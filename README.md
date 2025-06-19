@@ -91,10 +91,10 @@ Toggle night mode on or off with over 20 themes!
 ### In Progress
 - Connect to your favorite API ([see supported options](https://github.com/doolijb/serene-pub/issues/10))
 - App/user settings
+- Lorebooks+ - World lore, character lore, timeline/story date tracking, multi-character linking
 
 ### Pending Priorities
 - Character/chat tags
-- Lorebooks
 
 ### Considered
 - Multi-user logins & group chats
@@ -103,6 +103,7 @@ Toggle night mode on or off with over 20 themes!
 - User/chat backgrounds
 - Story narration/system instructions
 - Screen reader support
+- Lorebooks+ features: custom calendars, "eras" historical categories and more
 
 ## Getting Started (Download & Play!)
 
