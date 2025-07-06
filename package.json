@@ -75,6 +75,7 @@
 	"dependencies": {
 		"@electric-sql/pglite": "^0.2.17",
 		"@lenml/char-card-reader": "^1.0.6",
+		"@lenml/tokenizer-gemma": "^3.4.2",
 		"@lmstudio/sdk": "^1.2.1",
 		"@lucide/svelte": "^0.511.0",
 		"@proj-airi/duckdb-wasm": "^0.4.27",

@@ -10,6 +10,7 @@ export class TokenCounterOptions {
     static readonly ANTHROPIC_CLAUDE = "anthropic-claude";
     static readonly COHERE = "cohere";
     static readonly GEMINI = "gemini";
+    static readonly GEMMA = "gemma";
 
     static readonly keys = [
         TokenCounterOptions.ESTIMATE,
@@ -22,7 +23,8 @@ export class TokenCounterOptions {
         TokenCounterOptions.MISTRAL,
         TokenCounterOptions.ANTHROPIC_CLAUDE,
         TokenCounterOptions.COHERE,
-        TokenCounterOptions.GEMINI
+        TokenCounterOptions.GEMINI,
+        TokenCounterOptions.GEMMA
     ];
 
     static readonly options = [
@@ -36,6 +38,7 @@ export class TokenCounterOptions {
         { value: TokenCounterOptions.MISTRAL, label: "Mistral/Mixtral" },
         { value: TokenCounterOptions.ANTHROPIC_CLAUDE, label: "Anthropic Claude" },
         { value: TokenCounterOptions.COHERE, label: "Cohere" },
-        { value: TokenCounterOptions.GEMINI, label: "Google Gemini/PaLM" }
+        { value: TokenCounterOptions.GEMINI, label: "Google Gemini/PaLM" },
+        { value: TokenCounterOptions.GEMMA, label: "Google Gemma" },
     ];
 }

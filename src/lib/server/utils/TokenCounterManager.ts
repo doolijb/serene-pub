@@ -6,14 +6,19 @@ import llamaTokenizer from 'llama-tokenizer-js'
 import llama3Tokenizer from 'llama3-tokenizer-js'
 import mistralTokenizer from 'mistral-tokenizer-js'
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
+import { fromPreTrained as getGemmaTokenizer } from "@lenml/tokenizer-gemma";
 
 export interface TokenCounter {
     countTokens(text: string): Promise<number> | number
 }
 
+/**
+ * Estimate should always be the most conservative option
+ * It should never overestimate tokens, but can underestimate
+ */
 export class EstimateTokenCounter implements TokenCounter {
     countTokens(text: string): number {
-        return Math.ceil(text.length / 4)
+        return Math.ceil(text.length / 3.4);
     }
 }
 
@@ -67,13 +72,23 @@ export class AnthropicClaudeTokenCounter implements TokenCounter {
 
 export class CohereTokenCounter implements TokenCounter {
     countTokens(text: string): number {
-        return Math.ceil(text.length / 5)
+        const tokenizer = getGemmaTokenizer()
+        return tokenizer.encode(text, {add_special_tokens: false}).length
+        //return Math.ceil(text.length / 5)
     }
 }
 
 export class GeminiTokenCounter implements TokenCounter {
     countTokens(text: string): number {
         return Math.ceil(text.length / 4)
+    }
+}
+
+export class GemmaTokenCounter implements TokenCounter {
+    countTokens(text: string): number {
+        // Gemma models tend to have slightly different tokenization
+        // Use a more conservative estimate that's closer to actual Gemma tokenization
+        return Math.ceil(text.length / 3.5) // More conservative than /4
     }
 }
 
@@ -127,6 +142,14 @@ export class TokenCounters {
         [TokenCounterOptions.GEMINI, {
             label: TokenCounterOptions.options.find(o => o.value === TokenCounterOptions.GEMINI)!.label,
             counter: new GeminiTokenCounter()
+        }],
+        [TokenCounterOptions.GEMMA, {
+            label: TokenCounterOptions.options.find(o => o.value === TokenCounterOptions.GEMMA)!.label,
+            counter: new GemmaTokenCounter()
+        }],
+        [TokenCounterOptions.GEMMA, {
+            label: TokenCounterOptions.options.find(o => o.value === TokenCounterOptions.GEMMA)!.label,
+            counter: new GemmaTokenCounter()
         }],
     ])
 
