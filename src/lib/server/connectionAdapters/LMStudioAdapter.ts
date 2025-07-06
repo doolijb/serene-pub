@@ -10,11 +10,9 @@ import {
 } from "./BaseConnectionAdapter"
 import {
 	type BaseLoadModelOpts,
-	type ChatLike,
 	type LLM,
 	type LLMLoadModelConfig,
 	type LLMPredictionOpts,
-	type LLMRespondOpts,
 	LMStudioClient,
 	type OngoingPrediction
 } from "@lmstudio/sdk"
@@ -122,8 +120,12 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 
 			try {
 				this._modelClient = await client.llm.model(name, opts)
-				const modelInstCtxLength = await this._modelClient.getContextLength()
-				console.log("Model loaded successfully with context length:", modelInstCtxLength)
+				const modelInstCtxLength =
+					await this._modelClient.getContextLength()
+				console.log(
+					"Model loaded successfully with context length:",
+					modelInstCtxLength
+				)
 			} catch (error) {
 				const errorMsg =
 					error instanceof Error ? error.message : String(error)
@@ -190,7 +192,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		// Use PromptBuilder for prompt construction
 		const compiledPrompt: CompiledPrompt = await this.compilePrompt({})
 
-		let useChat = this.connection.extraJson?.useChat ?? true
+		const useChat = this.connection.extraJson?.useChat ?? true
 		let prompt: string = ""
 		let messages: any[] | undefined = undefined
 
@@ -200,7 +202,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			prompt = compiledPrompt.prompt!
 		}
 
-		let options: LLMPredictionOpts<unknown> = {
+		const options: LLMPredictionOpts<unknown> = {
 			stopStrings: stop,
 			maxTokens: this.sampling.responseTokensEnabled
 				? this.sampling.responseTokens || 250
@@ -329,9 +331,9 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 }
 
 const connectionDefaults = {
-	baseUrl: "http://localhost:1234",
+	baseUrl: "ws://localhost:1234",
 	promptFormat: PromptFormats.VICUNA,
-	tokenCounter: TokenCounterOptions.GEMMA, // Use Gemma tokenizer for better accuracy with Gemma models
+	tokenCounter: TokenCounterOptions.ESTIMATE, // Use Gemma tokenizer for better accuracy with Gemma models
 	extraJson: {
 		useChat: true, // Use chat (response api)
 		stream: true,
@@ -394,27 +396,35 @@ async function testConnection(
 async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
-	const client = new LMStudioClient({ baseUrl: connection.baseUrl || "" })
-	const res = await client.system.listDownloadedModels()
-	if (res && Array.isArray(res)) {
-		const models = res.map((model) => {
+	try {
+		const client = new LMStudioClient({ baseUrl: connection.baseUrl || "" })
+		const res = await client.system.listDownloadedModels()
+		if (res && Array.isArray(res)) {
+			const models = res.map((model) => {
+				return {
+					model: model.modelKey,
+					name: model.displayName
+				}
+			})
 			return {
-				model: model.modelKey,
-				name: model.displayName
+				models: models,
+				error: undefined
 			}
-		})
-		return {
-			models: models,
-			error: undefined
+		} else {
+			console.error(
+				"LM Studio listModels error: Unexpected response format",
+				res
+			)
+			return {
+				models: [],
+				error: "Unexpected response format from LM Studio API"
+			}
 		}
-	} else {
-		console.error(
-			"LM Studio listModels error: Unexpected response format",
-			res
-		)
+	} catch (error) {
+		console.error("LM Studio listModels error:", error)
 		return {
 			models: [],
-			error: "Unexpected response format from LM Studio API"
+			error: "Failed to list models from LM Studio API, is the server running?"
 		}
 	}
 }

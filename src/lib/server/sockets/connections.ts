@@ -53,6 +53,11 @@ export async function createConnection(
 	if ("id" in data) delete data.id
 	try {
 		const modelsRes = await Adapter.listModels(data as any)
+		if (modelsRes.error) {
+			const res = { error: modelsRes.error }
+			emitToUser("error", res)
+			return
+		}
 		if (!modelsRes.models || modelsRes.models.length === 0) {
 			const res = { error: "No models found for this connection." }
 			emitToUser("error", res)
@@ -161,6 +166,12 @@ export async function testConnection(
 		let error: string | null = null
 		if (result.ok) {
 			const modelsRes = await listModels(message.connection)
+			if (modelsRes.error) {
+				emitToUser("error", {
+					error: modelsRes.error,
+				})
+				return
+			}
 			models = modelsRes.models || []
 			error = modelsRes.error || null
 		} else {
@@ -192,7 +203,12 @@ export async function refreshModels(
 
 	try {
 		const result = await listModels(message.connection)
-		if (!result.models) {
+		if (result.error) {
+			const res = {
+				error: result.error,
+			}
+			emitToUser("error", res)
+		} else if (!result.models) {
 			const res: Sockets.RefreshModels.Response = {
 				error: "Failed to refresh models.",
 				models: []

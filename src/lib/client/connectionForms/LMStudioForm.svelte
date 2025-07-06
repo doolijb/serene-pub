@@ -52,6 +52,9 @@
 
 	socket.on("refreshModels", (msg: Sockets.RefreshModels.Response) => {
 		if (msg.models) availableLMStudioModels = msg.models
+		if (!connection.model && msg.models.length > 0) {
+			connection.model = msg.models[0].model
+		}
 	})
 
 	socket.on("testConnection", (msg: Sockets.TestConnection.Response) => {
@@ -177,7 +180,7 @@
 					id="baseUrl"
 					type="text"
 					bind:value={connection.baseUrl}
-					placeholder="http://localhost:11434/"
+					placeholder="ws://localhost:1234"
 					required
 					class="input"
 				/>
