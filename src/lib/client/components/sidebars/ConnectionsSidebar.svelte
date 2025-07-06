@@ -545,7 +545,7 @@
 					bind:value={newConnectionType}
 				>
 					{#each CONNECTION_TYPES as t}
-						<option value={t.value} disabled={t.value===CONNECTION_TYPE.LM_STUDIO}>{t.label}</option>
+						<option value={t.value}>{t.label}</option>
 					{/each}
 				</select>
 			</div>

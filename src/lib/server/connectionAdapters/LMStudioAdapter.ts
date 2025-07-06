@@ -56,10 +56,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			tokenCounter: new TokenCounters(
 				connection.tokenCounter || TokenCounterOptions.ESTIMATE
 			),
-			tokenLimit:
-				typeof sampling.contextTokens === "number"
-					? sampling.contextTokens
-					: 2048,
+			tokenLimit: 0, // This is set dynamically based on the LM Studio API
 			contextThresholdPercent: 0.9
 		})
 	}
@@ -97,18 +94,46 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			const name = modelName || this.connection.model
 			if (!name || typeof name !== "string")
 				throw new Error("Model name required for getModelClient")
-			// TODO, keep alive?
+
+			// Check available models first
+			try {
+				const availableModels =
+					await client.system.listDownloadedModels()
+				const modelExists = availableModels.some(
+					(model) => model.modelKey === name
+				)
+				if (!modelExists) {
+					throw new Error(
+						`Model "${name}" is not downloaded in LM Studio. Available models: ${availableModels.map((m) => m.modelKey).join(", ")}`
+					)
+				}
+			} catch (error) {
+				console.warn("Could not check available models:", error)
+			}
+
 			const opts: BaseLoadModelOpts<LLMLoadModelConfig> = {
 				config: {
-					contextLength: this.sampling.contextTokensEnabled
-						? this.sampling.contextTokens || 2048
-						: 2048,
+					contextLength: this.promptBuilder.tokenLimit,
 					keepModelInMemory: false // TODO: make configurable?
 				},
-				ttl: 1 // TODO: TTL is off for now to force reloading models
+				ttl: this.connection.extraJson.ttl || 60 // Increased TTL to avoid frequent reloading
 			}
 			console.log("LM Studio getModelClient opts", opts)
-			this._modelClient = await client.llm.model(name, opts)
+
+			try {
+				this._modelClient = await client.llm.model(name, opts)
+				const modelInstCtxLength = await this._modelClient.getContextLength()
+				console.log("Model loaded successfully with context length:", modelInstCtxLength)
+			} catch (error) {
+				const errorMsg =
+					error instanceof Error ? error.message : String(error)
+				if (errorMsg.includes("Error loading model")) {
+					throw new Error(
+						`Failed to load model "${name}" in LM Studio. This may be due to insufficient VRAM/RAM or context length mismatch. Requested context: ${this.promptBuilder.tokenLimit} tokens. Try using a smaller model, reducing context length, or check LM Studio settings. Original error: ${errorMsg}`
+					)
+				}
+				throw error
+			}
 		}
 		return this._modelClient
 	}
@@ -140,15 +165,13 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			throw new Error("LMStudioAdapter: model must be a string")
 
 		// Prepare stop strings for LM Studio
-		const promptContext = {
-			format: this.connection.promptFormat || "chatml",
-			characters: this.chat.chatCharacters?.map((c) => c.character) || [],
-			personas: this.chat.chatPersonas?.map((p) => p.persona) || []
-		}
+		const promptFormat = this.connection.promptFormat || "chatml"
 		const stopStrings = StopStrings.get({
 			format: promptFormat,
-			characters: this.chat.chatCharacters?.map((cc) => cc.character),
-			personas: this.chat.chatPersonas?.map((cp) => cp.persona),
+			characters: this.chat.chatCharacters?.map(
+				(cc: any) => cc.character
+			),
+			personas: this.chat.chatPersonas?.map((cp: any) => cp.persona),
 			currentCharacterId: this.currentCharacterId
 		})
 		const characterName =
@@ -180,8 +203,9 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		let options: LLMPredictionOpts<unknown> = {
 			stopStrings: stop,
 			maxTokens: this.sampling.responseTokensEnabled
-				? this.sampling.responseTokens || 2048
-				: 2048,
+				? this.sampling.responseTokens || 250
+				: 250,
+			contextOverflowPolicy: "truncateMiddle",
 			...this.mapSamplingConfig()
 		}
 
@@ -241,7 +265,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			const content = await (async () => {
 				try {
 					if (useChat && messages) {
-						this.prediction = modelClient.chat(messages, options)
+						this.prediction = modelClient.respond(messages, options)
 						const result = await this.prediction
 						if (
 							result &&
@@ -283,18 +307,35 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			this.prediction.cancel()
 		}
 	}
+
+	async getContextTokenLimit(): Promise<number> {
+		const limit = await super.getContextTokenLimit()
+
+		const models = await this.getClient().system.listDownloadedModels()
+		const modelName = this.connection.model
+		const modelInfo = models.find((m) => m.modelKey === modelName)
+		if (!modelInfo) {
+			console.warn(
+				`LM Studio getContextTokenLimit: Model "${modelName}" not found in downloaded models`
+			)
+		} else if (modelInfo.maxContextLength < limit) {
+			console.warn(
+				`LM Studio getContextTokenLimit: The configured context limit ${limit} exceeds the model's maximum context length of ${modelInfo.maxContextLength}. This may cause the model to crash.`
+			)
+		}
+
+		return limit
+	}
 }
 
 const connectionDefaults = {
-	baseUrl: "ws://localhost:1234",
+	baseUrl: "http://localhost:1234",
 	promptFormat: PromptFormats.VICUNA,
-	tokenCounter: TokenCounterOptions.ESTIMATE,
+	tokenCounter: TokenCounterOptions.GEMMA, // Use Gemma tokenizer for better accuracy with Gemma models
 	extraJson: {
 		useChat: true, // Use chat (response api)
 		stream: true,
-		// think: false,
-		keepAlive: "300ms"
-		// raw: true
+		ttl: 60
 	}
 }
 
@@ -314,15 +355,38 @@ const samplingKeyMap: Record<string, string> = {
 async function testConnection(
 	connection: SelectConnection
 ): Promise<{ ok: boolean; error?: string }> {
-	const client = new LMStudioClient({ baseUrl: connection.baseUrl || "" })
-	const res = await client.system.getLMStudioVersion()
-	if (res && typeof res === "object" && "version" in res) {
-		return {
-			ok: true
+	try {
+		const client = new LMStudioClient({ baseUrl: connection.baseUrl || "" })
+		const res = await client.system.getLMStudioVersion()
+		if (res && typeof res === "object" && "version" in res) {
+			// Also check if any models are available
+			try {
+				const models = await client.system.listDownloadedModels()
+				if (!models || models.length === 0) {
+					return {
+						ok: true,
+						error: "LM Studio is running but no models are downloaded. Please download a model in LM Studio first."
+					}
+				}
+			} catch (modelError) {
+				console.warn(
+					"Could not check models during connection test:",
+					modelError
+				)
+			}
+			return {
+				ok: true
+			}
+		} else {
+			return {
+				ok: false,
+				error: "Could not get LM Studio version. Make sure LM Studio server is running on the specified URL."
+			}
 		}
-	} else {
+	} catch (error) {
 		return {
-			ok: false
+			ok: false,
+			error: `Connection failed: ${error instanceof Error ? error.message : String(error)}`
 		}
 	}
 }

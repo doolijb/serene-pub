@@ -19,7 +19,7 @@ const lmStudioDesc = `
 const lmStudioDiff = "Beginner (GUI) - Minimal setup required"
 
 const ollamaDesc = `
-<p>Serene Pub supports Ollama through their <a class="text-primary-500 hover:underline" href="https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-completion" target="_blank">"Generate a completion" API.</a></p>
+<p>Serene Pub supports Ollama through its <a class="text-primary-500 hover:underline" href="https://github.com/ollama/ollama/blob/main/docs/api.md" target="_blank">native API.</a></p>
 <p>It provides a simple API for generating completions and supports various model formats.</p>
 <p>To download Ollama, visit their <a class="text-primary-500 hover:underline" href="https://ollama.com/" target="_blank">official website</a>.</p>
 <p>Ollama is simple to setup and run, manages your models automatically, but requires minimal command line usage.</p>

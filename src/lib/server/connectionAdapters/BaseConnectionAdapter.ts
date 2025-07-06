@@ -75,8 +75,9 @@ export abstract class BaseConnectionAdapter {
 		})
 	}
 
-	compilePrompt(args: {}): Promise<CompiledPrompt> {
-		return this.promptBuilder.compilePrompt(args)
+	async compilePrompt(args: {}): Promise<CompiledPrompt> {
+		this.promptBuilder.tokenLimit = await this.getContextTokenLimit()
+		return await this.promptBuilder.compilePrompt(args)
 	}
 
 	abstract generate(): Promise<
@@ -89,6 +90,10 @@ export abstract class BaseConnectionAdapter {
 
 	abort() {
 		this.isAborting = true
+	}
+
+	async getContextTokenLimit(): Promise<number> {
+		return this.sampling.contextTokensEnabled ? this.sampling.contextTokens || 4096 : 4096
 	}
 }
 

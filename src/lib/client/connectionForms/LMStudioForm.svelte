@@ -15,7 +15,6 @@
 	let testResult: { ok: boolean; error?: string; models?: any[] } | null =
 		$state(null)
 	let extraFields = $state(extraJsonToExtraFields(connection.extraJson || {}))
-	let availableModels = $derived.by(() => availableLMStudioModels)
 
 	function handleRefreshModels() {
 		socket.emit("refreshModels", {
@@ -34,7 +33,7 @@
 		return {
 			stream: extraJson?.stream ?? true,
 			think: extraJson?.think ?? false,
-			keepAlive: extraJson?.keepAlive ?? "300ms",
+			ttl: extraJson?.ttl ?? 60,
 			raw: extraJson?.raw ?? true,
 			useChat: extraJson?.useChat ?? true
 		}
@@ -45,7 +44,7 @@
 			...connection.extraJson,
 			stream: extraFields.stream,
 			think: extraFields.think,
-			keepAlive: extraFields.keepAlive,
+			ttl: extraFields.ttl,
 			raw: extraFields.raw,
 			useChat: extraFields.useChat
 		}
@@ -206,25 +205,19 @@
 					}}
 				/>
 			</div>
+			<div class="mt-2 flex flex-col gap-1">
+				<label class="font-semibold" for="ttl">Keep Alive (seconds)</label>
+				<input
+					id="ttl"
+					type="number"
+					bind:value={extraFields.ttl}
+					class="input"
+					placeholder="60"
+					min="1"
+				/>
+			</div>
 		</div>
 	</details>
-	<!-- <div>
-		<label class="font-semibold" for="keepAlive">Keep Alive</label>
-		<input
-			id="keepAlive"
-			type="text"
-			bind:value={extraFields.keepAlive}
-			class="input"
-			placeholder="e.g. 300ms"
-			onchange={() => {
-				connection.extraJson = {
-					...connection.extraJson,
-					keepAlive: extraFields.keepAlive
-				}
-				handleChange()
-			}}
-		/>
-	</div> -->
 	{#if testResult?.error}
 		<div class="text-error mt-1 text-xs">{testResult.error}</div>
 	{/if}
