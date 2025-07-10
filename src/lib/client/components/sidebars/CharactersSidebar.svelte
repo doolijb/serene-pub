@@ -374,18 +374,18 @@
 	<Modal
 		open={showImportModal}
 		onOpenChange={(e) => (showImportModal = e.open)}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm"
+		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm w-[35rem]"
 		backdropClasses="backdrop-blur-sm"
 	>
 		{#snippet content()}
 			<div class="p-6">
 				<h2 class="mb-2 text-lg font-bold">Import Character</h2>
 				<p class="mb-4">
-					Import your character card. (JSON is not supported yet.)
+					PNG, APNG, JPEG, JPG, WEBP, and JSON files are supported.
 				</p>
 				<FileUpload
 					name="example"
-					accept=".png,.apng,.jpeg, .jpg, .webp"
+					accept=".png,.apng,.jpeg, .jpg, .webp, .json"
 					maxFiles={1}
 					onFileAccept={handleFileImport}
 					onFileReject={console.error}

@@ -74,7 +74,7 @@
 	},
 	"dependencies": {
 		"@electric-sql/pglite": "^0.2.17",
-		"@lenml/char-card-reader": "^1.0.6",
+		"@lenml/char-card-reader": "^1.0.7",
 		"@lmstudio/sdk": "^1.3.0",
 		"@lenml/tokenizer-gemma": "^3.4.2",
 		"@lucide/svelte": "^0.511.0",
@@ -89,7 +89,7 @@
 		"gpt-tokenizer": "^3.0.0",
 		"handlebars": "^4.7.8",
 		"llama-tokenizer-js": "^1.2.2",
-		"llama3-tokenizer-js": "^1.2.0",
+		"llama3-tokenizer-js": "^1.2
 		"lodash": "^4.17.21",
 		"marked": "^15.0.12",
 		"mistral-tokenizer-js": "^1.0.0",

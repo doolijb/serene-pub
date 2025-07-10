@@ -152,7 +152,18 @@ export async function characterCardImport(
         let base64 = message.file!
         if (base64.startsWith("data:")) base64 = base64.split(",")[1]
         const buffer = Buffer.from(base64, "base64")
-        const card = await CharacterCard.from_file(buffer)
+
+        // Check if the file is JSON by trying to parse it as text
+        let card: any
+        try {
+            const text = buffer.toString('utf8')
+            const jsonData = JSON.parse(text) // Test if it's valid JSON
+            // If we reach here, it's valid JSON
+            card = await CharacterCard.from_json(jsonData)
+        } catch (jsonError) {
+            // If JSON parsing fails, treat it as a binary file (image with embedded data)
+            card = await CharacterCard.from_file(buffer)
+        }
 
         const v3Data = card.toSpecV3().data
         const creationDate =
@@ -226,7 +237,6 @@ export async function characterCardImport(
         }
 
         // TODO: Import tags
-        // TODO: Import lorebook
 
         const res: Sockets.CharacterCardImport.Response = { character, book: v3Data.character_book || null }
         emitToUser("characterCardImport", res)
