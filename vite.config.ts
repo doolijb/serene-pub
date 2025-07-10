@@ -18,5 +18,43 @@ export default defineConfig({
 	},
 	resolve: {
 		extensions: [".mjs", ".js", ".ts", ".jsx", ".tsx", ".json", ".svelte"]
+	},
+	build: {
+		rollupOptions: {
+			plugins: [
+				{
+					name: "customize-server-output",
+					generateBundle(options, bundle) {
+						// Modify the index.js file specifically
+						Object.keys(bundle).forEach((fileName) => {
+							if (
+								fileName === "index.js" &&
+								bundle[fileName].type === "chunk"
+							) {
+								let code = bundle[fileName].code
+
+								// Replace console.log messages
+								code = code.replace(
+									/console\.log\(`Listening on file descriptor/g,
+									"console.log(`🚀 Serene Pub listening on file descriptor"
+								)
+								code = code.replace(
+									/console\.log\(`Listening on \$\{path/g,
+									"console.log(`🚀 Serene Pub listening on ${path"
+								)
+
+								// You can add more replacements here
+								code = code.replace(
+									/graceful_shutdown\(reason\)/g,
+									"graceful_shutdown(reason); console.log(`👋 Serene Pub shutting down (${reason})`)"
+								)
+
+								bundle[fileName].code = code
+							}
+						})
+					}
+				}
+			]
+		}
 	}
 })

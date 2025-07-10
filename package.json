@@ -22,7 +22,7 @@
 	"scripts": {
 		"dev": "vite dev",
 		"dev:host": "vite dev --host",
-		"build": "vite build && vite build --ssr",
+		"build": "vite build && vite build --ssr && node scripts/customize-build.js",
 		"start": "node build/index.js",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
@@ -95,6 +95,7 @@
 		"marked": "^15.0.12",
 		"mistral-tokenizer-js": "^1.0.0",
 		"ollama": "^0.5.16",
+		"open": "^10.1.2",
 		"openai": "^5.3.0",
 		"pg": "^8.16.3",
 		"svelte-dnd-action": "^0.9.61",
