@@ -10,6 +10,7 @@ import {
 } from "./BaseConnectionAdapter"
 import axios from "axios"
 import { Readable } from "stream"
+import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 // GET /health
 export type HealthResponse =
@@ -411,6 +412,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 }
 
 const connectionDefaults = {
+	type: CONNECTION_TYPE.LLAMACPP_COMPLETION,
 	baseUrl: "http://localhost:8080/",
 	promptFormat: PromptFormats.VICUNA,
 	tokenCounter: TokenCounterOptions.ESTIMATE,

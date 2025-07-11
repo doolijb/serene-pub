@@ -2,7 +2,7 @@ import { db } from "$lib/server/db"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 
-export async function user(socket: any, message: {}, emitToUser: (event: string, data: any) => void) {
+export async function user(socket: any, message: Sockets.User.Call, emitToUser: (event: string, data: any) => void) {
     const userId = 1 // Replace with actual user id
     const user = await db.query.users.findFirst({
         where: (u, { eq }) => eq(u.id, userId),

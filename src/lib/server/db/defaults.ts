@@ -300,6 +300,19 @@ Story history:
 		console.error("Error syncing database defaults:", error)
 	}
 
+	try {
+		const res = await db.query.systemSettings.findFirst({where: (s, {eq}) => eq(s.id, 1)})
+		if (!res) {
+			await db.insert(schema.systemSettings).values({
+				id: 1,
+				ollamaManagerEnabled: true,
+				ollamaManagerBaseUrl: "http://localhost:11434/"
+			})
+		}
+	} catch (error) {
+		console.error("Error syncing system settings:", error)
+	}
+
 	const tables = [
 		"chat_messages",
 		"chats",

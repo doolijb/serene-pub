@@ -8,6 +8,7 @@ import type {
 	ChatCompletionCreateParamsBase,
 	ChatCompletionMessageParam
 } from "../../../../node_modules/openai/src/resources/chat/completions/completions"
+import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 export class OpenAIChatAdapter extends BaseConnectionAdapter {
 	constructor({
@@ -184,6 +185,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 }
 
 const connectionDefaults = {
+	type: CONNECTION_TYPE.OPENAI_CHAT,
 	baseUrl: "",
 	promptFormat: PromptFormats.VICUNA,
 	tokenCounter: TokenCounterOptions.ESTIMATE,

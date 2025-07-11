@@ -10,6 +10,7 @@ import {
 	type AdapterExports,
 	type BaseChat
 } from "./BaseConnectionAdapter"
+import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 class OllamaAdapter extends BaseConnectionAdapter {
 	private _client?: Ollama
@@ -288,6 +289,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 }
 
 const connectionDefaults = {
+	type: CONNECTION_TYPE.OLLAMA,
 	baseUrl: "http://localhost:11434/",
 	promptFormat: PromptFormats.VICUNA,
 	tokenCounter: TokenCounterOptions.ESTIMATE,

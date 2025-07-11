@@ -551,7 +551,7 @@
 			showImportModal = e.open
 			if (!e.open) importingBook = undefined
 		}}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm"
+		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm border border-surface-300-700"
 		backdropClasses="backdrop-blur-sm"
 	>
 		{#snippet content()}
@@ -609,7 +609,7 @@
 			showDeleteConfirmationModal = e.open
 			if (!e.open) deletingLorebookId = undefined
 		}}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm"
+		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm border border-surface-300-700"
 		backdropClasses="backdrop-blur-sm"
 	>
 		{#snippet content()}

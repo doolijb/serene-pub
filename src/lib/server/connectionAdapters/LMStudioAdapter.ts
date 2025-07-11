@@ -16,6 +16,7 @@ import {
 	LMStudioClient,
 	type OngoingPrediction
 } from "@lmstudio/sdk"
+import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 class LMStudioAdapter extends BaseConnectionAdapter {
 	private _client?: LMStudioClient
@@ -331,6 +332,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 }
 
 const connectionDefaults = {
+	type: CONNECTION_TYPE.LM_STUDIO,
 	baseUrl: "ws://localhost:1234",
 	promptFormat: PromptFormats.VICUNA,
 	tokenCounter: TokenCounterOptions.ESTIMATE, // Use Gemma tokenizer for better accuracy with Gemma models

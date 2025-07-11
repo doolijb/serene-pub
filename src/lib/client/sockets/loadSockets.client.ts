@@ -6,7 +6,6 @@ export async function loadSocketsClient({domain}:{domain: string}) {
 
 	const res = await axios.get("/api/sockets-endpoint")
 	const serverUrl = new URL(res.data.endpoint)
-	console.log("Server URL:", serverUrl)
 	const host = `${serverUrl.protocol}//${domain}:${serverUrl.port}`
 	console.log("Connecting to socket server at:", host)
 	
@@ -17,9 +16,5 @@ export async function loadSocketsClient({domain}:{domain: string}) {
 
 	if (typeof io.to !== "function") {
 		io.to = () => ({ emit: () => {} })
-	}
-
-	if (dev) {
-		console.log("Client socket initialized:", host)
 	}
 }

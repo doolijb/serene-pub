@@ -91,6 +91,21 @@ import {
 	iterateNextHistoryEntry,
 	lorebookImport
 } from "./lorebooks"
+import { updateOllamaManagerEnabled, systemSettings } from "./systemSettings"
+import {
+	ollamaConnectModel,
+	ollamaSearchAvailableModels,
+	ollamaSetBaseUrl,
+	ollamaModelsList,
+	ollamaDeleteModel,
+	ollamaListRunningModels,
+	ollamaPullModel,
+	ollamaVersion,
+	ollamaIsUpdateAvailable,
+	ollamaCancelPull,
+	ollamaGetDownloadProgress,
+	ollamaClearDownloadHistory
+} from "./ollama"
 
 const userId = 1 // Replace with actual user id
 
@@ -110,6 +125,7 @@ export function connectSockets(io: {
 
 		// Users
 		register(socket, user, emitToUser)
+
 		// SamplingConfig
 		register(socket, sampling, emitToUser)
 		register(socket, samplingConfigsList, emitToUser)
@@ -117,6 +133,7 @@ export function connectSockets(io: {
 		register(socket, createSamplingConfig, emitToUser)
 		register(socket, deleteSamplingConfig, emitToUser)
 		register(socket, updateSamplingConfig, emitToUser)
+
 		// Connections
 		register(socket, connectionsList, emitToUser)
 		register(socket, connection, emitToUser)
@@ -126,18 +143,39 @@ export function connectSockets(io: {
 		register(socket, setUserActiveConnection, emitToUser)
 		register(socket, testConnection, emitToUser)
 		register(socket, refreshModels, emitToUser)
+
+		// Ollama Manager
+		register(socket, ollamaConnectModel, emitToUser)
+		register(socket, ollamaSearchAvailableModels, emitToUser)
+		register(socket, ollamaSetBaseUrl, emitToUser)
+		register(socket, ollamaModelsList, emitToUser)
+		register(socket, ollamaDeleteModel, emitToUser)
+		register(socket, ollamaListRunningModels, emitToUser)
+		register(socket, ollamaPullModel, emitToUser)
+		register(socket, ollamaCancelPull, emitToUser)
+		register(socket, ollamaVersion, emitToUser)
+		register(socket, ollamaIsUpdateAvailable, emitToUser)
+		register(socket, ollamaGetDownloadProgress, emitToUser)
+		register(socket, ollamaClearDownloadHistory, emitToUser)
+
+		// App Settings
+		register(socket, systemSettings, emitToUser)
+		register(socket, updateOllamaManagerEnabled, emitToUser)
+
 		// Characters
 		register(socket, characterList, emitToUser)
 		register(socket, character, emitToUser)
 		register(socket, createCharacter, emitToUser)
 		register(socket, updateCharacter, emitToUser)
 		register(socket, deleteCharacter, emitToUser)
+
 		// Personas
 		register(socket, personaList, emitToUser)
 		register(socket, persona, emitToUser)
 		register(socket, createPersona, emitToUser)
 		register(socket, updatePersona, emitToUser)
 		register(socket, deletePersona, emitToUser)
+
 		// Context Configs
 		register(socket, contextConfigsList, emitToUser)
 		register(socket, contextConfig, emitToUser)
@@ -145,6 +183,7 @@ export function connectSockets(io: {
 		register(socket, updateContextConfig, emitToUser)
 		register(socket, deleteContextConfig, emitToUser)
 		register(socket, setUserActiveContextConfig, emitToUser)
+
 		// Prompt Configs
 		register(socket, promptConfigsList, emitToUser)
 		register(socket, promptConfig, emitToUser)
@@ -152,6 +191,7 @@ export function connectSockets(io: {
 		register(socket, updatePromptConfig, emitToUser)
 		register(socket, deletePromptConfig, emitToUser)
 		register(socket, setUserActivePromptConfig, emitToUser)
+
 		// Chats
 		register(socket, chatsList, emitToUser)
 		register(socket, createChat, emitToUser)
@@ -170,6 +210,7 @@ export function connectSockets(io: {
 		register(socket, chatMessageSwipeRight, emitToUser)
 		register(socket, chatMessageSwipeLeft, emitToUser)
 		register(socket, toggleChatCharacterActive, emitToUser)
+
 		// Lorebooks
 		register(socket, lorebookList, emitToUser)
 		register(socket, lorebook, emitToUser)
@@ -193,7 +234,7 @@ export function connectSockets(io: {
 		register(socket, updateHistoryEntry, emitToUser)
 		register(socket, deleteHistoryEntry, emitToUser)
 		register(socket, iterateNextHistoryEntry, emitToUser)
-        register(socket, lorebookImport, emitToUser)
+		register(socket, lorebookImport, emitToUser)
 		console.log(`Socket connected: ${socket.id} for user ${userId}`)
 	})
 }

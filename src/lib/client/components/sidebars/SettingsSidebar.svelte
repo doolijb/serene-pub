@@ -5,15 +5,24 @@
 	import { appVersion, appVersionDisplay } from "$lib/shared/constants/version"
 	import * as Icons from "@lucide/svelte"
 	import { page } from "$app/state"
+	import * as skio from "sveltekit-io"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
 	}
 	let { onclose = $bindable() }: Props = $props()
 
+	const socket = skio.get()
+
 	let isDarkMode = $state(false)
 	let selectedTheme: string = $state("")
 	let themeCtx: ThemeCtx = $state(getContext("themeCtx"))
+	let systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
+
+	$effect(() => {
+		const _s = {...$state.snapshot(systemSettingsCtx)}
+		console.log("SettingsSidebar systemSettingsCtx", $state.snapshot(systemSettingsCtx))
+	})
 
 	$effect(() => {
 		isDarkMode = themeCtx.mode === "dark"
@@ -32,6 +41,13 @@
 		const target = event.target as HTMLSelectElement
 		themeCtx.theme = target.value
 		// TODO use setTheme socket call
+	}
+
+	async function onOllamaManagerEnabledClick(event: { checked: boolean }) {
+		const res: Sockets.UpdateOllamaManagerEnabled.Call = {
+			enabled: event.checked
+		}
+		socket.emit("updateOllamaManagerEnabled", res)
 	}
 
 	onMount(() => {
@@ -85,6 +101,14 @@
 			></Switch>
 			<label for="dark-mode" class="font-semibold">Dark Mode</label>
 		</div>
+		<div class="flex gap-2">
+			<Switch
+				name="dark-mode"
+				checked={systemSettingsCtx.settings.ollamaManagerEnabled}
+				onCheckedChange={onOllamaManagerEnabledClick}
+			></Switch>
+			<label for="dark-mode" class="font-semibold">Enable Ollama Manager</label>
+		</div>
 	</div>
 
 	<div class="about-section mt-6 rounded-lg bg-surface-500/25 p-4 shadow-md flex flex-col gap-2 items-start">
@@ -108,6 +132,24 @@
 			>
 				<Icons.GitBranch size={16} />
 				<span>Repository</span>
+			</a>
+			<a
+				href="https://github.com/doolijb/serene-pub/wiki"
+				target="_blank"
+				rel="noopener noreferrer"
+				class="btn preset-filled-surface-500"
+			>
+				<Icons.BookOpen size={16} />
+				<span>Wiki</span>
+			</a>
+			<a
+				href="https://discord.gg/3kUx3MDcSa"
+				target="_blank"
+				rel="noopener noreferrer"
+				class="btn preset-filled-tertiary-500"
+			>
+				<Icons.MessageSquare size={16} />
+				<span>Discord</span>
 			</a>
 			<a
 				href="https://github.com/doolijb/serene-pub/issues"

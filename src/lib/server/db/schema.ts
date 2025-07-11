@@ -564,3 +564,12 @@ export const chatLorebooksRelations = relations(chatLorebooks, ({ one }) => ({
 		references: [lorebooks.id]
 	})
 }))
+
+/**
+ * Singleton table for system-wide settings
+ */
+export const systemSettings = pgTable("system_settings", {
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	ollamaManagerEnabled: boolean("ollama_manager_enabled").notNull().default(false),
+	ollamaManagerBaseUrl: text("ollama_base_url").notNull().default("http://localhost:11434/"),
+})

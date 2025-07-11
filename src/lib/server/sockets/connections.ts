@@ -1,8 +1,9 @@
 import { db } from "$lib/server/db"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { user as loadUser, user } from "./users"
 import { getConnectionAdapter } from "../utils/getConnectionAdapter"
+
 
 // --- CONNECTIONS SOCKET HANDLERS ---
 
@@ -228,3 +229,5 @@ export async function refreshModels(
 		emitToUser("refreshModels", res)
 	}
 }
+
+
