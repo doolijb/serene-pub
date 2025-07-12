@@ -102,8 +102,8 @@ Story history:
 \`\`\`
 {{/if}}
 
-{{#if wiBefore}}
-{{{wiBefore}}}
+{{#if exampleDialogue}}
+{{{exampleDialogue}}}
 {{/if}}
 {{/systemBlock}}
 
@@ -120,9 +120,9 @@ Story history:
 {{/if}}
 {{/each}}
 
-{{#if wiAfter}}
+{{#if postHistoryInstructions}}
 {{#systemBlock}}
-{{{wiAfter}}}
+{{{postHistoryInstructions}}}
 {{/systemBlock}}
 {{/if}}`
 			}

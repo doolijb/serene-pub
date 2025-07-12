@@ -33,17 +33,6 @@ async function runMigrations() {
 	} as MigrationConfig)
 	console.log("Migrations applied.")
 	await sync()
-
-	////
-	// DEPRECATE: Temporary migration from SQLite to PostgreSQL - remove in 0.4.0
-	////
-	const { dbPath: sqliteDbPath } = await import("../db_old/drizzle.config")
-	const sqliteDbExists = fs.existsSync(sqliteDbPath)
-	if (sqliteDbExists) {
-		console.log("SQLite database found, migrating to PostgreSQL...")
-		const { migrateToPg } = await import("../db_old/migrateToPg")
-		await migrateToPg()
-	}
 }
 
 // Check if database has been initialized by looking for a specific table

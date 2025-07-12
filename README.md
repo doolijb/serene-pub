@@ -182,11 +182,11 @@ Scenario: """ {{{scenario}}} """
 ```
 {{/if}}
 
-{{#if wiBefore}} {{{wiBefore}}} {{/if}} {{/systemBlock}}
+{{#if exampleDialogue}} {{{exampleDialogue}}} {{/if}} {{/systemBlock}}
 
 {{#each chatMessages}} {{#if (eq role "assistant")}} {{#assistantBlock}} {{{name}}}: {{{message}}} {{/assistantBlock}} {{/if}} {{#if (eq role "user")}} {{#userBlock}} {{{name}}}: {{{message}}} {{/userBlock}} {{/if}} {{/each}}
 
-{{#if wiAfter}} {{#systemBlock}} {{{wiAfter}}} {{/systemBlock}} {{/if}}
+{{#if postHistoryInstructions}} {{#systemBlock}} {{{postHistoryInstructions}}} {{/systemBlock}} {{/if}}
 ````
 
 

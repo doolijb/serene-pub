@@ -34,7 +34,7 @@
     >
 
         <!-- Desktop left nav -->
-        <div class="hidden flex-1 justify-start gap-2 md:flex">
+        <div class="hidden flex-1 justify-start gap-2 lg:flex">
             {#each Object.entries(panelsCtx.leftNav) as [key, item]}
             {@const isOpen = panelsCtx.leftPanel === key}
                 <button
@@ -58,7 +58,7 @@
         </div>
 
         <!-- Desktop right nav -->
-        <div class="hidden flex-1 justify-end gap-2 md:flex">
+        <div class="hidden flex-1 justify-end gap-2 lg:flex">
             {#each Object.entries(panelsCtx.rightNav) as [key, item]}
                 {@const isOpen = panelsCtx.rightPanel === key}
                 <button
@@ -71,7 +71,7 @@
             {/each}
         </div>
 
-		<div class="flex items-center gap-2 md:hidden">
+		<div class="flex items-center gap-2 lg:hidden">
             <button
                 class="btn preset-tonal"
                 aria-label="Open menu"

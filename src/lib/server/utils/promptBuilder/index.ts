@@ -11,8 +11,16 @@ import {
 	historyEntryIterator
 } from "./PromptIterators"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
-import type { ChatCompletionMessageParam } from "openai/resources/index.mjs"
-import { character } from "$lib/server/sockets/characters"
+
+// Import modular components
+import { InterpolationEngine } from "./InterpolationEngine"
+import { ContentInfillEngine } from "./ContentInfillEngine"
+import type { LoreMatchingStrategy, MatchingStrategyConfig } from "./LoreMatchingStrategies"
+import { MatchingStrategyFactory, KeywordMatchingStrategy } from "./LoreMatchingStrategies"
+import type { ContentInclusionConfig, ContentInclusionStrategy } from "./ContentInclusionStrategy"
+import { defaultContentInclusionConfig } from "./ContentInclusionStrategy"
+import type { CompiledPrompt, CompileOptions, TemplateContext } from "./types"
+import { parseSplitChatPrompt, isHistoryEntry } from "./utils"
 
 export class PromptBuilder {
 	connection: SelectConnection
@@ -24,17 +32,18 @@ export class PromptBuilder {
 	tokenCounter: TokenCounters
 	tokenLimit: number
 	contextThresholdPercent: number
+	
+	// Legacy properties (gradually being moved to modules)
 	assistantCharacters: any[] = []
 	userCharacters: any[] = []
-	systemCtxData: Record<string, any> = {}
 	instructions?: string
-	wiBefore?: string
-	wiAfter?: string
-	includedWorldLoreEntries: SelectWorldLoreEntry[] = []
-	includedCharacterLoreEntries: SelectCharacterLoreEntry[] = []
-	includedHistoryEntries: SelectHistoryEntry[] = []
+	exampleDialogue?: string
+	postHistoryInstructions?: string
 
 	handlebars: typeof Handlebars
+
+	// Interpolation engine for template processing
+	private interpolationEngine: InterpolationEngine
 
 	constructor({
 		connection,
@@ -67,6 +76,13 @@ export class PromptBuilder {
 		this.tokenCounter = tokenCounter
 		this.tokenLimit = tokenLimit
 		this.contextThresholdPercent = contextThresholdPercent
+
+		// Initialize the interpolation engine with the same handlebars instance
+		this.interpolationEngine = new InterpolationEngine(this.handlebars)
+	}
+
+	getInterpolationEngine(): InterpolationEngine {
+		return this.interpolationEngine
 	}
 
 	private registerHandlebarsHelpers({
@@ -157,10 +173,10 @@ export class PromptBuilder {
 		if (!character?.scenario) return undefined
 		return character.scenario
 	}
-	contextBuildCharacterWiBefore(): string | undefined {
+	contextBuildCharacterExampleDialogue(): string | undefined {
 		return undefined
 	}
-	contextBuildCharacterWiAfter(): string | undefined {
+	contextBuildCharacterPostHistoryInst(): string | undefined {
 		return undefined
 	}
 	contextBuildPersonaDescription(persona: any): string {
@@ -271,12 +287,8 @@ export class PromptBuilder {
 			this.compilePersonaData(cp.persona)
 		)
 		this.instructions = this.contextBuildSystemPrompt()
-		this.wiBefore = this.contextBuildCharacterWiBefore()
-		this.wiAfter = this.contextBuildCharacterWiAfter()
-		this.systemCtxData = {
-			assistant_characters: JSON.stringify(this.assistantCharacters),
-			user_characters: JSON.stringify(this.userCharacters)
-		}
+		this.exampleDialogue = this.contextBuildCharacterExampleDialogue()
+		this.postHistoryInstructions = this.contextBuildCharacterPostHistoryInst()
 	}
 
 	// --- Modularized section: scenario interpolation and source ---
@@ -289,11 +301,10 @@ export class PromptBuilder {
 	} {
 		let scenarioInterpolated = ""
 		let scenarioSource: null | "character" | "chat" = null
-		const interpolate = (str: string | undefined) =>
-			str ? this.handlebars.compile(str)(interpolationContext) : str
+		
 		if (this.chat && (this.chat as any).scenario) {
 			scenarioInterpolated =
-				interpolate((this.chat as any).scenario) || ""
+				this.interpolationEngine.interpolateString((this.chat as any).scenario, interpolationContext) || ""
 			scenarioSource = "chat"
 		} else if (this.chat && (this.chat as any).isGroup) {
 			scenarioInterpolated = ""
@@ -301,7 +312,7 @@ export class PromptBuilder {
 		} else {
 			const charScenario =
 				this.contextBuildCharacterScenario(currentCharacter) || ""
-			scenarioInterpolated = interpolate(charScenario) || ""
+			scenarioInterpolated = this.interpolationEngine.interpolateString(charScenario, interpolationContext) || ""
 			scenarioSource = charScenario ? "character" : null
 		}
 		return { scenarioInterpolated, scenarioSource }
@@ -309,24 +320,14 @@ export class PromptBuilder {
 
 	// --- Modularized section: interpolate characters/personas ---
 	private getInterpolatedCharacters(interpolationContext: any) {
-		const interpolate = (str: string | undefined) =>
-			str ? this.handlebars.compile(str)(interpolationContext) : str
-		return this.assistantCharacters.map((c: any) => ({
-			...c,
-			name: interpolate(c.name),
-			nickname: interpolate(c.nickname),
-			description: interpolate(c.description),
-			personality: interpolate(c.personality)
-		}))
+		return this.assistantCharacters.map((c: any) => 
+			this.interpolationEngine.interpolateObject(c, interpolationContext, ['name', 'nickname', 'description', 'personality'])
+		)
 	}
 	private getInterpolatedPersonas(interpolationContext: any) {
-		const interpolate = (str: string | undefined) =>
-			str ? this.handlebars.compile(str)(interpolationContext) : str
-		return this.userCharacters.map((p: any) => ({
-			...p,
-			name: interpolate(p.name),
-			description: interpolate(p.description)
-		}))
+		return this.userCharacters.map((p: any) => 
+			this.interpolationEngine.interpolateObject(p, interpolationContext, ['name', 'description'])
+		)
 	}
 
 	// --- Modularized section: build template context ---
@@ -335,8 +336,8 @@ export class PromptBuilder {
 		charactersInterpolated,
 		personasInterpolated,
 		scenarioInterpolated,
-		wiBefore,
-		wiAfter,
+		exampleDialogue,
+		postHistoryInstructions,
 		charName,
 		personaName
 	}: any): TemplateContext {
@@ -345,8 +346,8 @@ export class PromptBuilder {
 			characters: charactersInterpolated,
 			personas: personasInterpolated,
 			scenario: scenarioInterpolated,
-			wiBefore,
-			wiAfter,
+			exampleDialogue,
+			postHistoryInstructions,
 			chatMessages: [],
 			char: charName,
 			character: charName,
@@ -356,687 +357,100 @@ export class PromptBuilder {
 		}
 	}
 
-	// --- Modularized section: message block construction and token limit logic ---
-	private async infillContent({
+
+	/**
+	 * Enhanced modular version of infillContent using ContentInfillEngine
+	 * This demonstrates how the content inclusion logic can be simplified and made configurable
+	 * Now supports pluggable matching strategies for future vectorization
+	 */
+	async infillContent({
 		templateContext,
 		charName,
 		personaName,
-		useChatFormat
+		useChatFormat,
+		config = defaultContentInclusionConfig,
+		strategy,
+		matchingStrategy,
+		matchingStrategyConfig
 	}: {
 		templateContext: TemplateContext
 		charName: string
 		personaName: string
 		useChatFormat: boolean
-	}): Promise<{
-		renderedPrompt: string | undefined
-		renderedMessages: ChatCompletionMessageParam[] | undefined
-		totalTokens: number
-		chatMessages: {
-			included: number
-			includedIds: number[]
-			excludedIds: number[]
-		}
-	}> {
-		let completed = false
-		let priority = 4
-		let messagesIterator:
-			| IterableIterator<SelectChatMessage>
-			| undefined
-			| null
-		let worldLoreEntryIterator:
-			| IterableIterator<SelectWorldLoreEntry>
-			| undefined
-			| null
-		let characterLoreIter:
-			| IterableIterator<SelectCharacterLoreEntry>
-			| undefined
-			| null
-		let historyEntryIter:
-			| IterableIterator<SelectHistoryEntry>
-			| undefined
-			| null
-		let consideredWorldLoreEntries: SelectWorldLoreEntry[] = []
-		let consideredCharacterLoreEntries: SelectCharacterLoreEntry[] = []
-		let consideredHistoryEntries: SelectHistoryEntry[] = []
-		const messageFailedWorldLoreMatches: Record<number, number[]> = {}
-		const messageFailedCharacterLoreMatches: Record<number, number[]> = {}
-		const messageFailedHistoryMatches: Record<number, number[]> = {}
+		config?: ContentInclusionConfig
+		strategy?: ContentInclusionStrategy
+		matchingStrategy?: LoreMatchingStrategy
+		matchingStrategyConfig?: MatchingStrategyConfig
+	}) {
+		// Create the content infill engine with optional matching strategy
+		let infillEngine: ContentInfillEngine
 
-		let chatMessages: {
-			id: number
-			role: "assistant" | "user"
-			name: string
-			message: string | undefined
-		}[] = [
-			{
-				id: -2, // Placeholder for the current character's empty message
-				role: "assistant",
-				name: charName, // Only the placeholder uses the current character's name
-				message: ""
-			}
-		]
-		let includedChatMessages = 0
-		let includedChatMessageIds: number[] = []
-		let excludedChatMessageIds: number[] = []
-		// Precompiled prompt
-		let renderedPrompt: string | { role: string; content: string }[] = ""
-		// OpenAI chat format
-		let renderedMessages: ChatCompletionMessageParam[] | undefined
-		let totalTokens = 0
-
-		// Ensure interpolationContext is available
-		const interpolationContext = {
-			char: charName,
-			character: charName,
-			user: personaName,
-			persona: personaName
+		if (matchingStrategyConfig) {
+			// Create engine with strategy from config
+			infillEngine = await ContentInfillEngine.createWithStrategy(
+				this.chat,
+				this.interpolationEngine,
+				populateLorebookEntryBindings,
+				isHistoryEntry,
+				this.chatMessageIterator.bind(this),
+				this.worldLoreEntryIterator.bind(this),
+				characterLoreEntryIterator,
+				historyEntryIterator,
+				matchingStrategyConfig
+			)
+		} else {
+			// Create engine with explicit strategy or default
+			infillEngine = new ContentInfillEngine(
+				this.chat,
+				this.interpolationEngine,
+				populateLorebookEntryBindings,
+				isHistoryEntry,
+				this.chatMessageIterator.bind(this),
+				this.worldLoreEntryIterator.bind(this),
+				characterLoreEntryIterator,
+				historyEntryIterator,
+				matchingStrategy // Will default to keyword if undefined
+			)
 		}
 
-		let isBelowThreshold = true
-		let isAboveThreshold = false
-		let isOverLimit = false
-
-		// --- DEBUG: Start timing ---
-		const debugTimings: any[] = []
-
-		let iterationCount = 0
-		while (!completed) {
-			iterationCount++
-			const iterStart = Date.now()
-			switch (priority) {
-				case 4:
-					if (messagesIterator === undefined) {
-						messagesIterator = this.chatMessageIterator({
-							priority
-						})
-						worldLoreEntryIterator = this.worldLoreEntryIterator({
-							priority
-						})
-						characterLoreIter = characterLoreEntryIterator({
-							chat: this.chat,
-							priority
-						})
-						historyEntryIter = historyEntryIterator({
-							chat: this.chat,
-							priority
-						})
-					} else if (
-						messagesIterator === null &&
-						worldLoreEntryIterator === null &&
-						characterLoreIter === null &&
-						historyEntryIter === null
-					) {
-						priority = 3
-						continue
-					}
-					break
-				case 3:
-					if (
-						messagesIterator === null &&
-						characterLoreIter === null &&
-						worldLoreEntryIterator === null
-					) {
-						messagesIterator = this.chatMessageIterator({
-							priority
-						})
-						worldLoreEntryIterator = this.worldLoreEntryIterator({
-							priority
-						})
-						characterLoreIter = characterLoreEntryIterator({
-							chat: this.chat,
-							priority
-						})
-						priority = 2
-					}
-					break
-				case 2:
-					if (
-						historyEntryIter === null &&
-						characterLoreIter === null &&
-						worldLoreEntryIterator === null &&
-						messagesIterator === null
-					) {
-						worldLoreEntryIterator = this.worldLoreEntryIterator({
-							priority
-						})
-						characterLoreIter = characterLoreEntryIterator({
-							chat: this.chat,
-							priority
-						})
-						historyEntryIter = historyEntryIterator({
-							chat: this.chat,
-							priority
-						})
-						messagesIterator = this.chatMessageIterator({
-							priority
-						})
-						priority = 1
-					}
-					break
-				case 1:
-					if (
-						characterLoreIter === null &&
-						worldLoreEntryIterator === null
-					) {
-						worldLoreEntryIterator = this.worldLoreEntryIterator({
-							priority
-						})
-						characterLoreIter = characterLoreEntryIterator({
-							chat: this.chat,
-							priority
-						})
-						priority = 0
-					}
-					break
-				case 0:
-					if (
-						historyEntryIter === null &&
-						characterLoreIter === null &&
-						worldLoreEntryIterator === null &&
-						messagesIterator === null
-					) {
-						completed = true
-						continue
-					}
-					break
-				default:
-					throw new Error(`Unknown priority: ${priority}`)
-			}
-
-			let nextMessageVal
-			let nextWorldLoreEntryVal
-			let nextCharacterLoreEntryVal
-			let nextHistoryEntryVal
-			if (!isOverLimit) {
-				nextMessageVal = messagesIterator?.next()
-
-				if (isBelowThreshold) {
-					nextWorldLoreEntryVal = worldLoreEntryIterator?.next()
-					nextCharacterLoreEntryVal = characterLoreIter?.next()
-					nextHistoryEntryVal = historyEntryIter?.next()
-				}
-
-				// MESSAGES
-				if (!nextMessageVal || nextMessageVal.done) {
-					messagesIterator = null
-				} else if (nextMessageVal.value && !isOverLimit) {
-					// Normalize message structure
-					const msg = nextMessageVal.value
-					let msgInterpolationContext = { ...interpolationContext }
-					let assistantName = charName
-					let userName = personaName
-					if (msg.characterId && this.chat.chatCharacters) {
-						const foundChar = this.chat.chatCharacters.find(
-							(cc) => cc.character.id === msg.characterId
-						)?.character
-						let foundName: string | undefined
-						if (foundChar) {
-							foundName = foundChar.nickname || foundChar.name
-						}
-						if (msg.role === "assistant") {
-							assistantName = foundName || charName
-						}
-						msgInterpolationContext = {
-							...msgInterpolationContext,
-							char: foundName || charName,
-							character: foundName || charName
-						}
-					}
-					if (msg.personaId && this.chat.chatPersonas) {
-						const foundPersona = this.chat.chatPersonas.find(
-							(cp) => cp.persona.id === msg.personaId
-						)?.persona
-						if (foundPersona) {
-							userName = foundPersona.name
-							msgInterpolationContext = {
-								...msgInterpolationContext,
-								user: userName,
-								persona: userName
-							}
-						}
-					}
-					const interpolate = (str: string | undefined) =>
-						str ? this.handlebars.compile(str)(msgInterpolationContext) : str
-					chatMessages.push({
-						id: msg.id,
-						role:
-							msg.role === "user" || msg.role === "assistant"
-								? msg.role
-								: "assistant",
-						name: msg.role === "assistant" ? assistantName : userName, // Use correct name for each assistant message
-						message: interpolate(msg.content)
-					})
-				}
-
-				if (isBelowThreshold) {
-					// WORLD LORE ENTRIES
-					if (!nextWorldLoreEntryVal || nextWorldLoreEntryVal.done) {
-						worldLoreEntryIterator = null
-					} else if (nextWorldLoreEntryVal.value && priority === 4) {
-						this.includedWorldLoreEntries.push(
-							populateLorebookEntryBindings(
-								nextWorldLoreEntryVal.value,
-								this.chat
-							)
-						)
-					} else if (nextWorldLoreEntryVal.value) {
-						consideredWorldLoreEntries.push(
-							nextWorldLoreEntryVal.value
-						)
-					}
-
-					// CHARACTER LORE ENTRIES
-					if (
-						!nextCharacterLoreEntryVal ||
-						nextCharacterLoreEntryVal.done
-					) {
-						characterLoreIter = null
-					} else if (
-						nextCharacterLoreEntryVal.value &&
-						priority === 4
-					) {
-						this.includedCharacterLoreEntries.push(
-							populateLorebookEntryBindings(
-								nextCharacterLoreEntryVal.value,
-								this.chat
-							)
-						)
-					} else if (nextCharacterLoreEntryVal.value) {
-						consideredCharacterLoreEntries.push(
-							nextCharacterLoreEntryVal.value
-						)
-					}
-
-					// HISTORY ENTRIES
-					if (!nextHistoryEntryVal || nextHistoryEntryVal.done) {
-						historyEntryIter = null
-					} else if (nextHistoryEntryVal.value && priority === 4) {
-						if (isHistoryEntry(nextHistoryEntryVal.value)) {
-							const populated = populateLorebookEntryBindings(
-								nextHistoryEntryVal.value,
-								this.chat
-							)
-							if ("date" in populated) {
-								this.includedHistoryEntries.push(
-									populated as SelectHistoryEntry
-								)
-							}
-						}
-					} else if (nextHistoryEntryVal.value) {
-						consideredHistoryEntries.push(nextHistoryEntryVal.value)
-					}
-
-					// --- Lore/History matching ---
-					chatMessages.forEach((msg) => {
-						// 1. Process World Lore Matches
-						consideredWorldLoreEntries.forEach((entry) => {
-							if (
-								messageFailedWorldLoreMatches[msg.id] &&
-								messageFailedWorldLoreMatches[msg.id].includes(
-									entry.id
-								)
-							) {
-								return
-							}
-							let msgContent = entry.caseSensitive
-								? msg.message || ""
-								: msg.message?.toLowerCase() || ""
-							let matchFound = entry.keys
-								.split(",")
-								.some((key) => {
-									const keyToCheck = entry.caseSensitive
-										? key.trim()
-										: key.toLowerCase().trim()
-									if (entry.useRegex) {
-										const regex = new RegExp(
-											keyToCheck,
-											"g"
-										)
-										return regex.test(msgContent)
-									} else {
-										return msgContent.includes(keyToCheck)
-									}
-								})
-							if (matchFound) {
-								this.includedWorldLoreEntries.push(
-									populateLorebookEntryBindings(
-										entry,
-										this.chat
-									)
-								)
-								consideredWorldLoreEntries =
-									consideredWorldLoreEntries.filter(
-										(e) => e.id !== entry.id
-									)
-							} else {
-								if (!messageFailedWorldLoreMatches[msg.id])
-									messageFailedWorldLoreMatches[msg.id] = []
-								messageFailedWorldLoreMatches[msg.id].push(
-									entry.id
-								)
-							}
-						})
-						// 2. Process Character Lore Matches
-						consideredCharacterLoreEntries.forEach((entry) => {
-							if (
-								messageFailedCharacterLoreMatches[msg.id] &&
-								messageFailedCharacterLoreMatches[
-									msg.id
-								].includes(entry.id)
-							) {
-								return
-							}
-							let msgContent = entry.caseSensitive
-								? msg.message || ""
-								: msg.message?.toLowerCase() || ""
-							let matchFound = entry.keys
-								.split(",")
-								.some((key) => {
-									const keyToCheck = entry.caseSensitive
-										? key.trim()
-										: key.toLowerCase().trim()
-									if (entry.useRegex) {
-										const regex = new RegExp(
-											keyToCheck,
-											"g"
-										)
-										return regex.test(msgContent)
-									} else {
-										return msgContent.includes(keyToCheck)
-									}
-								})
-							if (matchFound) {
-								this.includedCharacterLoreEntries.push(
-									populateLorebookEntryBindings(
-										entry,
-										this.chat
-									)
-								)
-								consideredCharacterLoreEntries =
-									consideredCharacterLoreEntries.filter(
-										(e) => e.id !== entry.id
-									)
-							} else {
-								if (!messageFailedCharacterLoreMatches[msg.id])
-									messageFailedCharacterLoreMatches[msg.id] =
-										[]
-								messageFailedCharacterLoreMatches[msg.id].push(
-									entry.id
-								)
-							}
-						})
-						// 3. Process History Matches (do not call populateLorebookEntryBindings)
-						consideredHistoryEntries.forEach((entry) => {
-							if (
-								messageFailedHistoryMatches[msg.id] &&
-								messageFailedHistoryMatches[msg.id].includes(
-									entry.id
-								)
-							) {
-								return
-							}
-							let msgContent = entry.caseSensitive
-								? msg.message || ""
-								: msg.message?.toLowerCase() || ""
-							let matchFound = entry.keys
-								.split(",")
-								.some((key) => {
-									const keyToCheck = entry.caseSensitive
-										? key
-										: key.toLowerCase()
-									if (entry.useRegex) {
-										const regex = new RegExp(
-											keyToCheck,
-											"g"
-										)
-										return regex.test(msgContent)
-									} else {
-										return msgContent.includes(keyToCheck)
-									}
-								})
-							if (matchFound) {
-								if (isHistoryEntry(entry)) {
-									const populated =
-										populateLorebookEntryBindings(
-											entry,
-											this.chat
-										)
-									if ("date" in populated) {
-										this.includedHistoryEntries.push(
-											populated as SelectHistoryEntry
-										)
-									}
-								}
-								consideredHistoryEntries =
-									consideredHistoryEntries.filter(
-										(e) => e.id !== entry.id
-									)
-							} else {
-								if (!messageFailedHistoryMatches[msg.id])
-									messageFailedHistoryMatches[msg.id] = []
-								messageFailedHistoryMatches[msg.id].push(
-									entry.id
-								)
-							}
-						})
-					})
-				}
-			}
-
-			// --- Rebuild the entire template context for this iteration ---
-			const assistantCharacters =
-				this.getInterpolatedCharacters(interpolationContext)
-			const assistantCharactersWithLore = attachCharacterLoreToCharacters(
-				assistantCharacters,
-				this.includedCharacterLoreEntries,
-				this.chat
-			)
-			const charactersInterpolated = JSON.stringify(
-				assistantCharactersWithLore,
-				null,
-				2
-			)
-			const userCharactersWithLore = attachCharacterLoreToCharacters(
-				this.getInterpolatedPersonas(interpolationContext),
-				this.includedCharacterLoreEntries,
-				this.chat
-			)
-			const personasInterpolated = JSON.stringify(
-				userCharactersWithLore,
-				null,
-				2
-			)
-
-			templateContext.characters = charactersInterpolated
-			templateContext.personas = personasInterpolated
-			templateContext.chatMessages = chatMessages
-			templateContext.characterLore = this.includedCharacterLoreEntries
-
-			const worldLoreObj: Record<string, string> = {}
-			for (const entry of this.includedWorldLoreEntries) {
-				if (entry && entry.name && entry.content) {
-					worldLoreObj[entry.name] = entry.content
-				}
-			}
-			templateContext.worldLore = Object.keys(worldLoreObj).length
-				? JSON.stringify(worldLoreObj, null, 2)
-				: undefined
-
-			const historyObj: Record<string, string> = {}
-			this.includedHistoryEntries.forEach((entry) => {
-				if (entry.content.trim()) {
-					// Only populate bindings if the entry has the required lorebook fields
-					let populatedEntry = entry
-					if ((entry as any).name && (entry as any).keys) {
-						const lorePopulated = populateLorebookEntryBindings(
-							entry as any,
-							this.chat
-						)
-						if (
-							lorePopulated &&
-							typeof lorePopulated.content === "string"
-						) {
-							populatedEntry = {
-								...entry,
-								content: lorePopulated.content
-							}
-						}
-					}
-					// Format date as year-month-day, year-month, or year only
-					const y = populatedEntry.year
-					const m = populatedEntry.month
-					const d = populatedEntry.day
-					let dateKey = String(y)
-					if (m !== undefined && m !== null)
-						dateKey += `-${String(m).padStart(2, "0")}`
-					if (d !== undefined && d !== null)
-						dateKey += `-${String(d).padStart(2, "0")}`
-					historyObj[dateKey] = populatedEntry.content
-				}
-			})
-			let mostRecentDate: {
-				year: number
-				month: number | undefined
-				day: number | undefined
-			} | null = null
-			if (this.includedHistoryEntries.length) {
-				mostRecentDate = {
-					year: this.includedHistoryEntries[0].year,
-					month: !!this.includedHistoryEntries[0].month
-						? this.includedHistoryEntries[0].month
-						: undefined,
-					day: !!this.includedHistoryEntries[0].day
-						? this.includedHistoryEntries[0].day
-						: undefined
-				}
-			}
-			// Format currentDate as year-month-day, year-month, or year only
-			if (mostRecentDate) {
-				const y = mostRecentDate.year
-				const m = mostRecentDate.month
-				const d = mostRecentDate.day
-				let dateKey = String(y)
-				if (m !== undefined && m !== null)
-					dateKey += `-${String(m).padStart(2, "0")}`
-				if (d !== undefined && d !== null)
-					dateKey += `-${String(d).padStart(2, "0")}`
-				templateContext.currentDate = dateKey
-			} else {
-				templateContext.currentDate = undefined
-			}
-			templateContext.history = Object.keys(historyObj).length
-				? JSON.stringify(historyObj)
-				: undefined
-
-			// --- Over-limit logic: remove last non-placeholder message and re-count tokens ---
-			if (isOverLimit) {
-				if (chatMessages.length > 3) {
-					const popped = chatMessages.pop()
-				} else {
-					completed = true
-				}
-			}
-
-			const iterationRate = isBelowThreshold
-				? 10
-				: isAboveThreshold
-					? 2
-					: isOverLimit
-						? 1
-						: 1
-			if (
-				(priority !== 4 && iterationCount % iterationRate === 0) ||
-				isOverLimit
-			) {
-				includedChatMessages = chatMessages.length - 1 // Exclude the last empty message
-				includedChatMessageIds = chatMessages
-					.filter((m) => m.id !== -2)
-					.map((m) => m.id)
-
-				// --- Render and count tokens ---
-				renderedPrompt = this.handlebars.compile(
-					this.contextConfig.template
-				)({
-					...templateContext,
-					chatMessages: [...chatMessages].reverse()
-				})
-				if (useChatFormat) {
-					renderedMessages = parseSplitChatPrompt(renderedPrompt)
-					renderedPrompt = JSON.stringify(renderedMessages)
-				}
-				totalTokens =
-					typeof this.tokenCounter.countTokens === "function"
-						? await this.tokenCounter.countTokens(renderedPrompt)
-						: 0
-
-				isBelowThreshold = isBelowThreshold
-					? totalTokens <
-						this.tokenLimit * this.contextThresholdPercent
-					: isBelowThreshold
-				isAboveThreshold = !isAboveThreshold
-					? totalTokens >=
-						this.tokenLimit * this.contextThresholdPercent
-					: isAboveThreshold
-				isOverLimit = !isOverLimit
-					? totalTokens > this.tokenLimit
-					: isOverLimit
-				const iterEnd = Date.now()
-				debugTimings.push({
-					priority,
-					chatMessagesCount: chatMessages.length,
-					totalTokens,
-					iterationMs: iterEnd - iterStart
-				})
-			}
-
-			if (isOverLimit && totalTokens <= this.tokenLimit) {
-				completed = true
-			}
-		}
-
-		
-		////
-		// FINAL COMPILE
-		///
-
-		// Recalculate included/excluded message counts and token count based on final prompt/messages
-		includedChatMessages = chatMessages.length - 1 // Exclude the last empty message
-		includedChatMessageIds = chatMessages
-			.filter((m) => m.id !== -2)
-			.map((m) => m.id)
-		// Excluded IDs are those in the original chat that are not included
-		excludedChatMessageIds = (this.chat.chatMessages || [])
-			.map((m) => m.id)
-			.filter((id) => !includedChatMessageIds.includes(id))
-
-		renderedPrompt = this.handlebars.compile(this.contextConfig.template)({
-			...templateContext,
-			chatMessages: [...chatMessages].reverse()
+		// Use the engine to process content
+		return await infillEngine.infillContent({
+			charName,
+			personaName,
+			templateContext,
+			useChatFormat,
+			tokenLimit: this.tokenLimit,
+			contextThresholdPercent: this.contextThresholdPercent,
+			tokenCounter: this.tokenCounter,
+			handlebars: this.handlebars,
+			contextConfig: this.contextConfig,
+			strategy,
+			config
 		})
+	}
 
-		if (useChatFormat) {
-			renderedMessages = parseSplitChatPrompt(renderedPrompt)
-			renderedPrompt = JSON.stringify(renderedMessages)
-		}
+	/**
+	 * Set the matching strategy for lore matching
+	 * Allows runtime switching between keyword, vector, and hybrid matching
+	 */
+	private _infillEngine: ContentInfillEngine | null = null
 
-		// Recount tokens for the final prompt
-		totalTokens =
-			typeof this.tokenCounter.countTokens === "function"
-				? await this.tokenCounter.countTokens(renderedPrompt)
-				: 0
-
-		return {
-			renderedPrompt: !useChatFormat ? renderedPrompt : undefined,
-			renderedMessages,
-			totalTokens,
-			chatMessages: {
-				included: includedChatMessages,
-				includedIds: includedChatMessageIds,
-				excludedIds: excludedChatMessageIds
-			}
+	async setMatchingStrategy(strategy: LoreMatchingStrategy): Promise<void> {
+		if (this._infillEngine) {
+			await this._infillEngine.setMatchingStrategy(strategy)
 		}
 	}
 
+	async setMatchingStrategyFromConfig(config: MatchingStrategyConfig): Promise<void> {
+		const strategy = await MatchingStrategyFactory.createStrategy(config)
+		await this.setMatchingStrategy(strategy)
+	}
+
+	getMatchingStrategyName(): string | null {
+		return this._infillEngine?.getMatchingStrategyName() || null
+	}
+
+	// --- Original infillContent method remains for backward compatibility ---
 	// --- Modularized section: sources reporting ---
 	private buildSources(scenarioSource: null | "character" | "chat") {
 		const chatCharactersArr = this.chat.chatCharacters || []
@@ -1050,8 +464,7 @@ export class PromptBuilder {
 					nickname: c.nickname,
 					description: Boolean(c.description),
 					personality: Boolean(c.personality),
-					wiBefore: Boolean(this.contextBuildCharacterWiBefore()),
-					wiAfter: Boolean(this.contextBuildCharacterWiAfter()),
+					exampleDialogue: Boolean(this.contextBuildCharacterExampleDialogue()),
 					postHistoryInstructions: Boolean(c.postHistoryInstructions)
 				}
 			}),
@@ -1112,19 +525,14 @@ export class PromptBuilder {
 			(this.chat.chatPersonas &&
 				this.chat.chatPersonas[0]?.persona?.name) ||
 			"user"
-		const interpolationContext = {
-			char: charName,
-			character: charName,
-			user: personaName,
-			persona: personaName
-		}
+		const interpolationContext = this.interpolationEngine.createInterpolationContext({
+			currentCharacterName: charName,
+			currentPersonaName: personaName
+		})
 
-		const interpolate = (str: string | undefined) =>
-			str ? this.handlebars.compile(str)(interpolationContext) : str
-
-		const instructions = interpolate(this.instructions)
-		const wiBefore = interpolate(this.wiBefore)
-		const wiAfter = interpolate(this.wiAfter)
+		const instructions = this.interpolationEngine.interpolateString(this.instructions, interpolationContext)
+		const exampleDialogue = this.interpolationEngine.interpolateString(this.exampleDialogue, interpolationContext)
+		const postHistoryInstructions = this.interpolationEngine.interpolateString(this.postHistoryInstructions, interpolationContext)
 
 		const { scenarioInterpolated, scenarioSource } =
 			this.getScenarioInterpolated(currentCharacter, interpolationContext)
@@ -1132,7 +540,7 @@ export class PromptBuilder {
 			this.getInterpolatedCharacters(interpolationContext)
 		const assistantCharactersWithLore = attachCharacterLoreToCharacters(
 			assistantCharacters,
-			this.includedCharacterLoreEntries,
+			[], // Character lore is now handled by ContentInfillEngine
 			this.chat
 		)
 		const charactersInterpolated = JSON.stringify(
@@ -1142,7 +550,7 @@ export class PromptBuilder {
 		)
 		const userCharactersWithLore = attachCharacterLoreToCharacters(
 			this.getInterpolatedPersonas(interpolationContext),
-			this.includedCharacterLoreEntries,
+			[], // Character lore is now handled by ContentInfillEngine
 			this.chat
 		)
 		const personasInterpolated = JSON.stringify(
@@ -1155,8 +563,8 @@ export class PromptBuilder {
 			charactersInterpolated,
 			personasInterpolated,
 			scenarioInterpolated,
-			wiBefore,
-			wiAfter,
+			exampleDialogue,
+			postHistoryInstructions,
 			charName,
 			personaName
 		})
@@ -1174,7 +582,11 @@ export class PromptBuilder {
 			templateContext,
 			charName,
 			personaName,
-			useChatFormat
+			useChatFormat,
+			config: defaultContentInclusionConfig,
+			strategy: undefined,
+			matchingStrategy: undefined,
+			matchingStrategyConfig: undefined
 		})
 
 		const sources = this.buildSources(scenarioSource)
@@ -1215,30 +627,6 @@ export class PromptBuilder {
 				sources
 			}
 		}
-	}
-
-	attachCharacterLoreToPersonas(
-		arg0: any[],
-		includedCharacterLoreEntries: {
-			id: number
-			name: string | null
-			extraJson: Record<string, any>
-			createdAt: string | null
-			updatedAt: string | null
-			lorebookId: number
-			keys: string
-			useRegex: boolean | null
-			caseSensitive: boolean
-			content: string
-			constant: boolean
-			enabled: boolean
-			position: number
-			priority: number
-			lorebookBindingId: number | null
-		}[],
-		chat: BasePromptChat
-	) {
-		throw new Error("Method not implemented.")
 	}
 
 	*chatMessageIterator({
@@ -1298,62 +686,23 @@ export class PromptBuilder {
 	}
 }
 
-// --- Types for template context ---
-export type TemplateContextCharacter = {
-	name: string
-	nickname?: string
-	description: string
-	personality?: string
-	loreEntries?: SelectCharacterLoreEntry[]
-	category?: string
-	lorebookBindingId?: number | null
-	year?: number
-	month?: number
-	day?: number
-}
+// Re-export types for backward compatibility
+export type {
+	TemplateContextCharacter,
+	TemplateContextPersona, 
+	TemplateContext,
+	CompiledPrompt,
+	CompileOptions
+} from "./types"
 
-export type TemplateContextPersona = {
-	name: string
-	description: string
-}
-
-export type TemplateContext = {
-	instructions: string
-	characters: TemplateContextCharacter[] | string // can be JSON stringified
-	personas: TemplateContextPersona[] | string // can be JSON stringified
-	scenario: string
-	wiBefore?: string
-	wiAfter?: string
-	chatMessages: any[]
-	char: string
-	character: string
-	user: string
-	persona: string
-	worldLore?: string // changed to object
-	characterLore?: SelectCharacterLoreEntry[]
-	history?: string // changed to object
-	currentDate?: string
-	__promptBuilderInstance: PromptBuilder
-}
-
-function isHistoryEntry(entry: any): entry is SelectHistoryEntry {
-	return entry && typeof entry === "object" && "date" in entry
-}
-
-function parseSplitChatPrompt(prompt: string): ChatCompletionMessageParam[] {
-	const blocks = prompt.split(/(?=<@role:(user|assistant|system)>\s*)/g)
-	// TODO: populate the name param, but local models may ignore it anyway
-	const messages = blocks
-		.map((block) => {
-			const match = block.match(
-				/^<@role:(user|assistant|system)>\s*([\s\S]*)$/
-			)
-			return match ? { role: match[1], content: match[2].trim() } : null
-		})
-		.filter(Boolean)
-
-	return messages as ChatCompletionMessageParam[]
-}
+// Re-export InterpolationEngine and its utilities for external use
+export { 
+	InterpolationEngine,
+	createInterpolationEngine,
+	interpolateTemplate,
+	createBasicContext
+} from "./InterpolationEngine"
+export type { InterpolationContext, CharacterData, PersonaData } from "./InterpolationEngine"
 
 // Helper type guard for extended lorebook
 function hasLorebookEntries(lorebook: any): lorebook is SelectLorebook & {

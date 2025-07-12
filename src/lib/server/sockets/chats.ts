@@ -7,6 +7,7 @@ import type { BaseConnectionAdapter } from "../connectionAdapters/BaseConnection
 import { getConnectionAdapter } from "../utils/getConnectionAdapter"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
+import { InterpolationEngine } from "../utils/promptBuilder"
 
 // --- Global map for active adapters ---
 export const activeAdapters = new Map<string, BaseConnectionAdapter>()
@@ -90,10 +91,15 @@ export async function createChat(
 			with: { character: true },
 			orderBy: (cc, { asc }) => asc(cc.position ?? 0)
 		})
+		const chatPersona = await db.query.chatPersonas.findFirst({
+			where: (cp, { eq, and, isNotNull }) => and(eq(cp.chatId, newChat.id), isNotNull(cp.personaId)),
+			with: { persona: true },
+		})
 		for (const cc of chatCharacters) {
 			if (!cc.character) continue
 			const greetings = buildCharacterFirstChatMessage({
 				character: cc.character,
+				persona: chatPersona?.persona,
 				isGroup: !!newChat.isGroup
 			})
 			if (greetings.length > 0) {
@@ -816,8 +822,6 @@ export async function updateChat(
 			(id) => !existingChat?.chatPersonas.some((p) => p.personaId === id)
 		)
 
-		console.log("chatId", message.chat.id)
-
 		// Delete characters that are no longer in the chat
 		if (deletedCharacterIds.length > 0) {
 			await db
@@ -924,11 +928,17 @@ export async function updateChat(
 				with: { character: true },
 				orderBy: (cc, { asc }) => asc(cc.position ?? 0)
 			})
+			const chatPersona = await db.query.chatPersonas.findFirst({
+				where: (cp, { eq, and, isNotNull }) => and(eq(cp.chatId, message.chat.id), isNotNull(cp.personaId)),
+				with: { persona: true },
+				orderBy: (cp, { asc }) => asc(cp.position ?? 0)
+			})
 			for (const cc of newChatCharacters) {
 				if (!cc.character) continue
 				if (!newCharacterIds.includes(cc.character.id)) continue
 				const greetings = buildCharacterFirstChatMessage({
 					character: cc.character,
+					persona: chatPersona?.persona,
 					isGroup: message.characterIds.length > 1
 				})
 				if (greetings.length > 0) {
@@ -1261,23 +1271,30 @@ export async function chatMessageSwipeLeft(
 // Builds the chatMessage history for the first chat message of a character, with history swipes for the user to choose from
 function buildCharacterFirstChatMessage({
 	character,
+	persona,
 	isGroup
 }: {
 	character: SelectCharacter
+	persona: SelectPersona | undefined | null
 	isGroup: boolean
 }): string[] {
 	console.log("Building first chat message for character:", character.name)
 	const history: string[] = []
+	const engine = new InterpolationEngine()
+	const context = engine.createInterpolationContext({
+		currentCharacterName: character.nickname || character.name,
+		currentPersonaName: persona?.name || "User",
+	})
 	if (!isGroup || !character.groupOnlyGreetings?.length) {
 		if (character.firstMessage) {
-			history.push(character.firstMessage.trim())
+			history.push(engine.interpolateString(character.firstMessage.trim(), context)!)
 		}
 		if (character.alternateGreetings) {
-			history.push(...character.alternateGreetings.map((g) => g.trim()))
+			history.push(...character.alternateGreetings.map((g) => engine.interpolateString(g.trim(), context)!))
 		}
 	} else if (character.groupOnlyGreetings?.length) {
 		// If this is a group chat, use only group greetings
-		history.push(...character.groupOnlyGreetings.map((g) => g.trim()))
+		history.push(...character.groupOnlyGreetings.map((g) => engine.interpolateString(g.trim(), context)!))
 	} else {
 		// Fallback firstMessage if no greetings are available
 		history.push(

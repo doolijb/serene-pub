@@ -363,8 +363,7 @@ export const characters = pgTable("characters", {
 	}), // Optional FK to lorebooks.id
 	extensions: json("extensions").notNull().default({}).$type<Record<string, any>>() ,
 	isFavorite: boolean("is_favorite").notNull().default(false) // 1 if favorite, 0 otherwise
-}, table => ({
-}))
+})
 
 export const charactersRelations = relations(characters, ({ many, one }) => ({
 	user: one(users, {

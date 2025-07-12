@@ -917,8 +917,8 @@ declare global {
 					nickname?: string
 					description: boolean
 					personality: boolean
-					wiBefore: boolean
-					wiAfter: boolean
+					exampleDialogue: boolean
+					postHistoryInstructions: boolean
 					postHistoryInstructions: boolean
 				}>
 				personas: Array<{
