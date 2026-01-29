@@ -10,6 +10,7 @@ Serene Pub is an original project and is not a rewrite, port, clone, or fork of 
 ## Contributors
 
 - Jody Doolittle (doolijb)
+- djdembeck
 
 ## Third-Party Attributions
 
