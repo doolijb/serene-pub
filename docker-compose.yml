@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  serene-pub:
+    build: .
+    image: serene-pub:latest
+    ports:
+      - "3002:3000"
+    environment:
+      - PORT=3000
+    volumes:
+      - serenepub_data:/root/.local/share/SerenePub/data
+    restart: unless-stopped
+
+volumes:
+  serenepub_data:
+    driver: local

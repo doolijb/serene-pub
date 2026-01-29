@@ -150,6 +150,37 @@ Linux, MacOS and Windows are supported!
 3. `npm run dev` to start the dev server, or `npm run dev:host`
 4. Visit [http://localhost:5173](http://localhost:5173)
 
+## 🐳 Docker
+
+You can run Serene Pub with Docker. The repository includes a production-ready `Dockerfile` and a `docker-compose.yml` that mounts a persistent named volume for the app data (database).
+
+- Build the image locally:
+
+```bash
+docker build -t serene-pub .
+```
+
+- Run the container (host port 3002 -> container port 3000):
+
+```bash
+docker run -p 3002:3000 --env PORT=3000 --rm serene-pub
+```
+
+- Run with a host bind-mount for data persistence (creates `./data` on host):
+
+```bash
+mkdir -p ./data
+docker run -p 3002:3000 -v "$(pwd)/data":/root/.local/share/SerenePub/data --env PORT=3000 --rm serene-pub
+```
+
+- Use `docker-compose` (named volume `serenepub_data` will be created):
+
+```bash
+docker compose up --build -d
+```
+
+The app stores its PGlite database under `/root/.local/share/SerenePub/data` inside the container; mounting that path to a host directory or named volume keeps your chats and settings between restarts.
+
 **Need help?** Check out our **[Setup Guide](https://github.com/doolijb/serene-pub/wiki/Installation-&-Setup)** in the wiki.
 
 ---
