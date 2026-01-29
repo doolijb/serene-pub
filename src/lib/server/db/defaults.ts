@@ -309,7 +309,11 @@ Example dialogue:
 			await db.insert(schema.systemSettings).values({
 				id: 1,
 				ollamaManagerEnabled: true,
-				ollamaManagerBaseUrl: "http://localhost:11434/"
+				ollamaManagerBaseUrl: "http://localhost:11434/",
+				defaultConnectionId: null, // Will be set when first connection is created
+				defaultSamplingConfigId: 1, // Default sampling config
+				defaultContextConfigId: 1, // Default context config
+				defaultPromptConfigId: 1 // Roleplay - Simple
 			})
 		}
 	} catch (error) {
