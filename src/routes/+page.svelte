@@ -50,31 +50,64 @@
 	// Simple setup check - only requires connection + character + persona
 	let isBasicSetup = $derived(hasConnection && hasCharacter && hasPersona)
 
+	// Define wizard step types
+	type WizardStepType = "connection-choice" | "connection-setup" | "character" | "persona" | "chat"
+
+	interface WizardStepDefinition {
+		id: WizardStepType
+		requiresAdmin?: boolean
+		isComplete: () => boolean
+	}
+
+	// Build dynamic wizard steps based on user role
+	let wizardSteps = $derived.by((): WizardStepDefinition[] => {
+		const steps: WizardStepDefinition[] = []
+		
+		// Add admin-only steps first if user is admin
+		if (userCtx.user?.isAdmin) {
+			steps.push({
+				id: "connection-choice",
+				requiresAdmin: true,
+				isComplete: () => false // Always show choice first
+			})
+			steps.push({
+				id: "connection-setup",
+				requiresAdmin: true,
+				isComplete: () => hasConnection
+			})
+		}
+		
+		// Add common steps for all users
+		steps.push({
+			id: "character",
+			isComplete: () => hasCharacter
+		})
+		steps.push({
+			id: "persona",
+			isComplete: () => hasPersona
+		})
+		steps.push({
+			id: "chat",
+			isComplete: () => true // Final step
+		})
+		
+		return steps
+	})
+
+	// Current wizard step data
+	let currentWizardStep = $derived(wizardSteps[wizardStep])
+
+	// Total number of steps (dynamic)
+	let totalWizardSteps = $derived(wizardSteps.length)
+
 	// Determine current step based on what's completed
 	let currentStep = $derived.by(() => {
-		if (!hasConnection) return 0 // Connection step
-		if (!hasCharacter) return 2 // Character creation step
-		if (!hasPersona) return 3 // Persona creation step
-		return 4 // Final step - start chat
+		const firstIncompleteIndex = wizardSteps.findIndex(step => !step.isComplete())
+		return firstIncompleteIndex >= 0 ? firstIncompleteIndex : wizardSteps.length - 1
 	})
 
 	// Check if current wizard step is complete
-	let isCurrentStepComplete = $derived.by(() => {
-		switch (wizardStep) {
-			case 0:
-				return false // Always show choice first
-			case 1:
-				return hasConnection // Connection complete
-			case 2:
-				return hasCharacter // Character created
-			case 3:
-				return hasPersona // Persona created
-			case 4:
-				return true // Final step
-			default:
-				return false
-		}
-	})
+	let isCurrentStepComplete = $derived(currentWizardStep?.isComplete() ?? false)
 
 	// Full setup check (legacy)
 	let isSetup = $derived.by(() => {
@@ -98,7 +131,7 @@
 	function startWizard() {
 		showWizard = true
 		// Skip to the current incomplete step
-		wizardStep = currentStep === 4 ? 0 : currentStep
+		wizardStep = currentStep === wizardSteps.length - 1 ? 0 : currentStep
 	}
 
 	function nextWizardStep() {
@@ -135,11 +168,11 @@
 
 		// If basic setup is complete, go directly to chat creation step
 		if (isBasicSetup) {
-			wizardStep = 4 // Chat creation step
+			wizardStep = wizardSteps.findIndex(s => s.id === "chat")
 		} else {
-			// Skip to the current incomplete step
-			wizardStep = currentStep === 4 ? 0 : currentStep
+			wizardStep = currentStep === wizardSteps.length - 1 ? 0 : currentStep
 		}
+
 	}
 
 	function openAssistantChat() {
@@ -193,14 +226,14 @@
 		socket.on("characters:list", (msg) => {
 			characters = msg.characterList || []
 			// If we're in the wizard and just got characters, advance if needed
-			if (showWizard && wizardStep === 2 && characters.length > 0) {
+			if (showWizard && currentWizardStep?.id === "character" && characters.length > 0) {
 				nextWizardStep()
 			}
 		})
 		socket.on("personas:list", (msg) => {
 			personas = msg.personaList || []
 			// If we're in the wizard and just got personas, advance if needed
-			if (showWizard && wizardStep === 3 && personas.length > 0) {
+			if (showWizard && currentWizardStep?.id === "persona" && personas.length > 0) {
 				nextWizardStep()
 			}
 		})
@@ -284,7 +317,9 @@
 		socket.emit("characters:list", {})
 		socket.emit("personas:list", {})
 		socket.emit("chats:list", {})
-		socket.emit("connections:list", {})
+		if (userCtx.user?.isAdmin) {
+			socket.emit("connections:list", {})
+		}
 	})
 
 	onDestroy(() => {
@@ -366,8 +401,13 @@
 							Welcome to Serene Pub!
 						</h1>
 						<p class="text-muted-foreground text-lg">
-							We'll guide you through connecting to an AI service
-							and creating your first character
+							{#if userCtx.user?.isAdmin}
+								We'll guide you through connecting to an AI service
+								and creating your first character
+							{:else}
+								We'll guide you through creating your first character
+								and persona to start chatting
+							{/if}
 						</p>
 					{/if}
 				</div>
@@ -382,7 +422,7 @@
 					{#if isBasicSetup}
 						Create First Chat
 					{:else}
-						Quick Start (5 minutes)
+						Quick Start ({totalWizardSteps} steps)
 					{/if}
 				</button>
 			</div>				<!-- Advanced Option -->
@@ -393,15 +433,17 @@
 						Advanced Setup (Manual Configuration)
 					</summary>
 					<div class="mt-4 space-y-3">
-						<button
-							class="btn preset-tonal-surface btn-sm"
-							onclick={() => {
-								panelsCtx.digest.tutorial = true
-								openPanel("connections")
-							}}
-						>
-							<Icons.Cable size={16} /> Manage Connections
-						</button>
+						{#if userCtx.user?.isAdmin}
+							<button
+								class="btn preset-tonal-surface btn-sm"
+								onclick={() => {
+									panelsCtx.digest.tutorial = true
+									openPanel("connections")
+								}}
+							>
+								<Icons.Cable size={16} /> Manage Connections
+							</button>
+						{/if}
 						<button
 							class="btn preset-tonal-surface btn-sm"
 							onclick={() => {
@@ -438,7 +480,7 @@
 						Quick Setup
 					</h2>
 					<div class="mb-4 flex gap-2">
-						{#each Array(5) as _, i}
+						{#each wizardSteps as _, i}
 							<div
 								class="h-2 flex-1 rounded-full {i <= wizardStep
 									? 'bg-primary-500'
@@ -447,13 +489,13 @@
 						{/each}
 					</div>
 					<p class="text-muted-foreground text-lg">
-						Step {wizardStep + 1} of 5
+						Step {wizardStep + 1} of {totalWizardSteps}
 					</p>
 				</div>
 
 				<!-- Step Content -->
 				<div class="mb-6 min-h-[300px]">
-					{#if wizardStep === 0}
+					{#if currentWizardStep?.id === "connection-choice"}
 						<!-- Step 1: Choose AI Connection Method -->
 						<Icons.Brain
 							size={48}
@@ -468,7 +510,7 @@
 						</p>
 
 						<div class="space-y-3">
-							{#if systemSettingsCtx.settings.ollamaManagerEnabled}
+							{#if systemSettingsCtx.settings?.ollamaManagerEnabled}
 								<button
 									class="btn preset-filled-primary-500 h-auto w-full flex-col gap-2 p-4"
 									onclick={() => {
@@ -525,7 +567,7 @@
 								</p>
 							</button>
 						</div>
-					{:else if wizardStep === 1}
+					{:else if currentWizardStep?.id === "connection-setup"}
 						<!-- Step 2: Ollama Setup -->
 						{#if hasConnection}
 							<!-- Connection Complete -->
@@ -550,7 +592,7 @@
 									Continue to Character Creation
 								</button>
 							</div>
-						{:else if systemSettingsCtx.settings.ollamaManagerEnabled}
+						{:else if systemSettingsCtx.settings?.ollamaManagerEnabled}
 							<!-- Ollama Manager Flow -->
 							<OllamaIcon
 								class="text-primary-500 mx-auto mb-4 h-12 w-12"
@@ -649,7 +691,7 @@
 								</div>
 							</div>
 						{/if}
-					{:else if wizardStep === 2}
+					{:else if currentWizardStep?.id === "character"}
 						<!-- Step 3: Create Character -->
 						{#if hasCharacter}
 							<!-- Character Complete -->
@@ -698,7 +740,7 @@
 								</button>
 							</div>
 						{/if}
-					{:else if wizardStep === 3}
+					{:else if currentWizardStep?.id === "persona"}
 						<!-- Step 4: Create Persona -->
 						{#if hasPersona}
 							<!-- Persona Complete -->
@@ -750,7 +792,7 @@
 								</button>
 							</div>
 						{/if}
-					{:else if wizardStep === 4}
+					{:else if currentWizardStep?.id === "chat"}
 						<!-- Step 5: Open Chat Interface -->
 						<Icons.MessageCircle
 							size={48}
@@ -790,7 +832,7 @@
 						{wizardStep === 0 ? "Cancel" : "Previous"}
 					</button>
 
-					{#if wizardStep === 1 && !systemSettingsCtx.settings.ollamaManagerEnabled && !hasConnection}
+					{#if currentWizardStep?.id === "connection-setup" && !systemSettingsCtx.settings?.ollamaManagerEnabled && !hasConnection}
 						<button
 							class="btn preset-filled-primary-500"
 							onclick={() => {
@@ -859,19 +901,20 @@
 				>
 					Start Chatting
 				</button>
-				<button
-					class="btn preset-tonal-primary-500"
-					onclick={openAssistantChat}
-				>
-					<Icons.MessageCircleQuestion size={20} />
-					Ask the Assistant
-				</button>
-			</div>
+			<!-- Hidden for now -->
+			<!-- <button
+				class="btn preset-tonal-primary-500"
+				onclick={openAssistantChat}
+			>
+				<Icons.MessageCircleQuestion size={20} />
+				Ask the Assistant
+			</button> -->
 		</div>
+	</div>
 
-		<div class="w-full">
-			<h3 class="w-full text-xl">Characters</h3>
-			<div class="grid grid-cols-1 justify-between gap-2 lg:grid-cols-2">
+	<div class="w-full">
+		<h3 class="w-full text-xl">Characters</h3>
+		<div class="grid grid-cols-1 justify-between gap-2 lg:grid-cols-2">
 				<!-- <div class="card preset-filled-surface-200-800 p-2">
 					tEST
 				</div> -->

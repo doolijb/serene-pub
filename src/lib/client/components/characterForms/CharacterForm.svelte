@@ -449,6 +449,10 @@
 					title: "Character Created",
 					description: `Character "${res.character.name}" created successfully.`
 				})
+				// Reset original data to match current state before closing
+				originalCharacterData = { ...editCharacterData }
+				// Directly set hasChanges to false to prevent race condition
+				hasChanges = false
 				closeForm()
 			}
 		})
@@ -460,9 +464,14 @@
 					title: "Character Updated",
 					description: `Character "${res.character.name}" updated successfully.`
 				})
+				// Reset original data to match current state before closing
+				originalCharacterData = { ...editCharacterData }
+				// Directly set hasChanges to false to prevent race condition
+				hasChanges = false
 				closeForm()
 			}
 		})
+
 		socket.on(
 			"lorebooks:list",
 			(message: Sockets.Lorebooks.List.Response) => {

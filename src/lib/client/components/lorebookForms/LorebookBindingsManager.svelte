@@ -92,14 +92,17 @@
 		persona: Partial<SelectPersona> & { id: number }
 	) {
 		showLinkPersonaBindingModal = false
+		console.log("Linking persona:", persona, "to binding:", lorebookBindingId)
 		const req: Sockets.Lorebooks.UpdateBinding.Params = {
 			lorebookBinding: {
 				id: lorebookBindingId ?? 0,
-				personaId: persona.id ?? null,
+				personaId: persona.id,
 				characterId: null
 			}
 		}
+		console.log("Sending update request:", req)
 		socket?.emit("lorebooks:updateBinding", req)
+		lorebookBindingId = null
 	}
 
 	function handleLinkCharacterBindingSelect(
@@ -131,6 +134,7 @@
 			}
 		}
 		socket?.emit("lorebooks:createBinding", req)
+		lorebookBindingId = null
 	}
 
 	function handleAddCharacterBindingSelect(
@@ -151,6 +155,20 @@
 	}
 
 	function getBindingCharacter(binding: SelectLorebookBinding) {
+		// First check if the binding already has the character/persona populated from the server
+		const bindingWithRelations = binding as SelectLorebookBinding & {
+			character?: SelectCharacter | null
+			persona?: SelectPersona | null
+		}
+		
+		if (bindingWithRelations.character) {
+			return bindingWithRelations.character
+		}
+		if (bindingWithRelations.persona) {
+			return bindingWithRelations.persona
+		}
+		
+		// Fallback to looking them up in the lists
 		return binding.characterId
 			? characterList.find((c) => c.id === binding.characterId)
 			: binding.personaId
@@ -337,6 +355,7 @@
 	onSelect={handleLinkPersonaBindingSelect}
 	onOpenChange={() => (showLinkPersonaBindingModal = false)}
 	personas={availableBindingPersonas}
+	returnFullPersona={true}
 />
 <CharacterSelectModal
 	open={showLinkCharacterBindingModal}
@@ -352,6 +371,7 @@
 	onSelect={handleAddPersonaBindingSelect}
 	onOpenChange={() => (showAddPersonaBindingModal = false)}
 	personas={availableBindingPersonas}
+	returnFullPersona={true}
 />
 
 <CharacterSelectModal
