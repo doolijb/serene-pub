@@ -7,17 +7,26 @@ import { authMiddleware } from "$lib/server/sockets/auth"
 dotenv.config()
 
 function getSocketsHttpMode() {
-	const SOCKETS_USE_HTTPS = process.env.SOCKETS_HTTP_MODE
-	return SOCKETS_USE_HTTPS && parseInt(SOCKETS_USE_HTTPS) ? "https" : "http"
+	const SOCKETS_HTTP_MODE = process.env.SOCKETS_HTTP_MODE
+	if (!SOCKETS_HTTP_MODE) return "http"
+	const normalized = SOCKETS_HTTP_MODE.trim().toLowerCase()
+	if (normalized === "https" || normalized === "http") return normalized
+	return "http"
 }
 
 function getSocketsPort() {
 	return process.env.SOCKETS_PORT || "3001"
 }
 
+function getHost() {
+	if(!process.env.PUBLIC_SOCKETS_ENDPOINT) {
+		process.env.PUBLIC_SOCKETS_ENDPOINT = `${getSocketsHttpMode()}://0.0.0.0:${getSocketsPort()}`
+	}
+	return process.env.PUBLIC_SOCKETS_ENDPOINT
+}
+
 export async function loadSocketsServer() {
-	const host = `${getSocketsHttpMode()}://0.0.0.0:${getSocketsPort()}`
-	process.env.PUBLIC_SOCKETS_ENDPOINT = host
+	const host = getHost()
 
 	const io = await skio.setup(host, {
 		cors: { origin: "*", credentials: false },
