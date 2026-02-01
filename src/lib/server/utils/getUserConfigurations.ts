@@ -1,6 +1,8 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { eq } from "drizzle-orm"
+import { asc, eq } from "drizzle-orm"
+import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 /**
  * Gets user's active configurations with fallback to system defaults
@@ -90,7 +92,7 @@ export async function getUserConfigurations(userId: number, retryCount = 0): Pro
 			
 			try {
 				// Check if system settings exist
-				const systemSettings = await db.query.systemSettings.findFirst({
+				let systemSettings = await db.query.systemSettings.findFirst({
 					where: (s, { eq }) => eq(s.id, 1)
 				})
 
@@ -106,6 +108,9 @@ export async function getUserConfigurations(userId: number, retryCount = 0): Pro
 						defaultPromptConfigId: 1
 					})
 					console.log('Created missing system settings')
+					systemSettings = await db.query.systemSettings.findFirst({
+						where: (s, { eq }) => eq(s.id, 1)
+					})
 				} else {
 					// Update existing system settings with missing defaults
 					const updates: any = {}
@@ -125,6 +130,46 @@ export async function getUserConfigurations(userId: number, retryCount = 0): Pro
 							.set(updates)
 							.where(eq(schema.systemSettings.id, 1))
 						console.log('Updated system settings with missing defaults:', updates)
+						systemSettings = {
+							...systemSettings,
+							...updates
+						}
+					}
+				}
+
+				// Ensure a default connection exists and is referenced
+				let defaultConnection =
+					systemSettings?.defaultConnectionId
+						? await db.query.connections.findFirst({
+								where: (c, { eq }) => eq(c.id, systemSettings.defaultConnectionId)
+						  })
+						: undefined
+
+				if (!defaultConnection) {
+					// Try to reuse any existing connection
+					defaultConnection = await db.query.connections.findFirst({
+						orderBy: (c, { asc }) => [asc(c.id)]
+					})
+
+					if (!defaultConnection) {
+						const defaultData = {
+							...CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA],
+							name: "Ollama (Local)"
+						}
+						const [created] = await db
+							.insert(schema.connections)
+							.values(defaultData)
+							.returning()
+						defaultConnection = created
+						console.log("Created default connection:", created.id)
+					}
+
+					if (defaultConnection?.id) {
+						await db
+							.update(schema.systemSettings)
+							.set({ defaultConnectionId: defaultConnection.id })
+							.where(eq(schema.systemSettings.id, 1))
+						console.log("Updated system settings with default connection:", defaultConnection.id)
 					}
 				}
 
