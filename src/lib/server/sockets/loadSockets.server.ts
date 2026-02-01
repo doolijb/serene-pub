@@ -6,7 +6,7 @@ import { authMiddleware } from "$lib/server/sockets/auth"
 
 dotenv.config()
 
-function getSocketsHttpMode() {
+export function getSocketsHttpMode() {
 	const SOCKETS_HTTP_MODE = process.env.SOCKETS_HTTP_MODE
 	if (!SOCKETS_HTTP_MODE) return "http"
 	const normalized = SOCKETS_HTTP_MODE.trim().toLowerCase()
@@ -14,19 +14,22 @@ function getSocketsHttpMode() {
 	return "http"
 }
 
-function getSocketsPort() {
+export function getSocketsPort() {
 	return process.env.SOCKETS_PORT || "3001"
 }
 
-function getHost() {
-	if(!process.env.PUBLIC_SOCKETS_ENDPOINT) {
-		process.env.PUBLIC_SOCKETS_ENDPOINT = `${getSocketsHttpMode()}://0.0.0.0:${getSocketsPort()}`
-	}
-	return process.env.PUBLIC_SOCKETS_ENDPOINT
+export function getPublicSocketsEndpoint(url?: URL) {
+	const configured = process.env.PUBLIC_SOCKETS_ENDPOINT?.trim()
+	if (configured) return configured
+	const protocol =
+		getSocketsHttpMode() ||
+		(url ? url.protocol.replace(":", "") : "http")
+	const hostname = url?.hostname || "localhost"
+	return `${protocol}://${hostname}:${getSocketsPort()}`
 }
 
 export async function loadSocketsServer() {
-	const host = getHost()
+	const host = `${getSocketsHttpMode()}://0.0.0.0:${getSocketsPort()}`
 
 	const io = await skio.setup(host, {
 		cors: { origin: "*", credentials: false },
