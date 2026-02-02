@@ -32,41 +32,57 @@ async function handleAssistantReasoning({
 	emitToUser: (event: string, data: any) => void
 	userId: number
 }): Promise<boolean | null> {
-	console.log('[handleAssistantReasoning] Parsing for reasoning format...')
+	console.log("[handleAssistantReasoning] Parsing for reasoning format...")
 	const reasoningParsed = parseReasoningFormat(content)
-	
-	console.log('[handleAssistantReasoning] Parse result:', reasoningParsed ? 'DETECTED' : 'NOT DETECTED')
+
+	console.log(
+		"[handleAssistantReasoning] Parse result:",
+		reasoningParsed ? "DETECTED" : "NOT DETECTED"
+	)
 	if (reasoningParsed) {
-		console.log('[handleAssistantReasoning] Reasoning text:', reasoningParsed.reasoning)
-		console.log('[handleAssistantReasoning] Function calls count:', reasoningParsed.functionCalls.length)
+		console.log(
+			"[handleAssistantReasoning] Reasoning text:",
+			reasoningParsed.reasoning
+		)
+		console.log(
+			"[handleAssistantReasoning] Function calls count:",
+			reasoningParsed.functionCalls.length
+		)
 		if (reasoningParsed.functionCalls.length > 0) {
-			console.log('[handleAssistantReasoning] Function calls:', JSON.stringify(reasoningParsed.functionCalls, null, 2))
+			console.log(
+				"[handleAssistantReasoning] Function calls:",
+				JSON.stringify(reasoningParsed.functionCalls, null, 2)
+			)
 		}
 	}
-	
+
 	if (!reasoningParsed) {
 		return null // No reasoning detected, continue with normal flow
 	}
-	
+
 	if (reasoningParsed.functionCalls.length > 0) {
 		// Functions needed - emit to client and wait for selection
-		console.log('[handleAssistantReasoning] Function calls detected, waiting for user selection')
-		
-		socket.emit('assistant:reasoningDetected', {
+		console.log(
+			"[handleAssistantReasoning] Function calls detected, waiting for user selection"
+		)
+
+		socket.emit("assistant:reasoningDetected", {
 			chatId,
 			messageId: generatingMessage.id,
 			reasoning: reasoningParsed.reasoning,
 			functionCalls: reasoningParsed.functionCalls
 		})
-		
+
 		// Update message: store reasoning in metadata, keep content empty, mark as waiting
-		const currentMetadata = (typeof generatingMessage.metadata === 'object' && generatingMessage.metadata !== null) 
-			? generatingMessage.metadata 
-			: {}
-		
+		const currentMetadata =
+			typeof generatingMessage.metadata === "object" &&
+			generatingMessage.metadata !== null
+				? generatingMessage.metadata
+				: {}
+
 		await db
 			.update(schema.chatMessages)
-			.set({ 
+			.set({
 				content: "",
 				isGenerating: false,
 				adapterId: null,
@@ -77,33 +93,34 @@ async function handleAssistantReasoning({
 				}
 			})
 			.where(eq(schema.chatMessages.id, generatingMessage.id))
-		
+
 		const updatedMessage = await db.query.chatMessages.findFirst({
 			where: (cm, { eq }) => eq(cm.id, generatingMessage.id)
 		})
-		
+
 		if (updatedMessage) {
-			await broadcastToChatUsers(
-				socket.io,
-				chatId,
-				"chatMessage",
-				{ chatMessage: updatedMessage }
-			)
+			await broadcastToChatUsers(socket.io, chatId, "chatMessage", {
+				chatMessage: updatedMessage
+			})
 		}
-		
+
 		activeAdapters.delete(adapterId)
 		return true // Wait for user selection
 	} else {
 		// No functions needed - store reasoning and regenerate for final response
-		console.log('[handleAssistantReasoning] No functions needed, regenerating for conversational response')
-		
-		const currentMetadata = (typeof generatingMessage.metadata === 'object' && generatingMessage.metadata !== null) 
-			? generatingMessage.metadata 
-			: {}
-		
+		console.log(
+			"[handleAssistantReasoning] No functions needed, regenerating for conversational response"
+		)
+
+		const currentMetadata =
+			typeof generatingMessage.metadata === "object" &&
+			generatingMessage.metadata !== null
+				? generatingMessage.metadata
+				: {}
+
 		await db
 			.update(schema.chatMessages)
-			.set({ 
+			.set({
 				content: "",
 				isGenerating: true, // Keep generating for second pass
 				metadata: {
@@ -112,20 +129,22 @@ async function handleAssistantReasoning({
 				}
 			})
 			.where(eq(schema.chatMessages.id, generatingMessage.id))
-		
+
 		// Re-fetch message and call generateResponse again
 		const updatedGeneratingMessage = await db.query.chatMessages.findFirst({
 			where: (cm, { eq }) => eq(cm.id, generatingMessage.id)
 		})
-		
+
 		if (!updatedGeneratingMessage) {
-			console.error('[handleAssistantReasoning] Failed to fetch updated message')
+			console.error(
+				"[handleAssistantReasoning] Failed to fetch updated message"
+			)
 			activeAdapters.delete(adapterId)
 			return false
 		}
-		
+
 		activeAdapters.delete(adapterId)
-		
+
 		// Recursive call for conversational response
 		return await generateResponse({
 			socket,
@@ -152,22 +171,22 @@ export async function generateResponse({
 }): Promise<boolean> {
 	// Generate a UUID for this adapter instance
 	const adapterId = uuidv4()
-	
+
 	// Get the current message content before updating
 	const currentMessage = await db.query.chatMessages.findFirst({
 		where: (cm, { eq }) => eq(cm.id, generatingMessage.id)
 	})
 	const preservedContent = currentMessage?.content || ""
-	
+
 	// Save the adapterId to the chatMessage
 	// For continue: preserve existing content
 	// For new generation: clear content
 	await db
 		.update(schema.chatMessages)
-		.set({ 
-			isGenerating: true, 
+		.set({
+			isGenerating: true,
 			content: preservedContent, // Preserve existing content for continue
-			adapterId 
+			adapterId
 		})
 		.where(eq(schema.chatMessages.id, generatingMessage.id))
 	// Instead of getChat, emit the chatMessage
@@ -188,6 +207,9 @@ export async function generateResponse({
 		req
 	)
 
+	// Determine if we're continuing an existing message
+	const isContinuing = preservedContent.length > 0
+
 	const chat = await db.query.chats.findFirst({
 		where: (c, { eq }) => eq(c.id, chatId),
 		with: {
@@ -202,12 +224,29 @@ export async function generateResponse({
 				}
 			},
 			chatMessages: {
+				// Always exclude the generating message from history
 				where: (cm, { ne }) => ne(cm.id, generatingMessage.id),
 				orderBy: (cm, { asc }) => asc(cm.id)
 			},
 			lorebook: true
 		}
 	})
+
+	// If continuing, we need to add a synthetic message with the partial content
+	// This ensures the LLM sees the partial message and continues from it
+	if (isContinuing && chat) {
+		// Create a synthetic message with the existing content
+		const syntheticMessage: SelectChatMessage = {
+			...generatingMessage,
+			id: generatingMessage.id,
+			content: preservedContent,
+			isGenerating: false,
+			createdAt: generatingMessage.createdAt,
+			updatedAt: generatingMessage.updatedAt
+		}
+		// Add it to the end of chat messages
+		chat.chatMessages = [...chat.chatMessages, syntheticMessage]
+	}
 
 	// Get user and their configurations with fallbacks
 	const { connection, sampling, contextConfig, promptConfig } =
@@ -251,18 +290,18 @@ export async function generateResponse({
 	const charName = isAssistantMode
 		? ""
 		: currentCharacter?.character?.nickname ||
-		  currentCharacter?.character?.name ||
-		  ""
-	
+			currentCharacter?.character?.name ||
+			""
+
 	// If message already has content, we're continuing it
 	// Include the existing content in the startString so LLM continues from there
 	// Use preservedContent which was fetched from the database earlier
 	const existingContent = preservedContent || ""
-	const startString = existingContent 
-		? charName 
+	const startString = existingContent
+		? charName
 			? `${charName}: ${existingContent}`
 			: existingContent
-		: charName 
+		: charName
 			? `${charName}:`
 			: ""
 
@@ -292,9 +331,11 @@ export async function generateResponse({
 					}
 				}
 
-				// When continuing, prepend existing content to the staged content
-				const finalContent = existingContent 
-					? existingContent + stagedContent.trim()
+				// When continuing, the LLM sees the partial message in history
+				// and generates a continuation. We should append the new content
+				// to the existing partial content.
+				const finalContent = isContinuing
+					? preservedContent + " " + stagedContent.trim()
 					: stagedContent.trim()
 
 				// --- SWIPE HISTORY LOGIC ---
@@ -365,14 +406,28 @@ export async function generateResponse({
 					ok = false
 				}
 			})
-			
+
 			// Final update: mark as not generating, clear adapterId
 			content = content.replace(startString, "").trim()
-			
-			console.log('[generateResponse] POST-STREAM: Final content length:', content.length)
-			console.log('[generateResponse] POST-STREAM: Is assistant mode:', isAssistantMode)
-			console.log('[generateResponse] POST-STREAM: First 300 chars:', content.substring(0, 300))
-			
+
+			// When continuing, append to existing content
+			if (isContinuing) {
+				content = preservedContent + " " + content
+			}
+
+			console.log(
+				"[generateResponse] POST-STREAM: Final content length:",
+				content.length
+			)
+			console.log(
+				"[generateResponse] POST-STREAM: Is assistant mode:",
+				isAssistantMode
+			)
+			console.log(
+				"[generateResponse] POST-STREAM: First 300 chars:",
+				content.substring(0, 300)
+			)
+
 			// Check for reasoning format in assistant mode - only after streaming is complete
 			if (isAssistantMode) {
 				const reasoningResult = await handleAssistantReasoning({
@@ -384,13 +439,13 @@ export async function generateResponse({
 					emitToUser,
 					userId
 				})
-				
+
 				// If reasoning was detected and handled, return the result
 				if (reasoningResult !== null) {
 					return reasoningResult
 				}
 			}
-			
+
 			// Normal completion - no reasoning detected
 			const ret = await db
 				.update(schema.chatMessages)
@@ -426,10 +481,10 @@ export async function generateResponse({
 			)
 		} else {
 			content = completionResult.replace(startString, "").trim()
-			
-			// When continuing, prepend existing content to the new content
-			const finalContent = existingContent 
-				? existingContent + content
+
+			// When continuing, append to existing content
+			const finalContent = isContinuing
+				? preservedContent + " " + content
 				: content
 
 			// Check for reasoning format in assistant mode (NON-STREAMING)
@@ -443,7 +498,7 @@ export async function generateResponse({
 					emitToUser,
 					userId
 				})
-				
+
 				// If reasoning was detected and handled, return the result
 				if (reasoningResult !== null) {
 					return reasoningResult

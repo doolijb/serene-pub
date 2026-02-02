@@ -51,10 +51,13 @@ class OllamaAdapter extends BaseConnectionAdapter {
 			promptConfig,
 			chat,
 			currentCharacterId,
-			tokenCounter: tokenCounter || new TokenCounters(
-				connection.tokenCounter || TokenCounterOptions.ESTIMATE
-			),
-			tokenLimit: tokenLimit ||
+			tokenCounter:
+				tokenCounter ||
+				new TokenCounters(
+					connection.tokenCounter || TokenCounterOptions.ESTIMATE
+				),
+			tokenLimit:
+				tokenLimit ||
 				(typeof sampling.contextTokens === "number"
 					? sampling.contextTokens
 					: 2048),
@@ -103,9 +106,18 @@ class OllamaAdapter extends BaseConnectionAdapter {
 
 	compilePrompt(args: {}) {
 		const useChatFormat = !!this.connection.extraJson?.useChat
-		console.log('[OllamaAdapter.compilePrompt] connection.extraJson:', this.connection.extraJson)
-		console.log('[OllamaAdapter.compilePrompt] useChat value:', this.connection.extraJson?.useChat)
-		console.log('[OllamaAdapter.compilePrompt] useChatFormat:', useChatFormat)
+		console.log(
+			"[OllamaAdapter.compilePrompt] connection.extraJson:",
+			this.connection.extraJson
+		)
+		console.log(
+			"[OllamaAdapter.compilePrompt] useChat value:",
+			this.connection.extraJson?.useChat
+		)
+		console.log(
+			"[OllamaAdapter.compilePrompt] useChatFormat:",
+			useChatFormat
+		)
 		return super.compilePrompt({
 			useChatFormat,
 			...args
@@ -153,18 +165,29 @@ class OllamaAdapter extends BaseConnectionAdapter {
 
 		const compiledPrompt: CompiledPrompt = await this.compilePrompt({})
 
-		console.log('[OllamaAdapter] useChat:', this.connection.extraJson?.useChat)
-		console.log('[OllamaAdapter] compiledPrompt has messages:', !!compiledPrompt.messages)
-		console.log('[OllamaAdapter] compiledPrompt has prompt:', !!compiledPrompt.prompt)
+		console.log(
+			"[OllamaAdapter] useChat:",
+			this.connection.extraJson?.useChat
+		)
+		console.log(
+			"[OllamaAdapter] compiledPrompt has messages:",
+			!!compiledPrompt.messages
+		)
+		console.log(
+			"[OllamaAdapter] compiledPrompt has prompt:",
+			!!compiledPrompt.prompt
+		)
 
 		const useChat = this.connection.extraJson?.useChat ?? true
-		console.log('[OllamaAdapter] useChat after coalescing:', useChat)
+		console.log("[OllamaAdapter] useChat after coalescing:", useChat)
 		let req: GenerateRequest | ChatRequest
 
 		if (useChat) {
 			if (!compiledPrompt.messages) {
-				console.error('[OllamaAdapter] ERROR: useChat is true but compiledPrompt.messages is undefined!')
-				console.error('[OllamaAdapter] compiledPrompt:', compiledPrompt)
+				console.error(
+					"[OllamaAdapter] ERROR: useChat is true but compiledPrompt.messages is undefined!"
+				)
+				console.error("[OllamaAdapter] compiledPrompt:", compiledPrompt)
 			}
 			req = {
 				model,
@@ -174,7 +197,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 				keep_alive,
 				options: {
 					...this.mapSamplingConfig(),
-					stop,
+					stop
 				}
 			} as ChatRequest
 		} else {
@@ -186,10 +209,10 @@ class OllamaAdapter extends BaseConnectionAdapter {
 				personas: [],
 				currentCharacterId: this.currentCharacterId ?? undefined
 			})
-			
+
 			// Combine with the existing stop strings (which include character/persona names)
 			const allStopStrings = [...stop, ...formatStopStrings]
-			
+
 			req = {
 				model,
 				prompt: compiledPrompt.prompt!,
@@ -198,7 +221,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 				keep_alive,
 				options: {
 					...this.mapSamplingConfig(),
-					stop: allStopStrings,
+					stop: allStopStrings
 				}
 			} as GenerateRequest
 		}

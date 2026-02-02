@@ -27,14 +27,15 @@
 				<span class="text-surface-700-300 text-sm font-medium">
 					{nextCharacter.nickname || nextCharacter.name}
 				</span>
-				<span class="text-surface-500 text-xs"> ready to continue </span>
+				<span class="text-surface-500 text-xs">ready to continue</span>
 			</div>
 		</div>
 		<div class="flex gap-2">
 			<button
 				class="btn btn-sm preset-filled-primary-500"
 				onclick={onContinueWithNextCharacter}
-				title="Continue with {nextCharacter.nickname || nextCharacter.name}"
+				title="Continue with {nextCharacter.nickname ||
+					nextCharacter.name}"
 			>
 				<Icons.Play size={16} />
 				Continue

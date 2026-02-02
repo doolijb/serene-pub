@@ -2,35 +2,37 @@
  * Character-related assistant functions
  */
 
-import type { AssistantFunction } from '../types'
+import type { AssistantFunction } from "../types"
 
 export const characterFunctions: Record<string, AssistantFunction> = {
 	listCharacters: {
-		name: 'listCharacters',
-		description: 'Find and retrieve character information. Use this for ANY character-related query including: finding characters, getting character details, summarizing characters, describing characters, or answering questions about characters. Returns full character data including name, description, personality, and all other details.',
+		name: "listCharacters",
+		description:
+			"Find and retrieve character information. Use this for ANY character-related query including: finding characters, getting character details, summarizing characters, describing characters, or answering questions about characters. Returns full character data including name, description, personality, and all other details.",
 		requiresConfirmation: false,
 		requiresAdmin: false,
 		parameters: {
-			type: 'object',
+			type: "object",
 			properties: {
 				name: {
-					type: 'string',
-					description: 'Search by exact or partial character name'
+					type: "string",
+					description: "Search by exact or partial character name"
 				},
 				nickname: {
-					type: 'string',
-					description: 'Search by character nickname'
+					type: "string",
+					description: "Search by character nickname"
 				},
 				search: {
-					type: 'string',
-					description: 'General search term - searches across name, nickname, and description. Use this when you have a character name.'
+					type: "string",
+					description:
+						"General search term - searches across name, nickname, and description. Use this when you have a character name."
 				}
 			},
 			required: []
 		}
 	},
 	draftCharacter: {
-		name: 'draftCharacter',
+		name: "draftCharacter",
 		description: `Create or update a character draft based on user requirements. The draft is saved to the chat and shown to the user for review before being saved to the database. 
 
 **When to use**: 
@@ -57,34 +59,36 @@ export const characterFunctions: Record<string, AssistantFunction> = {
 		requiresConfirmation: false,
 		requiresAdmin: false,
 		parameters: {
-			type: 'object',
+			type: "object",
 			properties: {
 				userRequest: {
-					type: 'string',
-					description: 'The EXACT user request describing what character they want. Copy it word-for-word from the user message.'
+					type: "string",
+					description:
+						"The EXACT user request describing what character they want. Copy it word-for-word from the user message."
 				},
 				additionalFields: {
-					type: 'array',
+					type: "array",
 					items: {
-						type: 'string',
+						type: "string",
 						enum: [
-							'nickname',
-							'personality',
-							'scenario',
-							'firstMessage',
-							'alternateGreetings',
-							'exampleDialogues',
-							'creatorNotes',
-							'groupOnlyGreetings',
-							'postHistoryInstructions',
-							'source',
-							'characterVersion'
+							"nickname",
+							"personality",
+							"scenario",
+							"firstMessage",
+							"alternateGreetings",
+							"exampleDialogues",
+							"creatorNotes",
+							"groupOnlyGreetings",
+							"postHistoryInstructions",
+							"source",
+							"characterVersion"
 						]
 					},
-					description: 'Optional fields to populate in addition to required fields (name, description). Default: ["personality","scenario"]'
+					description:
+						'Optional fields to populate in addition to required fields (name, description). Default: ["personality","scenario"]'
 				}
 			},
-			required: ['userRequest']
+			required: ["userRequest"]
 		}
 	}
 }

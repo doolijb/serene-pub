@@ -51,7 +51,12 @@
 	let isBasicSetup = $derived(hasConnection && hasCharacter && hasPersona)
 
 	// Define wizard step types
-	type WizardStepType = "connection-choice" | "connection-setup" | "character" | "persona" | "chat"
+	type WizardStepType =
+		| "connection-choice"
+		| "connection-setup"
+		| "character"
+		| "persona"
+		| "chat"
 
 	interface WizardStepDefinition {
 		id: WizardStepType
@@ -62,7 +67,7 @@
 	// Build dynamic wizard steps based on user role
 	let wizardSteps = $derived.by((): WizardStepDefinition[] => {
 		const steps: WizardStepDefinition[] = []
-		
+
 		// Add admin-only steps first if user is admin
 		if (userCtx.user?.isAdmin) {
 			steps.push({
@@ -76,7 +81,7 @@
 				isComplete: () => hasConnection
 			})
 		}
-		
+
 		// Add common steps for all users
 		steps.push({
 			id: "character",
@@ -90,7 +95,7 @@
 			id: "chat",
 			isComplete: () => true // Final step
 		})
-		
+
 		return steps
 	})
 
@@ -102,12 +107,18 @@
 
 	// Determine current step based on what's completed
 	let currentStep = $derived.by(() => {
-		const firstIncompleteIndex = wizardSteps.findIndex(step => !step.isComplete())
-		return firstIncompleteIndex >= 0 ? firstIncompleteIndex : wizardSteps.length - 1
+		const firstIncompleteIndex = wizardSteps.findIndex(
+			(step) => !step.isComplete()
+		)
+		return firstIncompleteIndex >= 0
+			? firstIncompleteIndex
+			: wizardSteps.length - 1
 	})
 
 	// Check if current wizard step is complete
-	let isCurrentStepComplete = $derived(currentWizardStep?.isComplete() ?? false)
+	let isCurrentStepComplete = $derived(
+		currentWizardStep?.isComplete() ?? false
+	)
 
 	// Full setup check (legacy)
 	let isSetup = $derived.by(() => {
@@ -168,11 +179,11 @@
 
 		// If basic setup is complete, go directly to chat creation step
 		if (isBasicSetup) {
-			wizardStep = wizardSteps.findIndex(s => s.id === "chat")
+			wizardStep = wizardSteps.findIndex((s) => s.id === "chat")
 		} else {
-			wizardStep = currentStep === wizardSteps.length - 1 ? 0 : currentStep
+			wizardStep =
+				currentStep === wizardSteps.length - 1 ? 0 : currentStep
 		}
-
 	}
 
 	function openAssistantChat() {
@@ -226,14 +237,22 @@
 		socket.on("characters:list", (msg) => {
 			characters = msg.characterList || []
 			// If we're in the wizard and just got characters, advance if needed
-			if (showWizard && currentWizardStep?.id === "character" && characters.length > 0) {
+			if (
+				showWizard &&
+				currentWizardStep?.id === "character" &&
+				characters.length > 0
+			) {
 				nextWizardStep()
 			}
 		})
 		socket.on("personas:list", (msg) => {
 			personas = msg.personaList || []
 			// If we're in the wizard and just got personas, advance if needed
-			if (showWizard && currentWizardStep?.id === "persona" && personas.length > 0) {
+			if (
+				showWizard &&
+				currentWizardStep?.id === "persona" &&
+				personas.length > 0
+			) {
 				nextWizardStep()
 			}
 		})
@@ -402,30 +421,31 @@
 						</h1>
 						<p class="text-muted-foreground text-lg">
 							{#if userCtx.user?.isAdmin}
-								We'll guide you through connecting to an AI service
-								and creating your first character
+								We'll guide you through connecting to an AI
+								service and creating your first character
 							{:else}
-								We'll guide you through creating your first character
-								and persona to start chatting
+								We'll guide you through creating your first
+								character and persona to start chatting
 							{/if}
 						</p>
 					{/if}
 				</div>
 
-			<!-- Quick Start -->
-			<div class="mb-6">
-				<button
-					class="btn preset-filled-primary-500 btn-lg mb-4 px-8 py-4 text-lg"
-					onclick={handleQuickSetup}
-				>
-					<Icons.Zap size={20} />
-					{#if isBasicSetup}
-						Create First Chat
-					{:else}
-						Quick Start ({totalWizardSteps} steps)
-					{/if}
-				</button>
-			</div>				<!-- Advanced Option -->
+				<!-- Quick Start -->
+				<div class="mb-6">
+					<button
+						class="btn preset-filled-primary-500 btn-lg mb-4 px-8 py-4 text-lg"
+						onclick={handleQuickSetup}
+					>
+						<Icons.Zap size={20} />
+						{#if isBasicSetup}
+							Create First Chat
+						{:else}
+							Quick Start ({totalWizardSteps} steps)
+						{/if}
+					</button>
+				</div>
+				<!-- Advanced Option -->
 				<details class="mt-6">
 					<summary
 						class="cursor-pointer text-sm opacity-60 hover:opacity-100"
@@ -901,20 +921,20 @@
 				>
 					Start Chatting
 				</button>
-			<!-- Hidden for now -->
-			<!-- <button
+				<!-- Hidden for now -->
+				<!-- <button
 				class="btn preset-tonal-primary-500"
 				onclick={openAssistantChat}
 			>
 				<Icons.MessageCircleQuestion size={20} />
 				Ask the Assistant
 			</button> -->
+			</div>
 		</div>
-	</div>
 
-	<div class="w-full">
-		<h3 class="w-full text-xl">Characters</h3>
-		<div class="grid grid-cols-1 justify-between gap-2 lg:grid-cols-2">
+		<div class="w-full">
+			<h3 class="w-full text-xl">Characters</h3>
+			<div class="grid grid-cols-1 justify-between gap-2 lg:grid-cols-2">
 				<!-- <div class="card preset-filled-surface-200-800 p-2">
 					tEST
 				</div> -->

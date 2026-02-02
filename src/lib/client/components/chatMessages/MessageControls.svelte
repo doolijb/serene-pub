@@ -33,7 +33,11 @@
 	}: Props = $props()
 </script>
 
-<div role="group" aria-label="Message actions" class="flex flex-col lg:flex-row gap-2">
+<div
+	role="group"
+	aria-label="Message actions"
+	class="flex flex-col gap-2 lg:flex-row"
+>
 	<button
 		class="btn btn-sm msg-cntrl-icon hover:preset-filled-secondary-500"
 		class:preset-filled-secondary-500={msg.isHidden}
@@ -90,7 +94,7 @@
 			<span class="lg:hidden">Regenerate Response</span>
 		</button>
 	{/if}
-	{#if onContinueMessage && !!msg.characterId && isLastMessage &&  !msg.isGenerating && msg.content}
+	{#if onContinueMessage && !!msg.characterId && isLastMessage && !msg.isGenerating && msg.content}
 		<button
 			class="btn btn-sm msg-cntrl-icon hover:preset-filled-primary-500"
 			title="Continue Response"
@@ -119,6 +123,6 @@
 
 	.msg-cntrl-icon {
 		@apply h-min px-2 text-[1em] disabled:opacity-25;
-		@apply lg:w-min w-full justify-start;
+		@apply w-full justify-start lg:w-min;
 	}
 </style>

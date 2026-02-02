@@ -1,9 +1,9 @@
 <script lang="ts">
-	import type { AssistantCreateCharacter } from '$lib/server/db/zodSchemas'
-	import type { ZodError } from 'zod'
-	import { createEventDispatcher } from 'svelte'
-	import { fade, slide } from 'svelte/transition'
-	import GeneratingAnimation from '$lib/client/components/chatMessages/GeneratingAnimation.svelte'
+	import type { AssistantCreateCharacter } from "$lib/server/db/zodSchemas"
+	import type { ZodError } from "zod"
+	import { createEventDispatcher } from "svelte"
+	import { fade, slide } from "svelte/transition"
+	import GeneratingAnimation from "$lib/client/components/chatMessages/GeneratingAnimation.svelte"
 
 	// Props using Svelte 5 runes
 	let {
@@ -19,7 +19,7 @@
 		correctionAttempt = 0
 	}: {
 		draft: AssistantCreateCharacter
-		validationStatus?: 'valid' | 'invalid' | 'validating' | null
+		validationStatus?: "valid" | "invalid" | "validating" | null
 		errors?: ZodError | null
 		generatedFields?: string[]
 		isGenerating?: boolean
@@ -33,7 +33,7 @@
 	// Export a function to clear saving state for a field
 	export function clearSavingState(field: string) {
 		savingFields.delete(field)
-		savingFields = savingFields  // Trigger reactivity
+		savingFields = savingFields // Trigger reactivity
 	}
 
 	const dispatch = createEventDispatcher<{
@@ -41,7 +41,7 @@
 		cancel: void
 		regenerateField: { field: string }
 		editField: { field: string; value: any }
-		updateField: { field: string; value: any }  // For immediate updates via socket
+		updateField: { field: string; value: any } // For immediate updates via socket
 	}>()
 
 	// State
@@ -52,19 +52,19 @@
 
 	// Field labels for display
 	const fieldLabels: Record<string, string> = {
-		name: 'Name',
-		description: 'Description',
-		nickname: 'Nickname',
-		personality: 'Personality',
-		scenario: 'Scenario',
-		firstMessage: 'First Message',
-		alternateGreetings: 'Alternate Greetings',
-		exampleDialogues: 'Example Dialogues',
-		creatorNotes: 'Creator Notes',
-		groupOnlyGreetings: 'Group Only Greetings',
-		postHistoryInstructions: 'Post-History Instructions',
-		source: 'Source',
-		characterVersion: 'Version'
+		name: "Name",
+		description: "Description",
+		nickname: "Nickname",
+		personality: "Personality",
+		scenario: "Scenario",
+		firstMessage: "First Message",
+		alternateGreetings: "Alternate Greetings",
+		exampleDialogues: "Example Dialogues",
+		creatorNotes: "Creator Notes",
+		groupOnlyGreetings: "Group Only Greetings",
+		postHistoryInstructions: "Post-History Instructions",
+		source: "Source",
+		characterVersion: "Version"
 	}
 
 	// Get error message for a field
@@ -81,24 +81,24 @@
 
 	// Handle save
 	function handleSave() {
-		if (validationStatus === 'valid') {
-			dispatch('save')
+		if (validationStatus === "valid") {
+			dispatch("save")
 		}
 	}
 
 	// Handle cancel
 	function handleCancel() {
-		dispatch('cancel')
+		dispatch("cancel")
 	}
 
 	// Handle regenerate field
 	function handleRegenerateField(field: string) {
-		dispatch('regenerateField', { field })
+		dispatch("regenerateField", { field })
 	}
 
 	// Handle field edit
 	function handleFieldEdit(field: string, value: any) {
-		dispatch('editField', { field, value })
+		dispatch("editField", { field, value })
 	}
 
 	// Start editing a field
@@ -110,7 +110,7 @@
 	// Save field edit
 	function saveFieldEdit(field: string) {
 		const newValue = editingValues[field]
-		
+
 		// Don't save if value hasn't changed
 		if (newValue === (draft as any)[field]) {
 			editingField = null
@@ -119,10 +119,10 @@
 
 		// Add to saving set
 		savingFields.add(field)
-		
+
 		// Dispatch update event
-		dispatch('updateField', { field, value: newValue })
-		
+		dispatch("updateField", { field, value: newValue })
+
 		// Clear editing state
 		editingField = null
 	}
@@ -144,30 +144,41 @@
 
 	// Handle keydown in field
 	function handleFieldKeydown(event: KeyboardEvent, field: string) {
-		if (event.key === 'Enter' && !event.shiftKey && field !== 'description' && field !== 'personality' && field !== 'scenario') {
+		if (
+			event.key === "Enter" &&
+			!event.shiftKey &&
+			field !== "description" &&
+			field !== "personality" &&
+			field !== "scenario"
+		) {
 			event.preventDefault()
 			saveFieldEdit(field)
-		} else if (event.key === 'Escape') {
+		} else if (event.key === "Escape") {
 			cancelFieldEdit()
 		}
 	}
 
 	// Format array values for display
 	function formatArrayValue(value: string[] | undefined | null): string {
-		if (!value || value.length === 0) return 'Not set'
-		return value.join('\n• ')
+		if (!value || value.length === 0) return "Not set"
+		return value.join("\n• ")
 	}
 
 	// Get all fields that exist in the draft
 	let draftFields = $derived(
 		Object.entries(draft).filter(
-			([key, value]) => value !== null && value !== undefined && value !== ''
+			([key, value]) =>
+				value !== null && value !== undefined && value !== ""
 		)
 	)
 
 	// Count valid/invalid fields
-	let validFieldCount = $derived(generatedFields.filter((f) => isFieldValid(f)).length)
-	let invalidFieldCount = $derived(generatedFields.filter((f) => !isFieldValid(f)).length)
+	let validFieldCount = $derived(
+		generatedFields.filter((f) => isFieldValid(f)).length
+	)
+	let invalidFieldCount = $derived(
+		generatedFields.filter((f) => !isFieldValid(f)).length
+	)
 </script>
 
 <div class="character-draft-preview" transition:fade={{ duration: 200 }}>
@@ -177,24 +188,24 @@
 			<h3>Character Draft Preview</h3>
 			{#if isGenerating}
 				<GeneratingAnimation text="Generating" />
-			{:else if validationStatus === 'validating'}
+			{:else if validationStatus === "validating"}
 				<GeneratingAnimation text="Validating" />
 			{:else if isCorrecting}
 				<span class="status-badge correcting">
 					Auto-correcting (attempt {correctionAttempt}/3)
 				</span>
-			{:else if validationStatus === 'valid'}
+			{:else if validationStatus === "valid"}
 				<span class="status-badge valid">✓ Valid</span>
-			{:else if validationStatus === 'invalid'}
+			{:else if validationStatus === "invalid"}
 				<span class="status-badge invalid">⚠ Needs Review</span>
 			{/if}
-			
-			<button 
-				class="collapse-btn" 
-				on:click={() => isExpanded = !isExpanded}
-				title={isExpanded ? 'Collapse' : 'Expand'}
+
+			<button
+				class="collapse-btn"
+				on:click={() => (isExpanded = !isExpanded)}
+				title={isExpanded ? "Collapse" : "Expand"}
 			>
-				{isExpanded ? '▼' : '▶'}
+				{isExpanded ? "▼" : "▶"}
 			</button>
 		</div>
 
@@ -203,13 +214,18 @@
 				<div class="progress-text">
 					Generating field {currentFieldIndex + 1} of {totalFields}
 					{#if currentField}
-						<span class="current-field">({fieldLabels[currentField]})</span>
+						<span class="current-field">
+							({fieldLabels[currentField]})
+						</span>
 					{/if}
 				</div>
 				<div class="progress-track">
 					<div
 						class="progress-fill"
-						style="width: {((currentFieldIndex / totalFields) * 100).toFixed(0)}%"
+						style="width: {(
+							(currentFieldIndex / totalFields) *
+							100
+						).toFixed(0)}%"
 					></div>
 				</div>
 			</div>
@@ -248,20 +264,24 @@
 								<textarea
 									bind:value={editingValues[field]}
 									on:blur={() => handleFieldBlur(field)}
-									on:keydown={(e) => handleFieldKeydown(e, field)}
+									on:keydown={(e) =>
+										handleFieldKeydown(e, field)}
 									class="editable-textarea"
 									rows={5}
 									placeholder="Enter items, one per line"
 									autofocus
 								/>
 							{:else}
-								<div 
+								<div
 									class="field-content editable"
 									class:saving={savingFields.has(field)}
-									on:click={() => startEditing(field, value.join('\n'))}
+									on:click={() =>
+										startEditing(field, value.join("\n"))}
 									role="button"
 									tabindex="0"
-									on:keydown={(e) => e.key === 'Enter' && startEditing(field, value.join('\n'))}
+									on:keydown={(e) =>
+										e.key === "Enter" &&
+										startEditing(field, value.join("\n"))}
 								>
 									{#if value.length > 0}
 										<ul>
@@ -270,10 +290,14 @@
 											{/each}
 										</ul>
 									{:else}
-										<span class="empty">Click to add items...</span>
+										<span class="empty">
+											Click to add items...
+										</span>
 									{/if}
 									{#if savingFields.has(field)}
-										<span class="saving-indicator">Saving...</span>
+										<span class="saving-indicator">
+											Saving...
+										</span>
 									{/if}
 								</div>
 							{/if}
@@ -281,11 +305,12 @@
 					{:else}
 						<div class="field-value">
 							{#if editingField === field}
-								{#if field === 'description' || field === 'personality' || field === 'scenario'}
+								{#if field === "description" || field === "personality" || field === "scenario"}
 									<textarea
 										bind:value={editingValues[field]}
 										on:blur={() => handleFieldBlur(field)}
-										on:keydown={(e) => handleFieldKeydown(e, field)}
+										on:keydown={(e) =>
+											handleFieldKeydown(e, field)}
 										class="editable-textarea"
 										rows={6}
 										placeholder={`Enter ${fieldLabels[field] || field}...`}
@@ -296,24 +321,29 @@
 										type="text"
 										bind:value={editingValues[field]}
 										on:blur={() => handleFieldBlur(field)}
-										on:keydown={(e) => handleFieldKeydown(e, field)}
+										on:keydown={(e) =>
+											handleFieldKeydown(e, field)}
 										class="editable-input"
 										placeholder={`Enter ${fieldLabels[field] || field}...`}
 										autofocus
 									/>
 								{/if}
 							{:else}
-								<div 
+								<div
 									class="field-content editable"
 									class:saving={savingFields.has(field)}
 									on:click={() => startEditing(field, value)}
 									role="button"
 									tabindex="0"
-									on:keydown={(e) => e.key === 'Enter' && startEditing(field, value)}
+									on:keydown={(e) =>
+										e.key === "Enter" &&
+										startEditing(field, value)}
 								>
-									{value || '(empty)'}
+									{value || "(empty)"}
 									{#if savingFields.has(field)}
-										<span class="saving-indicator">Saving...</span>
+										<span class="saving-indicator">
+											Saving...
+										</span>
 									{/if}
 								</div>
 							{/if}
@@ -321,7 +351,10 @@
 					{/if}
 
 					{#if getFieldError(field)}
-						<div class="field-error" transition:slide={{ duration: 150 }}>
+						<div
+							class="field-error"
+							transition:slide={{ duration: 150 }}
+						>
 							⚠️ {getFieldError(field)}
 						</div>
 					{/if}
@@ -350,13 +383,17 @@
 
 	<!-- Actions -->
 	<div class="actions">
-		<button class="btn btn-secondary" on:click={handleCancel} disabled={isGenerating}>
+		<button
+			class="btn btn-secondary"
+			on:click={handleCancel}
+			disabled={isGenerating}
+		>
 			Cancel
 		</button>
 		<button
 			class="btn btn-primary"
 			on:click={handleSave}
-			disabled={isGenerating || validationStatus !== 'valid'}
+			disabled={isGenerating || validationStatus !== "valid"}
 		>
 			Save Character
 		</button>
@@ -563,7 +600,9 @@
 		padding: 0.5rem;
 		margin: -0.5rem;
 		border-radius: 4px;
-		transition: background-color 0.2s, box-shadow 0.2s;
+		transition:
+			background-color 0.2s,
+			box-shadow 0.2s;
 	}
 
 	.field-content.editable:hover {

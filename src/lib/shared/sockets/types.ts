@@ -259,14 +259,20 @@ declare global {
 					offset?: number
 				}
 				interface Response {
-					chat: (SelectChat & {
-						chatMessages: SelectChatMessage[]
-						chatCharacters: (SelectChatCharacter & { character: SelectCharacter })[]
-						chatPersonas: (SelectChatPersona & { persona: SelectPersona })[]
-						chatTags?: { tag: { name: string } }[]
-						chatGuests?: { user: any }[]
-						tags?: string[]
-					}) | null
+					chat:
+						| (SelectChat & {
+								chatMessages: SelectChatMessage[]
+								chatCharacters: (SelectChatCharacter & {
+									character: SelectCharacter
+								})[]
+								chatPersonas: (SelectChatPersona & {
+									persona: SelectPersona
+								})[]
+								chatTags?: { tag: { name: string } }[]
+								chatGuests?: { user: any }[]
+								tags?: string[]
+						  })
+						| null
 					messages?: SelectChatMessage[] | null // Legacy field
 					pagination?: any
 				}
@@ -1473,10 +1479,18 @@ declare global {
 			interface Response {
 				chatId: number
 				timestamp: number
-				status: 'started' | 'generating_field' | 'field_complete' | 'field_error' | 'validating' | 'correcting' | 'complete' | 'validation_failed'
+				status:
+					| "started"
+					| "generating_field"
+					| "field_complete"
+					| "field_error"
+					| "validating"
+					| "correcting"
+					| "complete"
+					| "validation_failed"
 				message?: string
 				field?: string
-				fieldStatus?: 'generating' | 'validating' | 'complete' | 'error'
+				fieldStatus?: "generating" | "validating" | "complete" | "error"
 				value?: any
 				error?: string
 				currentField?: number
@@ -1544,6 +1558,97 @@ declare global {
 
 	interface FileAcceptDetails {
 		files: File[]
+	}
+
+	// Import namespace
+	namespace Import {
+		namespace SillyTavern {
+			namespace Scan {
+				interface Params {
+					directoryPath: string
+				}
+				interface Response {
+					success: boolean
+					data?: {
+						characters: Array<{
+							filename: string
+							name: string
+							selected: boolean
+						}>
+						personas: Array<{
+							name: string
+							selected: boolean
+						}>
+						chats: Array<{
+							filename: string
+							name: string
+							characterNames: string[]
+							isGroup: boolean
+							selected: boolean
+							disabled: boolean
+							disabledReason?: string
+						}>
+						groupChats: Array<{
+							filename: string
+							name: string
+							memberNames: string[]
+							selected: boolean
+							disabled: boolean
+							disabledReason?: string
+						}>
+						lorebooks: Array<{
+							filename: string
+							name: string
+							selected: boolean
+						}>
+					}
+					error?: string
+				}
+			}
+			namespace Execute {
+				interface Params {
+					directoryPath: string
+					selectedData: {
+						characters: Array<{
+							filename: string
+							name: string
+							selected: boolean
+						}>
+						personas: Array<{
+							name: string
+							selected: boolean
+						}>
+						chats: Array<{
+							filename: string
+							name: string
+							characterNames: string[]
+							isGroup: boolean
+							selected: boolean
+							disabled: boolean
+							disabledReason?: string
+						}>
+						groupChats: Array<{
+							filename: string
+							name: string
+							memberNames: string[]
+							selected: boolean
+							disabled: boolean
+							disabledReason?: string
+						}>
+						lorebooks: Array<{
+							filename: string
+							name: string
+							selected: boolean
+						}>
+					}
+				}
+				interface Response {
+					success: boolean
+					message?: string
+					error?: string
+				}
+			}
+		}
 	}
 }
 

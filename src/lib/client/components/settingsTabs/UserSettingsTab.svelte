@@ -415,6 +415,23 @@
 		</label>
 	</div>
 
+	<!-- Import Section -->
+	<div class="mt-4 border-t pt-4">
+		<h3 class="mb-4 text-lg font-semibold">Data Import</h3>
+		<p class="text-surface-500 mb-3 text-sm">
+			Import your characters, personas, chats, and lorebooks from other
+			applications.
+		</p>
+		<a
+			href="/import"
+			class="btn preset-filled-primary-500 w-fit"
+			aria-label="Import from SillyTavern"
+		>
+			<Icons.Download size={16} />
+			Import from SillyTavern
+		</a>
+	</div>
+
 	<!-- User Profile Section - Only show when accounts are enabled -->
 	{#if systemSettingsCtx.settings?.isAccountsEnabled && userCtx.user}
 		<div class="mt-4 border-t pt-4">

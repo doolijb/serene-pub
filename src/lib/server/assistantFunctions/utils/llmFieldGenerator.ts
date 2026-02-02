@@ -1,13 +1,13 @@
 /**
  * LLM Field Generator
- * 
+ *
  * Utilities for generating individual character draft fields using LLM.
  * This module handles the low-level LLM API calls for field generation.
  */
 
-import { getConnectionAdapter } from '$lib/server/utils/getConnectionAdapter'
-import { getUserConfigurations } from '$lib/server/utils/getUserConfigurations'
-import { TokenCounters } from '$lib/server/utils/TokenCounterManager'
+import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
+import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
+import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 
 /**
  * Simple system prompt for field generation
@@ -19,7 +19,7 @@ Follow the instructions exactly and return ONLY the requested content without an
 
 /**
  * Generate a single field value using the LLM
- * 
+ *
  * @param userId - User making the request
  * @param systemPrompt - System-level instructions
  * @param userPrompt - Specific field generation prompt
@@ -39,30 +39,30 @@ export async function generateFieldWithLLM({
 }): Promise<string> {
 	// Get user's active LLM configurations
 	const { connection, sampling } = await getUserConfigurations(userId)
-	
+
 	// Get the appropriate adapter for this connection
 	const { Adapter } = getConnectionAdapter(connection.type)
-	
+
 	// Create a minimal "prompt builder" structure for the adapter
 	// We'll construct a simple chat-style prompt manually
 	const messages = [
-		{ role: 'system', content: systemPrompt },
-		{ role: 'user', content: userPrompt }
+		{ role: "system", content: systemPrompt },
+		{ role: "user", content: userPrompt }
 	]
-	
+
 	// Build prompt string based on connection type format
-	let promptString = ''
-	
+	let promptString = ""
+
 	// Most adapters expect chat format, but we'll build a simple prompt
 	// that works across different connection types
-	if (connection.type === 'openai') {
+	if (connection.type === "openai") {
 		// OpenAI uses messages array - we'll send it directly
 		promptString = JSON.stringify(messages)
 	} else {
 		// For other types (Ollama, LlamaCpp, etc.), build a simple text prompt
 		promptString = `${systemPrompt}\n\n${userPrompt}`
 	}
-	
+
 	// Make the LLM API call
 	try {
 		const response = await callLLMAPI({
@@ -72,11 +72,13 @@ export async function generateFieldWithLLM({
 			messages,
 			maxTokens
 		})
-		
+
 		return response.trim()
 	} catch (error) {
-		console.error('[generateFieldWithLLM] Error calling LLM:', error)
-		throw new Error(`Failed to generate field: ${error instanceof Error ? error.message : 'Unknown error'}`)
+		console.error("[generateFieldWithLLM] Error calling LLM:", error)
+		throw new Error(
+			`Failed to generate field: ${error instanceof Error ? error.message : "Unknown error"}`
+		)
 	}
 }
 
@@ -99,21 +101,38 @@ async function callLLMAPI({
 }): Promise<string> {
 	const { baseUrl, extraJson } = connection
 	const apiKey = extraJson?.apiKey || null
-	const url = baseUrl || ''
-	
+	const url = baseUrl || ""
+
 	// Handle different connection types
 	switch (connection.type) {
-		case 'openai':
-			return await callOpenAIAPI({ url, apiKey, messages, sampling, maxTokens })
-		
-		case 'ollama':
-			return await callOllamaAPI({ url, model: connection.model, messages, sampling, maxTokens })
-		
-		case 'lmstudio':
-		case 'koboldcpp':
-		case 'llamacpp':
-			return await callCompletionAPI({ url, messages, sampling, maxTokens })
-		
+		case "openai":
+			return await callOpenAIAPI({
+				url,
+				apiKey,
+				messages,
+				sampling,
+				maxTokens
+			})
+
+		case "ollama":
+			return await callOllamaAPI({
+				url,
+				model: connection.model,
+				messages,
+				sampling,
+				maxTokens
+			})
+
+		case "lmstudio":
+		case "koboldcpp":
+		case "llamacpp":
+			return await callCompletionAPI({
+				url,
+				messages,
+				sampling,
+				maxTokens
+			})
+
 		default:
 			throw new Error(`Unsupported connection type: ${connection.type}`)
 	}
@@ -135,16 +154,18 @@ async function callOpenAIAPI({
 	sampling: SelectSamplingConfig
 	maxTokens: number
 }): Promise<string> {
-	const endpoint = url.endsWith('/') ? `${url}chat/completions` : `${url}/chat/completions`
-	
+	const endpoint = url.endsWith("/")
+		? `${url}chat/completions`
+		: `${url}/chat/completions`
+
 	const headers: Record<string, string> = {
-		'Content-Type': 'application/json'
+		"Content-Type": "application/json"
 	}
-	
+
 	if (apiKey) {
-		headers['Authorization'] = `Bearer ${apiKey}`
+		headers["Authorization"] = `Bearer ${apiKey}`
 	}
-	
+
 	const body = {
 		messages,
 		max_tokens: maxTokens,
@@ -152,20 +173,20 @@ async function callOpenAIAPI({
 		top_p: sampling.topP ?? 1.0,
 		stream: false
 	}
-	
+
 	const response = await fetch(endpoint, {
-		method: 'POST',
+		method: "POST",
 		headers,
 		body: JSON.stringify(body)
 	})
-	
+
 	if (!response.ok) {
 		const errorText = await response.text()
 		throw new Error(`OpenAI API error (${response.status}): ${errorText}`)
 	}
-	
+
 	const data = await response.json()
-	return data.choices?.[0]?.message?.content || ''
+	return data.choices?.[0]?.message?.content || ""
 }
 
 /**
@@ -184,10 +205,10 @@ async function callOllamaAPI({
 	sampling: SelectSamplingConfig
 	maxTokens: number
 }): Promise<string> {
-	const endpoint = url.endsWith('/') ? `${url}api/chat` : `${url}/api/chat`
-	
+	const endpoint = url.endsWith("/") ? `${url}api/chat` : `${url}/api/chat`
+
 	const body = {
-		model: model || 'llama2',
+		model: model || "llama2",
 		messages,
 		stream: false,
 		options: {
@@ -196,20 +217,20 @@ async function callOllamaAPI({
 			num_predict: maxTokens
 		}
 	}
-	
+
 	const response = await fetch(endpoint, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body)
 	})
-	
+
 	if (!response.ok) {
 		const errorText = await response.text()
 		throw new Error(`Ollama API error (${response.status}): ${errorText}`)
 	}
-	
+
 	const data = await response.json()
-	return data.message?.content || ''
+	return data.message?.content || ""
 }
 
 /**
@@ -227,13 +248,17 @@ async function callCompletionAPI({
 	maxTokens: number
 }): Promise<string> {
 	// Build a simple text prompt from messages
-	const promptText = messages.map(m => {
-		if (m.role === 'system') return m.content
-		return m.content
-	}).join('\n\n')
-	
-	const endpoint = url.endsWith('/') ? `${url}v1/completions` : `${url}/v1/completions`
-	
+	const promptText = messages
+		.map((m) => {
+			if (m.role === "system") return m.content
+			return m.content
+		})
+		.join("\n\n")
+
+	const endpoint = url.endsWith("/")
+		? `${url}v1/completions`
+		: `${url}/v1/completions`
+
 	const body = {
 		prompt: promptText,
 		max_tokens: maxTokens,
@@ -241,20 +266,22 @@ async function callCompletionAPI({
 		top_p: sampling.topP ?? 1.0,
 		stream: false
 	}
-	
+
 	const response = await fetch(endpoint, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body)
 	})
-	
+
 	if (!response.ok) {
 		const errorText = await response.text()
-		throw new Error(`Completion API error (${response.status}): ${errorText}`)
+		throw new Error(
+			`Completion API error (${response.status}): ${errorText}`
+		)
 	}
-	
+
 	const data = await response.json()
-	return data.choices?.[0]?.text || ''
+	return data.choices?.[0]?.text || ""
 }
 
 /**
@@ -262,7 +289,7 @@ async function callCompletionAPI({
  */
 export type FieldGenerationProgressCallback = (update: {
 	field: string
-	status: 'generating' | 'validating' | 'complete' | 'error'
+	status: "generating" | "validating" | "complete" | "error"
 	message?: string
 	value?: any
 	error?: string
@@ -289,10 +316,10 @@ export async function generateFieldWithProgress({
 		// Emit generating status
 		onProgress?.({
 			field,
-			status: 'generating',
+			status: "generating",
 			message: `Generating ${field}...`
 		})
-		
+
 		// Generate the field
 		const value = await generateFieldWithLLM({
 			userId,
@@ -300,25 +327,25 @@ export async function generateFieldWithProgress({
 			userPrompt: prompt,
 			maxTokens
 		})
-		
+
 		// Emit complete status
 		onProgress?.({
 			field,
-			status: 'complete',
+			status: "complete",
 			message: `Generated ${field}`,
 			value
 		})
-		
+
 		return value
 	} catch (error) {
 		// Emit error status
 		onProgress?.({
 			field,
-			status: 'error',
+			status: "error",
 			message: `Failed to generate ${field}`,
-			error: error instanceof Error ? error.message : 'Unknown error'
+			error: error instanceof Error ? error.message : "Unknown error"
 		})
-		
+
 		throw error
 	}
 }

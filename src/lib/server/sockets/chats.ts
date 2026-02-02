@@ -226,7 +226,7 @@ export const chatsListHandler: Handler<
 				? and(
 						or(eq(c.userId, userId), inArray(c.id, guestChatIds)),
 						eq(c.chatType, chatType)
-				  )
+					)
 				: and(eq(c.userId, userId), eq(c.chatType, chatType))
 
 		const chatsList = await db.query.chats.findMany({
@@ -546,22 +546,25 @@ export const chatsDeleteHandler: Handler<
 	async handler(socket, params, emitToUser) {
 		try {
 			const userId = socket.user!.id
-			
-			console.log('[chats:delete] Received params:', params)
-			console.log('[chats:delete] Params type:', typeof params)
-			console.log('[chats:delete] Params keys:', Object.keys(params || {}))
+
+			console.log("[chats:delete] Received params:", params)
+			console.log("[chats:delete] Params type:", typeof params)
+			console.log(
+				"[chats:delete] Params keys:",
+				Object.keys(params || {})
+			)
 
 			// Check if user has access to delete this chat (only owners can delete)
 			const chatAccess = await checkChatAccess(params.id, userId)
-			
-			console.log('[chats:delete] Chat access check:', {
+
+			console.log("[chats:delete] Chat access check:", {
 				chatId: params.id,
 				userId,
 				isOwner: chatAccess.isOwner,
 				isGuest: chatAccess.isGuest,
 				hasAccess: chatAccess.hasAccess
 			})
-			
+
 			if (!chatAccess.hasAccess || !chatAccess.isOwner) {
 				throw new Error(
 					"Access denied. Only chat owners can delete chats."
@@ -571,8 +574,11 @@ export const chatsDeleteHandler: Handler<
 			await db.delete(schema.chats).where(eq(schema.chats.id, params.id))
 
 			// Emit to user with the deleted chat ID so frontend can update
-			emitToUser("chats:delete", { success: "Chat deleted successfully", id: params.id })
-			
+			emitToUser("chats:delete", {
+				success: "Chat deleted successfully",
+				id: params.id
+			})
+
 			return { success: "Chat deleted successfully", id: params.id }
 		} catch (error) {
 			throw error
@@ -1033,7 +1039,7 @@ export const chatsBranchHandler: Handler<
 
 			// Filter messages up to and including the branch message
 			const messagesToCopy = allMessages.filter(
-				msg => msg.id <= messageId
+				(msg) => msg.id <= messageId
 			)
 
 			// Copy messages
@@ -1067,7 +1073,6 @@ export const chatsBranchHandler: Handler<
 			}
 			emitToUser("chats:branch", res)
 			return res
-
 		} catch (error: any) {
 			console.error("Error branching chat:", error)
 			const res: Sockets.Chats.Branch.Response = {
@@ -1159,7 +1164,7 @@ export const chatMessagesSendPersonaMessageHandler: Handler<
 			const activeCharacterCount = chat.chatCharacters.filter(
 				(cc: any) => cc.isActive
 			).length
-			
+
 			if (activeCharacterCount === 1) {
 				console.log(
 					`[sendPersonaMessage] Triggering single character response for 1:1 chat ${chatId} (${activeCharacterCount} active character)`
@@ -1219,17 +1224,20 @@ export const chatMessagesUpdateHandler: Handler<
 			const updates: Partial<typeof schema.chatMessages.$inferInsert> = {}
 			if (content !== undefined) {
 				updates.content = content
-				
+
 				// Also update the swipe history if it exists
 				const metadata = existingMessage.metadata as any
-				if (metadata?.swipes?.history && Array.isArray(metadata.swipes.history)) {
+				if (
+					metadata?.swipes?.history &&
+					Array.isArray(metadata.swipes.history)
+				) {
 					const currentIdx = metadata.swipes.currentIdx ?? 0
 					// Update the content in the swipes history at the current index
 					const updatedHistory = [...metadata.swipes.history]
 					if (currentIdx >= 0 && currentIdx < updatedHistory.length) {
 						updatedHistory[currentIdx] = content
 					}
-					
+
 					updates.metadata = {
 						...metadata,
 						swipes: {
@@ -2618,19 +2626,22 @@ export const assistantSaveDraftHandler: Handler<
 	{ chatId: number },
 	{ success: boolean; characterId?: number; error?: string }
 > = {
-	event: 'assistant:saveDraft',
-	description: 'Save character draft from chat metadata to characters table',
+	event: "assistant:saveDraft",
+	description: "Save character draft from chat metadata to characters table",
 	async handler(data, { socket, userId, emitToUser }) {
 		try {
 			const { chatId } = data
 
 			// Get the chat
 			const chat = await db.query.chats.findFirst({
-				where: and(eq(schema.chats.id, chatId), eq(schema.chats.ownerId, userId))
+				where: and(
+					eq(schema.chats.id, chatId),
+					eq(schema.chats.ownerId, userId)
+				)
 			})
 
 			if (!chat) {
-				throw new Error('Chat not found or access denied')
+				throw new Error("Chat not found or access denied")
 			}
 
 			// Get the draft from metadata (now a JSON column)
@@ -2639,18 +2650,24 @@ export const assistantSaveDraftHandler: Handler<
 			const draft = metadata?.dataEditor?.create?.characters?.[0]
 
 			if (!draft) {
-				throw new Error('No character draft found in chat metadata')
+				throw new Error("No character draft found in chat metadata")
 			}
 
 			// Validate the draft one final time
-			const { assistantCreateCharacterSchema } = await import('$lib/server/db/zodSchemas')
-			const validationResult = assistantCreateCharacterSchema.safeParse(draft)
+			const { assistantCreateCharacterSchema } = await import(
+				"$lib/server/db/zodSchemas"
+			)
+			const validationResult =
+				assistantCreateCharacterSchema.safeParse(draft)
 
 			if (!validationResult.success) {
-				console.error('Draft validation failed:', validationResult.error)
+				console.error(
+					"Draft validation failed:",
+					validationResult.error
+				)
 				return {
 					success: false,
-					error: 'Draft validation failed. Please review the errors.'
+					error: "Draft validation failed. Please review the errors."
 				}
 			}
 
@@ -2668,7 +2685,8 @@ export const assistantSaveDraftHandler: Handler<
 					exampleDialogues: draft.exampleDialogues || null,
 					creatorNotes: draft.creatorNotes || null,
 					groupOnlyGreetings: draft.groupOnlyGreetings || null,
-					postHistoryInstructions: draft.postHistoryInstructions || null,
+					postHistoryInstructions:
+						draft.postHistoryInstructions || null,
 					source: draft.source || null,
 					characterVersion: draft.characterVersion || null,
 					ownerId: userId,
@@ -2676,7 +2694,7 @@ export const assistantSaveDraftHandler: Handler<
 				})
 				.returning()
 
-			console.log('Character created from draft:', newCharacter.id)
+			console.log("Character created from draft:", newCharacter.id)
 
 			// Link the character to the chat
 			await db.insert(schema.chatsToCharacters).values({
@@ -2703,27 +2721,30 @@ export const assistantSaveDraftHandler: Handler<
 				.set({ metadata: updatedMetadata })
 				.where(eq(schema.chats.id, chatId))
 
-			console.log('Draft cleared from chat metadata')
+			console.log("Draft cleared from chat metadata")
 
 			// Emit success event
-			emitToUser('assistant:draftSaved', {
+			emitToUser("assistant:draftSaved", {
 				chatId,
 				characterId: newCharacter.id,
 				character: newCharacter
 			})
 
 			// Reload the chat to show the new character
-			socket.emit('chats:get', { id: chatId })
+			socket.emit("chats:get", { id: chatId })
 
 			return {
 				success: true,
 				characterId: newCharacter.id
 			}
 		} catch (error) {
-			console.error('Error saving draft:', error)
+			console.error("Error saving draft:", error)
 			return {
 				success: false,
-				error: error instanceof Error ? error.message : 'Failed to save character draft'
+				error:
+					error instanceof Error
+						? error.message
+						: "Failed to save character draft"
 			}
 		}
 	}

@@ -5,7 +5,10 @@ import { eq } from "drizzle-orm"
 /**
  * Gets user's active configurations with fallback to system defaults
  */
-export async function getUserConfigurations(userId: number, retryCount = 0): Promise<{
+export async function getUserConfigurations(
+	userId: number,
+	retryCount = 0
+): Promise<{
 	connection: SelectConnection
 	sampling: SelectSamplingConfig
 	contextConfig: SelectContextConfig
@@ -28,7 +31,8 @@ export async function getUserConfigurations(userId: number, retryCount = 0): Pro
 
 		// Get active connection (userSettings -> systemSettings fallback)
 		const activeConnectionId =
-			userSettings?.activeConnectionId ?? systemSettings?.defaultConnectionId
+			userSettings?.activeConnectionId ??
+			systemSettings?.defaultConnectionId
 		if (activeConnectionId) {
 			activeConnection = await db.query.connections.findFirst({
 				where: (c, { eq }) => eq(c.id, activeConnectionId)
@@ -85,9 +89,14 @@ export async function getUserConfigurations(userId: number, retryCount = 0): Pro
 		}
 	} catch (error: any) {
 		// If this is the first attempt and we're missing configurations, try to fix the database
-		if (retryCount === 0 && error.message?.includes('Missing required configuration')) {
-			console.warn(`Detected missing configurations for user ${userId}, attempting to fix system settings...`)
-			
+		if (
+			retryCount === 0 &&
+			error.message?.includes("Missing required configuration")
+		) {
+			console.warn(
+				`Detected missing configurations for user ${userId}, attempting to fix system settings...`
+			)
+
 			try {
 				// Check if system settings exist
 				const systemSettings = await db.query.systemSettings.findFirst({
@@ -105,7 +114,7 @@ export async function getUserConfigurations(userId: number, retryCount = 0): Pro
 						defaultContextConfigId: 1,
 						defaultPromptConfigId: 1
 					})
-					console.log('Created missing system settings')
+					console.log("Created missing system settings")
 				} else {
 					// Update existing system settings with missing defaults
 					const updates: any = {}
@@ -124,14 +133,17 @@ export async function getUserConfigurations(userId: number, retryCount = 0): Pro
 							.update(schema.systemSettings)
 							.set(updates)
 							.where(eq(schema.systemSettings.id, 1))
-						console.log('Updated system settings with missing defaults:', updates)
+						console.log(
+							"Updated system settings with missing defaults:",
+							updates
+						)
 					}
 				}
 
 				// Retry once after fixing
 				return await getUserConfigurations(userId, retryCount + 1)
 			} catch (fixError: any) {
-				console.error('Failed to fix system settings:', fixError)
+				console.error("Failed to fix system settings:", fixError)
 				throw error // Throw original error if fix fails
 			}
 		}
