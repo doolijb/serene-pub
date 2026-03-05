@@ -54,6 +54,7 @@ const ACCEPTABLE_LICENSES = [
 	"agpl-3.0",
 	"agpl-3.0-only",
 	"agpl-3.0-or-later",
+	"blueoak-1.0.0",
 	"bsd",
 	"bsd-2-clause or mit or apache-2.0",
 	"bsd-2-clause or mit",
