@@ -214,12 +214,7 @@
 	}
 
 	function confirmDelete() {
-<<<<<<< HEAD
-		if (!socket) return
-		socket.emit("deleteSamplingConfig", {
-=======
 		socket.emit("samplingConfigs:delete", {
->>>>>>> 313aa84 (Initial reorganization)
 			id: userCtx.user.activeSamplingConfigId
 		})
 		showDeleteModal = false
@@ -264,13 +259,7 @@
 
 	onMount(() => {
 		onclose = handleOnClose
-<<<<<<< HEAD
-		if (!socket) return
-
-		socket.on("sampling", (message: Sockets.SamplingConfig.Response) => {
-=======
 		socket.on("samplingConfigs:get", (message: Sockets.SamplingConfigs.Get.Response) => {
->>>>>>> 313aa84 (Initial reorganization)
 			sampling = { ...message.sampling }
 			originalSamplingConfig = { ...message.sampling }
 		})
@@ -283,11 +272,7 @@
 					!userCtx.user.activeSamplingConfigId &&
 					samplingConfigsList.length > 0
 				) {
-<<<<<<< HEAD
-					socket?.emit("setUserActiveSamplingConfig", {
-=======
 					socket.emit("samplingConfigs:setUserActive", {
->>>>>>> 313aa84 (Initial reorganization)
 						id: samplingConfigsList[0].id
 					})
 				}
@@ -306,13 +291,8 @@
 			}
 		)
 		socket.on(
-<<<<<<< HEAD
-			"createSamplingConfig",
-			(message: Sockets.SamplingConfig.Response) => {
-=======
 			"samplingConfigs:create",
 			(message: Sockets.SamplingConfigs.Create.Response) => {
->>>>>>> 313aa84 (Initial reorganization)
 				toaster.success({ title: "Sampling Config Created" })
 			}
 		)
@@ -322,20 +302,11 @@
 	})
 
 	onDestroy(() => {
-<<<<<<< HEAD
-		if (!socket) return
-		socket.removeAllListeners("sampling")
-		socket.removeAllListeners("samplingConfigsList")
-		socket.removeAllListeners("deleteSamplingConfig")
-		socket.removeAllListeners("updateSamplingConfig")
-		socket.removeAllListeners("createSamplingConfig")
-=======
 		socket.off("samplingConfigs:get")
 		socket.off("samplingConfigs:list")
 		socket.off("samplingConfigs:delete")
 		socket.off("samplingConfigs:update")
 		socket.off("samplingConfigs:create")
->>>>>>> 313aa84 (Initial reorganization)
 	})
 </script>
 

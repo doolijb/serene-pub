@@ -11,6 +11,7 @@ Serene Pub is an original project and is not a rewrite, port, clone, or fork of 
 
 - Jody Doolittle (doolijb)
 - djdembeck
+- Flippo24
 
 ## Third-Party Attributions
 

@@ -3,6 +3,7 @@ import { and, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { handlePersonaAvatarUpload } from "../utils"
 import type { Handler } from "$lib/shared/events"
+import { parseCharacterCardFromBase64 } from "../utils/characterCardParser"
 
 // Helper function to process tags for persona creation/update
 async function processPersonaTags(
@@ -281,6 +282,244 @@ export const personasDelete: Handler<
 	}
 }
 
+export const personasSearchLibrary: Handler<Sockets.Personas.SearchLibrary.Params, Sockets.Personas.SearchLibrary.Response> = {
+	event: "personas:searchLibrary",
+	handler: async (socket, params, emitToUser) => {
+		try {
+			// Fetch personas YAML from GitHub
+			const response = await fetch(
+				"https://raw.githubusercontent.com/doolijb/serene-pub-chara-list/main/personas.yaml"
+			)
+
+			if (!response.ok) {
+				throw new Error(`GitHub API error: ${response.status}`)
+			}
+
+			const yamlText = await response.text()
+
+			// Parse YAML - simple parsing for flat persona list
+			const personas: Array<{
+				name: string
+				description: string
+				tags: string[]
+				author: string
+				version: string
+				spec: string
+				file: string
+				category: string
+			}> = []
+
+			const lines = yamlText.split("\n")
+			let currentCard: any = null
+			let inDescriptionBlock = false
+			let descriptionBuffer = ""
+
+			for (let i = 0; i < lines.length; i++) {
+				const line = lines[i]
+				const trimmed = line.trim()
+
+				// Card start (top level array item)
+				if (trimmed.startsWith("- name:") && line.match(/^  - name:/)) {
+					// Save previous card if exists
+					if (currentCard) {
+						if (inDescriptionBlock) {
+							currentCard.description = descriptionBuffer.trim()
+							inDescriptionBlock = false
+							descriptionBuffer = ""
+						}
+						personas.push(currentCard)
+					}
+					currentCard = {
+						name: trimmed.replace("- name:", "").trim(),
+						description: "",
+						tags: [],
+						author: "",
+						version: "",
+						spec: "V3",
+						file: "",
+						category: "Uncategorized"
+					}
+				} else if (currentCard) {
+					// Check for multiline description
+					if (trimmed.startsWith("description:")) {
+						const afterColon = trimmed.replace("description:", "").trim()
+						if (afterColon === "|-" || afterColon === "|") {
+							inDescriptionBlock = true
+							descriptionBuffer = ""
+						} else {
+							currentCard.description = afterColon
+						}
+					} else if (inDescriptionBlock) {
+						// Continue reading description block
+						if (line.match(/^    [^ ]/) && !line.match(/^      /)) {
+							// End of description block (next field at same level)
+							currentCard.description = descriptionBuffer.trim()
+							inDescriptionBlock = false
+							descriptionBuffer = ""
+							// Process this line as a new field
+							i-- // Re-process this line
+							continue
+						} else if (line.match(/^      /)) {
+							// Part of description
+							descriptionBuffer += line.substring(6) + "\n"
+						}
+					} else if (trimmed.startsWith("tags:") && line.match(/^    tags:/)) {
+						// Tags array follows
+						let j = i + 1
+						while (j < lines.length && lines[j].match(/^      - /)) {
+							const tag = lines[j].trim().replace("- ", "")
+							if (tag) currentCard.tags.push(tag)
+							j++
+						}
+					} else if (trimmed.startsWith("author:") && line.match(/^    author:/)) {
+						currentCard.author = trimmed.replace("author:", "").trim()
+					} else if (trimmed.startsWith("version:") && line.match(/^    version:/)) {
+						currentCard.version = trimmed.replace("version:", "").trim()
+					} else if (trimmed.startsWith("file:") && line.match(/^    file:/)) {
+						currentCard.file = trimmed.replace("file:", "").trim()
+					} else if (trimmed.startsWith("category:") && line.match(/^    category:/)) {
+						const cat = trimmed.replace("category:", "").trim()
+						if (cat && cat !== "null") {
+							currentCard.category = cat
+						}
+					}
+				}
+			}
+
+			// Add last card
+			if (currentCard) {
+				if (inDescriptionBlock) {
+					currentCard.description = descriptionBuffer.trim()
+				}
+				personas.push(currentCard)
+			}
+
+			// Filter by search term if provided
+			let filteredPersonas = personas
+			if (params.searchTerm) {
+				const searchLower = params.searchTerm.toLowerCase()
+				filteredPersonas = personas.filter(
+					(p) =>
+						p.name.toLowerCase().includes(searchLower) ||
+						p.description.toLowerCase().includes(searchLower) ||
+						p.category.toLowerCase().includes(searchLower) ||
+						p.tags.some((t) => t.toLowerCase().includes(searchLower))
+				)
+			}
+
+			const res: Sockets.Personas.SearchLibrary.Response = {
+				personas: filteredPersonas
+			}
+			emitToUser("personas:searchLibrary", res)
+			return res
+		} catch (error: any) {
+			console.error("Persona library search error:", error)
+			emitToUser("personas:searchLibrary:error", {
+				error: "Failed to search persona library"
+			})
+			throw error
+		}
+	}
+}
+
+export const personasImportCard: Handler<Sockets.Personas.ImportCard.Params, Sockets.Personas.ImportCard.Response> = {
+	event: "personas:importCard",
+	handler: async (socket, params, emitToUser) => {
+		try {
+			const userId = socket.user!.id
+
+			// Parse persona card using shared utility
+			const { card, avatarBuffer } = await parseCharacterCardFromBase64(params.file)
+
+			// Convert card to V3 spec to access data
+			const specData = card.toSpecV3()
+			const data = specData.data
+
+			// Create persona from spec data
+			const personaData: InsertPersona = {
+				userId,
+				name: data.name || "Unnamed Persona",
+				description: data.description || "",
+				isDefault: false
+			}
+
+			// Create the persona
+			const [persona] = await db
+				.insert(schema.personas)
+				.values(personaData)
+				.returning()
+
+			// Handle avatar upload if present
+			if (avatarBuffer) {
+			await handlePersonaAvatarUpload({
+				persona,
+				avatarFile: avatarBuffer
+			})
+			
+			// Refetch persona to get updated avatar path
+			const updatedPersona = await db.query.personas.findFirst({
+				where: eq(schema.personas.id, persona.id)
+			})
+			if (updatedPersona) {
+				Object.assign(persona, updatedPersona)
+			}
+		}
+
+		await personasList.handler(socket, {}, emitToUser)
+		const res: Sockets.Personas.ImportCard.Response = { persona }
+		emitToUser("personas:importCard", res)
+		return res
+		} catch (error: any) {
+			console.error("Error importing persona card:", error)
+			emitToUser("personas:importCard:error", {
+				error: error.message || "Failed to import persona card."
+			})
+			throw error
+		}
+	}
+}
+
+export const personasImportFromLibrary: Handler<Sockets.Personas.ImportFromLibrary.Params, Sockets.Personas.ImportFromLibrary.Response> = {
+	event: "personas:importFromLibrary",
+	handler: async (socket, params, emitToUser) => {
+		try {
+			// Fetch the persona card file from GitHub
+			const fileUrl = `https://raw.githubusercontent.com/doolijb/serene-pub-chara-list/main/${params.fileUrl}`
+			const response = await fetch(fileUrl)
+
+			if (!response.ok) {
+				throw new Error(`Failed to fetch persona file: ${response.status}`)
+			}
+
+			// Get the file as a buffer
+			const arrayBuffer = await response.arrayBuffer()
+			const buffer = Buffer.from(arrayBuffer)
+
+			// Convert to base64 for the import handler
+			const base64 = buffer.toString("base64")
+
+			// Use the existing import handler
+			const importResult = await personasImportCard.handler(
+				socket,
+				{ file: base64 },
+				emitToUser
+			)
+
+			const res: Sockets.Personas.ImportFromLibrary.Response = {
+				persona: importResult.persona
+			}
+			emitToUser("personas:importFromLibrary", res)
+			return res
+		} catch (error: any) {
+			console.error("Persona import from library error:", error)
+			emitToUser("personas:importFromLibrary:error", {
+				error: "Failed to import persona from library"
+			})
+			throw error
+		}
+	}
+}
+
 // Registration function for all persona handlers
 export function registerPersonaHandlers(
 	socket: any,
@@ -296,4 +535,7 @@ export function registerPersonaHandlers(
 	register(socket, personasCreate, emitToUser)
 	register(socket, personasUpdate, emitToUser)
 	register(socket, personasDelete, emitToUser)
+	register(socket, personasImportCard, emitToUser)
+	register(socket, personasSearchLibrary, emitToUser)
+	register(socket, personasImportFromLibrary, emitToUser)
 }

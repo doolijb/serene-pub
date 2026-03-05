@@ -529,6 +529,10 @@
 			})
 		})
 
+		socket.on("characters:exportCard:error", (msg: Sockets.ErrorResponse) => {
+			toaster.error({ title: msg.error || "Failed to export character" })
+		})
+
 		// Initialize with initialData if provided (for draft mode)
 		if (initialData) {
 			editCharacterData = {
@@ -600,6 +604,7 @@
 		socket.off("characters:update")
 		socket.off("characters:get")
 		socket.off("characters:exportCard")
+		socket.off("characters:exportCard:error")
 		socket.off("tags:list")
 		socket.off("userSettings:updateShowAllCharacterFields")
 

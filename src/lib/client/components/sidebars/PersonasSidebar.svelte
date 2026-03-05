@@ -1,12 +1,14 @@
 <script lang="ts">
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { getContext, onMount } from "svelte"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { getContext, onMount, onDestroy } from "svelte"
+	import { Modal, FileUpload } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import PersonaForm from "../personaForms/PersonaForm.svelte"
 	import PersonaCreator from "../modals/PersonaCreatorModal.svelte"
 	import PersonaUnsavedChangesModal from "../modals/PersonaUnsavedChangesModal.svelte"
+	import PersonaLibraryModal from "../modals/PersonaLibraryModal.svelte"
 	import PersonaListItem from "../listItems/PersonaListItem.svelte"
+	import { toaster } from "$lib/client/utils/toaster"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -28,6 +30,8 @@
 	let personaId: number | undefined = $state()
 	let isCreating = $state(false)
 	let showPersonaCreator = $state(false)
+	let showLibraryModal = $state(false)
+	let showImportModal = $state(false)
 	let personaFormHasChanges = $state(false)
 	let showDeleteModal = $state(false)
 	let personaToDelete: number | undefined = $state(undefined)
@@ -35,13 +39,44 @@
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
 	let onEditFormCancel: (() => void) | undefined = $state()
 
+	function handleImportClick() {
+		showImportModal = true
+	}
+
+	async function handleFileImport(details: FileAcceptDetails) {
+		console.log("File import details:", details)
+		if (!details.files || details.files.length === 0) return
+		const file = details.files[0]
+		const reader = new FileReader()
+		reader.onload = function (e) {
+			const base64 = (e.target?.result as string)?.split(",")[1]
+			if (base64) {
+				socket.emit("personas:importCard", { file: base64 })
+				showImportModal = false
+			}
+		}
+		reader.readAsDataURL(file)
+		showImportModal = false
+	}
+
 	onMount(() => {
+		socket.on("personas:list", (msg: Sockets.Personas.List.Response) => {
+			personaList = msg.personaList
+		})
+		socket.on("personas:importCard", (msg) => {
+			toaster.success({
+				title: `Persona Imported`,
+				description: `Persona ${msg.persona.name} imported successfully.`
+			})
+		})
 		socket.emit("personas:list", {})
 		onclose = handleOnClose
 	})
 
-	socket.on("personas:list", (msg: Sockets.Personas.List.Response) => {
-		personaList = msg.personaList
+	onDestroy(() => {
+		socket.off("personas:list")
+		socket.off("personas:importCard")
+		onclose = undefined
 	})
 
 	let filteredPersonas = $derived.by(() => {
@@ -193,8 +228,19 @@
 					: ''}"
 				onclick={handleCreateClick}
 				title="Create New Persona"
+				aria-label="Create new persona"
+				type="button"
 			>
-				<Icons.Plus size={16} />
+				<Icons.Plus size={16} aria-hidden="true" />
+			</button>
+			<button
+				class="btn btn-sm preset-filled-primary-500"
+				title="Import Persona"
+				onclick={handleImportClick}
+				aria-label="Import persona from file"
+				type="button"
+			>
+				<Icons.Download size={16} aria-hidden="true" />
 			</button>
 		</div>
 		<div class="mb-4 flex items-center gap-2">
@@ -263,3 +309,55 @@
 />
 
 <PersonaCreator bind:open={showPersonaCreator} />
+
+{#if showImportModal}
+	<Modal
+		open={showImportModal}
+		onOpenChange={(e) => (showImportModal = e.open)}
+		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm w-[35rem]"
+		backdropClasses="backdrop-blur-sm"
+	>
+		{#snippet content()}
+			<div class="p-6">
+				<h2 class="mb-2 text-lg font-bold">Import Persona</h2>
+				<p class="mb-4">Choose how to import:</p>
+				<div class="space-y-2">
+					<button
+						class="btn preset-tonal-surface w-full justify-start"
+						onclick={() => {
+							showImportModal = false
+							showLibraryModal = true
+						}}
+					>
+						<Icons.Library class="w-4 h-4" />
+						Search Library
+					</button>
+					<div class="divider">OR</div>
+					<div>
+						<p class="text-sm text-surface-600 dark:text-surface-400 mb-2">
+							Upload a file (PNG, APNG, JPEG, JPG, WEBP, JSON):
+						</p>
+						<FileUpload
+							name="example"
+							accept=".png,.apng,.jpeg, .jpg, .webp, .json"
+							maxFiles={1}
+							onFileAccept={handleFileImport}
+							onFileReject={console.error}
+							classes="w-full bg-surface-50-950"
+						/>
+					</div>
+				</div>
+				<div class="mt-4 flex gap-2">
+					<button
+						class="btn preset-filled-surface-500"
+						onclick={() => (showImportModal = false)}
+					>
+						Cancel
+					</button>
+				</div>
+			</div>
+		{/snippet}
+	</Modal>
+{/if}
+
+<PersonaLibraryModal bind:open={showLibraryModal} />

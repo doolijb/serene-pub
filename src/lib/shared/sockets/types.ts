@@ -126,6 +126,32 @@ declare global {
 					filename: string
 				}
 			}
+			namespace SearchLibrary {
+				interface Params {
+					searchTerm?: string
+				}
+				interface Response {
+					characters: {
+						name: string
+						description: string
+						tags: string[]
+						author: string
+						version: string
+						spec: string
+						file: string
+						category: string
+					}[]
+				}
+			}
+			namespace ImportFromLibrary {
+				interface Params {
+					fileUrl: string
+				}
+				interface Response {
+					character: SelectCharacter
+					book: SpecV3.Lorebook | null
+				}
+			}
 		}
 
 		// Connections namespace
@@ -238,6 +264,39 @@ declare global {
 				interface Response {
 					success?: string
 					error?: string
+				}
+			}
+			namespace ImportCard {
+				interface Params {
+					file: string // base64 encoded file (JSON or PNG)
+				}
+				interface Response {
+					persona: SelectPersona
+				}
+			}
+			namespace SearchLibrary {
+				interface Params {
+					searchTerm?: string
+				}
+				interface Response {
+					personas: {
+						name: string
+						description: string
+						tags: string[]
+						author: string
+						version: string
+						spec: string
+						file: string
+						category: string
+					}[]
+				}
+			}
+			namespace ImportFromLibrary {
+				interface Params {
+					fileUrl: string
+				}
+				interface Response {
+					persona: SelectPersona
 				}
 			}
 		}

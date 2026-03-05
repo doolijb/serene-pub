@@ -6,6 +6,7 @@
 	import CharacterForm from "../characterForms/CharacterForm.svelte"
 	import CharacterCreator from "../modals/CharacterCreatorModal.svelte"
 	import CharacterUnsavedChangesModal from "../modals/CharacterUnsavedChangesModal.svelte"
+	import CharacterLibraryModal from "../modals/CharacterLibraryModal.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import type { SpecV3 } from "@lenml/char-card-reader"
 	import CharacterListItem from "../listItems/CharacterListItem.svelte"
@@ -35,6 +36,7 @@
 	let showUnsavedChangesModal = $state(false)
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
 	let showImportModal = $state(false)
+	let showLibraryModal = $state(false)
 	let onEditFormCancel: (() => void) | undefined = $state()
 	let importingLorebook: SpecV3.Lorebook | null = $state(null)
 	let importingLorebookCharacter: SelectCharacter | null = $state(null)
@@ -129,7 +131,7 @@
 
 	function confirmDelete() {
 		if (characterToDelete !== undefined) {
-			socket.emit("characters:delete", { characterId: characterToDelete })
+			socket.emit("characters:delete", { id: characterToDelete })
 		}
 		showDeleteModal = false
 		characterToDelete = undefined
@@ -396,17 +398,33 @@
 		{#snippet content()}
 			<div class="p-6">
 				<h2 class="mb-2 text-lg font-bold">Import Character</h2>
-				<p class="mb-4">
-					PNG, APNG, JPEG, JPG, WEBP, and JSON files are supported.
-				</p>
-				<FileUpload
-					name="example"
-					accept=".png,.apng,.jpeg, .jpg, .webp, .json"
-					maxFiles={1}
-					onFileAccept={handleFileImport}
-					onFileReject={console.error}
-					classes="w-full bg-surface-50-950"
-				/>
+				<p class="mb-4">Choose how to import:</p>
+				<div class="space-y-2">
+					<button
+						class="btn preset-tonal-surface w-full justify-start"
+						onclick={() => {
+							showImportModal = false
+							showLibraryModal = true
+						}}
+					>
+						<Icons.Library class="w-4 h-4" />
+						Search Library
+					</button>
+					<div class="divider">OR</div>
+					<div>
+						<p class="text-sm text-surface-600 dark:text-surface-400 mb-2">
+							Upload a file (PNG, APNG, JPEG, JPG, WEBP, JSON):
+						</p>
+						<FileUpload
+							name="example"
+							accept=".png,.apng,.jpeg, .jpg, .webp, .json"
+							maxFiles={1}
+							onFileAccept={handleFileImport}
+							onFileReject={console.error}
+							classes="w-full bg-surface-50-950"
+						/>
+					</div>
+				</div>
 				<div class="mt-4 flex gap-2">
 					<button
 						class="btn preset-filled-surface-500"
@@ -419,6 +437,8 @@
 		{/snippet}
 	</Modal>
 {/if}
+
+<CharacterLibraryModal bind:open={showLibraryModal} />
 
 {#if showLorebookImportConfirmationModal}
 	<Modal

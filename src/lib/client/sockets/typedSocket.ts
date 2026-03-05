@@ -91,6 +91,26 @@ type SocketEventMap = {
 		params: Sockets.Characters.ExportCard.Params
 		response: Sockets.Characters.ExportCard.Response
 	}
+	"characters:exportCard:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"characters:searchLibrary": {
+		params: Sockets.Characters.SearchLibrary.Params
+		response: Sockets.Characters.SearchLibrary.Response
+	}
+	"characters:searchLibrary:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"characters:importFromLibrary": {
+		params: Sockets.Characters.ImportFromLibrary.Params
+		response: Sockets.Characters.ImportFromLibrary.Response
+	}
+	"characters:importFromLibrary:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 
 	// Connection events
 	"connections:list": {
@@ -146,6 +166,30 @@ type SocketEventMap = {
 	"personas:delete": {
 		params: Sockets.Personas.Delete.Params
 		response: Sockets.Personas.Delete.Response
+	}
+	"personas:searchLibrary": {
+		params: Sockets.Personas.SearchLibrary.Params
+		response: Sockets.Personas.SearchLibrary.Response
+	}
+	"personas:searchLibrary:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"personas:importCard": {
+		params: Sockets.Personas.ImportCard.Params
+		response: Sockets.Personas.ImportCard.Response
+	}
+	"personas:importCard:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"personas:importFromLibrary": {
+		params: Sockets.Personas.ImportFromLibrary.Params
+		response: Sockets.Personas.ImportFromLibrary.Response
+	}
+	"personas:importFromLibrary:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 
 	// Chat events
