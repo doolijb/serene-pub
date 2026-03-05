@@ -20,9 +20,8 @@
 	let showAddPersonaBindingModal = $state(false)
 	let showAddCharacterBindingModal = $state(false)
 	let lorebookBindingId: number | null = $state(null)
-	let characterList: Sockets.Characters.List.Response["characterList"] = $state(
-		[]
-	)
+	let characterList: Sockets.Characters.List.Response["characterList"] =
+		$state([])
 	let lorebookBindingList: SelectLorebookBinding[] = $state([])
 	let personaList: Sockets.Personas.List.Response["personaList"] = $state([])
 
@@ -54,7 +53,7 @@
 				return match ? parseInt(match[1], 10) : 0
 			})
 			.filter((n) => n > 0)
-		
+
 		if (existingNumbers.length === 0) return 1
 		return Math.max(...existingNumbers) + 1
 	}
@@ -92,7 +91,12 @@
 		persona: Partial<SelectPersona> & { id: number }
 	) {
 		showLinkPersonaBindingModal = false
-		console.log("Linking persona:", persona, "to binding:", lorebookBindingId)
+		console.log(
+			"Linking persona:",
+			persona,
+			"to binding:",
+			lorebookBindingId
+		)
 		const req: Sockets.Lorebooks.UpdateBinding.Params = {
 			lorebookBinding: {
 				id: lorebookBindingId ?? 0,
@@ -160,14 +164,14 @@
 			character?: SelectCharacter | null
 			persona?: SelectPersona | null
 		}
-		
+
 		if (bindingWithRelations.character) {
 			return bindingWithRelations.character
 		}
 		if (bindingWithRelations.persona) {
 			return bindingWithRelations.persona
 		}
-		
+
 		// Fallback to looking them up in the lists
 		return binding.characterId
 			? characterList.find((c) => c.id === binding.characterId)
@@ -179,9 +183,12 @@
 	onMount(() => {
 		if (!socket) return
 
-		socket.on("characters:list", (msg: Sockets.Characters.List.Response) => {
-			characterList = msg.characterList || []
-		})
+		socket.on(
+			"characters:list",
+			(msg: Sockets.Characters.List.Response) => {
+				characterList = msg.characterList || []
+			}
+		)
 
 		socket.on("personas:list", (msg: Sockets.Personas.List.Response) => {
 			personaList = msg.personaList || []
@@ -193,7 +200,10 @@
 				console.log("Received lorebooks:bindingList", msg)
 				if (msg.lorebookId === lorebookId) {
 					lorebookBindingList = msg.lorebookBindingList || []
-					console.log("Updated lorebookBindingList", lorebookBindingList)
+					console.log(
+						"Updated lorebookBindingList",
+						lorebookBindingList
+					)
 				}
 				await tick()
 			}
@@ -221,7 +231,10 @@
 			}
 		)
 
-		console.log("Emitting characters:list, personas:list, and lorebooks:bindingList for lorebookId:", lorebookId)
+		console.log(
+			"Emitting characters:list, personas:list, and lorebooks:bindingList for lorebookId:",
+			lorebookId
+		)
 		socket.emit("characters:list", {})
 		socket.emit("personas:list", {})
 		const bindingReq: Sockets.Lorebooks.BindingList.Params = {
@@ -259,8 +272,11 @@
 		<div class="relative mb-2 flex w-full flex-wrap gap-3">
 			{#key lorebookBindingList.length}
 				{#if lorebookBindingList.length === 0}
-					<div class="text-muted-foreground w-full py-8 text-center text-sm">
-						No bindings yet. Add a character or persona binding to get started.
+					<div
+						class="text-muted-foreground w-full py-8 text-center text-sm"
+					>
+						No bindings yet. Add a character or persona binding to
+						get started.
 					</div>
 				{:else}
 					{#each lorebookBindingList as binding, i}
@@ -277,7 +293,7 @@
 		<!-- Show character card -->
 		{@const char = getBindingCharacter(binding)}
 		<div
-			class="relative flex w-full flex-col gap-2 rounded-lg p-3 transition-all group hover:preset-filled-surface-200-800"
+			class="group hover:preset-filled-surface-200-800 relative flex w-full flex-col gap-2 rounded-lg p-3 transition-all"
 			class:preset-outlined-surface-300-700={!!char}
 			class:preset-outlined-warning-300-700={!char}
 		>

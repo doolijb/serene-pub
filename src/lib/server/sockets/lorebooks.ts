@@ -426,11 +426,11 @@ export const lorebookBindingListHandler: Handler<
 			lorebookId: book.id,
 			lorebookBindingList: book.lorebookBindings
 		}
-		
+
 		if (emitToUser) {
 			emitToUser("lorebooks:bindingList", res)
 		}
-		
+
 		return res
 	}
 }
@@ -474,7 +474,7 @@ export const createLorebookBindingHandler: Handler<
 		const res: Sockets.Lorebooks.CreateBinding.Response = {
 			lorebookBinding: binding
 		}
-		
+
 		if (emitToUser) {
 			emitToUser("lorebooks:createBinding", res)
 		}
@@ -507,9 +507,10 @@ export const updateLorebookBindingHandler: Handler<
 		}
 
 		// Type assertion to work around TypeScript limitation
-		const bindingWithLorebook = existingBinding as typeof existingBinding & {
-			lorebook: { userId: number }
-		}
+		const bindingWithLorebook =
+			existingBinding as typeof existingBinding & {
+				lorebook: { userId: number }
+			}
 
 		if (bindingWithLorebook.lorebook.userId !== userId) {
 			throw new Error("Access denied.")
@@ -534,7 +535,7 @@ export const updateLorebookBindingHandler: Handler<
 		const res: Sockets.Lorebooks.UpdateBinding.Response = {
 			lorebookBinding: updatedBinding
 		}
-		
+
 		if (emitToUser) {
 			emitToUser("lorebooks:updateBinding", res)
 		}

@@ -28,16 +28,16 @@
 	let title = $state(initialTitle)
 	let inputRef: HTMLInputElement | null = null
 	let validationErrors: ValidationErrors = $state({})
-	
+
 	// Update title when initialTitle changes
 	$effect(() => {
 		title = initialTitle
 	})
-	
+
 	$effect(() => {
 		if (open && inputRef) inputRef.focus()
 	})
-	
+
 	let isValid = $derived(
 		!!title.trim() && Object.keys(validationErrors).length === 0
 	)
@@ -73,7 +73,8 @@
 		</header>
 		<article class="space-y-4">
 			<p id="modal-description" class="text-muted-foreground">
-				Create a new chat branch from this message. The new chat will include all messages up to this point.
+				Create a new chat branch from this message. The new chat will
+				include all messages up to this point.
 			</p>
 			<div class="form-field">
 				<label for="title-input" class="sr-only">Chat Title</label>

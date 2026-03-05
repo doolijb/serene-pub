@@ -4,11 +4,11 @@
 	import * as Icons from "@lucide/svelte"
 	import { slide } from "svelte/transition"
 	import Avatar from "../Avatar.svelte"
-	
-	console.log('[DataManager] Component loaded')
 
-	type EntityType = 'characters' | 'personas' | 'chats' | 'lorebooks'
-	
+	console.log("[DataManager] Component loaded")
+
+	type EntityType = "characters" | "personas" | "chats" | "lorebooks"
+
 	interface EntityResult {
 		id: number
 		name: string
@@ -19,76 +19,93 @@
 		displayName?: string
 		tagline?: string
 	}
-	
+
 	interface PendingSelection {
 		messageId: number
 		reasoning: string
 		results: EntityResult[]
 		type: EntityType
 	}
-	
+
 	interface LinkedEntity {
 		id: number
 		name: string
 		type: EntityType
 		avatar?: string | null
 	}
-	
+
 	interface Props {
 		chatId: number
 		taggedEntities?: Record<string, number[]>
 		pendingSelection?: PendingSelection | null
 		onSelectionComplete?: () => void
 	}
-	
-	let { 
-		chatId, 
-		taggedEntities = {}, 
+
+	let {
+		chatId,
+		taggedEntities = {},
 		pendingSelection = null,
-		onSelectionComplete 
+		onSelectionComplete
 	}: Props = $props()
-	
-	console.log('[DataManager] Props:', { chatId, taggedEntities, pendingSelection })
-	
+
+	console.log("[DataManager] Props:", {
+		chatId,
+		taggedEntities,
+		pendingSelection
+	})
+
 	const socket = useTypedSocket()
-	
+
 	let isExpanded = $state(false)
 	let showAddDataModal = $state(false)
 	let isLoading = $state(false)
 	let availableCharacters: SelectCharacter[] = $state([])
 	let searchQuery = $state("")
 	let loadedCharacters: Map<number, SelectCharacter> = $state(new Map())
-	
+
 	// Auto-expand when pending selection appears
 	$effect(() => {
-		console.log('[DataManager] === PENDING SELECTION EFFECT ===')
-		console.log('[DataManager] Pending selection:', pendingSelection)
-		console.log('[DataManager] Has results:', pendingSelection?.results)
-		console.log('[DataManager] Results length:', pendingSelection?.results?.length)
-		
+		console.log("[DataManager] === PENDING SELECTION EFFECT ===")
+		console.log("[DataManager] Pending selection:", pendingSelection)
+		console.log("[DataManager] Has results:", pendingSelection?.results)
+		console.log(
+			"[DataManager] Results length:",
+			pendingSelection?.results?.length
+		)
+
 		if (pendingSelection && pendingSelection.results.length > 0) {
-			console.log('[DataManager] ✅ Auto-expanding with', pendingSelection.results.length, 'results')
+			console.log(
+				"[DataManager] ✅ Auto-expanding with",
+				pendingSelection.results.length,
+				"results"
+			)
 			isExpanded = true
 		} else {
-			console.log('[DataManager] ❌ Not expanding - no results or null pendingSelection')
+			console.log(
+				"[DataManager] ❌ Not expanding - no results or null pendingSelection"
+			)
 		}
 	})
-	
+
 	// Auto-select if only one result
 	$effect(() => {
 		if (pendingSelection && pendingSelection.results.length === 1) {
 			// Auto-select SHOULD trigger response since it's from assistant's function results
-			handleSelect([pendingSelection.results[0].id], pendingSelection.type, true)
+			handleSelect(
+				[pendingSelection.results[0].id],
+				pendingSelection.type,
+				true
+			)
 		}
 	})
-	
+
 	// Load available characters when modal opens
 	$effect(() => {
 		if (showAddDataModal && socket) {
 			loadAvailableCharacters()
 		}
 	})
-	
+
 	// Load linked entities when they change
 	$effect(() => {
 		const characterIds = taggedEntities.characters || []
@@ -101,48 +118,52 @@
 		// Note: Don't need to manually clear - linkedEntities is derived from loadedCharacters
 		// and will automatically be empty when there are no matching IDs
 	})
-	
+
 	// Filtered characters based on search
 	const filteredCharacters = $derived.by(() => {
 		if (!searchQuery.trim()) return availableCharacters
 		const query = searchQuery.toLowerCase()
-		return availableCharacters.filter(c => 
-			c.name?.toLowerCase().includes(query) ||
-			c.nickname?.toLowerCase().includes(query) ||
-			c.description?.toLowerCase().includes(query)
+		return availableCharacters.filter(
+			(c) =>
+				c.name?.toLowerCase().includes(query) ||
+				c.nickname?.toLowerCase().includes(query) ||
+				c.description?.toLowerCase().includes(query)
 		)
 	})
-	
+
 	// Get linked entities organized by type
 	const linkedEntities = $derived.by(() => {
-		console.log('[DataManager] Recomputing linkedEntities')
-		console.log('[DataManager] taggedEntities:', taggedEntities)
-		console.log('[DataManager] loadedCharacters:', loadedCharacters)
-		
+		console.log("[DataManager] Recomputing linkedEntities")
+		console.log("[DataManager] taggedEntities:", taggedEntities)
+		console.log("[DataManager] loadedCharacters:", loadedCharacters)
+
 		const entities: Record<EntityType, LinkedEntity[]> = {
 			characters: [],
 			personas: [],
 			chats: [],
 			lorebooks: []
 		}
-		
+
 		// Populate with actual character data
 		if (taggedEntities) {
 			for (const [type, ids] of Object.entries(taggedEntities)) {
-				if (type === 'characters' && Array.isArray(ids)) {
-					entities.characters = ids.map(id => {
+				if (type === "characters" && Array.isArray(ids)) {
+					entities.characters = ids.map((id) => {
 						const char = loadedCharacters.get(id)
 						console.log(`[DataManager] Character ${id}:`, char)
 						return {
 							id,
-							name: char?.nickname || char?.name || `Character #${id}`,
-							type: 'characters' as EntityType,
+							name:
+								char?.nickname ||
+								char?.name ||
+								`Character #${id}`,
+							type: "characters" as EntityType,
 							avatar: char?.avatar
 						}
 					})
 				} else if (type in entities && Array.isArray(ids)) {
 					// For other types, use placeholder for now
-					entities[type as EntityType] = ids.map(id => ({
+					entities[type as EntityType] = ids.map((id) => ({
 						id,
 						name: `${type.slice(0, -1)} #${id}`,
 						type: type as EntityType
@@ -150,84 +171,88 @@
 				}
 			}
 		}
-		
-		console.log('[DataManager] Final linkedEntities:', entities)
+
+		console.log("[DataManager] Final linkedEntities:", entities)
 		return entities
 	})
-	
+
 	// Count total linked entities
 	const totalLinked = $derived(
 		Object.values(linkedEntities).reduce((sum, arr) => sum + arr.length, 0)
 	)
-	
+
 	$effect(() => {
-		console.log('[DataManager] Total linked entities:', totalLinked)
+		console.log("[DataManager] Total linked entities:", totalLinked)
 	})
-	
+
 	// Count pending selections
 	const hasPendingSelection = $derived(
 		pendingSelection && pendingSelection.results.length > 0
 	)
-	
-	function handleSelect(selectedIds: number[], type: EntityType, shouldTriggerResponse = true) {
+
+	function handleSelect(
+		selectedIds: number[],
+		type: EntityType,
+		shouldTriggerResponse = true
+	) {
 		if (!socket) return
-		
+
 		isLoading = true
-		
+
 		// Send selection to server
 		;(socket as any).emit("assistant:selectFunctionResults", {
 			chatId,
 			selectedIds,
 			type
 		})
-		
+
 		// Only trigger assistant response if this is from a pending selection
 		if (shouldTriggerResponse) {
 			onSelectionComplete?.()
 		}
-		
+
 		setTimeout(() => {
 			isLoading = false
 		}, 500)
 	}
-	
+
 	function handleUnlink(entityId: number, type: EntityType) {
 		if (!socket || !confirm(`Unlink this ${type.slice(0, -1)}?`)) return
-		
+
 		isLoading = true
-		
+
 		// Send unlink request to server
 		;(socket as any).emit("assistant:unlinkEntity", {
 			chatId,
 			entityId,
 			type
 		})
-		
+
 		// The parent component should refresh chat data when it receives unlinkSuccess event
 		setTimeout(() => {
 			isLoading = false
 		}, 500)
 	}
-	
+
 	function toggleExpanded() {
 		isExpanded = !isExpanded
 	}
-	
+
 	function openAddDataModal() {
 		showAddDataModal = true
 	}
-	
+
 	function closeAddDataModal() {
 		showAddDataModal = false
 		searchQuery = ""
 	}
-	
+
 	async function loadAvailableCharacters() {
 		if (!socket) return
-		
+
 		try {
 			isLoading = true
-			
+
 			// Create handler for the response
 			const handleCharactersList = (response: any) => {
 				if (response.characterList) {
@@ -237,10 +262,10 @@
 				// Remove listener after handling
 				socket.off("characters:list", handleCharactersList)
 			}
-			
+
 			// Listen for response
 			socket.on("characters:list", handleCharactersList)
-			
+
 			// Emit request to load all characters
 			socket.emit("characters:list", {})
 		} catch (error) {
@@ -248,31 +273,37 @@
 			isLoading = false
 		}
 	}
-	
+
 	async function loadLinkedCharacters(characterIds: number[]) {
 		if (!socket || !characterIds.length) return
-		
-		console.log('[DataManager] Loading linked characters:', characterIds)
-		
+
+		console.log("[DataManager] Loading linked characters:", characterIds)
+
 		// Check if we already have all the characters loaded
-		const allLoaded = characterIds.every(id => loadedCharacters.has(id))
+		const allLoaded = characterIds.every((id) => loadedCharacters.has(id))
 		if (allLoaded) {
-			console.log('[DataManager] All characters already loaded')
+			console.log("[DataManager] All characters already loaded")
 			return
 		}
-		
+
 		try {
 			// Create a unique handler to avoid conflicts
 			const handleCharactersList = (response: any) => {
-				console.log('[DataManager] Received character list for linked data:', response)
+				console.log(
+					"[DataManager] Received character list for linked data:",
+					response
+				)
 				if (response.characterList) {
 					// Filter to only the characters we need and store them
-					const relevantChars = response.characterList.filter((char: any) => 
-						characterIds.includes(char.id)
+					const relevantChars = response.characterList.filter(
+						(char: any) => characterIds.includes(char.id)
 					)
-					
-					console.log('[DataManager] Filtered relevant characters:', relevantChars)
-					
+
+					console.log(
+						"[DataManager] Filtered relevant characters:",
+						relevantChars
+					)
+
 					// Update the map with only id, name, nickname, avatar (lightweight)
 					const newMap = new Map(loadedCharacters)
 					for (const char of relevantChars) {
@@ -283,44 +314,54 @@
 							avatar: char.avatar
 						} as SelectCharacter)
 					}
-					
+
 					// Force reactivity by creating new Map
 					loadedCharacters = newMap
-					console.log('[DataManager] Updated loadedCharacters map size:', loadedCharacters.size)
+					console.log(
+						"[DataManager] Updated loadedCharacters map size:",
+						loadedCharacters.size
+					)
 				}
 				// Clean up listener
 				socket.off("characters:list", handleCharactersList)
 			}
-			
+
 			// Listen for response
 			socket.on("characters:list", handleCharactersList)
-			
+
 			// Request all characters
-			console.log('[DataManager] Emitting characters:list request')
+			console.log("[DataManager] Emitting characters:list request")
 			socket.emit("characters:list", {})
 		} catch (error) {
-			console.error('[DataManager] Failed to load linked characters:', error)
+			console.error(
+				"[DataManager] Failed to load linked characters:",
+				error
+			)
 		}
 	}
-	
+
 	function handleCharacterSelect(character: SelectCharacter) {
 		if (!character.id) return
-		
+
 		// Add this character to the chat WITHOUT triggering assistant response
 		// (manual selection, not from pending function results)
-		handleSelect([character.id], 'characters', false)
+		handleSelect([character.id], "characters", false)
 		closeAddDataModal()
 	}
-	
+
 	function getEntityIcon(type: EntityType) {
 		switch (type) {
-			case 'characters': return Icons.User
-			case 'personas': return Icons.UserCircle
-			case 'chats': return Icons.MessageSquare
-			case 'lorebooks': return Icons.Book
+			case "characters":
+				return Icons.User
+			case "personas":
+				return Icons.UserCircle
+			case "chats":
+				return Icons.MessageSquare
+			case "lorebooks":
+				return Icons.Book
 		}
 	}
-	
+
 	function getEntityLabel(type: EntityType) {
 		return type.charAt(0).toUpperCase() + type.slice(1)
 	}
@@ -329,42 +370,60 @@
 <div class="assistant-data-manager">
 	<!-- Pending Selection Alert -->
 	{#if pendingSelection && pendingSelection.results.length > 0}
-		<div class="card variant-filled-warning p-3 mb-2" transition:slide={{ duration: 200 }}>
+		<div
+			class="card variant-filled-warning mb-2 p-3"
+			transition:slide={{ duration: 200 }}
+		>
 			<div class="flex items-start gap-3">
-				<Icons.AlertCircle size={20} class="flex-shrink-0 mt-0.5" />
-				<div class="flex-1 min-w-0 space-y-2">
+				<Icons.AlertCircle size={20} class="mt-0.5 flex-shrink-0" />
+				<div class="min-w-0 flex-1 space-y-2">
 					<div>
-						<h4 class="font-semibold text-sm">Assistant Found Options</h4>
-						<p class="text-xs opacity-90 mt-1">{pendingSelection.reasoning}</p>
+						<h4 class="text-sm font-semibold">
+							Assistant Found Options
+						</h4>
+						<p class="mt-1 text-xs opacity-90">
+							{pendingSelection.reasoning}
+						</p>
 					</div>
-					
+
 					<div class="flex flex-wrap gap-2">
 						{#each pendingSelection.results as entity}
 							<button
 								class="btn btn-sm variant-ghost-surface"
-								onclick={() => handleSelect([entity.id], pendingSelection!.type)}
+								onclick={() =>
+									handleSelect(
+										[entity.id],
+										pendingSelection!.type
+									)}
 								disabled={isLoading}
 							>
 								{#if entity.avatar}
 									<img
 										src={entity.avatar}
 										alt={entity.name}
-										class="w-5 h-5 rounded-full object-cover"
+										class="h-5 w-5 rounded-full object-cover"
 									/>
 								{:else}
-									{@const EntityIcon = getEntityIcon(pendingSelection!.type)}
+									{@const EntityIcon = getEntityIcon(
+										pendingSelection!.type
+									)}
 									<EntityIcon size={16} />
 								{/if}
-								<span class="truncate max-w-32">{entity.name}</span>
+								<span class="max-w-32 truncate">
+									{entity.name}
+								</span>
 							</button>
 						{/each}
 						{#if pendingSelection.results.length > 1}
 							<button
 								class="btn btn-sm variant-filled"
-								onclick={() => handleSelect(
-									pendingSelection!.results.map(r => r.id), 
-									pendingSelection!.type
-								)}
+								onclick={() =>
+									handleSelect(
+										pendingSelection!.results.map(
+											(r) => r.id
+										),
+										pendingSelection!.type
+									)}
 								disabled={isLoading}
 							>
 								<Icons.Check size={16} />
@@ -376,25 +435,27 @@
 			</div>
 		</div>
 	{/if}
-	
+
 	<!-- Main Data Bar -->
 	<div class="card variant-ghost-surface">
 		<div class="flex items-center justify-between p-3">
 			<button
-				class="flex items-center gap-2 flex-1 min-w-0 hover:opacity-80 transition-opacity"
+				class="flex min-w-0 flex-1 items-center gap-2 transition-opacity hover:opacity-80"
 				onclick={toggleExpanded}
 			>
-				<Icons.Database size={18} class="opacity-70 flex-shrink-0" />
-				<span class="font-medium text-sm">Linked Data</span>
+				<Icons.Database size={18} class="flex-shrink-0 opacity-70" />
+				<span class="text-sm font-medium">Linked Data</span>
 				{#if totalLinked > 0}
-					<span class="badge variant-filled-surface text-xs">{totalLinked}</span>
+					<span class="badge variant-filled-surface text-xs">
+						{totalLinked}
+					</span>
 				{/if}
-				<Icons.ChevronDown 
-					size={18} 
-					class={`transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+				<Icons.ChevronDown
+					size={18}
+					class={`transition-transform ${isExpanded ? "rotate-180" : ""}`}
 				/>
 			</button>
-			
+
 			<button
 				class="btn btn-sm variant-filled-primary"
 				onclick={openAddDataModal}
@@ -403,51 +464,72 @@
 				Add Data
 			</button>
 		</div>
-		
+
 		{#if isExpanded}
-		<div class="border-t border-surface-400-600"></div>
+			<div class="border-surface-400-600 border-t"></div>
 		{/if}
-		
+
 		<!-- Expanded Content -->
 		{#if isExpanded}
-			<div class="p-3 space-y-3" transition:slide={{ duration: 200 }}>
+			<div class="space-y-3 p-3" transition:slide={{ duration: 200 }}>
 				{#if totalLinked === 0}
-					<div class="text-center py-6 opacity-50">
+					<div class="py-6 text-center opacity-50">
 						<Icons.Database size={32} class="mx-auto mb-2" />
 						<p class="text-sm">No data linked yet</p>
-						<p class="text-xs mt-1">Use "Add Data" or ask the assistant to find information</p>
+						<p class="mt-1 text-xs">
+							Use "Add Data" or ask the assistant to find
+							information
+						</p>
 					</div>
 				{:else}
 					<!-- Show all entity types with category labels -->
 					<div class="space-y-3">
-						{#each ['characters', 'personas', 'chats', 'lorebooks'] as type}
-							{@const entities = linkedEntities[type as EntityType]}
+						{#each ["characters", "personas", "chats", "lorebooks"] as type}
+							{@const entities =
+								linkedEntities[type as EntityType]}
 							{#if entities.length > 0}
-								{@const EntityIcon = getEntityIcon(type as EntityType)}
+								{@const EntityIcon = getEntityIcon(
+									type as EntityType
+								)}
 								<div class="space-y-2">
-									<div class="flex items-center gap-2 opacity-70">
+									<div
+										class="flex items-center gap-2 opacity-70"
+									>
 										<EntityIcon size={14} />
-										<span class="text-xs font-semibold uppercase tracking-wide">
+										<span
+											class="text-xs font-semibold tracking-wide uppercase"
+										>
 											{getEntityLabel(type as EntityType)}
 										</span>
 									</div>
 									<div class="flex flex-wrap gap-2">
 										{#each entities as entity}
-											<div class="chip variant-soft-surface">
+											<div
+												class="chip variant-soft-surface"
+											>
 												{#if entity.avatar}
 													<img
 														src={entity.avatar}
 														alt={entity.name}
-														class="w-5 h-5 rounded-full object-cover"
+														class="h-5 w-5 rounded-full object-cover"
 													/>
 												{:else}
-													{@const EntityTypeIcon = getEntityIcon(entity.type)}
+													{@const EntityTypeIcon =
+														getEntityIcon(
+															entity.type
+														)}
 													<EntityTypeIcon size={14} />
 												{/if}
-												<span class="truncate max-w-32">{entity.name}</span>
+												<span class="max-w-32 truncate">
+													{entity.name}
+												</span>
 												<button
 													class="btn-icon btn-icon-sm hover:variant-filled-error"
-													onclick={() => handleUnlink(entity.id, entity.type)}
+													onclick={() =>
+														handleUnlink(
+															entity.id,
+															entity.type
+														)}
 													title="Unlink {entity.name}"
 												>
 													<Icons.X size={14} />
@@ -477,25 +559,22 @@
 	{#snippet content()}
 		<header class="flex items-center justify-between">
 			<h2 class="h2">Add Character</h2>
-			<button
-				class="btn btn-sm"
-				onclick={closeAddDataModal}
-			>
+			<button class="btn btn-sm" onclick={closeAddDataModal}>
 				<Icons.X size={20} />
 			</button>
 		</header>
-		
+
 		<input
 			class="input w-full"
 			type="text"
 			placeholder="Search characters..."
 			bind:value={searchQuery}
 		/>
-		
+
 		<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
 			<div class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap">
 				{#if filteredCharacters.length === 0}
-					<div class="text-surface-500 text-center w-full py-8">
+					<div class="text-surface-500 w-full py-8 text-center">
 						{#if isLoading}
 							Loading characters...
 						{:else if availableCharacters.length === 0}
@@ -514,12 +593,20 @@
 							<div class="w-fit">
 								<Avatar char={character} />
 							</div>
-							<div class="relative flex w-0 min-w-0 flex-1 flex-col">
-								<div class="w-full truncate text-left font-semibold">
+							<div
+								class="relative flex w-0 min-w-0 flex-1 flex-col"
+							>
+								<div
+									class="w-full truncate text-left font-semibold"
+								>
 									{character.nickname || character.name}
 								</div>
-								<div class="text-surface-500 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs">
-									{character.creatorNotes || character.description || "No description"}
+								<div
+									class="text-surface-500 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
+								>
+									{character.creatorNotes ||
+										character.description ||
+										"No description"}
 								</div>
 							</div>
 						</button>

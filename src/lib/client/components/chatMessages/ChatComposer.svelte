@@ -8,8 +8,10 @@
 		onSend: () => void
 		draftCompiledPrompt?: CompiledPrompt
 		currentUserPersona?: SelectChatPersona & { persona?: SelectPersona }
-		chat?: Sockets.Chats.Get.Response["chat"] & { 
-			chatPersonas?: Array<SelectChatPersona & { persona?: SelectPersona }> 
+		chat?: Sockets.Chats.Get.Response["chat"] & {
+			chatPersonas?: Array<
+				SelectChatPersona & { persona?: SelectPersona }
+			>
 		}
 		lastMessage?: SelectChatMessage
 		editChatMessage?: SelectChatMessage
@@ -60,7 +62,10 @@
 		<!-- Call to action for guests without personas -->
 		<div class="flex flex-col items-center justify-center gap-4 py-8">
 			<div class="text-center">
-				<Icons.UserPlus size={48} class="text-surface-500 mx-auto mb-2" />
+				<Icons.UserPlus
+					size={48}
+					class="text-surface-500 mx-auto mb-2"
+				/>
 				<h3 class="h3 mb-2">Join the Conversation</h3>
 				<p class="text-surface-600-400">
 					You need to add a persona to this chat to send messages.
@@ -77,7 +82,7 @@
 	{:else}
 		<MessageComposer
 			bind:markdown={newMessage}
-			onSend={onSend}
+			{onSend}
 			compiledPrompt={draftCompiledPrompt}
 			classes=""
 			{extraTabs}
@@ -106,7 +111,8 @@
 					<button
 						class="hover:preset-tonal-success mr-3 rounded-lg text-center lg:block lg:h-auto lg:p-3"
 						type="button"
-						disabled={!newMessage.trim() || lastMessage?.isGenerating}
+						disabled={!newMessage.trim() ||
+							lastMessage?.isGenerating}
 						title="Send"
 						onclick={handleSendButton}
 					>

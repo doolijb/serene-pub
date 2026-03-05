@@ -92,7 +92,7 @@
 	let userSettingsCtx: UserSettingsCtx = $state(getContext("userSettingsCtx"))
 
 	let isInitialized = $state(false)
-	
+
 	let editCharacterData: EditCharacterData = $state({
 		id: undefined,
 		name: "",
@@ -400,12 +400,12 @@
 	})
 
 	// Notify parent when data changes (for auto-save in assistant)
-	let lastNotifiedData = $state('')
+	let lastNotifiedData = $state("")
 	$effect(() => {
 		// Skip initial run and only trigger on actual changes after initialization
 		if (onDataChange && !disableDataChangeCallback && isInitialized) {
 			const currentData = JSON.stringify(editCharacterData)
-			
+
 			// Skip if data hasn't actually changed
 			if (currentData !== lastNotifiedData) {
 				lastNotifiedData = currentData
@@ -422,7 +422,10 @@
 
 	function handleExportAsJson() {
 		if (!characterId) return
-		socket.emit("characters:exportCard", { id: characterId, format: "json" })
+		socket.emit("characters:exportCard", {
+			id: characterId,
+			format: "json"
+		})
 		showExportFormatModal = false
 	}
 
@@ -501,21 +504,25 @@
 		socket.on("characters:exportCard", (msg) => {
 			// Create a blob from the buffer
 			// Socket.io sends Buffer as an object with data array
-			const bufferData = Array.isArray(msg.blob) ? msg.blob : (msg.blob as any).data || msg.blob
+			const bufferData = Array.isArray(msg.blob)
+				? msg.blob
+				: (msg.blob as any).data || msg.blob
 			const blob = new Blob([new Uint8Array(bufferData)], {
-				type: msg.filename.endsWith('.json') ? 'application/json' : 'image/png'
+				type: msg.filename.endsWith(".json")
+					? "application/json"
+					: "image/png"
 			})
-			
+
 			// Create a download link and trigger it
 			const url = URL.createObjectURL(blob)
-			const a = document.createElement('a')
+			const a = document.createElement("a")
 			a.href = url
 			a.download = msg.filename
 			document.body.appendChild(a)
 			a.click()
 			document.body.removeChild(a)
 			URL.revokeObjectURL(url)
-			
+
 			toaster.success({
 				title: `Character Exported`,
 				description: `Character card exported as ${msg.filename}`
@@ -577,7 +584,7 @@
 		}
 		socket.emit("lorebooks:list", {})
 		socket.emit("tags:list", {})
-		
+
 		// Mark as initialized after a short delay to allow initial data to settle
 		setTimeout(() => {
 			// Set the last notified data to current state before enabling
@@ -602,23 +609,25 @@
 	})
 
 	// Track the last initialData we processed to prevent infinite loops
-	let lastProcessedInitialData = $state<string>('')
+	let lastProcessedInitialData = $state<string>("")
 
 	// Watch for changes to initialData (for draft mode updates from server)
 	$effect(() => {
 		if (initialData && isInitialized && !disableDataChangeCallback) {
 			const newDataStr = JSON.stringify(initialData)
-			
+
 			// Only update if initialData itself changed (not editCharacterData)
 			if (newDataStr !== lastProcessedInitialData) {
-				console.log('[CharacterForm] initialData changed, updating form...')
+				console.log(
+					"[CharacterForm] initialData changed, updating form..."
+				)
 				lastProcessedInitialData = newDataStr
-				
+
 				editCharacterData = {
 					...editCharacterData,
 					...initialData
 				}
-				
+
 				// Update lastNotifiedData to prevent triggering onDataChange callback
 				if (onDataChange) {
 					lastNotifiedData = JSON.stringify(editCharacterData)
@@ -636,117 +645,125 @@
 	aria-modal="false"
 >
 	{#if !hideTitle}
-	<div class="mb-4 flex items-center justify-between">
-		<h1 class="text-lg font-bold" id="form-title">
-			{customTitle || (mode === "edit"
-				? `Edit: ${character?.nickname || character?.name || "Character"}`
-				: "Create Character")}
-		</h1>
-		{#if mode === "edit" && characterId}
-			<button
-				class="btn btn-sm preset-filled-primary-500"
-				title="Export Character"
-				onclick={handleExportClick}
-				aria-label="Export character"
-				type="button"
-			>
-				<Icons.Upload size={16} aria-hidden="true" />
-			</button>
-		{/if}
-	</div>
+		<div class="mb-4 flex items-center justify-between">
+			<h1 class="text-lg font-bold" id="form-title">
+				{customTitle ||
+					(mode === "edit"
+						? `Edit: ${character?.nickname || character?.name || "Character"}`
+						: "Create Character")}
+			</h1>
+			{#if mode === "edit" && characterId}
+				<button
+					class="btn btn-sm preset-filled-primary-500"
+					title="Export Character"
+					onclick={handleExportClick}
+					aria-label="Export character"
+					type="button"
+				>
+					<Icons.Upload size={16} aria-hidden="true" />
+				</button>
+			{/if}
+		</div>
 	{/if}
 	{#if !hideActionButtons}
-	<div class="mt-4 mb-4 flex gap-2" role="group" aria-label="Form actions">
-		<button
-			type="button"
-			class="btn btn-sm preset-filled-surface-500 w-full"
-			onclick={handleCancel}
-			aria-describedby="form-title"
+		<div
+			class="mt-4 mb-4 flex gap-2"
+			role="group"
+			aria-label="Form actions"
 		>
-			Cancel
-		</button>
-		<button
-			type="button"
-			class="btn btn-sm preset-filled-success-500 w-full"
-			class:preset-filled-success-500={hasChanges}
-			class:preset-tonal-success={!hasChanges}
-			onclick={onSave}
-			aria-describedby="form-title"
-			aria-label={`${mode === "edit" ? "Update" : "Create"} character${hasChanges ? " (has unsaved changes)" : ""}`}
-		>
-			<Icons.Save size={16} aria-hidden="true" />
-			{mode === "edit" ? "Update" : "Create"}
-		</button>
-	</div>
+			<button
+				type="button"
+				class="btn btn-sm preset-filled-surface-500 w-full"
+				onclick={handleCancel}
+				aria-describedby="form-title"
+			>
+				Cancel
+			</button>
+			<button
+				type="button"
+				class="btn btn-sm preset-filled-success-500 w-full"
+				class:preset-filled-success-500={hasChanges}
+				class:preset-tonal-success={!hasChanges}
+				onclick={onSave}
+				aria-describedby="form-title"
+				aria-label={`${mode === "edit" ? "Update" : "Create"} character${hasChanges ? " (has unsaved changes)" : ""}`}
+			>
+				<Icons.Save size={16} aria-hidden="true" />
+				{mode === "edit" ? "Update" : "Create"}
+			</button>
+		</div>
 	{/if}
 	<div class="flex flex-col gap-4" role="form" aria-labelledby="form-title">
 		{#if !hideAvatar}
-		<fieldset
-			class="flex items-center gap-4"
-			aria-labelledby="avatar-section"
-		>
-			<legend id="avatar-section" class="sr-only">Avatar Settings</legend>
-			<div aria-label="Current avatar preview">
-				<Avatar
-					src={editCharacterData._avatar || editCharacterData.avatar}
-					char={editCharacterData}
-				/>
-			</div>
-			<div class="flex w-full flex-col gap-2">
-				<div class="flex w-full items-center justify-center">
-					<label
-						for="dropzone-file"
-						class="flex w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-700 dark:hover:border-gray-500 dark:hover:bg-gray-800"
-						aria-describedby="avatar-help"
-					>
-						<div
-							class="flex w-full flex-col items-center justify-center"
-						>
-							<svg
-								class="my-4 h-8 w-8 text-gray-500 dark:text-gray-400"
-								aria-hidden="true"
-								xmlns="http://www.w3.org/2000/svg"
-								fill="none"
-								viewBox="0 0 20 16"
-							>
-								<path
-									stroke="currentColor"
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									stroke-width="2"
-									d="M13 13h3a3 3 0 0 0 0-6h-.025A5.56 5.56 0 0 0 16 6.5 5.5 5.5 0 0 0 5.207 5.021C5.137 5.017 5.071 5 5 5a4 4 0 0 0 0 8h2.167M10 15V6m0 0L8 8m2-2 2 2"
-								/>
-							</svg>
-						</div>
-						<input
-							id="dropzone-file"
-							type="file"
-							class="hidden"
-							accept="image/*"
-							onchange={handleAvatarChange}
-							aria-describedby="avatar-help"
-						/>
-						<div id="avatar-help" class="sr-only">
-							Upload an image file for the character avatar.
-							Supported formats: JPG, PNG, GIF
-						</div>
-					</label>
+			<fieldset
+				class="flex items-center gap-4"
+				aria-labelledby="avatar-section"
+			>
+				<legend id="avatar-section" class="sr-only">
+					Avatar Settings
+				</legend>
+				<div aria-label="Current avatar preview">
+					<Avatar
+						src={editCharacterData._avatar ||
+							editCharacterData.avatar}
+						char={editCharacterData}
+					/>
 				</div>
-				<button
-					type="button"
-					class="btn btn-sm preset-tonal-error mt-1"
-					onclick={() => {
-						editCharacterData._avatarFile = undefined
-						editCharacterData._avatar = ""
-					}}
-					disabled={!editCharacterData._avatarFile}
-					aria-label="Clear selected avatar image"
-				>
-					Clear Selection
-				</button>
-			</div>
-		</fieldset>
-{/if}
+				<div class="flex w-full flex-col gap-2">
+					<div class="flex w-full items-center justify-center">
+						<label
+							for="dropzone-file"
+							class="flex w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-700 dark:hover:border-gray-500 dark:hover:bg-gray-800"
+							aria-describedby="avatar-help"
+						>
+							<div
+								class="flex w-full flex-col items-center justify-center"
+							>
+								<svg
+									class="my-4 h-8 w-8 text-gray-500 dark:text-gray-400"
+									aria-hidden="true"
+									xmlns="http://www.w3.org/2000/svg"
+									fill="none"
+									viewBox="0 0 20 16"
+								>
+									<path
+										stroke="currentColor"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M13 13h3a3 3 0 0 0 0-6h-.025A5.56 5.56 0 0 0 16 6.5 5.5 5.5 0 0 0 5.207 5.021C5.137 5.017 5.071 5 5 5a4 4 0 0 0 0 8h2.167M10 15V6m0 0L8 8m2-2 2 2"
+									/>
+								</svg>
+							</div>
+							<input
+								id="dropzone-file"
+								type="file"
+								class="hidden"
+								accept="image/*"
+								onchange={handleAvatarChange}
+								aria-describedby="avatar-help"
+							/>
+							<div id="avatar-help" class="sr-only">
+								Upload an image file for the character avatar.
+								Supported formats: JPG, PNG, GIF
+							</div>
+						</label>
+					</div>
+					<button
+						type="button"
+						class="btn btn-sm preset-tonal-error mt-1"
+						onclick={() => {
+							editCharacterData._avatarFile = undefined
+							editCharacterData._avatar = ""
+						}}
+						disabled={!editCharacterData._avatarFile}
+						aria-label="Clear selected avatar image"
+					>
+						Clear Selection
+					</button>
+				</div>
+			</fieldset>
+		{/if}
 		<fieldset class="flex flex-col gap-1">
 			<label class="flex gap-1 font-semibold" for="charName">
 				Name* <span
@@ -1342,95 +1359,97 @@
 			</select>
 		</div> -->
 		{#if !hideTags}
-		<fieldset class="mb-4 flex flex-col gap-1">
-			<label class="font-semibold" for="charTags">Tags</label>
-			<div class="relative">
-				<input
-					id="charTags"
-					type="text"
-					bind:value={tagSearchQuery}
-					bind:this={tagInputRef}
-					class="input"
-					placeholder="Search or add tags..."
-					onfocus={() => (showTagDropdown = true)}
-					onblur={(e) => {
-						// Delay hiding dropdown to allow clicking on dropdown items
-						setTimeout(() => {
-							if (!e.relatedTarget?.closest(".tag-dropdown")) {
-								showTagDropdown = false
-							}
-						}, 150)
-					}}
-					onkeydown={handleTagInputKeydown}
-				/>
+			<fieldset class="mb-4 flex flex-col gap-1">
+				<label class="font-semibold" for="charTags">Tags</label>
+				<div class="relative">
+					<input
+						id="charTags"
+						type="text"
+						bind:value={tagSearchQuery}
+						bind:this={tagInputRef}
+						class="input"
+						placeholder="Search or add tags..."
+						onfocus={() => (showTagDropdown = true)}
+						onblur={(e) => {
+							// Delay hiding dropdown to allow clicking on dropdown items
+							setTimeout(() => {
+								if (
+									!e.relatedTarget?.closest(".tag-dropdown")
+								) {
+									showTagDropdown = false
+								}
+							}, 150)
+						}}
+						onkeydown={handleTagInputKeydown}
+					/>
 
-				{#if showTagDropdown && (filteredTags.length > 0 || tagSearchQuery.trim())}
-					<div
-						class="tag-dropdown bg-surface-100-900 border-surface-300-700 absolute top-full right-0 left-0 z-10 max-h-48 overflow-y-auto rounded-lg border shadow-lg"
-					>
-						{#if tagSearchQuery.trim() && !filteredTags.some((tag) => tag.name.toLowerCase() === tagSearchQuery.toLowerCase())}
-							<button
-								type="button"
-								class="hover:bg-surface-200-800 border-surface-300-700 w-full border-b px-3 py-2 text-left"
-								onclick={() => addTag(tagSearchQuery)}
-							>
-								<Icons.Plus size={16} class="mr-2 inline" />
-								Create "{tagSearchQuery}"
-							</button>
-						{/if}
-						{#each filteredTags as tag}
-							{#if !editCharacterData.tags.includes(tag.name)}
+					{#if showTagDropdown && (filteredTags.length > 0 || tagSearchQuery.trim())}
+						<div
+							class="tag-dropdown bg-surface-100-900 border-surface-300-700 absolute top-full right-0 left-0 z-10 max-h-48 overflow-y-auto rounded-lg border shadow-lg"
+						>
+							{#if tagSearchQuery.trim() && !filteredTags.some((tag) => tag.name.toLowerCase() === tagSearchQuery.toLowerCase())}
 								<button
 									type="button"
-									class="hover:bg-surface-200-800 w-full px-3 py-2 text-left"
-									onclick={() => addTag(tag.name)}
+									class="hover:bg-surface-200-800 border-surface-300-700 w-full border-b px-3 py-2 text-left"
+									onclick={() => addTag(tagSearchQuery)}
 								>
-									{tag.name}
+									<Icons.Plus size={16} class="mr-2 inline" />
+									Create "{tagSearchQuery}"
 								</button>
 							{/if}
+							{#each filteredTags as tag}
+								{#if !editCharacterData.tags.includes(tag.name)}
+									<button
+										type="button"
+										class="hover:bg-surface-200-800 w-full px-3 py-2 text-left"
+										onclick={() => addTag(tag.name)}
+									>
+										{tag.name}
+									</button>
+								{/if}
+							{/each}
+						</div>
+					{/if}
+				</div>
+
+				<!-- Selected tags display -->
+				{#if editCharacterData.tags.length > 0}
+					<div class="mt-2 flex flex-wrap gap-1">
+						{#each editCharacterData.tags as tag}
+							<span
+								class="inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs {getTagColorPreset(
+									tag
+								)}"
+							>
+								{tag}
+								<button
+									type="button"
+									class="rounded-full p-0.5 hover:opacity-70"
+									onclick={() => removeTag(tag)}
+									aria-label="Remove tag {tag}"
+								>
+									<Icons.X size={12} />
+								</button>
+							</span>
 						{/each}
 					</div>
 				{/if}
-			</div>
-
-			<!-- Selected tags display -->
-			{#if editCharacterData.tags.length > 0}
-				<div class="mt-2 flex flex-wrap gap-1">
-					{#each editCharacterData.tags as tag}
-						<span
-							class="inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs {getTagColorPreset(
-								tag
-							)}"
-						>
-							{tag}
-							<button
-								type="button"
-								class="rounded-full p-0.5 hover:opacity-70"
-								onclick={() => removeTag(tag)}
-								aria-label="Remove tag {tag}"
-							>
-								<Icons.X size={12} />
-							</button>
-						</span>
-					{/each}
-				</div>
-			{/if}
-		</fieldset>
+			</fieldset>
 		{/if}
 		{#if !hideFavorite}
-		<fieldset class="mt-2 flex items-center gap-2">
-			<Switch
-				name="favorite"
-				checked={editCharacterData.isFavorite}
-				onCheckedChange={(e) =>
-					(editCharacterData.isFavorite = e.checked)}
-				aria-describedby="favorite-description"
-			/>
-			<label for="favorite" class="font-semibold">Favorite</label>
-			<span id="favorite-description" class="sr-only">
-				Mark this character as a favorite for easier access
-			</span>
-		</fieldset>
+			<fieldset class="mt-2 flex items-center gap-2">
+				<Switch
+					name="favorite"
+					checked={editCharacterData.isFavorite}
+					onCheckedChange={(e) =>
+						(editCharacterData.isFavorite = e.checked)}
+					aria-describedby="favorite-description"
+				/>
+				<label for="favorite" class="font-semibold">Favorite</label>
+				<span id="favorite-description" class="sr-only">
+					Mark this character as a favorite for easier access
+				</span>
+			</fieldset>
 		{/if}
 		<fieldset class="mt-2 flex items-center gap-2">
 			<Switch
@@ -1470,7 +1489,9 @@
 			<div class="p-6">
 				<h2 class="mb-2 text-lg font-bold">Export Character</h2>
 				<p class="mb-4">
-					Choose the export format for "{character?.nickname || character?.name || 'character'}":
+					Choose the export format for "{character?.nickname ||
+						character?.name ||
+						"character"}":
 				</p>
 				<div class="flex flex-col gap-3">
 					<button

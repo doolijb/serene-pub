@@ -1,13 +1,13 @@
 /**
  * Assistant Tool Handlers
- * 
+ *
  * Implementation of all assistant tool functions.
  * These execute the actual operations requested by the AI.
  */
 
-import { db } from '$lib/server/db'
-import * as schema from '$lib/server/db/schema'
-import { eq, or, like, and, desc } from 'drizzle-orm'
+import { db } from "$lib/server/db"
+import * as schema from "$lib/server/db/schema"
+import { eq, or, like, and, desc } from "drizzle-orm"
 import type {
 	ListCharactersParams,
 	ListCharactersResult,
@@ -25,7 +25,7 @@ import type {
 	ListPersonasResult,
 	SearchDocumentationParams,
 	SearchDocumentationResult
-} from './schemas'
+} from "./schemas"
 
 // ============================================================================
 // CHARACTER HANDLERS
@@ -43,7 +43,7 @@ export async function listCharacters(
 
 	// Validate search string length
 	if (search && search.length > 200) {
-		throw new Error('Search query too long (max 200 characters)')
+		throw new Error("Search query too long (max 200 characters)")
 	}
 
 	const conditions = [eq(schema.characters.userId, userId)]
@@ -130,30 +130,45 @@ export async function draftCharacter(
 
 	// Validate input parameters
 	if (!userRequest || userRequest.trim().length === 0) {
-		throw new Error('User request is required to draft a character')
+		throw new Error("User request is required to draft a character")
 	}
 
 	if (userRequest.length > 10000) {
-		throw new Error('User request too long (max 10,000 characters)')
+		throw new Error("User request too long (max 10,000 characters)")
 	}
 
 	// Validate additionalFields contains only valid field names
 	const validFields = [
-		'name', 'nickname', 'description', 'personality', 'scenario',
-		'firstMessage', 'alternateGreetings', 'exampleDialogues',
-		'groupOnlyGreetings', 'source'
+		"name",
+		"nickname",
+		"description",
+		"personality",
+		"scenario",
+		"firstMessage",
+		"alternateGreetings",
+		"exampleDialogues",
+		"groupOnlyGreetings",
+		"source"
 	]
 
 	if (additionalFields.length > 0) {
-		const invalidFields = additionalFields.filter(field => !validFields.includes(field))
+		const invalidFields = additionalFields.filter(
+			(field) => !validFields.includes(field)
+		)
 		if (invalidFields.length > 0) {
-			throw new Error(`Invalid field names: ${invalidFields.join(', ')}. Valid fields are: ${validFields.join(', ')}`)
+			throw new Error(
+				`Invalid field names: ${invalidFields.join(", ")}. Valid fields are: ${validFields.join(", ")}`
+			)
 		}
 	}
 
 	// Import the draft orchestrator
-	const { generateCharacterDraft } = await import('$lib/server/assistantFunctions/utils/draftOrchestrator')
-	const { parseChatMetadata, getActiveCharacterDraft } = await import('$lib/shared/types/chatMetadata')
+	const { generateCharacterDraft } = await import(
+		"$lib/server/assistantFunctions/utils/draftOrchestrator"
+	)
+	const { parseChatMetadata, getActiveCharacterDraft } = await import(
+		"$lib/shared/types/chatMetadata"
+	)
 
 	// Get existing draft from chat metadata
 	const chat = await db.query.chats.findFirst({
@@ -178,7 +193,9 @@ export async function draftCharacter(
 		draft: result.draft as any, // Cast to match our schema
 		generatedFields: result.generatedFields,
 		isValid: result.isValid,
-		validationErrors: result.validationErrors?.map((e: any) => e.message || String(e))
+		validationErrors: result.validationErrors?.map(
+			(e: any) => e.message || String(e)
+		)
 	}
 }
 
@@ -191,7 +208,7 @@ export async function updateCharacterDraft(
 
 	console.log(`[updateCharacterDraft] Updating draft for chat ${chatId}`)
 	console.log(`[updateCharacterDraft] Field updates:`, fieldUpdates)
-	
+
 	// Get existing draft from chat metadata
 	const chat = await db.query.chats.findFirst({
 		where: eq(schema.chats.id, chatId),
@@ -199,7 +216,7 @@ export async function updateCharacterDraft(
 	})
 
 	if (!chat) {
-		throw new Error('Chat not found')
+		throw new Error("Chat not found")
 	}
 
 	// Get metadata (now a JSON column, no parsing needed)
@@ -209,7 +226,9 @@ export async function updateCharacterDraft(
 	const existingDraft = metadata?.dataEditor?.create?.characters?.[0]
 
 	if (!existingDraft) {
-		throw new Error('No existing draft found. Use draft_character to create a new draft first.')
+		throw new Error(
+			"No existing draft found. Use draft_character to create a new draft first."
+		)
 	}
 
 	console.log(`[updateCharacterDraft] Existing draft:`, existingDraft)
@@ -223,8 +242,8 @@ export async function updateCharacterDraft(
 	console.log(`[updateCharacterDraft] Updated draft:`, updatedDraft)
 
 	// Import CharacterDraftSchema for validation
-	const { CharacterDraftSchema } = await import('./schemas')
-	
+	const { CharacterDraftSchema } = await import("./schemas")
+
 	// Validate the updated draft
 	const validation = CharacterDraftSchema.safeParse(updatedDraft)
 
@@ -248,13 +267,17 @@ export async function updateCharacterDraft(
 		.set({ metadata })
 		.where(eq(schema.chats.id, chatId))
 
-	console.log(`[updateCharacterDraft] Updated fields: ${updatedFields.join(', ')}`)
+	console.log(
+		`[updateCharacterDraft] Updated fields: ${updatedFields.join(", ")}`
+	)
 
 	return {
 		draft: updatedDraft as any,
 		updatedFields,
 		isValid: validation.success,
-		validationErrors: validation.success ? undefined : validation.error.errors.map(e => e.message)
+		validationErrors: validation.success
+			? undefined
+			: validation.error.errors.map((e) => e.message)
 	}
 }
 
@@ -270,41 +293,63 @@ export async function updateCharacterDraftSimple(
 
 	// Validate input parameters
 	if (!userRequest || userRequest.trim().length === 0) {
-		throw new Error('User request is required')
+		throw new Error("User request is required")
 	}
 
 	if (userRequest.length > 10000) {
-		throw new Error('User request too long (max 10,000 characters)')
+		throw new Error("User request too long (max 10,000 characters)")
 	}
 
 	// Validate fieldsToUpdate contains only valid field names
 	const validFields = [
-		'name', 'nickname', 'description', 'personality', 'scenario',
-		'firstMessage', 'alternateGreetings', 'exampleDialogues',
-		'groupOnlyGreetings', 'source'
+		"name",
+		"nickname",
+		"description",
+		"personality",
+		"scenario",
+		"firstMessage",
+		"alternateGreetings",
+		"exampleDialogues",
+		"groupOnlyGreetings",
+		"source"
 	]
 
 	if (fieldsToUpdate.length > 0) {
-		const invalidFields = fieldsToUpdate.filter(field => !validFields.includes(field))
+		const invalidFields = fieldsToUpdate.filter(
+			(field) => !validFields.includes(field)
+		)
 		if (invalidFields.length > 0) {
-			throw new Error(`Invalid field names: ${invalidFields.join(', ')}. Valid fields are: ${validFields.join(', ')}`)
+			throw new Error(
+				`Invalid field names: ${invalidFields.join(", ")}. Valid fields are: ${validFields.join(", ")}`
+			)
 		}
 
 		// Limit number of fields that can be updated at once
 		if (fieldsToUpdate.length > 10) {
-			throw new Error('Too many fields to update at once (max 10)')
+			throw new Error("Too many fields to update at once (max 10)")
 		}
 	}
 
-	console.log(`[updateCharacterDraftSimple] Updating draft for chat ${chatId}`)
-	console.log(`[updateCharacterDraftSimple] User request: "${userRequest.substring(0, 200)}${userRequest.length > 200 ? '...' : ''}"`)
+	console.log(
+		`[updateCharacterDraftSimple] Updating draft for chat ${chatId}`
+	)
+	console.log(
+		`[updateCharacterDraftSimple] User request: "${userRequest.substring(0, 200)}${userRequest.length > 200 ? "..." : ""}"`
+	)
 	if (fieldsToUpdate.length > 0) {
-		console.log(`[updateCharacterDraftSimple] Suggested fields:`, fieldsToUpdate)
+		console.log(
+			`[updateCharacterDraftSimple] Suggested fields:`,
+			fieldsToUpdate
+		)
 	}
 
 	// Import the draft orchestrator
-	const { generateCharacterDraft } = await import('$lib/server/assistantFunctions/utils/draftOrchestrator')
-	const { parseChatMetadata, getActiveCharacterDraft } = await import('$lib/shared/types/chatMetadata')
+	const { generateCharacterDraft } = await import(
+		"$lib/server/assistantFunctions/utils/draftOrchestrator"
+	)
+	const { parseChatMetadata, getActiveCharacterDraft } = await import(
+		"$lib/shared/types/chatMetadata"
+	)
 
 	// Get existing draft from chat metadata
 	const chat = await db.query.chats.findFirst({
@@ -316,7 +361,9 @@ export async function updateCharacterDraftSimple(
 	const existingDraft = metadata ? getActiveCharacterDraft(metadata) : null
 
 	if (!existingDraft) {
-		throw new Error('No existing draft found. Use draft_character to create a new draft first.')
+		throw new Error(
+			"No existing draft found. Use draft_character to create a new draft first."
+		)
 	}
 
 	// Generate draft using orchestrator with existing draft as context
@@ -324,7 +371,8 @@ export async function updateCharacterDraftSimple(
 		userId,
 		chatId,
 		userRequest,
-		additionalFields: fieldsToUpdate.length > 0 ? fieldsToUpdate as any[] : undefined,
+		additionalFields:
+			fieldsToUpdate.length > 0 ? (fieldsToUpdate as any[]) : undefined,
 		existingDraft: existingDraft,
 		socket: undefined // No socket - AssistantService handles progress
 	})
@@ -333,7 +381,9 @@ export async function updateCharacterDraftSimple(
 		draft: result.draft as any,
 		generatedFields: result.generatedFields,
 		isValid: result.isValid,
-		validationErrors: result.validationErrors?.map((e: any) => e.message || String(e))
+		validationErrors: result.validationErrors?.map(
+			(e: any) => e.message || String(e)
+		)
 	}
 }
 
@@ -482,39 +532,43 @@ export async function searchDocumentation(
 
 	// TODO: Implement actual documentation search
 	// For now, return helpful placeholder responses based on common queries
-	
+
 	const mockDocs = [
 		{
-			title: 'Getting Started with Serene Pub',
-			content: 'Serene Pub is an AI-powered roleplay and creative writing application. You can create characters, personas, and have conversations with them using various AI backends.',
-			category: 'general',
+			title: "Getting Started with Serene Pub",
+			content:
+				"Serene Pub is an AI-powered roleplay and creative writing application. You can create characters, personas, and have conversations with them using various AI backends.",
+			category: "general",
 			relevance: 0.9
 		},
 		{
-			title: 'Creating Characters',
-			content: 'Characters are the AI entities you chat with. You can create them manually or use the assistant to draft them. Each character can have personality traits, scenarios, greetings, and example dialogue.',
-			category: 'characters',
+			title: "Creating Characters",
+			content:
+				"Characters are the AI entities you chat with. You can create them manually or use the assistant to draft them. Each character can have personality traits, scenarios, greetings, and example dialogue.",
+			category: "characters",
 			relevance: 0.85
 		},
 		{
-			title: 'Setting up AI Connections',
-			content: 'Serene Pub supports multiple AI backends: OpenAI, Ollama, LM Studio, Llama.cpp, KoboldCpp, and Anthropic. Configure your connections in the settings.',
-			category: 'connections',
+			title: "Setting up AI Connections",
+			content:
+				"Serene Pub supports multiple AI backends: OpenAI, Ollama, LM Studio, Llama.cpp, KoboldCpp, and Anthropic. Configure your connections in the settings.",
+			category: "connections",
 			relevance: 0.8
 		}
 	]
 
 	// Filter by category if specified
-	let results = category 
-		? mockDocs.filter(doc => doc.category === category)
+	let results = category
+		? mockDocs.filter((doc) => doc.category === category)
 		: mockDocs
 
 	// Simple keyword matching
 	if (query) {
 		const queryLower = query.toLowerCase()
-		results = results.filter(doc => 
-			doc.title.toLowerCase().includes(queryLower) ||
-			doc.content.toLowerCase().includes(queryLower)
+		results = results.filter(
+			(doc) =>
+				doc.title.toLowerCase().includes(queryLower) ||
+				doc.content.toLowerCase().includes(queryLower)
 		)
 	}
 

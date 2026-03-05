@@ -18,13 +18,16 @@
 	import { toaster } from "$lib/client/utils/toaster"
 
 	let chat: Sockets.Chats.Get.Response["chat"] | undefined = $state()
-	let pagination: Sockets.Chats.Get.Response["pagination"] | undefined = $state()
+	let pagination: Sockets.Chats.Get.Response["pagination"] | undefined =
+		$state()
 	let newMessage = $state("")
 	const socket = skio.get()
 	let showDeleteMessageModal = $state(false)
 	let deleteChatMessage: SelectChatMessage | undefined = $state()
 	let editChatMessage: SelectChatMessage | undefined = $state()
-	let draftCompiledPrompt: Sockets.Chats.PromptTokenCount.Response | undefined = $state()
+	let draftCompiledPrompt:
+		| Sockets.Chats.PromptTokenCount.Response
+		| undefined = $state()
 	let userCtx: UserCtx = getContext("userCtx")
 	let panelsCtx: PanelsCtx = getContext("panelsCtx")
 	let promptTokenCountTimeout: ReturnType<typeof setTimeout> | null = null
@@ -417,7 +420,7 @@
 	function handleHideMessage(e: Event, msg: SelectChatMessage) {
 		e.stopPropagation()
 		// Toggle isHidden status by updating the message
-		socket.emit("chatMessages:update", { 
+		socket.emit("chatMessages:update", {
 			id: msg.id,
 			isHidden: !msg.isHidden
 		})
@@ -919,20 +922,17 @@
 			}
 		)
 
-		socket.on(
-			"chats:branch",
-			(msg: Sockets.Chats.Branch.Response) => {
-				if (msg.chat) {
-					toaster.success({
-						title: "Chat branched successfully"
-					})
-					// Navigate to the new branched chat
-					goto(`/chats/${msg.chat.id}`)
-				} else if (msg.error) {
-					toaster.error({ title: msg.error })
-				}
+		socket.on("chats:branch", (msg: Sockets.Chats.Branch.Response) => {
+			if (msg.chat) {
+				toaster.success({
+					title: "Chat branched successfully"
+				})
+				// Navigate to the new branched chat
+				goto(`/chats/${msg.chat.id}`)
+			} else if (msg.error) {
+				toaster.error({ title: msg.error })
 			}
-		)
+		})
 
 		// Cleanup function
 		return () => {
@@ -1019,7 +1019,9 @@
 				{editChatMessage}
 				{isGuest}
 				{showAddPersonaCTA}
-				onAddPersonaClick={() => { showAddPersonaModal = true }}
+				onAddPersonaClick={() => {
+					showAddPersonaModal = true
+				}}
 				onAbortLastMessage={handleAbortLastMessage}
 				extraTabs={isGuest
 					? []

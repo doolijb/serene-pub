@@ -10,13 +10,20 @@
 	interface Props {
 		msg: SelectChatMessage
 		index: number
-		chat: Sockets.Chats.Get.Response["chat"] & { chatMessages: SelectChatMessage[] }
+		chat: Sockets.Chats.Get.Response["chat"] & {
+			chatMessages: SelectChatMessage[]
+		}
 		isLastMessage: boolean
 		messagesLength: number
 		// Functions
-		getMessageCharacter: (msg: SelectChatMessage) => SelectCharacter | SelectPersona | undefined
+		getMessageCharacter: (
+			msg: SelectChatMessage
+		) => SelectCharacter | SelectPersona | undefined
 		canControlMessage: (msg: SelectChatMessage) => boolean
-		showSwipeControls: (msg: SelectChatMessage, isGreeting: boolean) => boolean
+		showSwipeControls: (
+			msg: SelectChatMessage,
+			isGreeting: boolean
+		) => boolean
 		canSwipeRight: (msg: SelectChatMessage, isGreeting: boolean) => boolean
 		// Event handlers
 		onSwipeLeft: (msg: SelectChatMessage) => void
@@ -29,7 +36,9 @@
 		onAbortMessage: (event: MouseEvent, msg: SelectChatMessage) => void
 		onBranchMessage?: (event: Event, msg: SelectChatMessage) => void
 		onCharacterNameClick: (msg: SelectChatMessage) => void
-		onAvatarClick: (char: SelectCharacter | SelectPersona | undefined) => void
+		onAvatarClick: (
+			char: SelectCharacter | SelectPersona | undefined
+		) => void
 		onCancelEditMessage: () => void
 		onSaveEditMessage: () => void
 		openMobileMsgControls: number | undefined
@@ -40,7 +49,7 @@
 		isGuest: boolean
 		// Additional needed props
 		lastPersonaMessage: SelectChatMessage | undefined
-		// Snippets  
+		// Snippets
 		GeneratingAnimationComponent?: Snippet<[]>
 		messageControls?: Snippet<[SelectChatMessage]>
 		generatingAnimation?: Snippet<[]>
@@ -88,13 +97,13 @@
 	const canSwipeRightVal = $derived(canSwipeRight(msg, isGreeting))
 	const preContent = $derived((msg.metadata as any)?.reasoning || "")
 	const hasPreContent = $derived(preContent.trim().length > 0)
-	
+
 	let isPreContentExpanded = $state(false)
 
 	function handleMessageUpdate() {
 		onSaveEditMessage()
 	}
-	
+
 	function togglePreContent() {
 		isPreContentExpanded = !isPreContentExpanded
 	}
@@ -106,7 +115,13 @@
 	class:opacity-50={msg.isHidden && editChatMessage?.id !== msg.id}
 	tabindex="-1"
 	role="article"
-	aria-label="Message {index + 1} of {chat.chatMessages.length} from {(character as any)?.nickname || character?.name || 'Unknown'}: {msg.content.slice(0, 100)}{msg.content.length > 100 ? '...' : ''}"
+	aria-label="Message {index + 1} of {chat.chatMessages.length} from {(
+		character as any
+	)?.nickname ||
+		character?.name ||
+		'Unknown'}: {msg.content.slice(0, 100)}{msg.content.length > 100
+		? '...'
+		: ''}"
 >
 	<div class="flex justify-between gap-2">
 		<div class="group flex gap-2">
@@ -128,7 +143,9 @@
 						title="Edit"
 					>
 						<span class="text-nowrap">
-							{(character as any)?.nickname || character?.name || "Unknown"}
+							{(character as any)?.nickname ||
+								character?.name ||
+								"Unknown"}
 						</span>
 					</button>
 					{#if isGreeting}
@@ -185,11 +202,17 @@
 				<div class="ml-auto lg:hidden">
 					<Popover
 						open={openMobileMsgControls === msg.id}
-						onOpenChange={(e) => (openMobileMsgControls = e.open ? msg.id : undefined)}
+						onOpenChange={(e) =>
+							(openMobileMsgControls = e.open
+								? msg.id
+								: undefined)}
 						positioning={{
 							placement: "bottom"
 						}}
-						triggerBase="btn btn-sm hover:bg-primary-600-400 {openMobileMsgControls === msg.id ? 'bg-primary-600-400' : ''}"
+						triggerBase="btn btn-sm hover:bg-primary-600-400 {openMobileMsgControls ===
+						msg.id
+							? 'bg-primary-600-400'
+							: ''}"
 						contentBase="card bg-primary-200-800 p-4 space-y-4 w-[min(90vw,320px)]"
 						arrow
 						arrowBackground="!bg-primary-200 dark:!bg-primary-800"
@@ -227,24 +250,30 @@
 				</div>
 				{#if showSwipes}
 					<div class="ml-auto flex gap-6">
-					{#if msg.metadata?.swipes?.currentIdx !== null && msg.metadata?.swipes?.currentIdx !== undefined && msg.metadata?.swipes?.history && msg.metadata?.swipes.history.length > 1}
-						<button
-							class="btn btn-sm msg-cntrl-icon hover:preset-filled-success-500"
-							title="Swipe Left"
-							onclick={() => onSwipeLeft(msg)}
-							disabled={!!editChatMessage || !msg.metadata.swipes.currentIdx || msg.metadata.swipes.history.length <= 1 || msg.isGenerating}
-						>
-							<Icons.ChevronLeft size={24} />
-						</button>
-							<span class="text-surface-700-300 mt-[0.2rem] h-fit select-none">
-								{(msg.metadata.swipes.currentIdx || 0) + 1}/{msg.metadata.swipes.history.length}
+						{#if msg.metadata?.swipes?.currentIdx !== null && msg.metadata?.swipes?.currentIdx !== undefined && msg.metadata?.swipes?.history && msg.metadata?.swipes.history.length > 1}
+							<button
+								class="btn btn-sm msg-cntrl-icon hover:preset-filled-success-500"
+								title="Swipe Left"
+								onclick={() => onSwipeLeft(msg)}
+								disabled={!!editChatMessage ||
+									!msg.metadata.swipes.currentIdx ||
+									msg.metadata.swipes.history.length <= 1 ||
+									msg.isGenerating}
+							>
+								<Icons.ChevronLeft size={24} />
+							</button>
+							<span
+								class="text-surface-700-300 mt-[0.2rem] h-fit select-none"
+							>
+								{(msg.metadata.swipes.currentIdx || 0) + 1}/{msg
+									.metadata.swipes.history.length}
 							</span>
 						{/if}
 						<button
 							class="btn btn-sm msg-cntrl-icon hover:preset-filled-success-500"
 							title="Swipe Right"
 							onclick={() => onSwipeRight(msg)}
-						disabled={!!editChatMessage || !canSwipeRightVal}
+							disabled={!!editChatMessage || !canSwipeRightVal}
 						>
 							<Icons.ChevronRight size={24} />
 						</button>
@@ -258,19 +287,23 @@
 	{#if hasPreContent}
 		<div class="mx-2 mt-2">
 			<button
-				class="flex w-full items-center gap-2 py-2 text-sm opacity-70 hover:opacity-100 transition-opacity"
+				class="flex w-full items-center gap-2 py-2 text-sm opacity-70 transition-opacity hover:opacity-100"
 				onclick={togglePreContent}
-				title={isPreContentExpanded ? "Collapse reasoning" : "Expand reasoning"}
+				title={isPreContentExpanded
+					? "Collapse reasoning"
+					: "Expand reasoning"}
 			>
 				<Icons.Brain size={16} />
 				<span>Reasoning</span>
-				<Icons.ChevronDown 
-					size={16} 
-					class={`transition-transform ${isPreContentExpanded ? 'rotate-180' : ''}`}
+				<Icons.ChevronDown
+					size={16}
+					class={`transition-transform ${isPreContentExpanded ? "rotate-180" : ""}`}
 				/>
 			</button>
 			{#if isPreContentExpanded}
-				<div class="rendered-chat-message-content pb-2 text-sm opacity-80">
+				<div
+					class="rendered-chat-message-content pb-2 text-sm opacity-80"
+				>
 					{@html renderMarkdownWithQuotedText(preContent)}
 				</div>
 			{/if}
@@ -285,19 +318,30 @@
 				{@render generatingAnimation()}
 			{:else}
 				<div class="flex items-center gap-2">
-					<div class="animate-pulse text-sm text-surface-600-400">Generating...</div>
-					<div class="h-2 w-2 animate-bounce rounded-full bg-primary-500"></div>
+					<div class="text-surface-600-400 animate-pulse text-sm">
+						Generating...
+					</div>
+					<div
+						class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"
+					></div>
 				</div>
 			{/if}
 		{:else if editChatMessage && editChatMessage.id === msg.id}
-			<div class="chat-input-bar bg-surface-100-900 w-full rounded-xl p-2 pb-2 align-middle lg:pb-4">
+			<div
+				class="chat-input-bar bg-surface-100-900 w-full rounded-xl p-2 pb-2 align-middle lg:pb-4"
+			>
 				<MessageComposer
 					bind:markdown={editChatMessage.content}
 					onSend={handleMessageUpdate}
 				/>
 			</div>
 		{:else}
-			<div class="rendered-chat-message-content {msg.isGenerating && msg.content ? 'animate-pulse' : ''}">
+			<div
+				class="rendered-chat-message-content {msg.isGenerating &&
+				msg.content
+					? 'animate-pulse'
+					: ''}"
+			>
 				{@html renderMarkdownWithQuotedText(msg.content)}
 			</div>
 		{/if}
@@ -309,7 +353,7 @@
 
 	.chat-input-bar {
 	}
-	
+
 	/* Loader styles from Uiverse.io by mobinkakei */
 	.wrapper {
 		width: 66px;

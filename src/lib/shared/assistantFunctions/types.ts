@@ -1,6 +1,6 @@
 /**
  * Assistant Function Calling Types
- * 
+ *
  * These types define the structure for assistant functions that work with
  * ANY text completion model (not just those with native function calling).
  */
@@ -11,7 +11,7 @@ export interface AssistantFunction {
 	requiresConfirmation: boolean
 	requiresAdmin: boolean
 	parameters: {
-		type: 'object'
+		type: "object"
 		properties: Record<
 			string,
 			{
@@ -33,7 +33,7 @@ export interface AssistantFunctionCall {
 	id: string
 	name: string
 	arguments: Record<string, any>
-	status: 'pending' | 'executing' | 'completed' | 'error'
+	status: "pending" | "executing" | "completed" | "error"
 	result?: any
 	error?: string
 }

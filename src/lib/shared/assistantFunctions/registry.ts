@@ -1,11 +1,11 @@
 /**
  * Assistant Function Registry
- * 
+ *
  * Central registry of all available functions for the assistant.
  */
 
-import { characterFunctions } from './definitions/characterFunctions'
-import type { AssistantFunction } from './types'
+import { characterFunctions } from "./definitions/characterFunctions"
+import type { AssistantFunction } from "./types"
 
 export const assistantFunctionRegistry: Record<string, AssistantFunction> = {
 	...characterFunctions
@@ -23,22 +23,33 @@ export function getFunctionList(): AssistantFunction[] {
  * Generates function definitions formatted for the LLM's system prompt
  */
 export function getFunctionDefinitionsForPrompt(): string {
-	console.log('[Registry] ========== getFunctionDefinitionsForPrompt START ==========')
-	console.log('[Registry] About to call getFunctionList()')
-	
-	const functions = getFunctionList()
-	
-	console.log('[Registry] getFunctionList() returned')
-	console.log('[Registry] getFunctionDefinitionsForPrompt called, functions count:', functions.length)
-	console.log('[Registry] Function names:', functions.map(f => f.name))
-	console.log('[Registry] assistantFunctionRegistry keys:', Object.keys(assistantFunctionRegistry))
+	console.log(
+		"[Registry] ========== getFunctionDefinitionsForPrompt START =========="
+	)
+	console.log("[Registry] About to call getFunctionList()")
 
-	const functionNames = functions.map(f => f.name).join(', ')
-	const functionList = functions.map(f => `✅ ${f.name}`).join('\n')
+	const functions = getFunctionList()
+
+	console.log("[Registry] getFunctionList() returned")
+	console.log(
+		"[Registry] getFunctionDefinitionsForPrompt called, functions count:",
+		functions.length
+	)
+	console.log(
+		"[Registry] Function names:",
+		functions.map((f) => f.name)
+	)
+	console.log(
+		"[Registry] assistantFunctionRegistry keys:",
+		Object.keys(assistantFunctionRegistry)
+	)
+
+	const functionNames = functions.map((f) => f.name).join(", ")
+	const functionList = functions.map((f) => `✅ ${f.name}`).join("\n")
 
 	const result = `# Available Functions
 
-**YOU HAVE ${functions.length === 1 ? 'EXACTLY ONE FUNCTION' : `${functions.length} FUNCTIONS AVAILABLE`}: ${functionNames}**
+**YOU HAVE ${functions.length === 1 ? "EXACTLY ONE FUNCTION" : `${functions.length} FUNCTIONS AVAILABLE`}: ${functionNames}**
 
 **CRITICAL:** Only use the functions listed below. Do NOT invent or guess function names.
 
@@ -80,18 +91,22 @@ ${f.description}
 **Parameters:**
 ${Object.entries(f.parameters.properties)
 	.map(([key, prop]) => {
-		const required = f.parameters.required?.includes(key) ? ' (REQUIRED)' : ' (optional)'
-		const enumInfo = prop.enum ? ` [${prop.enum.join(', ')}]` : ''
-		const itemsInfo = prop.items?.enum ? ` [items: ${prop.items.enum.join(', ')}]` : ''
+		const required = f.parameters.required?.includes(key)
+			? " (REQUIRED)"
+			: " (optional)"
+		const enumInfo = prop.enum ? ` [${prop.enum.join(", ")}]` : ""
+		const itemsInfo = prop.items?.enum
+			? ` [items: ${prop.items.enum.join(", ")}]`
+			: ""
 		return `- ${key} (${prop.type})${required}: ${prop.description}${enumInfo}${itemsInfo}`
 	})
-	.join('\n')}
+	.join("\n")}
 
 **When to use:** ${f.description}
 **No confirmation needed** - Execute immediately when user requests this action.
 `
 	)
-	.join('\n---\n')}
+	.join("\n---\n")}
 
 ---
 
@@ -115,9 +130,13 @@ Based on your request, here's a draft for your samurai character...
 
 (STOP HERE - wait for function to execute and return results)
 `
-	
-	console.log('[Registry] Returning function definitions, length:', result.length)
-	console.log('[Registry] ========== getFunctionDefinitionsForPrompt END ==========')
+
+	console.log(
+		"[Registry] Returning function definitions, length:",
+		result.length
+	)
+	console.log(
+		"[Registry] ========== getFunctionDefinitionsForPrompt END =========="
+	)
 	return result
 }
-

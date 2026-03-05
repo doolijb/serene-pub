@@ -1,4 +1,4 @@
-import { getFunctionDefinitionsForPrompt } from '$lib/shared/assistantFunctions/registry'
+import { getFunctionDefinitionsForPrompt } from "$lib/shared/assistantFunctions/registry"
 
 export class AssistantPrompts {
 	static readonly SYSTEM_PROMPT_BASE = `You are the Serene Pub Assistant, a helpful AI designed to assist users with the Serene Pub application.
@@ -270,7 +270,7 @@ Advanced worldbuilding and context management:
 
 ${AssistantPrompts.DOCUMENTATION_CONTEXT}
 
-${functionsContext ? `\n---\n\n${functionsContext}` : ''}`
+${functionsContext ? `\n---\n\n${functionsContext}` : ""}`
 	}
 
 	/**
@@ -278,14 +278,26 @@ ${functionsContext ? `\n---\n\n${functionsContext}` : ''}`
 	 * This is a minimal, directive prompt that ONLY focuses on getting the LLM to output the format
 	 */
 	static getFunctionCallingPrompt(): string {
-		console.log('[AssistantPrompts] ========== getFunctionCallingPrompt START ==========')
-		console.log('[AssistantPrompts] About to call getFunctionDefinitionsForPrompt()')
-		
+		console.log(
+			"[AssistantPrompts] ========== getFunctionCallingPrompt START =========="
+		)
+		console.log(
+			"[AssistantPrompts] About to call getFunctionDefinitionsForPrompt()"
+		)
+
 		const functionsContext = getFunctionDefinitionsForPrompt()
-		
-		console.log('[AssistantPrompts] getFunctionDefinitionsForPrompt() returned')
-		console.log('[AssistantPrompts] Function definitions loaded, length:', functionsContext.length)
-		console.log('[AssistantPrompts] Function definitions preview:', functionsContext.substring(0, 200))
+
+		console.log(
+			"[AssistantPrompts] getFunctionDefinitionsForPrompt() returned"
+		)
+		console.log(
+			"[AssistantPrompts] Function definitions loaded, length:",
+			functionsContext.length
+		)
+		console.log(
+			"[AssistantPrompts] Function definitions preview:",
+			functionsContext.substring(0, 200)
+		)
 
 		const prompt = `**CRITICAL INSTRUCTION - READ THIS FIRST**
 
@@ -318,7 +330,7 @@ ${AssistantPrompts.SYSTEM_PROMPT_BASE}
 
 ${AssistantPrompts.FUNCTION_CALLING_CONTEXT}
 
-${functionsContext || ''}
+${functionsContext || ""}
 
 ---
 
@@ -331,8 +343,13 @@ NOTHING BEFORE IT. NOTHING AFTER IT. JUST THAT FORMAT.
 
 IF YOU SEE A USER CONFIRMATION (e.g., "yes", "go ahead", "option 3"), CALL THE FUNCTION IMMEDIATELY.`
 
-		console.log('[AssistantPrompts] Function calling prompt total length:', prompt.length)
-		console.log('[AssistantPrompts] ========== getFunctionCallingPrompt END ==========')
+		console.log(
+			"[AssistantPrompts] Function calling prompt total length:",
+			prompt.length
+		)
+		console.log(
+			"[AssistantPrompts] ========== getFunctionCallingPrompt END =========="
+		)
 		return prompt
 	}
 

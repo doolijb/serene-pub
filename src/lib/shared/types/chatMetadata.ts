@@ -1,11 +1,11 @@
 /**
  * Chat Metadata Types
- * 
+ *
  * Defines the structure of the metadata field in the chats table.
  * This metadata is stored as JSON and includes draft entities being created/edited.
  */
 
-import type { AssistantCreateCharacter } from '$lib/server/db/zodSchemas'
+import type { AssistantCreateCharacter } from "$lib/server/db/zodSchemas"
 
 /**
  * Data editor structure for draft entities
@@ -42,11 +42,11 @@ export function parseChatMetadata(metadataString: string | null): ChatMetadata {
 	if (!metadataString) {
 		return {}
 	}
-	
+
 	try {
 		return JSON.parse(metadataString) as ChatMetadata
 	} catch (error) {
-		console.error('Failed to parse chat metadata:', error)
+		console.error("Failed to parse chat metadata:", error)
 		return {}
 	}
 }
@@ -61,7 +61,9 @@ export function serializeChatMetadata(metadata: ChatMetadata): string {
 /**
  * Get the active character draft from chat metadata
  */
-export function getActiveCharacterDraft(metadata: ChatMetadata): Partial<AssistantCreateCharacter> | null {
+export function getActiveCharacterDraft(
+	metadata: ChatMetadata
+): Partial<AssistantCreateCharacter> | null {
 	return metadata.dataEditor?.create?.characters?.[0] ?? null
 }
 
@@ -87,7 +89,9 @@ export function setActiveCharacterDraft(
 /**
  * Clear the active character draft from chat metadata
  */
-export function clearActiveCharacterDraft(metadata: ChatMetadata): ChatMetadata {
+export function clearActiveCharacterDraft(
+	metadata: ChatMetadata
+): ChatMetadata {
 	const newMetadata = { ...metadata }
 	if (newMetadata.dataEditor?.create?.characters) {
 		newMetadata.dataEditor.create.characters = []

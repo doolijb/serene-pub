@@ -10,11 +10,16 @@
 		loadingOlderMessages: boolean
 		chatMessagesContainer: HTMLDivElement | null
 		onScroll: (event: Event) => void
-		
+
 		// Required props for MessageComponent
-		getMessageCharacter: (msg: SelectChatMessage) => SelectCharacter | SelectPersona | undefined
+		getMessageCharacter: (
+			msg: SelectChatMessage
+		) => SelectCharacter | SelectPersona | undefined
 		canControlMessage: (msg: SelectChatMessage) => boolean
-		showSwipeControls: (msg: SelectChatMessage, isGreeting: boolean) => boolean
+		showSwipeControls: (
+			msg: SelectChatMessage,
+			isGreeting: boolean
+		) => boolean
 		canSwipeRight: (msg: SelectChatMessage, isGreeting: boolean) => boolean
 		onSwipeLeft: (msg: SelectChatMessage) => void
 		onSwipeRight: (msg: SelectChatMessage) => void
@@ -29,32 +34,67 @@
 		canRegenerateLastMessage: boolean
 		hasGeneratingMessage: boolean
 		isGuest: boolean
-		
+
 		// Snippet children
-		MessageComponent: Snippet<[{ 
-			msg: SelectChatMessage; 
-			index: number;
-			chat: Sockets.Chats.Get.Response["chat"] & { chatMessages: SelectChatMessage[] };
-			isLastMessage: boolean;
-			messagesLength: number;
-			getMessageCharacter: (msg: SelectChatMessage) => SelectCharacter | SelectPersona | undefined;
-			canControlMessage: (msg: SelectChatMessage) => boolean;
-			showSwipeControls: (msg: SelectChatMessage, isGreeting: boolean) => boolean;
-			canSwipeRight: (msg: SelectChatMessage, isGreeting: boolean) => boolean;
-			onSwipeLeft: (msg: SelectChatMessage) => void;
-			onSwipeRight: (msg: SelectChatMessage) => void;
-			onEditMessage: (event: MouseEvent, msg: SelectChatMessage) => void;
-			onDeleteMessage: (event: MouseEvent, msg: SelectChatMessage) => void;
-			onHideMessage: (event: MouseEvent, msg: SelectChatMessage) => void;
-			onRegenerateMessage: (event: MouseEvent, msg: SelectChatMessage) => void;
-			onContinueMessage?: (event: MouseEvent, msg: SelectChatMessage) => void;
-			onAbortMessage: (event: MouseEvent, msg: SelectChatMessage) => void;
-			onBranchMessage?: (event: Event, msg: SelectChatMessage) => void;
-			editChatMessage: SelectChatMessage | undefined;
-			canRegenerateLastMessage: boolean;
-			hasGeneratingMessage: boolean;
-			isGuest: boolean;
-		}]>
+		MessageComponent: Snippet<
+			[
+				{
+					msg: SelectChatMessage
+					index: number
+					chat: Sockets.Chats.Get.Response["chat"] & {
+						chatMessages: SelectChatMessage[]
+					}
+					isLastMessage: boolean
+					messagesLength: number
+					getMessageCharacter: (
+						msg: SelectChatMessage
+					) => SelectCharacter | SelectPersona | undefined
+					canControlMessage: (msg: SelectChatMessage) => boolean
+					showSwipeControls: (
+						msg: SelectChatMessage,
+						isGreeting: boolean
+					) => boolean
+					canSwipeRight: (
+						msg: SelectChatMessage,
+						isGreeting: boolean
+					) => boolean
+					onSwipeLeft: (msg: SelectChatMessage) => void
+					onSwipeRight: (msg: SelectChatMessage) => void
+					onEditMessage: (
+						event: MouseEvent,
+						msg: SelectChatMessage
+					) => void
+					onDeleteMessage: (
+						event: MouseEvent,
+						msg: SelectChatMessage
+					) => void
+					onHideMessage: (
+						event: MouseEvent,
+						msg: SelectChatMessage
+					) => void
+					onRegenerateMessage: (
+						event: MouseEvent,
+						msg: SelectChatMessage
+					) => void
+					onContinueMessage?: (
+						event: MouseEvent,
+						msg: SelectChatMessage
+					) => void
+					onAbortMessage: (
+						event: MouseEvent,
+						msg: SelectChatMessage
+					) => void
+					onBranchMessage?: (
+						event: Event,
+						msg: SelectChatMessage
+					) => void
+					editChatMessage: SelectChatMessage | undefined
+					canRegenerateLastMessage: boolean
+					hasGeneratingMessage: boolean
+					isGuest: boolean
+				}
+			]
+		>
 		ComposerComponent: Snippet<[]>
 		NextCharacterComponent?: Snippet<[]>
 	}
@@ -124,10 +164,10 @@
 					{#each chat.chatMessages as msg, index (msg.id)}
 						{@const isLastMessage =
 							index === chat.chatMessages.length - 1}
-						
+
 						<li class="w-full">
-							{@render MessageComponent({ 
-								msg, 
+							{@render MessageComponent({
+								msg,
 								index,
 								chat,
 								isLastMessage,

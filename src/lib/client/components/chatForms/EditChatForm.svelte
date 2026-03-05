@@ -170,8 +170,6 @@
 		selectedTags = selectedTags.filter((tag) => tag !== tagName)
 	}
 
-
-
 	$effect(() => {
 		const _name = name.trim()
 		const _scenario = scenario.trim()
@@ -342,11 +340,19 @@
 
 	// Socket event handlers - defined as named functions for proper cleanup
 	const handleChatsGet = (msg: Sockets.Chats.Get.Response) => {
-		console.log("handleChatsGet received", msg.chat?.id, "editChatId:", editChatId)
+		console.log(
+			"handleChatsGet received",
+			msg.chat?.id,
+			"editChatId:",
+			editChatId
+		)
 		if (msg.chat && msg.chat.id === editChatId) {
 			console.log("Updating chat data", msg.chat)
 			// Create new object reference to ensure reactivity
-			chat = { ...msg.chat, chatCharacters: [...(msg.chat.chatCharacters || [])] }
+			chat = {
+				...msg.chat,
+				chatCharacters: [...(msg.chat.chatCharacters || [])]
+			}
 			name = chat.name || ""
 			scenario = chat.scenario || ""
 			groupReplyStrategy = chat.groupReplyStrategy || "ordered"
@@ -417,10 +423,11 @@
 			})
 			// Optimistically update local state immediately
 			if (chat.chatCharacters) {
-				const updatedChatCharacters = chat.chatCharacters.map((cc: SelectChatCharacter) => 
-					cc.characterId === msg.characterId
-						? { ...cc, visibility: msg.visibility }
-						: cc
+				const updatedChatCharacters = chat.chatCharacters.map(
+					(cc: SelectChatCharacter) =>
+						cc.characterId === msg.characterId
+							? { ...cc, visibility: msg.visibility }
+							: cc
 				)
 				chat = { ...chat, chatCharacters: updatedChatCharacters }
 			}
@@ -457,7 +464,9 @@
 		}
 	}
 
-	const handleChatsRemoveGuest = (res: Sockets.Chats.RemoveGuest.Response) => {
+	const handleChatsRemoveGuest = (
+		res: Sockets.Chats.RemoveGuest.Response
+	) => {
 		if (res.success) {
 			toaster.success({ title: "Guest removed successfully" })
 			// Request updated chat data
@@ -476,8 +485,14 @@
 		socket.on("personas:list", handlePersonasList)
 		socket.on("lorebooks:list", handleLorebooksList)
 		socket.on("tags:list", handleTagsList)
-		socket.on("chats:toggleChatCharacterActive", handleToggleChatCharacterActive)
-		socket.on("chats:updateChatCharacterVisibility", handleUpdateChatCharacterVisibility)
+		socket.on(
+			"chats:toggleChatCharacterActive",
+			handleToggleChatCharacterActive
+		)
+		socket.on(
+			"chats:updateChatCharacterVisibility",
+			handleUpdateChatCharacterVisibility
+		)
 		socket.on("chats:create", handleChatsCreate)
 		socket.on("chats:update", handleChatsUpdate)
 		socket.on("chats:addGuest", handleChatsAddGuest)
@@ -497,8 +512,14 @@
 		socket.off("personas:list", handlePersonasList)
 		socket.off("lorebooks:list", handleLorebooksList)
 		socket.off("tags:list", handleTagsList)
-		socket.off("chats:toggleChatCharacterActive", handleToggleChatCharacterActive)
-		socket.off("chats:updateChatCharacterVisibility", handleUpdateChatCharacterVisibility)
+		socket.off(
+			"chats:toggleChatCharacterActive",
+			handleToggleChatCharacterActive
+		)
+		socket.off(
+			"chats:updateChatCharacterVisibility",
+			handleUpdateChatCharacterVisibility
+		)
 		socket.off("chats:create", handleChatsCreate)
 		socket.off("chats:update", handleChatsUpdate)
 		socket.off("chats:addGuest", handleChatsAddGuest)

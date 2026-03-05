@@ -1,40 +1,40 @@
 /**
  * New Assistant Socket Handler (v2)
- * 
+ *
  * Uses AssistantService for clean tool-based interactions.
  * Replaces the old reasoning-based system with structured tool calling.
  */
 
-import type { Server, Socket } from 'socket.io'
-import { db } from '$lib/server/db'
-import * as schema from '$lib/server/db/schema'
-import { eq, and, ne } from 'drizzle-orm'
-import { AssistantService } from '$lib/server/assistant/AssistantService'
-import { getConnectionAdapter } from '$lib/server/utils/getConnectionAdapter'
-import { getUserConfigurations } from '$lib/server/utils/getUserConfigurations'
-import { TokenCounters } from '$lib/server/utils/TokenCounterManager'
-import { ChatTypes } from '$lib/shared/constants/ChatTypes'
-import { broadcastToChatUsers } from './utils/broadcastHelpers'
+import type { Server, Socket } from "socket.io"
+import { db } from "$lib/server/db"
+import * as schema from "$lib/server/db/schema"
+import { eq, and, ne } from "drizzle-orm"
+import { AssistantService } from "$lib/server/assistant/AssistantService"
+import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
+import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
+import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
+import { ChatTypes } from "$lib/shared/constants/ChatTypes"
+import { broadcastToChatUsers } from "./utils/broadcastHelpers"
 
 export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
-	console.log('[AssistantV2] Registering handlers for user', userId)
+	console.log("[AssistantV2] Registering handlers for user", userId)
 
 	/**
 	 * Send a message in an assistant chat
 	 */
 	socket.on(
-		'assistant:sendMessageV2',
+		"assistant:sendMessageV2",
 		async (data: { chatId: number; content: string }) => {
 			try {
 				const { chatId, content } = data
 
-				console.log('[AssistantV2] Received message for chat', chatId)
+				console.log("[AssistantV2] Received message for chat", chatId)
 
 				// Validate input parameters
-				if (!content || typeof content !== 'string') {
-					socket.emit('assistant:errorV2', {
+				if (!content || typeof content !== "string") {
+					socket.emit("assistant:errorV2", {
 						chatId,
-						error: 'Message content is required'
+						error: "Message content is required"
 					})
 					return
 				}
@@ -42,17 +42,17 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 				// Trim and validate content length
 				const trimmedContent = content.trim()
 				if (trimmedContent.length === 0) {
-					socket.emit('assistant:errorV2', {
+					socket.emit("assistant:errorV2", {
 						chatId,
-						error: 'Message cannot be empty'
+						error: "Message cannot be empty"
 					})
 					return
 				}
 
 				if (trimmedContent.length > 50000) {
-					socket.emit('assistant:errorV2', {
+					socket.emit("assistant:errorV2", {
 						chatId,
-						error: 'Message too long (max 50,000 characters)'
+						error: "Message too long (max 50,000 characters)"
 					})
 					return
 				}
@@ -64,27 +64,27 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 				})
 
 				if (!chatOwnership) {
-					socket.emit('assistant:errorV2', {
+					socket.emit("assistant:errorV2", {
 						chatId,
-						error: 'Chat not found'
+						error: "Chat not found"
 					})
 					return
 				}
 
 				// Verify it's an assistant chat
 				if (chatOwnership.chatType !== ChatTypes.ASSISTANT) {
-					socket.emit('assistant:errorV2', {
+					socket.emit("assistant:errorV2", {
 						chatId,
-						error: 'This is not an assistant chat'
+						error: "This is not an assistant chat"
 					})
 					return
 				}
 
 				// Verify user owns the chat (assistant chats don't support guests)
 				if (chatOwnership.userId !== userId) {
-					socket.emit('assistant:errorV2', {
+					socket.emit("assistant:errorV2", {
 						chatId,
-						error: 'Access denied. You do not own this chat.'
+						error: "Access denied. You do not own this chat."
 					})
 					return
 				}
@@ -95,14 +95,14 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 					.values({
 						chatId,
 						userId,
-						role: 'user',
+						role: "user",
 						content: trimmedContent,
 						metadata: {}
 					})
 					.returning()
 
 				// Broadcast user message to all chat users
-				await broadcastToChatUsers(io, chatId, 'chatMessage', {
+				await broadcastToChatUsers(io, chatId, "chatMessage", {
 					chatId,
 					chatMessage: userMessage
 				})
@@ -113,15 +113,15 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 					.values({
 						chatId,
 						userId,
-						role: 'assistant',
-						content: '',
+						role: "assistant",
+						content: "",
 						isGenerating: true,
 						metadata: {}
 					})
 					.returning()
 
 				// Broadcast placeholder to all chat users
-				await broadcastToChatUsers(io, chatId, 'chatMessage', {
+				await broadcastToChatUsers(io, chatId, "chatMessage", {
 					chatId,
 					chatMessage: assistantMessage
 				})
@@ -145,7 +145,10 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 							}
 						},
 						chatMessages: {
-							where: ne(schema.chatMessages.id, assistantMessage.id),
+							where: ne(
+								schema.chatMessages.id,
+								assistantMessage.id
+							),
 							orderBy: (cm, { asc }) => asc(cm.id)
 						},
 						lorebook: true
@@ -153,7 +156,7 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 				})
 
 				if (!chat) {
-					throw new Error('Chat not found')
+					throw new Error("Chat not found")
 				}
 
 				// 4. Get user's configurations
@@ -162,7 +165,7 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 
 				// 5. Create adapter instance
 				const { Adapter } = getConnectionAdapter(connection.type)
-				const tokenCounter = new TokenCounters('estimate')
+				const tokenCounter = new TokenCounters("estimate")
 				const tokenLimit = 4096
 				const contextThresholdPercent = 0.8
 
@@ -188,7 +191,8 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 					socket
 				)
 
-				const result = await assistantService.generateResponse(trimmedContent)
+				const result =
+					await assistantService.generateResponse(trimmedContent)
 
 				// 7. Update assistant message with result
 				if (result.success && result.message) {
@@ -204,34 +208,45 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 						.where(eq(schema.chatMessages.id, assistantMessage.id))
 
 					// Fetch updated message
-					const updatedMessage = await db.query.chatMessages.findFirst({
-						where: eq(schema.chatMessages.id, assistantMessage.id)
-					})
+					const updatedMessage =
+						await db.query.chatMessages.findFirst({
+							where: eq(
+								schema.chatMessages.id,
+								assistantMessage.id
+							)
+						})
 
 					// Broadcast final message to all chat users
-					await broadcastToChatUsers(io, chatId, 'chatMessage', {
+					await broadcastToChatUsers(io, chatId, "chatMessage", {
 						chatId,
 						chatMessage: updatedMessage
 					})
-					
+
 					// If metadata was updated (e.g., draft created), fetch and emit updated chat
 					if (result.metadataUpdated) {
 						const updatedChat = await db.query.chats.findFirst({
 							where: eq(schema.chats.id, chatId),
 							columns: { metadata: true }
 						})
-						
+
 						if (updatedChat) {
-							console.log('[AssistantV2] Emitting metadata update')
-							await broadcastToChatUsers(io, chatId, 'assistant:metadataUpdated', {
+							console.log(
+								"[AssistantV2] Emitting metadata update"
+							)
+							await broadcastToChatUsers(
+								io,
 								chatId,
-								metadata: updatedChat.metadata
-							})
+								"assistant:metadataUpdated",
+								{
+									chatId,
+									metadata: updatedChat.metadata
+								}
+							)
 						}
 					}
 
 					// Send completion event to requesting socket only
-					socket.emit('assistant:completeV2', {
+					socket.emit("assistant:completeV2", {
 						chatId,
 						messageId: assistantMessage.id,
 						toolsUsed: result.toolsUsed || []
@@ -241,7 +256,7 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 					await db
 						.update(schema.chatMessages)
 						.set({
-							content: `Error: ${result.error || 'Unknown error'}`,
+							content: `Error: ${result.error || "Unknown error"}`,
 							isGenerating: false,
 							metadata: { error: true } as any
 						})
@@ -253,25 +268,26 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 					})
 
 					// Broadcast error message to all chat users
-					await broadcastToChatUsers(io, chatId, 'chatMessage', {
+					await broadcastToChatUsers(io, chatId, "chatMessage", {
 						chatId,
 						chatMessage: errorMessage
 					})
 
 					// Send error event to requesting socket only
-					socket.emit('assistant:errorV2', {
+					socket.emit("assistant:errorV2", {
 						chatId,
-						error: result.error || 'Failed to generate response'
+						error: result.error || "Failed to generate response"
 					})
 				}
 			} catch (error) {
-				console.error('[AssistantV2] Error:', error)
-				socket.emit('assistant:errorV2', {
-					error: error instanceof Error ? error.message : 'Unknown error'
+				console.error("[AssistantV2] Error:", error)
+				socket.emit("assistant:errorV2", {
+					error:
+						error instanceof Error ? error.message : "Unknown error"
 				})
 			}
 		}
 	)
 
-	console.log('[AssistantV2] Handlers registered')
+	console.log("[AssistantV2] Handlers registered")
 }

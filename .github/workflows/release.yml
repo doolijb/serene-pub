@@ -44,7 +44,7 @@ jobs:
               run: |
                   TAG="${{ github.ref_name }}"
                   VERSION="${TAG#v}"  # Remove 'v' prefix
-                  
+
                   # Extract base version and suffix
                   if [[ "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(-(.+))?$ ]]; then
                     BASE_VERSION="${BASH_REMATCH[1]}"
@@ -86,7 +86,7 @@ jobs:
                     TITLE="$VERSION"
                     IS_PRERELEASE="true"
                   fi
-                  
+
                   echo "title=$TITLE" >> $GITHUB_OUTPUT
                   echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
                   echo "Release Title: $TITLE"

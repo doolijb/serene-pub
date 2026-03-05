@@ -42,8 +42,14 @@ export async function loadSocketsClient({
 		const res: AxiosResponse<SocketsEndpointResponse> = await axios.get(
 			"/api/sockets-endpoint"
 		)
-		const serverUrl = new URL(res.data.endpoint)
-		const host = `${serverUrl.protocol}//${domain}:${serverUrl.port}`
+		const endpoint = res.data.endpoint?.trim()
+		let host: string
+		if (endpoint) {
+			const serverUrl = new URL(endpoint, window.location.origin)
+			host = serverUrl.origin
+		} else {
+			host = window.location.origin
+		}
 
 		if (dev) {
 			console.log("Connecting to socket server at:", host)

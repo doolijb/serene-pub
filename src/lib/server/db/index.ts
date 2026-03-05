@@ -201,11 +201,13 @@ export function compareVersions(a: string, b: string): -1 | 0 | 1 {
 	// Parse version string into components
 	// Format: X.Y.Z or X.Y.Z-type or X.Y.Z-type-N
 	const parseVersion = (version: string) => {
-		const match = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)(?:-(\d+))?)?$/)
+		const match = version.match(
+			/^(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)(?:-(\d+))?)?$/
+		)
 		if (!match) {
 			return { major: 0, minor: 0, patch: 0, type: null, num: 0 }
 		}
-		
+
 		const [, major, minor, patch, type, num] = match
 		return {
 			major: parseInt(major, 10),
@@ -230,9 +232,9 @@ export function compareVersions(a: string, b: string): -1 | 0 | 1 {
 	// e.g., 0.4.1-pr-2 < 0.4.1-rc-1 < 0.4.1-alpha < 0.4.1
 	const getReleaseTypePriority = (type: string | null): number => {
 		if (!type) return 4 // Formal release (highest priority)
-		if (type === 'alpha') return 3
-		if (type === 'rc') return 2
-		if (type === 'pr') return 1
+		if (type === "alpha") return 3
+		if (type === "rc") return 2
+		if (type === "pr") return 1
 		return 0 // Unknown types get lowest priority
 	}
 

@@ -75,7 +75,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		if (this.isAssistantMode) {
 			return this.compileAssistantPrompt(args)
 		}
-		
+
 		let useChatFormat = true
 		if (this.connection.extraJson?.prerenderPrompt) {
 			useChatFormat = false

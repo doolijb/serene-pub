@@ -95,14 +95,16 @@
 	function isModelActive(modelName: string): boolean {
 		// Access currentConnectionModelName to create reactive dependency
 		if (!currentConnectionModelName) return false
-		
+
 		if (selectedSource === OllamaModelSearchSource.RECOMMENDED) {
 			// For recommended models, check against the pull string
 			const modelNameFromPull =
 				modelName.split("/").pop()?.split(":")[0] || modelName
 			return (
 				currentConnectionModelName.includes(modelNameFromPull) ||
-				currentConnectionModelName.startsWith(modelName.replace("hf.co/", ""))
+				currentConnectionModelName.startsWith(
+					modelName.replace("hf.co/", "")
+				)
 			)
 		}
 		return currentConnectionModelName.startsWith(modelName)

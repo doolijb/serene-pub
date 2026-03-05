@@ -59,7 +59,8 @@ export async function generateChatTitle({
 					id: 3,
 					chatId: 0,
 					role: "user",
-					content: "Based on the conversation above, generate a short, descriptive title (maximum 6 words, no quotes or punctuation at the end). Just the title, nothing else.",
+					content:
+						"Based on the conversation above, generate a short, descriptive title (maximum 6 words, no quotes or punctuation at the end). Just the title, nothing else.",
 					createdAt: new Date().toISOString(),
 					isHidden: false,
 					isGenerating: false,
@@ -80,7 +81,9 @@ export async function generateChatTitle({
 		// Get the appropriate adapter
 		const AdapterClass = getConnectionAdapter(connection.type)
 		if (!AdapterClass) {
-			throw new Error(`No adapter found for connection type: ${connection.type}`)
+			throw new Error(
+				`No adapter found for connection type: ${connection.type}`
+			)
 		}
 
 		// Create token counter
@@ -97,7 +100,8 @@ export async function generateChatTitle({
 			contextConfig,
 			promptConfig: {
 				...promptConfig,
-				systemPrompt: "You are a helpful assistant that generates concise titles."
+				systemPrompt:
+					"You are a helpful assistant that generates concise titles."
 			},
 			chat: titleChat as any,
 			currentCharacterId: null,

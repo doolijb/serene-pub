@@ -681,13 +681,16 @@ export class PromptBuilder {
 		const sections: string[] = []
 
 		// Load tagged characters
-		if (metadata.taggedEntities.characters && Array.isArray(metadata.taggedEntities.characters)) {
+		if (
+			metadata.taggedEntities.characters &&
+			Array.isArray(metadata.taggedEntities.characters)
+		) {
 			const { db } = await import("../../db")
 			const characterIds = metadata.taggedEntities.characters
-			
+
 			if (characterIds.length > 0) {
 				const characters = await db.query.characters.findMany({
-					where: (c:any, { inArray, eq, and }: any) =>
+					where: (c: any, { inArray, eq, and }: any) =>
 						and(
 							inArray(c.id, characterIds),
 							eq(c.userId, this.chat.userId)
@@ -705,7 +708,9 @@ export class PromptBuilder {
 				if (characters.length > 0) {
 					sections.push("## Tagged Characters\n")
 					for (const char of characters) {
-						sections.push(`### ${char.name}${char.nickname ? ` (${char.nickname})` : ""}`)
+						sections.push(
+							`### ${char.name}${char.nickname ? ` (${char.nickname})` : ""}`
+						)
 						sections.push(`- ID: ${char.id}`)
 						if (char.description) {
 							sections.push(`- Description: ${char.description}`)
@@ -713,7 +718,9 @@ export class PromptBuilder {
 						if (char.avatar) {
 							sections.push(`- Avatar: ${char.avatar}`)
 						}
-						sections.push(`- Created: ${new Date(char.createdAt).toLocaleDateString()}\n`)
+						sections.push(
+							`- Created: ${new Date(char.createdAt).toLocaleDateString()}\n`
+						)
 					}
 				}
 			}

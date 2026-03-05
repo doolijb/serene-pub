@@ -19,7 +19,7 @@ export const chatsListAssistantHandler: Handler<
 
 		// Get assistant chats for this user
 		const chatsList = await db.query.chats.findMany({
-			where: (c, { eq, and }) => 
+			where: (c, { eq, and }) =>
 				and(eq(c.userId, userId), eq(c.chatType, ChatTypes.ASSISTANT)),
 			orderBy: (c, { desc }) => desc(c.id)
 		})
@@ -88,7 +88,7 @@ export const assistantUpdateDraftHandler: Handler<
 
 			// Verify chat exists and user has access
 			const chat = await db.query.chats.findFirst({
-				where: (c, { eq, and }) => 
+				where: (c, { eq, and }) =>
 					and(eq(c.id, chatId), eq(c.userId, userId))
 			})
 
@@ -120,14 +120,16 @@ export const assistantUpdateDraftHandler: Handler<
 				.set({ metadata: updatedMetadata })
 				.where(eq(schema.chats.id, chatId))
 
-			console.log(`[assistantUpdateDraftHandler] Draft auto-saved for chat ${chatId}`)
+			console.log(
+				`[assistantUpdateDraftHandler] Draft auto-saved for chat ${chatId}`
+			)
 
 			// Broadcast updated chat to all users
 			if (socket.io) {
 				const updatedChat = await db.query.chats.findFirst({
 					where: eq(schema.chats.id, chatId)
 				})
-				
+
 				if (updatedChat) {
 					await broadcastToChatUsers(socket.io, chatId, "chats:get", {
 						chat: updatedChat
@@ -140,7 +142,10 @@ export const assistantUpdateDraftHandler: Handler<
 			console.error("Error in assistantUpdateDraftHandler:", error)
 			return {
 				success: false,
-				error: error instanceof Error ? error.message : "Failed to update draft"
+				error:
+					error instanceof Error
+						? error.message
+						: "Failed to update draft"
 			}
 		}
 	}

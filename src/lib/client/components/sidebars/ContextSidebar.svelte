@@ -78,7 +78,7 @@
 	})
 
 	function handleDelete() {
-		if (contextConfig.isImmutable) {
+		if (!contextConfig.isImmutable) {
 			socket.emit("contextConfigs:delete", { id: contextConfig.id })
 			selectedConfigId = undefined
 		}

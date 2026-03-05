@@ -225,13 +225,17 @@
 			})
 			return
 		}
-		
+
 		// Get the entry with the highest date value
 		const latestEntry = filteredEntries.reduce((max, entry) => {
-			return getEntryDateValue(entry) > getEntryDateValue(max) ? entry : max
+			return getEntryDateValue(entry) > getEntryDateValue(max)
+				? entry
+				: max
 		}, filteredEntries[0])
-		
-		const req: Sockets.HistoryEntries.IterateNext.Params = { id: latestEntry.id }
+
+		const req: Sockets.HistoryEntries.IterateNext.Params = {
+			id: latestEntry.id
+		}
 		socket.emit("historyEntries:iterateNext", req)
 	}
 
