@@ -1,6 +1,8 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { eq } from "drizzle-orm"
+import { asc, eq } from "drizzle-orm"
+import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 /**
  * Gets user's active configurations with fallback to system defaults
@@ -99,7 +101,7 @@ export async function getUserConfigurations(
 
 			try {
 				// Check if system settings exist
-				const systemSettings = await db.query.systemSettings.findFirst({
+				let systemSettings = await db.query.systemSettings.findFirst({
 					where: (s, { eq }) => eq(s.id, 1)
 				})
 
