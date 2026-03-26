@@ -2,6 +2,7 @@ import { db } from "$lib/server/db"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { user as loadUser, user } from "./users"
+import { userSettingsGet } from "./userSettings"
 import { getConnectionAdapter } from "../utils/getConnectionAdapter"
 import type { Handler } from "$lib/shared/events"
 
@@ -229,6 +230,7 @@ export const connectionsSetUserActive: Handler<
 		// The user handler is not modularized yet, so call as in original
 		// @ts-ignore
 		await loadUser(socket, {}, emitToUser)
+		await userSettingsGet.handler(socket, {}, emitToUser)
 		if (params.id)
 			await connectionsGet.handler(socket, { id: params.id }, emitToUser)
 		const res: Sockets.Connections.SetUserActive.Response = { ok: true }

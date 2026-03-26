@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { InsertConnection } from "$lib/server/db/schema"
 import { user as loadUser } from "./users"
-import { connectionsList } from "./connections"
+import { connectionsList, connectionsSetUserActive } from "./connections"
 import { Ollama } from "ollama"
 import ollamaAdapter from "$lib/server/connectionAdapters/OllamaAdapter"
 import { OllamaModelSearchSource } from "$lib/shared/constants/OllamaModelSource"
@@ -137,8 +137,6 @@ export const ollamaDeleteModelHandler: Handler<Sockets.Ollama.DeleteModel.Params
 export const ollamaConnectModelHandler: Handler<Sockets.Ollama.ConnectModel.Params, Sockets.Ollama.ConnectModel.Response> = {
 	event: "ollama:connectModel",
 	handler: async (socket, params, emitToUser) => {
-		const userId = 1
-
 		try {
 			let existingConnection = await db.query.connections.findFirst({
 				where: (c, { eq }) =>
@@ -164,14 +162,11 @@ export const ollamaConnectModelHandler: Handler<Sockets.Ollama.ConnectModel.Para
 				existingConnection = newConnection
 			}
 
-			await db
-				.update(schema.users)
-				.set({
-					activeConnectionId: existingConnection.id
-				})
-				.where(eq(schema.users.id, userId))
-
-			await loadUser(socket, {}, emitToUser)
+			await connectionsSetUserActive.handler(
+				socket,
+				{ id: existingConnection.id },
+				emitToUser
+			)
 			await connectionsList.handler(socket, {}, emitToUser)
 
 			const res: Sockets.Ollama.ConnectModel.Response = {
