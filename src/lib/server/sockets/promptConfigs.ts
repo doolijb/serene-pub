@@ -2,6 +2,7 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import { user as loadUser } from "./users"
+import { userSettingsGet } from "./userSettings"
 import type { Handler } from "$lib/shared/events"
 
 export const promptConfigsListHandler: Handler<
@@ -196,6 +197,7 @@ export const promptConfigsSetUserActive: Handler<
 			.where(eq(schema.userSettings.userId, currentUser.id))
 
 		await loadUser(socket, {}, emitToUser) // Emit updated user info
+		await userSettingsGet.handler(socket, {}, emitToUser)
 		if (params.id) {
 			await promptConfigsGet.handler(
 				socket,

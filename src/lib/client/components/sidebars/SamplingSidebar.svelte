@@ -15,8 +15,13 @@
 	let { onclose = $bindable() }: Props = $props()
 
 	let userCtx: { user: SelectUser } = getContext("userCtx")
+	let userSettingsCtx: UserSettingsCtx = getContext("userSettingsCtx")
 
 	const socket = useTypedSocket()
+
+	let activeSamplingConfigId = $derived(
+		userSettingsCtx.settings?.activeSamplingConfigId ?? null
+	)
 
 	let sampling: SelectSamplingConfig | undefined = $state()
 	let originalSamplingConfig: SelectSamplingConfig | undefined = $state()
@@ -140,7 +145,7 @@
 
 	function handleSelectChange(e: Event) {
 		socket.emit("samplingConfigs:setUserActive", {
-			id: (e.target as HTMLSelectElement).value
+			id: parseInt((e.target as HTMLSelectElement).value)
 		})
 	}
 
@@ -215,7 +220,7 @@
 
 	function confirmDelete() {
 		socket.emit("samplingConfigs:delete", {
-			id: userCtx.user.activeSamplingConfigId
+			id: activeSamplingConfigId
 		})
 		showDeleteModal = false
 	}
@@ -269,7 +274,7 @@
 			(message: Sockets.SamplingConfigs.List.Response) => {
 				samplingConfigsList = message.samplingConfigsList
 				if (
-					!userCtx.user.activeSamplingConfigId &&
+					!activeSamplingConfigId &&
 					samplingConfigsList.length > 0
 				) {
 					socket.emit("samplingConfigs:setUserActive", {
@@ -297,7 +302,7 @@
 			}
 		)
 
-		socket.emit("samplingConfigs:get", { id: userCtx.user.activeSamplingConfigId })
+		socket.emit("samplingConfigs:get", { id: activeSamplingConfigId })
 		socket.emit("samplingConfigs:list", {})
 	})
 
@@ -385,7 +390,7 @@
 			<select
 				class="select select-sm bg-background border-muted rounded border"
 				onchange={handleSelectChange}
-				bind:value={userCtx.user.activeSamplingConfigId}
+				value={activeSamplingConfigId}
 				disabled={unsavedChanges}
 			>
 				{#each samplingConfigsList.filter((w) => w.isImmutable) as w}

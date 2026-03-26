@@ -2,6 +2,7 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import { user } from "./users"
+import { userSettingsGet } from "./userSettings"
 import type { Handler } from "$lib/shared/events"
 import {
 	getSupportedSamplers,
@@ -204,6 +205,7 @@ export const samplingConfigsSetUserActive: Handler<
 			.where(eq(schema.userSettings.userId, currentUser.id))
 
 		await user(socket, {}, emitToUser)
+		await userSettingsGet.handler(socket, {}, emitToUser)
 		if (params.id) {
 			await samplingConfigsGet.handler(
 				socket,

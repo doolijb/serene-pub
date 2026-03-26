@@ -2,6 +2,7 @@ import { db } from "$lib/server/db"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { user as loadUser, user } from "./users"
+import { userSettingsGet } from "./userSettings"
 import type { Handler } from "$lib/shared/events"
 
 export const contextConfigsListHandler: Handler<
@@ -210,6 +211,7 @@ export const contextConfigsSetUserActive: Handler<
 
 		// You may want to emit the user and contextConfig updates here as in the original
 		await loadUser(socket, {}, emitToUser)
+		await userSettingsGet.handler(socket, {}, emitToUser)
 
 		// Get the updated user to return in response
 		const updatedUser = await db.query.users.findFirst({
