@@ -4,8 +4,7 @@
 	import * as skio from "sveltekit-io"
 	import { onDestroy, onMount, tick } from "svelte"
 	import LoreContentField from "./LoreContentField.svelte"
-	import { Switch } from "@skeletonlabs/skeleton-svelte"
-	import { v4 as uuid } from "uuid"
+import { v4 as uuid } from "uuid"
 	import DeleteLorebookEntryConfirmModal from "../modals/DeleteLorebookEntryConfirmModal.svelte"
 
 	interface Props {
@@ -58,9 +57,8 @@
 		getFilteredEntries()
 	)
 	let maxDateValue: number = $derived.by(() => {
-		return filteredEntries.length
-			? getEntryDateValue(filteredEntries[0])
-			: 0
+		if (filteredEntries.length === 0) return 0
+		return Math.max(...filteredEntries.map((e) => getEntryDateValue(e)))
 	})
 
 	$effect(() => {
@@ -362,17 +360,7 @@
 		socket.off("historyEntries:iterateNext")
 	})
 
-	// --- Reactive sorted/filter logic for display and current date ---
-	$effect(() => {
-		filteredEntries = getFilteredEntries()
-			.slice()
-			.sort((a, b) => getEntryDateValue(b) - getEntryDateValue(a))
-	})
-	$effect(() => {
-		maxDateValue = filteredEntries.length
-			? getEntryDateValue(filteredEntries[0])
-			: 0
-	})
+
 </script>
 
 {#if isReady}
@@ -427,8 +415,7 @@
 					filteredEntries.findIndex(
 						(e) => getEntryDateValue(e) === maxDateValue
 					) === filteredEntries.indexOf(entry)}
-				{#key entry}
-					{#if isEditing}
+				{#if isEditing}
 						<!-- Edit mode: show the form -->
 						<div
 							class="preset-filled-surface-100-900 border-success-500 flex flex-col gap-4 rounded-lg border-2 p-2"
@@ -559,55 +546,50 @@
 									Advanced Settings
 								</summary>
 								<div class="mt-2 flex flex-col gap-2">
-									<div class="flex w-full justify-between">
-										<label for="useRegex-{entry.id}">
-											Use Regex
-										</label>
-										<Switch
-											name="useRegex-{entry.id}"
-											checked={entry.useRegex || false}
-											onCheckedChange={(e) =>
-												(entry.useRegex = e.checked)}
-											aria-labelledby="useRegex-{entry.id}"
+									<label class="flex w-full cursor-pointer items-center justify-between gap-2">
+										<span>Use Regex</span>
+										<input
+											type="checkbox"
+											class="checkbox"
+											checked={!!entry.useRegex}
+											onchange={(e) => {
+												entry.useRegex = e.currentTarget.checked
+											}}
 										/>
-									</div>
-									<div class="flex w-full justify-between">
-										<label for="caseSensitive-{entry.id}">
-											Case Sensitive
-										</label>
-										<Switch
-											name="caseSensitive-{entry.id}"
-											checked={entry.caseSensitive}
-											onCheckedChange={(e) =>
-												(entry.caseSensitive =
-													e.checked)}
-											aria-labelledby="caseSensitive-{entry.id}"
+									</label>
+									<label class="flex w-full cursor-pointer items-center justify-between gap-2">
+										<span>Case Sensitive</span>
+										<input
+											type="checkbox"
+											class="checkbox"
+											checked={!!entry.caseSensitive}
+											onchange={(e) => {
+												entry.caseSensitive = e.currentTarget.checked
+											}}
 										/>
-									</div>
-									<div class="flex w-full justify-between">
-										<label for="constant-{entry.id}">
-											Pinned
-										</label>
-										<Switch
-											name="constant-{entry.id}"
-											checked={entry.constant}
-											onCheckedChange={(e) =>
-												(entry.constant = e.checked)}
-											aria-labelledby="constant-{entry.id}"
+									</label>
+									<label class="flex w-full cursor-pointer items-center justify-between gap-2">
+										<span>Pinned</span>
+										<input
+											type="checkbox"
+											class="checkbox"
+											checked={!!entry.constant}
+											onchange={(e) => {
+												entry.constant = e.currentTarget.checked
+											}}
 										/>
-									</div>
-									<div class="flex w-full justify-between">
-										<label for="enabled-{entry.id}">
-											Enabled
-										</label>
-										<Switch
-											name="enabled-{entry.id}"
-											checked={entry.enabled}
-											onCheckedChange={(e) =>
-												(entry.enabled = e.checked)}
-											aria-labelledby="enabled-{entry.id}"
+									</label>
+									<label class="flex w-full cursor-pointer items-center justify-between gap-2">
+										<span>Enabled</span>
+										<input
+											type="checkbox"
+											class="checkbox"
+											checked={!!entry.enabled}
+											onchange={(e) => {
+												entry.enabled = e.currentTarget.checked
+											}}
 										/>
-									</div>
+									</label>
 								</div>
 							</details>
 
@@ -717,7 +699,6 @@
 							</div>
 						</div>
 					{/if}
-				{/key}
 			{/each}
 		{:else}
 			<!-- Reorder drag-and-drop list -->

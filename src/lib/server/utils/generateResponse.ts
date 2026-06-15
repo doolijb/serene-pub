@@ -232,20 +232,13 @@ export async function generateResponse({
 		}
 	})
 
-	// If continuing, we need to add a synthetic message with the partial content
-	// This ensures the LLM sees the partial message and continues from it
+	// If continuing, signal the PromptBuilder to use preservedContent as the
+	// prefill (-2 placeholder) rather than inserting a duplicate message.
+	// Adding a separate synthetic message causes two consecutive assistant
+	// entries in chat-completion APIs and a wrongly-closed block for text-
+	// completion formats.
 	if (isContinuing && chat) {
-		// Create a synthetic message with the existing content
-		const syntheticMessage: SelectChatMessage = {
-			...generatingMessage,
-			id: generatingMessage.id,
-			content: preservedContent,
-			isGenerating: false,
-			createdAt: generatingMessage.createdAt,
-			updatedAt: generatingMessage.updatedAt
-		}
-		// Add it to the end of chat messages
-		chat.chatMessages = [...chat.chatMessages, syntheticMessage]
+		;(chat as any)._continuationPrefill = preservedContent
 	}
 
 	// Get user and their configurations with fallbacks

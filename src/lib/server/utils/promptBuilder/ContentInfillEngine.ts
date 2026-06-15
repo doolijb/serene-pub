@@ -153,6 +153,14 @@ export class ContentInfillEngine {
 		// Set the character name for the placeholder message
 		state.chatMessages[0].name = charName
 
+		// For continuation, seed the prefill placeholder with the existing content.
+		// This replaces the old approach of adding a synthetic message to
+		// chat.chatMessages, which caused duplicate consecutive assistant entries.
+		const continuationPrefill = (this.chat as any)._continuationPrefill
+		if (continuationPrefill) {
+			state.chatMessages[0].message = continuationPrefill
+		}
+
 		// Create interpolation context
 		const interpolationContext =
 			this.interpolationEngine.createInterpolationContext({
