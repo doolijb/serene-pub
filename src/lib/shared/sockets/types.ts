@@ -1278,6 +1278,55 @@ declare global {
 			}
 		}
 
+		namespace KoboldCpp {
+			namespace SetBaseUrl {
+				interface Params {
+					baseUrl: string
+				}
+				interface Response {
+					success: string
+				}
+			}
+			namespace Version {
+				interface Params {}
+				interface Response {
+					version: string
+				}
+			}
+			namespace IsUpdateAvailable {
+				interface Params {}
+				interface Response {
+					isUpdateAvailable: boolean
+					currentVersion?: string
+					latestVersion?: string
+					releaseUrl?: string
+				}
+			}
+			namespace ListModels {
+				interface Params {}
+				interface Response {
+					currentModel: string | null
+					availableConfigs: string[]
+				}
+			}
+			namespace LoadModel {
+				interface Params {
+					filename: string
+				}
+				interface Response {
+					success: string
+				}
+			}
+			namespace ConnectModel {
+				interface Params {
+					modelName: string
+				}
+				interface Response {
+					success: string
+				}
+			}
+		}
+
 		// Chat Lorebooks namespace
 		namespace ChatLorebooks {
 			namespace Get {
@@ -1447,6 +1496,24 @@ declare global {
 				}
 			}
 			namespace UpdateOllamaManagerBaseUrl {
+				interface Params {
+					baseUrl: string
+				}
+				interface Response {
+					success: boolean
+					baseUrl: string
+				}
+			}
+			namespace UpdateKoboldCppManagerEnabled {
+				interface Params {
+					enabled: boolean
+				}
+				interface Response {
+					success: boolean
+					enabled: boolean
+				}
+			}
+			namespace UpdateKoboldCppManagerBaseUrl {
 				interface Params {
 					baseUrl: string
 				}

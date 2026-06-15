@@ -310,6 +310,8 @@ Example dialogue:
 				id: 1,
 				ollamaManagerEnabled: true,
 				ollamaManagerBaseUrl: "http://localhost:11434/",
+				koboldCppManagerEnabled: false,
+				koboldCppManagerBaseUrl: "http://localhost:5001",
 				defaultConnectionId: null, // Will be set when first connection is created
 				defaultSamplingConfigId: 1, // Default sampling config
 				defaultContextConfigId: 1, // Default context config

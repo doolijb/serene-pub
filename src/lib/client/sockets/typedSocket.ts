@@ -372,6 +372,32 @@ type SocketEventMap = {
 		response: Sockets.PromptConfigs.SetUserActive.Response
 	}
 
+	// KoboldCPP events
+	"koboldcpp:setBaseUrl": {
+		params: Sockets.KoboldCpp.SetBaseUrl.Params
+		response: Sockets.KoboldCpp.SetBaseUrl.Response
+	}
+	"koboldcpp:version": {
+		params: Sockets.KoboldCpp.Version.Params
+		response: Sockets.KoboldCpp.Version.Response
+	}
+	"koboldcpp:isUpdateAvailable": {
+		params: Sockets.KoboldCpp.IsUpdateAvailable.Params
+		response: Sockets.KoboldCpp.IsUpdateAvailable.Response
+	}
+	"koboldcpp:listModels": {
+		params: Sockets.KoboldCpp.ListModels.Params
+		response: Sockets.KoboldCpp.ListModels.Response
+	}
+	"koboldcpp:loadModel": {
+		params: Sockets.KoboldCpp.LoadModel.Params
+		response: Sockets.KoboldCpp.LoadModel.Response
+	}
+	"koboldcpp:connectModel": {
+		params: Sockets.KoboldCpp.ConnectModel.Params
+		response: Sockets.KoboldCpp.ConnectModel.Response
+	}
+
 	// Ollama events
 	"ollama:setBaseUrl": {
 		params: Sockets.Ollama.SetBaseUrl.Params
@@ -406,6 +432,10 @@ type SocketEventMap = {
 	"systemSettings:updateOllamaManagerEnabled": {
 		params: Sockets.SystemSettings.UpdateOllamaManagerEnabled.Params
 		response: Sockets.SystemSettings.UpdateOllamaManagerEnabled.Response
+	}
+	"systemSettings:updateKoboldCppManagerEnabled": {
+		params: Sockets.SystemSettings.UpdateKoboldCppManagerEnabled.Params
+		response: Sockets.SystemSettings.UpdateKoboldCppManagerEnabled.Response
 	}
 	"systemSettings:updateOllamaManagerBaseUrl": {
 		params: Sockets.SystemSettings.UpdateOllamaManagerBaseUrl.Params

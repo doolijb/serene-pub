@@ -7,6 +7,7 @@
 	import SamplingSidebar from "./sidebars/SamplingSidebar.svelte"
 	import ConnectionsSidebar from "./sidebars/ConnectionsSidebar.svelte"
 	import OllamaSidebar from "./sidebars/OllamaSidebar.svelte"
+import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 	import ContextSidebar from "./sidebars/ContextSidebar.svelte"
 	import LorebooksSidebar from "./sidebars/LorebooksSidebar.svelte"
 	import PersonasSidebar from "./sidebars/PersonasSidebar.svelte"
@@ -65,6 +66,7 @@
 			"sampling",
 			"connections",
 			"ollama",
+			"koboldcpp",
 			"contexts",
 			"prompts",
 			"users",
@@ -118,6 +120,14 @@
 			panelsCtx.leftNav.ollama = {
 				icon: OllamaIcon,
 				title: "Ollama Manager"
+			}
+		}
+
+		// Add KoboldCPP Manager if enabled
+		if (systemSettingsCtx?.settings?.koboldCppManagerEnabled && isAdmin) {
+			panelsCtx.leftNav.koboldcpp = {
+				icon: Icons.Cpu,
+				title: "KoboldCPP Manager"
 			}
 		}
 
@@ -318,13 +328,7 @@
 	function initializeSocketConnection() {
 		socket.on("systemSettings:get", (message) => {
 			console.log("Received systemSettings:get", message)
-			systemSettingsCtx.settings = {
-				ollamaManagerEnabled:
-					message.systemSettings.ollamaManagerEnabled,
-				ollamaManagerBaseUrl:
-					message.systemSettings.ollamaManagerBaseUrl,
-				isAccountsEnabled: message.systemSettings.isAccountsEnabled
-			}
+			systemSettingsCtx.settings = { ...message.systemSettings }
 		})
 
 		socket.on("users:current", (message) => {
@@ -520,6 +524,10 @@
 								<OllamaSidebar
 									bind:onclose={panelsCtx.onLeftPanelClose}
 								/>
+							{:else if panelsCtx.leftPanel === "koboldcpp"}
+								<KoboldCppSidebar
+									bind:onclose={panelsCtx.onLeftPanelClose}
+								/>
 							{:else if panelsCtx.leftPanel === "contexts"}
 								<ContextSidebar
 									bind:onclose={panelsCtx.onLeftPanelClose}
@@ -658,6 +666,10 @@
 						/>
 					{:else if panelsCtx.mobilePanel === "ollama"}
 						<OllamaSidebar
+							bind:onclose={panelsCtx.onMobilePanelClose}
+						/>
+					{:else if panelsCtx.mobilePanel === "koboldcpp"}
+						<KoboldCppSidebar
 							bind:onclose={panelsCtx.onMobilePanelClose}
 						/>
 					{:else if panelsCtx.mobilePanel === "contexts"}

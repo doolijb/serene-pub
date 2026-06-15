@@ -173,6 +173,33 @@ export const systemSettingsUpdateEasyPersonaCreation: Handler<Sockets.SystemSett
 	}
 }
 
+export const systemSettingsUpdateKoboldCppManagerEnabled: Handler<
+	Sockets.SystemSettings.UpdateKoboldCppManagerEnabled.Params,
+	Sockets.SystemSettings.UpdateKoboldCppManagerEnabled.Response
+> = {
+	event: "systemSettings:updateKoboldCppManagerEnabled",
+	handler: async (socket, params, emitToUser) => {
+		try {
+			await db
+				.update(schema.systemSettings)
+				.set({ koboldCppManagerEnabled: params.enabled })
+				.where(eq(schema.systemSettings.id, 1))
+
+			const res: Sockets.SystemSettings.UpdateKoboldCppManagerEnabled.Response =
+				{ success: true, enabled: params.enabled }
+			emitToUser("systemSettings:updateKoboldCppManagerEnabled", res)
+			await systemSettingsGet.handler(socket, {}, emitToUser)
+			return res
+		} catch (error: any) {
+			console.error("Update KoboldCpp Manager enabled error:", error)
+			emitToUser("systemSettings:updateKoboldCppManagerEnabled:error", {
+				error: "Failed to update KoboldCpp Manager setting"
+			})
+			throw error
+		}
+	}
+}
+
 // Registration function for all system settings handlers
 export function registerSystemSettingsHandlers(
 	socket: any,
@@ -181,6 +208,7 @@ export function registerSystemSettingsHandlers(
 ) {
 	register(socket, systemSettingsGet, emitToUser)
 	register(socket, systemSettingsUpdateOllamaManagerEnabled, emitToUser)
+	register(socket, systemSettingsUpdateKoboldCppManagerEnabled, emitToUser)
 	register(socket, systemSettingsUpdateShowAllCharacterFields, emitToUser)
 	register(socket, systemSettingsUpdateEasyCharacterCreation, emitToUser)
 	register(socket, systemSettingsUpdateEasyPersonaCreation, emitToUser)

@@ -998,6 +998,12 @@ export const systemSettings = pgTable("system_settings", {
 	ollamaManagerBaseUrl: text("ollama_base_url")
 		.notNull()
 		.default("http://localhost:11434/"),
+	koboldCppManagerEnabled: boolean("koboldcpp_manager_enabled")
+		.notNull()
+		.default(false),
+	koboldCppManagerBaseUrl: text("koboldcpp_base_url")
+		.notNull()
+		.default("http://localhost:5001"),
 	isAccountsEnabled: boolean("is_accounts_enabled").notNull().default(false)
 })
 

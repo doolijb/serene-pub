@@ -1,0 +1,2 @@
+ALTER TABLE "system_settings" ADD COLUMN "koboldcpp_manager_enabled" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "system_settings" ADD COLUMN "koboldcpp_base_url" text DEFAULT 'http://localhost:5001' NOT NULL;

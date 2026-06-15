@@ -31,6 +31,7 @@ import { registerHistoryEntryHandlers } from "./historyEntries"
 import { registerTagHandlers } from "./tags"
 import { registerSystemSettingsHandlers } from "./systemSettings"
 import { registerOllamaHandlers } from "./ollama"
+import { registerKoboldCppHandlers } from "./koboldcpp"
 import { registerSummarizeHandlers } from "./summarize"
 
 const userId = 1 // Replace with actual user id
@@ -54,6 +55,7 @@ export function connectSockets(io: {
 		registerSamplingConfigHandlers(socket, emitToUser, register)
 		registerConnectionHandlers(socket, emitToUser, register)
 		registerOllamaHandlers(socket, emitToUser, register)
+		registerKoboldCppHandlers(socket, emitToUser, register)
 		registerSystemSettingsHandlers(socket, emitToUser, register)
 		registerCharacterHandlers(socket, emitToUser, register)
 		registerPersonaHandlers(socket, emitToUser, register)

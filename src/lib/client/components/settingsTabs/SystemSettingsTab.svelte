@@ -43,6 +43,11 @@
 	let ollamaBaseUrlError = $state("")
 	let isSavingBaseUrl = $state(false)
 
+	// State for koboldcpp manager
+	let koboldCppBaseUrlField = $state("")
+	let koboldCppBaseUrlError = $state("")
+	let isSavingKoboldCppBaseUrl = $state(false)
+
 	// State for enable accounts confirmation modal
 	let showEnableAccountsModal = $state(false)
 	let hasPassphrase = $state(false)
@@ -51,12 +56,56 @@
 	let passphraseError = $state("")
 	let isSettingPassphrase = $state(false)
 
-	// Initialize base URL field when system settings are available
+	// Initialize base URL fields when system settings are available
 	$effect(() => {
 		if (systemSettingsCtx.settings?.ollamaManagerBaseUrl) {
 			ollamaBaseUrlField = systemSettingsCtx.settings.ollamaManagerBaseUrl
 		}
+		if (systemSettingsCtx.settings?.koboldCppManagerBaseUrl) {
+			koboldCppBaseUrlField = systemSettingsCtx.settings.koboldCppManagerBaseUrl
+		}
 	})
+
+	async function onKoboldCppManagerEnabledClick(event: { checked: boolean }) {
+		if (!userCtx.user?.isAdmin) {
+			toaster.error({
+				title: "Access denied",
+				description: "Admin privileges required"
+			})
+			return
+		}
+		socket?.emit("systemSettings:updateKoboldCppManagerEnabled", {
+			enabled: event.checked
+		})
+	}
+
+	async function handleSaveKoboldCppBaseUrl() {
+		if (!userCtx.user?.isAdmin) {
+			toaster.error({
+				title: "Access denied",
+				description: "Admin privileges required"
+			})
+			return
+		}
+
+		const trimmedUrl = koboldCppBaseUrlField.trim()
+		const result = urlSchema.safeParse(trimmedUrl)
+		if (!result.success) {
+			koboldCppBaseUrlError =
+				result.error.errors[0]?.message || "Invalid URL format"
+			return
+		}
+
+		koboldCppBaseUrlError = ""
+		isSavingKoboldCppBaseUrl = true
+
+		try {
+			socket?.emit("koboldcpp:setBaseUrl", { baseUrl: trimmedUrl })
+		} catch (error) {
+			koboldCppBaseUrlError = "Failed to save URL"
+			isSavingKoboldCppBaseUrl = false
+		}
+	}
 
 	async function onOllamaManagerEnabledClick(event: { checked: boolean }) {
 		if (!userCtx.user?.isAdmin) {
@@ -214,6 +263,28 @@
 	$effect(() => {
 		if (!socket) return
 
+		const handleKoboldCppManagerEnabled = (message: any) => {
+			if (message.success) {
+				toaster.success({
+					title: `KoboldCPP Manager ${message.enabled ? "enabled" : "disabled"} successfully`
+				})
+			} else {
+				toaster.error({
+					title: "Failed to update KoboldCPP Manager setting"
+				})
+			}
+		}
+
+		const handleKoboldCppSetBaseUrl = (message: any) => {
+			isSavingKoboldCppBaseUrl = false
+			if (message.success) {
+				toaster.success({ title: "KoboldCPP URL updated successfully" })
+			} else {
+				koboldCppBaseUrlError = "Failed to update URL"
+				toaster.error({ title: "Failed to update KoboldCPP URL" })
+			}
+		}
+
 		const handleOllamaManagerEnabled = (message: any) => {
 			if (message.success) {
 				toaster.success({
@@ -301,6 +372,11 @@
 
 		// Register event listeners
 		socket.on(
+			"systemSettings:updateKoboldCppManagerEnabled",
+			handleKoboldCppManagerEnabled
+		)
+		socket.on("koboldcpp:setBaseUrl", handleKoboldCppSetBaseUrl)
+		socket.on(
 			"systemSettings:updateOllamaManagerEnabled",
 			handleOllamaManagerEnabled
 		)
@@ -315,6 +391,11 @@
 
 		// Cleanup function to remove listeners
 		return () => {
+			socket.off(
+				"systemSettings:updateKoboldCppManagerEnabled",
+				handleKoboldCppManagerEnabled
+			)
+			socket.off("koboldcpp:setBaseUrl", handleKoboldCppSetBaseUrl)
 			socket.off(
 				"systemSettings:updateOllamaManagerEnabled",
 				handleOllamaManagerEnabled
@@ -382,6 +463,63 @@
 						disabled={isSavingBaseUrl}
 					>
 						{#if isSavingBaseUrl}
+							<Icons.Loader2 class="h-4 w-4 animate-spin" />
+							Saving...
+						{:else}
+							<Icons.Save class="h-4 w-4" />
+							Save URL
+						{/if}
+					</button>
+				</div>
+			{/if}
+		</div>
+
+		<!-- KoboldCPP Manager Settings -->
+		<div class="space-y-4">
+			<h3 class="text-lg font-semibold">KoboldCPP Manager</h3>
+
+			<div class="flex items-center gap-2">
+				<Switch
+					name="koboldcpp-manager"
+					checked={systemSettingsCtx.settings?.koboldCppManagerEnabled}
+					onCheckedChange={onKoboldCppManagerEnabledClick}
+				></Switch>
+				<label for="koboldcpp-manager" class="font-semibold">
+					Enable KoboldCPP Manager
+				</label>
+			</div>
+
+			{#if systemSettingsCtx.settings?.koboldCppManagerEnabled}
+				<div class="ml-6 space-y-3">
+					<div>
+						<label
+							class="text-foreground mb-1 block text-sm font-medium"
+							for="koboldCppBaseUrl"
+						>
+							KoboldCPP Server URL
+						</label>
+						<input
+							id="koboldCppBaseUrl"
+							type="text"
+							bind:value={koboldCppBaseUrlField}
+							placeholder="http://localhost:5001"
+							class="input w-full {koboldCppBaseUrlError
+								? 'border-error-500'
+								: ''}"
+						/>
+						{#if koboldCppBaseUrlError}
+							<p class="text-error-500 mt-1 text-sm">
+								{koboldCppBaseUrlError}
+							</p>
+						{/if}
+					</div>
+
+					<button
+						class="btn preset-filled-primary-500"
+						onclick={handleSaveKoboldCppBaseUrl}
+						disabled={isSavingKoboldCppBaseUrl}
+					>
+						{#if isSavingKoboldCppBaseUrl}
 							<Icons.Loader2 class="h-4 w-4 animate-spin" />
 							Saving...
 						{:else}
