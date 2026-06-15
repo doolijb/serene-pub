@@ -1,6 +1,7 @@
 export class ChatTypes {
 	static readonly ROLEPLAY = "roleplay"
 	static readonly ASSISTANT = "assistant"
+	static readonly SUMMARIZE = "summarize"
 
 	static readonly ALL = [ChatTypes.ROLEPLAY, ChatTypes.ASSISTANT] as const
 

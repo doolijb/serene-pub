@@ -26,9 +26,12 @@ import { registerChatHandlers } from "./chats"
 import { registerPromptConfigHandlers } from "./promptConfigs"
 import { registerUserHandlers } from "./users"
 import { registerLorebookHandlers } from "./lorebooks"
+import { registerWorldLoreEntryHandlers } from "./worldLoreEntries"
+import { registerHistoryEntryHandlers } from "./historyEntries"
 import { registerTagHandlers } from "./tags"
 import { registerSystemSettingsHandlers } from "./systemSettings"
 import { registerOllamaHandlers } from "./ollama"
+import { registerSummarizeHandlers } from "./summarize"
 
 const userId = 1 // Replace with actual user id
 
@@ -58,7 +61,10 @@ export function connectSockets(io: {
 		registerPromptConfigHandlers(socket, emitToUser, register)
 		registerChatHandlers(socket, emitToUser, register)
 		registerLorebookHandlers(socket, emitToUser, register)
+		registerWorldLoreEntryHandlers(socket, emitToUser, register)
+		registerHistoryEntryHandlers(socket, emitToUser, register)
 		registerTagHandlers(socket, emitToUser, register)
+		registerSummarizeHandlers(socket, emitToUser, register)
 		console.log(`Socket connected: ${socket.id} for user ${userId}`)
 	})
 }

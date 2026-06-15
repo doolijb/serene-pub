@@ -68,3 +68,14 @@ DRAFT_MANUAL_EDITING_IMPLEMENTATION.md
 TOOL_CALLING_IMPROVEMENTS.md
 
 VERCEL_AI_SDK_MIGRATION.md
+
+# Android
+/android/.gradle
+/android/.idea
+/android/local.properties
+/android/build
+/android/app/build
+/android/app/src/main/assets/serene-pub
+*.apk
+*.aab
+keystore.jks

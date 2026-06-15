@@ -35,7 +35,12 @@
 		"db:studio": "node scripts/check-db-lock.js drizzle-kit studio --config ./src/lib/server/db/drizzle.config.ts",
 		"bundle": "node scripts/bundle-dist.js",
 		"dist": "npm run build && npm run bundle",
-		"create-executables": "node scripts/create-executables.js"
+		"create-executables": "node scripts/create-executables.js",
+		"android:setup": "bash scripts/setup-gradle-wrapper.sh",
+		"android:prepare": "node scripts/build-android.js",
+		"android:build": "cd android && ./gradlew assembleRelease",
+		"android:build:debug": "cd android && ./gradlew assembleDebug",
+		"android:full": "npm run build && npm run android:prepare && npm run android:build"
 	},
 	"devDependencies": {
 		"@enviro/metadata": "^1.5.1",

@@ -5,6 +5,7 @@
 	import * as skio from "sveltekit-io"
 	import * as Icons from "@lucide/svelte"
 	import MessageComposer from "$lib/client/components/chatMessages/MessageComposer.svelte"
+	import MessageControls from "$lib/client/components/chatMessages/MessageControls.svelte"
 	import ChatContainer from "$lib/client/components/chatMessages/ChatContainer.svelte"
 	import ChatMessage from "$lib/client/components/chatMessages/ChatMessage.svelte"
 	import NextCharacterBlock from "$lib/client/components/chatMessages/NextCharacterBlock.svelte"
@@ -15,6 +16,7 @@
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import PersonaSelectModal from "$lib/client/components/modals/PersonaSelectModal.svelte"
 	import BranchChatModal from "$lib/client/components/modals/BranchChatModal.svelte"
+	import SummarizeLoreModal from "$lib/client/components/modals/SummarizeLoreModal.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	let chat: Sockets.Chats.Get.Response["chat"] | undefined = $state()
@@ -47,6 +49,12 @@
 	let showAddPersonaModal = $state(false)
 	let showBranchChatModal = $state(false)
 	let branchFromMessage: SelectChatMessage | undefined = $state()
+
+	// Summarization mode
+	let isSummarizationMode = $state(false)
+	let selectedMessageIds = $state(new Set<number>())
+	let showSummarizeModal = $state(false)
+	let summarizeLoreType = $state<"world" | "history">("world")
 	let chatResponseOrder: Sockets.Chats.GetResponseOrder.Response | undefined =
 		$state()
 	let availablePersonas: Sockets.Personas.List.Response["personaList"] =
@@ -564,6 +572,58 @@
 		}
 		socket.emit("chatMessages:cancel", { id: msg.id, chatId })
 	}
+	// ── Summarization mode ────────────────────────────────────────
+	function enterSummarizationMode(msg: SelectChatMessage) {
+		openMobileMsgControls = undefined
+		isSummarizationMode = true
+		selectedMessageIds = new Set([msg.id])
+	}
+
+	function exitSummarizationMode() {
+		isSummarizationMode = false
+		selectedMessageIds = new Set()
+	}
+
+	function toggleSummarizationMessage(id: number) {
+		const next = new Set(selectedMessageIds)
+		next.has(id) ? next.delete(id) : next.add(id)
+		selectedMessageIds = next
+	}
+
+	function selectAllAbove(msgIndex: number) {
+		const msgs = chat!.chatMessages
+		const next = new Set(selectedMessageIds)
+		next.add(msgs[msgIndex].id)
+		for (let i = msgIndex - 1; i >= 0; i--) {
+			if (next.has(msgs[i].id)) break
+			next.add(msgs[i].id)
+		}
+		selectedMessageIds = next
+	}
+
+	function selectAllBelow(msgIndex: number) {
+		const msgs = chat!.chatMessages
+		const next = new Set(selectedMessageIds)
+		next.add(msgs[msgIndex].id)
+		for (let i = msgIndex + 1; i < msgs.length; i++) {
+			if (next.has(msgs[i].id)) break
+			next.add(msgs[i].id)
+		}
+		selectedMessageIds = next
+	}
+
+	function openSummarizeModal(loreType: "world" | "history") {
+		summarizeLoreType = loreType
+		showSummarizeModal = true
+	}
+
+	function handleLorebookSet(newLorebookId: number) {
+		if (chat) {
+			chat = { ...chat, lorebookId: newLorebookId } as typeof chat
+		}
+	}
+	// ─────────────────────────────────────────────────────────────
+
 	function handleBranchMessage(e: Event, msg: SelectChatMessage) {
 		e.stopPropagation()
 		openMobileMsgControls = undefined
@@ -999,6 +1059,9 @@
 				onSaveEditMessage={handleSaveEditMessage}
 				bind:openMobileMsgControls
 				{lastPersonaMessage}
+				isSummarizationMode={isSummarizationMode}
+				isSelected={selectedMessageIds.has(props.msg.id)}
+				onStartSummarization={!isSummarizationMode ? enterSummarizationMode : undefined}
 			>
 				{#snippet GeneratingAnimationComponent()}
 					{@const character = props.getMessageCharacter(props.msg)}
@@ -1006,40 +1069,146 @@
 						text={`${character?.nickname || character?.name || "User"} is typing`}
 					/>
 				{/snippet}
+				{#snippet messageControls(msg)}
+					{#if isSummarizationMode}
+						<div class="flex gap-2" role="group" aria-label="Selection controls">
+							<button
+								class="btn btn-sm {selectedMessageIds.has(msg.id)
+									? 'preset-filled-secondary-500'
+									: 'preset-tonal-surface'}"
+								title={selectedMessageIds.has(msg.id) ? 'Deselect message' : 'Select message'}
+								onclick={() => toggleSummarizationMessage(msg.id)}
+							>
+								{#if selectedMessageIds.has(msg.id)}
+									<Icons.CheckSquare size={16} />
+								{:else}
+									<Icons.Square size={16} />
+								{/if}
+								<span class="lg:hidden">
+									{selectedMessageIds.has(msg.id) ? 'Deselect' : 'Select'}
+								</span>
+							</button>
+							<button
+								class="btn btn-sm preset-tonal-surface"
+								title="Select all above up to nearest selected"
+								onclick={() => selectAllAbove(props.index)}
+							>
+								<Icons.ChevronsUp size={16} />
+								<span class="lg:hidden">Select All Above</span>
+							</button>
+							<button
+								class="btn btn-sm preset-tonal-surface"
+								title="Select all below up to nearest selected"
+								onclick={() => selectAllBelow(props.index)}
+							>
+								<Icons.ChevronsDown size={16} />
+								<span class="lg:hidden">Select All Below</span>
+							</button>
+						</div>
+					{:else}
+						<MessageControls
+							{msg}
+							isLastMessage={props.isLastMessage}
+							canRegenerateLastMessage={props.canRegenerateLastMessage}
+							editChatMessage={props.editChatMessage}
+							hasGeneratingMessage={props.hasGeneratingMessage}
+							onEditMessage={props.onEditMessage}
+							onHideMessage={props.onHideMessage}
+							onDeleteMessage={props.onDeleteMessage}
+							onRegenerateMessage={props.onRegenerateMessage}
+							onContinueMessage={props.onContinueMessage}
+							onAbortMessage={props.onAbortMessage}
+							onBranchMessage={props.onBranchMessage}
+							onStartSummarization={enterSummarizationMode}
+						/>
+					{/if}
+				{/snippet}
 			</ChatMessage>
 		{/snippet}
 		{#snippet ComposerComponent()}
-			<ChatComposer
-				bind:newMessage
-				onSend={handleSend}
-				{draftCompiledPrompt}
-				{currentUserPersona}
-				{chat}
-				{lastMessage}
-				{editChatMessage}
-				{isGuest}
-				{showAddPersonaCTA}
-				onAddPersonaClick={() => {
-					showAddPersonaModal = true
-				}}
-				onAbortLastMessage={handleAbortLastMessage}
-				extraTabs={isGuest
-					? []
-					: [
-							{
-								value: "extraControls",
-								title: "Extra Controls",
-								control: extraControlsButton,
-								content: extraControlsContent
-							},
-							{
-								value: "statistics",
-								title: "Statistics",
-								control: statisticsButton,
-								content: statisticsContent
-							}
-						]}
-			/>
+			{#if isSummarizationMode}
+				<div class="preset-tonal-secondary flex flex-wrap items-center gap-2 p-3 lg:rounded-t-lg">
+					<span class="text-sm font-semibold">
+						{selectedMessageIds.size}
+						{selectedMessageIds.size === 1 ? 'message' : 'messages'} selected
+					</span>
+					<div class="flex gap-2">
+						<button
+							class="btn btn-sm preset-tonal-surface"
+							onclick={() => {
+								selectedMessageIds = new Set(chat!.chatMessages.map((m) => m.id))
+							}}
+						>
+							<Icons.CheckSquare size={16} />
+							Select All
+						</button>
+						<button
+							class="btn btn-sm preset-tonal-surface"
+							onclick={() => (selectedMessageIds = new Set())}
+						>
+							<Icons.Square size={16} />
+							Select None
+						</button>
+					</div>
+					<div class="ml-auto flex flex-wrap gap-2">
+						<button
+							class="btn btn-sm preset-filled-surface-500"
+							onclick={exitSummarizationMode}
+						>
+							<Icons.X size={16} />
+							Cancel
+						</button>
+						<button
+							class="btn btn-sm preset-filled-primary-500"
+							disabled={selectedMessageIds.size === 0}
+							onclick={() => openSummarizeModal('world')}
+						>
+							<Icons.Globe size={16} />
+							World Lore
+						</button>
+						<button
+							class="btn btn-sm preset-filled-secondary-500"
+							disabled={selectedMessageIds.size === 0}
+							onclick={() => openSummarizeModal('history')}
+						>
+							<Icons.Scroll size={16} />
+							History Entry
+						</button>
+					</div>
+				</div>
+			{:else}
+				<ChatComposer
+					bind:newMessage
+					onSend={handleSend}
+					{draftCompiledPrompt}
+					{currentUserPersona}
+					{chat}
+					{lastMessage}
+					{editChatMessage}
+					{isGuest}
+					{showAddPersonaCTA}
+					onAddPersonaClick={() => {
+						showAddPersonaModal = true
+					}}
+					onAbortLastMessage={handleAbortLastMessage}
+					extraTabs={isGuest
+						? []
+						: [
+								{
+									value: "extraControls",
+									title: "Extra Controls",
+									control: extraControlsButton,
+									content: extraControlsContent
+								},
+								{
+									value: "statistics",
+									title: "Statistics",
+									control: statisticsButton,
+									content: statisticsContent
+								}
+							]}
+				/>
+			{/if}
 		{/snippet}
 		{#snippet NextCharacterComponent()}
 			{#if shouldShowNextCharacterBlock}
@@ -1053,6 +1222,17 @@
 		{/snippet}
 	</ChatContainer>
 </div>
+
+<SummarizeLoreModal
+	bind:open={showSummarizeModal}
+	onOpenChange={(e) => (showSummarizeModal = e.open)}
+	{chatId}
+	lorebookId={chat?.lorebookId ?? null}
+	selectedMessageIds={[...selectedMessageIds]}
+	initialLoreType={summarizeLoreType}
+	onSaved={exitSummarizationMode}
+	onLorebookSet={handleLorebookSet}
+/>
 
 <Modal
 	open={showDeleteMessageModal}

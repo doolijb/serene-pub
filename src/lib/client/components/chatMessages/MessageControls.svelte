@@ -15,6 +15,7 @@
 		onAbortMessage: (e: Event, msg: SelectChatMessage) => void
 		onBranchMessage?: (e: Event, msg: SelectChatMessage) => void
 		onContinueMessage?: (e: Event, msg: SelectChatMessage) => void
+		onStartSummarization?: (msg: SelectChatMessage) => void
 	}
 
 	let {
@@ -29,7 +30,8 @@
 		onRegenerateMessage,
 		onAbortMessage,
 		onBranchMessage,
-		onContinueMessage
+		onContinueMessage,
+		onStartSummarization
 	}: Props = $props()
 </script>
 
@@ -114,6 +116,18 @@
 		>
 			<Icons.Square size={16} />
 			<span class="lg:hidden">Stop Generation</span>
+		</button>
+	{/if}
+	{#if onStartSummarization && !msg.isGenerating}
+		<button
+			class="btn btn-sm msg-cntrl-icon hover:preset-filled-warning-500"
+			title="Select for Summarization"
+			aria-label="Select this message for summarization"
+			disabled={!!editChatMessage || hasGeneratingMessage}
+			onclick={() => onStartSummarization!(msg)}
+		>
+			<Icons.BookMarked size={16} aria-hidden="true" />
+			<span class="lg:hidden">Select for Summarization</span>
 		</button>
 	{/if}
 </div>

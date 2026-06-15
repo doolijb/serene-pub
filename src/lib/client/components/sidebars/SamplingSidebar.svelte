@@ -14,14 +14,22 @@
 
 	let { onclose = $bindable() }: Props = $props()
 
-	let userCtx: { user: SelectUser } = getContext("userCtx")
-	let userSettingsCtx: UserSettingsCtx = getContext("userSettingsCtx")
+	let userCtx: UserCtx = getContext("userCtx")
 
 	const socket = useTypedSocket()
 
 	let activeSamplingConfigId = $derived(
-		userSettingsCtx.settings?.activeSamplingConfigId ?? null
+		userCtx.user?.activeSamplingConfig?.id ?? null
 	)
+
+	// Sync local editable copy whenever the active config changes in the global context
+	$effect(() => {
+		const config = userCtx.user?.activeSamplingConfig
+		if (config) {
+			sampling = { ...config }
+			originalSamplingConfig = { ...config }
+		}
+	})
 
 	let sampling: SelectSamplingConfig | undefined = $state()
 	let originalSamplingConfig: SelectSamplingConfig | undefined = $state()
@@ -158,7 +166,7 @@
 		delete newSamplingConfig.id
 		delete newSamplingConfig.isImmutable
 		newSamplingConfig.name = name.trim()
-		socket.emit("samplingConfigs:create", { sampling: newSamplingConfig })
+		socket.emit("samplingConfigs:create", { sampling: { ...newSamplingConfig, name: name.trim() } })
 		showNewNameModal = false
 	}
 	function handleNewNameCancel() {
@@ -220,7 +228,7 @@
 
 	function confirmDelete() {
 		socket.emit("samplingConfigs:delete", {
-			id: activeSamplingConfigId
+			id: activeSamplingConfigId!
 		})
 		showDeleteModal = false
 	}
@@ -264,50 +272,35 @@
 
 	onMount(() => {
 		onclose = handleOnClose
-		socket.on("samplingConfigs:get", (message: Sockets.SamplingConfigs.Get.Response) => {
-			sampling = { ...message.sampling }
-			originalSamplingConfig = { ...message.sampling }
-		})
-
 		socket.on(
 			"samplingConfigs:list",
 			(message: Sockets.SamplingConfigs.List.Response) => {
 				samplingConfigsList = message.samplingConfigsList
-				if (
-					!activeSamplingConfigId &&
-					samplingConfigsList.length > 0
-				) {
-					socket.emit("samplingConfigs:setUserActive", {
-						id: samplingConfigsList[0].id
-					})
-				}
 			}
 		)
 		socket.on(
 			"samplingConfigs:delete",
-			(message: Sockets.SamplingConfigs.Delete.Response) => {
+			(_message: Sockets.SamplingConfigs.Delete.Response) => {
 				toaster.success({ title: "Sampling Config Deleted" })
 			}
 		)
 		socket.on(
 			"samplingConfigs:update",
-			(message: Sockets.SamplingConfigs.Update.Response) => {
+			(_message: Sockets.SamplingConfigs.Update.Response) => {
 				toaster.success({ title: "Sampling Config Updated" })
 			}
 		)
 		socket.on(
 			"samplingConfigs:create",
-			(message: Sockets.SamplingConfigs.Create.Response) => {
+			(_message: Sockets.SamplingConfigs.Create.Response) => {
 				toaster.success({ title: "Sampling Config Created" })
 			}
 		)
 
-		socket.emit("samplingConfigs:get", { id: activeSamplingConfigId })
 		socket.emit("samplingConfigs:list", {})
 	})
 
 	onDestroy(() => {
-		socket.off("samplingConfigs:get")
 		socket.off("samplingConfigs:list")
 		socket.off("samplingConfigs:delete")
 		socket.off("samplingConfigs:update")
@@ -390,16 +383,15 @@
 			<select
 				class="select select-sm bg-background border-muted rounded border"
 				onchange={handleSelectChange}
-				value={activeSamplingConfigId}
 				disabled={unsavedChanges}
 			>
 				{#each samplingConfigsList.filter((w) => w.isImmutable) as w}
-					<option value={w.id}>
+					<option value={w.id} selected={w.id === activeSamplingConfigId}>
 						{w.name}{#if w.isImmutable}*{/if}
 					</option>
 				{/each}
 				{#each samplingConfigsList.filter((w) => !w.isImmutable) as w}
-					<option value={w.id}>
+					<option value={w.id} selected={w.id === activeSamplingConfigId}>
 						{w.name}{#if w.isImmutable}*{/if}
 					</option>
 				{/each}

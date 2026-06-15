@@ -49,6 +49,10 @@
 		isGuest: boolean
 		// Additional needed props
 		lastPersonaMessage: SelectChatMessage | undefined
+		// Summarization mode
+		isSummarizationMode?: boolean
+		isSelected?: boolean
+		onStartSummarization?: (msg: SelectChatMessage) => void
 		// Snippets
 		GeneratingAnimationComponent?: Snippet<[]>
 		messageControls?: Snippet<[SelectChatMessage]>
@@ -84,6 +88,9 @@
 		hasGeneratingMessage,
 		isGuest,
 		lastPersonaMessage,
+		isSummarizationMode = false,
+		isSelected = false,
+		onStartSummarization,
 		GeneratingAnimationComponent,
 		messageControls,
 		generatingAnimation
@@ -111,8 +118,12 @@
 
 <li
 	id="message-{msg.id}"
-	class="preset-filled-primary-50-950 flex flex-col rounded-lg p-2"
-	class:opacity-50={msg.isHidden && editChatMessage?.id !== msg.id}
+	class="{isSummarizationMode
+		? isSelected
+			? 'preset-filled-secondary-100-900'
+			: 'preset-tonal-surface opacity-60'
+		: 'preset-filled-primary-50-950'} flex flex-col rounded-lg p-2 transition-colors duration-150"
+	class:opacity-50={!isSummarizationMode && msg.isHidden && editChatMessage?.id !== msg.id}
 	tabindex="-1"
 	role="article"
 	aria-label="Message {index + 1} of {chat.chatMessages.length} from {(
@@ -196,6 +207,7 @@
 							{onContinueMessage}
 							{onAbortMessage}
 							{onBranchMessage}
+							{onStartSummarization}
 						/>
 					{/if}
 				</div>
@@ -242,6 +254,7 @@
 										{onContinueMessage}
 										{onAbortMessage}
 										{onBranchMessage}
+										{onStartSummarization}
 									/>
 								{/if}
 							</article>

@@ -1,12 +1,16 @@
 {
-	"permissions": {
-		"allow": [
-			"Bash(npm run lint)",
-			"Bash(npm run format:*)",
-			"Bash(npm run check:*)",
-			"Bash(mkdir:*)",
-			"Bash(mv:*)"
-		],
-		"deny": []
-	}
+  "permissions": {
+    "allow": [
+      "Bash(npm run lint)",
+      "Bash(npm run format:*)",
+      "Bash(npm run check:*)",
+      "Bash(mkdir:*)",
+      "Bash(mv:*)",
+      "Bash(grep -n \"async generate\" /home/jody/github/serene-pub/src/lib/server/connectionAdapters/*.ts)",
+      "Bash(grep -n \"snippet MessageComponent\\\\|snippet ComposerComponent\\\\|ChatContainer\\\\|ChatComposer\\\\|PersonaSelectModal\\\\|BranchChatModal\\\\|showDeleteMessage\\\\|ChatMessage \" /home/jody/github/serene-pub/src/routes/chats/[id]/+page.svelte)",
+      "Bash(grep -n \"SummarizeLoreModal\\\\|showSummarizeModal\\\\|isSummarizationMode\" /home/jody/github/serene-pub/src/routes/chats/[id]/+page.svelte)",
+      "Bash(grep -v \"^$\")"
+    ],
+    "deny": []
+  }
 }

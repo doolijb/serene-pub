@@ -524,6 +524,43 @@ declare global {
 					title: string
 				}
 			}
+			namespace SetLorebook {
+				interface Params {
+					chatId: number
+					lorebookId: number | null
+				}
+				interface Response {
+					chat: SelectChat
+				}
+			}
+			namespace Summarize {
+				interface Params {
+					chatId: number
+					messageIds: number[] | 'all'
+					loreType: 'world' | 'history'
+					topic?: string
+				}
+				interface Progress {
+					phase: 'drafting' | 'synthesizing'
+					batch: number
+					totalBatches: number
+					partial: {
+						content?: string
+						raw?: string
+					}
+				}
+				interface Response {
+					content: string
+					name?: string
+					raw: string
+					lorebookId: number
+					batchCount: number
+				}
+				interface ErrorResponse {
+					reason: 'no_lorebook' | 'no_connection' | 'generation_failed'
+					error: string
+				}
+			}
 		}
 
 		// Chat Messages namespace

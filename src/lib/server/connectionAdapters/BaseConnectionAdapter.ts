@@ -54,6 +54,7 @@ export abstract class BaseConnectionAdapter {
 	currentCharacterId: number | null
 	isAborting = false
 	isAssistantMode = false
+	isSummarizerMode = false
 	generatingMessageMetadata: any = {}
 	promptBuilder: PromptBuilder
 
@@ -78,6 +79,7 @@ export abstract class BaseConnectionAdapter {
 		this.currentCharacterId = currentCharacterId
 		this.isAssistantMode =
 			isAssistantMode || chat.chatType === ChatTypes.ASSISTANT
+		this.isSummarizerMode = chat.chatType === ChatTypes.SUMMARIZE
 		this.generatingMessageMetadata = generatingMessageMetadata
 		this.promptBuilder = new PromptBuilder({
 			connection: this.connection,
@@ -95,6 +97,10 @@ export abstract class BaseConnectionAdapter {
 
 	async compilePrompt(args: {}): Promise<PromptBuilderCompiledPrompt> {
 		this.promptBuilder.tokenLimit = await this.getContextTokenLimit()
+
+		if (this.isSummarizerMode) {
+			return await this.compileSummarizerPrompt()
+		}
 
 		// Use assistant prompt compilation for assistant mode
 		if (this.isAssistantMode) {
@@ -245,6 +251,64 @@ export abstract class BaseConnectionAdapter {
 		)
 		console.log("=".repeat(80))
 		return "function-calling"
+	}
+
+	/**
+	 * Compile summarizer prompt — passes promptConfig.systemPrompt directly to the LLM
+	 * with no roleplay or assistant framing. Used for lore summarization.
+	 */
+	protected async compileSummarizerPrompt(): Promise<PromptBuilderCompiledPrompt> {
+		const messages: any[] = [
+			{
+				role: "system",
+				content: this.promptConfig.systemPrompt
+			}
+		]
+
+		for (const msg of this.chat.chatMessages) {
+			if (msg.isHidden) continue
+			messages.push({
+				role: msg.role === "assistant" ? "assistant" : "user",
+				content: msg.content
+			})
+		}
+
+		const totalTokens = await this.promptBuilder.tokenCounter.countTokens(
+			JSON.stringify(messages)
+		)
+
+		return {
+			prompt: undefined,
+			messages,
+			meta: {
+				promptFormat: "chat",
+				templateName: "summarizer",
+				timestamp: new Date().toISOString(),
+				truncationReason: null,
+				currentTurnCharacterId: null,
+				tokenCounts: {
+					total: totalTokens,
+					limit: await this.getContextTokenLimit()
+				},
+				chatMessages: {
+					included: this.chat.chatMessages.filter(
+						(m: SelectChatMessage) => !m.isHidden
+					).length,
+					total: this.chat.chatMessages.length,
+					includedIds: this.chat.chatMessages
+						.filter((m: SelectChatMessage) => !m.isHidden)
+						.map((m: SelectChatMessage) => m.id),
+					excludedIds: this.chat.chatMessages
+						.filter((m: SelectChatMessage) => m.isHidden)
+						.map((m: SelectChatMessage) => m.id)
+				},
+				sources: {
+					characters: [],
+					personas: [],
+					scenario: null
+				}
+			}
+		}
 	}
 
 	/**
