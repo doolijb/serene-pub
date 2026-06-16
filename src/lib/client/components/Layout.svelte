@@ -465,8 +465,17 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 		role="application"
 		aria-label="Serene Pub Chat Application"
 	>
+		<!-- Background image layer -->
+		{#if userSettingsCtx.settings?.backgroundImagePath}
+			{@const bgOpacity = (userSettingsCtx.settings.backgroundOpacity ?? 75) / 100}
+			<div
+				class="pointer-events-none fixed inset-0 z-0 bg-cover bg-center bg-no-repeat"
+				style="background-image: url({userSettingsCtx.settings.backgroundImagePath}); opacity: {bgOpacity};"
+				aria-hidden="true"
+			></div>
+		{/if}
 		<div
-			class="relative flex h-svh max-w-full min-w-full flex-1 flex-col overflow-hidden lg:flex-row lg:gap-2"
+			class="relative z-10 flex h-svh max-w-full min-w-full flex-1 flex-col overflow-hidden lg:flex-row lg:gap-2"
 		>
 			<!-- Left Sidebar -->
 			<aside class="desktop-sidebar" aria-label="Left navigation panel">

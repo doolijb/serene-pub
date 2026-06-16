@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <defs>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a1a0a"/>
+      <stop offset="50%" style="stop-color:#1a3320"/>
+      <stop offset="100%" style="stop-color:#0d2010"/>
+    </linearGradient>
+    <radialGradient id="mist1" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" style="stop-color:#7dbd8a;stop-opacity:0.15"/>
+      <stop offset="100%" style="stop-color:#7dbd8a;stop-opacity:0"/>
+    </radialGradient>
+    <radialGradient id="mist2" cx="20%" cy="60%" r="40%">
+      <stop offset="0%" style="stop-color:#b5d5a0;stop-opacity:0.1"/>
+      <stop offset="100%" style="stop-color:#b5d5a0;stop-opacity:0"/>
+    </radialGradient>
+    <radialGradient id="light" cx="60%" cy="20%" r="40%">
+      <stop offset="0%" style="stop-color:#d4edaa;stop-opacity:0.12"/>
+      <stop offset="100%" style="stop-color:#d4edaa;stop-opacity:0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#g1)"/>
+  <rect width="1920" height="1080" fill="url(#mist1)"/>
+  <rect width="1920" height="1080" fill="url(#mist2)"/>
+  <rect width="1920" height="1080" fill="url(#light)"/>
+</svg>

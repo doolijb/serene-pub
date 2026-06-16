@@ -3,6 +3,32 @@ import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import type { AuthenticatedSocket } from "./auth"
+import {
+	handleUserBackgroundUpload,
+	listUserBackgrounds,
+	deleteUserBackground
+} from "$lib/server/utils"
+import { readFileSync } from "fs"
+import { join } from "path"
+
+const DEFAULT_BACKGROUNDS_MANIFEST = "/backgrounds/defaults/manifest.json"
+
+function getDefaultBackgrounds(): string[] {
+	try {
+		// Resolve static folder relative to project root
+		const manifestPath = join(
+			process.cwd(),
+			"static",
+			"backgrounds",
+			"defaults",
+			"manifest.json"
+		)
+		const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as string[]
+		return manifest.map((f) => `/backgrounds/defaults/${f}`)
+	} catch {
+		return []
+	}
+}
 
 export const userSettingsGet: Handler<
 	Sockets.UserSettings.Get.Params,
@@ -64,7 +90,9 @@ export const userSettingsGet: Handler<
 						settings.enableEasyPersonaCreation,
 					enableEasyCharacterCreation:
 						settings.enableEasyCharacterCreation,
-					showAllCharacterFields: settings.showAllCharacterFields
+					showAllCharacterFields: settings.showAllCharacterFields,
+					backgroundImagePath: settings.backgroundImagePath ?? null,
+					backgroundOpacity: settings.backgroundOpacity ?? 75
 				}
 			}
 
@@ -296,6 +324,90 @@ export const userSettingsUpdateDarkMode: Handler<
 	}
 }
 
+export const userSettingsListBackgrounds: Handler<
+	Sockets.UserSettings.ListBackgrounds.Params,
+	Sockets.UserSettings.ListBackgrounds.Response
+> = {
+	event: "userSettings:listBackgrounds",
+	handler: async (socket: AuthenticatedSocket, _params, emitToUser) => {
+		const userId = socket.user!.id
+		const defaults = getDefaultBackgrounds()
+		const uploads = await listUserBackgrounds({ userId })
+		const res: Sockets.UserSettings.ListBackgrounds.Response = {
+			defaults,
+			uploads
+		}
+		emitToUser("userSettings:listBackgrounds", res)
+		return res
+	}
+}
+
+export const userSettingsUploadBackground: Handler<
+	Sockets.UserSettings.UploadBackground.Params,
+	Sockets.UserSettings.UploadBackground.Response
+> = {
+	event: "userSettings:uploadBackground",
+	handler: async (socket: AuthenticatedSocket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const bgPath = await handleUserBackgroundUpload({
+			userId,
+			backgroundFile: params.backgroundFile,
+			mimeType: params.mimeType
+		})
+		const res: Sockets.UserSettings.UploadBackground.Response = {
+			success: true,
+			path: bgPath
+		}
+		emitToUser("userSettings:uploadBackground", res)
+		// Refresh list so client gets updated uploads
+		await userSettingsListBackgrounds.handler(socket, {}, emitToUser)
+		return res
+	}
+}
+
+export const userSettingsDeleteBackground: Handler<
+	Sockets.UserSettings.DeleteBackground.Params,
+	Sockets.UserSettings.DeleteBackground.Response
+> = {
+	event: "userSettings:deleteBackground",
+	handler: async (socket: AuthenticatedSocket, params, emitToUser) => {
+		const userId = socket.user!.id
+		await deleteUserBackground({ userId, path: params.path })
+		const res: Sockets.UserSettings.DeleteBackground.Response = {
+			success: true
+		}
+		emitToUser("userSettings:deleteBackground", res)
+		// Refresh list
+		await userSettingsListBackgrounds.handler(socket, {}, emitToUser)
+		return res
+	}
+}
+
+export const userSettingsUpdateBackground: Handler<
+	Sockets.UserSettings.UpdateBackground.Params,
+	Sockets.UserSettings.UpdateBackground.Response
+> = {
+	event: "userSettings:updateBackground",
+	handler: async (socket: AuthenticatedSocket, params, emitToUser) => {
+		const userId = socket.user!.id
+		await db
+			.update(schema.userSettings)
+			.set({
+				backgroundImagePath: params.path,
+				backgroundOpacity: params.opacity
+			})
+			.where(eq(schema.userSettings.userId, userId))
+		const res: Sockets.UserSettings.UpdateBackground.Response = {
+			success: true,
+			path: params.path,
+			opacity: params.opacity
+		}
+		emitToUser("userSettings:updateBackground", res)
+		await userSettingsGet.handler(socket, {}, emitToUser)
+		return res
+	}
+}
+
 // Registration function for all user settings handlers
 export function registerUserSettingsHandlers(
 	socket: AuthenticatedSocket,
@@ -313,4 +425,8 @@ export function registerUserSettingsHandlers(
 	register(socket, userSettingsUpdateShowAllCharacterFields, emitToUser)
 	register(socket, userSettingsUpdateTheme, emitToUser)
 	register(socket, userSettingsUpdateDarkMode, emitToUser)
+	register(socket, userSettingsListBackgrounds, emitToUser)
+	register(socket, userSettingsUploadBackground, emitToUser)
+	register(socket, userSettingsDeleteBackground, emitToUser)
+	register(socket, userSettingsUpdateBackground, emitToUser)
 }

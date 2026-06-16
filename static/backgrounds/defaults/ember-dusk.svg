@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <defs>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a0a00"/>
+      <stop offset="40%" style="stop-color:#3d1c00"/>
+      <stop offset="100%" style="stop-color:#0d0d2b"/>
+    </linearGradient>
+    <radialGradient id="glow1" cx="50%" cy="70%" r="60%">
+      <stop offset="0%" style="stop-color:#ff6b35;stop-opacity:0.4"/>
+      <stop offset="60%" style="stop-color:#ff3d00;stop-opacity:0.15"/>
+      <stop offset="100%" style="stop-color:#ff3d00;stop-opacity:0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="20%" cy="80%" r="35%">
+      <stop offset="0%" style="stop-color:#ffaa00;stop-opacity:0.3"/>
+      <stop offset="100%" style="stop-color:#ffaa00;stop-opacity:0"/>
+    </radialGradient>
+    <radialGradient id="glow3" cx="80%" cy="75%" r="30%">
+      <stop offset="0%" style="stop-color:#c62a88;stop-opacity:0.25"/>
+      <stop offset="100%" style="stop-color:#c62a88;stop-opacity:0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#g1)"/>
+  <rect width="1920" height="1080" fill="url(#glow1)"/>
+  <rect width="1920" height="1080" fill="url(#glow2)"/>
+  <rect width="1920" height="1080" fill="url(#glow3)"/>
+</svg>

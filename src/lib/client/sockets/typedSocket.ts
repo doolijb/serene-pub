@@ -61,6 +61,18 @@ type SocketEventMap = {
 		params: Sockets.Users.Logout.Params
 		response: Sockets.Users.Logout.Response
 	}
+	"users:current:updateDisplayName:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"users:current:changePassphrase:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"users:current:logout:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 
 	// Character events
 	"characters:list": {
@@ -450,6 +462,22 @@ type SocketEventMap = {
 	"userSettings:get": {
 		params: Sockets.UserSettings.Get.Params
 		response: Sockets.UserSettings.Get.Response
+	}
+	"userSettings:listBackgrounds": {
+		params: Sockets.UserSettings.ListBackgrounds.Params
+		response: Sockets.UserSettings.ListBackgrounds.Response
+	}
+	"userSettings:uploadBackground": {
+		params: Sockets.UserSettings.UploadBackground.Params
+		response: Sockets.UserSettings.UploadBackground.Response
+	}
+	"userSettings:deleteBackground": {
+		params: Sockets.UserSettings.DeleteBackground.Params
+		response: Sockets.UserSettings.DeleteBackground.Response
+	}
+	"userSettings:updateBackground": {
+		params: Sockets.UserSettings.UpdateBackground.Params
+		response: Sockets.UserSettings.UpdateBackground.Response
 	}
 	"userSettings:updateShowHomePageBanner": {
 		params: Sockets.UserSettings.UpdateShowHomePageBanner.Params

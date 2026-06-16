@@ -9,7 +9,8 @@
       "Bash(grep -n \"async generate\" /home/jody/github/serene-pub/src/lib/server/connectionAdapters/*.ts)",
       "Bash(grep -n \"snippet MessageComponent\\\\|snippet ComposerComponent\\\\|ChatContainer\\\\|ChatComposer\\\\|PersonaSelectModal\\\\|BranchChatModal\\\\|showDeleteMessage\\\\|ChatMessage \" /home/jody/github/serene-pub/src/routes/chats/[id]/+page.svelte)",
       "Bash(grep -n \"SummarizeLoreModal\\\\|showSummarizeModal\\\\|isSummarizationMode\" /home/jody/github/serene-pub/src/routes/chats/[id]/+page.svelte)",
-      "Bash(grep -v \"^$\")"
+      "Bash(grep -v \"^$\")",
+      "Bash(grep -E \"\\\\.\\(svelte|ts\\)$\")"
     ],
     "deny": []
   }

@@ -7,6 +7,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { z } from "zod"
 	import * as Icons from "@lucide/svelte"
+	import BackgroundPicker from "$lib/client/components/backgrounds/BackgroundPicker.svelte"
 
 	const socket = useTypedSocket()
 
@@ -52,6 +53,10 @@
 	let confirmPassword = $state("")
 	let passwordError = $state("")
 
+	let selectedBackground = $state<string | null>(null)
+	let backgroundOpacity = $state(75)
+	let backgroundExpanded = $state(false)
+
 	$effect(() => {
 		isDarkMode = userSettingsCtx.settings?.darkMode ?? true
 	})
@@ -61,8 +66,17 @@
 	})
 
 	$effect(() => {
+		selectedBackground = userSettingsCtx.settings?.backgroundImagePath ?? null
+		backgroundOpacity = userSettingsCtx.settings?.backgroundOpacity ?? 75
+	})
+
+	$effect(() => {
 		displayName = userCtx.user?.displayName || ""
 	})
+
+	function handleBackgroundChange(path: string | null, opacity: number) {
+		socket?.emit("userSettings:updateBackground", { path, opacity })
+	}
 
 	const onDarkModeChanged = (event: { checked: boolean }) => {
 		socket?.emit("userSettings:updateDarkMode", { enabled: event.checked })
@@ -413,6 +427,29 @@
 		<label for="show-home-page-banner" class="font-semibold">
 			Show Home Page Banner
 		</label>
+	</div>
+
+	<!-- Background -->
+	<div class="border-t pt-4">
+		<button
+			type="button"
+			class="flex w-full items-center justify-between"
+			onclick={() => (backgroundExpanded = !backgroundExpanded)}
+		>
+			<h3 class="text-lg font-semibold">Background</h3>
+			<Icons.ChevronDown
+				class="text-muted-foreground h-4 w-4 transition-transform {backgroundExpanded ? 'rotate-180' : ''}"
+			/>
+		</button>
+		{#if backgroundExpanded}
+			<div class="mt-3">
+				<BackgroundPicker
+					bind:selectedPath={selectedBackground}
+					bind:opacity={backgroundOpacity}
+					onchange={handleBackgroundChange}
+				/>
+			</div>
+		{/if}
 	</div>
 
 	<!-- Import Section -->

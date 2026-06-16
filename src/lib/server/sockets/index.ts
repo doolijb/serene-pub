@@ -25,6 +25,7 @@ import { registerContextConfigHandlers } from "./contextConfigs"
 import { registerChatHandlers } from "./chats"
 import { registerPromptConfigHandlers } from "./promptConfigs"
 import { registerUserHandlers } from "./users"
+import { registerUserSettingsHandlers } from "./userSettings"
 import { registerLorebookHandlers } from "./lorebooks"
 import { registerWorldLoreEntryHandlers } from "./worldLoreEntries"
 import { registerHistoryEntryHandlers } from "./historyEntries"
@@ -52,6 +53,7 @@ export function connectSockets(io: {
 
 		// Register all handlers by module
 		registerUserHandlers(socket, emitToUser, register)
+		registerUserSettingsHandlers(socket, emitToUser, register)
 		registerSamplingConfigHandlers(socket, emitToUser, register)
 		registerConnectionHandlers(socket, emitToUser, register)
 		registerOllamaHandlers(socket, emitToUser, register)

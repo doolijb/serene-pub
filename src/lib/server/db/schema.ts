@@ -87,6 +87,8 @@ export const userSettings = pgTable("user_settings", {
 	showAllCharacterFields: boolean("show_all_character_fields")
 		.notNull()
 		.default(false),
+	backgroundImagePath: text("background_image_path"),
+	backgroundOpacity: integer("background_opacity").notNull().default(75),
 	createdAt: date("created_at")
 		.notNull()
 		.default(sql`(CURRENT_TIMESTAMP)`),

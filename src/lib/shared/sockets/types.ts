@@ -1549,7 +1549,45 @@ declare global {
 						enableEasyPersonaCreation: boolean
 						enableEasyCharacterCreation: boolean
 						showAllCharacterFields: boolean
+						backgroundImagePath: string | null
+						backgroundOpacity: number
 					}
+				}
+			}
+			namespace ListBackgrounds {
+				interface Params {}
+				interface Response {
+					defaults: string[]
+					uploads: string[]
+				}
+			}
+			namespace UploadBackground {
+				interface Params {
+					backgroundFile: Buffer | Uint8Array
+					mimeType: string
+				}
+				interface Response {
+					success: boolean
+					path: string
+				}
+			}
+			namespace DeleteBackground {
+				interface Params {
+					path: string
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace UpdateBackground {
+				interface Params {
+					path: string | null
+					opacity: number
+				}
+				interface Response {
+					success: boolean
+					path: string | null
+					opacity: number
 				}
 			}
 			namespace UpdateTheme {

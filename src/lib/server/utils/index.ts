@@ -105,6 +105,63 @@ export async function handleCharacterAvatarUpload({
 	}
 }
 
+export function getUserBackgroundsDir({ userId }: { userId: number }) {
+	const appData = getAppDataDir()
+	return path.join(appData, "data", "users", String(userId), "backgrounds")
+}
+
+export async function handleUserBackgroundUpload({
+	userId,
+	backgroundFile,
+	mimeType
+}: {
+	userId: number
+	backgroundFile: Buffer | Uint8Array
+	mimeType: string
+}) {
+	const ext = mimeType.split("/")[1]?.replace("jpeg", "jpg") || "jpg"
+	const filename = `bg-${uuid().substring(0, 8)}.${ext}`
+	const bgDir = getUserBackgroundsDir({ userId })
+	await mkdir(bgDir, { recursive: true })
+	const filePath = path.join(bgDir, filename)
+	await writeFile(filePath, backgroundFile, { flag: "w" })
+	return `/images/data/users/${userId}/backgrounds/${filename}`
+}
+
+export async function listUserBackgrounds({ userId }: { userId: number }) {
+	const bgDir = getUserBackgroundsDir({ userId })
+	try {
+		const { readdir } = await import("fs/promises")
+		const files = await readdir(bgDir)
+		return files
+			.filter((f) => /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(f))
+			.map((f) => `/images/data/users/${userId}/backgrounds/${f}`)
+	} catch {
+		return []
+	}
+}
+
+export async function deleteUserBackground({
+	userId,
+	path: bgPath
+}: {
+	userId: number
+	path: string
+}) {
+	// Safety: only allow deleting files within this user's backgrounds dir
+	const bgDir = getUserBackgroundsDir({ userId })
+	const filename = path.basename(bgPath)
+	const fullPath = path.join(bgDir, filename)
+	// Ensure the resolved path is inside the expected directory
+	if (!fullPath.startsWith(bgDir)) return
+	try {
+		const { unlink } = await import("fs/promises")
+		await unlink(fullPath)
+	} catch {
+		// File already gone — ignore
+	}
+}
+
 export async function handlePersonaAvatarUpload({
 	persona,
 	avatarFile
