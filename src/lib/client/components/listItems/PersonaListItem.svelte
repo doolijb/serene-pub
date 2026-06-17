@@ -2,6 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import Avatar from "../Avatar.svelte"
 	import SidebarListItem from "../SidebarListItem.svelte"
+	import EmbeddingStatusIcon from "../EmbeddingStatusIcon.svelte"
 
 	interface Props {
 		persona: Sockets.Personas.List.Response["personaList"][0]
@@ -58,8 +59,9 @@
 		</Avatar>
 		<div class="relative flex flex-1 gap-2">
 			<div class="relative flex-1">
-				<div class="truncate text-left font-semibold">
-					{persona.name}
+				<div class="flex items-center gap-1 text-left font-semibold">
+					<span class="truncate">{persona.name}</span>
+					<EmbeddingStatusIcon embeddingModel={persona.embeddingModel} />
 				</div>
 				{#if persona.description}
 					<div

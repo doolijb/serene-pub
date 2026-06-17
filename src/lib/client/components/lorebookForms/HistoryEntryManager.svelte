@@ -3,6 +3,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import * as skio from "sveltekit-io"
 	import { onDestroy, onMount, tick } from "svelte"
+	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
 	import LoreContentField from "./LoreContentField.svelte"
 import { v4 as uuid } from "uuid"
 	import DeleteLorebookEntryConfirmModal from "../modals/DeleteLorebookEntryConfirmModal.svelte"
@@ -654,7 +655,8 @@ import { v4 as uuid } from "uuid"
 								<strong>Keys:</strong>
 								{entry.keys}
 							</div>
-							<div class="flex gap-1">
+							<div class="flex items-center gap-1">
+								<EmbeddingStatusIcon embeddingModel={entry.embeddingModel} size={14} />
 								{#if !entry.enabled}
 									<span
 										class="preset-filled-error-500 rounded px-2 py-1"

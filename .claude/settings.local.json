@@ -10,7 +10,8 @@
       "Bash(grep -n \"snippet MessageComponent\\\\|snippet ComposerComponent\\\\|ChatContainer\\\\|ChatComposer\\\\|PersonaSelectModal\\\\|BranchChatModal\\\\|showDeleteMessage\\\\|ChatMessage \" /home/jody/github/serene-pub/src/routes/chats/[id]/+page.svelte)",
       "Bash(grep -n \"SummarizeLoreModal\\\\|showSummarizeModal\\\\|isSummarizationMode\" /home/jody/github/serene-pub/src/routes/chats/[id]/+page.svelte)",
       "Bash(grep -v \"^$\")",
-      "Bash(grep -E \"\\\\.\\(svelte|ts\\)$\")"
+      "Bash(grep -E \"\\\\.\\(svelte|ts\\)$\")",
+      "Bash(node -e \"const { PGlite } = require\\('@electric-sql/pglite'\\); console.log\\('PGLite available'\\); const { vector } = require\\('@electric-sql/pglite/vector'\\); console.log\\('vector available'\\);\")"
     ],
     "deny": []
   }

@@ -84,6 +84,15 @@ declare global {
 		settings?: Omit<SelectUserSettings, "id" | "userId">
 	}
 
+	interface VectorizationCtx {
+		status: "idle" | "running" | "paused"
+		currentItem?: { type: string; label: string }
+		queued: number
+		completed: number
+		priorityQueue: Sockets.Vectorization.PriorityGroup[]
+		history: Sockets.Vectorization.CompletedGroup[]
+	}
+
 	export interface CharaImportMetadata {
 		data: {
 			alternate_greetings?: string[]

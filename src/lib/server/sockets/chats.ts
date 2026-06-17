@@ -1224,6 +1224,9 @@ export const chatMessagesUpdateHandler: Handler<
 			const updates: Partial<typeof schema.chatMessages.$inferInsert> = {}
 			if (content !== undefined) {
 				updates.content = content
+				// Content changed — clear the embedding so the vectorization queue re-embeds it
+				updates.embedding = null
+				updates.embeddingModel = null
 
 				// Also update the swipe history if it exists
 				const metadata = existingMessage.metadata as any

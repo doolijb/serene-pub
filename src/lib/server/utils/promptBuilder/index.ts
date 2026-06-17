@@ -16,6 +16,7 @@ import { ChatCharacterVisibility } from "$lib/shared/constants/ChatCharacterVisi
 // Import modular components
 import { InterpolationEngine } from "./InterpolationEngine"
 import { ContentInfillEngine } from "./ContentInfillEngine"
+import { RagInfillEngine } from "./RagInfillEngine"
 import type {
 	LoreMatchingStrategy,
 	MatchingStrategyConfig
@@ -31,6 +32,7 @@ import type {
 import { defaultContentInclusionConfig } from "./ContentInclusionStrategy"
 import type { CompiledPrompt, CompileOptions, TemplateContext } from "./types"
 import { parseSplitChatPrompt, isHistoryEntry } from "./utils"
+import { isModelReady } from "$lib/server/embedding"
 
 export class PromptBuilder {
 	connection: SelectConnection
@@ -810,6 +812,58 @@ export class PromptBuilder {
 			personaName
 		})
 
+		// Dispatch to RagInfillEngine when vectorization is active and model is ready
+		const ragIgnored = !!(this.chat.metadata as any)?.ragIgnored
+		let infillResult: Awaited<ReturnType<typeof this.infillContent>> | null =
+			null
+
+		if (!ragIgnored && isModelReady()) {
+			try {
+				const { db } = await import("../../db")
+				const settings = await db.query.systemSettings.findFirst({
+					columns: { vectorizationEnabled: true }
+				})
+				if (settings?.vectorizationEnabled) {
+					const ragEngine = new RagInfillEngine(
+						this.chat,
+						this.interpolationEngine,
+						populateLorebookEntryBindings
+					)
+					infillResult = await ragEngine.infillContent({
+						charName,
+						personaName,
+						templateContext,
+						useChatFormat,
+						tokenLimit: this.tokenLimit,
+						contextThresholdPercent: this.contextThresholdPercent,
+						tokenCounter: this.tokenCounter,
+						handlebars: this.handlebars,
+						contextConfig: this.contextConfig
+					})
+				}
+			} catch (err) {
+				console.warn(
+					"[PromptBuilder] RagInfillEngine failed, falling back to keyword infill:",
+					err
+				)
+				infillResult = null
+			}
+		}
+
+		// Fall back to keyword-based infill
+		if (!infillResult) {
+			infillResult = await this.infillContent({
+				templateContext,
+				charName,
+				personaName,
+				useChatFormat,
+				config: defaultContentInclusionConfig,
+				strategy: undefined,
+				matchingStrategy: undefined,
+				matchingStrategyConfig: undefined
+			})
+		}
+
 		const {
 			renderedPrompt,
 			renderedMessages,
@@ -819,16 +873,7 @@ export class PromptBuilder {
 				includedIds,
 				excludedIds
 			}
-		} = await this.infillContent({
-			templateContext,
-			charName,
-			personaName,
-			useChatFormat,
-			config: defaultContentInclusionConfig,
-			strategy: undefined,
-			matchingStrategy: undefined,
-			matchingStrategyConfig: undefined
-		})
+		} = infillResult
 
 		const sources = this.buildSources(scenarioSource)
 		const meta = this.buildMeta({

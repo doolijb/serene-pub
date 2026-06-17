@@ -2,8 +2,6 @@
 // This file contains all the type definitions for socket communications
 // Moved from app.d.ts to be shared between client and server
 
-import type { Component } from "@lucide/svelte"
-import type { ChatCompletionMessageParam } from "openai/resources/chat/completions/completions"
 import type { ListResponse } from "ollama"
 import type { SpecV3 } from "@lenml/char-card-reader"
 
@@ -832,6 +830,7 @@ declare global {
 					lorebookId: number
 				}
 				interface Response {
+					lorebookId: number
 					characterLoreEntryList: SelectCharacterLoreEntry[]
 				}
 			}
@@ -862,7 +861,8 @@ declare global {
 			}
 			namespace UpdatePositions {
 				interface Params {
-					updates: Array<{ id: number; position: number }>
+					lorebookId: number
+					positions: Array<{ id: number; position: number }>
 				}
 				interface Response {
 					success?: string
@@ -1483,6 +1483,9 @@ declare global {
 						ollamaManagerEnabled: boolean
 						ollamaManagerBaseUrl: string
 						isAccountsEnabled: boolean
+						vectorizationEnabled: boolean
+						embeddingModelName: string | null
+						embeddingModelDimensions: number | null
 					}
 				}
 			}
@@ -1670,6 +1673,220 @@ declare global {
 				chatMessage: SelectChatMessage
 			}
 		}
+
+		// Vectorization namespace
+		namespace Vectorization {
+			/** Embedding model definition sent to the client */
+			interface ModelDef {
+				id: string
+				name: string
+				description: string
+				dimensions: number
+				sizeLabel: string
+				tier: "fast" | "balanced" | "best"
+			}
+
+			/**
+			 * A priority group in the embedding queue. Groups are processed in order;
+			 * within each group the order is: messages → lorebook content → characters → personas.
+			 */
+			interface PriorityGroup {
+				groupId: string
+				label: string
+				ownerDisplayName: string
+				chatId?: number
+				lorebookIds: number[]
+				characterIds: number[]
+				personaIds: number[]
+			}
+
+			interface CompletedGroup extends PriorityGroup {
+				completedAt: string
+			}
+
+			namespace ListModels {
+				interface Params {}
+				interface Response {
+					models: ModelDef[]
+					activeModelName: string | null
+					vectorizationEnabled: boolean
+					/** True if the model is loaded in memory and ready to embed */
+					modelReady: boolean
+					/** True if the model files are present in the local cache */
+					modelCached: boolean
+					/** Last load error message, if any */
+					loadError: string | null
+				}
+			}
+
+			namespace EnableVectorization {
+				interface Params {
+					/** Whether to start the queue immediately */
+					startNow: boolean
+					modelName: string
+				}
+				interface Response {
+					success: boolean
+					vectorizationEnabled: boolean
+				}
+			}
+
+			namespace DisableVectorization {
+				interface Params {}
+				interface Response {
+					success: boolean
+				}
+			}
+
+			namespace SetModel {
+				interface Params {
+					modelName: string
+				}
+				interface Response {
+					success: boolean
+					modelName: string
+					dimensions: number
+				}
+			}
+
+			namespace StartQueue {
+				interface Params {}
+				interface Response {
+					success: boolean
+				}
+			}
+
+			namespace StopQueue {
+				interface Params {}
+				interface Response {
+					success: boolean
+				}
+			}
+
+			/** Server → client: queue progress updates */
+			namespace Progress {
+				interface Params {}
+				interface Response {
+					status: "idle" | "running" | "paused"
+					currentItem?: {
+						type: string
+						label: string
+					}
+					queued: number
+					completed: number
+					priorityQueue: PriorityGroup[]
+					history: CompletedGroup[]
+				}
+			}
+
+			namespace GetQueue {
+				interface Params {}
+				interface Response {
+					queue: PriorityGroup[]
+					history: CompletedGroup[]
+				}
+			}
+
+			namespace AddToQueue {
+				interface Params {
+					/** Add a chat and all its linked lorebooks/characters/personas */
+					chatId?: number
+					/** Add a lorebook by itself */
+					lorebookId?: number
+					/** Add a character by itself */
+					characterId?: number
+					characterName?: string
+				}
+				interface Response {
+					success: boolean
+					queue: PriorityGroup[]
+				}
+			}
+
+			namespace MoveQueueGroup {
+				interface Params {
+					groupId: string
+					direction: "up" | "down"
+				}
+				interface Response {
+					success: boolean
+					queue: PriorityGroup[]
+				}
+			}
+
+			namespace RemoveFromQueue {
+				interface Params {
+					groupId: string
+				}
+				interface Response {
+					success: boolean
+					queue: PriorityGroup[]
+				}
+			}
+
+			/** Server → client: model download progress */
+			namespace ModelDownloadProgress {
+				interface Params {}
+				interface Response {
+					modelId: string
+					status: "loading" | "downloading" | "ready" | "error"
+					percent?: number
+					error?: string
+				}
+			}
+
+			/** Counts for a single content type */
+			interface RagTypeCounts {
+				total: number
+				/** Never embedded */
+				nullCount: number
+				/** Embedded with a different (stale) model */
+				staleCount: number
+				/** Correctly embedded with the active model */
+				readyCount: number
+			}
+
+			/**
+			 * Check the RAG embedding status for all content linked to a chat:
+			 *  - Messages older than the last 10 (last 10 assumed in context window)
+			 *  - Characters linked to the chat
+			 *  - Personas linked to the chat
+			 *  - Lorebook entries (world lore, character lore, history) for the chat's
+			 *    lorebook and each linked character's lorebook
+			 */
+			namespace CheckRagStatus {
+				interface Params {
+					chatId: number
+				}
+				interface Response {
+					/** False when vectorization is disabled or chat has ≤ 10 messages */
+					applicable: boolean
+					messages: RagTypeCounts
+					characters: RagTypeCounts
+					personas: RagTypeCounts
+					/** null when the chat has no associated lorebook */
+					lorebook: RagTypeCounts | null
+					/** Whether the vectorization queue is currently running */
+					queueRunning: boolean
+					/** The active embedding model name, or null if none */
+					activeModelName: string | null
+					/** Whether the user has opted out of RAG for this chat */
+					ragIgnored: boolean
+				}
+			}
+
+			/** Set whether RAG is ignored for a specific chat */
+			namespace SetChatRagIgnored {
+				interface Params {
+					chatId: number
+					ignored: boolean
+				}
+				interface Response {
+					success: boolean
+					ragIgnored: boolean
+				}
+			}
+		}
 	}
 
 	// Assistant namespace
@@ -1850,6 +2067,7 @@ declare global {
 				}
 			}
 		}
+
 	}
 }
 

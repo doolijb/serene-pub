@@ -3,6 +3,7 @@
 	import { getContext, onMount, onDestroy } from "svelte"
 
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
+	let vectorizationCtx: VectorizationCtx = $state(getContext("vectorizationCtx"))
 
 	// Prevent body scroll when mobile menu is open
 	$effect(() => {
@@ -38,6 +39,7 @@
 			{#each panelsCtx.getOrderedEntries(panelsCtx.leftNav, panelsCtx.leftNavOrder || []) as [key, item]}
 				{#if item?.icon}
 					{@const isOpen = panelsCtx.leftPanel === key}
+					{@const isVectorizationRunning = key === "vectorization" && vectorizationCtx?.status === "running"}
 					<button
 						title={item.title}
 						onclick={() => panelsCtx.openPanel({ key })}
@@ -48,6 +50,8 @@
 						<item.icon
 							class="{isOpen
 								? 'text-primary-800-200'
+								: ''} {isVectorizationRunning
+								? 'animate-spin-slow text-success-500'
 								: ''} hover:text-primary-500 h-5 w-5 transition-colors"
 							aria-hidden="true"
 						/>

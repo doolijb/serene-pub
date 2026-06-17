@@ -6,6 +6,7 @@
 	import MessageComposer from "$lib/client/components/chatMessages/MessageComposer.svelte"
 	import MessageControls from "$lib/client/components/chatMessages/MessageControls.svelte"
 	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
+	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
 
 	interface Props {
 		msg: SelectChatMessage
@@ -167,6 +168,9 @@
 							<Icons.Handshake size={16} />
 						</span>
 					{/if}
+					<span class="mt-1">
+						<EmbeddingStatusIcon embeddingModel={msg.embeddingModel} />
+					</span>
 				</span>
 			</div>
 		</div>

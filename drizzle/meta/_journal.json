@@ -183,6 +183,27 @@
       "when": 1781558008880,
       "tag": "0025_cute_harpoon",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1781585617310,
+      "tag": "0026_mighty_frightful_four",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1781589936722,
+      "tag": "0027_volatile_mojo",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1781595376315,
+      "tag": "0028_optimal_mimic",
+      "breakpoints": true
     }
   ]
 }

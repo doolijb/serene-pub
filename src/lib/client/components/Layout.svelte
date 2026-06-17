@@ -20,6 +20,7 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { KeyboardNavigationManager } from "$lib/client/utils/keyboardNavigation"
 	import SettingsSidebar from "$lib/client/components/sidebars/SettingsSidebar.svelte"
+	import VectorizationSidebar from "$lib/client/components/sidebars/VectorizationSidebar.svelte"
 	import ConnectionTimeoutModal from "$lib/client/components/ConnectionTimeoutModal.svelte"
 	import type { Snippet } from "svelte"
 	import { Theme } from "$lib/client/consts/Theme"
@@ -69,6 +70,7 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 			"koboldcpp",
 			"contexts",
 			"prompts",
+			"vectorization",
 			"users",
 			"settings"
 		],
@@ -89,6 +91,14 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 	})
 	let systemSettingsCtx: SystemSettingsCtx = $state({ settings: undefined })
 	let userSettingsCtx: UserSettingsCtx = $state({ settings: undefined })
+	let vectorizationCtx: VectorizationCtx = $state({
+		status: "idle",
+		currentItem: undefined,
+		queued: 0,
+		completed: 0,
+		priorityQueue: [],
+		history: []
+	})
 
 	$effect(() => {
 		console.log(
@@ -147,6 +157,13 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 			panelsCtx.leftNav.prompts = {
 				icon: Icons.MessageCircle,
 				title: "Prompts"
+			}
+
+			if (systemSettingsCtx?.settings?.vectorizationEnabled) {
+				panelsCtx.leftNav.vectorization = {
+					icon: Icons.Brain,
+					title: "Vectorization"
+				}
 			}
 		}
 	})
@@ -285,6 +302,7 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 		setContext("userCtx", userCtx)
 		setContext("systemSettingsCtx", systemSettingsCtx)
 		setContext("userSettingsCtx", userSettingsCtx)
+		setContext("vectorizationCtx", vectorizationCtx)
 
 		// Check system settings first before connecting to sockets
 		try {
@@ -371,6 +389,15 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 			})
 		})
 
+		socket.on("vectorization:progress", (message) => {
+			vectorizationCtx.status = message.status
+			vectorizationCtx.currentItem = message.currentItem
+			vectorizationCtx.queued = message.queued
+			vectorizationCtx.completed = message.completed
+			vectorizationCtx.priorityQueue = message.priorityQueue ?? []
+			vectorizationCtx.history = message.history ?? []
+		})
+
 		socket.emit("systemSettings:get", {})
 
 		if (!isSettingsLoaded) return
@@ -455,6 +482,7 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 		socket.off("**:error")
 		socket.off("error")
 		socket.off("success")
+		socket.off("vectorization:progress")
 	})
 </script>
 
@@ -547,6 +575,10 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 								/>
 							{:else if panelsCtx.leftPanel === "settings"}
 								<SettingsSidebar
+									bind:onclose={panelsCtx.onLeftPanelClose}
+								/>
+							{:else if panelsCtx.leftPanel === "vectorization"}
+								<VectorizationSidebar
 									bind:onclose={panelsCtx.onLeftPanelClose}
 								/>
 							{/if}
@@ -711,6 +743,10 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 						/>
 					{:else if panelsCtx.mobilePanel === "settings"}
 						<SettingsSidebar
+							bind:onclose={panelsCtx.onMobilePanelClose}
+						/>
+					{:else if panelsCtx.mobilePanel === "vectorization"}
+						<VectorizationSidebar
 							bind:onclose={panelsCtx.onMobilePanelClose}
 						/>
 					{/if}

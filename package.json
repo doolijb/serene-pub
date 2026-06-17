@@ -82,6 +82,7 @@
 	"dependencies": {
 		"@ai-sdk/openai": "^2.0.64",
 		"@electric-sql/pglite": "^0.2.17",
+		"@huggingface/transformers": "^4.2.0",
 		"@lenml/char-card-reader": "^1.0.7",
 		"@lenml/tokenizer-gemma": "^3.4.2",
 		"@lmstudio/sdk": "^1.3.0",

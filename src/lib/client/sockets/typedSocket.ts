@@ -458,6 +458,72 @@ type SocketEventMap = {
 		response: Sockets.SystemSettings.UpdateAccountsEnabled.Response
 	}
 
+	// Vectorization events
+	"vectorization:listModels": {
+		params: Sockets.Vectorization.ListModels.Params
+		response: Sockets.Vectorization.ListModels.Response
+	}
+	"vectorization:enable": {
+		params: Sockets.Vectorization.EnableVectorization.Params
+		response: Sockets.Vectorization.EnableVectorization.Response
+	}
+	"vectorization:disable": {
+		params: Sockets.Vectorization.DisableVectorization.Params
+		response: Sockets.Vectorization.DisableVectorization.Response
+	}
+	"vectorization:setModel": {
+		params: Sockets.Vectorization.SetModel.Params
+		response: Sockets.Vectorization.SetModel.Response
+	}
+	"vectorization:startQueue": {
+		params: Sockets.Vectorization.StartQueue.Params
+		response: Sockets.Vectorization.StartQueue.Response
+	}
+	"vectorization:stopQueue": {
+		params: Sockets.Vectorization.StopQueue.Params
+		response: Sockets.Vectorization.StopQueue.Response
+	}
+	"vectorization:progress": {
+		params: Sockets.Vectorization.Progress.Params
+		response: Sockets.Vectorization.Progress.Response
+	}
+	"vectorization:modelDownloadProgress": {
+		params: Sockets.Vectorization.ModelDownloadProgress.Params
+		response: Sockets.Vectorization.ModelDownloadProgress.Response
+	}
+	"vectorization:enable:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"vectorization:setModel:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"vectorization:checkRagStatus": {
+		params: Sockets.Vectorization.CheckRagStatus.Params
+		response: Sockets.Vectorization.CheckRagStatus.Response
+	}
+	"vectorization:setChatRagIgnored": {
+		params: Sockets.Vectorization.SetChatRagIgnored.Params
+		response: Sockets.Vectorization.SetChatRagIgnored.Response
+	}
+	"vectorization:getQueue": {
+		params: Sockets.Vectorization.GetQueue.Params
+		response: Sockets.Vectorization.GetQueue.Response
+	}
+	"vectorization:addToQueue": {
+		params: Sockets.Vectorization.AddToQueue.Params
+		response: Sockets.Vectorization.AddToQueue.Response
+	}
+	"vectorization:moveQueueGroup": {
+		params: Sockets.Vectorization.MoveQueueGroup.Params
+		response: Sockets.Vectorization.MoveQueueGroup.Response
+	}
+	"vectorization:removeFromQueue": {
+		params: Sockets.Vectorization.RemoveFromQueue.Params
+		response: Sockets.Vectorization.RemoveFromQueue.Response
+	}
+
 	// User Settings events
 	"userSettings:get": {
 		params: Sockets.UserSettings.Get.Params

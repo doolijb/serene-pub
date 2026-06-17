@@ -2,6 +2,7 @@
 	import { Avatar } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import SidebarListItem from "../SidebarListItem.svelte"
+	import EmbeddingStatusIcon from "../EmbeddingStatusIcon.svelte"
 
 	interface Props {
 		character: Sockets.Characters.List.Response["characterList"][0]
@@ -61,10 +62,11 @@
 		<div class="relative flex min-w-0 flex-1 gap-2">
 			<div class="relative min-w-0 flex-1">
 				<div
-					class="truncate text-left font-semibold"
+					class="flex items-center gap-1 text-left font-semibold"
 					id="character-name-{character.id}"
 				>
-					{character.nickname || character.name}
+					<span class="truncate">{character.nickname || character.name}</span>
+					<EmbeddingStatusIcon embeddingModel={character.embeddingModel} />
 				</div>
 				{#if character.description}
 					<div

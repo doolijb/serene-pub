@@ -32,6 +32,7 @@ export const characterLoreEntryListHandler: Handler<
 		if (!book) throw new Error("Lorebook not found.")
 
 		const res = {
+			lorebookId: params.lorebookId,
 			characterLoreEntryList: book.characterLoreEntries
 		}
 		emitToUser("characterLoreEntries:list", res)
@@ -236,46 +237,33 @@ export const updateCharacterLoreEntryPositionsHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 
-		// Verify all entries belong to user's lorebooks
-		const entryIds = params.updates.map((u) => u.id)
-		const entries = await db.query.characterLoreEntries.findMany({
-			where: (cle, { inArray }) => inArray(cle.id, entryIds),
-			with: {
-				lorebook: true
-			}
+		// Verify lorebook belongs to user
+		const book = await db.query.lorebooks.findFirst({
+			where: (l, { and, eq }) =>
+				and(eq(l.id, params.lorebookId), eq(l.userId, userId)),
+			columns: { id: true }
 		})
 
-		if (entries.length !== entryIds.length) {
-			throw new Error("Some character lore entries not found.")
-		}
-
-		const userEntries = entries.filter((e) => e.lorebook.userId === userId)
-		if (userEntries.length !== entries.length) {
-			throw new Error("Access denied to some character lore entries.")
+		if (!book) {
+			throw new Error("Lorebook not found or access denied.")
 		}
 
 		// Update positions
-		for (const update of params.updates) {
+		for (const update of params.positions) {
 			await db
 				.update(schema.characterLoreEntries)
 				.set({ position: update.position })
 				.where(eq(schema.characterLoreEntries.id, update.id))
 		}
 
-		// Refresh entry list for affected characters
+		// Refresh entry list
 		if (emitToUser) {
-			const affectedCharacterIds = [
-				...new Set(entries.map((e) => e.characterId))
-			]
-			for (const characterId of affectedCharacterIds) {
-				const entryListResult =
-					await characterLoreEntryListHandler.handler(
-						socket,
-						{ characterId },
-						emitToUser
-					)
-				emitToUser("characterLoreEntries:list", entryListResult)
-			}
+			const entryListResult = await characterLoreEntryListHandler.handler(
+				socket,
+				{ lorebookId: params.lorebookId },
+				emitToUser
+			)
+			emitToUser("characterLoreEntries:list", entryListResult)
 		}
 
 		return {

@@ -72,7 +72,8 @@ export const charactersList: Handler<Sockets.Characters.List.Params, Sockets.Cha
 				avatar: true,
 				isFavorite: true,
 				description: true,
-				creatorNotes: true
+				creatorNotes: true,
+				embeddingModel: true
 			},
 			with: {
 				characterTags: {

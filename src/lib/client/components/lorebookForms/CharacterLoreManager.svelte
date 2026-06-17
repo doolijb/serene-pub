@@ -3,6 +3,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import * as skio from "sveltekit-io"
 	import { onDestroy, onMount, tick } from "svelte"
+	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
 	import LoreContentField from "./LoreContentField.svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { v4 as uuid } from "uuid"
@@ -34,7 +35,7 @@
 		lorebookId
 	}
 
-	let characterLoreEntryList: Sockets.CharacterLoreEntryList.Response["characterLoreEntryList"] =
+	let characterLoreEntryList: Sockets.CharacterLoreEntries.List.Response["characterLoreEntryList"] =
 		$state([])
 	let lorebookBindingList: SelectLorebookBinding[] = $state([])
 	let editEntriesData: Record<number, SelectCharacterLoreEntry> = $state({})
@@ -293,14 +294,11 @@
 	onMount(() => {
 		socket.on(
 			"characterLoreEntries:list",
-			async (msg: Sockets.CharacterLoreEntryList.Response) => {
-				if (
-					msg.characterLoreEntryList.length &&
-					msg.characterLoreEntryList[0].lorebookId === lorebookId
-				) {
+			async (msg: Sockets.CharacterLoreEntries.List.Response) => {
+				if (msg.lorebookId === lorebookId) {
 					characterLoreEntryList = msg.characterLoreEntryList
 				}
-				await tick() // Force state to update
+				await tick()
 			}
 		)
 
@@ -689,7 +687,8 @@
 								<strong>Keys:</strong>
 								{entry.keys}
 							</div>
-							<div class="flex gap-1">
+							<div class="flex items-center gap-1">
+								<EmbeddingStatusIcon embeddingModel={entry.embeddingModel} size={14} />
 								{#if !entry.enabled}
 									<span
 										class="preset-filled-error-500 rounded px-2 py-1"

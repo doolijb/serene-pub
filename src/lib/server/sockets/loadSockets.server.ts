@@ -49,4 +49,35 @@ export async function loadSocketsServer() {
 	if (process.env.NODE_ENV !== "production") {
 		console.log("Socket server ready at", host)
 	}
+
+	// Auto-load embedding model on startup if vectorization was previously enabled
+	autoLoadEmbeddingModel()
+}
+
+async function autoLoadEmbeddingModel() {
+	try {
+		const { db } = await import("$lib/server/db")
+		const { schema } = await import("$lib/server/db")
+		const { eq } = await import("drizzle-orm")
+		const settings = await db.query.systemSettings.findFirst({
+			where: eq(schema.systemSettings.id, 1),
+			columns: { vectorizationEnabled: true, embeddingModelName: true }
+		})
+
+		if (!settings?.vectorizationEnabled || !settings.embeddingModelName) return
+
+		console.log(
+			`[embedding] Auto-loading model on startup: ${settings.embeddingModelName}`
+		)
+		const { loadEmbeddingModel } = await import(
+			"$lib/server/embedding/index"
+		)
+		await loadEmbeddingModel(settings.embeddingModelName)
+		console.log("[embedding] Model ready.")
+	} catch (err) {
+		console.error(
+			"[embedding] Failed to auto-load model on startup — vectorization will be unavailable until re-downloaded:",
+			err
+		)
+	}
 }

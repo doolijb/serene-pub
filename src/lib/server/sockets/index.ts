@@ -28,12 +28,14 @@ import { registerUserHandlers } from "./users"
 import { registerUserSettingsHandlers } from "./userSettings"
 import { registerLorebookHandlers } from "./lorebooks"
 import { registerWorldLoreEntryHandlers } from "./worldLoreEntries"
+import { registerCharacterLoreEntryHandlers } from "./characterLoreEntries"
 import { registerHistoryEntryHandlers } from "./historyEntries"
 import { registerTagHandlers } from "./tags"
 import { registerSystemSettingsHandlers } from "./systemSettings"
 import { registerOllamaHandlers } from "./ollama"
 import { registerKoboldCppHandlers } from "./koboldcpp"
 import { registerSummarizeHandlers } from "./summarize"
+import { registerVectorizationHandlers } from "./vectorization"
 
 const userId = 1 // Replace with actual user id
 
@@ -66,9 +68,11 @@ export function connectSockets(io: {
 		registerChatHandlers(socket, emitToUser, register)
 		registerLorebookHandlers(socket, emitToUser, register)
 		registerWorldLoreEntryHandlers(socket, emitToUser, register)
+		registerCharacterLoreEntryHandlers(socket, emitToUser, register)
 		registerHistoryEntryHandlers(socket, emitToUser, register)
 		registerTagHandlers(socket, emitToUser, register)
 		registerSummarizeHandlers(socket, emitToUser, register)
+		registerVectorizationHandlers(socket, emitToUser, register)
 		console.log(`Socket connected: ${socket.id} for user ${userId}`)
 	})
 }

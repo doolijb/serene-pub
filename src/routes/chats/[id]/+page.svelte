@@ -154,13 +154,38 @@
 		return isGuest && !userHasPersonaInChat
 	})
 
-	// Get the current user's persona in this chat
-	let currentUserPersona: SelectChatPersona | undefined = $derived.by(() => {
-		if (!chat?.chatPersonas || !userCtx.user?.id) return undefined
-		return chat.chatPersonas.find(
+	// All of the current user's personas in this chat
+	let userPersonasInChat = $derived.by(() => {
+		if (!chat?.chatPersonas || !userCtx.user?.id) return []
+		return chat.chatPersonas.filter(
 			(cp) => cp.persona?.userId === userCtx.user?.id
 		)
 	})
+
+	// Manually selected persona ID — null means auto-select (first in list)
+	let selectedPersonaId = $state<number | null>(null)
+
+	// Reset selection when navigating to a different chat
+	$effect(() => {
+		const _watchChatId = chat?.id
+		selectedPersonaId = null
+	})
+
+	// Get the current user's active persona in this chat
+	let currentUserPersona = $derived.by(() => {
+		if (!userPersonasInChat.length) return undefined
+		if (selectedPersonaId) {
+			const found = userPersonasInChat.find(
+				(cp) => cp.personaId === selectedPersonaId
+			)
+			if (found) return found
+		}
+		return userPersonasInChat[0]
+	})
+
+	function switchPersona(personaId: number) {
+		selectedPersonaId = personaId
+	}
 
 	// Get ordered characters from chat data using the response order
 	let orderedCharacters: SelectCharacter[] = $derived.by(() => {
@@ -1182,6 +1207,8 @@
 					onSend={handleSend}
 					{draftCompiledPrompt}
 					{currentUserPersona}
+					{userPersonasInChat}
+					onSwitchPersona={switchPersona}
 					{chat}
 					{lastMessage}
 					{editChatMessage}

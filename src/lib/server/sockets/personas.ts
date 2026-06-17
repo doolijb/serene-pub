@@ -98,7 +98,8 @@ export const personasList: Handler<
 				avatar: true,
 				isDefault: true,
 				description: true,
-				position: true
+				position: true,
+				embeddingModel: true
 			},
 			with: {
 				personaTags: {
