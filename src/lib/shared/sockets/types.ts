@@ -535,8 +535,12 @@ declare global {
 				interface Params {
 					chatId: number
 					messageIds: number[] | 'all'
-					loreType: 'world' | 'history'
+					loreType: 'world' | 'history' | 'character' | 'scene'
 					topic?: string
+					/** Character to bind the lore entry to (character lore only) */
+					lorebookBindingCharacterId?: number | null
+					/** Persona to bind the lore entry to (character lore only) */
+					lorebookBindingPersonaId?: number | null
 				}
 				interface Progress {
 					phase: 'drafting' | 'synthesizing'
@@ -553,6 +557,8 @@ declare global {
 					raw: string
 					lorebookId: number
 					batchCount: number
+					/** Resolved lorebook binding ID (character lore only) */
+					lorebookBindingId?: number | null
 				}
 				interface ErrorResponse {
 					reason: 'no_lorebook' | 'no_connection' | 'generation_failed'
@@ -1645,6 +1651,94 @@ declare global {
 				interface Response {
 					success: boolean
 					enabled: boolean
+				}
+			}
+		}
+
+		// Scenes namespace
+		namespace Scenes {
+			/** Scene with resolved chat name for sidebar display */
+			interface SceneWithMeta extends SelectScene {
+				chatName: string | null
+			}
+			namespace List {
+				interface Params {
+					chatId: number
+				}
+				/** Scene enriched with its history entry data for chat display */
+				interface SceneWithEntry extends SelectScene {
+					historyEntry: {
+						id: number
+						year: number
+						month: number | null
+						day: number | null
+						isCompleted: boolean
+						/** The next history entry in date order for this lorebook, if any */
+						nextEntry: { id: number; year: number; month: number | null; day: number | null } | null
+					} | null
+				}
+				interface Response {
+					sceneList: Sockets.Scenes.List.SceneWithEntry[]
+				}
+			}
+			namespace ListByLorebook {
+				interface Params {
+					lorebookId: number
+				}
+				interface Response {
+					sceneList: Sockets.Scenes.SceneWithMeta[]
+				}
+			}
+			namespace Create {
+				interface Params {
+					scene: InsertScene
+				}
+				interface Response {
+					scene: SelectScene
+				}
+			}
+			namespace Update {
+				interface Params {
+					scene: UpdateScene
+				}
+				interface Response {
+					scene: SelectScene
+				}
+			}
+			namespace Delete {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					success?: string
+					error?: string
+				}
+			}
+			/** Get all message IDs already captured in scenes for a chat */
+			namespace SenedMessageIds {
+				interface Params {
+					chatId: number
+				}
+				interface Response {
+					scenedMessageIds: number[]
+				}
+			}
+			namespace Compile {
+				interface Params {
+					historyEntryId: number
+				}
+				interface Progress {
+					phase: 'drafting' | 'synthesizing'
+					batch: number
+					totalBatches: number
+					partial: { content?: string; raw?: string }
+				}
+				interface Response {
+					content: string
+					historyEntryId: number
+				}
+				interface ErrorResponse {
+					error: string
 				}
 			}
 		}

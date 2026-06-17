@@ -46,6 +46,11 @@
 	let showDeleteConfirmationModal: boolean = $state(false)
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
 
+	// External navigation from chat scene/history-entry clicks
+	let focusHistoryEntryId = $state<number | undefined>(undefined)
+	let focusHistoryEntryTab = $state<"content" | "scenes">("content")
+	let focusSceneId = $state<number | undefined>(undefined)
+
 	async function handleOnClose() {
 		if (tabHasUnsavedChanges) {
 			showUnsavedChangesModal = true
@@ -262,6 +267,18 @@
 		}
 	})
 
+	$effect(() => {
+		if (panelsCtx.digest.historyEntryId) {
+			editGroup = "history"
+			focusHistoryEntryId = panelsCtx.digest.historyEntryId
+			focusHistoryEntryTab = panelsCtx.digest.historyEntryTab ?? "content"
+			focusSceneId = panelsCtx.digest.sceneId
+			delete panelsCtx.digest.historyEntryId
+			delete panelsCtx.digest.historyEntryTab
+			delete panelsCtx.digest.sceneId
+		}
+	})
+
 	onMount(() => {
 		socket.on("lorebooks:list", (msg: Sockets.Lorebooks.List.Response) => {
 			if (msg.lorebookList) {
@@ -396,6 +413,9 @@
 						<HistoryEntryManager
 							lorebookId={selectedLorebook.id}
 							bind:hasUnsavedChanges={tabHasUnsavedChanges}
+							focusHistoryEntryId={focusHistoryEntryId}
+							focusEntryTab={focusHistoryEntryTab}
+							focusSceneId={focusSceneId}
 						/>
 					{/if}
 				</Tabs.Panel>

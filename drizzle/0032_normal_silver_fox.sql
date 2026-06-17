@@ -1,0 +1,1 @@
+ALTER TABLE "history_entries" ADD COLUMN "is_completed" boolean DEFAULT false NOT NULL;

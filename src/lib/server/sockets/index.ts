@@ -36,6 +36,7 @@ import { registerOllamaHandlers } from "./ollama"
 import { registerKoboldCppHandlers } from "./koboldcpp"
 import { registerSummarizeHandlers } from "./summarize"
 import { registerVectorizationHandlers } from "./vectorization"
+import { registerSceneHandlers } from "./scenes"
 
 const userId = 1 // Replace with actual user id
 
@@ -73,6 +74,7 @@ export function connectSockets(io: {
 		registerTagHandlers(socket, emitToUser, register)
 		registerSummarizeHandlers(socket, emitToUser, register)
 		registerVectorizationHandlers(socket, emitToUser, register)
+		registerSceneHandlers(socket, emitToUser, register)
 		console.log(`Socket connected: ${socket.id} for user ${userId}`)
 	})
 }

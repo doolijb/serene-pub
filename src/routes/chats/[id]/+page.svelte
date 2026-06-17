@@ -54,7 +54,11 @@
 	let isSummarizationMode = $state(false)
 	let selectedMessageIds = $state(new Set<number>())
 	let showSummarizeModal = $state(false)
-	let summarizeLoreType = $state<"world" | "history">("world")
+	let summarizeLoreType = $state<"world" | "history" | "character" | "scene">("world")
+	/** Message IDs already captured in a scene — hard-blocked from selection */
+	let scenedMessageIds = $state(new Set<number>())
+	/** Full scene list for this chat — used for in-chat scene/history-entry indicators */
+	let sceneList = $state<Sockets.Scenes.List.SceneWithEntry[]>([])
 	let chatResponseOrder: Sockets.Chats.GetResponseOrder.Response | undefined =
 		$state()
 	let availablePersonas: Sockets.Personas.List.Response["personaList"] =
@@ -610,6 +614,7 @@
 	}
 
 	function toggleSummarizationMessage(id: number) {
+		if (scenedMessageIds.has(id)) return // hard block
 		const next = new Set(selectedMessageIds)
 		next.has(id) ? next.delete(id) : next.add(id)
 		selectedMessageIds = next
@@ -618,9 +623,9 @@
 	function selectAllAbove(msgIndex: number) {
 		const msgs = chat!.chatMessages
 		const next = new Set(selectedMessageIds)
-		next.add(msgs[msgIndex].id)
-		for (let i = msgIndex - 1; i >= 0; i--) {
-			if (next.has(msgs[i].id)) break
+		for (let i = msgIndex; i >= 0; i--) {
+			if (scenedMessageIds.has(msgs[i].id)) break // stop at scened message
+			if (next.has(msgs[i].id) && i < msgIndex) break
 			next.add(msgs[i].id)
 		}
 		selectedMessageIds = next
@@ -629,15 +634,40 @@
 	function selectAllBelow(msgIndex: number) {
 		const msgs = chat!.chatMessages
 		const next = new Set(selectedMessageIds)
-		next.add(msgs[msgIndex].id)
-		for (let i = msgIndex + 1; i < msgs.length; i++) {
-			if (next.has(msgs[i].id)) break
+		for (let i = msgIndex; i < msgs.length; i++) {
+			if (scenedMessageIds.has(msgs[i].id)) break // stop at scened message
+			if (next.has(msgs[i].id) && i > msgIndex) break
 			next.add(msgs[i].id)
 		}
 		selectedMessageIds = next
 	}
 
-	function openSummarizeModal(loreType: "world" | "history") {
+	/** True when selected messages (for a scene) have a visible gap between them */
+	let hasSceneGap = $derived.by(() => {
+		if (!chat?.chatMessages.length || selectedMessageIds.size === 0) return false
+		const msgs = chat.chatMessages
+		const selectedIndices = msgs
+			.map((m, i) => (selectedMessageIds.has(m.id) ? i : -1))
+			.filter((i) => i !== -1)
+		if (selectedIndices.length < 2) return false
+		const minIdx = selectedIndices[0]
+		const maxIdx = selectedIndices[selectedIndices.length - 1]
+		for (let i = minIdx + 1; i < maxIdx; i++) {
+			const m = msgs[i]
+			if (!selectedMessageIds.has(m.id) && !m.isHidden) return true
+		}
+		return false
+	})
+
+	function openSummarizeModal(loreType: "world" | "history" | "character" | "scene") {
+		if (loreType === "scene" && hasSceneGap) {
+			toaster.error({
+				title: "Non-consecutive messages selected",
+				description:
+					"Scenes require a consecutive sequence of messages with no visible gaps. Deselect the skipped messages or hide them first."
+			})
+			return
+		}
 		summarizeLoreType = loreType
 		showSummarizeModal = true
 	}
@@ -1019,6 +1049,19 @@
 			}
 		})
 
+		socket?.on("scenes:scenedMessageIds", (msg: Sockets.Scenes.SenedMessageIds.Response) => {
+			scenedMessageIds = new Set(msg.scenedMessageIds)
+		})
+
+		socket?.on("scenes:list", (msg: Sockets.Scenes.List.Response) => {
+			if (!msg.sceneList.length || msg.sceneList[0].chatId === chatId) {
+				sceneList = msg.sceneList
+			}
+		})
+
+		socket?.emit("scenes:scenedMessageIds", { chatId })
+		socket?.emit("scenes:list", { chatId } satisfies Sockets.Scenes.List.Params)
+
 		// Cleanup function
 		return () => {
 			// Clear any pending timeouts
@@ -1074,6 +1117,28 @@
 		{editChatMessage}
 		{hasGeneratingMessage}
 		{isGuest}
+		{sceneList}
+		onHistoryEntryClick={({ historyEntryId, lorebookId }) => {
+			panelsCtx.digest.lorebookId = lorebookId
+			panelsCtx.digest.historyEntryId = historyEntryId
+			panelsCtx.digest.historyEntryTab = "content"
+			panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+		}}
+		onSceneClick={({ sceneId, historyEntryId, lorebookId }) => {
+			panelsCtx.digest.lorebookId = lorebookId
+			panelsCtx.digest.historyEntryId = historyEntryId
+			panelsCtx.digest.historyEntryTab = "scenes"
+			panelsCtx.digest.sceneId = sceneId
+			panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+		}}
+		onNewHistoryEntry={({ lorebookId }) => {
+			panelsCtx.digest.lorebookId = lorebookId
+			panelsCtx.digest.historyEntryTab = "content"
+			panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+		}}
+		onAttachLorebook={() => {
+			panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+		}}
 	>
 		{#snippet MessageComponent(props)}
 			<ChatMessage
@@ -1096,39 +1161,50 @@
 				{/snippet}
 				{#snippet messageControls(msg)}
 					{#if isSummarizationMode}
+						{@const isScened = scenedMessageIds.has(msg.id)}
 						<div class="flex gap-2" role="group" aria-label="Selection controls">
-							<button
-								class="btn btn-sm {selectedMessageIds.has(msg.id)
-									? 'preset-filled-secondary-500'
-									: 'preset-tonal-surface'}"
-								title={selectedMessageIds.has(msg.id) ? 'Deselect message' : 'Select message'}
-								onclick={() => toggleSummarizationMessage(msg.id)}
-							>
-								{#if selectedMessageIds.has(msg.id)}
-									<Icons.CheckSquare size={16} />
-								{:else}
-									<Icons.Square size={16} />
-								{/if}
-								<span class="lg:hidden">
-									{selectedMessageIds.has(msg.id) ? 'Deselect' : 'Select'}
+							{#if isScened}
+								<span
+									class="btn btn-sm preset-tonal-surface opacity-60 cursor-not-allowed"
+									title="Already captured in a scene"
+								>
+									<Icons.Film size={16} />
+									<span class="lg:hidden">In Scene</span>
 								</span>
-							</button>
-							<button
-								class="btn btn-sm preset-tonal-surface"
-								title="Select all above up to nearest selected"
-								onclick={() => selectAllAbove(props.index)}
-							>
-								<Icons.ChevronsUp size={16} />
-								<span class="lg:hidden">Select All Above</span>
-							</button>
-							<button
-								class="btn btn-sm preset-tonal-surface"
-								title="Select all below up to nearest selected"
-								onclick={() => selectAllBelow(props.index)}
-							>
-								<Icons.ChevronsDown size={16} />
-								<span class="lg:hidden">Select All Below</span>
-							</button>
+							{:else}
+								<button
+									class="btn btn-sm {selectedMessageIds.has(msg.id)
+										? 'preset-filled-secondary-500'
+										: 'preset-tonal-surface'}"
+									title={selectedMessageIds.has(msg.id) ? 'Deselect message' : 'Select message'}
+									onclick={() => toggleSummarizationMessage(msg.id)}
+								>
+									{#if selectedMessageIds.has(msg.id)}
+										<Icons.CheckSquare size={16} />
+									{:else}
+										<Icons.Square size={16} />
+									{/if}
+									<span class="lg:hidden">
+										{selectedMessageIds.has(msg.id) ? 'Deselect' : 'Select'}
+									</span>
+								</button>
+								<button
+									class="btn btn-sm preset-tonal-surface"
+									title="Select all above up to nearest selected"
+									onclick={() => selectAllAbove(props.index)}
+								>
+									<Icons.ChevronsUp size={16} />
+									<span class="lg:hidden">Select All Above</span>
+								</button>
+								<button
+									class="btn btn-sm preset-tonal-surface"
+									title="Select all below up to nearest selected"
+									onclick={() => selectAllBelow(props.index)}
+								>
+									<Icons.ChevronsDown size={16} />
+									<span class="lg:hidden">Select All Below</span>
+								</button>
+							{/if}
 						</div>
 					{:else}
 						<MessageControls
@@ -1161,7 +1237,11 @@
 						<button
 							class="btn btn-sm preset-tonal-surface"
 							onclick={() => {
-								selectedMessageIds = new Set(chat!.chatMessages.map((m) => m.id))
+								selectedMessageIds = new Set(
+									chat!.chatMessages
+										.filter((m) => !scenedMessageIds.has(m.id))
+										.map((m) => m.id)
+								)
 							}}
 						>
 							<Icons.CheckSquare size={16} />
@@ -1184,6 +1264,14 @@
 							Cancel
 						</button>
 						<button
+							class="btn btn-sm preset-filled-secondary-500"
+							disabled={selectedMessageIds.size === 0}
+							onclick={() => openSummarizeModal('scene')}
+						>
+							<Icons.Film size={16} />
+							Scene
+						</button>
+						<button
 							class="btn btn-sm preset-filled-primary-500"
 							disabled={selectedMessageIds.size === 0}
 							onclick={() => openSummarizeModal('world')}
@@ -1192,7 +1280,15 @@
 							World Lore
 						</button>
 						<button
-							class="btn btn-sm preset-filled-secondary-500"
+							class="btn btn-sm preset-filled-tertiary-500"
+							disabled={selectedMessageIds.size === 0}
+							onclick={() => openSummarizeModal('character')}
+						>
+							<Icons.User size={16} />
+							Character Lore
+						</button>
+						<button
+							class="btn btn-sm preset-tonal-surface"
 							disabled={selectedMessageIds.size === 0}
 							onclick={() => openSummarizeModal('history')}
 						>
@@ -1257,8 +1353,15 @@
 	lorebookId={chat?.lorebookId ?? null}
 	selectedMessageIds={[...selectedMessageIds]}
 	initialLoreType={summarizeLoreType}
-	onSaved={exitSummarizationMode}
+	onSaved={() => {
+		socket?.emit("scenes:scenedMessageIds", { chatId })
+		socket?.emit("scenes:list", { chatId } satisfies Sockets.Scenes.List.Params)
+		exitSummarizationMode()
+	}}
 	onLorebookSet={handleLorebookSet}
+	chatCharacters={(chat?.chatCharacters ?? []).map(cc => ({ type: "character" as const, id: cc.character.id, name: (cc.character as any).nickname || cc.character.name }))}
+	chatPersonas={(chat?.chatPersonas ?? []).map(cp => ({ type: "persona" as const, id: cp.persona.id, name: cp.persona.name }))}
+	hasSceneMessageGap={hasSceneGap}
 />
 
 <Modal

@@ -11,7 +11,11 @@
       "Bash(grep -n \"SummarizeLoreModal\\\\|showSummarizeModal\\\\|isSummarizationMode\" /home/jody/github/serene-pub/src/routes/chats/[id]/+page.svelte)",
       "Bash(grep -v \"^$\")",
       "Bash(grep -E \"\\\\.\\(svelte|ts\\)$\")",
-      "Bash(node -e \"const { PGlite } = require\\('@electric-sql/pglite'\\); console.log\\('PGLite available'\\); const { vector } = require\\('@electric-sql/pglite/vector'\\); console.log\\('vector available'\\);\")"
+      "Bash(node -e \"const { PGlite } = require\\('@electric-sql/pglite'\\); console.log\\('PGLite available'\\); const { vector } = require\\('@electric-sql/pglite/vector'\\); console.log\\('vector available'\\);\")",
+      "Bash(grep -v \":[0-9]*:[0-9]*$\")",
+      "Bash(git stash *)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); errs=[x for x in d if x['severity']=='Error']; print\\(json.dumps\\(errs, indent=2\\)\\)\")",
+      "Bash(python3 -c ' *)"
     ],
     "deny": []
   }

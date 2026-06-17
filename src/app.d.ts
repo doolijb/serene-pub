@@ -56,6 +56,12 @@ declare global {
 			chatCharacterId?: number
 			lorebookId?: number
 			tutorial?: boolean
+			/** Focus a specific history entry in the lorebook sidebar */
+			historyEntryId?: number
+			/** Which tab to open when focusing a history entry */
+			historyEntryTab?: "content" | "scenes"
+			/** Expand a specific scene within the scenes tab */
+			sceneId?: number
 		}
 		leftNavOrder: string[]
 		rightNavOrder: string[]

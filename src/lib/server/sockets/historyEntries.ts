@@ -116,19 +116,19 @@ export const updateHistoryEntryHandler: Handler<
 			throw new Error("History entry not found.")
 		}
 
-		const data: SelectHistoryEntry = { ...params.historyEntry }
+		const { id, createdAt, updatedAt, embedding, embeddingModel, vectorizedAt, ...fields } = { ...params.historyEntry }
 
-		// Update the entry
+		// Update the entry (strip auto-managed/binary fields that must not be overwritten from client)
 		await db
 			.update(schema.historyEntries)
-			.set(data)
-			.where(eq(schema.historyEntries.id, data.id))
+			.set(fields)
+			.where(eq(schema.historyEntries.id, id))
 
 		// Get updated entry
 		const [updatedEntry] = await db
 			.select()
 			.from(schema.historyEntries)
-			.where(eq(schema.historyEntries.id, data.id))
+			.where(eq(schema.historyEntries.id, id))
 
 		// Refresh lorebook bindings and entry list
 		if (emitToUser) {

@@ -5,6 +5,50 @@ import type { Handler } from "$lib/shared/events"
 import { generateSummary } from "$lib/server/utils/summarizer"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 
+/**
+ * Find an existing lorebook binding for the given character or persona, or create
+ * a new one with an auto-incremented binding string (e.g. {{char:3}}).
+ */
+async function resolveOrCreateBinding({
+	lorebookId,
+	characterId,
+	personaId
+}: {
+	lorebookId: number
+	characterId?: number | null
+	personaId?: number | null
+}): Promise<number> {
+	if (!characterId && !personaId) throw new Error("characterId or personaId required")
+
+	// Check for an existing binding
+	const existing = await db.query.lorebookBindings.findFirst({
+		where: characterId
+			? and(eq(schema.lorebookBindings.lorebookId, lorebookId), eq(schema.lorebookBindings.characterId, characterId))
+			: and(eq(schema.lorebookBindings.lorebookId, lorebookId), eq(schema.lorebookBindings.personaId, personaId!))
+	})
+	if (existing) return existing.id
+
+	// Auto-generate next binding string
+	const allBindings = await db.query.lorebookBindings.findMany({
+		where: eq(schema.lorebookBindings.lorebookId, lorebookId)
+	})
+	let maxNum = 0
+	for (const b of allBindings) {
+		const match = b.binding.match(/\{\{char:(\d+)\}\}/)
+		if (match) {
+			const n = parseInt(match[1], 10)
+			if (n > maxNum) maxNum = n
+		}
+	}
+	const bindingStr = `{{char:${maxNum + 1}}}`
+
+	const [created] = await db
+		.insert(schema.lorebookBindings)
+		.values({ lorebookId, binding: bindingStr, characterId: characterId ?? null, personaId: personaId ?? null })
+		.returning()
+	return created.id
+}
+
 export const chatsSummarizeHandler: Handler<
 	Sockets.Chats.Summarize.Params,
 	Sockets.Chats.Summarize.Response
@@ -12,7 +56,7 @@ export const chatsSummarizeHandler: Handler<
 	event: "chats:summarize",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
-		const { chatId, messageIds, loreType, topic } = params
+		const { chatId, messageIds, loreType, topic, lorebookBindingCharacterId, lorebookBindingPersonaId } = params
 
 		// Verify the user owns the chat
 		const chat = await db.query.chats.findFirst({
@@ -99,12 +143,23 @@ export const chatsSummarizeHandler: Handler<
 			}
 		})
 
+		// For character lore, resolve or create the lorebook binding
+		let lorebookBindingId: number | null = null
+		if (loreType === "character" && (lorebookBindingCharacterId || lorebookBindingPersonaId)) {
+			lorebookBindingId = await resolveOrCreateBinding({
+				lorebookId: chat.lorebookId!,
+				characterId: lorebookBindingCharacterId,
+				personaId: lorebookBindingPersonaId
+			})
+		}
+
 		const response: Sockets.Chats.Summarize.Response = {
 			content: result.content ?? result.raw,
 			name: result.name,
 			raw: result.raw,
 			lorebookId: chat.lorebookId!,
-			batchCount: result.batchCount
+			batchCount: result.batchCount,
+			lorebookBindingId
 		}
 
 		emitToUser("chats:summarize:complete", response)

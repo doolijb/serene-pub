@@ -35,7 +35,7 @@ export interface SummarizeProgressData {
 
 export interface SummarizeInput {
 	messages: { senderName: string; content: string }[]
-	loreType: "world" | "history"
+	loreType: "world" | "history" | "character" | "scene"
 	topic?: string
 	connection: SelectConnection
 	sampling: SelectSamplingConfig
@@ -160,6 +160,59 @@ async function runGeneration(
 	return raw.trim()
 }
 
+export interface CompileInput {
+	scenes: { name: string | null; summary: string | null }[]
+	connection: SelectConnection
+	sampling: SelectSamplingConfig
+	contextConfig: SelectContextConfig
+	promptConfig: SelectPromptConfig
+	onProgress?: (data: SummarizeProgressData) => void
+}
+
+/**
+ * Synthesize scene summaries into a single history entry content string.
+ * Skips the batch-drafting phase — scenes are already drafted.
+ */
+export async function compileScenesForEntry(input: CompileInput): Promise<SummarizeResult> {
+	const { scenes, connection, sampling, contextConfig, promptConfig, onProgress } = input
+
+	const tokenCounter = new TokenCounters("estimate")
+	const tokenLimit: number = (connection as any).tokenLimit ?? (connection as any).contextSize ?? 4096
+	const genOpts = { connection, sampling, contextConfig, promptConfig, tokenCounter, tokenLimit }
+
+	const drafts: JsonDraft[] = scenes
+		.filter((s) => s.summary?.trim())
+		.map((s, i) => ({ part: i + 1, draft: s.summary! }))
+
+	if (drafts.length === 0) {
+		throw new Error("No scene summaries to compile.")
+	}
+
+	onProgress?.({ phase: "synthesizing", batch: 1, totalBatches: 1, partial: {} })
+
+	if (drafts.length === 1) {
+		const content = drafts[0].draft
+		onProgress?.({ phase: "synthesizing", batch: 1, totalBatches: 1, partial: { content } })
+		return { content, name: undefined, raw: content, batchCount: 1 }
+	}
+
+	const jsonDrafts = JSON.stringify(drafts, null, 2)
+	const synthesisPrompt = buildSynthesisPrompt({ jsonDrafts, loreType: "history", topic: undefined })
+	const synthesisRaw = await runGeneration(synthesisPrompt, { ...genOpts, maxTokens: 2000 })
+	const finalParsed = parseSummaryOutput(synthesisRaw)
+	const fallbackContent = drafts.map((d) => d.draft).join("\n\n")
+	const content = finalParsed.content || fallbackContent
+
+	onProgress?.({
+		phase: "synthesizing",
+		batch: 1,
+		totalBatches: 1,
+		partial: { content: finalParsed.content, raw: synthesisRaw }
+	})
+
+	return { content, name: undefined, raw: synthesisRaw, batchCount: drafts.length }
+}
+
 export async function generateSummary(
 	input: SummarizeInput
 ): Promise<SummarizeResult> {
@@ -215,7 +268,7 @@ export async function generateSummary(
 	// If only one batch, skip synthesis — the single draft is the final result
 	if (drafts.length === 1) {
 		const content = drafts[0].draft
-		const name = loreType === "world" ? await generateName(content) : undefined
+		const name = (loreType === "world" || loreType === "character" || loreType === "scene") ? await generateName(content) : undefined
 		return {
 			content,
 			name,
@@ -240,7 +293,7 @@ export async function generateSummary(
 		partial: { content: finalParsed.content, raw: synthesisRaw }
 	})
 
-	const name = loreType === "world" ? await generateName(finalContent) : undefined
+	const name = (loreType === "world" || loreType === "character" || loreType === "scene") ? await generateName(finalContent) : undefined
 
 	return {
 		content: finalContent,

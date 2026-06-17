@@ -1,0 +1,2 @@
+ALTER TABLE "scenes" ADD COLUMN "history_entry_id" integer;--> statement-breakpoint
+ALTER TABLE "scenes" ADD CONSTRAINT "scenes_history_entry_id_history_entries_id_fk" FOREIGN KEY ("history_entry_id") REFERENCES "public"."history_entries"("id") ON DELETE set null ON UPDATE no action;

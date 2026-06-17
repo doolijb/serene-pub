@@ -131,4 +131,9 @@ export global {
 
 	export type SelectUserSettings = typeof schema.userSettings.$inferSelect
 	export type InsertUserSettings = typeof schema.userSettings.$inferInsert
+
+	// Scene types
+	export type SelectScene = typeof schema.scenes.$inferSelect
+	export type InsertScene = typeof schema.scenes.$inferInsert
+	export type UpdateScene = Partial<SelectScene> & { id: number }
 }

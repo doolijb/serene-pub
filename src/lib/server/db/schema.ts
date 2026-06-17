@@ -359,6 +359,7 @@ export const lorebooksRelations = relations(lorebooks, ({ many, one }) => ({
 	worldLoreEntries: many(worldLoreEntries),
 	characterLoreEntries: many(characterLoreEntries),
 	historyEntries: many(historyEntries),
+	scenes: many(scenes),
 	user: one(users, {
 		fields: [lorebooks.userId],
 		references: [users.id]
@@ -525,16 +526,18 @@ export const historyEntries = pgTable("history_entries", {
 		.default(sql`(CURRENT_TIMESTAMP)`)
 		.$onUpdate(() => new Date()),
 	position: integer("position").notNull().default(0),
+	isCompleted: boolean("is_completed").notNull().default(false),
 	embedding: real("embedding").array(),
 	embeddingModel: text("embedding_model"),
 	vectorizedAt: timestamp("vectorized_at")
 })
 
-export const historyEntriesRelations = relations(historyEntries, ({ one }) => ({
+export const historyEntriesRelations = relations(historyEntries, ({ one, many }) => ({
 	lorebook: one(lorebooks, {
 		fields: [historyEntries.lorebookId],
 		references: [lorebooks.id]
-	})
+	}),
+	scenes: many(scenes)
 }))
 
 export const tags = pgTable("tags", {
@@ -794,7 +797,8 @@ export const chatsRelations = relations(chats, ({ one, many }) => ({
 		fields: [chats.lorebookId],
 		references: [lorebooks.id]
 	}),
-	chatTags: many(chatTags)
+	chatTags: many(chatTags),
+	scenes: many(scenes)
 }))
 
 // Chat messages
@@ -1057,12 +1061,16 @@ export const systemSettingsRelations = relations(systemSettings, ({ one }) => ({
  */
 export const scenes = pgTable("scenes", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	chatId: integer("chat_id")
+	// Chat is nullable — chat deletion sets this to null; scenes persist until lorebook is deleted
+	chatId: integer("chat_id").references(() => chats.id, { onDelete: "set null" }),
+	lorebookId: integer("lorebook_id")
 		.notNull()
-		.references(() => chats.id, { onDelete: "cascade" }),
-	lorebookId: integer("lorebook_id").references(() => lorebooks.id, {
-		onDelete: "set null"
-	}),
+		.references(() => lorebooks.id, { onDelete: "cascade" }),
+	// History entry this scene contributes to — cascade so scenes don't outlive their entry
+	historyEntryId: integer("history_entry_id")
+		.notNull()
+		.references(() => historyEntries.id, { onDelete: "cascade" }),
+	name: text("name"),
 	// The IDs of chatMessages included in this scene
 	selectedMessageIds: json("selected_message_ids")
 		.notNull()
@@ -1090,6 +1098,10 @@ export const scenesRelations = relations(scenes, ({ one, many }) => ({
 	lorebook: one(lorebooks, {
 		fields: [scenes.lorebookId],
 		references: [lorebooks.id]
+	}),
+	historyEntry: one(historyEntries, {
+		fields: [scenes.historyEntryId],
+		references: [historyEntries.id]
 	}),
 	narrativeNodes: many(narrativeNodes)
 }))

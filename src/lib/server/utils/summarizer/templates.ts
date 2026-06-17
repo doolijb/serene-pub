@@ -40,13 +40,36 @@ export function formatMessagesAsJson(
 
 export function buildBatchPrompt(opts: {
 	jsonMessages: string
-	loreType: "world" | "history"
+	loreType: "world" | "history" | "character" | "scene"
 	topic?: string
 }): SummaryPrompt {
 	const { jsonMessages, loreType, topic } = opts
 	const topicLine = topic?.trim()
 		? `Focus specifically on: "${topic.trim()}"\n\n`
 		: ""
+
+	if (loreType === "character") {
+		return {
+			systemPrompt:
+				"You are a character archivist recording facts about a specific character from a roleplay exchange. Your records are concise bullet points that capture who the character is, what they did, and how they relate to others. You write only what is directly shown — no invention, no embellishment.",
+			userPrompt: `The following JSON array contains a portion of a roleplay exchange. Extract character lore as bullet points.
+${topicLine}Rules:
+- One bullet point per meaningful fact, ability, relationship, or event involving the character.
+- Focus on character-specific details: personality traits revealed, abilities demonstrated, relationships formed or changed, past revealed, decisions made.
+- Write in past tense.
+- Do NOT include titles, headers, section labels, or any text outside the <content> tag.
+- Do not invent details not present in the messages.
+
+Messages:
+${jsonMessages}
+
+Output ONLY in this exact format — no other text before or after:
+<content>
+• [Character fact, ability, relationship, or event]
+• [Character fact, ability, relationship, or event]
+</content>`
+		}
+	}
 
 	if (loreType === "history") {
 		return {
@@ -68,6 +91,28 @@ Output ONLY in this exact format — no other text before or after:
 <content>
 • [Key event or change]
 • [Key event or change]
+</content>`
+		}
+	}
+
+	if (loreType === "scene") {
+		return {
+			systemPrompt:
+				"You are a scene archivist capturing what happened in a discrete story moment from a roleplay exchange. You write a tight narrative summary — past tense, plain prose — that captures the key beats, actions, and emotional turning points. No invention, no embellishment.",
+			userPrompt: `The following JSON array contains a portion of a roleplay exchange. Write a scene summary.
+${topicLine}Rules:
+- Write in past tense, plain prose (not bullet points).
+- Capture the key events, actions, character moments, and turning points.
+- Keep it concise — aim for 2–4 short paragraphs.
+- Do NOT include titles, headers, section labels, or any text outside the <content> tag.
+- Do not invent details not present in the messages.
+
+Messages:
+${jsonMessages}
+
+Output ONLY in this exact format — no other text before or after:
+<content>
+[Scene summary paragraph(s)]
 </content>`
 		}
 	}
@@ -98,12 +143,16 @@ Output ONLY in this exact format — no other text before or after:
 
 export function buildNamePrompt(opts: {
 	content: string
-	loreType: "world" | "history"
+	loreType: "world" | "history" | "character" | "scene"
 }): SummaryPrompt {
 	const instruction =
 		opts.loreType === "history"
 			? "You generate short titles for historical chronicle entries. The title should capture the key event or turning point."
-			: "You generate short titles for world lore entries. The title should describe the subject of the entry."
+			: opts.loreType === "character"
+				? "You generate short titles for character lore entries. The title should describe the subject matter of the entry (e.g. an ability, relationship, or past event)."
+				: opts.loreType === "scene"
+					? "You generate short titles for scene summaries. The title should capture the key moment or action of the scene."
+					: "You generate short titles for world lore entries. The title should describe the subject of the entry."
 
 	return {
 		systemPrompt: instruction,
@@ -119,13 +168,37 @@ Title:`
 
 export function buildSynthesisPrompt(opts: {
 	jsonDrafts: string
-	loreType: "world" | "history"
+	loreType: "world" | "history" | "character" | "scene"
 	topic?: string
 }): SummaryPrompt {
 	const { jsonDrafts, loreType, topic } = opts
 	const topicLine = topic?.trim()
 		? `Focus specifically on: "${topic.trim()}"\n\n`
 		: ""
+
+	if (loreType === "character") {
+		return {
+			systemPrompt:
+				"You are a master character archivist. Given draft bullet points about a character from a roleplay exchange, you merge them into a single clean character lore entry. You write only what the drafts contain — no invention, no embellishment.",
+			userPrompt: `The following JSON array contains draft character lore bullet points from a roleplay exchange. Merge them into one clean, organized bullet-point entry.
+${topicLine}Rules:
+- If multiple bullets describe the same trait, ability, or relationship, merge them into one bullet that captures all the detail.
+- If a bullet from a later part restates something already covered, drop the repeat and keep only the richer version.
+- Preserve the most specific and meaningful character details.
+- Write in past tense.
+- Do NOT include titles, headers, section labels, or any text outside the <content> tag.
+- Do not invent details not present in the drafts.
+
+Drafts:
+${jsonDrafts}
+
+Output ONLY in this exact format — no other text before or after:
+<content>
+• [Character fact, ability, relationship, or event]
+• [Character fact, ability, relationship, or event]
+</content>`
+		}
+	}
 
 	if (loreType === "history") {
 		return {
@@ -149,6 +222,29 @@ Output ONLY in this exact format — no other text before or after:
 <content>
 • [Key event or change]
 • [Key event or change]
+</content>`
+		}
+	}
+
+	if (loreType === "scene") {
+		return {
+			systemPrompt:
+				"You are a master scene editor. Given draft scene summaries covering a roleplay exchange in chronological order, you merge them into a single coherent scene narrative. You write only what the drafts contain — no invention, no embellishment.",
+			userPrompt: `The following JSON array contains draft scene summaries in chronological order. Merge them into one coherent scene narrative.
+${topicLine}Rules:
+- Preserve chronological order.
+- Write in past tense, plain prose (not bullet points).
+- Merge overlapping or duplicate descriptions into a single, richer version.
+- Keep it concise — aim for 3–6 short paragraphs.
+- Do NOT include titles, headers, section labels, or any text outside the <content> tag.
+- Do not invent details not present in the drafts.
+
+Drafts:
+${jsonDrafts}
+
+Output ONLY in this exact format — no other text before or after:
+<content>
+[Scene narrative paragraph(s)]
 </content>`
 		}
 	}

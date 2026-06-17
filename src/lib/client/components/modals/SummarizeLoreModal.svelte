@@ -25,15 +25,27 @@
 		}
 	}
 
+	interface BindableEntity {
+		type: "character" | "persona"
+		id: number
+		name: string
+	}
+
 	interface Props {
 		open: boolean
 		onOpenChange: (e: { open: boolean }) => void
 		chatId: number
 		lorebookId: number | null
 		selectedMessageIds: number[]
-		initialLoreType?: "world" | "history"
+		initialLoreType?: "world" | "history" | "character" | "scene"
 		onSaved: () => void
 		onLorebookSet: (lorebookId: number) => void
+		/** Characters currently in the chat */
+		chatCharacters?: BindableEntity[]
+		/** Personas currently in the chat */
+		chatPersonas?: BindableEntity[]
+		/** True when selected messages have a visible gap — blocks scene generation */
+		hasSceneMessageGap?: boolean
 	}
 
 	let {
@@ -44,7 +56,10 @@
 		selectedMessageIds,
 		initialLoreType = "world",
 		onSaved,
-		onLorebookSet
+		onLorebookSet,
+		chatCharacters = [],
+		chatPersonas = [],
+		hasSceneMessageGap = false
 	}: Props = $props()
 
 	const socket = skio.get()!
@@ -54,7 +69,7 @@
 	let step = $state<Step>("configure")
 
 	// ── Configure step state ──────────────────────────────────────
-	let loreType = $state<"world" | "history">(initialLoreType)
+	let loreType = $state<"world" | "history" | "character" | "scene">(initialLoreType)
 	let topic = $state("")
 
 	// Lorebook attachment
@@ -63,6 +78,33 @@
 	let isCreatingLorebook = $state(false)
 	let newLorebookName = $state("")
 	let historyEntryList = $state<Sockets.HistoryEntries.List.Response["historyEntryList"]>([])
+
+	// Scene — history entry binding
+	let selectedHistoryEntryId = $state<number | "">("")
+	let isCreatingHistoryEntry = $state(false)
+
+	// Character lore binding
+	let lorebookBindings = $state<SelectLorebookBinding[]>([])
+	/** Combined, deduplicated list of bindable entities for the dropdown */
+	let bindableEntities = $derived.by<BindableEntity[]>(() => {
+		const seen = new Set<string>()
+		const result: BindableEntity[] = []
+		const add = (e: BindableEntity) => {
+			const key = `${e.type}:${e.id}`
+			if (!seen.has(key)) { seen.add(key); result.push(e) }
+		}
+		for (const cc of chatCharacters) add(cc)
+		for (const cp of chatPersonas) add(cp)
+		for (const b of lorebookBindings) {
+			if (b.characterId && (b as any).character) add({ type: "character", id: b.characterId, name: (b as any).character.nickname || (b as any).character.name })
+			if (b.personaId && (b as any).persona) add({ type: "persona", id: b.personaId, name: (b as any).persona.name })
+		}
+		return result
+	})
+	/** Selected binding value: "character:5", "persona:3", or "" */
+	let selectedBinding = $state("")
+	/** Resolved binding ID returned from the server after summarization */
+	let resolvedBindingId = $state<number | null>(null)
 
 	// ── Generating step state ─────────────────────────────────────
 	let currentBatch = $state(0)
@@ -84,7 +126,11 @@
 		totalBatches > 0 ? Math.round((currentBatch / totalBatches) * 100) : 0
 	)
 	let canGenerate = $derived(
-		!!lorebookId && selectedMessageIds.length > 0
+		!!lorebookId &&
+		selectedMessageIds.length > 0 &&
+		(loreType !== "character" || topic.trim().length > 0) &&
+		(loreType !== "scene" || !!selectedHistoryEntryId) &&
+		(loreType !== "scene" || !hasSceneMessageGap)
 	)
 	let canSave = $derived(
 		loreType === "history"
@@ -99,10 +145,15 @@
 			step = "configure"
 			loreType = initialLoreType
 			topic = ""
+			selectedBinding = ""
+			resolvedBindingId = null
+			selectedHistoryEntryId = ""
+			isCreatingHistoryEntry = false
 			attachingLorebookId = ""
 			isCreatingLorebook = false
 			newLorebookName = ""
 			historyEntryList = []
+			lorebookBindings = []
 			summarizePhase = "drafting"
 			currentBatch = 0
 			totalBatches = 1
@@ -117,10 +168,11 @@
 		}
 	})
 
-	// Fetch history entries whenever the lorebook is set while the modal is open
+	// Fetch lorebook data whenever the lorebook changes while the modal is open
 	$effect(() => {
 		if (open && lorebookId) {
 			socket.emit("historyEntries:list", { lorebookId })
+			socket.emit("lorebooks:bindingList", { lorebookId })
 		}
 	})
 
@@ -138,6 +190,7 @@
 		rawOutput = data.raw
 		reviewName = data.name ?? ""
 		reviewContent = data.content ?? data.raw ?? ""
+		resolvedBindingId = data.lorebookBindingId ?? null
 
 		if (loreType === "history") {
 			const defaultDate = computeDefaultDate(historyEntryList)
@@ -182,6 +235,20 @@
 		historyEntryList = data.historyEntryList
 	}
 
+	function handleHistoryEntryCreate(data: Sockets.HistoryEntries.Create.Response) {
+		if (data.historyEntry && loreType === "scene") {
+			historyEntryList = [...historyEntryList, data.historyEntry]
+			selectedHistoryEntryId = data.historyEntry.id
+			isCreatingHistoryEntry = false
+		}
+	}
+
+	function handleLorebookBindingList(data: Sockets.Lorebooks.BindingList.Response) {
+		if (data.lorebookId === lorebookId) {
+			lorebookBindings = data.lorebookBindingList
+		}
+	}
+
 	onMount(() => {
 		socket.on("chats:summarize:progress", handleProgress)
 		socket.on("chats:summarize:complete", handleComplete)
@@ -190,6 +257,8 @@
 		socket.on("chats:setLorebook", handleSetLorebook)
 		socket.on("lorebooks:create", handleLorebookCreate)
 		socket.on("historyEntries:list", handleHistoryEntriesList)
+		socket.on("historyEntries:create", handleHistoryEntryCreate)
+		socket.on("lorebooks:bindingList", handleLorebookBindingList)
 		socket.emit("lorebooks:list", {})
 	})
 
@@ -201,6 +270,8 @@
 		socket.off("chats:setLorebook")
 		socket.off("lorebooks:create")
 		socket.off("historyEntries:list")
+		socket.off("historyEntries:create")
+		socket.off("lorebooks:bindingList")
 	})
 
 	// ── Actions ───────────────────────────────────────────────────
@@ -223,17 +294,44 @@
 		isCreatingLorebook = false
 	}
 
+	function createBlankHistoryEntry() {
+		if (!lorebookId) return
+		// Compute next date from the latest existing entry
+		const defaultDate = historyEntryList.length > 0
+			? computeDefaultDate(historyEntryList)
+			: { year: 1, month: 1, day: 1 }
+		socket.emit("historyEntries:create", {
+			historyEntry: {
+				lorebookId,
+				year: defaultDate.year,
+				month: defaultDate.month,
+				day: defaultDate.day,
+				content: "",
+				keys: "",
+				enabled: true,
+				constant: false,
+				useRegex: false,
+				caseSensitive: false
+			}
+		})
+		isCreatingHistoryEntry = true
+	}
+
 	function generate() {
 		step = "generating"
 		currentBatch = 0
 		totalBatches = 1
 		partialSummary = {}
+		resolvedBindingId = null
 
+		const [bindingType, bindingIdStr] = selectedBinding.split(":")
 		socket.emit("chats:summarize", {
 			chatId,
 			messageIds: selectedMessageIds,
 			loreType,
-			topic: topic.trim() || undefined
+			topic: loreType === "scene" ? undefined : (topic.trim() || undefined),
+			lorebookBindingCharacterId: bindingType === "character" ? Number(bindingIdStr) : undefined,
+			lorebookBindingPersonaId: bindingType === "persona" ? Number(bindingIdStr) : undefined
 		} satisfies Sockets.Chats.Summarize.Params)
 	}
 
@@ -241,12 +339,38 @@
 		if (!canSave || !lorebookId) return
 		isSaving = true
 
-		if (loreType === "world") {
+		if (loreType === "scene") {
+			socket.emit("scenes:create", {
+				scene: {
+					lorebookId,
+					chatId,
+					historyEntryId: selectedHistoryEntryId ? Number(selectedHistoryEntryId) : null,
+					name: reviewName.trim() || null,
+					summary: reviewContent.trim(),
+					selectedMessageIds
+				}
+			})
+		} else if (loreType === "world") {
 			socket.emit("worldLoreEntries:create", {
 				worldLoreEntry: {
 					lorebookId,
 					name: reviewName.trim(),
 					content: reviewContent.trim(),
+					keys: "",
+					enabled: true,
+					constant: false,
+					useRegex: false,
+					caseSensitive: false,
+					priority: 1
+				}
+			})
+		} else if (loreType === "character") {
+			socket.emit("characterLoreEntries:create", {
+				characterLoreEntry: {
+					lorebookId,
+					name: reviewName.trim(),
+					content: reviewContent.trim(),
+					lorebookBindingId: resolvedBindingId ?? null,
 					keys: "",
 					enabled: true,
 					constant: false,
@@ -272,9 +396,8 @@
 			})
 		}
 
-		toaster.success({
-			title: loreType === "world" ? "World lore entry saved" : "History entry saved"
-		})
+		const titles = { world: "World lore entry saved", character: "Character lore entry saved", history: "History entry saved", scene: "Scene saved" }
+		toaster.success({ title: titles[loreType] })
 		isSaving = false
 		onSaved()
 		onOpenChange({ open: false })
@@ -374,7 +497,18 @@
 				<!-- Entry type -->
 				<fieldset class="space-y-2">
 					<legend class="label text-sm font-semibold">Entry type</legend>
-					<div class="flex gap-4">
+					<div class="flex flex-wrap gap-4">
+						<label class="flex cursor-pointer items-center gap-2">
+							<input
+								type="radio"
+								class="radio"
+								name="loreType"
+								value="scene"
+								bind:group={loreType}
+							/>
+							<Icons.Film size={16} />
+							<span class="text-sm">Scene</span>
+						</label>
 						<label class="flex cursor-pointer items-center gap-2">
 							<input
 								type="radio"
@@ -391,6 +525,17 @@
 								type="radio"
 								class="radio"
 								name="loreType"
+								value="character"
+								bind:group={loreType}
+							/>
+							<Icons.User size={16} />
+							<span class="text-sm">Character Lore</span>
+						</label>
+						<label class="flex cursor-pointer items-center gap-2">
+							<input
+								type="radio"
+								class="radio"
+								name="loreType"
 								value="history"
 								bind:group={loreType}
 							/>
@@ -400,18 +545,94 @@
 					</div>
 				</fieldset>
 
-				<!-- Topic (world lore only) -->
-				{#if loreType === "world"}
+				<!-- Scene gap warning -->
+				{#if loreType === "scene" && hasSceneMessageGap}
+					<div class="flex items-start gap-2 rounded-lg border border-warning-500/40 bg-warning-500/10 p-3 text-sm">
+						<Icons.TriangleAlert size={16} class="text-warning-500 mt-0.5 shrink-0" />
+						<span>Selected messages have a visible gap. Scenes must be a consecutive sequence with no unselected visible messages between them. Deselect the skipped messages or hide them first.</span>
+					</div>
+				{/if}
+
+				<!-- History entry binding (scene only) -->
+				{#if loreType === "scene"}
+					<div class="space-y-1">
+						<label class="label text-sm font-semibold" for="summarize-history-entry">
+							History entry <span class="text-error-500">*</span>
+						</label>
+						{#if historyEntryList.length > 0 || selectedHistoryEntryId}
+							<div class="flex gap-2">
+								<select
+									id="summarize-history-entry"
+									class="select flex-1 text-sm"
+									bind:value={selectedHistoryEntryId}
+								>
+									<option value="">— Select history entry —</option>
+									{#each historyEntryList as entry}
+										<option value={entry.id}>
+											{#if entry.year}Year {entry.year}{entry.month ? `, Month ${entry.month}` : ""}{entry.day ? `, Day ${entry.day}` : ""}{:else}Entry #{entry.id}{/if}
+										</option>
+									{/each}
+								</select>
+								<button
+									class="btn btn-sm preset-tonal-surface"
+									disabled={isCreatingHistoryEntry}
+									onclick={createBlankHistoryEntry}
+									title="Create a new blank history entry"
+								>
+									{#if isCreatingHistoryEntry}
+										<Icons.Loader size={14} class="animate-spin" />
+									{:else}
+										<Icons.Plus size={14} />
+									{/if}
+									New
+								</button>
+							</div>
+						{:else}
+							<div class="flex gap-2">
+								<p class="text-surface-500 flex-1 text-sm">No history entries yet.</p>
+								<button
+									class="btn btn-sm preset-filled-primary-500"
+									disabled={isCreatingHistoryEntry}
+									onclick={createBlankHistoryEntry}
+								>
+									{#if isCreatingHistoryEntry}
+										<Icons.Loader size={14} class="animate-spin" />
+									{:else}
+										<Icons.Plus size={14} />
+									{/if}
+									Create New Entry
+								</button>
+							</div>
+						{/if}
+						{#if selectedHistoryEntryId}
+							{@const entry = historyEntryList.find(e => e.id === Number(selectedHistoryEntryId))}
+							{#if entry?.content}
+								<p class="text-surface-500 text-xs line-clamp-2">{entry.content}</p>
+							{:else}
+								<p class="text-surface-400 text-xs italic">Empty entry — content will be populated from scenes later.</p>
+							{/if}
+						{/if}
+					</div>
+				{/if}
+
+				<!-- Topic (world + character lore) -->
+				{#if loreType === "world" || loreType === "character"}
 					<div class="space-y-1">
 						<label class="label text-sm font-semibold" for="summarize-topic">
 							Focus topic
-							<span class="text-surface-400 font-normal">(optional)</span>
+							{#if loreType === "character"}
+								<span class="text-error-500">*</span>
+							{:else}
+								<span class="text-surface-400 font-normal">(optional)</span>
+							{/if}
 						</label>
 						<input
 							id="summarize-topic"
 							class="input text-sm"
 							type="text"
-							placeholder='e.g. "the guards in the Labyrinth of Descia"'
+							placeholder={loreType === "character"
+								? 'e.g. "abilities", "relationship with Kira", "past"'
+								: 'e.g. "the guards in the Labyrinth of Descia"'}
 							bind:value={topic}
 						/>
 						{#if topic.trim()}
@@ -419,6 +640,37 @@
 								Prompt will include: <em>"Specifically focus on: "{topic.trim()}""</em>
 							</p>
 						{/if}
+					</div>
+				{/if}
+
+				<!-- Binding (character lore only) -->
+				{#if loreType === "character"}
+					<div class="space-y-1">
+						<label class="label text-sm font-semibold" for="summarize-binding">
+							Bind to character / persona
+							<span class="text-surface-400 font-normal">(optional)</span>
+						</label>
+						<select
+							id="summarize-binding"
+							class="select text-sm"
+							bind:value={selectedBinding}
+						>
+							<option value="">— None (unbound) —</option>
+							{#if bindableEntities.filter(e => e.type === "character").length > 0}
+								<optgroup label="Characters">
+									{#each bindableEntities.filter(e => e.type === "character") as e}
+										<option value="character:{e.id}">{e.name}</option>
+									{/each}
+								</optgroup>
+							{/if}
+							{#if bindableEntities.filter(e => e.type === "persona").length > 0}
+								<optgroup label="Personas">
+									{#each bindableEntities.filter(e => e.type === "persona") as e}
+										<option value="persona:{e.id}">{e.name}</option>
+									{/each}
+								</optgroup>
+							{/if}
+						</select>
 					</div>
 				{/if}
 
@@ -442,7 +694,7 @@
 					class="btn preset-filled-primary-500"
 					disabled={!canGenerate}
 					onclick={generate}
-					title={!hasLorebook ? "Attach a lorebook first" : !selectedMessageIds.length ? "Select at least one message" : ""}
+					title={!hasLorebook ? "Attach a lorebook first" : !selectedMessageIds.length ? "Select at least one message" : loreType === "scene" && !selectedHistoryEntryId ? "Select or create a history entry first" : ""}
 				>
 					<Icons.Sparkles size={16} />
 					Generate Summary
@@ -526,13 +778,13 @@
 			<header class="mb-4 flex items-center justify-between">
 				<h2 id="summarize-modal-title" class="h3">Review & Save</h2>
 				<span class="badge preset-tonal-primary text-xs capitalize">
-					{loreType === "world" ? "World Lore" : "History Entry"}
+					{loreType === "world" ? "World Lore" : loreType === "character" ? "Character Lore" : loreType === "scene" ? "Scene" : "History Entry"}
 				</span>
 			</header>
 
 			<div class="space-y-4">
-				<!-- Name (world lore only — history entries are identified by date) -->
-				{#if loreType === "world"}
+				<!-- Name (world + character lore + scene — history entries are identified by date) -->
+				{#if loreType === "world" || loreType === "character" || loreType === "scene"}
 					<div class="space-y-1">
 						<label class="label text-sm font-semibold" for="review-name">
 							Name <span class="text-error-500">*</span>
