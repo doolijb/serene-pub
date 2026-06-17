@@ -2,7 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import * as skio from "sveltekit-io"
-	import { onDestroy, onMount, tick } from "svelte"
+	import { getContext, onDestroy, onMount, tick } from "svelte"
 	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
 	import LoreContentField from "./LoreContentField.svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
@@ -17,6 +17,8 @@
 	}
 
 	const socket = skio.get()
+	let systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
+	let vectorizationEnabled = $derived(systemSettingsCtx.settings?.vectorizationEnabled ?? false)
 
 	let {
 		lorebookId = $bindable(),
@@ -515,6 +517,7 @@
 									bind:lorebookBindingList
 								/>
 							</div>
+							{#if !vectorizationEnabled}
 							<div>
 								<label
 									class="flex items-center gap-1 font-semibold"
@@ -539,11 +542,13 @@
 									placeholder="abilities, powers, skills"
 								/>
 							</div>
+							{/if}
 							<details>
 								<summary class="cursor-pointer font-semibold">
 									Advanced Settings
 								</summary>
 								<div class="mt-2 flex flex-col gap-2">
+									{#if !vectorizationEnabled}
 									<div class="flex w-full justify-between">
 										<label for="useRegex-{entry.id}">
 											Use Regex
@@ -569,6 +574,7 @@
 											aria-labelledby="caseSensitive-{entry.id}"
 										/>
 									</div>
+									{/if}
 									<div class="flex w-full justify-between">
 										<label for="constant-{entry.id}">
 											Pinned

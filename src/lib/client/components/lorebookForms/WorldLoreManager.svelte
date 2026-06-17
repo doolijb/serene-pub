@@ -468,6 +468,7 @@
 									bind:lorebookBindingList
 								/>
 							</div>
+							{#if !vectorizationEnabled}
 							<div>
 								<label
 									class="flex items-center gap-1 font-semibold"
@@ -492,11 +493,13 @@
 									placeholder="umber, umber city"
 								/>
 							</div>
+							{/if}
 							<details>
 								<summary class="cursor-pointer font-semibold">
 									Advanced Settings
 								</summary>
 								<div class="mt-2 flex flex-col gap-2">
+									{#if !vectorizationEnabled}
 									<div class="flex w-full justify-between">
 										<label for="useRegex-{entry.id}">
 											Use Regex
@@ -522,6 +525,7 @@
 											aria-labelledby="caseSensitive-{entry.id}"
 										/>
 									</div>
+									{/if}
 									<div class="flex w-full justify-between">
 										<label for="constant-{entry.id}">
 											Pinned
@@ -605,12 +609,14 @@
 									{previewContent({ entry })}
 								</div>
 							</div>
+							{#if !vectorizationEnabled}
 							<div>
 								<strong>Keys:</strong>
 								{Array.isArray(entry.keys)
 									? entry.keys.join(", ")
 									: entry.keys}
 							</div>
+							{/if}
 							<div class="flex items-center gap-1">
 								<EmbeddingStatusIcon embeddingModel={entry.embeddingModel} size={14} />
 								{#if !entry.enabled}
@@ -621,7 +627,7 @@
 										<Icons.Ghost size={16} class="inline" />
 									</span>
 								{/if}
-								{#if entry.useRegex}
+								{#if !vectorizationEnabled && entry.useRegex}
 									<span
 										class="preset-filled-primary-500 rounded px-2 py-1"
 										title="This entry's keys use a regex pattern"
