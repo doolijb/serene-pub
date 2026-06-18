@@ -1981,6 +1981,146 @@ declare global {
 				}
 			}
 		}
+
+		// Narrative Graph namespace
+		namespace NarrativeGraph {
+			// Inline shape of a persisted narrative node (mirrors schema.narrativeNodes)
+			interface NarrativeNode {
+				id: number
+				lorebookId: number
+				sceneId: number | null
+				historyEntryId: number | null
+				nodeType: string
+				name: string
+				nodeState: string
+				content: string
+				summary: string | null
+				embedding: number[] | null
+				embeddingModel: string | null
+				characterIds: number[]
+				pendingReview: boolean
+				createdAt: Date | string
+				updatedAt: Date | string
+			}
+			// Inline shape of a persisted narrative relationship (mirrors schema.narrativeRelationships)
+			interface NarrativeRelationship {
+				id: number
+				lorebookId: number
+				fromNodeId: number
+				toNodeId: number
+				historyEntryId: number | null
+				sceneId: number | null
+				relationshipType: string
+				description: string
+				status: string
+				reason: string | null
+				pendingReview: boolean
+				createdAt: Date | string
+				updatedAt: Date | string
+			}
+
+			// A proposal returned from a graph build — pending user approval
+			interface NodeProposal {
+				tempId: string
+				nodeType: string
+				name: string
+				nodeState: string
+				summary: string
+				characterIds?: number[]
+				/** Which scene index (0-based) in the ordered scene list introduced this node */
+				sceneIndex?: number
+			}
+			interface RelationshipProposal {
+				fromTempId: string
+				toTempId: string
+				relationshipType: string
+				description: string
+				status: string
+				reason?: string
+				/** Which scene index (0-based) established this relationship */
+				sceneIndex?: number
+			}
+			interface GraphProposal {
+				nodes: NodeProposal[]
+				relationships: RelationshipProposal[]
+			}
+
+			namespace List {
+				interface Params {
+					lorebookId: number
+				}
+				interface Response {
+					nodes: NarrativeNode[]
+					relationships: NarrativeRelationship[]
+				}
+			}
+			namespace Build {
+				interface Params {
+					lorebookId: number
+				}
+				interface Progress {
+					phase: "loading" | "extracting" | "parsing"
+					sceneIndex: number
+					totalScenes: number
+					nodesFound: number
+					relationshipsFound: number
+					partial?: string
+				}
+				interface Response {
+					proposal: GraphProposal
+					/** Ordered list of scene labels used (for mapping sceneIndex → human-readable) */
+					sceneLabels: string[]
+				}
+				interface ErrorResponse {
+					error: string
+					raw?: string
+				}
+			}
+			namespace ApplyProposal {
+				interface Params {
+					lorebookId: number
+					proposal: GraphProposal
+					/** Replace all existing nodes/relationships, or merge */
+					mode: "replace" | "merge"
+				}
+				interface Response {
+					nodes: NarrativeNode[]
+					relationships: NarrativeRelationship[]
+				}
+			}
+			namespace UpdateNode {
+				interface Params {
+					node: Partial<NarrativeNode> & { id: number }
+				}
+				interface Response {
+					node: NarrativeNode
+				}
+			}
+			namespace DeleteNode {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					success: string
+				}
+			}
+			namespace UpdateRelationship {
+				interface Params {
+					relationship: Partial<NarrativeRelationship> & { id: number }
+				}
+				interface Response {
+					relationship: NarrativeRelationship
+				}
+			}
+			namespace DeleteRelationship {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					success: string
+				}
+			}
+		}
 	}
 
 	// Assistant namespace
@@ -2161,10 +2301,7 @@ declare global {
 				}
 			}
 		}
-
 	}
 }
-
-export {}
 
 export {}

@@ -138,6 +138,31 @@ export type ScopedRagItem =
 			score: number
 	  }
 	| {
+			source: "narrativeNode"
+			lorebookId: number
+			id: number
+			nodeType: string
+			name: string
+			summary: string | null
+			embedding: number[]
+			embeddingModel: string | null
+			score: number
+	  }
+	| {
+			source: "narrativeRelationship"
+			lorebookId: number
+			id: number
+			fromNodeId: number
+			toNodeId: number
+			relationshipType: string
+			description: string
+			status: string
+			reason: string | null
+			embedding: number[]
+			embeddingModel: string | null
+			score: number
+	  }
+	| {
 			source: "character"
 			id: number
 			name: string
@@ -160,7 +185,14 @@ export type ScopedRagOptions = {
 	topK?: number
 	/** Only return results from these content types */
 	sources?: Array<
-		"message" | "worldLore" | "characterLore" | "historyEntry" | "character" | "persona"
+		| "message"
+		| "worldLore"
+		| "characterLore"
+		| "historyEntry"
+		| "narrativeNode"
+		| "narrativeRelationship"
+		| "character"
+		| "persona"
 	>
 	/** Active embedding model — items from other models are excluded */
 	modelId: string
@@ -344,6 +376,82 @@ export async function scopedRankBySimilarity(
 					embedding: he.embedding,
 					embeddingModel: he.embeddingModel,
 					score: cosineSimilarity(queryEmbedding, he.embedding)
+				})
+			}
+		}
+
+		if (include("narrativeNode")) {
+			const nodes = await db
+				.select({
+					id: schema.narrativeNodes.id,
+					lorebookId: schema.narrativeNodes.lorebookId,
+					nodeType: schema.narrativeNodes.nodeType,
+					name: schema.narrativeNodes.name,
+					summary: schema.narrativeNodes.summary,
+					embedding: schema.narrativeNodes.embedding,
+					embeddingModel: schema.narrativeNodes.embeddingModel
+				})
+				.from(schema.narrativeNodes)
+				.where(
+					and(
+						inArray(schema.narrativeNodes.lorebookId, context.allLorebookIds),
+						isNotNull(schema.narrativeNodes.embedding),
+						eq(schema.narrativeNodes.embeddingModel, modelId)
+					)
+				)
+			for (const node of nodes) {
+				if (!node.embedding) continue
+				candidates.push({
+					source: "narrativeNode",
+					lorebookId: node.lorebookId,
+					id: node.id,
+					nodeType: node.nodeType,
+					name: node.name,
+					summary: node.summary,
+					embedding: node.embedding,
+					embeddingModel: node.embeddingModel,
+					score: cosineSimilarity(queryEmbedding, node.embedding)
+				})
+			}
+		}
+
+		if (include("narrativeRelationship")) {
+			const rels = await db
+				.select({
+					id: schema.narrativeRelationships.id,
+					lorebookId: schema.narrativeRelationships.lorebookId,
+					fromNodeId: schema.narrativeRelationships.fromNodeId,
+					toNodeId: schema.narrativeRelationships.toNodeId,
+					relationshipType: schema.narrativeRelationships.relationshipType,
+					description: schema.narrativeRelationships.description,
+					status: schema.narrativeRelationships.status,
+					reason: schema.narrativeRelationships.reason,
+					embedding: schema.narrativeRelationships.embedding,
+					embeddingModel: schema.narrativeRelationships.embeddingModel
+				})
+				.from(schema.narrativeRelationships)
+				.where(
+					and(
+						inArray(schema.narrativeRelationships.lorebookId, context.allLorebookIds),
+						isNotNull(schema.narrativeRelationships.embedding),
+						eq(schema.narrativeRelationships.embeddingModel, modelId)
+					)
+				)
+			for (const rel of rels) {
+				if (!rel.embedding) continue
+				candidates.push({
+					source: "narrativeRelationship",
+					lorebookId: rel.lorebookId,
+					id: rel.id,
+					fromNodeId: rel.fromNodeId,
+					toNodeId: rel.toNodeId,
+					relationshipType: rel.relationshipType,
+					description: rel.description,
+					status: rel.status,
+					reason: rel.reason,
+					embedding: rel.embedding,
+					embeddingModel: rel.embeddingModel,
+					score: cosineSimilarity(queryEmbedding, rel.embedding)
 				})
 			}
 		}

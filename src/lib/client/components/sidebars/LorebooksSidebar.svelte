@@ -11,6 +11,7 @@
 	import LorebookUnsavedChangesModal from "../modals/LorebookUnsavedChangesModal.svelte"
 	import CharacterLoreManager from "../lorebookForms/CharacterLoreManager.svelte"
 	import HistoryEntryManager from "../lorebookForms/HistoryEntryManager.svelte"
+	import GraphManager from "../lorebookForms/GraphManager.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import type { SpecV3 } from "@lenml/char-card-reader"
 	import LorebookListItem from "../listItems/LorebookListItem.svelte"
@@ -25,6 +26,7 @@
 		| "world"
 		| "characters"
 		| "history"
+		| "graph"
 
 	let { onclose = $bindable() }: Props = $props()
 
@@ -378,6 +380,12 @@
 						History
 					{/if}
 				</Tabs.Control>
+				<Tabs.Control value="graph">
+					<Icons.Network size={20} class="inline" />
+					{#if editGroup === "graph"}
+						Graph
+					{/if}
+				</Tabs.Control>
 			{/snippet}
 			{#snippet content()}
 				<Tabs.Panel value="lorebook">
@@ -417,6 +425,11 @@
 							focusEntryTab={focusHistoryEntryTab}
 							focusSceneId={focusSceneId}
 						/>
+					{/if}
+				</Tabs.Panel>
+				<Tabs.Panel value="graph">
+					{#if editGroup == "graph" && selectedLorebook}
+						<GraphManager lorebookId={selectedLorebook.id} />
 					{/if}
 				</Tabs.Panel>
 			{/snippet}

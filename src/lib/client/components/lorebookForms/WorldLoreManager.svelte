@@ -417,6 +417,7 @@
 					</div>
 
 					<!-- ... menu -->
+					<div role="none" onclick={(e) => e.stopPropagation()}>
 					<Popover
 						open={openMenuEntryId === entry.id}
 						onOpenChange={(e) => (openMenuEntryId = e.open ? entry.id : null)}
@@ -426,9 +427,7 @@
 						zIndex="1000"
 					>
 						{#snippet trigger()}
-							<span onclick={(e) => e.stopPropagation()} role="none">
-								<Icons.Ellipsis size={16} />
-							</span>
+							<Icons.Ellipsis size={16} />
 						{/snippet}
 						{#snippet content()}
 							<button
@@ -452,6 +451,7 @@
 							</button>
 						{/snippet}
 					</Popover>
+					</div>
 				</div>
 			{/each}
 		{/if}

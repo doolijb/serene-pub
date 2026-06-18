@@ -25,7 +25,7 @@ import { randomUUID } from "crypto"
 export type VectorizationProgressEvent = {
 	status: "idle" | "running" | "paused"
 	currentItem?: {
-		type: "message" | "worldLore" | "characterLore" | "historyEntry" | "character" | "persona"
+		type: "message" | "worldLore" | "characterLore" | "historyEntry" | "narrativeNode" | "narrativeRelationship" | "character" | "persona"
 		label: string
 	}
 	queued: number
@@ -391,7 +391,7 @@ async function pickFromGroup(group: PriorityGroup, currentModel: string): Promis
 		if (item) return item
 	}
 
-	// 2. Lorebook content (world lore → character lore → history entries)
+	// 2. Lorebook content (world lore → character lore → history entries → narrative graph)
 	for (const lorebookId of group.lorebookIds) {
 		const wle = await pickWorldLoreEntry(currentModel, lorebookId)
 		if (wle) return wle
@@ -401,6 +401,12 @@ async function pickFromGroup(group: PriorityGroup, currentModel: string): Promis
 
 		const he = await pickHistoryEntry(currentModel, lorebookId)
 		if (he) return he
+
+		const nn = await pickNarrativeNode(currentModel, lorebookId)
+		if (nn) return nn
+
+		const nr = await pickNarrativeRelationship(currentModel, lorebookId)
+		if (nr) return nr
 	}
 
 	// 3. Characters
@@ -424,6 +430,8 @@ async function pickGlobalNextItem(currentModel: string): Promise<QueueItem | nul
 		(await pickWorldLoreEntry(currentModel)) ??
 		(await pickCharacterLoreEntry(currentModel)) ??
 		(await pickHistoryEntry(currentModel)) ??
+		(await pickNarrativeNode(currentModel)) ??
+		(await pickNarrativeRelationship(currentModel)) ??
 		(await pickCharacter(currentModel)) ??
 		(await pickPersona(currentModel)) ??
 		null
@@ -585,6 +593,107 @@ async function pickHistoryEntry(
 	}
 }
 
+async function pickNarrativeNode(
+	currentModel: string,
+	lorebookId?: number
+): Promise<QueueItem | null> {
+	const staleness = needsEmbedding(
+		schema.narrativeNodes.embedding,
+		schema.narrativeNodes.embeddingModel,
+		currentModel,
+		schema.narrativeNodes.updatedAt,
+		schema.narrativeNodes.vectorizedAt
+	)
+	const where = lorebookId
+		? and(eq(schema.narrativeNodes.lorebookId, lorebookId), staleness)
+		: staleness
+
+	const rows = await db
+		.select({
+			id: schema.narrativeNodes.id,
+			name: schema.narrativeNodes.name,
+			summary: schema.narrativeNodes.summary
+		})
+		.from(schema.narrativeNodes)
+		.where(where)
+		.limit(1)
+
+	if (!rows.length) return null
+	const { id, name, summary } = rows[0]
+	const text = summary ? `${name}\n${summary}` : name
+	return {
+		label: { type: "narrativeNode", label: `Narrative node: ${name}` },
+		process: async () => {
+			const vector = await embed(text)
+			await db
+				.update(schema.narrativeNodes)
+				.set({ embedding: vector, embeddingModel: currentModel, vectorizedAt: new Date() })
+				.where(eq(schema.narrativeNodes.id, id))
+		}
+	}
+}
+
+async function pickNarrativeRelationship(
+	currentModel: string,
+	lorebookId?: number
+): Promise<QueueItem | null> {
+	const staleness = needsEmbedding(
+		schema.narrativeRelationships.embedding,
+		schema.narrativeRelationships.embeddingModel,
+		currentModel,
+		schema.narrativeRelationships.updatedAt,
+		schema.narrativeRelationships.vectorizedAt
+	)
+	const where = lorebookId
+		? and(eq(schema.narrativeRelationships.lorebookId, lorebookId), staleness)
+		: staleness
+
+	const rows = await db
+		.select({
+			id: schema.narrativeRelationships.id,
+			fromNodeId: schema.narrativeRelationships.fromNodeId,
+			toNodeId: schema.narrativeRelationships.toNodeId,
+			relationshipType: schema.narrativeRelationships.relationshipType,
+			description: schema.narrativeRelationships.description,
+			reason: schema.narrativeRelationships.reason
+		})
+		.from(schema.narrativeRelationships)
+		.where(where)
+		.limit(1)
+
+	if (!rows.length) return null
+	const { id, fromNodeId, toNodeId, relationshipType, description, reason } = rows[0]
+
+	// Fetch node names for richer embedding text
+	const [fromNode, toNode] = await Promise.all([
+		db.query.narrativeNodes.findFirst({
+			where: eq(schema.narrativeNodes.id, fromNodeId),
+			columns: { name: true }
+		}),
+		db.query.narrativeNodes.findFirst({
+			where: eq(schema.narrativeNodes.id, toNodeId),
+			columns: { name: true }
+		})
+	])
+
+	const fromName = fromNode?.name ?? String(fromNodeId)
+	const toName = toNode?.name ?? String(toNodeId)
+	let text = `${fromName} ${relationshipType} ${toName}`
+	if (description) text += `: ${description}`
+	if (reason) text += `. ${reason}`
+
+	return {
+		label: { type: "narrativeRelationship", label: `Narrative relationship: ${fromName} → ${toName}` },
+		process: async () => {
+			const vector = await embed(text)
+			await db
+				.update(schema.narrativeRelationships)
+				.set({ embedding: vector, embeddingModel: currentModel, vectorizedAt: new Date() })
+				.where(eq(schema.narrativeRelationships.id, id))
+		}
+	}
+}
+
 async function pickCharacter(
 	currentModel: string,
 	characterIds?: number[]
@@ -712,6 +821,14 @@ export async function countUnembedded(currentModel?: string): Promise<number> {
 		db.$count(
 			schema.historyEntries,
 			condition(schema.historyEntries.embedding, schema.historyEntries.embeddingModel)
+		),
+		db.$count(
+			schema.narrativeNodes,
+			condition(schema.narrativeNodes.embedding, schema.narrativeNodes.embeddingModel)
+		),
+		db.$count(
+			schema.narrativeRelationships,
+			condition(schema.narrativeRelationships.embedding, schema.narrativeRelationships.embeddingModel)
 		),
 		db.$count(
 			schema.characters,

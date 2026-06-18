@@ -96,9 +96,16 @@ World lore:
 {{/if}}
 
 {{#if history}}
-Story history: 
+Story history:
 \`\`\`json
 {{{history}}}
+\`\`\`
+{{/if}}
+
+{{#if narrativeGraph}}
+Story relationships:
+\`\`\`json
+{{{narrativeGraph}}}
 \`\`\`
 {{/if}}
 

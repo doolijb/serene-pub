@@ -1107,43 +1107,41 @@ export const scenesRelations = relations(scenes, ({ one, many }) => ({
 }))
 
 /**
- * Narrative nodes: entities in the causal graph (characters, relationships,
- * plot threads, locations, items, factions, themes).
+ * Narrative nodes: entities in the causal graph (characters, locations, factions, items, etc.).
  */
 export const narrativeNodes = pgTable("narrative_nodes", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 	lorebookId: integer("lorebook_id")
 		.notNull()
 		.references(() => lorebooks.id, { onDelete: "cascade" }),
-	// Scene where this node was first introduced/updated (optional)
-	sceneId: integer("scene_id").references(() => scenes.id, {
+	// Scene where this node first appeared (optional)
+	sceneId: integer("scene_id").references(() => scenes.id, { onDelete: "set null" }),
+	// History entry where this node first appeared (optional)
+	historyEntryId: integer("history_entry_id").references(() => historyEntries.id, {
 		onDelete: "set null"
 	}),
-	// Node type: character | relationship | plot_thread | location | item | faction | theme
+	// Node type: character | location | faction | item | concept | event
 	nodeType: text("node_type").notNull(),
-	// Lifecycle state of this node in the narrative
-	nodeState: text("node_state").notNull().default("active"), // active | resolved | superseded | retconned
-	// The full content/description of this node
+	// Display name
+	name: text("name").notNull().default(""),
+	// Lifecycle state
+	nodeState: text("node_state").notNull().default("active"), // active | resolved | defunct | retconned
+	// Full description of this entity
 	content: text("content").notNull().default(""),
-	// A shorter summary for context infill
+	// Short summary for context infill
 	summary: text("summary"),
 	embedding: real("embedding").array(),
 	embeddingModel: text("embedding_model"),
-	// Character IDs this node is associated with
+	vectorizedAt: timestamp("vectorized_at"),
+	// Character IDs associated with this node (for character-type nodes)
 	characterIds: json("character_ids").notNull().default([]).$type<number[]>(),
-	// Optional chat scope (null = global to lorebook)
-	chatId: integer("chat_id").references(() => chats.id, {
-		onDelete: "set null"
-	}),
-	// Whether this node is pending user review before being committed
+	// Whether awaiting user approval before commit
 	pendingReview: boolean("pending_review").notNull().default(false),
-	createdAt: date("created_at")
+	createdAt: timestamp("created_at").notNull().defaultNow(),
+	updatedAt: timestamp("updated_at")
 		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`),
-	updatedAt: date("updated_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`)
-		.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`)
+		.defaultNow()
+		.$onUpdate(() => new Date())
 })
 
 export const narrativeNodesRelations = relations(
@@ -1157,43 +1155,85 @@ export const narrativeNodesRelations = relations(
 			fields: [narrativeNodes.sceneId],
 			references: [scenes.id]
 		}),
-		chat: one(chats, {
-			fields: [narrativeNodes.chatId],
-			references: [chats.id]
+		historyEntry: one(historyEntries, {
+			fields: [narrativeNodes.historyEntryId],
+			references: [historyEntries.id]
 		}),
-		outgoingEdges: many(narrativeEdges, { relationName: "fromNode" }),
-		incomingEdges: many(narrativeEdges, { relationName: "toNode" })
+		outgoingRelationships: many(narrativeRelationships, { relationName: "fromNode" }),
+		incomingRelationships: many(narrativeRelationships, { relationName: "toNode" })
 	})
 )
 
 /**
- * Narrative edges: typed relationships between narrative nodes.
+ * Narrative relationships: versioned, typed connections between narrative nodes.
+ * Multiple rows between the same pair of nodes record how the relationship evolved over time.
+ *
+ * Examples:
+ *   Year 1: Aria → Kael  (neutral)       "just met"
+ *   Year 2: Aria → Kael  (life_debt)     "Aria saved Kael from burning building"
+ *   Year 5: Aria → Kael  (ally)          "Kael repaid the debt; now genuine friends"
  */
-export const narrativeEdges = pgTable("narrative_edges", {
+export const narrativeRelationships = pgTable("narrative_relationships", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	lorebookId: integer("lorebook_id")
+		.notNull()
+		.references(() => lorebooks.id, { onDelete: "cascade" }),
 	fromNodeId: integer("from_node_id")
 		.notNull()
 		.references(() => narrativeNodes.id, { onDelete: "cascade" }),
 	toNodeId: integer("to_node_id")
 		.notNull()
 		.references(() => narrativeNodes.id, { onDelete: "cascade" }),
-	// Edge type: causes | enables | prevents | resolves | contradicts | precedes | follows | relates_to
-	edgeType: text("edge_type").notNull(),
-	notes: text("notes"),
-	createdAt: date("created_at")
+	// History entry this relationship state was established in (optional)
+	historyEntryId: integer("history_entry_id").references(() => historyEntries.id, {
+		onDelete: "set null"
+	}),
+	// Scene that establishes/changes this relationship (optional)
+	sceneId: integer("scene_id").references(() => scenes.id, { onDelete: "set null" }),
+	// Relationship type: ally | enemy | rival | mentor | family | romantic | neutral | complicated | life_debt | etc.
+	relationshipType: text("relationship_type").notNull().default("neutral"),
+	// Description of the relationship at this point in time
+	description: text("description").notNull().default(""),
+	// Current state: active | resolved | broken | evolved
+	status: text("status").notNull().default("active"),
+	// Why this relationship changed (for non-initial entries)
+	reason: text("reason"),
+	embedding: real("embedding").array(),
+	embeddingModel: text("embedding_model"),
+	vectorizedAt: timestamp("vectorized_at"),
+	// Whether awaiting user approval before commit
+	pendingReview: boolean("pending_review").notNull().default(false),
+	createdAt: timestamp("created_at").notNull().defaultNow(),
+	updatedAt: timestamp("updated_at")
 		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`)
+		.defaultNow()
+		.$onUpdate(() => new Date())
 })
 
-export const narrativeEdgesRelations = relations(narrativeEdges, ({ one }) => ({
-	fromNode: one(narrativeNodes, {
-		fields: [narrativeEdges.fromNodeId],
-		references: [narrativeNodes.id],
-		relationName: "fromNode"
-	}),
-	toNode: one(narrativeNodes, {
-		fields: [narrativeEdges.toNodeId],
-		references: [narrativeNodes.id],
-		relationName: "toNode"
+export const narrativeRelationshipsRelations = relations(
+	narrativeRelationships,
+	({ one }) => ({
+		lorebook: one(lorebooks, {
+			fields: [narrativeRelationships.lorebookId],
+			references: [lorebooks.id]
+		}),
+		fromNode: one(narrativeNodes, {
+			fields: [narrativeRelationships.fromNodeId],
+			references: [narrativeNodes.id],
+			relationName: "fromNode"
+		}),
+		toNode: one(narrativeNodes, {
+			fields: [narrativeRelationships.toNodeId],
+			references: [narrativeNodes.id],
+			relationName: "toNode"
+		}),
+		historyEntry: one(historyEntries, {
+			fields: [narrativeRelationships.historyEntryId],
+			references: [historyEntries.id]
+		}),
+		scene: one(scenes, {
+			fields: [narrativeRelationships.sceneId],
+			references: [scenes.id]
+		})
 	})
-}))
+)

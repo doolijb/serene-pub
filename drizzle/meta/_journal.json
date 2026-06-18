@@ -232,6 +232,20 @@
       "when": 1781681657754,
       "tag": "0032_normal_silver_fox",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1781758428294,
+      "tag": "0033_unique_killraven",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1781774790829,
+      "tag": "0034_melodic_jigsaw",
+      "breakpoints": true
     }
   ]
 }

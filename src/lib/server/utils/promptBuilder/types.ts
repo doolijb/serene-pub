@@ -32,6 +32,7 @@ export type TemplateContext = {
 	characterLore?: SelectCharacterLoreEntry[]
 	history?: string
 	currentDate?: string
+	narrativeGraph?: string
 	__promptBuilderInstance?: any
 }
 

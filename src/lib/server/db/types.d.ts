@@ -136,4 +136,17 @@ export global {
 	export type SelectScene = typeof schema.scenes.$inferSelect
 	export type InsertScene = typeof schema.scenes.$inferInsert
 	export type UpdateScene = Partial<SelectScene> & { id: number }
+
+	// Narrative graph types
+	export type SelectNarrativeNode = typeof schema.narrativeNodes.$inferSelect
+	export type InsertNarrativeNode = typeof schema.narrativeNodes.$inferInsert
+	export type UpdateNarrativeNode = Partial<SelectNarrativeNode> & { id: number }
+
+	export type SelectNarrativeRelationship = typeof schema.narrativeRelationships.$inferSelect
+	export type InsertNarrativeRelationship = typeof schema.narrativeRelationships.$inferInsert
+	export type UpdateNarrativeRelationship = Partial<SelectNarrativeRelationship> & { id: number }
+
+	// Convenient re-exports of narrative graph inline types for server-side handlers
+	export type NarrativeNodeShape = Sockets.NarrativeGraph.NarrativeNode
+	export type NarrativeRelationshipShape = Sockets.NarrativeGraph.NarrativeRelationship
 }

@@ -37,6 +37,7 @@ import { registerKoboldCppHandlers } from "./koboldcpp"
 import { registerSummarizeHandlers } from "./summarize"
 import { registerVectorizationHandlers } from "./vectorization"
 import { registerSceneHandlers } from "./scenes"
+import { registerNarrativeGraphHandlers } from "./narrativeGraph"
 
 const userId = 1 // Replace with actual user id
 
@@ -75,6 +76,7 @@ export function connectSockets(io: {
 		registerSummarizeHandlers(socket, emitToUser, register)
 		registerVectorizationHandlers(socket, emitToUser, register)
 		registerSceneHandlers(socket, emitToUser, register)
+		registerNarrativeGraphHandlers(socket, emitToUser, register)
 		console.log(`Socket connected: ${socket.id} for user ${userId}`)
 	})
 }

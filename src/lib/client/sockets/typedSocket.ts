@@ -614,6 +614,48 @@ type SocketEventMap = {
 		response: Sockets.Tags.Delete.Response
 	}
 
+	// Narrative Graph events
+	"narrativeGraph:list": {
+		params: { lorebookId: number }
+		response: { nodes: Sockets.NarrativeGraph.NarrativeNode[]; relationships: Sockets.NarrativeGraph.NarrativeRelationship[] }
+	}
+	"narrativeGraph:build": {
+		params: { lorebookId: number }
+		response: { proposal: Sockets.NarrativeGraph.GraphProposal; sceneLabels: string[] }
+	}
+	"narrativeGraph:build:progress": {
+		params: Sockets.NarrativeGraph.Build.Progress
+		response: Sockets.NarrativeGraph.Build.Progress
+	}
+	"narrativeGraph:build:complete": {
+		params: { proposal: Sockets.NarrativeGraph.GraphProposal; sceneLabels: string[] }
+		response: { proposal: Sockets.NarrativeGraph.GraphProposal; sceneLabels: string[] }
+	}
+	"narrativeGraph:build:error": {
+		params: { error: string; raw?: string }
+		response: { error: string; raw?: string }
+	}
+	"narrativeGraph:applyProposal": {
+		params: { lorebookId: number; proposal: Sockets.NarrativeGraph.GraphProposal; mode: "replace" | "merge" }
+		response: { nodes: Sockets.NarrativeGraph.NarrativeNode[]; relationships: Sockets.NarrativeGraph.NarrativeRelationship[] }
+	}
+	"narrativeGraph:updateNode": {
+		params: { node: Partial<Sockets.NarrativeGraph.NarrativeNode> & { id: number } }
+		response: { node: Sockets.NarrativeGraph.NarrativeNode }
+	}
+	"narrativeGraph:deleteNode": {
+		params: { id: number }
+		response: { success: string }
+	}
+	"narrativeGraph:updateRelationship": {
+		params: { relationship: Partial<Sockets.NarrativeGraph.NarrativeRelationship> & { id: number } }
+		response: { relationship: Sockets.NarrativeGraph.NarrativeRelationship }
+	}
+	"narrativeGraph:deleteRelationship": {
+		params: { id: number }
+		response: { success: string }
+	}
+
 	// Global error/success events
 	error: {
 		params: never
