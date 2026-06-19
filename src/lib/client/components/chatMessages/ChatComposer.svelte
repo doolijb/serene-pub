@@ -4,6 +4,9 @@
 	import MessageComposer from "$lib/client/components/chatMessages/MessageComposer.svelte"
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import RagNotice from "$lib/client/components/chatMessages/RagNotice.svelte"
+	import { getContext } from "svelte"
+
+	let systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
 
 	interface Props {
 		newMessage: string
@@ -88,7 +91,7 @@
 			</button>
 		</div>
 	{:else}
-		{#if chat?.id}
+		{#if chat?.id && systemSettingsCtx.settings?.vectorizationEnabled}
 			<RagNotice
 				chatId={chat.id}
 				totalMessages={chat.chatMessages?.length ?? 0}

@@ -37,7 +37,7 @@
 		chatId: number
 		lorebookId: number | null
 		selectedMessageIds: number[]
-		initialLoreType?: "world" | "history" | "character" | "scene"
+		initialLoreType?: "world" | "character" | "scene"
 		onSaved: () => void
 		onLorebookSet: (lorebookId: number) => void
 		/** Characters currently in the chat */
@@ -69,7 +69,7 @@
 	let step = $state<Step>("configure")
 
 	// ── Configure step state ──────────────────────────────────────
-	let loreType = $state<"world" | "history" | "character" | "scene">(initialLoreType)
+	let loreType = $state<"world" | "character" | "scene">(initialLoreType)
 	let topic = $state("")
 
 	// Lorebook attachment
@@ -114,9 +114,6 @@
 	// ── Review step state ─────────────────────────────────────────
 	let reviewName = $state("")
 	let reviewContent = $state("")
-	let reviewYear = $state<number | null>(null)
-	let reviewMonth = $state<number | null>(null)
-	let reviewDay = $state<number | null>(null)
 	let rawOutput = $state("")
 	let showRaw = $state(false)
 	let isSaving = $state(false)
@@ -133,9 +130,7 @@
 		(loreType !== "scene" || !hasSceneMessageGap)
 	)
 	let canSave = $derived(
-		loreType === "history"
-			? reviewContent.trim().length > 0
-			: reviewName.trim().length > 0 && reviewContent.trim().length > 0
+		reviewName.trim().length > 0 && reviewContent.trim().length > 0
 	)
 	let hasLorebook = $derived(!!lorebookId)
 
@@ -162,9 +157,6 @@
 			showRaw = false
 			reviewName = ""
 			reviewContent = ""
-			reviewYear = null
-			reviewMonth = null
-			reviewDay = null
 		}
 	})
 
@@ -191,13 +183,6 @@
 		reviewName = data.name ?? ""
 		reviewContent = data.content ?? data.raw ?? ""
 		resolvedBindingId = data.lorebookBindingId ?? null
-
-		if (loreType === "history") {
-			const defaultDate = computeDefaultDate(historyEntryList)
-			reviewYear = defaultDate.year
-			reviewMonth = defaultDate.month
-			reviewDay = defaultDate.day
-		}
 
 		step = "review"
 	}
@@ -379,24 +364,9 @@
 					priority: 1
 				}
 			})
-		} else {
-			socket.emit("historyEntries:create", {
-				historyEntry: {
-					lorebookId,
-					year: reviewYear ?? 1,
-					month: reviewMonth || null,
-					day: reviewDay || null,
-					content: reviewContent.trim(),
-					keys: "",
-					enabled: true,
-					constant: false,
-					useRegex: false,
-					caseSensitive: false
-				}
-			})
 		}
 
-		const titles = { world: "World lore entry saved", character: "Character lore entry saved", history: "History entry saved", scene: "Scene saved" }
+		const titles = { world: "World lore entry saved", character: "Character lore entry saved", scene: "Scene saved" }
 		toaster.success({ title: titles[loreType] })
 		isSaving = false
 		onSaved()
@@ -530,17 +500,6 @@
 							/>
 							<Icons.User size={16} />
 							<span class="text-sm">Character Lore</span>
-						</label>
-						<label class="flex cursor-pointer items-center gap-2">
-							<input
-								type="radio"
-								class="radio"
-								name="loreType"
-								value="history"
-								bind:group={loreType}
-							/>
-							<Icons.Scroll size={16} />
-							<span class="text-sm">History Entry</span>
 						</label>
 					</div>
 				</fieldset>
@@ -778,7 +737,7 @@
 			<header class="mb-4 flex items-center justify-between">
 				<h2 id="summarize-modal-title" class="h3">Review & Save</h2>
 				<span class="badge preset-tonal-primary text-xs capitalize">
-					{loreType === "world" ? "World Lore" : loreType === "character" ? "Character Lore" : loreType === "scene" ? "Scene" : "History Entry"}
+					{loreType === "world" ? "World Lore" : loreType === "character" ? "Character Lore" : "Scene"}
 				</span>
 			</header>
 
@@ -799,49 +758,6 @@
 						{#if reviewName}
 							<p class="text-surface-500 text-xs">Auto-generated — edit if needed.</p>
 						{/if}
-					</div>
-				{/if}
-
-				<!-- Date (history only) -->
-				{#if loreType === "history"}
-					<div class="space-y-1">
-						<p class="label text-sm font-semibold">
-							In-world date
-							<span class="text-surface-400 font-normal">(optional)</span>
-						</p>
-						<div class="flex gap-2">
-							<label class="flex flex-1 flex-col gap-1">
-								<span class="text-surface-500 text-xs">Year</span>
-								<input
-									class="input text-sm"
-									type="number"
-									placeholder="e.g. 412"
-									bind:value={reviewYear}
-								/>
-							</label>
-							<label class="flex flex-1 flex-col gap-1">
-								<span class="text-surface-500 text-xs">Month</span>
-								<input
-									class="input text-sm"
-									type="number"
-									min="1"
-									max="12"
-									placeholder="1–12"
-									bind:value={reviewMonth}
-								/>
-							</label>
-							<label class="flex flex-1 flex-col gap-1">
-								<span class="text-surface-500 text-xs">Day</span>
-								<input
-									class="input text-sm"
-									type="number"
-									min="1"
-									max="31"
-									placeholder="1–31"
-									bind:value={reviewDay}
-								/>
-							</label>
-						</div>
 					</div>
 				{/if}
 

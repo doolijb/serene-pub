@@ -129,6 +129,24 @@ export const chatsSummarizeHandler: Handler<
 		const { connection, sampling, contextConfig, promptConfig } =
 			await getUserConfigurations(userId)
 
+		// Load active summarize prompt config for this loreType
+		const userSettings = await db.query.userSettings.findFirst({
+			where: (us, { eq }) => eq(us.userId, userId)
+		})
+		const systemSettings = await db.query.systemSettings.findFirst()
+
+		let summarizePromptConfig: { batchSystemPrompt: string; synthSystemPrompt: string; nameSystemPrompt: string } | null = null
+		if (loreType === "world") {
+			const id = userSettings?.activeSummarizeWorldConfigId ?? systemSettings?.defaultSummarizeWorldConfigId
+			if (id) summarizePromptConfig = await db.query.worldSummarizeConfigs.findFirst({ where: (c, { eq }) => eq(c.id, id) }) ?? null
+		} else if (loreType === "character") {
+			const id = userSettings?.activeSummarizeCharacterConfigId ?? systemSettings?.defaultSummarizeCharacterConfigId
+			if (id) summarizePromptConfig = await db.query.characterSummarizeConfigs.findFirst({ where: (c, { eq }) => eq(c.id, id) }) ?? null
+		} else if (loreType === "scene") {
+			const id = userSettings?.activeSummarizeSceneConfigId ?? systemSettings?.defaultSummarizeSceneConfigId
+			if (id) summarizePromptConfig = await db.query.sceneSummarizeConfigs.findFirst({ where: (c, { eq }) => eq(c.id, id) }) ?? null
+		}
+
 		// Run iterative summarization, streaming progress back to client
 		const result = await generateSummary({
 			messages,
@@ -138,6 +156,7 @@ export const chatsSummarizeHandler: Handler<
 			sampling,
 			contextConfig,
 			promptConfig,
+			summarizePromptConfig,
 			onProgress: (data) => {
 				emitToUser("chats:summarize:progress", data satisfies Sockets.Chats.Summarize.Progress)
 			}

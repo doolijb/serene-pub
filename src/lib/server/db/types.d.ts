@@ -146,6 +146,21 @@ export global {
 	export type InsertNarrativeRelationship = typeof schema.narrativeRelationships.$inferInsert
 	export type UpdateNarrativeRelationship = Partial<SelectNarrativeRelationship> & { id: number }
 
+	// World Summarize Config types
+	export type SelectWorldSummarizeConfig = typeof schema.worldSummarizeConfigs.$inferSelect
+	export type InsertWorldSummarizeConfig = typeof schema.worldSummarizeConfigs.$inferInsert
+	export type UpdateWorldSummarizeConfig = Partial<SelectWorldSummarizeConfig> & { id: number }
+
+	// Character Summarize Config types
+	export type SelectCharacterSummarizeConfig = typeof schema.characterSummarizeConfigs.$inferSelect
+	export type InsertCharacterSummarizeConfig = typeof schema.characterSummarizeConfigs.$inferInsert
+	export type UpdateCharacterSummarizeConfig = Partial<SelectCharacterSummarizeConfig> & { id: number }
+
+	// Scene Summarize Config types
+	export type SelectSceneSummarizeConfig = typeof schema.sceneSummarizeConfigs.$inferSelect
+	export type InsertSceneSummarizeConfig = typeof schema.sceneSummarizeConfigs.$inferInsert
+	export type UpdateSceneSummarizeConfig = Partial<SelectSceneSummarizeConfig> & { id: number }
+
 	// Convenient re-exports of narrative graph inline types for server-side handlers
 	export type NarrativeNodeShape = Sockets.NarrativeGraph.NarrativeNode
 	export type NarrativeRelationshipShape = Sockets.NarrativeGraph.NarrativeRelationship

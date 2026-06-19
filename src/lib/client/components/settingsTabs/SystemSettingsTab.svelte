@@ -228,6 +228,21 @@
 		socket?.emit("vectorization:setModel", { modelName: selectedModelForChange })
 	}
 
+	// ── Summarization functions ──────────────────────────────────────────────
+
+	function handleSummarizationEnabledClick(event: { checked: boolean }) {
+		if (!userCtx.user?.isAdmin) {
+			toaster.error({
+				title: "Access denied",
+				description: "Admin privileges required"
+			})
+			return
+		}
+		socket?.emit("systemSettings:updateSummarizationEnabled", {
+			enabled: event.checked
+		})
+	}
+
 	// ── Account functions ────────────────────────────────────────────────────
 
 	function handleEnableAccountsClick(event: { checked: boolean }) {
@@ -714,14 +729,15 @@
 			{/if}
 		</div>
 
-		<!-- Vectorization Settings -->
+		<!-- Vectorization & RAG Settings -->
 		<div class="space-y-4">
-			<h3 class="text-lg font-semibold">Vectorization</h3>
+			<h3 class="text-lg font-semibold">Vectorization & RAG</h3>
 
 			<p class="text-muted-foreground text-sm">
 				Enables semantic search and context retrieval using locally-run embedding
 				models. When active, content is embedded in the background and used to
-				improve lorebook retrieval and future causal graph features.
+				improve lorebook retrieval and narrative graph features via
+				retrieval-augmented generation (RAG).
 			</p>
 
 			{#if !vectorizationEnabled}
@@ -731,7 +747,7 @@
 					disabled={availableModels.length === 0}
 				>
 					<Icons.Cpu class="h-4 w-4" />
-					Enable Vectorization
+					Enable Vectorization & RAG
 				</button>
 			{:else}
 				<!-- Active state -->
@@ -890,6 +906,31 @@
 					</div>
 				</div>
 			{/if}
+		</div>
+
+		<!-- Summarization Settings -->
+		<div class="space-y-4">
+			<h3 class="text-lg font-semibold">Summarization</h3>
+
+			<p class="text-muted-foreground text-sm">
+				When enabled, older chat messages may be condensed into summaries to
+				preserve context while staying within token limits. Summaries are
+				generated automatically in the background and are used in place of the
+				original messages during prompt construction.
+			</p>
+
+			<div class="flex items-center gap-2">
+				<Switch
+					name="enable-summarization"
+					checked={systemSettingsCtx.settings?.summarizationEnabled}
+					onCheckedChange={handleSummarizationEnabledClick}
+				></Switch>
+				<label for="enable-summarization" class="font-semibold">
+					{systemSettingsCtx.settings?.summarizationEnabled
+						? "Summarization Enabled"
+						: "Enable Summarization"}
+				</label>
+			</div>
 		</div>
 
 		<!-- Account Settings -->

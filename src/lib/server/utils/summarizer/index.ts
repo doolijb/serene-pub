@@ -41,6 +41,7 @@ export interface SummarizeInput {
 	sampling: SelectSamplingConfig
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
+	summarizePromptConfig?: { batchSystemPrompt: string; synthSystemPrompt: string; nameSystemPrompt: string } | null
 	onProgress?: (data: SummarizeProgressData) => void
 }
 
@@ -216,7 +217,7 @@ export async function compileScenesForEntry(input: CompileInput): Promise<Summar
 export async function generateSummary(
 	input: SummarizeInput
 ): Promise<SummarizeResult> {
-	const { messages, loreType, topic, connection, sampling, contextConfig, promptConfig, onProgress } = input
+	const { messages, loreType, topic, connection, sampling, contextConfig, promptConfig, summarizePromptConfig, onProgress } = input
 
 	const tokenCounter = new TokenCounters("estimate")
 	const tokenLimit: number = (connection as any).tokenLimit ?? (connection as any).contextSize ?? 4096
@@ -230,7 +231,7 @@ export async function generateSummary(
 
 	for (let i = 0; i < batches.length; i++) {
 		const jsonMessages = formatMessagesAsJson(batches[i])
-		const promptData = buildBatchPrompt({ jsonMessages, loreType, topic })
+		const promptData = buildBatchPrompt({ jsonMessages, loreType, topic, systemPromptOverride: summarizePromptConfig?.batchSystemPrompt })
 		const raw = await runGeneration(promptData, { ...genOpts, maxTokens: 1000 })
 		const parsed = parseSummaryOutput(raw)
 		const draftContent = parsed.content || raw // fall back to raw if tags missing
@@ -256,7 +257,7 @@ export async function generateSummary(
 	// ── Name generation helper ───────────────────────────────────────────────
 	async function generateName(content: string): Promise<string | undefined> {
 		try {
-			const namePrompt = buildNamePrompt({ content, loreType })
+			const namePrompt = buildNamePrompt({ content, loreType, systemPromptOverride: summarizePromptConfig?.nameSystemPrompt })
 			const nameRaw = await runGeneration(namePrompt, { ...genOpts, maxTokens: 30 })
 			const name = nameRaw.trim().replace(/['".,!?]+$/g, "")
 			return name.length > 0 ? name : undefined
@@ -278,7 +279,7 @@ export async function generateSummary(
 	}
 
 	const jsonDrafts = JSON.stringify(drafts, null, 2)
-	const synthesisPrompt = buildSynthesisPrompt({ jsonDrafts, loreType, topic })
+	const synthesisPrompt = buildSynthesisPrompt({ jsonDrafts, loreType, topic, systemPromptOverride: summarizePromptConfig?.synthSystemPrompt })
 	const synthesisRaw = await runGeneration(synthesisPrompt, { ...genOpts, maxTokens: 2000 })
 	const finalParsed = parseSummaryOutput(synthesisRaw)
 

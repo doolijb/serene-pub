@@ -42,8 +42,9 @@ export function buildBatchPrompt(opts: {
 	jsonMessages: string
 	loreType: "world" | "history" | "character" | "scene"
 	topic?: string
+	systemPromptOverride?: string | null
 }): SummaryPrompt {
-	const { jsonMessages, loreType, topic } = opts
+	const { jsonMessages, loreType, topic, systemPromptOverride } = opts
 	const topicLine = topic?.trim()
 		? `Focus specifically on: "${topic.trim()}"\n\n`
 		: ""
@@ -51,6 +52,7 @@ export function buildBatchPrompt(opts: {
 	if (loreType === "character") {
 		return {
 			systemPrompt:
+				systemPromptOverride ??
 				"You are a character archivist recording facts about a specific character from a roleplay exchange. Your records are concise bullet points that capture who the character is, what they did, and how they relate to others. You write only what is directly shown — no invention, no embellishment.",
 			userPrompt: `The following JSON array contains a portion of a roleplay exchange. Extract character lore as bullet points.
 ${topicLine}Rules:
@@ -74,6 +76,7 @@ Output ONLY in this exact format — no other text before or after:
 	if (loreType === "history") {
 		return {
 			systemPrompt:
+				systemPromptOverride ??
 				"You are a chronicler recording key events from a roleplay exchange. Your records are concise bullet points that capture what changed, why it matters, and how it affected the people involved. You write only what is directly shown — no invention, no embellishment.",
 			userPrompt: `The following JSON array contains a portion of a roleplay exchange. Record the key events as bullet points.
 ${topicLine}Rules:
@@ -98,6 +101,7 @@ Output ONLY in this exact format — no other text before or after:
 	if (loreType === "scene") {
 		return {
 			systemPrompt:
+				systemPromptOverride ??
 				"You are a scene archivist capturing what happened in a discrete story moment from a roleplay exchange. You write a tight narrative summary — past tense, plain prose — that captures the key beats, actions, and emotional turning points. No invention, no embellishment.",
 			userPrompt: `The following JSON array contains a portion of a roleplay exchange. Write a scene summary.
 ${topicLine}Rules:
@@ -119,6 +123,7 @@ Output ONLY in this exact format — no other text before or after:
 
 	return {
 		systemPrompt:
+			systemPromptOverride ??
 			"You are an archivist recording world-building facts from a roleplay exchange. Your records are concise bullet points that capture facts, changes, and discoveries about the setting. You write only what is directly shown — no invention, no embellishment.",
 		userPrompt: `The following JSON array contains a portion of a roleplay exchange. Extract world lore as bullet points.
 ${topicLine}Rules:
@@ -144,15 +149,17 @@ Output ONLY in this exact format — no other text before or after:
 export function buildNamePrompt(opts: {
 	content: string
 	loreType: "world" | "history" | "character" | "scene"
+	systemPromptOverride?: string | null
 }): SummaryPrompt {
 	const instruction =
-		opts.loreType === "history"
+		opts.systemPromptOverride ??
+		(opts.loreType === "history"
 			? "You generate short titles for historical chronicle entries. The title should capture the key event or turning point."
 			: opts.loreType === "character"
 				? "You generate short titles for character lore entries. The title should describe the subject matter of the entry (e.g. an ability, relationship, or past event)."
 				: opts.loreType === "scene"
 					? "You generate short titles for scene summaries. The title should capture the key moment or action of the scene."
-					: "You generate short titles for world lore entries. The title should describe the subject of the entry."
+					: "You generate short titles for world lore entries. The title should describe the subject of the entry.")
 
 	return {
 		systemPrompt: instruction,
@@ -170,8 +177,9 @@ export function buildSynthesisPrompt(opts: {
 	jsonDrafts: string
 	loreType: "world" | "history" | "character" | "scene"
 	topic?: string
+	systemPromptOverride?: string | null
 }): SummaryPrompt {
-	const { jsonDrafts, loreType, topic } = opts
+	const { jsonDrafts, loreType, topic, systemPromptOverride } = opts
 	const topicLine = topic?.trim()
 		? `Focus specifically on: "${topic.trim()}"\n\n`
 		: ""
@@ -179,6 +187,7 @@ export function buildSynthesisPrompt(opts: {
 	if (loreType === "character") {
 		return {
 			systemPrompt:
+				systemPromptOverride ??
 				"You are a master character archivist. Given draft bullet points about a character from a roleplay exchange, you merge them into a single clean character lore entry. You write only what the drafts contain — no invention, no embellishment.",
 			userPrompt: `The following JSON array contains draft character lore bullet points from a roleplay exchange. Merge them into one clean, organized bullet-point entry.
 ${topicLine}Rules:
@@ -203,6 +212,7 @@ Output ONLY in this exact format — no other text before or after:
 	if (loreType === "history") {
 		return {
 			systemPrompt:
+				systemPromptOverride ??
 				"You are a master chronicler. Given draft bullet points covering a roleplay exchange in chronological order, you merge them into a single clean bullet-point record. You write only what the drafts contain — no invention, no embellishment.",
 			userPrompt: `The following JSON array contains draft bullet-point records covering a roleplay exchange in order. Merge them into one clean, chronological bullet-point list.
 ${topicLine}Rules:
@@ -229,6 +239,7 @@ Output ONLY in this exact format — no other text before or after:
 	if (loreType === "scene") {
 		return {
 			systemPrompt:
+				systemPromptOverride ??
 				"You are a master scene editor. Given draft scene summaries covering a roleplay exchange in chronological order, you merge them into a single coherent scene narrative. You write only what the drafts contain — no invention, no embellishment.",
 			userPrompt: `The following JSON array contains draft scene summaries in chronological order. Merge them into one coherent scene narrative.
 ${topicLine}Rules:
@@ -251,6 +262,7 @@ Output ONLY in this exact format — no other text before or after:
 
 	return {
 		systemPrompt:
+			systemPromptOverride ??
 			"You are a master archivist. Given draft bullet points covering a roleplay exchange, you merge them into a single clean world lore entry. You write only what the drafts contain — no invention, no embellishment.",
 		userPrompt: `The following JSON array contains draft world lore bullet points from a roleplay exchange. Merge them into one clean, organized bullet-point entry.
 ${topicLine}Rules:

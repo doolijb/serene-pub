@@ -38,6 +38,7 @@ import { registerSummarizeHandlers } from "./summarize"
 import { registerVectorizationHandlers } from "./vectorization"
 import { registerSceneHandlers } from "./scenes"
 import { registerNarrativeGraphHandlers } from "./narrativeGraph"
+import { registerSummarizePromptConfigHandlers } from "./summarizePromptConfigs"
 
 const userId = 1 // Replace with actual user id
 
@@ -67,6 +68,7 @@ export function connectSockets(io: {
 		registerPersonaHandlers(socket, emitToUser, register)
 		registerContextConfigHandlers(socket, emitToUser, register)
 		registerPromptConfigHandlers(socket, emitToUser, register)
+		registerSummarizePromptConfigHandlers(socket, emitToUser, register)
 		registerChatHandlers(socket, emitToUser, register)
 		registerLorebookHandlers(socket, emitToUser, register)
 		registerWorldLoreEntryHandlers(socket, emitToUser, register)

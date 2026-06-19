@@ -47,6 +47,19 @@
 	let deletingLorebookId: number | undefined = $state(undefined)
 	let showDeleteConfirmationModal: boolean = $state(false)
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
+	let systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
+
+	let graphEnabled = $derived(
+		!!systemSettingsCtx.settings?.vectorizationEnabled &&
+		!!systemSettingsCtx.settings?.summarizationEnabled
+	)
+
+	// If graph tab is active but graph becomes unavailable, fall back to world lore
+	$effect(() => {
+		if (!graphEnabled && editGroup === "graph") {
+			editGroup = "world"
+		}
+	})
 
 	// External navigation from chat scene/history-entry clicks
 	let focusHistoryEntryId = $state<number | undefined>(undefined)
@@ -380,12 +393,14 @@
 						History
 					{/if}
 				</Tabs.Control>
-				<Tabs.Control value="graph">
-					<Icons.Network size={20} class="inline" />
-					{#if editGroup === "graph"}
-						Graph
-					{/if}
-				</Tabs.Control>
+				{#if graphEnabled}
+					<Tabs.Control value="graph">
+						<Icons.Network size={20} class="inline" />
+						{#if editGroup === "graph"}
+							Graph
+						{/if}
+					</Tabs.Control>
+				{/if}
 			{/snippet}
 			{#snippet content()}
 				<Tabs.Panel value="lorebook">
@@ -427,11 +442,13 @@
 						/>
 					{/if}
 				</Tabs.Panel>
-				<Tabs.Panel value="graph">
-					{#if editGroup == "graph" && selectedLorebook}
-						<GraphManager lorebookId={selectedLorebook.id} />
-					{/if}
-				</Tabs.Panel>
+				{#if graphEnabled}
+					<Tabs.Panel value="graph">
+						{#if editGroup == "graph" && selectedLorebook}
+							<GraphManager lorebookId={selectedLorebook.id} />
+						{/if}
+					</Tabs.Panel>
+				{/if}
 			{/snippet}
 		</Tabs>
 	{:else}

@@ -75,6 +75,18 @@ export const userSettings = pgTable("user_settings", {
 			onDelete: "set null"
 		}
 	),
+	activeSummarizeWorldConfigId: integer("active_summarize_world_config_id").references(
+		() => worldSummarizeConfigs.id,
+		{ onDelete: "set null" }
+	),
+	activeSummarizeCharacterConfigId: integer("active_summarize_character_config_id").references(
+		() => characterSummarizeConfigs.id,
+		{ onDelete: "set null" }
+	),
+	activeSummarizeSceneConfigId: integer("active_summarize_scene_config_id").references(
+		() => sceneSummarizeConfigs.id,
+		{ onDelete: "set null" }
+	),
 	theme: text("theme").notNull().default("hamlindigo"),
 	darkMode: boolean("dark_mode").notNull().default(true),
 	showHomePageBanner: boolean("show_home_page_banner").default(true),
@@ -118,6 +130,18 @@ export const userSettingsRelations = relations(userSettings, ({ one }) => ({
 	activePromptConfig: one(promptConfigs, {
 		fields: [userSettings.activePromptConfigId],
 		references: [promptConfigs.id]
+	}),
+	activeSummarizeWorldConfig: one(worldSummarizeConfigs, {
+		fields: [userSettings.activeSummarizeWorldConfigId],
+		references: [worldSummarizeConfigs.id]
+	}),
+	activeSummarizeCharacterConfig: one(characterSummarizeConfigs, {
+		fields: [userSettings.activeSummarizeCharacterConfigId],
+		references: [characterSummarizeConfigs.id]
+	}),
+	activeSummarizeSceneConfig: one(sceneSummarizeConfigs, {
+		fields: [userSettings.activeSummarizeSceneConfigId],
+		references: [sceneSummarizeConfigs.id]
 	})
 }))
 
@@ -330,6 +354,39 @@ export const promptConfigs = pgTable("prompt_configs", {
 })
 
 export const promptConfigsRelations = relations(promptConfigs, () => ({}))
+
+export const worldSummarizeConfigs = pgTable("world_summarize_configs", {
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	isImmutable: boolean("is_immutable").notNull().default(false),
+	name: text("name").notNull(),
+	batchSystemPrompt: text("batch_system_prompt").notNull(),
+	synthSystemPrompt: text("synth_system_prompt").notNull(),
+	nameSystemPrompt: text("name_system_prompt").notNull()
+})
+
+export const worldSummarizeConfigsRelations = relations(worldSummarizeConfigs, () => ({}))
+
+export const characterSummarizeConfigs = pgTable("character_summarize_configs", {
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	isImmutable: boolean("is_immutable").notNull().default(false),
+	name: text("name").notNull(),
+	batchSystemPrompt: text("batch_system_prompt").notNull(),
+	synthSystemPrompt: text("synth_system_prompt").notNull(),
+	nameSystemPrompt: text("name_system_prompt").notNull()
+})
+
+export const characterSummarizeConfigsRelations = relations(characterSummarizeConfigs, () => ({}))
+
+export const sceneSummarizeConfigs = pgTable("scene_summarize_configs", {
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	isImmutable: boolean("is_immutable").notNull().default(false),
+	name: text("name").notNull(),
+	batchSystemPrompt: text("batch_system_prompt").notNull(),
+	synthSystemPrompt: text("synth_system_prompt").notNull(),
+	nameSystemPrompt: text("name_system_prompt").notNull()
+})
+
+export const sceneSummarizeConfigsRelations = relations(sceneSummarizeConfigs, () => ({}))
 
 export const lorebooks = pgTable(
 	"lorebooks",
@@ -781,7 +838,11 @@ export const chats = pgTable("chats", {
 	),
 	lorebookId: integer("lorebook_id").references(() => lorebooks.id, {
 		onDelete: "set null"
-	}) // Primary lorebook for this chat
+	}), // Primary lorebook for this chat
+	drafts: json("drafts")
+		.$type<Record<string, string>>()
+		.notNull()
+		.default({})
 })
 
 export const chatsRelations = relations(chats, ({ one, many }) => ({
@@ -1033,7 +1094,22 @@ export const systemSettings = pgTable("system_settings", {
 		.notNull()
 		.default(false),
 	embeddingModelName: text("embedding_model_name"),
-	embeddingModelDimensions: integer("embedding_model_dimensions")
+	embeddingModelDimensions: integer("embedding_model_dimensions"),
+	summarizationEnabled: boolean("summarization_enabled")
+		.notNull()
+		.default(false),
+	defaultSummarizeWorldConfigId: integer("default_summarize_world_config_id").references(
+		() => worldSummarizeConfigs.id,
+		{ onDelete: "set null" }
+	),
+	defaultSummarizeCharacterConfigId: integer("default_summarize_character_config_id").references(
+		() => characterSummarizeConfigs.id,
+		{ onDelete: "set null" }
+	),
+	defaultSummarizeSceneConfigId: integer("default_summarize_scene_config_id").references(
+		() => sceneSummarizeConfigs.id,
+		{ onDelete: "set null" }
+	)
 })
 
 export const systemSettingsRelations = relations(systemSettings, ({ one }) => ({
@@ -1052,6 +1128,18 @@ export const systemSettingsRelations = relations(systemSettings, ({ one }) => ({
 	defaultPromptConfig: one(promptConfigs, {
 		fields: [systemSettings.defaultPromptConfigId],
 		references: [promptConfigs.id]
+	}),
+	defaultSummarizeWorldConfig: one(worldSummarizeConfigs, {
+		fields: [systemSettings.defaultSummarizeWorldConfigId],
+		references: [worldSummarizeConfigs.id]
+	}),
+	defaultSummarizeCharacterConfig: one(characterSummarizeConfigs, {
+		fields: [systemSettings.defaultSummarizeCharacterConfigId],
+		references: [characterSummarizeConfigs.id]
+	}),
+	defaultSummarizeSceneConfig: one(sceneSummarizeConfigs, {
+		fields: [systemSettings.defaultSummarizeSceneConfigId],
+		references: [sceneSummarizeConfigs.id]
 	})
 }))
 

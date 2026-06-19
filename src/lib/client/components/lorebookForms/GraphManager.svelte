@@ -4,6 +4,7 @@
 	import * as Icons from "@lucide/svelte"
 	import GraphBuildModal from "../modals/GraphBuildModal.svelte"
 	import GraphVisualization from "../graph/GraphVisualization.svelte"
+	import EmbeddingStatusIcon from "../EmbeddingStatusIcon.svelte"
 
 	interface Props {
 		lorebookId: number
@@ -435,6 +436,7 @@
 						{:else}
 							<div class="flex items-center gap-2">
 								<span class="flex-1 truncate text-sm font-medium">{node.name}</span>
+								<EmbeddingStatusIcon embeddingModel={node.embeddingModel} />
 								<span class="badge {NODE_TYPE_COLOR[node.nodeType] ?? 'preset-tonal-surface'} text-xs">{node.nodeType}</span>
 								<button class="btn btn-sm preset-tonal-surface" onclick={() => startEditNode(node)}>
 									<Icons.Pencil size={13} />
@@ -487,6 +489,7 @@
 									<span class="text-surface-400 mx-1 text-xs">→ {rel.relationshipType} →</span>
 									<span class="font-medium">{nodeName(rel.toNodeId)}</span>
 								</span>
+								<EmbeddingStatusIcon embeddingModel={rel.embeddingModel} />
 								<span class="badge {REL_STATUS_BADGE[rel.status] ?? 'preset-tonal-surface'} text-xs">{rel.status}</span>
 								<button class="btn btn-sm preset-tonal-surface" onclick={() => startEditRel(rel)}>
 									<Icons.Pencil size={13} />

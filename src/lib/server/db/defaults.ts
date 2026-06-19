@@ -271,6 +271,111 @@ Example dialogue:
 
 		await Promise.all(promptConfigQueries)
 
+		// World Summarize Configs
+
+		const existingWorldSummarizeConfigs = await db.query.worldSummarizeConfigs.findMany()
+		const defaultWorldSummarizeConfigs: Partial<SelectWorldSummarizeConfig>[] = [
+			{
+				id: 1,
+				name: "Default World Summarization",
+				isImmutable: true,
+				batchSystemPrompt:
+					"You are an archivist recording world-building facts from a roleplay exchange. Your records are concise bullet points that capture facts, changes, and discoveries about the setting. You write only what is directly shown — no invention, no embellishment.",
+				synthSystemPrompt:
+					"You are a master archivist. Given draft bullet points covering a roleplay exchange, you merge them into a single clean world lore entry. You write only what the drafts contain — no invention, no embellishment.",
+				nameSystemPrompt:
+					"You generate short titles for world lore entries. The title should describe the subject of the entry."
+			}
+		]
+		const worldSummarizeConfigQueries: Promise<any>[] = []
+		defaultWorldSummarizeConfigs.forEach((data) => {
+			const found = existingWorldSummarizeConfigs.find((c) => c.id === data.id)
+			if (!found) {
+				worldSummarizeConfigQueries.push(
+					db.insert(schema.worldSummarizeConfigs).values(data as InsertWorldSummarizeConfig)
+				)
+			} else {
+				worldSummarizeConfigQueries.push(
+					db
+						.update(schema.worldSummarizeConfigs)
+						.set({ ...data, // @ts-ignore
+							id: undefined })
+						.where(eq(schema.worldSummarizeConfigs.id, found.id))
+				)
+			}
+		})
+		await Promise.all(worldSummarizeConfigQueries)
+
+		// Character Summarize Configs
+
+		const existingCharacterSummarizeConfigs = await db.query.characterSummarizeConfigs.findMany()
+		const defaultCharacterSummarizeConfigs: Partial<SelectCharacterSummarizeConfig>[] = [
+			{
+				id: 1,
+				name: "Default Character Summarization",
+				isImmutable: true,
+				batchSystemPrompt:
+					"You are a character archivist recording facts about a specific character from a roleplay exchange. Your records are concise bullet points that capture who the character is, what they did, and how they relate to others. You write only what is directly shown — no invention, no embellishment.",
+				synthSystemPrompt:
+					"You are a master character archivist. Given draft bullet points about a character from a roleplay exchange, you merge them into a single clean character lore entry. You write only what the drafts contain — no invention, no embellishment.",
+				nameSystemPrompt:
+					"You generate short titles for character lore entries. The title should describe the subject matter of the entry (e.g. an ability, relationship, or past event)."
+			}
+		]
+		const characterSummarizeConfigQueries: Promise<any>[] = []
+		defaultCharacterSummarizeConfigs.forEach((data) => {
+			const found = existingCharacterSummarizeConfigs.find((c) => c.id === data.id)
+			if (!found) {
+				characterSummarizeConfigQueries.push(
+					db.insert(schema.characterSummarizeConfigs).values(data as InsertCharacterSummarizeConfig)
+				)
+			} else {
+				characterSummarizeConfigQueries.push(
+					db
+						.update(schema.characterSummarizeConfigs)
+						.set({ ...data, // @ts-ignore
+							id: undefined })
+						.where(eq(schema.characterSummarizeConfigs.id, found.id))
+				)
+			}
+		})
+		await Promise.all(characterSummarizeConfigQueries)
+
+		// Scene Summarize Configs
+
+		const existingSceneSummarizeConfigs = await db.query.sceneSummarizeConfigs.findMany()
+		const defaultSceneSummarizeConfigs: Partial<SelectSceneSummarizeConfig>[] = [
+			{
+				id: 1,
+				name: "Default Scene Summarization",
+				isImmutable: true,
+				batchSystemPrompt:
+					"You are a scene archivist capturing what happened in a discrete story moment from a roleplay exchange. You write a tight narrative summary — past tense, plain prose — that captures the key beats, actions, and emotional turning points. No invention, no embellishment.",
+				synthSystemPrompt:
+					"You are a master scene editor. Given draft scene summaries covering a roleplay exchange in chronological order, you merge them into a single coherent scene narrative. You write only what the drafts contain — no invention, no embellishment.",
+				nameSystemPrompt:
+					"You generate short titles for scene summaries. The title should capture the key moment or action of the scene."
+			}
+		]
+		const sceneSummarizeConfigQueries: Promise<any>[] = []
+		defaultSceneSummarizeConfigs.forEach((data) => {
+			const found = existingSceneSummarizeConfigs.find((c) => c.id === data.id)
+			if (!found) {
+				sceneSummarizeConfigQueries.push(
+					db.insert(schema.sceneSummarizeConfigs).values(data as InsertSceneSummarizeConfig)
+				)
+			} else {
+				sceneSummarizeConfigQueries.push(
+					db
+						.update(schema.sceneSummarizeConfigs)
+						.set({ ...data, // @ts-ignore
+							id: undefined })
+						.where(eq(schema.sceneSummarizeConfigs.id, found.id))
+				)
+			}
+		})
+		await Promise.all(sceneSummarizeConfigQueries)
+
 		// Users
 
 		const existingUsers = await db.query.users.findMany()
@@ -342,6 +447,9 @@ Example dialogue:
 		"character_lore_entries",
 		"personas",
 		"prompt_configs",
+		"world_summarize_configs",
+		"character_summarize_configs",
+		"scene_summarize_configs",
 		"sampling_configs",
 		"users"
 	]

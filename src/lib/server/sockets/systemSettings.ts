@@ -200,6 +200,35 @@ export const systemSettingsUpdateKoboldCppManagerEnabled: Handler<
 	}
 }
 
+export const systemSettingsUpdateSummarizationEnabled: Handler<
+	Sockets.SystemSettings.UpdateSummarizationEnabled.Params,
+	Sockets.SystemSettings.UpdateSummarizationEnabled.Response
+> = {
+	event: "systemSettings:updateSummarizationEnabled",
+	handler: async (socket, params, emitToUser) => {
+		try {
+			await db
+				.update(schema.systemSettings)
+				.set({ summarizationEnabled: params.enabled })
+				.where(eq(schema.systemSettings.id, 1))
+
+			const res: Sockets.SystemSettings.UpdateSummarizationEnabled.Response = {
+				success: true,
+				enabled: params.enabled
+			}
+			emitToUser("systemSettings:updateSummarizationEnabled", res)
+			await systemSettingsGet.handler(socket, {}, emitToUser)
+			return res
+		} catch (error: any) {
+			console.error("Update summarization enabled error:", error)
+			emitToUser("systemSettings:updateSummarizationEnabled:error", {
+				error: "Failed to update summarization setting"
+			})
+			throw error
+		}
+	}
+}
+
 // Registration function for all system settings handlers
 export function registerSystemSettingsHandlers(
 	socket: any,
@@ -212,4 +241,5 @@ export function registerSystemSettingsHandlers(
 	register(socket, systemSettingsUpdateShowAllCharacterFields, emitToUser)
 	register(socket, systemSettingsUpdateEasyCharacterCreation, emitToUser)
 	register(socket, systemSettingsUpdateEasyPersonaCreation, emitToUser)
+	register(socket, systemSettingsUpdateSummarizationEnabled, emitToUser)
 }

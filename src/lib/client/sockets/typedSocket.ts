@@ -213,6 +213,10 @@ type SocketEventMap = {
 		params: Sockets.Chats.Get.Params
 		response: Sockets.Chats.Get.Response
 	}
+	"chats:saveDraft": {
+		params: Sockets.Chats.SaveDraft.Params
+		response: Sockets.Chats.SaveDraft.Response
+	}
 	"chats:create": {
 		params: Sockets.Chats.Create.Params
 		response: Sockets.Chats.Create.Response
@@ -384,6 +388,84 @@ type SocketEventMap = {
 		response: Sockets.PromptConfigs.SetUserActive.Response
 	}
 
+	// World Summarize Config events
+	"worldSummarizeConfigs:list": {
+		params: Sockets.WorldSummarizeConfigs.List.Params
+		response: Sockets.WorldSummarizeConfigs.List.Response
+	}
+	"worldSummarizeConfigs:get": {
+		params: Sockets.WorldSummarizeConfigs.Get.Params
+		response: Sockets.WorldSummarizeConfigs.Get.Response
+	}
+	"worldSummarizeConfigs:create": {
+		params: Sockets.WorldSummarizeConfigs.Create.Params
+		response: Sockets.WorldSummarizeConfigs.Create.Response
+	}
+	"worldSummarizeConfigs:update": {
+		params: Sockets.WorldSummarizeConfigs.Update.Params
+		response: Sockets.WorldSummarizeConfigs.Update.Response
+	}
+	"worldSummarizeConfigs:delete": {
+		params: Sockets.WorldSummarizeConfigs.Delete.Params
+		response: Sockets.WorldSummarizeConfigs.Delete.Response
+	}
+	"worldSummarizeConfigs:setUserActive": {
+		params: Sockets.WorldSummarizeConfigs.SetUserActive.Params
+		response: Sockets.WorldSummarizeConfigs.SetUserActive.Response
+	}
+
+	// Character Summarize Config events
+	"characterSummarizeConfigs:list": {
+		params: Sockets.CharacterSummarizeConfigs.List.Params
+		response: Sockets.CharacterSummarizeConfigs.List.Response
+	}
+	"characterSummarizeConfigs:get": {
+		params: Sockets.CharacterSummarizeConfigs.Get.Params
+		response: Sockets.CharacterSummarizeConfigs.Get.Response
+	}
+	"characterSummarizeConfigs:create": {
+		params: Sockets.CharacterSummarizeConfigs.Create.Params
+		response: Sockets.CharacterSummarizeConfigs.Create.Response
+	}
+	"characterSummarizeConfigs:update": {
+		params: Sockets.CharacterSummarizeConfigs.Update.Params
+		response: Sockets.CharacterSummarizeConfigs.Update.Response
+	}
+	"characterSummarizeConfigs:delete": {
+		params: Sockets.CharacterSummarizeConfigs.Delete.Params
+		response: Sockets.CharacterSummarizeConfigs.Delete.Response
+	}
+	"characterSummarizeConfigs:setUserActive": {
+		params: Sockets.CharacterSummarizeConfigs.SetUserActive.Params
+		response: Sockets.CharacterSummarizeConfigs.SetUserActive.Response
+	}
+
+	// Scene Summarize Config events
+	"sceneSummarizeConfigs:list": {
+		params: Sockets.SceneSummarizeConfigs.List.Params
+		response: Sockets.SceneSummarizeConfigs.List.Response
+	}
+	"sceneSummarizeConfigs:get": {
+		params: Sockets.SceneSummarizeConfigs.Get.Params
+		response: Sockets.SceneSummarizeConfigs.Get.Response
+	}
+	"sceneSummarizeConfigs:create": {
+		params: Sockets.SceneSummarizeConfigs.Create.Params
+		response: Sockets.SceneSummarizeConfigs.Create.Response
+	}
+	"sceneSummarizeConfigs:update": {
+		params: Sockets.SceneSummarizeConfigs.Update.Params
+		response: Sockets.SceneSummarizeConfigs.Update.Response
+	}
+	"sceneSummarizeConfigs:delete": {
+		params: Sockets.SceneSummarizeConfigs.Delete.Params
+		response: Sockets.SceneSummarizeConfigs.Delete.Response
+	}
+	"sceneSummarizeConfigs:setUserActive": {
+		params: Sockets.SceneSummarizeConfigs.SetUserActive.Params
+		response: Sockets.SceneSummarizeConfigs.SetUserActive.Response
+	}
+
 	// KoboldCPP events
 	"koboldcpp:setBaseUrl": {
 		params: Sockets.KoboldCpp.SetBaseUrl.Params
@@ -456,6 +538,10 @@ type SocketEventMap = {
 	"systemSettings:updateAccountsEnabled": {
 		params: Sockets.SystemSettings.UpdateAccountsEnabled.Params
 		response: Sockets.SystemSettings.UpdateAccountsEnabled.Response
+	}
+	"systemSettings:updateSummarizationEnabled": {
+		params: Sockets.SystemSettings.UpdateSummarizationEnabled.Params
+		response: Sockets.SystemSettings.UpdateSummarizationEnabled.Response
 	}
 
 	// Vectorization events

@@ -32,6 +32,25 @@
 		| undefined = $state()
 	let userCtx: UserCtx = getContext("userCtx")
 	let panelsCtx: PanelsCtx = getContext("panelsCtx")
+	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
+
+	let summarizationEnabled = $derived(!!systemSettingsCtx.settings?.summarizationEnabled)
+	let vectorizationEnabled = $derived(!!systemSettingsCtx.settings?.vectorizationEnabled)
+
+	// ── Draft autosave ────────────────────────────────────────────────────────
+	// Debounce-save newMessage to the server as the user types.
+	// Only runs when the chat is loaded (chat !== undefined) to avoid
+	// clobbering another user's draft during a chat transition.
+	$effect(() => {
+		const content = newMessage
+		const currentChatId = chatId
+		if (!currentChatId || !chat) return
+		const timer = setTimeout(() => {
+			socket.emit("chats:saveDraft", { chatId: currentChatId, content })
+		}, 500)
+		return () => clearTimeout(timer)
+	})
+
 	let promptTokenCountTimeout: ReturnType<typeof setTimeout> | null = null
 	let autoTriggerTimeout: ReturnType<typeof setTimeout> | null = null
 	let loadingOlderMessages = $state(false)
@@ -54,7 +73,7 @@
 	let isSummarizationMode = $state(false)
 	let selectedMessageIds = $state(new Set<number>())
 	let showSummarizeModal = $state(false)
-	let summarizeLoreType = $state<"world" | "history" | "character" | "scene">("world")
+	let summarizeLoreType = $state<"world" | "character" | "scene">("world")
 	/** Message IDs already captured in a scene — hard-blocked from selection */
 	let scenedMessageIds = $state(new Set<number>())
 	/** Full scene list for this chat — used for in-chat scene/history-entry indicators */
@@ -282,6 +301,7 @@
 		}
 		socket.emit("chatMessages:sendPersonaMessage", msg)
 		newMessage = ""
+		socket.emit("chats:saveDraft", { chatId, content: "" })
 
 		// In group chats, check if this message will complete all persona responses
 		if (chat?.isGroup && chat?.chatPersonas?.length > 1) {
@@ -887,12 +907,16 @@
 						loadingOlderMessages = false
 					}, 10)
 				} else {
-					// Initial load or refresh - ensure messages are sorted chronologically
+					// Initial load or refresh — restore draft only on first load
+					const isFirstLoad = !chat
 					chat = {
 						...msg.chat,
 						chatMessages: msg.chat.chatMessages.sort(
 							(a, b) => a.id - b.id
 						)
+					}
+					if (isFirstLoad && msg.userDraft) {
+						newMessage = msg.userDraft
 					}
 					loadingOlderMessages = false
 				}
@@ -1151,7 +1175,7 @@
 				{lastPersonaMessage}
 				isSummarizationMode={isSummarizationMode}
 				isSelected={selectedMessageIds.has(props.msg.id)}
-				onStartSummarization={!isSummarizationMode ? enterSummarizationMode : undefined}
+				onStartSummarization={summarizationEnabled && !isSummarizationMode ? enterSummarizationMode : undefined}
 			>
 				{#snippet GeneratingAnimationComponent()}
 					{@const character = props.getMessageCharacter(props.msg)}
@@ -1220,14 +1244,14 @@
 							onContinueMessage={props.onContinueMessage}
 							onAbortMessage={props.onAbortMessage}
 							onBranchMessage={props.onBranchMessage}
-							onStartSummarization={enterSummarizationMode}
+							onStartSummarization={summarizationEnabled ? enterSummarizationMode : undefined}
 						/>
 					{/if}
 				{/snippet}
 			</ChatMessage>
 		{/snippet}
 		{#snippet ComposerComponent()}
-			{#if isSummarizationMode}
+			{#if isSummarizationMode && summarizationEnabled}
 				<div class="preset-tonal-secondary flex flex-wrap items-center gap-2 p-3 lg:rounded-t-lg">
 					<span class="text-sm font-semibold">
 						{selectedMessageIds.size}
@@ -1286,14 +1310,6 @@
 						>
 							<Icons.User size={16} />
 							Character Lore
-						</button>
-						<button
-							class="btn btn-sm preset-tonal-surface"
-							disabled={selectedMessageIds.size === 0}
-							onclick={() => openSummarizeModal('history')}
-						>
-							<Icons.Scroll size={16} />
-							History Entry
 						</button>
 					</div>
 				</div>
@@ -1399,11 +1415,11 @@
 <Modal
 	open={showDraftCompiledPromptModal}
 	onOpenChange={(details) => (showDraftCompiledPromptModal = details.open)}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-full w-[60em] border border-surface-300-700"
+	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-full w-[70em] max-h-[90dvh] flex flex-col border border-surface-300-700"
 	backdropClasses="backdrop-blur-sm"
 >
 	{#snippet content()}
-		<header class="flex items-center justify-between">
+		<header class="flex shrink-0 items-center justify-between">
 			<h2 class="h2">Prompt Details</h2>
 			<button
 				class="btn btn-sm"
@@ -1412,84 +1428,192 @@
 				<Icons.X size={20} />
 			</button>
 		</header>
-		<article class="space-y-2">
-			{#if draftCompiledPrompt}
-				<div class="mb-2">
-					<b>Prompt Tokens:</b>
-					<span class:text-error-500={contextExceeded}>
-						{draftCompiledPrompt.meta.tokenCounts.total} / {draftCompiledPrompt
-							.meta.tokenCounts.limit}
-					</span>
-				</div>
-				<div class="mb-2">
-					<b>Messages Inserted:</b>
-					{draftCompiledPrompt.meta.chatMessages.included} / {draftCompiledPrompt
-						.meta.chatMessages.total}
-				</div>
-				<div class="mb-2">
-					<b>Prompt Format:</b>
-					{draftCompiledPrompt.meta.promptFormat}
-				</div>
-				<!-- <div class="mb-2">
-					<b>Truncation Reason:</b>
-					{draftCompiledPrompt.meta.sources.lorebooks?.truncationReason || "None"}
-				</div> -->
-				<!-- <div class="mb-2">
-					<b>Timestamp:</b>
-					{draftCompiledPrompt.meta.timestamp}
-				</div> -->
-				<!-- <div class="mb-2">
-					<b>World Lore:</b>
-					{draftCompiledPrompt.meta.lorebooks?.worldLore
-						.included || 0}
-					/
-					{draftCompiledPrompt.meta.sources.lorebooks?.worldLore
-						.total || 0}
-				</div> -->
-				<!-- <div class="mb-2">
-					<b>Character Lore:</b>
-					{draftCompiledPrompt.meta.sources.lorebooks?.characterLore
-						.included || 0}/{draftCompiledPrompt.meta.sources.lorebooks?.characterLore.total || 0}
-				</div> -->
-				<!-- <div class="mb-2">
-					<b>History:</b>
-					{draftCompiledPrompt.meta.sources.lorebooks?.history
-						.included || 0}/{draftCompiledPrompt.meta.sources.lorebooks?.history.total || 0}
-				</div> -->
-				<div class="mb-2">
-					<b>Characters Used:</b>
-					<ul class="ml-4 list-disc">
-						{#each draftCompiledPrompt.meta.sources.characters as char}
-							<li>
-								{char.name}
-								{char.nickname ? `(${char.nickname})` : ""}
-							</li>
-						{/each}
-					</ul>
-				</div>
-				<div class="mb-2">
-					<b>Personas Used:</b>
-					<ul class="ml-4 list-disc">
-						{#each draftCompiledPrompt.meta.sources.personas as persona}
-							<li>{persona.name}</li>
-						{/each}
-					</ul>
-				</div>
-				<div class="mb-2">
-					<b>Scenario Source:</b>
-					{draftCompiledPrompt.meta.sources.scenario || "None"}
-				</div>
-				<div class="mb-2">
-					<b>Prompt Preview:</b>
-					<pre
-						class="bg-surface-200-800 max-h-64 overflow-x-auto rounded p-2 text-xs whitespace-pre-wrap">{draftCompiledPrompt.prompt ||
-							JSON.stringify(draftCompiledPrompt.messages)}</pre>
-				</div>
-			{:else}
-				<div class="text-muted">No compiled prompt data available.</div>
-			{/if}
-		</article>
-		<footer class="flex justify-end gap-4">
+
+		{#if draftCompiledPrompt}
+			{@const rag = draftCompiledPrompt.meta.rag}
+			{@const tokens = draftCompiledPrompt.meta.tokenCounts}
+			{@const msgs = draftCompiledPrompt.meta.chatMessages}
+			{@const src = draftCompiledPrompt.meta.sources}
+			{@const tokenPct = Math.min(100, Math.round((tokens.total / tokens.limit) * 100))}
+
+			<div class="min-h-0 flex-1 overflow-y-auto space-y-4 pr-1">
+				<!-- ── Token Budget ──────────────────────────────────────────────── -->
+				<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
+					<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-500">Token Budget</h3>
+					<div class="flex items-center justify-between text-sm">
+						<span class:text-error-500={contextExceeded} class:text-success-500={!contextExceeded}>
+							{tokens.total.toLocaleString()} / {tokens.limit.toLocaleString()} tokens
+						</span>
+						<span class="text-surface-500 text-xs">{tokenPct}%</span>
+					</div>
+					<div class="bg-surface-300-700 h-2 w-full overflow-hidden rounded-full">
+						<div
+							class="h-full rounded-full transition-all {contextExceeded ? 'bg-error-500' : tokenPct > 85 ? 'bg-warning-500' : 'bg-success-500'}"
+							style="width: {tokenPct}%"
+						></div>
+					</div>
+					<div class="flex gap-4 text-xs text-surface-500">
+						<span>Format: <span class="text-surface-300-700">{draftCompiledPrompt.meta.promptFormat || "—"}</span></span>
+						{#if draftCompiledPrompt.meta.templateName}
+							<span>Template: <span class="text-surface-300-700">{draftCompiledPrompt.meta.templateName}</span></span>
+						{/if}
+						{#if rag}
+							<span class="text-primary-400 font-medium">RAG Active</span>
+						{:else}
+							<span class="text-surface-500">Keyword Matching</span>
+						{/if}
+					</div>
+				</section>
+
+				<!-- ── Messages ─────────────────────────────────────────────────── -->
+				<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
+					<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-500">Messages</h3>
+					<div class="text-sm">
+						<span class="font-medium">{msgs.included}</span>
+						<span class="text-surface-500"> / {msgs.total} included</span>
+						{#if msgs.total > msgs.included}
+							<span class="text-surface-500 text-xs ml-2">({msgs.total - msgs.included} truncated)</span>
+						{/if}
+					</div>
+					{#if rag}
+						<div class="grid grid-cols-3 gap-2 text-xs">
+							<div class="bg-surface-300-700 rounded p-2 text-center">
+								<div class="font-semibold text-surface-200-800">{rag.messages.guaranteed}</div>
+								<div class="text-surface-500">Guaranteed</div>
+							</div>
+							<div class="bg-surface-300-700 rounded p-2 text-center">
+								<div class="font-semibold text-primary-400">{rag.messages.ragOlder}</div>
+								<div class="text-surface-500">RAG recalled</div>
+							</div>
+							<div class="bg-surface-300-700 rounded p-2 text-center">
+								<div class="font-semibold text-surface-200-800">{rag.messages.filledIn}</div>
+								<div class="text-surface-500">Fill-in</div>
+							</div>
+						</div>
+					{/if}
+				</section>
+
+				<!-- ── Lore & Graph (RAG only) ───────────────────────────────────── -->
+				{#if rag}
+					{@const wl = rag.lore.worldLore}
+					{@const cl = rag.lore.characterLore}
+					{@const hi = rag.lore.history}
+					<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
+						<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-500">Lore & Graph</h3>
+						<div class="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+							<div class="bg-surface-300-700 rounded p-2">
+								<div class="text-surface-400 mb-1">World Lore</div>
+								{#if wl.pinned + wl.rag > 0}
+									<div class="font-medium">{wl.pinned + wl.rag} included</div>
+									<div class="text-surface-500">{wl.pinned} pinned · {wl.rag} RAG</div>
+								{:else}
+									<div class="text-surface-500">None</div>
+								{/if}
+							</div>
+							<div class="bg-surface-300-700 rounded p-2">
+								<div class="text-surface-400 mb-1">Char Lore</div>
+								{#if cl.pinned + cl.rag > 0}
+									<div class="font-medium">{cl.pinned + cl.rag} included</div>
+									<div class="text-surface-500">{cl.pinned} pinned · {cl.rag} RAG</div>
+								{:else}
+									<div class="text-surface-500">None</div>
+								{/if}
+							</div>
+							<div class="bg-surface-300-700 rounded p-2">
+								<div class="text-surface-400 mb-1">History</div>
+								{#if hi.pinned + hi.rag > 0}
+									<div class="font-medium">{hi.pinned + hi.rag} included</div>
+									<div class="text-surface-500">{hi.pinned} pinned · {hi.rag} RAG</div>
+								{:else}
+									<div class="text-surface-500">None</div>
+								{/if}
+							</div>
+							<div class="bg-surface-300-700 rounded p-2">
+								<div class="text-surface-400 mb-1">Graph Pairs</div>
+								{#if rag.graphPairs > 0}
+									<div class="font-medium text-primary-400">{rag.graphPairs} pairs</div>
+									<div class="text-surface-500">relationship context</div>
+								{:else}
+									<div class="text-surface-500">None matched</div>
+								{/if}
+							</div>
+						</div>
+					</section>
+				{/if}
+
+				<!-- ── Sources ───────────────────────────────────────────────────── -->
+				<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
+					<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-500">Sources</h3>
+					<div class="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+						<div>
+							<p class="text-surface-400 mb-1 text-xs">Characters</p>
+							{#if src.characters.length > 0}
+								<ul class="space-y-0.5">
+									{#each src.characters as char}
+										<li class="flex items-center gap-1">
+											<Icons.User size={12} class="text-surface-500 shrink-0" />
+											<span class="truncate">{char.name}{char.nickname ? ` (${char.nickname})` : ""}</span>
+										</li>
+									{/each}
+								</ul>
+							{:else}
+								<p class="text-surface-500 text-xs">None</p>
+							{/if}
+						</div>
+						<div>
+							<p class="text-surface-400 mb-1 text-xs">Personas</p>
+							{#if src.personas.length > 0}
+								<ul class="space-y-0.5">
+									{#each src.personas as persona}
+										<li class="flex items-center gap-1">
+											<Icons.User2 size={12} class="text-surface-500 shrink-0" />
+											<span class="truncate">{persona.name}</span>
+										</li>
+									{/each}
+								</ul>
+							{:else}
+								<p class="text-surface-500 text-xs">None</p>
+							{/if}
+						</div>
+						<div>
+							<p class="text-surface-400 mb-1 text-xs">Scenario</p>
+							<p class="text-xs capitalize">{src.scenario ?? "None"}</p>
+						</div>
+					</div>
+				</section>
+
+				<!-- ── Prompt Preview ────────────────────────────────────────────── -->
+				<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
+					<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-500">Prompt Preview</h3>
+					{#if draftCompiledPrompt.messages && draftCompiledPrompt.messages.length > 0}
+						<!-- Chat format: render each message block -->
+						<div class="max-h-96 overflow-y-auto space-y-2">
+							{#each draftCompiledPrompt.messages as msg, i}
+								<div class="rounded border {msg.role === 'system' ? 'border-warning-500/30 bg-warning-500/5' : msg.role === 'assistant' ? 'border-primary-500/30 bg-primary-500/5' : 'border-surface-400/30 bg-surface-300-700'} overflow-hidden">
+									<div class="flex items-center gap-2 border-b border-inherit px-2 py-1">
+										<span class="text-xs font-semibold uppercase tracking-wide {msg.role === 'system' ? 'text-warning-400' : msg.role === 'assistant' ? 'text-primary-400' : 'text-surface-400'}">{msg.role}</span>
+										{#if msg.name}
+											<span class="text-surface-500 text-xs">({msg.name})</span>
+										{/if}
+										<span class="ml-auto text-surface-600 text-xs">#{i + 1}</span>
+									</div>
+									<pre class="whitespace-pre-wrap px-2 py-1.5 text-xs leading-relaxed">{typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content, null, 2)}</pre>
+								</div>
+							{/each}
+						</div>
+					{:else if draftCompiledPrompt.prompt}
+						<!-- Raw text format -->
+						<pre class="max-h-96 overflow-y-auto whitespace-pre-wrap rounded bg-surface-300-700 p-2 text-xs leading-relaxed">{draftCompiledPrompt.prompt}</pre>
+					{:else}
+						<p class="text-surface-500 text-xs">No prompt content available.</p>
+					{/if}
+				</section>
+			</div>
+		{:else}
+			<div class="text-surface-500 py-8 text-center text-sm">No compiled prompt data available.</div>
+		{/if}
+
+		<footer class="flex shrink-0 justify-end gap-4 pt-2">
 			<button
 				class="btn preset-filled-surface-500"
 				onclick={() => (showDraftCompiledPromptModal = false)}

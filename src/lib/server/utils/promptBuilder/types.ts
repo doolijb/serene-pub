@@ -36,6 +36,22 @@ export type TemplateContext = {
 	__promptBuilderInstance?: any
 }
 
+export type RagDiagnostics = {
+	used: true
+	lore: {
+		worldLore: { pinned: number; rag: number }
+		characterLore: { pinned: number; rag: number }
+		history: { pinned: number; rag: number }
+	}
+	graphPairs: number
+	messages: {
+		guaranteed: number
+		ragOlder: number
+		filledIn: number
+		total: number
+	}
+}
+
 export type CompiledPrompt = {
 	prompt: string | undefined
 	messages: any[] | undefined
@@ -56,6 +72,7 @@ export type CompiledPrompt = {
 			excludedIds: number[]
 		}
 		sources: any
+		rag?: RagDiagnostics
 	}
 }
 

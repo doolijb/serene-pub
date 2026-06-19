@@ -545,11 +545,15 @@ export const vectorizationCheckRagStatus: Handler<
 			const lbWhere = inArray(schema.worldLoreEntries.lorebookId, allLorebookIds)
 			const clWhere = inArray(schema.characterLoreEntries.lorebookId, allLorebookIds)
 			const heWhere = inArray(schema.historyEntries.lorebookId, allLorebookIds)
+			const nnWhere = inArray(schema.narrativeNodes.lorebookId, allLorebookIds)
+			const nrWhere = inArray(schema.narrativeRelationships.lorebookId, allLorebookIds)
 
 			const [
 				wleTotal, wleNull, wleStale,
 				cleTotal, cleNull, cleStale,
-				heTotal, heNull, heStale
+				heTotal, heNull, heStale,
+				nnTotal, nnNull, nnStale,
+				nrTotal, nrNull, nrStale
 			] = await Promise.all([
 				db.$count(schema.worldLoreEntries, lbWhere),
 				db.$count(schema.worldLoreEntries, and(lbWhere, isNull(schema.worldLoreEntries.embedding))),
@@ -559,12 +563,18 @@ export const vectorizationCheckRagStatus: Handler<
 				db.$count(schema.characterLoreEntries, and(clWhere, sql`${schema.characterLoreEntries.embedding} IS NOT NULL`, ne(schema.characterLoreEntries.embeddingModel, activeModelName))),
 				db.$count(schema.historyEntries, heWhere),
 				db.$count(schema.historyEntries, and(heWhere, isNull(schema.historyEntries.embedding))),
-				db.$count(schema.historyEntries, and(heWhere, sql`${schema.historyEntries.embedding} IS NOT NULL`, ne(schema.historyEntries.embeddingModel, activeModelName)))
+				db.$count(schema.historyEntries, and(heWhere, sql`${schema.historyEntries.embedding} IS NOT NULL`, ne(schema.historyEntries.embeddingModel, activeModelName))),
+				db.$count(schema.narrativeNodes, nnWhere),
+				db.$count(schema.narrativeNodes, and(nnWhere, isNull(schema.narrativeNodes.embedding))),
+				db.$count(schema.narrativeNodes, and(nnWhere, sql`${schema.narrativeNodes.embedding} IS NOT NULL`, ne(schema.narrativeNodes.embeddingModel, activeModelName))),
+				db.$count(schema.narrativeRelationships, nrWhere),
+				db.$count(schema.narrativeRelationships, and(nrWhere, isNull(schema.narrativeRelationships.embedding))),
+				db.$count(schema.narrativeRelationships, and(nrWhere, sql`${schema.narrativeRelationships.embedding} IS NOT NULL`, ne(schema.narrativeRelationships.embeddingModel, activeModelName)))
 			])
 
-			const lbTotal = Number(wleTotal) + Number(cleTotal) + Number(heTotal)
-			const lbNull = Number(wleNull) + Number(cleNull) + Number(heNull)
-			const lbStale = Number(wleStale) + Number(cleStale) + Number(heStale)
+			const lbTotal = Number(wleTotal) + Number(cleTotal) + Number(heTotal) + Number(nnTotal) + Number(nrTotal)
+			const lbNull = Number(wleNull) + Number(cleNull) + Number(heNull) + Number(nnNull) + Number(nrNull)
+			const lbStale = Number(wleStale) + Number(cleStale) + Number(heStale) + Number(nnStale) + Number(nrStale)
 
 			lorebook = {
 				total: lbTotal,

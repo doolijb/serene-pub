@@ -617,9 +617,13 @@ export const chatsGetHandler: Handler<
 				return res
 			}
 
+			const drafts = (chatData as any).drafts as Record<string, string> | null | undefined
+			const userDraft = drafts?.[String(userId)] || null
+
 			const res: Sockets.Chats.Get.Response = {
 				chat: chatData as any,
-				messages: (chatData as any).chatMessages || null
+				messages: (chatData as any).chatMessages || null,
+				userDraft
 			}
 			emitToUser("chats:get", res)
 			return res
@@ -630,6 +634,37 @@ export const chatsGetHandler: Handler<
 			})
 			throw error
 		}
+	}
+}
+
+export const chatsSaveDraftHandler: Handler<
+	Sockets.Chats.SaveDraft.Params,
+	Sockets.Chats.SaveDraft.Response
+> = {
+	event: "chats:saveDraft",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const chatAccess = await checkChatAccess(params.chatId, userId)
+		if (!chatAccess.hasAccess) {
+			return { success: false }
+		}
+
+		const existing = await db.query.chats.findFirst({
+			where: eq(schema.chats.id, params.chatId),
+			columns: { drafts: true }
+		})
+		const drafts: Record<string, string> = { ...(existing?.drafts ?? {}) }
+		if (params.content) {
+			drafts[String(userId)] = params.content
+		} else {
+			delete drafts[String(userId)]
+		}
+		await db
+			.update(schema.chats)
+			.set({ drafts })
+			.where(eq(schema.chats.id, params.chatId))
+
+		return { success: true }
 	}
 }
 
@@ -2767,6 +2802,7 @@ export function registerChatHandlers(
 	register(socket, chatsCreateHandler, emitToUser)
 	register(socket, chatsDeleteHandler, emitToUser)
 	register(socket, chatsGetHandler, emitToUser)
+	register(socket, chatsSaveDraftHandler, emitToUser)
 	register(socket, chatsUpdateHandler, emitToUser)
 	register(socket, chatsAddPersonaHandler, emitToUser)
 	register(socket, chatsAddGuestHandler, emitToUser)

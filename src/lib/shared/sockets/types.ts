@@ -332,6 +332,17 @@ declare global {
 						| null
 					messages?: SelectChatMessage[] | null // Legacy field
 					pagination?: any
+					/** The current user's in-progress composer draft, if any */
+					userDraft?: string | null
+				}
+			}
+			namespace SaveDraft {
+				interface Params {
+					chatId: number
+					content: string
+				}
+				interface Response {
+					success: boolean
 				}
 			}
 			namespace Create {
@@ -469,6 +480,21 @@ declare global {
 							characters: any[]
 							personas: any[]
 							scenario: string | null
+						}
+						rag?: {
+							used: true
+							lore: {
+								worldLore: { pinned: number; rag: number }
+								characterLore: { pinned: number; rag: number }
+								history: { pinned: number; rag: number }
+							}
+							graphPairs: number
+							messages: {
+								guaranteed: number
+								ragOlder: number
+								filledIn: number
+								total: number
+							}
 						}
 					}
 					error?: string
@@ -1083,6 +1109,126 @@ declare global {
 			}
 		}
 
+		// World Summarize Configs namespace
+		namespace WorldSummarizeConfigs {
+			namespace List {
+				interface Params {}
+				interface Response {
+					worldSummarizeConfigsList: Partial<SelectWorldSummarizeConfig>[]
+				}
+			}
+			namespace Get {
+				interface Params { id: number }
+				interface Response {
+					worldSummarizeConfig: SelectWorldSummarizeConfig
+				}
+			}
+			namespace Create {
+				interface Params {
+					worldSummarizeConfig: InsertWorldSummarizeConfig
+				}
+				interface Response {
+					worldSummarizeConfig: SelectWorldSummarizeConfig
+				}
+			}
+			namespace Update {
+				interface Params {
+					worldSummarizeConfig: UpdateWorldSummarizeConfig
+				}
+				interface Response {
+					worldSummarizeConfig: SelectWorldSummarizeConfig
+				}
+			}
+			namespace Delete {
+				interface Params { id: number }
+				interface Response { success?: string; error?: string }
+			}
+			namespace SetUserActive {
+				interface Params { id: number | null }
+				interface Response { user: SelectUser }
+			}
+		}
+
+		// Character Summarize Configs namespace
+		namespace CharacterSummarizeConfigs {
+			namespace List {
+				interface Params {}
+				interface Response {
+					characterSummarizeConfigsList: Partial<SelectCharacterSummarizeConfig>[]
+				}
+			}
+			namespace Get {
+				interface Params { id: number }
+				interface Response {
+					characterSummarizeConfig: SelectCharacterSummarizeConfig
+				}
+			}
+			namespace Create {
+				interface Params {
+					characterSummarizeConfig: InsertCharacterSummarizeConfig
+				}
+				interface Response {
+					characterSummarizeConfig: SelectCharacterSummarizeConfig
+				}
+			}
+			namespace Update {
+				interface Params {
+					characterSummarizeConfig: UpdateCharacterSummarizeConfig
+				}
+				interface Response {
+					characterSummarizeConfig: SelectCharacterSummarizeConfig
+				}
+			}
+			namespace Delete {
+				interface Params { id: number }
+				interface Response { success?: string; error?: string }
+			}
+			namespace SetUserActive {
+				interface Params { id: number | null }
+				interface Response { user: SelectUser }
+			}
+		}
+
+		// Scene Summarize Configs namespace
+		namespace SceneSummarizeConfigs {
+			namespace List {
+				interface Params {}
+				interface Response {
+					sceneSummarizeConfigsList: Partial<SelectSceneSummarizeConfig>[]
+				}
+			}
+			namespace Get {
+				interface Params { id: number }
+				interface Response {
+					sceneSummarizeConfig: SelectSceneSummarizeConfig
+				}
+			}
+			namespace Create {
+				interface Params {
+					sceneSummarizeConfig: InsertSceneSummarizeConfig
+				}
+				interface Response {
+					sceneSummarizeConfig: SelectSceneSummarizeConfig
+				}
+			}
+			namespace Update {
+				interface Params {
+					sceneSummarizeConfig: UpdateSceneSummarizeConfig
+				}
+				interface Response {
+					sceneSummarizeConfig: SelectSceneSummarizeConfig
+				}
+			}
+			namespace Delete {
+				interface Params { id: number }
+				interface Response { success?: string; error?: string }
+			}
+			namespace SetUserActive {
+				interface Params { id: number | null }
+				interface Response { user: SelectUser }
+			}
+		}
+
 		// Users namespace
 		namespace Users {
 			namespace Get {
@@ -1492,6 +1638,7 @@ declare global {
 						vectorizationEnabled: boolean
 						embeddingModelName: string | null
 						embeddingModelDimensions: number | null
+						summarizationEnabled: boolean
 					}
 				}
 			}
@@ -1532,6 +1679,15 @@ declare global {
 				}
 			}
 			namespace UpdateAccountsEnabled {
+				interface Params {
+					enabled: boolean
+				}
+				interface Response {
+					success: boolean
+					enabled: boolean
+				}
+			}
+			namespace UpdateSummarizationEnabled {
 				interface Params {
 					enabled: boolean
 				}
@@ -2014,6 +2170,8 @@ declare global {
 				description: string
 				status: string
 				reason: string | null
+				embedding: number[] | null
+				embeddingModel: string | null
 				pendingReview: boolean
 				createdAt: Date | string
 				updatedAt: Date | string

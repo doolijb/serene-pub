@@ -54,7 +54,7 @@ import {
 } from "./ContentProcessors"
 import { parseSplitChatPrompt } from "./utils"
 import { attachCharacterLoreToCharacters } from "./LorebookBindingUtils"
-import type { TemplateContext } from "./types"
+import type { RagDiagnostics, TemplateContext } from "./types"
 import { db } from "$lib/server/db"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
@@ -268,7 +268,21 @@ export class RagInfillEngine {
 
 		const historyObj: Record<string, string> = {}
 		const includedHistoryIds = new Set<number>()
+
+		// currentDate = most recent history entry across ALL lorebook entries, not just
+		// those included in context. It's a world-state fact, not a RAG-filtered result.
 		let mostRecentHistory: { year: number; month: number | null; day: number | null } | null = null
+		if (lorebook?.historyEntries?.length) {
+			let latestVal = -Infinity
+			for (const e of lorebook.historyEntries as any[]) {
+				if (e.year == null) continue
+				const val = (e.year ?? 0) * 10000 + (e.month ?? 0) * 100 + (e.day ?? 0)
+				if (val > latestVal) {
+					latestVal = val
+					mostRecentHistory = { year: e.year, month: e.month ?? null, day: e.day ?? null }
+				}
+			}
+		}
 
 		type HistoryItem = { id: number; year: number; month: number | null; day: number | null; content: string }
 
@@ -280,7 +294,7 @@ export class RagInfillEngine {
 		historyToRender.sort((a, b) => {
 			const aVal = a.year * 10000 + (a.month ?? 0) * 100 + (a.day ?? 0)
 			const bVal = b.year * 10000 + (b.month ?? 0) * 100 + (b.day ?? 0)
-			return bVal - aVal // newest-first for currentDate tracking
+			return bVal - aVal // newest-first
 		})
 
 		for (const he of historyToRender) {
@@ -294,7 +308,6 @@ export class RagInfillEngine {
 			if (he.month !== null) dateKey += `-${String(he.month).padStart(2, "0")}`
 			if (he.day !== null) dateKey += `-${String(he.day).padStart(2, "0")}`
 			historyObj[dateKey] = content
-			if (!mostRecentHistory) mostRecentHistory = { year: he.year, month: he.month, day: he.day }
 		}
 
 		// ── 3b. Build narrative graph from RAG-retrieved relationship pairs ─────
@@ -523,8 +536,15 @@ export class RagInfillEngine {
 		// ── 6. Token budget management ─────────────────────────────────────────
 		let totalTokens = await countTokens(buildCtx())
 
-		// Over limit: trim oldest messages (they sit at the back of chatMessages)
-		while (totalTokens > tokenLimit && chatMessages.length > 1) {
+		// Over limit: trim oldest messages (they sit at the back of chatMessages).
+		// Never trim below the guaranteed window — +1 accounts for the placeholder.
+		// If there are fewer total messages than MIN_GUARANTEED_MESSAGES, cap at
+		// chatMessages.length so we don't try to trim a window larger than what exists.
+		const minChatMessages = Math.min(
+			MIN_GUARANTEED_MESSAGES + 1,
+			chatMessages.length
+		)
+		while (totalTokens > tokenLimit && chatMessages.length > minChatMessages) {
 			chatMessages.pop()
 			totalTokens = await countTokens(buildCtx())
 		}
@@ -545,7 +565,18 @@ export class RagInfillEngine {
 			}
 		}
 
-		// ── 7. Final render ────────────────────────────────────────────────────
+		// ── 7. Re-sort chatMessages chronologically ───────────────────────────
+		// RAG prioritization and fill-in may have pushed messages in a non-chronological
+		// order (e.g. RAG messages interleaved with non-RAG). Re-sort to newest-first
+		// so the final .reverse() at render time always produces oldest→newest output.
+		// Placeholder (id === -2) is pinned to index 0.
+		chatMessages.sort((a, b) => {
+			if (a.id === -2) return -1
+			if (b.id === -2) return 1
+			return b.id - a.id // newest-first
+		})
+
+		// ── 8. Final render ────────────────────────────────────────────────────
 		const finalCtx = buildCtx()
 		const rendered = handlebars.compile(contextConfig.template)({
 			...finalCtx,
@@ -568,6 +599,32 @@ export class RagInfillEngine {
 			(id) => !includedIds.includes(id)
 		)
 
+		// ── 9. Build RAG diagnostics ───────────────────────────────────────────
+		const includedMsgIdSet = new Set(includedIds)
+		const guaranteedIncluded = guaranteedMessages.filter((m) => includedMsgIdSet.has(m.id)).length
+		const ragOlderIncluded = olderMessages.filter((m) => ragOlderMessageIds.has(m.id) && includedMsgIdSet.has(m.id)).length
+		const filledInIncluded = olderMessages.filter((m) => !ragOlderMessageIds.has(m.id) && includedMsgIdSet.has(m.id)).length
+
+		const ragWorldLoreAdded = ragWorldLoreItems.filter((r) => !pinnedWorldLore.some((p: any) => p.id === r.id)).length
+		const ragCharLoreAdded = ragCharLoreItems.filter((r) => !pinnedCharLore.some((p: any) => p.id === r.id)).length
+		const ragHistoryAdded = ragHistoryItems.filter((r) => !pinnedHistory.some((p: any) => p.id === r.id)).length
+
+		const rag: RagDiagnostics = {
+			used: true,
+			lore: {
+				worldLore: { pinned: pinnedWorldLore.length, rag: ragWorldLoreAdded },
+				characterLore: { pinned: pinnedCharLore.length, rag: ragCharLoreAdded },
+				history: { pinned: pinnedHistory.length, rag: ragHistoryAdded }
+			},
+			graphPairs: graphPairs.length,
+			messages: {
+				guaranteed: guaranteedIncluded,
+				ragOlder: ragOlderIncluded,
+				filledIn: filledInIncluded,
+				total: includedIds.length
+			}
+		}
+
 		return {
 			renderedPrompt,
 			renderedMessages,
@@ -576,7 +633,8 @@ export class RagInfillEngine {
 				included: chatMessages.length - 1,
 				includedIds,
 				excludedIds
-			}
+			},
+			rag
 		}
 	}
 

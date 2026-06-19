@@ -872,8 +872,9 @@ export class PromptBuilder {
 				included: includedChatMessages,
 				includedIds,
 				excludedIds
-			}
-		} = infillResult
+			},
+			rag
+		} = infillResult as any
 
 		const sources = this.buildSources(scenarioSource)
 		const meta = this.buildMeta({
@@ -908,7 +909,8 @@ export class PromptBuilder {
 					includedIds,
 					excludedIds
 				},
-				sources
+				sources,
+				...(rag ? { rag } : {})
 			}
 		}
 	}
