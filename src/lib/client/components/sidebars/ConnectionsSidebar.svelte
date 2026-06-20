@@ -12,6 +12,7 @@
 	} from "$lib/shared/constants/ConnectionTypes"
 	import LlamaCppForm from "$lib/client/connectionForms/LlamaCppForm.svelte"
 	import KoboldCppForm from "$lib/client/connectionForms/KoboldCppForm.svelte"
+	import AnthropicForm from "$lib/client/connectionForms/AnthropicForm.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
@@ -409,6 +410,8 @@
 					<LlamaCppForm bind:connection />
 				{:else if connection.type === CONNECTION_TYPE.KOBOLDCPP}
 					<KoboldCppForm bind:connection />
+				{:else if connection.type === CONNECTION_TYPE.ANTHROPIC}
+					<AnthropicForm bind:connection />
 				{/if}
 			</section>
 		{/key}

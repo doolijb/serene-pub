@@ -182,6 +182,17 @@ export const koboldCppSamplingKeyMap: Record<string, string> = {
 	bannedTokens: "banned_tokens"
 }
 
+// Anthropic sampling key mappings
+export const anthropicSamplingKeyMap: Record<string, string> = {
+	// Core sampling parameters
+	temperature: "temperature",
+	topP: "top_p",
+	topK: "top_k",
+
+	// Generation limits
+	responseTokens: "max_tokens"
+}
+
 // Get sampling key map by connection type
 export function getSamplingKeyMap(
 	connectionType: string
@@ -197,6 +208,8 @@ export function getSamplingKeyMap(
 			return llamaCppSamplingKeyMap
 		case CONNECTION_TYPE.KOBOLDCPP:
 			return koboldCppSamplingKeyMap
+		case CONNECTION_TYPE.ANTHROPIC:
+			return anthropicSamplingKeyMap
 		default:
 			return {}
 	}
@@ -549,6 +562,9 @@ export function getUnsupportedSamplers(
 					break
 				case CONNECTION_TYPE.KOBOLDCPP:
 					explanation = "KoboldCpp does not support this sampler"
+					break
+				case CONNECTION_TYPE.ANTHROPIC:
+					explanation = "Anthropic API does not support this sampler"
 					break
 				default:
 					explanation =

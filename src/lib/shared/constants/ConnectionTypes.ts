@@ -47,12 +47,22 @@ const koboldCppDesc = `
 
 const koboldCppDiff = "Beginner (GUI) - Simple setup"
 
+const anthropicDesc = `
+<p>Serene Pub supports Anthropic's Claude API directly.</p>
+<p>Claude models support native extended thinking, streaming, and long context windows.</p>
+<p>To use Anthropic's API, obtain an API key from <a class="text-primary-500 hover:underline" href="https://console.anthropic.com/" target="_blank">Anthropic's console</a>.</p>
+<p>Extended thinking is supported on Claude 3.7+ models and requires setting a thinking budget in the connection settings.</p>
+`
+
+const anthropicDiff = "Beginner - Nothing to install"
+
 export class CONNECTION_TYPE {
 	static LLAMACPP_COMPLETION = "llamacpp_completion"
 	static LM_STUDIO = "lmstudio"
 	static OLLAMA = "ollama"
 	static OPENAI_CHAT = "openai"
 	static KOBOLDCPP = "koboldcpp"
+	static ANTHROPIC = "anthropic"
 
 	static options: {
 		value: string
@@ -89,6 +99,12 @@ export class CONNECTION_TYPE {
 			label: "KoboldCpp",
 			description: koboldCppDesc,
 			difficulty: koboldCppDiff
+		},
+		{
+			value: CONNECTION_TYPE.ANTHROPIC,
+			label: "Anthropic (Claude)",
+			description: anthropicDesc,
+			difficulty: anthropicDiff
 		}
 	]
 }

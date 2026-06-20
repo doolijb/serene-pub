@@ -59,6 +59,19 @@ export const CONNECTION_DEFAULTS = {
 			useMemory: false,
 			memory: ""
 		}
+	},
+	[CONNECTION_TYPE.ANTHROPIC]: {
+		type: CONNECTION_TYPE.ANTHROPIC,
+		baseUrl: "https://api.anthropic.com",
+		model: "claude-sonnet-4-5",
+		promptFormat: PromptFormats.OPENAI,
+		tokenCounter: TokenCounterOptions.ANTHROPIC_CLAUDE,
+		extraJson: {
+			stream: true,
+			apiKey: "",
+			thinking: false,
+			thinkingBudget: 8000
+		}
 	}
 }
 

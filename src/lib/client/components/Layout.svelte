@@ -125,20 +125,24 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 			panelsCtx.leftNav.users = { icon: Icons.Users, title: "Users" }
 		}
 
-		// Add Ollama Manager if enabled
+		// Add/remove Ollama Manager based on setting
 		if (systemSettingsCtx?.settings?.ollamaManagerEnabled && isAdmin) {
 			panelsCtx.leftNav.ollama = {
 				icon: OllamaIcon,
 				title: "Ollama Manager"
 			}
+		} else {
+			delete panelsCtx.leftNav.ollama
 		}
 
-		// Add KoboldCPP Manager if enabled
+		// Add/remove KoboldCPP Manager based on setting
 		if (systemSettingsCtx?.settings?.koboldCppManagerEnabled && isAdmin) {
 			panelsCtx.leftNav.koboldcpp = {
 				icon: Icons.Cpu,
 				title: "KoboldCPP Manager"
 			}
+		} else {
+			delete panelsCtx.leftNav.koboldcpp
 		}
 
 		if (isAdmin) {
@@ -164,6 +168,8 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 					icon: Icons.Brain,
 					title: "Vectorization"
 				}
+			} else {
+				delete panelsCtx.leftNav.vectorization
 			}
 		}
 	})

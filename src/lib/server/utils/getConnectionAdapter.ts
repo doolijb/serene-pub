@@ -3,6 +3,7 @@ import openAIChatAdapter from "../connectionAdapters/OpenAIChatAdapter"
 import lmStudioAdapter from "../connectionAdapters/LMStudioAdapter"
 import llamaCppAdapter from "../connectionAdapters/LlamaCppAdapter"
 import koboldCppAdapter from "../connectionAdapters/KoboldCppAdapter"
+import anthropicAdapter from "../connectionAdapters/AnthropicAdapter"
 import type { AdapterExports } from "../connectionAdapters/BaseConnectionAdapter"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
@@ -18,6 +19,8 @@ export function getConnectionAdapter(connectionType: string): AdapterExports {
 			return llamaCppAdapter
 		case CONNECTION_TYPE.KOBOLDCPP:
 			return koboldCppAdapter
+		case CONNECTION_TYPE.ANTHROPIC:
+			return anthropicAdapter
 		default:
 			throw new Error(`Unsupported connection type: ${connectionType}`)
 	}
