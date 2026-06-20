@@ -127,15 +127,20 @@ class OllamaAdapter extends BaseConnectionAdapter {
 	async generate(): Promise<{
 		completionResult:
 			| string
-			| ((cb: (chunk: string) => void) => Promise<void>)
+			| ((
+					contentCb: (chunk: string) => void,
+					thinkingCb?: (chunk: string) => void
+			  ) => Promise<void>)
 		compiledPrompt: CompiledPrompt
 		isAborted: boolean
+		thinkingContent?: string
 	}> {
 		const model =
 			this.connection.model ??
 			CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA].baseUrl
 		const stream = this.connection!.extraJson?.stream || false
 		const think = this.connection!.extraJson?.think || false
+		console.log("[OllamaAdapter] think flag:", think, "stream:", stream)
 		const keep_alive = this.connection!.extraJson?.keepAlive || "300ms"
 		if (typeof model !== "string")
 			throw new Error("OllamaAdapter: model must be a string")
@@ -230,7 +235,10 @@ class OllamaAdapter extends BaseConnectionAdapter {
 
 		if (stream) {
 			return {
-				completionResult: async (cb: (chunk: string) => void) => {
+				completionResult: async (
+					contentCb: (chunk: string) => void,
+					thinkingCb?: (chunk: string) => void
+				) => {
 					let content = ""
 					let abortedEarly = false
 					try {
@@ -247,14 +255,26 @@ class OllamaAdapter extends BaseConnectionAdapter {
 								ollama.abort()
 								return
 							}
+							let firstPart = true
 							for await (const part of result) {
 								if (this.isAborting) {
 									ollama.abort()
 									return
 								}
+								if (firstPart) {
+									console.log("[OllamaAdapter] first stream part keys:", Object.keys(part), "message keys:", part.message ? Object.keys(part.message) : "no message", "message.thinking:", (part.message as any)?.thinking?.substring(0, 50))
+									firstPart = false
+								}
 								if (part.message) {
-									content += part.message.content
-									cb(part.message.content)
+									// Forward thinking chunks before content starts
+									if (part.message.thinking) {
+										console.log("[OllamaAdapter] thinking chunk:", part.message.thinking.length, "chars")
+										thinkingCb?.(part.message.thinking)
+									}
+									if (part.message.content) {
+										content += part.message.content
+										contentCb(part.message.content)
+									}
 								}
 							}
 						} else {
@@ -268,80 +288,85 @@ class OllamaAdapter extends BaseConnectionAdapter {
 								ollama.abort()
 								return
 							}
+							let genFirstPart = true
 							for await (const part of result) {
 								if (this.isAborting) {
 									ollama.abort()
 									return
 								}
+								if (genFirstPart || part.done) {
+									console.log("[OllamaAdapter] generate part keys:", Object.keys(part), "thinking:", (part as any).thinking?.length ?? 0, "response:", part.response?.length ?? 0, "done:", part.done)
+									genFirstPart = false
+								}
+								if (part.thinking) {
+									console.log("[OllamaAdapter] generate thinking chunk:", part.thinking.length, "chars")
+									thinkingCb?.(part.thinking)
+								}
 								if (part.response) {
 									content += part.response
-									cb(part.response)
+									contentCb(part.response)
 								}
 							}
 						}
 						// No need to apply stop strings here, Ollama will handle it
 					} catch (e: any) {
 						if (!abortedEarly)
-							cb("FAILURE: " + (e.message || String(e)))
+							contentCb("FAILURE: " + (e.message || String(e)))
 					}
 				},
 				compiledPrompt,
 				isAborted: this.isAborting
 			}
 		} else {
-			const content = await (async () => {
-				let content = ""
+			const result = await (async () => {
 				try {
 					const ollama = this.getClient()
 					if (useChat) {
 						console.log("Using non-steaming chat API")
 						// Use Ollama's chat api
-						const result = await ollama.chat({
+						const res = await ollama.chat({
 							...(req as ChatRequest),
 							stream: false
 						})
 						if (this.isAborting) {
-							return undefined
+							return { content: undefined, thinking: undefined }
 						}
-						if (
-							result &&
-							typeof result === "object" &&
-							"message" in result
-						) {
-							content = result.message.content || ""
-							// No need to apply stop strings here, Ollama will handle it
-							return content
+						if (res && typeof res === "object" && "message" in res) {
+							console.log("[OllamaAdapter] non-stream chat thinking:", res.message.thinking ? res.message.thinking.length + " chars" : "none")
+							return {
+								content: res.message.content || "",
+								thinking: res.message.thinking
+							}
 						} else {
-							return "FAILURE: Unexpected Ollama result type"
+							return { content: "FAILURE: Unexpected Ollama result type", thinking: undefined }
 						}
 					} else {
-						const result = await ollama.generate({
+						const res = await ollama.generate({
 							...(req as GenerateRequest),
 							stream: false
 						})
 						if (this.isAborting) {
-							return undefined
+							return { content: undefined, thinking: undefined }
 						}
-						if (
-							result &&
-							typeof result === "object" &&
-							"response" in result
-						) {
-							content = result.response || ""
-							// No need to apply stop strings here, Ollama will handle it
-							return content
+						if (res && typeof res === "object" && "response" in res) {
+							console.log("[OllamaAdapter] non-stream generate thinking:", res.thinking ? res.thinking.length + " chars" : "none")
+							return {
+								content: res.response || "",
+								thinking: res.thinking
+							}
 						} else {
-							return "FAILURE: Unexpected Ollama result type"
+							return { content: "FAILURE: Unexpected Ollama result type", thinking: undefined }
 						}
 					}
 				} catch (e: any) {
-					return "FAILURE: " + (e.message || String(e))
+					return { content: "FAILURE: " + (e.message || String(e)), thinking: undefined }
 				}
 			})()
 			return {
-				completionResult: content ?? "",
+				completionResult: result.content ?? "",
 				compiledPrompt,
-				isAborted: this.isAborting
+				isAborted: this.isAborting,
+				thinkingContent: result.thinking || undefined
 			}
 		}
 	}

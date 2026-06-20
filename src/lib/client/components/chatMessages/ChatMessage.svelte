@@ -103,17 +103,27 @@
 	const canControl = $derived(canControlMessage(msg))
 	const showSwipes = $derived(showSwipeControls(msg, isGreeting))
 	const canSwipeRightVal = $derived(canSwipeRight(msg, isGreeting))
-	const preContent = $derived((msg.metadata as any)?.reasoning || "")
-	const hasPreContent = $derived(preContent.trim().length > 0)
+	// Native model thinking (from Ollama think: true, etc.)
+	const thinkingContent = $derived((msg.metadata as any)?.thinking || "")
+	const hasThinking = $derived(thinkingContent.trim().length > 0)
 
-	let isPreContentExpanded = $state(false)
+	// Assistant-mode XML-tag reasoning (function-calling flow)
+	const reasoningContent = $derived((msg.metadata as any)?.reasoning || "")
+	const hasReasoning = $derived(reasoningContent.trim().length > 0)
+
+	let isThinkingExpanded = $state(false)
+	let isReasoningExpanded = $state(false)
 
 	function handleMessageUpdate() {
 		onSaveEditMessage()
 	}
 
-	function togglePreContent() {
-		isPreContentExpanded = !isPreContentExpanded
+	function toggleThinking() {
+		isThinkingExpanded = !isThinkingExpanded
+	}
+
+	function toggleReasoning() {
+		isReasoningExpanded = !isReasoningExpanded
 	}
 </script>
 
@@ -300,28 +310,47 @@
 		{/if}
 	</div>
 
-	<!-- Pre-Content Section (Reasoning/Thinking) -->
-	{#if hasPreContent}
+	<!-- Thinking block (native model thinking, e.g. Ollama think: true) -->
+	{#if hasThinking}
 		<div class="mx-2 mt-2">
 			<button
 				class="flex w-full items-center gap-2 py-2 text-sm opacity-70 transition-opacity hover:opacity-100"
-				onclick={togglePreContent}
-				title={isPreContentExpanded
-					? "Collapse reasoning"
-					: "Expand reasoning"}
+				onclick={toggleThinking}
+				title={isThinkingExpanded ? "Collapse thinking" : "Expand thinking"}
+			>
+				<Icons.BrainCircuit size={16} />
+				<span>Thinking</span>
+				<Icons.ChevronDown
+					size={16}
+					class={`transition-transform ${isThinkingExpanded ? "rotate-180" : ""}`}
+				/>
+			</button>
+			{#if isThinkingExpanded}
+				<div class="rendered-chat-message-content pb-2 text-sm opacity-80">
+					{@html renderMarkdownWithQuotedText(thinkingContent)}
+				</div>
+			{/if}
+		</div>
+	{/if}
+
+	<!-- Reasoning block (assistant-mode function-calling reasoning) -->
+	{#if hasReasoning}
+		<div class="mx-2 mt-2">
+			<button
+				class="flex w-full items-center gap-2 py-2 text-sm opacity-70 transition-opacity hover:opacity-100"
+				onclick={toggleReasoning}
+				title={isReasoningExpanded ? "Collapse reasoning" : "Expand reasoning"}
 			>
 				<Icons.Brain size={16} />
 				<span>Reasoning</span>
 				<Icons.ChevronDown
 					size={16}
-					class={`transition-transform ${isPreContentExpanded ? "rotate-180" : ""}`}
+					class={`transition-transform ${isReasoningExpanded ? "rotate-180" : ""}`}
 				/>
 			</button>
-			{#if isPreContentExpanded}
-				<div
-					class="rendered-chat-message-content pb-2 text-sm opacity-80"
-				>
-					{@html renderMarkdownWithQuotedText(preContent)}
+			{#if isReasoningExpanded}
+				<div class="rendered-chat-message-content pb-2 text-sm opacity-80">
+					{@html renderMarkdownWithQuotedText(reasoningContent)}
 				</div>
 			{/if}
 		</div>

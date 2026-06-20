@@ -149,9 +149,10 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 	async generate(): Promise<{
 		completionResult:
 			| string
-			| ((cb: (chunk: string) => void) => Promise<void>)
+			| ((contentCb: (chunk: string) => void, thinkingCb?: (chunk: string) => void) => Promise<void>)
 		compiledPrompt: CompiledPrompt
 		isAborted: boolean
+		thinkingContent?: string
 	}> {
 		if (!this.sampling || typeof this.sampling !== "object") {
 			throw new Error(
@@ -224,7 +225,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 
 		if (stream) {
 			return {
-				completionResult: async (cb: (chunk: string) => void) => {
+				completionResult: async (contentCb: (chunk: string) => void, _thinkingCb?: (chunk: string) => void) => {
 					let fullContent = ""
 					let lastChunk = ""
 					let abortedEarly = false
@@ -239,7 +240,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 									const newChunk = part.content
 									fullContent += newChunk
 									lastChunk = newChunk
-									cb(newChunk)
+									contentCb(newChunk)
 								}
 							}
 						} else {
@@ -252,7 +253,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 									const newChunk = part.content
 									fullContent += newChunk
 									lastChunk = newChunk
-									cb(newChunk)
+									contentCb(newChunk)
 								}
 							}
 						}
@@ -265,7 +266,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 						}
 					} catch (e: any) {
 						if (!abortedEarly)
-							cb("FAILURE: " + (e.message || String(e)))
+							contentCb("FAILURE: " + (e.message || String(e)))
 					}
 				},
 				compiledPrompt,

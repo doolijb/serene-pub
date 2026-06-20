@@ -1675,6 +1675,11 @@ export const chatMessagesSwipeLeftHandler: Handler<
 				data.metadata!.swipes!.history[
 					data.metadata!.swipes!.currentIdx
 				] || ""
+			// Sync active thinking to the new swipe slot
+			data.metadata!.thinking =
+				(data.metadata!.swipes!.thinkingHistory as any)?.[
+					data.metadata!.swipes!.currentIdx
+				] ?? null
 
 			// Update the chat message in the database
 			delete data.id
@@ -1787,17 +1792,35 @@ export const chatMessagesSwipeRightHandler: Handler<
 					data.metadata!.swipes!.history[
 						data.metadata!.swipes!.currentIdx
 					] || ""
+				// Sync active thinking to the new swipe slot
+				data.metadata!.thinking =
+					(data.metadata!.swipes!.thinkingHistory as any)?.[
+						data.metadata!.swipes!.currentIdx
+					] ?? null
 			} else {
 				if (data.metadata!.swipes!.currentIdx === null) {
 					data.metadata!.swipes!.currentIdx = 0
 					data.metadata!.swipes!.history.push(data.content)
+					// Keep thinkingHistory in sync when initialising swipes for the first time
+					const th: (string | null)[] =
+						(data.metadata!.swipes! as any).thinkingHistory || []
+					while (th.length < data.metadata!.swipes!.history.length) th.push(null)
+					;(data.metadata!.swipes! as any).thinkingHistory = th
 				}
-				// Now increment the current index and content
+				// Now increment the current index and push a new empty generation slot
 				data.metadata!.swipes!.currentIdx += 1
 				data.content = "" // Clear the message content
 				data.isGenerating = true // Set generating state to true
 				// Push the new empty content to history
 				data.metadata!.swipes!.history.push("") // Add an empty string to history
+				// Push a matching null into thinkingHistory to keep lengths equal
+				const th: (string | null)[] =
+					(data.metadata!.swipes! as any).thinkingHistory || []
+				while (th.length < data.metadata!.swipes!.history.length - 1) th.push(null)
+				th.push(null)
+				;(data.metadata!.swipes! as any).thinkingHistory = th
+				// Clear active thinking — new slot has no thinking yet
+				data.metadata!.thinking = null
 			}
 
 			delete data.id

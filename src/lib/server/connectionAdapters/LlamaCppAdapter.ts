@@ -288,9 +288,10 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 	async generate(): Promise<{
 		completionResult:
 			| string
-			| ((cb: (chunk: string) => void) => Promise<void>)
+			| ((contentCb: (chunk: string) => void, thinkingCb?: (chunk: string) => void) => Promise<void>)
 		compiledPrompt: CompiledPrompt
 		isAborted: boolean
+		thinkingContent?: string
 	}> {
 		const stream = this.connection.extraJson?.stream || false
 		// Prepare stop strings
@@ -345,7 +346,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 
 		if (stream) {
 			return {
-				completionResult: async (cb: (chunk: string) => void) => {
+				completionResult: async (contentCb: (chunk: string) => void, _thinkingCb?: (chunk: string) => void) => {
 					let content = ""
 					let cancelTokenSource = axios.CancelToken.source()
 					try {
@@ -382,7 +383,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 										data.content.length > 0
 									) {
 										content += data.content
-										cb(data.content)
+										contentCb(data.content)
 									}
 								} catch (err) {
 									// ignore JSON parse errors
@@ -390,7 +391,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 							}
 						}
 					} catch (e: any) {
-						cb("FAILURE: " + (e.message || String(e)))
+						contentCb("FAILURE: " + (e.message || String(e)))
 					}
 				},
 				compiledPrompt,

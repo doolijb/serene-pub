@@ -86,9 +86,10 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 	async generate(): Promise<{
 		completionResult:
 			| string
-			| ((cb: (chunk: string) => void) => Promise<void>)
+			| ((contentCb: (chunk: string) => void, thinkingCb?: (chunk: string) => void) => Promise<void>)
 		compiledPrompt: CompiledPrompt
 		isAborted: boolean
+		thinkingContent?: string
 	}> {
 		const apiKey = this.connection.extraJson?.apiKey
 		const baseURL =
@@ -134,7 +135,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		try {
 			if (stream) {
 				return {
-					completionResult: async (cb: (chunk: string) => void) => {
+					completionResult: async (contentCb: (chunk: string) => void, _thinkingCb?: (chunk: string) => void) => {
 						const streamResp =
 							await openaiClient.chat.completions.create({
 								...params,
@@ -148,7 +149,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 								part.choices[0].delta &&
 								part.choices[0].delta.content
 							) {
-								cb(part.choices[0].delta.content)
+								contentCb(part.choices[0].delta.content)
 							}
 						}
 					},
@@ -157,7 +158,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 				}
 			} else {
 				const response =
-					await openaiClient.chat.completions.create(params)
+					await openaiClient.chat.completions.create({ ...params, stream: false })
 				let content = ""
 				if (
 					response.choices &&

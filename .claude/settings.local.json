@@ -16,7 +16,8 @@
       "Bash(git stash *)",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); errs=[x for x in d if x['severity']=='Error']; print\\(json.dumps\\(errs, indent=2\\)\\)\")",
       "Bash(python3 -c ' *)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(npm show *)"
     ],
     "deny": []
   }

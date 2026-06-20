@@ -94,9 +94,10 @@ class KoboldCppAdapter extends BaseConnectionAdapter {
 	async generate(): Promise<{
 		completionResult:
 			| string
-			| ((cb: (chunk: string) => void) => Promise<void>)
+			| ((contentCb: (chunk: string) => void, thinkingCb?: (chunk: string) => void) => Promise<void>)
 		compiledPrompt: CompiledPrompt
 		isAborted: boolean
+		thinkingContent?: string
 	}> {
 		const baseUrl = this.connection.baseUrl || "http://localhost:5001"
 		const stream = this.connection.extraJson?.stream ?? false
@@ -167,7 +168,7 @@ class KoboldCppAdapter extends BaseConnectionAdapter {
 		// Handle streaming vs non-streaming
 		if (stream) {
 			return {
-				completionResult: async (cb: (chunk: string) => void) => {
+				completionResult: async (contentCb: (chunk: string) => void, _thinkingCb?: (chunk: string) => void) => {
 					this.abortController = new AbortController()
 					let content = ""
 
@@ -226,13 +227,13 @@ class KoboldCppAdapter extends BaseConnectionAdapter {
 													data.choices[0].delta
 														.content
 												content += chunk
-												cb(chunk)
+												contentCb(chunk)
 											}
 										} else {
 											// KoboldCpp text format
 											if (data.token) {
 												content += data.token
-												cb(data.token)
+												contentCb(data.token)
 											}
 										}
 									} catch (e) {
@@ -243,7 +244,7 @@ class KoboldCppAdapter extends BaseConnectionAdapter {
 						}
 					} catch (e: any) {
 						if (e.name !== "AbortError") {
-							cb("FAILURE: " + (e.message || String(e)))
+							contentCb("FAILURE: " + (e.message || String(e)))
 						}
 					}
 				},

@@ -12,6 +12,83 @@ import { generateChatTitle } from "./generateChatTitle"
 import { parseReasoningFormat } from "./parseReasoningFormat"
 
 /**
+ * Build updated metadata that keeps swipes.history and swipes.thinkingHistory
+ * in perfect sync (equal length, same indices).
+ *
+ * @param existingMeta  - current message metadata object
+ * @param content       - the generated content string
+ * @param thinking      - the thinking/reasoning trace, or undefined if none
+ * @param writeToHistory - if true, also write content into swipes.history[currentIdx]
+ *                        (used for final completion; mid-stream only updates thinking)
+ * @returns updated metadata object, or null if no metadata changes are needed
+ */
+function buildThinkingMetadata(
+	existingMeta: any,
+	content: string,
+	thinking: string | undefined,
+	writeToHistory: boolean
+): any | null {
+	const hasThinking = thinking !== undefined
+	const swipes = existingMeta?.swipes
+
+	if (swipes && Array.isArray(swipes.history)) {
+		const idx = swipes.currentIdx ?? 0
+
+		// Clone content history; update only for swipe slots (idx > 0) to preserve existing behaviour
+		const history: string[] = [...swipes.history]
+		if (writeToHistory && typeof idx === "number" && idx > 0) {
+			history[idx] = content
+		}
+
+		// Build thinkingHistory always parallel (same length) as history
+		const thinkingHistory: (string | null)[] = [...(swipes.thinkingHistory || [])]
+		while (thinkingHistory.length < history.length) thinkingHistory.push(null)
+		if (hasThinking && typeof idx === "number") {
+			thinkingHistory[idx] = thinking!
+		}
+		// Trim excess (should never happen, but guard the invariant)
+		thinkingHistory.length = history.length
+
+		return {
+			...existingMeta,
+			...(hasThinking ? { thinking } : {}),
+			swipes: {
+				...swipes,
+				history,
+				thinkingHistory
+			}
+		}
+	}
+
+	// No swipes — only update metadata.thinking
+	if (hasThinking) {
+		return {
+			...(existingMeta || {}),
+			thinking
+		}
+	}
+
+	return null // no changes needed
+}
+
+/**
+ * Extract <think>...</think> block from content (DeepSeek R1 / embedded-tag style).
+ * Returns cleaned content and the extracted thinking string, or undefined if no tag found.
+ */
+function extractThinkFromContent(content: string): {
+	content: string
+	thinking: string | undefined
+} {
+	const trimmed = content.trimStart()
+	if (!trimmed.startsWith("<think>")) return { content, thinking: undefined }
+	const endIdx = trimmed.indexOf("</think>")
+	if (endIdx === -1) return { content, thinking: undefined }
+	const thinking = trimmed.slice(7, endIdx).trim() // 7 = "<think>".length
+	const remaining = trimmed.slice(endIdx + 8).trimStart() // 8 = "</think>".length
+	return { content: remaining, thinking: thinking || undefined }
+}
+
+/**
  * Handles reasoning format detection and processing for assistant mode
  * @returns true if waiting for user function selection, false if continuing with generation
  */
@@ -178,6 +255,25 @@ export async function generateResponse({
 	})
 	const preservedContent = currentMessage?.content || ""
 
+	// Build cleared metadata: wipe thinking for the current swipe slot so the
+	// client doesn't show stale thinking from a previous generation.
+	const existingMeta = (currentMessage?.metadata as any) || {}
+	const existingSwipes = existingMeta?.swipes
+	let clearedMeta: any = { ...existingMeta, thinking: null }
+	if (existingSwipes && Array.isArray(existingSwipes.history)) {
+		const idx = existingSwipes.currentIdx ?? 0
+		const thinkingHistory: (string | null)[] = [
+			...(existingSwipes.thinkingHistory || [])
+		]
+		while (thinkingHistory.length < existingSwipes.history.length)
+			thinkingHistory.push(null)
+		thinkingHistory[idx] = null
+		clearedMeta = {
+			...clearedMeta,
+			swipes: { ...existingSwipes, thinkingHistory }
+		}
+	}
+
 	// Save the adapterId to the chatMessage
 	// For continue: preserve existing content
 	// For new generation: clear content
@@ -186,7 +282,8 @@ export async function generateResponse({
 		.set({
 			isGenerating: true,
 			content: preservedContent, // Preserve existing content for continue
-			adapterId
+			adapterId,
+			metadata: clearedMeta
 		})
 		.where(eq(schema.chatMessages.id, generatingMessage.id))
 	// Instead of getChat, emit the chatMessage
@@ -196,7 +293,8 @@ export async function generateResponse({
 			...generatingMessage,
 			isGenerating: true,
 			content: preservedContent, // Use existing content
-			adapterId
+			adapterId,
+			metadata: clearedMeta
 		}
 	}
 
@@ -206,6 +304,9 @@ export async function generateResponse({
 		"chatMessage",
 		req
 	)
+
+	// Update local reference so buildThinkingMetadata works from the cleared state
+	generatingMessage = { ...generatingMessage, metadata: clearedMeta }
 
 	// Determine if we're continuing an existing message
 	const isContinuing = preservedContent.length > 0
@@ -299,13 +400,15 @@ export async function generateResponse({
 			: ""
 
 	// Generate completion
-	let { completionResult, compiledPrompt, isAborted } =
+	let { completionResult, compiledPrompt, isAborted, thinkingContent: adapterThinking } =
 		await adapter.generate() // TODO: save compiledPrompt to chatMessages
 	let content = ""
+	let thinking = "" // accumulated thinking from streaming thinkingCb
 	try {
 		if (typeof completionResult === "function") {
 			let ok = true
-			await completionResult(async (chunk: string) => {
+			await completionResult(
+				async (chunk: string) => {
 				if (!ok) {
 					return
 				}
@@ -331,32 +434,47 @@ export async function generateResponse({
 					? preservedContent + " " + stagedContent.trim()
 					: stagedContent.trim()
 
-				// --- SWIPE HISTORY LOGIC ---
+				// --- SWIPE HISTORY + THINKING LOGIC (mid-stream) ---
+				const currentThinking = thinking.trim() || undefined
 				let updateData: any = {
 					content: finalContent,
 					isGenerating: true
 				}
-				if (
-					generatingMessage.metadata &&
-					generatingMessage.metadata.swipes &&
-					typeof generatingMessage.metadata.swipes.currentIdx ===
-						"number" &&
-					generatingMessage.metadata.swipes.currentIdx > 0 &&
-					Array.isArray(generatingMessage.metadata.swipes.history)
-				) {
-					const idx = generatingMessage.metadata.swipes.currentIdx
-					const history: string[] = [
-						...generatingMessage.metadata.swipes.history
+				const swipes = generatingMessage.metadata?.swipes
+				if (swipes && Array.isArray(swipes.history)) {
+					const idx = swipes.currentIdx ?? 0
+					const history: string[] = [...swipes.history]
+					// Only update content in history for actual swipe slots (idx > 0)
+					if (typeof idx === "number" && idx > 0) {
+						history[idx] = content
+					}
+					// Keep thinkingHistory parallel to history
+					const thinkingHistory: (string | null)[] = [
+						...(swipes.thinkingHistory || [])
 					]
-					history[idx] = content
+					while (thinkingHistory.length < history.length) thinkingHistory.push(null)
+					if (currentThinking !== undefined && typeof idx === "number") {
+						thinkingHistory[idx] = currentThinking
+					}
 					updateData = {
 						...updateData,
 						metadata: {
 							...generatingMessage.metadata,
+							...(currentThinking !== undefined ? { thinking: currentThinking } : {}),
 							swipes: {
-								...generatingMessage.metadata.swipes,
-								history
+								...swipes,
+								history,
+								thinkingHistory
 							}
+						}
+					}
+				} else if (currentThinking !== undefined) {
+					// No swipes — store thinking directly in metadata
+					updateData = {
+						...updateData,
+						metadata: {
+							...(generatingMessage.metadata || {}),
+							thinking: currentThinking
 						}
 					}
 				}
@@ -398,6 +516,9 @@ export async function generateResponse({
 					)
 					ok = false
 				}
+			},
+			(thinkingChunk: string) => {
+				thinking += thinkingChunk
 			})
 
 			// Final update: mark as not generating, clear adapterId
@@ -406,6 +527,15 @@ export async function generateResponse({
 			// When continuing, append to existing content
 			if (isContinuing) {
 				content = preservedContent + " " + content
+			}
+
+			// If no native thinking was captured via thinkingCb, check for <think> tags in content
+			if (!thinking.trim()) {
+				const extracted = extractThinkFromContent(content)
+				if (extracted.thinking) {
+					thinking = extracted.thinking
+					content = extracted.content
+				}
 			}
 
 			console.log(
@@ -419,6 +549,12 @@ export async function generateResponse({
 			console.log(
 				"[generateResponse] POST-STREAM: First 300 chars:",
 				content.substring(0, 300)
+			)
+			console.log(
+				"[generateResponse] POST-STREAM: thinking length:",
+				thinking.length,
+				"first 200 chars:",
+				thinking.substring(0, 200)
 			)
 
 			// Check for reasoning format in assistant mode - only after streaming is complete
@@ -440,9 +576,17 @@ export async function generateResponse({
 			}
 
 			// Normal completion - no reasoning detected
+			// Build final metadata with thinking + swipe history in sync
+			const finalThinking = thinking.trim() || undefined
+			let finalMetadata: any = buildThinkingMetadata(
+				generatingMessage.metadata,
+				content,
+				finalThinking,
+				true // write content to swipe history
+			)
 			const ret = await db
 				.update(schema.chatMessages)
-				.set({ content, isGenerating: false, adapterId: null })
+				.set({ content, isGenerating: false, adapterId: null, ...(finalMetadata !== null ? { metadata: finalMetadata } : {}) })
 				.where(
 					and(
 						eq(schema.chatMessages.id, generatingMessage.id),
@@ -468,7 +612,8 @@ export async function generateResponse({
 						...generatingMessage,
 						content,
 						isGenerating: false,
-						adapterId: null
+						adapterId: null,
+						...(finalMetadata !== null ? { metadata: finalMetadata } : {})
 					}
 				}
 			)
@@ -480,10 +625,21 @@ export async function generateResponse({
 				? preservedContent + " " + content
 				: content
 
+			// If no native thinking was returned by the adapter, check for <think> tags in content
+			let nonStreamContent = finalContent
+			let nonStreamAdapterThinking = adapterThinking
+			if (!nonStreamAdapterThinking?.trim()) {
+				const extracted = extractThinkFromContent(nonStreamContent)
+				if (extracted.thinking) {
+					nonStreamAdapterThinking = extracted.thinking
+					nonStreamContent = extracted.content
+				}
+			}
+
 			// Check for reasoning format in assistant mode (NON-STREAMING)
 			if (isAssistantMode) {
 				const reasoningResult = await handleAssistantReasoning({
-					content: finalContent,
+					content: nonStreamContent,
 					socket,
 					chatId,
 					generatingMessage,
@@ -498,35 +654,19 @@ export async function generateResponse({
 				}
 			}
 
-			// --- SWIPE HISTORY LOGIC (non-streamed) ---
+			// --- SWIPE HISTORY + THINKING LOGIC (non-streamed) ---
+			const nonStreamThinking = nonStreamAdapterThinking?.trim() || undefined
+			const nonStreamMeta = buildThinkingMetadata(
+				generatingMessage.metadata,
+				nonStreamContent,
+				nonStreamThinking,
+				true // write content to swipe history
+			)
 			let updateData: any = {
-				content: finalContent,
+				content: nonStreamContent,
 				isGenerating: false,
-				adapterId: null
-			}
-			if (
-				generatingMessage.metadata &&
-				generatingMessage.metadata.swipes &&
-				typeof generatingMessage.metadata.swipes.currentIdx ===
-					"number" &&
-				generatingMessage.metadata.swipes.currentIdx > 0 &&
-				Array.isArray(generatingMessage.metadata.swipes.history)
-			) {
-				const idx = generatingMessage.metadata.swipes.currentIdx
-				const history: string[] = [
-					...generatingMessage.metadata.swipes.history
-				]
-				history[idx] = finalContent
-				updateData = {
-					...updateData,
-					metadata: {
-						...generatingMessage.metadata,
-						swipes: {
-							...generatingMessage.metadata.swipes,
-							history
-						}
-					}
-				}
+				adapterId: null,
+				...(nonStreamMeta !== null ? { metadata: nonStreamMeta } : {})
 			}
 
 			const ret = await db
@@ -555,12 +695,10 @@ export async function generateResponse({
 				{
 					chatMessage: {
 						...generatingMessage,
-						content,
+						content: nonStreamContent,
 						isGenerating: false,
 						adapterId: null,
-						...(updateData.metadata
-							? { metadata: updateData.metadata }
-							: {})
+						...(updateData.metadata ? { metadata: updateData.metadata } : {})
 					}
 				}
 			)

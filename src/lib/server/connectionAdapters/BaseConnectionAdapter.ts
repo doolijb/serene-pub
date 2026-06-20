@@ -113,9 +113,14 @@ export abstract class BaseConnectionAdapter {
 	abstract generate(): Promise<{
 		completionResult:
 			| string
-			| ((cb: (chunk: string) => void) => Promise<void>)
+			| ((
+					contentCb: (chunk: string) => void,
+					thinkingCb?: (chunk: string) => void
+			  ) => Promise<void>)
 		compiledPrompt: PromptBuilderCompiledPrompt
 		isAborted: boolean
+		/** Native thinking/reasoning content returned by the model, if any. Only populated for non-streaming responses. Streaming adapters deliver thinking via thinkingCb. */
+		thinkingContent?: string
 	}>
 
 	abort() {
