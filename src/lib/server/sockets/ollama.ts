@@ -433,29 +433,9 @@ export const ollamaSearchAvailableModelsHandler: Handler<Sockets.Ollama.SearchAv
 				pullOptions?: { label: string; pull: string }[]
 			}> = []
 
-			if (source === OllamaModelSearchSource.OLLAMA_DB) {
+			if (source === OllamaModelSearchSource.HUGGING_FACE) {
 				const response = await fetch(
-					`https://ollamadb.dev/api/v1/models?limit=25&search=${encodeURIComponent(search)}`
-				)
-
-				if (!response.ok) {
-					throw new Error(`OllamaDB API error: ${response.status}`)
-				}
-
-				const data = await response.json()
-
-				// Transform ollamadb.dev response to our format
-				models = (data.models || []).map((model: any) => ({
-					name: model.model_identifier || model.model_name,
-					description: model.description,
-					size: model.size,
-					url: model.url,
-					downloads: model.pulls,
-					updatedAtStr: model.last_updated_str
-				}))
-			} else if (source === OllamaModelSearchSource.HUGGING_FACE) {
-				const response = await fetch(
-					`https://huggingface.co/api/models?search=${encodeURIComponent(search)}&filter=gguf&limit=50&sort=trendingScore&full=True&config=True"`
+					`https://huggingface.co/api/models?search=${encodeURIComponent(search)}&filter=gguf&limit=50&sort=trendingScore&full=True&config=True`
 				)
 
 				if (!response.ok) {
@@ -464,18 +444,6 @@ export const ollamaSearchAvailableModelsHandler: Handler<Sockets.Ollama.SearchAv
 
 				const data = await response.json()
 
-				const textTags = [
-					"text-generation",
-					"text-classification",
-					"fill-mask",
-					"question-answering",
-					"summarization",
-					"translation",
-					"token-classification",
-					"conversational",
-					"image-text-to-text"
-				]
-
 				// Filter out private and gated models
 				const filteredData = (data || []).filter((model: any) => {
 					// Exclude private models
@@ -483,13 +451,8 @@ export const ollamaSearchAvailableModelsHandler: Handler<Sockets.Ollama.SearchAv
 						return false
 					}
 
-					// Exclude gated models (both boolean true and 'auto')
-					if (model.gated !== false) {
-						return false
-					}
-
-					// Exclude models that don't match the search or aren't text-based
-					if (!textTags.includes(model.pipeline_tag)) {
+					// Exclude explicitly gated models (boolean true or 'auto')
+					if (model.gated === true || model.gated === "auto") {
 						return false
 					}
 
@@ -504,14 +467,14 @@ export const ollamaSearchAvailableModelsHandler: Handler<Sockets.Ollama.SearchAv
 					)
 					const pullOptions: { label: string; pull: string }[] =
 						ggufSiblings
-							.filter(
-								(sibling: { rfilename: string }) =>
-									sibling.rfilename
-										.split("-")
-										.pop()
-										?.startsWith("Q") &&
-									sibling.rfilename.includes(".gguf")
-							)
+							.filter((sibling: { rfilename: string }) => {
+								const stem = sibling.rfilename
+									.replace(".gguf", "")
+									.split("-")
+									.pop()
+									?.toUpperCase() ?? ""
+								return /^(Q|IQ|BF|F)\d/.test(stem)
+							})
 							.map((sibling: { rfilename: string }) => {
 								const quant = sibling.rfilename
 									.replace(".gguf", "")

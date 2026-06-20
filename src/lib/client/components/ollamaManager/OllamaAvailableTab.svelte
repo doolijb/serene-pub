@@ -7,7 +7,6 @@
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import HuggingFaceQuantizationModal from "$lib/client/components/modals/HuggingFaceQuantizationModal.svelte"
 	import OllamaManualPullModal from "$lib/client/components/modals/OllamaManualPullModal.svelte"
-	import OllamaInstructionModal from "$lib/client/components/modals/OllamaInstructionModal.svelte"
 
 	interface OllamaModel {
 		name: string
@@ -40,7 +39,6 @@
 		$state([])
 	let isSearching = $state(false)
 	let showHuggingFaceModal = $state(false)
-	let showOllamaInstructionModal = $state(false)
 	let showOllamaManualPullModal = $state(false)
 	let selectedModelForDownload: string | null = $state(null)
 	let selectedModel:
@@ -116,7 +114,7 @@
 			socket.emit("ollama:recommendedModels", {})
 		} else {
 			socket.emit("ollama:searchAvailableModels", {
-				search: searchString.trim(),
+				searchTerm: searchString.trim(),
 				source: selectedSource
 			} as Sockets.OllamaSearchAvailableModels.Call)
 		}
@@ -158,20 +156,6 @@
 		showOllamaManualPullModal = true
 	}
 
-	function openOllamaInstructionModal(modelName: string) {
-		selectedModelForDownload = modelName
-		showOllamaInstructionModal = true
-	}
-
-	function closeOllamaInstructionModal() {
-		showOllamaInstructionModal = false
-		selectedModelForDownload = null
-	}
-
-	function handleInstructionContinue() {
-		showOllamaInstructionModal = false
-		showOllamaManualPullModal = true
-	}
 
 	function closeOllamaManualPullModal() {
 		showOllamaManualPullModal = false
@@ -567,11 +551,6 @@
 									OllamaModelSearchSource.HUGGING_FACE
 								) {
 									openHuggingFaceModal(model)
-								} else if (
-									selectedSource ===
-									OllamaModelSearchSource.OLLAMA_DB
-								) {
-									openOllamaInstructionModal(model.name)
 								} else {
 									openOllamaManualPullModal(model.name)
 								}
@@ -632,10 +611,3 @@
 	onconfirm={handleOllamaInstallConfirm}
 />
 
-<!-- Ollama Instruction Modal -->
-<OllamaInstructionModal
-	bind:open={showOllamaInstructionModal}
-	modelName={selectedModelForDownload || ""}
-	onClose={closeOllamaInstructionModal}
-	onContinue={handleInstructionContinue}
-/>
