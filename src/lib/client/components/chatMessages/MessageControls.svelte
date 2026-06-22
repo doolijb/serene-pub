@@ -16,6 +16,7 @@
 		onBranchMessage?: (e: Event, msg: SelectChatMessage) => void
 		onContinueMessage?: (e: Event, msg: SelectChatMessage) => void
 		onStartSummarization?: (msg: SelectChatMessage) => void
+		onclose?: () => void
 	}
 
 	let {
@@ -31,7 +32,8 @@
 		onAbortMessage,
 		onBranchMessage,
 		onContinueMessage,
-		onStartSummarization
+		onStartSummarization,
+		onclose
 	}: Props = $props()
 </script>
 
@@ -40,49 +42,14 @@
 	aria-label="Message actions"
 	class="flex flex-col gap-2 lg:flex-row"
 >
-	<button
-		class="btn btn-sm msg-cntrl-icon hover:preset-filled-secondary-500"
-		class:preset-filled-secondary-500={msg.isHidden}
-		title={msg.isHidden ? "Unhide Message" : "Hide Message"}
-		aria-label={msg.isHidden ? "Unhide this message" : "Hide this message"}
-		disabled={!!editChatMessage || hasGeneratingMessage}
-		onclick={(e) => onHideMessage(e, msg)}
-	>
-		<Icons.Ghost size={16} aria-hidden="true" />
-		<span class="lg:hidden">
-			{msg.isHidden ? "Unhide Message" : "Hide Message"}
-		</span>
-	</button>
-	<button
-		class="btn btn-sm msg-cntrl-icon hover:preset-filled-success-500"
-		title="Edit Message"
-		aria-label="Edit this message"
-		disabled={!!editChatMessage || hasGeneratingMessage || msg.isHidden}
-		onclick={(e) => onEditMessage(e, msg)}
-	>
-		<Icons.Edit size={16} aria-hidden="true" />
-		<span class="lg:hidden">Edit Message</span>
-	</button>
-	<button
-		class="btn btn-sm msg-cntrl-icon hover:preset-filled-error-500"
-		title="Delete Message"
-		aria-label="Delete this message"
-		disabled={!!editChatMessage || hasGeneratingMessage}
-		onclick={(e) => onDeleteMessage(e, msg)}
-	>
-		<Icons.Trash2 size={16} aria-hidden="true" />
-		<span class="lg:hidden">Delete Message</span>
-	</button>
-	{#if onBranchMessage}
+	{#if msg.isGenerating}
 		<button
-			class="btn btn-sm msg-cntrl-icon hover:preset-filled-primary-500"
-			title="Branch Chat"
-			aria-label="Create a new chat branch from this message"
-			disabled={!!editChatMessage || hasGeneratingMessage}
-			onclick={(e) => onBranchMessage(e, msg)}
+			class="btn btn-sm msg-cntrl-icon preset-filled-error-500"
+			title="Stop Generation"
+			onclick={(e) => { onclose?.(); onAbortMessage(e, msg) }}
 		>
-			<Icons.GitBranch size={16} aria-hidden="true" />
-			<span class="lg:hidden">Branch Chat</span>
+			<Icons.Square size={16} />
+			<span class="lg:hidden">Stop Generation</span>
 		</button>
 	{/if}
 	{#if !!msg.characterId && isLastMessage && !msg.isGenerating}
@@ -90,7 +57,7 @@
 			class="btn btn-sm msg-cntrl-icon hover:preset-filled-warning-500"
 			title="Regenerate Response"
 			disabled={!canRegenerateLastMessage}
-			onclick={(e) => onRegenerateMessage(e, msg)}
+			onclick={(e) => { onclose?.(); onRegenerateMessage(e, msg) }}
 		>
 			<Icons.RefreshCw size={16} />
 			<span class="lg:hidden">Regenerate Response</span>
@@ -102,20 +69,32 @@
 			title="Continue Response"
 			aria-label="Continue generating this response"
 			disabled={!!editChatMessage}
-			onclick={(e) => onContinueMessage(e, msg)}
+			onclick={(e) => { onclose?.(); onContinueMessage(e, msg) }}
 		>
 			<Icons.ArrowDown size={16} aria-hidden="true" />
 			<span class="lg:hidden">Continue Response</span>
 		</button>
 	{/if}
-	{#if msg.isGenerating}
+	<button
+		class="btn btn-sm msg-cntrl-icon hover:preset-filled-success-500"
+		title="Edit Message"
+		aria-label="Edit this message"
+		disabled={!!editChatMessage || hasGeneratingMessage || msg.isHidden}
+		onclick={(e) => { onclose?.(); onEditMessage(e, msg) }}
+	>
+		<Icons.Edit size={16} aria-hidden="true" />
+		<span class="lg:hidden">Edit Message</span>
+	</button>
+	{#if onBranchMessage}
 		<button
-			class="btn btn-sm msg-cntrl-icon preset-filled-error-500"
-			title="Stop Generation"
-			onclick={(e) => onAbortMessage(e, msg)}
+			class="btn btn-sm msg-cntrl-icon hover:preset-filled-primary-500"
+			title="Branch Chat"
+			aria-label="Create a new chat branch from this message"
+			disabled={!!editChatMessage || hasGeneratingMessage}
+			onclick={(e) => { onclose?.(); onBranchMessage(e, msg) }}
 		>
-			<Icons.Square size={16} />
-			<span class="lg:hidden">Stop Generation</span>
+			<Icons.GitBranch size={16} aria-hidden="true" />
+			<span class="lg:hidden">Branch Chat</span>
 		</button>
 	{/if}
 	{#if onStartSummarization && !msg.isGenerating}
@@ -124,12 +103,35 @@
 			title="Select for Summarization"
 			aria-label="Select this message for summarization"
 			disabled={!!editChatMessage || hasGeneratingMessage}
-			onclick={() => onStartSummarization!(msg)}
+			onclick={() => { onclose?.(); onStartSummarization!(msg) }}
 		>
 			<Icons.BookMarked size={16} aria-hidden="true" />
 			<span class="lg:hidden">Select for Summarization</span>
 		</button>
 	{/if}
+	<button
+		class="btn btn-sm msg-cntrl-icon hover:preset-filled-secondary-500"
+		class:preset-filled-secondary-500={msg.isHidden}
+		title={msg.isHidden ? "Unhide Message" : "Hide Message"}
+		aria-label={msg.isHidden ? "Unhide this message" : "Hide this message"}
+		disabled={!!editChatMessage || hasGeneratingMessage}
+		onclick={(e) => { onclose?.(); onHideMessage(e, msg) }}
+	>
+		<Icons.Ghost size={16} aria-hidden="true" />
+		<span class="lg:hidden">
+			{msg.isHidden ? "Unhide Message" : "Hide Message"}
+		</span>
+	</button>
+	<button
+		class="btn btn-sm msg-cntrl-icon hover:preset-filled-error-500"
+		title="Delete Message"
+		aria-label="Delete this message"
+		disabled={!!editChatMessage || hasGeneratingMessage}
+		onclick={(e) => { onclose?.(); onDeleteMessage(e, msg) }}
+	>
+		<Icons.Trash2 size={16} aria-hidden="true" />
+		<span class="lg:hidden">Delete Message</span>
+	</button>
 </div>
 
 <style lang="postcss">

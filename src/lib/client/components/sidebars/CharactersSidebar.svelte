@@ -10,6 +10,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import type { SpecV3 } from "@lenml/char-card-reader"
 	import CharacterListItem from "../listItems/CharacterListItem.svelte"
+	import CharacterViewPanel from "../characterForms/CharacterViewPanel.svelte"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -29,6 +30,8 @@
 	let characterList: any[] = $state([])
 	let search = $state("")
 	let characterId: number | undefined = $state()
+	let viewingId: number | undefined = $state()
+	let returnToViewId: number | undefined = $state()
 	let isCreating = $state(false)
 	let showCharacterCreator = $state(false)
 	let showDeleteModal = $state(false)
@@ -115,13 +118,27 @@
 		}
 	}
 
+	function handleViewClick(id: number) {
+		viewingId = id
+	}
+
 	function handleEditClick(id: number) {
 		characterId = id
+		viewingId = undefined
+	}
+
+	function handleEditFromView() {
+		returnToViewId = viewingId
+		characterId = viewingId
+		viewingId = undefined
 	}
 
 	function closeCharacterForm() {
 		isCreating = false
 		characterId = undefined
+		const returnId = returnToViewId
+		returnToViewId = undefined
+		if (returnId) viewingId = returnId
 	}
 
 	function handleDeleteClick(id: number) {
@@ -193,7 +210,12 @@
 	}
 
 	function handleCharacterClick(character: any) {
-		panelsCtx.digest.chatCharacterId = character.id
+		handleViewClick(character.id)
+	}
+
+	function handleChatFromView() {
+		if (!viewingId) return
+		panelsCtx.digest.chatCharacterId = viewingId
 		panelsCtx.openPanel({ key: "chats", toggle: false })
 	}
 
@@ -268,6 +290,17 @@
 					{characterId}
 					closeForm={closeCharacterForm}
 					bind:onCancel={onEditFormCancel}
+				/>
+			</section>
+		{/key}
+	{:else if viewingId}
+		{#key viewingId}
+			<section aria-label="View character" class="h-full">
+				<CharacterViewPanel
+					characterId={viewingId}
+					onBack={() => (viewingId = undefined)}
+					onEdit={handleEditFromView}
+					onChat={handleChatFromView}
 				/>
 			</section>
 		{/key}

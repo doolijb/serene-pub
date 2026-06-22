@@ -27,18 +27,41 @@ export interface GraphBuilderScene {
 	} | null
 }
 
+export interface GraphBuilderSeedNode {
+	id: number
+	nodeType: string
+	name: string
+	nodeState: string
+	summary: string | null
+}
+
+export interface GraphBuilderSeedRelationship {
+	fromNodeId: number
+	toNodeId: number
+	relationshipType: string
+	status: string
+	description: string | null
+	reason: string | null
+}
+
 export interface GraphBuilderInput {
 	scenes: GraphBuilderScene[]
 	connection: SelectConnection
 	sampling: SelectSamplingConfig
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
+	/** Existing graph nodes to seed the LLM context with (extend mode only) */
+	seedNodes?: GraphBuilderSeedNode[]
+	/** Existing relationships to seed the LLM context with (extend mode only) */
+	seedRelationships?: GraphBuilderSeedRelationship[]
 	onProgress?: (data: Sockets.NarrativeGraph.Build.Progress) => void
 }
 
 export interface GraphBuilderResult {
 	proposal: Sockets.NarrativeGraph.GraphProposal
 	sceneLabels: string[]
+	/** Maps seed tempIds (e.g. "existing_5") → real DB node id. Empty in replace mode. */
+	seedTempIdMap: Record<string, number>
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -299,7 +322,16 @@ export function sortScenesChronologically(scenes: GraphBuilderScene[]): GraphBui
 export async function buildGraphFromScenes(
 	input: GraphBuilderInput
 ): Promise<GraphBuilderResult> {
-	const { scenes, connection, sampling, contextConfig, promptConfig, onProgress } = input
+	const {
+		scenes,
+		connection,
+		sampling,
+		contextConfig,
+		promptConfig,
+		seedNodes,
+		seedRelationships,
+		onProgress
+	} = input
 
 	if (scenes.length === 0) throw new Error("No scenes to build graph from.")
 
@@ -319,7 +351,51 @@ export async function buildGraphFromScenes(
 	// Running state — built up incrementally across scene calls
 	const allNodes: Sockets.NarrativeGraph.NodeProposal[] = []
 	const allRelationships: Sockets.NarrativeGraph.RelationshipProposal[] = []
+	// Maps "fromTempId|toTempId" → index in allRelationships for O(1) dedup/update
+	const allRelKeyIndex = new Map<string, number>()
 	let nextNodeIndex = 1
+	const seedTempIdMap: Record<string, number> = {}
+
+	// Seed the context with existing nodes (extend mode)
+	if (seedNodes && seedNodes.length > 0) {
+		for (const seed of seedNodes) {
+			const tempId = `existing_${seed.id}`
+			seedTempIdMap[tempId] = seed.id
+			allNodes.push({
+				tempId,
+				nodeType: seed.nodeType,
+				name: seed.name,
+				nodeState: seed.nodeState,
+				summary: seed.summary ?? "",
+				characterIds: []
+			})
+		}
+	}
+
+	// Seed context with existing relationships (extend mode).
+	// Track which keys came from the DB so unchanged ones can be excluded from the proposal.
+	const seedRelKeys = new Set<string>()
+	const updatedSeedRelKeys = new Set<string>()
+
+	if (seedRelationships && seedRelationships.length > 0) {
+		for (const rel of seedRelationships) {
+			const fromTempId = `existing_${rel.fromNodeId}`
+			const toTempId = `existing_${rel.toNodeId}`
+			// Only include if both nodes are known seeds
+			if (!seedTempIdMap[fromTempId] || !seedTempIdMap[toTempId]) continue
+			const key = `${fromTempId}|${toTempId}`
+			seedRelKeys.add(key)
+			allRelKeyIndex.set(key, allRelationships.length)
+			allRelationships.push({
+				fromTempId,
+				toTempId,
+				relationshipType: rel.relationshipType,
+				description: rel.description ?? "",
+				status: rel.status,
+				reason: rel.reason ?? undefined
+			})
+		}
+	}
 
 	for (let i = 0; i < scenesWithSummaries.length; i++) {
 		onProgress?.({
@@ -348,30 +424,57 @@ export async function buildGraphFromScenes(
 		const existingTempIds = new Set(allNodes.map((n) => n.tempId))
 		const sceneResult = parseSceneProposal(raw, existingTempIds)
 
-		// Remap new tempIds to globally unique ones, then merge
+		const currentScene = scenesWithSummaries[i]
+
+		// Remap new node tempIds to globally unique ones
 		const tempIdRemap = new Map<string, string>()
 		for (const node of sceneResult.nodes) {
 			const globalId = `node_${nextNodeIndex++}`
 			tempIdRemap.set(node.tempId, globalId)
-			allNodes.push({ ...node, tempId: globalId })
+			allNodes.push({ ...node, tempId: globalId, sceneIndex: i, sceneId: currentScene.id })
 		}
 
 		for (const rel of sceneResult.relationships) {
-			allRelationships.push({
-				...rel,
-				fromTempId: tempIdRemap.get(rel.fromTempId) ?? rel.fromTempId,
-				toTempId: tempIdRemap.get(rel.toTempId) ?? rel.toTempId
-			})
+			const fromTempId = tempIdRemap.get(rel.fromTempId) ?? rel.fromTempId
+			const toTempId = tempIdRemap.get(rel.toTempId) ?? rel.toTempId
+			const key = `${fromTempId}|${toTempId}`
+
+			if (allRelKeyIndex.has(key)) {
+				// Relationship already seen this session (or is a seed) — update in place.
+				// Preserve the original sceneId (where it was first established).
+				const idx = allRelKeyIndex.get(key)!
+				allRelationships[idx] = { ...allRelationships[idx], ...rel, fromTempId, toTempId }
+				if (seedRelKeys.has(key)) updatedSeedRelKeys.add(key)
+			} else {
+				// First time seeing this relationship — tag with current scene
+				allRelKeyIndex.set(key, allRelationships.length)
+				allRelationships.push({ ...rel, fromTempId, toTempId, sceneIndex: i, sceneId: currentScene.id })
+			}
 		}
 	}
+
+	// Strip seed nodes from the proposal — only newly extracted nodes go back to the user
+	const newNodes = allNodes.filter((n) => !n.tempId.startsWith("existing_"))
+
+	// Strip unchanged seed relationships — only include ones the LLM explicitly changed.
+	// Within-session relationships (replace mode or new extend rels) are always included.
+	const proposalRelationships = allRelationships.filter((r) => {
+		const key = `${r.fromTempId}|${r.toTempId}`
+		if (seedRelKeys.has(key)) return updatedSeedRelKeys.has(key)
+		return true
+	})
 
 	onProgress?.({
 		phase: "parsing",
 		sceneIndex: scenesWithSummaries.length,
 		totalScenes: scenesWithSummaries.length,
-		nodesFound: allNodes.length,
-		relationshipsFound: allRelationships.length
+		nodesFound: newNodes.length,
+		relationshipsFound: proposalRelationships.length
 	})
 
-	return { proposal: { nodes: allNodes, relationships: allRelationships }, sceneLabels }
+	return {
+		proposal: { nodes: newNodes, relationships: proposalRelationships },
+		sceneLabels,
+		seedTempIdMap
+	}
 }

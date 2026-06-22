@@ -73,6 +73,22 @@ type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
+	"users:list": {
+		params: Sockets.Users.List.Params
+		response: Sockets.Users.List.Response
+	}
+	"users:create": {
+		params: Sockets.Users.Create.Params
+		response: Sockets.Users.Create.Response
+	}
+	"users:update": {
+		params: Sockets.Users.Update.Params
+		response: Sockets.Users.Update.Response
+	}
+	"users:delete": {
+		params: Sockets.Users.Delete.Params
+		response: Sockets.Users.Delete.Response
+	}
 
 	// Character events
 	"characters:list": {
@@ -241,6 +257,10 @@ type SocketEventMap = {
 		params: Sockets.Chats.UpdateChatCharacterVisibility.Params
 		response: Sockets.Chats.UpdateChatCharacterVisibility.Response
 	}
+	"chats:titleGenerated": {
+		params: Sockets.Chats.TitleGenerated.Call
+		response: Sockets.Chats.TitleGenerated.Call
+	}
 
 	// Chat Message events
 	"chatMessages:sendPersonaMessage": {
@@ -278,6 +298,10 @@ type SocketEventMap = {
 	"chatMessages:swipeRight": {
 		params: Sockets.ChatMessages.SwipeRight.Params
 		response: Sockets.ChatMessages.SwipeRight.Response
+	}
+	"chatMessages:cancel": {
+		params: Sockets.ChatMessages.Cancel.Params
+		response: Sockets.ChatMessages.Cancel.Response
 	}
 
 	// Legacy events (should be migrated) - temporarily using any types
@@ -681,6 +705,169 @@ type SocketEventMap = {
 		params: Sockets.Lorebooks.Import.Params
 		response: Sockets.Lorebooks.Import.Response
 	}
+	"lorebooks:bindingList": {
+		params: Sockets.Lorebooks.BindingList.Params
+		response: Sockets.Lorebooks.BindingList.Response
+	}
+
+	// History Entries events
+	"historyEntries:list": {
+		params: Sockets.HistoryEntries.List.Params
+		response: Sockets.HistoryEntries.List.Response
+	}
+	"historyEntries:create": {
+		params: Sockets.HistoryEntries.Create.Params
+		response: Sockets.HistoryEntries.Create.Response
+	}
+	"historyEntries:update": {
+		params: Sockets.HistoryEntries.Update.Params
+		response: Sockets.HistoryEntries.Update.Response
+	}
+	"historyEntries:delete": {
+		params: Sockets.HistoryEntries.Delete.Params
+		response: Sockets.HistoryEntries.Delete.Response
+	}
+	"historyEntries:iterateNext": {
+		params: Sockets.HistoryEntries.IterateNext.Params
+		response: Sockets.HistoryEntries.IterateNext.Response
+	}
+
+	// World Lore Entries events
+	"worldLoreEntries:list": {
+		params: Sockets.WorldLoreEntries.List.Params
+		response: Sockets.WorldLoreEntries.List.Response
+	}
+	"worldLoreEntries:create": {
+		params: Sockets.WorldLoreEntries.Create.Params
+		response: Sockets.WorldLoreEntries.Create.Response
+	}
+	"worldLoreEntries:update": {
+		params: Sockets.WorldLoreEntries.Update.Params
+		response: Sockets.WorldLoreEntries.Update.Response
+	}
+	"worldLoreEntries:delete": {
+		params: Sockets.WorldLoreEntries.Delete.Params
+		response: Sockets.WorldLoreEntries.Delete.Response
+	}
+	"worldLoreEntries:updatePositions": {
+		params: Sockets.WorldLoreEntries.UpdatePositions.Params
+		response: Sockets.WorldLoreEntries.UpdatePositions.Response
+	}
+
+	// Character Lore Entries events
+	"characterLoreEntries:list": {
+		params: Sockets.CharacterLoreEntries.List.Params
+		response: Sockets.CharacterLoreEntries.List.Response
+	}
+	"characterLoreEntries:create": {
+		params: Sockets.CharacterLoreEntries.Create.Params
+		response: Sockets.CharacterLoreEntries.Create.Response
+	}
+	"characterLoreEntries:update": {
+		params: Sockets.CharacterLoreEntries.Update.Params
+		response: Sockets.CharacterLoreEntries.Update.Response
+	}
+	"characterLoreEntries:delete": {
+		params: Sockets.CharacterLoreEntries.Delete.Params
+		response: Sockets.CharacterLoreEntries.Delete.Response
+	}
+	"characterLoreEntries:updatePositions": {
+		params: Sockets.CharacterLoreEntries.UpdatePositions.Params
+		response: Sockets.CharacterLoreEntries.UpdatePositions.Response
+	}
+
+	// Scenes events
+	"scenes:listByLorebook": {
+		params: Sockets.Scenes.ListByLorebook.Params
+		response: Sockets.Scenes.ListByLorebook.Response
+	}
+	"scenes:create": {
+		params: Sockets.Scenes.Create.Params
+		response: Sockets.Scenes.Create.Response
+	}
+	"scenes:update": {
+		params: Sockets.Scenes.Update.Params
+		response: Sockets.Scenes.Update.Response
+	}
+	"scenes:delete": {
+		params: Sockets.Scenes.Delete.Params
+		response: Sockets.Scenes.Delete.Response
+	}
+
+	// Assistant events
+	"assistant:completeV2": {
+		params: never
+		response: { chatId: number; messageId: number; toolsUsed: string[] }
+	}
+	"assistant:errorV2": {
+		params: never
+		response: { chatId: number; error: string }
+	}
+	"assistant:progress": {
+		params: never
+		response: {
+			chatId: number
+			type: "tool_execution" | "draft_generation"
+			tool?: string
+			status?: string
+			field?: string
+			currentField?: number
+			totalFields?: number
+			attempt?: number
+		}
+	}
+	"assistant:unlinkSuccess": {
+		params: never
+		response: { chatId: number; taggedEntities: Record<string, any> }
+	}
+	"assistant:editDraftSuccess": {
+		params: never
+		response: {
+			chatId: number
+			operation: "create" | "edit"
+			entityType: "characters" | "personas"
+			entityIndex: number
+			field: string
+			value: any
+			draft: any
+			chat?: any
+		}
+	}
+	"assistant:editDraftError": {
+		params: never
+		response: { error: string; field?: string; value?: any }
+	}
+	"assistant:metadataUpdated": {
+		params: never
+		response: { chatId: number; metadata: string | object }
+	}
+	"assistant:saveDraft": {
+		params: { chatId: number }
+		response: any
+	}
+	"assistant:editDraft": {
+		params: {
+			chatId: number
+			operation: string
+			entityType: string
+			entityIndex: number
+			field: string
+			value: any
+		}
+		response: any
+	}
+	"assistant:sendMessageV2": {
+		params: { chatId: number; content: string }
+		response: any
+	}
+	"assistant:selectFunctionResults": {
+		params: { chatId: number; selectedIds: number[]; type: string }
+		response: any
+	}
+	"assistant:unlinkEntity": {
+		params: { chatId: number; entityId: number; type: string }
+		response: any
+	}
 
 	// Tag events
 	"tags:list": {
@@ -702,28 +889,28 @@ type SocketEventMap = {
 
 	// Narrative Graph events
 	"narrativeGraph:list": {
-		params: { lorebookId: number }
-		response: { nodes: Sockets.NarrativeGraph.NarrativeNode[]; relationships: Sockets.NarrativeGraph.NarrativeRelationship[] }
+		params: Sockets.NarrativeGraph.List.Params
+		response: Sockets.NarrativeGraph.List.Response
 	}
 	"narrativeGraph:build": {
-		params: { lorebookId: number }
-		response: { proposal: Sockets.NarrativeGraph.GraphProposal; sceneLabels: string[] }
+		params: Sockets.NarrativeGraph.Build.Params
+		response: Sockets.NarrativeGraph.Build.Response
 	}
 	"narrativeGraph:build:progress": {
 		params: Sockets.NarrativeGraph.Build.Progress
 		response: Sockets.NarrativeGraph.Build.Progress
 	}
 	"narrativeGraph:build:complete": {
-		params: { proposal: Sockets.NarrativeGraph.GraphProposal; sceneLabels: string[] }
-		response: { proposal: Sockets.NarrativeGraph.GraphProposal; sceneLabels: string[] }
+		params: Sockets.NarrativeGraph.Build.Response
+		response: Sockets.NarrativeGraph.Build.Response
 	}
 	"narrativeGraph:build:error": {
-		params: { error: string; raw?: string }
-		response: { error: string; raw?: string }
+		params: Sockets.NarrativeGraph.Build.ErrorResponse
+		response: Sockets.NarrativeGraph.Build.ErrorResponse
 	}
 	"narrativeGraph:applyProposal": {
-		params: { lorebookId: number; proposal: Sockets.NarrativeGraph.GraphProposal; mode: "replace" | "merge" }
-		response: { nodes: Sockets.NarrativeGraph.NarrativeNode[]; relationships: Sockets.NarrativeGraph.NarrativeRelationship[] }
+		params: Sockets.NarrativeGraph.ApplyProposal.Params
+		response: Sockets.NarrativeGraph.ApplyProposal.Response
 	}
 	"narrativeGraph:updateNode": {
 		params: { node: Partial<Sockets.NarrativeGraph.NarrativeNode> & { id: number } }
@@ -740,6 +927,10 @@ type SocketEventMap = {
 	"narrativeGraph:deleteRelationship": {
 		params: { id: number }
 		response: { success: string }
+	}
+	"narrativeGraph:createRelationship": {
+		params: Sockets.NarrativeGraph.CreateRelationship.Params
+		response: Sockets.NarrativeGraph.CreateRelationship.Response
 	}
 
 	// Global error/success events

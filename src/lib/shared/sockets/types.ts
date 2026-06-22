@@ -2154,7 +2154,6 @@ declare global {
 				embedding: number[] | null
 				embeddingModel: string | null
 				characterIds: number[]
-				pendingReview: boolean
 				createdAt: Date | string
 				updatedAt: Date | string
 			}
@@ -2172,7 +2171,6 @@ declare global {
 				reason: string | null
 				embedding: number[] | null
 				embeddingModel: string | null
-				pendingReview: boolean
 				createdAt: Date | string
 				updatedAt: Date | string
 			}
@@ -2187,6 +2185,8 @@ declare global {
 				characterIds?: number[]
 				/** Which scene index (0-based) in the ordered scene list introduced this node */
 				sceneIndex?: number
+				/** DB scene id where this node first appeared — stored on commit */
+				sceneId?: number
 			}
 			interface RelationshipProposal {
 				fromTempId: string
@@ -2197,6 +2197,8 @@ declare global {
 				reason?: string
 				/** Which scene index (0-based) established this relationship */
 				sceneIndex?: number
+				/** DB scene id where this relationship was first established — stored on commit */
+				sceneId?: number
 			}
 			interface GraphProposal {
 				nodes: NodeProposal[]
@@ -2210,11 +2212,19 @@ declare global {
 				interface Response {
 					nodes: NarrativeNode[]
 					relationships: NarrativeRelationship[]
+					/** Scenes with a summary not yet processed into the graph (ready to extend) */
+					ungraphedSceneCount: number
+					/** Scenes without a summary not yet processed (need summarising first) */
+					ungraphedUnsummarizedCount: number
+					/** All scenes with a summary (used for replace-mode preflight) */
+					totalSummarizedCount: number
 				}
 			}
 			namespace Build {
 				interface Params {
 					lorebookId: number
+					/** replace: rebuild from scratch; extend: seed LLM with existing graph, only add new entries */
+					mode?: "replace" | "extend"
 				}
 				interface Progress {
 					phase: "loading" | "extracting" | "parsing"
@@ -2228,6 +2238,8 @@ declare global {
 					proposal: GraphProposal
 					/** Ordered list of scene labels used (for mapping sceneIndex → human-readable) */
 					sceneLabels: string[]
+					/** Maps seed tempIds (e.g. "existing_5") → real DB node id — only present in extend mode */
+					seedTempIdMap: Record<string, number>
 				}
 				interface ErrorResponse {
 					error: string
@@ -2238,8 +2250,10 @@ declare global {
 				interface Params {
 					lorebookId: number
 					proposal: GraphProposal
-					/** Replace all existing nodes/relationships, or merge */
-					mode: "replace" | "merge"
+					/** replace: delete existing graph first; extend: keep existing, resolve seed tempIds */
+					mode: "replace" | "extend"
+					/** Required when mode is "extend" — maps seed tempIds → real DB node ids */
+					seedTempIdMap?: Record<string, number>
 				}
 				interface Response {
 					nodes: NarrativeNode[]
@@ -2276,6 +2290,20 @@ declare global {
 				}
 				interface Response {
 					success: string
+				}
+			}
+			namespace CreateRelationship {
+				interface Params {
+					lorebookId: number
+					fromNodeId: number
+					toNodeId: number
+					relationshipType: string
+					status: string
+					description?: string
+					historyEntryId?: number
+				}
+				interface Response {
+					relationship: NarrativeRelationship
 				}
 			}
 		}

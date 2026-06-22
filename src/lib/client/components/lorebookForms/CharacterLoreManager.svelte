@@ -2,7 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { Popover } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { getContext, onDestroy, onMount, tick } from "svelte"
 	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
 	import LoreContentField from "./LoreContentField.svelte"
@@ -17,7 +17,7 @@
 		hasUnsavedChanges: boolean
 	}
 
-	const socket = skio.get()!
+	const socket = useTypedSocket()
 
 	let {
 		lorebookId = $bindable(),
@@ -285,13 +285,12 @@
 
 	onDestroy(() => {
 		hasUnsavedChanges = false
-		const s = socket as any
-		s.off("characterLoreEntries:list")
-		s.off("characterLoreEntries:create")
-		s.off("characterLoreEntries:update")
-		s.off("characterLoreEntries:delete")
-		s.off("lorebooks:bindingList")
-		s.off("characterLoreEntries:updatePositions")
+		socket.off("characterLoreEntries:list")
+		socket.off("characterLoreEntries:create")
+		socket.off("characterLoreEntries:update")
+		socket.off("characterLoreEntries:delete")
+		socket.off("lorebooks:bindingList")
+		socket.off("characterLoreEntries:updatePositions")
 	})
 </script>
 

@@ -27,12 +27,14 @@
 		editChatId?: number | null // If provided, edit mode; else create mode
 		showEditChatForm: boolean // Controls visibility of the form
 		hasChanges?: boolean // Track if the form has unsaved changes
+		onClose?: () => void
 	}
 
 	let {
 		editChatId = $bindable(null),
 		showEditChatForm = $bindable(),
-		hasChanges = $bindable(false)
+		hasChanges = $bindable(false),
+		onClose
 	}: Props = $props()
 
 	const socket = skio.get()
@@ -336,6 +338,7 @@
 	function handleCloseForm() {
 		// TODO handle unsaved changes if any
 		showEditChatForm = false
+		onClose?.()
 	}
 
 	// Socket event handlers - defined as named functions for proper cleanup
@@ -442,6 +445,7 @@
 			description: `Chat "${res.chat.name || "Unnamed Chat"}" created successfully.`
 		})
 		showEditChatForm = false
+		onClose?.()
 	}
 
 	const handleChatsUpdate = (res: any) => {
@@ -450,6 +454,7 @@
 			description: `Chat "${res.chat.name || "Unnamed Chat"}" updated successfully.`
 		})
 		showEditChatForm = false
+		onClose?.()
 	}
 
 	const handleChatsAddGuest = (res: Sockets.Chats.AddGuest.Response) => {
@@ -599,19 +604,26 @@
 
 {#if data}
 	<div class="flex min-h-full flex-col gap-6">
-		<div class="mt-4 flex gap-2">
+		<div class="flex items-center gap-2">
 			<button
-				class="btn btn-sm preset-filled-surface-500 w-full"
+				class="btn btn-sm preset-tonal-surface shrink-0 p-2"
 				onclick={handleCloseForm}
+				title="Cancel"
 			>
-				Cancel
+				<Icons.ChevronLeft size={16} />
 			</button>
+			<h2 class="flex-1 truncate font-semibold">
+				{chat ? "Edit Chat" : "New Chat"}
+			</h2>
 			<button
-				class="btn btn-sm preset-filled-success-500 w-full"
+				class="btn btn-sm shrink-0"
+				class:preset-filled-success-500={isDirty}
+				class:preset-tonal-success={!isDirty}
 				onclick={handleSave}
 				disabled={!canSave}
 			>
-				{chat ? "Save Changes" : "Create Chat"}
+				<Icons.Save size={16} />
+				{chat ? "Update" : "Create"}
 			</button>
 		</div>
 		<div>

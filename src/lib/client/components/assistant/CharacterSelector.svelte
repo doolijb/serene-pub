@@ -30,7 +30,7 @@
 
 	function selectCharacter(characterId: number) {
 		// Send selection to server (using raw emit since it's not in typed socket yet)
-		;(socket as any).emit("assistant:selectFunctionResults", {
+		socket.emit("assistant:selectFunctionResults", {
 			chatId,
 			selectedIds: [characterId],
 			type: "characters"

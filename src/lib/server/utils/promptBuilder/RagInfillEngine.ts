@@ -317,7 +317,7 @@ export class RagInfillEngine {
 			description?: string; reason?: string
 			historyEntryId: number | null
 		}
-		type GraphPairOutput = { from: string; to: string; fromNodeId: number; toNodeId: number; lorebookId: number; rels: InternalRelEntry[] }
+		type GraphPairOutput = { from: string; fromDescription?: string; to: string; toDescription?: string; fromNodeId: number; toNodeId: number; lorebookId: number; rels: InternalRelEntry[] }
 
 		const graphPairs: GraphPairOutput[] = []
 
@@ -329,14 +329,16 @@ export class RagInfillEngine {
 			const nodeIdSet = new Set<number>()
 			for (const p of pairsToProcess) { nodeIdSet.add(p.fromNodeId); nodeIdSet.add(p.toNodeId) }
 			const nodeRows = await db
-				.select({ id: schema.narrativeNodes.id, name: schema.narrativeNodes.name })
+				.select({ id: schema.narrativeNodes.id, name: schema.narrativeNodes.name, summary: schema.narrativeNodes.summary })
 				.from(schema.narrativeNodes)
 				.where(inArray(schema.narrativeNodes.id, Array.from(nodeIdSet)))
-			const nodeNameMap = new Map(nodeRows.map((n) => [n.id, n.name]))
+			const nodeInfoMap = new Map(nodeRows.map((n) => [n.id, { name: n.name, summary: n.summary }]))
 
 			for (const pair of pairsToProcess) {
-				const fromName = nodeNameMap.get(pair.fromNodeId) ?? String(pair.fromNodeId)
-				const toName = nodeNameMap.get(pair.toNodeId) ?? String(pair.toNodeId)
+				const fromInfo = nodeInfoMap.get(pair.fromNodeId)
+				const toInfo = nodeInfoMap.get(pair.toNodeId)
+				const fromName = fromInfo?.name ?? String(pair.fromNodeId)
+				const toName = toInfo?.name ?? String(pair.toNodeId)
 
 				// Fetch all rows for this pair ordered chronologically (id order = insertion order)
 				const allRows = await db
@@ -369,7 +371,16 @@ export class RagInfillEngine {
 					rels.push(entry)
 				}
 
-				graphPairs.push({ from: fromName, to: toName, fromNodeId: pair.fromNodeId, toNodeId: pair.toNodeId, lorebookId: pair.lorebookId, rels })
+				graphPairs.push({
+					from: fromName,
+					fromDescription: fromInfo?.summary ?? undefined,
+					to: toName,
+					toDescription: toInfo?.summary ?? undefined,
+					fromNodeId: pair.fromNodeId,
+					toNodeId: pair.toNodeId,
+					lorebookId: pair.lorebookId,
+					rels
+				})
 			}
 		}
 
@@ -401,9 +412,10 @@ export class RagInfillEngine {
 			const nodeIdArr = Array.from(includedNodeIds)
 
 			if (sharedLorebookId !== null && nodeIdArr.length >= 2) {
-				// Fetch node names for newly encountered nodes
-				const knownNames = new Map(graphPairs.flatMap((p) => [
-					[p.fromNodeId, p.from], [p.toNodeId, p.to]
+				// Reuse already-fetched node info (name + summary) for cross-pair entries
+				const knownInfo = new Map(graphPairs.flatMap((p) => [
+					[p.fromNodeId, { name: p.from, summary: p.fromDescription }],
+					[p.toNodeId, { name: p.to, summary: p.toDescription }]
 				]))
 
 				const crossRels = await db
@@ -432,8 +444,10 @@ export class RagInfillEngine {
 					if (includedPairKeys.has(pairKey)) continue
 					includedPairKeys.add(pairKey)
 
-					const fromName = knownNames.get(r.fromNodeId) ?? String(r.fromNodeId)
-					const toName = knownNames.get(r.toNodeId) ?? String(r.toNodeId)
+					const fromInfo = knownInfo.get(r.fromNodeId)
+					const toInfo = knownInfo.get(r.toNodeId)
+					const fromName = fromInfo?.name ?? String(r.fromNodeId)
+					const toName = toInfo?.name ?? String(r.toNodeId)
 					const rel: InternalRelEntry = { type: r.relationshipType, status: r.status, historyEntryId: r.historyEntryId }
 					if (r.description) rel.description = r.description
 					// Apply reason-omission for cross-pair entries too
@@ -441,7 +455,16 @@ export class RagInfillEngine {
 						rel.reason = r.reason
 					}
 
-					graphPairs.push({ from: fromName, to: toName, fromNodeId: r.fromNodeId, toNodeId: r.toNodeId, lorebookId: sharedLorebookId, rels: [rel] })
+					graphPairs.push({
+						from: fromName,
+						fromDescription: fromInfo?.summary ?? undefined,
+						to: toName,
+						toDescription: toInfo?.summary ?? undefined,
+						fromNodeId: r.fromNodeId,
+						toNodeId: r.toNodeId,
+						lorebookId: sharedLorebookId,
+						rels: [rel]
+					})
 					added++
 				}
 			}
@@ -450,11 +473,14 @@ export class RagInfillEngine {
 		// Serialize final graph (strip internal historyEntryId before output)
 		let narrativeGraph: string | undefined
 		if (graphPairs.length > 0) {
-			const output = graphPairs.map((p) => ({
-				from: p.from,
-				to: p.to,
-				relationships: p.rels.map(({ historyEntryId: _he, ...rest }) => rest)
-			}))
+			const output = graphPairs.map((p) => {
+				const entry: Record<string, any> = { from: p.from }
+				if (p.fromDescription) entry.from_description = p.fromDescription
+				entry.to = p.to
+				if (p.toDescription) entry.to_description = p.toDescription
+				entry.relationships = p.rels.map(({ historyEntryId: _he, ...rest }) => rest)
+				return entry
+			})
 			narrativeGraph = JSON.stringify({ story_relationships: output }, null, 2)
 		}
 

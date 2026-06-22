@@ -8,6 +8,7 @@
 	import PersonaUnsavedChangesModal from "../modals/PersonaUnsavedChangesModal.svelte"
 	import PersonaLibraryModal from "../modals/PersonaLibraryModal.svelte"
 	import PersonaListItem from "../listItems/PersonaListItem.svelte"
+	import PersonaViewPanel from "../personaForms/PersonaViewPanel.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	interface Props {
@@ -28,6 +29,8 @@
 	let personaList: Sockets.Personas.List.Response["personaList"] = $state([])
 	let search = $state("")
 	let personaId: number | undefined = $state()
+	let viewingId: number | undefined = $state()
+	let returnToViewId: number | undefined = $state()
 	let isCreating = $state(false)
 	let showPersonaCreator = $state(false)
 	let showLibraryModal = $state(false)
@@ -140,14 +143,34 @@
 		}
 	}
 
+	function handleViewClick(id: number) {
+		viewingId = id
+	}
+
 	function handleEditClick(id: number) {
 		personaId = id
+		viewingId = undefined
+	}
+
+	function handleEditFromView() {
+		returnToViewId = viewingId
+		personaId = viewingId
+		viewingId = undefined
 	}
 
 	function closePersonasForm() {
 		isCreating = false
 		personaId = undefined
 		personaFormHasChanges = false
+		const returnId = returnToViewId
+		returnToViewId = undefined
+		if (returnId) viewingId = returnId
+	}
+
+	function handleChatFromView() {
+		if (!viewingId) return
+		panelsCtx.digest.chatPersonaId = viewingId
+		panelsCtx.openPanel({ key: "chats", toggle: false })
 	}
 
 	function handleDeleteClick(id: number) {
@@ -200,8 +223,7 @@
 	function handlePersonaClick(
 		persona: Sockets.PersonaList.Response["personaList"][0]
 	) {
-		panelsCtx.digest.chatPersonaId = persona.id
-		panelsCtx.openPanel({ key: "chats", toggle: false })
+		handleViewClick(persona.id!)
 	}
 </script>
 
@@ -219,6 +241,15 @@
 			closeForm={closePersonasForm}
 			bind:onCancel={onEditFormCancel}
 		/>
+	{:else if viewingId}
+		{#key viewingId}
+			<PersonaViewPanel
+				personaId={viewingId}
+				onBack={() => (viewingId = undefined)}
+				onEdit={handleEditFromView}
+				onChat={handleChatFromView}
+			/>
+		{/key}
 	{:else}
 		<div class="mb-2 flex gap-2">
 			<button

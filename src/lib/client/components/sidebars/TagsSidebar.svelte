@@ -405,46 +405,38 @@
 	{#if selectedTag && !isEditing}
 		<!-- Selected tag view -->
 		<div class="mb-4">
-			<button
-				class="btn btn-sm preset-filled-surface-500 mb-3"
-				onclick={() => {
-					selectedTag = null
-				}}
-			>
-				<Icons.ArrowLeft size={16} />
-				Back to Tags
-			</button>
+			<div class="mb-4 flex items-center gap-2">
+				<button
+					class="btn btn-sm preset-tonal-surface p-2"
+					onclick={() => { selectedTag = null }}
+					title="Back to tags"
+				>
+					<Icons.ChevronLeft size={16} />
+				</button>
+				<h2 class="flex-1 truncate font-semibold">{selectedTag.name}</h2>
+				<button
+					class="btn btn-sm preset-tonal-surface p-2"
+					onclick={handleEditClick}
+					title="Rename Tag"
+				>
+					<Icons.Pencil size={16} />
+				</button>
+				<button
+					class="btn btn-sm preset-tonal-error p-2"
+					onclick={handleDeleteClick}
+					title="Delete Tag"
+				>
+					<Icons.Trash2 size={16} />
+				</button>
+			</div>
 
-			<div
-				class="border-primary-500 bg-surface-50-950 mb-4 rounded-lg border p-4"
-			>
-				<div class="mb-2 flex items-center justify-between">
-					<h2 class="text-primary-500 text-xl font-bold">
-						{selectedTag.name}
-					</h2>
-					<div class="flex gap-2">
-						<button
-							class="btn btn-sm text-primary-500 p-2"
-							onclick={handleEditClick}
-							title="Rename Tag"
-						>
-							<Icons.Edit size={16} />
-						</button>
-						<button
-							class="btn btn-sm text-error-500 p-2"
-							onclick={handleDeleteClick}
-							title="Delete Tag"
-						>
-							<Icons.Trash2 size={16} />
-						</button>
-					</div>
-				</div>
-				{#if selectedTag.description}
+			{#if selectedTag.description}
+				<div class="border-primary-500 bg-surface-50-950 mb-4 rounded-lg border p-4">
 					<p class="text-muted-foreground text-sm">
 						{selectedTag.description}
 					</p>
-				{/if}
-			</div>
+				</div>
+			{/if}
 
 			<!-- Related sections -->
 			{#if relatedCharacters.length > 0}

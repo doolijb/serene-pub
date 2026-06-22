@@ -2,7 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { Popover } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { getContext, onDestroy, onMount, tick } from "svelte"
 	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
 	import LoreContentField from "./LoreContentField.svelte"
@@ -19,16 +19,19 @@
 		focusEntryTab?: "content" | "scenes"
 		/** Expand this scene ID within the scenes tab when focusing externally */
 		focusSceneId?: number
+		/** Called when the user wants to switch to the Graph tab */
+		onNavigateToGraph?: () => void
 	}
 
-	const socket = skio.get()!
+	const socket = useTypedSocket()
 
 	let {
 		lorebookId = $bindable(),
 		hasUnsavedChanges = $bindable(false),
 		focusHistoryEntryId,
 		focusEntryTab,
-		focusSceneId
+		focusSceneId,
+		onNavigateToGraph
 	}: Props = $props()
 
 	let systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
@@ -170,6 +173,42 @@
 		return Math.max(...filteredEntries.map((e) => getEntryDateValue(e)))
 	})
 
+	// ── Date-order bounds ─────────────────────────────────────────
+	/** Encoded date: year×10000 + month×100 + day. Used for ordering. */
+	function dateValue(year: number, month?: number | null, day?: number | null) {
+		return year * 10000 + (month || 0) * 100 + (day || 0)
+	}
+
+	/** Human-readable date from an encoded value. */
+	function formatDateValue(value: number): string {
+		const y = Math.floor(value / 10000)
+		const m = Math.floor((value % 10000) / 100)
+		const d = value % 100
+		return `Year ${y}${m ? `, Mo. ${m}` : ""}${d ? `, Day ${d}` : ""}`
+	}
+
+	/**
+	 * When editing an existing entry, returns the exclusive (min, max) date values
+	 * it must remain between to preserve chronological order.
+	 * Returns (-Infinity, Infinity) for new entries or the only entry.
+	 */
+	let editBounds = $derived.by((): { min: number; max: number } => {
+		if (isNewEntry || !focusedEntry || historyEntryList.length < 2) {
+			return { min: -Infinity, max: Infinity }
+		}
+		const sorted = [...historyEntryList].sort(
+			(a, b) => getEntryDateValue(a) - getEntryDateValue(b)
+		)
+		const idx = sorted.findIndex((e) => e.id === focusedEntry!.id)
+		if (idx === -1) return { min: -Infinity, max: Infinity }
+		const prev = idx > 0 ? sorted[idx - 1] : null
+		const next = idx < sorted.length - 1 ? sorted[idx + 1] : null
+		return {
+			min: prev ? getEntryDateValue(prev) : -Infinity,
+			max: next ? getEntryDateValue(next) : Infinity
+		}
+	})
+
 	function previewContent(entry: SelectHistoryEntry): string {
 		let content = entry.content || ""
 		lorebookBindingList.forEach((binding) => {
@@ -193,6 +232,23 @@
 		if (!!entry.day && !entry.month) {
 			if (warn) toaster.error({ title: "Month is required if day is set" })
 			return false
+		}
+		if (!isNewEntry && focusedEntry) {
+			const v = dateValue(entry.year, entry.month, entry.day)
+			if (editBounds.min !== -Infinity && v <= editBounds.min) {
+				if (warn) toaster.error({
+					title: "Date would be out of order",
+					description: `Must be after ${formatDateValue(editBounds.min)}`
+				})
+				return false
+			}
+			if (editBounds.max !== Infinity && v >= editBounds.max) {
+				if (warn) toaster.error({
+					title: "Date would be out of order",
+					description: `Must be before ${formatDateValue(editBounds.max)}`
+				})
+				return false
+			}
 		}
 		return true
 	}
@@ -390,17 +446,16 @@
 
 	onDestroy(() => {
 		hasUnsavedChanges = false
-		const s = socket as any
-		s.off("historyEntries:list")
-		s.off("historyEntries:create")
-		s.off("historyEntries:update")
-		s.off("historyEntries:delete")
-		s.off("lorebooks:bindingList")
-		s.off("historyEntries:iterateNext")
-		s.off("scenes:listByLorebook")
-		s.off("scenes:update")
-		s.off("scenes:delete")
-		s.off("scenes:create")
+		socket.off("historyEntries:list")
+		socket.off("historyEntries:create")
+		socket.off("historyEntries:update")
+		socket.off("historyEntries:delete")
+		socket.off("lorebooks:bindingList")
+		socket.off("historyEntries:iterateNext")
+		socket.off("scenes:listByLorebook")
+		socket.off("scenes:update")
+		socket.off("scenes:delete")
+		socket.off("scenes:create")
 	})
 </script>
 
@@ -542,7 +597,7 @@
 	<div class="flex flex-col gap-4">
 		<!-- Header -->
 		<div class="flex items-center gap-2">
-			<button class="btn btn-sm preset-tonal-surface" onclick={goBack}>
+			<button class="btn btn-sm preset-tonal-surface p-2" onclick={goBack}>
 				<Icons.ChevronLeft size={16} />
 			</button>
 			<h3 class="flex-1 font-semibold">
@@ -612,7 +667,17 @@
 
 		<!-- Scenes tab -->
 		{:else}
+			{@const ungraphedSummarized = viewScenes.filter((s) => !s.graphed && s.summary)}
 			<div class="flex flex-col gap-2">
+				{#if ungraphedSummarized.length > 0 && onNavigateToGraph}
+					<button
+						class="btn btn-sm preset-tonal-secondary w-full"
+						onclick={onNavigateToGraph}
+						title="{ungraphedSummarized.length} scene{ungraphedSummarized.length === 1 ? '' : 's'} ready to graph"
+					>
+						<Icons.GitGraph size={13} /> Build Graph ({ungraphedSummarized.length} ready)
+					</button>
+				{/if}
 				{#if viewScenes.length === 0}
 					<p class="text-surface-500 py-4 text-center text-xs italic">
 						No scenes captured for this entry yet.
@@ -641,6 +706,11 @@
 								{#if scene.selectedMessageIds?.length}
 									<span class="badge preset-tonal-surface shrink-0 text-xs">
 										{scene.selectedMessageIds.length} msg
+									</span>
+								{/if}
+								{#if scene.graphed}
+									<span class="text-success-500 shrink-0" title="Added to graph">
+										<Icons.GitGraph size={12} />
 									</span>
 								{/if}
 							</button>
@@ -678,15 +748,12 @@
 	<div class="flex flex-col gap-4">
 		<!-- Header with inline Cancel/Save -->
 		<div class="flex items-center gap-2">
-			<button class="btn btn-sm preset-tonal-surface" onclick={goBack}>
+			<button class="btn btn-sm preset-tonal-surface p-2" onclick={goBack}>
 				<Icons.ChevronLeft size={16} />
 			</button>
 			<h3 class="flex-1 text-sm font-semibold">
 				{isNewEntry ? "New History Entry" : `Edit — Year ${focusedEntry?.year ?? "?"}`}
 			</h3>
-			<button class="btn btn-sm preset-tonal-surface" onclick={goBack}>
-				Cancel
-			</button>
 			<button
 				class="btn btn-sm preset-filled-success-500"
 				onclick={handleSave}
@@ -721,28 +788,41 @@
 		{#if focusedEntryTab === "content"}
 			<div class="flex flex-col gap-4">
 				<!-- Date fields -->
-				<div class="flex gap-2">
-					<div class="flex flex-col gap-1">
-						<label class="flex items-center gap-1 text-sm font-semibold" for="editYear">
-							Year <Icons.ScanEye size={13} class="text-surface-400 relative top-[1px]" />
-						</label>
-						<input id="editYear" class="input preset-filled-surface-200-800 w-full rounded-lg" type="number"
-							bind:value={editingEntry.year} required placeholder="2055" />
+				<div class="flex flex-col gap-1">
+					<div class="flex gap-2">
+						<div class="flex flex-col gap-1">
+							<label class="flex items-center gap-1 text-sm font-semibold" for="editYear">
+								Year <Icons.ScanEye size={13} class="text-surface-400 relative top-[1px]" />
+							</label>
+							<input id="editYear" class="input preset-filled-surface-200-800 w-full rounded-lg" type="number"
+								bind:value={editingEntry.year} required placeholder="2055" />
+						</div>
+						<div class="flex flex-col gap-1">
+							<label class="flex items-center gap-1 text-sm font-semibold" for="editMonth">
+								Month <Icons.ScanEye size={13} class="text-surface-400 relative top-[1px]" />
+							</label>
+							<input id="editMonth" class="input preset-filled-surface-200-800 w-full rounded-lg" type="number"
+								bind:value={editingEntry.month} placeholder="3" />
+						</div>
+						<div class="flex flex-col gap-1">
+							<label class="flex items-center gap-1 text-sm font-semibold" for="editDay">
+								Day <Icons.ScanEye size={13} class="text-surface-400 relative top-[1px]" />
+							</label>
+							<input id="editDay" class="input preset-filled-surface-200-800 w-full rounded-lg" type="number"
+								bind:value={editingEntry.day} placeholder="1" />
+						</div>
 					</div>
-					<div class="flex flex-col gap-1">
-						<label class="flex items-center gap-1 text-sm font-semibold" for="editMonth">
-							Month <Icons.ScanEye size={13} class="text-surface-400 relative top-[1px]" />
-						</label>
-						<input id="editMonth" class="input preset-filled-surface-200-800 w-full rounded-lg" type="number"
-							bind:value={editingEntry.month} placeholder="3" />
-					</div>
-					<div class="flex flex-col gap-1">
-						<label class="flex items-center gap-1 text-sm font-semibold" for="editDay">
-							Day <Icons.ScanEye size={13} class="text-surface-400 relative top-[1px]" />
-						</label>
-						<input id="editDay" class="input preset-filled-surface-200-800 w-full rounded-lg" type="number"
-							bind:value={editingEntry.day} placeholder="1" />
-					</div>
+					{#if !isNewEntry && (editBounds.min !== -Infinity || editBounds.max !== Infinity)}
+						<p class="text-surface-500 text-xs">
+							{#if editBounds.min !== -Infinity && editBounds.max !== Infinity}
+								Must be between {formatDateValue(editBounds.min)} and {formatDateValue(editBounds.max)}
+							{:else if editBounds.min !== -Infinity}
+								Must be after {formatDateValue(editBounds.min)}
+							{:else}
+								Must be before {formatDateValue(editBounds.max)}
+							{/if}
+						</p>
+					{/if}
 				</div>
 
 				<!-- Content -->
@@ -801,7 +881,17 @@
 
 		<!-- Scenes tab (edit mode) -->
 		{:else}
+			{@const ungraphedSummarizedEdit = editScenes.filter((s) => !s.graphed && s.summary)}
 			<div class="flex flex-col gap-2">
+				{#if ungraphedSummarizedEdit.length > 0 && onNavigateToGraph}
+					<button
+						class="btn btn-sm preset-tonal-secondary w-full"
+						onclick={onNavigateToGraph}
+						title="{ungraphedSummarizedEdit.length} scene{ungraphedSummarizedEdit.length === 1 ? '' : 's'} ready to graph"
+					>
+						<Icons.GitGraph size={13} /> Build Graph ({ungraphedSummarizedEdit.length} ready)
+					</button>
+				{/if}
 				{#if editScenes.length === 0}
 					<p class="text-surface-500 py-4 text-center text-xs italic">
 						No scenes captured for this entry yet. Capture scenes from the chat page.
@@ -846,6 +936,11 @@
 									{#if scene.selectedMessageIds?.length}
 										<span class="badge preset-tonal-surface shrink-0 text-xs">
 											{scene.selectedMessageIds.length} msg
+										</span>
+									{/if}
+									{#if scene.graphed}
+										<span class="text-success-500 shrink-0" title="Added to graph">
+											<Icons.GitGraph size={12} />
 										</span>
 									{/if}
 									<button

@@ -44,6 +44,7 @@ export const ollamaGetDownloadProgress: Handler<Sockets.Ollama.GetDownloadProgre
 export const ollamaSetBaseUrl: Handler<Sockets.Ollama.SetBaseUrl.Params, Sockets.Ollama.SetBaseUrl.Response> = {
 	event: "ollama:setBaseUrl",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			// This would typically update the active Ollama connection's baseUrl
 			// For now, we'll just validate the URL format
@@ -103,6 +104,7 @@ export const ollamaModelsList: Handler<Sockets.Ollama.ModelsList.Params, Sockets
 export const ollamaDeleteModelHandler: Handler<Sockets.Ollama.DeleteModel.Params, Sockets.Ollama.DeleteModel.Response> = {
 	event: "ollama:deleteModel",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			const { ollamaManagerBaseUrl: baseUrl } =
 				(await db.query.systemSettings.findFirst())!
@@ -137,6 +139,7 @@ export const ollamaDeleteModelHandler: Handler<Sockets.Ollama.DeleteModel.Params
 export const ollamaConnectModelHandler: Handler<Sockets.Ollama.ConnectModel.Params, Sockets.Ollama.ConnectModel.Response> = {
 	event: "ollama:connectModel",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			let existingConnection = await db.query.connections.findFirst({
 				where: (c, { eq }) =>
@@ -213,6 +216,7 @@ export const ollamaListRunningModelsHandler: Handler<Sockets.Ollama.ListRunningM
 export const ollamaPullModelHandler: Handler<Sockets.Ollama.PullModel.Params, Sockets.Ollama.PullModel.Response> = {
 	event: "ollama:pullModel",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			// Remove from cancelingPulls if it exists
 			if (cancelingPulls.includes(params.modelName)) {
@@ -520,6 +524,7 @@ export const ollamaSearchAvailableModelsHandler: Handler<Sockets.Ollama.SearchAv
 export const ollamaClearDownloadHistoryHandler: Handler<Sockets.Ollama.ClearDownloadHistory.Params, Sockets.Ollama.ClearDownloadHistory.Response> = {
 	event: "ollama:clearDownloadHistory",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			// Clear the download progress tracking
 			Object.keys(downloadingQuants).forEach((modelName) => {
@@ -547,6 +552,7 @@ export const ollamaClearDownloadHistoryHandler: Handler<Sockets.Ollama.ClearDown
 export const ollamaCancelPullHandler: Handler<Sockets.Ollama.CancelPull.Params, Sockets.Ollama.CancelPull.Response> = {
 	event: "ollama:cancelPull",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			// Add the model to the canceling pulls array
 			if (!cancelingPulls.includes(params.modelName)) {

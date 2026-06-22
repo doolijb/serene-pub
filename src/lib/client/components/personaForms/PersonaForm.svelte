@@ -357,23 +357,24 @@
 	aria-labelledby="form-title"
 	aria-modal="false"
 >
-	<h1 class="mb-4 text-lg font-bold" id="form-title">
-		{mode === "edit"
-			? `Edit: ${editPersonaData.name || "Persona"}`
-			: "Create Persona"}
-	</h1>
-	<div class="mt-4 mb-4 flex gap-2" role="group" aria-label="Form actions">
+	<div class="mb-4 flex items-center gap-2" role="group" aria-label="Form actions">
 		<button
 			type="button"
-			class="btn btn-sm preset-filled-surface-500 w-full"
+			class="btn btn-sm preset-tonal-surface shrink-0 p-2"
 			onclick={handleCancel}
-			aria-describedby="form-title"
+			title="Cancel"
+			aria-label="Cancel and go back"
 		>
-			Cancel
+			<Icons.ChevronLeft size={16} aria-hidden="true" />
 		</button>
+		<h1 class="flex-1 text-lg font-bold" id="form-title">
+			{mode === "edit"
+				? `Edit: ${editPersonaData.name || "Persona"}`
+				: "Create Persona"}
+		</h1>
 		<button
 			type="button"
-			class="btn btn-sm preset-filled-success-500 w-full"
+			class="btn btn-sm shrink-0"
 			class:preset-filled-success-500={hasChanges}
 			class:preset-tonal-success={!hasChanges}
 			onclick={onSave}

@@ -2,6 +2,7 @@
 	import { getContext, onMount } from "svelte"
 	import * as skio from "sveltekit-io"
 	import EditChatForm from "../chatForms/EditChatForm.svelte"
+	import ChatViewPanel from "../chatForms/ChatViewPanel.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { Modal } from "@skeletonlabs/skeleton-svelte"
 	import { goto } from "$app/navigation"
@@ -24,6 +25,8 @@
 	let searchCharacter: SelectCharacter | null = $state(null)
 	let searchPersona: SelectPersona | null = $state(null)
 	let editChatId: number | null = $state(null)
+	let viewingId: number | null = $state(null)
+	let returnToViewId: number | null = $state(null)
 	let chatFormHasChanges = $state(false)
 	let showUnsavedChangesModal = $state(false)
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
@@ -67,17 +70,40 @@
 	function handleEditClick(chatId: number) {
 		showEditChatForm = true
 		editChatId = chatId
+		viewingId = null
 	}
 
-	function handleChatClick(chat: any) {
-		goto(`/chats/${chat.id}`)
-		// Check if mobile menu/sidebar is open and close it
+	function handleViewClick(chatId: number) {
+		viewingId = chatId
+	}
+
+	function handleEditFromView() {
+		returnToViewId = viewingId
+		editChatId = viewingId
+		viewingId = null
+		showEditChatForm = true
+	}
+
+	function handleOpenChat(chatId: number) {
+		goto(`/chats/${chatId}`)
 		if (panelsCtx.isMobileMenuOpen) {
 			panelsCtx.isMobileMenuOpen = false
 		}
 		if (panelsCtx.mobilePanel) {
 			panelsCtx.mobilePanel = null
 		}
+	}
+
+	function handleChatClick(chat: any) {
+		handleViewClick(chat.id)
+	}
+
+	function closeEditForm() {
+		showEditChatForm = false
+		editChatId = null
+		const returnId = returnToViewId
+		returnToViewId = null
+		if (returnId) viewingId = returnId
 	}
 
 	let showDeleteModal = $state(false)
@@ -243,7 +269,17 @@
 			bind:showEditChatForm
 			bind:editChatId
 			bind:hasChanges={chatFormHasChanges}
+			onClose={closeEditForm}
 		/>
+	{:else if viewingId}
+		{#key viewingId}
+			<ChatViewPanel
+				chatId={viewingId}
+				onBack={() => (viewingId = null)}
+				onEdit={handleEditFromView}
+				onOpen={() => handleOpenChat(viewingId!)}
+			/>
+		{/key}
 	{:else}
 		<div class="mb-2 flex gap-2">
 			<button

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from "$app/state"
 	import { goto } from "$app/navigation"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import * as Icons from "@lucide/svelte"
 	import { Modal } from "@skeletonlabs/skeleton-svelte"
 	import ChatContainer from "$lib/client/components/chatMessages/ChatContainer.svelte"
@@ -17,7 +17,7 @@
 
 	let chat: Sockets.Chats.Get.Response["chat"] | undefined = $state()
 	let newMessage = $state("")
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
 	let messagesContainer: HTMLDivElement | null = $state(null)
 	let isSending = $state(false)
@@ -120,8 +120,6 @@
 
 	// Load assistant chat on mount
 	onMount(() => {
-		if (!socket) return
-
 		// Set up listeners first - using V2 events for new assistant system
 		socket.on("chatMessage", handleChatMessage)
 		socket.on("chats:get", handleChatGetResponse)
@@ -141,28 +139,16 @@
 
 		// Cleanup listeners on unmount
 		return () => {
-			;(socket as any).off("chatMessage", handleChatMessage)
-			;(socket as any).off("chats:get", handleChatGetResponse)
-			;(socket as any).off("chats:titleGenerated", handleTitleGenerated)
-			;(socket as any).off(
-				"assistant:completeV2",
-				handleAssistantCompleteV2
-			)
-			;(socket as any).off("assistant:errorV2", handleAssistantErrorV2)
-			;(socket as any).off("assistant:progress", handleAssistantProgress)
-			;(socket as any).off("assistant:unlinkSuccess", handleUnlinkSuccess)
-			;(socket as any).off(
-				"assistant:editDraftSuccess",
-				handleEditDraftSuccess
-			)
-			;(socket as any).off(
-				"assistant:editDraftError",
-				handleEditDraftError
-			)
-			;(socket as any).off(
-				"assistant:metadataUpdated",
-				handleMetadataUpdated
-			)
+			socket.off("chatMessage", handleChatMessage)
+			socket.off("chats:get", handleChatGetResponse)
+			socket.off("chats:titleGenerated", handleTitleGenerated)
+			socket.off("assistant:completeV2", handleAssistantCompleteV2)
+			socket.off("assistant:errorV2", handleAssistantErrorV2)
+			socket.off("assistant:progress", handleAssistantProgress)
+			socket.off("assistant:unlinkSuccess", handleUnlinkSuccess)
+			socket.off("assistant:editDraftSuccess", handleEditDraftSuccess)
+			socket.off("assistant:editDraftError", handleEditDraftError)
+			socket.off("assistant:metadataUpdated", handleMetadataUpdated)
 		}
 	})
 
@@ -173,7 +159,7 @@
 			lastSeenMessageId = null
 			lastSeenMessageContent = ""
 			// Load the chat
-			socket?.emit("chats:get", { id: chatId })
+			socket.emit("chats:get", { id: chatId })
 		}
 	})
 
@@ -684,7 +670,7 @@
 
 	function handleAbortMessage(event: MouseEvent, msg: SelectChatMessage) {
 		if (!socket) return
-		socket.emit("chatMessages:cancel", { messageId: msg.id })
+		socket.emit("chatMessages:cancel", { chatId: msg.chatId })
 	}
 
 	function handleScroll(event: Event) {

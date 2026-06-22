@@ -1223,8 +1223,6 @@ export const narrativeNodes = pgTable("narrative_nodes", {
 	vectorizedAt: timestamp("vectorized_at"),
 	// Character IDs associated with this node (for character-type nodes)
 	characterIds: json("character_ids").notNull().default([]).$type<number[]>(),
-	// Whether awaiting user approval before commit
-	pendingReview: boolean("pending_review").notNull().default(false),
 	createdAt: timestamp("created_at").notNull().defaultNow(),
 	updatedAt: timestamp("updated_at")
 		.notNull()
@@ -1289,8 +1287,6 @@ export const narrativeRelationships = pgTable("narrative_relationships", {
 	embedding: real("embedding").array(),
 	embeddingModel: text("embedding_model"),
 	vectorizedAt: timestamp("vectorized_at"),
-	// Whether awaiting user approval before commit
-	pendingReview: boolean("pending_review").notNull().default(false),
 	createdAt: timestamp("created_at").notNull().defaultNow(),
 	updatedAt: timestamp("updated_at")
 		.notNull()

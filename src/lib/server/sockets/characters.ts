@@ -82,7 +82,7 @@ export const charactersList: Handler<Sockets.Characters.List.Params, Sockets.Cha
 					}
 				}
 			},
-			where: (c, { eq }) => eq(c.userId, 1), // TODO: Replace with actual user id
+			where: (c, { eq }) => eq(c.userId, socket.user!.id),
 			orderBy: (c, { asc }) => asc(c.id)
 		})
 		const res: Sockets.Characters.List.Response = { characterList }
@@ -137,7 +137,7 @@ export const charactersCreate: Handler<Sockets.Characters.Create.Params, Sockets
 
 			const [character] = await db
 				.insert(schema.characters)
-				.values({ ...data, userId: 1 })
+				.values({ ...data, userId: socket.user!.id })
 				.returning()
 
 			// Process tags after character creation
@@ -173,7 +173,7 @@ export const charactersUpdate: Handler<Sockets.Characters.Update.Params, Sockets
 		try {
 			const data = { ...params.character }
 			const id = data.id
-			const userId = 1 // Replace with actual userId
+			const userId = socket.user!.id
 			const tags = (data as any).tags || []
 
 			// Remove fields that shouldn't be in the database update
@@ -222,7 +222,7 @@ export const charactersUpdate: Handler<Sockets.Characters.Update.Params, Sockets
 export const charactersDelete: Handler<Sockets.Characters.Delete.Params, Sockets.Characters.Delete.Response> = {
 	event: "characters:delete",
 	handler: async (socket, params, emitToUser) => {
-		const userId = 1 // Replace with actual userId
+		const userId = socket.user!.id
 
 		// Delete character tags first (cascade should handle this, but being explicit)
 		await db
@@ -263,8 +263,8 @@ export const charactersImportCard: Handler<Sockets.Characters.ImportCard.Params,
 	event: "characters:importCard",
 	handler: async (socket, params, emitToUser) => {
 		try {
-			const userId = 1 // TODO: Get from socket session
-			
+			const userId = socket.user!.id
+
 			// Parse character card using shared utility
 			const { card, avatarBuffer, lorebook } =
 				await parseCharacterCardFromBase64(params.file)
@@ -528,7 +528,7 @@ export const charactersExportCard: Handler<Sockets.Characters.ExportCard.Params,
 	event: "characters:exportCard",
 	handler: async (socket, params, emitToUser) => {
 		try {
-			const userId = 1 // TODO: Get from socket session
+			const userId = socket.user!.id
 			const format = params.format || "json"
 
 			// Fetch the character with all its data

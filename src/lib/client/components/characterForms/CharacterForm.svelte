@@ -649,17 +649,32 @@
 	aria-labelledby="form-title"
 	aria-modal="false"
 >
-	{#if !hideTitle}
-		<div class="mb-4 flex items-center justify-between">
-			<h1 class="text-lg font-bold" id="form-title">
-				{customTitle ||
-					(mode === "edit"
-						? `Edit: ${character?.nickname || character?.name || "Character"}`
-						: "Create Character")}
-			</h1>
+	{#if !hideTitle || !hideActionButtons}
+		<div class="mb-4 flex items-center gap-2" role="group" aria-label="Form actions">
+			{#if !hideActionButtons}
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface shrink-0 p-2"
+					onclick={handleCancel}
+					title="Cancel"
+					aria-label="Cancel and go back"
+				>
+					<Icons.ChevronLeft size={16} aria-hidden="true" />
+				</button>
+			{/if}
+			{#if !hideTitle}
+				<h1 class="flex-1 text-lg font-bold" id="form-title">
+					{customTitle ||
+						(mode === "edit"
+							? `Edit: ${character?.nickname || character?.name || "Character"}`
+							: "Create Character")}
+				</h1>
+			{:else}
+				<span class="flex-1"></span>
+			{/if}
 			{#if mode === "edit" && characterId}
 				<button
-					class="btn btn-sm preset-filled-primary-500"
+					class="btn btn-sm preset-tonal-surface shrink-0"
 					title="Export Character"
 					onclick={handleExportClick}
 					aria-label="Export character"
@@ -668,34 +683,20 @@
 					<Icons.Upload size={16} aria-hidden="true" />
 				</button>
 			{/if}
-		</div>
-	{/if}
-	{#if !hideActionButtons}
-		<div
-			class="mt-4 mb-4 flex gap-2"
-			role="group"
-			aria-label="Form actions"
-		>
-			<button
-				type="button"
-				class="btn btn-sm preset-filled-surface-500 w-full"
-				onclick={handleCancel}
-				aria-describedby="form-title"
-			>
-				Cancel
-			</button>
-			<button
-				type="button"
-				class="btn btn-sm preset-filled-success-500 w-full"
-				class:preset-filled-success-500={hasChanges}
-				class:preset-tonal-success={!hasChanges}
-				onclick={onSave}
-				aria-describedby="form-title"
-				aria-label={`${mode === "edit" ? "Update" : "Create"} character${hasChanges ? " (has unsaved changes)" : ""}`}
-			>
-				<Icons.Save size={16} aria-hidden="true" />
-				{mode === "edit" ? "Update" : "Create"}
-			</button>
+			{#if !hideActionButtons}
+				<button
+					type="button"
+					class="btn btn-sm shrink-0"
+					class:preset-filled-success-500={hasChanges}
+					class:preset-tonal-success={!hasChanges}
+					onclick={onSave}
+					aria-describedby="form-title"
+					aria-label={`${mode === "edit" ? "Update" : "Create"} character${hasChanges ? " (has unsaved changes)" : ""}`}
+				>
+					<Icons.Save size={16} aria-hidden="true" />
+					{mode === "edit" ? "Update" : "Create"}
+				</button>
+			{/if}
 		</div>
 	{/if}
 	<div class="flex flex-col gap-4" role="form" aria-labelledby="form-title">

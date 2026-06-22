@@ -19,11 +19,14 @@
 
 	let nodes = $state<NarrativeNode[]>([])
 	let relationships = $state<NarrativeRelationship[]>([])
+	let ungraphedSceneCount = $state(0)
+	let ungraphedUnsummarizedCount = $state(0)
+	let totalSummarizedCount = $state(0)
 	let isLoading = $state(true)
 
 	// Build modal
 	let showBuildModal = $state(false)
-	let buildMode = $state<"replace" | "merge">("replace")
+	let buildMode = $state<"replace" | "extend">("replace")
 
 	// Selected node / rel for detail panel
 	let selectedNode = $state<NarrativeNode | null>(null)
@@ -37,6 +40,20 @@
 	let editingNode = $state<NarrativeNode | null>(null)
 	let editingRel = $state<NarrativeRelationship | null>(null)
 	let isSaving = $state(false)
+
+	// Delete confirmation
+	let pendingDeleteNodeId = $state<number | null>(null)
+
+	// History entries (for optional temporal anchoring)
+	let historyEntries = $state<SelectHistoryEntry[]>([])
+
+	// Create relationship
+	let connectingFromNode = $state<NarrativeNode | null>(null)
+	let connectToNodeId = $state<number | null>(null)
+	let connectRelType = $state<string>("neutral")
+	let connectRelStatus = $state<string>("active")
+	let connectHistoryEntryId = $state<number | null>(null)
+	let isConnecting = $state(false)
 
 	// Relationship lookup helpers
 	let nodeMap = $derived(new Map(nodes.map((n) => [n.id, n])))
@@ -54,6 +71,9 @@
 			(msg: Sockets.NarrativeGraph.List.Response) => {
 				nodes = msg.nodes
 				relationships = msg.relationships
+				ungraphedSceneCount = msg.ungraphedSceneCount ?? 0
+				ungraphedUnsummarizedCount = msg.ungraphedUnsummarizedCount ?? 0
+				totalSummarizedCount = msg.totalSummarizedCount ?? 0
 				isLoading = false
 			}
 		)
@@ -93,15 +113,33 @@
 				editingRel = null
 			}
 		)
+		socket.on(
+			"narrativeGraph:createRelationship",
+			(msg: Sockets.NarrativeGraph.CreateRelationship.Response) => {
+				relationships = [...relationships, msg.relationship]
+				connectingFromNode = null
+				connectToNodeId = null
+				connectRelType = "neutral"
+				connectRelStatus = "active"
+				connectHistoryEntryId = null
+				isConnecting = false
+			}
+		)
+		socket.on("historyEntries:list", (msg) => {
+			historyEntries = msg.historyEntryList
+		})
+		socket.emit("historyEntries:list", { lorebookId })
 		load()
 	})
 
 	onDestroy(() => {
-		;(socket as any).off("narrativeGraph:list")
-		;(socket as any).off("narrativeGraph:updateNode")
-		;(socket as any).off("narrativeGraph:deleteNode")
-		;(socket as any).off("narrativeGraph:updateRelationship")
-		;(socket as any).off("narrativeGraph:deleteRelationship")
+		socket.off("narrativeGraph:list")
+		socket.off("narrativeGraph:updateNode")
+		socket.off("narrativeGraph:deleteNode")
+		socket.off("narrativeGraph:updateRelationship")
+		socket.off("narrativeGraph:deleteRelationship")
+		socket.off("narrativeGraph:createRelationship")
+		socket.off("historyEntries:list")
 	})
 
 	function saveNode() {
@@ -112,10 +150,16 @@
 		} satisfies Sockets.NarrativeGraph.UpdateNode.Params)
 	}
 
-	function deleteNode(id: number) {
+	function requestDeleteNode(id: number) {
+		pendingDeleteNodeId = id
+	}
+
+	function confirmDeleteNode() {
+		if (pendingDeleteNodeId === null) return
 		socket.emit("narrativeGraph:deleteNode", {
-			id
+			id: pendingDeleteNodeId
 		} satisfies Sockets.NarrativeGraph.DeleteNode.Params)
+		pendingDeleteNodeId = null
 	}
 
 	function saveRel() {
@@ -130,6 +174,35 @@
 		socket.emit("narrativeGraph:deleteRelationship", {
 			id
 		} satisfies Sockets.NarrativeGraph.DeleteRelationship.Params)
+	}
+
+	function startConnect(node: NarrativeNode) {
+		connectingFromNode = node
+		connectToNodeId = null
+		connectRelType = "neutral"
+		connectRelStatus = "active"
+		editingNode = null
+		editingRel = null
+	}
+
+	function submitConnect() {
+		if (!connectingFromNode || !connectToNodeId) return
+		isConnecting = true
+		socket.emit("narrativeGraph:createRelationship", {
+			lorebookId,
+			fromNodeId: connectingFromNode.id,
+			toNodeId: connectToNodeId,
+			relationshipType: connectRelType,
+			status: connectRelStatus,
+			historyEntryId: connectHistoryEntryId ?? undefined
+		} satisfies Sockets.NarrativeGraph.CreateRelationship.Params)
+	}
+
+	function cancelConnect() {
+		connectingFromNode = null
+		connectToNodeId = null
+		connectHistoryEntryId = null
+		isConnecting = false
 	}
 
 	function startEditNode(node: NarrativeNode) {
@@ -149,6 +222,7 @@
 	function cancelEdit() {
 		editingNode = null
 		editingRel = null
+		pendingDeleteNodeId = null
 	}
 
 	function nodeName(id: number): string {
@@ -170,6 +244,14 @@
 		broken: "preset-tonal-error",
 		evolved: "preset-tonal-warning"
 	}
+
+	const RELATIONSHIP_TYPES = [
+		"ally", "enemy", "rival", "mentor", "student", "family",
+		"romantic", "neutral", "complicated", "life_debt", "betrayal",
+		"contract", "unknown"
+	] as const
+
+	const RELATIONSHIP_STATUSES = ["active", "resolved", "broken", "evolved"] as const
 </script>
 
 <div class="flex h-full flex-col gap-3 pt-2">
@@ -189,13 +271,21 @@
 		<button
 			class="btn btn-sm preset-tonal-surface"
 			onclick={() => {
-				buildMode = "merge"
+				buildMode = "extend"
 				showBuildModal = true
 			}}
-			title="Merge new nodes into existing graph"
+			title={ungraphedSceneCount === 0
+				? ungraphedUnsummarizedCount > 0
+					? `${ungraphedUnsummarizedCount} scene${ungraphedUnsummarizedCount === 1 ? "" : "s"} need summaries before they can be graphed`
+					: "Graph is up to date"
+				: `Extend graph with ${ungraphedSceneCount} new scene${ungraphedSceneCount === 1 ? "" : "s"}${ungraphedUnsummarizedCount > 0 ? ` (${ungraphedUnsummarizedCount} more need summaries)` : ""}`}
+			disabled={nodes.length === 0 || ungraphedSceneCount === 0}
 		>
-			<Icons.GitMerge size={14} />
-			Merge
+			<Icons.Layers size={14} />
+			Extend
+			{#if ungraphedSceneCount > 0}
+				<span class="badge-icon preset-filled-primary-500 text-[10px]">{ungraphedSceneCount}</span>
+			{/if}
 		</button>
 		<div class="ml-auto flex gap-1">
 			<button
@@ -273,14 +363,16 @@
 					<div class="flex gap-1">
 						<button
 							class="btn btn-sm preset-tonal-surface"
+							onclick={() => startConnect(selectedNode!)}
+							title="Create relationship from this node"
+						><Icons.GitBranch size={13} /></button>
+						<button
+							class="btn btn-sm preset-tonal-surface"
 							onclick={() => startEditNode(selectedNode!)}
 						><Icons.Pencil size={13} /></button>
 						<button
 							class="btn btn-sm preset-tonal-error"
-							onclick={() => {
-								deleteNode(selectedNode!.id)
-								selectedNode = null
-							}}
+							onclick={() => requestDeleteNode(selectedNode!.id)}
 						><Icons.Trash2 size={13} /></button>
 						<button
 							class="btn btn-sm preset-tonal-surface"
@@ -294,6 +386,79 @@
 				{#if selectedNode.summary}
 					<p class="text-surface-500 text-xs">{selectedNode.summary}</p>
 				{/if}
+			</div>
+		{/if}
+
+		{#if pendingDeleteNodeId !== null}
+			{@const relCount = relationships.filter(r => r.fromNodeId === pendingDeleteNodeId || r.toNodeId === pendingDeleteNodeId).length}
+			{@const nodeName = nodeMap.get(pendingDeleteNodeId)?.name ?? "this node"}
+			<div class="bg-surface-200-800 rounded-lg border border-error-500/40 p-3 text-sm space-y-2">
+				<p class="font-semibold text-error-500">Delete "{nodeName}"?</p>
+				{#if relCount > 0}
+					<p class="text-surface-500 text-xs">This will also permanently delete <strong>{relCount} relationship{relCount === 1 ? "" : "s"}</strong>.</p>
+				{/if}
+				<div class="flex gap-2 justify-end">
+					<button class="btn btn-sm preset-tonal-surface" onclick={() => (pendingDeleteNodeId = null)}>Cancel</button>
+					<button class="btn btn-sm preset-filled-error-500" onclick={() => { confirmDeleteNode(); selectedNode = null }}>
+						<Icons.Trash2 size={13} /> Delete
+					</button>
+				</div>
+			</div>
+		{/if}
+
+		{#if connectingFromNode && connectingFromNode.id === selectedNode?.id}
+			<div class="bg-surface-200-800 rounded-lg p-3 text-sm space-y-2">
+				<p class="font-semibold">Connect: {connectingFromNode.name} →</p>
+				<div class="space-y-1">
+					<p class="text-surface-500 text-xs font-semibold uppercase">Target Node</p>
+					<select class="select text-sm" bind:value={connectToNodeId}>
+						<option value={null} disabled>Select a node…</option>
+						{#each nodes.filter(n => n.id !== connectingFromNode!.id) as n}
+							<option value={n.id}>{n.name}</option>
+						{/each}
+					</select>
+				</div>
+				<div class="grid grid-cols-2 gap-2">
+					<div class="space-y-1">
+						<p class="text-surface-500 text-xs font-semibold uppercase">Type</p>
+						<select class="select text-sm" bind:value={connectRelType}>
+							{#each RELATIONSHIP_TYPES as t}
+								<option value={t}>{t.replace("_", " ")}</option>
+							{/each}
+						</select>
+					</div>
+					<div class="space-y-1">
+						<p class="text-surface-500 text-xs font-semibold uppercase">Status</p>
+						<select class="select text-sm" bind:value={connectRelStatus}>
+							{#each RELATIONSHIP_STATUSES as s}
+								<option value={s}>{s}</option>
+							{/each}
+						</select>
+					</div>
+				</div>
+				{#if historyEntries.length > 0}
+					<div class="space-y-1">
+						<p class="text-surface-500 text-xs font-semibold uppercase">When (optional)</p>
+						<select class="select text-sm" bind:value={connectHistoryEntryId}>
+							<option value={null}>— none —</option>
+							{#each historyEntries as he}
+								<option value={he.id}>
+									Year {he.year}{he.month ? `, Mo. ${he.month}` : ""}{he.day ? `, Day ${he.day}` : ""}
+								</option>
+							{/each}
+						</select>
+					</div>
+				{/if}
+				<div class="flex gap-2 justify-end">
+					<button class="btn btn-sm preset-tonal-surface" onclick={cancelConnect}>Cancel</button>
+					<button
+						class="btn btn-sm preset-filled-primary-500"
+						disabled={!connectToNodeId || isConnecting}
+						onclick={submitConnect}
+					>
+						<Icons.GitBranch size={13} /> Connect
+					</button>
+				</div>
 			</div>
 		{/if}
 
@@ -324,6 +489,19 @@
 					<p class="text-surface-500 text-xs font-semibold uppercase">Summary</p>
 					<textarea class="textarea min-h-12 text-sm" bind:value={editingNode.summary}></textarea>
 				</div>
+				{#if historyEntries.length > 0}
+					<div class="space-y-1">
+						<p class="text-surface-500 text-xs font-semibold uppercase">First appeared (optional)</p>
+						<select class="select text-sm" bind:value={editingNode.historyEntryId}>
+							<option value={null}>— none —</option>
+							{#each historyEntries as he}
+								<option value={he.id}>
+									Year {he.year}{he.month ? `, Mo. ${he.month}` : ""}{he.day ? `, Day ${he.day}` : ""}
+								</option>
+							{/each}
+						</select>
+					</div>
+				{/if}
 				<div class="flex gap-2 justify-end">
 					<button class="btn btn-sm preset-tonal-surface" onclick={cancelEdit}>Cancel</button>
 					<button class="btn btn-sm preset-filled-primary-500" disabled={isSaving} onclick={saveNode}>
@@ -371,12 +549,16 @@
 				<p class="font-semibold">Edit Relationship</p>
 				<div class="space-y-1">
 					<p class="text-surface-500 text-xs font-semibold uppercase">Type</p>
-					<input class="input text-sm" type="text" bind:value={editingRel.relationshipType} />
+					<select class="select text-sm" bind:value={editingRel.relationshipType}>
+						{#each RELATIONSHIP_TYPES as t}
+							<option value={t}>{t.replace("_", " ")}</option>
+						{/each}
+					</select>
 				</div>
 				<div class="space-y-1">
 					<p class="text-surface-500 text-xs font-semibold uppercase">Status</p>
 					<select class="select text-sm" bind:value={editingRel.status}>
-						{#each ["active","resolved","broken","evolved"] as s}
+						{#each RELATIONSHIP_STATUSES as s}
 							<option value={s}>{s}</option>
 						{/each}
 					</select>
@@ -389,6 +571,19 @@
 					<p class="text-surface-500 text-xs font-semibold uppercase">Reason for this state</p>
 					<input class="input text-sm" type="text" bind:value={editingRel.reason} />
 				</div>
+				{#if historyEntries.length > 0}
+					<div class="space-y-1">
+						<p class="text-surface-500 text-xs font-semibold uppercase">When (optional)</p>
+						<select class="select text-sm" bind:value={editingRel.historyEntryId}>
+							<option value={null}>— none —</option>
+							{#each historyEntries as he}
+								<option value={he.id}>
+									Year {he.year}{he.month ? `, Mo. ${he.month}` : ""}{he.day ? `, Day ${he.day}` : ""}
+								</option>
+							{/each}
+						</select>
+					</div>
+				{/if}
 				<div class="flex gap-2 justify-end">
 					<button class="btn btn-sm preset-tonal-surface" onclick={cancelEdit}>Cancel</button>
 					<button class="btn btn-sm preset-filled-primary-500" disabled={isSaving} onclick={saveRel}>
@@ -432,6 +627,16 @@
 									</select>
 								</div>
 								<textarea class="textarea min-h-12 text-xs" placeholder="Summary…" bind:value={editingNode.summary}></textarea>
+								{#if historyEntries.length > 0}
+									<select class="select text-xs" bind:value={editingNode.historyEntryId}>
+										<option value={null}>— no history entry —</option>
+										{#each historyEntries as he}
+											<option value={he.id}>
+												Year {he.year}{he.month ? `, Mo. ${he.month}` : ""}{he.day ? `, Day ${he.day}` : ""}
+											</option>
+										{/each}
+									</select>
+								{/if}
 							</div>
 						{:else}
 							<div class="flex items-center gap-2">
@@ -441,7 +646,7 @@
 								<button class="btn btn-sm preset-tonal-surface" onclick={() => startEditNode(node)}>
 									<Icons.Pencil size={13} />
 								</button>
-								<button class="btn btn-sm preset-tonal-error" onclick={() => deleteNode(node.id)}>
+								<button class="btn btn-sm preset-tonal-error" onclick={() => requestDeleteNode(node.id)}>
 									<Icons.Trash2 size={13} />
 								</button>
 							</div>
@@ -463,7 +668,11 @@
 						{#if editingRel?.id === rel.id}
 							<div class="space-y-2">
 								<div class="flex items-center gap-2">
-									<input class="input flex-1 text-sm" type="text" bind:value={editingRel.relationshipType} placeholder="Type…" />
+									<select class="select flex-1 text-sm" bind:value={editingRel.relationshipType}>
+										{#each RELATIONSHIP_TYPES as t}
+											<option value={t}>{t.replace("_", " ")}</option>
+										{/each}
+									</select>
 									<button class="btn btn-sm preset-tonal-surface" onclick={cancelEdit}>
 										<Icons.X size={13} />
 									</button>
@@ -474,13 +683,23 @@
 								<div class="flex items-center gap-2">
 									<span class="text-surface-500 text-xs">{nodeName(rel.fromNodeId)} → {nodeName(rel.toNodeId)}</span>
 									<select class="select ml-auto text-xs" bind:value={editingRel.status}>
-										{#each ["active","resolved","broken","evolved"] as s}
+										{#each RELATIONSHIP_STATUSES as s}
 											<option value={s}>{s}</option>
 										{/each}
 									</select>
 								</div>
 								<textarea class="textarea min-h-10 text-xs" placeholder="Description…" bind:value={editingRel.description}></textarea>
 								<input class="input text-xs" type="text" placeholder="Reason for this state…" bind:value={editingRel.reason} />
+								{#if historyEntries.length > 0}
+									<select class="select text-xs" bind:value={editingRel.historyEntryId}>
+										<option value={null}>— none —</option>
+										{#each historyEntries as he}
+											<option value={he.id}>
+												Year {he.year}{he.month ? `, Mo. ${he.month}` : ""}{he.day ? `, Day ${he.day}` : ""}
+											</option>
+										{/each}
+									</select>
+								{/if}
 							</div>
 						{:else}
 							<div class="flex items-center gap-2">
@@ -517,5 +736,7 @@
 	onOpenChange={(e) => (showBuildModal = e.open)}
 	{lorebookId}
 	mode={buildMode}
+	readySceneCount={buildMode === "extend" ? ungraphedSceneCount : totalSummarizedCount}
+	skippedSceneCount={buildMode === "extend" ? ungraphedUnsummarizedCount : (totalSummarizedCount === 0 ? 0 : 0)}
 	onApplied={load}
 />

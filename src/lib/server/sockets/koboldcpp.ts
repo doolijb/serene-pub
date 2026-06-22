@@ -29,6 +29,7 @@ export const koboldCppSetBaseUrl: Handler<
 > = {
 	event: "koboldcpp:setBaseUrl",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const url = new URL(params.baseUrl)
 		if (!["http:", "https:"].includes(url.protocol)) {
 			emitToUser("koboldcpp:setBaseUrl:error", {
@@ -177,6 +178,7 @@ export const koboldCppLoadModelHandler: Handler<
 > = {
 	event: "koboldcpp:loadModel",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const { koboldCppManagerBaseUrl: baseUrl } =
 			(await db.query.systemSettings.findFirst())!
 
@@ -206,6 +208,7 @@ export const koboldCppConnectModelHandler: Handler<
 > = {
 	event: "koboldcpp:connectModel",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const { koboldCppManagerBaseUrl: baseUrl } =
 			(await db.query.systemSettings.findFirst())!
 

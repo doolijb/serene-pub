@@ -377,7 +377,7 @@ export async function chat(
 	message: Sockets.Chat.Call,
 	emitToUser: (event: string, data: any) => void
 ) {
-	const userId = 1
+	const userId = socket.user!.id
 	const limit = message.limit || 25
 	const offset = message.offset || 0
 
@@ -1233,7 +1233,7 @@ export const chatMessagesUpdateHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		try {
 			const { id, content, isHidden } = params
-			const userId = 1
+			const userId = socket.user!.id
 
 			// Get the existing message to check metadata
 			const [existingMessage] = await db
@@ -1893,7 +1893,7 @@ export const chatsGetResponseOrderHandler: Handler<
 	event: "chats:getResponseOrder",
 	handler: async (socket, params, emitToUser) => {
 		try {
-			const userId = 1
+			const userId = socket.user!.id
 			const chat = await getPromptChatFromDb(params.chatId, userId)
 
 			if (!chat) {
@@ -2515,15 +2515,7 @@ export const toggleChatCharacterActiveHandler: Handler<
 	event: "chats:toggleChatCharacterActive",
 	handler: async (socket, params, emitToUser) => {
 		try {
-			const userId = 1
-			if (!userId) {
-				return {
-					chatId: params.chatId,
-					characterId: params.characterId,
-					isActive: false,
-					error: "User not authenticated"
-				}
-			}
+			const userId = socket.user!.id
 
 			const chat = await db.query.chats.findFirst({
 				where: (c, { eq, and }) =>
@@ -2602,15 +2594,7 @@ export const updateChatCharacterVisibilityHandler: Handler<
 	event: "chats:updateChatCharacterVisibility",
 	handler: async (socket, params, emitToUser) => {
 		try {
-			const userId = 1
-			if (!userId) {
-				return {
-					chatId: params.chatId,
-					characterId: params.characterId,
-					visibility: params.visibility,
-					error: "User not authenticated"
-				}
-			}
+			const userId = socket.user!.id
 
 			const chat = await db.query.chats.findFirst({
 				where: (c, { eq, and }) =>

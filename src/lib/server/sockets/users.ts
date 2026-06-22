@@ -448,6 +448,7 @@ export const usersList: Handler<
 > = {
 	event: "users:list",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const currentUserId = socket.user!.id
 
 		// Get current user to check admin status

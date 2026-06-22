@@ -224,21 +224,19 @@
 </script>
 
 <div class="flex h-full flex-col p-4">
-	<h1 class="mb-4 text-lg font-bold">
-		{isCreating
-			? "Create User"
-			: `Edit: ${user?.displayName || user?.username || "User"}`}
-	</h1>
-
-	<div class="mb-4 flex gap-2">
+	<div class="mb-4 flex items-center gap-2">
 		<button
-			class="btn btn-sm preset-filled-surface-500 w-full"
+			class="btn btn-sm preset-tonal-surface shrink-0 p-2"
 			onclick={handleCancel}
+			title="Cancel"
 		>
-			Cancel
+			<Icons.ChevronLeft size={16} />
 		</button>
+		<h1 class="flex-1 truncate font-semibold">
+			{isCreating ? "New User" : (user?.displayName || user?.username || "Edit User")}
+		</h1>
 		<button
-			class="btn btn-sm preset-filled-primary-500 w-full"
+			class="btn btn-sm preset-filled-primary-500 shrink-0"
 			onclick={saveUser}
 		>
 			<Icons.Save size={16} />

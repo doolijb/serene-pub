@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Modal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { onDestroy, onMount } from "svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
@@ -9,7 +9,11 @@
 		open: boolean
 		onOpenChange: (e: { open: boolean }) => void
 		lorebookId: number
-		mode?: "replace" | "merge"
+		mode?: "replace" | "extend"
+		/** Scenes that will be processed in this build */
+		readySceneCount?: number
+		/** Scenes that will be skipped (no summary yet) */
+		skippedSceneCount?: number
 		onApplied?: () => void
 	}
 
@@ -18,13 +22,15 @@
 		onOpenChange,
 		lorebookId,
 		mode = "replace",
+		readySceneCount,
+		skippedSceneCount,
 		onApplied
 	}: Props = $props()
 
-	const socket = skio.get()!
+	const socket = useTypedSocket()
 
-	type Step = "building" | "review" | "applying" | "error"
-	let step = $state<Step>("building")
+	type Step = "preflight" | "building" | "review" | "applying" | "error"
+	let step = $state<Step>("preflight")
 
 	// Build progress
 	let progressPhase = $state<Sockets.NarrativeGraph.Build.Progress["phase"]>("loading")
@@ -46,6 +52,7 @@
 	let proposalNodes = $state<EditableNode[]>([])
 	let proposalRels = $state<EditableRel[]>([])
 	let sceneLabels = $state<string[]>([])
+	let seedTempIdMap = $state<Record<string, number>>({})
 	let isApplying = $state(false)
 
 	// Expand state for review cards
@@ -65,7 +72,7 @@
 
 	$effect(() => {
 		if (open) {
-			step = "building"
+			step = "preflight"
 			progressPhase = "loading"
 			progressSceneIndex = 0
 			progressTotalScenes = 0
@@ -76,16 +83,17 @@
 			proposalNodes = []
 			proposalRels = []
 			sceneLabels = []
+			seedTempIdMap = {}
 			isApplying = false
 			expandedNodeIdx = null
 			expandedRelIdx = null
-			triggerBuild()
 		}
 	})
 
 	function triggerBuild() {
 		socket.emit("narrativeGraph:build", {
-			lorebookId
+			lorebookId,
+			mode
 		} satisfies Sockets.NarrativeGraph.Build.Params)
 	}
 
@@ -102,6 +110,7 @@
 		proposalNodes = data.proposal.nodes.map((n) => ({ ...n }))
 		proposalRels = data.proposal.relationships.map((r) => ({ ...r }))
 		sceneLabels = data.sceneLabels
+		seedTempIdMap = data.seedTempIdMap ?? {}
 		step = "review"
 	}
 
@@ -118,9 +127,9 @@
 	})
 
 	onDestroy(() => {
-		;(socket as any).off("narrativeGraph:build:progress")
-		;(socket as any).off("narrativeGraph:build:complete")
-		;(socket as any).off("narrativeGraph:build:error")
+		socket.off("narrativeGraph:build:progress")
+		socket.off("narrativeGraph:build:complete")
+		socket.off("narrativeGraph:build:error")
 	})
 
 	function nodeLabel(tempId: string): string {
@@ -147,13 +156,14 @@
 			{
 				lorebookId,
 				proposal: filteredProposal,
-				mode
+				mode,
+				seedTempIdMap: mode === "extend" ? seedTempIdMap : undefined
 			} satisfies Sockets.NarrativeGraph.ApplyProposal.Params
 		)
 
 		// Listen for confirmation
 		const handleApplied = () => {
-			;(socket as any).off("narrativeGraph:applyProposal", handleApplied)
+			socket.off("narrativeGraph:applyProposal", handleApplied)
 			toaster.success({
 				title: "Graph applied",
 				description: `${activeNodes.length} nodes and ${activeRels.length} relationships saved.`
@@ -163,6 +173,11 @@
 		}
 		socket.on("narrativeGraph:applyProposal", handleApplied)
 	}
+
+	const NODE_TYPES = ["character", "location", "faction", "item", "concept", "event"] as const
+	const NODE_STATES = ["active", "resolved", "defunct", "retconned"] as const
+	const RELATIONSHIP_TYPES = ["ally", "enemy", "rival", "mentor", "student", "family", "romantic", "neutral", "complicated", "life_debt", "betrayal", "contract", "unknown"] as const
+	const RELATIONSHIP_STATUSES = ["active", "resolved", "broken", "evolved"] as const
 
 	const REL_STATUS_COLOR: Record<string, string> = {
 		active: "text-success-500",
@@ -179,12 +194,58 @@
 	backdropClasses="backdrop-blur-sm"
 >
 	{#snippet content()}
-		<!-- ── BUILDING ─────────────────────────────────────────────────── -->
-		{#if step === "building"}
+		<!-- ── PREFLIGHT ────────────────────────────────────────────────── -->
+		{#if step === "preflight"}
 			<header class="mb-4">
-				<h2 class="h3">Building Narrative Graph…</h2>
+				<h2 class="h3">{mode === "extend" ? "Extend Narrative Graph" : "Build Narrative Graph"}</h2>
 				<p class="text-surface-500 mt-1 text-sm">
-					Analyzing scenes to extract nodes and relationships.
+					{mode === "extend"
+						? "The LLM will process new scenes and add to your existing graph."
+						: "The LLM will process all summarised scenes and build a fresh graph."}
+				</p>
+			</header>
+
+			<div class="space-y-2">
+				{#if (readySceneCount ?? 0) > 0}
+					<div class="flex items-center gap-3 rounded-lg border border-success-500/30 bg-success-500/10 p-3 text-sm">
+						<Icons.CheckCircle size={16} class="text-success-500 shrink-0" />
+						<span><strong>{readySceneCount}</strong> scene{(readySceneCount ?? 0) === 1 ? "" : "s"} ready to process</span>
+					</div>
+				{:else}
+					<div class="flex items-center gap-3 rounded-lg border border-warning-500/30 bg-warning-500/10 p-3 text-sm">
+						<Icons.AlertTriangle size={16} class="text-warning-500 shrink-0" />
+						<span>No scenes are ready to process. Generate scene summaries first.</span>
+					</div>
+				{/if}
+				{#if (skippedSceneCount ?? 0) > 0}
+					<div class="flex items-center gap-3 rounded-lg border border-surface-300-700 bg-surface-200-800 p-3 text-sm">
+						<Icons.SkipForward size={16} class="text-surface-400 shrink-0" />
+						<span class="text-surface-500"><strong>{skippedSceneCount}</strong> scene{(skippedSceneCount ?? 0) === 1 ? "" : "s"} will be skipped — no summary yet</span>
+					</div>
+				{/if}
+			</div>
+
+			<footer class="mt-6 flex gap-3">
+				<button class="btn preset-tonal-surface" onclick={() => onOpenChange({ open: false })}>
+					Cancel
+				</button>
+				<button
+					class="btn preset-filled-primary-500 ml-auto"
+					disabled={(readySceneCount ?? 0) === 0}
+					onclick={() => { step = "building"; triggerBuild() }}
+				>
+					<Icons.Play size={16} /> Proceed
+				</button>
+			</footer>
+
+		<!-- ── BUILDING ─────────────────────────────────────────────────── -->
+		{:else if step === "building"}
+			<header class="mb-4">
+				<h2 class="h3">{mode === "extend" ? "Extending Narrative Graph…" : "Building Narrative Graph…"}</h2>
+				<p class="text-surface-500 mt-1 text-sm">
+					{mode === "extend"
+						? "Analyzing scenes for new entities and relationships to add to the existing graph."
+						: "Analyzing scenes to extract nodes and relationships."}
 				</p>
 			</header>
 
@@ -231,7 +292,7 @@
 				</button>
 			</footer>
 
-		<!-- ── ERROR ──────────────────────────────────────────────────────── -->
+		<!-- ── ERROR ─────────────────────────────────────────────────────── -->
 		{:else if step === "error"}
 			<header class="mb-4">
 				<h2 class="h3 text-error-500">Graph Build Failed</h2>
@@ -298,7 +359,7 @@
 						{activeNodes.length} nodes · {activeRels.length} relationships — remove or edit before applying.
 					</p>
 				</div>
-				<span class="badge preset-tonal-primary text-xs">{mode === "replace" ? "Replace All" : "Merge"}</span>
+				<span class="badge preset-tonal-primary text-xs">{mode === "replace" ? "Replace All" : "Extend"}</span>
 			</header>
 
 			<!-- Nodes -->
@@ -351,6 +412,24 @@
 										type="text"
 										bind:value={proposalNodes[i].name}
 									/>
+								</div>
+								<div class="grid grid-cols-2 gap-2">
+									<div class="space-y-1">
+										<p class="text-surface-500 text-xs font-semibold uppercase">Type</p>
+										<select class="select text-sm" bind:value={proposalNodes[i].nodeType}>
+											{#each NODE_TYPES as t}
+												<option value={t}>{t}</option>
+											{/each}
+										</select>
+									</div>
+									<div class="space-y-1">
+										<p class="text-surface-500 text-xs font-semibold uppercase">State</p>
+										<select class="select text-sm" bind:value={proposalNodes[i].nodeState}>
+											{#each NODE_STATES as s}
+												<option value={s}>{s}</option>
+											{/each}
+										</select>
+									</div>
 								</div>
 								<div class="space-y-1">
 									<p class="text-surface-500 text-xs font-semibold uppercase">Summary</p>
@@ -416,13 +495,23 @@
 						</div>
 						{#if expandedRelIdx === i && !rel._deleted}
 							<div class="border-surface-300-700 border-t px-3 py-2 space-y-2">
-								<div class="space-y-1">
-									<p class="text-surface-500 text-xs font-semibold uppercase">Type</p>
-									<input
-										class="input text-sm"
-										type="text"
-										bind:value={proposalRels[i].relationshipType}
-									/>
+								<div class="grid grid-cols-2 gap-2">
+									<div class="space-y-1">
+										<p class="text-surface-500 text-xs font-semibold uppercase">Type</p>
+										<select class="select text-sm" bind:value={proposalRels[i].relationshipType}>
+											{#each RELATIONSHIP_TYPES as t}
+												<option value={t}>{t.replace("_", " ")}</option>
+											{/each}
+										</select>
+									</div>
+									<div class="space-y-1">
+										<p class="text-surface-500 text-xs font-semibold uppercase">Status</p>
+										<select class="select text-sm" bind:value={proposalRels[i].status}>
+											{#each RELATIONSHIP_STATUSES as s}
+												<option value={s}>{s}</option>
+											{/each}
+										</select>
+									</div>
 								</div>
 								<div class="space-y-1">
 									<p class="text-surface-500 text-xs font-semibold uppercase">Description</p>
@@ -431,16 +520,15 @@
 										bind:value={proposalRels[i].description}
 									></textarea>
 								</div>
-								{#if proposalRels[i].reason != null}
-									<div class="space-y-1">
-										<p class="text-surface-500 text-xs font-semibold uppercase">Reason for change</p>
-										<input
-											class="input text-sm"
-											type="text"
-											bind:value={proposalRels[i].reason}
-										/>
-									</div>
-								{/if}
+								<div class="space-y-1">
+									<p class="text-surface-500 text-xs font-semibold uppercase">Reason for change</p>
+									<input
+										class="input text-sm"
+										type="text"
+										placeholder="Optional"
+										bind:value={proposalRels[i].reason}
+									/>
+								</div>
 							</div>
 						{/if}
 					</div>
@@ -453,14 +541,7 @@
 				</button>
 				<button
 					class="btn preset-tonal-warning"
-					onclick={() => {
-						step = "building"
-						progressPhase = "loading"
-						progressSceneIndex = 0
-						progressTotalScenes = 0
-						progressPartial = undefined
-						triggerBuild()
-					}}
+					onclick={() => { step = "preflight" }}
 				>
 					<Icons.RefreshCw size={16} /> Rebuild
 				</button>
@@ -476,7 +557,7 @@
 		<!-- ── APPLYING ───────────────────────────────────────────────────── -->
 		{:else if step === "applying"}
 			<header class="mb-4">
-				<h2 class="h3">Saving Graph…</h2>
+				<h2 class="h3">{mode === "extend" ? "Extending Graph…" : "Saving Graph…"}</h2>
 			</header>
 			<div class="flex items-center justify-center py-8">
 				<div class="bg-primary-500 h-3 w-3 animate-pulse rounded-full"></div>

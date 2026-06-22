@@ -1,10 +1,11 @@
 <script lang="ts">
-	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { getContext, onDestroy, onMount } from "svelte"
 	import { Modal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import UserForm from "../userForms/UserForm.svelte"
+	import UserViewPanel from "../userForms/UserViewPanel.svelte"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -13,45 +14,45 @@
 	let { onclose = $bindable() }: Props = $props()
 
 	const socket = useTypedSocket()
-	const panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
-	const systemSettingsCtx: SystemSettingsCtx = $state(
-		getContext("systemSettingsCtx")
-	)
 	const userCtx: { user: SelectUser } = $state(getContext("userCtx"))
 
 	let userList: SelectUser[] = $state([])
 	let search = $state("")
+	let viewingUser: SelectUser | undefined = $state()
 	let selectedUser: SelectUser | undefined = $state()
+	let returnToViewUser: SelectUser | undefined = $state()
 	let isCreating = $state(false)
 	let isEditing = $state(false)
 	let showDeleteModal = $state(false)
 	let userToDelete: SelectUser | undefined = $state(undefined)
+	let isMounted = $state(false)
+	let isLoading = $state(true)
 
-	// Filtered list
-	let filteredUsers: SelectUser[] = $derived.by(() => {
-		let list = [...userList]
-		if (!search) return list
-
-		const searchLower = search.toLowerCase()
-		return list.filter((user) => {
-			return (
-				user.username.toLowerCase().includes(searchLower) ||
-				(user.displayName?.toLowerCase().includes(searchLower) ?? false)
-			)
-		})
-	})
-
-	// Check if current user is admin
 	let isCurrentUserAdmin = $derived(userCtx.user?.isAdmin ?? false)
 
+	let filteredUsers: SelectUser[] = $derived.by(() => {
+		if (!search) return userList
+		const lower = search.toLowerCase()
+		return userList.filter(
+			(u) =>
+				u.username.toLowerCase().includes(lower) ||
+				(u.displayName?.toLowerCase().includes(lower) ?? false)
+		)
+	})
+
 	function resetForm() {
-		selectedUser = undefined
 		isCreating = false
 		isEditing = false
+		selectedUser = undefined
+		const returnId = returnToViewUser
+		returnToViewUser = undefined
+		if (returnId) viewingUser = returnId
 	}
 
 	function startCreate() {
-		resetForm()
+		viewingUser = undefined
+		selectedUser = undefined
+		returnToViewUser = undefined
 		isCreating = true
 	}
 
@@ -60,12 +61,15 @@
 		isEditing = true
 	}
 
-	function cancelForm() {
-		resetForm()
+	function handleViewClick(user: SelectUser) {
+		viewingUser = user
 	}
 
-	function handleFormSave(user: SelectUser) {
-		resetForm()
+	function handleEditFromView() {
+		returnToViewUser = viewingUser
+		selectedUser = viewingUser
+		viewingUser = undefined
+		isEditing = true
 	}
 
 	function confirmDelete(user: SelectUser) {
@@ -85,18 +89,18 @@
 		socket.emit("users:list", { search: search || undefined })
 	}
 
-	// Load users on mount and when search changes
+	// Re-fetch when search changes (only after mount)
 	$effect(() => {
+		if (!isMounted) return
+		void search
 		loadUsers()
 	})
 
 	onMount(() => {
-		// Load initial user list
-		loadUsers()
-
-		// Socket listeners
+		// Register listeners BEFORE emitting
 		socket.on("users:list", (response) => {
 			userList = response.users
+			isLoading = false
 		})
 
 		socket.on("users:create", (response) => {
@@ -109,9 +113,12 @@
 		})
 
 		socket.on("users:update", (response) => {
-			userList = userList.map((user) =>
-				user.id === response.user.id ? response.user : user
+			userList = userList.map((u) =>
+				u.id === response.user.id ? response.user : u
 			)
+			if (viewingUser?.id === response.user.id) {
+				viewingUser = response.user
+			}
 			resetForm()
 			toaster.success({
 				title: "User Updated",
@@ -119,17 +126,19 @@
 			})
 		})
 
-		socket.on("users:delete", (response) => {
+		socket.on("users:delete", (_response) => {
 			if (userToDelete) {
-				userList = userList.filter(
-					(user) => user.id !== userToDelete!.id
-				)
+				userList = userList.filter((u) => u.id !== userToDelete!.id)
+				if (viewingUser?.id === userToDelete.id) viewingUser = undefined
 				toaster.success({
 					title: "User Deleted",
 					description: `User has been deleted successfully.`
 				})
 			}
 		})
+
+		isMounted = true
+		loadUsers()
 	})
 
 	onDestroy(() => {
@@ -140,23 +149,30 @@
 	})
 </script>
 
-<div class="flex h-full flex-col">
-	{#if (isCreating || isEditing) && isCurrentUserAdmin}
-		<!-- Form View -->
+<div class="flex h-full flex-col p-4">
+	{#if isCreating || isEditing}
 		<UserForm
 			user={selectedUser}
-			onSave={handleFormSave}
-			onCancel={cancelForm}
+			onSave={resetForm}
+			onCancel={resetForm}
 		/>
+	{:else if viewingUser}
+		{#key viewingUser.id}
+			<UserViewPanel
+				user={viewingUser}
+				{isCurrentUserAdmin}
+				onBack={() => (viewingUser = undefined)}
+				onEdit={handleEditFromView}
+			/>
+		{/key}
 	{:else}
-		<!-- List View -->
 		<!-- Header -->
-		<div class="flex p-4 pb-2">
+		<div class="mb-2 flex gap-2">
 			{#if isCurrentUserAdmin}
 				<button
-					class="btn btn-sm preset-filled-primary-500 flex items-center gap-1"
+					class="btn btn-sm preset-filled-primary-500"
 					onclick={startCreate}
-					disabled={isCreating || isEditing}
+					title="Create new user"
 				>
 					<Icons.Plus size={16} />
 				</button>
@@ -164,71 +180,80 @@
 		</div>
 
 		<!-- Search -->
-		<div class="px-4 pb-4">
-			<div class="relative">
-				<Icons.Search
-					size={16}
-					class="text-surface-500 absolute top-1/2 left-3 -translate-y-1/2 transform"
-				/>
-				<input
-					type="text"
-					bind:value={search}
-					placeholder="Search users..."
-					class="input w-full pl-10"
-				/>
-			</div>
+		<div class="relative mb-4">
+			<Icons.Search
+				size={16}
+				class="text-surface-500 absolute top-1/2 left-3 -translate-y-1/2"
+			/>
+			<input
+				type="text"
+				bind:value={search}
+				placeholder="Search users..."
+				class="input w-full pl-10"
+			/>
 		</div>
 
 		<!-- User List -->
-		<div class="flex-1 overflow-y-auto px-4">
-			<div class="space-y-2">
-				{#each filteredUsers as user}
-					<div
-						class="bg-surface-100-900 flex items-center justify-between rounded-lg p-3"
-					>
-						<div class="flex-1">
-							<div class="flex items-center gap-2">
-								<span class="font-medium">
+		<div class="flex-1 overflow-y-auto">
+			{#if isLoading}
+				<div class="flex items-center justify-center py-8">
+					<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+				</div>
+			{:else if filteredUsers.length === 0}
+				<div class="text-surface-500 py-8 text-center text-sm">
+					{search ? `No users matching "${search}".` : "No users found."}
+				</div>
+			{:else}
+				<div class="space-y-2">
+					{#each filteredUsers as user}
+						<button
+							class="bg-surface-100-900 hover:bg-surface-200-800 flex w-full items-center justify-between rounded-lg p-3 text-left transition-colors"
+							onclick={() => handleViewClick(user)}
+						>
+							<div class="flex min-w-0 flex-1 items-center gap-2">
+								<span class="truncate font-medium">
 									{user.displayName || user.username}
 								</span>
 								{#if user.displayName}
-									<span class="text-surface-600-400 text-xs">
+									<span class="text-surface-500 shrink-0 text-xs">
 										@{user.username}
 									</span>
 								{/if}
 								{#if user.isAdmin}
-									<span
-										class="bg-primary-500 rounded px-1.5 py-0.5 text-xs text-white"
-									>
+									<span class="preset-filled-primary-500 shrink-0 rounded px-1.5 py-0.5 text-xs">
 										Admin
 									</span>
 								{/if}
 							</div>
-						</div>
 
-						{#if isCurrentUserAdmin && user.id !== userCtx.user.id}
-							<div class="flex gap-1">
-								<button
-									class="btn btn-sm btn-ghost p-1"
-									onclick={() => startEdit(user)}
-									disabled={isCreating || isEditing}
-									title="Edit user"
-								>
-									<Icons.Edit size={14} />
-								</button>
-								<button
-									class="btn btn-sm btn-ghost text-error-500 hover:text-error-600 hover:bg-error-500/10 p-1"
-									onclick={() => confirmDelete(user)}
-									disabled={isCreating || isEditing}
-									title="Delete user"
-								>
-									<Icons.Trash2 size={14} />
-								</button>
-							</div>
-						{/if}
-					</div>
-				{/each}
-			</div>
+							{#if isCurrentUserAdmin && user.id !== userCtx.user?.id}
+								<div class="ml-2 flex shrink-0 gap-1" role="group">
+									<span
+										class="btn btn-sm preset-tonal-surface p-2"
+										onclick={(e) => { e.stopPropagation(); startEdit(user) }}
+										title="Edit user"
+										role="button"
+										tabindex="0"
+										onkeydown={(e) => e.key === 'Enter' && startEdit(user)}
+									>
+										<Icons.Pencil size={14} />
+									</span>
+									<span
+										class="btn btn-sm preset-tonal-error p-2"
+										onclick={(e) => { e.stopPropagation(); confirmDelete(user) }}
+										title="Delete user"
+										role="button"
+										tabindex="0"
+										onkeydown={(e) => e.key === 'Enter' && confirmDelete(user)}
+									>
+										<Icons.Trash2 size={14} />
+									</span>
+								</div>
+							{/if}
+						</button>
+					{/each}
+				</div>
+			{/if}
 		</div>
 	{/if}
 </div>
@@ -236,34 +261,30 @@
 <!-- Delete Confirmation Modal -->
 <Modal
 	open={showDeleteModal}
-	onOpenChange={(open) => {
-		if (!open) {
+	onOpenChange={(e) => {
+		if (!e.open) {
 			showDeleteModal = false
 			userToDelete = undefined
 		}
 	}}
+	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm border border-surface-300-700"
+	backdropClasses="backdrop-blur-sm"
 >
 	{#snippet content()}
 		<div class="p-6">
 			<h3 class="mb-4 text-lg font-semibold">Delete User</h3>
-			<p class="text-surface-600-400 mb-6">
-				Are you sure you want to delete the user "{userToDelete?.displayName ||
+			<p class="text-surface-500 mb-6">
+				Are you sure you want to delete "{userToDelete?.displayName ||
 					userToDelete?.username}"? This action cannot be undone.
 			</p>
 			<div class="flex justify-end gap-2">
 				<button
 					class="btn btn-sm preset-filled-surface-500"
-					onclick={() => {
-						showDeleteModal = false
-						userToDelete = undefined
-					}}
+					onclick={() => { showDeleteModal = false; userToDelete = undefined }}
 				>
 					Cancel
 				</button>
-				<button
-					class="btn btn-sm preset-filled-error-500"
-					onclick={deleteUser}
-				>
+				<button class="btn btn-sm preset-filled-error-500" onclick={deleteUser}>
 					Delete
 				</button>
 			</div>

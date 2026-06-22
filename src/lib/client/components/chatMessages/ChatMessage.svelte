@@ -269,6 +269,7 @@
 										{onAbortMessage}
 										{onBranchMessage}
 										{onStartSummarization}
+										onclose={() => (openMobileMsgControls = undefined)}
 									/>
 								{/if}
 							</article>

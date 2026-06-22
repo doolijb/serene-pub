@@ -314,16 +314,17 @@
 		<div
 			class="animate-fade-in border-surface-500/25 min-h-full rounded-lg border p-2 shadow-lg"
 		>
-			<button
-				type="button"
-				class="btn preset-tonal-primary mb-4"
-				onclick={handleBackToSidebar}
-			>
-				<Icons.ArrowLeft /> Back
-			</button>
-			<h2 class="mb-4 text-lg font-bold">
-				Enable/Disable Weight Options
-			</h2>
+			<div class="mb-4 flex items-center gap-2">
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface p-2"
+					onclick={handleBackToSidebar}
+					title="Back"
+				>
+					<Icons.ChevronLeft size={16} />
+				</button>
+				<h2 class="flex-1 truncate font-semibold">Enable/Disable Weight Options</h2>
+			</div>
 			<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 				{#each Object.entries(fieldMeta) as [key, meta]}
 					{#if meta.type === "number" || meta.type === "boolean"}

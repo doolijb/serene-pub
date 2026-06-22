@@ -37,6 +37,7 @@ export const systemSettingsGet: Handler<Sockets.SystemSettings.Get.Params, Socke
 export const systemSettingsUpdateOllamaManagerEnabled: Handler<Sockets.SystemSettings.UpdateOllamaManagerEnabled.Params, Sockets.SystemSettings.UpdateOllamaManagerEnabled.Response> = {
 	event: "systemSettings:updateOllamaManagerEnabled",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			await db
 				.update(schema.systemSettings)
@@ -65,6 +66,7 @@ export const systemSettingsUpdateOllamaManagerEnabled: Handler<Sockets.SystemSet
 export const systemSettingsUpdateShowAllCharacterFields: Handler<Sockets.SystemSettings.UpdateShowAllCharacterFields.Params, Sockets.SystemSettings.UpdateShowAllCharacterFields.Response> = {
 	event: "systemSettings:updateShowAllCharacterFields",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			await db
 				.update(schema.systemSettings)
@@ -93,6 +95,7 @@ export const systemSettingsUpdateShowAllCharacterFields: Handler<Sockets.SystemS
 export const systemSettingsUpdateEasyCharacterCreation: Handler<Sockets.SystemSettings.UpdateEasyCharacterCreation.Params, Sockets.SystemSettings.UpdateEasyCharacterCreation.Response> = {
 	event: "systemSettings:updateEasyCharacterCreation",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			await db
 				.update(schema.systemSettings)
@@ -148,6 +151,7 @@ export async function updateShowHomePageBanner(
 export const systemSettingsUpdateEasyPersonaCreation: Handler<Sockets.SystemSettings.UpdateEasyPersonaCreation.Params, Sockets.SystemSettings.UpdateEasyPersonaCreation.Response> = {
 	event: "systemSettings:updateEasyPersonaCreation",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			await db
 				.update(schema.systemSettings)
@@ -179,6 +183,7 @@ export const systemSettingsUpdateKoboldCppManagerEnabled: Handler<
 > = {
 	event: "systemSettings:updateKoboldCppManagerEnabled",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			await db
 				.update(schema.systemSettings)
@@ -206,6 +211,7 @@ export const systemSettingsUpdateSummarizationEnabled: Handler<
 > = {
 	event: "systemSettings:updateSummarizationEnabled",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			await db
 				.update(schema.systemSettings)

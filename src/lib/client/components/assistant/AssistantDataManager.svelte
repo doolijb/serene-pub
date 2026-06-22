@@ -200,7 +200,7 @@
 		isLoading = true
 
 		// Send selection to server
-		;(socket as any).emit("assistant:selectFunctionResults", {
+		socket.emit("assistant:selectFunctionResults", {
 			chatId,
 			selectedIds,
 			type
@@ -222,7 +222,7 @@
 		isLoading = true
 
 		// Send unlink request to server
-		;(socket as any).emit("assistant:unlinkEntity", {
+		socket.emit("assistant:unlinkEntity", {
 			chatId,
 			entityId,
 			type

@@ -348,18 +348,17 @@
 
 <div class="min-h-full p-4">
 	{#if isEditingLorebook}
-		<div class="flex justify-between">
-			<h2 class="mb-4 text-lg font-bold">
+		<div class="mb-4 flex items-center gap-2">
+			<button
+				class="btn btn-sm preset-tonal-surface p-2"
+				onclick={() => { isEditingLorebook = false }}
+				title="Back to lorebooks"
+			>
+				<Icons.ChevronLeft size={16} />
+			</button>
+			<h2 class="flex-1 truncate font-semibold">
 				{selectedLorebook?.name || "Lorebook"}
 			</h2>
-			<button
-				onclick={() => {
-					isEditingLorebook = false
-				}}
-				class="mb-4"
-			>
-				<Icons.ArrowLeft size={20} class="inline" /> Back
-			</button>
 		</div>
 		<Tabs value={editGroup} onValueChange={(e) => handleSwitchTabGroup(e)}>
 			{#snippet list()}
@@ -439,6 +438,7 @@
 							focusHistoryEntryId={focusHistoryEntryId}
 							focusEntryTab={focusHistoryEntryTab}
 							focusSceneId={focusSceneId}
+							onNavigateToGraph={graphEnabled ? () => { editGroup = "graph" } : undefined}
 						/>
 					{/if}
 				</Tabs.Panel>
