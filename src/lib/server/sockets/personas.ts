@@ -1,7 +1,12 @@
 import { db } from "$lib/server/db"
 import { and, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { handlePersonaAvatarUpload } from "../utils"
+import {
+	handlePersonaAvatarUpload,
+	uploadPersonaGalleryImage,
+	listPersonaGallery,
+	deletePersonaGalleryImage
+} from "../utils"
 import type { Handler } from "$lib/shared/events"
 import { parseCharacterCardFromBase64 } from "../utils/characterCardParser"
 
@@ -521,6 +526,81 @@ export const personasImportFromLibrary: Handler<Sockets.Personas.ImportFromLibra
 	}
 }
 
+export const personasListGallery: Handler<Sockets.Personas.ListGallery.Params, Sockets.Personas.ListGallery.Response> = {
+	event: "personas:listGallery",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const images = await listPersonaGallery({ personaId: params.personaId, userId })
+		const res: Sockets.Personas.ListGallery.Response = { images }
+		emitToUser("personas:listGallery", res)
+		return res
+	}
+}
+
+export const personasUploadGalleryImage: Handler<Sockets.Personas.UploadGalleryImage.Params, Sockets.Personas.UploadGalleryImage.Response> = {
+	event: "personas:uploadGalleryImage",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const persona = await db.query.personas.findFirst({
+			where: (p, { and, eq }) => and(eq(p.id, params.personaId), eq(p.userId, userId))
+		})
+		if (!persona) throw new Error("Persona not found or access denied")
+
+		const imgPath = await uploadPersonaGalleryImage({
+			personaId: params.personaId,
+			userId,
+			imageFile: Buffer.from(params.imageFile as Uint8Array),
+			mimeType: params.mimeType
+		})
+
+		const res: Sockets.Personas.UploadGalleryImage.Response = { success: true, path: imgPath }
+		emitToUser("personas:uploadGalleryImage", res)
+		await personasListGallery.handler(socket, { personaId: params.personaId }, emitToUser)
+		await personasGet.handler(socket, { id: params.personaId }, emitToUser)
+		return res
+	}
+}
+
+export const personasDeleteGalleryImage: Handler<Sockets.Personas.DeleteGalleryImage.Params, Sockets.Personas.DeleteGalleryImage.Response> = {
+	event: "personas:deleteGalleryImage",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const persona = await db.query.personas.findFirst({
+			where: (p, { and, eq }) => and(eq(p.id, params.personaId), eq(p.userId, userId))
+		})
+		if (!persona) throw new Error("Persona not found or access denied")
+
+		await deletePersonaGalleryImage({ personaId: params.personaId, userId, path: params.path })
+
+		const res: Sockets.Personas.DeleteGalleryImage.Response = { success: true }
+		emitToUser("personas:deleteGalleryImage", res)
+		await personasListGallery.handler(socket, { personaId: params.personaId }, emitToUser)
+		return res
+	}
+}
+
+export const personasSetAvatar: Handler<Sockets.Personas.SetAvatar.Params, Sockets.Personas.SetAvatar.Response> = {
+	event: "personas:setAvatar",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const persona = await db.query.personas.findFirst({
+			where: (p, { and, eq }) => and(eq(p.id, params.personaId), eq(p.userId, userId))
+		})
+		if (!persona) throw new Error("Persona not found or access denied")
+
+		const [updated] = await db
+			.update(schema.personas)
+			.set({ avatar: params.path })
+			.where(and(eq(schema.personas.id, params.personaId), eq(schema.personas.userId, userId)))
+			.returning()
+
+		const res: Sockets.Personas.SetAvatar.Response = { persona: updated }
+		emitToUser("personas:setAvatar", res)
+		await personasGet.handler(socket, { id: params.personaId }, emitToUser)
+		return res
+	}
+}
+
 // Registration function for all persona handlers
 export function registerPersonaHandlers(
 	socket: any,
@@ -539,4 +619,8 @@ export function registerPersonaHandlers(
 	register(socket, personasImportCard, emitToUser)
 	register(socket, personasSearchLibrary, emitToUser)
 	register(socket, personasImportFromLibrary, emitToUser)
+	register(socket, personasListGallery, emitToUser)
+	register(socket, personasUploadGalleryImage, emitToUser)
+	register(socket, personasDeleteGalleryImage, emitToUser)
+	register(socket, personasSetAvatar, emitToUser)
 }

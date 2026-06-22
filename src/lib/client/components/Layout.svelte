@@ -26,6 +26,7 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 	import { Theme } from "$lib/client/consts/Theme"
 	import OllamaIcon from "./icons/OllamaIcon.svelte"
 	import { page } from "$app/state"
+	import { sceneImages } from "$lib/client/stores/sceneImages"
 
 	interface Props {
 		children?: Snippet
@@ -507,6 +508,33 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 				style="background-image: url({userSettingsCtx.settings.backgroundImagePath}); opacity: {bgOpacity};"
 				aria-hidden="true"
 			></div>
+		{/if}
+		<!-- Character scene image overlays — fixed at z-[2] so sidebars (z-10) always paint on top -->
+		{#if $sceneImages.left}
+			<div
+				class="pointer-events-none fixed bottom-0 left-0 z-[2] hidden w-1/4 lg:block"
+				style="height: 80svh;"
+				aria-hidden="true"
+			>
+				<img
+					src={$sceneImages.left}
+					alt=""
+					class="h-full w-full object-contain object-bottom drop-shadow-xl"
+				/>
+			</div>
+		{/if}
+		{#if $sceneImages.right}
+			<div
+				class="pointer-events-none fixed bottom-0 right-0 z-[2] hidden w-1/4 lg:block"
+				style="height: 80svh;"
+				aria-hidden="true"
+			>
+				<img
+					src={$sceneImages.right}
+					alt=""
+					class="h-full w-full object-contain object-bottom drop-shadow-xl"
+				/>
+			</div>
 		{/if}
 		<div
 			class="relative z-10 flex h-svh max-w-full min-w-full flex-1 flex-col overflow-hidden lg:flex-row lg:gap-2"

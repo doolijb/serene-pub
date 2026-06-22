@@ -50,6 +50,12 @@ export type RagDiagnostics = {
 		filledIn: number
 		total: number
 	}
+	scores: {
+		messageScores: number[]
+		loreScores: number[]
+		thresholdUsed: number
+		queryMessageCount: number
+	}
 }
 
 export type CompiledPrompt = {

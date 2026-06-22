@@ -12,11 +12,14 @@
 	import ChatComposer from "$lib/client/components/chatMessages/ChatComposer.svelte"
 	import GeneratingAnimation from "$lib/client/components/chatMessages/GeneratingAnimation.svelte"
 	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
-	import { getContext, onMount } from "svelte"
+	import { getContext, onDestroy, onMount } from "svelte"
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import PersonaSelectModal from "$lib/client/components/modals/PersonaSelectModal.svelte"
 	import BranchChatModal from "$lib/client/components/modals/BranchChatModal.svelte"
 	import SummarizeLoreModal from "$lib/client/components/modals/SummarizeLoreModal.svelte"
+	import AvatarGalleryModal from "$lib/client/components/chatMessages/AvatarGalleryModal.svelte"
+	import ChatSceneImagesTab from "$lib/client/components/chatMessages/ChatSceneImagesTab.svelte"
+	import { sceneImages } from "$lib/client/stores/sceneImages"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	let chat: Sockets.Chats.Get.Response["chat"] | undefined = $state()
@@ -1099,16 +1102,72 @@
 	})
 
 	let showAvatarModal = $state(false)
-	let avatarModalSrc: string | undefined = $state(undefined)
+	let avatarModalEntity = $state<{
+		type: "character" | "persona"
+		id: number
+		name: string
+		avatar: string | null | undefined
+	} | null>(null)
+
+	// Scene image overlays — synced into the shared store so Layout can render them
+	let leftSceneImage = $state<string | null>(null)
+	let rightSceneImage = $state<string | null>(null)
+	let sceneImagesInitialized = $state(false)
+
+	// Load persisted images from localStorage when navigating to a chat
+	$effect(() => {
+		const id = chatId
+		sceneImagesInitialized = false
+		leftSceneImage = null
+		rightSceneImage = null
+		if (id) {
+			try {
+				const saved = localStorage.getItem(`sceneImages:${id}`)
+				if (saved) {
+					const { left, right } = JSON.parse(saved)
+					leftSceneImage = left ?? null
+					rightSceneImage = right ?? null
+				}
+			} catch {}
+		}
+		sceneImagesInitialized = true
+	})
+
+	// Persist images to localStorage when they change (but not during initial load)
+	$effect(() => {
+		if (!sceneImagesInitialized) return
+		const id = chatId
+		if (!id) return
+		const left = leftSceneImage
+		const right = rightSceneImage
+		if (left || right) {
+			localStorage.setItem(`sceneImages:${id}`, JSON.stringify({ left, right }))
+		} else {
+			localStorage.removeItem(`sceneImages:${id}`)
+		}
+	})
+
+	// Sync into the shared store so Layout can render them
+	$effect(() => {
+		sceneImages.set({ left: leftSceneImage, right: rightSceneImage })
+	})
+	onDestroy(() => {
+		sceneImages.set({ left: null, right: null })
+	})
 
 	function handleAvatarClick(
 		char: SelectCharacter | SelectPersona | undefined
 	) {
 		if (!char) return
-		if (char.avatar) {
-			avatarModalSrc = char.avatar
-			showAvatarModal = true
+		const isPersona = chat?.chatPersonas?.some((cp) => cp.persona?.id === char.id)
+		const nickname = (char as any).nickname as string | null ?? null
+		avatarModalEntity = {
+			type: isPersona ? "persona" : "character",
+			id: char.id,
+			name: nickname ?? char.name ?? "",
+			avatar: char.avatar ?? null
 		}
+		showAvatarModal = true
 	}
 </script>
 
@@ -1333,6 +1392,12 @@
 					extraTabs={isGuest
 						? []
 						: [
+								{
+									value: "sceneImages",
+									title: "Scene Images",
+									control: sceneImagesButton,
+									content: sceneImagesContent
+								},
 								{
 									value: "extraControls",
 									title: "Extra Controls",
@@ -1697,35 +1762,11 @@
 	{/snippet}
 </Modal>
 
-<Modal
-	open={showAvatarModal}
+<AvatarGalleryModal
+	bind:open={showAvatarModal}
 	onOpenChange={(e) => (showAvatarModal = e.open)}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-md flex flex-col items-center border border-surface-300-700"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<header class="flex w-full justify-between">
-			<h2 class="h2">Avatar</h2>
-			<button
-				class="btn btn-sm"
-				onclick={() => (showAvatarModal = false)}
-			>
-				<Icons.X size={20} />
-			</button>
-		</header>
-		<article class="flex w-full flex-col items-center">
-			{#if avatarModalSrc}
-				<img
-					src={avatarModalSrc}
-					alt="Avatar"
-					class="border-surface-300 max-h-[60vh] max-w-full rounded-lg border"
-				/>
-			{:else}
-				<div class="text-muted">No avatar image available.</div>
-			{/if}
-		</article>
-	{/snippet}
-</Modal>
+	entity={avatarModalEntity}
+/>
 
 <PersonaSelectModal
 	open={showAddPersonaModal}
@@ -1753,6 +1794,19 @@
 		<div class="shadow"></div>
 		<div class="shadow"></div>
 	</div>
+{/snippet}
+
+{#snippet sceneImagesButton()}
+	<Icons.Images size="0.75em" />
+{/snippet}
+
+{#snippet sceneImagesContent()}
+	<ChatSceneImagesTab
+		chatCharacters={chat?.chatCharacters ?? []}
+		chatPersonas={chat?.chatPersonas ?? []}
+		bind:leftImage={leftSceneImage}
+		bind:rightImage={rightSceneImage}
+	/>
 {/snippet}
 
 {#snippet extraControlsButton()}

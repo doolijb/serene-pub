@@ -150,6 +150,43 @@ declare global {
 					book: SpecV3.Lorebook | null
 				}
 			}
+			namespace ListGallery {
+				interface Params {
+					characterId: number
+				}
+				interface Response {
+					images: string[]
+				}
+			}
+			namespace UploadGalleryImage {
+				interface Params {
+					characterId: number
+					imageFile: Buffer | Uint8Array
+					mimeType: string
+				}
+				interface Response {
+					success: boolean
+					path: string
+				}
+			}
+			namespace DeleteGalleryImage {
+				interface Params {
+					characterId: number
+					path: string
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace SetAvatar {
+				interface Params {
+					characterId: number
+					path: string
+				}
+				interface Response {
+					character: any
+				}
+			}
 		}
 
 		// Connections namespace
@@ -295,6 +332,43 @@ declare global {
 				}
 				interface Response {
 					persona: SelectPersona
+				}
+			}
+			namespace ListGallery {
+				interface Params {
+					personaId: number
+				}
+				interface Response {
+					images: string[]
+				}
+			}
+			namespace UploadGalleryImage {
+				interface Params {
+					personaId: number
+					imageFile: Buffer | Uint8Array
+					mimeType: string
+				}
+				interface Response {
+					success: boolean
+					path: string
+				}
+			}
+			namespace DeleteGalleryImage {
+				interface Params {
+					personaId: number
+					path: string
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace SetAvatar {
+				interface Params {
+					personaId: number
+					path: string
+				}
+				interface Response {
+					persona: any
 				}
 			}
 		}
@@ -2187,6 +2261,8 @@ declare global {
 				sceneIndex?: number
 				/** DB scene id where this node first appeared — stored on commit */
 				sceneId?: number
+				/** DB history entry id where this node originates (direct entry, no scene) */
+				historyEntryId?: number
 			}
 			interface RelationshipProposal {
 				fromTempId: string
@@ -2199,6 +2275,8 @@ declare global {
 				sceneIndex?: number
 				/** DB scene id where this relationship was first established — stored on commit */
 				sceneId?: number
+				/** DB history entry id where this relationship originates (direct entry, no scene) */
+				historyEntryId?: number
 			}
 			interface GraphProposal {
 				nodes: NodeProposal[]
@@ -2218,6 +2296,10 @@ declare global {
 					ungraphedUnsummarizedCount: number
 					/** All scenes with a summary (used for replace-mode preflight) */
 					totalSummarizedCount: number
+					/** History entries with content and no scenes, not yet graphed */
+					ungraphedHistoryEntryCount: number
+					/** All history entries with content and no scenes (for replace-mode preflight) */
+					totalDirectHistoryEntryCount: number
 				}
 			}
 			namespace Build {

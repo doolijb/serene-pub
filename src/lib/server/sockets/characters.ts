@@ -3,7 +3,13 @@ import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import * as fsPromises from "fs/promises"
 import * as path from "path"
-import { getCharacterDataDir, handleCharacterAvatarUpload } from "../utils"
+import {
+	getCharacterDataDir,
+	handleCharacterAvatarUpload,
+	uploadCharacterGalleryImage,
+	listCharacterGallery,
+	deleteCharacterGalleryImage
+} from "../utils"
 import { CharacterCard, type SpecV3 } from "@lenml/char-card-reader"
 import { fileTypeFromBuffer } from "file-type"
 import type { Handler } from "$lib/shared/events"
@@ -654,6 +660,81 @@ export const charactersExportCard: Handler<Sockets.Characters.ExportCard.Params,
 	}
 }
 
+export const charactersListGallery: Handler<Sockets.Characters.ListGallery.Params, Sockets.Characters.ListGallery.Response> = {
+	event: "characters:listGallery",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const images = await listCharacterGallery({ characterId: params.characterId, userId })
+		const res: Sockets.Characters.ListGallery.Response = { images }
+		emitToUser("characters:listGallery", res)
+		return res
+	}
+}
+
+export const charactersUploadGalleryImage: Handler<Sockets.Characters.UploadGalleryImage.Params, Sockets.Characters.UploadGalleryImage.Response> = {
+	event: "characters:uploadGalleryImage",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const character = await db.query.characters.findFirst({
+			where: (c, { and, eq }) => and(eq(c.id, params.characterId), eq(c.userId, userId))
+		})
+		if (!character) throw new Error("Character not found or access denied")
+
+		const imgPath = await uploadCharacterGalleryImage({
+			characterId: params.characterId,
+			userId,
+			imageFile: Buffer.from(params.imageFile as Uint8Array),
+			mimeType: params.mimeType
+		})
+
+		const res: Sockets.Characters.UploadGalleryImage.Response = { success: true, path: imgPath }
+		emitToUser("characters:uploadGalleryImage", res)
+		await charactersListGallery.handler(socket, { characterId: params.characterId }, emitToUser)
+		await charactersGet.handler(socket, { id: params.characterId }, emitToUser)
+		return res
+	}
+}
+
+export const charactersDeleteGalleryImage: Handler<Sockets.Characters.DeleteGalleryImage.Params, Sockets.Characters.DeleteGalleryImage.Response> = {
+	event: "characters:deleteGalleryImage",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const character = await db.query.characters.findFirst({
+			where: (c, { and, eq }) => and(eq(c.id, params.characterId), eq(c.userId, userId))
+		})
+		if (!character) throw new Error("Character not found or access denied")
+
+		await deleteCharacterGalleryImage({ characterId: params.characterId, userId, path: params.path })
+
+		const res: Sockets.Characters.DeleteGalleryImage.Response = { success: true }
+		emitToUser("characters:deleteGalleryImage", res)
+		await charactersListGallery.handler(socket, { characterId: params.characterId }, emitToUser)
+		return res
+	}
+}
+
+export const charactersSetAvatar: Handler<Sockets.Characters.SetAvatar.Params, Sockets.Characters.SetAvatar.Response> = {
+	event: "characters:setAvatar",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const character = await db.query.characters.findFirst({
+			where: (c, { and, eq }) => and(eq(c.id, params.characterId), eq(c.userId, userId))
+		})
+		if (!character) throw new Error("Character not found or access denied")
+
+		const [updated] = await db
+			.update(schema.characters)
+			.set({ avatar: params.path })
+			.where(and(eq(schema.characters.id, params.characterId), eq(schema.characters.userId, userId)))
+			.returning()
+
+		const res: Sockets.Characters.SetAvatar.Response = { character: updated }
+		emitToUser("characters:setAvatar", res)
+		await charactersGet.handler(socket, { id: params.characterId }, emitToUser)
+		return res
+	}
+}
+
 // Registration function for all character handlers
 export function registerCharacterHandlers(
 	socket: any,
@@ -669,4 +750,8 @@ export function registerCharacterHandlers(
 	register(socket, charactersExportCard, emitToUser)
 	register(socket, charactersSearchLibrary, emitToUser)
 	register(socket, charactersImportFromLibrary, emitToUser)
+	register(socket, charactersListGallery, emitToUser)
+	register(socket, charactersUploadGalleryImage, emitToUser)
+	register(socket, charactersDeleteGalleryImage, emitToUser)
+	register(socket, charactersSetAvatar, emitToUser)
 }

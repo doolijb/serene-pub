@@ -1,6 +1,6 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { eq, asc, and, isNotNull, isNull, or } from "drizzle-orm"
+import { eq, asc, and, isNotNull, isNull, or, gt, notExists, sql } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import {
 	buildGraphFromScenes,
@@ -26,7 +26,7 @@ export const narrativeGraphListHandler: Handler<
 		})
 		if (!lorebook) throw new Error("Lorebook not found or access denied.")
 
-		const [nodes, relationships, ungraphedScenes, ungraphedUnsummarizedScenes, allSummarizedScenes] = await Promise.all([
+		const [nodes, relationships, ungraphedScenes, ungraphedUnsummarizedScenes, allSummarizedScenes, ungraphedDirectEntries, allDirectEntries] = await Promise.all([
 			db.query.narrativeNodes.findMany({
 				where: eq(schema.narrativeNodes.lorebookId, params.lorebookId),
 				orderBy: asc(schema.narrativeNodes.id)
@@ -60,7 +60,30 @@ export const narrativeGraphListHandler: Handler<
 					isNotNull(schema.scenes.summary)
 				),
 				columns: { id: true }
-			})
+			}),
+			// History entries with content, no scenes, not yet graphed
+			db.select({ id: schema.historyEntries.id })
+				.from(schema.historyEntries)
+				.where(and(
+					eq(schema.historyEntries.lorebookId, params.lorebookId),
+					eq(schema.historyEntries.graphed, false),
+					gt(sql`length(trim(${schema.historyEntries.content}))`, 0),
+					notExists(
+						db.select({ _: sql`1` }).from(schema.scenes)
+							.where(eq(schema.scenes.historyEntryId, schema.historyEntries.id))
+					)
+				)),
+			// All history entries with content and no scenes — for replace-mode preflight
+			db.select({ id: schema.historyEntries.id })
+				.from(schema.historyEntries)
+				.where(and(
+					eq(schema.historyEntries.lorebookId, params.lorebookId),
+					gt(sql`length(trim(${schema.historyEntries.content}))`, 0),
+					notExists(
+						db.select({ _: sql`1` }).from(schema.scenes)
+							.where(eq(schema.scenes.historyEntryId, schema.historyEntries.id))
+					)
+				))
 		])
 
 		// Bootstrap: if a graph exists but no scenes are marked as graphed yet
@@ -94,7 +117,9 @@ export const narrativeGraphListHandler: Handler<
 			relationships,
 			ungraphedSceneCount,
 			ungraphedUnsummarizedCount: ungraphedUnsummarizedScenes.length,
-			totalSummarizedCount: allSummarizedScenes.length
+			totalSummarizedCount: allSummarizedScenes.length,
+			ungraphedHistoryEntryCount: ungraphedDirectEntries.length,
+			totalDirectHistoryEntryCount: allDirectEntries.length
 		}
 		emitToUser("narrativeGraph:list", res)
 		return res
@@ -116,36 +141,103 @@ export const narrativeGraphBuildHandler: Handler<
 		})
 		if (!lorebook) throw new Error("Lorebook not found or access denied.")
 
-		// Fetch all scenes for this lorebook with their history entries
-		const rawScenes = await db.query.scenes.findMany({
-			where: eq(schema.scenes.lorebookId, params.lorebookId),
-			orderBy: asc(schema.scenes.id),
-			with: {
-				historyEntry: {
-					columns: { id: true, year: true, month: true, day: true }
+		// Fetch scenes, direct history entries, and bindings
+		const [rawScenes, rawDirectEntries] = await Promise.all([
+			// All scenes for this lorebook with their history entries
+			db.query.scenes.findMany({
+				where: eq(schema.scenes.lorebookId, params.lorebookId),
+				orderBy: asc(schema.scenes.id),
+				with: {
+					historyEntry: {
+						columns: { id: true, year: true, month: true, day: true }
+					}
 				}
+			}),
+			// History entries with content but no scenes (direct entries)
+			db.select({
+				id: schema.historyEntries.id,
+				year: schema.historyEntries.year,
+				month: schema.historyEntries.month,
+				day: schema.historyEntries.day,
+				content: schema.historyEntries.content,
+				graphed: schema.historyEntries.graphed,
+			}).from(schema.historyEntries)
+				.where(and(
+					eq(schema.historyEntries.lorebookId, params.lorebookId),
+					gt(sql`length(trim(${schema.historyEntries.content}))`, 0),
+					notExists(
+						db.select({ _: sql`1` }).from(schema.scenes)
+							.where(eq(schema.scenes.historyEntryId, schema.historyEntries.id))
+					)
+				))
+		])
+
+		// Fetch bindings with left joins (explicit joins have reliable TS inference)
+		const bindings = await db
+			.select({
+				binding: schema.lorebookBindings.binding,
+				characterName: schema.characters.name,
+				characterNickname: schema.characters.nickname,
+				personaName: schema.personas.name
+			})
+			.from(schema.lorebookBindings)
+			.leftJoin(schema.characters, eq(schema.lorebookBindings.characterId, schema.characters.id))
+			.leftJoin(schema.personas, eq(schema.lorebookBindings.personaId, schema.personas.id))
+			.where(eq(schema.lorebookBindings.lorebookId, params.lorebookId))
+
+		// Build substitution map: binding token → display name
+		const bindingMap: Record<string, string> = {}
+		for (const b of bindings) {
+			if (!b.binding) continue
+			const label = b.characterName
+				? (b.characterNickname || b.characterName)
+				: (b.personaName ?? b.binding)
+			bindingMap[b.binding] = label
+		}
+
+		function resolveBindings(text: string): string {
+			let out = text
+			for (const [token, name] of Object.entries(bindingMap)) {
+				out = out.replaceAll(token, name)
 			}
-		})
+			return out
+		}
 
 		// In extend mode, only process scenes not yet graphed
 		const filteredRawScenes =
 			params.mode === "extend" ? (rawScenes as any[]).filter((s) => !s.graphed) : rawScenes
 
-		if (params.mode === "extend" && filteredRawScenes.length === 0) {
+		// In extend mode, only process direct entries not yet graphed
+		const filteredDirectEntries =
+			params.mode === "extend" ? rawDirectEntries.filter((e) => !e.graphed) : rawDirectEntries
+
+		if (params.mode === "extend" && filteredRawScenes.length === 0 && filteredDirectEntries.length === 0) {
 			const errRes: Sockets.NarrativeGraph.Build.ErrorResponse = {
-				error: "No new scenes to process. All scenes with summaries have already been graphed."
+				error: "No new content to process. All scenes and history entries have already been graphed."
 			}
 			emitToUser("narrativeGraph:build:error", errRes)
 			return { proposal: { nodes: [], relationships: [] }, sceneLabels: [], seedTempIdMap: {} }
 		}
 
-		const scenes: GraphBuilderScene[] = filteredRawScenes.map((s: any) => ({
-			id: s.id,
-			name: s.name,
-			summary: s.summary,
-			historyEntryId: s.historyEntryId ?? null,
-			historyEntry: s.historyEntry ?? null
-		}))
+		// Map scenes to GraphBuilderScene format with binding substitution applied
+		const scenes: GraphBuilderScene[] = [
+			...filteredRawScenes.map((s: any) => ({
+				id: s.id,
+				name: s.name,
+				summary: s.summary ? resolveBindings(s.summary) : s.summary,
+				historyEntryId: s.historyEntryId ?? null,
+				historyEntry: s.historyEntry ?? null
+			})),
+			// Map direct history entries to GraphBuilderScene format
+			...filteredDirectEntries.map((he) => ({
+				id: he.id,
+				name: null,
+				summary: resolveBindings(he.content),
+				historyEntryId: he.id,
+				historyEntry: { id: he.id, year: he.year, month: he.month, day: he.day },
+				sourceHistoryEntryId: he.id
+			}))
+		]
 
 		const { connection, sampling, contextConfig, promptConfig } =
 			await getUserConfigurations(userId)
@@ -261,7 +353,8 @@ export const narrativeGraphApplyProposalHandler: Handler<
 					nodeState: nodeProposal.nodeState ?? "active",
 					summary: nodeProposal.summary ?? "",
 					characterIds: nodeProposal.characterIds ?? [],
-					sceneId: nodeProposal.sceneId ?? null
+					sceneId: nodeProposal.sceneId ?? null,
+					historyEntryId: nodeProposal.historyEntryId ?? null
 				})
 				.returning()
 			tempIdMap.set(nodeProposal.tempId, inserted.id)
@@ -323,7 +416,8 @@ export const narrativeGraphApplyProposalHandler: Handler<
 				description: rel.description ?? "",
 				status: rel.status ?? "active",
 				reason: rel.reason ?? null,
-				sceneId: rel.sceneId ?? null
+				sceneId: rel.sceneId ?? null,
+				historyEntryId: rel.historyEntryId ?? null
 			})
 		}
 
@@ -335,6 +429,11 @@ export const narrativeGraphApplyProposalHandler: Handler<
 				.update(schema.scenes)
 				.set({ graphed: false })
 				.where(eq(schema.scenes.lorebookId, lorebookId))
+			// Reset history entries graphed status too
+			await db
+				.update(schema.historyEntries)
+				.set({ graphed: false })
+				.where(eq(schema.historyEntries.lorebookId, lorebookId))
 		}
 		await db
 			.update(schema.scenes)
@@ -346,9 +445,23 @@ export const narrativeGraphApplyProposalHandler: Handler<
 					isNotNull(schema.scenes.summary)
 				)
 			)
+		// Mark direct history entries (with content, no scenes) as graphed
+		await db
+			.update(schema.historyEntries)
+			.set({ graphed: true })
+			.where(
+				and(
+					eq(schema.historyEntries.lorebookId, lorebookId),
+					gt(sql`length(trim(${schema.historyEntries.content}))`, 0),
+					notExists(
+						db.select({ _: sql`1` }).from(schema.scenes)
+							.where(eq(schema.scenes.historyEntryId, schema.historyEntries.id))
+					)
+				)
+			)
 
 		// Return updated list with fresh ungraphed count
-		const [nodes, relationships, ungraphedScenes, ungraphedUnsummarized, allSummarized] = await Promise.all([
+		const [nodes, relationships, ungraphedScenes, ungraphedUnsummarized, allSummarized, ungraphedDirectEntries, allDirectEntries] = await Promise.all([
 			db.query.narrativeNodes.findMany({
 				where: eq(schema.narrativeNodes.lorebookId, lorebookId),
 				orderBy: asc(schema.narrativeNodes.id)
@@ -379,7 +492,28 @@ export const narrativeGraphApplyProposalHandler: Handler<
 					isNotNull(schema.scenes.summary)
 				),
 				columns: { id: true }
-			})
+			}),
+			db.select({ id: schema.historyEntries.id })
+				.from(schema.historyEntries)
+				.where(and(
+					eq(schema.historyEntries.lorebookId, lorebookId),
+					eq(schema.historyEntries.graphed, false),
+					gt(sql`length(trim(${schema.historyEntries.content}))`, 0),
+					notExists(
+						db.select({ _: sql`1` }).from(schema.scenes)
+							.where(eq(schema.scenes.historyEntryId, schema.historyEntries.id))
+					)
+				)),
+			db.select({ id: schema.historyEntries.id })
+				.from(schema.historyEntries)
+				.where(and(
+					eq(schema.historyEntries.lorebookId, lorebookId),
+					gt(sql`length(trim(${schema.historyEntries.content}))`, 0),
+					notExists(
+						db.select({ _: sql`1` }).from(schema.scenes)
+							.where(eq(schema.scenes.historyEntryId, schema.historyEntries.id))
+					)
+				))
 		])
 
 		const listPayload: Sockets.NarrativeGraph.List.Response = {
@@ -387,7 +521,9 @@ export const narrativeGraphApplyProposalHandler: Handler<
 			relationships,
 			ungraphedSceneCount: ungraphedScenes.length,
 			ungraphedUnsummarizedCount: ungraphedUnsummarized.length,
-			totalSummarizedCount: allSummarized.length
+			totalSummarizedCount: allSummarized.length,
+			ungraphedHistoryEntryCount: ungraphedDirectEntries.length,
+			totalDirectHistoryEntryCount: allDirectEntries.length
 		}
 		const res: Sockets.NarrativeGraph.ApplyProposal.Response = { nodes, relationships }
 		emitToUser("narrativeGraph:list", listPayload)

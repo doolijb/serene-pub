@@ -140,7 +140,17 @@ export const updateCharacterLoreEntryHandler: Handler<
 			throw new Error("Character lore entry not found or access denied.")
 		}
 
-		const updateData = { ...params.characterLoreEntry }
+		const {
+			id: _id,
+			lorebookId: _lorebookId,
+			createdAt: _createdAt,
+			updatedAt: _updatedAt,
+			vectorizedAt: _vectorizedAt,
+			embedding: _embedding,
+			embeddingModel: _embeddingModel,
+			...updateData
+		} = params.characterLoreEntry
+
 		if (updateData.name) updateData.name = updateData.name.trim()
 		if (updateData.content) updateData.content = updateData.content.trim()
 

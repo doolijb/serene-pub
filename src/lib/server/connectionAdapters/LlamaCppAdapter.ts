@@ -8,6 +8,7 @@ import {
 	BaseConnectionAdapter,
 	type AdapterExports
 } from "./BaseConnectionAdapter"
+import { type CompiledPrompt } from "../utils/promptBuilder"
 import axios from "axios"
 import { Readable } from "stream"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"

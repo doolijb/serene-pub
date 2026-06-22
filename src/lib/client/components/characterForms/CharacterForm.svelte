@@ -6,6 +6,7 @@
 	import { z } from "zod"
 	import CharacterUnsavedChangesModal from "../modals/CharacterUnsavedChangesModal.svelte"
 	import Avatar from "../Avatar.svelte"
+	import CharacterImageGallery from "./CharacterImageGallery.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	interface EditCharacterData {
@@ -769,6 +770,16 @@
 					</button>
 				</div>
 			</fieldset>
+		{/if}
+		{#if !hideAvatar && mode === "edit" && editCharacterData.id}
+			<div class="space-y-2">
+				<p class="mb-1 block font-semibold">Image Gallery</p>
+				<CharacterImageGallery
+					characterId={editCharacterData.id}
+					currentAvatar={editCharacterData.avatar}
+					onAvatarChange={(path) => { editCharacterData.avatar = path }}
+				/>
+			</div>
 		{/if}
 		<fieldset class="flex flex-col gap-1">
 			<label class="flex gap-1 font-semibold" for="charName">

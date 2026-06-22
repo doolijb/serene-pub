@@ -5,8 +5,9 @@ import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import {
 	BaseConnectionAdapter,
 	type AdapterExports,
-	type BaseChat
+	type BasePromptChat
 } from "./BaseConnectionAdapter"
+import { type CompiledPrompt } from "../utils/promptBuilder"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { koboldCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
@@ -28,7 +29,7 @@ class KoboldCppAdapter extends BaseConnectionAdapter {
 		sampling: SelectSamplingConfig
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
-		chat: BaseChat
+		chat: BasePromptChat
 		currentCharacterId: number
 		generatingMessageMetadata?: any
 	}) {

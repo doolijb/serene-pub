@@ -329,7 +329,25 @@ export async function generateResponse({
 				where: (cm, { ne }) => ne(cm.id, generatingMessage.id),
 				orderBy: (cm, { asc }) => asc(cm.id)
 			},
-			lorebook: true
+			lorebook: {
+				with: {
+					lorebookBindings: {
+						with: { character: true, persona: true }
+					},
+					worldLoreEntries: true,
+					characterLoreEntries: {
+						with: {
+							lorebookBinding: {
+								with: {
+									character: true,
+									persona: true
+								}
+							}
+						}
+					},
+					historyEntries: true
+				}
+			}
 		}
 	})
 

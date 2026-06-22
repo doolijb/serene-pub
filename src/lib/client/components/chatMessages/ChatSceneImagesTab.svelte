@@ -1,0 +1,297 @@
+<script lang="ts">
+	import * as Icons from "@lucide/svelte"
+	import Avatar from "$lib/client/components/Avatar.svelte"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { onMount } from "svelte"
+
+	interface EntityInfo {
+		type: "character" | "persona"
+		id: number
+		name: string
+		avatar: string | null | undefined
+		entity: SelectCharacter | SelectPersona
+	}
+
+	interface Props {
+		chatCharacters: (SelectChatCharacter & { character: SelectCharacter })[]
+		chatPersonas: (SelectChatPersona & { persona: SelectPersona })[]
+		leftImage: string | null
+		rightImage: string | null
+	}
+
+	let {
+		chatCharacters = [],
+		chatPersonas = [],
+		leftImage = $bindable(null),
+		rightImage = $bindable(null)
+	}: Props = $props()
+
+	const socket = useTypedSocket()
+
+	// Flat, deduplicated entity list for display
+	let entities = $derived<EntityInfo[]>([
+		...chatCharacters.map((cc) => ({
+			type: "character" as const,
+			id: cc.character.id,
+			name: (cc.character as any).nickname || cc.character.name,
+			avatar: cc.character.avatar,
+			entity: cc.character
+		})),
+		...chatPersonas.map((cp) => ({
+			type: "persona" as const,
+			id: cp.persona.id,
+			name: cp.persona.name,
+			avatar: cp.persona.avatar,
+			entity: cp.persona
+		}))
+	])
+
+	// Expanded entity key and gallery cache
+	let expandedKey = $state<string | null>(null)
+	let galleryCache = $state<Record<string, string[]>>({})
+	let pendingGalleryKey = $state<string | null>(null)
+	let brokenPaths = $state(new Set<string>())
+
+	function entityKey(e: EntityInfo): string {
+		return `${e.type}:${e.id}`
+	}
+
+	function toggleGallery(e: EntityInfo) {
+		const key = entityKey(e)
+		if (expandedKey === key) {
+			expandedKey = null
+			return
+		}
+		expandedKey = key
+		if (!galleryCache[key]) {
+			pendingGalleryKey = key
+			if (e.type === "character") {
+				socket.emit("characters:listGallery", { characterId: e.id })
+			} else {
+				socket.emit("personas:listGallery", { personaId: e.id })
+			}
+		}
+	}
+
+	function setLeft(src: string) {
+		leftImage = src
+	}
+	function setRight(src: string) {
+		rightImage = src
+	}
+	function clearLeft() {
+		leftImage = null
+	}
+	function clearRight() {
+		rightImage = null
+	}
+
+	onMount(() => {
+		const charHandler = (data: Sockets.Characters.ListGallery.Response) => {
+			if (pendingGalleryKey?.startsWith("character:")) {
+				galleryCache = { ...galleryCache, [pendingGalleryKey]: data.images }
+				pendingGalleryKey = null
+			}
+		}
+		const personaHandler = (data: Sockets.Personas.ListGallery.Response) => {
+			if (pendingGalleryKey?.startsWith("persona:")) {
+				galleryCache = { ...galleryCache, [pendingGalleryKey]: data.images }
+				pendingGalleryKey = null
+			}
+		}
+
+		socket.on("characters:listGallery", charHandler)
+		socket.on("personas:listGallery", personaHandler)
+
+		return () => {
+			socket.off("characters:listGallery", charHandler)
+			socket.off("personas:listGallery", personaHandler)
+		}
+	})
+</script>
+
+<div class="space-y-3 p-1">
+	<!-- Current selections preview -->
+	{#if leftImage || rightImage}
+		<div class="flex gap-3">
+			<!-- Left -->
+			<div class="flex min-w-0 flex-1 flex-col gap-1">
+				<span class="text-surface-500 text-xs font-semibold uppercase tracking-wide">Left</span>
+				{#if leftImage}
+					<div class="relative">
+						<img
+							src={leftImage}
+							alt="Left character"
+							class="border-surface-300-700 h-20 w-full rounded border object-cover"
+						/>
+						<button
+							class="btn-icon preset-filled-error-500 absolute -right-1 -top-1 h-5 w-5 min-h-0 p-0 text-xs"
+							onclick={clearLeft}
+							title="Clear left image"
+						>
+							<Icons.X size={10} />
+						</button>
+					</div>
+				{:else}
+					<div
+						class="border-surface-300-700 text-surface-500 flex h-20 items-center justify-center rounded border border-dashed text-xs"
+					>
+						None
+					</div>
+				{/if}
+			</div>
+			<!-- Right -->
+			<div class="flex min-w-0 flex-1 flex-col gap-1">
+				<span class="text-surface-500 text-xs font-semibold uppercase tracking-wide"
+					>Right</span
+				>
+				{#if rightImage}
+					<div class="relative">
+						<img
+							src={rightImage}
+							alt="Right character"
+							class="border-surface-300-700 h-20 w-full rounded border object-cover"
+						/>
+						<button
+							class="btn-icon preset-filled-error-500 absolute -right-1 -top-1 h-5 w-5 min-h-0 p-0 text-xs"
+							onclick={clearRight}
+							title="Clear right image"
+						>
+							<Icons.X size={10} />
+						</button>
+					</div>
+				{:else}
+					<div
+						class="border-surface-300-700 text-surface-500 flex h-20 items-center justify-center rounded border border-dashed text-xs"
+					>
+						None
+					</div>
+				{/if}
+			</div>
+		</div>
+		<hr class="border-surface-300-700" />
+	{/if}
+
+	<!-- Entity list -->
+	{#if entities.length === 0}
+		<p class="text-surface-500 text-sm">No characters or personas in this chat.</p>
+	{:else}
+		<div class="space-y-1">
+			{#each entities as e (entityKey(e))}
+				{@const key = entityKey(e)}
+				{@const isExpanded = expandedKey === key}
+				{@const galleryImages = galleryCache[key] ?? []}
+				{@const isLoadingGallery = pendingGalleryKey === key}
+				{@const isLeft = !!e.avatar && leftImage === e.avatar}
+				{@const isRight = !!e.avatar && rightImage === e.avatar}
+
+				<div class="rounded-lg border border-surface-300-700 overflow-hidden">
+					<!-- Entity row -->
+					<div class="flex items-center gap-2 px-2 py-1.5">
+						<!-- Avatar -->
+						<div class="shrink-0 scale-75 origin-left">
+							<Avatar char={e.entity} />
+						</div>
+						<!-- Name -->
+						<span class="min-w-0 flex-1 truncate text-sm font-medium">{e.name}</span>
+						<!-- Indicators -->
+						{#if isLeft}
+							<span class="badge preset-filled-primary-500 text-xs">L</span>
+						{/if}
+						{#if isRight}
+							<span class="badge preset-filled-secondary-500 text-xs">R</span>
+						{/if}
+						<!-- Controls -->
+						<div class="flex shrink-0 gap-1">
+							{#if e.avatar}
+								<button
+									class="btn btn-sm preset-tonal-primary text-xs px-2 py-1"
+									onclick={() => setLeft(e.avatar!)}
+									title="Set as left image"
+								>
+									L
+								</button>
+								<button
+									class="btn btn-sm preset-tonal-secondary text-xs px-2 py-1"
+									onclick={() => setRight(e.avatar!)}
+									title="Set as right image"
+								>
+									R
+								</button>
+							{/if}
+							<button
+								class="btn btn-sm preset-tonal-surface text-xs px-2 py-1 {isExpanded ? 'preset-filled-surface-500' : ''}"
+								onclick={() => toggleGallery(e)}
+								title={isExpanded ? "Hide gallery" : "Show gallery"}
+							>
+								{#if isLoadingGallery}
+									<Icons.Loader size={12} class="animate-spin" />
+								{:else}
+									<Icons.Images size={12} />
+									<Icons.ChevronDown
+										size={10}
+										class="transition-transform {isExpanded ? 'rotate-180' : ''}"
+									/>
+								{/if}
+							</button>
+						</div>
+					</div>
+
+					<!-- Gallery thumbnails (expanded) -->
+					{#if isExpanded}
+						<div class="border-t border-surface-300-700 bg-surface-50-950 p-2">
+							{#if isLoadingGallery}
+								<div class="text-surface-500 flex items-center gap-2 text-xs">
+									<Icons.Loader size={12} class="animate-spin" />
+									Loading…
+								</div>
+							{:else if galleryImages.length === 0}
+								<p class="text-surface-500 text-xs">No gallery images.</p>
+							{:else}
+								<div class="flex flex-wrap gap-1.5">
+									{#each galleryImages as imgPath}
+										{#if !brokenPaths.has(imgPath)}
+											<div class="group relative">
+												<img
+													src={imgPath}
+													alt=""
+													class="h-14 w-14 cursor-pointer rounded object-cover border-2 {leftImage === imgPath
+														? 'border-primary-500'
+														: rightImage === imgPath
+															? 'border-secondary-500'
+															: 'border-surface-300-700'}"
+													onerror={() => {
+														brokenPaths = new Set([...brokenPaths, imgPath])
+													}}
+												/>
+												<!-- L/R overlay buttons on hover -->
+												<div
+													class="absolute inset-0 flex items-center justify-center gap-0.5 rounded bg-black/60 opacity-0 transition-opacity group-hover:opacity-100"
+												>
+													<button
+														class="btn btn-sm preset-filled-primary-500 h-6 min-h-0 px-1.5 py-0 text-xs"
+														onclick={() => setLeft(imgPath)}
+														title="Set as left"
+													>
+														L
+													</button>
+													<button
+														class="btn btn-sm preset-filled-secondary-500 h-6 min-h-0 px-1.5 py-0 text-xs"
+														onclick={() => setRight(imgPath)}
+														title="Set as right"
+													>
+														R
+													</button>
+												</div>
+											</div>
+										{/if}
+									{/each}
+								</div>
+							{/if}
+						</div>
+					{/if}
+				</div>
+			{/each}
+		</div>
+	{/if}
+</div>

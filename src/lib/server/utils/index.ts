@@ -83,7 +83,6 @@ export async function handleCharacterAvatarUpload({
 		characterId: character.id,
 		userId: character.userId
 	})
-	const oldAvatar = character.avatar
 	// Ensure the directory exists
 	await mkdir(avatarDir, { recursive: true })
 	// Save the new avatar file
@@ -94,15 +93,6 @@ export async function handleCharacterAvatarUpload({
 		.update(schema.characters)
 		.set({ avatar })
 		.where(eq(schema.characters.id, character.id))
-	// Delete old avatar file if it exists and is not the same as the new one
-	if (oldAvatar && oldAvatar !== avatar) {
-		try {
-			const oldAvatarPath = path.join(avatarDir, path.basename(oldAvatar))
-			await import("fs/promises").then((fs) => fs.unlink(oldAvatarPath))
-		} catch (e) {
-			// Ignore error if file does not exist
-		}
-	}
 }
 
 export function getUserBackgroundsDir({ userId }: { userId: number }) {
@@ -175,7 +165,6 @@ export async function handlePersonaAvatarUpload({
 		personaId: persona.id,
 		userId: persona.userId
 	})
-	const oldAvatar = persona.avatar
 	// Ensure the directory exists
 	await mkdir(avatarDir, { recursive: true })
 	// Save the new avatar file
@@ -186,13 +175,134 @@ export async function handlePersonaAvatarUpload({
 		.update(schema.personas)
 		.set({ avatar })
 		.where(eq(schema.personas.id, persona.id))
-	// Delete old avatar file if it exists and is not the same as the new one
-	if (oldAvatar && oldAvatar !== avatar) {
-		try {
-			const oldAvatarPath = path.join(avatarDir, path.basename(oldAvatar))
-			await import("fs/promises").then((fs) => fs.unlink(oldAvatarPath))
-		} catch (e) {
-			// Ignore error if file does not exist
-		}
+}
+
+export async function uploadCharacterGalleryImage({
+	characterId,
+	userId,
+	imageFile,
+	mimeType
+}: {
+	characterId: number
+	userId: number
+	imageFile: Buffer
+	mimeType: string
+}) {
+	const ext = mimeType.split("/")[1]?.replace("jpeg", "jpg") || "png"
+	const filename = `img-${uuid().substring(0, 8)}.${ext}`
+	const dir = getCharacterDataDir({ characterId, userId })
+	await mkdir(dir, { recursive: true })
+	const filePath = path.join(dir, filename)
+	await writeFile(filePath, imageFile, { flag: "w" })
+	const imgPath = `/images/data/users/${userId}/characters/${characterId}/${filename}`
+	await db
+		.update(schema.characters)
+		.set({ avatar: imgPath })
+		.where(eq(schema.characters.id, characterId))
+	return imgPath
+}
+
+export async function listCharacterGallery({
+	characterId,
+	userId
+}: {
+	characterId: number
+	userId: number
+}) {
+	const dir = getCharacterDataDir({ characterId, userId })
+	try {
+		const { readdir } = await import("fs/promises")
+		const files = await readdir(dir)
+		return files
+			.filter((f) => /\.(jpg|jpeg|png|webp|gif)$/i.test(f))
+			.map((f) => `/images/data/users/${userId}/characters/${characterId}/${f}`)
+	} catch {
+		return []
+	}
+}
+
+export async function deleteCharacterGalleryImage({
+	characterId,
+	userId,
+	path: imgPath
+}: {
+	characterId: number
+	userId: number
+	path: string
+}) {
+	const dir = getCharacterDataDir({ characterId, userId })
+	const filename = path.basename(imgPath)
+	const fullPath = path.join(dir, filename)
+	if (!fullPath.startsWith(dir)) return
+	try {
+		const { unlink } = await import("fs/promises")
+		await unlink(fullPath)
+	} catch {
+		// File already gone
+	}
+}
+
+export async function uploadPersonaGalleryImage({
+	personaId,
+	userId,
+	imageFile,
+	mimeType
+}: {
+	personaId: number
+	userId: number
+	imageFile: Buffer
+	mimeType: string
+}) {
+	const ext = mimeType.split("/")[1]?.replace("jpeg", "jpg") || "png"
+	const filename = `img-${uuid().substring(0, 8)}.${ext}`
+	const dir = getPersonaDataDir({ personaId, userId })
+	await mkdir(dir, { recursive: true })
+	const filePath = path.join(dir, filename)
+	await writeFile(filePath, imageFile, { flag: "w" })
+	const imgPath = `/images/data/users/${userId}/personas/${personaId}/${filename}`
+	await db
+		.update(schema.personas)
+		.set({ avatar: imgPath })
+		.where(eq(schema.personas.id, personaId))
+	return imgPath
+}
+
+export async function listPersonaGallery({
+	personaId,
+	userId
+}: {
+	personaId: number
+	userId: number
+}) {
+	const dir = getPersonaDataDir({ personaId, userId })
+	try {
+		const { readdir } = await import("fs/promises")
+		const files = await readdir(dir)
+		return files
+			.filter((f) => /\.(jpg|jpeg|png|webp|gif)$/i.test(f))
+			.map((f) => `/images/data/users/${userId}/personas/${personaId}/${f}`)
+	} catch {
+		return []
+	}
+}
+
+export async function deletePersonaGalleryImage({
+	personaId,
+	userId,
+	path: imgPath
+}: {
+	personaId: number
+	userId: number
+	path: string
+}) {
+	const dir = getPersonaDataDir({ personaId, userId })
+	const filename = path.basename(imgPath)
+	const fullPath = path.join(dir, filename)
+	if (!fullPath.startsWith(dir)) return
+	try {
+		const { unlink } = await import("fs/promises")
+		await unlink(fullPath)
+	} catch {
+		// File already gone
 	}
 }

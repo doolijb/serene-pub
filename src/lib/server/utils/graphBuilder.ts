@@ -25,6 +25,8 @@ export interface GraphBuilderScene {
 		month: number | null
 		day: number | null
 	} | null
+	/** Present when this item is a direct history entry (no associated scene) */
+	sourceHistoryEntryId?: number
 }
 
 export interface GraphBuilderSeedNode {
@@ -431,13 +433,22 @@ export async function buildGraphFromScenes(
 		for (const node of sceneResult.nodes) {
 			const globalId = `node_${nextNodeIndex++}`
 			tempIdRemap.set(node.tempId, globalId)
-			allNodes.push({ ...node, tempId: globalId, sceneIndex: i, sceneId: currentScene.id })
+			// Direct history entries get historyEntryId set, not sceneId
+			const isDirectEntry = currentScene.sourceHistoryEntryId != null
+			allNodes.push({
+				...node,
+				tempId: globalId,
+				sceneIndex: i,
+				sceneId: isDirectEntry ? undefined : currentScene.id,
+				historyEntryId: isDirectEntry ? currentScene.sourceHistoryEntryId : undefined
+			})
 		}
 
 		for (const rel of sceneResult.relationships) {
 			const fromTempId = tempIdRemap.get(rel.fromTempId) ?? rel.fromTempId
 			const toTempId = tempIdRemap.get(rel.toTempId) ?? rel.toTempId
 			const key = `${fromTempId}|${toTempId}`
+			const isDirectEntry = currentScene.sourceHistoryEntryId != null
 
 			if (allRelKeyIndex.has(key)) {
 				// Relationship already seen this session (or is a seed) — update in place.
@@ -446,9 +457,16 @@ export async function buildGraphFromScenes(
 				allRelationships[idx] = { ...allRelationships[idx], ...rel, fromTempId, toTempId }
 				if (seedRelKeys.has(key)) updatedSeedRelKeys.add(key)
 			} else {
-				// First time seeing this relationship — tag with current scene
+				// First time seeing this relationship — tag with current scene or history entry
 				allRelKeyIndex.set(key, allRelationships.length)
-				allRelationships.push({ ...rel, fromTempId, toTempId, sceneIndex: i, sceneId: currentScene.id })
+				allRelationships.push({
+					...rel,
+					fromTempId,
+					toTempId,
+					sceneIndex: i,
+					sceneId: isDirectEntry ? undefined : currentScene.id,
+					historyEntryId: isDirectEntry ? currentScene.sourceHistoryEntryId : undefined
+				})
 			}
 		}
 	}

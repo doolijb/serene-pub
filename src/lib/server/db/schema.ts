@@ -584,6 +584,7 @@ export const historyEntries = pgTable("history_entries", {
 		.$onUpdate(() => new Date()),
 	position: integer("position").notNull().default(0),
 	isCompleted: boolean("is_completed").notNull().default(false),
+	graphed: boolean("graphed").notNull().default(false),
 	embedding: real("embedding").array(),
 	embeddingModel: text("embedding_model"),
 	vectorizedAt: timestamp("vectorized_at")

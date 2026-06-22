@@ -22,7 +22,11 @@
 	let ungraphedSceneCount = $state(0)
 	let ungraphedUnsummarizedCount = $state(0)
 	let totalSummarizedCount = $state(0)
+	let ungraphedHistoryEntryCount = $state(0)
+	let totalDirectHistoryEntryCount = $state(0)
 	let isLoading = $state(true)
+
+	let extendReadyCount = $derived(ungraphedSceneCount + ungraphedHistoryEntryCount)
 
 	// Build modal
 	let showBuildModal = $state(false)
@@ -74,6 +78,8 @@
 				ungraphedSceneCount = msg.ungraphedSceneCount ?? 0
 				ungraphedUnsummarizedCount = msg.ungraphedUnsummarizedCount ?? 0
 				totalSummarizedCount = msg.totalSummarizedCount ?? 0
+				ungraphedHistoryEntryCount = msg.ungraphedHistoryEntryCount ?? 0
+				totalDirectHistoryEntryCount = msg.totalDirectHistoryEntryCount ?? 0
 				isLoading = false
 			}
 		)
@@ -274,17 +280,17 @@
 				buildMode = "extend"
 				showBuildModal = true
 			}}
-			title={ungraphedSceneCount === 0
+			title={extendReadyCount === 0
 				? ungraphedUnsummarizedCount > 0
 					? `${ungraphedUnsummarizedCount} scene${ungraphedUnsummarizedCount === 1 ? "" : "s"} need summaries before they can be graphed`
 					: "Graph is up to date"
-				: `Extend graph with ${ungraphedSceneCount} new scene${ungraphedSceneCount === 1 ? "" : "s"}${ungraphedUnsummarizedCount > 0 ? ` (${ungraphedUnsummarizedCount} more need summaries)` : ""}`}
-			disabled={nodes.length === 0 || ungraphedSceneCount === 0}
+				: `Extend graph with ${extendReadyCount} new item${extendReadyCount === 1 ? "" : "s"}${ungraphedUnsummarizedCount > 0 ? ` (${ungraphedUnsummarizedCount} more scenes need summaries)` : ""}`}
+			disabled={nodes.length === 0 || extendReadyCount === 0}
 		>
 			<Icons.Layers size={14} />
 			Extend
-			{#if ungraphedSceneCount > 0}
-				<span class="badge-icon preset-filled-primary-500 text-[10px]">{ungraphedSceneCount}</span>
+			{#if extendReadyCount > 0}
+				<span class="badge-icon preset-filled-primary-500 text-[10px]">{extendReadyCount}</span>
 			{/if}
 		</button>
 		<div class="ml-auto flex gap-1">
@@ -737,6 +743,7 @@
 	{lorebookId}
 	mode={buildMode}
 	readySceneCount={buildMode === "extend" ? ungraphedSceneCount : totalSummarizedCount}
-	skippedSceneCount={buildMode === "extend" ? ungraphedUnsummarizedCount : (totalSummarizedCount === 0 ? 0 : 0)}
+	skippedSceneCount={buildMode === "extend" ? ungraphedUnsummarizedCount : 0}
+	ungraphedHistoryEntryCount={buildMode === "extend" ? ungraphedHistoryEntryCount : totalDirectHistoryEntryCount}
 	onApplied={load}
 />

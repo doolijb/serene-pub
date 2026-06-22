@@ -14,6 +14,8 @@
 		readySceneCount?: number
 		/** Scenes that will be skipped (no summary yet) */
 		skippedSceneCount?: number
+		/** Direct history entries (no scenes) that will be processed */
+		ungraphedHistoryEntryCount?: number
 		onApplied?: () => void
 	}
 
@@ -24,8 +26,11 @@
 		mode = "replace",
 		readySceneCount,
 		skippedSceneCount,
+		ungraphedHistoryEntryCount,
 		onApplied
 	}: Props = $props()
+
+	let totalReadyCount = $derived((readySceneCount ?? 0) + (ungraphedHistoryEntryCount ?? 0))
 
 	const socket = useTypedSocket()
 
@@ -206,15 +211,26 @@
 			</header>
 
 			<div class="space-y-2">
-				{#if (readySceneCount ?? 0) > 0}
+				{#if totalReadyCount > 0}
 					<div class="flex items-center gap-3 rounded-lg border border-success-500/30 bg-success-500/10 p-3 text-sm">
 						<Icons.CheckCircle size={16} class="text-success-500 shrink-0" />
-						<span><strong>{readySceneCount}</strong> scene{(readySceneCount ?? 0) === 1 ? "" : "s"} ready to process</span>
+						<span>
+							{#if (readySceneCount ?? 0) > 0}
+								<strong>{readySceneCount}</strong> scene{(readySceneCount ?? 0) === 1 ? "" : "s"}
+							{/if}
+							{#if (readySceneCount ?? 0) > 0 && (ungraphedHistoryEntryCount ?? 0) > 0}
+								{" + "}
+							{/if}
+							{#if (ungraphedHistoryEntryCount ?? 0) > 0}
+								<strong>{ungraphedHistoryEntryCount}</strong> history {(ungraphedHistoryEntryCount ?? 0) === 1 ? "entry" : "entries"}
+							{/if}
+							{" "}ready to process
+						</span>
 					</div>
 				{:else}
 					<div class="flex items-center gap-3 rounded-lg border border-warning-500/30 bg-warning-500/10 p-3 text-sm">
 						<Icons.AlertTriangle size={16} class="text-warning-500 shrink-0" />
-						<span>No scenes are ready to process. Generate scene summaries first.</span>
+						<span>No content is ready to process. Generate scene summaries or add history entry content first.</span>
 					</div>
 				{/if}
 				{#if (skippedSceneCount ?? 0) > 0}
@@ -231,7 +247,7 @@
 				</button>
 				<button
 					class="btn preset-filled-primary-500 ml-auto"
-					disabled={(readySceneCount ?? 0) === 0}
+					disabled={totalReadyCount === 0}
 					onclick={() => { step = "building"; triggerBuild() }}
 				>
 					<Icons.Play size={16} /> Proceed

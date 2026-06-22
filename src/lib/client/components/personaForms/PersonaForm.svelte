@@ -5,6 +5,7 @@
 	import { z } from "zod"
 	import PersonaUnsavedChangesModal from "../modals/PersonaUnsavedChangesModal.svelte"
 	import Avatar from "../Avatar.svelte"
+	import PersonaImageGallery from "./PersonaImageGallery.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	interface EditPersonaData {
@@ -451,6 +452,16 @@
 				</button>
 			</div>
 		</fieldset>
+		{#if mode === "edit" && editPersonaData.id}
+			<div class="space-y-2">
+				<p class="mb-1 font-semibold">Image Gallery</p>
+				<PersonaImageGallery
+					personaId={editPersonaData.id}
+					currentAvatar={editPersonaData.avatar}
+					onAvatarChange={(path) => { editPersonaData.avatar = path }}
+				/>
+			</div>
+		{/if}
 		<fieldset class="flex flex-col gap-1">
 			<label class="flex gap-1 font-semibold" for="personaName">
 				Name* <span

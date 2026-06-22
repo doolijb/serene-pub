@@ -17,7 +17,8 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); errs=[x for x in d if x['severity']=='Error']; print\\(json.dumps\\(errs, indent=2\\)\\)\")",
       "Bash(python3 -c ' *)",
       "Bash(npx tsc *)",
-      "Bash(npm show *)"
+      "Bash(npm show *)",
+      "Bash(git -C /home/jody/github/serene-pub diff HEAD -- src/lib/server/utils/promptBuilder/RagInfillEngine.ts)"
     ],
     "deny": []
   }

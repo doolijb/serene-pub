@@ -8,6 +8,7 @@ import {
 	BaseConnectionAdapter,
 	type AdapterExports
 } from "./BaseConnectionAdapter"
+import { type CompiledPrompt } from "../utils/promptBuilder"
 import {
 	type BaseLoadModelOpts,
 	type LLM,

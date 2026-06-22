@@ -2,6 +2,7 @@ import {
 	BaseConnectionAdapter,
 	type AdapterExports
 } from "./BaseConnectionAdapter"
+import { type CompiledPrompt } from "../utils/promptBuilder"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { TokenCounters } from "../utils/TokenCounterManager"
 import { OpenAI } from "openai"

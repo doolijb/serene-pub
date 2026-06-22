@@ -248,15 +248,15 @@
 	})
 
 	onDestroy(() => {
-		socket.off("chats:summarize:progress")
-		socket.off("chats:summarize:complete")
-		socket.off("chats:summarize:error")
-		socket.off("lorebooks:list")
-		socket.off("chats:setLorebook")
-		socket.off("lorebooks:create")
-		socket.off("historyEntries:list")
-		socket.off("historyEntries:create")
-		socket.off("lorebooks:bindingList")
+		socket.off("chats:summarize:progress", handleProgress)
+		socket.off("chats:summarize:complete", handleComplete)
+		socket.off("chats:summarize:error", handleError)
+		socket.off("lorebooks:list", handleLorebooksList)
+		socket.off("chats:setLorebook", handleSetLorebook)
+		socket.off("lorebooks:create", handleLorebookCreate)
+		socket.off("historyEntries:list", handleHistoryEntriesList)
+		socket.off("historyEntries:create", handleHistoryEntryCreate)
+		socket.off("lorebooks:bindingList", handleLorebookBindingList)
 	})
 
 	// ── Actions ───────────────────────────────────────────────────
@@ -272,9 +272,7 @@
 
 	function createAndAttachLorebook() {
 		if (!newLorebookName.trim()) return
-		socket.emit("lorebooks:create", {
-			lorebook: { name: newLorebookName.trim() }
-		})
+		socket.emit("lorebooks:create", { name: newLorebookName.trim() })
 		newLorebookName = ""
 		isCreatingLorebook = false
 	}

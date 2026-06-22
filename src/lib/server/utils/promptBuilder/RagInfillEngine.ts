@@ -28,7 +28,8 @@
  * ### RAG retrieval
  * scopedRankBySimilarity is called over all content types (messages, worldLore,
  * characterLore, historyEntry) scoped to the chat's linked lorebooks/characters.
- * Results are filtered to score ≥ RAG_SCORE_THRESHOLD and capped at RAG_TOP_K.
+ * Results are merged using Reciprocal Rank Fusion (RRF) across per-message
+ * queries, reranked with MMR for diversity, and capped per source type.
  *
  * - Message results: older messages that are semantically relevant to the current
  *   conversation are added to the context window.
@@ -39,13 +40,14 @@
  * 1. All guaranteed + RAG messages are included initially.
  * 2. If over the token limit: oldest messages are trimmed one-by-one.
  * 3. If under the context threshold: remaining older messages (not in RAG) are
- *    added from most-recent to oldest until the budget is consumed.
+ *    added scored by relevance until the budget is consumed.
  */
 
-import { embed, getLoadedModelId } from "$lib/server/embedding"
+import { batchEmbed, embed, getLoadedModelId } from "$lib/server/embedding"
 import {
 	getChatRagContext,
-	scopedRankBySimilarity
+	scopedRankBySimilarity,
+	type ScopedRagItem
 } from "$lib/server/embedding/ragContext"
 import type { BasePromptChat } from "../../connectionAdapters/BaseConnectionAdapter"
 import {
@@ -88,11 +90,116 @@ const RAG_RECENT_WINDOW = 3
  */
 const MAX_GRAPH_PAIRS = 10
 
-/** Maximum items returned from similarity search */
-const RAG_TOP_K = 20
+/** Per-source-type budget caps applied after RRF + MMR */
+const RAG_SOURCE_BUDGET = {
+	message:               12,
+	worldLore:             8,
+	characterLore:         6,
+	historyEntry:          6,
+	narrativeRelationship: 5,
+} as const
 
-/** Minimum cosine similarity score to include a RAG result */
-const RAG_SCORE_THRESHOLD = 0.4
+/** Recency boost amplitude for message scores */
+const RAG_RECENCY_BOOST = 0.15
+/** Recency decay rate — controls how fast the boost falls off with age */
+const RAG_RECENCY_DECAY = 0.01
+
+/** Adaptive score threshold floor */
+const RAG_SCORE_THRESHOLD_MIN = 0.3
+/** Adaptive threshold: at least this fraction of the top score */
+const RAG_RELATIVE_THRESHOLD = 0.7
+
+/** MMR relevance/diversity trade-off (higher = more relevance-focused) */
+const MMR_LAMBDA = 0.7
+
+// ─── Helper functions ──────────────────────────────────────────────────────────
+
+type ScoredRagItem = ScopedRagItem & { score: number }
+
+/**
+ * Reciprocal Rank Fusion over multiple ranked lists.
+ * Returns a map from item id to aggregated RRF score.
+ */
+function rrfMerge(
+	rankedLists: ScopedRagItem[][]
+): Map<string, { item: ScopedRagItem; rrfScore: number }> {
+	const merged = new Map<string, { item: ScopedRagItem; rrfScore: number }>()
+	for (const list of rankedLists) {
+		for (let rank = 0; rank < list.length; rank++) {
+			const item = list[rank]
+			const key = `${item.source}:${item.id}`
+			const contribution = 1 / (60 + rank)
+			if (merged.has(key)) {
+				merged.get(key)!.rrfScore += contribution
+			} else {
+				merged.set(key, { item, rrfScore: contribution })
+			}
+		}
+	}
+	return merged
+}
+
+/**
+ * Dot product of two vectors (used for MMR inter-item similarity).
+ * For normalized embeddings this equals cosine similarity.
+ */
+function dotProduct(a: number[], b: number[]): number {
+	let sum = 0
+	const len = Math.min(a.length, b.length)
+	for (let i = 0; i < len; i++) sum += a[i] * b[i]
+	return sum
+}
+
+/**
+ * Maximal Marginal Relevance reranking.
+ * λ=MMR_LAMBDA balances relevance vs. diversity.
+ * Returns items reordered by MMR priority.
+ */
+function mmrRerank(items: ScoredRagItem[]): ScoredRagItem[] {
+	if (items.length <= 1) return items
+	const remaining = [...items]
+	const selected: ScoredRagItem[] = []
+
+	// Start with highest-scoring item
+	remaining.sort((a, b) => b.score - a.score)
+	selected.push(remaining.shift()!)
+
+	while (remaining.length > 0) {
+		let bestIdx = 0
+		let bestMMR = -Infinity
+		for (let i = 0; i < remaining.length; i++) {
+			const relScore = remaining[i].score
+			let maxSim = 0
+			for (const sel of selected) {
+				const sim = dotProduct(remaining[i].embedding, sel.embedding)
+				if (sim > maxSim) maxSim = sim
+			}
+			const mmr = MMR_LAMBDA * relScore - (1 - MMR_LAMBDA) * maxSim
+			if (mmr > bestMMR) {
+				bestMMR = mmr
+				bestIdx = i
+			}
+		}
+		selected.push(remaining.splice(bestIdx, 1)[0])
+	}
+	return selected
+}
+
+/**
+ * Format a chat message for query embedding, including speaker attribution.
+ */
+function formatMessageForQuery(msg: SelectChatMessage, chat: BasePromptChat): string {
+	const char = (chat.chatCharacters as any[])?.find(
+		(cc: any) => cc.character?.id === msg.characterId
+	)?.character
+	const persona = (chat.chatPersonas as any[])?.find(
+		(cp: any) => cp.persona?.id === msg.personaId
+	)?.persona
+	const nickname = (char as any)?.nickname
+	const speakerName = nickname || char?.name || persona?.name || msg.role || "Unknown"
+	const cleanContent = (msg.content ?? "").replace(/^\*+|\*+$/gm, "").trim()
+	return `[${speakerName}]: ${cleanContent}`
+}
 
 // ─── Engine ───────────────────────────────────────────────────────────────────
 
@@ -153,8 +260,6 @@ export class RagInfillEngine {
 				: allMessages.slice(0, -MIN_GUARANTEED_MESSAGES)
 
 		// ── 2. Two-pass RAG retrieval ──────────────────────────────────────────
-		// Map preserves insertion order: current-pass pairs inserted first, so they
-		// occupy the priority slots when MAX_GRAPH_PAIRS cap is applied.
 		const ragOlderMessageIds = new Set<number>()
 		const ragWorldLoreItems: Array<{ id: number; name: string; content: string }> = []
 		const ragCharLoreItems: Array<{ id: number; lorebookId: number; name: string; content: string }> = []
@@ -163,6 +268,12 @@ export class RagInfillEngine {
 			year: number; month: number | null; day: number | null
 		}> = []
 		const ragRelPairMap = new Map<string, { fromNodeId: number; toNodeId: number; lorebookId: number }>()
+
+		// Diagnostic score tracking
+		let diagnosticMessageScores: number[] = []
+		let diagnosticLoreScores: number[] = []
+		let diagnosticThresholdUsed = 0
+		let diagnosticQueryMessageCount = 0
 
 		if (allMessages.length > 0) {
 			try {
@@ -175,43 +286,149 @@ export class RagInfillEngine {
 					-RAG_CURRENT_WINDOW
 				)
 
-				const seenIds = new Set<number>()
+				const seenIds = new Set<string>()
 
+				/**
+				 * Run a per-message-embedded query with RRF merging.
+				 * Each message is embedded individually; results are fused via RRF.
+				 */
 				const runQuery = async (messages: SelectChatMessage[]) => {
-					const text = messages.map((m) => m.content).filter(Boolean).join("\n\n")
-					if (!text.trim()) return []
-					const embedding = await embed(text)
-					const results = await scopedRankBySimilarity(embedding, ragContext, {
-						modelId,
-						topK: RAG_TOP_K,
-						sources: ["message", "worldLore", "characterLore", "historyEntry", "narrativeRelationship"],
-						excludeRecentMessages: guaranteedMessages.length
+					const texts = messages
+						.map((m) => formatMessageForQuery(m, this.chat))
+						.filter((t) => t.trim().length > 0)
+					if (texts.length === 0) return []
+
+					// Batch-embed all messages in one call
+					let embeddings: number[][]
+					try {
+						embeddings = await batchEmbed(texts)
+					} catch {
+						// Fallback: embed individually if batchEmbed fails
+						embeddings = await Promise.all(texts.map((t) => embed(t)))
+					}
+
+					// Run a separate scopedRankBySimilarity for each embedding
+					const perMsgResults = await Promise.all(
+						embeddings.map((emb) =>
+							scopedRankBySimilarity(emb, ragContext, {
+								modelId,
+								topK: Math.max(
+									RAG_SOURCE_BUDGET.message,
+									RAG_SOURCE_BUDGET.worldLore,
+									RAG_SOURCE_BUDGET.characterLore,
+									RAG_SOURCE_BUDGET.historyEntry,
+									RAG_SOURCE_BUDGET.narrativeRelationship
+								) * 3,
+								sources: ["message", "worldLore", "characterLore", "historyEntry", "narrativeRelationship"],
+								excludeRecentMessages: guaranteedMessages.length
+							})
+						)
+					)
+
+					// Merge via RRF
+					const rrfMap = rrfMerge(perMsgResults)
+
+					// Convert to array with RRF-as-score for threshold and MMR
+					// Normalise RRF scores to [0,1] range relative to max for threshold comparison
+					const rrfEntries = Array.from(rrfMap.values())
+					if (rrfEntries.length === 0) return []
+
+					const maxRRF = Math.max(...rrfEntries.map((e) => e.rrfScore))
+
+					// Produce items with normalised score for threshold filtering & MMR
+					const scored = rrfEntries.map(({ item, rrfScore }) => ({
+						...item,
+						score: maxRRF > 0 ? rrfScore / maxRRF : 0
+					}))
+
+					// ── Recency decay boost for messages ────────────────────────────
+					const msgCount = allMessages.length
+					for (const item of scored) {
+						if (item.source !== "message") continue
+						// Find position from the end (newer = smaller ageInMessages)
+						const idx = allMessages.findIndex((m) => m.id === item.id)
+						const ageInMessages = idx >= 0 ? msgCount - 1 - idx : msgCount
+						const boosted =
+							item.score *
+							(1 + RAG_RECENCY_BOOST * Math.exp(-RAG_RECENCY_DECAY * ageInMessages))
+						item.score = boosted
+					}
+
+					// ── Adaptive score threshold ─────────────────────────────────────
+					const topScore = Math.max(...scored.map((s) => s.score), 0)
+					const adaptiveThreshold = Math.max(
+						RAG_SCORE_THRESHOLD_MIN,
+						topScore * RAG_RELATIVE_THRESHOLD
+					)
+					// Track for diagnostics (update with last computed threshold)
+					diagnosticThresholdUsed = adaptiveThreshold
+
+					// ── MMR reranking ────────────────────────────────────────────────
+					const aboveThreshold = scored.filter((s) => s.score >= adaptiveThreshold)
+					const reranked = mmrRerank(aboveThreshold as any)
+
+					// ── Per-source budget caps ───────────────────────────────────────
+					const sourceCounts: Record<string, number> = {}
+					const budgeted = reranked.filter((item) => {
+						const src = item.source as keyof typeof RAG_SOURCE_BUDGET
+						const budget =
+							src in RAG_SOURCE_BUDGET ? RAG_SOURCE_BUDGET[src] : 20
+						const count = sourceCounts[src] ?? 0
+						if (count >= budget) return false
+						sourceCounts[src] = count + 1
+						return true
 					})
-					return results.filter((r) => r.score >= RAG_SCORE_THRESHOLD)
+
+					return budgeted
 				}
 
 				const mergeResults = (results: Awaited<ReturnType<typeof runQuery>>) => {
 					for (const item of results) {
-						if (seenIds.has(item.id)) continue
-						seenIds.add(item.id)
+						const key = `${item.source}:${item.id}`
+						if (seenIds.has(key)) continue
+						seenIds.add(key)
+
+						// Accumulate diagnostic scores
+						if (item.source === "message") {
+							diagnosticMessageScores.push(item.score)
+						} else if (
+							item.source === "worldLore" ||
+							item.source === "characterLore" ||
+							item.source === "historyEntry"
+						) {
+							diagnosticLoreScores.push(item.score)
+						}
+
 						if (item.source === "message") {
 							ragOlderMessageIds.add(item.id)
 						} else if (item.source === "worldLore") {
-							ragWorldLoreItems.push({ id: item.id, name: item.name, content: item.content })
+							ragWorldLoreItems.push({ id: item.id, name: (item as any).name, content: item.content })
 						} else if (item.source === "characterLore") {
-							ragCharLoreItems.push({ id: item.id, lorebookId: item.lorebookId, name: item.name, content: item.content })
+							ragCharLoreItems.push({ id: item.id, lorebookId: (item as any).lorebookId, name: (item as any).name, content: item.content })
 						} else if (item.source === "historyEntry") {
-							ragHistoryItems.push({ id: item.id, lorebookId: item.lorebookId, content: item.content, year: item.year, month: item.month, day: item.day })
+							ragHistoryItems.push({
+								id: item.id,
+								lorebookId: (item as any).lorebookId,
+								content: item.content,
+								year: (item as any).year,
+								month: (item as any).month,
+								day: (item as any).day
+							})
 						} else if (item.source === "narrativeRelationship") {
-							const pairKey = `${item.fromNodeId}:${item.toNodeId}`
+							const pairKey = `${(item as any).fromNodeId}:${(item as any).toNodeId}`
 							if (!ragRelPairMap.has(pairKey)) {
-								ragRelPairMap.set(pairKey, { fromNodeId: item.fromNodeId, toNodeId: item.toNodeId, lorebookId: item.lorebookId })
+								ragRelPairMap.set(pairKey, {
+									fromNodeId: (item as any).fromNodeId,
+									toNodeId: (item as any).toNodeId,
+									lorebookId: (item as any).lorebookId
+								})
 							}
 						}
 					}
 				}
 
 				// Current-pass results fill slots first; recent-pass fills what remains
+				diagnosticQueryMessageCount = currentMessages.length + recentMessages.length
 				mergeResults(await runQuery(currentMessages))
 				mergeResults(await runQuery(recentMessages))
 			} catch (err) {
@@ -496,16 +713,34 @@ export class RagInfillEngine {
 		let fillInMessages: SelectChatMessage[]
 
 		if (loreHasContent) {
-			// Lore present — RAG messages join the fill-in pool (but first, so most relevant)
+			// Lore present — RAG messages join the fill-in pool with unified scoring
 			initialOlderMessages = []
-			fillInMessages = [
-				...olderMessages.filter((m) => ragOlderMessageIds.has(m.id)).reverse(),
-				...olderMessages.filter((m) => !ragOlderMessageIds.has(m.id)).reverse()
-			]
+			const maxMsgId = olderMessages.length > 0
+				? Math.max(...olderMessages.map((m) => m.id), 1)
+				: 1
+			fillInMessages = olderMessages
+				.map((m) => ({
+					msg: m,
+					score: ragOlderMessageIds.has(m.id)
+						? 1.0
+						: 0.5 + 0.5 * (m.id / maxMsgId)
+				}))
+				.sort((a, b) => b.score - a.score)
+				.map((x) => x.msg)
 		} else {
 			// No lore — promote RAG messages into the initial set
 			initialOlderMessages = olderMessages.filter((m) => ragOlderMessageIds.has(m.id))
-			fillInMessages = olderMessages.filter((m) => !ragOlderMessageIds.has(m.id)).reverse()
+			const maxMsgId = olderMessages.length > 0
+				? Math.max(...olderMessages.map((m) => m.id), 1)
+				: 1
+			fillInMessages = olderMessages
+				.filter((m) => !ragOlderMessageIds.has(m.id))
+				.map((m) => ({
+					msg: m,
+					score: 0.5 + 0.5 * (m.id / maxMsgId)
+				}))
+				.sort((a, b) => b.score - a.score)
+				.map((x) => x.msg)
 		}
 
 		const processMsg = (msg: SelectChatMessage): ProcessedChatMessage | null =>
@@ -575,7 +810,8 @@ export class RagInfillEngine {
 			totalTokens = await countTokens(buildCtx())
 		}
 
-		// Under threshold: fill in older messages from fill-in pool (newest-first)
+		// Under threshold: fill in older messages from fill-in pool (by score)
+		// Stop only when token limit is exceeded — fill to limit, not just threshold.
 		const threshold = tokenLimit * contextThresholdPercent
 		if (totalTokens < threshold && fillInMessages.length > 0) {
 			for (const msg of fillInMessages) {
@@ -585,9 +821,11 @@ export class RagInfillEngine {
 				totalTokens = await countTokens(buildCtx())
 				if (totalTokens > tokenLimit) {
 					chatMessages.pop()
+					totalTokens = await countTokens(buildCtx())
 					break
 				}
-				if (totalTokens >= threshold) break
+				// Removed: if (totalTokens >= threshold) break
+				// The only stop condition is exceeding tokenLimit
 			}
 		}
 
@@ -648,6 +886,12 @@ export class RagInfillEngine {
 				ragOlder: ragOlderIncluded,
 				filledIn: filledInIncluded,
 				total: includedIds.length
+			},
+			scores: {
+				messageScores: diagnosticMessageScores,
+				loreScores: diagnosticLoreScores,
+				thresholdUsed: diagnosticThresholdUsed,
+				queryMessageCount: diagnosticQueryMessageCount
 			}
 		}
 

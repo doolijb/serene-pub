@@ -115,13 +115,13 @@ export function* historyEntryIterator({
 		chatWithLorebook.lorebook?.historyEntries || []
 	const sorted = entries.slice().sort((a, b) => {
 		const aVal =
-			(a.date?.year ?? 0) * 10000 +
-			(a.date?.month ?? 0) * 100 +
-			(a.date?.day ?? 0)
+			(a.year ?? 0) * 10000 +
+			(a.month ?? 0) * 100 +
+			(a.day ?? 0)
 		const bVal =
-			(b.date?.year ?? 0) * 10000 +
-			(b.date?.month ?? 0) * 100 +
-			(b.date?.day ?? 0)
+			(b.year ?? 0) * 10000 +
+			(b.month ?? 0) * 100 +
+			(b.day ?? 0)
 		return bVal - aVal
 	})
 	if (priority === 4) {

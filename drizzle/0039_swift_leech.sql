@@ -1,0 +1,1 @@
+ALTER TABLE "history_entries" ADD COLUMN "graphed" boolean DEFAULT false NOT NULL;

@@ -139,6 +139,22 @@ type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
+	"characters:listGallery": {
+		params: Sockets.Characters.ListGallery.Params
+		response: Sockets.Characters.ListGallery.Response
+	}
+	"characters:uploadGalleryImage": {
+		params: Sockets.Characters.UploadGalleryImage.Params
+		response: Sockets.Characters.UploadGalleryImage.Response
+	}
+	"characters:deleteGalleryImage": {
+		params: Sockets.Characters.DeleteGalleryImage.Params
+		response: Sockets.Characters.DeleteGalleryImage.Response
+	}
+	"characters:setAvatar": {
+		params: Sockets.Characters.SetAvatar.Params
+		response: Sockets.Characters.SetAvatar.Response
+	}
 
 	// Connection events
 	"connections:list": {
@@ -218,6 +234,22 @@ type SocketEventMap = {
 	"personas:importFromLibrary:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
+	}
+	"personas:listGallery": {
+		params: Sockets.Personas.ListGallery.Params
+		response: Sockets.Personas.ListGallery.Response
+	}
+	"personas:uploadGalleryImage": {
+		params: Sockets.Personas.UploadGalleryImage.Params
+		response: Sockets.Personas.UploadGalleryImage.Response
+	}
+	"personas:deleteGalleryImage": {
+		params: Sockets.Personas.DeleteGalleryImage.Params
+		response: Sockets.Personas.DeleteGalleryImage.Response
+	}
+	"personas:setAvatar": {
+		params: Sockets.Personas.SetAvatar.Params
+		response: Sockets.Personas.SetAvatar.Response
 	}
 
 	// Chat events
