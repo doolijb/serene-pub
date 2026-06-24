@@ -288,6 +288,13 @@
       "when": 1782190722489,
       "tag": "0040_magical_songbird",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1782278946320,
+      "tag": "0041_real_star_brand",
+      "breakpoints": true
     }
   ]
 }

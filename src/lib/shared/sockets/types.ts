@@ -2439,6 +2439,102 @@ declare global {
 				}
 			}
 		}
+
+		// Import namespace
+		namespace Import {
+			namespace SillyTavern {
+				namespace Scan {
+					interface Params {
+						directoryPath: string
+					}
+					interface Response {
+						success: boolean
+						data?: {
+							characters: Array<{
+								filename: string
+								name: string
+								selected: boolean
+								disabled?: boolean
+							}>
+							personas: Array<{
+								name: string
+								selected: boolean
+								disabled?: boolean
+							}>
+							chats: Array<{
+								filename: string
+								name: string
+								characterNames: string[]
+								isGroup: boolean
+								selected: boolean
+								disabled: boolean
+								disabledReason?: string
+							}>
+							groupChats: Array<{
+								filename: string
+								name: string
+								memberNames: string[]
+								selected: boolean
+								disabled: boolean
+								disabledReason?: string
+							}>
+							lorebooks: Array<{
+								filename: string
+								name: string
+								selected: boolean
+							}>
+						}
+						error?: string
+					}
+				}
+				namespace Execute {
+					interface Params {
+						directoryPath: string
+						selectedData: {
+							characters: Array<{
+								filename: string
+								name: string
+								selected: boolean
+								disabled?: boolean
+							}>
+							personas: Array<{
+								name: string
+								selected: boolean
+								disabled?: boolean
+							}>
+							chats: Array<{
+								filename: string
+								name: string
+								characterNames: string[]
+								isGroup: boolean
+								selected: boolean
+								disabled: boolean
+								disabledReason?: string
+							}>
+							groupChats: Array<{
+								filename: string
+								name: string
+								memberNames: string[]
+								selected: boolean
+								disabled: boolean
+								disabledReason?: string
+							}>
+							lorebooks: Array<{
+								filename: string
+								name: string
+								selected: boolean
+							}>
+						}
+					}
+					interface Response {
+						success: boolean
+						message?: string
+						error?: string
+						errors?: string[]
+					}
+				}
+			}
+		}
 	}
 
 	// Assistant namespace
@@ -2473,6 +2569,30 @@ declare global {
 				correctedFields?: string[]
 			}
 		}
+
+		namespace Setup {
+			namespace Get {
+				interface Params {}
+				interface Response {
+					setup: {
+						summarizationStepComplete: boolean
+						ragStepComplete: boolean
+					} | null
+				}
+			}
+			namespace MarkComplete {
+				interface Params {
+					step: "summarization" | "rag"
+				}
+				interface Response {
+					setup: {
+						summarizationStepComplete: boolean
+						ragStepComplete: boolean
+					}
+				}
+			}
+		}
+
 	}
 
 	// Additional interfaces used by socket types
@@ -2530,96 +2650,6 @@ declare global {
 		files: File[]
 	}
 
-	// Import namespace
-	namespace Import {
-		namespace SillyTavern {
-			namespace Scan {
-				interface Params {
-					directoryPath: string
-				}
-				interface Response {
-					success: boolean
-					data?: {
-						characters: Array<{
-							filename: string
-							name: string
-							selected: boolean
-						}>
-						personas: Array<{
-							name: string
-							selected: boolean
-						}>
-						chats: Array<{
-							filename: string
-							name: string
-							characterNames: string[]
-							isGroup: boolean
-							selected: boolean
-							disabled: boolean
-							disabledReason?: string
-						}>
-						groupChats: Array<{
-							filename: string
-							name: string
-							memberNames: string[]
-							selected: boolean
-							disabled: boolean
-							disabledReason?: string
-						}>
-						lorebooks: Array<{
-							filename: string
-							name: string
-							selected: boolean
-						}>
-					}
-					error?: string
-				}
-			}
-			namespace Execute {
-				interface Params {
-					directoryPath: string
-					selectedData: {
-						characters: Array<{
-							filename: string
-							name: string
-							selected: boolean
-						}>
-						personas: Array<{
-							name: string
-							selected: boolean
-						}>
-						chats: Array<{
-							filename: string
-							name: string
-							characterNames: string[]
-							isGroup: boolean
-							selected: boolean
-							disabled: boolean
-							disabledReason?: string
-						}>
-						groupChats: Array<{
-							filename: string
-							name: string
-							memberNames: string[]
-							selected: boolean
-							disabled: boolean
-							disabledReason?: string
-						}>
-						lorebooks: Array<{
-							filename: string
-							name: string
-							selected: boolean
-						}>
-					}
-				}
-				interface Response {
-					success: boolean
-					message?: string
-					error?: string
-				}
-			}
-		}
-	}
 }
 
 export {}

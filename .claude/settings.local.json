@@ -20,7 +20,12 @@
       "Bash(npm show *)",
       "Bash(git -C /home/jody/github/serene-pub diff HEAD -- src/lib/server/utils/promptBuilder/RagInfillEngine.ts)",
       "Bash(git -C /home/jody/github/serene-pub status)",
-      "Bash(grep -E \"\\\\.\\(tsx?|jsx?\\)$\")"
+      "Bash(grep -E \"\\\\.\\(tsx?|jsx?\\)$\")",
+      "Bash(awk 'BEGIN{d=0}{prev=d; for\\(i=1;i<=length\\($0\\);i++\\){c=substr\\($0,i,1\\);if\\(c==\"{\"\\)d++;if\\(c==\"}\"\\)d--}; if\\(NR>=2564 && NR<=2575\\)print NR\": \"prev\"->\"d\" \"$0}' /home/jody/github/serene-pub/src/lib/shared/sockets/types.ts)",
+      "Bash(awk 'BEGIN{d=0}{prev=d; for\\(i=1;i<=length\\($0\\);i++\\){c=substr\\($0,i,1\\);if\\(c==\"{\"\\)d++;if\\(c==\"}\"\\)d--}; if\\(NR>=2608 && NR<=2640\\)print NR\": \"prev\"->\"d\" \"$0}' /home/jody/github/serene-pub/src/lib/shared/sockets/types.ts)",
+      "Bash(awk 'BEGIN{d=0}{prev=d; for\\(i=1;i<=length\\($0\\);i++\\){c=substr\\($0,i,1\\);if\\(c==\"{\"\\)d++;if\\(c==\"}\"\\)d--}; if\\(NR>=2615 || d<0\\)print NR\": \"prev\"->\"d\" \"$0}' /home/jody/github/serene-pub/src/lib/shared/sockets/types.ts)",
+      "Bash(awk 'BEGIN{d=0}{prev=d; for\\(i=1;i<=length\\($0\\);i++\\){c=substr\\($0,i,1\\);if\\(c==\"{\"\\)d++;if\\(c==\"}\"\\)d--}; if\\(\\(NR>=2440&&NR<=2450\\)||\\(NR>=2470&&NR<=2480\\)||\\(NR>=2562&&NR<=2572\\)\\)print NR\": \"prev\"->\"d\" \"$0}' /home/jody/github/serene-pub/src/lib/shared/sockets/types.ts)",
+      "Bash(awk 'BEGIN{d=0}{prev=d; for\\(i=1;i<=length\\($0\\);i++\\){c=substr\\($0,i,1\\);if\\(c==\"{\"\\)d++;if\\(c==\"}\"\\)d--}; if\\(d<0\\)print NR\": \"prev\"->\"d\" \"$0}' /home/jody/github/serene-pub/src/lib/shared/sockets/types.ts)"
     ],
     "deny": []
   }

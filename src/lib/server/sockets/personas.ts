@@ -113,7 +113,7 @@ export const personasList: Handler<
 					}
 				}
 			},
-			where: (p, { eq }) => eq(p.userId, userId)
+			where: (p, { and, eq }) => and(eq(p.userId, userId), eq(p.isDeleted, false))
 		})
 		const res: Sockets.Personas.List.Response = { personaList }
 		emitToUser("personas:list", res)
@@ -130,7 +130,7 @@ export const personasGet: Handler<
 		const userId = socket.user!.id
 		const persona = await db.query.personas.findFirst({
 			where: (p, { and, eq }) =>
-				and(eq(p.id, params.id), eq(p.userId, userId)),
+				and(eq(p.id, params.id), eq(p.userId, userId), eq(p.isDeleted, false)),
 			with: {
 				personaTags: {
 					with: {

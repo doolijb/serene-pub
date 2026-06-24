@@ -4,8 +4,12 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { goto } from "$app/navigation"
+	import { getContext } from "svelte"
 
+	const userCtx: UserCtx = getContext("userCtx")
 	const socket = useTypedSocket()
+
+	if (!userCtx.user?.isAdmin) goto("/")
 
 	// Navigation back to settings
 	function goBack() {
@@ -60,6 +64,8 @@
 		directoryPath = pathTemplate
 	}
 
+	let scanTimeout: ReturnType<typeof setTimeout> | null = null
+
 	// Scan directory
 	async function scanDirectory() {
 		if (!validateDirectoryPath()) {
@@ -72,6 +78,17 @@
 
 		isScanning = true
 		scanResults = null
+
+		if (scanTimeout) clearTimeout(scanTimeout)
+		scanTimeout = setTimeout(() => {
+			if (isScanning) {
+				isScanning = false
+				toaster.error({
+					title: "Scan timed out",
+					description: "The server did not respond. Check that the path exists and try again."
+				})
+			}
+		}, 30000)
 
 		socket?.emit("import:sillytavern:scan", {
 			directoryPath: directoryPath.trim()
@@ -202,13 +219,27 @@
 	// Socket listeners
 	socket.on("import:sillytavern:scan", (message) => {
 		isScanning = false
+		if (scanTimeout) { clearTimeout(scanTimeout); scanTimeout = null }
 
 		if (message.success && message.data) {
 			scanResults = message.data
-			toaster.success({
-				title: "Scan completed",
-				description: `Found ${message.data.characters.length} characters, ${message.data.personas.length} personas, ${message.data.chats.length + message.data.groupChats.length} chats, ${message.data.lorebooks.length} lorebooks`
-			})
+			const total =
+				message.data.characters.length +
+				message.data.personas.length +
+				message.data.chats.length +
+				message.data.groupChats.length +
+				message.data.lorebooks.length
+			if (total === 0) {
+				toaster.warning({
+					title: "Nothing found",
+					description: "The directory was found but contained no importable data. Make sure you're pointing at your SillyTavern root (or SillyTavern-Launcher) folder."
+				})
+			} else {
+				toaster.success({
+					title: "Scan completed",
+					description: `Found ${message.data.characters.length} characters, ${message.data.personas.length} personas, ${message.data.chats.length + message.data.groupChats.length} chats, ${message.data.lorebooks.length} lorebooks`
+				})
+			}
 		} else {
 			toaster.error({
 				title: "Scan failed",
@@ -238,6 +269,7 @@
 	})
 </script>
 
+{#if userCtx.user?.isAdmin}
 <div class="container mx-auto max-w-4xl p-6">
 	<!-- Header with Back Button -->
 	<div class="mb-6 flex items-center gap-4">
@@ -595,3 +627,4 @@
 		{/if}
 	</div>
 </div>
+{/if}

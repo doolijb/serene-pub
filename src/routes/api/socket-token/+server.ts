@@ -1,5 +1,6 @@
 import { tokens } from "$lib/server/auth"
 import { authenticate } from "$lib/server/providers/users/authenticate"
+import { db } from "$lib/server/db"
 
 export async function GET({
 	cookies,
@@ -9,6 +10,17 @@ export async function GET({
 	request: Request
 }) {
 	try {
+		// When accounts are disabled the socket middleware uses the default user
+		// regardless of any token — no need to validate, and avoids noisy decrypt
+		// errors from stale cookies left over from a previous accounts-enabled session.
+		const systemSettings = await db.query.systemSettings.findFirst()
+		if (!systemSettings?.isAccountsEnabled) {
+			return new Response(JSON.stringify({ token: null }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" }
+			})
+		}
+
 		// Get the userToken cookie
 		const userToken = cookies.get("userToken")
 

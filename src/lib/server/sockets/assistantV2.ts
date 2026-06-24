@@ -163,6 +163,10 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 				const { connection, sampling, contextConfig, promptConfig } =
 					await getUserConfigurations(userId)
 
+				if (!connection) {
+					throw new Error("No AI connection configured. Please set up a connection first.")
+				}
+
 				// 5. Create adapter instance
 				const { Adapter } = getConnectionAdapter(connection.type)
 				const tokenCounter = new TokenCounters("estimate")

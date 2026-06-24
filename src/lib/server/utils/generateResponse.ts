@@ -364,6 +364,10 @@ export async function generateResponse({
 	const { connection, sampling, contextConfig, promptConfig } =
 		await getUserConfigurations(userId)
 
+	if (!connection) {
+		throw new Error("No AI connection configured. Please set up a connection first.")
+	}
+
 	const { Adapter } = getConnectionAdapter(connection.type)
 
 	const tokenCounter = new TokenCounters("estimate")

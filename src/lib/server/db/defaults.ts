@@ -409,6 +409,20 @@ Example dialogue:
 		})
 
 		await Promise.all(userQueries)
+
+		// Ensure user 1 has a userSettings row with the seeded config defaults.
+		// No connection is set — that's the wizard's job on first run.
+		const existingUserSettings = await db.query.userSettings.findFirst({
+			where: (us, { eq }) => eq(us.userId, 1)
+		})
+		if (!existingUserSettings) {
+			await db.insert(schema.userSettings).values({
+				userId: 1,
+				activeSamplingConfigId: 1,
+				activeContextConfigId: 1,
+				activePromptConfigId: 1
+			})
+		}
 	} catch (error) {
 		console.error("Error syncing database defaults:", error)
 	}

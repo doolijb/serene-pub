@@ -11,7 +11,7 @@ export async function getUserConfigurations(
 	userId: number,
 	retryCount = 0
 ): Promise<{
-	connection: SelectConnection
+	connection: SelectConnection | null
 	sampling: SelectSamplingConfig
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
@@ -71,20 +71,16 @@ export async function getUserConfigurations(
 			})
 		}
 
-		// Ensure we have all required configurations
-		if (
-			!activeConnection ||
-			!activeSamplingConfig ||
-			!activeContextConfig ||
-			!activePromptConfig
-		) {
+		// Sampling, context, and prompt configs always have seeded defaults — throw if missing.
+		// Connection is intentionally allowed to be null (pre-wizard, fresh install).
+		if (!activeSamplingConfig || !activeContextConfig || !activePromptConfig) {
 			throw new Error(
-				`Missing required configuration for user ${userId}: ${!activeConnection ? "connection " : ""}${!activeSamplingConfig ? "sampling " : ""}${!activeContextConfig ? "context " : ""}${!activePromptConfig ? "prompt" : ""}`
+				`Missing required configuration for user ${userId}: ${!activeSamplingConfig ? "sampling " : ""}${!activeContextConfig ? "context " : ""}${!activePromptConfig ? "prompt" : ""}`
 			)
 		}
 
 		return {
-			connection: activeConnection,
+			connection: activeConnection ?? null,
 			sampling: activeSamplingConfig,
 			contextConfig: activeContextConfig,
 			promptConfig: activePromptConfig
@@ -93,7 +89,8 @@ export async function getUserConfigurations(
 		// If this is the first attempt and we're missing configurations, try to fix the database
 		if (
 			retryCount === 0 &&
-			error.message?.includes("Missing required configuration")
+			error.message?.includes("Missing required configuration") &&
+			!error.message?.includes("connection")
 		) {
 			console.warn(
 				`Detected missing configurations for user ${userId}, attempting to fix system settings...`

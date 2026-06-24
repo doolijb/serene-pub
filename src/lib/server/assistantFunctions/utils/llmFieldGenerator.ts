@@ -40,6 +40,10 @@ export async function generateFieldWithLLM({
 	// Get user's active LLM configurations
 	const { connection, sampling } = await getUserConfigurations(userId)
 
+	if (!connection) {
+		throw new Error("No AI connection configured. Please set up a connection first.")
+	}
+
 	// Get the appropriate adapter for this connection
 	const { Adapter } = getConnectionAdapter(connection.type)
 

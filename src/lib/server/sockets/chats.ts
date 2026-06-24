@@ -2226,6 +2226,12 @@ export const promptTokenCountHandler: Handler<
 			const { connection, sampling, contextConfig, promptConfig } =
 				await getUserConfigurations(userId)
 
+			if (!connection) {
+				return {
+					error: "No AI connection configured. Please set up a connection first."
+				}
+			}
+
 			if (!chat || !user) {
 				return {
 					error: "Incomplete configuration, failed to calculate token count."

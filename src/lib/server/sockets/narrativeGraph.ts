@@ -242,6 +242,10 @@ export const narrativeGraphBuildHandler: Handler<
 		const { connection, sampling, contextConfig, promptConfig } =
 			await getUserConfigurations(userId)
 
+		if (!connection) {
+			throw new Error("No AI connection configured. Please set up a connection first.")
+		}
+
 		// In extend mode, load existing nodes and relationships as LLM seed context
 		let seedNodes: GraphBuilderSeedNode[] | undefined
 		let seedRelationships: GraphBuilderSeedRelationship[] | undefined

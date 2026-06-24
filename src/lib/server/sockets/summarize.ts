@@ -129,6 +129,10 @@ export const chatsSummarizeHandler: Handler<
 		const { connection, sampling, contextConfig, promptConfig } =
 			await getUserConfigurations(userId)
 
+		if (!connection) {
+			throw new Error("No AI connection configured. Please set up a connection first.")
+		}
+
 		// Load active summarize prompt config for this loreType
 		const userSettings = await db.query.userSettings.findFirst({
 			where: (us, { eq }) => eq(us.userId, userId)

@@ -1324,3 +1324,20 @@ export const narrativeRelationshipsRelations = relations(
 		})
 	})
 )
+
+export const setup = pgTable("setup", {
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	userId: integer("user_id")
+		.notNull()
+		.references(() => users.id, { onDelete: "cascade" })
+		.unique(),
+	summarizationStepComplete: boolean("summarization_step_complete").notNull().default(false),
+	ragStepComplete: boolean("rag_step_complete").notNull().default(false),
+})
+
+export const setupRelations = relations(setup, ({ one }) => ({
+	user: one(users, {
+		fields: [setup.userId],
+		references: [users.id]
+	}),
+}))

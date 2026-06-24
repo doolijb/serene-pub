@@ -969,6 +969,29 @@ type SocketEventMap = {
 		response: Sockets.NarrativeGraph.CreateRelationship.Response
 	}
 
+	// Import events
+	"import:sillytavern:scan": {
+		params: Sockets.Import.SillyTavern.Scan.Params
+		response: Sockets.Import.SillyTavern.Scan.Response
+	}
+	"import:sillytavern:execute": {
+		params: Sockets.Import.SillyTavern.Execute.Params
+		response: Sockets.Import.SillyTavern.Execute.Response
+	}
+
+	"setup:get": {
+		params: Record<string, never>
+		response: {
+			setup: { summarizationStepComplete: boolean; ragStepComplete: boolean } | null
+		}
+	}
+	"setup:markComplete": {
+		params: { step: "summarization" | "rag" }
+		response: {
+			setup: { summarizationStepComplete: boolean; ragStepComplete: boolean }
+		}
+	}
+
 	// Global error/success events
 	error: {
 		params: never

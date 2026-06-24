@@ -39,6 +39,8 @@ import { registerVectorizationHandlers } from "./vectorization"
 import { registerSceneHandlers } from "./scenes"
 import { registerNarrativeGraphHandlers } from "./narrativeGraph"
 import { registerSummarizePromptConfigHandlers } from "./summarizePromptConfigs"
+import { registerImportHandlers } from "./import"
+import { registerSetupHandlers } from "./setup"
 
 const userId = 1 // Replace with actual user id
 
@@ -79,6 +81,8 @@ export function connectSockets(io: {
 		registerVectorizationHandlers(socket, emitToUser, register)
 		registerSceneHandlers(socket, emitToUser, register)
 		registerNarrativeGraphHandlers(socket, emitToUser, register)
+		registerImportHandlers(socket, emitToUser, register)
+		registerSetupHandlers(socket, emitToUser, register)
 		console.log(`Socket connected: ${socket.id} for user ${userId}`)
 	})
 }
