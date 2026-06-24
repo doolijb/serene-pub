@@ -212,7 +212,8 @@ export class RagInfillEngine {
 		private populateLorebookEntryBindings: (
 			entry: any,
 			chat: BasePromptChat
-		) => any
+		) => any,
+		private diagnosticsEnabled: boolean = true
 	) {
 		this.chatMessageProcessor = new ChatMessageProcessor(
 			chat,
@@ -389,14 +390,16 @@ export class RagInfillEngine {
 						seenIds.add(key)
 
 						// Accumulate diagnostic scores
-						if (item.source === "message") {
-							diagnosticMessageScores.push(item.score)
-						} else if (
-							item.source === "worldLore" ||
-							item.source === "characterLore" ||
-							item.source === "historyEntry"
-						) {
-							diagnosticLoreScores.push(item.score)
+						if (this.diagnosticsEnabled) {
+							if (item.source === "message") {
+								diagnosticMessageScores.push(item.score)
+							} else if (
+								item.source === "worldLore" ||
+								item.source === "characterLore" ||
+								item.source === "historyEntry"
+							) {
+								diagnosticLoreScores.push(item.score)
+							}
 						}
 
 						if (item.source === "message") {
@@ -873,7 +876,7 @@ export class RagInfillEngine {
 		const ragCharLoreAdded = ragCharLoreItems.filter((r) => !pinnedCharLore.some((p: any) => p.id === r.id)).length
 		const ragHistoryAdded = ragHistoryItems.filter((r) => !pinnedHistory.some((p: any) => p.id === r.id)).length
 
-		const rag: RagDiagnostics = {
+		const rag: RagDiagnostics | undefined = this.diagnosticsEnabled ? {
 			used: true,
 			lore: {
 				worldLore: { pinned: pinnedWorldLore.length, rag: ragWorldLoreAdded },
@@ -893,7 +896,7 @@ export class RagInfillEngine {
 				thresholdUsed: diagnosticThresholdUsed,
 				queryMessageCount: diagnosticQueryMessageCount
 			}
-		}
+		} : undefined
 
 		return {
 			renderedPrompt,

@@ -17,6 +17,8 @@
 		onContinueMessage?: (e: Event, msg: SelectChatMessage) => void
 		onStartSummarization?: (msg: SelectChatMessage) => void
 		onclose?: () => void
+		debugMeta?: Record<string, any> | null
+		onShowDebugMeta?: (meta: Record<string, any>) => void
 	}
 
 	let {
@@ -33,7 +35,9 @@
 		onBranchMessage,
 		onContinueMessage,
 		onStartSummarization,
-		onclose
+		onclose,
+		debugMeta = null,
+		onShowDebugMeta = undefined
 	}: Props = $props()
 </script>
 
@@ -107,6 +111,16 @@
 		>
 			<Icons.BookMarked size={16} aria-hidden="true" />
 			<span class="lg:hidden">Select for Summarization</span>
+		</button>
+	{/if}
+	{#if onShowDebugMeta && debugMeta && !msg.isGenerating}
+		<button
+			class="btn btn-sm msg-cntrl-icon hover:preset-filled-primary-500"
+			title="View Prompt Details"
+			onclick={() => { onclose?.(); onShowDebugMeta!(debugMeta!) }}
+		>
+			<Icons.Info size={16} />
+			<span class="lg:hidden">Prompt Details</span>
 		</button>
 	{/if}
 	<button

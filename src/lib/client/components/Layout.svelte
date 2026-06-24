@@ -166,7 +166,7 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 
 			if (systemSettingsCtx?.settings?.vectorizationEnabled) {
 				panelsCtx.leftNav.vectorization = {
-					icon: Icons.Brain,
+					icon: Icons.Zap,
 					title: "Vectorization"
 				}
 			} else {

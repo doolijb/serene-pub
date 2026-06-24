@@ -899,6 +899,7 @@ export const chatMessages = pgTable(
 		isGenerating: boolean("is_generating").notNull().default(false), // 1 if processing, 0 otherwise
 		adapterId: text("adapter_id"), // UUID for in-flight adapter instance, nullable
 		isHidden: boolean("is_hidden").notNull().default(false), // Whether this message is processed or not
+		debugMeta: json("debug_meta").$type<Record<string, any>>(),
 		embedding: real("embedding").array(),
 		embeddingModel: text("embedding_model"),
 		vectorizedAt: timestamp("vectorized_at")
@@ -1099,6 +1100,7 @@ export const systemSettings = pgTable("system_settings", {
 	summarizationEnabled: boolean("summarization_enabled")
 		.notNull()
 		.default(false),
+	contextDebuggingEnabled: boolean("context_debugging_enabled").notNull().default(false),
 	defaultSummarizeWorldConfigId: integer("default_summarize_world_config_id").references(
 		() => worldSummarizeConfigs.id,
 		{ onDelete: "set null" }

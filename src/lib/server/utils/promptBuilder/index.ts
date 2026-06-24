@@ -6,32 +6,15 @@ import {
 	attachCharacterLoreToCharacters,
 	populateLorebookEntryBindings
 } from "./LorebookBindingUtils"
-import {
-	characterLoreEntryIterator,
-	historyEntryIterator
-} from "./PromptIterators"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 import { ChatCharacterVisibility } from "$lib/shared/constants/ChatCharacterVisibility"
 
 // Import modular components
 import { InterpolationEngine } from "./InterpolationEngine"
-import { ContentInfillEngine } from "./ContentInfillEngine"
+import { KeywordInfillEngine } from "./KeywordInfillEngine"
 import { RagInfillEngine } from "./RagInfillEngine"
-import type {
-	LoreMatchingStrategy,
-	MatchingStrategyConfig
-} from "./LoreMatchingStrategies"
-import {
-	MatchingStrategyFactory,
-	KeywordMatchingStrategy
-} from "./LoreMatchingStrategies"
-import type {
-	ContentInclusionConfig,
-	ContentInclusionStrategy
-} from "./ContentInclusionStrategy"
-import { defaultContentInclusionConfig } from "./ContentInclusionStrategy"
 import type { CompiledPrompt, CompileOptions, TemplateContext } from "./types"
-import { parseSplitChatPrompt, isHistoryEntry } from "./utils"
+import "./utils"
 import { isModelReady } from "$lib/server/embedding"
 
 export class PromptBuilder {
@@ -45,6 +28,7 @@ export class PromptBuilder {
 	tokenLimit: number
 	contextThresholdPercent: number
 	isAssistantMode: boolean
+	diagnosticsEnabled: boolean = true
 
 	// Legacy properties (gradually being moved to modules)
 	assistantCharacters: any[] = []
@@ -310,76 +294,6 @@ export class PromptBuilder {
 		}
 	}
 
-	// Modified character lore iterator that respects visibility settings
-	private characterLoreEntryIteratorWithVisibility = function* ({
-		chat,
-		priority,
-		currentCharacterId
-	}: {
-		chat: BasePromptChat
-		priority: number
-		currentCharacterId: number
-	}): IterableIterator<SelectCharacterLoreEntry> {
-		const chatWithLorebook = chat as typeof chat & {
-			lorebook?: { characterLoreEntries: SelectCharacterLoreEntry[] }
-		}
-		const entries: SelectCharacterLoreEntry[] =
-			chatWithLorebook.lorebook?.characterLoreEntries || []
-		let filtered: SelectCharacterLoreEntry[] = []
-
-		if (priority === 4) {
-			filtered = entries.filter((e) => e.constant === true)
-		} else if ([3, 2, 1].includes(priority)) {
-			filtered = entries.filter((e) => e.priority === priority)
-		}
-
-		filtered = filtered.filter((e) => {
-			if (!e.lorebookBindingId) return false
-			const lorebook =
-				chat.lorebookId === e.lorebookId ? chat.lorebook : undefined
-			if (!lorebook) return false
-			const binding = lorebook.lorebookBindings.find(
-				(b: SelectLorebookBinding) => b.id === e.lorebookBindingId
-			)
-			if (!binding) return false
-
-			if (binding.characterId) {
-				const chatCharacter = chat.chatCharacters?.find(
-					(cc) => cc.character.id === binding.characterId
-				)
-
-				if (!chatCharacter) return false
-
-				// Always include lore for the current character
-				if (binding.characterId === currentCharacterId) {
-					return true
-				}
-
-				// For other characters, check their visibility setting
-				// Hidden or minimal characters don't get lore included
-				if (
-					chatCharacter.visibility ===
-						ChatCharacterVisibility.HIDDEN ||
-					chatCharacter.visibility === ChatCharacterVisibility.MINIMAL
-				) {
-					return false
-				}
-
-				return true
-			} else if (binding.personaId) {
-				return chat.chatPersonas?.some(
-					(cp) => cp.persona.id === binding.personaId
-				)
-			}
-			return false
-		})
-
-		filtered.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
-		for (const entry of filtered) {
-			yield entry
-		}
-	}
-
 	buildContextData(currentCharacter: SelectCharacter) {
 		const chatCharacters = this.chat.chatCharacters as
 			| (SelectChatCharacter & { character: SelectCharacter })[]
@@ -499,73 +413,24 @@ export class PromptBuilder {
 		}
 	}
 
-	/**
-	 * Enhanced modular version of infillContent using ContentInfillEngine
-	 * This demonstrates how the content inclusion logic can be simplified and made configurable
-	 * Now supports pluggable matching strategies for future vectorization
-	 */
 	async infillContent({
 		templateContext,
 		charName,
 		personaName,
-		useChatFormat,
-		config = defaultContentInclusionConfig,
-		strategy,
-		matchingStrategy,
-		matchingStrategyConfig
+		useChatFormat
 	}: {
 		templateContext: TemplateContext
 		charName: string
 		personaName: string
 		useChatFormat: boolean
-		config?: ContentInclusionConfig
-		strategy?: ContentInclusionStrategy
-		matchingStrategy?: LoreMatchingStrategy
-		matchingStrategyConfig?: MatchingStrategyConfig
 	}) {
-		// Create the content infill engine with optional matching strategy
-		let infillEngine: ContentInfillEngine
-
-		// Create a bound version of the character lore iterator with current character ID
-		const boundCharacterLoreIterator = (params: {
-			chat: BasePromptChat
-			priority: number
-		}) =>
-			this.characterLoreEntryIteratorWithVisibility({
-				...params,
-				currentCharacterId: this.currentCharacterId || 0
-			})
-
-		if (matchingStrategyConfig) {
-			// Create engine with strategy from config
-			infillEngine = await ContentInfillEngine.createWithStrategy(
-				this.chat,
-				this.interpolationEngine,
-				populateLorebookEntryBindings,
-				isHistoryEntry,
-				this.chatMessageIterator.bind(this),
-				this.worldLoreEntryIterator.bind(this),
-				boundCharacterLoreIterator,
-				historyEntryIterator,
-				matchingStrategyConfig
-			)
-		} else {
-			// Create engine with explicit strategy or default
-			infillEngine = new ContentInfillEngine(
-				this.chat,
-				this.interpolationEngine,
-				populateLorebookEntryBindings,
-				isHistoryEntry,
-				this.chatMessageIterator.bind(this),
-				this.worldLoreEntryIterator.bind(this),
-				boundCharacterLoreIterator,
-				historyEntryIterator,
-				matchingStrategy // Will default to keyword if undefined
-			)
-		}
-
-		// Use the engine to process content
-		return await infillEngine.infillContent({
+		const engine = new KeywordInfillEngine(
+			this.chat,
+			this.interpolationEngine,
+			populateLorebookEntryBindings,
+			this.currentCharacterId
+		)
+		return await engine.infillContent({
 			charName,
 			personaName,
 			templateContext,
@@ -574,36 +439,10 @@ export class PromptBuilder {
 			contextThresholdPercent: this.contextThresholdPercent,
 			tokenCounter: this.tokenCounter,
 			handlebars: this.handlebars,
-			contextConfig: this.contextConfig,
-			strategy,
-			config
+			contextConfig: this.contextConfig
 		})
 	}
 
-	/**
-	 * Set the matching strategy for lore matching
-	 * Allows runtime switching between keyword, vector, and hybrid matching
-	 */
-	private _infillEngine: ContentInfillEngine | null = null
-
-	async setMatchingStrategy(strategy: LoreMatchingStrategy): Promise<void> {
-		if (this._infillEngine) {
-			await this._infillEngine.setMatchingStrategy(strategy)
-		}
-	}
-
-	async setMatchingStrategyFromConfig(
-		config: MatchingStrategyConfig
-	): Promise<void> {
-		const strategy = await MatchingStrategyFactory.createStrategy(config)
-		await this.setMatchingStrategy(strategy)
-	}
-
-	getMatchingStrategyName(): string | null {
-		return this._infillEngine?.getMatchingStrategyName() || null
-	}
-
-	// --- Original infillContent method remains for backward compatibility ---
 	// --- Modularized section: sources reporting ---
 	private buildSources(scenarioSource: null | "character" | "chat") {
 		const chatCharactersArr = this.chat.chatCharacters || []
@@ -827,9 +666,10 @@ export class PromptBuilder {
 					const ragEngine = new RagInfillEngine(
 						this.chat,
 						this.interpolationEngine,
-						populateLorebookEntryBindings
+						populateLorebookEntryBindings,
+						this.diagnosticsEnabled
 					)
-					infillResult = await ragEngine.infillContent({
+					infillResult = (await ragEngine.infillContent({
 						charName,
 						personaName,
 						templateContext,
@@ -839,7 +679,7 @@ export class PromptBuilder {
 						tokenCounter: this.tokenCounter,
 						handlebars: this.handlebars,
 						contextConfig: this.contextConfig
-					})
+					})) as any
 				}
 			} catch (err) {
 				console.warn(
@@ -856,11 +696,7 @@ export class PromptBuilder {
 				templateContext,
 				charName,
 				personaName,
-				useChatFormat,
-				config: defaultContentInclusionConfig,
-				strategy: undefined,
-				matchingStrategy: undefined,
-				matchingStrategyConfig: undefined
+				useChatFormat
 			})
 		}
 

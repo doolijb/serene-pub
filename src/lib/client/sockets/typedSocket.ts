@@ -599,6 +599,10 @@ type SocketEventMap = {
 		params: Sockets.SystemSettings.UpdateSummarizationEnabled.Params
 		response: Sockets.SystemSettings.UpdateSummarizationEnabled.Response
 	}
+	"systemSettings:updateContextDebuggingEnabled": {
+		params: Sockets.SystemSettings.UpdateContextDebuggingEnabled.Params
+		response: Sockets.SystemSettings.UpdateContextDebuggingEnabled.Response
+	}
 
 	// Vectorization events
 	"vectorization:listModels": {

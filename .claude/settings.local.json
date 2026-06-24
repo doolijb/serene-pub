@@ -18,7 +18,9 @@
       "Bash(python3 -c ' *)",
       "Bash(npx tsc *)",
       "Bash(npm show *)",
-      "Bash(git -C /home/jody/github/serene-pub diff HEAD -- src/lib/server/utils/promptBuilder/RagInfillEngine.ts)"
+      "Bash(git -C /home/jody/github/serene-pub diff HEAD -- src/lib/server/utils/promptBuilder/RagInfillEngine.ts)",
+      "Bash(git -C /home/jody/github/serene-pub status)",
+      "Bash(grep -E \"\\\\.\\(tsx?|jsx?\\)$\")"
     ],
     "deny": []
   }

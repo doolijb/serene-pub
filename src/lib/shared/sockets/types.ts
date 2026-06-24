@@ -555,21 +555,61 @@ declare global {
 							personas: any[]
 							scenario: string | null
 						}
-						rag?: {
-							used: true
-							lore: {
-								worldLore: { pinned: number; rag: number }
-								characterLore: { pinned: number; rag: number }
-								history: { pinned: number; rag: number }
+						rag?: (
+							{
+								used: true
+								lore: {
+									worldLore: { pinned: number; rag: number }
+									characterLore: { pinned: number; rag: number }
+									history: { pinned: number; rag: number }
+								}
+								graphPairs: number
+								messages: {
+									guaranteed: number
+									ragOlder: number
+									filledIn: number
+									total: number
+								}
+								scores: {
+									messageScores: number[]
+									loreScores: number[]
+									thresholdUsed: number
+									queryMessageCount: number
+								}
+							} | {
+								used: false
+								lore: {
+									worldLore: { pinned: number; candidates: number; included: number; budget: number; topScore: number }
+									characterLore: { pinned: number; candidates: number; included: number; budget: number; topScore: number }
+									history: { pinned: number; candidates: number; included: number; budget: number; topScore: number; mostRecentDate: string | undefined }
+								}
+								messages: {
+									guaranteed: number
+									candidates: number
+									filledIn: number
+									budget: number
+									total: number
+								}
+								tokens: { reserve: number; total: number; limit: number; threshold: number }
+								entries: Array<{
+									type: "worldLore" | "characterLore" | "history" | "message"
+									id: number
+									name: string
+									score: {
+										total: number
+										keyword: number
+										nameMatch: number
+										entityCooccurrence: number
+										tfidf: number
+										sceneAffinity: number
+										lastRefRecency: number
+										recency: number
+										density: number
+										includedReason: string
+									}
+								}>
 							}
-							graphPairs: number
-							messages: {
-								guaranteed: number
-								ragOlder: number
-								filledIn: number
-								total: number
-							}
-						}
+						)
 					}
 					error?: string
 				}
@@ -1713,6 +1753,7 @@ declare global {
 						embeddingModelName: string | null
 						embeddingModelDimensions: number | null
 						summarizationEnabled: boolean
+						contextDebuggingEnabled: boolean
 					}
 				}
 			}
@@ -1762,6 +1803,15 @@ declare global {
 				}
 			}
 			namespace UpdateSummarizationEnabled {
+				interface Params {
+					enabled: boolean
+				}
+				interface Response {
+					success: boolean
+					enabled: boolean
+				}
+			}
+			namespace UpdateContextDebuggingEnabled {
 				interface Params {
 					enabled: boolean
 				}

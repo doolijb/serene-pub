@@ -58,6 +58,69 @@ export type RagDiagnostics = {
 	}
 }
 
+export type InclusionReason =
+	| "reserved_constant"    // pinned/constant entry
+	| "reserved_guaranteed"  // message in last MIN_GUARANTEED_MESSAGES window
+	| "filled_scored"        // added in fill phase, score.total > 0
+	| "filled_zero_score"    // added in fill phase, score.total === 0, budget remained
+	| "excluded_budget"      // score > 0 but type cap exhausted
+	| "excluded_token_limit" // would have been included but hit token limit
+	| "excluded_zero_score"  // score === 0 and budget was consumed
+	| "excluded_visibility"  // filtered by character visibility rules
+	| "excluded_disabled"    // entry.enabled === false
+
+export interface ScoreBreakdown {
+	total: number
+	keyword: number
+	nameMatch: number
+	entityCooccurrence: number
+	tfidf: number
+	sceneAffinity: number
+	lastRefRecency: number
+	recency: number
+	density: number
+	includedReason: InclusionReason
+}
+
+export interface ScoredEntry {
+	type: "worldLore" | "characterLore" | "history" | "message"
+	id: number
+	name: string
+	score: ScoreBreakdown
+}
+
+interface LoreTypeDiag {
+	pinned: number
+	candidates: number
+	included: number
+	budget: number
+	topScore: number
+}
+
+interface HistoryTypeDiag extends LoreTypeDiag {
+	mostRecentDate: string | undefined
+}
+
+interface MessagesDiag {
+	guaranteed: number
+	candidates: number
+	filledIn: number
+	budget: number
+	total: number
+}
+
+export type NonRagDiagnostics = {
+	used: false
+	lore: {
+		worldLore:     LoreTypeDiag
+		characterLore: LoreTypeDiag
+		history:       HistoryTypeDiag
+	}
+	messages: MessagesDiag
+	tokens: { reserve: number; total: number; limit: number; threshold: number }
+	entries: ScoredEntry[]   // ALL candidates sorted by score.total descending
+}
+
 export type CompiledPrompt = {
 	prompt: string | undefined
 	messages: any[] | undefined
@@ -78,7 +141,7 @@ export type CompiledPrompt = {
 			excludedIds: number[]
 		}
 		sources: any
-		rag?: RagDiagnostics
+		rag?: RagDiagnostics | NonRagDiagnostics
 	}
 }
 

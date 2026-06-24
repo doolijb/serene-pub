@@ -373,6 +373,13 @@ export async function generateResponse({
 	// Detect assistant mode
 	const isAssistantMode = chat?.chatType === ChatTypes.ASSISTANT
 
+	// Fetch contextDebuggingEnabled from system settings
+	const sysSettings = await db.query.systemSettings.findFirst({
+		where: eq(schema.systemSettings.id, 1),
+		columns: { contextDebuggingEnabled: true }
+	})
+	const contextDebuggingEnabled = sysSettings?.contextDebuggingEnabled ?? false
+
 	// Get fresh metadata from the generating message (important for reasoning detection)
 	const generatingMessageMetadata = (generatingMessage.metadata as any) || {}
 
@@ -391,6 +398,9 @@ export async function generateResponse({
 		isAssistantMode,
 		generatingMessageMetadata
 	})
+	// Thread context debugging flag into prompt builder
+	adapter.promptBuilder.diagnosticsEnabled = contextDebuggingEnabled
+
 	// Store adapter in global map
 	activeAdapters.set(adapterId, adapter)
 
@@ -602,9 +612,12 @@ export async function generateResponse({
 				finalThinking,
 				true // write content to swipe history
 			)
+			const streamingDebugMeta = contextDebuggingEnabled && compiledPrompt?.meta
+				? { debugMeta: compiledPrompt.meta }
+				: {}
 			const ret = await db
 				.update(schema.chatMessages)
-				.set({ content, isGenerating: false, adapterId: null, ...(finalMetadata !== null ? { metadata: finalMetadata } : {}) })
+				.set({ content, isGenerating: false, adapterId: null, ...(finalMetadata !== null ? { metadata: finalMetadata } : {}), ...streamingDebugMeta })
 				.where(
 					and(
 						eq(schema.chatMessages.id, generatingMessage.id),
@@ -631,7 +644,10 @@ export async function generateResponse({
 						content,
 						isGenerating: false,
 						adapterId: null,
-						...(finalMetadata !== null ? { metadata: finalMetadata } : {})
+						...(finalMetadata !== null ? { metadata: finalMetadata } : {}),
+						...(contextDebuggingEnabled && compiledPrompt?.meta
+							? { debugMeta: compiledPrompt.meta }
+							: { debugMeta: null })
 					}
 				}
 			)
@@ -680,11 +696,15 @@ export async function generateResponse({
 				nonStreamThinking,
 				true // write content to swipe history
 			)
+			const nonStreamDebugMeta = contextDebuggingEnabled && compiledPrompt?.meta
+				? { debugMeta: compiledPrompt.meta }
+				: {}
 			let updateData: any = {
 				content: nonStreamContent,
 				isGenerating: false,
 				adapterId: null,
-				...(nonStreamMeta !== null ? { metadata: nonStreamMeta } : {})
+				...(nonStreamMeta !== null ? { metadata: nonStreamMeta } : {}),
+				...nonStreamDebugMeta
 			}
 
 			const ret = await db
@@ -716,7 +736,10 @@ export async function generateResponse({
 						content: nonStreamContent,
 						isGenerating: false,
 						adapterId: null,
-						...(updateData.metadata ? { metadata: updateData.metadata } : {})
+						...(updateData.metadata ? { metadata: updateData.metadata } : {}),
+						...(contextDebuggingEnabled && compiledPrompt?.meta
+							? { debugMeta: compiledPrompt.meta }
+							: { debugMeta: null })
 					}
 				}
 			)

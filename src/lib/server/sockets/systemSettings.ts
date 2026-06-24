@@ -235,6 +235,35 @@ export const systemSettingsUpdateSummarizationEnabled: Handler<
 	}
 }
 
+export const systemSettingsUpdateContextDebuggingEnabled: Handler<
+	Sockets.SystemSettings.UpdateContextDebuggingEnabled.Params,
+	Sockets.SystemSettings.UpdateContextDebuggingEnabled.Response
+> = {
+	event: "systemSettings:updateContextDebuggingEnabled",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		try {
+			await db
+				.update(schema.systemSettings)
+				.set({ contextDebuggingEnabled: params.enabled })
+				.where(eq(schema.systemSettings.id, 1))
+			const res: Sockets.SystemSettings.UpdateContextDebuggingEnabled.Response = {
+				success: true,
+				enabled: params.enabled
+			}
+			emitToUser("systemSettings:updateContextDebuggingEnabled", res)
+			await systemSettingsGet.handler(socket, {}, emitToUser)
+			return res
+		} catch (error: any) {
+			console.error("Update context debugging enabled error:", error)
+			emitToUser("systemSettings:updateContextDebuggingEnabled:error", {
+				error: "Failed to update context debugging setting"
+			})
+			throw error
+		}
+	}
+}
+
 // Registration function for all system settings handlers
 export function registerSystemSettingsHandlers(
 	socket: any,
@@ -248,4 +277,5 @@ export function registerSystemSettingsHandlers(
 	register(socket, systemSettingsUpdateEasyCharacterCreation, emitToUser)
 	register(socket, systemSettingsUpdateEasyPersonaCreation, emitToUser)
 	register(socket, systemSettingsUpdateSummarizationEnabled, emitToUser)
+	register(socket, systemSettingsUpdateContextDebuggingEnabled, emitToUser)
 }
