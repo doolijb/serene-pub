@@ -125,7 +125,8 @@ const ACCEPTABLE_LICENSES = [
 	"bsd-3-clause",
 	"bsd-2-clause",
 	"bsd",
-	"python-2.0"
+	"python-2.0",
+	"LGPL-3.0-or-later"
 ]
 
 function isAcceptableLicense(license, name, version) {
