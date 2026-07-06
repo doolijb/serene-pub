@@ -6,7 +6,7 @@ import path from "path"
 import { fileURLToPath } from "url"
 import child_process from "child_process"
 
-import pkg from "../package.json" assert { type: "json" }
+import pkg from "../package.json" with { type: "json" }
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
