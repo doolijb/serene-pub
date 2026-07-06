@@ -126,15 +126,28 @@ const ACCEPTABLE_LICENSES = [
 	"bsd-2-clause",
 	"bsd",
 	"python-2.0",
-	"LGPL-3.0-or-later"
+	"lgpl-3.0-or-later"
 ]
 
 function isAcceptableLicense(license, name, version) {
 	if (!license) return false
+	// Handle license objects and arrays from package.json
+	if (typeof license === "object") {
+		if (Array.isArray(license)) {
+			license = license.map((l) => (typeof l === "string" ? l : l.type || "")).join(" or ")
+		} else {
+			license = license.type || license.license || ""
+		}
+	}
 	// Special case: whitelist
 	if (isWhitelisted(name, version)) return true
 	// Remove parentheses and whitespace, split on OR/AND/||/&&
-	const cleaned = license.replace(/[()]/g, "").toLowerCase()
+	// Normalize some common noise and lowercase
+	let cleaned = String(license)
+		.replace(/\s*\(.*?\)\s*/g, "") // remove parenthesized notes
+		.replace(/\s*license:\s*/i, "")
+		.replace(/\s*the\s*/i, "")
+		.toLowerCase()
 	const parts = cleaned
 		.split(/\s*(or|and|\|\||&&|,|\/)\s*/i)
 		.filter((s) => s && !["or", "and", "||", "&&", "/"].includes(s))
