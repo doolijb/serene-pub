@@ -235,6 +235,7 @@ declare global {
 				}
 				interface Response {
 					ok: boolean
+					id?: number | null
 				}
 			}
 			namespace Test {
@@ -387,7 +388,8 @@ declare global {
 				interface Params {
 					id: number
 					limit?: number
-					offset?: number
+					/** Cursor: fetch messages with id < beforeId (newest-first page before this id) */
+					beforeId?: number
 				}
 				interface Response {
 					chat:
@@ -405,7 +407,9 @@ declare global {
 						  })
 						| null
 					messages?: SelectChatMessage[] | null // Legacy field
-					pagination?: any
+					pagination?: { total: number; hasMore: boolean } | null
+					/** Echoed from request — present only on load-more responses, not initial load */
+					beforeId?: number
 					/** The current user's in-progress composer draft, if any */
 					userDraft?: string | null
 				}
@@ -699,10 +703,20 @@ declare global {
 					batchCount: number
 					/** Resolved lorebook binding ID (character lore only) */
 					lorebookBindingId?: number | null
+					/** Characters physically present in the scene (scene type only) */
+					participantCharacters?: string[]
+					/** Characters referenced but not physically present (scene type only) */
+					mentionedCharacters?: string[]
 				}
 				interface ErrorResponse {
 					reason: 'no_lorebook' | 'no_connection' | 'generation_failed'
 					error: string
+				}
+				interface TraceEntry {
+					label: string
+					system: string
+					user: string
+					response: string
 				}
 			}
 		}
@@ -1550,13 +1564,33 @@ declare global {
 					baseUrl: string
 				}
 				interface Response {
-					success: string
+					success: boolean
+				}
+			}
+			namespace SetModelsDir {
+				interface Params {
+					dir: string
+				}
+				interface Response {
+					success: boolean
 				}
 			}
 			namespace Version {
 				interface Params {}
+				interface Capabilities {
+					txt2img: boolean
+					vision: boolean
+					tts: boolean
+					transcribe: boolean
+					embeddings: boolean
+					multiplayer: boolean
+					websearch: boolean
+					adminEnabled: boolean
+				}
 				interface Response {
 					version: string
+					capabilities: Capabilities
+					isLocal: boolean
 				}
 			}
 			namespace IsUpdateAvailable {
@@ -1570,9 +1604,22 @@ declare global {
 			}
 			namespace ListModels {
 				interface Params {}
+				interface ModelFile {
+					name: string
+					size: number
+				}
 				interface Response {
 					currentModel: string | null
-					availableConfigs: string[]
+					availableModels: ModelFile[]
+					modelsDirSet: boolean
+				}
+			}
+			namespace DeleteModel {
+				interface Params {
+					modelName: string
+				}
+				interface Response {
+					success: boolean
 				}
 			}
 			namespace LoadModel {
@@ -1589,6 +1636,204 @@ declare global {
 				}
 				interface Response {
 					success: string
+				}
+			}
+			namespace Perf {
+				interface Params {}
+				interface Response {
+					lastProcess: number
+					lastEval: number
+					lastTokenCount: number
+					queue: number
+					idle: boolean
+					uptime: number
+					avgGenSpeed: number
+					avgPromptSpeed: number
+					totalGens: number
+				}
+			}
+			namespace SearchModels {
+				interface Params {
+					searchTerm: string
+				}
+				interface PullOption {
+					label: string
+					filename: string
+					downloadUrl: string
+				}
+				interface ModelResult {
+					name: string
+					description?: string
+					downloads?: number
+					likes?: number
+					trendingScore?: number
+					url?: string
+					pullOptions: PullOption[]
+				}
+				interface Response {
+					models: ModelResult[]
+				}
+			}
+			namespace DownloadModel {
+				interface Params {
+					modelName: string
+					filename: string
+					downloadUrl: string
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace DownloadProgress {
+				interface DownloadEntry {
+					filename: string
+					modelName: string
+					status: string
+					downloaded: number
+					total: number
+					isDone: boolean
+				}
+				interface Response {
+					downloads: Record<string, DownloadEntry>
+				}
+			}
+			namespace CancelDownload {
+				interface Params {
+					filename: string
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace GetDownloadProgress {
+				interface Params {}
+				interface Response {
+					downloads: DownloadProgress.Response['downloads']
+				}
+			}
+			namespace ClearDownloadHistory {
+				interface Params {}
+				interface Response {
+					success: boolean
+				}
+			}
+
+			// --- Managed mode ---
+
+			namespace SetManagedMode {
+				interface Params {
+					mode: "managed" | "external" | null
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace SetManagedPort {
+				interface Params {
+					port: number
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace SetManagedBinaryDir {
+				interface Params {
+					dir: string
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace SetModelTtl {
+				interface Params {
+					ttlSecs: number
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace ListBinaryVariants {
+				interface Params {}
+				interface BinaryVariant {
+					name: string
+					displayName: string
+					platform: "linux" | "windows" | "macos" | "other"
+					description: string
+					downloadUrl: string
+					sizeBytes: number
+				}
+				interface Response {
+					variants: BinaryVariant[]
+					releaseTag: string
+					defaultDir: string
+				}
+			}
+			namespace DownloadBinary {
+				interface Params {
+					assetName: string
+					downloadUrl: string
+					destDir: string
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace BinaryDownloadProgress {
+				interface DownloadState {
+					assetName: string
+					status: "starting" | "downloading" | "success" | "error" | "cancelled"
+					downloaded: number
+					total: number
+					isDone: boolean
+					error?: string
+				}
+				interface Response {
+					download: DownloadState | null
+				}
+			}
+			namespace GetBinaryDownloadProgress {
+				interface Params {}
+				interface Response {
+					download: BinaryDownloadProgress.DownloadState | null
+				}
+			}
+			namespace CancelBinaryDownload {
+				interface Params {}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace StartSubprocess {
+				interface Params {}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace StopSubprocess {
+				interface Params {}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace SubprocessStatus {
+				interface Response {
+					status: "stopped" | "starting" | "running" | "crashed" | "stopping"
+					pid: number | null
+					startedAt: string | null
+					lastError: string | null
+					restartCount: number
+				}
+			}
+			namespace GetSubprocessStatus {
+				interface Params {}
+				interface Response {
+					status: SubprocessStatus.Response
+				}
+			}
+			namespace UnloadModel {
+				interface Params {}
+				interface Response {
+					success: boolean
 				}
 			}
 		}
@@ -1746,14 +1991,35 @@ declare global {
 				interface Params {}
 				interface Response {
 					systemSettings: {
-						ollamaManagerEnabled: boolean
-						ollamaManagerBaseUrl: string
 						isAccountsEnabled: boolean
 						vectorizationEnabled: boolean
 						embeddingModelName: string | null
 						embeddingModelDimensions: number | null
 						summarizationEnabled: boolean
 						contextDebuggingEnabled: boolean
+						defaultConnectionId: number | null
+						lockConnection: boolean
+						defaultSamplingConfigId: number | null
+						lockSamplingConfig: boolean
+						defaultContextConfigId: number | null
+						lockContextConfig: boolean
+						defaultPromptConfigId: number | null
+						lockPromptConfig: boolean
+					}
+					ollamaSettings: {
+						ollamaManagerEnabled: boolean
+						ollamaManagerBaseUrl: string
+					}
+					koboldCppSettings: {
+						koboldCppManagerEnabled: boolean
+						koboldCppManagerBaseUrl: string
+						koboldCppManagerModelsDir: string | null
+						koboldCppManagedMode: string | null
+						koboldCppManagedBinaryVariant: string | null
+						koboldCppManagedBinaryDir: string | null
+						koboldCppManagedPort: number
+						koboldCppManagedAdminPassword: string | null
+						koboldCppManagedModelTtlSecs: number
 					}
 				}
 			}
@@ -1828,8 +2094,6 @@ declare global {
 				interface Params {}
 				interface Response {
 					userSettings: {
-						activeConnectionId?: number | null
-						activeSamplingConfigId?: number | null
 						activeContextConfigId?: number | null
 						activePromptConfigId?: number | null
 						theme: string
@@ -2016,9 +2280,42 @@ declare global {
 				interface Response {
 					content: string
 					historyEntryId: number
+					activityId: string
 				}
 				interface ErrorResponse {
 					error: string
+				}
+			}
+			namespace Process {
+				interface Params {
+					sceneId: number
+				}
+				interface Progress {
+					sceneId: number
+					phase: "drafting" | "synthesizing" | "extracting"
+					batch: number
+					totalBatches: number
+					partial?: { content?: string; raw?: string }
+				}
+				interface Response {
+					sceneId: number
+					activityId: string
+					content: string
+					name?: string
+					participantCharacters: string[]
+					mentionedCharacters: string[]
+					raw: string
+				}
+				interface ErrorResponse {
+					sceneId: number
+					error: string
+				}
+				interface TraceEntry {
+					sceneId: number
+					label: string
+					system: string
+					user: string
+					response: string
 				}
 			}
 		}
@@ -2045,6 +2342,24 @@ declare global {
 			}
 			interface Response {
 				chatMessage: SelectChatMessage
+			}
+		}
+
+		// VectorizationConfig namespace
+		namespace VectorizationConfig {
+			namespace Get {
+				interface Params {}
+				interface Response {
+					config: { embeddingModelTtlMinutes: number }
+				}
+			}
+			namespace Update {
+				interface Params {
+					embeddingModelTtlMinutes: number
+				}
+				interface Response {
+					success: boolean
+				}
 			}
 		}
 
@@ -2270,10 +2585,12 @@ declare global {
 				lorebookId: number
 				sceneId: number | null
 				historyEntryId: number | null
-				nodeType: string
+				lorebookBindingId: number | null
+				parentNodeId: number | null
 				name: string
 				nodeState: string
-				content: string
+				nodeVisibility: string
+				aliases: string[]
 				summary: string | null
 				embedding: number[] | null
 				embeddingModel: string | null
@@ -2291,6 +2608,7 @@ declare global {
 				sceneId: number | null
 				relationshipType: string
 				description: string
+				visibility: string
 				status: string
 				reason: string | null
 				embedding: number[] | null
@@ -2302,11 +2620,9 @@ declare global {
 			// A proposal returned from a graph build — pending user approval
 			interface NodeProposal {
 				tempId: string
-				nodeType: string
 				name: string
 				nodeState: string
 				summary: string
-				characterIds?: number[]
 				/** Which scene index (0-based) in the ordered scene list introduced this node */
 				sceneIndex?: number
 				/** DB scene id where this node first appeared — stored on commit */
@@ -2319,6 +2635,7 @@ declare global {
 				toTempId: string
 				relationshipType: string
 				description: string
+				visibility: string
 				status: string
 				reason?: string
 				/** Which scene index (0-based) established this relationship */
@@ -2352,19 +2669,30 @@ declare global {
 					totalDirectHistoryEntryCount: number
 				}
 			}
+			interface TraceEntry {
+				label: string
+				system: string
+				user: string
+				response: string
+			}
 			namespace Build {
 				interface Params {
 					lorebookId: number
 					/** replace: rebuild from scratch; extend: seed LLM with existing graph, only add new entries */
 					mode?: "replace" | "extend"
+					/** If true, resume from the last saved checkpoint rather than starting over */
+					resume?: boolean
 				}
 				interface Progress {
-					phase: "loading" | "extracting" | "parsing"
+					phase: "loading" | "extracting_characters" | "generating_descriptions" | "detecting_state_changes" | "extracting_perspectives" | "parsing"
 					sceneIndex: number
 					totalScenes: number
 					nodesFound: number
 					relationshipsFound: number
-					partial?: string
+					/** e.g. "Aria → Kael" — shown during perspective extraction */
+					currentPair?: string
+					/** Human-readable label for the current scene (e.g. "Year 3, Month 5") */
+					currentSceneLabel?: string
 				}
 				interface Response {
 					proposal: GraphProposal
@@ -2432,10 +2760,148 @@ declare global {
 					relationshipType: string
 					status: string
 					description?: string
+					visibility?: string
 					historyEntryId?: number
 				}
 				interface Response {
 					relationship: NarrativeRelationship
+				}
+			}
+			namespace CreateNode {
+				interface Params {
+					lorebookId: number
+					name: string
+					nodeState: string
+					nodeVisibility?: string
+					summary?: string
+					historyEntryId?: number | null
+				}
+				interface Response {
+					node: NarrativeNode
+				}
+			}
+			/** Three-layer context query for prompt injection */
+			namespace QueryContext {
+				interface Params {
+					lorebookId: number
+					chatId: number
+					speakerCharacterId?: number
+					speakerPersonaId?: number
+				}
+				interface RelationshipEntry {
+					fromNodeId: number
+					fromNodeName: string
+					fromNodeState: string
+					toNodeId: number
+					toNodeName: string
+					toNodeState: string
+					relationshipType: string
+					description: string
+					visibility: string
+				}
+				interface LegendaryNodeEntry {
+					nodeId: number
+					nodeName: string
+					summary: string | null
+					publicRelationships: RelationshipEntry[]
+				}
+				interface Response {
+					/** Layer 1: speaker's outbound relationships (all visibilities) */
+					speakerRelationships: RelationshipEntry[]
+					/** Layer 2: inverse rels from chat participants → speaker, acknowledged/public only */
+					inverseRelationships: RelationshipEntry[]
+					/** Layer 3: legendary/historical nodes + public relationships (RAG-scored) */
+					legendaryNodes: LegendaryNodeEntry[]
+				}
+			}
+			/** Link a binding to an existing node or request a new one */
+			namespace LinkBindingNode {
+				interface Params {
+					bindingId: number
+					/** null = create a new node automatically */
+					nodeId: number | null
+				}
+				interface Response {
+					bindingId: number
+					nodeId: number
+				}
+			}
+			/** Link an orphaned lorebook binding to a character/persona, or create/skip */
+			namespace LinkOrphanBinding {
+				interface Params {
+					bindingId: number
+					characterId?: number
+					personaId?: number
+					/** true = user chose to skip, leave binding orphaned */
+					skip?: boolean
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+			/** Merge a node as an alias child of a parent node */
+			namespace MergeNode {
+				interface Params {
+					nodeId: number
+					parentNodeId: number
+				}
+				interface Response {
+					parentNode: NarrativeNode
+					childNode: NarrativeNode
+				}
+			}
+			/** Unlink a child alias node from its parent, restoring it as an independent node */
+			namespace DemergeNode {
+				interface Params {
+					nodeId: number
+				}
+				interface Response {
+					node: NarrativeNode
+				}
+			}
+		}
+
+		namespace BindingCheck {
+			/** Emitted after a chat save when orphaned bindings are found in the lorebook */
+			namespace Result {
+				interface OrphanedBinding {
+					id: number
+					binding: string
+				}
+				interface UnboundEntity {
+					type: "character" | "persona"
+					id: number
+					name: string
+				}
+				interface Response {
+					lorebookId: number
+					chatId: number
+					/** Chars/personas in the chat that have no binding (shown if orphaned bindings exist) */
+					unboundEntities: UnboundEntity[]
+					/** Existing bindings in the lorebook with no char/persona linked */
+					orphanedBindings: OrphanedBinding[]
+				}
+			}
+			/** Emitted when a binding has no graph node and unlinked nodes exist to choose from */
+			namespace NodeResult {
+				interface UnlinkedNode {
+					id: number
+					name: string
+					nodeState: string
+					summary: string | null
+					score?: number
+				}
+				interface PendingBinding {
+					bindingId: number
+					binding: string
+					entityName: string
+				}
+				interface Response {
+					lorebookId: number
+					pendingBindings: Array<{
+						binding: PendingBinding
+						unlinkedNodes: UnlinkedNode[]
+					}>
 				}
 			}
 		}
@@ -2535,6 +3001,70 @@ declare global {
 				}
 			}
 		}
+
+		namespace Activity {
+			interface GraphBuildActivity {
+				kind: "graph_build"
+				id: string
+				userId: number
+				// userId is intentionally exposed to clients so they can identify their own activities
+				lorebookId: number
+				lorebookLabel: string
+				mode: "replace" | "extend"
+				status: "building" | "review" | "error"
+				phase: string
+				sceneIndex: number
+				totalScenes: number
+				nodesFound: number
+				relsFound: number
+				currentPair?: string
+				currentSceneLabel?: string
+				proposal?: NarrativeGraph.GraphProposal
+				sceneLabels?: string[]
+				seedTempIdMap?: Record<string, number>
+				errorMessage?: string
+				errorRaw?: string
+				startedAt: string
+			}
+			interface SceneSummarizeActivity {
+				kind: "scene_summarize"
+				id: string
+				userId: number
+				sceneId: number
+				sceneName?: string
+				lorebookId: number
+				lorebookLabel?: string
+				historyEntryId?: number
+				status: "running" | "review" | "error"
+				phase?: "drafting" | "synthesizing" | "extracting"
+				batch?: number
+				totalBatches?: number
+				errorMessage?: string
+				pendingResult?: {
+					content: string
+					name?: string
+					participantCharacters: string[]
+					mentionedCharacters: string[]
+					raw: string
+				}
+				startedAt: string
+			}
+			namespace Update {
+				interface Response {
+					activities: (GraphBuildActivity | SceneSummarizeActivity)[]
+				}
+			}
+			namespace Dismiss {
+				interface Request {
+					id: string
+				}
+			}
+			namespace Cancel {
+				interface Request {
+					id: string
+				}
+			}
+		}
 	}
 
 	// Assistant namespace
@@ -2589,6 +3119,24 @@ declare global {
 						summarizationStepComplete: boolean
 						ragStepComplete: boolean
 					}
+				}
+			}
+		}
+
+		namespace TaskQueue {
+			interface QueuedTask {
+				id: string
+				taskType: string
+				connectionName: string
+				samplingName: string
+				startedAt: string
+				chatId?: number
+				lorebookId?: number
+				label?: string
+			}
+			namespace Update {
+				interface Response {
+					tasks: QueuedTask[]
 				}
 			}
 		}

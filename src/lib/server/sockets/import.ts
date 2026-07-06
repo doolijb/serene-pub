@@ -646,7 +646,9 @@ export const importExecuteSillyTavern: Handler<
 						postHistoryInstructions: d.post_history_instructions || null,
 						characterVersion: d.character_version || "1.0",
 						metadata: {},
-						extensions: d.extensions ?? {}
+						extensions: d.extensions ?? {},
+						aliases: d.extensions?.serenepub?.aliases ?? d.extensions?.aliases ?? [],
+						summary: d.extensions?.serenepub?.summary ?? null
 					}).returning()
 
 					characterNameToId.set(d.name, newChar.id)

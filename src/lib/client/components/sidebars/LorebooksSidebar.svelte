@@ -39,6 +39,8 @@
 	let editGroup: EditGroup = $state("lorebook")
 	let nextEditGroup: EditGroup | undefined = $state()
 	let tabHasUnsavedChanges: boolean = $state(false)
+	let lorebookFormMode = $state<"view" | "edit">("view")
+	let tabsDisabled = $derived(lorebookFormMode === "edit" || tabHasUnsavedChanges)
 	let showUnsavedChangesModal: boolean = $state(false)
 	let showUnsavedTabChangesModal: boolean = $state(false)
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
@@ -83,12 +85,13 @@
 
 	function handleLorebookClick(
 		e: Event,
-		{ lorebook, tab }: { lorebook: SelectLorebook; tab?: EditGroup }
+		{ lorebook, tab, startEditing = false }: { lorebook: SelectLorebook; tab?: EditGroup; startEditing?: boolean }
 	) {
 		e.preventDefault()
 		e.stopPropagation()
 		selectedLorebook = lorebook
 		isEditingLorebook = true
+		lorebookFormMode = startEditing ? "edit" : "view"
 		if (tab) {
 			editGroup = tab
 		} else {
@@ -144,6 +147,7 @@
 	async function handleSwitchTabGroup(e: ValueChangeDetails): Promise<void> {
 		if (!tabHasUnsavedChanges) {
 			editGroup = e.value as EditGroup
+			if (e.value !== "lorebook") lorebookFormMode = "view"
 			await tick()
 		} else {
 			nextEditGroup = e.value as EditGroup
@@ -278,6 +282,10 @@
 					(l) => l.id === panelsCtx.digest.lorebookId
 				) || null
 			isEditingLorebook = true
+			if (panelsCtx.digest.lorebookTab) {
+				editGroup = panelsCtx.digest.lorebookTab as EditGroup
+				delete panelsCtx.digest.lorebookTab
+			}
 			delete panelsCtx.digest.lorebookId
 		}
 	})
@@ -362,38 +370,38 @@
 		</div>
 		<Tabs value={editGroup} onValueChange={(e) => handleSwitchTabGroup(e)}>
 			{#snippet list()}
-				<Tabs.Control value="lorebook">
+				<Tabs.Control value="lorebook" disabled={tabsDisabled && editGroup !== "lorebook"}>
 					<Icons.Book size={20} class="inline" />
 					{#if editGroup === "lorebook"}
 						Lorebook
 					{/if}
 				</Tabs.Control>
-				<Tabs.Control value="bindings">
+				<Tabs.Control value="bindings" disabled={tabsDisabled}>
 					<Icons.Link size={20} class="inline" />
 					{#if editGroup === "bindings"}
 						Bindings
 					{/if}
 				</Tabs.Control>
-				<Tabs.Control value="world">
+				<Tabs.Control value="world" disabled={tabsDisabled}>
 					<Icons.Globe size={20} class="inline" />
 					{#if editGroup === "world"}
 						World Lore
 					{/if}
 				</Tabs.Control>
-				<Tabs.Control value="characters">
+				<Tabs.Control value="characters" disabled={tabsDisabled}>
 					<Icons.User size={20} class="inline" />
 					{#if editGroup === "characters"}
 						Character Lore
 					{/if}
 				</Tabs.Control>
-				<Tabs.Control value="history">
+				<Tabs.Control value="history" disabled={tabsDisabled}>
 					<Icons.Calendar size={20} class="inline" />
 					{#if editGroup === "history"}
 						History
 					{/if}
 				</Tabs.Control>
 				{#if graphEnabled}
-					<Tabs.Control value="graph">
+					<Tabs.Control value="graph" disabled={tabsDisabled}>
 						<Icons.Network size={20} class="inline" />
 						{#if editGroup === "graph"}
 							Graph
@@ -404,7 +412,11 @@
 			{#snippet content()}
 				<Tabs.Panel value="lorebook">
 					{#if editGroup == "lorebook" && selectedLorebook}
-						<EditLorebookForm lorebookId={selectedLorebook.id} />
+						<EditLorebookForm
+							lorebookId={selectedLorebook.id}
+							bind:mode={lorebookFormMode}
+							bind:hasUnsavedChanges={tabHasUnsavedChanges}
+						/>
 					{/if}
 				</Tabs.Panel>
 				<Tabs.Panel value="bindings">
@@ -503,7 +515,8 @@
 							)
 							if (lorebook) {
 								handleLorebookClick(new MouseEvent("click"), {
-									lorebook
+									lorebook,
+									startEditing: true
 								})
 							}
 						}}

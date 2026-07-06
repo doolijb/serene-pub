@@ -10,6 +10,10 @@ import { broadcastToChatUsers } from "../sockets/utils/broadcastHelpers"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
 import { generateChatTitle } from "./generateChatTitle"
 import { parseReasoningFormat } from "./parseReasoningFormat"
+import { buildGraphContext } from "./graphContextFormatter"
+import { taskQueue } from "./taskQueue"
+import { resolveTaskConfig } from "./resolveTaskConfig"
+import { autoEnqueueChat } from "$lib/server/embedding/vectorizationQueue"
 
 /**
  * Build updated metadata that keeps swipes.history and swipes.thinkingHistory
@@ -72,20 +76,32 @@ function buildThinkingMetadata(
 }
 
 /**
- * Extract <think>...</think> block from content (DeepSeek R1 / embedded-tag style).
- * Returns cleaned content and the extracted thinking string, or undefined if no tag found.
+ * Extract all <think>...</think> blocks from content (DeepSeek R1 / Qwen3 style).
+ * Returns cleaned content and the concatenated extracted thinking, or undefined if no tag found.
+ * Also hides any unclosed <think> block still being streamed.
  */
 function extractThinkFromContent(content: string): {
 	content: string
 	thinking: string | undefined
 } {
-	const trimmed = content.trimStart()
-	if (!trimmed.startsWith("<think>")) return { content, thinking: undefined }
-	const endIdx = trimmed.indexOf("</think>")
-	if (endIdx === -1) return { content, thinking: undefined }
-	const thinking = trimmed.slice(7, endIdx).trim() // 7 = "<think>".length
-	const remaining = trimmed.slice(endIdx + 8).trimStart() // 8 = "</think>".length
-	return { content: remaining, thinking: thinking || undefined }
+	// Collect all completed <think>...</think> blocks
+	const thinkRegex = /<think>([\s\S]*?)<\/think>/g
+	const thinkParts: string[] = []
+	let cleaned = content.replace(thinkRegex, (_match, inner: string) => {
+		const trimmed = inner.trim()
+		if (trimmed) thinkParts.push(trimmed)
+		return ""
+	})
+
+	// Hide any in-progress (unclosed) <think> block
+	const openIdx = cleaned.indexOf("<think>")
+	if (openIdx !== -1) {
+		cleaned = cleaned.slice(0, openIdx)
+	}
+
+	cleaned = cleaned.trimStart()
+	const thinking = thinkParts.length > 0 ? thinkParts.join("\n\n") : undefined
+	return { content: cleaned, thinking }
 }
 
 /**
@@ -405,6 +421,23 @@ export async function generateResponse({
 	// Thread context debugging flag into prompt builder
 	adapter.promptBuilder.diagnosticsEnabled = contextDebuggingEnabled
 
+	// Inject narrative graph context into system instructions (if lorebook + node present)
+	if (!isAssistantMode && chat?.lorebookId) {
+		try {
+			const graphCtx = await buildGraphContext({
+				chatId,
+				lorebookId: chat.lorebookId,
+				speakerCharacterId: generatingMessage.characterId ?? null,
+				speakerPersonaId: null
+			})
+			if (graphCtx && adapter.promptBuilder.instructions) {
+				adapter.promptBuilder.instructions += graphCtx
+			}
+		} catch (err) {
+			console.warn("[generateResponse] graph context injection failed:", err)
+		}
+	}
+
 	// Store adapter in global map
 	activeAdapters.set(adapterId, adapter)
 
@@ -430,6 +463,23 @@ export async function generateResponse({
 		: charName
 			? `${charName}:`
 			: ""
+
+	// Resolve task config for queue tracking (best-effort, non-fatal)
+	let taskQueueId: string | undefined
+	try {
+		const resolved = await resolveTaskConfig({
+			taskType: "chat",
+			promptConfigId: promptConfig?.id,
+			chatId
+		})
+		taskQueueId = taskQueue.start({
+			taskType: "chat",
+			connectionName: resolved.connectionName,
+			samplingName: resolved.samplingName,
+			chatId,
+			label: charName || undefined
+		})
+	} catch {}
 
 	// Generate completion
 	let { completionResult, compiledPrompt, isAborted, thinkingContent: adapterThinking } =
@@ -462,9 +512,24 @@ export async function generateResponse({
 				// When continuing, the LLM sees the partial message in history
 				// and generates a continuation. We should append the new content
 				// to the existing partial content.
+				let stagedForDisplay = stagedContent.trim()
+
+				// Strip <think> tags from streamed content when no native thinking is active.
+				// Completed blocks are moved to the thinking accumulator; unclosed blocks
+				// (still being streamed) are hidden from the displayed content.
+				if (!thinking.trim()) {
+					const extracted = extractThinkFromContent(stagedForDisplay)
+					if (extracted.thinking) {
+						thinking = extracted.thinking
+						stagedForDisplay = extracted.content
+					} else if (extracted.content !== stagedForDisplay) {
+						stagedForDisplay = extracted.content
+					}
+				}
+
 				const finalContent = isContinuing
-					? preservedContent + " " + stagedContent.trim()
-					: stagedContent.trim()
+					? preservedContent + " " + stagedForDisplay
+					: stagedForDisplay
 
 				// --- SWIPE HISTORY + THINKING LOGIC (mid-stream) ---
 				const currentThinking = thinking.trim() || undefined
@@ -655,6 +720,7 @@ export async function generateResponse({
 					}
 				}
 			)
+			autoEnqueueChat(chatId).catch(console.error)
 		} else {
 			content = completionResult.replace(startString, "").trim()
 
@@ -747,10 +813,11 @@ export async function generateResponse({
 					}
 				}
 			)
+			autoEnqueueChat(chatId).catch(console.error)
 		}
 	} finally {
-		// Remove adapter from global map
 		activeAdapters.delete(adapterId)
+		if (taskQueueId) taskQueue.finish(taskQueueId)
 	}
 	// Fetch the updated message for the response
 	const updatedMsg = await db.query.chatMessages.findFirst({

@@ -128,7 +128,8 @@ export const assistantCreateCharacterSchema = createInsertSchema(
 	isDeleted: true, // System managed
 	isFavorite: true, // Not set during creation
 	lorebookId: true, // Not set during creation (can be linked later)
-	assets: true // Managed separately
+	assets: true, // Managed separately
+	aliases: true // Set via UI after creation
 })
 
 // ============================================================================
@@ -178,7 +179,8 @@ export const assistantCreatePersonaSchema = createInsertSchema(
 	updatedAt: true, // Auto-generated
 	isDeleted: true, // System managed
 	isDefault: true, // Set separately
-	lorebookId: true // Not set during creation (can be linked later)
+	lorebookId: true, // Not set during creation (can be linked later)
+	aliases: true // Set via UI after creation
 })
 
 // ============================================================================
@@ -213,10 +215,6 @@ export const personaSchemaForLLM = {
  * The schemas work correctly at runtime, the types are just complex
  */
 // @ts-expect-error - drizzle-zod type compatibility
-export type AssistantCreateCharacter = z.infer<
-	typeof assistantCreateCharacterSchema
->
+export type AssistantCreateCharacter = z.infer<typeof assistantCreateCharacterSchema>
 // @ts-expect-error - drizzle-zod type compatibility
-export type AssistantCreatePersona = z.infer<
-	typeof assistantCreatePersonaSchema
->
+export type AssistantCreatePersona = z.infer<typeof assistantCreatePersonaSchema>

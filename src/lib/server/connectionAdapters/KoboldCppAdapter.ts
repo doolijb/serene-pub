@@ -11,6 +11,9 @@ import { type CompiledPrompt } from "../utils/promptBuilder"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { koboldCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+import { db } from "$lib/server/db"
+import * as subprocessManager from "$lib/server/koboldcpp/subprocessManager"
+import { ensureModelLoaded } from "$lib/server/koboldcpp/modelManager"
 
 class KoboldCppAdapter extends BaseConnectionAdapter {
 	private _tokenCounter?: TokenCounters
@@ -30,7 +33,7 @@ class KoboldCppAdapter extends BaseConnectionAdapter {
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
 		chat: BasePromptChat
-		currentCharacterId: number
+		currentCharacterId: number | null
 		generatingMessageMetadata?: any
 	}) {
 		super({
@@ -85,11 +88,72 @@ class KoboldCppAdapter extends BaseConnectionAdapter {
 		return this._tokenCounter
 	}
 
+	async getContextTokenLimit(): Promise<number> {
+		const samplingLimit = await super.getContextTokenLimit()
+		const baseUrl = this.connection.baseUrl || "http://localhost:5001"
+		try {
+			const res = await fetch(`${baseUrl}/api/extra/true_max_context_length`, {
+				signal: AbortSignal.timeout(3000)
+			})
+			if (res.ok) {
+				const data = await res.json()
+				const serverMax = typeof data.value === "number" ? data.value : null
+				if (serverMax) return Math.min(samplingLimit, serverMax)
+			}
+		} catch {
+			// KoboldCPP unreachable — fall through to sampling limit
+		}
+		return samplingLimit
+	}
+
 	compilePrompt(args: {}) {
 		return super.compilePrompt({
 			useChatFormat: !!this.connection.extraJson?.useChat,
 			...args
 		})
+	}
+
+	async managedPreflight(): Promise<void> {
+		const settings = await db.query.koboldCppSettings.findFirst()
+		if (!settings?.koboldCppManagerEnabled) {
+			console.log("[KoboldCPP] preflight skip: manager not enabled")
+			return
+		}
+		if (settings?.koboldCppManagedMode !== "managed") {
+			console.log("[KoboldCPP] preflight skip: mode is", settings?.koboldCppManagedMode)
+			return
+		}
+
+		const managedConfig = this.connection.extraJson?.managedConfig
+		if (!managedConfig?.modelFile) {
+			console.log("[KoboldCPP] preflight skip: no managedConfig.modelFile on connection", this.connection.id)
+			return
+		}
+
+		console.log("[KoboldCPP] preflight: connection", this.connection.id, "model", managedConfig.modelFile)
+
+		if (!subprocessManager.isRunning()) {
+			console.log("[KoboldCPP] preflight: subprocess not running, starting...")
+			await subprocessManager.start()
+			console.log("[KoboldCPP] preflight: subprocess started")
+		}
+
+		const contextSize = this.sampling.contextTokens ?? 4096
+		console.log("[KoboldCPP] preflight: calling ensureModelLoaded, contextSize=", contextSize)
+		try {
+			await ensureModelLoaded({
+				connectionId: this.connection.id,
+				managedConfig,
+				baseUrl: settings.koboldCppManagerBaseUrl,
+				modelsDir: settings.koboldCppManagerModelsDir ?? null,
+				adminPassword: settings.koboldCppManagedAdminPassword ?? "",
+				ttlSecs: settings.koboldCppManagedModelTtlSecs ?? 300,
+				contextSize
+			})
+			console.log("[KoboldCPP] preflight: ensureModelLoaded completed OK")
+		} catch (err) {
+			console.error("[KoboldCPP] preflight: ensureModelLoaded FAILED:", err)
+		}
 	}
 
 	async generate(): Promise<{
@@ -100,10 +164,14 @@ class KoboldCppAdapter extends BaseConnectionAdapter {
 		isAborted: boolean
 		thinkingContent?: string
 	}> {
+		await this.managedPreflight()
+
 		const baseUrl = this.connection.baseUrl || "http://localhost:5001"
 		const stream = this.connection.extraJson?.stream ?? false
 		const useMemory = this.connection.extraJson?.useMemory ?? false
 		const useChat = this.connection.extraJson?.useChat ?? false
+		// null = Auto (omit from request), true/false = explicit override
+		const enableThinking: boolean | null = this.connection.extraJson?.enableThinking ?? null
 
 		// Prepare stop strings
 		const stopStrings = StopStrings.get({
@@ -111,7 +179,7 @@ class KoboldCppAdapter extends BaseConnectionAdapter {
 			characters:
 				this.chat.chatCharacters?.map((cc) => cc.character) || [],
 			personas: this.chat.chatPersonas?.map((cp) => cp.persona) || [],
-			currentCharacterId: this.currentCharacterId
+			currentCharacterId: this.currentCharacterId ?? undefined
 		})
 		const characterName =
 			this.chat.chatCharacters?.[0]?.character?.nickname ||
@@ -145,7 +213,8 @@ class KoboldCppAdapter extends BaseConnectionAdapter {
 					samplingParams.n_predict ||
 					100,
 				stream,
-				...samplingParams
+				...samplingParams,
+				...(enableThinking !== null ? { enable_thinking: enableThinking } : {})
 			}
 		} else {
 			// Use text completion format
@@ -157,7 +226,8 @@ class KoboldCppAdapter extends BaseConnectionAdapter {
 					100,
 				max_context_length: await this.getContextTokenLimit(),
 				stop_sequence,
-				...samplingParams
+				...samplingParams,
+				...(enableThinking !== null ? { enable_thinking: enableThinking } : {})
 			}
 
 			// Add memory if enabled (only for text completion)
@@ -382,21 +452,27 @@ async function listModels(
 			currentModel = data.result || "No model loaded"
 		}
 
-		// Then, get available model files (.kcpps files)
-		const availableModelsResponse = await fetch(
-			`${baseUrl}/api/admin/list_options`,
-			{
-				method: "GET",
-				headers: {
-					"Content-Type": "application/json"
-				},
-				signal: AbortSignal.timeout(5000)
-			}
-		)
+		// Only query the admin API for .kcpps config files when the manager is enabled.
+		// When the manager is disabled, KoboldCPP may not be running or may not have
+		// admin mode active, so skip this call to avoid spurious errors.
+		const settings = await db.query.koboldCppSettings.findFirst()
+		const managerEnabled = settings?.koboldCppManagerEnabled ?? false
 
 		let availableModels: string[] = []
-		if (availableModelsResponse.ok) {
-			availableModels = await availableModelsResponse.json()
+		if (managerEnabled) {
+			const availableModelsResponse = await fetch(
+				`${baseUrl}/api/admin/list_options`,
+				{
+					method: "GET",
+					headers: {
+						"Content-Type": "application/json"
+					},
+					signal: AbortSignal.timeout(5000)
+				}
+			)
+			if (availableModelsResponse.ok) {
+				availableModels = await availableModelsResponse.json()
+			}
 		}
 
 		// Combine the results
@@ -410,7 +486,7 @@ async function listModels(
 			isCurrent: true
 		})
 
-		// Add available .kcpps files
+		// Add available .kcpps files (only populated when manager is enabled)
 		for (const filename of availableModels) {
 			models.push({
 				id: filename,

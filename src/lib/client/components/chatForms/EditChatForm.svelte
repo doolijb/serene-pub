@@ -13,6 +13,7 @@
 	import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 	import { ChatCharacterVisibility } from "$lib/shared/constants/ChatCharacterVisibility"
 	import { z } from "zod"
+	import ConnectionSamplingPicker from "../ConnectionSamplingPicker.svelte"
 
 	// Zod validation schema
 	const chatSchema = z.object({
@@ -67,6 +68,9 @@
 					groupReplyStrategy: string
 					lorebookId?: number | null
 					tags: string[]
+					connectionId?: number | null
+					samplingConfigId?: number | null
+					promptConfigId?: number | null
 				}
 				characterIds: number[]
 				personaIds: number[]
@@ -84,6 +88,9 @@
 					groupReplyStrategy: string
 					lorebookId?: number | null
 					tags: string[]
+					connectionId?: number | null
+					samplingConfigId?: number | null
+					promptConfigId?: number | null
 				}
 				characterIds: number[]
 				personaIds: number[]
@@ -97,6 +104,14 @@
 	let scenario = $state("")
 	let groupReplyStrategy = $state("ordered")
 	let lorebookId: number | null = $state(null)
+	let chatConnectionId: number | null = $state(null)
+	let chatSamplingConfigId: number | null = $state(null)
+	let chatPromptConfigId: number | null = $state(null)
+
+	// AI override lists (admin only)
+	let adminConnectionsList: { id: number; name: string; type: string }[] = $state([])
+	let adminSamplingList: { id: number; name: string }[] = $state([])
+	let adminPromptConfigsList: { id: number; name: string }[] = $state([])
 
 	// MODALS
 	let showCharacterModal = $state(false)
@@ -181,6 +196,9 @@
 		const _selectedGuests = selectedGuests
 		const _lorebookId = lorebookId || null
 		const _tags = selectedTags
+		const _connectionId = chatConnectionId
+		const _samplingConfigId = chatSamplingConfigId
+		const _promptConfigId = chatPromptConfigId
 		data = {
 			chat: {
 				id: chat?.id,
@@ -188,7 +206,10 @@
 				scenario: _scenario,
 				groupReplyStrategy: _groupReplyStrategy || "ordered",
 				lorebookId: _lorebookId,
-				tags: _tags
+				tags: _tags,
+				connectionId: _connectionId,
+				samplingConfigId: _samplingConfigId,
+				promptConfigId: _promptConfigId
 			},
 			characterIds: _selectedCharacters.map((cc) => cc.id),
 			personaIds: _selectedPersonas.map((cp) => cp.id),
@@ -366,6 +387,9 @@
 			selectedGuests = chat.chatGuests || []
 			lorebookId = chat.lorebookId || null
 			selectedTags = chat.tags || []
+			chatConnectionId = (chat as any).connectionId ?? null
+			chatSamplingConfigId = (chat as any).samplingConfigId ?? null
+			chatPromptConfigId = (chat as any).promptConfigId ?? null
 			// Reset originalData to null so it gets re-initialized with the loaded data
 			originalData = undefined
 		}
@@ -503,6 +527,16 @@
 		socket.on("chats:addGuest", handleChatsAddGuest)
 		socket.on("chats:removeGuest", handleChatsRemoveGuest)
 
+		// Admin-only: load connections, sampling configs, and prompt configs for override pickers
+		if (userCtx.user?.isAdmin) {
+			socket.on("connections:list", (msg: any) => { adminConnectionsList = msg.connectionsList || [] })
+			socket.on("samplingConfigs:list", (msg: any) => { adminSamplingList = msg.samplingConfigsList || [] })
+			socket.on("promptConfigs:list", (msg: any) => { adminPromptConfigsList = msg.promptConfigsList || [] })
+			socket.emit("connections:list", {})
+			socket.emit("samplingConfigs:list", {})
+			socket.emit("promptConfigs:list", {})
+		}
+
 		// Request initial data
 		socket.emit("characters:list", {})
 		socket.emit("personas:list", {})
@@ -511,6 +545,9 @@
 	})
 
 	onDestroy(() => {
+		socket.off("connections:list")
+		socket.off("samplingConfigs:list")
+		socket.off("promptConfigs:list")
 		// Properly remove event handlers by passing the function references
 		socket.off("chats:get", handleChatsGet)
 		socket.off("characters:list", handleCharactersList)
@@ -962,6 +999,29 @@
 				{/each}
 			</select>
 		</div>
+
+		<!-- Admin-only AI override -->
+		{#if userCtx.user?.isAdmin}
+			<div class="flex flex-col gap-2">
+				<p class="font-semibold">AI Override</p>
+				<p class="text-muted-foreground text-xs">Overrides system defaults for this chat. Leave as "System default" to use the global setting.</p>
+				<ConnectionSamplingPicker
+					connectionsList={adminConnectionsList}
+					samplingList={adminSamplingList}
+					bind:connectionId={chatConnectionId}
+					bind:samplingConfigId={chatSamplingConfigId}
+				/>
+				<div class="grid grid-cols-[5.5rem_1fr] items-center gap-x-2 gap-y-1.5">
+					<span class="text-muted-foreground text-xs">Prompt</span>
+					<select class="select text-xs" bind:value={chatPromptConfigId}>
+						<option value={null}>System default</option>
+						{#each adminPromptConfigsList.filter((p) => p.id != null) as p}
+							<option value={p.id}>{p.name}</option>
+						{/each}
+					</select>
+				</div>
+			</div>
+		{/if}
 
 		<!-- Tags Section -->
 		<div class="pb-10">

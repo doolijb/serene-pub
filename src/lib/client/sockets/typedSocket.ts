@@ -527,6 +527,30 @@ type SocketEventMap = {
 		params: Sockets.KoboldCpp.SetBaseUrl.Params
 		response: Sockets.KoboldCpp.SetBaseUrl.Response
 	}
+	"koboldcpp:setModelsDir": {
+		params: Sockets.KoboldCpp.SetModelsDir.Params
+		response: Sockets.KoboldCpp.SetModelsDir.Response
+	}
+	"koboldcpp:searchModels": {
+		params: Sockets.KoboldCpp.SearchModels.Params
+		response: Sockets.KoboldCpp.SearchModels.Response
+	}
+	"koboldcpp:downloadModel": {
+		params: Sockets.KoboldCpp.DownloadModel.Params
+		response: Sockets.KoboldCpp.DownloadModel.Response
+	}
+	"koboldcpp:cancelDownload": {
+		params: Sockets.KoboldCpp.CancelDownload.Params
+		response: Sockets.KoboldCpp.CancelDownload.Response
+	}
+	"koboldcpp:getDownloadProgress": {
+		params: Sockets.KoboldCpp.GetDownloadProgress.Params
+		response: Sockets.KoboldCpp.GetDownloadProgress.Response
+	}
+	"koboldcpp:clearDownloadHistory": {
+		params: Sockets.KoboldCpp.ClearDownloadHistory.Params
+		response: Sockets.KoboldCpp.ClearDownloadHistory.Response
+	}
 	"koboldcpp:version": {
 		params: Sockets.KoboldCpp.Version.Params
 		response: Sockets.KoboldCpp.Version.Response
@@ -546,6 +570,59 @@ type SocketEventMap = {
 	"koboldcpp:connectModel": {
 		params: Sockets.KoboldCpp.ConnectModel.Params
 		response: Sockets.KoboldCpp.ConnectModel.Response
+	}
+	"koboldcpp:perf": {
+		params: Sockets.KoboldCpp.Perf.Params
+		response: Sockets.KoboldCpp.Perf.Response
+	}
+	// Managed mode events
+	"koboldcpp:setManagedMode": {
+		params: Sockets.KoboldCpp.SetManagedMode.Params
+		response: Sockets.KoboldCpp.SetManagedMode.Response
+	}
+	"koboldcpp:setManagedPort": {
+		params: Sockets.KoboldCpp.SetManagedPort.Params
+		response: Sockets.KoboldCpp.SetManagedPort.Response
+	}
+	"koboldcpp:setManagedBinaryDir": {
+		params: Sockets.KoboldCpp.SetManagedBinaryDir.Params
+		response: Sockets.KoboldCpp.SetManagedBinaryDir.Response
+	}
+	"koboldcpp:setModelTtl": {
+		params: Sockets.KoboldCpp.SetModelTtl.Params
+		response: Sockets.KoboldCpp.SetModelTtl.Response
+	}
+	"koboldcpp:listBinaryVariants": {
+		params: Sockets.KoboldCpp.ListBinaryVariants.Params
+		response: Sockets.KoboldCpp.ListBinaryVariants.Response
+	}
+	"koboldcpp:downloadBinary": {
+		params: Sockets.KoboldCpp.DownloadBinary.Params
+		response: Sockets.KoboldCpp.DownloadBinary.Response
+	}
+	"koboldcpp:getBinaryDownloadProgress": {
+		params: Sockets.KoboldCpp.GetBinaryDownloadProgress.Params
+		response: Sockets.KoboldCpp.GetBinaryDownloadProgress.Response
+	}
+	"koboldcpp:cancelBinaryDownload": {
+		params: Sockets.KoboldCpp.CancelBinaryDownload.Params
+		response: Sockets.KoboldCpp.CancelBinaryDownload.Response
+	}
+	"koboldcpp:startSubprocess": {
+		params: Sockets.KoboldCpp.StartSubprocess.Params
+		response: Sockets.KoboldCpp.StartSubprocess.Response
+	}
+	"koboldcpp:stopSubprocess": {
+		params: Sockets.KoboldCpp.StopSubprocess.Params
+		response: Sockets.KoboldCpp.StopSubprocess.Response
+	}
+	"koboldcpp:getSubprocessStatus": {
+		params: Sockets.KoboldCpp.GetSubprocessStatus.Params
+		response: Sockets.KoboldCpp.GetSubprocessStatus.Response
+	}
+	"koboldcpp:unloadModel": {
+		params: Sockets.KoboldCpp.UnloadModel.Params
+		response: Sockets.KoboldCpp.UnloadModel.Response
 	}
 
 	// Ollama events
@@ -605,6 +682,14 @@ type SocketEventMap = {
 	}
 
 	// Vectorization events
+	"vectorizationConfig:get": {
+		params: Sockets.VectorizationConfig.Get.Params
+		response: Sockets.VectorizationConfig.Get.Response
+	}
+	"vectorizationConfig:update": {
+		params: Sockets.VectorizationConfig.Update.Params
+		response: Sockets.VectorizationConfig.Update.Response
+	}
 	"vectorization:listModels": {
 		params: Sockets.Vectorization.ListModels.Params
 		response: Sockets.Vectorization.ListModels.Response
@@ -741,6 +826,14 @@ type SocketEventMap = {
 		params: Sockets.Lorebooks.Import.Params
 		response: Sockets.Lorebooks.Import.Response
 	}
+	"lorebooks:createBinding": {
+		params: Sockets.Lorebooks.CreateBinding.Params
+		response: Sockets.Lorebooks.CreateBinding.Response
+	}
+	"lorebooks:updateBinding": {
+		params: Sockets.Lorebooks.UpdateBinding.Params
+		response: Sockets.Lorebooks.UpdateBinding.Response
+	}
 	"lorebooks:bindingList": {
 		params: Sockets.Lorebooks.BindingList.Params
 		response: Sockets.Lorebooks.BindingList.Response
@@ -828,6 +921,42 @@ type SocketEventMap = {
 	"scenes:delete": {
 		params: Sockets.Scenes.Delete.Params
 		response: Sockets.Scenes.Delete.Response
+	}
+	"scenes:process": {
+		params: Sockets.Scenes.Process.Params
+		response: Sockets.Scenes.Process.Response
+	}
+	"scenes:process:progress": {
+		params: never
+		response: Sockets.Scenes.Process.Progress
+	}
+	"scenes:process:complete": {
+		params: never
+		response: Sockets.Scenes.Process.Response
+	}
+	"scenes:process:error": {
+		params: never
+		response: Sockets.Scenes.Process.ErrorResponse
+	}
+	"scenes:process:trace": {
+		params: never
+		response: Sockets.Scenes.Process.TraceEntry
+	}
+	"scenes:compile": {
+		params: Sockets.Scenes.Compile.Params
+		response: Sockets.Scenes.Compile.Response
+	}
+	"scenes:compile:progress": {
+		params: never
+		response: Sockets.Scenes.Compile.Progress
+	}
+	"scenes:compile:complete": {
+		params: never
+		response: Sockets.Scenes.Compile.Response
+	}
+	"scenes:compile:error": {
+		params: never
+		response: Sockets.Scenes.Compile.ErrorResponse
 	}
 
 	// Assistant events
@@ -944,6 +1073,10 @@ type SocketEventMap = {
 		params: Sockets.NarrativeGraph.Build.ErrorResponse
 		response: Sockets.NarrativeGraph.Build.ErrorResponse
 	}
+	"narrativeGraph:buildLog": {
+		params: Sockets.NarrativeGraph.TraceEntry
+		response: Sockets.NarrativeGraph.TraceEntry
+	}
 	"narrativeGraph:applyProposal": {
 		params: Sockets.NarrativeGraph.ApplyProposal.Params
 		response: Sockets.NarrativeGraph.ApplyProposal.Response
@@ -968,6 +1101,38 @@ type SocketEventMap = {
 		params: Sockets.NarrativeGraph.CreateRelationship.Params
 		response: Sockets.NarrativeGraph.CreateRelationship.Response
 	}
+	"narrativeGraph:createNode": {
+		params: Sockets.NarrativeGraph.CreateNode.Params
+		response: Sockets.NarrativeGraph.CreateNode.Response
+	}
+	"narrativeGraph:queryContext": {
+		params: Sockets.NarrativeGraph.QueryContext.Params
+		response: Sockets.NarrativeGraph.QueryContext.Response
+	}
+	"narrativeGraph:linkBindingNode": {
+		params: Sockets.NarrativeGraph.LinkBindingNode.Params
+		response: Sockets.NarrativeGraph.LinkBindingNode.Response
+	}
+	"narrativeGraph:linkOrphanBinding": {
+		params: Sockets.NarrativeGraph.LinkOrphanBinding.Params
+		response: Sockets.NarrativeGraph.LinkOrphanBinding.Response
+	}
+	"narrativeGraph:mergeNode": {
+		params: Sockets.NarrativeGraph.MergeNode.Params
+		response: Sockets.NarrativeGraph.MergeNode.Response
+	}
+	"narrativeGraph:demergeNode": {
+		params: Sockets.NarrativeGraph.DemergeNode.Params
+		response: Sockets.NarrativeGraph.DemergeNode.Response
+	}
+	"bindingCheck:result": {
+		params: never
+		response: Sockets.BindingCheck.Result.Response
+	}
+	"bindingCheck:nodeResult": {
+		params: never
+		response: Sockets.BindingCheck.NodeResult.Response
+	}
 
 	// Import events
 	"import:sillytavern:scan": {
@@ -990,6 +1155,34 @@ type SocketEventMap = {
 		response: {
 			setup: { summarizationStepComplete: boolean; ragStepComplete: boolean }
 		}
+	}
+
+	// Task queue events (admin-only)
+	"taskQueue:get": {
+		params: Record<string, never>
+		response: never
+	}
+	"taskQueue:update": {
+		params: never
+		response: { tasks: Array<{ id: string; taskType: string; connectionName: string; samplingName: string; startedAt: string; chatId?: number; lorebookId?: number; label?: string }> }
+	}
+
+	// Activity events
+	"activity:get": {
+		params: Record<string, never>
+		response: never
+	}
+	"activity:dismiss": {
+		params: Sockets.Activity.Dismiss.Request
+		response: never
+	}
+	"activity:cancel": {
+		params: Sockets.Activity.Cancel.Request
+		response: never
+	}
+	"activity:update": {
+		params: never
+		response: Sockets.Activity.Update.Response
 	}
 
 	// Global error/success events

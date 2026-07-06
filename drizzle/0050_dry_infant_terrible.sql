@@ -1,0 +1,2 @@
+ALTER TABLE "chats" ADD COLUMN "prompt_config_id" integer;--> statement-breakpoint
+ALTER TABLE "chats" ADD CONSTRAINT "chats_prompt_config_id_prompt_configs_id_fk" FOREIGN KEY ("prompt_config_id") REFERENCES "public"."prompt_configs"("id") ON DELETE set null ON UPDATE no action;

@@ -13,7 +13,7 @@ import { ChatCharacterVisibility } from "$lib/shared/constants/ChatCharacterVisi
 import { InterpolationEngine } from "./InterpolationEngine"
 import { KeywordInfillEngine } from "./KeywordInfillEngine"
 import { RagInfillEngine } from "./RagInfillEngine"
-import type { CompiledPrompt, CompileOptions, TemplateContext } from "./types"
+import type { CompiledPrompt, CompileOptions, InfillResult, TemplateContext } from "./types"
 import "./utils"
 import { isModelReady } from "$lib/server/embedding"
 
@@ -217,6 +217,7 @@ export class PromptBuilder {
 	): {
 		name: string
 		nickname?: string
+		aliases?: string[]
 		description: string
 		personality?: string
 	} | null {
@@ -227,7 +228,8 @@ export class PromptBuilder {
 
 		const char: any = {
 			name: this.contextBuildCharacterName(character),
-			nickname: this.contextBuildCharacterNickname(character)
+			nickname: this.contextBuildCharacterNickname(character),
+			aliases: character.aliases?.length ? character.aliases.filter((a) => a.trim()) : undefined
 		}
 
 		// For minimal visibility, only include name/nickname and description
@@ -372,7 +374,7 @@ export class PromptBuilder {
 			this.interpolationEngine.interpolateObject(
 				c,
 				interpolationContext,
-				["name", "nickname", "description", "personality"]
+				["name", "nickname", "aliases", "description", "personality"]
 			)
 		)
 	}
@@ -653,8 +655,7 @@ export class PromptBuilder {
 
 		// Dispatch to RagInfillEngine when vectorization is active and model is ready
 		const ragIgnored = !!(this.chat.metadata as any)?.ragIgnored
-		let infillResult: Awaited<ReturnType<typeof this.infillContent>> | null =
-			null
+		let infillResult: InfillResult | null = null
 
 		if (!ragIgnored && isModelReady()) {
 			try {
@@ -669,7 +670,7 @@ export class PromptBuilder {
 						populateLorebookEntryBindings,
 						this.diagnosticsEnabled
 					)
-					infillResult = (await ragEngine.infillContent({
+					infillResult = await ragEngine.infillContent({
 						charName,
 						personaName,
 						templateContext,
@@ -679,7 +680,7 @@ export class PromptBuilder {
 						tokenCounter: this.tokenCounter,
 						handlebars: this.handlebars,
 						contextConfig: this.contextConfig
-					})) as any
+					})
 				}
 			} catch (err) {
 				console.warn(
@@ -710,7 +711,7 @@ export class PromptBuilder {
 				excludedIds
 			},
 			rag
-		} = infillResult as any
+		} = infillResult
 
 		const sources = this.buildSources(scenarioSource)
 		const meta = this.buildMeta({

@@ -1,8 +1,9 @@
 import { db } from "$lib/server/db"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { user as loadUser, user } from "./users"
+import { user as loadUser, user, usersCurrent } from "./users"
 import { userSettingsGet } from "./userSettings"
+import { systemSettingsGet } from "./systemSettings"
 import { getConnectionAdapter } from "../utils/getConnectionAdapter"
 import type { Handler } from "$lib/shared/events"
 
@@ -28,7 +29,9 @@ export const connectionsList: Handler<
 			columns: {
 				id: true,
 				name: true,
-				type: true
+				type: true,
+				model: true,
+				baseUrl: true
 			},
 			orderBy: (c, { asc }) => [asc(c.type), asc(c.name)]
 		})
@@ -94,11 +97,11 @@ export const connectionsCreate: Handler<
 			.insert(schema.connections)
 			.values(data)
 			.returning()
-		await connectionsSetUserActive.handler(
-			socket,
-			{ id: conn.id },
-			emitToUser
-		)
+		// Auto-set as default only when no default exists yet (first connection)
+		const sysSettings = await db.query.systemSettings.findFirst({ columns: { defaultConnectionId: true } })
+		if (!sysSettings?.defaultConnectionId) {
+			await connectionsSetUserActive.handler(socket, { id: conn.id }, emitToUser)
+		}
 		await connectionsList.handler(socket, {}, emitToUser)
 		const res: Sockets.Connections.Create.Response = { connection: conn }
 		emitToUser("connections:create", res)
@@ -154,24 +157,12 @@ export const connectionsDelete: Handler<
 			)
 		}
 
-		const currentUser = await db.query.users.findFirst({
-			where: (u, { eq }) => eq(u.id, socket.user!.id)
-		})
-
-		// Check if this connection is the user's active connection
-		if (currentUser) {
-			const userSettings = await db.query.userSettings.findFirst({
-				where: (us, { eq }) => eq(us.userId, currentUser.id)
-			})
-
-			if (userSettings?.activeConnectionId === params.id) {
-				await connectionsSetUserActive.handler(
-					socket,
-					{ id: null },
-					emitToUser
-				)
-			}
+		// Clear default connection in system settings if it's the one being deleted
+		const systemSettings = await db.query.systemSettings.findFirst({ columns: { id: true, defaultConnectionId: true } })
+		if (systemSettings?.defaultConnectionId === params.id) {
+			await connectionsSetUserActive.handler(socket, { id: null }, emitToUser)
 		}
+
 		await db
 			.delete(schema.connections)
 			.where(eq(schema.connections.id, params.id))
@@ -189,52 +180,27 @@ export const connectionsSetUserActive: Handler<
 	event: "connections:setUserActive",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) {
-			const res = {
-				error: "Access denied. Only admin users can set active connections."
-			}
+			const res = { error: "Access denied. Only admin users can set the default connection." }
 			emitToUser("error", res)
-			throw new Error(
-				"Access denied. Only admin users can set active connections."
-			)
+			throw new Error("Access denied.")
 		}
 
-		const currentUser = await db.query.users.findFirst({
-			where: (u, { eq }) => eq(u.id, socket.user!.id)
-		})
-		if (!currentUser) {
-			const res = { error: "User not found." }
-			emitToUser("error", res)
-			throw new Error("User not found.")
-		}
-
-		// Find or create user settings
-		let userSettings = await db.query.userSettings.findFirst({
-			where: (us, { eq }) => eq(us.userId, currentUser.id)
-		})
-
-		if (!userSettings) {
-			await db.insert(schema.userSettings).values({
-				userId: currentUser.id
-			})
-			userSettings = await db.query.userSettings.findFirst({
-				where: (us, { eq }) => eq(us.userId, currentUser.id)
-			})
-		}
-
+		// Update system-wide default connection (replaces the old per-user active connection)
 		await db
-			.update(schema.userSettings)
-			.set({
-				activeConnectionId: params.id
-			})
-			.where(eq(schema.userSettings.userId, currentUser.id))
-		// The user handler is not modularized yet, so call as in original
-		// @ts-ignore
-		await loadUser(socket, {}, emitToUser)
-		await userSettingsGet.handler(socket, {}, emitToUser)
+			.update(schema.systemSettings)
+			.set({ defaultConnectionId: params.id })
+			.where(eq(schema.systemSettings.id, 1))
+
 		if (params.id)
 			await connectionsGet.handler(socket, { id: params.id }, emitToUser)
-		const res: Sockets.Connections.SetUserActive.Response = { ok: true }
+
+		const res: Sockets.Connections.SetUserActive.Response = { ok: true, id: params.id }
 		emitToUser("connections:setUserActive", res)
+
+		// Push updated system settings and user so clients reflect the new default immediately
+		await systemSettingsGet.handler(socket, {}, emitToUser)
+		await usersCurrent.handler(socket, {}, emitToUser)
+
 		return res
 	}
 }

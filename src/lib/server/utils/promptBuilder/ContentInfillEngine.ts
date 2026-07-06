@@ -821,7 +821,7 @@ export class ContentInfillEngine {
 			this.interpolationEngine.interpolateObject(
 				c,
 				interpolationContext,
-				["name", "nickname", "description", "personality"]
+				["name", "nickname", "aliases", "description", "personality"]
 			)
 		)
 	}
@@ -851,6 +851,7 @@ export class ContentInfillEngine {
 		const char = {
 			name: character.name,
 			nickname: character.nickname || undefined,
+			aliases: character.aliases?.length ? character.aliases.filter((a) => a.trim()) : undefined,
 			description: character.description,
 			personality: character.personality || undefined
 		}

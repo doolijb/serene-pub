@@ -13,6 +13,8 @@
 		id?: number
 		name: string
 		nickname: string
+		aliases: string[]
+		summary: string
 		avatar: string
 		description: string
 		personality: string
@@ -98,6 +100,8 @@
 		id: undefined,
 		name: "",
 		nickname: "",
+		aliases: [],
+		summary: "",
 		avatar: "",
 		description: "",
 		personality: "",
@@ -120,6 +124,8 @@
 		id: undefined,
 		name: "",
 		nickname: "",
+		aliases: [],
+		summary: "",
 		avatar: "",
 		description: "",
 		personality: "",
@@ -148,7 +154,9 @@
 		creatorNotesMultilingual: false,
 		alternateGreetings: false,
 		groupOnlyGreetings: false,
-		postHistoryInstructions: false
+		postHistoryInstructions: false,
+		aliases: false,
+		summary: false
 	})
 	let character: Sockets.Character.Response["character"] | undefined =
 		$state(undefined)
@@ -562,25 +570,28 @@
 
 					editCharacterData = {
 						...editCharacterData,
-						...characterData,
-						avatar: characterData.avatar ?? "",
+						id: characterData.id,
+						name: characterData.name,
 						nickname: characterData.nickname ?? "",
+						aliases: Array.isArray(characterData.aliases) ? characterData.aliases : [],
+						summary: characterData.summary ?? "",
+						avatar: characterData.avatar ?? "",
+						description: characterData.description ?? "",
 						personality: characterData.personality ?? "",
 						scenario: characterData.scenario ?? "",
 						firstMessage: characterData.firstMessage ?? "",
+						alternateGreetings: Array.isArray(characterData.alternateGreetings) ? characterData.alternateGreetings : [],
+						exampleDialogues: characterData.exampleDialogues,
 						creatorNotes: characterData.creatorNotes ?? "",
-						creatorNotesMultilingual:
-							characterData.creatorNotesMultilingual ?? {},
-						groupOnlyGreetings: Array.isArray(
-							characterData.groupOnlyGreetings
-						)
-							? characterData.groupOnlyGreetings
-							: [],
-						postHistoryInstructions:
-							characterData.postHistoryInstructions ?? "",
-						characterVersion:
-							characterData.characterVersion ?? undefined,
-						tags: characterData.tags ?? []
+						creatorNotesMultilingual: characterData.creatorNotesMultilingual ?? {},
+						groupOnlyGreetings: Array.isArray(characterData.groupOnlyGreetings) ? characterData.groupOnlyGreetings : [],
+						postHistoryInstructions: characterData.postHistoryInstructions ?? "",
+						isFavorite: characterData.isFavorite ?? false,
+						lorebookId: characterData.lorebookId ?? null,
+						characterVersion: characterData.characterVersion ?? undefined,
+						tags: characterData.tags ?? [],
+						_avatar: "",
+						_avatarFile: undefined
 					}
 					originalCharacterData = { ...editCharacterData }
 				}
@@ -846,6 +857,81 @@
 				class="input"
 			/>
 		</fieldset>
+		<div class="flex flex-col gap-2">
+			<button
+				type="button"
+				class="flex items-center gap-2 text-sm font-semibold"
+				onclick={() => (expanded.aliases = !expanded.aliases)}
+			>
+				<span class="flex gap-1">
+					Aliases <span
+						class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
+						title="This field will be visible in prompts"
+						aria-label="This field will be visible in prompts"
+					>
+						<Icons.ScanEye
+							size={16}
+							class="relative top-[1px] inline"
+							aria-hidden="true"
+						/>
+					</span>
+				</span>
+				<span class="ml-1">{expanded.aliases ? "▼" : "►"}</span>
+			</button>
+			{#if expanded.aliases}
+				<div class="flex flex-col gap-1">
+					{#each editCharacterData.aliases as _alias, idx (idx)}
+						<div class="flex gap-2">
+							<input
+								type="text"
+								bind:value={editCharacterData.aliases[idx]}
+								class="input flex-1"
+								placeholder="Alias..."
+							/>
+							<button
+								class="btn btn-sm preset-tonal-error"
+								type="button"
+								onclick={() => removeFromArray(editCharacterData.aliases, idx)}
+							>
+								<Icons.Minus class="h-4 w-4" />
+							</button>
+						</div>
+					{/each}
+					<button
+						class="btn btn-sm preset-filled-primary-500 mt-1"
+						type="button"
+						onclick={() => addToArray(editCharacterData.aliases)}
+					>
+						<Icons.Plus class="h-4 w-4" />
+						Add Alias
+					</button>
+				</div>
+			{/if}
+		</div>
+		<div class="flex flex-col gap-2">
+			<button
+				type="button"
+				class="flex items-center gap-2 text-sm font-semibold"
+				onclick={() => (expanded.summary = !expanded.summary)}
+			>
+				Summary
+				<span class="ml-1">{expanded.summary ? "▼" : "►"}</span>
+			</button>
+			{#if expanded.summary}
+				<div class="flex flex-col gap-1">
+					<textarea
+						bind:value={editCharacterData.summary}
+						class="textarea min-h-16 text-sm"
+						placeholder="One or two sentences describing who this character is…"
+						maxlength="200"
+					></textarea>
+					<p class="text-surface-500 text-right text-xs">
+						{editCharacterData.summary.length} / 200
+					</p>
+					<p class="text-surface-400 text-xs">Used as a concise graph node description. Not injected into chat context.</p>
+				</div>
+			{/if}
+		</div>
 		<fieldset class="flex flex-col gap-2">
 			<button
 				type="button"

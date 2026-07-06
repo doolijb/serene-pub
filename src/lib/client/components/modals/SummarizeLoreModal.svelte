@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import * as skio from "sveltekit-io"
 	import { onDestroy, onMount } from "svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
 
 	function computeDefaultDate(
 		entries: Sockets.HistoryEntries.List.Response["historyEntryList"]
@@ -11,7 +11,6 @@
 		const dated = entries.filter((e) => e.year !== null)
 		if (dated.length === 0) return { year: 1, month: 1, day: 1 }
 
-		// Sort descending by year → month → day to find the latest entry
 		const latest = dated.sort((a, b) => {
 			if ((a.year ?? 0) !== (b.year ?? 0)) return (b.year ?? 0) - (a.year ?? 0)
 			if ((a.month ?? 0) !== (b.month ?? 0)) return (b.month ?? 0) - (a.month ?? 0)
@@ -40,11 +39,8 @@
 		initialLoreType?: "world" | "character" | "scene"
 		onSaved: () => void
 		onLorebookSet: (lorebookId: number) => void
-		/** Characters currently in the chat */
 		chatCharacters?: BindableEntity[]
-		/** Personas currently in the chat */
 		chatPersonas?: BindableEntity[]
-		/** True when selected messages have a visible gap — blocks scene generation */
 		hasSceneMessageGap?: boolean
 	}
 
@@ -64,28 +60,30 @@
 
 	const socket = skio.get()!
 
-	// ── Step management ──────────────────────────────────────────
-	type Step = "configure" | "generating" | "review"
-	let step = $state<Step>("configure")
+	// ── Internal step (mapped to AiTaskStep for the shell) ───────────
+	type InternalStep = "configure" | "generating" | "review" | "error"
+	let step = $state<InternalStep>("configure")
 
-	// ── Configure step state ──────────────────────────────────────
+	let aiStep = $derived<AiTaskStep>(
+		step === "configure" ? "confirm"
+		: step === "generating" ? "running"
+		: step
+	)
+
+	// ── Configure step state ─────────────────────────────────────────
 	let loreType = $state<"world" | "character" | "scene">(initialLoreType)
 	let topic = $state("")
 
-	// Lorebook attachment
 	let availableLorebooks = $state<Sockets.Lorebooks.List.Response["lorebookList"]>([])
 	let attachingLorebookId = $state<number | "">("")
 	let isCreatingLorebook = $state(false)
 	let newLorebookName = $state("")
 	let historyEntryList = $state<Sockets.HistoryEntries.List.Response["historyEntryList"]>([])
 
-	// Scene — history entry binding
 	let selectedHistoryEntryId = $state<number | "">("")
 	let isCreatingHistoryEntry = $state(false)
 
-	// Character lore binding
 	let lorebookBindings = $state<SelectLorebookBinding[]>([])
-	/** Combined, deduplicated list of bindable entities for the dropdown */
 	let bindableEntities = $derived.by<BindableEntity[]>(() => {
 		const seen = new Set<string>()
 		const result: BindableEntity[] = []
@@ -101,27 +99,45 @@
 		}
 		return result
 	})
-	/** Selected binding value: "character:5", "persona:3", or "" */
 	let selectedBinding = $state("")
-	/** Resolved binding ID returned from the server after summarization */
 	let resolvedBindingId = $state<number | null>(null)
 
-	// ── Generating step state ─────────────────────────────────────
+	// ── Generating step state ────────────────────────────────────────
+	let summarizePhase = $state<"drafting" | "synthesizing">("drafting")
 	let currentBatch = $state(0)
 	let totalBatches = $state(1)
 	let partialSummary = $state<{ content?: string; raw?: string }>({})
+	let trace = $state<Sockets.Chats.Summarize.TraceEntry[]>([])
+	let showTrace = $state(false)
+	let expandedTraceIdx = $state<number | null>(null)
 
-	// ── Review step state ─────────────────────────────────────────
+	// ── Review step state ────────────────────────────────────────────
 	let reviewName = $state("")
 	let reviewContent = $state("")
 	let rawOutput = $state("")
 	let showRaw = $state(false)
 	let isSaving = $state(false)
+	let extractedParticipantCharacters = $state<string[]>([])
+	let extractedMentionedCharacters = $state<string[]>([])
+	let newParticipantInput = $state("")
+	let newMentionedInput = $state("")
 
-	// ── Derived ───────────────────────────────────────────────────
+	// ── Error step state ─────────────────────────────────────────────
+	let errorMessage = $state("")
+
+	// ── Derived ─────────────────────────────────────────────────────
 	let progressPercent = $derived(
-		totalBatches > 0 ? Math.round((currentBatch / totalBatches) * 100) : 0
+		summarizePhase === "synthesizing" ? 90
+		: totalBatches > 1 ? Math.max(5, Math.round((currentBatch / totalBatches) * 80))
+		: currentBatch > 0 ? 60 : 5
 	)
+
+	let progressLabel = $derived(
+		summarizePhase === "synthesizing" ? "Synthesizing final entry…"
+		: currentBatch > 0 ? `Drafting part ${currentBatch} of ${totalBatches}…`
+		: "Starting…"
+	)
+
 	let canGenerate = $derived(
 		!!lorebookId &&
 		selectedMessageIds.length > 0 &&
@@ -129,12 +145,16 @@
 		(loreType !== "scene" || !!selectedHistoryEntryId) &&
 		(loreType !== "scene" || !hasSceneMessageGap)
 	)
-	let canSave = $derived(
-		reviewName.trim().length > 0 && reviewContent.trim().length > 0
-	)
+	let canSave = $derived(reviewName.trim().length > 0 && reviewContent.trim().length > 0)
 	let hasLorebook = $derived(!!lorebookId)
 
-	// ── Reset on open ─────────────────────────────────────────────
+	let badgeLabel = $derived(
+		loreType === "world" ? "World Lore"
+		: loreType === "character" ? "Character Lore"
+		: "Scene"
+	)
+
+	// ── Reset on open ────────────────────────────────────────────────
 	$effect(() => {
 		if (open) {
 			step = "configure"
@@ -157,10 +177,17 @@
 			showRaw = false
 			reviewName = ""
 			reviewContent = ""
+			extractedParticipantCharacters = []
+			extractedMentionedCharacters = []
+			newParticipantInput = ""
+			newMentionedInput = ""
+			trace = []
+			showTrace = false
+			expandedTraceIdx = null
+			errorMessage = ""
 		}
 	})
 
-	// Fetch lorebook data whenever the lorebook changes while the modal is open
 	$effect(() => {
 		if (open && lorebookId) {
 			socket.emit("historyEntries:list", { lorebookId })
@@ -168,9 +195,7 @@
 		}
 	})
 
-	// ── Socket handlers ───────────────────────────────────────────
-	let summarizePhase = $state<"drafting" | "synthesizing">("drafting")
-
+	// ── Socket handlers ──────────────────────────────────────────────
 	function handleProgress(data: Sockets.Chats.Summarize.Progress) {
 		summarizePhase = data.phase
 		currentBatch = data.batch
@@ -178,23 +203,25 @@
 		partialSummary = data.partial
 	}
 
+	function handleTrace(entry: Sockets.Chats.Summarize.TraceEntry) {
+		trace = [...trace, entry]
+	}
+
 	function handleComplete(data: Sockets.Chats.Summarize.Response) {
+		if (step !== "generating") return
 		rawOutput = data.raw
 		reviewName = data.name ?? ""
 		reviewContent = data.content ?? data.raw ?? ""
 		resolvedBindingId = data.lorebookBindingId ?? null
-
+		extractedParticipantCharacters = data.participantCharacters ?? []
+		extractedMentionedCharacters = data.mentionedCharacters ?? []
 		step = "review"
 	}
 
 	function handleError(data: Sockets.Chats.Summarize.ErrorResponse) {
-		if (data.reason === "no_lorebook") {
-			toaster.error({ title: "No lorebook attached", description: data.error })
-			step = "configure"
-		} else {
-			toaster.error({ title: "Summarization failed", description: data.error })
-			step = "configure"
-		}
+		if (step !== "generating") return
+		errorMessage = data.error
+		step = "error"
 	}
 
 	function handleLorebooksList(data: Sockets.Lorebooks.List.Response) {
@@ -238,6 +265,7 @@
 		socket.on("chats:summarize:progress", handleProgress)
 		socket.on("chats:summarize:complete", handleComplete)
 		socket.on("chats:summarize:error", handleError)
+		socket.on("chats:summarize:trace", handleTrace)
 		socket.on("lorebooks:list", handleLorebooksList)
 		socket.on("chats:setLorebook", handleSetLorebook)
 		socket.on("lorebooks:create", handleLorebookCreate)
@@ -248,18 +276,21 @@
 	})
 
 	onDestroy(() => {
-		socket.off("chats:summarize:progress", handleProgress)
-		socket.off("chats:summarize:complete", handleComplete)
-		socket.off("chats:summarize:error", handleError)
-		socket.off("lorebooks:list", handleLorebooksList)
-		socket.off("chats:setLorebook", handleSetLorebook)
-		socket.off("lorebooks:create", handleLorebookCreate)
-		socket.off("historyEntries:list", handleHistoryEntriesList)
-		socket.off("historyEntries:create", handleHistoryEntryCreate)
-		socket.off("lorebooks:bindingList", handleLorebookBindingList)
+		// skio.get()! returns Server | Socket union — .off() signatures are incompatible
+		const s = socket as any
+		s.off("chats:summarize:progress", handleProgress)
+		s.off("chats:summarize:complete", handleComplete)
+		s.off("chats:summarize:error", handleError)
+		s.off("chats:summarize:trace", handleTrace)
+		s.off("lorebooks:list", handleLorebooksList)
+		s.off("chats:setLorebook", handleSetLorebook)
+		s.off("lorebooks:create", handleLorebookCreate)
+		s.off("historyEntries:list", handleHistoryEntriesList)
+		s.off("historyEntries:create", handleHistoryEntryCreate)
+		s.off("lorebooks:bindingList", handleLorebookBindingList)
 	})
 
-	// ── Actions ───────────────────────────────────────────────────
+	// ── Actions ──────────────────────────────────────────────────────
 	function attachLorebookToChat(id: number) {
 		socket.emit("chats:setLorebook", { chatId, lorebookId: id })
 		attachingLorebookId = ""
@@ -279,7 +310,6 @@
 
 	function createBlankHistoryEntry() {
 		if (!lorebookId) return
-		// Compute next date from the latest existing entry
 		const defaultDate = historyEntryList.length > 0
 			? computeDefaultDate(historyEntryList)
 			: { year: 1, month: 1, day: 1 }
@@ -302,10 +332,15 @@
 
 	function generate() {
 		step = "generating"
+		summarizePhase = "drafting"
 		currentBatch = 0
 		totalBatches = 1
 		partialSummary = {}
 		resolvedBindingId = null
+		trace = []
+		showTrace = false
+		expandedTraceIdx = null
+		errorMessage = ""
 
 		const [bindingType, bindingIdStr] = selectedBinding.split(":")
 		socket.emit("chats:summarize", {
@@ -330,7 +365,9 @@
 					historyEntryId: selectedHistoryEntryId ? Number(selectedHistoryEntryId) : null,
 					name: reviewName.trim() || null,
 					summary: reviewContent.trim(),
-					selectedMessageIds
+					selectedMessageIds,
+					participantCharacters: extractedParticipantCharacters,
+					mentionedCharacters: extractedMentionedCharacters
 				}
 			})
 		} else if (loreType === "world") {
@@ -371,445 +408,429 @@
 		onOpenChange({ open: false })
 	}
 
-	function goBack() {
-		step = "configure"
+	function addParticipant() {
+		const name = newParticipantInput.trim()
+		if (name && !extractedParticipantCharacters.includes(name)) {
+			extractedParticipantCharacters = [...extractedParticipantCharacters, name]
+		}
+		newParticipantInput = ""
+	}
+
+	function addMentioned() {
+		const name = newMentionedInput.trim()
+		if (name && !extractedMentionedCharacters.includes(name)) {
+			extractedMentionedCharacters = [...extractedMentionedCharacters, name]
+		}
+		newMentionedInput = ""
 	}
 </script>
 
-<Modal
-	{open}
-	{onOpenChange}
-	contentBase="card bg-surface-100-900 p-6 shadow-xl w-[min(95vw,560px)] max-h-[90vh] overflow-y-auto"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<!-- ── STEP 1: Configure ─────────────────────────────── -->
-		{#if step === "configure"}
-			<header class="mb-4 flex items-center justify-between">
-				<h2 id="summarize-modal-title" class="h3">
-					Summarize to Lorebook
-				</h2>
-				<Icons.BookOpen size={24} class="text-primary-500" />
-			</header>
-
-			<div class="space-y-5">
-				<!-- Lorebook status -->
-				<div class="rounded-lg border border-surface-300-700 p-3">
-					{#if hasLorebook}
-						{@const book = availableLorebooks.find(l => l.id === lorebookId)}
-						<div class="flex items-center gap-2 text-sm">
-							<Icons.BookMarked size={16} class="text-success-500 shrink-0" />
-							<span class="text-surface-600-400">Saving to:</span>
-							<span class="font-semibold">{book?.name ?? `Lorebook #${lorebookId}`}</span>
+{#snippet confirmBlock()}
+	<div class="space-y-5">
+		<!-- Lorebook status -->
+		<div class="rounded-lg border border-surface-300-700 p-3">
+			{#if hasLorebook}
+				{@const book = availableLorebooks.find(l => l.id === lorebookId)}
+				<div class="flex items-center gap-2 text-sm">
+					<Icons.BookMarked size={16} class="text-success-500 shrink-0" />
+					<span class="text-surface-600-400">Saving to:</span>
+					<span class="font-semibold">{book?.name ?? `Lorebook #${lorebookId}`}</span>
+				</div>
+			{:else}
+				<div class="space-y-3">
+					<div class="flex items-start gap-2 text-sm">
+						<Icons.TriangleAlert size={16} class="text-warning-500 mt-0.5 shrink-0" />
+						<span>No lorebook is attached to this chat. Attach one to continue.</span>
+					</div>
+					{#if !isCreatingLorebook}
+						<div class="flex flex-wrap gap-2">
+							<select class="select flex-1 text-sm" bind:value={attachingLorebookId}>
+								<option value="">Select existing lorebook…</option>
+								{#each availableLorebooks as lb}
+									<option value={lb.id}>{lb.name}</option>
+								{/each}
+							</select>
+							<button class="btn btn-sm preset-filled-primary-500" disabled={!attachingLorebookId} onclick={confirmAttachExisting}>
+								Attach
+							</button>
+							<button class="btn btn-sm preset-tonal-surface" onclick={() => (isCreatingLorebook = true)}>
+								<Icons.Plus size={14} /> New
+							</button>
 						</div>
 					{:else}
-						<div class="space-y-3">
-							<div class="flex items-start gap-2 text-sm">
-								<Icons.TriangleAlert size={16} class="text-warning-500 mt-0.5 shrink-0" />
-								<span>No lorebook is attached to this chat. Attach one to continue.</span>
-							</div>
-							{#if !isCreatingLorebook}
-								<div class="flex flex-wrap gap-2">
-									<select
-										class="select flex-1 text-sm"
-										bind:value={attachingLorebookId}
-									>
-										<option value="">Select existing lorebook…</option>
-										{#each availableLorebooks as lb}
-											<option value={lb.id}>{lb.name}</option>
-										{/each}
-									</select>
-									<button
-										class="btn btn-sm preset-filled-primary-500"
-										disabled={!attachingLorebookId}
-										onclick={confirmAttachExisting}
-									>
-										Attach
-									</button>
-									<button
-										class="btn btn-sm preset-tonal-surface"
-										onclick={() => (isCreatingLorebook = true)}
-									>
-										<Icons.Plus size={14} />
-										New
-									</button>
-								</div>
-							{:else}
-								<div class="flex gap-2">
-									<input
-										class="input flex-1 text-sm"
-										type="text"
-										placeholder="New lorebook name…"
-										bind:value={newLorebookName}
-										onkeydown={(e) => e.key === "Enter" && createAndAttachLorebook()}
-									/>
-									<button
-										class="btn btn-sm preset-filled-primary-500"
-										disabled={!newLorebookName.trim()}
-										onclick={createAndAttachLorebook}
-									>
-										Create & Attach
-									</button>
-									<button
-										class="btn btn-sm preset-tonal-surface"
-										onclick={() => (isCreatingLorebook = false)}
-									>
-										<Icons.X size={14} />
-									</button>
-								</div>
-							{/if}
+						<div class="flex gap-2">
+							<input
+								class="input flex-1 text-sm"
+								type="text"
+								placeholder="New lorebook name…"
+								bind:value={newLorebookName}
+								onkeydown={(e) => e.key === "Enter" && createAndAttachLorebook()}
+							/>
+							<button class="btn btn-sm preset-filled-primary-500" disabled={!newLorebookName.trim()} onclick={createAndAttachLorebook}>
+								Create & Attach
+							</button>
+							<button class="btn btn-sm preset-tonal-surface" onclick={() => (isCreatingLorebook = false)}>
+								<Icons.X size={14} />
+							</button>
 						</div>
 					{/if}
 				</div>
+			{/if}
+		</div>
 
-				<!-- Entry type -->
-				<fieldset class="space-y-2">
-					<legend class="label text-sm font-semibold">Entry type</legend>
-					<div class="flex flex-wrap gap-4">
-						<label class="flex cursor-pointer items-center gap-2">
-							<input
-								type="radio"
-								class="radio"
-								name="loreType"
-								value="scene"
-								bind:group={loreType}
-							/>
-							<Icons.Film size={16} />
-							<span class="text-sm">Scene</span>
-						</label>
-						<label class="flex cursor-pointer items-center gap-2">
-							<input
-								type="radio"
-								class="radio"
-								name="loreType"
-								value="world"
-								bind:group={loreType}
-							/>
-							<Icons.Globe size={16} />
-							<span class="text-sm">World Lore</span>
-						</label>
-						<label class="flex cursor-pointer items-center gap-2">
-							<input
-								type="radio"
-								class="radio"
-								name="loreType"
-								value="character"
-								bind:group={loreType}
-							/>
-							<Icons.User size={16} />
-							<span class="text-sm">Character Lore</span>
-						</label>
-					</div>
-				</fieldset>
-
-				<!-- Scene gap warning -->
-				{#if loreType === "scene" && hasSceneMessageGap}
-					<div class="flex items-start gap-2 rounded-lg border border-warning-500/40 bg-warning-500/10 p-3 text-sm">
-						<Icons.TriangleAlert size={16} class="text-warning-500 mt-0.5 shrink-0" />
-						<span>Selected messages have a visible gap. Scenes must be a consecutive sequence with no unselected visible messages between them. Deselect the skipped messages or hide them first.</span>
-					</div>
-				{/if}
-
-				<!-- History entry binding (scene only) -->
-				{#if loreType === "scene"}
-					<div class="space-y-1">
-						<label class="label text-sm font-semibold" for="summarize-history-entry">
-							History entry <span class="text-error-500">*</span>
-						</label>
-						{#if historyEntryList.length > 0 || selectedHistoryEntryId}
-							<div class="flex gap-2">
-								<select
-									id="summarize-history-entry"
-									class="select flex-1 text-sm"
-									bind:value={selectedHistoryEntryId}
-								>
-									<option value="">— Select history entry —</option>
-									{#each historyEntryList as entry}
-										<option value={entry.id}>
-											{#if entry.year}Year {entry.year}{entry.month ? `, Month ${entry.month}` : ""}{entry.day ? `, Day ${entry.day}` : ""}{:else}Entry #{entry.id}{/if}
-										</option>
-									{/each}
-								</select>
-								<button
-									class="btn btn-sm preset-tonal-surface"
-									disabled={isCreatingHistoryEntry}
-									onclick={createBlankHistoryEntry}
-									title="Create a new blank history entry"
-								>
-									{#if isCreatingHistoryEntry}
-										<Icons.Loader size={14} class="animate-spin" />
-									{:else}
-										<Icons.Plus size={14} />
-									{/if}
-									New
-								</button>
-							</div>
-						{:else}
-							<div class="flex gap-2">
-								<p class="text-surface-500 flex-1 text-sm">No history entries yet.</p>
-								<button
-									class="btn btn-sm preset-filled-primary-500"
-									disabled={isCreatingHistoryEntry}
-									onclick={createBlankHistoryEntry}
-								>
-									{#if isCreatingHistoryEntry}
-										<Icons.Loader size={14} class="animate-spin" />
-									{:else}
-										<Icons.Plus size={14} />
-									{/if}
-									Create New Entry
-								</button>
-							</div>
-						{/if}
-						{#if selectedHistoryEntryId}
-							{@const entry = historyEntryList.find(e => e.id === Number(selectedHistoryEntryId))}
-							{#if entry?.content}
-								<p class="text-surface-500 text-xs line-clamp-2">{entry.content}</p>
-							{:else}
-								<p class="text-surface-400 text-xs italic">Empty entry — content will be populated from scenes later.</p>
-							{/if}
-						{/if}
-					</div>
-				{/if}
-
-				<!-- Topic (world + character lore) -->
-				{#if loreType === "world" || loreType === "character"}
-					<div class="space-y-1">
-						<label class="label text-sm font-semibold" for="summarize-topic">
-							Focus topic
-							{#if loreType === "character"}
-								<span class="text-error-500">*</span>
-							{:else}
-								<span class="text-surface-400 font-normal">(optional)</span>
-							{/if}
-						</label>
-						<input
-							id="summarize-topic"
-							class="input text-sm"
-							type="text"
-							placeholder={loreType === "character"
-								? 'e.g. "abilities", "relationship with Kira", "past"'
-								: 'e.g. "the guards in the Labyrinth of Descia"'}
-							bind:value={topic}
-						/>
-						{#if topic.trim()}
-							<p class="text-surface-500 text-xs">
-								Prompt will include: <em>"Specifically focus on: "{topic.trim()}""</em>
-							</p>
-						{/if}
-					</div>
-				{/if}
-
-				<!-- Binding (character lore only) -->
-				{#if loreType === "character"}
-					<div class="space-y-1">
-						<label class="label text-sm font-semibold" for="summarize-binding">
-							Bind to character / persona
-							<span class="text-surface-400 font-normal">(optional)</span>
-						</label>
-						<select
-							id="summarize-binding"
-							class="select text-sm"
-							bind:value={selectedBinding}
-						>
-							<option value="">— None (unbound) —</option>
-							{#if bindableEntities.filter(e => e.type === "character").length > 0}
-								<optgroup label="Characters">
-									{#each bindableEntities.filter(e => e.type === "character") as e}
-										<option value="character:{e.id}">{e.name}</option>
-									{/each}
-								</optgroup>
-							{/if}
-							{#if bindableEntities.filter(e => e.type === "persona").length > 0}
-								<optgroup label="Personas">
-									{#each bindableEntities.filter(e => e.type === "persona") as e}
-										<option value="persona:{e.id}">{e.name}</option>
-									{/each}
-								</optgroup>
-							{/if}
-						</select>
-					</div>
-				{/if}
-
-				<!-- Message count -->
-				<p class="text-surface-500 text-sm">
-					<Icons.MessageSquare size={14} class="mr-1 inline" />
-					Summarizing
-					<strong>{selectedMessageIds.length}</strong>
-					{selectedMessageIds.length === 1 ? "message" : "messages"}
-				</p>
+		<!-- Entry type -->
+		<fieldset class="space-y-2">
+			<legend class="label text-sm font-semibold">Entry type</legend>
+			<div class="flex flex-wrap gap-4">
+				<label class="flex cursor-pointer items-center gap-2">
+					<input type="radio" class="radio" name="loreType" value="scene" bind:group={loreType} />
+					<Icons.Film size={16} />
+					<span class="text-sm">Scene</span>
+				</label>
+				<label class="flex cursor-pointer items-center gap-2">
+					<input type="radio" class="radio" name="loreType" value="world" bind:group={loreType} />
+					<Icons.Globe size={16} />
+					<span class="text-sm">World Lore</span>
+				</label>
+				<label class="flex cursor-pointer items-center gap-2">
+					<input type="radio" class="radio" name="loreType" value="character" bind:group={loreType} />
+					<Icons.User size={16} />
+					<span class="text-sm">Character Lore</span>
+				</label>
 			</div>
+		</fieldset>
 
-			<footer class="mt-6 flex justify-end gap-3">
-				<button
-					class="btn preset-filled-surface-500"
-					onclick={() => onOpenChange({ open: false })}
-				>
-					Cancel
-				</button>
-				<button
-					class="btn preset-filled-primary-500"
-					disabled={!canGenerate}
-					onclick={generate}
-					title={!hasLorebook ? "Attach a lorebook first" : !selectedMessageIds.length ? "Select at least one message" : loreType === "scene" && !selectedHistoryEntryId ? "Select or create a history entry first" : ""}
-				>
-					<Icons.Sparkles size={16} />
-					Generate Summary
-				</button>
-			</footer>
+		<!-- Scene gap warning -->
+		{#if loreType === "scene" && hasSceneMessageGap}
+			<div class="flex items-start gap-2 rounded-lg border border-warning-500/40 bg-warning-500/10 p-3 text-sm">
+				<Icons.TriangleAlert size={16} class="text-warning-500 mt-0.5 shrink-0" />
+				<span>Selected messages have a visible gap. Scenes must be a consecutive sequence with no unselected visible messages between them.</span>
+			</div>
+		{/if}
 
-		<!-- ── STEP 2: Generating ────────────────────────────── -->
-		{:else if step === "generating"}
-			<header class="mb-4">
-				<h2 id="summarize-modal-title" class="h3">Generating Summary…</h2>
-			</header>
-
-			<div class="space-y-4">
-				<!-- Progress -->
-				<div class="space-y-2">
-					<div class="flex items-center justify-between text-sm">
-						<span class="text-surface-500">
-							{#if summarizePhase === "synthesizing"}
-								Synthesizing final entry…
-							{:else if currentBatch > 0}
-								Drafting part {currentBatch} of {totalBatches}…
+		<!-- History entry binding (scene only) -->
+		{#if loreType === "scene"}
+			<div class="space-y-1">
+				<label class="label text-sm font-semibold" for="summarize-history-entry">
+					History entry <span class="text-error-500">*</span>
+				</label>
+				{#if historyEntryList.length > 0 || selectedHistoryEntryId}
+					<div class="flex gap-2">
+						<select id="summarize-history-entry" class="select flex-1 text-sm" bind:value={selectedHistoryEntryId}>
+							<option value="">— Select history entry —</option>
+							{#each historyEntryList as entry}
+								<option value={entry.id}>
+									{#if entry.year}Year {entry.year}{entry.month ? `, Month ${entry.month}` : ""}{entry.day ? `, Day ${entry.day}` : ""}{:else}Entry #{entry.id}{/if}
+								</option>
+							{/each}
+						</select>
+						<button class="btn btn-sm preset-tonal-surface" disabled={isCreatingHistoryEntry} onclick={createBlankHistoryEntry} title="Create a new blank history entry">
+							{#if isCreatingHistoryEntry}
+								<Icons.Loader size={14} class="animate-spin" />
 							{:else}
-								Starting…
+								<Icons.Plus size={14} />
 							{/if}
-						</span>
-						<span class="font-mono text-sm">{progressPercent}%</span>
-					</div>
-					<div class="bg-surface-300-700 h-2 w-full overflow-hidden rounded-full">
-						<div
-							class="bg-primary-500 h-full rounded-full transition-all duration-300"
-							style="width: {progressPercent}%"
-						></div>
-					</div>
-				</div>
-
-				<!-- Live draft preview -->
-				{#if partialSummary.content || partialSummary.raw}
-					<div class="space-y-1">
-						<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">
-							{summarizePhase === "synthesizing" ? "Final entry" : `Draft ${currentBatch}`}
-						</p>
-						<div class="bg-surface-200-800 rounded-lg p-3 text-sm">
-							{#if partialSummary.content}
-								<p class="text-surface-700-300 line-clamp-6 whitespace-pre-wrap">
-									{partialSummary.content}
-								</p>
-							{:else if partialSummary.raw}
-								<p class="text-surface-500 line-clamp-6 whitespace-pre-wrap text-xs italic">
-									{partialSummary.raw}
-								</p>
-							{/if}
-						</div>
-					</div>
-				{:else if summarizePhase === "synthesizing"}
-					<div class="text-surface-500 py-4 text-center text-sm">
-						<div class="bg-primary-500 mx-auto mb-2 h-2 w-2 animate-pulse rounded-full"></div>
-						Synthesizing final entry…
+							New
+						</button>
 					</div>
 				{:else}
-					<div class="text-surface-500 py-4 text-center text-sm">
-						<div class="bg-primary-500 mx-auto mb-2 h-2 w-2 animate-pulse rounded-full"></div>
-						Waiting for first draft…
+					<div class="flex gap-2">
+						<p class="text-surface-500 flex-1 text-sm">No history entries yet.</p>
+						<button class="btn btn-sm preset-filled-primary-500" disabled={isCreatingHistoryEntry} onclick={createBlankHistoryEntry}>
+							{#if isCreatingHistoryEntry}
+								<Icons.Loader size={14} class="animate-spin" />
+							{:else}
+								<Icons.Plus size={14} />
+							{/if}
+							Create New Entry
+						</button>
 					</div>
+				{/if}
+				{#if selectedHistoryEntryId}
+					{@const entry = historyEntryList.find(e => e.id === Number(selectedHistoryEntryId))}
+					{#if entry?.content}
+						<p class="text-surface-500 text-xs line-clamp-2">{entry.content}</p>
+					{:else}
+						<p class="text-surface-400 text-xs italic">Empty entry — content will be populated from scenes later.</p>
+					{/if}
 				{/if}
 			</div>
+		{/if}
 
-			<footer class="mt-6 flex justify-end">
-				<button
-					class="btn preset-filled-error-500"
-					onclick={() => {
-						step = "configure"
-					}}
-				>
-					<Icons.X size={16} />
-					Cancel
-				</button>
-			</footer>
-
-		<!-- ── STEP 3: Review & Edit ─────────────────────────── -->
-		{:else if step === "review"}
-			<header class="mb-4 flex items-center justify-between">
-				<h2 id="summarize-modal-title" class="h3">Review & Save</h2>
-				<span class="badge preset-tonal-primary text-xs capitalize">
-					{loreType === "world" ? "World Lore" : loreType === "character" ? "Character Lore" : "Scene"}
-				</span>
-			</header>
-
-			<div class="space-y-4">
-				<!-- Name (world + character lore + scene — history entries are identified by date) -->
-				{#if loreType === "world" || loreType === "character" || loreType === "scene"}
-					<div class="space-y-1">
-						<label class="label text-sm font-semibold" for="review-name">
-							Name <span class="text-error-500">*</span>
-						</label>
-						<input
-							id="review-name"
-							class="input text-sm"
-							type="text"
-							placeholder="Entry name…"
-							bind:value={reviewName}
-						/>
-						{#if reviewName}
-							<p class="text-surface-500 text-xs">Auto-generated — edit if needed.</p>
-						{/if}
-					</div>
+		<!-- Topic (world + character) -->
+		{#if loreType === "world" || loreType === "character"}
+			<div class="space-y-1">
+				<label class="label text-sm font-semibold" for="summarize-topic">
+					Focus topic
+					{#if loreType === "character"}
+						<span class="text-error-500">*</span>
+					{:else}
+						<span class="text-surface-400 font-normal">(optional)</span>
+					{/if}
+				</label>
+				<input
+					id="summarize-topic"
+					class="input text-sm"
+					type="text"
+					placeholder={loreType === "character"
+						? 'e.g. "abilities", "relationship with Kira", "past"'
+						: 'e.g. "the guards in the Labyrinth of Descia"'}
+					bind:value={topic}
+				/>
+				{#if topic.trim()}
+					<p class="text-surface-500 text-xs">
+						Prompt will include: <em>"Specifically focus on: "{topic.trim()}""</em>
+					</p>
 				{/if}
+			</div>
+		{/if}
 
-				<!-- Content -->
-				<div class="space-y-1">
-					<label class="label text-sm font-semibold" for="review-content">
-						Content <span class="text-error-500">*</span>
-					</label>
-					<textarea
-						id="review-content"
-						class="textarea min-h-32 text-sm"
-						placeholder="Entry content…"
-						bind:value={reviewContent}
-					></textarea>
+		<!-- Binding (character lore only) -->
+		{#if loreType === "character"}
+			<div class="space-y-1">
+				<label class="label text-sm font-semibold" for="summarize-binding">
+					Bind to character / persona
+					<span class="text-surface-400 font-normal">(optional)</span>
+				</label>
+				<select id="summarize-binding" class="select text-sm" bind:value={selectedBinding}>
+					<option value="">— None (unbound) —</option>
+					{#if bindableEntities.filter(e => e.type === "character").length > 0}
+						<optgroup label="Characters">
+							{#each bindableEntities.filter(e => e.type === "character") as e}
+								<option value="character:{e.id}">{e.name}</option>
+							{/each}
+						</optgroup>
+					{/if}
+					{#if bindableEntities.filter(e => e.type === "persona").length > 0}
+						<optgroup label="Personas">
+							{#each bindableEntities.filter(e => e.type === "persona") as e}
+								<option value="persona:{e.id}">{e.name}</option>
+							{/each}
+						</optgroup>
+					{/if}
+				</select>
+			</div>
+		{/if}
+
+		<!-- Message count -->
+		<p class="text-surface-500 text-sm">
+			<Icons.MessageSquare size={14} class="mr-1 inline" />
+			Summarizing
+			<strong>{selectedMessageIds.length}</strong>
+			{selectedMessageIds.length === 1 ? "message" : "messages"}
+		</p>
+	</div>
+{/snippet}
+
+{#snippet previewBlock()}
+	{#if partialSummary.content || partialSummary.raw}
+		<div class="space-y-1">
+			<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">
+				{summarizePhase === "synthesizing" ? "Final entry" : `Draft ${currentBatch}`}
+			</p>
+			<div class="bg-surface-200-800 rounded-lg p-3 text-sm">
+				{#if partialSummary.content}
+					<p class="text-surface-700-300 line-clamp-6 whitespace-pre-wrap">{partialSummary.content}</p>
+				{:else if partialSummary.raw}
+					<p class="text-surface-500 line-clamp-6 whitespace-pre-wrap text-xs italic">{partialSummary.raw}</p>
+				{/if}
+			</div>
+		</div>
+	{:else if summarizePhase === "synthesizing"}
+		<div class="text-surface-500 py-4 text-center text-sm">
+			<div class="bg-primary-500 mx-auto mb-2 h-2 w-2 animate-pulse rounded-full"></div>
+			Synthesizing final entry…
+		</div>
+	{:else}
+		<div class="text-surface-500 py-4 text-center text-sm">
+			<div class="bg-primary-500 mx-auto mb-2 h-2 w-2 animate-pulse rounded-full"></div>
+			Waiting for first draft…
+		</div>
+	{/if}
+{/snippet}
+
+{#snippet reviewBlock()}
+	<div class="space-y-4">
+		{#if loreType === "world" || loreType === "character" || loreType === "scene"}
+			<div class="space-y-1">
+				<label class="label text-sm font-semibold" for="review-name">
+					Name <span class="text-error-500">*</span>
+				</label>
+				<input
+					id="review-name"
+					class="input text-sm"
+					type="text"
+					placeholder="Entry name…"
+					bind:value={reviewName}
+				/>
+				{#if reviewName}
+					<p class="text-surface-500 text-xs">Auto-generated — edit if needed.</p>
+				{/if}
+			</div>
+		{/if}
+
+		<div class="space-y-1">
+			<label class="label text-sm font-semibold" for="review-content">
+				Content <span class="text-error-500">*</span>
+			</label>
+			<textarea
+				id="review-content"
+				class="textarea min-h-32 text-sm"
+				placeholder="Entry content…"
+				bind:value={reviewContent}
+			></textarea>
+		</div>
+
+		{#if loreType === "scene"}
+			<div class="rounded-lg border border-surface-300-700 p-3 space-y-3">
+				<p class="text-xs font-semibold uppercase tracking-wide text-surface-500">Extracted characters</p>
+
+				<div class="space-y-1.5">
+					<p class="text-sm font-semibold">Participants <span class="text-surface-500 font-normal text-xs">(physically present)</span></p>
+					<div class="flex flex-wrap gap-1.5">
+						{#each extractedParticipantCharacters as name, i}
+							<span class="chip preset-tonal-primary text-xs flex items-center gap-1">
+								{name}
+								<button class="hover:text-error-500" onclick={() => (extractedParticipantCharacters = extractedParticipantCharacters.filter((_, j) => j !== i))}>
+									<Icons.X size={10} />
+								</button>
+							</span>
+						{/each}
+						<div class="flex gap-1">
+							<input
+								class="input input-sm text-xs w-28"
+								placeholder="Add name…"
+								bind:value={newParticipantInput}
+								onkeydown={(e) => e.key === "Enter" && addParticipant()}
+								onblur={addParticipant}
+							/>
+							<button class="btn btn-sm preset-tonal-surface" onclick={addParticipant} disabled={!newParticipantInput.trim()}>
+								<Icons.Plus size={12} />
+							</button>
+						</div>
+					</div>
+					{#if extractedParticipantCharacters.length === 0}
+						<p class="text-xs text-surface-400 italic">None extracted.</p>
+					{/if}
 				</div>
 
-				<!-- Raw output toggle -->
-				<div>
-					<button
-						class="text-surface-500 hover:text-surface-700-300 flex items-center gap-1 text-xs"
-						onclick={() => (showRaw = !showRaw)}
-					>
-						<Icons.ChevronDown
-							size={14}
-							class="transition-transform {showRaw ? 'rotate-180' : ''}"
-						/>
-						{showRaw ? "Hide" : "Show"} raw LLM output
-					</button>
-					{#if showRaw}
-						<pre class="bg-surface-200-800 mt-2 overflow-x-auto rounded p-3 text-xs whitespace-pre-wrap">{rawOutput}</pre>
+				<div class="space-y-1.5">
+					<p class="text-sm font-semibold">Mentioned <span class="text-surface-500 font-normal text-xs">(referenced but absent)</span></p>
+					<div class="flex flex-wrap gap-1.5">
+						{#each extractedMentionedCharacters as name, i}
+							<span class="chip preset-tonal-surface text-xs flex items-center gap-1">
+								{name}
+								<button class="hover:text-error-500" onclick={() => (extractedMentionedCharacters = extractedMentionedCharacters.filter((_, j) => j !== i))}>
+									<Icons.X size={10} />
+								</button>
+							</span>
+						{/each}
+						<div class="flex gap-1">
+							<input
+								class="input input-sm text-xs w-28"
+								placeholder="Add name…"
+								bind:value={newMentionedInput}
+								onkeydown={(e) => e.key === "Enter" && addMentioned()}
+								onblur={addMentioned}
+							/>
+							<button class="btn btn-sm preset-tonal-surface" onclick={addMentioned} disabled={!newMentionedInput.trim()}>
+								<Icons.Plus size={12} />
+							</button>
+						</div>
+					</div>
+					{#if extractedMentionedCharacters.length === 0}
+						<p class="text-xs text-surface-400 italic">None extracted.</p>
 					{/if}
 				</div>
 			</div>
-
-			<footer class="mt-6 flex flex-wrap gap-3">
-				<button class="btn preset-tonal-surface" onclick={goBack}>
-					<Icons.ChevronLeft size={16} />
-					Back
-				</button>
-				<button class="btn preset-tonal-surface" onclick={generate}>
-					<Icons.RefreshCw size={16} />
-					Re-generate
-				</button>
-				<div class="ml-auto">
-					<button
-						class="btn preset-filled-primary-500"
-						disabled={!canSave || isSaving}
-						onclick={saveEntry}
-					>
-						<Icons.Save size={16} />
-						Save to Lorebook
-					</button>
-				</div>
-			</footer>
 		{/if}
-	{/snippet}
-</Modal>
+
+		<div>
+			<button
+				class="text-surface-500 hover:text-surface-700-300 flex items-center gap-1 text-xs"
+				onclick={() => (showRaw = !showRaw)}
+			>
+				<Icons.ChevronDown size={14} class="transition-transform {showRaw ? 'rotate-180' : ''}" />
+				{showRaw ? "Hide" : "Show"} raw LLM output
+			</button>
+			{#if showRaw}
+				<pre class="bg-surface-200-800 mt-2 overflow-x-auto rounded p-3 text-xs whitespace-pre-wrap">{rawOutput}</pre>
+			{/if}
+		</div>
+	</div>
+{/snippet}
+
+{#snippet debugBlock()}
+	{#if trace.length > 0}
+		<button
+			class="flex w-full items-center justify-between text-xs text-surface-500 hover:text-surface-700-300"
+			onclick={() => (showTrace = !showTrace)}
+		>
+			<span>Debug ({trace.length} calls)</span>
+			<Icons.ChevronDown size={14} class="transition-transform {showTrace ? 'rotate-180' : ''}" />
+		</button>
+		{#if showTrace}
+			<div class="mt-3 max-h-[40vh] space-y-2 overflow-y-auto pr-1">
+				{#each trace as entry, i}
+					<div class="bg-surface-100-900 overflow-hidden rounded-lg border border-surface-300-700 text-xs">
+						<button
+							class="flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-surface-200-800"
+							onclick={() => (expandedTraceIdx = expandedTraceIdx === i ? null : i)}
+						>
+							<Icons.ChevronRight size={12} class="text-surface-400 shrink-0 transition-transform {expandedTraceIdx === i ? 'rotate-90' : ''}" />
+							<span class="text-primary-400 shrink-0 font-mono font-medium">{i + 1}.</span>
+							<span class="truncate font-medium">{entry.label}</span>
+						</button>
+						{#if expandedTraceIdx === i}
+							<div class="divide-y divide-surface-300-700 border-t border-surface-300-700">
+								<div class="space-y-1 p-3">
+									<p class="text-primary-500 text-[10px] font-bold uppercase tracking-widest">System</p>
+									<pre class="bg-surface-200-800 max-h-48 overflow-y-auto rounded p-2.5 leading-relaxed whitespace-pre-wrap">{entry.system}</pre>
+								</div>
+								<div class="space-y-1 p-3">
+									<p class="text-warning-500 text-[10px] font-bold uppercase tracking-widest">User</p>
+									<pre class="bg-surface-200-800 max-h-48 overflow-y-auto rounded p-2.5 leading-relaxed whitespace-pre-wrap">{entry.user}</pre>
+								</div>
+								<div class="space-y-1 p-3">
+									<p class="text-success-500 text-[10px] font-bold uppercase tracking-widest">Response</p>
+									<pre class="bg-surface-200-800 max-h-48 overflow-y-auto rounded p-2.5 leading-relaxed whitespace-pre-wrap">{entry.response}</pre>
+								</div>
+							</div>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		{/if}
+	{/if}
+{/snippet}
+
+<AiTaskModal
+	{open}
+	{onOpenChange}
+	title="Summarize to Lorebook"
+	runningTitle="Generating Summary…"
+	reviewTitle="Review & Save"
+	badge={badgeLabel}
+	step={aiStep}
+	{progressPercent}
+	{progressLabel}
+	canStart={canGenerate}
+	startLabel="Generate Summary"
+	{canSave}
+	saveLabel="Save to Lorebook"
+	{isSaving}
+	{errorMessage}
+	hasReviewContent={reviewContent.trim().length > 0}
+	onStart={generate}
+	onSave={saveEntry}
+	onCancel={() => onOpenChange({ open: false })}
+	onRetry={generate}
+	onDiscard={() => onOpenChange({ open: false })}
+	onBack={() => (step = "configure")}
+	onRerun={generate}
+	onViewLastResult={() => (step = "review")}
+	confirm={confirmBlock}
+	preview={previewBlock}
+	review={reviewBlock}
+	debug={debugBlock}
+/>

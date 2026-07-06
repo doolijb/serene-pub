@@ -102,11 +102,13 @@ Output ONLY in this exact format — no other text before or after:
 		return {
 			systemPrompt:
 				systemPromptOverride ??
-				"You are a scene archivist capturing what happened in a discrete story moment from a roleplay exchange. You write a tight narrative summary — past tense, plain prose — that captures the key beats, actions, and emotional turning points. No invention, no embellishment.",
+				"You are a scene archivist capturing what happened in a discrete story moment from a roleplay exchange. You write a tight narrative summary — past tense, plain prose — that captures the key beats, actions, emotional turning points, and important dialogue. When a character says something meaningful — a declaration, revelation, threat, confession, or memorable line — preserve it as a direct quote or close paraphrase. Trivial small talk and filler can be omitted. No invention, no embellishment.",
 			userPrompt: `The following JSON array contains a portion of a roleplay exchange. Write a scene summary.
 ${topicLine}Rules:
 - Write in past tense, plain prose (not bullet points).
 - Capture the key events, actions, character moments, and turning points.
+- Include important dialogue — meaningful things characters said (declarations, revelations, confessions, threats, memorable lines) — as direct quotes or close paraphrase. Trivial small talk can be omitted.
+- Use characters' actual names throughout. Do not refer to a named character only by their role, species, or title — if the messages name a character, use that name in the summary.
 - Keep it concise — aim for 2–4 short paragraphs.
 - Do NOT include titles, headers, section labels, or any text outside the <content> tag.
 - Do not invent details not present in the messages.
@@ -168,6 +170,51 @@ export function buildNamePrompt(opts: {
 ${opts.content.slice(0, 800)}
 
 Title:`
+	}
+}
+
+// ── Character extraction prompt (scene type only) ────────────────────────────
+
+const DEFAULT_CHARACTER_EXTRACTION_SYSTEM_PROMPT = `You extract character names from a scene summary into two groups.
+
+PARTICIPANTS — characters who are physically present in this scene — speaking, fighting, moving, reacting, waiting, or simply there. If the scene places them in the setting, they belong here.
+
+MENTIONED — characters who are brought up in conversation or thought but are not present and not acting in the scene. They are talked about, remembered, referenced, or discussed by others — but they themselves do nothing in this scene.
+
+Rules:
+- A character who acts in the scene is always a participant, even if they are also talked about.
+- A character who only appears in someone's dialogue, memory, or backstory — and never acts — is mentioned only.
+- If only one character is named or described as present, they are a participant. Do not also add them to mentioned.
+- Include named characters and named creatures only. No unnamed extras, no places, no objects.
+- Either array may be empty. Do not invent entries to fill an empty slot.
+- Output ONLY a raw JSON object. No explanation, no markdown, no code fences.`
+
+export interface CastEntry {
+	name: string
+	aliases: string[]
+}
+
+export function buildCharacterExtractionPrompt(
+	sceneSummary: string,
+	systemPromptOverride?: string | null,
+	knownCast?: CastEntry[]
+): SummaryPrompt {
+	let castBlock = ""
+	if (knownCast && knownCast.length > 0) {
+		const lines = knownCast.map(e => {
+			const aliasPart = e.aliases.length > 0 ? ` (aliases: ${e.aliases.join(", ")})` : ""
+			return `- ${e.name}${aliasPart}`
+		})
+		castBlock = `\nKnown characters in this story (reference only — do NOT assume any are present):\n${lines.join("\n")}\n`
+	}
+
+	return {
+		systemPrompt: systemPromptOverride?.trim() || DEFAULT_CHARACTER_EXTRACTION_SYSTEM_PROMPT,
+		userPrompt: `Scene summary:
+${sceneSummary}
+${castBlock}
+JSON output:
+{"participants":["Name1","Name2"],"mentioned":["Name3"]}`
 	}
 }
 
@@ -240,12 +287,14 @@ Output ONLY in this exact format — no other text before or after:
 		return {
 			systemPrompt:
 				systemPromptOverride ??
-				"You are a master scene editor. Given draft scene summaries covering a roleplay exchange in chronological order, you merge them into a single coherent scene narrative. You write only what the drafts contain — no invention, no embellishment.",
+				"You are a master scene editor. Given draft scene summaries covering a roleplay exchange in chronological order, you merge them into a single coherent scene narrative. You write only what the drafts contain — no invention, no embellishment. Preserve important dialogue that appears in the drafts — direct quotes or close paraphrases of meaningful things characters said.",
 			userPrompt: `The following JSON array contains draft scene summaries in chronological order. Merge them into one coherent scene narrative.
 ${topicLine}Rules:
 - Preserve chronological order.
 - Write in past tense, plain prose (not bullet points).
 - Merge overlapping or duplicate descriptions into a single, richer version.
+- Preserve important dialogue from the drafts — meaningful quotes, declarations, revelations, or notable lines — as direct quotes or close paraphrase.
+- Use characters' actual names throughout. Do not refer to a named character only by their role, species, or title — if the drafts name a character, use that name in the narrative.
 - Keep it concise — aim for 3–6 short paragraphs.
 - Do NOT include titles, headers, section labels, or any text outside the <content> tag.
 - Do not invent details not present in the drafts.

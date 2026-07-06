@@ -1,11 +1,13 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { and, asc, desc, eq, inArray, or } from "drizzle-orm"
+import { and, asc, count, desc, eq, inArray, lt, or } from "drizzle-orm"
+import { runBindingNodeCheck } from "$lib/server/utils/bindingNodeCheck"
 import { generateResponse } from "../utils/generateResponse"
 import { getNextCharacterTurn } from "$lib/server/utils/getNextCharacterTurn"
 import type { BaseConnectionAdapter } from "../connectionAdapters/BaseConnectionAdapter"
 import { getConnectionAdapter } from "../utils/getConnectionAdapter"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
+import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
 import { InterpolationEngine } from "../utils/promptBuilder"
@@ -408,7 +410,8 @@ async function getChatFromDB(
 	chatId: number,
 	userId: number,
 	limit?: number,
-	offset?: number
+	offset?: number,
+	beforeId?: number
 ) {
 	// Check if user has access (owner or guest)
 	const chatAccess = await checkChatAccess(chatId, userId)
@@ -425,9 +428,12 @@ async function getChatFromDB(
 			},
 			chatCharacters: { with: { character: true } },
 			chatMessages: {
+				where: beforeId != null
+					? (cm) => lt(cm.id, beforeId)
+					: undefined,
 				orderBy: (cm, { desc }) => desc(cm.id),
 				limit: limit,
-				offset: offset
+				offset: beforeId != null ? undefined : offset
 			},
 			chatTags: {
 				with: {
@@ -594,6 +600,8 @@ export const chatsGetHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		try {
 			const userId = socket.user!.id
+			const limit = params.limit ?? 25
+			const beforeId = params.beforeId
 
 			// Check if user has access to this chat (both owners and guests can get)
 			const chatAccess = await checkChatAccess(params.id, userId)
@@ -606,7 +614,7 @@ export const chatsGetHandler: Handler<
 				return res
 			}
 
-			const chatData = await getChatFromDB(params.id, userId)
+			const chatData = await getChatFromDB(params.id, userId, limit, undefined, beforeId)
 
 			if (!chatData) {
 				const res: Sockets.Chats.Get.Response = {
@@ -617,12 +625,25 @@ export const chatsGetHandler: Handler<
 				return res
 			}
 
+			// Count total messages for pagination metadata
+			const [{ total }] = await db
+				.select({ total: count() })
+				.from(schema.chatMessages)
+				.where(eq(schema.chatMessages.chatId, params.id))
+
+			const loadedCount = (chatData as any).chatMessages.length
+			const hasMore = beforeId != null
+				? loadedCount === limit  // cursor mode: full page implies more exist
+				: total > limit          // initial load: more exist than we fetched
+
 			const drafts = (chatData as any).drafts as Record<string, string> | null | undefined
 			const userDraft = drafts?.[String(userId)] || null
 
 			const res: Sockets.Chats.Get.Response = {
 				chat: chatData as any,
 				messages: (chatData as any).chatMessages || null,
+				pagination: { total, hasMore },
+				beforeId,
 				userDraft
 			}
 			emitToUser("chats:get", res)
@@ -666,6 +687,85 @@ export const chatsSaveDraftHandler: Handler<
 
 		return { success: true }
 	}
+}
+
+// ─── Binding + Node check utilities (Flow 1 + 2) ────────────────────────────
+
+/**
+ * After a chat is saved with a lorebook:
+ * - Quietly create bindings for chars/personas that don't have one yet.
+ * - Emit bindingCheck:result for any orphaned bindings (bindings without a char/persona).
+ * - Emit bindingCheck:nodeResult for bindings that need a node linked.
+ */
+async function runLorebookBindingCheck(
+	chatId: number,
+	lorebookId: number,
+	emitToUser: (event: string, data: any) => void
+): Promise<void> {
+	const [chatChars, chatPersonas, existingBindings] = await Promise.all([
+		db.query.chatCharacters.findMany({
+			where: eq(schema.chatCharacters.chatId, chatId),
+			columns: { characterId: true }
+		}),
+		db.query.chatPersonas.findMany({
+			where: eq(schema.chatPersonas.chatId, chatId),
+			columns: { personaId: true }
+		}),
+		db.query.lorebookBindings.findMany({
+			where: eq(schema.lorebookBindings.lorebookId, lorebookId)
+		})
+	])
+
+	const bindingsByChar = new Map(existingBindings.filter((b) => b.characterId).map((b) => [b.characterId!, b]))
+	const bindingsByPersona = new Map(existingBindings.filter((b) => b.personaId).map((b) => [b.personaId!, b]))
+
+	// Flow 1a: Create missing bindings for chars/personas
+	const nextIndex = existingBindings.length + 1
+	let tokenCounter = nextIndex
+
+	for (const { characterId } of chatChars) {
+		if (!characterId || bindingsByChar.has(characterId)) continue
+		const token = `{{char:${tokenCounter++}}}`
+		const [created] = await db
+			.insert(schema.lorebookBindings)
+			.values({ lorebookId, characterId, binding: token })
+			.returning()
+		bindingsByChar.set(characterId, created)
+		existingBindings.push(created)
+	}
+
+	for (const { personaId } of chatPersonas) {
+		if (!personaId || bindingsByPersona.has(personaId)) continue
+		const token = `{{char:${tokenCounter++}}}`
+		const [created] = await db
+			.insert(schema.lorebookBindings)
+			.values({ lorebookId, personaId, binding: token })
+			.returning()
+		bindingsByPersona.set(personaId, created)
+		existingBindings.push(created)
+	}
+
+	// Flow 1b: Collect orphaned bindings (no char or persona)
+	const orphaned = existingBindings.filter((b) => !b.characterId && !b.personaId)
+	if (orphaned.length > 0) {
+		const unboundChars = chatChars
+			.filter((c) => c.characterId && !bindingsByChar.get(c.characterId))
+			.map((c) => ({ type: "character" as const, id: c.characterId!, name: "" }))
+		const unboundPersonas = chatPersonas
+			.filter((p) => p.personaId && !bindingsByPersona.get(p.personaId))
+			.map((p) => ({ type: "persona" as const, id: p.personaId!, name: "" }))
+
+		const bindingCheckRes: Sockets.BindingCheck.Result.Response = {
+			lorebookId,
+			chatId,
+			unboundEntities: [...unboundChars, ...unboundPersonas],
+			orphanedBindings: orphaned.map((b) => ({ id: b.id, binding: b.binding }))
+		}
+		emitToUser("bindingCheck:result", bindingCheckRes)
+	}
+
+	// Flow 2: For each binding with no narrative node, check for unlinked nodes
+	await runBindingNodeCheck(lorebookId, existingBindings, emitToUser)
 }
 
 export const chatsUpdateHandler: Handler<
@@ -717,6 +817,13 @@ export const chatsUpdateHandler: Handler<
 			}
 			emitToUser("chats:update", res)
 			await chatsListHandler.handler(socket, {}, emitToUser) // Refresh chat list
+
+			// Flow 1+2: binding and node checks (fire-and-forget, errors are non-fatal)
+			const lorebookId = (updatedChat as any).lorebookId
+			if (lorebookId) {
+				runLorebookBindingCheck(params.chat.id!, lorebookId, emitToUser).catch(console.error)
+			}
+
 			return res
 		} catch (error: any) {
 			console.error("Error updating chat:", error)
@@ -2222,9 +2329,23 @@ export const promptTokenCountHandler: Handler<
 				where: (u, { eq }) => eq(u.id, userId)
 			})
 
-			// Get user configurations with fallbacks
-			const { connection, sampling, contextConfig, promptConfig } =
+			// Get system-default configurations with fallbacks
+			let { connection, sampling, contextConfig, promptConfig } =
 				await getUserConfigurations(userId)
+
+			// Apply per-chat connection/sampling overrides when set
+			if ((chat as any).connectionId) {
+				const chatConnection = await db.query.connections.findFirst({
+					where: (c, { eq }) => eq(c.id, (chat as any).connectionId)
+				})
+				if (chatConnection) connection = chatConnection
+			}
+			if ((chat as any).samplingConfigId) {
+				const chatSampling = await db.query.samplingConfigs.findFirst({
+					where: (sc, { eq }) => eq(sc.id, (chat as any).samplingConfigId)
+				})
+				if (chatSampling) sampling = chatSampling
+			}
 
 			if (!connection) {
 				return {
@@ -2267,9 +2388,7 @@ export const promptTokenCountHandler: Handler<
 
 			const { Adapter } = getConnectionAdapter(connection.type)
 
-			// Provide required params for Adapter (use defaults if not available)
-			const tokenCounter = new TokenCounters("estimate")
-			const tokenLimit = 4096
+			const tokenCounter = new TokenCounters((connection as any).tokenCounter || TokenCounterOptions.ESTIMATE)
 			const contextThresholdPercent = 0.8
 
 			const adapter = new Adapter({
@@ -2280,7 +2399,7 @@ export const promptTokenCountHandler: Handler<
 				promptConfig: promptConfig,
 				currentCharacterId,
 				tokenCounter,
-				tokenLimit,
+				tokenLimit: 4096,
 				contextThresholdPercent
 			})
 

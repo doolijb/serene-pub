@@ -119,18 +119,23 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 			? this.connection.promptFormat || "chatml"
 			: PromptFormats.OPENAI
 
-		// Add stop string if present in connection or sampling
-		params["stop"] =
-			StopStrings.get({
+		// In native chat completion mode (no pre-rendered template), don't send role-label
+		// stop strings — they override the model's native stop tokens (e.g. <|im_end|> for
+		// ChatML models like Qwen) in servers such as Ollama's OpenAI compatibility layer.
+		// Only apply stop strings when pre-rendering, where role labels are plain text.
+		params["stop"] = this.connection?.extraJson?.prerenderPrompt
+			? StopStrings.get({
 				format: promptFormat,
 				characters: this.chat.chatCharacters?.map((cc) => cc.character),
 				personas: this.chat.chatPersonas?.map((cp) => cp.persona),
 				currentCharacterId: this.currentCharacterId
 			}) || []
+			: []
 
 		const openaiClient = new OpenAI({
 			apiKey,
-			baseURL: baseURL || undefined
+			baseURL: baseURL || undefined,
+			defaultHeaders: { "User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)" }
 		})
 
 		try {
@@ -223,7 +228,8 @@ async function listModels(
 			CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT].baseUrl
 		const openai = new OpenAI({
 			apiKey,
-			baseURL: baseURL || undefined
+			baseURL: baseURL || undefined,
+			defaultHeaders: { "User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)" }
 		})
 		const res = await openai.models.list()
 		if (res && Array.isArray(res.data)) {
@@ -250,7 +256,8 @@ async function testConnection(
 			CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT].baseUrl
 		const openai = new OpenAI({
 			apiKey,
-			baseURL: baseURL || undefined
+			baseURL: baseURL || undefined,
+			defaultHeaders: { "User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)" }
 		})
 		// Try to list models as a test
 		try {

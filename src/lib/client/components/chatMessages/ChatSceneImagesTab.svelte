@@ -194,29 +194,24 @@
 						</div>
 						<!-- Name -->
 						<span class="min-w-0 flex-1 truncate text-sm font-medium">{e.name}</span>
-						<!-- Indicators -->
-						{#if isLeft}
-							<span class="badge preset-filled-primary-500 text-xs">L</span>
-						{/if}
-						{#if isRight}
-							<span class="badge preset-filled-secondary-500 text-xs">R</span>
-						{/if}
 						<!-- Controls -->
 						<div class="flex shrink-0 gap-1">
 							{#if e.avatar}
 								<button
-									class="btn btn-sm preset-tonal-primary text-xs px-2 py-1"
-									onclick={() => setLeft(e.avatar!)}
-									title="Set as left image"
+									class="btn btn-sm text-xs px-2 py-1 {isLeft ? 'preset-filled-primary-500' : 'preset-tonal-primary'}"
+									onclick={() => isLeft ? clearLeft() : setLeft(e.avatar!)}
+									title={isLeft ? "Unpin left" : "Pin left"}
 								>
-									L
+									<Icons.PanelLeft size={12} />
+									Left
 								</button>
 								<button
-									class="btn btn-sm preset-tonal-secondary text-xs px-2 py-1"
-									onclick={() => setRight(e.avatar!)}
-									title="Set as right image"
+									class="btn btn-sm text-xs px-2 py-1 {isRight ? 'preset-filled-secondary-500' : 'preset-tonal-secondary'}"
+									onclick={() => isRight ? clearRight() : setRight(e.avatar!)}
+									title={isRight ? "Unpin right" : "Pin right"}
 								>
-									R
+									Right
+									<Icons.PanelRight size={12} />
 								</button>
 							{/if}
 							<button
@@ -264,23 +259,23 @@
 														brokenPaths = new Set([...brokenPaths, imgPath])
 													}}
 												/>
-												<!-- L/R overlay buttons on hover -->
+												<!-- Pin overlay buttons on hover -->
 												<div
 													class="absolute inset-0 flex items-center justify-center gap-0.5 rounded bg-black/60 opacity-0 transition-opacity group-hover:opacity-100"
 												>
 													<button
-														class="btn btn-sm preset-filled-primary-500 h-6 min-h-0 px-1.5 py-0 text-xs"
-														onclick={() => setLeft(imgPath)}
-														title="Set as left"
+														class="btn btn-sm h-6 min-h-0 px-1.5 py-0 text-xs {leftImage === imgPath ? 'preset-filled-primary-500' : 'preset-tonal-primary'}"
+														onclick={() => leftImage === imgPath ? clearLeft() : setLeft(imgPath)}
+														title={leftImage === imgPath ? "Unpin left" : "Pin left"}
 													>
-														L
+														<Icons.PanelLeft size={10} />
 													</button>
 													<button
-														class="btn btn-sm preset-filled-secondary-500 h-6 min-h-0 px-1.5 py-0 text-xs"
-														onclick={() => setRight(imgPath)}
-														title="Set as right"
+														class="btn btn-sm h-6 min-h-0 px-1.5 py-0 text-xs {rightImage === imgPath ? 'preset-filled-secondary-500' : 'preset-tonal-secondary'}"
+														onclick={() => rightImage === imgPath ? clearRight() : setRight(imgPath)}
+														title={rightImage === imgPath ? "Unpin right" : "Pin right"}
 													>
-														R
+														<Icons.PanelRight size={10} />
 													</button>
 												</div>
 											</div>

@@ -62,6 +62,10 @@ declare global {
 			historyEntryTab?: "content" | "scenes"
 			/** Expand a specific scene within the scenes tab */
 			sceneId?: number
+			/** Navigate to a specific lorebook tab when digest.lorebookId is set */
+			lorebookTab?: string
+			/** Open the connections sidebar and select a specific connection */
+			connectionId?: number
 		}
 		leftNavOrder: string[]
 		rightNavOrder: string[]
@@ -86,6 +90,14 @@ declare global {
 		settings?: Omit<SelectSystemSettings, "id">
 	}
 
+	interface OllamaSettingsCtx {
+		settings?: Omit<SelectOllamaSettings, "id">
+	}
+
+	interface KoboldCppSettingsCtx {
+		settings?: Omit<SelectKoboldCppSettings, "id">
+	}
+
 	interface UserSettingsCtx {
 		settings?: Omit<SelectUserSettings, "id" | "userId">
 	}
@@ -97,6 +109,97 @@ declare global {
 		completed: number
 		priorityQueue: Sockets.Vectorization.PriorityGroup[]
 		history: Sockets.Vectorization.CompletedGroup[]
+	}
+
+	interface TaskQueueCtx {
+		tasks: Sockets.TaskQueue.QueuedTask[]
+	}
+
+	interface GraphBuildState {
+		activityId?: string
+		userId?: number
+		lorebookId: number
+		lorebookLabel?: string
+		mode: "replace" | "extend"
+		status: "building" | "review" | "error"
+		phase: string
+		sceneIndex: number
+		totalScenes: number
+		nodesFound: number
+		relsFound: number
+		currentPair?: string
+		currentSceneLabel?: string
+		proposal?: Sockets.NarrativeGraph.GraphProposal
+		sceneLabels?: string[]
+		seedTempIdMap?: Record<string, number>
+		seedNodeNames?: Record<string, string>
+		errorMessage?: string
+		errorRaw?: string
+		startedAt: string
+		trace?: Sockets.NarrativeGraph.TraceEntry[]
+	}
+
+	interface GraphBuildsCtx {
+		activeBuild: GraphBuildState | null
+		/** Set by notification dropdown to trigger a GraphManager to reopen its build modal */
+		reopenLorebookId: number | null
+		startBuild: (params: { lorebookId: number; mode: "replace" | "extend"; lorebookLabel?: string }) => void
+		clearBuild: () => void
+	}
+
+	interface SceneSummarizeState {
+		activityId: string
+		userId: number
+		sceneId: number
+		sceneName?: string
+		lorebookId: number
+		lorebookLabel?: string
+		historyEntryId?: number
+		status: "running" | "review" | "error"
+		phase?: "drafting" | "synthesizing" | "extracting"
+		batch?: number
+		totalBatches?: number
+		errorMessage?: string
+		pendingResult?: {
+			content: string
+			name?: string
+			participantCharacters: string[]
+			mentionedCharacters: string[]
+			raw: string
+		}
+		startedAt: string
+	}
+
+	interface SceneSummarizesCtx {
+		activities: SceneSummarizeState[]
+		/** Set by the activity sidebar to trigger HistoryEntryManager to open the review modal */
+		reviewSceneId: number | null
+		dismiss: (activityId: string) => void
+		setReviewSceneId: (id: number | null) => void
+	}
+
+	interface CompileEntryState {
+		activityId: string
+		userId: number
+		historyEntryId: number
+		historyEntryDate: string
+		lorebookId: number
+		lorebookLabel: string
+		status: "running" | "review" | "error"
+		phase?: "drafting" | "synthesizing"
+		batch?: number
+		totalBatches?: number
+		errorMessage?: string
+		pendingResult?: { content: string }
+		startedAt: string
+	}
+
+	interface CompileEntriesCtx {
+		activities: CompileEntryState[]
+		/** Set by the activity sidebar to trigger HistoryEntryManager to open the compile modal */
+		reviewHistoryEntryId: number | null
+		dismiss: (activityId: string) => void
+		setReviewHistoryEntryId: (id: number | null) => void
 	}
 
 	export interface CharaImportMetadata {

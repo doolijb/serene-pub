@@ -4,6 +4,7 @@ import { and, eq, inArray } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { generateSummary } from "$lib/server/utils/summarizer"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
+import { resolveTaskConfig } from "$lib/server/utils/resolveTaskConfig"
 
 /**
  * Find an existing lorebook binding for the given character or persona, or create
@@ -125,30 +126,37 @@ export const chatsSummarizeHandler: Handler<
 			return { senderName, content: msg.content }
 		})
 
-		// Get the user's active connection + configs
-		const { connection, sampling, contextConfig, promptConfig } =
-			await getUserConfigurations(userId)
+		// Get context/prompt configs (connection+sampling resolved per sub-task below)
+		const { contextConfig, promptConfig } = await getUserConfigurations(userId)
 
-		if (!connection) {
-			throw new Error("No AI connection configured. Please set up a connection first.")
+		const systemSettings = await db.query.systemSettings.findFirst()
+		const userSettings = await db.query.userSettings.findFirst({ where: (us, { eq }) => eq(us.userId, userId) })
+
+		// Determine which summarize config to use
+		const summarizeConfigType = loreType === "world" ? "world" : loreType === "character" ? "character" : "scene"
+		const summarizeConfigId =
+			loreType === "world"
+				? (userSettings?.activeSummarizeWorldConfigId ?? systemSettings?.defaultSummarizeWorldConfigId)
+				: loreType === "character"
+					? (userSettings?.activeSummarizeCharacterConfigId ?? systemSettings?.defaultSummarizeCharacterConfigId)
+					: (userSettings?.activeSummarizeSceneConfigId ?? systemSettings?.defaultSummarizeSceneConfigId)
+
+		let summarizePromptConfig: { batchSystemPrompt: string; synthSystemPrompt: string; nameSystemPrompt: string; characterExtractionSystemPrompt?: string | null } | null = null
+		if (summarizeConfigId) {
+			if (loreType === "world") summarizePromptConfig = await db.query.worldSummarizeConfigs.findFirst({ where: (c, { eq }) => eq(c.id, summarizeConfigId) }) ?? null
+			else if (loreType === "character") summarizePromptConfig = await db.query.characterSummarizeConfigs.findFirst({ where: (c, { eq }) => eq(c.id, summarizeConfigId) }) ?? null
+			else summarizePromptConfig = await db.query.sceneSummarizeConfigs.findFirst({ where: (c, { eq }) => eq(c.id, summarizeConfigId) }) ?? null
 		}
 
-		// Load active summarize prompt config for this loreType
-		const userSettings = await db.query.userSettings.findFirst({
-			where: (us, { eq }) => eq(us.userId, userId)
-		})
-		const systemSettings = await db.query.systemSettings.findFirst()
+		// Resolve per-sub-task connection + sampling
+		const [batchResolved, synthResolved, nameResolved] = await Promise.all([
+			resolveTaskConfig({ taskType: "summarize_batch", summarizeConfigId, summarizeConfigType }),
+			resolveTaskConfig({ taskType: "summarize_synth", summarizeConfigId, summarizeConfigType }),
+			resolveTaskConfig({ taskType: "summarize_name", summarizeConfigId, summarizeConfigType })
+		])
 
-		let summarizePromptConfig: { batchSystemPrompt: string; synthSystemPrompt: string; nameSystemPrompt: string } | null = null
-		if (loreType === "world") {
-			const id = userSettings?.activeSummarizeWorldConfigId ?? systemSettings?.defaultSummarizeWorldConfigId
-			if (id) summarizePromptConfig = await db.query.worldSummarizeConfigs.findFirst({ where: (c, { eq }) => eq(c.id, id) }) ?? null
-		} else if (loreType === "character") {
-			const id = userSettings?.activeSummarizeCharacterConfigId ?? systemSettings?.defaultSummarizeCharacterConfigId
-			if (id) summarizePromptConfig = await db.query.characterSummarizeConfigs.findFirst({ where: (c, { eq }) => eq(c.id, id) }) ?? null
-		} else if (loreType === "scene") {
-			const id = userSettings?.activeSummarizeSceneConfigId ?? systemSettings?.defaultSummarizeSceneConfigId
-			if (id) summarizePromptConfig = await db.query.sceneSummarizeConfigs.findFirst({ where: (c, { eq }) => eq(c.id, id) }) ?? null
+		if (!batchResolved.connection) {
+			throw new Error("No AI connection configured. Please set up a connection first.")
 		}
 
 		// Run iterative summarization, streaming progress back to client
@@ -156,13 +164,22 @@ export const chatsSummarizeHandler: Handler<
 			messages,
 			loreType,
 			topic,
-			connection,
-			sampling,
+			connection: batchResolved.connection,
+			sampling: batchResolved.sampling!,
 			contextConfig,
 			promptConfig,
 			summarizePromptConfig,
+			batchConnection: batchResolved.connection,
+			batchSampling: batchResolved.sampling,
+			synthConnection: synthResolved.connection,
+			synthSampling: synthResolved.sampling,
+			nameConnection: nameResolved.connection,
+			nameSampling: nameResolved.sampling,
 			onProgress: (data) => {
 				emitToUser("chats:summarize:progress", data satisfies Sockets.Chats.Summarize.Progress)
+			},
+			onLlmCall: (entry) => {
+				emitToUser("chats:summarize:trace", entry satisfies Sockets.Chats.Summarize.TraceEntry)
 			}
 		})
 
@@ -182,7 +199,9 @@ export const chatsSummarizeHandler: Handler<
 			raw: result.raw,
 			lorebookId: chat.lorebookId!,
 			batchCount: result.batchCount,
-			lorebookBindingId
+			lorebookBindingId,
+			participantCharacters: result.participantCharacters,
+			mentionedCharacters: result.mentionedCharacters
 		}
 
 		emitToUser("chats:summarize:complete", response)

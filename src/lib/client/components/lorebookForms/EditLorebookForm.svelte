@@ -14,11 +14,12 @@
 	type ValidationErrors = Record<string, string>
 
 	interface Props {
-		lorebookId: number // ID of the lorebook to edit
-		hasUnsavedChanges?: boolean // Optional prop to track unsaved changes
+		lorebookId: number
+		hasUnsavedChanges?: boolean
+		mode?: "view" | "edit"
 	}
 
-	let { lorebookId, hasUnsavedChanges = $bindable(false) }: Props = $props()
+	let { lorebookId, hasUnsavedChanges = $bindable(false), mode = $bindable("view") }: Props = $props()
 
 	const socket = skio.get()
 
@@ -126,6 +127,7 @@
 	}
 	function handleCancel() {
 		editLorebook = { ...originalLorebook! }
+		mode = "view"
 	}
 
 	onMount(() => {
@@ -148,10 +150,9 @@
 			"lorebooks:update",
 			async (msg: Sockets.Lorebooks.Update.Response) => {
 				if (msg.lorebook && msg.lorebook.id === lorebookId) {
-					// Update both editLorebook and originalLorebook to reflect the save
 					editLorebook = { ...msg.lorebook }
 					originalLorebook = { ...msg.lorebook }
-
+					mode = "view"
 					toaster.success({
 						title: "Lorebook Updated",
 						description: `Lorebook "${msg.lorebook.name}" updated successfully.`
@@ -195,14 +196,34 @@
 		</div>
 	</div>
 {:else if editLorebook}
+	{#if mode === "view"}
+		<div class="flex flex-col gap-4">
+			<button class="btn btn-sm preset-filled-primary-500 self-start" onclick={() => (mode = "edit")}>
+				<Icons.Pencil size={14} /> Edit
+			</button>
+			<div>
+				<p class="text-base font-semibold">{editLorebook.name}</p>
+				{#if editLorebook.description}
+					<p class="text-surface-500 mt-2 text-sm whitespace-pre-wrap">{editLorebook.description}</p>
+				{/if}
+			</div>
+			{#if editLorebook.tags && editLorebook.tags.length > 0}
+				<div class="flex flex-wrap gap-2">
+					{#each editLorebook.tags as tagName}
+						{@const tag = tagsList.find((t) => t.name === tagName)}
+						<span class="chip {tag?.colorPreset || 'preset-filled-primary-500'}">{tagName}</span>
+					{/each}
+				</div>
+			{/if}
+		</div>
+	{:else}
 	<div class="flex flex-col gap-6">
 		<div class="flex gap-2">
 			<button
-				class="btn btn-sm preset-filled-surface-500 w-full"
+				class="btn btn-sm preset-tonal-surface w-full"
 				onclick={handleCancel}
-				disabled={!hasUnsavedChanges}
 			>
-				Reset
+				Cancel
 			</button>
 			<button
 				class="btn btn-sm preset-filled-success-500 w-full"
@@ -317,4 +338,5 @@
 			{/if}
 		</div>
 	</div>
+	{/if}
 {/if}

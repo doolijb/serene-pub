@@ -69,9 +69,17 @@ async function autoLoadEmbeddingModel() {
 		console.log(
 			`[embedding] Auto-loading model on startup: ${settings.embeddingModelName}`
 		)
-		const { loadEmbeddingModel } = await import(
+		const { loadEmbeddingModel, setEmbeddingTtlMinutes } = await import(
 			"$lib/server/embedding/index"
 		)
+
+		// Load TTL config before loading the model so the timer starts correctly
+		const vecConfig = await db.query.vectorizationConfigs.findFirst({
+			where: eq(schema.vectorizationConfigs.id, 1),
+			columns: { embeddingModelTtlMinutes: true }
+		})
+		if (vecConfig) setEmbeddingTtlMinutes(vecConfig.embeddingModelTtlMinutes)
+
 		await loadEmbeddingModel(settings.embeddingModelName)
 		console.log("[embedding] Model ready.")
 	} catch (err) {

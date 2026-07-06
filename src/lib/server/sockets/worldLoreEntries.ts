@@ -4,6 +4,7 @@ import { eq, inArray } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import type { InsertWorldLoreEntry } from "$lib/server/db/types"
 import { lorebookBindingListHandler, syncLorebookBindings } from "./lorebooks"
+import { autoEnqueueLorebook } from "$lib/server/embedding/vectorizationQueue"
 
 export const worldLoreEntryListHandler: Handler<
 	Sockets.WorldLoreEntries.List.Params,
@@ -53,6 +54,7 @@ export const createWorldLoreEntryHandler: Handler<
 				and(eq(l.id, data.lorebookId), eq(l.userId, userId)),
 			columns: {
 				id: true,
+				name: true,
 				userId: true
 			},
 			with: {
@@ -91,6 +93,7 @@ export const createWorldLoreEntryHandler: Handler<
 			.returning()
 
 		await syncLorebookBindings({ lorebookId: newEntry.lorebookId })
+		autoEnqueueLorebook(newEntry.lorebookId, existingBook.name, "").catch(console.error)
 
 		// Refresh binding list and entry list
 		if (emitToUser) {
@@ -141,11 +144,12 @@ export const updateWorldLoreEntryHandler: Handler<
 
 		const [updatedEntry] = await db
 			.update(schema.worldLoreEntries)
-			.set(updateData)
+			.set({ ...updateData, embedding: null, embeddingModel: null, vectorizedAt: null })
 			.where(eq(schema.worldLoreEntries.id, params.worldLoreEntry.id!))
 			.returning()
 
 		await syncLorebookBindings({ lorebookId: existingEntry.lorebookId })
+		autoEnqueueLorebook(existingEntry.lorebookId, (existingEntry as any).lorebook?.name ?? "", "").catch(console.error)
 
 		// Refresh binding list and entry list
 		if (emitToUser) {

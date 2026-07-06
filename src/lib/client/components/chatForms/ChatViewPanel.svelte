@@ -49,8 +49,8 @@
 			<Icons.ChevronLeft size={16} />
 		</button>
 		<h2 class="flex-1 truncate font-semibold">{chat?.name || "Chat"}</h2>
-		<button class="btn btn-sm preset-tonal-surface p-2" onclick={onOpen} title="Open chat">
-			<Icons.MessageSquare size={14} />
+		<button class="btn btn-sm preset-tonal-surface" onclick={onOpen} title="Go to chat">
+			<Icons.MessageSquare size={14} /> Go To Chat
 		</button>
 		{#if canEdit}
 			<button class="btn btn-sm preset-filled-primary-500" onclick={onEdit} title="Edit chat">

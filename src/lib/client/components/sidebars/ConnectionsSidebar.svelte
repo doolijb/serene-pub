@@ -26,8 +26,6 @@
 	}
 
 	let { onclose = $bindable() }: Props = $props()
-	let userCtx: UserCtx = getContext("userCtx")
-	let userSettingsCtx: UserSettingsCtx = getContext("userSettingsCtx")
 	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 	let panelsCtx: PanelsCtx = getContext("panelsCtx")
 
@@ -57,10 +55,10 @@
 	// Screen reader announcements
 	let announcements = $state("")
 
-	// Computed property for getting the active connection ID
-	let activeConnectionId = $derived(
-		userSettingsCtx.settings?.activeConnectionId || null
-	)
+	// Which connection is currently shown in the form (local view state)
+	let selectedConnectionId = $state<number | null>(null)
+	// The system-wide default connection
+	let defaultConnectionId = $derived(systemSettingsCtx.settings?.defaultConnectionId ?? null)
 
 	function announce(message: string) {
 		announcements = message
@@ -99,16 +97,16 @@
 	}
 
 	function handleSelectChange(e: Event) {
-		const selectedId = +(e.target as HTMLSelectElement).value
-		const selectedConnection = connectionsList.find(
-			(c) => c.id === selectedId
-		)
-		socket.emit("connections:setUserActive", {
-			id: selectedId
-		})
-		if (selectedConnection) {
-			announce(`Switched to connection: ${selectedConnection.name}`)
-		}
+		const id = +(e.target as HTMLSelectElement).value
+		selectedConnectionId = id
+		socket.emit("connections:get", { id })
+	}
+
+	function handleSetDefault() {
+		if (!selectedConnectionId) return
+		socket.emit("connections:setUserActive", { id: selectedConnectionId })
+		const selected = connectionsList.find((c) => c.id === selectedConnectionId)
+		if (selected) announce(`Default connection set to: ${selected.name}`)
 	}
 	function handleNew() {
 		newConnectionName = ""
@@ -219,30 +217,36 @@
 			announce(`Connection ${deletedName} has been permanently deleted`)
 			connection = undefined
 			originalConnection = undefined
+			// Fall back to viewing the default if one exists
+			const fallbackId = defaultConnectionId && defaultConnectionId !== msg.id ? defaultConnectionId : null
+			selectedConnectionId = fallbackId
+			if (fallbackId) socket.emit("connections:get", { id: fallbackId })
 		})
 		socket.on("connections:create", (msg) => {
 			toaster.success({ title: "Connection Created" })
-			announce(
-				`New connection ${msg.connection?.name} has been created successfully`
-			)
-		})
-		socket.on("connections:setUserActive", (msg) => {
-			if (msg.id) {
-				const selectedConnection = connectionsList.find(
-					(c) => c.id === msg.id
-				)
-				if (selectedConnection) {
-					announce(
-						`Switched to connection: ${selectedConnection.name}`
-					)
-				}
+			announce(`New connection ${msg.connection?.name} has been created successfully`)
+			// View the newly created connection
+			if (msg.connection?.id) {
+				selectedConnectionId = msg.connection.id
+				socket.emit("connections:get", { id: msg.connection.id })
 			}
 		})
+		socket.on("connections:setUserActive", (msg) => {
+			// Update local system settings context so the default indicator updates
+			const s = systemSettingsCtx.settings
+			if (s) {
+				systemSettingsCtx.settings = { ...s, defaultConnectionId: msg.id ?? null }
+			}
+			if (msg.id) toaster.success({ title: "Default connection updated" })
+		})
 		socket.emit("connections:list", {})
-		if (userSettingsCtx.settings?.activeConnectionId) {
-			socket.emit("connections:get", {
-				id: userSettingsCtx.settings.activeConnectionId
-			})
+		// Seed the view: digest.connectionId (from external nav) takes priority over the default
+		const digestId = panelsCtx.digest.connectionId ?? null
+		const initialId = digestId ?? systemSettingsCtx.settings?.defaultConnectionId ?? null
+		if (digestId) panelsCtx.digest.connectionId = undefined
+		selectedConnectionId = initialId
+		if (initialId) {
+			socket.emit("connections:get", { id: initialId })
 		}
 		onclose = handleOnClose
 
@@ -329,33 +333,44 @@
 		</div>
 	</div>
 	<div
-		class="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center"
+		class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center"
 		class:hidden={!connectionsList.length}
 	>
 		<label for="connection-select" class="sr-only">
-			Select active AI connection
+			Select AI connection to view
 		</label>
 		<select
 			id="connection-select"
-			class="select bg-background border-muted rounded border"
+			class="select bg-background border-muted flex-1 rounded border"
 			onchange={handleSelectChange}
-			value={activeConnectionId}
+			value={selectedConnectionId}
 			disabled={unsavedChanges}
-			aria-label="Select active AI connection"
+			aria-label="Select AI connection to view"
 			aria-describedby="connection-help"
 		>
 			{#each connectionsList as c}
+				{@const typeLabel = CONNECTION_TYPE.options.find((t) => t.value === c.type)?.label ?? c.type}
+				{@const isDefault = c.id === defaultConnectionId}
 				<option value={c.id}>
-					{c.name} ({CONNECTION_TYPE.options.find(
-						(t) => t.value === c.type
-					)!.label})
+					{isDefault ? "★ " : ""}{c.name} ({typeLabel})
 				</option>
 			{/each}
 		</select>
+		<button
+			type="button"
+			class="btn btn-sm preset-filled-warning-500 shrink-0"
+			onclick={handleSetDefault}
+			disabled={!selectedConnectionId || selectedConnectionId === defaultConnectionId}
+			title={selectedConnectionId === defaultConnectionId ? "Already the default connection" : "Set as default connection"}
+			aria-label="Set selected connection as default"
+		>
+			<Icons.Star size={14} aria-hidden="true" />
+			Set Default
+		</button>
 		<div id="connection-help" class="sr-only">
 			{unsavedChanges
 				? "Save or reset changes before switching connections"
-				: "Choose which AI connection to use for conversations"}
+				: "Select a connection to view or edit its settings"}
 		</div>
 	</div>
 	{#if !!connection}

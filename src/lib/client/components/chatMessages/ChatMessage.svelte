@@ -359,14 +359,19 @@
 
 	<div class="flex h-fit rounded p-2 text-left">
 		{#if msg.content === "" && msg.isGenerating}
-			{#if GeneratingAnimationComponent}
+			{#if !msg.adapterId}
+				<div class="flex items-center gap-2">
+					<div class="text-surface-500 text-sm">Queued</div>
+					<div class="bg-surface-400-600 h-2 w-2 rounded-full"></div>
+				</div>
+			{:else if GeneratingAnimationComponent}
 				{@render GeneratingAnimationComponent()}
 			{:else if generatingAnimation}
 				{@render generatingAnimation()}
 			{:else}
 				<div class="flex items-center gap-2">
 					<div class="text-surface-600-400 animate-pulse text-sm">
-						Generating...
+						Typing...
 					</div>
 					<div
 						class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"

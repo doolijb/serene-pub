@@ -4,6 +4,18 @@
 
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
 	let vectorizationCtx: VectorizationCtx = $state(getContext("vectorizationCtx"))
+	let taskQueueCtx: TaskQueueCtx = $state(getContext("taskQueueCtx"))
+	let graphBuildsCtx: GraphBuildsCtx = $state(getContext("graphBuildsCtx"))
+	let sceneSummarizesCtx: SceneSummarizesCtx = $state(getContext("sceneSummarizesCtx"))
+	let compileEntriesCtx: CompileEntriesCtx = $state(getContext("compileEntriesCtx"))
+	let userCtx: UserCtx = $state(getContext("userCtx"))
+
+	let reviewCount = $derived(
+		((graphBuildsCtx?.activeBuild?.status === "review" || graphBuildsCtx?.activeBuild?.status === "error") ? 1 : 0) +
+		(sceneSummarizesCtx?.activities?.filter((a) => a.status === "review").length ?? 0) +
+		(compileEntriesCtx?.activities?.filter((a) => a.status === "review").length ?? 0)
+	)
+	let activityBadgeCount = $derived(reviewCount + (taskQueueCtx?.tasks?.length ?? 0))
 
 	// Prevent body scroll when mobile menu is open
 	$effect(() => {
@@ -56,6 +68,21 @@
 							aria-hidden="true"
 						/>
 					</button>
+				{:else if item?.imgSrc}
+					{@const isOpen = panelsCtx.leftPanel === key}
+					<button
+						title={item.title}
+						onclick={() => panelsCtx.openPanel({ key })}
+						aria-pressed={isOpen}
+						aria-label="Open {item.title} panel"
+						type="button"
+					>
+						<span
+							class="block h-6 w-6 opacity-70 transition-opacity hover:opacity-100 {isOpen ? 'opacity-100' : ''}"
+							style="background-color: currentColor; mask: url({item.imgSrc}) no-repeat center / contain; -webkit-mask: url({item.imgSrc}) no-repeat center / contain;"
+							aria-hidden="true"
+						></span>
+					</button>
 				{/if}
 			{/each}
 		</nav>
@@ -75,7 +102,7 @@
 
 		<!-- Desktop right nav -->
 		<nav
-			class="hidden flex-1 justify-end gap-2 lg:flex"
+			class="hidden flex-1 items-center justify-end gap-2 lg:flex"
 			aria-label="Right navigation"
 			role="navigation"
 		>
@@ -83,7 +110,7 @@
 				{#if item?.icon}
 					{@const isOpen = panelsCtx.rightPanel === key}
 					<button
-						class="btn-ghost"
+						class="btn-ghost relative"
 						title={item.title}
 						onclick={() => panelsCtx.openPanel({ key })}
 						aria-pressed={isOpen}
@@ -96,6 +123,11 @@
 								: ''} hover:text-primary-500 h-5 w-5 transition-colors"
 							aria-hidden="true"
 						/>
+						{#if key === "activity" && activityBadgeCount > 0}
+							<span class="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-warning-500 text-[10px] font-bold text-white">
+								{activityBadgeCount > 9 ? "9+" : activityBadgeCount}
+							</span>
+						{/if}
 					</button>
 				{/if}
 			{/each}

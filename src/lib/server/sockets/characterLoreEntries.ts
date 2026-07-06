@@ -8,6 +8,7 @@ import type {
 } from "$lib/server/db/types"
 import { lorebookBindingListHandler } from "./lorebooks"
 import { syncLorebookBindings } from "./lorebooks"
+import { autoEnqueueLorebook } from "$lib/server/embedding/vectorizationQueue"
 
 export const characterLoreEntryListHandler: Handler<
 	Sockets.CharacterLoreEntries.List.Params,
@@ -58,6 +59,7 @@ export const createCharacterLoreEntryHandler: Handler<
 				and(eq(l.id, data.lorebookId), eq(l.userId, userId)),
 			columns: {
 				id: true,
+				name: true,
 				userId: true
 			},
 			with: {
@@ -96,6 +98,7 @@ export const createCharacterLoreEntryHandler: Handler<
 			.returning()
 
 		await syncLorebookBindings({ lorebookId: newEntry.lorebookId })
+		autoEnqueueLorebook(newEntry.lorebookId, existingBook.name, "").catch(console.error)
 
 		// Refresh binding list and entry list
 		if (emitToUser) {
@@ -156,7 +159,7 @@ export const updateCharacterLoreEntryHandler: Handler<
 
 		const [updatedEntry] = await db
 			.update(schema.characterLoreEntries)
-			.set(updateData)
+			.set({ ...updateData, embedding: null, embeddingModel: null, vectorizedAt: null })
 			.where(
 				eq(
 					schema.characterLoreEntries.id,
@@ -166,6 +169,7 @@ export const updateCharacterLoreEntryHandler: Handler<
 			.returning()
 
 		await syncLorebookBindings({ lorebookId: existingEntry.lorebookId })
+		autoEnqueueLorebook(existingEntry.lorebookId, (existingEntry as any).lorebook?.name ?? "", "").catch(console.error)
 
 		// Refresh binding list and entry list
 		if (emitToUser) {

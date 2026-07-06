@@ -78,8 +78,6 @@ export const userSettingsGet: Handler<
 
 			const res: Sockets.UserSettings.Get.Response = {
 				userSettings: {
-					activeConnectionId: settings.activeConnectionId,
-					activeSamplingConfigId: settings.activeSamplingConfigId,
 					activeContextConfigId: settings.activeContextConfigId,
 					activePromptConfigId: settings.activePromptConfigId,
 					theme: settings.theme || "hamlindigo",

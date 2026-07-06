@@ -7,7 +7,7 @@
 	import SamplingSidebar from "./sidebars/SamplingSidebar.svelte"
 	import ConnectionsSidebar from "./sidebars/ConnectionsSidebar.svelte"
 	import OllamaSidebar from "./sidebars/OllamaSidebar.svelte"
-import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
+	import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 	import ContextSidebar from "./sidebars/ContextSidebar.svelte"
 	import LorebooksSidebar from "./sidebars/LorebooksSidebar.svelte"
 	import PersonasSidebar from "./sidebars/PersonasSidebar.svelte"
@@ -21,6 +21,7 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 	import { KeyboardNavigationManager } from "$lib/client/utils/keyboardNavigation"
 	import SettingsSidebar from "$lib/client/components/sidebars/SettingsSidebar.svelte"
 	import VectorizationSidebar from "$lib/client/components/sidebars/VectorizationSidebar.svelte"
+	import ActivitySidebar from "$lib/client/components/sidebars/ActivitySidebar.svelte"
 	import ConnectionTimeoutModal from "$lib/client/components/ConnectionTimeoutModal.svelte"
 	import type { Snippet } from "svelte"
 	import { Theme } from "$lib/client/consts/Theme"
@@ -57,6 +58,7 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 			settings: { icon: Icons.Settings, title: "Settings" }
 		},
 		rightNav: {
+			activity: { icon: Icons.Bell, title: "Activity" },
 			tags: { icon: Icons.Tag, title: "Tags" },
 			personas: { icon: Icons.UserRound, title: "Personas" },
 			characters: { icon: Icons.UsersRound, title: "Characters" },
@@ -75,7 +77,7 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 			"users",
 			"settings"
 		],
-		rightNavOrder: ["tags", "personas", "characters", "lorebooks", "chats"],
+		rightNavOrder: ["activity", "tags", "personas", "characters", "lorebooks", "chats"],
 		getOrderedEntries: (nav: Record<string, any>, order: string[]) => {
 			// First, get entries that are in the order array
 			const orderedEntries = order
@@ -91,6 +93,8 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 		}
 	})
 	let systemSettingsCtx: SystemSettingsCtx = $state({ settings: undefined })
+	let ollamaSettingsCtx: OllamaSettingsCtx = $state({ settings: undefined })
+	let koboldCppSettingsCtx: KoboldCppSettingsCtx = $state({ settings: undefined })
 	let userSettingsCtx: UserSettingsCtx = $state({ settings: undefined })
 	let vectorizationCtx: VectorizationCtx = $state({
 		status: "idle",
@@ -99,6 +103,53 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 		completed: 0,
 		priorityQueue: [],
 		history: []
+	})
+	let taskQueueCtx: TaskQueueCtx = $state({ tasks: [] })
+	let graphBuildsCtx: GraphBuildsCtx = $state({
+		activeBuild: null,
+		reopenLorebookId: null,
+		startBuild: (params) => {
+			graphBuildsCtx.activeBuild = {
+				lorebookId: params.lorebookId,
+				lorebookLabel: params.lorebookLabel,
+				mode: params.mode,
+				status: "building",
+				phase: "loading",
+				sceneIndex: 0,
+				totalScenes: 0,
+				nodesFound: 0,
+				relsFound: 0,
+				startedAt: new Date().toISOString()
+			}
+		},
+		clearBuild: () => {
+			const id = graphBuildsCtx.activeBuild?.activityId
+			if (id) socket.emit("activity:dismiss", { id })
+			graphBuildsCtx.activeBuild = null
+			graphBuildsCtx.reopenLorebookId = null
+		}
+	})
+	let sceneSummarizesCtx: SceneSummarizesCtx = $state({
+		activities: [],
+		reviewSceneId: null,
+		dismiss: (activityId: string) => {
+			socket.emit("activity:dismiss", { id: activityId })
+			sceneSummarizesCtx.activities = sceneSummarizesCtx.activities.filter((a) => a.activityId !== activityId)
+		},
+		setReviewSceneId: (id: number | null) => {
+			sceneSummarizesCtx.reviewSceneId = id
+		}
+	})
+	let compileEntriesCtx: CompileEntriesCtx = $state({
+		activities: [],
+		reviewHistoryEntryId: null,
+		dismiss: (activityId: string) => {
+			socket.emit("activity:dismiss", { id: activityId })
+			compileEntriesCtx.activities = compileEntriesCtx.activities.filter((a) => a.activityId !== activityId)
+		},
+		setReviewHistoryEntryId: (id: number | null) => {
+			compileEntriesCtx.reviewHistoryEntryId = id
+		}
 	})
 
 	$effect(() => {
@@ -127,7 +178,7 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 		}
 
 		// Add/remove Ollama Manager based on setting
-		if (systemSettingsCtx?.settings?.ollamaManagerEnabled && isAdmin) {
+		if (ollamaSettingsCtx?.settings?.ollamaManagerEnabled && isAdmin) {
 			panelsCtx.leftNav.ollama = {
 				icon: OllamaIcon,
 				title: "Ollama Manager"
@@ -137,9 +188,9 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 		}
 
 		// Add/remove KoboldCPP Manager based on setting
-		if (systemSettingsCtx?.settings?.koboldCppManagerEnabled && isAdmin) {
+		if (koboldCppSettingsCtx?.settings?.koboldCppManagerEnabled && isAdmin) {
 			panelsCtx.leftNav.koboldcpp = {
-				icon: Icons.Cpu,
+				imgSrc: "/koboldcpp/koboldcpp-icon.svg",
 				title: "KoboldCPP Manager"
 			}
 		} else {
@@ -308,8 +359,14 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 		setContext("panelsCtx", panelsCtx as PanelsCtx)
 		setContext("userCtx", userCtx)
 		setContext("systemSettingsCtx", systemSettingsCtx)
+		setContext("ollamaSettingsCtx", ollamaSettingsCtx)
+		setContext("koboldCppSettingsCtx", koboldCppSettingsCtx)
 		setContext("userSettingsCtx", userSettingsCtx)
 		setContext("vectorizationCtx", vectorizationCtx)
+		setContext("taskQueueCtx", taskQueueCtx)
+		setContext("graphBuildsCtx", graphBuildsCtx)
+		setContext("sceneSummarizesCtx", sceneSummarizesCtx)
+		setContext("compileEntriesCtx", compileEntriesCtx)
 
 		// Check system settings first before connecting to sockets
 		try {
@@ -354,6 +411,8 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 		socket.on("systemSettings:get", (message) => {
 			console.log("Received systemSettings:get", message)
 			systemSettingsCtx.settings = { ...message.systemSettings }
+			ollamaSettingsCtx.settings = { ...message.ollamaSettings }
+			koboldCppSettingsCtx.settings = { ...message.koboldCppSettings }
 		})
 
 		socket.on("users:current", (message) => {
@@ -365,6 +424,9 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 			if (message.user) {
 				console.log("Emitting userSettings:get")
 				socket.emit("userSettings:get", {})
+				if (message.user.isAdmin) {
+					socket.emit("taskQueue:get", {})
+				}
 			}
 		})
 
@@ -405,6 +467,96 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 			vectorizationCtx.history = message.history ?? []
 		})
 
+		socket.on("taskQueue:update", (message) => {
+			taskQueueCtx.tasks = message.tasks ?? []
+		})
+
+		socket.on("activity:update", (data) => {
+			const activities = data.activities ?? []
+			const graphActivities = activities.filter((a: any) => a.kind === "graph_build")
+			const sceneActivities = activities.filter((a: any) => a.kind === "scene_summarize")
+
+			// Graph build: take the most recent one
+			const latestGraph = [...graphActivities].sort(
+				(a: any, b: any) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
+			)[0] as any
+			if (!latestGraph) {
+				graphBuildsCtx.activeBuild = null
+			} else {
+				const prevTrace = graphBuildsCtx.activeBuild?.activityId === latestGraph.id
+					? graphBuildsCtx.activeBuild?.trace
+					: undefined
+				graphBuildsCtx.activeBuild = {
+					activityId: latestGraph.id,
+					userId: latestGraph.userId,
+					lorebookId: latestGraph.lorebookId,
+					lorebookLabel: latestGraph.lorebookLabel,
+					mode: latestGraph.mode,
+					status: latestGraph.status,
+					phase: latestGraph.phase,
+					sceneIndex: latestGraph.sceneIndex,
+					totalScenes: latestGraph.totalScenes,
+					nodesFound: latestGraph.nodesFound,
+					relsFound: latestGraph.relsFound,
+					currentPair: latestGraph.currentPair,
+					currentSceneLabel: latestGraph.currentSceneLabel,
+					proposal: latestGraph.proposal,
+					sceneLabels: latestGraph.sceneLabels,
+					seedTempIdMap: latestGraph.seedTempIdMap,
+					seedNodeNames: latestGraph.seedNodeNames,
+					errorMessage: latestGraph.errorMessage,
+					errorRaw: latestGraph.errorRaw,
+					startedAt: latestGraph.startedAt,
+					trace: prevTrace
+				}
+			}
+
+			// Scene summarizations: keep all
+			sceneSummarizesCtx.activities = sceneActivities.map((a: any) => ({
+				activityId: a.id,
+				userId: a.userId,
+				sceneId: a.sceneId,
+				sceneName: a.sceneName,
+				lorebookId: a.lorebookId,
+				lorebookLabel: a.lorebookLabel,
+				historyEntryId: a.historyEntryId,
+				status: a.status,
+				phase: a.phase,
+				batch: a.batch,
+				totalBatches: a.totalBatches,
+				errorMessage: a.errorMessage,
+				pendingResult: a.pendingResult,
+				startedAt: a.startedAt
+			}))
+
+			// History entry compile activities
+			const compileActivities = activities.filter((a: any) => a.kind === "compile_history_entry")
+			compileEntriesCtx.activities = compileActivities.map((a: any) => ({
+				activityId: a.id,
+				userId: a.userId,
+				historyEntryId: a.historyEntryId,
+				historyEntryDate: a.historyEntryDate,
+				lorebookId: a.lorebookId,
+				lorebookLabel: a.lorebookLabel,
+				status: a.status,
+				phase: a.phase,
+				batch: a.batch,
+				totalBatches: a.totalBatches,
+				errorMessage: a.errorMessage,
+				pendingResult: a.pendingResult,
+				startedAt: a.startedAt
+			}))
+		})
+
+		socket.on("narrativeGraph:buildLog", (entry) => {
+			if (!graphBuildsCtx.activeBuild) return
+			graphBuildsCtx.activeBuild.trace = [
+				...(graphBuildsCtx.activeBuild.trace ?? []),
+				entry
+			]
+		})
+
+		socket.emit("activity:get", {})
 		socket.emit("systemSettings:get", {})
 
 		if (!isSettingsLoaded) return
@@ -490,6 +642,8 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 		socket.off("error")
 		socket.off("success")
 		socket.off("vectorization:progress")
+		socket.off("activity:update")
+		socket.off("narrativeGraph:buildLog")
 	})
 </script>
 
@@ -674,7 +828,11 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 							</button>
 						</div>
 						<nav class="flex-1 overflow-y-auto">
-							{#if panelsCtx.rightPanel === "personas"}
+							{#if panelsCtx.rightPanel === "activity"}
+								<ActivitySidebar
+									bind:onclose={panelsCtx.onRightPanelClose}
+								/>
+							{:else if panelsCtx.rightPanel === "personas"}
 								<PersonasSidebar
 									bind:onclose={panelsCtx.onRightPanelClose}
 								/>
@@ -727,7 +885,11 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 					</button>
 				</div>
 				<div class="flex-1 overflow-y-auto">
-					{#if panelsCtx.mobilePanel === "sampling"}
+					{#if panelsCtx.mobilePanel === "activity"}
+						<ActivitySidebar
+							bind:onclose={panelsCtx.onMobilePanelClose}
+						/>
+					{:else if panelsCtx.mobilePanel === "sampling"}
 						<SamplingSidebar
 							bind:onclose={panelsCtx.onMobilePanelClose}
 						/>
@@ -820,7 +982,11 @@ import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 							title={item.title}
 							onclick={() => handleMobilePanelClick(key)}
 						>
+							{#if item.imgSrc}
+							<span class="block h-5 w-5" style="background-color: currentColor; mask: url({item.imgSrc}) no-repeat center / contain; -webkit-mask: url({item.imgSrc}) no-repeat center / contain;" aria-hidden="true"></span>
+						{:else}
 							<item.icon class="text-foreground h-5 w-5" />
+						{/if}
 							<span>{item.title}</span>
 						</button>
 					{/each}

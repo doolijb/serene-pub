@@ -95,7 +95,7 @@
 	}
 
 	function handleChatClick(chat: any) {
-		handleViewClick(chat.id)
+		handleOpenChat(chat.id)
 	}
 
 	function closeEditForm() {

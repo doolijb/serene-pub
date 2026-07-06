@@ -1,11 +1,10 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { asc, eq } from "drizzle-orm"
-import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
-import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import { eq } from "drizzle-orm"
 
 /**
- * Gets user's active configurations with fallback to system defaults
+ * Gets user's active context/prompt configurations with fallback to system defaults.
+ * Connection and sampling config are resolved separately via resolveTaskConfig.
  */
 export async function getUserConfigurations(
 	userId: number,
@@ -17,137 +16,72 @@ export async function getUserConfigurations(
 	promptConfig: SelectPromptConfig
 }> {
 	try {
-		// Get user settings
-		const userSettings = await db.query.userSettings.findFirst({
-			where: (us, { eq }) => eq(us.userId, userId)
-		})
+		const [userSettings, systemSettings] = await Promise.all([
+			db.query.userSettings.findFirst({ where: (us, { eq }) => eq(us.userId, userId) }),
+			db.query.systemSettings.findFirst()
+		])
 
-		// Get system settings for fallback values
-		const systemSettings = await db.query.systemSettings.findFirst()
+		// Resolve context config (userSettings -> systemSettings fallback)
+		const contextConfigId = userSettings?.activeContextConfigId ?? systemSettings?.defaultContextConfigId
+		const contextConfig = contextConfigId
+			? await db.query.contextConfigs.findFirst({ where: (cc, { eq }) => eq(cc.id, contextConfigId) })
+			: undefined
 
-		// Resolve active configurations with fallback to system defaults
-		let activeConnection: SelectConnection | undefined
-		let activeSamplingConfig: SelectSamplingConfig | undefined
-		let activeContextConfig: SelectContextConfig | undefined
-		let activePromptConfig: SelectPromptConfig | undefined
+		// Resolve prompt config (userSettings -> systemSettings fallback)
+		const promptConfigId = userSettings?.activePromptConfigId ?? systemSettings?.defaultPromptConfigId
+		const promptConfig = promptConfigId
+			? await db.query.promptConfigs.findFirst({ where: (pc, { eq }) => eq(pc.id, promptConfigId) })
+			: undefined
 
-		// Get active connection (userSettings -> systemSettings fallback)
-		const activeConnectionId =
-			userSettings?.activeConnectionId ??
-			systemSettings?.defaultConnectionId
-		if (activeConnectionId) {
-			activeConnection = await db.query.connections.findFirst({
-				where: (c, { eq }) => eq(c.id, activeConnectionId)
-			})
-		}
+		// Resolve connection + sampling from system default (no per-user override anymore)
+		const connection = systemSettings?.defaultConnectionId
+			? await db.query.connections.findFirst({ where: (c, { eq }) => eq(c.id, systemSettings.defaultConnectionId!) })
+			: undefined
 
-		// Get active sampling config (userSettings -> systemSettings fallback)
-		const activeSamplingConfigId =
-			userSettings?.activeSamplingConfigId ??
-			systemSettings?.defaultSamplingConfigId
-		if (activeSamplingConfigId) {
-			activeSamplingConfig = await db.query.samplingConfigs.findFirst({
-				where: (sc, { eq }) => eq(sc.id, activeSamplingConfigId)
-			})
-		}
+		const sampling = systemSettings?.defaultSamplingConfigId
+			? await db.query.samplingConfigs.findFirst({ where: (sc, { eq }) => eq(sc.id, systemSettings.defaultSamplingConfigId!) })
+			: undefined
 
-		// Get active context config (userSettings -> systemSettings fallback)
-		const activeContextConfigId =
-			userSettings?.activeContextConfigId ??
-			systemSettings?.defaultContextConfigId
-		if (activeContextConfigId) {
-			activeContextConfig = await db.query.contextConfigs.findFirst({
-				where: (cc, { eq }) => eq(cc.id, activeContextConfigId)
-			})
-		}
-
-		// Get active prompt config (userSettings -> systemSettings fallback)
-		const activePromptConfigId =
-			userSettings?.activePromptConfigId ??
-			systemSettings?.defaultPromptConfigId
-		if (activePromptConfigId) {
-			activePromptConfig = await db.query.promptConfigs.findFirst({
-				where: (pc, { eq }) => eq(pc.id, activePromptConfigId)
-			})
-		}
-
-		// Sampling, context, and prompt configs always have seeded defaults — throw if missing.
-		// Connection is intentionally allowed to be null (pre-wizard, fresh install).
-		if (!activeSamplingConfig || !activeContextConfig || !activePromptConfig) {
+		if (!sampling || !contextConfig || !promptConfig) {
 			throw new Error(
-				`Missing required configuration for user ${userId}: ${!activeSamplingConfig ? "sampling " : ""}${!activeContextConfig ? "context " : ""}${!activePromptConfig ? "prompt" : ""}`
+				`Missing required configuration for user ${userId}:${!sampling ? " sampling" : ""}${!contextConfig ? " context" : ""}${!promptConfig ? " prompt" : ""}`
 			)
 		}
 
 		return {
-			connection: activeConnection ?? null,
-			sampling: activeSamplingConfig,
-			contextConfig: activeContextConfig,
-			promptConfig: activePromptConfig
+			connection: connection ?? null,
+			sampling,
+			contextConfig,
+			promptConfig
 		}
 	} catch (error: any) {
-		// If this is the first attempt and we're missing configurations, try to fix the database
-		if (
-			retryCount === 0 &&
-			error.message?.includes("Missing required configuration") &&
-			!error.message?.includes("connection")
-		) {
-			console.warn(
-				`Detected missing configurations for user ${userId}, attempting to fix system settings...`
-			)
-
+		if (retryCount === 0 && error.message?.includes("Missing required configuration")) {
+			console.warn(`Detected missing configurations for user ${userId}, attempting to fix system settings...`)
 			try {
-				// Check if system settings exist
-				let systemSettings = await db.query.systemSettings.findFirst({
-					where: (s, { eq }) => eq(s.id, 1)
-				})
-
+				const systemSettings = await db.query.systemSettings.findFirst({ where: (s, { eq }) => eq(s.id, 1) })
 				if (!systemSettings) {
-					// Create system settings with defaults
 					await db.insert(schema.systemSettings).values({
 						id: 1,
-						ollamaManagerEnabled: true,
-						ollamaManagerBaseUrl: "http://localhost:11434/",
 						defaultConnectionId: null,
 						defaultSamplingConfigId: 1,
 						defaultContextConfigId: 1,
 						defaultPromptConfigId: 1
 					})
-					console.log("Created missing system settings")
 				} else {
-					// Update existing system settings with missing defaults
 					const updates: any = {}
-					if (!systemSettings.defaultSamplingConfigId) {
-						updates.defaultSamplingConfigId = 1
-					}
-					if (!systemSettings.defaultContextConfigId) {
-						updates.defaultContextConfigId = 1
-					}
-					if (!systemSettings.defaultPromptConfigId) {
-						updates.defaultPromptConfigId = 1
-					}
-
+					if (!systemSettings.defaultSamplingConfigId) updates.defaultSamplingConfigId = 1
+					if (!systemSettings.defaultContextConfigId) updates.defaultContextConfigId = 1
+					if (!systemSettings.defaultPromptConfigId) updates.defaultPromptConfigId = 1
 					if (Object.keys(updates).length > 0) {
-						await db
-							.update(schema.systemSettings)
-							.set(updates)
-							.where(eq(schema.systemSettings.id, 1))
-						console.log(
-							"Updated system settings with missing defaults:",
-							updates
-						)
+						await db.update(schema.systemSettings).set(updates).where(eq(schema.systemSettings.id, 1))
 					}
 				}
-
-				// Retry once after fixing
 				return await getUserConfigurations(userId, retryCount + 1)
 			} catch (fixError: any) {
 				console.error("Failed to fix system settings:", fixError)
-				throw error // Throw original error if fix fails
+				throw error
 			}
 		}
-
-		// If we've already retried or it's a different error, rethrow
 		throw error
 	}
 }

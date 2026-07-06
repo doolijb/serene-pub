@@ -46,8 +46,8 @@
 			<Icons.ChevronLeft size={16} />
 		</button>
 		<h2 class="flex-1 truncate font-semibold">{character?.nickname || character?.name || ""}</h2>
-		<button class="btn btn-sm preset-tonal-surface p-2" onclick={onChat} title="Open chats">
-			<Icons.MessageSquare size={14} />
+		<button class="btn btn-sm preset-tonal-surface" onclick={onChat} title="View chats">
+			<Icons.MessageSquare size={14} /> View Chats
 		</button>
 		<button class="btn btn-sm preset-filled-primary-500" onclick={onEdit} title="Edit character">
 			<Icons.Pencil size={14} /> Edit

@@ -2,8 +2,11 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { eq, inArray, asc } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
-import { compileScenesForEntry } from "$lib/server/utils/summarizer"
+import { compileScenesForEntry, generateSummary } from "$lib/server/utils/summarizer"
+import { buildSceneCastList } from "$lib/server/utils/summarizer/availableSceneCast"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
+import { resolveTaskConfig } from "$lib/server/utils/resolveTaskConfig"
+import { activityStore } from "$lib/server/utils/activityStore"
 
 export const sceneListHandler: Handler<
 	Sockets.Scenes.List.Params,
@@ -310,22 +313,227 @@ export const sceneCompileHandler: Handler<
 			throw new Error("No AI connection configured. Please set up a connection first.")
 		}
 
-		const result = await compileScenesForEntry({
-			scenes,
-			connection,
-			sampling,
-			contextConfig,
-			promptConfig,
-			onProgress: (data) => {
-				emitToUser("scenes:compile:progress", data satisfies Sockets.Scenes.Compile.Progress)
-			}
+		const lorebook = (historyEntry as any).lorebook
+		const historyEntryDate = `Year ${historyEntry.year}${historyEntry.month ? `, Mo. ${historyEntry.month}` : ""}${historyEntry.day ? `, Day ${historyEntry.day}` : ""}`
+
+		const activityId = activityStore.startCompile({
+			userId,
+			historyEntryId: params.historyEntryId,
+			historyEntryDate,
+			lorebookId: (historyEntry as any).lorebookId,
+			lorebookLabel: lorebook.name
+		})
+
+		let result
+		try {
+			result = await compileScenesForEntry({
+				scenes,
+				connection,
+				sampling,
+				contextConfig,
+				promptConfig,
+				onProgress: (data) => {
+					activityStore.updateCompile(activityId, {
+						phase: data.phase,
+						batch: data.batch,
+						totalBatches: data.totalBatches
+					})
+					emitToUser("scenes:compile:progress", data satisfies Sockets.Scenes.Compile.Progress)
+				}
+			})
+		} catch (err) {
+			activityStore.updateCompile(activityId, {
+				status: "error",
+				errorMessage: err instanceof Error ? err.message : "Unknown error"
+			})
+			throw err
+		}
+
+		activityStore.updateCompile(activityId, {
+			status: "review",
+			pendingResult: { content: result.content ?? result.raw }
 		})
 
 		const response: Sockets.Scenes.Compile.Response = {
 			content: result.content ?? result.raw,
-			historyEntryId: params.historyEntryId
+			historyEntryId: params.historyEntryId,
+			activityId
 		}
 		emitToUser("scenes:compile:complete", response)
+		return response
+	}
+}
+
+export const sceneProcessHandler: Handler<
+	Sockets.Scenes.Process.Params,
+	Sockets.Scenes.Process.Response
+> = {
+	event: "scenes:process",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+
+		const scene = await db.query.scenes.findFirst({
+			where: eq(schema.scenes.id, params.sceneId)
+		})
+		if (!scene) throw new Error("Scene not found.")
+
+		const lorebook = await db.query.lorebooks.findFirst({
+			where: (l, { and, eq }) => and(eq(l.id, scene.lorebookId), eq(l.userId, userId))
+		})
+		if (!lorebook) throw new Error("Scene not found or access denied.")
+
+		if (!scene.chatId || !scene.selectedMessageIds?.length) {
+			emitToUser("scenes:process:error", {
+				sceneId: params.sceneId,
+				error: "Scene has no linked messages to process."
+			} satisfies Sockets.Scenes.Process.ErrorResponse)
+			return null as any
+		}
+
+		const rawMessages = await db.query.chatMessages.findMany({
+			where: (cm, { and, eq, inArray }) =>
+				and(eq(cm.chatId, scene.chatId!), inArray(cm.id, scene.selectedMessageIds!)),
+			orderBy: (cm, { asc }) => asc(cm.id)
+		})
+
+		if (rawMessages.length === 0) {
+			emitToUser("scenes:process:error", {
+				sceneId: params.sceneId,
+				error: "No messages found for this scene."
+			} satisfies Sockets.Scenes.Process.ErrorResponse)
+			return null as any
+		}
+
+		const charIds = [...new Set(rawMessages.filter((m) => m.characterId).map((m) => m.characterId!))]
+		const personaIds = [...new Set(rawMessages.filter((m) => m.personaId).map((m) => m.personaId!))]
+
+		const [characters, personas] = await Promise.all([
+			charIds.length > 0
+				? db.query.characters.findMany({ where: inArray(schema.characters.id, charIds) })
+				: Promise.resolve([]),
+			personaIds.length > 0
+				? db.query.personas.findMany({ where: inArray(schema.personas.id, personaIds) })
+				: Promise.resolve([])
+		])
+
+		const characterMap = new Map(characters.map((c) => [c.id, c.name]))
+		const personaMap = new Map(personas.map((p) => [p.id, (p as any).nickname ?? p.name]))
+
+		const messages = rawMessages.map((msg) => {
+			let senderName = "Unknown"
+			if (msg.characterId && characterMap.has(msg.characterId)) senderName = characterMap.get(msg.characterId)!
+			else if (msg.personaId && personaMap.has(msg.personaId)) senderName = personaMap.get(msg.personaId)!
+			else if (msg.role === "user") senderName = "User"
+			return { senderName, content: msg.content }
+		})
+
+		const { contextConfig, promptConfig } = await getUserConfigurations(userId)
+
+		const systemSettings = await db.query.systemSettings.findFirst()
+		const userSettings = await db.query.userSettings.findFirst({
+			where: (us, { eq }) => eq(us.userId, userId)
+		})
+
+		const summarizeConfigId =
+			userSettings?.activeSummarizeSceneConfigId ?? systemSettings?.defaultSummarizeSceneConfigId
+
+		let summarizePromptConfig: { batchSystemPrompt: string; synthSystemPrompt: string; nameSystemPrompt: string; characterExtractionSystemPrompt?: string | null } | null = null
+		if (summarizeConfigId) {
+			summarizePromptConfig =
+				(await db.query.sceneSummarizeConfigs.findFirst({
+					where: (c, { eq }) => eq(c.id, summarizeConfigId)
+				})) ?? null
+		}
+
+		const [batchResolved, synthResolved, nameResolved] = await Promise.all([
+			resolveTaskConfig({ taskType: "summarize_batch", summarizeConfigId, summarizeConfigType: "scene" }),
+			resolveTaskConfig({ taskType: "summarize_synth", summarizeConfigId, summarizeConfigType: "scene" }),
+			resolveTaskConfig({ taskType: "summarize_name", summarizeConfigId, summarizeConfigType: "scene" })
+		])
+
+		if (!batchResolved.connection) {
+			emitToUser("scenes:process:error", {
+				sceneId: params.sceneId,
+				error: "No AI connection configured. Please set up a connection first."
+			} satisfies Sockets.Scenes.Process.ErrorResponse)
+			return null as any
+		}
+
+		const knownCast = await buildSceneCastList(params.sceneId, scene.lorebookId, scene.chatId ?? null)
+
+		const activityId = activityStore.startScene({
+			userId,
+			sceneId: params.sceneId,
+			sceneName: scene.name ?? undefined,
+			lorebookId: scene.lorebookId,
+			lorebookLabel: lorebook.name,
+			historyEntryId: scene.historyEntryId ?? undefined
+		})
+
+		let result
+		try {
+			result = await generateSummary({
+				messages,
+				loreType: "scene",
+				connection: batchResolved.connection,
+				sampling: batchResolved.sampling!,
+				contextConfig,
+				promptConfig,
+				summarizePromptConfig,
+				knownCast,
+				batchConnection: batchResolved.connection,
+				batchSampling: batchResolved.sampling,
+				synthConnection: synthResolved.connection,
+				synthSampling: synthResolved.sampling,
+				nameConnection: nameResolved.connection,
+				nameSampling: nameResolved.sampling,
+				onProgress: (data) => {
+					activityStore.updateScene(activityId, {
+						phase: data.phase === "synthesizing" ? "synthesizing" : "drafting",
+						batch: data.batch,
+						totalBatches: data.totalBatches
+					})
+					emitToUser("scenes:process:progress", {
+						sceneId: params.sceneId,
+						...data
+					} satisfies Sockets.Scenes.Process.Progress)
+				},
+				onLlmCall: (entry) => {
+					emitToUser("scenes:process:trace", {
+						sceneId: params.sceneId,
+						...entry
+					} satisfies Sockets.Scenes.Process.TraceEntry)
+				}
+			})
+		} catch (err) {
+			activityStore.updateScene(activityId, {
+				status: "error",
+				errorMessage: err instanceof Error ? err.message : "Unknown error"
+			})
+			throw err
+		}
+
+		const pendingResult = {
+			content: result.content ?? result.raw ?? "",
+			name: result.name ?? scene.name ?? undefined,
+			participantCharacters: result.participantCharacters ?? [],
+			mentionedCharacters: result.mentionedCharacters ?? [],
+			raw: result.raw
+		}
+
+		activityStore.updateScene(activityId, {
+			status: "review",
+			phase: "extracting",
+			sceneName: pendingResult.name,
+			pendingResult
+		})
+
+		const response: Sockets.Scenes.Process.Response = {
+			sceneId: params.sceneId,
+			activityId,
+			...pendingResult
+		}
+		emitToUser("scenes:process:complete", response)
 		return response
 	}
 }
@@ -346,4 +554,5 @@ export function registerSceneHandlers(
 	register(socket, scenedMessageIdsHandler, emitToUser)
 	register(socket, sceneListByLorebookHandler, emitToUser)
 	register(socket, sceneCompileHandler, emitToUser)
+	register(socket, sceneProcessHandler, emitToUser)
 }

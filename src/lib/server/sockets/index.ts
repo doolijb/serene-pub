@@ -36,11 +36,14 @@ import { registerOllamaHandlers } from "./ollama"
 import { registerKoboldCppHandlers } from "./koboldcpp"
 import { registerSummarizeHandlers } from "./summarize"
 import { registerVectorizationHandlers } from "./vectorization"
+import { registerVectorizationConfigHandlers } from "./vectorizationConfigs"
 import { registerSceneHandlers } from "./scenes"
 import { registerNarrativeGraphHandlers } from "./narrativeGraph"
 import { registerSummarizePromptConfigHandlers } from "./summarizePromptConfigs"
 import { registerImportHandlers } from "./import"
 import { registerSetupHandlers } from "./setup"
+import { registerTaskQueueHandlers } from "./taskQueue"
+import { registerActivityHandlers } from "./activity"
 
 const userId = 1 // Replace with actual user id
 
@@ -79,10 +82,13 @@ export function connectSockets(io: {
 		registerTagHandlers(socket, emitToUser, register)
 		registerSummarizeHandlers(socket, emitToUser, register)
 		registerVectorizationHandlers(socket, emitToUser, register)
+		registerVectorizationConfigHandlers(socket, emitToUser, register)
 		registerSceneHandlers(socket, emitToUser, register)
 		registerNarrativeGraphHandlers(socket, emitToUser, register)
 		registerImportHandlers(socket, emitToUser, register)
 		registerSetupHandlers(socket, emitToUser, register)
+		registerTaskQueueHandlers(socket, emitToUser, register)
+		registerActivityHandlers(socket)
 		console.log(`Socket connected: ${socket.id} for user ${userId}`)
 	})
 }

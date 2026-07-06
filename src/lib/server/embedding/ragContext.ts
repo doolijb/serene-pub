@@ -11,7 +11,7 @@
  */
 
 import { db } from "$lib/server/db"
-import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, isNotNull, ne } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { cosineSimilarity } from "./index"
 
@@ -33,6 +33,12 @@ export type ChatRagContext = {
 	characterLorebookMap: Record<number, number>
 	/** Map of personaId → that persona's lorebookId (only populated personas that have a lorebook) */
 	personaLorebookMap: Record<number, number>
+	/**
+	 * IDs of other chats (≠ chatId) that share the chat's lorebook and contain at least one
+	 * of the current characters. Messages from these chats are included in RAG message search
+	 * so the model can draw on related roleplay history for the same characters.
+	 */
+	relatedChatIds: number[]
 }
 
 /**
@@ -97,7 +103,26 @@ export async function getChatRagContext(chatId: number): Promise<ChatRagContext>
 		}
 	}
 
-	return { chatId, characterIds, personaIds, lorebookId, allLorebookIds, characterLorebookMap, personaLorebookMap }
+	// Other chats attached to the same lorebook that contain at least one of the current characters.
+	// Messages from those chats are folded into the RAG message pool so the model can recall
+	// relevant history involving the same characters across different conversations.
+	let relatedChatIds: number[] = []
+	if (lorebookId !== null && characterIds.length > 0) {
+		const rows = await db
+			.selectDistinct({ id: schema.chats.id })
+			.from(schema.chats)
+			.innerJoin(schema.chatCharacters, eq(schema.chatCharacters.chatId, schema.chats.id))
+			.where(
+				and(
+					eq(schema.chats.lorebookId, lorebookId),
+					inArray(schema.chatCharacters.characterId, characterIds),
+					ne(schema.chats.id, chatId)
+				)
+			)
+		relatedChatIds = rows.map((r) => r.id)
+	}
+
+	return { chatId, characterIds, personaIds, lorebookId, allLorebookIds, characterLorebookMap, personaLorebookMap, relatedChatIds }
 }
 
 // ---------------------------------------------------------------------------
@@ -141,7 +166,6 @@ export type ScopedRagItem =
 			source: "narrativeNode"
 			lorebookId: number
 			id: number
-			nodeType: string
 			name: string
 			summary: string | null
 			embedding: number[]
@@ -220,9 +244,10 @@ export async function scopedRankBySimilarity(
 
 	const candidates: ScopedRagItem[] = []
 
-	// Messages from this chat (exclude the N most recent)
+	// Messages from this chat and related chats (same lorebook + shared character).
+	// Recent messages from the *current* chat are excluded since they're already in the
+	// guaranteed context window; messages from related chats are always eligible.
 	if (include("message")) {
-		// Get recent message IDs to skip
 		let recentIds: number[] = []
 		if (excludeRecentMessages > 0) {
 			const recent = await db
@@ -234,9 +259,16 @@ export async function scopedRankBySimilarity(
 			recentIds = recent.map((r) => r.id)
 		}
 
+		const allChatIds = [context.chatId, ...context.relatedChatIds]
+		const chatFilter =
+			allChatIds.length === 1
+				? eq(schema.chatMessages.chatId, context.chatId)
+				: inArray(schema.chatMessages.chatId, allChatIds)
+
 		const messages = await db
 			.select({
 				id: schema.chatMessages.id,
+				chatId: schema.chatMessages.chatId,
 				content: schema.chatMessages.content,
 				embedding: schema.chatMessages.embedding,
 				embeddingModel: schema.chatMessages.embeddingModel
@@ -244,7 +276,7 @@ export async function scopedRankBySimilarity(
 			.from(schema.chatMessages)
 			.where(
 				and(
-					eq(schema.chatMessages.chatId, context.chatId),
+					chatFilter,
 					eq(schema.chatMessages.isHidden, false),
 					isNotNull(schema.chatMessages.embedding),
 					eq(schema.chatMessages.embeddingModel, modelId)
@@ -257,7 +289,7 @@ export async function scopedRankBySimilarity(
 			if (!msg.embedding) continue
 			candidates.push({
 				source: "message",
-				chatId: context.chatId,
+				chatId: msg.chatId,
 				id: msg.id,
 				content: msg.content,
 				embedding: msg.embedding,
@@ -385,7 +417,6 @@ export async function scopedRankBySimilarity(
 				.select({
 					id: schema.narrativeNodes.id,
 					lorebookId: schema.narrativeNodes.lorebookId,
-					nodeType: schema.narrativeNodes.nodeType,
 					name: schema.narrativeNodes.name,
 					summary: schema.narrativeNodes.summary,
 					embedding: schema.narrativeNodes.embedding,
@@ -405,7 +436,6 @@ export async function scopedRankBySimilarity(
 					source: "narrativeNode",
 					lorebookId: node.lorebookId,
 					id: node.id,
-					nodeType: node.nodeType,
 					name: node.name,
 					summary: node.summary,
 					embedding: node.embedding,

@@ -175,6 +175,31 @@
 
     const activeModelDef = $derived(availableModels.find((m) => m.id === activeModelName))
 
+    // TTL config
+    let ttlMinutes = $state(5)
+    let ttlInput = $state("5")
+    let savingTtl = $state(false)
+
+    $effect(() => {
+        if (!socket) return
+        const handleVecConfig = (res: Sockets.VectorizationConfig.Get.Response) => {
+            ttlMinutes = res.config.embeddingModelTtlMinutes
+            ttlInput = String(ttlMinutes)
+        }
+        socket.on("vectorizationConfig:get", handleVecConfig)
+        socket.emit("vectorizationConfig:get", {})
+        return () => socket.off("vectorizationConfig:get", handleVecConfig)
+    })
+
+    function saveTtl() {
+        const val = parseInt(ttlInput, 10)
+        if (isNaN(val) || val < 0) return
+        savingTtl = true
+        rawSocket.emit("vectorizationConfig:update", { embeddingModelTtlMinutes: val }, () => {
+            savingTtl = false
+        })
+    }
+
     function timeAgo(iso: string): string {
         const diff = Date.now() - new Date(iso).getTime()
         const s = Math.floor(diff / 1000)
@@ -457,6 +482,37 @@
                         {/if}
                     </div>
                 {/if}
+
+                <!-- Model idle TTL -->
+                <div class="bg-surface-200-800 rounded-lg p-3 space-y-2">
+                    <div class="flex items-center gap-2">
+                        <Icons.Timer size={16} class="text-surface-400" aria-hidden="true" />
+                        <span class="text-xs font-semibold uppercase tracking-wider text-surface-400">Model Idle TTL</span>
+                    </div>
+                    <p class="text-xs text-surface-500">Unload the embedding model after this many minutes of inactivity. Set to 0 to keep it loaded indefinitely.</p>
+                    <div class="flex items-center gap-2">
+                        <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            class="input text-sm w-24"
+                            bind:value={ttlInput}
+                        />
+                        <span class="text-xs text-surface-500">minutes</span>
+                        <button
+                            class="btn btn-sm preset-tonal-primary text-xs ml-auto"
+                            onclick={saveTtl}
+                            disabled={savingTtl}
+                        >
+                            {#if savingTtl}
+                                <Icons.Loader size={12} class="animate-spin" aria-hidden="true" />
+                            {:else}
+                                <Icons.Save size={12} aria-hidden="true" />
+                            {/if}
+                            Save
+                        </button>
+                    </div>
+                </div>
 
                 <!-- Change model button -->
                 <button

@@ -19,6 +19,26 @@ let loadedModelId: string | null = null
 let isLoading = false
 let loadError: string | null = null
 
+// TTL idle timer — unloads the model after N minutes of inactivity
+let ttlMinutes = 5
+let ttlTimer: ReturnType<typeof setTimeout> | null = null
+
+export function setEmbeddingTtlMinutes(minutes: number) {
+	ttlMinutes = minutes
+	resetTtlTimer()
+}
+
+function resetTtlTimer() {
+	if (ttlTimer) clearTimeout(ttlTimer)
+	ttlTimer = null
+	if (!pipeline || ttlMinutes <= 0) return
+	ttlTimer = setTimeout(() => {
+		ttlTimer = null
+		unloadEmbeddingModel()
+		console.log(`[embedding] Model unloaded after ${ttlMinutes}m idle`)
+	}, ttlMinutes * 60 * 1000)
+}
+
 export type DownloadProgressCallback = (progress: {
 	modelId: string
 	status: "loading" | "downloading" | "ready" | "error"
@@ -77,6 +97,7 @@ export async function loadEmbeddingModel(
 		loadedModelId = modelId
 		onProgress?.({ modelId, status: "ready" })
 		console.log(`[embedding] Model loaded: ${modelId}`)
+		resetTtlTimer()
 	} catch (err: any) {
 		loadError = err?.message ?? "Unknown error loading model"
 		onProgress?.({ modelId, status: "error" })
@@ -89,6 +110,7 @@ export async function loadEmbeddingModel(
 
 /** Unload the current model and free memory */
 export function unloadEmbeddingModel(): void {
+	if (ttlTimer) { clearTimeout(ttlTimer); ttlTimer = null }
 	pipeline = null
 	loadedModelId = null
 	loadError = null
@@ -146,7 +168,7 @@ export async function isModelCached(modelId: string): Promise<boolean> {
 export async function embed(text: string): Promise<number[]> {
 	if (!pipeline) throw new Error("No embedding model loaded")
 	const result = await pipeline(text, { pooling: "mean", normalize: true })
-	// result.data is a Float32Array
+	resetTtlTimer()
 	return Array.from(result.data as Float32Array)
 }
 
@@ -159,7 +181,7 @@ export async function batchEmbed(texts: string[]): Promise<number[][]> {
 	if (texts.length === 0) return []
 
 	const results = await pipeline(texts, { pooling: "mean", normalize: true })
-
+	resetTtlTimer()
 	// When given an array, result.data is a flat Float32Array of all embeddings
 	const flat = Array.from(results.data as Float32Array)
 	const dims = flat.length / texts.length

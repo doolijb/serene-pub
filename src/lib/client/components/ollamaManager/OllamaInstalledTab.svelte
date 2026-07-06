@@ -29,11 +29,22 @@
 	let userCtx: UserCtx = $state(getContext("userCtx"))
 	let showDeleteModal = $state(false)
 	let modelToDelete: OllamaModel | null = $state(null)
+	let connectionsList = $state<SelectConnection[]>([])
 
 	// Context
-	let systemSettingsCtx: SystemSettingsCtx = $state(
-		getContext("systemSettingsCtx")
-	)
+	let systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
+	const panelsCtx: PanelsCtx = getContext("panelsCtx")
+
+	function findConnectionForModel(modelName: string): SelectConnection | undefined {
+		return connectionsList.find((c) => c.type === "ollama" && c.model === modelName)
+	}
+
+	function openConnectionSidebar(modelName: string) {
+		const conn = findConnectionForModel(modelName)
+		if (!conn) return
+		panelsCtx.digest.connectionId = conn.id
+		panelsCtx.openPanel({ key: "connections" })
+	}
 
 	// Filtered models based on search
 	let filteredModels = $derived(
@@ -218,6 +229,10 @@
 			}
 		)
 
+		socket.on("connections:list", (msg: Sockets.Connections.List.Response) => {
+			connectionsList = msg.connectionsList ?? []
+		})
+
 		// Initial load
 		refreshModels()
 	})
@@ -228,6 +243,7 @@
 		socket.off("ollama:listRunningModels")
 		socket.off("ollama:stopModel")
 		socket.off("ollama:connectModel")
+		socket.off("connections:list")
 	})
 </script>
 
@@ -292,6 +308,7 @@
 		{#each filteredModels as model}
 			{@const isRunning = isModelRunning(model)}
 			{@const isConnected = currentConnectionModelName === model.name}
+			{@const existingConn = findConnectionForModel(model.name)}
 			<div class="card preset-tonal flex flex-col gap-2 p-4">
 				<div class="flex items-center justify-between">
 					<h4 class="font-semibold">
@@ -336,24 +353,34 @@
 					<div class="flex gap-2">
 						<button
 							class="btn btn-sm preset-filled-success-500"
-							title="Connect to this model"
-							aria-label="Connect to model"
+							title="Set as default connection"
+							aria-label="Set as default connection"
 							disabled={isConnected}
 							onclick={() => connectToModel(model)}
 						>
 							{#if isConnected}
-								<Icons.Check size={14} /> Connected
+								<Icons.Star size={14} /> Default
 							{:else}
-								<Icons.Cable size={14} /> Connect
+								<Icons.Star size={14} /> Set Default
 							{/if}
 						</button>
+						{#if existingConn}
+							<button
+								class="btn btn-sm preset-filled-surface-500"
+								onclick={() => openConnectionSidebar(model.name)}
+								title="Open connection settings"
+								aria-label={`Open connection settings for ${model.name}`}
+							>
+								<Icons.Settings size={14} aria-hidden="true" />
+							</button>
+						{/if}
 						<button
 							class="btn btn-sm preset-filled-surface-500"
 							onclick={() => viewModelWebsite(model)}
 							title="View model website"
 							aria-label={`View ${model.name} model website in new tab`}
 						>
-							<Icons.ExternalLink size={14} aria-hidden="true" /> View
+							<Icons.ExternalLink size={14} aria-hidden="true" /> Edit
 						</button>
 					</div>
 					<button

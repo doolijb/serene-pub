@@ -9,6 +9,7 @@ import {
 } from "../utils"
 import type { Handler } from "$lib/shared/events"
 import { parseCharacterCardFromBase64 } from "../utils/characterCardParser"
+import { autoEnqueuePersona } from "$lib/server/embedding/vectorizationQueue"
 
 // Helper function to process tags for persona creation/update
 async function processPersonaTags(
@@ -193,6 +194,7 @@ export const personasCreate: Handler<
 				})
 			}
 
+			autoEnqueuePersona(persona.id, persona.name).catch(console.error)
 			await personasList.handler(socket, {}, emitToUser)
 			const res: Sockets.Personas.Create.Response = { persona }
 			emitToUser("personas:create", res)
@@ -224,10 +226,15 @@ export const personasUpdate: Handler<
 			if ("id" in data) (data as any).id = undefined
 			delete (data as any).avatar // Remove avatar from persona data to avoid conflicts
 			delete (data as any).tags // Remove tags - will be handled separately
+			delete (data as any).createdAt
+			delete (data as any).updatedAt
+			delete (data as any).vectorizedAt
+			delete (data as any).embedding
+			delete (data as any).embeddingModel
 
 			const [updated] = await db
 				.update(schema.personas)
-				.set(data)
+				.set({ ...data, embedding: null, embeddingModel: null, vectorizedAt: null })
 				.where(
 					and(
 						eq(schema.personas.id, id),
@@ -246,6 +253,7 @@ export const personasUpdate: Handler<
 				})
 			}
 
+			autoEnqueuePersona(id, updated.name).catch(console.error)
 			await personasGet.handler(socket, { id }, emitToUser)
 			await personasList.handler(socket, {}, emitToUser)
 			const res: Sockets.Personas.Update.Response = { persona: updated }

@@ -8,7 +8,7 @@ import envPaths from "env-paths"
  * Gets the application data directory with optional override from environment
  * Checks SERENE_PUB_DATA_DIR environment variable first, falls back to envPaths
  */
-function getAppDataDir() {
+export function getAppDataDir() {
 	const envDataDir = process.env.SERENE_PUB_DATA_DIR
 	if (envDataDir) {
 		return envDataDir

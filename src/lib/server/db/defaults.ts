@@ -1,6 +1,8 @@
 import { eq, sql } from "drizzle-orm"
 import { db } from "."
 import * as schema from "./schema"
+import { getAppDataDir } from "./drizzle.config"
+import * as path from "path"
 
 export async function sync() {
 	console.log("Syncing database defaults...")
@@ -354,7 +356,9 @@ Example dialogue:
 				synthSystemPrompt:
 					"You are a master scene editor. Given draft scene summaries covering a roleplay exchange in chronological order, you merge them into a single coherent scene narrative. You write only what the drafts contain — no invention, no embellishment.",
 				nameSystemPrompt:
-					"You generate short titles for scene summaries. The title should capture the key moment or action of the scene."
+					"You generate short titles for scene summaries. The title should capture the key moment or action of the scene.",
+				characterExtractionSystemPrompt:
+					"You extract character names from a scene summary into two groups.\n\nPARTICIPANTS — characters who are physically present and doing something in this scene: speaking, fighting, moving, reacting, making decisions, or otherwise taking part in events as they unfold. If the scene describes them acting, it belongs here.\n\nMENTIONED — characters who are brought up in conversation or thought but are not present and not acting in the scene. They are talked about, remembered, referenced, or discussed by others — but they themselves do nothing in this scene.\n\nRules:\n- A character who acts in the scene is always a participant, even if they are also talked about.\n- A character who only appears in someone's dialogue, memory, or backstory — and never acts — is mentioned only.\n- Include named characters and named creatures only. No unnamed extras, no places, no objects.\n- Output ONLY a raw JSON object. No explanation, no markdown, no code fences."
 			}
 		]
 		const sceneSummarizeConfigQueries: Promise<any>[] = []
@@ -418,7 +422,6 @@ Example dialogue:
 		if (!existingUserSettings) {
 			await db.insert(schema.userSettings).values({
 				userId: 1,
-				activeSamplingConfigId: 1,
 				activeContextConfigId: 1,
 				activePromptConfigId: 1
 			})
@@ -428,24 +431,53 @@ Example dialogue:
 	}
 
 	try {
-		const res = await db.query.systemSettings.findFirst({
-			where: (s, { eq }) => eq(s.id, 1)
-		})
+		const vecConfig = await db.query.vectorizationConfigs.findFirst({ where: (c, { eq }) => eq(c.id, 1) })
+		if (!vecConfig) {
+			await db.insert(schema.vectorizationConfigs).values({ id: 1, embeddingModelTtlMinutes: 5 })
+		}
+	} catch (error) {
+		console.error("Error syncing vectorization config:", error)
+	}
+
+	try {
+		const res = await db.query.systemSettings.findFirst({ where: (s, { eq }) => eq(s.id, 1) })
 		if (!res) {
 			await db.insert(schema.systemSettings).values({
 				id: 1,
-				ollamaManagerEnabled: true,
-				ollamaManagerBaseUrl: "http://localhost:11434/",
-				koboldCppManagerEnabled: false,
-				koboldCppManagerBaseUrl: "http://localhost:5001",
-				defaultConnectionId: null, // Will be set when first connection is created
-				defaultSamplingConfigId: 1, // Default sampling config
-				defaultContextConfigId: 1, // Default context config
-				defaultPromptConfigId: 1 // Roleplay - Simple
+				defaultConnectionId: null,
+				defaultSamplingConfigId: 1,
+				defaultContextConfigId: 1,
+				defaultPromptConfigId: 1
 			})
 		}
 	} catch (error) {
 		console.error("Error syncing system settings:", error)
+	}
+
+	try {
+		const ollamaRes = await db.query.ollamaSettings.findFirst({ where: (s, { eq }) => eq(s.id, 1) })
+		if (!ollamaRes) {
+			await db.insert(schema.ollamaSettings).values({ id: 1 })
+		}
+	} catch (error) {
+		console.error("Error syncing ollama settings:", error)
+	}
+
+	try {
+		const kcppRes = await db.query.koboldCppSettings.findFirst({ where: (s, { eq }) => eq(s.id, 1) })
+		if (!kcppRes) {
+			await db.insert(schema.koboldCppSettings).values({
+				id: 1,
+				koboldCppManagerModelsDir: path.join(getAppDataDir(), "koboldcpp", "models")
+			})
+		} else if (!kcppRes.koboldCppManagerModelsDir) {
+			await db
+				.update(schema.koboldCppSettings)
+				.set({ koboldCppManagerModelsDir: path.join(getAppDataDir(), "koboldcpp", "models") })
+				.where(eq(schema.koboldCppSettings.id, 1))
+		}
+	} catch (error) {
+		console.error("Error syncing koboldcpp settings:", error)
 	}
 
 	const tables = [

@@ -19,6 +19,7 @@
 	import SummarizeLoreModal from "$lib/client/components/modals/SummarizeLoreModal.svelte"
 	import AvatarGalleryModal from "$lib/client/components/chatMessages/AvatarGalleryModal.svelte"
 	import ChatSceneImagesTab from "$lib/client/components/chatMessages/ChatSceneImagesTab.svelte"
+	import ChatWorkflowTab from "$lib/client/components/chatMessages/ChatWorkflowTab.svelte"
 	import { sceneImages } from "$lib/client/stores/sceneImages"
 	import { toaster } from "$lib/client/utils/toaster"
 
@@ -505,7 +506,7 @@
 			lastSeenMessageId = null
 			lastSeenMessageContent = ""
 			loadingOlderMessages = false
-			socket.emit("chats:get", { id: chatId, limit: 25, offset: 0 })
+			socket.emit("chats:get", { id: chatId, limit: 25 })
 			// console.log('Debug - Emitting getChatResponseOrder for chatId:', chatId)
 			socket.emit("chats:getResponseOrder", { chatId })
 		}
@@ -637,6 +638,12 @@
 		selectedMessageIds = new Set()
 	}
 
+	function enterSummarizationModeEmpty() {
+		openMobileMsgControls = undefined
+		isSummarizationMode = true
+		selectedMessageIds = new Set()
+	}
+
 	function toggleSummarizationMessage(id: number) {
 		if (scenedMessageIds.has(id)) return // hard block
 		const next = new Set(selectedMessageIds)
@@ -694,6 +701,13 @@
 		}
 		summarizeLoreType = loreType
 		showSummarizeModal = true
+	}
+
+	function handleOpenEntry(lorebookId: number, historyEntryId: number) {
+		panelsCtx.digest.lorebookId = lorebookId
+		panelsCtx.digest.historyEntryId = historyEntryId
+		panelsCtx.digest.historyEntryTab = "content"
+		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
 	}
 
 	function handleLorebookSet(newLorebookId: number) {
@@ -799,25 +813,18 @@
 	}
 
 	async function loadOlderMessages() {
-		if (loadingOlderMessages || !pagination?.hasMore || !chat) return
+		if (loadingOlderMessages || !pagination?.hasMore || !chat || chat.chatMessages.length === 0) return
 
 		loadingOlderMessages = true
 
-		// Store current scroll position to restore it after loading
-		const scrollHeight = chatMessagesContainer?.scrollHeight || 0
-		const currentOffset = chat.chatMessages.length
-
-		socket.emit("chats:get", {
-			id: chatId,
-			limit: 25,
-			offset: currentOffset
-		})
-
-		// Store scroll height for position restoration
+		// Save scroll anchor before the DOM changes so we can restore position after prepend
 		if (chatMessagesContainer) {
-			chatMessagesContainer.dataset.previousScrollHeight =
-				scrollHeight.toString()
+			chatMessagesContainer.dataset.previousScrollHeight = chatMessagesContainer.scrollHeight.toString()
+			chatMessagesContainer.dataset.previousScrollTop = chatMessagesContainer.scrollTop.toString()
 		}
+
+		const beforeId = Math.min(...chat.chatMessages.map((m) => m.id))
+		socket.emit("chats:get", { id: chatId, limit: 25, beforeId })
 
 		// loadingOlderMessages will be set to false in the socket response handler
 	}
@@ -878,46 +885,32 @@
 		})
 
 		socket.on("chats:get", (msg: Sockets.Chats.Get.Response) => {
-			if (msg.chat.id === Number.parseInt(page.params.id)) {
-				if (chat && loadingOlderMessages) {
-					// Merge older messages (avoiding duplicates)
-					const existingIds = new Set(
-						chat.chatMessages.map((m) => m.id)
-					)
-					const newMessages = msg.chat.chatMessages.filter(
-						(m) => !existingIds.has(m.id)
-					)
-					// Add older messages at the beginning, then sort all messages by ID (chronological order)
-					const allMessages = [...newMessages, ...chat.chatMessages]
+			if (msg.chat?.id === Number.parseInt(page.params.id)) {
+				if (chat && loadingOlderMessages && msg.beforeId != null) {
+					// Load-more: prepend older messages (server already deduped via cursor)
+					const existingIds = new Set(chat.chatMessages.map((m) => m.id))
+					const olderMessages = msg.chat.chatMessages.filter((m) => !existingIds.has(m.id))
+					const allMessages = [...olderMessages, ...chat.chatMessages]
 					chat.chatMessages = allMessages.sort((a, b) => a.id - b.id)
 
-					// Restore scroll position after loading older messages
+					// Restore scroll position: account for the height added above the old content
 					setTimeout(() => {
 						if (chatMessagesContainer) {
-							const previousScrollHeight = parseInt(
-								chatMessagesContainer.dataset
-									.previousScrollHeight || "0"
-							)
-							const newScrollHeight =
-								chatMessagesContainer.scrollHeight
-							const scrollDiff =
-								newScrollHeight - previousScrollHeight
-
-							// Maintain the user's relative position by scrolling down by the difference
-							chatMessagesContainer.scrollTop = scrollDiff
-							delete chatMessagesContainer.dataset
-								.previousScrollHeight
+							const prevScrollHeight = parseInt(chatMessagesContainer.dataset.previousScrollHeight || "0")
+							const prevScrollTop = parseInt(chatMessagesContainer.dataset.previousScrollTop || "0")
+							const addedHeight = chatMessagesContainer.scrollHeight - prevScrollHeight
+							chatMessagesContainer.scrollTop = addedHeight + prevScrollTop
+							delete chatMessagesContainer.dataset.previousScrollHeight
+							delete chatMessagesContainer.dataset.previousScrollTop
 						}
 						loadingOlderMessages = false
 					}, 10)
 				} else {
-					// Initial load or refresh — restore draft only on first load
+					// Initial load or chat switch — restore draft only on first load
 					const isFirstLoad = !chat
 					chat = {
 						...msg.chat,
-						chatMessages: msg.chat.chatMessages.sort(
-							(a, b) => a.id - b.id
-						)
+						chatMessages: msg.chat.chatMessages.sort((a, b) => a.id - b.id)
 					}
 					if (isFirstLoad && msg.userDraft) {
 						newMessage = msg.userDraft
@@ -1399,18 +1392,20 @@
 					onAbortLastMessage={handleAbortLastMessage}
 					extraTabs={isGuest
 						? []
-						: [
-								{
-									value: "sceneImages",
-									title: "Scene Images",
-									control: sceneImagesButton,
-									content: sceneImagesContent
-								},
-								{
+						: [		{
 									value: "extraControls",
 									title: "Extra Controls",
 									control: extraControlsButton,
 									content: extraControlsContent
+								},
+								...(chat?.lorebookId
+									? [{ value: "workflow", title: "Lore", control: workflowButton, content: workflowContent }]
+									: []),
+								{
+									value: "sceneImages",
+									title: "Pinned Images",
+									control: sceneImagesButton,
+									content: sceneImagesContent
 								},
 								...(systemSettingsCtx.settings?.contextDebuggingEnabled
 									? [{ value: "statistics", title: "Statistics", control: statisticsButton, content: statisticsContent }]
@@ -1733,7 +1728,7 @@
 									<div class="flex items-center gap-2 text-xs">
 										<span class="w-16 shrink-0 text-surface-500">Messages</span>
 										<div class="flex h-3 flex-1 gap-px overflow-hidden rounded">
-											{#each ragScores.messageScores.sort((a, b) => b - a) as score}
+											{#each [...ragScores.messageScores].sort((a, b) => b - a) as score}
 												<div
 													class="h-full shrink-0 bg-primary-500/70"
 													style="width: {Math.max(2, (score / (ragScores.thresholdUsed > 0 ? 1 : 1)) * 100 / ragScores.messageScores.length)}%; opacity: {0.4 + score * 0.6}"
@@ -1748,7 +1743,7 @@
 									<div class="flex items-center gap-2 text-xs">
 										<span class="w-16 shrink-0 text-surface-500">Lore</span>
 										<div class="flex h-3 flex-1 gap-px overflow-hidden rounded">
-											{#each ragScores.loreScores.sort((a, b) => b - a) as score}
+											{#each [...ragScores.loreScores].sort((a, b) => b - a) as score}
 												<div
 													class="h-full shrink-0 bg-secondary-500/70"
 													style="width: {Math.max(2, (score / (ragScores.thresholdUsed > 0 ? 1 : 1)) * 100 / ragScores.loreScores.length)}%; opacity: {0.4 + score * 0.6}"
@@ -1954,6 +1949,21 @@
 	</div>
 {/snippet}
 
+{#snippet workflowButton()}
+	<Icons.BookOpen size="0.75em" />
+{/snippet}
+
+{#snippet workflowContent()}
+	{#if chat?.lorebookId}
+		<ChatWorkflowTab
+			lorebookId={chat.lorebookId}
+			{sceneList}
+			onOpenEntry={handleOpenEntry}
+			onEnterSummarizationMode={summarizationEnabled ? enterSummarizationModeEmpty : undefined}
+		/>
+	{/if}
+{/snippet}
+
 {#snippet sceneImagesButton()}
 	<Icons.Images size="0.75em" />
 {/snippet}
@@ -1972,34 +1982,37 @@
 {/snippet}
 
 {#snippet extraControlsContent()}
-	<div class="flex gap-2">
+	<div class="flex flex-wrap gap-2">
 		<button
-			class="btn preset-filled-primary-500"
+			class="btn btn-sm preset-tonal-primary"
 			title="Continue Conversation"
 			onclick={handleTriggerContinueConversation}
 			disabled={!chat ||
 				!chat.chatPersonas?.[0]?.personaId ||
 				lastMessage?.isGenerating}
 		>
-			<Icons.MessageSquareMore size={24} />
+			<Icons.MessageSquareMore size={14} />
+			Continue
 		</button>
 		<button
-			class="btn preset-filled-secondary-500"
+			class="btn btn-sm preset-tonal-secondary"
 			title="Trigger Character"
 			onclick={handleTriggerCharacterMessage}
 			disabled={!chat ||
 				!chat.chatPersonas?.[0]?.personaId ||
 				lastMessage?.isGenerating}
 		>
-			<Icons.MessageSquarePlus size={24} />
+			<Icons.MessageSquarePlus size={14} />
+			Trigger Character
 		</button>
 		<button
-			class="btn preset-filled-warning-500"
+			class="btn btn-sm preset-tonal-warning"
 			title="Regenerate Last Message"
 			onclick={handleRegenerateLastMessage}
 			disabled={!canRegenerateLastMessage}
 		>
-			<Icons.RefreshCw size={24} />
+			<Icons.RefreshCw size={14} />
+			Regenerate
 		</button>
 	</div>
 {/snippet}
@@ -2009,36 +2022,34 @@
 {/snippet}
 
 {#snippet statisticsContent()}
-	<div class="flex gap-2">
+	<div class="flex flex-wrap items-center gap-3">
 		<button
-			class="btn preset-filled-primary-500"
-			title="View Prompt Statistics"
+			class="btn btn-sm preset-tonal-primary"
+			title="View full prompt details"
 			onclick={() => (showDraftCompiledPromptModal = true)}
 			disabled={!draftCompiledPrompt}
 		>
-			<Icons.Info size={24} />
+			<Icons.Info size={14} />
+			Details
 		</button>
-		<div class="flex flex-col text-sm">
-			{#if draftCompiledPrompt}
-				<div>
-					<b>Prompt Tokens:</b>
-					<span class:text-error-500={contextExceeded}>
-						{draftCompiledPrompt.meta.tokenCounts.total} / {draftCompiledPrompt
-							.meta.tokenCounts.limit}
+		{#if draftCompiledPrompt}
+			<div class="flex gap-4 text-xs">
+				<div class="flex flex-col gap-0.5">
+					<span class="text-surface-500 uppercase tracking-wide" style="font-size:0.65rem">Tokens</span>
+					<span class:text-error-500={contextExceeded} class="font-medium tabular-nums">
+						{draftCompiledPrompt.meta.tokenCounts.total} / {draftCompiledPrompt.meta.tokenCounts.limit}
 					</span>
 				</div>
-				<div>
-					<b>Messages Inserted:</b>
-					{draftCompiledPrompt.meta.chatMessages.included} / {draftCompiledPrompt
-						.meta.chatMessages.total}
-					<span class="text-surface-500">
-						(Includes current draft)
+				<div class="flex flex-col gap-0.5">
+					<span class="text-surface-500 uppercase tracking-wide" style="font-size:0.65rem">Messages</span>
+					<span class="font-medium tabular-nums">
+						{draftCompiledPrompt.meta.chatMessages.included} / {draftCompiledPrompt.meta.chatMessages.total}
 					</span>
 				</div>
-			{:else}
-				<div class="text-muted">No prompt statistics available.</div>
-			{/if}
-		</div>
+			</div>
+		{:else}
+			<span class="text-surface-500 text-xs">No statistics yet — send a message first.</span>
+		{/if}
 	</div>
 {/snippet}
 

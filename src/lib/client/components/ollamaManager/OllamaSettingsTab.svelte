@@ -29,13 +29,13 @@
 	let baseUrlField = $state("")
 
 	// Context
-	let systemSettingsCtx: SystemSettingsCtx = $state(
-		getContext("systemSettingsCtx")
+	let ollamaSettingsCtx: OllamaSettingsCtx = $state(
+		getContext("ollamaSettingsCtx")
 	)
 
 	$effect(() => {
 		// Update baseUrl when system settings change
-		baseUrlField = systemSettingsCtx.settings.ollamaManagerBaseUrl
+		baseUrlField = ollamaSettingsCtx.settings?.ollamaManagerBaseUrl ?? ""
 	})
 
 	// Settings functions
@@ -304,4 +304,10 @@
 			</div>
 		</div>
 	</div>
+
+	<!-- Attribution -->
+	<p class="text-muted-foreground text-center text-xs">
+		Ollama is developed and owned by <a href="https://ollama.com" target="_blank" rel="noopener noreferrer" class="hover:text-primary-500 underline">Ollama, Inc.</a>
+		Serene Pub's Ollama Manager is an independent integration and is not affiliated with or endorsed by Ollama, Inc.
+	</p>
 </div>

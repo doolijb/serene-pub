@@ -3,6 +3,7 @@
 	import { getContext, onDestroy, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import PromptConfigUnsavedChangesModal from "../modals/PromptConfigUnsavedChangesModal.svelte"
+	import ConnectionSamplingPicker from "../ConnectionSamplingPicker.svelte"
 	import NewNameModal from "../modals/NewNameModal.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { z } from "zod"
@@ -91,6 +92,10 @@
 	let showUnsavedChangesModal = $state(false)
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
 
+	// ── Connection / Sampling lists (for override pickers) ────────────────────
+	let connectionsList: Sockets.Connections.List.Response["connectionsList"] = $state([])
+	let samplingList: Sockets.SamplingConfigs.List.Response["samplingConfigsList"] = $state([])
+
 	// ── Validation ────────────────────────────────────────────────────────────
 	const nameSchema = z.object({ name: z.string().min(1, "Name is required").trim() })
 	type ValidationErrors = Record<string, string>
@@ -142,6 +147,48 @@
 	}
 	function handleUnsavedChangesModalOpenChange(e: OpenChangeDetails) {
 		if (!e.open) { showUnsavedChangesModal = false; confirmCloseSidebarResolve?.(false) }
+	}
+
+	// ── Guard selection changes against unsaved edits ─────────────────────────
+	async function handleChatSelectChange(e: Event) {
+		const newId = Number((e.target as HTMLSelectElement).value)
+		if (newId === selectedChatId) return
+		if (chatUnsaved && !(await checkUnsaved())) {
+			// Revert the DOM select back to the current selection
+			;(e.target as HTMLSelectElement).value = String(selectedChatId)
+			return
+		}
+		selectedChatId = newId
+	}
+
+	async function handleWorldSelectChange(e: Event) {
+		const newId = Number((e.target as HTMLSelectElement).value)
+		if (newId === selectedWorldId) return
+		if (worldUnsaved && !(await checkUnsaved())) {
+			;(e.target as HTMLSelectElement).value = String(selectedWorldId)
+			return
+		}
+		selectedWorldId = newId
+	}
+
+	async function handleCharacterSelectChange(e: Event) {
+		const newId = Number((e.target as HTMLSelectElement).value)
+		if (newId === selectedCharacterId) return
+		if (characterUnsaved && !(await checkUnsaved())) {
+			;(e.target as HTMLSelectElement).value = String(selectedCharacterId)
+			return
+		}
+		selectedCharacterId = newId
+	}
+
+	async function handleSceneSelectChange(e: Event) {
+		const newId = Number((e.target as HTMLSelectElement).value)
+		if (newId === selectedSceneId) return
+		if (sceneUnsaved && !(await checkUnsaved())) {
+			;(e.target as HTMLSelectElement).value = String(selectedSceneId)
+			return
+		}
+		selectedSceneId = newId
 	}
 
 	// ── Chat actions ──────────────────────────────────────────────────────────
@@ -208,30 +255,30 @@
 	}
 	function handleNewNameCancel() { showNewNameModal = false }
 
-	// ── Reactive: set active config on selection change ───────────────────────
+	// ── Reactive: set active config when selection changes ────────────────────
 	$effect(() => {
-		if (!!selectedChatId && selectedChatId !== userSettingsCtx.settings?.activePromptConfigId) {
+		if (selectedChatId && selectedChatId !== userSettingsCtx.settings?.activePromptConfigId) {
 			socket.emit("promptConfigs:setUserActive", { id: selectedChatId })
 		}
 	})
 	$effect(() => { if (selectedChatId) socket.emit("promptConfigs:get", { id: selectedChatId }) })
 
 	$effect(() => {
-		if (!!selectedWorldId && selectedWorldId !== (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId) {
+		if (selectedWorldId && selectedWorldId !== (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId) {
 			socket.emit("worldSummarizeConfigs:setUserActive", { id: selectedWorldId })
 		}
 	})
 	$effect(() => { if (selectedWorldId) socket.emit("worldSummarizeConfigs:get", { id: selectedWorldId }) })
 
 	$effect(() => {
-		if (!!selectedCharacterId && selectedCharacterId !== (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId) {
+		if (selectedCharacterId && selectedCharacterId !== (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId) {
 			socket.emit("characterSummarizeConfigs:setUserActive", { id: selectedCharacterId })
 		}
 	})
 	$effect(() => { if (selectedCharacterId) socket.emit("characterSummarizeConfigs:get", { id: selectedCharacterId }) })
 
 	$effect(() => {
-		if (!!selectedSceneId && selectedSceneId !== (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId) {
+		if (selectedSceneId && selectedSceneId !== (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId) {
 			socket.emit("sceneSummarizeConfigs:setUserActive", { id: selectedSceneId })
 		}
 	})
@@ -246,6 +293,7 @@
 			}
 		})
 		socket.on("promptConfigs:get", (msg: Sockets.PromptConfigs.Get.Response) => {
+			if (msg.promptConfig.id !== selectedChatId) return
 			chatConfig = { ...msg.promptConfig }; chatOriginal = { ...msg.promptConfig }
 		})
 		socket.on("promptConfigs:create", (msg: Sockets.PromptConfigs.Create.Response) => {
@@ -266,6 +314,7 @@
 			}
 		})
 		socket.on("worldSummarizeConfigs:get", (msg: Sockets.WorldSummarizeConfigs.Get.Response) => {
+			if (msg.worldSummarizeConfig.id !== selectedWorldId) return
 			worldConfig = { ...msg.worldSummarizeConfig }; worldOriginal = { ...msg.worldSummarizeConfig }
 		})
 		socket.on("worldSummarizeConfigs:create", (msg: Sockets.WorldSummarizeConfigs.Create.Response) => {
@@ -286,6 +335,7 @@
 			}
 		})
 		socket.on("characterSummarizeConfigs:get", (msg: Sockets.CharacterSummarizeConfigs.Get.Response) => {
+			if (msg.characterSummarizeConfig.id !== selectedCharacterId) return
 			characterConfig = { ...msg.characterSummarizeConfig }; characterOriginal = { ...msg.characterSummarizeConfig }
 		})
 		socket.on("characterSummarizeConfigs:create", (msg: Sockets.CharacterSummarizeConfigs.Create.Response) => {
@@ -306,6 +356,7 @@
 			}
 		})
 		socket.on("sceneSummarizeConfigs:get", (msg: Sockets.SceneSummarizeConfigs.Get.Response) => {
+			if (msg.sceneSummarizeConfig.id !== selectedSceneId) return
 			sceneConfig = { ...msg.sceneSummarizeConfig }; sceneOriginal = { ...msg.sceneSummarizeConfig }
 		})
 		socket.on("sceneSummarizeConfigs:create", (msg: Sockets.SceneSummarizeConfigs.Create.Response) => {
@@ -318,17 +369,28 @@
 			}
 		})
 
+		// Connection / sampling lists for override pickers
+		socket.on("connections:list", (msg: Sockets.Connections.List.Response) => {
+			connectionsList = msg.connectionsList
+		})
+		socket.on("samplingConfigs:list", (msg: Sockets.SamplingConfigs.List.Response) => {
+			samplingList = msg.samplingConfigsList
+		})
+
 		// Initial fetches
 		socket.emit("promptConfigs:list", {})
 		socket.emit("worldSummarizeConfigs:list", {})
 		socket.emit("characterSummarizeConfigs:list", {})
 		socket.emit("sceneSummarizeConfigs:list", {})
-		if (selectedChatId) socket.emit("promptConfigs:get", { id: selectedChatId })
+		socket.emit("connections:list", {})
+		socket.emit("samplingConfigs:list", {})
 
 		onclose = handleOnClose
 	})
 
 	onDestroy(() => {
+		socket.off("connections:list")
+		socket.off("samplingConfigs:list")
 		socket.off("promptConfigs:list")
 		socket.off("promptConfigs:get")
 		socket.off("promptConfigs:create")
@@ -431,14 +493,14 @@
 		</div>
 		<div class="flex-1 overflow-y-auto p-4">
 			<div class="mb-4">
-				<select class="select w-full" bind:value={selectedChatId}>
+				<select class="select w-full" value={selectedChatId} onchange={handleChatSelectChange}>
 					{#each chatList.filter((c) => c.isImmutable) as c}<option value={c.id}>{c.name} *</option>{/each}
 					{#each chatList.filter((c) => !c.isImmutable) as c}<option value={c.id}>{c.name}</option>{/each}
 				</select>
 			</div>
 			{#if chatConfig?.id}
 				<div class="flex flex-col gap-4">
-					<button class="btn btn-sm preset-filled-success-500 w-full" onclick={handleChatSave} disabled={chatConfig.isImmutable || !chatUnsaved}>
+					<button class="btn btn-sm preset-filled-success-500 w-full" onclick={handleChatSave} disabled={!chatUnsaved}>
 						<Icons.Save size={14} /> Save
 					</button>
 					<div class="flex flex-col gap-1">
@@ -450,6 +512,16 @@
 					<div class="flex flex-col gap-1">
 						<label class="text-sm font-semibold" for="chatSystemPrompt">System Instructions</label>
 						<textarea id="chatSystemPrompt" rows="15" bind:value={chatConfig.systemPrompt} class="textarea w-full" disabled={chatConfig.isImmutable}></textarea>
+					</div>
+					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
+						<p class="text-sm font-semibold">AI Override</p>
+						<p class="text-muted-foreground text-xs">Overrides the system default connection and sampling for this template.</p>
+						<ConnectionSamplingPicker
+							{connectionsList}
+							samplingList={samplingList}
+							bind:connectionId={chatConfig.connectionId}
+							bind:samplingConfigId={chatConfig.samplingConfigId}
+						/>
 					</div>
 				</div>
 			{/if}
@@ -470,14 +542,14 @@
 		</div>
 		<div class="flex-1 overflow-y-auto p-4">
 			<div class="mb-4">
-				<select class="select w-full" bind:value={selectedWorldId}>
+				<select class="select w-full" value={selectedWorldId} onchange={handleWorldSelectChange}>
 					{#each worldList.filter((c) => c.isImmutable) as c}<option value={c.id}>{c.name} *</option>{/each}
 					{#each worldList.filter((c) => !c.isImmutable) as c}<option value={c.id}>{c.name}</option>{/each}
 				</select>
 			</div>
 			{#if worldConfig?.id}
 				<div class="flex flex-col gap-4">
-					<button class="btn btn-sm preset-filled-success-500 w-full" onclick={handleWorldSave} disabled={worldConfig.isImmutable || !worldUnsaved}>
+					<button class="btn btn-sm preset-filled-success-500 w-full" onclick={handleWorldSave} disabled={!worldUnsaved}>
 						<Icons.Save size={14} /> Save
 					</button>
 					<div class="flex flex-col gap-1">
@@ -486,20 +558,41 @@
 							oninput={() => { if (validationErrors.name) { const { name, ...rest } = validationErrors; validationErrors = rest } }} />
 						{#if validationErrors.name}<p class="text-error-500 text-sm" role="alert">{validationErrors.name}</p>{/if}
 					</div>
-					<div class="flex flex-col gap-1">
+					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
 						<label class="text-sm font-semibold" for="worldBatch">Batch Instructions</label>
 						<p class="text-muted-foreground text-xs">Used during the drafting phase (per batch of messages).</p>
 						<textarea id="worldBatch" rows="8" bind:value={worldConfig.batchSystemPrompt} class="textarea w-full" disabled={worldConfig.isImmutable}></textarea>
+						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+						<ConnectionSamplingPicker
+							connectionsList={connectionsList}
+							samplingList={samplingList}
+							bind:connectionId={worldConfig.batchConnectionId}
+							bind:samplingConfigId={worldConfig.batchSamplingConfigId}
+						/>
 					</div>
-					<div class="flex flex-col gap-1">
+					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
 						<label class="text-sm font-semibold" for="worldSynth">Synthesis Instructions</label>
 						<p class="text-muted-foreground text-xs">Used during the synthesis phase (merging all drafts).</p>
 						<textarea id="worldSynth" rows="8" bind:value={worldConfig.synthSystemPrompt} class="textarea w-full" disabled={worldConfig.isImmutable}></textarea>
+						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+						<ConnectionSamplingPicker
+							connectionsList={connectionsList}
+							samplingList={samplingList}
+							bind:connectionId={worldConfig.synthConnectionId}
+							bind:samplingConfigId={worldConfig.synthSamplingConfigId}
+						/>
 					</div>
-					<div class="flex flex-col gap-1">
+					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
 						<label class="text-sm font-semibold" for="worldName2">Title Generation Instructions</label>
 						<p class="text-muted-foreground text-xs">Used when generating a title for the entry.</p>
 						<textarea id="worldName2" rows="4" bind:value={worldConfig.nameSystemPrompt} class="textarea w-full" disabled={worldConfig.isImmutable}></textarea>
+						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+						<ConnectionSamplingPicker
+							connectionsList={connectionsList}
+							samplingList={samplingList}
+							bind:connectionId={worldConfig.nameConnectionId}
+							bind:samplingConfigId={worldConfig.nameSamplingConfigId}
+						/>
 					</div>
 				</div>
 			{/if}
@@ -520,14 +613,14 @@
 		</div>
 		<div class="flex-1 overflow-y-auto p-4">
 			<div class="mb-4">
-				<select class="select w-full" bind:value={selectedCharacterId}>
+				<select class="select w-full" value={selectedCharacterId} onchange={handleCharacterSelectChange}>
 					{#each characterList.filter((c) => c.isImmutable) as c}<option value={c.id}>{c.name} *</option>{/each}
 					{#each characterList.filter((c) => !c.isImmutable) as c}<option value={c.id}>{c.name}</option>{/each}
 				</select>
 			</div>
 			{#if characterConfig?.id}
 				<div class="flex flex-col gap-4">
-					<button class="btn btn-sm preset-filled-success-500 w-full" onclick={handleCharacterSave} disabled={characterConfig.isImmutable || !characterUnsaved}>
+					<button class="btn btn-sm preset-filled-success-500 w-full" onclick={handleCharacterSave} disabled={!characterUnsaved}>
 						<Icons.Save size={14} /> Save
 					</button>
 					<div class="flex flex-col gap-1">
@@ -536,20 +629,41 @@
 							oninput={() => { if (validationErrors.name) { const { name, ...rest } = validationErrors; validationErrors = rest } }} />
 						{#if validationErrors.name}<p class="text-error-500 text-sm" role="alert">{validationErrors.name}</p>{/if}
 					</div>
-					<div class="flex flex-col gap-1">
+					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
 						<label class="text-sm font-semibold" for="charBatch">Batch Instructions</label>
 						<p class="text-muted-foreground text-xs">Used during the drafting phase (per batch of messages).</p>
 						<textarea id="charBatch" rows="8" bind:value={characterConfig.batchSystemPrompt} class="textarea w-full" disabled={characterConfig.isImmutable}></textarea>
+						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+						<ConnectionSamplingPicker
+							connectionsList={connectionsList}
+							samplingList={samplingList}
+							bind:connectionId={characterConfig.batchConnectionId}
+							bind:samplingConfigId={characterConfig.batchSamplingConfigId}
+						/>
 					</div>
-					<div class="flex flex-col gap-1">
+					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
 						<label class="text-sm font-semibold" for="charSynth">Synthesis Instructions</label>
 						<p class="text-muted-foreground text-xs">Used during the synthesis phase (merging all drafts).</p>
 						<textarea id="charSynth" rows="8" bind:value={characterConfig.synthSystemPrompt} class="textarea w-full" disabled={characterConfig.isImmutable}></textarea>
+						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+						<ConnectionSamplingPicker
+							connectionsList={connectionsList}
+							samplingList={samplingList}
+							bind:connectionId={characterConfig.synthConnectionId}
+							bind:samplingConfigId={characterConfig.synthSamplingConfigId}
+						/>
 					</div>
-					<div class="flex flex-col gap-1">
+					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
 						<label class="text-sm font-semibold" for="charName2">Title Generation Instructions</label>
 						<p class="text-muted-foreground text-xs">Used when generating a title for the entry.</p>
 						<textarea id="charName2" rows="4" bind:value={characterConfig.nameSystemPrompt} class="textarea w-full" disabled={characterConfig.isImmutable}></textarea>
+						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+						<ConnectionSamplingPicker
+							connectionsList={connectionsList}
+							samplingList={samplingList}
+							bind:connectionId={characterConfig.nameConnectionId}
+							bind:samplingConfigId={characterConfig.nameSamplingConfigId}
+						/>
 					</div>
 				</div>
 			{/if}
@@ -570,14 +684,14 @@
 		</div>
 		<div class="flex-1 overflow-y-auto p-4">
 			<div class="mb-4">
-				<select class="select w-full" bind:value={selectedSceneId}>
+				<select class="select w-full" value={selectedSceneId} onchange={handleSceneSelectChange}>
 					{#each sceneList.filter((c) => c.isImmutable) as c}<option value={c.id}>{c.name} *</option>{/each}
 					{#each sceneList.filter((c) => !c.isImmutable) as c}<option value={c.id}>{c.name}</option>{/each}
 				</select>
 			</div>
 			{#if sceneConfig?.id}
 				<div class="flex flex-col gap-4">
-					<button class="btn btn-sm preset-filled-success-500 w-full" onclick={handleSceneSave} disabled={sceneConfig.isImmutable || !sceneUnsaved}>
+					<button class="btn btn-sm preset-filled-success-500 w-full" onclick={handleSceneSave} disabled={!sceneUnsaved}>
 						<Icons.Save size={14} /> Save
 					</button>
 					<div class="flex flex-col gap-1">
@@ -586,20 +700,46 @@
 							oninput={() => { if (validationErrors.name) { const { name, ...rest } = validationErrors; validationErrors = rest } }} />
 						{#if validationErrors.name}<p class="text-error-500 text-sm" role="alert">{validationErrors.name}</p>{/if}
 					</div>
-					<div class="flex flex-col gap-1">
+					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
 						<label class="text-sm font-semibold" for="sceneBatch">Batch Instructions</label>
 						<p class="text-muted-foreground text-xs">Used during the drafting phase (per batch of messages).</p>
 						<textarea id="sceneBatch" rows="8" bind:value={sceneConfig.batchSystemPrompt} class="textarea w-full" disabled={sceneConfig.isImmutable}></textarea>
+						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+						<ConnectionSamplingPicker
+							connectionsList={connectionsList}
+							samplingList={samplingList}
+							bind:connectionId={sceneConfig.batchConnectionId}
+							bind:samplingConfigId={sceneConfig.batchSamplingConfigId}
+						/>
 					</div>
-					<div class="flex flex-col gap-1">
+					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
 						<label class="text-sm font-semibold" for="sceneSynth">Synthesis Instructions</label>
 						<p class="text-muted-foreground text-xs">Used during the synthesis phase (merging all drafts).</p>
 						<textarea id="sceneSynth" rows="8" bind:value={sceneConfig.synthSystemPrompt} class="textarea w-full" disabled={sceneConfig.isImmutable}></textarea>
+						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+						<ConnectionSamplingPicker
+							connectionsList={connectionsList}
+							samplingList={samplingList}
+							bind:connectionId={sceneConfig.synthConnectionId}
+							bind:samplingConfigId={sceneConfig.synthSamplingConfigId}
+						/>
 					</div>
-					<div class="flex flex-col gap-1">
+					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
 						<label class="text-sm font-semibold" for="sceneName2">Title Generation Instructions</label>
 						<p class="text-muted-foreground text-xs">Used when generating a title for the entry.</p>
 						<textarea id="sceneName2" rows="4" bind:value={sceneConfig.nameSystemPrompt} class="textarea w-full" disabled={sceneConfig.isImmutable}></textarea>
+						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+						<ConnectionSamplingPicker
+							connectionsList={connectionsList}
+							samplingList={samplingList}
+							bind:connectionId={sceneConfig.nameConnectionId}
+							bind:samplingConfigId={sceneConfig.nameSamplingConfigId}
+						/>
+					</div>
+					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
+						<label class="text-sm font-semibold" for="sceneCharacterExtraction">Character Extraction Instructions</label>
+						<p class="text-muted-foreground text-xs">Used when extracting participant and mentioned characters from the scene summary.</p>
+						<textarea id="sceneCharacterExtraction" rows="6" bind:value={sceneConfig.characterExtractionSystemPrompt} class="textarea w-full" disabled={sceneConfig.isImmutable}></textarea>
 					</div>
 				</div>
 			{/if}

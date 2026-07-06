@@ -1,0 +1,2 @@
+ALTER TABLE "scenes" ADD COLUMN "participant_characters" json DEFAULT '[]'::json NOT NULL;--> statement-breakpoint
+ALTER TABLE "scenes" ADD COLUMN "mentioned_characters" json DEFAULT '[]'::json NOT NULL;

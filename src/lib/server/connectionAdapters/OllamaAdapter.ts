@@ -311,7 +311,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 						// No need to apply stop strings here, Ollama will handle it
 					} catch (e: any) {
 						if (!abortedEarly)
-							contentCb("FAILURE: " + (e.message || String(e)))
+							console.error("[OllamaAdapter] stream error:", e.message || String(e))
 					}
 				},
 				compiledPrompt,

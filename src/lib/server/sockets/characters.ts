@@ -17,6 +17,7 @@ import extract from "png-chunks-extract"
 import encode from "png-chunks-encode"
 import text from "png-chunk-text"
 import { parseCharacterCardFromBase64 } from "../utils/characterCardParser"
+import { autoEnqueueCharacter } from "$lib/server/embedding/vectorizationQueue"
 
 // Helper function to process tags for character creation/update
 async function processCharacterTags(characterId: number, tagNames: string[]) {
@@ -158,6 +159,7 @@ export const charactersCreate: Handler<Sockets.Characters.Create.Params, Sockets
 				})
 			}
 
+			autoEnqueueCharacter(character.id, character.name).catch(console.error)
 			await charactersList.handler(socket, {}, emitToUser)
 
 			const res: Sockets.Characters.Create.Response = { character }
@@ -186,13 +188,18 @@ export const charactersUpdate: Handler<Sockets.Characters.Update.Params, Sockets
 			if ("userId" in data) (data as any).userId = undefined
 			if ("id" in data) (data as any).id = undefined
 			// @ts-ignore - Remove avatar from character data to avoid conflicts
-			delete data.avatar 
+			delete data.avatar
 			// @ts-ignore - Remove tags - will be handled separately
-			delete (data as any).tags 
+			delete (data as any).tags
+			delete (data as any).createdAt
+			delete (data as any).updatedAt
+			delete (data as any).vectorizedAt
+			delete (data as any).embedding
+			delete (data as any).embeddingModel
 
 			const [updated] = await db
 				.update(schema.characters)
-				.set(data)
+				.set({ ...data, embedding: null, embeddingModel: null, vectorizedAt: null })
 				.where(
 					and(
 						eq(schema.characters.id, id),
@@ -211,6 +218,7 @@ export const charactersUpdate: Handler<Sockets.Characters.Update.Params, Sockets
 				})
 			}
 
+			autoEnqueueCharacter(id, updated.name).catch(console.error)
 			const res: Sockets.Characters.Update.Response = { character: updated }
 			await charactersList.handler(socket, {}, emitToUser)
 			emitToUser("characters:update", res)
@@ -298,8 +306,10 @@ export const charactersImportCard: Handler<Sockets.Characters.ImportCard.Params,
 				postHistoryInstructions: data.post_history_instructions || null,
 				characterVersion: data.character_version || null,
 				// Extract extensions
-			source: data.extensions?.source || [],
+				source: data.extensions?.source || [],
 				groupOnlyGreetings: data.extensions?.group_only_greetings || null,
+				aliases: data.extensions?.serenepub?.aliases ?? data.extensions?.aliases ?? [],
+				summary: data.extensions?.serenepub?.summary ?? null,
 				isFavorite: false
 			}
 
@@ -580,9 +590,13 @@ export const charactersExportCard: Handler<Sockets.Characters.ExportCard.Params,
 							role: character.depthPromptRole || "system"
 						},
 						...(character.source && character.source.length > 0 ? { source: character.source } : {}),
-						...(character.groupOnlyGreetings && character.groupOnlyGreetings.length > 0 
-							? { group_only_greetings: character.groupOnlyGreetings } 
-							: {})
+						...(character.groupOnlyGreetings && character.groupOnlyGreetings.length > 0
+							? { group_only_greetings: character.groupOnlyGreetings }
+							: {}),
+						serenepub: {
+							...(character.aliases && character.aliases.length > 0 ? { aliases: character.aliases } : {}),
+							...(character.summary ? { summary: character.summary } : {})
+						}
 					}
 				}
 			}

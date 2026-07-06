@@ -56,9 +56,9 @@ export const ollamaSetBaseUrl: Handler<Sockets.Ollama.SetBaseUrl.Params, Sockets
 				throw new Error("Invalid URL protocol")
 			}
 
-			await db.update(schema.systemSettings).set({
+			await db.update(schema.ollamaSettings).set({
 				ollamaManagerBaseUrl: params.baseUrl
-			})
+			}).where(eq(schema.ollamaSettings.id, 1))
 
 			const res: Sockets.Ollama.SetBaseUrl.Response = {
 				success: "Base URL updated successfully"
@@ -80,7 +80,7 @@ export const ollamaModelsList: Handler<Sockets.Ollama.ModelsList.Params, Sockets
 	handler: async (socket, params, emitToUser) => {
 		try {
 			const { ollamaManagerBaseUrl: baseUrl } =
-				(await db.query.systemSettings.findFirst())!
+				(await db.query.ollamaSettings.findFirst())!
 			const ollama = new Ollama({
 				host: baseUrl
 			})
@@ -107,7 +107,7 @@ export const ollamaDeleteModelHandler: Handler<Sockets.Ollama.DeleteModel.Params
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			const { ollamaManagerBaseUrl: baseUrl } =
-				(await db.query.systemSettings.findFirst())!
+				(await db.query.ollamaSettings.findFirst())!
 			const ollama = new Ollama({
 				host: baseUrl
 			})
@@ -192,7 +192,7 @@ export const ollamaListRunningModelsHandler: Handler<Sockets.Ollama.ListRunningM
 	handler: async (socket, params, emitToUser) => {
 		try {
 			const { ollamaManagerBaseUrl: baseUrl } =
-				(await db.query.systemSettings.findFirst())!
+				(await db.query.ollamaSettings.findFirst())!
 			const ollama = new Ollama({
 				host: baseUrl
 			})
@@ -234,7 +234,7 @@ export const ollamaPullModelHandler: Handler<Sockets.Ollama.PullModel.Params, So
 			}
 
 			const { ollamaManagerBaseUrl: baseUrl } =
-				(await db.query.systemSettings.findFirst())!
+				(await db.query.ollamaSettings.findFirst())!
 			const ollama = new Ollama({
 				host: baseUrl
 			})
@@ -339,7 +339,7 @@ export const ollamaVersionHandler: Handler<Sockets.Ollama.Version.Params, Socket
 	handler: async (socket, params, emitToUser) => {
 		try {
 			const { ollamaManagerBaseUrl: baseUrl } =
-				(await db.query.systemSettings.findFirst())!
+				(await db.query.ollamaSettings.findFirst())!
 			const response = await fetch(`${baseUrl}/api/version`)
 
 			if (!response.ok) {
@@ -368,7 +368,7 @@ export const ollamaIsUpdateAvailableHandler: Handler<Sockets.Ollama.IsUpdateAvai
 		try {
 			// Get current version using direct HTTP request
 			const { ollamaManagerBaseUrl: baseUrl } =
-				(await db.query.systemSettings.findFirst())!
+				(await db.query.ollamaSettings.findFirst())!
 			const versionResponse = await fetch(`${baseUrl}/api/version`)
 
 			if (!versionResponse.ok) {
@@ -791,12 +791,30 @@ export async function ollamaRecommendedModelsLegacy(
 	await ollamaRecommendedModelsHandler.handler(socket, message, emitToUser)
 }
 
+import { systemSettingsGet } from "./systemSettings"
+
+export const ollamaUpdateManagerEnabled: Handler<
+	Sockets.SystemSettings.UpdateOllamaManagerEnabled.Params,
+	Sockets.SystemSettings.UpdateOllamaManagerEnabled.Response
+> = {
+	event: "systemSettings:updateOllamaManagerEnabled",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		await db.update(schema.ollamaSettings).set({ ollamaManagerEnabled: params.enabled }).where(eq(schema.ollamaSettings.id, 1))
+		const res: Sockets.SystemSettings.UpdateOllamaManagerEnabled.Response = { success: true, enabled: params.enabled }
+		emitToUser("systemSettings:updateOllamaManagerEnabled", res)
+		await systemSettingsGet.handler(socket, {}, emitToUser)
+		return res
+	}
+}
+
 // Registration function for all ollama handlers
 export function registerOllamaHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
 	register: (socket: any, handler: Handler<any, any>, emitToUser: (event: string, data: any) => void) => void
 ) {
+	register(socket, ollamaUpdateManagerEnabled, emitToUser)
 	register(socket, ollamaSetBaseUrl, emitToUser)
 	register(socket, ollamaModelsList, emitToUser)
 	register(socket, ollamaGetDownloadProgress, emitToUser)

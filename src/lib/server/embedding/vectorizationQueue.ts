@@ -15,7 +15,7 @@
 import { db } from "$lib/server/db"
 import { and, eq, inArray, isNull, isNotNull, asc, desc, ne, or, gt } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { embed, isModelReady, getLoadedModelId } from "./index"
+import { embed, isModelReady, getLoadedModelId, loadEmbeddingModel } from "./index"
 import { randomUUID } from "crypto"
 
 // ---------------------------------------------------------------------------
@@ -266,6 +266,33 @@ export async function enqueueCharacterGroup(
 	return group
 }
 
+/**
+ * Enqueue a persona at the front of the queue.
+ */
+export async function enqueuePersonaGroup(personaId: number, name: string): Promise<PriorityGroup> {
+	const persona = await db.query.personas.findFirst({
+		where: eq(schema.personas.id, personaId),
+		columns: { userId: true }
+	})
+	const owner = persona
+		? await db.query.users.findFirst({ where: eq(schema.users.id, persona.userId), columns: { username: true, displayName: true } })
+		: null
+	const ownerDisplayName = owner?.displayName ?? owner?.username ?? "Unknown"
+
+	const group: PriorityGroup = {
+		groupId: randomUUID(),
+		label: name,
+		ownerDisplayName,
+		lorebookIds: [],
+		characterIds: [],
+		personaIds: [personaId]
+	}
+
+	priorityQueue = [group, ...priorityQueue.filter((g) => !(g.personaIds.includes(personaId) && !g.chatId && g.characterIds.length === 0))]
+	if (!isRunning && !isPaused) runQueue()
+	return group
+}
+
 export function moveQueueGroup(groupId: string, direction: "up" | "down"): void {
 	const idx = priorityQueue.findIndex((g) => g.groupId === groupId)
 	if (idx === -1) return
@@ -312,8 +339,21 @@ async function runQueue() {
 			}
 
 			if (!isModelReady()) {
-				console.warn("[vectorization] Queue stopped: embedding model not ready")
-				break
+				// Try to auto-load the model from system settings
+				const settings = await db.query.systemSettings.findFirst({
+					columns: { vectorizationEnabled: true, embeddingModelName: true }
+				})
+				if (!settings?.vectorizationEnabled || !settings.embeddingModelName) {
+					console.warn("[vectorization] Queue stopped: vectorization disabled or no model configured")
+					break
+				}
+				try {
+					await loadEmbeddingModel(settings.embeddingModelName)
+				} catch (err) {
+					console.error("[vectorization] Failed to auto-load model:", err)
+					break
+				}
+				if (!isModelReady()) break
 			}
 
 			const item = await pickNextItem()
@@ -840,4 +880,33 @@ export async function countUnembedded(currentModel?: string): Promise<number> {
 		)
 	])
 	return counts.reduce((sum, n) => sum + Number(n), 0)
+}
+
+// ---------------------------------------------------------------------------
+// Auto-enqueue helpers — called by socket handlers after content saves
+// ---------------------------------------------------------------------------
+
+async function isVectorizationEnabled(): Promise<boolean> {
+	const settings = await db.query.systemSettings.findFirst({ columns: { vectorizationEnabled: true } })
+	return settings?.vectorizationEnabled ?? false
+}
+
+export async function autoEnqueueLorebook(lorebookId: number, lorebookLabel: string, ownerDisplayName: string) {
+	if (!await isVectorizationEnabled()) return
+	enqueueLorebookGroup(lorebookId, lorebookLabel, ownerDisplayName)
+}
+
+export async function autoEnqueueCharacter(characterId: number, characterName: string) {
+	if (!await isVectorizationEnabled()) return
+	await enqueueCharacterGroup(characterId, characterName)
+}
+
+export async function autoEnqueuePersona(personaId: number, personaName: string) {
+	if (!await isVectorizationEnabled()) return
+	await enqueuePersonaGroup(personaId, personaName)
+}
+
+export async function autoEnqueueChat(chatId: number) {
+	if (!await isVectorizationEnabled()) return
+	await enqueueChatGroup(chatId)
 }

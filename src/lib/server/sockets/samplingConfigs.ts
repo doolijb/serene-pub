@@ -2,7 +2,6 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import { user } from "./users"
-import { userSettingsGet } from "./userSettings"
 import type { Handler } from "$lib/shared/events"
 import {
 	getSupportedSamplers,
@@ -175,37 +174,13 @@ export const samplingConfigsSetUserActive: Handler<
 			)
 		}
 
-		const userId = socket.user!.id
-		const currentUser = await db.query.users.findFirst({
-			where: (u, { eq }) => eq(u.id, userId)
-		})
-		if (!currentUser) {
-			emitToUser("samplingConfigs:setUserActive:error", {
-				error: "User not found."
-			})
-			throw new Error("User not found")
-		}
-
-		// Find or create user settings
-		let userSettings = await db.query.userSettings.findFirst({
-			where: (us, { eq }) => eq(us.userId, currentUser.id)
-		})
-
-		if (!userSettings) {
-			await db.insert(schema.userSettings).values({
-				userId: currentUser.id
-			})
-		}
-
+		// Update system-wide default sampling config (replaces the old per-user active sampling)
 		await db
-			.update(schema.userSettings)
-			.set({
-				activeSamplingConfigId: params.id
-			})
-			.where(eq(schema.userSettings.userId, currentUser.id))
+			.update(schema.systemSettings)
+			.set({ defaultSamplingConfigId: params.id })
+			.where(eq(schema.systemSettings.id, 1))
 
 		await user(socket, {}, emitToUser)
-		await userSettingsGet.handler(socket, {}, emitToUser)
 		if (params.id) {
 			await samplingConfigsGet.handler(
 				socket,
@@ -214,12 +189,8 @@ export const samplingConfigsSetUserActive: Handler<
 			)
 		}
 
-		// Get the updated user to return in response
 		const updatedUser = await db.query.users.findFirst({
-			where: (u, { eq }) => eq(u.id, currentUser.id),
-			with: {
-				userSettings: true
-			}
+			where: (u, { eq }) => eq(u.id, socket.user!.id)
 		})
 		const res: Sockets.SamplingConfigs.SetUserActive.Response = {
 			user: updatedUser!
@@ -288,19 +259,14 @@ export const samplingConfigsDelete: Handler<
 			})
 			throw new Error("Cannot delete immutable samplingConfigs")
 		}
-		// Check if this is the user's active sampling config and reset to default if so
-		const userSettings = await db.query.userSettings.findFirst({
-			where: (us, { eq }) => eq(us.userId, socket.user!.id)
-		})
-		if (userSettings?.activeSamplingConfigId === params.id) {
-			// Get the system default sampling config
-			const systemSettings = await db.query.systemSettings.findFirst()
-			const defaultConfigId = systemSettings?.defaultSamplingConfigId || 1
-			await samplingConfigsSetUserActive.handler(
-				socket,
-				{ id: defaultConfigId },
-				emitToUser
-			)
+		// If the deleted config is the system default, fall back to the first immutable config
+		const systemSettings = await db.query.systemSettings.findFirst({ columns: { id: true, defaultSamplingConfigId: true } })
+		if (systemSettings?.defaultSamplingConfigId === params.id) {
+			const fallback = await db.query.samplingConfigs.findFirst({
+				where: (sc, { eq }) => eq(sc.isImmutable, true),
+				columns: { id: true }
+			})
+			await samplingConfigsSetUserActive.handler(socket, { id: fallback?.id ?? 1 }, emitToUser)
 		}
 		await db
 			.delete(schema.samplingConfigs)
@@ -370,27 +336,11 @@ export const samplingConfigsGetSupportedSamplers: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 
-		// Get user settings with active connection
-		const userSettings = await db.query.userSettings.findFirst({
-			where: (us, { eq }) => eq(us.userId, userId),
-			with: {
-				activeConnection: true
-			}
+		// Use the system default connection to determine supported samplers
+		const systemSettings = await db.query.systemSettings.findFirst({
+			with: { defaultConnection: true }
 		})
-
-		let connectionType: string | undefined
-
-		if (userSettings?.activeConnection) {
-			connectionType = userSettings.activeConnection.type
-		} else {
-			// Fall back to system default connection
-			const systemSettings = await db.query.systemSettings.findFirst({
-				with: {
-					defaultConnection: true
-				}
-			})
-			connectionType = systemSettings?.defaultConnection?.type
-		}
+		const connectionType = (systemSettings as any)?.defaultConnection?.type
 
 		if (!connectionType) {
 			emitToUser("samplingConfigs:getSupportedSamplers:error", {

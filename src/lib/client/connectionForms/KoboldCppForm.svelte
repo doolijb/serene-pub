@@ -4,7 +4,7 @@
 	import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
-	import { onMount, onDestroy } from "svelte"
+	import { onMount, onDestroy, getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { z } from "zod"
 
@@ -19,6 +19,7 @@
 		grammarRetainState: boolean
 		logprobs: boolean
 		replaceInstructPlaceholders: boolean
+		enableThinking: boolean | null
 	}
 
 	interface ExtraJson {
@@ -32,6 +33,7 @@
 		grammarRetainState?: boolean
 		logprobs?: boolean
 		replaceInstructPlaceholders?: boolean
+		enableThinking?: boolean | null
 	}
 
 	// Zod validation schema
@@ -52,8 +54,13 @@
 	let { connection = $bindable() } = $props()
 
 	const socket = useTypedSocket()
+	const koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
 	const defaultExtraJson =
 		CONNECTION_DEFAULTS[CONNECTION_TYPE.KOBOLDCPP].extraJson
+
+	let managerEnabled = $derived(
+		koboldCppSettingsCtx?.settings?.koboldCppManagerEnabled ?? false
+	)
 
 	let koboldCppFields: ExtraFieldData | undefined = $state()
 	let validationErrors: ValidationErrors = $state({})
@@ -162,8 +169,8 @@
 			bypassEos: extraJson.bypassEos ?? false,
 			grammarRetainState: extraJson.grammarRetainState ?? false,
 			logprobs: extraJson.logprobs ?? false,
-			replaceInstructPlaceholders:
-				extraJson.replaceInstructPlaceholders ?? false
+			replaceInstructPlaceholders: extraJson.replaceInstructPlaceholders ?? false,
+			enableThinking: extraJson.enableThinking ?? null
 		}
 	}
 
@@ -178,7 +185,8 @@
 			bypassEos: fields.bypassEos,
 			grammarRetainState: fields.grammarRetainState,
 			logprobs: fields.logprobs,
-			replaceInstructPlaceholders: fields.replaceInstructPlaceholders
+			replaceInstructPlaceholders: fields.replaceInstructPlaceholders,
+			enableThinking: fields.enableThinking
 		}
 	}
 
@@ -196,7 +204,9 @@
 		} else {
 			koboldCppFields = extraJsonToExtraFields(defaultExtraJson)
 		}
-		handleRefreshModels()
+		if (managerEnabled) {
+			handleRefreshModels()
+		}
 	})
 
 	onDestroy(() => {
@@ -206,36 +216,7 @@
 </script>
 
 {#if connection}
-	<div class="mt-2 flex flex-col gap-1">
-		<label class="font-semibold">Current Configuration</label>
-		<div class="bg-surface-100/50 dark:bg-surface-800/50 rounded p-3">
-			{#if availableModels.length > 0}
-				{@const currentModel = availableModels.find((m) => m.isCurrent)}
-				<p class="text-sm">
-					{currentModel
-						? currentModel.name.replace("Currently Loaded: ", "")
-						: "No model loaded"}
-				</p>
-			{:else}
-				<p class="text-muted-foreground text-sm">
-					Loading configuration info...
-				</p>
-			{/if}
-		</div>
-		<input type="hidden" bind:value={connection.model} />
-		{#if validationErrors.model}
-			<p class="text-error-500 text-sm">{validationErrors.model}</p>
-		{/if}
-	</div>
 	<div class="mt-4 flex gap-2">
-		<button
-			type="button"
-			class="btn btn-sm preset-tonal-primary w-full"
-			onclick={handleRefreshModels}
-			disabled={isLoadingModel}
-		>
-			Refresh Config
-		</button>
 		<button
 			type="button"
 			class="btn preset-tonal-success btn-sm w-full"
@@ -433,6 +414,25 @@
 								e.checked)}
 						aria-labelledby="replaceInstructPlaceholders"
 					/>
+				</div>
+				<div class="flex items-center justify-between gap-4">
+					<div>
+						<label class="font-semibold">Thinking / Reasoning</label>
+						<p class="text-muted-foreground text-xs">Auto lets the model decide based on its template</p>
+					</div>
+					<div class="flex rounded overflow-hidden border border-surface-300-700 text-sm">
+						{#each [{ label: "Auto", value: null }, { label: "On", value: true }, { label: "Off", value: false }] as opt}
+							<button
+								type="button"
+								class="px-3 py-1 transition-colors {koboldCppFields.enableThinking === opt.value
+									? 'preset-filled-primary-500'
+									: 'preset-tonal-surface'}"
+								onclick={() => (koboldCppFields!.enableThinking = opt.value)}
+							>
+								{opt.label}
+							</button>
+						{/each}
+					</div>
 				</div>
 			</section>
 		{/if}

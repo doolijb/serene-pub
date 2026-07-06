@@ -1,0 +1,1 @@
+ALTER TABLE "scene_summarize_configs" ADD COLUMN "character_extraction_system_prompt" text DEFAULT '' NOT NULL;

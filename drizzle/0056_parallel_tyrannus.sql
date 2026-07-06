@@ -1,0 +1,1 @@
+ALTER TABLE "system_settings" DROP COLUMN "koboldcpp_configs_dir";

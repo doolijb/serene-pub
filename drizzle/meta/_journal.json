@@ -295,6 +295,118 @@
       "when": 1782278946320,
       "tag": "0041_real_star_brand",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1782289175681,
+      "tag": "0042_cuddly_moira_mactaggert",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1782709148950,
+      "tag": "0043_magenta_odin",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1782714172076,
+      "tag": "0044_lovely_scourge",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1782798855535,
+      "tag": "0045_crazy_cerise",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1782814101162,
+      "tag": "0046_watery_ezekiel_stane",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1782871948302,
+      "tag": "0047_wonderful_black_cat",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1782872902417,
+      "tag": "0048_fantastic_cammi",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1782885967364,
+      "tag": "0049_familiar_hammerhead",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1782979625814,
+      "tag": "0050_dry_infant_terrible",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1783051706375,
+      "tag": "0051_wild_kate_bishop",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1783054280241,
+      "tag": "0052_previous_newton_destine",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1783061903305,
+      "tag": "0053_glamorous_yellow_claw",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1783159994547,
+      "tag": "0054_open_aqueduct",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1783238481098,
+      "tag": "0055_massive_wind_dancer",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1783241266342,
+      "tag": "0056_parallel_tyrannus",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1783284979623,
+      "tag": "0057_numerous_shard",
+      "breakpoints": true
     }
   ]
 }

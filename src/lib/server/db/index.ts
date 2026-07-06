@@ -341,5 +341,17 @@ if (!dev || !hasTables) {
 	}
 } else {
 	await runMigrations()
-	await sync()
 }
+
+// Auto-start managed KoboldCPP subprocess if configured
+import("$lib/server/koboldcpp/subprocessManager").then(async (mgr) => {
+	try {
+		const settings = await db.query.koboldCppSettings.findFirst()
+		if (settings?.koboldCppManagerEnabled && settings?.koboldCppManagedMode === "managed") {
+			await mgr.start()
+			console.log("KoboldCPP managed subprocess started.")
+		}
+	} catch (err: any) {
+		console.warn("KoboldCPP auto-start failed:", err.message)
+	}
+})

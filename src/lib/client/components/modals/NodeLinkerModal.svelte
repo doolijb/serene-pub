@@ -1,0 +1,136 @@
+<script lang="ts">
+	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import * as Icons from "@lucide/svelte"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+
+	const socket = useTypedSocket()
+
+	type UnlinkedNode = Sockets.BindingCheck.NodeResult.UnlinkedNode
+	type PendingBinding = Sockets.BindingCheck.NodeResult.PendingBinding
+
+	interface PendingEntry {
+		binding: PendingBinding
+		unlinkedNodes: UnlinkedNode[]
+	}
+
+	interface Props {
+		open: boolean
+		lorebookId: number
+		pendingBindings: PendingEntry[]
+		onOpenChange: (e: { open: boolean }) => void
+		onDone?: () => void
+	}
+
+	let {
+		open = $bindable(),
+		lorebookId,
+		pendingBindings = [],
+		onOpenChange,
+		onDone
+	}: Props = $props()
+
+	let currentIndex = $state(0)
+	let current = $derived(pendingBindings[currentIndex] ?? null)
+	let isBusy = $state(false)
+
+	function advance() {
+		if (currentIndex < pendingBindings.length - 1) {
+			currentIndex++
+		} else {
+			onOpenChange({ open: false })
+			onDone?.()
+		}
+	}
+
+	function linkNode(bindingId: number, nodeId: number) {
+		isBusy = true
+		socket.emit("narrativeGraph:linkBindingNode", { bindingId, nodeId })
+		isBusy = false
+		advance()
+	}
+
+	function createNode(bindingId: number) {
+		isBusy = true
+		socket.emit("narrativeGraph:linkBindingNode", { bindingId, nodeId: null })
+		isBusy = false
+		advance()
+	}
+
+	const NODE_STATE_LABELS: Record<string, string> = {
+		active: "Active",
+		deceased: "Deceased",
+		missing: "Missing",
+		departed: "Departed",
+		legendary: "Legendary",
+		hidden: "Hidden"
+	}
+</script>
+
+<Modal
+	{open}
+	{onOpenChange}
+	contentBase="card bg-surface-100-900 p-6 space-y-5 shadow-xl max-h-[95dvh] relative overflow-hidden w-[38em] max-w-95dvw"
+	backdropClasses="backdrop-blur-sm"
+>
+	{#snippet content()}
+		<header class="flex items-center justify-between">
+			<h2 class="text-lg font-semibold">Link Character to Graph Node</h2>
+			<button class="btn btn-sm preset-tonal" onclick={() => onOpenChange({ open: false })}>
+				<Icons.X size={18} />
+			</button>
+		</header>
+
+		{#if current}
+			<p class="text-surface-600-400 text-sm">
+				<strong>{current.binding.entityName}</strong> (binding: <code class="code">{current.binding.binding}</code>)
+				isn't linked to a narrative graph node yet. Select an existing node or create a new one.
+			</p>
+
+			<div class="space-y-3">
+				<p class="text-surface-500 text-xs font-medium uppercase tracking-wide">
+					Existing unlinked nodes
+				</p>
+				<div class="max-h-52 overflow-y-auto space-y-1 pr-1">
+					{#each current.unlinkedNodes as node}
+						<button
+							class="preset-outlined-surface-300-700 hover:preset-filled-surface-500 btn w-full justify-start gap-3 text-left text-sm"
+							disabled={isBusy}
+							onclick={() => linkNode(current.binding.bindingId, node.id)}
+						>
+							<Icons.CircleDot size={16} class="shrink-0 text-primary-500" />
+							<div class="min-w-0 flex-1">
+								<div class="flex items-center gap-2">
+									<span class="font-medium">{node.name}</span>
+									{#if node.score && node.score > 0}
+										<span class="badge preset-filled-primary-500 text-xs">match</span>
+									{/if}
+									<span class="text-surface-400 ml-auto text-xs">
+										{NODE_STATE_LABELS[node.nodeState] ?? node.nodeState}
+									</span>
+								</div>
+								{#if node.summary}
+									<p class="text-surface-500 mt-0.5 truncate text-xs">{node.summary}</p>
+								{/if}
+							</div>
+						</button>
+					{/each}
+				</div>
+
+				<div class="border-t pt-3">
+					<button
+						class="preset-outlined-primary-500 btn w-full justify-start gap-3"
+						disabled={isBusy}
+						onclick={() => createNode(current.binding.bindingId)}
+					>
+						<Icons.Plus size={18} />
+						<span>Create new node for <strong>{current.binding.entityName}</strong></span>
+					</button>
+				</div>
+			</div>
+
+			<div class="text-surface-500 border-t pt-2 text-right text-xs">
+				{currentIndex + 1} of {pendingBindings.length}
+			</div>
+		{/if}
+	{/snippet}
+</Modal>

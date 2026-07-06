@@ -30,6 +30,10 @@ Trees used:
 
 Serene Pub releases are distributed with third party packages included to provide a low-friction experience for users. This includes packages licensed under a variety of OSI-approved licenses, including MIT, BSD, Apache-2.0, and Python-2.0. License texts are included per package. We do not claim any additional rights over these third party works. Licenses can be found in `node_modules/<package>/LICENSE` of the respective release distributions.
 
+### KoboldCPP
+
+This project uses assets or branding that is property of [LostRuins](https://github.com/LostRuins) and contributors of the [KoboldCPP project](https://github.com/LostRuins/koboldcpp), including but not limited to the KoboldCPP logo and any variations of it. These assets are used in reference to this project's 3rd party support and integration of KoboldCPP.
+
 ### Node.js Runtime
 
 Serene Pub distribution packages include the Node.js runtime (https://nodejs.org/) to provide a standalone experience without requiring users to install Node.js separately. Node.js is licensed under the MIT License:

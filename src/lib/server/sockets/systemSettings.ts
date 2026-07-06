@@ -7,61 +7,30 @@ export const systemSettingsGet: Handler<Sockets.SystemSettings.Get.Params, Socke
 	event: "systemSettings:get",
 	handler: async (socket, params, emitToUser) => {
 		try {
-			const settings = await db.query.systemSettings.findFirst({
-				where: eq(schema.systemSettings.id, 1),
-				columns: {
-					id: false // We don't need the ID in the response
-				}
-			})
+			const [settings, ollamaSettings, koboldCppSettings] = await Promise.all([
+				db.query.systemSettings.findFirst({ where: eq(schema.systemSettings.id, 1), columns: { id: false } }),
+				db.query.ollamaSettings.findFirst({ where: eq(schema.ollamaSettings.id, 1), columns: { id: false } }),
+				db.query.koboldCppSettings.findFirst({ where: eq(schema.koboldCppSettings.id, 1), columns: { id: false } })
+			])
 
-			if (!settings) {
-				throw new Error("System settings not found")
-			}
+			if (!settings) throw new Error("System settings not found")
 
 			const res: Sockets.SystemSettings.Get.Response = {
-				systemSettings: settings
+				systemSettings: settings as any,
+				ollamaSettings: (ollamaSettings ?? {}) as any,
+				koboldCppSettings: (koboldCppSettings ?? {}) as any
 			}
 
 			emitToUser("systemSettings:get", res)
 			return res
 		} catch (error: any) {
 			console.error("Error fetching system settings:", error)
-			emitToUser("systemSettings:get:error", {
-				error: "Failed to fetch system settings"
-			})
+			emitToUser("systemSettings:get:error", { error: "Failed to fetch system settings" })
 			throw error
 		}
 	}
 }
 
-export const systemSettingsUpdateOllamaManagerEnabled: Handler<Sockets.SystemSettings.UpdateOllamaManagerEnabled.Params, Sockets.SystemSettings.UpdateOllamaManagerEnabled.Response> = {
-	event: "systemSettings:updateOllamaManagerEnabled",
-	handler: async (socket, params, emitToUser) => {
-		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		try {
-			await db
-				.update(schema.systemSettings)
-				.set({
-					ollamaManagerEnabled: params.enabled
-				})
-				.where(eq(schema.systemSettings.id, 1))
-
-			const res: Sockets.SystemSettings.UpdateOllamaManagerEnabled.Response = {
-				success: true,
-				enabled: params.enabled
-			}
-			emitToUser("systemSettings:updateOllamaManagerEnabled", res)
-			await systemSettingsGet.handler(socket, {}, emitToUser) // Refresh system settings after update
-			return res
-		} catch (error: any) {
-			console.error("Update Ollama Manager enabled error:", error)
-			emitToUser("systemSettings:updateOllamaManagerEnabled:error", {
-				error: "Failed to update Ollama Manager setting"
-			})
-			throw error
-		}
-	}
-}
 
 export const systemSettingsUpdateShowAllCharacterFields: Handler<Sockets.SystemSettings.UpdateShowAllCharacterFields.Params, Sockets.SystemSettings.UpdateShowAllCharacterFields.Response> = {
 	event: "systemSettings:updateShowAllCharacterFields",
@@ -139,7 +108,7 @@ export async function updateShowHomePageBanner(
 			enabled: message.enabled
 		}
 		emitToUser("updateShowHomePageBanner", res)
-		await systemSettings(socket, {}, emitToUser) // Refresh system settings after update
+		await systemSettingsGet.handler(socket, {}, emitToUser) // Refresh system settings after update
 	} catch (error: any) {
 		console.error("Update show home page banner error:", error)
 		const res = {
@@ -177,33 +146,6 @@ export const systemSettingsUpdateEasyPersonaCreation: Handler<Sockets.SystemSett
 	}
 }
 
-export const systemSettingsUpdateKoboldCppManagerEnabled: Handler<
-	Sockets.SystemSettings.UpdateKoboldCppManagerEnabled.Params,
-	Sockets.SystemSettings.UpdateKoboldCppManagerEnabled.Response
-> = {
-	event: "systemSettings:updateKoboldCppManagerEnabled",
-	handler: async (socket, params, emitToUser) => {
-		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		try {
-			await db
-				.update(schema.systemSettings)
-				.set({ koboldCppManagerEnabled: params.enabled })
-				.where(eq(schema.systemSettings.id, 1))
-
-			const res: Sockets.SystemSettings.UpdateKoboldCppManagerEnabled.Response =
-				{ success: true, enabled: params.enabled }
-			emitToUser("systemSettings:updateKoboldCppManagerEnabled", res)
-			await systemSettingsGet.handler(socket, {}, emitToUser)
-			return res
-		} catch (error: any) {
-			console.error("Update KoboldCpp Manager enabled error:", error)
-			emitToUser("systemSettings:updateKoboldCppManagerEnabled:error", {
-				error: "Failed to update KoboldCpp Manager setting"
-			})
-			throw error
-		}
-	}
-}
 
 export const systemSettingsUpdateSummarizationEnabled: Handler<
 	Sockets.SystemSettings.UpdateSummarizationEnabled.Params,
@@ -271,8 +213,6 @@ export function registerSystemSettingsHandlers(
 	register: (socket: any, handler: Handler<any, any>, emitToUser: (event: string, data: any) => void) => void
 ) {
 	register(socket, systemSettingsGet, emitToUser)
-	register(socket, systemSettingsUpdateOllamaManagerEnabled, emitToUser)
-	register(socket, systemSettingsUpdateKoboldCppManagerEnabled, emitToUser)
 	register(socket, systemSettingsUpdateShowAllCharacterFields, emitToUser)
 	register(socket, systemSettingsUpdateEasyCharacterCreation, emitToUser)
 	register(socket, systemSettingsUpdateEasyPersonaCreation, emitToUser)

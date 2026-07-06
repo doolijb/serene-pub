@@ -129,6 +129,12 @@ export global {
 	export type SelectSystemSettings = typeof schema.systemSettings.$inferSelect
 	export type InsertSystemSettings = typeof schema.systemSettings.$inferInsert
 
+	export type SelectOllamaSettings = typeof schema.ollamaSettings.$inferSelect
+	export type InsertOllamaSettings = typeof schema.ollamaSettings.$inferInsert
+
+	export type SelectKoboldCppSettings = typeof schema.koboldCppSettings.$inferSelect
+	export type InsertKoboldCppSettings = typeof schema.koboldCppSettings.$inferInsert
+
 	export type SelectUserSettings = typeof schema.userSettings.$inferSelect
 	export type InsertUserSettings = typeof schema.userSettings.$inferInsert
 

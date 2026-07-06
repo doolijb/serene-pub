@@ -24,8 +24,8 @@
 		"installed" | "available" | "downloads" | "settings"
 	>("installed")
 	let isConnected = $state(false)
-	let systemSettingsCtx: SystemSettingsCtx = $state(
-		getContext("systemSettingsCtx")
+	let ollamaSettingsCtx: OllamaSettingsCtx = $state(
+		getContext("ollamaSettingsCtx")
 	)
 	let isSavingBaseUrl = $state(false)
 	let baseUrlField = $state("")
@@ -51,7 +51,7 @@
 
 	// Save base URL
 	function handleSaveBaseUrl() {
-		if (!systemSettingsCtx.settings.ollamaManagerBaseUrl.trim()) {
+		if (!ollamaSettingsCtx.settings?.ollamaManagerBaseUrl.trim()) {
 			toaster.error({ title: "Base URL cannot be empty" })
 			return
 		}
@@ -63,7 +63,7 @@
 	}
 
 	$effect(() => {
-		baseUrlField = systemSettingsCtx.settings.ollamaManagerBaseUrl
+		baseUrlField = ollamaSettingsCtx.settings?.ollamaManagerBaseUrl
 	})
 
 	onMount(() => {
@@ -112,7 +112,7 @@
 
 <div class="flex h-full flex-col">
 	<!-- Check if Ollama Manager is enabled -->
-	{#if !systemSettingsCtx.settings.ollamaManagerEnabled}
+	{#if !ollamaSettingsCtx.settings?.ollamaManagerEnabled}
 		<div class="flex flex-1 items-center justify-center p-4">
 			<div class="text-center">
 				<Icons.AlertCircle

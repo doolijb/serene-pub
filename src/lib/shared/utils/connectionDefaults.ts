@@ -57,7 +57,8 @@ export const CONNECTION_DEFAULTS = {
 			stream: true,
 			useChat: true,
 			useMemory: false,
-			memory: ""
+			memory: "",
+			enableThinking: null as boolean | null
 		}
 	},
 	[CONNECTION_TYPE.ANTHROPIC]: {

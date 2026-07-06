@@ -10,15 +10,14 @@ import type { BasePromptChat } from "../../connectionAdapters/BaseConnectionAdap
 import { ChatMessageProcessor, type ProcessedChatMessage } from "./ContentProcessors"
 import { attachCharacterLoreToCharacters } from "./LorebookBindingUtils"
 import { parseSplitChatPrompt } from "./utils"
-import type { NonRagDiagnostics, ScoredEntry, ScoreBreakdown, TemplateContext } from "./types"
+import type { NonRagDiagnostics, ScoredEntry, ScoreBreakdown, TemplateContext, InfillContentOptions, InfillResult } from "./types"
 import { ChatCharacterVisibility } from "$lib/shared/constants/ChatCharacterVisibility"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
+import { BaseInfillEngine } from "./BaseInfillEngine"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const MIN_GUARANTEED_MESSAGES = 10
 
 const FILL_BUDGET = {
 	worldLore:     20,
@@ -56,16 +55,14 @@ interface ScoringContext {
 
 // ─── Engine ───────────────────────────────────────────────────────────────────
 
-export class KeywordInfillEngine {
-	private chatMessageProcessor: ChatMessageProcessor
-
+export class KeywordInfillEngine extends BaseInfillEngine {
 	constructor(
-		private chat: BasePromptChat,
-		private interpolationEngine: any,
-		private populateLorebookEntryBindings: (entry: any, chat: BasePromptChat) => any,
+		chat: BasePromptChat,
+		interpolationEngine: any,
+		populateLorebookEntryBindings: (entry: any, chat: BasePromptChat) => any,
 		private currentCharacterId: number | null
 	) {
-		this.chatMessageProcessor = new ChatMessageProcessor(chat, interpolationEngine)
+		super(chat, interpolationEngine, populateLorebookEntryBindings)
 	}
 
 	async infillContent({
@@ -78,17 +75,7 @@ export class KeywordInfillEngine {
 		tokenCounter,
 		handlebars,
 		contextConfig
-	}: {
-		charName: string
-		personaName: string
-		templateContext: TemplateContext
-		useChatFormat?: boolean
-		tokenLimit: number
-		contextThresholdPercent: number
-		tokenCounter: any
-		handlebars: any
-		contextConfig: any
-	}) {
+	}: InfillContentOptions): Promise<InfillResult> {
 		const interpolationContext = this.interpolationEngine.createInterpolationContext({
 			currentCharacterName: charName,
 			currentPersonaName: personaName
@@ -98,13 +85,13 @@ export class KeywordInfillEngine {
 
 		const allMessages = this.chat.chatMessages || []
 		const guaranteedMessages =
-			allMessages.length <= MIN_GUARANTEED_MESSAGES
+			allMessages.length <= KeywordInfillEngine.MIN_GUARANTEED_MESSAGES
 				? allMessages.slice()
-				: allMessages.slice(-MIN_GUARANTEED_MESSAGES)
+				: allMessages.slice(-KeywordInfillEngine.MIN_GUARANTEED_MESSAGES)
 		const olderMessages =
-			allMessages.length <= MIN_GUARANTEED_MESSAGES
+			allMessages.length <= KeywordInfillEngine.MIN_GUARANTEED_MESSAGES
 				? []
-				: allMessages.slice(0, -MIN_GUARANTEED_MESSAGES)
+				: allMessages.slice(0, -KeywordInfillEngine.MIN_GUARANTEED_MESSAGES)
 
 		// Guaranteed window text
 		const guaranteedWindowRaw = guaranteedMessages.map((m) => m.content ?? "").join(" ")
@@ -313,18 +300,12 @@ export class KeywordInfillEngine {
 				mostRecentHistory
 			)
 
-		const countTokens = async (ctx: any): Promise<number> => {
-			const rendered = handlebars.compile(contextConfig.template)({
-				...ctx,
-				chatMessages: [...chatMessages].reverse()
-			})
-			const final = useChatFormat ? JSON.stringify(parseSplitChatPrompt(rendered)) : rendered
-			return typeof tokenCounter.countTokens === "function"
-				? await tokenCounter.countTokens(final)
-				: 0
-		}
+		const countTokens = this.makeCountTokens(
+			handlebars, contextConfig.template, useChatFormat ?? false,
+			tokenCounter, chatMessages, buildCtx
+		)
 
-		const reserveTokens = await countTokens(buildCtx())
+		const reserveTokens = await countTokens()
 
 		// ── Phase 2: Score all non-reserved candidates ────────────────────────
 
@@ -508,17 +489,58 @@ export class KeywordInfillEngine {
 			allScoredEntries.push({ type: "characterLore", id: entry.id, name: (entry as any).name ?? String(entry.id), score: zeroScoreWith("excluded_visibility") })
 		}
 
+		// Budget split: reserve MESSAGE_FILL_FRACTION of available budget for chat
+		// messages so that high-scoring lore entries can't crowd out conversation history.
+		const contentBudget = Math.max(0, tokenLimit - reserveTokens)
+		const messageBudget = Math.max(
+			KeywordInfillEngine.MIN_MESSAGE_FILL_TOKENS,
+			Math.floor(contentBudget * KeywordInfillEngine.MESSAGE_FILL_FRACTION)
+		)
+		const messageTarget = reserveTokens + messageBudget  // ceiling for message fill pass
+
+		const messageFillPool = fillPool.filter(c => c.type === "message")
+		const loreFillPool    = fillPool.filter(c => c.type !== "message")
+
 		let totalTokens = reserveTokens
 
-		for (const candidate of fillPool) {
-			const typeCap = typeBudgets[candidate.type] ?? 999
-			if (typeCounts[candidate.type] >= typeCap) {
+		// ── Phase 3a: Messages first ──────────────────────────────────────────────
+		// Fill older messages (sorted by score) up to messageTarget before lore competes.
+		for (const candidate of messageFillPool) {
+			if (typeCounts[candidate.type] >= (typeBudgets[candidate.type] ?? 999)) {
 				candidate.score.includedReason = "excluded_budget"
 				allScoredEntries.push({ type: candidate.type, id: candidate.id, name: candidate.name, score: { ...candidate.score } })
 				continue
 			}
 
-			// Tentatively add
+			const msg = candidate.payload as SelectChatMessage
+			const processed = processMsg(msg)
+			if (!processed) {
+				allScoredEntries.push({ type: candidate.type, id: candidate.id, name: candidate.name, score: { ...candidate.score, includedReason: "excluded_budget" } })
+				continue
+			}
+			chatMessages.push(processed)
+			totalTokens = await countTokens()
+			if (totalTokens > messageTarget) {
+				chatMessages.pop()
+				totalTokens = await countTokens()
+				candidate.score.includedReason = "excluded_token_limit"
+				allScoredEntries.push({ type: candidate.type, id: candidate.id, name: candidate.name, score: { ...candidate.score } })
+				continue
+			}
+			typeCounts[candidate.type]++
+			candidate.score.includedReason = candidate.score.total > 0 ? "filled_scored" : "filled_zero_score"
+			allScoredEntries.push({ type: candidate.type, id: candidate.id, name: candidate.name, score: { ...candidate.score } })
+		}
+
+		// ── Phase 3b: Lore fills remaining budget ─────────────────────────────────
+		// Lore candidates (sorted by score) fill whatever budget remains up to tokenLimit.
+		for (const candidate of loreFillPool) {
+			if (typeCounts[candidate.type] >= (typeBudgets[candidate.type] ?? 999)) {
+				candidate.score.includedReason = "excluded_budget"
+				allScoredEntries.push({ type: candidate.type, id: candidate.id, name: candidate.name, score: { ...candidate.score } })
+				continue
+			}
+
 			let rollback: (() => void) | null = null
 			if (candidate.type === "worldLore") {
 				const entry = candidate.payload as SelectWorldLoreEntry
@@ -535,42 +557,28 @@ export class KeywordInfillEngine {
 				const populated = this.populateLorebookEntryBindings({ ...entry }, this.chat) as SelectHistoryEntry
 				includedHistory.push(populated)
 				rollback = () => { includedHistory.pop() }
-			} else if (candidate.type === "message") {
-				const msg = candidate.payload as SelectChatMessage
-				const processed = processMsg(msg)
-				if (!processed) {
-					allScoredEntries.push({ type: candidate.type, id: candidate.id, name: candidate.name, score: { ...candidate.score, includedReason: "excluded_budget" } })
-					continue
-				}
-				chatMessages.push(processed)
-				rollback = () => { chatMessages.pop() }
 			}
 
-			totalTokens = await countTokens(buildCtx())
-
+			totalTokens = await countTokens()
 			if (totalTokens > tokenLimit) {
-				// Roll back and continue (do NOT break)
 				rollback?.()
-				totalTokens = await countTokens(buildCtx())
+				totalTokens = await countTokens()
 				candidate.score.includedReason = "excluded_token_limit"
 				allScoredEntries.push({ type: candidate.type, id: candidate.id, name: candidate.name, score: { ...candidate.score } })
 				continue
 			}
-
-			// Commit
 			typeCounts[candidate.type]++
 			candidate.score.includedReason = candidate.score.total > 0 ? "filled_scored" : "filled_zero_score"
 			allScoredEntries.push({ type: candidate.type, id: candidate.id, name: candidate.name, score: { ...candidate.score } })
 		}
 
-		// ── Phase 4: Trim ─────────────────────────────────────────────────────
-		// Only triggered if reserve alone exceeded tokenLimit
+		// ── Phase 4: Enforce budget ───────────────────────────────────────────
+		// The fill pool already rolled back over-budget lore candidates; only
+		// messages may need trimming here (as a safety net for reserve overflows).
 		if (totalTokens > tokenLimit) {
-			const minChatMessages = Math.min(MIN_GUARANTEED_MESSAGES + 1, chatMessages.length)
-			while (totalTokens > tokenLimit && chatMessages.length > minChatMessages) {
-				chatMessages.pop()
-				totalTokens = await countTokens(buildCtx())
-			}
+			totalTokens = await this.enforceTokenBudget(
+				[], chatMessages, tokenLimit, countTokens
+			)
 		}
 
 		// ── Phase 5: Re-sort + Render ─────────────────────────────────────────
@@ -896,12 +904,13 @@ export class KeywordInfillEngine {
 				.map((cc: any) => ({
 					name: cc.character.name,
 					nickname: cc.character.nickname || undefined,
+					aliases: cc.character.aliases?.length ? cc.character.aliases.filter((a: string) => a.trim()) : undefined,
 					description: cc.character.description,
 					personality: cc.character.personality || undefined
 				}))
 				.map((c: any) =>
 					this.interpolationEngine.interpolateObject(c, interpolationContext, [
-						"name", "nickname", "description", "personality"
+						"name", "nickname", "aliases", "description", "personality"
 					])
 				)
 		}

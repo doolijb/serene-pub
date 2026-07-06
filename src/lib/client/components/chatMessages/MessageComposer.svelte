@@ -28,7 +28,7 @@
 		onSend
 	}: Props = $props()
 
-	let tabGroup: "compose" | "preview" = $state("compose")
+	let tabGroup: string = $state("compose")
 	let contextExceeded = $derived(
 		!!compiledPrompt
 			? compiledPrompt!.meta.tokenCounts.total >
@@ -60,31 +60,42 @@
 	$effect(() => {
 		console.log("compiledPrompt", $state.snapshot(compiledPrompt))
 	})
+
+	$effect(() => {
+		const fixed = new Set(["compose", "preview"])
+		const extra = new Set(extraTabs?.map((t) => t.value) ?? [])
+		if (!fixed.has(tabGroup) && !extra.has(tabGroup)) {
+			tabGroup = "compose"
+		}
+	})
 </script>
 
 <Tabs
 	value={tabGroup}
 	{classes}
-	onValueChange={(e) => (tabGroup = e.value as "compose" | "preview")}
+	onValueChange={(e) => (tabGroup = e.value)}
 	role="region"
 	aria-label="Message composer"
 >
 	{#snippet list()}
 		<Tabs.Control value="compose" classes="min-h-[2.75em]">
-			<span title="Compose" aria-label="Compose tab">
+			<span title="Compose" aria-label="Compose tab" class="flex items-center gap-1">
 				<Icons.Pen size="0.75em" aria-hidden="true" />
+				{#if tabGroup === "compose"}<span class="text-xs">Compose</span>{/if}
 			</span>
 		</Tabs.Control>
 		<Tabs.Control value="preview" classes="min-h-[2.75em]">
-			<span title="Preview" aria-label="Preview tab">
+			<span title="Preview" aria-label="Preview tab" class="flex items-center gap-1">
 				<Icons.Eye size="0.75em" aria-hidden="true" />
+				{#if tabGroup === "preview"}<span class="text-xs">Preview</span>{/if}
 			</span>
 		</Tabs.Control>
 		{#if extraTabs}
 			{#each extraTabs as tab}
 				<Tabs.Control value={tab.value} classes="min-h-[2.75em]">
-					<span title={tab.title} aria-label="{tab.title} tab">
+					<span title={tab.title} aria-label="{tab.title} tab" class="flex items-center gap-1">
 						{@render tab.control?.()}
+						{#if tabGroup === tab.value}<span class="text-xs">{tab.title}</span>{/if}
 					</span>
 				</Tabs.Control>
 			{/each}
@@ -164,7 +175,9 @@
 				{/if}
 			</div>
 			<div role="group" aria-label="Send controls">
-				{@render rightControls?.()}
+				{#if tabGroup === "compose"}
+					{@render rightControls?.()}
+				{/if}
 			</div>
 		</div>
 	{/snippet}

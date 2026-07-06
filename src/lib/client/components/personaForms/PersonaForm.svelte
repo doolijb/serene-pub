@@ -11,6 +11,8 @@
 	interface EditPersonaData {
 		id?: number
 		name: string
+		aliases: string[]
+		summary: string
 		avatar: string
 		description: string
 		isDefault?: boolean
@@ -59,6 +61,8 @@
 	let editPersonaData: EditPersonaData = $state({
 		id: undefined,
 		name: "",
+		aliases: [],
+		summary: "",
 		avatar: "",
 		description: "",
 		isDefault: false,
@@ -71,6 +75,8 @@
 	let originalPersonaData: EditPersonaData = $state({
 		id: undefined,
 		name: "",
+		aliases: [],
+		summary: "",
 		avatar: "",
 		description: "",
 		isDefault: false,
@@ -80,6 +86,8 @@
 		_avatarFile: undefined,
 		_avatar: ""
 	})
+	let expandedAliases = $state(false)
+	let expandedSummary = $state(false)
 	let showCancelModal = $state(false)
 	let validationErrors: ValidationErrors = $state({})
 	let formContainer: HTMLDivElement
@@ -305,14 +313,21 @@
 
 	const handlePersonasGet = (message: Sockets.Personas.Get.Response) => {
 		if (message.persona) {
-			const personaData = { ...message.persona }
+			const p = message.persona
 			editPersonaData = {
 				...editPersonaData,
-				...personaData,
-				avatar: personaData.avatar ?? "",
-				description: personaData.description ?? "",
-				tags: personaData.tags || [],
-				_avatar: ""
+				id: p.id,
+				name: p.name,
+				aliases: Array.isArray(p.aliases) ? p.aliases : [],
+				summary: p.summary ?? "",
+				avatar: p.avatar ?? "",
+				description: p.description ?? "",
+				isDefault: p.isDefault,
+				position: p.position ?? 0,
+				connections: (p as any).connections ?? "",
+				tags: (p as any).tags || [],
+				_avatar: "",
+				_avatarFile: undefined
 			}
 			originalPersonaData = { ...editPersonaData }
 		}
@@ -506,6 +521,85 @@
 				</p>
 			{/if}
 		</fieldset>
+		<div class="flex flex-col gap-2">
+			<button
+				type="button"
+				class="flex items-center gap-2 text-sm font-semibold"
+				onclick={() => (expandedAliases = !expandedAliases)}
+			>
+				<span class="flex gap-1">
+					Aliases <span
+						class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
+						title="This field will be visible in prompts"
+						aria-label="This field will be visible in prompts"
+					>
+						<Icons.ScanEye
+							size={16}
+							class="relative top-[1px] inline"
+							aria-hidden="true"
+						/>
+					</span>
+				</span>
+				<span class="ml-1">{expandedAliases ? "▼" : "►"}</span>
+			</button>
+			{#if expandedAliases}
+				<div class="flex flex-col gap-1">
+					{#each editPersonaData.aliases as _alias, idx (idx)}
+						<div class="flex gap-2">
+							<input
+								type="text"
+								bind:value={editPersonaData.aliases[idx]}
+								class="input flex-1"
+								placeholder="Alias..."
+							/>
+							<button
+								class="btn btn-sm preset-tonal-error"
+								type="button"
+								onclick={() => {
+									editPersonaData.aliases = editPersonaData.aliases.filter((_, i) => i !== idx)
+								}}
+							>
+								<Icons.Minus class="h-4 w-4" />
+							</button>
+						</div>
+					{/each}
+					<button
+						class="btn btn-sm preset-filled-primary-500 mt-1"
+						type="button"
+						onclick={() => {
+							editPersonaData.aliases = [...editPersonaData.aliases, ""]
+						}}
+					>
+						<Icons.Plus class="h-4 w-4" />
+						Add Alias
+					</button>
+				</div>
+			{/if}
+		</div>
+		<div class="flex flex-col gap-2">
+			<button
+				type="button"
+				class="flex items-center gap-2 text-sm font-semibold"
+				onclick={() => (expandedSummary = !expandedSummary)}
+			>
+				Summary
+				<span class="ml-1">{expandedSummary ? "▼" : "►"}</span>
+			</button>
+			{#if expandedSummary}
+				<div class="flex flex-col gap-1">
+					<textarea
+						bind:value={editPersonaData.summary}
+						class="textarea min-h-16 text-sm"
+						placeholder="One or two sentences describing who this persona is…"
+						maxlength="200"
+					></textarea>
+					<p class="text-surface-500 text-right text-xs">
+						{editPersonaData.summary.length} / 200
+					</p>
+					<p class="text-surface-400 text-xs">Used as a concise graph node description. Not injected into chat context.</p>
+				</div>
+			{/if}
+		</div>
 		<fieldset class="flex flex-col gap-2">
 			<label class="flex gap-1 font-semibold" for="personaDescription">
 				Description* <span

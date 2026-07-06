@@ -5,6 +5,8 @@
 	import PersonaCreator from "$lib/client/components/modals/PersonaCreatorModal.svelte"
 	import CharacterLibraryModal from "$lib/client/components/modals/CharacterLibraryModal.svelte"
 	import PersonaLibraryModal from "$lib/client/components/modals/PersonaLibraryModal.svelte"
+	import BindingLinkerModal from "$lib/client/components/modals/BindingLinkerModal.svelte"
+	import NodeLinkerModal from "$lib/client/components/modals/NodeLinkerModal.svelte"
 	import OllamaIcon from "$lib/client/components/icons/OllamaIcon.svelte"
 	import { FileUpload } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
@@ -19,6 +21,8 @@
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
 	let userSettingsCtx: UserSettingsCtx = $state(getContext("userSettingsCtx"))
 	let systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
+	let ollamaSettingsCtx: OllamaSettingsCtx = $state(getContext("ollamaSettingsCtx"))
+	let koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
 
 	const socket = useTypedSocket()
 
@@ -52,6 +56,12 @@
 	let showPersonaCreator = $state(false)
 	let showCharacterLibrary = $state(false)
 	let showPersonaLibrary = $state(false)
+
+	// Binding / node linker modals (Flow 1 + 2)
+	let bindingLinkerOpen = $state(false)
+	let bindingLinkerData = $state<Sockets.BindingCheck.Result.Response | null>(null)
+	let nodeLinkerOpen = $state(false)
+	let nodeLinkerData = $state<Sockets.BindingCheck.NodeResult.Response | null>(null)
 
 	// Connection setup state
 	let connectionChoice: "ollama" | "koboldcpp" | "manual" | null = $state(null)
@@ -468,6 +478,20 @@
 			}
 		})
 
+		// Binding / node linker modals
+		socket.on("bindingCheck:result", (data) => {
+			if (data.orphanedBindings.length > 0) {
+				bindingLinkerData = data
+				bindingLinkerOpen = true
+			}
+		})
+		socket.on("bindingCheck:nodeResult", (data) => {
+			if (data.pendingBindings.length > 0) {
+				nodeLinkerData = data
+				nodeLinkerOpen = true
+			}
+		})
+
 		socket.emit("characters:list", {})
 		socket.emit("personas:list", {})
 		socket.emit("chats:list", {})
@@ -481,6 +505,8 @@
 	})
 
 	onDestroy(() => {
+		socket.off("bindingCheck:result")
+		socket.off("bindingCheck:nodeResult")
 		socket.off("characters:list")
 		socket.off("personas:list")
 		socket.off("chats:list")
@@ -717,7 +743,7 @@
 								<div class="grid gap-3">
 									<!-- Ollama -->
 									<button
-										class="card preset-filled-primary-500 flex items-start gap-4 p-5 text-left transition-transform hover:scale-[1.01]"
+										class="card preset-tonal-surface flex items-start gap-4 p-5 text-left transition-transform hover:scale-[1.01] hover:preset-filled-surface-300-700"
 										onclick={() => {
 											connectionChoice = "ollama"
 											socket.emit("systemSettings:updateOllamaManagerEnabled", { enabled: true })
@@ -740,7 +766,7 @@
 											socket.emit("systemSettings:updateKoboldCppManagerEnabled", { enabled: true })
 										}}
 									>
-										<Icons.Cpu size={32} class="text-primary-500 mt-0.5 flex-shrink-0" />
+										<img src="/koboldcpp/koboldcpp-icon.svg" class="mt-0.5 h-8 w-8 flex-shrink-0 object-contain" alt="" />
 										<div>
 											<div class="mb-1 font-bold">KoboldCpp <span class="text-xs font-normal opacity-60">— Intermediate</span></div>
 											<p class="text-sm opacity-75">
@@ -777,7 +803,7 @@
 								</div>
 
 							{:else if connectionChoice === "ollama"}
-								{#if systemSettingsCtx.settings?.ollamaManagerEnabled}
+								{#if ollamaSettingsCtx.settings?.ollamaManagerEnabled}
 									<div class="text-center">
 										<OllamaIcon class="text-primary-500 mx-auto mb-4 h-14 w-14" />
 										<h2 class="mb-3 text-3xl font-bold">Set Up with Ollama Manager</h2>
@@ -811,9 +837,9 @@
 								{/if}
 
 							{:else if connectionChoice === "koboldcpp"}
-								{#if systemSettingsCtx.settings?.koboldCppManagerEnabled}
+								{#if koboldCppSettingsCtx.settings?.koboldCppManagerEnabled}
 									<div class="text-center">
-										<Icons.Cpu size={60} class="text-primary-500 mx-auto mb-4" />
+										<img src="/koboldcpp/koboldcpp-icon.svg" class="mx-auto mb-4 h-14 w-14 object-contain" alt="" />
 										<h2 class="mb-3 text-3xl font-bold">Set Up with KoboldCpp Manager</h2>
 										<p class="text-muted-foreground">
 											Open the KoboldCpp Manager to load a model and connect to it. Come back here when done — this updates automatically.
@@ -821,7 +847,7 @@
 									</div>
 								{:else}
 									<div class="mb-4 text-center">
-										<Icons.Cpu size={56} class="text-primary-500 mx-auto mb-4" />
+										<img src="/koboldcpp/koboldcpp-icon.svg" class="mx-auto mb-4 h-14 w-14 object-contain" alt="" />
 										<h2 class="mb-2 text-2xl font-bold">Set Up KoboldCpp</h2>
 									</div>
 									<div class="bg-surface-500/10 rounded-xl p-4">
@@ -1256,7 +1282,7 @@
 								<Icons.ChevronRight size={16} />
 							</button>
 						{:else if connectionChoice === "ollama"}
-							{#if systemSettingsCtx.settings?.ollamaManagerEnabled}
+							{#if ollamaSettingsCtx.settings?.ollamaManagerEnabled}
 								<button
 									class="btn preset-filled-primary-500"
 									onclick={() => { panelsCtx.digest.tutorial = true; openPanel("ollama") }}
@@ -1283,12 +1309,12 @@
 								</button>
 							{/if}
 						{:else if connectionChoice === "koboldcpp"}
-							{#if systemSettingsCtx.settings?.koboldCppManagerEnabled}
+							{#if koboldCppSettingsCtx.settings?.koboldCppManagerEnabled}
 								<button
 									class="btn preset-filled-primary-500"
 									onclick={() => { panelsCtx.digest.tutorial = true; openPanel("koboldcpp") }}
 								>
-									<Icons.Cpu size={16} />
+									<img src="/koboldcpp/koboldcpp-icon.svg" class="h-4 w-4 object-contain" alt="" />
 									Open KoboldCpp Manager
 								</button>
 							{:else if isKoboldCppConnected && selectedKoboldCppModel}
@@ -1400,6 +1426,28 @@
 		showPersonaLibrary = e.open
 	}}
 />
+
+{#if bindingLinkerData}
+	<BindingLinkerModal
+		bind:open={bindingLinkerOpen}
+		lorebookId={bindingLinkerData.lorebookId}
+		chatId={bindingLinkerData.chatId}
+		orphanedBindings={bindingLinkerData.orphanedBindings}
+		unboundEntities={bindingLinkerData.unboundEntities}
+		onOpenChange={(e) => (bindingLinkerOpen = e.open)}
+		onDone={() => (bindingLinkerData = null)}
+	/>
+{/if}
+
+{#if nodeLinkerData}
+	<NodeLinkerModal
+		bind:open={nodeLinkerOpen}
+		lorebookId={nodeLinkerData.lorebookId}
+		pendingBindings={nodeLinkerData.pendingBindings}
+		onOpenChange={(e) => (nodeLinkerOpen = e.open)}
+		onDone={() => (nodeLinkerData = null)}
+	/>
+{/if}
 
 <style lang="postcss">
 	@reference "tailwindcss";

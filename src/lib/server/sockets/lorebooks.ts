@@ -1,6 +1,7 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, eq } from "drizzle-orm"
+import { runBindingNodeCheck } from "$lib/server/utils/bindingNodeCheck"
 import { CharacterBook } from "@lenml/char-card-reader"
 import type { Handler } from "$lib/shared/events"
 import type {
@@ -471,6 +472,14 @@ export const createLorebookBindingHandler: Handler<
 			emitToUser("lorebooks:bindingList", listResult)
 		}
 
+		// Flow 2: node-link check for the new binding
+		if (emitToUser) {
+			const allBindings = await db.query.lorebookBindings.findMany({
+				where: eq(schema.lorebookBindings.lorebookId, book.id)
+			})
+			runBindingNodeCheck(book.id, allBindings, emitToUser).catch(console.error)
+		}
+
 		const res: Sockets.Lorebooks.CreateBinding.Response = {
 			lorebookBinding: binding
 		}
@@ -496,23 +505,22 @@ export const updateLorebookBindingHandler: Handler<
 
 		// Check if binding exists and user owns the lorebook
 		const existingBinding = await db.query.lorebookBindings.findFirst({
-			where: (lb, { eq }) => eq(lb.id, params.lorebookBinding.id!),
-			with: {
-				lorebook: true
-			}
+			where: (lb, { eq }) => eq(lb.id, params.lorebookBinding.id!)
 		})
 
 		if (!existingBinding) {
 			throw new Error("Lorebook binding not found.")
 		}
 
-		// Type assertion to work around TypeScript limitation
-		const bindingWithLorebook =
-			existingBinding as typeof existingBinding & {
-				lorebook: { userId: number }
-			}
+		const lorebookOwner = await db.query.lorebooks.findFirst({
+			where: and(
+				eq(schema.lorebooks.id, existingBinding.lorebookId),
+				eq(schema.lorebooks.userId, userId)
+			),
+			columns: { id: true }
+		})
 
-		if (bindingWithLorebook.lorebook.userId !== userId) {
+		if (!lorebookOwner) {
 			throw new Error("Access denied.")
 		}
 
@@ -530,6 +538,17 @@ export const updateLorebookBindingHandler: Handler<
 				emitToUser
 			)
 			emitToUser("lorebooks:bindingList", listResult)
+		}
+
+		// Flow 2: node-link check (skip if unlinking a character/persona)
+		const isUnlinking =
+			("characterId" in params.lorebookBinding && params.lorebookBinding.characterId === null) ||
+			("personaId" in params.lorebookBinding && params.lorebookBinding.personaId === null)
+		if (!isUnlinking && emitToUser) {
+			const allBindings = await db.query.lorebookBindings.findMany({
+				where: eq(schema.lorebookBindings.lorebookId, existingBinding.lorebookId)
+			})
+			runBindingNodeCheck(existingBinding.lorebookId, allBindings, emitToUser).catch(console.error)
 		}
 
 		const res: Sockets.Lorebooks.UpdateBinding.Response = {

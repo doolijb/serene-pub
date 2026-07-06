@@ -7,6 +7,7 @@ import type {
 	SelectHistoryEntry
 } from "$lib/server/db/types"
 import { lorebookBindingListHandler } from "./lorebooks"
+import { autoEnqueueLorebook } from "$lib/server/embedding/vectorizationQueue"
 
 export const historyEntryListHandler: Handler<
 	Sockets.HistoryEntries.List.Params,
@@ -74,6 +75,8 @@ export const createHistoryEntryHandler: Handler<
 			.values(data)
 			.returning()
 
+		autoEnqueueLorebook(newEntry.lorebookId, book.name, "").catch(console.error)
+
 		// Refresh lorebook bindings
 		if (emitToUser) {
 			const bindingListResult = await lorebookBindingListHandler.handler(
@@ -118,10 +121,10 @@ export const updateHistoryEntryHandler: Handler<
 
 		const { id, createdAt, updatedAt, embedding, embeddingModel, vectorizedAt, ...fields } = { ...params.historyEntry }
 
-		// Update the entry (strip auto-managed/binary fields that must not be overwritten from client)
+		// Update the entry; reset embedding so the queue re-vectorizes it
 		await db
 			.update(schema.historyEntries)
-			.set(fields)
+			.set({ ...fields, embedding: null, embeddingModel: null, vectorizedAt: null })
 			.where(eq(schema.historyEntries.id, id))
 
 		// Get updated entry
@@ -129,6 +132,8 @@ export const updateHistoryEntryHandler: Handler<
 			.select()
 			.from(schema.historyEntries)
 			.where(eq(schema.historyEntries.id, id))
+
+		autoEnqueueLorebook(existingEntry.lorebookId, (existingEntry as any).lorebook?.name ?? "", "").catch(console.error)
 
 		// Refresh lorebook bindings and entry list
 		if (emitToUser) {

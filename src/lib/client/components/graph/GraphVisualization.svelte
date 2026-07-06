@@ -39,7 +39,8 @@
 		vx: number
 		vy: number
 		label: string
-		nodeType: string
+		nodeState: string
+		nodeVisibility: string
 		pinned: boolean
 	}
 
@@ -109,37 +110,26 @@
 
 	// ── Perspective scope ─────────────────────────────────────────────────────
 	let perspectiveNodeId = $state<number | null>(null)
-	let maxHops = $state(2)
-	const HOP_OPTIONS = [1, 2, 3, Infinity] as const
 
-	/** BFS from perspectiveNodeId across all relationships (undirected). */
+	/** Direct neighbors of the focal node (1-hop, both directions). */
 	let inScopeIds = $derived.by((): Set<number> | null => {
 		if (perspectiveNodeId === null) return null
-		const visited = new Set<number>([perspectiveNodeId])
-		let frontier = new Set<number>([perspectiveNodeId])
-		for (let hop = 0; hop < maxHops; hop++) {
-			const next = new Set<number>()
-			for (const id of frontier) {
-				for (const r of relationships) {
-					if (r.fromNodeId === id && !visited.has(r.toNodeId)) {
-						next.add(r.toNodeId); visited.add(r.toNodeId)
-					} else if (r.toNodeId === id && !visited.has(r.fromNodeId)) {
-						next.add(r.fromNodeId); visited.add(r.fromNodeId)
-					}
-				}
-			}
-			frontier = next
-			if (frontier.size === 0) break
+		const ids = new Set<number>([perspectiveNodeId])
+		for (const r of relationships) {
+			if (r.fromNodeId === perspectiveNodeId) ids.add(r.toNodeId)
+			else if (r.toNodeId === perspectiveNodeId) ids.add(r.fromNodeId)
 		}
-		return visited
+		return ids
 	})
 
 	function inScope(id: number): boolean {
 		return inScopeIds === null || inScopeIds.has(id)
 	}
 
+	/** Only show edges that directly touch the focal node. */
 	function edgeInScope(src: number, tgt: number): boolean {
-		return inScopeIds === null || (inScopeIds.has(src) && inScopeIds.has(tgt))
+		if (inScopeIds === null) return true
+		return src === perspectiveNodeId || tgt === perspectiveNodeId
 	}
 
 	function clearPerspective() {
@@ -160,8 +150,9 @@
 				x: width / 2 + r * Math.cos(angle) + (Math.random() - 0.5) * 30,
 				y: height / 2 + r * Math.sin(angle) + (Math.random() - 0.5) * 30,
 				vx: 0, vy: 0,
-				label: n.name || n.nodeType,
-				nodeType: n.nodeType,
+				label: n.name,
+				nodeState: n.nodeState ?? "active",
+				nodeVisibility: n.nodeVisibility ?? "normal",
 				pinned: false
 			}
 			nodeMap.set(n.id, node)
@@ -347,13 +338,11 @@
 	})
 
 	// ── Colors & dash patterns ────────────────────────────────────────────────
-	const NODE_COLORS: Record<string, string> = {
-		character: "#7c6af7",
-		location:  "#3b82f6",
-		faction:   "#f59e0b",
-		item:      "#10b981",
-		concept:   "#ec4899",
-		event:     "#f97316"
+	const NODE_STATE_COLORS: Record<string, string> = {
+		active:   "#6366f1",
+		deceased: "#ef4444",
+		missing:  "#6b7280",
+		departed: "#f59e0b"
 	}
 
 	const REL_STATUS_DASH: Record<string, string> = {
@@ -363,8 +352,8 @@
 		evolved:  "6 2 2 2"
 	}
 
-	function nodeColor(t: string) { return NODE_COLORS[t] ?? "#6b7280" }
-	function edgeDash(s: string)  { return REL_STATUS_DASH[s] ?? "none" }
+	function nodeColor(state: string) { return NODE_STATE_COLORS[state] ?? "#6366f1" }
+	function edgeDash(s: string)      { return REL_STATUS_DASH[s] ?? "none" }
 	function getSimNode(id: number) { return simNodes.find((n) => n.id === id) }
 
 	// ── Parallel edge bundling ────────────────────────────────────────────────
@@ -431,24 +420,12 @@
 		{#if perspectiveNodeId !== null}
 			<div class="bg-surface-200-800/90 backdrop-blur-sm rounded flex items-center gap-1 px-2 py-1 pointer-events-auto">
 				<Icons.Crosshair size={12} class="text-primary-400 shrink-0" />
-				<span class="text-xs text-surface-200 max-w-28 truncate">{perspectiveNodeName}</span>
-				<!-- Hop selector -->
-				<div class="flex gap-px ml-1">
-					{#each HOP_OPTIONS as h}
-						<button
-							class="px-1.5 py-0.5 rounded text-xs transition-colors
-								{maxHops === h
-									? 'bg-primary-500 text-white'
-									: 'text-surface-400 hover:text-surface-200'}"
-							onclick={() => (maxHops = h)}
-							title="{h === Infinity ? 'All' : h} hop{h === 1 ? '' : 's'}"
-						>{h === Infinity ? '∞' : h}</button>
-					{/each}
-				</div>
+				<span class="text-xs text-surface-200 max-w-36 truncate">{perspectiveNodeName}</span>
+				<span class="text-surface-500 text-xs ml-0.5">· direct</span>
 				<button
 					class="ml-1 text-surface-500 hover:text-surface-200"
 					onclick={clearPerspective}
-					title="Clear perspective"
+					title="Clear perspective (or click background)"
 				>
 					<Icons.X size={12} />
 				</button>
@@ -526,11 +503,11 @@
 			{#each simNodes as node}
 				{@const scoped = inScope(node.id)}
 				{@const isFocal = node.id === perspectiveNodeId}
+				{@const color = nodeColor(node.nodeState)}
 				<!-- svelte-ignore a11y_click_events_have_key_events -->
 				<g
 					class="cursor-pointer"
 					onclick={() => {
-						// Toggle perspective on click
 						if (perspectiveNodeId === node.id) {
 							clearPerspective()
 						} else {
@@ -543,38 +520,49 @@
 					opacity={scoped ? 1 : 0.12}
 					style="transition: opacity 0.2s"
 				>
-					<title>{node.label}</title>
-					<!-- Focal ring -->
+					<title>{node.label} ({node.nodeState})</title>
+					<!-- Focal dashed ring -->
 					{#if isFocal}
 						<circle
 							cx={node.x} cy={node.y}
 							r={NODE_RADIUS + 6}
 							fill="none"
-							stroke={nodeColor(node.nodeType)}
+							stroke={color}
 							stroke-width="2"
 							stroke-dasharray="4 2"
 							opacity="0.8"
 						/>
 					{/if}
+					<!-- Legendary gold ring -->
+					{#if node.nodeVisibility === "legendary"}
+						<circle
+							cx={node.x} cy={node.y}
+							r={NODE_RADIUS + 4}
+							fill="none"
+							stroke="#f59e0b"
+							stroke-width="2"
+							opacity="0.9"
+						/>
+					{/if}
 					<circle
 						cx={node.x} cy={node.y}
 						r={NODE_RADIUS}
-						fill={nodeColor(node.nodeType)}
-						stroke="white"
-						stroke-width="2"
-						opacity="0.9"
+						fill={color}
+						stroke="rgba(255,255,255,0.25)"
+						stroke-width="1.5"
+						opacity={node.nodeVisibility === "hidden" ? 0.4 : 0.9}
 					/>
+					<!-- Deceased X mark -->
+					{#if node.nodeState === "deceased"}
+						<line x1={node.x - 6} y1={node.y - 6} x2={node.x + 6} y2={node.y + 6} stroke="white" stroke-width="1.5" opacity="0.5" class="pointer-events-none" />
+						<line x1={node.x + 6} y1={node.y - 6} x2={node.x - 6} y2={node.y + 6} stroke="white" stroke-width="1.5" opacity="0.5" class="pointer-events-none" />
+					{/if}
 					<text
 						x={node.x} y={node.y + 1}
 						text-anchor="middle" dominant-baseline="middle"
 						font-size="9" font-weight="600" fill="white"
 						class="pointer-events-none select-none"
 					>{node.label.length > 12 ? node.label.slice(0, 11) + "…" : node.label}</text>
-					<text
-						x={node.x} y={node.y + NODE_RADIUS + 10}
-						text-anchor="middle" font-size="8" fill="#9ca3af"
-						class="pointer-events-none select-none"
-					>{node.nodeType}</text>
 				</g>
 			{/each}
 		</g>
@@ -598,19 +586,32 @@
 	</div>
 
 	<!-- ── Bottom-right: legend ────────────────────────────────────────── -->
-	<details class="absolute bottom-2 right-2 text-xs">
+	<details class="absolute bottom-2 right-2 text-xs" style="bottom: 2.5rem">
 		<summary class="bg-surface-200-800/80 text-surface-400 cursor-pointer select-none rounded px-2 py-1 backdrop-blur-sm">
 			Legend
 		</summary>
-		<div class="bg-surface-200-800/90 mt-1 rounded-lg p-2 backdrop-blur-sm space-y-2 min-w-36">
+		<div class="bg-surface-200-800/90 rounded-lg p-2 backdrop-blur-sm space-y-2 min-w-40" style="position:absolute;bottom:100%;right:0;margin-bottom:4px">
 			<div class="space-y-1">
-				<p class="text-surface-500 font-semibold uppercase tracking-wide" style="font-size:9px">Node types</p>
-				{#each Object.entries(NODE_COLORS) as [type, color]}
+				<p class="text-surface-500 font-semibold uppercase tracking-wide" style="font-size:9px">Node state</p>
+				{#each Object.entries(NODE_STATE_COLORS) as [state, color]}
 					<div class="flex items-center gap-1.5">
-						<span class="h-3 w-3 rounded-full shrink-0" style="background:{color}"></span>
-						<span class="text-surface-300">{type}</span>
+						<svg width="16" height="16" class="shrink-0">
+							<circle cx="8" cy="8" r="7" fill={color} opacity="0.9" />
+							{#if state === "deceased"}
+								<line x1="4" y1="4" x2="12" y2="12" stroke="white" stroke-width="1.5" opacity="0.5" />
+								<line x1="12" y1="4" x2="4" y2="12" stroke="white" stroke-width="1.5" opacity="0.5" />
+							{/if}
+						</svg>
+						<span class="text-surface-300 capitalize">{state}</span>
 					</div>
 				{/each}
+				<div class="flex items-center gap-1.5 mt-0.5">
+					<svg width="16" height="16" class="shrink-0">
+						<circle cx="8" cy="8" r="6" fill="#6366f1" opacity="0.9" />
+						<circle cx="8" cy="8" r="7" fill="none" stroke="#f59e0b" stroke-width="2" opacity="0.9" />
+					</svg>
+					<span class="text-surface-300">legendary</span>
+				</div>
 			</div>
 			<div class="border-surface-600 border-t pt-2 space-y-1">
 				<p class="text-surface-500 font-semibold uppercase tracking-wide" style="font-size:9px">Edge status</p>

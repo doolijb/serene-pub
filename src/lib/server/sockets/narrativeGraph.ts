@@ -1,15 +1,21 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { eq, asc, and, isNotNull, isNull, or, gt, notExists, sql } from "drizzle-orm"
+import type { NodeState, NodeVisibility, RelationshipVisibility } from "$lib/server/db/schema"
+import { eq, asc, desc, and, isNotNull, isNull, gt, notExists, sql, inArray } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import {
 	buildGraphFromScenes,
 	GraphParseError,
 	type GraphBuilderScene,
 	type GraphBuilderSeedNode,
-	type GraphBuilderSeedRelationship
+	type GraphBuilderSeedRelationship,
+	type GraphBuilderResumeState
 } from "$lib/server/utils/graphBuilder"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
+import { activityStore } from "$lib/server/utils/activityStore"
+
+// Resume states saved before each scene — keyed by "userId:lorebookId"
+const buildResumeStates = new Map<string, GraphBuilderResumeState>()
 
 // ─── List ─────────────────────────────────────────────────────────────────────
 
@@ -141,6 +147,19 @@ export const narrativeGraphBuildHandler: Handler<
 		})
 		if (!lorebook) throw new Error("Lorebook not found or access denied.")
 
+		const mode = params.mode ?? "replace"
+		const resumeKey = `${userId}:${params.lorebookId}`
+		const resumeState = params.resume ? buildResumeStates.get(resumeKey) : undefined
+
+		const activityId = activityStore.start({
+			userId,
+			lorebookId: params.lorebookId,
+			lorebookLabel: lorebook.name,
+			mode
+		})
+		const abortController = new AbortController()
+		activityStore.setAbortController(activityId, abortController)
+
 		// Fetch scenes, direct history entries, and bindings
 		const [rawScenes, rawDirectEntries] = await Promise.all([
 			// All scenes for this lorebook with their history entries
@@ -205,17 +224,17 @@ export const narrativeGraphBuildHandler: Handler<
 
 		// In extend mode, only process scenes not yet graphed
 		const filteredRawScenes =
-			params.mode === "extend" ? (rawScenes as any[]).filter((s) => !s.graphed) : rawScenes
+			mode === "extend" ? (rawScenes as any[]).filter((s) => !s.graphed) : rawScenes
 
 		// In extend mode, only process direct entries not yet graphed
 		const filteredDirectEntries =
-			params.mode === "extend" ? rawDirectEntries.filter((e) => !e.graphed) : rawDirectEntries
+			mode === "extend" ? rawDirectEntries.filter((e) => !e.graphed) : rawDirectEntries
 
-		if (params.mode === "extend" && filteredRawScenes.length === 0 && filteredDirectEntries.length === 0) {
-			const errRes: Sockets.NarrativeGraph.Build.ErrorResponse = {
-				error: "No new content to process. All scenes and history entries have already been graphed."
-			}
-			emitToUser("narrativeGraph:build:error", errRes)
+		if (mode === "extend" && filteredRawScenes.length === 0 && filteredDirectEntries.length === 0) {
+			activityStore.update(activityId, {
+				status: "error",
+				errorMessage: "No new content to process. All scenes and history entries have already been graphed."
+			})
 			return { proposal: { nodes: [], relationships: [] }, sceneLabels: [], seedTempIdMap: {} }
 		}
 
@@ -226,7 +245,11 @@ export const narrativeGraphBuildHandler: Handler<
 				name: s.name,
 				summary: s.summary ? resolveBindings(s.summary) : s.summary,
 				historyEntryId: s.historyEntryId ?? null,
-				historyEntry: s.historyEntry ?? null
+				historyEntry: s.historyEntry ?? null,
+				participantCharacters: s.participantCharacters ?? null,
+				mentionedCharacters: s.mentionedCharacters ?? null,
+				chatId: s.chatId ?? null,
+				selectedMessageIds: s.selectedMessageIds?.length ? s.selectedMessageIds : null
 			})),
 			// Map direct history entries to GraphBuilderScene format
 			...filteredDirectEntries.map((he) => ({
@@ -246,11 +269,11 @@ export const narrativeGraphBuildHandler: Handler<
 			throw new Error("No AI connection configured. Please set up a connection first.")
 		}
 
-		// In extend mode, load existing nodes and relationships as LLM seed context
+		// Load seed nodes and relationships for LLM context
 		let seedNodes: GraphBuilderSeedNode[] | undefined
 		let seedRelationships: GraphBuilderSeedRelationship[] | undefined
-		if (params.mode === "extend") {
-			const [existingNodes, existingRelationships] = await Promise.all([
+		if (mode === "extend") {
+			const [allNodes, existingRelationships] = await Promise.all([
 				db.query.narrativeNodes.findMany({
 					where: eq(schema.narrativeNodes.lorebookId, params.lorebookId),
 					orderBy: asc(schema.narrativeNodes.id)
@@ -260,22 +283,76 @@ export const narrativeGraphBuildHandler: Handler<
 					orderBy: asc(schema.narrativeRelationships.id)
 				})
 			])
-			seedNodes = existingNodes.map((n) => ({
-				id: n.id,
-				nodeType: n.nodeType,
-				name: n.name,
-				nodeState: n.nodeState,
-				summary: n.summary
-			}))
+			// Build alias name map: non-hidden alias-child names per parent
+			const childrenByParent = new Map<number, string[]>()
+			for (const n of allNodes) {
+				if (n.parentNodeId !== null && n.nodeVisibility !== "hidden") {
+					const list = childrenByParent.get(n.parentNodeId) ?? []
+					list.push(n.name)
+					childrenByParent.set(n.parentNodeId, list)
+				}
+			}
+			// Only parent (non-alias) nodes as seeds; combine node's own aliases + child names
+			seedNodes = allNodes
+				.filter((n) => n.parentNodeId === null)
+				.map((n) => ({
+					id: n.id,
+					name: n.name,
+					nodeState: n.nodeState,
+					summary: n.summary,
+					aliases: [...new Set([...(n.aliases ?? []), ...(childrenByParent.get(n.id) ?? [])])]
+				}))
 			seedRelationships = existingRelationships.map((r) => ({
 				fromNodeId: r.fromNodeId,
 				toNodeId: r.toNodeId,
 				relationshipType: r.relationshipType,
+				visibility: r.visibility,
 				status: r.status,
 				description: r.description,
 				reason: r.reason
 			}))
+		} else {
+			// Replace mode: seed LLM with names from all lorebook bindings (characters + personas).
+			// All existing nodes are deleted and rebuilt fresh — bindings are re-linked after insertion.
+			const bindings = await db.query.lorebookBindings.findMany({
+				where: eq(schema.lorebookBindings.lorebookId, params.lorebookId),
+				orderBy: asc(schema.lorebookBindings.id)
+			})
+			if (bindings.length > 0) {
+				const characterIds = bindings.map((b) => b.characterId).filter((id): id is number => id != null)
+				const personaIds = bindings.map((b) => b.personaId).filter((id): id is number => id != null)
+
+				const [characters, personas] = await Promise.all([
+					characterIds.length > 0
+						? db.select({ id: schema.characters.id, name: schema.characters.name, nickname: schema.characters.nickname, description: schema.characters.description, summary: schema.characters.summary, aliases: schema.characters.aliases }).from(schema.characters).where(inArray(schema.characters.id, characterIds))
+						: Promise.resolve([]),
+					personaIds.length > 0
+						? db.select({ id: schema.personas.id, name: schema.personas.name, description: schema.personas.description, summary: schema.personas.summary, aliases: schema.personas.aliases }).from(schema.personas).where(inArray(schema.personas.id, personaIds))
+						: Promise.resolve([])
+				])
+
+				const charMap = new Map(characters.map((c) => [c.id, c]))
+				const personaMap = new Map(personas.map((p) => [p.id, p]))
+
+				const seeds: GraphBuilderSeedNode[] = []
+				for (const b of bindings) {
+					if (b.characterId && charMap.has(b.characterId)) {
+						const char = charMap.get(b.characterId)!
+						const name = char.nickname || char.name
+						if (!name.trim()) continue
+						seeds.push({ bindingId: b.id, name: name.trim(), summary: char.summary?.trim() || char.description.trim(), nodeState: "active", aliases: char.aliases?.length ? char.aliases : undefined })
+					} else if (b.personaId && personaMap.has(b.personaId)) {
+						const persona = personaMap.get(b.personaId)!
+						const name = persona.name
+						if (!name.trim()) continue
+						seeds.push({ bindingId: b.id, name: name.trim(), summary: persona.summary?.trim() || persona.description.trim(), nodeState: "active", aliases: persona.aliases?.length ? persona.aliases : undefined })
+					}
+				}
+				if (seeds.length > 0) seedNodes = seeds
+			}
 		}
+
+		let latestSceneSnapshot: GraphBuilderResumeState | undefined
 
 		try {
 			const result = await buildGraphFromScenes({
@@ -286,31 +363,100 @@ export const narrativeGraphBuildHandler: Handler<
 				promptConfig,
 				seedNodes,
 				seedRelationships,
+				signal: abortController.signal,
+				resumeState,
+				onSceneStart: (state) => {
+					latestSceneSnapshot = state
+				},
 				onProgress: (data) => {
-					emitToUser("narrativeGraph:build:progress", data)
+					activityStore.update(activityId, {
+						phase: data.phase,
+						sceneIndex: data.sceneIndex,
+						totalScenes: data.totalScenes,
+						nodesFound: data.nodesFound,
+						relsFound: data.relationshipsFound,
+						currentPair: data.currentPair,
+						currentSceneLabel: data.currentSceneLabel
+					})
+				},
+				onLlmCall: (entry) => {
+					emitToUser("narrativeGraph:buildLog", entry)
+				},
+				fetchSceneMessages: async (chatId, messageIds) => {
+					if (messageIds.length === 0) return []
+					const msgs = await db.query.chatMessages.findMany({
+						where: and(
+							eq(schema.chatMessages.chatId, chatId),
+							inArray(schema.chatMessages.id, messageIds),
+							eq(schema.chatMessages.isHidden, false)
+						),
+						orderBy: asc(schema.chatMessages.id),
+						columns: { id: true, content: true, characterId: true, personaId: true, role: true }
+					})
+					const charIds = [...new Set(msgs.filter(m => m.characterId).map(m => m.characterId!))]
+					const personaIds = [...new Set(msgs.filter(m => m.personaId).map(m => m.personaId!))]
+					const [characters, personas] = await Promise.all([
+						charIds.length > 0
+							? db.select({ id: schema.characters.id, name: schema.characters.name, nickname: schema.characters.nickname }).from(schema.characters).where(inArray(schema.characters.id, charIds))
+							: Promise.resolve([]),
+						personaIds.length > 0
+							? db.select({ id: schema.personas.id, name: schema.personas.name }).from(schema.personas).where(inArray(schema.personas.id, personaIds))
+							: Promise.resolve([])
+					])
+					const characterMap = new Map(characters.map(c => [c.id, c.nickname || c.name]))
+					const personaMap = new Map(personas.map(p => [p.id, p.name]))
+					return msgs.map(m => ({
+						senderName: m.characterId
+							? (characterMap.get(m.characterId) ?? m.role ?? "Character")
+							: m.personaId
+								? (personaMap.get(m.personaId) ?? m.role ?? "User")
+								: (m.role ?? "System"),
+						content: m.content
+					}))
 				}
 			})
 
-			const res: Sockets.NarrativeGraph.Build.Response = {
-				proposal: result.proposal,
-				sceneLabels: result.sceneLabels,
-				seedTempIdMap: result.seedTempIdMap
-			}
-			emitToUser("narrativeGraph:build:complete", res)
-			return res
-		} catch (err) {
-			if (err instanceof GraphParseError) {
-				const errRes: Sockets.NarrativeGraph.Build.ErrorResponse = {
-					error: err.truncated
-						? "The model ran out of response tokens before finishing the graph. Increase Max Response Tokens in your sampling config and try again."
-						: err.message,
-					raw: err.raw
-				}
-				emitToUser("narrativeGraph:build:error", errRes)
-				// Return gracefully so the register wrapper doesn't also emit an error
+			// Build completed — clear any saved checkpoint for this lorebook
+			buildResumeStates.delete(resumeKey)
+
+			// Guard: if the user cancelled while the last LLM call was still completing,
+			// the abort signal may have fired after buildGraphFromScenes returned normally.
+			if (abortController.signal.aborted) {
 				return { proposal: { nodes: [], relationships: [] }, sceneLabels: [], seedTempIdMap: {} }
 			}
-			throw err
+
+			activityStore.update(activityId, {
+				status: "review",
+				proposal: result.proposal,
+				sceneLabels: result.sceneLabels,
+				seedTempIdMap: result.seedTempIdMap,
+				seedNodeNames: result.seedNodeNames
+			})
+			return { proposal: result.proposal, sceneLabels: result.sceneLabels, seedTempIdMap: result.seedTempIdMap }
+		} catch (err) {
+			// If the build was aborted (cancel/stop), return silently regardless of error type.
+			// An LLM network failure can race with the abort signal — treat both as a clean stop.
+			if (abortController.signal.aborted || (err instanceof Error && err.name === "AbortError")) {
+				return { proposal: { nodes: [], relationships: [] }, sceneLabels: [], seedTempIdMap: {} }
+			}
+			if (err instanceof GraphParseError) {
+				// Save the pre-scene snapshot so the user can retry from this exact scene
+				if (latestSceneSnapshot) buildResumeStates.set(resumeKey, latestSceneSnapshot)
+				activityStore.update(activityId, {
+					status: "error",
+					errorMessage: err.truncated
+						? "The model ran out of response tokens before finishing the graph. Increase Max Response Tokens in your sampling config and try again."
+						: err.message,
+					errorRaw: err.raw
+				})
+				return { proposal: { nodes: [], relationships: [] }, sceneLabels: [], seedTempIdMap: {} }
+			}
+			// Unexpected error (network failure, DB error, etc.) — show in modal rather than a generic toast
+			activityStore.update(activityId, {
+				status: "error",
+				errorMessage: err instanceof Error ? err.message : "An unexpected error occurred."
+			})
+			return { proposal: { nodes: [], relationships: [] }, sceneLabels: [], seedTempIdMap: {} }
 		}
 	}
 }
@@ -331,7 +477,7 @@ export const narrativeGraphApplyProposalHandler: Handler<
 		})
 		if (!lorebook) throw new Error("Lorebook not found or access denied.")
 
-		// In replace mode, delete everything first
+		// In replace mode, delete everything — nodes are rebuilt fresh from binding seeds.
 		if (mode === "replace") {
 			await db
 				.delete(schema.narrativeRelationships)
@@ -352,16 +498,33 @@ export const narrativeGraphApplyProposalHandler: Handler<
 				.insert(schema.narrativeNodes)
 				.values({
 					lorebookId,
-					nodeType: nodeProposal.nodeType,
 					name: nodeProposal.name,
-					nodeState: nodeProposal.nodeState ?? "active",
+					nodeState: (nodeProposal.nodeState ?? "active") as NodeState,
 					summary: nodeProposal.summary ?? "",
-					characterIds: nodeProposal.characterIds ?? [],
 					sceneId: nodeProposal.sceneId ?? null,
 					historyEntryId: nodeProposal.historyEntryId ?? null
 				})
 				.returning()
 			tempIdMap.set(nodeProposal.tempId, inserted.id)
+
+			// Re-link lorebook binding for nodes seeded from bindings; populate aliases
+			if (nodeProposal.tempId.startsWith("binding_")) {
+				const bindingId = parseInt(nodeProposal.tempId.slice("binding_".length))
+				if (!isNaN(bindingId)) {
+					const binding = await db.query.lorebookBindings.findFirst({
+						where: eq(schema.lorebookBindings.id, bindingId),
+						with: {
+							character: { columns: { aliases: true } },
+							persona: { columns: { aliases: true } }
+						}
+					})
+					const aliases = binding?.character?.aliases ?? binding?.persona?.aliases ?? []
+					await db
+						.update(schema.narrativeNodes)
+						.set({ lorebookBindingId: bindingId, aliases })
+						.where(eq(schema.narrativeNodes.id, inserted.id))
+				}
+			}
 		}
 
 		// Insert (or update) relationships
@@ -379,24 +542,17 @@ export const narrativeGraphApplyProposalHandler: Handler<
 				rel.toTempId.startsWith("existing_")
 
 			if (bothSeeds) {
-				// Try exact direction first; only fall back to reverse if not found.
-				// This preserves intentionally directed relationships (A→B ≠ B→A).
-				let existing = await db.query.narrativeRelationships.findFirst({
+				// Exact direction only — A→B and B→A are distinct perspective entries and
+				// must never be collapsed into one row. A new type between existing nodes
+				// that has no exact-match row falls through to INSERT below.
+				const existing = await db.query.narrativeRelationships.findFirst({
 					where: and(
 						eq(schema.narrativeRelationships.lorebookId, lorebookId),
 						eq(schema.narrativeRelationships.fromNodeId, fromId),
-						eq(schema.narrativeRelationships.toNodeId, toId)
+						eq(schema.narrativeRelationships.toNodeId, toId),
+						eq(schema.narrativeRelationships.relationshipType, rel.relationshipType ?? "neutral")
 					)
 				})
-				if (!existing) {
-					existing = await db.query.narrativeRelationships.findFirst({
-						where: and(
-							eq(schema.narrativeRelationships.lorebookId, lorebookId),
-							eq(schema.narrativeRelationships.fromNodeId, toId),
-							eq(schema.narrativeRelationships.toNodeId, fromId)
-						)
-					})
-				}
 
 				if (existing) {
 					await db
@@ -404,6 +560,7 @@ export const narrativeGraphApplyProposalHandler: Handler<
 						.set({
 							relationshipType: rel.relationshipType ?? existing.relationshipType,
 							description: rel.description ?? existing.description,
+							visibility: (rel.visibility ?? existing.visibility) as RelationshipVisibility,
 							status: rel.status ?? existing.status,
 							reason: rel.reason ?? existing.reason
 						})
@@ -418,6 +575,7 @@ export const narrativeGraphApplyProposalHandler: Handler<
 				toNodeId: toId,
 				relationshipType: rel.relationshipType ?? "neutral",
 				description: rel.description ?? "",
+				visibility: (rel.visibility ?? "acknowledged") as RelationshipVisibility,
 				status: rel.status ?? "active",
 				reason: rel.reason ?? null,
 				sceneId: rel.sceneId ?? null,
@@ -562,7 +720,8 @@ export const narrativeGraphUpdateNodeHandler: Handler<
 		}
 		await db
 			.update(schema.narrativeNodes)
-			.set(fields)
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			.set(fields as any)
 			.where(eq(schema.narrativeNodes.id, params.node.id))
 
 		const [updated] = await db
@@ -627,7 +786,8 @@ export const narrativeGraphUpdateRelationshipHandler: Handler<
 		const { id, createdAt, updatedAt, ...fields } = { ...params.relationship }
 		await db
 			.update(schema.narrativeRelationships)
-			.set(fields)
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			.set(fields as any)
 			.where(eq(schema.narrativeRelationships.id, params.relationship.id))
 
 		const [updated] = await db
@@ -679,7 +839,7 @@ export const narrativeGraphCreateRelationshipHandler: Handler<
 	event: "narrativeGraph:createRelationship",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
-		const { lorebookId, fromNodeId, toNodeId, relationshipType, status, description, historyEntryId } = params
+		const { lorebookId, fromNodeId, toNodeId, relationshipType, status, description, visibility, historyEntryId } = params
 
 		const lorebook = await db.query.lorebooks.findFirst({
 			where: (l, { and, eq }) => and(eq(l.id, lorebookId), eq(l.userId, userId))
@@ -700,6 +860,7 @@ export const narrativeGraphCreateRelationshipHandler: Handler<
 				fromNodeId,
 				toNodeId,
 				relationshipType,
+				visibility: (visibility ?? "acknowledged") as RelationshipVisibility,
 				status,
 				description: description ?? "",
 				reason: null,
@@ -711,6 +872,468 @@ export const narrativeGraphCreateRelationshipHandler: Handler<
 		emitToUser("narrativeGraph:createRelationship", res)
 		return res
 	}
+}
+
+// ─── Create node (manual) ─────────────────────────────────────────────────────
+
+export const narrativeGraphCreateNodeHandler: Handler<
+	Sockets.NarrativeGraph.CreateNode.Params,
+	Sockets.NarrativeGraph.CreateNode.Response
+> = {
+	event: "narrativeGraph:createNode",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const { lorebookId, name, nodeState, nodeVisibility, summary, historyEntryId } = params
+
+		const lorebook = await db.query.lorebooks.findFirst({
+			where: (l, { and, eq }) => and(eq(l.id, lorebookId), eq(l.userId, userId))
+		})
+		if (!lorebook) throw new Error("Lorebook not found or access denied.")
+
+		const [node] = await db
+			.insert(schema.narrativeNodes)
+			.values({
+				lorebookId,
+				name,
+				nodeState: (nodeState ?? "active") as NodeState,
+				nodeVisibility: (nodeVisibility ?? "normal") as NodeVisibility,
+				summary: summary ?? null,
+				historyEntryId: historyEntryId ?? null,
+				characterIds: []
+			})
+			.returning()
+
+		const res: Sockets.NarrativeGraph.CreateNode.Response = { node }
+		emitToUser("narrativeGraph:createNode", res)
+		return res
+	}
+}
+
+// ─── Query context (three-layer injection) ────────────────────────────────────
+
+export const narrativeGraphQueryContextHandler: Handler<
+	Sockets.NarrativeGraph.QueryContext.Params,
+	Sockets.NarrativeGraph.QueryContext.Response
+> = {
+	event: "narrativeGraph:queryContext",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const { lorebookId, chatId, speakerCharacterId, speakerPersonaId } = params
+
+		const lorebook = await db.query.lorebooks.findFirst({
+			where: (l, { and, eq }) => and(eq(l.id, lorebookId), eq(l.userId, userId))
+		})
+		if (!lorebook) throw new Error("Lorebook not found or access denied.")
+
+		// Resolve speaker's root node via binding
+		let speakerNodeId: number | null = null
+		if (speakerCharacterId || speakerPersonaId) {
+			const binding = await db.query.lorebookBindings.findFirst({
+				where: and(
+					eq(schema.lorebookBindings.lorebookId, lorebookId),
+					speakerCharacterId
+						? eq(schema.lorebookBindings.characterId, speakerCharacterId)
+						: eq(schema.lorebookBindings.personaId, speakerPersonaId!)
+				),
+				columns: { id: true }
+			})
+			if (binding) {
+				const speakerNode = await db.query.narrativeNodes.findFirst({
+					where: and(
+						eq(schema.narrativeNodes.lorebookId, lorebookId),
+						eq(schema.narrativeNodes.lorebookBindingId, binding.id)
+					),
+					columns: { id: true }
+				})
+				speakerNodeId = speakerNode?.id ?? null
+			}
+		}
+
+		const res: Sockets.NarrativeGraph.QueryContext.Response = {
+			speakerRelationships: [],
+			inverseRelationships: [],
+			legendaryNodes: []
+		}
+
+		if (!speakerNodeId) {
+			emitToUser("narrativeGraph:queryContext", res)
+			return res
+		}
+
+		// Helper: resolve node name+state by id from a pre-fetched map
+		async function fetchNodeMap(nodeIds: number[]) {
+			if (nodeIds.length === 0) return new Map<number, { name: string; nodeState: string; nodeVisibility: string }>()
+			const nodes = await db.query.narrativeNodes.findMany({
+				where: inArray(schema.narrativeNodes.id, nodeIds),
+				columns: { id: true, name: true, nodeState: true, nodeVisibility: true }
+			})
+			return new Map(nodes.map((n) => [n.id, { name: n.name, nodeState: n.nodeState, nodeVisibility: n.nodeVisibility }]))
+		}
+
+		function relEntry(
+			r: { fromNodeId: number; toNodeId: number; relationshipType: string; description: string; visibility: string },
+			nodeMap: Map<number, { name: string; nodeState: string; nodeVisibility: string }>
+		): Sockets.NarrativeGraph.QueryContext.RelationshipEntry {
+			const from = nodeMap.get(r.fromNodeId)
+			const to = nodeMap.get(r.toNodeId)
+			return {
+				fromNodeId: r.fromNodeId,
+				fromNodeName: from?.name ?? "",
+				fromNodeState: from?.nodeState ?? "active",
+				toNodeId: r.toNodeId,
+				toNodeName: to?.name ?? "",
+				toNodeState: to?.nodeState ?? "active",
+				relationshipType: r.relationshipType,
+				description: r.description,
+				visibility: r.visibility
+			}
+		}
+
+		// ── Layer 1: speaker's outbound relationships ─────────────────────────────
+		const speakerRels = await db.query.narrativeRelationships.findMany({
+			where: and(
+				eq(schema.narrativeRelationships.lorebookId, lorebookId),
+				eq(schema.narrativeRelationships.fromNodeId, speakerNodeId)
+			)
+		})
+
+		const l1NodeIds = [...new Set([...speakerRels.map((r) => r.fromNodeId), ...speakerRels.map((r) => r.toNodeId)])]
+		const l1NodeMap = await fetchNodeMap(l1NodeIds)
+
+		res.speakerRelationships = speakerRels
+			.filter((r) => l1NodeMap.get(r.toNodeId)?.nodeVisibility !== "hidden")
+			.map((r) => relEntry(r, l1NodeMap))
+
+		// ── Layer 2: inverse rels from chat participants → speaker (acknowledged/public only) ──
+		const [chatChars, chatPersonas] = await Promise.all([
+			db.query.chatCharacters.findMany({
+				where: eq(schema.chatCharacters.chatId, chatId),
+				columns: { characterId: true }
+			}),
+			db.query.chatPersonas.findMany({
+				where: eq(schema.chatPersonas.chatId, chatId),
+				columns: { personaId: true }
+			})
+		])
+
+		const chatCharIds = chatChars
+			.map((c) => c.characterId)
+			.filter((id): id is number => id !== null && id !== speakerCharacterId)
+		const chatPersonaIds = chatPersonas
+			.map((p) => p.personaId)
+			.filter((id): id is number => id !== null && id !== (speakerPersonaId ?? -1))
+
+		if (chatCharIds.length > 0 || chatPersonaIds.length > 0) {
+			const participantBindings = await db.query.lorebookBindings.findMany({
+				where: and(
+					eq(schema.lorebookBindings.lorebookId, lorebookId),
+					sql`(
+						${chatCharIds.length > 0 ? sql`${schema.lorebookBindings.characterId} IN (${sql.join(chatCharIds.map((id) => sql`${id}`), sql`, `)})` : sql`false`}
+						OR
+						${chatPersonaIds.length > 0 ? sql`${schema.lorebookBindings.personaId} IN (${sql.join(chatPersonaIds.map((id) => sql`${id}`), sql`, `)})` : sql`false`}
+					)`
+				),
+				columns: { id: true }
+			})
+
+			const participantBindingIds = participantBindings.map((b) => b.id)
+			const participantNodeIds = participantBindingIds.length > 0
+				? (await db.query.narrativeNodes.findMany({
+					where: and(
+						eq(schema.narrativeNodes.lorebookId, lorebookId),
+						inArray(schema.narrativeNodes.lorebookBindingId, participantBindingIds)
+					),
+					columns: { id: true }
+				})).map((n) => n.id).filter((id) => id !== speakerNodeId)
+				: []
+
+			if (participantNodeIds.length > 0) {
+				const inverseRels = await db.query.narrativeRelationships.findMany({
+					where: and(
+						eq(schema.narrativeRelationships.lorebookId, lorebookId),
+						eq(schema.narrativeRelationships.toNodeId, speakerNodeId),
+						inArray(schema.narrativeRelationships.fromNodeId, participantNodeIds),
+						inArray(schema.narrativeRelationships.visibility, ["acknowledged", "public"] as RelationshipVisibility[])
+					)
+				})
+
+				const l2NodeIds = [...new Set([...inverseRels.map((r) => r.fromNodeId), ...inverseRels.map((r) => r.toNodeId)])]
+				const l2NodeMap = await fetchNodeMap(l2NodeIds)
+				res.inverseRelationships = inverseRels.map((r) => relEntry(r, l2NodeMap))
+			}
+		}
+
+		// ── Layer 3: legendary nodes (nodeVisibility="legendary") + public rels ──
+		const legendaryNodes = await db.query.narrativeNodes.findMany({
+			where: and(
+				eq(schema.narrativeNodes.lorebookId, lorebookId),
+				eq(schema.narrativeNodes.nodeVisibility, "legendary" as NodeVisibility)
+			),
+			orderBy: desc(schema.narrativeNodes.updatedAt),
+			limit: 5
+		})
+
+		for (const node of legendaryNodes) {
+			const publicRels = await db.query.narrativeRelationships.findMany({
+				where: and(
+					eq(schema.narrativeRelationships.lorebookId, lorebookId),
+					eq(schema.narrativeRelationships.fromNodeId, node.id),
+					eq(schema.narrativeRelationships.visibility, "public" as RelationshipVisibility)
+				)
+			})
+
+			const l3NodeIds = [...new Set([...publicRels.map((r) => r.fromNodeId), ...publicRels.map((r) => r.toNodeId)])]
+			const l3NodeMap = await fetchNodeMap(l3NodeIds)
+			l3NodeMap.set(node.id, { name: node.name, nodeState: node.nodeState, nodeVisibility: "legendary" })
+
+			res.legendaryNodes.push({
+				nodeId: node.id,
+				nodeName: node.name,
+				summary: node.summary,
+				publicRelationships: publicRels.map((r) => relEntry(r, l3NodeMap))
+			})
+		}
+
+		emitToUser("narrativeGraph:queryContext", res)
+		return res
+	}
+}
+
+// ─── Link binding to node ─────────────────────────────────────────────────────
+
+export const narrativeGraphLinkBindingNodeHandler: Handler<
+	Sockets.NarrativeGraph.LinkBindingNode.Params,
+	Sockets.NarrativeGraph.LinkBindingNode.Response
+> = {
+	event: "narrativeGraph:linkBindingNode",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const { bindingId, nodeId } = params
+
+		const binding = await db.query.lorebookBindings.findFirst({
+			where: eq(schema.lorebookBindings.id, bindingId),
+			with: {
+				character: { columns: { aliases: true, summary: true, description: true } },
+				persona: { columns: { aliases: true, summary: true, description: true } }
+			}
+		})
+		if (!binding) throw new Error("Binding not found.")
+		const lorebookForBinding = await db.query.lorebooks.findFirst({
+			where: and(eq(schema.lorebooks.id, binding.lorebookId), eq(schema.lorebooks.userId, userId))
+		})
+		if (!lorebookForBinding) throw new Error("Access denied.")
+
+		const bindingAliases = binding.character?.aliases ?? binding.persona?.aliases ?? []
+		const bindingEntity = binding.character ?? binding.persona
+		const bindingSummary = bindingEntity
+			? (bindingEntity.summary?.trim() || bindingEntity.description.trim() || null)
+			: null
+
+		let resolvedNodeId: number
+
+		if (nodeId !== null) {
+			// Link to existing node — clear any previous binding on it first
+			const node = await db.query.narrativeNodes.findFirst({
+				where: and(
+					eq(schema.narrativeNodes.id, nodeId),
+					eq(schema.narrativeNodes.lorebookId, binding.lorebookId)
+				)
+			})
+			if (!node) throw new Error("Node not found.")
+			resolvedNodeId = node.id
+		} else {
+			// Auto-create a new node for this binding
+			const entityName = await resolveBindingName(binding)
+			const [created] = await db
+				.insert(schema.narrativeNodes)
+				.values({
+					lorebookId: binding.lorebookId,
+					name: entityName,
+					nodeState: "active" as NodeState,
+					aliases: bindingAliases,
+					summary: bindingSummary,
+					lorebookBindingId: bindingId
+				})
+				.returning()
+			resolvedNodeId = created.id
+		}
+
+		if (nodeId !== null) {
+			// Clear old owner (unique constraint) then set new; populate aliases from binding
+			await db
+				.update(schema.narrativeNodes)
+				.set({ lorebookBindingId: null })
+				.where(eq(schema.narrativeNodes.lorebookBindingId, bindingId))
+			await db
+				.update(schema.narrativeNodes)
+				.set({ lorebookBindingId: bindingId, aliases: bindingAliases })
+				.where(eq(schema.narrativeNodes.id, resolvedNodeId))
+		}
+
+		const res: Sockets.NarrativeGraph.LinkBindingNode.Response = {
+			bindingId,
+			nodeId: resolvedNodeId
+		}
+		emitToUser("narrativeGraph:linkBindingNode", res)
+		return res
+	}
+}
+
+// ─── Link orphaned binding to character/persona ───────────────────────────────
+
+export const narrativeGraphLinkOrphanBindingHandler: Handler<
+	Sockets.NarrativeGraph.LinkOrphanBinding.Params,
+	Sockets.NarrativeGraph.LinkOrphanBinding.Response
+> = {
+	event: "narrativeGraph:linkOrphanBinding",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const { bindingId, characterId, personaId, skip } = params
+
+		const binding = await db.query.lorebookBindings.findFirst({
+			where: eq(schema.lorebookBindings.id, bindingId)
+		})
+		if (!binding) throw new Error("Binding not found.")
+		const lorebookForOrphan = await db.query.lorebooks.findFirst({
+			where: and(eq(schema.lorebooks.id, binding.lorebookId), eq(schema.lorebooks.userId, userId))
+		})
+		if (!lorebookForOrphan) throw new Error("Access denied.")
+
+		if (!skip && (characterId || personaId)) {
+			await db
+				.update(schema.lorebookBindings)
+				.set({
+					characterId: characterId ?? null,
+					personaId: personaId ?? null
+				})
+				.where(eq(schema.lorebookBindings.id, bindingId))
+		}
+
+		const res: Sockets.NarrativeGraph.LinkOrphanBinding.Response = { success: true }
+		emitToUser("narrativeGraph:linkOrphanBinding", res)
+		return res
+	}
+}
+
+// ─── Merge Node ───────────────────────────────────────────────────────────────
+
+export const narrativeGraphMergeNodeHandler: Handler<
+	Sockets.NarrativeGraph.MergeNode.Params,
+	Sockets.NarrativeGraph.MergeNode.Response
+> = {
+	event: "narrativeGraph:mergeNode",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const { nodeId, parentNodeId } = params
+
+		const [child, parent] = await Promise.all([
+			db.query.narrativeNodes.findFirst({ where: eq(schema.narrativeNodes.id, nodeId) }),
+			db.query.narrativeNodes.findFirst({ where: eq(schema.narrativeNodes.id, parentNodeId) })
+		])
+		if (!child) throw new Error("Node not found.")
+		if (!parent) throw new Error("Parent node not found.")
+		if (child.lorebookId !== parent.lorebookId) throw new Error("Nodes must belong to the same lorebook.")
+
+		const lorebook = await db.query.lorebooks.findFirst({
+			where: and(eq(schema.lorebooks.id, child.lorebookId), eq(schema.lorebooks.userId, userId))
+		})
+		if (!lorebook) throw new Error("Access denied.")
+
+		// Guard: cannot merge two bound nodes (distinct individuals)
+		if (child.lorebookBindingId && parent.lorebookBindingId) {
+			throw new Error("Cannot merge two nodes that are both linked to character bindings — they represent distinct individuals.")
+		}
+
+		// Guard: parent must not already be a child (2-level max)
+		if (parent.parentNodeId !== null) {
+			throw new Error("Cannot merge into a node that is already an alias. Merge into its parent instead.")
+		}
+
+		// Flatten grandchildren: reparent existing children of the merging node to the new parent
+		await db
+			.update(schema.narrativeNodes)
+			.set({ parentNodeId })
+			.where(eq(schema.narrativeNodes.parentNodeId, nodeId))
+
+		// Transfer binding from child to parent if applicable
+		if (child.lorebookBindingId && !parent.lorebookBindingId) {
+			await db
+				.update(schema.narrativeNodes)
+				.set({ lorebookBindingId: child.lorebookBindingId })
+				.where(eq(schema.narrativeNodes.id, parentNodeId))
+			await db
+				.update(schema.narrativeNodes)
+				.set({ lorebookBindingId: null })
+				.where(eq(schema.narrativeNodes.id, nodeId))
+		}
+
+		// Set the parent link
+		await db
+			.update(schema.narrativeNodes)
+			.set({ parentNodeId })
+			.where(eq(schema.narrativeNodes.id, nodeId))
+
+		const [updatedChild, updatedParent] = await Promise.all([
+			db.query.narrativeNodes.findFirst({ where: eq(schema.narrativeNodes.id, nodeId) }),
+			db.query.narrativeNodes.findFirst({ where: eq(schema.narrativeNodes.id, parentNodeId) })
+		])
+
+		const res: Sockets.NarrativeGraph.MergeNode.Response = {
+			parentNode: updatedParent!,
+			childNode: updatedChild!
+		}
+		emitToUser("narrativeGraph:mergeNode", res)
+		return res
+	}
+}
+
+export const narrativeGraphDemergeNodeHandler: Handler<
+	Sockets.NarrativeGraph.DemergeNode.Params,
+	Sockets.NarrativeGraph.DemergeNode.Response
+> = {
+	event: "narrativeGraph:demergeNode",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const { nodeId } = params
+
+		const node = await db.query.narrativeNodes.findFirst({ where: eq(schema.narrativeNodes.id, nodeId) })
+		if (!node) throw new Error("Node not found.")
+		if (node.parentNodeId === null) throw new Error("Node is not an alias child — nothing to de-merge.")
+
+		const lorebook = await db.query.lorebooks.findFirst({
+			where: and(eq(schema.lorebooks.id, node.lorebookId), eq(schema.lorebooks.userId, userId))
+		})
+		if (!lorebook) throw new Error("Access denied.")
+
+		await db
+			.update(schema.narrativeNodes)
+			.set({ parentNodeId: null })
+			.where(eq(schema.narrativeNodes.id, nodeId))
+
+		const updated = await db.query.narrativeNodes.findFirst({ where: eq(schema.narrativeNodes.id, nodeId) })
+
+		const res: Sockets.NarrativeGraph.DemergeNode.Response = { node: updated! }
+		emitToUser("narrativeGraph:demergeNode", res)
+		return res
+	}
+}
+
+// ─── Shared helper ────────────────────────────────────────────────────────────
+
+async function resolveBindingName(binding: any): Promise<string> {
+	if (binding.characterId) {
+		const char = await db.query.characters.findFirst({
+			where: eq(schema.characters.id, binding.characterId)
+		})
+		return char?.nickname || char?.name || binding.binding
+	}
+	if (binding.personaId) {
+		const persona = await db.query.personas.findFirst({
+			where: eq(schema.personas.id, binding.personaId)
+		})
+		return persona?.name || binding.binding
+	}
+	return binding.binding
 }
 
 // ─── Registration ─────────────────────────────────────────────────────────────
@@ -732,4 +1355,10 @@ export function registerNarrativeGraphHandlers(
 	register(socket, narrativeGraphUpdateRelationshipHandler, emitToUser)
 	register(socket, narrativeGraphDeleteRelationshipHandler, emitToUser)
 	register(socket, narrativeGraphCreateRelationshipHandler, emitToUser)
+	register(socket, narrativeGraphCreateNodeHandler, emitToUser)
+	register(socket, narrativeGraphQueryContextHandler, emitToUser)
+	register(socket, narrativeGraphLinkBindingNodeHandler, emitToUser)
+	register(socket, narrativeGraphLinkOrphanBindingHandler, emitToUser)
+	register(socket, narrativeGraphMergeNodeHandler, emitToUser)
+	register(socket, narrativeGraphDemergeNodeHandler, emitToUser)
 }

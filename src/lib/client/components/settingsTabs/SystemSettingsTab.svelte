@@ -23,6 +23,8 @@
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
 	)
+	let ollamaSettingsCtx: OllamaSettingsCtx = $state(getContext("ollamaSettingsCtx"))
+	let koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
 	let userCtx: UserCtx = $state(getContext("userCtx"))
 
 	// URL validation schema
@@ -75,13 +77,13 @@
 	let passphraseError = $state("")
 	let isSettingPassphrase = $state(false)
 
-	// Initialize base URL fields when system settings are available
+	// Initialize base URL fields when settings are available
 	$effect(() => {
-		if (systemSettingsCtx.settings?.ollamaManagerBaseUrl) {
-			ollamaBaseUrlField = systemSettingsCtx.settings.ollamaManagerBaseUrl
+		if (ollamaSettingsCtx.settings?.ollamaManagerBaseUrl) {
+			ollamaBaseUrlField = ollamaSettingsCtx.settings.ollamaManagerBaseUrl
 		}
-		if (systemSettingsCtx.settings?.koboldCppManagerBaseUrl) {
-			koboldCppBaseUrlField = systemSettingsCtx.settings.koboldCppManagerBaseUrl
+		if (koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl) {
+			koboldCppBaseUrlField = koboldCppSettingsCtx.settings.koboldCppManagerBaseUrl
 		}
 	})
 
@@ -558,7 +560,7 @@
 			<div class="flex items-center gap-2">
 				<Switch
 					name="ollama-manager"
-					checked={systemSettingsCtx.settings?.ollamaManagerEnabled}
+					checked={ollamaSettingsCtx.settings?.ollamaManagerEnabled}
 					onCheckedChange={onOllamaManagerEnabledClick}
 				></Switch>
 				<label for="ollama-manager" class="font-semibold">
@@ -566,7 +568,7 @@
 				</label>
 			</div>
 
-			{#if systemSettingsCtx.settings?.ollamaManagerEnabled}
+			{#if ollamaSettingsCtx.settings?.ollamaManagerEnabled}
 				<div class="ml-6 space-y-3">
 					<div>
 						<label
@@ -615,7 +617,7 @@
 			<div class="flex items-center gap-2">
 				<Switch
 					name="koboldcpp-manager"
-					checked={systemSettingsCtx.settings?.koboldCppManagerEnabled}
+					checked={koboldCppSettingsCtx.settings?.koboldCppManagerEnabled}
 					onCheckedChange={onKoboldCppManagerEnabledClick}
 				></Switch>
 				<label for="koboldcpp-manager" class="font-semibold">
@@ -623,7 +625,7 @@
 				</label>
 			</div>
 
-			{#if systemSettingsCtx.settings?.koboldCppManagerEnabled}
+			{#if koboldCppSettingsCtx.settings?.koboldCppManagerEnabled}
 				<div class="ml-6 space-y-3">
 					<div>
 						<label

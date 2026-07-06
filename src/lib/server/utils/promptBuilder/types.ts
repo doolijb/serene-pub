@@ -1,6 +1,7 @@
 export type TemplateContextCharacter = {
 	name: string
 	nickname?: string
+	aliases?: string[]
 	description: string
 	personality?: string
 	loreEntries?: SelectCharacterLoreEntry[]
@@ -162,4 +163,24 @@ export type AssembledContent = {
 
 export type CompileOptions = {
 	useChatFormat?: boolean
+}
+
+export type InfillContentOptions = {
+	charName: string
+	personaName: string
+	templateContext: TemplateContext
+	useChatFormat?: boolean
+	tokenLimit: number
+	contextThresholdPercent: number
+	tokenCounter: any
+	handlebars: any
+	contextConfig: any
+}
+
+export type InfillResult = {
+	renderedPrompt: string | undefined
+	renderedMessages: any[] | undefined
+	totalTokens: number
+	chatMessages: { included: number; includedIds: number[]; excludedIds: number[] }
+	rag?: RagDiagnostics | NonRagDiagnostics
 }

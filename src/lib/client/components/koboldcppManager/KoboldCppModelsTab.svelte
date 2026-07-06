@@ -1,229 +1,279 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { onMount, onDestroy } from "svelte"
+	import { onMount, onDestroy, getContext } from "svelte"
 	import * as skio from "sveltekit-io"
+	import { Modal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
+	type KoboldCppModel = Sockets.KoboldCpp.ListModels.ModelFile
+
 	const socket = skio.get()
+	const systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
+	const koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
+	const panelsCtx: PanelsCtx = getContext("panelsCtx")
 
 	let currentModel = $state<string | null>(null)
-	let availableConfigs = $state<string[]>([])
+	let availableModels = $state<KoboldCppModel[]>([])
+	let connectionsList = $state<SelectConnection[]>([])
+	let modelsDirSet = $derived(!!koboldCppSettingsCtx.settings?.koboldCppManagerModelsDir)
 	let isLoading = $state(false)
-	let isLoadingModel = $state(false)
-	let loadingConfig = $state<string | null>(null)
 	let isConnecting = $state(false)
-	let connectingConfig = $state<string | null>(null)
+	let connectingModel = $state<string | null>(null)
+	let searchQuery = $state("")
+	let showDeleteModal = $state(false)
+	let modelToDelete = $state<KoboldCppModel | null>(null)
 
-	function refreshModels() {
+	let filteredModels = $derived(
+		availableModels
+			.filter((m) => m.name.toLowerCase().includes(searchQuery.toLowerCase()))
+			.sort((a, b) => {
+				const aDefault = findConnectionForModel(a.name)?.id === systemSettingsCtx.settings?.defaultConnectionId
+				const bDefault = findConnectionForModel(b.name)?.id === systemSettingsCtx.settings?.defaultConnectionId
+				if (aDefault && !bDefault) return -1
+				if (!aDefault && bDefault) return 1
+				return a.name.localeCompare(b.name)
+			})
+	)
+
+	function refresh() {
 		isLoading = true
 		socket.emit("koboldcpp:listModels", {})
-	}
-
-	function handleLoadModel(filename: string) {
-		loadingConfig = filename
-		isLoadingModel = true
-		socket.emit("koboldcpp:loadModel", { filename })
+		socket.emit("connections:list", {})
 	}
 
 	function handleConnectModel(modelName: string) {
-		connectingConfig = modelName
+		connectingModel = modelName
 		isConnecting = true
 		socket.emit("koboldcpp:connectModel", { modelName })
 	}
 
-	onMount(() => {
-		socket.on(
-			"koboldcpp:listModels",
-			(message: Sockets.KoboldCpp.ListModels.Response) => {
-				isLoading = false
-				currentModel = message.currentModel
-				availableConfigs = message.availableConfigs
-			}
-		)
+	function findConnectionForModel(modelName: string): SelectConnection | undefined {
+		return connectionsList.find((c) => c.type === "koboldcpp" && c.model === modelName)
+	}
 
-		socket.on(
-			"koboldcpp:loadModel",
-			(message: Sockets.KoboldCpp.LoadModel.Response) => {
-				isLoadingModel = false
-				loadingConfig = null
-				if (message.success) {
-					toaster.success({ title: message.success })
-					refreshModels()
-				}
-			}
-		)
+	function openConnectionSidebar(modelName: string) {
+		const conn = findConnectionForModel(modelName)
+		if (!conn) return
+		panelsCtx.digest.connectionId = conn.id
+		panelsCtx.openPanel({ key: "connections" })
+	}
 
-		socket.on("koboldcpp:loadModel:error", (message: any) => {
-			isLoadingModel = false
-			loadingConfig = null
+	function handleDeleteClick(model: KoboldCppModel) {
+		const defaultConnId = systemSettingsCtx.settings?.defaultConnectionId
+		const conn = findConnectionForModel(model.name)
+		if (conn && conn.id === defaultConnId) {
 			toaster.error({
-				title: "Failed to load model",
-				description: message.error
+				title: "Cannot delete default model",
+				description: "Set a different default connection before deleting."
 			})
+			return
+		}
+		modelToDelete = model
+		showDeleteModal = true
+	}
+
+	function handleDeleteConfirm() {
+		if (modelToDelete) {
+			socket.emit("koboldcpp:deleteModel", { modelName: modelToDelete.name })
+		}
+		showDeleteModal = false
+		modelToDelete = null
+	}
+
+	function handleDeleteCancel() {
+		showDeleteModal = false
+		modelToDelete = null
+	}
+
+	function formatSize(bytes: number): string {
+		const units = ["B", "KB", "MB", "GB", "TB"]
+		let size = bytes
+		let i = 0
+		while (size >= 1024 && i < units.length - 1) { size /= 1024; i++ }
+		return `${size.toFixed(1)} ${units[i]}`
+	}
+
+	function modelDisplayName(filename: string): string {
+		return filename.replace(/\.gguf$/i, "")
+	}
+
+	function isCurrentlyLoaded(filename: string): boolean {
+		if (!currentModel) return false
+		return currentModel.toLowerCase().includes(filename.replace(/\.gguf$/i, "").toLowerCase())
+	}
+
+	onMount(() => {
+		socket.on("koboldcpp:listModels", (message: Sockets.KoboldCpp.ListModels.Response) => {
+			isLoading = false
+			currentModel = message.currentModel
+			availableModels = message.availableModels ?? []
 		})
 
-		socket.on(
-			"koboldcpp:connectModel",
-			(message: Sockets.KoboldCpp.ConnectModel.Response) => {
-				isConnecting = false
-				connectingConfig = null
-				if (message.success) {
-					toaster.success({ title: message.success })
-				}
-			}
-		)
+		socket.on("connections:list", (msg: Sockets.Connections.List.Response) => {
+			connectionsList = msg.connectionsList ?? []
+		})
+
+		socket.on("koboldcpp:connectModel", () => {
+			isConnecting = false
+			connectingModel = null
+			toaster.success({ title: "Model set as default" })
+			refresh()
+		})
 
 		socket.on("koboldcpp:connectModel:error", (message: any) => {
 			isConnecting = false
-			connectingConfig = null
-			toaster.error({
-				title: "Failed to connect model",
-				description: message.error
-			})
+			connectingModel = null
+			toaster.error({ title: "Failed to set default model", description: message.error })
 		})
 
-		refreshModels()
+		socket.on("koboldcpp:deleteModel", () => {
+			toaster.success({ title: "Model deleted" })
+			refresh()
+		})
+
+		socket.on("koboldcpp:deleteModel:error", (message: any) => {
+			toaster.error({ title: "Failed to delete model", description: message.error })
+		})
+
+		refresh()
 	})
 
 	onDestroy(() => {
 		socket.off("koboldcpp:listModels")
-		socket.off("koboldcpp:loadModel")
-		socket.off("koboldcpp:loadModel:error")
 		socket.off("koboldcpp:connectModel")
 		socket.off("koboldcpp:connectModel:error")
+		socket.off("koboldcpp:deleteModel")
+		socket.off("koboldcpp:deleteModel:error")
+		socket.off("connections:list")
 	})
-
-	function configDisplayName(path: string): string {
-		return path
-			.replace(/\.kcpps$/i, "")
-			.split(/[/\\]/)
-			.pop() ?? path
-	}
 </script>
 
-<div class="space-y-4 p-4">
-	<!-- Currently loaded model -->
-	<div class="card bg-surface-100-800 p-4">
-		<div class="mb-2 flex items-center justify-between">
-			<h3 class="font-semibold">Currently Loaded</h3>
-			<button
-				class="btn btn-sm preset-filled-surface-500"
-				onclick={refreshModels}
-				disabled={isLoading}
-				title="Refresh model list"
-			>
-				<Icons.RefreshCw
-					size={14}
-					class={isLoading ? "animate-spin" : ""}
-				/>
-			</button>
+<!-- Search -->
+<div class="px-4 py-2">
+	<div class="flex gap-2">
+		<div class="relative flex-1">
+			<Icons.Search class="text-surface-500 absolute top-1/2 left-3 -translate-y-1/2" size={16} />
+			<input
+				type="text"
+				placeholder="Search models..."
+				class="input w-full pl-10"
+				bind:value={searchQuery}
+			/>
 		</div>
-
-		{#if currentModel}
-			<div class="flex items-center justify-between gap-2">
-				<div class="flex items-center gap-2 overflow-hidden">
-					<Icons.Cpu size={16} class="text-success-500 shrink-0" />
-					<span class="truncate font-mono text-sm">{currentModel}</span>
-				</div>
-				<button
-					class="btn btn-sm preset-filled-primary-500 shrink-0"
-					onclick={() => handleConnectModel(currentModel!)}
-					disabled={isConnecting && connectingConfig === currentModel}
-				>
-					{#if isConnecting && connectingConfig === currentModel}
-						<Icons.Loader2 size={14} class="animate-spin" />
-					{:else}
-						<Icons.Cable size={14} />
-					{/if}
-					Use
-				</button>
-			</div>
-		{:else}
-			<p class="text-muted-foreground text-sm">No model currently loaded</p>
-		{/if}
-	</div>
-
-	<!-- Available configs -->
-	<div>
-		<h3 class="mb-2 font-semibold">
-			Available Configs
-			{#if availableConfigs.length > 0}
-				<span class="text-muted-foreground text-sm font-normal">
-					({availableConfigs.length})
-				</span>
-			{/if}
-		</h3>
-
-		{#if isLoading}
-			<div class="flex items-center justify-center py-8">
-				<Icons.Loader2 size={24} class="text-muted-foreground animate-spin" />
-			</div>
-		{:else if availableConfigs.length === 0}
-			<div class="text-muted-foreground py-6 text-center text-sm">
-				<Icons.FileQuestion
-					size={32}
-					class="mx-auto mb-2 opacity-50"
-				/>
-				<p>No .kcpps config files found.</p>
-				<p class="text-xs">
-					KoboldCPP may not expose the list_options endpoint.
-				</p>
-			</div>
-		{:else}
-			<div class="space-y-2">
-				{#each availableConfigs as config}
-					{@const displayName = configDisplayName(config)}
-					{@const isCurrentlyLoaded = config === currentModel}
-					<div
-						class="card bg-surface-100-800 flex items-center justify-between gap-2 p-3"
-					>
-						<div class="flex min-w-0 items-center gap-2">
-							<Icons.FileCode
-								size={16}
-								class={isCurrentlyLoaded
-									? "text-success-500"
-									: "text-muted-foreground"}
-							/>
-							<div class="min-w-0">
-								<p class="truncate text-sm font-medium">{displayName}</p>
-								<p class="text-muted-foreground truncate font-mono text-xs">
-									{config}
-								</p>
-							</div>
-						</div>
-						<div class="flex shrink-0 gap-1">
-							{#if !isCurrentlyLoaded}
-								<button
-									class="btn btn-sm preset-filled-surface-500"
-									onclick={() => handleLoadModel(config)}
-									disabled={isLoadingModel}
-									title="Hot-swap to this config"
-								>
-									{#if isLoadingModel && loadingConfig === config}
-										<Icons.Loader2 size={14} class="animate-spin" />
-									{:else}
-										<Icons.RefreshCcw size={14} />
-									{/if}
-									Load
-								</button>
-							{/if}
-							<button
-								class="btn btn-sm preset-filled-primary-500"
-								onclick={() => handleConnectModel(config)}
-								disabled={isConnecting}
-								title="Connect to this model in Serene Pub"
-							>
-								{#if isConnecting && connectingConfig === config}
-									<Icons.Loader2 size={14} class="animate-spin" />
-								{:else}
-									<Icons.Cable size={14} />
-								{/if}
-								Connect
-							</button>
-						</div>
-					</div>
-				{/each}
-			</div>
-		{/if}
+		<button class="btn preset-filled-surface-500" onclick={refresh} title="Refresh">
+			<Icons.RefreshCw size={16} class={isLoading ? "animate-spin" : ""} />
+		</button>
 	</div>
 </div>
+
+{#if isLoading}
+	<div class="p-6 text-center">
+		<Icons.Loader2 class="mx-auto mb-4 animate-spin" size={32} />
+		<p class="text-sm opacity-75">Loading models...</p>
+	</div>
+{:else if !modelsDirSet}
+	<div class="p-6 text-center">
+		<Icons.FolderOpen class="text-surface-500 mx-auto mb-4" size={48} />
+		<h3 class="h4 mb-2">No models directory configured</h3>
+		<p class="text-sm opacity-75">Set a Models Directory in the Settings tab.</p>
+	</div>
+{:else if filteredModels.length === 0}
+	<div class="p-6 text-center">
+		<Icons.Package class="text-surface-500 mx-auto mb-4" size={48} />
+		<h3 class="h4 mb-2">No models found</h3>
+		<p class="mb-4 text-sm opacity-75">
+			{searchQuery ? "No models match your search." : "Download models from the Available tab."}
+		</p>
+	</div>
+{:else}
+	<div class="space-y-3 p-4">
+		{#each filteredModels as model}
+			{@const loaded = isCurrentlyLoaded(model.name)}
+			{@const isDefault = findConnectionForModel(model.name)?.id === systemSettingsCtx.settings?.defaultConnectionId}
+			{@const existingConn = findConnectionForModel(model.name)}
+			<div class="card preset-tonal flex flex-col gap-2 p-4">
+				<div class="flex items-center justify-between">
+					<h4 class="font-semibold">
+						{#if isDefault}
+							<Icons.Check size={14} class="text-success-500 inline-block" />
+						{/if}
+						{modelDisplayName(model.name)}
+					</h4>
+				</div>
+				{#if loaded}
+				<div class="text-surface-600 space-y-1 text-sm">
+					<div class="flex justify-between">
+						<span>Status:</span>
+						<span class="preset-filled-success-500 rounded-xl px-2 py-1" role="status">
+							Loaded
+						</span>
+					</div>
+				</div>
+			{/if}
+				<div class="flex justify-between gap-2">
+					<div class="flex gap-2">
+						<button
+							class="btn btn-sm preset-filled-success-500"
+							onclick={() => handleConnectModel(model.name)}
+							disabled={isDefault || (isConnecting && connectingModel === model.name)}
+							title={isDefault ? "Already the default connection" : "Set as default connection"}
+						>
+							{#if isConnecting && connectingModel === model.name}
+								<Icons.Loader2 size={14} class="animate-spin" />
+							{:else}
+								<Icons.Star size={14} />
+							{/if}
+							{isDefault ? "Default" : "Set Default"}
+						</button>
+						{#if existingConn}
+							<button
+								class="btn btn-sm preset-filled-surface-500"
+								onclick={() => openConnectionSidebar(model.name)}
+								title="Open connection settings"
+							>
+								<Icons.Settings size={14} /> Edit
+							</button>
+						{/if}
+					</div>
+					<button
+						class="btn btn-sm preset-filled-error-500"
+						onclick={() => handleDeleteClick(model)}
+						title="Delete model"
+					>
+						<Icons.Trash2 size={14} /> Delete
+					</button>
+				</div>
+			</div>
+		{/each}
+	</div>
+{/if}
+
+<Modal
+	open={showDeleteModal}
+	onOpenChange={(e) => (showDeleteModal = e.open)}
+	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm border border-surface-300-700"
+	backdropClasses="backdrop-blur-sm"
+>
+	{#snippet content()}
+		<header class="flex justify-between">
+			<h2 class="h2">Delete Model</h2>
+		</header>
+		<article>
+			<p class="opacity-60">
+				Are you sure you want to delete "{modelToDelete?.name}" from your models directory?
+				This action cannot be undone.
+			</p>
+			<p class="opacity-60 mt-2">
+				Any associated connections to this model will also be removed.
+			</p>
+		</article>
+		<footer class="flex justify-end gap-2">
+			<button class="btn preset-filled-surface-500" onclick={handleDeleteCancel}>
+				Cancel
+			</button>
+			<button class="btn preset-filled-error-500" onclick={handleDeleteConfirm}>
+				Delete
+			</button>
+		</footer>
+	{/snippet}
+</Modal>
