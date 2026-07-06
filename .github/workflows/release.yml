@@ -19,12 +19,13 @@ jobs:
                       os: ubuntu-latest
                     - target: linux-arm64
                       os: ubuntu-latest
-                    - target: linux-arm
-                      os: ubuntu-latest
                     - target: linux-ppc64
                       os: ubuntu-latest
-                    # - target: macos-x64
-                    #   os: macos-latest
+                    # - target: linux-arm
+                    #   os: ubuntu-latest
+                    #   NOTE: Node.js does not provide armv7l builds
+                    - target: macos-x64
+                      os: macos-latest
                     - target: macos-arm64
                       os: macos-latest
                     - target: windows-x64
@@ -131,43 +132,43 @@ jobs:
                   case "${{ matrix.target }}" in
                     linux-x64)
                       NODE_URL="https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz"
-                      curl -L -o node.tar.xz "$NODE_URL"
+                      curl -L -o node.tar.xz "$NODE_URL" || { echo "Failed to download"; exit 1; }
                       tar -xf node.tar.xz
                       cp node-v24.18.0-linux-x64/bin/node ../node
                       ;;
                     linux-arm64)
                       NODE_URL="https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-arm64.tar.xz"
-                      curl -L -o node.tar.xz "$NODE_URL"
+                      curl -L -o node.tar.xz "$NODE_URL" || { echo "Failed to download"; exit 1; }
                       tar -xf node.tar.xz
                       cp node-v24.18.0-linux-arm64/bin/node ../node
                       ;;
-                    linux-arm)
-                      NODE_URL="https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-armv7l.tar.xz"
-                      curl -L -o node.tar.xz "$NODE_URL"
-                      tar -xf node.tar.xz
-                      cp node-v24.18.0-linux-armv7l/bin/node ../node
-                      ;;
                     linux-ppc64)
                       NODE_URL="https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-ppc64le.tar.xz"
-                      curl -L -o node.tar.xz "$NODE_URL"
+                      curl -L -o node.tar.xz "$NODE_URL" || { echo "Failed to download"; exit 1; }
                       tar -xf node.tar.xz
                       cp node-v24.18.0-linux-ppc64le/bin/node ../node
                       ;;
+                    macos-x64)
+                      NODE_URL="https://nodejs.org/dist/v24.18.0/node-v24.18.0-darwin-x64.tar.gz"
+                      curl -L -o node.tar.gz "$NODE_URL" || { echo "Failed to download"; exit 1; }
+                      tar -xzf node.tar.gz
+                      cp node-v24.18.0-darwin-x64/bin/node ../node
+                      ;;
                     macos-arm64)
                       NODE_URL="https://nodejs.org/dist/v24.18.0/node-v24.18.0-darwin-arm64.tar.gz"
-                      curl -L -o node.tar.gz "$NODE_URL"
+                      curl -L -o node.tar.gz "$NODE_URL" || { echo "Failed to download"; exit 1; }
                       tar -xzf node.tar.gz
                       cp node-v24.18.0-darwin-arm64/bin/node ../node
                       ;;
                     windows-x64)
                       NODE_URL="https://nodejs.org/dist/v24.18.0/node-v24.18.0-win-x64.zip"
-                      curl -L -o node.zip "$NODE_URL"
+                      curl -L -o node.zip "$NODE_URL" || { echo "Failed to download"; exit 1; }
                       unzip -q node.zip
                       cp node-v24.18.0-win-x64/node.exe ../node.exe
                       ;;
                     windows-arm64)
                       NODE_URL="https://nodejs.org/dist/v24.18.0/node-v24.18.0-win-arm64.zip"
-                      curl -L -o node.zip "$NODE_URL"
+                      curl -L -o node.zip "$NODE_URL" || { echo "Failed to download"; exit 1; }
                       unzip -q node.zip
                       cp node-v24.18.0-win-arm64/node.exe ../node.exe
                       ;;
