@@ -32,6 +32,10 @@ function copyRecursive(src, dest) {
 const LICENSE_WHITELIST = [
 	{ name: "json-bignum", version: "0.0.3" },
 	{ name: "xmlhttprequest-ssl", version: "2.1.2" }
+	,{ name: "@img/sharp-libvips-linux-x64", version: "1.2.4" },
+	{ name: "@img/sharp-libvips-linuxmusl-x64", version: "1.2.4" },
+	{ name: "json-schema", version: "0.4.0" },
+	{ name: "type-fest", version: "0.13.1" }
 ]
 
 function isWhitelisted(name, version) {
@@ -54,6 +58,9 @@ const ACCEPTABLE_LICENSES = [
 	"agpl-3.0",
 	"agpl-3.0-only",
 	"agpl-3.0-or-later",
+	"lgpl-3.0",
+	"lgpl-3.0-only",
+	"lgpl-3.0-or-later",
 	"blueoak-1.0.0",
 	"bsd",
 	"bsd-2-clause or mit or apache-2.0",
