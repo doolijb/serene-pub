@@ -291,6 +291,8 @@ export const chatsCreateHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const tags = params.tags || []
+		const personaIds = params.personaIds || []
+		const characterIds = params.characterIds || []
 
 		// Remove tags from chat data as it will be handled separately
 		const chatDataWithoutTags = { ...params.chat }
@@ -298,7 +300,7 @@ export const chatsCreateHandler: Handler<
 		const chatData: InsertChat = {
 			...chatDataWithoutTags,
 			userId,
-			isGroup: params.characterIds.length > 1
+			isGroup: characterIds.length > 1
 		}
 		const [newChat] = await db
 			.insert(schema.chats)
@@ -309,13 +311,13 @@ export const chatsCreateHandler: Handler<
 		if (tags.length > 0) {
 			await processChatTags(newChat.id, tags, userId)
 		}
-		for (const personaId of params.personaIds) {
+		for (const personaId of personaIds) {
 			await db.insert(schema.chatPersonas).values({
 				chatId: newChat.id,
 				personaId
 			})
 		}
-		for (const characterId of params.characterIds) {
+		for (const characterId of characterIds) {
 			const position = params.characterPositions[characterId] || 0
 			await db.insert(schema.chatCharacters).values({
 				chatId: newChat.id,
