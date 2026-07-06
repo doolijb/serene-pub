@@ -34,6 +34,7 @@ vite.config.ts.timestamp-*
 package-lock.json
 
 /*.md
+!/DOCKER.md
 /AI-TEMP/*
 
 # Android

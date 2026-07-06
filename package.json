@@ -1,7 +1,7 @@
 {
 	"name": "serene-pub",
 	"private": true,
-	"version": "0.5.0-pr-5",
+	"version": "0.5.0-pr-6",
 	"type": "module",
 	"license": "AGPL-3.0",
 	"bin": "build/index.js",
