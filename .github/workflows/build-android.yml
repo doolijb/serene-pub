@@ -1,120 +1,120 @@
-name: Build Android APK
+# name: Build Android APK
 
-on:
-    workflow_dispatch:
-    push:
-        tags:
-            - "v*"
+# on:
+#     workflow_dispatch:
+#     push:
+#         tags:
+#             - "v*"
 
-jobs:
-    build-android:
-        name: Build Android APK
-        runs-on: ubuntu-latest
+# jobs:
+#     build-android:
+#         name: Build Android APK
+#         runs-on: ubuntu-latest
         
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v4
+#         steps:
+#             - name: Checkout code
+#               uses: actions/checkout@v4
 
-            - name: Set up Node.js
-              uses: actions/setup-node@v4
-              with:
-                  node-version: "20"
+#             - name: Set up Node.js
+#               uses: actions/setup-node@v4
+#               with:
+#                   node-version: "20"
 
-            - name: Set up JDK 17
-              uses: actions/setup-java@v4
-              with:
-                  distribution: 'temurin'
-                  java-version: '17'
+#             - name: Set up JDK 17
+#               uses: actions/setup-java@v4
+#               with:
+#                   distribution: 'temurin'
+#                   java-version: '17'
 
-            - name: Install dependencies
-              run: |
-                  node -e "const fs = require('fs'); try { fs.unlinkSync('package-lock.json'); } catch (e) { /* ignore */ }"
-                  npm install
+#             - name: Install dependencies
+#               run: |
+#                   node -e "const fs = require('fs'); try { fs.unlinkSync('package-lock.json'); } catch (e) { /* ignore */ }"
+#                   npm install
 
-            - name: Prepare SvelteKit
-              run: npx @sveltejs/kit sync
+#             - name: Prepare SvelteKit
+#               run: npx @sveltejs/kit sync
 
-            - name: Build SvelteKit app
-              run: npm run build
+#             - name: Build SvelteKit app
+#               run: npm run build
 
-            - name: Prepare production dependencies
-              run: |
-                  npm install --production
-                  npm rebuild
+#             - name: Prepare production dependencies
+#               run: |
+#                   npm install --production
+#                   npm rebuild
 
-            - name: Prepare Android assets
-              run: node scripts/build-android.js
+#             - name: Prepare Android assets
+#               run: node scripts/build-android.js
 
-            - name: Decode keystore
-              if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-              env:
-                  KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-              run: |
-                  if [ -n "$KEYSTORE_BASE64" ]; then
-                    echo "$KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
-                    echo "Keystore decoded successfully"
-                  else
-                    echo "No keystore found, will build unsigned APK"
-                  fi
+#             - name: Decode keystore
+#               if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+#               env:
+#                   KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+#               run: |
+#                   if [ -n "$KEYSTORE_BASE64" ]; then
+#                     echo "$KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
+#                     echo "Keystore decoded successfully"
+#                   else
+#                     echo "No keystore found, will build unsigned APK"
+#                   fi
 
-            - name: Make gradlew executable
-              run: chmod +x android/gradlew
+#             - name: Make gradlew executable
+#               run: chmod +x android/gradlew
 
-            - name: Build Release APK
-              if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-              env:
-                  KEYSTORE_FILE: release.keystore
-                  KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-                  KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-                  KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-              working-directory: android
-              run: |
-                  if [ -f "app/release.keystore" ]; then
-                    ./gradlew assembleRelease
-                  else
-                    echo "Building unsigned APK (no keystore)"
-                    ./gradlew assembleRelease
-                  fi
+#             - name: Build Release APK
+#               if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+#               env:
+#                   KEYSTORE_FILE: release.keystore
+#                   KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+#                   KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+#                   KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+#               working-directory: android
+#               run: |
+#                   if [ -f "app/release.keystore" ]; then
+#                     ./gradlew assembleRelease
+#                   else
+#                     echo "Building unsigned APK (no keystore)"
+#                     ./gradlew assembleRelease
+#                   fi
 
-            - name: Build Debug APK
-              if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v')
-              working-directory: android
-              run: ./gradlew assembleDebug
+#             - name: Build Debug APK
+#               if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v')
+#               working-directory: android
+#               run: ./gradlew assembleDebug
 
-            - name: Get version from tag
-              if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-              id: get_version
-              run: |
-                  VERSION=${GITHUB_REF#refs/tags/v}
-                  echo "version=$VERSION" >> $GITHUB_OUTPUT
+#             - name: Get version from tag
+#               if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+#               id: get_version
+#               run: |
+#                   VERSION=${GITHUB_REF#refs/tags/v}
+#                   echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-            - name: Rename APK
-              if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-              run: |
-                  VERSION=${{ steps.get_version.outputs.version }}
-                  mkdir -p dist
-                  if [ -f "android/app/build/outputs/apk/release/app-release.apk" ]; then
-                    cp android/app/build/outputs/apk/release/app-release.apk \
-                       dist/serene-pub-${VERSION}-android.apk
-                  else
-                    echo "Release APK not found"
-                    exit 1
-                  fi
+#             - name: Rename APK
+#               if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+#               run: |
+#                   VERSION=${{ steps.get_version.outputs.version }}
+#                   mkdir -p dist
+#                   if [ -f "android/app/build/outputs/apk/release/app-release.apk" ]; then
+#                     cp android/app/build/outputs/apk/release/app-release.apk \
+#                        dist/serene-pub-${VERSION}-android.apk
+#                   else
+#                     echo "Release APK not found"
+#                     exit 1
+#                   fi
 
-            - name: Upload APK artifact
-              uses: actions/upload-artifact@v4
-              with:
-                  name: android-apk
-                  path: |
-                      dist/*.apk
-                      android/app/build/outputs/apk/**/*.apk
+#             - name: Upload APK artifact
+#               uses: actions/upload-artifact@v4
+#               with:
+#                   name: android-apk
+#                   path: |
+#                       dist/*.apk
+#                       android/app/build/outputs/apk/**/*.apk
 
-            - name: Upload to Release
-              if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-              uses: softprops/action-gh-release@v1
-              with:
-                  files: dist/*.apk
-                  draft: false
-                  prerelease: false
-              env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#             - name: Upload to Release
+#               if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+#               uses: softprops/action-gh-release@v1
+#               with:
+#                   files: dist/*.apk
+#                   draft: false
+#                   prerelease: false
+#               env:
+#                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
