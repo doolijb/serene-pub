@@ -34,6 +34,8 @@ const LICENSE_WHITELIST = [
 	{ name: "xmlhttprequest-ssl", version: "2.1.2" }
 	,{ name: "@img/sharp-libvips-linux-x64", version: "1.2.4" },
 	{ name: "@img/sharp-libvips-linuxmusl-x64", version: "1.2.4" },
+	{ name: "@img/sharp-libvips-darwin-arm64", version: "1.2.4" },
+	{ name: "@img/sharp-libvips-darwin-x64", version: "1.2.4" },
 	{ name: "json-schema", version: "0.4.0" },
 	{ name: "type-fest", version: "0.13.1" }
 ]
@@ -133,7 +135,10 @@ const ACCEPTABLE_LICENSES = [
 	"bsd-2-clause",
 	"bsd",
 	"python-2.0",
-	"lgpl-3.0-or-later"
+	"lgpl-3.0",
+	"lgpl-3.0-only",
+	"lgpl-3.0-or-later",
+	"lgpl-3.0 or later"
 ]
 
 function isAcceptableLicense(license, name, version) {
