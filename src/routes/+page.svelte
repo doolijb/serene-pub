@@ -210,12 +210,15 @@
 
 	function startChatWithCharacter(character: Partial<SelectCharacter>) {
 		if (!character.id) return
+		const personaId = personas[0]?.id
 		socket.emit("chats:create", {
 			chat: {
 				name: `Chat with ${character.nickname || character.name || "Character"}`,
 				isGroup: false
 			},
-			characterIds: [character.id]
+			characterIds: [character.id],
+			personaIds: personaId ? [personaId] : [],
+			characterPositions: { [character.id]: 0 }
 		} as any)
 	}
 

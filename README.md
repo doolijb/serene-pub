@@ -152,34 +152,31 @@ Linux, MacOS and Windows are supported!
 
 ## 🐳 Docker
 
-You can run Serene Pub with Docker. The repository includes a production-ready `Dockerfile` and a `docker-compose.yml` that mounts a persistent named volume for the app data (database).
+Pre-built images are published to the GitHub Container Registry on every release:
 
-- Build the image locally:
-
-```bash
-docker build -t serene-pub .
+```
+ghcr.io/doolijb/serene-pub:latest   ← always the latest stable release
+ghcr.io/doolijb/serene-pub:1.2.3    ← exact version pin
 ```
 
-- Run the container (host port 3002 -> container port 3000):
+**Quickstart** — download [`docker-compose.dist.yml`](docker-compose.dist.yml) from the release assets, then:
 
 ```bash
-docker run -p 3002:3000 --env PORT=3000 --rm serene-pub
+docker compose -f docker-compose.dist.yml up -d
 ```
 
-- Run with a host bind-mount for data persistence (creates `./data` on host):
+The web UI will be at **http://localhost:3000**.
+
+**Data directory** — all persistent data (database, model cache, uploads) is stored under a single directory controlled by the `SERENE_PUB_DATA_DIR` environment variable. The default inside the container is `/data`, which is mounted as a named Docker volume. To use a host path instead:
 
 ```bash
-mkdir -p ./data
-docker run -p 3002:3000 -v "$(pwd)/data":/root/.local/share/SerenePub/data --env PORT=3000 --rm serene-pub
+docker run -p 3000:3000 -p 3001:3001 \
+  -e SERENE_PUB_DATA_DIR=/data \
+  -v "$(pwd)/serene-pub-data":/data \
+  ghcr.io/doolijb/serene-pub:latest
 ```
 
-- Use `docker-compose` (named volume `serenepub_data` will be created):
-
-```bash
-docker compose up --build -d
-```
-
-The app stores its PGlite database under `/root/.local/share/SerenePub/data` inside the container; mounting that path to a host directory or named volume keeps your chats and settings between restarts.
+See [DOCKER.md](DOCKER.md) for full documentation — ports, volumes, reverse proxy setup, Ollama/KoboldCPP integration, and more.
 
 **Need help?** Check out our **[Setup Guide](https://github.com/doolijb/serene-pub/wiki/Installation-&-Setup)** in the wiki.
 

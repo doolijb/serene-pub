@@ -134,6 +134,30 @@
 		hasChanges = isDirty
 	})
 
+	// Initialize data for new chat creation
+	$effect(() => {
+		if (showEditChatForm && !editChatId && !data) {
+			data = {
+				chat: {
+					id: undefined,
+					name: "",
+					scenario: "",
+					groupReplyStrategy: "ordered",
+					lorebookId: null,
+					tags: [],
+					connectionId: null,
+					samplingConfigId: null,
+					promptConfigId: null
+				},
+				characterIds: [],
+				personaIds: [],
+				guestIds: [],
+				characterPositions: {}
+			}
+			originalData = JSON.parse(JSON.stringify(data))
+		}
+	})
+
 	// SELECTED CHARACTERS AND PERSONAS
 	let selectedCharacters: SelectCharacter[] = $state([])
 	let selectedPersonas: SelectPersona[] = $state([])
@@ -234,21 +258,54 @@
 		if (!selectedCharacters.some((c) => c.id === char.id))
 			selectedCharacters = [...selectedCharacters, char]
 		showCharacterModal = false
+		// Update data to reflect the new character
+		if (data) {
+			data = {
+				...data,
+				characterIds: selectedCharacters.map((c) => c.id),
+				characterPositions: Object.fromEntries(
+					selectedCharacters.map((cc, i) => [cc.id, i])
+				)
+			}
+		}
 	}
 
 	function handleRemoveCharacter(id: number) {
 		selectedCharacters = selectedCharacters.filter((c) => c.id !== id)
+		// Update data to reflect removed character
+		if (data) {
+			data = {
+				...data,
+				characterIds: selectedCharacters.map((c) => c.id),
+				characterPositions: Object.fromEntries(
+					selectedCharacters.map((cc, i) => [cc.id, i])
+				)
+			}
+		}
 	}
 
 	function handleAddPersona(p: SelectPersona & { id: number }) {
 		if (!selectedPersonas.some((pp) => pp.id === p.id))
 			selectedPersonas = [...selectedPersonas, p]
 		showPersonaModal = false
-		// Sync data.personaIds
+		// Update data to reflect the new persona
+		if (data) {
+			data = {
+				...data,
+				personaIds: selectedPersonas.map((p) => p.id)
+			}
+		}
 	}
 
 	function handleRemovePersona(id: number) {
 		selectedPersonas = selectedPersonas.filter((p) => p.id !== id)
+		// Update data to reflect removed persona
+		if (data) {
+			data = {
+				...data,
+				personaIds: selectedPersonas.map((p) => p.id)
+			}
+		}
 	}
 
 	function handleAddGuests(userIds: number[]) {
@@ -281,18 +338,52 @@
 			selectedPersonas.length === 0
 		)
 			return
-		const chatData: any = { name: data.chat.name }
-		if (data.chat.scenario.trim()) chatData.scenario = data.chat.scenario
-		if (selectedCharacters.length > 1)
-			chatData.group_reply_strategy = data.chat.groupReplyStrategy
+		
+		// Ensure data is synced with current selections
 		const characterIds = selectedCharacters.map((c) => c.id)
 		const personaIds = selectedPersonas.map((p) => p.id)
-		// characterPositions is now always up-to-date in data.characterPositions
+		const characterPositions = Object.fromEntries(
+			selectedCharacters.map((cc, i) => [cc.id, i])
+		)
+		
+		console.log("Creating chat with:", { characterIds, personaIds, characterPositions, selectedCharacters: selectedCharacters.length, selectedPersonas: selectedPersonas.length })
+		
+		// Update data to ensure everything is in sync
+		if (data) {
+			data = {
+				...data,
+				characterIds,
+				personaIds,
+				characterPositions,
+				chat: {
+					...data.chat,
+					name: name.trim(),
+					scenario: scenario.trim(),
+					groupReplyStrategy: groupReplyStrategy
+				}
+			}
+		}
+		
 		if (chat && chat.id) {
-			const updateChat: Sockets.UpdateChat.Call = data
+			const updateChat: Sockets.UpdateChat.Call = data!
 			socket.emit("chats:update", updateChat)
 		} else {
-			const createChat: Sockets.CreateChat.Call = data
+			const createChat: Sockets.CreateChat.Call = {
+				chat: {
+					name: name.trim(),
+					scenario: scenario.trim(),
+					groupReplyStrategy: groupReplyStrategy,
+					lorebookId: lorebookId,
+					connectionId: chatConnectionId,
+					samplingConfigId: chatSamplingConfigId,
+					promptConfigId: chatPromptConfigId
+				} as any,
+				characterIds,
+				personaIds,
+				characterPositions,
+				tags: selectedTags
+			}
+			console.log("Emitting chats:create with:", createChat)
 			socket.emit("chats:create", createChat)
 		}
 		isCreating = false

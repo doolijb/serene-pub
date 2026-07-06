@@ -1,0 +1,45 @@
+# ============================================================
+# Stage 1 — Build
+# ============================================================
+FROM node:24-alpine AS builder
+
+WORKDIR /app
+
+# Install deps first (layer-cached until package files change)
+COPY package*.json ./
+RUN npm ci
+
+# Copy source and build
+COPY . .
+RUN npm run build
+
+# Prune to production-only node_modules
+RUN npm prune --production
+
+# ============================================================
+# Stage 2 — Runtime
+# ============================================================
+FROM node:24-alpine
+
+WORKDIR /app
+
+# Defaults — all overridable at runtime via environment variables
+ENV NODE_ENV=production \
+    PORT=3000 \
+    SOCKETS_PORT=3001 \
+    SERENE_PUB_DATA_DIR=/data \
+    # Disable auto-open in container environments
+    SERENE_AUTO_OPEN=1
+
+# Copy only what's needed to run
+COPY --from=builder /app/build        ./build
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/drizzle      ./drizzle
+COPY --from=builder /app/package.json ./
+
+# Persistent data volume (database, uploads, model cache, etc.)
+VOLUME ["/data"]
+
+EXPOSE 3000 3001
+
+CMD ["node", "build/index.js"]

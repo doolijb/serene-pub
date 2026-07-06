@@ -438,6 +438,10 @@ declare global {
 			namespace Update {
 				interface Params {
 					chat: UpdateChat
+					characterIds?: number[]
+					personaIds?: number[]
+					characterPositions?: Record<number, number>
+					tags?: string[]
 				}
 				interface Response {
 					chat: SelectChat

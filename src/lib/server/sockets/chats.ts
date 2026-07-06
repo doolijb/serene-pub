@@ -293,6 +293,7 @@ export const chatsCreateHandler: Handler<
 		const tags = params.tags || []
 		const personaIds = params.personaIds || []
 		const characterIds = params.characterIds || []
+		const characterPositions = params.characterPositions || {}
 
 		// Remove tags from chat data as it will be handled separately
 		const chatDataWithoutTags = { ...params.chat }
@@ -311,14 +312,16 @@ export const chatsCreateHandler: Handler<
 		if (tags.length > 0) {
 			await processChatTags(newChat.id, tags, userId)
 		}
-		for (const personaId of personaIds) {
+		for (let i = 0; i < personaIds.length; i++) {
+			const personaId = personaIds[i]
 			await db.insert(schema.chatPersonas).values({
 				chatId: newChat.id,
-				personaId
+				personaId,
+				position: i
 			})
 		}
 		for (const characterId of characterIds) {
-			const position = params.characterPositions[characterId] || 0
+			const position = characterPositions[characterId] || 0
 			await db.insert(schema.chatCharacters).values({
 				chatId: newChat.id,
 				characterId,
@@ -807,6 +810,62 @@ export const chatsUpdateHandler: Handler<
 
 			// Process tags after chat update
 			await processChatTags(params.chat.id!, tags, userId)
+
+			// Sync chatCharacters if provided
+			if (params.characterIds !== undefined) {
+				const existingCCs = await db.query.chatCharacters.findMany({
+					where: (cc, { eq }) => eq(cc.chatId, params.chat.id!)
+				})
+				const existingCharacterIds = new Set(existingCCs.map((cc) => cc.characterId).filter((id): id is number => id !== null))
+				const newCharacterIds = new Set(params.characterIds)
+
+				for (const cc of existingCCs) {
+					if (cc.characterId === null) continue
+					if (!newCharacterIds.has(cc.characterId)) {
+						await db.delete(schema.chatCharacters).where(
+							and(eq(schema.chatCharacters.chatId, params.chat.id!), eq(schema.chatCharacters.characterId, cc.characterId))
+						)
+					}
+				}
+				for (let i = 0; i < params.characterIds.length; i++) {
+					const characterId = params.characterIds[i]
+					const position = (params.characterPositions ?? {})[characterId] ?? i
+					if (existingCharacterIds.has(characterId)) {
+						await db.update(schema.chatCharacters)
+							.set({ position })
+							.where(and(eq(schema.chatCharacters.chatId, params.chat.id!), eq(schema.chatCharacters.characterId, characterId)))
+					} else {
+						await db.insert(schema.chatCharacters).values({ chatId: params.chat.id!, characterId, position })
+					}
+				}
+				await db.update(schema.chats)
+					.set({ isGroup: params.characterIds.length > 1 })
+					.where(eq(schema.chats.id, params.chat.id!))
+			}
+
+			// Sync chatPersonas if provided
+			if (params.personaIds !== undefined) {
+				const existingCPs = await db.query.chatPersonas.findMany({
+					where: (cp, { eq }) => eq(cp.chatId, params.chat.id!)
+				})
+				const existingPersonaIds = new Set(existingCPs.map((cp) => cp.personaId).filter((id): id is number => id !== null))
+				const newPersonaIds = new Set(params.personaIds)
+
+				for (const cp of existingCPs) {
+					if (cp.personaId === null) continue
+					if (!newPersonaIds.has(cp.personaId)) {
+						await db.delete(schema.chatPersonas).where(
+							and(eq(schema.chatPersonas.chatId, params.chat.id!), eq(schema.chatPersonas.personaId, cp.personaId))
+						)
+					}
+				}
+				for (let i = 0; i < params.personaIds.length; i++) {
+					const personaId = params.personaIds[i]
+					if (!existingPersonaIds.has(personaId)) {
+						await db.insert(schema.chatPersonas).values({ chatId: params.chat.id!, personaId, position: i })
+					}
+				}
+			}
 
 			// Fetch updated chat
 			const updatedChat = await getChatFromDB(params.chat.id!, userId)
