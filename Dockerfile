@@ -6,8 +6,8 @@ FROM node:24-alpine AS builder
 WORKDIR /app
 
 # Install deps first (layer-cached until package files change)
-COPY package*.json ./
-RUN npm ci
+COPY package.json ./
+RUN npm install
 
 # Copy source and build
 COPY . .
