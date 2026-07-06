@@ -36,6 +36,12 @@ const LICENSE_WHITELIST = [
 	{ name: "@img/sharp-libvips-linuxmusl-x64", version: "1.2.4" },
 	{ name: "@img/sharp-libvips-darwin-arm64", version: "1.2.4" },
 	{ name: "@img/sharp-libvips-darwin-x64", version: "1.2.4" },
+	{ name: "@img/sharp-darwin-arm64", version: "0.34.5" },
+	{ name: "@img/sharp-darwin-x64", version: "0.34.5" },
+	{ name: "@img/sharp-linux-x64", version: "0.34.5" },
+	{ name: "@img/sharp-linux-arm64", version: "0.34.5" },
+	{ name: "@img/sharp-win32-x64", version: "0.34.5" },
+	{ name: "@img/sharp-win32-arm64", version: "0.34.5" },
 	{ name: "json-schema", version: "0.4.0" },
 	{ name: "type-fest", version: "0.13.1" }
 ]
@@ -138,7 +144,10 @@ const ACCEPTABLE_LICENSES = [
 	"lgpl-3.0",
 	"lgpl-3.0-only",
 	"lgpl-3.0-or-later",
-	"lgpl-3.0 or later"
+	"lgpl-3.0 or later",
+	"apache-2.0 and lgpl-3.0-or-later",
+	"apache-2.0 and lgpl-3.0",
+	"apache-2.0 or lgpl-3.0-or-later"
 ]
 
 function isAcceptableLicense(license, name, version) {
