@@ -332,7 +332,7 @@
 							bind:value={koboldCppFields.memory}
 							placeholder="Text to forcefully append to the beginning of prompts"
 							class="textarea h-20"
-						/>
+						></textarea>
 						<p class="text-muted-foreground text-xs">
 							This text is forcefully appended to the beginning of
 							any prompt
@@ -417,7 +417,7 @@
 				</div>
 				<div class="flex items-center justify-between gap-4">
 					<div>
-						<label class="font-semibold">Thinking / Reasoning</label>
+						<p class="font-semibold">Thinking / Reasoning</p>
 						<p class="text-muted-foreground text-xs">Auto lets the model decide based on its template</p>
 					</div>
 					<div class="flex rounded overflow-hidden border border-surface-300-700 text-sm">

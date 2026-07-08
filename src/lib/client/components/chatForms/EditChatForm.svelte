@@ -7,7 +7,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { dndzone } from "svelte-dnd-action"
 	import RemoveFromChatModal from "../modals/RemoveFromChatModal.svelte"
-	import { onDestroy, onMount, getContext } from "svelte"
+	import { onDestroy, onMount, getContext, untrack } from "svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
@@ -49,7 +49,7 @@
 	let selectedTags: string[] = $state([])
 
 	let chat: Sockets.Chat.Response["chat"] | undefined = $state()
-	let isCreating = $state(!chat)
+	let isCreating = $state(untrack(() => !chat))
 	let characters: Sockets.Characters.List.Response["characterList"] = $state(
 		[]
 	)
@@ -854,6 +854,7 @@
 								{/if}
 								<!-- Show character controls only when editing (chat exists) -->
 								{#if chat}
+									{@const VisibilityIcon = getVisibilityIcon(visibility)}
 									<div class="flex flex-col gap-1">
 										<span title="Toggle Character Active">
 											<Switch
@@ -891,12 +892,7 @@
 													opt.value === visibility
 											)?.label || 'Full Info'}"
 										>
-											<svelte:component
-												this={getVisibilityIcon(
-													visibility
-												)}
-												size={20}
-											/>
+											<VisibilityIcon size={20} />
 										</button>
 									</div>
 								{/if}

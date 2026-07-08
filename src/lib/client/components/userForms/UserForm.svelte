@@ -4,6 +4,7 @@
 	import { Modal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { z } from "zod"
+	import { untrack } from "svelte"
 
 	interface Props {
 		user?: SelectUser
@@ -16,9 +17,9 @@
 	const socket = useTypedSocket()
 
 	// Form state
-	let formUsername = $state(user?.username || "")
-	let formDisplayName = $state(user?.displayName || "")
-	let formIsAdmin = $state(user?.isAdmin || false)
+	let formUsername = $state(untrack(() => user?.username || ""))
+	let formDisplayName = $state(untrack(() => user?.displayName || ""))
+	let formIsAdmin = $state(untrack(() => user?.isAdmin || false))
 	let formPassphrase = $state("")
 	let formConfirmPassphrase = $state("")
 	let showAdminConfirmModal = $state(false)

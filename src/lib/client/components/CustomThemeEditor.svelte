@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { onMount, onDestroy, getContext } from "svelte"
+	import { onMount, onDestroy, getContext, untrack } from "svelte"
 	import * as skio from "sveltekit-io"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { EditorState } from "@codemirror/state"
@@ -38,9 +38,9 @@
 	let confirmDelete = $state(false)
 
 	// Form fields
-	let labelField = $state(theme?.label ?? "")
+	let labelField = $state(untrack(() => theme?.label ?? ""))
 	// For new themes, generate a stable random ID upfront so file import can use it immediately
-	const themeName = theme?.name ?? crypto.randomUUID()
+	const themeName = untrack(() => theme?.name ?? crypto.randomUUID())
 	let cssContent = $state("")
 
 	// Stats
@@ -238,8 +238,9 @@
 
 	<!-- Fields row -->
 	<div class="border-b px-4 py-3" style="border-color: #2a2a3a; background: #16162a;">
-		<label class="mb-1 block text-xs font-medium" style="color: #6b6b8a;">Display name</label>
+		<label for="theme-label-input" class="mb-1 block text-xs font-medium" style="color: #6b6b8a;">Display name</label>
 		<input
+			id="theme-label-input"
 			type="text"
 			class="w-full rounded border px-2 py-1.5 text-sm outline-none transition focus:ring-1"
 			style="background: #1e1e32; border-color: #2a2a3a; color: #c8c8e8; --tw-ring-color: #7c6af7;"

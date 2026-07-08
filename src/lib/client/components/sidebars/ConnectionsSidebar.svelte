@@ -268,6 +268,7 @@
 	})
 </script>
 
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
 	class="text-foreground p-4"
 	role="main"

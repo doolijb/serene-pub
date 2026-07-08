@@ -2,6 +2,7 @@
 	import { Modal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { untrack } from "svelte"
 
 	const socket = useTypedSocket()
 
@@ -30,7 +31,7 @@
 
 	type Status = "pending" | "picking" | "done" | "skipped"
 	let statuses = $state<Record<number, Status>>(
-		Object.fromEntries(orphanedBindings.map((b) => [b.id, "pending" as Status]))
+		untrack(() => Object.fromEntries(orphanedBindings.map((b) => [b.id, "pending" as Status])))
 	)
 
 	let currentIndex = $state(0)

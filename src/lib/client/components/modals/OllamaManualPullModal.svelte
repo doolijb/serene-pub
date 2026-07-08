@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { untrack } from "svelte"
 
 	interface Props {
 		open: boolean
@@ -19,7 +20,7 @@
 		onconfirm
 	}: Props = $props()
 
-	let inputValue = $state(modelName)
+	let inputValue = $state(untrack(() => modelName))
 	let isLoading = $state(false)
 
 	// Function to clean the model name

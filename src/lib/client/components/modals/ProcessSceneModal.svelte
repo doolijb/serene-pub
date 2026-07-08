@@ -28,7 +28,7 @@
 
 	const socket = useTypedSocket()
 
-	let internalActivityId = $state(activityId)
+	let internalActivityId = $state(untrack(() => activityId))
 
 	let step = $state<AiTaskStep>(
 		untrack(() => initialStep === "review" || (pendingResult != null && !initialStep) ? "review" : "running")
@@ -37,10 +37,10 @@
 	let errorMessage = $state("")
 
 	// Review state
-	let reviewName = $state(pendingResult?.name ?? "")
-	let reviewContent = $state(pendingResult?.content ?? "")
-	let reviewParticipants = $state<string[]>([...(pendingResult?.participantCharacters ?? [])])
-	let reviewMentioned = $state<string[]>([...(pendingResult?.mentionedCharacters ?? [])])
+	let reviewName = $state(untrack(() => pendingResult?.name ?? ""))
+	let reviewContent = $state(untrack(() => pendingResult?.content ?? ""))
+	let reviewParticipants = $state<string[]>(untrack(() => [...(pendingResult?.participantCharacters ?? [])]))
+	let reviewMentioned = $state<string[]>(untrack(() => [...(pendingResult?.mentionedCharacters ?? [])]))
 	let newParticipantInput = $state("")
 	let newMentionedInput = $state("")
 

@@ -38,9 +38,9 @@
 	const socket = useTypedSocket()
 
 	// Focus management refs
-	let mainContentRef: HTMLElement
-	let leftSidebarRef: HTMLElement
-	let rightSidebarRef: HTMLElement
+	let mainContentRef = $state<HTMLElement | null>(null)
+	let leftSidebarRef = $state<HTMLElement | null>(null)
+	let rightSidebarRef = $state<HTMLElement | null>(null)
 	let keyboardNavManager: KeyboardNavigationManager
 
 	let userCtx: { user: SelectUser } = $state({} as { user: any })

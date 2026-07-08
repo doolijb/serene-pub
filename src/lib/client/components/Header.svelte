@@ -38,7 +38,7 @@
 	})
 </script>
 
-<header class="w-full" role="banner">
+<header class="w-full">
 	<div
 		class="bg-surface-100-900 bg-opacity-25 relative mx-auto flex w-full justify-between px-4 py-2 backdrop-blur"
 	>
@@ -46,7 +46,7 @@
 		<nav
 			class="hidden flex-1 justify-start gap-2 lg:flex"
 			aria-label="Left navigation"
-			role="navigation"
+
 		>
 			{#each panelsCtx.getOrderedEntries(panelsCtx.leftNav, panelsCtx.leftNavOrder || []) as [key, item]}
 				{#if item?.icon}
@@ -104,7 +104,7 @@
 		<nav
 			class="hidden flex-1 items-center justify-end gap-2 lg:flex"
 			aria-label="Right navigation"
-			role="navigation"
+
 		>
 			{#each Object.entries(panelsCtx.rightNav) as [key, item]}
 				{#if item?.icon}

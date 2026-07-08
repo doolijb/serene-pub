@@ -184,7 +184,7 @@
 	}> = $state([])
 	let tagSearchQuery = $state("")
 	let showTagDropdown = $state(false)
-	let tagInputRef: HTMLInputElement
+	let tagInputRef = $state<HTMLInputElement | null>(null)
 
 	// Filtered tags based on search query
 	let filteredTags = $derived.by(() => {
