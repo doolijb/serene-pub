@@ -89,6 +89,7 @@
 
 	// Get chat id from route params
 	let chatId: number = $derived.by(() => Number(page.params.id))
+	let chatNotFound = $state(false)
 
 	let lastMessage: SelectChatMessage | undefined = $derived.by(() => {
 		if (chat && chat.chatMessages.length > 0) {
@@ -497,6 +498,7 @@
 		if (chatId) {
 			// Reset state when switching chats
 			chat = undefined // Clear current chat data
+			chatNotFound = false
 			pagination = undefined
 			chatResponseOrder = undefined
 			draftCompiledPrompt = undefined
@@ -885,6 +887,10 @@
 		})
 
 		socket.on("chats:get", (msg: Sockets.Chats.Get.Response) => {
+			if (msg.chat === null && !loadingOlderMessages) {
+				chatNotFound = true
+				return
+			}
 			if (msg.chat?.id === Number.parseInt(page.params.id)) {
 				if (chat && loadingOlderMessages && msg.beforeId != null) {
 					// Load-more: prepend older messages (server already deduped via cursor)
@@ -1073,11 +1079,17 @@
 		socket?.on("scenes:scenedMessageIds", (msg: Sockets.Scenes.SenedMessageIds.Response) => {
 			scenedMessageIds = new Set(msg.scenedMessageIds)
 		})
+		socket?.on("scenes:scenedMessageIds:error", () => {
+			chatNotFound = true
+		})
 
 		socket?.on("scenes:list", (msg: Sockets.Scenes.List.Response) => {
 			if (!msg.sceneList.length || msg.sceneList[0].chatId === chatId) {
 				sceneList = msg.sceneList
 			}
+		})
+		socket?.on("scenes:list:error", () => {
+			chatNotFound = true
 		})
 
 		socket?.emit("scenes:scenedMessageIds", { chatId })
@@ -1166,10 +1178,17 @@
 </script>
 
 <svelte:head>
-	<title>Serene Pub - {chat?.name}</title>
+	<title>Serene Pub - {chatNotFound ? "Not Found" : (chat?.name ?? "Loading...")}</title>
 	<meta name="description" content="Serene Pub" />
 </svelte:head>
 
+{#if chatNotFound}
+	<div class="flex h-full flex-col items-center justify-center gap-4 opacity-60">
+		<Icons.MessageSquareOff size={48} />
+		<p class="text-lg font-semibold">Chat not found</p>
+		<p class="text-sm">This chat may have been deleted or you don't have access to it.</p>
+	</div>
+{:else}
 <div class="relative flex h-full flex-col">
 	<ChatContainer
 		{chat}
@@ -2052,6 +2071,7 @@
 		{/if}
 	</div>
 {/snippet}
+{/if}
 
 <style lang="postcss">
 	@reference "tailwindcss";

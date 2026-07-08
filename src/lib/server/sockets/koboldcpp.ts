@@ -185,19 +185,39 @@ export const koboldCppListModelsHandler: Handler<
 			// KoboldCPP offline — return empty gracefully
 		}
 
-		// Scan modelsDir for .gguf files with sizes
+		// Load DB records; exclude anything still downloading (or errored)
+		const dbModels = await db.query.koboldCppModels.findMany()
+		const dbByFilename = new Map(dbModels.map((m) => [m.filename, m]))
+		const incompleteFilenames = new Set(
+			dbModels.filter((m) => m.status !== "complete").map((m) => m.filename)
+		)
+
+		// Scan modelsDir for .gguf files with sizes, skip incomplete downloads
 		let availableModels: Sockets.KoboldCpp.ListModels.ModelFile[] = []
 		if (modelsDir) {
 			try {
 				const entries = await fsPromises.readdir(modelsDir)
-				const ggufFiles = entries.filter((f) => f.toLowerCase().endsWith(".gguf"))
+				const ggufFiles = entries.filter(
+					(f) => f.toLowerCase().endsWith(".gguf") && !incompleteFilenames.has(f)
+				)
 				availableModels = await Promise.all(
 					ggufFiles.map(async (name) => {
+						let size = 0
 						try {
 							const stat = await fsPromises.stat(path.join(modelsDir, name))
-							return { name, size: stat.size }
-						} catch {
-							return { name, size: 0 }
+							size = stat.size
+						} catch {}
+						const rec = dbByFilename.get(name)
+						return {
+							name,
+							size,
+							...(rec ? {
+								modelName: rec.modelName,
+								modelUrl: rec.modelUrl ?? undefined,
+								description: rec.description ?? undefined,
+								quantization: rec.quantization ?? undefined,
+								sizeBytes: rec.sizeBytes ?? undefined
+							} : {})
 						}
 					})
 				)
@@ -223,13 +243,13 @@ export const koboldCppLoadModelHandler: Handler<
 	event: "koboldcpp:loadModel",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		const { koboldCppManagerBaseUrl: baseUrl } =
+		const { koboldCppManagerBaseUrl: baseUrl, koboldCppManagedAdminPassword: adminPassword } =
 			(await db.query.koboldCppSettings.findFirst())!
 
 		const response = await fetch(`${baseUrl}/api/admin/reload_config`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ filename: params.filename }),
+			body: JSON.stringify({ filename: params.filename, adminpassword: adminPassword ?? "" }),
 			signal: AbortSignal.timeout(30000)
 		})
 
@@ -265,15 +285,15 @@ export const koboldCppConnectModelHandler: Handler<
 				)
 		})
 
+		const isManaged = settings.koboldCppManagedMode === "managed"
+		const modelFile = path.basename(params.modelName)
+
 		if (!existingConnection) {
 			const connectionName = params.modelName
 				.replace(/\.gguf$/i, "")
 				.replace(/\.kcpps$/i, "")
 				.split(/[\\/]/)
 				.pop()!
-
-			const isManaged = settings.koboldCppManagedMode === "managed"
-			const modelFile = path.basename(params.modelName)
 
 			const extraJson = {
 				...koboldCppAdapter.connectionDefaults.extraJson,
@@ -300,6 +320,21 @@ export const koboldCppConnectModelHandler: Handler<
 				.values(data)
 				.returning()
 			existingConnection = newConnection
+		} else if (isManaged && !(existingConnection.extraJson as any)?.managedConfig?.modelFile) {
+			// Connection existed before managed mode was set up — patch in managedConfig
+			const updatedExtraJson = {
+				...(existingConnection.extraJson as any ?? {}),
+				managedConfig: {
+					...DEFAULT_MANAGED_CONFIG,
+					modelFile
+				}
+			}
+			const [updated] = await db
+				.update(schema.connections)
+				.set({ extraJson: updatedExtraJson })
+				.where(eq(schema.connections.id, existingConnection.id))
+				.returning()
+			existingConnection = updated
 		}
 
 		await connectionsSetUserActive.handler(
@@ -310,21 +345,23 @@ export const koboldCppConnectModelHandler: Handler<
 		await connectionsList.handler(socket, {}, emitToUser)
 
 		// Trigger model load for managed mode (async — don't block the response)
-		if (settings.koboldCppManagedMode === "managed") {
+		if (isManaged) {
 			const conn = existingConnection
-			const managedConfig = (conn.extraJson as any)?.managedConfig ?? { ...DEFAULT_MANAGED_CONFIG, modelFile: path.basename(params.modelName) }
+			const managedConfig = (conn.extraJson as any)?.managedConfig
 			const adminPassword = settings.koboldCppManagedAdminPassword ?? ""
 			const ttlSecs = settings.koboldCppManagedModelTtlSecs ?? 300
-			ensureModelLoaded({
-				connectionId: conn.id,
-				managedConfig,
-				baseUrl,
-				modelsDir: modelsDir ?? null,
-				adminPassword,
-				ttlSecs
-			}).catch((err) => {
-				console.error("Background model load failed:", err)
-			})
+			if (managedConfig?.modelFile) {
+				ensureModelLoaded({
+					connectionId: conn.id,
+					managedConfig,
+					baseUrl,
+					modelsDir: modelsDir ?? null,
+					adminPassword,
+					ttlSecs
+				}).catch((err) => {
+					console.error("[KoboldCPP] background model load failed:", err)
+				})
+			}
 		}
 
 		const res: Sockets.KoboldCpp.ConnectModel.Response = {
@@ -365,6 +402,121 @@ export const koboldCppPerfHandler: Handler<
 			totalGens: data.total_gens ?? 0
 		}
 		emitToUser("koboldcpp:perf", res)
+		return res
+	}
+}
+
+// --- RECOMMENDED MODELS (cached to avoid hammering HF on every open) ---
+
+const RECOMMENDED_CACHE_TTL_MS = 60 * 60 * 1000 // 1 hour
+let recommendedCache: { models: Sockets.KoboldCpp.RecommendedModels.RecommendedModel[]; cachedAt: number } | null = null
+
+const GGUF_QUANT_RE = /^(Q|IQ|BF|F)\d/i
+
+async function fetchRecommendedYaml(): Promise<Array<{ name: string; pull: string; recommended_vram: number; details: { parameter_size: string; description: string } }>> {
+	const resp = await fetch("https://raw.githubusercontent.com/doolijb/serene-pub-gguf-list/main/recommended.yaml")
+	if (!resp.ok) throw new Error(`YAML fetch failed: ${resp.status}`)
+	const text = await resp.text()
+
+	const models: any[] = []
+	let cur: any = null
+	let inDetails = false
+	for (const line of text.split("\n")) {
+		const t = line.trim()
+		if (t.startsWith("- name:")) {
+			if (cur) models.push(cur)
+			cur = { name: t.replace("- name:", "").trim(), pull: "", recommended_vram: 0, details: { parameter_size: "", description: "" } }
+			inDetails = false
+		} else if (cur) {
+			if (t.startsWith("pull:")) cur.pull = t.replace("pull:", "").trim()
+			else if (t.startsWith("recommended_vram:")) cur.recommended_vram = parseInt(t.replace("recommended_vram:", "").trim()) || 0
+			else if (t === "details:") inDetails = true
+			else if (inDetails) {
+				if (t.startsWith("parameter_size:")) cur.details.parameter_size = t.replace("parameter_size:", "").trim().replace(/"/g, "")
+				else if (t.startsWith("description:")) cur.details.description = t.replace("description:", "").trim().replace(/"/g, "")
+			}
+		}
+	}
+	if (cur) models.push(cur)
+	return models
+}
+
+async function resolveHfModel(ollamaName: string): Promise<Sockets.KoboldCpp.SearchModels.ModelResult | null> {
+	try {
+		const resp = await fetch(
+			`https://huggingface.co/api/models?search=${encodeURIComponent(ollamaName)}&filter=gguf&limit=5&sort=downloads&full=True&config=True`,
+			{ signal: AbortSignal.timeout(10_000) }
+		)
+		if (!resp.ok) return null
+		const data: any[] = await resp.json()
+
+		for (const m of data) {
+			if (m.private || m.gated === true || m.gated === "auto") continue
+			const pullOptions: Sockets.KoboldCpp.SearchModels.PullOption[] = (m.siblings as any[])
+				.filter((s: any) => s.rfilename.endsWith(".gguf"))
+				.filter((s: any) => GGUF_QUANT_RE.test(s.rfilename.replace(".gguf", "").split("-").pop()?.toUpperCase() ?? ""))
+				.map((s: any) => ({
+					label: s.rfilename.replace(".gguf", "").split("-").pop() ?? s.rfilename,
+					filename: s.rfilename,
+					downloadUrl: `https://huggingface.co/${m.id}/resolve/main/${s.rfilename}`,
+					sizeBytes: typeof s.size === "number" ? s.size : undefined
+				}))
+			if (pullOptions.length > 0) {
+				return {
+					name: m.id,
+					description: m.description || m.pipeline_tag,
+					downloads: m.downloads,
+					likes: m.likes,
+					trendingScore: m.trendingScore,
+					url: `https://huggingface.co/${m.id}`,
+					pullOptions
+				}
+			}
+		}
+		return null
+	} catch {
+		return null
+	}
+}
+
+export const koboldCppRecommendedModelsHandler: Handler<
+	Sockets.KoboldCpp.RecommendedModels.Params,
+	Sockets.KoboldCpp.RecommendedModels.Response
+> = {
+	event: "koboldcpp:recommendedModels",
+	handler: async (socket, params, emitToUser) => {
+		if (recommendedCache && Date.now() - recommendedCache.cachedAt < RECOMMENDED_CACHE_TTL_MS) {
+			const res = { models: recommendedCache.models }
+			emitToUser("koboldcpp:recommendedModels", res)
+			return res
+		}
+
+		const yamlModels = await fetchRecommendedYaml()
+
+		const settled = await Promise.allSettled(
+			yamlModels.map(async (ym) => {
+				const hf = await resolveHfModel(ym.name)
+				if (!hf) return null
+				return {
+					...hf,
+					ollamaName: ym.name,
+					recommendedVram: ym.recommended_vram || undefined,
+					parameterSize: ym.details.parameter_size || undefined,
+					description: hf.description || ym.details.description || undefined
+				} satisfies Sockets.KoboldCpp.RecommendedModels.RecommendedModel
+			})
+		)
+
+		const models = settled
+			.filter((r): r is PromiseFulfilledResult<Sockets.KoboldCpp.RecommendedModels.RecommendedModel> =>
+				r.status === "fulfilled" && r.value !== null
+			)
+			.map((r) => r.value)
+
+		recommendedCache = { models, cachedAt: Date.now() }
+
+		const res: Sockets.KoboldCpp.RecommendedModels.Response = { models }
+		emitToUser("koboldcpp:recommendedModels", res)
 		return res
 	}
 }
@@ -412,7 +564,8 @@ export const koboldCppSearchModelsHandler: Handler<
 					.map((s: any) => ({
 						label: s.rfilename.replace(".gguf", "").split("-").pop() ?? s.rfilename,
 						filename: s.rfilename,
-						downloadUrl: `https://huggingface.co/${m.id}/resolve/main/${s.rfilename}`
+						downloadUrl: `https://huggingface.co/${m.id}/resolve/main/${s.rfilename}`,
+						sizeBytes: typeof s.size === "number" ? s.size : undefined
 					}))
 				return {
 					name: m.id,
@@ -445,13 +598,18 @@ export const koboldCppDownloadModelHandler: Handler<
 
 		await fsPromises.mkdir(modelsDir, { recursive: true })
 
-		const { filename, downloadUrl, modelName } = params
+		const { filename, downloadUrl, modelName, modelUrl, description, quantization, sizeBytes } = params
 		const destPath = path.join(modelsDir, filename)
 
 		if (activeDownloads[filename] && !activeDownloads[filename].isDone) {
 			emitToUser("koboldcpp:downloadModel:error", { error: "Already downloading this file" })
 			return { success: false }
 		}
+
+		// Upsert DB record before starting so the file is excluded from the available list immediately
+		await db.insert(schema.koboldCppModels)
+			.values({ filename, modelName, modelUrl, description, quantization, sizeBytes: sizeBytes ?? null, downloadUrl, status: "downloading" })
+			.onConflictDoUpdate({ target: schema.koboldCppModels.filename, set: { modelName, modelUrl, description, quantization, sizeBytes: sizeBytes ?? null, downloadUrl, status: "downloading", errorMessage: null } })
 
 		// Bind the emitter so progress events reach this user
 		emitDownloadProgressFn = (data) => emitToUser("koboldcpp:downloadProgress", data)
@@ -516,13 +674,23 @@ export const koboldCppDownloadModelHandler: Handler<
 				activeDownloads[filename].status = "success"
 				activeDownloads[filename].isDone = true
 				emitDownloadProgress()
+				await db.update(schema.koboldCppModels)
+					.set({ status: "complete" })
+					.where(eq(schema.koboldCppModels.filename, filename))
 			} catch (err: any) {
 				const isCancelled = err.message === "cancelled"
 				activeDownloads[filename].status = isCancelled ? "cancelled" : "error"
 				activeDownloads[filename].isDone = true
 				if (isCancelled) {
-					// Clean up partial file
+					// Clean up partial file and DB record
 					fsPromises.unlink(destPath).catch(() => {})
+					db.delete(schema.koboldCppModels)
+						.where(eq(schema.koboldCppModels.filename, filename))
+						.catch(() => {})
+				} else {
+					await db.update(schema.koboldCppModels)
+						.set({ status: "error", errorMessage: err.message ?? "Unknown error" })
+						.where(eq(schema.koboldCppModels.filename, filename))
 				}
 				emitDownloadProgress()
 			}
@@ -669,6 +837,23 @@ export const koboldCppSetModelTtl: Handler<
 	}
 }
 
+export const koboldCppSetSubprocessTimeout: Handler<
+	Sockets.KoboldCpp.SetSubprocessTimeout.Params,
+	Sockets.KoboldCpp.SetSubprocessTimeout.Response
+> = {
+	event: "koboldcpp:setSubprocessTimeout",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		const secs = Math.max(0, Math.floor(params.timeoutSecs))
+		await db.update(schema.koboldCppSettings).set({ koboldCppManagedSubprocessTimeoutSecs: secs })
+		subprocessManager.setSubprocessTimeout(secs)
+		const res: Sockets.KoboldCpp.SetSubprocessTimeout.Response = { success: true }
+		emitToUser("koboldcpp:setSubprocessTimeout", res)
+		await systemSettingsGet.handler(socket, {}, emitToUser)
+		return res
+	}
+}
+
 export const koboldCppListBinaryVariants: Handler<
 	Sockets.KoboldCpp.ListBinaryVariants.Params,
 	Sockets.KoboldCpp.ListBinaryVariants.Response
@@ -677,20 +862,62 @@ export const koboldCppListBinaryVariants: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 
+		const { variants, releaseTag } = await binaryManager.listVariants(params.tag)
+		const res: Sockets.KoboldCpp.ListBinaryVariants.Response = {
+			variants,
+			releaseTag,
+			defaultDir: path.join(getAppDataDir(), "koboldcpp")
+		}
+		emitToUser("koboldcpp:listBinaryVariants", res)
+		return res
+	}
+}
+
+export const koboldCppListReleaseVersions: Handler<
+	Sockets.KoboldCpp.ListReleaseVersions.Params,
+	Sockets.KoboldCpp.ListReleaseVersions.Response
+> = {
+	event: "koboldcpp:listReleaseVersions",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+
+		const versions = await binaryManager.listReleaseVersions(10)
+		const res: Sockets.KoboldCpp.ListReleaseVersions.Response = { versions }
+		emitToUser("koboldcpp:listReleaseVersions", res)
+		return res
+	}
+}
+
+export const koboldCppCheckManagedBinaryUpdate: Handler<
+	Sockets.KoboldCpp.CheckManagedBinaryUpdate.Params,
+	Sockets.KoboldCpp.CheckManagedBinaryUpdate.Response
+> = {
+	event: "koboldcpp:checkManagedBinaryUpdate",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+
+		const settings = (await db.query.koboldCppSettings.findFirst())!
+		const installedTag = settings.koboldCppManagedReleaseTag ?? null
+
 		const ghResp = await fetch(
 			"https://api.github.com/repos/LostRuins/koboldcpp/releases/latest",
 			{ headers: { Accept: "application/vnd.github.v3+json" } }
 		)
 		if (!ghResp.ok) throw new Error(`GitHub API error: ${ghResp.status}`)
 		const release = await ghResp.json()
+		const latestTag: string = release.tag_name ?? ""
+		const releaseUrl: string = release.html_url ?? ""
 
-		const variants = await binaryManager.listVariants()
-		const res: Sockets.KoboldCpp.ListBinaryVariants.Response = {
-			variants,
-			releaseTag: release.tag_name ?? "unknown",
-			defaultDir: path.join(getAppDataDir(), "koboldcpp")
+		const isUpdateAvailable =
+			!!installedTag && !!latestTag ? compareVersions(latestTag, installedTag) > 0 : false
+
+		const res: Sockets.KoboldCpp.CheckManagedBinaryUpdate.Response = {
+			isUpdateAvailable,
+			installedTag,
+			latestTag,
+			releaseUrl
 		}
-		emitToUser("koboldcpp:listBinaryVariants", res)
+		emitToUser("koboldcpp:checkManagedBinaryUpdate", res)
 		return res
 	}
 }
@@ -705,10 +932,11 @@ export const koboldCppDownloadBinary: Handler<
 
 		binaryManager.setEmitter((d) => emitToUser("koboldcpp:binaryDownloadProgress", d))
 
-		// Persist the chosen variant + dir now so it can be resumed/referenced
+		// Persist the chosen variant + dir + version now so it can be resumed/referenced
 		await db.update(schema.koboldCppSettings).set({
 			koboldCppManagedBinaryVariant: params.assetName,
-			koboldCppManagedBinaryDir: params.destDir
+			koboldCppManagedBinaryDir: params.destDir,
+			koboldCppManagedReleaseTag: params.releaseTag
 		})
 
 		// Run async so we can return immediately
@@ -861,7 +1089,8 @@ export const koboldCppDeleteModelHandler: Handler<
 
 		await fsPromises.unlink(filePath)
 
-		// Remove any connections pointing to this model
+		// Remove DB record and any connections pointing to this model
+		await db.delete(schema.koboldCppModels).where(eq(schema.koboldCppModels.filename, params.modelName))
 		await db.delete(schema.connections).where(
 			and(
 				eq(schema.connections.type, "koboldcpp"),
@@ -895,6 +1124,7 @@ export function registerKoboldCppHandlers(
 	register(socket, koboldCppConnectModelHandler, emitToUser)
 	register(socket, koboldCppPerfHandler, emitToUser)
 	register(socket, koboldCppSearchModelsHandler, emitToUser)
+	register(socket, koboldCppRecommendedModelsHandler, emitToUser)
 	register(socket, koboldCppDownloadModelHandler, emitToUser)
 	register(socket, koboldCppCancelDownloadHandler, emitToUser)
 	register(socket, koboldCppGetDownloadProgressHandler, emitToUser)
@@ -904,7 +1134,10 @@ export function registerKoboldCppHandlers(
 	register(socket, koboldCppSetManagedPort, emitToUser)
 	register(socket, koboldCppSetManagedBinaryDir, emitToUser)
 	register(socket, koboldCppSetModelTtl, emitToUser)
+	register(socket, koboldCppSetSubprocessTimeout, emitToUser)
 	register(socket, koboldCppListBinaryVariants, emitToUser)
+	register(socket, koboldCppListReleaseVersions, emitToUser)
+	register(socket, koboldCppCheckManagedBinaryUpdate, emitToUser)
 	register(socket, koboldCppDownloadBinary, emitToUser)
 	register(socket, koboldCppGetBinaryDownloadProgress, emitToUser)
 	register(socket, koboldCppCancelBinaryDownload, emitToUser)

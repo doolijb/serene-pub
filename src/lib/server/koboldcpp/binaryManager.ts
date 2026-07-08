@@ -74,25 +74,31 @@ function makeDisplayName(name: string): string {
 	return name.replace(/\.exe$/i, "").replace(/_/g, " ")
 }
 
-export async function listVariants(): Promise<BinaryVariant[]> {
-	const resp = await fetch(
-		"https://api.github.com/repos/LostRuins/koboldcpp/releases/latest",
-		{ headers: { Accept: "application/vnd.github.v3+json" } }
-	)
+export interface ReleaseVersion {
+	tag: string
+	publishedAt: string
+	isLatest: boolean
+}
+
+export async function listVariants(tag?: string): Promise<{ variants: BinaryVariant[]; releaseTag: string }> {
+	const url =
+		tag && tag !== "latest"
+			? `https://api.github.com/repos/LostRuins/koboldcpp/releases/tags/${encodeURIComponent(tag)}`
+			: "https://api.github.com/repos/LostRuins/koboldcpp/releases/latest"
+
+	const resp = await fetch(url, { headers: { Accept: "application/vnd.github.v3+json" } })
 	if (!resp.ok) throw new Error(`GitHub API returned ${resp.status}`)
 
 	const release = await resp.json()
+	const releaseTag: string = release.tag_name ?? "unknown"
 	const assets = (release.assets ?? []) as { name: string; browser_download_url: string; size: number }[]
 
-	return assets
+	const variants = assets
 		.filter((a) => {
 			const lower = a.name.toLowerCase()
 			if (!lower.startsWith("koboldcpp")) return false
-			// Skip checksums, source archives
 			if (lower.endsWith(".sha256") || lower.endsWith(".sha1") || lower.endsWith(".md5")) return false
 			if (lower.endsWith(".tar.gz") || lower.endsWith(".tar") || lower.endsWith(".7z")) return false
-			// Skip macOS .zip bundles (they package the binary) — keep the raw binary if present
-			// but include macOS zips when there's no bare binary available
 			return true
 		})
 		.map((a) => ({
@@ -103,6 +109,32 @@ export async function listVariants(): Promise<BinaryVariant[]> {
 			downloadUrl: a.browser_download_url,
 			sizeBytes: a.size
 		}))
+
+	return { variants, releaseTag }
+}
+
+export async function listReleaseVersions(count = 10): Promise<ReleaseVersion[]> {
+	const [listResp, latestResp] = await Promise.all([
+		fetch(
+			`https://api.github.com/repos/LostRuins/koboldcpp/releases?per_page=${count}`,
+			{ headers: { Accept: "application/vnd.github.v3+json" } }
+		),
+		fetch(
+			"https://api.github.com/repos/LostRuins/koboldcpp/releases/latest",
+			{ headers: { Accept: "application/vnd.github.v3+json" } }
+		)
+	])
+
+	if (!listResp.ok) throw new Error(`GitHub API returned ${listResp.status}`)
+
+	const releases = await listResp.json()
+	const latestTag = latestResp.ok ? (await latestResp.json()).tag_name : null
+
+	return (releases as any[]).map((r) => ({
+		tag: r.tag_name as string,
+		publishedAt: r.published_at as string,
+		isLatest: r.tag_name === latestTag
+	}))
 }
 
 export async function downloadVariant(opts: {

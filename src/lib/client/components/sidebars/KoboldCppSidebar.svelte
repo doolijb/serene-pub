@@ -166,7 +166,7 @@
 			<KoboldCppBinaryVariantPicker
 				onDownloadStarted={() => {
 					showVariantPicker = false
-					activeTab = "settings"
+					activeTab = "models"
 				}}
 			/>
 		</div>
@@ -279,12 +279,12 @@
 					</Tabs.Panel>
 					<Tabs.Panel value="perf">
 						{#if activeTab === "perf"}
-							<KoboldCppPerfTab />
+							<KoboldCppPerfTab {isManaged} />
 						{/if}
 					</Tabs.Panel>
 					<Tabs.Panel value="settings">
 						{#if activeTab === "settings"}
-							<KoboldCppSettingsTab onReset={handleReset} {isManaged} />
+							<KoboldCppSettingsTab onReset={handleReset} {isManaged} onUpdateBinary={() => (showVariantPicker = true)} />
 						{/if}
 					</Tabs.Panel>
 				{/snippet}

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { Modal } from "@skeletonlabs/skeleton-svelte"
-	import { getContext } from "svelte"
+	import { getContext, onMount, onDestroy } from "svelte"
 	import { Theme } from "$lib/client/consts/Theme"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
@@ -10,6 +10,168 @@
 	import BackgroundPicker from "$lib/client/components/backgrounds/BackgroundPicker.svelte"
 
 	const socket = useTypedSocket()
+
+	// Custom themes
+	let myCustomThemes = $state<Sockets.CustomThemes.ThemeMeta[]>([])
+	let instanceCustomThemes = $state<Sockets.CustomThemes.ThemeMeta[]>([])
+
+	onMount(() => {
+		socket?.on("customThemes:list", (msg: Sockets.CustomThemes.List.Response) => {
+			myCustomThemes = msg.myThemes
+			instanceCustomThemes = msg.instanceThemes
+		})
+		socket?.emit("customThemes:list", {})
+
+		// Listen for socket responses
+		socket.on("userSettings:updateDarkMode", (message) => {
+			if (message.success) {
+				toaster.success({
+					title: `${message.enabled ? "Dark" : "Light"} mode enabled`
+				})
+			} else {
+				toaster.error({ title: "Failed to update dark mode setting" })
+			}
+		})
+
+		socket.on("userSettings:updateTheme", (message) => {
+			if (message.success) {
+				toaster.success({
+					title: "Theme updated successfully"
+				})
+			} else {
+				toaster.error({ title: "Failed to update theme" })
+			}
+		})
+
+		socket.on("userSettings:updateShowAllCharacterFields", (message) => {
+			if (message.success) {
+				toaster.success({
+					title: `Character fields display ${message.enabled ? "expanded" : "simplified"}`
+				})
+			} else {
+				toaster.error({
+					title: "Failed to update character fields setting"
+				})
+			}
+		})
+
+		socket.on("userSettings:updateEasyCharacterCreation", (message) => {
+			if (message.success) {
+				toaster.success({
+					title: `Easy character creation ${message.enabled ? "enabled" : "disabled"}`
+				})
+			} else {
+				toaster.error({
+					title: "Failed to update easy character creation setting"
+				})
+			}
+		})
+
+		socket.on("userSettings:updateEasyPersonaCreation", (message) => {
+			if (message.success) {
+				toaster.success({
+					title: `Easy persona creation ${message.enabled ? "enabled" : "disabled"}`
+				})
+			} else {
+				toaster.error({
+					title: "Failed to update easy persona creation setting"
+				})
+			}
+		})
+
+		socket.on("userSettings:updateShowHomePageBanner", (message) => {
+			if (message.success) {
+				toaster.success({
+					title: `Home page banner ${message.enabled ? "shown" : "hidden"}`
+				})
+			} else {
+				toaster.error({
+					title: "Failed to update home page banner setting"
+				})
+			}
+		})
+
+		// Profile socket listeners
+		socket.on("users:current:updateDisplayName", (message) => {
+			isUpdatingDisplayName = false
+			if (message.success) {
+				toaster.success({
+					title: "Display name updated",
+					description: `Updated to "${message.displayName}"`
+				})
+				displayNameError = ""
+			} else {
+				toaster.error({ title: "Failed to update display name" })
+			}
+		})
+
+		socket.on("users:current:changePassphrase", (message) => {
+			isChangingPassword = false
+			if (message.success) {
+				toaster.success({
+					title: "Passphrase changed successfully",
+					description: message.message || "Your passphrase has been updated"
+				})
+				closeChangePasswordModal()
+			} else {
+				toaster.error({ title: "Failed to change passphrase" })
+			}
+		})
+
+		socket.on("users:current:logout", (message) => {
+			if (message.success) {
+				toaster.success({
+					title: "Logged out successfully"
+				})
+			} else {
+				isLoggingOut = false
+				toaster.error({ title: "Logout failed" })
+			}
+		})
+
+		// Error events
+		socket.on("users:current:updateDisplayName:error", (message) => {
+			isUpdatingDisplayName = false
+			displayNameError = message.error || "Failed to update display name"
+			toaster.error({
+				title: "Display Name Error",
+				description: message.error || "Failed to update display name"
+			})
+		})
+
+		socket.on("users:current:changePassphrase:error", (message) => {
+			isChangingPassword = false
+			passwordError = message.error || "Failed to change passphrase"
+			toaster.error({
+				title: "Passphrase Error",
+				description: message.error || "Failed to change passphrase"
+			})
+		})
+
+		socket.on("users:current:logout:error", (message) => {
+			isLoggingOut = false
+			toaster.error({
+				title: "Logout Error",
+				description: message.error || "Failed to logout"
+			})
+		})
+	})
+
+	onDestroy(() => {
+		socket?.off("customThemes:list")
+		socket?.off("userSettings:updateDarkMode")
+		socket?.off("userSettings:updateTheme")
+		socket?.off("userSettings:updateShowAllCharacterFields")
+		socket?.off("userSettings:updateEasyCharacterCreation")
+		socket?.off("userSettings:updateEasyPersonaCreation")
+		socket?.off("userSettings:updateShowHomePageBanner")
+		socket?.off("users:current:updateDisplayName")
+		socket?.off("users:current:changePassphrase")
+		socket?.off("users:current:logout")
+		socket?.off("users:current:updateDisplayName:error")
+		socket?.off("users:current:changePassphrase:error")
+		socket?.off("users:current:logout:error")
+	})
 
 	// Passphrase validation schema
 	const passphraseSchema = z
@@ -221,140 +383,6 @@
 		}
 	}
 
-	// Listen for socket responses
-	socket.on("userSettings:updateDarkMode", (message) => {
-		if (message.success) {
-			toaster.success({
-				title: `${message.enabled ? "Dark" : "Light"} mode enabled`
-			})
-		} else {
-			toaster.error({ title: "Failed to update dark mode setting" })
-		}
-	})
-
-	socket.on("userSettings:updateTheme", (message) => {
-		if (message.success) {
-			toaster.success({
-				title: "Theme updated successfully"
-			})
-		} else {
-			toaster.error({ title: "Failed to update theme" })
-		}
-	})
-
-	socket.on("userSettings:updateShowAllCharacterFields", (message) => {
-		if (message.success) {
-			toaster.success({
-				title: `Character fields display ${message.enabled ? "expanded" : "simplified"}`
-			})
-		} else {
-			toaster.error({
-				title: "Failed to update character fields setting"
-			})
-		}
-	})
-
-	socket.on("userSettings:updateEasyCharacterCreation", (message) => {
-		if (message.success) {
-			toaster.success({
-				title: `Easy character creation ${message.enabled ? "enabled" : "disabled"}`
-			})
-		} else {
-			toaster.error({
-				title: "Failed to update easy character creation setting"
-			})
-		}
-	})
-
-	socket.on("userSettings:updateEasyPersonaCreation", (message) => {
-		if (message.success) {
-			toaster.success({
-				title: `Easy persona creation ${message.enabled ? "enabled" : "disabled"}`
-			})
-		} else {
-			toaster.error({
-				title: "Failed to update easy persona creation setting"
-			})
-		}
-	})
-
-	socket.on("userSettings:updateShowHomePageBanner", (message) => {
-		if (message.success) {
-			toaster.success({
-				title: `Home page banner ${message.enabled ? "shown" : "hidden"}`
-			})
-		} else {
-			toaster.error({
-				title: "Failed to update home page banner setting"
-			})
-		}
-	})
-
-	// Profile socket listeners
-	socket.on("users:current:updateDisplayName", (message) => {
-		isUpdatingDisplayName = false
-		if (message.success) {
-			toaster.success({
-				title: "Display name updated",
-				description: `Updated to "${message.displayName}"`
-			})
-			displayNameError = ""
-		} else {
-			toaster.error({ title: "Failed to update display name" })
-		}
-	})
-
-	socket.on("users:current:changePassphrase", (message) => {
-		isChangingPassword = false
-		if (message.success) {
-			toaster.success({
-				title: "Passphrase changed successfully",
-				description:
-					message.message || "Your passphrase has been updated"
-			})
-			closeChangePasswordModal()
-		} else {
-			toaster.error({ title: "Failed to change passphrase" })
-		}
-	})
-
-	socket.on("users:current:logout", (message) => {
-		if (message.success) {
-			toaster.success({
-				title: "Logged out successfully"
-			})
-		} else {
-			isLoggingOut = false
-			toaster.error({ title: "Logout failed" })
-		}
-	})
-
-	// Handle specific error events
-	socket.on("users:current:updateDisplayName:error", (message) => {
-		isUpdatingDisplayName = false
-		displayNameError = message.error || "Failed to update display name"
-		toaster.error({
-			title: "Display Name Error",
-			description: message.error || "Failed to update display name"
-		})
-	})
-
-	socket.on("users:current:changePassphrase:error", (message) => {
-		isChangingPassword = false
-		passwordError = message.error || "Failed to change passphrase"
-		toaster.error({
-			title: "Passphrase Error",
-			description: message.error || "Failed to change passphrase"
-		})
-	})
-
-	socket.on("users:current:logout:error", (message) => {
-		isLoggingOut = false
-		toaster.error({
-			title: "Logout Error",
-			description: message.error || "Failed to logout"
-		})
-	})
 </script>
 
 <div class="flex flex-col gap-4">
@@ -368,9 +396,25 @@
 			onchange={onThemeChanged}
 			aria-label="Select application theme"
 		>
-			{#each Theme.options as [key, label]}
-				<option value={key}>{label}</option>
-			{/each}
+			<optgroup label="Built-in">
+				{#each Theme.options as [key, label]}
+					<option value={key}>{label}</option>
+				{/each}
+			</optgroup>
+			{#if myCustomThemes.length > 0}
+				<optgroup label="My Themes">
+					{#each myCustomThemes as t}
+						<option value={t.name}>{t.label}</option>
+					{/each}
+				</optgroup>
+			{/if}
+			{#if instanceCustomThemes.length > 0}
+				<optgroup label="Instance Themes">
+					{#each instanceCustomThemes as t}
+						<option value={t.name}>{t.label}</option>
+					{/each}
+				</optgroup>
+			{/if}
 		</select>
 	</div>
 

@@ -96,6 +96,7 @@
 	let ollamaSettingsCtx: OllamaSettingsCtx = $state({ settings: undefined })
 	let koboldCppSettingsCtx: KoboldCppSettingsCtx = $state({ settings: undefined })
 	let userSettingsCtx: UserSettingsCtx = $state({ settings: undefined })
+	let customThemeCssKeys = $state<Record<string, string>>({})
 	let vectorizationCtx: VectorizationCtx = $state({
 		status: "idle",
 		currentItem: undefined,
@@ -339,7 +340,59 @@
 
 	$effect(() => {
 		const theme = userSettingsCtx.settings?.theme || Theme.HAMLINDIGO
-		document.documentElement.setAttribute("data-theme", theme)
+		// Custom themes: data-theme = cssKey so it matches the injected stylesheet selector
+		// Built-in themes: cssKey not in map, falls back to the theme name itself
+		const dataTheme = customThemeCssKeys[theme] || theme
+		document.documentElement.setAttribute("data-theme", dataTheme)
+	})
+
+	// Remove all style elements for a given theme name, then inject a fresh one keyed by cssKey.
+	// Using cssKey in the element ID ensures browsers always parse a new stylesheet on update.
+	function injectCustomThemeCss(name: string, cssKey: string, css: string) {
+		document.querySelectorAll(`style[data-custom-theme="${name}"]`).forEach((el) => el.remove())
+		const el = document.createElement("style")
+		el.id = `custom-theme-${cssKey}`
+		el.dataset.customTheme = name
+		el.textContent = css
+		document.head.appendChild(el)
+	}
+
+	function removeCustomThemeCss(name: string) {
+		document.querySelectorAll(`style[data-custom-theme="${name}"]`).forEach((el) => el.remove())
+	}
+
+	onMount(() => {
+		socket.on("customThemes:list", (msg: Sockets.CustomThemes.List.Response) => {
+			const allMeta = [...msg.myThemes, ...msg.instanceThemes]
+			const customNames = new Set(allMeta.map((t) => t.name))
+			const builtinNames = new Set(Theme.options.map(([v]) => v))
+
+			// Pre-populate cssKey map so data-theme updates before getCss response arrives
+			allMeta.forEach((t) => { if (t.cssKey) customThemeCssKeys[t.name] = t.cssKey })
+
+			// Fall back to hamlindigo if the active theme is a custom theme that no longer exists
+			const currentTheme = userSettingsCtx.settings?.theme
+			if (currentTheme && !builtinNames.has(currentTheme) && !customNames.has(currentTheme)) {
+				socket.emit("userSettings:updateTheme", { theme: Theme.HAMLINDIGO })
+			}
+
+			// Fetch CSS for current themes
+			allMeta.forEach((t) => socket.emit("customThemes:getCss", { name: t.name }))
+		})
+		socket.on("customThemes:getCss", (msg: Sockets.CustomThemes.GetCss.Response) => {
+			customThemeCssKeys[msg.name] = msg.cssKey
+			// Filename (element ID) = cssKey — fresh element per cssKey, never stale
+			injectCustomThemeCss(msg.name, msg.cssKey, `[data-theme='${msg.cssKey}'] {\n${msg.css}\n}`)
+		})
+		socket.on("customThemes:delete", () => {
+			socket.emit("customThemes:list", {})
+		})
+		socket.on("customThemes:save", (msg: Sockets.CustomThemes.Save.Response) => {
+			// Update cssKey immediately so data-theme snaps to new selector before CSS arrives
+			customThemeCssKeys[msg.theme.name] = msg.theme.cssKey
+			socket.emit("customThemes:getCss", { name: msg.theme.name })
+		})
+		socket.emit("customThemes:list", {})
 	})
 
 	$effect(() => {
@@ -644,6 +697,10 @@
 		socket.off("vectorization:progress")
 		socket.off("activity:update")
 		socket.off("narrativeGraph:buildLog")
+		socket.off("customThemes:list")
+		socket.off("customThemes:getCss")
+		socket.off("customThemes:save")
+		socket.off("customThemes:delete")
 	})
 </script>
 

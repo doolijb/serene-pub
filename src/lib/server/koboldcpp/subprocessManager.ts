@@ -34,6 +34,8 @@ const state: SubprocessState = {
 
 let emitStatusFn: ((s: SubprocessStatusEvent) => void) | null = null
 let healthInterval: ReturnType<typeof setInterval> | null = null
+let idleTimer: ReturnType<typeof setTimeout> | null = null
+let subprocessTimeoutSecs = 1800
 
 export function setEmitter(fn: (s: SubprocessStatusEvent) => void) {
 	emitStatusFn = fn
@@ -61,7 +63,28 @@ export function isRunning(): boolean {
 	return state.status === "running"
 }
 
-async function waitForReady(port: number, timeoutMs = 60000): Promise<void> {
+function clearIdleTimer() {
+	if (idleTimer) {
+		clearTimeout(idleTimer)
+		idleTimer = null
+	}
+}
+
+export function pingActivity() {
+	clearIdleTimer()
+	if (state.status !== "running" || subprocessTimeoutSecs <= 0) return
+	idleTimer = setTimeout(() => {
+		console.log("[KoboldCPP] Subprocess idle timeout reached, shutting down…")
+		stop().catch((err) => console.error("[KoboldCPP] Auto-stop failed:", err))
+	}, subprocessTimeoutSecs * 1000)
+}
+
+export function setSubprocessTimeout(secs: number) {
+	subprocessTimeoutSecs = secs
+	if (state.status === "running") pingActivity()
+}
+
+async function waitForReady(port: number, timeoutMs = 120_000): Promise<void> {
 	const deadline = Date.now() + timeoutMs
 	while (Date.now() < deadline) {
 		try {
@@ -72,7 +95,7 @@ async function waitForReady(port: number, timeoutMs = 60000): Promise<void> {
 		} catch {}
 		await new Promise((r) => setTimeout(r, 1500))
 	}
-	throw new Error("KoboldCPP did not become ready within 60 seconds")
+	throw new Error("KoboldCPP did not become ready within 2 minutes")
 }
 
 function startHealthCheck(port: number) {
@@ -86,6 +109,7 @@ function startHealthCheck(port: number) {
 			if (!resp.ok) throw new Error("non-ok")
 		} catch {
 			if (state.status === "running") {
+				clearIdleTimer()
 				state.status = "crashed"
 				state.lastError = "Health check failed — process may have crashed"
 				state.process = null
@@ -129,6 +153,7 @@ export async function start(): Promise<void> {
 
 	const port = settings.koboldCppManagedPort ?? 5001
 	const password = settings.koboldCppManagedAdminPassword ?? "serene"
+	subprocessTimeoutSecs = settings.koboldCppManagedSubprocessTimeoutSecs ?? 1800
 
 	// If KoboldCPP is already reachable (e.g. left over from a previous server session),
 	// adopt it rather than spawning a second instance on the same port.
@@ -143,6 +168,7 @@ export async function start(): Promise<void> {
 			state.lastError = null
 			emitStatus()
 			startHealthCheck(port)
+			pingActivity()
 			return
 		}
 	} catch {
@@ -173,6 +199,7 @@ export async function start(): Promise<void> {
 	})
 
 	proc.on("error", (err) => {
+		clearIdleTimer()
 		state.status = "crashed"
 		state.lastError = err.message
 		state.process = null
@@ -182,6 +209,7 @@ export async function start(): Promise<void> {
 	})
 
 	proc.on("exit", (code, signal) => {
+		clearIdleTimer()
 		stopHealthCheck()
 		if (state.status !== "stopping") {
 			state.status = "crashed"
@@ -210,9 +238,12 @@ export async function start(): Promise<void> {
 	state.status = "running"
 	emitStatus()
 	startHealthCheck(port)
+	pingActivity()
 }
 
 export async function stop(): Promise<void> {
+	clearIdleTimer()
+
 	if (!state.process) {
 		state.status = "stopped"
 		state.pid = null

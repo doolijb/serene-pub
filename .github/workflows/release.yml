@@ -64,13 +64,13 @@ jobs:
                       TITLE="$BASE_VERSION Alpha Release"
                       IS_PRERELEASE="true"
                     elif [ "$SUFFIX" = "beta" ]; then
-                      # Beta release
+                      # Beta release (not a pre-release)
                       TITLE="$BASE_VERSION Beta Release"
-                      IS_PRERELEASE="true"
+                      IS_PRERELEASE="false"
                     elif [[ "$SUFFIX" =~ ^pr-([0-9]+)$ ]]; then
-                      # Pre-release
+                      # Pre-release build
                       PR_NUM="${BASH_REMATCH[1]}"
-                      TITLE="$BASE_VERSION Pre-Release $PR_NUM"
+                      TITLE="$BASE_VERSION Pre-Release Build $PR_NUM"
                       IS_PRERELEASE="true"
                     elif [[ "$SUFFIX" =~ ^rc-([0-9]+)$ ]]; then
                       # Release candidate

@@ -44,6 +44,7 @@ import { registerImportHandlers } from "./import"
 import { registerSetupHandlers } from "./setup"
 import { registerTaskQueueHandlers } from "./taskQueue"
 import { registerActivityHandlers } from "./activity"
+import { registerCustomThemeHandlers } from "./customThemes"
 
 const userId = 1 // Replace with actual user id
 
@@ -89,6 +90,7 @@ export function connectSockets(io: {
 		registerSetupHandlers(socket, emitToUser, register)
 		registerTaskQueueHandlers(socket, emitToUser, register)
 		registerActivityHandlers(socket)
+		registerCustomThemeHandlers(socket, emitToUser, register)
 		console.log(`Socket connected: ${socket.id} for user ${userId}`)
 	})
 }

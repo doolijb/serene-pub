@@ -24,15 +24,15 @@ The first startup runs database migrations automatically and creates an admin ac
 
 | Tag | What you get |
 |-----|--------------|
-| `latest` | Latest **stable** release |
-| `1`, `1.2` | Latest stable within that major / minor line |
+| `latest` | Latest **stable** or **beta** release |
+| `1`, `1.2` | Latest stable or beta within that major / minor line |
 | `1.2.3` | Exact stable version |
-| `1.2.3-beta` | Pre-release — beta |
+| `1.2.3-beta` | Beta release |
 | `1.2.3-rc-1` | Pre-release — release candidate |
-| `1.2.3-pr-5` | Pre-release — pull-request build |
+| `1.2.3-pr-5` | Pre-release build |
 
-**`latest`, major, and minor aliases are only updated on stable releases.**  
-Pre-release tags are published but never assigned to `latest`, so pinning to `latest` will not pull an unstable build.
+**`latest`, major, and minor aliases are updated on stable and beta releases.**  
+Release candidates (`-rc-*`) and pre-release builds (`-pr-*`) are published but never assigned to `latest`, so pinning to `latest` will not pull those builds.
 
 To pin to an exact version (recommended for production):
 

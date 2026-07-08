@@ -2,6 +2,7 @@ import { relations, sql } from "drizzle-orm"
 import {
 	pgTable,
 	integer,
+	bigint,
 	text,
 	real,
 	boolean,
@@ -1233,8 +1234,30 @@ export const koboldCppSettings = pgTable("koboldcpp_settings", {
 	koboldCppManagedBinaryDir: text("koboldcpp_managed_binary_dir"),
 	koboldCppManagedPort: integer("koboldcpp_managed_port").notNull().default(5001),
 	koboldCppManagedAdminPassword: text("koboldcpp_managed_admin_password"),
-	koboldCppManagedModelTtlSecs: integer("koboldcpp_managed_model_ttl_secs").notNull().default(300)
+	koboldCppManagedModelTtlSecs: integer("koboldcpp_managed_model_ttl_secs").notNull().default(300),
+	koboldCppManagedSubprocessTimeoutSecs: integer("koboldcpp_managed_subprocess_timeout_secs").notNull().default(1800),
+	koboldCppManagedReleaseTag: text("koboldcpp_managed_release_tag")
 })
+
+// Tracks models downloaded through the UI, including their metadata and download status.
+// Models with status != "complete" are excluded from the available models list.
+export const koboldCppModels = pgTable("koboldcpp_models", {
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	filename: text("filename").notNull().unique(),
+	modelName: text("model_name").notNull(),
+	modelUrl: text("model_url"),
+	downloadUrl: text("download_url"),
+	description: text("description"),
+	quantization: text("quantization"),
+	sizeBytes: bigint("size_bytes", { mode: "number" }),
+	status: text("status").notNull().default("downloading"), // "downloading" | "complete" | "error"
+	errorMessage: text("error_message"),
+	createdAt: timestamp("created_at").notNull().defaultNow(),
+	updatedAt: timestamp("updated_at").notNull().defaultNow().$onUpdate(() => new Date())
+})
+
+export type SelectKoboldCppModel = typeof koboldCppModels.$inferSelect
+export type InsertKoboldCppModel = typeof koboldCppModels.$inferInsert
 
 /**
  * Scenes: discrete story moments within a chat, used as the foundation for
@@ -1460,3 +1483,22 @@ export const vectorizationConfigs = pgTable("vectorization_configs", {
 	id: integer("id").primaryKey().default(1),
 	embeddingModelTtlMinutes: integer("embedding_model_ttl_minutes").notNull().default(5),
 })
+
+export const customThemes = pgTable("custom_themes", {
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	name: text("name").notNull().unique(),
+	label: text("label").notNull(),
+	css: text("css").notNull(),
+	cssKey: text("css_key").notNull().default(""),
+	uploadedBy: integer("uploaded_by").references(() => users.id, { onDelete: "set null" }),
+	isInstanceTheme: boolean("is_instance_theme").notNull().default(false),
+	createdAt: timestamp("created_at").notNull().defaultNow(),
+	updatedAt: timestamp("updated_at").notNull().defaultNow().$onUpdate(() => new Date()),
+})
+
+export const customThemesRelations = relations(customThemes, ({ one }) => ({
+	uploader: one(users, {
+		fields: [customThemes.uploadedBy],
+		references: [users.id]
+	})
+}))

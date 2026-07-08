@@ -363,7 +363,7 @@
 		})
 		;(socket as any).on("koboldcpp:connectModel:error", (message: any) => {
 			toaster.error({
-				title: "KoboldCpp Connection Failed",
+				title: "KoboldCPP Connection Failed",
 				description: message.error ?? "Could not connect to the model"
 			})
 		})
@@ -744,6 +744,22 @@
 									</p>
 								</div>
 								<div class="grid gap-3">
+									<!-- KoboldCpp -->
+									<button
+										class="card preset-tonal-surface flex items-start gap-4 p-5 text-left transition-transform hover:scale-[1.01] hover:preset-filled-surface-300-700"
+										onclick={() => {
+											connectionChoice = "koboldcpp"
+											socket.emit("systemSettings:updateKoboldCppManagerEnabled", { enabled: true })
+										}}
+									>
+										<span class="mt-0.5 inline-block h-8 w-8 flex-shrink-0" style="background-color: currentColor; mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain; -webkit-mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain;" aria-hidden="true"></span>
+										<div>
+											<div class="mb-1 font-bold">KoboldCPP <span class="text-xs font-normal opacity-60">— Easy</span></div>
+											<p class="text-sm opacity-90">
+												A highly performant engine fine-tuned for storytelling and roleplay. Download and manage automatically with Serene Pub.
+											</p>
+										</div>
+									</button>
 									<!-- Ollama -->
 									<button
 										class="card preset-tonal-surface flex items-start gap-4 p-5 text-left transition-transform hover:scale-[1.01] hover:preset-filled-surface-300-700"
@@ -753,27 +769,11 @@
 											checkOllamaConnection()
 										}}
 									>
-										<OllamaIcon class="mt-0.5 h-8 w-8 flex-shrink-0 opacity-90" />
+										<OllamaIcon class="mt-0.5 h-8 w-8 flex-shrink-0" />
 										<div>
-											<div class="mb-1 font-bold">Ollama <span class="text-xs font-normal opacity-80">— Easiest</span></div>
+											<div class="mb-1 font-bold">Ollama <span class="text-xs font-normal opacity-80">— Easy</span></div>
 											<p class="text-sm opacity-90">
-												Incredibly easy to install, and managed entirely within Serene Pub. Search, download, and activate models in a few simple clicks.
-											</p>
-										</div>
-									</button>
-									<!-- KoboldCpp -->
-									<button
-										class="card preset-tonal-surface flex items-start gap-4 p-5 text-left transition-transform hover:scale-[1.01] hover:preset-filled-surface-300-700"
-										onclick={() => {
-											connectionChoice = "koboldcpp"
-											socket.emit("systemSettings:updateKoboldCppManagerEnabled", { enabled: true })
-										}}
-									>
-										<img src="/koboldcpp/koboldcpp-icon.svg" class="mt-0.5 h-8 w-8 flex-shrink-0 object-contain" alt="" />
-										<div>
-											<div class="mb-1 font-bold">KoboldCpp <span class="text-xs font-normal opacity-60">— Intermediate</span></div>
-											<p class="text-sm opacity-75">
-												A highly performant engine fine-tuned for storytelling and roleplay. Requires downloading and running KoboldCpp separately, but delivers excellent results.
+												Incredibly easy to install, seamless and managed entirely within Serene Pub. Search, download, and activate models in a few simple clicks.
 											</p>
 										</div>
 									</button>
@@ -786,7 +786,7 @@
 											openPanel("connections")
 										}}
 									>
-										<Icons.Settings size={32} class="text-surface-400 mt-0.5 flex-shrink-0" />
+										<Icons.Settings size={32} class="mt-0.5 flex-shrink-0" />
 										<div>
 											<div class="mb-1 font-bold">Manual Setup <span class="text-xs font-normal opacity-50">— Advanced</span></div>
 											<p class="text-sm opacity-60">
@@ -842,23 +842,23 @@
 							{:else if connectionChoice === "koboldcpp"}
 								{#if koboldCppSettingsCtx.settings?.koboldCppManagerEnabled}
 									<div class="text-center">
-										<img src="/koboldcpp/koboldcpp-icon.svg" class="mx-auto mb-4 h-14 w-14 object-contain" alt="" />
-										<h2 class="mb-3 text-3xl font-bold">Set Up with KoboldCpp Manager</h2>
+										<span class="text-primary-500 mx-auto mb-4 block h-14 w-14" style="background-color: currentColor; mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain; -webkit-mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain;" aria-hidden="true"></span>
+										<h2 class="mb-3 text-3xl font-bold">Set Up with KoboldCPP Manager</h2>
 										<p class="text-muted-foreground">
-											Open the KoboldCpp Manager to load a model and connect to it. Come back here when done — this updates automatically.
+											Open the KoboldCPP Manager to load a model and connect to it. Come back here when done — this updates automatically.
 										</p>
 									</div>
 								{:else}
 									<div class="mb-4 text-center">
-										<img src="/koboldcpp/koboldcpp-icon.svg" class="mx-auto mb-4 h-14 w-14 object-contain" alt="" />
-										<h2 class="mb-2 text-2xl font-bold">Set Up KoboldCpp</h2>
+										<span class="text-primary-500 mx-auto mb-4 block h-14 w-14" style="background-color: currentColor; mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain; -webkit-mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain;" aria-hidden="true"></span>
+										<h2 class="mb-2 text-2xl font-bold">Set Up KoboldCPP</h2>
 									</div>
 									<div class="bg-surface-500/10 rounded-xl p-4">
 										<h4 class="mb-3 font-semibold">Quick setup:</h4>
 										<ol class="list-inside list-decimal space-y-2 text-sm">
-											<li>Download KoboldCpp from <a href="https://github.com/LostRuins/koboldcpp/releases" target="_blank" rel="noreferrer" class="text-primary-500 hover:underline">GitHub</a></li>
+											<li>Download KoboldCPP from <a href="https://github.com/LostRuins/koboldcpp/releases" target="_blank" rel="noreferrer" class="text-primary-500 hover:underline">GitHub</a></li>
 											<li>Download a GGUF model (try <a href="https://huggingface.co/models?library=gguf" target="_blank" rel="noreferrer" class="text-primary-500 hover:underline">Hugging Face</a>)</li>
-											<li>Launch KoboldCpp and load your model</li>
+											<li>Launch KoboldCPP and load your model</li>
 											<li>Enter the URL below and click Detect</li>
 										</ol>
 									</div>
@@ -892,7 +892,7 @@
 											</select>
 										</div>
 									{:else if isKoboldCppConnected && koboldcppLoadedModels.length === 0}
-										<p class="mt-3 text-sm opacity-60">KoboldCpp is running but no models are loaded yet. Load a model in KoboldCpp and click Detect again.</p>
+										<p class="mt-3 text-sm opacity-60">KoboldCPP is running but no models are loaded yet. Load a model in KoboldCPP and click Detect again.</p>
 									{/if}
 								{/if}
 							{/if}
@@ -1317,8 +1317,8 @@
 									class="btn preset-filled-primary-500"
 									onclick={() => { panelsCtx.digest.tutorial = true; openPanel("koboldcpp") }}
 								>
-									<img src="/koboldcpp/koboldcpp-icon.svg" class="h-4 w-4 object-contain" alt="" />
-									Open KoboldCpp Manager
+									<span class="inline-block h-4 w-4" style="background-color: currentColor; mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain; -webkit-mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain;" aria-hidden="true"></span>
+									Open KoboldCPP Manager
 								</button>
 							{:else if isKoboldCppConnected && selectedKoboldCppModel}
 								<button

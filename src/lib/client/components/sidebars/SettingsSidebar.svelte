@@ -10,6 +10,7 @@
 	import { page } from "$app/state"
 	import UserSettingsTab from "../settingsTabs/UserSettingsTab.svelte"
 	import SystemSettingsTab from "../settingsTabs/SystemSettingsTab.svelte"
+	import CustomThemeManager from "../CustomThemeManager.svelte"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -17,12 +18,12 @@
 	let { onclose = $bindable() }: Props = $props()
 
 	// State
-	let activeTab = $state<"user" | "system" | "about">("user")
+	let activeTab = $state<"user" | "system" | "themes" | "about">("user")
 	let userCtx: UserCtx = $state(getContext("userCtx"))
 
 	// Handle tab switching
 	function handleTabChange(e: ValueChangeDetails): void {
-		activeTab = e.value as "user" | "system" | "about"
+		activeTab = e.value as "user" | "system" | "themes" | "about"
 	}
 
 	onMount(() => {
@@ -71,6 +72,12 @@
 						{/if}
 					</Tabs.Control>
 				{/if}
+				<Tabs.Control value="themes">
+					<Icons.Palette size={20} class="inline" />
+					{#if activeTab === "themes"}
+						Themes
+					{/if}
+				</Tabs.Control>
 				<Tabs.Control value="about">
 					<Icons.Info size={20} class="inline" />
 					{#if activeTab === "about"}
@@ -91,6 +98,11 @@
 						{/if}
 					</Tabs.Panel>
 				{/if}
+				<Tabs.Panel value="themes">
+					{#if activeTab === "themes"}
+						<CustomThemeManager />
+					{/if}
+				</Tabs.Panel>
 				<Tabs.Panel value="about">
 					{#if activeTab === "about"}
 						<div class="flex flex-col gap-4">

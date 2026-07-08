@@ -14,7 +14,7 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
@@ -23,7 +23,7 @@ jobs:
 
       # -------------------------------------------------------
       # Determine whether this tag is a stable release.
-      # Stable = vX.Y.Z with NO suffix (no -dev, -alpha, etc.)
+      # Stable = vX.Y.Z or vX.Y.Z-beta (beta is a release, not a pre-release).
       # Only stable releases receive the `latest` tag and the
       # short major/minor convenience aliases (e.g. "1", "1.2").
       # -------------------------------------------------------
@@ -31,12 +31,15 @@ jobs:
         id: classify
         run: |
           TAG="${{ github.ref_name }}"
-          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          VERSION="${TAG#v}"
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-beta)?$ ]]; then
             echo "stable=true" >> "$GITHUB_OUTPUT"
+            echo "compose_tag=latest" >> "$GITHUB_OUTPUT"
           else
             echo "stable=false" >> "$GITHUB_OUTPUT"
+            echo "compose_tag=$VERSION" >> "$GITHUB_OUTPUT"
           fi
-          echo "Tag: $TAG  →  stable=$( [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && echo true || echo false )"
+          echo "Tag: $TAG  →  stable=$( [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-beta)?$ ]] && echo true || echo false )"
 
       - name: Set up QEMU (multi-platform support)
         uses: docker/setup-qemu-action@v3
@@ -55,10 +58,12 @@ jobs:
       # Tag strategy:
       #
       #   Stable  (v1.2.3)          → 1.2.3, 1.2, 1, latest
-      #   Pre-release (v1.2.3-beta) → 1.2.3-beta         only
+      #   Stable  (v1.2.3-beta)     → 1.2.3-beta, 1.2, 1, latest
       #   Pre-release (v1.2.3-rc-1) → 1.2.3-rc-1         only
       #   Pre-release (v1.2.3-pr-5) → 1.2.3-pr-5         only
       #
+      # Beta is treated as a stable release — it receives `latest`
+      # and the short major/minor aliases.
       # The major (1) and minor (1.2) aliases are omitted for
       # pre-releases so that "latest", "1", and "1.2" always
       # resolve to a stable image.
@@ -86,3 +91,16 @@ jobs:
           # Layer cache via GitHub Actions cache (speeds up repeat builds)
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Publish docker-compose.dist.yml to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sed 's|ghcr.io/doolijb/serene-pub:latest|ghcr.io/doolijb/serene-pub:${{ steps.classify.outputs.compose_tag }}|' \
+            docker-compose.dist.yml > /tmp/docker-compose.dist.yml
+          # Retry a few times — release.yml may still be creating the release
+          for i in 1 2 3 4 5; do
+            gh release upload "${{ github.ref_name }}" /tmp/docker-compose.dist.yml --clobber && break
+            echo "Attempt $i failed, retrying in 30s..."
+            sleep 30
+          done

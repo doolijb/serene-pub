@@ -312,21 +312,27 @@ export const chatsCreateHandler: Handler<
 		if (tags.length > 0) {
 			await processChatTags(newChat.id, tags, userId)
 		}
-		for (let i = 0; i < personaIds.length; i++) {
-			const personaId = personaIds[i]
-			await db.insert(schema.chatPersonas).values({
-				chatId: newChat.id,
-				personaId,
-				position: i
-			})
+
+		// Batch insert personas
+		if (personaIds.length > 0) {
+			await db.insert(schema.chatPersonas).values(
+				personaIds.map((personaId, i) => ({
+					chatId: newChat.id,
+					personaId,
+					position: i
+				}))
+			)
 		}
-		for (const characterId of characterIds) {
-			const position = characterPositions[characterId] || 0
-			await db.insert(schema.chatCharacters).values({
-				chatId: newChat.id,
-				characterId,
-				position
-			})
+
+		// Batch insert characters
+		if (characterIds.length > 0) {
+			await db.insert(schema.chatCharacters).values(
+				characterIds.map((characterId) => ({
+					chatId: newChat.id,
+					characterId,
+					position: characterPositions[characterId] || 0
+				}))
+			)
 		}
 		// Insert a first message for every character assigned to the chat, ordered by position
 		const chatCharacters = await db.query.chatCharacters.findMany({

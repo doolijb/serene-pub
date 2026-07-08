@@ -7,8 +7,9 @@
 	interface Props {
 		isManaged?: boolean
 		onReset?: () => void
+		onUpdateBinary?: () => void
 	}
-	let { isManaged = false, onReset }: Props = $props()
+	let { isManaged = false, onReset, onUpdateBinary }: Props = $props()
 
 	const socket = skio.get()
 
@@ -27,16 +28,23 @@
 	let baseUrlField = $state("")
 	let modelsDirField = $state("")
 
-	// --- Subprocess / model state (managed only) ---
-	type Status = Sockets.KoboldCpp.SubprocessStatus.Response
-	let subStatus = $state<Status | null>(null)
-	let currentModel = $state<string | null>(null)
-	let adminEnabled = $state(false)
-	let unloading = $state(false)
-	let starting = $state(false)
-	let stopping = $state(false)
+	// --- Managed binary update ---
+	let managedUpdateAvailable = $state(false)
+	let managedInstalledTag = $state<string | null>(null)
+	let managedLatestTag = $state("")
+	let managedReleaseUrl = $state("")
+	let isCheckingManagedUpdate = $state(false)
+
+	function checkManagedBinaryUpdate() {
+		isCheckingManagedUpdate = true
+		socket.emit("koboldcpp:checkManagedBinaryUpdate", {})
+	}
+
+	// --- Managed settings ---
 	let ttlDraft = $state(String(koboldCppSettingsCtx.settings?.koboldCppManagedModelTtlSecs ?? 300))
 	let savingTtl = $state(false)
+	let subprocessTimeoutDraft = $state(String(koboldCppSettingsCtx.settings?.koboldCppManagedSubprocessTimeoutSecs ?? 1800))
+	let savingSubprocessTimeout = $state(false)
 	let portDraft = $state(String(koboldCppSettingsCtx.settings?.koboldCppManagedPort ?? 5001))
 	let savingPort = $state(false)
 
@@ -44,14 +52,6 @@
 		baseUrlField = koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl ?? ""
 		modelsDirField = koboldCppSettingsCtx.settings?.koboldCppManagerModelsDir ?? ""
 	})
-
-	const statusColors: Record<string, string> = {
-		running: "bg-success-500",
-		starting: "bg-warning-500 animate-pulse",
-		stopped: "bg-surface-400",
-		crashed: "bg-error-500",
-		stopping: "bg-warning-500"
-	}
 
 	function checkVersion() {
 		isCheckingVersion = true
@@ -77,21 +77,6 @@
 		socket.emit("koboldcpp:setModelsDir", { dir: modelsDirField.trim() })
 	}
 
-	function startSubprocess() {
-		starting = true
-		socket.emit("koboldcpp:startSubprocess", {})
-	}
-
-	function stopSubprocess() {
-		stopping = true
-		socket.emit("koboldcpp:stopSubprocess", {})
-	}
-
-	function unloadModel() {
-		unloading = true
-		socket.emit("koboldcpp:unloadModel", {})
-	}
-
 	function saveTtl() {
 		const v = parseInt(ttlDraft)
 		if (isNaN(v) || v < 0) return
@@ -99,29 +84,18 @@
 		socket.emit("koboldcpp:setModelTtl", { ttlSecs: v })
 	}
 
+	function saveSubprocessTimeout() {
+		const v = parseInt(subprocessTimeoutDraft)
+		if (isNaN(v) || v < 0) return
+		savingSubprocessTimeout = true
+		socket.emit("koboldcpp:setSubprocessTimeout", { timeoutSecs: v })
+	}
+
 	function savePort() {
 		const v = parseInt(portDraft)
 		if (isNaN(v) || v < 1024 || v > 65535) return
 		savingPort = true
 		socket.emit("koboldcpp:setManagedPort", { port: v })
-	}
-
-	async function refreshModel() {
-		try {
-			const baseUrl = koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl ?? "http://localhost:5001"
-			const resp = await fetch(`${baseUrl}/api/v1/model`)
-			if (resp.ok) {
-				const d = await resp.json()
-				currentModel = d.result && d.result !== "Read Only" ? d.result : null
-			}
-			const vResp = await fetch(`${baseUrl}/api/extra/version`)
-			if (vResp.ok) {
-				const d = await vResp.json()
-				adminEnabled = !!d.admin
-			}
-		} catch {
-			currentModel = null
-		}
 	}
 
 	onMount(() => {
@@ -157,53 +131,36 @@
 		})
 
 		if (isManaged) {
-			socket.emit("koboldcpp:getSubprocessStatus", {})
-
-			socket.on("koboldcpp:subprocessStatus", (msg: Status) => {
-				subStatus = msg
-				starting = false
-				stopping = false
-				if (msg.status === "running") refreshModel()
-			})
-			socket.on("koboldcpp:getSubprocessStatus", (msg: Sockets.KoboldCpp.GetSubprocessStatus.Response) => {
-				subStatus = msg.status
-				starting = false
-				stopping = false
-				if (msg.status.status === "running") refreshModel()
-			})
-			socket.on("koboldcpp:startSubprocess", () => {
-				starting = false
-				toaster.success({ title: "KoboldCPP starting…" })
-			})
-			socket.on("koboldcpp:startSubprocess:error", (msg: any) => {
-				starting = false
-				toaster.error({ title: "Failed to start", description: msg?.error })
-			})
-			socket.on("koboldcpp:stopSubprocess", () => {
-				stopping = false
-				toaster.success({ title: "KoboldCPP stopped" })
-			})
-			socket.on("koboldcpp:unloadModel", (msg: Sockets.KoboldCpp.UnloadModel.Response) => {
-				unloading = false
-				if (msg.success) {
-					currentModel = null
-					toaster.success({ title: "Model unloaded" })
-				} else {
-					toaster.error({ title: "Unload not supported by this build" })
-				}
-			})
 			socket.on("koboldcpp:setModelTtl", () => {
 				savingTtl = false
 				toaster.success({ title: "TTL updated" })
+			})
+			socket.on("koboldcpp:setSubprocessTimeout", () => {
+				savingSubprocessTimeout = false
+				toaster.success({ title: "Startup timeout updated" })
 			})
 			socket.on("koboldcpp:setManagedPort", () => {
 				savingPort = false
 				toaster.success({ title: "Port updated — restart required" })
 			})
+			socket.on(
+				"koboldcpp:checkManagedBinaryUpdate",
+				(msg: Sockets.KoboldCpp.CheckManagedBinaryUpdate.Response) => {
+					isCheckingManagedUpdate = false
+					managedUpdateAvailable = msg.isUpdateAvailable
+					managedInstalledTag = msg.installedTag
+					managedLatestTag = msg.latestTag
+					managedReleaseUrl = msg.releaseUrl
+				}
+			)
+			socket.on("koboldcpp:checkManagedBinaryUpdate:error", () => {
+				isCheckingManagedUpdate = false
+			})
+			checkManagedBinaryUpdate()
+		} else {
+			checkVersion()
+			checkForUpdates()
 		}
-
-		checkVersion()
-		checkForUpdates()
 	})
 
 	onDestroy(() => {
@@ -214,14 +171,11 @@
 		socket.off("koboldcpp:setBaseUrl")
 		socket.off("koboldcpp:setModelsDir")
 		if (isManaged) {
-			socket.off("koboldcpp:subprocessStatus")
-			socket.off("koboldcpp:getSubprocessStatus")
-			socket.off("koboldcpp:startSubprocess")
-			socket.off("koboldcpp:startSubprocess:error")
-			socket.off("koboldcpp:stopSubprocess")
-			socket.off("koboldcpp:unloadModel")
 			socket.off("koboldcpp:setModelTtl")
+			socket.off("koboldcpp:setSubprocessTimeout")
 			socket.off("koboldcpp:setManagedPort")
+			socket.off("koboldcpp:checkManagedBinaryUpdate")
+			socket.off("koboldcpp:checkManagedBinaryUpdate:error")
 		}
 	})
 
@@ -278,89 +232,70 @@
 		</div>
 	{/if}
 
-	<!-- Managed: subprocess status -->
-	{#if isManaged}
+	<!-- Managed: binary info + update check -->
+	{#if isManaged && koboldCppSettingsCtx.settings?.koboldCppManagedBinaryVariant}
 		<div class="card bg-surface-100-800 flex flex-col gap-4 p-4">
-			<h3 class="text-sm font-semibold">Subprocess</h3>
-
-			<!-- Status row -->
 			<div class="flex items-center justify-between">
-				<div class="flex items-center gap-2">
-					<span class="h-2.5 w-2.5 rounded-full {statusColors[subStatus?.status ?? 'stopped']}"></span>
-					<span class="text-sm font-medium capitalize">{subStatus?.status ?? "stopped"}</span>
-					{#if subStatus?.pid}
-						<span class="text-surface-500 text-xs">PID {subStatus.pid}</span>
-					{/if}
-				</div>
-				<div class="flex gap-1.5">
-					{#if subStatus?.status === "running" || subStatus?.status === "starting"}
-						<button
-							class="btn btn-sm preset-tonal-error"
-							onclick={stopSubprocess}
-							disabled={stopping || subStatus?.status === "stopping"}
-						>
-							{#if stopping}<Icons.Loader2 size={13} class="animate-spin" />{:else}<Icons.Square size={13} />{/if}
-							Stop
-						</button>
-					{:else}
-						<button
-							class="btn btn-sm preset-tonal-success"
-							onclick={startSubprocess}
-							disabled={starting}
-						>
-							{#if starting}<Icons.Loader2 size={13} class="animate-spin" />{:else}<Icons.Play size={13} />{/if}
-							Start
-						</button>
-					{/if}
-				</div>
-			</div>
-			{#if subStatus?.lastError}
-				<p class="text-error-500 text-xs">{subStatus.lastError}</p>
-			{/if}
-			{#if subStatus?.startedAt}
-				<p class="text-surface-500 text-xs">
-					Started {new Date(subStatus.startedAt).toLocaleTimeString()}
-				</p>
-			{/if}
-
-			<!-- Loaded model -->
-			<div>
-				<p class="text-surface-500 mb-1 text-xs font-semibold uppercase tracking-wide">Loaded model</p>
-				<div class="flex items-center gap-2">
-					<Icons.Brain size={14} class="text-surface-400 shrink-0" />
-					<span class="min-w-0 flex-1 truncate text-xs">{currentModel ?? "No model loaded"}</span>
-					{#if currentModel}
-						<button
-							class="btn btn-sm preset-tonal-warning shrink-0 text-xs"
-							onclick={unloadModel}
-							disabled={unloading}
-						>
-							{#if unloading}<Icons.Loader2 size={12} class="animate-spin" />{:else}<Icons.Eject size={12} />{/if}
-							Unload
-						</button>
-					{/if}
-				</div>
-				{#if adminEnabled}
-					<p class="text-success-600-400 mt-1 flex items-center gap-1 text-xs">
-						<Icons.ShieldCheck size={11} />
-						Admin mode active
-					</p>
+				<h3 class="text-sm font-semibold">Binary</h3>
+				{#if managedUpdateAvailable}
+					<span class="badge preset-filled-warning-500 rounded-full px-2 py-0.5 text-xs font-medium">
+						Update available
+					</span>
 				{/if}
 			</div>
 
-			<!-- Binary info -->
-			{#if koboldCppSettingsCtx.settings?.koboldCppManagedBinaryVariant}
-				<div>
-					<p class="text-surface-500 mb-1 text-xs font-semibold uppercase tracking-wide">Binary</p>
-					<p class="text-xs">{koboldCppSettingsCtx.settings.koboldCppManagedBinaryVariant}</p>
-					{#if koboldCppSettingsCtx.settings.koboldCppManagedBinaryDir}
-						<p class="text-surface-500 text-xs">{koboldCppSettingsCtx.settings.koboldCppManagedBinaryDir}</p>
-					{/if}
+			<div class="space-y-1 text-sm">
+				<div class="flex items-center justify-between">
+					<span class="text-surface-500 text-xs">Variant</span>
+					<span class="font-mono text-xs">{koboldCppSettingsCtx.settings.koboldCppManagedBinaryVariant}</span>
+				</div>
+				<div class="flex items-center justify-between">
+					<span class="text-surface-500 text-xs">Installed version</span>
+					<span class="font-mono text-xs">{managedInstalledTag ?? koboldCppSettingsCtx.settings.koboldCppManagedReleaseTag ?? "—"}</span>
+				</div>
+				{#if managedLatestTag}
+					<div class="flex items-center justify-between">
+						<span class="text-surface-500 text-xs">Latest version</span>
+						<span class="font-mono text-xs {managedUpdateAvailable ? 'text-warning-500' : ''}">{managedLatestTag}</span>
+					</div>
+				{/if}
+			</div>
+
+			{#if managedUpdateAvailable}
+				<div class="bg-warning-50 dark:bg-warning-950 border-warning-200 dark:border-warning-800 rounded-lg border p-3 text-sm">
+					<p class="text-warning-700 dark:text-warning-300 mb-2">
+						Version {managedLatestTag} is available.
+					</p>
+					<button class="btn btn-sm preset-filled-warning-500" onclick={onUpdateBinary}>
+						<Icons.Download size={14} />
+						Update Binary
+					</button>
 				</div>
 			{/if}
-		</div>
 
-		<!-- Managed: TTL and port -->
+			<div class="flex gap-2">
+				<button
+					class="btn btn-sm preset-tonal-surface text-xs"
+					onclick={checkManagedBinaryUpdate}
+					disabled={isCheckingManagedUpdate}
+				>
+					{#if isCheckingManagedUpdate}
+						<Icons.Loader2 size={12} class="animate-spin" />
+					{:else}
+						<Icons.RefreshCw size={12} />
+					{/if}
+					Check for updates
+				</button>
+				<button class="btn btn-sm preset-tonal-surface text-xs" onclick={onUpdateBinary}>
+					<Icons.Settings size={12} />
+					Change binary
+				</button>
+			</div>
+		</div>
+	{/if}
+
+	<!-- Managed: TTL, startup timeout, port -->
+	{#if isManaged}
 		<div class="card bg-surface-100-800 flex flex-col gap-4 p-4">
 			<h3 class="text-sm font-semibold">Managed Settings</h3>
 
@@ -387,6 +322,32 @@
 					{ttlDraft === "0" || ttlDraft === ""
 						? "Model stays loaded until manually unloaded."
 						: `Unload model after ${ttlDraft}s of inactivity.`}
+				</p>
+			</div>
+
+			<div>
+				<label class="text-surface-500 mb-2 text-xs font-semibold uppercase tracking-wide" for="subprocessTimeoutInput">
+					Subprocess idle timeout
+				</label>
+				<div class="flex items-center gap-2">
+					<input
+						id="subprocessTimeoutInput"
+						type="number"
+						min="0"
+						step="60"
+						bind:value={subprocessTimeoutDraft}
+						class="input w-24 text-sm"
+						placeholder="1800"
+					/>
+					<span class="text-surface-500 text-xs">seconds</span>
+					<button class="btn btn-sm preset-tonal-surface text-xs" onclick={saveSubprocessTimeout} disabled={savingSubprocessTimeout}>
+						{#if savingSubprocessTimeout}<Icons.Loader2 size={12} class="animate-spin" />{:else}Save{/if}
+					</button>
+				</div>
+				<p class="text-surface-500 mt-1 text-xs">
+					{subprocessTimeoutDraft === "0" || subprocessTimeoutDraft === ""
+						? "Subprocess stays running until manually stopped."
+						: `Shut down the subprocess after ${subprocessTimeoutDraft}s of inactivity (default: 30 minutes).`}
 				</p>
 			</div>
 
@@ -568,7 +529,7 @@
 
 	<!-- Attribution -->
 	<p class="text-muted-foreground text-center text-xs">
-		KoboldCpp is developed and owned by <a href="https://github.com/LostRuins/koboldcpp" target="_blank" rel="noopener noreferrer" class="hover:text-primary-500 underline">LostRuins</a>.
+		KoboldCPP is developed and owned by <a href="https://github.com/LostRuins/koboldcpp" target="_blank" rel="noopener noreferrer" class="hover:text-primary-500 underline">LostRuins</a>.
 		Serene Pub's KoboldCpp Manager is an independent integration and is not affiliated with or endorsed by the KoboldCPP project.
 	</p>
 </div>

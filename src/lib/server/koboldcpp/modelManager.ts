@@ -81,12 +81,14 @@ export async function ensureModelLoaded(opts: {
 
 	if (current === expected) {
 		if (contextSize) {
-			const knownContext = loadedContextByModel[expected] ?? null
+			// Prefer in-process tracking; fall back to querying the running instance
+			const knownContext = loadedContextByModel[expected] ?? await getCurrentContextSize(baseUrl)
 			if (knownContext !== null && knownContext >= contextSize) {
+				loadedContextByModel[expected] = knownContext
 				resetTtl(connectionId, baseUrl, adminPassword, ttlSecs)
 				return
 			}
-			// No tracked state or context too small — fall through to reload
+			// Context too small (or unknown) — fall through to reload
 		} else {
 			resetTtl(connectionId, baseUrl, adminPassword, ttlSecs)
 			return

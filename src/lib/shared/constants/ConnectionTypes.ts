@@ -38,11 +38,11 @@ const openaiChatDesc = `
 const openaiChatDiff = "Beginner - Nothing to install"
 
 const koboldCppDesc = `
-<p>Serene Pub supports KoboldCpp through its <a class="text-primary-500 hover:underline" href="https://github.com/LostRuins/koboldcpp/wiki" target="_blank">native API</a>.</p>
-<p>KoboldCpp is a simple one-file way to run various GGML and GGUF models with a KoboldAI-like interface.</p>
-<p>KoboldCpp has a built-in GUI and is relatively easy to set up and use.</p>
+<p>Serene Pub supports KoboldCPP through its <a class="text-primary-500 hover:underline" href="https://github.com/LostRuins/koboldcpp/wiki" target="_blank">native API</a>.</p>
+<p>KoboldCPP is a simple one-file way to run various GGML and GGUF models with a KoboldAI-like interface.</p>
+<p>KoboldCPP has a built-in GUI and is relatively easy to set up and use.</p>
 <p>It offers great performance and additional configuration options outside of Serene Pub.</p>
-<p>You can download KoboldCpp from the <a class="text-primary-500 hover:underline" href="https://github.com/LostRuins/koboldcpp/releases" target="_blank">GitHub releases page</a>.</p>
+<p>You can download KoboldCPP from the <a class="text-primary-500 hover:underline" href="https://github.com/LostRuins/koboldcpp/releases" target="_blank">GitHub releases page</a>.</p>
 `
 
 const koboldCppDiff = "Beginner (GUI) - Simple setup"

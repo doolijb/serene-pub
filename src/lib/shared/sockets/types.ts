@@ -1611,6 +1611,11 @@ declare global {
 				interface ModelFile {
 					name: string
 					size: number
+					modelName?: string
+					modelUrl?: string
+					description?: string
+					quantization?: string
+					sizeBytes?: number
 				}
 				interface Response {
 					currentModel: string | null
@@ -1664,6 +1669,7 @@ declare global {
 					label: string
 					filename: string
 					downloadUrl: string
+					sizeBytes?: number
 				}
 				interface ModelResult {
 					name: string
@@ -1683,6 +1689,10 @@ declare global {
 					modelName: string
 					filename: string
 					downloadUrl: string
+					modelUrl?: string
+					description?: string
+					quantization?: string
+					sizeBytes?: number
 				}
 				interface Response {
 					success: boolean
@@ -1721,6 +1731,17 @@ declare global {
 					success: boolean
 				}
 			}
+			namespace RecommendedModels {
+				interface RecommendedModel extends SearchModels.ModelResult {
+					ollamaName: string
+					recommendedVram?: number
+					parameterSize?: string
+				}
+				interface Params {}
+				interface Response {
+					models: RecommendedModel[]
+				}
+			}
 
 			// --- Managed mode ---
 
@@ -1756,8 +1777,18 @@ declare global {
 					success: boolean
 				}
 			}
+			namespace SetSubprocessTimeout {
+				interface Params {
+					timeoutSecs: number
+				}
+				interface Response {
+					success: boolean
+				}
+			}
 			namespace ListBinaryVariants {
-				interface Params {}
+				interface Params {
+					tag?: string
+				}
 				interface BinaryVariant {
 					name: string
 					displayName: string
@@ -1772,14 +1803,35 @@ declare global {
 					defaultDir: string
 				}
 			}
+			namespace ListReleaseVersions {
+				interface Params {}
+				interface ReleaseVersion {
+					tag: string
+					publishedAt: string
+					isLatest: boolean
+				}
+				interface Response {
+					versions: ReleaseVersion[]
+				}
+			}
 			namespace DownloadBinary {
 				interface Params {
 					assetName: string
 					downloadUrl: string
 					destDir: string
+					releaseTag: string
 				}
 				interface Response {
 					success: boolean
+				}
+			}
+			namespace CheckManagedBinaryUpdate {
+				interface Params {}
+				interface Response {
+					isUpdateAvailable: boolean
+					installedTag: string | null
+					latestTag: string
+					releaseUrl: string
 				}
 			}
 			namespace BinaryDownloadProgress {
@@ -3191,6 +3243,52 @@ declare global {
 
 	export interface ServerInfoDetails {
 		info: any
+	}
+
+	namespace CustomThemes {
+		interface ThemeMeta {
+			id: number
+			name: string
+			label: string
+			cssKey: string
+			isInstanceTheme: boolean
+			uploadedBy?: number | null
+			uploaderName?: string | null
+			createdAt: string
+		}
+
+		namespace List {
+			interface Params {}
+			interface Response {
+				myThemes: ThemeMeta[]
+				instanceThemes: ThemeMeta[]
+			}
+		}
+
+		namespace GetCss {
+			interface Params { name: string }
+			interface Response { name: string; css: string; cssKey: string }
+		}
+
+		namespace Save {
+			interface Params {
+				id?: number
+				name: string
+				label: string
+				css: string
+			}
+			interface Response { theme: ThemeMeta }
+		}
+
+		namespace Delete {
+			interface Params { id: number }
+			interface Response { success: boolean }
+		}
+
+		namespace SetInstanceTheme {
+			interface Params { id: number; enabled: boolean }
+			interface Response { success: boolean }
+		}
 	}
 
 	export interface SyncDetails {

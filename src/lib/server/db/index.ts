@@ -1,4 +1,5 @@
 import * as schema from "./schema"
+import { eq } from "drizzle-orm"
 import { migrate } from "drizzle-orm/pglite/migrator"
 import * as dbConfig from "./drizzle.config"
 import type { MigrationConfig } from "drizzle-orm/migrator"
@@ -342,6 +343,12 @@ if (!dev || !hasTables) {
 } else {
 	await runMigrations()
 }
+
+// Mark any downloads that were in-flight when the server last stopped as errored
+db.update(schema.koboldCppModels)
+	.set({ status: "error", errorMessage: "Server restarted during download" })
+	.where(eq(schema.koboldCppModels.status, "downloading"))
+	.catch(() => {})
 
 // Auto-start managed KoboldCPP subprocess if configured
 import("$lib/server/koboldcpp/subprocessManager").then(async (mgr) => {

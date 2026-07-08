@@ -499,7 +499,7 @@ export const samplerMetadata: Record<
 	// KoboldCpp-specific samplers
 	topA: {
 		label: "Top A",
-		description: "Top-a sampling value (KoboldCpp only)",
+		description: "Top-a sampling value (KoboldCPP only)",
 		type: "number",
 		min: 0,
 		max: 1,
@@ -509,7 +509,7 @@ export const samplerMetadata: Record<
 	nsigma: {
 		label: "N-Sigma",
 		description:
-			"Top N-Sigma value. Set above 0 to enable (KoboldCpp only)",
+			"Top N-Sigma value. Set above 0 to enable (KoboldCPP only)",
 		type: "number",
 		min: 0,
 		max: 10,
@@ -519,7 +519,7 @@ export const samplerMetadata: Record<
 	smoothingFactor: {
 		label: "Smoothing Factor",
 		description:
-			"Modifies temperature behavior. Greater than 0 uses smoothing (KoboldCpp only)",
+			"Modifies temperature behavior. Greater than 0 uses smoothing (KoboldCPP only)",
 		type: "number",
 		min: 0,
 		max: 10,
@@ -529,7 +529,7 @@ export const samplerMetadata: Record<
 	bannedTokens: {
 		label: "Banned Tokens",
 		description:
-			"Words/phrases prevented from being generated (KoboldCpp only)",
+			"Words/phrases prevented from being generated (KoboldCPP only)",
 		type: "array",
 		default: []
 	}

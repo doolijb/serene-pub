@@ -14,7 +14,12 @@
 	const koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
 
 	type Variant = Sockets.KoboldCpp.ListBinaryVariants.BinaryVariant
+	type ReleaseVersion = Sockets.KoboldCpp.ListReleaseVersions.ReleaseVersion
 	type DownloadState = Sockets.KoboldCpp.BinaryDownloadProgress.DownloadState
+
+	let versions = $state<ReleaseVersion[]>([])
+	let loadingVersions = $state(true)
+	let selectedTag = $state("latest")
 
 	let variants = $state<Variant[]>([])
 	let releaseTag = $state("")
@@ -25,6 +30,13 @@
 	let destDir = $state(koboldCppSettingsCtx.settings?.koboldCppManagedBinaryDir ?? "")
 	let download = $state<DownloadState | null>(null)
 	let confirming = $state(false)
+	let downloadStarted = $state(false)
+
+	$effect(() => {
+		if (downloadStarted && download?.status === "success" && download?.isDone) {
+			onDownloadStarted()
+		}
+	})
 
 	const platformOrder: Record<string, number> = { linux: 0, windows: 1, macos: 2, other: 3 }
 	let grouped = $derived(
@@ -51,20 +63,38 @@
 		return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 	}
 
+	function fetchVariants(tag: string) {
+		loading = true
+		error = null
+		selected = null
+		variants = []
+		socket.emit("koboldcpp:listBinaryVariants", { tag: tag === "latest" ? undefined : tag })
+	}
+
 	function startDownload() {
 		if (!selected || !destDir.trim()) return
 		socket.emit("koboldcpp:downloadBinary", {
 			assetName: selected.name,
 			downloadUrl: selected.downloadUrl,
-			destDir: destDir.trim()
+			destDir: destDir.trim(),
+			releaseTag
 		})
 		confirming = false
-		onDownloadStarted()
+		downloadStarted = true
 	}
 
 	onMount(() => {
+		socket.emit("koboldcpp:listReleaseVersions", {})
 		socket.emit("koboldcpp:listBinaryVariants", {})
 		socket.emit("koboldcpp:getBinaryDownloadProgress", {})
+
+		socket.on("koboldcpp:listReleaseVersions", (msg: Sockets.KoboldCpp.ListReleaseVersions.Response) => {
+			loadingVersions = false
+			versions = msg.versions
+		})
+		socket.on("koboldcpp:listReleaseVersions:error", () => {
+			loadingVersions = false
+		})
 
 		socket.on(
 			"koboldcpp:listBinaryVariants",
@@ -95,6 +125,8 @@
 	})
 
 	onDestroy(() => {
+		socket.off("koboldcpp:listReleaseVersions")
+		socket.off("koboldcpp:listReleaseVersions:error")
 		socket.off("koboldcpp:listBinaryVariants")
 		socket.off("koboldcpp:listBinaryVariants:error")
 		socket.off("koboldcpp:binaryDownloadProgress")
@@ -107,9 +139,38 @@
 		<div>
 			<p class="text-sm font-semibold">Choose a KoboldCPP build</p>
 			{#if releaseTag}
-				<p class="text-surface-500 text-xs">Latest release: {releaseTag}</p>
+				<p class="text-surface-500 text-xs">Release: {releaseTag}</p>
 			{/if}
 		</div>
+	</div>
+
+	<!-- Version picker -->
+	<div>
+		<label class="text-surface-600-400 mb-1 block text-xs font-medium" for="versionSelect">
+			Version
+		</label>
+		{#if loadingVersions}
+			<div class="flex items-center gap-2 text-xs">
+				<Icons.Loader2 size={12} class="animate-spin" />
+				Loading versions…
+			</div>
+		{:else}
+			<select
+				id="versionSelect"
+				class="select w-full text-sm"
+				bind:value={selectedTag}
+				onchange={() => fetchVariants(selectedTag)}
+			>
+				<option value="latest">
+					Latest{versions[0] ? ` (${versions[0].tag})` : ""}
+				</option>
+				{#each versions as v}
+					{#if !v.isLatest}
+						<option value={v.tag}>{v.tag}</option>
+					{/if}
+				{/each}
+			</select>
+		{/if}
 	</div>
 
 	<!-- Download directory -->

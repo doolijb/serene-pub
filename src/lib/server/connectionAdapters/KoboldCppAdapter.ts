@@ -12,8 +12,9 @@ import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { koboldCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { db } from "$lib/server/db"
+import * as path from "path"
 import * as subprocessManager from "$lib/server/koboldcpp/subprocessManager"
-import { ensureModelLoaded } from "$lib/server/koboldcpp/modelManager"
+import { ensureModelLoaded, DEFAULT_MANAGED_CONFIG } from "$lib/server/koboldcpp/modelManager"
 
 class KoboldCppAdapter extends BaseConnectionAdapter {
 	private _tokenCounter?: TokenCounters
@@ -124,9 +125,13 @@ class KoboldCppAdapter extends BaseConnectionAdapter {
 			return
 		}
 
-		const managedConfig = this.connection.extraJson?.managedConfig
+		let managedConfig = this.connection.extraJson?.managedConfig
+		if (!managedConfig?.modelFile && this.connection.model) {
+			// Connection predates managed mode — derive config from the stored model field
+			managedConfig = { ...DEFAULT_MANAGED_CONFIG, modelFile: path.basename(this.connection.model) }
+		}
 		if (!managedConfig?.modelFile) {
-			console.log("[KoboldCPP] preflight skip: no managedConfig.modelFile on connection", this.connection.id)
+			console.log("[KoboldCPP] preflight skip: no model on connection", this.connection.id)
 			return
 		}
 
@@ -151,6 +156,7 @@ class KoboldCppAdapter extends BaseConnectionAdapter {
 				contextSize
 			})
 			console.log("[KoboldCPP] preflight: ensureModelLoaded completed OK")
+			subprocessManager.pingActivity()
 		} catch (err) {
 			console.error("[KoboldCPP] preflight: ensureModelLoaded FAILED:", err)
 		}
