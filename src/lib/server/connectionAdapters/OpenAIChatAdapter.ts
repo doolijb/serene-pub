@@ -17,6 +17,8 @@ import { openAISamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 
 export class OpenAIChatAdapter extends BaseConnectionAdapter {
+	private abortController?: AbortController
+
 	constructor({
 		connection,
 		sampling,
@@ -138,15 +140,17 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 			defaultHeaders: { "User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)" }
 		})
 
+		this.abortController = new AbortController()
+
 		try {
 			if (stream) {
 				return {
 					completionResult: async (contentCb: (chunk: string) => void, _thinkingCb?: (chunk: string) => void) => {
 						const streamResp =
-							await openaiClient.chat.completions.create({
-								...params,
-								stream: true
-							})
+							await openaiClient.chat.completions.create(
+								{ ...params, stream: true },
+								{ signal: this.abortController?.signal }
+							)
 						for await (const part of streamResp as any) {
 							if (this.isAborting) break
 							if (
@@ -164,7 +168,10 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 				}
 			} else {
 				const response =
-					await openaiClient.chat.completions.create({ ...params, stream: false })
+					await openaiClient.chat.completions.create(
+						{ ...params, stream: false },
+						{ signal: this.abortController?.signal }
+					)
 				let content = ""
 				if (
 					response.choices &&
@@ -214,7 +221,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 
 	abort() {
 		this.isAborting = true
-		// TODO: OpenAI does not support aborting requests directly.
+		this.abortController?.abort()
 	}
 }
 

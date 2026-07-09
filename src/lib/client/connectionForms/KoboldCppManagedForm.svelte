@@ -7,7 +7,12 @@
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { onMount, onDestroy, getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { z } from "zod"
+
+	interface ManagedConfig {
+		gpuLayers: number
+		flashAttention: boolean
+		batchSize: number
+	}
 
 	interface ExtraFieldData {
 		stream: boolean
@@ -21,6 +26,7 @@
 		logprobs: boolean
 		replaceInstructPlaceholders: boolean
 		enableThinking: boolean | null
+		managedConfig: ManagedConfig
 	}
 
 	interface ExtraJson {
@@ -35,18 +41,8 @@
 		logprobs?: boolean
 		replaceInstructPlaceholders?: boolean
 		enableThinking?: boolean | null
+		managedConfig?: ManagedConfig
 	}
-
-	// Zod validation schema
-	const koboldCppConnectionSchema = z.object({
-		model: z.string().min(1, "Model is required"),
-		baseUrl: z
-			.string()
-			.url("Invalid URL format")
-			.min(1, "Base URL is required")
-	})
-
-	type ValidationErrors = Record<string, string>
 
 	interface Props {
 		connection: SelectConnection
@@ -57,106 +53,29 @@
 	const socket = useTypedSocket()
 	const koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
 	const defaultExtraJson =
-		CONNECTION_DEFAULTS[CONNECTION_TYPE.KOBOLDCPP].extraJson
+		CONNECTION_DEFAULTS[CONNECTION_TYPE.KOBOLDCPP_MANAGED].extraJson
+	const DEFAULT_MANAGED_CONFIG: ManagedConfig = {
+		gpuLayers: -1,
+		flashAttention: false,
+		batchSize: 512
+	}
 
 	let managerEnabled = $derived(
 		koboldCppSettingsCtx?.settings?.koboldCppManagerEnabled ?? false
 	)
 
 	let koboldCppFields: ExtraFieldData | undefined = $state()
-	let validationErrors: ValidationErrors = $state({})
-	let testResult: { ok: boolean; error?: string; models?: any[] } | null =
-		$state(null)
-	let availableModels: any[] = $state([])
-	let isLoadingModel = $state(false)
+	let availableModels: Sockets.KoboldCpp.ListModels.ModelFile[] = $state([])
+	let isLoadingModels = $state(false)
 
-	socket.on("connections:test", (msg) => {
-		testResult = msg
+	socket.on("koboldcpp:listModels", (message: Sockets.KoboldCpp.ListModels.Response) => {
+		isLoadingModels = false
+		availableModels = message.availableModels ?? []
 	})
 
-	socket.on("connections:refreshModels", (msg) => {
-		if (msg.models && msg.models.length > 0) {
-			availableModels = msg.models
-			// If no model is selected, select the current one
-			if (!connection.model) {
-				const currentModel = msg.models.find((m: any) => m.isCurrent)
-				connection.model = currentModel?.id || msg.models[0].id
-			}
-		}
-	})
-
-	function handleRefreshModels() {
-		socket.emit("connections:refreshModels", {
-			connection
-		})
-	}
-
-	function handleTestConnection() {
-		if (!validateConnection()) return
-		testResult = null
-		socket.emit("connections:test", {
-			connection
-		})
-	}
-
-	function validateConnection(): boolean {
-		const data = {
-			model: connection.model || "",
-			baseUrl: connection.baseUrl || ""
-		}
-
-		const result = koboldCppConnectionSchema.safeParse(data)
-
-		if (result.success) {
-			validationErrors = {}
-			return true
-		} else {
-			const errors: ValidationErrors = {}
-			result.error.errors.forEach((error) => {
-				if (error.path.length > 0) {
-					errors[error.path[0] as string] = error.message
-				}
-			})
-			validationErrors = errors
-			return false
-		}
-	}
-
-	async function handleModelChange(modelId: string) {
-		if (
-			modelId === "[current]" ||
-			!modelId ||
-			modelId === connection.model
-		) {
-			return
-		}
-
-		isLoadingModel = true
-		try {
-			const baseUrl = connection.baseUrl || "http://localhost:5001"
-			const response = await fetch(`${baseUrl}/api/admin/reload_config`, {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json"
-				},
-				body: JSON.stringify({
-					filename: modelId
-				})
-			})
-
-			if (response.ok) {
-				connection.model = modelId
-				// Refresh models to get updated current model
-				handleRefreshModels()
-			} else {
-				const error = await response.text()
-				console.error("Failed to load model:", error)
-			}
-		} catch (e) {
-			console.error("Error loading model:", e)
-		} finally {
-			isLoadingModel = false
-		}
+	function refreshModels() {
+		isLoadingModels = true
+		socket.emit("koboldcpp:listModels", {})
 	}
 
 	function extraJsonToExtraFields(extraJson: ExtraJson): ExtraFieldData {
@@ -171,7 +90,21 @@
 			grammarRetainState: extraJson.grammarRetainState ?? false,
 			logprobs: extraJson.logprobs ?? false,
 			replaceInstructPlaceholders: extraJson.replaceInstructPlaceholders ?? false,
-			enableThinking: extraJson.enableThinking ?? null
+			enableThinking: extraJson.enableThinking ?? null,
+			managedConfig: {
+				gpuLayers:
+					extraJson.managedConfig?.gpuLayers ??
+					defaultExtraJson.managedConfig?.gpuLayers ??
+					DEFAULT_MANAGED_CONFIG.gpuLayers,
+				flashAttention:
+					extraJson.managedConfig?.flashAttention ??
+					defaultExtraJson.managedConfig?.flashAttention ??
+					DEFAULT_MANAGED_CONFIG.flashAttention,
+				batchSize:
+					extraJson.managedConfig?.batchSize ??
+					defaultExtraJson.managedConfig?.batchSize ??
+					DEFAULT_MANAGED_CONFIG.batchSize
+			}
 		}
 	}
 
@@ -187,7 +120,8 @@
 			grammarRetainState: fields.grammarRetainState,
 			logprobs: fields.logprobs,
 			replaceInstructPlaceholders: fields.replaceInstructPlaceholders,
-			enableThinking: fields.enableThinking
+			enableThinking: fields.enableThinking,
+			managedConfig: fields.managedConfig
 		}
 	}
 
@@ -205,48 +139,51 @@
 		} else {
 			koboldCppFields = extraJsonToExtraFields(defaultExtraJson)
 		}
-		if (managerEnabled) {
-			handleRefreshModels()
-		}
+		refreshModels()
 	})
 
 	onDestroy(() => {
-		socket.off("connections:test")
-		socket.off("connections:refreshModels")
+		socket.off("koboldcpp:listModels")
 	})
 </script>
 
 {#if connection}
-	{#if managerEnabled}
+	{#if !managerEnabled}
 		<div
 			class="border-warning-500 bg-warning-500/10 mt-4 flex items-start gap-2 rounded-lg border p-3"
 		>
 			<Icons.AlertTriangle size={16} class="text-warning-700-300 mt-0.5 shrink-0" />
 			<p class="text-warning-700-300 text-sm">
-				KoboldCpp Manager is enabled — consider using a
-				<b>KoboldCPP (Managed)</b> connection instead, unless this connects
-				to a different/external KoboldCpp instance.
+				This is a Managed KoboldCpp connection. KoboldCpp Manager must be
+				enabled in Settings to use this connection.
 			</p>
 		</div>
 	{/if}
-	<div class="mt-4 flex gap-2">
-		<button
-			type="button"
-			class="btn preset-tonal-success btn-sm w-full"
-			onclick={handleTestConnection}
-		>
-			{#if testResult?.ok === true}
-				Test: Okay!
-			{:else if testResult?.ok === false}
-				Test: Failed!
-			{:else}
-				Test Connection
-			{/if}
-		</button>
+
+	<div class="mt-4 flex flex-col gap-1">
+		<div class="flex items-center justify-between">
+			<label class="font-semibold" for="model">Model</label>
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface"
+				onclick={refreshModels}
+				title="Refresh models"
+			>
+				<Icons.RefreshCw size={14} class={isLoadingModels ? "animate-spin" : ""} />
+			</button>
+		</div>
+		<select id="model" class="select w-full" bind:value={connection.model} disabled={!managerEnabled}>
+			<option value="">Select a model…</option>
+			{#each availableModels as model}
+				<option value={model.name}>{model.name}</option>
+			{/each}
+		</select>
+		<p class="text-muted-foreground text-xs">
+			Loaded automatically via KoboldCpp Manager's admin API the next time
+			this connection is used to generate.
+		</p>
 	</div>
-	{#if testResult?.error}
-		<p class="text-error-500 mt-2 text-sm">{testResult.error}</p>
-	{/if}
+
 	{#if !koboldCppFields?.useChat}
 		<div class="mt-2 flex flex-col gap-1">
 			<label class="font-semibold" for="promptFormat">
@@ -279,22 +216,10 @@
 		<summary class="cursor-pointer font-semibold">
 			Advanced Settings
 		</summary>
-		<div class="mt-2 flex flex-col gap-1">
-			<label class="font-semibold" for="baseUrl">Base URL</label>
-			<input
-				id="baseUrl"
-				type="text"
-				bind:value={connection.baseUrl}
-				placeholder="http://localhost:5001"
-				required
-				class="input"
-			/>
-			{#if validationErrors.baseUrl}
-				<p class="text-error-500 text-sm">
-					{validationErrors.baseUrl}
-				</p>
-			{/if}
-		</div>
+		<p class="text-muted-foreground mt-2 text-xs">
+			Base URL is managed by KoboldCpp Manager's configured address and
+			isn't set per-connection.
+		</p>
 		{#if koboldCppFields}
 			<section class="w-full space-y-4 pt-4">
 				<div class="flex items-center justify-between gap-4">
@@ -446,6 +371,51 @@
 							</button>
 						{/each}
 					</div>
+				</div>
+				<hr class="border-surface-300-700" />
+				<p class="text-muted-foreground text-xs">
+					Managed mode launch settings — applied the next time this
+					model is loaded.
+				</p>
+				<div class="flex flex-col gap-1">
+					<label class="font-semibold" for="gpuLayers">
+						GPU Layers
+					</label>
+					<input
+						id="gpuLayers"
+						type="number"
+						step="1"
+						bind:value={koboldCppFields.managedConfig.gpuLayers}
+						class="input"
+					/>
+					<p class="text-muted-foreground text-xs">
+						-1 = autofit as many layers as fit on GPU, 0 = CPU only
+					</p>
+				</div>
+				<div class="flex items-center justify-between gap-4">
+					<label class="font-semibold" for="flashAttention">
+						Flash Attention
+					</label>
+					<Switch
+						name="flashAttention"
+						checked={koboldCppFields.managedConfig.flashAttention}
+						onCheckedChange={(e) =>
+							(koboldCppFields!.managedConfig.flashAttention = e.checked)}
+						aria-labelledby="flashAttention"
+					/>
+				</div>
+				<div class="flex flex-col gap-1">
+					<label class="font-semibold" for="batchSize">
+						Batch Size
+					</label>
+					<input
+						id="batchSize"
+						type="number"
+						step="1"
+						min="1"
+						bind:value={koboldCppFields.managedConfig.batchSize}
+						class="input"
+					/>
 				</div>
 			</section>
 		{/if}

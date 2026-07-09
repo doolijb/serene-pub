@@ -973,7 +973,9 @@ export const chatMessages = pgTable(
 			reasoning?: string // Assistant reasoning/thinking before response
 		}>(), // JSON for extra info
 		isGenerating: boolean("is_generating").notNull().default(false), // 1 if processing, 0 otherwise
-		adapterId: text("adapter_id"), // UUID for in-flight adapter instance, nullable
+		generationStage: text("generation_stage"), // 'queued' | 'loading' | 'generating' | null; only meaningful while isGenerating
+		error: json("error").$type<{ message: string; code?: string } | null>(),
+		queueItemId: text("queue_item_id"), // UUID of the current llmQueue item / activeAdapters entry, nullable
 		isHidden: boolean("is_hidden").notNull().default(false), // Whether this message is processed or not
 		debugMeta: json("debug_meta").$type<Record<string, any>>(),
 		embedding: real("embedding").array(),

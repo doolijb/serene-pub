@@ -127,6 +127,12 @@ export abstract class BaseConnectionAdapter {
 		this.isAborting = true
 	}
 
+	/**
+	 * Optional hook run by the LLM queue before generate() is invoked, e.g.
+	 * koboldcpp's managed-mode subprocess start + model load. No-op by default.
+	 */
+	async preflight(_signal?: AbortSignal): Promise<void> {}
+
 	async getContextTokenLimit(): Promise<number> {
 		return this.sampling.contextTokensEnabled
 			? this.sampling.contextTokens || 4096

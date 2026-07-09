@@ -11,12 +11,14 @@ import { type CompiledPrompt } from "../utils/promptBuilder"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { koboldCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
-import { db } from "$lib/server/db"
-import * as path from "path"
-import * as subprocessManager from "$lib/server/koboldcpp/subprocessManager"
-import { ensureModelLoaded, DEFAULT_MANAGED_CONFIG } from "$lib/server/koboldcpp/modelManager"
 
-class KoboldCppAdapter extends BaseConnectionAdapter {
+// Plain/"dumb" KoboldCpp connection: the user runs and configures their own
+// koboldcpp instance entirely themselves. No admin API is assumed, so there's
+// no preflight — generate() just sends the request. For a connection that
+// works with Serene Pub's KoboldCPP Manager (subprocess lifecycle, model
+// swapping via the admin API), see KoboldCppManagedAdapter, which subclasses
+// this and only adds a preflight() step.
+export class KoboldCppAdapter extends BaseConnectionAdapter {
 	private _tokenCounter?: TokenCounters
 	private abortController?: AbortController
 
@@ -114,54 +116,6 @@ class KoboldCppAdapter extends BaseConnectionAdapter {
 		})
 	}
 
-	async managedPreflight(): Promise<void> {
-		const settings = await db.query.koboldCppSettings.findFirst()
-		if (!settings?.koboldCppManagerEnabled) {
-			console.log("[KoboldCPP] preflight skip: manager not enabled")
-			return
-		}
-		if (settings?.koboldCppManagedMode !== "managed") {
-			console.log("[KoboldCPP] preflight skip: mode is", settings?.koboldCppManagedMode)
-			return
-		}
-
-		let managedConfig = this.connection.extraJson?.managedConfig
-		if (!managedConfig?.modelFile && this.connection.model) {
-			// Connection predates managed mode — derive config from the stored model field
-			managedConfig = { ...DEFAULT_MANAGED_CONFIG, modelFile: path.basename(this.connection.model) }
-		}
-		if (!managedConfig?.modelFile) {
-			console.log("[KoboldCPP] preflight skip: no model on connection", this.connection.id)
-			return
-		}
-
-		console.log("[KoboldCPP] preflight: connection", this.connection.id, "model", managedConfig.modelFile)
-
-		if (!subprocessManager.isRunning()) {
-			console.log("[KoboldCPP] preflight: subprocess not running, starting...")
-			await subprocessManager.start()
-			console.log("[KoboldCPP] preflight: subprocess started")
-		}
-
-		const contextSize = this.sampling.contextTokens ?? 4096
-		console.log("[KoboldCPP] preflight: calling ensureModelLoaded, contextSize=", contextSize)
-		try {
-			await ensureModelLoaded({
-				connectionId: this.connection.id,
-				managedConfig,
-				baseUrl: settings.koboldCppManagerBaseUrl,
-				modelsDir: settings.koboldCppManagerModelsDir ?? null,
-				adminPassword: settings.koboldCppManagedAdminPassword ?? "",
-				ttlSecs: settings.koboldCppManagedModelTtlSecs ?? 300,
-				contextSize
-			})
-			console.log("[KoboldCPP] preflight: ensureModelLoaded completed OK")
-			subprocessManager.pingActivity()
-		} catch (err) {
-			console.error("[KoboldCPP] preflight: ensureModelLoaded FAILED:", err)
-		}
-	}
-
 	async generate(): Promise<{
 		completionResult:
 			| string
@@ -170,8 +124,6 @@ class KoboldCppAdapter extends BaseConnectionAdapter {
 		isAborted: boolean
 		thinkingContent?: string
 	}> {
-		await this.managedPreflight()
-
 		const baseUrl = this.connection.baseUrl || "http://localhost:5001"
 		const stream = this.connection.extraJson?.stream ?? false
 		const useMemory = this.connection.extraJson?.useMemory ?? false
@@ -265,7 +217,7 @@ class KoboldCppAdapter extends BaseConnectionAdapter {
 
 						if (!response.ok) {
 							throw new Error(
-								`KoboldCpp API error: ${response.status} ${response.statusText}`
+								`KoboldCPP API error: ${response.status} ${response.statusText}`
 							)
 						}
 
@@ -398,8 +350,8 @@ class KoboldCppAdapter extends BaseConnectionAdapter {
 	}
 }
 
-// Connection test function
-async function testConnection(
+// Connection test function — reused as-is by KoboldCppManagedAdapter.
+export async function testConnection(
 	connection: SelectConnection
 ): Promise<{ ok: boolean; error?: string }> {
 	try {
@@ -436,14 +388,15 @@ async function testConnection(
 	}
 }
 
-// List models function
+// List models function — a dumb connection never assumes an admin API is
+// present, so this only ever reports the currently loaded model. See
+// KoboldCppManagedAdapter's listModels for the admin-API-backed version.
 async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
 	try {
 		const baseUrl = connection.baseUrl || "http://localhost:5001"
 
-		// First, get the currently loaded model
 		const currentModelResponse = await fetch(`${baseUrl}/api/v1/model`, {
 			method: "GET",
 			headers: {
@@ -458,49 +411,14 @@ async function listModels(
 			currentModel = data.result || "No model loaded"
 		}
 
-		// Only query the admin API for .kcpps config files when the manager is enabled.
-		// When the manager is disabled, KoboldCPP may not be running or may not have
-		// admin mode active, so skip this call to avoid spurious errors.
-		const settings = await db.query.koboldCppSettings.findFirst()
-		const managerEnabled = settings?.koboldCppManagerEnabled ?? false
-
-		let availableModels: string[] = []
-		if (managerEnabled) {
-			const availableModelsResponse = await fetch(
-				`${baseUrl}/api/admin/list_options`,
-				{
-					method: "GET",
-					headers: {
-						"Content-Type": "application/json"
-					},
-					signal: AbortSignal.timeout(5000)
-				}
-			)
-			if (availableModelsResponse.ok) {
-				availableModels = await availableModelsResponse.json()
-			}
-		}
-
-		// Combine the results
-		const models = []
-
-		// Add currently loaded model first
-		models.push({
-			id: "[current]",
-			name: `Currently Loaded: ${currentModel}`,
-			object: "model",
-			isCurrent: true
-		})
-
-		// Add available .kcpps files (only populated when manager is enabled)
-		for (const filename of availableModels) {
-			models.push({
-				id: filename,
-				name: filename,
+		const models = [
+			{
+				id: "[current]",
+				name: `Currently Loaded: ${currentModel}`,
 				object: "model",
-				isCurrent: false
-			})
-		}
+				isCurrent: true
+			}
+		]
 
 		return { models }
 	} catch (e: any) {

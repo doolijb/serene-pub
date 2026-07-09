@@ -92,6 +92,7 @@ export const createHistoryEntryHandler: Handler<
 				emitToUser
 			)
 			emitToUser("historyEntries:list", entryListResult)
+			emitToUser("historyEntries:create", { historyEntry: newEntry })
 		}
 
 		return {

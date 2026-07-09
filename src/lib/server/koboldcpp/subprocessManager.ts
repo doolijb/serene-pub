@@ -36,6 +36,101 @@ let emitStatusFn: ((s: SubprocessStatusEvent) => void) | null = null
 let healthInterval: ReturnType<typeof setInterval> | null = null
 let idleTimer: ReturnType<typeof setTimeout> | null = null
 let subprocessTimeoutSecs = 1800
+let lastBinaryDir: string | null = null
+
+// Best-effort: if this Node process dies (normal exit, uncaught exception,
+// or a caught signal that leads to exit), take the managed koboldcpp
+// process group down with it rather than leaving it orphaned. This can't
+// catch SIGKILL or a suspend (SIGSTOP) — nothing running in-process can —
+// but it covers the common "dev server restarted/crashed" case.
+process.on("exit", () => {
+	if (state.process?.pid) {
+		try {
+			process.kill(-state.process.pid, "SIGKILL")
+		} catch {}
+	}
+})
+
+function pidFilePath(binaryDir: string): string {
+	return path.join(binaryDir, ".managed-subprocess.pid")
+}
+
+async function writePidFile(binaryDir: string, pid: number) {
+	try {
+		await fsPromises.writeFile(pidFilePath(binaryDir), String(pid))
+	} catch {}
+}
+
+async function clearPidFile(binaryDir: string) {
+	try {
+		await fsPromises.unlink(pidFilePath(binaryDir))
+	} catch {}
+}
+
+function isPidAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0)
+		return true
+	} catch {
+		return false
+	}
+}
+
+// Best-effort sanity check so we don't kill an unrelated process that
+// happens to have inherited a recycled PID — only meaningful on Linux.
+function pidLooksLikeOurBinary(pid: number, binaryPath: string): boolean {
+	if (process.platform !== "linux") return true
+	try {
+		const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8")
+		return cmdline.includes(path.basename(binaryPath))
+	} catch {
+		return false
+	}
+}
+
+/**
+ * If a previous run of this app left a koboldcpp process behind (e.g. the
+ * dev server was killed/crashed without a clean shutdown) and it's still
+ * alive but not responding to the port ping in start() — suspended, hung,
+ * or otherwise stuck — it'll block a fresh spawn from binding the port.
+ * Detect and clear that out before spawning.
+ */
+async function killStaleOrphan(binaryDir: string, binaryPath: string): Promise<void> {
+	let recordedPid: number | null = null
+	try {
+		const raw = await fsPromises.readFile(pidFilePath(binaryDir), "utf8")
+		recordedPid = parseInt(raw.trim(), 10) || null
+	} catch {
+		return
+	}
+	if (!recordedPid || !isPidAlive(recordedPid)) return
+	if (!pidLooksLikeOurBinary(recordedPid, binaryPath)) return
+
+	console.warn(
+		`[KoboldCPP] Found a stale managed process (pid ${recordedPid}) from a previous session that isn't responding — terminating it.`
+	)
+	try {
+		process.kill(-recordedPid, "SIGTERM")
+	} catch {
+		try {
+			process.kill(recordedPid, "SIGTERM")
+		} catch {}
+	}
+	const deadline = Date.now() + 5000
+	while (Date.now() < deadline && isPidAlive(recordedPid)) {
+		await new Promise((r) => setTimeout(r, 250))
+	}
+	if (isPidAlive(recordedPid)) {
+		try {
+			process.kill(-recordedPid, "SIGKILL")
+		} catch {
+			try {
+				process.kill(recordedPid, "SIGKILL")
+			} catch {}
+		}
+	}
+	await clearPidFile(binaryDir)
+}
 
 export function setEmitter(fn: (s: SubprocessStatusEvent) => void) {
 	emitStatusFn = fn
@@ -139,6 +234,7 @@ export async function start(): Promise<void> {
 		settings
 	if (!binaryDir || !binaryVariant) throw new Error("Binary not configured")
 
+	lastBinaryDir = binaryDir
 	const binaryPath = path.join(binaryDir, binaryVariant)
 
 	try {
@@ -172,24 +268,39 @@ export async function start(): Promise<void> {
 			return
 		}
 	} catch {
-		// Port is free, proceed with spawn
+		// Port is free (or the process behind it is unresponsive) — check for
+		// and clean up a stale process left behind by a previous session
+		// before we try to spawn on top of it.
+		await killStaleOrphan(binaryDir, binaryPath)
 	}
 
 	state.status = "starting"
 	state.lastError = null
 	emitStatus()
 
-	const args = ["--host", "0.0.0.0", "--port", String(port), "--admin", "--adminpassword", password, "--nomodel"]
+	// --admindir must be explicit: koboldcpp's admin reload/list-options endpoints jail
+	// requests to this directory, and ensureModelLoaded() writes its .kcpps files here.
+	const args = [
+		"--host", "0.0.0.0",
+		"--port", String(port),
+		"--admin", "--adminpassword", password, "--admindir", binaryDir,
+		"--nomodel"
+	]
 
+	// detached: true makes koboldcpp the leader of its own process group (setsid),
+	// so we can reliably kill it AND any children it spawns (its PyInstaller
+	// bootstrap process forks a real worker process) with a single group-kill
+	// via a negative PID, instead of leaving pieces behind.
 	const proc = spawn(binaryPath, args, {
 		stdio: ["ignore", "pipe", "pipe"],
-		detached: false
+		detached: true
 	})
 
 	state.process = proc
 	state.pid = proc.pid ?? null
 	state.startedAt = new Date()
 	state.restartCount++
+	if (proc.pid) await writePidFile(binaryDir, proc.pid)
 
 	proc.stdout?.on("data", (chunk: Buffer) => {
 		console.log("[KoboldCPP]", chunk.toString().trimEnd())
@@ -205,6 +316,7 @@ export async function start(): Promise<void> {
 		state.process = null
 		state.pid = null
 		stopHealthCheck()
+		clearPidFile(binaryDir).catch(() => {})
 		emitStatus()
 	})
 
@@ -219,18 +331,26 @@ export async function start(): Promise<void> {
 		}
 		state.process = null
 		state.pid = null
+		clearPidFile(binaryDir).catch(() => {})
 		emitStatus()
 	})
 
 	try {
 		await waitForReady(port)
 	} catch (err: any) {
-		// Process may still be starting — kill and propagate
-		proc.kill("SIGKILL")
+		// Process may still be starting — kill the whole group and propagate
+		if (proc.pid) {
+			try {
+				process.kill(-proc.pid, "SIGKILL")
+			} catch {
+				proc.kill("SIGKILL")
+			}
+		}
 		state.status = "crashed"
 		state.lastError = err.message
 		state.process = null
 		state.pid = null
+		await clearPidFile(binaryDir)
 		emitStatus()
 		throw err
 	}
@@ -256,11 +376,20 @@ export async function stop(): Promise<void> {
 	stopHealthCheck()
 
 	const proc = state.process
+	const pid = proc.pid
 	state.process = null
 
 	await new Promise<void>((resolve) => {
 		const forceKill = setTimeout(() => {
-			proc.kill("SIGKILL")
+			if (pid) {
+				try {
+					process.kill(-pid, "SIGKILL")
+				} catch {
+					proc.kill("SIGKILL")
+				}
+			} else {
+				proc.kill("SIGKILL")
+			}
 			resolve()
 		}, 10_000)
 
@@ -272,6 +401,16 @@ export async function stop(): Promise<void> {
 			resolve()
 		})
 
-		proc.kill("SIGTERM")
+		if (pid) {
+			try {
+				process.kill(-pid, "SIGTERM")
+			} catch {
+				proc.kill("SIGTERM")
+			}
+		} else {
+			proc.kill("SIGTERM")
+		}
 	})
+
+	if (lastBinaryDir) await clearPidFile(lastBinaryDir)
 }

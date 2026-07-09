@@ -22,12 +22,15 @@
 		userCtx.user?.activeSamplingConfig?.id ?? null
 	)
 
-	// Sync local editable copy whenever the active config changes in the global context
+	let selectedSamplingId: number | null = $state(null)
+
+	// Initial sync from user context — only when we haven't manually selected yet
 	$effect(() => {
 		const config = userCtx.user?.activeSamplingConfig
-		if (config) {
+		if (config && !selectedSamplingId) {
 			sampling = { ...config }
 			originalSamplingConfig = { ...config }
+			selectedSamplingId = config.id
 		}
 	})
 
@@ -152,9 +155,14 @@
 		$state([])
 
 	function handleSelectChange(e: Event) {
-		socket.emit("samplingConfigs:setUserActive", {
-			id: parseInt((e.target as HTMLSelectElement).value)
-		})
+		const newId = parseInt((e.target as HTMLSelectElement).value)
+		selectedSamplingId = newId
+		socket.emit("samplingConfigs:get", { id: newId })
+	}
+
+	function handleSetDefault() {
+		if (!selectedSamplingId) return
+		socket.emit("samplingConfigs:setUserActive", { id: selectedSamplingId })
 	}
 
 	function handleNew() {
@@ -228,7 +236,7 @@
 
 	function confirmDelete() {
 		socket.emit("samplingConfigs:delete", {
-			id: activeSamplingConfigId!
+			id: sampling!.id!
 		})
 		showDeleteModal = false
 	}
@@ -296,6 +304,13 @@
 				toaster.success({ title: "Sampling Config Created" })
 			}
 		)
+		socket.on("samplingConfigs:get", (message: Sockets.SamplingConfigs.Get.Response) => {
+			sampling = { ...message.sampling }
+			originalSamplingConfig = { ...message.sampling }
+		})
+		socket.on("samplingConfigs:setUserActive", () => {
+			toaster.success({ title: "Default sampling config updated" })
+		})
 
 		socket.emit("samplingConfigs:list", {})
 	})
@@ -305,6 +320,8 @@
 		socket.off("samplingConfigs:delete")
 		socket.off("samplingConfigs:update")
 		socket.off("samplingConfigs:create")
+		socket.off("samplingConfigs:get")
+		socket.off("samplingConfigs:setUserActive")
 	})
 </script>
 
@@ -378,22 +395,22 @@
 				<Icons.X size={16} />
 			</button>
 		</div>
-		<div
-			class="mb-6 flex flex-col items-start gap-2 sm:flex-row sm:items-center"
-		>
+		<div class="mb-4">
 			<select
-				class="select select-sm bg-background border-muted rounded border"
+				class="select w-full"
 				onchange={handleSelectChange}
 				disabled={unsavedChanges}
 			>
 				{#each samplingConfigsList.filter((w) => w.isImmutable) as w}
-					<option value={w.id} selected={w.id === activeSamplingConfigId}>
-						{w.name}{#if w.isImmutable}*{/if}
+					{@const isDefault = w.id === activeSamplingConfigId}
+					<option value={w.id} selected={w.id === selectedSamplingId}>
+						{isDefault ? "★ " : ""}{w.name}*
 					</option>
 				{/each}
 				{#each samplingConfigsList.filter((w) => !w.isImmutable) as w}
-					<option value={w.id} selected={w.id === activeSamplingConfigId}>
-						{w.name}{#if w.isImmutable}*{/if}
+					{@const isDefault = w.id === activeSamplingConfigId}
+					<option value={w.id} selected={w.id === selectedSamplingId}>
+						{isDefault ? "★ " : ""}{w.name}
 					</option>
 				{/each}
 			</select>
@@ -401,7 +418,7 @@
 		<div class="mb-4 flex gap-2">
 			<button
 				type="button"
-				class="btn btn-sm preset-tonal-primary w-full"
+				class="btn btn-sm preset-tonal-primary flex-1"
 				onclick={handleSelectSamplingConfig}
 			>
 				<Icons.CheckSquare size={16} />
@@ -409,12 +426,21 @@
 			</button>
 			<button
 				type="button"
-				class="btn btn-sm preset-filled-success-500 w-full"
+				class="btn btn-sm preset-filled-success-500 flex-1"
 				onclick={handleUpdate}
 				disabled={(!!sampling && sampling.isImmutable) ||
 					!unsavedChanges}
 			>
 				<Icons.Save size={16} /> Save
+			</button>
+			<button
+				type="button"
+				class="btn btn-sm preset-filled-warning-500 shrink-0"
+				onclick={handleSetDefault}
+				disabled={!selectedSamplingId || selectedSamplingId === activeSamplingConfigId}
+				title="Set as default"
+			>
+				<Icons.Star size={16} /> Set Default
 			</button>
 		</div>
 

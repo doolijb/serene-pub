@@ -255,34 +255,29 @@
 	}
 	function handleNewNameCancel() { showNewNameModal = false }
 
-	// ── Reactive: set active config when selection changes ────────────────────
-	$effect(() => {
-		if (selectedChatId && selectedChatId !== userSettingsCtx.settings?.activePromptConfigId) {
-			socket.emit("promptConfigs:setUserActive", { id: selectedChatId })
-		}
-	})
+	// ── Reactive: load config when selection changes ──────────────────────────
 	$effect(() => { if (selectedChatId) socket.emit("promptConfigs:get", { id: selectedChatId }) })
-
-	$effect(() => {
-		if (selectedWorldId && selectedWorldId !== (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId) {
-			socket.emit("worldSummarizeConfigs:setUserActive", { id: selectedWorldId })
-		}
-	})
 	$effect(() => { if (selectedWorldId) socket.emit("worldSummarizeConfigs:get", { id: selectedWorldId }) })
-
-	$effect(() => {
-		if (selectedCharacterId && selectedCharacterId !== (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId) {
-			socket.emit("characterSummarizeConfigs:setUserActive", { id: selectedCharacterId })
-		}
-	})
 	$effect(() => { if (selectedCharacterId) socket.emit("characterSummarizeConfigs:get", { id: selectedCharacterId }) })
-
-	$effect(() => {
-		if (selectedSceneId && selectedSceneId !== (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId) {
-			socket.emit("sceneSummarizeConfigs:setUserActive", { id: selectedSceneId })
-		}
-	})
 	$effect(() => { if (selectedSceneId) socket.emit("sceneSummarizeConfigs:get", { id: selectedSceneId }) })
+
+	// ── Set default actions ────────────────────────────────────────────────────
+	function handleChatSetDefault() {
+		if (!selectedChatId) return
+		socket.emit("promptConfigs:setUserActive", { id: selectedChatId })
+	}
+	function handleWorldSetDefault() {
+		if (!selectedWorldId) return
+		socket.emit("worldSummarizeConfigs:setUserActive", { id: selectedWorldId })
+	}
+	function handleCharacterSetDefault() {
+		if (!selectedCharacterId) return
+		socket.emit("characterSummarizeConfigs:setUserActive", { id: selectedCharacterId })
+	}
+	function handleSceneSetDefault() {
+		if (!selectedSceneId) return
+		socket.emit("sceneSummarizeConfigs:setUserActive", { id: selectedSceneId })
+	}
 
 	onMount(() => {
 		// Chat listeners
@@ -369,6 +364,20 @@
 			}
 		})
 
+		// Set-default response listeners (just toast — userSettings:get updates context)
+		socket.on("promptConfigs:setUserActive", () => {
+			toaster.success({ title: "Default chat prompt updated" })
+		})
+		socket.on("worldSummarizeConfigs:setUserActive", () => {
+			toaster.success({ title: "Default world summarization updated" })
+		})
+		socket.on("characterSummarizeConfigs:setUserActive", () => {
+			toaster.success({ title: "Default character summarization updated" })
+		})
+		socket.on("sceneSummarizeConfigs:setUserActive", () => {
+			toaster.success({ title: "Default scene summarization updated" })
+		})
+
 		// Connection / sampling lists for override pickers
 		socket.on("connections:list", (msg: Sockets.Connections.List.Response) => {
 			connectionsList = msg.connectionsList
@@ -395,18 +404,22 @@
 		socket.off("promptConfigs:get")
 		socket.off("promptConfigs:create")
 		socket.off("promptConfigs:update")
+		socket.off("promptConfigs:setUserActive")
 		socket.off("worldSummarizeConfigs:list")
 		socket.off("worldSummarizeConfigs:get")
 		socket.off("worldSummarizeConfigs:create")
 		socket.off("worldSummarizeConfigs:update")
+		socket.off("worldSummarizeConfigs:setUserActive")
 		socket.off("characterSummarizeConfigs:list")
 		socket.off("characterSummarizeConfigs:get")
 		socket.off("characterSummarizeConfigs:create")
 		socket.off("characterSummarizeConfigs:update")
+		socket.off("characterSummarizeConfigs:setUserActive")
 		socket.off("sceneSummarizeConfigs:list")
 		socket.off("sceneSummarizeConfigs:get")
 		socket.off("sceneSummarizeConfigs:create")
 		socket.off("sceneSummarizeConfigs:update")
+		socket.off("sceneSummarizeConfigs:setUserActive")
 	})
 </script>
 
@@ -494,15 +507,28 @@
 		<div class="flex-1 overflow-y-auto p-4">
 			<div class="mb-4">
 				<select class="select w-full" value={selectedChatId} onchange={handleChatSelectChange}>
-					{#each chatList.filter((c) => c.isImmutable) as c}<option value={c.id}>{c.name} *</option>{/each}
-					{#each chatList.filter((c) => !c.isImmutable) as c}<option value={c.id}>{c.name}</option>{/each}
+					{#each chatList.filter((c) => c.isImmutable) as c}
+						{@const isDefault = c.id === userSettingsCtx.settings?.activePromptConfigId}
+						<option value={c.id}>{isDefault ? "★ " : ""}{c.name} *</option>
+					{/each}
+					{#each chatList.filter((c) => !c.isImmutable) as c}
+						{@const isDefault = c.id === userSettingsCtx.settings?.activePromptConfigId}
+						<option value={c.id}>{isDefault ? "★ " : ""}{c.name}</option>
+					{/each}
 				</select>
 			</div>
 			{#if chatConfig?.id}
 				<div class="flex flex-col gap-4">
-					<button class="btn btn-sm preset-filled-success-500 w-full" onclick={handleChatSave} disabled={!chatUnsaved}>
-						<Icons.Save size={14} /> Save
-					</button>
+					<div class="flex gap-2">
+						<button class="btn btn-sm preset-filled-success-500 flex-1" onclick={handleChatSave} disabled={!chatUnsaved}>
+							<Icons.Save size={14} /> Save
+						</button>
+						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleChatSetDefault}
+							disabled={!selectedChatId || selectedChatId === userSettingsCtx.settings?.activePromptConfigId}
+							title="Set as default">
+							<Icons.Star size={14} /> Set Default
+						</button>
+					</div>
 					<div class="flex flex-col gap-1">
 						<label class="text-sm font-semibold" for="chatName">Name *</label>
 						<input id="chatName" type="text" bind:value={chatConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={chatConfig.isImmutable}
@@ -543,15 +569,28 @@
 		<div class="flex-1 overflow-y-auto p-4">
 			<div class="mb-4">
 				<select class="select w-full" value={selectedWorldId} onchange={handleWorldSelectChange}>
-					{#each worldList.filter((c) => c.isImmutable) as c}<option value={c.id}>{c.name} *</option>{/each}
-					{#each worldList.filter((c) => !c.isImmutable) as c}<option value={c.id}>{c.name}</option>{/each}
+					{#each worldList.filter((c) => c.isImmutable) as c}
+						{@const isDefault = c.id === (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId}
+						<option value={c.id}>{isDefault ? "★ " : ""}{c.name} *</option>
+					{/each}
+					{#each worldList.filter((c) => !c.isImmutable) as c}
+						{@const isDefault = c.id === (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId}
+						<option value={c.id}>{isDefault ? "★ " : ""}{c.name}</option>
+					{/each}
 				</select>
 			</div>
 			{#if worldConfig?.id}
 				<div class="flex flex-col gap-4">
-					<button class="btn btn-sm preset-filled-success-500 w-full" onclick={handleWorldSave} disabled={!worldUnsaved}>
-						<Icons.Save size={14} /> Save
-					</button>
+					<div class="flex gap-2">
+						<button class="btn btn-sm preset-filled-success-500 flex-1" onclick={handleWorldSave} disabled={!worldUnsaved}>
+							<Icons.Save size={14} /> Save
+						</button>
+						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleWorldSetDefault}
+							disabled={!selectedWorldId || selectedWorldId === (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId}
+							title="Set as default">
+							<Icons.Star size={14} /> Set Default
+						</button>
+					</div>
 					<div class="flex flex-col gap-1">
 						<label class="text-sm font-semibold" for="worldName">Name *</label>
 						<input id="worldName" type="text" bind:value={worldConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={worldConfig.isImmutable}
@@ -614,15 +653,28 @@
 		<div class="flex-1 overflow-y-auto p-4">
 			<div class="mb-4">
 				<select class="select w-full" value={selectedCharacterId} onchange={handleCharacterSelectChange}>
-					{#each characterList.filter((c) => c.isImmutable) as c}<option value={c.id}>{c.name} *</option>{/each}
-					{#each characterList.filter((c) => !c.isImmutable) as c}<option value={c.id}>{c.name}</option>{/each}
+					{#each characterList.filter((c) => c.isImmutable) as c}
+						{@const isDefault = c.id === (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId}
+						<option value={c.id}>{isDefault ? "★ " : ""}{c.name} *</option>
+					{/each}
+					{#each characterList.filter((c) => !c.isImmutable) as c}
+						{@const isDefault = c.id === (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId}
+						<option value={c.id}>{isDefault ? "★ " : ""}{c.name}</option>
+					{/each}
 				</select>
 			</div>
 			{#if characterConfig?.id}
 				<div class="flex flex-col gap-4">
-					<button class="btn btn-sm preset-filled-success-500 w-full" onclick={handleCharacterSave} disabled={!characterUnsaved}>
-						<Icons.Save size={14} /> Save
-					</button>
+					<div class="flex gap-2">
+						<button class="btn btn-sm preset-filled-success-500 flex-1" onclick={handleCharacterSave} disabled={!characterUnsaved}>
+							<Icons.Save size={14} /> Save
+						</button>
+						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleCharacterSetDefault}
+							disabled={!selectedCharacterId || selectedCharacterId === (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId}
+							title="Set as default">
+							<Icons.Star size={14} /> Set Default
+						</button>
+					</div>
 					<div class="flex flex-col gap-1">
 						<label class="text-sm font-semibold" for="charName">Name *</label>
 						<input id="charName" type="text" bind:value={characterConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={characterConfig.isImmutable}
@@ -685,15 +737,28 @@
 		<div class="flex-1 overflow-y-auto p-4">
 			<div class="mb-4">
 				<select class="select w-full" value={selectedSceneId} onchange={handleSceneSelectChange}>
-					{#each sceneList.filter((c) => c.isImmutable) as c}<option value={c.id}>{c.name} *</option>{/each}
-					{#each sceneList.filter((c) => !c.isImmutable) as c}<option value={c.id}>{c.name}</option>{/each}
+					{#each sceneList.filter((c) => c.isImmutable) as c}
+						{@const isDefault = c.id === (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId}
+						<option value={c.id}>{isDefault ? "★ " : ""}{c.name} *</option>
+					{/each}
+					{#each sceneList.filter((c) => !c.isImmutable) as c}
+						{@const isDefault = c.id === (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId}
+						<option value={c.id}>{isDefault ? "★ " : ""}{c.name}</option>
+					{/each}
 				</select>
 			</div>
 			{#if sceneConfig?.id}
 				<div class="flex flex-col gap-4">
-					<button class="btn btn-sm preset-filled-success-500 w-full" onclick={handleSceneSave} disabled={!sceneUnsaved}>
-						<Icons.Save size={14} /> Save
-					</button>
+					<div class="flex gap-2">
+						<button class="btn btn-sm preset-filled-success-500 flex-1" onclick={handleSceneSave} disabled={!sceneUnsaved}>
+							<Icons.Save size={14} /> Save
+						</button>
+						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleSceneSetDefault}
+							disabled={!selectedSceneId || selectedSceneId === (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId}
+							title="Set as default">
+							<Icons.Star size={14} /> Set Default
+						</button>
+					</div>
 					<div class="flex flex-col gap-1">
 						<label class="text-sm font-semibold" for="sceneName">Name *</label>
 						<input id="sceneName" type="text" bind:value={sceneConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={sceneConfig.isImmutable}

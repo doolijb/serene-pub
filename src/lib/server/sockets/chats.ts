@@ -14,6 +14,8 @@ import { InterpolationEngine } from "../utils/promptBuilder"
 import { dev } from "$app/environment"
 import type { Handler } from "$lib/shared/events"
 import { getUserConfigurations } from "../utils/getUserConfigurations"
+import { resolveTaskConfig } from "../utils/resolveTaskConfig"
+import { llmQueue } from "../utils/llmQueue"
 import {
 	broadcastToChatUsers,
 	createChatBroadcaster
@@ -1621,6 +1623,8 @@ export const chatMessagesRegenerateHandler: Handler<
 				.set({
 					content: "",
 					isGenerating: true,
+					generationStage: "queued",
+					error: null,
 					metadata: cleanedMetadata
 				})
 				.where(eq(schema.chatMessages.id, params.id))
@@ -1707,6 +1711,8 @@ export const chatMessagesContinueHandler: Handler<
 				.update(schema.chatMessages)
 				.set({
 					isGenerating: true,
+					generationStage: "queued",
+					error: null,
 					metadata: currentMetadata
 				})
 				.where(eq(schema.chatMessages.id, params.id))
@@ -1985,6 +1991,9 @@ export const chatMessagesSwipeRightHandler: Handler<
 				data.metadata!.swipes!.currentIdx += 1
 				data.content = "" // Clear the message content
 				data.isGenerating = true // Set generating state to true
+				data.generationStage = "queued"
+				data.error = null
+				data.queueItemId = null
 				// Push the new empty content to history
 				data.metadata!.swipes!.history.push("") // Add an empty string to history
 				// Push a matching null into thinkingHistory to keep lengths equal
@@ -2137,27 +2146,24 @@ export const chatMessagesCancelHandler: Handler<
 
 			// Stop generation for all messages in this chat
 			for (const message of generatingMessages) {
-				// If there's an active adapter, try to abort it FIRST
-				if (message.adapterId) {
-					const adapter = activeAdapters.get(message.adapterId)
-					if (adapter) {
-						try {
-							adapter.abort()
-							// Remove adapter from active adapters map
-							activeAdapters.delete(message.adapterId)
-						} catch (e) {
-							// Silent fail for abort
-							console.warn("Failed to abort adapter:", e)
-						}
-					}
+				// Ask the queue to cancel this run — it fires the adapter's abort()
+				// internally and, if the run doesn't respond in time, force-detaches
+				// it so the queue can proceed regardless. Never throws.
+				if (message.queueItemId) {
+					llmQueue.cancel(message.queueItemId)
+					activeAdapters.delete(message.queueItemId)
 				}
 
-				// Then update the database
+				// Update the DB immediately and unconditionally so the UI reflects
+				// the stop right away, regardless of how long the adapter takes to
+				// actually settle. A user-initiated stop is not an error.
 				await db
 					.update(schema.chatMessages)
 					.set({
 						isGenerating: false,
-						adapterId: null
+						generationStage: null,
+						queueItemId: null,
+						error: null
 					})
 					.where(eq(schema.chatMessages.id, message.id))
 			}
@@ -2396,27 +2402,23 @@ export const promptTokenCountHandler: Handler<
 				where: (u, { eq }) => eq(u.id, userId)
 			})
 
-			// Get system-default configurations with fallbacks
-			let { connection, sampling, contextConfig, promptConfig } =
-				await getUserConfigurations(userId)
-
-			// Apply per-chat connection/sampling overrides when set
-			if ((chat as any).connectionId) {
-				const chatConnection = await db.query.connections.findFirst({
-					where: (c, { eq }) => eq(c.id, (chat as any).connectionId)
-				})
-				if (chatConnection) connection = chatConnection
-			}
-			if ((chat as any).samplingConfigId) {
-				const chatSampling = await db.query.samplingConfigs.findFirst({
-					where: (sc, { eq }) => eq(sc.id, (chat as any).samplingConfigId)
-				})
-				if (chatSampling) sampling = chatSampling
-			}
+			// Get context/prompt config from user settings; resolve connection+sampling via
+			// resolveTaskConfig (chat override → prompt config override → system default)
+			const { contextConfig, promptConfig } = await getUserConfigurations(userId)
+			const { connection, sampling } = await resolveTaskConfig({
+				taskType: "chat",
+				promptConfigId: promptConfig?.id,
+				chatId: chat.id
+			})
 
 			if (!connection) {
 				return {
 					error: "No AI connection configured. Please set up a connection first."
+				}
+			}
+			if (!sampling) {
+				return {
+					error: "No sampling config configured. Please set up a sampling config first."
 				}
 			}
 
@@ -2602,7 +2604,8 @@ export const triggerGenerateMessageHandler: Handler<
 						characterId: nextCharacter.character.id,
 						content: "",
 						role: "assistant",
-						isGenerating: true
+						isGenerating: true,
+						generationStage: "queued"
 					}
 
 					const [generatingMessage] = await db

@@ -47,6 +47,14 @@ const koboldCppDesc = `
 
 const koboldCppDiff = "Beginner (GUI) - Simple setup"
 
+const koboldCppManagedDesc = `
+<p>A KoboldCPP connection managed by Serene Pub's built-in <b>KoboldCPP Manager</b>.</p>
+<p>The manager handles model loading and swapping for you — pick a model here and it's loaded via KoboldCPP's admin API (spawning a managed subprocess, or using your own already-running KoboldCPP instance with the admin API enabled).</p>
+<p>Requires the KoboldCPP Manager to be enabled in Settings.</p>
+`
+
+const koboldCppManagedDiff = "Beginner (GUI) - Managed by Serene Pub"
+
 const anthropicDesc = `
 <p>Serene Pub supports Anthropic's Claude API directly.</p>
 <p>Claude models support native extended thinking, streaming, and long context windows.</p>
@@ -62,6 +70,7 @@ export class CONNECTION_TYPE {
 	static OLLAMA = "ollama"
 	static OPENAI_CHAT = "openai"
 	static KOBOLDCPP = "koboldcpp"
+	static KOBOLDCPP_MANAGED = "koboldcpp_managed"
 	static ANTHROPIC = "anthropic"
 
 	static options: {
@@ -96,9 +105,15 @@ export class CONNECTION_TYPE {
 		},
 		{
 			value: CONNECTION_TYPE.KOBOLDCPP,
-			label: "KoboldCpp",
+			label: "KoboldCPP",
 			description: koboldCppDesc,
 			difficulty: koboldCppDiff
+		},
+		{
+			value: CONNECTION_TYPE.KOBOLDCPP_MANAGED,
+			label: "KoboldCPP (Managed)",
+			description: koboldCppManagedDesc,
+			difficulty: koboldCppManagedDiff
 		},
 		{
 			value: CONNECTION_TYPE.ANTHROPIC,

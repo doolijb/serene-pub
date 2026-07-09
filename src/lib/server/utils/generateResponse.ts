@@ -1,7 +1,6 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, eq } from "drizzle-orm"
-import { v4 as uuidv4 } from "uuid"
 import { activeAdapters, chatMessage } from "../sockets/chats"
 import { getConnectionAdapter } from "./getConnectionAdapter"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
@@ -11,7 +10,7 @@ import { ChatTypes } from "$lib/shared/constants/ChatTypes"
 import { generateChatTitle } from "./generateChatTitle"
 import { parseReasoningFormat } from "./parseReasoningFormat"
 import { buildGraphContext } from "./graphContextFormatter"
-import { taskQueue } from "./taskQueue"
+import { llmQueue, isQueueCancellation, type LLMQueueStatus } from "./llmQueue"
 import { resolveTaskConfig } from "./resolveTaskConfig"
 import { autoEnqueueChat } from "$lib/server/embedding/vectorizationQueue"
 
@@ -113,7 +112,6 @@ async function handleAssistantReasoning({
 	socket,
 	chatId,
 	generatingMessage,
-	adapterId,
 	emitToUser,
 	userId
 }: {
@@ -121,33 +119,10 @@ async function handleAssistantReasoning({
 	socket: any
 	chatId: number
 	generatingMessage: SelectChatMessage
-	adapterId: string
 	emitToUser: (event: string, data: any) => void
 	userId: number
 }): Promise<boolean | null> {
-	console.log("[handleAssistantReasoning] Parsing for reasoning format...")
 	const reasoningParsed = parseReasoningFormat(content)
-
-	console.log(
-		"[handleAssistantReasoning] Parse result:",
-		reasoningParsed ? "DETECTED" : "NOT DETECTED"
-	)
-	if (reasoningParsed) {
-		console.log(
-			"[handleAssistantReasoning] Reasoning text:",
-			reasoningParsed.reasoning
-		)
-		console.log(
-			"[handleAssistantReasoning] Function calls count:",
-			reasoningParsed.functionCalls.length
-		)
-		if (reasoningParsed.functionCalls.length > 0) {
-			console.log(
-				"[handleAssistantReasoning] Function calls:",
-				JSON.stringify(reasoningParsed.functionCalls, null, 2)
-			)
-		}
-	}
 
 	if (!reasoningParsed) {
 		return null // No reasoning detected, continue with normal flow
@@ -155,10 +130,6 @@ async function handleAssistantReasoning({
 
 	if (reasoningParsed.functionCalls.length > 0) {
 		// Functions needed - emit to client and wait for selection
-		console.log(
-			"[handleAssistantReasoning] Function calls detected, waiting for user selection"
-		)
-
 		socket.emit("assistant:reasoningDetected", {
 			chatId,
 			messageId: generatingMessage.id,
@@ -178,7 +149,8 @@ async function handleAssistantReasoning({
 			.set({
 				content: "",
 				isGenerating: false,
-				adapterId: null,
+				generationStage: null,
+				queueItemId: null,
 				metadata: {
 					...currentMetadata,
 					reasoning: reasoningParsed.reasoning,
@@ -197,14 +169,9 @@ async function handleAssistantReasoning({
 			})
 		}
 
-		activeAdapters.delete(adapterId)
 		return true // Wait for user selection
 	} else {
 		// No functions needed - store reasoning and regenerate for final response
-		console.log(
-			"[handleAssistantReasoning] No functions needed, regenerating for conversational response"
-		)
-
 		const currentMetadata =
 			typeof generatingMessage.metadata === "object" &&
 			generatingMessage.metadata !== null
@@ -232,11 +199,8 @@ async function handleAssistantReasoning({
 			console.error(
 				"[handleAssistantReasoning] Failed to fetch updated message"
 			)
-			activeAdapters.delete(adapterId)
 			return false
 		}
-
-		activeAdapters.delete(adapterId)
 
 		// Recursive call for conversational response
 		return await generateResponse({
@@ -246,6 +210,61 @@ async function handleAssistantReasoning({
 			userId,
 			generatingMessage: updatedGeneratingMessage
 		})
+	}
+}
+
+type GenerateExecuteResult =
+	| { kind: "reasoningHandled"; value: boolean }
+	| { kind: "silentFail" }
+	| { kind: "normal"; isAborted: boolean }
+
+function friendlyErrorFromUnknown(err: unknown): { message: string; code?: string } {
+	const raw = err instanceof Error ? err.message : String(err)
+	// Pull a leading HTTP-status-looking token out of adapter error messages
+	// (e.g. "KoboldCpp API error: 500 ...") so it can be shown as a code.
+	const statusMatch = raw.match(/\b([1-5]\d{2})\b/)
+	const code = statusMatch ? statusMatch[1] : (err as any)?.code || (err as any)?.name
+	const message = raw && raw !== "[object Object]" ? raw : "Generation failed for an unknown reason."
+	return { message, code: code ? String(code) : undefined }
+}
+
+async function persistGenerationStage(
+	generatingMessageId: number,
+	chatId: number,
+	socketIo: any,
+	status: LLMQueueStatus
+) {
+	const stage = status === "queued" || status === "loading" || status === "generating" ? status : null
+	const [updated] = await db
+		.update(schema.chatMessages)
+		.set({ generationStage: stage })
+		.where(and(eq(schema.chatMessages.id, generatingMessageId), eq(schema.chatMessages.isGenerating, true)))
+		.returning()
+	if (updated) {
+		await broadcastToChatUsers(socketIo, chatId, "chatMessage", { chatMessage: updated })
+	}
+}
+
+async function persistGenerationErrorRow(
+	socketIo: any,
+	chatId: number,
+	generatingMessageId: number,
+	err: unknown
+) {
+	const error = friendlyErrorFromUnknown(err)
+	console.error("[generateResponse] generation failed:", err)
+	const [updated] = await db
+		.update(schema.chatMessages)
+		.set({
+			isGenerating: false,
+			generationStage: null,
+			queueItemId: null,
+			error
+		})
+		.where(and(eq(schema.chatMessages.id, generatingMessageId), eq(schema.chatMessages.isGenerating, true)))
+		.returning()
+	if (updated) {
+		await broadcastToChatUsers(socketIo, chatId, "chatMessage", { chatMessage: updated })
 	}
 }
 
@@ -262,9 +281,6 @@ export async function generateResponse({
 	userId: number
 	generatingMessage: SelectChatMessage
 }): Promise<boolean> {
-	// Generate a UUID for this adapter instance
-	const adapterId = uuidv4()
-
 	// Get the current message content before updating
 	const currentMessage = await db.query.chatMessages.findFirst({
 		where: (cm, { eq }) => eq(cm.id, generatingMessage.id)
@@ -290,26 +306,27 @@ export async function generateResponse({
 		}
 	}
 
-	// Save the adapterId to the chatMessage
-	// For continue: preserve existing content
-	// For new generation: clear content
+	// Initial write: enter the pipeline as "queued" — no queue item exists yet.
 	await db
 		.update(schema.chatMessages)
 		.set({
 			isGenerating: true,
+			generationStage: "queued",
+			error: null,
 			content: preservedContent, // Preserve existing content for continue
-			adapterId,
+			queueItemId: null,
 			metadata: clearedMeta
 		})
 		.where(eq(schema.chatMessages.id, generatingMessage.id))
-	// Instead of getChat, emit the chatMessage
 
 	const req: Sockets.ChatMessage.Call = {
 		chatMessage: {
 			...generatingMessage,
 			isGenerating: true,
+			generationStage: "queued",
+			error: null,
 			content: preservedContent, // Use existing content
-			adapterId,
+			queueItemId: null,
 			metadata: clearedMeta
 		}
 	}
@@ -376,12 +393,27 @@ export async function generateResponse({
 		;(chat as any)._continuationPrefill = preservedContent
 	}
 
-	// Get user and their configurations with fallbacks
-	const { connection, sampling, contextConfig, promptConfig } =
+	// Get context/prompt config from user settings; resolve connection+sampling via
+	// resolveTaskConfig (chat override → prompt config override → system default)
+	const { sampling: defaultSampling, contextConfig, promptConfig } =
 		await getUserConfigurations(userId)
 
+	const resolved = await resolveTaskConfig({
+		taskType: "chat",
+		promptConfigId: promptConfig?.id,
+		chatId
+	})
+	const connection = resolved.connection
+	const sampling = resolved.sampling ?? defaultSampling
+
 	if (!connection) {
-		throw new Error("No AI connection configured. Please set up a connection first.")
+		await persistGenerationErrorRow(
+			socket.io,
+			generatingMessage.chatId,
+			generatingMessage.id,
+			new Error("No AI connection configured. Please set up a connection first.")
+		)
+		return false
 	}
 
 	const { Adapter } = getConnectionAdapter(connection.type)
@@ -438,9 +470,6 @@ export async function generateResponse({
 		}
 	}
 
-	// Store adapter in global map
-	activeAdapters.set(adapterId, adapter)
-
 	// For assistant mode, no character name prefix
 	const currentCharacter = chat?.chatCharacters?.find(
 		(cc) => cc.character?.id === adapter.currentCharacterId
@@ -464,34 +493,143 @@ export async function generateResponse({
 			? `${charName}:`
 			: ""
 
-	// Resolve task config for queue tracking (best-effort, non-fatal)
-	let taskQueueId: string | undefined
-	try {
-		const resolved = await resolveTaskConfig({
-			taskType: "chat",
-			promptConfigId: promptConfig?.id,
-			chatId
-		})
-		taskQueueId = taskQueue.start({
-			taskType: "chat",
-			connectionName: resolved.connectionName,
-			samplingName: resolved.samplingName,
-			chatId,
-			label: charName || undefined
-		})
-	} catch {}
+	const { id: queueItemId, done } = llmQueue.enqueue<GenerateExecuteResult>({
+		taskType: "chat",
+		connectionName: resolved.connectionName,
+		samplingName: resolved.samplingName,
+		chatId,
+		messageId: generatingMessage.id,
+		label: charName || undefined,
+		preflight: (signal) => adapter.preflight(signal),
+		execute: (signal) =>
+			runGenerateAndPersist({
+				signal,
+				adapter,
+				socket,
+				chatId,
+				generatingMessage,
+				startString,
+				isContinuing,
+				preservedContent,
+				isAssistantMode,
+				emitToUser,
+				userId,
+				contextDebuggingEnabled
+			}),
+		onCancel: () => adapter.abort(),
+		onStatusChange: (status) =>
+			persistGenerationStage(generatingMessage.id, generatingMessage.chatId, socket.io, status)
+	})
 
+	activeAdapters.set(queueItemId, adapter)
+	await db
+		.update(schema.chatMessages)
+		.set({ queueItemId })
+		.where(eq(schema.chatMessages.id, generatingMessage.id))
+
+	try {
+		const result = await done
+		activeAdapters.delete(queueItemId)
+
+		if (result.kind === "reasoningHandled") {
+			return result.value
+		}
+		if (result.kind === "silentFail") {
+			return false
+		}
+
+		const { isAborted } = result
+
+		// Fetch the updated message for the response
+		const updatedMsg = await db.query.chatMessages.findFirst({
+			where: (cm, { eq }) => eq(cm.id, generatingMessage.id)
+		})
+		const response: Sockets.SendPersonaMessage.Response = {
+			chatMessage: updatedMsg!
+		}
+		socket.io.to("user_" + userId).emit("personaMessageReceived", response)
+		await broadcastToChatUsers(socket.io, updatedMsg!.chatId, "chatMessage", {
+			chatMessage: updatedMsg!
+		})
+
+		// ASYNC: Generate chat title if this is the first assistant message in an assistant chat
+		if (isAssistantMode && chat && !isAborted) {
+			// Don't await - run this asynchronously to not block the response
+			generateChatTitleIfNeeded(
+				chatId,
+				userId,
+				socket.io,
+				connection,
+				sampling,
+				contextConfig,
+				promptConfig
+			).catch((error) => {
+				console.error("Background title generation failed:", error)
+			})
+		}
+
+		return !isAborted // Whether there were no interruptions
+	} catch (err) {
+		activeAdapters.delete(queueItemId)
+		if (isQueueCancellation(err)) {
+			// The cancel handler already flipped isGenerating/queueItemId/error on
+			// the row — a user-initiated stop isn't a failure worth reporting.
+			return false
+		}
+		await persistGenerationErrorRow(
+			socket.io,
+			generatingMessage.chatId,
+			generatingMessage.id,
+			err
+		)
+		return false
+	}
+}
+
+/**
+ * Runs adapter.generate(), consumes streaming or non-streaming output, and
+ * persists it to the message row — this is the LLM queue item's execute()
+ * body. Errors thrown here are caught by llmQueue and surfaced to the
+ * caller's `done` promise.
+ */
+async function runGenerateAndPersist({
+	signal,
+	adapter,
+	socket,
+	chatId,
+	generatingMessage,
+	startString,
+	isContinuing,
+	preservedContent,
+	isAssistantMode,
+	emitToUser,
+	userId,
+	contextDebuggingEnabled
+}: {
+	signal: AbortSignal
+	adapter: any
+	socket: any
+	chatId: number
+	generatingMessage: SelectChatMessage
+	startString: string
+	isContinuing: boolean
+	preservedContent: string
+	isAssistantMode: boolean
+	emitToUser: (event: string, data: any) => void
+	userId: number
+	contextDebuggingEnabled: boolean
+}): Promise<GenerateExecuteResult> {
 	// Generate completion
 	let { completionResult, compiledPrompt, isAborted, thinkingContent: adapterThinking } =
 		await adapter.generate() // TODO: save compiledPrompt to chatMessages
 	let content = ""
 	let thinking = "" // accumulated thinking from streaming thinkingCb
-	try {
-		if (typeof completionResult === "function") {
-			let ok = true
-			await completionResult(
-				async (chunk: string) => {
-				if (!ok) {
+
+	if (typeof completionResult === "function") {
+		let ok = true
+		await completionResult(
+			async (chunk: string) => {
+				if (!ok || signal.aborted) {
 					return
 				}
 				content += chunk
@@ -616,239 +754,196 @@ export async function generateResponse({
 			},
 			(thinkingChunk: string) => {
 				thinking += thinkingChunk
+			}
+		)
+
+		// Final update: mark as not generating, clear queueItemId
+		content = content.replace(startString, "").trim()
+
+		// When continuing, append to existing content
+		if (isContinuing) {
+			content = preservedContent + " " + content
+		}
+
+		// If no native thinking was captured via thinkingCb, check for <think> tags in content
+		if (!thinking.trim()) {
+			const extracted = extractThinkFromContent(content)
+			if (extracted.thinking) {
+				thinking = extracted.thinking
+				content = extracted.content
+			}
+		}
+
+		// Check for reasoning format in assistant mode - only after streaming is complete
+		if (isAssistantMode) {
+			const reasoningResult = await handleAssistantReasoning({
+				content,
+				socket,
+				chatId,
+				generatingMessage,
+				emitToUser,
+				userId
 			})
 
-			// Final update: mark as not generating, clear adapterId
-			content = content.replace(startString, "").trim()
-
-			// When continuing, append to existing content
-			if (isContinuing) {
-				content = preservedContent + " " + content
+			if (reasoningResult !== null) {
+				return { kind: "reasoningHandled", value: reasoningResult }
 			}
-
-			// If no native thinking was captured via thinkingCb, check for <think> tags in content
-			if (!thinking.trim()) {
-				const extracted = extractThinkFromContent(content)
-				if (extracted.thinking) {
-					thinking = extracted.thinking
-					content = extracted.content
-				}
-			}
-
-			console.log(
-				"[generateResponse] POST-STREAM: Final content length:",
-				content.length
-			)
-			console.log(
-				"[generateResponse] POST-STREAM: Is assistant mode:",
-				isAssistantMode
-			)
-			console.log(
-				"[generateResponse] POST-STREAM: First 300 chars:",
-				content.substring(0, 300)
-			)
-			console.log(
-				"[generateResponse] POST-STREAM: thinking length:",
-				thinking.length,
-				"first 200 chars:",
-				thinking.substring(0, 200)
-			)
-
-			// Check for reasoning format in assistant mode - only after streaming is complete
-			if (isAssistantMode) {
-				const reasoningResult = await handleAssistantReasoning({
-					content,
-					socket,
-					chatId,
-					generatingMessage,
-					adapterId,
-					emitToUser,
-					userId
-				})
-
-				// If reasoning was detected and handled, return the result
-				if (reasoningResult !== null) {
-					return reasoningResult
-				}
-			}
-
-			// Normal completion - no reasoning detected
-			// Build final metadata with thinking + swipe history in sync
-			const finalThinking = thinking.trim() || undefined
-			let finalMetadata: any = buildThinkingMetadata(
-				generatingMessage.metadata,
-				content,
-				finalThinking,
-				true // write content to swipe history
-			)
-			const streamingDebugMeta = contextDebuggingEnabled && compiledPrompt?.meta
-				? { debugMeta: compiledPrompt.meta }
-				: {}
-			const ret = await db
-				.update(schema.chatMessages)
-				.set({ content, isGenerating: false, adapterId: null, ...(finalMetadata !== null ? { metadata: finalMetadata } : {}), ...streamingDebugMeta })
-				.where(
-					and(
-						eq(schema.chatMessages.id, generatingMessage.id),
-						eq(schema.chatMessages.isGenerating, true)
-					)
-				)
-				.returning()
-			if (!ret || ret.length === 0) {
-				console.error(
-					"[generateResponse] Failed to update generating message:",
-					generatingMessage.id
-				)
-				activeAdapters.delete(adapterId)
-				return false
-			}
-			// Broadcast the chatMessage to all chat participants
-			await broadcastToChatUsers(
-				socket.io,
-				generatingMessage.chatId,
-				"chatMessage",
-				{
-					chatMessage: {
-						...generatingMessage,
-						content,
-						isGenerating: false,
-						adapterId: null,
-						...(finalMetadata !== null ? { metadata: finalMetadata } : {}),
-						...(contextDebuggingEnabled && compiledPrompt?.meta
-							? { debugMeta: compiledPrompt.meta }
-							: { debugMeta: null })
-					}
-				}
-			)
-			autoEnqueueChat(chatId).catch(console.error)
-		} else {
-			content = completionResult.replace(startString, "").trim()
-
-			// When continuing, append to existing content
-			const finalContent = isContinuing
-				? preservedContent + " " + content
-				: content
-
-			// If no native thinking was returned by the adapter, check for <think> tags in content
-			let nonStreamContent = finalContent
-			let nonStreamAdapterThinking = adapterThinking
-			if (!nonStreamAdapterThinking?.trim()) {
-				const extracted = extractThinkFromContent(nonStreamContent)
-				if (extracted.thinking) {
-					nonStreamAdapterThinking = extracted.thinking
-					nonStreamContent = extracted.content
-				}
-			}
-
-			// Check for reasoning format in assistant mode (NON-STREAMING)
-			if (isAssistantMode) {
-				const reasoningResult = await handleAssistantReasoning({
-					content: nonStreamContent,
-					socket,
-					chatId,
-					generatingMessage,
-					adapterId,
-					emitToUser,
-					userId
-				})
-
-				// If reasoning was detected and handled, return the result
-				if (reasoningResult !== null) {
-					return reasoningResult
-				}
-			}
-
-			// --- SWIPE HISTORY + THINKING LOGIC (non-streamed) ---
-			const nonStreamThinking = nonStreamAdapterThinking?.trim() || undefined
-			const nonStreamMeta = buildThinkingMetadata(
-				generatingMessage.metadata,
-				nonStreamContent,
-				nonStreamThinking,
-				true // write content to swipe history
-			)
-			const nonStreamDebugMeta = contextDebuggingEnabled && compiledPrompt?.meta
-				? { debugMeta: compiledPrompt.meta }
-				: {}
-			let updateData: any = {
-				content: nonStreamContent,
-				isGenerating: false,
-				adapterId: null,
-				...(nonStreamMeta !== null ? { metadata: nonStreamMeta } : {}),
-				...nonStreamDebugMeta
-			}
-
-			const ret = await db
-				.update(schema.chatMessages)
-				.set(updateData)
-				.where(
-					and(
-						eq(schema.chatMessages.id, generatingMessage.id),
-						eq(schema.chatMessages.isGenerating, true)
-					)
-				)
-				.returning()
-			// Instead of getChat, emit the chatMessage
-			if (!ret || ret.length === 0) {
-				console.error(
-					"[generateResponse] Failed to update generating message:",
-					generatingMessage.id
-				)
-				activeAdapters.delete(adapterId)
-				return false
-			}
-			await broadcastToChatUsers(
-				socket.io,
-				generatingMessage.chatId,
-				"chatMessage",
-				{
-					chatMessage: {
-						...generatingMessage,
-						content: nonStreamContent,
-						isGenerating: false,
-						adapterId: null,
-						...(updateData.metadata ? { metadata: updateData.metadata } : {}),
-						...(contextDebuggingEnabled && compiledPrompt?.meta
-							? { debugMeta: compiledPrompt.meta }
-							: { debugMeta: null })
-					}
-				}
-			)
-			autoEnqueueChat(chatId).catch(console.error)
 		}
-	} finally {
-		activeAdapters.delete(adapterId)
-		if (taskQueueId) taskQueue.finish(taskQueueId)
-	}
-	// Fetch the updated message for the response
-	const updatedMsg = await db.query.chatMessages.findFirst({
-		where: (cm, { eq }) => eq(cm.id, generatingMessage.id)
-	})
-	const response: Sockets.SendPersonaMessage.Response = {
-		chatMessage: updatedMsg!
-	}
-	socket.io.to("user_" + userId).emit("personaMessageReceived", response)
-	// Broadcast the chatMessage to all chat participants
-	await broadcastToChatUsers(socket.io, updatedMsg!.chatId, "chatMessage", {
-		chatMessage: updatedMsg!
-	})
 
-	// ASYNC: Generate chat title if this is the first assistant message in an assistant chat
-	if (isAssistantMode && chat && !isAborted) {
-		// Don't await - run this asynchronously to not block the response
-		generateChatTitleIfNeeded(
-			chatId,
-			userId,
+		// Normal completion - no reasoning detected
+		// Build final metadata with thinking + swipe history in sync
+		const finalThinking = thinking.trim() || undefined
+		let finalMetadata: any = buildThinkingMetadata(
+			generatingMessage.metadata,
+			content,
+			finalThinking,
+			true // write content to swipe history
+		)
+		const streamingDebugMeta = contextDebuggingEnabled && compiledPrompt?.meta
+			? { debugMeta: compiledPrompt.meta }
+			: {}
+		const ret = await db
+			.update(schema.chatMessages)
+			.set({
+				content,
+				isGenerating: false,
+				generationStage: null,
+				queueItemId: null,
+				error: null,
+				...(finalMetadata !== null ? { metadata: finalMetadata } : {}),
+				...streamingDebugMeta
+			})
+			.where(
+				and(
+					eq(schema.chatMessages.id, generatingMessage.id),
+					eq(schema.chatMessages.isGenerating, true)
+				)
+			)
+			.returning()
+		if (!ret || ret.length === 0) {
+			console.error(
+				"[generateResponse] Failed to update generating message:",
+				generatingMessage.id
+			)
+			return { kind: "silentFail" }
+		}
+		// Broadcast the chatMessage to all chat participants
+		await broadcastToChatUsers(
 			socket.io,
-			connection,
-			sampling,
-			contextConfig,
-			promptConfig
-		).catch((error) => {
-			console.error("Background title generation failed:", error)
-		})
-	}
+			generatingMessage.chatId,
+			"chatMessage",
+			{
+				chatMessage: {
+					...generatingMessage,
+					content,
+					isGenerating: false,
+					generationStage: null,
+					queueItemId: null,
+					error: null,
+					...(finalMetadata !== null ? { metadata: finalMetadata } : {}),
+					...(contextDebuggingEnabled && compiledPrompt?.meta
+						? { debugMeta: compiledPrompt.meta }
+						: { debugMeta: null })
+				}
+			}
+		)
+		autoEnqueueChat(chatId).catch(console.error)
+		return { kind: "normal", isAborted }
+	} else {
+		content = completionResult.replace(startString, "").trim()
 
-	return !isAborted // Whether there were no interruptions
+		// When continuing, append to existing content
+		const finalContent = isContinuing
+			? preservedContent + " " + content
+			: content
+
+		// If no native thinking was returned by the adapter, check for <think> tags in content
+		let nonStreamContent = finalContent
+		let nonStreamAdapterThinking = adapterThinking
+		if (!nonStreamAdapterThinking?.trim()) {
+			const extracted = extractThinkFromContent(nonStreamContent)
+			if (extracted.thinking) {
+				nonStreamAdapterThinking = extracted.thinking
+				nonStreamContent = extracted.content
+			}
+		}
+
+		// Check for reasoning format in assistant mode (NON-STREAMING)
+		if (isAssistantMode) {
+			const reasoningResult = await handleAssistantReasoning({
+				content: nonStreamContent,
+				socket,
+				chatId,
+				generatingMessage,
+				emitToUser,
+				userId
+			})
+
+			if (reasoningResult !== null) {
+				return { kind: "reasoningHandled", value: reasoningResult }
+			}
+		}
+
+		// --- SWIPE HISTORY + THINKING LOGIC (non-streamed) ---
+		const nonStreamThinking = nonStreamAdapterThinking?.trim() || undefined
+		const nonStreamMeta = buildThinkingMetadata(
+			generatingMessage.metadata,
+			nonStreamContent,
+			nonStreamThinking,
+			true // write content to swipe history
+		)
+		const nonStreamDebugMeta = contextDebuggingEnabled && compiledPrompt?.meta
+			? { debugMeta: compiledPrompt.meta }
+			: {}
+		let updateData: any = {
+			content: nonStreamContent,
+			isGenerating: false,
+			generationStage: null,
+			queueItemId: null,
+			error: null,
+			...(nonStreamMeta !== null ? { metadata: nonStreamMeta } : {}),
+			...nonStreamDebugMeta
+		}
+
+		const ret = await db
+			.update(schema.chatMessages)
+			.set(updateData)
+			.where(
+				and(
+					eq(schema.chatMessages.id, generatingMessage.id),
+					eq(schema.chatMessages.isGenerating, true)
+				)
+			)
+			.returning()
+		if (!ret || ret.length === 0) {
+			console.error(
+				"[generateResponse] Failed to update generating message:",
+				generatingMessage.id
+			)
+			return { kind: "silentFail" }
+		}
+		await broadcastToChatUsers(
+			socket.io,
+			generatingMessage.chatId,
+			"chatMessage",
+			{
+				chatMessage: {
+					...generatingMessage,
+					content: nonStreamContent,
+					isGenerating: false,
+					generationStage: null,
+					queueItemId: null,
+					error: null,
+					...(updateData.metadata ? { metadata: updateData.metadata } : {}),
+					...(contextDebuggingEnabled && compiledPrompt?.meta
+						? { debugMeta: compiledPrompt.meta }
+						: { debugMeta: null })
+				}
+			}
+		)
+		autoEnqueueChat(chatId).catch(console.error)
+		return { kind: "normal", isAborted }
+	}
 }
 
 /**

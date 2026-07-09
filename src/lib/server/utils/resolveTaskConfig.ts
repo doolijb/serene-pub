@@ -3,6 +3,8 @@ import * as schema from "$lib/server/db/schema"
 
 export type TaskType =
 	| "chat"
+	| "chat_title"
+	| "field_generation"
 	| "summarize_batch"
 	| "summarize_synth"
 	| "summarize_name"

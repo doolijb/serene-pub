@@ -12,6 +12,7 @@
 	} from "$lib/shared/constants/ConnectionTypes"
 	import LlamaCppForm from "$lib/client/connectionForms/LlamaCppForm.svelte"
 	import KoboldCppForm from "$lib/client/connectionForms/KoboldCppForm.svelte"
+	import KoboldCppManagedForm from "$lib/client/connectionForms/KoboldCppManagedForm.svelte"
 	import AnthropicForm from "$lib/client/connectionForms/AnthropicForm.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
@@ -28,6 +29,7 @@
 	let { onclose = $bindable() }: Props = $props()
 	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 	let panelsCtx: PanelsCtx = getContext("panelsCtx")
+	let koboldCppSettingsCtx: KoboldCppSettingsCtx = getContext("koboldCppSettingsCtx")
 
 	const socket = useTypedSocket()
 
@@ -59,6 +61,11 @@
 	let selectedConnectionId = $state<number | null>(null)
 	// The system-wide default connection
 	let defaultConnectionId = $derived(systemSettingsCtx.settings?.defaultConnectionId ?? null)
+	// A Managed KoboldCpp connection can't be set default while the manager is off
+	let managedButDisabled = $derived(
+		connection?.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED &&
+			!koboldCppSettingsCtx?.settings?.koboldCppManagerEnabled
+	)
 
 	function announce(message: string) {
 		announcements = message
@@ -334,7 +341,7 @@
 		</div>
 	</div>
 	<div
-		class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center"
+		class="mb-4"
 		class:hidden={!connectionsList.length}
 	>
 		<label for="connection-select" class="sr-only">
@@ -342,7 +349,7 @@
 		</label>
 		<select
 			id="connection-select"
-			class="select bg-background border-muted flex-1 rounded border"
+			class="select bg-background border-muted w-full rounded border"
 			onchange={handleSelectChange}
 			value={selectedConnectionId}
 			disabled={unsavedChanges}
@@ -357,17 +364,6 @@
 				</option>
 			{/each}
 		</select>
-		<button
-			type="button"
-			class="btn btn-sm preset-filled-warning-500 shrink-0"
-			onclick={handleSetDefault}
-			disabled={!selectedConnectionId || selectedConnectionId === defaultConnectionId}
-			title={selectedConnectionId === defaultConnectionId ? "Already the default connection" : "Set as default connection"}
-			aria-label="Set selected connection as default"
-		>
-			<Icons.Star size={14} aria-hidden="true" />
-			Set Default
-		</button>
 		<div id="connection-help" class="sr-only">
 			{unsavedChanges
 				? "Save or reset changes before switching connections"
@@ -380,10 +376,10 @@
 				<h3 id="connection-details" class="sr-only">
 					Connection Details for {connection.name}
 				</h3>
-				<div class="my-4 flex">
+				<div class="my-4 flex gap-2">
 					<button
 						type="button"
-						class="btn btn-sm preset-filled-success-500 w-full"
+						class="btn btn-sm preset-filled-success-500 flex-1"
 						onclick={handleUpdate}
 						disabled={!unsavedChanges}
 						aria-label={unsavedChanges
@@ -393,6 +389,23 @@
 					>
 						<Icons.Save size={16} aria-hidden="true" />
 						Save
+					</button>
+					<button
+						type="button"
+						class="btn btn-sm preset-filled-warning-500 shrink-0"
+						onclick={handleSetDefault}
+						disabled={!selectedConnectionId ||
+							selectedConnectionId === defaultConnectionId ||
+							managedButDisabled}
+						title={managedButDisabled
+							? "KoboldCpp Manager must be enabled to use this connection"
+							: selectedConnectionId === defaultConnectionId
+								? "Already the default connection"
+								: "Set as default connection"}
+						aria-label="Set selected connection as default"
+					>
+						<Icons.Star size={14} aria-hidden="true" />
+						Set Default
 					</button>
 				</div>
 				<div id="save-status" class="sr-only">
@@ -426,6 +439,8 @@
 					<LlamaCppForm bind:connection />
 				{:else if connection.type === CONNECTION_TYPE.KOBOLDCPP}
 					<KoboldCppForm bind:connection />
+				{:else if connection.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED}
+					<KoboldCppManagedForm bind:connection />
 				{:else if connection.type === CONNECTION_TYPE.ANTHROPIC}
 					<AnthropicForm bind:connection />
 				{/if}
@@ -542,7 +557,16 @@
 						aria-describedby="type-help"
 					>
 						{#each CONNECTION_TYPES as t}
-							<option value={t.value}>{t.label}</option>
+							<option
+								value={t.value}
+								disabled={t.value === CONNECTION_TYPE.KOBOLDCPP_MANAGED &&
+									!koboldCppSettingsCtx?.settings?.koboldCppManagerEnabled}
+							>
+								{t.label}{t.value === CONNECTION_TYPE.KOBOLDCPP_MANAGED &&
+								!koboldCppSettingsCtx?.settings?.koboldCppManagerEnabled
+									? " (Manager disabled)"
+									: ""}
+							</option>
 						{/each}
 					</select>
 					<div id="type-help" class="sr-only">

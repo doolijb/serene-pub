@@ -1,5 +1,6 @@
 import { getConnectionAdapter } from "./getConnectionAdapter"
 import { TokenCounters } from "./TokenCounterManager"
+import { runQueuedLLMCall } from "./runQueuedLLMCall"
 
 /**
  * Generate a concise title for an assistant chat based on the first exchange
@@ -112,17 +113,13 @@ export async function generateChatTitle({
 		})
 
 		// Generate the title
-		const { completionResult } = await adapter.generate()
-
-		let title = ""
-		if (typeof completionResult === "string") {
-			title = completionResult
-		} else {
-			// Handle streaming response
-			await completionResult((chunk: string) => {
-				title += chunk
-			})
-		}
+		const { text } = await runQueuedLLMCall({
+			adapter,
+			taskType: "chat_title",
+			connectionName: connection.name || connection.type,
+			samplingName: sampling.name || "title"
+		})
+		let title = text
 
 		// Clean up the title
 		title = title

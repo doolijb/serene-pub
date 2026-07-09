@@ -13,6 +13,7 @@
 
 import { getConnectionAdapter } from "./getConnectionAdapter"
 import { TokenCounters } from "./TokenCounterManager"
+import { runQueuedLLMCall } from "./runQueuedLLMCall"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -153,7 +154,8 @@ async function runLLM(
 		sampling: SelectSamplingConfig
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
-	}
+	},
+	label?: string
 ): Promise<string> {
 	const AdapterClass = getConnectionAdapter(opts.connection.type)
 	const tokenCounter = new TokenCounters("estimate")
@@ -175,18 +177,14 @@ async function runLLM(
 		isAssistantMode: false
 	})
 
-	let raw = ""
-	const { completionResult } = await adapter.generate()
-
-	if (typeof completionResult === "string") {
-		raw = completionResult
-	} else {
-		await completionResult((chunk: string) => {
-			raw += chunk
-		})
-	}
-
-	raw = raw.trim()
+	const { text } = await runQueuedLLMCall({
+		adapter,
+		taskType: "graph_perspective",
+		connectionName: opts.connection.name,
+		samplingName: opts.sampling.name,
+		label
+	})
+	let raw = text
 
 	// Strip any trailing FAILURE messages appended by the adapter's stream error handler
 	const failureIdx = raw.lastIndexOf("FAILURE:")
@@ -644,7 +642,7 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 	const llmOpts = { connection, sampling, contextConfig, promptConfig }
 
 	async function llm(label: string, system: string, user: string): Promise<string> {
-		const response = await runLLM(system, user, llmOpts)
+		const response = await runLLM(system, user, llmOpts, label)
 		onLlmCall?.({ label, system, user, response })
 		return response
 	}

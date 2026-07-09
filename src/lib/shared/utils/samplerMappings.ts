@@ -207,6 +207,7 @@ export function getSamplingKeyMap(
 		case CONNECTION_TYPE.LLAMACPP_COMPLETION:
 			return llamaCppSamplingKeyMap
 		case CONNECTION_TYPE.KOBOLDCPP:
+		case CONNECTION_TYPE.KOBOLDCPP_MANAGED:
 			return koboldCppSamplingKeyMap
 		case CONNECTION_TYPE.ANTHROPIC:
 			return anthropicSamplingKeyMap
@@ -561,6 +562,7 @@ export function getUnsupportedSamplers(
 					explanation = "This sampler is not available in llama.cpp"
 					break
 				case CONNECTION_TYPE.KOBOLDCPP:
+				case CONNECTION_TYPE.KOBOLDCPP_MANAGED:
 					explanation = "KoboldCpp does not support this sampler"
 					break
 				case CONNECTION_TYPE.ANTHROPIC:

@@ -248,10 +248,9 @@
 	}
 
 	function handleHistoryEntryCreate(data: Sockets.HistoryEntries.Create.Response) {
+		isCreatingHistoryEntry = false
 		if (data.historyEntry && loreType === "scene") {
-			historyEntryList = [...historyEntryList, data.historyEntry]
 			selectedHistoryEntryId = data.historyEntry.id
-			isCreatingHistoryEntry = false
 		}
 	}
 
@@ -524,7 +523,7 @@
 								</option>
 							{/each}
 						</select>
-						<button class="btn btn-sm preset-tonal-surface" disabled={isCreatingHistoryEntry} onclick={createBlankHistoryEntry} title="Create a new blank history entry">
+						<button class="btn btn-sm preset-tonal-surface" disabled={isCreatingHistoryEntry || !hasLorebook} onclick={createBlankHistoryEntry} title={!hasLorebook ? "Attach a lorebook first" : "Create a new blank history entry"}>
 							{#if isCreatingHistoryEntry}
 								<Icons.Loader size={14} class="animate-spin" />
 							{:else}
@@ -536,7 +535,7 @@
 				{:else}
 					<div class="flex gap-2">
 						<p class="text-surface-500 flex-1 text-sm">No history entries yet.</p>
-						<button class="btn btn-sm preset-filled-primary-500" disabled={isCreatingHistoryEntry} onclick={createBlankHistoryEntry}>
+						<button class="btn btn-sm preset-filled-primary-500" disabled={isCreatingHistoryEntry || !hasLorebook} onclick={createBlankHistoryEntry} title={!hasLorebook ? "Attach a lorebook first" : undefined}>
 							{#if isCreatingHistoryEntry}
 								<Icons.Loader size={14} class="animate-spin" />
 							{:else}

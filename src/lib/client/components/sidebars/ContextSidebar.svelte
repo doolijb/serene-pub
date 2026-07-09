@@ -136,16 +136,10 @@
 		}
 	}
 
-	$effect(() => {
-		if (
-			!!selectedConfigId &&
-			selectedConfigId !== userSettingsCtx.settings?.activeContextConfigId
-		) {
-			socket.emit("contextConfigs:setUserActive", {
-				id: selectedConfigId
-			})
-		}
-	})
+	function handleSetDefault() {
+		if (!selectedConfigId) return
+		socket.emit("contextConfigs:setUserActive", { id: selectedConfigId })
+	}
 
 	onMount(() => {
 		socket.on(
@@ -182,6 +176,9 @@
 				toaster.success({ title: "Context config saved successfully." })
 			}
 		)
+		socket.on("contextConfigs:setUserActive", () => {
+			toaster.success({ title: "Default context config updated" })
+		})
 		socket.emit("contextConfigs:list", {})
 		socket.emit("contextConfigs:get", {
 			id: selectedConfigId
@@ -194,6 +191,7 @@
 		socket.off("contextConfigs:get")
 		socket.off("contextConfigs:create")
 		socket.off("contextConfigs:update")
+		socket.off("contextConfigs:setUserActive")
 		onclose = undefined
 	})
 </script>
@@ -224,29 +222,39 @@
 			<Icons.X size={16} />
 		</button>
 	</div>
-	<div class="mb-6 flex items-center gap-2">
+	<div class="mb-6">
 		<select
 			class="select w-full"
 			bind:value={selectedConfigId}
 			disabled={unsavedChanges}
 		>
 			{#each configsList.filter((c) => c.isImmutable) as c}
-				<option value={c.id}>{c.name}{c.isImmutable ? "*" : ""}</option>
+				{@const isDefault = c.id === userSettingsCtx.settings?.activeContextConfigId}
+				<option value={c.id}>{isDefault ? "★ " : ""}{c.name}*</option>
 			{/each}
 			{#each configsList.filter((c) => !c.isImmutable) as c}
-				<option value={c.id}>{c.name}{c.isImmutable ? "*" : ""}</option>
+				{@const isDefault = c.id === userSettingsCtx.settings?.activeContextConfigId}
+				<option value={c.id}>{isDefault ? "★ " : ""}{c.name}</option>
 			{/each}
 		</select>
 	</div>
 	{#if contextConfig}
-		<div class="mt-4 mb-4 flex w-full justify-end gap-2">
+		<div class="mt-4 mb-4 flex w-full gap-2">
 			<button
-				class="btn btn-sm preset-filled-success-500 w-full"
+				class="btn btn-sm preset-filled-success-500 flex-1"
 				onclick={handleSave}
 				disabled={contextConfig.isImmutable || !unsavedChanges}
 			>
 				<Icons.Save size={16} />
 				Save
+			</button>
+			<button
+				class="btn btn-sm preset-filled-warning-500 shrink-0"
+				onclick={handleSetDefault}
+				disabled={!selectedConfigId || selectedConfigId === userSettingsCtx.settings?.activeContextConfigId}
+				title="Set as default"
+			>
+				<Icons.Star size={16} /> Set Default
 			</button>
 		</div>
 		<div class="flex flex-col gap-4">

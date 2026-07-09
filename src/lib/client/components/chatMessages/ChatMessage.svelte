@@ -358,11 +358,40 @@
 	{/if}
 
 	<div class="flex h-fit rounded p-2 text-left">
-		{#if msg.content === "" && msg.isGenerating}
-			{#if !msg.adapterId}
+		{#if msg.error}
+			{#if msg.content}
+				<div class="rendered-chat-message-content mb-2">
+					{@html renderMarkdownWithQuotedText(msg.content)}
+				</div>
+			{/if}
+			<div
+				class="border-error-500 bg-error-500/10 flex w-full flex-col gap-2 rounded-lg border p-3"
+			>
+				<div class="text-error-700-300 flex items-center gap-2">
+					<Icons.AlertTriangle size={16} />
+					<span class="text-sm font-medium">{msg.error.message}</span>
+					{#if msg.error.code}
+						<span class="text-xs opacity-60">({msg.error.code})</span>
+					{/if}
+				</div>
+				<button
+					class="btn preset-filled-primary-500 btn-sm w-fit"
+					onclick={(e) => onRegenerateMessage(e, msg)}
+				>
+					<Icons.RotateCcw size={14} />
+					Retry
+				</button>
+			</div>
+		{:else if msg.content === "" && msg.isGenerating}
+			{#if msg.generationStage === "queued"}
 				<div class="flex items-center gap-2">
 					<div class="text-surface-500 text-sm">Queued</div>
 					<div class="bg-surface-400-600 h-2 w-2 rounded-full"></div>
+				</div>
+			{:else if msg.generationStage === "loading"}
+				<div class="flex items-center gap-2">
+					<div class="text-surface-500 text-sm">Loading model…</div>
+					<div class="bg-surface-400-600 h-2 w-2 animate-pulse rounded-full"></div>
 				</div>
 			{:else if GeneratingAnimationComponent}
 				{@render GeneratingAnimationComponent()}

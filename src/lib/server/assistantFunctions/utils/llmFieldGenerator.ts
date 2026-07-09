@@ -2,12 +2,12 @@
  * LLM Field Generator
  *
  * Utilities for generating individual character draft fields using LLM.
- * This module handles the low-level LLM API calls for field generation.
  */
 
 import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
+import { runQueuedLLMCall } from "$lib/server/utils/runQueuedLLMCall"
 
 /**
  * Simple system prompt for field generation
@@ -16,6 +16,43 @@ import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 const FIELD_GENERATION_SYSTEM_PROMPT = `You are a creative assistant helping to design a character for a roleplay application.
 You will be given specific instructions for generating individual character fields.
 Follow the instructions exactly and return ONLY the requested content without any additional formatting, explanations, or meta-commentary.`
+
+function buildFieldGenerationChat(userPrompt: string): any {
+	return {
+		id: 0,
+		userId: 0,
+		name: null,
+		createdAt: new Date().toISOString(),
+		updatedAt: new Date().toISOString(),
+		scenario: null,
+		metadata: null,
+		lorebookId: null,
+		isGroup: false,
+		chatType: "assistant",
+		groupReplyStrategy: null,
+		chatMessages: [
+			{
+				id: 1,
+				chatId: 0,
+				role: "user",
+				content: userPrompt,
+				createdAt: new Date().toISOString(),
+				isHidden: false,
+				isGenerating: false,
+				metadata: null
+			}
+		],
+		lorebook: {
+			id: 0,
+			userId: 0,
+			name: "",
+			description: null,
+			createdAt: new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+			lorebookBindings: []
+		}
+	}
+}
 
 /**
  * Generate a single field value using the LLM
@@ -38,254 +75,47 @@ export async function generateFieldWithLLM({
 	maxTokens?: number
 }): Promise<string> {
 	// Get user's active LLM configurations
-	const { connection, sampling } = await getUserConfigurations(userId)
+	const { connection, sampling, contextConfig, promptConfig } =
+		await getUserConfigurations(userId)
 
 	if (!connection) {
 		throw new Error("No AI connection configured. Please set up a connection first.")
 	}
 
-	// Get the appropriate adapter for this connection
 	const { Adapter } = getConnectionAdapter(connection.type)
+	const tokenCounter = new TokenCounters(
+		connection.tokenCounter || "estimate"
+	)
 
-	// Create a minimal "prompt builder" structure for the adapter
-	// We'll construct a simple chat-style prompt manually
-	const messages = [
-		{ role: "system", content: systemPrompt },
-		{ role: "user", content: userPrompt }
-	]
+	const adapter = new Adapter({
+		connection,
+		sampling: { ...sampling, maxTokens },
+		contextConfig,
+		promptConfig: { ...promptConfig, systemPrompt },
+		chat: buildFieldGenerationChat(userPrompt),
+		currentCharacterId: null,
+		tokenCounter,
+		tokenLimit:
+			typeof sampling.contextTokens === "number" ? sampling.contextTokens : 4096,
+		contextThresholdPercent: 0.9,
+		isAssistantMode: false
+	})
 
-	// Build prompt string based on connection type format
-	let promptString = ""
-
-	// Most adapters expect chat format, but we'll build a simple prompt
-	// that works across different connection types
-	if (connection.type === "openai") {
-		// OpenAI uses messages array - we'll send it directly
-		promptString = JSON.stringify(messages)
-	} else {
-		// For other types (Ollama, LlamaCpp, etc.), build a simple text prompt
-		promptString = `${systemPrompt}\n\n${userPrompt}`
-	}
-
-	// Make the LLM API call
 	try {
-		const response = await callLLMAPI({
-			connection,
-			sampling,
-			promptString,
-			messages,
-			maxTokens
+		const { text } = await runQueuedLLMCall({
+			adapter,
+			taskType: "field_generation",
+			connectionName: connection.name,
+			samplingName: sampling.name,
+			label: "field generation"
 		})
-
-		return response.trim()
+		return text
 	} catch (error) {
 		console.error("[generateFieldWithLLM] Error calling LLM:", error)
 		throw new Error(
 			`Failed to generate field: ${error instanceof Error ? error.message : "Unknown error"}`
 		)
 	}
-}
-
-/**
- * Call the LLM API directly with a simple prompt
- * This is a simplified version that doesn't use the full adapter infrastructure
- */
-async function callLLMAPI({
-	connection,
-	sampling,
-	promptString,
-	messages,
-	maxTokens
-}: {
-	connection: SelectConnection
-	sampling: SelectSamplingConfig
-	promptString: string
-	messages: Array<{ role: string; content: string }>
-	maxTokens: number
-}): Promise<string> {
-	const { baseUrl, extraJson } = connection
-	const apiKey = extraJson?.apiKey || null
-	const url = baseUrl || ""
-
-	// Handle different connection types
-	switch (connection.type) {
-		case "openai":
-			return await callOpenAIAPI({
-				url,
-				apiKey,
-				messages,
-				sampling,
-				maxTokens
-			})
-
-		case "ollama":
-			return await callOllamaAPI({
-				url,
-				model: connection.model,
-				messages,
-				sampling,
-				maxTokens
-			})
-
-		case "lmstudio":
-		case "koboldcpp":
-		case "llamacpp":
-			return await callCompletionAPI({
-				url,
-				messages,
-				sampling,
-				maxTokens
-			})
-
-		default:
-			throw new Error(`Unsupported connection type: ${connection.type}`)
-	}
-}
-
-/**
- * Call OpenAI-compatible API
- */
-async function callOpenAIAPI({
-	url,
-	apiKey,
-	messages,
-	sampling,
-	maxTokens
-}: {
-	url: string
-	apiKey: string | null
-	messages: Array<{ role: string; content: string }>
-	sampling: SelectSamplingConfig
-	maxTokens: number
-}): Promise<string> {
-	const endpoint = url.endsWith("/")
-		? `${url}chat/completions`
-		: `${url}/chat/completions`
-
-	const headers: Record<string, string> = {
-		"Content-Type": "application/json"
-	}
-
-	if (apiKey) {
-		headers["Authorization"] = `Bearer ${apiKey}`
-	}
-
-	const body = {
-		messages,
-		max_tokens: maxTokens,
-		temperature: sampling.temperature ?? 0.7,
-		top_p: sampling.topP ?? 1.0,
-		stream: false
-	}
-
-	const response = await fetch(endpoint, {
-		method: "POST",
-		headers,
-		body: JSON.stringify(body)
-	})
-
-	if (!response.ok) {
-		const errorText = await response.text()
-		throw new Error(`OpenAI API error (${response.status}): ${errorText}`)
-	}
-
-	const data = await response.json()
-	return data.choices?.[0]?.message?.content || ""
-}
-
-/**
- * Call Ollama API
- */
-async function callOllamaAPI({
-	url,
-	model,
-	messages,
-	sampling,
-	maxTokens
-}: {
-	url: string
-	model: string | null
-	messages: Array<{ role: string; content: string }>
-	sampling: SelectSamplingConfig
-	maxTokens: number
-}): Promise<string> {
-	const endpoint = url.endsWith("/") ? `${url}api/chat` : `${url}/api/chat`
-
-	const body = {
-		model: model || "llama2",
-		messages,
-		stream: false,
-		options: {
-			temperature: sampling.temperature ?? 0.7,
-			top_p: sampling.topP ?? 1.0,
-			num_predict: maxTokens
-		}
-	}
-
-	const response = await fetch(endpoint, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify(body)
-	})
-
-	if (!response.ok) {
-		const errorText = await response.text()
-		throw new Error(`Ollama API error (${response.status}): ${errorText}`)
-	}
-
-	const data = await response.json()
-	return data.message?.content || ""
-}
-
-/**
- * Call generic completion API (LMStudio, KoboldCpp, LlamaCpp)
- */
-async function callCompletionAPI({
-	url,
-	messages,
-	sampling,
-	maxTokens
-}: {
-	url: string
-	messages: Array<{ role: string; content: string }>
-	sampling: SelectSamplingConfig
-	maxTokens: number
-}): Promise<string> {
-	// Build a simple text prompt from messages
-	const promptText = messages
-		.map((m) => {
-			if (m.role === "system") return m.content
-			return m.content
-		})
-		.join("\n\n")
-
-	const endpoint = url.endsWith("/")
-		? `${url}v1/completions`
-		: `${url}/v1/completions`
-
-	const body = {
-		prompt: promptText,
-		max_tokens: maxTokens,
-		temperature: sampling.temperature ?? 0.7,
-		top_p: sampling.topP ?? 1.0,
-		stream: false
-	}
-
-	const response = await fetch(endpoint, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify(body)
-	})
-
-	if (!response.ok) {
-		const errorText = await response.text()
-		throw new Error(
-			`Completion API error (${response.status}): ${errorText}`
-		)
-	}
-
-	const data = await response.json()
-	return data.choices?.[0]?.text || ""
 }
 
 /**

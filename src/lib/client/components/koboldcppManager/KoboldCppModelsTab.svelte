@@ -4,6 +4,7 @@
 	import * as skio from "sveltekit-io"
 	import { Modal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 	type KoboldCppModel = Sockets.KoboldCpp.ListModels.ModelFile
 
@@ -48,7 +49,9 @@
 	}
 
 	function findConnectionForModel(modelName: string): SelectConnection | undefined {
-		return connectionsList.find((c) => c.type === "koboldcpp" && c.model === modelName)
+		return connectionsList.find(
+			(c) => c.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED && c.model === modelName
+		)
 	}
 
 	function openConnectionSidebar(modelName: string) {

@@ -15,6 +15,7 @@ import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
 import { broadcastToChatUsers } from "./utils/broadcastHelpers"
+import { llmQueue } from "$lib/server/utils/llmQueue"
 
 export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 	console.log("[AssistantV2] Registering handlers for user", userId)
@@ -195,8 +196,20 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 					socket
 				)
 
-				const result =
-					await assistantService.generateResponse(trimmedContent)
+				// Treat the whole tool-calling turn as a single queue slot rather
+				// than instrumenting each internal LLM call — assistant turns have
+				// no per-call UI today, so the coarser granularity is fine.
+				const { done } = llmQueue.enqueue({
+					taskType: "chat",
+					connectionName: connection.name,
+					samplingName: sampling.name,
+					chatId,
+					label: "assistant",
+					preflight: (signal) => adapter.preflight(signal),
+					execute: () => assistantService.generateResponse(trimmedContent),
+					onCancel: () => adapter.abort()
+				})
+				const result = await done
 
 				// 7. Update assistant message with result
 				if (result.success && result.message) {

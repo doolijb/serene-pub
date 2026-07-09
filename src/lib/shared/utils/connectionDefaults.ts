@@ -61,6 +61,26 @@ export const CONNECTION_DEFAULTS = {
 			enableThinking: null as boolean | null
 		}
 	},
+	[CONNECTION_TYPE.KOBOLDCPP_MANAGED]: {
+		type: CONNECTION_TYPE.KOBOLDCPP_MANAGED,
+		baseUrl: "http://localhost:5001",
+		apiKey: "",
+		model: "",
+		promptFormat: PromptFormats.VICUNA,
+		tokenCounter: TokenCounterOptions.ESTIMATE,
+		extraJson: {
+			stream: true,
+			useChat: true,
+			useMemory: false,
+			memory: "",
+			enableThinking: null as boolean | null,
+			managedConfig: {
+				gpuLayers: -1,
+				flashAttention: false,
+				batchSize: 512
+			}
+		}
+	},
 	[CONNECTION_TYPE.ANTHROPIC]: {
 		type: CONNECTION_TYPE.ANTHROPIC,
 		baseUrl: "https://api.anthropic.com",

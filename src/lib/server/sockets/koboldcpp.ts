@@ -6,7 +6,8 @@ import type { Handler } from "$lib/shared/events"
 import { connectionsList, connectionsSetUserActive } from "./connections"
 import { systemSettingsGet } from "./systemSettings"
 import { getAppDataDir } from "$lib/server/db/drizzle.config"
-import koboldCppAdapter from "$lib/server/connectionAdapters/KoboldCppAdapter"
+import koboldCppManagedAdapter from "$lib/server/connectionAdapters/KoboldCppManagedAdapter"
+import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import * as fs from "fs"
 import * as fsPromises from "fs/promises"
 import * as path from "path"
@@ -15,7 +16,7 @@ import * as http from "http"
 import { randomUUID } from "crypto"
 import * as subprocessManager from "$lib/server/koboldcpp/subprocessManager"
 import * as binaryManager from "$lib/server/koboldcpp/binaryManager"
-import { unloadModel, ensureModelLoaded, DEFAULT_MANAGED_CONFIG } from "$lib/server/koboldcpp/modelManager"
+import { unloadModel } from "$lib/server/koboldcpp/modelManager"
 
 // --- KOBOLDCPP MANAGER HANDLERS ---
 
@@ -248,14 +249,21 @@ export const koboldCppLoadModelHandler: Handler<
 
 		const response = await fetch(`${baseUrl}/api/admin/reload_config`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ filename: params.filename, adminpassword: adminPassword ?? "" }),
+			headers: {
+				"Content-Type": "application/json",
+				Authorization: `Bearer ${adminPassword ?? ""}`
+			},
+			body: JSON.stringify({ filename: params.filename }),
 			signal: AbortSignal.timeout(30000)
 		})
 
 		if (!response.ok) {
 			const text = await response.text()
 			throw new Error(`Failed to load model: ${response.status} ${text}`)
+		}
+		const data = await response.json().catch(() => ({}))
+		if (!data.success) {
+			throw new Error("reload_config rejected the request (success: false)")
 		}
 
 		const res: Sockets.KoboldCpp.LoadModel.Response = {
@@ -274,19 +282,20 @@ export const koboldCppConnectModelHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const settings = (await db.query.koboldCppSettings.findFirst())!
-		const { koboldCppManagerBaseUrl: baseUrl, koboldCppManagerModelsDir: modelsDir } = settings
+		if (!settings.koboldCppManagerEnabled) {
+			throw new Error("KoboldCpp Manager is disabled")
+		}
+		const { koboldCppManagerBaseUrl: baseUrl } = settings
 
+		// Activating a model always targets a Managed-type connection — a
+		// dumb/unmanaged connection never has model-swap behavior applied to it.
 		let existingConnection = await db.query.connections.findFirst({
 			where: (c, { and, eq }) =>
 				and(
-					eq(c.type, "koboldcpp"),
-					eq(c.model, params.modelName),
-					eq(c.baseUrl, baseUrl)
+					eq(c.type, CONNECTION_TYPE.KOBOLDCPP_MANAGED),
+					eq(c.model, params.modelName)
 				)
 		})
-
-		const isManaged = settings.koboldCppManagedMode === "managed"
-		const modelFile = path.basename(params.modelName)
 
 		if (!existingConnection) {
 			const connectionName = params.modelName
@@ -295,24 +304,12 @@ export const koboldCppConnectModelHandler: Handler<
 				.split(/[\\/]/)
 				.pop()!
 
-			const extraJson = {
-				...koboldCppAdapter.connectionDefaults.extraJson,
-				...(isManaged
-					? {
-						managedConfig: {
-							...DEFAULT_MANAGED_CONFIG,
-							modelFile
-						}
-					}
-					: {})
-			}
-
 			const data: InsertConnection = {
-				...koboldCppAdapter.connectionDefaults,
+				...koboldCppManagedAdapter.connectionDefaults,
 				name: connectionName,
 				model: params.modelName,
 				baseUrl,
-				extraJson
+				extraJson: { ...koboldCppManagedAdapter.connectionDefaults.extraJson }
 			}
 
 			const [newConnection] = await db
@@ -320,21 +317,6 @@ export const koboldCppConnectModelHandler: Handler<
 				.values(data)
 				.returning()
 			existingConnection = newConnection
-		} else if (isManaged && !(existingConnection.extraJson as any)?.managedConfig?.modelFile) {
-			// Connection existed before managed mode was set up — patch in managedConfig
-			const updatedExtraJson = {
-				...(existingConnection.extraJson as any ?? {}),
-				managedConfig: {
-					...DEFAULT_MANAGED_CONFIG,
-					modelFile
-				}
-			}
-			const [updated] = await db
-				.update(schema.connections)
-				.set({ extraJson: updatedExtraJson })
-				.where(eq(schema.connections.id, existingConnection.id))
-				.returning()
-			existingConnection = updated
 		}
 
 		await connectionsSetUserActive.handler(
@@ -344,25 +326,8 @@ export const koboldCppConnectModelHandler: Handler<
 		)
 		await connectionsList.handler(socket, {}, emitToUser)
 
-		// Trigger model load for managed mode (async — don't block the response)
-		if (isManaged) {
-			const conn = existingConnection
-			const managedConfig = (conn.extraJson as any)?.managedConfig
-			const adminPassword = settings.koboldCppManagedAdminPassword ?? ""
-			const ttlSecs = settings.koboldCppManagedModelTtlSecs ?? 300
-			if (managedConfig?.modelFile) {
-				ensureModelLoaded({
-					connectionId: conn.id,
-					managedConfig,
-					baseUrl,
-					modelsDir: modelsDir ?? null,
-					adminPassword,
-					ttlSecs
-				}).catch((err) => {
-					console.error("[KoboldCPP] background model load failed:", err)
-				})
-			}
-		}
+		// Model loading is deferred to generation time (see KoboldCppManagedAdapter.preflight) —
+		// setting a connection as default should not eagerly load/swap the koboldcpp model.
 
 		const res: Sockets.KoboldCpp.ConnectModel.Response = {
 			success: "Model set as default"
