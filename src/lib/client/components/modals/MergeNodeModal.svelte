@@ -151,7 +151,7 @@
 
 				<div class="flex gap-2 justify-end">
 					<button
-						class="btn preset-tonal-surface"
+						class="btn preset-filled-surface-400-600"
 						onclick={() => { selectedParent = null }}
 					>
 						<Icons.ArrowLeft size={16} /> Back

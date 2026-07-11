@@ -67,29 +67,10 @@
 	let validationErrors: ValidationErrors = $state({})
 	let testResult: { ok: boolean; error?: string; models?: any[] } | null =
 		$state(null)
-	let availableModels: any[] = $state([])
-	let isLoadingModel = $state(false)
 
 	socket.on("connections:test", (msg) => {
 		testResult = msg
 	})
-
-	socket.on("connections:refreshModels", (msg) => {
-		if (msg.models && msg.models.length > 0) {
-			availableModels = msg.models
-			// If no model is selected, select the current one
-			if (!connection.model) {
-				const currentModel = msg.models.find((m: any) => m.isCurrent)
-				connection.model = currentModel?.id || msg.models[0].id
-			}
-		}
-	})
-
-	function handleRefreshModels() {
-		socket.emit("connections:refreshModels", {
-			connection
-		})
-	}
 
 	function handleTestConnection() {
 		if (!validateConnection()) return
@@ -119,43 +100,6 @@
 			})
 			validationErrors = errors
 			return false
-		}
-	}
-
-	async function handleModelChange(modelId: string) {
-		if (
-			modelId === "[current]" ||
-			!modelId ||
-			modelId === connection.model
-		) {
-			return
-		}
-
-		isLoadingModel = true
-		try {
-			const baseUrl = connection.baseUrl || "http://localhost:5001"
-			const response = await fetch(`${baseUrl}/api/admin/reload_config`, {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json"
-				},
-				body: JSON.stringify({
-					filename: modelId
-				})
-			})
-
-			if (response.ok) {
-				connection.model = modelId
-				// Refresh models to get updated current model
-				handleRefreshModels()
-			} else {
-				const error = await response.text()
-				console.error("Failed to load model:", error)
-			}
-		} catch (e) {
-			console.error("Error loading model:", e)
-		} finally {
-			isLoadingModel = false
 		}
 	}
 
@@ -205,14 +149,10 @@
 		} else {
 			koboldCppFields = extraJsonToExtraFields(defaultExtraJson)
 		}
-		if (managerEnabled) {
-			handleRefreshModels()
-		}
 	})
 
 	onDestroy(() => {
 		socket.off("connections:test")
-		socket.off("connections:refreshModels")
 	})
 </script>
 
@@ -224,7 +164,7 @@
 			<Icons.AlertTriangle size={16} class="text-warning-700-300 mt-0.5 shrink-0" />
 			<p class="text-warning-700-300 text-sm">
 				KoboldCpp Manager is enabled — consider using a
-				<b>KoboldCPP (Managed)</b> connection instead, unless this connects
+				<b>KCPP Manager</b> connection instead, unless this connects
 				to a different/external KoboldCpp instance.
 			</p>
 		</div>
@@ -439,7 +379,7 @@
 								type="button"
 								class="px-3 py-1 transition-colors {koboldCppFields.enableThinking === opt.value
 									? 'preset-filled-primary-500'
-									: 'preset-tonal-surface'}"
+									: 'preset-filled-surface-400-600'}"
 								onclick={() => (koboldCppFields!.enableThinking = opt.value)}
 							>
 								{opt.label}

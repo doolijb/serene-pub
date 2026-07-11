@@ -343,7 +343,7 @@
 				{:else}
 					<Icons.Save size={11} />
 				{/if}
-				Save theme
+				{theme ? "Update" : "Create"}
 			</button>
 		</div>
 	</div>

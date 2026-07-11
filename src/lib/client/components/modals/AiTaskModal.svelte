@@ -96,7 +96,7 @@
 			{@render confirm?.()}
 
 			<footer class="mt-6 flex gap-3">
-				<button class="btn preset-tonal-surface" onclick={onCancel}>Cancel</button>
+				<button class="btn preset-filled-surface-400-600" onclick={onCancel}>Cancel</button>
 				<button class="btn preset-filled-primary-500 ml-auto" disabled={!canStart} onclick={onStart}>
 					<Icons.Sparkles size={16} /> {startLabel}
 				</button>
@@ -133,7 +133,7 @@
 					<Icons.Square size={16} /> Cancel
 				</button>
 				{#if onMinimize}
-					<button class="btn preset-tonal-surface ml-auto" onclick={onMinimize}>
+					<button class="btn preset-filled-surface-400-600 ml-auto" onclick={onMinimize}>
 						<Icons.Minimize2 size={16} /> Minimize
 					</button>
 				{/if}
@@ -156,12 +156,12 @@
 					<Icons.Trash2 size={16} /> Discard
 				</button>
 				{#if onBack}
-					<button class="btn preset-tonal-surface" onclick={onBack}>
+					<button class="btn preset-filled-surface-400-600" onclick={onBack}>
 						<Icons.ChevronLeft size={16} /> Back
 					</button>
 				{/if}
 				{#if onRerun}
-					<button class="btn preset-tonal-surface" onclick={onRerun}>
+					<button class="btn preset-filled-surface-400-600" onclick={onRerun}>
 						<Icons.RefreshCw size={16} /> Re-run
 					</button>
 				{/if}
@@ -197,14 +197,14 @@
 			{/if}
 
 			<footer class="mt-6 flex flex-wrap gap-3">
-				<button class="btn preset-tonal-surface" onclick={onCancel}>Cancel</button>
+				<button class="btn preset-filled-surface-400-600" onclick={onCancel}>Cancel</button>
 				{#if hasReviewContent && onViewLastResult}
-					<button class="btn preset-tonal-surface" onclick={onViewLastResult}>
+					<button class="btn preset-filled-surface-400-600" onclick={onViewLastResult}>
 						<Icons.Eye size={16} /> View Last Result
 					</button>
 				{/if}
 				{#if onStartOver}
-					<button class="btn preset-tonal-surface ml-auto" onclick={onStartOver}>
+					<button class="btn preset-filled-surface-400-600 ml-auto" onclick={onStartOver}>
 						<Icons.RotateCcw size={16} /> Start Over
 					</button>
 				{/if}

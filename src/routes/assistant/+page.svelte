@@ -155,7 +155,7 @@
 		class="preset-filled-surface-100-950 border-surface-400-600 flex items-center gap-4 border-b p-4"
 	>
 		<button
-			class="btn preset-tonal-surface"
+			class="btn preset-filled-surface-400-600"
 			onclick={() => goto("/")}
 			title="Back to Home"
 		>
@@ -170,7 +170,7 @@
 		</div>
 		<!-- Select mode toggle button -->
 		<button
-			class="btn preset-tonal-surface"
+			class="btn preset-filled-surface-400-600"
 			onclick={() => {
 				isSelectMode = !isSelectMode
 				if (!isSelectMode) {
@@ -442,7 +442,7 @@
 
 			<div class="flex justify-end gap-2">
 				<button
-					class="btn preset-tonal-surface"
+					class="btn preset-filled-surface-400-600"
 					onclick={cancelDeleteChat}
 				>
 					Cancel
@@ -488,7 +488,7 @@
 
 			<div class="flex justify-end gap-2">
 				<button
-					class="btn preset-tonal-surface"
+					class="btn preset-filled-surface-400-600"
 					onclick={cancelBulkDelete}
 				>
 					Cancel

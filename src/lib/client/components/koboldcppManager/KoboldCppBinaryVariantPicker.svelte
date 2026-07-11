@@ -31,6 +31,7 @@
 	let download = $state<DownloadState | null>(null)
 	let confirming = $state(false)
 	let downloadStarted = $state(false)
+	let isDownloading = $derived(!!download && !download.isDone)
 
 	$effect(() => {
 		if (downloadStarted && download?.status === "success" && download?.isDone) {
@@ -160,6 +161,7 @@
 				class="select w-full text-sm"
 				bind:value={selectedTag}
 				onchange={() => fetchVariants(selectedTag)}
+				disabled={isDownloading}
 			>
 				<option value="latest">
 					Latest{versions[0] ? ` (${versions[0].tag})` : ""}
@@ -184,6 +186,7 @@
 			bind:value={destDir}
 			placeholder="/home/user/koboldcpp"
 			class="input w-full text-sm"
+			disabled={isDownloading}
 		/>
 		<p class="text-surface-500 mt-0.5 text-xs">
 			Where the KoboldCPP binary will be saved.{defaultDir ? ` Default: ${defaultDir}` : ""}
@@ -247,10 +250,11 @@
 					{#each grouped[platform] as variant (variant.name)}
 						{@const isSelected = selected?.name === variant.name}
 						<button
-							class="border-surface-300-700 flex items-start gap-3 rounded-lg border p-3 text-left transition {isSelected
+							class="border-surface-300-700 flex items-start gap-3 rounded-lg border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-50 {isSelected
 								? 'border-primary-500 bg-primary-50-950'
 								: 'bg-surface-100-900 hover:bg-surface-200-800'}"
 							onclick={() => (selected = variant)}
+							disabled={isDownloading}
 						>
 							<div
 								class="mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border-2 {isSelected
@@ -277,7 +281,7 @@
 
 		<button
 			class="btn preset-filled-primary-500 w-full"
-			disabled={!selected || !destDir.trim() || (!!download && !download.isDone)}
+			disabled={!selected || !destDir.trim() || isDownloading}
 			onclick={startDownload}
 		>
 			<Icons.Download size={16} />

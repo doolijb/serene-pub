@@ -139,7 +139,7 @@
 		<header class="flex items-center justify-between">
 			<div class="flex items-center gap-2">
 				{#if selectedPersona}
-					<button class="btn btn-sm preset-tonal-surface" onclick={handleBackToList} aria-label="Back to list">
+					<button class="btn btn-sm preset-filled-surface-400-600" onclick={handleBackToList} aria-label="Back to list">
 						<Icons.ArrowLeft size={16} />
 					</button>
 				{:else}
@@ -147,7 +147,7 @@
 				{/if}
 				<h3 class="h3">{selectedPersona ? selectedPersona.name : "Persona Library"}</h3>
 			</div>
-			<button class="btn btn-sm preset-tonal-surface" onclick={handleClose} aria-label="Close">
+			<button class="btn btn-sm preset-filled-surface-400-600" onclick={handleClose} aria-label="Close">
 				<Icons.X size={16} />
 			</button>
 		</header>

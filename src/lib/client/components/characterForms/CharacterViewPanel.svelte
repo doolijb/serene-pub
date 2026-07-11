@@ -42,11 +42,11 @@
 <div class="flex h-full flex-col gap-0 overflow-hidden">
 	<!-- Header -->
 	<div class="flex shrink-0 items-center gap-2 pb-3">
-		<button class="btn btn-sm preset-tonal-surface p-2" onclick={onBack} title="Back to list">
+		<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={onBack} title="Back to list">
 			<Icons.ChevronLeft size={16} />
 		</button>
 		<h2 class="flex-1 truncate font-semibold">{character?.nickname || character?.name || ""}</h2>
-		<button class="btn btn-sm preset-tonal-surface" onclick={onChat} title="View chats">
+		<button class="btn btn-sm preset-filled-surface-400-600" onclick={onChat} title="View chats">
 			<Icons.MessageSquare size={14} /> View Chats
 		</button>
 		<button class="btn btn-sm preset-filled-primary-500" onclick={onEdit} title="Edit character">

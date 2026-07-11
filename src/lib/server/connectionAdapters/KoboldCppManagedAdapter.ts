@@ -1,4 +1,5 @@
-import { KoboldCppAdapter, testConnection } from "./KoboldCppAdapter"
+import { KoboldCppAdapter } from "./KoboldCppAdapter"
+import { fetchCurrentModelName } from "$lib/server/koboldcpp/kcppHttp"
 import type { AdapterExports } from "./BaseConnectionAdapter"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { koboldCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
@@ -27,6 +28,12 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 		}
 		if (!this.connection.model) {
 			throw new Error("No model selected for this connection.")
+		}
+		const adminDir = settings.koboldCppManagedBinaryDir
+		if (!adminDir) {
+			throw new Error(
+				"KoboldCpp Manager needs an Admin Directory configured — set one in Settings."
+			)
 		}
 
 		// This connection type doesn't store/use its own base URL — always
@@ -71,7 +78,7 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 				managedConfig,
 				baseUrl: settings.koboldCppManagerBaseUrl,
 				modelsDir: settings.koboldCppManagerModelsDir ?? null,
-				adminDir: settings.koboldCppManagedBinaryDir ?? "",
+				adminDir,
 				adminPassword: settings.koboldCppManagedAdminPassword ?? "",
 				ttlSecs: settings.koboldCppManagedModelTtlSecs ?? 300,
 				contextSize,
@@ -86,6 +93,42 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 	}
 }
 
+// Test connection — resolves the manager's configured address first, same as
+// listModels() below, rather than reading connection.baseUrl directly (this
+// connection type never stores/uses its own base URL).
+async function testConnection(
+	connection: SelectConnection
+): Promise<{ ok: boolean; error?: string }> {
+	try {
+		const settings = await db.query.koboldCppSettings.findFirst()
+		const baseUrl = settings?.koboldCppManagerBaseUrl || connection.baseUrl || "http://localhost:5001"
+		const response = await fetch(`${baseUrl}/api/extra/version`, {
+			method: "GET",
+			headers: { "Content-Type": "application/json" },
+			signal: AbortSignal.timeout(5000)
+		})
+
+		if (!response.ok) {
+			return {
+				ok: false,
+				error: `Server returned ${response.status} ${response.statusText}`
+			}
+		}
+
+		const data = await response.json()
+		if (!data.version) {
+			return { ok: false, error: "Invalid response from KoboldCpp server" }
+		}
+
+		return { ok: true }
+	} catch (e: any) {
+		return {
+			ok: false,
+			error: e.message || "Failed to connect to KoboldCpp server"
+		}
+	}
+}
+
 // List models function — always attempts the admin API (this connection type
 // requires it to function at all, unlike the dumb type which never assumes
 // it's present).
@@ -96,17 +139,7 @@ async function listModels(
 		const settings = await db.query.koboldCppSettings.findFirst()
 		const baseUrl = settings?.koboldCppManagerBaseUrl || connection.baseUrl || "http://localhost:5001"
 
-		const currentModelResponse = await fetch(`${baseUrl}/api/v1/model`, {
-			method: "GET",
-			headers: { "Content-Type": "application/json" },
-			signal: AbortSignal.timeout(5000)
-		})
-
-		let currentModel = "No model loaded"
-		if (currentModelResponse.ok) {
-			const data = await currentModelResponse.json()
-			currentModel = data.result || "No model loaded"
-		}
+		const currentModel = (await fetchCurrentModelName(baseUrl)) || "No model loaded"
 
 		let availableModels: string[] = []
 		try {

@@ -1040,7 +1040,7 @@
 							onclick={() => handleMobilePanelClick(key)}
 						>
 							{#if item.imgSrc}
-							<span class="block h-5 w-5" style="background-color: currentColor; mask: url({item.imgSrc}) no-repeat center / contain; -webkit-mask: url({item.imgSrc}) no-repeat center / contain;" aria-hidden="true"></span>
+							<span class="text-foreground block h-5 w-5" style="background-color: currentColor; mask: url({item.imgSrc}) no-repeat center / contain; -webkit-mask: url({item.imgSrc}) no-repeat center / contain;" aria-hidden="true"></span>
 						{:else}
 							<item.icon class="text-foreground h-5 w-5" />
 						{/if}

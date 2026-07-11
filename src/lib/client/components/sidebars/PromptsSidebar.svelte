@@ -433,7 +433,7 @@
 
 		<!-- Chat Prompts card -->
 		<button
-			class="card preset-tonal-surface hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
+			class="card preset-filled-surface-400-600 hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
 			onclick={() => (view = "chat")}
 		>
 			<div class="flex items-start gap-3">
@@ -464,7 +464,7 @@
 				{ v: "scene" as const, label: "Scene Summarization", desc: "System instructions for scene summarization.", icon: Icons.Film, activeName: activeSceneName }
 			] as card}
 				<button
-					class="card preset-tonal-surface hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
+					class="card preset-filled-surface-400-600 hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
 					onclick={() => (view = card.v)}
 				>
 					<div class="flex items-start gap-3">
@@ -494,13 +494,13 @@
 {:else if view === "chat"}
 	<div class="text-foreground flex h-full flex-col">
 		<div class="flex items-center gap-2 border-b border-surface-200-800 px-4 py-3">
-			<button class="btn btn-sm preset-tonal-surface" onclick={navigateBack} title="Back">
+			<button class="btn btn-sm preset-filled-surface-400-600" onclick={navigateBack} title="Back">
 				<Icons.ChevronLeft size={16} />
 			</button>
 			<div class="min-w-0 flex-1"><h2 class="truncate text-sm font-semibold">Chat Prompts</h2></div>
 			<div class="flex shrink-0 items-center gap-1">
-				<button type="button" class="btn btn-sm preset-tonal-surface" onclick={handleChatNew} title="Clone to new config"><Icons.Plus size={14} /></button>
-				<button type="button" class="btn btn-sm preset-tonal-surface" onclick={handleChatReset} disabled={!chatUnsaved} title="Discard changes"><Icons.RefreshCcw size={14} /></button>
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleChatNew} title="Clone to new config"><Icons.Plus size={14} /></button>
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleChatReset} disabled={!chatUnsaved} title="Discard changes"><Icons.RefreshCcw size={14} /></button>
 				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleChatDelete} disabled={!chatConfig || chatConfig.isImmutable} title="Delete config"><Icons.Trash2 size={14} /></button>
 			</div>
 		</div>
@@ -521,7 +521,7 @@
 				<div class="flex flex-col gap-4">
 					<div class="flex gap-2">
 						<button class="btn btn-sm preset-filled-success-500 flex-1" onclick={handleChatSave} disabled={!chatUnsaved}>
-							<Icons.Save size={14} /> Save
+							<Icons.Save size={14} /> Update
 						</button>
 						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleChatSetDefault}
 							disabled={!selectedChatId || selectedChatId === userSettingsCtx.settings?.activePromptConfigId}
@@ -558,11 +558,11 @@
 {:else if view === "world"}
 	<div class="text-foreground flex h-full flex-col">
 		<div class="flex items-center gap-2 border-b border-surface-200-800 px-4 py-3">
-			<button class="btn btn-sm preset-tonal-surface" onclick={navigateBack} title="Back"><Icons.ChevronLeft size={16} /></button>
+			<button class="btn btn-sm preset-filled-surface-400-600" onclick={navigateBack} title="Back"><Icons.ChevronLeft size={16} /></button>
 			<div class="min-w-0 flex-1"><h2 class="truncate text-sm font-semibold">World Lore Summarization</h2></div>
 			<div class="flex shrink-0 items-center gap-1">
-				<button type="button" class="btn btn-sm preset-tonal-surface" onclick={handleWorldNew} title="Clone to new config"><Icons.Plus size={14} /></button>
-				<button type="button" class="btn btn-sm preset-tonal-surface" onclick={handleWorldReset} disabled={!worldUnsaved} title="Discard changes"><Icons.RefreshCcw size={14} /></button>
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleWorldNew} title="Clone to new config"><Icons.Plus size={14} /></button>
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleWorldReset} disabled={!worldUnsaved} title="Discard changes"><Icons.RefreshCcw size={14} /></button>
 				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleWorldDelete} disabled={!worldConfig || worldConfig.isImmutable} title="Delete config"><Icons.Trash2 size={14} /></button>
 			</div>
 		</div>
@@ -583,7 +583,7 @@
 				<div class="flex flex-col gap-4">
 					<div class="flex gap-2">
 						<button class="btn btn-sm preset-filled-success-500 flex-1" onclick={handleWorldSave} disabled={!worldUnsaved}>
-							<Icons.Save size={14} /> Save
+							<Icons.Save size={14} /> Update
 						</button>
 						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleWorldSetDefault}
 							disabled={!selectedWorldId || selectedWorldId === (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId}
@@ -642,11 +642,11 @@
 {:else if view === "character"}
 	<div class="text-foreground flex h-full flex-col">
 		<div class="flex items-center gap-2 border-b border-surface-200-800 px-4 py-3">
-			<button class="btn btn-sm preset-tonal-surface" onclick={navigateBack} title="Back"><Icons.ChevronLeft size={16} /></button>
+			<button class="btn btn-sm preset-filled-surface-400-600" onclick={navigateBack} title="Back"><Icons.ChevronLeft size={16} /></button>
 			<div class="min-w-0 flex-1"><h2 class="truncate text-sm font-semibold">Character Lore Summarization</h2></div>
 			<div class="flex shrink-0 items-center gap-1">
-				<button type="button" class="btn btn-sm preset-tonal-surface" onclick={handleCharacterNew} title="Clone to new config"><Icons.Plus size={14} /></button>
-				<button type="button" class="btn btn-sm preset-tonal-surface" onclick={handleCharacterReset} disabled={!characterUnsaved} title="Discard changes"><Icons.RefreshCcw size={14} /></button>
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleCharacterNew} title="Clone to new config"><Icons.Plus size={14} /></button>
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleCharacterReset} disabled={!characterUnsaved} title="Discard changes"><Icons.RefreshCcw size={14} /></button>
 				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleCharacterDelete} disabled={!characterConfig || characterConfig.isImmutable} title="Delete config"><Icons.Trash2 size={14} /></button>
 			</div>
 		</div>
@@ -667,7 +667,7 @@
 				<div class="flex flex-col gap-4">
 					<div class="flex gap-2">
 						<button class="btn btn-sm preset-filled-success-500 flex-1" onclick={handleCharacterSave} disabled={!characterUnsaved}>
-							<Icons.Save size={14} /> Save
+							<Icons.Save size={14} /> Update
 						</button>
 						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleCharacterSetDefault}
 							disabled={!selectedCharacterId || selectedCharacterId === (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId}
@@ -726,11 +726,11 @@
 {:else if view === "scene"}
 	<div class="text-foreground flex h-full flex-col">
 		<div class="flex items-center gap-2 border-b border-surface-200-800 px-4 py-3">
-			<button class="btn btn-sm preset-tonal-surface" onclick={navigateBack} title="Back"><Icons.ChevronLeft size={16} /></button>
+			<button class="btn btn-sm preset-filled-surface-400-600" onclick={navigateBack} title="Back"><Icons.ChevronLeft size={16} /></button>
 			<div class="min-w-0 flex-1"><h2 class="truncate text-sm font-semibold">Scene Summarization</h2></div>
 			<div class="flex shrink-0 items-center gap-1">
-				<button type="button" class="btn btn-sm preset-tonal-surface" onclick={handleSceneNew} title="Clone to new config"><Icons.Plus size={14} /></button>
-				<button type="button" class="btn btn-sm preset-tonal-surface" onclick={handleSceneReset} disabled={!sceneUnsaved} title="Discard changes"><Icons.RefreshCcw size={14} /></button>
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleSceneNew} title="Clone to new config"><Icons.Plus size={14} /></button>
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleSceneReset} disabled={!sceneUnsaved} title="Discard changes"><Icons.RefreshCcw size={14} /></button>
 				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleSceneDelete} disabled={!sceneConfig || sceneConfig.isImmutable} title="Delete config"><Icons.Trash2 size={14} /></button>
 			</div>
 		</div>
@@ -751,7 +751,7 @@
 				<div class="flex flex-col gap-4">
 					<div class="flex gap-2">
 						<button class="btn btn-sm preset-filled-success-500 flex-1" onclick={handleSceneSave} disabled={!sceneUnsaved}>
-							<Icons.Save size={14} /> Save
+							<Icons.Save size={14} /> Update
 						</button>
 						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleSceneSetDefault}
 							disabled={!selectedSceneId || selectedSceneId === (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId}

@@ -1,5 +1,6 @@
 import * as path from "path"
 import * as fsPromises from "fs/promises"
+import { fetchCurrentModelName } from "./kcppHttp"
 
 export interface ManagedConfig {
 	modelFile: string
@@ -21,8 +22,18 @@ const ttlTimers: Record<number, ReturnType<typeof setTimeout>> = {}
 // Simple lock so concurrent requests don't double-load
 let loadingPromise: Promise<void> | null = null
 
-// Track the context size we last loaded, keyed by normalized model name
-const loadedContextByModel: Record<string, number> = {}
+// What's actually resident right now, as far as this process knows. There's
+// only ever one loaded model per koboldcpp instance, so this tracks a single
+// signature rather than a per-model dict — a per-model cache would let a
+// stale entry for a *different*, no-longer-loaded model look validly cached.
+interface LoadedSignature {
+	model: string // normalized basename
+	contextSize: number
+	gpuLayers: number
+	flashAttention: boolean
+	batchSize: number
+}
+let loadedSignature: LoadedSignature | null = null
 
 // koboldcpp's /api/v1/model reports the loaded model without its file
 // extension (e.g. "koboldcpp/MN-12B-Lyra-v4-Q4_K_M"), while managedConfig
@@ -34,26 +45,8 @@ function normalizeModelName(name: string): string {
 }
 
 async function getCurrentModelBasename(baseUrl: string): Promise<string | null> {
-	try {
-		const resp = await fetch(`${baseUrl}/api/v1/model`, { signal: AbortSignal.timeout(5000) })
-		if (!resp.ok) return null
-		const data = await resp.json()
-		const result: string = data.result ?? ""
-		return result ? normalizeModelName(result) : null
-	} catch {
-		return null
-	}
-}
-
-async function getCurrentContextSize(baseUrl: string): Promise<number | null> {
-	try {
-		const resp = await fetch(`${baseUrl}/api/extra/true_max_context_length`, { signal: AbortSignal.timeout(3000) })
-		if (!resp.ok) return null
-		const data = await resp.json()
-		return typeof data.value === "number" ? data.value : null
-	} catch {
-		return null
-	}
+	const result = await fetchCurrentModelName(baseUrl)
+	return result ? normalizeModelName(result) : null
 }
 
 async function waitForModelReady(
@@ -108,18 +101,30 @@ export async function ensureModelLoaded(opts: {
 	const expected = normalizeModelName(managedConfig.modelFile)
 
 	if (current === expected) {
-		if (contextSize) {
-			// Prefer in-process tracking; fall back to querying the running instance
-			const knownContext = loadedContextByModel[expected] ?? await getCurrentContextSize(baseUrl)
-			if (knownContext !== null && knownContext >= contextSize) {
-				loadedContextByModel[expected] = knownContext
+		// gpuLayers/flashAttention/batchSize aren't queryable from koboldcpp at
+		// all — they can only be trusted from what THIS process itself last
+		// loaded. With no in-process record (e.g. right after a server
+		// restart) we can't verify them, so always reload once to be safe;
+		// loadedSignature then tracks it going forward.
+		const known =
+			loadedSignature?.model === expected ? loadedSignature : null
+		const configMatches =
+			known !== null &&
+			known.gpuLayers === managedConfig.gpuLayers &&
+			known.flashAttention === managedConfig.flashAttention &&
+			known.batchSize === managedConfig.batchSize
+
+		if (configMatches) {
+			if (contextSize) {
+				if (known!.contextSize >= contextSize) {
+					resetTtl(connectionId, baseUrl, adminPassword, ttlSecs)
+					return
+				}
+				// Loaded context too small — fall through to reload
+			} else {
 				resetTtl(connectionId, baseUrl, adminPassword, ttlSecs)
 				return
 			}
-			// Context too small (or unknown) — fall through to reload
-		} else {
-			resetTtl(connectionId, baseUrl, adminPassword, ttlSecs)
-			return
 		}
 	}
 
@@ -171,7 +176,13 @@ export async function ensureModelLoaded(opts: {
 		loadingPromise = null
 	}
 
-	loadedContextByModel[normalizeModelName(managedConfig.modelFile)] = contextSize ?? 4096
+	loadedSignature = {
+		model: normalizeModelName(managedConfig.modelFile),
+		contextSize: contextSize ?? 4096,
+		gpuLayers: managedConfig.gpuLayers,
+		flashAttention: managedConfig.flashAttention,
+		batchSize: managedConfig.batchSize
+	}
 	resetTtl(connectionId, baseUrl, adminPassword, ttlSecs)
 }
 
@@ -191,7 +202,7 @@ export async function unloadModel(baseUrl: string, adminPassword: string): Promi
 		if (!resp.ok) return false
 		const data = await resp.json().catch(() => ({}))
 		if (data.success) {
-			for (const key of Object.keys(loadedContextByModel)) delete loadedContextByModel[key]
+			loadedSignature = null
 		}
 		return !!data.success
 	} catch {

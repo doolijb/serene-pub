@@ -273,7 +273,7 @@
 			<header class="flex items-center justify-between">
 				<h2 class="h2">Confirm Action</h2>
 				<button
-					class="btn btn-sm preset-tonal-surface"
+					class="btn btn-sm preset-filled-surface-400-600"
 					onclick={handleCancelCancel}
 					aria-label="Go back to editing"
 				>
@@ -322,7 +322,7 @@
 					</p>
 				</div>
 				<button
-					class="btn btn-sm preset-tonal-surface"
+					class="btn btn-sm preset-filled-surface-400-600"
 					onclick={handleCancel}
 					aria-label="Close character creator"
 				>
@@ -875,7 +875,7 @@
 				<div class="flex gap-2">
 					{#if steps[currentStep].canSkip && !isLastStep}
 						<button
-							class="btn preset-tonal-surface"
+							class="btn preset-filled-surface-400-600"
 							onclick={handleNext}
 						>
 							Skip

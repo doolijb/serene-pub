@@ -223,7 +223,7 @@
 				placeholder="300"
 			/>
 			<span class="text-surface-500 text-xs">seconds</span>
-			<button class="btn btn-sm preset-tonal-surface text-xs" onclick={saveTtl} disabled={savingTtl}>
+			<button class="btn btn-sm preset-filled-surface-400-600 text-xs" onclick={saveTtl} disabled={savingTtl}>
 				{#if savingTtl}<Icons.Loader2 size={12} class="animate-spin" />{:else}Save{/if}
 			</button>
 		</div>
@@ -246,7 +246,7 @@
 				class="input w-24 text-sm"
 				placeholder="5001"
 			/>
-			<button class="btn btn-sm preset-tonal-surface text-xs" onclick={savePort} disabled={savingPort}>
+			<button class="btn btn-sm preset-filled-surface-400-600 text-xs" onclick={savePort} disabled={savingPort}>
 				{#if savingPort}<Icons.Loader2 size={12} class="animate-spin" />{:else}Save{/if}
 			</button>
 		</div>

@@ -354,7 +354,7 @@
 				<p class="mb-4">Choose how to import:</p>
 				<div class="space-y-2">
 					<button
-						class="btn preset-tonal-surface w-full justify-start"
+						class="btn preset-filled-surface-400-600 w-full justify-start"
 						onclick={() => {
 							showImportModal = false
 							showLibraryModal = true

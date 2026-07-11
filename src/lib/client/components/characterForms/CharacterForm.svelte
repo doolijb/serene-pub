@@ -666,7 +666,7 @@
 			{#if !hideActionButtons}
 				<button
 					type="button"
-					class="btn btn-sm preset-tonal-surface shrink-0 p-2"
+					class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
 					onclick={handleCancel}
 					title="Cancel"
 					aria-label="Cancel and go back"
@@ -686,7 +686,7 @@
 			{/if}
 			{#if mode === "edit" && characterId}
 				<button
-					class="btn btn-sm preset-tonal-surface shrink-0"
+					class="btn btn-sm preset-filled-surface-400-600 shrink-0"
 					title="Export Character"
 					onclick={handleExportClick}
 					aria-label="Export character"

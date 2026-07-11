@@ -3,14 +3,12 @@ import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 
-const userId = 1
-
 interface SetupData {
 	summarizationStepComplete: boolean
 	ragStepComplete: boolean
 }
 
-async function getOrCreate(): Promise<SetupData> {
+async function getOrCreate(userId: number): Promise<SetupData> {
 	const existing = await db.query.setup.findFirst({
 		where: eq(schema.setup.userId, userId)
 	})
@@ -25,7 +23,8 @@ async function getOrCreate(): Promise<SetupData> {
 export const setupGet: Handler<Record<string, never>, { setup: SetupData }> = {
 	event: "setup:get",
 	handler: async (socket, params, emitToUser) => {
-		const row = await getOrCreate()
+		const userId = socket.user!.id
+		const row = await getOrCreate(userId)
 		const res = {
 			setup: {
 				summarizationStepComplete: row.summarizationStepComplete,
@@ -40,6 +39,7 @@ export const setupGet: Handler<Record<string, never>, { setup: SetupData }> = {
 export const setupMarkComplete: Handler<{ step: "summarization" | "rag" }, { setup: SetupData }> = {
 	event: "setup:markComplete",
 	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
 		const updates =
 			params.step === "summarization"
 				? { summarizationStepComplete: true }
@@ -53,7 +53,7 @@ export const setupMarkComplete: Handler<{ step: "summarization" | "rag" }, { set
 				set: updates
 			})
 
-		const row = await getOrCreate()
+		const row = await getOrCreate(userId)
 		const res = {
 			setup: {
 				summarizationStepComplete: row.summarizationStepComplete,

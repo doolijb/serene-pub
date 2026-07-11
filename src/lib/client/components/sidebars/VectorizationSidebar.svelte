@@ -516,7 +516,7 @@
 
                 <!-- Change model button -->
                 <button
-                    class="btn btn-sm preset-tonal-surface w-full text-xs"
+                    class="btn btn-sm preset-filled-surface-400-600 w-full text-xs"
                     onclick={openChangeModelModal}
                     disabled={isChangingModel}
                 >
@@ -606,7 +606,7 @@
         {/if}
 
         <footer class="flex justify-end gap-2">
-            <button class="btn preset-tonal-surface" onclick={cancelChangeModel} disabled={isChangingModel}>Cancel</button>
+            <button class="btn preset-filled-surface-400-600" onclick={cancelChangeModel} disabled={isChangingModel}>Cancel</button>
             <button
                 class="btn preset-filled-primary-500"
                 onclick={confirmChangeModel}

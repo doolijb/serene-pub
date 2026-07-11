@@ -246,7 +246,7 @@
 				disabled={contextConfig.isImmutable || !unsavedChanges}
 			>
 				<Icons.Save size={16} />
-				Save
+				Update
 			</button>
 			<button
 				class="btn btn-sm preset-filled-warning-500 shrink-0"

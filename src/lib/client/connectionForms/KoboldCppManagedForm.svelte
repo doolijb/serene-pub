@@ -165,7 +165,7 @@
 			<label class="font-semibold" for="model">Model</label>
 			<button
 				type="button"
-				class="btn btn-sm preset-tonal-surface"
+				class="btn btn-sm preset-filled-surface-400-600"
 				onclick={refreshModels}
 				title="Refresh models"
 			>
@@ -364,7 +364,7 @@
 								type="button"
 								class="px-3 py-1 transition-colors {koboldCppFields.enableThinking === opt.value
 									? 'preset-filled-primary-500'
-									: 'preset-tonal-surface'}"
+									: 'preset-filled-surface-400-600'}"
 								onclick={() => (koboldCppFields!.enableThinking = opt.value)}
 							>
 								{opt.label}

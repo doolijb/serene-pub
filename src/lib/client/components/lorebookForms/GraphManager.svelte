@@ -421,7 +421,7 @@
 				{nodes.length > 0 ? "Rebuild Graph" : "Build Graph"}
 			</button>
 			<button
-				class="btn btn-sm preset-tonal-surface"
+				class="btn btn-sm preset-filled-surface-400-600"
 				onclick={() => {
 					buildMode = "extend"
 					showBuildModal = true
@@ -442,21 +442,21 @@
 		{/if}
 		<div class="ml-auto flex gap-1">
 			<button
-				class="btn btn-sm preset-tonal-surface"
+				class="btn btn-sm preset-filled-surface-400-600"
 				onclick={() => { showCreateNodeForm = !showCreateNodeForm; editingNode = null; editingRel = null; connectingFromNode = null }}
 				title="Add node manually"
 			>
 				<Icons.Plus size={14} />
 			</button>
 			<button
-				class="btn btn-sm {viewMode === 'graph' ? 'preset-filled-surface-500' : 'preset-tonal-surface'}"
+				class="btn btn-sm {viewMode === 'graph' ? 'preset-filled-surface-500' : 'preset-filled-surface-400-600'}"
 				onclick={() => (viewMode = "graph")}
 				title="Graph view"
 			>
 				<Icons.Network size={14} />
 			</button>
 			<button
-				class="btn btn-sm {viewMode === 'list' ? 'preset-filled-surface-500' : 'preset-tonal-surface'}"
+				class="btn btn-sm {viewMode === 'list' ? 'preset-filled-surface-500' : 'preset-filled-surface-400-600'}"
 				onclick={() => (viewMode = "list")}
 				title="List view"
 			>
@@ -464,7 +464,7 @@
 			</button>
 		</div>
 		<button
-			class="btn btn-sm preset-tonal-surface"
+			class="btn btn-sm preset-filled-surface-400-600"
 			onclick={load}
 			title="Refresh"
 		>
@@ -501,7 +501,7 @@
 						</button>
 					{/if}
 					<button
-						class="btn btn-sm preset-tonal-surface"
+						class="btn btn-sm preset-filled-surface-400-600"
 						onclick={() => { if (activeBuild) buildMode = activeBuild.mode; showBuildModal = true }}
 					>
 						<Icons.Eye size={14} /> View Progress
@@ -583,7 +583,7 @@
 				</div>
 			{/if}
 			<div class="flex gap-2 justify-end">
-				<button class="btn btn-sm preset-tonal-surface" onclick={cancelCreateNode}>Cancel</button>
+				<button class="btn btn-sm preset-filled-surface-400-600" onclick={cancelCreateNode}>Cancel</button>
 				<button
 					class="btn btn-sm preset-filled-primary-500"
 					disabled={!createNodeName.trim() || isCreatingNode}
@@ -655,12 +655,12 @@
 					<span class="font-semibold">{selectedNode.name}</span>
 					<div class="flex gap-1">
 						<button
-							class="btn btn-sm preset-tonal-surface"
+							class="btn btn-sm preset-filled-surface-400-600"
 							onclick={() => startConnect(selectedNode!)}
 							title="Add relationship from this node"
 						><Icons.GitBranch size={13} /></button>
 						<button
-							class="btn btn-sm preset-tonal-surface"
+							class="btn btn-sm preset-filled-surface-400-600"
 							onclick={() => startEditNode(selectedNode!)}
 							title="Edit node"
 						><Icons.Pencil size={13} /></button>
@@ -675,7 +675,7 @@
 							title="Delete node"
 						><Icons.Trash2 size={13} /></button>
 						<button
-							class="btn btn-sm preset-tonal-surface"
+							class="btn btn-sm preset-filled-surface-400-600"
 							onclick={() => { selectedNode = null; editingRel = null }}
 						><Icons.X size={13} /></button>
 					</div>
@@ -748,9 +748,9 @@
 										</select>
 									{/if}
 									<div class="flex gap-2 justify-end">
-										<button class="btn btn-sm preset-tonal-surface" onclick={() => { editingRel = null }}>Cancel</button>
+										<button class="btn btn-sm preset-filled-surface-400-600" onclick={() => { editingRel = null }}>Cancel</button>
 										<button class="btn btn-sm preset-filled-primary-500" disabled={isSaving} onclick={saveRel}>
-											<Icons.Save size={13} /> Save
+											<Icons.Save size={13} /> Update
 										</button>
 									</div>
 								</div>
@@ -772,7 +772,7 @@
 										{/if}
 										<div class="flex gap-1 ml-auto">
 											<button
-												class="btn btn-sm preset-tonal-surface p-1"
+												class="btn btn-sm preset-filled-surface-400-600 p-1"
 												onclick={() => { editingRel = { ...rel }; selectedRel = rel }}
 												title="Edit relationship"
 											><Icons.Pencil size={11} /></button>
@@ -803,7 +803,7 @@
 					<p class="text-surface-500 text-xs">This will also permanently delete <strong>{relCount} relationship{relCount === 1 ? "" : "s"}</strong>.</p>
 				{/if}
 				<div class="flex gap-2 justify-end">
-					<button class="btn btn-sm preset-tonal-surface" onclick={() => (pendingDeleteNodeId = null)}>Cancel</button>
+					<button class="btn btn-sm preset-filled-surface-400-600" onclick={() => (pendingDeleteNodeId = null)}>Cancel</button>
 					<button class="btn btn-sm preset-filled-error-500" onclick={() => { confirmDeleteNode(); selectedNode = null }}>
 						<Icons.Trash2 size={13} /> Delete
 					</button>
@@ -863,7 +863,7 @@
 					</div>
 				{/if}
 				<div class="flex gap-2 justify-end">
-					<button class="btn btn-sm preset-tonal-surface" onclick={cancelConnect}>Cancel</button>
+					<button class="btn btn-sm preset-filled-surface-400-600" onclick={cancelConnect}>Cancel</button>
 					<button
 						class="btn btn-sm preset-filled-primary-500"
 						disabled={!connectToNodeId || isConnecting}
@@ -932,9 +932,9 @@
 					</div>
 				{/if}
 				<div class="flex gap-2 justify-end">
-					<button class="btn btn-sm preset-tonal-surface" onclick={cancelEdit}>Cancel</button>
+					<button class="btn btn-sm preset-filled-surface-400-600" onclick={cancelEdit}>Cancel</button>
 					<button class="btn btn-sm preset-filled-primary-500" disabled={isSaving} onclick={saveNode}>
-						<Icons.Save size={13} /> Save
+						<Icons.Save size={13} /> Update
 					</button>
 				</div>
 			</div>
@@ -947,7 +947,7 @@
 						{nodeName(selectedRel.fromNodeId)} → {selectedRel.relationshipType} → {nodeName(selectedRel.toNodeId)}
 					</span>
 					<div class="flex gap-1">
-						<button class="btn btn-sm preset-tonal-surface" onclick={() => startEditRel(selectedRel!)}>
+						<button class="btn btn-sm preset-filled-surface-400-600" onclick={() => startEditRel(selectedRel!)}>
 							<Icons.Pencil size={13} />
 						</button>
 						<button class="btn btn-sm preset-tonal-error" onclick={() => {
@@ -956,7 +956,7 @@
 						}}>
 							<Icons.Trash2 size={13} />
 						</button>
-						<button class="btn btn-sm preset-tonal-surface" onclick={() => (selectedRel = null)}>
+						<button class="btn btn-sm preset-filled-surface-400-600" onclick={() => (selectedRel = null)}>
 							<Icons.X size={13} />
 						</button>
 					</div>
@@ -1010,9 +1010,9 @@
 					</div>
 				{/if}
 				<div class="flex gap-2 justify-end">
-					<button class="btn btn-sm preset-tonal-surface" onclick={cancelEdit}>Cancel</button>
+					<button class="btn btn-sm preset-filled-surface-400-600" onclick={cancelEdit}>Cancel</button>
 					<button class="btn btn-sm preset-filled-primary-500" disabled={isSaving} onclick={saveRel}>
-						<Icons.Save size={13} /> Save
+						<Icons.Save size={13} /> Update
 					</button>
 				</div>
 			</div>
@@ -1032,7 +1032,7 @@
 							<div class="space-y-2">
 								<div class="flex items-center gap-2">
 									<input class="input flex-1 text-sm" type="text" bind:value={editingNode.name} />
-									<button class="btn btn-sm preset-tonal-surface" onclick={cancelEdit}>
+									<button class="btn btn-sm preset-filled-surface-400-600" onclick={cancelEdit}>
 										<Icons.X size={13} />
 									</button>
 									<button class="btn btn-sm preset-filled-primary-500" disabled={isSaving} onclick={saveNode}>
@@ -1085,7 +1085,7 @@
 								{#if node.nodeVisibility !== "normal"}
 									<span class="badge {NODE_VISIBILITY_COLOR[node.nodeVisibility] ?? 'preset-tonal-surface'} text-xs">{node.nodeVisibility}</span>
 								{/if}
-								<button class="btn btn-sm preset-tonal-surface" onclick={() => startEditNode(node)}>
+								<button class="btn btn-sm preset-filled-surface-400-600" onclick={() => startEditNode(node)}>
 									<Icons.Pencil size={13} />
 								</button>
 								<button class="btn btn-sm preset-tonal-error" onclick={() => requestDeleteNode(node.id)}>
@@ -1111,7 +1111,7 @@
 							<div class="space-y-2">
 								<div class="flex items-center gap-2">
 									<input class="input flex-1 text-sm" type="text" bind:value={editingRel.relationshipType} />
-									<button class="btn btn-sm preset-tonal-surface" onclick={cancelEdit}>
+									<button class="btn btn-sm preset-filled-surface-400-600" onclick={cancelEdit}>
 										<Icons.X size={13} />
 									</button>
 									<button class="btn btn-sm preset-filled-primary-500" disabled={isSaving} onclick={saveRel}>
@@ -1156,7 +1156,7 @@
 									<span class="badge {REL_VISIBILITY_BADGE[rel.visibility] ?? 'preset-tonal-surface'} text-xs">{rel.visibility}</span>
 								{/if}
 								<span class="badge {REL_STATUS_BADGE[rel.status] ?? 'preset-tonal-surface'} text-xs">{rel.status}</span>
-								<button class="btn btn-sm preset-tonal-surface" onclick={() => startEditRel(rel)}>
+								<button class="btn btn-sm preset-filled-surface-400-600" onclick={() => startEditRel(rel)}>
 									<Icons.Pencil size={13} />
 								</button>
 								<button class="btn btn-sm preset-tonal-error" onclick={() => deleteRel(rel.id)}>

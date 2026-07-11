@@ -334,7 +334,7 @@
 			<div class="mb-4 flex items-center gap-2">
 				<button
 					type="button"
-					class="btn btn-sm preset-tonal-surface p-2"
+					class="btn btn-sm preset-filled-surface-400-600 p-2"
 					onclick={handleBackToSidebar}
 					title="Back"
 				>
@@ -431,7 +431,7 @@
 				disabled={(!!sampling && sampling.isImmutable) ||
 					!unsavedChanges}
 			>
-				<Icons.Save size={16} /> Save
+				<Icons.Save size={16} /> Update
 			</button>
 			<button
 				type="button"

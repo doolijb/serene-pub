@@ -746,10 +746,11 @@
 								<div class="grid gap-3">
 									<!-- KoboldCpp -->
 									<button
-										class="card preset-tonal-surface flex items-start gap-4 p-5 text-left transition-transform hover:scale-[1.01] hover:preset-filled-surface-300-700"
+										class="card preset-filled-surface-400-600 flex items-start gap-4 p-5 text-left transition-transform hover:scale-[1.01] hover:preset-filled-surface-300-700"
 										onclick={() => {
 											connectionChoice = "koboldcpp"
 											socket.emit("systemSettings:updateKoboldCppManagerEnabled", { enabled: true })
+											socket.emit("systemSettings:updateOllamaManagerEnabled", { enabled: false })
 										}}
 									>
 										<span class="mt-0.5 inline-block h-8 w-8 flex-shrink-0" style="background-color: currentColor; mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain; -webkit-mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain;" aria-hidden="true"></span>
@@ -762,10 +763,11 @@
 									</button>
 									<!-- Ollama -->
 									<button
-										class="card preset-tonal-surface flex items-start gap-4 p-5 text-left transition-transform hover:scale-[1.01] hover:preset-filled-surface-300-700"
+										class="card preset-filled-surface-400-600 flex items-start gap-4 p-5 text-left transition-transform hover:scale-[1.01] hover:preset-filled-surface-300-700"
 										onclick={() => {
 											connectionChoice = "ollama"
 											socket.emit("systemSettings:updateOllamaManagerEnabled", { enabled: true })
+											socket.emit("systemSettings:updateKoboldCppManagerEnabled", { enabled: false })
 											checkOllamaConnection()
 										}}
 									>
@@ -779,9 +781,11 @@
 									</button>
 									<!-- Manual -->
 									<button
-										class="card preset-tonal-surface flex items-start gap-4 p-5 text-left transition-transform hover:scale-[1.01] hover:preset-filled-surface-300-700"
+										class="card preset-filled-surface-400-600 flex items-start gap-4 p-5 text-left transition-transform hover:scale-[1.01] hover:preset-filled-surface-300-700"
 										onclick={() => {
 											connectionChoice = "manual"
+											socket.emit("systemSettings:updateKoboldCppManagerEnabled", { enabled: false })
+											socket.emit("systemSettings:updateOllamaManagerEnabled", { enabled: false })
 											panelsCtx.digest.tutorial = true
 											openPanel("connections")
 										}}
@@ -870,7 +874,7 @@
 											placeholder="http://localhost:5001"
 										/>
 										<button
-											class="btn preset-tonal-surface"
+											class="btn preset-filled-surface-400-600"
 											onclick={checkKoboldCppConnection}
 											disabled={isCheckingKoboldCpp}
 										>
@@ -966,7 +970,7 @@
 											<button
 												class="card flex items-start gap-3 p-4 text-left transition-all {wizardSelectedModel === fastModels[0].id
 													? 'preset-filled-primary-500'
-													: 'preset-tonal-surface hover:preset-filled-surface-300-700'}"
+													: 'preset-filled-surface-400-600 hover:preset-filled-surface-300-700'}"
 												onclick={() => (wizardSelectedModel = fastModels[0].id)}
 											>
 												<Icons.Zap size={20} class="mt-0.5 flex-shrink-0" />
@@ -984,7 +988,7 @@
 											<button
 												class="card flex items-start gap-3 p-4 text-left transition-all {wizardSelectedModel === balancedModels[0].id
 													? 'preset-filled-primary-500'
-													: 'preset-tonal-surface hover:preset-filled-surface-300-700'}"
+													: 'preset-filled-surface-400-600 hover:preset-filled-surface-300-700'}"
 												onclick={() => (wizardSelectedModel = balancedModels[0].id)}
 											>
 												<Icons.Scale size={20} class="mt-0.5 flex-shrink-0" />
@@ -1002,7 +1006,7 @@
 											<button
 												class="card flex items-start gap-3 p-4 text-left transition-all {wizardSelectedModel === bestModels[0].id
 													? 'preset-filled-primary-500'
-													: 'preset-tonal-surface hover:preset-filled-surface-300-700'}"
+													: 'preset-filled-surface-400-600 hover:preset-filled-surface-300-700'}"
 												onclick={() => (wizardSelectedModel = bestModels[0].id)}
 											>
 												<Icons.Trophy size={20} class="mt-0.5 flex-shrink-0" />
@@ -1058,7 +1062,7 @@
 							</div>
 							<div class="grid gap-3 sm:grid-cols-2">
 								<button
-									class="card preset-tonal-surface flex flex-col items-start gap-2 p-5 text-left transition-transform hover:scale-[1.02] hover:preset-filled-surface-300-700"
+									class="card preset-filled-surface-400-600 flex flex-col items-start gap-2 p-5 text-left transition-transform hover:scale-[1.02] hover:preset-filled-surface-300-700"
 									onclick={() => (showCharacterLibrary = true)}
 								>
 									<div class="flex items-center gap-2 font-bold">
@@ -1071,7 +1075,7 @@
 								</button>
 								{#if userCtx.user?.isAdmin}
 								<button
-									class="card preset-tonal-surface flex flex-col items-start gap-2 p-5 text-left transition-transform hover:scale-[1.02] hover:preset-filled-surface-300-700"
+									class="card preset-filled-surface-400-600 flex flex-col items-start gap-2 p-5 text-left transition-transform hover:scale-[1.02] hover:preset-filled-surface-300-700"
 									onclick={() => {
 										closeWizard()
 										goto("/import")
@@ -1111,7 +1115,7 @@
 									{/if}
 								</div>
 								<button
-									class="card preset-tonal-surface flex flex-col items-start gap-2 p-5 text-left transition-transform hover:scale-[1.02] hover:preset-filled-surface-300-700"
+									class="card preset-filled-surface-400-600 flex flex-col items-start gap-2 p-5 text-left transition-transform hover:scale-[1.02] hover:preset-filled-surface-300-700"
 									onclick={() => (showCharacterCreator = true)}
 								>
 									<div class="flex items-center gap-2 font-bold">
@@ -1135,7 +1139,7 @@
 							</div>
 							<div class="grid gap-3 sm:grid-cols-2">
 								<button
-									class="card preset-tonal-surface flex flex-col items-start gap-2 p-5 text-left transition-transform hover:scale-[1.02] hover:preset-filled-surface-300-700"
+									class="card preset-filled-surface-400-600 flex flex-col items-start gap-2 p-5 text-left transition-transform hover:scale-[1.02] hover:preset-filled-surface-300-700"
 									onclick={() => (showPersonaLibrary = true)}
 								>
 									<div class="flex items-center gap-2 font-bold">
@@ -1147,7 +1151,7 @@
 									</p>
 								</button>
 								<button
-									class="card preset-tonal-surface flex flex-col items-start gap-2 p-5 text-left transition-transform hover:scale-[1.02] hover:preset-filled-surface-300-700"
+									class="card preset-filled-surface-400-600 flex flex-col items-start gap-2 p-5 text-left transition-transform hover:scale-[1.02] hover:preset-filled-surface-300-700"
 									onclick={() => {
 										closeWizard()
 										goto("/import")
@@ -1186,7 +1190,7 @@
 									{/if}
 								</div>
 								<button
-									class="card preset-tonal-surface flex flex-col items-start gap-2 p-5 text-left transition-transform hover:scale-[1.02] hover:preset-filled-surface-300-700"
+									class="card preset-filled-surface-400-600 flex flex-col items-start gap-2 p-5 text-left transition-transform hover:scale-[1.02] hover:preset-filled-surface-300-700"
 									onclick={() => (showPersonaCreator = true)}
 								>
 									<div class="flex items-center gap-2 font-bold">
@@ -1202,7 +1206,7 @@
 							<div class="text-center">
 								<p class="mb-2 text-sm opacity-50">Or, start simple:</p>
 								<button
-									class="btn preset-tonal-surface btn-sm"
+									class="btn preset-filled-surface-400-600 btn-sm"
 									onclick={createSamplePersona}
 								>
 									<Icons.User size={14} />
@@ -1223,7 +1227,7 @@
 								<div class="grid gap-2 sm:grid-cols-2">
 									{#each characters.slice(0, 6) as character (character.id)}
 										<button
-											class="card preset-tonal-surface flex items-center gap-3 p-4 text-left transition-all hover:preset-filled-surface-300-700"
+											class="card preset-filled-surface-400-600 flex items-center gap-3 p-4 text-left transition-all hover:preset-filled-surface-300-700"
 											onclick={() => startChatWithCharacter(character)}
 										>
 											<div class="h-12 w-12 flex-shrink-0">
@@ -1257,7 +1261,7 @@
 				<div class="flex items-center justify-between gap-4">
 					<!-- Left: back — goes to choice picker when in a connection sub-flow, else previous step -->
 					{#if wizardStep > 0 || connectionChoice !== null}
-						<button class="btn preset-tonal-surface" onclick={() => {
+						<button class="btn preset-filled-surface-400-600" onclick={() => {
 							if (currentWizardStep?.id === "connection-setup" && connectionChoice !== null) {
 								connectionChoice = null
 							} else {
@@ -1341,7 +1345,7 @@
 
 					{:else if currentWizardStep?.id === "summarization"}
 						<div class="flex items-center gap-2">
-							<button class="btn preset-tonal-surface btn-sm" onclick={() => { markSetupComplete("summarization"); nextWizardStep() }}>
+							<button class="btn preset-filled-surface-400-600 btn-sm" onclick={() => { markSetupComplete("summarization"); nextWizardStep() }}>
 								Skip for now
 							</button>
 							<button
@@ -1361,7 +1365,7 @@
 
 					{:else if currentWizardStep?.id === "vectorization"}
 						<div class="flex items-center gap-2">
-							<button class="btn preset-tonal-surface btn-sm" onclick={() => { markSetupComplete("rag"); nextWizardStep() }}>
+							<button class="btn preset-filled-surface-400-600 btn-sm" onclick={() => { markSetupComplete("rag"); nextWizardStep() }}>
 								Skip for now
 							</button>
 							<button
@@ -1380,17 +1384,17 @@
 						</div>
 
 					{:else if currentWizardStep?.id === "character"}
-						<button class="btn preset-tonal-surface btn-sm" onclick={nextWizardStep}>
+						<button class="btn preset-filled-surface-400-600 btn-sm" onclick={nextWizardStep}>
 							Skip for now
 						</button>
 
 					{:else if currentWizardStep?.id === "persona"}
-						<button class="btn preset-tonal-surface btn-sm" onclick={nextWizardStep}>
+						<button class="btn preset-filled-surface-400-600 btn-sm" onclick={nextWizardStep}>
 							Skip for now
 						</button>
 
 					{:else if currentWizardStep?.id === "create-chat"}
-						<button class="btn preset-tonal-surface btn-sm" onclick={() => panelsCtx.openPanel({ key: "chats", toggle: false })}>
+						<button class="btn preset-filled-surface-400-600 btn-sm" onclick={() => panelsCtx.openPanel({ key: "chats", toggle: false })}>
 							<Icons.MessageSquare size={14} />
 							Open Chats Panel
 						</button>

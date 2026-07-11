@@ -121,14 +121,14 @@
 				</div>
 			</div>
 			<button
-				class="btn btn-sm preset-tonal-surface"
+				class="btn btn-sm preset-filled-surface-400-600"
 				title="Open in lorebook"
 				onclick={() => onOpenEntry(lorebookId, latestEntry.id)}
 			>
 				<Icons.ExternalLink size={13} />
 			</button>
 			<button
-				class="btn btn-sm preset-tonal-surface"
+				class="btn btn-sm preset-filled-surface-400-600"
 				title="Start new history entry"
 				disabled={isCreatingEntry}
 				onclick={handleNewEntry}

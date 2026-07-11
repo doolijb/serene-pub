@@ -975,7 +975,7 @@ export const chatMessages = pgTable(
 		isGenerating: boolean("is_generating").notNull().default(false), // 1 if processing, 0 otherwise
 		generationStage: text("generation_stage"), // 'queued' | 'loading' | 'generating' | null; only meaningful while isGenerating
 		error: json("error").$type<{ message: string; code?: string } | null>(),
-		queueItemId: text("queue_item_id"), // UUID of the current llmQueue item / activeAdapters entry, nullable
+		queueItemId: text("queue_item_id"), // UUID of the current llmQueue item, nullable
 		isHidden: boolean("is_hidden").notNull().default(false), // Whether this message is processed or not
 		debugMeta: json("debug_meta").$type<Record<string, any>>(),
 		embedding: real("embedding").array(),
@@ -1222,7 +1222,7 @@ export const systemSettingsRelations = relations(systemSettings, ({ one }) => ({
 
 export const ollamaSettings = pgTable("ollama_settings", {
 	id: integer("id").primaryKey().default(1),
-	ollamaManagerEnabled: boolean("ollama_manager_enabled").notNull().default(true),
+	ollamaManagerEnabled: boolean("ollama_manager_enabled").notNull().default(false),
 	ollamaManagerBaseUrl: text("ollama_base_url").notNull().default("http://localhost:11434/")
 })
 

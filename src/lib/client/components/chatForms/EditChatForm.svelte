@@ -734,7 +734,7 @@
 	<div class="flex min-h-full flex-col gap-6">
 		<div class="flex items-center gap-2">
 			<button
-				class="btn btn-sm preset-tonal-surface shrink-0 p-2"
+				class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
 				onclick={handleCloseForm}
 				title="Cancel"
 			>

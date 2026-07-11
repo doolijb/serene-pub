@@ -4,6 +4,10 @@
  */
 
 import { CharacterCard, type SpecV3 } from "@lenml/char-card-reader"
+import extract from "png-chunks-extract"
+import encode from "png-chunks-encode"
+import text from "png-chunk-text"
+import { fileTypeFromBuffer } from "file-type"
 
 export interface ParsedCharacterCard {
 	card: CharacterCard
@@ -22,8 +26,14 @@ export interface ParsedCharacterCard {
 export async function parseCharacterCard(
 	buffer: Buffer
 ): Promise<ParsedCharacterCard> {
-	// Parse character card using @lenml/char-card-reader
-	const card = await CharacterCard.from_file(buffer)
+	// CharacterCard.from_file() only understands image formats (PNG/JPEG/WebP)
+	// metadata — it throws "Unsupported image format" on a plain JSON buffer.
+	// Sniff the actual file type so JSON character cards route to from_json()
+	// instead.
+	const fileType = await fileTypeFromBuffer(buffer)
+	const card = fileType?.mime.startsWith("image/")
+		? await CharacterCard.from_file(buffer)
+		: CharacterCard.from_json(JSON.parse(buffer.toString("utf8")))
 
 	if (!card) {
 		throw new Error("Failed to parse character card")
@@ -64,4 +74,113 @@ export async function parseCharacterCardFromBase64(
 ): Promise<ParsedCharacterCard> {
 	const buffer = Buffer.from(base64String, "base64")
 	return parseCharacterCard(buffer)
+}
+
+/** Plain input for buildCharacterCardV2 — deliberately decoupled from the DB row shape. */
+export interface CharacterCardV2Input {
+	name: string
+	description?: string | null
+	personality?: string | null
+	scenario?: string | null
+	firstMessage?: string | null
+	exampleDialogues?: string | string[] | null
+	creatorNotes?: string | null
+	systemPrompt?: string | null
+	postHistoryInstructions?: string | null
+	alternateGreetings?: string[] | null
+	tags?: string[]
+	creator?: string | null
+	characterVersion?: string | null
+	depthPrompt?: string | null
+	depthPromptDepth?: number | null
+	depthPromptRole?: string | null
+	source?: string[] | null
+	groupOnlyGreetings?: string[] | null
+	aliases?: string[] | null
+	summary?: string | null
+}
+
+/**
+ * Build a CharacterCard V2 JSON object from a character's data. Used for
+ * both JSON export and PNG-embedded export (characters:exportCard).
+ */
+export function buildCharacterCardV2(character: CharacterCardV2Input) {
+	return {
+		spec: "chara_card_v2",
+		spec_version: "2.0",
+		data: {
+			name: character.name,
+			description: character.description || "",
+			personality: character.personality || "",
+			scenario: character.scenario || "",
+			first_mes: character.firstMessage || "",
+			mes_example:
+				typeof character.exampleDialogues === "string"
+					? character.exampleDialogues
+					: (character.exampleDialogues || []).join("<START>"),
+			creator_notes: character.creatorNotes || "",
+			system_prompt: character.systemPrompt || "",
+			post_history_instructions: character.postHistoryInstructions || "",
+			alternate_greetings: character.alternateGreetings || [],
+			tags: character.tags || [],
+			creator: character.creator || "",
+			character_version: character.characterVersion || "",
+			extensions: {
+				depth_prompt: {
+					prompt: character.depthPrompt || "",
+					depth: character.depthPromptDepth || 4,
+					role: character.depthPromptRole || "system"
+				},
+				...(character.source && character.source.length > 0
+					? { source: character.source }
+					: {}),
+				...(character.groupOnlyGreetings &&
+				character.groupOnlyGreetings.length > 0
+					? { group_only_greetings: character.groupOnlyGreetings }
+					: {}),
+				serenepub: {
+					...(character.aliases && character.aliases.length > 0
+						? { aliases: character.aliases }
+						: {}),
+					...(character.summary ? { summary: character.summary } : {})
+				}
+			}
+		}
+	}
+}
+
+/**
+ * Embed a character card JSON object into a PNG's tEXt chunks, replacing any
+ * existing "chara"/"ccv3" chunk. Mirrors how SillyTavern and other tools
+ * embed character data directly in the avatar PNG.
+ */
+export function embedCharacterCardInPng(
+	pngBuffer: Buffer,
+	cardData: unknown
+): Buffer {
+	const chunks = extract(pngBuffer)
+
+	const base64Data = Buffer.from(JSON.stringify(cardData), "utf-8").toString(
+		"base64"
+	)
+	const textChunk = text.encode("chara", base64Data)
+
+	// Remove any existing "chara" or "ccv3" chunks
+	const filteredChunks = chunks.filter((chunk) => {
+		if (chunk.name === "tEXt") {
+			const decoded = text.decode(chunk.data)
+			return decoded.keyword !== "chara" && decoded.keyword !== "ccv3"
+		}
+		return true
+	})
+
+	// Insert the new chunk before the IEND chunk
+	const iendIndex = filteredChunks.findIndex((chunk) => chunk.name === "IEND")
+	if (iendIndex !== -1) {
+		filteredChunks.splice(iendIndex, 0, textChunk)
+	} else {
+		filteredChunks.push(textChunk)
+	}
+
+	return Buffer.from(encode(filteredChunks))
 }

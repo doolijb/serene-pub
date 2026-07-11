@@ -41,9 +41,7 @@ export async function runQueuedLLMCall({
 		chatId,
 		lorebookId,
 		label,
-		preflight: adapter.preflight
-			? (signal) => adapter.preflight(signal)
-			: undefined,
+		preflight: (signal) => adapter.preflight(signal),
 		execute: async (signal) => {
 			const { completionResult, isAborted, thinkingContent } = await adapter.generate()
 

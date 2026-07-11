@@ -123,7 +123,9 @@
 	{#snippet content()}
 		<div class="flex gap-4">
 			<div role="group" aria-label="Message controls">
-				{@render leftControls?.()}
+				{#if tabGroup === "compose" || tabGroup === "preview"}
+					{@render leftControls?.()}
+				{/if}
 			</div>
 			<div class="w-full">
 				<Tabs.Panel value="compose">

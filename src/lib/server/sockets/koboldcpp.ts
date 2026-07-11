@@ -1058,7 +1058,7 @@ export const koboldCppDeleteModelHandler: Handler<
 		await db.delete(schema.koboldCppModels).where(eq(schema.koboldCppModels.filename, params.modelName))
 		await db.delete(schema.connections).where(
 			and(
-				eq(schema.connections.type, "koboldcpp"),
+				eq(schema.connections.type, CONNECTION_TYPE.KOBOLDCPP_MANAGED),
 				eq(schema.connections.model, params.modelName)
 			)
 		)

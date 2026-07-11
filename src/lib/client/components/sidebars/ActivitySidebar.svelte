@@ -192,7 +192,7 @@
 						{/if}
 						{#if isOwnActivity}
 							{#if build.status === "building"}
-								<button class="btn btn-sm preset-tonal-surface" onclick={openModal}>
+								<button class="btn btn-sm preset-filled-surface-400-600" onclick={openModal}>
 									<Icons.Eye size={14} /> View Progress
 								</button>
 							{:else if build.status === "review"}
@@ -283,7 +283,7 @@
 						</div>
 					{:else if isOwn && activity.status === "error"}
 						<div class="flex items-center gap-2">
-							<button class="btn btn-sm preset-tonal-surface" onclick={() => navigateToScene(activity)}>
+							<button class="btn btn-sm preset-filled-surface-400-600" onclick={() => navigateToScene(activity)}>
 								<Icons.ExternalLink size={14} /> Go to Scene
 							</button>
 						</div>
@@ -362,7 +362,7 @@
 						</div>
 					{:else if isOwn && activity.status === "error"}
 						<div class="flex items-center gap-2">
-							<button class="btn btn-sm preset-tonal-surface" onclick={() => navigateToCompileEntry(activity)}>
+							<button class="btn btn-sm preset-filled-surface-400-600" onclick={() => navigateToCompileEntry(activity)}>
 								<Icons.ExternalLink size={14} /> Go to Entry
 							</button>
 						</div>
@@ -400,12 +400,19 @@
 								</p>
 							</div>
 							<div class="flex shrink-0 items-center gap-2">
+								{#if task.status !== "generating"}
+									<span class="text-surface-500 text-xs capitalize">{task.status}</span>
+								{/if}
 								<div class="bg-primary-500 h-1.5 w-1.5 animate-pulse rounded-full"></div>
 								<Icons.ChevronDown size={14} class="text-surface-400 transition-transform {expanded ? 'rotate-180' : ''}" />
 							</div>
 						</button>
 						{#if expanded}
 							<div class="bg-surface-100-900 px-4 py-3 text-xs space-y-1.5">
+								<div class="flex justify-between gap-2">
+									<span class="text-surface-500">Status</span>
+									<span class="font-mono text-right capitalize">{task.status}</span>
+								</div>
 								<div class="flex justify-between gap-2">
 									<span class="text-surface-500">Type</span>
 									<span class="font-mono text-right">{task.taskType}</span>

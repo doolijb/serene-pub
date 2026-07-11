@@ -692,7 +692,7 @@
 		class="preset-filled-surface-100-950 border-surface-400-600 flex items-center gap-4 border-b p-4"
 	>
 		<button
-			class="btn preset-tonal-surface"
+			class="btn preset-filled-surface-400-600"
 			onclick={handleBackButton}
 			title="Back to Serenity"
 		>

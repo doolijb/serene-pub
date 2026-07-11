@@ -20,6 +20,7 @@
 	type Status = Sockets.KoboldCpp.SubprocessStatus.Response
 	let subStatus = $state<Status | null>(null)
 	let currentModel = $state<string | null>(null)
+	let currentContext = $state<number | null>(null)
 	let adminEnabled = $state(false)
 	let unloading = $state(false)
 	let starting = $state(false)
@@ -79,8 +80,16 @@
 				const d = await vResp.json()
 				adminEnabled = !!d.admin
 			}
+			const cResp = await fetch(`${baseUrl}/api/extra/true_max_context_length`)
+			if (cResp.ok) {
+				const d = await cResp.json()
+				currentContext = typeof d.value === "number" ? d.value : null
+			} else {
+				currentContext = null
+			}
 		} catch {
 			currentModel = null
+			currentContext = null
 		}
 	}
 
@@ -125,6 +134,7 @@
 				unloading = false
 				if (msg.success) {
 					currentModel = null
+					currentContext = null
 					toaster.success({ title: "Model unloaded" })
 				} else {
 					toaster.error({ title: "Unload not supported by this build" })
@@ -195,7 +205,12 @@
 				<p class="text-surface-500 mb-1 text-xs font-semibold uppercase tracking-wide">Loaded model</p>
 				<div class="flex items-center gap-2">
 					<Icons.Brain size={14} class="text-surface-400 shrink-0" />
-					<span class="min-w-0 flex-1 truncate text-xs">{currentModel ?? "No model loaded"}</span>
+					<span class="min-w-0 flex-1 truncate text-xs">
+						{currentModel ?? "No model loaded"}
+						{#if currentModel && currentContext}
+							<span class="text-surface-500">· {currentContext.toLocaleString()} ctx</span>
+						{/if}
+					</span>
 					{#if currentModel}
 						<button
 							class="btn btn-sm preset-tonal-warning shrink-0 text-xs"

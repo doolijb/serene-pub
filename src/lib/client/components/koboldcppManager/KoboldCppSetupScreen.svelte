@@ -61,7 +61,7 @@
 			<div>
 				<p class="text-sm font-semibold">Let Serene Pub manage it</p>
 				<p class="text-surface-500 mt-1 text-xs leading-relaxed">
-					Download a KoboldCPP binary and let Serene Pub start, stop, and load models
+					Automatically download a KoboldCPP binary and let Serene Pub start, stop, and load models
 					automatically.
 				</p>
 			</div>
@@ -82,7 +82,7 @@
 			<div>
 				<p class="text-sm font-semibold">I'll manage it myself</p>
 				<p class="text-surface-500 mt-1 text-xs leading-relaxed">
-					Start KoboldCPP yourself and connect Serene Pub to the running instance via URL.
+					Start KoboldCPP yourself and connect Serene Pub to the running instance via URL. The <code class="code">--admin</code> API is required for integration.
 				</p>
 			</div>
 			<span class="text-surface-500 mt-auto text-xs">Manual setup</span>

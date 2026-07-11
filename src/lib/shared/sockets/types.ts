@@ -2965,9 +2965,38 @@ declare global {
 		// Import namespace
 		namespace Import {
 			namespace SillyTavern {
+				namespace StartSession {
+					interface Params {}
+					interface Response {
+						success: boolean
+						importSessionId?: string
+						error?: string
+					}
+				}
+				namespace StageFiles {
+					/**
+					 * Files are concatenated into a single blob with a manifest
+					 * describing how to slice it back apart — socket.io's binary
+					 * parser reliably supports one large binary attachment per
+					 * message, but disconnects the transport almost immediately
+					 * when a message contains more than ~10-14 separate binary
+					 * attachments (verified empirically against socket.io 4.8.x),
+					 * regardless of total payload size.
+					 */
+					interface Params {
+						importSessionId: string
+						manifest: Array<{ relativePath: string; length: number }>
+						blob: Uint8Array
+					}
+					interface Response {
+						success: boolean
+						staged?: number
+						error?: string
+					}
+				}
 				namespace Scan {
 					interface Params {
-						directoryPath: string
+						importSessionId: string
 					}
 					interface Response {
 						success: boolean
@@ -3011,7 +3040,7 @@ declare global {
 				}
 				namespace Execute {
 					interface Params {
-						directoryPath: string
+						importSessionId: string
 						selectedData: {
 							characters: Array<{
 								filename: string
@@ -3185,6 +3214,7 @@ declare global {
 				taskType: string
 				connectionName: string
 				samplingName: string
+				status: "queued" | "loading" | "generating" | "done" | "error" | "cancelled"
 				startedAt: string
 				chatId?: number
 				lorebookId?: number

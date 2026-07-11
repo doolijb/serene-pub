@@ -73,7 +73,7 @@
 					open={menuOpen}
 					onOpenChange={(e) => (menuOpen = e.open)}
 					positioning={{ placement: "bottom-end" }}
-					triggerBase="btn btn-sm preset-tonal-surface p-1 shrink-0"
+					triggerBase="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0"
 					contentBase="card bg-surface-100-900 shadow-xl p-2 flex flex-col gap-1 min-w-32"
 					zIndex="1000"
 				>
@@ -83,7 +83,7 @@
 					{#snippet content()}
 						{#if onclick}
 							<button
-								class="btn btn-sm preset-tonal-surface w-full justify-start"
+								class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
 								onclick={() => { menuOpen = false; handleClick() }}
 								type="button"
 							>
@@ -92,7 +92,7 @@
 						{/if}
 						{#if onEdit}
 							<button
-								class="btn btn-sm preset-tonal-surface w-full justify-start"
+								class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
 								onclick={() => { menuOpen = false; onEdit?.(persona.id!) }}
 								type="button"
 							>

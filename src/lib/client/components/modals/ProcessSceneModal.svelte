@@ -251,7 +251,7 @@
 							onkeydown={(e) => e.key === "Enter" && addParticipant()}
 							onblur={addParticipant}
 						/>
-						<button class="btn btn-sm preset-tonal-surface" onclick={addParticipant} disabled={!newParticipantInput.trim()}>
+						<button class="btn btn-sm preset-filled-surface-400-600" onclick={addParticipant} disabled={!newParticipantInput.trim()}>
 							<Icons.Plus size={12} />
 						</button>
 					</div>
@@ -280,7 +280,7 @@
 							onkeydown={(e) => e.key === "Enter" && addMentioned()}
 							onblur={addMentioned}
 						/>
-						<button class="btn btn-sm preset-tonal-surface" onclick={addMentioned} disabled={!newMentionedInput.trim()}>
+						<button class="btn btn-sm preset-filled-surface-400-600" onclick={addMentioned} disabled={!newMentionedInput.trim()}>
 							<Icons.Plus size={12} />
 						</button>
 					</div>

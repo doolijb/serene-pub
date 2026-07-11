@@ -11,6 +11,7 @@ import { type CompiledPrompt } from "../utils/promptBuilder"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { koboldCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+import { fetchCurrentModelName } from "$lib/server/koboldcpp/kcppHttp"
 
 // Plain/"dumb" KoboldCpp connection: the user runs and configures their own
 // koboldcpp instance entirely themselves. No admin API is assumed, so there's
@@ -397,19 +398,7 @@ async function listModels(
 	try {
 		const baseUrl = connection.baseUrl || "http://localhost:5001"
 
-		const currentModelResponse = await fetch(`${baseUrl}/api/v1/model`, {
-			method: "GET",
-			headers: {
-				"Content-Type": "application/json"
-			},
-			signal: AbortSignal.timeout(5000)
-		})
-
-		let currentModel = "No model loaded"
-		if (currentModelResponse.ok) {
-			const data = await currentModelResponse.json()
-			currentModel = data.result || "No model loaded"
-		}
+		const currentModel = (await fetchCurrentModelName(baseUrl)) || "No model loaded"
 
 		const models = [
 			{

@@ -111,7 +111,7 @@ export class CONNECTION_TYPE {
 		},
 		{
 			value: CONNECTION_TYPE.KOBOLDCPP_MANAGED,
-			label: "KoboldCPP (Managed)",
+			label: "KoboldCPP Manager",
 			description: koboldCppManagedDesc,
 			difficulty: koboldCppManagedDiff
 		},

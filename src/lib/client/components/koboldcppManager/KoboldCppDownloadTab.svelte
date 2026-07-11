@@ -339,7 +339,7 @@
 					<h2 class="text-lg font-bold">Select Quantization</h2>
 					<p class="text-muted-foreground mt-0.5 text-sm">{selectedModel.name}</p>
 				</div>
-				<button class="btn btn-sm preset-tonal-surface" onclick={() => { showQuantModal = false; selectedModel = null }}>
+				<button class="btn btn-sm preset-filled-surface-400-600" onclick={() => { showQuantModal = false; selectedModel = null }}>
 					<Icons.X size={16} />
 				</button>
 			</div>
@@ -372,7 +372,7 @@
 			</div>
 
 			<div class="flex justify-end">
-				<button class="btn preset-tonal-surface" onclick={() => { showQuantModal = false; selectedModel = null }}>
+				<button class="btn preset-filled-surface-400-600" onclick={() => { showQuantModal = false; selectedModel = null }}>
 					Cancel
 				</button>
 			</div>

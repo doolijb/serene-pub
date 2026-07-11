@@ -157,7 +157,7 @@
 				<span class="inline-block h-5 w-5 flex-shrink-0" style="background-color: currentColor; mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain; -webkit-mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain;" aria-hidden="true"></span>
 				<span class="text-sm font-semibold">Download KoboldCPP</span>
 			</div>
-			<button class="btn btn-sm preset-tonal-surface text-xs" onclick={handleReset}>
+			<button class="btn btn-sm preset-filled-surface-400-600 text-xs" onclick={handleReset}>
 				<Icons.ArrowLeft size={12} />
 				Back
 			</button>
@@ -178,7 +178,7 @@
 				<span class="inline-block h-5 w-5 flex-shrink-0" style="background-color: currentColor; mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain; -webkit-mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain;" aria-hidden="true"></span>
 				<span class="text-sm font-semibold">Connect to KoboldCPP</span>
 			</div>
-			<button class="btn btn-sm preset-tonal-surface text-xs" onclick={handleReset}>
+			<button class="btn btn-sm preset-filled-surface-400-600 text-xs" onclick={handleReset}>
 				<Icons.ArrowLeft size={12} />
 				Back
 			</button>
@@ -214,7 +214,7 @@
 					{/if}
 				</button>
 				<button
-					class="btn preset-tonal-surface"
+					class="btn preset-filled-surface-400-600"
 					onclick={checkConnection}
 					disabled={isTesting}
 					title="Test connection"

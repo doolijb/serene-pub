@@ -684,7 +684,7 @@
 						open={openMenuEntryId === entry.id}
 						onOpenChange={(e) => (openMenuEntryId = e.open ? entry.id : null)}
 						positioning={{ placement: "bottom-end" }}
-						triggerBase="btn btn-sm preset-tonal-surface p-1 shrink-0"
+						triggerBase="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0"
 						contentBase="card bg-surface-100-900 shadow-xl p-2 flex flex-col gap-1 min-w-32"
 						zIndex="1000"
 					>
@@ -693,13 +693,13 @@
 						{/snippet}
 						{#snippet content()}
 							<button
-								class="btn btn-sm preset-tonal-surface w-full justify-start"
+								class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
 								onclick={(e) => { e.stopPropagation(); openMenuEntryId = null; viewEntry(entry) }}
 							>
 								<Icons.Eye size={14} /> View
 							</button>
 							<button
-								class="btn btn-sm preset-tonal-surface w-full justify-start"
+								class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
 								onclick={(e) => { e.stopPropagation(); openMenuEntryId = null; editEntry(entry) }}
 							>
 								<Icons.Pencil size={14} /> Edit
@@ -728,7 +728,7 @@
 	<div class="flex flex-col gap-4">
 		<!-- Header -->
 		<div class="flex items-center gap-2">
-			<button class="btn btn-sm preset-tonal-surface p-2" onclick={goBack}>
+			<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={goBack}>
 				<Icons.ChevronLeft size={16} />
 			</button>
 			<h3 class="flex-1 text-sm font-semibold">
@@ -739,11 +739,11 @@
 		<!-- Tabs -->
 		<div class="flex gap-1 border-b border-surface-300-700 pb-1">
 			<button
-				class="btn btn-sm {focusedEntryTab === 'content' ? 'preset-filled-primary-500' : 'preset-tonal-surface'}"
+				class="btn btn-sm {focusedEntryTab === 'content' ? 'preset-filled-primary-500' : 'preset-filled-surface-400-600'}"
 				onclick={() => (focusedEntryTab = "content")}
 			>Content</button>
 			<button
-				class="btn btn-sm {focusedEntryTab === 'scenes' ? 'preset-filled-primary-500' : 'preset-tonal-surface'}"
+				class="btn btn-sm {focusedEntryTab === 'scenes' ? 'preset-filled-primary-500' : 'preset-filled-surface-400-600'}"
 				onclick={() => (focusedEntryTab = "scenes")}
 			>
 				<Icons.Film size={13} /> Scenes
@@ -797,15 +797,15 @@
 				{@const editingScene = viewScenes.find((s) => s.id === editingSceneId)}
 				<div class="flex flex-col gap-4">
 					<div class="flex items-center gap-2">
-						<button class="btn btn-sm preset-tonal-surface p-2" onclick={cancelEditScene}>
+						<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={cancelEditScene}>
 							<Icons.ChevronLeft size={16} />
 						</button>
 						<h4 class="flex-1 truncate text-sm font-semibold">{editingScene?.name ?? "Scene"}</h4>
 					</div>
 					<div class="flex gap-2">
-						<button class="btn btn-sm preset-tonal-surface" onclick={cancelEditScene}>Cancel</button>
+						<button class="btn btn-sm preset-filled-surface-400-600" onclick={cancelEditScene}>Cancel</button>
 						<button class="btn btn-sm preset-filled-success-500" onclick={saveEditScene}>
-							<Icons.Save size={14} /> Save
+							<Icons.Save size={14} /> Update
 						</button>
 					</div>
 					<input class="input input-sm w-full text-sm" type="text" placeholder="Scene name" bind:value={editingSceneName} />
@@ -822,7 +822,7 @@
 						<div class="flex gap-1">
 							<input class="input input-sm flex-1 text-xs" type="text" placeholder="Add participant…" bind:value={newParticipantInput}
 								onkeydown={(e) => e.key === "Enter" && (e.preventDefault(), addParticipant())} />
-							<button class="btn btn-sm preset-tonal-surface p-1" onclick={addParticipant} disabled={!newParticipantInput.trim()}><Icons.Plus size={12} /></button>
+							<button class="btn btn-sm preset-filled-surface-400-600 p-1" onclick={addParticipant} disabled={!newParticipantInput.trim()}><Icons.Plus size={12} /></button>
 						</div>
 					</div>
 					<div class="space-y-1">
@@ -837,7 +837,7 @@
 						<div class="flex gap-1">
 							<input class="input input-sm flex-1 text-xs" type="text" placeholder="Add mentioned…" bind:value={newMentionedInput}
 								onkeydown={(e) => e.key === "Enter" && (e.preventDefault(), addMentioned())} />
-							<button class="btn btn-sm preset-tonal-surface p-1" onclick={addMentioned} disabled={!newMentionedInput.trim()}><Icons.Plus size={12} /></button>
+							<button class="btn btn-sm preset-filled-surface-400-600 p-1" onclick={addMentioned} disabled={!newMentionedInput.trim()}><Icons.Plus size={12} /></button>
 						</div>
 					</div>
 				</div>
@@ -853,7 +853,7 @@
 					{@const hasSummary = !!scene.summary}
 					<div class="flex flex-col gap-4">
 						<div class="flex items-center gap-2">
-							<button class="btn btn-sm preset-tonal-surface p-2" onclick={() => focusedSceneId = null}>
+							<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={() => focusedSceneId = null}>
 								<Icons.ChevronLeft size={16} />
 							</button>
 							<h4 class="flex-1 truncate text-sm font-semibold">{scene.name ?? "Unnamed Scene"}</h4>
@@ -874,7 +874,7 @@
 								><Icons.Pencil size={14} /> Edit Scene</button>
 								{#if hasMessages}
 									<button
-										class="btn btn-sm preset-tonal-surface"
+										class="btn btn-sm preset-filled-surface-400-600"
 										disabled={isProcessing}
 										onclick={() => processScene(scene.id)}
 									>
@@ -968,7 +968,7 @@
 										open={openMenuSceneId === scene.id}
 										onOpenChange={(e) => (openMenuSceneId = e.open ? scene.id : null)}
 										positioning={{ placement: "bottom-end" }}
-										triggerBase="btn btn-sm preset-tonal-surface p-1 shrink-0"
+										triggerBase="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0"
 										contentBase="card bg-surface-100-900 shadow-xl p-2 flex flex-col gap-1 min-w-36"
 										zIndex="1000"
 									>
@@ -979,14 +979,14 @@
 													onclick={() => { openMenuSceneId = null; openProcessModal(pendingActivity) }}
 												><Icons.Eye size={13} /> Review</button>
 											{:else if hasMessages}
-												<button class="btn btn-sm preset-tonal-surface w-full justify-start"
+												<button class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
 													disabled={isProcessing}
 													onclick={() => { openMenuSceneId = null; processScene(scene.id) }}
 												>
 													{#if hasSummary}<Icons.RefreshCw size={13} /> Reprocess{:else}<Icons.Sparkles size={13} /> Process{/if}
 												</button>
 											{/if}
-											<button class="btn btn-sm preset-tonal-surface w-full justify-start"
+											<button class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
 												onclick={() => { openMenuSceneId = null; startEditScene(scene) }}
 											><Icons.Pencil size={13} /> Edit</button>
 											<hr class="border-surface-300-700" />
@@ -1020,7 +1020,7 @@
 	<div class="flex flex-col gap-4">
 		<!-- Header -->
 		<div class="flex items-center gap-2">
-			<button class="btn btn-sm preset-tonal-surface p-2" onclick={goBack}>
+			<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={goBack}>
 				<Icons.ChevronLeft size={16} />
 			</button>
 			<h3 class="flex-1 text-sm font-semibold">
@@ -1035,7 +1035,7 @@
 		<!-- Content | Scenes tabs (scenes only available when editing existing entry) -->
 		<div class="flex gap-1 border-b border-surface-300-700 pb-1">
 			<button
-				class="btn btn-sm {focusedEntryTab === 'content' ? 'preset-filled-primary-500' : 'preset-tonal-surface'}"
+				class="btn btn-sm {focusedEntryTab === 'content' ? 'preset-filled-primary-500' : 'preset-filled-surface-400-600'}"
 				onclick={() => (focusedEntryTab = "content")}
 				disabled={hasUnsavedChanges && focusedEntryTab !== "content"}
 			>
@@ -1043,7 +1043,7 @@
 			</button>
 			{#if !isNewEntry}
 				<button
-					class="btn btn-sm {focusedEntryTab === 'scenes' ? 'preset-filled-primary-500' : 'preset-tonal-surface'}"
+					class="btn btn-sm {focusedEntryTab === 'scenes' ? 'preset-filled-primary-500' : 'preset-filled-surface-400-600'}"
 					onclick={() => (focusedEntryTab = "scenes")}
 					disabled={hasUnsavedChanges && focusedEntryTab !== "scenes"}
 				>
@@ -1060,13 +1060,13 @@
 			<div class="flex flex-col gap-4">
 				<!-- Actions -->
 				<div class="flex gap-2">
-					<button class="btn btn-sm preset-tonal-surface" onclick={goBack}>Cancel</button>
+					<button class="btn btn-sm preset-filled-surface-400-600" onclick={goBack}>Cancel</button>
 					<button
 						class="btn btn-sm preset-filled-success-500"
 						onclick={handleSave}
 						disabled={!entryIsValid(editingEntry)}
 					>
-						<Icons.Save size={14} /> Save
+						<Icons.Save size={14} /> {isNewEntry ? "Create" : "Update"}
 					</button>
 				</div>
 				<!-- Date fields -->
@@ -1167,15 +1167,15 @@
 				{@const editingScene = editScenes.find((s) => s.id === editingSceneId)}
 				<div class="flex flex-col gap-4">
 					<div class="flex items-center gap-2">
-						<button class="btn btn-sm preset-tonal-surface p-2" onclick={cancelEditScene}>
+						<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={cancelEditScene}>
 							<Icons.ChevronLeft size={16} />
 						</button>
 						<h4 class="flex-1 truncate text-sm font-semibold">{editingScene?.name ?? "Scene"}</h4>
 					</div>
 					<div class="flex gap-2">
-						<button class="btn btn-sm preset-tonal-surface" onclick={cancelEditScene}>Cancel</button>
+						<button class="btn btn-sm preset-filled-surface-400-600" onclick={cancelEditScene}>Cancel</button>
 						<button class="btn btn-sm preset-filled-success-500" onclick={saveEditScene}>
-							<Icons.Save size={14} /> Save
+							<Icons.Save size={14} /> Update
 						</button>
 					</div>
 					<input class="input input-sm w-full text-sm" type="text" placeholder="Scene name" bind:value={editingSceneName} />
@@ -1192,7 +1192,7 @@
 						<div class="flex gap-1">
 							<input class="input input-sm flex-1 text-xs" type="text" placeholder="Add participant…" bind:value={newParticipantInput}
 								onkeydown={(e) => e.key === "Enter" && (e.preventDefault(), addParticipant())} />
-							<button class="btn btn-sm preset-tonal-surface p-1" onclick={addParticipant} disabled={!newParticipantInput.trim()}><Icons.Plus size={12} /></button>
+							<button class="btn btn-sm preset-filled-surface-400-600 p-1" onclick={addParticipant} disabled={!newParticipantInput.trim()}><Icons.Plus size={12} /></button>
 						</div>
 					</div>
 					<div class="space-y-1">
@@ -1207,7 +1207,7 @@
 						<div class="flex gap-1">
 							<input class="input input-sm flex-1 text-xs" type="text" placeholder="Add mentioned…" bind:value={newMentionedInput}
 								onkeydown={(e) => e.key === "Enter" && (e.preventDefault(), addMentioned())} />
-							<button class="btn btn-sm preset-tonal-surface p-1" onclick={addMentioned} disabled={!newMentionedInput.trim()}><Icons.Plus size={12} /></button>
+							<button class="btn btn-sm preset-filled-surface-400-600 p-1" onclick={addMentioned} disabled={!newMentionedInput.trim()}><Icons.Plus size={12} /></button>
 						</div>
 					</div>
 				</div>
@@ -1256,7 +1256,7 @@
 										open={openMenuSceneId === scene.id}
 										onOpenChange={(e) => (openMenuSceneId = e.open ? scene.id : null)}
 										positioning={{ placement: "bottom-end" }}
-										triggerBase="btn btn-sm preset-tonal-surface p-1 shrink-0"
+										triggerBase="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0"
 										contentBase="card bg-surface-100-900 shadow-xl p-2 flex flex-col gap-1 min-w-36"
 										zIndex="1000"
 									>
@@ -1269,7 +1269,7 @@
 												><Icons.Eye size={13} /> Review</button>
 											{:else if hasMessages}
 												<button
-													class="btn btn-sm preset-tonal-surface w-full justify-start"
+													class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
 													disabled={isProcessing}
 													onclick={() => { openMenuSceneId = null; processScene(scene.id) }}
 												>
@@ -1277,7 +1277,7 @@
 												</button>
 											{/if}
 											<button
-												class="btn btn-sm preset-tonal-surface w-full justify-start"
+												class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
 												onclick={() => { openMenuSceneId = null; startEditScene(scene) }}
 											><Icons.Pencil size={13} /> Edit</button>
 											<hr class="border-surface-300-700" />

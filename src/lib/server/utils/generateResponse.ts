@@ -1,7 +1,7 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, eq } from "drizzle-orm"
-import { activeAdapters, chatMessage } from "../sockets/chats"
+import { v4 as uuidv4 } from "uuid"
 import { getConnectionAdapter } from "./getConnectionAdapter"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { getUserConfigurations } from "./getUserConfigurations"
@@ -10,7 +10,8 @@ import { ChatTypes } from "$lib/shared/constants/ChatTypes"
 import { generateChatTitle } from "./generateChatTitle"
 import { parseReasoningFormat } from "./parseReasoningFormat"
 import { buildGraphContext } from "./graphContextFormatter"
-import { llmQueue, isQueueCancellation, type LLMQueueStatus } from "./llmQueue"
+import { llmQueue, isQueueCancellation } from "./llmQueue"
+import { persistGenerationStage, persistGenerationErrorRow } from "./generationStatus"
 import { resolveTaskConfig } from "./resolveTaskConfig"
 import { autoEnqueueChat } from "$lib/server/embedding/vectorizationQueue"
 
@@ -217,56 +218,6 @@ type GenerateExecuteResult =
 	| { kind: "reasoningHandled"; value: boolean }
 	| { kind: "silentFail" }
 	| { kind: "normal"; isAborted: boolean }
-
-function friendlyErrorFromUnknown(err: unknown): { message: string; code?: string } {
-	const raw = err instanceof Error ? err.message : String(err)
-	// Pull a leading HTTP-status-looking token out of adapter error messages
-	// (e.g. "KoboldCpp API error: 500 ...") so it can be shown as a code.
-	const statusMatch = raw.match(/\b([1-5]\d{2})\b/)
-	const code = statusMatch ? statusMatch[1] : (err as any)?.code || (err as any)?.name
-	const message = raw && raw !== "[object Object]" ? raw : "Generation failed for an unknown reason."
-	return { message, code: code ? String(code) : undefined }
-}
-
-async function persistGenerationStage(
-	generatingMessageId: number,
-	chatId: number,
-	socketIo: any,
-	status: LLMQueueStatus
-) {
-	const stage = status === "queued" || status === "loading" || status === "generating" ? status : null
-	const [updated] = await db
-		.update(schema.chatMessages)
-		.set({ generationStage: stage })
-		.where(and(eq(schema.chatMessages.id, generatingMessageId), eq(schema.chatMessages.isGenerating, true)))
-		.returning()
-	if (updated) {
-		await broadcastToChatUsers(socketIo, chatId, "chatMessage", { chatMessage: updated })
-	}
-}
-
-async function persistGenerationErrorRow(
-	socketIo: any,
-	chatId: number,
-	generatingMessageId: number,
-	err: unknown
-) {
-	const error = friendlyErrorFromUnknown(err)
-	console.error("[generateResponse] generation failed:", err)
-	const [updated] = await db
-		.update(schema.chatMessages)
-		.set({
-			isGenerating: false,
-			generationStage: null,
-			queueItemId: null,
-			error
-		})
-		.where(and(eq(schema.chatMessages.id, generatingMessageId), eq(schema.chatMessages.isGenerating, true)))
-		.returning()
-	if (updated) {
-		await broadcastToChatUsers(socketIo, chatId, "chatMessage", { chatMessage: updated })
-	}
-}
 
 export async function generateResponse({
 	socket,
@@ -493,43 +444,48 @@ export async function generateResponse({
 			? `${charName}:`
 			: ""
 
-	const { id: queueItemId, done } = llmQueue.enqueue<GenerateExecuteResult>({
-		taskType: "chat",
-		connectionName: resolved.connectionName,
-		samplingName: resolved.samplingName,
-		chatId,
-		messageId: generatingMessage.id,
-		label: charName || undefined,
-		preflight: (signal) => adapter.preflight(signal),
-		execute: (signal) =>
-			runGenerateAndPersist({
-				signal,
-				adapter,
-				socket,
-				chatId,
-				generatingMessage,
-				startString,
-				isContinuing,
-				preservedContent,
-				isAssistantMode,
-				emitToUser,
-				userId,
-				contextDebuggingEnabled
-			}),
-		onCancel: () => adapter.abort(),
-		onStatusChange: (status) =>
-			persistGenerationStage(generatingMessage.id, generatingMessage.chatId, socket.io, status)
-	})
-
-	activeAdapters.set(queueItemId, adapter)
+	// Persist the queue item id BEFORE enqueueing so it's never possible for a
+	// run to be active/started while the row still shows queueItemId: null —
+	// closes the race where a very-fast Stop click finds nothing to cancel.
+	const queueItemId = uuidv4()
 	await db
 		.update(schema.chatMessages)
 		.set({ queueItemId })
 		.where(eq(schema.chatMessages.id, generatingMessage.id))
 
+	const { done } = llmQueue.enqueue<GenerateExecuteResult>(
+		{
+			taskType: "chat",
+			connectionName: resolved.connectionName,
+			samplingName: resolved.samplingName,
+			chatId,
+			messageId: generatingMessage.id,
+			label: charName || undefined,
+			preflight: (signal) => adapter.preflight(signal),
+			execute: (signal) =>
+				runGenerateAndPersist({
+					signal,
+					adapter,
+					socket,
+					chatId,
+					generatingMessage,
+					startString,
+					isContinuing,
+					preservedContent,
+					isAssistantMode,
+					emitToUser,
+					userId,
+					contextDebuggingEnabled
+				}),
+			onCancel: () => adapter.abort(),
+			onStatusChange: (status) =>
+				persistGenerationStage(generatingMessage.id, generatingMessage.chatId, socket.io, status)
+		},
+		queueItemId
+	)
+
 	try {
 		const result = await done
-		activeAdapters.delete(queueItemId)
 
 		if (result.kind === "reasoningHandled") {
 			return result.value
@@ -570,7 +526,6 @@ export async function generateResponse({
 
 		return !isAborted // Whether there were no interruptions
 	} catch (err) {
-		activeAdapters.delete(queueItemId)
 		if (isQueueCancellation(err)) {
 			// The cancel handler already flipped isGenerating/queueItemId/error on
 			// the row — a user-initiated stop isn't a failure worth reporting.

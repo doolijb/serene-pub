@@ -45,11 +45,11 @@
 <div class="flex h-full flex-col gap-0 overflow-hidden">
 	<!-- Header -->
 	<div class="flex shrink-0 items-center gap-2 pb-3">
-		<button class="btn btn-sm preset-tonal-surface p-2" onclick={onBack} title="Back to chats">
+		<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={onBack} title="Back to chats">
 			<Icons.ChevronLeft size={16} />
 		</button>
 		<h2 class="flex-1 truncate font-semibold">{chat?.name || "Chat"}</h2>
-		<button class="btn btn-sm preset-tonal-surface" onclick={onOpen} title="Go to chat">
+		<button class="btn btn-sm preset-filled-surface-400-600" onclick={onOpen} title="Go to chat">
 			<Icons.MessageSquare size={14} /> Go To Chat
 		</button>
 		{#if canEdit}

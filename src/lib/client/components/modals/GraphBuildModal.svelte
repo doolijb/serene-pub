@@ -449,7 +449,7 @@
 {/snippet}
 
 {#snippet reviewExtraBlock()}
-	<button class="btn preset-tonal-surface" onclick={() => onOpenChange({ open: false })}>
+	<button class="btn preset-filled-surface-400-600" onclick={() => onOpenChange({ open: false })}>
 		Close
 	</button>
 	<button class="btn preset-tonal-warning" onclick={() => (step = "preflight")}>

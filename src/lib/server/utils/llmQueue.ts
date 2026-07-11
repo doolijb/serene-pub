@@ -115,8 +115,14 @@ class LLMQueue {
 		return lane
 	}
 
-	enqueue<T>(item: LLMQueueItemInput<T>): { id: string; done: Promise<T> } {
-		const id = uuidv4()
+	/**
+	 * @param presetId - Optional pre-generated id. Pass this when the caller
+	 * needs to persist the id (e.g. to a DB row, for cancellation) before the
+	 * run can possibly start — generate it, persist it, then enqueue with it,
+	 * so the id is always resolvable the moment the run exists.
+	 */
+	enqueue<T>(item: LLMQueueItemInput<T>, presetId?: string): { id: string; done: Promise<T> } {
+		const id = presetId ?? uuidv4()
 		const laneKey = getConcurrencyKey(item)
 
 		let resolve!: (value: T) => void

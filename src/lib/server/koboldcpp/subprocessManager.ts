@@ -3,6 +3,7 @@ import * as fs from "fs"
 import * as fsPromises from "fs/promises"
 import * as path from "path"
 import { db } from "$lib/server/db"
+import { pingKoboldCpp } from "./kcppHttp"
 
 export type SubprocessStatus = "stopped" | "starting" | "running" | "crashed" | "stopping"
 
@@ -78,8 +79,11 @@ function isPidAlive(pid: number): boolean {
 
 // Best-effort sanity check so we don't kill an unrelated process that
 // happens to have inherited a recycled PID — only meaningful on Linux.
+// Off Linux there's no /proc to verify against, so fail closed (skip the
+// kill) rather than trust an unverified PID; the subsequent spawn will just
+// fail with a normal port-in-use error if a stale orphan is still around.
 function pidLooksLikeOurBinary(pid: number, binaryPath: string): boolean {
-	if (process.platform !== "linux") return true
+	if (process.platform !== "linux") return false
 	try {
 		const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8")
 		return cmdline.includes(path.basename(binaryPath))
@@ -182,12 +186,7 @@ export function setSubprocessTimeout(secs: number) {
 async function waitForReady(port: number, timeoutMs = 120_000): Promise<void> {
 	const deadline = Date.now() + timeoutMs
 	while (Date.now() < deadline) {
-		try {
-			const resp = await fetch(`http://localhost:${port}/api/extra/version`, {
-				signal: AbortSignal.timeout(2000)
-			})
-			if (resp.ok) return
-		} catch {}
+		if (await pingKoboldCpp(`http://localhost:${port}`, 2000)) return
 		await new Promise((r) => setTimeout(r, 1500))
 	}
 	throw new Error("KoboldCPP did not become ready within 2 minutes")
@@ -197,20 +196,14 @@ function startHealthCheck(port: number) {
 	stopHealthCheck()
 	healthInterval = setInterval(async () => {
 		if (state.status !== "running") return
-		try {
-			const resp = await fetch(`http://localhost:${port}/api/extra/version`, {
-				signal: AbortSignal.timeout(5000)
-			})
-			if (!resp.ok) throw new Error("non-ok")
-		} catch {
-			if (state.status === "running") {
-				clearIdleTimer()
-				state.status = "crashed"
-				state.lastError = "Health check failed — process may have crashed"
-				state.process = null
-				state.pid = null
-				emitStatus()
-			}
+		const ok = await pingKoboldCpp(`http://localhost:${port}`, 5000)
+		if (!ok && state.status === "running") {
+			clearIdleTimer()
+			state.status = "crashed"
+			state.lastError = "Health check failed — process may have crashed"
+			state.process = null
+			state.pid = null
+			emitStatus()
 		}
 	}, 30_000)
 }
@@ -253,21 +246,16 @@ export async function start(): Promise<void> {
 
 	// If KoboldCPP is already reachable (e.g. left over from a previous server session),
 	// adopt it rather than spawning a second instance on the same port.
-	try {
-		const ping = await fetch(`http://localhost:${port}/api/extra/version`, {
-			signal: AbortSignal.timeout(2000)
-		})
-		if (ping.ok) {
-			console.log(`[KoboldCPP] Port ${port} already active — adopting existing instance`)
-			state.status = "running"
-			state.startedAt = new Date()
-			state.lastError = null
-			emitStatus()
-			startHealthCheck(port)
-			pingActivity()
-			return
-		}
-	} catch {
+	if (await pingKoboldCpp(`http://localhost:${port}`, 2000)) {
+		console.log(`[KoboldCPP] Port ${port} already active — adopting existing instance`)
+		state.status = "running"
+		state.startedAt = new Date()
+		state.lastError = null
+		emitStatus()
+		startHealthCheck(port)
+		pingActivity()
+		return
+	} else {
 		// Port is free (or the process behind it is unresponsive) — check for
 		// and clean up a stale process left behind by a previous session
 		// before we try to spawn on top of it.

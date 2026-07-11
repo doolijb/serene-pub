@@ -215,7 +215,7 @@
 								</button>
 							{/if}
 							<button
-								class="btn btn-sm preset-tonal-surface text-xs px-2 py-1 {isExpanded ? 'preset-filled-surface-500' : ''}"
+								class="btn btn-sm preset-filled-surface-400-600 text-xs px-2 py-1 {isExpanded ? 'preset-filled-surface-500' : ''}"
 								onclick={() => toggleGallery(e)}
 								title={isExpanded ? "Hide gallery" : "Show gallery"}
 							>

@@ -5,6 +5,12 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { goto } from "$app/navigation"
 	import { getContext } from "svelte"
+	import {
+		resolvePickedFolder,
+		startImportSession,
+		stageFilesToServer,
+		type FolderPickResult
+	} from "$lib/client/utils/sillyTavernFolderImport"
 
 	const userCtx: UserCtx = getContext("userCtx")
 	const socket = useTypedSocket()
@@ -16,8 +22,15 @@
 		goto("/")
 	}
 
+	function importAnother() {
+		importComplete = null
+	}
+
 	// State
-	let directoryPath = $state("")
+	let folderInputEl: HTMLInputElement | undefined = $state()
+	let pickedFolder = $state<FolderPickResult | null>(null)
+	let importSessionId = $state<string | null>(null)
+	let uploadProgress = $state<{ staged: number; total: number } | null>(null)
 	let isScanning = $state(false)
 	let isImporting = $state(false)
 	let scanResults = $state<{
@@ -43,41 +56,65 @@
 		lorebooks: Array<{ filename: string; name: string; selected: boolean }>
 	} | null>(null)
 	let confirmImport = $state(false)
+	let importComplete = $state<{ message: string; errors?: string[] } | null>(
+		null
+	)
 
-	// Directory validation helper
-	function validateDirectoryPath() {
-		if (!directoryPath.trim()) {
-			return false
-		}
-		return true
+	function triggerFolderPicker() {
+		folderInputEl?.click()
 	}
 
-	// Common SillyTavern paths
-	const commonPaths = [
-		"/home/$USER/SillyTavern",
-		"C:\\Users\\$USERNAME\\SillyTavern",
-		"/opt/SillyTavern",
-		"~/SillyTavern"
-	]
+	function handleFolderSelected(e: Event) {
+		const files = (e.target as HTMLInputElement).files
+		if (!files || files.length === 0) return
 
-	function useCommonPath(pathTemplate: string) {
-		directoryPath = pathTemplate
-	}
-
-	let scanTimeout: ReturnType<typeof setTimeout> | null = null
-
-	// Scan directory
-	async function scanDirectory() {
-		if (!validateDirectoryPath()) {
+		const result = resolvePickedFolder(files)
+		if (!result || result.files.length === 0) {
 			toaster.error({
-				title: "Invalid directory path",
-				description: "Please enter a valid SillyTavern directory path"
+				title: "No SillyTavern data found",
+				description:
+					"Couldn't find characters, chats, groups, worlds, or settings.json in the selected folder. Please select your SillyTavern (or SillyTavern-Launcher) folder."
 			})
+			pickedFolder = null
+			;(e.target as HTMLInputElement).value = ""
 			return
 		}
 
+		pickedFolder = result
+		scanResults = null
+		importSessionId = null
+	}
+
+	let scanTimeout: ReturnType<typeof setTimeout> | null = null
+	let importTimeout: ReturnType<typeof setTimeout> | null = null
+
+	// Upload the metadata-bearing subset of the picked folder, then scan it
+	async function scanFolder() {
+		if (!pickedFolder || !socket) return
+
 		isScanning = true
 		scanResults = null
+		uploadProgress = null
+
+		try {
+			importSessionId = await startImportSession(socket)
+			await stageFilesToServer(
+				socket,
+				importSessionId,
+				pickedFolder.scanFiles,
+				(staged, total) => (uploadProgress = { staged, total })
+			)
+			uploadProgress = null
+		} catch (error) {
+			isScanning = false
+			uploadProgress = null
+			toaster.error({
+				title: "Upload failed",
+				description:
+					error instanceof Error ? error.message : "Failed to upload files"
+			})
+			return
+		}
 
 		if (scanTimeout) clearTimeout(scanTimeout)
 		scanTimeout = setTimeout(() => {
@@ -85,14 +122,12 @@
 				isScanning = false
 				toaster.error({
 					title: "Scan timed out",
-					description: "The server did not respond. Check that the path exists and try again."
+					description: "The server did not respond. Please try again."
 				})
 			}
 		}, 30000)
 
-		socket?.emit("import:sillytavern:scan", {
-			directoryPath: directoryPath.trim()
-		})
+		socket.emit("import:sillytavern:scan", { importSessionId })
 	}
 
 	// Toggle individual item selection
@@ -196,11 +231,12 @@
 
 	// Import data
 	async function importData() {
-		if (!scanResults || !confirmImport || !validateDirectoryPath()) {
+		if (!scanResults || !confirmImport || !pickedFolder || !importSessionId || !socket) {
 			return
 		}
 
 		isImporting = true
+		uploadProgress = null
 
 		const selectedData = {
 			characters: scanResults.characters.filter((c) => c.selected),
@@ -210,8 +246,52 @@
 			lorebooks: scanResults.lorebooks.filter((l) => l.selected)
 		}
 
-		socket?.emit("import:sillytavern:execute", {
-			directoryPath: directoryPath.trim(),
+		// Only now upload chat history — individual chats the user selected,
+		// plus all group chat history if any group chat is selected (mapping
+		// a selected group to its exact history filename requires re-parsing
+		// its JSON, so we just upload the whole small "group chats/" set).
+		const selectedChatPaths = new Set(
+			selectedData.chats.map((c) => `chats/${c.filename}`)
+		)
+		const wantsGroupChatHistory = selectedData.groupChats.length > 0
+		const filesToUpload = pickedFolder.deferredFiles.filter(
+			(f) =>
+				selectedChatPaths.has(f.relativePath) ||
+				(wantsGroupChatHistory && f.relativePath.startsWith("group chats/"))
+		)
+
+		try {
+			await stageFilesToServer(
+				socket,
+				importSessionId,
+				filesToUpload,
+				(staged, total) => (uploadProgress = { staged, total })
+			)
+			uploadProgress = null
+		} catch (error) {
+			isImporting = false
+			uploadProgress = null
+			toaster.error({
+				title: "Upload failed",
+				description:
+					error instanceof Error ? error.message : "Failed to upload files"
+			})
+			return
+		}
+
+		if (importTimeout) clearTimeout(importTimeout)
+		importTimeout = setTimeout(() => {
+			if (isImporting) {
+				isImporting = false
+				toaster.error({
+					title: "Import timed out",
+					description: "The server did not respond. Please try again."
+				})
+			}
+		}, 300000)
+
+		socket.emit("import:sillytavern:execute", {
+			importSessionId,
 			selectedData
 		})
 	}
@@ -250,15 +330,21 @@
 
 	socket.on("import:sillytavern:execute", (message) => {
 		isImporting = false
+		if (importTimeout) { clearTimeout(importTimeout); importTimeout = null }
 
 		if (message.success) {
 			toaster.success({
 				title: "Import completed",
 				description: message.message || "Data imported successfully"
 			})
-			// Reset state
+			importComplete = {
+				message: message.message || "Data imported successfully",
+				errors: message.errors
+			}
+			// Reset the picker/scan state so "Import Another" starts fresh
 			scanResults = null
-			directoryPath = ""
+			pickedFolder = null
+			importSessionId = null
 			confirmImport = false
 		} else {
 			toaster.error({
@@ -270,7 +356,7 @@
 </script>
 
 {#if userCtx.user?.isAdmin}
-<div class="container mx-auto max-w-4xl p-6">
+<div class="container mx-auto max-w-4xl p-6 preset-tonal rounded-lg shadow-md mt-4">
 	<!-- Header with Back Button -->
 	<div class="mb-6 flex items-center gap-4">
 		<button
@@ -291,6 +377,49 @@
 	</div>
 
 	<div class="flex flex-col gap-6">
+		{#if importComplete}
+			<!-- Import Complete Confirmation -->
+			<div class="rounded p-6 text-center">
+				<Icons.CheckCircle size={48} class="text-success-500 mx-auto mb-4" />
+				<h2 class="mb-2 text-xl font-bold">Import Complete</h2>
+				<p class="text-surface-500 mb-4 text-sm">{importComplete.message}</p>
+				{#if importComplete.errors?.length}
+					<div
+						class="bg-warning-200-800 border-warning-500 mb-4 rounded border-l-4 p-3 text-left"
+					>
+						<p class="mb-1 text-sm font-semibold">
+							{importComplete.errors.length} item{importComplete.errors
+								.length !== 1
+								? "s"
+								: ""} had errors:
+						</p>
+						<ul class="list-inside list-disc space-y-0.5 text-xs">
+							{#each importComplete.errors as error}
+								<li>{error}</li>
+							{/each}
+						</ul>
+					</div>
+				{/if}
+				<div class="flex justify-center gap-2">
+					<button
+						type="button"
+						class="btn preset-filled-primary-500"
+						onclick={goBack}
+					>
+						<Icons.ArrowLeft size={16} />
+						Back to Settings
+					</button>
+					<button
+						type="button"
+						class="btn preset-filled-surface-400-600"
+						onclick={importAnother}
+					>
+						<Icons.FolderOpen size={16} />
+						Import Another Folder
+					</button>
+				</div>
+			</div>
+		{:else}
 		<!-- Important Notes -->
 		<div
 			class="bg-warning-200-800 border-warning-500 rounded border-l-4 p-4"
@@ -323,48 +452,63 @@
 			</ul>
 		</div>
 
-		<!-- Directory Selection -->
+		<!-- Folder Selection -->
 		<div class="flex flex-col gap-2">
-			<label class="font-semibold">SillyTavern Directory Path</label>
+			<label class="font-semibold">SillyTavern Folder</label>
 			<input
-				type="text"
-				class="input"
-				bind:value={directoryPath}
-				placeholder="/path/to/SillyTavern"
+				type="file"
+				bind:this={folderInputEl}
+				onchange={handleFolderSelected}
+				webkitdirectory
+				multiple
+				class="hidden"
 				disabled={isScanning || isImporting}
 			/>
+			<button
+				type="button"
+				class="btn preset-tonal-primary w-fit"
+				onclick={triggerFolderPicker}
+				disabled={isScanning || isImporting}
+			>
+				<Icons.FolderOpen size={16} />
+				{pickedFolder ? "Change Folder" : "Choose SillyTavern Folder"}
+			</button>
+			{#if pickedFolder}
+				<p class="text-success-600-400 text-sm">
+					Found {pickedFolder.files.length} relevant file{pickedFolder
+						.files.length !== 1
+						? "s"
+						: ""} ({pickedFolder.scanFiles.length} to scan now, {pickedFolder
+						.deferredFiles.length} chat log file{pickedFolder
+						.deferredFiles.length !== 1
+						? "s"
+						: ""} uploaded only for what you select to import)
+				</p>
+			{/if}
 			<p class="text-surface-500 text-xs">
-				Enter the full path to your SillyTavern installation directory
-				(contains 'data' folder).
+				Everything is read by your browser and uploaded — nothing is
+				read from the server's filesystem. Select your SillyTavern (or
+				SillyTavern-Launcher) folder. Requires a Chromium-based browser
+				or a recent version of Firefox.
 			</p>
 
-			<!-- Common paths helper -->
-			<div class="bg-surface-200-800 rounded p-3">
-				<p
-					class="text-surface-600 dark:text-surface-400 mb-2 text-xs font-semibold"
-				>
-					Common SillyTavern locations:
-				</p>
-				<div class="flex flex-wrap gap-2">
-					{#each commonPaths as pathTemplate}
-						<button
-							type="button"
-							class="btn btn-sm preset-tonal-surface-500"
-							onclick={() => useCommonPath(pathTemplate)}
-							disabled={isScanning || isImporting}
-						>
-							<Icons.MapPin size={12} />
-							<span class="font-mono text-xs">
-								{pathTemplate}
-							</span>
-						</button>
-					{/each}
+			{#if uploadProgress}
+				<div class="bg-surface-200-800 rounded p-2">
+					<p class="text-surface-600 dark:text-surface-400 text-xs">
+						Uploading files... {uploadProgress.staged}/{uploadProgress.total}
+					</p>
+					<div
+						class="bg-surface-300-700 mt-1 h-1.5 w-full overflow-hidden rounded-full"
+					>
+						<div
+							class="bg-primary-500 h-full transition-all"
+							style="width: {(uploadProgress.staged /
+								uploadProgress.total) *
+								100}%"
+						></div>
+					</div>
 				</div>
-				<p class="text-surface-500 mt-2 text-xs">
-					Click a common path to use it, then edit as needed (replace
-					$USER or $USERNAME with your actual username)
-				</p>
-			</div>
+			{/if}
 		</div>
 
 		<!-- Scan Button -->
@@ -372,15 +516,15 @@
 			<button
 				type="button"
 				class="btn preset-filled-secondary-500"
-				onclick={scanDirectory}
-				disabled={!directoryPath || isScanning || isImporting}
+				onclick={scanFolder}
+				disabled={!pickedFolder || isScanning || isImporting}
 			>
 				{#if isScanning}
 					<Icons.Loader2 size={16} class="animate-spin" />
-					Scanning...
+					{uploadProgress ? "Uploading..." : "Processing..."}
 				{:else}
-					<Icons.Search size={16} />
-					Scan Directory
+					<Icons.Brain size={16} />
+					Process Data
 				{/if}
 			</button>
 		</div>
@@ -616,7 +760,9 @@
 					>
 						{#if isImporting}
 							<Icons.Loader2 size={16} class="animate-spin" />
-							Importing...
+							{uploadProgress
+								? `Uploading... ${uploadProgress.staged}/${uploadProgress.total}`
+								: "Importing..."}
 						{:else}
 							<Icons.Download size={16} />
 							Import Selected Data
@@ -624,6 +770,7 @@
 					</button>
 				</div>
 			</div>
+		{/if}
 		{/if}
 	</div>
 </div>

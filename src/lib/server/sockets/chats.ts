@@ -4,7 +4,6 @@ import { and, asc, count, desc, eq, inArray, lt, or } from "drizzle-orm"
 import { runBindingNodeCheck } from "$lib/server/utils/bindingNodeCheck"
 import { generateResponse } from "../utils/generateResponse"
 import { getNextCharacterTurn } from "$lib/server/utils/getNextCharacterTurn"
-import type { BaseConnectionAdapter } from "../connectionAdapters/BaseConnectionAdapter"
 import { getConnectionAdapter } from "../utils/getConnectionAdapter"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
@@ -196,9 +195,6 @@ async function processChatTags(
 			.onConflictDoNothing()
 	}
 }
-
-// --- Global map for active adapters ---
-export const activeAdapters = new Map<string, BaseConnectionAdapter>()
 
 export const chatsListHandler: Handler<
 	Sockets.Chats.List.Params,
@@ -2151,7 +2147,6 @@ export const chatMessagesCancelHandler: Handler<
 				// it so the queue can proceed regardless. Never throws.
 				if (message.queueItemId) {
 					llmQueue.cancel(message.queueItemId)
-					activeAdapters.delete(message.queueItemId)
 				}
 
 				// Update the DB immediately and unconditionally so the UI reflects

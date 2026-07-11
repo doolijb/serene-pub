@@ -255,7 +255,7 @@
 				disabled={validationStatus !== "valid" || isGenerating}
 			>
 				<Icons.Save class="h-4 w-4" />
-				<span>Save Character</span>
+				<span>Create Character</span>
 			</button>
 		</div>
 	</div>

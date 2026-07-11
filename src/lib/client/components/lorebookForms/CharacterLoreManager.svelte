@@ -316,7 +316,7 @@
 					{/each}
 				</select>
 				<button
-					class="btn btn-sm preset-tonal-surface shrink-0"
+					class="btn btn-sm preset-filled-surface-400-600 shrink-0"
 					onclick={() => (isReordering = true)}
 					disabled={characterLoreEntryList.length === 0}
 					title="Reorder entries"
@@ -451,7 +451,7 @@
 						open={openMenuEntryId === entry.id}
 						onOpenChange={(e) => (openMenuEntryId = e.open ? entry.id : null)}
 						positioning={{ placement: "bottom-end" }}
-						triggerBase="btn btn-sm preset-tonal-surface p-1 shrink-0"
+						triggerBase="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0"
 						contentBase="card bg-surface-100-900 shadow-xl p-2 flex flex-col gap-1 min-w-32"
 						zIndex="1000"
 					>
@@ -460,13 +460,13 @@
 						{/snippet}
 						{#snippet content()}
 							<button
-								class="btn btn-sm preset-tonal-surface w-full justify-start"
+								class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
 								onclick={(e) => { e.stopPropagation(); openMenuEntryId = null; viewEntry(entry) }}
 							>
 								<Icons.Eye size={14} /> View
 							</button>
 							<button
-								class="btn btn-sm preset-tonal-surface w-full justify-start"
+								class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
 								onclick={(e) => { e.stopPropagation(); openMenuEntryId = null; editEntry(entry) }}
 							>
 								<Icons.Pencil size={14} /> Edit
@@ -499,7 +499,7 @@
 	<div class="flex flex-col gap-4">
 		<!-- Header -->
 		<div class="flex items-center gap-2">
-			<button class="btn btn-sm preset-tonal-surface" onclick={goBack}>
+			<button class="btn btn-sm preset-filled-surface-400-600" onclick={goBack}>
 				<Icons.ChevronLeft size={16} />
 			</button>
 			<h3 class="flex-1 truncate font-semibold">{focusedEntry.name}</h3>
@@ -584,19 +584,19 @@
 	<div class="flex flex-col gap-4">
 		<!-- Header with inline Cancel/Save -->
 		<div class="flex items-center gap-2">
-			<button class="btn btn-sm preset-tonal-surface" onclick={goBack}>
+			<button class="btn btn-sm preset-filled-surface-400-600" onclick={goBack}>
 				<Icons.ChevronLeft size={16} />
 			</button>
 			<h3 class="flex-1 text-sm font-semibold">
 				{isNewEntry ? "New Character Lore Entry" : `Edit — ${focusedEntry?.name ?? "?"}`}
 			</h3>
-			<button class="btn btn-sm preset-tonal-surface" onclick={goBack}>Cancel</button>
+			<button class="btn btn-sm preset-filled-surface-400-600" onclick={goBack}>Cancel</button>
 			<button
 				class="btn btn-sm preset-filled-success-500"
 				onclick={handleSave}
 				disabled={!entryIsValid(editingEntry)}
 			>
-				<Icons.Save size={14} /> Save
+				<Icons.Save size={14} /> {isNewEntry ? "Create" : "Update"}
 			</button>
 		</div>
 

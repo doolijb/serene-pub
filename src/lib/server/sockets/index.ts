@@ -46,18 +46,29 @@ import { registerTaskQueueHandlers } from "./taskQueue"
 import { registerActivityHandlers } from "./activity"
 import { registerCustomThemeHandlers } from "./customThemes"
 
-const userId = 1 // Replace with actual user id
-
 export function connectSockets(io: {
 	on: (arg0: string, arg1: (socket: any) => void) => void
 	to: (room: string) => any
 }) {
 	io.on("connect", (socket) => {
+		// authMiddleware (registered via io.use before connectSockets runs)
+		// authenticates the connection and sets socket.user before "connect"
+		// fires — it also disconnects unauthenticated sockets before this
+		// point, so this should never actually be missing in practice.
+		const userId = socket.user?.id
+		if (!userId) {
+			console.error(
+				`Socket ${socket.id} connected with no authenticated user — disconnecting`
+			)
+			socket.disconnect()
+			return
+		}
+
 		// Attach io to socket for use in handlers
 		socket.io = io
 		socket.join("user_" + userId)
 
-		// Helper to emit to all user_1 sockets
+		// Helper to emit to this socket's own user room
 		function emitToUser(event: string, data: any) {
 			io.to("user_" + userId).emit(event, data)
 		}
@@ -136,9 +147,12 @@ function register(
 			await handler.handler(socket, message, emitToUser)
 		} catch (error) {
 			console.error(`Error handling event ${handler.event}:`, error)
-			socket.io.to("user_" + userId).emit(`${handler.event}:error`, {
-				error: "An error occurred while processing your request."
-			})
+			const userId = socket.user?.id
+			if (userId) {
+				socket.io.to("user_" + userId).emit(`${handler.event}:error`, {
+					error: "An error occurred while processing your request."
+				})
+			}
 		}
 	})
 }

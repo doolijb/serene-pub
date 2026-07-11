@@ -388,7 +388,7 @@
 						aria-describedby="save-status"
 					>
 						<Icons.Save size={16} aria-hidden="true" />
-						Save
+						Update
 					</button>
 					<button
 						type="button"
@@ -627,7 +627,7 @@
 						? `Create connection named ${newConnectionName}`
 						: "Enter a name to create connection"}
 				>
-					Create Connection
+					Create
 				</button>
 			</footer>
 		</div>

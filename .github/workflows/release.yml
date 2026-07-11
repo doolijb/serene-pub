@@ -50,48 +50,58 @@ jobs:
                   if [[ "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(-(.+))?$ ]]; then
                     BASE_VERSION="${BASH_REMATCH[1]}"
                     SUFFIX="${BASH_REMATCH[3]}"
-                    
+
                     if [ -z "$SUFFIX" ]; then
                       # No suffix - formal release
                       TITLE="$BASE_VERSION Release"
                       IS_PRERELEASE="false"
+                      RUN_TESTS="true"
                     elif [ "$SUFFIX" = "dev" ]; then
                       # Development release
                       TITLE="$BASE_VERSION Development Release"
                       IS_PRERELEASE="true"
+                      RUN_TESTS="false"
                     elif [ "$SUFFIX" = "alpha" ]; then
                       # Alpha release
                       TITLE="$BASE_VERSION Alpha Release"
                       IS_PRERELEASE="true"
+                      RUN_TESTS="true"
                     elif [ "$SUFFIX" = "beta" ]; then
                       # Beta release (not a pre-release)
                       TITLE="$BASE_VERSION Beta Release"
                       IS_PRERELEASE="false"
+                      RUN_TESTS="true"
                     elif [[ "$SUFFIX" =~ ^pr-([0-9]+)$ ]]; then
-                      # Pre-release build
+                      # Pre-release build - skip tests, these are frequent throwaway builds
                       PR_NUM="${BASH_REMATCH[1]}"
                       TITLE="$BASE_VERSION Pre-Release Build $PR_NUM"
                       IS_PRERELEASE="true"
+                      RUN_TESTS="false"
                     elif [[ "$SUFFIX" =~ ^rc-([0-9]+)$ ]]; then
                       # Release candidate
                       RC_NUM="${BASH_REMATCH[1]}"
                       TITLE="$BASE_VERSION Release Candidate $RC_NUM"
                       IS_PRERELEASE="true"
+                      RUN_TESTS="true"
                     else
                       # Unknown suffix
                       TITLE="$VERSION"
                       IS_PRERELEASE="true"
+                      RUN_TESTS="false"
                     fi
                   else
                     # Invalid version format
                     TITLE="$VERSION"
                     IS_PRERELEASE="true"
+                    RUN_TESTS="false"
                   fi
 
                   echo "title=$TITLE" >> $GITHUB_OUTPUT
                   echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+                  echo "run_tests=$RUN_TESTS" >> $GITHUB_OUTPUT
                   echo "Release Title: $TITLE"
                   echo "Is Pre-release: $IS_PRERELEASE"
+                  echo "Run Tests: $RUN_TESTS"
 
             - name: Set up Node.js
               uses: actions/setup-node@v4
@@ -105,6 +115,10 @@ jobs:
 
             - name: Prepare SvelteKit
               run: npx @sveltejs/kit sync
+
+            - name: Run tests
+              if: steps.release_title.outputs.run_tests == 'true'
+              run: npm test
 
             - name: Build app
               run: npm run build

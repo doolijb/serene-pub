@@ -19,7 +19,7 @@
 
 {#if shouldShow && nextCharacter}
 	<li
-		class="preset-tonal-surface-100-900 border-surface-300-700 my-2 flex items-center justify-between rounded-full px-4"
+		class="preset-filled-surface-400-600 border-surface-300-700 my-2 flex items-center justify-between rounded-full px-4"
 	>
 		<div class="flex items-center gap-3">
 			<Avatar char={nextCharacter} />
@@ -41,7 +41,7 @@
 				Continue
 			</button>
 			<button
-				class="btn btn-sm preset-tonal-surface-500"
+				class="btn btn-sm preset-tonal-primary"
 				onclick={onChooseDifferentCharacter}
 				title="Choose a different character"
 			>

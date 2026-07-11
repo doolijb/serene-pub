@@ -1261,7 +1261,7 @@
 						<div class="flex gap-2" role="group" aria-label="Selection controls">
 							{#if isScened}
 								<span
-									class="btn btn-sm preset-tonal-surface opacity-60 cursor-not-allowed"
+									class="btn btn-sm preset-filled-surface-400-600 opacity-60 cursor-not-allowed"
 									title="Already captured in a scene"
 								>
 									<Icons.Film size={16} />
@@ -1271,7 +1271,7 @@
 								<button
 									class="btn btn-sm {selectedMessageIds.has(msg.id)
 										? 'preset-filled-secondary-500'
-										: 'preset-tonal-surface'}"
+										: 'preset-filled-surface-400-600'}"
 									title={selectedMessageIds.has(msg.id) ? 'Deselect message' : 'Select message'}
 									onclick={() => toggleSummarizationMessage(msg.id)}
 								>
@@ -1285,7 +1285,7 @@
 									</span>
 								</button>
 								<button
-									class="btn btn-sm preset-tonal-surface"
+									class="btn btn-sm preset-filled-surface-400-600"
 									title="Select all above up to nearest selected"
 									onclick={() => selectAllAbove(props.index)}
 								>
@@ -1293,7 +1293,7 @@
 									<span class="lg:hidden">Select All Above</span>
 								</button>
 								<button
-									class="btn btn-sm preset-tonal-surface"
+									class="btn btn-sm preset-filled-surface-400-600"
 									title="Select all below up to nearest selected"
 									onclick={() => selectAllBelow(props.index)}
 								>
@@ -1338,7 +1338,7 @@
 					</span>
 					<div class="flex gap-2">
 						<button
-							class="btn btn-sm preset-tonal-surface"
+							class="btn btn-sm preset-filled-surface-400-600"
 							onclick={() => {
 								selectedMessageIds = new Set(
 									chat!.chatMessages
@@ -1351,7 +1351,7 @@
 							Select All
 						</button>
 						<button
-							class="btn btn-sm preset-tonal-surface"
+							class="btn btn-sm preset-filled-surface-400-600"
 							onclick={() => (selectedMessageIds = new Set())}
 						>
 							<Icons.Square size={16} />

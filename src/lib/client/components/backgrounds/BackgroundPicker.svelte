@@ -355,7 +355,7 @@
 			Are you sure you want to delete this background? This cannot be undone.
 		</p>
 		<footer class="flex justify-end gap-2">
-			<button class="btn preset-tonal-surface" onclick={cancelDelete}>
+			<button class="btn preset-filled-surface-400-600" onclick={cancelDelete}>
 				Cancel
 			</button>
 			<button class="btn preset-filled-error-500" onclick={confirmDelete}>

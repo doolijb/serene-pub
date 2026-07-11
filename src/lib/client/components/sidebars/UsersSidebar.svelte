@@ -229,7 +229,7 @@
 							{#if isCurrentUserAdmin && user.id !== userCtx.user?.id}
 								<div class="ml-2 flex shrink-0 gap-1" role="group">
 									<span
-										class="btn btn-sm preset-tonal-surface p-2"
+										class="btn btn-sm preset-filled-surface-400-600 p-2"
 										onclick={(e) => { e.stopPropagation(); startEdit(user) }}
 										title="Edit user"
 										role="button"

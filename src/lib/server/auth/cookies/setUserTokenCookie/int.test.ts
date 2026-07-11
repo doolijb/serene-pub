@@ -1,27 +1,53 @@
-import { expect, test } from "vitest"
-import { setUserTokenCookie } from "."
+import { afterEach, describe, expect, test, vi } from "vitest"
 import type { RequestEvent } from "@sveltejs/kit"
-import { fn } from "jest-mock"
 
-test("setUserTokenCookie: sets userToken cookie", async () => {
-	const setMock = fn()
+// maxAge/secure/sameSite are computed from process.env at module load time,
+// so each test stubs env vars and re-imports the module fresh.
+describe("setUserTokenCookie", () => {
+	const originalEnv = { ...process.env }
 
-	const event = {
-		cookies: {
-			set: setMock,
-			get: () => "userToken",
-			getAll: () => [{ name: "userToken", value: "token" }],
-			delete: (name: string, opts) => null,
-			serialize: (name: string, value: string, opts) => `${name}=${value}` // Mock serialize method
-		}
-	} as unknown as RequestEvent
+	afterEach(() => {
+		process.env = { ...originalEnv }
+		vi.resetModules()
+	})
 
-	setUserTokenCookie({ event, token: "testToken" })
+	test("sets a strict/secure cookie with maxAge derived from USER_TOKEN_EXPIRATION_HOURS in production", async () => {
+		process.env.NODE_ENV = "production"
+		process.env.USER_TOKEN_EXPIRATION_HOURS = "12"
+		vi.resetModules()
+		const { setUserTokenCookie } = await import("./index")
 
-	expect(setMock).toHaveBeenCalledWith("userToken", "testToken", {
-		path: "/",
-		httpOnly: true,
-		secure: true,
-		sameSite: "strict"
+		const setMock = vi.fn()
+		const event = { cookies: { set: setMock } } as unknown as RequestEvent
+
+		setUserTokenCookie({ event, token: "testToken" })
+
+		expect(setMock).toHaveBeenCalledWith("userToken", "testToken", {
+			path: "/",
+			httpOnly: true,
+			secure: true,
+			sameSite: "strict",
+			maxAge: 60 * 60 * 12
+		})
+	})
+
+	test("relaxes to a lax/non-secure cookie in development", async () => {
+		process.env.NODE_ENV = "development"
+		process.env.USER_TOKEN_EXPIRATION_HOURS = "24"
+		vi.resetModules()
+		const { setUserTokenCookie } = await import("./index")
+
+		const setMock = vi.fn()
+		const event = { cookies: { set: setMock } } as unknown as RequestEvent
+
+		setUserTokenCookie({ event, token: "testToken" })
+
+		expect(setMock).toHaveBeenCalledWith("userToken", "testToken", {
+			path: "/",
+			httpOnly: true,
+			secure: false,
+			sameSite: "lax",
+			maxAge: 60 * 60 * 24
+		})
 	})
 })

@@ -15,7 +15,9 @@ import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
 import { broadcastToChatUsers } from "./utils/broadcastHelpers"
-import { llmQueue } from "$lib/server/utils/llmQueue"
+import { v4 as uuidv4 } from "uuid"
+import { llmQueue, isQueueCancellation } from "$lib/server/utils/llmQueue"
+import { persistGenerationStage, persistGenerationErrorRow } from "$lib/server/utils/generationStatus"
 
 export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 	console.log("[AssistantV2] Registering handlers for user", userId)
@@ -26,8 +28,10 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 	socket.on(
 		"assistant:sendMessageV2",
 		async (data: { chatId: number; content: string }) => {
+			let assistantMessage: typeof schema.chatMessages.$inferSelect | undefined
+			const { chatId } = data
 			try {
-				const { chatId, content } = data
+				const { content } = data
 
 				console.log("[AssistantV2] Received message for chat", chatId)
 
@@ -109,7 +113,7 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 				})
 
 				// 2. Create placeholder assistant message
-				const [assistantMessage] = await db
+				;[assistantMessage] = await db
 					.insert(schema.chatMessages)
 					.values({
 						chatId,
@@ -117,6 +121,7 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 						role: "assistant",
 						content: "",
 						isGenerating: true,
+						generationStage: "queued",
 						metadata: {}
 					})
 					.returning()
@@ -196,19 +201,33 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 					socket
 				)
 
+				// Persist the queue item id BEFORE enqueueing so cancellation can
+				// always find it — same race-window fix as generateResponse.ts.
+				const queueItemId = uuidv4()
+				await db
+					.update(schema.chatMessages)
+					.set({ queueItemId })
+					.where(eq(schema.chatMessages.id, assistantMessage.id))
+
 				// Treat the whole tool-calling turn as a single queue slot rather
 				// than instrumenting each internal LLM call — assistant turns have
 				// no per-call UI today, so the coarser granularity is fine.
-				const { done } = llmQueue.enqueue({
-					taskType: "chat",
-					connectionName: connection.name,
-					samplingName: sampling.name,
-					chatId,
-					label: "assistant",
-					preflight: (signal) => adapter.preflight(signal),
-					execute: () => assistantService.generateResponse(trimmedContent),
-					onCancel: () => adapter.abort()
-				})
+				const { done } = llmQueue.enqueue(
+					{
+						taskType: "chat",
+						connectionName: connection.name,
+						samplingName: sampling.name,
+						chatId,
+						messageId: assistantMessage.id,
+						label: "assistant",
+						preflight: (signal) => adapter.preflight(signal),
+						execute: () => assistantService.generateResponse(trimmedContent),
+						onCancel: () => adapter.abort(),
+						onStatusChange: (status) =>
+							persistGenerationStage(assistantMessage!.id, chatId, io, status)
+					},
+					queueItemId
+				)
 				const result = await done
 
 				// 7. Update assistant message with result
@@ -218,6 +237,9 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 						.set({
 							content: result.message,
 							isGenerating: false,
+							generationStage: null,
+							queueItemId: null,
+							error: null,
 							metadata: {
 								toolsUsed: result.toolsUsed || []
 							} as any
@@ -275,6 +297,9 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 						.set({
 							content: `Error: ${result.error || "Unknown error"}`,
 							isGenerating: false,
+							generationStage: null,
+							queueItemId: null,
+							error: { message: result.error || "Failed to generate response" },
 							metadata: { error: true } as any
 						})
 						.where(eq(schema.chatMessages.id, assistantMessage.id))
@@ -298,7 +323,16 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 				}
 			} catch (error) {
 				console.error("[AssistantV2] Error:", error)
+				if (isQueueCancellation(error)) {
+					// User-initiated stop already flipped isGenerating/queueItemId/error
+					// on the row via the cancel handler — nothing left to persist.
+					return
+				}
+				if (assistantMessage) {
+					await persistGenerationErrorRow(io, chatId, assistantMessage.id, error)
+				}
 				socket.emit("assistant:errorV2", {
+					chatId,
 					error:
 						error instanceof Error ? error.message : "Unknown error"
 				})

@@ -220,7 +220,7 @@
 	<div class="flex flex-col gap-6">
 		<div class="flex gap-2">
 			<button
-				class="btn btn-sm preset-tonal-surface w-full"
+				class="btn btn-sm preset-filled-surface-400-600 w-full"
 				onclick={handleCancel}
 			>
 				Cancel
@@ -231,7 +231,7 @@
 				disabled={!hasUnsavedChanges}
 			>
 				<Icons.Save size={16} />
-				Save
+				Update
 			</button>
 		</div>
 		<div>

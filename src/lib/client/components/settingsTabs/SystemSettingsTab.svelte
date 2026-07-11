@@ -901,7 +901,7 @@
 		</article>
 		<footer class="flex justify-end gap-2">
 			<button
-				class="btn preset-tonal-surface"
+				class="btn preset-filled-surface-400-600"
 				onclick={cancelEnableAccounts}
 			>
 				Cancel
@@ -1006,7 +1006,7 @@
 		<footer class="flex flex-col gap-2">
 			<div class="flex flex-wrap justify-end gap-2">
 				<button
-					class="btn preset-tonal-surface"
+					class="btn preset-filled-surface-400-600"
 					onclick={cancelEnableVectorization}
 					disabled={isEnablingVectorization}
 				>

@@ -109,7 +109,7 @@
 						<button
 							class="flex flex-col items-center gap-2 rounded-lg p-2 text-center text-sm transition"
 							class:preset-filled-primary-500={cp.personaId === currentUserPersona?.personaId}
-							class:preset-tonal-surface={cp.personaId !== currentUserPersona?.personaId}
+							class:preset-filled-surface-400-600={cp.personaId !== currentUserPersona?.personaId}
 							onclick={() => onSwitchPersona?.(cp.personaId!)}
 						>
 							<Avatar char={cp.persona} />
@@ -157,7 +157,7 @@
 											<button
 												class="btn btn-sm w-full justify-start rounded-lg text-left"
 												class:preset-filled-primary-500={cp.personaId === currentUserPersona?.personaId}
-												class:preset-tonal-surface={cp.personaId !== currentUserPersona?.personaId}
+												class:preset-filled-surface-400-600={cp.personaId !== currentUserPersona?.personaId}
 												onclick={() => {
 													onSwitchPersona?.(cp.personaId!)
 													personaSwitcherOpen = false

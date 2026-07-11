@@ -78,7 +78,9 @@
 						type="button"
 					>
 						<span
-							class="block h-6 w-6 opacity-70 transition-opacity hover:opacity-100 {isOpen ? 'opacity-100' : ''}"
+							class="block h-6 w-6 transition-colors {isOpen
+								? 'text-primary-800-200'
+								: ''} hover:text-primary-500"
 							style="background-color: currentColor; mask: url({item.imgSrc}) no-repeat center / contain; -webkit-mask: url({item.imgSrc}) no-repeat center / contain;"
 							aria-hidden="true"
 						></span>

@@ -3,6 +3,7 @@ import * as schema from "$lib/server/db/schema"
 import { and, eq } from "drizzle-orm"
 import { runBindingNodeCheck } from "$lib/server/utils/bindingNodeCheck"
 import { CharacterBook } from "@lenml/char-card-reader"
+import { mapLorebookEntryToWorldLoreEntry } from "$lib/server/utils/lorebookImportMapper"
 import type { Handler } from "$lib/shared/events"
 import type {
 	SelectTag,
@@ -604,26 +605,10 @@ export const lorebookImportHandler: Handler<
 		const queries: Promise<any>[] = []
 		card.entries.forEach((entry) => {
 			// World entries are the most agnostic, so we will import all entries as world lore entries
-			// Get priority from the entry. If the priority is null/less than 1, set it to 1.
-			// If the priority is greater than 3, set it to 3
-			let priority = entry.priority
-			if (priority === null || (priority || 1) < 1) {
-				priority = 1
-			} else if ((priority || 1) > 3) {
-				priority = 3
-			}
-
 			queries.push(
 				db.insert(schema.worldLoreEntries).values({
-					name: entry.name || entry.comment || "Imported Entry",
-					content: entry.content || "",
-					lorebookId: book.id,
-					position,
-					keys: entry.keys.join(", ") || "",
-					enabled: entry.enabled ?? true,
-					constant: entry.constant ?? false,
-					priority: priority || 1,
-					extraJson: {}
+					...mapLorebookEntryToWorldLoreEntry(entry, position),
+					lorebookId: book.id
 				})
 			)
 			position++

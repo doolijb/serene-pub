@@ -275,7 +275,7 @@
 
 			<div class="flex gap-2">
 				<button
-					class="btn btn-sm preset-tonal-surface text-xs"
+					class="btn btn-sm preset-filled-surface-400-600 text-xs"
 					onclick={checkManagedBinaryUpdate}
 					disabled={isCheckingManagedUpdate}
 				>
@@ -286,7 +286,7 @@
 					{/if}
 					Check for updates
 				</button>
-				<button class="btn btn-sm preset-tonal-surface text-xs" onclick={onUpdateBinary}>
+				<button class="btn btn-sm preset-filled-surface-400-600 text-xs" onclick={onUpdateBinary}>
 					<Icons.Settings size={12} />
 					Change binary
 				</button>
@@ -314,7 +314,7 @@
 						placeholder="300"
 					/>
 					<span class="text-surface-500 text-xs">seconds</span>
-					<button class="btn btn-sm preset-tonal-surface text-xs" onclick={saveTtl} disabled={savingTtl}>
+					<button class="btn btn-sm preset-filled-surface-400-600 text-xs" onclick={saveTtl} disabled={savingTtl}>
 						{#if savingTtl}<Icons.Loader2 size={12} class="animate-spin" />{:else}Save{/if}
 					</button>
 				</div>
@@ -340,7 +340,7 @@
 						placeholder="1800"
 					/>
 					<span class="text-surface-500 text-xs">seconds</span>
-					<button class="btn btn-sm preset-tonal-surface text-xs" onclick={saveSubprocessTimeout} disabled={savingSubprocessTimeout}>
+					<button class="btn btn-sm preset-filled-surface-400-600 text-xs" onclick={saveSubprocessTimeout} disabled={savingSubprocessTimeout}>
 						{#if savingSubprocessTimeout}<Icons.Loader2 size={12} class="animate-spin" />{:else}Save{/if}
 					</button>
 				</div>
@@ -365,7 +365,7 @@
 						class="input w-24 text-sm"
 						placeholder="5001"
 					/>
-					<button class="btn btn-sm preset-tonal-surface text-xs" onclick={savePort} disabled={savingPort}>
+					<button class="btn btn-sm preset-filled-surface-400-600 text-xs" onclick={savePort} disabled={savingPort}>
 						{#if savingPort}<Icons.Loader2 size={12} class="animate-spin" />{:else}Save{/if}
 					</button>
 				</div>
@@ -497,7 +497,7 @@
 				</button>
 			</div>
 			<p class="text-surface-500 mt-1 text-xs">
-				Server-side path where GGUF model files are stored or downloaded to.
+				Server-side path where GGUF model files are stored and downloaded to.
 			</p>
 		</div>
 

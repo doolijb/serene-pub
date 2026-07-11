@@ -407,7 +407,7 @@
 		<div class="mb-4">
 			<div class="mb-4 flex items-center gap-2">
 				<button
-					class="btn btn-sm preset-tonal-surface p-2"
+					class="btn btn-sm preset-filled-surface-400-600 p-2"
 					onclick={() => { selectedTag = null }}
 					title="Back to tags"
 				>
@@ -415,7 +415,7 @@
 				</button>
 				<h2 class="flex-1 truncate font-semibold">{selectedTag.name}</h2>
 				<button
-					class="btn btn-sm preset-tonal-surface p-2"
+					class="btn btn-sm preset-filled-surface-400-600 p-2"
 					onclick={handleEditClick}
 					title="Rename Tag"
 				>

@@ -227,7 +227,7 @@
 <div class="flex h-full flex-col p-4">
 	<div class="mb-4 flex items-center gap-2">
 		<button
-			class="btn btn-sm preset-tonal-surface shrink-0 p-2"
+			class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
 			onclick={handleCancel}
 			title="Cancel"
 		>

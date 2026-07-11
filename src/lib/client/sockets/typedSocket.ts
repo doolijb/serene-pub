@@ -1,7 +1,7 @@
 import * as skio from "sveltekit-io"
 
 // Type mapping for socket events - this maps event names to their param/response types
-type SocketEventMap = {
+export type SocketEventMap = {
 	// Authentication events
 	"auth:login": {
 		params: Sockets.Auth.Login.Params
@@ -1135,6 +1135,14 @@ type SocketEventMap = {
 	}
 
 	// Import events
+	"import:sillytavern:startSession": {
+		params: Sockets.Import.SillyTavern.StartSession.Params
+		response: Sockets.Import.SillyTavern.StartSession.Response
+	}
+	"import:sillytavern:stageFiles": {
+		params: Sockets.Import.SillyTavern.StageFiles.Params
+		response: Sockets.Import.SillyTavern.StageFiles.Response
+	}
 	"import:sillytavern:scan": {
 		params: Sockets.Import.SillyTavern.Scan.Params
 		response: Sockets.Import.SillyTavern.Scan.Response

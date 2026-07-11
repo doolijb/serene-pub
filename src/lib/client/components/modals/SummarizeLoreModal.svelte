@@ -452,7 +452,7 @@
 							<button class="btn btn-sm preset-filled-primary-500" disabled={!attachingLorebookId} onclick={confirmAttachExisting}>
 								Attach
 							</button>
-							<button class="btn btn-sm preset-tonal-surface" onclick={() => (isCreatingLorebook = true)}>
+							<button class="btn btn-sm preset-filled-surface-400-600" onclick={() => (isCreatingLorebook = true)}>
 								<Icons.Plus size={14} /> New
 							</button>
 						</div>
@@ -468,7 +468,7 @@
 							<button class="btn btn-sm preset-filled-primary-500" disabled={!newLorebookName.trim()} onclick={createAndAttachLorebook}>
 								Create & Attach
 							</button>
-							<button class="btn btn-sm preset-tonal-surface" onclick={() => (isCreatingLorebook = false)}>
+							<button class="btn btn-sm preset-filled-surface-400-600" onclick={() => (isCreatingLorebook = false)}>
 								<Icons.X size={14} />
 							</button>
 						</div>
@@ -523,7 +523,7 @@
 								</option>
 							{/each}
 						</select>
-						<button class="btn btn-sm preset-tonal-surface" disabled={isCreatingHistoryEntry || !hasLorebook} onclick={createBlankHistoryEntry} title={!hasLorebook ? "Attach a lorebook first" : "Create a new blank history entry"}>
+						<button class="btn btn-sm preset-filled-surface-400-600" disabled={isCreatingHistoryEntry || !hasLorebook} onclick={createBlankHistoryEntry} title={!hasLorebook ? "Attach a lorebook first" : "Create a new blank history entry"}>
 							{#if isCreatingHistoryEntry}
 								<Icons.Loader size={14} class="animate-spin" />
 							{:else}
@@ -703,7 +703,7 @@
 								onkeydown={(e) => e.key === "Enter" && addParticipant()}
 								onblur={addParticipant}
 							/>
-							<button class="btn btn-sm preset-tonal-surface" onclick={addParticipant} disabled={!newParticipantInput.trim()}>
+							<button class="btn btn-sm preset-filled-surface-400-600" onclick={addParticipant} disabled={!newParticipantInput.trim()}>
 								<Icons.Plus size={12} />
 							</button>
 						</div>
@@ -732,7 +732,7 @@
 								onkeydown={(e) => e.key === "Enter" && addMentioned()}
 								onblur={addMentioned}
 							/>
-							<button class="btn btn-sm preset-tonal-surface" onclick={addMentioned} disabled={!newMentionedInput.trim()}>
+							<button class="btn btn-sm preset-filled-surface-400-600" onclick={addMentioned} disabled={!newMentionedInput.trim()}>
 								<Icons.Plus size={12} />
 							</button>
 						</div>

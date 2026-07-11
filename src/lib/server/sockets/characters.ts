@@ -13,10 +13,11 @@ import {
 import { CharacterCard, type SpecV3 } from "@lenml/char-card-reader"
 import { fileTypeFromBuffer } from "file-type"
 import type { Handler } from "$lib/shared/events"
-import extract from "png-chunks-extract"
-import encode from "png-chunks-encode"
-import text from "png-chunk-text"
-import { parseCharacterCardFromBase64 } from "../utils/characterCardParser"
+import {
+	parseCharacterCardFromBase64,
+	buildCharacterCardV2,
+	embedCharacterCardInPng
+} from "../utils/characterCardParser"
 import { autoEnqueueCharacter } from "$lib/server/embedding/vectorizationQueue"
 
 // Helper function to process tags for character creation/update
@@ -564,42 +565,10 @@ export const charactersExportCard: Handler<Sockets.Characters.ExportCard.Params,
 			}
 
 			// Convert to CharacterCard V2 format
-			const charCardData = {
-				spec: "chara_card_v2",
-				spec_version: "2.0",
-				data: {
-					name: character.name,
-					description: character.description || "",
-					personality: character.personality || "",
-					scenario: character.scenario || "",
-					first_mes: character.firstMessage || "",
-					mes_example: typeof character.exampleDialogues === "string" 
-						? character.exampleDialogues 
-						: (character.exampleDialogues as string[] || []).join("<START>"),
-					creator_notes: character.creatorNotes || "",
-					system_prompt: character.systemPrompt || "",
-					post_history_instructions: character.postHistoryInstructions || "",
-					alternate_greetings: character.alternateGreetings || [],
-					tags: character.characterTags?.map(ct => ct.tag.name) || [],
-					creator: character.creator || "",
-					character_version: character.characterVersion || "",
-					extensions: {
-						depth_prompt: {
-							prompt: character.depthPrompt || "",
-							depth: character.depthPromptDepth || 4,
-							role: character.depthPromptRole || "system"
-						},
-						...(character.source && character.source.length > 0 ? { source: character.source } : {}),
-						...(character.groupOnlyGreetings && character.groupOnlyGreetings.length > 0
-							? { group_only_greetings: character.groupOnlyGreetings }
-							: {}),
-						serenepub: {
-							...(character.aliases && character.aliases.length > 0 ? { aliases: character.aliases } : {}),
-							...(character.summary ? { summary: character.summary } : {})
-						}
-					}
-				}
-			}
+			const charCardData = buildCharacterCardV2({
+				...character,
+				tags: character.characterTags?.map((ct) => ct.tag.name) || []
+			})
 
 			if (format === "json") {
 				// Export as JSON
@@ -626,35 +595,7 @@ export const charactersExportCard: Handler<Sockets.Characters.ExportCard.Params,
 				const avatarPath = path.join(avatarDir, avatarFilename)
 				const avatarBuffer = await fsPromises.readFile(avatarPath)
 
-				// Extract existing PNG chunks
-				const chunks = extract(avatarBuffer)
-
-				// Create the character data in base64
-				const jsonString = JSON.stringify(charCardData)
-				const base64Data = Buffer.from(jsonString, "utf-8").toString("base64")
-
-				// Create a tEXt chunk with the character data
-				const textChunk = text.encode("chara", base64Data)
-
-				// Remove any existing "chara" or "ccv3" chunks
-				const filteredChunks = chunks.filter(chunk => {
-					if (chunk.name === "tEXt") {
-						const decoded = text.decode(chunk.data)
-						return decoded.keyword !== "chara" && decoded.keyword !== "ccv3"
-					}
-					return true
-				})
-
-				// Insert the new chunk before the IEND chunk
-				const iendIndex = filteredChunks.findIndex(chunk => chunk.name === "IEND")
-				if (iendIndex !== -1) {
-					filteredChunks.splice(iendIndex, 0, textChunk)
-				} else {
-					filteredChunks.push(textChunk)
-				}
-
-				// Encode back to PNG
-				const blob = Buffer.from(encode(filteredChunks))
+				const blob = embedCharacterCardInPng(avatarBuffer, charCardData)
 				const filename = `${character.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.png`
 
 				const res: Sockets.Characters.ExportCard.Response = {
