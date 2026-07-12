@@ -221,8 +221,10 @@
 				>
 					{#if isTesting}
 						<Icons.Loader2 class="h-4 w-4 animate-spin" />
+						Testing…
 					{:else}
 						<Icons.RefreshCw class="h-4 w-4" />
+						Test
 					{/if}
 				</button>
 			</div>

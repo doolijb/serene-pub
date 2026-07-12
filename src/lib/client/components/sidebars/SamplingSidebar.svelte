@@ -334,11 +334,12 @@
 			<div class="mb-4 flex items-center gap-2">
 				<button
 					type="button"
-					class="btn btn-sm preset-filled-surface-400-600 p-2"
+					class="btn btn-sm preset-filled-surface-400-600"
 					onclick={handleBackToSidebar}
 					title="Back"
 				>
 					<Icons.ChevronLeft size={16} />
+					Back
 				</button>
 				<h2 class="flex-1 truncate font-semibold">Enable/Disable Weight Options</h2>
 			</div>
@@ -375,24 +376,30 @@
 				type="button"
 				class="btn btn-sm preset-filled-primary-500"
 				onclick={handleNew}
+				title="New sampling config"
 			>
 				<Icons.Plus size={16} />
+				New
 			</button>
 			<button
 				type="button"
 				class="btn btn-sm preset-filled-secondary-500"
 				onclick={handleReset}
 				disabled={!unsavedChanges}
+				title="Reset unsaved changes"
 			>
 				<Icons.RefreshCcw size={16} />
+				Reset
 			</button>
 			<button
 				type="button"
 				class="btn btn-sm preset-filled-error-500"
 				onclick={handleDelete}
 				disabled={!!sampling && sampling.isImmutable}
+				title="Delete sampling config"
 			>
 				<Icons.X size={16} />
+				Delete
 			</button>
 		</div>
 		<div class="mb-4">

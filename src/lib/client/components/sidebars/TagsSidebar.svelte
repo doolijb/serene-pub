@@ -407,26 +407,29 @@
 		<div class="mb-4">
 			<div class="mb-4 flex items-center gap-2">
 				<button
-					class="btn btn-sm preset-filled-surface-400-600 p-2"
+					class="btn btn-sm preset-filled-surface-400-600"
 					onclick={() => { selectedTag = null }}
 					title="Back to tags"
 				>
 					<Icons.ChevronLeft size={16} />
+					Back
 				</button>
-				<h2 class="flex-1 truncate font-semibold">{selectedTag.name}</h2>
+				<h2 class="min-w-0 flex-1 truncate font-semibold">{selectedTag.name}</h2>
 				<button
-					class="btn btn-sm preset-filled-surface-400-600 p-2"
+					class="btn btn-sm preset-filled-surface-400-600"
 					onclick={handleEditClick}
 					title="Rename Tag"
 				>
 					<Icons.Pencil size={16} />
+					Rename
 				</button>
 				<button
-					class="btn btn-sm preset-tonal-error p-2"
+					class="btn btn-sm preset-tonal-error"
 					onclick={handleDeleteClick}
 					title="Delete Tag"
 				>
 					<Icons.Trash2 size={16} />
+					Delete
 				</button>
 			</div>
 
@@ -745,6 +748,7 @@
 				title="Create New Tag"
 			>
 				<Icons.Plus size={16} />
+				New
 			</button>
 		</div>
 

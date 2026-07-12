@@ -175,6 +175,7 @@
 					title="Create new user"
 				>
 					<Icons.Plus size={16} />
+					New
 				</button>
 			{/if}
 		</div>
@@ -229,7 +230,7 @@
 							{#if isCurrentUserAdmin && user.id !== userCtx.user?.id}
 								<div class="ml-2 flex shrink-0 gap-1" role="group">
 									<span
-										class="btn btn-sm preset-filled-surface-400-600 p-2"
+										class="btn btn-sm preset-filled-surface-400-600"
 										onclick={(e) => { e.stopPropagation(); startEdit(user) }}
 										title="Edit user"
 										role="button"
@@ -237,9 +238,10 @@
 										onkeydown={(e) => e.key === 'Enter' && startEdit(user)}
 									>
 										<Icons.Pencil size={14} />
+										Edit
 									</span>
 									<span
-										class="btn btn-sm preset-tonal-error p-2"
+										class="btn btn-sm preset-tonal-error"
 										onclick={(e) => { e.stopPropagation(); confirmDelete(user) }}
 										title="Delete user"
 										role="button"
@@ -247,6 +249,7 @@
 										onkeydown={(e) => e.key === 'Enter' && confirmDelete(user)}
 									>
 										<Icons.Trash2 size={14} />
+										Delete
 									</span>
 								</div>
 							{/if}

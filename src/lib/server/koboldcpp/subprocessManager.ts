@@ -215,17 +215,32 @@ function stopHealthCheck() {
 	}
 }
 
+// Early-exit failures below happen before a real process ever spawns, so
+// there's nothing for the normal proc.on("error"/"exit") handlers to report.
+// Without this, callers that only console.error() a rejected start() (the
+// manual "start" button, and the auto-start after a binary download) leave
+// the client with no feedback at all — the UI keeps showing "stopped" while
+// the real reason only ever reaches the server log.
+function failStart(message: string): never {
+	state.status = "crashed"
+	state.lastError = message
+	state.process = null
+	state.pid = null
+	emitStatus()
+	throw new Error(message)
+}
+
 export async function start(): Promise<void> {
 	if (state.status === "running" || state.status === "starting") return
 
 	const settings = await db.query.koboldCppSettings.findFirst()
 	if (!settings?.koboldCppManagerEnabled || settings?.koboldCppManagedMode !== "managed") {
-		throw new Error("Managed mode is not enabled")
+		failStart("Managed mode is not enabled")
 	}
 
 	const { koboldCppManagedBinaryDir: binaryDir, koboldCppManagedBinaryVariant: binaryVariant } =
 		settings
-	if (!binaryDir || !binaryVariant) throw new Error("Binary not configured")
+	if (!binaryDir || !binaryVariant) failStart("Binary not configured")
 
 	lastBinaryDir = binaryDir
 	const binaryPath = path.join(binaryDir, binaryVariant)
@@ -233,7 +248,7 @@ export async function start(): Promise<void> {
 	try {
 		await fsPromises.access(binaryPath, fs.constants.F_OK)
 	} catch {
-		throw new Error(`Binary not found at ${binaryPath}`)
+		failStart(`Binary not found at ${binaryPath}`)
 	}
 
 	if (process.platform !== "win32") {

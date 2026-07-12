@@ -896,13 +896,7 @@ export const koboldCppDownloadBinary: Handler<
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 
 		binaryManager.setEmitter((d) => emitToUser("koboldcpp:binaryDownloadProgress", d))
-
-		// Persist the chosen variant + dir + version now so it can be resumed/referenced
-		await db.update(schema.koboldCppSettings).set({
-			koboldCppManagedBinaryVariant: params.assetName,
-			koboldCppManagedBinaryDir: params.destDir,
-			koboldCppManagedReleaseTag: params.releaseTag
-		})
+		subprocessManager.setEmitter((s) => emitToUser("koboldcpp:subprocessStatus", s))
 
 		// Run async so we can return immediately
 		;(async () => {
@@ -911,6 +905,17 @@ export const koboldCppDownloadBinary: Handler<
 					assetName: params.assetName,
 					downloadUrl: params.downloadUrl,
 					destDir: params.destDir
+				})
+				// Only record the binary as installed once the file is actually
+				// on disk — persisting this before a successful download meant a
+				// failed download (eg. a permissions error creating destDir)
+				// still left settings claiming a binary was configured at a path
+				// where nothing existed, so the next auto-start attempt would
+				// fail with a confusing "Binary not found" and no download to retry.
+				await db.update(schema.koboldCppSettings).set({
+					koboldCppManagedBinaryVariant: params.assetName,
+					koboldCppManagedBinaryDir: params.destDir,
+					koboldCppManagedReleaseTag: params.releaseTag
 				})
 				// Auto-start subprocess after successful download
 				await subprocessManager.start()

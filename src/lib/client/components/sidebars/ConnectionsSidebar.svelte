@@ -305,7 +305,7 @@
 					title="Create new AI connection (Ctrl+N)"
 				>
 					<Icons.Plus size={16} aria-hidden="true" />
-					<span class="sr-only">Create New Connection</span>
+					New
 				</button>
 				<button
 					type="button"
@@ -318,7 +318,7 @@
 					aria-describedby={unsavedChanges ? "reset-help" : undefined}
 				>
 					<Icons.RefreshCcw size={16} aria-hidden="true" />
-					<span class="sr-only">Reset Changes</span>
+					Reset
 				</button>
 				{#if unsavedChanges}
 					<div id="reset-help" class="sr-only">
@@ -335,7 +335,7 @@
 						: "No connection selected to delete"}
 				>
 					<Icons.X size={16} aria-hidden="true" />
-					<span class="sr-only">Delete Connection</span>
+					Delete
 				</button>
 			</div>
 		</div>

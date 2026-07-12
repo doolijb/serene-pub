@@ -321,6 +321,7 @@
 				type="button"
 			>
 				<Icons.Plus size={16} aria-hidden="true" />
+				New
 			</button>
 			<button
 				class="btn btn-sm preset-filled-primary-500"
@@ -330,6 +331,7 @@
 				type="button"
 			>
 				<Icons.Download size={16} aria-hidden="true" />
+				Import
 			</button>
 		</div>
 		<div class="mb-4 flex items-center gap-2">

@@ -291,6 +291,7 @@
 				title="Create New Chat"
 			>
 				<Icons.Plus size={16} />
+				New
 			</button>
 		</div>
 		<div class="mb-4 flex items-center gap-2">

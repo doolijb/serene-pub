@@ -575,6 +575,14 @@
 		Expect bugs and rapid changes. This project is under heavy development.
 	</div>
 
+	<a
+		href="/docs"
+		class="btn btn-sm preset-filled-surface-400-600 self-end"
+	>
+		<Icons.BookOpen size={16} />
+		Documentation
+	</a>
+
 	<!-- Loading state while socket data arrives -->
 	{#if !dataReady}
 		<div class="preset-filled-surface-200-800 mx-auto w-full rounded-2xl p-10 text-center">

@@ -143,14 +143,19 @@ export async function downloadVariant(opts: {
 	destDir: string
 }): Promise<void> {
 	const { assetName, downloadUrl, destDir } = opts
-
-	await fsPromises.mkdir(destDir, { recursive: true })
 	const destPath = path.join(destDir, assetName)
 
 	currentDownload = { assetName, status: "starting", downloaded: 0, total: 0, isDone: false }
 	emitProgress()
 
 	try {
+		// Deliberately inside the try: a mkdir failure (eg. a permissions
+		// problem on a mounted volume) is just as much a download failure as
+		// a network error, and must reach the client the same way — via
+		// emitProgress()'s "error" status below, not silently swallowed by
+		// whatever bare console.error() the caller wraps this in.
+		await fsPromises.mkdir(destDir, { recursive: true })
+
 		await new Promise<void>((resolve, reject) => {
 			function request(url: string, redirectsLeft: number) {
 				const urlObj = new URL(url)

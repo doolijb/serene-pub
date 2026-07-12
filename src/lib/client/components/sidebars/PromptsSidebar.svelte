@@ -496,12 +496,13 @@
 		<div class="flex items-center gap-2 border-b border-surface-200-800 px-4 py-3">
 			<button class="btn btn-sm preset-filled-surface-400-600" onclick={navigateBack} title="Back">
 				<Icons.ChevronLeft size={16} />
+				Back
 			</button>
 			<div class="min-w-0 flex-1"><h2 class="truncate text-sm font-semibold">Chat Prompts</h2></div>
 			<div class="flex shrink-0 items-center gap-1">
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleChatNew} title="Clone to new config"><Icons.Plus size={14} /></button>
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleChatReset} disabled={!chatUnsaved} title="Discard changes"><Icons.RefreshCcw size={14} /></button>
-				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleChatDelete} disabled={!chatConfig || chatConfig.isImmutable} title="Delete config"><Icons.Trash2 size={14} /></button>
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleChatNew} title="Clone to new config"><Icons.Plus size={14} /> Clone</button>
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleChatReset} disabled={!chatUnsaved} title="Discard changes"><Icons.RefreshCcw size={14} /> Discard</button>
+				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleChatDelete} disabled={!chatConfig || chatConfig.isImmutable} title="Delete config"><Icons.Trash2 size={14} /> Delete</button>
 			</div>
 		</div>
 		<div class="flex-1 overflow-y-auto p-4">
@@ -558,12 +559,12 @@
 {:else if view === "world"}
 	<div class="text-foreground flex h-full flex-col">
 		<div class="flex items-center gap-2 border-b border-surface-200-800 px-4 py-3">
-			<button class="btn btn-sm preset-filled-surface-400-600" onclick={navigateBack} title="Back"><Icons.ChevronLeft size={16} /></button>
+			<button class="btn btn-sm preset-filled-surface-400-600" onclick={navigateBack} title="Back"><Icons.ChevronLeft size={16} /> Back</button>
 			<div class="min-w-0 flex-1"><h2 class="truncate text-sm font-semibold">World Lore Summarization</h2></div>
 			<div class="flex shrink-0 items-center gap-1">
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleWorldNew} title="Clone to new config"><Icons.Plus size={14} /></button>
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleWorldReset} disabled={!worldUnsaved} title="Discard changes"><Icons.RefreshCcw size={14} /></button>
-				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleWorldDelete} disabled={!worldConfig || worldConfig.isImmutable} title="Delete config"><Icons.Trash2 size={14} /></button>
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleWorldNew} title="Clone to new config"><Icons.Plus size={14} /> Clone</button>
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleWorldReset} disabled={!worldUnsaved} title="Discard changes"><Icons.RefreshCcw size={14} /> Discard</button>
+				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleWorldDelete} disabled={!worldConfig || worldConfig.isImmutable} title="Delete config"><Icons.Trash2 size={14} /> Delete</button>
 			</div>
 		</div>
 		<div class="flex-1 overflow-y-auto p-4">
@@ -642,12 +643,12 @@
 {:else if view === "character"}
 	<div class="text-foreground flex h-full flex-col">
 		<div class="flex items-center gap-2 border-b border-surface-200-800 px-4 py-3">
-			<button class="btn btn-sm preset-filled-surface-400-600" onclick={navigateBack} title="Back"><Icons.ChevronLeft size={16} /></button>
+			<button class="btn btn-sm preset-filled-surface-400-600" onclick={navigateBack} title="Back"><Icons.ChevronLeft size={16} /> Back</button>
 			<div class="min-w-0 flex-1"><h2 class="truncate text-sm font-semibold">Character Lore Summarization</h2></div>
 			<div class="flex shrink-0 items-center gap-1">
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleCharacterNew} title="Clone to new config"><Icons.Plus size={14} /></button>
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleCharacterReset} disabled={!characterUnsaved} title="Discard changes"><Icons.RefreshCcw size={14} /></button>
-				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleCharacterDelete} disabled={!characterConfig || characterConfig.isImmutable} title="Delete config"><Icons.Trash2 size={14} /></button>
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleCharacterNew} title="Clone to new config"><Icons.Plus size={14} /> Clone</button>
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleCharacterReset} disabled={!characterUnsaved} title="Discard changes"><Icons.RefreshCcw size={14} /> Discard</button>
+				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleCharacterDelete} disabled={!characterConfig || characterConfig.isImmutable} title="Delete config"><Icons.Trash2 size={14} /> Delete</button>
 			</div>
 		</div>
 		<div class="flex-1 overflow-y-auto p-4">
@@ -726,12 +727,12 @@
 {:else if view === "scene"}
 	<div class="text-foreground flex h-full flex-col">
 		<div class="flex items-center gap-2 border-b border-surface-200-800 px-4 py-3">
-			<button class="btn btn-sm preset-filled-surface-400-600" onclick={navigateBack} title="Back"><Icons.ChevronLeft size={16} /></button>
+			<button class="btn btn-sm preset-filled-surface-400-600" onclick={navigateBack} title="Back"><Icons.ChevronLeft size={16} /> Back</button>
 			<div class="min-w-0 flex-1"><h2 class="truncate text-sm font-semibold">Scene Summarization</h2></div>
 			<div class="flex shrink-0 items-center gap-1">
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleSceneNew} title="Clone to new config"><Icons.Plus size={14} /></button>
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleSceneReset} disabled={!sceneUnsaved} title="Discard changes"><Icons.RefreshCcw size={14} /></button>
-				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleSceneDelete} disabled={!sceneConfig || sceneConfig.isImmutable} title="Delete config"><Icons.Trash2 size={14} /></button>
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleSceneNew} title="Clone to new config"><Icons.Plus size={14} /> Clone</button>
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleSceneReset} disabled={!sceneUnsaved} title="Discard changes"><Icons.RefreshCcw size={14} /> Discard</button>
+				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleSceneDelete} disabled={!sceneConfig || sceneConfig.isImmutable} title="Delete config"><Icons.Trash2 size={14} /> Delete</button>
 			</div>
 		</div>
 		<div class="flex-1 overflow-y-auto p-4">

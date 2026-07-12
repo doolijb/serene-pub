@@ -358,11 +358,12 @@
 	{#if isEditingLorebook}
 		<div class="mb-4 flex items-center gap-2">
 			<button
-				class="btn btn-sm preset-filled-surface-400-600 p-2"
+				class="btn btn-sm preset-filled-surface-400-600"
 				onclick={() => { isEditingLorebook = false }}
 				title="Back to lorebooks"
 			>
 				<Icons.ChevronLeft size={16} />
+				Back
 			</button>
 			<h2 class="flex-1 truncate font-semibold">
 				{selectedLorebook?.name || "Lorebook"}
@@ -471,6 +472,7 @@
 				title="Create New Lorebook"
 			>
 				<Icons.Plus size={16} />
+				New
 			</button>
 			<button
 				class="btn btn-sm preset-filled-primary-500"
@@ -478,6 +480,7 @@
 				onclick={handleImportClick}
 			>
 				<Icons.Upload size={16} />
+				Import
 			</button>
 			<button
 				class="btn btn-sm preset-filled-primary-500"
@@ -485,6 +488,7 @@
 				disabled
 			>
 				<Icons.Download size={16} />
+				Export
 			</button>
 		</div>
 		<div class="mb-4 flex items-center gap-2">
