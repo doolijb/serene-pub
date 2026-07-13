@@ -2450,7 +2450,7 @@ export const promptTokenCountHandler: Handler<
 				return { error: "No character available for prompt." }
 			}
 
-			const { Adapter } = getConnectionAdapter(connection.type)
+			const { Adapter } = await getConnectionAdapter(connection.type)
 
 			const tokenCounter = new TokenCounters((connection as any).tokenCounter || TokenCounterOptions.ESTIMATE)
 			const contextThresholdPercent = 0.8

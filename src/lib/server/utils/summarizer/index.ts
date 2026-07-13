@@ -150,7 +150,7 @@ async function runGeneration(
 		label?: string
 	}
 ): Promise<string> {
-	const AdapterClass = getConnectionAdapter(opts.connection.type)
+	const AdapterClass = await getConnectionAdapter(opts.connection.type)
 	const fakeChat = buildMinimalChat(promptData.userPrompt)
 
 	const adapter = new AdapterClass.Adapter({

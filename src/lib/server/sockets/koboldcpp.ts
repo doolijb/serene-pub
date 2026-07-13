@@ -17,6 +17,7 @@ import { randomUUID } from "crypto"
 import * as subprocessManager from "$lib/server/koboldcpp/subprocessManager"
 import * as binaryManager from "$lib/server/koboldcpp/binaryManager"
 import { unloadModel } from "$lib/server/koboldcpp/modelManager"
+import { isAndroidWrapper } from "$lib/server/utils"
 
 // --- KOBOLDCPP MANAGER HANDLERS ---
 
@@ -346,9 +347,19 @@ export const koboldCppPerfHandler: Handler<
 		const { koboldCppManagerBaseUrl: baseUrl } =
 			(await db.query.koboldCppSettings.findFirst())!
 
-		const response = await fetch(`${baseUrl}/api/extra/perf`, {
-			signal: AbortSignal.timeout(5000)
-		})
+		let response: Response
+		try {
+			response = await fetch(`${baseUrl}/api/extra/perf`, {
+				signal: AbortSignal.timeout(5000)
+			})
+		} catch {
+			// Not reachable is an expected, common state (nothing started yet,
+			// no managed/external instance configured) — throw a short, clean
+			// message instead of letting the raw fetch failure (with its nested
+			// AggregateError/ECONNREFUSED cause chain) hit the generic handler
+			// wrapper's console.error on every poll.
+			throw new Error("KoboldCPP is not reachable")
+		}
 
 		if (!response.ok) {
 			throw new Error(`HTTP ${response.status}: ${response.statusText}`)
@@ -728,6 +739,9 @@ export const koboldCppSetManagedMode: Handler<
 	event: "koboldcpp:setManagedMode",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		if (params.mode === "managed" && isAndroidWrapper()) {
+			throw new Error("Managed KoboldCPP mode is not available in the Android app")
+		}
 		const settings = (await db.query.koboldCppSettings.findFirst())!
 
 		let adminPassword = settings.koboldCppManagedAdminPassword
@@ -1036,6 +1050,9 @@ export const koboldCppUpdateManagerEnabled: Handler<
 	event: "systemSettings:updateKoboldCppManagerEnabled",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		if (params.enabled && isAndroidWrapper()) {
+			throw new Error("KoboldCPP Manager is not available in the Android app")
+		}
 		await db.update(schema.koboldCppSettings).set({ koboldCppManagerEnabled: params.enabled }).where(eq(schema.koboldCppSettings.id, 1))
 		const res: Sockets.SystemSettings.UpdateKoboldCppManagerEnabled.Response = { success: true, enabled: params.enabled }
 		emitToUser("systemSettings:updateKoboldCppManagerEnabled", res)

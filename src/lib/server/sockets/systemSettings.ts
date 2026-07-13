@@ -2,6 +2,7 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
+import { isAndroidWrapper } from "$lib/server/utils"
 
 export const systemSettingsGet: Handler<Sockets.SystemSettings.Get.Params, Sockets.SystemSettings.Get.Response> = {
 	event: "systemSettings:get",
@@ -18,7 +19,8 @@ export const systemSettingsGet: Handler<Sockets.SystemSettings.Get.Params, Socke
 			const res: Sockets.SystemSettings.Get.Response = {
 				systemSettings: settings as any,
 				ollamaSettings: (ollamaSettings ?? {}) as any,
-				koboldCppSettings: (koboldCppSettings ?? {}) as any
+				koboldCppSettings: (koboldCppSettings ?? {}) as any,
+				isAndroidWrapper: isAndroidWrapper()
 			}
 
 			emitToUser("systemSettings:get", res)

@@ -80,7 +80,7 @@ export async function generateChatTitle({
 		}
 
 		// Get the appropriate adapter
-		const AdapterClass = getConnectionAdapter(connection.type)
+		const AdapterClass = await getConnectionAdapter(connection.type)
 		if (!AdapterClass) {
 			throw new Error(
 				`No adapter found for connection type: ${connection.type}`

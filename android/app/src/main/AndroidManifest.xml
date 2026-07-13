@@ -4,22 +4,19 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:allowBackup="true"
-        android:icon="@drawable/ic_launcher"
-        android:label="Serene Pub"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
-        android:requestLegacyExternalStorage="true">
-        
+        android:extractNativeLibs="true">
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -31,12 +28,19 @@
             </intent-filter>
         </activity>
 
-        <!-- Foreground service for Node.js process -->
+        <!-- Foreground service for the bundled Node.js process. specialUse is the
+             correct API 34+ category for a long-lived local app server that doesn't
+             fit a standard FGS type (dataSync is subject to sync-specific time
+             limits Android increasingly enforces, a poor fit for "runs all session"). -->
         <service
             android:name=".NodeService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="local_app_server" />
+        </service>
     </application>
 
 </manifest>

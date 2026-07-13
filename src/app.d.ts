@@ -87,7 +87,7 @@ declare global {
 	}
 
 	interface SystemSettingsCtx {
-		settings?: Omit<SelectSystemSettings, "id">
+		settings?: Omit<SelectSystemSettings, "id"> & { isAndroidWrapper?: boolean }
 	}
 
 	interface OllamaSettingsCtx {

@@ -553,6 +553,19 @@
 
 {#if !!systemSettingsCtx.settings && userCtx.user?.isAdmin}
 	<div class="flex flex-col gap-6">
+		{#if systemSettingsCtx.settings?.isAndroidWrapper}
+			<div class="space-y-4">
+				<h3 class="text-lg font-semibold">Local Model Managers</h3>
+				<p class="text-muted-foreground text-sm">
+					Ollama Manager, KoboldCPP Manager, and Vectorization & RAG aren't
+					available in the Android app — they depend on locally-run binaries and
+					on-device embedding models this build can't bundle or hasn't verified
+					work on Android. Connect to a remote Ollama or KoboldCPP instance from
+					the Connections panel instead.
+				</p>
+			</div>
+		{:else}
+
 		<!-- Ollama Manager Settings -->
 		<div class="space-y-4">
 			<h3 class="text-lg font-semibold">Ollama Manager</h3>
@@ -702,6 +715,8 @@
 				</p>
 			{/if}
 		</div>
+
+		{/if}
 
 		<!-- Summarization Settings -->
 		<div class="space-y-4">

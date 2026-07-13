@@ -2,6 +2,7 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
+import { isAndroidWrapper } from "$lib/server/utils"
 import { EMBEDDING_MODELS, findModel } from "$lib/server/embedding/models"
 import {
 	loadEmbeddingModel,
@@ -115,6 +116,9 @@ export const vectorizationEnableVectorization: Handler<
 	event: "vectorization:enable",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		if (isAndroidWrapper()) {
+			throw new Error("Vectorization is not available in the Android app")
+		}
 		const modelDef = findModel(params.modelName)
 		if (!modelDef) {
 			emitToUser("vectorization:enable:error", {

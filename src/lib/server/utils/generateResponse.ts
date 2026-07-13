@@ -367,7 +367,7 @@ export async function generateResponse({
 		return false
 	}
 
-	const { Adapter } = getConnectionAdapter(connection.type)
+	const { Adapter } = await getConnectionAdapter(connection.type)
 
 	const tokenCounter = new TokenCounters("estimate")
 	const tokenLimit = 4096

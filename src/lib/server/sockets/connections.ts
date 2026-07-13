@@ -88,7 +88,7 @@ export const connectionsCreate: Handler<
 		}
 
 		let data = { ...params.connection }
-		const Adapter = getConnectionAdapter(data.type)
+		const Adapter = await getConnectionAdapter(data.type)
 		data = { ...Adapter.connectionDefaults, ...data }
 		if ("id" in data) delete data.id
 		// Always remove id before insert to let DB auto-increment
@@ -223,7 +223,7 @@ export const connectionsTest: Handler<
 			)
 		}
 
-		const { Adapter, testConnection, listModels } = getConnectionAdapter(
+		const { Adapter, testConnection, listModels } = await getConnectionAdapter(
 			params.connection.type
 		)
 		if (!Adapter) {
@@ -290,7 +290,7 @@ export const connectionsRefreshModels: Handler<
 			)
 		}
 
-		const { listModels } = getConnectionAdapter(params.connection.type)
+		const { listModels } = await getConnectionAdapter(params.connection.type)
 
 		try {
 			const result = await listModels(params.connection)

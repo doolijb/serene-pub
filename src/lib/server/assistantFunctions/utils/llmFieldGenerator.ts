@@ -82,7 +82,7 @@ export async function generateFieldWithLLM({
 		throw new Error("No AI connection configured. Please set up a connection first.")
 	}
 
-	const { Adapter } = getConnectionAdapter(connection.type)
+	const { Adapter } = await getConnectionAdapter(connection.type)
 	const tokenCounter = new TokenCounters(
 		connection.tokenCounter || "estimate"
 	)

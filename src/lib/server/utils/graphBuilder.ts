@@ -157,7 +157,7 @@ async function runLLM(
 	},
 	label?: string
 ): Promise<string> {
-	const AdapterClass = getConnectionAdapter(opts.connection.type)
+	const AdapterClass = await getConnectionAdapter(opts.connection.type)
 	const tokenCounter = new TokenCounters("estimate")
 	const tokenLimit: number =
 		(opts.connection as any).tokenLimit ?? (opts.connection as any).contextSize ?? 4096

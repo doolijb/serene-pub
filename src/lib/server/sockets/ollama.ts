@@ -8,6 +8,7 @@ import { Ollama } from "ollama"
 import ollamaAdapter from "$lib/server/connectionAdapters/OllamaAdapter"
 import { OllamaModelSearchSource } from "$lib/shared/constants/OllamaModelSource"
 import { emit } from "process"
+import { isAndroidWrapper } from "$lib/server/utils"
 import type { Handler } from "$lib/shared/events"
 
 // --- OLLAMA SPECIFIC FUNCTIONS ---
@@ -800,6 +801,9 @@ export const ollamaUpdateManagerEnabled: Handler<
 	event: "systemSettings:updateOllamaManagerEnabled",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		if (params.enabled && isAndroidWrapper()) {
+			throw new Error("Ollama Manager is not available in the Android app")
+		}
 		await db.update(schema.ollamaSettings).set({ ollamaManagerEnabled: params.enabled }).where(eq(schema.ollamaSettings.id, 1))
 		const res: Sockets.SystemSettings.UpdateOllamaManagerEnabled.Response = { success: true, enabled: params.enabled }
 		emitToUser("systemSettings:updateOllamaManagerEnabled", res)

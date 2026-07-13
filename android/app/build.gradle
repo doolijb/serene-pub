@@ -3,6 +3,16 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+// Keep versionName in sync with the root package.json instead of hand-editing it here
+// (it had already drifted — package.json was at 0.5.0-pr-9 while this stayed at 0.5.0).
+def rootPackageJson = new groovy.json.JsonSlurper().parseText(
+    file("${rootDir}/../package.json").text
+)
+// versionCode must be a strictly increasing plain integer — it can't be derived from a
+// semver string with prerelease suffixes like "-pr-9", so it's tracked separately here
+// and bumped by hand on each release.
+def androidVersionCode = file("${projectDir}/../versionCode.txt").text.trim().toInteger()
+
 android {
     namespace 'pub.serene.app'
     compileSdk 34
@@ -11,10 +21,69 @@ android {
         applicationId "pub.serene.app"
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "0.5.0"
+        versionCode androidVersionCode
+        versionName rootPackageJson.version
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        // The bundled Node runtime (a prebuilt Bionic-targeted libnode.so from
+        // nodejs-mobile, pulled in by scripts/build-android.js — see
+        // src/main/cpp/) is only built for this one ABI.
+        ndk {
+            abiFilters "arm64-v8a"
+        }
+
+        externalNativeBuild {
+            cmake {
+                cppFlags ""
+                // libnode.so (built by nodejs-mobile against the shared C++
+                // runtime, same as their own android/build.gradle) needs
+                // libc++_shared.so at runtime — without this, dlopen fails
+                // with "library libc++_shared.so not found". Setting
+                // ANDROID_STL here makes AGP build node-bridge.so against
+                // the same shared runtime AND automatically copy the NDK's
+                // libc++_shared.so into the APK for us.
+                arguments "-DANDROID_STL=c++_shared"
+            }
+        }
+    }
+
+    // node-bridge (our JNI wrapper around node::Start()) is built from source
+    // here; it links against the prebuilt libnode.so as an IMPORTED CMake
+    // target. See src/main/cpp/CMakeLists.txt.
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
+    // r27+ so the toolchain itself is 16 KB-page-size aware (see node-bridge's
+    // explicit -Wl,-z,max-page-size=16384 in CMakeLists.txt, which forces this
+    // regardless of NDK default). Install via: sdkmanager --install "ndk;27.2.12479018"
+    ndkVersion "27.2.12479018"
+
+    // libnode.so lives alongside the CMake project (src/main/cpp/libnode/bin/<abi>/)
+    // rather than the conventional jniLibs/ location, so it doubles as both the
+    // CMake IMPORTED library CMakeLists.txt links against AND gets packaged into
+    // the APK the normal jniLibs way — Gradle treats any jniLibs.srcDirs entry
+    // the same regardless of path.
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['src/main/cpp/libnode/bin']
+        }
+    }
+
+    // AAPT's default ignoreAssetsPattern excludes any DIRECTORY starting with
+    // an underscore (the "<dir>_*" segment below, normally present in the
+    // default pattern) — silently dropping SvelteKit/Vite's client output
+    // (assets/serene-pub/build/client/_app/...) from the APK entirely during
+    // packaging, before NodeService's extraction code ever runs. This wasn't
+    // an extraction bug: the files were never IN the APK to extract. Server
+    // code loaded fine (no underscore-prefixed dirs), so this went unnoticed
+    // until the WebView tried to fetch client-side chunks and got real 404s.
+    // Same default pattern, minus the "<dir>_*" clause.
+    androidResources {
+        ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~"
     }
 
     signingConfigs {
@@ -33,7 +102,11 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.release
+            // Only sign if a keystore was actually provided — otherwise Gradle produces
+            // an unsigned release APK instead of hard-failing on a missing storeFile.
+            if (System.getenv("KEYSTORE_FILE")) {
+                signingConfig signingConfigs.release
+            }
         }
         debug {
             applicationIdSuffix ".debug"

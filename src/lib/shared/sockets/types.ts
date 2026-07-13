@@ -2077,6 +2077,7 @@ declare global {
 						koboldCppManagedAdminPassword: string | null
 						koboldCppManagedModelTtlSecs: number
 					}
+					isAndroidWrapper: boolean
 				}
 			}
 			namespace UpdateOllamaManagerEnabled {

@@ -43,7 +43,10 @@ package-lock.json
 /android/local.properties
 /android/build
 /android/app/build
+/android/app/.cxx
 /android/app/src/main/assets/serene-pub
+/android/app/src/main/cpp/libnode
+/android/gradle/wrapper/dists
 *.apk
 *.aab
 keystore.jks

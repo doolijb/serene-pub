@@ -168,6 +168,11 @@
 	let hasUser = $derived(!!userCtx.user)
 	let shouldShowApp = $derived(isSettingsLoaded && hasUser)
 	let isAdmin = $derived(!!userCtx.user?.isAdmin)
+	// Managed local model runners need a binary we don't/can't bundle for
+	// Android, and on-device embedding models are an unverified native-dependency
+	// risk there — Ollama Manager, KoboldCPP Manager, and Vectorization are all
+	// hidden in this wrapper regardless of their underlying DB flags.
+	let isAndroidWrapper = $derived(!!systemSettingsCtx?.settings?.isAndroidWrapper)
 
 	// Update leftNav based on Ollama Manager setting
 	$effect(() => {
@@ -179,7 +184,7 @@
 		}
 
 		// Add/remove Ollama Manager based on setting
-		if (ollamaSettingsCtx?.settings?.ollamaManagerEnabled && isAdmin) {
+		if (ollamaSettingsCtx?.settings?.ollamaManagerEnabled && isAdmin && !isAndroidWrapper) {
 			panelsCtx.leftNav.ollama = {
 				icon: OllamaIcon,
 				title: "Ollama Manager"
@@ -189,7 +194,7 @@
 		}
 
 		// Add/remove KoboldCPP Manager based on setting
-		if (koboldCppSettingsCtx?.settings?.koboldCppManagerEnabled && isAdmin) {
+		if (koboldCppSettingsCtx?.settings?.koboldCppManagerEnabled && isAdmin && !isAndroidWrapper) {
 			panelsCtx.leftNav.koboldcpp = {
 				imgSrc: "/koboldcpp/koboldcpp-icon.svg",
 				title: "KoboldCPP Manager"
@@ -216,7 +221,7 @@
 				title: "Prompts"
 			}
 
-			if (systemSettingsCtx?.settings?.vectorizationEnabled) {
+			if (systemSettingsCtx?.settings?.vectorizationEnabled && !isAndroidWrapper) {
 				panelsCtx.leftNav.vectorization = {
 					icon: Icons.Zap,
 					title: "Vectorization"
@@ -463,7 +468,10 @@
 	function initializeSocketConnection() {
 		socket.on("systemSettings:get", (message) => {
 			console.log("Received systemSettings:get", message)
-			systemSettingsCtx.settings = { ...message.systemSettings }
+			systemSettingsCtx.settings = {
+				...message.systemSettings,
+				isAndroidWrapper: message.isAndroidWrapper
+			}
 			ollamaSettingsCtx.settings = { ...message.ollamaSettings }
 			koboldCppSettingsCtx.settings = { ...message.koboldCppSettings }
 		})

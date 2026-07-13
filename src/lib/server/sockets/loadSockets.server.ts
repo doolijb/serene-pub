@@ -29,7 +29,13 @@ export function getPublicSocketsEndpoint(url?: URL) {
 }
 
 export async function loadSocketsServer() {
-	const host = `${getSocketsHttpMode()}://0.0.0.0:${getSocketsPort()}`
+	// Mirrors @sveltejs/adapter-node's own HOST env var (default 0.0.0.0) so a
+	// single HOST=127.0.0.1 locks down both the main app server and this socket
+	// server together — previously this was hardcoded to 0.0.0.0 with no way to
+	// restrict it at all, even for deployments (like the Android wrapper) that
+	// only ever need loopback access.
+	const bindHost = process.env.HOST || "0.0.0.0"
+	const host = `${getSocketsHttpMode()}://${bindHost}:${getSocketsPort()}`
 
 	const io = await skio.setup(host, {
 		cors: { origin: "*", credentials: false },

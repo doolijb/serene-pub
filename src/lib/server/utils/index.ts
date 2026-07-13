@@ -21,6 +21,17 @@ export function getAppDataDir() {
 }
 
 /**
+ * True when running inside the bundled Android app wrapper (NodeService.kt sets
+ * this env var before spawning the server). Used to hide features that don't
+ * make sense in that sandbox — managed local model runners need a binary we
+ * don't/can't bundle for Android, and on-device embedding models are an
+ * unverified native-dependency risk there.
+ */
+export function isAndroidWrapper() {
+	return process.env.SERENE_PUB_PLATFORM === "android"
+}
+
+/**
  * Gets the database data directory (app data dir + /data)
  * Includes CI environment check for compatibility with existing logic
  */

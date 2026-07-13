@@ -131,7 +131,11 @@
 		if (userCtx.user?.isAdmin) {
 			ids.push("connection-setup")
 			ids.push("summarization")
-			ids.push("vectorization")
+			// Vectorization/RAG relies on an on-device embedding model with an
+			// unverified native-dependency story on Android — not offered there.
+			if (!systemSettingsCtx.settings?.isAndroidWrapper) {
+				ids.push("vectorization")
+			}
 		}
 		ids.push("character")
 		ids.push("persona")
@@ -752,41 +756,43 @@
 									</p>
 								</div>
 								<div class="grid gap-3">
-									<!-- KoboldCpp -->
-									<button
-										class="card preset-filled-surface-400-600 flex items-start gap-4 p-5 text-left transition-transform hover:scale-[1.01] hover:preset-filled-surface-300-700"
-										onclick={() => {
-											connectionChoice = "koboldcpp"
-											socket.emit("systemSettings:updateKoboldCppManagerEnabled", { enabled: true })
-											socket.emit("systemSettings:updateOllamaManagerEnabled", { enabled: false })
-										}}
-									>
-										<span class="mt-0.5 inline-block h-8 w-8 flex-shrink-0" style="background-color: currentColor; mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain; -webkit-mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain;" aria-hidden="true"></span>
-										<div>
-											<div class="mb-1 font-bold">KoboldCPP <span class="text-xs font-normal opacity-60">— Easy</span></div>
-											<p class="text-sm opacity-90">
-												A highly performant engine fine-tuned for storytelling and roleplay. Download and manage automatically with Serene Pub.
-											</p>
-										</div>
-									</button>
-									<!-- Ollama -->
-									<button
-										class="card preset-filled-surface-400-600 flex items-start gap-4 p-5 text-left transition-transform hover:scale-[1.01] hover:preset-filled-surface-300-700"
-										onclick={() => {
-											connectionChoice = "ollama"
-											socket.emit("systemSettings:updateOllamaManagerEnabled", { enabled: true })
-											socket.emit("systemSettings:updateKoboldCppManagerEnabled", { enabled: false })
-											checkOllamaConnection()
-										}}
-									>
-										<OllamaIcon class="mt-0.5 h-8 w-8 flex-shrink-0" />
-										<div>
-											<div class="mb-1 font-bold">Ollama <span class="text-xs font-normal opacity-80">— Easy</span></div>
-											<p class="text-sm opacity-90">
-												Incredibly easy to install, seamless and managed entirely within Serene Pub. Search, download, and activate models in a few simple clicks.
-											</p>
-										</div>
-									</button>
+									{#if !systemSettingsCtx.settings?.isAndroidWrapper}
+										<!-- KoboldCpp -->
+										<button
+											class="card preset-filled-surface-400-600 flex items-start gap-4 p-5 text-left transition-transform hover:scale-[1.01] hover:preset-filled-surface-300-700"
+											onclick={() => {
+												connectionChoice = "koboldcpp"
+												socket.emit("systemSettings:updateKoboldCppManagerEnabled", { enabled: true })
+												socket.emit("systemSettings:updateOllamaManagerEnabled", { enabled: false })
+											}}
+										>
+											<span class="mt-0.5 inline-block h-8 w-8 flex-shrink-0" style="background-color: currentColor; mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain; -webkit-mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain;" aria-hidden="true"></span>
+											<div>
+												<div class="mb-1 font-bold">KoboldCPP <span class="text-xs font-normal opacity-60">— Easy</span></div>
+												<p class="text-sm opacity-90">
+													A highly performant engine fine-tuned for storytelling and roleplay. Download and manage automatically with Serene Pub.
+												</p>
+											</div>
+										</button>
+										<!-- Ollama -->
+										<button
+											class="card preset-filled-surface-400-600 flex items-start gap-4 p-5 text-left transition-transform hover:scale-[1.01] hover:preset-filled-surface-300-700"
+											onclick={() => {
+												connectionChoice = "ollama"
+												socket.emit("systemSettings:updateOllamaManagerEnabled", { enabled: true })
+												socket.emit("systemSettings:updateKoboldCppManagerEnabled", { enabled: false })
+												checkOllamaConnection()
+											}}
+										>
+											<OllamaIcon class="mt-0.5 h-8 w-8 flex-shrink-0" />
+											<div>
+												<div class="mb-1 font-bold">Ollama <span class="text-xs font-normal opacity-80">— Easy</span></div>
+												<p class="text-sm opacity-90">
+													Incredibly easy to install, seamless and managed entirely within Serene Pub. Search, download, and activate models in a few simple clicks.
+												</p>
+											</div>
+										</button>
+									{/if}
 									<!-- Manual -->
 									<button
 										class="card preset-filled-surface-400-600 flex items-start gap-4 p-5 text-left transition-transform hover:scale-[1.01] hover:preset-filled-surface-300-700"

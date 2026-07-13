@@ -174,7 +174,7 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 				}
 
 				// 5. Create adapter instance
-				const { Adapter } = getConnectionAdapter(connection.type)
+				const { Adapter } = await getConnectionAdapter(connection.type)
 				const tokenCounter = new TokenCounters("estimate")
 				const tokenLimit = 4096
 				const contextThresholdPercent = 0.8
