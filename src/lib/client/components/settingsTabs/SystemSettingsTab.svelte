@@ -50,25 +50,6 @@
 	let koboldCppBaseUrlError = $state("")
 	let isSavingKoboldCppBaseUrl = $state(false)
 
-	// Vectorization state
-	type ModelDef = {
-		id: string
-		name: string
-		description: string
-		dimensions: number
-		sizeLabel: string
-		tier: "fast" | "balanced" | "best"
-	}
-	let availableModels = $state<ModelDef[]>([])
-	let vectorizationEnabled = $state(false)
-	let showEnableVectorizationModal = $state(false)
-	let selectedModelForEnable = $state<string>("")
-	let isEnablingVectorization = $state(false)
-	let downloadProgress = $state<{
-		status: "loading" | "downloading" | "ready" | "error"
-		percent?: number
-	} | null>(null)
-
 	// State for enable accounts confirmation modal
 	let showEnableAccountsModal = $state(false)
 	let hasPassphrase = $state(false)
@@ -172,32 +153,6 @@
 			ollamaBaseUrlError = "Failed to save URL"
 			isSavingBaseUrl = false
 		}
-	}
-
-	// ── Vectorization functions ──────────────────────────────────────────────
-
-	function openEnableVectorizationModal() {
-		selectedModelForEnable = availableModels[0]?.id ?? ""
-		showEnableVectorizationModal = true
-	}
-
-	function cancelEnableVectorization() {
-		showEnableVectorizationModal = false
-		downloadProgress = null
-	}
-
-	async function confirmEnableVectorization(startNow: boolean) {
-		if (!selectedModelForEnable) return
-		isEnablingVectorization = true
-		downloadProgress = null
-		socket?.emit("vectorization:enable", {
-			modelName: selectedModelForEnable,
-			startNow
-		})
-	}
-
-	function handleDisableVectorization() {
-		socket?.emit("vectorization:disable", {})
 	}
 
 	// ── Summarization functions ──────────────────────────────────────────────
@@ -333,12 +288,6 @@
 		// The switch will remain in its previous state
 	}
 
-	// Fetch vectorization model list on mount
-	$effect(() => {
-		if (!socket) return
-		socket.emit("vectorization:listModels", {})
-	})
-
 	// Listen for socket responses
 	$effect(() => {
 		if (!socket) return
@@ -399,62 +348,6 @@
 				toaster.error({ title: "Failed to enable user accounts" })
 			}
 		}
-
-		// ── Vectorization listeners ──────────────────────────────────────────
-
-		const handleListModels = (message: any) => {
-			availableModels = message.models ?? []
-			vectorizationEnabled = message.vectorizationEnabled ?? false
-			if (!selectedModelForEnable && availableModels.length > 0) {
-				selectedModelForEnable = availableModels[0].id
-			}
-		}
-
-		const handleVectorizationEnabled = (message: any) => {
-			isEnablingVectorization = false
-			downloadProgress = null
-			if (message.success) {
-				vectorizationEnabled = true
-				showEnableVectorizationModal = false
-				toaster.success({ title: "Vectorization enabled" })
-				socket?.emit("vectorization:listModels", {})
-			} else {
-				toaster.error({ title: "Failed to enable vectorization" })
-			}
-		}
-
-		const handleVectorizationDisabled = (message: any) => {
-			if (message.success) {
-				vectorizationEnabled = false
-				toaster.success({ title: "Vectorization disabled" })
-				socket?.emit("vectorization:listModels", {})
-			} else {
-				toaster.error({ title: "Failed to disable vectorization" })
-			}
-		}
-
-		const handleModelDownloadProgress = (message: any) => {
-			downloadProgress = { status: message.status, percent: message.percent }
-			if (message.status === "error") {
-				isEnablingVectorization = false
-				toaster.error({ title: "Model download failed" })
-			}
-		}
-
-		const handleVectorizationEnableError = (message: any) => {
-			isEnablingVectorization = false
-			downloadProgress = null
-			toaster.error({
-				title: "Failed to enable vectorization",
-				description: message.error
-			})
-		}
-
-		socket.on("vectorization:listModels", handleListModels)
-		socket.on("vectorization:enable", handleVectorizationEnabled)
-		socket.on("vectorization:disable", handleVectorizationDisabled)
-		socket.on("vectorization:modelDownloadProgress", handleModelDownloadProgress)
-		socket.on("vectorization:enable:error", handleVectorizationEnableError)
 
 		// ────────────────────────────────────────────────────────────────────
 
@@ -522,11 +415,6 @@
 
 		// Cleanup function to remove listeners
 		return () => {
-			socket.off("vectorization:listModels", handleListModels)
-			socket.off("vectorization:enable", handleVectorizationEnabled)
-			socket.off("vectorization:disable", handleVectorizationDisabled)
-			socket.off("vectorization:modelDownloadProgress", handleModelDownloadProgress)
-			socket.off("vectorization:enable:error", handleVectorizationEnableError)
 			socket.off(
 				"systemSettings:updateKoboldCppManagerEnabled",
 				handleKoboldCppManagerEnabled
@@ -557,11 +445,12 @@
 			<div class="space-y-4">
 				<h3 class="text-lg font-semibold">Local Model Managers</h3>
 				<p class="text-muted-foreground text-sm">
-					Ollama Manager, KoboldCPP Manager, and Vectorization & RAG aren't
-					available in the Android app — they depend on locally-run binaries and
-					on-device embedding models this build can't bundle or hasn't verified
-					work on Android. Connect to a remote Ollama or KoboldCPP instance from
-					the Connections panel instead.
+					Ollama Manager and KoboldCPP Manager aren't available in the Android
+					app — they depend on locally-run binaries this build can't bundle.
+					Connect to a remote Ollama or KoboldCPP instance from the Connections
+					panel instead. Local embeddings aren't available either, for the same
+					reason, but an external embeddings API works fine — set it up from the
+					Embeddings panel.
 				</p>
 			</div>
 		{:else}
@@ -677,42 +566,6 @@
 						{/if}
 					</button>
 				</div>
-			{/if}
-		</div>
-
-		<!-- Vectorization & RAG Settings -->
-		<div class="space-y-4">
-			<h3 class="text-lg font-semibold">Vectorization & RAG</h3>
-
-			<div class="flex items-center gap-2">
-				<Switch
-					name="vectorization"
-					checked={vectorizationEnabled}
-					onCheckedChange={(e) => {
-						if (e.checked) {
-							openEnableVectorizationModal()
-						} else {
-							handleDisableVectorization()
-						}
-					}}
-					disabled={availableModels.length === 0}
-				></Switch>
-				<label for="vectorization" class="font-semibold">
-					Enable Vectorization & RAG
-				</label>
-			</div>
-
-			{#if vectorizationEnabled}
-				<p class="text-muted-foreground text-xs ml-10">
-					Manage models and queue in the Vectorization sidebar.
-				</p>
-			{:else}
-				<p class="text-muted-foreground text-sm">
-					Enables semantic search and context retrieval using locally-run embedding
-					models. When active, content is embedded in the background and used to
-					improve lorebook retrieval and narrative graph features via
-					retrieval-augmented generation (RAG).
-				</p>
 			{/if}
 		</div>
 
@@ -940,121 +793,3 @@
 	{/snippet}
 </Modal>
 
-<!-- Enable Vectorization Modal -->
-<Modal
-	open={showEnableVectorizationModal}
-	onOpenChange={(e) => { if (!e.open) cancelEnableVectorization() }}
-	contentBase="card bg-surface-100-900 p-6 space-y-5 shadow-xl max-w-lg w-full"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<header class="flex items-center gap-3">
-			<Icons.Cpu class="text-primary-500 h-5 w-5 shrink-0" />
-			<h2 class="text-lg font-bold">Enable Vectorization</h2>
-		</header>
-
-		<p class="text-muted-foreground text-sm">
-			Serene Pub will use this embedding model to index your content. The
-			model runs locally on your machine. Larger models give better results
-			but require more RAM and are slower to run.
-		</p>
-
-		<!-- Model list -->
-		<div class="space-y-2">
-			<p class="text-sm font-medium">Choose an embedding model</p>
-			{#each availableModels as model}
-				<label
-					class="flex cursor-pointer items-start gap-3 rounded-lg border-2 p-3 transition-all
-						{selectedModelForEnable === model.id
-						? 'border-primary-500 bg-primary-500/5'
-						: 'border-surface-300-600 hover:border-surface-400-500'}"
-				>
-					<input
-						type="radio"
-						name="vectorization-model"
-						value={model.id}
-						bind:group={selectedModelForEnable}
-						class="mt-0.5"
-					/>
-					<div class="min-w-0 flex-1">
-						<div class="flex flex-wrap items-center gap-2">
-							<span class="font-medium">{model.name}</span>
-							{#if model.tier === "fast"}
-								<span class="rounded-full bg-sky-500/15 px-1.5 py-0.5 text-xs font-medium text-sky-600">Fast</span>
-							{:else if model.tier === "balanced"}
-								<span class="rounded-full bg-violet-500/15 px-1.5 py-0.5 text-xs font-medium text-violet-600">Balanced</span>
-							{:else}
-								<span class="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-xs font-medium text-amber-600">Best</span>
-							{/if}
-							<span class="text-muted-foreground text-xs">{model.sizeLabel} · {model.dimensions}d</span>
-						</div>
-						<p class="text-muted-foreground mt-0.5 text-xs">{model.description}</p>
-					</div>
-				</label>
-			{/each}
-		</div>
-
-		<!-- Download progress -->
-		{#if downloadProgress}
-			<div class="space-y-1">
-				<div class="flex items-center justify-between text-xs">
-					<span class="text-muted-foreground capitalize">{downloadProgress.status}…</span>
-					{#if downloadProgress.percent !== undefined}
-						<span class="font-mono">{downloadProgress.percent}%</span>
-					{/if}
-				</div>
-				{#if downloadProgress.percent !== undefined}
-					<div class="bg-surface-300-600 h-1.5 w-full overflow-hidden rounded-full">
-						<div
-							class="bg-primary-500 h-full transition-all duration-300"
-							style="width: {downloadProgress.percent}%"
-						></div>
-					</div>
-				{:else}
-					<div class="bg-surface-300-600 h-1.5 w-full overflow-hidden rounded-full">
-						<div class="bg-primary-500 h-full w-1/3 animate-pulse rounded-full"></div>
-					</div>
-				{/if}
-			</div>
-		{/if}
-
-		<footer class="flex flex-col gap-2">
-			<div class="flex flex-wrap justify-end gap-2">
-				<button
-					class="btn preset-filled-surface-400-600"
-					onclick={cancelEnableVectorization}
-					disabled={isEnablingVectorization}
-				>
-					Cancel
-				</button>
-				<button
-					class="btn preset-tonal-primary"
-					onclick={() => confirmEnableVectorization(false)}
-					disabled={!selectedModelForEnable || isEnablingVectorization}
-				>
-					{#if isEnablingVectorization && !downloadProgress}
-						<Icons.Loader2 class="h-4 w-4 animate-spin" />
-					{:else}
-						<Icons.Download class="h-4 w-4" />
-					{/if}
-					Enable, start later
-				</button>
-				<button
-					class="btn preset-filled-primary-500"
-					onclick={() => confirmEnableVectorization(true)}
-					disabled={!selectedModelForEnable || isEnablingVectorization}
-				>
-					{#if isEnablingVectorization && !downloadProgress}
-						<Icons.Loader2 class="h-4 w-4 animate-spin" />
-					{:else}
-						<Icons.Play class="h-4 w-4" />
-					{/if}
-					Enable &amp; Start Now
-				</button>
-			</div>
-			<p class="text-muted-foreground text-right text-xs">
-				Models are cached after the first download.
-			</p>
-		</footer>
-	{/snippet}
-</Modal>

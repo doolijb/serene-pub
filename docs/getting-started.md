@@ -71,22 +71,22 @@ Also admin-only. This step introduces manual conversation summarization and expl
 - **What it does**: "You trigger summarization manually in a chat. Serene compresses selected messages into a compact record that the AI uses to stay aware of past events without running out of context."
 - **Resource usage**: "Increases AI usage by around 30%. Summarization only runs when you manually trigger it in a chat, so you stay in control."
 
-Two footer buttons are offered: **Skip for now** (marks this step done without turning summarization on) and **Enable Summarization** (turns the feature on server-wide and marks the step done). Either choice advances the wizard. This step is tracked per-user on the server, independent of whether you actually have any chats yet. For the full picture of how summarization works day-to-day, see [Summarization & RAG](./summarization-and-rag.md).
+Two footer buttons are offered: **Skip for now** (marks this step done without turning summarization on) and **Enable Summarization** (turns the feature on server-wide and marks the step done). Either choice advances the wizard. This step is tracked per-user on the server, independent of whether you actually have any chats yet. For the full picture of how summarization works day-to-day, see [Summarization](./summarization.md).
 
-## Vectorization (RAG) Setup
+## Embeddings (RAG) Setup
 
-Admin-only, and only shown right after the Summarization step. This introduces retrieval-augmented generation (RAG) for lorebooks and chat history:
+Admin-only, and only shown right after the Summarization step (reachable on Android too, where only the External API option applies — see [Android App](./android.md)). This introduces retrieval-augmented generation (RAG) for lorebooks and chat history:
 
 - **What it does**: "A small AI model understands the meaning of your lore. When you chat, Serene Pub finds the most relevant entries and quietly adds them to every message."
 - **Resource usage**: "CPU only — runs a small model locally in the background. One-time download, then works silently without extra AI calls."
 
-Below that is a tier picker with three cards, each labeled with the underlying model's name and download size:
+Unlike the connection setup steps, this step doesn't have its own inline configuration UI — its footer's **Open Embeddings Settings** button opens the real Embeddings sidebar (the same panel described in [Embeddings & RAG](./embeddings-and-rag.md)), and the wizard waits for it to report ready before advancing, updating live with no page reload needed:
 
-- **Fast** — smallest download, lowest resource use.
-- **Balanced** *(marked Recommended)* — best balance of quality and resource use for most setups.
-- **Best Quality** — maximum accuracy, largest download.
+- Not yet enabled: **Skip for now** and **Open Embeddings Settings** are both offered.
+- Enabled but not ready yet (still loading or misconfigured): a status message points you back to the Embeddings panel.
+- Enabled and ready: the footer's button becomes **Continue**, plus a **Disable & Skip** option if you'd rather back out after already enabling something mid-wizard.
 
-The footer offers **Skip for now** (marks the RAG step complete without picking a model) or **Save & Continue**, which downloads and loads the chosen embedding model, showing a live progress bar (downloading → loading → ready) before advancing. Note that this step only *sets the embedding model* — it does not itself turn on RAG for any particular lorebook or chat. See [Summarization & RAG](./summarization-and-rag.md) for how to actually enable RAG once a model is configured.
+See [Embeddings & RAG](./embeddings-and-rag.md) for what the Local Model vs. External API choice means and how to reconfigure it later.
 
 ## Creating Your First Character
 

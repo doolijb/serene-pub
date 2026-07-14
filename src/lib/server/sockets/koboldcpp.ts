@@ -1,7 +1,7 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import type { InsertConnection } from "$lib/server/db/schema"
-import { eq, and } from "drizzle-orm"
+import { eq, and, inArray } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { connectionsList, connectionsSetUserActive } from "./connections"
 import { systemSettingsGet } from "./systemSettings"
@@ -202,6 +202,21 @@ export const koboldCppListModelsHandler: Handler<
 				const ggufFiles = entries.filter(
 					(f) => f.toLowerCase().endsWith(".gguf") && !incompleteFilenames.has(f)
 				)
+				const ggufFileSet = new Set(ggufFiles)
+
+				// Forget complete records for files removed outside the app —
+				// the listing itself is always driven by the directory scan
+				// above, so this only prevents koboldCppModels from
+				// accumulating rows for files that no longer exist.
+				const staleFilenames = dbModels
+					.filter((m) => m.status === "complete" && !ggufFileSet.has(m.filename))
+					.map((m) => m.filename)
+				if (staleFilenames.length > 0) {
+					await db
+						.delete(schema.koboldCppModels)
+						.where(inArray(schema.koboldCppModels.filename, staleFilenames))
+				}
+
 				availableModels = await Promise.all(
 					ggufFiles.map(async (name) => {
 						let size = 0
@@ -209,7 +224,29 @@ export const koboldCppListModelsHandler: Handler<
 							const stat = await fsPromises.stat(path.join(modelsDir, name))
 							size = stat.size
 						} catch {}
-						const rec = dbByFilename.get(name)
+
+						let rec = dbByFilename.get(name)
+						if (!rec) {
+							// Placed directly into the models folder rather than
+							// downloaded through the UI — track it the same as a
+							// completed download so it behaves consistently
+							// everywhere else that reads this table.
+							const [tracked] = await db
+								.insert(schema.koboldCppModels)
+								.values({
+									filename: name,
+									modelName: name.replace(/\.gguf$/i, ""),
+									sizeBytes: size,
+									status: "complete"
+								})
+								.onConflictDoUpdate({
+									target: schema.koboldCppModels.filename,
+									set: { filename: name }
+								})
+								.returning()
+							rec = tracked
+						}
+
 						return {
 							name,
 							size,

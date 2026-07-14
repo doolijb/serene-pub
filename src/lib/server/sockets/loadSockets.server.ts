@@ -72,25 +72,45 @@ async function autoLoadEmbeddingModel() {
 
 		if (!settings?.vectorizationEnabled || !settings.embeddingModelName) return
 
-		console.log(
-			`[embedding] Auto-loading model on startup: ${settings.embeddingModelName}`
-		)
-		const { loadEmbeddingModel, setEmbeddingTtlMinutes } = await import(
-			"$lib/server/embedding/index"
-		)
+		const { setEmbeddingTtlMinutes } = await import("$lib/server/embedding/index")
 
-		// Load TTL config before loading the model so the timer starts correctly
 		const vecConfig = await db.query.vectorizationConfigs.findFirst({
 			where: eq(schema.vectorizationConfigs.id, 1),
-			columns: { embeddingModelTtlMinutes: true }
+			columns: {
+				embeddingModelTtlMinutes: true,
+				mode: true,
+				apiBaseUrl: true,
+				apiKey: true,
+				apiModel: true
+			}
 		})
+		// Load TTL config before loading the model so the timer starts correctly
 		if (vecConfig) setEmbeddingTtlMinutes(vecConfig.embeddingModelTtlMinutes)
 
-		await loadEmbeddingModel(settings.embeddingModelName)
+		if (vecConfig?.mode === "api") {
+			if (!vecConfig.apiBaseUrl || !vecConfig.apiModel) {
+				throw new Error("API vectorization is enabled but not fully configured")
+			}
+			console.log(
+				`[embedding] Auto-activating API backend on startup: ${vecConfig.apiBaseUrl}`
+			)
+			const { activateApiEmbedding } = await import("$lib/server/embedding/index")
+			await activateApiEmbedding({
+				baseUrl: vecConfig.apiBaseUrl,
+				apiKey: vecConfig.apiKey,
+				model: vecConfig.apiModel
+			})
+		} else {
+			console.log(
+				`[embedding] Auto-loading model on startup: ${settings.embeddingModelName}`
+			)
+			const { loadEmbeddingModel } = await import("$lib/server/embedding/index")
+			await loadEmbeddingModel(settings.embeddingModelName)
+		}
 		console.log("[embedding] Model ready.")
 	} catch (err) {
 		console.error(
-			"[embedding] Failed to auto-load model on startup — vectorization will be unavailable until re-downloaded:",
+			"[embedding] Failed to auto-load embedding backend on startup — vectorization will be unavailable until reconfigured:",
 			err
 		)
 	}

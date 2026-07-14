@@ -27,13 +27,17 @@ The Graph tab only appears when both vectorization and summarization are turned 
 Everywhere entries are edited, the form adapts based on whether **vectorization** is enabled system-wide:
 
 - **Vectorization off (keyword mode).** Entries carry comma-separated **Keywords**, an optional **Use Regex** flag (treat keywords as a regex pattern instead of plain substrings), **Case Sensitive** matching, and a manual **Priority** level used as a tie-breaker when several entries compete for limited context space.
-- **Vectorization on (semantic mode).** All of the above fields are hidden. Entries are instead retrieved by embedding similarity against the current conversation — see [Summarization & RAG](./summarization-and-rag.md) for how that pipeline works and how to enable it.
+- **Vectorization on (semantic mode).** All of the above fields are hidden. Entries are instead retrieved by embedding similarity against the current conversation — see [Embeddings & RAG](./embeddings-and-rag.md) for how that pipeline works and how to enable it.
 
 Regardless of mode, a **Pinned** entry is always included in context, bypassing both keyword matching and semantic relevance scoring — useful for facts the model must never forget (a core worldbuilding rule, a character's one unbreakable trait, and so on). An **Enabled** switch lets you soft-disable an entry without deleting it, which is handy for retiring outdated lore while keeping it around for reference.
 
 ### Creating, importing, and deleting a lorebook
 
 The `+` button in the list view creates a new lorebook from just a name. The upload button imports a SillyTavern-style lorebook JSON file: on import, **every** entry in the file — regardless of what type it was in the source format — is created as a World Lore entry in a brand-new lorebook, since world entries are the most format-agnostic starting point and don't require a binding. You're prompted to confirm or edit the new lorebook's name before the import commits. Export is present in the toolbar but currently disabled.
+
+### Attaching a lorebook to the currently open chat
+
+If you have a chat open, each lorebook's row menu (and the detail view's header, once opened) offers an **Attach to current chat** / **Detach from current chat** action — a shortcut for the same [Lorebook Binding](./chats.md#lorebook-binding) done from chat settings. If the open chat already has a lorebook attached, every other lorebook's attach action is disabled until it's detached, and the currently-attached one shows the detach action instead. Guests viewing someone else's shared chat don't see these actions — only the chat's owner can change its lorebook.
 
 ## Lorebook Tab
 

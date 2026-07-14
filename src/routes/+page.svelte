@@ -79,19 +79,12 @@
 	// Summarization step state
 	let wizardSummarizationLoading = $state(false)
 
-	// Vectorization step state
-	type ModelDef = {
-		id: string
-		name: string
-		description: string
-		dimensions: number
-		sizeLabel: string
-		tier: "fast" | "balanced" | "best"
-	}
-	let wizardVectorizationModels = $state<ModelDef[]>([])
-	let wizardSelectedModel = $state("")
-	let wizardVectorizationLoading = $state(false)
-	let wizardVectorizationProgress = $state<{ status: string; percent?: number } | null>(null)
+	// Vectorization step state — configuration itself now happens in the real
+	// VectorizationSidebar (opened from this step, same as the Ollama/KoboldCPP
+	// Easy Setup steps); this file just tracks whether it's working yet.
+	let vectorizationEnabled = $state(false)
+	let vectorizationModelReady = $state(false)
+	let disablingVectorization = $state(false)
 
 	// Card import state
 	let wizardImportingCharacterCard = $state(false)
@@ -131,11 +124,10 @@
 		if (userCtx.user?.isAdmin) {
 			ids.push("connection-setup")
 			ids.push("summarization")
-			// Vectorization/RAG relies on an on-device embedding model with an
-			// unverified native-dependency story on Android — not offered there.
-			if (!systemSettingsCtx.settings?.isAndroidWrapper) {
-				ids.push("vectorization")
-			}
+			// Reachable on Android too now — local vectorization still can't
+			// work there (native ABI), but external-API vectorization does;
+			// the sidebar's setup screen hides the Local option on Android.
+			ids.push("vectorization")
 		}
 		ids.push("character")
 		ids.push("persona")
@@ -178,11 +170,6 @@
 		}
 	})
 
-	// Vectorization model tiers for the wizard
-	let fastModels = $derived(wizardVectorizationModels.filter((m) => m.tier === "fast"))
-	let balancedModels = $derived(wizardVectorizationModels.filter((m) => m.tier === "balanced"))
-	let bestModels = $derived(wizardVectorizationModels.filter((m) => m.tier === "best"))
-
 	// Navigation
 	function openPanel(key: string) {
 		panelsCtx.openPanel({ key })
@@ -199,8 +186,6 @@
 	function closeWizard() {
 		wizardStep = 0
 		connectionChoice = null
-		wizardVectorizationProgress = null
-		wizardVectorizationLoading = false
 		wizardSummarizationLoading = false
 		isKoboldCppConnected = false
 		koboldcppLoadedModels = []
@@ -265,12 +250,9 @@
 		socket.emit("systemSettings:updateSummarizationEnabled", { enabled: true })
 	}
 
-	function configureRag() {
-		if (!wizardSelectedModel) return
-		wizardVectorizationLoading = true
-		wizardVectorizationProgress = null
-		// Sets the embedding model but does NOT enable vectorization
-		socket.emit("vectorization:setModel", { modelName: wizardSelectedModel })
+	function disableAndSkipVectorization() {
+		disablingVectorization = true
+		socket.emit("vectorization:disable", {})
 	}
 
 	async function handleCharacterCardImport(details: FileAcceptDetails) {
@@ -402,41 +384,22 @@
 			}
 		})
 
-		// RAG model configuration responses — marks RAG step complete but does NOT enable RAG
+		// Vectorization status — actual configuration happens in the real
+		// VectorizationSidebar (opened via the footer button); this just
+		// tracks whether it's enabled/ready so the footer can react.
 		socket.on("vectorization:listModels", (msg: any) => {
-			wizardVectorizationModels = msg.models ?? []
-			if (!wizardSelectedModel && msg.models?.length > 0) {
-				const balancedModel = msg.models.find((m: ModelDef) => m.tier === "balanced")
-				const fastModel = msg.models.find((m: ModelDef) => m.tier === "fast")
-				wizardSelectedModel = balancedModel?.id ?? fastModel?.id ?? msg.models[0].id
-			}
+			vectorizationEnabled = msg.vectorizationEnabled ?? false
+			vectorizationModelReady = msg.modelReady ?? false
 		})
-		socket.on("vectorization:setModel", (msg: any) => {
-			if (msg.success && wizardVectorizationLoading) {
-				wizardVectorizationLoading = false
-				wizardVectorizationProgress = null
+		socket.on("vectorization:disable", (msg: any) => {
+			disablingVectorization = false
+			if (msg.success) {
+				vectorizationEnabled = false
 				if (currentWizardStep?.id === "vectorization") {
 					markSetupComplete("rag")
 					nextWizardStep()
 				}
 			}
-		})
-		socket.on("vectorization:modelDownloadProgress", (msg: any) => {
-			if (!wizardVectorizationLoading) return
-			wizardVectorizationProgress = { status: msg.status, percent: msg.percent }
-			if (msg.status === "ready") {
-				wizardVectorizationLoading = false
-				wizardVectorizationProgress = null
-				if (currentWizardStep?.id === "vectorization") {
-					markSetupComplete("rag")
-					nextWizardStep()
-				}
-			}
-		})
-		socket.on("vectorization:setModel:error", (msg: any) => {
-			wizardVectorizationLoading = false
-			wizardVectorizationProgress = null
-			toaster.error({ title: "RAG configuration failed", description: msg.error ?? "Unknown error" })
 		})
 
 		// Card imports from wizard
@@ -532,9 +495,7 @@
 		;(socket as any).off("koboldcpp:connectModel:error")
 		socket.off("systemSettings:updateSummarizationEnabled")
 		socket.off("vectorization:listModels")
-		socket.off("vectorization:setModel")
-		socket.off("vectorization:modelDownloadProgress")
-		socket.off("vectorization:setModel:error")
+		socket.off("vectorization:disable")
 		socket.off("characters:importCard")
 		;(socket as any).off("characters:importCard:error")
 		socket.off("personas:importCard")
@@ -975,93 +936,28 @@
 								</div>
 							</div>
 
-							<!-- Model tier picker -->
-							{#if wizardVectorizationModels.length > 0}
-								<div>
-									<p class="mb-3 text-sm font-semibold">Choose a model:</p>
-									<div class="grid gap-2">
-										{#if fastModels.length > 0}
-											<button
-												class="card flex items-start gap-3 p-4 text-left transition-all {wizardSelectedModel === fastModels[0].id
-													? 'preset-filled-primary-500'
-													: 'preset-filled-surface-400-600 hover:preset-filled-surface-300-700'}"
-												onclick={() => (wizardSelectedModel = fastModels[0].id)}
-											>
-												<Icons.Zap size={20} class="mt-0.5 flex-shrink-0" />
-												<div class="flex-1">
-													<div class="font-semibold">Fast</div>
-													<div class="text-sm opacity-75">{fastModels[0].name} · {fastModels[0].sizeLabel}</div>
-													<div class="mt-1 text-xs opacity-60">Smallest download, lowest resource use</div>
-												</div>
-												{#if wizardSelectedModel === fastModels[0].id}
-													<Icons.CheckCircle size={18} class="mt-0.5 flex-shrink-0" />
-												{/if}
-											</button>
-										{/if}
-										{#if balancedModels.length > 0}
-											<button
-												class="card flex items-start gap-3 p-4 text-left transition-all {wizardSelectedModel === balancedModels[0].id
-													? 'preset-filled-primary-500'
-													: 'preset-filled-surface-400-600 hover:preset-filled-surface-300-700'}"
-												onclick={() => (wizardSelectedModel = balancedModels[0].id)}
-											>
-												<Icons.Scale size={20} class="mt-0.5 flex-shrink-0" />
-												<div class="flex-1">
-													<div class="font-semibold">Balanced <span class="text-xs opacity-75">— Recommended</span></div>
-													<div class="text-sm opacity-75">{balancedModels[0].name} · {balancedModels[0].sizeLabel}</div>
-													<div class="mt-1 text-xs opacity-60">Best balance of quality and resource use for most setups</div>
-												</div>
-												{#if wizardSelectedModel === balancedModels[0].id}
-													<Icons.CheckCircle size={18} class="mt-0.5 flex-shrink-0" />
-												{/if}
-											</button>
-										{/if}
-										{#if bestModels.length > 0}
-											<button
-												class="card flex items-start gap-3 p-4 text-left transition-all {wizardSelectedModel === bestModels[0].id
-													? 'preset-filled-primary-500'
-													: 'preset-filled-surface-400-600 hover:preset-filled-surface-300-700'}"
-												onclick={() => (wizardSelectedModel = bestModels[0].id)}
-											>
-												<Icons.Trophy size={20} class="mt-0.5 flex-shrink-0" />
-												<div class="flex-1">
-													<div class="font-semibold">Best Quality</div>
-													<div class="text-sm opacity-75">{bestModels[0].name} · {bestModels[0].sizeLabel}</div>
-													<div class="mt-1 text-xs opacity-60">Maximum accuracy, largest download</div>
-												</div>
-												{#if wizardSelectedModel === bestModels[0].id}
-													<Icons.CheckCircle size={18} class="mt-0.5 flex-shrink-0" />
-												{/if}
-											</button>
-										{/if}
-									</div>
+							<!-- Status — actual configuration happens in the Embeddings sidebar,
+							     opened via the footer button below, same pattern as the Ollama/
+							     KoboldCPP Easy Setup steps. -->
+							{#if vectorizationEnabled && vectorizationModelReady}
+								<div class="bg-success-500/10 flex items-center gap-3 rounded-xl p-4">
+									<Icons.CheckCircle size={20} class="text-success-500 flex-shrink-0" />
+									<p class="text-sm">
+										Embeddings are configured and ready — RAG will use them automatically.
+									</p>
+								</div>
+							{:else if vectorizationEnabled}
+								<div class="bg-surface-500/10 flex items-center gap-3 rounded-xl p-4">
+									<Icons.Loader size={20} class="flex-shrink-0 animate-spin" />
+									<p class="text-sm opacity-75">
+										Embeddings are enabled but not ready yet — check the Embeddings panel for status.
+									</p>
 								</div>
 							{:else}
-								<div class="text-center opacity-50 text-sm">Loading available models…</div>
-							{/if}
-
-							<!-- Download progress -->
-							{#if wizardVectorizationLoading}
 								<div class="bg-surface-500/10 rounded-xl p-4">
-									<div class="mb-2 flex items-center gap-2 text-sm font-semibold">
-										<Icons.Loader size={14} class="animate-spin" />
-										{wizardVectorizationProgress?.status === "downloading"
-											? "Downloading model…"
-											: wizardVectorizationProgress?.status === "loading"
-												? "Loading model…"
-												: "Setting up…"}
-									</div>
-									{#if wizardVectorizationProgress?.percent != null}
-										<div class="bg-surface-300-700 h-2 w-full overflow-hidden rounded-full">
-											<div
-												class="bg-primary-500 h-full rounded-full transition-all"
-												style="width: {wizardVectorizationProgress.percent}%"
-											></div>
-										</div>
-										<p class="mt-1 text-right text-xs opacity-50">
-											{Math.round(wizardVectorizationProgress.percent)}%
-										</p>
-									{/if}
+									<p class="text-sm opacity-75">
+										Choose a local model or an external embeddings API in the Embeddings panel to turn this on.
+									</p>
 								</div>
 							{/if}
 
@@ -1087,7 +983,7 @@
 										Pick a ready-made character from the Serene Pub community library.
 									</p>
 								</button>
-								{#if userCtx.user?.isAdmin}
+								{#if userCtx.user?.isAdmin && !systemSettingsCtx.settings?.isAndroidWrapper}
 								<button
 									class="card preset-filled-surface-400-600 flex flex-col items-start gap-2 p-5 text-left transition-transform hover:scale-[1.02] hover:preset-filled-surface-300-700"
 									onclick={() => {
@@ -1164,6 +1060,7 @@
 										Pick a persona from the Serene Pub library.
 									</p>
 								</button>
+								{#if !systemSettingsCtx.settings?.isAndroidWrapper}
 								<button
 									class="card preset-filled-surface-400-600 flex flex-col items-start gap-2 p-5 text-left transition-transform hover:scale-[1.02] hover:preset-filled-surface-300-700"
 									onclick={() => {
@@ -1179,6 +1076,7 @@
 										Import your personas from an existing SillyTavern installation.
 									</p>
 								</button>
+								{/if}
 								<div class="card preset-tonal-surface flex flex-col gap-2 p-5">
 									<div class="flex items-center gap-2 font-bold">
 										<Icons.Upload size={20} class="text-primary-500" />
@@ -1379,22 +1277,37 @@
 
 					{:else if currentWizardStep?.id === "vectorization"}
 						<div class="flex items-center gap-2">
-							<button class="btn preset-filled-surface-400-600 btn-sm" onclick={() => { markSetupComplete("rag"); nextWizardStep() }}>
-								Skip for now
-							</button>
-							<button
-								class="btn preset-filled-primary-500"
-								onclick={configureRag}
-								disabled={wizardVectorizationLoading || !wizardSelectedModel}
-							>
-								{#if wizardVectorizationLoading}
-									<Icons.Loader size={16} class="animate-spin" />
-									Setting up…
-								{:else}
+							{#if vectorizationEnabled}
+								<button
+									class="btn preset-filled-surface-400-600 btn-sm"
+									onclick={disableAndSkipVectorization}
+									disabled={disablingVectorization}
+								>
+									{#if disablingVectorization}
+										<Icons.Loader size={14} class="animate-spin" />
+									{/if}
+									Disable & Skip
+								</button>
+							{:else}
+								<button class="btn preset-filled-surface-400-600 btn-sm" onclick={() => { markSetupComplete("rag"); nextWizardStep() }}>
+									Skip for now
+								</button>
+							{/if}
+
+							{#if vectorizationEnabled && vectorizationModelReady}
+								<button class="btn preset-filled-primary-500" onclick={() => { markSetupComplete("rag"); nextWizardStep() }}>
+									Continue
+									<Icons.ChevronRight size={16} />
+								</button>
+							{:else}
+								<button
+									class="btn preset-filled-primary-500"
+									onclick={() => { panelsCtx.digest.tutorial = true; openPanel("vectorization") }}
+								>
 									<Icons.Database size={16} />
-									Save & Continue
-								{/if}
-							</button>
+									Open Embeddings Settings
+								</button>
+							{/if}
 						</div>
 
 					{:else if currentWizardStep?.id === "character"}

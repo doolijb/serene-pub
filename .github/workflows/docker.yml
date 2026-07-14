@@ -97,10 +97,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           sed 's|ghcr.io/doolijb/serene-pub:latest|ghcr.io/doolijb/serene-pub:${{ steps.classify.outputs.compose_tag }}|' \
-            docker-compose.dist.yml > /tmp/docker-compose.dist.yml
+            docker-compose.dist.yml > /tmp/docker-compose.yml
           # Retry a few times — release.yml may still be creating the release
           for i in 1 2 3 4 5; do
-            gh release upload "${{ github.ref_name }}" /tmp/docker-compose.dist.yml --clobber && break
+            gh release upload "${{ github.ref_name }}" /tmp/docker-compose.yml --clobber && break
             echo "Attempt $i failed, retrying in 30s..."
             sleep 30
           done

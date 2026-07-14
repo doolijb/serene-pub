@@ -468,12 +468,12 @@ Example dialogue:
 		if (!kcppRes) {
 			await db.insert(schema.koboldCppSettings).values({
 				id: 1,
-				koboldCppManagerModelsDir: path.join(getAppDataDir(), "koboldcpp", "models")
+				koboldCppManagerModelsDir: path.join(getAppDataDir(), "models", "llm")
 			})
 		} else if (!kcppRes.koboldCppManagerModelsDir) {
 			await db
 				.update(schema.koboldCppSettings)
-				.set({ koboldCppManagerModelsDir: path.join(getAppDataDir(), "koboldcpp", "models") })
+				.set({ koboldCppManagerModelsDir: path.join(getAppDataDir(), "models", "llm") })
 				.where(eq(schema.koboldCppSettings.id, 1))
 		}
 	} catch (error) {

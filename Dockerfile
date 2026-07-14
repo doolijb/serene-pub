@@ -19,7 +19,11 @@ RUN npm prune --production
 # ============================================================
 # Stage 2 — Runtime
 # ============================================================
-FROM node:24-alpine
+# Debian slim (glibc), not alpine: onnxruntime-node's prebuilt native binary
+# (used by @huggingface/transformers for local embeddings) has no musl build
+# and fails to dlopen on Alpine with "Error loading shared library
+# ld-linux-x86-64.so.2".
+FROM node:24-bookworm-slim
 
 WORKDIR /app
 

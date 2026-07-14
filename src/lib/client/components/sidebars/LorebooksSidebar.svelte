@@ -50,11 +50,28 @@
 	let showDeleteConfirmationModal: boolean = $state(false)
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
 	let systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
+	let openChatCtx: OpenChatCtx = $state(getContext("openChatCtx"))
 
 	let graphEnabled = $derived(
 		!!systemSettingsCtx.settings?.vectorizationEnabled &&
 		!!systemSettingsCtx.settings?.summarizationEnabled
 	)
+
+	// Guests can view a shared chat but can't reconfigure it — the server
+	// rejects chats:setLorebook for non-owners anyway, this just avoids
+	// showing an action that would fail with an error toast.
+	let hasOpenChat = $derived(openChatCtx.chatId !== null && openChatCtx.isOwner)
+	let openChatHasLorebook = $derived(openChatCtx.lorebookId !== null)
+
+	function handleAttachToChat(lorebookId: number) {
+		if (openChatCtx.chatId === null) return
+		socket.emit("chats:setLorebook", { chatId: openChatCtx.chatId, lorebookId })
+	}
+
+	function handleDetachFromChat() {
+		if (openChatCtx.chatId === null) return
+		socket.emit("chats:setLorebook", { chatId: openChatCtx.chatId, lorebookId: null })
+	}
 
 	// If graph tab is active but graph becomes unavailable, fall back to world lore
 	$effect(() => {
@@ -340,6 +357,18 @@
 				// Server automatically emits updated list
 			}
 		)
+		socket.on(
+			"chats:setLorebook",
+			(msg: Sockets.Chats.SetLorebook.Response) => {
+				if (!msg.chat || openChatCtx.chatId === null || msg.chat.id !== openChatCtx.chatId) return
+				toaster.success({
+					title: msg.chat.lorebookId ? "Lorebook Attached" : "Lorebook Detached"
+				})
+				// Full reload of the open chat, not just a field patch — lore-bound
+				// content (RAG notices, etc.) can depend on the chat's lorebook.
+				socket.emit("chats:get", { id: openChatCtx.chatId, limit: 25 })
+			}
+		)
 		onclose = handleOnClose
 		socket.emit("lorebooks:list", {})
 	})
@@ -350,6 +379,7 @@
 		socket.off("lorebooks:update")
 		socket.off("lorebooks:import")
 		socket.off("lorebooks:delete")
+		socket.off("chats:setLorebook")
 		onclose = undefined
 	})
 </script>
@@ -368,6 +398,30 @@
 			<h2 class="flex-1 truncate font-semibold">
 				{selectedLorebook?.name || "Lorebook"}
 			</h2>
+			{#if hasOpenChat && selectedLorebook}
+				{#if openChatCtx.lorebookId === selectedLorebook.id}
+					<button
+						class="btn btn-sm preset-filled-warning-500"
+						onclick={handleDetachFromChat}
+						title="Detach from current chat"
+					>
+						<Icons.Unlink size={16} />
+						Detach from Chat
+					</button>
+				{:else}
+					<button
+						class="btn btn-sm preset-filled-success-500"
+						onclick={() => handleAttachToChat(selectedLorebook.id)}
+						disabled={openChatHasLorebook}
+						title={openChatHasLorebook
+							? "The current chat already has a lorebook attached"
+							: "Attach to current chat"}
+					>
+						<Icons.Link size={16} />
+						Attach to Chat
+					</button>
+				{/if}
+			{/if}
 		</div>
 		<Tabs value={editGroup} onValueChange={(e) => handleSwitchTabGroup(e)}>
 			{#snippet list()}
@@ -530,6 +584,11 @@
 						characterEntriesCount={l.characterLoreEntries?.length ||
 							0}
 						historyEntriesCount={l.historyEntries?.length || 0}
+						{hasOpenChat}
+						{openChatHasLorebook}
+						isOpenChatLorebook={openChatCtx.lorebookId === l.id}
+						onAttachToChat={handleAttachToChat}
+						onDetachFromChat={handleDetachFromChat}
 					/>
 				{/each}
 			{/if}

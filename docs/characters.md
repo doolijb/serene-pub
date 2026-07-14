@@ -18,7 +18,7 @@ The search box above the character list filters as you type, matching against th
 
 ### The Vectorization Status Icon
 
-Each character row shows a small status icon next to its name reflecting whether that character has been embedded for retrieval-augmented generation: a lightning-bolt icon means the character's vector embedding is up to date with the active embedding model, a refresh icon means the embedding is stale because the embedding model has since changed, and no icon appears if vectorization is disabled or the character hasn't been embedded yet. See [Summarization & RAG](./summarization-and-rag.md) for how character data feeds into retrieval.
+Each character row shows a small status icon next to its name reflecting whether that character has been embedded for retrieval-augmented generation: a lightning-bolt icon means the character's vector embedding is up to date with the active embedding model, a refresh icon means the embedding is stale because the embedding model has since changed, and no icon appears if vectorization is disabled or the character hasn't been embedded yet. See [Embeddings & RAG](./embeddings-and-rag.md) for how character data feeds into retrieval.
 
 ## Character Fields
 
@@ -27,7 +27,7 @@ The character edit form (opened via **Edit** on any character) exposes the follo
 - **Name*** — required. The character's full or primary name.
 - **Nickname** — optional. If set, the nickname is used in conversations and prompts instead of the full name.
 - **Aliases** — a list of alternate names/spellings for the character (collapsible, advanced field).
-- **Summary** — a short (up to 200 characters) one- or two-sentence description. The form notes this is "used as a concise graph node description" and is **not** injected into chat context — it exists for [RAG/graph](./summarization-and-rag.md) lookups, not for prompting.
+- **Summary** — a short (up to 200 characters) one- or two-sentence description. The form notes this is "used as a concise graph node description" and is **not** injected into chat context — it exists for [RAG/graph](./embeddings-and-rag.md) lookups, not for prompting.
 - **Description*** — required. The character's core description (appearance, background, role).
 - **Personality** — the character's personality traits and behavior.
 - **Scenario** — the setting/situation the character is placed in. The UI notes this field is excluded from group chats. Hidden behind "Show All Fields" unless that setting is enabled.

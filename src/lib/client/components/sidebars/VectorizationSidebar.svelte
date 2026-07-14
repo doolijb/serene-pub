@@ -5,6 +5,7 @@
     import { Modal, Tabs } from "@skeletonlabs/skeleton-svelte"
     import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
     import type { ValueChangeDetails } from "@zag-js/tabs"
+    import VectorizationSetupScreen from "$lib/client/components/vectorization/VectorizationSetupScreen.svelte"
 
     interface Props {
         onclose?: () => Promise<boolean> | undefined
@@ -15,6 +16,8 @@
     const rawSocket = skio.get()!
     const socket = useTypedSocket()
     let vectorizationCtx: VectorizationCtx = $state(getContext("vectorizationCtx"))
+    let systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
+    let isAndroidWrapper = $derived(systemSettingsCtx.settings?.isAndroidWrapper ?? false)
 
     let activeTab = $state<"queue" | "settings">("queue")
 
@@ -49,6 +52,29 @@
         percent?: number
     } | null>(null)
 
+    // "mode" is whichever backend the server actually has active.
+    // "settingsView" is which Settings-tab screen is shown — a state machine
+    // (chooser → setup-local/setup-api → configured) mirroring
+    // KoboldCppSidebar's isUnconfigured/setup-screen/main-view flow, since
+    // vectorization has no nullable "unconfigured" sentinel column: the
+    // existing vectorizationEnabled flag already means "setup completed for
+    // whichever mode," so !vectorizationEnabled is the chooser state.
+    type SettingsView = "chooser" | "setup-local" | "setup-api" | "configured"
+    let mode = $state<"local" | "api">("local")
+    let vectorizationEnabled = $state(false)
+    let settingsView = $state<SettingsView>("chooser")
+    // Where a setup screen's "Back" link returns to — the raw chooser for a
+    // true first-time setup, or straight back to the configured summary when
+    // this setup screen was reached via "Switch to X" on an already-working setup.
+    let backTarget: SettingsView = $derived(vectorizationEnabled ? "configured" : "chooser")
+    let apiBaseUrl = $state("")
+    let apiKey = $state("")
+    let apiModelInput = $state("")
+    let apiDimensions = $state<number | null>(null)
+    let testingApi = $state(false)
+    let apiTestError = $state<string | null>(null)
+    let disabling = $state(false)
+
     onMount(() => {
         onclose = async () => true
         rawSocket.emit("vectorization:getQueue", {}, (res: Sockets.Vectorization.GetQueue.Response) => {
@@ -57,6 +83,8 @@
         })
         socket?.emit("vectorization:listModels", {})
     })
+
+    let settingsViewInitialized = false
 
     $effect(() => {
         if (!socket) return
@@ -67,6 +95,19 @@
             modelReady = message.modelReady ?? false
             modelCached = message.modelCached ?? false
             modelLoadError = message.loadError ?? null
+            mode = message.mode ?? "local"
+            vectorizationEnabled = message.vectorizationEnabled ?? false
+            apiBaseUrl = message.apiBaseUrl ?? ""
+            apiKey = message.apiKey ?? ""
+            apiModelInput = message.apiModel ?? ""
+            apiDimensions = message.apiDimensions ?? null
+            // Only set the initial screen once — afterward, leave navigation
+            // alone so an in-progress setup/switch flow doesn't get yanked
+            // back to "configured" by an unrelated listModels refresh.
+            if (!settingsViewInitialized) {
+                settingsView = vectorizationEnabled ? "configured" : "chooser"
+                settingsViewInitialized = true
+            }
         }
         const handleSetModel = (message: any) => {
             isChangingModel = false
@@ -74,6 +115,7 @@
             if (message.success) {
                 activeModelName = message.modelName
                 showChangeModelModal = false
+                settingsView = "configured"
                 socket?.emit("vectorization:listModels", {})
             }
         }
@@ -82,6 +124,12 @@
             if (message.status === "ready") {
                 modelReady = true
                 downloadProgress = null
+                isChangingModel = false
+                // Fires for both the first-time "enable local" setup flow and
+                // the already-configured "change model"/"reload" flows — in
+                // all three cases, a successful load means the local model is
+                // now the working, configured backend.
+                settingsView = "configured"
                 socket?.emit("vectorization:listModels", {})
             }
             if (message.status === "error") {
@@ -153,6 +201,74 @@
         isChangingModel = true
         downloadProgress = null
         socket?.emit("vectorization:setModel", { modelName: selectedModelForChange })
+    }
+
+    // Chooser → setup screens. Defaulting the tier selection here (rather
+    // than leaving it to whatever the modal happens to have last set) covers
+    // the true first-time case, where there's no activeModelName yet.
+    function goToLocalSetup() {
+        selectedModelForChange =
+            mode === "local" && activeModelName ? activeModelName : (availableModels[0]?.id ?? "")
+        settingsView = "setup-local"
+    }
+    function goToApiSetup() {
+        settingsView = "setup-api"
+    }
+
+    function enableLocalModel() {
+        if (!selectedModelForChange) return
+        isChangingModel = true
+        downloadProgress = null
+        rawSocket.emit(
+            "vectorization:enable",
+            { modelName: selectedModelForChange, startNow: true },
+            (res: Sockets.Vectorization.EnableVectorization.Response) => {
+                // On success, the model-download-progress "ready" event (already
+                // streaming throughout the load) is what flips settingsView to
+                // "configured" and clears isChangingModel — this ack only needs
+                // to handle the failure path.
+                if (!res.success) {
+                    isChangingModel = false
+                    downloadProgress = null
+                }
+            }
+        )
+    }
+
+    function saveApiConfig() {
+        apiTestError = null
+        testingApi = true
+        rawSocket.emit(
+            "vectorization:setApiConfig",
+            {
+                baseUrl: apiBaseUrl.trim(),
+                apiKey: apiKey.trim() || null,
+                model: apiModelInput.trim(),
+                startNow: true
+            },
+            (res: Sockets.Vectorization.SetApiConfig.Response) => {
+                testingApi = false
+                if (res.success) {
+                    mode = "api"
+                    vectorizationEnabled = true
+                    activeModelName = res.modelName ?? null
+                    apiDimensions = res.dimensions ?? null
+                    settingsView = "configured"
+                    socket?.emit("vectorization:listModels", {})
+                } else {
+                    apiTestError = res.error ?? "Failed to validate the embeddings API"
+                }
+            }
+        )
+    }
+
+    function disableVectorization() {
+        disabling = true
+        rawSocket.emit("vectorization:disable", {}, () => {
+            disabling = false
+            vectorizationEnabled = false
+            settingsView = "chooser"
+        })
     }
 
     function reloadModel() {
@@ -401,128 +517,338 @@
             <Tabs.Panel value="settings">
             <div class="flex flex-col gap-4 overflow-y-auto p-4">
 
-                <!-- Model not in memory warning -->
-                {#if !modelReady}
-                    <div class="border-warning-500/30 bg-warning-500/10 flex items-start gap-3 rounded-lg border p-3">
-                        <Icons.AlertTriangle size={16} class="text-warning-500 mt-0.5 shrink-0" aria-hidden="true" />
-                        <div class="min-w-0 flex-1 space-y-2">
-                            {#if !modelCached}
-                                <p class="text-sm font-medium">Model files missing</p>
-                                <p class="text-surface-500 text-xs">The embedding model is not in the local cache. Re-download it to resume vectorization.</p>
-                            {:else if modelLoadError}
-                                <p class="text-sm font-medium">Model failed to load</p>
-                                <p class="text-surface-500 text-xs">{modelLoadError}</p>
-                            {:else}
-                                <p class="text-sm font-medium">Model not loaded</p>
-                                <p class="text-surface-500 text-xs">The server restarted and the model needs to be reloaded before vectorization can run.</p>
-                            {/if}
-                            <button
-                                class="btn btn-sm preset-tonal-warning text-xs"
-                                onclick={reloadModel}
-                                disabled={!activeModelName || isChangingModel}
-                            >
-                                {#if isChangingModel && !showChangeModelModal}
-                                    <Icons.Loader size={12} class="animate-spin" aria-hidden="true" />
-                                    Loading…
-                                {:else}
-                                    <Icons.Download size={12} aria-hidden="true" />
-                                    {modelCached ? "Reload Model" : "Re-download Model"}
-                                {/if}
-                            </button>
-                        </div>
-                    </div>
-                {/if}
+                {#if settingsView === "chooser"}
+                    <!-- First-time setup: choose backend -->
+                    <VectorizationSetupScreen
+                        {isAndroidWrapper}
+                        onChooseLocal={goToLocalSetup}
+                        onChooseApi={goToApiSetup}
+                    />
 
-                <!-- Current model card -->
-                <div class="bg-surface-200-800 rounded-lg p-3 space-y-1">
-                    <div class="flex items-center gap-2 mb-2">
-                        <Icons.Cpu size={16} class={modelReady ? 'text-primary-500' : 'text-surface-400'} aria-hidden="true" />
-                        <span class="text-xs font-semibold uppercase tracking-wider text-surface-400">Embedding Model</span>
-                    </div>
-                    <p class="text-sm font-medium">
-                        {activeModelDef?.name ?? activeModelName ?? "Unknown model"}
-                    </p>
-                    {#if activeModelDef}
-                        <div class="flex flex-wrap items-center gap-1.5 text-xs text-surface-500">
-                            {#if activeModelDef.tier === "fast"}
-                                <span class="rounded-full bg-sky-500/15 px-1.5 py-0.5 text-xs font-medium text-sky-600">Fast</span>
-                            {:else if activeModelDef.tier === "balanced"}
-                                <span class="rounded-full bg-violet-500/15 px-1.5 py-0.5 text-xs font-medium text-violet-600">Balanced</span>
-                            {:else}
-                                <span class="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-xs font-medium text-amber-600">Best</span>
-                            {/if}
-                            <span>{activeModelDef.dimensions}d · {activeModelDef.sizeLabel}</span>
-                        </div>
-                        <p class="text-xs text-surface-500 mt-1">{activeModelDef.description}</p>
-                    {/if}
-                    {#if !modelReady}
-                        <span class="inline-block mt-1 rounded-full bg-warning-500/20 px-2 py-0.5 text-xs font-medium text-warning-600">Not loaded</span>
-                    {:else}
-                        <span class="inline-block mt-1 rounded-full bg-success-500/20 px-2 py-0.5 text-xs font-medium text-success-600">Loaded</span>
-                    {/if}
-                </div>
-
-                <!-- Download progress -->
-                {#if downloadProgress}
-                    <div class="space-y-1">
-                        <div class="flex items-center justify-between text-xs">
-                            <span class="text-surface-500 capitalize">{downloadProgress.status}…</span>
-                            {#if downloadProgress.percent !== undefined}
-                                <span class="font-mono">{downloadProgress.percent}%</span>
-                            {/if}
-                        </div>
-                        {#if downloadProgress.percent !== undefined}
-                            <div class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full">
-                                <div class="bg-primary-500 h-full transition-all duration-300" style="width: {downloadProgress.percent}%"></div>
-                            </div>
-                        {:else}
-                            <div class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full">
-                                <div class="bg-primary-500 h-full w-1/3 animate-pulse rounded-full"></div>
-                            </div>
-                        {/if}
-                    </div>
-                {/if}
-
-                <!-- Model idle TTL -->
-                <div class="bg-surface-200-800 rounded-lg p-3 space-y-2">
-                    <div class="flex items-center gap-2">
-                        <Icons.Timer size={16} class="text-surface-400" aria-hidden="true" />
-                        <span class="text-xs font-semibold uppercase tracking-wider text-surface-400">Model Idle TTL</span>
-                    </div>
-                    <p class="text-xs text-surface-500">Unload the embedding model after this many minutes of inactivity. Set to 0 to keep it loaded indefinitely.</p>
-                    <div class="flex items-center gap-2">
-                        <input
-                            type="number"
-                            min="0"
-                            step="1"
-                            class="input text-sm w-24"
-                            bind:value={ttlInput}
-                        />
-                        <span class="text-xs text-surface-500">minutes</span>
+                {:else if settingsView === "setup-local"}
+                    <!-- Local: pick a model tier -->
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm font-semibold">Choose a Local Model</span>
                         <button
-                            class="btn btn-sm preset-tonal-primary text-xs ml-auto"
-                            onclick={saveTtl}
-                            disabled={savingTtl}
+                            class="btn btn-sm preset-filled-surface-400-600 text-xs"
+                            onclick={() => (settingsView = backTarget)}
                         >
-                            {#if savingTtl}
-                                <Icons.Loader size={12} class="animate-spin" aria-hidden="true" />
-                            {:else}
-                                <Icons.Save size={12} aria-hidden="true" />
-                            {/if}
-                            Save
+                            <Icons.ArrowLeft size={12} aria-hidden="true" />
+                            Back
                         </button>
                     </div>
-                </div>
 
-                <!-- Change model button -->
-                <button
-                    class="btn btn-sm preset-filled-surface-400-600 w-full text-xs"
-                    onclick={openChangeModelModal}
-                    disabled={isChangingModel}
-                >
-                    <Icons.RefreshCw size={12} aria-hidden="true" />
-                    Change Model
-                </button>
+                    {#if availableModels.length === 0}
+                        <div class="text-center opacity-50 text-sm py-4">Loading available models…</div>
+                    {:else}
+                        <div class="space-y-2">
+                            {#each availableModels as model}
+                                <label
+                                    class="flex cursor-pointer items-start gap-3 rounded-lg border-2 p-3 transition-all
+                                        {selectedModelForChange === model.id
+                                        ? 'border-primary-500 bg-primary-500/5'
+                                        : 'border-surface-300-600 hover:border-surface-400-500'}"
+                                >
+                                    <input
+                                        type="radio"
+                                        name="setup-local-model"
+                                        value={model.id}
+                                        bind:group={selectedModelForChange}
+                                        class="mt-0.5"
+                                    />
+                                    <div class="min-w-0 flex-1">
+                                        <div class="flex flex-wrap items-center gap-2">
+                                            <span class="font-medium">{model.name}</span>
+                                            {#if model.tier === "fast"}
+                                                <span class="rounded-full bg-sky-500/15 px-1.5 py-0.5 text-xs font-medium text-sky-600">Fast</span>
+                                            {:else if model.tier === "balanced"}
+                                                <span class="rounded-full bg-violet-500/15 px-1.5 py-0.5 text-xs font-medium text-violet-600">Balanced</span>
+                                            {:else}
+                                                <span class="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-xs font-medium text-amber-600">Best</span>
+                                            {/if}
+                                            <span class="text-surface-500 text-xs">{model.sizeLabel} · {model.dimensions}d</span>
+                                        </div>
+                                        <p class="text-surface-500 mt-0.5 text-xs">{model.description}</p>
+                                    </div>
+                                </label>
+                            {/each}
+                        </div>
+                    {/if}
+
+                    {#if downloadProgress}
+                        <div class="space-y-1">
+                            <div class="flex items-center justify-between text-xs">
+                                <span class="text-surface-500 capitalize">{downloadProgress.status}…</span>
+                                {#if downloadProgress.percent !== undefined}
+                                    <span class="font-mono">{downloadProgress.percent}%</span>
+                                {/if}
+                            </div>
+                            {#if downloadProgress.percent !== undefined}
+                                <div class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full">
+                                    <div class="bg-primary-500 h-full transition-all duration-300" style="width: {downloadProgress.percent}%"></div>
+                                </div>
+                            {:else}
+                                <div class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full">
+                                    <div class="bg-primary-500 h-full w-1/3 animate-pulse rounded-full"></div>
+                                </div>
+                            {/if}
+                        </div>
+                    {/if}
+
+                    <button
+                        class="btn preset-filled-primary-500 w-full"
+                        onclick={enableLocalModel}
+                        disabled={!selectedModelForChange || isChangingModel}
+                    >
+                        {#if isChangingModel}
+                            <Icons.Loader size={16} class="animate-spin" aria-hidden="true" />
+                            Setting up…
+                        {:else}
+                            <Icons.Cpu size={16} aria-hidden="true" />
+                            Save & Enable
+                        {/if}
+                    </button>
+
+                {:else if settingsView === "setup-api"}
+                    <!-- External API config -->
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm font-semibold">External API Setup</span>
+                        <button
+                            class="btn btn-sm preset-filled-surface-400-600 text-xs"
+                            onclick={() => (settingsView = backTarget)}
+                        >
+                            <Icons.ArrowLeft size={12} aria-hidden="true" />
+                            Back
+                        </button>
+                    </div>
+                    <p class="text-xs text-surface-500">
+                        Any OpenAI-compatible /embeddings endpoint — OpenAI itself, Ollama, LM Studio, llama.cpp server, etc.
+                    </p>
+
+                    <label class="block">
+                        <span class="text-xs text-surface-500">Base URL</span>
+                        <input
+                            type="text"
+                            class="input text-sm w-full"
+                            placeholder="https://api.openai.com/v1"
+                            bind:value={apiBaseUrl}
+                        />
+                    </label>
+                    <label class="block">
+                        <span class="text-xs text-surface-500">API Key</span>
+                        <input
+                            type="password"
+                            class="input text-sm w-full"
+                            placeholder="(optional, depending on provider)"
+                            bind:value={apiKey}
+                        />
+                    </label>
+                    <label class="block">
+                        <span class="text-xs text-surface-500">Model</span>
+                        <input
+                            type="text"
+                            class="input text-sm w-full"
+                            placeholder="text-embedding-3-small"
+                            bind:value={apiModelInput}
+                        />
+                    </label>
+
+                    {#if apiTestError}
+                        <p class="text-error-500 text-xs">{apiTestError}</p>
+                    {/if}
+
+                    <button
+                        class="btn preset-filled-primary-500 w-full"
+                        onclick={saveApiConfig}
+                        disabled={testingApi || !apiBaseUrl.trim() || !apiModelInput.trim()}
+                    >
+                        {#if testingApi}
+                            <Icons.Loader size={16} class="animate-spin" aria-hidden="true" />
+                            Testing…
+                        {:else}
+                            <Icons.Check size={16} aria-hidden="true" />
+                            Test & Save
+                        {/if}
+                    </button>
+
+                {:else}
+                    <!-- Configured: summary + reconfigure/disable -->
+                    {#if !modelReady}
+                        <div class="border-warning-500/30 bg-warning-500/10 flex items-start gap-3 rounded-lg border p-3">
+                            <Icons.AlertTriangle size={16} class="text-warning-500 mt-0.5 shrink-0" aria-hidden="true" />
+                            <div class="min-w-0 flex-1 space-y-2">
+                                {#if mode === "api"}
+                                    <p class="text-sm font-medium">External API not working</p>
+                                    <p class="text-surface-500 text-xs">
+                                        {modelLoadError ?? "RAG retrieval is skipped (falls back to keyword search) until the embeddings API is reachable again."}
+                                    </p>
+                                {:else if !modelCached}
+                                    <p class="text-sm font-medium">Model files missing</p>
+                                    <p class="text-surface-500 text-xs">The embedding model is not in the local cache. Re-download it to resume embeddings.</p>
+                                {:else if modelLoadError}
+                                    <p class="text-sm font-medium">Model failed to load</p>
+                                    <p class="text-surface-500 text-xs">{modelLoadError}</p>
+                                {:else}
+                                    <p class="text-sm font-medium">Model not loaded</p>
+                                    <p class="text-surface-500 text-xs">The server restarted and the model needs to be reloaded before embeddings can run.</p>
+                                {/if}
+                                {#if mode === "local"}
+                                    <button
+                                        class="btn btn-sm preset-tonal-warning text-xs"
+                                        onclick={reloadModel}
+                                        disabled={!activeModelName || isChangingModel}
+                                    >
+                                        {#if isChangingModel && !showChangeModelModal}
+                                            <Icons.Loader size={12} class="animate-spin" aria-hidden="true" />
+                                            Loading…
+                                        {:else}
+                                            <Icons.Download size={12} aria-hidden="true" />
+                                            {modelCached ? "Reload Model" : "Re-download Model"}
+                                        {/if}
+                                    </button>
+                                {/if}
+                            </div>
+                        </div>
+                    {/if}
+
+                    {#if mode === "local"}
+                        <!-- Current model card -->
+                        <div class="bg-surface-200-800 rounded-lg p-3 space-y-1">
+                            <div class="flex items-center gap-2 mb-2">
+                                <Icons.Cpu size={16} class={modelReady ? 'text-primary-500' : 'text-surface-400'} aria-hidden="true" />
+                                <span class="text-xs font-semibold uppercase tracking-wider text-surface-400">Embedding Model</span>
+                            </div>
+                            <p class="text-sm font-medium">
+                                {activeModelDef?.name ?? activeModelName ?? "Unknown model"}
+                            </p>
+                            {#if activeModelDef}
+                                <div class="flex flex-wrap items-center gap-1.5 text-xs text-surface-500">
+                                    {#if activeModelDef.tier === "fast"}
+                                        <span class="rounded-full bg-sky-500/15 px-1.5 py-0.5 text-xs font-medium text-sky-600">Fast</span>
+                                    {:else if activeModelDef.tier === "balanced"}
+                                        <span class="rounded-full bg-violet-500/15 px-1.5 py-0.5 text-xs font-medium text-violet-600">Balanced</span>
+                                    {:else}
+                                        <span class="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-xs font-medium text-amber-600">Best</span>
+                                    {/if}
+                                    <span>{activeModelDef.dimensions}d · {activeModelDef.sizeLabel}</span>
+                                </div>
+                                <p class="text-xs text-surface-500 mt-1">{activeModelDef.description}</p>
+                            {/if}
+                            {#if !modelReady}
+                                <span class="inline-block mt-1 rounded-full bg-warning-500/20 px-2 py-0.5 text-xs font-medium text-warning-600">Not loaded</span>
+                            {:else}
+                                <span class="inline-block mt-1 rounded-full bg-success-500/20 px-2 py-0.5 text-xs font-medium text-success-600">Loaded</span>
+                            {/if}
+                        </div>
+
+                        {#if downloadProgress}
+                            <div class="space-y-1">
+                                <div class="flex items-center justify-between text-xs">
+                                    <span class="text-surface-500 capitalize">{downloadProgress.status}…</span>
+                                    {#if downloadProgress.percent !== undefined}
+                                        <span class="font-mono">{downloadProgress.percent}%</span>
+                                    {/if}
+                                </div>
+                                {#if downloadProgress.percent !== undefined}
+                                    <div class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full">
+                                        <div class="bg-primary-500 h-full transition-all duration-300" style="width: {downloadProgress.percent}%"></div>
+                                    </div>
+                                {:else}
+                                    <div class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full">
+                                        <div class="bg-primary-500 h-full w-1/3 animate-pulse rounded-full"></div>
+                                    </div>
+                                {/if}
+                            </div>
+                        {/if}
+
+                        <!-- Model idle TTL — no-op in API mode, only meaningful here -->
+                        <div class="bg-surface-200-800 rounded-lg p-3 space-y-2">
+                            <div class="flex items-center gap-2">
+                                <Icons.Timer size={16} class="text-surface-400" aria-hidden="true" />
+                                <span class="text-xs font-semibold uppercase tracking-wider text-surface-400">Model Idle TTL</span>
+                            </div>
+                            <p class="text-xs text-surface-500">Unload the embedding model after this many minutes of inactivity. Set to 0 to keep it loaded indefinitely.</p>
+                            <div class="flex items-center gap-2">
+                                <input
+                                    type="number"
+                                    min="0"
+                                    step="1"
+                                    class="input text-sm w-24"
+                                    bind:value={ttlInput}
+                                />
+                                <span class="text-xs text-surface-500">minutes</span>
+                                <button
+                                    class="btn btn-sm preset-tonal-primary text-xs ml-auto"
+                                    onclick={saveTtl}
+                                    disabled={savingTtl}
+                                >
+                                    {#if savingTtl}
+                                        <Icons.Loader size={12} class="animate-spin" aria-hidden="true" />
+                                    {:else}
+                                        <Icons.Save size={12} aria-hidden="true" />
+                                    {/if}
+                                    Save
+                                </button>
+                            </div>
+                        </div>
+
+                        <button
+                            class="btn btn-sm preset-filled-surface-400-600 w-full text-xs"
+                            onclick={openChangeModelModal}
+                            disabled={isChangingModel}
+                        >
+                            <Icons.RefreshCw size={12} aria-hidden="true" />
+                            Change Model
+                        </button>
+                    {:else}
+                        <!-- Current API card -->
+                        <div class="bg-surface-200-800 rounded-lg p-3 space-y-1">
+                            <div class="flex items-center gap-2 mb-2">
+                                <Icons.Globe size={16} class={modelReady ? 'text-primary-500' : 'text-surface-400'} aria-hidden="true" />
+                                <span class="text-xs font-semibold uppercase tracking-wider text-surface-400">Embeddings API</span>
+                            </div>
+                            <p class="text-sm font-medium">{apiModelInput || "Unknown model"}</p>
+                            <p class="text-xs text-surface-500 truncate" title={apiBaseUrl}>{apiBaseUrl}</p>
+                            {#if apiDimensions}
+                                <p class="text-xs text-surface-500">{apiDimensions}d</p>
+                            {/if}
+                            {#if !modelReady}
+                                <span class="inline-block mt-1 rounded-full bg-warning-500/20 px-2 py-0.5 text-xs font-medium text-warning-600">Not ready</span>
+                            {:else}
+                                <span class="inline-block mt-1 rounded-full bg-success-500/20 px-2 py-0.5 text-xs font-medium text-success-600">Ready</span>
+                            {/if}
+                        </div>
+                    {/if}
+
+                    <!-- Switch backend — not offered on Android, where local can't work -->
+                    {#if !(isAndroidWrapper && mode === "api")}
+                        <button
+                            class="btn btn-sm preset-tonal-primary w-full text-xs"
+                            onclick={mode === "local" ? goToApiSetup : goToLocalSetup}
+                        >
+                            <Icons.RefreshCw size={12} aria-hidden="true" />
+                            Switch to {mode === "local" ? "External API" : "Local Model"}
+                        </button>
+                    {/if}
+
+                    <!-- Disable -->
+                    <div class="border-surface-300-700 mt-2 border-t pt-4">
+                        <p class="text-surface-500 mb-2 text-xs">Turn off embeddings entirely — RAG falls back to keyword search.</p>
+                        <button
+                            class="btn btn-sm preset-tonal-error w-full text-xs"
+                            onclick={disableVectorization}
+                            disabled={disabling}
+                        >
+                            {#if disabling}
+                                <Icons.Loader size={12} class="animate-spin" aria-hidden="true" />
+                                Disabling…
+                            {:else}
+                                <Icons.PowerOff size={12} aria-hidden="true" />
+                                Disable Embeddings
+                            {/if}
+                        </button>
+                    </div>
+                {/if}
 
             </div>
             </Tabs.Panel>
@@ -546,7 +872,7 @@
 
         <div class="text-warning-500 flex items-start gap-2 text-sm">
             <Icons.AlertTriangle class="mt-0.5 h-4 w-4 shrink-0" />
-            <p>Changing the model will stop the current vectorization queue. All existing embeddings will need to be regenerated with the new model.</p>
+            <p>Changing the model will stop the current embedding queue. All existing embeddings will need to be regenerated with the new model.</p>
         </div>
 
         <div class="space-y-2">

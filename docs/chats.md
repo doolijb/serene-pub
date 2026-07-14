@@ -107,7 +107,7 @@ The **Scenario** field (a multi-line textarea in the chat settings form) is free
 
 ## Lorebook Binding
 
-The **Lorebook** dropdown in chat settings attaches a single [lorebook](./lorebooks.md) to the chat (or "None"). Once attached, the chat draws on that lorebook's world lore, character lore, and history entries when compiling prompts, and unlocks the composer's **Lore** tab (below) for browsing/creating history entries and scenes directly from the chat. Summarizing chat messages into lore (see [Summarization & RAG](./summarization-and-rag.md)) will also auto-bind a lorebook to the chat if one isn't already set.
+The **Lorebook** dropdown in chat settings attaches a single [lorebook](./lorebooks.md) to the chat (or "None"). Once attached, the chat draws on that lorebook's world lore, character lore, and history entries when compiling prompts, and unlocks the composer's **Lore** tab (below) for browsing/creating history entries and scenes directly from the chat. Summarizing chat messages into lore (see [Summarization](./summarization.md)) will also auto-bind a lorebook to the chat if one isn't already set. A chat's lorebook can also be attached or detached from the [Lorebooks](./lorebooks.md) sidebar itself, via each lorebook's menu or the detail view, when that chat is the one currently open.
 
 ## Prompt Config, Connection & Sampling Overrides
 
@@ -193,7 +193,7 @@ Clicking Edit replaces the message content with the same composer used for new m
 
 ### Selecting Messages for Summarization
 
-Selecting a message for summarization switches the whole chat into a multi-select mode: the composer area is replaced by a toolbar showing how many messages are selected, with **Select All**, **Select None**, **Cancel**, and three destination buttons — **Scene**, **World Lore**, and **Character Lore** — plus per-message **Select**, **Select All Above**, and **Select All Below** helpers. Messages already captured in an existing scene are locked out of selection (shown with a film-strip "In Scene" badge). Selecting **Scene** requires a *contiguous* run of messages with no visible (non-hidden) gap between the earliest and latest picks — Serene Pub blocks the summarize action and explains why if you've skipped over an unselected, visible message. The actual summarization mechanics (what gets extracted, how it's stored, and how it feeds RAG) are covered in [Summarization & RAG](./summarization-and-rag.md).
+Selecting a message for summarization switches the whole chat into a multi-select mode: the composer area is replaced by a toolbar showing how many messages are selected, with **Select All**, **Select None**, **Cancel**, and three destination buttons — **Scene**, **World Lore**, and **Character Lore** — plus per-message **Select**, **Select All Above**, and **Select All Below** helpers. Messages already captured in an existing scene are locked out of selection (shown with a film-strip "In Scene" badge). Selecting **Scene** requires a *contiguous* run of messages with no visible (non-hidden) gap between the earliest and latest picks — Serene Pub blocks the summarize action and explains why if you've skipped over an unselected, visible message. The actual summarization mechanics (what gets extracted and how it's stored) are covered in [Summarization](./summarization.md); how the result feeds RAG is covered in [Embeddings & RAG](./embeddings-and-rag.md).
 
 ## The Extra Controls Tab
 
@@ -225,7 +225,7 @@ Each participant row shows Left/Right pin toggle buttons for their default avata
 
 ## Understanding RAG Notices
 
-When [vectorization](./summarization-and-rag.md) is enabled system-wide, a notice banner can appear directly above the composer summarizing the RAG-indexing state of everything relevant to the chat (messages, characters, personas, and lorebook entries):
+When [vectorization](./embeddings-and-rag.md) is enabled system-wide, a notice banner can appear directly above the composer summarizing the RAG-indexing state of everything relevant to the chat (messages, characters, personas, and lorebook entries):
 
 - **"RAG content not yet indexed"** — nothing has been embedded yet for this chat's content; RAG can't surface anything from it until indexing runs.
 - **"RAG content indexed with a different model"** — existing embeddings were generated with a previously-active embedding model and need to be redone against the current one.
@@ -233,7 +233,7 @@ When [vectorization](./summarization-and-rag.md) is enabled system-wide, a notic
 
 The notice offers **Prioritize in queue** (moves this chat's content to the front of the embedding queue) and **Ignore for this chat** (silences the notice and excludes the chat from RAG going forward, with a one-click **Re-enable** link shown afterward in its place). No notice appears once everything is fully indexed.
 
-Individual messages also carry a small per-message embedding-status icon next to the sender's name: a lightning bolt when that message's embedding matches the currently active embedding model, or a refresh icon when it was embedded under a since-changed model and is stale. See [Summarization & RAG](./summarization-and-rag.md) for how retrieval, scoring, and the underlying embedding queue actually work.
+Individual messages also carry a small per-message embedding-status icon next to the sender's name: a lightning bolt when that message's embedding matches the currently active embedding model, or a refresh icon when it was embedded under a since-changed model and is stale. See [Embeddings & RAG](./embeddings-and-rag.md) for how retrieval, scoring, and the underlying embedding queue actually work.
 
 ## Statistics Tab & Prompt Details
 

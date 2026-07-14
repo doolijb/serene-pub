@@ -217,9 +217,9 @@ picker actually needs it.
   from source with a 16 KB-aware toolchain (a multi-hour native build, not
   attempted here). Revisit if this ever causes an actual crash rather than a
   notice, or once upstream ships an aligned build.
-- **Ollama Manager, KoboldCPP Manager, and Vectorization & RAG are hidden entirely
-  in this build** — not offered in the setup wizard, not shown in the sidebar nav,
-  not toggleable from System Settings, and rejected server-side if triggered
+- **Ollama Manager and KoboldCPP Manager are hidden entirely in this build** —
+  not offered in the setup wizard, not shown in the sidebar nav, not
+  toggleable from System Settings, and rejected server-side if triggered
   directly. Reasons:
   - **KoboldCPP Manager's managed/local-subprocess mode** can't work regardless of
     engineering effort here — upstream `LostRuins/koboldcpp` only publishes
@@ -230,14 +230,20 @@ picker actually needs it.
     here as a scope decision to keep the Android build simple, not a hard technical
     blocker. A remote Ollama instance running on another machine can still be
     reached via a plain connection in the Connections panel.
-  - **Vectorization/RAG** depends on `onnxruntime-node` (a transitive native
-    dependency of `@huggingface/transformers`), which has no explicit Android
-    target and an unverified glibc-vs-Bionic compatibility question — rather than
-    risk a crash or silently-broken embedding pipeline, it's disabled outright for
-    this build.
   - Remote/external KoboldCPP and Ollama **connections** (as opposed to the
     Manager sub-systems) are unaffected — configure them manually via the
     Connections panel, same as any other provider.
+- **Local vectorization (the in-process ONNX embedding model) is disabled on
+  Android** — confirmed via `readelf` that `onnxruntime-node`'s prebuilt Linux
+  ARM64 binaries depend on `ld-linux-aarch64.so.1`/`libc.so.6`/`libpthread.so.0`,
+  the same glibc-ecosystem libraries that don't exist under Bionic which made
+  the original Node.js binary itself unusable here. Not fixable via packaging.
+  **External-API vectorization works fine, including on Android** — it's a
+  plain OpenAI-compatible `/embeddings` HTTP call (see
+  `src/lib/server/embedding/index.ts`'s `activateApiEmbedding`), so it's
+  usable with OpenAI itself, or a self-hosted Ollama/LM Studio/llama.cpp
+  server instance elsewhere on the network. Configure it from the
+  Vectorization sidebar's Settings tab → External API.
 - **nodejs-mobile's V8 build lacks full ICU/Unicode support** — any regex
   using a Unicode property escape (`\p{L}`, `\p{N}`, `\p{Lu}`, etc.) throws a
   `SyntaxError` while the containing module is *parsed*, not run. This isn't

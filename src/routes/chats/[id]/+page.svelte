@@ -37,6 +37,15 @@
 	let userCtx: UserCtx = getContext("userCtx")
 	let panelsCtx: PanelsCtx = getContext("panelsCtx")
 	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
+	let openChatCtx: OpenChatCtx = getContext("openChatCtx")
+
+	// Lets globally-rendered sidebars (e.g. LorebooksSidebar) know which chat
+	// is open and whether it already has a lorebook, without a fetch of their own.
+	$effect(() => {
+		openChatCtx.chatId = chat?.id ?? null
+		openChatCtx.lorebookId = chat?.lorebookId ?? null
+		openChatCtx.isOwner = !!chat && chat.userId === userCtx.user?.id
+	})
 
 	let summarizationEnabled = $derived(!!systemSettingsCtx.settings?.summarizationEnabled)
 	let vectorizationEnabled = $derived(!!systemSettingsCtx.settings?.vectorizationEnabled)
@@ -1159,6 +1168,9 @@
 	})
 	onDestroy(() => {
 		sceneImages.set({ left: null, right: null })
+		openChatCtx.chatId = null
+		openChatCtx.lorebookId = null
+		openChatCtx.isOwner = false
 	})
 
 	function handleAvatarClick(

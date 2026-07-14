@@ -277,6 +277,10 @@ export type SocketEventMap = {
 		params: Sockets.Chats.Update.Params
 		response: Sockets.Chats.Update.Response
 	}
+	"chats:setLorebook": {
+		params: Sockets.Chats.SetLorebook.Params
+		response: Sockets.Chats.SetLorebook.Response
+	}
 	"chats:delete": {
 		params: Sockets.Chats.Delete.Params
 		response: Sockets.Chats.Delete.Response

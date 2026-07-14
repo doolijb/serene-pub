@@ -115,6 +115,17 @@ declare global {
 		tasks: Sockets.TaskQueue.QueuedTask[]
 	}
 
+	// Written by the open chat route (src/routes/chats/[id]/+page.svelte) so
+	// globally-rendered sidebars (e.g. LorebooksSidebar) can tell whether a
+	// chat is currently open, whether it already has a lorebook attached, and
+	// whether the current user owns it (guests can't change it), without a
+	// dedicated fetch of their own.
+	interface OpenChatCtx {
+		chatId: number | null
+		lorebookId: number | null
+		isOwner: boolean
+	}
+
 	interface GraphBuildState {
 		activityId?: string
 		userId?: number

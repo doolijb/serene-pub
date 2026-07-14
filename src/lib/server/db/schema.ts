@@ -1241,8 +1241,10 @@ export const koboldCppSettings = pgTable("koboldcpp_settings", {
 	koboldCppManagedReleaseTag: text("koboldcpp_managed_release_tag")
 })
 
-// Tracks models downloaded through the UI, including their metadata and download status.
-// Models with status != "complete" are excluded from the available models list.
+// Tracks .gguf models in the KoboldCPP models directory, whether downloaded through
+// the UI or placed there manually — rows for manually-placed files are created on
+// discovery during a koboldcpp:listModels scan. Models with status != "complete"
+// (still downloading, or errored) are excluded from the available models list.
 export const koboldCppModels = pgTable("koboldcpp_models", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 	filename: text("filename").notNull().unique(),
@@ -1484,6 +1486,14 @@ export const setupRelations = relations(setup, ({ one }) => ({
 export const vectorizationConfigs = pgTable("vectorization_configs", {
 	id: integer("id").primaryKey().default(1),
 	embeddingModelTtlMinutes: integer("embedding_model_ttl_minutes").notNull().default(5),
+	// "local" (in-process ONNX model) or "api" (external OpenAI-compatible
+	// embeddings endpoint). Only one is ever active, so this singleton table
+	// holds both configs rather than a dedicated multi-row connections table.
+	mode: text("mode").notNull().default("local"),
+	apiBaseUrl: text("api_base_url"),
+	apiKey: text("api_key"),
+	apiModel: text("api_model"),
+	apiDimensions: integer("api_dimensions"),
 })
 
 export const customThemes = pgTable("custom_themes", {

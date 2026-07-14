@@ -52,17 +52,11 @@ The System Settings tab only covers whether a manager is on and which URL it tal
 
 Both the Ollama and KoboldCPP base URL fields use the same validation rule: the value must be a well-formed URL, and it must either include an explicit port or use `localhost` as the hostname. An invalid entry shows an inline error (e.g. "URL must include a port (e.g., http://localhost:11434)") instead of saving.
 
-## Summarization & Vectorization
+## Summarization
 
-These two switches turn on the background systems that keep long chats and large lorebooks usable without blowing past a model's context window. Both are off by default. Full behavior, configuration, and the underlying concepts are documented in [Summarization & RAG](./summarization-and-rag.md); this tab only controls whether each system is active for the whole instance.
+**Enable Summarization** turns on automatic background condensation of older chat messages into summaries, which are then used in place of the original messages during prompt construction so long conversations stay within a model's context limit. Off by default. Full behavior is documented in [Summarization](./summarization.md).
 
-### Vectorization & RAG
-
-**Enable Vectorization & RAG** turns on local semantic embedding of content, which improves lorebook retrieval and narrative graph features. Turning it on opens a modal to choose an embedding model, grouped by tier (**Fast**, **Balanced**, **Best**), each showing its approximate size and embedding dimensions. You can choose **Enable, start later** to just save the setting, or **Enable & Start Now** to begin downloading/loading the model immediately, with a progress indicator for the download. Model management and the processing queue are handled from the Vectorization sidebar once enabled. This switch is disabled (greyed out) if no embedding models are available to select.
-
-### Summarization
-
-**Enable Summarization** turns on automatic background condensation of older chat messages into summaries, which are then used in place of the original messages during prompt construction so long conversations stay within a model's context limit.
+Embeddings/RAG has no switch on this tab — unlike Summarization, it's entirely enabled, disabled, and reconfigured from the **Embeddings** sidebar panel itself (always available in the left navigation for admins). See [Embeddings & RAG](./embeddings-and-rag.md) for how that works.
 
 ## Diagnostics
 

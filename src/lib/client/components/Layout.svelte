@@ -106,6 +106,7 @@
 		history: []
 	})
 	let taskQueueCtx: TaskQueueCtx = $state({ tasks: [] })
+	let openChatCtx: OpenChatCtx = $state({ chatId: null, lorebookId: null, isOwner: false })
 	let graphBuildsCtx: GraphBuildsCtx = $state({
 		activeBuild: null,
 		reopenLorebookId: null,
@@ -169,9 +170,11 @@
 	let shouldShowApp = $derived(isSettingsLoaded && hasUser)
 	let isAdmin = $derived(!!userCtx.user?.isAdmin)
 	// Managed local model runners need a binary we don't/can't bundle for
-	// Android, and on-device embedding models are an unverified native-dependency
-	// risk there — Ollama Manager, KoboldCPP Manager, and Vectorization are all
-	// hidden in this wrapper regardless of their underlying DB flags.
+	// Android — Ollama Manager and KoboldCPP Manager are hidden in this wrapper
+	// regardless of their underlying DB flags. Embeddings/Vectorization isn't:
+	// local ONNX models can't load under Bionic, but external-API embeddings
+	// work fine, so its nav entry stays visible and the sidebar itself gates
+	// the local-model option (VectorizationSetupScreen).
 	let isAndroidWrapper = $derived(!!systemSettingsCtx?.settings?.isAndroidWrapper)
 
 	// Update leftNav based on Ollama Manager setting
@@ -221,13 +224,14 @@
 				title: "Prompts"
 			}
 
-			if (systemSettingsCtx?.settings?.vectorizationEnabled && !isAndroidWrapper) {
-				panelsCtx.leftNav.vectorization = {
-					icon: Icons.Zap,
-					title: "Vectorization"
-				}
-			} else {
-				delete panelsCtx.leftNav.vectorization
+			// Always visible, regardless of vectorizationEnabled — this is the
+			// only entry point into Embeddings setup/reconfiguration (unlike
+			// Ollama/KoboldCPP Manager, there's no separate always-visible
+			// "enabled" toggle left in System Settings). VectorizationSidebar
+			// itself renders the unconfigured chooser vs. configured view.
+			panelsCtx.leftNav.vectorization = {
+				icon: Icons.Zap,
+				title: "Embeddings"
 			}
 		}
 	})
@@ -422,6 +426,7 @@
 		setContext("userSettingsCtx", userSettingsCtx)
 		setContext("vectorizationCtx", vectorizationCtx)
 		setContext("taskQueueCtx", taskQueueCtx)
+		setContext("openChatCtx", openChatCtx)
 		setContext("graphBuildsCtx", graphBuildsCtx)
 		setContext("sceneSummarizesCtx", sceneSummarizesCtx)
 		setContext("compileEntriesCtx", compileEntriesCtx)

@@ -114,7 +114,7 @@ The search box above the persona list filters as you type, matching against a pe
 
 ### Personas and Retrieval
 
-Whenever a persona is created or updated, it is automatically queued for vectorization in the background, making its description and summary available to the app's retrieval-augmented context system. See [Summarization and RAG](./summarization-and-rag.md) for how that indexing is used during chat.
+Whenever a persona is created or updated, it is automatically queued for vectorization in the background, making its description and summary available to the app's retrieval-augmented context system. See [Embeddings & RAG](./embeddings-and-rag.md) for how that indexing is used during chat.
 
 ### Personas Are Per Account
 

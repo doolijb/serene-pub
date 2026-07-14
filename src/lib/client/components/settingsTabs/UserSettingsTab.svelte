@@ -497,7 +497,7 @@
 	</div>
 
 	<!-- Import Section -->
-	{#if userCtx.user?.isAdmin}
+	{#if userCtx.user?.isAdmin && !systemSettingsCtx.settings?.isAndroidWrapper}
 	<div class="mt-4 border-t pt-4">
 		<h3 class="mb-4 text-lg font-semibold">Data Import</h3>
 		<p class="text-surface-500 mb-3 text-sm">

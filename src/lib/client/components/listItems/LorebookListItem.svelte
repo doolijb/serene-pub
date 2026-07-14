@@ -15,6 +15,11 @@
 		worldEntriesCount?: number
 		characterEntriesCount?: number
 		historyEntriesCount?: number
+		hasOpenChat?: boolean
+		openChatHasLorebook?: boolean
+		isOpenChatLorebook?: boolean
+		onAttachToChat?: (id: number) => void
+		onDetachFromChat?: (id: number) => void
 	}
 
 	let {
@@ -28,7 +33,12 @@
 		bindingsCount = 0,
 		worldEntriesCount = 0,
 		characterEntriesCount = 0,
-		historyEntriesCount = 0
+		historyEntriesCount = 0,
+		hasOpenChat = false,
+		openChatHasLorebook = false,
+		isOpenChatLorebook = false,
+		onAttachToChat,
+		onDetachFromChat
 	}: Props = $props()
 
 	let menuOpen = $state(false)
@@ -123,6 +133,30 @@
 							>
 								<Icons.Pencil size={14} /> Edit
 							</button>
+						{/if}
+						{#if hasOpenChat && (onAttachToChat || onDetachFromChat)}
+							<hr class="border-surface-300-700" />
+							{#if isOpenChatLorebook}
+								<button
+									class="btn btn-sm preset-filled-warning-500 w-full justify-start"
+									onclick={() => { menuOpen = false; onDetachFromChat?.(lorebook.id!) }}
+									type="button"
+								>
+									<Icons.Unlink size={14} /> Detach from current chat
+								</button>
+							{:else}
+								<button
+									class="btn btn-sm preset-filled-success-500 w-full justify-start"
+									disabled={openChatHasLorebook}
+									title={openChatHasLorebook
+										? "The current chat already has a lorebook attached"
+										: "Attach to current chat"}
+									onclick={() => { menuOpen = false; onAttachToChat?.(lorebook.id!) }}
+									type="button"
+								>
+									<Icons.Link size={14} /> Attach to current chat
+								</button>
+							{/if}
 						{/if}
 						{#if onDelete}
 							<hr class="border-surface-300-700" />

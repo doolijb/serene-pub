@@ -6,12 +6,15 @@ import { isAndroidWrapper } from "$lib/server/utils"
 import { EMBEDDING_MODELS, findModel } from "$lib/server/embedding/models"
 import {
 	loadEmbeddingModel,
+	activateApiEmbedding,
+	buildApiModelId,
 	unloadEmbeddingModel,
 	getLoadedModelId,
 	isModelReady,
 	isModelCached,
 	getLoadError
 } from "$lib/server/embedding/index"
+import { systemSettingsGet } from "./systemSettings"
 import {
 	startVectorizationQueue,
 	stopVectorization,
@@ -92,9 +95,25 @@ export const vectorizationListModels: Handler<
 				embeddingModelName: true
 			}
 		})
+		const vecConfig = await db.query.vectorizationConfigs.findFirst({
+			where: eq(schema.vectorizationConfigs.id, 1),
+			columns: {
+				mode: true,
+				apiBaseUrl: true,
+				apiKey: true,
+				apiModel: true,
+				apiDimensions: true
+			}
+		})
 
 		const activeModelName = settings?.embeddingModelName ?? null
-		const cached = activeModelName ? await isModelCached(activeModelName) : false
+		const mode = (vecConfig?.mode as "local" | "api" | undefined) ?? "local"
+		// isModelCached() only makes sense for local HF models — API mode has
+		// nothing cached on disk, readiness there comes entirely from isModelReady().
+		const cached =
+			mode === "local" && activeModelName
+				? await isModelCached(activeModelName)
+				: false
 
 		const res: Sockets.Vectorization.ListModels.Response = {
 			models: EMBEDDING_MODELS,
@@ -102,7 +121,12 @@ export const vectorizationListModels: Handler<
 			vectorizationEnabled: settings?.vectorizationEnabled ?? false,
 			modelReady: isModelReady(),
 			modelCached: cached,
-			loadError: getLoadError()
+			loadError: getLoadError(),
+			mode,
+			apiBaseUrl: vecConfig?.apiBaseUrl ?? null,
+			apiKey: vecConfig?.apiKey ?? null,
+			apiModel: vecConfig?.apiModel ?? null,
+			apiDimensions: vecConfig?.apiDimensions ?? null
 		}
 		emitToUser("vectorization:listModels", res)
 		return res
@@ -117,7 +141,13 @@ export const vectorizationEnableVectorization: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		if (isAndroidWrapper()) {
-			throw new Error("Vectorization is not available in the Android app")
+			// Local vectorization needs onnxruntime-node, a native addon whose
+			// prebuilt binaries are glibc-linked and can't load under Android's
+			// Bionic userspace. External API vectorization (vectorizationSetApiConfig)
+			// has no such restriction — it's plain HTTP.
+			throw new Error(
+				"Local vectorization is not available in the Android app — use an external API instead"
+			)
 		}
 		const modelDef = findModel(params.modelName)
 		if (!modelDef) {
@@ -145,6 +175,14 @@ export const vectorizationEnableVectorization: Handler<
 				embeddingModelDimensions: modelDef.dimensions
 			})
 			.where(eq(schema.systemSettings.id, 1))
+		// Keep vectorizationConfigs.mode in sync — without this, switching back
+		// to local mode after having used the API backend would leave mode
+		// stuck at "api", and the next server restart's boot-resume logic would
+		// incorrectly try to reactivate the stale API config instead.
+		await db
+			.update(schema.vectorizationConfigs)
+			.set({ mode: "local" })
+			.where(eq(schema.vectorizationConfigs.id, 1))
 
 		setProgressEmitter(emitToUser)
 
@@ -157,6 +195,83 @@ export const vectorizationEnableVectorization: Handler<
 			vectorizationEnabled: true
 		}
 		emitToUser("vectorization:enable", res)
+		await systemSettingsGet.handler(socket, {}, emitToUser)
+		return res
+	}
+}
+
+export const vectorizationSetApiConfig: Handler<
+	Sockets.Vectorization.SetApiConfig.Params,
+	Sockets.Vectorization.SetApiConfig.Response
+> = {
+	event: "vectorization:setApiConfig",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		if (!params.baseUrl || !params.model) {
+			const res: Sockets.Vectorization.SetApiConfig.Response = {
+				success: false,
+				error: "Base URL and model are required"
+			}
+			emitToUser("vectorization:setApiConfig", res)
+			return res
+		}
+
+		// Validates via a real test embed call before anything is persisted —
+		// a config that fails here never reaches an "enabled" state. Returned
+		// as a normal response (not thrown), matching connections:test's
+		// convention for user-facing validation failures the UI should show
+		// inline rather than treat as an unexpected error.
+		let dimensions: number
+		try {
+			;({ dimensions } = await activateApiEmbedding({
+				baseUrl: params.baseUrl,
+				apiKey: params.apiKey,
+				model: params.model
+			}))
+		} catch (err: any) {
+			const res: Sockets.Vectorization.SetApiConfig.Response = {
+				success: false,
+				error: err?.message ?? "Failed to validate the embeddings API"
+			}
+			emitToUser("vectorization:setApiConfig", res)
+			return res
+		}
+
+		const modelId = buildApiModelId(params.baseUrl, params.model)
+
+		await db
+			.update(schema.vectorizationConfigs)
+			.set({
+				mode: "api",
+				apiBaseUrl: params.baseUrl,
+				apiKey: params.apiKey,
+				apiModel: params.model,
+				apiDimensions: dimensions
+			})
+			.where(eq(schema.vectorizationConfigs.id, 1))
+
+		await db
+			.update(schema.systemSettings)
+			.set({
+				vectorizationEnabled: true,
+				embeddingModelName: modelId,
+				embeddingModelDimensions: dimensions
+			})
+			.where(eq(schema.systemSettings.id, 1))
+
+		setProgressEmitter(emitToUser)
+
+		if (params.startNow) {
+			startVectorizationQueue({ startFromBeginning: true })
+		}
+
+		const res: Sockets.Vectorization.SetApiConfig.Response = {
+			success: true,
+			modelName: modelId,
+			dimensions
+		}
+		emitToUser("vectorization:setApiConfig", res)
+		await systemSettingsGet.handler(socket, {}, emitToUser)
 		return res
 	}
 }
@@ -180,6 +295,7 @@ export const vectorizationDisableVectorization: Handler<
 			success: true
 		}
 		emitToUser("vectorization:disable", res)
+		await systemSettingsGet.handler(socket, {}, emitToUser)
 		return res
 	}
 }
@@ -217,6 +333,11 @@ export const vectorizationSetModel: Handler<
 				embeddingModelDimensions: modelDef.dimensions
 			})
 			.where(eq(schema.systemSettings.id, 1))
+		// See vectorizationEnableVectorization — keep boot-resume mode in sync.
+		await db
+			.update(schema.vectorizationConfigs)
+			.set({ mode: "local" })
+			.where(eq(schema.vectorizationConfigs.id, 1))
 
 		const res: Sockets.Vectorization.SetModel.Response = {
 			success: true,
@@ -650,6 +771,7 @@ export function registerVectorizationHandlers(
 ) {
 	register(socket, vectorizationListModels, emitToUser)
 	register(socket, vectorizationEnableVectorization, emitToUser)
+	register(socket, vectorizationSetApiConfig, emitToUser)
 	register(socket, vectorizationDisableVectorization, emitToUser)
 	register(socket, vectorizationSetModel, emitToUser)
 	register(socket, vectorizationStartQueue, emitToUser)

@@ -49,4 +49,6 @@ package-lock.json
 /android/gradle/wrapper/dists
 *.apk
 *.aab
-keystore.jks
+*.keystore
+*.jks
+release.keystore.base64

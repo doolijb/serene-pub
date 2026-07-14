@@ -2456,12 +2456,19 @@ declare global {
 					models: ModelDef[]
 					activeModelName: string | null
 					vectorizationEnabled: boolean
-					/** True if the model is loaded in memory and ready to embed */
+					/** True if the active backend (local or API) is loaded/validated and ready to embed */
 					modelReady: boolean
-					/** True if the model files are present in the local cache */
+					/** True if the model files are present in the local cache (local mode only — always false in API mode) */
 					modelCached: boolean
 					/** Last load error message, if any */
 					loadError: string | null
+					/** Which embedding backend is configured */
+					mode: "local" | "api"
+					apiBaseUrl: string | null
+					/** Returned as-is for the admin's own settings form to pre-fill, same as connections.apiKey elsewhere in the app */
+					apiKey: string | null
+					apiModel: string | null
+					apiDimensions: number | null
 				}
 			}
 
@@ -2474,6 +2481,24 @@ declare global {
 				interface Response {
 					success: boolean
 					vectorizationEnabled: boolean
+				}
+			}
+
+			namespace SetApiConfig {
+				interface Params {
+					baseUrl: string
+					apiKey?: string | null
+					model: string
+					/** Whether to start the queue immediately */
+					startNow: boolean
+				}
+				interface Response {
+					success: boolean
+					/** Set when success is false — e.g. the test embed call failed. Nothing is persisted in this case. */
+					error?: string | null
+					/** The composite api::baseUrl::model identifier now active, when success is true */
+					modelName?: string
+					dimensions?: number
 				}
 			}
 

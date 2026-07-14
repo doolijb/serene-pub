@@ -15,9 +15,12 @@ import android.webkit.WebViewClient
 import android.webkit.WebSettings
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
+import android.content.res.ColorStateList
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -26,9 +29,12 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 class MainActivity : AppCompatActivity() {
+    private enum class OverlayKind { NONE, LOADING, RECOVERY }
+
     private lateinit var webView: WebView
     private lateinit var rootLayout: FrameLayout
-    private var recoveryView: android.view.View? = null
+    private var overlayView: android.view.View? = null
+    private var overlayKind = OverlayKind.NONE
     private var serverCheckJob: Job? = null
     private var nodeDiedReceiver: BroadcastReceiver? = null
 
@@ -92,6 +98,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        webView.setBackgroundColor(Color.parseColor("#13131f"))
+
         rootLayout = FrameLayout(this)
         rootLayout.addView(
             webView,
@@ -128,6 +136,14 @@ class MainActivity : AppCompatActivity() {
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
 
+        // Cover the WebView with a proper loading screen immediately — left
+        // alone, the WebView paints solid white the moment it's attached
+        // (before any page has loaded into it), and first-run startup here
+        // covers asset extraction + Node boot, which can take well over a
+        // minute. A blank white screen for that long reads as "the app is
+        // broken/frozen," not "still loading."
+        showLoadingView()
+
         // Start the foreground service immediately, while the app is freshly
         // launched and definitely eligible to do so. Asset extraction (first
         // run only — hundreds of MB, node_modules included) and Node startup
@@ -139,7 +155,6 @@ class MainActivity : AppCompatActivity() {
         // expire before extraction finishes. setContentView() above has
         // already put the (empty) WebView on screen, so this doesn't block
         // the Activity's own launch either way.
-        Toast.makeText(this, "Starting Serene Pub...", Toast.LENGTH_LONG).show()
         startNodeService()
         waitForServerAndLoad()
     }
@@ -157,7 +172,7 @@ class MainActivity : AppCompatActivity() {
             while (elapsedTime < MAX_WAIT_TIME) {
                 if (isServerReady()) {
                     withContext(Dispatchers.Main) {
-                        hideRecoveryView()
+                        hideOverlay()
                         webView.loadUrl(SERVER_URL)
                         Toast.makeText(
                             this@MainActivity,
@@ -193,45 +208,80 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Shows a simple "server's down, tap to restart" overlay in place of the dead WebView. */
-    private fun showRecoveryView(message: String) {
-        if (recoveryView != null) return // already showing
+    /** Shown from launch until the server responds — replaces the otherwise-blank WebView. */
+    private fun showLoadingView() {
+        if (overlayKind == OverlayKind.LOADING) return
+        setOverlay(OverlayKind.LOADING, buildOverlayContainer {
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(R.mipmap.ic_launcher)
+            }, LinearLayout.LayoutParams(160, 160))
+            addView(ProgressBar(this@MainActivity).apply {
+                isIndeterminate = true
+                indeterminateTintList = ColorStateList.valueOf(Color.parseColor("#a7bef3"))
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 48 })
+            addView(TextView(this@MainActivity).apply {
+                text = "Starting Serene Pub..."
+                setTextColor(Color.WHITE)
+                textSize = 16f
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 24 })
+        })
+    }
 
-        val container = LinearLayout(this).apply {
+    /** Shows a "server's down, tap to restart" overlay in place of the dead WebView. */
+    private fun showRecoveryView(message: String) {
+        if (overlayKind == OverlayKind.RECOVERY) return
+        setOverlay(OverlayKind.RECOVERY, buildOverlayContainer {
+            addView(TextView(this@MainActivity).apply {
+                text = message
+                setTextColor(Color.WHITE)
+                textSize = 16f
+                gravity = Gravity.CENTER
+            })
+            addView(Button(this@MainActivity).apply {
+                text = "Restart"
+                setOnClickListener { restartApp() }
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 32 })
+        })
+    }
+
+    private fun buildOverlayContainer(populate: LinearLayout.() -> Unit): LinearLayout {
+        return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setBackgroundColor(Color.parseColor("#13131f"))
             setPadding(64, 64, 64, 64)
+            populate()
         }
-        container.addView(TextView(this).apply {
-            text = message
-            setTextColor(Color.WHITE)
-            textSize = 16f
-            gravity = Gravity.CENTER
-        })
-        container.addView(Button(this).apply {
-            text = "Restart"
-            setOnClickListener { restartApp() }
-        }.apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = 32 }
-        })
+    }
 
+    /** Replaces whatever overlay is currently showing (loading or recovery), if any. */
+    private fun setOverlay(kind: OverlayKind, view: android.view.View) {
+        hideOverlay()
         rootLayout.addView(
-            container,
+            view,
             FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
         )
-        recoveryView = container
+        overlayView = view
+        overlayKind = kind
     }
 
-    private fun hideRecoveryView() {
-        recoveryView?.let { rootLayout.removeView(it) }
-        recoveryView = null
+    private fun hideOverlay() {
+        overlayView?.let { rootLayout.removeView(it) }
+        overlayView = null
+        overlayKind = OverlayKind.NONE
     }
 
     /**
