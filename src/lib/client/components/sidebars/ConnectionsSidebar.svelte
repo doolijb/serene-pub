@@ -35,6 +35,7 @@
 
 	// --- State ---
 	let connectionsList: SelectConnection[] = $state([])
+	let isLoading = $state(true)
 	let connection: any = $state()
 	let originalConnection = $state()
 	let unsavedChanges = $derived.by(() => {
@@ -201,6 +202,16 @@
 			connectionsList = msg.connectionsList
 				.slice()
 				.sort((a, b) => a.name!.localeCompare(b.name!))
+			isLoading = false
+		})
+		// The generic **:error listener in Layout.svelte already toasts this —
+		// this just stops the spinner from spinning forever if the initial
+		// fetch fails, so it settles into the (accurate enough) empty state.
+		socket.on("connections:list:error", () => {
+			isLoading = false
+		})
+		socket.on("connections:refreshModels:error", () => {
+			refreshModelsResult = { error: "Failed to refresh models" }
 		})
 		socket.on("connections:get", (msg) => {
 			connection = { ...msg.connection }
@@ -264,6 +275,8 @@
 
 	onDestroy(() => {
 		socket.off("connections:list")
+		socket.off("connections:list:error")
+		socket.off("connections:refreshModels:error")
 		socket.off("connections:get")
 		socket.off("connections:test")
 		socket.off("connections:refreshModels")
@@ -447,7 +460,11 @@
 			</section>
 		{/key}
 	{/if}
-	{#if !connectionsList.length}
+	{#if isLoading}
+		<div class="flex items-center justify-center py-8">
+			<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+		</div>
+	{:else if !connectionsList.length}
 		<div
 			class="text-muted-foreground py-8 text-center"
 			role="status"

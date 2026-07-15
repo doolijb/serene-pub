@@ -62,7 +62,23 @@ type EmitFn = (event: string, data: any) => void
 
 type QueueItem = {
 	label: VectorizationProgressEvent["currentItem"]
+	/** DB id of the row being embedded — carried through so processItem() can
+	 * broadcast which specific item just got a fresh vector. */
+	id: number
+	/** Set for lorebook-scoped item types (world/character lore, history,
+	 * narrative nodes/relationships) so listeners can filter to the lorebook
+	 * they're currently viewing. */
+	lorebookId?: number
+	embeddingModel: string
 	process: () => Promise<void>
+}
+
+export type VectorizationItemUpdatedEvent = {
+	type: NonNullable<VectorizationProgressEvent["currentItem"]>["type"]
+	id: number
+	lorebookId?: number
+	embeddingModel: string
+	vectorizedAt: string
 }
 
 // ---------------------------------------------------------------------------
@@ -508,6 +524,8 @@ async function pickChatMessage(
 	const { id, content } = rows[0]
 	return {
 		label: { type: "message", label: `Chat message #${id}` },
+		id,
+		embeddingModel: currentModel,
 		process: async () => {
 			const vector = await embed(content)
 			await db
@@ -537,17 +555,21 @@ async function pickWorldLoreEntry(
 		.select({
 			id: schema.worldLoreEntries.id,
 			content: schema.worldLoreEntries.content,
-			name: schema.worldLoreEntries.name
+			name: schema.worldLoreEntries.name,
+			lorebookId: schema.worldLoreEntries.lorebookId
 		})
 		.from(schema.worldLoreEntries)
 		.where(where)
 		.limit(1)
 
 	if (!rows.length) return null
-	const { id, content, name } = rows[0]
+	const { id, content, name, lorebookId: rowLorebookId } = rows[0]
 	const text = name ? `${name}\n${content}` : content
 	return {
 		label: { type: "worldLore", label: `World lore: ${name || id}` },
+		id,
+		lorebookId: rowLorebookId,
+		embeddingModel: currentModel,
 		process: async () => {
 			const vector = await embed(text)
 			await db
@@ -577,17 +599,21 @@ async function pickCharacterLoreEntry(
 		.select({
 			id: schema.characterLoreEntries.id,
 			content: schema.characterLoreEntries.content,
-			name: schema.characterLoreEntries.name
+			name: schema.characterLoreEntries.name,
+			lorebookId: schema.characterLoreEntries.lorebookId
 		})
 		.from(schema.characterLoreEntries)
 		.where(where)
 		.limit(1)
 
 	if (!rows.length) return null
-	const { id, content, name } = rows[0]
+	const { id, content, name, lorebookId: rowLorebookId } = rows[0]
 	const text = name ? `${name}\n${content}` : content
 	return {
 		label: { type: "characterLore", label: `Character lore: ${name || id}` },
+		id,
+		lorebookId: rowLorebookId,
+		embeddingModel: currentModel,
 		process: async () => {
 			const vector = await embed(text)
 			await db
@@ -614,15 +640,22 @@ async function pickHistoryEntry(
 		: staleness
 
 	const rows = await db
-		.select({ id: schema.historyEntries.id, content: schema.historyEntries.content })
+		.select({
+			id: schema.historyEntries.id,
+			content: schema.historyEntries.content,
+			lorebookId: schema.historyEntries.lorebookId
+		})
 		.from(schema.historyEntries)
 		.where(where)
 		.limit(1)
 
 	if (!rows.length) return null
-	const { id, content } = rows[0]
+	const { id, content, lorebookId: rowLorebookId } = rows[0]
 	return {
 		label: { type: "historyEntry", label: `History entry #${id}` },
+		id,
+		lorebookId: rowLorebookId,
+		embeddingModel: currentModel,
 		process: async () => {
 			const vector = await embed(content)
 			await db
@@ -652,17 +685,21 @@ async function pickNarrativeNode(
 		.select({
 			id: schema.narrativeNodes.id,
 			name: schema.narrativeNodes.name,
-			summary: schema.narrativeNodes.summary
+			summary: schema.narrativeNodes.summary,
+			lorebookId: schema.narrativeNodes.lorebookId
 		})
 		.from(schema.narrativeNodes)
 		.where(where)
 		.limit(1)
 
 	if (!rows.length) return null
-	const { id, name, summary } = rows[0]
+	const { id, name, summary, lorebookId: rowLorebookId } = rows[0]
 	const text = summary ? `${name}\n${summary}` : name
 	return {
 		label: { type: "narrativeNode", label: `Narrative node: ${name}` },
+		id,
+		lorebookId: rowLorebookId,
+		embeddingModel: currentModel,
 		process: async () => {
 			const vector = await embed(text)
 			await db
@@ -695,14 +732,15 @@ async function pickNarrativeRelationship(
 			toNodeId: schema.narrativeRelationships.toNodeId,
 			relationshipType: schema.narrativeRelationships.relationshipType,
 			description: schema.narrativeRelationships.description,
-			reason: schema.narrativeRelationships.reason
+			reason: schema.narrativeRelationships.reason,
+			lorebookId: schema.narrativeRelationships.lorebookId
 		})
 		.from(schema.narrativeRelationships)
 		.where(where)
 		.limit(1)
 
 	if (!rows.length) return null
-	const { id, fromNodeId, toNodeId, relationshipType, description, reason } = rows[0]
+	const { id, fromNodeId, toNodeId, relationshipType, description, reason, lorebookId: rowLorebookId } = rows[0]
 
 	// Fetch node names for richer embedding text
 	const [fromNode, toNode] = await Promise.all([
@@ -724,6 +762,9 @@ async function pickNarrativeRelationship(
 
 	return {
 		label: { type: "narrativeRelationship", label: `Narrative relationship: ${fromName} → ${toName}` },
+		id,
+		lorebookId: rowLorebookId,
+		embeddingModel: currentModel,
 		process: async () => {
 			const vector = await embed(text)
 			await db
@@ -767,6 +808,8 @@ async function pickCharacter(
 	const text = `${name}\n${description}`
 	return {
 		label: { type: "character", label: `Character: ${name}` },
+		id,
+		embeddingModel: currentModel,
 		process: async () => {
 			const vector = await embed(text)
 			await db
@@ -810,6 +853,8 @@ async function pickPersona(
 	const text = `${name}\n${description}`
 	return {
 		label: { type: "persona", label: `Persona: ${name}` },
+		id,
+		embeddingModel: currentModel,
 		process: async () => {
 			const vector = await embed(text)
 			await db
@@ -822,6 +867,20 @@ async function pickPersona(
 
 async function processItem(item: QueueItem) {
 	await item.process()
+	// Per-item DB rows get their embedding/vectorizedAt updated inside
+	// item.process(), but nothing previously told connected clients which
+	// specific item changed — the per-item "vectorized/stale" badges in list
+	// UIs only ever refreshed on the next explicit CRUD action, leaving them
+	// showing a stale state until a manual page refresh.
+	if (item.label) {
+		emitProgress?.("vectorization:itemUpdated", {
+			type: item.label.type,
+			id: item.id,
+			lorebookId: item.lorebookId,
+			embeddingModel: item.embeddingModel,
+			vectorizedAt: new Date().toISOString()
+		} satisfies VectorizationItemUpdatedEvent)
+	}
 }
 
 function sleep(ms: number) {

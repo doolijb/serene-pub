@@ -221,6 +221,22 @@
 		socket.on("narrativeGraph:demergeNode", (msg: Sockets.NarrativeGraph.DemergeNode.Response) => {
 			nodes = nodes.map(n => n.id === msg.node.id ? msg.node : n)
 		})
+		// The background vectorization queue updates a row's embeddingModel
+		// directly in the DB — without this, the badge here only ever refreshes
+		// on the next explicit CRUD action, leaving it stale until a manual refresh.
+		socket.on(
+			"vectorization:itemUpdated",
+			(msg: Sockets.Vectorization.ItemUpdated.Response) => {
+				if (msg.lorebookId !== lorebookId) return
+				if (msg.type === "narrativeNode") {
+					const target = nodes.find((n: any) => n.id === msg.id)
+					if (target) (target as any).embeddingModel = msg.embeddingModel
+				} else if (msg.type === "narrativeRelationship") {
+					const target = relationships.find((r: any) => r.id === msg.id)
+					if (target) (target as any).embeddingModel = msg.embeddingModel
+				}
+			}
+		)
 		socket.emit("historyEntries:list", { lorebookId })
 		socket.emit("lorebooks:bindingList", { lorebookId })
 		load()
@@ -239,6 +255,7 @@
 		socket.off("narrativeGraph:linkBindingNode")
 		socket.off("narrativeGraph:mergeNode")
 		socket.off("narrativeGraph:demergeNode")
+		socket.off("vectorization:itemUpdated")
 	})
 
 	function saveNode() {

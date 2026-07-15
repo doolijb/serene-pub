@@ -389,6 +389,36 @@
 		isCreating = false
 	}
 
+	// Touch-friendly alternative to the drag handle above — dndzone works fine
+	// with a mouse but has no keyboard/touch-tap equivalent on its own.
+	function moveCharacterUp(index: number) {
+		if (index <= 0) return
+		const next = selectedCharacters.slice()
+		;[next[index - 1], next[index]] = [next[index], next[index - 1]]
+		selectedCharacters = next
+	}
+
+	function moveCharacterDown(index: number) {
+		if (index >= selectedCharacters.length - 1) return
+		const next = selectedCharacters.slice()
+		;[next[index], next[index + 1]] = [next[index + 1], next[index]]
+		selectedCharacters = next
+	}
+
+	function movePersonaUp(index: number) {
+		if (index <= 0) return
+		const next = selectedPersonas.slice()
+		;[next[index - 1], next[index]] = [next[index], next[index - 1]]
+		selectedPersonas = next
+	}
+
+	function movePersonaDown(index: number) {
+		if (index >= selectedPersonas.length - 1) return
+		const next = selectedPersonas.slice()
+		;[next[index], next[index + 1]] = [next[index + 1], next[index]]
+		selectedPersonas = next
+	}
+
 	function confirmRemoveCharacter(id: number, name: string) {
 		removeType = "character"
 		removeName = name
@@ -537,7 +567,7 @@
 					(opt) => opt.value === msg.visibility
 				)?.label || msg.visibility
 			toaster.success({
-				title: `Character visibility set to ${visibilityLabel}`
+				title: `Set to "${visibilityLabel}" when not speaking`
 			})
 			// Optimistically update local state immediately
 			if (chat.chatCharacters) {
@@ -782,7 +812,7 @@
 			<span class="mb-2 font-semibold">Characters*</span>
 			{#key chat?.chatCharacters}
 				<div
-					class="relative mb-2 flex flex-col gap-3"
+					class="relative mb-2 flex flex-col gap-2"
 					use:dndzone={{
 						items: selectedCharacters,
 						flipDurationMs: 150,
@@ -792,7 +822,7 @@
 					onconsider={(e) => (selectedCharacters = e.detail.items)}
 					onfinalize={(e) => (selectedCharacters = e.detail.items)}
 				>
-					{#each selectedCharacters as c (c.id)}
+					{#each selectedCharacters as c, i (c.id)}
 						{@const isActive = chat
 							? !!chat?.chatCharacters?.find(
 									(cc) => cc.characterId === c.id
@@ -803,12 +833,13 @@
 									(cc) => cc.characterId === c.id
 								)?.visibility || ChatCharacterVisibility.VISIBLE
 							: ChatCharacterVisibility.VISIBLE}
-						<div class="flex gap-2">
-							<div
-								class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-3"
-								data-dnd-handle
-							>
-								<div class="relative w-fit">
+						{@const VisibilityIcon = getVisibilityIcon(visibility)}
+						<div
+							class="preset-outlined-surface-400-600 bg-surface-100-800 hover:bg-surface-200-800 flex flex-col gap-3 rounded-xl p-3 shadow-sm transition-colors"
+							data-dnd-handle
+						>
+							<div class="flex items-start gap-3">
+								<div class="relative w-fit shrink-0">
 									<span
 										class="text-surface-400 hover:text-primary-500 absolute -top-2 -left-2 z-10 cursor-grab"
 										data-dnd-handle
@@ -816,86 +847,107 @@
 											1}
 										title="Drag to reorder"
 									>
-										<Icons.GripVertical size={20} />
+										<Icons.GripVertical size={18} />
 									</span>
 									<Avatar char={c} />
 								</div>
-								<div
-									class="relative flex w-0 min-w-0 flex-1 flex-col"
-								>
-									<div
-										class="w-full truncate text-left font-semibold select-none"
-									>
+								<div class="min-w-0 flex-1">
+									<div class="truncate font-semibold select-none">
 										{c.nickname || c.name}
 									</div>
 									<div
-										class="text-surface-500 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs select-none"
+										class="text-surface-500 line-clamp-2 text-xs select-none"
 									>
 										{c.creatorNotes || c.description || ""}
 									</div>
 								</div>
-							</div>
-							<div
-								class="flex flex-col justify-between gap-2 py-1 text-center"
-							>
-								<!-- Show remove button only when creating (no chat) -->
-								{#if !chat}
-									<button
-										class="preset-tonal-error btn btn-sm opacity-75"
-										onclick={() =>
-											confirmRemoveCharacter(
-												c.id,
-												c.nickname || c.name
-											)}
-										title="Remove"
-									>
-										<Icons.X size={16} />
-									</button>
-								{/if}
-								<!-- Show character controls only when editing (chat exists) -->
-								{#if chat}
-									{@const VisibilityIcon = getVisibilityIcon(visibility)}
-									<div class="flex flex-col gap-1">
-										<span title="Toggle Character Active">
-											<Switch
-												name="toggle-character-active-{c.id}"
-												controlWidth="w-9"
-												controlActive="preset-filled-success-500"
-												controlDisabled="preset-filled-surface-500"
-												compact
-												checked={isActive}
-												onCheckedChange={(e) =>
-													toggleCharacterActive(e, c)}
-												aria-label="Toggle character {c.name} active status"
-											>
-												{#snippet inactiveChild()}<Icons.Meh
-														size="20"
-													/>{/snippet}
-												{#snippet activeChild()}<Icons.Smile
-														size="20"
-													/>{/snippet}
-											</Switch>
-										</span>
+								{#if selectedCharacters.length > 1}
+									<div class="flex shrink-0 flex-col gap-0.5">
 										<button
-											class="btn btn-sm {getVisibilityColor(
-												visibility
-											)} transition-transform hover:scale-110"
-											onclick={() =>
-												updateCharacterVisibility(
-													c,
-													getNextVisibility(
-														visibility
-													)
-												)}
-											title="Context Optimization: {ChatCharacterVisibility.options.find(
-												(opt) =>
-													opt.value === visibility
-											)?.label || 'Full Info'}"
+											class="btn-ghost rounded p-0.5 disabled:opacity-30"
+											onclick={() => moveCharacterUp(i)}
+											disabled={i === 0}
+											title="Move up"
+											aria-label="Move {c.nickname || c.name} up"
 										>
-											<VisibilityIcon size={20} />
+											<Icons.ChevronUp size={16} />
+										</button>
+										<button
+											class="btn-ghost rounded p-0.5 disabled:opacity-30"
+											onclick={() => moveCharacterDown(i)}
+											disabled={i === selectedCharacters.length - 1}
+											title="Move down"
+											aria-label="Move {c.nickname || c.name} down"
+										>
+											<Icons.ChevronDown size={16} />
 										</button>
 									</div>
 								{/if}
+							</div>
+							<div
+								class="border-surface-300-700 flex items-center justify-between gap-2 border-t pt-2"
+							>
+								{#if chat}
+									<span
+										title="Toggle Character Active"
+										class="flex items-center gap-2"
+									>
+										<Switch
+											name="toggle-character-active-{c.id}"
+											controlWidth="w-9"
+											controlActive="preset-filled-success-500"
+											controlDisabled="preset-filled-surface-500"
+											compact
+											checked={isActive}
+											onCheckedChange={(e) =>
+												toggleCharacterActive(e, c)}
+											aria-label="Toggle character {c.name} active status"
+										>
+											{#snippet inactiveChild()}<Icons.Meh
+													size="20"
+												/>{/snippet}
+											{#snippet activeChild()}<Icons.Smile
+													size="20"
+												/>{/snippet}
+										</Switch>
+										<span class="text-surface-500 text-xs">
+											{isActive ? "Active" : "Inactive"}
+										</span>
+									</span>
+									<button
+										class="btn btn-sm {getVisibilityColor(
+											visibility
+										)}"
+										onclick={() =>
+											updateCharacterVisibility(
+												c,
+												getNextVisibility(visibility)
+											)}
+										title="When not speaking: {ChatCharacterVisibility.options.find(
+											(opt) => opt.value === visibility
+										)?.description || 'Full character info is included even when they\'re not speaking'}"
+									>
+										<VisibilityIcon size={16} />
+										{ChatCharacterVisibility.options.find(
+											(opt) => opt.value === visibility
+										)?.label || "Full Info"}
+									</button>
+								{:else}
+									<span class="text-surface-500 text-xs">
+										Ready to add
+									</span>
+								{/if}
+								<button
+									class="preset-tonal-error btn btn-sm"
+									onclick={() =>
+										confirmRemoveCharacter(
+											c.id,
+											c.nickname || c.name
+										)}
+									title="Remove from chat"
+								>
+									<Icons.X size={16} /> Remove
+								</button>
 							</div>
 						</div>
 					{/each}
@@ -912,63 +964,84 @@
 		</div>
 		<div>
 			<span class="mb-2 font-semibold">Personas*</span>
-			<div class="relative mb-2 flex flex-col gap-3">
-				{#each selectedPersonas as p}
-					<div class="flex gap-2">
-						<div
-							class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-3"
-						>
-							<div class="w-fit">
+			<div
+				class="relative mb-2 flex flex-col gap-2"
+				use:dndzone={{
+					items: selectedPersonas,
+					flipDurationMs: 150,
+					dragDisabled: !(selectedPersonas.length > 1),
+					dropFromOthersDisabled: true
+				}}
+				onconsider={(e) => (selectedPersonas = e.detail.items)}
+				onfinalize={(e) => (selectedPersonas = e.detail.items)}
+			>
+				{#each selectedPersonas as p, i (p.id)}
+					<div
+						class="preset-outlined-surface-400-600 bg-surface-100-800 hover:bg-surface-200-800 flex flex-col gap-3 rounded-xl p-3 shadow-sm transition-colors"
+						data-dnd-handle
+					>
+						<div class="flex items-start gap-3">
+							<div class="relative w-fit shrink-0">
+								<span
+									class="text-surface-400 hover:text-primary-500 absolute -top-2 -left-2 z-10 cursor-grab"
+									data-dnd-handle
+									class:hidden={selectedPersonas.length <= 1}
+									title="Drag to reorder"
+								>
+									<Icons.GripVertical size={18} />
+								</span>
 								<Avatar char={p} />
 							</div>
-							<div
-								class="relative flex w-0 min-w-0 flex-1 flex-col"
-							>
-								<div
-									class="w-full truncate text-left font-semibold select-none"
-								>
+							<div class="min-w-0 flex-1">
+								<div class="truncate font-semibold select-none">
 									{p.name}
 								</div>
 								<div
-									class="text-surface-500 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs select-none"
+									class="text-surface-500 line-clamp-2 text-xs select-none"
 								>
 									{p.description || ""}
 								</div>
 							</div>
-							<!-- Show remove button only when creating (no chat) -->
-							{#if !chat}
-								<button
-									class="text-text-error-500 absolute -top-2 -right-2 z-10 mt-2 mr-2 opacity-0 group-hover:opacity-100"
-									onclick={() =>
-										confirmRemovePersona(p.id, p.name)}
-									title="Remove"
-								>
-									<Icons.X size={26} class="text-error-500" />
-								</button>
+							{#if selectedPersonas.length > 1}
+								<div class="flex shrink-0 flex-col gap-0.5">
+									<button
+										class="btn-ghost rounded p-0.5 disabled:opacity-30"
+										onclick={() => movePersonaUp(i)}
+										disabled={i === 0}
+										title="Move up"
+										aria-label="Move {p.name} up"
+									>
+										<Icons.ChevronUp size={16} />
+									</button>
+									<button
+										class="btn-ghost rounded p-0.5 disabled:opacity-30"
+										onclick={() => movePersonaDown(i)}
+										disabled={i === selectedPersonas.length - 1}
+										title="Move down"
+										aria-label="Move {p.name} down"
+									>
+										<Icons.ChevronDown size={16} />
+									</button>
+								</div>
 							{/if}
 						</div>
-						<!-- Show remove button only when creating (no chat) -->
-						{#if !chat}
-							<div
-								class="flex flex-col justify-between py-1 text-center"
+						<div
+							class="border-surface-300-700 flex items-center justify-end border-t pt-2"
+						>
+							<button
+								class="preset-tonal-error btn btn-sm"
+								onclick={() => confirmRemovePersona(p.id, p.name)}
+								title="Remove from chat"
 							>
-								<button
-									class="preset-tonal-error btn btn-sm opacity-75"
-									onclick={() =>
-										confirmRemovePersona(p.id, p.name)}
-									title="Remove"
-								>
-									<Icons.X size={16} />
-								</button>
-							</div>
-						{/if}
+								<Icons.X size={16} /> Remove
+							</button>
+						</div>
 					</div>
 				{/each}
 			</div>
 			<div>
 				<button
 					class="btn btn-sm preset-filled-primary-500 flex items-center gap-1"
-					disabled={selectedPersonas.length > 0}
 					onclick={() => (showPersonaModal = true)}
 				>
 					<Icons.Plus size={16} /> Add Persona
@@ -997,7 +1070,7 @@
 						</div>
 					{/if}
 					{#each selectedGuests as guest}
-						<div class="preset-tonal-surface card p-3">
+						<div class="preset-outlined-surface-400-600 bg-surface-100-800 rounded-xl p-3">
 							<div class="flex flex-col gap-2">
 								<div class="flex items-center justify-between">
 									<div class="flex items-center gap-2">
@@ -1027,7 +1100,7 @@
 			</div>
 		{/if}
 
-		{#if selectedCharacters.length > 1}
+		{#if selectedCharacters.length > 1 || selectedPersonas.length > 1}
 			<div>
 				<label class="font-semibold" for="groupReplyStrategy">
 					Group Reply Strategy

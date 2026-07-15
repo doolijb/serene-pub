@@ -221,7 +221,7 @@
 			}
 			panelsCtx.leftNav.prompts = {
 				icon: Icons.MessageCircle,
-				title: "Prompts"
+				title: "Prompt Configs"
 			}
 
 			// Always visible, regardless of vectorizationEnabled — this is the

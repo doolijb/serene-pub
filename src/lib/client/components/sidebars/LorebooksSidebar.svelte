@@ -32,6 +32,7 @@
 
 	const socket = useTypedSocket()
 	let lorebookList: any[] = $state([])
+	let isLoading: boolean = $state(true)
 	let search: string = $state("")
 	let isCreating: boolean = $state(false)
 	let isEditingLorebook: boolean = $state(false)
@@ -52,10 +53,11 @@
 	let systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
 	let openChatCtx: OpenChatCtx = $state(getContext("openChatCtx"))
 
-	let graphEnabled = $derived(
-		!!systemSettingsCtx.settings?.vectorizationEnabled &&
-		!!systemSettingsCtx.settings?.summarizationEnabled
-	)
+	// Building a graph is pure LLM extraction from scene summaries — it never
+	// touches embeddings (see graphBuilder.ts), so this only needs summarization
+	// on, not vectorization too. The keyword-based infill path can now surface
+	// graph content without RAG as well (see KeywordInfillEngine.ts).
+	let graphEnabled = $derived(!!systemSettingsCtx.settings?.summarizationEnabled)
 
 	// Guests can view a shared chat but can't reconfigure it — the server
 	// rejects chats:setLorebook for non-owners anyway, this just avoids
@@ -324,6 +326,13 @@
 			if (msg.lorebookList) {
 				lorebookList = msg.lorebookList
 			}
+			isLoading = false
+		})
+		// The generic **:error listener in Layout.svelte already toasts this —
+		// this just stops the spinner from spinning forever if the initial
+		// fetch fails, so it settles into the (accurate enough) empty state.
+		socket.on("lorebooks:list:error", () => {
+			isLoading = false
 		})
 		socket.on(
 			"lorebooks:create",
@@ -375,6 +384,7 @@
 
 	onDestroy(() => {
 		socket.off("lorebooks:list")
+		socket.off("lorebooks:list:error")
 		socket.off("lorebooks:create")
 		socket.off("lorebooks:update")
 		socket.off("lorebooks:import")
@@ -423,7 +433,7 @@
 				{/if}
 			{/if}
 		</div>
-		<Tabs value={editGroup} onValueChange={(e) => handleSwitchTabGroup(e)}>
+		<Tabs value={editGroup} onValueChange={(e) => handleSwitchTabGroup(e)} listBase="flex flex-wrap gap-1">
 			{#snippet list()}
 				<Tabs.Control value="lorebook" disabled={tabsDisabled && editGroup !== "lorebook"}>
 					<Icons.Book size={20} class="inline" />
@@ -538,7 +548,7 @@
 			</button>
 			<button
 				class="btn btn-sm preset-filled-primary-500"
-				title="Export Lorebook"
+				title="Export Lorebook — coming soon"
 				disabled
 			>
 				<Icons.Download size={16} />
@@ -554,7 +564,11 @@
 			/>
 		</div>
 		<div class="flex flex-col gap-2">
-			{#if filteredLorebooks.length === 0}
+			{#if isLoading}
+				<div class="flex items-center justify-center py-8">
+					<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+				</div>
+			{:else if filteredLorebooks.length === 0}
 				<div class="text-muted-foreground py-8 text-center">
 					No lorebooks found.
 				</div>

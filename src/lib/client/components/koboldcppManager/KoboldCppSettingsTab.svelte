@@ -106,7 +106,13 @@
 		})
 		socket.on("koboldcpp:version:error", (message: any) => {
 			isCheckingVersion = false
-			toaster.error({ title: "Cannot reach KoboldCPP", description: message.error })
+			// In managed mode "not reachable" is a normal, common transient state
+			// (subprocess not started yet, or stopped) — the Perf tab's status
+			// indicator already covers that. Only external mode's user-provided
+			// URL failing to respond is unexpected enough to warrant a toast.
+			if (!isManaged) {
+				toaster.error({ title: "Cannot reach KoboldCPP", description: message.error })
+			}
 		})
 		socket.on("koboldcpp:isUpdateAvailable", (message: Sockets.KoboldCpp.IsUpdateAvailable.Response) => {
 			isCheckingUpdates = false
@@ -157,6 +163,11 @@
 				isCheckingManagedUpdate = false
 			})
 			checkManagedBinaryUpdate()
+			// Also check the live instance's own reported version/capabilities —
+			// distinct from checkManagedBinaryUpdate's GitHub-release check above.
+			// Harmless if the subprocess isn't running yet (error is swallowed
+			// above rather than toasted for this mode).
+			checkVersion()
 		} else {
 			checkVersion()
 			checkForUpdates()
@@ -252,6 +263,16 @@
 				<div class="flex items-center justify-between">
 					<span class="text-surface-500 text-xs">Installed version</span>
 					<span class="font-mono text-xs">{managedInstalledTag ?? koboldCppSettingsCtx.settings.koboldCppManagedReleaseTag ?? "—"}</span>
+				</div>
+				<div class="flex items-center justify-between">
+					<span class="text-surface-500 text-xs">Running version</span>
+					<span class="font-mono text-xs">
+						{#if isCheckingVersion}
+							<Icons.Loader2 size={12} class="inline animate-spin" />
+						{:else}
+							{currentVersion || "Not running"}
+						{/if}
+					</span>
 				</div>
 				{#if managedLatestTag}
 					<div class="flex items-center justify-between">

@@ -27,6 +27,7 @@
 	)
 
 	let personaList: Sockets.Personas.List.Response["personaList"] = $state([])
+	let isLoading = $state(true)
 	let search = $state("")
 	let personaId: number | undefined = $state()
 	let viewingId: number | undefined = $state()
@@ -65,6 +66,13 @@
 	onMount(() => {
 		socket.on("personas:list", (msg: Sockets.Personas.List.Response) => {
 			personaList = msg.personaList
+			isLoading = false
+		})
+		// The generic **:error listener in Layout.svelte already toasts this —
+		// this just stops the spinner from spinning forever if the initial
+		// fetch fails, so it settles into the (accurate enough) empty state.
+		socket.on("personas:list:error", () => {
+			isLoading = false
 		})
 		socket.on("personas:importCard", (msg) => {
 			toaster.success({
@@ -72,13 +80,27 @@
 				description: `Persona ${msg.persona.name} imported successfully.`
 			})
 		})
+		// The background vectorization queue updates a row's embeddingModel
+		// directly in the DB — without this, the list here only ever refreshes
+		// on the next explicit personas:list, leaving the embedding-status
+		// badge showing stale info until a manual refresh.
+		socket.on(
+			"vectorization:itemUpdated",
+			(msg: Sockets.Vectorization.ItemUpdated.Response) => {
+				if (msg.type !== "persona") return
+				const target = personaList.find((p: any) => p.id === msg.id)
+				if (target) (target as any).embeddingModel = msg.embeddingModel
+			}
+		)
 		socket.emit("personas:list", {})
 		onclose = handleOnClose
 	})
 
 	onDestroy(() => {
 		socket.off("personas:list")
+		socket.off("personas:list:error")
 		socket.off("personas:importCard")
+		socket.off("vectorization:itemUpdated")
 		onclose = undefined
 	})
 
@@ -115,15 +137,25 @@
 		if (panelsCtx.digest.personaId) {
 			// Check if we have unsaved changes
 			if (
-				personaId !== panelsCtx.digest.characterId &&
+				personaId !== panelsCtx.digest.personaId &&
 				personaFormHasChanges
 			) {
 				onEditFormCancel?.()
 			} else {
-				// If no unsaved changes, just set the characterId
+				// If no unsaved changes, just set the personaId
 				personaId = panelsCtx.digest.personaId
 			}
 			delete panelsCtx.digest.personaId
+		}
+	})
+
+	// Same as above, but opens the read-only detail view instead of the edit
+	// form — used when arriving from a context that just wants to look up a
+	// persona (eg. clicking a name in a chat), not edit it.
+	$effect(() => {
+		if (panelsCtx.digest.viewPersonaId) {
+			viewingId = panelsCtx.digest.viewPersonaId
+			delete panelsCtx.digest.viewPersonaId
 		}
 	})
 
@@ -285,7 +317,11 @@
 			/>
 		</div>
 		<div class="flex flex-col gap-2">
-			{#if filteredPersonas.length === 0}
+			{#if isLoading}
+				<div class="flex items-center justify-center py-8">
+					<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+				</div>
+			{:else if filteredPersonas.length === 0}
 				<div class="text-muted-foreground py-8 text-center">
 					No personas found.
 				</div>

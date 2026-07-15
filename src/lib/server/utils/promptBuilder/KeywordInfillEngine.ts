@@ -14,8 +14,9 @@ import type { NonRagDiagnostics, ScoredEntry, ScoreBreakdown, TemplateContext, I
 import { ChatCharacterVisibility } from "$lib/shared/constants/ChatCharacterVisibility"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { eq } from "drizzle-orm"
+import { and, eq, inArray, ne, or } from "drizzle-orm"
 import { BaseInfillEngine } from "./BaseInfillEngine"
+import { MAX_GRAPH_PAIRS, fetchActiveRelationshipsAmongNodes, serializeGraphPairs } from "./NarrativeGraphContext"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -589,6 +590,59 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		})
 
 		const finalCtx = buildCtx()
+
+		// Narrative graph: relationships between co-present characters/personas
+		// that don't involve the current speaker. buildGraphContext() in
+		// generateResponse.ts already injects the speaker's own relationships
+		// and how others see them, unconditionally, for every mode — this is
+		// the keyword-mode equivalent of RagInfillEngine's broader semantic
+		// sweep, seeded by chat co-occurrence instead of similarity search.
+		const lorebookId = (this.chat as any).lorebookId as number | null | undefined
+		if (lorebookId) {
+			try {
+				const chatCharacterIds = ((this.chat.chatCharacters || []) as any[])
+					.map((cc) => cc.character?.id)
+					.filter((id): id is number => id != null)
+				const chatPersonaIds = ((this.chat.chatPersonas || []) as any[])
+					.map((cp) => cp.persona?.id)
+					.filter((id): id is number => id != null)
+
+				if (chatCharacterIds.length > 0 || chatPersonaIds.length > 0) {
+					const bindingConditions = []
+					if (chatCharacterIds.length > 0) {
+						bindingConditions.push(inArray(schema.lorebookBindings.characterId, chatCharacterIds))
+					}
+					if (chatPersonaIds.length > 0) {
+						bindingConditions.push(inArray(schema.lorebookBindings.personaId, chatPersonaIds))
+					}
+					const bindings = await db.query.lorebookBindings.findMany({
+						where: and(eq(schema.lorebookBindings.lorebookId, lorebookId), or(...bindingConditions)),
+						columns: { id: true }
+					})
+					const bindingIds = bindings.map((b) => b.id)
+
+					if (bindingIds.length > 0) {
+						const nodes = await db.query.narrativeNodes.findMany({
+							where: and(
+								eq(schema.narrativeNodes.lorebookId, lorebookId),
+								inArray(schema.narrativeNodes.lorebookBindingId, bindingIds),
+								ne(schema.narrativeNodes.nodeVisibility, "hidden")
+							),
+							columns: { id: true }
+						})
+						const nodeIds = nodes.map((n) => n.id)
+						const includedHistoryIds = new Set(includedHistory.map((e) => e.id))
+						const graphPairs = await fetchActiveRelationshipsAmongNodes(
+							nodeIds, lorebookId, MAX_GRAPH_PAIRS, includedHistoryIds
+						)
+						finalCtx.narrativeGraph = serializeGraphPairs(graphPairs)
+					}
+				}
+			} catch (err) {
+				console.warn("[KeywordInfillEngine] narrative graph fill failed:", err)
+			}
+		}
+
 		const rendered = handlebars.compile(contextConfig.template)({
 			...finalCtx,
 			chatMessages: [...chatMessages].reverse()

@@ -4,6 +4,7 @@ import * as schema from "$lib/server/db/schema"
 import { user as loadUser, user } from "./users"
 import { userSettingsGet } from "./userSettings"
 import type { Handler } from "$lib/shared/events"
+import { compileContextTemplatePreview } from "$lib/server/utils/promptBuilder/previewCompiler"
 
 export const contextConfigsListHandler: Handler<
 	Sockets.ContextConfigs.List.Params,
@@ -228,6 +229,29 @@ export const contextConfigsSetUserActive: Handler<
 	}
 }
 
+export const contextConfigsPreview: Handler<
+	Sockets.ContextConfigs.Preview.Params,
+	Sockets.ContextConfigs.Preview.Response
+> = {
+	event: "contextConfigs:preview",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const res = {
+				error: "Access denied. Only admin users can manage context configurations."
+			}
+			emitToUser("error", res)
+			throw new Error(
+				"Access denied. Only admin users can manage context configurations."
+			)
+		}
+
+		const res: Sockets.ContextConfigs.Preview.Response =
+			compileContextTemplatePreview(params.template)
+		emitToUser("contextConfigs:preview", res)
+		return res
+	}
+}
+
 // Legacy functions for compatibility
 export async function contextConfigsList(
 	socket: any,
@@ -305,4 +329,5 @@ export function registerContextConfigHandlers(
 	register(socket, contextConfigsUpdate, emitToUser)
 	register(socket, contextConfigsDelete, emitToUser)
 	register(socket, contextConfigsSetUserActive, emitToUser)
+	register(socket, contextConfigsPreview, emitToUser)
 }

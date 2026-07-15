@@ -221,7 +221,7 @@
 	{:else}
 		<!-- Main Ollama Manager Content -->
 		<div class="flex-1 overflow-y-auto">
-			<Tabs value={activeTab} onValueChange={handleTabChange}>
+			<Tabs value={activeTab} onValueChange={handleTabChange} listBase="flex flex-wrap gap-1">
 				{#snippet list()}
 					<Tabs.Control value="installed">
 						<Icons.Package size={20} class="inline" />

@@ -29,6 +29,8 @@
 	let isSavingBaseUrl = $state(false)
 	let baseUrlField = $state("")
 	let showVariantPicker = $state(false)
+	let lastToastedError: string | null = $state(null)
+	let missingBinaryError: string | null = $state(null)
 
 	// Derive mode from system settings
 	let managedMode = $derived(koboldCppSettingsCtx.settings?.koboldCppManagedMode ?? null)
@@ -110,6 +112,23 @@
 			if (msg.status === "running" && !isConnected) {
 				isConnected = true
 			}
+			// The binary can go missing without any in-app action (eg. the host lost
+			// the volume between restarts) — without this, the failure only ever
+			// shows as a small error line buried in the Perf tab, which the sidebar
+			// doesn't default to, so a crash on auto-start can go unnoticed.
+			const isMissingBinary =
+				msg.status === "crashed" &&
+				!!msg.lastError &&
+				(msg.lastError.includes("Binary not found") ||
+					msg.lastError.includes("Binary not configured"))
+			missingBinaryError = isMissingBinary ? msg.lastError : null
+			if (isMissingBinary && msg.lastError !== lastToastedError) {
+				lastToastedError = msg.lastError
+				toaster.error({
+					title: "KoboldCPP binary is missing",
+					description: "It may have been lost from storage between restarts. Re-download it below."
+				})
+			}
 		})
 	})
 
@@ -165,6 +184,11 @@
 		<div class="flex-1 overflow-y-auto">
 			<KoboldCppBinaryVariantPicker
 				onDownloadStarted={() => {
+					// Optimistic clear: a fresh download is underway, so the stale
+					// "binary missing" banner shouldn't linger until (or if) a new
+					// subprocessStatus event happens to arrive and overwrite it.
+					// Re-set by the handler above if the new attempt fails too.
+					missingBinaryError = null
 					showVariantPicker = false
 					activeTab = "models"
 				}}
@@ -239,8 +263,22 @@
 
 	{:else}
 		<!-- Main tab view (managed running OR external connected) -->
+		{#if missingBinaryError}
+			<div
+				class="preset-tonal-error m-2 flex items-center justify-between gap-2 rounded-lg p-2"
+			>
+				<p class="text-error-500 text-xs">{missingBinaryError}</p>
+				<button
+					class="btn btn-sm preset-filled-error-500 shrink-0 text-xs"
+					onclick={() => (showVariantPicker = true)}
+				>
+					<Icons.Download size={13} />
+					Re-download
+				</button>
+			</div>
+		{/if}
 		<div class="flex-1 overflow-y-auto">
-			<Tabs value={activeTab} onValueChange={handleTabChange}>
+			<Tabs value={activeTab} onValueChange={handleTabChange} listBase="flex flex-wrap gap-1">
 				{#snippet list()}
 					<Tabs.Control value="models">
 						<Icons.Package size={20} class="inline" />

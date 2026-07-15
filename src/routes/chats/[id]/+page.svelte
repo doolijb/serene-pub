@@ -50,6 +50,27 @@
 	let summarizationEnabled = $derived(!!systemSettingsCtx.settings?.summarizationEnabled)
 	let vectorizationEnabled = $derived(!!systemSettingsCtx.settings?.vectorizationEnabled)
 
+	// ── Typing indicator ──────────────────────────────────────────────────────
+	// Other participants' personas currently typing, keyed by personaId. Purely
+	// client-expired — there's no "stopped typing" event, entries just drop
+	// off 10s after the last ping (matches how the composer's own throttled
+	// ping below only re-fires every ~2.5s while text keeps changing).
+	let typingPersonas: Map<number, { name: string; lastTypingAt: number }> =
+		$state(new Map())
+	let lastTypingEmitAt = 0
+	let typingPruneInterval: ReturnType<typeof setInterval> | null = null
+
+	$effect(() => {
+		const content = newMessage
+		if (!chatId || !chat || !content.trim()) return
+		const now = Date.now()
+		if (now - lastTypingEmitAt < 2500) return
+		lastTypingEmitAt = now
+		const personaId =
+			currentUserPersona?.personaId || chat?.chatPersonas?.[0]?.personaId
+		if (personaId) socket.emit("chats:typing", { chatId, personaId })
+	})
+
 	// ── Draft autosave ────────────────────────────────────────────────────────
 	// Debounce-save newMessage to the server as the user types.
 	// Only runs when the chat is loaded (chat !== undefined) to avoid
@@ -255,47 +276,6 @@
 		return false
 	}
 
-	// Check if all personas have responded after last character message
-	let allPersonasHaveResponded = $derived.by(() => {
-		if (
-			!chat?.isGroup ||
-			!chat?.chatMessages?.length ||
-			!chat?.chatPersonas?.length
-		)
-			return true
-
-		// Find the last character (assistant) message
-		let lastCharacterMsgIndex = -1
-		for (let i = chat.chatMessages.length - 1; i >= 0; i--) {
-			if (
-				chat.chatMessages[i].role === "assistant" &&
-				chat.chatMessages[i].characterId
-			) {
-				lastCharacterMsgIndex = i
-				break
-			}
-		}
-
-		// If no character messages, all personas should respond
-		if (lastCharacterMsgIndex === -1) return false
-
-		// Get messages after the last character message
-		const messagesAfterLastCharacter = chat.chatMessages.slice(
-			lastCharacterMsgIndex + 1
-		)
-
-		// Check if each persona has sent a message after the last character message
-		const personaIds = chat.chatPersonas.map((cp) => cp.personaId)
-		const respondedPersonaIds = new Set(
-			messagesAfterLastCharacter
-				.filter((msg) => msg.role === "user" && msg.personaId)
-				.map((msg) => msg.personaId)
-		)
-
-		// All personas have responded if every persona ID is in the responded set
-		return personaIds.every((id) => respondedPersonaIds.has(id))
-	})
-
 	function handleSend() {
 		if (!newMessage.trim()) return
 
@@ -317,86 +297,11 @@
 		newMessage = ""
 		socket.emit("chats:saveDraft", { chatId, content: "" })
 
-		// In group chats, check if this message will complete all persona responses
-		if (chat?.isGroup && chat?.chatPersonas?.length > 1) {
-			// We need to check if sending this message will mean all personas have responded
-			// This is a bit complex because we need to account for the message we just sent
-
-			// Find the last character message
-			let lastCharacterMsgIndex = -1
-			for (let i = chat.chatMessages.length - 1; i >= 0; i--) {
-				if (
-					chat.chatMessages[i].role === "assistant" &&
-					chat.chatMessages[i].characterId
-				) {
-					lastCharacterMsgIndex = i
-					break
-				}
-			}
-
-			console.log(
-				"Checking persona responses after character at index:",
-				lastCharacterMsgIndex
-			)
-
-			if (lastCharacterMsgIndex >= 0) {
-				// Get messages after the last character message
-				const messagesAfterLastCharacter = chat.chatMessages.slice(
-					lastCharacterMsgIndex + 1
-				)
-
-				// Get persona IDs that have already responded
-				const respondedPersonaIds = new Set(
-					messagesAfterLastCharacter
-						.filter((msg) => msg.role === "user" && msg.personaId)
-						.map((msg) => msg.personaId)
-				)
-
-				// Add the persona that just sent a message
-				respondedPersonaIds.add(personaId)
-
-				// Check if all personas have now responded
-				const allPersonaIds = chat.chatPersonas.map(
-					(cp) => cp.personaId
-				)
-				const allResponded = allPersonaIds.every((id) =>
-					respondedPersonaIds.has(id)
-				)
-
-				console.log("Persona turn tracking:", {
-					allPersonaIds,
-					respondedPersonaIds: Array.from(respondedPersonaIds),
-					currentPersonaId: personaId,
-					allResponded,
-					messagesAfterChar: messagesAfterLastCharacter.map((m) => ({
-						role: m.role,
-						personaId: m.personaId,
-						characterId: m.characterId
-					}))
-				})
-
-				if (allResponded) {
-					console.log(
-						"All personas have responded, triggering character responses..."
-					)
-					// Clear any existing timeout
-					if (autoTriggerTimeout) {
-						clearTimeout(autoTriggerTimeout)
-					}
-					// Small delay to ensure the message is processed before triggering responses
-					autoTriggerTimeout = setTimeout(() => {
-						socket.emit("chats:triggerGenerateMessage", { chatId })
-						autoTriggerTimeout = null
-					}, 500)
-				} else {
-					console.log(
-						"Not all personas have responded yet, waiting..."
-					)
-				}
-			} else {
-				console.log("No character messages found in chat yet")
-			}
-		}
+		// Character response triggering (once every persona has taken their turn)
+		// is handled entirely server-side, in chatMessagesSendPersonaMessageHandler —
+		// see that handler for why: deciding this client-side, from a single
+		// client's local chat state, doesn't hold up with multiple real
+		// participants sending messages around the same time.
 
 		// Refresh response order after sending message
 		socket.emit("chats:getResponseOrder", { chatId })
@@ -802,10 +707,10 @@
 	function handleCharacterNameClick(msg: SelectChatMessage): void {
 		if (msg.characterId) {
 			panelsCtx.openPanel({ key: "characters", toggle: false })
-			panelsCtx.digest.characterId = msg.characterId
+			panelsCtx.digest.viewCharacterId = msg.characterId
 		} else if (msg.personaId) {
 			panelsCtx.openPanel({ key: "personas", toggle: false })
-			panelsCtx.digest.personaId = msg.personaId
+			panelsCtx.digest.viewPersonaId = msg.personaId
 		}
 	}
 
@@ -894,6 +799,33 @@
 		socket.on("personas:list", (msg: Sockets.Personas.List.Response) => {
 			availablePersonas = msg.personaList
 		})
+
+		socket.on(
+			"chats:userTyping",
+			(msg: Sockets.Chats.UserTyping.Response) => {
+				if (msg.chatId !== chatId) return
+				const myPersonaId =
+					currentUserPersona?.personaId ||
+					chat?.chatPersonas?.[0]?.personaId
+				if (msg.personaId === myPersonaId) return
+				typingPersonas.set(msg.personaId, {
+					name: msg.personaName,
+					lastTypingAt: Date.now()
+				})
+				typingPersonas = new Map(typingPersonas)
+			}
+		)
+		typingPruneInterval = setInterval(() => {
+			const cutoff = Date.now() - 10_000
+			let changed = false
+			for (const [id, info] of typingPersonas) {
+				if (info.lastTypingAt < cutoff) {
+					typingPersonas.delete(id)
+					changed = true
+				}
+			}
+			if (changed) typingPersonas = new Map(typingPersonas)
+		}, 1000)
 
 		socket.on("chats:get", (msg: Sockets.Chats.Get.Response) => {
 			if (msg.chat === null && !loadingOlderMessages) {
@@ -1113,6 +1045,10 @@
 			if (autoTriggerTimeout) {
 				clearTimeout(autoTriggerTimeout)
 			}
+			if (typingPruneInterval) {
+				clearInterval(typingPruneInterval)
+			}
+			socket.off("chats:userTyping")
 		}
 	})
 
@@ -1405,6 +1341,16 @@
 					</div>
 				</div>
 			{:else}
+				{#each [...typingPersonas.values()] as typingPersona (typingPersona.name)}
+					<div class="flex items-center gap-2 px-2 pb-1">
+						<p class="text-surface-600-400 animate-pulse text-sm">
+							{typingPersona.name} is typing...
+						</p>
+						<div
+							class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"
+						></div>
+					</div>
+				{/each}
 				<ChatComposer
 					bind:newMessage
 					onSend={handleSend}

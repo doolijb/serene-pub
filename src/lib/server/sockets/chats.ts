@@ -19,38 +19,9 @@ import {
 	broadcastToChatUsers,
 	createChatBroadcaster
 } from "./utils/broadcastHelpers"
+import { checkChatAccess } from "$lib/server/utils/chatAccess"
 
 // ===== SECURITY HELPERS =====
-
-/**
- * Check if user owns the chat or is a guest in the chat
- */
-async function checkChatAccess(
-	chatId: number,
-	userId: number
-): Promise<{ isOwner: boolean; isGuest: boolean; hasAccess: boolean }> {
-	const chat = await db.query.chats.findFirst({
-		where: eq(schema.chats.id, chatId),
-		columns: { userId: true }
-	})
-
-	if (!chat) {
-		return { isOwner: false, isGuest: false, hasAccess: false }
-	}
-
-	const isOwner = chat.userId === userId
-
-	// Check if user is a guest
-	const guestRecord = await db.query.chatGuests.findFirst({
-		where: (cg, { and, eq }) =>
-			and(eq(cg.chatId, chatId), eq(cg.userId, userId))
-	})
-
-	const isGuest = !!guestRecord
-	const hasAccess = isOwner || isGuest
-
-	return { isOwner, isGuest, hasAccess }
-}
 
 /**
  * Check if user owns a character
@@ -82,6 +53,40 @@ async function checkPersonaOwnership(
 	})
 
 	return !!persona
+}
+
+/**
+ * Batch version of checkCharacterOwnership — returns the subset of the given
+ * ids actually owned by userId. Used to validate newly-added chatCharacters
+ * without an ownership query per id.
+ */
+async function checkCharactersOwnership(
+	characterIds: number[],
+	userId: number
+): Promise<Set<number>> {
+	if (characterIds.length === 0) return new Set()
+	const owned = await db.query.characters.findMany({
+		where: (c, { and, eq, inArray }) =>
+			and(inArray(c.id, characterIds), eq(c.userId, userId)),
+		columns: { id: true }
+	})
+	return new Set(owned.map((c) => c.id))
+}
+
+/**
+ * Batch version of checkPersonaOwnership.
+ */
+async function checkPersonasOwnership(
+	personaIds: number[],
+	userId: number
+): Promise<Set<number>> {
+	if (personaIds.length === 0) return new Set()
+	const owned = await db.query.personas.findMany({
+		where: (p, { and, eq, inArray }) =>
+			and(inArray(p.id, personaIds), eq(p.userId, userId)),
+		columns: { id: true }
+	})
+	return new Set(owned.map((p) => p.id))
 }
 
 /**
@@ -281,6 +286,41 @@ export const chatsListHandler: Handler<
 	}
 }
 
+export const chatsTypingHandler: Handler<
+	Sockets.Chats.Typing.Params,
+	Sockets.Chats.Typing.Response
+> = {
+	event: "chats:typing",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const chatAccess = await checkChatAccess(params.chatId, userId)
+		if (!chatAccess.hasAccess) {
+			const res: Sockets.Chats.Typing.Response = { success: false }
+			return res
+		}
+
+		const persona = await db.query.personas.findFirst({
+			where: eq(schema.personas.id, params.personaId),
+			columns: { id: true, name: true }
+		})
+		if (!persona) {
+			const res: Sockets.Chats.Typing.Response = { success: false }
+			return res
+		}
+
+		// Fire-and-forget broadcast — receiving clients own their own 10s
+		// expiry, so there's no matching "stopped typing" event to send.
+		await broadcastToChatUsers(socket.io, params.chatId, "chats:userTyping", {
+			chatId: params.chatId,
+			personaId: persona.id,
+			personaName: persona.name
+		} satisfies Sockets.Chats.UserTyping.Response)
+
+		const res: Sockets.Chats.Typing.Response = { success: true }
+		return res
+	}
+}
+
 export const chatsCreateHandler: Handler<
 	Sockets.Chats.Create.Params,
 	Sockets.Chats.Create.Response
@@ -292,6 +332,31 @@ export const chatsCreateHandler: Handler<
 		const personaIds = params.personaIds || []
 		const characterIds = params.characterIds || []
 		const characterPositions = params.characterPositions || {}
+
+		// A new chat has no existing characters/personas to diff against — every
+		// id supplied here must belong to the requesting user.
+		if (characterIds.length > 0) {
+			const ownedCharacterIds = await checkCharactersOwnership(
+				characterIds,
+				userId
+			)
+			if (ownedCharacterIds.size !== characterIds.length) {
+				throw new Error(
+					"Access denied. You can only add characters you own."
+				)
+			}
+		}
+		if (personaIds.length > 0) {
+			const ownedPersonaIds = await checkPersonasOwnership(
+				personaIds,
+				userId
+			)
+			if (ownedPersonaIds.size !== personaIds.length) {
+				throw new Error(
+					"Access denied. You can only add personas you own."
+				)
+			}
+		}
 
 		// Remove tags from chat data as it will be handled separately
 		const chatDataWithoutTags = { ...params.chat }
@@ -823,6 +888,27 @@ export const chatsUpdateHandler: Handler<
 				const existingCharacterIds = new Set(existingCCs.map((cc) => cc.characterId).filter((id): id is number => id !== null))
 				const newCharacterIds = new Set(params.characterIds)
 
+				// Only characters the requesting user owns can be newly added —
+				// already-linked characters (eg. added by another participant)
+				// are left alone regardless of who owns them.
+				const characterIdsToAdd = params.characterIds.filter(
+					(id) => !existingCharacterIds.has(id)
+				)
+				if (characterIdsToAdd.length > 0) {
+					const ownedCharacterIds = await checkCharactersOwnership(
+						characterIdsToAdd,
+						userId
+					)
+					if (ownedCharacterIds.size !== characterIdsToAdd.length) {
+						emitToUser("chats:update:error", {
+							error: "Access denied. You can only add characters you own."
+						})
+						throw new Error(
+							"Access denied. Attempted to add a character not owned by the user."
+						)
+					}
+				}
+
 				for (const cc of existingCCs) {
 					if (cc.characterId === null) continue
 					if (!newCharacterIds.has(cc.characterId)) {
@@ -855,6 +941,27 @@ export const chatsUpdateHandler: Handler<
 				const existingPersonaIds = new Set(existingCPs.map((cp) => cp.personaId).filter((id): id is number => id !== null))
 				const newPersonaIds = new Set(params.personaIds)
 
+				// Only personas the requesting user owns can be newly added —
+				// already-linked personas (eg. added by another participant)
+				// are left alone regardless of who owns them.
+				const personaIdsToAdd = params.personaIds.filter(
+					(id) => !existingPersonaIds.has(id)
+				)
+				if (personaIdsToAdd.length > 0) {
+					const ownedPersonaIds = await checkPersonasOwnership(
+						personaIdsToAdd,
+						userId
+					)
+					if (ownedPersonaIds.size !== personaIdsToAdd.length) {
+						emitToUser("chats:update:error", {
+							error: "Access denied. You can only add personas you own."
+						})
+						throw new Error(
+							"Access denied. Attempted to add a persona not owned by the user."
+						)
+					}
+				}
+
 				for (const cp of existingCPs) {
 					if (cp.personaId === null) continue
 					if (!newPersonaIds.has(cp.personaId)) {
@@ -865,7 +972,11 @@ export const chatsUpdateHandler: Handler<
 				}
 				for (let i = 0; i < params.personaIds.length; i++) {
 					const personaId = params.personaIds[i]
-					if (!existingPersonaIds.has(personaId)) {
+					if (existingPersonaIds.has(personaId)) {
+						await db.update(schema.chatPersonas)
+							.set({ position: i })
+							.where(and(eq(schema.chatPersonas.chatId, params.chat.id!), eq(schema.chatPersonas.personaId, personaId)))
+					} else {
 						await db.insert(schema.chatPersonas).values({ chatId: params.chat.id!, personaId, position: i })
 					}
 				}
@@ -1367,19 +1478,52 @@ export const chatMessagesSendPersonaMessageHandler: Handler<
 				{ chatMessage: inserted }
 			)
 
-			// Check if this is effectively a 1-on-1 chat (only 1 active character)
-			const activeCharacterCount = chat.chatCharacters.filter(
-				(cc: any) => cc.isActive
-			).length
+			// Round-robin: only trigger character response(s) once every persona in
+			// the chat has sent a message since the last character reply — not just
+			// the persona who happens to have sent this particular message. Checking
+			// only "is there 1 active character" (as before) ignored persona count
+			// entirely, so a chat with 1 character and multiple personas triggered a
+			// reply after every single persona message instead of waiting for all of
+			// them to go.
+			const chatPersonaIds = chat.chatPersonas
+				.map((cp: any) => cp.personaId)
+				.filter((id: any): id is number => id != null)
 
-			if (activeCharacterCount === 1) {
+			let lastCharacterMsgIdx = -1
+			for (let i = chat.chatMessages.length - 1; i >= 0; i--) {
+				if (
+					chat.chatMessages[i].role === "assistant" &&
+					chat.chatMessages[i].characterId
+				) {
+					lastCharacterMsgIdx = i
+					break
+				}
+			}
+			const messagesSinceLastCharacter = chat.chatMessages.slice(
+				lastCharacterMsgIdx + 1
+			)
+			const respondedPersonaIds = new Set(
+				messagesSinceLastCharacter
+					.filter((m: any) => m.role === "user" && m.personaId)
+					.map((m: any) => m.personaId)
+			)
+			// The message just inserted isn't in chat.chatMessages — chat was
+			// fetched before the insert above.
+			if (personaId) respondedPersonaIds.add(personaId)
+
+			const allPersonasResponded =
+				chatPersonaIds.length > 0 &&
+				chatPersonaIds.every((id: number) => respondedPersonaIds.has(id))
+
+			if (allPersonasResponded) {
 				console.log(
-					`[sendPersonaMessage] Triggering single character response for 1:1 chat ${chatId} (${activeCharacterCount} active character)`
+					`[sendPersonaMessage] All ${chatPersonaIds.length} persona(s) have responded — triggering character response(s) for chat ${chatId}`
 				)
-				// Trigger character response generation
+				// No `once` — let the trigger loop cycle through every active
+				// character's turn (getNextCharacterTurn stops once each has replied).
 				await triggerGenerateMessageHandler.handler(
 					socket,
-					{ chatId, once: true },
+					{ chatId },
 					emitToUser
 				)
 			}
@@ -2130,29 +2274,35 @@ export const chatMessagesCancelHandler: Handler<
 		try {
 			const userId = socket.user!.id
 
-			// Find messages being generated for this chat
+			const chatAccess = await checkChatAccess(params.chatId, userId)
+			if (!chatAccess.hasAccess) {
+				throw new Error("Chat not found")
+			}
+
+			// THE VERY FIRST THING this handler does: unconditionally flip the
+			// clicked message off "generating" and broadcast it — scoped only by
+			// message id + chatId, never by isGenerating/userId matching. This
+			// must never be contingent on the upstream LLM actually stopping, on
+			// queue state, or on a row's stamped userId matching whoever clicked
+			// Stop (previously required cm.userId === socket.user.id, which
+			// silently no-op'd the whole handler whenever that didn't match,
+			// leaving the message stuck "generating" forever — e.g. while still
+			// in the "loading model" preflight stage). Everything below this is
+			// best-effort cleanup of the actual upstream generation.
+			const targetIds = new Set<number>()
+			if (params.id) targetIds.add(params.id)
+
+			// Also sweep every other message this chat currently has marked as
+			// generating, so a group chat with multiple in-flight generations
+			// (or a client that didn't pass an id) is fully covered too.
 			const generatingMessages = await db.query.chatMessages.findMany({
 				where: (cm, { and, eq }) =>
-					and(
-						eq(cm.chatId, params.chatId),
-						eq(cm.isGenerating, true),
-						eq(cm.userId, userId)
-					)
+					and(eq(cm.chatId, params.chatId), eq(cm.isGenerating, true))
 			})
+			for (const message of generatingMessages) targetIds.add(message.id)
 
-			// Stop generation for all messages in this chat
-			for (const message of generatingMessages) {
-				// Ask the queue to cancel this run — it fires the adapter's abort()
-				// internally and, if the run doesn't respond in time, force-detaches
-				// it so the queue can proceed regardless. Never throws.
-				if (message.queueItemId) {
-					llmQueue.cancel(message.queueItemId)
-				}
-
-				// Update the DB immediately and unconditionally so the UI reflects
-				// the stop right away, regardless of how long the adapter takes to
-				// actually settle. A user-initiated stop is not an error.
-				await db
+			for (const id of targetIds) {
+				const [updated] = await db
 					.update(schema.chatMessages)
 					.set({
 						isGenerating: false,
@@ -2160,22 +2310,34 @@ export const chatMessagesCancelHandler: Handler<
 						queueItemId: null,
 						error: null
 					})
-					.where(eq(schema.chatMessages.id, message.id))
+					.where(
+						and(
+							eq(schema.chatMessages.id, id),
+							eq(schema.chatMessages.chatId, params.chatId)
+						)
+					)
+					.returning()
+				if (updated) {
+					await broadcastToChatUsers(socket.io, params.chatId, "chatMessage", {
+						chatMessage: updated
+					})
+				}
+			}
+
+			// Best-effort: ask the queue to cancel the actual upstream runs we
+			// knew about. Fires the adapter's abort() internally and, if the run
+			// doesn't respond in time, force-detaches it so the queue can proceed
+			// regardless. Never throws. Purely cleanup — the UI is already fixed.
+			for (const message of generatingMessages) {
+				if (message.queueItemId) {
+					llmQueue.cancel(message.queueItemId)
+				}
 			}
 
 			const res: Sockets.ChatMessages.Cancel.Response = {
-				success: `Cancelled ${generatingMessages.length} generating messages`
+				success: `Cancelled ${targetIds.size} generating message(s)`
 			}
 			emitToUser("chatMessages:cancel", res)
-
-			// Emit chats:get to refresh all messages after cancellation
-			if (generatingMessages.length > 0) {
-				await chatsGetHandler.handler(
-					socket,
-					{ id: params.chatId },
-					emitToUser
-				)
-			}
 
 			return res
 		} catch (error: any) {
@@ -2752,16 +2914,20 @@ export const toggleChatCharacterActiveHandler: Handler<
 					)
 				)
 
-			// Refresh chat data
-			if (emitToUser) {
-				await getChat(socket, { id: chat.id }, emitToUser)
-			}
-
-			return {
+			const res = {
 				chatId: params.chatId,
 				characterId: params.characterId,
 				isActive: newActiveStatus
 			}
+			// getChat (aliased from the legacy chat() function) emits under the
+			// event name "chat", which nothing on the client listens for — this
+			// silently dropped both the ack below and the chat refresh. Emit the
+			// handler's own declared event, then refresh via the real chats:get
+			// handler that EditChatForm/the chat page actually listen for.
+			emitToUser("chats:toggleChatCharacterActive", res)
+			await chatsGetHandler.handler(socket, { id: chat.id }, emitToUser)
+
+			return res
 		} catch (error) {
 			console.error("Error in toggleChatCharacterActiveHandler:", error)
 			return {
@@ -2829,16 +2995,17 @@ export const updateChatCharacterVisibilityHandler: Handler<
 					)
 				)
 
-			// Refresh chat data
-			if (emitToUser) {
-				await getChat(socket, { id: chat.id }, emitToUser)
-			}
-
-			return {
+			const res = {
 				chatId: params.chatId,
 				characterId: params.characterId,
 				visibility: params.visibility
 			}
+			// See toggleChatCharacterActiveHandler — getChat emits under an event
+			// name nothing listens for, dropping both the ack and the refresh.
+			emitToUser("chats:updateChatCharacterVisibility", res)
+			await chatsGetHandler.handler(socket, { id: chat.id }, emitToUser)
+
+			return res
 		} catch (error) {
 			console.error(
 				"Error in updateChatCharacterVisibilityHandler:",
@@ -2996,6 +3163,7 @@ export function registerChatHandlers(
 	) => void
 ) {
 	register(socket, chatsListHandler, emitToUser)
+	register(socket, chatsTypingHandler, emitToUser)
 	register(socket, chatsCreateHandler, emitToUser)
 	register(socket, chatsDeleteHandler, emitToUser)
 	register(socket, chatsGetHandler, emitToUser)

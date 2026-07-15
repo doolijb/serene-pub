@@ -74,6 +74,7 @@
 					onOpenChange={(e) => (menuOpen = e.open)}
 					positioning={{ placement: "bottom-end" }}
 					triggerBase="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0"
+					triggerAriaLabel="Persona options"
 					contentBase="card bg-surface-100-900 shadow-xl p-2 flex flex-col gap-1 min-w-32"
 					zIndex="1000"
 				>

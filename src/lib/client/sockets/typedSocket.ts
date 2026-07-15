@@ -95,6 +95,10 @@ export type SocketEventMap = {
 		params: Sockets.Characters.List.Params
 		response: Sockets.Characters.List.Response
 	}
+	"characters:list:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"characters:get": {
 		params: Sockets.Characters.Get.Params
 		response: Sockets.Characters.Get.Response
@@ -161,6 +165,10 @@ export type SocketEventMap = {
 		params: Sockets.Connections.List.Params
 		response: Sockets.Connections.List.Response
 	}
+	"connections:list:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"connections:get": {
 		params: Sockets.Connections.Get.Params
 		response: Sockets.Connections.Get.Response
@@ -189,11 +197,19 @@ export type SocketEventMap = {
 		params: Sockets.Connections.RefreshModels.Params
 		response: Sockets.Connections.RefreshModels.Response
 	}
+	"connections:refreshModels:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 
 	// Persona events
 	"personas:list": {
 		params: Sockets.Personas.List.Params
 		response: Sockets.Personas.List.Response
+	}
+	"personas:list:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	"personas:get": {
 		params: Sockets.Personas.Get.Params
@@ -256,6 +272,14 @@ export type SocketEventMap = {
 	"chats:list": {
 		params: Sockets.Chats.List.Params
 		response: Sockets.Chats.List.Response
+	}
+	"chats:typing": {
+		params: Sockets.Chats.Typing.Params
+		response: Sockets.Chats.Typing.Response
+	}
+	"chats:userTyping": {
+		params: Sockets.Chats.UserTyping.Params
+		response: Sockets.Chats.UserTyping.Response
 	}
 	"chats:get": {
 		params: Sockets.Chats.Get.Params
@@ -421,6 +445,10 @@ export type SocketEventMap = {
 		params: Sockets.ContextConfigs.SetUserActive.Params
 		response: Sockets.ContextConfigs.SetUserActive.Response
 	}
+	"contextConfigs:preview": {
+		params: Sockets.ContextConfigs.Preview.Params
+		response: Sockets.ContextConfigs.Preview.Response
+	}
 
 	// Prompt Config events
 	"promptConfigs:list": {
@@ -579,6 +607,10 @@ export type SocketEventMap = {
 		params: Sockets.KoboldCpp.Perf.Params
 		response: Sockets.KoboldCpp.Perf.Response
 	}
+	"koboldcpp:getLoadedConfig": {
+		params: Sockets.KoboldCpp.GetLoadedConfig.Params
+		response: Sockets.KoboldCpp.GetLoadedConfig.Response
+	}
 	// Managed mode events
 	"koboldcpp:setManagedMode": {
 		params: Sockets.KoboldCpp.SetManagedMode.Params
@@ -722,6 +754,10 @@ export type SocketEventMap = {
 		params: Sockets.Vectorization.Progress.Params
 		response: Sockets.Vectorization.Progress.Response
 	}
+	"vectorization:itemUpdated": {
+		params: Sockets.Vectorization.ItemUpdated.Params
+		response: Sockets.Vectorization.ItemUpdated.Response
+	}
 	"vectorization:modelDownloadProgress": {
 		params: Sockets.Vectorization.ModelDownloadProgress.Params
 		response: Sockets.Vectorization.ModelDownloadProgress.Response
@@ -809,6 +845,10 @@ export type SocketEventMap = {
 	"lorebooks:list": {
 		params: Sockets.Lorebooks.List.Params
 		response: Sockets.Lorebooks.List.Response
+	}
+	"lorebooks:list:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	"lorebooks:get": {
 		params: Sockets.Lorebooks.Get.Params
@@ -1042,6 +1082,10 @@ export type SocketEventMap = {
 	"tags:list": {
 		params: Sockets.Tags.List.Params
 		response: Sockets.Tags.List.Response
+	}
+	"tags:list:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	"tags:create": {
 		params: Sockets.Tags.Create.Params

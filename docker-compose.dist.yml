@@ -34,5 +34,10 @@ services:
       # See DOCKER.md for details.
       # KOBOLDCPP_BINARY_DIR: /koboldcpp
 
+      # Running behind a reverse proxy or tunnel? See HOSTING.md — you'll likely need
+      # SOCKETS_HTTPS_HOSTS and HOST_HEADER, and to route /socket.io/ to SOCKETS_PORT.
+      # SOCKETS_HTTPS_HOSTS: serene.example.com
+      # HOST_HEADER: x-forwarded-host
+
 volumes:
   serene-pub-data:

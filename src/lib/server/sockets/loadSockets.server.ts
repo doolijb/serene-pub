@@ -18,13 +18,38 @@ export function getSocketsPort() {
 	return process.env.SOCKETS_PORT || "3001"
 }
 
+// Hostnames that are always reached over HTTPS (eg. a tunnel/reverse-proxy
+// domain), regardless of what protocol adapter-node perceives the current
+// request as. Checking the request's *hostname* against this list sidesteps
+// needing PROTOCOL_HEADER to be configured (and trusted) at all for this
+// specific decision — useful since the same deployment might be reachable
+// both directly (plain http://localhost) and through a TLS-terminating
+// tunnel, and a single global SOCKETS_HTTP_MODE can't tell those apart.
+function getHttpsHosts(): string[] {
+	return (process.env.SOCKETS_HTTPS_HOSTS || "")
+		.split(",")
+		.map((h) => h.trim().toLowerCase())
+		.filter(Boolean)
+}
+
 export function getPublicSocketsEndpoint(url?: URL) {
 	const configured = process.env.PUBLIC_SOCKETS_ENDPOINT?.trim()
 	if (configured) return configured
-	const protocol =
-		getSocketsHttpMode() ||
-		(url ? url.protocol.replace(":", "") : "http")
+
 	const hostname = url?.hostname || "localhost"
+
+	// SOCKETS_HTTP_MODE is an explicit admin override — read the raw env var
+	// here rather than getSocketsHttpMode() (used for the server's own bind
+	// protocol), since that helper always defaults to "http" and would make
+	// the auto-detect fallback below dead code, always winning via `||`.
+	const explicitMode = process.env.SOCKETS_HTTP_MODE?.trim().toLowerCase()
+	const explicitProtocol =
+		explicitMode === "http" || explicitMode === "https" ? explicitMode : null
+
+	const protocol = getHttpsHosts().includes(hostname.toLowerCase())
+		? "https"
+		: (explicitProtocol ?? (url ? url.protocol.replace(":", "") : "http"))
+
 	return `${protocol}://${hostname}:${getSocketsPort()}`
 }
 

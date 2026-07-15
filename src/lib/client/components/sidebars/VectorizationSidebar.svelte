@@ -46,6 +46,7 @@
     let modelLoadError = $state<string | null>(null)
     let isChangingModel = $state(false)
     let showChangeModelModal = $state(false)
+    let showDisableConfirmModal = $state(false)
     let selectedModelForChange = $state<string>("")
     let downloadProgress = $state<{
         status: "loading" | "downloading" | "ready" | "error"
@@ -84,7 +85,11 @@
         socket?.emit("vectorization:listModels", {})
     })
 
-    let settingsViewInitialized = false
+    // Reactive (not a plain flag) so the template can gate on it — avoids a
+    // flash of the "chooser" screen for already-configured users while the
+    // real state is still loading (this panel has no pre-loaded shared
+    // context to read, unlike KoboldCppSidebar's koboldCppSettingsCtx).
+    let settingsViewInitialized = $state(false)
 
     $effect(() => {
         if (!socket) return
@@ -340,7 +345,175 @@
 </script>
 
 <div class="flex h-full flex-col overflow-hidden">
-    <Tabs value={activeTab} onValueChange={handleTabChange}>
+    {#if !settingsViewInitialized}
+        <div class="flex flex-1 flex-col items-center justify-center gap-2 p-4">
+            <Icons.Loader2 size={24} class="animate-spin opacity-50" aria-hidden="true" />
+            <p class="text-sm opacity-50">Loading…</p>
+        </div>
+    {:else if settingsView !== "configured"}
+        <!-- Not yet configured: the setup flow is the whole panel, no tabs —
+             mirrors KoboldCppSidebar's isUnconfigured/setup-screen pattern,
+             so opening this sidebar always lands on setup first until done. -->
+        <div class="flex flex-col gap-4 overflow-y-auto p-4">
+
+            {#if settingsView === "chooser"}
+                <!-- First-time setup: choose backend -->
+                <VectorizationSetupScreen
+                    {isAndroidWrapper}
+                    onChooseLocal={goToLocalSetup}
+                    onChooseApi={goToApiSetup}
+                />
+
+            {:else if settingsView === "setup-local"}
+                <!-- Local: pick a model tier -->
+                <div class="flex items-center justify-between">
+                    <span class="text-sm font-semibold">Choose a Local Model</span>
+                    <button
+                        class="btn btn-sm preset-filled-surface-400-600 text-xs"
+                        onclick={() => (settingsView = backTarget)}
+                    >
+                        <Icons.ArrowLeft size={12} aria-hidden="true" />
+                        Back
+                    </button>
+                </div>
+
+                {#if availableModels.length === 0}
+                    <div class="text-center opacity-50 text-sm py-4">Loading available models…</div>
+                {:else}
+                    <div class="space-y-2">
+                        {#each availableModels as model}
+                            <label
+                                class="flex cursor-pointer items-start gap-3 rounded-lg border-2 p-3 transition-all
+                                    {selectedModelForChange === model.id
+                                    ? 'border-primary-500 bg-primary-500/5'
+                                    : 'border-surface-300-600 hover:border-surface-400-500'}"
+                            >
+                                <input
+                                    type="radio"
+                                    name="setup-local-model"
+                                    value={model.id}
+                                    bind:group={selectedModelForChange}
+                                    class="mt-0.5"
+                                />
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <span class="font-medium">{model.name}</span>
+                                        {#if model.tier === "fast"}
+                                            <span class="rounded-full bg-sky-500/15 px-1.5 py-0.5 text-xs font-medium text-sky-600">Fast</span>
+                                        {:else if model.tier === "balanced"}
+                                            <span class="rounded-full bg-violet-500/15 px-1.5 py-0.5 text-xs font-medium text-violet-600">Balanced</span>
+                                        {:else}
+                                            <span class="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-xs font-medium text-amber-600">Best</span>
+                                        {/if}
+                                        <span class="text-surface-500 text-xs">{model.sizeLabel} · {model.dimensions}d</span>
+                                    </div>
+                                    <p class="text-surface-500 mt-0.5 text-xs">{model.description}</p>
+                                </div>
+                            </label>
+                        {/each}
+                    </div>
+                {/if}
+
+                {#if downloadProgress}
+                    <div class="space-y-1">
+                        <div class="flex items-center justify-between text-xs">
+                            <span class="text-surface-500 capitalize">{downloadProgress.status}…</span>
+                            {#if downloadProgress.percent !== undefined}
+                                <span class="font-mono">{downloadProgress.percent}%</span>
+                            {/if}
+                        </div>
+                        {#if downloadProgress.percent !== undefined}
+                            <div class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full">
+                                <div class="bg-primary-500 h-full transition-all duration-300" style="width: {downloadProgress.percent}%"></div>
+                            </div>
+                        {:else}
+                            <div class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full">
+                                <div class="bg-primary-500 h-full w-1/3 animate-pulse rounded-full"></div>
+                            </div>
+                        {/if}
+                    </div>
+                {/if}
+
+                <button
+                    class="btn preset-filled-primary-500 w-full"
+                    onclick={enableLocalModel}
+                    disabled={!selectedModelForChange || isChangingModel}
+                >
+                    {#if isChangingModel}
+                        <Icons.Loader size={16} class="animate-spin" aria-hidden="true" />
+                        Setting up…
+                    {:else}
+                        <Icons.Cpu size={16} aria-hidden="true" />
+                        Save & Enable
+                    {/if}
+                </button>
+
+            {:else if settingsView === "setup-api"}
+                <!-- External API config -->
+                <div class="flex items-center justify-between">
+                    <span class="text-sm font-semibold">External API Setup</span>
+                    <button
+                        class="btn btn-sm preset-filled-surface-400-600 text-xs"
+                        onclick={() => (settingsView = backTarget)}
+                    >
+                        <Icons.ArrowLeft size={12} aria-hidden="true" />
+                        Back
+                    </button>
+                </div>
+                <p class="text-xs text-surface-500">
+                    Any OpenAI-compatible /embeddings endpoint — OpenAI itself, Ollama, LM Studio, llama.cpp server, etc.
+                </p>
+
+                <label class="block">
+                    <span class="text-xs text-surface-500">Base URL</span>
+                    <input
+                        type="text"
+                        class="input text-sm w-full"
+                        placeholder="https://api.openai.com/v1"
+                        bind:value={apiBaseUrl}
+                    />
+                </label>
+                <label class="block">
+                    <span class="text-xs text-surface-500">API Key</span>
+                    <input
+                        type="password"
+                        class="input text-sm w-full"
+                        placeholder="(optional, depending on provider)"
+                        bind:value={apiKey}
+                    />
+                </label>
+                <label class="block">
+                    <span class="text-xs text-surface-500">Model</span>
+                    <input
+                        type="text"
+                        class="input text-sm w-full"
+                        placeholder="text-embedding-3-small"
+                        bind:value={apiModelInput}
+                    />
+                </label>
+
+                {#if apiTestError}
+                    <p class="text-error-500 text-xs">{apiTestError}</p>
+                {/if}
+
+                <button
+                    class="btn preset-filled-primary-500 w-full"
+                    onclick={saveApiConfig}
+                    disabled={testingApi || !apiBaseUrl.trim() || !apiModelInput.trim()}
+                >
+                    {#if testingApi}
+                        <Icons.Loader size={16} class="animate-spin" aria-hidden="true" />
+                        Testing…
+                    {:else}
+                        <Icons.Check size={16} aria-hidden="true" />
+                        Test & Save
+                    {/if}
+                </button>
+            {/if}
+
+        </div>
+    {:else}
+    <Tabs value={activeTab} onValueChange={handleTabChange} listBase="flex flex-wrap gap-1">
         {#snippet list()}
             <Tabs.Control value="queue">
                 <Icons.List size={20} class="inline" />
@@ -517,163 +690,8 @@
             <Tabs.Panel value="settings">
             <div class="flex flex-col gap-4 overflow-y-auto p-4">
 
-                {#if settingsView === "chooser"}
-                    <!-- First-time setup: choose backend -->
-                    <VectorizationSetupScreen
-                        {isAndroidWrapper}
-                        onChooseLocal={goToLocalSetup}
-                        onChooseApi={goToApiSetup}
-                    />
-
-                {:else if settingsView === "setup-local"}
-                    <!-- Local: pick a model tier -->
-                    <div class="flex items-center justify-between">
-                        <span class="text-sm font-semibold">Choose a Local Model</span>
-                        <button
-                            class="btn btn-sm preset-filled-surface-400-600 text-xs"
-                            onclick={() => (settingsView = backTarget)}
-                        >
-                            <Icons.ArrowLeft size={12} aria-hidden="true" />
-                            Back
-                        </button>
-                    </div>
-
-                    {#if availableModels.length === 0}
-                        <div class="text-center opacity-50 text-sm py-4">Loading available models…</div>
-                    {:else}
-                        <div class="space-y-2">
-                            {#each availableModels as model}
-                                <label
-                                    class="flex cursor-pointer items-start gap-3 rounded-lg border-2 p-3 transition-all
-                                        {selectedModelForChange === model.id
-                                        ? 'border-primary-500 bg-primary-500/5'
-                                        : 'border-surface-300-600 hover:border-surface-400-500'}"
-                                >
-                                    <input
-                                        type="radio"
-                                        name="setup-local-model"
-                                        value={model.id}
-                                        bind:group={selectedModelForChange}
-                                        class="mt-0.5"
-                                    />
-                                    <div class="min-w-0 flex-1">
-                                        <div class="flex flex-wrap items-center gap-2">
-                                            <span class="font-medium">{model.name}</span>
-                                            {#if model.tier === "fast"}
-                                                <span class="rounded-full bg-sky-500/15 px-1.5 py-0.5 text-xs font-medium text-sky-600">Fast</span>
-                                            {:else if model.tier === "balanced"}
-                                                <span class="rounded-full bg-violet-500/15 px-1.5 py-0.5 text-xs font-medium text-violet-600">Balanced</span>
-                                            {:else}
-                                                <span class="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-xs font-medium text-amber-600">Best</span>
-                                            {/if}
-                                            <span class="text-surface-500 text-xs">{model.sizeLabel} · {model.dimensions}d</span>
-                                        </div>
-                                        <p class="text-surface-500 mt-0.5 text-xs">{model.description}</p>
-                                    </div>
-                                </label>
-                            {/each}
-                        </div>
-                    {/if}
-
-                    {#if downloadProgress}
-                        <div class="space-y-1">
-                            <div class="flex items-center justify-between text-xs">
-                                <span class="text-surface-500 capitalize">{downloadProgress.status}…</span>
-                                {#if downloadProgress.percent !== undefined}
-                                    <span class="font-mono">{downloadProgress.percent}%</span>
-                                {/if}
-                            </div>
-                            {#if downloadProgress.percent !== undefined}
-                                <div class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full">
-                                    <div class="bg-primary-500 h-full transition-all duration-300" style="width: {downloadProgress.percent}%"></div>
-                                </div>
-                            {:else}
-                                <div class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full">
-                                    <div class="bg-primary-500 h-full w-1/3 animate-pulse rounded-full"></div>
-                                </div>
-                            {/if}
-                        </div>
-                    {/if}
-
-                    <button
-                        class="btn preset-filled-primary-500 w-full"
-                        onclick={enableLocalModel}
-                        disabled={!selectedModelForChange || isChangingModel}
-                    >
-                        {#if isChangingModel}
-                            <Icons.Loader size={16} class="animate-spin" aria-hidden="true" />
-                            Setting up…
-                        {:else}
-                            <Icons.Cpu size={16} aria-hidden="true" />
-                            Save & Enable
-                        {/if}
-                    </button>
-
-                {:else if settingsView === "setup-api"}
-                    <!-- External API config -->
-                    <div class="flex items-center justify-between">
-                        <span class="text-sm font-semibold">External API Setup</span>
-                        <button
-                            class="btn btn-sm preset-filled-surface-400-600 text-xs"
-                            onclick={() => (settingsView = backTarget)}
-                        >
-                            <Icons.ArrowLeft size={12} aria-hidden="true" />
-                            Back
-                        </button>
-                    </div>
-                    <p class="text-xs text-surface-500">
-                        Any OpenAI-compatible /embeddings endpoint — OpenAI itself, Ollama, LM Studio, llama.cpp server, etc.
-                    </p>
-
-                    <label class="block">
-                        <span class="text-xs text-surface-500">Base URL</span>
-                        <input
-                            type="text"
-                            class="input text-sm w-full"
-                            placeholder="https://api.openai.com/v1"
-                            bind:value={apiBaseUrl}
-                        />
-                    </label>
-                    <label class="block">
-                        <span class="text-xs text-surface-500">API Key</span>
-                        <input
-                            type="password"
-                            class="input text-sm w-full"
-                            placeholder="(optional, depending on provider)"
-                            bind:value={apiKey}
-                        />
-                    </label>
-                    <label class="block">
-                        <span class="text-xs text-surface-500">Model</span>
-                        <input
-                            type="text"
-                            class="input text-sm w-full"
-                            placeholder="text-embedding-3-small"
-                            bind:value={apiModelInput}
-                        />
-                    </label>
-
-                    {#if apiTestError}
-                        <p class="text-error-500 text-xs">{apiTestError}</p>
-                    {/if}
-
-                    <button
-                        class="btn preset-filled-primary-500 w-full"
-                        onclick={saveApiConfig}
-                        disabled={testingApi || !apiBaseUrl.trim() || !apiModelInput.trim()}
-                    >
-                        {#if testingApi}
-                            <Icons.Loader size={16} class="animate-spin" aria-hidden="true" />
-                            Testing…
-                        {:else}
-                            <Icons.Check size={16} aria-hidden="true" />
-                            Test & Save
-                        {/if}
-                    </button>
-
-                {:else}
-                    <!-- Configured: summary + reconfigure/disable -->
-                    {#if !modelReady}
+                <!-- Configured: summary + reconfigure/disable -->
+                {#if !modelReady}
                         <div class="border-warning-500/30 bg-warning-500/10 flex items-start gap-3 rounded-lg border p-3">
                             <Icons.AlertTriangle size={16} class="text-warning-500 mt-0.5 shrink-0" aria-hidden="true" />
                             <div class="min-w-0 flex-1 space-y-2">
@@ -836,7 +854,7 @@
                         <p class="text-surface-500 mb-2 text-xs">Turn off embeddings entirely — RAG falls back to keyword search.</p>
                         <button
                             class="btn btn-sm preset-tonal-error w-full text-xs"
-                            onclick={disableVectorization}
+                            onclick={() => (showDisableConfirmModal = true)}
                             disabled={disabling}
                         >
                             {#if disabling}
@@ -848,13 +866,13 @@
                             {/if}
                         </button>
                     </div>
-                {/if}
 
             </div>
             </Tabs.Panel>
 
         {/snippet}
     </Tabs>
+    {/if}
 </div>
 
 <!-- Change Model Modal -->
@@ -945,6 +963,38 @@
                     <Icons.RefreshCw class="h-4 w-4" />
                     Switch Model
                 {/if}
+            </button>
+        </footer>
+    {/snippet}
+</Modal>
+
+<!-- Disable Confirmation Modal -->
+<Modal
+    open={showDisableConfirmModal}
+    onOpenChange={(e) => (showDisableConfirmModal = e.open)}
+    contentBase="card bg-surface-100-900 p-6 space-y-5 shadow-xl max-w-lg w-full"
+    backdropClasses="backdrop-blur-sm"
+>
+    {#snippet content()}
+        <header class="flex items-center gap-3">
+            <Icons.AlertTriangle class="text-error-500 h-5 w-5 shrink-0" />
+            <h2 class="text-lg font-bold">Disable Embeddings?</h2>
+        </header>
+
+        <p class="text-sm">
+            RAG will fall back to keyword search for all chats. You can re-enable embeddings and reconfigure at any time — existing embeddings aren't deleted, just unused until you turn this back on.
+        </p>
+
+        <footer class="flex justify-end gap-2">
+            <button class="btn preset-filled-surface-400-600" onclick={() => (showDisableConfirmModal = false)}>
+                Cancel
+            </button>
+            <button
+                class="btn preset-filled-error-500"
+                onclick={() => { showDisableConfirmModal = false; disableVectorization() }}
+            >
+                <Icons.PowerOff class="h-4 w-4" />
+                Disable Embeddings
             </button>
         </footer>
     {/snippet}

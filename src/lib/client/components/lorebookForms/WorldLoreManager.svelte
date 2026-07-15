@@ -265,6 +265,20 @@
 			if (msg.success) toaster.success({ title: "Entries reordered" })
 		})
 
+		// The background vectorization queue updates a row's embeddingModel
+		// directly in the DB — without this, the badge here only ever refreshes
+		// on the next explicit CRUD action, leaving it stale until a manual refresh.
+		socket.on(
+			"vectorization:itemUpdated",
+			(msg: Sockets.Vectorization.ItemUpdated.Response) => {
+				if (msg.type !== "worldLore" || msg.lorebookId !== lorebookId) return
+				const target = worldLoreEntryList.find((e: any) => e.id === msg.id)
+				if (target) (target as any).embeddingModel = msg.embeddingModel
+				if (focusedEntry?.id === msg.id)
+					(focusedEntry as any).embeddingModel = msg.embeddingModel
+			}
+		)
+
 		socket.emit("worldLoreEntries:list", { lorebookId } satisfies Sockets.WorldLoreEntries.List.Params)
 		socket.emit("lorebooks:bindingList", { lorebookId } satisfies Sockets.Lorebooks.BindingList.Params)
 		isReady = true
@@ -278,6 +292,7 @@
 		socket.off("worldLoreEntries:delete")
 		socket.off("lorebooks:bindingList")
 		socket.off("worldLoreEntries:updatePositions")
+		socket.off("vectorization:itemUpdated")
 	})
 </script>
 

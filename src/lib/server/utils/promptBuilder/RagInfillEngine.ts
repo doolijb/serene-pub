@@ -61,6 +61,7 @@ import { db } from "$lib/server/db"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { BaseInfillEngine } from "./BaseInfillEngine"
+import { MAX_GRAPH_PAIRS, serializeGraphPairs, type GraphPairOutput as SharedGraphPairOutput } from "./NarrativeGraphContext"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -77,13 +78,6 @@ const RAG_CURRENT_WINDOW = 2
  * TODO: make configurable in a future pass.
  */
 const RAG_RECENT_WINDOW = 3
-
-/**
- * Maximum narrative graph relationship pairs included in context.
- * Current-pass (more relevant) pairs fill first; recent-pass fills the remainder.
- * TODO: make configurable per-chat or per-context-config in a future pass.
- */
-const MAX_GRAPH_PAIRS = 10
 
 /** Per-source-type budget caps applied after RRF + MMR */
 const RAG_SOURCE_BUDGET = {
@@ -515,17 +509,8 @@ export class RagInfillEngine extends BaseInfillEngine {
 
 		// ── 3b. Build narrative graph from RAG-retrieved relationship pairs ─────
 		// Internal type includes historyEntryId for reason-omission; stripped before output.
-		type InternalRelEntry = {
-			type: string; status: string
-			description?: string; reason?: string
-			historyEntryId: number | null
-		}
-		type GraphPairOutput = {
-			from: string; fromBound: boolean; fromDescription?: string
-			to: string; toBound: boolean; toDescription?: string
-			fromNodeId: number; toNodeId: number; lorebookId: number
-			rels: InternalRelEntry[]
-		}
+		type InternalRelEntry = SharedGraphPairOutput["rels"][number]
+		type GraphPairOutput = SharedGraphPairOutput
 
 		const graphPairs: GraphPairOutput[] = []
 
@@ -695,44 +680,13 @@ export class RagInfillEngine extends BaseInfillEngine {
 			}
 		}
 
-		// Serialize final graph.
-		// Descriptions are hoisted to a top-level "side_characters" map (unbound nodes only —
-		// bound nodes already have descriptions in the character/persona context sections).
-		// Relationships are grouped by "from" node perspective to avoid per-pair repetition.
+		// Serialize final graph (shared with KeywordInfillEngine's co-occurrence
+		// variant so both produce structurally identical output).
 		// Wrapped in a single-element array so enforceTokenBudget can pop it to clear.
 		const graphSlot: (string | undefined)[] = []
-		if (graphPairs.length > 0) {
-			// Collect unique nodes: description only for unbound ones
-			const nodeDescriptions = new Map<string, string>()
-			for (const p of graphPairs) {
-				if (!p.fromBound && p.fromDescription && !nodeDescriptions.has(p.from)) {
-					nodeDescriptions.set(p.from, p.fromDescription)
-				}
-				if (!p.toBound && p.toDescription && !nodeDescriptions.has(p.to)) {
-					nodeDescriptions.set(p.to, p.toDescription)
-				}
-			}
-
-			// Group relationships by "from" node (directional perspective)
-			const perspectiveMap = new Map<string, Array<{ with: string; relationships: any[] }>>()
-			for (const p of graphPairs) {
-				if (!perspectiveMap.has(p.from)) perspectiveMap.set(p.from, [])
-				perspectiveMap.get(p.from)!.push({
-					with: p.to,
-					relationships: p.rels.map(({ historyEntryId: _he, ...rest }) => rest)
-				})
-			}
-
-			// Build output: side_characters first, then per-node perspective keys
-			const output: Record<string, any> = {}
-			if (nodeDescriptions.size > 0) {
-				output.side_characters = Object.fromEntries(nodeDescriptions)
-			}
-			for (const [name, rels] of perspectiveMap) {
-				output[`${name}_perspective`] = rels
-			}
-
-			graphSlot.push(JSON.stringify(output, null, 2))
+		const serializedGraph = serializeGraphPairs(graphPairs)
+		if (serializedGraph !== undefined) {
+			graphSlot.push(serializedGraph)
 		}
 
 		// ── 4. Determine message sets ──────────────────────────────────────────

@@ -16,7 +16,7 @@ import * as http from "http"
 import { randomUUID } from "crypto"
 import * as subprocessManager from "$lib/server/koboldcpp/subprocessManager"
 import * as binaryManager from "$lib/server/koboldcpp/binaryManager"
-import { unloadModel } from "$lib/server/koboldcpp/modelManager"
+import { unloadModel, getLoadedSignature } from "$lib/server/koboldcpp/modelManager"
 import { isAndroidWrapper } from "$lib/server/utils"
 
 // --- KOBOLDCPP MANAGER HANDLERS ---
@@ -415,6 +415,30 @@ export const koboldCppPerfHandler: Handler<
 			totalGens: data.total_gens ?? 0
 		}
 		emitToUser("koboldcpp:perf", res)
+		return res
+	}
+}
+
+export const koboldCppGetLoadedConfigHandler: Handler<
+	Sockets.KoboldCpp.GetLoadedConfig.Params,
+	Sockets.KoboldCpp.GetLoadedConfig.Response
+> = {
+	event: "koboldcpp:getLoadedConfig",
+	handler: async (socket, params, emitToUser) => {
+		const signature = getLoadedSignature()
+		const res: Sockets.KoboldCpp.GetLoadedConfig.Response = {
+			config: signature
+				? {
+						model: signature.model,
+						contextSize: signature.contextSize,
+						gpuLayers: signature.gpuLayers,
+						flashAttention: signature.flashAttention,
+						batchSize: signature.batchSize,
+						rawConfigJson: signature.rawConfigJson
+					}
+				: null
+		}
+		emitToUser("koboldcpp:getLoadedConfig", res)
 		return res
 	}
 }
@@ -882,7 +906,9 @@ export const koboldCppListBinaryVariants: Handler<
 		const res: Sockets.KoboldCpp.ListBinaryVariants.Response = {
 			variants,
 			releaseTag,
-			defaultDir: path.join(getAppDataDir(), "koboldcpp")
+			// Respect KOBOLDCPP_BINARY_DIR when set, so a fresh in-app download lands
+			// in the same directory a Docker deployment was configured to expect.
+			defaultDir: process.env.KOBOLDCPP_BINARY_DIR || path.join(getAppDataDir(), "koboldcpp")
 		}
 		emitToUser("koboldcpp:listBinaryVariants", res)
 		return res
@@ -1147,6 +1173,7 @@ export function registerKoboldCppHandlers(
 	register(socket, koboldCppLoadModelHandler, emitToUser)
 	register(socket, koboldCppConnectModelHandler, emitToUser)
 	register(socket, koboldCppPerfHandler, emitToUser)
+	register(socket, koboldCppGetLoadedConfigHandler, emitToUser)
 	register(socket, koboldCppSearchModelsHandler, emitToUser)
 	register(socket, koboldCppRecommendedModelsHandler, emitToUser)
 	register(socket, koboldCppDownloadModelHandler, emitToUser)

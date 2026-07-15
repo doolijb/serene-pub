@@ -43,10 +43,10 @@ If you choose Local Model, you pick from three tiers, each trading speed for ret
 | Tier | Model | Dimensions | Size | Notes |
 |---|---|---|---|---|
 | Fast | all-MiniLM-L6-v2 | 384 | ~80 MB | Lightweight; good for shorter lorebook entries and fact-style lore; best if RAM is limited or you want to get started immediately. |
-| Balanced | all-mpnet-base-v2 | 768 | ~420 MB | Stronger semantic understanding of longer prose and character descriptions; a good default for most setups. |
-| Best | bge-large-en-v1.5 | 1024 | ~1.2 GB | Top-tier retrieval quality for nuanced narrative context, character relationships, and thematic similarity; recommended if you have the hardware. |
+| Balanced | EmbeddingGemma-300M | 768 | ~300 MB | Google's current-generation embedding model; multilingual, with strong semantic understanding of longer prose and character descriptions; a good default for most setups. |
+| Best | bge-m3 | 1024 | ~570 MB | Top-tier, multilingual retrieval quality with an 8192-token context window — 16x the reach of the previous best-tier model, useful for long character and lorebook entries; recommended if you have the hardware. |
 
-All three run fully locally via an ONNX-based embedding runtime — nothing is sent to an external API. Models are downloaded once and cached; switching models later re-downloads only if the new one isn't cached yet.
+All three run fully locally via an ONNX-based embedding runtime — nothing is sent to an external API. Balanced and Best load int8-quantized weights (a small quality tradeoff for a much smaller download than full precision); Fast already downloads a small enough model that quantizing it further isn't worthwhile. Models are downloaded once and cached; switching models later re-downloads only if the new one isn't cached yet.
 
 ### Changing models or backends later invalidates existing embeddings
 

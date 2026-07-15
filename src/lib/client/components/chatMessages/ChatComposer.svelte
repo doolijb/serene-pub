@@ -132,7 +132,7 @@
 			{#snippet leftControls()}
 				{@const activePersona = currentUserPersona?.persona ?? (!isGuest ? chat?.chatPersonas?.[0]?.persona : undefined)}
 				{#if activePersona}
-					<div class="hidden flex-col lg:ml-2 lg:flex lg:gap-2">
+					<div class="flex flex-col lg:ml-2 lg:gap-2">
 						{#if userPersonasInChat.length > 1}
 							<Popover
 								open={personaSwitcherOpen}
@@ -175,7 +175,6 @@
 							</span>
 						{/if}
 					</div>
-					<div class="lg:hidden"></div>
 				{/if}
 			{/snippet}
 			{#snippet rightControls()}

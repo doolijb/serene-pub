@@ -111,6 +111,7 @@ export async function loadEmbeddingModel(
 		onProgress?.({ modelId, status: "loading" })
 
 		pipeline = (await createPipeline("feature-extraction", modelId, {
+			...(modelDef.dtype ? { dtype: modelDef.dtype } : {}),
 			// @ts-ignore — progress_callback is valid but not in all type defs
 			progress_callback: (event: any) => {
 				if (event?.status === "downloading") {

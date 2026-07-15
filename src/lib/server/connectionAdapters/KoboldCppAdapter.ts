@@ -22,6 +22,13 @@ import { fetchCurrentModelName } from "$lib/server/koboldcpp/kcppHttp"
 export class KoboldCppAdapter extends BaseConnectionAdapter {
 	private _tokenCounter?: TokenCounters
 	private abortController?: AbortController
+	// KoboldCPP does not treat a dropped client connection as a cancel signal —
+	// it keeps computing the abandoned generation server-side (occupying its
+	// one generation slot in managed/single-user mode, blocking everything
+	// queued behind it) unless explicitly told to stop via genkey + the
+	// /api/extra/abort endpoint. abortController.abort() alone only stops
+	// *this app* from reading the response.
+	private genKey?: string
 
 	constructor({
 		connection,
@@ -129,6 +136,9 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		const stream = this.connection.extraJson?.stream ?? false
 		const useMemory = this.connection.extraJson?.useMemory ?? false
 		const useChat = this.connection.extraJson?.useChat ?? false
+		// A fresh key per generation — lets abort() tell KoboldCPP exactly which
+		// in-flight generation to actually stop computing.
+		this.genKey = crypto.randomUUID()
 		// null = Auto (omit from request), true/false = explicit override
 		const enableThinking: boolean | null = this.connection.extraJson?.enableThinking ?? null
 
@@ -163,7 +173,10 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		let requestBody: Record<string, any>
 
 		if (useChat) {
-			// Use OpenAI-style chat completion format
+			// Use OpenAI-style chat completion format. genkey is a KoboldCPP
+			// extension the OpenAI-compat endpoint may or may not honor — harmless
+			// to include either way, and abort() below still works via the plain
+			// fetch abort for this mode regardless.
 			requestBody = {
 				model: this.connection.model || "koboldcpp",
 				messages: compiledPrompt.messages!,
@@ -172,6 +185,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 					samplingParams.n_predict ||
 					100,
 				stream,
+				genkey: this.genKey,
 				...samplingParams,
 				...(enableThinking !== null ? { enable_thinking: enableThinking } : {})
 			}
@@ -185,6 +199,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 					100,
 				max_context_length: await this.getContextTokenLimit(),
 				stop_sequence,
+				genkey: this.genKey,
 				...samplingParams,
 				...(enableThinking !== null ? { enable_thinking: enableThinking } : {})
 			}
@@ -347,6 +362,21 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		super.abort()
 		if (this.abortController) {
 			this.abortController.abort()
+		}
+		// Tell KoboldCPP itself to stop — without this it keeps computing the
+		// abandoned generation after we drop the connection, which in managed
+		// mode (a single generation slot) blocks every subsequent request until
+		// the zombie generation finishes on its own.
+		if (this.genKey) {
+			const baseUrl = this.connection.baseUrl || "http://localhost:5001"
+			fetch(`${baseUrl}/api/extra/abort`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ genkey: this.genKey }),
+				signal: AbortSignal.timeout(5000)
+			}).catch((err) => {
+				console.warn("[KoboldCppAdapter] Failed to send abort to KoboldCPP:", err)
+			})
 		}
 	}
 }

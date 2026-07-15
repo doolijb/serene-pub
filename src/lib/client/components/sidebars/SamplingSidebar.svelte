@@ -154,11 +154,17 @@
 	let samplingConfigsList: Sockets.SamplingConfigs.List.Response["samplingConfigsList"] =
 		$state([])
 
-	function handleSelectChange(e: Event) {
-		const newId = parseInt((e.target as HTMLSelectElement).value)
-		selectedSamplingId = newId
-		socket.emit("samplingConfigs:get", { id: newId })
-	}
+	// Drives the select's value via bind: rather than per-option `selected`
+	// attributes — the list of options gets regenerated on every save (the
+	// server re-emits samplingConfigs:list as part of the update flow), and
+	// `selected` attributes on <option> don't reliably survive that; the
+	// browser falls back to the first option, which looked like "the
+	// selection reverts to the default config" after saving.
+	$effect(() => {
+		if (selectedSamplingId) {
+			socket.emit("samplingConfigs:get", { id: selectedSamplingId })
+		}
+	})
 
 	function handleSetDefault() {
 		if (!selectedSamplingId) return
@@ -405,18 +411,18 @@
 		<div class="mb-4">
 			<select
 				class="select w-full"
-				onchange={handleSelectChange}
+				bind:value={selectedSamplingId}
 				disabled={unsavedChanges}
 			>
 				{#each samplingConfigsList.filter((w) => w.isImmutable) as w}
 					{@const isDefault = w.id === activeSamplingConfigId}
-					<option value={w.id} selected={w.id === selectedSamplingId}>
+					<option value={w.id}>
 						{isDefault ? "★ " : ""}{w.name}*
 					</option>
 				{/each}
 				{#each samplingConfigsList.filter((w) => !w.isImmutable) as w}
 					{@const isDefault = w.id === activeSamplingConfigId}
-					<option value={w.id} selected={w.id === selectedSamplingId}>
+					<option value={w.id}>
 						{isDefault ? "★ " : ""}{w.name}
 					</option>
 				{/each}

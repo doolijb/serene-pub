@@ -242,6 +242,7 @@
 						contentBase="card bg-primary-200-800 p-4 space-y-4 w-[min(90vw,320px)]"
 						arrow
 						arrowBackground="!bg-primary-200 dark:!bg-primary-800"
+						triggerAriaLabel="Message options"
 						zIndex="1000"
 					>
 						{#snippet trigger()}

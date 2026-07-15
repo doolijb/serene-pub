@@ -21,6 +21,7 @@
 	const panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
 
 	let tagsList: SelectTag[] = $state([])
+	let isLoading = $state(true)
 	let selectedTag: SelectTag | null = $state(null)
 	let search = $state("")
 	let isCreating = $state(false)
@@ -353,6 +354,13 @@
 	onMount(() => {
 		socket.on("tags:list", (msg: any) => {
 			tagsList = msg.tagsList || []
+			isLoading = false
+		})
+		// The generic **:error listener in Layout.svelte already toasts this —
+		// this just stops the spinner from spinning forever if the initial
+		// fetch fails, so it settles into the (accurate enough) empty state.
+		socket.on("tags:list:error", () => {
+			isLoading = false
 		})
 
 		socket.on("tags:create", (msg: any) => {
@@ -393,6 +401,7 @@
 
 	onDestroy(() => {
 		socket.off("tags:list")
+		socket.off("tags:list:error")
 		socket.off("tags:create")
 		socket.off("tags:update")
 		socket.off("tags:delete")
@@ -761,7 +770,11 @@
 			/>
 		</div>
 
-		{#if filteredTags.length === 0}
+		{#if isLoading}
+			<div class="flex items-center justify-center py-8">
+				<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+			</div>
+		{:else if filteredTags.length === 0}
 			<div class="text-muted-foreground relative w-100 py-8 text-center">
 				No tags found.
 			</div>

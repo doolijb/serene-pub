@@ -78,17 +78,22 @@ volumes:
 
 ## Environment variables
 
-All variables are optional unless noted.
+All variables are optional unless noted. This is the Docker-relevant subset —
+for the full reference, including reverse-proxy trust settings
+(`PROTOCOL_HEADER`/`HOST_HEADER`) and socket endpoint overrides
+(`SOCKETS_HTTPS_HOSTS`/`PUBLIC_SOCKETS_ENDPOINT`), see
+[HOSTING.md](./HOSTING.md).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SERENE_PUB_DATA_DIR` | `/data` | Directory for all persistent data |
 | `PORT` | `3000` | HTTP port the web server listens on |
 | `SOCKETS_PORT` | `3001` | WebSocket server port |
-| `SERENE_AUTO_OPEN` | `1` | Set to `1` to disable automatic browser launch (always disabled in containers) |
+| `SERENE_AUTO_OPEN` | unset (auto-open enabled) | Always effectively disabled in containers (no browser to open) — irrelevant for Docker, listed for completeness |
 | `NODE_ENV` | `production` | Node.js environment |
 | `USER_TOKEN_EXPIRATION_HOURS` | `168` | Session lifetime in hours (168 = 7 days) |
 | `TRANSFORMERS_CACHE` | `$SERENE_PUB_DATA_DIR/transformers-cache` | Override embedding model cache directory |
+| `KOBOLDCPP_BINARY_DIR` / `KOBOLDCPP_BINARY_NAME` | unset | Point managed KoboldCPP mode at a binary you mounted yourself — see [Managed mode](#koboldcpp--managed-mode) below |
 
 ---
 
@@ -109,27 +114,15 @@ environment:
 
 ## Running behind a reverse proxy
 
-Serene Pub uses WebSockets for real-time updates. Your proxy must forward WebSocket upgrade requests.
-
-### Nginx example
-
-```nginx
-server {
-    listen 80;
-    server_name serene.example.com;
-
-    location / {
-        proxy_pass         http://localhost:3000;
-        proxy_http_version 1.1;
-        proxy_set_header   Upgrade $http_upgrade;
-        proxy_set_header   Connection "upgrade";
-        proxy_set_header   Host $host;
-        proxy_set_header   X-Real-IP $remote_addr;
-    }
-}
-```
-
-Both ports (HTTP and WebSocket) should be proxied, or configure Serene Pub to use the same port for both by pointing `SOCKETS_PORT` to the same value as `PORT` if your reverse proxy consolidates them.
+Serene Pub runs two servers — the web app (`PORT`, default `3000`) and a
+separate WebSocket server (`SOCKETS_PORT`, default `3001`). Your proxy needs
+to route **both**, and forward WebSocket upgrade requests. The simplest way
+is a path split on the same host — see
+[HOSTING.md](./HOSTING.md#reverse-proxy--tunnel-same-host) for a full nginx
+example (including Nginx Proxy Manager) and the matching environment
+variables (`SOCKETS_HTTPS_HOSTS`, `HOST_HEADER`), plus a troubleshooting
+table for the "mixed content" / CORS / timeout errors this typically shows
+up as when misconfigured.
 
 ---
 

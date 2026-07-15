@@ -207,11 +207,15 @@
 			{:else}
 				<div class="space-y-2">
 					{#each filteredUsers as user}
-						<button
-							class="bg-surface-100-900 hover:bg-surface-200-800 flex w-full items-center justify-between rounded-lg p-3 text-left transition-colors"
-							onclick={() => handleViewClick(user)}
+						<div
+							class="bg-surface-100-900 hover:bg-surface-200-800 flex w-full items-center justify-between rounded-lg p-3 transition-colors"
+							role="listitem"
 						>
-							<div class="flex min-w-0 flex-1 items-center gap-2">
+							<button
+								class="flex min-w-0 flex-1 items-center gap-2 text-left"
+								onclick={() => handleViewClick(user)}
+								type="button"
+							>
 								<span class="truncate font-medium">
 									{user.displayName || user.username}
 								</span>
@@ -225,35 +229,35 @@
 										Admin
 									</span>
 								{/if}
-							</div>
+							</button>
 
 							{#if isCurrentUserAdmin && user.id !== userCtx.user?.id}
-								<div class="ml-2 flex shrink-0 gap-1" role="group">
-									<span
+								<div
+									class="ml-2 flex shrink-0 gap-1"
+									role="group"
+									aria-label="Actions for {user.displayName || user.username}"
+								>
+									<button
 										class="btn btn-sm preset-filled-surface-400-600"
 										onclick={(e) => { e.stopPropagation(); startEdit(user) }}
 										title="Edit user"
-										role="button"
-										tabindex="0"
-										onkeydown={(e) => e.key === 'Enter' && startEdit(user)}
+										type="button"
 									>
 										<Icons.Pencil size={14} />
 										Edit
-									</span>
-									<span
+									</button>
+									<button
 										class="btn btn-sm preset-tonal-error"
 										onclick={(e) => { e.stopPropagation(); confirmDelete(user) }}
 										title="Delete user"
-										role="button"
-										tabindex="0"
-										onkeydown={(e) => e.key === 'Enter' && confirmDelete(user)}
+										type="button"
 									>
 										<Icons.Trash2 size={14} />
 										Delete
-									</span>
+									</button>
 								</div>
 							{/if}
-						</button>
+						</div>
 					{/each}
 				</div>
 			{/if}

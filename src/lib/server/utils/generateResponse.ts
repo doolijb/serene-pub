@@ -475,7 +475,8 @@ export async function generateResponse({
 					isAssistantMode,
 					emitToUser,
 					userId,
-					contextDebuggingEnabled
+					contextDebuggingEnabled,
+					queueItemId
 				}),
 			onCancel: () => adapter.abort(),
 			onStatusChange: (status) =>
@@ -559,7 +560,8 @@ async function runGenerateAndPersist({
 	isAssistantMode,
 	emitToUser,
 	userId,
-	contextDebuggingEnabled
+	contextDebuggingEnabled,
+	queueItemId
 }: {
 	signal: AbortSignal
 	adapter: any
@@ -573,6 +575,15 @@ async function runGenerateAndPersist({
 	emitToUser: (event: string, data: any) => void
 	userId: number
 	contextDebuggingEnabled: boolean
+	// Fences every write this run makes: a user-initiated stop nulls
+	// queueItemId on the row immediately and unconditionally (see
+	// chatMessagesCancelHandler). Streaming adapters invoke their per-chunk
+	// callback fire-and-forget, so several writes from this run can still be
+	// in flight after cancellation — gating every write on this exact id
+	// guarantees none of them can resurrect isGenerating:true after the row
+	// has moved on, regardless of timing. Message-stop status must never be
+	// contingent on whether the upstream LLM actually stops in time.
+	queueItemId: string
 }): Promise<GenerateExecuteResult> {
 	// Generate completion
 	let { completionResult, compiledPrompt, isAborted, thinkingContent: adapterThinking } =
@@ -675,7 +686,8 @@ async function runGenerateAndPersist({
 					.where(
 						and(
 							eq(schema.chatMessages.id, generatingMessage.id),
-							eq(schema.chatMessages.isGenerating, true)
+							eq(schema.chatMessages.isGenerating, true),
+							eq(schema.chatMessages.queueItemId, queueItemId)
 						)
 					)
 					.returning()
@@ -690,6 +702,10 @@ async function runGenerateAndPersist({
 						"chatMessage",
 						chatMsgReq
 					)
+				} else if (signal.aborted) {
+					// Fenced out by a user-initiated stop — the cancel handler already
+					// reset and owns this row's state. Not an error; stay quiet.
+					ok = false
 				} else {
 					const chatMsgReq: Sockets.ChatMessage.Call = {
 						id: generatingMessage.id
@@ -771,11 +787,17 @@ async function runGenerateAndPersist({
 			.where(
 				and(
 					eq(schema.chatMessages.id, generatingMessage.id),
-					eq(schema.chatMessages.isGenerating, true)
+					eq(schema.chatMessages.isGenerating, true),
+					eq(schema.chatMessages.queueItemId, queueItemId)
 				)
 			)
 			.returning()
 		if (!ret || ret.length === 0) {
+			if (signal.aborted) {
+				// Cancelled — the cancel handler already reset this row; this run's
+				// own completion write is stale and correctly a no-op.
+				return { kind: "normal", isAborted: true }
+			}
 			console.error(
 				"[generateResponse] Failed to update generating message:",
 				generatingMessage.id
@@ -866,11 +888,17 @@ async function runGenerateAndPersist({
 			.where(
 				and(
 					eq(schema.chatMessages.id, generatingMessage.id),
-					eq(schema.chatMessages.isGenerating, true)
+					eq(schema.chatMessages.isGenerating, true),
+					eq(schema.chatMessages.queueItemId, queueItemId)
 				)
 			)
 			.returning()
 		if (!ret || ret.length === 0) {
+			if (signal.aborted) {
+				// Cancelled — the cancel handler already reset this row; this run's
+				// own completion write is stale and correctly a no-op.
+				return { kind: "normal", isAborted: true }
+			}
 			console.error(
 				"[generateResponse] Failed to update generating message:",
 				generatingMessage.id

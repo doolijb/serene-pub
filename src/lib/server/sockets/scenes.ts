@@ -7,6 +7,7 @@ import { buildSceneCastList } from "$lib/server/utils/summarizer/availableSceneC
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 import { resolveTaskConfig } from "$lib/server/utils/resolveTaskConfig"
 import { activityStore } from "$lib/server/utils/activityStore"
+import { checkChatAccess } from "$lib/server/utils/chatAccess"
 
 export const sceneListHandler: Handler<
 	Sockets.Scenes.List.Params,
@@ -16,12 +17,11 @@ export const sceneListHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 
-		// Verify chat ownership
-		const chat = await db.query.chats.findFirst({
-			where: (c, { and, eq }) => and(eq(c.id, params.chatId), eq(c.userId, userId))
-		})
-
-		if (!chat) {
+		// Read access: any chat participant (owner or guest) can view scenes —
+		// this fires on every chat page load, so an owner-only check here
+		// locks guests out of the chat entirely, not just scene management.
+		const chatAccess = await checkChatAccess(params.chatId, userId)
+		if (!chatAccess.hasAccess) {
 			throw new Error("Chat not found or access denied.")
 		}
 
@@ -216,12 +216,9 @@ export const scenedMessageIdsHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 
-		// Verify chat ownership
-		const chat = await db.query.chats.findFirst({
-			where: (c, { and, eq }) => and(eq(c.id, params.chatId), eq(c.userId, userId))
-		})
-
-		if (!chat) {
+		// Read access: any chat participant (owner or guest) — see sceneListHandler.
+		const chatAccess = await checkChatAccess(params.chatId, userId)
+		if (!chatAccess.hasAccess) {
 			throw new Error("Chat not found or access denied.")
 		}
 

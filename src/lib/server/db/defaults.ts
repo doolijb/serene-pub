@@ -66,29 +66,37 @@ export async function sync() {
 				name: "Default",
 				isImmutable: true,
 				template: `{{#systemBlock}}
-Instructions:
-"""
-{{#if currentDate}} 
+{{#if currentDate}}
 The current date in the story is {{{currentDate}}}.
 {{/if}}
 
+{{#if instructions}}
+Instructions:
+"""
 {{{instructions}}}
 """
+{{/if}}
 
+{{#if characters}}
 Assistant Characters (AI-controlled):
 \`\`\`json
 {{{characters}}}
 \`\`\`
+{{/if}}
 
+{{#if personas}}
 User Characters (player-controlled):
 \`\`\`json
 {{{personas}}}
 \`\`\`
+{{/if}}
 
+{{#if scenario}}
 Scenario:
 """
 {{{scenario}}}
 """
+{{/if}}
 
 {{#if worldLore}}
 World lore: 
@@ -464,17 +472,42 @@ Example dialogue:
 	}
 
 	try {
+		// KOBOLDCPP_BINARY_DIR / KOBOLDCPP_BINARY_NAME let a Docker deployment (or
+		// any deployment) point managed mode at a binary directory/file without
+		// using the in-app downloader — documented in DOCKER.md, but previously
+		// never actually read anywhere. Only seed when unset so an already-working
+		// setup (downloaded via the manager, or configured before this existed)
+		// is never silently overridden by a stray env var.
+		const envBinaryDir = process.env.KOBOLDCPP_BINARY_DIR
+		const envBinaryName = process.env.KOBOLDCPP_BINARY_NAME
+
 		const kcppRes = await db.query.koboldCppSettings.findFirst({ where: (s, { eq }) => eq(s.id, 1) })
 		if (!kcppRes) {
 			await db.insert(schema.koboldCppSettings).values({
 				id: 1,
-				koboldCppManagerModelsDir: path.join(getAppDataDir(), "models", "llm")
+				koboldCppManagerModelsDir: path.join(getAppDataDir(), "models", "llm"),
+				...(envBinaryDir ? { koboldCppManagedBinaryDir: envBinaryDir } : {}),
+				...(envBinaryDir && envBinaryName
+					? { koboldCppManagedBinaryVariant: envBinaryName }
+					: {})
 			})
-		} else if (!kcppRes.koboldCppManagerModelsDir) {
-			await db
-				.update(schema.koboldCppSettings)
-				.set({ koboldCppManagerModelsDir: path.join(getAppDataDir(), "models", "llm") })
-				.where(eq(schema.koboldCppSettings.id, 1))
+		} else {
+			const patch: Partial<typeof kcppRes> = {}
+			if (!kcppRes.koboldCppManagerModelsDir) {
+				patch.koboldCppManagerModelsDir = path.join(getAppDataDir(), "models", "llm")
+			}
+			if (!kcppRes.koboldCppManagedBinaryDir && envBinaryDir) {
+				patch.koboldCppManagedBinaryDir = envBinaryDir
+			}
+			if (!kcppRes.koboldCppManagedBinaryVariant && envBinaryDir && envBinaryName) {
+				patch.koboldCppManagedBinaryVariant = envBinaryName
+			}
+			if (Object.keys(patch).length > 0) {
+				await db
+					.update(schema.koboldCppSettings)
+					.set(patch)
+					.where(eq(schema.koboldCppSettings.id, 1))
+			}
 		}
 	} catch (error) {
 		console.error("Error syncing koboldcpp settings:", error)

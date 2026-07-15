@@ -17,6 +17,7 @@
 	let { onclose = $bindable() }: Props = $props()
 
 	let chats: Sockets.Chats.List.Response["chatList"] = $state([])
+	let isLoading = $state(true)
 	let search = $state("")
 	let showEditChatForm = $state(false)
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
@@ -37,6 +38,13 @@
 
 	socket.on("chats:list", (msg: Sockets.Chats.List.Response) => {
 		chats = msg.chatList || []
+		isLoading = false
+	})
+	// The generic **:error listener in Layout.svelte already toasts this —
+	// this just stops the spinner from spinning forever if the initial
+	// fetch fails, so it settles into the (accurate enough) empty state.
+	socket.on("chats:list:error", () => {
+		isLoading = false
 	})
 
 	async function handleOnClose() {
@@ -329,7 +337,11 @@
 			</button>
 		{/if}
 		<div class="flex-1 overflow-y-auto">
-			{#if filteredChats.length === 0}
+			{#if isLoading}
+				<div class="flex items-center justify-center py-8">
+					<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+				</div>
+			{:else if filteredChats.length === 0}
 				<div class="text-muted">No chats found.</div>
 			{:else}
 				<ul class="flex flex-col gap-2">

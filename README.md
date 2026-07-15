@@ -176,7 +176,7 @@ docker run -p 3000:3000 -p 3001:3001 \
   ghcr.io/doolijb/serene-pub:latest
 ```
 
-See [DOCKER.md](DOCKER.md) for full documentation — ports, volumes, reverse proxy setup, Ollama/KoboldCPP integration, and more.
+See [DOCKER.md](DOCKER.md) for full documentation — ports, volumes, reverse proxy setup, Ollama/KoboldCPP integration, and more. For a full environment variable reference and reverse-proxy/tunnel setups (Docker or not), see [HOSTING.md](HOSTING.md).
 
 **Need help?** Check out our **[Setup Guide](https://github.com/doolijb/serene-pub/wiki/Installation-&-Setup)** in the wiki.
 

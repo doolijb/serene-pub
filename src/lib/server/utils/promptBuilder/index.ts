@@ -1,4 +1,4 @@
-import { PromptBlockFormatter } from "../PromptBlockFormatter"
+import { registerContextHandlebarsHelpers } from "$lib/shared/utils/contextHandlebarsHelpers"
 import Handlebars from "handlebars"
 import type { TokenCounters } from "../TokenCounterManager"
 import type { BasePromptChat } from "../../connectionAdapters/BaseConnectionAdapter"
@@ -90,71 +90,11 @@ export class PromptBuilder {
 	}: {
 		useChatFormat?: boolean
 	}) {
-		const handlebars = this.handlebars
-
-		// Common helpers
-		if (!handlebars.helpers.eq)
-			handlebars.registerHelper("eq", (a, b) => a === b)
-		if (!handlebars.helpers.ne)
-			handlebars.registerHelper("ne", (a, b) => a !== b)
-		if (!handlebars.helpers.and)
-			handlebars.registerHelper("and", (a, b) => a && b)
-		if (!handlebars.helpers.or)
-			handlebars.registerHelper("or", (a, b) => a || b)
-
-		// Precompute prompt format ONCE for this registration
-		const precomputedPromptFormat = useChatFormat
+		const promptFormat = useChatFormat
 			? PromptFormats.SPLIT_CHAT
 			: this.connection?.promptFormat || PromptFormats.VICUNA
 
-		const getPromptFormat = () => precomputedPromptFormat
-
-		if (!handlebars.helpers.systemBlock) {
-			handlebars.registerHelper(
-				"systemBlock",
-				function (this: any, options: any) {
-					const promptFormat = getPromptFormat()
-					return PromptBlockFormatter.makeBlock({
-						format: promptFormat,
-						role: "system",
-						content: options.fn(this)
-					})
-				}
-			)
-		}
-		if (!handlebars.helpers.assistantBlock) {
-			handlebars.registerHelper(
-				"assistantBlock",
-				function (this: any, options: any) {
-					const promptFormat = getPromptFormat()
-					// If available, check for id property in the context
-					// Handlebars context for each message should have id
-					const messageId =
-						this.id !== undefined
-							? this.id
-							: options.data && options.data.id
-					return PromptBlockFormatter.makeBlock({
-						format: promptFormat,
-						role: "assistant",
-						content: options.fn(this),
-						includeClose: messageId !== -2
-					})
-				}
-			)
-		}
-		if (!handlebars.helpers.userBlock) {
-			handlebars.registerHelper(
-				"userBlock",
-				function (this: any, options: any) {
-					const promptFormat = getPromptFormat()
-					return PromptBlockFormatter.makeBlock({
-						format: promptFormat,
-						role: "user",
-						content: options.fn(this)
-					})
-				}
-			)
-		}
+		registerContextHandlebarsHelpers(this.handlebars, { promptFormat })
 	}
 
 	// --- Context builders ---

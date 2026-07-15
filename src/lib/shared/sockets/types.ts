@@ -384,6 +384,25 @@ declare global {
 					chatList: (Partial<SelectChat> & { canEdit: boolean })[]
 				}
 			}
+			/** Client → server: "my persona is actively typing in this chat" ping */
+			namespace Typing {
+				interface Params {
+					chatId: number
+					personaId: number
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+			/** Server → client: broadcast of another participant's typing ping */
+			namespace UserTyping {
+				interface Params {}
+				interface Response {
+					chatId: number
+					personaId: number
+					personaName: string
+				}
+			}
 			namespace Get {
 				interface Params {
 					id: number
@@ -835,6 +854,10 @@ declare global {
 			namespace Cancel {
 				interface Params {
 					chatId: number
+					/** The specific message the Stop button was clicked on. Optional
+					 * for backwards compatibility — omitting it falls back to
+					 * cancelling every generating message in the chat. */
+					id?: number
 				}
 				interface Response {
 					success?: string
@@ -1186,6 +1209,15 @@ declare global {
 				}
 				interface Response {
 					user: SelectUser
+				}
+			}
+			namespace Preview {
+				interface Params {
+					template: string
+				}
+				interface Response {
+					messages?: { role: string; content: string }[]
+					error?: string
 				}
 			}
 		}
@@ -1661,6 +1693,21 @@ declare global {
 					totalGens: number
 				}
 			}
+			namespace GetLoadedConfig {
+				interface Params {}
+				interface Response {
+					// null if nothing loaded, or this process doesn't know (e.g. right
+					// after a restart — koboldcpp doesn't expose these for querying).
+					config: {
+						model: string
+						contextSize: number
+						gpuLayers: number
+						flashAttention: boolean
+						batchSize: number
+						rawConfigJson: string
+					} | null
+				}
+			}
 			namespace SearchModels {
 				interface Params {
 					searchTerm: string
@@ -1764,9 +1811,11 @@ declare global {
 			namespace SetManagedBinaryDir {
 				interface Params {
 					dir: string
+					variant?: string
 				}
 				interface Response {
 					success: boolean
+					error?: string
 				}
 			}
 			namespace SetModelTtl {
@@ -2547,6 +2596,20 @@ declare global {
 					completed: number
 					priorityQueue: PriorityGroup[]
 					history: CompletedGroup[]
+				}
+			}
+
+			/** Server → client: one specific item finished (re)embedding — lets
+			 * list/detail UIs update their "vectorized/stale" badge without
+			 * waiting for the next explicit CRUD action or a manual refresh. */
+			namespace ItemUpdated {
+				interface Params {}
+				interface Response {
+					type: string
+					id: number
+					lorebookId?: number
+					embeddingModel: string
+					vectorizedAt: string
 				}
 			}
 

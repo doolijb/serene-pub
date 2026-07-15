@@ -558,6 +558,20 @@
 			toaster.error({ title: "Scene processing failed", description: msg.error })
 		})
 
+		// The background vectorization queue updates a row's embeddingModel
+		// directly in the DB — without this, the badge here only ever refreshes
+		// on the next explicit CRUD action, leaving it stale until a manual refresh.
+		socket.on(
+			"vectorization:itemUpdated",
+			(msg: Sockets.Vectorization.ItemUpdated.Response) => {
+				if (msg.type !== "historyEntry" || msg.lorebookId !== lorebookId) return
+				const target = historyEntryList.find((e: any) => e.id === msg.id)
+				if (target) (target as any).embeddingModel = msg.embeddingModel
+				if (focusedEntry?.id === msg.id)
+					(focusedEntry as any).embeddingModel = msg.embeddingModel
+			}
+		)
+
 		socket.emit("historyEntries:list", { lorebookId } satisfies Sockets.HistoryEntries.List.Params)
 		socket.emit("lorebooks:bindingList", { lorebookId } satisfies Sockets.Lorebooks.BindingList.Params)
 		fetchScenes()
@@ -577,6 +591,7 @@
 		socket.off("scenes:delete")
 		socket.off("scenes:create")
 		socket.off("scenes:process:error")
+		socket.off("vectorization:itemUpdated")
 	})
 </script>
 

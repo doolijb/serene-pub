@@ -28,6 +28,7 @@
 	)
 
 	let characterList: any[] = $state([])
+	let isLoading = $state(true)
 	let search = $state("")
 	let characterId: number | undefined = $state()
 	let viewingId: number | undefined = $state()
@@ -62,6 +63,16 @@
 				characterId = panelsCtx.digest.characterId
 			}
 			delete panelsCtx.digest.characterId
+		}
+	})
+
+	// Same as above, but opens the read-only detail view instead of the edit
+	// form — used when arriving from a context that just wants to look up a
+	// character (eg. clicking a name in a chat), not edit it.
+	$effect(() => {
+		if (panelsCtx.digest.viewCharacterId) {
+			viewingId = panelsCtx.digest.viewCharacterId
+			delete panelsCtx.digest.viewCharacterId
 		}
 	})
 
@@ -239,6 +250,13 @@
 	onMount(() => {
 		socket.on("characters:list", (msg) => {
 			characterList = msg.characterList
+			isLoading = false
+		})
+		// The generic **:error listener in Layout.svelte already toasts this —
+		// this just stops the spinner from spinning forever if the initial
+		// fetch fails, so it settles into the (accurate enough) empty state.
+		socket.on("characters:list:error", () => {
+			isLoading = false
 		})
 		socket.on("characters:importCard", (msg) => {
 			importingLorebook = msg.book || null
@@ -257,12 +275,26 @@
 				description: `Lorebook imported successfully.`
 			})
 		})
+		// The background vectorization queue updates a row's embeddingModel
+		// directly in the DB — without this, the list here only ever refreshes
+		// on the next explicit characters:list, leaving the embedding-status
+		// badge showing stale info until a manual refresh.
+		socket.on(
+			"vectorization:itemUpdated",
+			(msg: Sockets.Vectorization.ItemUpdated.Response) => {
+				if (msg.type !== "character") return
+				const target = characterList.find((c: any) => c.id === msg.id)
+				if (target) (target as any).embeddingModel = msg.embeddingModel
+			}
+		)
 		socket.emit("characters:list", {})
 		onclose = handleOnClose
 	})
 
 	onDestroy(() => {
 		socket.off("characters:list")
+		socket.off("characters:list:error")
+		socket.off("vectorization:itemUpdated")
 		socket.off("characters:importCard")
 		socket.off("lorebooks:import")
 		onclose = undefined
@@ -352,7 +384,11 @@
 			role="list"
 			aria-label="Characters list"
 		>
-			{#if filteredCharacters.length === 0}
+			{#if isLoading}
+				<div class="flex items-center justify-center py-8">
+					<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+				</div>
+			{:else if filteredCharacters.length === 0}
 				<div
 					class="text-muted-foreground relative w-100 py-8 text-center"
 					role="status"

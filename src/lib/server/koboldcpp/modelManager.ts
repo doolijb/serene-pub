@@ -32,8 +32,23 @@ interface LoadedSignature {
 	gpuLayers: number
 	flashAttention: boolean
 	batchSize: number
+	// The exact .kcpps file content sent to koboldcpp's admin API — kept
+	// verbatim (not re-derived from the fields above) so what's shown to the
+	// user is guaranteed to match what was actually sent, including any
+	// fields added here in the future that the summary fields don't surface.
+	rawConfigJson: string
 }
 let loadedSignature: LoadedSignature | null = null
+
+/**
+ * What this process last loaded via ensureModelLoaded(), if anything — the
+ * only source of truth for gpuLayers/flashAttention/batchSize/contextSize,
+ * since koboldcpp doesn't expose them for querying. Resets to null on server
+ * restart even if koboldcpp itself is still running with a model loaded.
+ */
+export function getLoadedSignature(): LoadedSignature | null {
+	return loadedSignature
+}
 
 // koboldcpp's /api/v1/model reports the loaded model without its file
 // extension (e.g. "koboldcpp/MN-12B-Lyra-v4-Q4_K_M"), while managedConfig
@@ -128,24 +143,22 @@ export async function ensureModelLoaded(opts: {
 		}
 	}
 
-	loadingPromise = (async () => {
-		const modelPath = modelsDir ? path.join(modelsDir, managedConfig.modelFile) : managedConfig.modelFile
+	const modelPath = modelsDir ? path.join(modelsDir, managedConfig.modelFile) : managedConfig.modelFile
+	// koboldcpp's admin reload_config only accepts .kcpps files that live inside
+	// its --admindir (validated against a jailed allowlist), referenced by a path
+	// relative to that directory — an absolute /tmp path is silently rejected.
+	const configFilename = `serene_${path.basename(managedConfig.modelFile, ".gguf")}.kcpps`
+	const configContent = {
+		model: [modelPath],
+		gpulayers: managedConfig.gpuLayers,
+		contextsize: contextSize ?? 4096,
+		flashattention: managedConfig.flashAttention,
+		batchsize: managedConfig.batchSize
+	}
+	const configJson = JSON.stringify(configContent, null, 2)
 
-		// koboldcpp's admin reload_config only accepts .kcpps files that live inside
-		// its --admindir (validated against a jailed allowlist), referenced by a path
-		// relative to that directory — an absolute /tmp path is silently rejected.
-		const configFilename = `serene_${path.basename(managedConfig.modelFile, ".gguf")}.kcpps`
-		const configContent = {
-			model: [modelPath],
-			gpulayers: managedConfig.gpuLayers,
-			contextsize: contextSize ?? 4096,
-			flashattention: managedConfig.flashAttention,
-			batchsize: managedConfig.batchSize
-		}
-		await fsPromises.writeFile(
-			path.join(adminDir, configFilename),
-			JSON.stringify(configContent, null, 2)
-		)
+	loadingPromise = (async () => {
+		await fsPromises.writeFile(path.join(adminDir, configFilename), configJson)
 
 		const timeoutSignal = AbortSignal.timeout(600_000)
 		const resp = await fetch(`${baseUrl}/api/admin/reload_config`, {
@@ -181,7 +194,8 @@ export async function ensureModelLoaded(opts: {
 		contextSize: contextSize ?? 4096,
 		gpuLayers: managedConfig.gpuLayers,
 		flashAttention: managedConfig.flashAttention,
-		batchSize: managedConfig.batchSize
+		batchSize: managedConfig.batchSize,
+		rawConfigJson: configJson
 	}
 	resetTtl(connectionId, baseUrl, adminPassword, ttlSecs)
 }

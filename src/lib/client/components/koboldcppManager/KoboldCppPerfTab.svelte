@@ -2,6 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { onMount, onDestroy, getContext } from "svelte"
 	import * as skio from "sveltekit-io"
+	import { Modal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	interface Props {
@@ -11,6 +12,7 @@
 
 	const socket = skio.get()
 	const koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
+	let showFullConfigModal = $state(false)
 
 	// --- Perf ---
 	let perf = $state<Sockets.KoboldCpp.Perf.Response | null>(null)
@@ -25,6 +27,7 @@
 	let unloading = $state(false)
 	let starting = $state(false)
 	let stopping = $state(false)
+	let loadedConfig = $state<Sockets.KoboldCpp.GetLoadedConfig.Response["config"]>(null)
 
 	const statusColors: Record<string, string> = {
 		running: "bg-success-500",
@@ -91,6 +94,7 @@
 			currentModel = null
 			currentContext = null
 		}
+		socket.emit("koboldcpp:getLoadedConfig", {})
 	}
 
 	onMount(() => {
@@ -106,6 +110,9 @@
 		if (isManaged) {
 			socket.emit("koboldcpp:getSubprocessStatus", {})
 
+			socket.on("koboldcpp:getLoadedConfig", (msg: Sockets.KoboldCpp.GetLoadedConfig.Response) => {
+				loadedConfig = msg.config
+			})
 			socket.on("koboldcpp:subprocessStatus", (msg: Status) => {
 				subStatus = msg
 				starting = false
@@ -135,6 +142,7 @@
 				if (msg.success) {
 					currentModel = null
 					currentContext = null
+					loadedConfig = null
 					toaster.success({ title: "Model unloaded" })
 				} else {
 					toaster.error({ title: "Unload not supported by this build" })
@@ -149,6 +157,7 @@
 		socket.off("koboldcpp:perf")
 		socket.off("koboldcpp:perf:error")
 		if (isManaged) {
+			socket.off("koboldcpp:getLoadedConfig")
 			socket.off("koboldcpp:subprocessStatus")
 			socket.off("koboldcpp:getSubprocessStatus")
 			socket.off("koboldcpp:startSubprocess")
@@ -172,7 +181,7 @@
 					{/if}
 				</div>
 				<div class="flex gap-1.5">
-					{#if subStatus?.status === "running" || subStatus?.status === "starting"}
+					{#if subStatus?.status === "running" || subStatus?.status === "starting" || subStatus?.status === "stopping"}
 						<button
 							class="btn btn-sm preset-tonal-error"
 							onclick={stopSubprocess}
@@ -218,7 +227,7 @@
 							disabled={unloading}
 							title="Unload model from memory"
 						>
-							{#if unloading}<Icons.Loader2 size={12} class="animate-spin" />{:else}<Icons.Eject size={12} />{/if}
+							{#if unloading}<Icons.Loader2 size={12} class="animate-spin" />{:else}<Icons.LogOut size={12} />{/if}
 							Unload
 						</button>
 					{/if}
@@ -230,6 +239,44 @@
 					</p>
 				{/if}
 			</div>
+
+			<!-- Loaded config -->
+			{#if currentModel}
+				<div>
+					<p class="text-surface-500 mb-1 text-xs font-semibold uppercase tracking-wide">Loaded config</p>
+					{#if loadedConfig}
+						<div class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+							<div class="flex justify-between gap-2">
+								<span class="text-surface-500">Context</span>
+								<span class="font-mono">{loadedConfig.contextSize.toLocaleString()}</span>
+							</div>
+							<div class="flex justify-between gap-2">
+								<span class="text-surface-500">GPU layers</span>
+								<span class="font-mono">{loadedConfig.gpuLayers === -1 ? "auto" : loadedConfig.gpuLayers}</span>
+							</div>
+							<div class="flex justify-between gap-2">
+								<span class="text-surface-500">Batch size</span>
+								<span class="font-mono">{loadedConfig.batchSize}</span>
+							</div>
+							<div class="flex justify-between gap-2">
+								<span class="text-surface-500">Flash attn</span>
+								<span class="font-mono">{loadedConfig.flashAttention ? "on" : "off"}</span>
+							</div>
+						</div>
+						<button
+							class="btn btn-sm preset-tonal-primary mt-2 text-xs"
+							onclick={() => (showFullConfigModal = true)}
+						>
+							<Icons.FileText size={12} />
+							View Full Config
+						</button>
+					{:else}
+						<p class="text-surface-500 text-xs italic">
+							Unknown — the server restarted since this model was loaded. Reload it to see its config here.
+						</p>
+					{/if}
+				</div>
+			{/if}
 
 			<!-- Binary info -->
 			{#if koboldCppSettingsCtx.settings?.koboldCppManagedBinaryVariant}
@@ -332,3 +379,27 @@
 		</div>
 	{/if}
 </div>
+
+<!-- Full Config Modal -->
+<Modal
+	open={showFullConfigModal}
+	onOpenChange={(e) => (showFullConfigModal = e.open)}
+	contentBase="card bg-surface-100-900 p-6 space-y-4 shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col"
+	backdropClasses="backdrop-blur-sm"
+>
+	{#snippet content()}
+		<header class="flex items-center gap-3">
+			<Icons.FileText class="text-primary-500 h-5 w-5 shrink-0" />
+			<h2 class="text-lg font-bold">Loaded Config</h2>
+		</header>
+		<p class="text-surface-500 text-xs">
+			The exact .kcpps config sent to KoboldCPP when this model was loaded.
+		</p>
+		<pre class="bg-surface-200-800 min-h-0 flex-1 overflow-auto rounded-lg p-3 text-xs">{loadedConfig?.rawConfigJson ?? ""}</pre>
+		<footer class="flex justify-end">
+			<button class="btn preset-filled-surface-400-600" onclick={() => (showFullConfigModal = false)}>
+				Close
+			</button>
+		</footer>
+	{/snippet}
+</Modal>

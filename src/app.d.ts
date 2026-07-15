@@ -51,6 +51,10 @@ declare global {
 		digest: {
 			characterId?: number
 			personaId?: number
+			/** Open the character sidebar straight to its detail/view screen, not the edit form */
+			viewCharacterId?: number
+			/** Open the persona sidebar straight to its detail/view screen, not the edit form */
+			viewPersonaId?: number
 			chatId?: number
 			chatPersonaId?: number
 			chatCharacterId?: number
