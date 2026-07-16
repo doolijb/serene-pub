@@ -21,7 +21,7 @@
 	let userCtx: UserCtx = getContext("userCtx")
 	let messagesContainer: HTMLDivElement | null = $state(null)
 	let isSending = $state(false)
-	let openMobileMsgControls: number | undefined = $state(undefined)
+	let openMsgControlsMenu: number | undefined = $state(undefined)
 
 	// Scroll tracking for autoscroll
 	let lastSeenMessageId: number | null = $state(null)
@@ -764,7 +764,7 @@
 						onAvatarClick={noop}
 						onCancelEditMessage={noop}
 						onSaveEditMessage={noop}
-						bind:openMobileMsgControls
+						bind:openMsgControlsMenu
 						editChatMessage={undefined}
 						canRegenerateLastMessage={false}
 						isGuest={false}

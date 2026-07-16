@@ -34,11 +34,11 @@
 	let showQuantModal = $state(false)
 
 	function vramColor(gb: number): string {
-		if (gb <= 3) return "text-green-500"
-		if (gb <= 6) return "text-blue-500"
-		if (gb <= 10) return "text-yellow-500"
-		if (gb <= 16) return "text-orange-500"
-		return "text-red-500"
+		if (gb <= 3) return "text-success-500"
+		if (gb <= 6) return "text-primary-500"
+		if (gb <= 10) return "text-warning-500"
+		if (gb <= 16) return "text-warning-500"
+		return "text-error-500"
 	}
 
 	function vramTier(gb: number): string {
@@ -354,7 +354,7 @@
 						<div class="flex items-center gap-2">
 							<span class="font-mono text-sm font-medium">{opt.label}</span>
 							{#if opt.label.includes("Q4_K_M")}
-								<span class="rounded bg-orange-500 px-1.5 py-0.5 text-xs text-white">Recommended</span>
+								<span class="rounded bg-warning-500 px-1.5 py-0.5 text-xs text-white">Recommended</span>
 							{/if}
 							{#if opt.sizeBytes}
 								<span class="text-surface-500 text-xs">{(opt.sizeBytes / 1_073_741_824).toFixed(1)}GB</span>

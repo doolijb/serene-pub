@@ -82,7 +82,7 @@
 					bind:this={inputRef}
 					bind:value={name}
 					class="input w-full {validationErrors.name
-						? 'border-red-500'
+						? 'border-error-500'
 						: ''}"
 					type="text"
 					placeholder="Enter a name..."
@@ -108,7 +108,7 @@
 				{#if validationErrors.name}
 					<p
 						id="name-error"
-						class="mt-1 text-sm text-red-500"
+						class="mt-1 text-sm text-error-500"
 						role="alert"
 					>
 						{validationErrors.name}

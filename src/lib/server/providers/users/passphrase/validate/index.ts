@@ -1,6 +1,17 @@
 import { schema, db } from "$lib/server/db"
 import { encrypt } from "../encrypt"
 import { eq, and, isNull } from "drizzle-orm"
+import { timingSafeEqual } from "crypto"
+
+// Both hashes are hex-encoded PBKDF2 digests of equal length, so a plain
+// string comparison would still be constant-time in practice — but using
+// timingSafeEqual removes any doubt/dependency on that always holding.
+function hashesMatch(a: string, b: string): boolean {
+	const bufA = Buffer.from(a)
+	const bufB = Buffer.from(b)
+	if (bufA.length !== bufB.length) return false
+	return timingSafeEqual(bufA, bufB)
+}
 
 /**
  * Create a new passphrase for a user and store it in the database
@@ -34,5 +45,5 @@ export async function validate({
 	})
 
 	// Compare encrypted passphrase with hash from database
-	return hash === res.hash
+	return hashesMatch(hash, res.hash)
 }

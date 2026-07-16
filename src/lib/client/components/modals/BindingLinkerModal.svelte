@@ -76,7 +76,7 @@
 <Modal
 	{open}
 	{onOpenChange}
-	contentBase="card bg-surface-100-900 p-6 space-y-5 shadow-xl max-h-[95dvh] relative overflow-hidden w-[36em] max-w-95dvw"
+	contentBase="card bg-surface-100-900 p-6 space-y-5 shadow-xl max-h-[95dvh] relative overflow-hidden w-[min(95vw,576px)]"
 	backdropClasses="backdrop-blur-sm"
 >
 	{#snippet content()}

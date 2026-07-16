@@ -107,7 +107,7 @@
 			id="model"
 			bind:value={connection.model}
 			class="select bg-background border-muted w-full rounded border {validationErrors.model
-				? 'border-red-500'
+				? 'border-error-500'
 				: ''}"
 			aria-invalid={validationErrors.model ? "true" : "false"}
 			aria-describedby={validationErrors.model
@@ -126,7 +126,7 @@
 			{/each}
 		</select>
 		{#if validationErrors.model}
-			<p id="model-error" class="mt-1 text-sm text-red-500" role="alert">
+			<p id="model-error" class="mt-1 text-sm text-error-500" role="alert">
 				{validationErrors.model}
 			</p>
 		{/if}
@@ -228,7 +228,7 @@
 					placeholder="ws://localhost:1234"
 					required
 					class="input {validationErrors.baseUrl
-						? 'border-red-500'
+						? 'border-error-500'
 						: ''}"
 					aria-invalid={validationErrors.baseUrl ? "true" : "false"}
 					aria-describedby={validationErrors.baseUrl
@@ -244,7 +244,7 @@
 				{#if validationErrors.baseUrl}
 					<p
 						id="baseUrl-error"
-						class="mt-1 text-sm text-red-500"
+						class="mt-1 text-sm text-error-500"
 						role="alert"
 					>
 						{validationErrors.baseUrl}

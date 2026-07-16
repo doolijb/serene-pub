@@ -486,7 +486,7 @@
 					type="text"
 					bind:value={contextConfig.name}
 					class="input w-full {validationErrors.name
-						? 'border-red-500'
+						? 'border-error-500'
 						: ''}"
 					disabled={contextConfig.isImmutable}
 					oninput={() => {
@@ -497,7 +497,7 @@
 					}}
 				/>
 				{#if validationErrors.name}
-					<p class="mt-1 text-sm text-red-500" role="alert">
+					<p class="mt-1 text-sm text-error-500" role="alert">
 						{validationErrors.name}
 					</p>
 				{/if}

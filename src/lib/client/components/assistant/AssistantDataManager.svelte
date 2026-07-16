@@ -5,7 +5,6 @@
 	import { slide } from "svelte/transition"
 	import Avatar from "../Avatar.svelte"
 
-	console.log("[DataManager] Component loaded")
 
 	type EntityType = "characters" | "personas" | "chats" | "lorebooks"
 
@@ -48,11 +47,6 @@
 		onSelectionComplete
 	}: Props = $props()
 
-	console.log("[DataManager] Props:", {
-		chatId,
-		taggedEntities,
-		pendingSelection
-	})
 
 	const socket = useTypedSocket()
 
@@ -65,25 +59,10 @@
 
 	// Auto-expand when pending selection appears
 	$effect(() => {
-		console.log("[DataManager] === PENDING SELECTION EFFECT ===")
-		console.log("[DataManager] Pending selection:", pendingSelection)
-		console.log("[DataManager] Has results:", pendingSelection?.results)
-		console.log(
-			"[DataManager] Results length:",
-			pendingSelection?.results?.length
-		)
 
 		if (pendingSelection && pendingSelection.results.length > 0) {
-			console.log(
-				"[DataManager] ✅ Auto-expanding with",
-				pendingSelection.results.length,
-				"results"
-			)
 			isExpanded = true
 		} else {
-			console.log(
-				"[DataManager] ❌ Not expanding - no results or null pendingSelection"
-			)
 		}
 	})
 
@@ -133,9 +112,6 @@
 
 	// Get linked entities organized by type
 	const linkedEntities = $derived.by(() => {
-		console.log("[DataManager] Recomputing linkedEntities")
-		console.log("[DataManager] taggedEntities:", taggedEntities)
-		console.log("[DataManager] loadedCharacters:", loadedCharacters)
 
 		const entities: Record<EntityType, LinkedEntity[]> = {
 			characters: [],
@@ -150,7 +126,6 @@
 				if (type === "characters" && Array.isArray(ids)) {
 					entities.characters = ids.map((id) => {
 						const char = loadedCharacters.get(id)
-						console.log(`[DataManager] Character ${id}:`, char)
 						return {
 							id,
 							name:
@@ -172,7 +147,6 @@
 			}
 		}
 
-		console.log("[DataManager] Final linkedEntities:", entities)
 		return entities
 	})
 
@@ -182,7 +156,6 @@
 	)
 
 	$effect(() => {
-		console.log("[DataManager] Total linked entities:", totalLinked)
 	})
 
 	// Count pending selections
@@ -277,32 +250,22 @@
 	async function loadLinkedCharacters(characterIds: number[]) {
 		if (!socket || !characterIds.length) return
 
-		console.log("[DataManager] Loading linked characters:", characterIds)
 
 		// Check if we already have all the characters loaded
 		const allLoaded = characterIds.every((id) => loadedCharacters.has(id))
 		if (allLoaded) {
-			console.log("[DataManager] All characters already loaded")
 			return
 		}
 
 		try {
 			// Create a unique handler to avoid conflicts
 			const handleCharactersList = (response: any) => {
-				console.log(
-					"[DataManager] Received character list for linked data:",
-					response
-				)
 				if (response.characterList) {
 					// Filter to only the characters we need and store them
 					const relevantChars = response.characterList.filter(
 						(char: any) => characterIds.includes(char.id)
 					)
 
-					console.log(
-						"[DataManager] Filtered relevant characters:",
-						relevantChars
-					)
 
 					// Update the map with only id, name, nickname, avatar (lightweight)
 					const newMap = new Map(loadedCharacters)
@@ -317,10 +280,6 @@
 
 					// Force reactivity by creating new Map
 					loadedCharacters = newMap
-					console.log(
-						"[DataManager] Updated loadedCharacters map size:",
-						loadedCharacters.size
-					)
 				}
 				// Clean up listener
 				socket.off("characters:list", handleCharactersList)
@@ -330,7 +289,6 @@
 			socket.on("characters:list", handleCharactersList)
 
 			// Request all characters
-			console.log("[DataManager] Emitting characters:list request")
 			socket.emit("characters:list", {})
 		} catch (error) {
 			console.error(
@@ -553,7 +511,7 @@
 	onOpenChange={(e) => {
 		if (!e.open) closeAddDataModal()
 	}}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-h-[95dvh] relative overflow-hidden w-[50em] max-w-95dvw"
+	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-h-[95dvh] relative overflow-hidden w-[min(95vw,800px)]"
 	backdropClasses="backdrop-blur-sm"
 >
 	{#snippet content()}

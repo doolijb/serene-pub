@@ -10,6 +10,7 @@
 		CONNECTION_TYPE,
 		CONNECTION_TYPES
 	} from "$lib/shared/constants/ConnectionTypes"
+	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import LlamaCppForm from "$lib/client/connectionForms/LlamaCppForm.svelte"
 	import KoboldCppForm from "$lib/client/connectionForms/KoboldCppForm.svelte"
 	import KoboldCppManagedForm from "$lib/client/connectionForms/KoboldCppManagedForm.svelte"
@@ -465,14 +466,10 @@
 			<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
 		</div>
 	{:else if !connectionsList.length}
-		<div
-			class="text-muted-foreground py-8 text-center"
-			role="status"
-			aria-live="polite"
-		>
-			<p>No AI connections found.</p>
-			<p>Create a new connection to get started with AI conversations.</p>
-		</div>
+		<EmptyState
+			icon={Icons.Cable}
+			message="No AI connections yet — create one to get started with AI conversations."
+		/>
 	{/if}
 </div>
 

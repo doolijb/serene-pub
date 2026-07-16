@@ -169,7 +169,7 @@
 				bind:value={connection.baseUrl}
 				placeholder="http://localhost:8080/"
 				required
-				class="input {validationErrors.baseUrl ? 'border-red-500' : ''}"
+				class="input {validationErrors.baseUrl ? 'border-error-500' : ''}"
 				aria-invalid={validationErrors.baseUrl ? "true" : "false"}
 				aria-describedby={validationErrors.baseUrl
 					? "baseUrl-error"
@@ -184,7 +184,7 @@
 			{#if validationErrors.baseUrl}
 				<p
 					id="baseUrl-error"
-					class="mt-1 text-sm text-red-500"
+					class="mt-1 text-sm text-error-500"
 					role="alert"
 				>
 					{validationErrors.baseUrl}

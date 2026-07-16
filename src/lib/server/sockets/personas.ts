@@ -10,6 +10,7 @@ import {
 import type { Handler } from "$lib/shared/events"
 import { parseCharacterCardFromBase64 } from "../utils/characterCardParser"
 import { autoEnqueuePersona } from "$lib/server/embedding/vectorizationQueue"
+import { canViewPersona } from "$lib/server/utils/chatAccess"
 
 // Helper function to process tags for persona creation/update
 async function processPersonaTags(
@@ -130,24 +131,30 @@ export const personasGet: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const persona = await db.query.personas.findFirst({
-			where: (p, { and, eq }) =>
-				and(eq(p.id, params.id), eq(p.userId, userId), eq(p.isDeleted, false)),
+			where: (p, { and, eq }) => and(eq(p.id, params.id), eq(p.isDeleted, false)),
 			with: {
 				personaTags: {
 					with: {
 						tag: true
 					}
+				},
+				user: {
+					columns: { username: true, displayName: true }
 				}
 			}
 		})
-		if (persona) {
+
+		const isOwner = persona?.userId === userId
+		if (persona && (isOwner || (await canViewPersona(persona.id, userId)))) {
 			// Transform the persona data to include tags as string array
-			const personaWithTags = {
+			const personaWithTags: any = {
 				...persona,
-				tags: persona.personaTags.map((pt) => pt.tag.name)
+				tags: persona.personaTags.map((pt) => pt.tag.name),
+				isOwner,
+				ownerName: persona.user?.displayName || persona.user?.username || null
 			}
-			// @ts-ignore - Remove the junction table data
 			delete personaWithTags.personaTags
+			delete personaWithTags.user
 
 			const res: Sockets.Personas.Get.Response = {
 				persona: personaWithTags

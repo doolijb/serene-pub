@@ -95,7 +95,7 @@
 					draftCompiledPrompt!.meta.tokenCounts.limit
 			: false
 	)
-	let openMobileMsgControls: number | undefined = $state(undefined)
+	let openMsgControlsMenu: number | undefined = $state(undefined)
 	let showDraftCompiledPromptModal = $state(false)
 	let showTriggerCharacterMessageModal = $state(false)
 	let triggerCharacterSearch = $state("")
@@ -257,18 +257,32 @@
 			.filter((char) => char !== undefined) as SelectCharacter[]
 	})
 
-	// Check if current user can edit/control a specific message
+	// Check if current user can edit/control a specific message — mirrors
+	// checkMessageEditPermission server-side exactly:
+	// - Persona messages: only that persona's own owner, never the chat
+	//   owner (a persona is another participant's own self-representation).
+	// - Character messages: the chat owner, or whoever owns that character
+	//   (so a guest who brought their own character in can control it).
 	let canControlMessage = (msg: SelectChatMessage): boolean => {
-		if (!isGuest) return true // Chat owner can control all messages
 		if (!userCtx.user?.id) return false
 
-		// Guest can only control messages from their own personas
 		if (msg.personaId) {
 			return (
 				chat?.chatPersonas?.some(
 					(cp) =>
 						cp.personaId === msg.personaId &&
 						cp.persona?.userId === userCtx.user?.id
+				) ?? false
+			)
+		}
+
+		if (msg.characterId) {
+			if (!isGuest) return true
+			return (
+				chat?.chatCharacters?.some(
+					(cc) =>
+						cc.characterId === msg.characterId &&
+						cc.character?.userId === userCtx.user?.id
 				) ?? false
 			)
 		}
@@ -366,7 +380,7 @@
 	}
 
 	function handleEditMessageClick(message: SelectChatMessage) {
-		openMobileMsgControls = undefined
+		openMsgControlsMenu = undefined
 		editChatMessage = { ...message }
 	}
 
@@ -534,7 +548,7 @@
 	}
 	function handleAbortMessage(e: Event, msg: SelectChatMessage) {
 		e.stopPropagation()
-		openMobileMsgControls = undefined
+		openMsgControlsMenu = undefined
 		// Clear any pending auto-trigger timeout
 		if (autoTriggerTimeout) {
 			clearTimeout(autoTriggerTimeout)
@@ -544,7 +558,7 @@
 	}
 	// ── Summarization mode ────────────────────────────────────────
 	function enterSummarizationMode(msg: SelectChatMessage) {
-		openMobileMsgControls = undefined
+		openMsgControlsMenu = undefined
 		isSummarizationMode = true
 		selectedMessageIds = new Set([msg.id])
 	}
@@ -555,7 +569,7 @@
 	}
 
 	function enterSummarizationModeEmpty() {
-		openMobileMsgControls = undefined
+		openMsgControlsMenu = undefined
 		isSummarizationMode = true
 		selectedMessageIds = new Set()
 	}
@@ -635,7 +649,7 @@
 
 	function handleBranchMessage(e: Event, msg: SelectChatMessage) {
 		e.stopPropagation()
-		openMobileMsgControls = undefined
+		openMsgControlsMenu = undefined
 		branchFromMessage = msg
 		showBranchChatModal = true
 	}
@@ -645,7 +659,7 @@
 	}
 	function handleAbortLastMessage(e: Event) {
 		e.stopPropagation()
-		openMobileMsgControls = undefined
+		openMsgControlsMenu = undefined
 		// Clear any pending auto-trigger timeout
 		if (autoTriggerTimeout) {
 			clearTimeout(autoTriggerTimeout)
@@ -656,17 +670,17 @@
 	}
 	function handleTriggerContinueConversation(e: Event) {
 		e.stopPropagation()
-		openMobileMsgControls = undefined
+		openMsgControlsMenu = undefined
 		socket.emit("chats:triggerGenerateMessage", { chatId, triggered: true })
 	}
 	function handleTriggerCharacterMessage(e: Event) {
 		e.stopPropagation()
-		openMobileMsgControls = undefined
+		openMsgControlsMenu = undefined
 		showTriggerCharacterMessageModal = true
 	}
 	function handleRegenerateLastMessage(e: Event) {
 		e.stopPropagation()
-		openMobileMsgControls = undefined
+		openMsgControlsMenu = undefined
 		if (lastMessage && !lastMessage.isGenerating) {
 			socket.emit("chatMessages:regenerate", { id: lastMessage.id })
 		}
@@ -674,7 +688,7 @@
 
 	function onSelectTriggerCharacterMessage(characterId: number) {
 		showTriggerCharacterMessageModal = false
-		openMobileMsgControls = undefined
+		openMsgControlsMenu = undefined
 		socket.emit("chats:triggerGenerateMessage", {
 			chatId,
 			characterId,
@@ -784,7 +798,7 @@
 			res = false
 		} else if (msg.role === "user") {
 			return false
-		} else if (openMobileMsgControls === msg.id) {
+		} else if (openMsgControlsMenu === msg.id) {
 			res = true
 		} else if (isGreeting) {
 			res = (lastPersonaMessage?.id ?? 0) < msg.id
@@ -1191,7 +1205,7 @@
 				onAvatarClick={handleAvatarClick}
 				onCancelEditMessage={handleCancelEditMessage}
 				onSaveEditMessage={handleSaveEditMessage}
-				bind:openMobileMsgControls
+				bind:openMsgControlsMenu
 				{lastPersonaMessage}
 				isSummarizationMode={isSummarizationMode}
 				isSelected={selectedMessageIds.has(props.msg.id)}
@@ -1272,8 +1286,11 @@
 									showDraftCompiledPromptModal = true
 								  }
 								: undefined}
-						/>
-					{/if}
+								open={openMsgControlsMenu === msg.id}
+								onOpenChange={(isOpen) =>
+									(openMsgControlsMenu = isOpen ? msg.id : undefined)}
+							/>
+						{/if}
 				{/snippet}
 			</ChatMessage>
 		{/snippet}
@@ -1287,6 +1304,7 @@
 					<div class="flex gap-2">
 						<button
 							class="btn btn-sm preset-filled-surface-400-600"
+							title="Select All"
 							onclick={() => {
 								selectedMessageIds = new Set(
 									chat!.chatMessages
@@ -1296,47 +1314,52 @@
 							}}
 						>
 							<Icons.CheckSquare size={16} />
-							Select All
+							<span class="hidden sm:inline">Select All</span>
 						</button>
 						<button
 							class="btn btn-sm preset-filled-surface-400-600"
+							title="Select None"
 							onclick={() => (selectedMessageIds = new Set())}
 						>
 							<Icons.Square size={16} />
-							Select None
+							<span class="hidden sm:inline">Select None</span>
 						</button>
 					</div>
 					<div class="ml-auto flex flex-wrap gap-2">
 						<button
 							class="btn btn-sm preset-filled-surface-500"
+							title="Cancel"
 							onclick={exitSummarizationMode}
 						>
 							<Icons.X size={16} />
-							Cancel
+							<span class="hidden sm:inline">Cancel</span>
 						</button>
 						<button
 							class="btn btn-sm preset-filled-secondary-500"
+							title="Scene"
 							disabled={selectedMessageIds.size === 0}
 							onclick={() => openSummarizeModal('scene')}
 						>
 							<Icons.Film size={16} />
-							Scene
+							<span class="hidden sm:inline">Scene</span>
 						</button>
 						<button
 							class="btn btn-sm preset-filled-primary-500"
+							title="World Lore"
 							disabled={selectedMessageIds.size === 0}
 							onclick={() => openSummarizeModal('world')}
 						>
 							<Icons.Globe size={16} />
-							World Lore
+							<span class="hidden sm:inline">World Lore</span>
 						</button>
 						<button
 							class="btn btn-sm preset-filled-tertiary-500"
+							title="Character Lore"
 							disabled={selectedMessageIds.size === 0}
 							onclick={() => openSummarizeModal('character')}
 						>
 							<Icons.User size={16} />
-							Character Lore
+							<span class="hidden sm:inline">Character Lore</span>
 						</button>
 					</div>
 				</div>
@@ -1425,7 +1448,7 @@
 <Modal
 	open={showDeleteMessageModal}
 	onOpenChange={onOpenMessageDeleteChange}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm border border-surface-300-700"
+	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
 	backdropClasses="backdrop-blur-sm"
 >
 	{#snippet content()}
@@ -1822,7 +1845,7 @@
 <Modal
 	open={showTriggerCharacterMessageModal}
 	onOpenChange={(e) => (showTriggerCharacterMessageModal = e.open)}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-h-[95dvh] relative overflow-hidden w-[50em] max-w-95dvw"
+	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-h-[95dvh] relative overflow-hidden w-[min(95vw,800px)]"
 	backdropClasses="backdrop-blur-sm"
 >
 	{#snippet content()}

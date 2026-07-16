@@ -192,12 +192,26 @@ async function waitForReady(port: number, timeoutMs = 120_000): Promise<void> {
 	throw new Error("KoboldCPP did not become ready within 2 minutes")
 }
 
+// Loading a real model via the admin API (ensureModelLoaded's reload_config
+// call) can leave koboldcpp unresponsive to other requests for well over 30s
+// on a large GGUF/slow disk — long enough to miss a single health-check ping
+// while genuinely healthy. Require a few consecutive failures (~90s of total
+// unresponsiveness) before declaring it crashed, rather than acting on one
+// slow tick and orphaning a process that's still fine.
+const HEALTH_CHECK_FAILURE_THRESHOLD = 3
+let healthCheckFailures = 0
+
 function startHealthCheck(port: number) {
 	stopHealthCheck()
 	healthInterval = setInterval(async () => {
 		if (state.status !== "running") return
 		const ok = await pingKoboldCpp(`http://localhost:${port}`, 5000)
-		if (!ok && state.status === "running") {
+		if (ok) {
+			healthCheckFailures = 0
+			return
+		}
+		healthCheckFailures++
+		if (healthCheckFailures >= HEALTH_CHECK_FAILURE_THRESHOLD && state.status === "running") {
 			clearIdleTimer()
 			state.status = "crashed"
 			state.lastError = "Health check failed — process may have crashed"
@@ -209,6 +223,7 @@ function startHealthCheck(port: number) {
 }
 
 function stopHealthCheck() {
+	healthCheckFailures = 0
 	if (healthInterval) {
 		clearInterval(healthInterval)
 		healthInterval = null

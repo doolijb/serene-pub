@@ -112,7 +112,7 @@
 				{#if entry.isDone && entry.status === "success"}
 					<Icons.Check size={16} class="text-success-500" />
 				{:else if entry.isDone && entry.status === "cancelled"}
-					<Icons.X size={16} class="text-orange-500" />
+					<Icons.X size={16} class="text-warning-500" />
 				{:else if entry.isDone && entry.status === "error"}
 					<Icons.AlertTriangle size={16} class="text-error-500" />
 				{:else}
@@ -152,7 +152,7 @@
 				{:else}
 					<div class="border-surface-300-700 border-t pt-2">
 						<div class="flex items-center gap-2">
-							<div class="h-2 w-2 rounded-full {entry.status === 'success' ? 'bg-success-500' : entry.status === 'cancelled' ? 'bg-orange-500' : 'bg-error-500'}"></div>
+							<div class="h-2 w-2 rounded-full {entry.status === 'success' ? 'bg-success-500' : entry.status === 'cancelled' ? 'bg-warning-500' : 'bg-error-500'}"></div>
 							<span class="text-muted-foreground text-xs capitalize font-medium">{entry.status}</span>
 						</div>
 					</div>

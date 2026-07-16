@@ -9,6 +9,7 @@
 	import PersonaListItem from "../listItems/PersonaListItem.svelte"
 	import ChatListItem from "../listItems/ChatListItem.svelte"
 	import LorebookListItem from "../listItems/LorebookListItem.svelte"
+	import EmptyState from "../EmptyState.svelte"
 	import { goto } from "$app/navigation"
 
 	interface Props {
@@ -575,7 +576,7 @@
 						name="tagName"
 						type="text"
 						class="input w-full {validationErrors.name
-							? 'border-red-500'
+							? 'border-error-500'
 							: ''}"
 						bind:value={newTagName}
 						placeholder="Enter tag name"
@@ -593,7 +594,7 @@
 					{#if validationErrors.name}
 						<p
 							id="name-error"
-							class="mt-1 text-sm text-red-500"
+							class="mt-1 text-sm text-error-500"
 							role="alert"
 						>
 							{validationErrors.name}
@@ -676,7 +677,7 @@
 						name="editTagName"
 						type="text"
 						class="input w-full {editValidationErrors.name
-							? 'border-red-500'
+							? 'border-error-500'
 							: ''}"
 						bind:value={editTagName}
 						placeholder="Enter tag name"
@@ -696,7 +697,7 @@
 					{#if editValidationErrors.name}
 						<p
 							id="edit-name-error"
-							class="mt-1 text-sm text-red-500"
+							class="mt-1 text-sm text-error-500"
 							role="alert"
 						>
 							{editValidationErrors.name}
@@ -775,9 +776,14 @@
 				<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
 			</div>
 		{:else if filteredTags.length === 0}
-			<div class="text-muted-foreground relative w-100 py-8 text-center">
-				No tags found.
-			</div>
+			<EmptyState
+				icon={Icons.Tag}
+				message={search
+					? `No tags found matching "${search}".`
+					: "No tags yet — create one to get started."}
+				ctaLabel={search ? undefined : "New Tag"}
+				onCta={search ? undefined : () => (isCreating = true)}
+			/>
 		{:else}
 			<!-- Beautiful multi-row flex layout using Skeleton chips -->
 			<div class="flex flex-wrap gap-2">
@@ -802,7 +808,7 @@
 	<Modal
 		open={showDeleteModal}
 		onOpenChange={(e) => (showDeleteModal = e.open)}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm"
+		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw]"
 		backdropClasses="backdrop-blur-sm"
 	>
 		{#snippet content()}

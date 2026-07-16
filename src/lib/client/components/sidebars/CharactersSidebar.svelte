@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { getContext, onDestroy, onMount } from "svelte"
+	import { flip } from "svelte/animate"
+	import { fade } from "svelte/transition"
 	import { FileUpload, Modal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import CharacterForm from "../characterForms/CharacterForm.svelte"
@@ -11,6 +13,7 @@
 	import type { SpecV3 } from "@lenml/char-card-reader"
 	import CharacterListItem from "../listItems/CharacterListItem.svelte"
 	import CharacterViewPanel from "../characterForms/CharacterViewPanel.svelte"
+	import EmptyState from "../EmptyState.svelte"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -205,7 +208,6 @@
 	}
 
 	async function handleFileImport(details: FileAcceptDetails) {
-		console.log("File import details:", details)
 		if (!details.files || details.files.length === 0) return
 		const file = details.files[0]
 		const reader = new FileReader()
@@ -356,7 +358,7 @@
 				New
 			</button>
 			<button
-				class="btn btn-sm preset-filled-primary-500"
+				class="btn btn-sm preset-tonal-primary"
 				title="Import Character"
 				onclick={handleImportClick}
 				aria-label="Import character from file"
@@ -389,24 +391,25 @@
 					<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
 				</div>
 			{:else if filteredCharacters.length === 0}
-				<div
-					class="text-muted-foreground relative w-100 py-8 text-center"
-					role="status"
-					aria-live="polite"
-				>
-					{search
+				<EmptyState
+					icon={Icons.Users}
+					message={search
 						? `No characters found matching "${search}".`
-						: "No characters found."}
-				</div>
+						: "No characters yet — create one to get started."}
+					ctaLabel={search ? undefined : "New Character"}
+					onCta={search ? undefined : () => (isCreating = true)}
+				/>
 			{:else}
-				{#each filteredCharacters as c}
-					<CharacterListItem
-						character={c}
-						onclick={handleCharacterClick}
-						onEdit={handleEditClick}
-						onDelete={handleDeleteClick}
-						contentTitle="Go to character chats"
-					/>
+				{#each filteredCharacters as c (c.id)}
+					<div animate:flip={{ duration: 200 }} out:fade={{ duration: 150 }}>
+						<CharacterListItem
+							character={c}
+							onclick={handleCharacterClick}
+							onEdit={handleEditClick}
+							onDelete={handleDeleteClick}
+							contentTitle="Go to character chats"
+						/>
+					</div>
 				{/each}
 			{/if}
 		</div>
@@ -417,7 +420,7 @@
 	<Modal
 		open={showDeleteModal}
 		onOpenChange={(e) => (showDeleteModal = e.open)}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm border border-surface-300-700"
+		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
 		backdropClasses="backdrop-blur-sm"
 		role="alertdialog"
 		aria-labelledby="delete-modal-title"
@@ -463,7 +466,7 @@
 	<Modal
 		open={showImportModal}
 		onOpenChange={(e) => (showImportModal = e.open)}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm w-[35rem]"
+		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl w-[min(95vw,560px)]"
 		backdropClasses="backdrop-blur-sm"
 	>
 		{#snippet content()}
@@ -519,7 +522,7 @@
 			importingLorebook = null
 			importingLorebookCharacter = null
 		}}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm border border-surface-300-700"
+		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
 		backdropClasses="backdrop-blur-sm"
 	>
 		{#snippet content()}

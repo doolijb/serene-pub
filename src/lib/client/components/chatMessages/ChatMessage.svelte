@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { Popover } from "@skeletonlabs/skeleton-svelte"
 	import type { Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import Avatar from "$lib/client/components/Avatar.svelte"
@@ -42,7 +41,10 @@
 		) => void
 		onCancelEditMessage: () => void
 		onSaveEditMessage: () => void
-		openMobileMsgControls: number | undefined
+		// Tracks which message's "more actions" popover is open, so only one
+		// is ever open at a time in a message list. No longer mobile-only —
+		// the popover now replaces the always-visible desktop toolbar too.
+		openMsgControlsMenu: number | undefined
 		// Edit state
 		editChatMessage: SelectChatMessage | undefined
 		canRegenerateLastMessage: boolean
@@ -83,7 +85,7 @@
 		onAvatarClick,
 		onCancelEditMessage,
 		onSaveEditMessage,
-		openMobileMsgControls = $bindable(),
+		openMsgControlsMenu = $bindable(),
 		editChatMessage,
 		canRegenerateLastMessage,
 		hasGeneratingMessage,
@@ -154,7 +156,10 @@
 					onclick={() => onAvatarClick(character)}
 					title="View Avatar"
 				>
-					<Avatar char={character || undefined} />
+					<Avatar
+						char={character || undefined}
+						size="w-12 h-12 lg:w-[4em] lg:h-[4em]"
+					/>
 				</button>
 			</span>
 			<div class="flex flex-col">
@@ -204,7 +209,7 @@
 			</div>
 		{:else}
 			<div class="flex w-full flex-col gap-2">
-				<div class="ml-auto hidden gap-2 lg:flex">
+				<div class="ml-auto flex flex-wrap justify-end gap-2">
 					{#if messageControls}
 						{@render messageControls(msg)}
 					{:else}
@@ -214,6 +219,7 @@
 							{canRegenerateLastMessage}
 							{editChatMessage}
 							{hasGeneratingMessage}
+							{canControl}
 							{onEditMessage}
 							{onHideMessage}
 							{onDeleteMessage}
@@ -222,60 +228,11 @@
 							{onAbortMessage}
 							{onBranchMessage}
 							{onStartSummarization}
+							open={openMsgControlsMenu === msg.id}
+							onOpenChange={(isOpen) =>
+								(openMsgControlsMenu = isOpen ? msg.id : undefined)}
 						/>
 					{/if}
-				</div>
-				<div class="ml-auto lg:hidden">
-					<Popover
-						open={openMobileMsgControls === msg.id}
-						onOpenChange={(e) =>
-							(openMobileMsgControls = e.open
-								? msg.id
-								: undefined)}
-						positioning={{
-							placement: "bottom"
-						}}
-						triggerBase="btn btn-sm hover:bg-primary-600-400 {openMobileMsgControls ===
-						msg.id
-							? 'bg-primary-600-400'
-							: ''}"
-						contentBase="card bg-primary-200-800 p-4 space-y-4 w-[min(90vw,320px)]"
-						arrow
-						arrowBackground="!bg-primary-200 dark:!bg-primary-800"
-						triggerAriaLabel="Message options"
-						zIndex="1000"
-					>
-						{#snippet trigger()}
-							<Icons.EllipsisVertical size={20} />
-						{/snippet}
-						{#snippet content()}
-							<header class="flex justify-between">
-								<p class="text-xl font-bold">Message Options</p>
-							</header>
-							<article class="flex flex-col gap-2">
-								{#if messageControls}
-									{@render messageControls(msg)}
-								{:else}
-									<MessageControls
-										{msg}
-										{isLastMessage}
-										{canRegenerateLastMessage}
-										{editChatMessage}
-										{hasGeneratingMessage}
-										{onEditMessage}
-										{onHideMessage}
-										{onDeleteMessage}
-										{onRegenerateMessage}
-										{onContinueMessage}
-										{onAbortMessage}
-										{onBranchMessage}
-										{onStartSummarization}
-										onclose={() => (openMobileMsgControls = undefined)}
-									/>
-								{/if}
-							</article>
-						{/snippet}
-					</Popover>
 				</div>
 				{#if showSwipes}
 					<div class="ml-auto flex gap-6">
@@ -287,7 +244,8 @@
 								disabled={!!editChatMessage ||
 									!msg.metadata.swipes.currentIdx ||
 									msg.metadata.swipes.history.length <= 1 ||
-									msg.isGenerating}
+									msg.isGenerating ||
+									!canControl}
 							>
 								<Icons.ChevronLeft size={24} />
 							</button>
@@ -302,7 +260,7 @@
 							class="btn btn-sm msg-cntrl-icon hover:preset-filled-success-500"
 							title="Swipe Right"
 							onclick={() => onSwipeRight(msg)}
-							disabled={!!editChatMessage || !canSwipeRightVal}
+							disabled={!!editChatMessage || !canSwipeRightVal || !canControl}
 						>
 							<Icons.ChevronRight size={24} />
 						</button>
@@ -541,6 +499,10 @@
 	}
 
 	.msg-cntrl-icon {
-		@apply h-min w-min px-2 text-[1em] disabled:opacity-25;
+		/* Bigger tap area on mobile (swipe/edit-save-cancel buttons aren't
+		   moved into the lg:hidden popover like the rest of the message
+		   controls, so they need to be comfortably tappable on their own) —
+		   shrinks back down at lg: to match the compact desktop hover style. */
+		@apply h-min w-min px-3 py-2 text-[1em] disabled:opacity-25 lg:px-2 lg:py-0;
 	}
 </style>

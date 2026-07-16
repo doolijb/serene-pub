@@ -175,7 +175,7 @@
 			</button>
 		</div>
 	{:else}
-		<div class="grid grid-cols-3 gap-2">
+		<div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
 			{#each visibleImages as imgPath}
 				<div
 					class="group relative h-24 overflow-hidden rounded-lg border-2 transition-all

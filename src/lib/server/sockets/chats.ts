@@ -90,9 +90,14 @@ async function checkPersonasOwnership(
 }
 
 /**
- * Check if user can edit a chat message
- * - Chat owners can edit any message
- * - Character/persona owners can edit messages from their characters/personas
+ * Check if user can edit/swipe/regenerate a chat message.
+ * - Persona messages: only the owner of that specific persona — NOT even the
+ *   chat owner, since a persona is another participant's own
+ *   self-representation in the chat, not something the chat owner controls.
+ * - Character messages: the chat owner (broad control over the shared "AI"
+ *   character outputs) OR whoever owns that specific character (so a guest
+ *   who brought their own character into the chat can edit/swipe its
+ *   messages too).
  */
 async function checkMessageEditPermission(
 	messageId: number,
@@ -105,18 +110,16 @@ async function checkMessageEditPermission(
 
 	if (!message) return false
 
-	// Check chat access
 	const chatAccess = await checkChatAccess(message.chatId, userId)
-	if (chatAccess.isOwner) return true // Chat owner can edit any message
+	if (!chatAccess.hasAccess) return false
 
-	// Check if user owns the character that created the message
-	if (message.characterId) {
-		return await checkCharacterOwnership(message.characterId, userId)
-	}
-
-	// Check if user owns the persona that created the message
 	if (message.personaId) {
 		return await checkPersonaOwnership(message.personaId, userId)
+	}
+
+	if (message.characterId) {
+		if (chatAccess.isOwner) return true
+		return await checkCharacterOwnership(message.characterId, userId)
 	}
 
 	return false
@@ -274,11 +277,21 @@ export const chatsListHandler: Handler<
 			orderBy: desc(schema.chats.updatedAt)
 		})
 
-		// Add canEdit property to each chat
-		const chatsWithEditPermission = chatsList.map((chat) => ({
-			...chat,
-			canEdit: chat.userId === userId // User can edit only if they own the chat
-		}))
+		// isOwner/isGuest let the client show the right menu affordances:
+		// owners get full edit + delete, guests get a scoped edit (characters/
+		// personas/guests only — enforced server-side in chatsUpdateHandler,
+		// not just hidden client-side). canEdit kept for back-compat meaning
+		// "can open the edit menu at all" (owner or guest), not "owns the chat".
+		const chatsWithEditPermission = chatsList.map((chat) => {
+			const isOwner = chat.userId === userId
+			const isGuest = !isOwner && guestChatIds.includes(chat.id)
+			return {
+				...chat,
+				isOwner,
+				isGuest,
+				canEdit: isOwner || isGuest
+			}
+		})
 
 		const response = { chatList: chatsWithEditPermission }
 		emitToUser("chats:list", response)
@@ -862,23 +875,31 @@ export const chatsUpdateHandler: Handler<
 				)
 			}
 
-			const tags = params.tags || params.chat.tags || []
+			// Guests may manage characters/personas on a chat (further
+			// ownership-checked below) but never chat-level settings — name,
+			// scenario, lorebook, connection/sampling/prompt overrides, tags,
+			// response mode, etc. Enforced here server-side rather than only
+			// hiding those fields client-side, since this event is reachable
+			// directly regardless of what the UI shows.
+			if (chatAccess.isOwner) {
+				const tags = params.tags || params.chat.tags || []
 
-			// Remove tags from chat data as it will be handled separately
-			const chatDataWithoutTags = { ...params.chat }
-			delete chatDataWithoutTags.tags
+				// Remove tags from chat data as it will be handled separately
+				const chatDataWithoutTags = { ...params.chat }
+				delete chatDataWithoutTags.tags
 
-			// Update the chat
-			await db
-				.update(schema.chats)
-				.set({
-					...chatDataWithoutTags,
-					updatedAt: new Date().toISOString()
-				})
-				.where(eq(schema.chats.id, params.chat.id!))
+				// Update the chat
+				await db
+					.update(schema.chats)
+					.set({
+						...chatDataWithoutTags,
+						updatedAt: new Date().toISOString()
+					})
+					.where(eq(schema.chats.id, params.chat.id!))
 
-			// Process tags after chat update
-			await processChatTags(params.chat.id!, tags, userId)
+				// Process tags after chat update
+				await processChatTags(params.chat.id!, tags, userId)
+			}
 
 			// Sync chatCharacters if provided
 			if (params.characterIds !== undefined) {
@@ -1551,16 +1572,24 @@ export const chatMessagesUpdateHandler: Handler<
 			const { id, content, isHidden } = params
 			const userId = socket.user!.id
 
+			// Persona messages: only that persona's owner. Character messages:
+			// the chat owner or that character's owner. See
+			// checkMessageEditPermission for the full rationale.
+			const canEdit = await checkMessageEditPermission(id, userId)
+			if (!canEdit) {
+				const res: Sockets.ChatMessages.Update.Response = {
+					chatMessage: undefined,
+					error: "You don't have permission to edit this message"
+				}
+				emitToUser("chatMessages:update:error", res)
+				return res
+			}
+
 			// Get the existing message to check metadata
 			const [existingMessage] = await db
 				.select()
 				.from(schema.chatMessages)
-				.where(
-					and(
-						eq(schema.chatMessages.id, id),
-						eq(schema.chatMessages.userId, userId)
-					)
-				)
+				.where(eq(schema.chatMessages.id, id))
 
 			if (!existingMessage) {
 				const res: Sockets.ChatMessages.Update.Response = {
@@ -1607,12 +1636,7 @@ export const chatMessagesUpdateHandler: Handler<
 			const [updated] = await db
 				.update(schema.chatMessages)
 				.set(updates)
-				.where(
-					and(
-						eq(schema.chatMessages.id, id),
-						eq(schema.chatMessages.userId, userId)
-					)
-				)
+				.where(eq(schema.chatMessages.id, id))
 				.returning()
 
 			if (!updated) {
@@ -1734,15 +1758,13 @@ export const chatMessagesRegenerateHandler: Handler<
 				return res
 			}
 
-			// Check if user owns the chat (only chat owners can regenerate)
-			const chatAccess = await checkChatAccess(
-				messageToRegenerate.chatId,
-				userId
-			)
-			if (!chatAccess.hasAccess || !chatAccess.isOwner) {
+			// Chat owner or the character's owner (character messages), or the
+			// persona's owner (persona messages) — see checkMessageEditPermission.
+			const canEdit = await checkMessageEditPermission(params.id, userId)
+			if (!canEdit) {
 				const res: Sockets.ChatMessages.Regenerate.Response = {
 					chatMessage: undefined,
-					error: "Access denied. Only chat owners can regenerate messages."
+					error: "Access denied. You don't have permission to regenerate this message."
 				}
 				emitToUser("chatMessages:regenerate", res)
 				return res
@@ -1828,15 +1850,12 @@ export const chatMessagesContinueHandler: Handler<
 				return res
 			}
 
-			// Check if user owns the chat (only chat owners can continue)
-			const chatAccess = await checkChatAccess(
-				messageToContinue.chatId,
-				userId
-			)
-			if (!chatAccess.hasAccess || !chatAccess.isOwner) {
+			// Chat owner or the character's owner — see checkMessageEditPermission.
+			const canEdit = await checkMessageEditPermission(params.id, userId)
+			if (!canEdit) {
 				const res: Sockets.ChatMessages.Continue.Response = {
 					chatMessage: undefined,
-					error: "Access denied. Only chat owners can continue messages."
+					error: "Access denied. You don't have permission to continue this message."
 				}
 				emitToUser("chatMessages:continue", res)
 				return res
@@ -1943,12 +1962,12 @@ export const chatMessagesSwipeLeftHandler: Handler<
 				return res
 			}
 
-			// Check if user owns the chat (only chat owners can swipe)
-			const chatAccess = await checkChatAccess(message.chatId, userId)
-			if (!chatAccess.hasAccess || !chatAccess.isOwner) {
+			// Chat owner or the character's owner — see checkMessageEditPermission.
+			const canEdit = await checkMessageEditPermission(params.id, userId)
+			if (!canEdit) {
 				const res: Sockets.ChatMessages.SwipeLeft.Response = {
 					chatMessage: undefined,
-					error: "Access denied. Only chat owners can swipe messages."
+					error: "Access denied. You don't have permission to swipe this message."
 				}
 				emitToUser("chatMessages:swipeLeft", res)
 				return res
@@ -2066,12 +2085,12 @@ export const chatMessagesSwipeRightHandler: Handler<
 				emitToUser("chatMessages:swipeRight", res)
 				return res
 			}
-			// Check if user owns the chat (only chat owners can swipe)
-			const chatAccess = await checkChatAccess(message.chatId, userId)
-			if (!chatAccess.hasAccess || !chatAccess.isOwner) {
+			// Chat owner or the character's owner — see checkMessageEditPermission.
+			const canEdit = await checkMessageEditPermission(params.id, userId)
+			if (!canEdit) {
 				const res: Sockets.ChatMessages.SwipeRight.Response = {
 					chatMessage: undefined,
-					error: "Access denied. Only chat owners can swipe messages."
+					error: "Access denied. You don't have permission to swipe this message."
 				}
 				emitToUser("chatMessages:swipeRight", res)
 				return res

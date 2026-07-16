@@ -74,6 +74,17 @@ let latestReleaseTag: string | undefined = undefined
 let isNewerReleaseAvailable: boolean | undefined = undefined
 let hasCheckedForUpdates = false
 
+// Content-Security-Policy is configured via svelte.config.js's kit.csp
+// instead of set here — SvelteKit needs to own that header so it can inject
+// a correct hash/nonce for its own generated inline hydration script; a
+// hand-rolled header here has no way to know that value and silently breaks
+// hydration (confirmed the hard way — see CSP_EXTRA_*_SRC in HOSTING.md for
+// the escape hatch covering hosting-injected third-party scripts/styles).
+const SECURITY_HEADERS: Record<string, string> = {
+	"X-Content-Type-Options": "nosniff",
+	"X-Frame-Options": "DENY"
+}
+
 export const handle: Handle = async ({ event, resolve }) => {
 	if (
 		event.url.pathname.startsWith(
@@ -94,5 +105,20 @@ export const handle: Handle = async ({ event, resolve }) => {
 		await handler(event)
 	}
 
-	return resolve(event)
+	const response = await resolve(event)
+
+	for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+		response.headers.set(name, value)
+	}
+	// Only advertise HSTS when this request actually arrived over HTTPS —
+	// forcing it on a plain-http local/dev/LAN deployment would make the
+	// browser refuse to fall back to http on a future visit.
+	if (event.url.protocol === "https:") {
+		response.headers.set(
+			"Strict-Transport-Security",
+			"max-age=31536000; includeSubDomains"
+		)
+	}
+
+	return response
 }

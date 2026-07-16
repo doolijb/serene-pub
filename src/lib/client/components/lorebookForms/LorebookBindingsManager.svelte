@@ -91,12 +91,6 @@
 		persona: Partial<SelectPersona> & { id: number }
 	) {
 		showLinkPersonaBindingModal = false
-		console.log(
-			"Linking persona:",
-			persona,
-			"to binding:",
-			lorebookBindingId
-		)
 		const req: Sockets.Lorebooks.UpdateBinding.Params = {
 			lorebookBinding: {
 				id: lorebookBindingId ?? 0,
@@ -104,7 +98,6 @@
 				characterId: null
 			}
 		}
-		console.log("Sending update request:", req)
 		socket?.emit("lorebooks:updateBinding", req)
 		lorebookBindingId = null
 	}
@@ -197,13 +190,8 @@
 		socket.on(
 			"lorebooks:bindingList",
 			async (msg: Sockets.Lorebooks.BindingList.Response) => {
-				console.log("Received lorebooks:bindingList", msg)
 				if (msg.lorebookId === lorebookId) {
 					lorebookBindingList = msg.lorebookBindingList || []
-					console.log(
-						"Updated lorebookBindingList",
-						lorebookBindingList
-					)
 				}
 				await tick()
 			}
@@ -212,7 +200,6 @@
 		socket.on(
 			"lorebooks:createBinding",
 			(msg: Sockets.Lorebooks.CreateBinding.Response) => {
-				console.log("Received lorebooks:createBinding", msg)
 				toaster.success({
 					title: "Binding Created",
 					description: "Lorebook binding created successfully."
@@ -223,7 +210,6 @@
 		socket.on(
 			"lorebooks:updateBinding",
 			(msg: Sockets.Lorebooks.UpdateBinding.Response) => {
-				console.log("Received lorebooks:updateBinding", msg)
 				toaster.success({
 					title: "Binding Updated",
 					description: "Lorebook binding updated successfully."
@@ -231,10 +217,6 @@
 			}
 		)
 
-		console.log(
-			"Emitting characters:list, personas:list, and lorebooks:bindingList for lorebookId:",
-			lorebookId
-		)
 		socket.emit("characters:list", {})
 		socket.emit("personas:list", {})
 		const bindingReq: Sockets.Lorebooks.BindingList.Params = {

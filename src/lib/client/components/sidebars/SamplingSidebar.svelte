@@ -465,7 +465,7 @@
 					type="text"
 					bind:value={sampling.name}
 					class="input {validationErrors.name
-						? 'border-red-500'
+						? 'border-error-500'
 						: ''}"
 					disabled={!!sampling && sampling.isImmutable}
 					oninput={() => {
@@ -476,7 +476,7 @@
 					}}
 				/>
 				{#if validationErrors.name}
-					<p class="mt-1 text-sm text-red-500" role="alert">
+					<p class="mt-1 text-sm text-error-500" role="alert">
 						{validationErrors.name}
 					</p>
 				{/if}
@@ -643,7 +643,7 @@
 <Modal
 	open={showDeleteModal}
 	onOpenChange={(e) => (showDeleteModal = e.open)}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm"
+	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw]"
 	backdropClasses="backdrop-blur-sm"
 >
 	{#snippet content()}

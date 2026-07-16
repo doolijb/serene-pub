@@ -72,10 +72,6 @@
 	})
 
 	$effect(() => {
-		console.log(
-			"Current connection model name:",
-			currentConnectionModelName
-		)
 	})
 
 	// Format file size
@@ -186,7 +182,6 @@
 			(message: Sockets.OllamaModelsList.Response) => {
 				installedModels = message.models
 				isLoading = false
-				console.log("ollamaModelsList", message.models)
 			}
 		)
 
@@ -400,7 +395,7 @@
 <Modal
 	open={showDeleteModal}
 	onOpenChange={(e) => (showDeleteModal = e.open)}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm border border-surface-300-700"
+	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
 	backdropClasses="backdrop-blur-sm"
 >
 	{#snippet content()}

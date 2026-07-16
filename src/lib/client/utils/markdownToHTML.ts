@@ -1,4 +1,5 @@
 import { marked } from "marked"
+import DOMPurify from "dompurify"
 
 // Fix italic formatting to handle trailing spaces before closing asterisk
 function fixItalicSpaces(text: string): string {
@@ -24,6 +25,11 @@ export function renderMarkdownWithQuotedText(md: string): string {
 	const fixedMd = fixItalicSpaces(md)
 	const markedMd = markQuotedText(fixedMd)
 	let html = marked.parse(markedMd) as string
+	// Sanitize BEFORE injecting our own trusted quoted-text markup — html at
+	// this point may contain LLM-generated or character-card-sourced content
+	// (susceptible to prompt injection / malicious cards), and marked does
+	// not escape/sanitize raw HTML by default.
+	html = DOMPurify.sanitize(html)
 	html = replaceQuotedTextMarkers(html)
 	return html
 }

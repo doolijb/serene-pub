@@ -31,3 +31,37 @@ export async function checkChatAccess(
 
 	return { isOwner, isGuest, hasAccess }
 }
+
+// A user may view (not edit) a character/persona they don't own if it's
+// bound into a chat they have access to as owner or guest — mirrors the
+// "view details for characters in chats they participate in" requirement
+// that already governs adding characters/personas to a chat.
+export async function canViewCharacter(
+	characterId: number,
+	userId: number
+): Promise<boolean> {
+	const bindings = await db.query.chatCharacters.findMany({
+		where: eq(schema.chatCharacters.characterId, characterId),
+		columns: { chatId: true }
+	})
+	for (const binding of bindings) {
+		const access = await checkChatAccess(binding.chatId, userId)
+		if (access.hasAccess) return true
+	}
+	return false
+}
+
+export async function canViewPersona(
+	personaId: number,
+	userId: number
+): Promise<boolean> {
+	const bindings = await db.query.chatPersonas.findMany({
+		where: eq(schema.chatPersonas.personaId, personaId),
+		columns: { chatId: true }
+	})
+	for (const binding of bindings) {
+		const access = await checkChatAccess(binding.chatId, userId)
+		if (access.hasAccess) return true
+	}
+	return false
+}

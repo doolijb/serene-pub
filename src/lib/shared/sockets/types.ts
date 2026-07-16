@@ -75,7 +75,9 @@ declare global {
 					id: number
 				}
 				interface Response {
-					character: SelectCharacter | null
+					character:
+						| (SelectCharacter & { isOwner: boolean; ownerName: string | null })
+						| null
 				}
 			}
 			namespace Create {
@@ -272,7 +274,9 @@ declare global {
 					id: number
 				}
 				interface Response {
-					persona: SelectPersona | null
+					persona:
+						| (SelectPersona & { isOwner: boolean; ownerName: string | null })
+						| null
 				}
 			}
 			namespace Create {
@@ -381,7 +385,11 @@ declare global {
 					chatType?: string
 				}
 				interface Response {
-					chatList: (Partial<SelectChat> & { canEdit: boolean })[]
+					chatList: (Partial<SelectChat> & {
+						canEdit: boolean
+						isOwner: boolean
+						isGuest: boolean
+					})[]
 				}
 			}
 			/** Client → server: "my persona is actively typing in this chat" ping */

@@ -11,8 +11,15 @@ export const GET: RequestHandler = async ({ params }) => {
 	}
 	// reqPath is an array (SvelteKit catchall)
 	const relPath = Array.isArray(reqPath) ? reqPath.join("/") : reqPath
-	const appData = getAppDataDir()
-	const filePath = path.join(appData, relPath)
+	const appData = path.resolve(getAppDataDir())
+	const filePath = path.resolve(appData, relPath)
+	// Containment check — reqPath is caller-controlled, so without this an
+	// encoded/normalized "../" sequence could resolve outside appData and
+	// read arbitrary files on disk (same pattern already used by
+	// deleteUserBackground for the equivalent write-side risk).
+	if (filePath !== appData && !filePath.startsWith(appData + path.sep)) {
+		return new Response("Not found", { status: 404 })
+	}
 	try {
 		const data = await fs.readFile(filePath)
 		// Guess content type from extension

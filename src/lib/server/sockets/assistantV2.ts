@@ -220,6 +220,7 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 						chatId,
 						messageId: assistantMessage.id,
 						label: "assistant",
+						userId,
 						preflight: (signal) => adapter.preflight(signal),
 						execute: () => assistantService.generateResponse(trimmedContent),
 						onCancel: () => adapter.abort(),

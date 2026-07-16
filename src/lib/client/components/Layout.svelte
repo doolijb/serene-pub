@@ -2,7 +2,7 @@
 	import Header from "./Header.svelte"
 	import "../../../app.css"
 	import * as Icons from "@lucide/svelte"
-	import { fly } from "svelte/transition"
+	import { fly, fade } from "svelte/transition"
 	import { onMount, setContext, onDestroy } from "svelte"
 	import SamplingSidebar from "./sidebars/SamplingSidebar.svelte"
 	import ConnectionsSidebar from "./sidebars/ConnectionsSidebar.svelte"
@@ -155,10 +155,6 @@
 	})
 
 	$effect(() => {
-		console.log(
-			"Layout systemSettingsCtx",
-			$state.snapshot(systemSettingsCtx)
-		)
 	})
 
 	// Derived state for authentication flow
@@ -253,7 +249,12 @@
 			panelsCtx.rightNav,
 			key
 		)
-		const isMobile = window.innerWidth < 768
+		// Must match the `lg` breakpoint the desktop sidebars (`hidden ...
+		// lg:block`) and header hamburger (`lg:hidden`) actually switch at —
+		// using `md` (768) here left a dead zone from 768-1023px where this
+		// sets desktop panel state but the sidebars are still display:none
+		// until 1024px, so nothing visibly opened.
+		const isMobile = window.innerWidth < 1024
 		if (isMobile) {
 			if (panelsCtx.mobilePanel === key) {
 				if (toggle) {
@@ -406,7 +407,6 @@
 
 	$effect(() => {
 		if (isSettingsLoaded) {
-			console.log("Settings loaded, getting current user")
 			socket.emit("users:current", {})
 		}
 	})
@@ -445,9 +445,6 @@
 				const isAuthenticated = await checkAuthentication()
 				if (!isAuthenticated) {
 					// User is not authenticated, redirect to login
-					console.log(
-						"Authentication required but user not authenticated"
-					)
 					toaster.error({
 						title: "Authentication Required",
 						description:
@@ -472,7 +469,6 @@
 
 	function initializeSocketConnection() {
 		socket.on("systemSettings:get", (message) => {
-			console.log("Received systemSettings:get", message)
 			systemSettingsCtx.settings = {
 				...message.systemSettings,
 				isAndroidWrapper: message.isAndroidWrapper
@@ -482,13 +478,11 @@
 		})
 
 		socket.on("users:current", (message) => {
-			console.log("Received users:current", message)
 			userCtx.user = message.user
 
 			// Once we have a user, get user settings
 			// This works for both enabled and disabled accounts
 			if (message.user) {
-				console.log("Emitting userSettings:get")
 				socket.emit("userSettings:get", {})
 				if (message.user.isAdmin) {
 					socket.emit("taskQueue:get", {})
@@ -498,7 +492,6 @@
 
 		// Listen for user settings
 		socket.on("userSettings:get", (message) => {
-			console.log("Received userSettings:get", message)
 			userSettingsCtx.settings = message.userSettings
 		})
 
@@ -682,18 +675,12 @@
 	$effect(() => {
 		if (!systemSettingsCtx) return
 
-		console.log("Auth effect triggered", {
-			hasSystemSettings: !!systemSettingsCtx.settings,
-			isAccountsEnabled: systemSettingsCtx.settings?.isAccountsEnabled,
-			hasUser: !!userCtx.user
-		})
 
 		// Only proceed if we have system settings
 		if (!systemSettingsCtx.settings) return
 
 		// If accounts are disabled, get user 1 automatically
 		if (!systemSettingsCtx.settings.isAccountsEnabled && !userCtx.user) {
-			console.log("Accounts disabled, emitting users:get")
 			socket.emit("users:get", {})
 		}
 		// If accounts are enabled and we don't have a user, the login form will be shown
@@ -938,6 +925,7 @@
 				role="dialog"
 				aria-labelledby="mobile-panel-title"
 				aria-modal="true"
+				transition:fly={{ x: 40, duration: 200 }}
 			>
 				<div
 					class="border-border flex items-center justify-between border-b p-4"
@@ -945,7 +933,7 @@
 					<span
 						class="text-foreground text-lg font-semibold capitalize"
 					>
-						{panelsCtx.mobilePanel}
+						{title}
 					</span>
 					<button
 						class="btn-ghost"
@@ -1022,9 +1010,15 @@
 		<!-- Mobile menu -->
 		{#if panelsCtx.isMobileMenuOpen}
 			<!-- Backdrop -->
-			<div class="fixed inset-0 z-[40] bg-black/40"></div>
+			<div
+				class="fixed inset-0 z-[40] bg-black/40"
+				onclick={() => (panelsCtx.isMobileMenuOpen = false)}
+				role="presentation"
+				transition:fade={{ duration: 150 }}
+			></div>
 			<div
 				class="bg-surface-100-900/95 fixed inset-0 z-[40] flex flex-col overflow-y-auto px-2 lg:hidden"
+				transition:fly={{ x: -40, duration: 200 }}
 			>
 				<div
 					class="border-border flex items-center justify-between border-b p-4"
@@ -1037,7 +1031,6 @@
 					<button
 						type="button"
 						onclick={(e) => {
-							console.log("Click!")
 							e.stopPropagation()
 							panelsCtx.isMobileMenuOpen = false
 						}}

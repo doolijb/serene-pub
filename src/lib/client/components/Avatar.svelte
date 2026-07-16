@@ -5,9 +5,14 @@
 	interface Props {
 		char: Partial<SelectCharacter> | Partial<SelectPersona>
 		src?: string
+		size?: string
 	}
 
-	let { char = $bindable(), src = $bindable() }: Props = $props()
+	let {
+		char = $bindable(),
+		src = $bindable(),
+		size = "w-[4em] h-[4em]"
+	}: Props = $props()
 
 	// Determine if this is a character or persona
 	// Characters have specific fields that personas don't have like 'personality', 'scenario', 'firstMessage'
@@ -22,7 +27,7 @@
 
 <Avatar
 	src={src ? src : char ? char.avatar || "" : ""}
-	size="w-[4em] h-[4em]"
+	{size}
 	imageClasses="object-cover"
 	name={char
 		? "nickname" in char && char.nickname

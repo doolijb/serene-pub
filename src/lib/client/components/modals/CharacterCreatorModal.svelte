@@ -5,6 +5,7 @@
 	import { onDestroy, onMount } from "svelte"
 	import { z } from "zod"
 	import Avatar from "../Avatar.svelte"
+	import Dropzone from "../Dropzone.svelte"
 
 	interface Props {
 		open: boolean
@@ -375,7 +376,7 @@
 									type="text"
 									bind:value={characterData.name}
 									class="input {validationErrors.name
-										? 'border-red-500 focus:border-red-500'
+										? 'border-error-500 focus:border-error-500'
 										: ''}"
 									placeholder="Enter character name..."
 									aria-required="true"
@@ -389,7 +390,7 @@
 								/>
 								{#if validationErrors.name}
 									<p
-										class="mt-1 text-sm text-red-500"
+										class="mt-1 text-sm text-error-500"
 										id="name-error"
 										role="alert"
 									>
@@ -493,42 +494,7 @@
 
 							<!-- Upload Area -->
 							<div class="flex-1 space-y-3">
-								<div
-									class="flex w-full items-center justify-center"
-								>
-									<label
-										for="avatar-upload"
-										class="flex w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 p-6 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-700 dark:hover:border-gray-500 dark:hover:bg-gray-800"
-									>
-										<div
-											class="flex flex-col items-center justify-center"
-										>
-											<Icons.Upload
-												class="mb-3 h-8 w-8 text-gray-500 dark:text-gray-400"
-											/>
-											<p
-												class="mb-2 text-sm text-gray-500 dark:text-gray-400"
-											>
-												<span class="font-semibold">
-													Click to upload
-												</span>
-												or drag and drop
-											</p>
-											<p
-												class="text-xs text-gray-500 dark:text-gray-400"
-											>
-												PNG, JPG or GIF
-											</p>
-										</div>
-										<input
-											id="avatar-upload"
-											type="file"
-											class="hidden"
-											accept="image/*"
-											onchange={handleAvatarChange}
-										/>
-									</label>
-								</div>
+								<Dropzone id="avatar-upload" onchange={handleAvatarChange} />
 
 								{#if characterData._avatarFile}
 									<button
@@ -606,7 +572,7 @@
 								rows="8"
 								bind:value={characterData.description}
 								class="input {validationErrors.description
-									? 'border-red-500 focus:border-red-500'
+									? 'border-error-500 focus:border-error-500'
 									: ''}"
 								placeholder="Describe your character..."
 								aria-required="true"
@@ -621,7 +587,7 @@
 							></textarea>
 							{#if validationErrors.description}
 								<p
-									class="mt-1 text-sm text-red-500"
+									class="mt-1 text-sm text-error-500"
 									id="description-error"
 									role="alert"
 								>

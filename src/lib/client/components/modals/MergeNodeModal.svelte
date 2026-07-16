@@ -74,7 +74,7 @@
 <Modal
 	{open}
 	{onOpenChange}
-	contentBase="card bg-surface-100-900 p-6 space-y-4 shadow-xl max-h-[90dvh] flex flex-col w-[36em] max-w-95dvw"
+	contentBase="card bg-surface-100-900 p-6 space-y-4 shadow-xl max-h-[90dvh] flex flex-col w-[min(95vw,576px)]"
 	backdropClasses="backdrop-blur-sm"
 >
 	{#snippet content()}

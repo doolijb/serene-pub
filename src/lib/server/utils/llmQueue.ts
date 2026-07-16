@@ -17,6 +17,10 @@ export interface LLMQueueItemInput<T> {
 	messageId?: number
 	lorebookId?: number
 	label?: string
+	/** Set by user-triggered call sites so per-user abuse limits can be
+	 * enforced (see MAX_QUEUED_PER_USER below) — omit for background/system
+	 * work that isn't directly spammable by rapid clicking. */
+	userId?: number
 	/** Optional hook run before execute(), e.g. koboldcpp managed-mode model loading. */
 	preflight?: (signal: AbortSignal) => Promise<void>
 	execute: (signal: AbortSignal) => Promise<T>
@@ -36,6 +40,7 @@ export interface LLMQueueSnapshotItem {
 	messageId?: number
 	lorebookId?: number
 	label?: string
+	userId?: number
 }
 
 export class CancelledError extends Error {
@@ -75,6 +80,14 @@ interface Lane {
 }
 
 const FORCE_DETACH_MS = 10_000
+
+// The queue has a single global lane (see getConcurrencyKey below) with no
+// depth cap — without this, one user could queue unbounded generations,
+// each consuming real compute/API cost, while every other user's requests
+// pile up behind them. Only enforced for items that opt in with a userId
+// (user-triggered, easily-spammed call sites — background/system work is
+// exempt, see LLMQueueItemInput.userId).
+const MAX_QUEUED_PER_USER = 3
 
 // Concurrency grouping. Hardcoded to a single global lane today; swap this out
 // for a per-connection/per-connection-type key once that's needed — nothing
@@ -122,6 +135,15 @@ class LLMQueue {
 	 * so the id is always resolvable the moment the run exists.
 	 */
 	enqueue<T>(item: LLMQueueItemInput<T>, presetId?: string): { id: string; done: Promise<T> } {
+		if (item.userId !== undefined) {
+			const existing = this.countForUser(item.userId)
+			if (existing >= MAX_QUEUED_PER_USER) {
+				throw new Error(
+					`You already have ${existing} generations in progress or queued — wait for one to finish before starting another.`
+				)
+			}
+		}
+
 		const id = presetId ?? uuidv4()
 		const laneKey = getConcurrencyKey(item)
 
@@ -264,10 +286,20 @@ class LLMQueue {
 				chatId: run.item.chatId,
 				messageId: run.item.messageId,
 				lorebookId: run.item.lorebookId,
-				label: run.item.label
+				label: run.item.label,
+				userId: run.item.userId
 			})
 		}
 		return out
+	}
+
+	/** Count of this user's runs currently queued or in flight (not yet settled). */
+	countForUser(userId: number): number {
+		let count = 0
+		for (const run of this.runsById.values()) {
+			if (run.item.userId === userId) count++
+		}
+		return count
 	}
 
 	get size() {

@@ -118,7 +118,7 @@
 			id="model"
 			bind:value={connection.model}
 			class="select bg-background border-muted w-full rounded border {validationErrors.model
-				? 'border-red-500'
+				? 'border-error-500'
 				: ''}"
 		>
 			<option value="">-- Select Model --</option>
@@ -127,7 +127,7 @@
 			{/each}
 		</select>
 		{#if validationErrors.model}
-			<p class="mt-1 text-sm text-red-500" role="alert">{validationErrors.model}</p>
+			<p class="mt-1 text-sm text-error-500" role="alert">{validationErrors.model}</p>
 		{/if}
 	</div>
 
@@ -155,7 +155,7 @@
 		</button>
 	</div>
 	{#if testResult?.ok === false && testResult.error}
-		<p class="mt-1 text-sm text-red-500" role="alert">{testResult.error}</p>
+		<p class="mt-1 text-sm text-error-500" role="alert">{testResult.error}</p>
 	{/if}
 
 	<div class="mt-2 flex flex-col gap-1">
@@ -178,10 +178,10 @@
 			type="password"
 			bind:value={fields.apiKey}
 			placeholder="sk-ant-..."
-			class="input {validationErrors.apiKey ? 'border-red-500' : ''}"
+			class="input {validationErrors.apiKey ? 'border-error-500' : ''}"
 		/>
 		{#if validationErrors.apiKey}
-			<p class="mt-1 text-sm text-red-500" role="alert">{validationErrors.apiKey}</p>
+			<p class="mt-1 text-sm text-error-500" role="alert">{validationErrors.apiKey}</p>
 		{/if}
 	</div>
 

@@ -8,10 +8,17 @@ export const systemSettingsGet: Handler<Sockets.SystemSettings.Get.Params, Socke
 	event: "systemSettings:get",
 	handler: async (socket, params, emitToUser) => {
 		try {
+			// koboldCppManagedAdminPassword is never read client-side (only used
+			// server-side, eg. subprocessManager.ts / KoboldCppManagedAdapter.ts) —
+			// exclude it here regardless of caller so it's never handed to any
+			// authenticated user's browser, not just hidden by client UI.
 			const [settings, ollamaSettings, koboldCppSettings] = await Promise.all([
 				db.query.systemSettings.findFirst({ where: eq(schema.systemSettings.id, 1), columns: { id: false } }),
 				db.query.ollamaSettings.findFirst({ where: eq(schema.ollamaSettings.id, 1), columns: { id: false } }),
-				db.query.koboldCppSettings.findFirst({ where: eq(schema.koboldCppSettings.id, 1), columns: { id: false } })
+				db.query.koboldCppSettings.findFirst({
+					where: eq(schema.koboldCppSettings.id, 1),
+					columns: { id: false, koboldCppManagedAdminPassword: false }
+				})
 			])
 
 			if (!settings) throw new Error("System settings not found")

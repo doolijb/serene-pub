@@ -19,6 +19,7 @@ import {
 	embedCharacterCardInPng
 } from "../utils/characterCardParser"
 import { autoEnqueueCharacter } from "$lib/server/embedding/vectorizationQueue"
+import { canViewCharacter } from "$lib/server/utils/chatAccess"
 
 // Helper function to process tags for character creation/update
 async function processCharacterTags(characterId: number, tagNames: string[]) {
@@ -102,6 +103,7 @@ export const charactersList: Handler<Sockets.Characters.List.Params, Sockets.Cha
 export const charactersGet: Handler<Sockets.Characters.Get.Params, Sockets.Characters.Get.Response> = {
 	event: "characters:get",
 	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
 		const character = await db.query.characters.findFirst({
 			where: (c, { eq }) => eq(c.id, params.id),
 			with: {
@@ -109,16 +111,26 @@ export const charactersGet: Handler<Sockets.Characters.Get.Params, Sockets.Chara
 					with: {
 						tag: true
 					}
+				},
+				user: {
+					columns: { username: true, displayName: true }
 				}
 			}
 		})
-		if (character) {
+
+		const isOwner = character?.userId === userId
+		if (
+			character &&
+			(isOwner || (await canViewCharacter(character.id, userId)))
+		) {
 			// Transform the character data to include tags as string array
 			const characterWithTags = {
 				...character,
-				tags: character.characterTags.map((ct) => ct.tag.name)
+				tags: character.characterTags.map((ct) => ct.tag.name),
+				isOwner,
+				ownerName: character.user?.displayName || character.user?.username || null
 			}
-			const { characterTags, ...characterWithoutTags } = characterWithTags
+			const { characterTags, user, ...characterWithoutTags } = characterWithTags
 
 			const res: Sockets.Characters.Get.Response = { character: characterWithoutTags }
 			emitToUser("characters:get", res)
@@ -548,9 +560,14 @@ export const charactersExportCard: Handler<Sockets.Characters.ExportCard.Params,
 			const userId = socket.user!.id
 			const format = params.format || "json"
 
-			// Fetch the character with all its data
+			// Fetch the character with all its data — owner-only (export is a
+			// data-extraction action, unlike viewing a character in a shared
+			// chat, so this deliberately does NOT use canViewCharacter).
 			const character = await db.query.characters.findFirst({
-				where: eq(schema.characters.id, params.id),
+				where: and(
+					eq(schema.characters.id, params.id),
+					eq(schema.characters.userId, userId)
+				),
 				with: {
 					characterTags: {
 						with: {

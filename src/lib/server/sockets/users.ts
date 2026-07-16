@@ -8,10 +8,12 @@ import { cookies } from "$lib/server/auth"
 import * as userTokens from "$lib/server/providers/users/tokens"
 import { getUserConfigurations } from "../utils/getUserConfigurations"
 
-// Passphrase validation schema
+// Passphrase validation schema. Max length bounds the PBKDF2 cost an
+// attacker-supplied passphrase can force the server to pay.
 const passphraseSchema = z
 	.string()
-	.min(6, "Passphrase must be at least 6 characters long")
+	.min(10, "Passphrase must be at least 10 characters long")
+	.max(128, "Passphrase must be at most 128 characters long")
 	.regex(/[a-z]/, "Passphrase must contain at least one lowercase letter")
 	.regex(/[A-Z]/, "Passphrase must contain at least one uppercase letter")
 	.regex(

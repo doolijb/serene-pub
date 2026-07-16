@@ -10,6 +10,7 @@
 	import { page } from "$app/state"
 	import ChatListItem from "../listItems/ChatListItem.svelte"
 	import ChatsUnsavedChangesModal from "../modals/ChatsUnsavedChangesModal.svelte"
+	import EmptyState from "../EmptyState.svelte"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -132,7 +133,6 @@
 				goto("/")
 			}
 			socket.emit("chats:delete", { id: chatToDelete })
-			console.log("Deleting chat with ID:", chatToDelete)
 			showDeleteModal = false
 			chatToDelete = null
 		}
@@ -342,7 +342,18 @@
 					<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
 				</div>
 			{:else if filteredChats.length === 0}
-				<div class="text-muted">No chats found.</div>
+				<EmptyState
+					icon={Icons.MessageSquareText}
+					message={search || searchByCharacterId || searchByPersonaId
+						? "No chats found matching your filters."
+						: "No chats yet — start one to get roleplaying."}
+					ctaLabel={search || searchByCharacterId || searchByPersonaId
+						? undefined
+						: "New Chat"}
+					onCta={search || searchByCharacterId || searchByPersonaId
+						? undefined
+						: () => (showEditChatForm = true)}
+				/>
 			{:else}
 				<ul class="flex flex-col gap-2">
 					{#each filteredChats as chat}
@@ -362,7 +373,7 @@
 <Modal
 	open={showDeleteModal}
 	onOpenChange={(e) => (showDeleteModal = e.open)}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm border border-surface-300-700"
+	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
 	backdropClasses="backdrop-blur-sm"
 >
 	{#snippet content()}

@@ -59,16 +59,10 @@
 		if (formComponent) {
 			// Disable callback temporarily while updating from server
 			disableCallback = true
-			console.log(
-				"[AssistantCharacterDraftWrapper] Draft changed, disabling callback temporarily"
-			)
 
 			// Use setTimeout to re-enable after form processes the initialData change
 			setTimeout(() => {
 				disableCallback = false
-				console.log(
-					"[AssistantCharacterDraftWrapper] Callback re-enabled"
-				)
 			}, 200)
 		}
 	})
@@ -76,15 +70,9 @@
 	// Callback when form data changes
 	function handleFormDataChange(data: any) {
 		if (isGenerating) {
-			console.log(
-				"[AssistantCharacterDraftWrapper] Ignoring form data change - generating"
-			)
 			return
 		}
 
-		console.log(
-			"[AssistantCharacterDraftWrapper] Form data changed, scheduling auto-save..."
-		)
 		currentFormData = data
 		scheduleAutoSave()
 	}
@@ -92,15 +80,9 @@
 	// Debounced auto-save function
 	function scheduleAutoSave() {
 		if (!currentFormData) {
-			console.log(
-				"[AssistantCharacterDraftWrapper] Skipping auto-save schedule - no form data"
-			)
 			return
 		}
 
-		console.log(
-			"[AssistantCharacterDraftWrapper] User edit detected, scheduling auto-save in 3 seconds..."
-		)
 
 		// Clear existing timer
 		if (autoSaveTimer) {
@@ -109,33 +91,15 @@
 
 		// Set new timer for auto-save (3 second delay)
 		autoSaveTimer = window.setTimeout(() => {
-			console.log(
-				"[AssistantCharacterDraftWrapper] Auto-save timer fired, saving..."
-			)
 			saveDraftToDatabase(currentFormData)
 		}, 3000)
 	}
 
 	function saveDraftToDatabase(updatedData: any) {
 		if (!socket || !chatId || isGenerating) {
-			console.log(
-				"[AssistantCharacterDraftWrapper] Skipping auto-save:",
-				{
-					hasSocket: !!socket,
-					hasChatId: !!chatId,
-					isGenerating
-				}
-			)
 			return
 		}
 
-		console.log(
-			"[AssistantCharacterDraftWrapper] Auto-saving draft to database..."
-		)
-		console.log(
-			"[AssistantCharacterDraftWrapper] Updated data:",
-			updatedData
-		)
 
 		// Extract only the draft fields (exclude UI-only fields)
 		const draftToSave: Partial<AssistantCreateCharacter> = {
@@ -161,10 +125,6 @@
 			characterVersion: updatedData.characterVersion || undefined
 		}
 
-		console.log(
-			"[AssistantCharacterDraftWrapper] Emitting assistant:updateDraft with:",
-			draftToSave
-		)
 
 		// Update the draft in chat metadata via socket
 		socket.emit(
@@ -175,9 +135,6 @@
 			},
 			(response: { success: boolean; error?: string }) => {
 				if (response.success) {
-					console.log(
-						"[AssistantCharacterDraftWrapper] Draft auto-saved successfully"
-					)
 				} else {
 					console.error(
 						"[AssistantCharacterDraftWrapper] Failed to auto-save draft:",

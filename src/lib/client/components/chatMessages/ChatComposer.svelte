@@ -180,7 +180,7 @@
 			{#snippet rightControls()}
 				{#if !lastMessage?.isGenerating && !editChatMessage}
 					<button
-						class="hover:preset-tonal-success mr-3 rounded-lg text-center lg:block lg:h-auto lg:p-3"
+						class="hover:preset-tonal-success mr-3 h-auto rounded-lg p-3 text-center lg:block"
 						type="button"
 						disabled={!newMessage.trim() ||
 							lastMessage?.isGenerating}
@@ -192,7 +192,7 @@
 				{:else if lastMessage?.isGenerating}
 					<button
 						title="Stop Generation"
-						class="text-error-500 hover:preset-tonal-error mr-3 rounded-lg text-center lg:h-auto lg:p-3"
+						class="text-error-500 hover:preset-tonal-error mr-3 h-auto rounded-lg p-3 text-center"
 						type="button"
 						onclick={handleAbortLastMessage}
 					>

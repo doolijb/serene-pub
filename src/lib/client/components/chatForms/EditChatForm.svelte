@@ -170,6 +170,16 @@
 	let userCtx: UserCtx = getContext("userCtx")
 	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 
+	// A guest (chat participant who isn't the owner) may manage characters/
+	// personas/guests on this chat but not chat-level settings (name,
+	// scenario, lorebook, tags, response mode, AI overrides) — mirrors the
+	// same restriction enforced server-side in chatsUpdateHandler, which
+	// silently ignores those fields for non-owners regardless of what this
+	// form sends, so this is UX clarity, not the actual security boundary.
+	let isGuest: boolean = $derived(
+		!!chat && chat.userId !== userCtx.user?.id
+	)
+
 	// Filtered tags for suggestions
 	let filteredTags = $derived.by(() => {
 		if (!tagSearchInput)
@@ -346,7 +356,6 @@
 			selectedCharacters.map((cc, i) => [cc.id, i])
 		)
 		
-		console.log("Creating chat with:", { characterIds, personaIds, characterPositions, selectedCharacters: selectedCharacters.length, selectedPersonas: selectedPersonas.length })
 		
 		// Update data to ensure everything is in sync
 		if (data) {
@@ -383,7 +392,6 @@
 				characterPositions,
 				tags: selectedTags
 			}
-			console.log("Emitting chats:create with:", createChat)
 			socket.emit("chats:create", createChat)
 		}
 		isCreating = false
@@ -485,14 +493,7 @@
 
 	// Socket event handlers - defined as named functions for proper cleanup
 	const handleChatsGet = (msg: Sockets.Chats.Get.Response) => {
-		console.log(
-			"handleChatsGet received",
-			msg.chat?.id,
-			"editChatId:",
-			editChatId
-		)
 		if (msg.chat && msg.chat.id === editChatId) {
-			console.log("Updating chat data", msg.chat)
 			// Create new object reference to ensure reactivity
 			chat = {
 				...msg.chat,
@@ -784,17 +785,25 @@
 				{chat ? "Update" : "Create"}
 			</button>
 		</div>
+		{#if isGuest}
+			<p class="preset-tonal-surface rounded-lg p-3 text-sm">
+				You're a guest in this chat. You can manage characters, personas,
+				and guests below — chat settings (name, scenario, lorebook, tags,
+				etc.) can only be changed by the chat owner.
+			</p>
+		{/if}
 		<div>
 			<label class="font-semibold" for="chatName">Chat Name*</label>
 			<input
 				id="chatName"
 				class="input input-lg w-full {validationErrors.name
-					? 'border-red-500'
+					? 'border-error-500'
 					: ''}"
 				type="text"
 				placeholder="Enter chat name"
 				bind:value={name}
 				required
+				disabled={isGuest}
 				oninput={() => {
 					if (validationErrors.name) {
 						const { name, ...rest } = validationErrors
@@ -803,7 +812,7 @@
 				}}
 			/>
 			{#if validationErrors.name}
-				<p class="mt-1 text-sm text-red-500" role="alert">
+				<p class="mt-1 text-sm text-error-500" role="alert">
 					{validationErrors.name}
 				</p>
 			{/if}
@@ -1109,6 +1118,7 @@
 					id="groupReplyStrategy"
 					class="select input-lg w-full"
 					bind:value={groupReplyStrategy}
+					disabled={isGuest}
 				>
 					{#each GroupReplyStrategies.options as opt}
 						<option value={opt.value}>{opt.label}</option>
@@ -1134,6 +1144,7 @@
 				placeholder="Describe the chat scenario, setting, or context (optional)"
 				bind:value={scenario}
 				rows={3}
+				disabled={isGuest}
 			></textarea>
 		</div>
 		<div>
@@ -1152,6 +1163,7 @@
 				id="lorebook"
 				class="select input-lg w-full"
 				bind:value={lorebookId}
+				disabled={isGuest}
 			>
 				<option value={null}>None</option>
 				{#each lorebookList as lorebook (lorebook.id)}
@@ -1193,6 +1205,7 @@
 					bind:value={tagSearchInput}
 					class="input input-lg w-full"
 					placeholder="Add a tag..."
+					disabled={isGuest}
 					onfocus={() => (showTagSuggestions = true)}
 					onblur={() =>
 						setTimeout(() => (showTagSuggestions = false), 200)}
@@ -1236,13 +1249,16 @@
 							class="chip {tag?.colorPreset ||
 								'preset-filled-primary-500'} group relative"
 							onclick={() => removeTag(tagName)}
-							title="Click to remove tag"
+							disabled={isGuest}
+							title={isGuest ? tagName : "Click to remove tag"}
 						>
 							{tagName}
-							<Icons.X
-								size={14}
-								class="ml-1 opacity-60 group-hover:opacity-100"
-							/>
+							{#if !isGuest}
+								<Icons.X
+									size={14}
+									class="ml-1 opacity-60 group-hover:opacity-100"
+								/>
+							{/if}
 						</button>
 					{/each}
 				</div>

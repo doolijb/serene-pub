@@ -15,7 +15,9 @@
 
 	const socket = useTypedSocket()
 
-	let persona = $state<SelectPersona | null>(null)
+	let persona = $state<
+		(SelectPersona & { isOwner?: boolean; ownerName?: string | null }) | null
+	>(null)
 	let isLoading = $state(true)
 
 	onMount(() => {
@@ -49,9 +51,11 @@
 		<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={onChat} title="Open chats">
 			<Icons.MessageSquare size={14} />
 		</button>
-		<button class="btn btn-sm preset-filled-primary-500" onclick={onEdit} title="Edit persona">
-			<Icons.Pencil size={14} /> Edit
-		</button>
+		{#if persona?.isOwner}
+			<button class="btn btn-sm preset-filled-primary-500" onclick={onEdit} title="Edit persona">
+				<Icons.Pencil size={14} /> Edit
+			</button>
+		{/if}
 	</div>
 
 	{#if isLoading}
@@ -79,6 +83,9 @@
 							</span>
 						{/if}
 					</div>
+					{#if !persona.isOwner && persona.ownerName}
+						<p class="text-surface-500 truncate text-xs">Owned by {persona.ownerName}</p>
+					{/if}
 				</div>
 			</div>
 

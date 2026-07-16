@@ -47,7 +47,7 @@
 <Modal
 	{open}
 	onOpenChange={(e) => (open = e.open)}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl w-[50em] max-w-dvw-lg border border-surface-300-700"
+	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl w-[min(95vw,800px)] border border-surface-300-700"
 	backdropClasses="backdrop-blur-sm"
 >
 	{#snippet content()}
@@ -107,13 +107,13 @@
 										<!-- Add special labels -->
 										<!-- {#if index === 0 && sortedPullOptions.length > 1}
 											<span
-												class="badge rounded bg-blue-500 px-2 py-1 text-xs text-white"
+												class="badge rounded bg-primary-500 px-2 py-1 text-xs text-white"
 											>
 												Larger
 											</span>
 										{:else if index === sortedPullOptions.length - 1 && sortedPullOptions.length > 1}
 											<span
-												class="badge rounded bg-green-500 px-2 py-1 text-xs text-white"
+												class="badge rounded bg-success-500 px-2 py-1 text-xs text-white"
 											>
 												Smaller
 											</span>
@@ -121,7 +121,7 @@
 
 										{#if pullOption.label.includes("Q4_K_M")}
 											<span
-												class="badge rounded bg-orange-500 px-2 py-1 text-xs text-white"
+												class="badge rounded bg-warning-500 px-2 py-1 text-xs text-white"
 											>
 												Recommended
 											</span>

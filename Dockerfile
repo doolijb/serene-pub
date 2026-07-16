@@ -41,6 +41,15 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/drizzle      ./drizzle
 COPY --from=builder /app/package.json ./
 
+# Run as a non-root user rather than the container default (root) — limits
+# blast radius if the app process is ever compromised. /data is created (and
+# owned) here, before VOLUME, so a fresh anonymous/named volume inherits the
+# right ownership instead of defaulting to root.
+RUN groupadd -r serene && useradd -r -g serene -d /app serene \
+    && mkdir -p /data \
+    && chown -R serene:serene /app /data
+USER serene
+
 # Persistent data volume (database, uploads, model cache, etc.)
 VOLUME ["/data"]
 

@@ -138,7 +138,6 @@
 		modelId: string,
 		pullOption: { label: string; pull: string }
 	) {
-		console.log("Downloading Hugging Face quantization:", pullOption.pull)
 
 		// Track this model as currently downloading
 		currentlyDownloading.add(modelId)
@@ -163,7 +162,6 @@
 	}
 
 	function handleOllamaInstallConfirm(cleanedModelName: string) {
-		console.log("Installing Ollama model:", cleanedModelName)
 
 		// Track this model as currently downloading
 		currentlyDownloading.add(cleanedModelName)
@@ -229,7 +227,6 @@
 			"ollama:pullModel",
 			(message: Sockets.OllamaPullModel.Response) => {
 				// Handle model pull completion/error only - no progress handling
-				console.log("Pull model response:", message)
 				if (message.success) {
 					socket.emit("ollama:modelsList", {})
 					toaster.success({ title: "Model downloaded successfully" })
@@ -340,14 +337,14 @@
 								</span>
 								<span
 									class="badge {model.recommended_vram <= 3
-										? 'text-green-500'
+										? 'text-success-500'
 										: model.recommended_vram <= 6
-											? 'text-blue-500'
+											? 'text-primary-500'
 											: model.recommended_vram <= 10
-												? 'text-yellow-500'
+												? 'text-warning-500'
 												: model.recommended_vram <= 16
-													? 'text-orange-500'
-													: 'text-red-500'} bg-surface-200 dark:bg-surface-800 rounded-full px-2 py-1 text-xs"
+													? 'text-warning-500'
+													: 'text-error-500'} bg-surface-200 dark:bg-surface-800 rounded-full px-2 py-1 text-xs"
 								>
 									{model.recommended_vram}GB VRAM • {model.recommended_vram <=
 									3
@@ -394,10 +391,6 @@
 									? 'preset-filled-success-500'
 									: 'preset-filled-primary-500'}"
 							onclick={() => {
-								console.log(
-									"Downloading recommended model:",
-									model.pull
-								)
 								currentlyDownloading.add(model.pull)
 								socket.emit("ollama:pullModel", {
 									modelName: model.pull

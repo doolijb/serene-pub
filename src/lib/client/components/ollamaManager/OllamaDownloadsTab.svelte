@@ -210,14 +210,14 @@
 				<div class="bg-primary-500/10 mt-1 rounded-full p-2">
 					{#if progress.isDone}
 						{#if progress.status.toLowerCase() === "cancelled"}
-							<Icons.X size={16} class="text-orange-500" />
+							<Icons.X size={16} class="text-warning-500" />
 						{:else if progress.status.toLowerCase() === "error"}
 							<Icons.AlertTriangle
 								size={16}
-								class="text-red-500"
+								class="text-error-500"
 							/>
 						{:else}
-							<Icons.Check size={16} class="text-green-500" />
+							<Icons.Check size={16} class="text-success-500" />
 						{/if}
 					{:else}
 						<Icons.Download
@@ -304,16 +304,16 @@
 										? ''
 										: 'animate-pulse'} {progress.status.toLowerCase() ===
 									'canceled'
-										? 'bg-orange-500'
+										? 'bg-warning-500'
 										: ['error', 'cancelled'].includes(
 													progress.status.toLowerCase()
 											  )
-											? 'bg-red-500'
+											? 'bg-error-500'
 											: progress.status.toLowerCase() ===
 														'success' ||
 												  isComplete(progress)
-												? 'bg-green-500'
-												: 'bg-blue-500'}"
+												? 'bg-success-500'
+												: 'bg-primary-500'}"
 								></div>
 								<span class="text-muted-foreground font-medium">
 									{progress.status}

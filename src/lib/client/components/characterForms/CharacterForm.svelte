@@ -635,9 +635,6 @@
 
 			// Only update if initialData itself changed (not editCharacterData)
 			if (newDataStr !== lastProcessedInitialData) {
-				console.log(
-					"[CharacterForm] initialData changed, updating form..."
-				)
 				lastProcessedInitialData = newDataStr
 
 				editCharacterData = {
@@ -731,14 +728,14 @@
 					<div class="flex w-full items-center justify-center">
 						<label
 							for="dropzone-file"
-							class="flex w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-700 dark:hover:border-gray-500 dark:hover:bg-gray-800"
+							class="border-surface-300-700 bg-surface-50-950 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed"
 							aria-describedby="avatar-help"
 						>
 							<div
 								class="flex w-full flex-col items-center justify-center"
 							>
 								<svg
-									class="my-4 h-8 w-8 text-gray-500 dark:text-gray-400"
+									class="my-4 h-8 w-8 text-surface-500 dark:text-surface-400"
 									aria-hidden="true"
 									xmlns="http://www.w3.org/2000/svg"
 									fill="none"
@@ -811,7 +808,7 @@
 				type="text"
 				bind:value={editCharacterData.name}
 				class="input {validationErrors.name
-					? 'border-red-500 focus:border-red-500'
+					? 'border-error-500 focus:border-error-500'
 					: ''}"
 				oninput={() => {
 					// Clear validation error when user starts typing
@@ -828,7 +825,7 @@
 			/>
 			{#if validationErrors.name}
 				<p
-					class="mt-1 text-sm text-red-500"
+					class="mt-1 text-sm text-error-500"
 					id="name-error"
 					role="alert"
 				>
@@ -968,7 +965,7 @@
 						rows="8"
 						bind:value={editCharacterData.description}
 						class="input {validationErrors.description
-							? 'border-red-500 focus:border-red-500'
+							? 'border-error-500 focus:border-error-500'
 							: ''}"
 						placeholder="Description..."
 						aria-label="Character description"
@@ -990,7 +987,7 @@
 					></textarea>
 					{#if validationErrors.description}
 						<p
-							class="mt-1 text-sm text-red-500"
+							class="mt-1 text-sm text-error-500"
 							id="description-error"
 							role="alert"
 						>
@@ -1585,7 +1582,7 @@
 		onOpenChange={(e) => {
 			showExportFormatModal = e.open
 		}}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm w-[35rem]"
+		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl w-[min(95vw,560px)]"
 		backdropClasses="backdrop-blur-sm"
 	>
 		{#snippet content()}

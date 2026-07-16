@@ -141,28 +141,20 @@
 	<div
 		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
 	>
-		<div
-			class="mx-4 w-full max-w-md rounded-lg bg-white p-6 shadow-xl dark:bg-gray-800"
-		>
+		<div class="card bg-surface-100-900 mx-4 w-full max-w-md p-6 shadow-xl">
 			<div class="text-center">
 				<!-- Icon -->
 				<div
-					class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-orange-100 dark:bg-orange-900/20"
+					class="bg-warning-500/10 mx-auto flex h-16 w-16 items-center justify-center rounded-full"
 				>
-					<Icons.WifiOff
-						class="h-8 w-8 text-orange-600 dark:text-orange-400"
-					/>
+					<Icons.WifiOff class="text-warning-500 h-8 w-8" />
 				</div>
 
 				<!-- Title -->
-				<h3
-					class="mt-4 text-lg font-semibold text-gray-900 dark:text-gray-100"
-				>
-					Connection Timed Out
-				</h3>
+				<h3 class="h3 mt-4">Connection Timed Out</h3>
 
 				<!-- Description -->
-				<p class="mt-2 text-sm text-gray-600 dark:text-gray-300">
+				<p class="text-surface-600-400 mt-2 text-sm">
 					Your session has expired due to inactivity. You can
 					reconnect to continue using the application.
 				</p>
@@ -170,13 +162,11 @@
 				<!-- Countdown or Ready State -->
 				<div class="mt-4">
 					{#if canReconnect}
-						<p
-							class="text-sm font-medium text-green-600 dark:text-green-400"
-						>
+						<p class="text-success-500 text-sm font-medium">
 							Ready to reconnect
 						</p>
 					{:else if reconnectCountdown > 0}
-						<p class="text-sm text-gray-500 dark:text-gray-400">
+						<p class="text-surface-500 text-sm">
 							Reconnect available in {reconnectCountdown} seconds
 						</p>
 					{/if}
@@ -186,31 +176,31 @@
 				<div class="mt-6 flex flex-col gap-3 sm:flex-row">
 					<!-- Reconnect Button -->
 					<button
+						class="btn preset-filled-primary-500 flex-1"
 						onclick={handleReconnect}
 						disabled={!canReconnect || isReconnecting}
-						class="flex-1 rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-offset-gray-800"
 					>
 						{#if isReconnecting}
-							<Icons.Loader2 class="mr-2 h-4 w-4 animate-spin" />
+							<Icons.Loader2 size={16} class="animate-spin" />
 							Reconnecting...
 						{:else}
-							<Icons.RotateCcw class="mr-2 h-4 w-4" />
+							<Icons.RotateCcw size={16} />
 							Reconnect
 						{/if}
 					</button>
 
 					<!-- Refresh Page Button -->
 					<button
+						class="btn preset-outlined-surface-500 flex-1"
 						onclick={handleRefreshPage}
-						class="flex-1 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 dark:focus:ring-offset-gray-800"
 					>
-						<Icons.RefreshCw class="mr-2 h-4 w-4" />
+						<Icons.RefreshCw size={16} />
 						Refresh Page
 					</button>
 				</div>
 
 				<!-- Additional Info -->
-				<p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+				<p class="text-surface-500 mt-3 text-xs">
 					Sessions expire after 1 hour of inactivity
 				</p>
 			</div>

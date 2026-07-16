@@ -71,6 +71,27 @@
 	@apply card hover:preset-filled-surface-200-800 flex cursor-pointer items-center gap-2 rounded-lg p-2 transition;
 }
 
+/* Consistent press/focus/disabled feedback across every button in the app —
+   Skeleton's own .btn utility (see node_modules/@skeletonlabs/skeleton) only
+   implements a hover brightness effect; it has no built-in active/focus-visible
+   treatment and no disabled dimming, and per-component disabled opacity values
+   were inconsistent (0.25/0.3/0.5) before this. */
+.btn:disabled {
+	@apply pointer-events-none opacity-40 grayscale-[0.3];
+}
+
+.btn:not(:disabled):active {
+	filter: brightness(90%);
+	transform: scale(0.98);
+	@variant dark {
+		filter: brightness(115%);
+	}
+}
+
+.btn:focus-visible {
+	@apply ring-primary-500 outline-none ring-2 ring-offset-2;
+}
+
 .tiptap.ProseMirror {
 	/* padding: 0.33em; */
 	@apply min-h-[6em] rounded-lg px-2 py-2;

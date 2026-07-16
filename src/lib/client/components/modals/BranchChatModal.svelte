@@ -83,7 +83,7 @@
 					bind:this={inputRef}
 					bind:value={title}
 					class="input w-full {validationErrors.title
-						? 'border-red-500'
+						? 'border-error-500'
 						: ''}"
 					type="text"
 					placeholder="Enter chat title..."
@@ -109,7 +109,7 @@
 				{#if validationErrors.title}
 					<p
 						id="title-error"
-						class="mt-1 text-sm text-red-500"
+						class="mt-1 text-sm text-error-500"
 						role="alert"
 					>
 						{validationErrors.title}

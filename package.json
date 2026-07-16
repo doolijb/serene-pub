@@ -102,6 +102,7 @@
 		"ai": "^5.0.90",
 		"codemirror": "^6.0.2",
 		"diff": "^9.0.0",
+		"dompurify": "^3.4.12",
 		"dotenv": "^16.5.0",
 		"drizzle-orm": "^0.40.0",
 		"drizzle-zod": "^0.8.3",

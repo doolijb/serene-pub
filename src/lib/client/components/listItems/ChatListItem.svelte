@@ -135,7 +135,7 @@
 								<Icons.Pencil size={14} /> Edit
 							</button>
 						{/if}
-						{#if onDelete}
+						{#if onDelete && chat.isOwner}
 							<hr class="border-surface-300-700" />
 							<button
 								class="btn btn-sm preset-filled-error-500 w-full justify-start"

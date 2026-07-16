@@ -10,8 +10,13 @@ export const vectorizationConfigGetHandler: Handler<
 > = {
 	event: "vectorizationConfig:get",
 	handler: async (_socket, _params, emitToUser) => {
+		// apiKey deliberately excluded — the client never reads it from this
+		// event (only from the admin-gated vectorization:listModels), so any
+		// authenticated non-admin user could otherwise read the plaintext
+		// embedding-provider API key straight off this response.
 		const config = await db.query.vectorizationConfigs.findFirst({
-			where: eq(schema.vectorizationConfigs.id, 1)
+			where: eq(schema.vectorizationConfigs.id, 1),
+			columns: { apiKey: false }
 		})
 		const res: Sockets.VectorizationConfig.Get.Response = {
 			config: config ?? { embeddingModelTtlMinutes: 5 }

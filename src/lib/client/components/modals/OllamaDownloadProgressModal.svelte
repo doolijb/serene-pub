@@ -89,7 +89,7 @@
 			handleClose()
 		}
 	}}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-2xl border border-surface-300-700 w-[40em] max-w-dvw-lg max-h-[90dvh]"
+	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-2xl border border-surface-300-700 w-[min(95vw,640px)] max-h-[90dvh]"
 	backdropClasses="backdrop-blur-md bg-black/20"
 >
 	{#snippet content()}
@@ -127,17 +127,17 @@
 									{#if progress.status.toLowerCase() === "canceled"}
 										<Icons.X
 											size={16}
-											class="text-orange-500"
+											class="text-warning-500"
 										/>
 									{:else if progress.status.toLowerCase() === "error"}
 										<Icons.AlertTriangle
 											size={16}
-											class="text-red-500"
+											class="text-error-500"
 										/>
 									{:else}
 										<Icons.Check
 											size={16}
-											class="text-green-500"
+											class="text-success-500"
 										/>
 									{/if}
 								{:else}
@@ -230,17 +230,17 @@
 													? ''
 													: 'animate-pulse'} {progress.status.toLowerCase() ===
 												'canceled'
-													? 'bg-orange-500'
+													? 'bg-warning-500'
 													: progress.status.toLowerCase() ===
 														  'error'
-														? 'bg-red-500'
+														? 'bg-error-500'
 														: progress.status.toLowerCase() ===
 																	'success' ||
 															  isComplete(
 																	progress
 															  )
-															? 'bg-green-500'
-															: 'bg-blue-500'}"
+															? 'bg-success-500'
+															: 'bg-primary-500'}"
 											></div>
 											<span
 												class="text-surface-600-400 font-medium"

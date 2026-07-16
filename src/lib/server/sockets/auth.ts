@@ -1,6 +1,7 @@
 import { db } from "$lib/server/db"
 import { tokens } from "$lib/server/auth"
 import { authenticate } from "$lib/server/providers/users/authenticate"
+import { isOriginAllowed } from "$lib/server/sockets/originAllowlist"
 import type { Socket } from "socket.io"
 
 export interface AuthenticatedSocket extends Socket {
@@ -23,6 +24,21 @@ export async function authMiddleware(
 	next: (err?: Error) => void
 ) {
 	try {
+		// Real enforcement point for the origin allowlist — Socket.IO's own
+		// `cors` option (loadSockets.server.ts) only governs the polling
+		// transport; browsers don't apply CORS restrictions to WebSocket
+		// upgrades, so without this check any web page could open a socket
+		// straight to this server and — when accounts are disabled, the
+		// default — get auto-attached to the first admin user below with no
+		// token at all.
+		const origin = socket.handshake.headers.origin as string | undefined
+		const requestHost = socket.handshake.headers.host as string | undefined
+		if (!isOriginAllowed(origin, requestHost)) {
+			console.log(`Socket connection from disallowed origin "${origin}" — rejecting`)
+			socket.disconnect()
+			return next(new Error("Origin not allowed"))
+		}
+
 		// Check if accounts are enabled in system settings
 		const systemSettings = await db.query.systemSettings.findFirst()
 
@@ -129,43 +145,5 @@ export async function authMiddleware(
 		// Reject connection on authentication errors when accounts are enabled
 		socket.disconnect()
 		return next(new Error("Authentication error"))
-	}
-}
-
-/**
- * Middleware wrapper to ensure user is authenticated before handler execution
- */
-export function requireAuth<T extends AuthenticatedSocket>(
-	handler: (socket: T, ...args: any[]) => Promise<any>
-) {
-	return async (socket: T, ...args: any[]) => {
-		// Check if accounts are disabled - if so, allow all requests
-		const systemSettings = await db.query.systemSettings.findFirst()
-		const isAccountsEnabled = systemSettings?.isAccountsEnabled ?? false
-
-		if (!isAccountsEnabled) {
-			// Accounts disabled - always allow with fallback user
-			if (!socket.user) {
-				const fallbackUser = await db.query.users.findFirst({
-					where: (u, { eq }) => eq(u.isAdmin, true),
-					orderBy: (u, { asc }) => [asc(u.id)],
-					columns: {
-						id: true,
-						username: true,
-						isAdmin: true
-					}
-				})
-				if (fallbackUser) {
-					socket.user = fallbackUser
-				}
-			}
-			return handler(socket, ...args)
-		}
-
-		// Accounts enabled - require authentication
-		if (!socket.isAuthenticated || !socket.user) {
-			throw new Error("Authentication required")
-		}
-		return handler(socket, ...args)
 	}
 }

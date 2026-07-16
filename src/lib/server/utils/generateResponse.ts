@@ -461,6 +461,7 @@ export async function generateResponse({
 			chatId,
 			messageId: generatingMessage.id,
 			label: charName || undefined,
+			userId,
 			preflight: (signal) => adapter.preflight(signal),
 			execute: (signal) =>
 				runGenerateAndPersist({

@@ -263,14 +263,27 @@
 		aria-atomic="false"
 	>
 		<div class="p-2">
-			{#if !chat || chat.chatMessages.length === 0}
-				<div class="text-muted mt-8 text-center">No messages yet.</div>
+			{#if !chat}
+				<!-- Still loading the chat itself — distinct from a genuinely
+				     empty chat below, otherwise "No messages yet." flashes on
+				     every chat open even when it has hundreds of messages. -->
+				<div class="flex flex-col items-center gap-2 py-16">
+					<Icons.Loader2 size={28} class="text-surface-400 animate-spin" />
+					<span class="text-muted text-sm">Loading chat…</span>
+				</div>
+			{:else if chat.chatMessages.length === 0}
+				<div class="flex flex-col items-center gap-2 py-16 text-center">
+					<Icons.MessageSquareText size={28} class="text-surface-400" />
+					<span class="text-muted text-sm">
+						Send a message to begin the roleplay
+					</span>
+				</div>
 			{:else}
 				<!-- Loading indicator for older messages -->
 				{#if loadingOlderMessages}
 					<div class="text-muted py-2 text-center">
 						<div class="inline-flex items-center gap-2">
-							<div class="h-4 w-4 animate-spin rounded-full border-b-2 border-current"></div>
+							<Icons.Loader2 size={16} class="animate-spin" />
 							Loading older messages...
 						</div>
 					</div>

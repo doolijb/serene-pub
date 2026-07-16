@@ -3,6 +3,7 @@ import os from "os"
 import * as skio from "sveltekit-io"
 import { connectSockets } from "$lib/server/sockets/index"
 import { authMiddleware } from "$lib/server/sockets/auth"
+import { getHttpsHosts, isOriginAllowed } from "$lib/server/sockets/originAllowlist"
 
 dotenv.config()
 
@@ -16,20 +17,6 @@ export function getSocketsHttpMode() {
 
 export function getSocketsPort() {
 	return process.env.SOCKETS_PORT || "3001"
-}
-
-// Hostnames that are always reached over HTTPS (eg. a tunnel/reverse-proxy
-// domain), regardless of what protocol adapter-node perceives the current
-// request as. Checking the request's *hostname* against this list sidesteps
-// needing PROTOCOL_HEADER to be configured (and trusted) at all for this
-// specific decision — useful since the same deployment might be reachable
-// both directly (plain http://localhost) and through a TLS-terminating
-// tunnel, and a single global SOCKETS_HTTP_MODE can't tell those apart.
-function getHttpsHosts(): string[] {
-	return (process.env.SOCKETS_HTTPS_HOSTS || "")
-		.split(",")
-		.map((h) => h.trim().toLowerCase())
-		.filter(Boolean)
 }
 
 export function getPublicSocketsEndpoint(url?: URL) {
@@ -63,7 +50,29 @@ export async function loadSocketsServer() {
 	const host = `${getSocketsHttpMode()}://${bindHost}:${getSocketsPort()}`
 
 	const io = await skio.setup(host, {
-		cors: { origin: "*", credentials: false },
+		// Governs the polling transport's CORS headers (Socket.IO tries polling
+		// before upgrading to WebSocket by default, so this has to actually
+		// work, not just be a formality — WS enforcement itself happens
+		// separately in authMiddleware, since browsers don't apply CORS/ACAO
+		// restrictions to WS the way they do XHR/polling).
+		//
+		// Passed as a function rather than a static object — the `cors` package
+		// (used internally by engine.io) treats a function as a per-request
+		// options delegate `(req, callback)`, which is the only way to get at
+		// the request's own Host header here. That's needed for the same
+		// zero-config default as isOriginAllowed()'s requestHost param: a
+		// same-site tab's Origin hostname equals whatever hostname it used to
+		// reach this server, so comparing against the request's own Host header
+		// works for localhost/LAN IPs/custom domains without requiring
+		// SOCKETS_HTTPS_HOSTS/SOCKETS_ALLOWED_ORIGINS to be configured at all.
+		cors: (req: any, callback: (err: Error | null, options?: any) => void) => {
+			const origin = req.headers?.origin
+			const requestHost = req.headers?.host
+			callback(null, {
+				origin: isOriginAllowed(origin, requestHost),
+				credentials: false
+			})
+		},
 		maxHttpBufferSize: 1e8
 	})
 

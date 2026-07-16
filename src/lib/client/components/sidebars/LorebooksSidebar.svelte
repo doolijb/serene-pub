@@ -15,6 +15,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import type { SpecV3 } from "@lenml/char-card-reader"
 	import LorebookListItem from "../listItems/LorebookListItem.svelte"
+	import EmptyState from "../EmptyState.svelte"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -249,7 +250,6 @@
 					extensions: json.extensions || {}
 				}
 			} catch (err) {
-				console.log("Error parsing JSON:", err)
 				toaster.error({ title: "Invalid JSON file" })
 			}
 		}
@@ -258,7 +258,6 @@
 
 	function handleImportConfirm() {
 		if (importingBook && importingBook.name?.trim()) {
-			console.log("Importing lorebook:", $state.snapshot(importingBook))
 			const req: Sockets.Lorebooks.Import.Params = {
 				lorebookData: importingBook
 			}
@@ -420,7 +419,7 @@
 					</button>
 				{:else}
 					<button
-						class="btn btn-sm preset-filled-success-500"
+						class="btn btn-sm preset-filled-primary-500"
 						onclick={() => handleAttachToChat(selectedLorebook.id)}
 						disabled={openChatHasLorebook}
 						title={openChatHasLorebook
@@ -539,7 +538,7 @@
 				New
 			</button>
 			<button
-				class="btn btn-sm preset-filled-primary-500"
+				class="btn btn-sm preset-tonal-primary"
 				title="Import Lorebook"
 				onclick={handleImportClick}
 			>
@@ -547,7 +546,7 @@
 				Import
 			</button>
 			<button
-				class="btn btn-sm preset-filled-primary-500"
+				class="btn btn-sm preset-outlined-surface-500"
 				title="Export Lorebook — coming soon"
 				disabled
 			>
@@ -569,9 +568,14 @@
 					<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
 				</div>
 			{:else if filteredLorebooks.length === 0}
-				<div class="text-muted-foreground py-8 text-center">
-					No lorebooks found.
-				</div>
+				<EmptyState
+					icon={Icons.Book}
+					message={search
+						? `No lorebooks found matching "${search}".`
+						: "No lorebooks yet — create one to get started."}
+					ctaLabel={search ? undefined : "New Lorebook"}
+					onCta={search ? undefined : () => (isCreating = true)}
+				/>
 			{:else}
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				{#each filteredLorebooks as l}
@@ -640,7 +644,7 @@
 			showImportModal = e.open
 			if (!e.open) importingBook = undefined
 		}}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm border border-surface-300-700"
+		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
 		backdropClasses="backdrop-blur-sm"
 	>
 		{#snippet content()}
@@ -678,7 +682,7 @@
 					</button>
 					{#if importingBook}
 						<button
-							class="btn preset-filled-success-500"
+							class="btn preset-filled-primary-500"
 							disabled={!importingBook?.name?.trim()}
 							onclick={handleImportConfirm}
 						>
@@ -698,7 +702,7 @@
 			showDeleteConfirmationModal = e.open
 			if (!e.open) deletingLorebookId = undefined
 		}}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm border border-surface-300-700"
+		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
 		backdropClasses="backdrop-blur-sm"
 	>
 		{#snippet content()}

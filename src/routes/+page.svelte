@@ -129,8 +129,8 @@
 			// the sidebar's setup screen hides the Local option on Android.
 			ids.push("vectorization")
 		}
-		ids.push("character")
 		ids.push("persona")
+		ids.push("character")
 		ids.push("create-chat")
 		return ids
 	}

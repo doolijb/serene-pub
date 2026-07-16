@@ -83,6 +83,7 @@ export const koboldCppVersionHandler: Handler<
 > = {
 	event: "koboldcpp:version",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const { koboldCppManagerBaseUrl: baseUrl } =
 			(await db.query.koboldCppSettings.findFirst())!
 
@@ -122,6 +123,7 @@ export const koboldCppIsUpdateAvailableHandler: Handler<
 > = {
 	event: "koboldcpp:isUpdateAvailable",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const { koboldCppManagerBaseUrl: baseUrl } =
 			(await db.query.koboldCppSettings.findFirst())!
 
@@ -171,6 +173,7 @@ export const koboldCppListModelsHandler: Handler<
 > = {
 	event: "koboldcpp:listModels",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const settings = (await db.query.koboldCppSettings.findFirst())!
 		const { koboldCppManagerBaseUrl: baseUrl, koboldCppManagerModelsDir: modelsDir } = settings
 
@@ -381,6 +384,7 @@ export const koboldCppPerfHandler: Handler<
 > = {
 	event: "koboldcpp:perf",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const { koboldCppManagerBaseUrl: baseUrl } =
 			(await db.query.koboldCppSettings.findFirst())!
 
@@ -425,6 +429,7 @@ export const koboldCppGetLoadedConfigHandler: Handler<
 > = {
 	event: "koboldcpp:getLoadedConfig",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const signature = getLoadedSignature()
 		const res: Sockets.KoboldCpp.GetLoadedConfig.Response = {
 			config: signature
@@ -522,6 +527,7 @@ export const koboldCppRecommendedModelsHandler: Handler<
 > = {
 	event: "koboldcpp:recommendedModels",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		if (recommendedCache && Date.now() - recommendedCache.cachedAt < RECOMMENDED_CACHE_TTL_MS) {
 			const res = { models: recommendedCache.models }
 			emitToUser("koboldcpp:recommendedModels", res)
@@ -580,6 +586,7 @@ export const koboldCppSearchModelsHandler: Handler<
 > = {
 	event: "koboldcpp:searchModels",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const { searchTerm } = params
 		const response = await fetch(
 			`https://huggingface.co/api/models?search=${encodeURIComponent(searchTerm)}&filter=gguf&limit=50&sort=trendingScore&full=True&config=True`
@@ -762,6 +769,7 @@ export const koboldCppGetDownloadProgressHandler: Handler<
 > = {
 	event: "koboldcpp:getDownloadProgress",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		// Re-bind emitter on reconnect
 		emitDownloadProgressFn = (data) => emitToUser("koboldcpp:downloadProgress", data)
 		const downloads: Sockets.KoboldCpp.GetDownloadProgress.Response["downloads"] = {}
@@ -1020,6 +1028,7 @@ export const koboldCppGetBinaryDownloadProgress: Handler<
 > = {
 	event: "koboldcpp:getBinaryDownloadProgress",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		binaryManager.setEmitter((d) => emitToUser("koboldcpp:binaryDownloadProgress", d))
 		const res: Sockets.KoboldCpp.GetBinaryDownloadProgress.Response = {
 			download: binaryManager.getDownloadState()
@@ -1080,6 +1089,7 @@ export const koboldCppGetSubprocessStatus: Handler<
 > = {
 	event: "koboldcpp:getSubprocessStatus",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		subprocessManager.setEmitter((s) => emitToUser("koboldcpp:subprocessStatus", s))
 		const res: Sockets.KoboldCpp.GetSubprocessStatus.Response = {
 			status: subprocessManager.getStatus()

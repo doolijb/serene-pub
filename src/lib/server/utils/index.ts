@@ -5,6 +5,28 @@ import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { writeFile, mkdir } from "fs/promises"
 import { v4 as uuid } from "uuid"
+import { fileTypeFromBuffer } from "file-type"
+
+const ALLOWED_IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif"])
+
+/**
+ * Sniffs the real file type from the uploaded bytes and returns a safe
+ * extension to write to disk — never trusts the client-supplied MIME
+ * type/extension, which previously went straight into the on-disk filename
+ * with no verification that it matched the actual file content.
+ */
+async function sniffImageExtension(
+	buffer: Buffer | Uint8Array
+): Promise<string> {
+	const detected = await fileTypeFromBuffer(buffer)
+	const ext = detected?.ext?.toLowerCase()
+	if (!ext || !ALLOWED_IMAGE_EXTENSIONS.has(ext)) {
+		throw new Error(
+			"Uploaded file is not a recognized image type (png/jpg/webp/gif)"
+		)
+	}
+	return ext === "jpeg" ? "jpg" : ext
+}
 
 /**
  * Gets the application data directory with optional override from environment
@@ -88,7 +110,7 @@ export async function handleCharacterAvatarUpload({
 	character: any
 	avatarFile: Buffer
 }) {
-	const ext = character.avatarType?.split("/")[1] || "png"
+	const ext = await sniffImageExtension(avatarFile)
 	const filename = `avatar-${uuid().substring(0, 4)}.${ext}`
 	const avatarDir = getCharacterDataDir({
 		characterId: character.id,
@@ -120,7 +142,7 @@ export async function handleUserBackgroundUpload({
 	backgroundFile: Buffer | Uint8Array
 	mimeType: string
 }) {
-	const ext = mimeType.split("/")[1]?.replace("jpeg", "jpg") || "jpg"
+	const ext = await sniffImageExtension(backgroundFile)
 	const filename = `bg-${uuid().substring(0, 8)}.${ext}`
 	const bgDir = getUserBackgroundsDir({ userId })
 	await mkdir(bgDir, { recursive: true })
@@ -170,7 +192,7 @@ export async function handlePersonaAvatarUpload({
 	persona: any
 	avatarFile: Buffer
 }) {
-	const ext = persona.avatarType?.split("/")[1] || "png"
+	const ext = await sniffImageExtension(avatarFile)
 	const filename = `avatar-${uuid().substring(0, 4)}.${ext}` // Use UUID to ensure unique filename
 	const avatarDir = getPersonaDataDir({
 		personaId: persona.id,
@@ -199,7 +221,7 @@ export async function uploadCharacterGalleryImage({
 	imageFile: Buffer
 	mimeType: string
 }) {
-	const ext = mimeType.split("/")[1]?.replace("jpeg", "jpg") || "png"
+	const ext = await sniffImageExtension(imageFile)
 	const filename = `img-${uuid().substring(0, 8)}.${ext}`
 	const dir = getCharacterDataDir({ characterId, userId })
 	await mkdir(dir, { recursive: true })
@@ -264,7 +286,7 @@ export async function uploadPersonaGalleryImage({
 	imageFile: Buffer
 	mimeType: string
 }) {
-	const ext = mimeType.split("/")[1]?.replace("jpeg", "jpg") || "png"
+	const ext = await sniffImageExtension(imageFile)
 	const filename = `img-${uuid().substring(0, 8)}.${ext}`
 	const dir = getPersonaDataDir({ personaId, userId })
 	await mkdir(dir, { recursive: true })

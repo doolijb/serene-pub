@@ -33,6 +33,7 @@ function emitDownloadProgress(emitToAll: (event: string, data: any) => void) {
 export const ollamaGetDownloadProgress: Handler<Sockets.Ollama.GetDownloadProgress.Params, Sockets.Ollama.GetDownloadProgress.Response> = {
 	event: "ollama:getDownloadProgress",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		// Send current download progress as complete state
 		const res: Sockets.Ollama.GetDownloadProgress.Response = {
 			downloadingQuants
@@ -79,6 +80,7 @@ export const ollamaSetBaseUrl: Handler<Sockets.Ollama.SetBaseUrl.Params, Sockets
 export const ollamaModelsList: Handler<Sockets.Ollama.ModelsList.Params, Sockets.Ollama.ModelsList.Response> = {
 	event: "ollama:modelsList",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			const { ollamaManagerBaseUrl: baseUrl } =
 				(await db.query.ollamaSettings.findFirst())!
@@ -191,6 +193,7 @@ export const ollamaConnectModelHandler: Handler<Sockets.Ollama.ConnectModel.Para
 export const ollamaListRunningModelsHandler: Handler<Sockets.Ollama.ListRunningModels.Params, Sockets.Ollama.ListRunningModels.Response> = {
 	event: "ollama:listRunningModels",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			const { ollamaManagerBaseUrl: baseUrl } =
 				(await db.query.ollamaSettings.findFirst())!
@@ -338,6 +341,7 @@ export const ollamaPullModelHandler: Handler<Sockets.Ollama.PullModel.Params, So
 export const ollamaVersionHandler: Handler<Sockets.Ollama.Version.Params, Sockets.Ollama.Version.Response> = {
 	event: "ollama:version",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			const { ollamaManagerBaseUrl: baseUrl } =
 				(await db.query.ollamaSettings.findFirst())!
@@ -366,6 +370,7 @@ export const ollamaVersionHandler: Handler<Sockets.Ollama.Version.Params, Socket
 export const ollamaIsUpdateAvailableHandler: Handler<Sockets.Ollama.IsUpdateAvailable.Params, Sockets.Ollama.IsUpdateAvailable.Response> = {
 	event: "ollama:isUpdateAvailable",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			// Get current version using direct HTTP request
 			const { ollamaManagerBaseUrl: baseUrl } =
@@ -421,6 +426,7 @@ export const ollamaIsUpdateAvailableHandler: Handler<Sockets.Ollama.IsUpdateAvai
 export const ollamaSearchAvailableModelsHandler: Handler<Sockets.Ollama.SearchAvailableModels.Params, Sockets.Ollama.SearchAvailableModels.Response> = {
 	event: "ollama:searchAvailableModels",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			const { searchTerm: search, source } = params
 			let models: Array<{
@@ -584,6 +590,7 @@ export const ollamaCancelPullHandler: Handler<Sockets.Ollama.CancelPull.Params, 
 export const ollamaRecommendedModelsHandler: Handler<Sockets.Ollama.RecommendedModels.Params, Sockets.Ollama.RecommendedModels.Response> = {
 	event: "ollama:recommendedModels",
 	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			// Fetch the recommended models YAML from GitHub
 			const response = await fetch(
