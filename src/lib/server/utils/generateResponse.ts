@@ -808,8 +808,20 @@ async function runGenerateAndPersist({
 			finalThinking,
 			true // write content to swipe history
 		)
-		const streamingDebugMeta = contextDebuggingEnabled && compiledPrompt?.meta
-			? { debugMeta: compiledPrompt.meta }
+		// debugMeta persists the actual compiled prompt/messages alongside the
+		// stats meta — without them, "Prompt Details" has nothing to browse
+		// after the fact (only the aggregate counts survive), since the raw
+		// compiledPrompt otherwise only lives in memory for this one request.
+		const streamingDebugMetaValue =
+			contextDebuggingEnabled && compiledPrompt?.meta
+				? {
+						...compiledPrompt.meta,
+						prompt: compiledPrompt.prompt,
+						messages: compiledPrompt.messages
+					}
+				: null
+		const streamingDebugMeta = streamingDebugMetaValue
+			? { debugMeta: streamingDebugMetaValue }
 			: {}
 		const ret = await db
 			.update(schema.chatMessages)
@@ -856,9 +868,7 @@ async function runGenerateAndPersist({
 					queueItemId: null,
 					error: null,
 					...(finalMetadata !== null ? { metadata: finalMetadata } : {}),
-					...(contextDebuggingEnabled && compiledPrompt?.meta
-						? { debugMeta: compiledPrompt.meta }
-						: { debugMeta: null })
+					debugMeta: streamingDebugMetaValue
 				}
 			}
 		)
@@ -907,8 +917,16 @@ async function runGenerateAndPersist({
 			nonStreamThinking,
 			true // write content to swipe history
 		)
-		const nonStreamDebugMeta = contextDebuggingEnabled && compiledPrompt?.meta
-			? { debugMeta: compiledPrompt.meta }
+		const nonStreamDebugMetaValue =
+			contextDebuggingEnabled && compiledPrompt?.meta
+				? {
+						...compiledPrompt.meta,
+						prompt: compiledPrompt.prompt,
+						messages: compiledPrompt.messages
+					}
+				: null
+		const nonStreamDebugMeta = nonStreamDebugMetaValue
+			? { debugMeta: nonStreamDebugMetaValue }
 			: {}
 		let updateData: any = {
 			content: nonStreamContent,
@@ -956,9 +974,7 @@ async function runGenerateAndPersist({
 					queueItemId: null,
 					error: null,
 					...(updateData.metadata ? { metadata: updateData.metadata } : {}),
-					...(contextDebuggingEnabled && compiledPrompt?.meta
-						? { debugMeta: compiledPrompt.meta }
-						: { debugMeta: null })
+					debugMeta: nonStreamDebugMetaValue
 				}
 			}
 		)

@@ -1,5 +1,5 @@
 import { KoboldCppAdapter } from "./KoboldCppAdapter"
-import { fetchCurrentModelName } from "$lib/server/koboldcpp/kcppHttp"
+import { fetchCurrentModelName, pingKoboldCpp } from "$lib/server/koboldcpp/kcppHttp"
 import type { AdapterExports } from "./BaseConnectionAdapter"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { koboldCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
@@ -7,6 +7,8 @@ import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { db } from "$lib/server/db"
 import * as subprocessManager from "$lib/server/koboldcpp/subprocessManager"
 import { ensureModelLoaded, DEFAULT_MANAGED_CONFIG } from "$lib/server/koboldcpp/modelManager"
+
+const PREFLIGHT_RETRY_DELAY_MS = 2000
 
 /**
  * A KoboldCpp connection that works with Serene Pub's built-in KoboldCPP
@@ -42,20 +44,52 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 		// (inherited unchanged from KoboldCppAdapter) automatically pick this up.
 		this.connection = { ...this.connection, baseUrl: settings.koboldCppManagerBaseUrl }
 
+		try {
+			await this.attemptPreflight(settings, adminDir, signal, 1)
+		} catch (err: any) {
+			if (signal?.aborted) throw err
+			console.warn(
+				`[KoboldCPP] preflight: attempt 1 failed (${err?.message || err}) — retrying once...`
+			)
+			await new Promise((r) => setTimeout(r, PREFLIGHT_RETRY_DELAY_MS))
+			await this.attemptPreflight(settings, adminDir, signal, 2)
+		}
+	}
+
+	/** One full "make sure the server is up and the right model is loaded"
+	 * pass. Always re-verifies actual liveness with a real ping rather than
+	 * trusting subprocessManager's in-memory isRunning() flag, which can go
+	 * stale (a health-check false-positive, or the process having exited/been
+	 * restarted outside this app's tracking) — so every generation gets a
+	 * fresh check, not just the first one after a cold start. */
+	private async attemptPreflight(
+		settings: NonNullable<Awaited<ReturnType<typeof db.query.koboldCppSettings.findFirst>>>,
+		adminDir: string,
+		signal: AbortSignal | undefined,
+		attemptNum: number
+	): Promise<void> {
+		const baseUrl = settings.koboldCppManagerBaseUrl
+		const alreadyResponding = await pingKoboldCpp(baseUrl, 3000)
+
 		// Only spawn a subprocess in "managed" mode — in "external" mode the
 		// user's own koboldcpp instance is expected to already be running
 		// with the admin API enabled.
-		if (settings.koboldCppManagedMode === "managed" && !subprocessManager.isRunning()) {
-			console.log("[KoboldCPP] preflight: subprocess not running, starting...")
+		if (settings.koboldCppManagedMode === "managed" && !alreadyResponding) {
+			console.log(
+				`[KoboldCPP] preflight attempt ${attemptNum}: subprocess not responding, starting...`
+			)
 			try {
 				await subprocessManager.start()
 			} catch (err: any) {
-				console.error("[KoboldCPP] preflight: subprocess start FAILED:", err)
+				console.error(
+					`[KoboldCPP] preflight attempt ${attemptNum}: subprocess start FAILED:`,
+					err
+				)
 				throw new Error(
 					`KoboldCpp managed subprocess failed to start: ${err?.message || err}`
 				)
 			}
-			console.log("[KoboldCPP] preflight: subprocess started")
+			console.log(`[KoboldCPP] preflight attempt ${attemptNum}: subprocess started`)
 		}
 
 		const managedConfig = {
@@ -65,18 +99,25 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 		}
 		const contextSize = this.sampling.contextTokens ?? 4096
 		console.log(
-			"[KoboldCPP] preflight: connection",
+			`[KoboldCPP] preflight attempt ${attemptNum}: connection`,
 			this.connection.id,
 			"model",
 			managedConfig.modelFile,
 			"contextSize",
 			contextSize
 		)
+
+		// A model load can leave koboldcpp unresponsive to other requests for
+		// minutes on a large GGUF/slow disk — well beyond the health check's
+		// own failure-tolerance window. Suspend it for the duration so a slow
+		// load can never be mistaken for a crash and have its process torn
+		// down while this exact request is still waiting on it.
+		subprocessManager.suspendHealthCheck()
 		try {
 			await ensureModelLoaded({
 				connectionId: this.connection.id,
 				managedConfig,
-				baseUrl: settings.koboldCppManagerBaseUrl,
+				baseUrl,
 				modelsDir: settings.koboldCppManagerModelsDir ?? null,
 				adminDir,
 				adminPassword: settings.koboldCppManagedAdminPassword ?? "",
@@ -84,11 +125,18 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 				contextSize,
 				signal
 			})
-			console.log("[KoboldCPP] preflight: ensureModelLoaded completed OK")
+			console.log(
+				`[KoboldCPP] preflight attempt ${attemptNum}: ensureModelLoaded completed OK`
+			)
 			subprocessManager.pingActivity()
 		} catch (err: any) {
-			console.error("[KoboldCPP] preflight: ensureModelLoaded FAILED:", err)
+			console.error(
+				`[KoboldCPP] preflight attempt ${attemptNum}: ensureModelLoaded FAILED:`,
+				err
+			)
 			throw new Error(`KoboldCpp model load failed: ${err?.message || err}`)
+		} finally {
+			subprocessManager.resumeHealthCheck()
 		}
 	}
 }

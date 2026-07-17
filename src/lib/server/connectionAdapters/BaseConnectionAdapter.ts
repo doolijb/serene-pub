@@ -6,6 +6,8 @@ import type { TokenCounters } from "../utils/TokenCounterManager"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
 import { AssistantPrompts } from "$lib/shared/constants/AssistantPrompts"
 import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
+import { PromptBlockFormatter } from "$lib/shared/utils/PromptBlockFormatter"
+import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 
 export interface BasePromptChat extends SelectChat {
 	chatCharacters?: (SelectChatCharacter & {
@@ -119,7 +121,7 @@ export abstract class BaseConnectionAdapter {
 		}
 
 		if (this.isWorldResponseMode) {
-			return await this.compileWorldResponsePrompt()
+			return await this.compileWorldResponsePrompt(args)
 		}
 
 		return await this.promptBuilder.compilePrompt(args)
@@ -344,7 +346,9 @@ export abstract class BaseConnectionAdapter {
 	 * rather than the default character-perspective compilePrompt(), which
 	 * hard-requires a resolvable currentCharacterId and would throw here.
 	 */
-	protected async compileWorldResponsePrompt(): Promise<PromptBuilderCompiledPrompt> {
+	protected async compileWorldResponsePrompt(
+		args: any = {}
+	): Promise<PromptBuilderCompiledPrompt> {
 		const worldInstructions: string | undefined =
 			this.generatingMessageMetadata?.worldInstructions
 
@@ -388,15 +392,46 @@ export abstract class BaseConnectionAdapter {
 			})
 		}
 
+		// Chat-completion connections (or callers requesting chat format, e.g.
+		// KoboldCpp's "Use Chat Mode") consume `messages` above directly, but
+		// text-completion connections read `prompt` instead — that field was
+		// previously always left undefined here, silently sending an empty
+		// prompt to any connection not in chat mode. Build a real formatted
+		// prompt string too, using the same block-format convention
+		// (ChatML/Vicuna/Llama2/etc.) the connection is otherwise configured
+		// for, ending on an open assistant block so the model continues as
+		// the narrator.
+		const useChatFormat = !!args?.useChatFormat
+		let promptString: string | undefined
+		if (!useChatFormat) {
+			const format = this.connection?.promptFormat || PromptFormats.VICUNA
+			const blocks = messages.map((msg) =>
+				PromptBlockFormatter.makeBlock({
+					format,
+					role: msg.role === "system" ? "system" : msg.role,
+					content: msg.content
+				})
+			)
+			blocks.push(
+				PromptBlockFormatter.makeBlock({
+					format,
+					role: "assistant",
+					content: "",
+					includeClose: false
+				})
+			)
+			promptString = blocks.join("")
+		}
+
 		const totalTokens = await this.promptBuilder.tokenCounter.countTokens(
-			JSON.stringify(messages)
+			useChatFormat ? JSON.stringify(messages) : promptString!
 		)
 
 		return {
-			prompt: undefined,
+			prompt: promptString,
 			messages,
 			meta: {
-				promptFormat: "chat",
+				promptFormat: useChatFormat ? "chat" : "text",
 				templateName: "worldResponse",
 				timestamp: new Date().toISOString(),
 				truncationReason: null,

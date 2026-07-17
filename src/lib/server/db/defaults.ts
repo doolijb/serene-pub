@@ -588,6 +588,7 @@ Example dialogue:
 		"character_lore_entries",
 		"personas",
 		"prompt_configs",
+		"chat_world_prompt_configs",
 		"world_summarize_configs",
 		"character_summarize_configs",
 		"scene_summarize_configs",

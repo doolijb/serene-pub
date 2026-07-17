@@ -197,14 +197,32 @@ async function waitForReady(port: number, timeoutMs = 120_000): Promise<void> {
 // on a large GGUF/slow disk — long enough to miss a single health-check ping
 // while genuinely healthy. Require a few consecutive failures (~90s of total
 // unresponsiveness) before declaring it crashed, rather than acting on one
-// slow tick and orphaning a process that's still fine.
+// slow tick and orphaning a process that's still fine. This alone isn't
+// always enough for a large/slow-to-load model, so callers that know a load
+// is in flight (KoboldCppManagedAdapter.preflight) should also bracket it
+// with suspendHealthCheck()/resumeHealthCheck() below — belt and suspenders.
 const HEALTH_CHECK_FAILURE_THRESHOLD = 3
 let healthCheckFailures = 0
+let healthCheckSuspended = false
+
+/** Pause health checking entirely for the duration of a known-slow operation
+ * (a model load). Unlike the failure-threshold tolerance above, this has no
+ * time limit — a model that takes several minutes to load on slow hardware
+ * still won't get its process torn out from under it. Always pair with
+ * resumeHealthCheck() in a finally block. */
+export function suspendHealthCheck() {
+	healthCheckSuspended = true
+}
+
+export function resumeHealthCheck() {
+	healthCheckSuspended = false
+	healthCheckFailures = 0
+}
 
 function startHealthCheck(port: number) {
 	stopHealthCheck()
 	healthInterval = setInterval(async () => {
-		if (state.status !== "running") return
+		if (state.status !== "running" || healthCheckSuspended) return
 		const ok = await pingKoboldCpp(`http://localhost:${port}`, 5000)
 		if (ok) {
 			healthCheckFailures = 0

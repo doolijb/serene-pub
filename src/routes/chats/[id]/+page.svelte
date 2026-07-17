@@ -1333,7 +1333,11 @@
 							debugMeta={systemSettingsCtx.settings?.contextDebuggingEnabled ? ((msg as any).debugMeta ?? null) : null}
 							onShowDebugMeta={systemSettingsCtx.settings?.contextDebuggingEnabled
 								? (meta: any) => {
-									draftCompiledPrompt = { prompt: undefined, messages: undefined, meta }
+									draftCompiledPrompt = {
+										prompt: meta?.prompt,
+										messages: meta?.messages,
+										meta
+									}
 									showDraftCompiledPromptModal = true
 								  }
 								: undefined}
