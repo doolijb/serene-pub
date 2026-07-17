@@ -147,7 +147,8 @@ const ACCEPTABLE_LICENSES = [
 	"lgpl-3.0 or later",
 	"apache-2.0 and lgpl-3.0-or-later",
 	"apache-2.0 and lgpl-3.0",
-	"apache-2.0 or lgpl-3.0-or-later"
+	"apache-2.0 or lgpl-3.0-or-later",
+	"mpl-2.0"
 ]
 
 function isAcceptableLicense(license, name, version) {
@@ -162,10 +163,19 @@ function isAcceptableLicense(license, name, version) {
 	}
 	// Special case: whitelist
 	if (isWhitelisted(name, version)) return true
+	// npm SPDX dual/multi-license expressions are sometimes wrapped in a
+	// single pair of outer parens, e.g. "(MPL-2.0 OR Apache-2.0)" — unwrap
+	// that first so the blanket parenthetical-notes removal below (meant for
+	// trailing annotations like "MIT (see LICENSE)") doesn't delete the
+	// entire license expression and leave nothing to check.
+	let cleaned = String(license).trim()
+	if (/^\(.*\)$/.test(cleaned)) {
+		cleaned = cleaned.slice(1, -1)
+	}
 	// Remove parentheses and whitespace, split on OR/AND/||/&&
 	// Normalize some common noise and lowercase
-	let cleaned = String(license)
-		.replace(/\s*\(.*?\)\s*/g, "") // remove parenthesized notes
+	cleaned = cleaned
+		.replace(/\s*\(.*?\)\s*/g, "") // remove remaining parenthesized notes
 		.replace(/\s*license:\s*/i, "")
 		.replace(/\s*the\s*/i, "")
 		.toLowerCase()

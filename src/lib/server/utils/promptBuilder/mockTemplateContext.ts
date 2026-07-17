@@ -1,4 +1,5 @@
 import type { TemplateContext } from "./types"
+import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 
 // Static fictional demo story/cast for rendering a context template preview without a real chat.
 export function buildMockTemplateContext(): TemplateContext {
@@ -71,6 +72,8 @@ export function buildMockTemplateContext(): TemplateContext {
 		character: "Kestrel",
 		user: "Ana",
 		persona: "Ana",
+		characterNames: joinWithAnd(["Kestrel", "Old Marrow"]),
+		personaNames: joinWithAnd(["Ana"]),
 		worldLore: JSON.stringify(worldLore, null, 2),
 		history: JSON.stringify(history, null, 2),
 		currentDate: "Year 3 of the Long Descent, early Autumn",

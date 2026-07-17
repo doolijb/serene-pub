@@ -126,13 +126,13 @@
 			compiledPrompt={draftCompiledPrompt}
 			classes=""
 			extraTabs={userPersonasInChat.length > 1
-				? [{ value: "personaSwitcher", title: "Switch Persona", control: personaSwitcherControl, content: personaSwitcherContent }, ...(extraTabs ?? [])]
+				? [{ value: "personaSwitcher", title: "Switch Persona", control: personaSwitcherControl, content: personaSwitcherContent, alwaysVisible: true }, ...(extraTabs ?? [])]
 				: extraTabs}
 		>
 			{#snippet leftControls()}
 				{@const activePersona = currentUserPersona?.persona ?? (!isGuest ? chat?.chatPersonas?.[0]?.persona : undefined)}
 				{#if activePersona}
-					<div class="flex flex-col lg:ml-2 lg:gap-2">
+					<div class="max-lg:hidden flex flex-col lg:ml-2 lg:gap-2">
 						{#if userPersonasInChat.length > 1}
 							<Popover
 								open={personaSwitcherOpen}

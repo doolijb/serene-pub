@@ -71,6 +71,12 @@ export const userSettings = pgTable("user_settings", {
 			onDelete: "set null"
 		}
 	),
+	activeChatWorldPromptConfigId: integer("active_chat_world_prompt_config_id").references(
+		() => chatWorldPromptConfigs.id,
+		{
+			onDelete: "set null"
+		}
+	),
 	activeSummarizeWorldConfigId: integer("active_summarize_world_config_id").references(
 		() => worldSummarizeConfigs.id,
 		{ onDelete: "set null" }
@@ -118,6 +124,10 @@ export const userSettingsRelations = relations(userSettings, ({ one }) => ({
 	activePromptConfig: one(promptConfigs, {
 		fields: [userSettings.activePromptConfigId],
 		references: [promptConfigs.id]
+	}),
+	activeChatWorldPromptConfig: one(chatWorldPromptConfigs, {
+		fields: [userSettings.activeChatWorldPromptConfigId],
+		references: [chatWorldPromptConfigs.id]
 	}),
 	activeSummarizeWorldConfig: one(worldSummarizeConfigs, {
 		fields: [userSettings.activeSummarizeWorldConfigId],
@@ -346,6 +356,27 @@ export const promptConfigs = pgTable("prompt_configs", {
 export const promptConfigsRelations = relations(promptConfigs, ({ one }) => ({
 	connection: one(connections, { fields: [promptConfigs.connectionId], references: [connections.id] }),
 	samplingConfig: one(samplingConfigs, { fields: [promptConfigs.samplingConfigId], references: [samplingConfigs.id] })
+}))
+
+// "chat" prefix is deliberate: this is a prompt config scoped to the
+// standard roleplay chat type specifically, so a future world/environment
+// config for a different chat type (e.g. Assistant) can't collide with it.
+export const chatWorldPromptConfigs = pgTable("chat_world_prompt_configs", {
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	isImmutable: boolean("is_immutable").notNull().default(false),
+	name: text("name").notNull(),
+	// Chat-facing display name/label shown on messages generated with this
+	// config (e.g. "The World", "The Narrator", "Fate") — distinct from
+	// `name` above, which only identifies the config itself in the sidebar.
+	narratorName: text("narrator_name").notNull().default("The World"),
+	systemPrompt: text("system_prompt").notNull(),
+	connectionId: integer("connection_id").references(() => connections.id, { onDelete: "set null" }),
+	samplingConfigId: integer("sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" })
+})
+
+export const chatWorldPromptConfigsRelations = relations(chatWorldPromptConfigs, ({ one }) => ({
+	connection: one(connections, { fields: [chatWorldPromptConfigs.connectionId], references: [connections.id] }),
+	samplingConfig: one(samplingConfigs, { fields: [chatWorldPromptConfigs.samplingConfigId], references: [samplingConfigs.id] })
 }))
 
 export const worldSummarizeConfigs = pgTable("world_summarize_configs", {
@@ -904,6 +935,7 @@ export const chats = pgTable("chats", {
 	connectionId: integer("connection_id").references(() => connections.id, { onDelete: "set null" }),
 	samplingConfigId: integer("sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" }),
 	promptConfigId: integer("prompt_config_id").references(() => promptConfigs.id, { onDelete: "set null" }),
+	chatWorldPromptConfigId: integer("chat_world_prompt_config_id").references(() => chatWorldPromptConfigs.id, { onDelete: "set null" }),
 	drafts: json("drafts")
 		.$type<Record<string, string>>()
 		.notNull()
@@ -935,6 +967,10 @@ export const chatsRelations = relations(chats, ({ one, many }) => ({
 		fields: [chats.promptConfigId],
 		references: [promptConfigs.id]
 	}),
+	chatWorldPromptConfig: one(chatWorldPromptConfigs, {
+		fields: [chats.chatWorldPromptConfigId],
+		references: [chatWorldPromptConfigs.id]
+	}),
 	chatTags: many(chatTags),
 	scenes: many(scenes)
 }))
@@ -957,6 +993,10 @@ export const chatMessages = pgTable(
 			onDelete: "set null"
 		}), // nullable
 		role: text("role"), // 'user', 'character', 'system', etc
+		// True for a manually-triggered "World Response" (narration/environment
+		// flavor, not a character) — characterId/personaId stay null, role stays
+		// "assistant" so existing history-building code keeps including it.
+		isWorldResponse: boolean("is_world_response").notNull().default(false),
 		content: text("content").notNull(),
 		createdAt: date("created_at")
 			.notNull()
@@ -971,6 +1011,8 @@ export const chatMessages = pgTable(
 			swipes?: { currentIdx: number | null; history: [] }
 			waitingForFunctionSelection?: boolean
 			reasoning?: string // Assistant reasoning/thinking before response
+			worldInstructions?: string // Optional extra focus text for a World Response generation
+			worldName?: string // Display name resolved at generation time for a World Response message (e.g. "The World")
 		}>(), // JSON for extra info
 		isGenerating: boolean("is_generating").notNull().default(false), // 1 if processing, 0 otherwise
 		generationStage: text("generation_stage"), // 'queued' | 'loading' | 'generating' | null; only meaningful while isGenerating
@@ -1157,6 +1199,10 @@ export const systemSettings = pgTable("system_settings", {
 		}
 	),
 	lockPromptConfig: boolean("lock_prompt_config").notNull().default(false),
+	defaultChatWorldPromptConfigId: integer("default_chat_world_prompt_config_id").references(
+		() => chatWorldPromptConfigs.id,
+		{ onDelete: "set null" }
+	),
 	isAccountsEnabled: boolean("is_accounts_enabled").notNull().default(false),
 	vectorizationEnabled: boolean("vectorization_enabled")
 		.notNull()
@@ -1201,6 +1247,10 @@ export const systemSettingsRelations = relations(systemSettings, ({ one }) => ({
 	defaultPromptConfig: one(promptConfigs, {
 		fields: [systemSettings.defaultPromptConfigId],
 		references: [promptConfigs.id]
+	}),
+	defaultChatWorldPromptConfig: one(chatWorldPromptConfigs, {
+		fields: [systemSettings.defaultChatWorldPromptConfigId],
+		references: [chatWorldPromptConfigs.id]
 	}),
 	defaultSummarizeWorldConfig: one(worldSummarizeConfigs, {
 		fields: [systemSettings.defaultSummarizeWorldConfigId],

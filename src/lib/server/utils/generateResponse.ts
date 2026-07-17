@@ -13,6 +13,7 @@ import { buildGraphContext } from "./graphContextFormatter"
 import { llmQueue, isQueueCancellation } from "./llmQueue"
 import { persistGenerationStage, persistGenerationErrorRow } from "./generationStatus"
 import { resolveTaskConfig } from "./resolveTaskConfig"
+import { resolveChatWorldPromptConfig } from "./resolveChatWorldPromptConfig"
 import { autoEnqueueChat } from "$lib/server/embedding/vectorizationQueue"
 
 /**
@@ -349,11 +350,39 @@ export async function generateResponse({
 	const { sampling: defaultSampling, contextConfig, promptConfig } =
 		await getUserConfigurations(userId)
 
-	const resolved = await resolveTaskConfig({
-		taskType: "chat",
-		promptConfigId: promptConfig?.id,
-		chatId
-	})
+	// World Response: a manually-triggered, non-character narration/environment
+	// message — uses its own "Chat Prompts: World" config instead of the
+	// chat's normal prompt config. The chat's own override (set via Edit Chat)
+	// wins over the user's active/system-default pick — see
+	// resolveChatWorldPromptConfig.ts.
+	const isWorldResponseMode = !!generatingMessage.isWorldResponse
+	const chatWorldPromptConfig = isWorldResponseMode
+		? await resolveChatWorldPromptConfig(chat, userId)
+		: null
+
+	if (isWorldResponseMode && !chatWorldPromptConfig) {
+		await persistGenerationErrorRow(
+			socket.io,
+			generatingMessage.chatId,
+			generatingMessage.id,
+			new Error(
+				"No World Response prompt config configured. Set one up under Chat Prompts: World in Settings."
+			)
+		)
+		return false
+	}
+
+	const resolved = isWorldResponseMode
+		? await resolveTaskConfig({
+				taskType: "chatWorldPrompt",
+				chatWorldPromptConfigId: chatWorldPromptConfig!.id,
+				chatId
+			})
+		: await resolveTaskConfig({
+				taskType: "chat",
+				promptConfigId: promptConfig?.id,
+				chatId
+			})
 	const connection = resolved.connection
 	const sampling = resolved.sampling ?? defaultSampling
 
@@ -383,16 +412,22 @@ export async function generateResponse({
 	})
 	const contextDebuggingEnabled = sysSettings?.contextDebuggingEnabled ?? false
 
-	// Get fresh metadata from the generating message (important for reasoning detection)
-	const generatingMessageMetadata = (generatingMessage.metadata as any) || {}
+	// Get fresh metadata from the generating message (important for reasoning
+	// detection) — isWorldResponse rides along here rather than as a separate
+	// adapter constructor param; see the comment on isWorldResponseMode in
+	// BaseConnectionAdapter.ts for why.
+	const generatingMessageMetadata = {
+		...((generatingMessage.metadata as any) || {}),
+		isWorldResponse: isWorldResponseMode
+	}
 
 	const adapter = new Adapter({
 		chat,
 		connection: connection,
 		sampling: sampling,
 		contextConfig: contextConfig,
-		promptConfig: promptConfig,
-		currentCharacterId: isAssistantMode
+		promptConfig: isWorldResponseMode ? chatWorldPromptConfig! : promptConfig,
+		currentCharacterId: isAssistantMode || isWorldResponseMode
 			? null
 			: generatingMessage.characterId!,
 		tokenCounter,
@@ -404,8 +439,10 @@ export async function generateResponse({
 	// Thread context debugging flag into prompt builder
 	adapter.promptBuilder.diagnosticsEnabled = contextDebuggingEnabled
 
-	// Inject narrative graph context into system instructions (if lorebook + node present)
-	if (!isAssistantMode && chat?.lorebookId) {
+	// Inject narrative graph context into system instructions (if lorebook + node
+	// present) — skipped for World Response, which has no character perspective
+	// of its own to build graph context from.
+	if (!isAssistantMode && !isWorldResponseMode && chat?.lorebookId) {
 		try {
 			const graphCtx = await buildGraphContext({
 				chatId,
@@ -455,12 +492,12 @@ export async function generateResponse({
 
 	const { done } = llmQueue.enqueue<GenerateExecuteResult>(
 		{
-			taskType: "chat",
+			taskType: isWorldResponseMode ? "chatWorldPrompt" : "chat",
 			connectionName: resolved.connectionName,
 			samplingName: resolved.samplingName,
 			chatId,
 			messageId: generatingMessage.id,
-			label: charName || undefined,
+			label: isWorldResponseMode ? "The World" : charName || undefined,
 			userId,
 			preflight: (signal) => adapter.preflight(signal),
 			execute: (signal) =>

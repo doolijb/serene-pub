@@ -5,6 +5,7 @@ import {
 import type { TokenCounters } from "../utils/TokenCounterManager"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
 import { AssistantPrompts } from "$lib/shared/constants/AssistantPrompts"
+import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 
 export interface BasePromptChat extends SelectChat {
 	chatCharacters?: (SelectChatCharacter & {
@@ -55,6 +56,7 @@ export abstract class BaseConnectionAdapter {
 	isAborting = false
 	isAssistantMode = false
 	isSummarizerMode = false
+	isWorldResponseMode = false
 	generatingMessageMetadata: any = {}
 	promptBuilder: PromptBuilder
 
@@ -79,6 +81,15 @@ export abstract class BaseConnectionAdapter {
 		this.currentCharacterId = currentCharacterId
 		this.isAssistantMode =
 			isAssistantMode || chat.chatType === ChatTypes.ASSISTANT
+		// Deliberately derived from generatingMessageMetadata rather than its
+		// own constructor param: every adapter subclass (KoboldCpp, Ollama,
+		// LMStudio, OpenAI, Anthropic, LlamaCpp) has its own constructor with
+		// an explicit destructured field list and forwards generatingMessageMetadata
+		// faithfully, but a plain boolean param added here would silently need
+		// updating in all six of those subclasses too — easy to miss (this
+		// exact bug happened once already). Piggybacking on a field that's
+		// already reliably threaded through avoids that whole class of bug.
+		this.isWorldResponseMode = !!generatingMessageMetadata?.isWorldResponse
 		this.isSummarizerMode = chat.chatType === ChatTypes.SUMMARIZE
 		this.generatingMessageMetadata = generatingMessageMetadata
 		this.promptBuilder = new PromptBuilder({
@@ -105,6 +116,10 @@ export abstract class BaseConnectionAdapter {
 		// Use assistant prompt compilation for assistant mode
 		if (this.isAssistantMode) {
 			return await this.compileAssistantPrompt(args)
+		}
+
+		if (this.isWorldResponseMode) {
+			return await this.compileWorldResponsePrompt()
 		}
 
 		return await this.promptBuilder.compilePrompt(args)
@@ -294,6 +309,95 @@ export abstract class BaseConnectionAdapter {
 			meta: {
 				promptFormat: "chat",
 				templateName: "summarizer",
+				timestamp: new Date().toISOString(),
+				truncationReason: null,
+				currentTurnCharacterId: null,
+				tokenCounts: {
+					total: totalTokens,
+					limit: await this.getContextTokenLimit()
+				},
+				chatMessages: {
+					included: this.chat.chatMessages.filter(
+						(m: SelectChatMessage) => !m.isHidden
+					).length,
+					total: this.chat.chatMessages.length,
+					includedIds: this.chat.chatMessages
+						.filter((m: SelectChatMessage) => !m.isHidden)
+						.map((m: SelectChatMessage) => m.id),
+					excludedIds: this.chat.chatMessages
+						.filter((m: SelectChatMessage) => m.isHidden)
+						.map((m: SelectChatMessage) => m.id)
+				},
+				sources: {
+					characters: [],
+					personas: [],
+					scenario: null
+				}
+			}
+		}
+	}
+
+	/**
+	 * Compile a "World Response" prompt — a manually-triggered narration/
+	 * environment response with no character perspective of its own. Follows
+	 * compileSummarizerPrompt()'s pattern (system prompt + full history)
+	 * rather than the default character-perspective compilePrompt(), which
+	 * hard-requires a resolvable currentCharacterId and would throw here.
+	 */
+	protected async compileWorldResponsePrompt(): Promise<PromptBuilderCompiledPrompt> {
+		const worldInstructions: string | undefined =
+			this.generatingMessageMetadata?.worldInstructions
+
+		// No single "current character" exists in this mode, so {{char}}/
+		// {{character}} and {{user}}/{{persona}} resolve to the full joined
+		// cast lists here rather than one name — {{characterNames}}/
+		// {{personaNames}} are exposed too, as the forward-looking names for
+		// the same values.
+		const characterNames = joinWithAnd(
+			this.promptBuilder.getVisibleCharacterNames()
+		)
+		const personaNames = joinWithAnd(this.promptBuilder.getPersonaNames())
+		const interpolationEngine = this.promptBuilder.getInterpolationEngine()
+		const interpolationContext = interpolationEngine.createInterpolationContext({
+			currentCharacterName: characterNames,
+			currentPersonaName: personaNames,
+			additionalContext: { characterNames, personaNames }
+		})
+		const interpolatedSystemPrompt =
+			interpolationEngine.interpolateString(
+				this.promptConfig.systemPrompt,
+				interpolationContext
+			) ?? this.promptConfig.systemPrompt
+
+		const systemContent = worldInstructions
+			? `${interpolatedSystemPrompt}\n\nAdditional focus for this response: ${worldInstructions}`
+			: interpolatedSystemPrompt
+
+		const messages: any[] = [
+			{
+				role: "system",
+				content: systemContent
+			}
+		]
+
+		for (const msg of this.chat.chatMessages) {
+			if (msg.isHidden) continue
+			messages.push({
+				role: msg.role === "assistant" ? "assistant" : "user",
+				content: msg.content
+			})
+		}
+
+		const totalTokens = await this.promptBuilder.tokenCounter.countTokens(
+			JSON.stringify(messages)
+		)
+
+		return {
+			prompt: undefined,
+			messages,
+			meta: {
+				promptFormat: "chat",
+				templateName: "worldResponse",
 				timestamp: new Date().toISOString(),
 				truncationReason: null,
 				currentTurnCharacterId: null,

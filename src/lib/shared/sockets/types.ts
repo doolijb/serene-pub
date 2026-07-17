@@ -661,6 +661,26 @@ declare global {
 					error?: string
 				}
 			}
+			namespace TriggerWorldResponse {
+				interface Params {
+					chatId: number
+					/** Optional extra focus text for this specific generation. */
+					instructions?: string
+				}
+				interface Response {
+					success?: boolean
+					error?: string
+				}
+			}
+			namespace GetWorldNarratorName {
+				interface Params {
+					chatId: number
+				}
+				interface Response {
+					chatId: number
+					narratorName: string
+				}
+			}
 			namespace Branch {
 				interface Params {
 					chatId: number
@@ -1260,6 +1280,57 @@ declare global {
 				}
 				interface Response {
 					promptConfig: SelectPromptConfig
+				}
+			}
+			namespace Delete {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					success?: string
+					error?: string
+				}
+			}
+			namespace SetUserActive {
+				interface Params {
+					id: number | null
+				}
+				interface Response {
+					user: SelectUser
+				}
+			}
+		}
+
+		// Chat World Prompt Configs namespace ("Chat Prompts: World")
+		namespace ChatWorldPromptConfigs {
+			namespace List {
+				interface Params {}
+				interface Response {
+					chatWorldPromptConfigsList: Partial<SelectChatWorldPromptConfig>[]
+				}
+			}
+			namespace Get {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					chatWorldPromptConfig: SelectChatWorldPromptConfig
+				}
+			}
+			namespace Create {
+				interface Params {
+					chatWorldPromptConfig: InsertChatWorldPromptConfig
+				}
+				interface Response {
+					chatWorldPromptConfig: SelectChatWorldPromptConfig
+				}
+			}
+			namespace Update {
+				interface Params {
+					chatWorldPromptConfig: UpdateChatWorldPromptConfig
+				}
+				interface Response {
+					chatWorldPromptConfig: SelectChatWorldPromptConfig
 				}
 			}
 			namespace Delete {

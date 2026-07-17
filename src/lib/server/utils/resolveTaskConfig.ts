@@ -3,6 +3,7 @@ import * as schema from "$lib/server/db/schema"
 
 export type TaskType =
 	| "chat"
+	| "chatWorldPrompt"
 	| "chat_title"
 	| "field_generation"
 	| "summarize_batch"
@@ -30,6 +31,8 @@ export async function resolveTaskConfig(params: {
 	taskType: TaskType
 	/** ID of the prompt config (chat generation) */
 	promptConfigId?: number | null
+	/** ID of the chat-world prompt config (World Response generation) */
+	chatWorldPromptConfigId?: number | null
 	/** ID of the active summarize config (summarization tasks) */
 	summarizeConfigId?: number | null
 	/** Type of summarize config table */
@@ -39,7 +42,7 @@ export async function resolveTaskConfig(params: {
 	/** ID of the chat (optional per-chat override) */
 	chatId?: number | null
 }): Promise<ResolvedTaskConfig> {
-	const { taskType, promptConfigId, summarizeConfigId, summarizeConfigType, graphBuildConfigId, chatId } = params
+	const { taskType, promptConfigId, chatWorldPromptConfigId, summarizeConfigId, summarizeConfigType, graphBuildConfigId, chatId } = params
 
 	const systemSettings = await db.query.systemSettings.findFirst()
 
@@ -61,6 +64,13 @@ export async function resolveTaskConfig(params: {
 		if (taskType === "chat" && promptConfigId) {
 			const cfg = await db.query.promptConfigs.findFirst({
 				where: (c, { eq }) => eq(c.id, promptConfigId),
+				columns: { connectionId: true, samplingConfigId: true }
+			})
+			overrideConnectionId = cfg?.connectionId ?? null
+			overrideSamplingId = cfg?.samplingConfigId ?? null
+		} else if (taskType === "chatWorldPrompt" && chatWorldPromptConfigId) {
+			const cfg = await db.query.chatWorldPromptConfigs.findFirst({
+				where: (c, { eq }) => eq(c.id, chatWorldPromptConfigId),
 				columns: { connectionId: true, samplingConfigId: true }
 			})
 			overrideConnectionId = cfg?.connectionId ?? null

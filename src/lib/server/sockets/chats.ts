@@ -14,6 +14,7 @@ import { dev } from "$app/environment"
 import type { Handler } from "$lib/shared/events"
 import { getUserConfigurations } from "../utils/getUserConfigurations"
 import { resolveTaskConfig } from "../utils/resolveTaskConfig"
+import { resolveChatWorldPromptConfig } from "../utils/resolveChatWorldPromptConfig"
 import { llmQueue } from "../utils/llmQueue"
 import {
 	broadcastToChatUsers,
@@ -105,7 +106,12 @@ async function checkMessageEditPermission(
 ): Promise<boolean> {
 	const message = await db.query.chatMessages.findFirst({
 		where: eq(schema.chatMessages.id, messageId),
-		columns: { chatId: true, characterId: true, personaId: true }
+		columns: {
+			chatId: true,
+			characterId: true,
+			personaId: true,
+			isWorldResponse: true
+		}
 	})
 
 	if (!message) return false
@@ -121,6 +127,10 @@ async function checkMessageEditPermission(
 		if (chatAccess.isOwner) return true
 		return await checkCharacterOwnership(message.characterId, userId)
 	}
+
+	// World Response messages aren't owned by any persona/character — only
+	// the chat owner controls them (nobody guest-owns "the world").
+	if (message.isWorldResponse) return chatAccess.isOwner
 
 	return false
 }
@@ -1499,55 +1509,17 @@ export const chatMessagesSendPersonaMessageHandler: Handler<
 				{ chatMessage: inserted }
 			)
 
-			// Round-robin: only trigger character response(s) once every persona in
-			// the chat has sent a message since the last character reply — not just
-			// the persona who happens to have sent this particular message. Checking
-			// only "is there 1 active character" (as before) ignored persona count
-			// entirely, so a chat with 1 character and multiple personas triggered a
-			// reply after every single persona message instead of waiting for all of
-			// them to go.
-			const chatPersonaIds = chat.chatPersonas
-				.map((cp: any) => cp.personaId)
-				.filter((id: any): id is number => id != null)
-
-			let lastCharacterMsgIdx = -1
-			for (let i = chat.chatMessages.length - 1; i >= 0; i--) {
-				if (
-					chat.chatMessages[i].role === "assistant" &&
-					chat.chatMessages[i].characterId
-				) {
-					lastCharacterMsgIdx = i
-					break
-				}
-			}
-			const messagesSinceLastCharacter = chat.chatMessages.slice(
-				lastCharacterMsgIdx + 1
+			// Round-robin no longer waits for every persona to speak before letting
+			// a character go — a persona can freely speak between two characters'
+			// turns. getNextCharacterTurn decides per-character, from message
+			// recency, whether anyone is actually due right now (see
+			// getNextCharacterTurn.ts), so this is safe to call after every
+			// persona message: it's a no-op if nobody's due yet.
+			await triggerGenerateMessageHandler.handler(
+				socket,
+				{ chatId },
+				emitToUser
 			)
-			const respondedPersonaIds = new Set(
-				messagesSinceLastCharacter
-					.filter((m: any) => m.role === "user" && m.personaId)
-					.map((m: any) => m.personaId)
-			)
-			// The message just inserted isn't in chat.chatMessages — chat was
-			// fetched before the insert above.
-			if (personaId) respondedPersonaIds.add(personaId)
-
-			const allPersonasResponded =
-				chatPersonaIds.length > 0 &&
-				chatPersonaIds.every((id: number) => respondedPersonaIds.has(id))
-
-			if (allPersonasResponded) {
-				console.log(
-					`[sendPersonaMessage] All ${chatPersonaIds.length} persona(s) have responded — triggering character response(s) for chat ${chatId}`
-				)
-				// No `once` — let the trigger loop cycle through every active
-				// character's turn (getNextCharacterTurn stops once each has replied).
-				await triggerGenerateMessageHandler.handler(
-					socket,
-					{ chatId },
-					emitToUser
-				)
-			}
 
 			return res
 		} catch (error: any) {
@@ -2249,20 +2221,17 @@ export const chatsGetResponseOrderHandler: Handler<
 			}
 
 			// Get next character turn using existing logic
-			const nextCharacterId = getNextCharacterTurn(
-				{
-					chatMessages: chat.chatMessages,
-					chatCharacters: chat.chatCharacters
-						.filter((cc) => cc.character !== null && cc.isActive)
-						.sort(
-							(a, b) => (a.position ?? 0) - (b.position ?? 0)
-						) as any,
-					chatPersonas: chat.chatPersonas.filter(
-						(cp) => cp.persona !== null
-					) as any
-				},
-				{ triggered: false }
-			)
+			const nextCharacterId = getNextCharacterTurn({
+				chatMessages: chat.chatMessages,
+				chatCharacters: chat.chatCharacters
+					.filter((cc) => cc.character !== null && cc.isActive)
+					.sort(
+						(a, b) => (a.position ?? 0) - (b.position ?? 0)
+					) as any,
+				chatPersonas: chat.chatPersonas.filter(
+					(cp) => cp.persona !== null
+				) as any
+			})
 
 			const res: Sockets.Chats.GetResponseOrder.Response = {
 				chatId: params.chatId,
@@ -2609,23 +2578,20 @@ export const promptTokenCountHandler: Handler<
 				chatMessages: [...chat.chatMessages]
 			}
 
-			const currentCharacterId = getNextCharacterTurn(
-				{
-					chatMessages: chat.chatMessages,
-					chatCharacters: chat.chatCharacters
-						.filter(
-							(cc: any) =>
-								cc && cc.character != null && cc.isActive
-						)
-						.sort(
-							(a, b) => (a.position ?? 0) - (b.position ?? 0)
-						) as any,
-					chatPersonas: chat.chatPersonas.filter(
-						(cp: any) => cp && cp.persona != null
-					) as any
-				},
-				{ triggered: true }
-			)
+			const currentCharacterId = getNextCharacterTurn({
+				chatMessages: chat.chatMessages,
+				chatCharacters: chat.chatCharacters
+					.filter(
+						(cc: any) =>
+							cc && cc.character != null && cc.isActive
+					)
+					.sort(
+						(a, b) => (a.position ?? 0) - (b.position ?? 0)
+					) as any,
+				chatPersonas: chat.chatPersonas.filter(
+					(cp: any) => cp && cp.persona != null
+				) as any
+			})
 
 			if (!currentCharacterId) {
 				return { error: "No character available for prompt." }
@@ -2675,12 +2641,10 @@ export const triggerGenerateMessageHandler: Handler<
 			const userId = socket.user!.id
 			const msgLimit = 10
 			let currentMsg = 1
-			let triggered =
-				params.triggered !== undefined ? params.triggered : false
 			let ok = true
 
 			console.log(
-				`[triggerGenerateMessage] Starting generation for chat ${params.chatId}, once: ${params.once}, characterId: ${params.characterId}, triggered: ${triggered}`
+				`[triggerGenerateMessage] Starting generation for chat ${params.chatId}, once: ${params.once}, characterId: ${params.characterId}`
 			)
 
 			while (currentMsg <= msgLimit && ok) {
@@ -2707,60 +2671,22 @@ export const triggerGenerateMessageHandler: Handler<
 					(cc) => cc.character !== null && cc.isActive
 				)
 
-				// Find the next character who should reply
+				// Find the next character who should reply — an explicit
+				// characterId always wins (manual out-of-turn trigger); otherwise
+				// ask getNextCharacterTurn who's actually due right now. It's
+				// stateless (recomputed from message history every call), so
+				// there's no separate "triggered" mode to reconcile here anymore.
 				const nextCharacterId =
 					params.characterId ||
-					getNextCharacterTurn(
-						{
-							chatMessages: chat.chatMessages,
-							chatCharacters: activeCharacters.sort(
-								(a, b) => (a.position ?? 0) - (b.position ?? 0)
-							) as any,
-							chatPersonas: chat.chatPersonas.filter(
-								(cp) => cp.persona !== null
-							) as any
-						},
-						{ triggered }
-					)
-
-				// Check if this is a triggered response when all characters have already responded
-				if (triggered && nextCharacterId) {
-					// Check with triggered: false to see if any character needs a normal turn
-					const normalTurnCharacterId = getNextCharacterTurn(
-						{
-							chatMessages: chat.chatMessages,
-							chatCharacters: activeCharacters.sort(
-								(a, b) => (a.position ?? 0) - (b.position ?? 0)
-							) as any,
-							chatPersonas: chat.chatPersonas.filter(
-								(cp) => cp.persona !== null
-							) as any
-						},
-						{ triggered: false }
-					)
-
-					if (!normalTurnCharacterId) {
-						// All characters have had their normal turn
-						// For triggered mode, we should only generate ONE response
-						console.log(
-							`[triggerGenerateMessage] Triggered mode: All characters have responded, allowing ONE triggered response`
-						)
-
-						// After generating this ONE message, we need to ensure the loop stops
-						// We'll do this by setting params.once = true for triggered responses
-						if (!params.once) {
-							params.once = true
-							console.log(
-								`[triggerGenerateMessage] Setting once=true to prevent triggered response loop`
-							)
-						}
-					} else {
-						// Some characters still need their normal turn
-						console.log(
-							`[triggerGenerateMessage] Normal turn mode: Character ${normalTurnCharacterId} needs to respond`
-						)
-					}
-				}
+					getNextCharacterTurn({
+						chatMessages: chat.chatMessages,
+						chatCharacters: activeCharacters.sort(
+							(a, b) => (a.position ?? 0) - (b.position ?? 0)
+						) as any,
+						chatPersonas: chat.chatPersonas.filter(
+							(cp) => cp.persona !== null
+						) as any
+					})
 
 				if (!nextCharacterId) {
 					break
@@ -2821,47 +2747,7 @@ export const triggerGenerateMessageHandler: Handler<
 				}
 
 				// If once is true, exit after the first message
-				if (params.once) {
-					// Re-fetch chat to get updated message list
-					const updatedChat = await getPromptChatFromDb(
-						params.chatId,
-						userId
-					)
-					if (!updatedChat) break
-
-					// Check if we're in triggered mode with all characters having responded
-					const updatedActiveCharacters =
-						updatedChat.chatCharacters.filter(
-							(cc) => cc.character !== null && cc.isActive
-						)
-					const normalTurnCharacterId = getNextCharacterTurn(
-						{
-							chatMessages: updatedChat.chatMessages,
-							chatCharacters: updatedActiveCharacters.sort(
-								(a, b) => (a.position ?? 0) - (b.position ?? 0)
-							) as any,
-							chatPersonas: updatedChat.chatPersonas.filter(
-								(cp) => cp.persona !== null
-							) as any
-						},
-						{ triggered: false }
-					)
-
-					if (triggered && !normalTurnCharacterId) {
-						// In triggered mode with all characters responded - stop after one
-						console.log(
-							`[triggerGenerateMessage] Breaking loop due to once=true in triggered mode`
-						)
-						break
-					} else if (!triggered) {
-						// In normal mode with once=true - also stop after one
-						console.log(
-							`[triggerGenerateMessage] Breaking loop due to once=true parameter`
-						)
-						break
-					}
-					// Otherwise, continue to let all characters take their normal turn
-				}
+				if (params.once) break
 
 				currentMsg++
 			}
@@ -2873,6 +2759,125 @@ export const triggerGenerateMessageHandler: Handler<
 				error: "Failed to trigger message generation."
 			}
 		}
+	}
+}
+
+// "The World" — a manually-triggered, non-character narration/environment
+// response. Deliberately does NOT touch chat.chatCharacters or
+// getNextCharacterTurn at all: since a world message is never a
+// chatCharacters row, it's automatically excluded from round-robin with no
+// extra exclusion logic needed.
+export const triggerWorldResponseHandler: Handler<
+	Sockets.Chats.TriggerWorldResponse.Params,
+	Sockets.Chats.TriggerWorldResponse.Response
+> = {
+	event: "chats:triggerWorldResponse",
+	handler: async (socket, params, emitToUser) => {
+		try {
+			const userId = socket.user!.id
+
+			const chat = await getPromptChatFromDb(params.chatId, userId)
+			if (!chat) {
+				return { error: "Error triggering World Response: Chat not found." }
+			}
+
+			const hasGeneratingMessages = chat.chatMessages.some(
+				(msg) => msg.isGenerating
+			)
+			if (hasGeneratingMessages) {
+				return {
+					error: "A response is already generating in this chat."
+				}
+			}
+
+			// Resolve the effective world config (chat override → user active →
+			// system default) up front so the message's display name is
+			// snapshotted at generation time — later renaming a config, or
+			// changing the chat's override, doesn't retroactively relabel
+			// already-generated messages.
+			const effectiveWorldConfig = await resolveChatWorldPromptConfig(
+				chat,
+				userId
+			)
+			const worldName = effectiveWorldConfig?.narratorName || "The World"
+
+			const worldMessage: InsertChatMessage = {
+				userId,
+				chatId: params.chatId,
+				personaId: null,
+				characterId: null,
+				content: "",
+				role: "assistant",
+				isWorldResponse: true,
+				isGenerating: true,
+				generationStage: "queued",
+				metadata: {
+					worldName,
+					...(params.instructions
+						? { worldInstructions: params.instructions }
+						: {})
+				}
+			}
+
+			const [generatingMessage] = await db
+				.insert(schema.chatMessages)
+				.values(worldMessage)
+				.returning()
+
+			await broadcastToChatUsers(
+				socket.io,
+				generatingMessage.chatId,
+				"chatMessage",
+				{ chatMessage: generatingMessage }
+			)
+
+			const ok = await generateResponse({
+				socket,
+				emitToUser,
+				chatId: params.chatId,
+				userId,
+				generatingMessage: generatingMessage as any
+			})
+
+			return { success: ok }
+		} catch (error) {
+			console.error("Error in triggerWorldResponseHandler:", error)
+			return {
+				error: "Failed to trigger World Response."
+			}
+		}
+	}
+}
+
+// Lets the client label the World trigger button/modal correctly BEFORE any
+// message exists (e.g. a chat-specific narrator name like "Fate" instead of
+// the default "The World"). Deliberately not admin-gated — any chat
+// participant (owner or guest) needs to see this, unlike the
+// chatWorldPromptConfigs CRUD handlers which manage the underlying configs.
+export const chatsGetWorldNarratorNameHandler: Handler<
+	Sockets.Chats.GetWorldNarratorName.Params,
+	Sockets.Chats.GetWorldNarratorName.Response
+> = {
+	event: "chats:getWorldNarratorName",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const chatAccess = await checkChatAccess(params.chatId, userId)
+		if (!chatAccess.hasAccess) {
+			return { chatId: params.chatId, narratorName: "The World" }
+		}
+
+		const chat = await db.query.chats.findFirst({
+			where: (c, { eq }) => eq(c.id, params.chatId),
+			columns: { chatWorldPromptConfigId: true }
+		})
+
+		const config = await resolveChatWorldPromptConfig(chat, userId)
+		const res: Sockets.Chats.GetWorldNarratorName.Response = {
+			chatId: params.chatId,
+			narratorName: config?.narratorName || "The World"
+		}
+		emitToUser("chats:getWorldNarratorName", res)
+		return res
 	}
 }
 
@@ -3204,6 +3209,8 @@ export function registerChatHandlers(
 	register(socket, chatMessageHandler, emitToUser)
 	register(socket, promptTokenCountHandler, emitToUser)
 	register(socket, triggerGenerateMessageHandler, emitToUser)
+	register(socket, triggerWorldResponseHandler, emitToUser)
+	register(socket, chatsGetWorldNarratorNameHandler, emitToUser)
 	register(socket, toggleChatCharacterActiveHandler, emitToUser)
 	register(socket, updateChatCharacterVisibilityHandler, emitToUser)
 	register(socket, assistantSaveDraftHandler, emitToUser)

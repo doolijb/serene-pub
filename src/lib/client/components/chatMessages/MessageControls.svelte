@@ -87,7 +87,7 @@
 				<p class="text-xl font-bold">Message Options</p>
 			</header>
 			<article class="flex flex-col gap-2">
-				{#if !!msg.characterId && isLastMessage && !msg.isGenerating}
+				{#if (!!msg.characterId || msg.isWorldResponse) && isLastMessage && !msg.isGenerating}
 					<button
 						class="btn btn-sm msg-cntrl-icon hover:preset-filled-warning-500"
 						title="Regenerate Response"

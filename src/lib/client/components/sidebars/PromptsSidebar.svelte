@@ -15,7 +15,7 @@
 	let { onclose = $bindable() }: Props = $props()
 
 	// ── View state ───────────────────────────────────────────────────────────
-	type View = "index" | "chat" | "world" | "character" | "scene"
+	type View = "index" | "chat" | "chatWorld" | "world" | "character" | "scene"
 	let view = $state<View>("index")
 
 	const socket = useTypedSocket()
@@ -38,6 +38,25 @@
 	let activeChatName = $derived.by(() => {
 		const id = userSettingsCtx.settings?.activePromptConfigId ?? chatList[0]?.id
 		return chatList.find((p) => p.id === id)?.name ?? null
+	})
+
+	// ── Chat Prompts: World state ────────────────────────────────────────────
+	let chatWorldList: Sockets.ChatWorldPromptConfigs.List.Response["chatWorldPromptConfigsList"] =
+		$state([])
+	let selectedChatWorldId: number | undefined = $state(
+		(userSettingsCtx.settings as any)?.activeChatWorldPromptConfigId || undefined
+	)
+	let chatWorldConfig: Sockets.ChatWorldPromptConfigs.Get.Response["chatWorldPromptConfig"] = $state(
+		{} as Sockets.ChatWorldPromptConfigs.Get.Response["chatWorldPromptConfig"]
+	)
+	let chatWorldOriginal: Sockets.ChatWorldPromptConfigs.Get.Response["chatWorldPromptConfig"] = $state(
+		{} as Sockets.ChatWorldPromptConfigs.Get.Response["chatWorldPromptConfig"]
+	)
+	let chatWorldUnsaved = $derived(JSON.stringify(chatWorldConfig) !== JSON.stringify(chatWorldOriginal))
+
+	let activeChatWorldName = $derived.by(() => {
+		const id = (userSettingsCtx.settings as any)?.activeChatWorldPromptConfigId ?? chatWorldList[0]?.id
+		return chatWorldList.find((p) => p.id === id)?.name ?? null
 	})
 
 	// ── World Summarize state ─────────────────────────────────────────────────
@@ -103,6 +122,7 @@
 
 	function currentName(): string {
 		if (view === "chat") return chatConfig.name
+		if (view === "chatWorld") return chatWorldConfig.name
 		if (view === "world") return worldConfig.name
 		if (view === "character") return characterConfig.name
 		if (view === "scene") return sceneConfig.name
@@ -121,6 +141,7 @@
 	// ── Unsaved guard ─────────────────────────────────────────────────────────
 	function hasUnsaved(): boolean {
 		if (view === "chat") return chatUnsaved
+		if (view === "chatWorld") return chatWorldUnsaved
 		if (view === "world") return worldUnsaved
 		if (view === "character") return characterUnsaved
 		if (view === "scene") return sceneUnsaved
@@ -159,6 +180,16 @@
 			return
 		}
 		selectedChatId = newId
+	}
+
+	async function handleChatWorldSelectChange(e: Event) {
+		const newId = Number((e.target as HTMLSelectElement).value)
+		if (newId === selectedChatWorldId) return
+		if (chatWorldUnsaved && !(await checkUnsaved())) {
+			;(e.target as HTMLSelectElement).value = String(selectedChatWorldId)
+			return
+		}
+		selectedChatWorldId = newId
 	}
 
 	async function handleWorldSelectChange(e: Event) {
@@ -202,6 +233,17 @@
 	function handleChatReset() { chatConfig = { ...chatOriginal } }
 	function handleChatNew() { showNewNameModal = true }
 
+	// ── Chat World actions ───────────────────────────────────────────────────
+	function handleChatWorldSave() {
+		if (!validateForm()) return
+		socket.emit("chatWorldPromptConfigs:update", { chatWorldPromptConfig: { ...chatWorldConfig, id: chatWorldConfig.id } })
+	}
+	function handleChatWorldDelete() {
+		if (!chatWorldConfig.isImmutable) { socket.emit("chatWorldPromptConfigs:delete", { id: chatWorldConfig.id }); selectedChatWorldId = undefined }
+	}
+	function handleChatWorldReset() { chatWorldConfig = { ...chatWorldOriginal } }
+	function handleChatWorldNew() { showNewNameModal = true }
+
 	// ── World actions ─────────────────────────────────────────────────────────
 	function handleWorldSave() {
 		if (!validateForm()) return
@@ -241,6 +283,9 @@
 		if (view === "chat") {
 			const { id: _id, ...rest } = chatConfig
 			socket.emit("promptConfigs:create", { promptConfig: { ...rest, name: name.trim(), isImmutable: false } })
+		} else if (view === "chatWorld") {
+			const { id: _id, ...rest } = chatWorldConfig
+			socket.emit("chatWorldPromptConfigs:create", { chatWorldPromptConfig: { ...rest, name: name.trim(), isImmutable: false } })
 		} else if (view === "world") {
 			const { id: _id, ...rest } = worldConfig
 			socket.emit("worldSummarizeConfigs:create", { worldSummarizeConfig: { ...rest, name: name.trim(), isImmutable: false } })
@@ -257,6 +302,7 @@
 
 	// ── Reactive: load config when selection changes ──────────────────────────
 	$effect(() => { if (selectedChatId) socket.emit("promptConfigs:get", { id: selectedChatId }) })
+	$effect(() => { if (selectedChatWorldId) socket.emit("chatWorldPromptConfigs:get", { id: selectedChatWorldId }) })
 	$effect(() => { if (selectedWorldId) socket.emit("worldSummarizeConfigs:get", { id: selectedWorldId }) })
 	$effect(() => { if (selectedCharacterId) socket.emit("characterSummarizeConfigs:get", { id: selectedCharacterId }) })
 	$effect(() => { if (selectedSceneId) socket.emit("sceneSummarizeConfigs:get", { id: selectedSceneId }) })
@@ -265,6 +311,10 @@
 	function handleChatSetDefault() {
 		if (!selectedChatId) return
 		socket.emit("promptConfigs:setUserActive", { id: selectedChatId })
+	}
+	function handleChatWorldSetDefault() {
+		if (!selectedChatWorldId) return
+		socket.emit("chatWorldPromptConfigs:setUserActive", { id: selectedChatWorldId })
 	}
 	function handleWorldSetDefault() {
 		if (!selectedWorldId) return
@@ -298,6 +348,27 @@
 			if (msg.promptConfig.id === chatConfig.id) {
 				chatConfig = { ...msg.promptConfig }; chatOriginal = { ...msg.promptConfig }
 				toaster.success({ title: "Prompt Config Updated" })
+			}
+		})
+
+		// Chat World listeners
+		socket.on("chatWorldPromptConfigs:list", (msg: Sockets.ChatWorldPromptConfigs.List.Response) => {
+			chatWorldList = msg.chatWorldPromptConfigsList
+			if (!selectedChatWorldId && chatWorldList.length > 0) {
+				selectedChatWorldId = (userSettingsCtx.settings as any)?.activeChatWorldPromptConfigId ?? chatWorldList[0].id
+			}
+		})
+		socket.on("chatWorldPromptConfigs:get", (msg: Sockets.ChatWorldPromptConfigs.Get.Response) => {
+			if (msg.chatWorldPromptConfig.id !== selectedChatWorldId) return
+			chatWorldConfig = { ...msg.chatWorldPromptConfig }; chatWorldOriginal = { ...msg.chatWorldPromptConfig }
+		})
+		socket.on("chatWorldPromptConfigs:create", (msg: Sockets.ChatWorldPromptConfigs.Create.Response) => {
+			selectedChatWorldId = msg.chatWorldPromptConfig.id
+		})
+		socket.on("chatWorldPromptConfigs:update", (msg: Sockets.ChatWorldPromptConfigs.Update.Response) => {
+			if (msg.chatWorldPromptConfig.id === chatWorldConfig.id) {
+				chatWorldConfig = { ...msg.chatWorldPromptConfig }; chatWorldOriginal = { ...msg.chatWorldPromptConfig }
+				toaster.success({ title: "World Prompt Config Updated" })
 			}
 		})
 
@@ -368,6 +439,15 @@
 		socket.on("promptConfigs:setUserActive", () => {
 			toaster.success({ title: "Default chat prompt updated" })
 		})
+		socket.on("promptConfigs:setUserActive:error", (msg: any) => {
+			toaster.error({ title: msg?.error || "Failed to set default chat prompt" })
+		})
+		socket.on("chatWorldPromptConfigs:setUserActive", () => {
+			toaster.success({ title: "Default World Response prompt updated" })
+		})
+		socket.on("chatWorldPromptConfigs:setUserActive:error", (msg: any) => {
+			toaster.error({ title: msg?.error || "Failed to set default World Response prompt" })
+		})
 		socket.on("worldSummarizeConfigs:setUserActive", () => {
 			toaster.success({ title: "Default world summarization updated" })
 		})
@@ -388,6 +468,7 @@
 
 		// Initial fetches
 		socket.emit("promptConfigs:list", {})
+		socket.emit("chatWorldPromptConfigs:list", {})
 		socket.emit("worldSummarizeConfigs:list", {})
 		socket.emit("characterSummarizeConfigs:list", {})
 		socket.emit("sceneSummarizeConfigs:list", {})
@@ -405,6 +486,11 @@
 		socket.off("promptConfigs:create")
 		socket.off("promptConfigs:update")
 		socket.off("promptConfigs:setUserActive")
+		socket.off("chatWorldPromptConfigs:list")
+		socket.off("chatWorldPromptConfigs:get")
+		socket.off("chatWorldPromptConfigs:create")
+		socket.off("chatWorldPromptConfigs:update")
+		socket.off("chatWorldPromptConfigs:setUserActive")
 		socket.off("worldSummarizeConfigs:list")
 		socket.off("worldSummarizeConfigs:get")
 		socket.off("worldSummarizeConfigs:create")
@@ -441,7 +527,7 @@
 				</div>
 				<div class="min-w-0 flex-1">
 					<div class="flex items-center justify-between gap-2">
-						<span class="font-semibold">Chat Prompts</span>
+						<span class="font-semibold">Chat Prompts: Character</span>
 						<Icons.ChevronRight size={16} class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5" />
 					</div>
 					<p class="text-muted-foreground mt-0.5 text-sm">System instructions injected into every chat.</p>
@@ -449,6 +535,31 @@
 						<div class="mt-2 flex items-center gap-1.5">
 							<Icons.CheckCircle size={12} class="text-success-500 shrink-0" />
 							<span class="text-success-600 dark:text-success-400 truncate text-xs font-medium">{activeChatName}</span>
+						</div>
+					{/if}
+				</div>
+			</div>
+		</button>
+
+		<!-- Chat Prompts: World card -->
+		<button
+			class="card preset-tonal hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
+			onclick={() => (view = "chatWorld")}
+		>
+			<div class="flex items-start gap-3">
+				<div class="bg-primary-500/10 text-primary-500 mt-0.5 rounded-lg p-2 shrink-0">
+					<Icons.CloudSun size={20} />
+				</div>
+				<div class="min-w-0 flex-1">
+					<div class="flex items-center justify-between gap-2">
+						<span class="font-semibold">Chat Prompts: World</span>
+						<Icons.ChevronRight size={16} class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5" />
+					</div>
+					<p class="text-muted-foreground mt-0.5 text-sm">System instructions for manually-triggered World Response narration.</p>
+					{#if activeChatWorldName}
+						<div class="mt-2 flex items-center gap-1.5">
+							<Icons.CheckCircle size={12} class="text-success-500 shrink-0" />
+							<span class="text-success-600 dark:text-success-400 truncate text-xs font-medium">{activeChatWorldName}</span>
 						</div>
 					{/if}
 				</div>
@@ -497,7 +608,7 @@
 				<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={navigateBack} title="Back" aria-label="Back to prompt types">
 					<Icons.ChevronLeft size={16} />
 				</button>
-				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">Chat Prompts</h2>
+				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">Chat Prompts: Character</h2>
 			</div>
 			<div class="mt-2 flex gap-2" role="toolbar" aria-label="Chat prompt config actions">
 				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleChatNew} title="Clone to new config"><Icons.Plus size={14} /> Clone</button>
@@ -526,7 +637,7 @@
 						</button>
 						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleChatSetDefault}
 							disabled={!selectedChatId || selectedChatId === userSettingsCtx.settings?.activePromptConfigId}
-							title="Set as default">
+							title={selectedChatId && selectedChatId === userSettingsCtx.settings?.activePromptConfigId ? "Already the default" : "Set as default"}>
 							<Icons.Star size={14} /> Set Default
 						</button>
 					</div>
@@ -548,6 +659,78 @@
 							samplingList={samplingList}
 							bind:connectionId={chatConfig.connectionId}
 							bind:samplingConfigId={chatConfig.samplingConfigId}
+						/>
+					</div>
+				</div>
+			{/if}
+		</div>
+	</div>
+
+<!-- ── CHAT PROMPTS: WORLD EDITOR ─────────────────────────────────────────── -->
+{:else if view === "chatWorld"}
+	<div class="text-foreground flex h-full flex-col">
+		<div class="border-b border-surface-200-800 px-4 py-3">
+			<div class="flex items-center gap-2">
+				<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={navigateBack} title="Back" aria-label="Back to prompt types">
+					<Icons.ChevronLeft size={16} />
+				</button>
+				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">Chat Prompts: World</h2>
+			</div>
+			<div class="mt-2 flex gap-2" role="toolbar" aria-label="World prompt config actions">
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleChatWorldNew} title="Clone to new config"><Icons.Plus size={14} /> Clone</button>
+				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleChatWorldReset} disabled={!chatWorldUnsaved} title="Discard changes"><Icons.RefreshCcw size={14} /> Discard</button>
+				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleChatWorldDelete} disabled={!chatWorldConfig || chatWorldConfig.isImmutable} title="Delete config"><Icons.Trash2 size={14} /> Delete</button>
+			</div>
+		</div>
+		<div class="flex-1 overflow-y-auto p-4">
+			<div class="mb-4">
+				<select class="select w-full" value={selectedChatWorldId} onchange={handleChatWorldSelectChange}>
+					{#each chatWorldList.filter((c) => c.isImmutable) as c}
+						{@const isDefault = c.id === (userSettingsCtx.settings as any)?.activeChatWorldPromptConfigId}
+						<option value={c.id}>{isDefault ? "★ " : ""}{c.name} *</option>
+					{/each}
+					{#each chatWorldList.filter((c) => !c.isImmutable) as c}
+						{@const isDefault = c.id === (userSettingsCtx.settings as any)?.activeChatWorldPromptConfigId}
+						<option value={c.id}>{isDefault ? "★ " : ""}{c.name}</option>
+					{/each}
+				</select>
+			</div>
+			{#if chatWorldConfig?.id}
+				<div class="flex flex-col gap-4">
+					<div class="flex gap-2">
+						<button class="btn btn-sm preset-filled-success-500 flex-1" onclick={handleChatWorldSave} disabled={!chatWorldUnsaved}>
+							<Icons.Save size={14} /> Update
+						</button>
+						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleChatWorldSetDefault}
+							disabled={!selectedChatWorldId || selectedChatWorldId === (userSettingsCtx.settings as any)?.activeChatWorldPromptConfigId}
+							title={selectedChatWorldId && selectedChatWorldId === (userSettingsCtx.settings as any)?.activeChatWorldPromptConfigId ? "Already the default" : "Set as default"}>
+							<Icons.Star size={14} /> Set Default
+						</button>
+					</div>
+					<div class="flex flex-col gap-1">
+						<label class="text-sm font-semibold" for="chatWorldName">Name *</label>
+						<input id="chatWorldName" type="text" bind:value={chatWorldConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={chatWorldConfig.isImmutable}
+							oninput={() => { if (validationErrors.name) { const { name, ...rest } = validationErrors; validationErrors = rest } }} />
+						{#if validationErrors.name}<p class="text-error-500 text-sm" role="alert">{validationErrors.name}</p>{/if}
+					</div>
+					<div class="flex flex-col gap-1">
+						<label class="text-sm font-semibold" for="chatWorldNarratorName">Display Name</label>
+						<p class="text-muted-foreground text-xs">Shown in the chat instead of "The World" (e.g. "The Narrator", "Fate") when a message is generated with this config.</p>
+						<input id="chatWorldNarratorName" type="text" bind:value={chatWorldConfig.narratorName} class="input w-full" disabled={chatWorldConfig.isImmutable} placeholder="The World" />
+					</div>
+					<div class="flex flex-col gap-1">
+						<label class="text-sm font-semibold" for="chatWorldSystemPrompt">System Instructions</label>
+						<p class="text-muted-foreground text-xs">Used when "The World" is manually triggered to narrate the environment, atmosphere, or side characters instead of a chat character.</p>
+						<textarea id="chatWorldSystemPrompt" rows="15" bind:value={chatWorldConfig.systemPrompt} class="textarea w-full" disabled={chatWorldConfig.isImmutable}></textarea>
+					</div>
+					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
+						<p class="text-sm font-semibold">AI Override</p>
+						<p class="text-muted-foreground text-xs">Overrides the system default connection and sampling for this template.</p>
+						<ConnectionSamplingPicker
+							{connectionsList}
+							samplingList={samplingList}
+							bind:connectionId={chatWorldConfig.connectionId}
+							bind:samplingConfigId={chatWorldConfig.samplingConfigId}
 						/>
 					</div>
 				</div>
@@ -592,7 +775,7 @@
 						</button>
 						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleWorldSetDefault}
 							disabled={!selectedWorldId || selectedWorldId === (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId}
-							title="Set as default">
+							title={selectedWorldId && selectedWorldId === (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId ? "Already the default" : "Set as default"}>
 							<Icons.Star size={14} /> Set Default
 						</button>
 					</div>
@@ -680,7 +863,7 @@
 						</button>
 						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleCharacterSetDefault}
 							disabled={!selectedCharacterId || selectedCharacterId === (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId}
-							title="Set as default">
+							title={selectedCharacterId && selectedCharacterId === (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId ? "Already the default" : "Set as default"}>
 							<Icons.Star size={14} /> Set Default
 						</button>
 					</div>
@@ -768,7 +951,7 @@
 						</button>
 						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleSceneSetDefault}
 							disabled={!selectedSceneId || selectedSceneId === (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId}
-							title="Set as default">
+							title={selectedSceneId && selectedSceneId === (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId ? "Already the default" : "Set as default"}>
 							<Icons.Star size={14} /> Set Default
 						</button>
 					</div>
@@ -836,6 +1019,6 @@
 	onOpenChange={(e) => (showNewNameModal = e.open)}
 	onConfirm={handleNewNameConfirm}
 	onCancel={handleNewNameCancel}
-	title={view === "chat" ? "New Prompt Config" : view === "world" ? "New World Lore Summarization Config" : view === "character" ? "New Character Lore Summarization Config" : "New Scene Summarization Config"}
+	title={view === "chat" ? "New Prompt Config" : view === "chatWorld" ? "New World Prompt Config" : view === "world" ? "New World Lore Summarization Config" : view === "character" ? "New Character Lore Summarization Config" : "New Scene Summarization Config"}
 	description="Your current settings will be copied."
 />

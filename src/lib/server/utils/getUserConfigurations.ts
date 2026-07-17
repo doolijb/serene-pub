@@ -14,6 +14,7 @@ export async function getUserConfigurations(
 	sampling: SelectSamplingConfig
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
+	chatWorldPromptConfig: SelectChatWorldPromptConfig | null
 }> {
 	try {
 		const [userSettings, systemSettings] = await Promise.all([
@@ -31,6 +32,16 @@ export async function getUserConfigurations(
 		const promptConfigId = userSettings?.activePromptConfigId ?? systemSettings?.defaultPromptConfigId
 		const promptConfig = promptConfigId
 			? await db.query.promptConfigs.findFirst({ where: (pc, { eq }) => eq(pc.id, promptConfigId) })
+			: undefined
+
+		// Resolve chat-world prompt config (userSettings -> systemSettings fallback).
+		// Optional — a chat can generate normally without one configured; only
+		// triggering a World Response actually requires it.
+		const chatWorldPromptConfigId =
+			userSettings?.activeChatWorldPromptConfigId ??
+			systemSettings?.defaultChatWorldPromptConfigId
+		const chatWorldPromptConfig = chatWorldPromptConfigId
+			? await db.query.chatWorldPromptConfigs.findFirst({ where: (c, { eq }) => eq(c.id, chatWorldPromptConfigId) })
 			: undefined
 
 		// Resolve connection + sampling from system default (no per-user override anymore)
@@ -52,7 +63,8 @@ export async function getUserConfigurations(
 			connection: connection ?? null,
 			sampling,
 			contextConfig,
-			promptConfig
+			promptConfig,
+			chatWorldPromptConfig: chatWorldPromptConfig ?? null
 		}
 	} catch (error: any) {
 		if (retryCount === 0 && error.message?.includes("Missing required configuration")) {

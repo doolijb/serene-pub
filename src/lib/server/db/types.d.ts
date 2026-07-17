@@ -34,6 +34,16 @@ export global {
 		id: number
 	}
 
+	// Chat World Prompt Config types
+	export type SelectChatWorldPromptConfig =
+		typeof schema.chatWorldPromptConfigs.$inferSelect
+	export type InsertChatWorldPromptConfig =
+		typeof schema.chatWorldPromptConfigs.$inferInsert
+	export type UpdateChatWorldPromptConfig =
+		Partial<SelectChatWorldPromptConfig> & {
+			id: number
+		}
+
 	// Lorebook types
 	export type SelectLorebook = typeof schema.lorebooks.$inferSelect
 	export type InsertLorebook = typeof schema.lorebooks.$inferInsert

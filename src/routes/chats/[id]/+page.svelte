@@ -17,6 +17,7 @@
 	import PersonaSelectModal from "$lib/client/components/modals/PersonaSelectModal.svelte"
 	import BranchChatModal from "$lib/client/components/modals/BranchChatModal.svelte"
 	import SummarizeLoreModal from "$lib/client/components/modals/SummarizeLoreModal.svelte"
+	import TriggerWorldResponseModal from "$lib/client/components/modals/TriggerWorldResponseModal.svelte"
 	import AvatarGalleryModal from "$lib/client/components/chatMessages/AvatarGalleryModal.svelte"
 	import ChatSceneImagesTab from "$lib/client/components/chatMessages/ChatSceneImagesTab.svelte"
 	import ChatWorkflowTab from "$lib/client/components/chatMessages/ChatWorkflowTab.svelte"
@@ -99,6 +100,7 @@
 	let showDraftCompiledPromptModal = $state(false)
 	let showTriggerCharacterMessageModal = $state(false)
 	let triggerCharacterSearch = $state("")
+	let showTriggerWorldResponseModal = $state(false)
 	let showAddPersonaModal = $state(false)
 	let showBranchChatModal = $state(false)
 	let branchFromMessage: SelectChatMessage | undefined = $state()
@@ -112,6 +114,10 @@
 	let scenedMessageIds = $state(new Set<number>())
 	/** Full scene list for this chat — used for in-chat scene/history-entry indicators */
 	let sceneList = $state<Sockets.Scenes.List.SceneWithEntry[]>([])
+	// Resolved display name for World Response (chat override -> user active
+	// -> system default -> "The World"), used to label the trigger button/
+	// modal/character-picker option before any message exists.
+	let worldNarratorName = $state("The World")
 	let chatResponseOrder: Sockets.Chats.GetResponseOrder.Response | undefined =
 		$state()
 	let availablePersonas: Sockets.Personas.List.Response["personaList"] =
@@ -286,6 +292,11 @@
 				) ?? false
 			)
 		}
+
+		// World Response messages aren't owned by any persona/character —
+		// only the chat owner controls them, mirroring
+		// checkMessageEditPermission server-side.
+		if (msg.isWorldResponse) return !isGuest
 
 		return false
 	}
@@ -696,6 +707,25 @@
 		})
 	}
 
+	function handleTriggerWorldResponse(e: Event) {
+		e.stopPropagation()
+		openMsgControlsMenu = undefined
+		showTriggerCharacterMessageModal = false
+		showTriggerWorldResponseModal = true
+	}
+
+	function handleConfirmTriggerWorldResponse(instructions: string) {
+		showTriggerWorldResponseModal = false
+		socket.emit("chats:triggerWorldResponse", {
+			chatId,
+			instructions: instructions || undefined
+		})
+	}
+
+	function handleCancelTriggerWorldResponse() {
+		showTriggerWorldResponseModal = false
+	}
+
 	function handleContinueWithNextCharacter() {
 		if (!nextCharacter) return
 		socket.emit("chats:triggerGenerateMessage", {
@@ -1050,6 +1080,14 @@
 		socket?.emit("scenes:scenedMessageIds", { chatId })
 		socket?.emit("scenes:list", { chatId } satisfies Sockets.Scenes.List.Params)
 
+		socket.on(
+			"chats:getWorldNarratorName",
+			(msg: Sockets.Chats.GetWorldNarratorName.Response) => {
+				if (msg.chatId !== chatId) return
+				worldNarratorName = msg.narratorName
+			}
+		)
+
 		// Cleanup function
 		return () => {
 			// Clear any pending timeouts
@@ -1063,6 +1101,16 @@
 				clearInterval(typingPruneInterval)
 			}
 			socket.off("chats:userTyping")
+			socket.off("chats:getWorldNarratorName")
+		}
+	})
+
+	// Re-resolve if the chat's world-config override changes (e.g. saved via
+	// Edit Chat) while this page stays open.
+	$effect(() => {
+		const overrideId = chat?.chatWorldPromptConfigId
+		if (chatId) {
+			socket.emit("chats:getWorldNarratorName", { chatId })
 		}
 	})
 
@@ -1128,11 +1176,14 @@
 	) {
 		if (!char) return
 		const isPersona = chat?.chatPersonas?.some((cp) => cp.persona?.id === char.id)
-		const nickname = (char as any).nickname as string | null ?? null
+		// `||` (not `??`) — a blank nickname is commonly stored as "" rather
+		// than null, and "" isn't nullish so `??` wouldn't fall through to
+		// the character's real name, leaving the modal title empty.
+		const nickname = ((char as any).nickname as string | null)?.trim() || null
 		avatarModalEntity = {
 			type: isPersona ? "persona" : "character",
 			id: char.id,
-			name: nickname ?? char.name ?? "",
+			name: nickname || char.name || "",
 			avatar: char.avatar ?? null
 		}
 		showAvatarModal = true
@@ -1858,6 +1909,20 @@
 				<Icons.X size={20} />
 			</button>
 		</header>
+		<button
+			class="group preset-outlined-primary-400-600 hover:preset-filled-primary-500 mb-4 flex w-full items-center gap-3 rounded p-2"
+			onclick={(e) => handleTriggerWorldResponse(e)}
+		>
+			<div class="bg-primary-500/10 text-primary-500 group-hover:text-primary-950 shrink-0 rounded-lg p-2">
+				<Icons.CloudSun size={20} />
+			</div>
+			<div class="flex-1 text-left">
+				<div class="font-semibold">{worldNarratorName}</div>
+				<div class="text-surface-500 group-hover:text-surface-800-200 text-xs">
+					Narrate the environment, atmosphere, or side characters instead
+				</div>
+			</div>
+		</button>
 		<input
 			class="input mb-4 w-full"
 			type="text"
@@ -1914,6 +1979,14 @@
 		</div>
 	{/snippet}
 </Modal>
+
+<TriggerWorldResponseModal
+	open={showTriggerWorldResponseModal}
+	onOpenChange={(e) => (showTriggerWorldResponseModal = e.open)}
+	onTrigger={handleConfirmTriggerWorldResponse}
+	onCancel={handleCancelTriggerWorldResponse}
+	narratorName={worldNarratorName}
+/>
 
 <AvatarGalleryModal
 	bind:open={showAvatarModal}
@@ -2013,6 +2086,15 @@
 		>
 			<Icons.RefreshCw size={14} />
 			Regenerate
+		</button>
+		<button
+			class="btn btn-sm preset-tonal-success"
+			title="Trigger World Response"
+			onclick={handleTriggerWorldResponse}
+			disabled={!chat || lastMessage?.isGenerating}
+		>
+			<Icons.CloudSun size={14} />
+			{worldNarratorName}
 		</button>
 	</div>
 {/snippet}

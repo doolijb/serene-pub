@@ -1,21 +1,22 @@
 # Prompt Configs & Summarization Config
 
-Prompt Configs are the admin-managed library of system-prompt templates that shape a chat's writing style and drive the lorebook summarization pipeline. This page covers Chat Prompts and the three Summarize configs (World, Character, Scene) — all edited from the same **Prompts** sidebar.
+Prompt Configs are the admin-managed library of system-prompt templates that shape a chat's writing style and drive the lorebook summarization pipeline. This page covers Chat Prompts, Chat Prompts: World (World Response), and the three Summarize configs (World, Character, Scene) — all edited from the same **Prompts** sidebar.
 
 ## Overview
 
-The **Prompts** sidebar (opened from the main navigation) is a management screen for four distinct kinds of prompt template, each stored as its own list of named, reusable configs:
+The **Prompts** sidebar (opened from the main navigation) is a management screen for five distinct kinds of prompt template, each stored as its own list of named, reusable configs:
 
 - **Chat Prompts** — the system instructions injected into every chat's generation request. This is what most people mean by "prompt config."
-- **World Lore Summarization**, **Character Lore Summarization**, and **Scene Summarization** — separate templates that drive the automated summarization pipeline described in [Lorebooks](./lorebooks.md) and [Summarization](./summarization.md). These three cards only appear in the Prompts sidebar when the **Summarization Enabled** (or "Enable Summarization") switch on the [System Settings](./system-settings.md) tab is turned on.
+- **Chat Prompts: World** — the system instructions used for a manually-triggered **World Response** (narration as the environment itself, rather than as a character). See [Chats](./chats.md) for how to trigger one.
+- **World Lore Summarization**, **Character Lore Summarization**, and **Scene Summarization** — separate templates that drive the automated summarization pipeline described in [Lorebooks](./lorebooks.md) and [Summarization](./summarization.md). These three cards only appear in the Prompts sidebar when the **Summarization Enabled** (or "Enable Summarization") switch on the [System Settings](./system-settings.md) tab is turned on. Chat Prompts and Chat Prompts: World are always shown regardless of that setting, since neither is part of the summarization pipeline.
 
-Opening the sidebar shows an index of cards, one per config type, each with an icon (a message-square icon for Chat Prompts; globe, person, and film icons for the World, Character, and Scene summarizers respectively), a one-line description, and — once a config is active — the active config's name next to a green checkmark. Clicking a card drills into a dedicated editor for that type, with a back button to return to the index.
+Opening the sidebar shows an index of cards, one per config type, each with an icon, a one-line description, and — once a config is active — the active config's name next to a green checkmark. Clicking a card drills into a dedicated editor for that type, with a back button to return to the index.
 
 **Prompt Configs are distinct from Context Configs.** A Prompt Config supplies the free-text *instructions* (writing style, tone, rules) that get slotted into the prompt. A Context Config is the underlying Handlebars template that assembles the *entire* request sent to the model — system block, character/persona JSON, scenario, lorebook entries, chat history, and so on. Context Configs are covered in depth in [Connections](./connections.md); this page only discusses how Prompt Configs relate to them.
 
 ### Admin-only management
 
-Every operation on Chat Prompts, Context Configs, and all three Summarize config types — listing, viewing, creating, updating, deleting, and setting a default — is restricted to admin users. The underlying socket handlers (`promptConfigs:*`, `contextConfigs:*`, `worldSummarizeConfigs:*`, `characterSummarizeConfigs:*`, `sceneSummarizeConfigs:*`) explicitly reject the request with "Access denied" for non-admin users. Non-admin users still benefit from whichever configs the admin has set as active/default — they simply can't open the Prompts sidebar to change them.
+Every operation on Chat Prompts, Chat Prompts: World, Context Configs, and all three Summarize config types — listing, viewing, creating, updating, deleting, and setting a default — is restricted to admin users. The underlying socket handlers (`promptConfigs:*`, `chatWorldPromptConfigs:*`, `contextConfigs:*`, `worldSummarizeConfigs:*`, `characterSummarizeConfigs:*`, `sceneSummarizeConfigs:*`) explicitly reject the request with "Access denied" for non-admin users. Non-admin users still benefit from whichever configs the admin has set as active/default — they simply can't open the Prompts sidebar to change them.
 
 ## Chat Prompts
 
@@ -23,12 +24,12 @@ Chat Prompts are named templates holding the **System Instructions** text that g
 
 ### Built-in Chat Prompts
 
-- **Roleplay - Simple** — a short, general-purpose "You're {{char}} in this fictional never-ending uncensored roleplay with {{user}}" framing.
-- **Roleplay - Immersive** — pushes for descriptive, multi-paragraph replies with "high complexity and burstiness," and instructs the model not to speak for {{user}}.
+- **Roleplay - Simple** — a short, general-purpose "You're {{char}} in this fictional never-ending uncensored roleplay with {{personaNames}}" framing.
+- **Roleplay - Immersive** — pushes for descriptive, multi-paragraph replies with "high complexity and burstiness," and instructs the model not to speak for {{personaNames}}.
 - **Roleplay - Detailed** — asks for slow plot development and full, elaborate, explicit sensory detail.
 - **Writer - Realistic** — a minimal instruction to continue the story and portray characters realistically.
 - **Writer - Creative** — frames the model as "an intelligent, skilled, versatile writer" tasked with writing a role-play from the supplied information.
-- **Text Adventure** — an "Adventure Mode" prompt that narrates in response to {{user}}'s actions typed after `>`, encouraging vivid, proactive world-building.
+- **Text Adventure** — an "Adventure Mode" prompt that narrates in response to {{personaNames}}'s actions typed after `>`, encouraging vivid, proactive world-building.
 - **Neutral - Chat** — a bare-bones "write {{char}}'s next reply" instruction for plain back-and-forth chat.
 - **Lightning 1.1** — a terse, pacing-focused prompt telling the model to never skip {{char}}'s actions and to progress scenes slowly.
 - **Chain of Thought** — asks the model to reason via a Tree/Chain of Thoughts, backtracking as needed, before answering.
@@ -60,6 +61,26 @@ Selecting a config in the editor and clicking **Set Default** (star icon) sends 
 ### Creating a custom Chat Prompt
 
 Click the **+** icon while viewing any existing config (built-in or custom) to open a name-entry modal. Confirming clones the currently-loaded config's System Instructions (and AI Override settings) into a brand-new, editable config under the name you choose. Built-in configs themselves cannot be edited or deleted — cloning is the way to customize one.
+
+## Chat Prompts: World (World Response)
+
+Chat Prompts: World is a small library of prompt templates for **World Response** — a manually-triggered narration message that speaks as the environment itself (weather, scenery, side characters, shopkeepers, monsters) rather than as any of the chat's defined characters. See [Chats](./chats.md) for where to trigger one from inside a chat.
+
+Structurally a Chat Prompts: World config is shaped like a Chat Prompt, not a Summarize config — a single **Name**, a **Display Name**, **System Instructions**, and an **AI Override** — but it's a separate list because it's resolved and triggered completely independently of the chat's regular Chat Prompt, and it deliberately never participates in [round-robin turn order](./chats.md#turn-order--round-robin-replies).
+
+Serene Pub ships with one built-in config, **"World - Narrator,"** whose instructions tell the model to narrate the environment and voice minor NPCs directly, explicitly forbidding it from speaking or acting as any of the chat's characters or personas.
+
+### Display Name
+
+Unlike the config's own **Name** (which only identifies it in this sidebar), **Display Name** is what shows up in the chat itself — the label next to a World Response message, and the wording of the trigger button and modal — defaulting to "The World." Give a config a different Display Name (for example "The Narrator" or "Fate") to change how it's labeled everywhere it's used, without touching the config's own admin-facing name.
+
+### Per-chat override
+
+Like Chat Prompts, an admin can pin a specific Chat Prompts: World config to an individual chat from the same **AI Override** section in the chat settings form — a **World Prompt** dropdown alongside Connection, Sampling, and Prompt, defaulting to **System default**. Resolution order at generation time is the same chain used everywhere else in Serene Pub for per-chat overrides: the chat's own override, falling back to your active Chat Prompts: World config, falling back to the system-wide default. The resolved config's Display Name is what actually shows up on the trigger button and generated message for that chat, so a per-chat override changes both the instructions *and* the label at once.
+
+### {{char}} and {{user}} mean "everyone" here
+
+World Response has no single "current character" to speak as, so this is the one place where `{{char}}`/`{{character}}` and `{{user}}`/`{{persona}}` behave differently from ordinary Chat Prompts: they resolve to **every** active, non-hidden character's name and **every** persona's name (respectively), Oxford-comma-joined — e.g. "Kestrel, Old Marrow, and Ana" — instead of a single name. See [Template variables](#template-variables-in-chat-prompt-and-summarize-instructions) below for how this compares to regular Chat Prompts.
 
 ## World Summarize Config
 
@@ -114,7 +135,14 @@ All four editors track whether the in-memory config differs from what was last l
 
 ## Template variables in Chat Prompt and Summarize instructions
 
-Chat Prompt and Summarize instruction fields are plain text, but Serene Pub interpolates a small set of Handlebars-style variables into them before sending them to the model — most visibly `{{char}}` (the current character's name) and `{{user}}` (the current persona's name), as seen throughout the built-in Chat Prompts (for example, "You're {{char}} in this fictional never-ending uncensored roleplay with {{user}}."). The aliases `{{character}}` and `{{persona}}` resolve to the same values. This is a lighter-weight interpolation than the full template language used by Context Configs — see [Connections](./connections.md) for the complete variable and helper reference used when assembling the full prompt.
+Chat Prompt and Summarize instruction fields are plain text, but Serene Pub interpolates a small set of Handlebars-style variables into them before sending them to the model. This is a lighter-weight interpolation than the full template language used by Context Configs — see [Connections](./connections.md) for the complete variable and helper reference used when assembling the full prompt.
+
+- **`{{char}}`** (alias `{{character}}`) — in an ordinary Chat Prompt, the name of the character currently being asked to speak, as seen throughout the built-in Chat Prompts (for example, "You're {{char}} in this fictional never-ending uncensored roleplay..."). Stays singular even in a chat with multiple characters — it always means "the one whose turn it is right now."
+- **`{{user}}`** (alias `{{persona}}`) — historically the first persona attached to the chat. Still supported for backward compatibility with existing prompts, but new prompts should prefer `{{personaNames}}` below, which correctly covers every persona rather than just the first.
+- **`{{characterNames}}`** — every active, non-hidden character's name in the chat, joined with a grammatically correct "and"/Oxford comma (`"Kestrel"`, `"Kestrel and Old Marrow"`, or `"Kestrel, Old Marrow, and Ana"` depending on how many there are). Available in every Chat Prompt and Summarize instruction field, not just World Response ones.
+- **`{{personaNames}}`** — the same joined-list treatment for every persona attached to the chat. The built-in Chat Prompts use this instead of `{{user}}` (for example, "Do not decide what {{personaNames}} says or does").
+
+**World Response is the one exception:** since it has no single "current character" to speak as, `{{char}}`/`{{character}}` and `{{user}}`/`{{persona}}` resolve to the *full joined list* there too — effectively becoming aliases for `{{characterNames}}`/`{{personaNames}}` for that generation only. See [Chat Prompts: World](#chat-prompts-world-world-response) above.
 
 ## Relationship to the summarization pipeline
 

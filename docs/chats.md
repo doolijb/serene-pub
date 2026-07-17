@@ -10,7 +10,7 @@ A chat lives at `/chats/[id]` and is built from a few core pieces:
 - **Personas** — one or more user-driven participants. The chat owner and any guests each send messages as one of the personas attached to the chat.
 - **Scenario** — an optional block of scene-setting text that's fed into every prompt.
 - **Lorebook** — an optional bound [lorebook](./lorebooks.md) supplying world lore, character lore, and history entries.
-- **AI overrides** — admin-only per-chat overrides for connection, sampling, and [prompt config](./prompt-configs.md).
+- **AI overrides** — admin-only per-chat overrides for connection, sampling, [prompt config](./prompt-configs.md), and [World Prompt config](./prompt-configs.md#chat-prompts-world-world-response).
 
 Everything in the chat updates live over sockets — new messages, generation progress, edits, and deletions are pushed to every connected participant (owner and guests alike) as they happen.
 
@@ -63,9 +63,9 @@ A chat becomes a "group chat" as soon as it has more than one character attached
 
 ### Turn Order & Round-Robin Replies
 
-Serene Pub tracks whose turn it is by looking at messages sent since the last persona (user) message. In the normal (non-triggered) flow, it walks the active characters in their configured order and picks the **first one who hasn't replied yet** since that last user message; once every active character has replied, the round is considered complete and no one is auto-suggested next. Character order — set when you add them, and reorderable by drag-and-drop in the chat settings form — is what defines this rotation.
+Serene Pub decides who's due for a reply by looking at recent message history, not by tracking a persistent "whose turn is it" pointer — the whole rotation is recomputed fresh every time. Let N be the number of active characters plus personas attached to the chat. Serene Pub looks at the last N messages: if every character and persona appears at least once in that window, the rotation is considered "healthy" (nobody's been silently dropped from the conversation), and any character who hasn't sent a message in the last N-1 of those messages is **due**. If more than one character is due at once, whichever has gone the longest without replying (or has never replied at all) is suggested first.
 
-For example, in a 3-character group chat (Alice, Bob, Carol, in that order) where you just sent a message: Alice is suggested next. Once Alice replies, Bob is suggested. Once Bob replies, Carol is suggested. Once all three have replied, the round is complete and the composer waits for your next message — at which point the rotation starts over from Alice.
+Because this is recomputed from history rather than tracked as state, a persona doesn't have to wait for every other persona to speak before the next due character can go, and manually triggering a character out of turn (see Triggering Responses Manually, below) never leaves the rotation "stuck" on a character who was skipped — the very next automatic check just re-reads the updated history and picks correctly from it.
 
 ### Group Reply Strategy
 
@@ -80,9 +80,9 @@ In a group chat, once it's a character's turn (and you don't have a draft messag
 
 ### Triggering Responses Manually
 
-The composer's **Extra Controls** tab (see below) exposes three buttons for taking control of who talks next: **Continue**, **Trigger Character**, and **Regenerate**. **Trigger Character** opens a searchable grid of the chat's characters (search matches name, nickname, description, or creator notes) — picking one generates exactly one response from that character regardless of whose "turn" it technically is.
+The composer's **Extra Controls** tab (see below) exposes buttons for taking control of who talks next: **Continue**, **Trigger Character**, **Regenerate**, and a World Response trigger (see [World Response](#world-response) below). **Trigger Character** opens a searchable grid of the chat's characters (search matches name, nickname, description, or creator notes), with a **The World** option pinned above the search box — picking a character generates exactly one response from them regardless of whose "turn" it technically is; picking The World opens the World Response instructions modal instead.
 
-**Continue** (labeled "Continue Conversation" via its tooltip) re-runs the round-robin turn logic in "triggered" mode: it will keep generating responses, character by character, until every active character has replied in the current round — useful for catching up a group chat after several personas have spoken.
+**Continue** (labeled "Continue Conversation" via its tooltip) repeatedly asks "is anyone due right now?" and generates for whoever is, one at a time, until nobody's due anymore (or a safety cap is hit) — useful for catching up a group chat after several personas have spoken, without needing to click once per character.
 
 ### Activating, Deactivating & Visibility
 
@@ -95,7 +95,7 @@ Deactivating a character is the right tool when you want to "bench" a character 
 
 ## Personas & Persona Switching
 
-Every chat needs at least one persona. If a chat has more than one persona attached to your account, a **Switch Persona** control appears (an avatar with a chevron badge next to the composer, and — on the composer's tab bar — a dedicated "Switch Persona" tab on smaller layouts) so you can pick which persona your next message is sent as.
+Every chat needs at least one persona. If a chat has more than one persona attached to your account, a **Switch Persona** control appears: an avatar with a chevron badge next to the composer on desktop-width screens, plus a dedicated "Switch Persona" tab on the composer's tab bar — always visible there even on mobile, unlike the other extra tabs (see The Composer's Tab Bar, below). On mobile, the avatar-and-chevron control is hidden in favor of that tab, so it's the one place to switch personas on a narrow screen.
 
 If you're a guest in someone else's chat and don't yet have a persona attached, the composer instead shows a **"Join the Conversation"** call-to-action with an **Add Your Persona** button, which opens a persona picker scoped to your own personas.
 
@@ -111,7 +111,7 @@ The **Lorebook** dropdown in chat settings attaches a single [lorebook](./lorebo
 
 ## Prompt Config, Connection & Sampling Overrides
 
-Administrators editing a chat see an **AI Override** section with a note that it "Overrides system defaults for this chat. Leave as 'System default' to use the global setting." It lets an admin pin a specific **connection**, **sampling config** (both via the shared connection/sampling picker — see [Connections](./connections.md)), and **prompt config** (a plain dropdown defaulting to "System default") to this one chat, independent of what any individual user has active elsewhere. See [Prompt Configs](./prompt-configs.md) for what a prompt config controls. This section is not shown to non-admin users.
+Administrators editing a chat see an **AI Override** section with a note that it "Overrides system defaults for this chat. Leave as 'System default' to use the global setting." It lets an admin pin a specific **connection**, **sampling config** (both via the shared connection/sampling picker — see [Connections](./connections.md)), **prompt config**, and **World Prompt** config (both plain dropdowns defaulting to "System default") to this one chat, independent of what any individual user has active elsewhere. See [Prompt Configs](./prompt-configs.md) for what a prompt config controls, and the [Chat Prompts: World](./prompt-configs.md#chat-prompts-world-world-response) section specifically for the World Prompt override. This section is not shown to non-admin users.
 
 ## Tags
 
@@ -137,9 +137,11 @@ Beyond Compose and Preview, the composer's tab bar picks up extra tabs condition
 
 A read-only token-count tab pins itself to the far right once a prompt has been compiled at least once (for example, after your first send, or once context debugging starts tracking your draft).
 
+On narrower/mobile layouts, Switch Persona stays its own permanent tab, but Extra Controls, Lore, Pinned Images, and Statistics collapse into a single "More" popover (an ellipsis button, or the active tab's own icon if one of them is open) to keep the tab row from overflowing.
+
 ### Auto-Cascading Group Replies
 
-In a group chat, once every persona attached to the chat has sent a message following the last character reply, Serene Pub automatically triggers the next round of character responses — you don't have to manually click Continue after every persona in the group has spoken.
+In a group chat, any single persona message is enough to trigger a check for whether a character is now due (see Turn Order & Round-Robin Replies, above) — Serene Pub doesn't wait for every persona in the chat to chime in first. If a character is due, they're generated automatically; if not, nothing happens until the rotation says someone is.
 
 ## Message Actions
 
@@ -197,13 +199,35 @@ Selecting a message for summarization switches the whole chat into a multi-selec
 
 ## The Extra Controls Tab
 
-The composer's **Extra Controls** tab (message-square icon) is a compact row of three buttons for group-chat and regeneration shortcuts without leaving the compose area:
+The composer's **Extra Controls** tab (message-square icon) is a compact row of buttons for group-chat, regeneration, and World Response shortcuts without leaving the compose area:
 
-- **Continue** — cascades through the round-robin turn order (see Group Chats above), generating for every character who still owes a reply this round.
-- **Trigger Character** — opens the character-search modal and generates exactly one response from whichever character you pick.
-- **Regenerate** — re-generates the most recent character message (equivalent to that message's own Regenerate action).
+- **Continue** — checks who's due per the round-robin logic (see Group Chats above) and keeps generating, one at a time, until nobody's due anymore.
+- **Trigger Character** — opens the character-search modal (with a **The World** option pinned above the search box) and generates exactly one response from whichever you pick.
+- **Regenerate** — re-generates the most recent message, character or World Response alike (equivalent to that message's own Regenerate action).
+- **A World Response trigger**, labeled with the resolved config's Display Name (e.g. "The World") — opens the World Response instructions modal. See [World Response](#world-response) below.
 
-All three are disabled while any message is currently generating, or if the chat has no persona at all.
+Continue, Trigger Character, and Regenerate are disabled while any message is currently generating, or if the chat has no persona at all; the World Response trigger is disabled only while something is generating.
+
+## World Response
+
+**World Response** is a manually-triggered message that narrates as the environment itself — weather, scenery, side characters, shopkeepers, monsters, or other third parties — rather than as any of the chat's defined characters. It has no persistent identity of its own (no avatar, no character sheet) and is never auto-triggered: unlike ordinary character replies, a World Response never counts toward or interrupts round-robin turn order, and it's never suggested by the "ready to continue" banner.
+
+### Triggering a World Response
+
+Two entry points open the same instructions modal:
+
+- The World Response button in the **Extra Controls** tab (see above).
+- The **The World** option pinned above the search box in the **Trigger Character** modal.
+
+The modal shows an optional **Extra instructions** text field for anything you want this specific response to focus on (for example, "focus on the weather turning stormy" or "have the shopkeeper notice the party") — leave it blank for a generic narration pass. Confirming inserts a new message and starts generating immediately, just like any other response.
+
+### Display name
+
+A World Response message shows up in the thread with a globe icon and a label — "The World" by default, or whatever **Display Name** is configured on the resolved Chat Prompts: World config (see [Prompt Configs](./prompt-configs.md#chat-prompts-world-world-response)) at the moment it was generated. Renaming the config afterward doesn't retroactively relabel already-generated messages; each one keeps the name it was generated with.
+
+### Message actions on a World Response
+
+Edit, Branch, Hide, Delete, and Regenerate all work on a World Response message the same as on any other, restricted to the chat **owner** (a World Response isn't owned by any persona or character, so the persona/character-owner exception that applies to other messages doesn't apply here). Continue and Swipe aren't available on World Response messages.
 
 ## The Lore Tab
 

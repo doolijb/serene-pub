@@ -101,6 +101,7 @@
 
 	// Derived values
 	const character = $derived(getMessageCharacter(msg))
+	const worldDisplayName = $derived(msg.metadata?.worldName || "The World")
 	const isGreeting = $derived(!!msg.metadata?.isGreeting)
 	const canControl = $derived(canControlMessage(msg))
 	const showSwipes = $derived(showSwipeControls(msg, isGreeting))
@@ -139,42 +140,57 @@
 	class:opacity-50={!isSummarizationMode && msg.isHidden && editChatMessage?.id !== msg.id}
 	tabindex="-1"
 	role="article"
-	aria-label="Message {index + 1} of {chat.chatMessages.length} from {(
-		character as any
-	)?.nickname ||
-		character?.name ||
-		'Unknown'}: {msg.content.slice(0, 100)}{msg.content.length > 100
+	aria-label="Message {index + 1} of {chat.chatMessages.length} from {msg.isWorldResponse
+		? worldDisplayName
+		: (character as any)?.nickname ||
+			character?.name ||
+			'Unknown'}: {msg.content.slice(0, 100)}{msg.content.length > 100
 		? '...'
 		: ''}"
 >
 	<div class="flex justify-between gap-2">
 		<div class="group flex gap-2">
 			<span>
-				<!-- Make avatar clickable -->
-				<button
-					class="m-0 w-fit p-0"
-					onclick={() => onAvatarClick(character)}
-					title="View Avatar"
-				>
-					<Avatar
-						char={character || undefined}
-						size="w-12 h-12 lg:w-[4em] lg:h-[4em]"
-					/>
-				</button>
+				{#if msg.isWorldResponse}
+					<span
+						class="bg-primary-500/10 text-primary-500 flex h-12 w-12 items-center justify-center rounded-full lg:h-[4em] lg:w-[4em]"
+						title={worldDisplayName}
+					>
+						<Icons.CloudSun size="1.5em" />
+					</span>
+				{:else}
+					<!-- Make avatar clickable -->
+					<button
+						class="m-0 w-fit p-0"
+						onclick={() => onAvatarClick(character)}
+						title="View Avatar"
+					>
+						<Avatar
+							char={character || undefined}
+							size="w-12 h-12 lg:w-[4em] lg:h-[4em]"
+						/>
+					</button>
+				{/if}
 			</span>
 			<div class="flex flex-col">
 				<span class="flex gap-1">
-					<button
-						class="funnel-display mx-0 inline-block w-fit px-0 text-[1.1em] font-bold hover:underline"
-						onclick={(e) => onCharacterNameClick(msg)}
-						title="Edit"
-					>
-						<span class="text-nowrap">
-							{(character as any)?.nickname ||
-								character?.name ||
-								"Unknown"}
+					{#if msg.isWorldResponse}
+						<span class="funnel-display mx-0 inline-block w-fit px-0 text-[1.1em] font-bold">
+							<span class="text-nowrap">{worldDisplayName}</span>
 						</span>
-					</button>
+					{:else}
+						<button
+							class="funnel-display mx-0 inline-block w-fit px-0 text-[1.1em] font-bold hover:underline"
+							onclick={(e) => onCharacterNameClick(msg)}
+							title="Edit"
+						>
+							<span class="text-nowrap">
+								{(character as any)?.nickname ||
+									character?.name ||
+									"Unknown"}
+							</span>
+						</button>
+					{/if}
 					{#if isGreeting}
 						<span
 							class="text-muted mt-1 text-xs opacity-50"

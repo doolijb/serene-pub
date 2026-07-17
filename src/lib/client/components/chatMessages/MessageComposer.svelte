@@ -15,6 +15,9 @@
 			title: string
 			control: Snippet
 			content: Snippet
+			/** Stays as its own permanently visible tab on all screen sizes
+			 * instead of collapsing into the mobile "More" popover. */
+			alwaysVisible?: boolean
 		}[]
 		onSend: () => void
 	}
@@ -34,8 +37,11 @@
 	// the same overflow-into-a-menu pattern already used for per-message
 	// controls (see ChatMessage.svelte's mobile controls popover).
 	let showMoreMenu = $state(false)
+	let collapsibleExtraTabs = $derived(
+		extraTabs?.filter((t) => !t.alwaysVisible) ?? []
+	)
 	let activeExtraTab = $derived(
-		extraTabs?.find((t) => t.value === tabGroup)
+		collapsibleExtraTabs.find((t) => t.value === tabGroup)
 	)
 	let contextExceeded = $derived(
 		!!compiledPrompt
@@ -99,14 +105,17 @@
 		</Tabs.Control>
 		{#if extraTabs}
 			{#each extraTabs as tab}
-				<Tabs.Control value={tab.value} classes="max-lg:hidden min-h-[2.75em]">
+				<Tabs.Control
+					value={tab.value}
+					classes="{tab.alwaysVisible ? '' : 'max-lg:hidden'} min-h-[2.75em]"
+				>
 					<span title={tab.title} aria-label="{tab.title} tab" class="flex items-center gap-1">
 						{@render tab.control?.()}
 						{#if tabGroup === tab.value}<span class="text-xs">{tab.title}</span>{/if}
 					</span>
 				</Tabs.Control>
 			{/each}
-			{#if extraTabs.length > 0}
+			{#if collapsibleExtraTabs.length > 0}
 				<div class="lg:hidden">
 					<Popover
 						open={showMoreMenu}
@@ -129,7 +138,7 @@
 							</span>
 						{/snippet}
 						{#snippet content()}
-							{#each extraTabs as tab}
+							{#each collapsibleExtraTabs as tab}
 								<button
 									type="button"
 									class="btn btn-sm w-full justify-start {tabGroup === tab.value
@@ -170,7 +179,7 @@
 		{/if}
 	{/snippet}
 	{#snippet content()}
-		<div class="flex gap-4">
+		<div class="flex items-end gap-4">
 			<div role="group" aria-label="Message controls">
 				{#if tabGroup === "compose" || tabGroup === "preview"}
 					{@render leftControls?.()}

@@ -8,6 +8,7 @@ import {
 } from "./LorebookBindingUtils"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 import { ChatCharacterVisibility } from "$lib/shared/constants/ChatCharacterVisibility"
+import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 
 // Import modular components
 import { InterpolationEngine } from "./InterpolationEngine"
@@ -219,6 +220,29 @@ export class PromptBuilder {
 		return character.nickname || character.name || "assistant"
 	}
 
+	/** Display names of every active, non-hidden character in the chat —
+	 * source list for the {{characterNames}}/{{char}} joined-list value. */
+	getVisibleCharacterNames(): string[] {
+		const chatCharacters = this.chat.chatCharacters as
+			| (SelectChatCharacter & { character: SelectCharacter })[]
+			| undefined
+		return (chatCharacters || [])
+			.filter(
+				(cc) =>
+					cc.isActive &&
+					cc.visibility !== ChatCharacterVisibility.HIDDEN
+			)
+			.map((cc) => this.getCharacterDisplayName(cc.character))
+	}
+
+	/** Display names of every persona in the chat — source list for the
+	 * {{personaNames}}/{{user}} joined-list value. */
+	getPersonaNames(): string[] {
+		return (this.chat.chatPersonas || []).map((cp) =>
+			this.contextBuildPersonaName(cp.persona)
+		)
+	}
+
 	async compileHandlebarsData(character: SelectCharacter): Promise<{
 		assistant: string
 		char: string
@@ -343,6 +367,14 @@ export class PromptBuilder {
 			instructions,
 			characters: charactersInterpolated,
 			personas: personasInterpolated,
+			// Plain, human-readable "A, B, and C" joined lists — distinct from
+			// the `characters`/`personas` JSON blobs above (those are consumed
+			// as raw JSON in default context templates, see defaults.ts). The
+			// long-term migration path away from singular {{char}}/{{user}} is
+			// meant to go through these, plus {{character}}/{{persona}}, which
+			// already alias the current single character/persona.
+			characterNames: joinWithAnd(this.getVisibleCharacterNames()),
+			personaNames: joinWithAnd(this.getPersonaNames()),
 			scenario: scenarioInterpolated,
 			exampleDialogue,
 			postHistoryInstructions,

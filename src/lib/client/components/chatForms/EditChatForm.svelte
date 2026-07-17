@@ -71,6 +71,7 @@
 					connectionId?: number | null
 					samplingConfigId?: number | null
 					promptConfigId?: number | null
+					chatWorldPromptConfigId?: number | null
 				}
 				characterIds: number[]
 				personaIds: number[]
@@ -91,6 +92,7 @@
 					connectionId?: number | null
 					samplingConfigId?: number | null
 					promptConfigId?: number | null
+					chatWorldPromptConfigId?: number | null
 				}
 				characterIds: number[]
 				personaIds: number[]
@@ -107,11 +109,13 @@
 	let chatConnectionId: number | null = $state(null)
 	let chatSamplingConfigId: number | null = $state(null)
 	let chatPromptConfigId: number | null = $state(null)
+	let chatWorldPromptConfigId: number | null = $state(null)
 
 	// AI override lists (admin only)
 	let adminConnectionsList: { id: number; name: string; type: string }[] = $state([])
 	let adminSamplingList: { id: number; name: string }[] = $state([])
 	let adminPromptConfigsList: { id: number; name: string }[] = $state([])
+	let adminChatWorldPromptConfigsList: { id: number; name: string }[] = $state([])
 
 	// MODALS
 	let showCharacterModal = $state(false)
@@ -147,7 +151,8 @@
 					tags: [],
 					connectionId: null,
 					samplingConfigId: null,
-					promptConfigId: null
+					promptConfigId: null,
+					chatWorldPromptConfigId: null
 				},
 				characterIds: [],
 				personaIds: [],
@@ -233,6 +238,7 @@
 		const _connectionId = chatConnectionId
 		const _samplingConfigId = chatSamplingConfigId
 		const _promptConfigId = chatPromptConfigId
+		const _chatWorldPromptConfigId = chatWorldPromptConfigId
 		data = {
 			chat: {
 				id: chat?.id,
@@ -243,7 +249,8 @@
 				tags: _tags,
 				connectionId: _connectionId,
 				samplingConfigId: _samplingConfigId,
-				promptConfigId: _promptConfigId
+				promptConfigId: _promptConfigId,
+				chatWorldPromptConfigId: _chatWorldPromptConfigId
 			},
 			characterIds: _selectedCharacters.map((cc) => cc.id),
 			personaIds: _selectedPersonas.map((cp) => cp.id),
@@ -385,7 +392,8 @@
 					lorebookId: lorebookId,
 					connectionId: chatConnectionId,
 					samplingConfigId: chatSamplingConfigId,
-					promptConfigId: chatPromptConfigId
+					promptConfigId: chatPromptConfigId,
+					chatWorldPromptConfigId: chatWorldPromptConfigId
 				} as any,
 				characterIds,
 				personaIds,
@@ -512,6 +520,7 @@
 			chatConnectionId = (chat as any).connectionId ?? null
 			chatSamplingConfigId = (chat as any).samplingConfigId ?? null
 			chatPromptConfigId = (chat as any).promptConfigId ?? null
+			chatWorldPromptConfigId = (chat as any).chatWorldPromptConfigId ?? null
 			// Reset originalData to null so it gets re-initialized with the loaded data
 			originalData = undefined
 		}
@@ -654,9 +663,11 @@
 			socket.on("connections:list", (msg: any) => { adminConnectionsList = msg.connectionsList || [] })
 			socket.on("samplingConfigs:list", (msg: any) => { adminSamplingList = msg.samplingConfigsList || [] })
 			socket.on("promptConfigs:list", (msg: any) => { adminPromptConfigsList = msg.promptConfigsList || [] })
+			socket.on("chatWorldPromptConfigs:list", (msg: any) => { adminChatWorldPromptConfigsList = msg.chatWorldPromptConfigsList || [] })
 			socket.emit("connections:list", {})
 			socket.emit("samplingConfigs:list", {})
 			socket.emit("promptConfigs:list", {})
+			socket.emit("chatWorldPromptConfigs:list", {})
 		}
 
 		// Request initial data
@@ -670,6 +681,7 @@
 		socket.off("connections:list")
 		socket.off("samplingConfigs:list")
 		socket.off("promptConfigs:list")
+		socket.off("chatWorldPromptConfigs:list")
 		// Properly remove event handlers by passing the function references
 		socket.off("chats:get", handleChatsGet)
 		socket.off("characters:list", handleCharactersList)
@@ -1184,10 +1196,19 @@
 					bind:samplingConfigId={chatSamplingConfigId}
 				/>
 				<div class="grid grid-cols-[5.5rem_1fr] items-center gap-x-2 gap-y-1.5">
-					<span class="text-muted-foreground text-xs">Prompt</span>
+					<span class="text-muted-foreground text-xs">Character Prompt</span>
 					<select class="select text-xs" bind:value={chatPromptConfigId}>
 						<option value={null}>System default</option>
 						{#each adminPromptConfigsList.filter((p) => p.id != null) as p}
+							<option value={p.id}>{p.name}</option>
+						{/each}
+					</select>
+				</div>
+				<div class="grid grid-cols-[5.5rem_1fr] items-center gap-x-2 gap-y-1.5">
+					<span class="text-muted-foreground text-xs">World Prompt</span>
+					<select class="select text-xs" bind:value={chatWorldPromptConfigId}>
+						<option value={null}>System default</option>
+						{#each adminChatWorldPromptConfigsList.filter((p) => p.id != null) as p}
 							<option value={p.id}>{p.name}</option>
 						{/each}
 					</select>

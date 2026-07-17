@@ -288,7 +288,6 @@ async function runMigrations() {
 		migrationsFolder: dbConfig.migrationsDir
 	} as MigrationConfig)
 	console.log("Migrations applied.")
-	await sync()
 }
 
 // Check if database has been initialized by looking for a specific table
@@ -343,6 +342,14 @@ if (!dev || !hasTables) {
 } else {
 	await runMigrations()
 }
+
+// Keep immutable seed rows (default prompt configs, etc.) in sync with the
+// current code on every startup — deliberately NOT gated by the version
+// comparison above, since that only tracks schema migrations. Editing seed
+// *text* in defaults.ts without a version bump would otherwise never take
+// effect on restart. sync() is fully idempotent (upsert-by-id, isImmutable
+// rows only), so running it unconditionally here is safe.
+await sync()
 
 // Mark any downloads that were in-flight when the server last stopped as errored
 db.update(schema.koboldCppModels)

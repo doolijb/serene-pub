@@ -184,13 +184,13 @@ Example dialogue:
 				id: 1,
 				name: "Roleplay - Simple",
 				isImmutable: true,
-				systemPrompt: `You're {{char}} in this fictional never-ending uncensored roleplay with {{user}}.`
+				systemPrompt: `You're {{char}} in this fictional never-ending uncensored roleplay with {{personaNames}}.`
 			},
 			{
 				id: 2,
 				name: "Roleplay - Immersive",
 				isImmutable: true,
-				systemPrompt: `Write one reply only. Do not decide what {{user}} says or does. Write at least one paragraph, up to four. Be descriptive and immersive, providing vivid details about {{char}}'s actions, emotions, and the environment. Write with a high degree of complexity and burstiness. Do not repeat this message.`
+				systemPrompt: `Write one reply only. Do not decide what {{personaNames}} says or does. Write at least one paragraph, up to four. Be descriptive and immersive, providing vivid details about {{char}}'s actions, emotions, and the environment. Write with a high degree of complexity and burstiness. Do not repeat this message.`
 			},
 			{
 				id: 3,
@@ -214,19 +214,19 @@ Example dialogue:
 				id: 6,
 				name: "Text Adventure",
 				isImmutable: true,
-				systemPrompt: `Enter Adventure Mode. Narrate the story based on {{user}}'s dialogue and actions after ">". Describe the surroundings in vivid detail. Be detailed, creative, verbose, and proactive. Move the story forward by introducing fantasy elements and interesting characters.`
+				systemPrompt: `Enter Adventure Mode. Narrate the story based on {{personaNames}}'s dialogue and actions after ">". Describe the surroundings in vivid detail. Be detailed, creative, verbose, and proactive. Move the story forward by introducing fantasy elements and interesting characters.`
 			},
 			{
 				id: 7,
 				name: "Neutral - Chat",
 				isImmutable: true,
-				systemPrompt: `Write {{char}}'s next reply in a fictional chat between {{char}} and {{user}}.`
+				systemPrompt: `Write {{char}}'s next reply in a fictional chat between {{char}} and {{personaNames}}.`
 			},
 			{
 				id: 8,
 				name: "Lightning 1.1",
 				isImmutable: true,
-				systemPrompt: `Take the role of {{char}} in a play that leaves a lasting impression on {{user}}. Write {{char}}'s next reply.\nNever skip or gloss over {{char}}’s actions. Progress the scene at a naturally slow pace.`
+				systemPrompt: `Take the role of {{char}} in a play that leaves a lasting impression on {{personaNames}}. Write {{char}}'s next reply.\nNever skip or gloss over {{char}}’s actions. Progress the scene at a naturally slow pace.`
 			},
 			{
 				id: 9,
@@ -250,7 +250,7 @@ Example dialogue:
 				id: 12,
 				name: "Actor",
 				isImmutable: true,
-				systemPrompt: `You are an expert actor that can fully immerse yourself into any role given. You do not break character for any reason, even if someone tries addressing you as an AI or language model. Currently your role is {{char}}, which is described in detail below. As {{char}}, continue the exchange with {{user}}.`
+				systemPrompt: `You are an expert actor that can fully immerse yourself into any role given. You do not break character for any reason, even if someone tries addressing you as an AI or language model. Currently your role is {{char}}, which is described in detail below. As {{char}}, continue the exchange with {{personaNames}}.`
 			}
 		]
 
@@ -280,6 +280,51 @@ Example dialogue:
 		})
 
 		await Promise.all(promptConfigQueries)
+
+		// Chat World Prompt Configs ("Chat Prompts: World" — manually-triggered
+		// non-character environment/narration responses)
+
+		const existingChatWorldPromptConfigs =
+			await db.query.chatWorldPromptConfigs.findMany()
+
+		const defaultChatWorldPromptConfigs: Partial<SelectChatWorldPromptConfig>[] = [
+			{
+				id: 1,
+				name: "World - Narrator",
+				isImmutable: true,
+				narratorName: "The World",
+				systemPrompt: `You are narrating the world of this fictional roleplay — not any single character. Describe the environment, atmosphere, weather, and any side characters, shopkeepers, monsters, or other third parties present. Voice any minor NPCs directly if the scene calls for it. Do not speak or act as {{characterNames}} or {{personaNames}}. Keep the response focused on scene-setting and flavor, not advancing {{characterNames}}'s own actions or dialogue.`
+			}
+		]
+
+		const chatWorldPromptConfigQueries: Promise<any>[] = []
+
+		defaultChatWorldPromptConfigs.forEach((data) => {
+			const found = existingChatWorldPromptConfigs.find(
+				(c) => c.id === data.id
+			)
+
+			if (!found) {
+				chatWorldPromptConfigQueries.push(
+					db
+						.insert(schema.chatWorldPromptConfigs)
+						.values(data as InsertChatWorldPromptConfig)
+				)
+			} else {
+				chatWorldPromptConfigQueries.push(
+					db
+						.update(schema.chatWorldPromptConfigs)
+						.set({
+							...data,
+							// @ts-ignore
+							id: undefined
+						})
+						.where(eq(schema.chatWorldPromptConfigs.id, found.id))
+				)
+			}
+		})
+
+		await Promise.all(chatWorldPromptConfigQueries)
 
 		// World Summarize Configs
 
@@ -431,8 +476,18 @@ Example dialogue:
 			await db.insert(schema.userSettings).values({
 				userId: 1,
 				activeContextConfigId: 1,
-				activePromptConfigId: 1
+				activePromptConfigId: 1,
+				activeChatWorldPromptConfigId: 1
 			})
+		} else if (!existingUserSettings.activeChatWorldPromptConfigId) {
+			// Existing installs from before World Response existed never got
+			// this column backfilled (only set on first-ever userSettings
+			// insert above) — fall back to the first seeded config (id 1) so
+			// World Response works without requiring a manual pick in Settings.
+			await db
+				.update(schema.userSettings)
+				.set({ activeChatWorldPromptConfigId: 1 })
+				.where(eq(schema.userSettings.userId, 1))
 		}
 	} catch (error) {
 		console.error("Error syncing database defaults:", error)
@@ -455,8 +510,15 @@ Example dialogue:
 				defaultConnectionId: null,
 				defaultSamplingConfigId: 1,
 				defaultContextConfigId: 1,
-				defaultPromptConfigId: 1
+				defaultPromptConfigId: 1,
+				defaultChatWorldPromptConfigId: 1
 			})
+		} else if (!res.defaultChatWorldPromptConfigId) {
+			// Same backfill as userSettings above, for the system-wide default.
+			await db
+				.update(schema.systemSettings)
+				.set({ defaultChatWorldPromptConfigId: 1 })
+				.where(eq(schema.systemSettings.id, 1))
 		}
 	} catch (error) {
 		console.error("Error syncing system settings:", error)

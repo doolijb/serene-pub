@@ -317,6 +317,14 @@ export type SocketEventMap = {
 		params: Sockets.Chats.UpdateChatCharacterVisibility.Params
 		response: Sockets.Chats.UpdateChatCharacterVisibility.Response
 	}
+	"chats:triggerWorldResponse": {
+		params: Sockets.Chats.TriggerWorldResponse.Params
+		response: Sockets.Chats.TriggerWorldResponse.Response
+	}
+	"chats:getWorldNarratorName": {
+		params: Sockets.Chats.GetWorldNarratorName.Params
+		response: Sockets.Chats.GetWorldNarratorName.Response
+	}
 	"chats:titleGenerated": {
 		params: Sockets.Chats.TitleGenerated.Call
 		response: Sockets.Chats.TitleGenerated.Call
@@ -474,6 +482,40 @@ export type SocketEventMap = {
 	"promptConfigs:setUserActive": {
 		params: Sockets.PromptConfigs.SetUserActive.Params
 		response: Sockets.PromptConfigs.SetUserActive.Response
+	}
+	"promptConfigs:setUserActive:error": {
+		params: never
+		response: { error?: string }
+	}
+
+	// Chat World Prompt Config events ("Chat Prompts: World")
+	"chatWorldPromptConfigs:list": {
+		params: Sockets.ChatWorldPromptConfigs.List.Params
+		response: Sockets.ChatWorldPromptConfigs.List.Response
+	}
+	"chatWorldPromptConfigs:get": {
+		params: Sockets.ChatWorldPromptConfigs.Get.Params
+		response: Sockets.ChatWorldPromptConfigs.Get.Response
+	}
+	"chatWorldPromptConfigs:create": {
+		params: Sockets.ChatWorldPromptConfigs.Create.Params
+		response: Sockets.ChatWorldPromptConfigs.Create.Response
+	}
+	"chatWorldPromptConfigs:update": {
+		params: Sockets.ChatWorldPromptConfigs.Update.Params
+		response: Sockets.ChatWorldPromptConfigs.Update.Response
+	}
+	"chatWorldPromptConfigs:delete": {
+		params: Sockets.ChatWorldPromptConfigs.Delete.Params
+		response: Sockets.ChatWorldPromptConfigs.Delete.Response
+	}
+	"chatWorldPromptConfigs:setUserActive": {
+		params: Sockets.ChatWorldPromptConfigs.SetUserActive.Params
+		response: Sockets.ChatWorldPromptConfigs.SetUserActive.Response
+	}
+	"chatWorldPromptConfigs:setUserActive:error": {
+		params: never
+		response: { error?: string }
 	}
 
 	// World Summarize Config events

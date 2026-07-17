@@ -29,6 +29,10 @@ export type TemplateContext = {
 	character: string
 	user: string
 	persona: string
+	/** "A, B, and C" — every active, non-hidden character's display name. */
+	characterNames: string
+	/** "A, B, and C" — every persona's display name. */
+	personaNames: string
 	worldLore?: string
 	characterLore?: SelectCharacterLoreEntry[]
 	history?: string
