@@ -9,18 +9,50 @@ import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
+import { ChatCharacterVisibility } from "$lib/shared/constants/ChatCharacterVisibility"
 import { InterpolationEngine } from "../utils/promptBuilder"
 import { dev } from "$app/environment"
 import type { Handler } from "$lib/shared/events"
 import { getUserConfigurations } from "../utils/getUserConfigurations"
 import { resolveTaskConfig } from "../utils/resolveTaskConfig"
-import { resolveChatWorldPromptConfig } from "../utils/resolveChatWorldPromptConfig"
+import { resolveNarratorPromptConfig } from "../utils/resolveNarratorPromptConfig"
 import { llmQueue } from "../utils/llmQueue"
 import {
 	broadcastToChatUsers,
 	createChatBroadcaster
 } from "./utils/broadcastHelpers"
 import { checkChatAccess } from "$lib/server/utils/chatAccess"
+import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
+
+// Per-chat in-process mutex serializing triggerGenerateMessageHandler runs
+// for the same chat. Without this, two near-simultaneous triggers (two
+// guests each sending a persona message back to back, or a double-clicked
+// manual "Trigger Character") can both read the "already generating" check
+// as false before either has inserted its own generating-message row,
+// letting both proceed and produce two responses for one turn. The LLM
+// queue's single global lane (llmQueue.ts) still serializes the actual
+// network calls, so this isn't about concurrent compute — it's about the
+// DB check-then-insert race that happens entirely before either reaches the
+// queue. Chats are independent of each other, so only same-chat triggers
+// serialize; different chats still run fully in parallel.
+const chatTriggerLocks = new Map<number, Promise<unknown>>()
+
+async function withChatTriggerLock<T>(
+	chatId: number,
+	fn: () => Promise<T>
+): Promise<T> {
+	const prior = chatTriggerLocks.get(chatId) ?? Promise.resolve()
+	const run = prior.catch(() => {}).then(fn)
+	const tracked = run.catch(() => {})
+	chatTriggerLocks.set(chatId, tracked)
+	try {
+		return await run
+	} finally {
+		if (chatTriggerLocks.get(chatId) === tracked) {
+			chatTriggerLocks.delete(chatId)
+		}
+	}
+}
 
 // ===== SECURITY HELPERS =====
 
@@ -110,7 +142,7 @@ async function checkMessageEditPermission(
 			chatId: true,
 			characterId: true,
 			personaId: true,
-			isWorldResponse: true
+			isNarratorResponse: true
 		}
 	})
 
@@ -128,9 +160,9 @@ async function checkMessageEditPermission(
 		return await checkCharacterOwnership(message.characterId, userId)
 	}
 
-	// World Response messages aren't owned by any persona/character — only
-	// the chat owner controls them (nobody guest-owns "the world").
-	if (message.isWorldResponse) return chatAccess.isOwner
+	// Narrator response messages aren't owned by any persona/character — only
+	// the chat owner controls them (nobody guest-owns "the narrator").
+	if (message.isNarratorResponse) return chatAccess.isOwner
 
 	return false
 }
@@ -1157,6 +1189,22 @@ export const chatsAddGuestHandler: Handler<
 				return res
 			}
 
+			// A soft-deleted user still has a real row (the FK alone wouldn't
+			// catch this), so check explicitly rather than silently adding a
+			// guest who can never actually authenticate as themselves again.
+			const guestUser = await db.query.users.findFirst({
+				where: (u, { eq }) => eq(u.id, guestUserId),
+				columns: { id: true, isDeleted: true }
+			})
+			if (!guestUser || guestUser.isDeleted) {
+				const res: Sockets.Chats.AddGuest.Response = {
+					success: false,
+					error: "That user doesn't exist."
+				}
+				emitToUser("chats:addGuest", res)
+				return res
+			}
+
 			// Check if guest is already in the chat
 			const existingGuest = await db.query.chatGuests.findFirst({
 				where: and(
@@ -1328,85 +1376,98 @@ export const chatsBranchHandler: Handler<
 				return res
 			}
 
-			// Create the new chat with only the properties that exist in the schema
-			const newChatData: InsertChat = {
-				name: title,
-				scenario: originalChat.scenario,
-				userId: originalChat.userId,
-				isGroup: originalChat.isGroup,
-				groupReplyStrategy: originalChat.groupReplyStrategy,
-				metadata: originalChat.metadata,
-				lorebookId: originalChat.lorebookId
-			}
-
-			const [newChat] = await db
-				.insert(schema.chats)
-				.values(newChatData)
-				.returning()
-
-			// Copy chat characters
-			for (const chatCharacter of (originalChat as any).chatCharacters) {
-				await db.insert(schema.chatCharacters).values({
-					chatId: newChat.id,
-					characterId: chatCharacter.characterId,
-					position: chatCharacter.position,
-					isActive: chatCharacter.isActive,
-					visibility: chatCharacter.visibility
-				})
-			}
-
-			// Copy chat personas
-			for (const chatPersona of (originalChat as any).chatPersonas) {
-				await db.insert(schema.chatPersonas).values({
-					chatId: newChat.id,
-					personaId: chatPersona.personaId,
-					position: chatPersona.position
-				})
-			}
-
-			// Copy chat guests
-			for (const chatGuest of (originalChat as any).chatGuests) {
-				await db.insert(schema.chatGuests).values({
-					chatId: newChat.id,
-					userId: chatGuest.userId
-				})
-			}
-
-			// Copy chat tags
-			for (const chatTag of (originalChat as any).chatTags) {
-				await db.insert(schema.chatTags).values({
-					chatId: newChat.id,
-					tagId: chatTag.tagId
-				})
-			}
-
 			// Get all messages up to and including the branch message
 			const allMessages = await db.query.chatMessages.findMany({
 				where: eq(schema.chatMessages.chatId, chatId),
 				orderBy: asc(schema.chatMessages.id)
 			})
-
-			// Filter messages up to and including the branch message
 			const messagesToCopy = allMessages.filter(
 				(msg) => msg.id <= messageId
 			)
 
-			// Copy messages
-			for (const message of messagesToCopy) {
-				const newMessageData: InsertChatMessage = {
-					chatId: newChat.id,
-					userId: message.userId,
-					personaId: message.personaId,
-					characterId: message.characterId,
-					role: message.role,
-					content: message.content,
-					isHidden: message.isHidden,
-					isGenerating: false, // Always set to false for copied messages
-					metadata: message.metadata
+			// Everything below writes a brand-new chat and its full copied
+			// history — wrapped in one transaction so a crash or thrown error
+			// partway through (e.g. server restart mid-copy) can't leave an
+			// orphaned, half-copied branch chat visible in the chat list.
+			const newChat = await db.transaction(async (tx) => {
+				// Create the new chat with only the properties that exist in the schema
+				const newChatData: InsertChat = {
+					name: title,
+					scenario: originalChat.scenario,
+					userId: originalChat.userId,
+					isGroup: originalChat.isGroup,
+					groupReplyStrategy: originalChat.groupReplyStrategy,
+					metadata: originalChat.metadata,
+					lorebookId: originalChat.lorebookId
 				}
 
-				await db.insert(schema.chatMessages).values(newMessageData)
-			}
+				const [newChat] = await tx
+					.insert(schema.chats)
+					.values(newChatData)
+					.returning()
+
+				const chatCharacters = (originalChat as any).chatCharacters
+				if (chatCharacters.length > 0) {
+					await tx.insert(schema.chatCharacters).values(
+						chatCharacters.map((chatCharacter: any) => ({
+							chatId: newChat.id,
+							characterId: chatCharacter.characterId,
+							position: chatCharacter.position,
+							isActive: chatCharacter.isActive,
+							visibility: chatCharacter.visibility
+						}))
+					)
+				}
+
+				const chatPersonas = (originalChat as any).chatPersonas
+				if (chatPersonas.length > 0) {
+					await tx.insert(schema.chatPersonas).values(
+						chatPersonas.map((chatPersona: any) => ({
+							chatId: newChat.id,
+							personaId: chatPersona.personaId,
+							position: chatPersona.position
+						}))
+					)
+				}
+
+				const chatGuests = (originalChat as any).chatGuests
+				if (chatGuests.length > 0) {
+					await tx.insert(schema.chatGuests).values(
+						chatGuests.map((chatGuest: any) => ({
+							chatId: newChat.id,
+							userId: chatGuest.userId
+						}))
+					)
+				}
+
+				const chatTags = (originalChat as any).chatTags
+				if (chatTags.length > 0) {
+					await tx.insert(schema.chatTags).values(
+						chatTags.map((chatTag: any) => ({
+							chatId: newChat.id,
+							tagId: chatTag.tagId
+						}))
+					)
+				}
+
+				if (messagesToCopy.length > 0) {
+					await tx.insert(schema.chatMessages).values(
+						messagesToCopy.map((message) => ({
+							chatId: newChat.id,
+							userId: message.userId,
+							personaId: message.personaId,
+							characterId: message.characterId,
+							role: message.role,
+							content: message.content,
+							isHidden: message.isHidden,
+							isGenerating: false, // Always set to false for copied messages
+							metadata: message.metadata
+						}) satisfies InsertChatMessage)
+					)
+				}
+
+				return newChat
+			})
 
 			// Fetch the complete new chat with messages
 			const branchedChat = await getChatFromDB(newChat.id, userId)
@@ -2436,7 +2497,7 @@ function buildCharacterFirstChatMessage({
 	const history: string[] = []
 	const engine = new InterpolationEngine()
 	const context = engine.createInterpolationContext({
-		currentCharacterName: character.nickname || character.name,
+		currentCharacterName: resolveCharacterName(character),
 		currentPersonaName: persona?.name || "User"
 	})
 	if (dev) {
@@ -2636,7 +2697,8 @@ export const triggerGenerateMessageHandler: Handler<
 	Sockets.Chats.TriggerGenerateMessage.Response
 > = {
 	event: "chats:triggerGenerateMessage",
-	handler: async (socket, params, emitToUser) => {
+	handler: async (socket, params, emitToUser) =>
+		withChatTriggerLock(params.chatId, async () => {
 		try {
 			const userId = socket.user!.id
 			const msgLimit = 10
@@ -2672,21 +2734,25 @@ export const triggerGenerateMessageHandler: Handler<
 				)
 
 				// Find the next character who should reply — an explicit
-				// characterId always wins (manual out-of-turn trigger); otherwise
-				// ask getNextCharacterTurn who's actually due right now. It's
-				// stateless (recomputed from message history every call), so
-				// there's no separate "triggered" mode to reconcile here anymore.
+				// characterId always wins (manual out-of-turn trigger, and the
+				// only way a "Manual" chat ever advances at all). Otherwise ask
+				// getNextCharacterTurn who's actually due right now, but only for
+				// "Ordered" chats — a "Manual" chat's whole point is that nobody
+				// auto-advances, so calls with no explicit characterId (e.g. the
+				// automatic re-check after every persona message) are a no-op.
 				const nextCharacterId =
 					params.characterId ||
-					getNextCharacterTurn({
-						chatMessages: chat.chatMessages,
-						chatCharacters: activeCharacters.sort(
-							(a, b) => (a.position ?? 0) - (b.position ?? 0)
-						) as any,
-						chatPersonas: chat.chatPersonas.filter(
-							(cp) => cp.persona !== null
-						) as any
-					})
+					(chat.groupReplyStrategy !== GroupReplyStrategies.MANUAL
+						? getNextCharacterTurn({
+								chatMessages: chat.chatMessages,
+								chatCharacters: activeCharacters.sort(
+									(a, b) => (a.position ?? 0) - (b.position ?? 0)
+								) as any,
+								chatPersonas: chat.chatPersonas.filter(
+									(cp) => cp.persona !== null
+								) as any
+							})
+						: null)
 
 				if (!nextCharacterId) {
 					break
@@ -2759,26 +2825,26 @@ export const triggerGenerateMessageHandler: Handler<
 				error: "Failed to trigger message generation."
 			}
 		}
-	}
+		})
 }
 
-// "The World" — a manually-triggered, non-character narration/environment
+// "Narrator" — a manually-triggered, non-character narration/environment
 // response. Deliberately does NOT touch chat.chatCharacters or
-// getNextCharacterTurn at all: since a world message is never a
+// getNextCharacterTurn at all: since a narrator message is never a
 // chatCharacters row, it's automatically excluded from round-robin with no
 // extra exclusion logic needed.
-export const triggerWorldResponseHandler: Handler<
-	Sockets.Chats.TriggerWorldResponse.Params,
-	Sockets.Chats.TriggerWorldResponse.Response
+export const triggerNarratorResponseHandler: Handler<
+	Sockets.Chats.TriggerNarratorResponse.Params,
+	Sockets.Chats.TriggerNarratorResponse.Response
 > = {
-	event: "chats:triggerWorldResponse",
+	event: "chats:triggerNarratorResponse",
 	handler: async (socket, params, emitToUser) => {
 		try {
 			const userId = socket.user!.id
 
 			const chat = await getPromptChatFromDb(params.chatId, userId)
 			if (!chat) {
-				return { error: "Error triggering World Response: Chat not found." }
+				return { error: "Error triggering Narrator response: Chat not found." }
 			}
 
 			const hasGeneratingMessages = chat.chatMessages.some(
@@ -2790,38 +2856,38 @@ export const triggerWorldResponseHandler: Handler<
 				}
 			}
 
-			// Resolve the effective world config (chat override → user active →
+			// Resolve the effective narrator config (chat override → user active →
 			// system default) up front so the message's display name is
 			// snapshotted at generation time — later renaming a config, or
 			// changing the chat's override, doesn't retroactively relabel
 			// already-generated messages.
-			const effectiveWorldConfig = await resolveChatWorldPromptConfig(
+			const effectiveNarratorConfig = await resolveNarratorPromptConfig(
 				chat,
 				userId
 			)
-			const worldName = effectiveWorldConfig?.narratorName || "The World"
+			const narratorName = effectiveNarratorConfig?.narratorName || "Narrator"
 
-			const worldMessage: InsertChatMessage = {
+			const narratorMessage: InsertChatMessage = {
 				userId,
 				chatId: params.chatId,
 				personaId: null,
 				characterId: null,
 				content: "",
 				role: "assistant",
-				isWorldResponse: true,
+				isNarratorResponse: true,
 				isGenerating: true,
 				generationStage: "queued",
 				metadata: {
-					worldName,
+					narratorName,
 					...(params.instructions
-						? { worldInstructions: params.instructions }
+						? { narratorInstructions: params.instructions }
 						: {})
 				}
 			}
 
 			const [generatingMessage] = await db
 				.insert(schema.chatMessages)
-				.values(worldMessage)
+				.values(narratorMessage)
 				.returning()
 
 			await broadcastToChatUsers(
@@ -2841,42 +2907,42 @@ export const triggerWorldResponseHandler: Handler<
 
 			return { success: ok }
 		} catch (error) {
-			console.error("Error in triggerWorldResponseHandler:", error)
+			console.error("Error in triggerNarratorResponseHandler:", error)
 			return {
-				error: "Failed to trigger World Response."
+				error: "Failed to trigger Narrator response."
 			}
 		}
 	}
 }
 
-// Lets the client label the World trigger button/modal correctly BEFORE any
+// Lets the client label the Narrator trigger button/modal correctly BEFORE any
 // message exists (e.g. a chat-specific narrator name like "Fate" instead of
-// the default "The World"). Deliberately not admin-gated — any chat
+// the default "Narrator"). Deliberately not admin-gated — any chat
 // participant (owner or guest) needs to see this, unlike the
-// chatWorldPromptConfigs CRUD handlers which manage the underlying configs.
-export const chatsGetWorldNarratorNameHandler: Handler<
-	Sockets.Chats.GetWorldNarratorName.Params,
-	Sockets.Chats.GetWorldNarratorName.Response
+// narratorPromptConfigs CRUD handlers which manage the underlying configs.
+export const chatsGetNarratorNameHandler: Handler<
+	Sockets.Chats.GetNarratorName.Params,
+	Sockets.Chats.GetNarratorName.Response
 > = {
-	event: "chats:getWorldNarratorName",
+	event: "chats:getNarratorName",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const chatAccess = await checkChatAccess(params.chatId, userId)
 		if (!chatAccess.hasAccess) {
-			return { chatId: params.chatId, narratorName: "The World" }
+			return { chatId: params.chatId, narratorName: "Narrator" }
 		}
 
 		const chat = await db.query.chats.findFirst({
 			where: (c, { eq }) => eq(c.id, params.chatId),
-			columns: { chatWorldPromptConfigId: true }
+			columns: { narratorPromptConfigId: true }
 		})
 
-		const config = await resolveChatWorldPromptConfig(chat, userId)
-		const res: Sockets.Chats.GetWorldNarratorName.Response = {
+		const config = await resolveNarratorPromptConfig(chat, userId)
+		const res: Sockets.Chats.GetNarratorName.Response = {
 			chatId: params.chatId,
-			narratorName: config?.narratorName || "The World"
+			narratorName: config?.narratorName || "Narrator"
 		}
-		emitToUser("chats:getWorldNarratorName", res)
+		emitToUser("chats:getNarratorName", res)
 		return res
 	}
 }
@@ -3053,16 +3119,16 @@ export const assistantSaveDraftHandler: Handler<
 	{ success: boolean; characterId?: number; error?: string }
 > = {
 	event: "assistant:saveDraft",
-	description: "Save character draft from chat metadata to characters table",
-	async handler(data, { socket, userId, emitToUser }) {
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
 		try {
-			const { chatId } = data
+			const { chatId } = params
 
 			// Get the chat
 			const chat = await db.query.chats.findFirst({
 				where: and(
 					eq(schema.chats.id, chatId),
-					eq(schema.chats.ownerId, userId)
+					eq(schema.chats.userId, userId)
 				)
 			})
 
@@ -3115,19 +3181,19 @@ export const assistantSaveDraftHandler: Handler<
 						draft.postHistoryInstructions || null,
 					source: draft.source || null,
 					characterVersion: draft.characterVersion || null,
-					ownerId: userId,
-					favorite: false
+					userId,
+					isFavorite: false
 				})
 				.returning()
 
 			console.log("Character created from draft:", newCharacter.id)
 
 			// Link the character to the chat
-			await db.insert(schema.chatsToCharacters).values({
+			await db.insert(schema.chatCharacters).values({
 				chatId,
 				characterId: newCharacter.id,
 				isActive: true,
-				isVisible: true
+				visibility: ChatCharacterVisibility.VISIBLE
 			})
 
 			// Clear the draft from metadata
@@ -3209,8 +3275,8 @@ export function registerChatHandlers(
 	register(socket, chatMessageHandler, emitToUser)
 	register(socket, promptTokenCountHandler, emitToUser)
 	register(socket, triggerGenerateMessageHandler, emitToUser)
-	register(socket, triggerWorldResponseHandler, emitToUser)
-	register(socket, chatsGetWorldNarratorNameHandler, emitToUser)
+	register(socket, triggerNarratorResponseHandler, emitToUser)
+	register(socket, chatsGetNarratorNameHandler, emitToUser)
 	register(socket, toggleChatCharacterActiveHandler, emitToUser)
 	register(socket, updateChatCharacterVisibilityHandler, emitToUser)
 	register(socket, assistantSaveDraftHandler, emitToUser)

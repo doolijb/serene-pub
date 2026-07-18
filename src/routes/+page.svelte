@@ -526,7 +526,7 @@
 				class="bg-primary-500/25 w-full rounded-xl"
 			/>
 			<button
-				class="text-primary-800 hover:text-primary-900 dark:text-primary-200 hover:dark:text-primary-100 absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded-full bg-black/20 text-xl leading-none font-bold hover:bg-black/30"
+				class="text-primary-800 hover:text-primary-900 dark:text-primary-200 hover:dark:text-primary-100 absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded-full text-xl leading-none font-bold hover:bg-black/30"
 				onclick={toggleBanner}
 				title="Hide banner"
 			>
@@ -1020,8 +1020,18 @@
 											maxFiles={1}
 											onFileAccept={handleCharacterCardImport}
 											onFileReject={console.error}
-											classes="w-full"
-										/>
+										>
+											<FileUpload.Dropzone
+												class="border-surface-300-700 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
+											>
+												<Icons.Upload class="text-surface-500 h-8 w-8" />
+												<FileUpload.Trigger class="btn btn-sm preset-filled-primary-500">
+													Browse
+												</FileUpload.Trigger>
+												<span class="text-surface-500 text-xs">or drag and drop</span>
+												<FileUpload.HiddenInput />
+											</FileUpload.Dropzone>
+										</FileUpload>
 									{/if}
 								</div>
 								<button
@@ -1097,8 +1107,18 @@
 											maxFiles={1}
 											onFileAccept={handlePersonaCardImport}
 											onFileReject={console.error}
-											classes="w-full"
-										/>
+										>
+											<FileUpload.Dropzone
+												class="border-surface-300-700 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
+											>
+												<Icons.Upload class="text-surface-500 h-8 w-8" />
+												<FileUpload.Trigger class="btn btn-sm preset-filled-primary-500">
+													Browse
+												</FileUpload.Trigger>
+												<span class="text-surface-500 text-xs">or drag and drop</span>
+												<FileUpload.HiddenInput />
+											</FileUpload.Dropzone>
+										</FileUpload>
 									{/if}
 								</div>
 								<button

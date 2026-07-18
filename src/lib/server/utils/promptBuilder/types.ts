@@ -171,6 +171,18 @@ export type CompileOptions = {
 
 export type InfillContentOptions = {
 	charName: string
+	/**
+	 * Name used to seed the trailing placeholder assistant turn that primes
+	 * the LLM to continue as a given speaker (e.g. "Cassian Vharo:"). Distinct
+	 * from charName, which is the joined cast list ("Cassian Vharo and
+	 * Elowyn") used for {{char}}/{{character}} template interpolation in
+	 * no-single-perspective (Narrator response) mode — that joined text is a
+	 * reasonable stand-in inside descriptive prose, but using it as the seed
+	 * primes the model to write joint dialogue AS those characters instead of
+	 * narrating as the Narrator. Empty string when there's no single character
+	 * to seed as (Narrator response mode).
+	 */
+	seedName: string
 	personaName: string
 	templateContext: TemplateContext
 	useChatFormat?: boolean

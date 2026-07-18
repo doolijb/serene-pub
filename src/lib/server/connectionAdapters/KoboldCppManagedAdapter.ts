@@ -74,6 +74,17 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 		// Only spawn a subprocess in "managed" mode — in "external" mode the
 		// user's own koboldcpp instance is expected to already be running
 		// with the admin API enabled.
+		if (!alreadyResponding && settings.koboldCppManagedMode !== "managed") {
+			// Nothing is listening and we're not allowed to spawn anything —
+			// left uncaught, this surfaces as a bare "fetch failed"/ECONNREFUSED
+			// from ensureModelLoaded() below, which reads like an app bug rather
+			// than a config/timing issue (e.g. Manager was switched to
+			// "External" or disabled from the settings screen — possibly
+			// mid-generation — while nothing external was actually running).
+			throw new Error(
+				`KoboldCpp is not reachable at ${baseUrl} and the Manager is in "${settings.koboldCppManagedMode ?? "unset"}" mode, so it can't be auto-started. Either start KoboldCpp externally, or switch the Manager to "Managed" mode in Settings.`
+			)
+		}
 		if (settings.koboldCppManagedMode === "managed" && !alreadyResponding) {
 			console.log(
 				`[KoboldCPP] preflight attempt ${attemptNum}: subprocess not responding, starting...`

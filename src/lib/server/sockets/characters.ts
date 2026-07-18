@@ -1,5 +1,5 @@
 import { db } from "$lib/server/db"
-import { and, eq } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import * as fsPromises from "fs/promises"
 import * as path from "path"
@@ -21,24 +21,69 @@ import {
 import { autoEnqueueCharacter } from "$lib/server/embedding/vectorizationQueue"
 import { canViewCharacter } from "$lib/server/utils/chatAccess"
 
-// Helper function to process tags for character creation/update
-async function processCharacterTags(characterId: number, tagNames: string[]) {
-	if (!tagNames || tagNames.length === 0) return
+// Helper function to process tags for character creation/update. Tags are
+// per-user (schema.tags.userId): lookups/creates must stay scoped to the
+// calling user, both so one user's tag name never resolves to another
+// user's tag row, and so a caller can never mutate tag associations on a
+// character it doesn't own by supplying someone else's characterId — the
+// resource-ownership check below guards that even though the actual
+// character field update elsewhere is already ownership-scoped.
+async function processCharacterTags(
+	characterId: number,
+	tagNames: string[],
+	userId: number
+) {
+	const character = await db.query.characters.findFirst({
+		where: (c, { and, eq }) =>
+			and(eq(c.id, characterId), eq(c.userId, userId)),
+		columns: { id: true }
+	})
+	if (!character) return
 
-	// First, remove all existing tags for this character
-	await db
-		.delete(schema.characterTags)
-		.where(eq(schema.characterTags.characterId, characterId))
+	// Get existing tags for this character that belong to the user
+	const existingCharacterTags = await db.query.characterTags.findMany({
+		where: eq(schema.characterTags.characterId, characterId),
+		with: { tag: true }
+	})
+	const userCharacterTags = existingCharacterTags.filter(
+		(ct) => ct.tag.userId === userId
+	)
+	const existingTagNames = userCharacterTags.map((ct) => ct.tag.name)
 
-	// Process each tag name
-	const tagIds: number[] = []
+	// Normalize tag names for comparison
+	const normalizedNewTags = (tagNames || [])
+		.map((t) => t.trim())
+		.filter((t) => t.length > 0)
 
-	for (const tagName of tagNames) {
-		if (!tagName.trim()) continue
+	// Find tags to remove (exist in DB but not in new list)
+	const tagsToRemove = userCharacterTags.filter(
+		(ct) => !normalizedNewTags.includes(ct.tag.name)
+	)
 
-		// Check if tag exists
+	// Find tags to add (exist in new list but not in DB)
+	const tagsToAdd = normalizedNewTags.filter(
+		(tagName) => !existingTagNames.includes(tagName)
+	)
+
+	// Remove tags that are no longer in the list
+	if (tagsToRemove.length > 0) {
+		const tagIdsToRemove = tagsToRemove.map((ct) => ct.tagId)
+		await db
+			.delete(schema.characterTags)
+			.where(
+				and(
+					eq(schema.characterTags.characterId, characterId),
+					inArray(schema.characterTags.tagId, tagIdsToRemove)
+				)
+			)
+	}
+
+	// Add new tags
+	for (const tagName of tagsToAdd) {
+		// Check if tag exists for this user
 		let existingTag = await db.query.tags.findFirst({
-			where: eq(schema.tags.name, tagName.trim())
+			where: (t, { and, eq }) =>
+				and(eq(t.name, tagName), eq(t.userId, userId))
 		})
 
 		// Create tag if it doesn't exist
@@ -46,26 +91,20 @@ async function processCharacterTags(characterId: number, tagNames: string[]) {
 			const [newTag] = await db
 				.insert(schema.tags)
 				.values({
-					name: tagName.trim()
-					// description and colorPreset will use database defaults
+					name: tagName,
+					userId
 				})
 				.returning()
 			existingTag = newTag
 		}
 
-		tagIds.push(existingTag.id)
-	}
-
-	// Link all tags to the character
-	if (tagIds.length > 0) {
-		const characterTagsData = tagIds.map((tagId) => ({
-			characterId,
-			tagId
-		}))
-
+		// Link tag to character
 		await db
 			.insert(schema.characterTags)
-			.values(characterTagsData)
+			.values({
+				characterId,
+				tagId: existingTag.id
+			})
 			.onConflictDoNothing() // In case of race conditions
 	}
 }
@@ -162,7 +201,7 @@ export const charactersCreate: Handler<Sockets.Characters.Create.Params, Sockets
 
 			// Process tags after character creation
 			if (tags.length > 0) {
-				await processCharacterTags(character.id, tags)
+				await processCharacterTags(character.id, tags, socket.user!.id)
 			}
 
 			if (params.avatarFile) {
@@ -221,8 +260,12 @@ export const charactersUpdate: Handler<Sockets.Characters.Update.Params, Sockets
 				)
 				.returning()
 
+			if (!updated) {
+				throw new Error("Character not found or not owned by user.")
+			}
+
 			// Process tags after character update
-			await processCharacterTags(id, tags)
+			await processCharacterTags(id, tags, userId)
 
 			if (params.avatarFile) {
 				await handleCharacterAvatarUpload({
@@ -251,12 +294,13 @@ export const charactersDelete: Handler<Sockets.Characters.Delete.Params, Sockets
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 
-		// Delete character tags first (cascade should handle this, but being explicit)
-		await db
-			.delete(schema.characterTags)
-			.where(eq(schema.characterTags.characterId, params.id))
-
-		// Delete the character
+		// character_tags.characterId already declares onDelete: "cascade" from
+		// characters.id, so a separate manual delete here is redundant — and
+		// was wrong: it ran unconditionally on any supplied id BEFORE this
+		// ownership-scoped delete, so any user could wipe another user's
+		// character's tag associations just by guessing the id, even though
+		// the character row itself correctly survived (same bug class already
+		// fixed for tags:delete).
 		await db
 			.delete(schema.characters)
 			.where(
@@ -350,7 +394,7 @@ export const charactersImportCard: Handler<Sockets.Characters.ImportCard.Params,
 
 			// Process tags if present
 			if (data.tags && data.tags.length > 0) {
-				await processCharacterTags(character.id, data.tags)
+				await processCharacterTags(character.id, data.tags, userId)
 			}
 
 			await charactersList.handler(socket, {}, emitToUser)

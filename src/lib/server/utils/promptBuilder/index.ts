@@ -9,6 +9,7 @@ import {
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 import { ChatCharacterVisibility } from "$lib/shared/constants/ChatCharacterVisibility"
 import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
+import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 
 // Import modular components
 import { InterpolationEngine } from "./InterpolationEngine"
@@ -109,7 +110,7 @@ export class PromptBuilder {
 		return character.personality
 	}
 	contextBuildCharacterScenario(
-		character: SelectCharacter
+		character: SelectCharacter | null
 	): string | undefined {
 		if (!character?.scenario) return undefined
 		return character.scenario
@@ -121,7 +122,7 @@ export class PromptBuilder {
 		return this.promptConfig.systemPrompt
 	}
 	contextBuildCharacterExampleDialogues(
-		character: SelectCharacter
+		character: SelectCharacter | null
 	): string | undefined {
 		if (
 			!character?.exampleDialogues ||
@@ -135,7 +136,7 @@ export class PromptBuilder {
 		return validDialogues[randomIndex]
 	}
 	contextBuildPostHistoryInstructions(
-		character: SelectCharacter
+		character: SelectCharacter | null
 	): string | undefined {
 		if (!character?.postHistoryInstructions) return undefined
 		return character.postHistoryInstructions
@@ -217,7 +218,7 @@ export class PromptBuilder {
 	}
 
 	getCharacterDisplayName(character: SelectCharacter): string {
-		return character.nickname || character.name || "assistant"
+		return resolveCharacterName(character)
 	}
 
 	/** Display names of every active, non-hidden character in the chat —
@@ -260,7 +261,7 @@ export class PromptBuilder {
 		}
 	}
 
-	buildContextData(currentCharacter: SelectCharacter) {
+	buildContextData(currentCharacter: SelectCharacter | null) {
 		const chatCharacters = this.chat.chatCharacters as
 			| (SelectChatCharacter & { character: SelectCharacter })[]
 			| undefined
@@ -300,7 +301,7 @@ export class PromptBuilder {
 
 	// --- Modularized section: scenario interpolation and source ---
 	private getScenarioInterpolated(
-		currentCharacter: SelectCharacter,
+		currentCharacter: SelectCharacter | null,
 		interpolationContext: any
 	): {
 		scenarioInterpolated: string
@@ -390,11 +391,13 @@ export class PromptBuilder {
 	async infillContent({
 		templateContext,
 		charName,
+		seedName,
 		personaName,
 		useChatFormat
 	}: {
 		templateContext: TemplateContext
 		charName: string
+		seedName: string
 		personaName: string
 		useChatFormat: boolean
 	}) {
@@ -406,6 +409,7 @@ export class PromptBuilder {
 		)
 		return await engine.infillContent({
 			charName,
+			seedName,
 			personaName,
 			templateContext,
 			useChatFormat,
@@ -546,30 +550,61 @@ export class PromptBuilder {
 
 	// --- Main compilePrompt ---
 	async compilePrompt({
-		useChatFormat = false
+		useChatFormat = false,
+		extraInstructions
 	}: {
 		useChatFormat?: boolean
+		/** Ad hoc text appended to the system prompt for this compile only —
+		 * e.g. the Narrator's optional per-trigger focus note. Not persisted
+		 * on the prompt config itself. */
+		extraInstructions?: string
 	}): Promise<CompiledPrompt> {
 		this.registerHandlebarsHelpers({ useChatFormat })
 		const chatCharacters = this.chat.chatCharacters as
 			| (SelectChatCharacter & { character: SelectCharacter })[]
 			| undefined
-		const currentCharacter = chatCharacters?.find(
-			(cc) => cc.character.id === this.currentCharacterId
-		)?.character
-		if (!currentCharacter) {
+		// A null currentCharacterId is a deliberate "no single perspective" mode
+		// (Narrator response) rather than a missing-character error — only a
+		// non-null id that fails to resolve is a real data-integrity problem.
+		const currentCharacter: SelectCharacter | null =
+			this.currentCharacterId != null
+				? (chatCharacters?.find(
+						(cc) => cc.character.id === this.currentCharacterId
+					)?.character ?? null)
+				: null
+		if (this.currentCharacterId != null && !currentCharacter) {
 			throw new Error(
 				`compilePrompt: No character found with ID ${this.currentCharacterId}`
 			)
 		}
 
 		this.buildContextData(currentCharacter)
+		if (extraInstructions) {
+			this.instructions = this.instructions
+				? `${this.instructions}\n\nAdditional focus for this response: ${extraInstructions}`
+				: extraInstructions
+		}
 
-		const charName = currentCharacter.nickname || currentCharacter.name
-		const personaName =
-			(this.chat.chatPersonas &&
-				this.chat.chatPersonas[0]?.persona?.name) ||
-			"user"
+		// No single current character/persona to name in no-perspective mode —
+		// {{char}}/{{user}} (and {{character}}/{{persona}}) resolve to the full
+		// joined cast lists instead, same convention as {{characterNames}}/
+		// {{personaNames}} below.
+		const charName = currentCharacter
+			? resolveCharacterName(currentCharacter)
+			: joinWithAnd(this.getVisibleCharacterNames())
+		// Unlike charName, seedName must NOT fall back to the joined cast list —
+		// it primes the trailing assistant placeholder turn ("Name:"), and a
+		// multi-name seed teaches the model to write joint dialogue as those
+		// characters instead of narrating as the Narrator. "Narrator" matches
+		// the same default ContentProcessors.ts uses for already-saved Narrator
+		// response messages in history (narratorName metadata || "Narrator"),
+		// so the seed is consistent with how every other narration line reads.
+		const seedName = currentCharacter ? resolveCharacterName(currentCharacter) : "Narrator"
+		const personaName = currentCharacter
+			? (this.chat.chatPersonas &&
+					this.chat.chatPersonas[0]?.persona?.name) ||
+				"user"
+			: joinWithAnd(this.getPersonaNames())
 		const interpolationContext =
 			this.interpolationEngine.createInterpolationContext({
 				currentCharacterName: charName,
@@ -644,6 +679,7 @@ export class PromptBuilder {
 					)
 					infillResult = await ragEngine.infillContent({
 						charName,
+						seedName,
 						personaName,
 						templateContext,
 						useChatFormat,
@@ -668,6 +704,7 @@ export class PromptBuilder {
 			infillResult = await this.infillContent({
 				templateContext,
 				charName,
+				seedName,
 				personaName,
 				useChatFormat
 			})

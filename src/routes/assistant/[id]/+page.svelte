@@ -3,7 +3,7 @@
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import * as Icons from "@lucide/svelte"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import ChatContainer from "$lib/client/components/chatMessages/ChatContainer.svelte"
 	import ChatMessage from "$lib/client/components/chatMessages/ChatMessage.svelte"
 	import MessageComposer from "$lib/client/components/chatMessages/MessageComposer.svelte"
@@ -122,6 +122,7 @@
 	onMount(() => {
 		// Set up listeners first - using V2 events for new assistant system
 		socket.on("chatMessage", handleChatMessage)
+		;(socket as any).on("chatMessage:error", handleChatMessageError)
 		socket.on("chats:get", handleChatGetResponse)
 		socket.on("chats:titleGenerated", handleTitleGenerated)
 		socket.on("assistant:completeV2", handleAssistantCompleteV2)
@@ -140,6 +141,7 @@
 		// Cleanup listeners on unmount
 		return () => {
 			socket.off("chatMessage", handleChatMessage)
+			;(socket as any).off("chatMessage:error", handleChatMessageError)
 			socket.off("chats:get", handleChatGetResponse)
 			socket.off("chats:titleGenerated", handleTitleGenerated)
 			socket.off("assistant:completeV2", handleAssistantCompleteV2)
@@ -542,6 +544,16 @@
 		}
 	}
 
+	// "chatMessage" (singular) is the server's event for a single message
+	// fetch/echo (distinct from the "chatMessages:*" bulk/action events used
+	// elsewhere) - this surfaces a toast if that ever fails.
+	function handleChatMessageError(msg: { error?: string }) {
+		toaster.error({
+			title: "Failed to load message",
+			description: msg?.error
+		})
+	}
+
 	async function sendMessage() {
 		if (!canSendMessage || !chat || !socket) return
 
@@ -652,12 +664,25 @@
 		return false
 	}
 
+	let showDeleteMessageModal = $state(false)
+	let pendingDeleteMessageId: number | null = $state(null)
+
 	function handleDeleteMessage(event: MouseEvent, msg: SelectChatMessage) {
 		if (!socket) return
-		// Simplified delete - just call the socket
-		if (confirm("Delete this message?")) {
-			socket.emit("chatMessages:delete", { id: msg.id })
-		}
+		pendingDeleteMessageId = msg.id
+		showDeleteMessageModal = true
+	}
+
+	function cancelDeleteMessage() {
+		showDeleteMessageModal = false
+		pendingDeleteMessageId = null
+	}
+
+	function confirmDeleteMessage() {
+		if (!socket || pendingDeleteMessageId == null) return
+		socket.emit("chatMessages:delete", { id: pendingDeleteMessageId })
+		showDeleteMessageModal = false
+		pendingDeleteMessageId = null
 	}
 
 	function handleRegenerateMessage(
@@ -850,4 +875,42 @@
 			</ChatContainer>
 		{/if}
 	</div>
+
+	<!-- Delete message confirmation modal -->
+	<Dialog
+		open={showDeleteMessageModal}
+		onOpenChange={(e) => {
+			if (!e.open) cancelDeleteMessage()
+		}}
+	>
+		<Portal>
+			<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+				<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-md">
+					<header class="flex justify-between">
+						<h2 class="h2">Confirm</h2>
+					</header>
+					<article>
+						<p class="opacity-60">
+							Delete this message? This action cannot be undone.
+						</p>
+					</article>
+					<footer class="flex justify-end gap-4">
+						<button
+							class="btn preset-filled-surface-500"
+							onclick={cancelDeleteMessage}
+						>
+							Cancel
+						</button>
+						<button
+							class="btn preset-filled-error-500"
+							onclick={confirmDeleteMessage}
+						>
+							Delete
+						</button>
+					</footer>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
 </div>

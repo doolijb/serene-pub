@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { slide } from "svelte/transition"
 	import Avatar from "../Avatar.svelte"
@@ -189,8 +189,26 @@
 		}, 500)
 	}
 
+	let showUnlinkModal = $state(false)
+	let pendingUnlink: { entityId: number; type: EntityType } | null =
+		$state(null)
+
 	function handleUnlink(entityId: number, type: EntityType) {
-		if (!socket || !confirm(`Unlink this ${type.slice(0, -1)}?`)) return
+		if (!socket) return
+		pendingUnlink = { entityId, type }
+		showUnlinkModal = true
+	}
+
+	function cancelUnlink() {
+		showUnlinkModal = false
+		pendingUnlink = null
+	}
+
+	function confirmUnlink() {
+		if (!socket || !pendingUnlink) return
+		const { entityId, type } = pendingUnlink
+		showUnlinkModal = false
+		pendingUnlink = null
 
 		isLoading = true
 
@@ -506,74 +524,111 @@
 </div>
 
 <!-- Add Data Modal -->
-<Modal
+<Dialog
 	open={showAddDataModal}
 	onOpenChange={(e) => {
 		if (!e.open) closeAddDataModal()
 	}}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-h-[95dvh] relative overflow-hidden w-[min(95vw,800px)]"
-	backdropClasses="backdrop-blur-sm"
 >
-	{#snippet content()}
-		<header class="flex items-center justify-between">
-			<h2 class="h2">Add Character</h2>
-			<button class="btn btn-sm" onclick={closeAddDataModal}>
-				<Icons.X size={20} />
-			</button>
-		</header>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-h-[95dvh] relative overflow-hidden w-[min(95vw,800px)]">
+				<header class="flex items-center justify-between">
+					<h2 class="h2">Add Character</h2>
+					<button class="btn btn-sm" aria-label="Close" onclick={closeAddDataModal}>
+						<Icons.X size={20} />
+					</button>
+				</header>
 
-		<input
-			class="input w-full"
-			type="text"
-			placeholder="Search characters..."
-			bind:value={searchQuery}
-		/>
+				<input
+					class="input w-full"
+					type="text"
+					placeholder="Search characters..."
+					bind:value={searchQuery}
+				/>
 
-		<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
-			<div class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap">
-				{#if filteredCharacters.length === 0}
-					<div class="text-surface-500 w-full py-8 text-center">
-						{#if isLoading}
-							Loading characters...
-						{:else if availableCharacters.length === 0}
-							No characters available
-						{:else}
-							No characters found matching your search
+				<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
+					<div class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap">
+						{#if filteredCharacters.length === 0}
+							<div class="text-surface-500 w-full py-8 text-center">
+								{#if isLoading}
+									Loading characters...
+								{:else if availableCharacters.length === 0}
+									No characters available
+								{:else}
+									No characters found matching your search
+								{/if}
+							</div>
 						{/if}
-					</div>
-				{/if}
-				{#each filteredCharacters as character}
-					<div class="flex p-1 lg:basis-1/2">
-						<button
-							class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
-							onclick={() => handleCharacterSelect(character)}
-						>
-							<div class="w-fit">
-								<Avatar char={character} />
-							</div>
-							<div
-								class="relative flex w-0 min-w-0 flex-1 flex-col"
-							>
-								<div
-									class="w-full truncate text-left font-semibold"
+						{#each filteredCharacters as character}
+							<div class="flex p-1 lg:basis-1/2">
+								<button
+									class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
+									onclick={() => handleCharacterSelect(character)}
 								>
-									{character.nickname || character.name}
-								</div>
-								<div
-									class="text-surface-500 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
-								>
-									{character.creatorNotes ||
-										character.description ||
-										"No description"}
-								</div>
+									<div class="w-fit">
+										<Avatar char={character} />
+									</div>
+									<div
+										class="relative flex w-0 min-w-0 flex-1 flex-col"
+									>
+										<div
+											class="w-full truncate text-left font-semibold"
+										>
+											{character.nickname || character.name}
+										</div>
+										<div
+											class="text-surface-500 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
+										>
+											{character.creatorNotes ||
+												character.description ||
+												"No description"}
+										</div>
+									</div>
+								</button>
 							</div>
-						</button>
+						{/each}
 					</div>
-				{/each}
-			</div>
-		</div>
-	{/snippet}
-</Modal>
+				</div>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
+
+<!-- Unlink confirmation modal -->
+<Dialog
+	open={showUnlinkModal}
+	onOpenChange={(e) => {
+		if (!e.open) cancelUnlink()
+	}}
+>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-md">
+				<header class="flex justify-between">
+					<h2 class="h2">Confirm</h2>
+				</header>
+				<article>
+					<p class="opacity-60">
+						Unlink this {pendingUnlink
+							? pendingUnlink.type.slice(0, -1)
+							: "item"}?
+					</p>
+				</article>
+				<footer class="flex justify-end gap-4">
+					<button class="btn preset-filled-surface-500" onclick={cancelUnlink}>
+						Cancel
+					</button>
+					<button class="btn preset-filled-error-500" onclick={confirmUnlink}>
+						Unlink
+					</button>
+				</footer>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
 
 <style>
 	.chip {

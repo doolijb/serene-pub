@@ -5,7 +5,7 @@
 	import type { Snippet } from "svelte"
 	import { page } from "$app/state"
 	import * as Icons from "@lucide/svelte"
-	import { Toaster } from "@skeletonlabs/skeleton-svelte"
+	import { Toast } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import LoginForm from "$lib/client/components/LoginForm.svelte"
 
@@ -81,4 +81,31 @@
 	</div>
 {/if}
 
-<Toaster {toaster}></Toaster>
+<Toast.Group {toaster}>
+	{#snippet children(toast)}
+		<Toast
+			{toast}
+			class="card flex items-start gap-3 p-4 shadow-xl {toast.type === 'error'
+				? 'preset-filled-error-500'
+				: toast.type === 'success'
+					? 'preset-filled-success-500'
+					: toast.type === 'warning'
+						? 'preset-filled-warning-500'
+						: 'preset-filled-surface-500'}"
+		>
+			<Toast.Message class="flex-1 space-y-1">
+				{#if toast.title}
+					<Toast.Title class="font-semibold">{toast.title}</Toast.Title>
+				{/if}
+				{#if toast.description}
+					<Toast.Description class="text-sm opacity-80">{toast.description}</Toast.Description>
+				{/if}
+			</Toast.Message>
+			{#if toast.closable}
+				<Toast.CloseTrigger class="btn btn-sm">
+					<Icons.X size={16} />
+				</Toast.CloseTrigger>
+			{/if}
+		</Toast>
+	{/snippet}
+</Toast.Group>

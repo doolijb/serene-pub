@@ -2,7 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { onMount, onDestroy, getContext } from "svelte"
 	import * as skio from "sveltekit-io"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	interface Props {
@@ -381,25 +381,28 @@
 </div>
 
 <!-- Full Config Modal -->
-<Modal
+<Dialog
 	open={showFullConfigModal}
 	onOpenChange={(e) => (showFullConfigModal = e.open)}
-	contentBase="card bg-surface-100-900 p-6 space-y-4 shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col"
-	backdropClasses="backdrop-blur-sm"
 >
-	{#snippet content()}
-		<header class="flex items-center gap-3">
-			<Icons.FileText class="text-primary-500 h-5 w-5 shrink-0" />
-			<h2 class="text-lg font-bold">Loaded Config</h2>
-		</header>
-		<p class="text-surface-500 text-xs">
-			The exact .kcpps config sent to KoboldCPP when this model was loaded.
-		</p>
-		<pre class="bg-surface-200-800 min-h-0 flex-1 overflow-auto rounded-lg p-3 text-xs">{loadedConfig?.rawConfigJson ?? ""}</pre>
-		<footer class="flex justify-end">
-			<button class="btn preset-filled-surface-400-600" onclick={() => (showFullConfigModal = false)}>
-				Close
-			</button>
-		</footer>
-	{/snippet}
-</Modal>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-4 shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col">
+				<header class="flex items-center gap-3">
+					<Icons.FileText class="text-primary-500 h-5 w-5 shrink-0" />
+					<h2 class="text-lg font-bold">Loaded Config</h2>
+				</header>
+				<p class="text-surface-500 text-xs">
+					The exact .kcpps config sent to KoboldCPP when this model was loaded.
+				</p>
+				<pre class="bg-surface-200-800 min-h-0 flex-1 overflow-auto rounded-lg p-3 text-xs">{loadedConfig?.rawConfigJson ?? ""}</pre>
+				<footer class="flex justify-end">
+					<button class="btn preset-filled-surface-400-600" onclick={() => (showFullConfigModal = false)}>
+						Close
+					</button>
+				</footer>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

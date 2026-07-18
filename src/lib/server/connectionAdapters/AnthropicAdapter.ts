@@ -26,6 +26,7 @@ const ANTHROPIC_MODELS = [
 
 class AnthropicAdapter extends BaseConnectionAdapter {
 	private _client?: Anthropic
+	private abortController?: AbortController
 
 	constructor({
 		connection,
@@ -206,6 +207,12 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 		}
 
 		const client = this.getClient()
+		// A fresh controller per generation — abort() below fires this, and the
+		// signal is threaded into the actual SDK call so cancelling a
+		// non-streaming request actually stops the in-flight HTTP call
+		// instead of just flipping a flag nothing checks until the response
+		// (and its real spend) has already come back.
+		this.abortController = new AbortController()
 
 		if (stream) {
 			return {
@@ -216,10 +223,13 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 					try {
 						if (this.isAborting) return
 
-						const streamResp = await client.messages.stream({
-							...baseParams,
-							...(thinkingParam ? { betas: ["interleaved-thinking-2025-05-14"] } : {})
-						} as any)
+						const streamResp = await client.messages.stream(
+							{
+								...baseParams,
+								...(thinkingParam ? { betas: ["interleaved-thinking-2025-05-14"] } : {})
+							} as any,
+							{ signal: this.abortController?.signal }
+						)
 
 						for await (const event of streamResp) {
 							if (this.isAborting) {
@@ -237,6 +247,10 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 							}
 						}
 					} catch (e: any) {
+						// An intentional abort throws too (the SDK rejects the
+						// aborted request) — don't surface that as a "FAILURE"
+						// completion, the caller already knows this was cancelled.
+						if (this.isAborting) return
 						contentCb("FAILURE: " + (e.message || String(e)))
 					}
 				},
@@ -249,10 +263,13 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 					return { completionResult: "", compiledPrompt, isAborted: true }
 				}
 
-				const response = await client.messages.create({
-					...baseParams,
-					...(thinkingParam ? { betas: ["interleaved-thinking-2025-05-14"] } : {})
-				} as any)
+				const response = await client.messages.create(
+					{
+						...baseParams,
+						...(thinkingParam ? { betas: ["interleaved-thinking-2025-05-14"] } : {})
+					} as any,
+					{ signal: this.abortController?.signal }
+				)
 
 				let content = ""
 				let thinking = ""
@@ -272,6 +289,9 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 					thinkingContent: thinking || undefined
 				}
 			} catch (e: any) {
+				if (this.isAborting) {
+					return { completionResult: "", compiledPrompt, isAborted: true }
+				}
 				return {
 					completionResult: "FAILURE: " + (e.message || String(e)),
 					compiledPrompt,
@@ -283,6 +303,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 
 	abort() {
 		this.isAborting = true
+		this.abortController?.abort()
 	}
 }
 

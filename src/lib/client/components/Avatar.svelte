@@ -25,19 +25,21 @@
 	)
 </script>
 
-<Avatar
-	src={src ? src : char ? char.avatar || "" : ""}
-	{size}
-	imageClasses="object-cover"
-	name={char
-		? "nickname" in char && char.nickname
-			? char.nickname
-			: char.name!
-		: "Unknown"}
->
-	{#if isCharacter}
-		<Icons.UsersRound size={36} />
-	{:else}
-		<Icons.UserRound size={36} />
-	{/if}
+<Avatar class={size}>
+	<Avatar.Image
+		src={src ? src : char ? char.avatar || "" : ""}
+		alt={char
+			? "nickname" in char && char.nickname
+				? char.nickname
+				: char.name!
+			: "Unknown"}
+		class="object-cover"
+	/>
+	<Avatar.Fallback>
+		{#if isCharacter}
+			<Icons.UsersRound size={36} />
+		{:else}
+			<Icons.UserRound size={36} />
+		{/if}
+	</Avatar.Fallback>
 </Avatar>

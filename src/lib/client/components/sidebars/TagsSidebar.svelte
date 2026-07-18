@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { getContext, onDestroy, onMount } from "svelte"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { z } from "zod"
@@ -766,6 +766,7 @@
 			<input
 				type="text"
 				placeholder="Search tags..."
+				aria-label="Search tags"
 				class="input"
 				bind:value={search}
 			/>
@@ -805,35 +806,35 @@
 
 <!-- Delete confirmation modal -->
 {#if showDeleteModal}
-	<Modal
-		open={showDeleteModal}
-		onOpenChange={(e) => (showDeleteModal = e.open)}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw]"
-		backdropClasses="backdrop-blur-sm"
-	>
-		{#snippet content()}
-			<div class="p-6">
-				<h2 class="mb-2 text-lg font-bold">Delete Tag?</h2>
-				<p class="mb-4">
-					Are you sure you want to delete the tag "{tagToDelete?.name}"?
-					This action cannot be undone and will remove the tag from
-					all associated items.
-				</p>
-				<div class="flex justify-end gap-2">
-					<button
-						class="btn preset-filled-surface-500"
-						onclick={cancelDelete}
-					>
-						Cancel
-					</button>
-					<button
-						class="btn preset-filled-error-500"
-						onclick={confirmDelete}
-					>
-						Delete
-					</button>
-				</div>
-			</div>
-		{/snippet}
-	</Modal>
+	<Dialog open={showDeleteModal} onOpenChange={(e) => (showDeleteModal = e.open)}>
+		<Portal>
+			<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+				<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw]">
+					<div class="p-6">
+						<h2 class="mb-2 text-lg font-bold">Delete Tag?</h2>
+						<p class="mb-4">
+							Are you sure you want to delete the tag "{tagToDelete?.name}"?
+							This action cannot be undone and will remove the tag from
+							all associated items.
+						</p>
+						<div class="flex justify-end gap-2">
+							<button
+								class="btn preset-filled-surface-500"
+								onclick={cancelDelete}
+							>
+								Cancel
+							</button>
+							<button
+								class="btn preset-filled-error-500"
+								onclick={confirmDelete}
+							>
+								Delete
+							</button>
+						</div>
+					</div>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
 {/if}

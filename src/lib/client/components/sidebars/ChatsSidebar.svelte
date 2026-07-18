@@ -4,7 +4,7 @@
 	import EditChatForm from "../chatForms/EditChatForm.svelte"
 	import ChatViewPanel from "../chatForms/ChatViewPanel.svelte"
 	import * as Icons from "@lucide/svelte"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { goto } from "$app/navigation"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { page } from "$app/state"
@@ -117,6 +117,7 @@
 
 	let showDeleteModal = $state(false)
 	let chatToDelete: number | null = $state(null)
+	let isDeleting = $state(false)
 
 	function handleDeleteClick(chatId: number) {
 		chatToDelete = chatId
@@ -127,19 +128,30 @@
 		chatToDelete = null
 	}
 	function confirmDelete() {
+		// Guard against double-submit (eg. an impatient re-click while the
+		// previous delete is still in flight)
+		if (isDeleting) return
 		if (chatToDelete != null) {
 			if (page.params.id === chatToDelete.toString()) {
 				// If the current chat is being deleted, navigate away
 				goto("/")
 			}
+			isDeleting = true
 			socket.emit("chats:delete", { id: chatToDelete })
 			showDeleteModal = false
 			chatToDelete = null
 		}
 	}
 	socket.on("chats:delete", (msg) => {
+		isDeleting = false
 		chats = chats.filter((c) => c.id !== msg.id)
 		toaster.success({ title: "Chat deleted" })
+	})
+	// Not shown to the user here - the generic onAny catch-all in Layout.svelte
+	// already toasts on "chats:delete:error"; this listener just clears the
+	// in-flight guard so a failed delete doesn't leave the button stuck.
+	;(socket as any).on("chats:delete:error", () => {
+		isDeleting = false
 	})
 
 	function handleCloseModalDiscard() {
@@ -307,6 +319,7 @@
 				class="input w-full"
 				type="text"
 				placeholder="Search chats, personas, characters, tags..."
+				aria-label="Search chats"
 				bind:value={search}
 			/>
 		</div>
@@ -370,36 +383,41 @@
 	{/if}
 </div>
 
-<Modal
-	open={showDeleteModal}
-	onOpenChange={(e) => (showDeleteModal = e.open)}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<div class="p-6">
-			<h2 class="mb-2 text-lg font-bold">Delete Chat?</h2>
-			<p class="mb-4">
-				Are you sure you want to delete this chat and all of it's
-				messages? This action cannot be undone.
-			</p>
-			<div class="flex justify-end gap-2">
-				<button
-					class="btn preset-filled-surface-500"
-					onclick={cancelDelete}
-				>
-					Cancel
-				</button>
-				<button
-					class="btn preset-filled-error-500"
-					onclick={confirmDelete}
-				>
-					Delete
-				</button>
-			</div>
-		</div>
-	{/snippet}
-</Modal>
+<Dialog open={showDeleteModal} onOpenChange={(e) => (showDeleteModal = e.open)}>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700">
+				<div class="p-6">
+					<h2 class="mb-2 text-lg font-bold">Delete Chat?</h2>
+					<p class="mb-4">
+						Are you sure you want to delete this chat and all of it's
+						messages? This action cannot be undone.
+					</p>
+					<div class="flex justify-end gap-2">
+						<button
+							class="btn preset-filled-surface-500"
+							onclick={cancelDelete}
+							disabled={isDeleting}
+						>
+							Cancel
+						</button>
+						<button
+							class="btn preset-filled-error-500"
+							onclick={confirmDelete}
+							disabled={isDeleting}
+						>
+							{#if isDeleting}
+								<Icons.Loader2 size={16} class="animate-spin" aria-hidden="true" />
+							{/if}
+							Delete
+						</button>
+					</div>
+				</div>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
 
 {#if showUnsavedChangesModal}
 	<ChatsUnsavedChangesModal

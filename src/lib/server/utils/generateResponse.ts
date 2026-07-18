@@ -4,6 +4,7 @@ import { and, eq } from "drizzle-orm"
 import { v4 as uuidv4 } from "uuid"
 import { getConnectionAdapter } from "./getConnectionAdapter"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
+import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { getUserConfigurations } from "./getUserConfigurations"
 import { broadcastToChatUsers } from "../sockets/utils/broadcastHelpers"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
@@ -13,7 +14,7 @@ import { buildGraphContext } from "./graphContextFormatter"
 import { llmQueue, isQueueCancellation } from "./llmQueue"
 import { persistGenerationStage, persistGenerationErrorRow } from "./generationStatus"
 import { resolveTaskConfig } from "./resolveTaskConfig"
-import { resolveChatWorldPromptConfig } from "./resolveChatWorldPromptConfig"
+import { resolveNarratorPromptConfig } from "./resolveNarratorPromptConfig"
 import { autoEnqueueChat } from "$lib/server/embedding/vectorizationQueue"
 
 /**
@@ -350,32 +351,32 @@ export async function generateResponse({
 	const { sampling: defaultSampling, contextConfig, promptConfig } =
 		await getUserConfigurations(userId)
 
-	// World Response: a manually-triggered, non-character narration/environment
-	// message — uses its own "Chat Prompts: World" config instead of the
+	// Narrator response: a manually-triggered, non-character narration/environment
+	// message — uses its own "Chat Prompts: Narrator" config instead of the
 	// chat's normal prompt config. The chat's own override (set via Edit Chat)
 	// wins over the user's active/system-default pick — see
-	// resolveChatWorldPromptConfig.ts.
-	const isWorldResponseMode = !!generatingMessage.isWorldResponse
-	const chatWorldPromptConfig = isWorldResponseMode
-		? await resolveChatWorldPromptConfig(chat, userId)
+	// resolveNarratorPromptConfig.ts.
+	const isNarratorResponseMode = !!generatingMessage.isNarratorResponse
+	const narratorPromptConfig = isNarratorResponseMode
+		? await resolveNarratorPromptConfig(chat, userId)
 		: null
 
-	if (isWorldResponseMode && !chatWorldPromptConfig) {
+	if (isNarratorResponseMode && !narratorPromptConfig) {
 		await persistGenerationErrorRow(
 			socket.io,
 			generatingMessage.chatId,
 			generatingMessage.id,
 			new Error(
-				"No World Response prompt config configured. Set one up under Chat Prompts: World in Settings."
+				"No Narrator prompt config configured. Set one up under Chat Prompts: Narrator in Settings."
 			)
 		)
 		return false
 	}
 
-	const resolved = isWorldResponseMode
+	const resolved = isNarratorResponseMode
 		? await resolveTaskConfig({
-				taskType: "chatWorldPrompt",
-				chatWorldPromptConfigId: chatWorldPromptConfig!.id,
+				taskType: "narratorPrompt",
+				narratorPromptConfigId: narratorPromptConfig!.id,
 				chatId
 			})
 		: await resolveTaskConfig({
@@ -398,7 +399,18 @@ export async function generateResponse({
 
 	const { Adapter } = await getConnectionAdapter(connection.type)
 
-	const tokenCounter = new TokenCounters("estimate")
+	// Honor the connection's own configured tokenizer (set in the connection
+	// form) rather than always forcing the crude length-based estimate —
+	// every adapter constructor already has a `tokenCounter ||
+	// connection.tokenCounter` fallback for exactly this, but passing a
+	// truthy value here unconditionally short-circuited it, so a user who
+	// picked a precise tokenizer to size context correctly never actually
+	// got it for a real generation (only for the prompt-preview/assistant
+	// paths, which already resolve this correctly — see chats.ts's
+	// `chats:promptTokenCount` handler for the same pattern).
+	const tokenCounter = new TokenCounters(
+		(connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
+	)
 	const tokenLimit = 4096
 	const contextThresholdPercent = 0.8
 
@@ -413,12 +425,12 @@ export async function generateResponse({
 	const contextDebuggingEnabled = sysSettings?.contextDebuggingEnabled ?? false
 
 	// Get fresh metadata from the generating message (important for reasoning
-	// detection) — isWorldResponse rides along here rather than as a separate
-	// adapter constructor param; see the comment on isWorldResponseMode in
+	// detection) — isNarratorResponse rides along here rather than as a separate
+	// adapter constructor param; see the comment on isNarratorResponseMode in
 	// BaseConnectionAdapter.ts for why.
 	const generatingMessageMetadata = {
 		...((generatingMessage.metadata as any) || {}),
-		isWorldResponse: isWorldResponseMode
+		isNarratorResponse: isNarratorResponseMode
 	}
 
 	const adapter = new Adapter({
@@ -426,8 +438,8 @@ export async function generateResponse({
 		connection: connection,
 		sampling: sampling,
 		contextConfig: contextConfig,
-		promptConfig: isWorldResponseMode ? chatWorldPromptConfig! : promptConfig,
-		currentCharacterId: isAssistantMode || isWorldResponseMode
+		promptConfig: isNarratorResponseMode ? narratorPromptConfig! : promptConfig,
+		currentCharacterId: isAssistantMode || isNarratorResponseMode
 			? null
 			: generatingMessage.characterId!,
 		tokenCounter,
@@ -440,9 +452,9 @@ export async function generateResponse({
 	adapter.promptBuilder.diagnosticsEnabled = contextDebuggingEnabled
 
 	// Inject narrative graph context into system instructions (if lorebook + node
-	// present) — skipped for World Response, which has no character perspective
+	// present) — skipped for Narrator response, which has no character perspective
 	// of its own to build graph context from.
-	if (!isAssistantMode && !isWorldResponseMode && chat?.lorebookId) {
+	if (!isAssistantMode && !isNarratorResponseMode && chat?.lorebookId) {
 		try {
 			const graphCtx = await buildGraphContext({
 				chatId,
@@ -465,9 +477,13 @@ export async function generateResponse({
 
 	const charName = isAssistantMode
 		? ""
-		: currentCharacter?.character?.nickname ||
-			currentCharacter?.character?.name ||
-			""
+		: isNarratorResponseMode
+			? (generatingMessage.metadata as any)?.narratorName ||
+				narratorPromptConfig?.narratorName ||
+				"Narrator"
+			: currentCharacter?.character?.nickname ||
+				currentCharacter?.character?.name ||
+				""
 
 	// If message already has content, we're continuing it
 	// Include the existing content in the startString so LLM continues from there
@@ -492,12 +508,12 @@ export async function generateResponse({
 
 	const { done } = llmQueue.enqueue<GenerateExecuteResult>(
 		{
-			taskType: isWorldResponseMode ? "chatWorldPrompt" : "chat",
+			taskType: isNarratorResponseMode ? "narratorPrompt" : "chat",
 			connectionName: resolved.connectionName,
 			samplingName: resolved.samplingName,
 			chatId,
 			messageId: generatingMessage.id,
-			label: isWorldResponseMode ? "The World" : charName || undefined,
+			label: isNarratorResponseMode ? "Narrator" : charName || undefined,
 			userId,
 			preflight: (signal) => adapter.preflight(signal),
 			execute: (signal) =>
@@ -631,12 +647,29 @@ async function runGenerateAndPersist({
 
 	if (typeof completionResult === "function") {
 		let ok = true
+		// Without this, every single streamed chunk (often several per
+		// second, sometimes per token) did its own DB UPDATE...RETURNING plus
+		// a socket broadcast to every user in the chat — for a 200-500 token
+		// response that's 200-500 round trips of both. A ~120ms cadence is
+		// well below what's perceptible as "smooth streaming" to a reader,
+		// so this only cuts wasted work, not visible responsiveness. The
+		// unconditional final persist after the stream ends (below) always
+		// flushes the last chunk's content regardless of this throttle, so
+		// nothing streamed is ever lost — only some *intermediate* frames
+		// are skipped.
+		const STREAM_PERSIST_THROTTLE_MS = 120
+		let lastPersistedAt = 0
 		await completionResult(
 			async (chunk: string) => {
 				if (!ok || signal.aborted) {
 					return
 				}
 				content += chunk
+				const now = Date.now()
+				if (now - lastPersistedAt < STREAM_PERSIST_THROTTLE_MS) {
+					return
+				}
+				lastPersistedAt = now
 
 				let stagedContent = content.replace(startString, "")
 				// If stagedContent length is <= startString, remove partial startString

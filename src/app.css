@@ -4,31 +4,31 @@
 @plugin '@tailwindcss/typography';
 
 @import "@skeletonlabs/skeleton";
-@import "@skeletonlabs/skeleton/optional/presets";
+@import "@skeletonlabs/skeleton-svelte";
 @import "@skeletonlabs/skeleton/themes/cerberus";
 @import "@skeletonlabs/skeleton/themes/catppuccin";
 @import "@skeletonlabs/skeleton/themes/concord";
-@import "@skeletonlabs/skeleton/themes/fennec";
-@import "@skeletonlabs/skeleton/themes/legacy";
-@import "@skeletonlabs/skeleton/themes/modern";
-@import "@skeletonlabs/skeleton/themes/nosh";
-@import "@skeletonlabs/skeleton/themes/pine";
-@import "@skeletonlabs/skeleton/themes/rocket";
-@import "@skeletonlabs/skeleton/themes/sahara";
-@import "@skeletonlabs/skeleton/themes/terminus";
-@import "@skeletonlabs/skeleton/themes/vox";
-@import "@skeletonlabs/skeleton/themes/cerberus";
 @import "@skeletonlabs/skeleton/themes/crimson";
+@import "@skeletonlabs/skeleton/themes/dracula";
+@import "@skeletonlabs/skeleton/themes/fennec";
 @import "@skeletonlabs/skeleton/themes/hamlindigo";
+@import "@skeletonlabs/skeleton/themes/legacy";
 @import "@skeletonlabs/skeleton/themes/mint";
+@import "@skeletonlabs/skeleton/themes/modern";
 @import "@skeletonlabs/skeleton/themes/mona";
+@import "@skeletonlabs/skeleton/themes/nosh";
 @import "@skeletonlabs/skeleton/themes/nouveau";
+@import "@skeletonlabs/skeleton/themes/pine";
+@import "@skeletonlabs/skeleton/themes/reign";
+@import "@skeletonlabs/skeleton/themes/rocket";
 @import "@skeletonlabs/skeleton/themes/rose";
+@import "@skeletonlabs/skeleton/themes/rosepine";
+@import "@skeletonlabs/skeleton/themes/sahara";
 @import "@skeletonlabs/skeleton/themes/seafoam";
+@import "@skeletonlabs/skeleton/themes/terminus";
 @import "@skeletonlabs/skeleton/themes/vintage";
+@import "@skeletonlabs/skeleton/themes/vox";
 @import "@skeletonlabs/skeleton/themes/wintry";
-
-@source '../node_modules/@skeletonlabs/skeleton-svelte/dist';
 
 @custom-variant dark (&:where([data-mode="dark"], [data-mode="dark"] *));
 
@@ -71,6 +71,21 @@
 	@apply card hover:preset-filled-surface-200-800 flex cursor-pointer items-center gap-2 rounded-lg p-2 transition;
 }
 
+/* Shared button style for items inside a Popover.Content "kebab menu" style
+   dropdown (message options, character/persona/lorebook/chat item options,
+   composer "more tabs" menu, etc.) — plain text row with an icon that fills
+   in on hover, instead of a permanently-filled button, so a stack of several
+   menu items reads as one list rather than a wall of colored buttons. */
+.popover-menu-btn {
+	@apply flex h-min w-full items-center justify-start gap-2 px-2 text-[1em] disabled:opacity-25;
+}
+
+/* Shared header for the same popover menus — icon + title, consistent across
+   every "..." trigger in the app. */
+.popover-menu-title {
+	@apply flex items-center gap-2 text-lg font-bold;
+}
+
 /* Consistent press/focus/disabled feedback across every button in the app —
    Skeleton's own .btn utility (see node_modules/@skeletonlabs/skeleton) only
    implements a hover brightness effect; it has no built-in active/focus-visible
@@ -103,4 +118,24 @@
 	float: left;
 	height: 0;
 	pointer-events: none;
+}
+
+/* Global prefers-reduced-motion support. Dozens of components use Tailwind's
+   animate-pulse/animate-spin/animate-bounce utilities plus a couple of custom
+   infinite keyframe animations (typing indicator, generating spinner) — hand-
+   editing every one of them individually is high-risk for a feature-frozen
+   polish pass, so this single rule collapses all CSS animations/transitions
+   site-wide for users who've set the OS-level reduced-motion preference.
+   iteration-count stays at 1 (not "none") so elements still render their
+   animated property's end state instead of disappearing entirely (e.g. a
+   spinner still shows a static frame rather than nothing). */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
 }

@@ -13,6 +13,7 @@
 
 import { getConnectionAdapter } from "./getConnectionAdapter"
 import { TokenCounters } from "./TokenCounterManager"
+import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { runQueuedLLMCall } from "./runQueuedLLMCall"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
 
@@ -158,7 +159,11 @@ async function runLLM(
 	label?: string
 ): Promise<string> {
 	const AdapterClass = await getConnectionAdapter(opts.connection.type)
-	const tokenCounter = new TokenCounters("estimate")
+	// Honor the connection's own configured tokenizer — see the identical
+	// fix/comment in generateResponse.ts.
+	const tokenCounter = new TokenCounters(
+		(opts.connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
+	)
 	const tokenLimit: number =
 		(opts.connection as any).tokenLimit ?? (opts.connection as any).contextSize ?? 4096
 

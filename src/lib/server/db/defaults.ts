@@ -281,50 +281,50 @@ Example dialogue:
 
 		await Promise.all(promptConfigQueries)
 
-		// Chat World Prompt Configs ("Chat Prompts: World" — manually-triggered
+		// Narrator Prompt Configs ("Chat Prompts: Narrator" — manually-triggered
 		// non-character environment/narration responses)
 
-		const existingChatWorldPromptConfigs =
-			await db.query.chatWorldPromptConfigs.findMany()
+		const existingNarratorPromptConfigs =
+			await db.query.narratorPromptConfigs.findMany()
 
-		const defaultChatWorldPromptConfigs: Partial<SelectChatWorldPromptConfig>[] = [
+		const defaultNarratorPromptConfigs: Partial<SelectNarratorPromptConfig>[] = [
 			{
 				id: 1,
-				name: "World - Narrator",
+				name: "Narrator",
 				isImmutable: true,
-				narratorName: "The World",
+				narratorName: "Narrator",
 				systemPrompt: `You are narrating the world of this fictional roleplay — not any single character. Describe the environment, atmosphere, weather, and any side characters, shopkeepers, monsters, or other third parties present. Voice any minor NPCs directly if the scene calls for it. Do not speak or act as {{characterNames}} or {{personaNames}}. Keep the response focused on scene-setting and flavor, not advancing {{characterNames}}'s own actions or dialogue.`
 			}
 		]
 
-		const chatWorldPromptConfigQueries: Promise<any>[] = []
+		const narratorPromptConfigQueries: Promise<any>[] = []
 
-		defaultChatWorldPromptConfigs.forEach((data) => {
-			const found = existingChatWorldPromptConfigs.find(
+		defaultNarratorPromptConfigs.forEach((data) => {
+			const found = existingNarratorPromptConfigs.find(
 				(c) => c.id === data.id
 			)
 
 			if (!found) {
-				chatWorldPromptConfigQueries.push(
+				narratorPromptConfigQueries.push(
 					db
-						.insert(schema.chatWorldPromptConfigs)
-						.values(data as InsertChatWorldPromptConfig)
+						.insert(schema.narratorPromptConfigs)
+						.values(data as InsertNarratorPromptConfig)
 				)
 			} else {
-				chatWorldPromptConfigQueries.push(
+				narratorPromptConfigQueries.push(
 					db
-						.update(schema.chatWorldPromptConfigs)
+						.update(schema.narratorPromptConfigs)
 						.set({
 							...data,
 							// @ts-ignore
 							id: undefined
 						})
-						.where(eq(schema.chatWorldPromptConfigs.id, found.id))
+						.where(eq(schema.narratorPromptConfigs.id, found.id))
 				)
 			}
 		})
 
-		await Promise.all(chatWorldPromptConfigQueries)
+		await Promise.all(narratorPromptConfigQueries)
 
 		// World Summarize Configs
 
@@ -433,6 +433,46 @@ Example dialogue:
 		})
 		await Promise.all(sceneSummarizeConfigQueries)
 
+		// Graph Build Configs — unlike the summarize/prompt configs above, this
+		// table isn't wired into any feature yet (narrativeGraphBuildHandler
+		// currently takes connection/sampling directly rather than resolving
+		// them from a graphBuildConfigs row) — seeded for schema completeness
+		// and so systemSettings.defaultGraphBuildConfigId isn't left dangling
+		// at null, matching every sibling immutable-config table's convention.
+
+		const existingGraphBuildConfigs = await db.query.graphBuildConfigs.findMany()
+		const defaultGraphBuildConfigs: Partial<SelectGraphBuildConfig>[] = [
+			{
+				id: 1,
+				name: "Default Graph Build",
+				isImmutable: true,
+				nodeResolutionSystemPrompt:
+					"You resolve whether a character mentioned in a scene is a new entity or an existing one already tracked in the narrative graph. Compare names, aliases, and context carefully before deciding.",
+				preFilterSystemPrompt:
+					"You screen a scene summary for characters worth tracking in the narrative graph, filtering out incidental mentions with no lasting relationship significance.",
+				perspectiveSystemPrompt:
+					"You extract relationship changes from a scene, written from one character's perspective — what they learned, felt, or how their relationship to others present changed."
+			}
+		]
+		const graphBuildConfigQueries: Promise<any>[] = []
+		defaultGraphBuildConfigs.forEach((data) => {
+			const found = existingGraphBuildConfigs.find((c) => c.id === data.id)
+			if (!found) {
+				graphBuildConfigQueries.push(
+					db.insert(schema.graphBuildConfigs).values(data as InsertGraphBuildConfig)
+				)
+			} else {
+				graphBuildConfigQueries.push(
+					db
+						.update(schema.graphBuildConfigs)
+						.set({ ...data, // @ts-ignore
+							id: undefined })
+						.where(eq(schema.graphBuildConfigs.id, found.id))
+				)
+			}
+		})
+		await Promise.all(graphBuildConfigQueries)
+
 		// Users
 
 		const existingUsers = await db.query.users.findMany()
@@ -477,16 +517,16 @@ Example dialogue:
 				userId: 1,
 				activeContextConfigId: 1,
 				activePromptConfigId: 1,
-				activeChatWorldPromptConfigId: 1
+				activeNarratorPromptConfigId: 1
 			})
-		} else if (!existingUserSettings.activeChatWorldPromptConfigId) {
-			// Existing installs from before World Response existed never got
-			// this column backfilled (only set on first-ever userSettings
+		} else if (!existingUserSettings.activeNarratorPromptConfigId) {
+			// Existing installs from before the Narrator feature existed never
+			// got this column backfilled (only set on first-ever userSettings
 			// insert above) — fall back to the first seeded config (id 1) so
-			// World Response works without requiring a manual pick in Settings.
+			// the Narrator works without requiring a manual pick in Settings.
 			await db
 				.update(schema.userSettings)
-				.set({ activeChatWorldPromptConfigId: 1 })
+				.set({ activeNarratorPromptConfigId: 1 })
 				.where(eq(schema.userSettings.userId, 1))
 		}
 	} catch (error) {
@@ -511,14 +551,23 @@ Example dialogue:
 				defaultSamplingConfigId: 1,
 				defaultContextConfigId: 1,
 				defaultPromptConfigId: 1,
-				defaultChatWorldPromptConfigId: 1
+				defaultNarratorPromptConfigId: 1,
+				defaultGraphBuildConfigId: 1
 			})
-		} else if (!res.defaultChatWorldPromptConfigId) {
-			// Same backfill as userSettings above, for the system-wide default.
-			await db
-				.update(schema.systemSettings)
-				.set({ defaultChatWorldPromptConfigId: 1 })
-				.where(eq(schema.systemSettings.id, 1))
+		} else {
+			if (!res.defaultNarratorPromptConfigId) {
+				// Same backfill as userSettings above, for the system-wide default.
+				await db
+					.update(schema.systemSettings)
+					.set({ defaultNarratorPromptConfigId: 1 })
+					.where(eq(schema.systemSettings.id, 1))
+			}
+			if (!res.defaultGraphBuildConfigId) {
+				await db
+					.update(schema.systemSettings)
+					.set({ defaultGraphBuildConfigId: 1 })
+					.where(eq(schema.systemSettings.id, 1))
+			}
 		}
 	} catch (error) {
 		console.error("Error syncing system settings:", error)
@@ -588,10 +637,11 @@ Example dialogue:
 		"character_lore_entries",
 		"personas",
 		"prompt_configs",
-		"chat_world_prompt_configs",
+		"narrator_prompt_configs",
 		"world_summarize_configs",
 		"character_summarize_configs",
 		"scene_summarize_configs",
+		"graph_build_configs",
 		"sampling_configs",
 		"users"
 	]

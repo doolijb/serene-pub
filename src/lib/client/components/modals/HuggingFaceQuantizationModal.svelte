@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 
 	interface Props {
 		open: boolean
@@ -44,14 +44,12 @@
 	)
 </script>
 
-<Modal
-	{open}
-	onOpenChange={(e) => (open = e.open)}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl w-[min(95vw,800px)] border border-surface-300-700"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<header class="flex justify-between">
+<Dialog {open} onOpenChange={(e) => (open = e.open)}>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl w-[min(95vw,800px)] border border-surface-300-700">
+				<header class="flex justify-between">
 			<h2 class="h2">Select Quantization</h2>
 		</header>
 		<article class="space-y-4">
@@ -173,5 +171,7 @@
 		<footer class="flex justify-end gap-4">
 			<button class="btn preset-tonal" onclick={onClose}>Cancel</button>
 		</footer>
-	{/snippet}
-</Modal>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

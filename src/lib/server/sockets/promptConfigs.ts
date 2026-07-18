@@ -139,6 +139,16 @@ export const promptConfigsDelete: Handler<
 			)
 		}
 
+		const currentConfig = await db.query.promptConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, params.id)
+		})
+		if (currentConfig?.isImmutable) {
+			emitToUser("promptConfigs:delete:error", {
+				error: "Cannot delete a built-in prompt config."
+			})
+			throw new Error("Cannot delete a built-in prompt config.")
+		}
+
 		await db
 			.delete(schema.promptConfigs)
 			.where(eq(schema.promptConfigs.id, params.id))

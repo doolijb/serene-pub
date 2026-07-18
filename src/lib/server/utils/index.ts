@@ -1,3 +1,4 @@
+import os from "os"
 import path from "path"
 import envPaths from "env-paths"
 import { db } from "$lib/server/db"
@@ -60,7 +61,7 @@ export function isAndroidWrapper() {
 export function getDbDataDir() {
 	const isCI = process.env.CI === "true"
 	if (isCI) {
-		return "~/SerenePubData"
+		return path.join(os.homedir(), "SerenePubData")
 	}
 
 	const appDataDir = getAppDataDir()

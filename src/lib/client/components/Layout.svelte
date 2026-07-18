@@ -37,6 +37,101 @@
 
 	const socket = useTypedSocket()
 
+	// Event names ending in ":error" that already have their own explicit
+	// socket.on(...) listener elsewhere in the app (some of which show their
+	// own toast, some of which deliberately show nothing / handle the error
+	// inline). The generic onAny catch-all below must skip these so we don't
+	// double-toast (or override an intentional suppression) - see the
+	// wildcard error handling note near `handleAnyEvent`.
+	const HANDLED_ERROR_EVENTS = new Set<string>([
+		"characters:create:error",
+		"characters:exportCard:error",
+		"chatMessage:error",
+		"characters:importCard:error",
+		"characters:importFromLibrary:error",
+		"characters:list:error",
+		"characters:searchLibrary:error",
+		"characters:update:error",
+		"characters:uploadGalleryImage:error",
+		"chats:list:error",
+		"chats:summarize:error",
+		"connections:list:error",
+		"connections:refreshModels:error",
+		"customThemes:delete:error",
+		"customThemes:list:error",
+		"customThemes:save:error",
+		"customThemes:setInstanceTheme:error",
+		"koboldcpp:checkManagedBinaryUpdate:error",
+		"koboldcpp:connectModel:error",
+		"koboldcpp:deleteModel:error",
+		"koboldcpp:downloadModel:error",
+		"koboldcpp:isUpdateAvailable:error",
+		"koboldcpp:listBinaryVariants:error",
+		"koboldcpp:listReleaseVersions:error",
+		"koboldcpp:perf:error",
+		"koboldcpp:recommendedModels:error",
+		"koboldcpp:searchModels:error",
+		"koboldcpp:setManagedMode:error",
+		"koboldcpp:startSubprocess:error",
+		"koboldcpp:version:error",
+		"lorebooks:list:error",
+		"narratorPromptConfigs:setUserActive:error",
+		"ollama:pullModel:error",
+		"personas:create:error",
+		"personas:importCard:error",
+		"personas:importFromLibrary:error",
+		"personas:list:error",
+		"personas:searchLibrary:error",
+		"personas:update:error",
+		"personas:uploadGalleryImage:error",
+		"promptConfigs:setUserActive:error",
+		"scenes:compile:error",
+		"scenes:process:error",
+		"systemSettings:updateAccountsEnabled:error",
+		"tags:list:error",
+		"users:current:changePassphrase:error",
+		"users:current:logout:error",
+		"users:current:updateDisplayName:error",
+		"userSettings:uploadBackground:error",
+		"vectorization:setModel:error"
+	])
+
+	// Turns "characters:update:error" into "Characters update failed", etc.
+	// Used only as a fallback title when no specific listener has already
+	// produced a nicer one for a given event.
+	function humanizeErrorEvent(event: string): string {
+		const base = event.replace(/:error$/, "")
+		const words = base
+			.split(":")
+			.flatMap((segment) =>
+				segment.replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(" ")
+			)
+			.filter(Boolean)
+			.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+		return `${words.join(" ")} failed`
+	}
+
+	// Generic catch-all error handler. Socket.IO has no glob/wildcard event
+	// matching (a literal event named "**:error" would never fire), so this
+	// uses the real `onAny` API to inspect every event and toast on any
+	// "*:error" event that isn't already handled by a more specific listener
+	// (see HANDLED_ERROR_EVENTS above). This ensures actions that previously
+	// failed silently (no toast, no UI change) now always surface an error.
+	function handleAnyEvent(event: string, payload: any) {
+		if (event === "error" || !event.endsWith(":error")) return
+		if (HANDLED_ERROR_EVENTS.has(event)) return
+		const description =
+			typeof payload?.error === "string"
+				? payload.error
+				: typeof payload?.description === "string"
+					? payload.description
+					: undefined
+		toaster.error({
+			title: humanizeErrorEvent(event),
+			description
+		})
+	}
+
 	// Focus management refs
 	let mainContentRef = $state<HTMLElement | null>(null)
 	let leftSidebarRef = $state<HTMLElement | null>(null)
@@ -480,13 +575,10 @@
 		socket.on("users:current", (message) => {
 			userCtx.user = message.user
 
-			// Once we have a user, get user settings
-			// This works for both enabled and disabled accounts
-			if (message.user) {
-				socket.emit("userSettings:get", {})
-				if (message.user.isAdmin) {
-					socket.emit("taskQueue:get", {})
-				}
+			// userSettings:get is requested by the `hasUser` $effect above;
+			// only the admin-only taskQueue fetch needs to happen here.
+			if (message.user?.isAdmin) {
+				socket.emit("taskQueue:get", {})
 			}
 		})
 
@@ -495,13 +587,10 @@
 			userSettingsCtx.settings = message.userSettings
 		})
 
-		// Capture all error events (both specific errors and general error events)
-		socket.on("**:error", (message) => {
-			toaster.error({
-				title: message.error || "Error",
-				description: message.description
-			})
-		})
+		// Capture all otherwise-unhandled "*:error" events (see handleAnyEvent
+		// / HANDLED_ERROR_EVENTS above for why this uses onAny rather than a
+		// literal "**:error" listener, which never fires).
+		socket.onAny(handleAnyEvent)
 
 		socket.on("error", (message) => {
 			toaster.error({
@@ -691,7 +780,7 @@
 		socket.off("users:get")
 		socket.off("systemSettings:get")
 		socket.off("userSettings:get")
-		socket.off("**:error")
+		socket.offAny(handleAnyEvent)
 		socket.off("error")
 		socket.off("success")
 		socket.off("vectorization:progress")
@@ -938,6 +1027,7 @@
 					<button
 						class="btn-ghost"
 						onclick={() => closePanel({ panel: "mobile" })}
+						aria-label="Close {title} panel"
 					>
 						<Icons.X class="text-foreground h-5 w-5" />
 					</button>
@@ -1039,7 +1129,7 @@
 					</button>
 				</div>
 				<div class="flex flex-col gap-4 overflow-y-auto p-4 text-2xl">
-					{#each panelsCtx.getOrderedEntries( { ...panelsCtx.leftNav, ...panelsCtx.rightNav }, [...panelsCtx.leftNavOrder, ...panelsCtx.rightNavOrder] ) as [key, item]}
+					{#each panelsCtx.getOrderedEntries( { ...panelsCtx.rightNav, ...panelsCtx.leftNav }, [...panelsCtx.rightNavOrder, ...panelsCtx.leftNavOrder] ) as [key, item]}
 						<button
 							class="btn-ghost flex items-center gap-2"
 							title={item.title}

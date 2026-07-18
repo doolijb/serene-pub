@@ -140,7 +140,7 @@ Linux, MacOS and Windows are supported!
 
 #### Requirements
 
-- [Node.js](https://nodejs.org/en)
+- [Node.js](https://nodejs.org/en) 24 or later
 - (Optional) [Ollama](https://ollama.com/download) for local models
 
 #### Steps

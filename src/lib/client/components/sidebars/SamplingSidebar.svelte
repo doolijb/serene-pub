@@ -2,7 +2,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getContext, onDestroy, onMount, tick } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import SamplingConfigUnsavedChangesModal from "../modals/PromptConfigUnsavedChangesModal.svelte"
 	import NewNameModal from "../modals/NewNameModal.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
@@ -451,9 +451,12 @@
 				class="btn btn-sm preset-filled-warning-500 shrink-0"
 				onclick={handleSetDefault}
 				disabled={!selectedSamplingId || selectedSamplingId === activeSamplingConfigId}
-				title="Set as default"
+				title={selectedSamplingId === activeSamplingConfigId
+					? "Already the default"
+					: "Set as default"}
 			>
-				<Icons.Star size={16} /> Set Default
+				<Icons.Star size={16} fill={selectedSamplingId === activeSamplingConfigId ? "currentColor" : "none"} />
+				{selectedSamplingId === activeSamplingConfigId ? "Default" : "Set Default"}
 			</button>
 		</div>
 
@@ -640,32 +643,32 @@
 	description="Your current settings will be copied."
 />
 
-<Modal
-	open={showDeleteModal}
-	onOpenChange={(e) => (showDeleteModal = e.open)}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw]"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<header class="flex justify-between">
-			<h2 class="h2">Delete Sampling Configuration</h2>
-		</header>
-		<article>
-			<p class="opacity-60">
-				Are you sure you want to delete the sampling configuration "{sampling?.name}"?
-				This action cannot be undone.
-			</p>
-		</article>
-		<footer class="flex justify-end gap-4">
-			<button
-				class="btn preset-filled-surface-500"
-				onclick={cancelDelete}
-			>
-				Cancel
-			</button>
-			<button class="btn preset-filled-error-500" onclick={confirmDelete}>
-				Delete
-			</button>
-		</footer>
-	{/snippet}
-</Modal>
+<Dialog open={showDeleteModal} onOpenChange={(e) => (showDeleteModal = e.open)}>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw]">
+				<header class="flex justify-between">
+					<h2 class="h2">Delete Sampling Configuration</h2>
+				</header>
+				<article>
+					<p class="opacity-60">
+						Are you sure you want to delete the sampling configuration "{sampling?.name}"?
+						This action cannot be undone.
+					</p>
+				</article>
+				<footer class="flex justify-end gap-4">
+					<button
+						class="btn preset-filled-surface-500"
+						onclick={cancelDelete}
+					>
+						Cancel
+					</button>
+					<button class="btn preset-filled-error-500" onclick={confirmDelete}>
+						Delete
+					</button>
+				</footer>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

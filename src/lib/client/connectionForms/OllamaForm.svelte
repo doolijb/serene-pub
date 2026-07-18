@@ -264,7 +264,12 @@
 						onCheckedChange={(e) =>
 							(ollamaFields!.useChat = e.checked)}
 						aria-labelledby="useChat"
-					/>
+					>
+						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+					</Switch>
 				</div>
 				<div class="flex items-center justify-between gap-4">
 					<label class="font-semibold" for="stream">Stream</label>
@@ -274,7 +279,12 @@
 						onCheckedChange={(e) =>
 							(ollamaFields!.stream = e.checked)}
 						aria-labelledby="stream"
-					/>
+					>
+						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+					</Switch>
 				</div>
 				<div class="flex items-center justify-between gap-4">
 					<label class="font-semibold" for="think">Think</label>
@@ -284,7 +294,12 @@
 						onCheckedChange={(e) =>
 							(ollamaFields!.think = e.checked)}
 						aria-labelledby="think"
-					/>
+					>
+						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+					</Switch>
 				</div>
 			</section>
 		{/if}

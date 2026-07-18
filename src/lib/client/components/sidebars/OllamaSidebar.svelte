@@ -221,57 +221,55 @@
 	{:else}
 		<!-- Main Ollama Manager Content -->
 		<div class="flex-1 overflow-y-auto">
-			<Tabs value={activeTab} onValueChange={handleTabChange} listBase="flex flex-wrap gap-1">
-				{#snippet list()}
-					<Tabs.Control value="installed">
+			<Tabs value={activeTab} onValueChange={handleTabChange}>
+				<Tabs.List class="flex flex-wrap gap-1">
+					<Tabs.Trigger value="installed">
 						<Icons.Package size={20} class="inline" />
 						{#if activeTab === "installed"}
 							Installed
 						{/if}
-					</Tabs.Control>
-					<Tabs.Control value="available">
+					</Tabs.Trigger>
+					<Tabs.Trigger value="available">
 						<Icons.Search size={20} class="inline" />
 						{#if activeTab === "available"}
 							Available
 						{/if}
-					</Tabs.Control>
-					<Tabs.Control value="downloads">
+					</Tabs.Trigger>
+					<Tabs.Trigger value="downloads">
 						<Icons.Download size={20} class="inline" />
 						{#if activeTab === "downloads"}
 							Downloads
 						{/if}
-					</Tabs.Control>
-					<Tabs.Control value="settings">
+					</Tabs.Trigger>
+					<Tabs.Trigger value="settings">
 						<Icons.Settings size={20} class="inline" />
 						{#if activeTab === "settings"}
 							Settings
 						{/if}
-					</Tabs.Control>
-				{/snippet}
-				{#snippet content()}
-					<Tabs.Panel value="installed">
-						{#if activeTab === "installed"}
-							<OllamaInstalledTab />
-						{/if}
-					</Tabs.Panel>
-					<Tabs.Panel value="available">
-						{#if activeTab === "available"}
-							<OllamaAvailableTab
-								onDownloadStart={handleDownloadStart}
-							/>
-						{/if}
-					</Tabs.Panel>
-					<Tabs.Panel value="downloads">
-						{#if activeTab === "downloads"}
-							<OllamaDownloadsTab />
-						{/if}
-					</Tabs.Panel>
-					<Tabs.Panel value="settings">
-						{#if activeTab === "settings"}
-							<OllamaSettingsTab />
-						{/if}
-					</Tabs.Panel>
-				{/snippet}
+					</Tabs.Trigger>
+				</Tabs.List>
+				<Tabs.Content value="installed">
+					{#if activeTab === "installed"}
+						<OllamaInstalledTab />
+					{/if}
+				</Tabs.Content>
+				<Tabs.Content value="available">
+					{#if activeTab === "available"}
+						<OllamaAvailableTab
+							onDownloadStart={handleDownloadStart}
+						/>
+					{/if}
+				</Tabs.Content>
+				<Tabs.Content value="downloads">
+					{#if activeTab === "downloads"}
+						<OllamaDownloadsTab />
+					{/if}
+				</Tabs.Content>
+				<Tabs.Content value="settings">
+					{#if activeTab === "settings"}
+						<OllamaSettingsTab />
+					{/if}
+				</Tabs.Content>
 			</Tabs>
 		</div>
 	{/if}

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import fs from "fs"
+import os from "os"
 import path from "path"
 import { fileURLToPath } from "url"
 import { spawn } from "child_process"
@@ -53,7 +54,7 @@ function getDataDirectory() {
 	// Check for CI environment
 	const isCI = process.env.CI === "true"
 	if (isCI) {
-		return "~/SerenePubData"
+		return path.join(os.homedir(), "SerenePubData")
 	}
 
 	// Fallback to envPaths logic - we need to import it dynamically

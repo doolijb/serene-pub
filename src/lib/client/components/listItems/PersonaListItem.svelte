@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Popover } from "@skeletonlabs/skeleton-svelte"
+	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import Avatar from "../Avatar.svelte"
 	import SidebarListItem from "../SidebarListItem.svelte"
@@ -42,14 +42,7 @@
 	{classes}
 >
 	{#snippet content()}
-		<Avatar
-			src={persona.avatar || ""}
-			size="w-[4em] h-[4em] min-w-[4em] min-h-[4em]"
-			imageClasses="object-cover"
-			name={persona.name!}
-		>
-			<Icons.User size={36} />
-		</Avatar>
+		<Avatar char={persona} size="w-[4em] h-[4em] min-w-[4em] min-h-[4em]" />
 		<div class="relative flex flex-1 gap-2">
 			<div class="relative flex-1">
 				<div class="flex items-center gap-1 text-left font-semibold">
@@ -73,44 +66,58 @@
 					open={menuOpen}
 					onOpenChange={(e) => (menuOpen = e.open)}
 					positioning={{ placement: "bottom-end" }}
-					triggerBase="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0"
-					triggerAriaLabel="Persona options"
-					contentBase="card bg-surface-100-900 shadow-xl p-2 flex flex-col gap-1 min-w-32"
-					zIndex="1000"
 				>
-					{#snippet trigger()}
-						<Icons.Ellipsis size={16} />
-					{/snippet}
-					{#snippet content()}
-						{#if onclick}
-							<button
-								class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-								onclick={() => { menuOpen = false; handleClick() }}
-								type="button"
-							>
-								<Icons.Eye size={14} /> View
-							</button>
-						{/if}
-						{#if onEdit}
-							<button
-								class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-								onclick={() => { menuOpen = false; onEdit?.(persona.id!) }}
-								type="button"
-							>
-								<Icons.Pencil size={14} /> Edit
-							</button>
-						{/if}
-						{#if onDelete}
-							<hr class="border-surface-300-700" />
-							<button
-								class="btn btn-sm preset-filled-error-500 w-full justify-start"
-								onclick={() => { menuOpen = false; onDelete?.(persona.id!) }}
-								type="button"
-							>
-								<Icons.Trash2 size={14} /> Delete
-							</button>
-						{/if}
-					{/snippet}
+					<Popover.Trigger
+						class="btn btn-sm p-3 shrink-0 hover:bg-primary-600-400 {menuOpen ? 'bg-primary-600-400' : ''}"
+						aria-label="Persona options"
+					>
+						<Icons.EllipsisVertical size={16} />
+					</Popover.Trigger>
+					<Portal>
+						<Popover.Positioner class="z-[1000]!">
+							<Popover.Content class="card bg-primary-200-800 shadow-xl p-4 space-y-4 w-[min(90vw,240px)]">
+								<header class="popover-menu-title">
+									<Icons.UserCog size={18} aria-hidden="true" />
+									<p>Persona Options</p>
+								</header>
+								<article class="flex flex-col gap-2">
+									{#if onclick}
+										<button
+											class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
+											onclick={() => { menuOpen = false; handleClick() }}
+											type="button"
+										>
+											<Icons.Eye size={16} aria-hidden="true" />
+											<span>View</span>
+										</button>
+									{/if}
+									{#if onEdit}
+										<button
+											class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
+											onclick={() => { menuOpen = false; onEdit?.(persona.id!) }}
+											type="button"
+										>
+											<Icons.Pencil size={16} aria-hidden="true" />
+											<span>Edit</span>
+										</button>
+									{/if}
+									{#if onDelete}
+										<button
+											class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
+											onclick={() => { menuOpen = false; onDelete?.(persona.id!) }}
+											type="button"
+										>
+											<Icons.Trash2 size={16} aria-hidden="true" />
+											<span>Delete</span>
+										</button>
+									{/if}
+								</article>
+								<Popover.Arrow>
+									<Popover.ArrowTip class="!bg-primary-200 dark:!bg-primary-800" />
+								</Popover.Arrow>
+							</Popover.Content>
+						</Popover.Positioner>
+					</Portal>
 				</Popover>
 			</div>
 		{/if}

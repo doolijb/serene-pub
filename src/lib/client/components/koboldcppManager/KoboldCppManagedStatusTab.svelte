@@ -221,6 +221,7 @@
 				bind:value={ttlDraft}
 				class="input w-24 text-sm"
 				placeholder="300"
+				aria-label="Model unload timer, seconds"
 			/>
 			<span class="text-surface-500 text-xs">seconds</span>
 			<button class="btn btn-sm preset-filled-surface-400-600 text-xs" onclick={saveTtl} disabled={savingTtl}>
@@ -245,6 +246,7 @@
 				bind:value={portDraft}
 				class="input w-24 text-sm"
 				placeholder="5001"
+				aria-label="Port"
 			/>
 			<button class="btn btn-sm preset-filled-surface-400-600 text-xs" onclick={savePort} disabled={savingPort}>
 				{#if savingPort}<Icons.Loader2 size={12} class="animate-spin" />{:else}Save{/if}

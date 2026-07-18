@@ -2,7 +2,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { getContext, onDestroy, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import OllamaForm from "$lib/client/connectionForms/OllamaForm.svelte"
 	import OpenAIForm from "$lib/client/connectionForms/OpenAIForm.svelte"
 	import LmStudioForm from "$lib/client/connectionForms/LMStudioForm.svelte"
@@ -28,7 +28,7 @@
 	}
 
 	let { onclose = $bindable() }: Props = $props()
-	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
+	let systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
 	let panelsCtx: PanelsCtx = getContext("panelsCtx")
 	let koboldCppSettingsCtx: KoboldCppSettingsCtx = getContext("koboldCppSettingsCtx")
 
@@ -418,8 +418,12 @@
 								: "Set as default connection"}
 						aria-label="Set selected connection as default"
 					>
-						<Icons.Star size={14} aria-hidden="true" />
-						Set Default
+						<Icons.Star
+							size={14}
+							aria-hidden="true"
+							fill={selectedConnectionId === defaultConnectionId ? "currentColor" : "none"}
+						/>
+						{selectedConnectionId === defaultConnectionId ? "Default" : "Set Default"}
 					</button>
 				</div>
 				<div id="save-status" class="sr-only">
@@ -473,59 +477,57 @@
 	{/if}
 </div>
 
-<Modal
-	open={showConfirmModal}
-	onOpenChange={(e) => (showConfirmModal = e.open)}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-lg w-full"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<div
-			role="dialog"
-			aria-labelledby="confirm-title"
-			aria-describedby="confirm-desc"
-		>
-			<header class="flex justify-between">
-				<h2 id="confirm-title" class="h2">Confirm Action</h2>
-			</header>
-			<article>
-				<p id="confirm-desc" class="opacity-60">
-					Your connection has unsaved changes. Are you sure you want
-					to discard them? This action cannot be undone.
-				</p>
-			</article>
-			<footer class="flex justify-end gap-4">
-				<button
-					class="btn preset-filled-surface-500"
-					onclick={handleModalCancel}
-					aria-label="Cancel and keep unsaved changes"
+<Dialog open={showConfirmModal} onOpenChange={(e) => (showConfirmModal = e.open)}>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-lg w-full">
+				<div
+					role="dialog"
+					aria-labelledby="confirm-title"
+					aria-describedby="confirm-desc"
 				>
-					Cancel
-				</button>
-				<button
-					class="btn preset-filled-error-500"
-					onclick={handleModalDiscard}
-					aria-label="Discard all unsaved changes"
+					<header class="flex justify-between">
+						<h2 id="confirm-title" class="h2">Confirm Action</h2>
+					</header>
+					<article>
+						<p id="confirm-desc" class="opacity-60">
+							Your connection has unsaved changes. Are you sure you want
+							to discard them? This action cannot be undone.
+						</p>
+					</article>
+					<footer class="flex justify-end gap-4">
+						<button
+							class="btn preset-filled-surface-500"
+							onclick={handleModalCancel}
+							aria-label="Cancel and keep unsaved changes"
+						>
+							Cancel
+						</button>
+						<button
+							class="btn preset-filled-error-500"
+							onclick={handleModalDiscard}
+							aria-label="Discard all unsaved changes"
+						>
+							Discard
+						</button>
+					</footer>
+				</div>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
+<Dialog open={showNewConnectionModal} onOpenChange={(e) => (showNewConnectionModal = e.open)}>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+				<div
+					role="dialog"
+					aria-labelledby="new-conn-title"
+					aria-describedby="new-conn-desc"
 				>
-					Discard
-				</button>
-			</footer>
-		</div>
-	{/snippet}
-</Modal>
-<Modal
-	open={showNewConnectionModal}
-	onOpenChange={(e) => (showNewConnectionModal = e.open)}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<div
-			role="dialog"
-			aria-labelledby="new-conn-title"
-			aria-describedby="new-conn-desc"
-		>
-			<header class="flex justify-between">
+			<header class="flex justify-between mb-[1em]">
 				<h2 id="new-conn-title" class="h2">Create New AI Connection</h2>
 			</header>
 			<div id="new-conn-desc" class="sr-only">
@@ -570,7 +572,7 @@
 						bind:value={newConnectionType}
 						aria-describedby="type-help"
 					>
-						{#each CONNECTION_TYPES as t}
+						{#each CONNECTION_TYPES.sort((a, b) => a.label.localeCompare(b.label)) as t}
 							<option
 								value={t.value}
 								disabled={t.value === CONNECTION_TYPE.KOBOLDCPP_MANAGED &&
@@ -645,48 +647,50 @@
 				</button>
 			</footer>
 		</div>
-	{/snippet}
-</Modal>
-<Modal
-	open={showDeleteModal}
-	onOpenChange={(e) => (showDeleteModal = e.open)}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-lg w-full"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<div
-			role="alertdialog"
-			aria-labelledby="delete-title"
-			aria-describedby="delete-desc"
-		>
-			<header class="flex justify-between">
-				<h2 id="delete-title" class="h2">Delete AI Connection</h2>
-			</header>
-			<article>
-				<p id="delete-desc" class="opacity-60">
-					Are you sure you want to delete the connection "{connection?.name}"?
-					This action cannot be undone and will permanently remove
-					this AI connection.
-				</p>
-			</article>
-			<footer class="flex justify-end gap-4">
-				<button
-					type="button"
-					class="btn preset-filled-surface-500"
-					onclick={handleDeleteModalCancel}
-					aria-label="Cancel deletion and keep the connection"
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
+<Dialog open={showDeleteModal} onOpenChange={(e) => (showDeleteModal = e.open)}>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-lg w-full">
+				<div
+					role="alertdialog"
+					aria-labelledby="delete-title"
+					aria-describedby="delete-desc"
 				>
-					Cancel
-				</button>
-				<button
-					type="button"
-					class="btn preset-filled-error-500"
-					onclick={handleDeleteModalConfirm}
-					aria-label="Permanently delete this AI connection"
-				>
-					Delete Connection
-				</button>
-			</footer>
-		</div>
-	{/snippet}
-</Modal>
+					<header class="flex justify-between">
+						<h2 id="delete-title" class="h2">Delete AI Connection</h2>
+					</header>
+					<article>
+						<p id="delete-desc" class="opacity-60">
+							Are you sure you want to delete the connection "{connection?.name}"?
+							This action cannot be undone and will permanently remove
+							this AI connection.
+						</p>
+					</article>
+					<footer class="flex justify-end gap-4">
+						<button
+							type="button"
+							class="btn preset-filled-surface-500"
+							onclick={handleDeleteModalCancel}
+							aria-label="Cancel deletion and keep the connection"
+						>
+							Cancel
+						</button>
+						<button
+							type="button"
+							class="btn preset-filled-error-500"
+							onclick={handleDeleteModalConfirm}
+							aria-label="Permanently delete this AI connection"
+						>
+							Delete Connection
+						</button>
+					</footer>
+				</div>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

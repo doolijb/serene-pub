@@ -17,7 +17,7 @@ Everything described below lives in the **User** and **Themes** tabs. See [Users
 
 In the **User** tab, the **Theme** dropdown lists every theme available to you, grouped into:
 
-- **Built-in** — Catppuccin, Cerberus, Concord, Crimson, Fennec, Hamlindigo (the default), Legacy, Mint, Modern, Mona, Nosh, Nouveau, Pine, Rocket, Rose, Sahara, Seafoam, Terminus, Vintage, Vox, and Wintry.
+- **Built-in** — Catppuccin, Cerberus, Concord, Crimson, Dracula, Fennec, Hamlindigo (the default), Legacy, Mint, Modern, Mona, Nosh, Nouveau, Pine, Reign, Rocket, Rose, Rosé Pine, Sahara, Seafoam, Terminus, Vintage, Vox, and Wintry.
 - **My Themes** — any custom themes you've created (see below).
 - **Instance Themes** — custom themes an admin has made available to everyone, if any exist.
 
@@ -34,6 +34,8 @@ The editor has:
 - An **Import** button to load a `.css` or `.json` file instead of writing CSS by hand.
 
 A tip in the manager points you to the [Skeleton theme generator](https://themes.skeleton.dev/themes/create) — Serene Pub's UI is built on Skeleton UI, so you can visually design a theme there, download the file, and import it directly into the editor.
+
+> **Note:** Serene Pub upgraded from Skeleton UI v3 to v5, which renamed a number of underlying CSS design tokens. Custom themes created before this upgrade may render incorrectly (wrong colors, missing values) since they were generated against the old token names. If a saved custom theme looks broken after updating, re-open the [theme generator](https://themes.skeleton.dev/themes/create), re-create or re-import your theme there, and re-import the regenerated CSS here. Built-in themes are unaffected.
 
 Once you're happy with the CSS, click **Create** (or **Update** if editing an existing theme) to save it. The theme immediately becomes available in your **Theme** dropdown under "My Themes." The status bar at the bottom of the editor shows a running line count and character count while you work.
 

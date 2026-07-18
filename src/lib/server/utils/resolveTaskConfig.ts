@@ -3,7 +3,7 @@ import * as schema from "$lib/server/db/schema"
 
 export type TaskType =
 	| "chat"
-	| "chatWorldPrompt"
+	| "narratorPrompt"
 	| "chat_title"
 	| "field_generation"
 	| "summarize_batch"
@@ -31,8 +31,8 @@ export async function resolveTaskConfig(params: {
 	taskType: TaskType
 	/** ID of the prompt config (chat generation) */
 	promptConfigId?: number | null
-	/** ID of the chat-world prompt config (World Response generation) */
-	chatWorldPromptConfigId?: number | null
+	/** ID of the narrator prompt config (Narrator response generation) */
+	narratorPromptConfigId?: number | null
 	/** ID of the active summarize config (summarization tasks) */
 	summarizeConfigId?: number | null
 	/** Type of summarize config table */
@@ -42,7 +42,7 @@ export async function resolveTaskConfig(params: {
 	/** ID of the chat (optional per-chat override) */
 	chatId?: number | null
 }): Promise<ResolvedTaskConfig> {
-	const { taskType, promptConfigId, chatWorldPromptConfigId, summarizeConfigId, summarizeConfigType, graphBuildConfigId, chatId } = params
+	const { taskType, promptConfigId, narratorPromptConfigId, summarizeConfigId, summarizeConfigType, graphBuildConfigId, chatId } = params
 
 	const systemSettings = await db.query.systemSettings.findFirst()
 
@@ -68,9 +68,9 @@ export async function resolveTaskConfig(params: {
 			})
 			overrideConnectionId = cfg?.connectionId ?? null
 			overrideSamplingId = cfg?.samplingConfigId ?? null
-		} else if (taskType === "chatWorldPrompt" && chatWorldPromptConfigId) {
-			const cfg = await db.query.chatWorldPromptConfigs.findFirst({
-				where: (c, { eq }) => eq(c.id, chatWorldPromptConfigId),
+		} else if (taskType === "narratorPrompt" && narratorPromptConfigId) {
+			const cfg = await db.query.narratorPromptConfigs.findFirst({
+				where: (c, { eq }) => eq(c.id, narratorPromptConfigId),
 				columns: { connectionId: true, samplingConfigId: true }
 			})
 			overrideConnectionId = cfg?.connectionId ?? null

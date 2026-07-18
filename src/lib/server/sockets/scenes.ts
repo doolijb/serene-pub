@@ -2,6 +2,7 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { eq, inArray, asc } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
+import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
 import { compileScenesForEntry, generateSummary } from "$lib/server/utils/summarizer"
 import { buildSceneCastList } from "$lib/server/utils/summarizer/availableSceneCast"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
@@ -414,7 +415,7 @@ export const sceneProcessHandler: Handler<
 		])
 
 		const characterMap = new Map(characters.map((c) => [c.id, c.name]))
-		const personaMap = new Map(personas.map((p) => [p.id, (p as any).nickname ?? p.name]))
+		const personaMap = new Map(personas.map((p) => [p.id, resolvePersonaName(p)]))
 
 		const messages = rawMessages.map((msg) => {
 			let senderName = "Unknown"

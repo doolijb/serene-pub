@@ -85,13 +85,32 @@ export class AnthropicClaudeTokenCounter implements TokenCounter {
 }
 
 export class CohereTokenCounter implements TokenCounter {
+	// fromPreTrained() rebuilds the tokenizer's vocab/merges from scratch —
+	// expensive, and unlike the other counters here it was being called on
+	// every single countTokens() invocation rather than once. This class is
+	// instantiated once as a static singleton (see TokenCounters.counters
+	// below), so caching the built tokenizer on the instance persists it for
+	// the process's lifetime. The promise itself (not just the eventual
+	// value) is cached so concurrent calls before the first load finishes
+	// share one in-flight load instead of racing to build it twice.
+	private tokenizerPromise?: Promise<
+		ReturnType<
+			typeof import("@lenml/tokenizer-gemma").fromPreTrained
+		>
+	>
+
+	private getTokenizer() {
+		if (!this.tokenizerPromise) {
+			this.tokenizerPromise = import("@lenml/tokenizer-gemma").then(
+				({ fromPreTrained }) => fromPreTrained()
+			)
+		}
+		return this.tokenizerPromise
+	}
+
 	async countTokens(text: string): Promise<number> {
-		const { fromPreTrained: getGemmaTokenizer } = await import(
-			"@lenml/tokenizer-gemma"
-		)
-		const tokenizer = getGemmaTokenizer()
+		const tokenizer = await this.getTokenizer()
 		return tokenizer.encode(text, { add_special_tokens: false }).length
-		//return Math.ceil(text.length / 5)
 	}
 }
 

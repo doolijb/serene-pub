@@ -4,7 +4,7 @@
 	import { onMount } from "svelte"
 	import LorebookBindingTag from "../../utils/tiptapLorebookBindingTag"
 	import * as Icons from "@lucide/svelte"
-	import { Popover } from "@skeletonlabs/skeleton-svelte"
+	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import Placeholder from "@tiptap/extension-placeholder"
 	import LegacyTag from "$lib/client/utils/tiptapLegacyTag"
 	import type { EditorView } from "prosemirror-view"
@@ -161,47 +161,48 @@
 			open={addBindingOpenState}
 			onOpenChange={(e) => (addBindingOpenState = e.open)}
 			positioning={{ placement: "bottom" }}
-			triggerBase="underline"
-			contentBase="card preset-filled-surface-100-900 shadow-xl p-4"
-			zIndex="1000"
 		>
-			{#snippet trigger()}
+			<Popover.Trigger class="underline">
 				<button
 					class="btn btn-sm preset-filled-surface-500"
 					title="Insert Character Tag"
 				>
 					<Icons.UserPlus size={16} />
 				</button>
-			{/snippet}
-			{#snippet content()}
-				<div class="flex flex-col gap-2">
-					<div class="mb-2 text-sm font-semibold">
-						Insert Character Tag
-					</div>
-					{#each lorebookBindingList as binding}
-						{@const char = binding.character || binding.persona}
-						<button
-							class="btn"
-							class:preset-filled-primary-500={!!binding.characterId}
-							class:preset-filled-surface-500={!!binding.personaId}
-							class:preset-filled-warning-500={!char}
-							onclick={() => {
-								editor.commands.insertLorebookBindingTag(
-									binding.binding
-								)
-								addBindingOpenState = false
-							}}
-							title={char
-								? `${char.nickname || char.name}`
-								: binding.binding}
-						>
-							{char
-								? char.nickname || char.name
-								: binding.binding}
-						</button>
-					{/each}
-				</div>
-			{/snippet}
+			</Popover.Trigger>
+			<Portal>
+				<Popover.Positioner class="z-[1000]!">
+					<Popover.Content class="card preset-filled-surface-100-900 shadow-xl p-4">
+						<div class="flex flex-col gap-2">
+							<div class="mb-2 text-sm font-semibold">
+								Insert Character Tag
+							</div>
+							{#each lorebookBindingList as binding}
+								{@const char = binding.character || binding.persona}
+								<button
+									class="btn"
+									class:preset-filled-primary-500={!!binding.characterId}
+									class:preset-filled-surface-500={!!binding.personaId}
+									class:preset-filled-warning-500={!char}
+									onclick={() => {
+										editor.commands.insertLorebookBindingTag(
+											binding.binding
+										)
+										addBindingOpenState = false
+									}}
+									title={char
+										? `${char.nickname || char.name}`
+										: binding.binding}
+								>
+									{char
+										? char.nickname || char.name
+										: binding.binding}
+								</button>
+							{/each}
+						</div>
+					</Popover.Content>
+				</Popover.Positioner>
+			</Portal>
 		</Popover>
 		<button
 			class="btn btn-sm preset-filled-surface-500"

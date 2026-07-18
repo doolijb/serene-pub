@@ -194,7 +194,12 @@
 					name="stream"
 					checked={fields.stream}
 					onCheckedChange={(e) => (fields!.stream = e.checked)}
-									/>
+				>
+					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
 			</div>
 			<div class="flex items-center justify-between gap-4">
 				<div>
@@ -205,7 +210,12 @@
 					name="thinking"
 					checked={fields.thinking}
 					onCheckedChange={(e) => (fields!.thinking = e.checked)}
-									/>
+				>
+					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
 			</div>
 			{#if fields.thinking}
 				<div class="flex flex-col gap-1">

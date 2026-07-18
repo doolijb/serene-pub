@@ -7,7 +7,7 @@ WORKDIR /app
 
 # Install deps first (layer-cached until package files change)
 COPY package.json ./
-RUN npm install
+RUN npm install --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000
 
 # Copy source and build
 COPY . .

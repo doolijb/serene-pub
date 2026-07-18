@@ -423,9 +423,10 @@
 				<span class="text-xs text-surface-200 max-w-36 truncate">{perspectiveNodeName}</span>
 				<span class="text-surface-500 text-xs ml-0.5">· direct</span>
 				<button
-					class="ml-1 text-surface-500 hover:text-surface-200"
+					class="ml-1 text-surface-500 hover:text-surface-200 p-1.5"
 					onclick={clearPerspective}
 					title="Clear perspective (or click background)"
+					aria-label="Clear perspective"
 				>
 					<Icons.X size={12} />
 				</button>
@@ -439,6 +440,7 @@
 			class="bg-surface-200-800/80 text-surface-400 hover:text-surface-200 rounded p-1.5 backdrop-blur-sm pointer-events-auto"
 			onclick={toggleFullscreen}
 			title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+			aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
 		>
 			{#if isFullscreen}
 				<Icons.Minimize2 size={14} />

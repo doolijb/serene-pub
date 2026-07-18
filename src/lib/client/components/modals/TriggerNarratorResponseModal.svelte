@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 
 	interface Props {
@@ -15,30 +15,30 @@
 		onOpenChange,
 		onTrigger,
 		onCancel,
-		narratorName = "The World"
+		narratorName = "Narrator"
 	}: Props = $props()
 
 	let instructions = $state("")
 
 	$effect(() => {
 		// Clear the field each time the modal is (re)opened, so leftover text
-		// from a previous World Response doesn't silently carry over.
+		// from a previous Narrator response doesn't silently carry over.
 		if (open) instructions = ""
 	})
 </script>
 
-<Modal
-	{open}
-	{onOpenChange}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl w-[min(95vw,520px)]"
-	backdropClasses="backdrop-blur-sm"
-	role="dialog"
-	aria-labelledby="trigger-world-response-title"
->
-	{#snippet content()}
+<Dialog {open} {onOpenChange}>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content
+				class="card bg-surface-100-900 p-6 space-y-6 shadow-xl w-[min(95vw,520px)]"
+				role="dialog"
+				aria-labelledby="trigger-narrator-response-title"
+			>
 		<header class="flex items-center gap-2">
 			<Icons.CloudSun size={20} class="text-primary-500" />
-			<h2 id="trigger-world-response-title" class="h2">
+			<h2 id="trigger-narrator-response-title" class="h2">
 				Trigger {narratorName}
 			</h2>
 		</header>
@@ -47,11 +47,11 @@
 				Let {narratorName} narrate — describe the environment, atmosphere,
 				or any side characters and encounters, instead of a chat character.
 			</p>
-			<label class="text-sm font-semibold" for="world-instructions">
+			<label class="text-sm font-semibold" for="narrator-instructions">
 				Extra instructions (optional)
 			</label>
 			<textarea
-				id="world-instructions"
+				id="narrator-instructions"
 				bind:value={instructions}
 				class="textarea w-full"
 				rows="4"
@@ -76,5 +76,7 @@
 				<Icons.CloudSun size={14} /> Trigger
 			</button>
 		</footer>
-	{/snippet}
-</Modal>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

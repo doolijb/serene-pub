@@ -14,6 +14,7 @@
 
 import { getConnectionAdapter } from "../getConnectionAdapter"
 import { TokenCounters } from "../TokenCounterManager"
+import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { runQueuedLLMCall } from "../runQueuedLLMCall"
 import type { TaskType } from "../resolveTaskConfig"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
@@ -193,7 +194,11 @@ export interface CompileInput {
 export async function compileScenesForEntry(input: CompileInput): Promise<SummarizeResult> {
 	const { scenes, connection, sampling, contextConfig, promptConfig, onProgress } = input
 
-	const tokenCounter = new TokenCounters("estimate")
+	// Honor the connection's own configured tokenizer — see the identical
+	// fix/comment in generateResponse.ts.
+	const tokenCounter = new TokenCounters(
+		(connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
+	)
 	const tokenLimit: number = (connection as any).tokenLimit ?? (connection as any).contextSize ?? 4096
 	const genOpts = { connection, sampling, contextConfig, promptConfig, tokenCounter, tokenLimit }
 
@@ -251,11 +256,23 @@ export async function generateSummary(
 	const nameConn = nameConnection ?? connection
 	const nameSamp = nameSampling ?? sampling
 
-	const tokenCounter = new TokenCounters("estimate")
+	// Each phase can use a different connection (batch/synth/name overrides),
+	// so each gets its own tokenCounter matching its own connection's
+	// configured tokenizer, rather than one shared "estimate" instance that
+	// ignored all three — see the identical fix/comment in generateResponse.ts.
+	const batchTokenCounter = new TokenCounters(
+		(batchConn as any).tokenCounter || TokenCounterOptions.ESTIMATE
+	)
+	const synthTokenCounter = new TokenCounters(
+		(synthConn as any).tokenCounter || TokenCounterOptions.ESTIMATE
+	)
+	const nameTokenCounter = new TokenCounters(
+		(nameConn as any).tokenCounter || TokenCounterOptions.ESTIMATE
+	)
 	const tokenLimit: number = (batchConn as any).tokenLimit ?? (batchConn as any).contextSize ?? 4096
-	const batchOpts = { connection: batchConn, sampling: batchSamp, contextConfig, promptConfig, tokenCounter, tokenLimit }
-	const synthOpts = { connection: synthConn, sampling: synthSamp, contextConfig, promptConfig, tokenCounter, tokenLimit: (synthConn as any).tokenLimit ?? (synthConn as any).contextSize ?? 4096 }
-	const nameOpts = { connection: nameConn, sampling: nameSamp, contextConfig, promptConfig, tokenCounter, tokenLimit: (nameConn as any).tokenLimit ?? (nameConn as any).contextSize ?? 4096 }
+	const batchOpts = { connection: batchConn, sampling: batchSamp, contextConfig, promptConfig, tokenCounter: batchTokenCounter, tokenLimit }
+	const synthOpts = { connection: synthConn, sampling: synthSamp, contextConfig, promptConfig, tokenCounter: synthTokenCounter, tokenLimit: (synthConn as any).tokenLimit ?? (synthConn as any).contextSize ?? 4096 }
+	const nameOpts = { connection: nameConn, sampling: nameSamp, contextConfig, promptConfig, tokenCounter: nameTokenCounter, tokenLimit: (nameConn as any).tokenLimit ?? (nameConn as any).contextSize ?? 4096 }
 
 	const batches = batchMessages(messages, tokenLimit)
 	const totalBatches = batches.length

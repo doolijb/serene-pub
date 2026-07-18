@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { Modal, Progress } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal, Progress } from "@skeletonlabs/skeleton-svelte"
 
 	interface DownloadProgress {
 		modelName: string
@@ -82,18 +82,19 @@
 	}
 </script>
 
-<Modal
+<Dialog
 	{open}
 	onOpenChange={(e) => {
 		if (!e.open && areAllDownloadsDone()) {
 			handleClose()
 		}
 	}}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-2xl border border-surface-300-700 w-[min(95vw,640px)] max-h-[90dvh]"
-	backdropClasses="backdrop-blur-md bg-black/20"
 >
-	{#snippet content()}
-		<header class="border-surface-300-700 border-b pb-4">
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-md bg-black/20" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-2xl border border-surface-300-700 w-[min(95vw,640px)] max-h-[90dvh]">
+				<header class="border-surface-300-700 border-b pb-4">
 			<div class="flex items-center gap-3">
 				<div class="bg-primary-500/10 rounded-full p-2">
 					<Icons.Download size={20} class="text-primary-500" />
@@ -196,10 +197,11 @@
 													</span>
 												</div>
 												<div class="w-full">
-													<Progress
-														value={fileProgress.completed}
-														max={fileProgress.total}
-													/>
+													<Progress value={fileProgress.completed} max={fileProgress.total}>
+														<Progress.Track class="bg-surface-200-800">
+															<Progress.Range class="bg-primary-500" />
+														</Progress.Track>
+													</Progress>
 												</div>
 												{#if fileProgress.total > 0}
 													<div
@@ -275,5 +277,7 @@
 				{/if}
 			</div>
 		</footer>
-	{/snippet}
-</Modal>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

@@ -745,7 +745,12 @@
 							name="confirm-import"
 							checked={confirmImport}
 							onCheckedChange={(e) => (confirmImport = e.checked)}
-						/>
+						>
+							<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+								<Switch.Thumb />
+							</Switch.Control>
+							<Switch.HiddenInput />
+						</Switch>
 						<label for="confirm-import" class="font-semibold">
 							I understand this will import the selected data into
 							Serene Pub

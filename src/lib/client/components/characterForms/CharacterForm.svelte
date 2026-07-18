@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Switch, Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Switch, Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import * as skio from "sveltekit-io"
 	import { onMount, onDestroy, getContext } from "svelte"
@@ -164,6 +164,7 @@
 		!!character ? "edit" : "create"
 	)
 	let showCancelModal = $state(false)
+	let isSaving = $state(false)
 	let validationErrors: ValidationErrors = $state({})
 	let newLangKey = $state("")
 	let newLangNote = $state("")
@@ -292,6 +293,10 @@
 	}
 
 	function onSave() {
+		// Guard against double-submit (eg. an impatient re-click while the
+		// previous save is still in flight)
+		if (isSaving) return
+
 		// Validate the form first
 		if (!validateForm()) {
 			// Validation failed, errors are already set in validationErrors
@@ -311,6 +316,7 @@
 		const newCharacter = { ...editCharacterData }
 		const avatarFile = newCharacter._avatarFile
 		delete newCharacter._avatarFile
+		isSaving = true
 		socket.emit("characters:create", {
 			character: newCharacter,
 			avatarFile
@@ -321,6 +327,7 @@
 		const updatedCharacter = { ...editCharacterData }
 		const avatarFile = updatedCharacter._avatarFile
 		delete updatedCharacter._avatarFile
+		isSaving = true
 		socket.emit("characters:update", {
 			character: updatedCharacter,
 			avatarFile
@@ -455,6 +462,7 @@
 		document.addEventListener("keydown", handleKeydown)
 
 		socket.on("characters:create", (res: any) => {
+			isSaving = false
 			if (res.character) {
 				validationErrors = {} // Clear any validation errors on success
 				toaster.success({
@@ -470,6 +478,7 @@
 		})
 
 		socket.on("characters:update", (res: any) => {
+			isSaving = false
 			if (res.character) {
 				validationErrors = {} // Clear any validation errors on success
 				toaster.success({
@@ -483,6 +492,31 @@
 				closeForm()
 			}
 		})
+
+		// These aren't in the typed SocketEventMap (only their success
+		// variants are), so registered via the same `(socket as any).on(...)`
+		// cast pattern used elsewhere in the app for ad hoc error listeners.
+		;(socket as any).on(
+			"characters:create:error",
+			(msg: Sockets.ErrorResponse) => {
+				isSaving = false
+				toaster.error({
+					title: "Failed to create character",
+					description: msg.error
+				})
+			}
+		)
+
+		;(socket as any).on(
+			"characters:update:error",
+			(msg: Sockets.ErrorResponse) => {
+				isSaving = false
+				toaster.error({
+					title: "Failed to update character",
+					description: msg.error
+				})
+			}
+		)
 
 		socket.on(
 			"lorebooks:list",
@@ -614,6 +648,8 @@
 	onDestroy(() => {
 		socket.off("characters:create")
 		socket.off("characters:update")
+		;(socket as any).off("characters:create:error")
+		;(socket as any).off("characters:update:error")
 		socket.off("characters:get")
 		socket.off("characters:exportCard")
 		socket.off("characters:exportCard:error")
@@ -699,10 +735,15 @@
 					class:preset-filled-success-500={hasChanges}
 					class:preset-tonal-success={!hasChanges}
 					onclick={onSave}
+					disabled={isSaving}
 					aria-describedby="form-title"
 					aria-label={`${mode === "edit" ? "Update" : "Create"} character${hasChanges ? " (has unsaved changes)" : ""}`}
 				>
-					<Icons.Save size={16} aria-hidden="true" />
+					{#if isSaving}
+						<Icons.Loader2 size={16} class="animate-spin" aria-hidden="true" />
+					{:else}
+						<Icons.Save size={16} aria-hidden="true" />
+					{/if}
 					{mode === "edit" ? "Update" : "Create"}
 				</button>
 			{/if}
@@ -1544,7 +1585,12 @@
 					onCheckedChange={(e) =>
 						(editCharacterData.isFavorite = e.checked)}
 					aria-describedby="favorite-description"
-				/>
+				>
+					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
 				<label for="favorite" class="font-semibold">Favorite</label>
 				<span id="favorite-description" class="sr-only">
 					Mark this character as a favorite for easier access
@@ -1558,7 +1604,12 @@
 					false}
 				onCheckedChange={onShowAllCharacterFieldsClick}
 				aria-describedby="show-all-fields-description"
-			/>
+			>
+				<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+					<Switch.Thumb />
+				</Switch.Control>
+				<Switch.HiddenInput />
+			</Switch>
 			<label for="show-all-character-fields" class="font-semibold">
 				Show All Fields
 			</label>
@@ -1577,60 +1628,63 @@
 />
 
 {#if showExportFormatModal && characterId}
-	<Modal
+	<Dialog
 		open={showExportFormatModal}
 		onOpenChange={(e) => {
 			showExportFormatModal = e.open
 		}}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl w-[min(95vw,560px)]"
-		backdropClasses="backdrop-blur-sm"
 	>
-		{#snippet content()}
-			<div class="p-6">
-				<h2 class="mb-2 text-lg font-bold">Export Character</h2>
-				<p class="mb-4">
-					Choose the export format for "{character?.nickname ||
-						character?.name ||
-						"character"}":
-				</p>
-				<div class="flex flex-col gap-3">
-					<button
-						class="btn preset-filled-primary-500 justify-start"
-						onclick={handleExportAsJson}
-					>
-						<Icons.FileText size={20} aria-hidden="true" />
-						<span>Export as JSON</span>
-					</button>
-					{#if character?.avatar}
-						<button
-							class="btn preset-filled-primary-500 justify-start"
-							onclick={handleExportAsPng}
-						>
-							<Icons.FileImage size={20} aria-hidden="true" />
-							<span>Export as PNG Card</span>
-						</button>
-					{:else}
-						<button
-							class="btn preset-filled-surface-500 justify-start"
-							disabled
-							title="Character has no avatar image"
-						>
-							<Icons.FileImage size={20} aria-hidden="true" />
-							<span>Export as PNG Card (No Avatar)</span>
-						</button>
-					{/if}
-				</div>
-				<div class="mt-4 flex justify-end gap-2">
-					<button
-						class="btn preset-filled-surface-500"
-						onclick={cancelExport}
-					>
-						Cancel
-					</button>
-				</div>
-			</div>
-		{/snippet}
-	</Modal>
+		<Portal>
+			<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+				<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl w-[min(95vw,560px)]">
+					<div class="p-6">
+						<h2 class="mb-2 text-lg font-bold">Export Character</h2>
+						<p class="mb-4">
+							Choose the export format for "{character?.nickname ||
+								character?.name ||
+								"character"}":
+						</p>
+						<div class="flex flex-col gap-3">
+							<button
+								class="btn preset-filled-primary-500 justify-start"
+								onclick={handleExportAsJson}
+							>
+								<Icons.FileText size={20} aria-hidden="true" />
+								<span>Export as JSON</span>
+							</button>
+							{#if character?.avatar}
+								<button
+									class="btn preset-filled-primary-500 justify-start"
+									onclick={handleExportAsPng}
+								>
+									<Icons.FileImage size={20} aria-hidden="true" />
+									<span>Export as PNG Card</span>
+								</button>
+							{:else}
+								<button
+									class="btn preset-filled-surface-500 justify-start"
+									disabled
+									title="Character has no avatar image"
+								>
+									<Icons.FileImage size={20} aria-hidden="true" />
+									<span>Export as PNG Card (No Avatar)</span>
+								</button>
+							{/if}
+						</div>
+						<div class="mt-4 flex justify-end gap-2">
+							<button
+								class="btn preset-filled-surface-500"
+								onclick={cancelExport}
+							>
+								Cancel
+							</button>
+						</div>
+					</div>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
 {/if}
 
 <style>

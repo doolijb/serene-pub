@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
@@ -134,8 +134,11 @@
 	})
 </script>
 
-<Modal {open} onOpenChange={(e) => { if (!e.open) handleClose() }} contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto" backdropClasses="backdrop-blur-sm">
-	{#snippet content()}
+<Dialog {open} onOpenChange={(e) => { if (!e.open) handleClose() }}>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
 		<header class="flex items-center justify-between">
 			<div class="flex items-center gap-2">
 				{#if selectedCharacter}
@@ -285,5 +288,7 @@
 				Close
 			</button>
 		</footer>
-	{/snippet}
-</Modal>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

@@ -2,6 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import * as skio from "sveltekit-io"
 	import { onMount, onDestroy, getContext } from "svelte"
+	import { SvelteSet } from "svelte/reactivity"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { OllamaModelSearchSource } from "$lib/shared/constants/OllamaModelSource"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -48,8 +49,11 @@
 	// Get user context to track active connection
 	let userCtx: UserCtx = $state(getContext("userCtx"))
 
-	// Track which models are being downloaded locally (for UI state only)
-	let currentlyDownloading = $state(new Set<string>())
+	// Track which models are being downloaded locally (for UI state only).
+	// Uses SvelteSet (not a plain Set in $state) so .add()/.delete() mutations
+	// are actually reactive - a plain Set wrapped in $state only reacts to
+	// reassignment, not in-place mutation.
+	let currentlyDownloading = new SvelteSet<string>()
 
 	// Derive the current active connection model name for reactivity
 	let currentConnectionModelName: string | null = $derived.by(() => {
@@ -226,16 +230,28 @@
 		socket.on(
 			"ollama:pullModel",
 			(message: Sockets.OllamaPullModel.Response) => {
-				// Handle model pull completion/error only - no progress handling
+				// Handle model pull completion only - errors arrive on the
+				// separate "ollama:pullModel:error" event (registered below),
+				// not as an `error` field on this event.
+				currentlyDownloading.clear()
 				if (message.success) {
 					socket.emit("ollama:modelsList", {})
 					toaster.success({ title: "Model downloaded successfully" })
 					closeHuggingFaceModal()
-				} else if (message.error) {
-					toaster.error({ title: message.error })
 				}
 			}
 		)
+
+		// The server response doesn't carry which model failed, so this just
+		// clears the whole in-flight set - the per-model progress/error state
+		// lives in the Downloads tab (driven by "ollamaPullProgress").
+		;(socket as any).on("ollama:pullModel:error", (message: any) => {
+			currentlyDownloading.clear()
+			toaster.error({
+				title: "Model download failed",
+				description: message?.error
+			})
+		})
 
 		// Load initial installed models
 		refreshInstalled()
@@ -246,6 +262,7 @@
 		socket.off("ollama:searchAvailableModels")
 		socket.off("ollama:recommendedModels")
 		socket.off("ollama:pullModel")
+		;(socket as any).off("ollama:pullModel:error")
 		socket.off("ollama:cancelPull")
 	})
 </script>
@@ -314,6 +331,7 @@
 		{#each recommendedModels as model}
 			{@const installed = isModelInstalled(model.pull)}
 			{@const active = isModelActive(model.pull)}
+			{@const downloading = currentlyDownloading.has(model.pull)}
 			<div class="card preset-tonal p-4">
 				<div class="flex flex-col gap-3">
 					<!-- Header with name and VRAM tier -->
@@ -397,12 +415,14 @@
 								} as Sockets.OllamaPullModel.Call)
 								onDownloadStart?.(model.pull)
 							}}
-							disabled={installed}
+							disabled={installed || downloading}
 							aria-label={active
 								? `Model ${model.name} is currently active`
 								: installed
 									? `Model ${model.name} is already installed`
-									: `Install model ${model.name}`}
+									: downloading
+										? `Installing model ${model.name}`
+										: `Install model ${model.name}`}
 						>
 							{#if active}
 								<Icons.Zap size={14} aria-hidden="true" />
@@ -410,6 +430,9 @@
 							{:else if installed}
 								<Icons.Check size={14} aria-hidden="true" />
 								Installed
+							{:else if downloading}
+								<Icons.Loader2 size={14} class="animate-spin" aria-hidden="true" />
+								Installing
 							{:else}
 								<Icons.Download size={14} aria-hidden="true" />
 								Install

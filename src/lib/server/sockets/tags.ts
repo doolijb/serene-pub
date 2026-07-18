@@ -100,22 +100,13 @@ export const tagsDelete: Handler<
 		try {
 			const userId = socket.user!.id
 
-			// First delete all character tag associations for this user's tags
-			await db
-				.delete(schema.characterTags)
-				.where(eq(schema.characterTags.tagId, params.id))
-
-			// Also delete persona tag associations
-			await db
-				.delete(schema.personaTags)
-				.where(eq(schema.personaTags.tagId, params.id))
-
-			// Also delete lorebook tag associations
-			await db
-				.delete(schema.lorebookTags)
-				.where(eq(schema.lorebookTags.tagId, params.id))
-
-			// Then delete the tag (only if owned by user)
+			// Delete the tag (only if owned by user). character_tags/persona_tags/
+			// lorebook_tags all declare onDelete: "cascade" on their tagId FK, so
+			// their associations clean up automatically — no need to (and
+			// previously wrong to) delete them manually here. Doing it manually,
+			// unconditionally, before this ownership-scoped delete meant any user
+			// could wipe another user's tag associations by id, even though the
+			// tag row itself correctly survived.
 			await db
 				.delete(schema.tags)
 				.where(
@@ -220,106 +211,6 @@ export const tagsGetRelatedData: Handler<
 	}
 }
 
-export const tagsAddToCharacter: Handler<
-	Sockets.Tags.AddToCharacter.Params,
-	Sockets.Tags.AddToCharacter.Response
-> = {
-	event: "tags:addToCharacter",
-	handler: async (socket, params, emitToUser) => {
-		try {
-			const userId = socket.user!.id
-
-			// Verify that the user owns both the tag and the character
-			const tag = await db.query.tags.findFirst({
-				where: (t, { and, eq }) =>
-					and(eq(t.id, params.tagId), eq(t.userId, userId))
-			})
-
-			const character = await db.query.characters.findFirst({
-				where: (c, { and, eq }) =>
-					and(eq(c.id, params.characterId), eq(c.userId, userId))
-			})
-
-			if (!tag || !character) {
-				throw new Error(
-					"Tag or character not found or not owned by user"
-				)
-			}
-
-			await db
-				.insert(schema.characterTags)
-				.values({
-					characterId: params.characterId,
-					tagId: params.tagId
-				})
-				.onConflictDoNothing()
-
-			const res: Sockets.Tags.AddToCharacter.Response = { success: true }
-			emitToUser("tags:addToCharacter", res)
-			return res
-		} catch (error) {
-			console.error("Error adding tag to character:", error)
-			emitToUser("tags:addToCharacter:error", {
-				error: "Failed to add tag to character."
-			})
-			throw error
-		}
-	}
-}
-
-export const tagsRemoveFromCharacter: Handler<
-	Sockets.Tags.RemoveFromCharacter.Params,
-	Sockets.Tags.RemoveFromCharacter.Response
-> = {
-	event: "tags:removeFromCharacter",
-	handler: async (socket, params, emitToUser) => {
-		try {
-			const userId = socket.user!.id
-
-			// Verify that the user owns both the tag and the character
-			const tag = await db.query.tags.findFirst({
-				where: (t, { and, eq }) =>
-					and(eq(t.id, params.tagId), eq(t.userId, userId))
-			})
-
-			const character = await db.query.characters.findFirst({
-				where: (c, { and, eq }) =>
-					and(eq(c.id, params.characterId), eq(c.userId, userId))
-			})
-
-			if (!tag || !character) {
-				throw new Error(
-					"Tag or character not found or not owned by user"
-				)
-			}
-
-			await db
-				.delete(schema.characterTags)
-				.where(
-					and(
-						eq(
-							schema.characterTags.characterId,
-							params.characterId
-						),
-						eq(schema.characterTags.tagId, params.tagId)
-					)
-				)
-
-			const res: Sockets.Tags.RemoveFromCharacter.Response = {
-				success: true
-			}
-			emitToUser("tags:removeFromCharacter", res)
-			return res
-		} catch (error) {
-			console.error("Error removing tag from character:", error)
-			emitToUser("tags:removeFromCharacter:error", {
-				error: "Failed to remove tag from character."
-			})
-			throw error
-		}
-	}
-}
-
 // Registration function for all tag handlers
 export function registerTagHandlers(
 	socket: any,
@@ -335,6 +226,4 @@ export function registerTagHandlers(
 	register(socket, tagsUpdate, emitToUser)
 	register(socket, tagsDelete, emitToUser)
 	register(socket, tagsGetRelatedData, emitToUser)
-	register(socket, tagsAddToCharacter, emitToUser)
-	register(socket, tagsRemoveFromCharacter, emitToUser)
 }

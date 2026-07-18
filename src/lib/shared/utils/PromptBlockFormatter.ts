@@ -13,7 +13,7 @@ export class PromptBlockFormatter {
 	static readonly OPENAI_OPEN = "<|"
 	static readonly OPENAI_CLOSE = "\n"
 	static readonly LLAMA2_INST_OPEN = "<s>[INST] "
-	static readonly LLAMA2_INST_CLOSE = " [/INST]></s>\n"
+	static readonly LLAMA2_INST_CLOSE = " [/INST]</s>\n"
 	static readonly CLAUDE_OPEN = "Human: "
 	static readonly CLAUDE_CLOSE = "\nAssistant: "
 	static readonly INSTRUCT_OPEN = "### Instruction:\n"
@@ -49,7 +49,7 @@ export class PromptBlockFormatter {
 	static llama2InstClose(role: BlockRole) {
 		switch (role) {
 			case "system":
-				return "\n<</SYS>> [/INST]></s>\n"
+				return "\n<</SYS>> [/INST]</s>\n"
 			case "user":
 				return "\n</s>\n"
 			case "assistant":

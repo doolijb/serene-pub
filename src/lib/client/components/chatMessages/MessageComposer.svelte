@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Tabs, Popover } from "@skeletonlabs/skeleton-svelte"
+	import { Tabs, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { onMount, type Snippet } from "svelte"
 	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
@@ -85,35 +85,35 @@
 
 <Tabs
 	value={tabGroup}
-	{classes}
+	class={classes}
 	onValueChange={(e) => (tabGroup = e.value)}
 	role="region"
 	aria-label="Message composer"
 >
-	{#snippet list()}
-		<Tabs.Control value="compose" classes="min-h-[2.75em]">
+	<Tabs.List class="border-none flex flex-wrap items-center gap-1 pt-[0.2em] pb-[0]">
+		<Tabs.Trigger value="compose" class="flex min-h-[2em] items-center justify-center">
 			<span title="Compose" aria-label="Compose tab" class="flex items-center gap-1">
 				<Icons.Pen size="0.75em" aria-hidden="true" />
 				{#if tabGroup === "compose"}<span class="text-xs">Compose</span>{/if}
 			</span>
-		</Tabs.Control>
-		<Tabs.Control value="preview" classes="min-h-[2.75em]">
+		</Tabs.Trigger>
+		<Tabs.Trigger value="preview" class="flex min-h-[2em] items-center justify-center">
 			<span title="Preview" aria-label="Preview tab" class="flex items-center gap-1">
 				<Icons.Eye size="0.75em" aria-hidden="true" />
 				{#if tabGroup === "preview"}<span class="text-xs">Preview</span>{/if}
 			</span>
-		</Tabs.Control>
+		</Tabs.Trigger>
 		{#if extraTabs}
 			{#each extraTabs as tab}
-				<Tabs.Control
+				<Tabs.Trigger
 					value={tab.value}
-					classes="{tab.alwaysVisible ? '' : 'max-lg:hidden'} min-h-[2.75em]"
+					class="flex min-h-[2em] items-center justify-center {tab.alwaysVisible ? '' : 'max-lg:hidden'}"
 				>
 					<span title={tab.title} aria-label="{tab.title} tab" class="flex items-center gap-1">
 						{@render tab.control?.()}
 						{#if tabGroup === tab.value}<span class="text-xs">{tab.title}</span>{/if}
 					</span>
-				</Tabs.Control>
+				</Tabs.Trigger>
 			{/each}
 			{#if collapsibleExtraTabs.length > 0}
 				<div class="lg:hidden">
@@ -121,47 +121,58 @@
 						open={showMoreMenu}
 						onOpenChange={(e) => (showMoreMenu = e.open)}
 						positioning={{ placement: "top" }}
-						triggerBase="btn btn-sm min-h-[2.75em] {activeExtraTab ? 'preset-tonal-primary' : ''}"
-						contentBase="card bg-surface-100-900 p-2 space-y-1 shadow-xl w-[min(90vw,240px)]"
-						arrow
-						triggerAriaLabel="More composer tabs"
-						zIndex="1000"
 					>
-						{#snippet trigger()}
-							<span class="flex items-center gap-1">
+						<Popover.Trigger
+							class="btn btn-sm min-h-[2em] pt-[0.7em] justify-center {activeExtraTab ? 'preset-tonal-primary' : ''}"
+							aria-label="More composer tabs"
+						>
+							<span class="flex w-full items-center justify-center gap-1">
 								{#if activeExtraTab}
 									{@render activeExtraTab.control?.()}
 									<span class="text-xs">{activeExtraTab.title}</span>
 								{:else}
-									<Icons.Ellipsis size="0.75em" aria-hidden="true" />
+									<Icons.EllipsisVertical size="0.9em" class="block" aria-hidden="true" />
 								{/if}
 							</span>
-						{/snippet}
-						{#snippet content()}
-							{#each collapsibleExtraTabs as tab}
-								<button
-									type="button"
-									class="btn btn-sm w-full justify-start {tabGroup === tab.value
-										? 'preset-tonal-primary'
-										: 'preset-filled-surface-400-600'}"
-									onclick={() => {
-										tabGroup = tab.value
-										showMoreMenu = false
-									}}
-								>
-									{@render tab.control?.()}
-									{tab.title}
-								</button>
-							{/each}
-						{/snippet}
+						</Popover.Trigger>
+						<Portal>
+							<Popover.Positioner class="z-[1000]!">
+								<Popover.Content class="card bg-primary-200-800 shadow-xl p-4 space-y-4 w-[min(90vw,240px)]">
+									<header class="popover-menu-title">
+										<Icons.EllipsisVertical size={18} aria-hidden="true" />
+										<p>More</p>
+									</header>
+									<article class="flex flex-col gap-2">
+										{#each collapsibleExtraTabs as tab}
+											<button
+												type="button"
+												class="btn btn-sm popover-menu-btn {tabGroup === tab.value
+													? 'preset-tonal-primary'
+													: 'hover:preset-filled-primary-500'}"
+												onclick={() => {
+													tabGroup = tab.value
+													showMoreMenu = false
+												}}
+											>
+												{@render tab.control?.()}
+												<span>{tab.title}</span>
+											</button>
+										{/each}
+									</article>
+									<Popover.Arrow>
+										<Popover.ArrowTip class="!bg-primary-200 dark:!bg-primary-800" />
+									</Popover.Arrow>
+								</Popover.Content>
+							</Popover.Positioner>
+						</Portal>
 					</Popover>
 				</div>
 			{/if}
 		{/if}
 		{#if compiledPrompt}
-			<Tabs.Control
+			<Tabs.Trigger
 				value="tokenCount"
-				classes="w-full text-right min-h-[2.75]"
+				class="flex min-h-[2em] w-full items-center justify-end text-right"
 				disabled
 			>
 				<span
@@ -175,70 +186,68 @@
 					{compiledPrompt.meta.tokenCounts.total} / {compiledPrompt
 						.meta.tokenCounts.limit}
 				</span>
-			</Tabs.Control>
+			</Tabs.Trigger>
 		{/if}
-	{/snippet}
-	{#snippet content()}
-		<div class="flex items-end gap-4">
-			<div role="group" aria-label="Message controls">
-				{#if tabGroup === "compose" || tabGroup === "preview"}
-					{@render leftControls?.()}
-				{/if}
-			</div>
-			<div class="w-full">
-				<Tabs.Panel value="compose">
-					<label class="sr-only" for="message-input">
-						Type your message here
-					</label>
-					<textarea
-						id="message-input"
-						class="input field-sizing-content flex-1 rounded-xl lg:min-h-[3.75em]"
-						placeholder="Type a message..."
-						bind:value={markdown}
-						autocomplete="off"
-						spellcheck="true"
-						onkeydown={handleKeyDown}
-						aria-describedby={contextExceeded
-							? "token-warning"
-							: undefined}
-						aria-invalid={contextExceeded}
-					></textarea>
-					{#if contextExceeded}
-						<div
-							id="token-warning"
-							class="text-error-500 mt-1 text-xs"
-							role="alert"
-						>
-							Token limit exceeded. Message may be truncated.
-						</div>
-					{/if}
-				</Tabs.Panel>
-				<Tabs.Panel value="preview">
-					<div
-						class="card bg-surface-100-900 min-h-[4em] w-full rounded-lg p-2"
-						role="region"
-						aria-label="Message preview"
-					>
-						<div class="rendered-chat-message-content">
-							{@html renderMarkdownWithQuotedText(markdown)}
-						</div>
-					</div>
-				</Tabs.Panel>
-				{#if extraTabs}
-					{#each extraTabs as tab}
-						<Tabs.Panel value={tab.value}>
-							<div role="region" aria-label="{tab.title} content">
-								{@render tab.content?.()}
-							</div>
-						</Tabs.Panel>
-					{/each}
-				{/if}
-			</div>
-			<div role="group" aria-label="Send controls">
-				{#if tabGroup === "compose"}
-					{@render rightControls?.()}
-				{/if}
-			</div>
+	</Tabs.List>
+	<div class="flex items-center gap-4">
+		<div role="group" aria-label="Message controls">
+			{#if tabGroup === "compose" || tabGroup === "preview"}
+				{@render leftControls?.()}
+			{/if}
 		</div>
-	{/snippet}
+		<div class="w-full">
+			<Tabs.Content value="compose">
+				<label class="sr-only" for="message-input">
+					Type your message here
+				</label>
+				<textarea
+					id="message-input"
+					class="input field-sizing-content flex-1 rounded-xl lg:min-h-[3.75em]"
+					placeholder="Type a message..."
+					bind:value={markdown}
+					autocomplete="off"
+					spellcheck="true"
+					onkeydown={handleKeyDown}
+					aria-describedby={contextExceeded
+						? "token-warning"
+						: undefined}
+					aria-invalid={contextExceeded}
+				></textarea>
+				{#if contextExceeded}
+					<div
+						id="token-warning"
+						class="text-error-500 mt-1 text-xs"
+						role="alert"
+					>
+						Token limit exceeded. Message may be truncated.
+					</div>
+				{/if}
+			</Tabs.Content>
+			<Tabs.Content value="preview">
+				<div
+					class="card bg-surface-100-900 min-h-[2em] lg:min-h-[4em] w-full rounded-xl p-2 mb-[1em]"
+					role="region"
+					aria-label="Message preview"
+				>
+					<div class="rendered-chat-message-content">
+						{@html renderMarkdownWithQuotedText(markdown)}
+					</div>
+				</div>
+			</Tabs.Content>
+			{#if extraTabs}
+				{#each extraTabs as tab}
+					<Tabs.Content value={tab.value}>
+						<div role="region" aria-label="{tab.title} content">
+							{@render tab.content?.()}
+						</div>
+					</Tabs.Content>
+				{/each}
+			{/if}
+		</div>
+		<div role="group" aria-label="Send controls">
+			{#if tabGroup === "compose"}
+				{@render rightControls?.()}
+			{/if}
+		</div>
+	</div>
 </Tabs>

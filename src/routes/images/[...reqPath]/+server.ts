@@ -3,11 +3,22 @@ import type { RequestHandler } from "@sveltejs/kit"
 import path from "path"
 import fs from "fs/promises"
 import { getAppDataDir } from "$lib/server/utils"
+import { authenticateRequest } from "$lib/server/auth/authenticateRequest"
 
-export const GET: RequestHandler = async ({ params }) => {
+export const GET: RequestHandler = async (event) => {
+	const { params } = event
 	const { reqPath } = params
 	if (!reqPath) {
 		return new Response("Not found", { status: 404 })
+	}
+
+	// hooks.server.ts runs no auth middleware on HTTP routes (only the socket
+	// layer enforces it) — without this, every uploaded avatar/gallery/
+	// background file was servable to anyone on the internet who could guess
+	// or enumerate a path, no login required.
+	const user = await authenticateRequest(event)
+	if (!user) {
+		return new Response("Unauthorized", { status: 401 })
 	}
 	// reqPath is an array (SvelteKit catchall)
 	const relPath = Array.isArray(reqPath) ? reqPath.join("/") : reqPath

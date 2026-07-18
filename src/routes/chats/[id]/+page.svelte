@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from "$app/state"
 	import { goto } from "$app/navigation"
-	import { Modal, Popover } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal, Popover } from "@skeletonlabs/skeleton-svelte"
 	import * as skio from "sveltekit-io"
 	import * as Icons from "@lucide/svelte"
 	import MessageComposer from "$lib/client/components/chatMessages/MessageComposer.svelte"
@@ -17,12 +17,13 @@
 	import PersonaSelectModal from "$lib/client/components/modals/PersonaSelectModal.svelte"
 	import BranchChatModal from "$lib/client/components/modals/BranchChatModal.svelte"
 	import SummarizeLoreModal from "$lib/client/components/modals/SummarizeLoreModal.svelte"
-	import TriggerWorldResponseModal from "$lib/client/components/modals/TriggerWorldResponseModal.svelte"
+	import TriggerNarratorResponseModal from "$lib/client/components/modals/TriggerNarratorResponseModal.svelte"
 	import AvatarGalleryModal from "$lib/client/components/chatMessages/AvatarGalleryModal.svelte"
 	import ChatSceneImagesTab from "$lib/client/components/chatMessages/ChatSceneImagesTab.svelte"
 	import ChatWorkflowTab from "$lib/client/components/chatMessages/ChatWorkflowTab.svelte"
 	import { sceneImages } from "$lib/client/stores/sceneImages"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 
 	let chat: Sockets.Chats.Get.Response["chat"] | undefined = $state()
 	let pagination: Sockets.Chats.Get.Response["pagination"] | undefined =
@@ -100,7 +101,7 @@
 	let showDraftCompiledPromptModal = $state(false)
 	let showTriggerCharacterMessageModal = $state(false)
 	let triggerCharacterSearch = $state("")
-	let showTriggerWorldResponseModal = $state(false)
+	let showTriggerNarratorResponseModal = $state(false)
 	let showAddPersonaModal = $state(false)
 	let showBranchChatModal = $state(false)
 	let branchFromMessage: SelectChatMessage | undefined = $state()
@@ -114,10 +115,10 @@
 	let scenedMessageIds = $state(new Set<number>())
 	/** Full scene list for this chat — used for in-chat scene/history-entry indicators */
 	let sceneList = $state<Sockets.Scenes.List.SceneWithEntry[]>([])
-	// Resolved display name for World Response (chat override -> user active
-	// -> system default -> "The World"), used to label the trigger button/
+	// Resolved display name for Narrator responses (chat override -> user active
+	// -> system default -> "Narrator"), used to label the trigger button/
 	// modal/character-picker option before any message exists.
-	let worldNarratorName = $state("The World")
+	let narratorName = $state("Narrator")
 	let chatResponseOrder: Sockets.Chats.GetResponseOrder.Response | undefined =
 		$state()
 	let availablePersonas: Sockets.Personas.List.Response["personaList"] =
@@ -293,10 +294,10 @@
 			)
 		}
 
-		// World Response messages aren't owned by any persona/character —
+		// Narrator response messages aren't owned by any persona/character —
 		// only the chat owner controls them, mirroring
 		// checkMessageEditPermission server-side.
-		if (msg.isWorldResponse) return !isGuest
+		if (msg.isNarratorResponse) return !isGuest
 
 		return false
 	}
@@ -707,23 +708,23 @@
 		})
 	}
 
-	function handleTriggerWorldResponse(e: Event) {
+	function handleTriggerNarratorResponse(e: Event) {
 		e.stopPropagation()
 		openMsgControlsMenu = undefined
 		showTriggerCharacterMessageModal = false
-		showTriggerWorldResponseModal = true
+		showTriggerNarratorResponseModal = true
 	}
 
-	function handleConfirmTriggerWorldResponse(instructions: string) {
-		showTriggerWorldResponseModal = false
-		socket.emit("chats:triggerWorldResponse", {
+	function handleConfirmTriggerNarratorResponse(instructions: string) {
+		showTriggerNarratorResponseModal = false
+		socket.emit("chats:triggerNarratorResponse", {
 			chatId,
 			instructions: instructions || undefined
 		})
 	}
 
-	function handleCancelTriggerWorldResponse() {
-		showTriggerWorldResponseModal = false
+	function handleCancelTriggerNarratorResponse() {
+		showTriggerNarratorResponseModal = false
 	}
 
 	function handleContinueWithNextCharacter() {
@@ -941,6 +942,16 @@
 			}
 		})
 
+		// "chatMessage" (singular) is the server's event for a single message
+		// fetch/echo (distinct from the "chatMessages:*" bulk/action events
+		// used elsewhere) - this surfaces a toast if that ever fails.
+		socket.on("chatMessage:error", (msg: { error?: string }) => {
+			toaster.error({
+				title: "Failed to load message",
+				description: msg?.error
+			})
+		})
+
 		socket.on(
 			"characters:update",
 			(msg: Sockets.Characters.Update.Response) => {
@@ -1081,10 +1092,10 @@
 		socket?.emit("scenes:list", { chatId } satisfies Sockets.Scenes.List.Params)
 
 		socket.on(
-			"chats:getWorldNarratorName",
-			(msg: Sockets.Chats.GetWorldNarratorName.Response) => {
+			"chats:getNarratorName",
+			(msg: Sockets.Chats.GetNarratorName.Response) => {
 				if (msg.chatId !== chatId) return
-				worldNarratorName = msg.narratorName
+				narratorName = msg.narratorName
 			}
 		)
 
@@ -1101,16 +1112,16 @@
 				clearInterval(typingPruneInterval)
 			}
 			socket.off("chats:userTyping")
-			socket.off("chats:getWorldNarratorName")
+			socket.off("chats:getNarratorName")
 		}
 	})
 
-	// Re-resolve if the chat's world-config override changes (e.g. saved via
+	// Re-resolve if the chat's narrator-config override changes (e.g. saved via
 	// Edit Chat) while this page stays open.
 	$effect(() => {
-		const overrideId = chat?.chatWorldPromptConfigId
+		const overrideId = chat?.narratorPromptConfigId
 		if (chatId) {
-			socket.emit("chats:getWorldNarratorName", { chatId })
+			socket.emit("chats:getNarratorName", { chatId })
 		}
 	})
 
@@ -1176,14 +1187,14 @@
 	) {
 		if (!char) return
 		const isPersona = chat?.chatPersonas?.some((cp) => cp.persona?.id === char.id)
-		// `||` (not `??`) — a blank nickname is commonly stored as "" rather
-		// than null, and "" isn't nullish so `??` wouldn't fall through to
-		// the character's real name, leaving the modal title empty.
-		const nickname = ((char as any).nickname as string | null)?.trim() || null
 		avatarModalEntity = {
 			type: isPersona ? "persona" : "character",
 			id: char.id,
-			name: nickname || char.name || "",
+			// resolveCharacterName uses `||` (not `??`) deliberately — a blank
+			// nickname is commonly stored as "" rather than null, and ""
+			// isn't nullish, so `??` wouldn't fall through to the character's
+			// real name, leaving the modal title empty.
+			name: resolveCharacterName(char, ""),
 			avatar: char.avatar ?? null
 		}
 		showAvatarModal = true
@@ -1264,9 +1275,10 @@
 			>
 				{#snippet GeneratingAnimationComponent()}
 					{@const character = props.getMessageCharacter(props.msg)}
-					<GeneratingAnimation
-						text={`${character?.nickname || character?.name || "User"} is typing`}
-					/>
+					{@const speakerName = props.msg.isNarratorResponse
+						? (props.msg.metadata as any)?.narratorName || "Narrator"
+						: character?.nickname || character?.name || "User"}
+					<GeneratingAnimation text={`${speakerName} is typing`} />
 				{/snippet}
 				{#snippet messageControls(msg)}
 					{#if isSummarizationMode}
@@ -1500,45 +1512,46 @@
 	hasSceneMessageGap={hasSceneGap}
 />
 
-<Modal
-	open={showDeleteMessageModal}
-	onOpenChange={onOpenMessageDeleteChange}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<header class="flex justify-between">
-			<h2 class="h2">Confirm</h2>
-		</header>
-		<article>
-			<p class="opacity-60">
-				Are you sure you want to delete this message?
-			</p>
-		</article>
-		<footer class="flex justify-end gap-4">
-			<button
-				class="btn preset-filled-surface-500"
-				onclick={onDeleteMessageCancel}
-			>
-				Cancel
-			</button>
-			<button
-				class="btn preset-filled-error-500"
-				onclick={onDeleteMessageConfirm}
-			>
-				Delete
-			</button>
-		</footer>
-	{/snippet}
-</Modal>
+<Dialog open={showDeleteMessageModal} onOpenChange={onOpenMessageDeleteChange}>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700">
+				<header class="flex justify-between">
+					<h2 class="h2">Confirm</h2>
+				</header>
+				<article>
+					<p class="opacity-60">
+						Are you sure you want to delete this message?
+					</p>
+				</article>
+				<footer class="flex justify-end gap-4">
+					<button
+						class="btn preset-filled-surface-500"
+						onclick={onDeleteMessageCancel}
+					>
+						Cancel
+					</button>
+					<button
+						class="btn preset-filled-error-500"
+						onclick={onDeleteMessageConfirm}
+					>
+						Delete
+					</button>
+				</footer>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
 
-<Modal
+<Dialog
 	open={showDraftCompiledPromptModal}
 	onOpenChange={(details) => (showDraftCompiledPromptModal = details.open)}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-full w-[70em] max-h-[90dvh] flex flex-col border border-surface-300-700"
-	backdropClasses="backdrop-blur-sm"
 >
-	{#snippet content()}
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-full w-[70em] max-h-[90dvh] flex flex-col border border-surface-300-700">
 		<header class="flex shrink-0 items-center justify-between">
 			<h2 class="h2">Prompt Details</h2>
 			<button
@@ -1894,16 +1907,19 @@
 				Close
 			</button>
 		</footer>
-	{/snippet}
-</Modal>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
 
-<Modal
+<Dialog
 	open={showTriggerCharacterMessageModal}
 	onOpenChange={(e) => (showTriggerCharacterMessageModal = e.open)}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-h-[95dvh] relative overflow-hidden w-[min(95vw,800px)]"
-	backdropClasses="backdrop-blur-sm"
 >
-	{#snippet content()}
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-h-[95dvh] relative overflow-hidden w-[min(95vw,800px)]">
 		<header class="mb-2 flex items-center justify-between">
 			<h2 class="h2">Trigger Character</h2>
 			<button
@@ -1915,13 +1931,13 @@
 		</header>
 		<button
 			class="group preset-outlined-primary-400-600 hover:preset-filled-primary-500 mb-4 flex w-full items-center gap-3 rounded p-2"
-			onclick={(e) => handleTriggerWorldResponse(e)}
+			onclick={(e) => handleTriggerNarratorResponse(e)}
 		>
 			<div class="bg-primary-500/10 text-primary-500 group-hover:text-primary-950 shrink-0 rounded-lg p-2">
 				<Icons.CloudSun size={20} />
 			</div>
 			<div class="flex-1 text-left">
-				<div class="font-semibold">{worldNarratorName}</div>
+				<div class="font-semibold">{narratorName}</div>
 				<div class="text-surface-500 group-hover:text-surface-800-200 text-xs">
 					Narrate the environment, atmosphere, or side characters instead
 				</div>
@@ -1981,15 +1997,17 @@
 				{/each}
 			</div>
 		</div>
-	{/snippet}
-</Modal>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
 
-<TriggerWorldResponseModal
-	open={showTriggerWorldResponseModal}
-	onOpenChange={(e) => (showTriggerWorldResponseModal = e.open)}
-	onTrigger={handleConfirmTriggerWorldResponse}
-	onCancel={handleCancelTriggerWorldResponse}
-	narratorName={worldNarratorName}
+<TriggerNarratorResponseModal
+	open={showTriggerNarratorResponseModal}
+	onOpenChange={(e) => (showTriggerNarratorResponseModal = e.open)}
+	onTrigger={handleConfirmTriggerNarratorResponse}
+	onCancel={handleCancelTriggerNarratorResponse}
+	{narratorName}
 />
 
 <AvatarGalleryModal
@@ -2027,7 +2045,7 @@
 {/snippet}
 
 {#snippet workflowButton()}
-	<Icons.BookOpen size="0.75em" />
+	<Icons.BookOpen size="0.75em" class="block" />
 {/snippet}
 
 {#snippet workflowContent()}
@@ -2059,7 +2077,7 @@
 {/snippet}
 
 {#snippet extraControlsContent()}
-	<div class="flex flex-wrap gap-2">
+	<div class="flex flex-wrap gap-2 mb-[0.5em]">
 		<button
 			class="btn btn-sm preset-tonal-primary"
 			title="Continue Conversation"
@@ -2093,12 +2111,12 @@
 		</button>
 		<button
 			class="btn btn-sm preset-tonal-success"
-			title="Trigger World Response"
-			onclick={handleTriggerWorldResponse}
+			title="Trigger Narrator Response"
+			onclick={handleTriggerNarratorResponse}
 			disabled={!chat || lastMessage?.isGenerating}
 		>
 			<Icons.CloudSun size={14} />
-			{worldNarratorName}
+			{narratorName}
 		</button>
 	</div>
 {/snippet}
@@ -2108,7 +2126,7 @@
 {/snippet}
 
 {#snippet statisticsContent()}
-	<div class="flex flex-wrap items-center gap-3">
+	<div class="flex flex-wrap items-center gap-3 mb-[0.5em]">
 		<button
 			class="btn btn-sm preset-tonal-primary"
 			title="View full prompt details"

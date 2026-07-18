@@ -238,7 +238,7 @@
 					{#each reviewParticipants as name, i}
 						<span class="chip preset-tonal-primary text-xs flex items-center gap-1">
 							{name}
-							<button class="hover:text-error-500" onclick={() => (reviewParticipants = reviewParticipants.filter((_, j) => j !== i))}>
+							<button class="hover:text-error-500 p-1.5" aria-label="Remove participant {name}" onclick={() => (reviewParticipants = reviewParticipants.filter((_, j) => j !== i))}>
 								<Icons.X size={10} />
 							</button>
 						</span>
@@ -267,7 +267,7 @@
 					{#each reviewMentioned as name, i}
 						<span class="chip preset-tonal-surface text-xs flex items-center gap-1">
 							{name}
-							<button class="hover:text-error-500" onclick={() => (reviewMentioned = reviewMentioned.filter((_, j) => j !== i))}>
+							<button class="hover:text-error-500 p-1.5" aria-label="Remove mention {name}" onclick={() => (reviewMentioned = reviewMentioned.filter((_, j) => j !== i))}>
 								<Icons.X size={10} />
 							</button>
 						</span>

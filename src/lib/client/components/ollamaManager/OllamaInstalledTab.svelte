@@ -2,7 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import * as skio from "sveltekit-io"
 	import { onMount, onDestroy, getContext } from "svelte"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import type { ListResponse, ModelDetails, ModelResponse } from "ollama"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -354,7 +354,7 @@
 							onclick={() => connectToModel(model)}
 						>
 							{#if isConnected}
-								<Icons.Star size={14} /> Default
+								<Icons.Star size={14} fill="currentColor" /> Default
 							{:else}
 								<Icons.Star size={14} /> Set Default
 							{/if}
@@ -392,13 +392,11 @@
 	</div>
 {/if}
 
-<Modal
-	open={showDeleteModal}
-	onOpenChange={(e) => (showDeleteModal = e.open)}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
+<Dialog open={showDeleteModal} onOpenChange={(e) => (showDeleteModal = e.open)}>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700">
 		<header class="flex justify-between">
 			<h2 class="h2">Delete Model</h2>
 		</header>
@@ -425,5 +423,7 @@
 				Delete
 			</button>
 		</footer>
-	{/snippet}
-</Modal>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

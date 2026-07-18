@@ -7,7 +7,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { z } from "zod"
 	import { dndzone } from "svelte-dnd-action"
-	import { Popover, Tabs } from "@skeletonlabs/skeleton-svelte"
+	import { Popover, Tabs, Portal } from "@skeletonlabs/skeleton-svelte"
 	import {
 		CONTEXT_CARD_TYPES,
 		getContextCardType,
@@ -473,9 +473,15 @@
 				class="btn btn-sm preset-filled-warning-500 shrink-0"
 				onclick={handleSetDefault}
 				disabled={!selectedConfigId || selectedConfigId === userSettingsCtx.settings?.activeContextConfigId}
-				title="Set as default"
+				title={selectedConfigId === userSettingsCtx.settings?.activeContextConfigId
+					? "Already the default"
+					: "Set as default"}
 			>
-				<Icons.Star size={16} /> Set Default
+				<Icons.Star
+					size={16}
+					fill={selectedConfigId === userSettingsCtx.settings?.activeContextConfigId ? "currentColor" : "none"}
+				/>
+				{selectedConfigId === userSettingsCtx.settings?.activeContextConfigId ? "Default" : "Set Default"}
 			</button>
 		</div>
 		<div class="flex flex-col gap-4">
@@ -514,21 +520,19 @@
 			<Tabs
 				value={activeView}
 				onValueChange={(e) => (activeView = e.value as typeof activeView)}
-				listBase="flex flex-wrap gap-1"
 			>
-				{#snippet list()}
-					<Tabs.Control value="cards">
+				<Tabs.List class="flex flex-wrap gap-1">
+					<Tabs.Trigger value="cards">
 						<Icons.LayoutList size={16} class="inline" /> Cards
-					</Tabs.Control>
-					<Tabs.Control value="raw">
+					</Tabs.Trigger>
+					<Tabs.Trigger value="raw">
 						<Icons.Code size={16} class="inline" /> Raw
-					</Tabs.Control>
-					<Tabs.Control value="preview">
+					</Tabs.Trigger>
+					<Tabs.Trigger value="preview">
 						<Icons.Eye size={16} class="inline" /> Preview
-					</Tabs.Control>
-				{/snippet}
-				{#snippet content()}
-					<Tabs.Panel value="cards">
+					</Tabs.Trigger>
+				</Tabs.List>
+				<Tabs.Content value="cards">
 						<div class="flex flex-col gap-4">
 							<!-- System Message zone -->
 							<div
@@ -615,51 +619,57 @@
 																<option value="assistant">Assistant</option>
 															</select>
 														{/if}
-														<Popover
-															positioning={{ placement: "top" }}
-															zIndex="1000"
-															triggerBase="btn-ghost rounded p-0.5"
-															contentBase="card preset-tonal-surface p-2 max-w-xs text-sm"
-															triggerAriaLabel="About {cardType.label}"
-														>
-															{#snippet trigger()}
+														<Popover positioning={{ placement: "top" }}>
+															<Popover.Trigger
+																class="btn-ghost rounded p-0.5"
+																aria-label="About {cardType.label}"
+															>
 																<Icons.Info size={14} />
-															{/snippet}
-															{#snippet content()}
-																{cardType.description}
-															{/snippet}
+															</Popover.Trigger>
+															<Portal>
+																<Popover.Positioner class="z-[1000]!">
+																	<Popover.Content
+																		class="card preset-tonal-surface p-2 max-w-xs text-sm"
+																	>
+																		{cardType.description}
+																	</Popover.Content>
+																</Popover.Positioner>
+															</Portal>
 														</Popover>
 													</div>
 												</div>
 												<div class="flex shrink-0 items-center gap-0.5">
-													<Popover
-														positioning={{ placement: "bottom-end" }}
-														zIndex="1000"
-														triggerBase="btn-ghost rounded p-0.5"
-														contentBase="card preset-tonal-surface p-2 flex flex-col gap-1 max-w-[16rem]"
-														triggerAriaLabel="Insert card above {cardType.label}"
-													>
-														{#snippet trigger()}
+													<Popover positioning={{ placement: "bottom-end" }}>
+														<Popover.Trigger
+															class="btn-ghost rounded p-0.5"
+															aria-label="Insert card above {cardType.label}"
+														>
 															<Icons.Plus size={16} />
-														{/snippet}
-														{#snippet content()}
-															<p
-																class="text-surface-500 px-1 pb-1 text-xs font-semibold tracking-wide uppercase"
-															>
-																Insert above
-															</p>
-															{#each addableSystemCardTypes as insertType}
-																<button
-																	type="button"
-																	class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-																	onclick={() =>
-																		addCardAt(i, insertType.id)}
+														</Popover.Trigger>
+														<Portal>
+															<Popover.Positioner class="z-[1000]!">
+																<Popover.Content
+																	class="card preset-tonal-surface p-2 flex flex-col gap-1 max-w-[16rem]"
 																>
-																	<Icons.Plus size={14} />
-																	{insertType.label}
-																</button>
-															{/each}
-														{/snippet}
+																	<p
+																		class="text-surface-500 px-1 pb-1 text-xs font-semibold tracking-wide uppercase"
+																	>
+																		Insert above
+																	</p>
+																	{#each addableSystemCardTypes as insertType}
+																		<button
+																			type="button"
+																			class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+																			onclick={() =>
+																				addCardAt(i, insertType.id)}
+																		>
+																			<Icons.Plus size={14} />
+																			{insertType.label}
+																		</button>
+																	{/each}
+																</Popover.Content>
+															</Popover.Positioner>
+														</Portal>
 													</Popover>
 													{#if systemCardsDnd.length > 1}
 														<button
@@ -739,35 +749,38 @@
 										</div>
 									{/each}
 								</div>
-								<Popover
-									positioning={{ placement: "bottom" }}
-									zIndex="1000"
-									triggerBase="btn btn-sm preset-outlined-primary-500 self-start"
-									contentBase="card preset-tonal-surface p-2 flex flex-col gap-1 max-w-[16rem]"
-									triggerAriaLabel="Add a card"
-								>
-									{#snippet trigger()}
+								<Popover positioning={{ placement: "bottom" }}>
+									<Popover.Trigger
+										class="btn btn-sm preset-outlined-primary-500 self-start"
+										aria-label="Add a card"
+									>
 										<Icons.Plus size={14} />
 										Add Card
-									{/snippet}
-									{#snippet content()}
-										<p
-											class="text-surface-500 px-1 pb-1 text-xs font-semibold tracking-wide uppercase"
-										>
-											Add to end
-										</p>
-										{#each addableSystemCardTypes as insertType}
-											<button
-												type="button"
-												class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-												onclick={() =>
-													addCardAt(systemCardsDnd.length, insertType.id)}
+									</Popover.Trigger>
+									<Portal>
+										<Popover.Positioner class="z-[1000]!">
+											<Popover.Content
+												class="card preset-tonal-surface p-2 flex flex-col gap-1 max-w-[16rem]"
 											>
-												<Icons.Plus size={14} />
-												{insertType.label}
-											</button>
-										{/each}
-									{/snippet}
+												<p
+													class="text-surface-500 px-1 pb-1 text-xs font-semibold tracking-wide uppercase"
+												>
+													Add to end
+												</p>
+												{#each addableSystemCardTypes as insertType}
+													<button
+														type="button"
+														class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+														onclick={() =>
+															addCardAt(systemCardsDnd.length, insertType.id)}
+													>
+														<Icons.Plus size={14} />
+														{insertType.label}
+													</button>
+												{/each}
+											</Popover.Content>
+										</Popover.Positioner>
+									</Portal>
 								</Popover>
 							</div>
 
@@ -799,19 +812,22 @@
 												<span class="truncate font-semibold select-none">
 													{cardType.label}
 												</span>
-												<Popover
-													positioning={{ placement: "top" }}
-													zIndex="1000"
-													triggerBase="btn-ghost rounded p-0.5"
-													contentBase="card preset-tonal-surface p-2 max-w-xs text-sm"
-													triggerAriaLabel="About {cardType.label}"
-												>
-													{#snippet trigger()}
+												<Popover positioning={{ placement: "top" }}>
+													<Popover.Trigger
+														class="btn-ghost rounded p-0.5"
+														aria-label="About {cardType.label}"
+													>
 														<Icons.Info size={14} />
-													{/snippet}
-													{#snippet content()}
-														{cardType.description}
-													{/snippet}
+													</Popover.Trigger>
+													<Portal>
+														<Popover.Positioner class="z-[1000]!">
+															<Popover.Content
+																class="card preset-tonal-surface p-2 max-w-xs text-sm"
+															>
+																{cardType.description}
+															</Popover.Content>
+														</Popover.Positioner>
+													</Portal>
 												</Popover>
 											</div>
 										</div>
@@ -859,19 +875,22 @@
 													<span class="truncate font-semibold select-none">
 														{cardType.label}
 													</span>
-													<Popover
-														positioning={{ placement: "top" }}
-														zIndex="1000"
-														triggerBase="btn-ghost rounded p-0.5"
-														contentBase="card preset-tonal-surface p-2 max-w-xs text-sm"
-														triggerAriaLabel="About {cardType.label}"
-													>
-														{#snippet trigger()}
+													<Popover positioning={{ placement: "top" }}>
+														<Popover.Trigger
+															class="btn-ghost rounded p-0.5"
+															aria-label="About {cardType.label}"
+														>
 															<Icons.Info size={14} />
-														{/snippet}
-														{#snippet content()}
-															{cardType.description}
-														{/snippet}
+														</Popover.Trigger>
+														<Portal>
+															<Popover.Positioner class="z-[1000]!">
+																<Popover.Content
+																	class="card preset-tonal-surface p-2 max-w-xs text-sm"
+																>
+																	{cardType.description}
+																</Popover.Content>
+															</Popover.Positioner>
+														</Portal>
 													</Popover>
 												</div>
 											</div>
@@ -920,8 +939,8 @@
 								{/if}
 							</div>
 						</div>
-					</Tabs.Panel>
-					<Tabs.Panel value="raw">
+					</Tabs.Content>
+					<Tabs.Content value="raw">
 						<div class="flex flex-col gap-1">
 							<label class="font-semibold" for="contextTemplate">
 								Template
@@ -933,8 +952,8 @@
 								class="input w-full font-mono text-xs"
 							></textarea>
 						</div>
-					</Tabs.Panel>
-					<Tabs.Panel value="preview">
+					</Tabs.Content>
+					<Tabs.Content value="preview">
 						<div class="flex flex-col gap-2">
 							<p class="text-surface-500 text-sm">
 								Renders this template against static mock story data, using
@@ -983,8 +1002,7 @@
 								</div>
 							{/if}
 						</div>
-					</Tabs.Panel>
-				{/snippet}
+					</Tabs.Content>
 			</Tabs>
 		</div>
 	{/if}

@@ -66,13 +66,11 @@
 		<div class="flex flex-1 flex-col gap-4 overflow-y-auto">
 			<!-- Avatar + name -->
 			<div class="flex items-center gap-3">
-				<Avatar
-					src={character.avatar || ""}
-					size="w-16 h-16 min-w-16 min-h-16"
-					imageClasses="object-cover"
-					name={character.nickname || character.name}
-				>
-					<Icons.User size={32} />
+				<Avatar class="w-16 h-16 min-w-16 min-h-16">
+					<Avatar.Image src={character.avatar || ""} alt={character.nickname || character.name} class="object-cover" />
+					<Avatar.Fallback>
+						<Icons.User size={32} />
+					</Avatar.Fallback>
 				</Avatar>
 				<div class="min-w-0 flex-1">
 					<p class="truncate text-lg font-bold">{character.nickname || character.name}</p>

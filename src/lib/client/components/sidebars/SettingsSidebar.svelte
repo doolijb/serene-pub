@@ -56,55 +56,54 @@
 
 	<!-- Settings Tabs -->
 	<div class="flex-1 overflow-y-auto">
-		<Tabs value={activeTab} onValueChange={handleTabChange} listBase="flex flex-wrap gap-1">
-			{#snippet list()}
-				<Tabs.Control value="user">
+		<Tabs value={activeTab} onValueChange={handleTabChange}>
+			<Tabs.List class="flex flex-wrap gap-1">
+				<Tabs.Trigger value="user">
 					<Icons.UserCog size={20} class="inline" />
 					{#if activeTab === "user"}
 						User
 					{/if}
-				</Tabs.Control>
+				</Tabs.Trigger>
 				{#if userCtx.user?.isAdmin}
-					<Tabs.Control value="system">
+					<Tabs.Trigger value="system">
 						<Icons.Server size={20} class="inline" />
 						{#if activeTab === "system"}
 							System
 						{/if}
-					</Tabs.Control>
+					</Tabs.Trigger>
 				{/if}
-				<Tabs.Control value="themes">
+				<Tabs.Trigger value="themes">
 					<Icons.Palette size={20} class="inline" />
 					{#if activeTab === "themes"}
 						Themes
 					{/if}
-				</Tabs.Control>
-				<Tabs.Control value="about">
+				</Tabs.Trigger>
+				<Tabs.Trigger value="about">
 					<Icons.Info size={20} class="inline" />
 					{#if activeTab === "about"}
 						About
 					{/if}
-				</Tabs.Control>
-			{/snippet}
-			{#snippet content()}
-				<Tabs.Panel value="user">
-					{#if activeTab === "user"}
-						<UserSettingsTab />
-					{/if}
-				</Tabs.Panel>
-				{#if userCtx.user?.isAdmin}
-					<Tabs.Panel value="system">
-						{#if activeTab === "system"}
-							<SystemSettingsTab />
-						{/if}
-					</Tabs.Panel>
+				</Tabs.Trigger>
+			</Tabs.List>
+			<Tabs.Content value="user">
+				{#if activeTab === "user"}
+					<UserSettingsTab />
 				{/if}
-				<Tabs.Panel value="themes">
-					{#if activeTab === "themes"}
-						<CustomThemeManager />
+			</Tabs.Content>
+			{#if userCtx.user?.isAdmin}
+				<Tabs.Content value="system">
+					{#if activeTab === "system"}
+						<SystemSettingsTab />
 					{/if}
-				</Tabs.Panel>
-				<Tabs.Panel value="about">
-					{#if activeTab === "about"}
+				</Tabs.Content>
+			{/if}
+			<Tabs.Content value="themes">
+				{#if activeTab === "themes"}
+					<CustomThemeManager />
+				{/if}
+			</Tabs.Content>
+			<Tabs.Content value="about">
+				{#if activeTab === "about"}
 						<div class="flex flex-col gap-4">
 							<div class="mb-1 flex items-center gap-2">
 								<Icons.Info
@@ -209,8 +208,7 @@
 							</div>
 						</div>
 					{/if}
-				</Tabs.Panel>
-			{/snippet}
+			</Tabs.Content>
 		</Tabs>
 	</div>
 </div>

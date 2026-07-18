@@ -5,7 +5,6 @@ import {
 import type { TokenCounters } from "../utils/TokenCounterManager"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
 import { AssistantPrompts } from "$lib/shared/constants/AssistantPrompts"
-import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 import { PromptBlockFormatter } from "$lib/shared/utils/PromptBlockFormatter"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 
@@ -58,7 +57,7 @@ export abstract class BaseConnectionAdapter {
 	isAborting = false
 	isAssistantMode = false
 	isSummarizerMode = false
-	isWorldResponseMode = false
+	isNarratorResponseMode = false
 	generatingMessageMetadata: any = {}
 	promptBuilder: PromptBuilder
 
@@ -91,7 +90,7 @@ export abstract class BaseConnectionAdapter {
 		// updating in all six of those subclasses too — easy to miss (this
 		// exact bug happened once already). Piggybacking on a field that's
 		// already reliably threaded through avoids that whole class of bug.
-		this.isWorldResponseMode = !!generatingMessageMetadata?.isWorldResponse
+		this.isNarratorResponseMode = !!generatingMessageMetadata?.isNarratorResponse
 		this.isSummarizerMode = chat.chatType === ChatTypes.SUMMARIZE
 		this.generatingMessageMetadata = generatingMessageMetadata
 		this.promptBuilder = new PromptBuilder({
@@ -112,7 +111,7 @@ export abstract class BaseConnectionAdapter {
 		this.promptBuilder.tokenLimit = await this.getContextTokenLimit()
 
 		if (this.isSummarizerMode) {
-			return await this.compileSummarizerPrompt()
+			return await this.compileSummarizerPrompt(args)
 		}
 
 		// Use assistant prompt compilation for assistant mode
@@ -120,8 +119,8 @@ export abstract class BaseConnectionAdapter {
 			return await this.compileAssistantPrompt(args)
 		}
 
-		if (this.isWorldResponseMode) {
-			return await this.compileWorldResponsePrompt(args)
+		if (this.isNarratorResponseMode) {
+			return await this.compileNarratorResponsePrompt(args)
 		}
 
 		return await this.promptBuilder.compilePrompt(args)
@@ -282,10 +281,45 @@ export abstract class BaseConnectionAdapter {
 	}
 
 	/**
+	 * Build a text-completion prompt string from a chat-format messages
+	 * array, for compile*Prompt() methods (summarizer, assistant) whose
+	 * primary representation is `messages` but which — like the default
+	 * character-perspective path — still need to produce a real `prompt` on
+	 * any text-completion connection. Without this, `prompt` was always left
+	 * undefined here, so any connection not in chat-completion mode (e.g.
+	 * KoboldCpp's default) silently generated from an empty prompt — the
+	 * exact bug Narrator response had until it was fixed by delegating into the
+	 * shared context-block pipeline instead; summarizer/assistant modes
+	 * intentionally stay minimal (no lore/character context), so they need
+	 * this narrower fix rather than that same delegation.
+	 */
+	private buildTextPromptFromMessages(messages: any[]): string {
+		const format = this.connection?.promptFormat || PromptFormats.VICUNA
+		const blocks = messages.map((msg) =>
+			PromptBlockFormatter.makeBlock({
+				format,
+				role: msg.role === "system" ? "system" : msg.role,
+				content: msg.content
+			})
+		)
+		blocks.push(
+			PromptBlockFormatter.makeBlock({
+				format,
+				role: "assistant",
+				content: "",
+				includeClose: false
+			})
+		)
+		return blocks.join("")
+	}
+
+	/**
 	 * Compile summarizer prompt — passes promptConfig.systemPrompt directly to the LLM
 	 * with no roleplay or assistant framing. Used for lore summarization.
 	 */
-	protected async compileSummarizerPrompt(): Promise<PromptBuilderCompiledPrompt> {
+	protected async compileSummarizerPrompt(
+		args: any = {}
+	): Promise<PromptBuilderCompiledPrompt> {
 		const messages: any[] = [
 			{
 				role: "system",
@@ -301,15 +335,20 @@ export abstract class BaseConnectionAdapter {
 			})
 		}
 
+		const useChatFormat = !!args?.useChatFormat
+		const promptString = useChatFormat
+			? undefined
+			: this.buildTextPromptFromMessages(messages)
+
 		const totalTokens = await this.promptBuilder.tokenCounter.countTokens(
-			JSON.stringify(messages)
+			useChatFormat ? JSON.stringify(messages) : promptString!
 		)
 
 		return {
-			prompt: undefined,
+			prompt: promptString,
 			messages,
 			meta: {
-				promptFormat: "chat",
+				promptFormat: useChatFormat ? "chat" : "text",
 				templateName: "summarizer",
 				timestamp: new Date().toISOString(),
 				truncationReason: null,
@@ -340,132 +379,36 @@ export abstract class BaseConnectionAdapter {
 	}
 
 	/**
-	 * Compile a "World Response" prompt — a manually-triggered narration/
-	 * environment response with no character perspective of its own. Follows
-	 * compileSummarizerPrompt()'s pattern (system prompt + full history)
-	 * rather than the default character-perspective compilePrompt(), which
-	 * hard-requires a resolvable currentCharacterId and would throw here.
+	 * Compile a Narrator response prompt — a manually-triggered narration/
+	 * environment response with no character perspective of its own.
+	 * PromptBuilder.compilePrompt() treats a null currentCharacterId (set for
+	 * this adapter in generateResponse.ts) as "no single perspective" rather
+	 * than throwing, so this reuses the exact same context-block pipeline a
+	 * character's own turn gets — lore/history matching (RAG or keyword),
+	 * full character/persona context, per-format rendering — with
+	 * {{char}}/{{user}} resolving to the joined cast lists instead of one
+	 * name. The optional per-trigger focus note is layered on as
+	 * extraInstructions rather than hand-appended here, so it's interpolated
+	 * and included in the same system block the context pipeline builds.
 	 */
-	protected async compileWorldResponsePrompt(
+	protected async compileNarratorResponsePrompt(
 		args: any = {}
 	): Promise<PromptBuilderCompiledPrompt> {
-		const worldInstructions: string | undefined =
-			this.generatingMessageMetadata?.worldInstructions
-
-		// No single "current character" exists in this mode, so {{char}}/
-		// {{character}} and {{user}}/{{persona}} resolve to the full joined
-		// cast lists here rather than one name — {{characterNames}}/
-		// {{personaNames}} are exposed too, as the forward-looking names for
-		// the same values.
-		const characterNames = joinWithAnd(
-			this.promptBuilder.getVisibleCharacterNames()
-		)
-		const personaNames = joinWithAnd(this.promptBuilder.getPersonaNames())
-		const interpolationEngine = this.promptBuilder.getInterpolationEngine()
-		const interpolationContext = interpolationEngine.createInterpolationContext({
-			currentCharacterName: characterNames,
-			currentPersonaName: personaNames,
-			additionalContext: { characterNames, personaNames }
+		const narratorInstructions: string | undefined =
+			this.generatingMessageMetadata?.narratorInstructions
+		return await this.promptBuilder.compilePrompt({
+			...args,
+			extraInstructions: narratorInstructions
 		})
-		const interpolatedSystemPrompt =
-			interpolationEngine.interpolateString(
-				this.promptConfig.systemPrompt,
-				interpolationContext
-			) ?? this.promptConfig.systemPrompt
-
-		const systemContent = worldInstructions
-			? `${interpolatedSystemPrompt}\n\nAdditional focus for this response: ${worldInstructions}`
-			: interpolatedSystemPrompt
-
-		const messages: any[] = [
-			{
-				role: "system",
-				content: systemContent
-			}
-		]
-
-		for (const msg of this.chat.chatMessages) {
-			if (msg.isHidden) continue
-			messages.push({
-				role: msg.role === "assistant" ? "assistant" : "user",
-				content: msg.content
-			})
-		}
-
-		// Chat-completion connections (or callers requesting chat format, e.g.
-		// KoboldCpp's "Use Chat Mode") consume `messages` above directly, but
-		// text-completion connections read `prompt` instead — that field was
-		// previously always left undefined here, silently sending an empty
-		// prompt to any connection not in chat mode. Build a real formatted
-		// prompt string too, using the same block-format convention
-		// (ChatML/Vicuna/Llama2/etc.) the connection is otherwise configured
-		// for, ending on an open assistant block so the model continues as
-		// the narrator.
-		const useChatFormat = !!args?.useChatFormat
-		let promptString: string | undefined
-		if (!useChatFormat) {
-			const format = this.connection?.promptFormat || PromptFormats.VICUNA
-			const blocks = messages.map((msg) =>
-				PromptBlockFormatter.makeBlock({
-					format,
-					role: msg.role === "system" ? "system" : msg.role,
-					content: msg.content
-				})
-			)
-			blocks.push(
-				PromptBlockFormatter.makeBlock({
-					format,
-					role: "assistant",
-					content: "",
-					includeClose: false
-				})
-			)
-			promptString = blocks.join("")
-		}
-
-		const totalTokens = await this.promptBuilder.tokenCounter.countTokens(
-			useChatFormat ? JSON.stringify(messages) : promptString!
-		)
-
-		return {
-			prompt: promptString,
-			messages,
-			meta: {
-				promptFormat: useChatFormat ? "chat" : "text",
-				templateName: "worldResponse",
-				timestamp: new Date().toISOString(),
-				truncationReason: null,
-				currentTurnCharacterId: null,
-				tokenCounts: {
-					total: totalTokens,
-					limit: await this.getContextTokenLimit()
-				},
-				chatMessages: {
-					included: this.chat.chatMessages.filter(
-						(m: SelectChatMessage) => !m.isHidden
-					).length,
-					total: this.chat.chatMessages.length,
-					includedIds: this.chat.chatMessages
-						.filter((m: SelectChatMessage) => !m.isHidden)
-						.map((m: SelectChatMessage) => m.id),
-					excludedIds: this.chat.chatMessages
-						.filter((m: SelectChatMessage) => m.isHidden)
-						.map((m: SelectChatMessage) => m.id)
-				},
-				sources: {
-					characters: [],
-					personas: [],
-					scenario: null
-				}
-			}
-		}
 	}
 
 	/**
 	 * Compile assistant mode prompt (simple message history)
 	 * Can be overridden by subclasses for custom formatting
 	 */
-	protected async compileAssistantPrompt(args: {}): Promise<PromptBuilderCompiledPrompt> {
+	protected async compileAssistantPrompt(
+		args: any = {}
+	): Promise<PromptBuilderCompiledPrompt> {
 		const messages: any[] = []
 
 		// Determine which prompt mode to use
@@ -539,15 +482,20 @@ export abstract class BaseConnectionAdapter {
 			})
 		}
 
+		const useChatFormat = !!args?.useChatFormat
+		const promptString = useChatFormat
+			? undefined
+			: this.buildTextPromptFromMessages(messages)
+
 		const totalTokens = await this.promptBuilder.tokenCounter.countTokens(
-			JSON.stringify(messages)
+			useChatFormat ? JSON.stringify(messages) : promptString!
 		)
 
 		return {
-			prompt: undefined,
+			prompt: promptString,
 			messages,
 			meta: {
-				promptFormat: "chat",
+				promptFormat: useChatFormat ? "chat" : "text",
 				templateName: "assistant",
 				timestamp: new Date().toISOString(),
 				truncationReason: null,

@@ -142,6 +142,16 @@ export const contextConfigsDelete: Handler<
 			)
 		}
 
+		const currentConfig = await db.query.contextConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, params.id)
+		})
+		if (currentConfig?.isImmutable) {
+			emitToUser("contextConfigs:delete:error", {
+				error: "Cannot delete a built-in context config."
+			})
+			throw new Error("Cannot delete a built-in context config.")
+		}
+
 		// Check if this is the user's active context config and reset to default if so
 		const userSettings = await db.query.userSettings.findFirst({
 			where: (us, { eq }) => eq(us.userId, socket.user!.id)

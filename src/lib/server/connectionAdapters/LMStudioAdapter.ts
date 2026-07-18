@@ -1,4 +1,5 @@
 import Handlebars from "handlebars"
+import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import _ from "lodash"
 import { StopStrings } from "../utils/StopStrings"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
@@ -186,10 +187,9 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			personas: this.chat.chatPersonas?.map((cp: any) => cp.persona),
 			currentCharacterId: this.currentCharacterId
 		})
-		const characterName =
-			this.chat.chatCharacters?.[0]?.character?.nickname ||
-			this.chat.chatCharacters?.[0]?.character?.name ||
-			"assistant"
+		const characterName = resolveCharacterName(
+			this.chat.chatCharacters?.[0]?.character
+		)
 		const personaName = this.chat.chatPersonas?.[0]?.persona?.name || "user"
 		const stopContext: Record<string, string> = {
 			char: characterName,
@@ -227,9 +227,6 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		if (stream) {
 			return {
 				completionResult: async (contentCb: (chunk: string) => void, _thinkingCb?: (chunk: string) => void) => {
-					let fullContent = ""
-					let lastChunk = ""
-					let abortedEarly = false
 					try {
 						if (useChat && messages) {
 							this.prediction = modelClient.respond(
@@ -237,11 +234,14 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 								options
 							)
 							for await (const part of this.prediction) {
+								// A second line of defense alongside abort()'s
+								// prediction.cancel() call — every other
+								// streaming adapter also polls isAborting
+								// per-chunk, in case cancel() doesn't reliably
+								// unblock this loop on its own.
+								if (this.isAborting) break
 								if (part?.content) {
-									const newChunk = part.content
-									fullContent += newChunk
-									lastChunk = newChunk
-									contentCb(newChunk)
+									contentCb(part.content)
 								}
 							}
 						} else {
@@ -250,24 +250,17 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 								options
 							)
 							for await (const part of this.prediction) {
+								if (this.isAborting) break
 								if (part?.content) {
-									const newChunk = part.content
-									fullContent += newChunk
-									lastChunk = newChunk
-									contentCb(newChunk)
+									contentCb(part.content)
 								}
 							}
 						}
-						// Only emit final content if it's different from the last streamed piece
-						if (
-							!fullContent.endsWith(lastChunk) ||
-							fullContent !== lastChunk
-						) {
-							return
-						}
 					} catch (e: any) {
-						if (!abortedEarly)
-							contentCb("FAILURE: " + (e.message || String(e)))
+						// An intentional cancel() rejects the iterator too —
+						// don't surface that as a "FAILURE" completion.
+						if (this.isAborting) return
+						contentCb("FAILURE: " + (e.message || String(e)))
 					}
 				},
 				compiledPrompt,

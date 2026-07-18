@@ -68,6 +68,7 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 
 	async infillContent({
 		charName,
+		seedName,
 		personaName,
 		templateContext,
 		useChatFormat = false,
@@ -219,7 +220,7 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		const placeholder: ProcessedChatMessage = {
 			id: -2,
 			role: "assistant",
-			name: charName,
+			name: seedName,
 			message: (this.chat as any)._continuationPrefill ?? ""
 		}
 
@@ -350,9 +351,10 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		}))
 
 		// Score older messages
-		interface ScoredMessage { msg: SelectChatMessage; score: ScoreBreakdown }
+		interface ScoredMessage { msg: SelectChatMessage; idx: number; score: ScoreBreakdown }
 		const scoredMessages: ScoredMessage[] = candidateOlderMessages.map((msg, idx) => ({
 			msg,
+			idx,
 			score: this.scoreMessage(msg, idx, candidateOlderMessages.length, scoringCtx, 0)
 		}))
 
@@ -376,8 +378,10 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 			s.score = this.scoreHistory(s.entry as any, scoringCtx, maxTfidf)
 		}
 		for (const s of scoredMessages) {
-			const idx = candidateOlderMessages.indexOf(s.msg)
-			s.score = this.scoreMessage(s.msg, idx, candidateOlderMessages.length, scoringCtx, maxTfidf)
+			// idx captured during the initial 1:1 map over candidateOlderMessages above
+			// (array is never mutated/reordered in between), so it's safe to reuse here
+			// instead of re-deriving it via an O(n) indexOf lookup per message.
+			s.score = this.scoreMessage(s.msg, s.idx, candidateOlderMessages.length, scoringCtx, maxTfidf)
 		}
 
 		// ── Phase 3: Fill ─────────────────────────────────────────────────────

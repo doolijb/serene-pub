@@ -16,8 +16,16 @@ export const DEFAULT_MANAGED_CONFIG: ManagedConfig = {
 	batchSize: 512
 }
 
-// Per-connection TTL timers
-const ttlTimers: Record<number, ReturnType<typeof setTimeout>> = {}
+// TTL timers, keyed by baseUrl (the koboldcpp instance), not connectionId.
+// There's only ever one loaded model per instance — the resource this timer
+// guards is shared, not per-connection. Two managed connections pointed at
+// the same instance (e.g. a "Chat" connection and a separate "Summarizer"
+// connection) used to each get their own independent timer keyed by their
+// own connectionId: whichever fired first would unload the model out from
+// under the other connection's active or imminent generation, regardless of
+// that connection's own idle state. Keying by baseUrl means any activity on
+// the shared instance resets the one timer that actually governs it.
+const ttlTimers: Record<string, ReturnType<typeof setTimeout>> = {}
 
 // Simple lock so concurrent requests don't double-load
 let loadingPromise: Promise<void> | null = null
@@ -132,12 +140,12 @@ export async function ensureModelLoaded(opts: {
 		if (configMatches) {
 			if (contextSize) {
 				if (known!.contextSize >= contextSize) {
-					resetTtl(connectionId, baseUrl, adminPassword, ttlSecs)
+					resetTtl(baseUrl, adminPassword, ttlSecs)
 					return
 				}
 				// Loaded context too small — fall through to reload
 			} else {
-				resetTtl(connectionId, baseUrl, adminPassword, ttlSecs)
+				resetTtl(baseUrl, adminPassword, ttlSecs)
 				return
 			}
 		}
@@ -197,7 +205,7 @@ export async function ensureModelLoaded(opts: {
 		batchSize: managedConfig.batchSize,
 		rawConfigJson: configJson
 	}
-	resetTtl(connectionId, baseUrl, adminPassword, ttlSecs)
+	resetTtl(baseUrl, adminPassword, ttlSecs)
 }
 
 export async function unloadModel(baseUrl: string, adminPassword: string): Promise<boolean> {
@@ -225,29 +233,28 @@ export async function unloadModel(baseUrl: string, adminPassword: string): Promi
 }
 
 export function resetTtl(
-	connectionId: number,
 	baseUrl: string,
 	adminPassword: string,
 	ttlSecs: number
 ) {
-	clearTtl(connectionId)
+	clearTtl(baseUrl)
 	if (ttlSecs <= 0) return
-	ttlTimers[connectionId] = setTimeout(() => {
-		delete ttlTimers[connectionId]
+	ttlTimers[baseUrl] = setTimeout(() => {
+		delete ttlTimers[baseUrl]
 		unloadModel(baseUrl, adminPassword).catch(() => {})
 	}, ttlSecs * 1000)
 }
 
-export function clearTtl(connectionId: number) {
-	if (ttlTimers[connectionId]) {
-		clearTimeout(ttlTimers[connectionId])
-		delete ttlTimers[connectionId]
+export function clearTtl(baseUrl: string) {
+	if (ttlTimers[baseUrl]) {
+		clearTimeout(ttlTimers[baseUrl])
+		delete ttlTimers[baseUrl]
 	}
 }
 
 export function clearAllTtls() {
-	for (const id of Object.keys(ttlTimers)) {
-		clearTimeout(ttlTimers[Number(id)])
-		delete ttlTimers[Number(id)]
+	for (const url of Object.keys(ttlTimers)) {
+		clearTimeout(ttlTimers[url])
+		delete ttlTimers[url]
 	}
 }

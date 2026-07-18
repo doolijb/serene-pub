@@ -643,7 +643,16 @@ export const koboldCppDownloadModelHandler: Handler<
 		await fsPromises.mkdir(modelsDir, { recursive: true })
 
 		const { filename, downloadUrl, modelName, modelUrl, description, quantization, sizeBytes } = params
-		const destPath = path.join(modelsDir, filename)
+		const destPath = path.resolve(path.join(modelsDir, filename))
+		const resolvedModelsDir = path.resolve(modelsDir)
+		// filename is client-supplied — without containment, a path-traversal
+		// or absolute-path filename could write outside modelsDir entirely.
+		if (
+			destPath !== resolvedModelsDir &&
+			!destPath.startsWith(resolvedModelsDir + path.sep)
+		) {
+			throw new Error("Invalid filename")
+		}
 
 		if (activeDownloads[filename] && !activeDownloads[filename].isDone) {
 			emitToUser("koboldcpp:downloadModel:error", { error: "Already downloading this file" })
@@ -1145,7 +1154,15 @@ export const koboldCppDeleteModelHandler: Handler<
 		if (!modelsDir) throw new Error("Models directory not configured")
 
 		const filePath = path.resolve(path.join(modelsDir, params.modelName))
-		if (!filePath.startsWith(path.resolve(modelsDir))) throw new Error("Invalid path")
+		const resolvedModelsDir = path.resolve(modelsDir)
+		// Trailing separator matters here — without it, a sibling directory
+		// like "models-evil" would pass a bare startsWith(modelsDir) check.
+		if (
+			filePath !== resolvedModelsDir &&
+			!filePath.startsWith(resolvedModelsDir + path.sep)
+		) {
+			throw new Error("Invalid path")
+		}
 
 		await fsPromises.unlink(filePath)
 

@@ -2,7 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { onMount, onDestroy, getContext } from "svelte"
 	import * as skio from "sveltekit-io"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
@@ -224,7 +224,7 @@
 							{#if isConnecting && connectingModel === model.name}
 								<Icons.Loader2 size={14} class="animate-spin" />
 							{:else}
-								<Icons.Star size={14} />
+								<Icons.Star size={14} fill={isDefault ? "currentColor" : "none"} />
 							{/if}
 							{isDefault ? "Default" : "Set Default"}
 						</button>
@@ -251,32 +251,35 @@
 	</div>
 {/if}
 
-<Modal
+<Dialog
 	open={showDeleteModal}
 	onOpenChange={(e) => (showDeleteModal = e.open)}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
-	backdropClasses="backdrop-blur-sm"
 >
-	{#snippet content()}
-		<header class="flex justify-between">
-			<h2 class="h2">Delete Model</h2>
-		</header>
-		<article>
-			<p class="opacity-60">
-				Are you sure you want to delete "{modelToDelete?.name}" from your models directory?
-				This action cannot be undone.
-			</p>
-			<p class="opacity-60 mt-2">
-				Any associated connections to this model will also be removed.
-			</p>
-		</article>
-		<footer class="flex justify-end gap-2">
-			<button class="btn preset-filled-surface-500" onclick={handleDeleteCancel}>
-				Cancel
-			</button>
-			<button class="btn preset-filled-error-500" onclick={handleDeleteConfirm}>
-				Delete
-			</button>
-		</footer>
-	{/snippet}
-</Modal>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700">
+				<header class="flex justify-between">
+					<h2 class="h2">Delete Model</h2>
+				</header>
+				<article>
+					<p class="opacity-60">
+						Are you sure you want to delete "{modelToDelete?.name}" from your models directory?
+						This action cannot be undone.
+					</p>
+					<p class="opacity-60 mt-2">
+						Any associated connections to this model will also be removed.
+					</p>
+				</article>
+				<footer class="flex justify-end gap-2">
+					<button class="btn preset-filled-surface-500" onclick={handleDeleteCancel}>
+						Cancel
+					</button>
+					<button class="btn preset-filled-error-500" onclick={handleDeleteConfirm}>
+						Delete
+					</button>
+				</footer>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

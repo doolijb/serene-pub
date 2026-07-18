@@ -204,6 +204,7 @@ export class RagInfillEngine extends BaseInfillEngine {
 
 	async infillContent({
 		charName,
+		seedName,
 		personaName,
 		templateContext,
 		useChatFormat = false,
@@ -742,7 +743,7 @@ export class RagInfillEngine extends BaseInfillEngine {
 		const placeholder: ProcessedChatMessage = {
 			id: -2,
 			role: "assistant",
-			name: charName,
+			name: seedName,
 			message: (this.chat as any)._continuationPrefill ?? ""
 		}
 

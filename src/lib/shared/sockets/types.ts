@@ -661,7 +661,7 @@ declare global {
 					error?: string
 				}
 			}
-			namespace TriggerWorldResponse {
+			namespace TriggerNarratorResponse {
 				interface Params {
 					chatId: number
 					/** Optional extra focus text for this specific generation. */
@@ -672,7 +672,7 @@ declare global {
 					error?: string
 				}
 			}
-			namespace GetWorldNarratorName {
+			namespace GetNarratorName {
 				interface Params {
 					chatId: number
 				}
@@ -1180,14 +1180,6 @@ declare global {
 					user: SelectUser
 				}
 			}
-			namespace GetSupportedSamplers {
-				interface Params {}
-				interface Response {
-					connectionType: string
-					supportedSamplers: string[]
-					unsupportedSamplers: Record<string, string>
-				}
-			}
 		}
 
 		// Context Configs namespace
@@ -1301,12 +1293,12 @@ declare global {
 			}
 		}
 
-		// Chat World Prompt Configs namespace ("Chat Prompts: World")
-		namespace ChatWorldPromptConfigs {
+		// Narrator Prompt Configs namespace ("Chat Prompts: Narrator")
+		namespace NarratorPromptConfigs {
 			namespace List {
 				interface Params {}
 				interface Response {
-					chatWorldPromptConfigsList: Partial<SelectChatWorldPromptConfig>[]
+					narratorPromptConfigsList: Partial<SelectNarratorPromptConfig>[]
 				}
 			}
 			namespace Get {
@@ -1314,23 +1306,23 @@ declare global {
 					id: number
 				}
 				interface Response {
-					chatWorldPromptConfig: SelectChatWorldPromptConfig
+					narratorPromptConfig: SelectNarratorPromptConfig
 				}
 			}
 			namespace Create {
 				interface Params {
-					chatWorldPromptConfig: InsertChatWorldPromptConfig
+					narratorPromptConfig: InsertNarratorPromptConfig
 				}
 				interface Response {
-					chatWorldPromptConfig: SelectChatWorldPromptConfig
+					narratorPromptConfig: SelectNarratorPromptConfig
 				}
 			}
 			namespace Update {
 				interface Params {
-					chatWorldPromptConfig: UpdateChatWorldPromptConfig
+					narratorPromptConfig: UpdateNarratorPromptConfig
 				}
 				interface Response {
-					chatWorldPromptConfig: SelectChatWorldPromptConfig
+					narratorPromptConfig: SelectNarratorPromptConfig
 				}
 			}
 			namespace Delete {
@@ -2147,24 +2139,6 @@ declare global {
 						personas: any[]
 						lorebooks: any[]
 					}
-				}
-			}
-			namespace AddToCharacter {
-				interface Params {
-					tagId: number
-					characterId: number
-				}
-				interface Response {
-					success: boolean
-				}
-			}
-			namespace RemoveFromCharacter {
-				interface Params {
-					tagId: number
-					characterId: number
-				}
-				interface Response {
-					success: boolean
 				}
 			}
 		}

@@ -1,6 +1,7 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray, isNull } from "drizzle-orm"
+import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 
 export async function runBindingNodeCheck(
 	lorebookId: number,
@@ -89,7 +90,7 @@ async function resolveBindingEntityName(binding: {
 			where: eq(schema.characters.id, binding.characterId),
 			columns: { name: true, nickname: true }
 		})
-		return char?.nickname || char?.name || binding.binding
+		return resolveCharacterName(char, binding.binding)
 	}
 	if (binding.personaId) {
 		const persona = await db.query.personas.findFirst({
