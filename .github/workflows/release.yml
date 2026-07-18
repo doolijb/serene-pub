@@ -112,6 +112,7 @@ jobs:
                   node-version: "24"
 
             - name: Install dependencies
+              shell: bash
               run: |
                   node -e "const fs = require('fs'); try { fs.unlinkSync('package-lock.json'); } catch (e) { /* ignore */ }"
                   for i in 1 2 3; do npm install --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 && break || sleep 15; done
