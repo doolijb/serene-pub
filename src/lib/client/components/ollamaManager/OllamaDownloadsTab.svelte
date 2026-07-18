@@ -275,7 +275,11 @@
 											value={fileProgress.completed}
 											max={fileProgress.total}
 											aria-label={`Download progress for ${fileName}: ${fileProgress.total > 0 ? `${((fileProgress.completed / fileProgress.total) * 100).toFixed(1)}%` : "0%"} complete`}
-										/>
+										>
+											<Progress.Track class="bg-surface-200-800">
+												<Progress.Range class="bg-primary-500" />
+											</Progress.Track>
+										</Progress>
 									</div>
 									{#if fileProgress.total > 0}
 										<div

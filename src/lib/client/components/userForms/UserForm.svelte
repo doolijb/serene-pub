@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { z } from "zod"
 	import { untrack } from "svelte"
@@ -374,56 +374,59 @@
 </div>
 
 <!-- Admin Confirmation Modal -->
-<Modal
+<Dialog
 	open={showAdminConfirmModal}
 	onOpenChange={(e) => {
 		if (!e.open) {
 			cancelAdminChange()
 		}
 	}}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-lg"
-	backdropClasses="backdrop-blur-sm"
 >
-	{#snippet content()}
-		<header class="flex items-center justify-between">
-			<h2 class="text-xl font-bold">Grant Administrator Privileges?</h2>
-			<button class="btn-ghost" onclick={cancelAdminChange}>
-				<Icons.X class="h-5 w-5" />
-			</button>
-		</header>
-		<article class="space-y-4">
-			<div class="text-warning-500 flex items-center gap-2">
-				<Icons.ShieldAlert class="h-5 w-5" />
-				<span class="font-semibold">Warning: Powerful Access</span>
-			</div>
-			<p>
-				Are you sure you want to grant administrator privileges to this
-				user? Administrators have full access to all system features
-				including:
-			</p>
-			<ul class="ml-4 list-inside list-disc space-y-1">
-				<li>Managing all users and their permissions</li>
-				<li>Accessing and modifying all chats and characters</li>
-				<li>Changing system settings</li>
-				<li>Deleting content across the system</li>
-			</ul>
-			<p class="font-medium">
-				This action should only be performed for trusted users.
-			</p>
-		</article>
-		<footer class="flex justify-end gap-2">
-			<button
-				class="btn btn-sm preset-filled-surface-500"
-				onclick={cancelAdminChange}
-			>
-				Cancel
-			</button>
-			<button
-				class="btn btn-sm preset-filled-warning-500"
-				onclick={confirmAdminChange}
-			>
-				Grant Admin Access
-			</button>
-		</footer>
-	{/snippet}
-</Modal>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-lg">
+				<header class="flex items-center justify-between">
+					<h2 class="text-xl font-bold">Grant Administrator Privileges?</h2>
+					<button class="btn-ghost" aria-label="Close" onclick={cancelAdminChange}>
+						<Icons.X class="h-5 w-5" />
+					</button>
+				</header>
+				<article class="space-y-4">
+					<div class="text-warning-500 flex items-center gap-2">
+						<Icons.ShieldAlert class="h-5 w-5" />
+						<span class="font-semibold">Warning: Powerful Access</span>
+					</div>
+					<p>
+						Are you sure you want to grant administrator privileges to this
+						user? Administrators have full access to all system features
+						including:
+					</p>
+					<ul class="ml-4 list-inside list-disc space-y-1">
+						<li>Managing all users and their permissions</li>
+						<li>Accessing and modifying all chats and characters</li>
+						<li>Changing system settings</li>
+						<li>Deleting content across the system</li>
+					</ul>
+					<p class="font-medium">
+						This action should only be performed for trusted users.
+					</p>
+				</article>
+				<footer class="flex justify-end gap-2">
+					<button
+						class="btn btn-sm preset-filled-surface-500"
+						onclick={cancelAdminChange}
+					>
+						Cancel
+					</button>
+					<button
+						class="btn btn-sm preset-filled-warning-500"
+						onclick={confirmAdminChange}
+					>
+						Grant Admin Access
+					</button>
+				</footer>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

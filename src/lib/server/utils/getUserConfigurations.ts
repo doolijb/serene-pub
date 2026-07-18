@@ -14,7 +14,7 @@ export async function getUserConfigurations(
 	sampling: SelectSamplingConfig
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
-	chatWorldPromptConfig: SelectChatWorldPromptConfig | null
+	narratorPromptConfig: SelectNarratorPromptConfig | null
 }> {
 	try {
 		const [userSettings, systemSettings] = await Promise.all([
@@ -34,14 +34,14 @@ export async function getUserConfigurations(
 			? await db.query.promptConfigs.findFirst({ where: (pc, { eq }) => eq(pc.id, promptConfigId) })
 			: undefined
 
-		// Resolve chat-world prompt config (userSettings -> systemSettings fallback).
+		// Resolve narrator prompt config (userSettings -> systemSettings fallback).
 		// Optional — a chat can generate normally without one configured; only
-		// triggering a World Response actually requires it.
-		const chatWorldPromptConfigId =
-			userSettings?.activeChatWorldPromptConfigId ??
-			systemSettings?.defaultChatWorldPromptConfigId
-		const chatWorldPromptConfig = chatWorldPromptConfigId
-			? await db.query.chatWorldPromptConfigs.findFirst({ where: (c, { eq }) => eq(c.id, chatWorldPromptConfigId) })
+		// triggering a Narrator response actually requires it.
+		const narratorPromptConfigId =
+			userSettings?.activeNarratorPromptConfigId ??
+			systemSettings?.defaultNarratorPromptConfigId
+		const narratorPromptConfig = narratorPromptConfigId
+			? await db.query.narratorPromptConfigs.findFirst({ where: (c, { eq }) => eq(c.id, narratorPromptConfigId) })
 			: undefined
 
 		// Resolve connection + sampling from system default (no per-user override anymore)
@@ -64,7 +64,7 @@ export async function getUserConfigurations(
 			sampling,
 			contextConfig,
 			promptConfig,
-			chatWorldPromptConfig: chatWorldPromptConfig ?? null
+			narratorPromptConfig: narratorPromptConfig ?? null
 		}
 	} catch (error: any) {
 		if (retryCount === 0 && error.message?.includes("Missing required configuration")) {

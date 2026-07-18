@@ -4,6 +4,7 @@ export class Theme {
 	static CERBERUS = "cerberus"
 	static CONCORD = "concord"
 	static CRIMSON = "crimson"
+	static DRACULA = "dracula"
 	static FENNEC = "fennec"
 	static HAMLINDIGO = "hamlindigo"
 	static LEGACY = "legacy"
@@ -13,8 +14,10 @@ export class Theme {
 	static NOSH = "nosh"
 	static NOUVEAU = "nouveau"
 	static PINE = "pine"
+	static REIGN = "reign"
 	static ROCKET = "rocket"
 	static ROSE = "rose"
+	static ROSEPINE = "rosepine"
 	static SAHARA = "sahara"
 	static SEAFOAM = "seafoam"
 	static TERMINUS = "terminus"
@@ -27,6 +30,7 @@ export class Theme {
 		[Theme.CERBERUS, "Cerberus"],
 		[Theme.CONCORD, "Concord"],
 		[Theme.CRIMSON, "Crimson"],
+		[Theme.DRACULA, "Dracula"],
 		[Theme.FENNEC, "Fennec"],
 		[Theme.HAMLINDIGO, "Hamlindigo (Default)"],
 		[Theme.LEGACY, "Legacy"],
@@ -36,8 +40,10 @@ export class Theme {
 		[Theme.NOSH, "Nosh"],
 		[Theme.NOUVEAU, "Nouveau"],
 		[Theme.PINE, "Pine"],
+		[Theme.REIGN, "Reign"],
 		[Theme.ROCKET, "Rocket"],
 		[Theme.ROSE, "Rose"],
+		[Theme.ROSEPINE, "Rosé Pine"],
 		[Theme.SAHARA, "Sahara"],
 		[Theme.SEAFOAM, "Seafoam"],
 		[Theme.TERMINUS, "Terminus"],

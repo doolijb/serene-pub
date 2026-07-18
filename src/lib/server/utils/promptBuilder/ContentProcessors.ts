@@ -1,5 +1,6 @@
 import type { InterpolationContext } from "./InterpolationEngine"
 import type { LoreMatchingStrategy } from "./LoreMatchingStrategies"
+import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 
 // Define processed chat message format
 export interface ProcessedChatMessage {
@@ -59,14 +60,31 @@ export class ChatMessageProcessor
 		let assistantName = charName
 		let userName = personaName
 
+		// Narrator response messages have no characterId/personaId of their own
+		// to resolve a name from — without this, they fall through to
+		// whichever name this call's default happens to be (the *current*
+		// speaking character, or the joined cast list in no-perspective
+		// mode), mislabeling every past narration line in history with the
+		// wrong speaker. Use the name snapshotted on the message itself
+		// (set once at trigger time, matching how it's displayed) instead.
+		if ((message as any).isNarratorResponse) {
+			const narratorName =
+				(message.metadata as any)?.narratorName || "Narrator"
+			assistantName = narratorName
+			msgInterpolationContext = {
+				...msgInterpolationContext,
+				char: narratorName,
+				character: narratorName
+			}
+		}
 		// Handle character-specific context
-		if (message.characterId && this.chat.chatCharacters) {
+		else if (message.characterId && this.chat.chatCharacters) {
 			const foundChar = this.chat.chatCharacters.find(
 				(cc: any) => cc.character.id === message.characterId
 			)?.character
 			let foundName: string | undefined
 			if (foundChar) {
-				foundName = foundChar.nickname || foundChar.name
+				foundName = resolveCharacterName(foundChar)
 			}
 			if (message.role === "assistant") {
 				assistantName = foundName || charName

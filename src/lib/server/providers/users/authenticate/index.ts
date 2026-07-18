@@ -96,6 +96,17 @@ export async function authenticate({
 		return null
 	}
 
+	// A soft-deleted user's existing tokens are revoked immediately at delete
+	// time (see usersDelete), but check here too as a second line of defense
+	// — e.g. a token created in a race just before the delete committed.
+	if ((userToken.user as SelectUser).isDeleted) {
+		await tx
+			.update(schema.userTokens)
+			.set({ expiresAt: new Date() })
+			.where(eq(schema.userTokens.id, tokenId))
+		return null
+	}
+
 	return {
 		user: userToken.user as SelectUser
 	}

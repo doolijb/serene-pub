@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 
 	interface Props {
 		open: boolean
@@ -20,16 +20,14 @@
 	})
 </script>
 
-<Modal
-	{open}
-	onOpenChange={(e) => (open = e.open)}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl w-[min(95vw,640px)] border border-surface-300-700"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<header class="flex items-center justify-between">
+<Dialog {open} onOpenChange={(e) => (open = e.open)}>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl w-[min(95vw,640px)] border border-surface-300-700">
+				<header class="flex items-center justify-between">
 			<h2 class="h2">Select Model Version</h2>
-			<button onclick={onClose} class="btn-icon btn-icon-sm">
+			<button onclick={onClose} class="btn-icon btn-icon-sm" aria-label="Close">
 				<Icons.X size={16} />
 			</button>
 		</header>
@@ -102,5 +100,7 @@
 				Continue to Download
 			</button>
 		</footer>
-	{/snippet}
-</Modal>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

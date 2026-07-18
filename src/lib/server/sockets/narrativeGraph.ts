@@ -3,6 +3,7 @@ import * as schema from "$lib/server/db/schema"
 import type { NodeState, NodeVisibility, RelationshipVisibility } from "$lib/server/db/schema"
 import { eq, asc, desc, and, isNotNull, isNull, gt, notExists, sql, inArray } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
+import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import {
 	buildGraphFromScenes,
 	GraphParseError,
@@ -338,7 +339,7 @@ export const narrativeGraphBuildHandler: Handler<
 				for (const b of bindings) {
 					if (b.characterId && charMap.has(b.characterId)) {
 						const char = charMap.get(b.characterId)!
-						const name = char.nickname || char.name
+						const name = resolveCharacterName(char, "")
 						if (!name.trim()) continue
 						seeds.push({ bindingId: b.id, name: name.trim(), summary: char.summary?.trim() || char.description.trim(), nodeState: "active", aliases: char.aliases?.length ? char.aliases : undefined })
 					} else if (b.personaId && personaMap.has(b.personaId)) {
@@ -403,7 +404,7 @@ export const narrativeGraphBuildHandler: Handler<
 							? db.select({ id: schema.personas.id, name: schema.personas.name }).from(schema.personas).where(inArray(schema.personas.id, personaIds))
 							: Promise.resolve([])
 					])
-					const characterMap = new Map(characters.map(c => [c.id, c.nickname || c.name]))
+					const characterMap = new Map(characters.map(c => [c.id, resolveCharacterName(c)]))
 					const personaMap = new Map(personas.map(p => [p.id, p.name]))
 					return msgs.map(m => ({
 						senderName: m.characterId
@@ -493,134 +494,161 @@ export const narrativeGraphApplyProposalHandler: Handler<
 			seedTempIdMap ? Object.entries(seedTempIdMap).map(([k, v]) => [k, v]) : []
 		)
 
-		for (const nodeProposal of proposal.nodes) {
-			const [inserted] = await db
-				.insert(schema.narrativeNodes)
-				.values({
-					lorebookId,
-					name: nodeProposal.name,
-					nodeState: (nodeProposal.nodeState ?? "active") as NodeState,
-					summary: nodeProposal.summary ?? "",
-					sceneId: nodeProposal.sceneId ?? null,
-					historyEntryId: nodeProposal.historyEntryId ?? null
-				})
-				.returning()
-			tempIdMap.set(nodeProposal.tempId, inserted.id)
-
-			// Re-link lorebook binding for nodes seeded from bindings; populate aliases
-			if (nodeProposal.tempId.startsWith("binding_")) {
-				const bindingId = parseInt(nodeProposal.tempId.slice("binding_".length))
-				if (!isNaN(bindingId)) {
-					const binding = await db.query.lorebookBindings.findFirst({
-						where: eq(schema.lorebookBindings.id, bindingId),
-						with: {
-							character: { columns: { aliases: true } },
-							persona: { columns: { aliases: true } }
-						}
-					})
-					const aliases = binding?.character?.aliases ?? binding?.persona?.aliases ?? []
-					await db
-						.update(schema.narrativeNodes)
-						.set({ lorebookBindingId: bindingId, aliases })
-						.where(eq(schema.narrativeNodes.id, inserted.id))
-				}
-			}
-		}
-
-		// Insert (or update) relationships
-		for (const rel of proposal.relationships) {
-			const fromId = tempIdMap.get(rel.fromTempId)
-			const toId = tempIdMap.get(rel.toTempId)
-			if (!fromId || !toId) continue
-
-			// In extend mode, when both nodes are existing seeds the LLM may have
-			// updated a relationship that already exists — find it and UPDATE rather
-			// than INSERT a duplicate.
-			const bothSeeds =
-				mode === "extend" &&
-				rel.fromTempId.startsWith("existing_") &&
-				rel.toTempId.startsWith("existing_")
-
-			if (bothSeeds) {
-				// Exact direction only — A→B and B→A are distinct perspective entries and
-				// must never be collapsed into one row. A new type between existing nodes
-				// that has no exact-match row falls through to INSERT below.
-				const existing = await db.query.narrativeRelationships.findFirst({
-					where: and(
-						eq(schema.narrativeRelationships.lorebookId, lorebookId),
-						eq(schema.narrativeRelationships.fromNodeId, fromId),
-						eq(schema.narrativeRelationships.toNodeId, toId),
-						eq(schema.narrativeRelationships.relationshipType, rel.relationshipType ?? "neutral")
-					)
-				})
-
-				if (existing) {
-					await db
-						.update(schema.narrativeRelationships)
-						.set({
-							relationshipType: rel.relationshipType ?? existing.relationshipType,
-							description: rel.description ?? existing.description,
-							visibility: (rel.visibility ?? existing.visibility) as RelationshipVisibility,
-							status: rel.status ?? existing.status,
-							reason: rel.reason ?? existing.reason
-						})
-						.where(eq(schema.narrativeRelationships.id, existing.id))
-					continue
-				}
-			}
-
-			await db.insert(schema.narrativeRelationships).values({
-				lorebookId,
-				fromNodeId: fromId,
-				toNodeId: toId,
-				relationshipType: rel.relationshipType ?? "neutral",
-				description: rel.description ?? "",
-				visibility: (rel.visibility ?? "acknowledged") as RelationshipVisibility,
-				status: rel.status ?? "active",
-				reason: rel.reason ?? null,
-				sceneId: rel.sceneId ?? null,
-				historyEntryId: rel.historyEntryId ?? null
+		// seedTempIdMap is client-supplied — without this check, a relationship
+		// below could be pointed at a real node id belonging to a DIFFERENT
+		// user's lorebook just by supplying that id here, since fromId/toId
+		// come straight out of this map with no further verification at
+		// insert time.
+		if (tempIdMap.size > 0) {
+			const seededIds = [...new Set(tempIdMap.values())]
+			const seededNodes = await db.query.narrativeNodes.findMany({
+				where: (n, { inArray }) => inArray(n.id, seededIds),
+				columns: { id: true, lorebookId: true }
 			})
+			if (
+				seededNodes.length !== seededIds.length ||
+				seededNodes.some((n) => n.lorebookId !== lorebookId)
+			) {
+				throw new Error(
+					"Access denied: seed node ids must belong to this lorebook."
+				)
+			}
 		}
 
-		// Mark scenes as graphed — entirely server-side, no client round-trip needed.
-		// Replace: reset all scenes for this lorebook, then mark all summarized scenes as graphed.
-		// Extend: mark all currently-ungraphed summarized scenes as graphed (those were the ones processed).
-		if (mode === "replace") {
-			await db
+		// Everything below builds/updates the graph for this lorebook in one
+		// pass — wrapped in a transaction so a crash or thrown error partway
+		// through (e.g. after some nodes are inserted but before their
+		// relationships are) can't leave a half-applied graph.
+		await db.transaction(async (tx) => {
+			for (const nodeProposal of proposal.nodes) {
+				const [inserted] = await tx
+					.insert(schema.narrativeNodes)
+					.values({
+						lorebookId,
+						name: nodeProposal.name,
+						nodeState: (nodeProposal.nodeState ?? "active") as NodeState,
+						summary: nodeProposal.summary ?? "",
+						sceneId: nodeProposal.sceneId ?? null,
+						historyEntryId: nodeProposal.historyEntryId ?? null
+					})
+					.returning()
+				tempIdMap.set(nodeProposal.tempId, inserted.id)
+
+				// Re-link lorebook binding for nodes seeded from bindings; populate aliases
+				if (nodeProposal.tempId.startsWith("binding_")) {
+					const bindingId = parseInt(nodeProposal.tempId.slice("binding_".length))
+					if (!isNaN(bindingId)) {
+						const binding = await tx.query.lorebookBindings.findFirst({
+							where: eq(schema.lorebookBindings.id, bindingId),
+							with: {
+								character: { columns: { aliases: true } },
+								persona: { columns: { aliases: true } }
+							}
+						})
+						const aliases = binding?.character?.aliases ?? binding?.persona?.aliases ?? []
+						await tx
+							.update(schema.narrativeNodes)
+							.set({ lorebookBindingId: bindingId, aliases })
+							.where(eq(schema.narrativeNodes.id, inserted.id))
+					}
+				}
+			}
+
+			// Insert (or update) relationships
+			for (const rel of proposal.relationships) {
+				const fromId = tempIdMap.get(rel.fromTempId)
+				const toId = tempIdMap.get(rel.toTempId)
+				if (!fromId || !toId) continue
+
+				// In extend mode, when both nodes are existing seeds the LLM may have
+				// updated a relationship that already exists — find it and UPDATE rather
+				// than INSERT a duplicate.
+				const bothSeeds =
+					mode === "extend" &&
+					rel.fromTempId.startsWith("existing_") &&
+					rel.toTempId.startsWith("existing_")
+
+				if (bothSeeds) {
+					// Exact direction only — A→B and B→A are distinct perspective entries and
+					// must never be collapsed into one row. A new type between existing nodes
+					// that has no exact-match row falls through to INSERT below.
+					const existing = await tx.query.narrativeRelationships.findFirst({
+						where: and(
+							eq(schema.narrativeRelationships.lorebookId, lorebookId),
+							eq(schema.narrativeRelationships.fromNodeId, fromId),
+							eq(schema.narrativeRelationships.toNodeId, toId),
+							eq(schema.narrativeRelationships.relationshipType, rel.relationshipType ?? "neutral")
+						)
+					})
+
+					if (existing) {
+						await tx
+							.update(schema.narrativeRelationships)
+							.set({
+								relationshipType: rel.relationshipType ?? existing.relationshipType,
+								description: rel.description ?? existing.description,
+								visibility: (rel.visibility ?? existing.visibility) as RelationshipVisibility,
+								status: rel.status ?? existing.status,
+								reason: rel.reason ?? existing.reason
+							})
+							.where(eq(schema.narrativeRelationships.id, existing.id))
+						continue
+					}
+				}
+
+				await tx.insert(schema.narrativeRelationships).values({
+					lorebookId,
+					fromNodeId: fromId,
+					toNodeId: toId,
+					relationshipType: rel.relationshipType ?? "neutral",
+					description: rel.description ?? "",
+					visibility: (rel.visibility ?? "acknowledged") as RelationshipVisibility,
+					status: rel.status ?? "active",
+					reason: rel.reason ?? null,
+					sceneId: rel.sceneId ?? null,
+					historyEntryId: rel.historyEntryId ?? null
+				})
+			}
+
+			// Mark scenes as graphed — entirely server-side, no client round-trip needed.
+			// Replace: reset all scenes for this lorebook, then mark all summarized scenes as graphed.
+			// Extend: mark all currently-ungraphed summarized scenes as graphed (those were the ones processed).
+			if (mode === "replace") {
+				await tx
+					.update(schema.scenes)
+					.set({ graphed: false })
+					.where(eq(schema.scenes.lorebookId, lorebookId))
+				// Reset history entries graphed status too
+				await tx
+					.update(schema.historyEntries)
+					.set({ graphed: false })
+					.where(eq(schema.historyEntries.lorebookId, lorebookId))
+			}
+			await tx
 				.update(schema.scenes)
-				.set({ graphed: false })
-				.where(eq(schema.scenes.lorebookId, lorebookId))
-			// Reset history entries graphed status too
-			await db
-				.update(schema.historyEntries)
-				.set({ graphed: false })
-				.where(eq(schema.historyEntries.lorebookId, lorebookId))
-		}
-		await db
-			.update(schema.scenes)
-			.set({ graphed: true })
-			.where(
-				and(
-					eq(schema.scenes.lorebookId, lorebookId),
-					eq(schema.scenes.graphed, false),
-					isNotNull(schema.scenes.summary)
-				)
-			)
-		// Mark direct history entries (with content, no scenes) as graphed
-		await db
-			.update(schema.historyEntries)
-			.set({ graphed: true })
-			.where(
-				and(
-					eq(schema.historyEntries.lorebookId, lorebookId),
-					gt(sql`length(trim(${schema.historyEntries.content}))`, 0),
-					notExists(
-						db.select({ _: sql`1` }).from(schema.scenes)
-							.where(eq(schema.scenes.historyEntryId, schema.historyEntries.id))
+				.set({ graphed: true })
+				.where(
+					and(
+						eq(schema.scenes.lorebookId, lorebookId),
+						eq(schema.scenes.graphed, false),
+						isNotNull(schema.scenes.summary)
 					)
 				)
-			)
+			// Mark direct history entries (with content, no scenes) as graphed
+			await tx
+				.update(schema.historyEntries)
+				.set({ graphed: true })
+				.where(
+					and(
+						eq(schema.historyEntries.lorebookId, lorebookId),
+						gt(sql`length(trim(${schema.historyEntries.content}))`, 0),
+						notExists(
+							tx.select({ _: sql`1` }).from(schema.scenes)
+								.where(eq(schema.scenes.historyEntryId, schema.historyEntries.id))
+						)
+					)
+				)
+		})
 
 		// Return updated list with fresh ungraphed count
 		const [nodes, relationships, ungraphedScenes, ungraphedUnsummarized, allSummarized, ungraphedDirectEntries, allDirectEntries] = await Promise.all([

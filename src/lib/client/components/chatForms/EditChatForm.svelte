@@ -71,7 +71,7 @@
 					connectionId?: number | null
 					samplingConfigId?: number | null
 					promptConfigId?: number | null
-					chatWorldPromptConfigId?: number | null
+					narratorPromptConfigId?: number | null
 				}
 				characterIds: number[]
 				personaIds: number[]
@@ -92,7 +92,7 @@
 					connectionId?: number | null
 					samplingConfigId?: number | null
 					promptConfigId?: number | null
-					chatWorldPromptConfigId?: number | null
+					narratorPromptConfigId?: number | null
 				}
 				characterIds: number[]
 				personaIds: number[]
@@ -109,13 +109,13 @@
 	let chatConnectionId: number | null = $state(null)
 	let chatSamplingConfigId: number | null = $state(null)
 	let chatPromptConfigId: number | null = $state(null)
-	let chatWorldPromptConfigId: number | null = $state(null)
+	let narratorPromptConfigId: number | null = $state(null)
 
 	// AI override lists (admin only)
 	let adminConnectionsList: { id: number; name: string; type: string }[] = $state([])
 	let adminSamplingList: { id: number; name: string }[] = $state([])
 	let adminPromptConfigsList: { id: number; name: string }[] = $state([])
-	let adminChatWorldPromptConfigsList: { id: number; name: string }[] = $state([])
+	let adminNarratorPromptConfigsList: { id: number; name: string }[] = $state([])
 
 	// MODALS
 	let showCharacterModal = $state(false)
@@ -152,7 +152,7 @@
 					connectionId: null,
 					samplingConfigId: null,
 					promptConfigId: null,
-					chatWorldPromptConfigId: null
+					narratorPromptConfigId: null
 				},
 				characterIds: [],
 				personaIds: [],
@@ -238,7 +238,7 @@
 		const _connectionId = chatConnectionId
 		const _samplingConfigId = chatSamplingConfigId
 		const _promptConfigId = chatPromptConfigId
-		const _chatWorldPromptConfigId = chatWorldPromptConfigId
+		const _narratorPromptConfigId = narratorPromptConfigId
 		data = {
 			chat: {
 				id: chat?.id,
@@ -250,7 +250,7 @@
 				connectionId: _connectionId,
 				samplingConfigId: _samplingConfigId,
 				promptConfigId: _promptConfigId,
-				chatWorldPromptConfigId: _chatWorldPromptConfigId
+				narratorPromptConfigId: _narratorPromptConfigId
 			},
 			characterIds: _selectedCharacters.map((cc) => cc.id),
 			personaIds: _selectedPersonas.map((cp) => cp.id),
@@ -393,7 +393,7 @@
 					connectionId: chatConnectionId,
 					samplingConfigId: chatSamplingConfigId,
 					promptConfigId: chatPromptConfigId,
-					chatWorldPromptConfigId: chatWorldPromptConfigId
+					narratorPromptConfigId: narratorPromptConfigId
 				} as any,
 				characterIds,
 				personaIds,
@@ -520,7 +520,7 @@
 			chatConnectionId = (chat as any).connectionId ?? null
 			chatSamplingConfigId = (chat as any).samplingConfigId ?? null
 			chatPromptConfigId = (chat as any).promptConfigId ?? null
-			chatWorldPromptConfigId = (chat as any).chatWorldPromptConfigId ?? null
+			narratorPromptConfigId = (chat as any).narratorPromptConfigId ?? null
 			// Reset originalData to null so it gets re-initialized with the loaded data
 			originalData = undefined
 		}
@@ -663,11 +663,11 @@
 			socket.on("connections:list", (msg: any) => { adminConnectionsList = msg.connectionsList || [] })
 			socket.on("samplingConfigs:list", (msg: any) => { adminSamplingList = msg.samplingConfigsList || [] })
 			socket.on("promptConfigs:list", (msg: any) => { adminPromptConfigsList = msg.promptConfigsList || [] })
-			socket.on("chatWorldPromptConfigs:list", (msg: any) => { adminChatWorldPromptConfigsList = msg.chatWorldPromptConfigsList || [] })
+			socket.on("narratorPromptConfigs:list", (msg: any) => { adminNarratorPromptConfigsList = msg.narratorPromptConfigsList || [] })
 			socket.emit("connections:list", {})
 			socket.emit("samplingConfigs:list", {})
 			socket.emit("promptConfigs:list", {})
-			socket.emit("chatWorldPromptConfigs:list", {})
+			socket.emit("narratorPromptConfigs:list", {})
 		}
 
 		// Request initial data
@@ -681,7 +681,7 @@
 		socket.off("connections:list")
 		socket.off("samplingConfigs:list")
 		socket.off("promptConfigs:list")
-		socket.off("chatWorldPromptConfigs:list")
+		socket.off("narratorPromptConfigs:list")
 		// Properly remove event handlers by passing the function references
 		socket.off("chats:get", handleChatsGet)
 		socket.off("characters:list", handleCharactersList)
@@ -915,21 +915,23 @@
 									>
 										<Switch
 											name="toggle-character-active-{c.id}"
-											controlWidth="w-9"
-											controlActive="preset-filled-success-500"
-											controlDisabled="preset-filled-surface-500"
-											compact
 											checked={isActive}
 											onCheckedChange={(e) =>
 												toggleCharacterActive(e, c)}
 											aria-label="Toggle character {c.name} active status"
 										>
-											{#snippet inactiveChild()}<Icons.Meh
-													size="20"
-												/>{/snippet}
-											{#snippet activeChild()}<Icons.Smile
-													size="20"
-												/>{/snippet}
+											<Switch.Control
+												class="w-9 preset-filled-surface-500 data-[state=checked]:preset-filled-success-500"
+											>
+												<Switch.Thumb>
+													{#if isActive}
+														<Icons.Smile size="14" />
+													{:else}
+														<Icons.Meh size="14" />
+													{/if}
+												</Switch.Thumb>
+											</Switch.Control>
+											<Switch.HiddenInput />
 										</Switch>
 										<span class="text-surface-500 text-xs">
 											{isActive ? "Active" : "Inactive"}
@@ -1205,10 +1207,10 @@
 					</select>
 				</div>
 				<div class="grid grid-cols-[5.5rem_1fr] items-center gap-x-2 gap-y-1.5">
-					<span class="text-muted-foreground text-xs">World Prompt</span>
-					<select class="select text-xs" bind:value={chatWorldPromptConfigId}>
+					<span class="text-muted-foreground text-xs">Narrator Prompt</span>
+					<select class="select text-xs" bind:value={narratorPromptConfigId}>
 						<option value={null}>System default</option>
-						{#each adminChatWorldPromptConfigsList.filter((p) => p.id != null) as p}
+						{#each adminNarratorPromptConfigsList.filter((p) => p.id != null) as p}
 							<option value={p.id}>{p.name}</option>
 						{/each}
 					</select>

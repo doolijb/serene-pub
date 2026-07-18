@@ -262,13 +262,31 @@ export const updateCharacterLoreEntryPositionsHandler: Handler<
 			throw new Error("Lorebook not found or access denied.")
 		}
 
-		// Update positions
-		for (const update of params.positions) {
-			await db
-				.update(schema.characterLoreEntries)
-				.set({ position: update.position })
-				.where(eq(schema.characterLoreEntries.id, update.id))
+		// Verify every entry id in this request actually belongs to THIS
+		// lorebook — without this, owning any lorebook was enough to reposition
+		// (and thus write to) another user's entries by id.
+		const entryIds = params.positions.map((p) => p.id)
+		const entries = await db.query.characterLoreEntries.findMany({
+			where: (cle, { inArray }) => inArray(cle.id, entryIds),
+			columns: { id: true, lorebookId: true }
+		})
+		if (
+			entries.length !== entryIds.length ||
+			entries.some((e) => e.lorebookId !== params.lorebookId)
+		) {
+			throw new Error("Access denied to some character lore entries.")
 		}
+
+		// Update positions concurrently — each update targets a distinct entry
+		// id and doesn't depend on any other update's result.
+		await Promise.all(
+			params.positions.map((update) =>
+				db
+					.update(schema.characterLoreEntries)
+					.set({ position: update.position })
+					.where(eq(schema.characterLoreEntries.id, update.id))
+			)
+		)
 
 		// Refresh entry list
 		if (emitToUser) {

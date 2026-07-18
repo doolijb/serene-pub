@@ -1049,10 +1049,10 @@
 							<div class="space-y-2">
 								<div class="flex items-center gap-2">
 									<input class="input flex-1 text-sm" type="text" bind:value={editingNode.name} />
-									<button class="btn btn-sm preset-filled-surface-400-600" onclick={cancelEdit}>
+									<button class="btn btn-sm preset-filled-surface-400-600" aria-label="Cancel" onclick={cancelEdit}>
 										<Icons.X size={13} />
 									</button>
-									<button class="btn btn-sm preset-filled-primary-500" disabled={isSaving} onclick={saveNode}>
+									<button class="btn btn-sm preset-filled-primary-500" aria-label="Save" disabled={isSaving} onclick={saveNode}>
 										<Icons.Save size={13} />
 									</button>
 								</div>
@@ -1128,10 +1128,10 @@
 							<div class="space-y-2">
 								<div class="flex items-center gap-2">
 									<input class="input flex-1 text-sm" type="text" bind:value={editingRel.relationshipType} />
-									<button class="btn btn-sm preset-filled-surface-400-600" onclick={cancelEdit}>
+									<button class="btn btn-sm preset-filled-surface-400-600" aria-label="Cancel" onclick={cancelEdit}>
 										<Icons.X size={13} />
 									</button>
-									<button class="btn btn-sm preset-filled-primary-500" disabled={isSaving} onclick={saveRel}>
+									<button class="btn btn-sm preset-filled-primary-500" aria-label="Save" disabled={isSaving} onclick={saveRel}>
 										<Icons.Save size={13} />
 									</button>
 								</div>

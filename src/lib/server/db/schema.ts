@@ -7,6 +7,7 @@ import {
 	real,
 	boolean,
 	uniqueIndex,
+	index,
 	json,
 	date,
 	type PgTableWithColumns,
@@ -26,22 +27,32 @@ import { GroupReplyStrategies } from "../../shared/constants/GroupReplyStrategie
 import { ChatCharacterVisibility } from "../../shared/constants/ChatCharacterVisibility"
 import { ChatTypes } from "../../shared/constants/ChatTypes"
 
-export const users = pgTable("users", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	username: text("username").notNull(),
-	displayName: text("display_name"),
-	theme: text("theme").notNull().default("hamlindigo"), // Remove next
-	darkMode: boolean("dark_mode").notNull().default(true), // Remove next
-	isAdmin: boolean("is_admin").notNull().default(false),
-	isDeleted: boolean("is_deleted").notNull().default(false),
-	createdAt: date("created_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`),
-	updatedAt: date("updated_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`)
-		.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`)
-})
+export const users = pgTable(
+	"users",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		username: text("username").notNull(),
+		displayName: text("display_name"),
+		theme: text("theme").notNull().default("hamlindigo"), // Remove next
+		darkMode: boolean("dark_mode").notNull().default(true), // Remove next
+		isAdmin: boolean("is_admin").notNull().default(false),
+		isDeleted: boolean("is_deleted").notNull().default(false),
+		createdAt: date("created_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`),
+		updatedAt: date("updated_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`)
+			.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`)
+	},
+	(t) => [
+		// Without this, a check-then-insert race in users.ts's create handler
+		// could let two concurrent signups with the same username both
+		// succeed, after which username-keyed lookups (login, auth) resolve
+		// nondeterministically.
+		uniqueIndex("users_username_unique").on(t.username)
+	]
+)
 
 export const userRelations = relations(users, ({ many, one }) => ({
 	lorebooks: many(lorebooks),
@@ -71,8 +82,8 @@ export const userSettings = pgTable("user_settings", {
 			onDelete: "set null"
 		}
 	),
-	activeChatWorldPromptConfigId: integer("active_chat_world_prompt_config_id").references(
-		() => chatWorldPromptConfigs.id,
+	activeNarratorPromptConfigId: integer("active_narrator_prompt_config_id").references(
+		() => narratorPromptConfigs.id,
 		{
 			onDelete: "set null"
 		}
@@ -125,9 +136,9 @@ export const userSettingsRelations = relations(userSettings, ({ one }) => ({
 		fields: [userSettings.activePromptConfigId],
 		references: [promptConfigs.id]
 	}),
-	activeChatWorldPromptConfig: one(chatWorldPromptConfigs, {
-		fields: [userSettings.activeChatWorldPromptConfigId],
-		references: [chatWorldPromptConfigs.id]
+	activeNarratorPromptConfig: one(narratorPromptConfigs, {
+		fields: [userSettings.activeNarratorPromptConfigId],
+		references: [narratorPromptConfigs.id]
 	}),
 	activeSummarizeWorldConfig: one(worldSummarizeConfigs, {
 		fields: [userSettings.activeSummarizeWorldConfigId],
@@ -172,9 +183,14 @@ export const userTokens = pgTable("user_tokens", {
 	id: uuid("id")
 		.primaryKey()
 		.default(sql`(gen_random_uuid ())`),
-	userId: integer("user_id")
-		.notNull()
-		.references(() => users.id, { onDelete: "set null" }),
+	// Nullable: onDelete "set null" on a notNull column is a contradiction
+	// Postgres can't actually satisfy — it would throw the moment the
+	// cascade fired on a real hard delete. In practice usersDelete deletes
+	// these rows outright (see users.ts) rather than relying on this FK, but
+	// the constraint itself still needs to be satisfiable.
+	userId: integer("user_id").references(() => users.id, {
+		onDelete: "set null"
+	}),
 	token: text("token").notNull(),
 	createdAt: timestamp("created_at").notNull().defaultNow(),
 	expiresAt: timestamp("expires_at").notNull(),
@@ -359,24 +375,24 @@ export const promptConfigsRelations = relations(promptConfigs, ({ one }) => ({
 }))
 
 // "chat" prefix is deliberate: this is a prompt config scoped to the
-// standard roleplay chat type specifically, so a future world/environment
+// standard roleplay chat type specifically, so a future narrator/environment
 // config for a different chat type (e.g. Assistant) can't collide with it.
-export const chatWorldPromptConfigs = pgTable("chat_world_prompt_configs", {
+export const narratorPromptConfigs = pgTable("narrator_prompt_configs", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 	isImmutable: boolean("is_immutable").notNull().default(false),
 	name: text("name").notNull(),
 	// Chat-facing display name/label shown on messages generated with this
-	// config (e.g. "The World", "The Narrator", "Fate") — distinct from
+	// config (e.g. "Narrator", "The World", "Fate") — distinct from
 	// `name` above, which only identifies the config itself in the sidebar.
-	narratorName: text("narrator_name").notNull().default("The World"),
+	narratorName: text("narrator_name").notNull().default("Narrator"),
 	systemPrompt: text("system_prompt").notNull(),
 	connectionId: integer("connection_id").references(() => connections.id, { onDelete: "set null" }),
 	samplingConfigId: integer("sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" })
 })
 
-export const chatWorldPromptConfigsRelations = relations(chatWorldPromptConfigs, ({ one }) => ({
-	connection: one(connections, { fields: [chatWorldPromptConfigs.connectionId], references: [connections.id] }),
-	samplingConfig: one(samplingConfigs, { fields: [chatWorldPromptConfigs.samplingConfigId], references: [samplingConfigs.id] })
+export const narratorPromptConfigsRelations = relations(narratorPromptConfigs, ({ one }) => ({
+	connection: one(connections, { fields: [narratorPromptConfigs.connectionId], references: [connections.id] }),
+	samplingConfig: one(samplingConfigs, { fields: [narratorPromptConfigs.samplingConfigId], references: [samplingConfigs.id] })
 }))
 
 export const worldSummarizeConfigs = pgTable("world_summarize_configs", {
@@ -497,7 +513,7 @@ export const lorebooks = pgTable(
 			.default(sql`(CURRENT_TIMESTAMP)`)
 			.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`)
 	},
-	(table) => ({})
+	(table) => [index("lorebooks_user_id_idx").on(table.userId)]
 )
 
 export const lorebooksRelations = relations(lorebooks, ({ many, one }) => ({
@@ -556,36 +572,40 @@ export const lorebookBindingsRelations = relations(
 	})
 )
 
-export const worldLoreEntries = pgTable("world_lore_entries", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	lorebookId: integer("lorebook_id")
-		.notNull()
-		.references(() => lorebooks.id, { onDelete: "cascade" }),
-	name: text("name").notNull(),
-	category: text("category"),
-	keys: text("keys").notNull().default(""),
-	useRegex: boolean("use_regex").default(false),
-	caseSensitive: boolean("case_sensitive").notNull().default(false),
-	content: text("content").notNull().default(""),
-	priority: integer("priority").notNull().default(1),
-	constant: boolean("constant").notNull().default(false),
-	enabled: boolean("enabled").notNull().default(true),
-	extraJson: json("extra_json")
-		.notNull()
-		.default({})
-		.$type<Record<string, any>>(),
-	createdAt: date("created_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`),
-	updatedAt: timestamp("updated_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`)
-		.$onUpdate(() => new Date()),
-	position: integer("position").notNull().default(0),
-	embedding: real("embedding").array(),
-	embeddingModel: text("embedding_model"),
-	vectorizedAt: timestamp("vectorized_at")
-})
+export const worldLoreEntries = pgTable(
+	"world_lore_entries",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		lorebookId: integer("lorebook_id")
+			.notNull()
+			.references(() => lorebooks.id, { onDelete: "cascade" }),
+		name: text("name").notNull(),
+		category: text("category"),
+		keys: text("keys").notNull().default(""),
+		useRegex: boolean("use_regex").default(false),
+		caseSensitive: boolean("case_sensitive").notNull().default(false),
+		content: text("content").notNull().default(""),
+		priority: integer("priority").notNull().default(1),
+		constant: boolean("constant").notNull().default(false),
+		enabled: boolean("enabled").notNull().default(true),
+		extraJson: json("extra_json")
+			.notNull()
+			.default({})
+			.$type<Record<string, any>>(),
+		createdAt: date("created_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`)
+			.$onUpdate(() => new Date()),
+		position: integer("position").notNull().default(0),
+		embedding: real("embedding").array(),
+		embeddingModel: text("embedding_model"),
+		vectorizedAt: timestamp("vectorized_at")
+	},
+	(table) => [index("world_lore_entries_lorebook_id_idx").on(table.lorebookId)]
+)
 
 export const worldLoreEntriesRelations = relations(
 	worldLoreEntries,
@@ -597,39 +617,45 @@ export const worldLoreEntriesRelations = relations(
 	})
 )
 
-export const characterLoreEntries = pgTable("character_lore_entries", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	lorebookId: integer("lorebook_id")
-		.notNull()
-		.references(() => lorebooks.id, { onDelete: "cascade" }),
-	lorebookBindingId: integer("character_binding_id").references(
-		() => lorebookBindings.id,
-		{ onDelete: "set null" }
-	),
-	name: text("name").notNull(),
-	keys: text("keys").notNull().default(""),
-	useRegex: boolean("use_regex").default(false),
-	caseSensitive: boolean("case_sensitive").notNull().default(false),
-	content: text("content").notNull().default(""),
-	priority: integer("priority").notNull().default(1),
-	constant: boolean("constant").notNull().default(false),
-	enabled: boolean("enabled").notNull().default(true),
-	extraJson: json("extra_json")
-		.notNull()
-		.default({})
-		.$type<Record<string, any>>(),
-	createdAt: date("created_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`),
-	updatedAt: timestamp("updated_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`)
-		.$onUpdate(() => new Date()),
-	position: integer("position").notNull().default(0),
-	embedding: real("embedding").array(),
-	embeddingModel: text("embedding_model"),
-	vectorizedAt: timestamp("vectorized_at")
-})
+export const characterLoreEntries = pgTable(
+	"character_lore_entries",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		lorebookId: integer("lorebook_id")
+			.notNull()
+			.references(() => lorebooks.id, { onDelete: "cascade" }),
+		lorebookBindingId: integer("character_binding_id").references(
+			() => lorebookBindings.id,
+			{ onDelete: "set null" }
+		),
+		name: text("name").notNull(),
+		keys: text("keys").notNull().default(""),
+		useRegex: boolean("use_regex").default(false),
+		caseSensitive: boolean("case_sensitive").notNull().default(false),
+		content: text("content").notNull().default(""),
+		priority: integer("priority").notNull().default(1),
+		constant: boolean("constant").notNull().default(false),
+		enabled: boolean("enabled").notNull().default(true),
+		extraJson: json("extra_json")
+			.notNull()
+			.default({})
+			.$type<Record<string, any>>(),
+		createdAt: date("created_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`)
+			.$onUpdate(() => new Date()),
+		position: integer("position").notNull().default(0),
+		embedding: real("embedding").array(),
+		embeddingModel: text("embedding_model"),
+		vectorizedAt: timestamp("vectorized_at")
+	},
+	(table) => [
+		index("character_lore_entries_lorebook_id_idx").on(table.lorebookId)
+	]
+)
 
 export const characterLoreEntriesRelations = relations(
 	characterLoreEntries,
@@ -645,38 +671,42 @@ export const characterLoreEntriesRelations = relations(
 	})
 )
 
-export const historyEntries = pgTable("history_entries", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	lorebookId: integer("lorebook_id")
-		.notNull()
-		.references(() => lorebooks.id, { onDelete: "cascade" }),
-	year: integer("year").notNull().default(1), // Default to year 1
-	month: integer("month"), // Default to January
-	day: integer("day"), // Default to 1
-	keys: text("keys").notNull().default(""),
-	useRegex: boolean("use_regex").default(false),
-	caseSensitive: boolean("case_sensitive").notNull().default(false),
-	content: text("content").notNull().default(""),
-	constant: boolean("constant").notNull().default(false),
-	enabled: boolean("enabled").notNull().default(true),
-	extraJson: json("extra_json")
-		.notNull()
-		.default({})
-		.$type<Record<string, any>>(),
-	createdAt: date("created_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`),
-	updatedAt: timestamp("updated_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`)
-		.$onUpdate(() => new Date()),
-	position: integer("position").notNull().default(0),
-	isCompleted: boolean("is_completed").notNull().default(false),
-	graphed: boolean("graphed").notNull().default(false),
-	embedding: real("embedding").array(),
-	embeddingModel: text("embedding_model"),
-	vectorizedAt: timestamp("vectorized_at")
-})
+export const historyEntries = pgTable(
+	"history_entries",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		lorebookId: integer("lorebook_id")
+			.notNull()
+			.references(() => lorebooks.id, { onDelete: "cascade" }),
+		year: integer("year").notNull().default(1), // Default to year 1
+		month: integer("month"), // Default to January
+		day: integer("day"), // Default to 1
+		keys: text("keys").notNull().default(""),
+		useRegex: boolean("use_regex").default(false),
+		caseSensitive: boolean("case_sensitive").notNull().default(false),
+		content: text("content").notNull().default(""),
+		constant: boolean("constant").notNull().default(false),
+		enabled: boolean("enabled").notNull().default(true),
+		extraJson: json("extra_json")
+			.notNull()
+			.default({})
+			.$type<Record<string, any>>(),
+		createdAt: date("created_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`)
+			.$onUpdate(() => new Date()),
+		position: integer("position").notNull().default(0),
+		isCompleted: boolean("is_completed").notNull().default(false),
+		graphed: boolean("graphed").notNull().default(false),
+		embedding: real("embedding").array(),
+		embeddingModel: text("embedding_model"),
+		vectorizedAt: timestamp("vectorized_at")
+	},
+	(table) => [index("history_entries_lorebook_id_idx").on(table.lorebookId)]
+)
 
 export const historyEntriesRelations = relations(historyEntries, ({ one, many }) => ({
 	lorebook: one(lorebooks, {
@@ -686,17 +716,21 @@ export const historyEntriesRelations = relations(historyEntries, ({ one, many })
 	scenes: many(scenes)
 }))
 
-export const tags = pgTable("tags", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	userId: integer("user_id")
-		.notNull()
-		.references(() => users.id, { onDelete: "cascade" }),
-	name: text("name").notNull(), // Tag name (unique)
-	description: text("description"),
-	colorPreset: text("color_preset")
-		.notNull()
-		.default("preset-filled-primary-500") // Color preset for the tag
-})
+export const tags = pgTable(
+	"tags",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		userId: integer("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		name: text("name").notNull(), // Tag name (unique)
+		description: text("description"),
+		colorPreset: text("color_preset")
+			.notNull()
+			.default("preset-filled-primary-500") // Color preset for the tag
+	},
+	(table) => [index("tags_user_id_idx").on(table.userId)]
+)
 
 export const tagsRelations = relations(tags, ({ many, one }) => ({
 	user: one(users, {
@@ -709,14 +743,25 @@ export const tagsRelations = relations(tags, ({ many, one }) => ({
 	chatTags: many(chatTags)
 }))
 
-export const characterTags = pgTable("character_tags", {
-	characterId: integer("character_id")
-		.notNull()
-		.references(() => characters.id, { onDelete: "cascade" }), // FK to characters.id
-	tagId: integer("tag_id")
-		.notNull()
-		.references(() => tags.id, { onDelete: "cascade" }) // FK to tags.id
-})
+export const characterTags = pgTable(
+	"character_tags",
+	{
+		characterId: integer("character_id")
+			.notNull()
+			.references(() => characters.id, { onDelete: "cascade" }), // FK to characters.id
+		tagId: integer("tag_id")
+			.notNull()
+			.references(() => tags.id, { onDelete: "cascade" }) // FK to tags.id
+	},
+	(t) => [
+		// Without this, nothing stopped the same (characterId, tagId) pair
+		// being inserted repeatedly (a double-click/retry), silently
+		// duplicating the association and inflating counts anywhere that
+		// renders a tag list — matches the composite unique PKs already used
+		// on chatCharacters/chatPersonas/chatGuests for the same reason.
+		uniqueIndex("character_tags_unique").on(t.characterId, t.tagId)
+	]
+)
 
 export const characterTagsRelations = relations(characterTags, ({ one }) => ({
 	character: one(characters, {
@@ -729,14 +774,18 @@ export const characterTagsRelations = relations(characterTags, ({ one }) => ({
 	})
 }))
 
-export const personaTags = pgTable("persona_tags", {
-	personaId: integer("persona_id")
-		.notNull()
-		.references(() => personas.id, { onDelete: "cascade" }), // FK to personas.id
-	tagId: integer("tag_id")
-		.notNull()
-		.references(() => tags.id, { onDelete: "cascade" }) // FK to tags.id
-})
+export const personaTags = pgTable(
+	"persona_tags",
+	{
+		personaId: integer("persona_id")
+			.notNull()
+			.references(() => personas.id, { onDelete: "cascade" }), // FK to personas.id
+		tagId: integer("tag_id")
+			.notNull()
+			.references(() => tags.id, { onDelete: "cascade" }) // FK to tags.id
+	},
+	(t) => [uniqueIndex("persona_tags_unique").on(t.personaId, t.tagId)]
+)
 
 export const personaTagsRelations = relations(personaTags, ({ one }) => ({
 	persona: one(personas, {
@@ -749,14 +798,18 @@ export const personaTagsRelations = relations(personaTags, ({ one }) => ({
 	})
 }))
 
-export const lorebookTags = pgTable("lorebook_tags", {
-	lorebookId: integer("lorebook_id")
-		.notNull()
-		.references(() => lorebooks.id, { onDelete: "cascade" }), // FK to lorebooks.id
-	tagId: integer("tag_id")
-		.notNull()
-		.references(() => tags.id, { onDelete: "cascade" }) // FK to tags.id
-})
+export const lorebookTags = pgTable(
+	"lorebook_tags",
+	{
+		lorebookId: integer("lorebook_id")
+			.notNull()
+			.references(() => lorebooks.id, { onDelete: "cascade" }), // FK to lorebooks.id
+		tagId: integer("tag_id")
+			.notNull()
+			.references(() => tags.id, { onDelete: "cascade" }) // FK to tags.id
+	},
+	(t) => [uniqueIndex("lorebook_tags_unique").on(t.lorebookId, t.tagId)]
+)
 
 export const lorebookTagsRelations = relations(lorebookTags, ({ one }) => ({
 	lorebook: one(lorebooks, {
@@ -769,14 +822,18 @@ export const lorebookTagsRelations = relations(lorebookTags, ({ one }) => ({
 	})
 }))
 
-export const chatTags = pgTable("chat_tags", {
-	chatId: integer("chat_id")
-		.notNull()
-		.references(() => chats.id, { onDelete: "cascade" }), // FK to chats.id
-	tagId: integer("tag_id")
-		.notNull()
-		.references(() => tags.id, { onDelete: "cascade" }) // FK to tags.id
-})
+export const chatTags = pgTable(
+	"chat_tags",
+	{
+		chatId: integer("chat_id")
+			.notNull()
+			.references(() => chats.id, { onDelete: "cascade" }), // FK to chats.id
+		tagId: integer("tag_id")
+			.notNull()
+			.references(() => tags.id, { onDelete: "cascade" }) // FK to tags.id
+	},
+	(t) => [uniqueIndex("chat_tags_unique").on(t.chatId, t.tagId)]
+)
 
 export const chatTagsRelations = relations(chatTags, ({ one }) => ({
 	chat: one(chats, {
@@ -789,7 +846,9 @@ export const chatTagsRelations = relations(chatTags, ({ one }) => ({
 	})
 }))
 
-export const characters = pgTable("characters", {
+export const characters = pgTable(
+	"characters",
+	{
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 	userId: integer("user_id")
 		.notNull()
@@ -850,7 +909,9 @@ export const characters = pgTable("characters", {
 	embedding: real("embedding").array(),
 	embeddingModel: text("embedding_model"),
 	vectorizedAt: timestamp("vectorized_at")
-})
+	},
+	(table) => [index("characters_user_id_idx").on(table.userId)]
+)
 
 export const charactersRelations = relations(characters, ({ many, one }) => ({
 	user: one(users, {
@@ -866,7 +927,9 @@ export const charactersRelations = relations(characters, ({ many, one }) => ({
 	chatMessages: many(chatMessages)
 }))
 
-export const personas = pgTable("personas", {
+export const personas = pgTable(
+	"personas",
+	{
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 	userId: integer("user_id")
 		.notNull()
@@ -891,7 +954,9 @@ export const personas = pgTable("personas", {
 	embedding: real("embedding").array(),
 	embeddingModel: text("embedding_model"),
 	vectorizedAt: timestamp("vectorized_at")
-})
+	},
+	(table) => [index("personas_user_id_idx").on(table.userId)]
+)
 
 export const personasRelations = relations(personas, ({ one, many }) => ({
 	user: one(users, {
@@ -906,7 +971,9 @@ export const personasRelations = relations(personas, ({ one, many }) => ({
 }))
 
 // Chats (group or 1:1)
-export const chats = pgTable("chats", {
+export const chats = pgTable(
+	"chats",
+	{
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 	name: text("name"), // Optional chat/group name
 	isGroup: boolean("is_group").notNull(), // 1 for group chat, 0 for 1:1
@@ -935,12 +1002,14 @@ export const chats = pgTable("chats", {
 	connectionId: integer("connection_id").references(() => connections.id, { onDelete: "set null" }),
 	samplingConfigId: integer("sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" }),
 	promptConfigId: integer("prompt_config_id").references(() => promptConfigs.id, { onDelete: "set null" }),
-	chatWorldPromptConfigId: integer("chat_world_prompt_config_id").references(() => chatWorldPromptConfigs.id, { onDelete: "set null" }),
+	narratorPromptConfigId: integer("narrator_prompt_config_id").references(() => narratorPromptConfigs.id, { onDelete: "set null" }),
 	drafts: json("drafts")
 		.$type<Record<string, string>>()
 		.notNull()
 		.default({})
-})
+	},
+	(table) => [index("chats_user_id_idx").on(table.userId)]
+)
 
 export const chatsRelations = relations(chats, ({ one, many }) => ({
 	user: one(users, {
@@ -967,9 +1036,9 @@ export const chatsRelations = relations(chats, ({ one, many }) => ({
 		fields: [chats.promptConfigId],
 		references: [promptConfigs.id]
 	}),
-	chatWorldPromptConfig: one(chatWorldPromptConfigs, {
-		fields: [chats.chatWorldPromptConfigId],
-		references: [chatWorldPromptConfigs.id]
+	narratorPromptConfig: one(narratorPromptConfigs, {
+		fields: [chats.narratorPromptConfigId],
+		references: [narratorPromptConfigs.id]
 	}),
 	chatTags: many(chatTags),
 	scenes: many(scenes)
@@ -983,9 +1052,15 @@ export const chatMessages = pgTable(
 		chatId: integer("chat_id")
 			.notNull()
 			.references(() => chats.id, { onDelete: "cascade" }),
-		userId: integer("user_id")
-			.notNull()
-			.references(() => users.id, { onDelete: "cascade" }), // nullable for system/character messages
+		// Nullable + set null (not cascade): this is who SENT the message, not
+		// who owns the chat it's in — a message can easily belong to a chat
+		// owned by a different user (a guest's message in someone else's
+		// chat). Cascading a user delete here would silently wipe messages
+		// out of chats that user doesn't even own; nulling authorship instead
+		// (matching characterId/personaId below) preserves the chat's history.
+		userId: integer("user_id").references(() => users.id, {
+			onDelete: "set null"
+		}),
 		characterId: integer("character_id").references(() => characters.id, {
 			onDelete: "set null"
 		}), // nullable
@@ -993,10 +1068,10 @@ export const chatMessages = pgTable(
 			onDelete: "set null"
 		}), // nullable
 		role: text("role"), // 'user', 'character', 'system', etc
-		// True for a manually-triggered "World Response" (narration/environment
+		// True for a manually-triggered Narrator response (narration/environment
 		// flavor, not a character) — characterId/personaId stay null, role stays
 		// "assistant" so existing history-building code keeps including it.
-		isWorldResponse: boolean("is_world_response").notNull().default(false),
+		isNarratorResponse: boolean("is_narrator_response").notNull().default(false),
 		content: text("content").notNull(),
 		createdAt: date("created_at")
 			.notNull()
@@ -1011,8 +1086,8 @@ export const chatMessages = pgTable(
 			swipes?: { currentIdx: number | null; history: [] }
 			waitingForFunctionSelection?: boolean
 			reasoning?: string // Assistant reasoning/thinking before response
-			worldInstructions?: string // Optional extra focus text for a World Response generation
-			worldName?: string // Display name resolved at generation time for a World Response message (e.g. "The World")
+			narratorInstructions?: string // Optional extra focus text for a Narrator response generation
+			narratorName?: string // Display name resolved at generation time for a Narrator response message (e.g. "Narrator")
 		}>(), // JSON for extra info
 		isGenerating: boolean("is_generating").notNull().default(false), // 1 if processing, 0 otherwise
 		generationStage: text("generation_stage"), // 'queued' | 'loading' | 'generating' | null; only meaningful while isGenerating
@@ -1024,7 +1099,8 @@ export const chatMessages = pgTable(
 		embeddingModel: text("embedding_model"),
 		vectorizedAt: timestamp("vectorized_at")
 	},
-	(table) => ({})
+	// The single hottest query in the app — every chat load filters by this.
+	(table) => [index("chat_messages_chat_id_idx").on(table.chatId)]
 )
 
 export const chatMessagesRelations = relations(chatMessages, ({ one }) => ({
@@ -1058,9 +1134,11 @@ export const chatPersonas = pgTable(
 		}),
 		position: integer("position").default(0) // Position in the chat
 	},
-	(table) => ({
-		pk: uniqueIndex("chat_personas_pk").on(table.chatId, table.personaId)
-	})
+	(table) => [
+		uniqueIndex("chat_personas_pk").on(table.chatId, table.personaId),
+		// canViewPersona() looks up chatPersonas by personaId alone.
+		index("chat_personas_persona_id_idx").on(table.personaId)
+	]
 )
 
 export const chatPersonasRelations = relations(chatPersonas, ({ one }) => ({
@@ -1091,12 +1169,14 @@ export const chatCharacters = pgTable(
 			.notNull()
 			.default(ChatCharacterVisibility.VISIBLE) // Controls how much character info is shown when not responding
 	},
-	(table) => ({
-		pk: uniqueIndex("chat_characters_pk").on(
+	(table) => [
+		uniqueIndex("chat_characters_pk").on(
 			table.chatId,
 			table.characterId
-		)
-	})
+		),
+		// canViewCharacter() looks up chatCharacters by characterId alone.
+		index("chat_characters_character_id_idx").on(table.characterId)
+	]
 )
 
 export const chatCharactersRelations = relations(chatCharacters, ({ one }) => ({
@@ -1199,8 +1279,8 @@ export const systemSettings = pgTable("system_settings", {
 		}
 	),
 	lockPromptConfig: boolean("lock_prompt_config").notNull().default(false),
-	defaultChatWorldPromptConfigId: integer("default_chat_world_prompt_config_id").references(
-		() => chatWorldPromptConfigs.id,
+	defaultNarratorPromptConfigId: integer("default_narrator_prompt_config_id").references(
+		() => narratorPromptConfigs.id,
 		{ onDelete: "set null" }
 	),
 	isAccountsEnabled: boolean("is_accounts_enabled").notNull().default(false),
@@ -1248,9 +1328,9 @@ export const systemSettingsRelations = relations(systemSettings, ({ one }) => ({
 		fields: [systemSettings.defaultPromptConfigId],
 		references: [promptConfigs.id]
 	}),
-	defaultChatWorldPromptConfig: one(chatWorldPromptConfigs, {
-		fields: [systemSettings.defaultChatWorldPromptConfigId],
-		references: [chatWorldPromptConfigs.id]
+	defaultNarratorPromptConfig: one(narratorPromptConfigs, {
+		fields: [systemSettings.defaultNarratorPromptConfigId],
+		references: [narratorPromptConfigs.id]
 	}),
 	defaultSummarizeWorldConfig: one(worldSummarizeConfigs, {
 		fields: [systemSettings.defaultSummarizeWorldConfigId],
@@ -1317,7 +1397,9 @@ export type InsertKoboldCppModel = typeof koboldCppModels.$inferInsert
  * Scenes: discrete story moments within a chat, used as the foundation for
  * vectorization and causal graph construction.
  */
-export const scenes = pgTable("scenes", {
+export const scenes = pgTable(
+	"scenes",
+	{
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 	// Chat is nullable — chat deletion sets this to null; scenes persist until lorebook is deleted
 	chatId: integer("chat_id").references(() => chats.id, { onDelete: "set null" }),
@@ -1349,7 +1431,12 @@ export const scenes = pgTable("scenes", {
 		.notNull()
 		.default(sql`(CURRENT_TIMESTAMP)`)
 		.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`)
-})
+	},
+	(table) => [
+		index("scenes_lorebook_id_idx").on(table.lorebookId),
+		index("scenes_chat_id_idx").on(table.chatId)
+	]
+)
 
 export const scenesRelations = relations(scenes, ({ one, many }) => ({
 	chat: one(chats, {
@@ -1371,7 +1458,9 @@ export const scenesRelations = relations(scenes, ({ one, many }) => ({
  * Narrative nodes: character/entity nodes in the relationship graph.
  * All nodes represent characters, persons, or sentient entities — no locations or items.
  */
-export const narrativeNodes = pgTable("narrative_nodes", {
+export const narrativeNodes = pgTable(
+	"narrative_nodes",
+	{
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 	lorebookId: integer("lorebook_id")
 		.notNull()
@@ -1410,7 +1499,9 @@ export const narrativeNodes = pgTable("narrative_nodes", {
 		.notNull()
 		.defaultNow()
 		.$onUpdate(() => new Date())
-})
+	},
+	(table) => [index("narrative_nodes_lorebook_id_idx").on(table.lorebookId)]
+)
 
 export const narrativeNodesRelations = relations(
 	narrativeNodes,
@@ -1451,7 +1542,9 @@ export const narrativeNodesRelations = relations(
  *   Year 2: Aria → Kael  (life_debt)     "Aria saved Kael from burning building"
  *   Year 5: Aria → Kael  (ally)          "Kael repaid the debt; now genuine friends"
  */
-export const narrativeRelationships = pgTable("narrative_relationships", {
+export const narrativeRelationships = pgTable(
+	"narrative_relationships",
+	{
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 	lorebookId: integer("lorebook_id")
 		.notNull()
@@ -1486,7 +1579,12 @@ export const narrativeRelationships = pgTable("narrative_relationships", {
 		.notNull()
 		.defaultNow()
 		.$onUpdate(() => new Date())
-})
+	},
+	(table) => [
+		index("narrative_relationships_from_node_id_idx").on(table.fromNodeId),
+		index("narrative_relationships_to_node_id_idx").on(table.toNodeId)
+	]
+)
 
 export const narrativeRelationshipsRelations = relations(
 	narrativeRelationships,

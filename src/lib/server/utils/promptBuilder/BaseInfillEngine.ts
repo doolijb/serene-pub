@@ -113,6 +113,10 @@ export abstract class BaseInfillEngine {
 		if (currentTokens >= threshold || candidates.length === 0) return currentTokens
 		let total = currentTokens
 		for (const msg of candidates) {
+			// Re-check saturation each iteration (not just before the loop): once total
+			// reaches threshold, no further candidate can add value, so stop evaluating
+			// (and re-tokenizing) the rest of the pool instead of exhausting it.
+			if (total >= threshold) break
 			const p = processMsg(msg)
 			if (!p) continue
 			chatMessages.push(p)

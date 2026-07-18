@@ -1,4 +1,5 @@
 import Handlebars from "handlebars"
+import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import _ from "lodash"
 import { StopStrings } from "../utils/StopStrings"
 import { Ollama, type ChatRequest, type GenerateRequest } from "ollama"
@@ -153,10 +154,9 @@ class OllamaAdapter extends BaseConnectionAdapter {
 			personas: this.chat.chatPersonas?.map((cp) => cp.persona) || [],
 			currentCharacterId: this.currentCharacterId ?? undefined
 		})
-		const characterName =
-			this.chat.chatCharacters?.[0]?.character?.nickname ||
-			this.chat.chatCharacters?.[0]?.character?.name ||
-			"assistant"
+		const characterName = resolveCharacterName(
+			this.chat.chatCharacters?.[0]?.character
+		)
 		const personaName = this.chat.chatPersonas?.[0]?.persona?.name || "user"
 		const stopContext: Record<string, string> = {
 			char: characterName,

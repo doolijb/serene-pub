@@ -1,16 +1,52 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
+	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { onMount, onDestroy, getContext } from "svelte"
 	import * as skio from "sveltekit-io"
+	import { Theme } from "$lib/client/consts/Theme"
 	import { toaster } from "$lib/client/utils/toaster"
+	import BackgroundPicker from "$lib/client/components/backgrounds/BackgroundPicker.svelte"
 	import CustomThemeEditor from "./CustomThemeEditor.svelte"
 
 	const socket = skio.get()
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
+	const userSettingsCtx: UserSettingsCtx = getContext("userSettingsCtx")
 
 	let isAccountsEnabled = $derived(systemSettingsCtx?.settings?.isAccountsEnabled ?? false)
 	let isAdmin = $derived(userCtx?.user?.isAdmin ?? false)
+
+	let isDarkMode = $state(false)
+	let selectedTheme = $state("")
+	let selectedBackground = $state<string | null>(null)
+	let backgroundOpacity = $state(75)
+	let backgroundExpanded = $state(false)
+
+	$effect(() => {
+		isDarkMode = userSettingsCtx.settings?.darkMode ?? true
+	})
+
+	$effect(() => {
+		selectedTheme = userSettingsCtx.settings?.theme ?? "hamlindigo"
+	})
+
+	$effect(() => {
+		selectedBackground = userSettingsCtx.settings?.backgroundImagePath ?? null
+		backgroundOpacity = userSettingsCtx.settings?.backgroundOpacity ?? 75
+	})
+
+	function handleBackgroundChange(path: string | null, opacity: number) {
+		socket.emit("userSettings:updateBackground", { path, opacity })
+	}
+
+	const onDarkModeChanged = (event: { checked: boolean }) => {
+		socket.emit("userSettings:updateDarkMode", { enabled: event.checked })
+	}
+
+	const onThemeChanged = (event: Event) => {
+		const target = event.target as HTMLSelectElement
+		socket.emit("userSettings:updateTheme", { theme: target.value })
+	}
 
 	type ThemeMeta = Sockets.CustomThemes.ThemeMeta
 
@@ -37,11 +73,33 @@
 			toaster.error({ title: "Failed to load themes" })
 		})
 		loadList()
+
+		socket.on("userSettings:updateDarkMode", (message: any) => {
+			if (message.success) {
+				toaster.success({
+					title: `${message.enabled ? "Dark" : "Light"} mode enabled`
+				})
+			} else {
+				toaster.error({ title: "Failed to update dark mode setting" })
+			}
+		})
+
+		socket.on("userSettings:updateTheme", (message: any) => {
+			if (message.success) {
+				toaster.success({
+					title: "Theme updated successfully"
+				})
+			} else {
+				toaster.error({ title: "Failed to update theme" })
+			}
+		})
 	})
 
 	onDestroy(() => {
 		socket.off("customThemes:list")
 		socket.off("customThemes:list:error")
+		socket.off("userSettings:updateDarkMode")
+		socket.off("userSettings:updateTheme")
 	})
 
 	function onSaved(theme: ThemeMeta) {
@@ -67,7 +125,76 @@
 
 {:else}
 	<div class="flex flex-col gap-4 p-4">
-		<div class="flex items-center justify-between">
+		<div>
+			<label for="theme" class="font-semibold">Theme</label>
+			<select
+				id="theme"
+				class="select"
+				name="theme"
+				value={selectedTheme}
+				onchange={onThemeChanged}
+				aria-label="Select application theme"
+			>
+				<optgroup label="Built-in">
+					{#each Theme.options as [key, label]}
+						<option value={key}>{label}</option>
+					{/each}
+				</optgroup>
+				{#if myThemes.length > 0}
+					<optgroup label="My Themes">
+						{#each myThemes as t}
+							<option value={t.name}>{t.label}</option>
+						{/each}
+					</optgroup>
+				{/if}
+				{#if instanceThemes.length > 0}
+					<optgroup label="Instance Themes">
+						{#each instanceThemes as t}
+							<option value={t.name}>{t.label}</option>
+						{/each}
+					</optgroup>
+				{/if}
+			</select>
+		</div>
+
+		<div class="flex gap-2">
+			<Switch
+				name="dark-mode"
+				checked={isDarkMode}
+				onCheckedChange={onDarkModeChanged}
+			>
+				<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+					<Switch.Thumb />
+				</Switch.Control>
+				<Switch.HiddenInput />
+			</Switch>
+			<label for="dark-mode" class="font-semibold">Dark Mode</label>
+		</div>
+
+		<!-- Background -->
+		<div class="border-t pt-4">
+			<button
+				type="button"
+				class="flex w-full items-center justify-between"
+				onclick={() => (backgroundExpanded = !backgroundExpanded)}
+			>
+				<h3 class="text-lg font-semibold">Background</h3>
+				<Icons.ChevronDown
+					class="text-muted-foreground h-4 w-4 transition-transform {backgroundExpanded ? 'rotate-180' : ''}"
+				/>
+			</button>
+			{#if backgroundExpanded}
+				<div class="mt-3">
+					<BackgroundPicker
+						bind:selectedPath={selectedBackground}
+						bind:opacity={backgroundOpacity}
+						onchange={handleBackgroundChange}
+					/>
+				</div>
+			{/if}
+		</div>
+
+		<div class="flex items-center justify-between border-t pt-4">
 			<h3 class="text-sm font-semibold">Custom Themes</h3>
 			<button class="btn btn-sm preset-filled-primary-500" onclick={() => (editing = "new")}>
 				<Icons.Plus size={14} />

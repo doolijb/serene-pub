@@ -317,13 +317,13 @@ export type SocketEventMap = {
 		params: Sockets.Chats.UpdateChatCharacterVisibility.Params
 		response: Sockets.Chats.UpdateChatCharacterVisibility.Response
 	}
-	"chats:triggerWorldResponse": {
-		params: Sockets.Chats.TriggerWorldResponse.Params
-		response: Sockets.Chats.TriggerWorldResponse.Response
+	"chats:triggerNarratorResponse": {
+		params: Sockets.Chats.TriggerNarratorResponse.Params
+		response: Sockets.Chats.TriggerNarratorResponse.Response
 	}
-	"chats:getWorldNarratorName": {
-		params: Sockets.Chats.GetWorldNarratorName.Params
-		response: Sockets.Chats.GetWorldNarratorName.Response
+	"chats:getNarratorName": {
+		params: Sockets.Chats.GetNarratorName.Params
+		response: Sockets.Chats.GetNarratorName.Response
 	}
 	"chats:titleGenerated": {
 		params: Sockets.Chats.TitleGenerated.Call
@@ -488,32 +488,32 @@ export type SocketEventMap = {
 		response: { error?: string }
 	}
 
-	// Chat World Prompt Config events ("Chat Prompts: World")
-	"chatWorldPromptConfigs:list": {
-		params: Sockets.ChatWorldPromptConfigs.List.Params
-		response: Sockets.ChatWorldPromptConfigs.List.Response
+	// Narrator Prompt Config events ("Chat Prompts: Narrator")
+	"narratorPromptConfigs:list": {
+		params: Sockets.NarratorPromptConfigs.List.Params
+		response: Sockets.NarratorPromptConfigs.List.Response
 	}
-	"chatWorldPromptConfigs:get": {
-		params: Sockets.ChatWorldPromptConfigs.Get.Params
-		response: Sockets.ChatWorldPromptConfigs.Get.Response
+	"narratorPromptConfigs:get": {
+		params: Sockets.NarratorPromptConfigs.Get.Params
+		response: Sockets.NarratorPromptConfigs.Get.Response
 	}
-	"chatWorldPromptConfigs:create": {
-		params: Sockets.ChatWorldPromptConfigs.Create.Params
-		response: Sockets.ChatWorldPromptConfigs.Create.Response
+	"narratorPromptConfigs:create": {
+		params: Sockets.NarratorPromptConfigs.Create.Params
+		response: Sockets.NarratorPromptConfigs.Create.Response
 	}
-	"chatWorldPromptConfigs:update": {
-		params: Sockets.ChatWorldPromptConfigs.Update.Params
-		response: Sockets.ChatWorldPromptConfigs.Update.Response
+	"narratorPromptConfigs:update": {
+		params: Sockets.NarratorPromptConfigs.Update.Params
+		response: Sockets.NarratorPromptConfigs.Update.Response
 	}
-	"chatWorldPromptConfigs:delete": {
-		params: Sockets.ChatWorldPromptConfigs.Delete.Params
-		response: Sockets.ChatWorldPromptConfigs.Delete.Response
+	"narratorPromptConfigs:delete": {
+		params: Sockets.NarratorPromptConfigs.Delete.Params
+		response: Sockets.NarratorPromptConfigs.Delete.Response
 	}
-	"chatWorldPromptConfigs:setUserActive": {
-		params: Sockets.ChatWorldPromptConfigs.SetUserActive.Params
-		response: Sockets.ChatWorldPromptConfigs.SetUserActive.Response
+	"narratorPromptConfigs:setUserActive": {
+		params: Sockets.NarratorPromptConfigs.SetUserActive.Params
+		response: Sockets.NarratorPromptConfigs.SetUserActive.Response
 	}
-	"chatWorldPromptConfigs:setUserActive:error": {
+	"narratorPromptConfigs:setUserActive:error": {
 		params: never
 		response: { error?: string }
 	}
@@ -1308,23 +1308,18 @@ export interface TypedSocket {
 		listener: (data: SocketEventMap[K]["response"]) => void
 	): void
 
-	// Wildcard error event listener
-	on(
-		event: "**:error",
-		listener: (data: { error?: string; description?: string }) => void
-	): void
-
 	// Type-safe off method
 	off<K extends keyof SocketEventMap>(
 		event: K,
 		listener?: (data: SocketEventMap[K]["response"]) => void
 	): void
 
-	// Wildcard error event off
-	off(
-		event: "**:error",
-		listener?: (data: { error?: string; description?: string }) => void
-	): void
+	// Generic catch-all listener - Socket.IO does NOT support glob/wildcard
+	// event names (eg. "**:error") without a plugin, so this is the only real
+	// mechanism for observing every event (used eg. to toast on any unhandled
+	// "*:error" event). Fires for every event this socket receives.
+	onAny(listener: (event: string, ...args: any[]) => void): void
+	offAny(listener?: (event: string, ...args: any[]) => void): void
 
 	// Original socket methods for backward compatibility
 	id: string
@@ -1353,24 +1348,28 @@ export function createTypedSocket(): TypedSocket {
 		},
 
 		on: (<K extends keyof SocketEventMap>(
-			event: K | "**:error",
-			listener:
-				| ((data: SocketEventMap[K]["response"]) => void)
-				| ((data: { error?: string; description?: string }) => void)
+			event: K,
+			listener: (data: SocketEventMap[K]["response"]) => void
 		) => {
 			socket.on(event as string, listener)
 		}) as any,
 
 		off: (<K extends keyof SocketEventMap>(
-			event: K | "**:error",
-			listener?:
-				| ((data: SocketEventMap[K]["response"]) => void)
-				| ((data: { error?: string; description?: string }) => void)
+			event: K,
+			listener?: (data: SocketEventMap[K]["response"]) => void
 		) => {
 			if (socket.off) {
 				socket.off(event as string, listener)
 			}
 		}) as any,
+
+		onAny: (listener: (event: string, ...args: any[]) => void) => {
+			if (socket.onAny) socket.onAny(listener)
+		},
+
+		offAny: (listener?: (event: string, ...args: any[]) => void) => {
+			if (socket.offAny) socket.offAny(listener)
+		},
 
 		// Pass through original socket properties with safe access
 		get id() {

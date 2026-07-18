@@ -74,13 +74,11 @@
 					<div class="flex flex-col gap-2">
 						{#each characters as c}
 							<div class="flex items-center gap-2">
-								<Avatar
-									src={c.avatar || ""}
-									size="w-8 h-8 min-w-8 min-h-8"
-									imageClasses="object-cover"
-									name={c.nickname || c.name}
-								>
-									<Icons.User size={16} />
+								<Avatar class="w-8 h-8 min-w-8 min-h-8">
+									<Avatar.Image src={c.avatar || ""} alt={c.nickname || c.name} class="object-cover" />
+									<Avatar.Fallback>
+										<Icons.User size={16} />
+									</Avatar.Fallback>
 								</Avatar>
 								<span class="truncate text-sm font-medium">{c.nickname || c.name}</span>
 							</div>
@@ -98,13 +96,11 @@
 					<div class="flex flex-col gap-2">
 						{#each personas as p}
 							<div class="flex items-center gap-2">
-								<Avatar
-									src={p.avatar || ""}
-									size="w-8 h-8 min-w-8 min-h-8"
-									imageClasses="object-cover"
-									name={p.name}
-								>
-									<Icons.UserCog size={16} />
+								<Avatar class="w-8 h-8 min-w-8 min-h-8">
+									<Avatar.Image src={p.avatar || ""} alt={p.name} class="object-cover" />
+									<Avatar.Fallback>
+										<Icons.UserCog size={16} />
+									</Avatar.Fallback>
 								</Avatar>
 								<span class="truncate text-sm font-medium">{p.name}</span>
 							</div>

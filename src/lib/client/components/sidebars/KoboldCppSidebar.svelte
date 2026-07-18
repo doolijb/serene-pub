@@ -278,56 +278,54 @@
 			</div>
 		{/if}
 		<div class="flex-1 overflow-y-auto">
-			<Tabs value={activeTab} onValueChange={handleTabChange} listBase="flex flex-wrap gap-1">
-				{#snippet list()}
-					<Tabs.Control value="models">
+			<Tabs value={activeTab} onValueChange={handleTabChange}>
+				<Tabs.List class="flex flex-wrap gap-1">
+					<Tabs.Trigger value="models">
 						<Icons.Package size={20} class="inline" />
 						{#if activeTab === "models"}Models{/if}
-					</Tabs.Control>
-					<Tabs.Control value="available">
+					</Tabs.Trigger>
+					<Tabs.Trigger value="available">
 						<Icons.Search size={20} class="inline" />
 						{#if activeTab === "available"}Available{/if}
-					</Tabs.Control>
-					<Tabs.Control value="downloads">
+					</Tabs.Trigger>
+					<Tabs.Trigger value="downloads">
 						<Icons.Download size={20} class="inline" />
 						{#if activeTab === "downloads"}Downloads{/if}
-					</Tabs.Control>
-					<Tabs.Control value="perf">
+					</Tabs.Trigger>
+					<Tabs.Trigger value="perf">
 						<Icons.Gauge size={20} class="inline" />
 						{#if activeTab === "perf"}Performance{/if}
-					</Tabs.Control>
-					<Tabs.Control value="settings">
+					</Tabs.Trigger>
+					<Tabs.Trigger value="settings">
 						<Icons.Settings size={20} class="inline" />
 						{#if activeTab === "settings"}Settings{/if}
-					</Tabs.Control>
-				{/snippet}
-				{#snippet content()}
-				<Tabs.Panel value="models">
+					</Tabs.Trigger>
+				</Tabs.List>
+				<Tabs.Content value="models">
 						{#if activeTab === "models"}
 							<KoboldCppModelsTab />
 						{/if}
-					</Tabs.Panel>
-					<Tabs.Panel value="available">
+					</Tabs.Content>
+					<Tabs.Content value="available">
 						{#if activeTab === "available"}
 							<KoboldCppDownloadTab {isLocal} onDownloadStart={() => (activeTab = "downloads")} />
 						{/if}
-					</Tabs.Panel>
-					<Tabs.Panel value="downloads">
+					</Tabs.Content>
+					<Tabs.Content value="downloads">
 						{#if activeTab === "downloads"}
 							<KoboldCppDownloadsTab />
 						{/if}
-					</Tabs.Panel>
-					<Tabs.Panel value="perf">
+					</Tabs.Content>
+					<Tabs.Content value="perf">
 						{#if activeTab === "perf"}
 							<KoboldCppPerfTab {isManaged} />
 						{/if}
-					</Tabs.Panel>
-					<Tabs.Panel value="settings">
+					</Tabs.Content>
+					<Tabs.Content value="settings">
 						{#if activeTab === "settings"}
 							<KoboldCppSettingsTab onReset={handleReset} {isManaged} onUpdateBinary={() => (showVariantPicker = true)} />
 						{/if}
-					</Tabs.Panel>
-				{/snippet}
+					</Tabs.Content>
 			</Tabs>
 		</div>
 	{/if}

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, onMount } from "svelte"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import UserForm from "../userForms/UserForm.svelte"
@@ -190,6 +190,7 @@
 				type="text"
 				bind:value={search}
 				placeholder="Search users..."
+				aria-label="Search users"
 				class="input w-full pl-10"
 			/>
 		</div>
@@ -266,7 +267,7 @@
 </div>
 
 <!-- Delete Confirmation Modal -->
-<Modal
+<Dialog
 	open={showDeleteModal}
 	onOpenChange={(e) => {
 		if (!e.open) {
@@ -274,27 +275,30 @@
 			userToDelete = undefined
 		}
 	}}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
-	backdropClasses="backdrop-blur-sm"
 >
-	{#snippet content()}
-		<div class="p-6">
-			<h3 class="mb-4 text-lg font-semibold">Delete User</h3>
-			<p class="text-surface-500 mb-6">
-				Are you sure you want to delete "{userToDelete?.displayName ||
-					userToDelete?.username}"? This action cannot be undone.
-			</p>
-			<div class="flex justify-end gap-2">
-				<button
-					class="btn btn-sm preset-filled-surface-500"
-					onclick={() => { showDeleteModal = false; userToDelete = undefined }}
-				>
-					Cancel
-				</button>
-				<button class="btn btn-sm preset-filled-error-500" onclick={deleteUser}>
-					Delete
-				</button>
-			</div>
-		</div>
-	{/snippet}
-</Modal>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700">
+				<div class="p-6">
+					<h3 class="mb-4 text-lg font-semibold">Delete User</h3>
+					<p class="text-surface-500 mb-6">
+						Are you sure you want to delete "{userToDelete?.displayName ||
+							userToDelete?.username}"? This action cannot be undone.
+					</p>
+					<div class="flex justify-end gap-2">
+						<button
+							class="btn btn-sm preset-filled-surface-500"
+							onclick={() => { showDeleteModal = false; userToDelete = undefined }}
+						>
+							Cancel
+						</button>
+						<button class="btn btn-sm preset-filled-error-500" onclick={deleteUser}>
+							Delete
+						</button>
+					</div>
+				</div>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

@@ -3,10 +3,6 @@ import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import { user } from "./users"
 import type { Handler } from "$lib/shared/events"
-import {
-	getSupportedSamplers,
-	getUnsupportedSamplers
-} from "$lib/shared/utils/samplerMappings"
 
 // --- WEIGHTS SOCKET HANDLERS ---
 
@@ -328,47 +324,6 @@ export const samplingConfigsUpdate: Handler<
 	}
 }
 
-export const samplingConfigsGetSupportedSamplers: Handler<
-	Sockets.SamplingConfigs.GetSupportedSamplers.Params,
-	Sockets.SamplingConfigs.GetSupportedSamplers.Response
-> = {
-	event: "samplingConfigs:getSupportedSamplers",
-	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-
-		// Use the system default connection to determine supported samplers
-		const systemSettings = await db.query.systemSettings.findFirst({
-			with: { defaultConnection: true }
-		})
-		const connectionType = (systemSettings as any)?.defaultConnection?.type
-
-		if (!connectionType) {
-			emitToUser("samplingConfigs:getSupportedSamplers:error", {
-				error: "No active connection found"
-			})
-			throw new Error("No active connection found")
-		}
-
-		// Get supported and unsupported samplers
-		const supportedSamplers = Array.from(
-			getSupportedSamplers(connectionType)
-		)
-		const unsupportedSamplers: Record<string, string> = {}
-		for (const [key, reason] of getUnsupportedSamplers(connectionType)) {
-			unsupportedSamplers[key] = reason
-		}
-
-		const res: Sockets.SamplingConfigs.GetSupportedSamplers.Response = {
-			connectionType,
-			supportedSamplers,
-			unsupportedSamplers
-		}
-
-		emitToUser("samplingConfigs:getSupportedSamplers", res)
-		return res
-	}
-}
-
 // Registration function for all sampling config handlers
 export function registerSamplingConfigHandlers(
 	socket: any,
@@ -386,5 +341,4 @@ export function registerSamplingConfigHandlers(
 	register(socket, samplingConfigsUpdate, emitToUser)
 	register(socket, samplingConfigsDelete, emitToUser)
 	register(socket, samplingHandler, emitToUser)
-	register(socket, samplingConfigsGetSupportedSamplers, emitToUser)
 }

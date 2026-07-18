@@ -72,11 +72,13 @@ jobs:
                       IS_PRERELEASE="false"
                       RUN_TESTS="true"
                     elif [[ "$SUFFIX" =~ ^pr-([0-9]+)$ ]]; then
-                      # Pre-release build - skip tests, these are frequent throwaway builds
+                      # Pre-release build - these are the tag pattern currently
+                      # shipped as real releases, so run the full test suite
+                      # just like any other release.
                       PR_NUM="${BASH_REMATCH[1]}"
                       TITLE="$BASE_VERSION Pre-Release Build $PR_NUM"
                       IS_PRERELEASE="true"
-                      RUN_TESTS="false"
+                      RUN_TESTS="true"
                     elif [[ "$SUFFIX" =~ ^rc-([0-9]+)$ ]]; then
                       # Release candidate
                       RC_NUM="${BASH_REMATCH[1]}"
@@ -99,6 +101,7 @@ jobs:
                   echo "title=$TITLE" >> $GITHUB_OUTPUT
                   echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
                   echo "run_tests=$RUN_TESTS" >> $GITHUB_OUTPUT
+                  echo "base_version=$BASE_VERSION" >> $GITHUB_OUTPUT
                   echo "Release Title: $TITLE"
                   echo "Is Pre-release: $IS_PRERELEASE"
                   echo "Run Tests: $RUN_TESTS"
@@ -111,10 +114,13 @@ jobs:
             - name: Install dependencies
               run: |
                   node -e "const fs = require('fs'); try { fs.unlinkSync('package-lock.json'); } catch (e) { /* ignore */ }"
-                  npm install
+                  for i in 1 2 3; do npm install --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 && break || sleep 15; done
 
             - name: Prepare SvelteKit
               run: npx @sveltejs/kit sync
+
+            - name: Run typecheck
+              run: npm run check
 
             - name: Run tests
               if: steps.release_title.outputs.run_tests == 'true'
@@ -220,8 +226,8 @@ jobs:
                     ls -la
                     exit 1
                   fi
-                  cat > "$DIST_DIR/.env.example" << 'EOF'
-                  # Serene Pub 0.4.1 - Production Configuration
+                  cat > "$DIST_DIR/.env.example" << EOF
+                  # Serene Pub ${{ steps.release_title.outputs.base_version }} - Production Configuration
                   # Copy this file to .env in the same directory to customize settings
 
                   # ===========================================

@@ -142,7 +142,11 @@
 						value={entry.downloaded}
 						max={entry.total || 1}
 						aria-label="Download progress for {entry.filename}: {pct(entry).toFixed(1)}%"
-					/>
+					>
+						<Progress.Track class="bg-surface-200-800">
+							<Progress.Range class="bg-primary-500" />
+						</Progress.Track>
+					</Progress>
 					<div class="text-muted-foreground mt-1 flex justify-between font-mono text-xs">
 						<span class="capitalize">{entry.status}</span>
 						{#if entry.total > 0}

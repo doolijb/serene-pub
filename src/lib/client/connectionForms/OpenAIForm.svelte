@@ -294,7 +294,12 @@
 						onCheckedChange={(e) =>
 							(openAIFields!.stream = e.checked)}
 						aria-labelledby="stream"
-					/>
+					>
+						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+					</Switch>
 				</div>
 				<div class="flex items-center justify-between gap-4">
 					<label class="font-semibold" for="prerenderPrompt">
@@ -306,7 +311,12 @@
 						onCheckedChange={(e) =>
 							(openAIFields!.prerenderPrompt = e.checked)}
 						aria-labelledby="prerenderPrompt"
-					/>
+					>
+						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+					</Switch>
 				</div>
 			</section>
 		</details>

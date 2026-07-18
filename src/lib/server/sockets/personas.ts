@@ -18,6 +18,17 @@ async function processPersonaTags(
 	tagNames: string[],
 	userId: number
 ) {
+	// Without this, a caller supplying another user's personaId could still
+	// attach its own tags to (or strip tags from) a persona it doesn't own,
+	// even though the persona's own field update is already ownership-scoped
+	// and would no-op for an unowned id.
+	const persona = await db.query.personas.findFirst({
+		where: (p, { and, eq }) =>
+			and(eq(p.id, personaId), eq(p.userId, userId)),
+		columns: { id: true }
+	})
+	if (!persona) return
+
 	// Get existing tags for this persona that belong to the user
 	const existingPersonaTags = await db.query.personaTags.findMany({
 		where: eq(schema.personaTags.personaId, personaId),
@@ -249,6 +260,10 @@ export const personasUpdate: Handler<
 					)
 				)
 				.returning()
+
+			if (!updated) {
+				throw new Error("Persona not found or not owned by user.")
+			}
 
 			// Process tags after persona update
 			await processPersonaTags(id, tags, userId)

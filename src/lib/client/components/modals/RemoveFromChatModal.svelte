@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 
 	interface Props {
 		open: boolean
@@ -20,13 +20,11 @@
 	}: Props = $props()
 </script>
 
-<Modal
-	{open}
-	{onOpenChange}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-md"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
+<Dialog {open} {onOpenChange}>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-md">
 		<header class="flex justify-between">
 			<h2 class="h2">
 				Remove {type === "persona" ? "Persona" : "Character"}?
@@ -47,5 +45,7 @@
 				Remove
 			</button>
 		</footer>
-	{/snippet}
-</Modal>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

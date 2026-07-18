@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import * as skio from "sveltekit-io"
 	import { onDestroy, onMount } from "svelte"
@@ -233,7 +233,7 @@
 	})
 </script>
 
-<Modal
+<Dialog
 	{open}
 	onOpenChange={(e) => {
 		if (!e.open && hasUnsavedData && !showCancelConfirmation) {
@@ -244,10 +244,11 @@
 		// Otherwise allow normal close behavior
 		onOpenChange?.(e)
 	}}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
-	backdropClasses="backdrop-blur-sm"
 >
-	{#snippet content()}
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
 		{#if showCancelConfirmation}
 			<!-- Cancel Confirmation View -->
 			<header class="flex items-center justify-between">
@@ -617,5 +618,7 @@
 				</div>
 			</footer>
 		{/if}
-	{/snippet}
-</Modal>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

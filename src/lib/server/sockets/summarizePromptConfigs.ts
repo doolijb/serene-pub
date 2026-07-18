@@ -99,6 +99,15 @@ export const worldSummarizeConfigsDeleteHandler: Handler<
 	event: "worldSummarizeConfigs:delete",
 	handler: async (socket, params, emitToUser) => {
 		adminGuard(socket, emitToUser)
+		const currentConfig = await db.query.worldSummarizeConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, params.id)
+		})
+		if (currentConfig?.isImmutable) {
+			emitToUser("worldSummarizeConfigs:delete:error", {
+				error: "Cannot delete a built-in summarize config."
+			})
+			throw new Error("Cannot delete a built-in summarize config.")
+		}
 		await db.delete(schema.worldSummarizeConfigs).where(eq(schema.worldSummarizeConfigs.id, params.id))
 		await worldSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
 		const res: Sockets.WorldSummarizeConfigs.Delete.Response = { success: "Deleted successfully" }
@@ -213,6 +222,15 @@ export const characterSummarizeConfigsDeleteHandler: Handler<
 	event: "characterSummarizeConfigs:delete",
 	handler: async (socket, params, emitToUser) => {
 		adminGuard(socket, emitToUser)
+		const currentConfig = await db.query.characterSummarizeConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, params.id)
+		})
+		if (currentConfig?.isImmutable) {
+			emitToUser("characterSummarizeConfigs:delete:error", {
+				error: "Cannot delete a built-in summarize config."
+			})
+			throw new Error("Cannot delete a built-in summarize config.")
+		}
 		await db.delete(schema.characterSummarizeConfigs).where(eq(schema.characterSummarizeConfigs.id, params.id))
 		await characterSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
 		const res: Sockets.CharacterSummarizeConfigs.Delete.Response = { success: "Deleted successfully" }
@@ -327,6 +345,15 @@ export const sceneSummarizeConfigsDeleteHandler: Handler<
 	event: "sceneSummarizeConfigs:delete",
 	handler: async (socket, params, emitToUser) => {
 		adminGuard(socket, emitToUser)
+		const currentConfig = await db.query.sceneSummarizeConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, params.id)
+		})
+		if (currentConfig?.isImmutable) {
+			emitToUser("sceneSummarizeConfigs:delete:error", {
+				error: "Cannot delete a built-in summarize config."
+			})
+			throw new Error("Cannot delete a built-in summarize config.")
+		}
 		await db.delete(schema.sceneSummarizeConfigs).where(eq(schema.sceneSummarizeConfigs.id, params.id))
 		await sceneSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
 		const res: Sockets.SceneSummarizeConfigs.Delete.Response = { success: "Deleted successfully" }

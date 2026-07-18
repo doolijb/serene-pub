@@ -2,7 +2,7 @@
  * Determine which active character (if any) is due for a turn right now.
  *
  * Rule: let N = active personas + active characters in the chat. Look at the
- * last N (non-hidden, non-World-Response) messages — if every cast member
+ * last N (non-hidden, non-Narrator-response) messages — if every cast member
  * (every persona, every character) appears at least once in that window, the
  * rotation is "healthy"
  * (nobody's been silently dropped from the conversation). A character is due
@@ -23,16 +23,33 @@
  */
 export function getNextCharacterTurn(chat: {
 	chatMessages: SelectChatMessage[]
-	chatCharacters: (SelectChatCharacter & { character: SelectCharacter })[]
-	chatPersonas: (SelectChatPersona & { persona: SelectPersona })[]
+	chatCharacters: (SelectChatCharacter & { character: SelectCharacter | null })[]
+	chatPersonas: (SelectChatPersona & { persona: SelectPersona | null })[]
 }): number | null {
 	if (!chat.chatCharacters?.length || !chat.chatPersonas?.length) {
 		return null
 	}
 
+	// character/persona can be null — chatCharacters.characterId and
+	// chatPersonas.personaId are both nullable (onDelete: "set null"), so a
+	// deleted-but-still-bound character/persona leaves a row with no linked
+	// entity. Every current caller already filters these out first, but that
+	// discipline isn't enforced by the type — guard here too so a future
+	// caller that skips the filter can't crash on `.id` of null.
+	const validChatCharacters = chat.chatCharacters.filter(
+		(cc): cc is typeof cc & { character: SelectCharacter } =>
+			cc.character !== null
+	)
+	const validChatPersonas = chat.chatPersonas.filter(
+		(cp): cp is typeof cp & { persona: SelectPersona } => cp.persona !== null
+	)
+	if (!validChatCharacters.length || !validChatPersonas.length) {
+		return null
+	}
+
 	// Sort by position (normalizing missing positions to array index), then
 	// keep only active characters.
-	const activeCharacters = chat.chatCharacters
+	const activeCharacters = validChatCharacters
 		.slice()
 		.map((cc, index) => ({
 			...cc,
@@ -43,16 +60,17 @@ export function getNextCharacterTurn(chat: {
 
 	if (activeCharacters.length === 0) return null
 
-	const personaIds = chat.chatPersonas.map((cp) => cp.persona.id)
+	const personaIds = validChatPersonas.map((cp) => cp.persona.id)
 	const characterIds = activeCharacters.map((cc) => cc.character.id)
 	const castSize = personaIds.length + characterIds.length
 
-	// World Response messages (isWorldResponse, characterId: null) are narration,
-	// not a cast member's turn — excluded entirely rather than just failing to
-	// match a character id, so they can't occupy a slot in the recency windows
-	// below and skew the healthy-window/due checks for the real cast.
+	// Narrator response messages (isNarratorResponse, characterId: null) are
+	// narration, not a cast member's turn — excluded entirely rather than just
+	// failing to match a character id, so they can't occupy a slot in the
+	// recency windows below and skew the healthy-window/due checks for the
+	// real cast.
 	const messages = chat.chatMessages.filter(
-		(m) => !m.isHidden && !m.isWorldResponse
+		(m) => !m.isHidden && !m.isNarratorResponse
 	)
 
 	// Healthy-window check: has every cast member spoken at least once in the

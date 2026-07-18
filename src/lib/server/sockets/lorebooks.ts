@@ -2,6 +2,7 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, eq } from "drizzle-orm"
 import { runBindingNodeCheck } from "$lib/server/utils/bindingNodeCheck"
+import { canViewCharacter, canViewPersona } from "$lib/server/utils/chatAccess"
 import { CharacterBook } from "@lenml/char-card-reader"
 import { mapLorebookEntryToWorldLoreEntry } from "$lib/server/utils/lorebookImportMapper"
 import type { Handler } from "$lib/shared/events"
@@ -440,6 +441,36 @@ export const lorebookBindingListHandler: Handler<
 /**
  * Type-safe handler for creating lorebook binding
  */
+// A lorebook binding resolves a placeholder like {{char:1}} to a real
+// character/persona's name/data — without this check, any characterId or
+// personaId could be supplied regardless of who it belongs to, and the
+// bound entity's name/aliases/summary would later be disclosed through the
+// binding (and copied into narrative-graph nodes derived from it).
+async function verifyBindingTargetAccess(
+	binding: { characterId?: number | null; personaId?: number | null },
+	userId: number
+): Promise<boolean> {
+	if (binding.characterId) {
+		const character = await db.query.characters.findFirst({
+			where: eq(schema.characters.id, binding.characterId),
+			columns: { userId: true }
+		})
+		if (!character) return false
+		if (character.userId === userId) return true
+		return await canViewCharacter(binding.characterId, userId)
+	}
+	if (binding.personaId) {
+		const persona = await db.query.personas.findFirst({
+			where: eq(schema.personas.id, binding.personaId),
+			columns: { userId: true }
+		})
+		if (!persona) return false
+		if (persona.userId === userId) return true
+		return await canViewPersona(binding.personaId, userId)
+	}
+	return true
+}
+
 export const createLorebookBindingHandler: Handler<
 	Sockets.Lorebooks.CreateBinding.Params,
 	Sockets.Lorebooks.CreateBinding.Response
@@ -457,6 +488,12 @@ export const createLorebookBindingHandler: Handler<
 		})
 
 		if (!book) throw new Error("Lorebook not found.")
+
+		if (!(await verifyBindingTargetAccess(params.lorebookBinding, userId))) {
+			throw new Error(
+				"Access denied. You don't have permission to bind that character or persona."
+			)
+		}
 
 		const [binding] = await db
 			.insert(schema.lorebookBindings)
@@ -523,6 +560,12 @@ export const updateLorebookBindingHandler: Handler<
 
 		if (!lorebookOwner) {
 			throw new Error("Access denied.")
+		}
+
+		if (!(await verifyBindingTargetAccess(params.lorebookBinding, userId))) {
+			throw new Error(
+				"Access denied. You don't have permission to bind that character or persona."
+			)
 		}
 
 		const [updatedBinding] = await db

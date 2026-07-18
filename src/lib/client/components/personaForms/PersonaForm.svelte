@@ -89,6 +89,7 @@
 	let expandedAliases = $state(false)
 	let expandedSummary = $state(false)
 	let showCancelModal = $state(false)
+	let isSaving = $state(false)
 	let validationErrors: ValidationErrors = $state({})
 	let formContainer: HTMLDivElement
 	let validationTimeout: NodeJS.Timeout
@@ -191,6 +192,10 @@
 	}
 
 	function onSave() {
+		// Guard against double-submit (eg. an impatient re-click while the
+		// previous save is still in flight)
+		if (isSaving) return
+
 		// Validate the form first
 		if (!validateForm()) {
 			// Validation failed, errors are already set in validationErrors
@@ -209,6 +214,7 @@
 		const avatarFile = newPersona._avatarFile
 		delete newPersona._avatarFile
 		delete newPersona._avatar
+		isSaving = true
 		socket.emit("personas:create", {
 			persona: newPersona,
 			avatarFile
@@ -220,6 +226,7 @@
 		const avatarFile = updatedPersona._avatarFile
 		delete updatedPersona._avatarFile
 		delete updatedPersona._avatar
+		isSaving = true
 		socket.emit("personas:update", {
 			persona: updatedPersona,
 			avatarFile
@@ -286,6 +293,7 @@
 
 	// Define socket event handlers as named functions for proper cleanup
 	const handlePersonasCreate = (res: Sockets.CreatePersona.Response) => {
+		isSaving = false
 		if (res.persona) {
 			validationErrors = {} // Clear any validation errors on success
 			toaster.success({
@@ -297,6 +305,7 @@
 	}
 
 	const handlePersonasUpdate = (res: Sockets.UpdatePersona.Response) => {
+		isSaving = false
 		if (res.persona) {
 			validationErrors = {} // Clear any validation errors on success
 			toaster.success({
@@ -305,6 +314,25 @@
 			})
 			closeForm()
 		}
+	}
+
+	// These aren't in the typed SocketEventMap (only their success variants
+	// are), so registered via the same `(socket as any).on(...)` cast
+	// pattern used elsewhere in the app for ad hoc error listeners.
+	const handlePersonasCreateError = (msg: Sockets.ErrorResponse) => {
+		isSaving = false
+		toaster.error({
+			title: "Failed to create persona",
+			description: msg.error
+		})
+	}
+
+	const handlePersonasUpdateError = (msg: Sockets.ErrorResponse) => {
+		isSaving = false
+		toaster.error({
+			title: "Failed to update persona",
+			description: msg.error
+		})
 	}
 
 	const handleTagsList = (msg: any) => {
@@ -342,6 +370,8 @@
 		// Register socket event handlers
 		socket.on("personas:create", handlePersonasCreate)
 		socket.on("personas:update", handlePersonasUpdate)
+		;(socket as any).on("personas:create:error", handlePersonasCreateError)
+		;(socket as any).on("personas:update:error", handlePersonasUpdateError)
 		socket.on("tags:list", handleTagsList)
 
 		// Load tags list
@@ -357,6 +387,8 @@
 		// Properly remove event handlers by passing the function references
 		socket.off("personas:create", handlePersonasCreate)
 		socket.off("personas:update", handlePersonasUpdate)
+		;(socket as any).off("personas:create:error", handlePersonasCreateError)
+		;(socket as any).off("personas:update:error", handlePersonasUpdateError)
 		socket.off("personas:get", handlePersonasGet)
 		socket.off("tags:list", handleTagsList)
 
@@ -394,10 +426,15 @@
 			class:preset-filled-success-500={hasChanges}
 			class:preset-tonal-success={!hasChanges}
 			onclick={onSave}
+			disabled={isSaving}
 			aria-describedby="form-title"
 			aria-label={`${mode === "edit" ? "Update" : "Create"} persona${hasChanges ? " (has unsaved changes)" : ""}`}
 		>
-			<Icons.Save size={16} aria-hidden="true" />
+			{#if isSaving}
+				<Icons.Loader2 size={16} class="animate-spin" aria-hidden="true" />
+			{:else}
+				<Icons.Save size={16} aria-hidden="true" />
+			{/if}
 			{mode === "edit" ? "Update" : "Create"}
 		</button>
 	</div>

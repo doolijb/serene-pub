@@ -4,7 +4,7 @@
 	import * as Icons from "@lucide/svelte"
 	import NewNameModal from "../modals/NewNameModal.svelte"
 	import EditLorebookForm from "../lorebookForms/EditLorebookForm.svelte"
-	import { FileUpload, Modal, Tabs } from "@skeletonlabs/skeleton-svelte"
+	import { FileUpload, Dialog, Portal, Tabs } from "@skeletonlabs/skeleton-svelte"
 	import LorebookBindingsManager from "../lorebookForms/LorebookBindingsManager.svelte"
 	import WorldLoreManager from "../lorebookForms/WorldLoreManager.svelte"
 	import type { ValueChangeDetails } from "@zag-js/tabs"
@@ -432,100 +432,98 @@
 				{/if}
 			{/if}
 		</div>
-		<Tabs value={editGroup} onValueChange={(e) => handleSwitchTabGroup(e)} listBase="flex flex-wrap gap-1">
-			{#snippet list()}
-				<Tabs.Control value="lorebook" disabled={tabsDisabled && editGroup !== "lorebook"}>
+		<Tabs value={editGroup} onValueChange={(e) => handleSwitchTabGroup(e)}>
+			<Tabs.List class="flex flex-wrap gap-1">
+				<Tabs.Trigger value="lorebook" disabled={tabsDisabled && editGroup !== "lorebook"}>
 					<Icons.Book size={20} class="inline" />
 					{#if editGroup === "lorebook"}
 						Lorebook
 					{/if}
-				</Tabs.Control>
-				<Tabs.Control value="bindings" disabled={tabsDisabled}>
+				</Tabs.Trigger>
+				<Tabs.Trigger value="bindings" disabled={tabsDisabled}>
 					<Icons.Link size={20} class="inline" />
 					{#if editGroup === "bindings"}
 						Bindings
 					{/if}
-				</Tabs.Control>
-				<Tabs.Control value="world" disabled={tabsDisabled}>
+				</Tabs.Trigger>
+				<Tabs.Trigger value="world" disabled={tabsDisabled}>
 					<Icons.Globe size={20} class="inline" />
 					{#if editGroup === "world"}
 						World Lore
 					{/if}
-				</Tabs.Control>
-				<Tabs.Control value="characters" disabled={tabsDisabled}>
+				</Tabs.Trigger>
+				<Tabs.Trigger value="characters" disabled={tabsDisabled}>
 					<Icons.User size={20} class="inline" />
 					{#if editGroup === "characters"}
 						Character Lore
 					{/if}
-				</Tabs.Control>
-				<Tabs.Control value="history" disabled={tabsDisabled}>
+				</Tabs.Trigger>
+				<Tabs.Trigger value="history" disabled={tabsDisabled}>
 					<Icons.Calendar size={20} class="inline" />
 					{#if editGroup === "history"}
 						History
 					{/if}
-				</Tabs.Control>
+				</Tabs.Trigger>
 				{#if graphEnabled}
-					<Tabs.Control value="graph" disabled={tabsDisabled}>
+					<Tabs.Trigger value="graph" disabled={tabsDisabled}>
 						<Icons.Network size={20} class="inline" />
 						{#if editGroup === "graph"}
 							Graph
 						{/if}
-					</Tabs.Control>
+					</Tabs.Trigger>
 				{/if}
-			{/snippet}
-			{#snippet content()}
-				<Tabs.Panel value="lorebook">
-					{#if editGroup == "lorebook" && selectedLorebook}
-						<EditLorebookForm
-							lorebookId={selectedLorebook.id}
-							bind:mode={lorebookFormMode}
-							bind:hasUnsavedChanges={tabHasUnsavedChanges}
-						/>
-					{/if}
-				</Tabs.Panel>
-				<Tabs.Panel value="bindings">
-					{#if editGroup == "bindings" && selectedLorebook}
-						<LorebookBindingsManager
-							lorebookId={selectedLorebook.id}
-						/>
-					{/if}
-				</Tabs.Panel>
-				<Tabs.Panel value="world">
-					{#if editGroup == "world" && selectedLorebook}
-						<WorldLoreManager
-							lorebookId={selectedLorebook.id}
-							bind:hasUnsavedChanges={tabHasUnsavedChanges}
-						/>
-					{/if}
-				</Tabs.Panel>
-				<Tabs.Panel value="characters">
-					{#if editGroup == "characters" && selectedLorebook}
-						<CharacterLoreManager
-							lorebookId={selectedLorebook.id}
-							bind:hasUnsavedChanges={tabHasUnsavedChanges}
-						/>
-					{/if}
-				</Tabs.Panel>
-				<Tabs.Panel value="history">
-					{#if editGroup == "history" && selectedLorebook}
-						<HistoryEntryManager
-							lorebookId={selectedLorebook.id}
-							bind:hasUnsavedChanges={tabHasUnsavedChanges}
-							focusHistoryEntryId={focusHistoryEntryId}
-							focusEntryTab={focusHistoryEntryTab}
-							focusSceneId={focusSceneId}
-							onNavigateToGraph={graphEnabled ? () => { editGroup = "graph" } : undefined}
-						/>
-					{/if}
-				</Tabs.Panel>
-				{#if graphEnabled}
-					<Tabs.Panel value="graph">
-						{#if editGroup == "graph" && selectedLorebook}
-							<GraphManager lorebookId={selectedLorebook.id} />
-						{/if}
-					</Tabs.Panel>
+			</Tabs.List>
+			<Tabs.Content value="lorebook">
+				{#if editGroup == "lorebook" && selectedLorebook}
+					<EditLorebookForm
+						lorebookId={selectedLorebook.id}
+						bind:mode={lorebookFormMode}
+						bind:hasUnsavedChanges={tabHasUnsavedChanges}
+					/>
 				{/if}
-			{/snippet}
+			</Tabs.Content>
+			<Tabs.Content value="bindings">
+				{#if editGroup == "bindings" && selectedLorebook}
+					<LorebookBindingsManager
+						lorebookId={selectedLorebook.id}
+					/>
+				{/if}
+			</Tabs.Content>
+			<Tabs.Content value="world">
+				{#if editGroup == "world" && selectedLorebook}
+					<WorldLoreManager
+						lorebookId={selectedLorebook.id}
+						bind:hasUnsavedChanges={tabHasUnsavedChanges}
+					/>
+				{/if}
+			</Tabs.Content>
+			<Tabs.Content value="characters">
+				{#if editGroup == "characters" && selectedLorebook}
+					<CharacterLoreManager
+						lorebookId={selectedLorebook.id}
+						bind:hasUnsavedChanges={tabHasUnsavedChanges}
+					/>
+				{/if}
+			</Tabs.Content>
+			<Tabs.Content value="history">
+				{#if editGroup == "history" && selectedLorebook}
+					<HistoryEntryManager
+						lorebookId={selectedLorebook.id}
+						bind:hasUnsavedChanges={tabHasUnsavedChanges}
+						focusHistoryEntryId={focusHistoryEntryId}
+						focusEntryTab={focusHistoryEntryTab}
+						focusSceneId={focusSceneId}
+						onNavigateToGraph={graphEnabled ? () => { editGroup = "graph" } : undefined}
+					/>
+				{/if}
+			</Tabs.Content>
+			{#if graphEnabled}
+				<Tabs.Content value="graph">
+					{#if editGroup == "graph" && selectedLorebook}
+						<GraphManager lorebookId={selectedLorebook.id} />
+					{/if}
+				</Tabs.Content>
+			{/if}
 		</Tabs>
 	{:else}
 		<div class="mb-2 flex gap-2">
@@ -558,6 +556,7 @@
 			<input
 				type="text"
 				placeholder="Search lorebooks..."
+				aria-label="Search lorebooks"
 				class="input"
 				bind:value={search}
 			/>
@@ -638,97 +637,113 @@
 />
 
 {#if showImportModal}
-	<Modal
+	<Dialog
 		open={showImportModal}
 		onOpenChange={(e) => {
 			showImportModal = e.open
 			if (!e.open) importingBook = undefined
 		}}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
-		backdropClasses="backdrop-blur-sm"
 	>
-		{#snippet content()}
-			<div class="p-6">
-				<h2 class="mb-2 text-lg font-bold">Import Lorebook</h2>
-				{#if !importingBook}
-					<label class="mb-2" for="file-upload">Select a file.</label>
-					<FileUpload
-						name="file-upload"
-						accept=".json"
-						maxFiles={1}
-						onFileAccept={handleFileImport}
-						onFileReject={console.error}
-						classes="w-full bg-surface-50-950"
-					/>
-				{:else}
-					<label class="mb-2" for="name">Name</label>
-					<input
-						id="name"
-						type="text"
-						bind:value={importingBook.name}
-						placeholder="Lorebook Name"
-						class="input"
-					/>
-				{/if}
-				<div class="mt-4 flex items-end gap-2">
-					<button
-						class="btn preset-filled-surface-500"
-						onclick={() => {
-							showImportModal = false
-							importingBook = undefined
-						}}
-					>
-						Cancel
-					</button>
-					{#if importingBook}
-						<button
-							class="btn preset-filled-primary-500"
-							disabled={!importingBook?.name?.trim()}
-							onclick={handleImportConfirm}
-						>
-							Import
-						</button>
-					{/if}
-				</div>
-			</div>
-		{/snippet}
-	</Modal>
+		<Portal>
+			<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+				<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700">
+					<div class="p-6">
+						<h2 class="mb-2 text-lg font-bold">Import Lorebook</h2>
+						{#if !importingBook}
+							<label class="mb-2" for="file-upload">Select a file.</label>
+							<FileUpload
+								name="file-upload"
+								accept=".json"
+								maxFiles={1}
+								onFileAccept={handleFileImport}
+								onFileReject={console.error}
+							>
+								<FileUpload.Dropzone
+									class="border-surface-300-700 bg-surface-50-950 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
+								>
+									<Icons.Upload class="text-surface-500 h-8 w-8" />
+									<FileUpload.Trigger class="btn btn-sm preset-filled-primary-500">
+										Browse
+									</FileUpload.Trigger>
+									<span class="text-surface-500 text-xs">or drag and drop</span>
+									<FileUpload.HiddenInput />
+								</FileUpload.Dropzone>
+							</FileUpload>
+						{:else}
+							<label class="mb-2" for="name">Name</label>
+							<input
+								id="name"
+								type="text"
+								bind:value={importingBook.name}
+								placeholder="Lorebook Name"
+								class="input"
+							/>
+						{/if}
+						<div class="mt-4 flex items-end gap-2">
+							<button
+								class="btn preset-filled-surface-500"
+								onclick={() => {
+									showImportModal = false
+									importingBook = undefined
+								}}
+							>
+								Cancel
+							</button>
+							{#if importingBook}
+								<button
+									class="btn preset-filled-primary-500"
+									disabled={!importingBook?.name?.trim()}
+									onclick={handleImportConfirm}
+								>
+									Import
+								</button>
+							{/if}
+						</div>
+					</div>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
 {/if}
 
 {#if showDeleteConfirmationModal}
-	<Modal
+	<Dialog
 		open={showDeleteConfirmationModal}
 		onOpenChange={(e) => {
 			showDeleteConfirmationModal = e.open
 			if (!e.open) deletingLorebookId = undefined
 		}}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
-		backdropClasses="backdrop-blur-sm"
 	>
-		{#snippet content()}
-			<div class="p-6">
-				<h2 class="text-error-500 mb-2 text-lg font-bold">
-					Delete Lorebook?
-				</h2>
-				<p class="mb-4">
-					Are you sure you want to delete this lorebook? This action
-					cannot be undone.
-				</p>
-				<div class="mt-4 flex items-end gap-2">
-					<button
-						class="btn preset-filled-surface-500"
-						onclick={onDeleteCancel}
-					>
-						Cancel
-					</button>
-					<button
-						class="btn preset-filled-error-500"
-						onclick={onDeleteConfirm}
-					>
-						Delete
-					</button>
-				</div>
-			</div>
-		{/snippet}
-	</Modal>
+		<Portal>
+			<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+				<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700">
+					<div class="p-6">
+						<h2 class="text-error-500 mb-2 text-lg font-bold">
+							Delete Lorebook?
+						</h2>
+						<p class="mb-4">
+							Are you sure you want to delete this lorebook? This action
+							cannot be undone.
+						</p>
+						<div class="mt-4 flex items-end gap-2">
+							<button
+								class="btn preset-filled-surface-500"
+								onclick={onDeleteCancel}
+							>
+								Cancel
+							</button>
+							<button
+								class="btn preset-filled-error-500"
+								onclick={onDeleteConfirm}
+							>
+								Delete
+							</button>
+						</div>
+					</div>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
 {/if}

@@ -2,7 +2,7 @@
 	import { goto } from "$app/navigation"
 	import * as skio from "sveltekit-io"
 	import * as Icons from "@lucide/svelte"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { onMount } from "svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { ChatTypes } from "$lib/shared/constants/ChatTypes"
@@ -415,92 +415,98 @@
 </div>
 
 <!-- Delete Chat Confirmation Modal -->
-<Modal
+<Dialog
 	open={showDeleteChatModal}
 	onOpenChange={(e) => {
 		if (!e.open) cancelDeleteChat()
 	}}
-	contentBase="card bg-surface-100-900 p-6 w-[90vw] max-w-md"
-	backdropClasses="backdrop-blur-sm"
 >
-	{#snippet content()}
-		<div class="space-y-4">
-			<div class="flex items-start gap-3">
-				<div class="flex-1">
-					<h3 class="h3">Delete Conversation?</h3>
-					<p class="mt-2 text-sm opacity-80">
-						Are you sure you want to delete this conversation? This
-						action cannot be undone.
-					</p>
-					{#if chatToDelete}
-						<p class="mt-2 text-sm font-medium">
-							"{chatToDelete.name || "Untitled Conversation"}"
-						</p>
-					{/if}
-				</div>
-			</div>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 w-[90vw] max-w-md">
+				<div class="space-y-4">
+					<div class="flex items-start gap-3">
+						<div class="flex-1">
+							<h3 class="h3">Delete Conversation?</h3>
+							<p class="mt-2 text-sm opacity-80">
+								Are you sure you want to delete this conversation? This
+								action cannot be undone.
+							</p>
+							{#if chatToDelete}
+								<p class="mt-2 text-sm font-medium">
+									"{chatToDelete.name || "Untitled Conversation"}"
+								</p>
+							{/if}
+						</div>
+					</div>
 
-			<div class="flex justify-end gap-2">
-				<button
-					class="btn preset-filled-surface-400-600"
-					onclick={cancelDeleteChat}
-				>
-					Cancel
-				</button>
-				<button
-					class="btn preset-filled-error-500"
-					onclick={confirmDeleteChat}
-				>
-					<Icons.Trash2 size={16} />
-					Delete
-				</button>
-			</div>
-		</div>
-	{/snippet}
-</Modal>
+					<div class="flex justify-end gap-2">
+						<button
+							class="btn preset-filled-surface-400-600"
+							onclick={cancelDeleteChat}
+						>
+							Cancel
+						</button>
+						<button
+							class="btn preset-filled-error-500"
+							onclick={confirmDeleteChat}
+						>
+							<Icons.Trash2 size={16} />
+							Delete
+						</button>
+					</div>
+				</div>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
 
 <!-- Bulk Delete Confirmation Modal -->
-<Modal
+<Dialog
 	open={showBulkDeleteModal}
 	onOpenChange={(e) => {
 		if (!e.open) cancelBulkDelete()
 	}}
-	contentBase="card bg-surface-100-900 p-6 w-[90vw] max-w-md"
-	backdropClasses="backdrop-blur-sm"
 >
-	{#snippet content()}
-		<div class="space-y-4">
-			<div class="flex items-start gap-3">
-				<div class="flex-1">
-					<h3 class="h3">
-						Delete {selectedChatIds.size} Conversation{selectedChatIds.size !==
-						1
-							? "s"
-							: ""}?
-					</h3>
-					<p class="mt-2 text-sm opacity-80">
-						Are you sure you want to delete {selectedChatIds.size} selected
-						conversation{selectedChatIds.size !== 1 ? "s" : ""}?
-						This action cannot be undone.
-					</p>
-				</div>
-			</div>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 w-[90vw] max-w-md">
+				<div class="space-y-4">
+					<div class="flex items-start gap-3">
+						<div class="flex-1">
+							<h3 class="h3">
+								Delete {selectedChatIds.size} Conversation{selectedChatIds.size !==
+								1
+									? "s"
+									: ""}?
+							</h3>
+							<p class="mt-2 text-sm opacity-80">
+								Are you sure you want to delete {selectedChatIds.size} selected
+								conversation{selectedChatIds.size !== 1 ? "s" : ""}?
+								This action cannot be undone.
+							</p>
+						</div>
+					</div>
 
-			<div class="flex justify-end gap-2">
-				<button
-					class="btn preset-filled-surface-400-600"
-					onclick={cancelBulkDelete}
-				>
-					Cancel
-				</button>
-				<button
-					class="btn preset-filled-error-500"
-					onclick={confirmBulkDelete}
-				>
-					<Icons.Trash2 size={16} />
-					Delete {selectedChatIds.size}
-				</button>
-			</div>
-		</div>
-	{/snippet}
-</Modal>
+					<div class="flex justify-end gap-2">
+						<button
+							class="btn preset-filled-surface-400-600"
+							onclick={cancelBulkDelete}
+						>
+							Cancel
+						</button>
+						<button
+							class="btn preset-filled-error-500"
+							onclick={confirmBulkDelete}
+						>
+							<Icons.Trash2 size={16} />
+							Delete {selectedChatIds.size}
+						</button>
+					</div>
+				</div>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

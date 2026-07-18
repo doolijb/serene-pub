@@ -232,7 +232,12 @@
 						onCheckedChange={(e) =>
 							(koboldCppFields!.useChat = e.checked)}
 						aria-labelledby="useChat"
-					/>
+					>
+						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+					</Switch>
 				</div>
 				<p class="text-muted-foreground text-xs">
 					Enable to use OpenAI-style chat completion format instead of
@@ -246,7 +251,12 @@
 						onCheckedChange={(e) =>
 							(koboldCppFields!.stream = e.checked)}
 						aria-labelledby="stream"
-					/>
+					>
+						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+					</Switch>
 				</div>
 				<div class="flex items-center justify-between gap-4">
 					<label class="font-semibold" for="useMemory">
@@ -258,7 +268,12 @@
 						onCheckedChange={(e) =>
 							(koboldCppFields!.useMemory = e.checked)}
 						aria-labelledby="useMemory"
-					/>
+					>
+						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+					</Switch>
 				</div>
 				{#if koboldCppFields.useMemory}
 					<div class="flex flex-col gap-1">
@@ -287,7 +302,12 @@
 						onCheckedChange={(e) =>
 							(koboldCppFields!.trimStop = e.checked)}
 						aria-labelledby="trimStop"
-					/>
+					>
+						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+					</Switch>
 				</div>
 				<div class="flex items-center justify-between gap-4">
 					<label class="font-semibold" for="renderSpecial">
@@ -299,7 +319,12 @@
 						onCheckedChange={(e) =>
 							(koboldCppFields!.renderSpecial = e.checked)}
 						aria-labelledby="renderSpecial"
-					/>
+					>
+						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+					</Switch>
 				</div>
 				<div class="flex items-center justify-between gap-4">
 					<label class="font-semibold" for="bypassEos">
@@ -311,7 +336,12 @@
 						onCheckedChange={(e) =>
 							(koboldCppFields!.bypassEos = e.checked)}
 						aria-labelledby="bypassEos"
-					/>
+					>
+						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+					</Switch>
 				</div>
 				<div class="flex items-center justify-between gap-4">
 					<label class="font-semibold" for="grammarRetainState">
@@ -323,7 +353,12 @@
 						onCheckedChange={(e) =>
 							(koboldCppFields!.grammarRetainState = e.checked)}
 						aria-labelledby="grammarRetainState"
-					/>
+					>
+						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+					</Switch>
 				</div>
 				<div class="flex items-center justify-between gap-4">
 					<label class="font-semibold" for="logprobs">
@@ -335,7 +370,12 @@
 						onCheckedChange={(e) =>
 							(koboldCppFields!.logprobs = e.checked)}
 						aria-labelledby="logprobs"
-					/>
+					>
+						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+					</Switch>
 				</div>
 				<div class="flex items-center justify-between gap-4">
 					<label
@@ -351,7 +391,12 @@
 							(koboldCppFields!.replaceInstructPlaceholders =
 								e.checked)}
 						aria-labelledby="replaceInstructPlaceholders"
-					/>
+					>
+						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+					</Switch>
 				</div>
 				<div class="flex items-center justify-between gap-4">
 					<div>
@@ -402,7 +447,12 @@
 						onCheckedChange={(e) =>
 							(koboldCppFields!.managedConfig.flashAttention = e.checked)}
 						aria-labelledby="flashAttention"
-					/>
+					>
+						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+					</Switch>
 				</div>
 				<div class="flex flex-col gap-1">
 					<label class="font-semibold" for="batchSize">

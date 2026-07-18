@@ -6,6 +6,7 @@
 	import MessageControls from "$lib/client/components/chatMessages/MessageControls.svelte"
 	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
 	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
+	import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 
 	interface Props {
 		msg: SelectChatMessage
@@ -101,7 +102,14 @@
 
 	// Derived values
 	const character = $derived(getMessageCharacter(msg))
-	const worldDisplayName = $derived(msg.metadata?.worldName || "The World")
+	const narratorDisplayName = $derived(msg.metadata?.narratorName || "Narrator")
+	const speakerDisplayName = $derived(
+		msg.isNarratorResponse
+			? narratorDisplayName
+			: character
+				? resolveCharacterName(character, "") || null
+				: null
+	)
 	const isGreeting = $derived(!!msg.metadata?.isGreeting)
 	const canControl = $derived(canControlMessage(msg))
 	const showSwipes = $derived(showSwipeControls(msg, isGreeting))
@@ -140,21 +148,19 @@
 	class:opacity-50={!isSummarizationMode && msg.isHidden && editChatMessage?.id !== msg.id}
 	tabindex="-1"
 	role="article"
-	aria-label="Message {index + 1} of {chat.chatMessages.length} from {msg.isWorldResponse
-		? worldDisplayName
-		: (character as any)?.nickname ||
-			character?.name ||
-			'Unknown'}: {msg.content.slice(0, 100)}{msg.content.length > 100
+	aria-label="Message {index + 1} of {chat.chatMessages.length} from {msg.isNarratorResponse
+		? narratorDisplayName
+		: resolveCharacterName(character, 'Unknown')}: {msg.content.slice(0, 100)}{msg.content.length > 100
 		? '...'
 		: ''}"
 >
 	<div class="flex justify-between gap-2">
 		<div class="group flex gap-2">
 			<span>
-				{#if msg.isWorldResponse}
+				{#if msg.isNarratorResponse}
 					<span
 						class="bg-primary-500/10 text-primary-500 flex h-12 w-12 items-center justify-center rounded-full lg:h-[4em] lg:w-[4em]"
-						title={worldDisplayName}
+						title={narratorDisplayName}
 					>
 						<Icons.CloudSun size="1.5em" />
 					</span>
@@ -174,9 +180,9 @@
 			</span>
 			<div class="flex flex-col">
 				<span class="flex gap-1">
-					{#if msg.isWorldResponse}
+					{#if msg.isNarratorResponse}
 						<span class="funnel-display mx-0 inline-block w-fit px-0 text-[1.1em] font-bold">
-							<span class="text-nowrap">{worldDisplayName}</span>
+							<span class="text-nowrap">{narratorDisplayName}</span>
 						</span>
 					{:else}
 						<button
@@ -185,9 +191,7 @@
 							title="Edit"
 						>
 							<span class="text-nowrap">
-								{(character as any)?.nickname ||
-									character?.name ||
-									"Unknown"}
+								{resolveCharacterName(character, "Unknown")}
 							</span>
 						</button>
 					{/if}
@@ -251,10 +255,10 @@
 					{/if}
 				</div>
 				{#if showSwipes}
-					<div class="ml-auto flex gap-6">
+					<div class="ml-auto flex items-center gap-2">
 						{#if msg.metadata?.swipes?.currentIdx !== null && msg.metadata?.swipes?.currentIdx !== undefined && msg.metadata?.swipes?.history && msg.metadata?.swipes.history.length > 1}
 							<button
-								class="btn btn-sm msg-cntrl-icon hover:preset-filled-success-500"
+								class="btn btn-sm h-8 w-8 rounded-full p-0 hover:preset-tonal-success"
 								title="Swipe Left"
 								onclick={() => onSwipeLeft(msg)}
 								disabled={!!editChatMessage ||
@@ -263,22 +267,20 @@
 									msg.isGenerating ||
 									!canControl}
 							>
-								<Icons.ChevronLeft size={24} />
+								<Icons.ChevronLeft size={20} />
 							</button>
-							<span
-								class="text-surface-700-300 mt-[0.2rem] h-fit select-none"
-							>
+							<span class="text-surface-700-300 select-none text-sm">
 								{(msg.metadata.swipes.currentIdx || 0) + 1}/{msg
 									.metadata.swipes.history.length}
 							</span>
 						{/if}
 						<button
-							class="btn btn-sm msg-cntrl-icon hover:preset-filled-success-500"
+							class="btn btn-sm h-8 w-8 rounded-full p-0 hover:preset-tonal-success"
 							title="Swipe Right"
 							onclick={() => onSwipeRight(msg)}
 							disabled={!!editChatMessage || !canSwipeRightVal || !canControl}
 						>
-							<Icons.ChevronRight size={24} />
+							<Icons.ChevronRight size={20} />
 						</button>
 					</div>
 				{/if}
@@ -375,7 +377,9 @@
 			{:else}
 				<div class="flex items-center gap-2">
 					<div class="text-surface-600-400 animate-pulse text-sm">
-						Typing...
+						{speakerDisplayName
+							? `${speakerDisplayName} is typing...`
+							: "Typing..."}
 					</div>
 					<div
 						class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"

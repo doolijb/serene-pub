@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { Popover } from "@skeletonlabs/skeleton-svelte"
+	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import MessageComposer from "$lib/client/components/chatMessages/MessageComposer.svelte"
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import RagNotice from "$lib/client/components/chatMessages/RagNotice.svelte"
@@ -66,7 +66,7 @@
 </script>
 
 <div
-	class="chat-input-bar preset-tonal-surface gap-4 pb-2 align-middle lg:rounded-t-lg lg:pb-4"
+	class="chat-input-bar preset-tonal-surface gap-4 px-3 pb-2 align-middle lg:rounded-t-lg lg:pb-4"
 	class:hidden={!!editChatMessage}
 >
 	{#if showAddPersonaCTA}
@@ -132,45 +132,46 @@
 			{#snippet leftControls()}
 				{@const activePersona = currentUserPersona?.persona ?? (!isGuest ? chat?.chatPersonas?.[0]?.persona : undefined)}
 				{#if activePersona}
-					<div class="max-lg:hidden flex flex-col lg:ml-2 lg:gap-2">
+					<div class="max-lg:hidden flex flex-col lg:gap-2">
 						{#if userPersonasInChat.length > 1}
 							<Popover
 								open={personaSwitcherOpen}
 								onOpenChange={(e) => (personaSwitcherOpen = e.open)}
 								positioning={{ placement: "top" }}
-								triggerBase="relative p-0 cursor-pointer"
-								contentBase="card preset-tonal-surface p-2 space-y-1 min-w-[180px]"
-								zIndex="1000"
 							>
-								{#snippet trigger()}
-									<span class="ml-1 block">
+								<Popover.Trigger class="relative p-0 cursor-pointer">
+									<span class="block">
 										<Avatar char={activePersona} />
 									</span>
 									<span class="bg-surface-300-700 absolute -bottom-1 -right-1 flex items-center justify-center rounded-full p-0.5 shadow">
 										<Icons.ChevronDown size={10} />
 									</span>
-								{/snippet}
-								{#snippet content()}
-									<p class="text-surface-500 px-2 pb-1 text-xs font-semibold uppercase tracking-wider">Switch Persona</p>
-									{#each userPersonasInChat as cp (cp.personaId)}
-										{#if cp.persona && cp.personaId != null}
-											<button
-												class="btn btn-sm w-full justify-start rounded-lg text-left"
-												class:preset-filled-primary-500={cp.personaId === currentUserPersona?.personaId}
-												class:preset-filled-surface-400-600={cp.personaId !== currentUserPersona?.personaId}
-												onclick={() => {
-													onSwitchPersona?.(cp.personaId!)
-													personaSwitcherOpen = false
-												}}
-											>
-												{cp.persona.name}
-											</button>
-										{/if}
-									{/each}
-								{/snippet}
+								</Popover.Trigger>
+								<Portal>
+									<Popover.Positioner class="z-[1000]!">
+										<Popover.Content class="card preset-tonal-surface p-2 space-y-1 min-w-[180px]">
+											<p class="text-surface-500 px-2 pb-1 text-xs font-semibold uppercase tracking-wider">Switch Persona</p>
+											{#each userPersonasInChat as cp (cp.personaId)}
+												{#if cp.persona && cp.personaId != null}
+													<button
+														class="btn btn-sm w-full justify-start rounded-lg text-left"
+														class:preset-filled-primary-500={cp.personaId === currentUserPersona?.personaId}
+														class:preset-filled-surface-400-600={cp.personaId !== currentUserPersona?.personaId}
+														onclick={() => {
+															onSwitchPersona?.(cp.personaId!)
+															personaSwitcherOpen = false
+														}}
+													>
+														{cp.persona.name}
+													</button>
+												{/if}
+											{/each}
+										</Popover.Content>
+									</Popover.Positioner>
+								</Portal>
 							</Popover>
 						{:else}
-							<span class="ml-1">
+							<span class="block">
 								<Avatar char={activePersona} />
 							</span>
 						{/if}
@@ -180,11 +181,12 @@
 			{#snippet rightControls()}
 				{#if !lastMessage?.isGenerating && !editChatMessage}
 					<button
-						class="hover:preset-tonal-success mr-3 h-auto rounded-lg p-3 text-center lg:block"
+						class="hover:preset-tonal-success h-auto rounded-lg p-3 text-center"
 						type="button"
 						disabled={!newMessage.trim() ||
 							lastMessage?.isGenerating}
 						title="Send"
+						aria-label="Send message"
 						onclick={handleSendButton}
 					>
 						<Icons.Send size={24} class="mx-auto" />
@@ -192,7 +194,8 @@
 				{:else if lastMessage?.isGenerating}
 					<button
 						title="Stop Generation"
-						class="text-error-500 hover:preset-tonal-error mr-3 h-auto rounded-lg p-3 text-center"
+						aria-label="Stop generating"
+						class="text-error-500 hover:preset-tonal-error h-auto rounded-lg p-3 text-center"
 						type="button"
 						onclick={handleAbortLastMessage}
 					>

@@ -2,7 +2,7 @@
     import * as Icons from "@lucide/svelte"
     import { getContext, onMount } from "svelte"
     import * as skio from "sveltekit-io"
-    import { Modal, Tabs } from "@skeletonlabs/skeleton-svelte"
+    import { Dialog, Portal, Tabs } from "@skeletonlabs/skeleton-svelte"
     import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
     import type { ValueChangeDetails } from "@zag-js/tabs"
     import VectorizationSetupScreen from "$lib/client/components/vectorization/VectorizationSetupScreen.svelte"
@@ -513,21 +513,20 @@
 
         </div>
     {:else}
-    <Tabs value={activeTab} onValueChange={handleTabChange} listBase="flex flex-wrap gap-1">
-        {#snippet list()}
-            <Tabs.Control value="queue">
+    <Tabs value={activeTab} onValueChange={handleTabChange}>
+        <Tabs.List class="flex flex-wrap gap-1">
+            <Tabs.Trigger value="queue">
                 <Icons.List size={20} class="inline" />
                 {#if activeTab === "queue"}Queue{/if}
-            </Tabs.Control>
-            <Tabs.Control value="settings">
+            </Tabs.Trigger>
+            <Tabs.Trigger value="settings">
                 <Icons.Settings size={20} class="inline" />
                 {#if activeTab === "settings"}Settings{/if}
-            </Tabs.Control>
-        {/snippet}
-        {#snippet content()}
+            </Tabs.Trigger>
+        </Tabs.List>
 
             <!-- Queue Tab -->
-            <Tabs.Panel value="queue">
+            <Tabs.Content value="queue">
             <div class="flex flex-col gap-4 overflow-y-auto p-4">
 
                 <!-- Status card -->
@@ -684,10 +683,10 @@
                 {/if}
 
             </div>
-            </Tabs.Panel>
+            </Tabs.Content>
 
             <!-- Settings Tab -->
-            <Tabs.Panel value="settings">
+            <Tabs.Content value="settings">
             <div class="flex flex-col gap-4 overflow-y-auto p-4">
 
                 <!-- Configured: summary + reconfigure/disable -->
@@ -849,153 +848,134 @@
                         </button>
                     {/if}
 
-                    <!-- Disable -->
-                    <div class="border-surface-300-700 mt-2 border-t pt-4">
-                        <p class="text-surface-500 mb-2 text-xs">Turn off embeddings entirely — RAG falls back to keyword search.</p>
-                        <button
-                            class="btn btn-sm preset-tonal-error w-full text-xs"
-                            onclick={() => (showDisableConfirmModal = true)}
-                            disabled={disabling}
-                        >
-                            {#if disabling}
-                                <Icons.Loader size={12} class="animate-spin" aria-hidden="true" />
-                                Disabling…
-                            {:else}
-                                <Icons.PowerOff size={12} aria-hidden="true" />
-                                Disable Embeddings
-                            {/if}
-                        </button>
-                    </div>
-
             </div>
-            </Tabs.Panel>
+            </Tabs.Content>
 
-        {/snippet}
     </Tabs>
     {/if}
 </div>
 
 <!-- Change Model Modal -->
-<Modal
-    open={showChangeModelModal}
-    onOpenChange={(e) => { if (!e.open) cancelChangeModel() }}
-    contentBase="card bg-surface-100-900 p-6 space-y-5 shadow-xl max-w-lg w-full"
-    backdropClasses="backdrop-blur-sm"
->
-    {#snippet content()}
-        <header class="flex items-center gap-3">
-            <Icons.RefreshCw class="text-primary-500 h-5 w-5 shrink-0" />
-            <h2 class="text-lg font-bold">Change Embedding Model</h2>
-        </header>
+<Dialog open={showChangeModelModal} onOpenChange={(e) => { if (!e.open) cancelChangeModel() }}>
+    <Portal>
+        <Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+        <Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <Dialog.Content class="card bg-surface-100-900 p-6 space-y-5 shadow-xl max-w-lg w-full">
+                <header class="flex items-center gap-3">
+                    <Icons.RefreshCw class="text-primary-500 h-5 w-5 shrink-0" />
+                    <h2 class="text-lg font-bold">Change Embedding Model</h2>
+                </header>
 
-        <div class="text-warning-500 flex items-start gap-2 text-sm">
-            <Icons.AlertTriangle class="mt-0.5 h-4 w-4 shrink-0" />
-            <p>Changing the model will stop the current embedding queue. All existing embeddings will need to be regenerated with the new model.</p>
-        </div>
-
-        <div class="space-y-2">
-            {#each availableModels as model}
-                <label
-                    class="flex cursor-pointer items-start gap-3 rounded-lg border-2 p-3 transition-all
-                        {selectedModelForChange === model.id
-                        ? 'border-primary-500 bg-primary-500/5'
-                        : 'border-surface-300-600 hover:border-surface-400-500'}"
-                >
-                    <input
-                        type="radio"
-                        name="change-model"
-                        value={model.id}
-                        bind:group={selectedModelForChange}
-                        class="mt-0.5"
-                    />
-                    <div class="min-w-0 flex-1">
-                        <div class="flex flex-wrap items-center gap-2">
-                            <span class="font-medium">{model.name}</span>
-                            {#if model.tier === "fast"}
-                                <span class="rounded-full bg-sky-500/15 px-1.5 py-0.5 text-xs font-medium text-sky-600">Fast</span>
-                            {:else if model.tier === "balanced"}
-                                <span class="rounded-full bg-violet-500/15 px-1.5 py-0.5 text-xs font-medium text-violet-600">Balanced</span>
-                            {:else}
-                                <span class="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-xs font-medium text-amber-600">Best</span>
-                            {/if}
-                            {#if model.id === activeModelName}
-                                <span class="bg-primary-500/20 text-primary-600 rounded-full px-1.5 py-0.5 text-xs">current</span>
-                            {/if}
-                            <span class="text-surface-500 text-xs">{model.sizeLabel} · {model.dimensions}d</span>
-                        </div>
-                        <p class="text-surface-500 mt-0.5 text-xs">{model.description}</p>
-                    </div>
-                </label>
-            {/each}
-        </div>
-
-        {#if downloadProgress}
-            <div class="space-y-1">
-                <div class="flex items-center justify-between text-xs">
-                    <span class="text-surface-500 capitalize">{downloadProgress.status}…</span>
-                    {#if downloadProgress.percent !== undefined}
-                        <span class="font-mono">{downloadProgress.percent}%</span>
-                    {/if}
+                <div class="text-warning-500 flex items-start gap-2 text-sm">
+                    <Icons.AlertTriangle class="mt-0.5 h-4 w-4 shrink-0" />
+                    <p>Changing the model will stop the current embedding queue. All existing embeddings will need to be regenerated with the new model.</p>
                 </div>
-                {#if downloadProgress.percent !== undefined}
-                    <div class="bg-surface-300-600 h-1.5 w-full overflow-hidden rounded-full">
-                        <div class="bg-primary-500 h-full transition-all duration-300" style="width: {downloadProgress.percent}%"></div>
-                    </div>
-                {:else}
-                    <div class="bg-surface-300-600 h-1.5 w-full overflow-hidden rounded-full">
-                        <div class="bg-primary-500 h-full w-1/3 animate-pulse rounded-full"></div>
-                    </div>
-                {/if}
-            </div>
-        {/if}
 
-        <footer class="flex justify-end gap-2">
-            <button class="btn preset-filled-surface-400-600" onclick={cancelChangeModel} disabled={isChangingModel}>Cancel</button>
-            <button
-                class="btn preset-filled-primary-500"
-                onclick={confirmChangeModel}
-                disabled={!selectedModelForChange || selectedModelForChange === activeModelName || isChangingModel}
-            >
-                {#if isChangingModel}
-                    <Icons.Loader class="h-4 w-4 animate-spin" />
-                    Loading…
-                {:else}
-                    <Icons.RefreshCw class="h-4 w-4" />
-                    Switch Model
+                <div class="space-y-2">
+                    {#each availableModels as model}
+                        <label
+                            class="flex cursor-pointer items-start gap-3 rounded-lg border-2 p-3 transition-all
+                                {selectedModelForChange === model.id
+                                ? 'border-primary-500 bg-primary-500/5'
+                                : 'border-surface-300-600 hover:border-surface-400-500'}"
+                        >
+                            <input
+                                type="radio"
+                                name="change-model"
+                                value={model.id}
+                                bind:group={selectedModelForChange}
+                                class="mt-0.5"
+                            />
+                            <div class="min-w-0 flex-1">
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <span class="font-medium">{model.name}</span>
+                                    {#if model.tier === "fast"}
+                                        <span class="rounded-full bg-sky-500/15 px-1.5 py-0.5 text-xs font-medium text-sky-600">Fast</span>
+                                    {:else if model.tier === "balanced"}
+                                        <span class="rounded-full bg-violet-500/15 px-1.5 py-0.5 text-xs font-medium text-violet-600">Balanced</span>
+                                    {:else}
+                                        <span class="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-xs font-medium text-amber-600">Best</span>
+                                    {/if}
+                                    {#if model.id === activeModelName}
+                                        <span class="bg-primary-500/20 text-primary-600 rounded-full px-1.5 py-0.5 text-xs">current</span>
+                                    {/if}
+                                    <span class="text-surface-500 text-xs">{model.sizeLabel} · {model.dimensions}d</span>
+                                </div>
+                                <p class="text-surface-500 mt-0.5 text-xs">{model.description}</p>
+                            </div>
+                        </label>
+                    {/each}
+                </div>
+
+                {#if downloadProgress}
+                    <div class="space-y-1">
+                        <div class="flex items-center justify-between text-xs">
+                            <span class="text-surface-500 capitalize">{downloadProgress.status}…</span>
+                            {#if downloadProgress.percent !== undefined}
+                                <span class="font-mono">{downloadProgress.percent}%</span>
+                            {/if}
+                        </div>
+                        {#if downloadProgress.percent !== undefined}
+                            <div class="bg-surface-300-600 h-1.5 w-full overflow-hidden rounded-full">
+                                <div class="bg-primary-500 h-full transition-all duration-300" style="width: {downloadProgress.percent}%"></div>
+                            </div>
+                        {:else}
+                            <div class="bg-surface-300-600 h-1.5 w-full overflow-hidden rounded-full">
+                                <div class="bg-primary-500 h-full w-1/3 animate-pulse rounded-full"></div>
+                            </div>
+                        {/if}
+                    </div>
                 {/if}
-            </button>
-        </footer>
-    {/snippet}
-</Modal>
+
+                <footer class="flex justify-end gap-2">
+                    <button class="btn preset-filled-surface-400-600" onclick={cancelChangeModel} disabled={isChangingModel}>Cancel</button>
+                    <button
+                        class="btn preset-filled-primary-500"
+                        onclick={confirmChangeModel}
+                        disabled={!selectedModelForChange || selectedModelForChange === activeModelName || isChangingModel}
+                    >
+                        {#if isChangingModel}
+                            <Icons.Loader class="h-4 w-4 animate-spin" />
+                            Loading…
+                        {:else}
+                            <Icons.RefreshCw class="h-4 w-4" />
+                            Switch Model
+                        {/if}
+                    </button>
+                </footer>
+            </Dialog.Content>
+        </Dialog.Positioner>
+    </Portal>
+</Dialog>
 
 <!-- Disable Confirmation Modal -->
-<Modal
-    open={showDisableConfirmModal}
-    onOpenChange={(e) => (showDisableConfirmModal = e.open)}
-    contentBase="card bg-surface-100-900 p-6 space-y-5 shadow-xl max-w-lg w-full"
-    backdropClasses="backdrop-blur-sm"
->
-    {#snippet content()}
-        <header class="flex items-center gap-3">
-            <Icons.AlertTriangle class="text-error-500 h-5 w-5 shrink-0" />
-            <h2 class="text-lg font-bold">Disable Embeddings?</h2>
-        </header>
+<Dialog open={showDisableConfirmModal} onOpenChange={(e) => (showDisableConfirmModal = e.open)}>
+    <Portal>
+        <Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+        <Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <Dialog.Content class="card bg-surface-100-900 p-6 space-y-5 shadow-xl max-w-lg w-full">
+                <header class="flex items-center gap-3">
+                    <Icons.AlertTriangle class="text-error-500 h-5 w-5 shrink-0" />
+                    <h2 class="text-lg font-bold">Disable Embeddings?</h2>
+                </header>
 
-        <p class="text-sm">
-            RAG will fall back to keyword search for all chats. You can re-enable embeddings and reconfigure at any time — existing embeddings aren't deleted, just unused until you turn this back on.
-        </p>
+                <p class="text-sm">
+                    RAG will fall back to keyword search for all chats. You can re-enable embeddings and reconfigure at any time — existing embeddings aren't deleted, just unused until you turn this back on.
+                </p>
 
-        <footer class="flex justify-end gap-2">
-            <button class="btn preset-filled-surface-400-600" onclick={() => (showDisableConfirmModal = false)}>
-                Cancel
-            </button>
-            <button
-                class="btn preset-filled-error-500"
-                onclick={() => { showDisableConfirmModal = false; disableVectorization() }}
-            >
-                <Icons.PowerOff class="h-4 w-4" />
-                Disable Embeddings
-            </button>
-        </footer>
-    {/snippet}
-</Modal>
+                <footer class="flex justify-end gap-2">
+                    <button class="btn preset-filled-surface-400-600" onclick={() => (showDisableConfirmModal = false)}>
+                        Cancel
+                    </button>
+                    <button
+                        class="btn preset-filled-error-500"
+                        onclick={() => { showDisableConfirmModal = false; disableVectorization() }}
+                    >
+                        <Icons.PowerOff class="h-4 w-4" />
+                        Disable Embeddings
+                    </button>
+                </footer>
+            </Dialog.Content>
+        </Dialog.Positioner>
+    </Portal>
+</Dialog>

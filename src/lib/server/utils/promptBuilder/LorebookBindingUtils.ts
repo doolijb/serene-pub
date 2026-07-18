@@ -2,6 +2,7 @@
 // Contains lorebook binding logic for PromptBuilder modularization
 import type { BasePromptChat } from "../../connectionAdapters/BaseConnectionAdapter"
 import type { TemplateContextCharacter, TemplateContextPersona } from "./index"
+import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 
 export function populateLorebookEntryBindings(
 	entry: SelectWorldLoreEntry | SelectCharacterLoreEntry | SelectHistoryEntry,
@@ -16,7 +17,7 @@ export function populateLorebookEntryBindings(
 	// Handle {{char:#}} syntax by replacing with actual character names
 	lorebook.lorebookBindings.forEach((binding) => {
 		if (binding.character) {
-			const name = binding.character.nickname || binding.character.name
+			const name = resolveCharacterName(binding.character)
 			// Extract the number from the binding string (e.g., "{{char:1}}")
 			const bindingMatch = binding.binding.match(/\{\{char:(\d+)\}\}/)
 			if (bindingMatch) {
@@ -45,7 +46,7 @@ export function populateLorebookEntryBindings(
 	// Then handle direct binding replacements (legacy approach)
 	lorebook.lorebookBindings.forEach((binding) => {
 		if (binding.character) {
-			const name = binding.character.nickname || binding.character.name
+			const name = resolveCharacterName(binding.character)
 			entry.content = entry.content.replaceAll(binding.binding, name)
 		} else if (binding.persona) {
 			const name = binding.persona.name

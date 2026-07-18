@@ -34,13 +34,13 @@ export global {
 		id: number
 	}
 
-	// Chat World Prompt Config types
-	export type SelectChatWorldPromptConfig =
-		typeof schema.chatWorldPromptConfigs.$inferSelect
-	export type InsertChatWorldPromptConfig =
-		typeof schema.chatWorldPromptConfigs.$inferInsert
-	export type UpdateChatWorldPromptConfig =
-		Partial<SelectChatWorldPromptConfig> & {
+	// Narrator Prompt Config types
+	export type SelectNarratorPromptConfig =
+		typeof schema.narratorPromptConfigs.$inferSelect
+	export type InsertNarratorPromptConfig =
+		typeof schema.narratorPromptConfigs.$inferInsert
+	export type UpdateNarratorPromptConfig =
+		Partial<SelectNarratorPromptConfig> & {
 			id: number
 		}
 
@@ -176,6 +176,11 @@ export global {
 	export type SelectSceneSummarizeConfig = typeof schema.sceneSummarizeConfigs.$inferSelect
 	export type InsertSceneSummarizeConfig = typeof schema.sceneSummarizeConfigs.$inferInsert
 	export type UpdateSceneSummarizeConfig = Partial<SelectSceneSummarizeConfig> & { id: number }
+
+	// Graph Build Config types
+	export type SelectGraphBuildConfig = typeof schema.graphBuildConfigs.$inferSelect
+	export type InsertGraphBuildConfig = typeof schema.graphBuildConfigs.$inferInsert
+	export type UpdateGraphBuildConfig = Partial<SelectGraphBuildConfig> & { id: number }
 
 	// Convenient re-exports of narrative graph inline types for server-side handlers
 	export type NarrativeNodeShape = Sockets.NarrativeGraph.NarrativeNode

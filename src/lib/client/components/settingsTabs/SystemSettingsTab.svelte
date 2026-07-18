@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { z } from "zod"
@@ -26,6 +26,8 @@
 	let ollamaSettingsCtx: OllamaSettingsCtx = $state(getContext("ollamaSettingsCtx"))
 	let koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
 	let userCtx: UserCtx = $state(getContext("userCtx"))
+	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
+	let disablingEmbeddings = $state(false)
 
 	// URL validation schema
 	const urlSchema = z
@@ -107,6 +109,26 @@
 			koboldCppBaseUrlError = "Failed to save URL"
 			isSavingKoboldCppBaseUrl = false
 		}
+	}
+
+	// Enabling embeddings needs a model chosen (local vs API, which model) —
+	// unlike the Ollama/KoboldCPP manager switches, there's no safe "just flip
+	// it on" action, so the switch only ever turns things off here; turning it
+	// on routes to the Vectorization panel's setup flow instead.
+	function onEmbeddingsEnabledClick(event: { checked: boolean }) {
+		if (!userCtx.user?.isAdmin) {
+			toaster.error({
+				title: "Access denied",
+				description: "Admin privileges required"
+			})
+			return
+		}
+		if (event.checked) {
+			panelsCtx.openPanel({ key: "vectorization" })
+			return
+		}
+		disablingEmbeddings = true
+		socket?.emit("vectorization:disable", {})
 	}
 
 	async function onOllamaManagerEnabledClick(event: { checked: boolean }) {
@@ -338,6 +360,15 @@
 			}
 		}
 
+		const handleEmbeddingsDisabled = (message: any) => {
+			disablingEmbeddings = false
+			if (message.success) {
+				toaster.success({ title: "Embeddings disabled" })
+			} else {
+				toaster.error({ title: "Failed to disable embeddings" })
+			}
+		}
+
 		const handleAccountsEnabled = (message: any) => {
 			if (message.success) {
 				toaster.success({
@@ -351,14 +382,20 @@
 
 		// ────────────────────────────────────────────────────────────────────
 
-		const handleGenericError = (message: any) => {
-			// Handle specific error events based on the event type
-			if (message.error?.includes("passphrase")) {
-				toaster.error({
-					title: "Cannot enable user accounts",
-					description: message.error
-				})
-			}
+		// "systemSettings:updateAccountsEnabled:error" isn't in the typed
+		// SocketEventMap (only its success variant is), so this listener is
+		// registered via the same `(socket as any).on(...)` cast used
+		// elsewhere in the app for ad hoc error listeners (eg. +page.svelte's
+		// "koboldcpp:connectModel:error"). Note: the "systemSettings:*Enabled"
+		// switches are bound directly to `systemSettingsCtx.settings`, which
+		// is only updated by the server on success, so on failure they
+		// already revert to their prior (correct) state - this listener's
+		// job is just to surface *why* it failed.
+		const handleAccountsEnabledError = (message: { error?: string }) => {
+			toaster.error({
+				title: "Cannot enable user accounts",
+				description: message.error
+			})
 		}
 
 		const handleHasPassphrase = (message: any) => {
@@ -408,8 +445,12 @@
 			"systemSettings:updateOllamaManagerBaseUrl",
 			handleOllamaManagerBaseUrl
 		)
+		socket.on("vectorization:disable", handleEmbeddingsDisabled)
 		socket.on("systemSettings:updateAccountsEnabled", handleAccountsEnabled)
-		socket.on("**:error", handleGenericError)
+		;(socket as any).on(
+			"systemSettings:updateAccountsEnabled:error",
+			handleAccountsEnabledError
+		)
 		socket.on("users:current:hasPassphrase", handleHasPassphrase)
 		socket.on("users:current:setPassphrase", handleSetPassphrase)
 
@@ -428,11 +469,15 @@
 				"systemSettings:updateOllamaManagerBaseUrl",
 				handleOllamaManagerBaseUrl
 			)
+			socket.off("vectorization:disable", handleEmbeddingsDisabled)
 			socket.off(
 				"systemSettings:updateAccountsEnabled",
 				handleAccountsEnabled
 			)
-			socket.off("**:error", handleGenericError)
+			;(socket as any).off(
+				"systemSettings:updateAccountsEnabled:error",
+				handleAccountsEnabledError
+			)
 			socket.off("users:current:hasPassphrase", handleHasPassphrase)
 			socket.off("users:current:setPassphrase", handleSetPassphrase)
 		}
@@ -464,7 +509,12 @@
 					name="ollama-manager"
 					checked={ollamaSettingsCtx.settings?.ollamaManagerEnabled}
 					onCheckedChange={onOllamaManagerEnabledClick}
-				></Switch>
+				>
+					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
 				<label for="ollama-manager" class="font-semibold">
 					Enable Ollama Manager
 				</label>
@@ -521,7 +571,12 @@
 					name="koboldcpp-manager"
 					checked={koboldCppSettingsCtx.settings?.koboldCppManagerEnabled}
 					onCheckedChange={onKoboldCppManagerEnabledClick}
-				></Switch>
+				>
+					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
 				<label for="koboldcpp-manager" class="font-semibold">
 					Enable KoboldCPP Manager
 				</label>
@@ -569,6 +624,34 @@
 			{/if}
 		</div>
 
+		<!-- Embeddings Settings -->
+		<div class="space-y-4">
+			<h3 class="text-lg font-semibold">Embeddings</h3>
+
+			<p class="text-muted-foreground text-sm">
+				Powers retrieval-augmented context (RAG) for lore, history, and past
+				messages. Turning this on opens the Embeddings panel to choose a
+				local or API-based model — there's no in-place default to switch to.
+			</p>
+
+			<div class="flex items-center gap-2">
+				<Switch
+					name="embeddings-enabled"
+					checked={systemSettingsCtx.settings?.vectorizationEnabled}
+					disabled={disablingEmbeddings}
+					onCheckedChange={onEmbeddingsEnabledClick}
+				>
+					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
+				<label for="embeddings-enabled" class="font-semibold">
+					Enable Embeddings
+				</label>
+			</div>
+		</div>
+
 		{/if}
 
 		<!-- Summarization Settings -->
@@ -587,7 +670,12 @@
 					name="enable-summarization"
 					checked={systemSettingsCtx.settings?.summarizationEnabled}
 					onCheckedChange={handleSummarizationEnabledClick}
-				></Switch>
+				>
+					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
 				<label for="enable-summarization" class="font-semibold">
 					{systemSettingsCtx.settings?.summarizationEnabled
 						? "Summarization Enabled"
@@ -609,7 +697,12 @@
 					name="enable-context-debugging"
 					checked={systemSettingsCtx.settings?.contextDebuggingEnabled}
 					onCheckedChange={handleContextDebuggingEnabledClick}
-				/>
+				>
+					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
 				<label for="enable-context-debugging" class="font-semibold">
 					{systemSettingsCtx.settings?.contextDebuggingEnabled
 						? "Context Debugging Enabled"
@@ -628,7 +721,12 @@
 					checked={systemSettingsCtx.settings?.isAccountsEnabled}
 					onCheckedChange={handleEnableAccountsClick}
 					disabled={systemSettingsCtx.settings?.isAccountsEnabled}
-				></Switch>
+				>
+					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
 				<label for="enable-accounts" class="font-semibold">
 					Enable User Accounts
 				</label>
@@ -657,16 +755,14 @@
 {/if}
 
 <!-- Enable Accounts Confirmation Modal -->
-<Modal
-	open={showEnableAccountsModal}
-	onOpenChange={(e) => (showEnableAccountsModal = e.open)}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-lg"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
+<Dialog open={showEnableAccountsModal} onOpenChange={(e) => (showEnableAccountsModal = e.open)}>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-lg">
 		<header class="flex items-center justify-between">
 			<h2 class="text-xl font-bold">Enable User Accounts</h2>
-			<button class="btn-ghost" onclick={cancelEnableAccounts}>
+			<button class="btn-ghost" aria-label="Close" onclick={cancelEnableAccounts}>
 				<Icons.X class="h-5 w-5" />
 			</button>
 		</header>
@@ -790,6 +886,8 @@
 				{/if}
 			</button>
 		</footer>
-	{/snippet}
-</Modal>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
 

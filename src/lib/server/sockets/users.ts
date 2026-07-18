@@ -526,14 +526,28 @@ export const usersCreate: Handler<
 			throw new Error("Username already exists")
 		}
 
-		const [newUser] = await db
-			.insert(schema.users)
-			.values({
-				username: params.username,
-				displayName: params.displayName || null,
-				isAdmin: params.isAdmin || false
-			})
-			.returning()
+		// The findFirst check above is a friendly pre-check, not the real
+		// guard — two concurrent creates for the same username could both
+		// pass it before either insert commits. users.username now has a DB
+		// unique constraint as the actual backstop; translate its violation
+		// into the same friendly message rather than letting a raw
+		// constraint-violation error surface.
+		let newUser: typeof schema.users.$inferSelect
+		try {
+			;[newUser] = await db
+				.insert(schema.users)
+				.values({
+					username: params.username,
+					displayName: params.displayName || null,
+					isAdmin: params.isAdmin || false
+				})
+				.returning()
+		} catch (err: any) {
+			if (err?.code === "23505") {
+				throw new Error("Username already exists")
+			}
+			throw err
+		}
 
 		// Set passphrase (required for creation)
 		await passphrase.set({
@@ -649,6 +663,14 @@ export const usersDelete: Handler<
 			.update(schema.users)
 			.set({ isDeleted: true })
 			.where(eq(schema.users.id, params.id))
+
+		// Revoke every active session immediately — without this, a token
+		// issued before the delete stays valid (and authenticate() didn't
+		// check isDeleted either, see the fix there) for up to
+		// USER_TOKEN_EXPIRATION_HOURS, letting a "deleted" user keep chatting.
+		await db
+			.delete(schema.userTokens)
+			.where(eq(schema.userTokens.userId, params.id))
 
 		const res: Sockets.Users.Delete.Response = { success: true }
 		emitToUser("users:delete", res)

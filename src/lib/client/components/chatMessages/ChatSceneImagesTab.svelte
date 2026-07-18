@@ -261,7 +261,7 @@
 												/>
 												<!-- Pin overlay buttons on hover -->
 												<div
-													class="absolute inset-0 flex items-center justify-center gap-0.5 rounded bg-black/60 opacity-0 transition-opacity group-hover:opacity-100"
+													class="absolute inset-0 flex items-center justify-center gap-0.5 rounded bg-black/60 max-lg:opacity-100 lg:opacity-0 lg:transition-opacity lg:group-hover:opacity-100"
 												>
 													<button
 														class="btn btn-sm h-6 min-h-0 px-1.5 py-0 text-xs {leftImage === imgPath ? 'preset-filled-primary-500' : 'preset-tonal-primary'}"

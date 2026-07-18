@@ -66,7 +66,7 @@ Click the **+** icon while viewing any existing config (built-in or custom) to o
 
 Chat Prompts: World is a small library of prompt templates for **World Response** — a manually-triggered narration message that speaks as the environment itself (weather, scenery, side characters, shopkeepers, monsters) rather than as any of the chat's defined characters. See [Chats](./chats.md) for where to trigger one from inside a chat.
 
-Structurally a Chat Prompts: World config is shaped like a Chat Prompt, not a Summarize config — a single **Name**, a **Display Name**, **System Instructions**, and an **AI Override** — but it's a separate list because it's resolved and triggered completely independently of the chat's regular Chat Prompt, and it deliberately never participates in [round-robin turn order](./chats.md#turn-order--round-robin-replies).
+Structurally a Chat Prompts: World config is shaped like a Chat Prompt, not a Summarize config — a single **Name**, a **Display Name**, **System Instructions**, and an **AI Override** — but it's a separate list because it's resolved and triggered completely independently of the chat's regular Chat Prompt, and it deliberately never participates in [round-robin turn order](./chats.md#turn-order-round-robin-replies).
 
 Serene Pub ships with one built-in config, **"World - Narrator,"** whose instructions tell the model to narrate the environment and voice minor NPCs directly, explicitly forbidding it from speaking or acting as any of the chat's characters or personas.
 

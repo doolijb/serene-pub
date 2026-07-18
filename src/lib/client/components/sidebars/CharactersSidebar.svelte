@@ -3,7 +3,7 @@
 	import { getContext, onDestroy, onMount } from "svelte"
 	import { flip } from "svelte/animate"
 	import { fade } from "svelte/transition"
-	import { FileUpload, Modal } from "@skeletonlabs/skeleton-svelte"
+	import { FileUpload, Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import CharacterForm from "../characterForms/CharacterForm.svelte"
 	import CharacterCreator from "../modals/CharacterCreatorModal.svelte"
@@ -417,147 +417,165 @@
 </div>
 
 {#if showDeleteModal}
-	<Modal
+	<Dialog
 		open={showDeleteModal}
 		onOpenChange={(e) => (showDeleteModal = e.open)}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
-		backdropClasses="backdrop-blur-sm"
-		role="alertdialog"
-		aria-labelledby="delete-modal-title"
-		aria-describedby="delete-modal-description"
 	>
-		{#snippet content()}
-			<div class="p-6">
-				<h2 id="delete-modal-title" class="mb-2 text-lg font-bold">
-					Delete Character?
-				</h2>
-				<p id="delete-modal-description" class="mb-4">
-					Are you sure you want to delete this character? This action
-					cannot be undone.
-				</p>
-				<div
-					class="flex justify-end gap-2"
-					role="group"
-					aria-label="Delete confirmation actions"
+		<Portal>
+			<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+				<Dialog.Content
+					class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
+					role="alertdialog"
+					aria-labelledby="delete-modal-title"
+					aria-describedby="delete-modal-description"
 				>
-					<button
-						class="btn preset-filled-surface-500"
-						onclick={cancelDelete}
-						type="button"
-						aria-label="Cancel deletion"
-					>
-						Cancel
-					</button>
-					<button
-						class="btn preset-filled-error-500"
-						onclick={confirmDelete}
-						type="button"
-						aria-label="Confirm deletion"
-					>
-						Delete
-					</button>
-				</div>
-			</div>
-		{/snippet}
-	</Modal>
+					<div class="p-6">
+						<h2 id="delete-modal-title" class="mb-2 text-lg font-bold">
+							Delete Character?
+						</h2>
+						<p id="delete-modal-description" class="mb-4">
+							Are you sure you want to delete this character? This action
+							cannot be undone.
+						</p>
+						<div
+							class="flex justify-end gap-2"
+							role="group"
+							aria-label="Delete confirmation actions"
+						>
+							<button
+								class="btn preset-filled-surface-500"
+								onclick={cancelDelete}
+								type="button"
+								aria-label="Cancel deletion"
+							>
+								Cancel
+							</button>
+							<button
+								class="btn preset-filled-error-500"
+								onclick={confirmDelete}
+								type="button"
+								aria-label="Confirm deletion"
+							>
+								Delete
+							</button>
+						</div>
+					</div>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
 {/if}
 
 {#if showImportModal}
-	<Modal
-		open={showImportModal}
-		onOpenChange={(e) => (showImportModal = e.open)}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl w-[min(95vw,560px)]"
-		backdropClasses="backdrop-blur-sm"
-	>
-		{#snippet content()}
-			<div class="p-6">
-				<h2 class="mb-2 text-lg font-bold">Import Character</h2>
-				<p class="mb-4">Choose how to import:</p>
-				<div class="space-y-2">
-					<button
-						class="btn preset-filled-surface-400-600 w-full justify-start"
-						onclick={() => {
-							showImportModal = false
-							showLibraryModal = true
-						}}
-					>
-						<Icons.Library class="w-4 h-4" />
-						Search Library
-					</button>
-					<div class="divider">OR</div>
-					<div>
-						<p class="text-sm text-surface-600 dark:text-surface-400 mb-2">
-							Upload a file (PNG, APNG, JPEG, JPG, WEBP, JSON):
-						</p>
-						<FileUpload
-							name="example"
-							accept=".png,.apng,.jpeg, .jpg, .webp, .json"
-							maxFiles={1}
-							onFileAccept={handleFileImport}
-							onFileReject={console.error}
-							classes="w-full bg-surface-50-950"
-						/>
+	<Dialog open={showImportModal} onOpenChange={(e) => (showImportModal = e.open)}>
+		<Portal>
+			<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+				<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl w-[min(95vw,560px)]">
+					<div class="p-6">
+						<h2 class="mb-2 text-lg font-bold">Import Character</h2>
+						<p class="mb-4">Choose how to import:</p>
+						<div class="space-y-2">
+							<button
+								class="btn preset-filled-surface-400-600 w-full justify-start"
+								onclick={() => {
+									showImportModal = false
+									showLibraryModal = true
+								}}
+							>
+								<Icons.Library class="w-4 h-4" />
+								Search Library
+							</button>
+							<div class="divider">OR</div>
+							<div>
+								<p class="text-sm text-surface-600 dark:text-surface-400 mb-2">
+									Upload a file (PNG, APNG, JPEG, JPG, WEBP, JSON):
+								</p>
+								<FileUpload
+									name="example"
+									accept=".png,.apng,.jpeg, .jpg, .webp, .json"
+									maxFiles={1}
+									onFileAccept={handleFileImport}
+									onFileReject={console.error}
+								>
+									<FileUpload.Dropzone
+										class="border-surface-300-700 bg-surface-50-950 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
+									>
+										<Icons.Upload class="text-surface-500 h-8 w-8" />
+										<FileUpload.Trigger class="btn btn-sm preset-filled-primary-500">
+											Browse
+										</FileUpload.Trigger>
+										<span class="text-surface-500 text-xs">or drag and drop</span>
+										<FileUpload.HiddenInput />
+									</FileUpload.Dropzone>
+								</FileUpload>
+							</div>
+						</div>
+						<div class="mt-4 flex gap-2">
+							<button
+								class="btn preset-filled-surface-500"
+								onclick={() => (showImportModal = false)}
+							>
+								Cancel
+							</button>
+						</div>
 					</div>
-				</div>
-				<div class="mt-4 flex gap-2">
-					<button
-						class="btn preset-filled-surface-500"
-						onclick={() => (showImportModal = false)}
-					>
-						Cancel
-					</button>
-				</div>
-			</div>
-		{/snippet}
-	</Modal>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
 {/if}
 
 <CharacterLibraryModal bind:open={showLibraryModal} />
 
 {#if showLorebookImportConfirmationModal}
-	<Modal
+	<Dialog
 		open={showLorebookImportConfirmationModal}
 		onOpenChange={(e) => {
 			showLorebookImportConfirmationModal = e.open
 			importingLorebook = null
 			importingLorebookCharacter = null
 		}}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
-		backdropClasses="backdrop-blur-sm"
 	>
-		{#snippet content()}
-			<div class="p-6">
-				<h2 class="mb-2 text-lg font-bold">Import Lorebook?</h2>
-				<p class="mb-4">
-					A lorebook is associated with this character card. Would you
-					like to import it?
-				</p>
-				<label class="mb-2 block font-semibold" for="lorebookName">
-					Lorebook Name
-				</label>
-				<input
-					name="lorebookName"
-					type="text"
-					class="input mb-4 w-full"
-					bind:value={importingLorebook!.name}
-				/>
-				<div class="flex justify-end gap-2">
-					<button
-						class="btn preset-filled-surface-500"
-						onclick={cancelLorebookImport}
-					>
-						Cancel
-					</button>
-					<button
-						class="btn preset-filled-primary-500"
-						onclick={confirmLorebookImport}
-					>
-						Import Lorebook
-					</button>
-				</div>
-			</div>
-		{/snippet}
-	</Modal>
+		<Portal>
+			<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+				<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700">
+					<div class="p-6">
+						<h2 class="mb-2 text-lg font-bold">Import Lorebook?</h2>
+						<p class="mb-4">
+							A lorebook is associated with this character card. Would you
+							like to import it?
+						</p>
+						<label class="mb-2 block font-semibold" for="lorebookName">
+							Lorebook Name
+						</label>
+						<input
+							name="lorebookName"
+							type="text"
+							class="input mb-4 w-full"
+							bind:value={importingLorebook!.name}
+						/>
+						<div class="flex justify-end gap-2">
+							<button
+								class="btn preset-filled-surface-500"
+								onclick={cancelLorebookImport}
+							>
+								Cancel
+							</button>
+							<button
+								class="btn preset-filled-primary-500"
+								onclick={confirmLorebookImport}
+							>
+								Import Lorebook
+							</button>
+						</div>
+					</div>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
 {/if}
 
 {#if showUnsavedChangesModal}

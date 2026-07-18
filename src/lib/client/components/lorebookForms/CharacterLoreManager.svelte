@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { Popover } from "@skeletonlabs/skeleton-svelte"
+	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { getContext, onDestroy, onMount, tick } from "svelte"
@@ -466,34 +466,35 @@
 						open={openMenuEntryId === entry.id}
 						onOpenChange={(e) => (openMenuEntryId = e.open ? entry.id : null)}
 						positioning={{ placement: "bottom-end" }}
-						triggerBase="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0"
-						contentBase="card bg-surface-100-900 shadow-xl p-2 flex flex-col gap-1 min-w-32"
-						zIndex="1000"
 					>
-						{#snippet trigger()}
+						<Popover.Trigger class="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0">
 							<Icons.Ellipsis size={16} />
-						{/snippet}
-						{#snippet content()}
-							<button
-								class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-								onclick={(e) => { e.stopPropagation(); openMenuEntryId = null; viewEntry(entry) }}
-							>
-								<Icons.Eye size={14} /> View
-							</button>
-							<button
-								class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-								onclick={(e) => { e.stopPropagation(); openMenuEntryId = null; editEntry(entry) }}
-							>
-								<Icons.Pencil size={14} /> Edit
-							</button>
-							<hr class="border-surface-300-700" />
-							<button
-								class="btn btn-sm preset-filled-error-500 w-full justify-start"
-								onclick={(e) => { e.stopPropagation(); openMenuEntryId = null; onDeleteClick(entry.id) }}
-							>
-								<Icons.Trash2 size={14} /> Delete
-							</button>
-						{/snippet}
+						</Popover.Trigger>
+						<Portal>
+							<Popover.Positioner class="z-[1000]!">
+								<Popover.Content class="card bg-surface-100-900 shadow-xl p-2 flex flex-col gap-1 min-w-32">
+									<button
+										class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+										onclick={(e) => { e.stopPropagation(); openMenuEntryId = null; viewEntry(entry) }}
+									>
+										<Icons.Eye size={14} /> View
+									</button>
+									<button
+										class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+										onclick={(e) => { e.stopPropagation(); openMenuEntryId = null; editEntry(entry) }}
+									>
+										<Icons.Pencil size={14} /> Edit
+									</button>
+									<hr class="border-surface-300-700" />
+									<button
+										class="btn btn-sm preset-filled-error-500 w-full justify-start"
+										onclick={(e) => { e.stopPropagation(); openMenuEntryId = null; onDeleteClick(entry.id) }}
+									>
+										<Icons.Trash2 size={14} /> Delete
+									</button>
+								</Popover.Content>
+							</Popover.Positioner>
+						</Portal>
 					</Popover>
 					</div>
 				</div>
@@ -514,7 +515,7 @@
 	<div class="flex flex-col gap-4">
 		<!-- Header -->
 		<div class="flex items-center gap-2">
-			<button class="btn btn-sm preset-filled-surface-400-600" onclick={goBack}>
+			<button class="btn btn-sm preset-filled-surface-400-600" onclick={goBack} aria-label="Back">
 				<Icons.ChevronLeft size={16} />
 			</button>
 			<h3 class="flex-1 truncate font-semibold">{focusedEntry.name}</h3>
@@ -599,7 +600,7 @@
 	<div class="flex flex-col gap-4">
 		<!-- Header with inline Cancel/Save -->
 		<div class="flex items-center gap-2">
-			<button class="btn btn-sm preset-filled-surface-400-600" onclick={goBack}>
+			<button class="btn btn-sm preset-filled-surface-400-600" onclick={goBack} aria-label="Back">
 				<Icons.ChevronLeft size={16} />
 			</button>
 			<h3 class="flex-1 text-sm font-semibold">
@@ -687,7 +688,12 @@
 								name="cleRegex"
 								checked={editingEntry.useRegex || false}
 								onCheckedChange={(e) => { if (editingEntry) editingEntry.useRegex = e.checked }}
-							/>
+							>
+								<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+									<Switch.Thumb />
+								</Switch.Control>
+								<Switch.HiddenInput />
+							</Switch>
 						</div>
 						<div class="flex w-full items-center justify-between gap-2">
 							<label for="cleCase">Case Sensitive</label>
@@ -695,7 +701,12 @@
 								name="cleCase"
 								checked={editingEntry.caseSensitive || false}
 								onCheckedChange={(e) => { if (editingEntry) editingEntry.caseSensitive = e.checked }}
-							/>
+							>
+								<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+									<Switch.Thumb />
+								</Switch.Control>
+								<Switch.HiddenInput />
+							</Switch>
 						</div>
 					{/if}
 					<div class="flex w-full items-center justify-between gap-2">
@@ -704,7 +715,12 @@
 							name="clePinned"
 							checked={editingEntry.constant || false}
 							onCheckedChange={(e) => { if (editingEntry) editingEntry.constant = e.checked }}
-						/>
+						>
+							<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+								<Switch.Thumb />
+							</Switch.Control>
+							<Switch.HiddenInput />
+						</Switch>
 					</div>
 					<div class="flex w-full items-center justify-between gap-2">
 						<label for="cleEnabled">Enabled</label>
@@ -712,7 +728,12 @@
 							name="cleEnabled"
 							checked={editingEntry.enabled !== false}
 							onCheckedChange={(e) => { if (editingEntry) editingEntry.enabled = e.checked }}
-						/>
+						>
+							<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+								<Switch.Thumb />
+							</Switch.Control>
+							<Switch.HiddenInput />
+						</Switch>
 					</div>
 					{#if !vectorizationEnabled}
 						<div class="flex w-full items-center justify-between gap-2">

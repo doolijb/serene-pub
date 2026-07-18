@@ -1,48 +1,15 @@
 <script lang="ts">
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { getContext, onMount, onDestroy } from "svelte"
-	import { Theme } from "$lib/client/consts/Theme"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { z } from "zod"
 	import * as Icons from "@lucide/svelte"
-	import BackgroundPicker from "$lib/client/components/backgrounds/BackgroundPicker.svelte"
 
 	const socket = useTypedSocket()
 
-	// Custom themes
-	let myCustomThemes = $state<Sockets.CustomThemes.ThemeMeta[]>([])
-	let instanceCustomThemes = $state<Sockets.CustomThemes.ThemeMeta[]>([])
-
 	onMount(() => {
-		socket?.on("customThemes:list", (msg: Sockets.CustomThemes.List.Response) => {
-			myCustomThemes = msg.myThemes
-			instanceCustomThemes = msg.instanceThemes
-		})
-		socket?.emit("customThemes:list", {})
-
-		// Listen for socket responses
-		socket.on("userSettings:updateDarkMode", (message) => {
-			if (message.success) {
-				toaster.success({
-					title: `${message.enabled ? "Dark" : "Light"} mode enabled`
-				})
-			} else {
-				toaster.error({ title: "Failed to update dark mode setting" })
-			}
-		})
-
-		socket.on("userSettings:updateTheme", (message) => {
-			if (message.success) {
-				toaster.success({
-					title: "Theme updated successfully"
-				})
-			} else {
-				toaster.error({ title: "Failed to update theme" })
-			}
-		})
-
 		socket.on("userSettings:updateShowAllCharacterFields", (message) => {
 			if (message.success) {
 				toaster.success({
@@ -158,9 +125,6 @@
 	})
 
 	onDestroy(() => {
-		socket?.off("customThemes:list")
-		socket?.off("userSettings:updateDarkMode")
-		socket?.off("userSettings:updateTheme")
 		socket?.off("userSettings:updateShowAllCharacterFields")
 		socket?.off("userSettings:updateEasyCharacterCreation")
 		socket?.off("userSettings:updateEasyPersonaCreation")
@@ -191,8 +155,6 @@
 		.max(50, "Display name must not exceed 50 characters")
 		.trim()
 
-	let isDarkMode = $state(false)
-	let selectedTheme: string = $state("")
 	let userSettingsCtx: UserSettingsCtx = $state(getContext("userSettingsCtx"))
 	let userCtx: UserCtx = $state(getContext("userCtx"))
 	let systemSettingsCtx: SystemSettingsCtx = $state(
@@ -215,39 +177,9 @@
 	let confirmPassword = $state("")
 	let passwordError = $state("")
 
-	let selectedBackground = $state<string | null>(null)
-	let backgroundOpacity = $state(75)
-	let backgroundExpanded = $state(false)
-
-	$effect(() => {
-		isDarkMode = userSettingsCtx.settings?.darkMode ?? true
-	})
-
-	$effect(() => {
-		selectedTheme = userSettingsCtx.settings?.theme ?? "hamlindigo"
-	})
-
-	$effect(() => {
-		selectedBackground = userSettingsCtx.settings?.backgroundImagePath ?? null
-		backgroundOpacity = userSettingsCtx.settings?.backgroundOpacity ?? 75
-	})
-
 	$effect(() => {
 		displayName = userCtx.user?.displayName || ""
 	})
-
-	function handleBackgroundChange(path: string | null, opacity: number) {
-		socket?.emit("userSettings:updateBackground", { path, opacity })
-	}
-
-	const onDarkModeChanged = (event: { checked: boolean }) => {
-		socket?.emit("userSettings:updateDarkMode", { enabled: event.checked })
-	}
-
-	const onThemeChanged = (event: Event) => {
-		const target = event.target as HTMLSelectElement
-		socket?.emit("userSettings:updateTheme", { theme: target.value })
-	}
 
 	async function onShowAllCharacterFieldsClick(event: { checked: boolean }) {
 		socket?.emit("userSettings:updateShowAllCharacterFields", {
@@ -386,53 +318,17 @@
 </script>
 
 <div class="flex flex-col gap-4">
-	<div>
-		<label for="theme" class="font-semibold">Theme</label>
-		<select
-			id="theme"
-			class="select"
-			name="theme"
-			value={selectedTheme}
-			onchange={onThemeChanged}
-			aria-label="Select application theme"
-		>
-			<optgroup label="Built-in">
-				{#each Theme.options as [key, label]}
-					<option value={key}>{label}</option>
-				{/each}
-			</optgroup>
-			{#if myCustomThemes.length > 0}
-				<optgroup label="My Themes">
-					{#each myCustomThemes as t}
-						<option value={t.name}>{t.label}</option>
-					{/each}
-				</optgroup>
-			{/if}
-			{#if instanceCustomThemes.length > 0}
-				<optgroup label="Instance Themes">
-					{#each instanceCustomThemes as t}
-						<option value={t.name}>{t.label}</option>
-					{/each}
-				</optgroup>
-			{/if}
-		</select>
-	</div>
-
-	<div class="flex gap-2">
-		<Switch
-			name="dark-mode"
-			checked={isDarkMode}
-			onCheckedChange={onDarkModeChanged}
-		></Switch>
-		<label for="dark-mode" class="font-semibold">Dark Mode</label>
-	</div>
-
 	<div class="flex gap-2">
 		<Switch
 			name="show-all-character-fields"
 			checked={userSettingsCtx.settings?.showAllCharacterFields ?? false}
 			onCheckedChange={onShowAllCharacterFieldsClick}
-		></Switch>
+		>
+			<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+				<Switch.Thumb />
+			</Switch.Control>
+			<Switch.HiddenInput />
+		</Switch>
 		<label for="show-all-character-fields" class="font-semibold">
 			Show All Character Fields
 		</label>
@@ -444,7 +340,12 @@
 			checked={userSettingsCtx.settings?.enableEasyCharacterCreation ??
 				true}
 			onCheckedChange={onEasyCharacterCreationClick}
-		></Switch>
+		>
+			<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+				<Switch.Thumb />
+			</Switch.Control>
+			<Switch.HiddenInput />
+		</Switch>
 		<label for="easy-character-creation" class="font-semibold">
 			Easy Character Creation
 		</label>
@@ -456,7 +357,12 @@
 			checked={userSettingsCtx.settings?.enableEasyPersonaCreation ??
 				true}
 			onCheckedChange={onEasyPersonaCreationClick}
-		></Switch>
+		>
+			<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+				<Switch.Thumb />
+			</Switch.Control>
+			<Switch.HiddenInput />
+		</Switch>
 		<label for="easy-persona-creation" class="font-semibold">
 			Easy Persona Creation
 		</label>
@@ -467,33 +373,15 @@
 			name="show-home-page-banner"
 			checked={userSettingsCtx.settings?.showHomePageBanner ?? true}
 			onCheckedChange={onShowHomePageBannerClick}
-		></Switch>
+		>
+			<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+				<Switch.Thumb />
+			</Switch.Control>
+			<Switch.HiddenInput />
+		</Switch>
 		<label for="show-home-page-banner" class="font-semibold">
 			Show Home Page Banner
 		</label>
-	</div>
-
-	<!-- Background -->
-	<div class="border-t pt-4">
-		<button
-			type="button"
-			class="flex w-full items-center justify-between"
-			onclick={() => (backgroundExpanded = !backgroundExpanded)}
-		>
-			<h3 class="text-lg font-semibold">Background</h3>
-			<Icons.ChevronDown
-				class="text-muted-foreground h-4 w-4 transition-transform {backgroundExpanded ? 'rotate-180' : ''}"
-			/>
-		</button>
-		{#if backgroundExpanded}
-			<div class="mt-3">
-				<BackgroundPicker
-					bind:selectedPath={selectedBackground}
-					bind:opacity={backgroundOpacity}
-					onchange={handleBackgroundChange}
-				/>
-			</div>
-		{/if}
 	</div>
 
 	<!-- Import Section -->
@@ -586,97 +474,97 @@
 </div>
 
 <!-- Change Password Modal -->
-<Modal
-	open={showChangePasswordModal}
-	onOpenChange={(e) => (showChangePasswordModal = e.open)}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-lg"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<header class="flex items-center justify-between">
-			<h2 class="text-xl font-bold">Change Passphrase</h2>
-			<button class="btn-ghost" onclick={closeChangePasswordModal}>
-				<Icons.X class="h-5 w-5" />
-			</button>
-		</header>
+<Dialog open={showChangePasswordModal} onOpenChange={(e) => (showChangePasswordModal = e.open)}>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-lg">
+				<header class="flex items-center justify-between">
+					<h2 class="text-xl font-bold">Change Passphrase</h2>
+					<button class="btn-ghost" aria-label="Close" onclick={closeChangePasswordModal}>
+						<Icons.X class="h-5 w-5" />
+					</button>
+				</header>
 
-		<article class="space-y-4">
-			<div>
-				<label for="current-password" class="font-semibold">
-					Current Passphrase
-				</label>
-				<input
-					id="current-password"
-					type="password"
-					class="input"
-					bind:value={currentPassword}
-					placeholder="Enter current passphrase"
-					disabled={isChangingPassword}
-				/>
-			</div>
+				<article class="space-y-4">
+					<div>
+						<label for="current-password" class="font-semibold">
+							Current Passphrase
+						</label>
+						<input
+							id="current-password"
+							type="password"
+							class="input"
+							bind:value={currentPassword}
+							placeholder="Enter current passphrase"
+							disabled={isChangingPassword}
+						/>
+					</div>
 
-			<div>
-				<label for="new-password" class="font-semibold">
-					New Passphrase
-				</label>
-				<input
-					id="new-password"
-					type="password"
-					class="input"
-					bind:value={newPassword}
-					placeholder="Enter new passphrase"
-					disabled={isChangingPassword}
-				/>
-				<p class="text-muted-foreground mt-1 text-sm">
-					Must be at least 6 characters with uppercase, lowercase, and
-					special character
-				</p>
-			</div>
+					<div>
+						<label for="new-password" class="font-semibold">
+							New Passphrase
+						</label>
+						<input
+							id="new-password"
+							type="password"
+							class="input"
+							bind:value={newPassword}
+							placeholder="Enter new passphrase"
+							disabled={isChangingPassword}
+						/>
+						<p class="text-muted-foreground mt-1 text-sm">
+							Must be at least 6 characters with uppercase, lowercase, and
+							special character
+						</p>
+					</div>
 
-			<div>
-				<label for="confirm-password" class="font-semibold">
-					Confirm New Passphrase
-				</label>
-				<input
-					id="confirm-password"
-					type="password"
-					class="input"
-					bind:value={confirmPassword}
-					placeholder="Confirm new passphrase"
-					disabled={isChangingPassword}
-				/>
-			</div>
+					<div>
+						<label for="confirm-password" class="font-semibold">
+							Confirm New Passphrase
+						</label>
+						<input
+							id="confirm-password"
+							type="password"
+							class="input"
+							bind:value={confirmPassword}
+							placeholder="Confirm new passphrase"
+							disabled={isChangingPassword}
+						/>
+					</div>
 
-			{#if passwordError}
-				<p class="text-error-500 text-sm">{passwordError}</p>
-			{/if}
-
-			<footer class="flex justify-end gap-2">
-				<button
-					type="button"
-					class="btn btn-sm variant-ghost"
-					onclick={closeChangePasswordModal}
-					disabled={isChangingPassword}
-				>
-					Cancel
-				</button>
-				<button
-					type="button"
-					class="btn btn-sm variant-filled-primary"
-					onclick={changePassword}
-					disabled={isChangingPassword ||
-						!currentPassword ||
-						!newPassword ||
-						!confirmPassword}
-				>
-					{#if isChangingPassword}
-						<Icons.Loader2 size={16} class="animate-spin" />
-						Changing...
-					{:else}
-						Change Passphrase
+					{#if passwordError}
+						<p class="text-error-500 text-sm">{passwordError}</p>
 					{/if}
-				</button>
-			</footer>
-		</article>
-	{/snippet}
-</Modal>
+
+					<footer class="flex justify-end gap-2">
+						<button
+							type="button"
+							class="btn btn-sm variant-ghost"
+							onclick={closeChangePasswordModal}
+							disabled={isChangingPassword}
+						>
+							Cancel
+						</button>
+						<button
+							type="button"
+							class="btn btn-sm variant-filled-primary"
+							onclick={changePassword}
+							disabled={isChangingPassword ||
+								!currentPassword ||
+								!newPassword ||
+								!confirmPassword}
+						>
+							{#if isChangingPassword}
+								<Icons.Loader2 size={16} class="animate-spin" />
+								Changing...
+							{:else}
+								Change Passphrase
+							{/if}
+						</button>
+					</footer>
+				</article>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { onMount } from "svelte"
@@ -75,62 +75,62 @@
 	})
 </script>
 
-<Modal
-	{open}
-	{onOpenChange}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl w-[min(95vw,560px)] max-h-[90vh] flex flex-col border border-surface-300-700"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<header class="flex shrink-0 items-center justify-between">
-			<h2 class="h2">{entity?.name ?? "Avatar"}</h2>
-			<button class="btn btn-sm" onclick={() => onOpenChange({ open: false })}>
-				<Icons.X size={20} />
-			</button>
-		</header>
+<Dialog {open} {onOpenChange}>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl w-[min(95vw,560px)] max-h-[90vh] flex flex-col border border-surface-300-700">
+				<header class="flex shrink-0 items-center justify-between">
+					<h2 class="h2">{entity?.name ?? "Avatar"}</h2>
+					<button class="btn btn-sm" onclick={() => onOpenChange({ open: false })}>
+						<Icons.X size={20} />
+					</button>
+				</header>
 
-		<article class="flex min-h-0 flex-1 flex-col items-center gap-4 overflow-y-auto">
-			<!-- Main image -->
-			{#if selectedSrc}
-				<img
-					src={selectedSrc}
-					alt={entity?.name ?? "Avatar"}
-					class="border-surface-300-700 max-h-[55vh] max-w-full shrink-0 rounded-lg border object-contain"
-				/>
-			{:else}
-				<div class="text-surface-500 py-12 text-sm">No image available.</div>
-			{/if}
+				<article class="flex min-h-0 flex-1 flex-col items-center gap-4 overflow-y-auto">
+					<!-- Main image -->
+					{#if selectedSrc}
+						<img
+							src={selectedSrc}
+							alt={entity?.name ?? "Avatar"}
+							class="border-surface-300-700 max-h-[55vh] max-w-full shrink-0 rounded-lg border object-contain"
+						/>
+					{:else}
+						<div class="text-surface-500 py-12 text-sm">No image available.</div>
+					{/if}
 
-			<!-- Gallery strip -->
-			{#if loading}
-				<div class="text-surface-500 flex shrink-0 items-center gap-2 text-sm">
-					<Icons.Loader size={16} class="animate-spin" />
-					Loading gallery…
-				</div>
-			{:else if images.length > 0}
-				<div class="flex w-full shrink-0 flex-wrap gap-2">
-					{#each images as imgPath}
-						{#if !brokenPaths.has(imgPath)}
-							<button
-								class="overflow-hidden rounded border-2 transition-colors {selectedSrc === imgPath
-									? 'border-primary-500'
-									: 'border-surface-300-700 hover:border-surface-500'}"
-								onclick={() => (selectedSrc = imgPath)}
-								title="Select image"
-							>
-								<img
-									src={imgPath}
-									alt=""
-									class="h-16 w-16 object-cover"
-									onerror={() => {
-										brokenPaths = new Set([...brokenPaths, imgPath])
-									}}
-								/>
-							</button>
-						{/if}
-					{/each}
-				</div>
-			{/if}
-		</article>
-	{/snippet}
-</Modal>
+					<!-- Gallery strip -->
+					{#if loading}
+						<div class="text-surface-500 flex shrink-0 items-center gap-2 text-sm">
+							<Icons.Loader size={16} class="animate-spin" />
+							Loading gallery…
+						</div>
+					{:else if images.length > 0}
+						<div class="flex w-full shrink-0 flex-wrap gap-2">
+							{#each images as imgPath}
+								{#if !brokenPaths.has(imgPath)}
+									<button
+										class="overflow-hidden rounded border-2 transition-colors {selectedSrc === imgPath
+											? 'border-primary-500'
+											: 'border-surface-300-700 hover:border-surface-500'}"
+										onclick={() => (selectedSrc = imgPath)}
+										title="Select image"
+									>
+										<img
+											src={imgPath}
+											alt=""
+											class="h-16 w-16 object-cover"
+											onerror={() => {
+												brokenPaths = new Set([...brokenPaths, imgPath])
+											}}
+										/>
+									</button>
+								{/if}
+							{/each}
+						</div>
+					{/if}
+				</article>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

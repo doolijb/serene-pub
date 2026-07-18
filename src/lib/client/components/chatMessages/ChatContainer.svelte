@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from "svelte"
+	import { untrack } from "svelte"
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	import * as Icons from "@lucide/svelte"
 
@@ -167,7 +168,28 @@
 		colorIndex: number
 	}
 
+	// Lightweight signal capturing only the message *set and order* (ids), not
+	// their content. The parent replaces the whole `chat.chatMessages` array
+	// reference on every streamed chunk even when only one message's content
+	// changed, which would otherwise force the expensive O(scenes × messages)
+	// derivation below to fully recompute on every token.
+	let msgOrderKey = $derived(
+		chat?.chatMessages.map((m) => m.id).join(",") ?? ""
+	)
+
 	let msgSceneMap = $derived.by((): Map<number, MsgSceneInfo> => {
+		// Track sceneList and msgOrderKey as the real dependencies here. The
+		// heavy work below (which reads chat.chatMessages directly) is wrapped
+		// in untrack() so a chat.chatMessages reference change alone doesn't
+		// dirty this derived — only a change in msgOrderKey's *value* (i.e. the
+		// message ids/order actually changing) or sceneList does.
+		void sceneList.length
+		void msgOrderKey
+
+		return untrack(buildMsgSceneMap)
+	})
+
+	function buildMsgSceneMap(): Map<number, MsgSceneInfo> {
 		const map = new Map<number, MsgSceneInfo>()
 		if (!sceneList.length || !chat?.chatMessages.length) return map
 
@@ -241,7 +263,7 @@
 		}
 
 		return map
-	})
+	}
 
 	function formatEntryDate(he: { year: number; month: number | null; day: number | null }): string {
 		let s = `Year ${he.year}`

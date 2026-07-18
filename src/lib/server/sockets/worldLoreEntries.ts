@@ -249,13 +249,16 @@ export const updateWorldLoreEntryPositionsHandler: Handler<
 			throw new Error("Access denied to some world lore entries.")
 		}
 
-		// Update positions
-		for (const update of params.updates) {
-			await db
-				.update(schema.worldLoreEntries)
-				.set({ position: update.position })
-				.where(eq(schema.worldLoreEntries.id, update.id))
-		}
+		// Update positions concurrently — each update targets a distinct entry id
+		// and doesn't depend on any other update's result.
+		await Promise.all(
+			params.updates.map((update) =>
+				db
+					.update(schema.worldLoreEntries)
+					.set({ position: update.position })
+					.where(eq(schema.worldLoreEntries.id, update.id))
+			)
+		)
 
 		// Refresh entry list for affected lorebooks
 		if (emitToUser) {

@@ -114,6 +114,13 @@ export function handleAssistantFunctions(
 						return
 					}
 
+					if (chat.userId !== userId) {
+						console.error(
+							"[AssistantFunctions] Chat not owned by requesting user, refusing auto-complete"
+						)
+						return
+					}
+
 					// Find the last assistant message (the one that called the functions)
 					const lastAssistantMessage = chat.chatMessages
 						.filter((m: any) => m.role === "assistant")
@@ -207,6 +214,13 @@ export function handleAssistantFunctions(
 					return
 				}
 
+				if (chat.userId !== userId) {
+					socket.emit("assistant:selectionError", {
+						error: "Unauthorized"
+					})
+					return
+				}
+
 				console.log(
 					"[selectFunctionResults] Chat metadata exists:",
 					!!chat.metadata
@@ -288,6 +302,13 @@ export function handleAssistantFunctions(
 				if (!chat) {
 					socket.emit("assistant:unlinkError", {
 						error: "Chat not found"
+					})
+					return
+				}
+
+				if (chat.userId !== userId) {
+					socket.emit("assistant:unlinkError", {
+						error: "Unauthorized"
 					})
 					return
 				}

@@ -13,6 +13,7 @@ import { AssistantService } from "$lib/server/assistant/AssistantService"
 import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
+import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
 import { broadcastToChatUsers } from "./utils/broadcastHelpers"
 import { v4 as uuidv4 } from "uuid"
@@ -175,7 +176,11 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 
 				// 5. Create adapter instance
 				const { Adapter } = await getConnectionAdapter(connection.type)
-				const tokenCounter = new TokenCounters("estimate")
+				// Honor the connection's own configured tokenizer — see the
+				// identical fix/comment in generateResponse.ts.
+				const tokenCounter = new TokenCounters(
+					(connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
+				)
 				const tokenLimit = 4096
 				const contextThresholdPercent = 0.8
 

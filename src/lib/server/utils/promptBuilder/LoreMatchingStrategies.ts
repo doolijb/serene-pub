@@ -104,73 +104,21 @@ export class KeywordMatchingStrategy implements LoreMatchingStrategy {
 }
 
 /**
- * Vector similarity-based matching strategy (future implementation)
+ * NOTE: A `VectorMatchingStrategy` used to live here as scaffolding for
+ * semantic/embedding-based lore matching, but it was never implemented —
+ * `initialize()`/`matchesMessage()` were TODO stubs that just fell back to
+ * `KeywordMatchingStrategy`, and nothing in the codebase ever selected it
+ * (see git history if you need the old code). Real semantic/vector lore
+ * retrieval already exists under `RagInfillEngine.ts` using pgvector
+ * embeddings — that's the actual implementation, not this. Don't recreate
+ * a vector strategy here; extend `RagInfillEngine.ts` instead.
  */
-export class VectorMatchingStrategy implements LoreMatchingStrategy {
-	private embeddings: Map<number, number[]> = new Map()
-	private isInitialized = false
-
-	getName(): string {
-		return "vector"
-	}
-
-	async initialize(): Promise<void> {
-		// TODO: Initialize embedding model
-		// TODO: Pre-compute embeddings for lore entries
-		this.isInitialized = true
-		console.log("VectorMatchingStrategy initialized")
-	}
-
-	async cleanup(): Promise<void> {
-		this.embeddings.clear()
-		this.isInitialized = false
-	}
-
-	async matchesMessage(
-		entry:
-			| SelectWorldLoreEntry
-			| SelectCharacterLoreEntry
-			| SelectHistoryEntry,
-		message: { id: number; message: string | undefined },
-		context?: {
-			interpolationContext: InterpolationContext
-			chatMessages: Array<{ id: number; message: string | undefined }>
-			failedMatches: Record<number, number[]>
-		}
-	): Promise<boolean> {
-		if (!this.isInitialized) {
-			throw new Error(
-				"VectorMatchingStrategy must be initialized before use"
-			)
-		}
-
-		if (!message.message) {
-			return false
-		}
-
-		// TODO: Implement vector similarity matching
-		// 1. Generate embedding for message content
-		// 2. Calculate similarity with lore entry embedding
-		// 3. Return true if similarity exceeds threshold
-
-		// Placeholder implementation - fallback to keyword matching for now
-		const keywordStrategy = new KeywordMatchingStrategy()
-		return keywordStrategy.matchesMessage(entry, message, context)
-	}
-}
 
 /**
  * Configuration for matching strategies
  */
 export interface MatchingStrategyConfig {
-	strategy: "keyword" | "vector"
-
-	// Vector strategy options
-	vectorOptions?: {
-		model?: string
-		threshold?: number
-		maxResults?: number
-	}
+	strategy: "keyword"
 
 	// Performance options
 	performance?: {
@@ -190,17 +138,12 @@ export class MatchingStrategyFactory {
 			case "keyword":
 				return new KeywordMatchingStrategy()
 
-			case "vector":
-				const vectorStrategy = new VectorMatchingStrategy()
-				await vectorStrategy.initialize()
-				return vectorStrategy
-
 			default:
 				throw new Error(`Unknown matching strategy: ${config.strategy}`)
 		}
 	}
 
 	static getAvailableStrategies(): string[] {
-		return ["keyword", "vector"]
+		return ["keyword"]
 	}
 }

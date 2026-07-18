@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { Popover } from "@skeletonlabs/skeleton-svelte"
+	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { getContext, onDestroy, onMount, tick } from "svelte"
@@ -616,7 +616,7 @@
 						<option value={opt.value}>{opt.label}</option>
 					{/each}
 				</select>
-				<button class="btn btn-sm preset-filled-primary-500" onclick={onClickIterateNextEntry} title="Add the next date in sequence">
+				<button class="btn btn-sm preset-filled-primary-500" onclick={onClickIterateNextEntry} title="Add the next date in sequence" aria-label="Add the next date in sequence">
 					<Icons.CalendarPlus size={14} />
 				</button>
 				<button class="btn btn-sm preset-filled-success-500" onclick={createEntry}>
@@ -699,34 +699,35 @@
 						open={openMenuEntryId === entry.id}
 						onOpenChange={(e) => (openMenuEntryId = e.open ? entry.id : null)}
 						positioning={{ placement: "bottom-end" }}
-						triggerBase="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0"
-						contentBase="card bg-surface-100-900 shadow-xl p-2 flex flex-col gap-1 min-w-32"
-						zIndex="1000"
 					>
-						{#snippet trigger()}
+						<Popover.Trigger class="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0">
 							<Icons.Ellipsis size={16} />
-						{/snippet}
-						{#snippet content()}
-							<button
-								class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-								onclick={(e) => { e.stopPropagation(); openMenuEntryId = null; viewEntry(entry) }}
-							>
-								<Icons.Eye size={14} /> View
-							</button>
-							<button
-								class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-								onclick={(e) => { e.stopPropagation(); openMenuEntryId = null; editEntry(entry) }}
-							>
-								<Icons.Pencil size={14} /> Edit
-							</button>
-							<hr class="border-surface-300-700" />
-							<button
-								class="btn btn-sm preset-filled-error-500 w-full justify-start"
-								onclick={(e) => { e.stopPropagation(); openMenuEntryId = null; onDeleteClick(entry.id) }}
-							>
-								<Icons.Trash2 size={14} /> Delete
-							</button>
-						{/snippet}
+						</Popover.Trigger>
+						<Portal>
+							<Popover.Positioner class="z-[1000]!">
+								<Popover.Content class="card bg-surface-100-900 shadow-xl p-2 flex flex-col gap-1 min-w-32">
+									<button
+										class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+										onclick={(e) => { e.stopPropagation(); openMenuEntryId = null; viewEntry(entry) }}
+									>
+										<Icons.Eye size={14} /> View
+									</button>
+									<button
+										class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+										onclick={(e) => { e.stopPropagation(); openMenuEntryId = null; editEntry(entry) }}
+									>
+										<Icons.Pencil size={14} /> Edit
+									</button>
+									<hr class="border-surface-300-700" />
+									<button
+										class="btn btn-sm preset-filled-error-500 w-full justify-start"
+										onclick={(e) => { e.stopPropagation(); openMenuEntryId = null; onDeleteClick(entry.id) }}
+									>
+										<Icons.Trash2 size={14} /> Delete
+									</button>
+								</Popover.Content>
+							</Popover.Positioner>
+						</Portal>
 					</Popover>
 					</div>
 				</div>
@@ -743,7 +744,7 @@
 	<div class="flex flex-col gap-4">
 		<!-- Header -->
 		<div class="flex items-center gap-2">
-			<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={goBack}>
+			<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={goBack} aria-label="Back">
 				<Icons.ChevronLeft size={16} />
 			</button>
 			<h3 class="flex-1 text-sm font-semibold">
@@ -812,7 +813,7 @@
 				{@const editingScene = viewScenes.find((s) => s.id === editingSceneId)}
 				<div class="flex flex-col gap-4">
 					<div class="flex items-center gap-2">
-						<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={cancelEditScene}>
+						<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={cancelEditScene} aria-label="Back">
 							<Icons.ChevronLeft size={16} />
 						</button>
 						<h4 class="flex-1 truncate text-sm font-semibold">{editingScene?.name ?? "Scene"}</h4>
@@ -830,7 +831,7 @@
 						<div class="flex flex-wrap gap-1">
 							{#each editingSceneParticipants as name, i}
 								<span class="chip preset-tonal-primary text-[10px] py-0 flex items-center gap-0.5">
-									{name}<button onclick={() => (editingSceneParticipants = editingSceneParticipants.filter((_, j) => j !== i))}><Icons.X size={9} /></button>
+									{name}<button class="p-1.5" aria-label="Remove participant {name}" onclick={() => (editingSceneParticipants = editingSceneParticipants.filter((_, j) => j !== i))}><Icons.X size={9} /></button>
 								</span>
 							{/each}
 						</div>
@@ -845,7 +846,7 @@
 						<div class="flex flex-wrap gap-1">
 							{#each editingSceneMentioned as name, i}
 								<span class="chip preset-tonal-surface text-[10px] py-0 flex items-center gap-0.5">
-									{name}<button onclick={() => (editingSceneMentioned = editingSceneMentioned.filter((_, j) => j !== i))}><Icons.X size={9} /></button>
+									{name}<button class="p-1.5" aria-label="Remove mention {name}" onclick={() => (editingSceneMentioned = editingSceneMentioned.filter((_, j) => j !== i))}><Icons.X size={9} /></button>
 								</span>
 							{/each}
 						</div>
@@ -868,7 +869,7 @@
 					{@const hasSummary = !!scene.summary}
 					<div class="flex flex-col gap-4">
 						<div class="flex items-center gap-2">
-							<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={() => focusedSceneId = null}>
+							<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={() => focusedSceneId = null} aria-label="Back">
 								<Icons.ChevronLeft size={16} />
 							</button>
 							<h4 class="flex-1 truncate text-sm font-semibold">{scene.name ?? "Unnamed Scene"}</h4>
@@ -983,32 +984,33 @@
 										open={openMenuSceneId === scene.id}
 										onOpenChange={(e) => (openMenuSceneId = e.open ? scene.id : null)}
 										positioning={{ placement: "bottom-end" }}
-										triggerBase="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0"
-										contentBase="card bg-surface-100-900 shadow-xl p-2 flex flex-col gap-1 min-w-36"
-										zIndex="1000"
 									>
-										{#snippet trigger()}<Icons.Ellipsis size={14} />{/snippet}
-										{#snippet content()}
-											{#if pendingActivity}
-												<button class="btn btn-sm preset-filled-warning-500 w-full justify-start"
-													onclick={() => { openMenuSceneId = null; openProcessModal(pendingActivity) }}
-												><Icons.Eye size={13} /> Review</button>
-											{:else if hasMessages}
-												<button class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-													disabled={isProcessing}
-													onclick={() => { openMenuSceneId = null; processScene(scene.id) }}
-												>
-													{#if hasSummary}<Icons.RefreshCw size={13} /> Reprocess{:else}<Icons.Sparkles size={13} /> Process{/if}
-												</button>
-											{/if}
-											<button class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-												onclick={() => { openMenuSceneId = null; startEditScene(scene) }}
-											><Icons.Pencil size={13} /> Edit</button>
-											<hr class="border-surface-300-700" />
-											<button class="btn btn-sm preset-filled-error-500 w-full justify-start"
-												onclick={() => { openMenuSceneId = null; deleteScene(scene.id) }}
-											><Icons.Trash2 size={13} /> Delete</button>
-										{/snippet}
+										<Popover.Trigger class="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0"><Icons.Ellipsis size={14} /></Popover.Trigger>
+										<Portal>
+											<Popover.Positioner class="z-[1000]!">
+												<Popover.Content class="card bg-surface-100-900 shadow-xl p-2 flex flex-col gap-1 min-w-36">
+													{#if pendingActivity}
+														<button class="btn btn-sm preset-filled-warning-500 w-full justify-start"
+															onclick={() => { openMenuSceneId = null; openProcessModal(pendingActivity) }}
+														><Icons.Eye size={13} /> Review</button>
+													{:else if hasMessages}
+														<button class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+															disabled={isProcessing}
+															onclick={() => { openMenuSceneId = null; processScene(scene.id) }}
+														>
+															{#if hasSummary}<Icons.RefreshCw size={13} /> Reprocess{:else}<Icons.Sparkles size={13} /> Process{/if}
+														</button>
+													{/if}
+													<button class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+														onclick={() => { openMenuSceneId = null; startEditScene(scene) }}
+													><Icons.Pencil size={13} /> Edit</button>
+													<hr class="border-surface-300-700" />
+													<button class="btn btn-sm preset-filled-error-500 w-full justify-start"
+														onclick={() => { openMenuSceneId = null; deleteScene(scene.id) }}
+													><Icons.Trash2 size={13} /> Delete</button>
+												</Popover.Content>
+											</Popover.Positioner>
+										</Portal>
 									</Popover>
 									</div>
 								</div>
@@ -1035,7 +1037,7 @@
 	<div class="flex flex-col gap-4">
 		<!-- Header -->
 		<div class="flex items-center gap-2">
-			<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={goBack}>
+			<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={goBack} aria-label="Back">
 				<Icons.ChevronLeft size={16} />
 			</button>
 			<h3 class="flex-1 text-sm font-semibold">
@@ -1182,7 +1184,7 @@
 				{@const editingScene = editScenes.find((s) => s.id === editingSceneId)}
 				<div class="flex flex-col gap-4">
 					<div class="flex items-center gap-2">
-						<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={cancelEditScene}>
+						<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={cancelEditScene} aria-label="Back">
 							<Icons.ChevronLeft size={16} />
 						</button>
 						<h4 class="flex-1 truncate text-sm font-semibold">{editingScene?.name ?? "Scene"}</h4>
@@ -1200,7 +1202,7 @@
 						<div class="flex flex-wrap gap-1">
 							{#each editingSceneParticipants as name, i}
 								<span class="chip preset-tonal-primary text-[10px] py-0 flex items-center gap-0.5">
-									{name}<button onclick={() => (editingSceneParticipants = editingSceneParticipants.filter((_, j) => j !== i))}><Icons.X size={9} /></button>
+									{name}<button class="p-1.5" aria-label="Remove participant {name}" onclick={() => (editingSceneParticipants = editingSceneParticipants.filter((_, j) => j !== i))}><Icons.X size={9} /></button>
 								</span>
 							{/each}
 						</div>
@@ -1215,7 +1217,7 @@
 						<div class="flex flex-wrap gap-1">
 							{#each editingSceneMentioned as name, i}
 								<span class="chip preset-tonal-surface text-[10px] py-0 flex items-center gap-0.5">
-									{name}<button onclick={() => (editingSceneMentioned = editingSceneMentioned.filter((_, j) => j !== i))}><Icons.X size={9} /></button>
+									{name}<button class="p-1.5" aria-label="Remove mention {name}" onclick={() => (editingSceneMentioned = editingSceneMentioned.filter((_, j) => j !== i))}><Icons.X size={9} /></button>
 								</span>
 							{/each}
 						</div>
@@ -1234,6 +1236,7 @@
 							class="btn btn-sm preset-tonal-secondary w-full"
 							onclick={onNavigateToGraph}
 							title="{ungraphedSummarizedEdit.length} scene{ungraphedSummarizedEdit.length === 1 ? '' : 's'} ready to graph"
+							aria-label="{ungraphedSummarizedEdit.length} scene{ungraphedSummarizedEdit.length === 1 ? '' : 's'} ready to graph"
 						>
 							<Icons.GitGraph size={13} /> Build Graph ({ungraphedSummarizedEdit.length} ready)
 						</button>
@@ -1264,6 +1267,7 @@
 											class="btn btn-sm p-1 preset-filled-warning-500 shrink-0"
 											onclick={() => openProcessModal(pendingActivityEdit)}
 											title="Review pending summary"
+											aria-label="Review pending summary"
 										><Icons.Eye size={11} /></button>
 									{/if}
 									<div role="none">
@@ -1271,36 +1275,37 @@
 										open={openMenuSceneId === scene.id}
 										onOpenChange={(e) => (openMenuSceneId = e.open ? scene.id : null)}
 										positioning={{ placement: "bottom-end" }}
-										triggerBase="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0"
-										contentBase="card bg-surface-100-900 shadow-xl p-2 flex flex-col gap-1 min-w-36"
-										zIndex="1000"
 									>
-										{#snippet trigger()}<Icons.Ellipsis size={14} />{/snippet}
-										{#snippet content()}
-											{#if pendingActivityEdit}
-												<button
-													class="btn btn-sm preset-filled-warning-500 w-full justify-start"
-													onclick={() => { openMenuSceneId = null; openProcessModal(pendingActivityEdit) }}
-												><Icons.Eye size={13} /> Review</button>
-											{:else if hasMessages}
-												<button
-													class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-													disabled={isProcessing}
-													onclick={() => { openMenuSceneId = null; processScene(scene.id) }}
-												>
-													{#if hasSummary}<Icons.RefreshCw size={13} /> Reprocess{:else}<Icons.Sparkles size={13} /> Process{/if}
-												</button>
-											{/if}
-											<button
-												class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-												onclick={() => { openMenuSceneId = null; startEditScene(scene) }}
-											><Icons.Pencil size={13} /> Edit</button>
-											<hr class="border-surface-300-700" />
-											<button
-												class="btn btn-sm preset-filled-error-500 w-full justify-start"
-												onclick={() => { openMenuSceneId = null; deleteScene(scene.id) }}
-											><Icons.Trash2 size={13} /> Delete</button>
-										{/snippet}
+										<Popover.Trigger class="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0"><Icons.Ellipsis size={14} /></Popover.Trigger>
+										<Portal>
+											<Popover.Positioner class="z-[1000]!">
+												<Popover.Content class="card bg-surface-100-900 shadow-xl p-2 flex flex-col gap-1 min-w-36">
+													{#if pendingActivityEdit}
+														<button
+															class="btn btn-sm preset-filled-warning-500 w-full justify-start"
+															onclick={() => { openMenuSceneId = null; openProcessModal(pendingActivityEdit) }}
+														><Icons.Eye size={13} /> Review</button>
+													{:else if hasMessages}
+														<button
+															class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+															disabled={isProcessing}
+															onclick={() => { openMenuSceneId = null; processScene(scene.id) }}
+														>
+															{#if hasSummary}<Icons.RefreshCw size={13} /> Reprocess{:else}<Icons.Sparkles size={13} /> Process{/if}
+														</button>
+													{/if}
+													<button
+														class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+														onclick={() => { openMenuSceneId = null; startEditScene(scene) }}
+													><Icons.Pencil size={13} /> Edit</button>
+													<hr class="border-surface-300-700" />
+													<button
+														class="btn btn-sm preset-filled-error-500 w-full justify-start"
+														onclick={() => { openMenuSceneId = null; deleteScene(scene.id) }}
+													><Icons.Trash2 size={13} /> Delete</button>
+												</Popover.Content>
+											</Popover.Positioner>
+										</Portal>
 									</Popover>
 									</div>
 								</div>
@@ -1339,6 +1344,7 @@
 						onclick={() => focusedEntry && openCompileModal(focusedEntry)}
 						disabled={editScenes.length === 0}
 						title={editScenes.length === 0 ? "No scenes to compile" : "Compile scenes into this history entry"}
+						aria-label={editScenes.length === 0 ? "No scenes to compile" : "Compile scenes into this history entry"}
 					>
 						<Icons.Wand size={14} /> Compile to Entry
 					</button>

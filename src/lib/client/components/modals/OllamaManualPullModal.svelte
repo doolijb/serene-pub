@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { untrack } from "svelte"
 
 	interface Props {
@@ -63,17 +63,18 @@
 	})
 </script>
 
-<Modal
+<Dialog
 	{open}
 	onOpenChange={(e) => {
 		if (!e.open) {
 			onclose()
 		}
 	}}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl w-[min(95vw,480px)] border border-surface-300-700"
-	backdropClasses="backdrop-blur-sm"
 >
-	{#snippet content()}
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl w-[min(95vw,480px)] border border-surface-300-700">
 		<div class="space-y-2">
 			<div class="mb-2 flex items-center gap-3">
 				<h3 class="text-foreground text-lg font-bold">Install Model</h3>
@@ -143,5 +144,7 @@
 				{/if}
 			</button>
 		</div>
-	{/snippet}
-</Modal>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

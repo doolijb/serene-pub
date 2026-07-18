@@ -1,6 +1,7 @@
 import { defineConfig } from "drizzle-kit"
 import { mkdirSync } from "fs"
 import { existsSync } from "fs"
+import os from "os"
 import path from "path"
 import envPaths from "env-paths"
 
@@ -25,7 +26,7 @@ export function getAppDataDir() {
 function getDbDataDir() {
 	const isCI = process.env.CI === "true"
 	if (isCI) {
-		return "~/SerenePubData"
+		return path.join(os.homedir(), "SerenePubData")
 	}
 
 	const appDataDir = getAppDataDir()

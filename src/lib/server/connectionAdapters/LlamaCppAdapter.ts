@@ -1,4 +1,5 @@
 import Handlebars from "handlebars"
+import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import _ from "lodash"
 import { StopStrings } from "../utils/StopStrings"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
@@ -226,6 +227,8 @@ export interface LoraAdapter {
 export type LoraAdaptersResponse = LoraAdapter[]
 
 class LlamaCppAdapter extends BaseConnectionAdapter {
+	private abortController?: AbortController
+
 	constructor({
 		connection,
 		sampling,
@@ -303,10 +306,9 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 			personas: this.chat.chatPersonas?.map((cp) => cp.persona) || [],
 			currentCharacterId: this.currentCharacterId
 		})
-		const characterName =
-			this.chat.chatCharacters?.[0]?.character?.nickname ||
-			this.chat.chatCharacters?.[0]?.character?.name ||
-			"assistant"
+		const characterName = resolveCharacterName(
+			this.chat.chatCharacters?.[0]?.character
+		)
 		const personaName = this.chat.chatPersonas?.[0]?.persona?.name || "user"
 		const stopContext: Record<string, string> = {
 			char: characterName,
@@ -399,9 +401,14 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 				isAborted: this.isAborting
 			}
 		} else {
-			const abortController = new AbortController()
+			// Stored on `this` (not a local const) so abort() below — called
+			// externally, from the queue's cancel handler, while this single
+			// non-yielding axios.post() await is in flight — actually has
+			// something to reach. A local AbortController here can never be
+			// cancelled from outside this function.
+			this.abortController = new AbortController()
 			if (this.isAborting) {
-				abortController.abort()
+				this.abortController.abort()
 				return {
 					completionResult: "FAILURE: Request aborted by user.",
 					compiledPrompt,
@@ -412,7 +419,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 				const response = await axios.post<CompletionResponse>(
 					baseUrl + "/completion",
 					req,
-					{ signal: abortController.signal }
+					{ signal: this.abortController.signal }
 				)
 				const result = response.data
 				const content = result?.content || result?.response || ""
@@ -422,11 +429,17 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 					isAborted: this.isAborting
 				}
 			} catch (e: any) {
-				if (
+				// Only a genuine cancellation should report isAborted: true —
+				// this used to be unconditional in the fallback branch below,
+				// so a real network error or 5xx during generation was
+				// silently rebranded as "the user cancelled this", hiding the
+				// actual failure from anyone looking at the result.
+				const wasCancelled =
+					this.isAborting ||
 					axios.isCancel?.(e) ||
 					e?.code === "ERR_CANCELED" ||
 					e?.message?.includes("aborted")
-				) {
+				if (wasCancelled) {
 					return {
 						completionResult: "FAILURE: Request aborted by user.",
 						compiledPrompt,
@@ -436,10 +449,15 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 				return {
 					completionResult: "FAILURE: " + (e.message || String(e)),
 					compiledPrompt,
-					isAborted: true
+					isAborted: false
 				}
 			}
 		}
+	}
+
+	abort() {
+		this.isAborting = true
+		this.abortController?.abort()
 	}
 }
 

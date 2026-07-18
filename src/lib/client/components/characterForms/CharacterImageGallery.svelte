@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { onMount, onDestroy } from "svelte"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
 
@@ -199,7 +199,7 @@
 					<!-- Delete button -->
 					<button
 						type="button"
-						class="bg-error-500 absolute top-1 right-1 rounded-full p-0.5 opacity-0 transition-opacity group-hover:opacity-100"
+						class="bg-error-500 absolute top-1 right-1 rounded-full p-0.5 max-lg:opacity-100 lg:opacity-0 lg:transition-opacity lg:group-hover:opacity-100"
 						onclick={(e) => {
 							e.stopPropagation()
 							requestDelete(imgPath)
@@ -221,37 +221,40 @@
 	{/if}
 </div>
 
-<Modal
+<Dialog
 	open={showDeleteModal}
 	onOpenChange={(e) => { if (!e.open) cancelDelete() }}
-	contentBase="card bg-surface-100-900 p-6 space-y-4 shadow-xl max-w-sm"
-	backdropClasses="backdrop-blur-sm"
 >
-	{#snippet content()}
-		<header class="flex items-center gap-3">
-			<Icons.Trash2 class="text-error-500 h-5 w-5 shrink-0" />
-			<h2 class="text-lg font-bold">Delete Image</h2>
-		</header>
-		{#if pendingDeletePath}
-			<div class="overflow-hidden rounded-lg">
-				<img
-					src={pendingDeletePath}
-					alt="Preview of item to delete"
-					class="h-24 w-full object-cover"
-				/>
-			</div>
-		{/if}
-		<p class="text-muted-foreground text-sm">
-			Are you sure you want to delete this image? This cannot be undone.
-		</p>
-		<footer class="flex justify-end gap-2">
-			<button class="btn preset-filled-surface-400-600" onclick={cancelDelete}>
-				Cancel
-			</button>
-			<button class="btn preset-filled-error-500" onclick={confirmDelete}>
-				<Icons.Trash2 class="h-4 w-4" />
-				Delete
-			</button>
-		</footer>
-	{/snippet}
-</Modal>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-4 shadow-xl max-w-sm">
+				<header class="flex items-center gap-3">
+					<Icons.Trash2 class="text-error-500 h-5 w-5 shrink-0" />
+					<h2 class="text-lg font-bold">Delete Image</h2>
+				</header>
+				{#if pendingDeletePath}
+					<div class="overflow-hidden rounded-lg">
+						<img
+							src={pendingDeletePath}
+							alt="Preview of item to delete"
+							class="h-24 w-full object-cover"
+						/>
+					</div>
+				{/if}
+				<p class="text-muted-foreground text-sm">
+					Are you sure you want to delete this image? This cannot be undone.
+				</p>
+				<footer class="flex justify-end gap-2">
+					<button class="btn preset-filled-surface-400-600" onclick={cancelDelete}>
+						Cancel
+					</button>
+					<button class="btn preset-filled-error-500" onclick={confirmDelete}>
+						<Icons.Trash2 class="h-4 w-4" />
+						Delete
+					</button>
+				</footer>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

@@ -14,7 +14,9 @@ export default defineConfig({
 	],
 	define: {
 		__APP_VERSION__: JSON.stringify(pkg.version),
-		__APP_VERSION_DISPLAY__: JSON.stringify(`v${pkg.version}-alpha`)
+		__APP_VERSION_DISPLAY__: JSON.stringify(
+			`v${pkg.version}${pkg.version.includes("-") ? "" : "-alpha"}`
+		)
 	},
 	resolve: {
 		extensions: [".mjs", ".js", ".ts", ".jsx", ".tsx", ".json", ".svelte"]

@@ -316,8 +316,12 @@ export async function start(): Promise<void> {
 
 	// --admindir must be explicit: koboldcpp's admin reload/list-options endpoints jail
 	// requests to this directory, and ensureModelLoaded() writes its .kcpps files here.
+	// --host is bound to loopback only: the app always reaches this subprocess via
+	// localhost (see pingKoboldCpp calls below), and koboldcpp's own generation/completion
+	// endpoints (e.g. /lcpp/) aren't gated by --adminpassword, so binding 0.0.0.0 would
+	// expose an unauthenticated inference API to the whole LAN on non-Docker deployments.
 	const args = [
-		"--host", "0.0.0.0",
+		"--host", "127.0.0.1",
 		"--port", String(port),
 		"--admin", "--adminpassword", password, "--admindir", binaryDir,
 		"--nomodel"

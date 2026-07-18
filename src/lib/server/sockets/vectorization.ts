@@ -15,6 +15,7 @@ import {
 	getLoadError
 } from "$lib/server/embedding/index"
 import { systemSettingsGet } from "./systemSettings"
+import { checkChatAccess } from "$lib/server/utils/chatAccess"
 import {
 	startVectorizationQueue,
 	stopVectorization,
@@ -481,6 +482,12 @@ export const vectorizationCheckRagStatus: Handler<
 > = {
 	event: "vectorization:checkRagStatus",
 	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const chatAccess = await checkChatAccess(params.chatId, userId)
+		if (!chatAccess.hasAccess) {
+			throw new Error("Access denied. Chat not found or no permission to access.")
+		}
+
 		const settings = await db.query.systemSettings.findFirst({
 			where: eq(schema.systemSettings.id, 1),
 			columns: { vectorizationEnabled: true, embeddingModelName: true }
@@ -736,6 +743,15 @@ export const vectorizationSetChatRagIgnored: Handler<
 > = {
 	event: "vectorization:setChatRagIgnored",
 	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		// A chat-level setting, like the other chat-level toggles gated to
+		// owners only in chatsUpdateHandler — guests can use RAG, not
+		// reconfigure it for everyone else in the chat.
+		const chatAccess = await checkChatAccess(params.chatId, userId)
+		if (!chatAccess.hasAccess || !chatAccess.isOwner) {
+			throw new Error("Access denied. Only the chat owner can change this.")
+		}
+
 		const chat = await db.query.chats.findFirst({
 			where: eq(schema.chats.id, params.chatId),
 			columns: { metadata: true }

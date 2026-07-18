@@ -1,4 +1,5 @@
 import Handlebars from "handlebars"
+import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import { StopStrings } from "../utils/StopStrings"
 import { TokenCounters } from "../utils/TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
@@ -119,7 +120,11 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 
 	compilePrompt(args: {}) {
 		return super.compilePrompt({
-			useChatFormat: !!this.connection.extraJson?.useChat,
+			// Default true — matches every connection type's actual form
+			// default (connectionDefaults.ts) and Ollama/LMStudio's adapter
+			// fallback. Only an old/malformed connection missing this field
+			// entirely would ever hit the fallback.
+			useChatFormat: this.connection.extraJson?.useChat ?? true,
 			...args
 		})
 	}
@@ -135,7 +140,8 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		const baseUrl = this.connection.baseUrl || "http://localhost:5001"
 		const stream = this.connection.extraJson?.stream ?? false
 		const useMemory = this.connection.extraJson?.useMemory ?? false
-		const useChat = this.connection.extraJson?.useChat ?? false
+		// Default true — see compilePrompt() above for why.
+		const useChat = this.connection.extraJson?.useChat ?? true
 		// A fresh key per generation — lets abort() tell KoboldCPP exactly which
 		// in-flight generation to actually stop computing.
 		this.genKey = crypto.randomUUID()
@@ -150,10 +156,9 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 			personas: this.chat.chatPersonas?.map((cp) => cp.persona) || [],
 			currentCharacterId: this.currentCharacterId ?? undefined
 		})
-		const characterName =
-			this.chat.chatCharacters?.[0]?.character?.nickname ||
-			this.chat.chatCharacters?.[0]?.character?.name ||
-			"assistant"
+		const characterName = resolveCharacterName(
+			this.chat.chatCharacters?.[0]?.character
+		)
 		const personaName = this.chat.chatPersonas?.[0]?.persona?.name || "user"
 		const stopContext: Record<string, string> = {
 			char: characterName,

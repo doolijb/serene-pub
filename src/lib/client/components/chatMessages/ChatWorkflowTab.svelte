@@ -104,7 +104,7 @@
 	})
 </script>
 
-<div class="flex flex-col gap-3 py-1">
+<div class="flex flex-col gap-3 py-1 mb-[0.5em]">
 	<!-- Current (latest) history entry -->
 	{#if latestEntry}
 		<div class="flex items-center gap-2">

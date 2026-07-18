@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 
@@ -66,14 +66,12 @@
 	}
 </script>
 
-<Modal
-	{open}
-	{onOpenChange}
-	contentBase="card bg-surface-100-900 p-6 space-y-5 shadow-xl max-h-[95dvh] relative overflow-hidden w-[min(95vw,608px)]"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<header class="flex items-center justify-between">
+<Dialog {open} {onOpenChange}>
+	<Portal>
+		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
+		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-5 shadow-xl max-h-[95dvh] relative overflow-hidden w-[min(95vw,608px)]">
+				<header class="flex items-center justify-between">
 			<h2 class="text-lg font-semibold">Link Character to Graph Node</h2>
 			<button class="btn btn-sm preset-tonal" onclick={() => onOpenChange({ open: false })}>
 				<Icons.X size={18} />
@@ -132,5 +130,7 @@
 				{currentIndex + 1} of {pendingBindings.length}
 			</div>
 		{/if}
-	{/snippet}
-</Modal>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

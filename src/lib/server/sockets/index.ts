@@ -24,7 +24,7 @@ import { registerPersonaHandlers } from "./personas"
 import { registerContextConfigHandlers } from "./contextConfigs"
 import { registerChatHandlers } from "./chats"
 import { registerPromptConfigHandlers } from "./promptConfigs"
-import { registerChatWorldPromptConfigHandlers } from "./chatWorldPromptConfigs"
+import { registerNarratorPromptConfigHandlers } from "./narratorPromptConfigs"
 import { registerUserHandlers } from "./users"
 import { registerUserSettingsHandlers } from "./userSettings"
 import { registerLorebookHandlers } from "./lorebooks"
@@ -86,7 +86,7 @@ export function connectSockets(io: {
 		registerPersonaHandlers(socket, emitToUser, register)
 		registerContextConfigHandlers(socket, emitToUser, register)
 		registerPromptConfigHandlers(socket, emitToUser, register)
-		registerChatWorldPromptConfigHandlers(socket, emitToUser, register)
+		registerNarratorPromptConfigHandlers(socket, emitToUser, register)
 		registerSummarizePromptConfigHandlers(socket, emitToUser, register)
 		registerChatHandlers(socket, emitToUser, register)
 		registerLorebookHandlers(socket, emitToUser, register)
