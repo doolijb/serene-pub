@@ -150,10 +150,13 @@
 		selectedCharacter = item
 		showDetails = true
 
-		// Some sources (eg. CharaVault) don't include a description on
-		// search results, only on their single-card detail endpoint —
-		// fetch it lazily on open rather than for every card in the grid.
-		if (!item.description) {
+		// CharaVault's search results only carry a truncated preview
+		// (`description_preview`), not the full description — always fetch
+		// the full text on open rather than for every card in the grid.
+		// Other sources (eg. GitHub) already return the complete
+		// description on search results, so this only fires when it's
+		// actually missing for them.
+		if (item.source === "charavault" || !item.description) {
 			loadingDetail = true
 			socket.emit("cardSources:cardDetail", {
 				source: item.source,

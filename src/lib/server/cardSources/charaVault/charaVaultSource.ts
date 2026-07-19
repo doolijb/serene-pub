@@ -11,7 +11,7 @@ import { acquire } from "./rateLimiter"
 import { hasActiveSession, withCharaVaultSession } from "./session"
 import { getOrFetchCardBytes } from "../diskCache"
 import { parseCharacterCard } from "$lib/server/utils/characterCardParser"
-import { applyDefaultContentFilter } from "./contentFilter"
+import { applyDefaultContentFilter, hasExcludedTag } from "./contentFilter"
 
 const API_BASE = "https://charavault.net"
 const DEFAULT_LIMIT = 24
@@ -39,7 +39,12 @@ function mapCharaVaultItem(raw: any): LibraryCatalogItem | null {
 
 	return {
 		name: raw.name ?? raw.title ?? "Untitled",
-		description: raw.description ?? "",
+		// The list endpoint's field is `description_preview` (confirmed live
+		// against a real /api/cards response) — a truncated preview, not the
+		// full description. `description`/`desc`/`summary` kept as fallbacks
+		// in case a differently-shaped payload ever comes through.
+		description:
+			raw.description_preview ?? raw.description ?? raw.desc ?? raw.summary ?? "",
 		tags: Array.isArray(raw.tags) ? raw.tags : [],
 		author: raw.creator ?? raw.author ?? "",
 		version: raw.version ?? raw.card_version ?? "",
@@ -48,7 +53,15 @@ function mapCharaVaultItem(raw: any): LibraryCatalogItem | null {
 		category: raw.folder ?? raw.category ?? "Uncategorized",
 		source: "charavault",
 		sourceRef: ref,
-		hasLorebook: typeof raw.has_book === "boolean" ? raw.has_book : undefined
+		// Confirmed live field name is `has_lorebook`, not `has_book` (that's
+		// only the outbound ?has_book= query param name, not the response
+		// field) — `has_book` kept as a defensive fallback.
+		hasLorebook:
+			typeof raw.has_lorebook === "boolean"
+				? raw.has_lorebook
+				: typeof raw.has_book === "boolean"
+					? raw.has_book
+					: undefined
 	}
 }
 
@@ -156,9 +169,17 @@ export const charaVaultSource: CardSource = {
 
 		const payload = await response.json()
 		const rawItems = extractItems(payload)
-		const items = rawItems
+		let items = rawItems
 			.map(mapCharaVaultItem)
 			.filter((item): item is LibraryCatalogItem => item !== null)
+
+		// The query-string exclusion above is a courtesy, not a guarantee —
+		// this is the actual enforcement, checked against each card's real
+		// CharaVault-assigned tags rather than trusting their undocumented
+		// "-word" query grammar to have matched everything it should have.
+		if (!params.nsfw) {
+			items = items.filter((item) => !hasExcludedTag(item.tags))
+		}
 
 		return {
 			items,

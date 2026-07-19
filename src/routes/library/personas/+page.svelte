@@ -86,9 +86,11 @@
 		selectedPersona = item
 		showDetails = true
 
-		// Some sources don't include a description on search results, only
-		// on their single-card detail endpoint — fetch it lazily on open.
-		if (!item.description) {
+		// CharaVault's search results only carry a truncated preview, not
+		// the full description — always fetch on open for that source.
+		// Other sources already return the complete description, so this
+		// only fires when it's actually missing for them.
+		if (item.source === "charavault" || !item.description) {
 			loadingDetail = true
 			socket.emit("cardSources:cardDetail", {
 				source: item.source,
