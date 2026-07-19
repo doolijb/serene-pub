@@ -51,7 +51,7 @@
 			{#each panelsCtx.getOrderedEntries(panelsCtx.leftNav, panelsCtx.leftNavOrder || []) as [key, item]}
 				{#if item?.icon}
 					{@const isOpen = panelsCtx.leftPanel === key}
-					{@const isVectorizationRunning = key === "vectorization" && vectorizationCtx?.status === "running"}
+					{@const isVectorizationRunning = key === "connections" && vectorizationCtx?.status === "running"}
 					<button
 						title={item.title}
 						onclick={() => panelsCtx.openPanel({ key })}

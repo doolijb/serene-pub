@@ -1,4 +1,5 @@
 import { taskQueue } from "$lib/server/utils/taskQueue"
+import type { Handler } from "$lib/shared/events"
 
 /**
  * Registers task queue handlers for admin sockets.
@@ -8,7 +9,14 @@ import { taskQueue } from "$lib/server/utils/taskQueue"
 export function registerTaskQueueHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
-	register: (handler: any) => void
+	// Matches the shared `register` helper in index.ts (unused here — this
+	// handler wires up plain socket.on listeners directly — but the type
+	// must match what index.ts actually passes in).
+	register: (
+		socket: any,
+		handler: Handler<any, any>,
+		emitToUser: (event: string, data: any) => void
+	) => void
 ) {
 	if (!socket.user?.isAdmin) return
 

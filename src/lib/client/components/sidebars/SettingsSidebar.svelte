@@ -119,7 +119,7 @@
 									{appVersionDisplay}
 								</span>
 							</div>
-							<div class="text-surface-500 mb-2 text-xs">
+							<div class="text-surface-700-300 mb-2 text-xs">
 								Build: <span class="font-mono">
 									{appVersion}
 								</span>

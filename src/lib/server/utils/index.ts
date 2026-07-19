@@ -55,6 +55,18 @@ export function isAndroidWrapper() {
 }
 
 /**
+ * Gates whether NSFW browsing is available at all — both the "include
+ * NSFW" toggle's visibility and whether outbound card-source search
+ * requests are ever allowed to ask for NSFW-inclusive results. Off by
+ * default; must be explicitly opted into via env var, not just disabled by
+ * default UI state, so NSFW content is invisible rather than merely hidden
+ * behind a togglable client-side flag.
+ */
+export function isUnsafeCharacterBrowsingEnabled() {
+	return process.env.ENABLE_UNSAFE_CHARACTER_BROWSING === "true"
+}
+
+/**
  * Gets the database data directory (app data dir + /data)
  * Includes CI environment check for compatibility with existing logic
  */

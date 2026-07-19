@@ -44,7 +44,7 @@
 	let narratorPromptList: Sockets.NarratorPromptConfigs.List.Response["narratorPromptConfigsList"] =
 		$state([])
 	let selectedNarratorId: number | undefined = $state(
-		(userSettingsCtx.settings as any)?.activeNarratorPromptConfigId || undefined
+		userSettingsCtx.settings?.activeNarratorPromptConfigId || undefined
 	)
 	let narratorConfig: Sockets.NarratorPromptConfigs.Get.Response["narratorPromptConfig"] = $state(
 		{} as Sockets.NarratorPromptConfigs.Get.Response["narratorPromptConfig"]
@@ -55,7 +55,7 @@
 	let narratorUnsaved = $derived(JSON.stringify(narratorConfig) !== JSON.stringify(narratorOriginal))
 
 	let activeNarratorName = $derived.by(() => {
-		const id = (userSettingsCtx.settings as any)?.activeNarratorPromptConfigId ?? narratorPromptList[0]?.id
+		const id = userSettingsCtx.settings?.activeNarratorPromptConfigId ?? narratorPromptList[0]?.id
 		return narratorPromptList.find((p) => p.id === id)?.name ?? null
 	})
 
@@ -71,7 +71,7 @@
 	let worldUnsaved = $derived(JSON.stringify(worldConfig) !== JSON.stringify(worldOriginal))
 
 	let activeWorldName = $derived.by(() => {
-		const id = (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId ?? worldList[0]?.id
+		const id = userSettingsCtx.settings?.activeSummarizeWorldConfigId ?? worldList[0]?.id
 		return worldList.find((p) => p.id === id)?.name ?? null
 	})
 
@@ -86,7 +86,7 @@
 	let characterUnsaved = $derived(JSON.stringify(characterConfig) !== JSON.stringify(characterOriginal))
 
 	let activeCharacterName = $derived.by(() => {
-		const id = (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId ?? characterList[0]?.id
+		const id = userSettingsCtx.settings?.activeSummarizeCharacterConfigId ?? characterList[0]?.id
 		return characterList.find((p) => p.id === id)?.name ?? null
 	})
 
@@ -102,7 +102,7 @@
 	let sceneUnsaved = $derived(JSON.stringify(sceneConfig) !== JSON.stringify(sceneOriginal))
 
 	let activeSceneName = $derived.by(() => {
-		const id = (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId ?? sceneList[0]?.id
+		const id = userSettingsCtx.settings?.activeSummarizeSceneConfigId ?? sceneList[0]?.id
 		return sceneList.find((p) => p.id === id)?.name ?? null
 	})
 
@@ -355,7 +355,7 @@
 		socket.on("narratorPromptConfigs:list", (msg: Sockets.NarratorPromptConfigs.List.Response) => {
 			narratorPromptList = msg.narratorPromptConfigsList
 			if (!selectedNarratorId && narratorPromptList.length > 0) {
-				selectedNarratorId = (userSettingsCtx.settings as any)?.activeNarratorPromptConfigId ?? narratorPromptList[0].id
+				selectedNarratorId = userSettingsCtx.settings?.activeNarratorPromptConfigId ?? narratorPromptList[0].id
 			}
 		})
 		socket.on("narratorPromptConfigs:get", (msg: Sockets.NarratorPromptConfigs.Get.Response) => {
@@ -376,7 +376,7 @@
 		socket.on("worldSummarizeConfigs:list", (msg: Sockets.WorldSummarizeConfigs.List.Response) => {
 			worldList = msg.worldSummarizeConfigsList
 			if (!selectedWorldId && worldList.length > 0) {
-				selectedWorldId = (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId ?? worldList[0].id
+				selectedWorldId = userSettingsCtx.settings?.activeSummarizeWorldConfigId ?? worldList[0].id
 			}
 		})
 		socket.on("worldSummarizeConfigs:get", (msg: Sockets.WorldSummarizeConfigs.Get.Response) => {
@@ -397,7 +397,7 @@
 		socket.on("characterSummarizeConfigs:list", (msg: Sockets.CharacterSummarizeConfigs.List.Response) => {
 			characterList = msg.characterSummarizeConfigsList
 			if (!selectedCharacterId && characterList.length > 0) {
-				selectedCharacterId = (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId ?? characterList[0].id
+				selectedCharacterId = userSettingsCtx.settings?.activeSummarizeCharacterConfigId ?? characterList[0].id
 			}
 		})
 		socket.on("characterSummarizeConfigs:get", (msg: Sockets.CharacterSummarizeConfigs.Get.Response) => {
@@ -418,7 +418,7 @@
 		socket.on("sceneSummarizeConfigs:list", (msg: Sockets.SceneSummarizeConfigs.List.Response) => {
 			sceneList = msg.sceneSummarizeConfigsList
 			if (!selectedSceneId && sceneList.length > 0) {
-				selectedSceneId = (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId ?? sceneList[0].id
+				selectedSceneId = userSettingsCtx.settings?.activeSummarizeSceneConfigId ?? sceneList[0].id
 			}
 		})
 		socket.on("sceneSummarizeConfigs:get", (msg: Sockets.SceneSummarizeConfigs.Get.Response) => {
@@ -691,11 +691,11 @@
 			<div class="mb-4">
 				<select class="select w-full" value={selectedNarratorId} onchange={handleNarratorSelectChange}>
 					{#each narratorPromptList.filter((c) => c.isImmutable) as c}
-						{@const isDefault = c.id === (userSettingsCtx.settings as any)?.activeNarratorPromptConfigId}
+						{@const isDefault = c.id === userSettingsCtx.settings?.activeNarratorPromptConfigId}
 						<option value={c.id}>{isDefault ? "★ " : ""}{c.name} *</option>
 					{/each}
 					{#each narratorPromptList.filter((c) => !c.isImmutable) as c}
-						{@const isDefault = c.id === (userSettingsCtx.settings as any)?.activeNarratorPromptConfigId}
+						{@const isDefault = c.id === userSettingsCtx.settings?.activeNarratorPromptConfigId}
 						<option value={c.id}>{isDefault ? "★ " : ""}{c.name}</option>
 					{/each}
 				</select>
@@ -707,14 +707,14 @@
 							<Icons.Save size={14} /> Update
 						</button>
 						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleNarratorSetDefault}
-							disabled={!selectedNarratorId || selectedNarratorId === (userSettingsCtx.settings as any)?.activeNarratorPromptConfigId}
-							title={selectedNarratorId && selectedNarratorId === (userSettingsCtx.settings as any)?.activeNarratorPromptConfigId ? "Already the default" : "Set as default"}
-							aria-label={selectedNarratorId && selectedNarratorId === (userSettingsCtx.settings as any)?.activeNarratorPromptConfigId ? "Already the default" : "Set as default"}>
+							disabled={!selectedNarratorId || selectedNarratorId === userSettingsCtx.settings?.activeNarratorPromptConfigId}
+							title={selectedNarratorId && selectedNarratorId === userSettingsCtx.settings?.activeNarratorPromptConfigId ? "Already the default" : "Set as default"}
+							aria-label={selectedNarratorId && selectedNarratorId === userSettingsCtx.settings?.activeNarratorPromptConfigId ? "Already the default" : "Set as default"}>
 							<Icons.Star
 								size={14}
-								fill={selectedNarratorId && selectedNarratorId === (userSettingsCtx.settings as any)?.activeNarratorPromptConfigId ? "currentColor" : "none"}
+								fill={selectedNarratorId && selectedNarratorId === userSettingsCtx.settings?.activeNarratorPromptConfigId ? "currentColor" : "none"}
 							/>
-							{selectedNarratorId && selectedNarratorId === (userSettingsCtx.settings as any)?.activeNarratorPromptConfigId ? "Default" : "Set Default"}
+							{selectedNarratorId && selectedNarratorId === userSettingsCtx.settings?.activeNarratorPromptConfigId ? "Default" : "Set Default"}
 						</button>
 					</div>
 					<div class="flex flex-col gap-1">
@@ -768,11 +768,11 @@
 			<div class="mb-4">
 				<select class="select w-full" value={selectedWorldId} onchange={handleWorldSelectChange}>
 					{#each worldList.filter((c) => c.isImmutable) as c}
-						{@const isDefault = c.id === (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId}
+						{@const isDefault = c.id === userSettingsCtx.settings?.activeSummarizeWorldConfigId}
 						<option value={c.id}>{isDefault ? "★ " : ""}{c.name} *</option>
 					{/each}
 					{#each worldList.filter((c) => !c.isImmutable) as c}
-						{@const isDefault = c.id === (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId}
+						{@const isDefault = c.id === userSettingsCtx.settings?.activeSummarizeWorldConfigId}
 						<option value={c.id}>{isDefault ? "★ " : ""}{c.name}</option>
 					{/each}
 				</select>
@@ -784,14 +784,14 @@
 							<Icons.Save size={14} /> Update
 						</button>
 						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleWorldSetDefault}
-							disabled={!selectedWorldId || selectedWorldId === (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId}
-							title={selectedWorldId && selectedWorldId === (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId ? "Already the default" : "Set as default"}
-							aria-label={selectedWorldId && selectedWorldId === (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId ? "Already the default" : "Set as default"}>
+							disabled={!selectedWorldId || selectedWorldId === userSettingsCtx.settings?.activeSummarizeWorldConfigId}
+							title={selectedWorldId && selectedWorldId === userSettingsCtx.settings?.activeSummarizeWorldConfigId ? "Already the default" : "Set as default"}
+							aria-label={selectedWorldId && selectedWorldId === userSettingsCtx.settings?.activeSummarizeWorldConfigId ? "Already the default" : "Set as default"}>
 							<Icons.Star
 								size={14}
-								fill={selectedWorldId && selectedWorldId === (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId ? "currentColor" : "none"}
+								fill={selectedWorldId && selectedWorldId === userSettingsCtx.settings?.activeSummarizeWorldConfigId ? "currentColor" : "none"}
 							/>
-							{selectedWorldId && selectedWorldId === (userSettingsCtx.settings as any)?.activeSummarizeWorldConfigId ? "Default" : "Set Default"}
+							{selectedWorldId && selectedWorldId === userSettingsCtx.settings?.activeSummarizeWorldConfigId ? "Default" : "Set Default"}
 						</button>
 					</div>
 					<div class="flex flex-col gap-1">
@@ -812,7 +812,7 @@
 							bind:samplingConfigId={worldConfig.batchSamplingConfigId}
 						/>
 					</div>
-					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
+					<div class="flex flex-col gap-2">
 						<label class="text-sm font-semibold" for="worldSynth">Synthesis Instructions</label>
 						<p class="text-muted-foreground text-xs">Used during the synthesis phase (merging all drafts).</p>
 						<textarea id="worldSynth" rows="8" bind:value={worldConfig.synthSystemPrompt} class="textarea w-full" disabled={worldConfig.isImmutable}></textarea>
@@ -824,7 +824,7 @@
 							bind:samplingConfigId={worldConfig.synthSamplingConfigId}
 						/>
 					</div>
-					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
+					<div class="flex flex-col gap-2">
 						<label class="text-sm font-semibold" for="worldName2">Title Generation Instructions</label>
 						<p class="text-muted-foreground text-xs">Used when generating a title for the entry.</p>
 						<textarea id="worldName2" rows="4" bind:value={worldConfig.nameSystemPrompt} class="textarea w-full" disabled={worldConfig.isImmutable}></textarea>
@@ -861,11 +861,11 @@
 			<div class="mb-4">
 				<select class="select w-full" value={selectedCharacterId} onchange={handleCharacterSelectChange}>
 					{#each characterList.filter((c) => c.isImmutable) as c}
-						{@const isDefault = c.id === (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId}
+						{@const isDefault = c.id === userSettingsCtx.settings?.activeSummarizeCharacterConfigId}
 						<option value={c.id}>{isDefault ? "★ " : ""}{c.name} *</option>
 					{/each}
 					{#each characterList.filter((c) => !c.isImmutable) as c}
-						{@const isDefault = c.id === (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId}
+						{@const isDefault = c.id === userSettingsCtx.settings?.activeSummarizeCharacterConfigId}
 						<option value={c.id}>{isDefault ? "★ " : ""}{c.name}</option>
 					{/each}
 				</select>
@@ -877,14 +877,14 @@
 							<Icons.Save size={14} /> Update
 						</button>
 						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleCharacterSetDefault}
-							disabled={!selectedCharacterId || selectedCharacterId === (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId}
-							title={selectedCharacterId && selectedCharacterId === (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId ? "Already the default" : "Set as default"}
-							aria-label={selectedCharacterId && selectedCharacterId === (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId ? "Already the default" : "Set as default"}>
+							disabled={!selectedCharacterId || selectedCharacterId === userSettingsCtx.settings?.activeSummarizeCharacterConfigId}
+							title={selectedCharacterId && selectedCharacterId === userSettingsCtx.settings?.activeSummarizeCharacterConfigId ? "Already the default" : "Set as default"}
+							aria-label={selectedCharacterId && selectedCharacterId === userSettingsCtx.settings?.activeSummarizeCharacterConfigId ? "Already the default" : "Set as default"}>
 							<Icons.Star
 								size={14}
-								fill={selectedCharacterId && selectedCharacterId === (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId ? "currentColor" : "none"}
+								fill={selectedCharacterId && selectedCharacterId === userSettingsCtx.settings?.activeSummarizeCharacterConfigId ? "currentColor" : "none"}
 							/>
-							{selectedCharacterId && selectedCharacterId === (userSettingsCtx.settings as any)?.activeSummarizeCharacterConfigId ? "Default" : "Set Default"}
+							{selectedCharacterId && selectedCharacterId === userSettingsCtx.settings?.activeSummarizeCharacterConfigId ? "Default" : "Set Default"}
 						</button>
 					</div>
 					<div class="flex flex-col gap-1">
@@ -905,7 +905,7 @@
 							bind:samplingConfigId={characterConfig.batchSamplingConfigId}
 						/>
 					</div>
-					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
+					<div class="flex flex-col gap-2">
 						<label class="text-sm font-semibold" for="charSynth">Synthesis Instructions</label>
 						<p class="text-muted-foreground text-xs">Used during the synthesis phase (merging all drafts).</p>
 						<textarea id="charSynth" rows="8" bind:value={characterConfig.synthSystemPrompt} class="textarea w-full" disabled={characterConfig.isImmutable}></textarea>
@@ -917,7 +917,7 @@
 							bind:samplingConfigId={characterConfig.synthSamplingConfigId}
 						/>
 					</div>
-					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
+					<div class="flex flex-col gap-2">
 						<label class="text-sm font-semibold" for="charName2">Title Generation Instructions</label>
 						<p class="text-muted-foreground text-xs">Used when generating a title for the entry.</p>
 						<textarea id="charName2" rows="4" bind:value={characterConfig.nameSystemPrompt} class="textarea w-full" disabled={characterConfig.isImmutable}></textarea>
@@ -954,11 +954,11 @@
 			<div class="mb-4">
 				<select class="select w-full" value={selectedSceneId} onchange={handleSceneSelectChange}>
 					{#each sceneList.filter((c) => c.isImmutable) as c}
-						{@const isDefault = c.id === (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId}
+						{@const isDefault = c.id === userSettingsCtx.settings?.activeSummarizeSceneConfigId}
 						<option value={c.id}>{isDefault ? "★ " : ""}{c.name} *</option>
 					{/each}
 					{#each sceneList.filter((c) => !c.isImmutable) as c}
-						{@const isDefault = c.id === (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId}
+						{@const isDefault = c.id === userSettingsCtx.settings?.activeSummarizeSceneConfigId}
 						<option value={c.id}>{isDefault ? "★ " : ""}{c.name}</option>
 					{/each}
 				</select>
@@ -970,14 +970,14 @@
 							<Icons.Save size={14} /> Update
 						</button>
 						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleSceneSetDefault}
-							disabled={!selectedSceneId || selectedSceneId === (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId}
-							title={selectedSceneId && selectedSceneId === (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId ? "Already the default" : "Set as default"}
-							aria-label={selectedSceneId && selectedSceneId === (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId ? "Already the default" : "Set as default"}>
+							disabled={!selectedSceneId || selectedSceneId === userSettingsCtx.settings?.activeSummarizeSceneConfigId}
+							title={selectedSceneId && selectedSceneId === userSettingsCtx.settings?.activeSummarizeSceneConfigId ? "Already the default" : "Set as default"}
+							aria-label={selectedSceneId && selectedSceneId === userSettingsCtx.settings?.activeSummarizeSceneConfigId ? "Already the default" : "Set as default"}>
 							<Icons.Star
 								size={14}
-								fill={selectedSceneId && selectedSceneId === (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId ? "currentColor" : "none"}
+								fill={selectedSceneId && selectedSceneId === userSettingsCtx.settings?.activeSummarizeSceneConfigId ? "currentColor" : "none"}
 							/>
-							{selectedSceneId && selectedSceneId === (userSettingsCtx.settings as any)?.activeSummarizeSceneConfigId ? "Default" : "Set Default"}
+							{selectedSceneId && selectedSceneId === userSettingsCtx.settings?.activeSummarizeSceneConfigId ? "Default" : "Set Default"}
 						</button>
 					</div>
 					<div class="flex flex-col gap-1">
@@ -998,7 +998,7 @@
 							bind:samplingConfigId={sceneConfig.batchSamplingConfigId}
 						/>
 					</div>
-					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
+					<div class="flex flex-col gap-2">
 						<label class="text-sm font-semibold" for="sceneSynth">Synthesis Instructions</label>
 						<p class="text-muted-foreground text-xs">Used during the synthesis phase (merging all drafts).</p>
 						<textarea id="sceneSynth" rows="8" bind:value={sceneConfig.synthSystemPrompt} class="textarea w-full" disabled={sceneConfig.isImmutable}></textarea>
@@ -1010,7 +1010,7 @@
 							bind:samplingConfigId={sceneConfig.synthSamplingConfigId}
 						/>
 					</div>
-					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
+					<div class="flex flex-col gap-2">
 						<label class="text-sm font-semibold" for="sceneName2">Title Generation Instructions</label>
 						<p class="text-muted-foreground text-xs">Used when generating a title for the entry.</p>
 						<textarea id="sceneName2" rows="4" bind:value={sceneConfig.nameSystemPrompt} class="textarea w-full" disabled={sceneConfig.isImmutable}></textarea>
@@ -1022,7 +1022,7 @@
 							bind:samplingConfigId={sceneConfig.nameSamplingConfigId}
 						/>
 					</div>
-					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
+					<div class="flex flex-col gap-2">
 						<label class="text-sm font-semibold" for="sceneCharacterExtraction">Character Extraction Instructions</label>
 						<p class="text-muted-foreground text-xs">Used when extracting participant and mentioned characters from the scene summary.</p>
 						<textarea id="sceneCharacterExtraction" rows="6" bind:value={sceneConfig.characterExtractionSystemPrompt} class="textarea w-full" disabled={sceneConfig.isImmutable}></textarea>

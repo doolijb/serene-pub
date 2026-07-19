@@ -7,7 +7,8 @@ import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { TokenCounters } from "../utils/TokenCounterManager"
 import {
 	BaseConnectionAdapter,
-	type AdapterExports
+	type AdapterExports,
+	type BasePromptChat
 } from "./BaseConnectionAdapter"
 import { type CompiledPrompt } from "../utils/promptBuilder"
 import {
@@ -41,14 +42,8 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		sampling: SelectSamplingConfig
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
-		chat: SelectChat & {
-			chatCharacters?: (SelectChatCharacter & {
-				character: SelectCharacter
-			})[]
-			chatPersonas?: (SelectChatPersona & { persona: SelectPersona })[]
-			chatMessages: SelectChatMessage[]
-		}
-		currentCharacterId: number
+		chat: BasePromptChat
+		currentCharacterId: number | null
 		generatingMessageMetadata?: any
 	}) {
 		super({
@@ -181,11 +176,11 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		const promptFormat = this.connection.promptFormat || "chatml"
 		const stopStrings = StopStrings.get({
 			format: promptFormat,
-			characters: this.chat.chatCharacters?.map(
-				(cc: any) => cc.character
-			),
-			personas: this.chat.chatPersonas?.map((cp: any) => cp.persona),
-			currentCharacterId: this.currentCharacterId
+			characters:
+				this.chat.chatCharacters?.map((cc) => cc.character) || [],
+			personas:
+				this.chat.chatPersonas?.map((cp) => cp.persona) || [],
+			currentCharacterId: this.currentCharacterId ?? undefined
 		})
 		const characterName = resolveCharacterName(
 			this.chat.chatCharacters?.[0]?.character

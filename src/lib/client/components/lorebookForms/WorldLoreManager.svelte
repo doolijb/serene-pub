@@ -334,7 +334,7 @@
 		<!-- Reorder panel -->
 		{#if isReordering}
 			<div class="flex flex-col gap-2">
-				<div class="text-surface-500 text-xs font-semibold uppercase tracking-wide">
+				<div class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">
 					Drag to reorder
 				</div>
 				<div
@@ -360,7 +360,7 @@
 						>
 							<Icons.GripVertical size={16} class="text-surface-400 shrink-0" />
 							<span class="flex-1 truncate font-medium">{entry.name}</span>
-							<span class="text-surface-500 text-xs">#{entry.position}</span>
+							<span class="text-surface-700-300 text-xs">#{entry.position}</span>
 						</div>
 					{/each}
 				</div>
@@ -374,7 +374,7 @@
 
 		<!-- Entry cards -->
 		{:else if filteredEntries.length === 0}
-			<p class="text-surface-500 py-6 text-center text-sm italic">No world lore entries yet.</p>
+			<p class="text-surface-700-300 py-6 text-center text-sm italic">No world lore entries yet.</p>
 		{:else}
 			{#each filteredEntries as entry}
 				<!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -392,7 +392,7 @@
 								{previewContent(entry)}
 							</p>
 						{:else}
-							<p class="text-surface-500 text-xs italic">No content yet.</p>
+							<p class="text-surface-700-300 text-xs italic">No content yet.</p>
 						{/if}
 						<div class="mt-1.5 flex flex-wrap items-center gap-1">
 							<EmbeddingStatusIcon embeddingModel={entry.embeddingModel} size={12} />
@@ -492,16 +492,16 @@
 		<div class="flex flex-col gap-3 text-sm">
 			{#if focusedEntry.content?.trim()}
 				<div>
-					<p class="text-surface-500 mb-1 text-xs font-semibold uppercase tracking-wide">Content</p>
+					<p class="text-surface-700-300 mb-1 text-xs font-semibold uppercase tracking-wide">Content</p>
 					<div class="whitespace-pre-wrap leading-relaxed">{previewContent(focusedEntry)}</div>
 				</div>
 			{:else}
-				<p class="text-surface-500 italic">No content yet.</p>
+				<p class="text-surface-700-300 italic">No content yet.</p>
 			{/if}
 
 			{#if !vectorizationEnabled && focusedEntry.keys?.trim()}
 				<div>
-					<p class="text-surface-500 mb-1 text-xs font-semibold uppercase tracking-wide">Keywords</p>
+					<p class="text-surface-700-300 mb-1 text-xs font-semibold uppercase tracking-wide">Keywords</p>
 					<p>{focusedEntry.keys}</p>
 				</div>
 			{/if}
@@ -594,7 +594,7 @@
 			{#if !vectorizationEnabled}
 				<div class="flex flex-col gap-1">
 					<label class="text-sm font-semibold" for="wleKeys">
-						Keywords <span class="text-surface-500 text-xs font-normal">(comma separated)</span>
+						Keywords <span class="text-surface-700-300 text-xs font-normal">(comma separated)</span>
 					</label>
 					<input
 						id="wleKeys"

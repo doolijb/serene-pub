@@ -158,7 +158,16 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 							),
 							orderBy: (cm, { asc }) => asc(cm.id)
 						},
-						lorebook: true
+						// Matches generateResponse.ts's shape — BasePromptChat (shared
+						// by every adapter) declares `lorebook.lorebookBindings`, so
+						// it must actually be fetched here too.
+						lorebook: {
+							with: {
+								lorebookBindings: {
+									with: { character: true, persona: true }
+								}
+							}
+						}
 					}
 				})
 
@@ -184,8 +193,38 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 				const tokenLimit = 4096
 				const contextThresholdPercent = 0.8
 
+				// chatCharacters/chatPersonas rows can have a null character/persona
+				// when the linked row was deleted (the FK is nullable, onDelete:
+				// "set null") — filter those out since there's nothing left to
+				// prompt-build from, and BasePromptChat (shared by every adapter)
+				// requires the relation to be populated for the rows it does list.
+				// Matches the identical fix in generateResponse.ts. Also, this
+				// query (unlike generateResponse.ts's) fetches character.lorebook,
+				// whose FK is likewise nullable (`| null`), while BasePromptChat
+				// declares it optional (`?:` i.e. `| undefined`) — normalize null
+				// to undefined so it satisfies the shared interface.
+				const adapterChat = {
+					...chat,
+					chatCharacters: (chat.chatCharacters ?? [])
+						.filter(
+							(cc): cc is typeof cc & { character: SelectCharacter } =>
+								cc.character !== null
+						)
+						.map((cc) => ({
+							...cc,
+							character: {
+								...cc.character,
+								lorebook: cc.character.lorebook ?? undefined
+							}
+						})),
+					chatPersonas: (chat.chatPersonas ?? []).filter(
+						(cp): cp is typeof cp & { persona: SelectPersona } =>
+							cp.persona !== null
+					)
+				}
+
 				const adapter = new Adapter({
-					chat,
+					chat: adapterChat,
 					connection,
 					sampling,
 					contextConfig,

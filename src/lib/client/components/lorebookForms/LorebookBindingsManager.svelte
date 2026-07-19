@@ -1,7 +1,7 @@
 <script lang="ts">
 	import PersonaSelectModal from "../modals/PersonaSelectModal.svelte"
 	import CharacterSelectModal from "../modals/CharacterSelectModal.svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import Avatar from "../Avatar.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
@@ -13,7 +13,7 @@
 
 	let { lorebookId }: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	let showLinkPersonaBindingModal = $state(false)
 	let showLinkCharacterBindingModal = $state(false)

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { onMount } from "svelte"
 	import { getContext } from "svelte"
 
@@ -27,7 +27,7 @@
 		multiSelect = false
 	}: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
 	let users: SelectUser[] = $state([])
 	let search = $state("")
@@ -35,7 +35,7 @@
 
 	let availableUsers = $derived.by(() => {
 		// Exclude current user and any other excluded users
-		const currentUserId = userCtx.currentUser?.id
+		const currentUserId = userCtx.user?.id
 		if (!users || users.length === 0) return []
 		return users.filter((u) => {
 			// Check if user should be excluded
@@ -128,7 +128,7 @@
 		<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
 			<div class="relative flex flex-col gap-2 pr-2">
 				{#if filtered.length === 0}
-					<div class="text-surface-500 text-center">
+					<div class="text-surface-700-300 text-center">
 						No users found
 					</div>
 				{/if}

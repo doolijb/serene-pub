@@ -48,12 +48,12 @@
 		canSwipeRight: (msg: SelectChatMessage, isGreeting: boolean) => boolean
 		onSwipeLeft: (msg: SelectChatMessage) => void
 		onSwipeRight: (msg: SelectChatMessage) => void
-		onEditMessage: (event: MouseEvent, msg: SelectChatMessage) => void
-		onDeleteMessage: (event: MouseEvent, msg: SelectChatMessage) => void
-		onHideMessage: (event: MouseEvent, msg: SelectChatMessage) => void
-		onRegenerateMessage: (event: MouseEvent, msg: SelectChatMessage) => void
-		onContinueMessage?: (event: MouseEvent, msg: SelectChatMessage) => void
-		onAbortMessage: (event: MouseEvent, msg: SelectChatMessage) => void
+		onEditMessage: (event: Event, msg: SelectChatMessage) => void
+		onDeleteMessage: (event: Event, msg: SelectChatMessage) => void
+		onHideMessage: (event: Event, msg: SelectChatMessage) => void
+		onRegenerateMessage: (event: Event, msg: SelectChatMessage) => void
+		onContinueMessage?: (event: Event, msg: SelectChatMessage) => void
+		onAbortMessage: (event: Event, msg: SelectChatMessage) => void
 		onBranchMessage?: (event: Event, msg: SelectChatMessage) => void
 		editChatMessage: SelectChatMessage | undefined
 		canRegenerateLastMessage: boolean
@@ -86,27 +86,27 @@
 					onSwipeLeft: (msg: SelectChatMessage) => void
 					onSwipeRight: (msg: SelectChatMessage) => void
 					onEditMessage: (
-						event: MouseEvent,
+						event: Event,
 						msg: SelectChatMessage
 					) => void
 					onDeleteMessage: (
-						event: MouseEvent,
+						event: Event,
 						msg: SelectChatMessage
 					) => void
 					onHideMessage: (
-						event: MouseEvent,
+						event: Event,
 						msg: SelectChatMessage
 					) => void
 					onRegenerateMessage: (
-						event: MouseEvent,
+						event: Event,
 						msg: SelectChatMessage
 					) => void
 					onContinueMessage?: (
-						event: MouseEvent,
+						event: Event,
 						msg: SelectChatMessage
 					) => void
 					onAbortMessage: (
-						event: MouseEvent,
+						event: Event,
 						msg: SelectChatMessage
 					) => void
 					onBranchMessage?: (

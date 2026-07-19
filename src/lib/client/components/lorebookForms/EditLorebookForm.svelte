@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount, tick } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { z } from "zod"
 
@@ -21,17 +21,23 @@
 
 	let { lorebookId, hasUnsavedChanges = $bindable(false), mode = $bindable("view") }: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	// Tag-related state
 	let tagsList: SelectTag[] = $state([])
 	let tagSearchInput = $state("")
 	let showTagSuggestions = $state(false)
 
-	let editLorebook: Sockets.Lorebook.Response["lorebook"] | undefined =
-		$state()
-	let originalLorebook: Sockets.Lorebook.Response["lorebook"] | undefined =
-		$state()
+	// "lorebooks:get" always includes `tags`, but "lorebooks:update" returns
+	// the raw updated row without it (see lorebooksUpdateHandler in
+	// lorebooks.ts) — so locally `tags` is only guaranteed after a fresh Get.
+	type EditableLorebook = Omit<
+		NonNullable<Sockets.Lorebooks.Get.Response["lorebook"]>,
+		"tags"
+	> & { tags?: string[] }
+
+	let editLorebook: EditableLorebook | undefined = $state()
+	let originalLorebook: EditableLorebook | undefined = $state()
 	let validationErrors: ValidationErrors = $state({})
 	let isLoading = $state(true)
 	let loadError = $state("")
@@ -97,7 +103,7 @@
 
 	function handleSave() {
 		if (!validateForm()) return
-		const updateReq: Sockets.Lorebooks.Update.Call = {
+		const updateReq: Sockets.Lorebooks.Update.Params = {
 			lorebook: editLorebook!
 		}
 		socket.emit("lorebooks:update", updateReq)
@@ -160,7 +166,7 @@
 				}
 			}
 		)
-		socket.on("tags:list", (msg: any) => {
+		socket.on("tags:list", (msg) => {
 			tagsList = msg.tagsList || []
 		})
 
@@ -204,7 +210,7 @@
 			<div>
 				<p class="text-base font-semibold">{editLorebook.name}</p>
 				{#if editLorebook.description}
-					<p class="text-surface-500 mt-2 text-sm whitespace-pre-wrap">{editLorebook.description}</p>
+					<p class="text-surface-700-300 mt-2 text-sm whitespace-pre-wrap">{editLorebook.description}</p>
 				{/if}
 			</div>
 			{#if editLorebook.tags && editLorebook.tags.length > 0}

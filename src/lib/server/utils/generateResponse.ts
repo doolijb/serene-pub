@@ -337,12 +337,22 @@ export async function generateResponse({
 		}
 	})
 
+	if (!chat) {
+		await persistGenerationErrorRow(
+			socket.io,
+			generatingMessage.chatId,
+			generatingMessage.id,
+			new Error("Chat not found.")
+		)
+		return false
+	}
+
 	// If continuing, signal the PromptBuilder to use preservedContent as the
 	// prefill (-2 placeholder) rather than inserting a duplicate message.
 	// Adding a separate synthetic message causes two consecutive assistant
 	// entries in chat-completion APIs and a wrongly-closed block for text-
 	// completion formats.
-	if (isContinuing && chat) {
+	if (isContinuing) {
 		;(chat as any)._continuationPrefill = preservedContent
 	}
 
@@ -433,8 +443,25 @@ export async function generateResponse({
 		isNarratorResponse: isNarratorResponseMode
 	}
 
+	// chatCharacters/chatPersonas rows can have a null character/persona when
+	// the linked row was deleted (the FK is nullable, onDelete: "set null") —
+	// filter those out since there's nothing left to prompt-build from, and
+	// BasePromptChat (shared by every adapter) requires the relation to be
+	// populated for the rows it does list.
+	const adapterChat = {
+		...chat,
+		chatCharacters: (chat.chatCharacters ?? []).filter(
+			(cc): cc is typeof cc & { character: SelectCharacter } =>
+				cc.character !== null
+		),
+		chatPersonas: (chat.chatPersonas ?? []).filter(
+			(cp): cp is typeof cp & { persona: SelectPersona } =>
+				cp.persona !== null
+		)
+	}
+
 	const adapter = new Adapter({
-		chat,
+		chat: adapterChat,
 		connection: connection,
 		sampling: sampling,
 		contextConfig: contextConfig,
@@ -555,7 +582,7 @@ export async function generateResponse({
 		const updatedMsg = await db.query.chatMessages.findFirst({
 			where: (cm, { eq }) => eq(cm.id, generatingMessage.id)
 		})
-		const response: Sockets.SendPersonaMessage.Response = {
+		const response: Sockets.ChatMessages.SendPersonaMessage.Response = {
 			chatMessage: updatedMsg!
 		}
 		socket.io.to("user_" + userId).emit("personaMessageReceived", response)

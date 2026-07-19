@@ -16,7 +16,7 @@ export async function exists({
 }): Promise<boolean> {
 	const result = await tx
 		.select({
-			id: true
+			id: schema.users.id
 		})
 		.from(schema.users)
 		.where(eq(schema.users.username, username))

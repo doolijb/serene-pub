@@ -177,7 +177,7 @@
 </script>
 
 {#snippet confirmBlock()}
-	<p class="text-surface-500 text-sm">
+	<p class="text-surface-700-300 text-sm">
 		Re-process this scene to regenerate the summary and character list. This will replace the current results.
 	</p>
 {/snippet}
@@ -185,19 +185,19 @@
 {#snippet previewBlock()}
 	{#if genPartial.content || genPartial.raw}
 		<div class="space-y-1">
-			<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">
+			<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">
 				{genPhase === "synthesizing" ? "Synthesizing" : `Draft ${genBatch}`}
 			</p>
 			<div class="bg-surface-200-800 rounded-lg p-3 text-sm">
 				{#if genPartial.content}
 					<p class="text-surface-700-300 line-clamp-6 whitespace-pre-wrap">{genPartial.content}</p>
 				{:else if genPartial.raw}
-					<p class="text-surface-500 line-clamp-6 whitespace-pre-wrap text-xs italic">{genPartial.raw}</p>
+					<p class="text-surface-700-300 line-clamp-6 whitespace-pre-wrap text-xs italic">{genPartial.raw}</p>
 				{/if}
 			</div>
 		</div>
 	{:else}
-		<div class="text-surface-500 py-4 text-center text-sm">
+		<div class="text-surface-700-300 py-4 text-center text-sm">
 			<div class="bg-primary-500 mx-auto mb-2 h-2 w-2 animate-pulse rounded-full"></div>
 			Waiting for first draft…
 		</div>
@@ -230,10 +230,10 @@
 		</div>
 
 		<div class="rounded-lg border border-surface-300-700 p-3 space-y-3">
-			<p class="text-xs font-semibold uppercase tracking-wide text-surface-500">Characters</p>
+			<p class="text-xs font-semibold uppercase tracking-wide text-surface-700-300">Characters</p>
 
 			<div class="space-y-1.5">
-				<p class="text-sm font-semibold">Participants <span class="text-surface-500 font-normal text-xs">(physically present)</span></p>
+				<p class="text-sm font-semibold">Participants <span class="text-surface-700-300 font-normal text-xs">(physically present)</span></p>
 				<div class="flex flex-wrap gap-1.5">
 					{#each reviewParticipants as name, i}
 						<span class="chip preset-tonal-primary text-xs flex items-center gap-1">
@@ -262,7 +262,7 @@
 			</div>
 
 			<div class="space-y-1.5">
-				<p class="text-sm font-semibold">Mentioned <span class="text-surface-500 font-normal text-xs">(referenced but absent)</span></p>
+				<p class="text-sm font-semibold">Mentioned <span class="text-surface-700-300 font-normal text-xs">(referenced but absent)</span></p>
 				<div class="flex flex-wrap gap-1.5">
 					{#each reviewMentioned as name, i}
 						<span class="chip preset-tonal-surface text-xs flex items-center gap-1">
@@ -296,7 +296,7 @@
 {#snippet debugBlock()}
 	{#if trace.length > 0}
 		<button
-			class="flex w-full items-center justify-between text-xs text-surface-500 hover:text-surface-700-300"
+			class="flex w-full items-center justify-between text-xs text-surface-700-300 hover:text-surface-700-300"
 			onclick={() => (showTrace = !showTrace)}
 		>
 			<span>Debug ({trace.length} calls)</span>

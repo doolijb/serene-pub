@@ -98,6 +98,7 @@ export interface CharacterCardV2Input {
 	groupOnlyGreetings?: string[] | null
 	aliases?: string[] | null
 	summary?: string | null
+	category?: string | null
 }
 
 /**
@@ -142,7 +143,8 @@ export function buildCharacterCardV2(character: CharacterCardV2Input) {
 					...(character.aliases && character.aliases.length > 0
 						? { aliases: character.aliases }
 						: {}),
-					...(character.summary ? { summary: character.summary } : {})
+					...(character.summary ? { summary: character.summary } : {}),
+					...(character.category ? { category: character.category } : {})
 				}
 			}
 		}

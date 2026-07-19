@@ -282,7 +282,9 @@
 
 	function handleNewNameConfirm(name: string) {
 		if (!name.trim()) return
-		const newContextConfig = {
+		const newContextConfig: Partial<SelectContextConfig> & {
+			name: string
+		} = {
 			...contextConfig,
 			name: name.trim(),
 			isImmutable: false
@@ -378,9 +380,11 @@
 			}
 		)
 		socket.emit("contextConfigs:list", {})
-		socket.emit("contextConfigs:get", {
-			id: selectedConfigId
-		})
+		if (selectedConfigId) {
+			socket.emit("contextConfigs:get", {
+				id: selectedConfigId
+			})
+		}
 		onclose = handleOnClose
 	})
 
@@ -417,10 +421,10 @@
 			type="button"
 			class="btn btn-sm preset-filled-primary-500"
 			onclick={handleNew}
-			title="New context config"
+			title="Clone to new config"
 		>
 			<Icons.Plus size={16} />
-			New
+			Clone
 		</button>
 		<button
 			type="button"
@@ -546,7 +550,7 @@
 									</div>
 									<div class="min-w-0">
 										<div class="font-semibold">System Message</div>
-										<p class="text-surface-500 text-xs">
+										<p class="text-surface-700-300 text-xs">
 											Everything the model sees as scene-setting context,
 											wrapped in one system-role block.
 										</p>
@@ -554,7 +558,7 @@
 								</div>
 
 								{#if systemCardsDnd.length === 0}
-									<p class="text-surface-500 text-sm">
+									<p class="text-surface-700-300 text-sm">
 										No cards yet — add one below.
 									</p>
 								{/if}
@@ -652,7 +656,7 @@
 																	class="card preset-tonal-surface p-2 flex flex-col gap-1 max-w-[16rem]"
 																>
 																	<p
-																		class="text-surface-500 px-1 pb-1 text-xs font-semibold tracking-wide uppercase"
+																		class="text-surface-700-300 px-1 pb-1 text-xs font-semibold tracking-wide uppercase"
 																	>
 																		Insert above
 																	</p>
@@ -763,7 +767,7 @@
 												class="card preset-tonal-surface p-2 flex flex-col gap-1 max-w-[16rem]"
 											>
 												<p
-													class="text-surface-500 px-1 pb-1 text-xs font-semibold tracking-wide uppercase"
+													class="text-surface-700-300 px-1 pb-1 text-xs font-semibold tracking-wide uppercase"
 												>
 													Add to end
 												</p>
@@ -796,7 +800,7 @@
 									</div>
 									<div class="min-w-0">
 										<div class="font-semibold">Chat Messages</div>
-										<p class="text-surface-500 text-xs">
+										<p class="text-surface-700-300 text-xs">
 											The conversation itself. Fixed in place — always
 											present, can't be reordered or removed.
 										</p>
@@ -856,7 +860,7 @@
 										<div class="font-semibold">
 											Post-History Instructions
 										</div>
-										<p class="text-surface-500 text-xs">
+										<p class="text-surface-700-300 text-xs">
 											A reminder injected right after the chat history,
 											closest to where the model starts writing.
 										</p>
@@ -955,7 +959,7 @@
 					</Tabs.Content>
 					<Tabs.Content value="preview">
 						<div class="flex flex-col gap-2">
-							<p class="text-surface-500 text-sm">
+							<p class="text-surface-700-300 text-sm">
 								Renders this template against static mock story data, using
 								the same engine as real chats.
 							</p>
@@ -995,7 +999,7 @@
 										</div>
 									{/each}
 									{#if previewMessages.length === 0}
-										<p class="text-surface-500 text-sm">
+										<p class="text-surface-700-300 text-sm">
 											This template didn't render any content.
 										</p>
 									{/if}

@@ -2,10 +2,10 @@
 	import * as Icons from "@lucide/svelte"
 	import { Progress } from "@skeletonlabs/skeleton-svelte"
 	import { onMount, onDestroy } from "svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	type DownloadEntry = Sockets.KoboldCpp.DownloadProgress.DownloadEntry
 	let downloads = $state<Record<string, DownloadEntry>>({})

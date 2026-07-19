@@ -42,11 +42,15 @@ declare global {
 		onMobilePanelClose?: () => Promise<boolean>
 		leftNav: Record<
 			string,
-			{ icon: Component<Icons.IconProps, {}, "">; title: string }
+			| { icon: Component<Icons.IconProps, {}, "">; title: string; imgSrc?: undefined }
+			// KoboldCPP's nav entry uses an image mask instead of a lucide icon
+			// component — see the `item.imgSrc` branch in Layout.svelte's mobile nav.
+			| { icon?: undefined; imgSrc: string; title: string }
 		>
 		rightNav: Record<
 			string,
-			{ icon: Component<Icons.IconProps, {}, "">; title: string }
+			| { icon: Component<Icons.IconProps, {}, "">; title: string; imgSrc?: undefined }
+			| { icon?: undefined; imgSrc: string; title: string }
 		>
 		digest: {
 			characterId?: number
@@ -70,28 +74,30 @@ declare global {
 			lorebookTab?: string
 			/** Open the connections sidebar and select a specific connection */
 			connectionId?: number
+			/** Open the connections sidebar straight to a category, skipping the index screen */
+			connectionsView?: "connections" | "embedding"
 		}
 		leftNavOrder: string[]
 		rightNavOrder: string[]
 		getOrderedEntries: (
 			nav: Record<string, any>,
 			order: string[]
-		) => Array<[string, any]>
+		) => ReadonlyArray<readonly [string, any]>
 	}
 
 	interface UserCtx {
-		user:
-			| (SelectUser & {
-					activeConnection: SelectConnection | null
-					activeSamplingConfig: SelectSamplingConfig | null
-					activeContextConfig: SelectContextConfig | null
-					activePromptConfig: SelectPromptConfig | null
-			  })
-			| undefined
+		user: SelectUser | undefined
 	}
 
 	interface SystemSettingsCtx {
-		settings?: Omit<SelectSystemSettings, "id"> & { isAndroidWrapper?: boolean }
+		settings?: Omit<
+			SelectSystemSettings,
+			| "id"
+			| "charaVaultEmail"
+			| "charaVaultEncryptedToken"
+			| "charaVaultTokenIv"
+			| "charaVaultTokenAuthTag"
+		> & { isAndroidWrapper?: boolean }
 	}
 
 	interface OllamaSettingsCtx {
@@ -99,11 +105,18 @@ declare global {
 	}
 
 	interface KoboldCppSettingsCtx {
-		settings?: Omit<SelectKoboldCppSettings, "id">
+		// koboldCppManagedAdminPassword is never sent to the client (server-only
+		// secret) — see the `columns` filter in systemSettingsGet.
+		settings?: Omit<
+			SelectKoboldCppSettings,
+			"id" | "koboldCppManagedAdminPassword"
+		>
 	}
 
 	interface UserSettingsCtx {
-		settings?: Omit<SelectUserSettings, "id" | "userId">
+		// "userSettings:get" only returns a hand-picked subset of columns (see
+		// userSettingsGet in userSettings.ts), not the full row minus id/userId.
+		settings?: Sockets.UserSettings.Get.Response["userSettings"]
 	}
 
 	interface VectorizationCtx {

@@ -9,22 +9,26 @@ export async function expire({
 	userTokenId: tokenId,
 	returning
 }: {
-	tx?: typeof db
+	tx?: DbTransaction | typeof db
 	userTokenId: string
-	returning?: any
-}): Promise<any> {
-	let query = tx
-		.update(schema.userTokens)
-		.set({
-			expiresAt: new Date()
-		})
-		.where(eq(schema.userTokens.id, tokenId))
+	returning?: ReturningSelect
+}) {
+	const where = eq(schema.userTokens.id, tokenId)
 
 	// Returning?
 	if (returning) {
-		query = query.returning(returning)
+		return await tx
+			.update(schema.userTokens)
+			.set({ expiresAt: new Date() })
+			.where(where)
+			.returning(returning)
+			.execute()
 	}
 
 	// Return result
-	return await query.execute()
+	return await tx
+		.update(schema.userTokens)
+		.set({ expiresAt: new Date() })
+		.where(where)
+		.execute()
 }

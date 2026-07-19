@@ -1,4 +1,25 @@
 <script lang="ts">
+	// Note: this component currently has no callers anywhere in the app, and
+	// its expected shape (a nested `date: {year,month,day}` object, plus a
+	// `priority` field) doesn't match the `historyEntries` DB table (which
+	// stores flat `year`/`month`/`day` columns and has no `priority` column)
+	// — kept as-is, typed to match what the template below actually reads.
+	interface HistoryEntryDisplay {
+		date?: { year: number; month: number; day: number } | null
+		content: string
+		keys: string | string[]
+		useRegex?: boolean
+		caseSensitive?: boolean
+		priority?: number
+		constant?: boolean
+		enabled?: boolean
+	}
+
+	interface Props {
+		historyEntries: HistoryEntryDisplay[]
+	}
+
+	let { historyEntries }: Props = $props()
 </script>
 
 <div class="mt-2 flex flex-col gap-2">
@@ -8,7 +29,7 @@
 		if (ad.year !== bd.year) return bd.year - ad.year
 		if (ad.month !== bd.month) return bd.month - ad.month
 		return bd.day - ad.day
-	}) as entry, i ((entry, i))}
+	}) as entry, i (i)}
 		<details class="bg-surface-100-900 relative rounded border p-2">
 			<summary class="flex cursor-pointer items-center gap-2 select-none">
 				<span class="font-mono text-sm">

@@ -417,7 +417,7 @@
 			{#if activeBuild.status === "building"}
 				<div class="flex items-center gap-2">
 					<div class="bg-primary-500 h-2 w-2 shrink-0 animate-pulse rounded-full"></div>
-					<span class="text-surface-500 text-sm">Building…</span>
+					<span class="text-surface-700-300 text-sm">Building…</span>
 				</div>
 			{:else if activeBuild.status === "error"}
 				<div class="flex items-center gap-2">
@@ -494,7 +494,7 @@
 		<div class="bg-surface-200-800 border border-surface-300-700 rounded-lg p-3 space-y-2 text-sm">
 			{#if activeBuild.status === "building"}
 				<div class="space-y-1.5">
-					<p class="text-surface-500 capitalize text-xs">
+					<p class="text-surface-700-300 capitalize text-xs">
 						{activeBuild.phase.replace(/_/g, " ")}
 						{#if activeBuild.totalScenes > 0}· scene {activeBuild.sceneIndex + 1}/{activeBuild.totalScenes}{/if}
 					</p>
@@ -541,7 +541,7 @@
 						<Icons.AlertCircle size={14} class="text-error-500 shrink-0" />
 						<span class="text-error-500">Build failed</span>
 						{#if activeBuild.errorMessage}
-							<span class="text-surface-500 text-xs truncate">— {activeBuild.errorMessage}</span>
+							<span class="text-surface-700-300 text-xs truncate">— {activeBuild.errorMessage}</span>
 						{/if}
 					</div>
 					<button
@@ -560,12 +560,12 @@
 		<div class="bg-surface-200-800 border border-surface-300-700 rounded-lg p-3 space-y-2 text-sm">
 			<p class="font-semibold text-sm">New Node</p>
 			<div class="space-y-1">
-				<p class="text-surface-500 text-xs font-semibold uppercase">Name</p>
+				<p class="text-surface-700-300 text-xs font-semibold uppercase">Name</p>
 				<input class="input text-sm" type="text" placeholder="Node name…" bind:value={createNodeName} />
 			</div>
 			<div class="grid grid-cols-2 gap-2">
 				<div class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase">State</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase">State</p>
 					<select class="select text-sm" bind:value={createNodeState}>
 						{#each NODE_STATES as s}
 							<option value={s}>{s}</option>
@@ -573,7 +573,7 @@
 					</select>
 				</div>
 				<div class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase">Visibility</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase">Visibility</p>
 					<select class="select text-sm" bind:value={createNodeVisibility}>
 						{#each NODE_VISIBILITY as v}
 							<option value={v}>{v}</option>
@@ -582,13 +582,13 @@
 				</div>
 			</div>
 			<div class="space-y-1">
-				<p class="text-surface-500 text-xs font-semibold uppercase">Summary</p>
+				<p class="text-surface-700-300 text-xs font-semibold uppercase">Summary</p>
 				<textarea class="textarea min-h-10 text-sm" placeholder="Short summary for context infill…" maxlength="200" bind:value={createNodeSummary}></textarea>
 			<p class="text-surface-400 text-right text-xs">{createNodeSummary.length} / 200</p>
 			</div>
 			{#if historyEntries.length > 0}
 				<div class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase">First appeared (optional)</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase">First appeared (optional)</p>
 					<select class="select text-sm" bind:value={createNodeHistoryEntryId}>
 						<option value={null}>— none —</option>
 						{#each historyEntries as he}
@@ -613,13 +613,13 @@
 	{/if}
 
 	{#if isLoading}
-		<div class="text-surface-500 flex items-center justify-center py-10 text-sm">
+		<div class="text-surface-700-300 flex items-center justify-center py-10 text-sm">
 			<div class="bg-primary-500 mr-2 h-2 w-2 animate-pulse rounded-full"></div>
 			Loading…
 		</div>
 	{:else if nodes.length === 0}
 		<!-- Empty state -->
-		<div class="text-surface-500 flex flex-col items-center gap-3 py-10 text-center text-sm">
+		<div class="text-surface-700-300 flex flex-col items-center gap-3 py-10 text-center text-sm">
 			<Icons.Network size={32} class="opacity-30" />
 			<div>
 				<p class="font-medium">No graph yet</p>
@@ -709,7 +709,7 @@
 					{/if}
 				</div>
 				{#if selectedNode.summary}
-					<p class="text-surface-500 text-xs">{selectedNode.summary}</p>
+					<p class="text-surface-700-300 text-xs">{selectedNode.summary}</p>
 				{/if}
 				{#if aliasChildren.length > 0}
 					<div class="space-y-1">
@@ -732,12 +732,12 @@
 				<!-- Relationships -->
 				{#if nodeRels.length > 0 || connectingFromNode?.id === selectedNode.id}
 					<div class="border-t border-surface-300-700 pt-2 space-y-2">
-						<p class="text-surface-500 text-xs font-semibold uppercase">Relationships</p>
+						<p class="text-surface-700-300 text-xs font-semibold uppercase">Relationships</p>
 						{#each nodeRels as rel (rel.id)}
 							{#if editingRel?.id === rel.id}
 								<!-- Inline edit card -->
 								<div class="bg-surface-100-900 border border-surface-300-700 rounded-lg p-3 space-y-2">
-									<div class="flex items-center gap-1 text-xs text-surface-500">
+									<div class="flex items-center gap-1 text-xs text-surface-700-300">
 										<Icons.ArrowRight size={11} class="text-primary-400 shrink-0" />
 										<span class="font-medium">→ {nodeName(rel.toNodeId)}</span>
 									</div>
@@ -784,7 +784,7 @@
 										{#if rel.historyEntryId}
 											{@const he = historyEntries.find(h => h.id === rel.historyEntryId)}
 											{#if he}
-												<span class="text-surface-500 text-xs">Yr {he.year}{he.month ? `, Mo. ${he.month}` : ""}</span>
+												<span class="text-surface-700-300 text-xs">Yr {he.year}{he.month ? `, Mo. ${he.month}` : ""}</span>
 											{/if}
 										{/if}
 										<div class="flex gap-1 ml-auto">
@@ -801,7 +801,7 @@
 										</div>
 									</div>
 									{#if rel.description}
-										<p class="text-surface-500 text-xs leading-snug">{rel.description}</p>
+										<p class="text-surface-700-300 text-xs leading-snug">{rel.description}</p>
 									{/if}
 								</div>
 							{/if}
@@ -817,7 +817,7 @@
 			<div class="bg-surface-200-800 rounded-lg border border-error-500/40 p-3 text-sm space-y-2">
 				<p class="font-semibold text-error-500">Delete "{nodeName}"?</p>
 				{#if relCount > 0}
-					<p class="text-surface-500 text-xs">This will also permanently delete <strong>{relCount} relationship{relCount === 1 ? "" : "s"}</strong>.</p>
+					<p class="text-surface-700-300 text-xs">This will also permanently delete <strong>{relCount} relationship{relCount === 1 ? "" : "s"}</strong>.</p>
 				{/if}
 				<div class="flex gap-2 justify-end">
 					<button class="btn btn-sm preset-filled-surface-400-600" onclick={() => (pendingDeleteNodeId = null)}>Cancel</button>
@@ -832,7 +832,7 @@
 			<div class="bg-surface-200-800 rounded-lg p-3 text-sm space-y-2">
 				<p class="font-semibold">Connect: {connectingFromNode.name} →</p>
 				<div class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase">Target Node</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase">Target Node</p>
 					<select class="select text-sm" bind:value={connectToNodeId}>
 						<option value={null} disabled>Select a node…</option>
 						{#each nodes.filter(n => n.id !== connectingFromNode!.id) as n}
@@ -842,11 +842,11 @@
 				</div>
 				<div class="grid grid-cols-2 gap-2">
 					<div class="space-y-1">
-						<p class="text-surface-500 text-xs font-semibold uppercase">Type</p>
+						<p class="text-surface-700-300 text-xs font-semibold uppercase">Type</p>
 						<input class="input text-sm" type="text" bind:value={connectRelType} placeholder="e.g. ally, romantic, rival" />
 					</div>
 					<div class="space-y-1">
-						<p class="text-surface-500 text-xs font-semibold uppercase">Status</p>
+						<p class="text-surface-700-300 text-xs font-semibold uppercase">Status</p>
 						<select class="select text-sm" bind:value={connectRelStatus}>
 							{#each RELATIONSHIP_STATUSES as s}
 								<option value={s}>{s}</option>
@@ -855,7 +855,7 @@
 					</div>
 				</div>
 				<div class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase">Visibility</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase">Visibility</p>
 					<select class="select text-sm" bind:value={connectVisibility}>
 						{#each RELATIONSHIP_VISIBILITIES as v}
 							<option value={v}>{v}</option>
@@ -863,12 +863,12 @@
 					</select>
 				</div>
 				<div class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase">Description (optional)</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase">Description (optional)</p>
 					<textarea class="textarea min-h-10 text-sm" placeholder="Describe the relationship…" bind:value={connectDescription}></textarea>
 				</div>
 				{#if historyEntries.length > 0}
 					<div class="space-y-1">
-						<p class="text-surface-500 text-xs font-semibold uppercase">When (optional)</p>
+						<p class="text-surface-700-300 text-xs font-semibold uppercase">When (optional)</p>
 						<select class="select text-sm" bind:value={connectHistoryEntryId}>
 							<option value={null}>— none —</option>
 							{#each historyEntries as he}
@@ -896,12 +896,12 @@
 			<div class="bg-surface-200-800 rounded-lg p-3 text-sm space-y-2">
 				<p class="font-semibold">Edit Node</p>
 				<div class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase">Name</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase">Name</p>
 					<input class="input text-sm" type="text" bind:value={editingNode.name} />
 				</div>
 				<div class="grid grid-cols-2 gap-2">
 					<div class="space-y-1">
-						<p class="text-surface-500 text-xs font-semibold uppercase">State</p>
+						<p class="text-surface-700-300 text-xs font-semibold uppercase">State</p>
 						<select class="select text-sm" bind:value={editingNode.nodeState}>
 							{#each NODE_STATES as s}
 								<option value={s}>{s}</option>
@@ -909,7 +909,7 @@
 						</select>
 					</div>
 					<div class="space-y-1">
-						<p class="text-surface-500 text-xs font-semibold uppercase">Visibility</p>
+						<p class="text-surface-700-300 text-xs font-semibold uppercase">Visibility</p>
 						<select class="select text-sm" bind:value={editingNode.nodeVisibility}>
 							{#each NODE_VISIBILITY as v}
 								<option value={v}>{v}</option>
@@ -918,13 +918,13 @@
 					</div>
 				</div>
 				<div class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase">Summary</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase">Summary</p>
 					<textarea class="textarea min-h-10 text-sm" maxlength="200" bind:value={editingNode.summary}></textarea>
 					<p class="text-surface-400 text-right text-xs">{(editingNode.summary ?? "").length} / 200</p>
 				</div>
 				{#if bindings.length > 0}
 					<div class="space-y-1">
-						<p class="text-surface-500 text-xs font-semibold uppercase">Character Binding</p>
+						<p class="text-surface-700-300 text-xs font-semibold uppercase">Character Binding</p>
 						<select class="select text-sm" bind:value={editingNode.lorebookBindingId}>
 							<option value={null}>— None —</option>
 							{#each bindings.filter(b => !nodes.some(n => n.id !== editingNode!.id && n.lorebookBindingId === b.id)) as b}
@@ -937,7 +937,7 @@
 				{/if}
 				{#if historyEntries.length > 0}
 					<div class="space-y-1">
-						<p class="text-surface-500 text-xs font-semibold uppercase">First appeared (optional)</p>
+						<p class="text-surface-700-300 text-xs font-semibold uppercase">First appeared (optional)</p>
 						<select class="select text-sm" bind:value={editingNode.historyEntryId}>
 							<option value={null}>— none —</option>
 							{#each historyEntries as he}
@@ -985,7 +985,7 @@
 					<p class="text-xs">{selectedRel.description}</p>
 				{/if}
 				{#if selectedRel.reason}
-					<p class="text-surface-500 text-xs italic">Reason: {selectedRel.reason}</p>
+					<p class="text-surface-700-300 text-xs italic">Reason: {selectedRel.reason}</p>
 				{/if}
 			</div>
 		{/if}
@@ -994,11 +994,11 @@
 			<div class="bg-surface-200-800 rounded-lg p-3 text-sm space-y-2">
 				<p class="font-semibold">Edit Relationship</p>
 				<div class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase">Type</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase">Type</p>
 					<input class="input text-sm" type="text" bind:value={editingRel.relationshipType} />
 				</div>
 				<div class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase">Status</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase">Status</p>
 					<select class="select text-sm" bind:value={editingRel.status}>
 						{#each RELATIONSHIP_STATUSES as s}
 							<option value={s}>{s}</option>
@@ -1006,16 +1006,16 @@
 					</select>
 				</div>
 				<div class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase">Description</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase">Description</p>
 					<textarea class="textarea min-h-12 text-sm" bind:value={editingRel.description}></textarea>
 				</div>
 				<div class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase">Reason for this state</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase">Reason for this state</p>
 					<input class="input text-sm" type="text" bind:value={editingRel.reason} />
 				</div>
 				{#if historyEntries.length > 0}
 					<div class="space-y-1">
-						<p class="text-surface-500 text-xs font-semibold uppercase">When (optional)</p>
+						<p class="text-surface-700-300 text-xs font-semibold uppercase">When (optional)</p>
 						<select class="select text-sm" bind:value={editingRel.historyEntryId}>
 							<option value={null}>— none —</option>
 							{#each historyEntries as he}
@@ -1040,7 +1040,7 @@
 		<div class="space-y-4 overflow-y-auto">
 			<!-- Nodes list -->
 			<section class="space-y-1">
-				<h3 class="text-surface-500 text-xs font-semibold uppercase tracking-wide">
+				<h3 class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">
 					Nodes ({parentNodes.length})
 				</h3>
 				{#each parentNodes as node}
@@ -1072,7 +1072,7 @@
 								<p class="text-surface-400 text-right text-xs">{(editingNode.summary ?? "").length} / 200</p>
 								{#if bindings.length > 0}
 									<div class="space-y-1">
-										<p class="text-surface-500 text-xs font-semibold uppercase">Character Binding</p>
+										<p class="text-surface-700-300 text-xs font-semibold uppercase">Character Binding</p>
 										<select class="select text-xs" bind:value={editingNode.lorebookBindingId}>
 											<option value={null}>— None —</option>
 											{#each bindings.filter(b => !nodes.some(n => n.id !== editingNode!.id && n.lorebookBindingId === b.id)) as b}
@@ -1110,7 +1110,7 @@
 								</button>
 							</div>
 							{#if node.summary}
-								<p class="text-surface-500 mt-1 text-xs">{node.summary}</p>
+								<p class="text-surface-700-300 mt-1 text-xs">{node.summary}</p>
 							{/if}
 						{/if}
 					</div>
@@ -1119,7 +1119,7 @@
 
 			<!-- Relationships list -->
 			<section class="space-y-1">
-				<h3 class="text-surface-500 text-xs font-semibold uppercase tracking-wide">
+				<h3 class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">
 					Relationships ({relationships.length})
 				</h3>
 				{#each relationships as rel}
@@ -1136,7 +1136,7 @@
 									</button>
 								</div>
 								<div class="flex items-center gap-2">
-									<span class="text-surface-500 shrink-0 text-xs">{nodeName(rel.fromNodeId)} → {nodeName(rel.toNodeId)}</span>
+									<span class="text-surface-700-300 shrink-0 text-xs">{nodeName(rel.fromNodeId)} → {nodeName(rel.toNodeId)}</span>
 									<select class="select ml-auto text-xs" bind:value={editingRel.status}>
 										{#each RELATIONSHIP_STATUSES as s}
 											<option value={s}>{s}</option>
@@ -1181,7 +1181,7 @@
 								</button>
 							</div>
 							{#if rel.description}
-								<p class="text-surface-500 mt-1 text-xs">{rel.description}</p>
+								<p class="text-surface-700-300 mt-1 text-xs">{rel.description}</p>
 							{/if}
 							{#if rel.reason}
 								<p class="text-surface-400 mt-0.5 text-xs italic">Reason: {rel.reason}</p>

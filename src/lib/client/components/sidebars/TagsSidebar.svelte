@@ -36,11 +36,16 @@
 	let showDeleteModal = $state(false)
 	let tagToDelete: SelectTag | null = $state(null)
 
-	// Related data for selected tag
-	let relatedCharacters: SelectCharacter[] = $state([])
-	let relatedPersonas: SelectPersona[] = $state([])
+	// Related data for selected tag — these come back from "tags:getRelatedData"
+	// with only a display-column subset (see registerTagHandlers), so they're
+	// Partial, matching what the *ListItem components expect.
+	let relatedCharacters: Partial<SelectCharacter>[] = $state([])
+	let relatedPersonas: Partial<SelectPersona>[] = $state([])
 	let relatedLorebooks: SelectLorebook[] = $state([])
-	let relatedChats: SelectChat[] = $state([])
+	// tags:getRelatedData never actually populates chats server-side today
+	// (see registerTagHandlers), so this stays empty at runtime — typed to
+	// match ChatListItem's expected shape regardless.
+	let relatedChats: Sockets.Chats.List.Response["chatList"] = $state([])
 
 	// Zod validation schema
 	const tagSchema = z.object({
@@ -265,7 +270,7 @@
 	function createTag() {
 		if (!validateNewTag()) return
 
-		const tag: InsertTag = {
+		const tag: Omit<InsertTag, "userId"> = {
 			name: newTagName.trim(),
 			description: newTagDescription.trim() || null,
 			colorPreset: newTagColorPreset
@@ -291,10 +296,11 @@
 
 	function confirmDelete() {
 		if (!tagToDelete) return
-		socket.emit("tags:delete", { id: tagToDelete.id })
+		const deletedId = tagToDelete.id
+		socket.emit("tags:delete", { id: deletedId })
 		showDeleteModal = false
 		tagToDelete = null
-		if (selectedTag?.id === tagToDelete.id) {
+		if (selectedTag?.id === deletedId) {
 			selectedTag = null
 		}
 	}
@@ -318,22 +324,22 @@
 		editTagColorPreset = "preset-filled-primary-500"
 	}
 
-	function handleCharacterClick(character: SelectCharacter) {
+	function handleCharacterClick(character: Partial<SelectCharacter>) {
 		panelsCtx.digest.chatCharacterId = character.id
 		panelsCtx.openPanel({ key: "chats", toggle: false })
 	}
 
-	function handleCharacterEditClick(character: SelectCharacter) {
+	function handleCharacterEditClick(character: Partial<SelectCharacter>) {
 		panelsCtx.digest.characterId = character.id
 		panelsCtx.openPanel({ key: "characters", toggle: false })
 	}
 
-	function handlePersonaClick(persona: SelectPersona) {
+	function handlePersonaClick(persona: Partial<SelectPersona>) {
 		panelsCtx.digest.chatPersonaId = persona.id
 		panelsCtx.openPanel({ key: "chats", toggle: false })
 	}
 
-	function handlePersonaEditClick(persona: SelectPersona) {
+	function handlePersonaEditClick(persona: Partial<SelectPersona>) {
 		panelsCtx.digest.characterId = persona.id
 		panelsCtx.openPanel({ key: "personas", toggle: false })
 	}
@@ -343,11 +349,13 @@
 		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
 	}
 
-	function handleChatClick(chat: SelectChat) {
+	function handleChatClick(chat: Sockets.Chats.List.Response["chatList"][0]) {
 		goto(`/chats/${chat.id}`)
 	}
 
-	function handleChatEditClick(chat: SelectChat) {
+	function handleChatEditClick(
+		chat: Sockets.Chats.List.Response["chatList"][0]
+	) {
 		panelsCtx.digest.chatId = chat.id
 		panelsCtx.openPanel({ key: "chats", toggle: false })
 	}

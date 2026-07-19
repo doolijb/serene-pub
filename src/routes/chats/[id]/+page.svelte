@@ -2,7 +2,7 @@
 	import { page } from "$app/state"
 	import { goto } from "$app/navigation"
 	import { Dialog, Portal, Popover } from "@skeletonlabs/skeleton-svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import * as Icons from "@lucide/svelte"
 	import MessageComposer from "$lib/client/components/chatMessages/MessageComposer.svelte"
 	import MessageControls from "$lib/client/components/chatMessages/MessageControls.svelte"
@@ -29,7 +29,7 @@
 	let pagination: Sockets.Chats.Get.Response["pagination"] | undefined =
 		$state()
 	let newMessage = $state("")
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	let showDeleteMessageModal = $state(false)
 	let deleteChatMessage: SelectChatMessage | undefined = $state()
 	let editChatMessage: SelectChatMessage | undefined = $state()
@@ -39,6 +39,7 @@
 	let userCtx: UserCtx = getContext("userCtx")
 	let panelsCtx: PanelsCtx = getContext("panelsCtx")
 	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
+	let userSettingsCtx: UserSettingsCtx = getContext("userSettingsCtx")
 	let openChatCtx: OpenChatCtx = getContext("openChatCtx")
 
 	// Lets globally-rendered sidebars (e.g. LorebooksSidebar) know which chat
@@ -92,9 +93,9 @@
 	let loadingOlderMessages = $state(false)
 	let messagesContainer: HTMLElement | undefined = $state()
 	let contextExceeded = $derived(
-		!!draftCompiledPrompt
-			? draftCompiledPrompt!.meta.tokenCounts.total >
-					draftCompiledPrompt!.meta.tokenCounts.limit
+		draftCompiledPrompt?.meta
+			? draftCompiledPrompt.meta.tokenCounts.total >
+					draftCompiledPrompt.meta.tokenCounts.limit
 			: false
 	)
 	let openMsgControlsMenu: number | undefined = $state(undefined)
@@ -183,12 +184,13 @@
 
 	// Get the next character info from chat data
 	let nextCharacter: SelectCharacter | undefined = $derived.by(() => {
-		if (!chatResponseOrder?.nextCharacterId) {
+		const nextCharacterId = chatResponseOrder?.nextCharacterId
+		if (!nextCharacterId) {
 			return undefined
 		}
 
 		const foundCharacter = chat?.chatCharacters?.find(
-			(cc) => cc.characterId === chatResponseOrder.nextCharacterId
+			(cc) => cc.characterId === nextCharacterId
 		)?.character
 
 		return foundCharacter
@@ -254,11 +256,12 @@
 
 	// Get ordered characters from chat data using the response order
 	let orderedCharacters: SelectCharacter[] = $derived.by(() => {
-		if (!chatResponseOrder?.characterIds || !chat?.chatCharacters) return []
+		const chatCharacters = chat?.chatCharacters
+		if (!chatResponseOrder?.characterIds || !chatCharacters) return []
 		return chatResponseOrder.characterIds
 			.map(
 				(id) =>
-					chat.chatCharacters.find((cc) => cc.characterId === id)
+					chatCharacters.find((cc) => cc.characterId === id)
 						?.character
 			)
 			.filter((char) => char !== undefined) as SelectCharacter[]
@@ -362,8 +365,9 @@
 	}
 
 	function onDeleteMessageConfirm() {
+		if (!deleteChatMessage) return
 		socket.emit("chatMessages:delete", {
-			id: deleteChatMessage?.id
+			id: deleteChatMessage.id
 		})
 		deleteChatMessage = undefined
 		showDeleteMessageModal = false
@@ -455,10 +459,10 @@
 	})
 
 	$effect(() => {
-		const _connection = userCtx?.user?.activeConnection // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
-		const _samplingConfig = userCtx?.user?.activeSamplingConfig // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
-		const _contextConfig = userCtx?.user?.activeContextConfig // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
-		const _promptConfig = userCtx?.user?.activePromptConfig // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
+		const _connection = systemSettingsCtx.settings?.defaultConnectionId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
+		const _samplingConfig = systemSettingsCtx.settings?.defaultSamplingConfigId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
+		const _contextConfig = userSettingsCtx.settings?.activeContextConfigId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
+		const _promptConfig = userSettingsCtx.settings?.activePromptConfigId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
 		const _newMessage = newMessage // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
 		if (
 			!chatId ||
@@ -632,7 +636,7 @@
 		return false
 	})
 
-	function openSummarizeModal(loreType: "world" | "history" | "character" | "scene") {
+	function openSummarizeModal(loreType: "world" | "character" | "scene") {
 		if (loreType === "scene" && hasSceneGap) {
 			toaster.error({
 				title: "Non-consecutive messages selected",
@@ -877,7 +881,7 @@
 				chatNotFound = true
 				return
 			}
-			if (msg.chat?.id === Number.parseInt(page.params.id)) {
+			if (msg.chat?.id === chatId) {
 				if (chat && loadingOlderMessages && msg.beforeId != null) {
 					// Load-more: prepend older messages (server already deduped via cursor)
 					const existingIds = new Set(chat.chatMessages.map((m) => m.id))
@@ -915,22 +919,28 @@
 		})
 
 		socket.on("chatMessage", (msg: Sockets.ChatMessage.Response) => {
-			if (chat !== undefined && msg.chatMessage.chatId === chatId) {
-				const existingIndex = chat!.chatMessages.findIndex(
-					(m: SelectChatMessage) => m.id === msg.chatMessage.id
+			const currentChat = chat
+			if (
+				currentChat != null &&
+				msg.chatMessage &&
+				msg.chatMessage.chatId === chatId
+			) {
+				const chatMessage = msg.chatMessage
+				const existingIndex = currentChat.chatMessages.findIndex(
+					(m: SelectChatMessage) => m.id === chatMessage.id
 				)
 				if (existingIndex !== -1) {
-					const updatedMessages = [...chat!.chatMessages]
-					updatedMessages[existingIndex] = msg.chatMessage
-					chat = { ...chat, chatMessages: updatedMessages }
+					const updatedMessages = [...currentChat.chatMessages]
+					updatedMessages[existingIndex] = chatMessage
+					chat = { ...currentChat, chatMessages: updatedMessages }
 				} else {
 					// Add new message and maintain chronological order
 					const updatedMessages = [
-						...chat.chatMessages,
-						msg.chatMessage
+						...currentChat.chatMessages,
+						chatMessage
 					]
 					chat = {
-						...chat,
+						...currentChat,
 						chatMessages: updatedMessages.sort(
 							(a, b) => a.id - b.id
 						)
@@ -1276,8 +1286,8 @@
 				{#snippet GeneratingAnimationComponent()}
 					{@const character = props.getMessageCharacter(props.msg)}
 					{@const speakerName = props.msg.isNarratorResponse
-						? (props.msg.metadata as any)?.narratorName || "Narrator"
-						: character?.nickname || character?.name || "User"}
+						? props.msg.metadata?.narratorName || "Narrator"
+						: resolveCharacterName(character, "User")}
 					<GeneratingAnimation text={`${speakerName} is typing`} />
 				{/snippet}
 				{#snippet messageControls(msg)}
@@ -1342,7 +1352,7 @@
 							onAbortMessage={props.onAbortMessage}
 							onBranchMessage={props.onBranchMessage}
 							onStartSummarization={summarizationEnabled ? enterSummarizationMode : undefined}
-							debugMeta={systemSettingsCtx.settings?.contextDebuggingEnabled ? ((msg as any).debugMeta ?? null) : null}
+							debugMeta={systemSettingsCtx.settings?.contextDebuggingEnabled ? (msg.debugMeta ?? null) : null}
 							onShowDebugMeta={systemSettingsCtx.settings?.contextDebuggingEnabled
 								? (meta: any) => {
 									draftCompiledPrompt = {
@@ -1448,7 +1458,7 @@
 					{currentUserPersona}
 					{userPersonasInChat}
 					onSwitchPersona={switchPersona}
-					{chat}
+					chat={chat ?? undefined}
 					{lastMessage}
 					{editChatMessage}
 					{isGuest}
@@ -1507,7 +1517,7 @@
 		exitSummarizationMode()
 	}}
 	onLorebookSet={handleLorebookSet}
-	chatCharacters={(chat?.chatCharacters ?? []).map(cc => ({ type: "character" as const, id: cc.character.id, name: (cc.character as any).nickname || cc.character.name }))}
+	chatCharacters={(chat?.chatCharacters ?? []).map(cc => ({ type: "character" as const, id: cc.character.id, name: resolveCharacterName(cc.character, cc.character.name) }))}
 	chatPersonas={(chat?.chatPersonas ?? []).map(cp => ({ type: "persona" as const, id: cp.persona.id, name: cp.persona.name }))}
 	hasSceneMessageGap={hasSceneGap}
 />
@@ -1562,14 +1572,14 @@
 			</button>
 		</header>
 
-		{#if draftCompiledPrompt}
+		{#if draftCompiledPrompt?.meta}
 			{@const rag = draftCompiledPrompt.meta.rag}
 			{@const tokens = draftCompiledPrompt.meta.tokenCounts}
 			{@const msgs = draftCompiledPrompt.meta.chatMessages}
 			{@const src = draftCompiledPrompt.meta.sources}
 			{@const tokenPct = Math.min(100, Math.round((tokens.total / tokens.limit) * 100))}
 			{@const truncReason = draftCompiledPrompt.meta.truncationReason}
-			{@const ragScores = rag?.scores}
+			{@const ragScores = rag?.used ? rag.scores : undefined}
 			{@const msgScoreMin = ragScores?.messageScores?.length ? Math.min(...ragScores.messageScores) : null}
 			{@const msgScoreMax = ragScores?.messageScores?.length ? Math.max(...ragScores.messageScores) : null}
 			{@const msgScoreAvg = ragScores?.messageScores?.length ? ragScores.messageScores.reduce((a, b) => a + b, 0) / ragScores.messageScores.length : null}
@@ -1580,12 +1590,12 @@
 			<div class="min-h-0 flex-1 overflow-y-auto space-y-4 pr-1">
 				<!-- ── Token Budget ──────────────────────────────────────────────── -->
 				<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
-					<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-500">Token Budget</h3>
+					<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-700-300">Token Budget</h3>
 					<div class="flex items-center justify-between text-sm">
 						<span class:text-error-500={contextExceeded} class:text-success-500={!contextExceeded}>
 							{tokens.total.toLocaleString()} / {tokens.limit.toLocaleString()} tokens
 						</span>
-						<span class="text-surface-500 text-xs">{tokenPct}%</span>
+						<span class="text-surface-700-300 text-xs">{tokenPct}%</span>
 					</div>
 					<div class="bg-surface-300-700 h-2 w-full overflow-hidden rounded-full">
 						<div
@@ -1593,7 +1603,7 @@
 							style="width: {tokenPct}%"
 						></div>
 					</div>
-					<div class="flex flex-wrap gap-4 text-xs text-surface-500">
+					<div class="flex flex-wrap gap-4 text-xs text-surface-700-300">
 						<span>Format: <span class="text-surface-300-700">{draftCompiledPrompt.meta.promptFormat || "—"}</span></span>
 						{#if draftCompiledPrompt.meta.templateName}
 							<span>Template: <span class="text-surface-300-700">{draftCompiledPrompt.meta.templateName}</span></span>
@@ -1616,9 +1626,9 @@
 
 				<!-- ── Messages ─────────────────────────────────────────────────── -->
 				<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
-					<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-500">Messages</h3>
+					<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-700-300">Messages</h3>
 					<div class="flex items-baseline gap-2 text-sm">
-						<span><span class="font-medium">{msgs.included}</span><span class="text-surface-500"> / {msgs.total} included</span></span>
+						<span><span class="font-medium">{msgs.included}</span><span class="text-surface-700-300"> / {msgs.total} included</span></span>
 						{#if msgs.total > msgs.included}
 							<span class="text-warning-400 text-xs">{msgs.total - msgs.included} excluded</span>
 						{/if}
@@ -1627,35 +1637,35 @@
 						<div class="grid grid-cols-3 gap-2 text-xs">
 							<div class="bg-surface-300-700 rounded p-2 text-center">
 								<div class="font-semibold">{rag.messages.guaranteed}</div>
-								<div class="text-surface-500">Guaranteed</div>
+								<div class="text-surface-700-300">Guaranteed</div>
 							</div>
 							<div class="bg-surface-300-700 rounded p-2 text-center">
 								<div class="font-semibold text-primary-400">{rag.messages.ragOlder}</div>
-								<div class="text-surface-500">RAG recalled</div>
+								<div class="text-surface-700-300">RAG recalled</div>
 							</div>
 							<div class="bg-surface-300-700 rounded p-2 text-center">
 								<div class="font-semibold">{rag.messages.filledIn}</div>
-								<div class="text-surface-500">Fill-in</div>
+								<div class="text-surface-700-300">Fill-in</div>
 							</div>
 						</div>
 					{:else if rag?.used === false}
 						<div class="grid grid-cols-3 gap-2 text-xs">
 							<div class="bg-surface-300-700 rounded p-2 text-center">
 								<div class="font-semibold">{rag.messages.guaranteed}</div>
-								<div class="text-surface-500">Guaranteed</div>
+								<div class="text-surface-700-300">Guaranteed</div>
 							</div>
 							<div class="bg-surface-300-700 rounded p-2 text-center">
 								<div class="font-semibold">{rag.messages.filledIn}</div>
-								<div class="text-surface-500">Scored fill</div>
+								<div class="text-surface-700-300">Scored fill</div>
 							</div>
 							<div class="bg-surface-300-700 rounded p-2 text-center">
 								<div class="font-semibold text-surface-400">{rag.messages.budget}</div>
-								<div class="text-surface-500">Budget</div>
+								<div class="text-surface-700-300">Budget</div>
 							</div>
 						</div>
 					{/if}
 					{#if msgs.excludedIds?.length > 0}
-						<p class="text-surface-500 text-xs">Excluded message IDs: {msgs.excludedIds.join(", ")}</p>
+						<p class="text-surface-700-300 text-xs">Excluded message IDs: {msgs.excludedIds.join(", ")}</p>
 					{/if}
 				</section>
 
@@ -1665,42 +1675,42 @@
 					{@const cl = rag.lore.characterLore}
 					{@const hi = rag.lore.history}
 					<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
-						<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-500">Lore & Graph</h3>
+						<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-700-300">Lore & Graph</h3>
 						<div class="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
 							<div class="bg-surface-300-700 rounded p-2">
 								<div class="text-surface-400 mb-1">World Lore</div>
 								{#if wl.pinned + wl.rag > 0}
 									<div class="font-medium">{wl.pinned + wl.rag} included</div>
-									<div class="text-surface-500">{wl.pinned} pinned · {wl.rag} RAG</div>
+									<div class="text-surface-700-300">{wl.pinned} pinned · {wl.rag} RAG</div>
 								{:else}
-									<div class="text-surface-500">None</div>
+									<div class="text-surface-700-300">None</div>
 								{/if}
 							</div>
 							<div class="bg-surface-300-700 rounded p-2">
 								<div class="text-surface-400 mb-1">Char Lore</div>
 								{#if cl.pinned + cl.rag > 0}
 									<div class="font-medium">{cl.pinned + cl.rag} included</div>
-									<div class="text-surface-500">{cl.pinned} pinned · {cl.rag} RAG</div>
+									<div class="text-surface-700-300">{cl.pinned} pinned · {cl.rag} RAG</div>
 								{:else}
-									<div class="text-surface-500">None</div>
+									<div class="text-surface-700-300">None</div>
 								{/if}
 							</div>
 							<div class="bg-surface-300-700 rounded p-2">
 								<div class="text-surface-400 mb-1">History</div>
 								{#if hi.pinned + hi.rag > 0}
 									<div class="font-medium">{hi.pinned + hi.rag} included</div>
-									<div class="text-surface-500">{hi.pinned} pinned · {hi.rag} RAG</div>
+									<div class="text-surface-700-300">{hi.pinned} pinned · {hi.rag} RAG</div>
 								{:else}
-									<div class="text-surface-500">None</div>
+									<div class="text-surface-700-300">None</div>
 								{/if}
 							</div>
 							<div class="bg-surface-300-700 rounded p-2">
 								<div class="text-surface-400 mb-1">Graph Pairs</div>
 								{#if rag.graphPairs > 0}
 									<div class="font-medium text-primary-400">{rag.graphPairs} pairs</div>
-									<div class="text-surface-500">relationship context</div>
+									<div class="text-surface-700-300">relationship context</div>
 								{:else}
-									<div class="text-surface-500">None matched</div>
+									<div class="text-surface-700-300">None matched</div>
 								{/if}
 							</div>
 						</div>
@@ -1710,44 +1720,44 @@
 					{@const cl = rag.lore.characterLore}
 					{@const hi = rag.lore.history}
 					<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
-						<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-500">Lore</h3>
+						<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-700-300">Lore</h3>
 						<div class="grid grid-cols-3 gap-2 text-xs">
 							<div class="bg-surface-300-700 rounded p-2">
 								<div class="text-surface-400 mb-1">World Lore</div>
 								{#if wl.included > 0}
 									<div class="font-medium">{wl.included} / {wl.budget}</div>
-									<div class="text-surface-500">{wl.pinned} pinned · top {wl.topScore.toFixed(2)}</div>
+									<div class="text-surface-700-300">{wl.pinned} pinned · top {wl.topScore.toFixed(2)}</div>
 								{:else}
-									<div class="text-surface-500">None</div>
+									<div class="text-surface-700-300">None</div>
 								{/if}
 							</div>
 							<div class="bg-surface-300-700 rounded p-2">
 								<div class="text-surface-400 mb-1">Char Lore</div>
 								{#if cl.included > 0}
 									<div class="font-medium">{cl.included} / {cl.budget}</div>
-									<div class="text-surface-500">{cl.pinned} pinned · top {cl.topScore.toFixed(2)}</div>
+									<div class="text-surface-700-300">{cl.pinned} pinned · top {cl.topScore.toFixed(2)}</div>
 								{:else}
-									<div class="text-surface-500">None</div>
+									<div class="text-surface-700-300">None</div>
 								{/if}
 							</div>
 							<div class="bg-surface-300-700 rounded p-2">
 								<div class="text-surface-400 mb-1">History</div>
 								{#if hi.included > 0}
 									<div class="font-medium">{hi.included} / {hi.budget}</div>
-									<div class="text-surface-500">{hi.pinned} pinned · top {hi.topScore.toFixed(2)}</div>
+									<div class="text-surface-700-300">{hi.pinned} pinned · top {hi.topScore.toFixed(2)}</div>
 								{:else}
-									<div class="text-surface-500">None</div>
+									<div class="text-surface-700-300">None</div>
 								{/if}
 							</div>
 						</div>
 						{#if rag.entries.length > 0}
 							<div class="space-y-1 pt-1">
-								<div class="text-xs text-surface-500 font-medium">Top scored entries</div>
+								<div class="text-xs text-surface-700-300 font-medium">Top scored entries</div>
 								{#each rag.entries.slice(0, 8) as entry}
 									<div class="flex items-center justify-between gap-2 text-xs">
 										<span class="truncate text-surface-300-700">{entry.name || entry.type}</span>
-										<span class="shrink-0 font-mono text-surface-500">{entry.score.total.toFixed(3)}</span>
-										<span class="shrink-0 rounded px-1 text-[10px] {entry.score.includedReason.startsWith('filled') || entry.score.includedReason.startsWith('reserved') ? 'bg-success-500/20 text-success-400' : 'bg-surface-400/20 text-surface-500'}">{entry.score.includedReason.replace(/_/g, " ")}</span>
+										<span class="shrink-0 font-mono text-surface-700-300">{entry.score.total.toFixed(3)}</span>
+										<span class="shrink-0 rounded px-1 text-[10px] {entry.score.includedReason.startsWith('filled') || entry.score.includedReason.startsWith('reserved') ? 'bg-success-500/20 text-success-400' : 'bg-surface-400/20 text-surface-700-300'}">{entry.score.includedReason.replace(/_/g, " ")}</span>
 									</div>
 								{/each}
 							</div>
@@ -1758,34 +1768,34 @@
 				<!-- ── RAG Retrieval Scores ──────────────────────────────────────── -->
 				{#if ragScores}
 					<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
-						<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-500">RAG Retrieval Scores</h3>
+						<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-700-300">RAG Retrieval Scores</h3>
 						<div class="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
 							<div class="bg-surface-300-700 rounded p-2">
 								<div class="text-surface-400 mb-1">Threshold</div>
 								<div class="font-medium font-mono">{ragScores.thresholdUsed.toFixed(3)}</div>
-								<div class="text-surface-500">adaptive cutoff</div>
+								<div class="text-surface-700-300">adaptive cutoff</div>
 							</div>
 							<div class="bg-surface-300-700 rounded p-2">
 								<div class="text-surface-400 mb-1">Query Window</div>
 								<div class="font-medium">{ragScores.queryMessageCount}</div>
-								<div class="text-surface-500">messages embedded</div>
+								<div class="text-surface-700-300">messages embedded</div>
 							</div>
 							<div class="bg-surface-300-700 rounded p-2">
 								<div class="text-surface-400 mb-1">Msg Scores</div>
 								{#if msgScoreMin !== null}
 									<div class="font-medium font-mono">{msgScoreMin.toFixed(3)} – {msgScoreMax?.toFixed(3)}</div>
-									<div class="text-surface-500">avg {msgScoreAvg?.toFixed(3)} · {ragScores.messageScores.length} retrieved</div>
+									<div class="text-surface-700-300">avg {msgScoreAvg?.toFixed(3)} · {ragScores.messageScores.length} retrieved</div>
 								{:else}
-									<div class="text-surface-500">None retrieved</div>
+									<div class="text-surface-700-300">None retrieved</div>
 								{/if}
 							</div>
 							<div class="bg-surface-300-700 rounded p-2">
 								<div class="text-surface-400 mb-1">Lore Scores</div>
 								{#if loreScoreMin !== null}
 									<div class="font-medium font-mono">{loreScoreMin.toFixed(3)} – {loreScoreMax?.toFixed(3)}</div>
-									<div class="text-surface-500">avg {loreScoreAvg?.toFixed(3)} · {ragScores.loreScores.length} retrieved</div>
+									<div class="text-surface-700-300">avg {loreScoreAvg?.toFixed(3)} · {ragScores.loreScores.length} retrieved</div>
 								{:else}
-									<div class="text-surface-500">None retrieved</div>
+									<div class="text-surface-700-300">None retrieved</div>
 								{/if}
 							</div>
 						</div>
@@ -1794,7 +1804,7 @@
 							<div class="space-y-1.5 pt-1">
 								{#if ragScores.messageScores.length > 0}
 									<div class="flex items-center gap-2 text-xs">
-										<span class="w-16 shrink-0 text-surface-500">Messages</span>
+										<span class="w-16 shrink-0 text-surface-700-300">Messages</span>
 										<div class="flex h-3 flex-1 gap-px overflow-hidden rounded">
 											{#each [...ragScores.messageScores].sort((a, b) => b - a) as score}
 												<div
@@ -1804,12 +1814,12 @@
 												></div>
 											{/each}
 										</div>
-										<span class="w-10 shrink-0 text-right text-surface-500">{ragScores.messageScores.length}</span>
+										<span class="w-10 shrink-0 text-right text-surface-700-300">{ragScores.messageScores.length}</span>
 									</div>
 								{/if}
 								{#if ragScores.loreScores.length > 0}
 									<div class="flex items-center gap-2 text-xs">
-										<span class="w-16 shrink-0 text-surface-500">Lore</span>
+										<span class="w-16 shrink-0 text-surface-700-300">Lore</span>
 										<div class="flex h-3 flex-1 gap-px overflow-hidden rounded">
 											{#each [...ragScores.loreScores].sort((a, b) => b - a) as score}
 												<div
@@ -1819,7 +1829,7 @@
 												></div>
 											{/each}
 										</div>
-										<span class="w-10 shrink-0 text-right text-surface-500">{ragScores.loreScores.length}</span>
+										<span class="w-10 shrink-0 text-right text-surface-700-300">{ragScores.loreScores.length}</span>
 									</div>
 								{/if}
 							</div>
@@ -1829,7 +1839,7 @@
 
 				<!-- ── Sources ───────────────────────────────────────────────────── -->
 				<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
-					<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-500">Sources</h3>
+					<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-700-300">Sources</h3>
 					<div class="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
 						<div>
 							<p class="text-surface-400 mb-1 text-xs">Characters</p>
@@ -1837,13 +1847,13 @@
 								<ul class="space-y-0.5">
 									{#each src.characters as char}
 										<li class="flex items-center gap-1">
-											<Icons.User size={12} class="text-surface-500 shrink-0" />
+											<Icons.User size={12} class="text-surface-700-300 shrink-0" />
 											<span class="truncate text-xs">{char.name}{char.nickname ? ` (${char.nickname})` : ""}</span>
 										</li>
 									{/each}
 								</ul>
 							{:else}
-								<p class="text-surface-500 text-xs">None</p>
+								<p class="text-surface-700-300 text-xs">None</p>
 							{/if}
 						</div>
 						<div>
@@ -1852,13 +1862,13 @@
 								<ul class="space-y-0.5">
 									{#each src.personas as persona}
 										<li class="flex items-center gap-1">
-											<Icons.User2 size={12} class="text-surface-500 shrink-0" />
+											<Icons.User2 size={12} class="text-surface-700-300 shrink-0" />
 											<span class="truncate text-xs">{persona.name}</span>
 										</li>
 									{/each}
 								</ul>
 							{:else}
-								<p class="text-surface-500 text-xs">None</p>
+								<p class="text-surface-700-300 text-xs">None</p>
 							{/if}
 						</div>
 						<div>
@@ -1870,7 +1880,7 @@
 
 				<!-- ── Prompt Preview ────────────────────────────────────────────── -->
 				<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
-					<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-500">Prompt Preview</h3>
+					<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-700-300">Prompt Preview</h3>
 					{#if draftCompiledPrompt.messages && draftCompiledPrompt.messages.length > 0}
 						<!-- Chat format: render each message block -->
 						<div class="max-h-96 overflow-y-auto space-y-2">
@@ -1879,7 +1889,7 @@
 									<div class="flex items-center gap-2 border-b border-inherit px-2 py-1">
 										<span class="text-xs font-semibold uppercase tracking-wide {msg.role === 'system' ? 'text-warning-400' : msg.role === 'assistant' ? 'text-primary-400' : 'text-surface-400'}">{msg.role}</span>
 										{#if msg.name}
-											<span class="text-surface-500 text-xs">({msg.name})</span>
+											<span class="text-surface-700-300 text-xs">({msg.name})</span>
 										{/if}
 										<span class="ml-auto text-surface-600 text-xs">#{i + 1}</span>
 									</div>
@@ -1891,12 +1901,12 @@
 						<!-- Raw text format -->
 						<pre class="max-h-96 overflow-y-auto whitespace-pre-wrap rounded bg-surface-300-700 p-2 text-xs leading-relaxed">{draftCompiledPrompt.prompt}</pre>
 					{:else}
-						<p class="text-surface-500 text-xs">No prompt content available.</p>
+						<p class="text-surface-700-300 text-xs">No prompt content available.</p>
 					{/if}
 				</section>
 			</div>
 		{:else}
-			<div class="text-surface-500 py-8 text-center text-sm">No compiled prompt data available.</div>
+			<div class="text-surface-700-300 py-8 text-center text-sm">No compiled prompt data available.</div>
 		{/if}
 
 		<footer class="flex shrink-0 justify-end gap-4 pt-2">
@@ -1938,7 +1948,7 @@
 			</div>
 			<div class="flex-1 text-left">
 				<div class="font-semibold">{narratorName}</div>
-				<div class="text-surface-500 group-hover:text-surface-800-200 text-xs">
+				<div class="text-surface-700-300 group-hover:text-surface-800-200 text-xs">
 					Narrate the environment, atmosphere, or side characters instead
 				</div>
 			</div>
@@ -1963,7 +1973,7 @@
 							.includes(s) || c.creatorNotes
 							?.toLowerCase()
 							.includes(s)
-				}) as any[] as typeof chat.chatCharacters as filtered}
+				}) as filtered}
 					<div class="flex p-1 lg:basis-1/2">
 						<button
 							class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
@@ -1985,7 +1995,7 @@
 										filtered.character.name}
 								</div>
 								<div
-									class="text-surface-500 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
+									class="text-surface-700-300 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
 								>
 									{filtered.character.creatorNotes ||
 										filtered.character.description ||
@@ -2030,7 +2040,7 @@
 	onOpenChange={(e) => (showBranchChatModal = e.open)}
 	onConfirm={onBranchChatConfirm}
 	onCancel={onBranchChatCancel}
-	initialTitle={chat?.name}
+	initialTitle={chat?.name ?? undefined}
 />
 
 {#snippet generatingAnimation()}
@@ -2136,23 +2146,23 @@
 			<Icons.Info size={14} />
 			Details
 		</button>
-		{#if draftCompiledPrompt}
+		{#if draftCompiledPrompt?.meta}
 			<div class="flex gap-4 text-xs">
 				<div class="flex flex-col gap-0.5">
-					<span class="text-surface-500 uppercase tracking-wide" style="font-size:0.65rem">Tokens</span>
+					<span class="text-surface-700-300 uppercase tracking-wide" style="font-size:0.65rem">Tokens</span>
 					<span class:text-error-500={contextExceeded} class="font-medium tabular-nums">
 						{draftCompiledPrompt.meta.tokenCounts.total} / {draftCompiledPrompt.meta.tokenCounts.limit}
 					</span>
 				</div>
 				<div class="flex flex-col gap-0.5">
-					<span class="text-surface-500 uppercase tracking-wide" style="font-size:0.65rem">Messages</span>
+					<span class="text-surface-700-300 uppercase tracking-wide" style="font-size:0.65rem">Messages</span>
 					<span class="font-medium tabular-nums">
 						{draftCompiledPrompt.meta.chatMessages.included} / {draftCompiledPrompt.meta.chatMessages.total}
 					</span>
 				</div>
 			</div>
 		{:else}
-			<span class="text-surface-500 text-xs">No statistics yet — send a message first.</span>
+			<span class="text-surface-700-300 text-xs">No statistics yet — send a message first.</span>
 		{/if}
 	</div>
 {/snippet}

@@ -25,7 +25,7 @@
 
 <div class={compact ? "max-h-[60vh] space-y-4 overflow-y-auto" : "space-y-6"}>
 	{#if grouped.length === 0}
-		<div class="text-surface-500 py-8 text-center">
+		<div class="text-surface-700-300 py-8 text-center">
 			<p>No matching documentation found.</p>
 		</div>
 	{:else}

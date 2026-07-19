@@ -491,7 +491,7 @@
 
 	function handleMetadataUpdated(data: {
 		chatId: number
-		metadata: string | object
+		metadata: Record<string, any>
 	}) {
 		console.log(
 			"[handleMetadataUpdated] Received metadata update for chat",
@@ -667,7 +667,7 @@
 	let showDeleteMessageModal = $state(false)
 	let pendingDeleteMessageId: number | null = $state(null)
 
-	function handleDeleteMessage(event: MouseEvent, msg: SelectChatMessage) {
+	function handleDeleteMessage(event: Event, msg: SelectChatMessage) {
 		if (!socket) return
 		pendingDeleteMessageId = msg.id
 		showDeleteMessageModal = true
@@ -686,14 +686,14 @@
 	}
 
 	function handleRegenerateMessage(
-		event: MouseEvent,
+		event: Event,
 		msg: SelectChatMessage
 	) {
 		if (!chat || !socket) return
 		socket.emit("chatMessages:regenerate", { id: msg.id })
 	}
 
-	function handleAbortMessage(event: MouseEvent, msg: SelectChatMessage) {
+	function handleAbortMessage(event: Event, msg: SelectChatMessage) {
 		if (!socket) return
 		socket.emit("chatMessages:cancel", { chatId: msg.chatId })
 	}
@@ -756,6 +756,7 @@
 				{canControlMessage}
 				{showSwipeControls}
 				{canSwipeRight}
+				{hasGeneratingMessage}
 				onSwipeLeft={noop}
 				onSwipeRight={noop}
 				onEditMessage={noop}
@@ -778,6 +779,7 @@
 						{canControlMessage}
 						{showSwipeControls}
 						{canSwipeRight}
+						{hasGeneratingMessage}
 						onSwipeLeft={noop}
 						onSwipeRight={noop}
 						onEditMessage={noop}

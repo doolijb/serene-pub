@@ -96,12 +96,12 @@
 							class="border-surface-300-700 max-h-[55vh] max-w-full shrink-0 rounded-lg border object-contain"
 						/>
 					{:else}
-						<div class="text-surface-500 py-12 text-sm">No image available.</div>
+						<div class="text-surface-700-300 py-12 text-sm">No image available.</div>
 					{/if}
 
 					<!-- Gallery strip -->
 					{#if loading}
-						<div class="text-surface-500 flex shrink-0 items-center gap-2 text-sm">
+						<div class="text-surface-700-300 flex shrink-0 items-center gap-2 text-sm">
 							<Icons.Loader size={16} class="animate-spin" />
 							Loading gallery…
 						</div>

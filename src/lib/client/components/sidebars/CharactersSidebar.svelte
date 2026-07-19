@@ -5,14 +5,16 @@
 	import { fade } from "svelte/transition"
 	import { FileUpload, Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
+	import { goto } from "$app/navigation"
 	import CharacterForm from "../characterForms/CharacterForm.svelte"
 	import CharacterCreator from "../modals/CharacterCreatorModal.svelte"
 	import CharacterUnsavedChangesModal from "../modals/CharacterUnsavedChangesModal.svelte"
-	import CharacterLibraryModal from "../modals/CharacterLibraryModal.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { createViewMode } from "$lib/client/utils/viewMode.svelte"
 	import type { SpecV3 } from "@lenml/char-card-reader"
 	import CharacterListItem from "../listItems/CharacterListItem.svelte"
 	import CharacterViewPanel from "../characterForms/CharacterViewPanel.svelte"
+	import CharacterCardItem from "../listItems/CharacterCardItem.svelte"
 	import EmptyState from "../EmptyState.svelte"
 
 	interface Props {
@@ -32,6 +34,7 @@
 
 	let characterList: any[] = $state([])
 	let isLoading = $state(true)
+	const viewMode = createViewMode("serene-pub:viewMode:charactersSidebar")
 	let search = $state("")
 	let characterId: number | undefined = $state()
 	let viewingId: number | undefined = $state()
@@ -43,7 +46,6 @@
 	let showUnsavedChangesModal = $state(false)
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
 	let showImportModal = $state(false)
-	let showLibraryModal = $state(false)
 	let onEditFormCancel: (() => void) | undefined = $state()
 	let importingLorebook: SpecV3.Lorebook | null = $state(null)
 	let importingLorebookCharacter: SelectCharacter | null = $state(null)
@@ -207,6 +209,18 @@
 		showImportModal = true
 	}
 
+	// Must match the `lg` breakpoint the desktop/mobile sidebar split
+	// actually switches at (see the matching comment in Layout.svelte's
+	// openPanel) — otherwise this sidebar (open as the mobile overlay) stays
+	// open behind the newly-navigated library page instead of closing.
+	async function handleBrowseClick() {
+		if (window.innerWidth < 1024) {
+			const closed = await panelsCtx.closePanel({ panel: "mobile" })
+			if (!closed) return
+		}
+		goto("/library/characters")
+	}
+
 	async function handleFileImport(details: FileAcceptDetails) {
 		if (!details.files || details.files.length === 0) return
 		const file = details.files[0]
@@ -267,7 +281,7 @@
 				description: `Character ${msg.character.nickname || msg.character.name} imported successfully.`
 			})
 			if (!!importingLorebook) {
-				importingLorebookCharacter = importingLorebook.character || null
+				importingLorebookCharacter = msg.character || null
 				showLorebookImportConfirmationModal = true
 			}
 		})
@@ -367,6 +381,16 @@
 				<Icons.Download size={16} aria-hidden="true" />
 				Import
 			</button>
+			<button
+				class="btn btn-sm preset-tonal-primary"
+				title="Browse Character Library"
+				onclick={handleBrowseClick}
+				aria-label="Browse the character library"
+				type="button"
+			>
+				<Icons.Library size={16} aria-hidden="true" />
+				Browse
+			</button>
 		</div>
 		<div class="mb-4 flex items-center gap-2">
 			<label for="character-search" class="sr-only">
@@ -375,31 +399,49 @@
 			<input
 				id="character-search"
 				type="text"
-				placeholder="Search characters, descriptions, tags..."
+				placeholder="Search"
 				class="input"
 				bind:value={search}
 				aria-label="Search characters by name, description, or tags"
 			/>
+			<div class="flex shrink-0 gap-1" role="group" aria-label="View mode">
+				<button
+					type="button"
+					class="btn btn-sm p-2 {viewMode.value === 'list' ? 'preset-filled-primary-500' : 'preset-tonal-surface'}"
+					onclick={() => (viewMode.value = "list")}
+					title="List view"
+					aria-label="List view"
+					aria-pressed={viewMode.value === "list"}
+				>
+					<Icons.List size={16} aria-hidden="true" />
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm p-2 {viewMode.value === 'cards' ? 'preset-filled-primary-500' : 'preset-tonal-surface'}"
+					onclick={() => (viewMode.value = "cards")}
+					title="Card view"
+					aria-label="Card view"
+					aria-pressed={viewMode.value === "cards"}
+				>
+					<Icons.LayoutGrid size={16} aria-hidden="true" />
+				</button>
+			</div>
 		</div>
-		<div
-			class="flex flex-col gap-2"
-			role="list"
-			aria-label="Characters list"
-		>
-			{#if isLoading}
-				<div class="flex items-center justify-center py-8">
-					<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
-				</div>
-			{:else if filteredCharacters.length === 0}
-				<EmptyState
-					icon={Icons.Users}
-					message={search
-						? `No characters found matching "${search}".`
-						: "No characters yet — create one to get started."}
-					ctaLabel={search ? undefined : "New Character"}
-					onCta={search ? undefined : () => (isCreating = true)}
-				/>
-			{:else}
+		{#if isLoading}
+			<div class="flex items-center justify-center py-8">
+				<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+			</div>
+		{:else if filteredCharacters.length === 0}
+			<EmptyState
+				icon={Icons.Users}
+				message={search
+					? `No characters found matching "${search}".`
+					: "No characters yet — create one to get started."}
+				ctaLabel={search ? undefined : "New Character"}
+				onCta={search ? undefined : () => (isCreating = true)}
+			/>
+		{:else if viewMode.value === "list"}
+			<div class="flex flex-col gap-2" role="list" aria-label="Characters list">
 				{#each filteredCharacters as c (c.id)}
 					<div animate:flip={{ duration: 200 }} out:fade={{ duration: 150 }}>
 						<CharacterListItem
@@ -411,8 +453,38 @@
 						/>
 					</div>
 				{/each}
-			{/if}
-		</div>
+			</div>
+		{:else}
+			<!--
+				The sidebar's grid needs to respond to ITS OWN width (a fixed
+				25% of viewport), not the viewport's width — a viewport-based
+				breakpoint (sm/md/lg) gives the same column count whether this
+				sidebar is 300px wide (a 1440px window) or 950px wide (a 4K
+				window), which is exactly why a single fixed min-width made
+				cards either too cramped on modest screens or too tiny (too
+				many columns) on very large ones. @container queries the
+				actual pixel width of the wrapper below instead.
+			-->
+			<div class="@container">
+				<div
+					class="grid grid-cols-1 gap-3 @md:grid-cols-2 @xl:grid-cols-3 @3xl:grid-cols-4 @5xl:grid-cols-5"
+					role="list"
+					aria-label="Characters list"
+				>
+					{#each filteredCharacters as c (c.id)}
+						<div animate:flip={{ duration: 200 }} out:fade={{ duration: 150 }}>
+							<CharacterCardItem
+								character={c}
+								onclick={handleCharacterClick}
+								onEdit={handleEditClick}
+								onDelete={handleDeleteClick}
+								contentTitle="Go to character chats"
+							/>
+						</div>
+					{/each}
+				</div>
+			</div>
+		{/if}
 	{/if}
 </div>
 
@@ -475,19 +547,7 @@
 				<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl w-[min(95vw,560px)]">
 					<div class="p-6">
 						<h2 class="mb-2 text-lg font-bold">Import Character</h2>
-						<p class="mb-4">Choose how to import:</p>
 						<div class="space-y-2">
-							<button
-								class="btn preset-filled-surface-400-600 w-full justify-start"
-								onclick={() => {
-									showImportModal = false
-									showLibraryModal = true
-								}}
-							>
-								<Icons.Library class="w-4 h-4" />
-								Search Library
-							</button>
-							<div class="divider">OR</div>
 							<div>
 								<p class="text-sm text-surface-600 dark:text-surface-400 mb-2">
 									Upload a file (PNG, APNG, JPEG, JPG, WEBP, JSON):
@@ -502,11 +562,11 @@
 									<FileUpload.Dropzone
 										class="border-surface-300-700 bg-surface-50-950 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
 									>
-										<Icons.Upload class="text-surface-500 h-8 w-8" />
+										<Icons.Upload class="text-surface-700-300 h-8 w-8" />
 										<FileUpload.Trigger class="btn btn-sm preset-filled-primary-500">
 											Browse
 										</FileUpload.Trigger>
-										<span class="text-surface-500 text-xs">or drag and drop</span>
+										<span class="text-surface-700-300 text-xs">or drag and drop</span>
 										<FileUpload.HiddenInput />
 									</FileUpload.Dropzone>
 								</FileUpload>
@@ -526,8 +586,6 @@
 		</Portal>
 	</Dialog>
 {/if}
-
-<CharacterLibraryModal bind:open={showLibraryModal} />
 
 {#if showLorebookImportConfirmationModal}
 	<Dialog

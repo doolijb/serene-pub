@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { onMount, onDestroy, getContext } from "svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
@@ -10,7 +10,7 @@
 	}
 	let { isManaged = false }: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	const koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
 	let showFullConfigModal = $state(false)
 
@@ -102,7 +102,7 @@
 			isLoadingPerf = false
 			perf = message
 		})
-		socket.on("koboldcpp:perf:error", (message: any) => {
+		socket.on("koboldcpp:perf:error", (message: Sockets.ErrorResponse) => {
 			isLoadingPerf = false
 			toaster.error({ title: "Failed to fetch performance stats", description: message.error })
 		})
@@ -129,7 +129,7 @@
 				starting = false
 				toaster.success({ title: "KoboldCPP starting…" })
 			})
-			socket.on("koboldcpp:startSubprocess:error", (msg: any) => {
+			socket.on("koboldcpp:startSubprocess:error", (msg: Sockets.ErrorResponse) => {
 				starting = false
 				toaster.error({ title: "Failed to start", description: msg?.error })
 			})
@@ -177,7 +177,7 @@
 					<span class="h-2.5 w-2.5 rounded-full {statusColors[subStatus?.status ?? 'stopped']}"></span>
 					<span class="text-sm font-medium capitalize">{subStatus?.status ?? "stopped"}</span>
 					{#if subStatus?.pid}
-						<span class="text-surface-500 text-xs">PID {subStatus.pid}</span>
+						<span class="text-surface-700-300 text-xs">PID {subStatus.pid}</span>
 					{/if}
 				</div>
 				<div class="flex gap-1.5">
@@ -206,18 +206,18 @@
 				<p class="text-error-500 text-xs">{subStatus.lastError}</p>
 			{/if}
 			{#if subStatus?.startedAt}
-				<p class="text-surface-500 text-xs">Started {new Date(subStatus.startedAt).toLocaleTimeString()}</p>
+				<p class="text-surface-700-300 text-xs">Started {new Date(subStatus.startedAt).toLocaleTimeString()}</p>
 			{/if}
 
 			<!-- Loaded model -->
 			<div>
-				<p class="text-surface-500 mb-1 text-xs font-semibold uppercase tracking-wide">Loaded model</p>
+				<p class="text-surface-700-300 mb-1 text-xs font-semibold uppercase tracking-wide">Loaded model</p>
 				<div class="flex items-center gap-2">
 					<Icons.Brain size={14} class="text-surface-400 shrink-0" />
 					<span class="min-w-0 flex-1 truncate text-xs">
 						{currentModel ?? "No model loaded"}
 						{#if currentModel && currentContext}
-							<span class="text-surface-500">· {currentContext.toLocaleString()} ctx</span>
+							<span class="text-surface-700-300">· {currentContext.toLocaleString()} ctx</span>
 						{/if}
 					</span>
 					{#if currentModel}
@@ -243,23 +243,23 @@
 			<!-- Loaded config -->
 			{#if currentModel}
 				<div>
-					<p class="text-surface-500 mb-1 text-xs font-semibold uppercase tracking-wide">Loaded config</p>
+					<p class="text-surface-700-300 mb-1 text-xs font-semibold uppercase tracking-wide">Loaded config</p>
 					{#if loadedConfig}
 						<div class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
 							<div class="flex justify-between gap-2">
-								<span class="text-surface-500">Context</span>
+								<span class="text-surface-700-300">Context</span>
 								<span class="font-mono">{loadedConfig.contextSize.toLocaleString()}</span>
 							</div>
 							<div class="flex justify-between gap-2">
-								<span class="text-surface-500">GPU layers</span>
+								<span class="text-surface-700-300">GPU layers</span>
 								<span class="font-mono">{loadedConfig.gpuLayers === -1 ? "auto" : loadedConfig.gpuLayers}</span>
 							</div>
 							<div class="flex justify-between gap-2">
-								<span class="text-surface-500">Batch size</span>
+								<span class="text-surface-700-300">Batch size</span>
 								<span class="font-mono">{loadedConfig.batchSize}</span>
 							</div>
 							<div class="flex justify-between gap-2">
-								<span class="text-surface-500">Flash attn</span>
+								<span class="text-surface-700-300">Flash attn</span>
 								<span class="font-mono">{loadedConfig.flashAttention ? "on" : "off"}</span>
 							</div>
 						</div>
@@ -271,7 +271,7 @@
 							View Full Config
 						</button>
 					{:else}
-						<p class="text-surface-500 text-xs italic">
+						<p class="text-surface-700-300 text-xs italic">
 							Unknown — the server restarted since this model was loaded. Reload it to see its config here.
 						</p>
 					{/if}
@@ -281,10 +281,10 @@
 			<!-- Binary info -->
 			{#if koboldCppSettingsCtx.settings?.koboldCppManagedBinaryVariant}
 				<div>
-					<p class="text-surface-500 mb-1 text-xs font-semibold uppercase tracking-wide">Binary</p>
+					<p class="text-surface-700-300 mb-1 text-xs font-semibold uppercase tracking-wide">Binary</p>
 					<p class="text-xs">{koboldCppSettingsCtx.settings.koboldCppManagedBinaryVariant}</p>
 					{#if koboldCppSettingsCtx.settings.koboldCppManagedBinaryDir}
-						<p class="text-surface-500 text-xs">{koboldCppSettingsCtx.settings.koboldCppManagedBinaryDir}</p>
+						<p class="text-surface-700-300 text-xs">{koboldCppSettingsCtx.settings.koboldCppManagedBinaryDir}</p>
 					{/if}
 				</div>
 			{/if}
@@ -393,7 +393,7 @@
 					<Icons.FileText class="text-primary-500 h-5 w-5 shrink-0" />
 					<h2 class="text-lg font-bold">Loaded Config</h2>
 				</header>
-				<p class="text-surface-500 text-xs">
+				<p class="text-surface-700-300 text-xs">
 					The exact .kcpps config sent to KoboldCPP when this model was loaded.
 				</p>
 				<pre class="bg-surface-200-800 min-h-0 flex-1 overflow-auto rounded-lg p-3 text-xs">{loadedConfig?.rawConfigJson ?? ""}</pre>

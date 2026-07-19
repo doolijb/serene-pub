@@ -157,19 +157,19 @@
 {#snippet previewBlock()}
 	{#if genPartial.content || genPartial.raw}
 		<div class="space-y-1">
-			<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">
+			<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">
 				{genPhase === "synthesizing" ? "Synthesizing" : `Draft ${genBatch}`}
 			</p>
 			<div class="bg-surface-200-800 rounded-lg p-3 text-sm">
 				{#if genPartial.content}
 					<p class="text-surface-700-300 line-clamp-6 whitespace-pre-wrap">{genPartial.content}</p>
 				{:else if genPartial.raw}
-					<p class="text-surface-500 line-clamp-6 whitespace-pre-wrap text-xs italic">{genPartial.raw}</p>
+					<p class="text-surface-700-300 line-clamp-6 whitespace-pre-wrap text-xs italic">{genPartial.raw}</p>
 				{/if}
 			</div>
 		</div>
 	{:else}
-		<div class="text-surface-500 py-4 text-center text-sm">
+		<div class="text-surface-700-300 py-4 text-center text-sm">
 			<div class="bg-primary-500 mx-auto mb-2 h-2 w-2 animate-pulse rounded-full"></div>
 			Waiting for synthesis…
 		</div>
@@ -180,7 +180,7 @@
 	<div class="space-y-4">
 		{#if hasExistingContent && hasDiff}
 			<div class="space-y-1">
-				<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">Changes</p>
+				<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Changes</p>
 				<div class="bg-surface-200-800 rounded-lg p-3 text-sm leading-relaxed whitespace-pre-wrap">
 					{#each diffParts as part}
 						{#if part.removed}

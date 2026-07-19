@@ -551,7 +551,7 @@
 				<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
 					<div class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap">
 						{#if filteredCharacters.length === 0}
-							<div class="text-surface-500 w-full py-8 text-center">
+							<div class="text-surface-700-300 w-full py-8 text-center">
 								{#if isLoading}
 									Loading characters...
 								{:else if availableCharacters.length === 0}
@@ -579,7 +579,7 @@
 											{character.nickname || character.name}
 										</div>
 										<div
-											class="text-surface-500 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
+											class="text-surface-700-300 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
 										>
 											{character.creatorNotes ||
 												character.description ||

@@ -10,7 +10,7 @@
 	import KoboldCppDownloadsTab from "../koboldcppManager/KoboldCppDownloadsTab.svelte"
 	import KoboldCppSetupScreen from "../koboldcppManager/KoboldCppSetupScreen.svelte"
 	import KoboldCppBinaryVariantPicker from "../koboldcppManager/KoboldCppBinaryVariantPicker.svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	interface Props {
@@ -19,7 +19,7 @@
 
 	let { onclose = $bindable() }: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	const koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
 
 	let activeTab = $state("models")
@@ -150,7 +150,7 @@
 			<div class="text-center">
 				<Icons.AlertCircle class="text-warning-500 mx-auto mb-4 h-12 w-12" />
 				<h3 class="mb-2 text-lg font-semibold">KoboldCPP Manager Disabled</h3>
-				<p class="text-surface-500 text-sm">Enable KoboldCPP Manager in Settings to use this feature.</p>
+				<p class="text-surface-700-300 text-sm">Enable KoboldCPP Manager in Settings to use this feature.</p>
 			</div>
 		</div>
 
@@ -208,7 +208,7 @@
 			</button>
 		</div>
 		<div class="mt-6 flex flex-col gap-4 px-4">
-			<p class="text-surface-500 text-sm">
+			<p class="text-surface-700-300 text-sm">
 				Enter the URL of your running KoboldCPP instance.
 			</p>
 			<div>
@@ -253,7 +253,7 @@
 				</button>
 			</div>
 			<div class="border-surface-300-700 mt-2 border-t pt-4">
-				<p class="text-surface-500 mb-2 text-xs">Want Serene Pub to manage KoboldCPP for you?</p>
+				<p class="text-surface-700-300 mb-2 text-xs">Want Serene Pub to manage KoboldCPP for you?</p>
 				<button class="btn btn-sm preset-tonal-primary w-full" onclick={handleReset}>
 					<Icons.Bot size={14} />
 					Switch to Managed Mode

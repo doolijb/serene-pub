@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { getContext, onMount, onDestroy } from "svelte"
 
@@ -10,7 +10,7 @@
 
 	let { onDownloadStarted }: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	const koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
 
 	type Variant = Sockets.KoboldCpp.ListBinaryVariants.BinaryVariant
@@ -107,7 +107,7 @@
 				if (!destDir) destDir = msg.defaultDir
 			}
 		)
-		socket.on("koboldcpp:listBinaryVariants:error", (msg: any) => {
+		socket.on("koboldcpp:listBinaryVariants:error", (msg: Sockets.ErrorResponse) => {
 			loading = false
 			error = msg?.error ?? "Failed to fetch releases"
 		})
@@ -140,7 +140,7 @@
 		<div>
 			<p class="text-sm font-semibold">Choose a KoboldCPP build</p>
 			{#if releaseTag}
-				<p class="text-surface-500 text-xs">Release: {releaseTag}</p>
+				<p class="text-surface-700-300 text-xs">Release: {releaseTag}</p>
 			{/if}
 		</div>
 	</div>
@@ -188,7 +188,7 @@
 			class="input w-full text-sm"
 			disabled={isDownloading}
 		/>
-		<p class="text-surface-500 mt-0.5 text-xs">
+		<p class="text-surface-700-300 mt-0.5 text-xs">
 			Where the KoboldCPP binary will be saved.{defaultDir ? ` Default: ${defaultDir}` : ""}
 		</p>
 	</div>
@@ -213,7 +213,7 @@
 						style="width: {Math.min(100, (download.downloaded / download.total) * 100).toFixed(1)}%"
 					></div>
 				</div>
-				<p class="text-surface-500 mt-1 text-xs">
+				<p class="text-surface-700-300 mt-1 text-xs">
 					{formatSize(download.downloaded)} / {formatSize(download.total)}
 				</p>
 			{/if}
@@ -243,7 +243,7 @@
 	{:else}
 		{#each sortedPlatforms as platform}
 			<div>
-				<p class="text-surface-500 mb-2 text-xs font-semibold uppercase tracking-wide">
+				<p class="text-surface-700-300 mb-2 text-xs font-semibold uppercase tracking-wide">
 					{platformLabel[platform] ?? platform}
 				</p>
 				<div class="flex flex-col gap-1.5">
@@ -263,7 +263,7 @@
 							></div>
 							<div class="min-w-0 flex-1">
 								<p class="text-xs font-medium">{variant.name}</p>
-								<p class="text-surface-500 text-xs">{variant.description}</p>
+								<p class="text-surface-700-300 text-xs">{variant.description}</p>
 							</div>
 							<span class="text-surface-400 shrink-0 text-xs">{formatSize(variant.sizeBytes)}</span>
 						</button>
@@ -275,7 +275,7 @@
 		{#if selected}
 			<div class="border-surface-300-700 mt-1 rounded-lg border p-3">
 				<p class="text-xs font-medium">Selected: <span class="text-primary-500">{selected.name}</span></p>
-				<p class="text-surface-500 text-xs">{selected.description}</p>
+				<p class="text-surface-700-300 text-xs">{selected.description}</p>
 			</div>
 		{/if}
 

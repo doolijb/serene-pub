@@ -1,6 +1,7 @@
 import {
 	BaseConnectionAdapter,
-	type AdapterExports
+	type AdapterExports,
+	type BasePromptChat
 } from "./BaseConnectionAdapter"
 import { type CompiledPrompt } from "../utils/promptBuilder"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
@@ -11,7 +12,7 @@ import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 import type {
 	ChatCompletionCreateParamsBase,
 	ChatCompletionMessageParam
-} from "../../../../node_modules/openai/src/resources/chat/completions/completions"
+} from "openai/resources/chat/completions/completions"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { openAISamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
@@ -36,13 +37,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		sampling: SelectSamplingConfig
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
-		chat: SelectChat & {
-			chatCharacters?: (SelectChatCharacter & {
-				character: SelectCharacter
-			})[]
-			chatPersonas?: (SelectChatPersona & { persona: SelectPersona })[]
-			chatMessages: SelectChatMessage[]
-		}
+		chat: BasePromptChat
 		currentCharacterId?: number | null
 		tokenCounter?: TokenCounters
 		tokenLimit?: number
@@ -128,9 +123,11 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		params["stop"] = this.connection?.extraJson?.prerenderPrompt
 			? StopStrings.get({
 				format: promptFormat,
-				characters: this.chat.chatCharacters?.map((cc) => cc.character),
-				personas: this.chat.chatPersonas?.map((cp) => cp.persona),
-				currentCharacterId: this.currentCharacterId
+				characters:
+					this.chat.chatCharacters?.map((cc) => cc.character) || [],
+				personas:
+					this.chat.chatPersonas?.map((cp) => cp.persona) || [],
+				currentCharacterId: this.currentCharacterId ?? undefined
 			}) || []
 			: []
 

@@ -24,7 +24,7 @@
 			<span class="text-surface-700-300 truncate text-sm font-medium">
 				{nextCharacter.nickname || nextCharacter.name}
 			</span>
-			<span class="text-surface-500 text-xs">ready to continue</span>
+			<span class="text-surface-700-300 text-xs">ready to continue</span>
 		</div>
 		<div class="flex shrink-0 gap-2">
 			<button

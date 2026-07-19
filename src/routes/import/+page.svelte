@@ -34,8 +34,13 @@
 	let isScanning = $state(false)
 	let isImporting = $state(false)
 	let scanResults = $state<{
-		characters: Array<{ filename: string; name: string; selected: boolean }>
-		personas: Array<{ name: string; selected: boolean }>
+		characters: Array<{
+			filename: string
+			name: string
+			selected: boolean
+			disabled?: boolean
+		}>
+		personas: Array<{ name: string; selected: boolean; disabled?: boolean }>
 		chats: Array<{
 			filename: string
 			name: string
@@ -53,7 +58,12 @@
 			disabled: boolean
 			disabledReason?: string
 		}>
-		lorebooks: Array<{ filename: string; name: string; selected: boolean }>
+		lorebooks: Array<{
+			filename: string
+			name: string
+			selected: boolean
+			disabled?: boolean
+		}>
 	} | null>(null)
 	let confirmImport = $state(false)
 	let importComplete = $state<{ message: string; errors?: string[] } | null>(
@@ -369,7 +379,7 @@
 		</button>
 		<div class="flex-1">
 			<h1 class="text-2xl font-bold">Import from SillyTavern</h1>
-			<p class="text-surface-500 mt-1 text-sm">
+			<p class="text-surface-700-300 mt-1 text-sm">
 				Import your characters, personas, chats, and lorebooks from
 				SillyTavern.
 			</p>
@@ -382,7 +392,7 @@
 			<div class="rounded p-6 text-center">
 				<Icons.CheckCircle size={48} class="text-success-500 mx-auto mb-4" />
 				<h2 class="mb-2 text-xl font-bold">Import Complete</h2>
-				<p class="text-surface-500 mb-4 text-sm">{importComplete.message}</p>
+				<p class="text-surface-700-300 mb-4 text-sm">{importComplete.message}</p>
 				{#if importComplete.errors?.length}
 					<div
 						class="bg-warning-200-800 border-warning-500 mb-4 rounded border-l-4 p-3 text-left"
@@ -485,7 +495,7 @@
 						: ""} uploaded only for what you select to import)
 				</p>
 			{/if}
-			<p class="text-surface-500 text-xs">
+			<p class="text-surface-700-300 text-xs">
 				Everything is read by your browser and uploaded — nothing is
 				read from the server's filesystem. Select your SillyTavern (or
 				SillyTavern-Launcher) folder. Requires a Chromium-based browser
@@ -563,7 +573,7 @@
 										toggleSelection("characters", index)}
 								/>
 								<span class="text-sm">{character.name}</span>
-								<span class="text-surface-500 ml-auto text-xs">
+								<span class="text-surface-700-300 ml-auto text-xs">
 									{character.filename}
 								</span>
 							</label>
@@ -638,7 +648,7 @@
 								/>
 								<div class="flex flex-1 flex-col">
 									<span class="text-sm">{chat.name}</span>
-									<span class="text-surface-500 text-xs">
+									<span class="text-surface-700-300 text-xs">
 										Character: {chat.characterNames.join(
 											", "
 										)}
@@ -687,7 +697,7 @@
 								/>
 								<div class="flex flex-1 flex-col">
 									<span class="text-sm">{chat.name}</span>
-									<span class="text-surface-500 text-xs">
+									<span class="text-surface-700-300 text-xs">
 										Members: {chat.memberNames.join(", ")}
 									</span>
 									{#if chat.disabledReason}
@@ -730,7 +740,7 @@
 										toggleSelection("lorebooks", index)}
 								/>
 								<span class="text-sm">{lorebook.name}</span>
-								<span class="text-surface-500 ml-auto text-xs">
+								<span class="text-surface-700-300 ml-auto text-xs">
 									{lorebook.filename}
 								</span>
 							</label>

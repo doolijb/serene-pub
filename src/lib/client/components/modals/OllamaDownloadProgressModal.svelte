@@ -101,7 +101,7 @@
 				</div>
 				<div>
 					<h2 class="h3 font-bold">Model Downloads</h2>
-					<p class="text-surface-500 text-sm">
+					<p class="text-surface-700-300 text-sm">
 						{Object.keys(downloadingQuants).length} model{Object.keys(
 							downloadingQuants
 						).length !== 1
@@ -183,7 +183,7 @@
 													class="flex items-center justify-between text-xs"
 												>
 													<span
-														class="text-surface-500 max-w-[60%] truncate font-mono"
+														class="text-surface-700-300 max-w-[60%] truncate font-mono"
 														title={fileName}
 													>
 														{fileName}
@@ -260,7 +260,7 @@
 		</article>
 		<footer class="border-surface-300-700 border-t pt-4">
 			<div
-				class="text-surface-500 flex items-center justify-between text-xs"
+				class="text-surface-700-300 flex items-center justify-between text-xs"
 			>
 				<!-- <div class="flex items-center gap-2">
 					<Icons.Info size={14} />

@@ -6,11 +6,9 @@ import { canViewCharacter, canViewPersona } from "$lib/server/utils/chatAccess"
 import { CharacterBook } from "@lenml/char-card-reader"
 import { mapLorebookEntryToWorldLoreEntry } from "$lib/server/utils/lorebookImportMapper"
 import type { Handler } from "$lib/shared/events"
-import type {
-	SelectTag,
-	SelectLorebookTag,
-	InsertHistoryEntry
-} from "$lib/server/db/types"
+// SelectTag/SelectLorebookTag/InsertHistoryEntry are declared globally in
+// $lib/server/db/types.d.ts (ambient `export global {}` block, same pattern
+// as the Sockets namespace) — no import needed/available for them.
 
 // Helper function to process tags for lorebook creation/update
 async function processLorebookTags(
@@ -135,7 +133,6 @@ export const lorebooksCreateHandler: Handler<
 	async handler(socket, params, emitToUser) {
 		try {
 			const userId = socket.user!.id
-			const tags = params.tags || []
 
 			const [newBook] = await db
 				.insert(schema.lorebooks)
@@ -144,11 +141,6 @@ export const lorebooksCreateHandler: Handler<
 					userId
 				})
 				.returning()
-
-			// Process tags after lorebook creation
-			if (tags.length > 0) {
-				await processLorebookTags(newBook.id, tags, userId)
-			}
 
 			// Refresh lorebook list
 			if (emitToUser) {
@@ -196,28 +188,26 @@ export const lorebooksGetHandler: Handler<
 			if (!book) {
 				const res: Sockets.Lorebooks.Get.Response = {
 					lorebook: null,
-					entries: []
+					worldLoreEntries: [],
+					characterLoreEntries: [],
+					historyEntries: []
 				}
 				emitToUser("lorebooks:get", res)
 				return res
 			}
 
 			// Transform lorebook tags to include tags as string array
+			const { lorebookTags, ...bookFields } = book
 			const bookWithTags = {
-				...book,
-				tags: book.lorebookTags?.map((lt) => lt.tag.name) || []
+				...bookFields,
+				tags: lorebookTags?.map((lt) => lt.tag.name) || []
 			}
 
-			// Combine all entries into one array
-			const allEntries = [
-				...book.worldLoreEntries,
-				...book.characterLoreEntries,
-				...book.historyEntries
-			]
-
 			const res: Sockets.Lorebooks.Get.Response = {
-				lorebook: bookWithTags as any,
-				entries: allEntries as any
+				lorebook: bookWithTags,
+				worldLoreEntries: book.worldLoreEntries,
+				characterLoreEntries: book.characterLoreEntries,
+				historyEntries: book.historyEntries
 			}
 			emitToUser("lorebooks:get", res)
 			return res
@@ -624,8 +614,8 @@ export const lorebookImportHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 
-		console.log("Importing lorebook data:", params.lorebookJson)
-		let card = CharacterBook.from_json(params.lorebookJson)
+		console.log("Importing lorebook data:", params.lorebookData)
+		let card = CharacterBook.from_json(params.lorebookData)
 
 		console.log("Importing lorebook data:", card)
 

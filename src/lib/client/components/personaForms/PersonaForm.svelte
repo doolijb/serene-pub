@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { onDestroy, onMount } from "svelte"
 	import { z } from "zod"
 	import PersonaUnsavedChangesModal from "../modals/PersonaUnsavedChangesModal.svelte"
@@ -15,9 +15,11 @@
 		summary: string
 		avatar: string
 		description: string
-		isDefault?: boolean
+		isDefault: boolean
 		position?: number
 		connections?: string
+		creator: string
+		category: string
 		tags: string[]
 		_avatarFile?: File | undefined
 		_avatar?: string
@@ -51,7 +53,7 @@
 
 	let hasChanges = $state(false)
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	// Tag-related state
 	let tagsList: SelectTag[] = $state([])
@@ -68,6 +70,8 @@
 		isDefault: false,
 		position: 0,
 		connections: "",
+		creator: "",
+		category: "",
 		tags: [],
 		_avatarFile: undefined,
 		_avatar: ""
@@ -82,6 +86,8 @@
 		isDefault: false,
 		position: 0,
 		connections: "",
+		creator: "",
+		category: "",
 		tags: [],
 		_avatarFile: undefined,
 		_avatar: ""
@@ -217,19 +223,24 @@
 		isSaving = true
 		socket.emit("personas:create", {
 			persona: newPersona,
-			avatarFile
+			// Socket.IO transparently marshals a browser File (a Blob
+			// subclass) to a Node Buffer on the server; the wire shape
+			// differs from the client-side value's compile-time type.
+			avatarFile: avatarFile as unknown as Buffer | undefined
 		})
 	}
 
 	function handleUpdate() {
 		const updatedPersona = { ...editPersonaData }
+		if (!updatedPersona.id) return
 		const avatarFile = updatedPersona._avatarFile
 		delete updatedPersona._avatarFile
 		delete updatedPersona._avatar
 		isSaving = true
 		socket.emit("personas:update", {
-			persona: updatedPersona,
-			avatarFile
+			persona: { ...updatedPersona, id: updatedPersona.id },
+			// See handleCreate() above re: File → Buffer wire conversion.
+			avatarFile: avatarFile as unknown as Buffer | undefined
 		})
 	}
 
@@ -292,7 +303,7 @@
 	})
 
 	// Define socket event handlers as named functions for proper cleanup
-	const handlePersonasCreate = (res: Sockets.CreatePersona.Response) => {
+	const handlePersonasCreate = (res: Sockets.Personas.Create.Response) => {
 		isSaving = false
 		if (res.persona) {
 			validationErrors = {} // Clear any validation errors on success
@@ -304,7 +315,7 @@
 		}
 	}
 
-	const handlePersonasUpdate = (res: Sockets.UpdatePersona.Response) => {
+	const handlePersonasUpdate = (res: Sockets.Personas.Update.Response) => {
 		isSaving = false
 		if (res.persona) {
 			validationErrors = {} // Clear any validation errors on success
@@ -316,9 +327,6 @@
 		}
 	}
 
-	// These aren't in the typed SocketEventMap (only their success variants
-	// are), so registered via the same `(socket as any).on(...)` cast
-	// pattern used elsewhere in the app for ad hoc error listeners.
 	const handlePersonasCreateError = (msg: Sockets.ErrorResponse) => {
 		isSaving = false
 		toaster.error({
@@ -335,7 +343,7 @@
 		})
 	}
 
-	const handleTagsList = (msg: any) => {
+	const handleTagsList = (msg: Sockets.Tags.List.Response) => {
 		tagsList = msg.tagsList || []
 	}
 
@@ -352,8 +360,13 @@
 				description: p.description ?? "",
 				isDefault: p.isDefault,
 				position: p.position ?? 0,
-				connections: (p as any).connections ?? "",
-				tags: (p as any).tags || [],
+				// "connections" has no backing column on the personas table
+				// (see schema.ts) and is never sent by "personas:get" — this
+				// field only ever gets its value from local UI state.
+				connections: "",
+				creator: p.creator ?? "",
+				category: p.category ?? "",
+				tags: p.tags || [],
 				_avatar: "",
 				_avatarFile: undefined
 			}
@@ -370,8 +383,8 @@
 		// Register socket event handlers
 		socket.on("personas:create", handlePersonasCreate)
 		socket.on("personas:update", handlePersonasUpdate)
-		;(socket as any).on("personas:create:error", handlePersonasCreateError)
-		;(socket as any).on("personas:update:error", handlePersonasUpdateError)
+		socket.on("personas:create:error", handlePersonasCreateError)
+		socket.on("personas:update:error", handlePersonasUpdateError)
 		socket.on("tags:list", handleTagsList)
 
 		// Load tags list
@@ -387,8 +400,8 @@
 		// Properly remove event handlers by passing the function references
 		socket.off("personas:create", handlePersonasCreate)
 		socket.off("personas:update", handlePersonasUpdate)
-		;(socket as any).off("personas:create:error", handlePersonasCreateError)
-		;(socket as any).off("personas:update:error", handlePersonasUpdateError)
+		socket.off("personas:create:error", handlePersonasCreateError)
+		socket.off("personas:update:error", handlePersonasUpdateError)
 		socket.off("personas:get", handlePersonasGet)
 		socket.off("tags:list", handleTagsList)
 
@@ -461,7 +474,7 @@
 							class="flex w-full flex-col items-center justify-center"
 						>
 							<svg
-								class="my-4 h-8 w-8 text-surface-500 dark:text-surface-400"
+								class="my-4 h-8 w-8 text-surface-700-300 dark:text-surface-400"
 								aria-hidden="true"
 								xmlns="http://www.w3.org/2000/svg"
 								fill="none"
@@ -630,7 +643,7 @@
 						placeholder="One or two sentences describing who this persona is…"
 						maxlength="200"
 					></textarea>
-					<p class="text-surface-500 text-right text-xs">
+					<p class="text-surface-700-300 text-right text-xs">
 						{editPersonaData.summary.length} / 200
 					</p>
 					<p class="text-surface-400 text-xs">Used as a concise graph node description. Not injected into chat context.</p>
@@ -683,6 +696,27 @@
 				</p>
 			{/if}
 		</fieldset>
+
+		<div class="flex flex-col gap-1">
+			<label class="font-semibold" for="personaCreator">Creator</label>
+			<input
+				id="personaCreator"
+				type="text"
+				bind:value={editPersonaData.creator}
+				class="input"
+				placeholder="Who made this persona?"
+			/>
+		</div>
+		<div class="flex flex-col gap-1">
+			<label class="font-semibold" for="personaCategory">Category</label>
+			<input
+				id="personaCategory"
+				type="text"
+				bind:value={editPersonaData.category}
+				class="input"
+				placeholder="e.g. Fantasy, Sci-Fi, Slice of Life"
+			/>
+		</div>
 
 		<!-- Tags Section -->
 		<fieldset class="flex flex-col gap-2">

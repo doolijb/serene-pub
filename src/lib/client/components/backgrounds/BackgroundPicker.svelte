@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { onMount, onDestroy } from "svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 
@@ -14,7 +14,7 @@
 	let { selectedPath = $bindable(), opacity = $bindable(), onchange }: Props =
 		$props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	let defaults = $state<string[]>([])
 	let uploads = $state<string[]>([])
@@ -63,7 +63,7 @@
 		isUploading = true
 		const buffer = await file.arrayBuffer()
 		socket.emit("userSettings:uploadBackground", {
-			backgroundFile: new Uint8Array(buffer) as any,
+			backgroundFile: new Uint8Array(buffer),
 			mimeType: file.type
 		})
 
@@ -122,7 +122,7 @@
 			}
 		)
 
-		socket.on("userSettings:uploadBackground:error", (_msg: any) => {
+		socket.on("userSettings:uploadBackground:error", (_msg) => {
 			isUploading = false
 			toaster.error({ title: "Upload failed" })
 		})

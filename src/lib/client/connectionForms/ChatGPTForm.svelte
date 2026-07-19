@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { onDestroy } from "svelte"
 	import { z } from "zod"
 
 	// Zod validation schema
@@ -54,17 +53,13 @@
 		}
 	}
 	$effect(() => {
-		function handleTest(msg) {
-			testResult = msg
+		function handleTest(msg: Sockets.Connections.Test.Response) {
+			testResult = { ok: msg.ok, error: msg.error ?? undefined }
 		}
 		socket.on("connections:test", handleTest)
 		return () => {
-			socket.off && socket.off("connections:test", handleTest)
+			socket.off("connections:test", handleTest)
 		}
-	})
-
-	onDestroy(() => {
-		socket.off && socket.off("testConnection", handleTest)
 	})
 </script>
 

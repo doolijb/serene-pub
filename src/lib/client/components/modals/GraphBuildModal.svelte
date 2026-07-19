@@ -232,7 +232,7 @@
 </script>
 
 {#snippet confirmBlock()}
-	<p class="text-surface-500 mt-1 text-sm">
+	<p class="text-surface-700-300 mt-1 text-sm">
 		{mode === "extend"
 			? "The LLM will process new scenes and add to your existing graph."
 			: "The LLM will process all summarised scenes and build a fresh graph."}
@@ -263,7 +263,7 @@
 		{#if (skippedSceneCount ?? 0) > 0}
 			<div class="flex items-center gap-3 rounded-lg border border-surface-300-700 bg-surface-200-800 p-3 text-sm">
 				<Icons.SkipForward size={16} class="text-surface-400 shrink-0" />
-				<span class="text-surface-500"><strong>{skippedSceneCount}</strong> scene{(skippedSceneCount ?? 0) === 1 ? "" : "s"} will be skipped — no summary yet</span>
+				<span class="text-surface-700-300"><strong>{skippedSceneCount}</strong> scene{(skippedSceneCount ?? 0) === 1 ? "" : "s"} will be skipped — no summary yet</span>
 			</div>
 		{/if}
 		{#if hasExistingContent}
@@ -289,20 +289,20 @@
 
 {#snippet previewBlock()}
 	{#if progressTotalScenes > 0}
-		<div class="text-surface-500 flex justify-between text-xs">
+		<div class="text-surface-700-300 flex justify-between text-xs">
 			<span>{progressCurrentSceneLabel ?? `Scene ${progressSceneIndex + 1}`} ({progressSceneIndex + 1} / {progressTotalScenes})</span>
 			<span>{progressNodesFound} nodes · {progressRelsFound} relationships</span>
 		</div>
 	{/if}
 	{#if progressCurrentPair}
 		<div class="mt-3 space-y-1">
-			<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">Extracting perspective</p>
+			<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Extracting perspective</p>
 			<div class="bg-surface-200-800 rounded-lg p-3 text-sm">
 				<p class="text-surface-700-300 font-mono text-xs">{progressCurrentPair}</p>
 			</div>
 		</div>
 	{:else}
-		<div class="text-surface-500 py-6 text-center text-sm">
+		<div class="text-surface-700-300 py-6 text-center text-sm">
 			<div class="bg-primary-500 mx-auto mb-2 h-2 w-2 animate-pulse rounded-full"></div>
 			Waiting for LLM…
 		</div>
@@ -310,13 +310,13 @@
 {/snippet}
 
 {#snippet reviewBlock()}
-	<p class="text-surface-500 -mt-1 mb-4 text-sm">{activeNodes.length} nodes · {activeRels.length} relationships</p>
+	<p class="text-surface-700-300 -mt-1 mb-4 text-sm">{activeNodes.length} nodes · {activeRels.length} relationships</p>
 
 	<!-- Nodes -->
 	<section class="mb-4 space-y-2">
-		<h3 class="text-surface-500 text-xs font-semibold uppercase tracking-wide">Nodes</h3>
+		<h3 class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Nodes</h3>
 		{#if proposalNodes.length === 0}
-			<p class="text-surface-500 text-sm italic">No new nodes extracted.</p>
+			<p class="text-surface-700-300 text-sm italic">No new nodes extracted.</p>
 		{/if}
 		{#each proposalNodes as node, i}
 			<div class="bg-surface-200-800 rounded-lg border transition-opacity {node._deleted ? 'opacity-40' : 'border-surface-300-700'}">
@@ -349,17 +349,17 @@
 				{#if expandedNodeIdx === i && !node._deleted}
 					<div class="border-surface-300-700 border-t px-3 py-2 space-y-2">
 						<div class="space-y-1">
-							<p class="text-surface-500 text-xs font-semibold uppercase">Name</p>
+							<p class="text-surface-700-300 text-xs font-semibold uppercase">Name</p>
 							<input class="input text-sm" type="text" bind:value={proposalNodes[i].name} />
 						</div>
 						<div class="space-y-1">
-							<p class="text-surface-500 text-xs font-semibold uppercase">State</p>
+							<p class="text-surface-700-300 text-xs font-semibold uppercase">State</p>
 							<select class="select text-sm" bind:value={proposalNodes[i].nodeState}>
 								{#each NODE_STATES as s}<option value={s}>{s}</option>{/each}
 							</select>
 						</div>
 						<div class="space-y-1">
-							<p class="text-surface-500 text-xs font-semibold uppercase">Summary</p>
+							<p class="text-surface-700-300 text-xs font-semibold uppercase">Summary</p>
 							<textarea class="textarea min-h-12 text-sm" maxlength="200" bind:value={proposalNodes[i].summary}></textarea>
 							<p class="text-surface-400 text-right text-xs">{(proposalNodes[i].summary ?? "").length} / 200</p>
 						</div>
@@ -371,9 +371,9 @@
 
 	<!-- Relationships -->
 	<section class="mb-4 space-y-2">
-		<h3 class="text-surface-500 text-xs font-semibold uppercase tracking-wide">Relationships</h3>
+		<h3 class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Relationships</h3>
 		{#if proposalRels.length === 0}
-			<p class="text-surface-500 text-sm italic">No relationships extracted.</p>
+			<p class="text-surface-700-300 text-sm italic">No relationships extracted.</p>
 		{/if}
 		{#each proposalRels as rel, i}
 			<div class="bg-surface-200-800 rounded-lg border transition-opacity {rel._deleted ? 'opacity-40' : 'border-surface-300-700'}">
@@ -417,28 +417,28 @@
 					<div class="border-surface-300-700 border-t px-3 py-2 space-y-2">
 						<div class="grid grid-cols-3 gap-2">
 							<div class="space-y-1">
-								<p class="text-surface-500 text-xs font-semibold uppercase">Type</p>
+								<p class="text-surface-700-300 text-xs font-semibold uppercase">Type</p>
 								<input class="input text-sm" type="text" bind:value={proposalRels[i].relationshipType} />
 							</div>
 							<div class="space-y-1">
-								<p class="text-surface-500 text-xs font-semibold uppercase">Status</p>
+								<p class="text-surface-700-300 text-xs font-semibold uppercase">Status</p>
 								<select class="select text-sm" bind:value={proposalRels[i].status}>
 									{#each RELATIONSHIP_STATUSES as s}<option value={s}>{s}</option>{/each}
 								</select>
 							</div>
 							<div class="space-y-1">
-								<p class="text-surface-500 text-xs font-semibold uppercase">Visibility</p>
+								<p class="text-surface-700-300 text-xs font-semibold uppercase">Visibility</p>
 								<select class="select text-sm" bind:value={proposalRels[i].visibility}>
 									{#each RELATIONSHIP_VISIBILITIES as v}<option value={v}>{v}</option>{/each}
 								</select>
 							</div>
 						</div>
 						<div class="space-y-1">
-							<p class="text-surface-500 text-xs font-semibold uppercase">Description</p>
+							<p class="text-surface-700-300 text-xs font-semibold uppercase">Description</p>
 							<textarea class="textarea min-h-12 text-sm" bind:value={proposalRels[i].description}></textarea>
 						</div>
 						<div class="space-y-1">
-							<p class="text-surface-500 text-xs font-semibold uppercase">Reason for change</p>
+							<p class="text-surface-700-300 text-xs font-semibold uppercase">Reason for change</p>
 							<input class="input text-sm" type="text" placeholder="Optional" bind:value={proposalRels[i].reason} />
 						</div>
 					</div>
@@ -460,7 +460,7 @@
 {#snippet errorExtraBlock()}
 	{#if errorRaw}
 		<button
-			class="text-surface-500 hover:text-surface-700-300 flex items-center gap-1 text-xs"
+			class="text-surface-700-300 hover:text-surface-700-300 flex items-center gap-1 text-xs"
 			onclick={() => (showRaw = !showRaw)}
 		>
 			<Icons.ChevronDown size={14} class="transition-transform {showRaw ? 'rotate-180' : ''}" />
@@ -475,7 +475,7 @@
 {#snippet debugBlock()}
 	{#if (build?.trace?.length ?? 0) > 0}
 		<button
-			class="flex w-full items-center justify-between text-xs text-surface-500 hover:text-surface-700-300"
+			class="flex w-full items-center justify-between text-xs text-surface-700-300 hover:text-surface-700-300"
 			onclick={() => (showTrace = !showTrace)}
 		>
 			<span>Debug ({build?.trace?.length ?? 0} calls)</span>

@@ -627,7 +627,7 @@
 
 		<!-- Entry cards -->
 		{#if filteredEntries.length === 0}
-			<p class="text-surface-500 py-6 text-center text-sm italic">No history entries yet.</p>
+			<p class="text-surface-700-300 py-6 text-center text-sm italic">No history entries yet.</p>
 		{:else}
 			{#each filteredEntries as entry}
 				{@const entryScenes = scenesByEntryId.get(entry.id) ?? []}
@@ -656,7 +656,7 @@
 								{previewContent(entry)}
 							</p>
 						{:else}
-							<p class="text-surface-500 text-xs italic">No content yet.</p>
+							<p class="text-surface-700-300 text-xs italic">No content yet.</p>
 						{/if}
 						<!-- Status / meta badges -->
 						<div class="mt-1.5 flex flex-wrap items-center gap-1">
@@ -778,11 +778,11 @@
 				{#if focusedEntry.content?.trim()}
 					<div class="whitespace-pre-wrap leading-relaxed">{previewContent(focusedEntry)}</div>
 				{:else}
-					<p class="text-surface-500 italic">No content yet.</p>
+					<p class="text-surface-700-300 italic">No content yet.</p>
 				{/if}
 				{#if !vectorizationEnabled && focusedEntry.keys?.trim()}
 					<div>
-						<p class="text-surface-500 mb-1 text-xs font-semibold uppercase tracking-wide">Keywords</p>
+						<p class="text-surface-700-300 mb-1 text-xs font-semibold uppercase tracking-wide">Keywords</p>
 						<p class="text-sm">{focusedEntry.keys}</p>
 					</div>
 				{/if}
@@ -827,7 +827,7 @@
 					<input class="input input-sm w-full text-sm" type="text" placeholder="Scene name" bind:value={editingSceneName} />
 					<textarea class="textarea min-h-24 text-xs" placeholder="Scene summary…" bind:value={editingSceneSummary}></textarea>
 					<div class="space-y-1">
-						<p class="text-[10px] font-semibold uppercase tracking-wide text-surface-500">Participants</p>
+						<p class="text-[10px] font-semibold uppercase tracking-wide text-surface-700-300">Participants</p>
 						<div class="flex flex-wrap gap-1">
 							{#each editingSceneParticipants as name, i}
 								<span class="chip preset-tonal-primary text-[10px] py-0 flex items-center gap-0.5">
@@ -842,7 +842,7 @@
 						</div>
 					</div>
 					<div class="space-y-1">
-						<p class="text-[10px] font-semibold uppercase tracking-wide text-surface-500">Mentioned</p>
+						<p class="text-[10px] font-semibold uppercase tracking-wide text-surface-700-300">Mentioned</p>
 						<div class="flex flex-wrap gap-1">
 							{#each editingSceneMentioned as name, i}
 								<span class="chip preset-tonal-surface text-[10px] py-0 flex items-center gap-0.5">
@@ -908,13 +908,13 @@
 						{#if scene.summary}
 							<div class="whitespace-pre-wrap text-sm leading-relaxed">{scene.summary}</div>
 						{:else}
-							<p class="text-surface-500 text-sm italic">No summary yet.</p>
+							<p class="text-surface-700-300 text-sm italic">No summary yet.</p>
 						{/if}
 						{#if (scene.participantCharacters?.length ?? 0) > 0 || (scene.mentionedCharacters?.length ?? 0) > 0}
 							<div class="space-y-1.5">
 								{#if (scene.participantCharacters?.length ?? 0) > 0}
 									<div class="flex flex-wrap items-center gap-1">
-										<span class="text-surface-500 text-[10px] font-semibold uppercase tracking-wide shrink-0">Present:</span>
+										<span class="text-surface-700-300 text-[10px] font-semibold uppercase tracking-wide shrink-0">Present:</span>
 										{#each scene.participantCharacters ?? [] as name}
 											<span class="chip preset-tonal-primary text-[10px] py-0">{name}</span>
 										{/each}
@@ -922,7 +922,7 @@
 								{/if}
 								{#if (scene.mentionedCharacters?.length ?? 0) > 0}
 									<div class="flex flex-wrap items-center gap-1">
-										<span class="text-surface-500 text-[10px] font-semibold uppercase tracking-wide shrink-0">Mentioned:</span>
+										<span class="text-surface-700-300 text-[10px] font-semibold uppercase tracking-wide shrink-0">Mentioned:</span>
 										{#each scene.mentionedCharacters ?? [] as name}
 											<span class="chip preset-tonal-surface text-[10px] py-0">{name}</span>
 										{/each}
@@ -931,7 +931,7 @@
 							</div>
 						{/if}
 						{#if scene.chatName}
-							<p class="text-surface-500 text-xs">
+							<p class="text-surface-700-300 text-xs">
 								<Icons.MessageSquare size={11} class="inline" /> {scene.chatName}
 								{#if scene.selectedMessageIds?.length}· {scene.selectedMessageIds.length} messages{/if}
 							</p>
@@ -949,7 +949,7 @@
 						</button>
 					{/if}
 					{#if viewScenes.length === 0}
-						<p class="text-surface-500 py-4 text-center text-xs italic">No scenes captured for this entry yet.</p>
+						<p class="text-surface-700-300 py-4 text-center text-xs italic">No scenes captured for this entry yet.</p>
 					{:else}
 						{#each viewScenes as scene, sceneIdx}
 							{@const sceneActivity = sceneActivityBySceneId.get(scene.id)}
@@ -1112,7 +1112,7 @@
 						</div>
 					</div>
 					{#if !isNewEntry && (editBounds.min !== -Infinity || editBounds.max !== Infinity)}
-						<p class="text-surface-500 text-xs">
+						<p class="text-surface-700-300 text-xs">
 							{#if editBounds.min !== -Infinity && editBounds.max !== Infinity}
 								Must be between {formatDateValue(editBounds.min)} and {formatDateValue(editBounds.max)}
 							{:else if editBounds.min !== -Infinity}
@@ -1136,7 +1136,7 @@
 				{#if !vectorizationEnabled}
 					<div class="flex flex-col gap-1">
 						<label class="flex items-center gap-1 text-sm font-semibold" for="editKeys">
-							Keywords <span class="text-surface-500 text-xs font-normal">(comma separated)</span>
+							Keywords <span class="text-surface-700-300 text-xs font-normal">(comma separated)</span>
 						</label>
 						<input id="editKeys" class="input preset-filled-surface-200-800 w-full rounded-lg" type="text"
 							bind:value={editingEntry.keys} placeholder="umber, umber city" />
@@ -1198,7 +1198,7 @@
 					<input class="input input-sm w-full text-sm" type="text" placeholder="Scene name" bind:value={editingSceneName} />
 					<textarea class="textarea min-h-24 text-xs" placeholder="Scene summary…" bind:value={editingSceneSummary}></textarea>
 					<div class="space-y-1">
-						<p class="text-[10px] font-semibold uppercase tracking-wide text-surface-500">Participants</p>
+						<p class="text-[10px] font-semibold uppercase tracking-wide text-surface-700-300">Participants</p>
 						<div class="flex flex-wrap gap-1">
 							{#each editingSceneParticipants as name, i}
 								<span class="chip preset-tonal-primary text-[10px] py-0 flex items-center gap-0.5">
@@ -1213,7 +1213,7 @@
 						</div>
 					</div>
 					<div class="space-y-1">
-						<p class="text-[10px] font-semibold uppercase tracking-wide text-surface-500">Mentioned</p>
+						<p class="text-[10px] font-semibold uppercase tracking-wide text-surface-700-300">Mentioned</p>
 						<div class="flex flex-wrap gap-1">
 							{#each editingSceneMentioned as name, i}
 								<span class="chip preset-tonal-surface text-[10px] py-0 flex items-center gap-0.5">
@@ -1242,7 +1242,7 @@
 						</button>
 					{/if}
 					{#if editScenes.length === 0}
-						<p class="text-surface-500 py-4 text-center text-xs italic">
+						<p class="text-surface-700-300 py-4 text-center text-xs italic">
 							No scenes captured for this entry yet. Capture scenes from the chat page.
 						</p>
 					{:else}
@@ -1314,13 +1314,13 @@
 										{scene.summary}
 									</p>
 								{:else}
-									<p class="text-surface-500 text-xs italic">No summary.</p>
+									<p class="text-surface-700-300 text-xs italic">No summary.</p>
 								{/if}
 								{#if (scene.participantCharacters?.length ?? 0) > 0 || (scene.mentionedCharacters?.length ?? 0) > 0}
 									<div class="space-y-1">
 										{#if (scene.participantCharacters?.length ?? 0) > 0}
 											<div class="flex flex-wrap items-center gap-1">
-												<span class="text-surface-500 text-[10px] font-semibold uppercase tracking-wide shrink-0">Present:</span>
+												<span class="text-surface-700-300 text-[10px] font-semibold uppercase tracking-wide shrink-0">Present:</span>
 												{#each scene.participantCharacters ?? [] as name}
 													<span class="chip preset-tonal-primary text-[10px] py-0">{name}</span>
 												{/each}
@@ -1328,7 +1328,7 @@
 										{/if}
 										{#if (scene.mentionedCharacters?.length ?? 0) > 0}
 											<div class="flex flex-wrap items-center gap-1">
-												<span class="text-surface-500 text-[10px] font-semibold uppercase tracking-wide shrink-0">Mentioned:</span>
+												<span class="text-surface-700-300 text-[10px] font-semibold uppercase tracking-wide shrink-0">Mentioned:</span>
 												{#each scene.mentionedCharacters ?? [] as name}
 													<span class="chip preset-tonal-surface text-[10px] py-0">{name}</span>
 												{/each}

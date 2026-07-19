@@ -6,7 +6,7 @@
 
 <div class="relative flex-1">
 	<Icons.Search
-		class="text-surface-500 pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2"
+		class="text-surface-700-300 pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2"
 	/>
 	<input
 		type="text"
@@ -18,7 +18,7 @@
 	{#if query}
 		<button
 			type="button"
-			class="text-surface-500 hover:text-surface-700 absolute top-1/2 right-2 -translate-y-1/2"
+			class="text-surface-700-300 hover:text-surface-700 absolute top-1/2 right-2 -translate-y-1/2"
 			onclick={() => (query = "")}
 			aria-label="Clear search"
 		>

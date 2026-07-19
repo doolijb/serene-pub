@@ -38,7 +38,7 @@
 	let validationErrors: ValidationErrors = $state({})
 
 	socket.on("connections:test", (msg) => {
-		testResult = msg
+		testResult = { ok: msg.ok, error: msg.error ?? undefined, models: msg.models }
 	})
 
 	let testResult: { ok: boolean; error?: string; models?: any[] } | null =
@@ -112,7 +112,7 @@
 	})
 
 	onDestroy(() => {
-		socket.off("testConnection")
+		socket.off("connections:test")
 	})
 </script>
 

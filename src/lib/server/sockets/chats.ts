@@ -269,27 +269,19 @@ export const chatsListHandler: Handler<
 		const guestChatIds = guestChats.map((gc) => gc.chatId)
 		console.log("User is guest in chat IDs:", guestChatIds)
 
-		// Build the where clause: user owns the chat OR user is a guest in the chat
-		// AND filter by chat type
-		const whereCondition = (c, { or, eq, inArray, and }) =>
-			guestChatIds.length > 0
-				? and(
-						or(eq(c.userId, userId), inArray(c.id, guestChatIds)),
-						eq(c.chatType, chatType)
-					)
-				: and(eq(c.userId, userId), eq(c.chatType, chatType))
-
 		const chatsList = await db.query.chats.findMany({
 			with: {
 				chatCharacters: {
 					with: {
+						// `character` columns are limited to id/name/avatar — no
+						// shortDescription/visibility column exists on the
+						// characters table (visibility lives on chatCharacters
+						// itself, included automatically alongside this relation).
 						character: {
 							columns: {
 								id: true,
 								name: true,
-								shortDescription: true,
-								avatar: true,
-								visibility: true
+								avatar: true
 							}
 						}
 					},
@@ -297,13 +289,13 @@ export const chatsListHandler: Handler<
 				},
 				chatPersonas: {
 					with: {
+						// Same trimmed subset as `character` above — no
+						// shortDescription/visibility column exists on personas.
 						persona: {
 							columns: {
 								id: true,
 								name: true,
-								shortDescription: true,
-								avatar: true,
-								visibility: true
+								avatar: true
 							}
 						}
 					},
@@ -315,7 +307,17 @@ export const chatsListHandler: Handler<
 					}
 				}
 			},
-			where: whereCondition,
+			// Build the where clause: user owns the chat OR user is a guest in
+			// the chat, AND filter by chat type. Inlined (rather than a
+			// standalone const) so drizzle's contextual typing can infer the
+			// callback's parameter types.
+			where: (c, { or, eq, inArray, and }) =>
+				guestChatIds.length > 0
+					? and(
+							or(eq(c.userId, userId), inArray(c.id, guestChatIds)),
+							eq(c.chatType, chatType)
+						)
+					: and(eq(c.userId, userId), eq(c.chatType, chatType)),
 			orderBy: desc(schema.chats.updatedAt)
 		})
 
@@ -331,7 +333,19 @@ export const chatsListHandler: Handler<
 				...chat,
 				isOwner,
 				isGuest,
-				canEdit: isOwner || isGuest
+				canEdit: isOwner || isGuest,
+				// chatCharacters/chatPersonas rows can have a null character/
+				// persona when the linked row was deleted (the FK is nullable,
+				// onDelete: "set null") — filter those out, matching the same
+				// fix in generateResponse.ts/assistantV2.ts.
+				chatCharacters: chat.chatCharacters.filter(
+					(cc): cc is typeof cc & { character: NonNullable<typeof cc.character> } =>
+						cc.character !== null
+				),
+				chatPersonas: chat.chatPersonas.filter(
+					(cp): cp is typeof cp & { persona: NonNullable<typeof cp.persona> } =>
+						cp.persona !== null
+				)
 			}
 		})
 
@@ -503,43 +517,19 @@ export const chatsCreateHandler: Handler<
 	}
 }
 
-export async function chat(
-	socket: any,
-	message: Sockets.Chat.Call,
-	emitToUser: (event: string, data: any) => void
-) {
-	const userId = socket.user!.id
-	const limit = message.limit || 25
-	const offset = message.offset || 0
-
-	const chat = await getChatFromDB(message.id, userId, limit, offset)
-	if (chat) {
-		// Get total message count for pagination
-		const totalMessages = await db.query.chatMessages.findMany({
-			where: (cm, { eq }) => eq(cm.chatId, message.id)
-		})
-
-		const hasMore = offset + limit < totalMessages.length
-
-		const res: Sockets.Chat.Response = {
-			chat: chat as any,
-			pagination: {
-				total: totalMessages.length,
-				hasMore
-			}
-		}
-		emitToUser("chat", res)
-	}
-}
-
-export const getChat = chat
-
 // Helper to get chat with userId
+//
+// No `offset` param: drizzle-orm's relational query config only allows
+// `offset` at the query root (DBQueryConfig's TIsRoot check), not inside a
+// nested `with.chatMessages` relation like this one — and the only caller
+// that ever passed a real offset was the legacy chat()/getChat() function,
+// which has been removed (see the "getChat emits under an event name
+// nothing listens for" comments elsewhere in this file). Every remaining
+// caller relies on `beforeId` cursor pagination instead.
 async function getChatFromDB(
 	chatId: number,
 	userId: number,
 	limit?: number,
-	offset?: number,
 	beforeId?: number
 ) {
 	// Check if user has access (owner or guest)
@@ -561,8 +551,7 @@ async function getChatFromDB(
 					? (cm) => lt(cm.id, beforeId)
 					: undefined,
 				orderBy: (cm, { desc }) => desc(cm.id),
-				limit: limit,
-				offset: beforeId != null ? undefined : offset
+				limit: limit
 			},
 			chatTags: {
 				with: {
@@ -743,7 +732,7 @@ export const chatsGetHandler: Handler<
 				return res
 			}
 
-			const chatData = await getChatFromDB(params.id, userId, limit, undefined, beforeId)
+			const chatData = await getChatFromDB(params.id, userId, limit, beforeId)
 
 			if (!chatData) {
 				const res: Sockets.Chats.Get.Response = {
@@ -924,17 +913,14 @@ export const chatsUpdateHandler: Handler<
 			// hiding those fields client-side, since this event is reachable
 			// directly regardless of what the UI shows.
 			if (chatAccess.isOwner) {
-				const tags = params.tags || params.chat.tags || []
+				const tags = params.tags || []
 
-				// Remove tags from chat data as it will be handled separately
-				const chatDataWithoutTags = { ...params.chat }
-				delete chatDataWithoutTags.tags
-
-				// Update the chat
+				// Update the chat (Params.chat is UpdateChat, which never has a
+				// `tags` field — tags are handled separately via Params.tags)
 				await db
 					.update(schema.chats)
 					.set({
-						...chatDataWithoutTags,
+						...params.chat,
 						updatedAt: new Date().toISOString()
 					})
 					.where(eq(schema.chats.id, params.chat.id!))
@@ -1723,6 +1709,7 @@ export const chatMessagesDeleteHandler: Handler<
 
 			if (!message) {
 				const res: Sockets.ChatMessages.Delete.Response = {
+					id: params.id,
 					error: "Message not found"
 				}
 				emitToUser("chatMessages:delete", res)
@@ -1733,6 +1720,7 @@ export const chatMessagesDeleteHandler: Handler<
 			const canEdit = await checkMessageEditPermission(params.id, userId)
 			if (!canEdit) {
 				const res: Sockets.ChatMessages.Delete.Response = {
+					id: params.id,
 					error: "Access denied. You can only delete messages from your own characters/personas or if you own the chat."
 				}
 				emitToUser("chatMessages:delete", res)
@@ -1745,6 +1733,7 @@ export const chatMessagesDeleteHandler: Handler<
 				.where(eq(schema.chatMessages.id, params.id))
 
 			const res: Sockets.ChatMessages.Delete.Response = {
+				id: params.id,
 				success: "Message deleted successfully"
 			}
 			emitToUser("chatMessages:delete", res)
@@ -1760,6 +1749,7 @@ export const chatMessagesDeleteHandler: Handler<
 		} catch (error: any) {
 			console.error("Error deleting chat message:", error)
 			const res: Sockets.ChatMessages.Delete.Response = {
+				id: params.id,
 				error: "Failed to delete message"
 			}
 			emitToUser("chatMessages:delete:error", res)
@@ -2049,15 +2039,17 @@ export const chatMessagesSwipeLeftHandler: Handler<
 				] || ""
 			// Sync active thinking to the new swipe slot
 			data.metadata!.thinking =
-				(data.metadata!.swipes!.thinkingHistory as any)?.[
+				data.metadata!.swipes!.thinkingHistory?.[
 					data.metadata!.swipes!.currentIdx
 				] ?? null
 
-			// Update the chat message in the database
-			delete data.id
+			// Update the chat message in the database (drop `id` — it's the
+			// primary key, not an updatable column, and isn't optional on
+			// SelectChatMessage so `delete` can't be used here)
+			const { id: _id, ...dataWithoutId } = data
 			const [updated] = await db
 				.update(schema.chatMessages)
-				.set({ ...data })
+				.set({ ...dataWithoutId })
 				.where(eq(schema.chatMessages.id, message.id))
 				.returning()
 
@@ -2166,7 +2158,7 @@ export const chatMessagesSwipeRightHandler: Handler<
 					] || ""
 				// Sync active thinking to the new swipe slot
 				data.metadata!.thinking =
-					(data.metadata!.swipes!.thinkingHistory as any)?.[
+					data.metadata!.swipes!.thinkingHistory?.[
 						data.metadata!.swipes!.currentIdx
 					] ?? null
 			} else {
@@ -2175,9 +2167,9 @@ export const chatMessagesSwipeRightHandler: Handler<
 					data.metadata!.swipes!.history.push(data.content)
 					// Keep thinkingHistory in sync when initialising swipes for the first time
 					const th: (string | null)[] =
-						(data.metadata!.swipes! as any).thinkingHistory || []
+						data.metadata!.swipes!.thinkingHistory || []
 					while (th.length < data.metadata!.swipes!.history.length) th.push(null)
-					;(data.metadata!.swipes! as any).thinkingHistory = th
+					data.metadata!.swipes!.thinkingHistory = th
 				}
 				// Now increment the current index and push a new empty generation slot
 				data.metadata!.swipes!.currentIdx += 1
@@ -2190,20 +2182,22 @@ export const chatMessagesSwipeRightHandler: Handler<
 				data.metadata!.swipes!.history.push("") // Add an empty string to history
 				// Push a matching null into thinkingHistory to keep lengths equal
 				const th: (string | null)[] =
-					(data.metadata!.swipes! as any).thinkingHistory || []
+					data.metadata!.swipes!.thinkingHistory || []
 				while (th.length < data.metadata!.swipes!.history.length - 1) th.push(null)
 				th.push(null)
-				;(data.metadata!.swipes! as any).thinkingHistory = th
+				data.metadata!.swipes!.thinkingHistory = th
 				// Clear active thinking — new slot has no thinking yet
 				data.metadata!.thinking = null
 			}
 
-			delete data.id
+			// Drop `id` — it's the primary key, not an updatable column, and
+			// isn't optional on SelectChatMessage so `delete` can't be used.
+			const { id: _id, ...dataWithoutId } = data
 
 			// Update the chat message in the database
 			const [updated] = await db
 				.update(schema.chatMessages)
-				.set({ ...data })
+				.set({ ...dataWithoutId })
 				.where(eq(schema.chatMessages.id, message.id))
 				.returning()
 
@@ -2634,24 +2628,36 @@ export const promptTokenCountHandler: Handler<
 				}
 			}
 
+			// chatCharacters/chatPersonas rows can have a null character/persona
+			// when the linked row was deleted (the FK is nullable, onDelete:
+			// "set null") — filter those out, matching the same fix in
+			// generateResponse.ts/assistantV2.ts/chatsListHandler.
+			const activeChatCharacters = chat.chatCharacters.filter(
+				(cc): cc is typeof cc & { character: NonNullable<typeof cc.character> } =>
+					cc.character !== null && cc.isActive
+			)
+			const chatCharactersWithCharacter = chat.chatCharacters.filter(
+				(cc): cc is typeof cc & { character: NonNullable<typeof cc.character> } =>
+					cc.character !== null
+			)
+			const chatPersonasWithPersona = chat.chatPersonas.filter(
+				(cp): cp is typeof cp & { persona: NonNullable<typeof cp.persona> } =>
+					cp.persona !== null
+			)
+
 			let chatForPrompt = {
 				...chat,
-				chatMessages: [...chat.chatMessages]
+				chatMessages: [...chat.chatMessages],
+				chatCharacters: chatCharactersWithCharacter,
+				chatPersonas: chatPersonasWithPersona
 			}
 
 			const currentCharacterId = getNextCharacterTurn({
 				chatMessages: chat.chatMessages,
-				chatCharacters: chat.chatCharacters
-					.filter(
-						(cc: any) =>
-							cc && cc.character != null && cc.isActive
-					)
-					.sort(
-						(a, b) => (a.position ?? 0) - (b.position ?? 0)
-					) as any,
-				chatPersonas: chat.chatPersonas.filter(
-					(cp: any) => cp && cp.persona != null
-				) as any
+				chatCharacters: activeChatCharacters.sort(
+					(a, b) => (a.position ?? 0) - (b.position ?? 0)
+				),
+				chatPersonas: chatPersonasWithPersona
 			})
 
 			if (!currentCharacterId) {
@@ -2781,15 +2787,16 @@ export const triggerGenerateMessageHandler: Handler<
 						.values(assistantMessage)
 						.returning()
 
-					if (emitToUser) {
-						await broadcastToChatUsers(
-							socket.io,
-							generatingMessage.chatId,
-							"chatMessage",
-							{ chatMessage: generatingMessage }
-						)
-						// chatMessage was already broadcasted above, no need for duplicate emission
-					}
+					// emitToUser is always provided by the handler dispatcher (see
+					// Handler in $lib/shared/events.ts — non-optional), so this
+					// unconditionally broadcasts.
+					await broadcastToChatUsers(
+						socket.io,
+						generatingMessage.chatId,
+						"chatMessage",
+						{ chatMessage: generatingMessage }
+					)
+					// chatMessage was already broadcasted above, no need for duplicate emission
 
 					ok = await generateResponse({
 						socket,

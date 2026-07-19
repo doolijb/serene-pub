@@ -58,37 +58,39 @@
 				<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
 					<div class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap">
 						{#if filtered.length === 0}
-							<div class="text-surface-500 text-center">
+							<div class="text-surface-700-300 text-center">
 								No characters found
 							</div>
 						{/if}
 						{#each filtered as c}
-							<div class="flex p-1 lg:basis-1/2">
-								<button
-									class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
-									onclick={() => onSelect(c)}
-								>
-									<div class="w-fit">
-										<Avatar char={c} />
-									</div>
-									<div
-										class="relative flex w-0 min-w-0 flex-1 flex-col"
+							{#if c.id}
+								<div class="flex p-1 lg:basis-1/2">
+									<button
+										class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
+										onclick={() => onSelect(c as Partial<SelectCharacter> & { id: number })}
 									>
-										<div
-											class="w-full truncate text-left font-semibold"
-										>
-											{c.nickname || c.name}
+										<div class="w-fit">
+											<Avatar char={c} />
 										</div>
 										<div
-											class="text-surface-500 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
+											class="relative flex w-0 min-w-0 flex-1 flex-col"
 										>
-											{c.creatorNotes ||
-												c.description ||
-												"No description"}
+											<div
+												class="w-full truncate text-left font-semibold"
+											>
+												{c.nickname || c.name}
+											</div>
+											<div
+												class="text-surface-700-300 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
+											>
+												{c.creatorNotes ||
+													c.description ||
+													"No description"}
+											</div>
 										</div>
-									</div>
-								</button>
-							</div>
+									</button>
+								</div>
+							{/if}
 						{/each}
 					</div>
 				</div>

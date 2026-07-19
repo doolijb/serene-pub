@@ -1,8 +1,10 @@
 import { dev } from "$app/environment"
 import { loadSocketsServer } from "$lib/server/sockets/loadSockets.server"
 import { appVersion } from "$lib/shared/constants/version"
-import type { Handle } from "@sveltejs/kit"
+import type { Handle, RequestEvent } from "@sveltejs/kit"
 // import { userAuthentication, routeGuard } from "$server/middleware"
+
+type Middleware = (event: RequestEvent) => Promise<void> | void
 
 const middleware: Middleware[] = [] // [userAuthentication, routeGuard]
 

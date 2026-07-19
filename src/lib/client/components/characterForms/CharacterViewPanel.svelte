@@ -75,13 +75,13 @@
 				<div class="min-w-0 flex-1">
 					<p class="truncate text-lg font-bold">{character.nickname || character.name}</p>
 					{#if character.nickname && character.name !== character.nickname}
-						<p class="text-surface-500 truncate text-sm">{character.name}</p>
+						<p class="text-surface-700-300 truncate text-sm">{character.name}</p>
 					{/if}
 					{#if character.characterVersion}
 						<p class="text-surface-600 text-xs">v{character.characterVersion}</p>
 					{/if}
 					{#if !character.isOwner && character.ownerName}
-						<p class="text-surface-500 truncate text-xs">Owned by {character.ownerName}</p>
+						<p class="text-surface-700-300 truncate text-xs">Owned by {character.ownerName}</p>
 					{/if}
 				</div>
 			</div>
@@ -98,7 +98,7 @@
 			<!-- Description -->
 			{#if character.description}
 				<section class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">Description</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Description</p>
 					<p class="whitespace-pre-wrap text-sm leading-relaxed">{character.description}</p>
 				</section>
 			{/if}
@@ -106,7 +106,7 @@
 			<!-- Personality -->
 			{#if character.personality}
 				<section class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">Personality</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Personality</p>
 					<p class="whitespace-pre-wrap text-sm leading-relaxed">{character.personality}</p>
 				</section>
 			{/if}
@@ -114,7 +114,7 @@
 			<!-- Scenario -->
 			{#if character.scenario}
 				<section class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">Scenario</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Scenario</p>
 					<p class="whitespace-pre-wrap text-sm leading-relaxed">{character.scenario}</p>
 				</section>
 			{/if}
@@ -122,7 +122,7 @@
 			<!-- First message -->
 			{#if character.firstMessage}
 				<section class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">First Message</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">First Message</p>
 					<p class="whitespace-pre-wrap text-sm leading-relaxed">{character.firstMessage}</p>
 				</section>
 			{/if}
@@ -130,7 +130,7 @@
 			<!-- Alternate greetings -->
 			{#if character.alternateGreetings?.length}
 				<section class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">
+					<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">
 						Alternate Greetings ({character.alternateGreetings.length})
 					</p>
 					{#each character.alternateGreetings as greeting, i}
@@ -145,12 +145,12 @@
 			<!-- Creator notes -->
 			{#if character.creatorNotes}
 				<section class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">Creator Notes</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Creator Notes</p>
 					<p class="whitespace-pre-wrap text-sm leading-relaxed">{character.creatorNotes}</p>
 				</section>
 			{/if}
 		</div>
 	{:else}
-		<p class="text-surface-500 py-8 text-center text-sm">Character not found.</p>
+		<p class="text-surface-700-300 py-8 text-center text-sm">Character not found.</p>
 	{/if}
 </div>

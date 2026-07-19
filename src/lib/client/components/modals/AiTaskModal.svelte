@@ -107,7 +107,7 @@
 
 			<div class="space-y-2">
 				<div class="flex items-center justify-between text-sm">
-					<span class="text-surface-500">{progressLabel ?? "Working…"}</span>
+					<span class="text-surface-700-300">{progressLabel ?? "Working…"}</span>
 					<span class="font-mono text-sm">{progressPercent}%</span>
 				</div>
 				<div class="bg-surface-300-700 h-2 w-full overflow-hidden rounded-full">

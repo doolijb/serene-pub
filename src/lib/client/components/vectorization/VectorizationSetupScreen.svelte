@@ -30,7 +30,7 @@
 				</div>
 				<div>
 					<p class="text-sm font-semibold">Local Model</p>
-					<p class="text-surface-500 mt-1 text-xs leading-relaxed">
+					<p class="text-surface-700-300 mt-1 text-xs leading-relaxed">
 						Runs a small embedding model on this device — one-time download,
 						then works fully offline with no per-request cost.
 					</p>
@@ -51,7 +51,7 @@
 			</div>
 			<div>
 				<p class="text-sm font-semibold">External API</p>
-				<p class="text-surface-500 mt-1 text-xs leading-relaxed">
+				<p class="text-surface-700-300 mt-1 text-xs leading-relaxed">
 					Use any OpenAI-compatible /embeddings endpoint — OpenAI itself, or a
 					self-hosted Ollama/LM Studio/llama.cpp server elsewhere on your network.
 				</p>
@@ -61,7 +61,7 @@
 					Only option on Android
 				</span>
 			{:else}
-				<span class="text-surface-500 mt-auto text-xs">Works everywhere, including Android</span>
+				<span class="text-surface-700-300 mt-auto text-xs">Works everywhere, including Android</span>
 			{/if}
 		</button>
 	</div>

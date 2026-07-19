@@ -115,7 +115,7 @@
 						</div>
 					{:else}
 						<div class="space-y-2">
-							<p class="text-surface-500 text-xs">Select who <code class="code">{currentBinding.binding}</code> refers to:</p>
+							<p class="text-surface-700-300 text-xs">Select who <code class="code">{currentBinding.binding}</code> refers to:</p>
 							<div class="max-h-48 overflow-y-auto space-y-1 pr-1">
 								{#each unboundEntities as entity}
 									<button
@@ -134,7 +134,7 @@
 								{/each}
 							</div>
 							<button
-								class="btn btn-sm text-surface-500"
+								class="btn btn-sm text-surface-700-300"
 								onclick={() => (showPicker = false)}
 							>
 								<Icons.ArrowLeft size={14} />
@@ -143,7 +143,7 @@
 						</div>
 					{/if}
 
-					<div class="text-surface-500 border-t pt-2 text-right text-xs">
+					<div class="text-surface-700-300 border-t pt-2 text-right text-xs">
 						Binding {currentIndex + 1} of {orphanedBindings.length}
 					</div>
 				{/if}

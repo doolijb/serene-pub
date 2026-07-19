@@ -2,13 +2,13 @@
 	import * as Icons from "@lucide/svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { onMount, onDestroy, getContext } from "svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { Theme } from "$lib/client/consts/Theme"
 	import { toaster } from "$lib/client/utils/toaster"
 	import BackgroundPicker from "$lib/client/components/backgrounds/BackgroundPicker.svelte"
 	import CustomThemeEditor from "./CustomThemeEditor.svelte"
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 	const userSettingsCtx: UserSettingsCtx = getContext("userSettingsCtx")
@@ -20,7 +20,6 @@
 	let selectedTheme = $state("")
 	let selectedBackground = $state<string | null>(null)
 	let backgroundOpacity = $state(75)
-	let backgroundExpanded = $state(false)
 
 	$effect(() => {
 		isDarkMode = userSettingsCtx.settings?.darkMode ?? true
@@ -74,7 +73,7 @@
 		})
 		loadList()
 
-		socket.on("userSettings:updateDarkMode", (message: any) => {
+		socket.on("userSettings:updateDarkMode", (message) => {
 			if (message.success) {
 				toaster.success({
 					title: `${message.enabled ? "Dark" : "Light"} mode enabled`
@@ -84,7 +83,7 @@
 			}
 		})
 
-		socket.on("userSettings:updateTheme", (message: any) => {
+		socket.on("userSettings:updateTheme", (message) => {
 			if (message.success) {
 				toaster.success({
 					title: "Theme updated successfully"
@@ -173,17 +172,8 @@
 
 		<!-- Background -->
 		<div class="border-t pt-4">
-			<button
-				type="button"
-				class="flex w-full items-center justify-between"
-				onclick={() => (backgroundExpanded = !backgroundExpanded)}
-			>
 				<h3 class="text-lg font-semibold">Background</h3>
-				<Icons.ChevronDown
-					class="text-muted-foreground h-4 w-4 transition-transform {backgroundExpanded ? 'rotate-180' : ''}"
-				/>
-			</button>
-			{#if backgroundExpanded}
+
 				<div class="mt-3">
 					<BackgroundPicker
 						bind:selectedPath={selectedBackground}
@@ -191,11 +181,10 @@
 						onchange={handleBackgroundChange}
 					/>
 				</div>
-			{/if}
 		</div>
 
-		<div class="flex items-center justify-between border-t pt-4">
-			<h3 class="text-sm font-semibold">Custom Themes</h3>
+		<div class="flex items-center justify-between pt-4">
+			<h3 class="font-semibold">Custom Themes</h3>
 			<button class="btn btn-sm preset-filled-primary-500" onclick={() => (editing = "new")}>
 				<Icons.Plus size={14} />
 				New Theme
@@ -211,7 +200,7 @@
 			<!-- Generator tip -->
 			<div class="bg-surface-100-800 flex items-start gap-3 rounded-lg p-3 text-sm">
 				<Icons.Sparkles size={16} class="text-primary-500 mt-0.5 shrink-0" />
-				<p class="text-surface-500 leading-snug">
+				<p class="text-surface-700-300 leading-snug">
 					Use the <a
 						href="https://themes.skeleton.dev/themes/create"
 						target="_blank"
@@ -223,7 +212,7 @@
 
 			<!-- My Themes -->
 			<div class="space-y-2">
-				<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">My Themes</p>
+				<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">My Themes</p>
 				{#if myThemes.length === 0}
 					<div class="bg-surface-100-800 rounded-lg p-4 text-center text-sm opacity-60">
 						No custom themes yet. Import a file or start from scratch.
@@ -239,9 +228,9 @@
 							></div>
 							<div class="flex-1 min-w-0">
 								<p class="truncate text-sm font-medium">{theme.label}</p>
-								<p class="text-surface-500 font-mono text-xs">{theme.name}</p>
+								<p class="text-surface-700-300 font-mono text-xs">{theme.name}</p>
 								{#if isAdmin && theme.uploaderName && isAccountsEnabled}
-									<p class="text-surface-500 text-xs">by {theme.uploaderName}</p>
+									<p class="text-surface-700-300 text-xs">by {theme.uploaderName}</p>
 								{/if}
 							</div>
 							<div class="flex shrink-0 items-center gap-1">
@@ -267,7 +256,7 @@
 			<!-- Instance Themes (only when accounts enabled and there are some) -->
 			{#if isAccountsEnabled && instanceThemes.length > 0}
 				<div class="space-y-2">
-					<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">Instance Themes</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Instance Themes</p>
 					{#each instanceThemes as theme}
 						<div class="bg-surface-100-800 flex items-center gap-3 rounded-lg p-3">
 							<div
@@ -277,9 +266,9 @@
 							></div>
 							<div class="flex-1 min-w-0">
 								<p class="truncate text-sm font-medium">{theme.label}</p>
-								<p class="text-surface-500 font-mono text-xs">{theme.name}</p>
+								<p class="text-surface-700-300 font-mono text-xs">{theme.name}</p>
 								{#if isAdmin && theme.uploaderName}
-									<p class="text-surface-500 text-xs">by {theme.uploaderName}</p>
+									<p class="text-surface-700-300 text-xs">by {theme.uploaderName}</p>
 								{/if}
 							</div>
 							{#if isAdmin}

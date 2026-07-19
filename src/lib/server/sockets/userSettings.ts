@@ -80,6 +80,14 @@ export const userSettingsGet: Handler<
 				userSettings: {
 					activeContextConfigId: settings.activeContextConfigId,
 					activePromptConfigId: settings.activePromptConfigId,
+					activeNarratorPromptConfigId:
+						settings.activeNarratorPromptConfigId,
+					activeSummarizeWorldConfigId:
+						settings.activeSummarizeWorldConfigId,
+					activeSummarizeCharacterConfigId:
+						settings.activeSummarizeCharacterConfigId,
+					activeSummarizeSceneConfigId:
+						settings.activeSummarizeSceneConfigId,
 					theme: settings.theme || "hamlindigo",
 					darkMode:
 						settings.darkMode !== null ? settings.darkMode : true,
@@ -90,7 +98,8 @@ export const userSettingsGet: Handler<
 						settings.enableEasyCharacterCreation,
 					showAllCharacterFields: settings.showAllCharacterFields,
 					backgroundImagePath: settings.backgroundImagePath ?? null,
-					backgroundOpacity: settings.backgroundOpacity ?? 75
+					backgroundOpacity: settings.backgroundOpacity ?? 75,
+					charaVaultIncludeNsfw: settings.charaVaultIncludeNsfw ?? false
 				}
 			}
 
@@ -100,6 +109,43 @@ export const userSettingsGet: Handler<
 			console.error("Error fetching user settings:", error)
 			emitToUser("userSettings:get:error", {
 				error: "Failed to fetch user settings"
+			})
+			throw error
+		}
+	}
+}
+
+export const userSettingsUpdateCharaVaultIncludeNsfw: Handler<
+	Sockets.UserSettings.UpdateCharaVaultIncludeNsfw.Params,
+	Sockets.UserSettings.UpdateCharaVaultIncludeNsfw.Response
+> = {
+	event: "userSettings:updateCharaVaultIncludeNsfw",
+	handler: async (socket: AuthenticatedSocket, params, emitToUser) => {
+		try {
+			const userId = socket.user!.id
+			if (!userId) {
+				throw new Error("User not authenticated")
+			}
+
+			await db
+				.update(schema.userSettings)
+				.set({
+					charaVaultIncludeNsfw: params.enabled
+				})
+				.where(eq(schema.userSettings.userId, userId))
+
+			const res: Sockets.UserSettings.UpdateCharaVaultIncludeNsfw.Response =
+				{
+					success: true,
+					enabled: params.enabled
+				}
+			emitToUser("userSettings:updateCharaVaultIncludeNsfw", res)
+			await userSettingsGet.handler(socket, {}, emitToUser)
+			return res
+		} catch (error: any) {
+			console.error("Update CharaVault include-NSFW error:", error)
+			emitToUser("userSettings:updateCharaVaultIncludeNsfw:error", {
+				error: "Failed to update setting"
 			})
 			throw error
 		}
@@ -417,6 +463,7 @@ export function registerUserSettingsHandlers(
 	) => void
 ) {
 	register(socket, userSettingsGet, emitToUser)
+	register(socket, userSettingsUpdateCharaVaultIncludeNsfw, emitToUser)
 	register(socket, userSettingsUpdateShowHomePageBanner, emitToUser)
 	register(socket, userSettingsUpdateEasyPersonaCreation, emitToUser)
 	register(socket, userSettingsUpdateEasyCharacterCreation, emitToUser)

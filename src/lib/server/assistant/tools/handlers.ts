@@ -457,7 +457,6 @@ export async function getWorldDetails(
 				columns: {
 					id: true,
 					name: true,
-					category: true,
 					keys: true,
 					content: true,
 					enabled: true,
@@ -477,7 +476,13 @@ export async function getWorldDetails(
 			name: world.name,
 			description: world.description,
 			worldEntries: world.worldLoreEntries,
-			characterEntries: world.characterLoreEntries
+			// characterLoreEntries has no `category` column (only world lore
+			// entries are categorized) — the shared LorebookEntrySchema still
+			// requires the (nullable) field, so fill it in as null.
+			characterEntries: world.characterLoreEntries.map((entry) => ({
+				...entry,
+				category: null
+			}))
 		}
 	}
 }

@@ -6,7 +6,7 @@
 		open: boolean
 		selectedModelForDownload: string | null
 		selectedModel:
-			| Sockets.OllamaSearchAvailableModels.Response["models"][0]
+			| Sockets.Ollama.SearchAvailableModels.Response["models"][0]
 			| null
 		onClose: () => void
 		onDownload: (
@@ -54,7 +54,7 @@
 		</header>
 		<article class="space-y-4">
 			<div>
-				<p class="text-surface-500 mb-2 text-sm">
+				<p class="text-surface-700-300 mb-2 text-sm">
 					Choose a quantization level for <strong>
 						{selectedModelForDownload}
 					</strong>
@@ -84,7 +84,7 @@
 			{:else if sortedPullOptions.length === 0}
 				<div class="p-6 text-center">
 					<Icons.AlertCircle
-						class="text-surface-500 mx-auto mb-4"
+						class="text-surface-700-300 mx-auto mb-4"
 						size={48}
 					/>
 					<p class="text-sm opacity-75">
@@ -127,7 +127,7 @@
 									</div>
 
 									<!-- <div
-										class="text-surface-500 flex items-center gap-4 text-xs"
+										class="text-surface-700-300 flex items-center gap-4 text-xs"
 									>
 										{#if pullOption.size}
 											<div

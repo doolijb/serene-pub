@@ -75,7 +75,7 @@
 			<div class="text-center">
 				<Icons.UserPlus
 					size={48}
-					class="text-surface-500 mx-auto mb-2"
+					class="text-surface-700-300 mx-auto mb-2"
 				/>
 				<h3 class="h3 mb-2">Join the Conversation</h3>
 				<p class="text-surface-600-400">
@@ -150,7 +150,7 @@
 								<Portal>
 									<Popover.Positioner class="z-[1000]!">
 										<Popover.Content class="card preset-tonal-surface p-2 space-y-1 min-w-[180px]">
-											<p class="text-surface-500 px-2 pb-1 text-xs font-semibold uppercase tracking-wider">Switch Persona</p>
+											<p class="text-surface-700-300 px-2 pb-1 text-xs font-semibold uppercase tracking-wider">Switch Persona</p>
 											{#each userPersonasInChat as cp (cp.personaId)}
 												{#if cp.persona && cp.personaId != null}
 													<button

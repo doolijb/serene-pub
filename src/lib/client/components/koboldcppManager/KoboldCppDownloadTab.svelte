@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { onMount, onDestroy, getContext } from "svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	interface Props {
@@ -18,7 +18,7 @@
 		{ value: SOURCE_HUGGING_FACE, label: "Hugging Face" }
 	]
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	let koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
 
 	let modelsDir = $state(koboldCppSettingsCtx.settings?.koboldCppManagerModelsDir ?? "")
@@ -73,7 +73,7 @@
 	}
 
 	onMount(() => {
-		socket.on("systemSettings:get", (message: any) => {
+		socket.on("systemSettings:get", (message: Sockets.SystemSettings.Get.Response) => {
 			modelsDir = message.koboldCppSettings?.koboldCppManagerModelsDir ?? ""
 		})
 
@@ -87,7 +87,7 @@
 		})
 
 		socket.on("koboldcpp:downloadModel", () => {})
-		socket.on("koboldcpp:downloadModel:error", (msg: any) => {
+		socket.on("koboldcpp:downloadModel:error", (msg: Sockets.ErrorResponse) => {
 			toaster.error({ title: "Download failed", description: msg.error })
 		})
 
@@ -152,7 +152,7 @@
 			{/each}
 		</select>
 		<div class="relative">
-			<Icons.Search class="text-surface-500 absolute top-1/2 left-3 -translate-y-1/2" size={16} />
+			<Icons.Search class="text-surface-700-300 absolute top-1/2 left-3 -translate-y-1/2" size={16} />
 			<input
 				type="text"
 				placeholder={selectedSource === SOURCE_RECOMMENDED
@@ -176,7 +176,7 @@
 				</div>
 			{:else if recommendedModels.length === 0}
 				<div class="p-6 text-center">
-					<Icons.Search class="text-surface-500 mx-auto mb-4" size={48} />
+					<Icons.Search class="text-surface-700-300 mx-auto mb-4" size={48} />
 					<p class="text-sm opacity-75">No recommended models available.</p>
 				</div>
 			{:else}
@@ -207,7 +207,7 @@
 								<p class="text-muted-foreground text-sm leading-relaxed">{model.description}</p>
 							{/if}
 
-							<div class="text-surface-500 flex flex-wrap items-center gap-4 text-xs">
+							<div class="text-surface-700-300 flex flex-wrap items-center gap-4 text-xs">
 								{#if model.downloads != null}
 									<div class="flex items-center gap-1">
 										<Icons.Download size={12} />
@@ -260,12 +260,12 @@
 				</div>
 			{:else if searchResults.length === 0 && searchString}
 				<div class="p-6 text-center">
-					<Icons.Search class="text-surface-500 mx-auto mb-4" size={48} />
+					<Icons.Search class="text-surface-700-300 mx-auto mb-4" size={48} />
 					<p class="text-sm opacity-75">No models found for "{searchString}".</p>
 				</div>
 			{:else if searchResults.length === 0}
 				<div class="p-6 text-center">
-					<Icons.Search class="text-surface-500 mx-auto mb-4" size={48} />
+					<Icons.Search class="text-surface-700-300 mx-auto mb-4" size={48} />
 					<p class="text-sm opacity-75">Search Hugging Face for GGUF models.</p>
 				</div>
 			{:else}
@@ -275,10 +275,10 @@
 							<h4 class="text-lg font-semibold">{model.name}</h4>
 
 							{#if model.description}
-								<p class="text-surface-500 line-clamp-2 text-sm">{model.description}</p>
+								<p class="text-surface-700-300 line-clamp-2 text-sm">{model.description}</p>
 							{/if}
 
-							<div class="text-surface-500 flex flex-wrap items-center gap-4 text-xs">
+							<div class="text-surface-700-300 flex flex-wrap items-center gap-4 text-xs">
 								{#if model.downloads != null}
 									<div class="flex items-center gap-1">
 										<Icons.Download size={12} />
@@ -357,7 +357,7 @@
 								<span class="rounded bg-warning-500 px-1.5 py-0.5 text-xs text-white">Recommended</span>
 							{/if}
 							{#if opt.sizeBytes}
-								<span class="text-surface-500 text-xs">{(opt.sizeBytes / 1_073_741_824).toFixed(1)}GB</span>
+								<span class="text-surface-700-300 text-xs">{(opt.sizeBytes / 1_073_741_824).toFixed(1)}GB</span>
 							{/if}
 						</div>
 						<button

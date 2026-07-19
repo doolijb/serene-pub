@@ -4,6 +4,7 @@
 
 import type { ListResponse } from "ollama"
 import type { SpecV3 } from "@lenml/char-card-reader"
+import type { LibraryCatalogItem, CardSourceId, CardSourceSort } from "$lib/shared/library/types"
 
 declare global {
 	namespace Sockets {
@@ -76,13 +77,16 @@ declare global {
 				}
 				interface Response {
 					character:
-						| (SelectCharacter & { isOwner: boolean; ownerName: string | null })
+						| (SelectCharacter & { isOwner: boolean; ownerName: string | null; tags: string[] })
 						| null
 				}
 			}
 			namespace Create {
 				interface Params {
-					character: InsertCharacter
+					// "characters:create" always derives userId from the
+					// authenticated socket (see charactersCreate in
+					// characters.ts) — the client never supplies it.
+					character: Omit<InsertCharacter, "userId">
 					avatarFile?: Buffer
 				}
 				interface Response {
@@ -129,23 +133,31 @@ declare global {
 			namespace SearchLibrary {
 				interface Params {
 					searchTerm?: string
+					source?: CardSourceId
+					category?: string
+					nsfw?: boolean
+					sort?: CardSourceSort
+					cursor?: { limit: number; offset: number }
+					/**
+					 * Client-generated, echoed back verbatim on the response —
+					 * lets the client tell which in-flight request a given
+					 * response belongs to and discard stale ones, without
+					 * blocking new searches from being sent while an older one
+					 * is still pending (which previously made a slow CharaVault
+					 * response feel like it froze the whole page).
+					 */
+					requestId?: string
 				}
 				interface Response {
-					characters: {
-						name: string
-						description: string
-						tags: string[]
-						author: string
-						version: string
-						spec: string
-						file: string
-						category: string
-					}[]
+					characters: LibraryCatalogItem[]
+					hasMore: boolean
+					requestId?: string
 				}
 			}
 			namespace ImportFromLibrary {
 				interface Params {
-					fileUrl: string
+					source: CardSourceId
+					ref: unknown
 				}
 				interface Response {
 					character: SelectCharacter
@@ -266,7 +278,11 @@ declare global {
 			namespace List {
 				interface Params {}
 				interface Response {
-					personaList: Partial<SelectPersona>[]
+					// Matches the `with: { personaTags: { with: { tag: true } } }`
+					// query in personasList (personas.ts).
+					personaList: (Partial<SelectPersona> & {
+						personaTags?: { tag: SelectTag }[]
+					})[]
 				}
 			}
 			namespace Get {
@@ -275,13 +291,16 @@ declare global {
 				}
 				interface Response {
 					persona:
-						| (SelectPersona & { isOwner: boolean; ownerName: string | null })
+						| (SelectPersona & { isOwner: boolean; ownerName: string | null; tags: string[] })
 						| null
 				}
 			}
 			namespace Create {
 				interface Params {
-					persona: InsertPersona
+					// "personas:create" always derives userId from the
+					// authenticated socket (see personasCreate in
+					// personas.ts) — the client never supplies it.
+					persona: Omit<InsertPersona, "userId">
 					avatarFile?: Buffer
 				}
 				interface Response {
@@ -317,23 +336,31 @@ declare global {
 			namespace SearchLibrary {
 				interface Params {
 					searchTerm?: string
+					source?: CardSourceId
+					category?: string
+					nsfw?: boolean
+					sort?: CardSourceSort
+					cursor?: { limit: number; offset: number }
+					/**
+					 * Client-generated, echoed back verbatim on the response —
+					 * lets the client tell which in-flight request a given
+					 * response belongs to and discard stale ones, without
+					 * blocking new searches from being sent while an older one
+					 * is still pending (which previously made a slow CharaVault
+					 * response feel like it froze the whole page).
+					 */
+					requestId?: string
 				}
 				interface Response {
-					personas: {
-						name: string
-						description: string
-						tags: string[]
-						author: string
-						version: string
-						spec: string
-						file: string
-						category: string
-					}[]
+					personas: LibraryCatalogItem[]
+					hasMore: boolean
+					requestId?: string
 				}
 			}
 			namespace ImportFromLibrary {
 				interface Params {
-					fileUrl: string
+					source: CardSourceId
+					ref: unknown
 				}
 				interface Response {
 					persona: SelectPersona
@@ -385,10 +412,22 @@ declare global {
 					chatType?: string
 				}
 				interface Response {
+					// Matches the `with: { chatCharacters, chatPersonas, chatTags }`
+					// query in registerChatsHandlers' "chats:list" handler — the
+					// character/persona rows are trimmed to a display-only column
+					// subset there (id/name/shortDescription/avatar/visibility),
+					// hence Partial<...> rather than the full Select* type.
 					chatList: (Partial<SelectChat> & {
 						canEdit: boolean
 						isOwner: boolean
 						isGuest: boolean
+						chatCharacters?: (SelectChatCharacter & {
+							character: Partial<SelectCharacter>
+						})[]
+						chatPersonas?: (SelectChatPersona & {
+							persona: Partial<SelectPersona>
+						})[]
+						chatTags?: { tag: SelectTag }[]
 					})[]
 				}
 			}
@@ -429,7 +468,16 @@ declare global {
 									persona: SelectPersona
 								})[]
 								chatTags?: { tag: { name: string } }[]
-								chatGuests?: { user: any }[]
+								// chatGuests table has no `id` column (composite PK of
+								// chatId+userId — see schema.ts chatGuests); the "chats:get"
+								// handler queries it `with: { user: true }`, so each row is
+								// the full join row plus the full joined user.
+								chatGuests?: {
+									chatId: number
+									userId: number
+									isPlayer: boolean
+									user: SelectUser
+								}[]
 								tags?: string[]
 						  })
 						| null
@@ -452,7 +500,11 @@ declare global {
 			}
 			namespace Create {
 				interface Params {
-					chat: InsertChat
+					// "chats:create" always derives userId from the authenticated
+					// socket and computes isGroup from characterIds.length itself
+					// (see chatsCreateHandler in chats.ts) — the client must not,
+					// and structurally can't reliably, supply either.
+					chat: Omit<InsertChat, "userId" | "isGroup">
 					characterIds: number[]
 					personaIds: number[]
 					characterPositions: Record<number, number>
@@ -569,12 +621,19 @@ declare global {
 				interface Response {
 					prompt?: string
 					messages?: any[]
-					meta: {
+					// promptTokenCountHandler returns just `{ error }` (no meta) on
+					// every early-exit path (access denied, chat not found, no
+					// connection/sampling configured, etc.) and on exception.
+					error?: string
+					meta?: {
 						promptFormat: string
 						templateName: string | null
 						timestamp: string
 						truncationReason: string | null
-						currentTurnCharacterId: number
+						// Matches CompiledPrompt.meta.currentTurnCharacterId
+						// (promptBuilder/types.ts) — null in narrator/assistant
+						// mode, where there's no single "current turn" character.
+						currentTurnCharacterId: number | null
 						tokenCounts: {
 							total: number
 							limit: number
@@ -646,7 +705,6 @@ declare global {
 							}
 						)
 					}
-					error?: string
 				}
 			}
 			namespace TriggerGenerateMessage {
@@ -917,7 +975,7 @@ declare global {
 					id: number
 				}
 				interface Response {
-					lorebook: SelectLorebook | null
+					lorebook: (SelectLorebook & { tags: string[] }) | null
 					worldLoreEntries: SelectWorldLoreEntry[]
 					characterLoreEntries: SelectCharacterLoreEntry[]
 					historyEntries: SelectHistoryEntry[]
@@ -971,7 +1029,13 @@ declare global {
 				}
 				interface Response {
 					lorebookId: number
-					lorebookBindingList: SelectLorebookBinding[]
+					// Matches the `with: { character: true, persona: true }`
+					// query in registerLorebookHandlers' "lorebooks:bindingList"
+					// handler (lorebooks.ts).
+					lorebookBindingList: (SelectLorebookBinding & {
+						character?: SelectCharacter | null
+						persona?: SelectPersona | null
+					})[]
 				}
 			}
 			namespace CreateBinding {
@@ -1587,7 +1651,10 @@ declare global {
 			namespace ConnectModel {
 				interface Params {
 					modelName: string
-					connectionId: number
+					// Note: ollamaConnectModelHandler (src/lib/server/sockets/ollama.ts)
+					// looks up/creates the connection from modelName alone and never
+					// reads a connectionId - no caller has ever supplied one. Previously
+					// declared as a required field here, which didn't match reality.
 				}
 				interface Response {
 					success: string
@@ -1602,7 +1669,10 @@ declare global {
 			namespace PullModel {
 				interface Params {
 					modelName: string
-					connectionId: number
+					// Note: ollamaPullModelHandler (src/lib/server/sockets/ollama.ts)
+					// only reads modelName - no caller has ever supplied connectionId.
+					// Previously declared as a required field here, which didn't match
+					// reality.
 				}
 				interface Response {
 					success: string
@@ -1629,6 +1699,11 @@ declare global {
 				}
 				interface Response {
 					models: any[]
+					// Optional - not sent alongside `models` by the server today, but
+					// the client's success-path handler defensively checks for it
+					// (errors currently arrive via the separate
+					// "ollama:searchAvailableModels:error" event).
+					error?: string
 				}
 			}
 			namespace ClearDownloadHistory {
@@ -1661,6 +1736,9 @@ declare global {
 				interface Params {}
 				interface Response {
 					recommendedModels: any[]
+					// Optional - see SearchAvailableModels.Response.error above for
+					// why the success-path handler defensively checks for this.
+					error?: string
 				}
 			}
 		}
@@ -2105,7 +2183,10 @@ declare global {
 			}
 			namespace Create {
 				interface Params {
-					tag: InsertTag
+					// "tags:create" always derives userId from the
+					// authenticated socket (see tagsCreate in tags.ts) —
+					// the client never supplies it.
+					tag: Omit<InsertTag, "userId">
 				}
 				interface Response {
 					tag: SelectTag
@@ -2143,42 +2224,83 @@ declare global {
 			}
 		}
 
+		// Card Sources namespace — the pluggable character/persona browsing
+		// backends (GitHub community library, CharaVault, ...).
+		namespace CardSources {
+			namespace Capabilities {
+				interface Params {}
+				interface Response {
+					unsafeBrowsingEnabled: boolean
+					sources: {
+					id: CardSourceId
+					label: string
+					description: string
+					url: string
+					supportsPersonas: boolean
+				}[]
+					charaVaultConnected: boolean
+				}
+			}
+			namespace CharaVaultConnect {
+				interface Params {
+					email: string
+					token: string
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace CharaVaultDisconnect {
+				interface Params {}
+				interface Response {
+					success: boolean
+				}
+			}
+			namespace CharaVaultStatus {
+				interface Params {}
+				interface Response {
+					connected: boolean
+					email: string | null
+				}
+			}
+			namespace CardDetail {
+				interface Params {
+					source: CardSourceId
+					ref: unknown
+				}
+				interface Response {
+					description?: string
+					hasLorebook?: boolean
+				}
+			}
+		}
+
 		// System Settings namespace
 		namespace SystemSettings {
 			namespace Get {
 				interface Params {}
 				interface Response {
-					systemSettings: {
-						isAccountsEnabled: boolean
-						vectorizationEnabled: boolean
-						embeddingModelName: string | null
-						embeddingModelDimensions: number | null
-						summarizationEnabled: boolean
-						contextDebuggingEnabled: boolean
-						defaultConnectionId: number | null
-						lockConnection: boolean
-						defaultSamplingConfigId: number | null
-						lockSamplingConfig: boolean
-						defaultContextConfigId: number | null
-						lockContextConfig: boolean
-						defaultPromptConfigId: number | null
-						lockPromptConfig: boolean
-					}
-					ollamaSettings: {
-						ollamaManagerEnabled: boolean
-						ollamaManagerBaseUrl: string
-					}
-					koboldCppSettings: {
-						koboldCppManagerEnabled: boolean
-						koboldCppManagerBaseUrl: string
-						koboldCppManagerModelsDir: string | null
-						koboldCppManagedMode: string | null
-						koboldCppManagedBinaryVariant: string | null
-						koboldCppManagedBinaryDir: string | null
-						koboldCppManagedPort: number
-						koboldCppManagedAdminPassword: string | null
-						koboldCppManagedModelTtlSecs: number
-					}
+					// Mirrors the columns actually queried in systemSettingsGet
+					// (systemSettings.ts) — `id` is always excluded from every
+					// row via `columns: { id: false }` etc. The CharaVault
+					// credential fields are deliberately never sent to the
+					// client either — see cardSources:charaVault:status instead.
+					systemSettings: Omit<
+						SelectSystemSettings,
+						| "id"
+						| "charaVaultEmail"
+						| "charaVaultEncryptedToken"
+						| "charaVaultTokenIv"
+						| "charaVaultTokenAuthTag"
+					>
+					ollamaSettings: Omit<SelectOllamaSettings, "id">
+					// koboldCppManagedAdminPassword is deliberately never sent to
+					// the client (server-only secret) — see the `columns` filter
+					// in systemSettingsGet.
+					koboldCppSettings: Omit<
+						SelectKoboldCppSettings,
+						"id" | "koboldCppManagedAdminPassword"
+					>
 					isAndroidWrapper: boolean
 				}
 			}
@@ -2255,6 +2377,10 @@ declare global {
 					userSettings: {
 						activeContextConfigId?: number | null
 						activePromptConfigId?: number | null
+						activeNarratorPromptConfigId?: number | null
+						activeSummarizeWorldConfigId?: number | null
+						activeSummarizeCharacterConfigId?: number | null
+						activeSummarizeSceneConfigId?: number | null
 						theme: string
 						darkMode: boolean
 						showHomePageBanner: boolean
@@ -2263,6 +2389,7 @@ declare global {
 						showAllCharacterFields: boolean
 						backgroundImagePath: string | null
 						backgroundOpacity: number
+						charaVaultIncludeNsfw: boolean
 					}
 				}
 			}
@@ -2321,6 +2448,15 @@ declare global {
 				}
 			}
 			namespace UpdateShowHomePageBanner {
+				interface Params {
+					enabled: boolean
+				}
+				interface Response {
+					success: boolean
+					enabled: boolean
+				}
+			}
+			namespace UpdateCharaVaultIncludeNsfw {
 				interface Params {
 					enabled: boolean
 				}
@@ -2498,9 +2634,14 @@ declare global {
 		namespace ChatMessage {
 			interface Call {
 				chatMessage?: SelectChatMessage
+				id?: number
 			}
 			interface Response {
-				chatMessage: SelectChatMessage
+				// chatMessageHandler ("chats.ts") omits `chatMessage` and sets
+				// `error` instead on the not-found/invalid-params/exception paths
+				// (see the "chatMessage:error" emits), so both fields are optional.
+				chatMessage?: SelectChatMessage
+				error?: string
 			}
 		}
 
@@ -3292,7 +3433,6 @@ declare global {
 				}
 			}
 		}
-	}
 
 	// Assistant namespace
 	namespace Assistant {
@@ -3472,6 +3612,7 @@ declare global {
 		files: File[]
 	}
 
+	}
 }
 
 export {}

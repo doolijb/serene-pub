@@ -1,5 +1,5 @@
 <script lang="ts">
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import CharacterSelectModal from "../modals/CharacterSelectModal.svelte"
 	import PersonaSelectModal from "../modals/PersonaSelectModal.svelte"
 	import UserSelectModal from "../modals/UserSelectModal.svelte"
@@ -38,7 +38,7 @@
 		onClose
 	}: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	// STATE VARIABLES
 
@@ -48,7 +48,7 @@
 	let showTagSuggestions = $state(false)
 	let selectedTags: string[] = $state([])
 
-	let chat: Sockets.Chat.Response["chat"] | undefined = $state()
+	let chat: Sockets.Chats.Get.Response["chat"] | undefined = $state()
 	let isCreating = $state(untrack(() => !chat))
 	let characters: Sockets.Characters.List.Response["characterList"] = $state(
 		[]
@@ -112,10 +112,14 @@
 	let narratorPromptConfigId: number | null = $state(null)
 
 	// AI override lists (admin only)
-	let adminConnectionsList: { id: number; name: string; type: string }[] = $state([])
-	let adminSamplingList: { id: number; name: string }[] = $state([])
-	let adminPromptConfigsList: { id: number; name: string }[] = $state([])
-	let adminNarratorPromptConfigsList: { id: number; name: string }[] = $state([])
+	let adminConnectionsList: Sockets.Connections.List.Response["connectionsList"] =
+		$state([])
+	let adminSamplingList: Sockets.SamplingConfigs.List.Response["samplingConfigsList"] =
+		$state([])
+	let adminPromptConfigsList: Sockets.PromptConfigs.List.Response["promptConfigsList"] =
+		$state([])
+	let adminNarratorPromptConfigsList: Sockets.NarratorPromptConfigs.List.Response["narratorPromptConfigsList"] =
+		$state([])
 
 	// MODALS
 	let showCharacterModal = $state(false)
@@ -128,9 +132,11 @@
 	)
 	let canSave: boolean = $derived(
 		// Always allow saving if we have basic requirements
-		data?.chat.name.trim() &&
+		!!(
+			data?.chat.name.trim() &&
 			data?.characterIds.length > 0 &&
 			data?.personaIds.length > 0
+		)
 	)
 
 	// Sync hasChanges with isDirty
@@ -164,9 +170,17 @@
 	})
 
 	// SELECTED CHARACTERS AND PERSONAS
-	let selectedCharacters: SelectCharacter[] = $state([])
-	let selectedPersonas: SelectPersona[] = $state([])
-	let selectedGuests: SelectChatGuest[] = $state([])
+	// Populated either from the full chat load (chat.chatCharacters/Personas,
+	// which carry the complete row) or from CharacterSelectModal/
+	// PersonaSelectModal (which only carry the display-column subset from
+	// "characters:list"/"personas:list") — Partial<...> reflects the latter.
+	let selectedCharacters: (Partial<SelectCharacter> & { id: number })[] =
+		$state([])
+	let selectedPersonas: (Partial<SelectPersona> & { id: number })[] =
+		$state([])
+	let selectedGuests: NonNullable<
+		NonNullable<Sockets.Chats.Get.Response["chat"]>["chatGuests"]
+	> = $state([])
 	let showRemoveModal = $state(false)
 	let removeType: "character" | "persona" | "guest" = $state("character")
 	let removeName = $state("")
@@ -271,7 +285,7 @@
 		}
 	})
 
-	function handleAddCharacter(char: SelectCharacter & { id: number }) {
+	function handleAddCharacter(char: Partial<SelectCharacter> & { id: number }) {
 		if (!selectedCharacters.some((c) => c.id === char.id))
 			selectedCharacters = [...selectedCharacters, char]
 		showCharacterModal = false
@@ -301,7 +315,7 @@
 		}
 	}
 
-	function handleAddPersona(p: SelectPersona & { id: number }) {
+	function handleAddPersona(p: Partial<SelectPersona> & { id: number }) {
 		if (!selectedPersonas.some((pp) => pp.id === p.id))
 			selectedPersonas = [...selectedPersonas, p]
 		showPersonaModal = false
@@ -327,13 +341,15 @@
 
 	function handleAddGuests(userIds: number[]) {
 		if (!chat?.id) return
+		const chatId = chat.id
 
 		// Add each guest via socket
 		userIds.forEach((userId) => {
-			socket.emit("chats:addGuest", {
-				chatId: chat.id,
+			const req: Sockets.Chats.AddGuest.Params = {
+				chatId,
 				guestUserId: userId
-			} as Sockets.Chats.AddGuest.Params)
+			}
+			socket.emit("chats:addGuest", req)
 		})
 		showGuestModal = false
 	}
@@ -341,10 +357,11 @@
 	function handleRemoveGuest(userId: number) {
 		if (!chat?.id) return
 
-		socket.emit("chats:removeGuest", {
+		const req: Sockets.Chats.RemoveGuest.Params = {
 			chatId: chat.id,
 			guestUserId: userId
-		} as Sockets.Chats.RemoveGuest.Params)
+		}
+		socket.emit("chats:removeGuest", req)
 	}
 
 	function handleSave() {
@@ -381,10 +398,16 @@
 		}
 		
 		if (chat && chat.id) {
-			const updateChat: Sockets.UpdateChat.Call = data!
+			const updateChat: Sockets.Chats.Update.Params = {
+				...data!,
+				chat: {
+					...data!.chat,
+					id: chat.id
+				}
+			}
 			socket.emit("chats:update", updateChat)
 		} else {
-			const createChat: Sockets.CreateChat.Call = {
+			const createChat: Sockets.Chats.Create.Params = {
 				chat: {
 					name: name.trim(),
 					scenario: scenario.trim(),
@@ -394,7 +417,7 @@
 					samplingConfigId: chatSamplingConfigId,
 					promptConfigId: chatPromptConfigId,
 					narratorPromptConfigId: narratorPromptConfigId
-				} as any,
+				},
 				characterIds,
 				personaIds,
 				characterPositions,
@@ -511,16 +534,16 @@
 			scenario = chat.scenario || ""
 			groupReplyStrategy = chat.groupReplyStrategy || "ordered"
 			selectedCharacters =
-				chat.chatCharacters?.map((cc: any) => cc.character) || []
+				chat.chatCharacters?.map((cc) => cc.character) || []
 			selectedPersonas =
-				chat.chatPersonas?.map((cp: any) => cp.persona) || []
+				chat.chatPersonas?.map((cp) => cp.persona) || []
 			selectedGuests = chat.chatGuests || []
 			lorebookId = chat.lorebookId || null
 			selectedTags = chat.tags || []
-			chatConnectionId = (chat as any).connectionId ?? null
-			chatSamplingConfigId = (chat as any).samplingConfigId ?? null
-			chatPromptConfigId = (chat as any).promptConfigId ?? null
-			narratorPromptConfigId = (chat as any).narratorPromptConfigId ?? null
+			chatConnectionId = chat.connectionId ?? null
+			chatSamplingConfigId = chat.samplingConfigId ?? null
+			chatPromptConfigId = chat.promptConfigId ?? null
+			narratorPromptConfigId = chat.narratorPromptConfigId ?? null
 			// Reset originalData to null so it gets re-initialized with the loaded data
 			originalData = undefined
 		}
@@ -581,11 +604,10 @@
 			})
 			// Optimistically update local state immediately
 			if (chat.chatCharacters) {
-				const updatedChatCharacters = chat.chatCharacters.map(
-					(cc: SelectChatCharacter) =>
-						cc.characterId === msg.characterId
-							? { ...cc, visibility: msg.visibility }
-							: cc
+				const updatedChatCharacters = chat.chatCharacters.map((cc) =>
+					cc.characterId === msg.characterId
+						? { ...cc, visibility: msg.visibility }
+						: cc
 				)
 				chat = { ...chat, chatCharacters: updatedChatCharacters }
 			}
@@ -660,10 +682,10 @@
 
 		// Admin-only: load connections, sampling configs, and prompt configs for override pickers
 		if (userCtx.user?.isAdmin) {
-			socket.on("connections:list", (msg: any) => { adminConnectionsList = msg.connectionsList || [] })
-			socket.on("samplingConfigs:list", (msg: any) => { adminSamplingList = msg.samplingConfigsList || [] })
-			socket.on("promptConfigs:list", (msg: any) => { adminPromptConfigsList = msg.promptConfigsList || [] })
-			socket.on("narratorPromptConfigs:list", (msg: any) => { adminNarratorPromptConfigsList = msg.narratorPromptConfigsList || [] })
+			socket.on("connections:list", (msg: Sockets.Connections.List.Response) => { adminConnectionsList = msg.connectionsList || [] })
+			socket.on("samplingConfigs:list", (msg: Sockets.SamplingConfigs.List.Response) => { adminSamplingList = msg.samplingConfigsList || [] })
+			socket.on("promptConfigs:list", (msg: Sockets.PromptConfigs.List.Response) => { adminPromptConfigsList = msg.promptConfigsList || [] })
+			socket.on("narratorPromptConfigs:list", (msg: Sockets.NarratorPromptConfigs.List.Response) => { adminNarratorPromptConfigsList = msg.narratorPromptConfigsList || [] })
 			socket.emit("connections:list", {})
 			socket.emit("samplingConfigs:list", {})
 			socket.emit("promptConfigs:list", {})
@@ -704,7 +726,7 @@
 
 	function toggleCharacterActive(
 		e: { checked: boolean },
-		c: SelectCharacter
+		c: Partial<SelectCharacter> & { id: number }
 	): void {
 		if (!chat?.id) {
 			console.error("No chat ID available")
@@ -718,7 +740,7 @@
 	}
 
 	function updateCharacterVisibility(
-		c: SelectCharacter,
+		c: Partial<SelectCharacter> & { id: number },
 		visibility: string
 	): void {
 		if (!chat?.id) {
@@ -877,7 +899,7 @@
 										{c.nickname || c.name}
 									</div>
 									<div
-										class="text-surface-500 line-clamp-2 text-xs select-none"
+										class="text-surface-700-300 line-clamp-2 text-xs select-none"
 									>
 										{c.creatorNotes || c.description || ""}
 									</div>
@@ -933,7 +955,7 @@
 											</Switch.Control>
 											<Switch.HiddenInput />
 										</Switch>
-										<span class="text-surface-500 text-xs">
+										<span class="text-surface-700-300 text-xs">
 											{isActive ? "Active" : "Inactive"}
 										</span>
 									</span>
@@ -956,7 +978,7 @@
 										)?.label || "Full Info"}
 									</button>
 								{:else}
-									<span class="text-surface-500 text-xs">
+									<span class="text-surface-700-300 text-xs">
 										Ready to add
 									</span>
 								{/if}
@@ -965,7 +987,7 @@
 									onclick={() =>
 										confirmRemoveCharacter(
 											c.id,
-											c.nickname || c.name
+											c.nickname || c.name || ""
 										)}
 									title="Remove from chat"
 								>
@@ -1020,7 +1042,7 @@
 									{p.name}
 								</div>
 								<div
-									class="text-surface-500 line-clamp-2 text-xs select-none"
+									class="text-surface-700-300 line-clamp-2 text-xs select-none"
 								>
 									{p.description || ""}
 								</div>
@@ -1053,7 +1075,7 @@
 						>
 							<button
 								class="preset-tonal-error btn btn-sm"
-								onclick={() => confirmRemovePersona(p.id, p.name)}
+								onclick={() => confirmRemovePersona(p.id, p.name || "")}
 								title="Remove from chat"
 							>
 								<Icons.X size={16} /> Remove
@@ -1072,7 +1094,7 @@
 			</div>
 		</div>
 
-		{#if editChatId && systemSettingsCtx?.settings.isAccountsEnabled}
+		{#if editChatId && systemSettingsCtx?.settings?.isAccountsEnabled}
 			<!-- Guests Section (only show in edit mode and when accounts are enabled) -->
 			<div>
 				<label class="mb-3 flex items-center justify-between">
@@ -1087,7 +1109,7 @@
 				<div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
 					{#if selectedGuests.length === 0}
 						<div
-							class="text-surface-500 col-span-full text-center text-sm"
+							class="text-surface-700-300 col-span-full text-center text-sm"
 						>
 							No guests added
 						</div>
@@ -1305,13 +1327,17 @@
 		onSelect={handleAddPersona}
 		returnFullPersona={true}
 	/>
+	<!-- RemoveFromChatModal only models "character" | "persona" (its ternaries
+		fall back to the "character" copy for anything else, including its own
+		default value of "character") — mapping "guest" to undefined below
+		keeps that exact same fallback behavior while satisfying its prop type. -->
 	<RemoveFromChatModal
 		open={showRemoveModal}
 		onOpenChange={(e) => (showRemoveModal = e.open)}
 		onConfirm={handleRemoveConfirm}
 		onCancel={handleRemoveCancel}
 		name={removeName}
-		type={removeType}
+		type={removeType === "guest" ? undefined : removeType}
 	/>
 	<UserSelectModal
 		open={showGuestModal}

@@ -3,7 +3,11 @@
 	import * as Icons from "@lucide/svelte"
 
 	interface Props {
-		char: Partial<SelectCharacter> | Partial<SelectPersona>
+		// Optional: the template below already treats a falsy `char` as the
+		// "unknown" case (fallback icon + "Unknown" alt text), so callers that
+		// haven't resolved a character/persona yet (eg. a deleted reference)
+		// can legitimately pass undefined.
+		char: Partial<SelectCharacter> | Partial<SelectPersona> | undefined
 		src?: string
 		size?: string
 	}

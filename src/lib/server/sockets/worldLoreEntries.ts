@@ -1,8 +1,10 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { eq, inArray } from "drizzle-orm"
+import { asc, eq, inArray } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
-import type { InsertWorldLoreEntry } from "$lib/server/db/types"
+// InsertWorldLoreEntry is declared globally in $lib/server/db/types.d.ts
+// (ambient `export global {}` block, same pattern as the Sockets namespace)
+// — no import needed/available for it.
 import { lorebookBindingListHandler, syncLorebookBindings } from "./lorebooks"
 import { autoEnqueueLorebook } from "$lib/server/embedding/vectorizationQueue"
 
@@ -63,7 +65,7 @@ export const createWorldLoreEntryHandler: Handler<
 						id: true,
 						position: true
 					},
-					orderBy: (e, { asc }) => asc(e.position)
+					orderBy: asc(schema.worldLoreEntries.position)
 				}
 			}
 		})
@@ -149,7 +151,7 @@ export const updateWorldLoreEntryHandler: Handler<
 			.returning()
 
 		await syncLorebookBindings({ lorebookId: existingEntry.lorebookId })
-		autoEnqueueLorebook(existingEntry.lorebookId, (existingEntry as any).lorebook?.name ?? "", "").catch(console.error)
+		autoEnqueueLorebook(existingEntry.lorebookId, existingEntry.lorebook?.name ?? "", "").catch(console.error)
 
 		// Refresh binding list and entry list
 		if (emitToUser) {

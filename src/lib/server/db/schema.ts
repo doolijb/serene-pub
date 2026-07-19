@@ -10,7 +10,6 @@ import {
 	index,
 	json,
 	date,
-	type PgTableWithColumns,
 	type AnyPgColumn,
 	numeric,
 	timestamp,
@@ -114,6 +113,13 @@ export const userSettings = pgTable("user_settings", {
 		.default(false),
 	backgroundImagePath: text("background_image_path"),
 	backgroundOpacity: integer("background_opacity").notNull().default(75),
+	// Personal viewing preference — independent of who owns the underlying
+	// CharaVault account (a single admin-configured, instance-wide
+	// credential; see systemSettings.charaVaultEmail). Only has any effect
+	// when ENABLE_UNSAFE_CHARACTER_BROWSING is set.
+	charaVaultIncludeNsfw: boolean("chara_vault_include_nsfw")
+		.notNull()
+		.default(false),
 	createdAt: date("created_at")
 		.notNull()
 		.default(sql`(CURRENT_TIMESTAMP)`),
@@ -154,9 +160,7 @@ export const userSettingsRelations = relations(userSettings, ({ one }) => ({
 	})
 }))
 
-export const passphrases: PgTableWithColumns<any> & {
-	usePermissions?: boolean
-} = pgTable(
+export const passphrases = pgTable(
 	"passphrases",
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
@@ -904,6 +908,8 @@ export const characters = pgTable(
 		.$type<Record<string, any>>(),
 	aliases: json("aliases").notNull().default([]).$type<string[]>(),
 	summary: text("summary"),
+	creator: text("creator"), // Card creator/author, per Character Card V3 spec
+	category: text("category"), // Serene Pub-specific grouping/filter tag
 	isFavorite: boolean("is_favorite").notNull().default(false), // 1 if favorite, 0 otherwise
 	isDeleted: boolean("is_deleted").notNull().default(false),
 	embedding: real("embedding").array(),
@@ -950,6 +956,8 @@ export const personas = pgTable(
 	}), // Optional lorebook for this persona
 	aliases: json("aliases").notNull().default([]).$type<string[]>(),
 	summary: text("summary"),
+	creator: text("creator"), // Card creator/author, per Character Card V3 spec
+	category: text("category"), // Serene Pub-specific grouping/filter tag
 	isDeleted: boolean("is_deleted").notNull().default(false),
 	embedding: real("embedding").array(),
 	embeddingModel: text("embedding_model"),
@@ -1083,9 +1091,17 @@ export const chatMessages = pgTable(
 		isEdited: boolean("is_edited").notNull().default(false), // 1 if edited, 0 otherwise
 		metadata: json("metadata").notNull().default({}).$type<{
 			isGreeting?: boolean
-			swipes?: { currentIdx: number | null; history: [] }
+			swipes?: {
+				currentIdx: number | null
+				history: string[]
+				thinkingHistory?: (string | null)[]
+			}
 			waitingForFunctionSelection?: boolean
 			reasoning?: string // Assistant reasoning/thinking before response
+			// Native model thinking content (e.g. Ollama `think: true`) for the
+			// message's currently-active swipe — mirrors swipes.thinkingHistory[currentIdx],
+			// kept denormalized here since that's what ChatMessage.svelte reads.
+			thinking?: string | null
 			narratorInstructions?: string // Optional extra focus text for a Narrator response generation
 			narratorName?: string // Display name resolved at generation time for a Narrator response message (e.g. "Narrator")
 		}>(), // JSON for extra info
@@ -1308,7 +1324,14 @@ export const systemSettings = pgTable("system_settings", {
 	defaultGraphBuildConfigId: integer("default_graph_build_config_id").references(
 		() => graphBuildConfigs.id,
 		{ onDelete: "set null" }
-	)
+	),
+	// Admin-configured CharaVault account, shared instance-wide across all
+	// users (not a per-user credential). Never sent to the client — see
+	// systemSettingsGet's column exclusions.
+	charaVaultEmail: text("chara_vault_email"),
+	charaVaultEncryptedToken: text("chara_vault_encrypted_token"),
+	charaVaultTokenIv: text("chara_vault_token_iv"),
+	charaVaultTokenAuthTag: text("chara_vault_token_auth_tag")
 })
 
 export const systemSettingsRelations = relations(systemSettings, ({ one }) => ({

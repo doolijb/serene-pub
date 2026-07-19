@@ -405,9 +405,9 @@
                                         {:else}
                                             <span class="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-xs font-medium text-amber-600">Best</span>
                                         {/if}
-                                        <span class="text-surface-500 text-xs">{model.sizeLabel} · {model.dimensions}d</span>
+                                        <span class="text-surface-700-300 text-xs">{model.sizeLabel} · {model.dimensions}d</span>
                                     </div>
-                                    <p class="text-surface-500 mt-0.5 text-xs">{model.description}</p>
+                                    <p class="text-surface-700-300 mt-0.5 text-xs">{model.description}</p>
                                 </div>
                             </label>
                         {/each}
@@ -417,7 +417,7 @@
                 {#if downloadProgress}
                     <div class="space-y-1">
                         <div class="flex items-center justify-between text-xs">
-                            <span class="text-surface-500 capitalize">{downloadProgress.status}…</span>
+                            <span class="text-surface-700-300 capitalize">{downloadProgress.status}…</span>
                             {#if downloadProgress.percent !== undefined}
                                 <span class="font-mono">{downloadProgress.percent}%</span>
                             {/if}
@@ -460,12 +460,12 @@
                         Back
                     </button>
                 </div>
-                <p class="text-xs text-surface-500">
+                <p class="text-xs text-surface-700-300">
                     Any OpenAI-compatible /embeddings endpoint — OpenAI itself, Ollama, LM Studio, llama.cpp server, etc.
                 </p>
 
                 <label class="block">
-                    <span class="text-xs text-surface-500">Base URL</span>
+                    <span class="text-xs text-surface-700-300">Base URL</span>
                     <input
                         type="text"
                         class="input text-sm w-full"
@@ -474,7 +474,7 @@
                     />
                 </label>
                 <label class="block">
-                    <span class="text-xs text-surface-500">API Key</span>
+                    <span class="text-xs text-surface-700-300">API Key</span>
                     <input
                         type="password"
                         class="input text-sm w-full"
@@ -483,7 +483,7 @@
                     />
                 </label>
                 <label class="block">
-                    <span class="text-xs text-surface-500">Model</span>
+                    <span class="text-xs text-surface-700-300">Model</span>
                     <input
                         type="text"
                         class="input text-sm w-full"
@@ -576,13 +576,13 @@
                     </div>
 
                     {#if vectorizationCtx.currentItem && vectorizationCtx.status === "running"}
-                        <div class="text-surface-500 mt-2 flex items-center gap-1.5 text-xs">
+                        <div class="text-surface-700-300 mt-2 flex items-center gap-1.5 text-xs">
                             <Icons.Cpu size={12} class="shrink-0" aria-hidden="true" />
                             <span class="truncate">{vectorizationCtx.currentItem.label}</span>
                         </div>
                     {/if}
 
-                    <div class="text-surface-500 mt-2 grid grid-cols-2 gap-2 text-xs">
+                    <div class="text-surface-700-300 mt-2 grid grid-cols-2 gap-2 text-xs">
                         <div>
                             <span class="text-surface-400">Completed</span>
                             <span class="ml-1 font-mono font-medium">{vectorizationCtx.completed}</span>
@@ -616,7 +616,7 @@
 
                                     <div class="min-w-0 flex-1">
                                         <p class="truncate font-medium" title={group.label}>{group.label}</p>
-                                        <p class="text-surface-500 truncate">{group.ownerDisplayName}</p>
+                                        <p class="text-surface-700-300 truncate">{group.ownerDisplayName}</p>
                                         {#if summary}
                                             <p class="text-surface-400 mt-0.5">{summary}</p>
                                         {/if}
@@ -670,7 +670,7 @@
                                     <Icons.CheckCircle size={14} class="text-success-500 mt-0.5 shrink-0" aria-hidden="true" />
                                     <div class="min-w-0 flex-1">
                                         <p class="truncate font-medium" title={item.label}>{item.label}</p>
-                                        <p class="text-surface-500 truncate">{item.ownerDisplayName}</p>
+                                        <p class="text-surface-700-300 truncate">{item.ownerDisplayName}</p>
                                         {#if summary}
                                             <p class="text-surface-400 mt-0.5">{summary}</p>
                                         {/if}
@@ -696,18 +696,18 @@
                             <div class="min-w-0 flex-1 space-y-2">
                                 {#if mode === "api"}
                                     <p class="text-sm font-medium">External API not working</p>
-                                    <p class="text-surface-500 text-xs">
+                                    <p class="text-surface-700-300 text-xs">
                                         {modelLoadError ?? "RAG retrieval is skipped (falls back to keyword search) until the embeddings API is reachable again."}
                                     </p>
                                 {:else if !modelCached}
                                     <p class="text-sm font-medium">Model files missing</p>
-                                    <p class="text-surface-500 text-xs">The embedding model is not in the local cache. Re-download it to resume embeddings.</p>
+                                    <p class="text-surface-700-300 text-xs">The embedding model is not in the local cache. Re-download it to resume embeddings.</p>
                                 {:else if modelLoadError}
                                     <p class="text-sm font-medium">Model failed to load</p>
-                                    <p class="text-surface-500 text-xs">{modelLoadError}</p>
+                                    <p class="text-surface-700-300 text-xs">{modelLoadError}</p>
                                 {:else}
                                     <p class="text-sm font-medium">Model not loaded</p>
-                                    <p class="text-surface-500 text-xs">The server restarted and the model needs to be reloaded before embeddings can run.</p>
+                                    <p class="text-surface-700-300 text-xs">The server restarted and the model needs to be reloaded before embeddings can run.</p>
                                 {/if}
                                 {#if mode === "local"}
                                     <button
@@ -739,7 +739,7 @@
                                 {activeModelDef?.name ?? activeModelName ?? "Unknown model"}
                             </p>
                             {#if activeModelDef}
-                                <div class="flex flex-wrap items-center gap-1.5 text-xs text-surface-500">
+                                <div class="flex flex-wrap items-center gap-1.5 text-xs text-surface-700-300">
                                     {#if activeModelDef.tier === "fast"}
                                         <span class="rounded-full bg-sky-500/15 px-1.5 py-0.5 text-xs font-medium text-sky-600">Fast</span>
                                     {:else if activeModelDef.tier === "balanced"}
@@ -749,7 +749,7 @@
                                     {/if}
                                     <span>{activeModelDef.dimensions}d · {activeModelDef.sizeLabel}</span>
                                 </div>
-                                <p class="text-xs text-surface-500 mt-1">{activeModelDef.description}</p>
+                                <p class="text-xs text-surface-700-300 mt-1">{activeModelDef.description}</p>
                             {/if}
                             {#if !modelReady}
                                 <span class="inline-block mt-1 rounded-full bg-warning-500/20 px-2 py-0.5 text-xs font-medium text-warning-600">Not loaded</span>
@@ -761,7 +761,7 @@
                         {#if downloadProgress}
                             <div class="space-y-1">
                                 <div class="flex items-center justify-between text-xs">
-                                    <span class="text-surface-500 capitalize">{downloadProgress.status}…</span>
+                                    <span class="text-surface-700-300 capitalize">{downloadProgress.status}…</span>
                                     {#if downloadProgress.percent !== undefined}
                                         <span class="font-mono">{downloadProgress.percent}%</span>
                                     {/if}
@@ -784,7 +784,7 @@
                                 <Icons.Timer size={16} class="text-surface-400" aria-hidden="true" />
                                 <span class="text-xs font-semibold uppercase tracking-wider text-surface-400">Model Idle TTL</span>
                             </div>
-                            <p class="text-xs text-surface-500">Unload the embedding model after this many minutes of inactivity. Set to 0 to keep it loaded indefinitely.</p>
+                            <p class="text-xs text-surface-700-300">Unload the embedding model after this many minutes of inactivity. Set to 0 to keep it loaded indefinitely.</p>
                             <div class="flex items-center gap-2">
                                 <input
                                     type="number"
@@ -793,7 +793,7 @@
                                     class="input text-sm w-24"
                                     bind:value={ttlInput}
                                 />
-                                <span class="text-xs text-surface-500">minutes</span>
+                                <span class="text-xs text-surface-700-300">minutes</span>
                                 <button
                                     class="btn btn-sm preset-tonal-primary text-xs ml-auto"
                                     onclick={saveTtl}
@@ -825,9 +825,9 @@
                                 <span class="text-xs font-semibold uppercase tracking-wider text-surface-400">Embeddings API</span>
                             </div>
                             <p class="text-sm font-medium">{apiModelInput || "Unknown model"}</p>
-                            <p class="text-xs text-surface-500 truncate" title={apiBaseUrl}>{apiBaseUrl}</p>
+                            <p class="text-xs text-surface-700-300 truncate" title={apiBaseUrl}>{apiBaseUrl}</p>
                             {#if apiDimensions}
-                                <p class="text-xs text-surface-500">{apiDimensions}d</p>
+                                <p class="text-xs text-surface-700-300">{apiDimensions}d</p>
                             {/if}
                             {#if !modelReady}
                                 <span class="inline-block mt-1 rounded-full bg-warning-500/20 px-2 py-0.5 text-xs font-medium text-warning-600">Not ready</span>
@@ -899,9 +899,9 @@
                                     {#if model.id === activeModelName}
                                         <span class="bg-primary-500/20 text-primary-600 rounded-full px-1.5 py-0.5 text-xs">current</span>
                                     {/if}
-                                    <span class="text-surface-500 text-xs">{model.sizeLabel} · {model.dimensions}d</span>
+                                    <span class="text-surface-700-300 text-xs">{model.sizeLabel} · {model.dimensions}d</span>
                                 </div>
-                                <p class="text-surface-500 mt-0.5 text-xs">{model.description}</p>
+                                <p class="text-surface-700-300 mt-0.5 text-xs">{model.description}</p>
                             </div>
                         </label>
                     {/each}
@@ -910,7 +910,7 @@
                 {#if downloadProgress}
                     <div class="space-y-1">
                         <div class="flex items-center justify-between text-xs">
-                            <span class="text-surface-500 capitalize">{downloadProgress.status}…</span>
+                            <span class="text-surface-700-300 capitalize">{downloadProgress.status}…</span>
                             {#if downloadProgress.percent !== undefined}
                                 <span class="font-mono">{downloadProgress.percent}%</span>
                             {/if}

@@ -1,6 +1,24 @@
 import type * as schema from "$lib/server/db/schema"
+import type { db } from "$lib/server/db"
+import type { SelectedFieldsFlat } from "drizzle-orm/pg-core"
 
 export global {
+	// Transaction handle type inferred directly from the db instance's own
+	// `.transaction()` callback parameter, so it always matches whatever
+	// driver (pglite) backs `db`.
+	export type DbTransaction = Parameters<typeof db.transaction>[0] extends (
+		tx: infer T,
+		...args: any[]
+	) => any
+		? T
+		: never
+
+	// Column/expression map accepted by Drizzle's `.returning(fields)`. Kept
+	// flat (rather than the wider `SelectedFields`) since `PgDelete.returning`
+	// only accepts `SelectedFieldsFlat`; a flat map is still assignable
+	// wherever the wider `SelectedFields` (e.g. `PgUpdate.returning`) is
+	// expected.
+	export type ReturningSelect = SelectedFieldsFlat
 	// User types
 	export type SelectUser = typeof schema.users.$inferSelect
 	export type InsertUser = typeof schema.users.$inferInsert

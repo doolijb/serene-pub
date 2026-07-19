@@ -36,15 +36,25 @@ export interface ChatMetadata {
 }
 
 /**
- * Parse chat metadata from JSON string
+ * Parse chat metadata from a JSON string. Also accepts an already-parsed
+ * object, since the `chats.metadata` column is a Drizzle `json()` column —
+ * callers reading it straight from a query result get a plain object, not
+ * a string (only a value read from elsewhere, e.g. raw SQL/text, would
+ * still be a string needing JSON.parse).
  */
-export function parseChatMetadata(metadataString: string | null): ChatMetadata {
-	if (!metadataString) {
+export function parseChatMetadata(
+	metadata: string | Record<string, any> | null | undefined
+): ChatMetadata {
+	if (!metadata) {
 		return {}
 	}
 
+	if (typeof metadata !== "string") {
+		return metadata as ChatMetadata
+	}
+
 	try {
-		return JSON.parse(metadataString) as ChatMetadata
+		return JSON.parse(metadata) as ChatMetadata
 	} catch (error) {
 		console.error("Failed to parse chat metadata:", error)
 		return {}

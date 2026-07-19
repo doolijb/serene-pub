@@ -20,6 +20,8 @@ import {
 } from "../utils/characterCardParser"
 import { autoEnqueueCharacter } from "$lib/server/embedding/vectorizationQueue"
 import { canViewCharacter } from "$lib/server/utils/chatAccess"
+import { resolveCardSource, cachedSearch, resolveNsfwParam } from "$lib/server/cardSources"
+import { CardSourceUnavailableError, CardSourceRateLimitedError } from "$lib/server/cardSources/types"
 
 // Helper function to process tags for character creation/update. Tags are
 // per-user (schema.tags.userId): lookups/creates must stay scoped to the
@@ -362,11 +364,13 @@ export const charactersImportCard: Handler<Sockets.Characters.ImportCard.Params,
 				creatorNotes: data.creator_notes || null,
 				postHistoryInstructions: data.post_history_instructions || null,
 				characterVersion: data.character_version || null,
+				creator: data.creator || null,
 				// Extract extensions
 				source: data.extensions?.source || [],
 				groupOnlyGreetings: data.extensions?.group_only_greetings || null,
 				aliases: data.extensions?.serenepub?.aliases ?? data.extensions?.aliases ?? [],
 				summary: data.extensions?.serenepub?.summary ?? null,
+				category: data.extensions?.serenepub?.category ?? null,
 				isFavorite: false
 			}
 
@@ -419,136 +423,51 @@ export const charactersSearchLibrary: Handler<Sockets.Characters.SearchLibrary.P
 	event: "characters:searchLibrary",
 	handler: async (socket, params, emitToUser) => {
 		try {
-			// Fetch characters YAML from GitHub
-			const response = await fetch(
-				"https://raw.githubusercontent.com/doolijb/serene-pub-chara-list/main/characters.yaml"
-			)
-
-			if (!response.ok) {
-				throw new Error(`GitHub API error: ${response.status}`)
-			}
-
-			const yamlText = await response.text()
-
-			// Parse YAML - simple parsing for flat character list
-			const characters: Array<{
-				name: string
-				description: string
-				tags: string[]
-				author: string
-				version: string
-				spec: string
-				file: string
-				category: string
-			}> = []
-
-			const lines = yamlText.split("\n")
-			let currentCard: any = null
-			let inDescriptionBlock = false
-			let descriptionBuffer = ""
-
-			for (let i = 0; i < lines.length; i++) {
-				const line = lines[i]
-				const trimmed = line.trim()
-
-				// Card start (top level array item)
-				if (trimmed.startsWith("- name:") && line.match(/^  - name:/)) {
-					// Save previous card if exists
-					if (currentCard) {
-						if (inDescriptionBlock) {
-							currentCard.description = descriptionBuffer.trim()
-							inDescriptionBlock = false
-							descriptionBuffer = ""
-						}
-						characters.push(currentCard)
-					}
-					currentCard = {
-						name: trimmed.replace("- name:", "").trim(),
-						description: "",
-						tags: [],
-						author: "",
-						version: "",
-						spec: "V3",
-						file: "",
-						category: "Uncategorized"
-					}
-				} else if (currentCard) {
-					// Check for multiline description
-					if (trimmed.startsWith("description:")) {
-						const afterColon = trimmed.replace("description:", "").trim()
-						if (afterColon === "|-" || afterColon === "|") {
-							inDescriptionBlock = true
-							descriptionBuffer = ""
-						} else {
-							currentCard.description = afterColon
-						}
-					} else if (inDescriptionBlock) {
-						// Continue reading description block
-						if (line.match(/^    [^ ]/) && !line.match(/^      /)) {
-							// End of description block (next field at same level)
-							currentCard.description = descriptionBuffer.trim()
-							inDescriptionBlock = false
-							descriptionBuffer = ""
-							// Process this line as a new field
-							i-- // Re-process this line
-							continue
-						} else if (line.match(/^      /)) {
-							// Part of description
-							descriptionBuffer += line.substring(6) + "\n"
-						}
-					} else if (trimmed.startsWith("tags:") && line.match(/^    tags:/)) {
-						// Tags array follows
-						let j = i + 1
-						while (j < lines.length && lines[j].match(/^      - /)) {
-							const tag = lines[j].trim().replace("- ", "")
-							if (tag) currentCard.tags.push(tag)
-							j++
-						}
-					} else if (trimmed.startsWith("author:") && line.match(/^    author:/)) {
-						currentCard.author = trimmed.replace("author:", "").trim()
-					} else if (trimmed.startsWith("version:") && line.match(/^    version:/)) {
-						currentCard.version = trimmed.replace("version:", "").trim()
-					} else if (trimmed.startsWith("file:") && line.match(/^    file:/)) {
-						currentCard.file = trimmed.replace("file:", "").trim()
-					} else if (trimmed.startsWith("category:") && line.match(/^    category:/)) {
-						const cat = trimmed.replace("category:", "").trim()
-						if (cat && cat !== "null") {
-							currentCard.category = cat
-						}
-					}
-				}
-			}
-
-			// Add last card
-			if (currentCard) {
-				if (inDescriptionBlock) {
-					currentCard.description = descriptionBuffer.trim()
-				}
-				characters.push(currentCard)
-			}
-
-			// Filter by search term if provided
-			let filteredCharacters = characters
-			if (params.searchTerm) {
-				const searchLower = params.searchTerm.toLowerCase()
-				filteredCharacters = characters.filter(
-					(c) =>
-						c.name.toLowerCase().includes(searchLower) ||
-						c.description.toLowerCase().includes(searchLower) ||
-						c.category.toLowerCase().includes(searchLower) ||
-						c.tags.some((t) => t.toLowerCase().includes(searchLower))
+			const userId = socket.user!.id
+			const sourceId = params.source ?? "github-serenepub"
+			const source = resolveCardSource(sourceId)
+			if (!source.supports("character")) {
+				throw new CardSourceUnavailableError(
+					`${source.label} does not support browsing characters`
 				)
 			}
 
+			const nsfw = await resolveNsfwParam(userId)
+			const { items, hasMore } = await cachedSearch(
+				sourceId,
+				{
+					kind: "character",
+					searchTerm: params.searchTerm,
+					category: params.category,
+					nsfw,
+					sort: params.sort,
+					cursor: params.cursor
+				},
+				{ userId }
+			)
+
 			const res: Sockets.Characters.SearchLibrary.Response = {
-				characters: filteredCharacters
+				characters: items,
+				hasMore,
+				requestId: params.requestId
 			}
 			emitToUser("characters:searchLibrary", res)
 			return res
 		} catch (error: any) {
 			console.error("Character library search error:", error)
 			emitToUser("characters:searchLibrary:error", {
-				error: "Failed to search character library"
+				error:
+					error instanceof CardSourceUnavailableError ||
+					error instanceof CardSourceRateLimitedError
+						? error.message
+						: "Failed to search character library",
+				unreachable: error instanceof CardSourceUnavailableError || undefined,
+				rateLimited: error instanceof CardSourceRateLimitedError || undefined,
+				retryAfterMs:
+					error instanceof CardSourceRateLimitedError
+						? error.retryAfterMs
+						: undefined,
+				requestId: params.requestId
 			})
 			throw error
 		}
@@ -559,19 +478,10 @@ export const charactersImportFromLibrary: Handler<Sockets.Characters.ImportFromL
 	event: "characters:importFromLibrary",
 	handler: async (socket, params, emitToUser) => {
 		try {
-			// Fetch the character card file from GitHub
-			const fileUrl = `https://raw.githubusercontent.com/doolijb/serene-pub-chara-list/main/${params.fileUrl}`
-			const response = await fetch(fileUrl)
-
-			if (!response.ok) {
-				throw new Error(`Failed to fetch character file: ${response.status}`)
-			}
-
-			// Get the file as a buffer
-			const arrayBuffer = await response.arrayBuffer()
-			const buffer = Buffer.from(arrayBuffer)
-			
-			// Convert to base64 for the import handler
+			const source = resolveCardSource(params.source)
+			const buffer = await source.getCardBytes(params.ref, {
+				userId: socket.user!.id
+			})
 			const base64 = buffer.toString("base64")
 
 			// Use the existing import handler
@@ -590,7 +500,11 @@ export const charactersImportFromLibrary: Handler<Sockets.Characters.ImportFromL
 		} catch (error: any) {
 			console.error("Character import from library error:", error)
 			emitToUser("characters:importFromLibrary:error", {
-				error: "Failed to import character from library"
+				error:
+					error instanceof CardSourceUnavailableError ||
+					error instanceof CardSourceRateLimitedError
+						? error.message
+						: "Failed to import character from library"
 			})
 			throw error
 		}

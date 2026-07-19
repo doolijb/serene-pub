@@ -11,6 +11,8 @@ import type { Handler } from "$lib/shared/events"
 import { parseCharacterCardFromBase64 } from "../utils/characterCardParser"
 import { autoEnqueuePersona } from "$lib/server/embedding/vectorizationQueue"
 import { canViewPersona } from "$lib/server/utils/chatAccess"
+import { resolveCardSource, cachedSearch, resolveNsfwParam } from "$lib/server/cardSources"
+import { CardSourceUnavailableError, CardSourceRateLimitedError } from "$lib/server/cardSources/types"
 
 // Helper function to process tags for persona creation/update
 async function processPersonaTags(
@@ -322,136 +324,51 @@ export const personasSearchLibrary: Handler<Sockets.Personas.SearchLibrary.Param
 	event: "personas:searchLibrary",
 	handler: async (socket, params, emitToUser) => {
 		try {
-			// Fetch personas YAML from GitHub
-			const response = await fetch(
-				"https://raw.githubusercontent.com/doolijb/serene-pub-chara-list/main/personas.yaml"
-			)
-
-			if (!response.ok) {
-				throw new Error(`GitHub API error: ${response.status}`)
-			}
-
-			const yamlText = await response.text()
-
-			// Parse YAML - simple parsing for flat persona list
-			const personas: Array<{
-				name: string
-				description: string
-				tags: string[]
-				author: string
-				version: string
-				spec: string
-				file: string
-				category: string
-			}> = []
-
-			const lines = yamlText.split("\n")
-			let currentCard: any = null
-			let inDescriptionBlock = false
-			let descriptionBuffer = ""
-
-			for (let i = 0; i < lines.length; i++) {
-				const line = lines[i]
-				const trimmed = line.trim()
-
-				// Card start (top level array item)
-				if (trimmed.startsWith("- name:") && line.match(/^  - name:/)) {
-					// Save previous card if exists
-					if (currentCard) {
-						if (inDescriptionBlock) {
-							currentCard.description = descriptionBuffer.trim()
-							inDescriptionBlock = false
-							descriptionBuffer = ""
-						}
-						personas.push(currentCard)
-					}
-					currentCard = {
-						name: trimmed.replace("- name:", "").trim(),
-						description: "",
-						tags: [],
-						author: "",
-						version: "",
-						spec: "V3",
-						file: "",
-						category: "Uncategorized"
-					}
-				} else if (currentCard) {
-					// Check for multiline description
-					if (trimmed.startsWith("description:")) {
-						const afterColon = trimmed.replace("description:", "").trim()
-						if (afterColon === "|-" || afterColon === "|") {
-							inDescriptionBlock = true
-							descriptionBuffer = ""
-						} else {
-							currentCard.description = afterColon
-						}
-					} else if (inDescriptionBlock) {
-						// Continue reading description block
-						if (line.match(/^    [^ ]/) && !line.match(/^      /)) {
-							// End of description block (next field at same level)
-							currentCard.description = descriptionBuffer.trim()
-							inDescriptionBlock = false
-							descriptionBuffer = ""
-							// Process this line as a new field
-							i-- // Re-process this line
-							continue
-						} else if (line.match(/^      /)) {
-							// Part of description
-							descriptionBuffer += line.substring(6) + "\n"
-						}
-					} else if (trimmed.startsWith("tags:") && line.match(/^    tags:/)) {
-						// Tags array follows
-						let j = i + 1
-						while (j < lines.length && lines[j].match(/^      - /)) {
-							const tag = lines[j].trim().replace("- ", "")
-							if (tag) currentCard.tags.push(tag)
-							j++
-						}
-					} else if (trimmed.startsWith("author:") && line.match(/^    author:/)) {
-						currentCard.author = trimmed.replace("author:", "").trim()
-					} else if (trimmed.startsWith("version:") && line.match(/^    version:/)) {
-						currentCard.version = trimmed.replace("version:", "").trim()
-					} else if (trimmed.startsWith("file:") && line.match(/^    file:/)) {
-						currentCard.file = trimmed.replace("file:", "").trim()
-					} else if (trimmed.startsWith("category:") && line.match(/^    category:/)) {
-						const cat = trimmed.replace("category:", "").trim()
-						if (cat && cat !== "null") {
-							currentCard.category = cat
-						}
-					}
-				}
-			}
-
-			// Add last card
-			if (currentCard) {
-				if (inDescriptionBlock) {
-					currentCard.description = descriptionBuffer.trim()
-				}
-				personas.push(currentCard)
-			}
-
-			// Filter by search term if provided
-			let filteredPersonas = personas
-			if (params.searchTerm) {
-				const searchLower = params.searchTerm.toLowerCase()
-				filteredPersonas = personas.filter(
-					(p) =>
-						p.name.toLowerCase().includes(searchLower) ||
-						p.description.toLowerCase().includes(searchLower) ||
-						p.category.toLowerCase().includes(searchLower) ||
-						p.tags.some((t) => t.toLowerCase().includes(searchLower))
+			const userId = socket.user!.id
+			const sourceId = params.source ?? "github-serenepub"
+			const source = resolveCardSource(sourceId)
+			if (!source.supports("persona")) {
+				throw new CardSourceUnavailableError(
+					`${source.label} does not support browsing personas`
 				)
 			}
 
+			const nsfw = await resolveNsfwParam(userId)
+			const { items, hasMore } = await cachedSearch(
+				sourceId,
+				{
+					kind: "persona",
+					searchTerm: params.searchTerm,
+					category: params.category,
+					nsfw,
+					sort: params.sort,
+					cursor: params.cursor
+				},
+				{ userId }
+			)
+
 			const res: Sockets.Personas.SearchLibrary.Response = {
-				personas: filteredPersonas
+				personas: items,
+				hasMore,
+				requestId: params.requestId
 			}
 			emitToUser("personas:searchLibrary", res)
 			return res
 		} catch (error: any) {
 			console.error("Persona library search error:", error)
 			emitToUser("personas:searchLibrary:error", {
-				error: "Failed to search persona library"
+				error:
+					error instanceof CardSourceUnavailableError ||
+					error instanceof CardSourceRateLimitedError
+						? error.message
+						: "Failed to search persona library",
+				unreachable: error instanceof CardSourceUnavailableError || undefined,
+				rateLimited: error instanceof CardSourceRateLimitedError || undefined,
+				retryAfterMs:
+					error instanceof CardSourceRateLimitedError
+						? error.retryAfterMs
+						: undefined,
+				requestId: params.requestId
 			})
 			throw error
 		}
@@ -476,6 +393,8 @@ export const personasImportCard: Handler<Sockets.Personas.ImportCard.Params, Soc
 				userId,
 				name: data.name || "Unnamed Persona",
 				description: data.description || "",
+				creator: data.creator || null,
+				category: data.extensions?.serenepub?.category ?? null,
 				isDefault: false
 			}
 
@@ -519,19 +438,10 @@ export const personasImportFromLibrary: Handler<Sockets.Personas.ImportFromLibra
 	event: "personas:importFromLibrary",
 	handler: async (socket, params, emitToUser) => {
 		try {
-			// Fetch the persona card file from GitHub
-			const fileUrl = `https://raw.githubusercontent.com/doolijb/serene-pub-chara-list/main/${params.fileUrl}`
-			const response = await fetch(fileUrl)
-
-			if (!response.ok) {
-				throw new Error(`Failed to fetch persona file: ${response.status}`)
-			}
-
-			// Get the file as a buffer
-			const arrayBuffer = await response.arrayBuffer()
-			const buffer = Buffer.from(arrayBuffer)
-
-			// Convert to base64 for the import handler
+			const source = resolveCardSource(params.source)
+			const buffer = await source.getCardBytes(params.ref, {
+				userId: socket.user!.id
+			})
 			const base64 = buffer.toString("base64")
 
 			// Use the existing import handler
@@ -549,7 +459,11 @@ export const personasImportFromLibrary: Handler<Sockets.Personas.ImportFromLibra
 		} catch (error: any) {
 			console.error("Persona import from library error:", error)
 			emitToUser("personas:importFromLibrary:error", {
-				error: "Failed to import persona from library"
+				error:
+					error instanceof CardSourceUnavailableError ||
+					error instanceof CardSourceRateLimitedError
+						? error.message
+						: "Failed to import persona from library"
 			})
 			throw error
 		}

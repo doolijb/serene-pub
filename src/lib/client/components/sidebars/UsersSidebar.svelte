@@ -184,7 +184,7 @@
 		<div class="relative mb-4">
 			<Icons.Search
 				size={16}
-				class="text-surface-500 absolute top-1/2 left-3 -translate-y-1/2"
+				class="text-surface-700-300 absolute top-1/2 left-3 -translate-y-1/2"
 			/>
 			<input
 				type="text"
@@ -202,7 +202,7 @@
 					<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
 				</div>
 			{:else if filteredUsers.length === 0}
-				<div class="text-surface-500 py-8 text-center text-sm">
+				<div class="text-surface-700-300 py-8 text-center text-sm">
 					{search ? `No users matching "${search}".` : "No users found."}
 				</div>
 			{:else}
@@ -221,7 +221,7 @@
 									{user.displayName || user.username}
 								</span>
 								{#if user.displayName}
-									<span class="text-surface-500 shrink-0 text-xs">
+									<span class="text-surface-700-300 shrink-0 text-xs">
 										@{user.username}
 									</span>
 								{/if}
@@ -282,7 +282,7 @@
 			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700">
 				<div class="p-6">
 					<h3 class="mb-4 text-lg font-semibold">Delete User</h3>
-					<p class="text-surface-500 mb-6">
+					<p class="text-surface-700-300 mb-6">
 						Are you sure you want to delete "{userToDelete?.displayName ||
 							userToDelete?.username}"? This action cannot be undone.
 					</p>

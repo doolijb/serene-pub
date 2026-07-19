@@ -16,12 +16,21 @@ export interface BasePromptChat extends SelectChat {
 		persona: SelectPersona & { lorebook?: SelectLorebook }
 	})[]
 	chatMessages: SelectChatMessage[]
-	lorebook: SelectLorebook & {
-		lorebookBindings: (SelectLorebookBinding & {
-			character?: SelectCharacter
-			persona?: SelectPersona
-		})[]
-	}
+	// A chat's lorebookId is nullable, and the relational query result mirrors
+	// that (null when unset) — every consumer already guards for this (see
+	// hasLorebookEntries() and the `chat.lorebook && ...` checks in
+	// LorebookBindingUtils.ts/PromptIterators.ts), so this stays optional
+	// rather than falsely promising it's always populated.
+	lorebook?:
+		| (SelectLorebook & {
+				lorebookBindings: (SelectLorebookBinding & {
+					// characterId/personaId are nullable FKs (onDelete: "set null"),
+					// so the populated relation can likewise be null, not just absent.
+					character?: SelectCharacter | null
+					persona?: SelectPersona | null
+				})[]
+		  })
+		| null
 }
 
 // Generic interface for constructor parameters

@@ -22,6 +22,7 @@
 		CONNECTION_DEFAULTS,
 		OPENAI_CHAT_PRESETS
 	} from "$lib/shared/utils/connectionDefaults"
+	import EmbeddingConnectionPanel from "./EmbeddingConnectionPanel.svelte"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -34,11 +35,17 @@
 
 	const socket = useTypedSocket()
 
+	// ── View state ──────────────────────────────────────────────────────────
+	// "connections" (LLM/Text Generation) and "embedding" are categories under
+	// one Connections sidebar, mirroring PromptsSidebar's card-list pattern.
+	type View = "index" | "connections" | "embedding"
+	let view = $state<View>("index")
+
 	// --- State ---
-	let connectionsList: SelectConnection[] = $state([])
+	let connectionsList: Partial<SelectConnection>[] = $state([])
 	let isLoading = $state(true)
 	let connection: any = $state()
-	let originalConnection = $state()
+	let originalConnection: any = $state()
 	let unsavedChanges = $derived.by(() => {
 		if (!connection || !originalConnection) return false
 		return JSON.stringify(connection) !== JSON.stringify(originalConnection)
@@ -63,6 +70,10 @@
 	let selectedConnectionId = $state<number | null>(null)
 	// The system-wide default connection
 	let defaultConnectionId = $derived(systemSettingsCtx.settings?.defaultConnectionId ?? null)
+	// Shown as the "active" badge on the index screen's LLM/Text Generation card
+	let defaultConnectionName = $derived(
+		connectionsList.find((c) => c.id === defaultConnectionId)?.name ?? null
+	)
 	// A Managed KoboldCpp connection can't be set default while the manager is off
 	let managedButDisabled = $derived(
 		connection?.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED &&
@@ -176,12 +187,19 @@
 	function handleDeleteModalCancel() {
 		showDeleteModal = false
 	}
-	function handleOnClose() {
-		if (!unsavedChanges) return true
+	function handleOnClose(): Promise<boolean> {
+		// The embedding category has no bind-and-save-later fields (every
+		// action there saves immediately), so only the connections category's
+		// edit form needs an unsaved-changes guard.
+		if (view !== "connections" || !unsavedChanges) return Promise.resolve(true)
 		showConfirmModal = true
 		return new Promise<boolean>((resolve) => {
 			confirmResolve = resolve
 		})
+	}
+	async function navigateBack() {
+		if (!(await handleOnClose())) return
+		view = "index"
 	}
 	function handleModalDiscard() {
 		showConfirmModal = false
@@ -193,9 +211,7 @@
 	}
 	function handleRefreshModels() {
 		refreshModelsResult = null
-		socket.emit("connections:refreshModels", {
-			baseUrl: connection?.baseUrl
-		})
+		socket.emit("connections:refreshModels", { connection })
 	}
 
 	onMount(() => {
@@ -219,10 +235,10 @@
 			originalConnection = { ...msg.connection }
 		})
 		socket.on("connections:test", (msg) => {
-			testResult = msg
+			testResult = { ok: msg.ok, error: msg.error ?? undefined, models: msg.models }
 		})
 		socket.on("connections:refreshModels", (msg) => {
-			refreshModelsResult = msg.models || []
+			refreshModelsResult = { models: msg.models || [], error: msg.error ?? undefined }
 		})
 		socket.on("connections:update", (msg) => {
 			toaster.success({ title: "Connection Updated" })
@@ -259,10 +275,21 @@
 			if (msg.id) toaster.success({ title: "Default connection updated" })
 		})
 		socket.emit("connections:list", {})
-		// Seed the view: digest.connectionId (from external nav) takes priority over the default
+		// Seed the view: digest.connectionId (from external nav, e.g. Ollama
+		// Manager's "open connection sidebar") always means "go straight to the
+		// connections category," taking priority over the default. Otherwise
+		// digest.connectionsView (set by System Settings' Embeddings toggle and
+		// the onboarding wizard) routes straight to a specific category. If
+		// neither is set, land on the index/category-picker screen.
 		const digestId = panelsCtx.digest.connectionId ?? null
 		const initialId = digestId ?? systemSettingsCtx.settings?.defaultConnectionId ?? null
-		if (digestId) panelsCtx.digest.connectionId = undefined
+		if (digestId) {
+			panelsCtx.digest.connectionId = undefined
+			view = "connections"
+		} else if (panelsCtx.digest.connectionsView) {
+			view = panelsCtx.digest.connectionsView
+			panelsCtx.digest.connectionsView = undefined
+		}
 		selectedConnectionId = initialId
 		if (initialId) {
 			socket.emit("connections:get", { id: initialId })
@@ -289,9 +316,84 @@
 	})
 </script>
 
+{#if view === "index"}
+	<div class="text-foreground flex h-full flex-col gap-3 p-4">
+		<p class="text-muted-foreground text-sm">
+			Select a connection category to view and edit its configurations.
+		</p>
+
+		<!-- LLM / Text Generation card -->
+		<button
+			class="card preset-tonal hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
+			onclick={() => (view = "connections")}
+		>
+			<div class="flex items-start gap-3">
+				<div class="bg-primary-500/10 text-primary-500 mt-0.5 rounded-lg p-2 shrink-0">
+					<Icons.Cable size={20} />
+				</div>
+				<div class="min-w-0 flex-1">
+					<div class="flex items-center justify-between gap-2">
+						<span class="font-semibold">LLM / Text Generation</span>
+						<Icons.ChevronRight size={16} class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5" />
+					</div>
+					<p class="text-muted-foreground mt-0.5 text-sm">Connections used for chat, summarization, and narration.</p>
+					{#if defaultConnectionName}
+						<div class="mt-2 flex items-center gap-1.5">
+							<Icons.CheckCircle size={12} class="text-success-500 shrink-0" />
+							<span class="text-success-600 dark:text-success-400 truncate text-xs font-medium">{defaultConnectionName}</span>
+						</div>
+					{/if}
+				</div>
+			</div>
+		</button>
+
+		<!-- Embedding card — hidden until an admin has actually enabled
+		     embeddings (via System Settings or the onboarding wizard), both of
+		     which route straight into this category via digest.connectionsView
+		     rather than through this card. -->
+		{#if systemSettingsCtx.settings?.vectorizationEnabled}
+			<button
+				class="card preset-tonal hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
+				onclick={() => (view = "embedding")}
+			>
+				<div class="flex items-start gap-3">
+					<div class="bg-primary-500/10 text-primary-500 mt-0.5 rounded-lg p-2 shrink-0">
+						<Icons.Zap size={20} />
+					</div>
+					<div class="min-w-0 flex-1">
+						<div class="flex items-center justify-between gap-2">
+							<span class="font-semibold">Embedding</span>
+							<Icons.ChevronRight size={16} class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5" />
+						</div>
+						<p class="text-muted-foreground mt-0.5 text-sm">RAG embedding model, queue, and configuration.</p>
+					</div>
+				</div>
+			</button>
+		{/if}
+	</div>
+
+{:else if view === "embedding"}
+	<div class="flex h-full flex-col">
+		<div class="flex items-center gap-2 px-4 pt-4 pb-2">
+			<button
+				class="btn btn-sm preset-filled-surface-400-600 p-2"
+				onclick={() => (view = "index")}
+				title="Back"
+				aria-label="Back to connection types"
+			>
+				<Icons.ChevronLeft size={16} />
+			</button>
+			<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">Embedding</h2>
+		</div>
+		<div class="min-h-0 flex-1 pt-2">
+			<EmbeddingConnectionPanel />
+		</div>
+	</div>
+
+{:else}
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
-	class="text-foreground p-4"
+	class="text-foreground flex h-full flex-col"
 	role="main"
 	aria-label="AI Connections Management"
 	onkeydown={handleKeydown}
@@ -300,10 +402,21 @@
 	<div aria-live="polite" aria-atomic="true" class="sr-only">
 		{announcements}
 	</div>
+	<div class="flex items-center gap-2 px-4 pt-4 pb-2">
+		<button
+			class="btn btn-sm preset-filled-surface-400-600 p-2"
+			onclick={navigateBack}
+			title="Back"
+			aria-label="Back to connection types"
+		>
+			<Icons.ChevronLeft size={16} />
+		</button>
+		<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">LLM / Text Generation</h2>
+	</div>
+	<div class="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
 	<div class="mb-2">
-		<h2 class="sr-only">Connection Management</h2>
 		<div
-			class="mt-2 mb-2 flex justify-between gap-2 sm:mt-0"
+			class="flex justify-between gap-2"
 			role="toolbar"
 			aria-label="Connection actions"
 		>
@@ -475,7 +588,9 @@
 			message="No AI connections yet — create one to get started with AI conversations."
 		/>
 	{/if}
+	</div>
 </div>
+{/if}
 
 <Dialog open={showConfirmModal} onOpenChange={(e) => (showConfirmModal = e.open)}>
 	<Portal>

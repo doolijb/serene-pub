@@ -662,11 +662,11 @@
 								<FileUpload.Dropzone
 									class="border-surface-300-700 bg-surface-50-950 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
 								>
-									<Icons.Upload class="text-surface-500 h-8 w-8" />
+									<Icons.Upload class="text-surface-700-300 h-8 w-8" />
 									<FileUpload.Trigger class="btn btn-sm preset-filled-primary-500">
 										Browse
 									</FileUpload.Trigger>
-									<span class="text-surface-500 text-xs">or drag and drop</span>
+									<span class="text-surface-700-300 text-xs">or drag and drop</span>
 									<FileUpload.HiddenInput />
 								</FileUpload.Dropzone>
 							</FileUpload>

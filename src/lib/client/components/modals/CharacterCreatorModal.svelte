@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { onDestroy, onMount } from "svelte"
 	import { z } from "zod"
 	import Avatar from "../Avatar.svelte"
@@ -14,7 +14,7 @@
 
 	let { open = $bindable(), onOpenChange }: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	// Character data interface
 	interface CharacterData {
@@ -175,7 +175,10 @@
 
 		socket.emit("characters:create", {
 			character: newCharacter,
-			avatarFile
+			// Client holds a browser File; the server receives it deserialized
+			// via socket.io as a Buffer — see the same pattern in
+			// PersonaForm.svelte/CharacterForm.svelte.
+			avatarFile: avatarFile as unknown as Buffer | undefined
 		})
 	}
 

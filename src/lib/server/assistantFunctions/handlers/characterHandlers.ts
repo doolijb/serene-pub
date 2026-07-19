@@ -8,7 +8,6 @@ import * as schema from "$lib/server/db/schema"
 import type { AssistantFunctionHandler } from "$lib/shared/assistantFunctions/types"
 import {
 	parseChatMetadata,
-	serializeChatMetadata,
 	getActiveCharacterDraft,
 	setActiveCharacterDraft
 } from "$lib/shared/types/chatMetadata"
@@ -152,7 +151,7 @@ export const draftCharacterHandler: AssistantFunctionHandler = async ({
 
 		await db
 			.update(schema.chats)
-			.set({ metadata: serializeChatMetadata(updatedMetadata) })
+			.set({ metadata: updatedMetadata })
 			.where(eq(schema.chats.id, chatId))
 
 		console.log(`[draftCharacterHandler] Draft saved to chat metadata`)

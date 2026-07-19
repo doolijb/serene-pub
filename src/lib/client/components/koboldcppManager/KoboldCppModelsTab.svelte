@@ -1,21 +1,23 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { onMount, onDestroy, getContext } from "svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 	type KoboldCppModel = Sockets.KoboldCpp.ListModels.ModelFile
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	const systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
 	const koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
 	const panelsCtx: PanelsCtx = getContext("panelsCtx")
 
 	let currentModel = $state<string | null>(null)
 	let availableModels = $state<KoboldCppModel[]>([])
-	let connectionsList = $state<SelectConnection[]>([])
+	// Server returns Partial<SelectConnection>[] (see Sockets.Connections.List.Response) —
+	// not every field is guaranteed present, so this must stay Partial here too.
+	let connectionsList = $state<Partial<SelectConnection>[]>([])
 	let modelsDirSet = $derived(!!koboldCppSettingsCtx.settings?.koboldCppManagerModelsDir)
 	let isLoading = $state(false)
 	let isConnecting = $state(false)
@@ -48,7 +50,7 @@
 		socket.emit("koboldcpp:connectModel", { modelName })
 	}
 
-	function findConnectionForModel(modelName: string): SelectConnection | undefined {
+	function findConnectionForModel(modelName: string): Partial<SelectConnection> | undefined {
 		return connectionsList.find(
 			(c) => c.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED && c.model === modelName
 		)
@@ -123,7 +125,7 @@
 			refresh()
 		})
 
-		socket.on("koboldcpp:connectModel:error", (message: any) => {
+		socket.on("koboldcpp:connectModel:error", (message: Sockets.ErrorResponse) => {
 			isConnecting = false
 			connectingModel = null
 			toaster.error({ title: "Failed to set default model", description: message.error })
@@ -134,7 +136,7 @@
 			refresh()
 		})
 
-		socket.on("koboldcpp:deleteModel:error", (message: any) => {
+		socket.on("koboldcpp:deleteModel:error", (message: Sockets.ErrorResponse) => {
 			toaster.error({ title: "Failed to delete model", description: message.error })
 		})
 
@@ -155,7 +157,7 @@
 <div class="px-4 py-2">
 	<div class="flex gap-2">
 		<div class="relative flex-1">
-			<Icons.Search class="text-surface-500 absolute top-1/2 left-3 -translate-y-1/2" size={16} />
+			<Icons.Search class="text-surface-700-300 absolute top-1/2 left-3 -translate-y-1/2" size={16} />
 			<input
 				type="text"
 				placeholder="Search models..."
@@ -176,13 +178,13 @@
 	</div>
 {:else if !modelsDirSet}
 	<div class="p-6 text-center">
-		<Icons.FolderOpen class="text-surface-500 mx-auto mb-4" size={48} />
+		<Icons.FolderOpen class="text-surface-700-300 mx-auto mb-4" size={48} />
 		<h3 class="h4 mb-2">No models directory configured</h3>
 		<p class="text-sm opacity-75">Set a Models Directory in the Settings tab.</p>
 	</div>
 {:else if filteredModels.length === 0}
 	<div class="p-6 text-center">
-		<Icons.Package class="text-surface-500 mx-auto mb-4" size={48} />
+		<Icons.Package class="text-surface-700-300 mx-auto mb-4" size={48} />
 		<h3 class="h4 mb-2">No models found</h3>
 		<p class="mb-4 text-sm opacity-75">
 			{searchQuery ? "No models match your search." : "Download models from the Available tab."}

@@ -68,7 +68,7 @@
 			<!-- Characters -->
 			{#if characters.length > 0}
 				<section class="space-y-2">
-					<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">
+					<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">
 						Characters
 					</p>
 					<div class="flex flex-col gap-2">
@@ -90,7 +90,7 @@
 			<!-- Personas -->
 			{#if personas.length > 0}
 				<section class="space-y-2">
-					<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">
+					<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">
 						Personas
 					</p>
 					<div class="flex flex-col gap-2">
@@ -112,7 +112,7 @@
 			<!-- Scenario -->
 			{#if chat.scenario}
 				<section class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">Scenario</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Scenario</p>
 					<p class="whitespace-pre-wrap text-sm leading-relaxed">{chat.scenario}</p>
 				</section>
 			{/if}
@@ -120,7 +120,7 @@
 			<!-- Tags -->
 			{#if tags.length > 0}
 				<section class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">Tags</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Tags</p>
 					<div class="flex flex-wrap gap-1">
 						{#each tags as tag}
 							<span class="preset-tonal-surface rounded px-2 py-0.5 text-xs">{tag}</span>
@@ -130,6 +130,6 @@
 			{/if}
 		</div>
 	{:else}
-		<p class="text-surface-500 py-8 text-center text-sm">Chat not found.</p>
+		<p class="text-surface-700-300 py-8 text-center text-sm">Chat not found.</p>
 	{/if}
 </div>

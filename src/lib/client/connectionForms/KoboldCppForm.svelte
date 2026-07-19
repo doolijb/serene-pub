@@ -69,7 +69,7 @@
 		$state(null)
 
 	socket.on("connections:test", (msg) => {
-		testResult = msg
+		testResult = { ok: msg.ok, error: msg.error ?? undefined, models: msg.models }
 	})
 
 	function handleTestConnection() {

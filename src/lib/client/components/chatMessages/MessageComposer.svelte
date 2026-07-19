@@ -44,9 +44,9 @@
 		collapsibleExtraTabs.find((t) => t.value === tabGroup)
 	)
 	let contextExceeded = $derived(
-		!!compiledPrompt
-			? compiledPrompt!.meta.tokenCounts.total >
-					compiledPrompt!.meta.tokenCounts.limit
+		compiledPrompt?.meta
+			? compiledPrompt.meta.tokenCounts.total >
+					compiledPrompt.meta.tokenCounts.limit
 			: false
 	)
 	let submitOnEnter = $state(true)
@@ -169,7 +169,7 @@
 				</div>
 			{/if}
 		{/if}
-		{#if compiledPrompt}
+		{#if compiledPrompt?.meta}
 			<Tabs.Trigger
 				value="tokenCount"
 				class="flex min-h-[2em] w-full items-center justify-end text-right"

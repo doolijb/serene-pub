@@ -2,17 +2,18 @@
 	import * as Icons from "@lucide/svelte"
 	import { Progress } from "@skeletonlabs/skeleton-svelte"
 	import { onDestroy, onMount } from "svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 
 	interface DownloadProgress {
 		modelName: string
 		status: string
+		isDone: boolean
 		files: {
 			[key: string]: { total: number; completed: number }
 		}
 	}
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	// Download progress state managed by this component
 	let downloadingQuants: {
@@ -61,14 +62,11 @@
 	function cancelDownload(modelName: string) {
 		socket.emit("ollama:cancelPull", {
 			modelName
-		} as Sockets.OllamaCancelPull.Call)
+		})
 	}
 
 	function clearDownloadHistory() {
-		socket.emit(
-			"ollama:clearDownloadHistory",
-			{} as Sockets.OllamaClearDownloadHistory.Call
-		)
+		socket.emit("ollama:clearDownloadHistory", {})
 	}
 
 	onMount(() => {
@@ -90,7 +88,7 @@
 
 		socket.on(
 			"ollama:clearDownloadHistory",
-			(message: Sockets.OllamaClearDownloadHistory.Response) => {
+			(message: Sockets.Ollama.ClearDownloadHistory.Response) => {
 				if (message.success) {
 					downloadingQuants = {}
 				}
@@ -200,7 +198,7 @@
 	</div>
 </div>
 
-{#snippet downloadItem(key, progress)}
+{#snippet downloadItem(key: string, progress: DownloadProgress)}
 	{#if key !== "undefined"}
 		{@const fileStats = getFileStats(progress)}
 		<div

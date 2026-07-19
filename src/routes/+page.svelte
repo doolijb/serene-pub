@@ -1,10 +1,9 @@
 <script lang="ts">
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import SidebarListItem from "$lib/client/components/SidebarListItem.svelte"
+	import CharacterCardItem from "$lib/client/components/listItems/CharacterCardItem.svelte"
 	import CharacterCreator from "$lib/client/components/modals/CharacterCreatorModal.svelte"
 	import PersonaCreator from "$lib/client/components/modals/PersonaCreatorModal.svelte"
-	import CharacterLibraryModal from "$lib/client/components/modals/CharacterLibraryModal.svelte"
-	import PersonaLibraryModal from "$lib/client/components/modals/PersonaLibraryModal.svelte"
 	import BindingLinkerModal from "$lib/client/components/modals/BindingLinkerModal.svelte"
 	import NodeLinkerModal from "$lib/client/components/modals/NodeLinkerModal.svelte"
 	import OllamaIcon from "$lib/client/components/icons/OllamaIcon.svelte"
@@ -16,6 +15,9 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+	import { createViewMode } from "$lib/client/utils/viewMode.svelte"
+
+	const homeViewMode = createViewMode("serene-pub:viewMode:home")
 
 	let userCtx: UserCtx = $state(getContext("userCtx"))
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
@@ -54,8 +56,6 @@
 	let _wizardInitialized = $state(false)
 	let showCharacterCreator = $state(false)
 	let showPersonaCreator = $state(false)
-	let showCharacterLibrary = $state(false)
-	let showPersonaLibrary = $state(false)
 
 	// Binding / node linker modals (Flow 1 + 2)
 	let bindingLinkerOpen = $state(false)
@@ -79,9 +79,10 @@
 	// Summarization step state
 	let wizardSummarizationLoading = $state(false)
 
-	// Vectorization step state — configuration itself now happens in the real
-	// VectorizationSidebar (opened from this step, same as the Ollama/KoboldCPP
-	// Easy Setup steps); this file just tracks whether it's working yet.
+	// Vectorization step state — configuration itself now happens in the
+	// Connections sidebar's Embedding category (opened from this step, same as
+	// the Ollama/KoboldCPP Easy Setup steps); this file just tracks whether
+	// it's working yet.
 	let vectorizationEnabled = $state(false)
 	let vectorizationModelReady = $state(false)
 	let disablingVectorization = $state(false)
@@ -91,7 +92,10 @@
 	let wizardImportingPersonaCard = $state(false)
 
 	// Derived setup state
-	let hasConnection = $derived(!!userCtx.user?.activeConnection)
+	let hasConnection = $derived(!!systemSettingsCtx.settings?.defaultConnectionId)
+	let activeConnectionName = $derived(
+		connections.find((c) => c.id === systemSettingsCtx.settings?.defaultConnectionId)?.name ?? null
+	)
 	let hasCharacter = $derived(characters.length > 0)
 	let hasPersona = $derived(personas.length > 0)
 
@@ -158,9 +162,9 @@
 		if (dataReady && !allStepsComplete && !_wizardInitialized) {
 			_wizardInitialized = true
 			// Set default user configs on first wizard show
-			if (!userCtx.user?.activeSamplingConfig) socket.emit("samplingConfigs:setUserActive", { id: 1 })
-			if (!userCtx.user?.activeContextConfig) socket.emit("contextConfigs:setUserActive", { id: 1 })
-			if (!userCtx.user?.activePromptConfig) socket.emit("promptConfigs:setUserActive", { id: 1 })
+			if (!systemSettingsCtx.settings?.defaultSamplingConfigId) socket.emit("samplingConfigs:setUserActive", { id: 1 })
+			if (!userSettingsCtx.settings?.activeContextConfigId && !systemSettingsCtx.settings?.defaultContextConfigId) socket.emit("contextConfigs:setUserActive", { id: 1 })
+			if (!userSettingsCtx.settings?.activePromptConfigId && !systemSettingsCtx.settings?.defaultPromptConfigId) socket.emit("promptConfigs:setUserActive", { id: 1 })
 			// Skip welcome if any step is already complete
 			const anyDone = wizardSteps.slice(1).some(s => s.isComplete())
 			if (anyDone) {
@@ -384,9 +388,10 @@
 			}
 		})
 
-		// Vectorization status — actual configuration happens in the real
-		// VectorizationSidebar (opened via the footer button); this just
-		// tracks whether it's enabled/ready so the footer can react.
+		// Vectorization status — actual configuration happens in the
+		// Connections sidebar's Embedding category (opened via the footer
+		// button); this just tracks whether it's enabled/ready so the footer
+		// can react.
 		socket.on("vectorization:listModels", (msg: any) => {
 			vectorizationEnabled = msg.vectorizationEnabled ?? false
 			vectorizationModelReady = msg.modelReady ?? false
@@ -432,20 +437,6 @@
 				title: "Import Failed",
 				description: msg.error ?? "Could not import persona card"
 			})
-		})
-
-		// Library imports — advance wizard on success
-		socket.on("characters:importFromLibrary", (msg: any) => {
-			if (msg.character && !allStepsComplete && currentWizardStep?.id === "character") {
-				showCharacterLibrary = false
-				nextWizardStep()
-			}
-		})
-		socket.on("personas:importFromLibrary", (msg: any) => {
-			if (msg.persona && !allStepsComplete && currentWizardStep?.id === "persona") {
-				showPersonaLibrary = false
-				nextWizardStep()
-			}
 		})
 
 		// Binding / node linker modals
@@ -500,8 +491,6 @@
 		;(socket as any).off("characters:importCard:error")
 		socket.off("personas:importCard")
 		socket.off("personas:importCard:error")
-		socket.off("characters:importFromLibrary")
-		socket.off("personas:importFromLibrary")
 		socket.off("setup:get")
 		socket.off("setup:markComplete")
 	})
@@ -515,7 +504,7 @@
 <!-- Page background content -->
 <div class="flex flex-1 flex-col items-center justify-center gap-4 px-2 md:px-0">
 	{#if userSettingsCtx.settings?.showHomePageBanner}
-		<div class="relative w-full">
+		<div class="relative w-full hidden md:block">
 			<img
 				src={(userSettingsCtx.settings?.darkMode !== undefined
 					? userSettingsCtx.settings.darkMode
@@ -559,39 +548,79 @@
 	<!-- Main content — shown when all wizard steps are complete -->
 	{#if dataReady && allStepsComplete}
 		<div class="w-full">
-			<h3 class="w-full text-xl">Characters</h3>
-			<div class="grid grid-cols-1 justify-between gap-2 lg:grid-cols-2">
-				{#each characters as character (character.id)}
-					<SidebarListItem
-						onclick={() => {
-							panelsCtx.digest.chatCharacterId = character.id
-							panelsCtx.openPanel({ key: "chats", toggle: false })
-						}}
-						contentTitle="Go to character chats"
-						classes="!preset-filled-surface-200-800 transition-colors hover:!preset-filled-surface-300-700"
+			<div class="flex w-full items-center justify-between mb-1">
+				<h3 class="text-xl">Characters</h3>
+				<div class="flex shrink-0 gap-1" role="group" aria-label="View mode">
+					<button
+						type="button"
+						class="btn btn-sm p-2 {homeViewMode.value === 'list' ? 'preset-filled-primary-500' : 'preset-tonal-surface'}"
+						onclick={() => (homeViewMode.value = "list")}
+						title="List view"
+						aria-label="List view"
+						aria-pressed={homeViewMode.value === "list"}
 					>
-						{#snippet content()}
-							<div class="flex gap-2">
-								<div class="h-[4em] min-h-[4em] w-[4em] min-w-[4em]">
-									<Avatar char={character} />
-								</div>
-								<div class="gap2 flex flex-col">
-									<div class="text-foreground text-left font-semibold">
-										{character.nickname || character.name || "Unknown"}
-									</div>
-									<div class="text-muted-foreground line-clamp-2 text-sm">
-										{character.description || "No description"}
-									</div>
-								</div>
-							</div>
-						{/snippet}
-					</SidebarListItem>
-				{/each}
+						<Icons.List size={16} aria-hidden="true" />
+					</button>
+					<button
+						type="button"
+						class="btn btn-sm p-2 {homeViewMode.value === 'cards' ? 'preset-filled-primary-500' : 'preset-tonal-surface'}"
+						onclick={() => (homeViewMode.value = "cards")}
+						title="Card view"
+						aria-label="Card view"
+						aria-pressed={homeViewMode.value === "cards"}
+					>
+						<Icons.LayoutGrid size={16} aria-hidden="true" />
+					</button>
+				</div>
 			</div>
+			{#if homeViewMode.value === "list"}
+				<div class="grid grid-cols-1 justify-between gap-2 lg:grid-cols-2">
+					{#each characters as character (character.id)}
+						<SidebarListItem
+							onclick={() => {
+								panelsCtx.digest.chatCharacterId = character.id
+								panelsCtx.openPanel({ key: "chats", toggle: false })
+							}}
+							contentTitle="Go to character chats"
+							classes="!preset-filled-surface-200-800 transition-colors hover:!preset-filled-surface-300-700"
+						>
+							{#snippet content()}
+								<div class="flex gap-2">
+									<div class="h-[4em] min-h-[4em] w-[4em] min-w-[4em]">
+										<Avatar char={character} />
+									</div>
+									<div class="gap2 flex flex-col">
+										<div class="text-foreground text-left font-semibold">
+											{character.nickname || character.name || "Unknown"}
+										</div>
+										<div class="text-muted-foreground line-clamp-2 text-sm">
+											{character.description || "No description"}
+										</div>
+									</div>
+								</div>
+							{/snippet}
+						</SidebarListItem>
+					{/each}
+				</div>
+			{:else}
+				<div class="grid grid-cols-[repeat(auto-fill,minmax(16.625rem,1fr))] gap-3">
+					{#each characters as character (character.id)}
+						<CharacterCardItem
+							{character}
+							onclick={() => {
+								panelsCtx.digest.chatCharacterId = character.id
+								panelsCtx.openPanel({ key: "chats", toggle: false })
+							}}
+							showControls={false}
+							contentTitle="Go to character chats"
+						/>
+					{/each}
+				</div>
+			{/if}
 		</div>
 
 		{#if chats.length > 0}
-			<div class="w-full">
+			<div class="w-full mb-6">
 				<h3 class="w-full text-xl">Recent Chats</h3>
 				<div class="grid grid-cols-1 justify-between gap-2 lg:grid-cols-2">
 					{#each chats.slice(0, 6) as chat (chat.id)}
@@ -703,7 +732,7 @@
 									<Icons.CheckCircle size={60} class="text-success-500 mx-auto mb-4" />
 									<h2 class="mb-3 text-3xl font-bold">Connected!</h2>
 									<p class="text-muted-foreground">
-										You're connected to <strong>{userCtx.user?.activeConnection?.name}</strong>.
+										You're connected to <strong>{activeConnectionName}</strong>.
 									</p>
 								</div>
 
@@ -973,7 +1002,10 @@
 							<div class="grid gap-3 sm:grid-cols-2">
 								<button
 									class="card preset-filled-surface-400-600 flex flex-col items-start gap-2 p-5 text-left transition-transform hover:scale-[1.02] hover:preset-filled-surface-300-700"
-									onclick={() => (showCharacterLibrary = true)}
+									onclick={() => {
+										closeWizard()
+										goto("/library/characters")
+									}}
 								>
 									<div class="flex items-center gap-2 font-bold">
 										<Icons.Library size={20} class="text-primary-500" />
@@ -1024,11 +1056,11 @@
 											<FileUpload.Dropzone
 												class="border-surface-300-700 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
 											>
-												<Icons.Upload class="text-surface-500 h-8 w-8" />
+												<Icons.Upload class="text-surface-700-300 h-8 w-8" />
 												<FileUpload.Trigger class="btn btn-sm preset-filled-primary-500">
 													Browse
 												</FileUpload.Trigger>
-												<span class="text-surface-500 text-xs">or drag and drop</span>
+												<span class="text-surface-700-300 text-xs">or drag and drop</span>
 												<FileUpload.HiddenInput />
 											</FileUpload.Dropzone>
 										</FileUpload>
@@ -1060,7 +1092,10 @@
 							<div class="grid gap-3 sm:grid-cols-2">
 								<button
 									class="card preset-filled-surface-400-600 flex flex-col items-start gap-2 p-5 text-left transition-transform hover:scale-[1.02] hover:preset-filled-surface-300-700"
-									onclick={() => (showPersonaLibrary = true)}
+									onclick={() => {
+										closeWizard()
+										goto("/library/personas")
+									}}
 								>
 									<div class="flex items-center gap-2 font-bold">
 										<Icons.Library size={20} class="text-primary-500" />
@@ -1111,11 +1146,11 @@
 											<FileUpload.Dropzone
 												class="border-surface-300-700 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
 											>
-												<Icons.Upload class="text-surface-500 h-8 w-8" />
+												<Icons.Upload class="text-surface-700-300 h-8 w-8" />
 												<FileUpload.Trigger class="btn btn-sm preset-filled-primary-500">
 													Browse
 												</FileUpload.Trigger>
-												<span class="text-surface-500 text-xs">or drag and drop</span>
+												<span class="text-surface-700-300 text-xs">or drag and drop</span>
 												<FileUpload.HiddenInput />
 											</FileUpload.Dropzone>
 										</FileUpload>
@@ -1322,7 +1357,7 @@
 							{:else}
 								<button
 									class="btn preset-filled-primary-500"
-									onclick={() => { panelsCtx.digest.tutorial = true; openPanel("vectorization") }}
+									onclick={() => { panelsCtx.digest.tutorial = true; panelsCtx.digest.connectionsView = "embedding"; openPanel("connections") }}
 								>
 									<Icons.Database size={16} />
 									Open Embeddings Settings
@@ -1364,20 +1399,6 @@
 	bind:open={showPersonaCreator}
 	onOpenChange={(e) => {
 		showPersonaCreator = e.open
-	}}
-/>
-
-<CharacterLibraryModal
-	bind:open={showCharacterLibrary}
-	onOpenChange={(e) => {
-		showCharacterLibrary = e.open
-	}}
-/>
-
-<PersonaLibraryModal
-	bind:open={showPersonaLibrary}
-	onOpenChange={(e) => {
-		showPersonaLibrary = e.open
 	}}
 />
 

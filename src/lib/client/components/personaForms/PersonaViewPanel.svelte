@@ -82,7 +82,7 @@
 						{/if}
 					</div>
 					{#if !persona.isOwner && persona.ownerName}
-						<p class="text-surface-500 truncate text-xs">Owned by {persona.ownerName}</p>
+						<p class="text-surface-700-300 truncate text-xs">Owned by {persona.ownerName}</p>
 					{/if}
 				</div>
 			</div>
@@ -99,12 +99,12 @@
 			<!-- Description -->
 			{#if persona.description}
 				<section class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">Description</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Description</p>
 					<p class="whitespace-pre-wrap text-sm leading-relaxed">{persona.description}</p>
 				</section>
 			{/if}
 		</div>
 	{:else}
-		<p class="text-surface-500 py-8 text-center text-sm">Persona not found.</p>
+		<p class="text-surface-700-300 py-8 text-center text-sm">Persona not found.</p>
 	{/if}
 </div>

@@ -421,9 +421,9 @@
 			<div class="bg-surface-200-800/90 backdrop-blur-sm rounded flex items-center gap-1 px-2 py-1 pointer-events-auto">
 				<Icons.Crosshair size={12} class="text-primary-400 shrink-0" />
 				<span class="text-xs text-surface-200 max-w-36 truncate">{perspectiveNodeName}</span>
-				<span class="text-surface-500 text-xs ml-0.5">· direct</span>
+				<span class="text-surface-700-300 text-xs ml-0.5">· direct</span>
 				<button
-					class="ml-1 text-surface-500 hover:text-surface-200 p-1.5"
+					class="ml-1 text-surface-700-300 hover:text-surface-200 p-1.5"
 					onclick={clearPerspective}
 					title="Clear perspective (or click background)"
 					aria-label="Clear perspective"
@@ -594,7 +594,7 @@
 		</summary>
 		<div class="bg-surface-200-800/90 rounded-lg p-2 backdrop-blur-sm space-y-2 min-w-40" style="position:absolute;bottom:100%;right:0;margin-bottom:4px">
 			<div class="space-y-1">
-				<p class="text-surface-500 font-semibold uppercase tracking-wide" style="font-size:9px">Node state</p>
+				<p class="text-surface-700-300 font-semibold uppercase tracking-wide" style="font-size:9px">Node state</p>
 				{#each Object.entries(NODE_STATE_COLORS) as [state, color]}
 					<div class="flex items-center gap-1.5">
 						<svg width="16" height="16" class="shrink-0">
@@ -616,7 +616,7 @@
 				</div>
 			</div>
 			<div class="border-surface-600 border-t pt-2 space-y-1">
-				<p class="text-surface-500 font-semibold uppercase tracking-wide" style="font-size:9px">Edge status</p>
+				<p class="text-surface-700-300 font-semibold uppercase tracking-wide" style="font-size:9px">Edge status</p>
 				{#each [["active","none"],["resolved","4 2"],["broken","2 3"],["evolved","6 2 2 2"]] as [status, dash]}
 					<div class="flex items-center gap-1.5">
 						<svg width="24" height="8" class="shrink-0">

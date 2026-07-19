@@ -26,8 +26,19 @@ export const chatsListAssistantHandler: Handler<
 
 		console.log(`Found ${chatsList.length} assistant chats`)
 
+		// This query is scoped to eq(c.userId, userId) above, so every row is
+		// owned by the caller (no guest concept for assistant chats). Matches
+		// the isOwner/isGuest/canEdit shape the real chats:list handler in
+		// chats.ts adds; Sockets.Chats.List.Response requires them.
+		const chatListWithPermissions = chatsList.map((chat) => ({
+			...chat,
+			isOwner: true,
+			isGuest: false,
+			canEdit: true
+		}))
+
 		const res: Sockets.Chats.List.Response = {
-			chatList: chatsList
+			chatList: chatListWithPermissions
 		}
 		emitToUser("chats:listAssistant", res)
 		return res

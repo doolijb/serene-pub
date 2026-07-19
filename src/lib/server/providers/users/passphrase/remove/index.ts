@@ -9,16 +9,14 @@ export async function remove({
 	tx?: DbTransaction | typeof db
 	userId: string
 	returning?: ReturningSelect
-}): PromisedQueryResult<typeof returning> {
-	const query = tx
-		.delete(schema.passphrases)
-		.where(eq(schema.passphrases.userId, userId))
+}) {
+	const where = eq(schema.passphrases.userId, parseInt(userId))
 
 	// Returning?
 	if (returning) {
-		query.returning(returning)
+		return await tx.delete(schema.passphrases).where(where).returning(returning)
 	}
 
 	// Return result
-	return await query
+	return await tx.delete(schema.passphrases).where(where)
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onMount } from "svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import EditChatForm from "../chatForms/EditChatForm.svelte"
 	import ChatViewPanel from "../chatForms/ChatViewPanel.svelte"
 	import * as Icons from "@lucide/svelte"
@@ -32,7 +32,7 @@
 	let chatFormHasChanges = $state(false)
 	let showUnsavedChangesModal = $state(false)
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	// Filtered chats derived from search
 	let filteredChats: Sockets.Chats.List.Response["chatList"] = $state([])
@@ -150,7 +150,7 @@
 	// Not shown to the user here - the generic onAny catch-all in Layout.svelte
 	// already toasts on "chats:delete:error"; this listener just clears the
 	// in-flight guard so a failed delete doesn't leave the button stuck.
-	;(socket as any).on("chats:delete:error", () => {
+	socket.on("chats:delete:error", () => {
 		isDeleting = false
 	})
 
@@ -243,12 +243,13 @@
 
 	$effect(() => {
 		if (searchByCharacterId) {
-			socket.once(
-				"characters:get",
-				(msg: Sockets.Characters.Get.Response) => {
-					searchCharacter = msg.character
-				}
-			)
+			// TypedSocket has no `.once()` — self-unsubscribe after the first
+			// response to replicate the same "fire once" semantics.
+			const handleCharacterGet = (msg: Sockets.Characters.Get.Response) => {
+				searchCharacter = msg.character
+				socket.off("characters:get", handleCharacterGet)
+			}
+			socket.on("characters:get", handleCharacterGet)
 			const charIdReq: Sockets.Characters.Get.Params = {
 				id: searchByCharacterId
 			}
@@ -258,12 +259,13 @@
 
 	$effect(() => {
 		if (searchByPersonaId) {
-			socket.once(
-				"personas:get",
-				(msg: Sockets.Personas.Get.Response) => {
-					searchPersona = msg.persona
-				}
-			)
+			// TypedSocket has no `.once()` — self-unsubscribe after the first
+			// response to replicate the same "fire once" semantics.
+			const handlePersonaGet = (msg: Sockets.Personas.Get.Response) => {
+				searchPersona = msg.persona
+				socket.off("personas:get", handlePersonaGet)
+			}
+			socket.on("personas:get", handlePersonaGet)
 			const personaIdReq: Sockets.Personas.Get.Params = {
 				id: searchByPersonaId
 			}

@@ -1,0 +1,1 @@
+ALTER TABLE "user_settings" ADD COLUMN "chara_vault_include_nsfw" boolean DEFAULT false NOT NULL;

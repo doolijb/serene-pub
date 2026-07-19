@@ -107,9 +107,17 @@ export type SocketEventMap = {
 		params: Sockets.Characters.Create.Params
 		response: Sockets.Characters.Create.Response
 	}
+	"characters:create:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"characters:update": {
 		params: Sockets.Characters.Update.Params
 		response: Sockets.Characters.Update.Response
+	}
+	"characters:update:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	"characters:delete": {
 		params: Sockets.Characters.Delete.Params
@@ -219,9 +227,17 @@ export type SocketEventMap = {
 		params: Sockets.Personas.Create.Params
 		response: Sockets.Personas.Create.Response
 	}
+	"personas:create:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"personas:update": {
 		params: Sockets.Personas.Update.Params
 		response: Sockets.Personas.Update.Response
+	}
+	"personas:update:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	"personas:delete": {
 		params: Sockets.Personas.Delete.Params
@@ -268,8 +284,54 @@ export type SocketEventMap = {
 		response: Sockets.Personas.SetAvatar.Response
 	}
 
+	// Card source events
+	"cardSources:capabilities": {
+		params: Sockets.CardSources.Capabilities.Params
+		response: Sockets.CardSources.Capabilities.Response
+	}
+	"cardSources:capabilities:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"cardSources:charaVault:connect": {
+		params: Sockets.CardSources.CharaVaultConnect.Params
+		response: Sockets.CardSources.CharaVaultConnect.Response
+	}
+	"cardSources:charaVault:connect:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"cardSources:charaVault:disconnect": {
+		params: Sockets.CardSources.CharaVaultDisconnect.Params
+		response: Sockets.CardSources.CharaVaultDisconnect.Response
+	}
+	"cardSources:charaVault:disconnect:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"cardSources:charaVault:status": {
+		params: Sockets.CardSources.CharaVaultStatus.Params
+		response: Sockets.CardSources.CharaVaultStatus.Response
+	}
+	"cardSources:charaVault:status:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"cardSources:cardDetail": {
+		params: Sockets.CardSources.CardDetail.Params
+		response: Sockets.CardSources.CardDetail.Response
+	}
+	"cardSources:cardDetail:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+
 	// Chat events
 	"chats:list": {
+		params: Sockets.Chats.List.Params
+		response: Sockets.Chats.List.Response
+	}
+	"chats:listAssistant": {
 		params: Sockets.Chats.List.Params
 		response: Sockets.Chats.List.Response
 	}
@@ -329,6 +391,70 @@ export type SocketEventMap = {
 		params: Sockets.Chats.TitleGenerated.Call
 		response: Sockets.Chats.TitleGenerated.Call
 	}
+	"chats:list:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"chats:delete:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"chats:create:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"chats:update:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"chats:get:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"chats:addPersona": {
+		params: Sockets.Chats.AddPersona.Params
+		response: Sockets.Chats.AddPersona.Response
+	}
+	"chats:addPersona:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"chats:addGuest": {
+		params: Sockets.Chats.AddGuest.Params
+		response: Sockets.Chats.AddGuest.Response
+	}
+	"chats:addGuest:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"chats:removeGuest": {
+		params: Sockets.Chats.RemoveGuest.Params
+		response: Sockets.Chats.RemoveGuest.Response
+	}
+	"chats:removeGuest:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"chats:getResponseOrder": {
+		params: Sockets.Chats.GetResponseOrder.Params
+		response: Sockets.Chats.GetResponseOrder.Response
+	}
+	"chats:promptTokenCount": {
+		params: Sockets.Chats.PromptTokenCount.Params
+		response: Sockets.Chats.PromptTokenCount.Response
+	}
+	"chats:triggerGenerateMessage": {
+		params: Sockets.Chats.TriggerGenerateMessage.Params
+		response: Sockets.Chats.TriggerGenerateMessage.Response
+	}
+	"chats:branch": {
+		params: Sockets.Chats.Branch.Params
+		response: Sockets.Chats.Branch.Response
+	}
+	"chats:branch:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
 
 	// Chat Message events
 	"chatMessages:sendPersonaMessage": {
@@ -375,6 +501,10 @@ export type SocketEventMap = {
 	// Legacy events (should be migrated) - temporarily using any types
 	chatMessage: {
 		params: Sockets.ChatMessage.Call
+		response: Sockets.ChatMessage.Response
+	}
+	"chatMessage:error": {
+		params: never
 		response: Sockets.ChatMessage.Response
 	}
 	lorebookBindingList: {
@@ -702,6 +832,94 @@ export type SocketEventMap = {
 		params: Sockets.KoboldCpp.UnloadModel.Params
 		response: Sockets.KoboldCpp.UnloadModel.Response
 	}
+	"koboldcpp:deleteModel": {
+		params: Sockets.KoboldCpp.DeleteModel.Params
+		response: Sockets.KoboldCpp.DeleteModel.Response
+	}
+	"koboldcpp:deleteModel:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"koboldcpp:connectModel:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"koboldcpp:setBaseUrl:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"koboldcpp:version:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"koboldcpp:isUpdateAvailable:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"koboldcpp:perf:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"koboldcpp:searchModels:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"koboldcpp:downloadModel:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"koboldcpp:recommendedModels": {
+		params: Sockets.KoboldCpp.RecommendedModels.Params
+		response: Sockets.KoboldCpp.RecommendedModels.Response
+	}
+	"koboldcpp:recommendedModels:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"koboldcpp:downloadProgress": {
+		params: never
+		response: Sockets.KoboldCpp.DownloadProgress.Response
+	}
+	"koboldcpp:setSubprocessTimeout": {
+		params: Sockets.KoboldCpp.SetSubprocessTimeout.Params
+		response: Sockets.KoboldCpp.SetSubprocessTimeout.Response
+	}
+	"koboldcpp:listReleaseVersions": {
+		params: Sockets.KoboldCpp.ListReleaseVersions.Params
+		response: Sockets.KoboldCpp.ListReleaseVersions.Response
+	}
+	"koboldcpp:listReleaseVersions:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"koboldcpp:listBinaryVariants:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"koboldcpp:checkManagedBinaryUpdate": {
+		params: Sockets.KoboldCpp.CheckManagedBinaryUpdate.Params
+		response: Sockets.KoboldCpp.CheckManagedBinaryUpdate.Response
+	}
+	"koboldcpp:checkManagedBinaryUpdate:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"koboldcpp:binaryDownloadProgress": {
+		params: never
+		response: Sockets.KoboldCpp.BinaryDownloadProgress.Response
+	}
+	"koboldcpp:startSubprocess:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"koboldcpp:subprocessStatus": {
+		params: never
+		response: Sockets.KoboldCpp.SubprocessStatus.Response
+	}
+	"koboldcpp:setManagedMode:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 
 	// Ollama events
 	"ollama:setBaseUrl": {
@@ -727,6 +945,54 @@ export type SocketEventMap = {
 	"ollama:version": {
 		params: Sockets.Ollama.Version.Params
 		response: Sockets.Ollama.Version.Response
+	}
+	"ollama:setBaseUrl:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"ollama:pullModel:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"ollama:listRunningModels": {
+		params: Sockets.Ollama.ListRunningModels.Params
+		response: Sockets.Ollama.ListRunningModels.Response
+	}
+	"ollama:isUpdateAvailable": {
+		params: Sockets.Ollama.IsUpdateAvailable.Params
+		response: Sockets.Ollama.IsUpdateAvailable.Response
+	}
+	"ollama:isUpdateAvailable:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"ollama:searchAvailableModels": {
+		params: Sockets.Ollama.SearchAvailableModels.Params
+		response: Sockets.Ollama.SearchAvailableModels.Response
+	}
+	"ollama:clearDownloadHistory": {
+		params: Sockets.Ollama.ClearDownloadHistory.Params
+		response: Sockets.Ollama.ClearDownloadHistory.Response
+	}
+	"ollama:cancelPull": {
+		params: Sockets.Ollama.CancelPull.Params
+		response: Sockets.Ollama.CancelPull.Response
+	}
+	"ollama:getDownloadProgress": {
+		params: Sockets.Ollama.GetDownloadProgress.Params
+		response: Sockets.Ollama.GetDownloadProgress.Response
+	}
+	"ollama:recommendedModels": {
+		params: Sockets.Ollama.RecommendedModels.Params
+		response: Sockets.Ollama.RecommendedModels.Response
+	}
+	// Raw legacy progress event (no colon-namespacing) - emitted directly via
+	// emitToUser("ollamaPullProgress", ...) in src/lib/server/sockets/ollama.ts
+	// rather than through the Handler/register pattern, so it never got a
+	// "ollama:" prefix like the rest of this namespace.
+	ollamaPullProgress: {
+		params: never
+		response: Sockets.Ollama.PullProgress.Response
 	}
 
 	// System Settings events
@@ -850,6 +1116,10 @@ export type SocketEventMap = {
 		params: Sockets.UserSettings.UploadBackground.Params
 		response: Sockets.UserSettings.UploadBackground.Response
 	}
+	"userSettings:uploadBackground:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"userSettings:deleteBackground": {
 		params: Sockets.UserSettings.DeleteBackground.Params
 		response: Sockets.UserSettings.DeleteBackground.Response
@@ -861,6 +1131,14 @@ export type SocketEventMap = {
 	"userSettings:updateShowHomePageBanner": {
 		params: Sockets.UserSettings.UpdateShowHomePageBanner.Params
 		response: Sockets.UserSettings.UpdateShowHomePageBanner.Response
+	}
+	"userSettings:updateCharaVaultIncludeNsfw": {
+		params: Sockets.UserSettings.UpdateCharaVaultIncludeNsfw.Params
+		response: Sockets.UserSettings.UpdateCharaVaultIncludeNsfw.Response
+	}
+	"userSettings:updateCharaVaultIncludeNsfw:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	"userSettings:updateEasyPersonaCreation": {
 		params: Sockets.UserSettings.UpdateEasyPersonaCreation.Params
@@ -992,6 +1270,22 @@ export type SocketEventMap = {
 	}
 
 	// Scenes events
+	"scenes:list": {
+		params: Sockets.Scenes.List.Params
+		response: Sockets.Scenes.List.Response
+	}
+	"scenes:list:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"scenes:scenedMessageIds": {
+		params: Sockets.Scenes.SenedMessageIds.Params
+		response: Sockets.Scenes.SenedMessageIds.Response
+	}
+	"scenes:scenedMessageIds:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
 	"scenes:listByLorebook": {
 		params: Sockets.Scenes.ListByLorebook.Params
 		response: Sockets.Scenes.ListByLorebook.Response
@@ -1090,7 +1384,9 @@ export type SocketEventMap = {
 	}
 	"assistant:metadataUpdated": {
 		params: never
-		response: { chatId: number; metadata: string | object }
+		// `chats.metadata` is a Drizzle json() column — always an already-
+		// parsed object by the time assistantV2.ts reads and re-emits it.
+		response: { chatId: number; metadata: Record<string, any> }
 	}
 	"assistant:saveDraft": {
 		params: { chatId: number }
@@ -1140,6 +1436,10 @@ export type SocketEventMap = {
 	"tags:delete": {
 		params: Sockets.Tags.Delete.Params
 		response: Sockets.Tags.Delete.Response
+	}
+	"tags:getRelatedData": {
+		params: Sockets.Tags.GetRelatedData.Params
+		response: Sockets.Tags.GetRelatedData.Response
 	}
 
 	// Narrative Graph events
@@ -1283,6 +1583,44 @@ export type SocketEventMap = {
 		response: Sockets.Activity.Update.Response
 	}
 
+	// Custom Theme events
+	"customThemes:list": {
+		params: Sockets.CustomThemes.List.Params
+		response: Sockets.CustomThemes.List.Response
+	}
+	"customThemes:list:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"customThemes:getCss": {
+		params: Sockets.CustomThemes.GetCss.Params
+		response: Sockets.CustomThemes.GetCss.Response
+	}
+	"customThemes:save": {
+		params: Sockets.CustomThemes.Save.Params
+		response: Sockets.CustomThemes.Save.Response
+	}
+	"customThemes:save:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"customThemes:delete": {
+		params: Sockets.CustomThemes.Delete.Params
+		response: Sockets.CustomThemes.Delete.Response
+	}
+	"customThemes:delete:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"customThemes:setInstanceTheme": {
+		params: Sockets.CustomThemes.SetInstanceTheme.Params
+		response: Sockets.CustomThemes.SetInstanceTheme.Response
+	}
+	"customThemes:setInstanceTheme:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+
 	// Global error/success events
 	error: {
 		params: never
@@ -1312,6 +1650,12 @@ export interface TypedSocket {
 	off<K extends keyof SocketEventMap>(
 		event: K,
 		listener?: (data: SocketEventMap[K]["response"]) => void
+	): void
+
+	// Type-safe once method - listener fires at most once, then auto-removes
+	once<K extends keyof SocketEventMap>(
+		event: K,
+		listener: (data: SocketEventMap[K]["response"]) => void
 	): void
 
 	// Generic catch-all listener - Socket.IO does NOT support glob/wildcard
@@ -1361,6 +1705,13 @@ export function createTypedSocket(): TypedSocket {
 			if (socket.off) {
 				socket.off(event as string, listener)
 			}
+		}) as any,
+
+		once: (<K extends keyof SocketEventMap>(
+			event: K,
+			listener: (data: SocketEventMap[K]["response"]) => void
+		) => {
+			socket.once(event as string, listener)
 		}) as any,
 
 		onAny: (listener: (event: string, ...args: any[]) => void) => {

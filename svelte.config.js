@@ -47,7 +47,17 @@ const config = {
 			directives: {
 				"default-src": ["self"],
 				"connect-src": ["self", ...socketConnectSrc, ...cspList("CSP_EXTRA_CONNECT_SRC")],
-				"img-src": ["self", "data:", "blob:"],
+				// raw.githubusercontent.com serves character/persona portrait
+				// images for the community library (src/routes/library/*) —
+				// fetched directly by the browser, not proxied through this app.
+				// CharaVault's images are NOT listed here: charavault.net sends a
+				// Cross-Origin-Resource-Policy header that blocks direct
+				// cross-site <img> loads regardless of what CSP allows, so those
+				// go through /library/cardImage/charavault/[...path] (a
+				// same-origin server-side proxy) instead. All other CharaVault
+				// API traffic already happens server-side (fetch isn't subject
+				// to page CSP either way).
+				"img-src": ["self", "data:", "blob:", "https://raw.githubusercontent.com"],
 				"style-src": [
 					"self",
 					"unsafe-inline",

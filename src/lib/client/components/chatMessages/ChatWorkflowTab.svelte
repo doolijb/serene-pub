@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { onMount, onDestroy } from "svelte"
 
 	interface Props {
@@ -12,7 +12,7 @@
 
 	let { lorebookId, sceneList, onOpenEntry, onEnterSummarizationMode }: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	let historyEntryList = $state<SelectHistoryEntry[]>([])
 	let isCreatingEntry = $state(false)
 
@@ -112,7 +112,7 @@
 				<Icons.BookOpen size={13} class="text-surface-400 shrink-0" />
 				<div class="min-w-0 flex-1">
 					<p class="text-xs font-semibold">{formatDate(latestEntry)}</p>
-					<p class="text-surface-500 text-xs">
+					<p class="text-surface-700-300 text-xs">
 						{sceneCountByEntry[latestEntry.id] ?? 0} scene{(sceneCountByEntry[latestEntry.id] ??
 							0) === 1
 							? ""
@@ -141,7 +141,7 @@
 			</button>
 		</div>
 	{:else if historyEntryList.length === 0}
-		<p class="text-surface-500 text-xs">
+		<p class="text-surface-700-300 text-xs">
 			No history entries yet. Open the lorebook to create one.
 		</p>
 	{/if}
@@ -176,7 +176,7 @@
 	<!-- Recent entries list -->
 	{#if sortedEntries.length > 1}
 		<div class="space-y-1">
-			<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">
+			<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">
 				Recent Entries
 			</p>
 			<div class="flex flex-col gap-1">
@@ -186,7 +186,7 @@
 						onclick={() => onOpenEntry(lorebookId, entry.id)}
 					>
 						<span class="min-w-0 flex-1 truncate text-xs">{formatDate(entry)}</span>
-						<span class="text-surface-500 shrink-0 text-xs">
+						<span class="text-surface-700-300 shrink-0 text-xs">
 							{sceneCountByEntry[entry.id] ?? 0} scene{(sceneCountByEntry[entry.id] ?? 0) === 1
 								? ""
 								: "s"}

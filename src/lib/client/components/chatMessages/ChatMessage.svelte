@@ -29,19 +29,29 @@
 		// Event handlers
 		onSwipeLeft: (msg: SelectChatMessage) => void
 		onSwipeRight: (msg: SelectChatMessage) => void
-		onEditMessage: (event: MouseEvent, msg: SelectChatMessage) => void
-		onDeleteMessage: (event: MouseEvent, msg: SelectChatMessage) => void
-		onHideMessage: (event: MouseEvent, msg: SelectChatMessage) => void
-		onRegenerateMessage: (event: MouseEvent, msg: SelectChatMessage) => void
-		onContinueMessage?: (event: MouseEvent, msg: SelectChatMessage) => void
-		onAbortMessage: (event: MouseEvent, msg: SelectChatMessage) => void
+		onEditMessage: (event: Event, msg: SelectChatMessage) => void
+		onDeleteMessage: (event: Event, msg: SelectChatMessage) => void
+		onHideMessage: (event: Event, msg: SelectChatMessage) => void
+		onRegenerateMessage: (event: Event, msg: SelectChatMessage) => void
+		onContinueMessage?: (event: Event, msg: SelectChatMessage) => void
+		onAbortMessage: (event: Event, msg: SelectChatMessage) => void
 		onBranchMessage?: (event: Event, msg: SelectChatMessage) => void
 		onCharacterNameClick: (msg: SelectChatMessage) => void
 		onAvatarClick: (
 			char: SelectCharacter | SelectPersona | undefined
 		) => void
-		onCancelEditMessage: () => void
-		onSaveEditMessage: () => void
+		// Method-shorthand (not arrow-type) syntax deliberately: these are wired
+		// directly as `onclick={onCancelEditMessage}` below (invoked with the
+		// click MouseEvent) but also invoked with zero args internally via
+		// handleMessageUpdate()/MessageComposer's onSend. Real implementations
+		// (eg. +page.svelte's handleCancelEditMessage/handleSaveEditMessage)
+		// take the event to call stopPropagation(). Method-shorthand gives this
+		// property bivariant parameter checking, which is what lets both a
+		// zero-arg and an Event-taking callback satisfy it — an arrow-type
+		// property (even with `e?: Event`) is checked strictly/contravariantly
+		// and rejects one side or the other.
+		onCancelEditMessage(e?: Event): void
+		onSaveEditMessage(e?: Event): void
 		// Tracks which message's "more actions" popover is open, so only one
 		// is ever open at a time in a message list. No longer mobile-only —
 		// the popover now replaces the always-visible desktop toolbar too.
@@ -114,12 +124,16 @@
 	const canControl = $derived(canControlMessage(msg))
 	const showSwipes = $derived(showSwipeControls(msg, isGreeting))
 	const canSwipeRightVal = $derived(canSwipeRight(msg, isGreeting))
-	// Native model thinking (from Ollama think: true, etc.)
+	// Native model thinking (from Ollama think: true, etc.) — `thinking` is
+	// written into chatMessages.metadata at runtime (see generateResponse.ts)
+	// but isn't part of the column's `$type<{...}>()` declaration in
+	// schema.ts, so it's genuinely absent from SelectChatMessage's inferred
+	// type. `as any` here is the accurate escape hatch for that upstream gap.
 	const thinkingContent = $derived((msg.metadata as any)?.thinking || "")
 	const hasThinking = $derived(thinkingContent.trim().length > 0)
 
 	// Assistant-mode XML-tag reasoning (function-calling flow)
-	const reasoningContent = $derived((msg.metadata as any)?.reasoning || "")
+	const reasoningContent = $derived(msg.metadata?.reasoning || "")
 	const hasReasoning = $derived(reasoningContent.trim().length > 0)
 
 	let isThinkingExpanded = $state(false)
@@ -362,12 +376,12 @@
 		{:else if msg.content === "" && msg.isGenerating}
 			{#if msg.generationStage === "queued"}
 				<div class="flex items-center gap-2">
-					<div class="text-surface-500 text-sm">Queued</div>
+					<div class="text-surface-700-300 text-sm">Queued</div>
 					<div class="bg-surface-400-600 h-2 w-2 rounded-full"></div>
 				</div>
 			{:else if msg.generationStage === "loading"}
 				<div class="flex items-center gap-2">
-					<div class="text-surface-500 text-sm">Loading model…</div>
+					<div class="text-surface-700-300 text-sm">Loading model…</div>
 					<div class="bg-surface-400-600 h-2 w-2 animate-pulse rounded-full"></div>
 				</div>
 			{:else if GeneratingAnimationComponent}

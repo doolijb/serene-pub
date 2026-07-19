@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { goto } from "$app/navigation"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import * as Icons from "@lucide/svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { onMount } from "svelte"
@@ -9,7 +9,7 @@
 
 	let assistantChats: SelectChat[] = $state([])
 	let newMessage = $state("")
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	let isCreatingChat = $state(false)
 	let showDeleteChatModal = $state(false)
 	let chatToDelete: SelectChat | null = $state(null)

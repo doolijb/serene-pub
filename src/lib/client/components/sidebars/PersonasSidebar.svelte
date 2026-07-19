@@ -5,14 +5,16 @@
 	import { fade } from "svelte/transition"
 	import { Dialog, Portal, FileUpload } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
+	import { goto } from "$app/navigation"
 	import PersonaForm from "../personaForms/PersonaForm.svelte"
 	import PersonaCreator from "../modals/PersonaCreatorModal.svelte"
 	import PersonaUnsavedChangesModal from "../modals/PersonaUnsavedChangesModal.svelte"
-	import PersonaLibraryModal from "../modals/PersonaLibraryModal.svelte"
 	import PersonaListItem from "../listItems/PersonaListItem.svelte"
+	import PersonaCardItem from "../listItems/PersonaCardItem.svelte"
 	import PersonaViewPanel from "../personaForms/PersonaViewPanel.svelte"
 	import EmptyState from "../EmptyState.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { createViewMode } from "$lib/client/utils/viewMode.svelte"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -31,13 +33,13 @@
 
 	let personaList: Sockets.Personas.List.Response["personaList"] = $state([])
 	let isLoading = $state(true)
+	const viewMode = createViewMode("serene-pub:viewMode:personasSidebar")
 	let search = $state("")
 	let personaId: number | undefined = $state()
 	let viewingId: number | undefined = $state()
 	let returnToViewId: number | undefined = $state()
 	let isCreating = $state(false)
 	let showPersonaCreator = $state(false)
-	let showLibraryModal = $state(false)
 	let showImportModal = $state(false)
 	let personaFormHasChanges = $state(false)
 	let showDeleteModal = $state(false)
@@ -48,6 +50,18 @@
 
 	function handleImportClick() {
 		showImportModal = true
+	}
+
+	// Must match the `lg` breakpoint the desktop/mobile sidebar split
+	// actually switches at (see the matching comment in Layout.svelte's
+	// openPanel) — otherwise this sidebar (open as the mobile overlay) stays
+	// open behind the newly-navigated library page instead of closing.
+	async function handleBrowseClick() {
+		if (window.innerWidth < 1024) {
+			const closed = await panelsCtx.closePanel({ panel: "mobile" })
+			if (!closed) return
+		}
+		goto("/library/personas")
 	}
 
 	async function handleFileImport(details: FileAcceptDetails) {
@@ -255,7 +269,7 @@
 	}
 
 	function handlePersonaClick(
-		persona: Sockets.PersonaList.Response["personaList"][0]
+		persona: Sockets.Personas.List.Response["personaList"][0]
 	) {
 		handleViewClick(persona.id!)
 	}
@@ -309,31 +323,63 @@
 				<Icons.Download size={16} aria-hidden="true" />
 				Import
 			</button>
+			<button
+				class="btn btn-sm preset-tonal-primary"
+				title="Browse Persona Library"
+				onclick={handleBrowseClick}
+				aria-label="Browse the persona library"
+				type="button"
+			>
+				<Icons.Library size={16} aria-hidden="true" />
+				Browse
+			</button>
 		</div>
 		<div class="mb-4 flex items-center gap-2">
 			<input
 				type="text"
-				placeholder="Search personas, descriptions, tags..."
+				placeholder="Search"
 				aria-label="Search personas"
 				class="input"
 				bind:value={search}
 			/>
+			<div class="flex shrink-0 gap-1" role="group" aria-label="View mode">
+				<button
+					type="button"
+					class="btn btn-sm p-2 {viewMode.value === 'list' ? 'preset-filled-primary-500' : 'preset-tonal-surface'}"
+					onclick={() => (viewMode.value = "list")}
+					title="List view"
+					aria-label="List view"
+					aria-pressed={viewMode.value === "list"}
+				>
+					<Icons.List size={16} aria-hidden="true" />
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm p-2 {viewMode.value === 'cards' ? 'preset-filled-primary-500' : 'preset-tonal-surface'}"
+					onclick={() => (viewMode.value = "cards")}
+					title="Card view"
+					aria-label="Card view"
+					aria-pressed={viewMode.value === "cards"}
+				>
+					<Icons.LayoutGrid size={16} aria-hidden="true" />
+				</button>
+			</div>
 		</div>
-		<div class="flex flex-col gap-2">
-			{#if isLoading}
-				<div class="flex items-center justify-center py-8">
-					<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
-				</div>
-			{:else if filteredPersonas.length === 0}
-				<EmptyState
-					icon={Icons.User}
-					message={search
-						? `No personas found matching "${search}".`
-						: "No personas yet — create one to get started."}
-					ctaLabel={search ? undefined : "New Persona"}
-					onCta={search ? undefined : () => (isCreating = true)}
-				/>
-			{:else}
+		{#if isLoading}
+			<div class="flex items-center justify-center py-8">
+				<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+			</div>
+		{:else if filteredPersonas.length === 0}
+			<EmptyState
+				icon={Icons.User}
+				message={search
+					? `No personas found matching "${search}".`
+					: "No personas yet — create one to get started."}
+				ctaLabel={search ? undefined : "New Persona"}
+				onCta={search ? undefined : () => (isCreating = true)}
+			/>
+		{:else if viewMode.value === "list"}
+			<div class="flex flex-col gap-2">
 				{#each filteredPersonas as p (p.id)}
 					<div animate:flip={{ duration: 200 }} out:fade={{ duration: 150 }}>
 						<PersonaListItem
@@ -345,8 +391,28 @@
 						/>
 					</div>
 				{/each}
-			{/if}
-		</div>
+			</div>
+		{:else}
+			<!-- See CharactersSidebar.svelte's matching grid for why this uses
+				a @container query instead of a fixed min-width or viewport
+				breakpoints — the sidebar's own pixel width doesn't track
+				viewport width proportionally. -->
+			<div class="@container">
+				<div class="grid grid-cols-1 gap-3 @md:grid-cols-2 @xl:grid-cols-3 @3xl:grid-cols-4 @5xl:grid-cols-5">
+					{#each filteredPersonas as p (p.id)}
+						<div animate:flip={{ duration: 200 }} out:fade={{ duration: 150 }}>
+							<PersonaCardItem
+								persona={p}
+								onclick={handlePersonaClick}
+								onEdit={handleEditClick}
+								onDelete={handleDeleteClick}
+								contentTitle="Go to persona chats"
+							/>
+						</div>
+					{/each}
+				</div>
+			</div>
+		{/if}
 	{/if}
 </div>
 
@@ -397,19 +463,7 @@
 				<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl w-[min(95vw,560px)]">
 					<div class="p-6">
 						<h2 class="mb-2 text-lg font-bold">Import Persona</h2>
-						<p class="mb-4">Choose how to import:</p>
 						<div class="space-y-2">
-							<button
-								class="btn preset-filled-surface-400-600 w-full justify-start"
-								onclick={() => {
-									showImportModal = false
-									showLibraryModal = true
-								}}
-							>
-								<Icons.Library class="w-4 h-4" />
-								Search Library
-							</button>
-							<div class="divider">OR</div>
 							<div>
 								<p class="text-sm text-surface-600 dark:text-surface-400 mb-2">
 									Upload a file (PNG, APNG, JPEG, JPG, WEBP, JSON):
@@ -424,11 +478,11 @@
 									<FileUpload.Dropzone
 										class="border-surface-300-700 bg-surface-50-950 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
 									>
-										<Icons.Upload class="text-surface-500 h-8 w-8" />
+										<Icons.Upload class="text-surface-700-300 h-8 w-8" />
 										<FileUpload.Trigger class="btn btn-sm preset-filled-primary-500">
 											Browse
 										</FileUpload.Trigger>
-										<span class="text-surface-500 text-xs">or drag and drop</span>
+										<span class="text-surface-700-300 text-xs">or drag and drop</span>
 										<FileUpload.HiddenInput />
 									</FileUpload.Dropzone>
 								</FileUpload>
@@ -448,5 +502,3 @@
 		</Portal>
 	</Dialog>
 {/if}
-
-<PersonaLibraryModal bind:open={showLibraryModal} />

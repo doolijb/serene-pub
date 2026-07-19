@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Switch, Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { onMount, onDestroy, getContext } from "svelte"
 	import { z } from "zod"
 	import CharacterUnsavedChangesModal from "../modals/CharacterUnsavedChangesModal.svelte"
@@ -31,6 +31,8 @@
 		_avatar: string
 		lorebookId: number | null
 		characterVersion?: string
+		creator: string
+		category: string
 		tags: string[]
 	}
 
@@ -49,6 +51,8 @@
 		groupOnlyGreetings: z.array(z.string()).optional(),
 		postHistoryInstructions: z.string().optional(),
 		characterVersion: z.string().optional(),
+		creator: z.string().optional(),
+		category: z.string().optional(),
 		isFavorite: z.boolean().optional(),
 		lorebookId: z.number().nullable().optional(),
 		tags: z.array(z.string()).optional()
@@ -88,7 +92,7 @@
 		disableDataChangeCallback = false
 	}: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
 	)
@@ -115,6 +119,8 @@
 		postHistoryInstructions: "",
 		isFavorite: false,
 		characterVersion: "",
+		creator: "",
+		category: "",
 		_avatarFile: undefined,
 		_avatar: "",
 		lorebookId: null,
@@ -139,6 +145,8 @@
 		postHistoryInstructions: "",
 		isFavorite: false,
 		characterVersion: "",
+		creator: "",
+		category: "",
 		_avatarFile: undefined,
 		_avatar: "",
 		lorebookId: null,
@@ -158,7 +166,7 @@
 		aliases: false,
 		summary: false
 	})
-	let character: Sockets.Character.Response["character"] | undefined =
+	let character: Sockets.Characters.Get.Response["character"] | undefined =
 		$state(undefined)
 	let mode: "create" | "edit" = $derived.by(() =>
 		!!character ? "edit" : "create"
@@ -319,18 +327,23 @@
 		isSaving = true
 		socket.emit("characters:create", {
 			character: newCharacter,
-			avatarFile
+			// Socket.IO transparently marshals a browser File (a Blob
+			// subclass) to a Node Buffer on the server; the wire shape
+			// differs from the client-side value's compile-time type.
+			avatarFile: avatarFile as unknown as Buffer | undefined
 		})
 	}
 
 	function handleUpdate() {
 		const updatedCharacter = { ...editCharacterData }
+		if (!updatedCharacter.id) return
 		const avatarFile = updatedCharacter._avatarFile
 		delete updatedCharacter._avatarFile
 		isSaving = true
 		socket.emit("characters:update", {
-			character: updatedCharacter,
-			avatarFile
+			character: { ...updatedCharacter, id: updatedCharacter.id },
+			// See handleCreate() above re: File → Buffer wire conversion.
+			avatarFile: avatarFile as unknown as Buffer | undefined
 		})
 	}
 
@@ -493,10 +506,7 @@
 			}
 		})
 
-		// These aren't in the typed SocketEventMap (only their success
-		// variants are), so registered via the same `(socket as any).on(...)`
-		// cast pattern used elsewhere in the app for ad hoc error listeners.
-		;(socket as any).on(
+		socket.on(
 			"characters:create:error",
 			(msg: Sockets.ErrorResponse) => {
 				isSaving = false
@@ -507,7 +517,7 @@
 			}
 		)
 
-		;(socket as any).on(
+		socket.on(
 			"characters:update:error",
 			(msg: Sockets.ErrorResponse) => {
 				isSaving = false
@@ -522,8 +532,8 @@
 			"lorebooks:list",
 			(message: Sockets.Lorebooks.List.Response) => {
 				lorebookList =
-					message.lorebookList.sort((a, b) =>
-						a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+					message.lorebookList.sort(
+						(a, b) => (a.id ?? 0) - (b.id ?? 0)
 					) || []
 			}
 		)
@@ -588,6 +598,7 @@
 				"characters:get",
 				(message: Sockets.Characters.Get.Response) => {
 					character = message.character
+					if (!message.character) return
 					const characterData = { ...message.character }
 
 					// Handle migration from old string format to new array format
@@ -623,6 +634,8 @@
 						isFavorite: characterData.isFavorite ?? false,
 						lorebookId: characterData.lorebookId ?? null,
 						characterVersion: characterData.characterVersion ?? undefined,
+						creator: characterData.creator ?? "",
+						category: characterData.category ?? "",
 						tags: characterData.tags ?? [],
 						_avatar: "",
 						_avatarFile: undefined
@@ -648,8 +661,8 @@
 	onDestroy(() => {
 		socket.off("characters:create")
 		socket.off("characters:update")
-		;(socket as any).off("characters:create:error")
-		;(socket as any).off("characters:update:error")
+		socket.off("characters:create:error")
+		socket.off("characters:update:error")
 		socket.off("characters:get")
 		socket.off("characters:exportCard")
 		socket.off("characters:exportCard:error")
@@ -776,7 +789,7 @@
 								class="flex w-full flex-col items-center justify-center"
 							>
 								<svg
-									class="my-4 h-8 w-8 text-surface-500 dark:text-surface-400"
+									class="my-4 h-8 w-8 text-surface-700-300 dark:text-surface-400"
 									aria-hidden="true"
 									xmlns="http://www.w3.org/2000/svg"
 									fill="none"
@@ -963,7 +976,7 @@
 						placeholder="One or two sentences describing who this character is…"
 						maxlength="200"
 					></textarea>
-					<p class="text-surface-500 text-right text-xs">
+					<p class="text-surface-700-300 text-right text-xs">
 						{editCharacterData.summary.length} / 200
 					</p>
 					<p class="text-surface-400 text-xs">Used as a concise graph node description. Not injected into chat context.</p>
@@ -1485,6 +1498,30 @@
 					placeholder="1.0"
 				/>
 			</div>
+			<div class="flex flex-col gap-1">
+				<label class="font-semibold" for="charCreator">
+					Creator
+				</label>
+				<input
+					id="charCreator"
+					type="text"
+					bind:value={editCharacterData.creator}
+					class="input"
+					placeholder="Who made this character?"
+				/>
+			</div>
+			<div class="flex flex-col gap-1">
+				<label class="font-semibold" for="charCategory">
+					Category
+				</label>
+				<input
+					id="charCategory"
+					type="text"
+					bind:value={editCharacterData.category}
+					class="input"
+					placeholder="e.g. Fantasy, Sci-Fi, Slice of Life"
+				/>
+			</div>
 		{/if}
 		<!-- <div class="flex flex-col gap-2">
 			<label class="font-semibold" for="lorebookSelect">Lorebook</label>
@@ -1515,7 +1552,10 @@
 							// Delay hiding dropdown to allow clicking on dropdown items
 							setTimeout(() => {
 								if (
-									!e.relatedTarget?.closest(".tag-dropdown")
+									!(
+										e.relatedTarget instanceof Element &&
+										e.relatedTarget.closest(".tag-dropdown")
+									)
 								) {
 									showTagDropdown = false
 								}

@@ -20,7 +20,6 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { KeyboardNavigationManager } from "$lib/client/utils/keyboardNavigation"
 	import SettingsSidebar from "$lib/client/components/sidebars/SettingsSidebar.svelte"
-	import VectorizationSidebar from "$lib/client/components/sidebars/VectorizationSidebar.svelte"
 	import ActivitySidebar from "$lib/client/components/sidebars/ActivitySidebar.svelte"
 	import ConnectionTimeoutModal from "$lib/client/components/ConnectionTimeoutModal.svelte"
 	import type { Snippet } from "svelte"
@@ -168,7 +167,6 @@
 			"koboldcpp",
 			"contexts",
 			"prompts",
-			"vectorization",
 			"users",
 			"settings"
 		],
@@ -313,16 +311,6 @@
 			panelsCtx.leftNav.prompts = {
 				icon: Icons.MessageCircle,
 				title: "Prompt Configs"
-			}
-
-			// Always visible, regardless of vectorizationEnabled — this is the
-			// only entry point into Embeddings setup/reconfiguration (unlike
-			// Ollama/KoboldCPP Manager, there's no separate always-visible
-			// "enabled" toggle left in System Settings). VectorizationSidebar
-			// itself renders the unconfigured chooser vs. configured view.
-			panelsCtx.leftNav.vectorization = {
-				icon: Icons.Zap,
-				title: "Embeddings"
 			}
 		}
 	})
@@ -911,10 +899,6 @@
 								<SettingsSidebar
 									bind:onclose={panelsCtx.onLeftPanelClose}
 								/>
-							{:else if panelsCtx.leftPanel === "vectorization"}
-								<VectorizationSidebar
-									bind:onclose={panelsCtx.onLeftPanelClose}
-								/>
 							{/if}
 						</div>
 					</div>
@@ -1087,10 +1071,6 @@
 						/>
 					{:else if panelsCtx.mobilePanel === "settings"}
 						<SettingsSidebar
-							bind:onclose={panelsCtx.onMobilePanelClose}
-						/>
-					{:else if panelsCtx.mobilePanel === "vectorization"}
-						<VectorizationSidebar
 							bind:onclose={panelsCtx.onMobilePanelClose}
 						/>
 					{/if}

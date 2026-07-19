@@ -85,7 +85,7 @@
 			</p>
 
 			<div class="space-y-3">
-				<p class="text-surface-500 text-xs font-medium uppercase tracking-wide">
+				<p class="text-surface-700-300 text-xs font-medium uppercase tracking-wide">
 					Existing unlinked nodes
 				</p>
 				<div class="max-h-52 overflow-y-auto space-y-1 pr-1">
@@ -107,7 +107,7 @@
 									</span>
 								</div>
 								{#if node.summary}
-									<p class="text-surface-500 mt-0.5 truncate text-xs">{node.summary}</p>
+									<p class="text-surface-700-300 mt-0.5 truncate text-xs">{node.summary}</p>
 								{/if}
 							</div>
 						</button>
@@ -126,7 +126,7 @@
 				</div>
 			</div>
 
-			<div class="text-surface-500 border-t pt-2 text-right text-xs">
+			<div class="text-surface-700-300 border-t pt-2 text-right text-xs">
 				{currentIndex + 1} of {pendingBindings.length}
 			</div>
 		{/if}

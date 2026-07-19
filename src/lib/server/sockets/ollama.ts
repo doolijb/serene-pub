@@ -1,7 +1,9 @@
 import { db } from "$lib/server/db"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import type { InsertConnection } from "$lib/server/db/schema"
+// InsertConnection is declared globally in $lib/server/db/types.d.ts (ambient
+// `export global {}` block, same pattern as the Sockets namespace) — no
+// import needed/available for it.
 import { user as loadUser } from "./users"
 import { connectionsList, connectionsSetUserActive } from "./connections"
 import { Ollama } from "ollama"

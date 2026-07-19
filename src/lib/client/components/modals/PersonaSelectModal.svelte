@@ -3,8 +3,6 @@
 	import Avatar from "../Avatar.svelte"
 	import * as Icons from "@lucide/svelte"
 
-	import { getContext } from "svelte"
-
 	interface Props {
 		open: boolean
 		personas?: Partial<SelectPersona>[]
@@ -29,9 +27,10 @@
 		returnFullPersona = false
 	}: Props = $props()
 
-	// Get personas from user context if not provided
-	let userCtx: UserCtx = getContext("userCtx")
-	let availablePersonas = $derived(personas || userCtx.personas || [])
+	// Every caller passes `personas` explicitly (see EditChatForm.svelte,
+	// chats/[id]/+page.svelte, LorebookBindingsManager.svelte) — there is no
+	// personas-list context to fall back to.
+	let availablePersonas = $derived(personas || [])
 	let search = $state("")
 
 	let filtered = $derived.by(() => {
@@ -86,7 +85,7 @@
 		<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
 			<div class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap">
 				{#if filtered.length === 0}
-					<div class="text-surface-500 text-center">
+					<div class="text-surface-700-300 text-center">
 						No personas found
 					</div>
 				{/if}
@@ -136,7 +135,7 @@
 										{p.name}
 									</div>
 									<div
-										class="text-surface-500 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
+										class="text-surface-700-300 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
 									>
 										{p.description || "No description"}
 									</div>

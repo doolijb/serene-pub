@@ -347,7 +347,7 @@
 		<!-- Reorder panel -->
 		{#if isReordering}
 			<div class="flex flex-col gap-2">
-				<div class="text-surface-500 text-xs font-semibold uppercase tracking-wide">
+				<div class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">
 					Drag to reorder
 				</div>
 				<div
@@ -374,9 +374,9 @@
 							<Icons.GripVertical size={16} class="text-surface-400 shrink-0" />
 							<span class="flex-1 truncate font-medium">{entry.name}</span>
 							{#if entry.lorebookBindingId}
-								<span class="text-surface-500 shrink-0 text-xs">{getBindingLabel(entry.lorebookBindingId)}</span>
+								<span class="text-surface-700-300 shrink-0 text-xs">{getBindingLabel(entry.lorebookBindingId)}</span>
 							{/if}
-							<span class="text-surface-500 text-xs">#{entry.position}</span>
+							<span class="text-surface-700-300 text-xs">#{entry.position}</span>
 						</div>
 					{/each}
 				</div>
@@ -390,7 +390,7 @@
 
 		<!-- Entry cards -->
 		{:else if filteredEntries.length === 0}
-			<p class="text-surface-500 py-6 text-center text-sm italic">No character lore entries yet.</p>
+			<p class="text-surface-700-300 py-6 text-center text-sm italic">No character lore entries yet.</p>
 		{:else}
 			{#each filteredEntries as entry}
 				{@const isUnbound = !entry.lorebookBindingId}
@@ -408,7 +408,7 @@
 						<div class="mb-1 flex items-center gap-2 text-sm font-semibold">
 							<span class="truncate">{entry.name}</span>
 							{#if entry.lorebookBindingId}
-								<span class="text-surface-500 shrink-0 text-xs font-normal">
+								<span class="text-surface-700-300 shrink-0 text-xs font-normal">
 									<Icons.Link2 size={11} class="inline" /> {getBindingLabel(entry.lorebookBindingId)}
 								</span>
 							{:else}
@@ -422,7 +422,7 @@
 								{previewContent(entry)}
 							</p>
 						{:else}
-							<p class="text-surface-500 text-xs italic">No content yet.</p>
+							<p class="text-surface-700-300 text-xs italic">No content yet.</p>
 						{/if}
 						<div class="mt-1.5 flex flex-wrap items-center gap-1">
 							<EmbeddingStatusIcon embeddingModel={entry.embeddingModel} size={12} />
@@ -527,7 +527,7 @@
 		<div class="flex flex-col gap-3 text-sm">
 			<!-- Binding -->
 			<div>
-				<p class="text-surface-500 mb-1 text-xs font-semibold uppercase tracking-wide">Binding</p>
+				<p class="text-surface-700-300 mb-1 text-xs font-semibold uppercase tracking-wide">Binding</p>
 				{#if isUnbound}
 					<span class="text-warning-500">
 						<Icons.AlertTriangle size={14} class="inline" /> Unbound
@@ -545,16 +545,16 @@
 
 			{#if focusedEntry.content?.trim()}
 				<div>
-					<p class="text-surface-500 mb-1 text-xs font-semibold uppercase tracking-wide">Content</p>
+					<p class="text-surface-700-300 mb-1 text-xs font-semibold uppercase tracking-wide">Content</p>
 					<div class="whitespace-pre-wrap leading-relaxed">{previewContent(focusedEntry)}</div>
 				</div>
 			{:else}
-				<p class="text-surface-500 italic">No content yet.</p>
+				<p class="text-surface-700-300 italic">No content yet.</p>
 			{/if}
 
 			{#if !vectorizationEnabled && focusedEntry.keys?.trim()}
 				<div>
-					<p class="text-surface-500 mb-1 text-xs font-semibold uppercase tracking-wide">Keywords</p>
+					<p class="text-surface-700-300 mb-1 text-xs font-semibold uppercase tracking-wide">Keywords</p>
 					<p>{focusedEntry.keys}</p>
 				</div>
 			{/if}
@@ -665,7 +665,7 @@
 			{#if !vectorizationEnabled}
 				<div class="flex flex-col gap-1">
 					<label class="text-sm font-semibold" for="cleKeys">
-						Keywords <span class="text-surface-500 text-xs font-normal">(comma separated)</span>
+						Keywords <span class="text-surface-700-300 text-xs font-normal">(comma separated)</span>
 					</label>
 					<input
 						id="cleKeys"

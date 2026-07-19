@@ -101,7 +101,7 @@
 	<button
 		class="flex-1 px-4 py-2 text-sm font-medium transition-colors {activeTab === 'activity'
 			? 'border-b-2 border-primary-500 text-primary-500'
-			: 'text-surface-500 hover:text-surface-700-300'}"
+			: 'text-surface-700-300 hover:text-surface-700-300'}"
 		onclick={() => (activeTab = "activity")}
 	>
 		Activity
@@ -113,7 +113,7 @@
 		<button
 			class="flex-1 px-4 py-2 text-sm font-medium transition-colors {activeTab === 'queue'
 				? 'border-b-2 border-primary-500 text-primary-500'
-				: 'text-surface-500 hover:text-surface-700-300'}"
+				: 'text-surface-700-300 hover:text-surface-700-300'}"
 			onclick={() => (activeTab = "queue")}
 		>
 			LLM Queue
@@ -146,7 +146,7 @@
 									{build.lorebookLabel ?? `Lorebook #${build.lorebookId}`}
 								</p>
 							{/if}
-							<p class="text-surface-500 text-xs">
+							<p class="text-surface-700-300 text-xs">
 								{build.mode === "extend" ? "Extend" : "Build"} graph ·
 								<span class="{BUILD_STATUS_COLOR[build.status]}">{BUILD_STATUS_LABEL[build.status]}</span>
 							</p>
@@ -164,7 +164,7 @@
 
 					{#if build.status === "building"}
 						<div class="space-y-1">
-							<p class="text-surface-500 capitalize text-xs">
+							<p class="text-surface-700-300 capitalize text-xs">
 								{build.phase.replace(/_/g, " ")}
 								{#if build.totalScenes > 0}· scene {build.sceneIndex + 1}/{build.totalScenes}{/if}
 							</p>
@@ -229,7 +229,7 @@
 							{:else}
 								<p class="truncate text-sm font-medium">{activity.sceneName ?? `Scene #${activity.sceneId}`}</p>
 							{/if}
-							<p class="text-surface-500 text-xs">
+							<p class="text-surface-700-300 text-xs">
 								{activity.lorebookLabel ?? `Lorebook #${activity.lorebookId}`} · Scene
 								{#if activity.status === "running"}
 									· <span class="text-primary-500">Processing…</span>
@@ -252,7 +252,7 @@
 					</div>
 					{#if activity.status === "running" && activity.phase}
 						<div class="space-y-1">
-							<p class="text-surface-500 capitalize text-xs">
+							<p class="text-surface-700-300 capitalize text-xs">
 								{activity.phase}
 								{#if activity.totalBatches && activity.totalBatches > 1}
 									· batch {activity.batch ?? 0}/{activity.totalBatches}
@@ -308,7 +308,7 @@
 							{:else}
 								<p class="truncate text-sm font-medium">{activity.historyEntryDate}</p>
 							{/if}
-							<p class="text-surface-500 text-xs">
+							<p class="text-surface-700-300 text-xs">
 								{activity.lorebookLabel} · Compile
 								{#if activity.status === "running"}
 									· <span class="text-primary-500">Compiling…</span>
@@ -331,7 +331,7 @@
 					</div>
 					{#if activity.status === "running" && activity.phase}
 						<div class="space-y-1">
-							<p class="text-surface-500 capitalize text-xs">
+							<p class="text-surface-700-300 capitalize text-xs">
 								{activity.phase}
 								{#if activity.totalBatches && activity.totalBatches > 1}
 									· batch {activity.batch ?? 0}/{activity.totalBatches}
@@ -371,7 +371,7 @@
 			</div>
 		{/each}
 		{#if !build && sceneActivities.length === 0 && compileActivities.length === 0}
-			<div class="text-surface-500 flex flex-col items-center gap-2 py-12 text-sm">
+			<div class="text-surface-700-300 flex flex-col items-center gap-2 py-12 text-sm">
 				<Icons.CheckCircle size={28} class="opacity-30" />
 				No active tasks
 			</div>
@@ -380,7 +380,7 @@
 		{/if}
 	{:else if activeTab === "queue" && isAdmin}
 		{#if queueCount === 0}
-			<div class="text-surface-500 flex flex-col items-center gap-2 py-12 text-sm">
+			<div class="text-surface-700-300 flex flex-col items-center gap-2 py-12 text-sm">
 				<Icons.Cpu size={28} class="opacity-30" />
 				Queue is empty
 			</div>
@@ -395,13 +395,13 @@
 						>
 							<div class="min-w-0 flex-1">
 								<p class="truncate text-sm font-medium">{task.label ?? task.taskType}</p>
-								<p class="text-surface-500 text-xs">
+								<p class="text-surface-700-300 text-xs">
 									{task.connectionName}{#if task.samplingName} · {task.samplingName}{/if}
 								</p>
 							</div>
 							<div class="flex shrink-0 items-center gap-2">
 								{#if task.status !== "generating"}
-									<span class="text-surface-500 text-xs capitalize">{task.status}</span>
+									<span class="text-surface-700-300 text-xs capitalize">{task.status}</span>
 								{/if}
 								<div class="bg-primary-500 h-1.5 w-1.5 animate-pulse rounded-full"></div>
 								<Icons.ChevronDown size={14} class="text-surface-400 transition-transform {expanded ? 'rotate-180' : ''}" />
@@ -410,37 +410,37 @@
 						{#if expanded}
 							<div class="bg-surface-100-900 px-4 py-3 text-xs space-y-1.5">
 								<div class="flex justify-between gap-2">
-									<span class="text-surface-500">Status</span>
+									<span class="text-surface-700-300">Status</span>
 									<span class="font-mono text-right capitalize">{task.status}</span>
 								</div>
 								<div class="flex justify-between gap-2">
-									<span class="text-surface-500">Type</span>
+									<span class="text-surface-700-300">Type</span>
 									<span class="font-mono text-right">{task.taskType}</span>
 								</div>
 								<div class="flex justify-between gap-2">
-									<span class="text-surface-500">Connection</span>
+									<span class="text-surface-700-300">Connection</span>
 									<span class="truncate text-right">{task.connectionName}</span>
 								</div>
 								{#if task.samplingName}
 									<div class="flex justify-between gap-2">
-										<span class="text-surface-500">Sampling</span>
+										<span class="text-surface-700-300">Sampling</span>
 										<span class="truncate text-right">{task.samplingName}</span>
 									</div>
 								{/if}
 								{#if task.chatId}
 									<div class="flex justify-between gap-2">
-										<span class="text-surface-500">Chat ID</span>
+										<span class="text-surface-700-300">Chat ID</span>
 										<span class="font-mono">{task.chatId}</span>
 									</div>
 								{/if}
 								{#if task.lorebookId}
 									<div class="flex justify-between gap-2">
-										<span class="text-surface-500">Lorebook ID</span>
+										<span class="text-surface-700-300">Lorebook ID</span>
 										<span class="font-mono">{task.lorebookId}</span>
 									</div>
 								{/if}
 								<div class="flex justify-between gap-2">
-									<span class="text-surface-500">Running</span>
+									<span class="text-surface-700-300">Running</span>
 									<span class="font-mono">{elapsedLabel(task.startedAt)}</span>
 								</div>
 							</div>

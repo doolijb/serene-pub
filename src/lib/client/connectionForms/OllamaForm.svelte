@@ -53,7 +53,7 @@
 	})
 
 	socket.on("connections:test", (msg) => {
-		testResult = msg
+		testResult = { ok: msg.ok, error: msg.error ?? undefined, models: msg.models }
 	})
 
 	function handleRefreshModels() {
@@ -146,8 +146,8 @@
 	})
 
 	onDestroy(() => {
-		socket.off("refreshModels")
-		socket.off("testConnection")
+		socket.off("connections:refreshModels")
+		socket.off("connections:test")
 	})
 </script>
 

@@ -1,10 +1,10 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getContext, onMount, onDestroy } from "svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	const koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
 
 	type Status = Sockets.KoboldCpp.SubprocessStatus.Response
@@ -98,7 +98,7 @@
 			starting = false
 			toaster.success({ title: "KoboldCPP starting…" })
 		})
-		socket.on("koboldcpp:startSubprocess:error", (msg: any) => {
+		socket.on("koboldcpp:startSubprocess:error", (msg: Sockets.ErrorResponse) => {
 			starting = false
 			toaster.error({ title: "Failed to start", description: msg?.error })
 		})
@@ -145,11 +145,11 @@
 				<span class="h-2.5 w-2.5 rounded-full {statusColors[subStatus?.status ?? 'stopped']}"></span>
 				<span class="text-sm font-medium capitalize">{subStatus?.status ?? "stopped"}</span>
 				{#if subStatus?.pid}
-					<span class="text-surface-500 text-xs">PID {subStatus.pid}</span>
+					<span class="text-surface-700-300 text-xs">PID {subStatus.pid}</span>
 				{/if}
 			</div>
 			<div class="flex gap-1.5">
-				{#if subStatus?.status === "running" || subStatus?.status === "starting"}
+				{#if subStatus?.status === "running" || subStatus?.status === "starting" || subStatus?.status === "stopping"}
 					<button
 						class="btn btn-sm preset-tonal-error"
 						onclick={stopSubprocess}
@@ -174,7 +174,7 @@
 			<p class="text-error-500 mt-2 text-xs">{subStatus.lastError}</p>
 		{/if}
 		{#if subStatus?.startedAt}
-			<p class="text-surface-500 mt-1 text-xs">
+			<p class="text-surface-700-300 mt-1 text-xs">
 				Started {new Date(subStatus.startedAt).toLocaleTimeString()}
 			</p>
 		{/if}
@@ -182,7 +182,7 @@
 
 	<!-- Current model -->
 	<div class="bg-surface-100-900 rounded-lg p-3">
-		<p class="text-surface-500 mb-1 text-xs font-semibold uppercase tracking-wide">
+		<p class="text-surface-700-300 mb-1 text-xs font-semibold uppercase tracking-wide">
 			Loaded model
 		</p>
 		<div class="flex items-center gap-2">
@@ -195,7 +195,7 @@
 					disabled={unloading}
 					title="Unload model from memory"
 				>
-					{#if unloading}<Icons.Loader2 size={12} class="animate-spin" />{:else}<Icons.Eject size={12} />{/if}
+					{#if unloading}<Icons.Loader2 size={12} class="animate-spin" />{:else}<Icons.LogOut size={12} />{/if}
 					Unload
 				</button>
 			{/if}
@@ -210,7 +210,7 @@
 
 	<!-- TTL setting -->
 	<div class="bg-surface-100-900 rounded-lg p-3">
-		<p class="text-surface-500 mb-2 text-xs font-semibold uppercase tracking-wide">
+		<p class="text-surface-700-300 mb-2 text-xs font-semibold uppercase tracking-wide">
 			Model unload timer
 		</p>
 		<div class="flex items-center gap-2">
@@ -223,12 +223,12 @@
 				placeholder="300"
 				aria-label="Model unload timer, seconds"
 			/>
-			<span class="text-surface-500 text-xs">seconds</span>
+			<span class="text-surface-700-300 text-xs">seconds</span>
 			<button class="btn btn-sm preset-filled-surface-400-600 text-xs" onclick={saveTtl} disabled={savingTtl}>
 				{#if savingTtl}<Icons.Loader2 size={12} class="animate-spin" />{:else}Save{/if}
 			</button>
 		</div>
-		<p class="text-surface-500 mt-1 text-xs">
+		<p class="text-surface-700-300 mt-1 text-xs">
 			{ttlDraft === "0" || ttlDraft === ""
 				? "Model stays loaded until manually unloaded."
 				: `Unload model after ${ttlDraft}s of inactivity.`}
@@ -237,7 +237,7 @@
 
 	<!-- Port setting -->
 	<div class="bg-surface-100-900 rounded-lg p-3">
-		<p class="text-surface-500 mb-2 text-xs font-semibold uppercase tracking-wide">Port</p>
+		<p class="text-surface-700-300 mb-2 text-xs font-semibold uppercase tracking-wide">Port</p>
 		<div class="flex items-center gap-2">
 			<input
 				type="number"
@@ -252,16 +252,16 @@
 				{#if savingPort}<Icons.Loader2 size={12} class="animate-spin" />{:else}Save{/if}
 			</button>
 		</div>
-		<p class="text-surface-500 mt-1 text-xs">Requires restart to take effect.</p>
+		<p class="text-surface-700-300 mt-1 text-xs">Requires restart to take effect.</p>
 	</div>
 
 	<!-- Binary info -->
 	{#if koboldCppSettingsCtx.settings?.koboldCppManagedBinaryVariant}
 		<div class="bg-surface-100-900 rounded-lg p-3">
-			<p class="text-surface-500 mb-1 text-xs font-semibold uppercase tracking-wide">Binary</p>
+			<p class="text-surface-700-300 mb-1 text-xs font-semibold uppercase tracking-wide">Binary</p>
 			<p class="text-xs">{koboldCppSettingsCtx.settings.koboldCppManagedBinaryVariant}</p>
 			{#if koboldCppSettingsCtx.settings.koboldCppManagedBinaryDir}
-				<p class="text-surface-500 text-xs">{koboldCppSettingsCtx.settings.koboldCppManagedBinaryDir}</p>
+				<p class="text-surface-700-300 text-xs">{koboldCppSettingsCtx.settings.koboldCppManagedBinaryDir}</p>
 			{/if}
 		</div>
 	{/if}

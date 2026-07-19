@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { onMount, onDestroy, getContext } from "svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	interface Props {
@@ -11,7 +11,7 @@
 	}
 	let { isManaged = false, onReset, onUpdateBinary }: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	let koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
 
@@ -104,7 +104,7 @@
 			currentVersion = message.version || "Unknown"
 			capabilities = message.capabilities
 		})
-		socket.on("koboldcpp:version:error", (message: any) => {
+		socket.on("koboldcpp:version:error", (message: Sockets.ErrorResponse) => {
 			isCheckingVersion = false
 			// In managed mode "not reachable" is a normal, common transient state
 			// (subprocess not started yet, or stopped) — the Perf tab's status
@@ -121,7 +121,7 @@
 			releaseUrl = message.releaseUrl ?? ""
 			if (!currentVersion && message.currentVersion) currentVersion = message.currentVersion
 		})
-		socket.on("koboldcpp:isUpdateAvailable:error", (message: any) => {
+		socket.on("koboldcpp:isUpdateAvailable:error", (message: Sockets.ErrorResponse) => {
 			isCheckingUpdates = false
 			toaster.error({ title: "Failed to check for updates", description: message.error })
 		})
@@ -234,7 +234,7 @@
 		<div class="card bg-surface-100-800 flex items-center justify-between gap-3 p-4">
 			<div>
 				<p class="text-sm font-medium">{isManaged ? "Managed mode" : "External mode"}</p>
-				<p class="text-surface-500 text-xs">Switch to a different setup</p>
+				<p class="text-surface-700-300 text-xs">Switch to a different setup</p>
 			</div>
 			<button class="btn btn-sm preset-tonal-warning" onclick={onReset}>
 				<Icons.RefreshCw size={13} />
@@ -257,15 +257,15 @@
 
 			<div class="space-y-1 text-sm">
 				<div class="flex items-center justify-between">
-					<span class="text-surface-500 text-xs">Variant</span>
+					<span class="text-surface-700-300 text-xs">Variant</span>
 					<span class="font-mono text-xs">{koboldCppSettingsCtx.settings.koboldCppManagedBinaryVariant}</span>
 				</div>
 				<div class="flex items-center justify-between">
-					<span class="text-surface-500 text-xs">Installed version</span>
+					<span class="text-surface-700-300 text-xs">Installed version</span>
 					<span class="font-mono text-xs">{managedInstalledTag ?? koboldCppSettingsCtx.settings.koboldCppManagedReleaseTag ?? "—"}</span>
 				</div>
 				<div class="flex items-center justify-between">
-					<span class="text-surface-500 text-xs">Running version</span>
+					<span class="text-surface-700-300 text-xs">Running version</span>
 					<span class="font-mono text-xs">
 						{#if isCheckingVersion}
 							<Icons.Loader2 size={12} class="inline animate-spin" />
@@ -276,7 +276,7 @@
 				</div>
 				{#if managedLatestTag}
 					<div class="flex items-center justify-between">
-						<span class="text-surface-500 text-xs">Latest version</span>
+						<span class="text-surface-700-300 text-xs">Latest version</span>
 						<span class="font-mono text-xs {managedUpdateAvailable ? 'text-warning-500' : ''}">{managedLatestTag}</span>
 					</div>
 				{/if}
@@ -321,7 +321,7 @@
 			<h3 class="text-sm font-semibold">Managed Settings</h3>
 
 			<div>
-				<label class="text-surface-500 mb-2 text-xs font-semibold uppercase tracking-wide" for="ttlInput">
+				<label class="text-surface-700-300 mb-2 text-xs font-semibold uppercase tracking-wide" for="ttlInput">
 					Model unload timer
 				</label>
 				<div class="flex items-center gap-2">
@@ -334,12 +334,12 @@
 						class="input w-24 text-sm"
 						placeholder="300"
 					/>
-					<span class="text-surface-500 text-xs">seconds</span>
+					<span class="text-surface-700-300 text-xs">seconds</span>
 					<button class="btn btn-sm preset-filled-surface-400-600 text-xs" onclick={saveTtl} disabled={savingTtl}>
 						{#if savingTtl}<Icons.Loader2 size={12} class="animate-spin" />{:else}Save{/if}
 					</button>
 				</div>
-				<p class="text-surface-500 mt-1 text-xs">
+				<p class="text-surface-700-300 mt-1 text-xs">
 					{ttlDraft === "0" || ttlDraft === ""
 						? "Model stays loaded until manually unloaded."
 						: `Unload model after ${ttlDraft}s of inactivity.`}
@@ -347,7 +347,7 @@
 			</div>
 
 			<div>
-				<label class="text-surface-500 mb-2 text-xs font-semibold uppercase tracking-wide" for="subprocessTimeoutInput">
+				<label class="text-surface-700-300 mb-2 text-xs font-semibold uppercase tracking-wide" for="subprocessTimeoutInput">
 					Subprocess idle timeout
 				</label>
 				<div class="flex items-center gap-2">
@@ -360,12 +360,12 @@
 						class="input w-24 text-sm"
 						placeholder="1800"
 					/>
-					<span class="text-surface-500 text-xs">seconds</span>
+					<span class="text-surface-700-300 text-xs">seconds</span>
 					<button class="btn btn-sm preset-filled-surface-400-600 text-xs" onclick={saveSubprocessTimeout} disabled={savingSubprocessTimeout}>
 						{#if savingSubprocessTimeout}<Icons.Loader2 size={12} class="animate-spin" />{:else}Save{/if}
 					</button>
 				</div>
-				<p class="text-surface-500 mt-1 text-xs">
+				<p class="text-surface-700-300 mt-1 text-xs">
 					{subprocessTimeoutDraft === "0" || subprocessTimeoutDraft === ""
 						? "Subprocess stays running until manually stopped."
 						: `Shut down the subprocess after ${subprocessTimeoutDraft}s of inactivity (default: 30 minutes).`}
@@ -373,7 +373,7 @@
 			</div>
 
 			<div>
-				<label class="text-surface-500 mb-2 text-xs font-semibold uppercase tracking-wide" for="portInput">
+				<label class="text-surface-700-300 mb-2 text-xs font-semibold uppercase tracking-wide" for="portInput">
 					Port
 				</label>
 				<div class="flex items-center gap-2">
@@ -390,7 +390,7 @@
 						{#if savingPort}<Icons.Loader2 size={12} class="animate-spin" />{:else}Save{/if}
 					</button>
 				</div>
-				<p class="text-surface-500 mt-1 text-xs">Requires restart to take effect.</p>
+				<p class="text-surface-700-300 mt-1 text-xs">Requires restart to take effect.</p>
 			</div>
 		</div>
 	{/if}
@@ -418,7 +418,7 @@
 						Save
 					</button>
 				</div>
-				<p class="text-surface-500 mt-1 text-xs">
+				<p class="text-surface-700-300 mt-1 text-xs">
 					The URL where KoboldCPP is running. Usually http://localhost:5001
 				</p>
 			</div>
@@ -517,7 +517,7 @@
 					Save
 				</button>
 			</div>
-			<p class="text-surface-500 mt-1 text-xs">
+			<p class="text-surface-700-300 mt-1 text-xs">
 				Server-side path where GGUF model files are stored and downloaded to.
 			</p>
 		</div>

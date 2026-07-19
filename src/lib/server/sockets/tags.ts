@@ -152,58 +152,82 @@ export const tagsGetRelatedData: Handler<
 			throw new Error("Tag not found")
 		}
 
-		// Get related characters (only from user's characters)
-		const characters = await db.query.characterTags.findMany({
+		// Get related characters (only from user's characters). "character"
+		// is a `one(...)` relation, and drizzle-orm's relational query API
+		// only supports a `where` filter on `many(...)` relations (see
+		// DBQueryConfig in drizzle-orm/relations.d.ts — `where`/`orderBy`/
+		// `limit` are only added to the config type when TRelationType
+		// extends "many"), so the user-ownership check has to happen after
+		// the fetch instead of inside the `with.character` config.
+		const characterTagRows = await db.query.characterTags.findMany({
 			where: (ct, { eq }) => eq(ct.tagId, params.tagId),
 			with: {
 				character: {
 					columns: {
 						id: true,
 						name: true,
-						avatar: true
-					},
-					where: (c, { eq }) => eq(c.userId, userId)
+						avatar: true,
+						userId: true
+					}
 				}
 			}
 		})
+		const characters = characterTagRows
+			.map((ct) => ct.character)
+			.filter(
+				(c): c is NonNullable<typeof c> => c !== null && c.userId === userId
+			)
+			.map(({ userId: _userId, ...c }) => c)
 
-		// Get related personas (only from user's personas)
-		const personas = await db.query.personaTags.findMany({
+		// Get related personas (only from user's personas) — same "one"
+		// relation `where` limitation as above.
+		const personaTagRows = await db.query.personaTags.findMany({
 			where: (pt, { eq }) => eq(pt.tagId, params.tagId),
 			with: {
 				persona: {
 					columns: {
 						id: true,
 						name: true,
-						avatar: true
-					},
-					where: (p, { eq }) => eq(p.userId, userId)
+						avatar: true,
+						userId: true
+					}
 				}
 			}
 		})
+		const personas = personaTagRows
+			.map((pt) => pt.persona)
+			.filter(
+				(p): p is NonNullable<typeof p> => p !== null && p.userId === userId
+			)
+			.map(({ userId: _userId, ...p }) => p)
 
-		// Get related lorebooks (only from user's lorebooks)
-		const lorebooks = await db.query.lorebookTags.findMany({
+		// Get related lorebooks (only from user's lorebooks) — same "one"
+		// relation `where` limitation as above.
+		const lorebookTagRows = await db.query.lorebookTags.findMany({
 			where: (lt, { eq }) => eq(lt.tagId, params.tagId),
 			with: {
 				lorebook: {
 					columns: {
 						id: true,
-						name: true
-					},
-					where: (l, { eq }) => eq(l.userId, userId)
+						name: true,
+						userId: true
+					}
 				}
 			}
 		})
+		const lorebooks = lorebookTagRows
+			.map((lt) => lt.lorebook)
+			.filter(
+				(l): l is NonNullable<typeof l> => l !== null && l.userId === userId
+			)
+			.map(({ userId: _userId, ...l }) => l)
 
 		const res: Sockets.Tags.GetRelatedData.Response = {
 			tagData: {
 				tag,
-				characters: characters
-					.map((ct) => ct.character)
-					.filter(Boolean),
-				personas: personas.map((pt) => pt.persona).filter(Boolean),
-				lorebooks: lorebooks.map((lt) => lt.lorebook).filter(Boolean)
+				characters,
+				personas,
+				lorebooks
 			}
 		}
 		emitToUser("tags:getRelatedData", res)

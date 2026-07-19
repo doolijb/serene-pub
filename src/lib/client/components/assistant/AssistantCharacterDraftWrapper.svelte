@@ -34,6 +34,7 @@
 	// Convert draft to compatible format
 	const formData = $derived({
 		...draft,
+		summary: draft.summary ?? "",
 		nickname: draft.nickname ?? "",
 		personality: draft.personality ?? "",
 		scenario: draft.scenario ?? "",
@@ -41,6 +42,8 @@
 		creatorNotes: draft.creatorNotes ?? "",
 		postHistoryInstructions: draft.postHistoryInstructions ?? "",
 		characterVersion: draft.characterVersion ?? "",
+		creator: draft.creator ?? "",
+		category: draft.category ?? "",
 		groupOnlyGreetings: draft.groupOnlyGreetings ?? [],
 		avatar: "",
 		_avatar: "",

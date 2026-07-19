@@ -2,7 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { onMount, onDestroy, getContext, untrack } from "svelte"
 	import { v4 as uuid } from "uuid"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { EditorState } from "@codemirror/state"
 	import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view"
@@ -22,7 +22,7 @@
 
 	let { theme = null, onSaved, onDeleted, onCancel }: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 
@@ -169,7 +169,7 @@
 			toaster.success({ title: "Theme saved" })
 			onSaved?.(msg.theme)
 		})
-		socket.on("customThemes:save:error", (msg: any) => {
+		socket.on("customThemes:save:error", (msg: Sockets.ErrorResponse) => {
 			isSaving = false
 			toaster.error({ title: "Failed to save theme", description: msg?.error })
 		})
@@ -179,7 +179,7 @@
 			toaster.success({ title: "Theme deleted" })
 			if (theme?.id) onDeleted?.(theme.id)
 		})
-		socket.on("customThemes:delete:error", (msg: any) => {
+		socket.on("customThemes:delete:error", (msg: Sockets.ErrorResponse) => {
 			isDeleting = false
 			toaster.error({ title: "Failed to delete theme", description: msg?.error })
 		})
@@ -187,7 +187,7 @@
 		socket.on("customThemes:setInstanceTheme", () => {
 			toaster.success({ title: "Instance theme setting updated" })
 		})
-		socket.on("customThemes:setInstanceTheme:error", (msg: any) => {
+		socket.on("customThemes:setInstanceTheme:error", (msg: Sockets.ErrorResponse) => {
 			toaster.error({ title: "Failed to update", description: msg?.error })
 		})
 	})

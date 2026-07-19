@@ -17,7 +17,7 @@
 </script>
 
 <div
-	class="container mx-auto mt-4 mb-4 flex h-[calc(100%-2rem)] max-w-4xl flex-col overflow-hidden rounded-lg preset-tonal shadow-md"
+	class="mx-4 mt-4 mb-4 flex h-[calc(100%-2rem)] flex-col overflow-hidden rounded-lg preset-tonal shadow-md"
 >
 	<div class="border-surface-300-700 flex items-center gap-3 border-b p-4">
 		<DocsSearchBar bind:query={docsSearchCtx.query} />

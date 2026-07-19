@@ -36,7 +36,7 @@
 			<div class="min-w-0">
 				<p class="truncate text-lg font-bold">{user.displayName || user.username}</p>
 				{#if user.displayName}
-					<p class="text-surface-500 truncate text-sm">@{user.username}</p>
+					<p class="text-surface-700-300 truncate text-sm">@{user.username}</p>
 				{/if}
 			</div>
 		</div>
@@ -57,12 +57,12 @@
 		<!-- Details -->
 		<section class="space-y-3">
 			<div class="space-y-1">
-				<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">Username</p>
+				<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Username</p>
 				<p class="text-sm">{user.username}</p>
 			</div>
 			{#if user.displayName}
 				<div class="space-y-1">
-					<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">Display Name</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Display Name</p>
 					<p class="text-sm">{user.displayName}</p>
 				</div>
 			{/if}

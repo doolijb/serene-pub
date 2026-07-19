@@ -60,6 +60,16 @@
 	let passphraseError = $state("")
 	let isSettingPassphrase = $state(false)
 
+	// State for the CharaVault integration — a single instance-wide
+	// credential, admin-configured (not per-user), same shared-config
+	// pattern as Connections/Ollama Manager/KoboldCpp Manager above.
+	let charaVaultConnected = $state(false)
+	let charaVaultConnectedEmail = $state<string | null>(null)
+	let charaVaultEmailField = $state("")
+	let charaVaultTokenField = $state("")
+	let isConnectingCharaVault = $state(false)
+	let isDisconnectingCharaVault = $state(false)
+
 	// Initialize base URL fields when settings are available
 	$effect(() => {
 		if (ollamaSettingsCtx.settings?.ollamaManagerBaseUrl) {
@@ -114,7 +124,8 @@
 	// Enabling embeddings needs a model chosen (local vs API, which model) —
 	// unlike the Ollama/KoboldCPP manager switches, there's no safe "just flip
 	// it on" action, so the switch only ever turns things off here; turning it
-	// on routes to the Vectorization panel's setup flow instead.
+	// on routes to the Connections sidebar's Embedding category setup flow
+	// instead.
 	function onEmbeddingsEnabledClick(event: { checked: boolean }) {
 		if (!userCtx.user?.isAdmin) {
 			toaster.error({
@@ -124,7 +135,8 @@
 			return
 		}
 		if (event.checked) {
-			panelsCtx.openPanel({ key: "vectorization" })
+			panelsCtx.digest.connectionsView = "embedding"
+			panelsCtx.openPanel({ key: "connections" })
 			return
 		}
 		disablingEmbeddings = true
@@ -310,6 +322,22 @@
 		// The switch will remain in its previous state
 	}
 
+	function connectCharaVault() {
+		if (!userCtx.user?.isAdmin) return
+		if (!charaVaultEmailField.trim() || !charaVaultTokenField.trim()) return
+		isConnectingCharaVault = true
+		socket?.emit("cardSources:charaVault:connect", {
+			email: charaVaultEmailField.trim(),
+			token: charaVaultTokenField.trim()
+		})
+	}
+
+	function disconnectCharaVault() {
+		if (!userCtx.user?.isAdmin) return
+		isDisconnectingCharaVault = true
+		socket?.emit("cardSources:charaVault:disconnect", {})
+	}
+
 	// Listen for socket responses
 	$effect(() => {
 		if (!socket) return
@@ -398,6 +426,44 @@
 			})
 		}
 
+		const handleCharaVaultStatus = (
+			message: Sockets.CardSources.CharaVaultStatus.Response
+		) => {
+			charaVaultConnected = message.connected
+			charaVaultConnectedEmail = message.email
+		}
+
+		const handleCharaVaultConnect = (
+			message: Sockets.CardSources.CharaVaultConnect.Response
+		) => {
+			isConnectingCharaVault = false
+			if (message.success) {
+				charaVaultEmailField = ""
+				charaVaultTokenField = ""
+				toaster.success({ title: "CharaVault account connected" })
+				socket?.emit("cardSources:charaVault:status", {})
+			}
+		}
+
+		const handleCharaVaultConnectError = (message: { error?: string }) => {
+			isConnectingCharaVault = false
+			toaster.error({
+				title: "Failed to connect CharaVault account",
+				description: message.error
+			})
+		}
+
+		const handleCharaVaultDisconnect = (
+			message: Sockets.CardSources.CharaVaultDisconnect.Response
+		) => {
+			isDisconnectingCharaVault = false
+			if (message.success) {
+				charaVaultConnected = false
+				charaVaultConnectedEmail = null
+				toaster.success({ title: "CharaVault account disconnected" })
+			}
+		}
+
 		const handleHasPassphrase = (message: any) => {
 			hasPassphrase = message.hasPassphrase
 			if (hasPassphrase) {
@@ -453,6 +519,20 @@
 		)
 		socket.on("users:current:hasPassphrase", handleHasPassphrase)
 		socket.on("users:current:setPassphrase", handleSetPassphrase)
+		socket.on("cardSources:charaVault:status", handleCharaVaultStatus)
+		socket.on("cardSources:charaVault:connect", handleCharaVaultConnect)
+		;(socket as any).on(
+			"cardSources:charaVault:connect:error",
+			handleCharaVaultConnectError
+		)
+		socket.on(
+			"cardSources:charaVault:disconnect",
+			handleCharaVaultDisconnect
+		)
+
+		if (userCtx.user?.isAdmin) {
+			socket.emit("cardSources:charaVault:status", {})
+		}
 
 		// Cleanup function to remove listeners
 		return () => {
@@ -480,6 +560,16 @@
 			)
 			socket.off("users:current:hasPassphrase", handleHasPassphrase)
 			socket.off("users:current:setPassphrase", handleSetPassphrase)
+			socket.off("cardSources:charaVault:status", handleCharaVaultStatus)
+			socket.off("cardSources:charaVault:connect", handleCharaVaultConnect)
+			;(socket as any).off(
+				"cardSources:charaVault:connect:error",
+				handleCharaVaultConnectError
+			)
+			socket.off(
+				"cardSources:charaVault:disconnect",
+				handleCharaVaultDisconnect
+			)
 		}
 	})
 </script>
@@ -709,6 +799,74 @@
 						: "Enable Context Debugging"}
 				</label>
 			</div>
+		</div>
+
+		<!-- CharaVault Integration -->
+		<div class="space-y-4">
+			<h3 class="text-lg font-semibold">Community Library: CharaVault</h3>
+			<p class="text-muted-foreground text-sm">
+				Connect one CharaVault account to enable browsing charavault.net
+				from the Character Library. This account is shared instance-wide —
+				it raises the search rate limit for every user on this Serene Pub
+				instance, not just you. Create an App Password at charavault.net
+				named "Serene Pub" and paste it below along with the account email.
+			</p>
+
+			{#if charaVaultConnected}
+				<div class="flex items-center gap-2">
+					<Icons.CheckCircle2 size={18} class="text-success-500" />
+					<span class="text-sm">
+						Connected{#if charaVaultConnectedEmail}
+							as <span class="font-semibold">{charaVaultConnectedEmail}</span
+							>{/if}
+					</span>
+					<button
+						type="button"
+						class="btn btn-sm preset-tonal-error ml-auto"
+						onclick={disconnectCharaVault}
+						disabled={isDisconnectingCharaVault}
+					>
+						{#if isDisconnectingCharaVault}
+							<Icons.Loader2 size={16} class="animate-spin" />
+						{:else}
+							<Icons.Unlink size={16} />
+						{/if}
+						Disconnect
+					</button>
+				</div>
+			{:else}
+				<div class="flex flex-col gap-2 sm:flex-row">
+					<input
+						type="email"
+						bind:value={charaVaultEmailField}
+						placeholder="CharaVault account email"
+						class="input flex-1"
+						aria-label="CharaVault account email"
+					/>
+					<input
+						type="password"
+						bind:value={charaVaultTokenField}
+						placeholder="App Password (cv_...)"
+						class="input flex-1"
+						aria-label="CharaVault App Password"
+					/>
+					<button
+						type="button"
+						class="btn preset-filled-primary-500 shrink-0"
+						onclick={connectCharaVault}
+						disabled={isConnectingCharaVault ||
+							!charaVaultEmailField.trim() ||
+							!charaVaultTokenField.trim()}
+					>
+						{#if isConnectingCharaVault}
+							<Icons.Loader2 size={16} class="animate-spin" />
+						{:else}
+							<Icons.Link size={16} />
+						{/if}
+						Connect
+					</button>
+				</div>
+			{/if}
 		</div>
 
 		<!-- Account Settings -->

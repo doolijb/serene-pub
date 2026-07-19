@@ -1,6 +1,8 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import type { InsertConnection } from "$lib/server/db/schema"
+// InsertConnection is declared globally in $lib/server/db/types.d.ts (ambient
+// `export global {}` block, same pattern as the Sockets namespace) — no
+// import needed/available for it.
 import { eq, and, inArray } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { connectionsList, connectionsSetUserActive } from "./connections"
@@ -347,6 +349,12 @@ export const koboldCppConnectModelHandler: Handler<
 
 			const data: InsertConnection = {
 				...koboldCppManagedAdapter.connectionDefaults,
+				// connectionDefaults is typed as Record<string, any> on the
+				// AdapterExports interface (adapters have differently-shaped
+				// defaults), so the spread above doesn't statically guarantee
+				// `type` even though it's present at runtime — set it
+				// explicitly so this satisfies InsertConnection.
+				type: CONNECTION_TYPE.KOBOLDCPP_MANAGED,
 				name: connectionName,
 				model: params.modelName,
 				baseUrl,
@@ -537,17 +545,21 @@ export const koboldCppRecommendedModelsHandler: Handler<
 		const yamlModels = await fetchRecommendedYaml()
 
 		const settled = await Promise.allSettled(
-			yamlModels.map(async (ym) => {
-				const hf = await resolveHfModel(ym.name)
-				if (!hf) return null
-				return {
-					...hf,
-					ollamaName: ym.name,
-					recommendedVram: ym.recommended_vram || undefined,
-					parameterSize: ym.details.parameter_size || undefined,
-					description: hf.description || ym.details.description || undefined
-				} satisfies Sockets.KoboldCpp.RecommendedModels.RecommendedModel
-			})
+			yamlModels.map(
+				async (
+					ym
+				): Promise<Sockets.KoboldCpp.RecommendedModels.RecommendedModel | null> => {
+					const hf = await resolveHfModel(ym.name)
+					if (!hf) return null
+					return {
+						...hf,
+						ollamaName: ym.name,
+						recommendedVram: ym.recommended_vram || undefined,
+						parameterSize: ym.details.parameter_size || undefined,
+						description: hf.description || ym.details.description || undefined
+					}
+				}
+			)
 		)
 
 		const models = settled

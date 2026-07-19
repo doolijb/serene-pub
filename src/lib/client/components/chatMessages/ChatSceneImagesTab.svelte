@@ -116,7 +116,7 @@
 		<div class="flex gap-3">
 			<!-- Left -->
 			<div class="flex min-w-0 flex-1 flex-col gap-1">
-				<span class="text-surface-500 text-xs font-semibold uppercase tracking-wide">Left</span>
+				<span class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Left</span>
 				{#if leftImage}
 					<div class="relative">
 						<img
@@ -134,7 +134,7 @@
 					</div>
 				{:else}
 					<div
-						class="border-surface-300-700 text-surface-500 flex h-20 items-center justify-center rounded border border-dashed text-xs"
+						class="border-surface-300-700 text-surface-700-300 flex h-20 items-center justify-center rounded border border-dashed text-xs"
 					>
 						None
 					</div>
@@ -142,7 +142,7 @@
 			</div>
 			<!-- Right -->
 			<div class="flex min-w-0 flex-1 flex-col gap-1">
-				<span class="text-surface-500 text-xs font-semibold uppercase tracking-wide"
+				<span class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide"
 					>Right</span
 				>
 				{#if rightImage}
@@ -162,7 +162,7 @@
 					</div>
 				{:else}
 					<div
-						class="border-surface-300-700 text-surface-500 flex h-20 items-center justify-center rounded border border-dashed text-xs"
+						class="border-surface-300-700 text-surface-700-300 flex h-20 items-center justify-center rounded border border-dashed text-xs"
 					>
 						None
 					</div>
@@ -174,7 +174,7 @@
 
 	<!-- Entity list -->
 	{#if entities.length === 0}
-		<p class="text-surface-500 text-sm">No characters or personas in this chat.</p>
+		<p class="text-surface-700-300 text-sm">No characters or personas in this chat.</p>
 	{:else}
 		<div class="space-y-1">
 			{#each entities as e (entityKey(e))}
@@ -236,12 +236,12 @@
 					{#if isExpanded}
 						<div class="border-t border-surface-300-700 bg-surface-50-950 p-2">
 							{#if isLoadingGallery}
-								<div class="text-surface-500 flex items-center gap-2 text-xs">
+								<div class="text-surface-700-300 flex items-center gap-2 text-xs">
 									<Icons.Loader size={12} class="animate-spin" />
 									Loading…
 								</div>
 							{:else if galleryImages.length === 0}
-								<p class="text-surface-500 text-xs">No gallery images.</p>
+								<p class="text-surface-700-300 text-xs">No gallery images.</p>
 							{:else}
 								<div class="flex flex-wrap gap-1.5">
 									{#each galleryImages as imgPath}

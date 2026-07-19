@@ -534,7 +534,7 @@
 					</div>
 				{:else}
 					<div class="flex gap-2">
-						<p class="text-surface-500 flex-1 text-sm">No history entries yet.</p>
+						<p class="text-surface-700-300 flex-1 text-sm">No history entries yet.</p>
 						<button class="btn btn-sm preset-filled-primary-500" disabled={isCreatingHistoryEntry || !hasLorebook} onclick={createBlankHistoryEntry} title={!hasLorebook ? "Attach a lorebook first" : undefined}>
 							{#if isCreatingHistoryEntry}
 								<Icons.Loader size={14} class="animate-spin" />
@@ -548,7 +548,7 @@
 				{#if selectedHistoryEntryId}
 					{@const entry = historyEntryList.find(e => e.id === Number(selectedHistoryEntryId))}
 					{#if entry?.content}
-						<p class="text-surface-500 text-xs line-clamp-2">{entry.content}</p>
+						<p class="text-surface-700-300 text-xs line-clamp-2">{entry.content}</p>
 					{:else}
 						<p class="text-surface-400 text-xs italic">Empty entry — content will be populated from scenes later.</p>
 					{/if}
@@ -577,7 +577,7 @@
 					bind:value={topic}
 				/>
 				{#if topic.trim()}
-					<p class="text-surface-500 text-xs">
+					<p class="text-surface-700-300 text-xs">
 						Prompt will include: <em>"Specifically focus on: "{topic.trim()}""</em>
 					</p>
 				{/if}
@@ -612,7 +612,7 @@
 		{/if}
 
 		<!-- Message count -->
-		<p class="text-surface-500 text-sm">
+		<p class="text-surface-700-300 text-sm">
 			<Icons.MessageSquare size={14} class="mr-1 inline" />
 			Summarizing
 			<strong>{selectedMessageIds.length}</strong>
@@ -624,24 +624,24 @@
 {#snippet previewBlock()}
 	{#if partialSummary.content || partialSummary.raw}
 		<div class="space-y-1">
-			<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">
+			<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">
 				{summarizePhase === "synthesizing" ? "Final entry" : `Draft ${currentBatch}`}
 			</p>
 			<div class="bg-surface-200-800 rounded-lg p-3 text-sm">
 				{#if partialSummary.content}
 					<p class="text-surface-700-300 line-clamp-6 whitespace-pre-wrap">{partialSummary.content}</p>
 				{:else if partialSummary.raw}
-					<p class="text-surface-500 line-clamp-6 whitespace-pre-wrap text-xs italic">{partialSummary.raw}</p>
+					<p class="text-surface-700-300 line-clamp-6 whitespace-pre-wrap text-xs italic">{partialSummary.raw}</p>
 				{/if}
 			</div>
 		</div>
 	{:else if summarizePhase === "synthesizing"}
-		<div class="text-surface-500 py-4 text-center text-sm">
+		<div class="text-surface-700-300 py-4 text-center text-sm">
 			<div class="bg-primary-500 mx-auto mb-2 h-2 w-2 animate-pulse rounded-full"></div>
 			Synthesizing final entry…
 		</div>
 	{:else}
-		<div class="text-surface-500 py-4 text-center text-sm">
+		<div class="text-surface-700-300 py-4 text-center text-sm">
 			<div class="bg-primary-500 mx-auto mb-2 h-2 w-2 animate-pulse rounded-full"></div>
 			Waiting for first draft…
 		</div>
@@ -663,7 +663,7 @@
 					bind:value={reviewName}
 				/>
 				{#if reviewName}
-					<p class="text-surface-500 text-xs">Auto-generated — edit if needed.</p>
+					<p class="text-surface-700-300 text-xs">Auto-generated — edit if needed.</p>
 				{/if}
 			</div>
 		{/if}
@@ -682,10 +682,10 @@
 
 		{#if loreType === "scene"}
 			<div class="rounded-lg border border-surface-300-700 p-3 space-y-3">
-				<p class="text-xs font-semibold uppercase tracking-wide text-surface-500">Extracted characters</p>
+				<p class="text-xs font-semibold uppercase tracking-wide text-surface-700-300">Extracted characters</p>
 
 				<div class="space-y-1.5">
-					<p class="text-sm font-semibold">Participants <span class="text-surface-500 font-normal text-xs">(physically present)</span></p>
+					<p class="text-sm font-semibold">Participants <span class="text-surface-700-300 font-normal text-xs">(physically present)</span></p>
 					<div class="flex flex-wrap gap-1.5">
 						{#each extractedParticipantCharacters as name, i}
 							<span class="chip preset-tonal-primary text-xs flex items-center gap-1">
@@ -714,7 +714,7 @@
 				</div>
 
 				<div class="space-y-1.5">
-					<p class="text-sm font-semibold">Mentioned <span class="text-surface-500 font-normal text-xs">(referenced but absent)</span></p>
+					<p class="text-sm font-semibold">Mentioned <span class="text-surface-700-300 font-normal text-xs">(referenced but absent)</span></p>
 					<div class="flex flex-wrap gap-1.5">
 						{#each extractedMentionedCharacters as name, i}
 							<span class="chip preset-tonal-surface text-xs flex items-center gap-1">
@@ -746,7 +746,7 @@
 
 		<div>
 			<button
-				class="text-surface-500 hover:text-surface-700-300 flex items-center gap-1 text-xs"
+				class="text-surface-700-300 hover:text-surface-700-300 flex items-center gap-1 text-xs"
 				onclick={() => (showRaw = !showRaw)}
 			>
 				<Icons.ChevronDown size={14} class="transition-transform {showRaw ? 'rotate-180' : ''}" />
@@ -762,7 +762,7 @@
 {#snippet debugBlock()}
 	{#if trace.length > 0}
 		<button
-			class="flex w-full items-center justify-between text-xs text-surface-500 hover:text-surface-700-300"
+			class="flex w-full items-center justify-between text-xs text-surface-700-300 hover:text-surface-700-300"
 			onclick={() => (showTrace = !showTrace)}
 		>
 			<span>Debug ({trace.length} calls)</span>

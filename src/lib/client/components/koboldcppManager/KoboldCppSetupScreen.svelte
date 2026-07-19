@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { onMount, onDestroy } from "svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
@@ -11,7 +11,7 @@
 
 	let { onChooseManaged, onChooseExternal }: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	let saving = $state(false)
 
 	function chooseManaged() {
@@ -60,7 +60,7 @@
 			</div>
 			<div>
 				<p class="text-sm font-semibold">Let Serene Pub manage it</p>
-				<p class="text-surface-500 mt-1 text-xs leading-relaxed">
+				<p class="text-surface-700-300 mt-1 text-xs leading-relaxed">
 					Automatically download a KoboldCPP binary and let Serene Pub start, stop, and load models
 					automatically.
 				</p>
@@ -81,11 +81,11 @@
 			</div>
 			<div>
 				<p class="text-sm font-semibold">I'll manage it myself</p>
-				<p class="text-surface-500 mt-1 text-xs leading-relaxed">
+				<p class="text-surface-700-300 mt-1 text-xs leading-relaxed">
 					Start KoboldCPP yourself and connect Serene Pub to the running instance via URL. The <code class="code">--admin</code> API is required for integration.
 				</p>
 			</div>
-			<span class="text-surface-500 mt-auto text-xs">Manual setup</span>
+			<span class="text-surface-700-300 mt-auto text-xs">Manual setup</span>
 		</button>
 	</div>
 </div>

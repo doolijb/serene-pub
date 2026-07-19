@@ -12,20 +12,21 @@ export async function expireAll({
 	tx?: DbTransaction | typeof db
 	userId: string
 	returning?: ReturningSelect
-}): PromisedQueryResult<typeof returning> {
-	const query = tx
-		.update(schema.userTokens)
-		.set({
-			expiresAt: new Date()
-		})
-		.where(eq(schema.userTokens.userId, userId))
-		.execute()
+}) {
+	const where = eq(schema.userTokens.userId, parseInt(userId))
 
 	// Returning?
 	if (returning) {
-		query.returning(returning)
+		return await tx
+			.update(schema.userTokens)
+			.set({ expiresAt: new Date() })
+			.where(where)
+			.returning(returning)
 	}
 
 	// Return result
-	return await query
+	return await tx
+		.update(schema.userTokens)
+		.set({ expiresAt: new Date() })
+		.where(where)
 }

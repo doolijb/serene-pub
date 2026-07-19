@@ -11,7 +11,7 @@
 
 	interface Props {
 		content: string
-		lorebookBindingList: Sockets.LorebookBindingList.Response["lorebookBindingList"]
+		lorebookBindingList: Sockets.Lorebooks.BindingList.Response["lorebookBindingList"]
 	}
 
 	let { content = $bindable(), lorebookBindingList = $bindable() }: Props =
@@ -118,15 +118,16 @@
 	}
 
 	function forceRawContentCopy(view: EditorView, arg1: () => string) {
-		const originalCopy = view.dom.addEventListener("copy", (event) => {
+		const listener = (event: ClipboardEvent) => {
 			const text = arg1()
-			event.clipboardData.setData("text/plain", text)
+			event.clipboardData?.setData("text/plain", text)
 			event.preventDefault()
-		})
+		}
+		view.dom.addEventListener("copy", listener)
 
 		// Clean up the event listener when the component is destroyed
 		return () => {
-			view.dom.removeEventListener("copy", originalCopy)
+			view.dom.removeEventListener("copy", listener)
 		}
 	}
 
@@ -191,11 +192,11 @@
 										addBindingOpenState = false
 									}}
 									title={char
-										? `${char.nickname || char.name}`
+										? `${("nickname" in char && char.nickname) || char.name}`
 										: binding.binding}
 								>
 									{char
-										? char.nickname || char.name
+										? ("nickname" in char && char.nickname) || char.name
 										: binding.binding}
 								</button>
 							{/each}

@@ -7,7 +7,8 @@ import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { TokenCounters } from "../utils/TokenCounterManager"
 import {
 	BaseConnectionAdapter,
-	type AdapterExports
+	type AdapterExports,
+	type BasePromptChat
 } from "./BaseConnectionAdapter"
 import { type CompiledPrompt } from "../utils/promptBuilder"
 import axios from "axios"
@@ -242,14 +243,8 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 		sampling: SelectSamplingConfig
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
-		chat: SelectChat & {
-			chatCharacters?: (SelectChatCharacter & {
-				character: SelectCharacter
-			})[]
-			chatPersonas?: (SelectChatPersona & { persona: SelectPersona })[]
-			chatMessages: SelectChatMessage[]
-		}
-		currentCharacterId: number
+		chat: BasePromptChat
+		currentCharacterId: number | null
 		generatingMessageMetadata?: any
 	}) {
 		super({
@@ -304,7 +299,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 			characters:
 				this.chat.chatCharacters?.map((cc) => cc.character) || [],
 			personas: this.chat.chatPersonas?.map((cp) => cp.persona) || [],
-			currentCharacterId: this.currentCharacterId
+			currentCharacterId: this.currentCharacterId ?? undefined
 		})
 		const characterName = resolveCharacterName(
 			this.chat.chatCharacters?.[0]?.character

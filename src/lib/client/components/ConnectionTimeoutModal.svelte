@@ -166,7 +166,7 @@
 							Ready to reconnect
 						</p>
 					{:else if reconnectCountdown > 0}
-						<p class="text-surface-500 text-sm">
+						<p class="text-surface-700-300 text-sm">
 							Reconnect available in {reconnectCountdown} seconds
 						</p>
 					{/if}
@@ -200,7 +200,7 @@
 				</div>
 
 				<!-- Additional Info -->
-				<p class="text-surface-500 mt-3 text-xs">
+				<p class="text-surface-700-300 mt-3 text-xs">
 					Sessions expire after 1 hour of inactivity
 				</p>
 			</div>

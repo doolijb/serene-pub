@@ -2,6 +2,7 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import { user } from "./users"
+import { systemSettingsGet } from "./systemSettings"
 import type { Handler } from "$lib/shared/events"
 
 // --- WEIGHTS SOCKET HANDLERS ---
@@ -184,6 +185,11 @@ export const samplingConfigsSetUserActive: Handler<
 				emitToUser
 			)
 		}
+
+		// Push updated system settings so clients reflect the new default
+		// sampling config immediately (this is a system-wide default, not a
+		// per-user setting — see the comment above).
+		await systemSettingsGet.handler(socket, {}, emitToUser)
 
 		const updatedUser = await db.query.users.findFirst({
 			where: (u, { eq }) => eq(u.id, socket.user!.id)

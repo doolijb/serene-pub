@@ -6,7 +6,6 @@ import { z } from "zod"
 import * as passphrase from "$lib/server/providers/users/passphrase"
 import { cookies } from "$lib/server/auth"
 import * as userTokens from "$lib/server/providers/users/tokens"
-import { getUserConfigurations } from "../utils/getUserConfigurations"
 
 // Passphrase validation schema. Max length bounds the PBKDF2 cost an
 // attacker-supplied passphrase can force the server to pay.
@@ -43,20 +42,7 @@ export const usersGet: Handler<
 			throw new Error("User not found")
 		}
 
-		// Get user configurations with fallback to system defaults
-		const { connection, sampling, contextConfig, promptConfig } =
-			await getUserConfigurations(userId)
-
-		// Add active configs to user object for compatibility
-		const userWithConfigs = {
-			...user,
-			activeConnection: connection,
-			activeSamplingConfig: sampling,
-			activeContextConfig: contextConfig,
-			activePromptConfig: promptConfig
-		}
-
-		const res: Sockets.Users.Get.Response = { user: userWithConfigs }
+		const res: Sockets.Users.Get.Response = { user }
 		emitToUser("users:get", res)
 		return res
 	}
@@ -89,20 +75,7 @@ export const usersCurrent: Handler<
 			throw new Error("User not found")
 		}
 
-		// Get user configurations with fallback to system defaults
-		const { connection, sampling, contextConfig, promptConfig } =
-			await getUserConfigurations(userId)
-
-		// Add active configs to user object for compatibility
-		const userWithConfigs = {
-			...user,
-			activeConnection: connection,
-			activeSamplingConfig: sampling,
-			activeContextConfig: contextConfig,
-			activePromptConfig: promptConfig
-		}
-
-		const res: Sockets.Users.Get.Response = { user: userWithConfigs }
+		const res: Sockets.Users.Get.Response = { user }
 		emitToUser("users:current", res)
 		return res
 	}
@@ -242,22 +215,7 @@ export async function user(
 		throw new Error("User not found")
 	}
 
-	// Get user configurations with fallback to system defaults
-	const { connection, sampling, contextConfig, promptConfig } =
-		await getUserConfigurations(userId)
-
-	// Add active configs to user object for compatibility
-	const userWithConfigs = {
-		...user,
-		activeConnection: connection,
-		activeSamplingConfig: sampling,
-		activeContextConfig: contextConfig,
-		activePromptConfig: promptConfig
-	}
-
-	socket.server
-		.to("user_" + userId)
-		.emit("users:current", { user: userWithConfigs })
+	socket.server.to("user_" + userId).emit("users:current", { user })
 }
 
 export async function setTheme(
@@ -590,9 +548,14 @@ export const usersUpdate: Handler<
 
 		// If username is being changed, check if it already exists
 		if (params.username && params.username !== targetUser.username) {
+			// Narrowed to a local so the type stays `string` (not `string |
+			// undefined`) once captured by the where callback below — TS does
+			// not retain the outer `if` narrowing of `params.username` across
+			// the callback boundary.
+			const newUsername = params.username
 			const existingUser = await db.query.users.findFirst({
 				where: (u, { eq, and, ne }) =>
-					and(eq(u.username, params.username), ne(u.id, params.id))
+					and(eq(u.username, newUsername), ne(u.id, params.id))
 			})
 
 			if (existingUser) {

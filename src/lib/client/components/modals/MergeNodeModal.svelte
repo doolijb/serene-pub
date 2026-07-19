@@ -84,7 +84,7 @@
 		</header>
 
 		{#if !selectedParent}
-			<p class="text-surface-500 text-sm">
+			<p class="text-surface-700-300 text-sm">
 				Select the node that <strong>{node.name}</strong> is an alias of. The selected node will become
 				the primary entity; "{node.name}" will be hidden and treated as an alternate name.
 			</p>
@@ -98,7 +98,7 @@
 
 			<div class="min-h-0 flex-1 overflow-y-auto space-y-1 pr-1">
 				{#if filtered.length === 0}
-					<p class="text-surface-500 py-4 text-center text-sm italic">No candidates found.</p>
+					<p class="text-surface-700-300 py-4 text-center text-sm italic">No candidates found.</p>
 				{/if}
 				{#each filtered as candidate}
 					<button
@@ -114,7 +114,7 @@
 								</span>
 							</div>
 							{#if candidate.summary}
-								<p class="text-surface-500 mt-0.5 truncate text-xs">{candidate.summary}</p>
+								<p class="text-surface-700-300 mt-0.5 truncate text-xs">{candidate.summary}</p>
 							{/if}
 						</div>
 					</button>
@@ -123,7 +123,7 @@
 		{:else}
 			<div class="space-y-4">
 				<div class="bg-surface-200-800 rounded-lg p-4 text-sm space-y-2">
-					<p class="text-surface-500 text-xs font-semibold uppercase tracking-wide">Merging</p>
+					<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Merging</p>
 					<div class="flex items-center gap-3">
 						<div class="text-center">
 							<div class="font-medium">"{node.name}"</div>
@@ -135,7 +135,7 @@
 							<div class="text-surface-400 text-xs">primary entity</div>
 						</div>
 					</div>
-					<p class="text-surface-500 text-xs">
+					<p class="text-surface-700-300 text-xs">
 						"{node.name}" will be hidden from the graph and treated as an alternate name for
 						"{selectedParent.name}". Its relationships will fall back to "{selectedParent.name}"
 						when no direct relationship exists.

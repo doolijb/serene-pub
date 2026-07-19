@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { onMount, onDestroy, getContext } from "svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
@@ -18,7 +18,7 @@
 		}
 	}
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	// State
 	let installedModels: OllamaModel[] = $state([])
@@ -26,16 +26,17 @@
 	let isLoading = $state(false)
 	let searchQuery = $state("")
 	let runningModels: ListResponse["models"] = $state([])
-	let userCtx: UserCtx = $state(getContext("userCtx"))
 	let showDeleteModal = $state(false)
 	let modelToDelete: OllamaModel | null = $state(null)
-	let connectionsList = $state<SelectConnection[]>([])
+	let connectionsList: Sockets.Connections.List.Response["connectionsList"] = $state([])
 
 	// Context
 	let systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
 	const panelsCtx: PanelsCtx = getContext("panelsCtx")
 
-	function findConnectionForModel(modelName: string): SelectConnection | undefined {
+	function findConnectionForModel(
+		modelName: string
+	): Sockets.Connections.List.Response["connectionsList"][number] | undefined {
 		return connectionsList.find((c) => c.type === "ollama" && c.model === modelName)
 	}
 
@@ -64,9 +65,11 @@
 	)
 
 	let currentConnectionModelName: string | null = $derived.by(() => {
-		if (userCtx?.user?.activeConnection?.type === CONNECTION_TYPE.OLLAMA) {
-			const currentName = userCtx.user.activeConnection.model
-			return currentName
+		const activeConnection = connectionsList.find(
+			(c) => c.id === systemSettingsCtx.settings?.defaultConnectionId
+		)
+		if (activeConnection?.type === CONNECTION_TYPE.OLLAMA) {
+			return activeConnection.model ?? null
 		}
 		return null
 	})
@@ -179,7 +182,7 @@
 		// Socket event listeners
 		socket.on(
 			"ollama:modelsList",
-			(message: Sockets.OllamaModelsList.Response) => {
+			(message: Sockets.Ollama.ModelsList.Response) => {
 				installedModels = message.models
 				isLoading = false
 			}
@@ -187,7 +190,7 @@
 
 		socket.on(
 			"ollama:deleteModel",
-			(message: Sockets.OllamaDeleteModel.Response) => {
+			(message: Sockets.Ollama.DeleteModel.Response) => {
 				if (message.success) {
 					refreshModels()
 					toaster.success({ title: "Model deleted successfully" })
@@ -199,24 +202,18 @@
 
 		socket.on(
 			"ollama:listRunningModels",
-			(message: Sockets.OllamaListRunningModels.Response) => {
-				runningModels = message.models ?? []
+			(message: Sockets.Ollama.ListRunningModels.Response) => {
+				runningModels = message.runningModels ?? []
 			}
 		)
 
-		socket.on(
-			"ollama:stopModel",
-			(message: Sockets.OllamaStopModel.Response) => {
-				if (message.success) {
-					toaster.success({ title: "Model stopped successfully" })
-					refreshModels()
-				}
-			}
-		)
+		// Note: there is no "ollama:stopModel" server handler (see
+		// src/lib/server/sockets/ollama.ts) - it was never implemented, so a
+		// listener for it here was unreachable dead code and has been removed.
 
 		socket.on(
 			"ollama:connectModel",
-			(message: Sockets.OllamaConnectModel.Response) => {
+			(message: Sockets.Ollama.ConnectModel.Response) => {
 				if (message.success) {
 					toaster.success({ title: "Model connected successfully" })
 					refreshModels()
@@ -236,7 +233,6 @@
 		socket.off("ollama:modelsList")
 		socket.off("ollama:deleteModel")
 		socket.off("ollama:listRunningModels")
-		socket.off("ollama:stopModel")
 		socket.off("ollama:connectModel")
 		socket.off("connections:list")
 	})
@@ -247,7 +243,7 @@
 	<div class="flex gap-2">
 		<div class="relative flex-1">
 			<Icons.Search
-				class="text-surface-500 absolute top-1/2 left-3 -translate-y-1/2 transform"
+				class="text-surface-700-300 absolute top-1/2 left-3 -translate-y-1/2 transform"
 				size={16}
 			/>
 			<input
@@ -292,7 +288,7 @@
 	</div>
 {:else if filteredModels.length === 0}
 	<div class="p-6 text-center">
-		<Icons.Package class="text-surface-500 mx-auto mb-4" size={48} />
+		<Icons.Package class="text-surface-700-300 mx-auto mb-4" size={48} />
 		<h3 class="h4 mb-2">No models installed</h3>
 		<p class="mb-4 text-sm opacity-75">
 			Install models from the Available tab to get started.

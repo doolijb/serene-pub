@@ -14,25 +14,21 @@
 
 	let { onclose = $bindable() }: Props = $props()
 
-	let userCtx: UserCtx = getContext("userCtx")
+	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 
 	const socket = useTypedSocket()
 
 	let activeSamplingConfigId = $derived(
-		userCtx.user?.activeSamplingConfig?.id ?? null
+		systemSettingsCtx.settings?.defaultSamplingConfigId ?? null
 	)
 
-	let selectedSamplingId: number | null = $state(null)
-
-	// Initial sync from user context — only when we haven't manually selected yet
-	$effect(() => {
-		const config = userCtx.user?.activeSamplingConfig
-		if (config && !selectedSamplingId) {
-			sampling = { ...config }
-			originalSamplingConfig = { ...config }
-			selectedSamplingId = config.id
-		}
-	})
+	// Sampling config has no per-user override — it's the system-wide default
+	// (systemSettingsCtx.settings.defaultSamplingConfigId), same value every
+	// admin sees. Seed the initial selection from it; the samplingConfigs:get
+	// effect below fetches the full editable config once this is set.
+	let selectedSamplingId: number | null = $state(
+		systemSettingsCtx.settings?.defaultSamplingConfigId ?? null
+	)
 
 	let sampling: SelectSamplingConfig | undefined = $state()
 	let originalSamplingConfig: SelectSamplingConfig | undefined = $state()
@@ -382,10 +378,10 @@
 				type="button"
 				class="btn btn-sm preset-filled-primary-500"
 				onclick={handleNew}
-				title="New sampling config"
+				title="Clone to new config"
 			>
 				<Icons.Plus size={16} />
-				New
+				Clone
 			</button>
 			<button
 				type="button"

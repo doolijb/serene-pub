@@ -46,6 +46,7 @@ import { registerSetupHandlers } from "./setup"
 import { registerTaskQueueHandlers } from "./taskQueue"
 import { registerActivityHandlers } from "./activity"
 import { registerCustomThemeHandlers } from "./customThemes"
+import { registerCardSourceHandlers } from "./cardSources"
 
 export function connectSockets(io: {
 	on: (arg0: string, arg1: (socket: any) => void) => void
@@ -84,6 +85,7 @@ export function connectSockets(io: {
 		registerSystemSettingsHandlers(socket, emitToUser, register)
 		registerCharacterHandlers(socket, emitToUser, register)
 		registerPersonaHandlers(socket, emitToUser, register)
+		registerCardSourceHandlers(socket, emitToUser, register)
 		registerContextConfigHandlers(socket, emitToUser, register)
 		registerPromptConfigHandlers(socket, emitToUser, register)
 		registerNarratorPromptConfigHandlers(socket, emitToUser, register)

@@ -1,11 +1,10 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { eq, desc } from "drizzle-orm"
+import { asc, eq, desc } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
-import type {
-	InsertHistoryEntry,
-	SelectHistoryEntry
-} from "$lib/server/db/types"
+// InsertHistoryEntry/SelectHistoryEntry are declared globally in
+// $lib/server/db/types.d.ts (ambient `export global {}` block, same pattern
+// as the Sockets namespace) — no import needed/available for them.
 import { lorebookBindingListHandler } from "./lorebooks"
 import { autoEnqueueLorebook } from "$lib/server/embedding/vectorizationQueue"
 
@@ -22,7 +21,7 @@ export const historyEntryListHandler: Handler<
 				and(eq(l.id, params.lorebookId), eq(l.userId, userId)),
 			with: {
 				historyEntries: {
-					orderBy: (he, { asc }) => asc(he.position)
+					orderBy: asc(schema.historyEntries.position)
 				}
 			}
 		})
@@ -134,7 +133,7 @@ export const updateHistoryEntryHandler: Handler<
 			.from(schema.historyEntries)
 			.where(eq(schema.historyEntries.id, id))
 
-		autoEnqueueLorebook(existingEntry.lorebookId, (existingEntry as any).lorebook?.name ?? "", "").catch(console.error)
+		autoEnqueueLorebook(existingEntry.lorebookId, existingEntry.lorebook?.name ?? "", "").catch(console.error)
 
 		// Refresh lorebook bindings and entry list
 		if (emitToUser) {

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { onMount, onDestroy, getContext } from "svelte"
 	import OllamaIcon from "../icons/OllamaIcon.svelte"
 
@@ -16,7 +16,7 @@
 		}
 	}
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	// State
 	let currentVersion = $state("")
@@ -108,7 +108,7 @@
 		// Socket event listeners
 		socket.on(
 			"ollama:setBaseUrl",
-			(message: Sockets.OllamaSetBaseUrl.Response) => {
+			(message: Sockets.Ollama.SetBaseUrl.Response) => {
 				isSavingBaseUrl = false
 				if (message.success) {
 					toaster.success({
@@ -212,7 +212,7 @@
 					Save
 				</button>
 			</div>
-			<p class="text-surface-500 mt-1 text-xs">
+			<p class="text-surface-700-300 mt-1 text-xs">
 				The URL where Ollama is running. Usually http://localhost:11434
 			</p>
 		</div>

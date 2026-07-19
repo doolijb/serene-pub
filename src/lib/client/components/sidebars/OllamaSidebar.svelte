@@ -7,7 +7,7 @@
 	import OllamaAvailableTab from "../ollamaManager/OllamaAvailableTab.svelte"
 	import OllamaSettingsTab from "../ollamaManager/OllamaSettingsTab.svelte"
 	import OllamaDownloadsTab from "../ollamaManager/OllamaDownloadsTab.svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 	import OllamaIcon from "../icons/OllamaIcon.svelte"
 
@@ -17,7 +17,7 @@
 
 	let { onclose = $bindable() }: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	// State
 	let activeTab = $state<
@@ -63,7 +63,7 @@
 	}
 
 	$effect(() => {
-		baseUrlField = ollamaSettingsCtx.settings?.ollamaManagerBaseUrl
+		baseUrlField = ollamaSettingsCtx.settings?.ollamaManagerBaseUrl ?? ""
 	})
 
 	onMount(() => {
