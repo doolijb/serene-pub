@@ -13,9 +13,25 @@
 	const socket = useTypedSocket()
 	let userSettingsCtx: UserSettingsCtx = $state(getContext("userSettingsCtx"))
 
+	const PAGE_SIZE = 24
+
+	const SORT_OPTIONS: { value: CardSourceSort; label: string }[] = [
+		{ value: "top_rated", label: "Top Rated" },
+		{ value: "most_downloaded", label: "Most Downloaded" },
+		{ value: "newest", label: "Newest" },
+		{ value: "oldest", label: "Oldest" },
+		{ value: "name_asc", label: "Name (A–Z)" },
+		{ value: "name_desc", label: "Name (Z–A)" },
+		{ value: "token_count_asc", label: "Token Count (Low–High)" },
+		{ value: "token_count_desc", label: "Token Count (High–Low)" },
+		{ value: "most_commented", label: "Most Discussed" }
+	]
+
 	let searchString = $state("")
 	let libraryCharacters: LibraryCatalogItem[] = $state([])
 	let isLoading = $state(false)
+	let loadingMore = $state(false)
+	let hasMoreResults = $state(false)
 	let downloading = $state(false)
 	let selectedCharacter: LibraryCatalogItem | null = $state(null)
 	let showDetails = $state(false)
@@ -31,6 +47,8 @@
 	// with nothing searched" defaults to instead of whatever CharaVault's
 	// own unspecified default order is.
 	let activeSort = $state<CardSourceSort>("top_rated")
+	let hasBookOnly = $state(false)
+	let creatorFilter = $state("")
 	let sourcesForCharacters = $derived.by(() => capabilities?.sources ?? [])
 	let activeSourceInfo = $derived.by(() =>
 		capabilities?.sources.find((s) => s.id === activeSource) ?? null
@@ -55,6 +73,10 @@
 	// responses whose id doesn't match the most recently sent request are
 	// just stale results arriving late and are silently discarded.
 	let latestRequestId = ""
+	// Whether the in-flight request (tracked by latestRequestId above)
+	// should APPEND to libraryCharacters (a "Load More" page fetch) or
+	// REPLACE it (any other search change) once its response arrives.
+	let pendingIsAppend = false
 
 	const debouncedFetchLibrary = (() => {
 		let timeoutId: ReturnType<typeof setTimeout> | undefined
@@ -64,25 +86,58 @@
 		}
 	})()
 
-	function fetchLibrary(showLoading: boolean = false) {
+	function fetchLibrary(showLoading: boolean = false, append: boolean = false) {
 		const requestId = crypto.randomUUID()
 		latestRequestId = requestId
-		if (showLoading) isLoading = true
-		unreachable = false
-		rateLimited = false
-		retryAfterMs = null
-		clearTimeout(retryTimer)
+		pendingIsAppend = append
+		if (append) {
+			loadingMore = true
+		} else {
+			if (showLoading) isLoading = true
+			unreachable = false
+			rateLimited = false
+			retryAfterMs = null
+			clearTimeout(retryTimer)
+		}
 		socket.emit("characters:searchLibrary", {
 			searchTerm: searchString,
 			source: activeSource,
 			sort: activeSource === "charavault" ? activeSort : undefined,
+			hasBook: activeSource === "charavault" && hasBookOnly ? true : undefined,
+			creatorFilter:
+				activeSource === "charavault" && creatorFilter ? creatorFilter : undefined,
+			cursor: {
+				limit: PAGE_SIZE,
+				offset: append ? libraryCharacters.length : 0
+			},
 			requestId
 		})
+	}
+
+	function loadMore() {
+		if (!hasMoreResults || loadingMore || isLoading) return
+		fetchLibrary(false, true)
 	}
 
 	function handleSortChange(sort: CardSourceSort) {
 		if (sort === activeSort) return
 		activeSort = sort
+		fetchLibrary(true)
+	}
+
+	function handleHasBookChange(event: { checked: boolean }) {
+		hasBookOnly = event.checked
+		fetchLibrary(true)
+	}
+
+	function filterByCreator(author: string) {
+		creatorFilter = author
+		showDetails = false
+		fetchLibrary(true)
+	}
+
+	function clearCreatorFilter() {
+		creatorFilter = ""
 		fetchLibrary(true)
 	}
 
@@ -135,16 +190,21 @@
 
 	socket.on("characters:searchLibrary", (msg: Sockets.Characters.SearchLibrary.Response) => {
 		if (msg.requestId !== latestRequestId) return
-		libraryCharacters = msg.characters
+		libraryCharacters = pendingIsAppend
+			? [...libraryCharacters, ...msg.characters]
+			: msg.characters
+		hasMoreResults = msg.hasMore
 		isLoading = false
+		loadingMore = false
 	})
 	socket.on("characters:searchLibrary:error", (msg: any) => {
 		if (msg.requestId !== latestRequestId) return
-		libraryCharacters = []
+		if (!pendingIsAppend) libraryCharacters = []
 		unreachable = !!msg.unreachable
 		rateLimited = !!msg.rateLimited
 		retryAfterMs = msg.retryAfterMs ?? null
 		isLoading = false
+		loadingMore = false
 		if (rateLimited && retryAfterMs) {
 			clearTimeout(retryTimer)
 			retryTimer = setTimeout(() => fetchLibrary(true), retryAfterMs)
@@ -230,7 +290,7 @@
 		</p>
 	{/if}
 
-	<div class="mb-4">
+	<div class="mb-1">
 		<input
 			type="text"
 			bind:value={searchString}
@@ -243,26 +303,50 @@
 	</div>
 
 	{#if activeSource === "charavault"}
-		<div class="mb-4 flex items-center gap-2" role="group" aria-label="Sort order">
-			<span class="text-surface-700-300 text-sm font-semibold">Sort:</span>
-			<button
-				type="button"
-				class="btn btn-sm {activeSort === 'top_rated' ? 'preset-filled-primary-500' : 'preset-tonal-surface'}"
-				onclick={() => handleSortChange("top_rated")}
-				aria-pressed={activeSort === "top_rated"}
-			>
-				<Icons.Star size={14} aria-hidden="true" />
-				Top Rated
-			</button>
-			<button
-				type="button"
-				class="btn btn-sm {activeSort === 'most_downloaded' ? 'preset-filled-primary-500' : 'preset-tonal-surface'}"
-				onclick={() => handleSortChange("most_downloaded")}
-				aria-pressed={activeSort === "most_downloaded"}
-			>
-				<Icons.Download size={14} aria-hidden="true" />
-				Most Downloaded
-			</button>
+		<p class="text-surface-700-300 mb-3 text-xs">
+			Supports <code>tag:name</code>, <code>-exclude</code>,
+			<code>creator:name</code>, and <code>"exact phrase"</code> — combine
+			freely, e.g. <code>elf tag:fantasy -romance creator:anon</code>.
+		</p>
+
+		{#if creatorFilter}
+			<div class="mb-3 flex items-center gap-2">
+				<span class="chip preset-filled-primary-500 inline-flex items-center gap-1.5">
+					Creator: {creatorFilter}
+					<button
+						type="button"
+						onclick={clearCreatorFilter}
+						aria-label="Clear creator filter"
+						class="inline-flex"
+					>
+						<Icons.X size={12} aria-hidden="true" />
+					</button>
+				</span>
+			</div>
+		{/if}
+
+		<div class="mb-4 flex flex-wrap items-center gap-3">
+			<label class="flex items-center gap-2 text-sm" for="sort-select">
+				<span class="text-surface-700-300 font-semibold">Sort:</span>
+				<select id="sort-select" class="select" value={activeSort} onchange={(e) => handleSortChange(e.currentTarget.value as CardSourceSort)}>
+					{#each SORT_OPTIONS as option}
+						<option value={option.value}>{option.label}</option>
+					{/each}
+				</select>
+			</label>
+			<div class="flex items-center gap-2">
+				<Switch
+					name="has-book-only"
+					checked={hasBookOnly}
+					onCheckedChange={handleHasBookChange}
+				>
+					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
+				<label for="has-book-only" class="text-sm font-semibold">Only cards with a lorebook</label>
+			</div>
 		</div>
 	{/if}
 
@@ -308,6 +392,19 @@
 			<Icons.Search size={40} class="opacity-40" />
 			<p>No characters found</p>
 		</div>
+	{:else if activeSource === "charavault"}
+		<!-- CharaVault's "category" (folder) grouping doesn't map to a
+			meaningful browsing structure the way the curated GitHub catalog's
+			categories do — flat grid instead of sectioned-by-category. -->
+		<div class="grid grid-cols-[repeat(auto-fill,minmax(16.625rem,1fr))] gap-4">
+			{#each libraryCharacters as character (`${character.source}:${character.file}`)}
+				<LibraryPortraitCard
+					item={character}
+					imageUrl={imageUrlFor(character)}
+					onclick={() => openDetails(character)}
+				/>
+			{/each}
+		</div>
 	{:else}
 		<div class="space-y-8">
 			{#each categorizedCharacters as [category, characters]}
@@ -328,6 +425,25 @@
 			{/each}
 		</div>
 	{/if}
+
+	{#if hasMoreResults && !isLoading && !unreachable && !rateLimited}
+		<div class="mt-6 flex justify-center">
+			<button
+				type="button"
+				class="btn preset-tonal-primary"
+				onclick={loadMore}
+				disabled={loadingMore}
+			>
+				{#if loadingMore}
+					<Icons.Loader2 size={16} class="animate-spin" />
+					Loading…
+				{:else}
+					<Icons.ChevronDown size={16} />
+					Load More
+				{/if}
+			</button>
+		</div>
+	{/if}
 </div>
 
 <LibraryDetailsModal
@@ -338,5 +454,6 @@
 	{downloading}
 	{loadingDetail}
 	onDownload={handleDownload}
+	onFilterByCreator={filterByCreator}
 	itemTypeLabel="Character"
 />

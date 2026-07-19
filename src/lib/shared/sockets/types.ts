@@ -137,6 +137,10 @@ declare global {
 					category?: string
 					nsfw?: boolean
 					sort?: CardSourceSort
+					/** Only CharaVault honors this (its ?has_book= param) — ignored by other sources. */
+					hasBook?: boolean
+					/** Only CharaVault honors this (its ?creator= param) — ignored by other sources. */
+					creatorFilter?: string
 					cursor?: { limit: number; offset: number }
 					/**
 					 * Client-generated, echoed back verbatim on the response —

@@ -45,9 +45,14 @@ jobs:
                       # npm's platform/arch-matching install logic, silently
                       # shipping an arm64 binary inside a "macos-x64" zip
                       # that would fail to load on real Intel Macs.
-                      # macos-latest-large is the guaranteed-Intel runner
-                      # that stays in sync with whatever "-latest" means.
-                      os: macos-latest-large
+                      # NOT macos-latest-large either — that's a paid
+                      # "larger runner" (GitHub Team/Enterprise only,
+                      # triggered a billing requirement when tried).
+                      # macos-15-intel is the plain, free-tier Intel runner
+                      # that matches macos-latest's current OS version
+                      # (macOS 15) — just x64 instead of arm64, no paid plan
+                      # needed.
+                      os: macos-15-intel
                     - target: macos-arm64
                       os: macos-latest
                     - target: windows-x64

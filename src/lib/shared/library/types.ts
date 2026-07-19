@@ -14,7 +14,16 @@ export type CardKind = "character" | "persona"
  * currently only CharaVault does anything with this (its /api/cards
  * ?sort= param); sources that ignore it just return their natural order.
  */
-export type CardSourceSort = "top_rated" | "most_downloaded"
+export type CardSourceSort =
+	| "newest"
+	| "oldest"
+	| "name_asc"
+	| "name_desc"
+	| "most_downloaded"
+	| "top_rated"
+	| "token_count_asc"
+	| "token_count_desc"
+	| "most_commented"
 
 export type LibraryCatalogItem = {
 	name: string

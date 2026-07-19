@@ -19,6 +19,10 @@ export interface CardSourceSearchParams {
 	/** Whether to include NSFW results. Callers must apply the env-gate + user-preference policy before setting this — sources trust it as-is. */
 	nsfw?: boolean
 	sort?: CardSourceSort
+	/** Only sources that support it (currently just CharaVault's ?has_book=) honor this — others ignore it. */
+	hasBook?: boolean
+	/** Restrict results to one creator/author — only CharaVault honors this today. */
+	creatorFilter?: string
 	cursor?: { limit: number; offset: number }
 }
 

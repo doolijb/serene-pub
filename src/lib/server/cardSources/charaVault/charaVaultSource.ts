@@ -11,6 +11,7 @@ import { acquire } from "./rateLimiter"
 import { hasActiveSession, withCharaVaultSession } from "./session"
 import { getOrFetchCardBytes } from "../diskCache"
 import { parseCharacterCard } from "$lib/server/utils/characterCardParser"
+import { applyDefaultContentFilter } from "./contentFilter"
 
 const API_BASE = "https://charavault.net"
 const DEFAULT_LIMIT = 24
@@ -122,9 +123,18 @@ export const charaVaultSource: CardSource = {
 		const offset = params.cursor?.offset ?? 0
 
 		const query = new URLSearchParams()
-		if (params.searchTerm) query.set("q", params.searchTerm)
+		// Once a user has actually opted into NSFW-inclusive browsing
+		// (env var + their own toggle — already resolved into this boolean
+		// by the caller), suppressing borderline-but-technically-SFW tags
+		// would be redundant with what they've explicitly asked to see.
+		const q = params.nsfw
+			? params.searchTerm
+			: applyDefaultContentFilter(params.searchTerm)
+		if (q) query.set("q", q)
 		if (params.category) query.set("folder", params.category)
 		if (params.sort) query.set("sort", params.sort)
+		if (params.hasBook) query.set("has_book", "true")
+		if (params.creatorFilter) query.set("creator", params.creatorFilter)
 		query.set("nsfw", params.nsfw ? "true" : "false")
 		query.set("limit", String(Math.min(limit, 200)))
 		query.set("offset", String(offset))

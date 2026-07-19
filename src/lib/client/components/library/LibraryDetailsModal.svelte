@@ -11,6 +11,8 @@
 		downloading: boolean
 		loadingDetail?: boolean
 		onDownload: () => void
+		/** Only offered for sources that support server-side creator filtering (currently CharaVault). */
+		onFilterByCreator?: (author: string) => void
 		itemTypeLabel: "Character" | "Persona"
 	}
 
@@ -22,6 +24,7 @@
 		downloading,
 		loadingDetail = false,
 		onDownload,
+		onFilterByCreator,
 		itemTypeLabel
 	}: Props = $props()
 
@@ -85,7 +88,18 @@
 							<div class="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
 								<div>
 									<span class="text-surface-700-300 font-semibold">Author</span>
-									<p class="truncate">{item.author}</p>
+									{#if onFilterByCreator && item.source === "charavault" && item.author}
+										<button
+											type="button"
+											class="anchor block truncate text-left"
+											onclick={() => onFilterByCreator?.(item!.author)}
+											title="Browse more from this creator"
+										>
+											{item.author}
+										</button>
+									{:else}
+										<p class="truncate">{item.author}</p>
+									{/if}
 								</div>
 								<div>
 									<span class="text-surface-700-300 font-semibold">Version</span>

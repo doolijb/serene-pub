@@ -441,6 +441,8 @@ export const charactersSearchLibrary: Handler<Sockets.Characters.SearchLibrary.P
 					category: params.category,
 					nsfw,
 					sort: params.sort,
+					hasBook: params.hasBook,
+					creatorFilter: params.creatorFilter,
 					cursor: params.cursor
 				},
 				{ userId }
