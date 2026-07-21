@@ -139,7 +139,11 @@
 								onOpenChange={(e) => (personaSwitcherOpen = e.open)}
 								positioning={{ placement: "top" }}
 							>
-								<Popover.Trigger class="relative p-0 cursor-pointer">
+								<Popover.Trigger
+									class="relative p-0 cursor-pointer"
+									title="Switch persona"
+									aria-label="Switch persona (currently {activePersona.name})"
+								>
 									<span class="block">
 										<Avatar char={activePersona} />
 									</span>

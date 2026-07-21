@@ -1,17 +1,21 @@
 <script lang="ts">
-	import { Avatar } from "@skeletonlabs/skeleton-svelte"
+	import { Avatar, Tabs } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { onDestroy, onMount } from "svelte"
+	import EntityGalleryTab from "$lib/client/components/gallery/EntityGalleryTab.svelte"
 
 	interface Props {
 		personaId: number
 		onBack: () => void
 		onEdit: () => void
 		onChat: () => void
+		onExport?: (
+			persona: SelectPersona & { isOwner?: boolean; ownerName?: string | null }
+		) => void
 	}
 
-	let { personaId, onBack, onEdit, onChat }: Props = $props()
+	let { personaId, onBack, onEdit, onChat, onExport }: Props = $props()
 
 	const socket = useTypedSocket()
 
@@ -39,6 +43,8 @@
 			?.map((pt: any) => pt.tag?.name)
 			.filter(Boolean) ?? []
 	)
+
+	let activeTab = $state("details")
 </script>
 
 <div class="flex h-full flex-col gap-0 overflow-hidden">
@@ -52,6 +58,16 @@
 			<Icons.MessageSquare size={14} />
 		</button>
 		{#if persona?.isOwner}
+			{#if onExport}
+				<button
+					class="btn btn-sm preset-filled-surface-400-600 p-2"
+					onclick={() => onExport?.(persona!)}
+					title="Export persona"
+					aria-label="Export persona"
+				>
+					<Icons.Download size={14} />
+				</button>
+			{/if}
 			<button class="btn btn-sm preset-filled-primary-500" onclick={onEdit} title="Edit persona">
 				<Icons.Pencil size={14} /> Edit
 			</button>
@@ -63,47 +79,70 @@
 			<Icons.Loader2 size={24} class="text-surface-400 animate-spin" />
 		</div>
 	{:else if persona}
-		<div class="flex flex-1 flex-col gap-4 overflow-y-auto">
-			<!-- Avatar + name -->
-			<div class="flex items-center gap-3">
-				<Avatar class="w-16 h-16 min-w-16 min-h-16">
-					<Avatar.Image src={persona.avatar || ""} alt={persona.name} class="object-cover" />
-					<Avatar.Fallback>
-						<Icons.User size={32} />
-					</Avatar.Fallback>
-				</Avatar>
-				<div class="min-w-0 flex-1">
-					<div class="flex items-center gap-2">
-						<p class="truncate text-lg font-bold">{persona.name}</p>
-						{#if persona.isDefault}
-							<span class="preset-filled-primary-500 rounded px-1.5 py-0.5 text-xs font-medium">
-								Default
-							</span>
-						{/if}
+		<Tabs value={activeTab} onValueChange={(e) => (activeTab = e.value)} class="flex min-h-0 flex-1 flex-col">
+			<Tabs.List class="flex shrink-0 gap-1">
+				<Tabs.Trigger value="details">
+					<Icons.User size={16} /> Details
+				</Tabs.Trigger>
+				<Tabs.Trigger value="gallery">
+					<Icons.Images size={16} /> Gallery
+				</Tabs.Trigger>
+			</Tabs.List>
+
+			<Tabs.Content value="details" class="min-h-0 flex-1 overflow-y-auto">
+				<div class="flex flex-col gap-4">
+					<!-- Avatar + name -->
+					<div class="flex items-center gap-3">
+						<Avatar class="w-16 h-16 min-w-16 min-h-16">
+							<Avatar.Image src={persona.avatar || ""} alt={persona.name} class="object-cover" />
+							<Avatar.Fallback>
+								<Icons.User size={32} />
+							</Avatar.Fallback>
+						</Avatar>
+						<div class="min-w-0 flex-1">
+							<div class="flex items-center gap-2">
+								<p class="truncate text-lg font-bold">{persona.name}</p>
+								{#if persona.isDefault}
+									<span class="preset-filled-primary-500 rounded px-1.5 py-0.5 text-xs font-medium">
+										Default
+									</span>
+								{/if}
+							</div>
+							{#if !persona.isOwner && persona.ownerName}
+								<p class="text-surface-700-300 truncate text-xs">Owned by {persona.ownerName}</p>
+							{/if}
+						</div>
 					</div>
-					{#if !persona.isOwner && persona.ownerName}
-						<p class="text-surface-700-300 truncate text-xs">Owned by {persona.ownerName}</p>
+
+					<!-- Tags -->
+					{#if tags.length > 0}
+						<div class="flex flex-wrap gap-1">
+							{#each tags as tag}
+								<span class="preset-tonal-surface rounded px-2 py-0.5 text-xs">{tag}</span>
+							{/each}
+						</div>
+					{/if}
+
+					<!-- Description -->
+					{#if persona.description}
+						<section class="space-y-1">
+							<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Description</p>
+							<p class="whitespace-pre-wrap text-sm leading-relaxed">{persona.description}</p>
+						</section>
 					{/if}
 				</div>
-			</div>
+			</Tabs.Content>
 
-			<!-- Tags -->
-			{#if tags.length > 0}
-				<div class="flex flex-wrap gap-1">
-					{#each tags as tag}
-						<span class="preset-tonal-surface rounded px-2 py-0.5 text-xs">{tag}</span>
-					{/each}
-				</div>
-			{/if}
-
-			<!-- Description -->
-			{#if persona.description}
-				<section class="space-y-1">
-					<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Description</p>
-					<p class="whitespace-pre-wrap text-sm leading-relaxed">{persona.description}</p>
-				</section>
-			{/if}
-		</div>
+			<Tabs.Content value="gallery" class="min-h-0 flex-1 overflow-y-auto">
+				<EntityGalleryTab
+					entityType="persona"
+					entityId={persona.id}
+					entityName={persona.name}
+					isOwner={!!persona.isOwner}
+					currentAvatar={persona.avatar}
+				/>
+			</Tabs.Content>
+		</Tabs>
 	{:else}
 		<p class="text-surface-700-300 py-8 text-center text-sm">Persona not found.</p>
 	{/if}

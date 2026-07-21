@@ -138,7 +138,9 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		thinkingContent?: string
 	}> {
 		const baseUrl = this.connection.baseUrl || "http://localhost:5001"
-		const stream = this.connection.extraJson?.stream ?? false
+		// Default true — matches CONNECTION_DEFAULTS[KOBOLDCPP].extraJson.stream
+		// (connectionDefaults.ts), same reasoning as useChat below.
+		const stream = this.connection.extraJson?.stream ?? true
 		const useMemory = this.connection.extraJson?.useMemory ?? false
 		// Default true — see compilePrompt() above for why.
 		const useChat = this.connection.extraJson?.useChat ?? true

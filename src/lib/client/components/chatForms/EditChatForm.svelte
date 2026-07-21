@@ -12,6 +12,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 	import { ChatCharacterVisibility } from "$lib/shared/constants/ChatCharacterVisibility"
+	import { resolveUserHandle } from "$lib/shared/utils/resolveCharacterName"
 	import { z } from "zod"
 	import ConnectionSamplingPicker from "../ConnectionSamplingPicker.svelte"
 
@@ -877,6 +878,9 @@
 								)?.visibility || ChatCharacterVisibility.VISIBLE
 							: ChatCharacterVisibility.VISIBLE}
 						{@const VisibilityIcon = getVisibilityIcon(visibility)}
+						{@const isSaved = !chat || !!chat.chatCharacters?.some(
+							(cc) => cc.characterId === c.id
+						)}
 						<div
 							class="preset-outlined-surface-400-600 bg-surface-100-800 hover:bg-surface-200-800 flex flex-col gap-3 rounded-xl p-3 shadow-sm transition-colors"
 							data-dnd-handle
@@ -932,12 +936,15 @@
 							>
 								{#if chat}
 									<span
-										title="Toggle Character Active"
+										title={isSaved
+											? "Toggle Character Active"
+											: "Save the chat to set this character's active status"}
 										class="flex items-center gap-2"
 									>
 										<Switch
 											name="toggle-character-active-{c.id}"
 											checked={isActive}
+											disabled={!isSaved}
 											onCheckedChange={(e) =>
 												toggleCharacterActive(e, c)}
 											aria-label="Toggle character {c.name} active status"
@@ -1121,8 +1128,7 @@
 									<div class="flex items-center gap-2">
 										<Icons.User size={20} />
 										<span class="font-semibold">
-											{guest.user?.username ||
-												"Unknown User"}
+											{resolveUserHandle(guest.user)}
 										</span>
 									</div>
 									<button
@@ -1130,8 +1136,7 @@
 										onclick={() =>
 											confirmRemoveGuest(
 												guest.userId,
-												guest.user?.username ||
-													"Unknown User"
+												resolveUserHandle(guest.user)
 											)}
 										title="Remove guest"
 									>
@@ -1157,7 +1162,9 @@
 					disabled={isGuest}
 				>
 					{#each GroupReplyStrategies.options as opt}
-						<option value={opt.value}>{opt.label}</option>
+						{#if opt.value !== GroupReplyStrategies.USER_SPLIT || systemSettingsCtx.settings?.isAccountsEnabled}
+							<option value={opt.value}>{opt.label}</option>
+						{/if}
 					{/each}
 				</select>
 			</div>
@@ -1310,46 +1317,46 @@
 			{/if}
 		</div>
 	</div>
-	<CharacterSelectModal
-		open={showCharacterModal}
-		characters={characters.filter(
-			(c) => !selectedCharacters.some((sel) => sel.id === c.id)
-		)}
-		onOpenChange={(e) => (showCharacterModal = e.open)}
-		onSelect={handleAddCharacter}
-	/>
-	<PersonaSelectModal
-		open={showPersonaModal}
-		personas={personas.filter(
-			(p) => !selectedPersonas.some((sel) => sel.id === p.id)
-		)}
-		onOpenChange={(e) => (showPersonaModal = e.open)}
-		onSelect={handleAddPersona}
-		returnFullPersona={true}
-	/>
-	<!-- RemoveFromChatModal only models "character" | "persona" (its ternaries
-		fall back to the "character" copy for anything else, including its own
-		default value of "character") — mapping "guest" to undefined below
-		keeps that exact same fallback behavior while satisfying its prop type. -->
-	<RemoveFromChatModal
-		open={showRemoveModal}
-		onOpenChange={(e) => (showRemoveModal = e.open)}
-		onConfirm={handleRemoveConfirm}
-		onCancel={handleRemoveCancel}
-		name={removeName}
-		type={removeType === "guest" ? undefined : removeType}
-	/>
-	<UserSelectModal
-		open={showGuestModal}
-		excludeUserIds={[
-			...(chat?.userId ? [chat.userId] : []),
-			...selectedGuests.map((g) => g.userId)
-		]}
-		onclose={() => (showGuestModal = false)}
-		onSelect={() => {}}
-		multiSelect={true}
-		onMultiSelect={handleAddGuests}
-		title="Add Guests to Chat"
-		description="Select users to add as guests. Guests can view and participate in the chat."
-	/>
 {/if}
+<CharacterSelectModal
+	open={showCharacterModal}
+	characters={characters.filter(
+		(c) => !selectedCharacters.some((sel) => sel.id === c.id)
+	)}
+	onOpenChange={(e) => (showCharacterModal = e.open)}
+	onSelect={handleAddCharacter}
+/>
+<PersonaSelectModal
+	open={showPersonaModal}
+	personas={personas.filter(
+		(p) => !selectedPersonas.some((sel) => sel.id === p.id)
+	)}
+	onOpenChange={(e) => (showPersonaModal = e.open)}
+	onSelect={handleAddPersona}
+	returnFullPersona={true}
+/>
+<!-- RemoveFromChatModal only models "character" | "persona" (its ternaries
+	fall back to the "character" copy for anything else, including its own
+	default value of "character") — mapping "guest" to undefined below
+	keeps that exact same fallback behavior while satisfying its prop type. -->
+<RemoveFromChatModal
+	open={showRemoveModal}
+	onOpenChange={(e) => (showRemoveModal = e.open)}
+	onConfirm={handleRemoveConfirm}
+	onCancel={handleRemoveCancel}
+	name={removeName}
+	type={removeType === "guest" ? undefined : removeType}
+/>
+<UserSelectModal
+	open={showGuestModal}
+	excludeUserIds={[
+		...(chat?.userId ? [chat.userId] : []),
+		...selectedGuests.map((g) => g.userId)
+	]}
+	onclose={() => (showGuestModal = false)}
+	onSelect={() => {}}
+	multiSelect={true}
+	onMultiSelect={handleAddGuests}
+	title="Add Guests to Chat"
+	description="Select users to add as guests. Guests can view and participate in the chat."
+/>

@@ -51,7 +51,13 @@
 		// property (even with `e?: Event`) is checked strictly/contravariantly
 		// and rejects one side or the other.
 		onCancelEditMessage(e?: Event): void
-		onSaveEditMessage(e?: Event): void
+		// Takes the edited content rather than reading it off `editChatMessage`
+		// itself — this component only owns a local edit buffer, not
+		// `editChatMessage` (a prop passed down from +page.svelte), so the
+		// actual `editChatMessage.content` write happens in the real
+		// implementation (+page.svelte's handleSaveEditMessage), which does
+		// own that state.
+		onSaveEditMessage(content: string, e?: Event): void
 		// Tracks which message's "more actions" popover is open, so only one
 		// is ever open at a time in a message list. No longer mobile-only —
 		// the popover now replaces the always-visible desktop toolbar too.
@@ -139,8 +145,19 @@
 	let isThinkingExpanded = $state(false)
 	let isReasoningExpanded = $state(false)
 
-	function handleMessageUpdate() {
-		onSaveEditMessage()
+	// Local edit buffer: bound to MessageComposer instead of binding directly
+	// into `editChatMessage.content` (a prop this component doesn't own) —
+	// mutating it, even via plain assignment, trips Svelte's
+	// ownership_invalid_mutation check. Handed to onSaveEditMessage at save
+	// time so the actual write happens in the component that owns
+	// editChatMessage (+page.svelte).
+	let editContent = $state("")
+	$effect(() => {
+		if (editChatMessage) editContent = editChatMessage.content
+	})
+
+	function handleMessageUpdate(e?: Event) {
+		onSaveEditMessage(editContent, e)
 	}
 
 	function toggleThinking() {
@@ -236,7 +253,7 @@
 				<button
 					class="btn btn-sm msg-cntrl-icon preset-filled-success-500"
 					title="Save"
-					onclick={onSaveEditMessage}
+					onclick={handleMessageUpdate}
 				>
 					<Icons.Save size={16} class="mx-4" />
 				</button>
@@ -405,7 +422,7 @@
 				class="chat-input-bar bg-surface-100-900 w-full rounded-xl p-2 pb-2 align-middle lg:pb-4"
 			>
 				<MessageComposer
-					bind:markdown={editChatMessage.content}
+					bind:markdown={editContent}
 					onSend={handleMessageUpdate}
 				/>
 			</div>

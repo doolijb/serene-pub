@@ -25,6 +25,11 @@
 	let selectedSource = $state(SOURCE_RECOMMENDED)
 	let searchString = $state("")
 	let isSearching = $state(false)
+	// Distinguishes "haven't searched yet" from "searched, zero results" —
+	// searchResults starts empty, so gating the "No models found" message on
+	// searchString alone showed it the instant you typed anything, before
+	// Enter (the only way to actually trigger search()) was ever pressed.
+	let hasSearched = $state(false)
 
 	let searchResults = $state<Sockets.KoboldCpp.SearchModels.ModelResult[]>([])
 	let recommendedModels = $state<Sockets.KoboldCpp.RecommendedModels.RecommendedModel[]>([])
@@ -52,6 +57,7 @@
 	function search() {
 		if (!searchString.trim()) return
 		isSearching = true
+		hasSearched = true
 		searchResults = []
 		socket.emit("koboldcpp:searchModels", { searchTerm: searchString.trim() })
 	}
@@ -152,12 +158,21 @@
 			{/each}
 		</select>
 		<div class="relative">
-			<Icons.Search class="text-surface-700-300 absolute top-1/2 left-3 -translate-y-1/2" size={16} />
+			<button
+				type="button"
+				class="text-surface-700-300 hover:text-foreground absolute top-1/2 left-3 -translate-y-1/2 disabled:cursor-not-allowed"
+				onclick={search}
+				disabled={selectedSource === SOURCE_RECOMMENDED || !searchString.trim()}
+				title="Search"
+				aria-label="Search"
+			>
+				<Icons.Search size={16} />
+			</button>
 			<input
 				type="text"
 				placeholder={selectedSource === SOURCE_RECOMMENDED
 					? "Search not available for recommended models"
-					: "Search Hugging Face for GGUF models…"}
+					: "Search Hugging Face for GGUF models, then press Enter…"}
 				class="input w-full pl-10"
 				bind:value={searchString}
 				disabled={selectedSource === SOURCE_RECOMMENDED}
@@ -258,7 +273,7 @@
 					<Icons.Loader2 class="mx-auto mb-4 animate-spin" size={32} />
 					<p class="text-sm opacity-75">Searching…</p>
 				</div>
-			{:else if searchResults.length === 0 && searchString}
+			{:else if searchResults.length === 0 && hasSearched}
 				<div class="p-6 text-center">
 					<Icons.Search class="text-surface-700-300 mx-auto mb-4" size={48} />
 					<p class="text-sm opacity-75">No models found for "{searchString}".</p>
@@ -266,7 +281,7 @@
 			{:else if searchResults.length === 0}
 				<div class="p-6 text-center">
 					<Icons.Search class="text-surface-700-300 mx-auto mb-4" size={48} />
-					<p class="text-sm opacity-75">Search Hugging Face for GGUF models.</p>
+					<p class="text-sm opacity-75">Search Hugging Face for GGUF models, then press Enter.</p>
 				</div>
 			{:else}
 				{#each searchResults as model}

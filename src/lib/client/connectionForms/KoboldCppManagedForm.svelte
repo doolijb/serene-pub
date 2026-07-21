@@ -54,11 +54,6 @@
 	const koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
 	const defaultExtraJson =
 		CONNECTION_DEFAULTS[CONNECTION_TYPE.KOBOLDCPP_MANAGED].extraJson
-	const DEFAULT_MANAGED_CONFIG: ManagedConfig = {
-		gpuLayers: -1,
-		flashAttention: false,
-		batchSize: 512
-	}
 
 	let managerEnabled = $derived(
 		koboldCppSettingsCtx?.settings?.koboldCppManagerEnabled ?? false
@@ -94,16 +89,13 @@
 			managedConfig: {
 				gpuLayers:
 					extraJson.managedConfig?.gpuLayers ??
-					defaultExtraJson.managedConfig?.gpuLayers ??
-					DEFAULT_MANAGED_CONFIG.gpuLayers,
+					defaultExtraJson.managedConfig?.gpuLayers,
 				flashAttention:
 					extraJson.managedConfig?.flashAttention ??
-					defaultExtraJson.managedConfig?.flashAttention ??
-					DEFAULT_MANAGED_CONFIG.flashAttention,
+					defaultExtraJson.managedConfig?.flashAttention,
 				batchSize:
 					extraJson.managedConfig?.batchSize ??
-					defaultExtraJson.managedConfig?.batchSize ??
-					DEFAULT_MANAGED_CONFIG.batchSize
+					defaultExtraJson.managedConfig?.batchSize
 			}
 		}
 	}

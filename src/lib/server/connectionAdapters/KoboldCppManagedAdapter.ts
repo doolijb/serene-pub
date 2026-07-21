@@ -145,6 +145,16 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 				`[KoboldCPP] preflight attempt ${attemptNum}: ensureModelLoaded FAILED:`,
 				err
 			)
+			// An externally-owned instance almost certainly has a different
+			// --adminpassword and --admindir than this Manager is configured
+			// with, so the admin API call above (reload_config) is expected to
+			// be rejected — surface that explanation instead of the raw,
+			// undiagnosable "rejected the request" error.
+			if (subprocessManager.isExternal()) {
+				throw new Error(
+					`KoboldCpp is running on this port but wasn't started by this Manager, so its admin password/directory don't match — model loading was rejected: ${err?.message || err}. Stop the external instance and let the Manager start its own, or point this Manager at a different port.`
+				)
+			}
 			throw new Error(`KoboldCpp model load failed: ${err?.message || err}`)
 		} finally {
 			subprocessManager.resumeHealthCheck()

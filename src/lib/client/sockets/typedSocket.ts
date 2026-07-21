@@ -127,6 +127,18 @@ export type SocketEventMap = {
 		params: Sockets.Characters.ImportCard.Params
 		response: Sockets.Characters.ImportCard.Response
 	}
+	"characters:importCard:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"characters:importResolve": {
+		params: Sockets.Characters.ImportResolve.Params
+		response: Sockets.Characters.ImportResolve.Response
+	}
+	"characters:importResolve:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"characters:exportCard": {
 		params: Sockets.Characters.ExportCard.Params
 		response: Sockets.Characters.ExportCard.Response
@@ -166,6 +178,10 @@ export type SocketEventMap = {
 	"characters:setAvatar": {
 		params: Sockets.Characters.SetAvatar.Params
 		response: Sockets.Characters.SetAvatar.Response
+	}
+	"characters:reorderGallery": {
+		params: Sockets.Characters.ReorderGallery.Params
+		response: Sockets.Characters.ReorderGallery.Response
 	}
 
 	// Connection events
@@ -259,6 +275,22 @@ export type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
+	"personas:importResolve": {
+		params: Sockets.Personas.ImportResolve.Params
+		response: Sockets.Personas.ImportResolve.Response
+	}
+	"personas:importResolve:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"personas:exportCard": {
+		params: Sockets.Personas.ExportCard.Params
+		response: Sockets.Personas.ExportCard.Response
+	}
+	"personas:exportCard:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"personas:importFromLibrary": {
 		params: Sockets.Personas.ImportFromLibrary.Params
 		response: Sockets.Personas.ImportFromLibrary.Response
@@ -282,6 +314,10 @@ export type SocketEventMap = {
 	"personas:setAvatar": {
 		params: Sockets.Personas.SetAvatar.Params
 		response: Sockets.Personas.SetAvatar.Response
+	}
+	"personas:reorderGallery": {
+		params: Sockets.Personas.ReorderGallery.Params
+		response: Sockets.Personas.ReorderGallery.Response
 	}
 
 	// Card source events
@@ -1190,6 +1226,26 @@ export type SocketEventMap = {
 		params: Sockets.Lorebooks.Import.Params
 		response: Sockets.Lorebooks.Import.Response
 	}
+	"lorebooks:import:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"lorebooks:importResolve": {
+		params: Sockets.Lorebooks.ImportResolve.Params
+		response: Sockets.Lorebooks.ImportResolve.Response
+	}
+	"lorebooks:importResolve:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"lorebooks:export": {
+		params: Sockets.Lorebooks.Export.Params
+		response: Sockets.Lorebooks.Export.Response
+	}
+	"lorebooks:export:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"lorebooks:createBinding": {
 		params: Sockets.Lorebooks.CreateBinding.Params
 		response: Sockets.Lorebooks.CreateBinding.Response
@@ -1201,6 +1257,14 @@ export type SocketEventMap = {
 	"lorebooks:bindingList": {
 		params: Sockets.Lorebooks.BindingList.Params
 		response: Sockets.Lorebooks.BindingList.Response
+	}
+	"lorebooks:bindingsForCharacter": {
+		params: Sockets.Lorebooks.BindingsForCharacter.Params
+		response: Sockets.Lorebooks.BindingsForCharacter.Response
+	}
+	"lorebooks:bindingsForCharacter:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 
 	// History Entries events

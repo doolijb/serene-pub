@@ -63,15 +63,15 @@
 			<Dialog.Content
 				class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-md"
 				role="dialog"
-				aria-labelledby="modal-title"
-				aria-describedby="modal-description"
+				aria-labelledby="new-name-modal-title"
+				aria-describedby="new-name-modal-description"
 			>
 				<header class="flex justify-between">
-			<h2 id="modal-title" class="h2">{title ? title : "Create new"}</h2>
+			<h2 id="new-name-modal-title" class="h2">{title ? title : "Create new"}</h2>
 		</header>
 		<article class="space-y-4">
 			{#if description}
-				<p id="modal-description" class="text-muted-foreground">
+				<p id="new-name-modal-description" class="text-muted-foreground">
 					{description}
 				</p>
 			{/if}

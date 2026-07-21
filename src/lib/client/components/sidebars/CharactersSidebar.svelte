@@ -16,6 +16,9 @@
 	import CharacterViewPanel from "../characterForms/CharacterViewPanel.svelte"
 	import CharacterCardItem from "../listItems/CharacterCardItem.svelte"
 	import EmptyState from "../EmptyState.svelte"
+	import ImportConflictModal from "../modals/ImportConflictModal.svelte"
+	import CharacterExportModal from "../modals/CharacterExportModal.svelte"
+	import { downloadBlob } from "$lib/client/utils/downloadBlob"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -50,6 +53,27 @@
 	let importingLorebook: SpecV3.Lorebook | null = $state(null)
 	let importingLorebookCharacter: SelectCharacter | null = $state(null)
 	let showLorebookImportConfirmationModal = $state(false)
+	// Set when lorebooks:import comes back with status "conflict" — the
+	// embedded book's uuid matched a lorebook this user already has, but its
+	// content differs.
+	let lorebookImportConflict:
+		| { existingLorebook: any; lorebookData: object }
+		| undefined = $state(undefined)
+	let showLorebookImportConflictModal = $state(false)
+	// Set when characters:importCard comes back with status "conflict" — the
+	// card's uuid matched a character this user already has, but its
+	// content differs.
+	let characterImportConflict:
+		| { existingCharacter: SelectCharacter; file: string }
+		| undefined = $state(undefined)
+	let showCharacterImportConflictModal = $state(false)
+	let exportingCharacter: {
+		id: number
+		name: string
+		nickname?: string | null
+		avatar?: string | null
+	} | null = $state(null)
+	let showExportModal = $state(false)
 	let characterFormHasChanges = $state(false)
 
 	// Note: Despite the name "isSafeToClose", this prop actually tracks when there ARE changes
@@ -257,6 +281,95 @@
 		importingLorebookCharacter = null
 	}
 
+	function handleOverwriteLorebookImportConflict() {
+		if (!lorebookImportConflict) return
+		socket.emit("lorebooks:importResolve", {
+			action: "overwrite",
+			lorebookData: lorebookImportConflict.lorebookData,
+			existingId: lorebookImportConflict.existingLorebook.id
+		})
+		showLorebookImportConflictModal = false
+		lorebookImportConflict = undefined
+	}
+
+	function handleImportLorebookAsNewFromConflict() {
+		if (!lorebookImportConflict) return
+		socket.emit("lorebooks:importResolve", {
+			action: "createNew",
+			lorebookData: lorebookImportConflict.lorebookData,
+			existingId: lorebookImportConflict.existingLorebook.id
+		})
+		showLorebookImportConflictModal = false
+		lorebookImportConflict = undefined
+	}
+
+	function handleCancelLorebookImportConflict() {
+		showLorebookImportConflictModal = false
+		lorebookImportConflict = undefined
+	}
+
+	function handleOverwriteCharacterImportConflict() {
+		if (!characterImportConflict) return
+		socket.emit("characters:importResolve", {
+			action: "overwrite",
+			file: characterImportConflict.file,
+			existingId: characterImportConflict.existingCharacter.id
+		})
+		showCharacterImportConflictModal = false
+		characterImportConflict = undefined
+	}
+
+	function handleImportCharacterAsNewFromConflict() {
+		if (!characterImportConflict) return
+		socket.emit("characters:importResolve", {
+			action: "createNew",
+			file: characterImportConflict.file,
+			existingId: characterImportConflict.existingCharacter.id
+		})
+		showCharacterImportConflictModal = false
+		characterImportConflict = undefined
+	}
+
+	function handleCancelCharacterImportConflict() {
+		showCharacterImportConflictModal = false
+		characterImportConflict = undefined
+	}
+
+	function handleExportCharacter(character: {
+		id?: number
+		name?: string
+		nickname?: string | null
+		avatar?: string | null
+	}) {
+		if (!character.id || !character.name) return
+		exportingCharacter = {
+			id: character.id,
+			name: character.name,
+			nickname: character.nickname,
+			avatar: character.avatar
+		}
+		showExportModal = true
+	}
+
+	function handleConfirmCharacterExport(options: {
+		format: "json" | "png"
+		lorebookId: number | null
+	}) {
+		if (!exportingCharacter?.id) return
+		socket.emit("characters:exportCard", {
+			id: exportingCharacter.id,
+			format: options.format,
+			lorebookId: options.lorebookId
+		})
+		showExportModal = false
+		exportingCharacter = null
+	}
+
+	function handleCancelCharacterExport() {
+		showExportModal = false
+		exportingCharacter = null
+	}
+
 	function cancelLorebookImport() {
 		showLorebookImportConfirmationModal = false
 		importingLorebook = null
@@ -274,22 +387,94 @@
 		socket.on("characters:list:error", () => {
 			isLoading = false
 		})
-		socket.on("characters:importCard", (msg) => {
-			importingLorebook = msg.book || null
-			toaster.success({
-				title: `Character Imported`,
-				description: `Character ${msg.character.nickname || msg.character.name} imported successfully.`
-			})
-			if (!!importingLorebook) {
-				importingLorebookCharacter = msg.character || null
-				showLorebookImportConfirmationModal = true
+		socket.on(
+			"characters:importCard",
+			(msg: Sockets.Characters.ImportCard.Response) => {
+				if (msg.status === "conflict" && msg.conflict) {
+					characterImportConflict = msg.conflict
+					showCharacterImportConflictModal = true
+					return
+				}
+				if (msg.status === "unchanged") {
+					toaster.success({
+						title: "Character Already Imported",
+						description: `"${msg.character?.nickname || msg.character?.name}" is unchanged — using the existing character.`
+					})
+					return
+				}
+				importingLorebook = msg.book || null
+				toaster.success({
+					title: `Character Imported`,
+					description: `Character ${msg.character!.nickname || msg.character!.name} imported successfully.`
+				})
+				if (!!importingLorebook) {
+					importingLorebookCharacter = msg.character || null
+					showLorebookImportConfirmationModal = true
+				}
 			}
+		)
+		socket.on(
+			"characters:importResolve",
+			(msg: Sockets.Characters.ImportResolve.Response) => {
+				importingLorebook = msg.book || null
+				toaster.success({
+					title: `Character Imported`,
+					description: `Character ${msg.character.nickname || msg.character.name} imported successfully.`
+				})
+				if (!!importingLorebook) {
+					importingLorebookCharacter = msg.character || null
+					showLorebookImportConfirmationModal = true
+				}
+			}
+		)
+		socket.on(
+			"characters:importResolve:error",
+			(msg: Sockets.ErrorResponse) => {
+				toaster.error({ title: msg.error || "Failed to resolve character import" })
+			}
+		)
+		socket.on("characters:exportCard", (msg) => {
+			downloadBlob(msg)
+			toaster.success({
+				title: "Character Exported",
+				description: `Character card exported as ${msg.filename}`
+			})
 		})
-		socket.on("lorebooks:import", (msg) => {
+		socket.on("characters:exportCard:error", (msg: Sockets.ErrorResponse) => {
+			toaster.error({ title: msg.error || "Failed to export character" })
+		})
+		socket.on("lorebooks:import", (msg: Sockets.Lorebooks.Import.Response) => {
+			if (msg.status === "conflict" && msg.conflict) {
+				lorebookImportConflict = msg.conflict
+				showLorebookImportConflictModal = true
+				return
+			}
+			if (msg.status === "unchanged") {
+				toaster.success({
+					title: "Lorebook Already Imported",
+					description: `"${msg.lorebook?.name}" is unchanged — using the existing lorebook.`
+				})
+				return
+			}
 			toaster.success({
 				title: `Lorebook Imported`,
 				description: `Lorebook imported successfully.`
 			})
+		})
+		socket.on("lorebooks:import:error", (msg: Sockets.ErrorResponse) => {
+			toaster.error({ title: msg.error || "Failed to import lorebook" })
+		})
+		socket.on(
+			"lorebooks:importResolve",
+			(msg: Sockets.Lorebooks.ImportResolve.Response) => {
+				toaster.success({
+					title: `Lorebook Imported`,
+					description: `Lorebook imported successfully.`
+				})
+			}
+		)
+		socket.on("lorebooks:importResolve:error", (msg: Sockets.ErrorResponse) => {
+			toaster.error({ title: msg.error || "Failed to resolve lorebook import" })
 		})
 		// The background vectorization queue updates a row's embeddingModel
 		// directly in the DB — without this, the list here only ever refreshes
@@ -312,7 +497,14 @@
 		socket.off("characters:list:error")
 		socket.off("vectorization:itemUpdated")
 		socket.off("characters:importCard")
+		socket.off("characters:importResolve")
+		socket.off("characters:importResolve:error")
+		socket.off("characters:exportCard")
+		socket.off("characters:exportCard:error")
 		socket.off("lorebooks:import")
+		socket.off("lorebooks:import:error")
+		socket.off("lorebooks:importResolve")
+		socket.off("lorebooks:importResolve:error")
 		onclose = undefined
 	})
 </script>
@@ -349,6 +541,7 @@
 					onBack={() => (viewingId = undefined)}
 					onEdit={handleEditFromView}
 					onChat={handleChatFromView}
+					onExport={handleExportCharacter}
 				/>
 			</section>
 		{/key}
@@ -378,7 +571,7 @@
 				aria-label="Import character from file"
 				type="button"
 			>
-				<Icons.Download size={16} aria-hidden="true" />
+				<Icons.Upload size={16} aria-hidden="true" />
 				Import
 			</button>
 			<button
@@ -449,6 +642,7 @@
 							onclick={handleCharacterClick}
 							onEdit={handleEditClick}
 							onDelete={handleDeleteClick}
+							onExport={handleExportCharacter}
 							contentTitle="Go to character chats"
 						/>
 					</div>
@@ -478,6 +672,7 @@
 								onclick={handleCharacterClick}
 								onEdit={handleEditClick}
 								onDelete={handleDeleteClick}
+								onExport={handleExportCharacter}
 								contentTitle="Go to character chats"
 							/>
 						</div>
@@ -635,6 +830,48 @@
 		</Portal>
 	</Dialog>
 {/if}
+
+{#if lorebookImportConflict}
+	<ImportConflictModal
+		open={showLorebookImportConflictModal}
+		onOpenChange={(e) => {
+			showLorebookImportConflictModal = e.open
+			if (!e.open) lorebookImportConflict = undefined
+		}}
+		entityLabel="Lorebook"
+		existingName={lorebookImportConflict.existingLorebook.name}
+		onOverwrite={handleOverwriteLorebookImportConflict}
+		onImportAsNew={handleImportLorebookAsNewFromConflict}
+		onCancel={handleCancelLorebookImportConflict}
+	/>
+{/if}
+
+{#if characterImportConflict}
+	<ImportConflictModal
+		open={showCharacterImportConflictModal}
+		onOpenChange={(e) => {
+			showCharacterImportConflictModal = e.open
+			if (!e.open) characterImportConflict = undefined
+		}}
+		entityLabel="Character"
+		existingName={characterImportConflict.existingCharacter.nickname ||
+			characterImportConflict.existingCharacter.name}
+		onOverwrite={handleOverwriteCharacterImportConflict}
+		onImportAsNew={handleImportCharacterAsNewFromConflict}
+		onCancel={handleCancelCharacterImportConflict}
+	/>
+{/if}
+
+<CharacterExportModal
+	open={showExportModal}
+	onOpenChange={(e) => {
+		showExportModal = e.open
+		if (!e.open) exportingCharacter = null
+	}}
+	character={exportingCharacter}
+	onConfirm={handleConfirmCharacterExport}
+	onCancel={handleCancelCharacterExport}
+/>
 
 {#if showUnsavedChangesModal}
 	<CharacterUnsavedChangesModal

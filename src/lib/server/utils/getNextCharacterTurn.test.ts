@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest"
 import { getNextCharacterTurn } from "./getNextCharacterTurn"
+import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 
 // getNextCharacterTurn only reads:
 //   chatMessages: { role, personaId, characterId, isHidden, isNarratorResponse }[]
@@ -87,18 +88,20 @@ describe("getNextCharacterTurn", () => {
 		expect(getNextCharacterTurn(chat)).toBeNull()
 	})
 
-	test("returns null when an active character has no message in the healthy window, even if others are due (unhealthy rotation)", () => {
+	test("a character who has never replied is immediately due, even mid-conversation (not stuck behind the healthy-window check)", () => {
 		// castSize = 2 personas + 2 characters = 4. Window = last 4 messages.
-		// Character 20 never speaks anywhere in history, so it can never appear
-		// in the window -> the rotation is never "healthy" -> null forever,
-		// regardless of character 10's recency.
+		// Character 20 never speaks anywhere in history. The old behavior
+		// required every cast member to already appear in the window before
+		// anyone could be picked, which made this permanently null — a
+		// character added to an in-progress chat could never get a first
+		// turn. Character 20 must win regardless of character 10's recency.
 		const messages = [assistantMsg(10), userMsg(1), userMsg(2), assistantMsg(10)]
 		const chat = buildChat({
 			messages,
 			characterIds: [10, 20],
 			personaIds: [1, 2]
 		})
-		expect(getNextCharacterTurn(chat)).toBeNull()
+		expect(getNextCharacterTurn(chat)).toBe(20)
 	})
 
 	test("healthy window precondition: a due character is only selected once every persona and character has appeared within the last castSize messages", () => {
@@ -228,5 +231,143 @@ describe("getNextCharacterTurn", () => {
 			chatPersonas: [chatPersona(1)]
 		} as any
 		expect(getNextCharacterTurn(chat)).toBeNull()
+	})
+})
+
+// Fixtures below mirror userMsg/assistantMsg/chatCharacter/chatPersona/buildChat
+// above, but additionally carry a userId on each character/persona so the
+// "User-Split" strategy has ownership info to group by.
+
+function chatCharacterWithUser(
+	id: number,
+	position: number,
+	userId: number,
+	isActive = true
+) {
+	return { position, isActive, character: { id, userId } }
+}
+
+function chatPersonaWithUser(id: number, userId: number) {
+	return { persona: { id, userId } }
+}
+
+function buildUserSplitChat({
+	messages,
+	characters,
+	personas
+}: {
+	messages: any[]
+	characters: { id: number; position: number; userId: number; isActive?: boolean }[]
+	personas: { id: number; userId: number }[]
+}) {
+	return {
+		chatMessages: messages,
+		chatCharacters: characters.map((c) =>
+			chatCharacterWithUser(c.id, c.position, c.userId, c.isActive ?? true)
+		),
+		chatPersonas: personas.map((p) => chatPersonaWithUser(p.id, p.userId))
+	} as any
+}
+
+describe("getNextCharacterTurn - User-Split strategy", () => {
+	// Worked example from the feature request: user 1 owns 1 persona (id 1)
+	// and 2 characters (ids 10, 20); user 2 owns 2 personas (ids 2, 3) and 2
+	// characters (ids 30, 40). A full cycle should complete user 1's whole
+	// sub-cast before moving to user 2's, rather than flattening everyone's
+	// personas/characters together.
+	const user1Characters = [
+		{ id: 10, position: 0, userId: 1 },
+		{ id: 20, position: 1, userId: 1 }
+	]
+	const user2Characters = [
+		{ id: 30, position: 2, userId: 2 },
+		{ id: 40, position: 3, userId: 2 }
+	]
+	const allCharacters = [...user1Characters, ...user2Characters]
+	const allPersonas = [
+		{ id: 1, userId: 1 },
+		{ id: 2, userId: 2 },
+		{ id: 3, userId: 2 }
+	]
+
+	test("bootstraps with the lowest userId's group, then the first character by position within it", () => {
+		const chat = buildUserSplitChat({
+			messages: [],
+			characters: allCharacters,
+			personas: allPersonas
+		})
+		expect(getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)).toBe(10)
+	})
+
+	test("a user's whole sub-cast is offered (never-replied bootstrap) before the rotation ever moves to the next user", () => {
+		// Both of user 1's characters have now replied, but neither of user 2's
+		// personas nor characters have said anything at all. User 2's group is
+		// therefore the most overdue (never active) and becomes due - and within
+		// it, its never-replied characters win immediately, same as the
+		// never-replied bootstrap rule for the flat "Ordered" strategy.
+		const messages = [assistantMsg(10), assistantMsg(20)]
+		const chat = buildUserSplitChat({
+			messages,
+			characters: allCharacters,
+			personas: allPersonas
+		})
+		expect(getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)).toBe(30)
+	})
+
+	test("a quiet other user's interleaved messages don't block or skew this user's own healthy-window/due calculation", () => {
+		// user1: persona 1, characters 10 (pos 0) and 20 (pos 1) - castSize 3.
+		// user2: persona 2, character 30 (pos 2) - castSize 2.
+		const characters = [
+			{ id: 10, position: 0, userId: 1 },
+			{ id: 20, position: 1, userId: 1 },
+			{ id: 30, position: 2, userId: 2 }
+		]
+		const personas = [
+			{ id: 1, userId: 1 },
+			{ id: 2, userId: 2 }
+		]
+		const messages = [
+			assistantMsg(10), // [0] user1: C1's only reply
+			assistantMsg(30), // [1] user2: C3 replies
+			userMsg(1), // [2] user1: P1 speaks
+			assistantMsg(20), // [3] user1: C2 replies
+			assistantMsg(30), // [4] user2: C3 replies again, keeping user2 "recent"
+			userMsg(2) // [5] user2: P2 speaks, now user2's last activity (5) > user1's (3)
+		]
+		// user1's last activity is index 3, user2's is index 5 - user1 is more
+		// overdue and becomes the due group. Scoped to only user1's own
+		// messages ([0]=C1, [2]=P1, [3]=C2), the rotation is healthy (everyone
+		// in {persona 1, char 10, char 20} appears in that 3-message window),
+		// and character 10's last reply is further back (scoped index 0) than
+		// character 20's (scoped index 2) - so 10 is due, not 20. If user2's
+		// interleaved messages weren't filtered out of the scoped history, this
+		// would compute a different (wrong) answer.
+		const chat = buildUserSplitChat({ messages, characters, personas })
+		expect(getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)).toBe(10)
+	})
+
+	test("a user with characters but no persona of their own can still be selected as the due group", () => {
+		const characters = [
+			{ id: 10, position: 0, userId: 1 }, // user 1: no personas at all
+			{ id: 20, position: 1, userId: 2 }
+		]
+		const personas = [{ id: 2, userId: 2 }]
+		const chat = buildUserSplitChat({ messages: [], characters, personas })
+		// Both groups tie at "never active" -> ascending userId picks user 1,
+		// whose only character (never replied) is immediately due.
+		expect(getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)).toBe(10)
+	})
+
+	test("due-group tie-break sorts by ascending userId, independent of position/insertion order", () => {
+		const characters = [
+			{ id: 99, position: 0, userId: 5 },
+			{ id: 11, position: 1, userId: 2 }
+		]
+		const personas = [
+			{ id: 1, userId: 5 },
+			{ id: 2, userId: 2 }
+		]
+		const chat = buildUserSplitChat({ messages: [], characters, personas })
+		expect(getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)).toBe(11)
 	})
 })

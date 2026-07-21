@@ -59,30 +59,38 @@
 		<Tabs value={activeTab} onValueChange={handleTabChange}>
 			<Tabs.List class="flex flex-wrap gap-1">
 				<Tabs.Trigger value="user">
-					<Icons.UserCog size={20} class="inline" />
-					{#if activeTab === "user"}
-						User
-					{/if}
+					<span title="User" aria-label="User tab" class="flex items-center gap-1">
+						<Icons.UserCog size={20} class="inline" />
+						{#if activeTab === "user"}
+							User
+						{/if}
+					</span>
 				</Tabs.Trigger>
 				{#if userCtx.user?.isAdmin}
 					<Tabs.Trigger value="system">
-						<Icons.Server size={20} class="inline" />
-						{#if activeTab === "system"}
-							System
-						{/if}
+						<span title="System" aria-label="System tab" class="flex items-center gap-1">
+							<Icons.Server size={20} class="inline" />
+							{#if activeTab === "system"}
+								System
+							{/if}
+						</span>
 					</Tabs.Trigger>
 				{/if}
 				<Tabs.Trigger value="themes">
-					<Icons.Palette size={20} class="inline" />
-					{#if activeTab === "themes"}
-						Themes
-					{/if}
+					<span title="Themes" aria-label="Themes tab" class="flex items-center gap-1">
+						<Icons.Palette size={20} class="inline" />
+						{#if activeTab === "themes"}
+							Themes
+						{/if}
+					</span>
 				</Tabs.Trigger>
 				<Tabs.Trigger value="about">
-					<Icons.Info size={20} class="inline" />
-					{#if activeTab === "about"}
-						About
-					{/if}
+					<span title="About" aria-label="About tab" class="flex items-center gap-1">
+						<Icons.Info size={20} class="inline" />
+						{#if activeTab === "about"}
+							About
+						{/if}
+					</span>
 				</Tabs.Trigger>
 			</Tabs.List>
 			<Tabs.Content value="user">

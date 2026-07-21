@@ -1,18 +1,28 @@
 import { db } from "$lib/server/db"
 import { and, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import * as fsPromises from "fs/promises"
+import * as path from "path"
 import {
 	handlePersonaAvatarUpload,
 	uploadPersonaGalleryImage,
 	listPersonaGallery,
-	deletePersonaGalleryImage
+	deletePersonaGalleryImage,
+	reorderPersonaGalleryImages,
+	getPersonaDataDir
 } from "../utils"
 import type { Handler } from "$lib/shared/events"
-import { parseCharacterCardFromBase64 } from "../utils/characterCardParser"
+import {
+	parseCharacterCardFromBase64,
+	embedCharacterCardInPng,
+	getRobustSpecV3Data
+} from "../utils/characterCardParser"
 import { autoEnqueuePersona } from "$lib/server/embedding/vectorizationQueue"
 import { canViewPersona } from "$lib/server/utils/chatAccess"
 import { resolveCardSource, cachedSearch, resolveNsfwParam } from "$lib/server/cardSources"
 import { CardSourceUnavailableError, CardSourceRateLimitedError } from "$lib/server/cardSources/types"
+import { hashCanonicalJson } from "$lib/server/utils/contentHash"
+import { isValidUuid } from "$lib/server/utils/uuid"
 
 // Helper function to process tags for persona creation/update
 async function processPersonaTags(
@@ -375,6 +385,116 @@ export const personasSearchLibrary: Handler<Sockets.Personas.SearchLibrary.Param
 	}
 }
 
+/**
+ * Extracts a stable per-row uuid from a parsed persona card's V3 spec data,
+ * if present. A malformed value (wrong shape/type — untrusted import data)
+ * is treated as absent rather than passed through to a `uuid`-typed DB
+ * column, where it would otherwise surface as a raw driver error.
+ */
+export function extractPersonaUuid(data: any): string | undefined {
+	const uuid = data?.extensions?.serenepub?.uuid
+	return isValidUuid(uuid) ? uuid : undefined
+}
+
+/**
+ * Personas have no spec-format export/card-builder (no persona export
+ * feature exists yet) — this is a small flat comparison shape used purely
+ * for import-dedup hashing, not a portable file format.
+ */
+export function canonicalPersonaContent(persona: {
+	name: string
+	description: string
+	creator: string | null
+	category: string | null
+}) {
+	return {
+		name: persona.name,
+		description: persona.description,
+		creator: persona.creator,
+		category: persona.category
+	}
+}
+
+/**
+ * Flat, Serene-Pub-specific persona card shape used when a persona is
+ * embedded into a lorebook export (extensions.serenepub.personas) — not a
+ * spec format (personas have no standalone export/card-builder otherwise).
+ */
+export function buildPersonaExportCard(persona: {
+	name: string
+	description: string
+	creator: string | null
+	category: string | null
+	aliases: string[] | null
+	summary: string | null
+	uuid: string
+}) {
+	return {
+		name: persona.name,
+		description: persona.description,
+		creator: persona.creator || "",
+		extensions: {
+			serenepub: {
+				uuid: persona.uuid,
+				...(persona.category ? { category: persona.category } : {}),
+				...(persona.aliases && persona.aliases.length > 0
+					? { aliases: persona.aliases }
+					: {}),
+				...(persona.summary ? { summary: persona.summary } : {})
+			}
+		}
+	}
+}
+
+export function personaFieldsFromParsedData(
+	data: any
+): Omit<InsertPersona, "userId" | "isDefault"> {
+	return {
+		name: data.name || "Unnamed Persona",
+		description: data.description || "",
+		creator: data.creator || null,
+		category: data.extensions?.serenepub?.category ?? null
+	}
+}
+
+async function applyPersonaAvatar(
+	persona: typeof schema.personas.$inferSelect,
+	avatarBuffer: Buffer | undefined
+) {
+	if (avatarBuffer) {
+		await handlePersonaAvatarUpload({ persona, avatarFile: avatarBuffer })
+		const updatedPersona = await db.query.personas.findFirst({
+			where: eq(schema.personas.id, persona.id)
+		})
+		if (updatedPersona) Object.assign(persona, updatedPersona)
+	}
+	return persona
+}
+
+export async function createPersonaFromParsedData(data: any, avatarBuffer: Buffer | undefined, userId: number) {
+	const [persona] = await db
+		.insert(schema.personas)
+		.values({ ...personaFieldsFromParsedData(data), userId, isDefault: false })
+		.returning()
+	return applyPersonaAvatar(persona, avatarBuffer)
+}
+
+export async function overwritePersonaFromParsedData(
+	existingId: number,
+	data: any,
+	avatarBuffer: Buffer | undefined
+) {
+	await db
+		.update(schema.personas)
+		.set(personaFieldsFromParsedData(data))
+		.where(eq(schema.personas.id, existingId))
+	const persona = await db.query.personas.findFirst({
+		where: eq(schema.personas.id, existingId)
+	})
+	if (!persona) throw new Error("Persona not found.")
+	return applyPersonaAvatar(persona, avatarBuffer)
+}
+
 export const personasImportCard: Handler<Sockets.Personas.ImportCard.Params, Sockets.Personas.ImportCard.Response> = {
 	event: "personas:importCard",
 	handler: async (socket, params, emitToUser) => {
@@ -384,50 +504,166 @@ export const personasImportCard: Handler<Sockets.Personas.ImportCard.Params, Soc
 			// Parse persona card using shared utility
 			const { card, avatarBuffer } = await parseCharacterCardFromBase64(params.file)
 
-			// Convert card to V3 spec to access data
-			const specData = card.toSpecV3()
-			const data = specData.data
+			// getRobustSpecV3Data (not a bare card.toSpecV3()) so older/V1
+			// cards import with full fidelity — see its own doc comment.
+			const data = getRobustSpecV3Data(card)
 
-			// Create persona from spec data
-			const personaData: InsertPersona = {
-				userId,
-				name: data.name || "Unnamed Persona",
-				description: data.description || "",
-				creator: data.creator || null,
-				category: data.extensions?.serenepub?.category ?? null,
-				isDefault: false
+			const incomingUuid = extractPersonaUuid(data)
+
+			if (incomingUuid) {
+				const existing = await db.query.personas.findFirst({
+					where: and(
+						eq(schema.personas.uuid, incomingUuid),
+						eq(schema.personas.userId, userId)
+					)
+				})
+
+				if (existing) {
+					const existingHash = hashCanonicalJson(
+						canonicalPersonaContent(existing)
+					)
+					const incomingHash = hashCanonicalJson(
+						canonicalPersonaContent(personaFieldsFromParsedData(data) as any)
+					)
+
+					if (existingHash === incomingHash) {
+						const res: Sockets.Personas.ImportCard.Response = {
+							status: "unchanged",
+							persona: existing
+						}
+						emitToUser("personas:importCard", res)
+						return res
+					}
+
+					const res: Sockets.Personas.ImportCard.Response = {
+						status: "conflict",
+						persona: null,
+						conflict: { existingPersona: existing, file: params.file }
+					}
+					emitToUser("personas:importCard", res)
+					return res
+				}
 			}
 
-			// Create the persona
-			const [persona] = await db
-				.insert(schema.personas)
-				.values(personaData)
-				.returning()
+			const persona = await createPersonaFromParsedData(data, avatarBuffer, userId)
 
-			// Handle avatar upload if present
-			if (avatarBuffer) {
-			await handlePersonaAvatarUpload({
-				persona,
-				avatarFile: avatarBuffer
-			})
-			
-			// Refetch persona to get updated avatar path
-			const updatedPersona = await db.query.personas.findFirst({
-				where: eq(schema.personas.id, persona.id)
-			})
-			if (updatedPersona) {
-				Object.assign(persona, updatedPersona)
+			await personasList.handler(socket, {}, emitToUser)
+			const res: Sockets.Personas.ImportCard.Response = {
+				status: "created",
+				persona
 			}
-		}
-
-		await personasList.handler(socket, {}, emitToUser)
-		const res: Sockets.Personas.ImportCard.Response = { persona }
-		emitToUser("personas:importCard", res)
-		return res
+			emitToUser("personas:importCard", res)
+			return res
 		} catch (error: any) {
 			console.error("Error importing persona card:", error)
 			emitToUser("personas:importCard:error", {
 				error: error.message || "Failed to import persona card."
+			})
+			throw error
+		}
+	}
+}
+
+/**
+ * Carries out the user's choice after personas:importCard returned a
+ * "conflict" status — either overwrite the existing (uuid-matched) persona
+ * in place, or import the file as a brand-new persona with a fresh uuid.
+ */
+export const personasImportResolve: Handler<
+	Sockets.Personas.ImportResolve.Params,
+	Sockets.Personas.ImportResolve.Response
+> = {
+	event: "personas:importResolve",
+	handler: async (socket, params, emitToUser) => {
+		try {
+			const userId = socket.user!.id
+			const { card, avatarBuffer } = await parseCharacterCardFromBase64(params.file)
+			const data = getRobustSpecV3Data(card)
+
+			let persona
+			if (params.action === "overwrite") {
+				const existing = await db.query.personas.findFirst({
+					where: and(
+						eq(schema.personas.id, params.existingId),
+						eq(schema.personas.userId, userId)
+					),
+					columns: { id: true }
+				})
+				if (!existing) throw new Error("Persona not found.")
+				persona = await overwritePersonaFromParsedData(existing.id, data, avatarBuffer)
+			} else {
+				persona = await createPersonaFromParsedData(data, avatarBuffer, userId)
+			}
+
+			await personasList.handler(socket, {}, emitToUser)
+
+			const res: Sockets.Personas.ImportResolve.Response = { persona }
+			emitToUser("personas:importResolve", res)
+			return res
+		} catch (error: any) {
+			console.error("Error resolving persona import conflict:", error)
+			emitToUser("personas:importResolve:error", {
+				error: error.message || "Failed to resolve persona import."
+			})
+			throw error
+		}
+	}
+}
+
+export const personasExportCard: Handler<
+	Sockets.Personas.ExportCard.Params,
+	Sockets.Personas.ExportCard.Response
+> = {
+	event: "personas:exportCard",
+	handler: async (socket, params, emitToUser) => {
+		try {
+			const userId = socket.user!.id
+			const format = params.format || "json"
+
+			// Owner-only (export is a data-extraction action) — mirrors
+			// charactersExportCard's precedent exactly.
+			const persona = await db.query.personas.findFirst({
+				where: and(
+					eq(schema.personas.id, params.id),
+					eq(schema.personas.userId, userId)
+				)
+			})
+
+			if (!persona) {
+				throw new Error("Persona not found")
+			}
+
+			const cardData = buildPersonaExportCard(persona)
+
+			if (format === "json") {
+				const jsonString = JSON.stringify(cardData, null, 2)
+				const blob = Buffer.from(jsonString, "utf-8")
+				const filename = `${persona.name.replace(/[^a-z0-9]/gi, "_").toLowerCase()}.v3.json`
+
+				const res: Sockets.Personas.ExportCard.Response = { blob, filename }
+				emitToUser("personas:exportCard", res)
+				return res
+			} else {
+				if (!persona.avatar) {
+					throw new Error("Persona has no avatar to embed data into")
+				}
+
+				const avatarDir = getPersonaDataDir({ personaId: params.id, userId })
+				const avatarFilename = path.basename(persona.avatar)
+				const avatarPath = path.join(avatarDir, avatarFilename)
+				const avatarBuffer = await fsPromises.readFile(avatarPath)
+
+				const blob = embedCharacterCardInPng(avatarBuffer, cardData)
+				const filename = `${persona.name.replace(/[^a-z0-9]/gi, "_").toLowerCase()}.v3.png`
+
+				const res: Sockets.Personas.ExportCard.Response = { blob, filename }
+				emitToUser("personas:exportCard", res)
+				return res
+			}
+		} catch (error: any) {
+			console.error("Error exporting persona card:", error)
+			emitToUser("personas:exportCard:error", {
+				error: error.message || "Failed to export persona card."
 			})
 			throw error
 		}
@@ -439,6 +675,11 @@ export const personasImportFromLibrary: Handler<Sockets.Personas.ImportFromLibra
 	handler: async (socket, params, emitToUser) => {
 		try {
 			const source = resolveCardSource(params.source)
+			if (!source.supports("persona")) {
+				throw new CardSourceUnavailableError(
+					`${source.label} does not support browsing personas`
+				)
+			}
 			const buffer = await source.getCardBytes(params.ref, {
 				userId: socket.user!.id
 			})
@@ -450,6 +691,16 @@ export const personasImportFromLibrary: Handler<Sockets.Personas.ImportFromLibra
 				{ file: base64 },
 				emitToUser
 			)
+
+			// Only reachable if this exact card (by its embedded uuid) somehow
+			// already conflicts with one this user has — there's no
+			// conflict-resolution UI wired up for the library-import path, so
+			// surface it as a plain error rather than return a null persona.
+			if (!importResult.persona) {
+				throw new Error(
+					"This card conflicts with one you already have — resolve it from the Personas panel instead."
+				)
+			}
 
 			const res: Sockets.Personas.ImportFromLibrary.Response = {
 				persona: importResult.persona
@@ -523,6 +774,24 @@ export const personasDeleteGalleryImage: Handler<Sockets.Personas.DeleteGalleryI
 	}
 }
 
+export const personasReorderGallery: Handler<Sockets.Personas.ReorderGallery.Params, Sockets.Personas.ReorderGallery.Response> = {
+	event: "personas:reorderGallery",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const persona = await db.query.personas.findFirst({
+			where: (p, { and, eq }) => and(eq(p.id, params.personaId), eq(p.userId, userId))
+		})
+		if (!persona) throw new Error("Persona not found or access denied")
+
+		await reorderPersonaGalleryImages({ personaId: params.personaId, paths: params.paths })
+
+		const listRes = await personasListGallery.handler(socket, { personaId: params.personaId }, emitToUser)
+		const res: Sockets.Personas.ReorderGallery.Response = listRes
+		emitToUser("personas:reorderGallery", res)
+		return res
+	}
+}
+
 export const personasSetAvatar: Handler<Sockets.Personas.SetAvatar.Params, Sockets.Personas.SetAvatar.Response> = {
 	event: "personas:setAvatar",
 	handler: async (socket, params, emitToUser) => {
@@ -561,10 +830,13 @@ export function registerPersonaHandlers(
 	register(socket, personasUpdate, emitToUser)
 	register(socket, personasDelete, emitToUser)
 	register(socket, personasImportCard, emitToUser)
+	register(socket, personasImportResolve, emitToUser)
+	register(socket, personasExportCard, emitToUser)
 	register(socket, personasSearchLibrary, emitToUser)
 	register(socket, personasImportFromLibrary, emitToUser)
 	register(socket, personasListGallery, emitToUser)
 	register(socket, personasUploadGalleryImage, emitToUser)
 	register(socket, personasDeleteGalleryImage, emitToUser)
+	register(socket, personasReorderGallery, emitToUser)
 	register(socket, personasSetAvatar, emitToUser)
 }

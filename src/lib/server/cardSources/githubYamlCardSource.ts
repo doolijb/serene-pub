@@ -139,7 +139,20 @@ async function fetchYamlEntries(kind: CardKind): Promise<GithubYamlEntry[]> {
 		if (!response.ok) {
 			throw new CardSourceUnavailableError(`GitHub API error: ${response.status}`)
 		}
-		return parseGithubYaml(await response.text())
+		const yamlText = await response.text()
+		const entries = parseGithubYaml(yamlText)
+		// The parser above is a narrow, hand-rolled match on this repo's
+		// current YAML layout — if upstream formatting ever drifts, it fails
+		// silently (zero entries, no error) rather than throwing. A non-empty
+		// response that yields zero entries is a strong signal of exactly
+		// that drift, so warn loudly instead of quietly serving an empty
+		// catalog.
+		if (entries.length === 0 && yamlText.trim().length > 0) {
+			console.warn(
+				`[cardSources] Parsed 0 entries from ${filename} despite a non-empty response — the upstream YAML format may have changed.`
+			)
+		}
+		return entries
 	})
 }
 

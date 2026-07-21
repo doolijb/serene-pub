@@ -1,13 +1,11 @@
 <script lang="ts">
     import * as Icons from "@lucide/svelte"
     import { getContext, onMount } from "svelte"
-    import * as skio from "sveltekit-io"
     import { Dialog, Portal, Tabs } from "@skeletonlabs/skeleton-svelte"
     import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
     import type { ValueChangeDetails } from "@zag-js/tabs"
     import VectorizationSetupScreen from "$lib/client/components/vectorization/VectorizationSetupScreen.svelte"
 
-    const rawSocket = skio.get()!
     const socket = useTypedSocket()
     let vectorizationCtx: VectorizationCtx = $state(getContext("vectorizationCtx"))
     let systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
@@ -71,10 +69,7 @@
     let disabling = $state(false)
 
     onMount(() => {
-        rawSocket.emit("vectorization:getQueue", {}, (res: Sockets.Vectorization.GetQueue.Response) => {
-            vectorizationCtx.priorityQueue = res.queue
-            vectorizationCtx.history = res.history ?? []
-        })
+        socket?.emit("vectorization:getQueue", {})
         socket?.emit("vectorization:listModels", {})
     })
 
@@ -138,50 +133,93 @@
             isChangingModel = false
             downloadProgress = null
         }
+        const handleEnableError = (_message: any) => {
+            isChangingModel = false
+            downloadProgress = null
+        }
+        const handleDisable = (message: any) => {
+            disabling = false
+            if (message?.success) {
+                vectorizationEnabled = false
+                settingsView = "chooser"
+            }
+        }
+        const handleSetApiConfig = (message: Sockets.Vectorization.SetApiConfig.Response) => {
+            testingApi = false
+            if (message.success) {
+                mode = "api"
+                vectorizationEnabled = true
+                activeModelName = message.modelName ?? null
+                apiDimensions = message.dimensions ?? null
+                settingsView = "configured"
+                socket?.emit("vectorization:listModels", {})
+            } else {
+                apiTestError = message.error ?? "Failed to validate the embeddings API"
+            }
+        }
+        const handleStartQueue = () => { startingQueue = false }
+        const handleStopQueue = () => { stoppingQueue = false }
+        const handleGetQueue = (message: Sockets.Vectorization.GetQueue.Response) => {
+            vectorizationCtx.priorityQueue = message.queue
+            vectorizationCtx.history = message.history ?? []
+        }
+        const handleRemoveFromQueue = (message: Sockets.Vectorization.RemoveFromQueue.Response) => {
+            vectorizationCtx.priorityQueue = message.queue
+            removingGroup = null
+        }
+        const handleMoveQueueGroup = (message: Sockets.Vectorization.MoveQueueGroup.Response) => {
+            vectorizationCtx.priorityQueue = message.queue
+        }
+        const handleVectorizationConfigUpdate = () => { savingTtl = false }
 
         socket.on("vectorization:listModels", handleListModels)
         socket.on("vectorization:setModel", handleSetModel)
         socket.on("vectorization:modelDownloadProgress", handleModelDownloadProgress)
         socket.on("vectorization:setModel:error", handleSetModelError)
+        socket.on("vectorization:enable:error", handleEnableError)
+        socket.on("vectorization:disable", handleDisable)
+        socket.on("vectorization:setApiConfig", handleSetApiConfig)
+        socket.on("vectorization:startQueue", handleStartQueue)
+        socket.on("vectorization:stopQueue", handleStopQueue)
+        socket.on("vectorization:getQueue", handleGetQueue)
+        socket.on("vectorization:removeFromQueue", handleRemoveFromQueue)
+        socket.on("vectorization:moveQueueGroup", handleMoveQueueGroup)
+        socket.on("vectorizationConfig:update", handleVectorizationConfigUpdate)
 
         return () => {
             socket.off("vectorization:listModels", handleListModels)
             socket.off("vectorization:setModel", handleSetModel)
             socket.off("vectorization:modelDownloadProgress", handleModelDownloadProgress)
             socket.off("vectorization:setModel:error", handleSetModelError)
+            socket.off("vectorization:enable:error", handleEnableError)
+            socket.off("vectorization:disable", handleDisable)
+            socket.off("vectorization:setApiConfig", handleSetApiConfig)
+            socket.off("vectorization:startQueue", handleStartQueue)
+            socket.off("vectorization:stopQueue", handleStopQueue)
+            socket.off("vectorization:getQueue", handleGetQueue)
+            socket.off("vectorization:removeFromQueue", handleRemoveFromQueue)
+            socket.off("vectorization:moveQueueGroup", handleMoveQueueGroup)
+            socket.off("vectorizationConfig:update", handleVectorizationConfigUpdate)
         }
     })
 
     function startQueue() {
         startingQueue = true
-        rawSocket.emit("vectorization:startQueue", {}, () => { startingQueue = false })
+        socket?.emit("vectorization:startQueue", {})
     }
 
     function stopQueue() {
         stoppingQueue = true
-        rawSocket.emit("vectorization:stopQueue", {}, () => { stoppingQueue = false })
+        socket?.emit("vectorization:stopQueue", {})
     }
 
     function removeGroup(groupId: string) {
         removingGroup = groupId
-        rawSocket.emit(
-            "vectorization:removeFromQueue",
-            { groupId },
-            (res: Sockets.Vectorization.RemoveFromQueue.Response) => {
-                vectorizationCtx.priorityQueue = res.queue
-                removingGroup = null
-            }
-        )
+        socket?.emit("vectorization:removeFromQueue", { groupId })
     }
 
     function moveGroup(groupId: string, direction: "up" | "down") {
-        rawSocket.emit(
-            "vectorization:moveQueueGroup",
-            { groupId, direction },
-            (res: Sockets.Vectorization.MoveQueueGroup.Response) => {
-                vectorizationCtx.priorityQueue = res.queue
-            }
-        )
+        socket?.emit("vectorization:moveQueueGroup", { groupId, direction })
     }
 
     function openChangeModelModal() {
@@ -217,56 +255,27 @@
         if (!selectedModelForChange) return
         isChangingModel = true
         downloadProgress = null
-        rawSocket.emit(
-            "vectorization:enable",
-            { modelName: selectedModelForChange, startNow: true },
-            (res: Sockets.Vectorization.EnableVectorization.Response) => {
-                // On success, the model-download-progress "ready" event (already
-                // streaming throughout the load) is what flips settingsView to
-                // "configured" and clears isChangingModel — this ack only needs
-                // to handle the failure path.
-                if (!res.success) {
-                    isChangingModel = false
-                    downloadProgress = null
-                }
-            }
-        )
+        // On success, the model-download-progress "ready" event (already
+        // streaming throughout the load) is what flips settingsView to
+        // "configured" and clears isChangingModel. On failure, the
+        // vectorization:enable:error listener above handles it.
+        socket?.emit("vectorization:enable", { modelName: selectedModelForChange, startNow: true })
     }
 
     function saveApiConfig() {
         apiTestError = null
         testingApi = true
-        rawSocket.emit(
-            "vectorization:setApiConfig",
-            {
-                baseUrl: apiBaseUrl.trim(),
-                apiKey: apiKey.trim() || null,
-                model: apiModelInput.trim(),
-                startNow: true
-            },
-            (res: Sockets.Vectorization.SetApiConfig.Response) => {
-                testingApi = false
-                if (res.success) {
-                    mode = "api"
-                    vectorizationEnabled = true
-                    activeModelName = res.modelName ?? null
-                    apiDimensions = res.dimensions ?? null
-                    settingsView = "configured"
-                    socket?.emit("vectorization:listModels", {})
-                } else {
-                    apiTestError = res.error ?? "Failed to validate the embeddings API"
-                }
-            }
-        )
+        socket?.emit("vectorization:setApiConfig", {
+            baseUrl: apiBaseUrl.trim(),
+            apiKey: apiKey.trim() || null,
+            model: apiModelInput.trim(),
+            startNow: true
+        })
     }
 
     function disableVectorization() {
         disabling = true
-        rawSocket.emit("vectorization:disable", {}, () => {
-            disabling = false
-            vectorizationEnabled = false
-            settingsView = "chooser"
-        })
+        socket?.emit("vectorization:disable", {})
     }
 
     function reloadModel() {
@@ -309,9 +318,7 @@
         const val = parseInt(ttlInput, 10)
         if (isNaN(val) || val < 0) return
         savingTtl = true
-        rawSocket.emit("vectorizationConfig:update", { embeddingModelTtlMinutes: val }, () => {
-            savingTtl = false
-        })
+        socket?.emit("vectorizationConfig:update", { embeddingModelTtlMinutes: val })
     }
 
     function timeAgo(iso: string): string {
@@ -509,12 +516,16 @@
     <Tabs value={activeTab} onValueChange={handleTabChange}>
         <Tabs.List class="flex flex-wrap gap-1">
             <Tabs.Trigger value="queue">
-                <Icons.List size={20} class="inline" />
-                {#if activeTab === "queue"}Queue{/if}
+                <span title="Queue" aria-label="Queue tab" class="flex items-center gap-1">
+                    <Icons.List size={20} class="inline" />
+                    {#if activeTab === "queue"}Queue{/if}
+                </span>
             </Tabs.Trigger>
             <Tabs.Trigger value="settings">
-                <Icons.Settings size={20} class="inline" />
-                {#if activeTab === "settings"}Settings{/if}
+                <span title="Settings" aria-label="Settings tab" class="flex items-center gap-1">
+                    <Icons.Settings size={20} class="inline" />
+                    {#if activeTab === "settings"}Settings{/if}
+                </span>
             </Tabs.Trigger>
         </Tabs.List>
 
@@ -840,6 +851,14 @@
                             Switch to {mode === "local" ? "External API" : "Local Model"}
                         </button>
                     {/if}
+
+                    <button
+                        class="btn btn-sm preset-tonal-error w-full text-xs"
+                        onclick={() => (showDisableConfirmModal = true)}
+                    >
+                        <Icons.PowerOff size={12} aria-hidden="true" />
+                        Disable Embeddings
+                    </button>
 
             </div>
             </Tabs.Content>

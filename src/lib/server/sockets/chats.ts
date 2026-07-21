@@ -2276,17 +2276,20 @@ export const chatsGetResponseOrderHandler: Handler<
 			}
 
 			// Get next character turn using existing logic
-			const nextCharacterId = getNextCharacterTurn({
-				chatMessages: chat.chatMessages,
-				chatCharacters: chat.chatCharacters
-					.filter((cc) => cc.character !== null && cc.isActive)
-					.sort(
-						(a, b) => (a.position ?? 0) - (b.position ?? 0)
-					) as any,
-				chatPersonas: chat.chatPersonas.filter(
-					(cp) => cp.persona !== null
-				) as any
-			})
+			const nextCharacterId = getNextCharacterTurn(
+				{
+					chatMessages: chat.chatMessages,
+					chatCharacters: chat.chatCharacters
+						.filter((cc) => cc.character !== null && cc.isActive)
+						.sort(
+							(a, b) => (a.position ?? 0) - (b.position ?? 0)
+						) as any,
+					chatPersonas: chat.chatPersonas.filter(
+						(cp) => cp.persona !== null
+					) as any
+				},
+				chat.groupReplyStrategy
+			)
 
 			const res: Sockets.Chats.GetResponseOrder.Response = {
 				chatId: params.chatId,
@@ -2586,16 +2589,20 @@ export const promptTokenCountHandler: Handler<
 			// Check if user has access to this chat
 			const chatAccess = await checkChatAccess(params.chatId, userId)
 			if (!chatAccess.hasAccess) {
-				return {
+				const res: Sockets.Chats.PromptTokenCount.Response = {
 					error: "Access denied. Chat not found or no permission to access."
 				}
+				emitToUser("chats:promptTokenCount", res)
+				return res
 			}
 
 			const chat = await getPromptChatFromDb(params.chatId, userId)
 			if (!chat) {
-				return {
+				const res: Sockets.Chats.PromptTokenCount.Response = {
 					error: "Error Generating Prompt Token Count: Chat not found."
 				}
+				emitToUser("chats:promptTokenCount", res)
+				return res
 			}
 
 			const user = await db.query.users.findFirst({
@@ -2612,20 +2619,26 @@ export const promptTokenCountHandler: Handler<
 			})
 
 			if (!connection) {
-				return {
+				const res: Sockets.Chats.PromptTokenCount.Response = {
 					error: "No AI connection configured. Please set up a connection first."
 				}
+				emitToUser("chats:promptTokenCount", res)
+				return res
 			}
 			if (!sampling) {
-				return {
+				const res: Sockets.Chats.PromptTokenCount.Response = {
 					error: "No sampling config configured. Please set up a sampling config first."
 				}
+				emitToUser("chats:promptTokenCount", res)
+				return res
 			}
 
 			if (!chat || !user) {
-				return {
+				const res: Sockets.Chats.PromptTokenCount.Response = {
 					error: "Incomplete configuration, failed to calculate token count."
 				}
+				emitToUser("chats:promptTokenCount", res)
+				return res
 			}
 
 			// chatCharacters/chatPersonas rows can have a null character/persona
@@ -2652,16 +2665,23 @@ export const promptTokenCountHandler: Handler<
 				chatPersonas: chatPersonasWithPersona
 			}
 
-			const currentCharacterId = getNextCharacterTurn({
-				chatMessages: chat.chatMessages,
-				chatCharacters: activeChatCharacters.sort(
-					(a, b) => (a.position ?? 0) - (b.position ?? 0)
-				),
-				chatPersonas: chatPersonasWithPersona
-			})
+			const currentCharacterId = getNextCharacterTurn(
+				{
+					chatMessages: chat.chatMessages,
+					chatCharacters: activeChatCharacters.sort(
+						(a, b) => (a.position ?? 0) - (b.position ?? 0)
+					),
+					chatPersonas: chatPersonasWithPersona
+				},
+				chat.groupReplyStrategy
+			)
 
 			if (!currentCharacterId) {
-				return { error: "No character available for prompt." }
+				const res: Sockets.Chats.PromptTokenCount.Response = {
+					error: "No character available for prompt."
+				}
+				emitToUser("chats:promptTokenCount", res)
+				return res
 			}
 
 			const { Adapter } = await getConnectionAdapter(connection.type)
@@ -2688,9 +2708,11 @@ export const promptTokenCountHandler: Handler<
 			return promptResult
 		} catch (error) {
 			console.error("Error in promptTokenCountHandler:", error)
-			return {
+			const res: Sockets.Chats.PromptTokenCount.Response = {
 				error: "Failed to calculate prompt token count."
 			}
+			emitToUser("chats:promptTokenCount", res)
+			return res
 		}
 	}
 }
@@ -2743,21 +2765,24 @@ export const triggerGenerateMessageHandler: Handler<
 				// characterId always wins (manual out-of-turn trigger, and the
 				// only way a "Manual" chat ever advances at all). Otherwise ask
 				// getNextCharacterTurn who's actually due right now, but only for
-				// "Ordered" chats — a "Manual" chat's whole point is that nobody
+				// non-"Manual" chats — a "Manual" chat's whole point is that nobody
 				// auto-advances, so calls with no explicit characterId (e.g. the
 				// automatic re-check after every persona message) are a no-op.
 				const nextCharacterId =
 					params.characterId ||
 					(chat.groupReplyStrategy !== GroupReplyStrategies.MANUAL
-						? getNextCharacterTurn({
-								chatMessages: chat.chatMessages,
-								chatCharacters: activeCharacters.sort(
-									(a, b) => (a.position ?? 0) - (b.position ?? 0)
-								) as any,
-								chatPersonas: chat.chatPersonas.filter(
-									(cp) => cp.persona !== null
-								) as any
-							})
+						? getNextCharacterTurn(
+								{
+									chatMessages: chat.chatMessages,
+									chatCharacters: activeCharacters.sort(
+										(a, b) => (a.position ?? 0) - (b.position ?? 0)
+									) as any,
+									chatPersonas: chat.chatPersonas.filter(
+										(cp) => cp.persona !== null
+									) as any
+								},
+								chat.groupReplyStrategy
+							)
 						: null)
 
 				if (!nextCharacterId) {

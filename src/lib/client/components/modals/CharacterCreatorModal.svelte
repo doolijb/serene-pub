@@ -360,7 +360,7 @@
 							<div class="space-y-2">
 								<label
 									class="flex gap-1 font-semibold"
-									for="stepName"
+									for="characterCreatorStepName"
 								>
 									Name*
 									<span
@@ -376,7 +376,7 @@
 									</span>
 								</label>
 								<input
-									id="stepName"
+									id="characterCreatorStepName"
 									type="text"
 									bind:value={characterData.name}
 									class="input {validationErrors.name
@@ -556,7 +556,7 @@
 						<div class="space-y-2">
 							<label
 								class="flex gap-1 font-semibold"
-								for="stepDescription"
+								for="characterCreatorStepDescription"
 							>
 								Description*
 								<span
@@ -572,7 +572,7 @@
 								</span>
 							</label>
 							<textarea
-								id="stepDescription"
+								id="characterCreatorStepDescription"
 								rows="8"
 								bind:value={characterData.description}
 								class="input {validationErrors.description

@@ -1097,10 +1097,22 @@ export const koboldCppStopSubprocess: Handler<
 	event: "koboldcpp:stopSubprocess",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		await subprocessManager.stop()
-		const res: Sockets.KoboldCpp.StopSubprocess.Response = { success: true }
-		emitToUser("koboldcpp:stopSubprocess", res)
-		return res
+		subprocessManager.setEmitter((s) => emitToUser("koboldcpp:subprocessStatus", s))
+		try {
+			await subprocessManager.stop()
+			const res: Sockets.KoboldCpp.StopSubprocess.Response = { success: true }
+			emitToUser("koboldcpp:stopSubprocess", res)
+			return res
+		} catch (err: any) {
+			// e.g. an adopted process we can't verify we own — surface the
+			// reason instead of a bare "failed" with no explanation.
+			const res: Sockets.KoboldCpp.StopSubprocess.Response = {
+				success: false,
+				error: err.message
+			}
+			emitToUser("koboldcpp:stopSubprocess", res)
+			return res
+		}
 	}
 }
 

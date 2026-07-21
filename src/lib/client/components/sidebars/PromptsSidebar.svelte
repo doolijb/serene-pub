@@ -647,8 +647,8 @@
 						</button>
 					</div>
 					<div class="flex flex-col gap-1">
-						<label class="text-sm font-semibold" for="chatName">Name *</label>
-						<input id="chatName" type="text" bind:value={chatConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={chatConfig.isImmutable}
+						<label class="text-sm font-semibold" for="promptConfigChatName">Name *</label>
+						<input id="promptConfigChatName" type="text" bind:value={chatConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={chatConfig.isImmutable}
 							oninput={() => { if (validationErrors.name) { const { name, ...rest } = validationErrors; validationErrors = rest } }} />
 						{#if validationErrors.name}<p class="text-error-500 text-sm" role="alert">{validationErrors.name}</p>{/if}
 					</div>
@@ -718,15 +718,15 @@
 						</button>
 					</div>
 					<div class="flex flex-col gap-1">
-						<label class="text-sm font-semibold" for="narratorConfigName">Name *</label>
-						<input id="narratorConfigName" type="text" bind:value={narratorConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={narratorConfig.isImmutable}
+						<label class="text-sm font-semibold" for="promptConfigNarratorName">Name *</label>
+						<input id="promptConfigNarratorName" type="text" bind:value={narratorConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={narratorConfig.isImmutable}
 							oninput={() => { if (validationErrors.name) { const { name, ...rest } = validationErrors; validationErrors = rest } }} />
 						{#if validationErrors.name}<p class="text-error-500 text-sm" role="alert">{validationErrors.name}</p>{/if}
 					</div>
 					<div class="flex flex-col gap-1">
-						<label class="text-sm font-semibold" for="narratorDisplayName">Display Name</label>
+						<label class="text-sm font-semibold" for="promptConfigNarratorDisplayName">Display Name</label>
 						<p class="text-muted-foreground text-xs">Shown in the chat instead of "Narrator" (e.g. "The World", "Fate") when a message is generated with this config.</p>
-						<input id="narratorDisplayName" type="text" bind:value={narratorConfig.narratorName} class="input w-full" disabled={narratorConfig.isImmutable} placeholder="Narrator" />
+						<input id="promptConfigNarratorDisplayName" type="text" bind:value={narratorConfig.narratorName} class="input w-full" disabled={narratorConfig.isImmutable} placeholder="Narrator" />
 					</div>
 					<div class="flex flex-col gap-1">
 						<label class="text-sm font-semibold" for="narratorSystemPrompt">System Instructions</label>
@@ -795,8 +795,8 @@
 						</button>
 					</div>
 					<div class="flex flex-col gap-1">
-						<label class="text-sm font-semibold" for="worldName">Name *</label>
-						<input id="worldName" type="text" bind:value={worldConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={worldConfig.isImmutable}
+						<label class="text-sm font-semibold" for="promptConfigWorldName">Name *</label>
+						<input id="promptConfigWorldName" type="text" bind:value={worldConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={worldConfig.isImmutable}
 							oninput={() => { if (validationErrors.name) { const { name, ...rest } = validationErrors; validationErrors = rest } }} />
 						{#if validationErrors.name}<p class="text-error-500 text-sm" role="alert">{validationErrors.name}</p>{/if}
 					</div>
@@ -888,8 +888,8 @@
 						</button>
 					</div>
 					<div class="flex flex-col gap-1">
-						<label class="text-sm font-semibold" for="charName">Name *</label>
-						<input id="charName" type="text" bind:value={characterConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={characterConfig.isImmutable}
+						<label class="text-sm font-semibold" for="promptConfigCharName">Name *</label>
+						<input id="promptConfigCharName" type="text" bind:value={characterConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={characterConfig.isImmutable}
 							oninput={() => { if (validationErrors.name) { const { name, ...rest } = validationErrors; validationErrors = rest } }} />
 						{#if validationErrors.name}<p class="text-error-500 text-sm" role="alert">{validationErrors.name}</p>{/if}
 					</div>
@@ -981,8 +981,8 @@
 						</button>
 					</div>
 					<div class="flex flex-col gap-1">
-						<label class="text-sm font-semibold" for="sceneName">Name *</label>
-						<input id="sceneName" type="text" bind:value={sceneConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={sceneConfig.isImmutable}
+						<label class="text-sm font-semibold" for="promptConfigSceneName">Name *</label>
+						<input id="promptConfigSceneName" type="text" bind:value={sceneConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={sceneConfig.isImmutable}
 							oninput={() => { if (validationErrors.name) { const { name, ...rest } = validationErrors; validationErrors = rest } }} />
 						{#if validationErrors.name}<p class="text-error-500 text-sm" role="alert">{validationErrors.name}</p>{/if}
 					</div>

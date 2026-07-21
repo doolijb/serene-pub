@@ -11,8 +11,11 @@
 	let { item, imageUrl, onclick }: Props = $props()
 
 	function getExcerpt(text: string, maxLength: number = 90): string {
-		if (text.length <= maxLength) return text
-		return text.substring(0, maxLength).trim() + "…"
+		// Iterate by code point (not UTF-16 code unit) so truncation can't
+		// split a surrogate pair (eg. an emoji) in half.
+		const chars = Array.from(text)
+		if (chars.length <= maxLength) return text
+		return chars.slice(0, maxLength).join("").trim() + "…"
 	}
 </script>
 
@@ -55,7 +58,7 @@
 				<Icons.BookOpen size={12} aria-hidden="true" />
 			</span>
 		{/if}
-		{#if item.category}
+		{#if item.category && item.source !== "charavault"}
 			<span
 				class="bg-surface-950/70 rounded-full px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm"
 			>

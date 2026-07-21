@@ -1,6 +1,8 @@
 import * as path from "path"
 import * as fsPromises from "fs/promises"
 import { fetchCurrentModelName } from "./kcppHttp"
+import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 export interface ManagedConfig {
 	modelFile: string
@@ -9,11 +11,17 @@ export interface ManagedConfig {
 	batchSize: number
 }
 
+// Sourced from the shared connection defaults (the same object the edit
+// form and connections:create/get backfilling use) rather than a separate
+// local copy, so a launch config and the form displaying it can never drift.
+const SHARED_MANAGED_DEFAULTS =
+	CONNECTION_DEFAULTS[CONNECTION_TYPE.KOBOLDCPP_MANAGED].extraJson.managedConfig!
+
 export const DEFAULT_MANAGED_CONFIG: ManagedConfig = {
 	modelFile: "",
-	gpuLayers: -1, // -1 = koboldcpp autofit (offload as many layers as fit on GPU)
-	flashAttention: false,
-	batchSize: 512
+	gpuLayers: SHARED_MANAGED_DEFAULTS.gpuLayers, // -1 = koboldcpp autofit (offload as many layers as fit on GPU)
+	flashAttention: SHARED_MANAGED_DEFAULTS.flashAttention,
+	batchSize: SHARED_MANAGED_DEFAULTS.batchSize
 }
 
 // TTL timers, keyed by baseUrl (the koboldcpp instance), not connectionId.

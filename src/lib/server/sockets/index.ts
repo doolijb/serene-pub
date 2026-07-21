@@ -147,10 +147,23 @@ function register(
 	emitToUser: (event: string, data: any) => void
 ) {
 	socket.on(handler.event, async (message: any) => {
+		// Many handlers catch their own errors, emit a specific
+		// `{event}:error` with a useful message via emitToUser, then
+		// re-throw so this wrapper's catch below also runs (eg. for
+		// logging). Wrapping emitToUser here to notice that emit means the
+		// generic fallback below can skip re-emitting the same event with a
+		// generic, less useful message — without needing every handler to
+		// coordinate this explicitly.
+		let specificErrorEmitted = false
+		const trackedEmitToUser = (event: string, data: any) => {
+			if (event === `${handler.event}:error`) specificErrorEmitted = true
+			emitToUser(event, data)
+		}
 		try {
-			await handler.handler(socket, message, emitToUser)
+			await handler.handler(socket, message, trackedEmitToUser)
 		} catch (error) {
 			console.error(`Error handling event ${handler.event}:`, error)
+			if (specificErrorEmitted) return
 			const userId = socket.user?.id
 			if (userId) {
 				socket.io.to("user_" + userId).emit(`${handler.event}:error`, {

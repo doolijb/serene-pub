@@ -12,6 +12,9 @@
 		) => void
 		onEdit?: (id: number) => void
 		onDelete?: (id: number) => void
+		onExport?: (
+			character: Sockets.Characters.List.Response["characterList"][0]
+		) => void
 		showControls?: boolean
 		contentTitle?: string
 		classes?: string
@@ -22,6 +25,7 @@
 		onclick,
 		onEdit,
 		onDelete,
+		onExport,
 		showControls = true,
 		contentTitle = "Go to character",
 		classes = ""
@@ -71,7 +75,7 @@
 		</div>
 	{/snippet}
 	{#snippet controls()}
-		{#if showControls && (onclick || onEdit || onDelete)}
+		{#if showControls && (onclick || onEdit || onExport || onDelete)}
 			<div role="none" onclick={(e) => e.stopPropagation()}>
 				<Popover
 					open={menuOpen}
@@ -110,6 +114,16 @@
 										>
 											<Icons.Pencil size={16} aria-hidden="true" />
 											<span>Edit</span>
+										</button>
+									{/if}
+									{#if onExport}
+										<button
+											class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
+											onclick={() => { menuOpen = false; onExport?.(character) }}
+											type="button"
+										>
+											<Icons.Download size={16} aria-hidden="true" />
+											<span>Export</span>
 										</button>
 									{/if}
 									{#if onDelete}

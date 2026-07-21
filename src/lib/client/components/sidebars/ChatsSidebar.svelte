@@ -393,7 +393,7 @@
 				<div class="p-6">
 					<h2 class="mb-2 text-lg font-bold">Delete Chat?</h2>
 					<p class="mb-4">
-						Are you sure you want to delete this chat and all of it's
+						Are you sure you want to delete this chat and all of its
 						messages? This action cannot be undone.
 					</p>
 					<div class="flex justify-end gap-2">

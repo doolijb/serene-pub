@@ -5,6 +5,7 @@ import { user as loadUser, user, usersCurrent } from "./users"
 import { userSettingsGet } from "./userSettings"
 import { systemSettingsGet } from "./systemSettings"
 import { getConnectionAdapter } from "../utils/getConnectionAdapter"
+import { withConnectionDefaults, stableStringify } from "$lib/shared/utils/connectionDefaults"
 import type { Handler } from "$lib/shared/events"
 
 // --- CONNECTIONS SOCKET HANDLERS ---
@@ -57,14 +58,39 @@ export const connectionsGet: Handler<
 			)
 		}
 
-		const connection = await db.query.connections.findFirst({
+		const raw = await db.query.connections.findFirst({
 			where: (c, { eq }) => eq(c.id, params.id)
 		})
-		if (!connection) {
+		if (!raw) {
 			const res = { error: "Connection not found." }
 			emitToUser("error", res)
 			throw new Error("Connection not found.")
 		}
+
+		// Backfill any fields missing their type's defaults (e.g. extraJson
+		// keys added to CONNECTION_DEFAULTS after this connection was
+		// created) and persist them *before* handing the record to the edit
+		// form. Without this, the form's own defaulting logic fills the gaps
+		// only in its local copy, which immediately diverges from the raw
+		// DB record still held as the "original" — a false "unsaved changes"
+		// state the moment the connection is opened.
+		let connection = raw
+		const merged = withConnectionDefaults(raw)
+		if (stableStringify(merged) !== stableStringify(raw)) {
+			const [updated] = await db
+				.update(schema.connections)
+				.set({
+					baseUrl: merged.baseUrl,
+					model: merged.model,
+					promptFormat: merged.promptFormat,
+					tokenCounter: merged.tokenCounter,
+					extraJson: merged.extraJson
+				})
+				.where(eq(schema.connections.id, params.id))
+				.returning()
+			connection = updated
+		}
+
 		const res: Sockets.Connections.Get.Response = { connection }
 		emitToUser("connections:get", res)
 		return res
@@ -88,8 +114,7 @@ export const connectionsCreate: Handler<
 		}
 
 		let data = { ...params.connection }
-		const Adapter = await getConnectionAdapter(data.type)
-		data = { ...Adapter.connectionDefaults, ...data }
+		data = withConnectionDefaults(data as any)
 		if ("id" in data) delete data.id
 		// Always remove id before insert to let DB auto-increment
 		if ("id" in data) delete data.id

@@ -554,12 +554,13 @@
 		e.stopPropagation()
 		handleEditMessageClick(msg)
 	}
-	function handleCancelEditMessage(e: Event) {
-		e.stopPropagation()
+	function handleCancelEditMessage(e?: Event) {
+		e?.stopPropagation()
 		editChatMessage = undefined
 	}
-	function handleSaveEditMessage(e: Event) {
-		e.stopPropagation()
+	function handleSaveEditMessage(content: string, e?: Event) {
+		e?.stopPropagation()
+		if (editChatMessage) editChatMessage.content = content
 		handleMessageUpdate(e)
 	}
 	function handleAbortMessage(e: Event, msg: SelectChatMessage) {
@@ -2141,7 +2142,7 @@
 			class="btn btn-sm preset-tonal-primary"
 			title="View full prompt details"
 			onclick={() => (showDraftCompiledPromptModal = true)}
-			disabled={!draftCompiledPrompt}
+			disabled={!draftCompiledPrompt?.meta}
 		>
 			<Icons.Info size={14} />
 			Details
@@ -2161,6 +2162,8 @@
 					</span>
 				</div>
 			</div>
+		{:else if draftCompiledPrompt?.error}
+			<span class="text-error-500 text-xs">{draftCompiledPrompt.error}</span>
 		{:else}
 			<span class="text-surface-700-300 text-xs">No statistics yet — send a message first.</span>
 		{/if}

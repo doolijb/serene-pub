@@ -364,14 +364,14 @@
 					title: "Connection Created",
 					description: `Connected to ${res.connection.name}`
 				})
-				nextWizardStep()
+				if (!allStepsComplete && currentWizardStep?.id === "connection-setup") nextWizardStep()
 			}
 		})
 		socket.on("characters:create", (res) => {
-			if (res.character && !allStepsComplete) nextWizardStep()
+			if (res.character && !allStepsComplete && currentWizardStep?.id === "character") nextWizardStep()
 		})
 		socket.on("personas:create", (res) => {
-			if (res.persona && !allStepsComplete) nextWizardStep()
+			if (res.persona && !allStepsComplete && currentWizardStep?.id === "persona") nextWizardStep()
 		})
 		socket.on("chats:create", (res) => {
 			if (res.chat) {
@@ -941,7 +941,7 @@
 								<Icons.Database size={60} class="text-primary-500 mx-auto mb-4" />
 								<h2 class="mb-3 text-3xl font-bold">Supercharge Context with RAG</h2>
 								<p class="text-muted-foreground mx-auto max-w-sm">
-									Serene can search your character lore, world-building notes, and story history to automatically include the most relevant details in every message.
+									Serene Pub can search your character lore, world-building notes, and story history to automatically include the most relevant details in every message.
 								</p>
 							</div>
 							<div class="grid gap-3 sm:grid-cols-2">

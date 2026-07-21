@@ -464,6 +464,14 @@
 			}
 		}
 
+		const handleCharaVaultDisconnectError = (message: { error?: string }) => {
+			isDisconnectingCharaVault = false
+			toaster.error({
+				title: "Failed to disconnect CharaVault account",
+				description: message.error
+			})
+		}
+
 		const handleHasPassphrase = (message: any) => {
 			hasPassphrase = message.hasPassphrase
 			if (hasPassphrase) {
@@ -529,6 +537,10 @@
 			"cardSources:charaVault:disconnect",
 			handleCharaVaultDisconnect
 		)
+		socket.on(
+			"cardSources:charaVault:disconnect:error",
+			handleCharaVaultDisconnectError
+		)
 
 		if (userCtx.user?.isAdmin) {
 			socket.emit("cardSources:charaVault:status", {})
@@ -569,6 +581,10 @@
 			socket.off(
 				"cardSources:charaVault:disconnect",
 				handleCharaVaultDisconnect
+			)
+			socket.off(
+				"cardSources:charaVault:disconnect:error",
+				handleCharaVaultDisconnectError
 			)
 		}
 	})

@@ -248,3 +248,50 @@ export const OPENAI_CHAT_PRESETS = [
 export function getConnectionDefaults(type: string): Record<string, any> {
 	return CONNECTION_DEFAULTS[type] || {}
 }
+
+function isPlainObject(value: unknown): value is Record<string, any> {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function deepMerge<T>(base: T, override: Partial<T> | undefined | null): T {
+	if (!isPlainObject(base) || !isPlainObject(override)) {
+		return override === undefined ? base : (override as T)
+	}
+	const result: any = { ...base }
+	for (const key of Object.keys(override)) {
+		const overrideVal = (override as any)[key]
+		if (overrideVal === undefined) continue
+		result[key] = isPlainObject(overrideVal) && isPlainObject(result[key])
+			? deepMerge(result[key], overrideVal)
+			: overrideVal
+	}
+	return result
+}
+
+/**
+ * Single source of truth for filling in a connection's missing fields with
+ * its type's defaults (including nested extraJson/managedConfig fields).
+ * Used both server-side, to persist backfilled defaults before a connection
+ * is handed to the edit form, and by generation-time adapter code — so the
+ * value a form displays always matches what generation actually falls back
+ * to, instead of each side keeping its own separate copy of "the defaults."
+ */
+export function withConnectionDefaults<T extends { type: string }>(connection: T): T {
+	const defaults = CONNECTION_DEFAULTS[connection.type as keyof typeof CONNECTION_DEFAULTS]
+	if (!defaults) return connection
+	return deepMerge(defaults as any, connection as any)
+}
+
+/**
+ * A JSON.stringify whose output doesn't depend on object key insertion
+ * order — used to compare connection records for "did backfilling actually
+ * change anything" (server) and "are there real unsaved changes" (client),
+ * since plain JSON.stringify treats two logically-identical objects with
+ * differently-ordered keys as different strings.
+ */
+export function stableStringify(value: any): string {
+	if (value === null || typeof value !== "object") return JSON.stringify(value)
+	if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`
+	const keys = Object.keys(value).sort()
+	return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`
+}

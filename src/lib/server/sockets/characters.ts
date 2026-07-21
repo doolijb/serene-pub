@@ -8,20 +8,25 @@ import {
 	handleCharacterAvatarUpload,
 	uploadCharacterGalleryImage,
 	listCharacterGallery,
-	deleteCharacterGalleryImage
+	deleteCharacterGalleryImage,
+	reorderCharacterGalleryImages
 } from "../utils"
 import { CharacterCard, type SpecV3 } from "@lenml/char-card-reader"
 import { fileTypeFromBuffer } from "file-type"
 import type { Handler } from "$lib/shared/events"
 import {
 	parseCharacterCardFromBase64,
-	buildCharacterCardV2,
-	embedCharacterCardInPng
+	buildCharacterCardV3,
+	embedCharacterCardInPng,
+	getRobustSpecV3Data
 } from "../utils/characterCardParser"
 import { autoEnqueueCharacter } from "$lib/server/embedding/vectorizationQueue"
 import { canViewCharacter } from "$lib/server/utils/chatAccess"
 import { resolveCardSource, cachedSearch, resolveNsfwParam } from "$lib/server/cardSources"
 import { CardSourceUnavailableError, CardSourceRateLimitedError } from "$lib/server/cardSources/types"
+import { buildSpecV3Lorebook } from "$lib/server/utils/lorebookExportMapper"
+import { hashCanonicalJson } from "$lib/server/utils/contentHash"
+import { isValidUuid } from "$lib/server/utils/uuid"
 
 // Helper function to process tags for character creation/update. Tags are
 // per-user (schema.tags.userId): lookups/creates must stay scoped to the
@@ -332,6 +337,120 @@ export const charactersDelete: Handler<Sockets.Characters.Delete.Params, Sockets
 	}
 }
 
+/**
+ * Extracts a stable per-row uuid from a parsed character card's V3 spec
+ * data, if present. A malformed value (wrong shape/type — untrusted import
+ * data) is treated as absent rather than passed through to a `uuid`-typed
+ * DB column, where it would otherwise surface as a raw driver error.
+ */
+export function extractCharacterUuid(data: any): string | undefined {
+	const uuid = data?.extensions?.serenepub?.uuid
+	return isValidUuid(uuid) ? uuid : undefined
+}
+
+export function characterFieldsFromParsedData(
+	data: any
+): Omit<typeof schema.characters.$inferInsert, "userId" | "isFavorite"> {
+	return {
+		name: data.name || "Unnamed Character",
+		nickname: data.nickname || null,
+		description: data.description || "",
+		personality: data.personality || null,
+		scenario: data.scenario || null,
+		firstMessage: data.first_mes || null,
+		exampleDialogues: data.mes_example
+			? Array.isArray(data.mes_example)
+				? data.mes_example
+				: [data.mes_example]
+			: undefined,
+		alternateGreetings: data.alternate_greetings || null,
+		creatorNotes: data.creator_notes || null,
+		postHistoryInstructions: data.post_history_instructions || null,
+		characterVersion: data.character_version || null,
+		creator: data.creator || null,
+		source: data.extensions?.source || [],
+		groupOnlyGreetings: data.extensions?.group_only_greetings || null,
+		aliases: data.extensions?.serenepub?.aliases ?? data.extensions?.aliases ?? [],
+		summary: data.extensions?.serenepub?.summary ?? null,
+		category: data.extensions?.serenepub?.category ?? null
+	}
+}
+
+async function applyAvatarAndTags(
+	character: typeof schema.characters.$inferSelect,
+	avatarBuffer: Buffer | undefined,
+	tags: string[] | undefined,
+	userId: number
+) {
+	if (avatarBuffer) {
+		await handleCharacterAvatarUpload({ character, avatarFile: avatarBuffer })
+		const updatedCharacter = await db.query.characters.findFirst({
+			where: eq(schema.characters.id, character.id)
+		})
+		if (updatedCharacter) Object.assign(character, updatedCharacter)
+	}
+	if (tags && tags.length > 0) {
+		await processCharacterTags(character.id, tags, userId)
+	}
+	return character
+}
+
+/** Creates a brand-new character (+ avatar/tags) from parsed V3 spec data. */
+export async function createCharacterFromParsedData(
+	data: any,
+	avatarBuffer: Buffer | undefined,
+	userId: number
+) {
+	const [character] = await db
+		.insert(schema.characters)
+		.values({ ...characterFieldsFromParsedData(data), userId, isFavorite: false })
+		.returning()
+	return applyAvatarAndTags(character, avatarBuffer, data.tags, userId)
+}
+
+/**
+ * Overwrites an existing character's fields (+ avatar/tags) wholesale from
+ * parsed V3 spec data — the "Overwrite" choice after an import conflict.
+ */
+export async function overwriteCharacterFromParsedData(
+	existingId: number,
+	data: any,
+	avatarBuffer: Buffer | undefined,
+	userId: number
+) {
+	await db
+		.update(schema.characters)
+		.set(characterFieldsFromParsedData(data))
+		.where(eq(schema.characters.id, existingId))
+	const character = await db.query.characters.findFirst({
+		where: eq(schema.characters.id, existingId)
+	})
+	if (!character) throw new Error("Character not found.")
+	return applyAvatarAndTags(character, avatarBuffer, data.tags, userId)
+}
+
+/**
+ * Spec-shaped `data` for an existing character (+ its tags), built the same
+ * way charactersExportCard would — used to hash-compare against an
+ * incoming import's own spec data. `character_book` is deliberately never
+ * set here (a character's lorebook has its own independent uuid/hash
+ * tracked separately), so it must also be stripped from the incoming side
+ * before comparing, or an exported-with-lorebook character would always
+ * look "changed".
+ */
+export async function buildExistingCharacterComparisonData(characterId: number) {
+	const character = await db.query.characters.findFirst({
+		where: eq(schema.characters.id, characterId),
+		with: { characterTags: { with: { tag: true } } }
+	})
+	if (!character) return null
+	const built = buildCharacterCardV3({
+		...character,
+		tags: character.characterTags?.map((ct) => ct.tag.name) || []
+	})
+	return { character, comparisonData: built.data }
+}
+
 export const charactersImportCard: Handler<Sockets.Characters.ImportCard.Params, Sockets.Characters.ImportCard.Response> = {
 	event: "characters:importCard",
 	handler: async (socket, params, emitToUser) => {
@@ -342,68 +461,67 @@ export const charactersImportCard: Handler<Sockets.Characters.ImportCard.Params,
 			const { card, avatarBuffer, lorebook } =
 				await parseCharacterCardFromBase64(params.file)
 
-			// Convert card to V3 spec to access data
-			const specData = card.toSpecV3()
-			const data = specData.data
+			// getRobustSpecV3Data (not a bare card.toSpecV3()) so older/V1
+			// cards import with full fidelity — see its own doc comment.
+			const data = getRobustSpecV3Data(card)
 
-			// Prepare character data for insertion
-			const characterData: typeof schema.characters.$inferInsert = {
-				userId,
-				name: data.name || "Unnamed Character",
-				nickname: data.nickname || null,
-				description: data.description || "",
-				personality: data.personality || null,
-				scenario: data.scenario || null,
-				firstMessage: data.first_mes || null,
-				exampleDialogues: data.mes_example 
-					? (Array.isArray(data.mes_example) 
-						? data.mes_example 
-						: [data.mes_example])
-					: undefined,
-				alternateGreetings: data.alternate_greetings || null,
-				creatorNotes: data.creator_notes || null,
-				postHistoryInstructions: data.post_history_instructions || null,
-				characterVersion: data.character_version || null,
-				creator: data.creator || null,
-				// Extract extensions
-				source: data.extensions?.source || [],
-				groupOnlyGreetings: data.extensions?.group_only_greetings || null,
-				aliases: data.extensions?.serenepub?.aliases ?? data.extensions?.aliases ?? [],
-				summary: data.extensions?.serenepub?.summary ?? null,
-				category: data.extensions?.serenepub?.category ?? null,
-				isFavorite: false
-			}
+			const incomingUuid = extractCharacterUuid(data)
 
-			// Create the character
-			const [character] = await db
-				.insert(schema.characters)
-				.values(characterData)
-				.returning()
-
-			// Handle avatar upload if present
-			if (avatarBuffer) {
-				await handleCharacterAvatarUpload({
-					character,
-					avatarFile: avatarBuffer
+			if (incomingUuid) {
+				const existing = await db.query.characters.findFirst({
+					where: and(
+						eq(schema.characters.uuid, incomingUuid),
+						eq(schema.characters.userId, userId)
+					),
+					columns: { id: true }
 				})
-				
-				// Refetch character to get updated avatar path
-				const updatedCharacter = await db.query.characters.findFirst({
-					where: eq(schema.characters.id, character.id)
-				})
-				if (updatedCharacter) {
-					Object.assign(character, updatedCharacter)
+
+				if (existing) {
+					const existingComparison = await buildExistingCharacterComparisonData(
+						existing.id
+					)
+					if (existingComparison) {
+						const { character_book, ...incomingForHash } = data as any
+						const existingHash = hashCanonicalJson(
+							existingComparison.comparisonData
+						)
+						const incomingHash = hashCanonicalJson(incomingForHash)
+
+						if (existingHash === incomingHash) {
+							const res: Sockets.Characters.ImportCard.Response = {
+								status: "unchanged",
+								character: existingComparison.character,
+								book: lorebook ?? null
+							}
+							emitToUser("characters:importCard", res)
+							return res
+						}
+
+						const res: Sockets.Characters.ImportCard.Response = {
+							status: "conflict",
+							character: null,
+							book: null,
+							conflict: {
+								existingCharacter: existingComparison.character,
+								file: params.file
+							}
+						}
+						emitToUser("characters:importCard", res)
+						return res
+					}
 				}
 			}
 
-			// Process tags if present
-			if (data.tags && data.tags.length > 0) {
-				await processCharacterTags(character.id, data.tags, userId)
-			}
+			const character = await createCharacterFromParsedData(
+				data,
+				avatarBuffer,
+				userId
+			)
 
 			await charactersList.handler(socket, {}, emitToUser)
-			
+
 			const res: Sockets.Characters.ImportCard.Response = {
+				status: "created",
 				character,
 				book: lorebook ?? null
 			}
@@ -415,6 +533,63 @@ export const charactersImportCard: Handler<Sockets.Characters.ImportCard.Params,
 				error: e.message || "Failed to import character card."
 			})
 			throw e
+		}
+	}
+}
+
+/**
+ * Carries out the user's choice after characters:importCard returned a
+ * "conflict" status — either overwrite the existing (uuid-matched)
+ * character in place, or import the file as a brand-new character with a
+ * fresh uuid.
+ */
+export const charactersImportResolve: Handler<
+	Sockets.Characters.ImportResolve.Params,
+	Sockets.Characters.ImportResolve.Response
+> = {
+	event: "characters:importResolve",
+	handler: async (socket, params, emitToUser) => {
+		try {
+			const userId = socket.user!.id
+			const { card, avatarBuffer, lorebook } = await parseCharacterCardFromBase64(
+				params.file
+			)
+			const data = getRobustSpecV3Data(card)
+
+			let character
+			if (params.action === "overwrite") {
+				const existing = await db.query.characters.findFirst({
+					where: and(
+						eq(schema.characters.id, params.existingId),
+						eq(schema.characters.userId, userId)
+					),
+					columns: { id: true }
+				})
+				if (!existing) throw new Error("Character not found.")
+				character = await overwriteCharacterFromParsedData(
+					existing.id,
+					data,
+					avatarBuffer,
+					userId
+				)
+			} else {
+				character = await createCharacterFromParsedData(data, avatarBuffer, userId)
+			}
+
+			await charactersList.handler(socket, {}, emitToUser)
+
+			const res: Sockets.Characters.ImportResolve.Response = {
+				character,
+				book: lorebook ?? null
+			}
+			emitToUser("characters:importResolve", res)
+			return res
+		} catch (error: any) {
+			console.error("Error resolving character import conflict:", error)
+			emitToUser("characters:importResolve:error", {
+				error: error.message || "Failed to resolve character import."
+			})
+			throw error
 		}
 	}
 }
@@ -481,6 +656,11 @@ export const charactersImportFromLibrary: Handler<Sockets.Characters.ImportFromL
 	handler: async (socket, params, emitToUser) => {
 		try {
 			const source = resolveCardSource(params.source)
+			if (!source.supports("character")) {
+				throw new CardSourceUnavailableError(
+					`${source.label} does not support browsing characters`
+				)
+			}
 			const buffer = await source.getCardBytes(params.ref, {
 				userId: socket.user!.id
 			})
@@ -492,6 +672,16 @@ export const charactersImportFromLibrary: Handler<Sockets.Characters.ImportFromL
 				{ file: base64 },
 				emitToUser
 			)
+
+			// Only reachable if this exact card (by its embedded uuid) somehow
+			// already conflicts with one this user has — there's no
+			// conflict-resolution UI wired up for the library-import path, so
+			// surface it as a plain error rather than return a null character.
+			if (!importResult.character) {
+				throw new Error(
+					"This card conflicts with one you already have — resolve it from the Characters panel instead."
+				)
+			}
 
 			const res: Sockets.Characters.ImportFromLibrary.Response = {
 				character: importResult.character,
@@ -541,17 +731,57 @@ export const charactersExportCard: Handler<Sockets.Characters.ExportCard.Params,
 				throw new Error("Character not found")
 			}
 
-			// Convert to CharacterCard V2 format
-			const charCardData = buildCharacterCardV2({
+			// Embedding a lorebook is optional — only when the caller picked
+			// one from this character's own binding list (verified below, not
+			// just trusted from the client), matching the "whole shared book"
+			// scope decision: every world/character/history entry in the book
+			// is included, not just entries scoped to this one character.
+			let lorebook: SpecV3.Lorebook | undefined
+			if (params.lorebookId) {
+				const binding = await db.query.lorebookBindings.findFirst({
+					where: and(
+						eq(schema.lorebookBindings.lorebookId, params.lorebookId),
+						eq(schema.lorebookBindings.characterId, params.id)
+					)
+				})
+				if (!binding) {
+					throw new Error(
+						"That lorebook isn't bound to this character."
+					)
+				}
+				const boundLorebook = await db.query.lorebooks.findFirst({
+					where: and(
+						eq(schema.lorebooks.id, params.lorebookId),
+						eq(schema.lorebooks.userId, userId)
+					),
+					with: {
+						worldLoreEntries: true,
+						characterLoreEntries: true,
+						historyEntries: true
+					}
+				})
+				if (!boundLorebook) {
+					throw new Error("Lorebook not found.")
+				}
+				lorebook = buildSpecV3Lorebook(
+					boundLorebook,
+					boundLorebook.worldLoreEntries,
+					boundLorebook.characterLoreEntries,
+					boundLorebook.historyEntries
+				) as unknown as SpecV3.Lorebook
+			}
+
+			const charCardData = buildCharacterCardV3({
 				...character,
-				tags: character.characterTags?.map((ct) => ct.tag.name) || []
+				tags: character.characterTags?.map((ct) => ct.tag.name) || [],
+				lorebook
 			})
 
 			if (format === "json") {
 				// Export as JSON
 				const jsonString = JSON.stringify(charCardData, null, 2)
 				const blob = Buffer.from(jsonString, "utf-8")
-				const filename = `${character.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.json`
+				const filename = `${character.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.v3.json`
 
 				const res: Sockets.Characters.ExportCard.Response = {
 					blob,
@@ -573,7 +803,7 @@ export const charactersExportCard: Handler<Sockets.Characters.ExportCard.Params,
 				const avatarBuffer = await fsPromises.readFile(avatarPath)
 
 				const blob = embedCharacterCardInPng(avatarBuffer, charCardData)
-				const filename = `${character.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.png`
+				const filename = `${character.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.v3.png`
 
 				const res: Sockets.Characters.ExportCard.Response = {
 					blob,
@@ -645,6 +875,24 @@ export const charactersDeleteGalleryImage: Handler<Sockets.Characters.DeleteGall
 	}
 }
 
+export const charactersReorderGallery: Handler<Sockets.Characters.ReorderGallery.Params, Sockets.Characters.ReorderGallery.Response> = {
+	event: "characters:reorderGallery",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const character = await db.query.characters.findFirst({
+			where: (c, { and, eq }) => and(eq(c.id, params.characterId), eq(c.userId, userId))
+		})
+		if (!character) throw new Error("Character not found or access denied")
+
+		await reorderCharacterGalleryImages({ characterId: params.characterId, paths: params.paths })
+
+		const listRes = await charactersListGallery.handler(socket, { characterId: params.characterId }, emitToUser)
+		const res: Sockets.Characters.ReorderGallery.Response = listRes
+		emitToUser("characters:reorderGallery", res)
+		return res
+	}
+}
+
 export const charactersSetAvatar: Handler<Sockets.Characters.SetAvatar.Params, Sockets.Characters.SetAvatar.Response> = {
 	event: "characters:setAvatar",
 	handler: async (socket, params, emitToUser) => {
@@ -679,11 +927,13 @@ export function registerCharacterHandlers(
 	register(socket, charactersUpdate, emitToUser)
 	register(socket, charactersDelete, emitToUser)
 	register(socket, charactersImportCard, emitToUser)
+	register(socket, charactersImportResolve, emitToUser)
 	register(socket, charactersExportCard, emitToUser)
 	register(socket, charactersSearchLibrary, emitToUser)
 	register(socket, charactersImportFromLibrary, emitToUser)
 	register(socket, charactersListGallery, emitToUser)
 	register(socket, charactersUploadGalleryImage, emitToUser)
 	register(socket, charactersDeleteGalleryImage, emitToUser)
+	register(socket, charactersReorderGallery, emitToUser)
 	register(socket, charactersSetAvatar, emitToUser)
 }

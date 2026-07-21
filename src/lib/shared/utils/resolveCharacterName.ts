@@ -34,3 +34,24 @@ export function resolvePersonaName(
 ): string {
 	return persona?.name?.trim() || fallback
 }
+
+/**
+ * Formats a user (eg. a chat guest) for display as "Display Name (@username)"
+ * — display name primary, username always shown as an @-handle annotation
+ * alongside it. Falls back to just "@username" when no display name is set
+ * (or it's identical to the username, which would otherwise render as a
+ * pointless "name (@name)"). `username` is required app-wide (`users.username`
+ * is `NOT NULL`), so only `fallback` is used for a genuinely missing user.
+ */
+export function resolveUserHandle(
+	user: { username?: string | null; displayName?: string | null } | null | undefined,
+	fallback = "Unknown User"
+): string {
+	const username = user?.username?.trim()
+	if (!username) return fallback
+	const displayName = user?.displayName?.trim()
+	if (displayName && displayName !== username) {
+		return `${displayName} (@${username})`
+	}
+	return `@${username}`
+}

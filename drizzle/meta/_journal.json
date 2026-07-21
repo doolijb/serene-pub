@@ -498,6 +498,20 @@
       "when": 1784446369658,
       "tag": "0070_handy_spitfire",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1784557070319,
+      "tag": "0071_melodic_mantis",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1784568537383,
+      "tag": "0072_supreme_cerebro",
+      "breakpoints": true
     }
   ]
 }

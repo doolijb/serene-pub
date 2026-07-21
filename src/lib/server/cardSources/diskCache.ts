@@ -65,10 +65,22 @@ export async function setCachedCardBytes(
 	}
 }
 
+// In-flight de-dup: concurrent getOrFetchCardBytes() calls for the same
+// not-yet-cached key share one fetcher() call instead of each
+// independently hitting CharaVault (or GitHub) — the same "cache
+// stampede" this session's cache.ts TtlCache already solves for search
+// results. Two browser tabs (or a page rendering the same card's avatar
+// twice before the disk cache warms) previously burned two rate-limit
+// slots for one logical fetch.
+const pendingFetches = new Map<string, Promise<Buffer>>()
+
 /**
  * Wraps a fetcher that produces card bytes with the disk cache — the
- * common shape every CardSource's getCardBytes() and the CharaVault image
- * proxy route all want.
+ * common shape every CardSource's getCardBytes() wants. (The CharaVault
+ * image-proxy route deliberately does NOT use this — it streams the
+ * response through rather than buffering, so it can't share this same
+ * in-flight-promise de-dup; a concurrent-request stampede there is a
+ * known, accepted gap, not covered by this fix.)
  */
 export async function getOrFetchCardBytes(
 	key: string,
@@ -78,9 +90,20 @@ export async function getOrFetchCardBytes(
 	const cached = await getCachedCardBytes(key, ttlMs)
 	if (cached) return cached
 
-	const bytes = await fetcher()
-	await setCachedCardBytes(key, bytes)
-	return bytes
+	const inFlight = pendingFetches.get(key)
+	if (inFlight) return inFlight
+
+	const promise = (async () => {
+		try {
+			const bytes = await fetcher()
+			await setCachedCardBytes(key, bytes)
+			return bytes
+		} finally {
+			pendingFetches.delete(key)
+		}
+	})()
+	pendingFetches.set(key, promise)
+	return promise
 }
 
 async function sweepStaleCacheFiles() {

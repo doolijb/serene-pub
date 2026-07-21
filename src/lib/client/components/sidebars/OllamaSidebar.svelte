@@ -224,28 +224,36 @@
 			<Tabs value={activeTab} onValueChange={handleTabChange}>
 				<Tabs.List class="flex flex-wrap gap-1">
 					<Tabs.Trigger value="installed">
-						<Icons.Package size={20} class="inline" />
-						{#if activeTab === "installed"}
-							Installed
-						{/if}
+						<span title="Installed" aria-label="Installed tab" class="flex items-center gap-1">
+							<Icons.Package size={20} class="inline" />
+							{#if activeTab === "installed"}
+								Installed
+							{/if}
+						</span>
 					</Tabs.Trigger>
 					<Tabs.Trigger value="available">
-						<Icons.Search size={20} class="inline" />
-						{#if activeTab === "available"}
-							Available
-						{/if}
+						<span title="Available" aria-label="Available tab" class="flex items-center gap-1">
+							<Icons.Search size={20} class="inline" />
+							{#if activeTab === "available"}
+								Available
+							{/if}
+						</span>
 					</Tabs.Trigger>
 					<Tabs.Trigger value="downloads">
-						<Icons.Download size={20} class="inline" />
-						{#if activeTab === "downloads"}
-							Downloads
-						{/if}
+						<span title="Downloads" aria-label="Downloads tab" class="flex items-center gap-1">
+							<Icons.Download size={20} class="inline" />
+							{#if activeTab === "downloads"}
+								Downloads
+							{/if}
+						</span>
 					</Tabs.Trigger>
 					<Tabs.Trigger value="settings">
-						<Icons.Settings size={20} class="inline" />
-						{#if activeTab === "settings"}
-							Settings
-						{/if}
+						<span title="Settings" aria-label="Settings tab" class="flex items-center gap-1">
+							<Icons.Settings size={20} class="inline" />
+							{#if activeTab === "settings"}
+								Settings
+							{/if}
+						</span>
 					</Tabs.Trigger>
 				</Tabs.List>
 				<Tabs.Content value="installed">

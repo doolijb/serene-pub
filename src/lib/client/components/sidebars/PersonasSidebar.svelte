@@ -15,6 +15,9 @@
 	import EmptyState from "../EmptyState.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { createViewMode } from "$lib/client/utils/viewMode.svelte"
+	import ImportConflictModal from "../modals/ImportConflictModal.svelte"
+	import PersonaExportModal from "../modals/PersonaExportModal.svelte"
+	import { downloadBlob } from "$lib/client/utils/downloadBlob"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -38,6 +41,16 @@
 	let personaId: number | undefined = $state()
 	let viewingId: number | undefined = $state()
 	let returnToViewId: number | undefined = $state()
+	// Set when personas:importCard comes back with status "conflict" — the
+	// card's uuid matched a persona this user already has, but its content
+	// differs.
+	let personaImportConflict:
+		| { existingPersona: SelectPersona; file: string }
+		| undefined = $state(undefined)
+	let showPersonaImportConflictModal = $state(false)
+	let exportingPersona: { id: number; name: string; avatar?: string | null } | null =
+		$state(null)
+	let showExportModal = $state(false)
 	let isCreating = $state(false)
 	let showPersonaCreator = $state(false)
 	let showImportModal = $state(false)
@@ -50,6 +63,58 @@
 
 	function handleImportClick() {
 		showImportModal = true
+	}
+
+	function handleOverwritePersonaImportConflict() {
+		if (!personaImportConflict) return
+		socket.emit("personas:importResolve", {
+			action: "overwrite",
+			file: personaImportConflict.file,
+			existingId: personaImportConflict.existingPersona.id
+		})
+		showPersonaImportConflictModal = false
+		personaImportConflict = undefined
+	}
+
+	function handleImportPersonaAsNewFromConflict() {
+		if (!personaImportConflict) return
+		socket.emit("personas:importResolve", {
+			action: "createNew",
+			file: personaImportConflict.file,
+			existingId: personaImportConflict.existingPersona.id
+		})
+		showPersonaImportConflictModal = false
+		personaImportConflict = undefined
+	}
+
+	function handleCancelPersonaImportConflict() {
+		showPersonaImportConflictModal = false
+		personaImportConflict = undefined
+	}
+
+	function handleExportPersona(persona: {
+		id?: number
+		name?: string
+		avatar?: string | null
+	}) {
+		if (!persona.id || !persona.name) return
+		exportingPersona = { id: persona.id, name: persona.name, avatar: persona.avatar }
+		showExportModal = true
+	}
+
+	function handleConfirmPersonaExport(options: { format: "json" | "png" }) {
+		if (!exportingPersona?.id) return
+		socket.emit("personas:exportCard", {
+			id: exportingPersona.id,
+			format: options.format
+		})
+		showExportModal = false
+		exportingPersona = null
+	}
+
+	function handleCancelPersonaExport() {
+		showExportModal = false
+		exportingPersona = null
 	}
 
 	// Must match the `lg` breakpoint the desktop/mobile sidebar split
@@ -90,11 +155,51 @@
 		socket.on("personas:list:error", () => {
 			isLoading = false
 		})
-		socket.on("personas:importCard", (msg) => {
+		socket.on(
+			"personas:importCard",
+			(msg: Sockets.Personas.ImportCard.Response) => {
+				if (msg.status === "conflict" && msg.conflict) {
+					personaImportConflict = msg.conflict
+					showPersonaImportConflictModal = true
+					return
+				}
+				if (msg.status === "unchanged") {
+					toaster.success({
+						title: "Persona Already Imported",
+						description: `"${msg.persona?.name}" is unchanged — using the existing persona.`
+					})
+					return
+				}
+				toaster.success({
+					title: `Persona Imported`,
+					description: `Persona ${msg.persona!.name} imported successfully.`
+				})
+			}
+		)
+		socket.on(
+			"personas:importResolve",
+			(msg: Sockets.Personas.ImportResolve.Response) => {
+				toaster.success({
+					title: `Persona Imported`,
+					description: `Persona ${msg.persona.name} imported successfully.`
+				})
+			}
+		)
+		socket.on(
+			"personas:importResolve:error",
+			(msg: Sockets.ErrorResponse) => {
+				toaster.error({ title: msg.error || "Failed to resolve persona import" })
+			}
+		)
+		socket.on("personas:exportCard", (msg) => {
+			downloadBlob(msg)
 			toaster.success({
-				title: `Persona Imported`,
-				description: `Persona ${msg.persona.name} imported successfully.`
+				title: "Persona Exported",
+				description: `Persona card exported as ${msg.filename}`
 			})
+		})
+		socket.on("personas:exportCard:error", (msg: Sockets.ErrorResponse) => {
+			toaster.error({ title: msg.error || "Failed to export persona" })
 		})
 		// The background vectorization queue updates a row's embeddingModel
 		// directly in the DB — without this, the list here only ever refreshes
@@ -116,6 +221,10 @@
 		socket.off("personas:list")
 		socket.off("personas:list:error")
 		socket.off("personas:importCard")
+		socket.off("personas:importResolve")
+		socket.off("personas:importResolve:error")
+		socket.off("personas:exportCard")
+		socket.off("personas:exportCard:error")
 		socket.off("vectorization:itemUpdated")
 		onclose = undefined
 	})
@@ -296,6 +405,7 @@
 				onBack={() => (viewingId = undefined)}
 				onEdit={handleEditFromView}
 				onChat={handleChatFromView}
+				onExport={handleExportPersona}
 			/>
 		{/key}
 	{:else}
@@ -320,7 +430,7 @@
 				aria-label="Import persona from file"
 				type="button"
 			>
-				<Icons.Download size={16} aria-hidden="true" />
+				<Icons.Upload size={16} aria-hidden="true" />
 				Import
 			</button>
 			<button
@@ -379,7 +489,7 @@
 				onCta={search ? undefined : () => (isCreating = true)}
 			/>
 		{:else if viewMode.value === "list"}
-			<div class="flex flex-col gap-2">
+			<div class="flex flex-col gap-2" role="list" aria-label="Personas list">
 				{#each filteredPersonas as p (p.id)}
 					<div animate:flip={{ duration: 200 }} out:fade={{ duration: 150 }}>
 						<PersonaListItem
@@ -387,6 +497,7 @@
 							onclick={handlePersonaClick}
 							onEdit={handleEditClick}
 							onDelete={handleDeleteClick}
+							onExport={handleExportPersona}
 							contentTitle="Go to persona chats"
 						/>
 					</div>
@@ -398,7 +509,11 @@
 				breakpoints — the sidebar's own pixel width doesn't track
 				viewport width proportionally. -->
 			<div class="@container">
-				<div class="grid grid-cols-1 gap-3 @md:grid-cols-2 @xl:grid-cols-3 @3xl:grid-cols-4 @5xl:grid-cols-5">
+				<div
+					class="grid grid-cols-1 gap-3 @md:grid-cols-2 @xl:grid-cols-3 @3xl:grid-cols-4 @5xl:grid-cols-5"
+					role="list"
+					aria-label="Personas list"
+				>
 					{#each filteredPersonas as p (p.id)}
 						<div animate:flip={{ duration: 200 }} out:fade={{ duration: 150 }}>
 							<PersonaCardItem
@@ -406,6 +521,7 @@
 								onclick={handlePersonaClick}
 								onEdit={handleEditClick}
 								onDelete={handleDeleteClick}
+								onExport={handleExportPersona}
 								contentTitle="Go to persona chats"
 							/>
 						</div>
@@ -424,7 +540,7 @@
 				<div class="p-6">
 					<h2 class="mb-2 text-lg font-bold">Delete Persona?</h2>
 					<p class="mb-4">
-						Are you sure you want to delete this character? This action
+						Are you sure you want to delete this persona? This action
 						cannot be undone.
 					</p>
 					<div class="flex justify-end gap-2">
@@ -454,6 +570,32 @@
 />
 
 <PersonaCreator bind:open={showPersonaCreator} />
+
+{#if personaImportConflict}
+	<ImportConflictModal
+		open={showPersonaImportConflictModal}
+		onOpenChange={(e) => {
+			showPersonaImportConflictModal = e.open
+			if (!e.open) personaImportConflict = undefined
+		}}
+		entityLabel="Persona"
+		existingName={personaImportConflict.existingPersona.name}
+		onOverwrite={handleOverwritePersonaImportConflict}
+		onImportAsNew={handleImportPersonaAsNewFromConflict}
+		onCancel={handleCancelPersonaImportConflict}
+	/>
+{/if}
+
+<PersonaExportModal
+	open={showExportModal}
+	onOpenChange={(e) => {
+		showExportModal = e.open
+		if (!e.open) exportingPersona = null
+	}}
+	persona={exportingPersona}
+	onConfirm={handleConfirmPersonaExport}
+	onCancel={handleCancelPersonaExport}
+/>
 
 {#if showImportModal}
 	<Dialog open={showImportModal} onOpenChange={(e) => (showImportModal = e.open)}>

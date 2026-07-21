@@ -436,10 +436,10 @@
 				<button
 					class="btn btn-sm preset-filled-surface-400-600"
 					onclick={handleEditClick}
-					title="Rename Tag"
+					title="Edit Tag"
 				>
 					<Icons.Pencil size={16} />
-					Rename
+					Edit
 				</button>
 				<button
 					class="btn btn-sm preset-tonal-error"

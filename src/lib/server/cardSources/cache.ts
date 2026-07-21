@@ -1,3 +1,5 @@
+import { sortKeysDeep } from "$lib/server/utils/contentHash"
+
 /**
  * Small generic TTL cache — Map + lazy expiry-on-read, no per-entry
  * timers. Used to avoid hammering upstream sources (a courtesy to
@@ -51,7 +53,7 @@ export class TtlCache<T> {
 }
 
 export function stableSearchKey(params: Record<string, unknown>): string {
-	return JSON.stringify(params, Object.keys(params).sort())
+	return JSON.stringify(sortKeysDeep(params))
 }
 
 export const searchCache = new TtlCache<unknown>(60 * 60_000)

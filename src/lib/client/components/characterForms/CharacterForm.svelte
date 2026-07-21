@@ -6,7 +6,6 @@
 	import { z } from "zod"
 	import CharacterUnsavedChangesModal from "../modals/CharacterUnsavedChangesModal.svelte"
 	import Avatar from "../Avatar.svelte"
-	import CharacterImageGallery from "./CharacterImageGallery.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	interface EditCharacterData {
@@ -181,9 +180,6 @@
 	)
 	let formContainer: HTMLDivElement
 	let validationTimeout: NodeJS.Timeout
-
-	// Export state
-	let showExportFormatModal = $state(false)
 
 	// Tags state
 	let availableTags: Array<{
@@ -444,30 +440,6 @@
 		}
 	})
 
-	// Export functions
-	function handleExportClick() {
-		showExportFormatModal = true
-	}
-
-	function handleExportAsJson() {
-		if (!characterId) return
-		socket.emit("characters:exportCard", {
-			id: characterId,
-			format: "json"
-		})
-		showExportFormatModal = false
-	}
-
-	function handleExportAsPng() {
-		if (!characterId) return
-		socket.emit("characters:exportCard", { id: characterId, format: "png" })
-		showExportFormatModal = false
-	}
-
-	function cancelExport() {
-		showExportFormatModal = false
-	}
-
 	onMount(() => {
 		onCancel = handleCancel
 
@@ -554,38 +526,6 @@
 			}
 		})
 
-		socket.on("characters:exportCard", (msg) => {
-			// Create a blob from the buffer
-			// Socket.io sends Buffer as an object with data array
-			const bufferData = Array.isArray(msg.blob)
-				? msg.blob
-				: (msg.blob as any).data || msg.blob
-			const blob = new Blob([new Uint8Array(bufferData)], {
-				type: msg.filename.endsWith(".json")
-					? "application/json"
-					: "image/png"
-			})
-
-			// Create a download link and trigger it
-			const url = URL.createObjectURL(blob)
-			const a = document.createElement("a")
-			a.href = url
-			a.download = msg.filename
-			document.body.appendChild(a)
-			a.click()
-			document.body.removeChild(a)
-			URL.revokeObjectURL(url)
-
-			toaster.success({
-				title: `Character Exported`,
-				description: `Character card exported as ${msg.filename}`
-			})
-		})
-
-		socket.on("characters:exportCard:error", (msg: Sockets.ErrorResponse) => {
-			toaster.error({ title: msg.error || "Failed to export character" })
-		})
-
 		// Initialize with initialData if provided (for draft mode)
 		if (initialData) {
 			editCharacterData = {
@@ -664,8 +604,6 @@
 		socket.off("characters:create:error")
 		socket.off("characters:update:error")
 		socket.off("characters:get")
-		socket.off("characters:exportCard")
-		socket.off("characters:exportCard:error")
 		socket.off("tags:list")
 		socket.off("userSettings:updateShowAllCharacterFields")
 
@@ -729,17 +667,6 @@
 				</h1>
 			{:else}
 				<span class="flex-1"></span>
-			{/if}
-			{#if mode === "edit" && characterId}
-				<button
-					class="btn btn-sm preset-filled-surface-400-600 shrink-0"
-					title="Export Character"
-					onclick={handleExportClick}
-					aria-label="Export character"
-					type="button"
-				>
-					<Icons.Upload size={16} aria-hidden="true" />
-				</button>
 			{/if}
 			{#if !hideActionButtons}
 				<button
@@ -832,16 +759,6 @@
 					</button>
 				</div>
 			</fieldset>
-		{/if}
-		{#if !hideAvatar && mode === "edit" && editCharacterData.id}
-			<div class="space-y-2">
-				<p class="mb-1 block font-semibold">Image Gallery</p>
-				<CharacterImageGallery
-					characterId={editCharacterData.id}
-					currentAvatar={editCharacterData.avatar}
-					onAvatarChange={(path) => { editCharacterData.avatar = path }}
-				/>
-			</div>
 		{/if}
 		<fieldset class="flex flex-col gap-1">
 			<label class="flex gap-1 font-semibold" for="charName">
@@ -1667,65 +1584,6 @@
 	onCancel={handleCancelModalCancel}
 />
 
-{#if showExportFormatModal && characterId}
-	<Dialog
-		open={showExportFormatModal}
-		onOpenChange={(e) => {
-			showExportFormatModal = e.open
-		}}
-	>
-		<Portal>
-			<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-				<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl w-[min(95vw,560px)]">
-					<div class="p-6">
-						<h2 class="mb-2 text-lg font-bold">Export Character</h2>
-						<p class="mb-4">
-							Choose the export format for "{character?.nickname ||
-								character?.name ||
-								"character"}":
-						</p>
-						<div class="flex flex-col gap-3">
-							<button
-								class="btn preset-filled-primary-500 justify-start"
-								onclick={handleExportAsJson}
-							>
-								<Icons.FileText size={20} aria-hidden="true" />
-								<span>Export as JSON</span>
-							</button>
-							{#if character?.avatar}
-								<button
-									class="btn preset-filled-primary-500 justify-start"
-									onclick={handleExportAsPng}
-								>
-									<Icons.FileImage size={20} aria-hidden="true" />
-									<span>Export as PNG Card</span>
-								</button>
-							{:else}
-								<button
-									class="btn preset-filled-surface-500 justify-start"
-									disabled
-									title="Character has no avatar image"
-								>
-									<Icons.FileImage size={20} aria-hidden="true" />
-									<span>Export as PNG Card (No Avatar)</span>
-								</button>
-							{/if}
-						</div>
-						<div class="mt-4 flex justify-end gap-2">
-							<button
-								class="btn preset-filled-surface-500"
-								onclick={cancelExport}
-							>
-								Cancel
-							</button>
-						</div>
-					</div>
-				</Dialog.Content>
-			</Dialog.Positioner>
-		</Portal>
-	</Dialog>
-{/if}
 
 <style>
 	.sr-only {

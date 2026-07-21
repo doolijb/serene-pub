@@ -40,6 +40,14 @@ export function hasActiveSession(): boolean {
 
 export function invalidateSession(): void {
 	cachedSession = null
+	// Also clear the cooldown: every caller of invalidateSession() is about
+	// to immediately retry a login (a 401-triggered retry in
+	// withCharaVaultSession, or an admin verifying a just-saved credential
+	// in cardSourcesCharaVaultConnect) — a stale cooldown from an earlier,
+	// unrelated failure would otherwise block that retry regardless of
+	// whether the new attempt would actually succeed. If this attempt fails
+	// too, the cooldown re-arms itself from within loginAndCacheSession().
+	loginFailedUntil = null
 }
 
 async function loginAndCacheSession(): Promise<string | null> {
@@ -65,11 +73,25 @@ async function loginAndCacheSession(): Promise<string | null> {
 		return null
 	}
 
-	const password = decryptToken({
-		ciphertext: settings.charaVaultEncryptedToken,
-		iv: settings.charaVaultTokenIv,
-		authTag: settings.charaVaultTokenAuthTag
-	})
+	let password: string
+	try {
+		password = decryptToken({
+			ciphertext: settings.charaVaultEncryptedToken,
+			iv: settings.charaVaultTokenIv,
+			authTag: settings.charaVaultTokenAuthTag
+		})
+	} catch (e) {
+		// The stored token is corrupt or the app's crypto secret changed
+		// since it was encrypted (eg. a redeploy with a regenerated .env) —
+		// this will fail identically on every call until an admin
+		// reconnects the credential, so cool down the same as any other
+		// login failure rather than re-attempting the decrypt (and
+		// re-throwing) on every single search.
+		loginFailedUntil = Date.now() + LOGIN_FAILURE_COOLDOWN_MS
+		throw new CardSourceUnavailableError(
+			`Stored CharaVault credential could not be decrypted: ${(e as Error).message}`
+		)
+	}
 
 	// A fresh login is always the very first CharaVault call of a session
 	// (hasActiveSession() is false here by construction), so this

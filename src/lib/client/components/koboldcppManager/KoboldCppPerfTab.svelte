@@ -133,9 +133,13 @@
 				starting = false
 				toaster.error({ title: "Failed to start", description: msg?.error })
 			})
-			socket.on("koboldcpp:stopSubprocess", () => {
+			socket.on("koboldcpp:stopSubprocess", (msg: Sockets.KoboldCpp.StopSubprocess.Response) => {
 				stopping = false
-				toaster.success({ title: "KoboldCPP stopped" })
+				if (msg.success) {
+					toaster.success({ title: "KoboldCPP stopped" })
+				} else {
+					toaster.error({ title: "Couldn't stop KoboldCPP", description: msg.error })
+				}
 			})
 			socket.on("koboldcpp:unloadModel", (msg: Sockets.KoboldCpp.UnloadModel.Response) => {
 				unloading = false
@@ -185,7 +189,10 @@
 						<button
 							class="btn btn-sm preset-tonal-error"
 							onclick={stopSubprocess}
-							disabled={stopping || subStatus?.status === "stopping"}
+							disabled={stopping || subStatus?.status === "stopping" || subStatus?.isExternal}
+							title={subStatus?.isExternal
+								? "This instance wasn't started by this Manager, so it can't be stopped from here"
+								: undefined}
 						>
 							{#if stopping}<Icons.Loader2 size={13} class="animate-spin" />{:else}<Icons.Square size={13} />{/if}
 							Stop
@@ -202,6 +209,16 @@
 					{/if}
 				</div>
 			</div>
+			{#if subStatus?.isExternal}
+				<div class="border-warning-500 bg-warning-500/10 flex items-start gap-2 rounded-lg border p-2">
+					<Icons.AlertTriangle size={14} class="text-warning-700-300 mt-0.5 shrink-0" />
+					<p class="text-warning-700-300 text-xs">
+						This is an external KoboldCpp instance the Manager found already running on the
+						configured port, not one it started itself — Stop and Unload aren't available for it,
+						and its admin password may not match, which can make model loading fail.
+					</p>
+				</div>
+			{/if}
 			{#if subStatus?.lastError}
 				<p class="text-error-500 text-xs">{subStatus.lastError}</p>
 			{/if}
@@ -225,7 +242,9 @@
 							class="btn btn-sm preset-tonal-warning shrink-0 text-xs"
 							onclick={unloadModel}
 							disabled={unloading}
-							title="Unload model from memory"
+							title={subStatus?.isExternal
+								? "This instance's admin password may not match the Manager's — unload may fail"
+								: "Unload model from memory"}
 						>
 							{#if unloading}<Icons.Loader2 size={12} class="animate-spin" />{:else}<Icons.LogOut size={12} />{/if}
 							Unload

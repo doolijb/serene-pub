@@ -184,6 +184,22 @@ export function getContextCardType(typeId: string): ContextCardTypeDef | undefin
 	return CONTEXT_CARD_TYPES.find((c) => c.id === typeId)
 }
 
+/**
+ * Deterministic (FNV-1a) string hash — not cryptographic, just needs to be
+ * stable and cheap so a card's derived `key` doesn't change when its
+ * position in the template does. Collisions only matter between two cards
+ * of the same type with byte-identical content, which pushCard's dupCount
+ * suffix already disambiguates.
+ */
+function fingerprint(text: string): string {
+	let hash = 0x811c9dc5
+	for (let i = 0; i < text.length; i++) {
+		hash ^= text.charCodeAt(i)
+		hash = Math.imul(hash, 0x01000193)
+	}
+	return (hash >>> 0).toString(36)
+}
+
 function buildLineOffsets(text: string): number[] {
 	const offsets = [0]
 	for (let i = 0; i < text.length; i++) {
@@ -239,7 +255,7 @@ export function parseContextTemplate(template: string): ParsedContextTemplate {
 	const offsetOf = (pos: { line: number; column: number }) =>
 		lineOffsets[pos.line - 1] + pos.column
 
-	const typeOccurrence = new Map<string, number>()
+	const seenKeys = new Map<string, number>()
 	const pushCard = (
 		typeId: string,
 		zone: ContextCardZone,
@@ -248,10 +264,28 @@ export function parseContextTemplate(template: string): ParsedContextTemplate {
 		content?: string,
 		role?: ContextBlockRole
 	) => {
-		const occurrence = (typeOccurrence.get(typeId) ?? 0) + 1
-		typeOccurrence.set(typeId, occurrence)
+		// Keys are derived from content, not scan-order occurrence, so a
+		// card's identity survives being moved to a different position by a
+		// reorder — reorderContextCards (below) and ContextSidebar's drag
+		// mirror both depend on the SAME card keeping the SAME key across a
+		// reorder + re-parse cycle. Occurrence-based keys broke that: after
+		// swapping two same-typed cards, re-parsing renumbered by new scan
+		// position, so eg. "customText:1" silently started referring to a
+		// different card's content — which svelte-dnd-action (keyed on this
+		// value) can't distinguish from that card being deleted and a new
+		// one inserted, causing it to visually vanish mid-drop.
+		const baseKey =
+			content !== undefined ? `${typeId}:${fingerprint(content)}` : typeId
+		// Falls back to the old occurrence-numbering only to disambiguate
+		// two cards of the same type with byte-identical content (or no
+		// content at all, eg. the fixed chatMessages card) — a rare,
+		// harmless case since such cards are indistinguishable to the user
+		// too.
+		const dupCount = seenKeys.get(baseKey) ?? 0
+		seenKeys.set(baseKey, dupCount + 1)
+		const key = dupCount === 0 ? baseKey : `${baseKey}:${dupCount}`
 		result.cards.push({
-			key: `${typeId}:${occurrence}`,
+			key,
 			typeId,
 			zone,
 			start,
@@ -600,14 +634,37 @@ export function reorderContextCards(
 	)
 	if (orderedKeys.some((key) => !textByKey.has(key))) return template
 
-	const gaps: string[] = []
+	// Each gap (whitespace, or hand-written prose the parser doesn't
+	// recognize as its own card) "belongs" to the card immediately before
+	// it — kept attached to that card, not to a position, so reordering
+	// can't relocate text written between two specific cards to sit between
+	// a different, unrelated pair just because they end up adjacent.
+	const gapAfterKey = new Map<string, string>()
 	for (let i = 0; i < zoneCards.length - 1; i++) {
-		gaps.push(template.slice(zoneCards[i].end, zoneCards[i + 1].start))
+		gapAfterKey.set(
+			zoneCards[i].key,
+			template.slice(zoneCards[i].end, zoneCards[i + 1].start)
+		)
 	}
 
 	let rebuilt = textByKey.get(orderedKeys[0])!
+	const usedGapKeys = new Set<string>()
 	for (let i = 1; i < orderedKeys.length; i++) {
-		rebuilt += gaps[i - 1] + textByKey.get(orderedKeys[i])!
+		const prevKey = orderedKeys[i - 1]
+		// A card that used to be last (no recorded gap) may now have a
+		// successor for the first time — fall back to the same "\n\n"
+		// separator insertContextCard/insertContextCardAt use elsewhere.
+		const gap = gapAfterKey.get(prevKey) ?? "\n\n"
+		usedGapKeys.add(prevKey)
+		rebuilt += gap + textByKey.get(orderedKeys[i])!
+	}
+	// A gap whose card no longer has anything after it (eg. that card moved
+	// to the last position) would otherwise vanish entirely — append it
+	// after the rebuilt content instead of dropping it. It can no longer
+	// sit "between these two specific cards" (there's no longer a second
+	// card for it to precede), but the text itself is never lost.
+	for (const [key, gap] of gapAfterKey) {
+		if (!usedGapKeys.has(key)) rebuilt += gap
 	}
 
 	return (

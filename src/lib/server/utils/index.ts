@@ -2,7 +2,7 @@ import os from "os"
 import path from "path"
 import envPaths from "env-paths"
 import { db } from "$lib/server/db"
-import { eq } from "drizzle-orm"
+import { and, eq, inArray, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { writeFile, mkdir } from "fs/promises"
 import { v4 as uuid } from "uuid"
@@ -223,6 +223,12 @@ export async function handlePersonaAvatarUpload({
 		.where(eq(schema.personas.id, persona.id))
 }
 
+/**
+ * Gallery uploads add to the gallery only — they deliberately do NOT touch
+ * `characters.avatar` (a prior version of this function did, which meant
+ * every gallery upload silently changed the character's avatar). Setting
+ * the avatar is a separate, explicit action (see charactersSetAvatar).
+ */
 export async function uploadCharacterGalleryImage({
 	characterId,
 	userId,
@@ -241,13 +247,31 @@ export async function uploadCharacterGalleryImage({
 	const filePath = path.join(dir, filename)
 	await writeFile(filePath, imageFile, { flag: "w" })
 	const imgPath = `/images/data/users/${userId}/characters/${characterId}/${filename}`
-	await db
-		.update(schema.characters)
-		.set({ avatar: imgPath })
-		.where(eq(schema.characters.id, characterId))
+
+	const [{ maxPosition }] = await db
+		.select({
+			maxPosition: sql<number>`coalesce(max(${schema.characterGalleryImages.position}), -1)`
+		})
+		.from(schema.characterGalleryImages)
+		.where(eq(schema.characterGalleryImages.characterId, characterId))
+	await db.insert(schema.characterGalleryImages).values({
+		characterId,
+		path: imgPath,
+		position: maxPosition + 1
+	})
+
 	return imgPath
 }
 
+/**
+ * Lists a character's gallery images in persisted order, reconciling the
+ * `characterGalleryImages` table against what's actually on disk: rows
+ * whose file is gone (eg. removed out-of-band) are dropped, and on-disk
+ * files with no row yet (eg. the first call after this table was
+ * introduced, or a file that landed on disk some other way) are lazily
+ * backfilled at the end, in directory-listing order — a one-time self-heal
+ * rather than a startup migration script.
+ */
 export async function listCharacterGallery({
 	characterId,
 	userId
@@ -256,15 +280,56 @@ export async function listCharacterGallery({
 	userId: number
 }) {
 	const dir = getCharacterDataDir({ characterId, userId })
+	const urlPrefix = `/images/data/users/${userId}/characters/${characterId}/`
+
+	let onDiskPaths = new Set<string>()
 	try {
 		const { readdir } = await import("fs/promises")
 		const files = await readdir(dir)
-		return files
-			.filter((f) => /\.(jpg|jpeg|png|webp|gif)$/i.test(f))
-			.map((f) => `/images/data/users/${userId}/characters/${characterId}/${f}`)
+		onDiskPaths = new Set(
+			files
+				.filter((f) => /\.(jpg|jpeg|png|webp|gif)$/i.test(f))
+				.map((f) => urlPrefix + f)
+		)
 	} catch {
-		return []
+		onDiskPaths = new Set()
 	}
+
+	const rows = await db.query.characterGalleryImages.findMany({
+		where: eq(schema.characterGalleryImages.characterId, characterId),
+		orderBy: (t, { asc }) => asc(t.position)
+	})
+
+	const staleIds = rows.filter((r) => !onDiskPaths.has(r.path)).map((r) => r.id)
+	if (staleIds.length > 0) {
+		await db
+			.delete(schema.characterGalleryImages)
+			.where(inArray(schema.characterGalleryImages.id, staleIds))
+	}
+
+	const knownPaths = new Set(rows.map((r) => r.path))
+	const missingPaths = [...onDiskPaths].filter((p) => !knownPaths.has(p))
+	if (missingPaths.length > 0) {
+		let nextPosition =
+			rows.length > 0 ? Math.max(...rows.map((r) => r.position)) + 1 : 0
+		await db.insert(schema.characterGalleryImages).values(
+			missingPaths.map((p) => ({
+				characterId,
+				path: p,
+				position: nextPosition++
+			}))
+		)
+	}
+
+	if (staleIds.length === 0 && missingPaths.length === 0) {
+		return rows.map((r) => r.path)
+	}
+
+	const finalRows = await db.query.characterGalleryImages.findMany({
+		where: eq(schema.characterGalleryImages.characterId, characterId),
+		orderBy: (t, { asc }) => asc(t.position)
+	})
+	return finalRows.map((r) => r.path)
 }
 
 export async function deleteCharacterGalleryImage({
@@ -286,8 +351,45 @@ export async function deleteCharacterGalleryImage({
 	} catch {
 		// File already gone
 	}
+	await db
+		.delete(schema.characterGalleryImages)
+		.where(
+			and(
+				eq(schema.characterGalleryImages.characterId, characterId),
+				eq(schema.characterGalleryImages.path, imgPath)
+			)
+		)
 }
 
+/**
+ * Persists a new display order for a character's gallery. Only `position`
+ * changes — filenames on disk are never renamed — so `characters.avatar`
+ * (which stores a full image path) can never be invalidated by a reorder.
+ * Paths that don't belong to this character are silently ignored.
+ */
+export async function reorderCharacterGalleryImages({
+	characterId,
+	paths
+}: {
+	characterId: number
+	paths: string[]
+}) {
+	await Promise.all(
+		paths.map((p, position) =>
+			db
+				.update(schema.characterGalleryImages)
+				.set({ position })
+				.where(
+					and(
+						eq(schema.characterGalleryImages.characterId, characterId),
+						eq(schema.characterGalleryImages.path, p)
+					)
+				)
+		)
+	)
+}
+
+/** Mirrors uploadCharacterGalleryImage — see its comment. */
 export async function uploadPersonaGalleryImage({
 	personaId,
 	userId,
@@ -306,13 +408,23 @@ export async function uploadPersonaGalleryImage({
 	const filePath = path.join(dir, filename)
 	await writeFile(filePath, imageFile, { flag: "w" })
 	const imgPath = `/images/data/users/${userId}/personas/${personaId}/${filename}`
-	await db
-		.update(schema.personas)
-		.set({ avatar: imgPath })
-		.where(eq(schema.personas.id, personaId))
+
+	const [{ maxPosition }] = await db
+		.select({
+			maxPosition: sql<number>`coalesce(max(${schema.personaGalleryImages.position}), -1)`
+		})
+		.from(schema.personaGalleryImages)
+		.where(eq(schema.personaGalleryImages.personaId, personaId))
+	await db.insert(schema.personaGalleryImages).values({
+		personaId,
+		path: imgPath,
+		position: maxPosition + 1
+	})
+
 	return imgPath
 }
 
+/** Mirrors listCharacterGallery — see its comment. */
 export async function listPersonaGallery({
 	personaId,
 	userId
@@ -321,15 +433,56 @@ export async function listPersonaGallery({
 	userId: number
 }) {
 	const dir = getPersonaDataDir({ personaId, userId })
+	const urlPrefix = `/images/data/users/${userId}/personas/${personaId}/`
+
+	let onDiskPaths = new Set<string>()
 	try {
 		const { readdir } = await import("fs/promises")
 		const files = await readdir(dir)
-		return files
-			.filter((f) => /\.(jpg|jpeg|png|webp|gif)$/i.test(f))
-			.map((f) => `/images/data/users/${userId}/personas/${personaId}/${f}`)
+		onDiskPaths = new Set(
+			files
+				.filter((f) => /\.(jpg|jpeg|png|webp|gif)$/i.test(f))
+				.map((f) => urlPrefix + f)
+		)
 	} catch {
-		return []
+		onDiskPaths = new Set()
 	}
+
+	const rows = await db.query.personaGalleryImages.findMany({
+		where: eq(schema.personaGalleryImages.personaId, personaId),
+		orderBy: (t, { asc }) => asc(t.position)
+	})
+
+	const staleIds = rows.filter((r) => !onDiskPaths.has(r.path)).map((r) => r.id)
+	if (staleIds.length > 0) {
+		await db
+			.delete(schema.personaGalleryImages)
+			.where(inArray(schema.personaGalleryImages.id, staleIds))
+	}
+
+	const knownPaths = new Set(rows.map((r) => r.path))
+	const missingPaths = [...onDiskPaths].filter((p) => !knownPaths.has(p))
+	if (missingPaths.length > 0) {
+		let nextPosition =
+			rows.length > 0 ? Math.max(...rows.map((r) => r.position)) + 1 : 0
+		await db.insert(schema.personaGalleryImages).values(
+			missingPaths.map((p) => ({
+				personaId,
+				path: p,
+				position: nextPosition++
+			}))
+		)
+	}
+
+	if (staleIds.length === 0 && missingPaths.length === 0) {
+		return rows.map((r) => r.path)
+	}
+
+	const finalRows = await db.query.personaGalleryImages.findMany({
+		where: eq(schema.personaGalleryImages.personaId, personaId),
+		orderBy: (t, { asc }) => asc(t.position)
+	})
+	return finalRows.map((r) => r.path)
 }
 
 export async function deletePersonaGalleryImage({
@@ -351,4 +504,35 @@ export async function deletePersonaGalleryImage({
 	} catch {
 		// File already gone
 	}
+	await db
+		.delete(schema.personaGalleryImages)
+		.where(
+			and(
+				eq(schema.personaGalleryImages.personaId, personaId),
+				eq(schema.personaGalleryImages.path, imgPath)
+			)
+		)
+}
+
+/** Mirrors reorderCharacterGalleryImages — see its comment. */
+export async function reorderPersonaGalleryImages({
+	personaId,
+	paths
+}: {
+	personaId: number
+	paths: string[]
+}) {
+	await Promise.all(
+		paths.map((p, position) =>
+			db
+				.update(schema.personaGalleryImages)
+				.set({ position })
+				.where(
+					and(
+						eq(schema.personaGalleryImages.personaId, personaId),
+						eq(schema.personaGalleryImages.path, p)
+					)
+				)
+		)
+	)
 }

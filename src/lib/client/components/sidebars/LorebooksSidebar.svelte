@@ -16,6 +16,9 @@
 	import type { SpecV3 } from "@lenml/char-card-reader"
 	import LorebookListItem from "../listItems/LorebookListItem.svelte"
 	import EmptyState from "../EmptyState.svelte"
+	import ImportConflictModal from "../modals/ImportConflictModal.svelte"
+	import LorebookExportOptionsModal from "../modals/LorebookExportOptionsModal.svelte"
+	import { downloadBlob } from "$lib/client/utils/downloadBlob"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -48,6 +51,14 @@
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
 	let showImportModal: boolean = $state(false)
 	let importingBook: SpecV3.Lorebook | undefined = $state(undefined)
+	// Set when lorebooks:import comes back with status "conflict" — the
+	// incoming uuid matched an existing lorebook but its content differs.
+	let importConflict:
+		| { existingLorebook: any; lorebookData: object }
+		| undefined = $state(undefined)
+	let showImportConflictModal: boolean = $state(false)
+	let exportingLorebookId: number | null = $state(null)
+	let showExportOptionsModal: boolean = $state(false)
 	let deletingLorebookId: number | undefined = $state(undefined)
 	let showDeleteConfirmationModal: boolean = $state(false)
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
@@ -267,6 +278,56 @@
 		}
 	}
 
+	function handleExportLorebook(id: number) {
+		exportingLorebookId = id
+		showExportOptionsModal = true
+	}
+
+	function handleConfirmExportOptions(options: {
+		includeCharacters: boolean
+		includePersonas: boolean
+		includeNarrativeGraph: boolean
+	}) {
+		if (exportingLorebookId === null) return
+		socket.emit("lorebooks:export", { id: exportingLorebookId, ...options })
+		showExportOptionsModal = false
+		exportingLorebookId = null
+	}
+
+	function handleCancelExportOptions() {
+		showExportOptionsModal = false
+		exportingLorebookId = null
+	}
+
+	function handleOverwriteImportConflict() {
+		if (!importConflict) return
+		const req: Sockets.Lorebooks.ImportResolve.Params = {
+			action: "overwrite",
+			lorebookData: importConflict.lorebookData,
+			existingId: importConflict.existingLorebook.id
+		}
+		socket.emit("lorebooks:importResolve", req)
+		showImportConflictModal = false
+		importConflict = undefined
+	}
+
+	function handleImportAsNewFromConflict() {
+		if (!importConflict) return
+		const req: Sockets.Lorebooks.ImportResolve.Params = {
+			action: "createNew",
+			lorebookData: importConflict.lorebookData,
+			existingId: importConflict.existingLorebook.id
+		}
+		socket.emit("lorebooks:importResolve", req)
+		showImportConflictModal = false
+		importConflict = undefined
+	}
+
+	function handleCancelImportConflict() {
+		showImportConflictModal = false
+		importConflict = undefined
+	}
+
 	function onDeleteClick(id: number) {
 		deletingLorebookId = id
 		showDeleteConfirmationModal = true
@@ -354,10 +415,48 @@
 		socket.on(
 			"lorebooks:import",
 			(msg: Sockets.Lorebooks.Import.Response) => {
+				if (msg.status === "conflict" && msg.conflict) {
+					importConflict = msg.conflict
+					showImportConflictModal = true
+					return
+				}
+				if (msg.status === "unchanged") {
+					toaster.success({
+						title: "Already Imported",
+						description: `"${msg.lorebook?.name}" is unchanged — using the existing lorebook.`
+					})
+					return
+				}
 				toaster.success({ title: "Lorebook Imported" })
 				// Server automatically emits updated list
 			}
 		)
+		socket.on("lorebooks:import:error", (msg: Sockets.ErrorResponse) => {
+			toaster.error({ title: msg.error || "Failed to import lorebook" })
+		})
+		socket.on(
+			"lorebooks:importResolve",
+			(msg: Sockets.Lorebooks.ImportResolve.Response) => {
+				toaster.success({ title: "Lorebook Imported" })
+				// Server automatically emits updated list
+			}
+		)
+		socket.on("lorebooks:importResolve:error", (msg: Sockets.ErrorResponse) => {
+			toaster.error({ title: msg.error || "Failed to resolve lorebook import" })
+		})
+		socket.on(
+			"lorebooks:export",
+			(msg: Sockets.Lorebooks.Export.Response) => {
+				downloadBlob(msg)
+				toaster.success({
+					title: "Lorebook Exported",
+					description: `Lorebook exported as ${msg.filename}`
+				})
+			}
+		)
+		socket.on("lorebooks:export:error", (msg: Sockets.ErrorResponse) => {
+			toaster.error({ title: msg.error || "Failed to export lorebook" })
+		})
 		socket.on(
 			"lorebooks:delete",
 			(msg: Sockets.Lorebooks.Delete.Response) => {
@@ -387,6 +486,11 @@
 		socket.off("lorebooks:create")
 		socket.off("lorebooks:update")
 		socket.off("lorebooks:import")
+		socket.off("lorebooks:import:error")
+		socket.off("lorebooks:importResolve")
+		socket.off("lorebooks:importResolve:error")
+		socket.off("lorebooks:export")
+		socket.off("lorebooks:export:error")
 		socket.off("lorebooks:delete")
 		socket.off("chats:setLorebook")
 		onclose = undefined
@@ -435,41 +539,53 @@
 		<Tabs value={editGroup} onValueChange={(e) => handleSwitchTabGroup(e)}>
 			<Tabs.List class="flex flex-wrap gap-1">
 				<Tabs.Trigger value="lorebook" disabled={tabsDisabled && editGroup !== "lorebook"}>
-					<Icons.Book size={20} class="inline" />
-					{#if editGroup === "lorebook"}
-						Lorebook
-					{/if}
+					<span title="Lorebook" aria-label="Lorebook tab" class="flex items-center gap-1">
+						<Icons.Book size={20} class="inline" />
+						{#if editGroup === "lorebook"}
+							Lorebook
+						{/if}
+					</span>
 				</Tabs.Trigger>
 				<Tabs.Trigger value="bindings" disabled={tabsDisabled}>
-					<Icons.Link size={20} class="inline" />
-					{#if editGroup === "bindings"}
-						Bindings
-					{/if}
+					<span title="Bindings" aria-label="Bindings tab" class="flex items-center gap-1">
+						<Icons.Link size={20} class="inline" />
+						{#if editGroup === "bindings"}
+							Bindings
+						{/if}
+					</span>
 				</Tabs.Trigger>
 				<Tabs.Trigger value="world" disabled={tabsDisabled}>
-					<Icons.Globe size={20} class="inline" />
-					{#if editGroup === "world"}
-						World Lore
-					{/if}
+					<span title="World Lore" aria-label="World Lore tab" class="flex items-center gap-1">
+						<Icons.Globe size={20} class="inline" />
+						{#if editGroup === "world"}
+							World Lore
+						{/if}
+					</span>
 				</Tabs.Trigger>
 				<Tabs.Trigger value="characters" disabled={tabsDisabled}>
-					<Icons.User size={20} class="inline" />
-					{#if editGroup === "characters"}
-						Character Lore
-					{/if}
+					<span title="Character Lore" aria-label="Character Lore tab" class="flex items-center gap-1">
+						<Icons.User size={20} class="inline" />
+						{#if editGroup === "characters"}
+							Character Lore
+						{/if}
+					</span>
 				</Tabs.Trigger>
 				<Tabs.Trigger value="history" disabled={tabsDisabled}>
-					<Icons.Calendar size={20} class="inline" />
-					{#if editGroup === "history"}
-						History
-					{/if}
+					<span title="History" aria-label="History tab" class="flex items-center gap-1">
+						<Icons.Calendar size={20} class="inline" />
+						{#if editGroup === "history"}
+							History
+						{/if}
+					</span>
 				</Tabs.Trigger>
 				{#if graphEnabled}
 					<Tabs.Trigger value="graph" disabled={tabsDisabled}>
-						<Icons.Network size={20} class="inline" />
-						{#if editGroup === "graph"}
-							Graph
-						{/if}
+						<span title="Graph" aria-label="Graph tab" class="flex items-center gap-1">
+							<Icons.Network size={20} class="inline" />
+							{#if editGroup === "graph"}
+								Graph
+							{/if}
+						</span>
 					</Tabs.Trigger>
 				{/if}
 			</Tabs.List>
@@ -479,6 +595,7 @@
 						lorebookId={selectedLorebook.id}
 						bind:mode={lorebookFormMode}
 						bind:hasUnsavedChanges={tabHasUnsavedChanges}
+						onExport={handleExportLorebook}
 					/>
 				{/if}
 			</Tabs.Content>
@@ -543,14 +660,6 @@
 				<Icons.Upload size={16} />
 				Import
 			</button>
-			<button
-				class="btn btn-sm preset-outlined-surface-500"
-				title="Export Lorebook — coming soon"
-				disabled
-			>
-				<Icons.Download size={16} />
-				Export
-			</button>
 		</div>
 		<div class="mb-4 flex items-center gap-2">
 			<input
@@ -596,6 +705,7 @@
 							}
 						}}
 						onDelete={onDeleteClick}
+						onExport={handleExportLorebook}
 						bindingsCount={l.lorebookBindings?.length || 0}
 						worldEntriesCount={l.worldLoreEntries?.length || 0}
 						characterEntriesCount={l.characterLoreEntries?.length ||
@@ -635,6 +745,33 @@
 	onConfirm={handleUnsavedTabChangesModalConfirm}
 	onCancel={handleUnsavedTabChangesModalCancel}
 />
+
+{#if importConflict}
+	<ImportConflictModal
+		open={showImportConflictModal}
+		onOpenChange={(e) => {
+			showImportConflictModal = e.open
+			if (!e.open) importConflict = undefined
+		}}
+		entityLabel="Lorebook"
+		existingName={importConflict.existingLorebook.name}
+		onOverwrite={handleOverwriteImportConflict}
+		onImportAsNew={handleImportAsNewFromConflict}
+		onCancel={handleCancelImportConflict}
+	/>
+{/if}
+
+{#if exportingLorebookId !== null}
+	<LorebookExportOptionsModal
+		open={showExportOptionsModal}
+		onOpenChange={(e) => {
+			showExportOptionsModal = e.open
+			if (!e.open) exportingLorebookId = null
+		}}
+		onConfirm={handleConfirmExportOptions}
+		onCancel={handleCancelExportOptions}
+	/>
+{/if}
 
 {#if showImportModal}
 	<Dialog

@@ -116,11 +116,18 @@
 
 		socket.on("connections:list", (msg: Sockets.Connections.List.Response) => {
 			connectionsList = msg.connectionsList ?? []
+			// Only now — not on the bare connectModel ack — does isDefault/
+			// existingConn below actually reflect the new default, since both
+			// derive from this list. Clearing the spinner earlier left a
+			// window where the button looked interactive/unchanged (spinner
+			// gone, but still reading "Set Default") right up until this
+			// refresh landed, which read as "did clicking it even do
+			// anything?" in practice.
+			isConnecting = false
+			connectingModel = null
 		})
 
 		socket.on("koboldcpp:connectModel", () => {
-			isConnecting = false
-			connectingModel = null
 			toaster.success({ title: "Model set as default" })
 			refresh()
 		})

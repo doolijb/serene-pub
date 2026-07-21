@@ -500,6 +500,14 @@ export const lorebooks = pgTable(
 	"lorebooks",
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		// Stable, DB-generated identity for export/import dedup — never
+		// user-edited or regenerated. Backfills automatically on migration
+		// (default value applies to existing rows too), so there's no app-side
+		// generation or backfill script anywhere. Matches the existing
+		// userTokens.id column's exact pattern.
+		uuid: uuid("uuid")
+			.notNull()
+			.default(sql`(gen_random_uuid ())`),
 		name: text("name").notNull(),
 		description: text("description").notNull().default(""),
 		extraJson: json("extra_json")
@@ -517,7 +525,10 @@ export const lorebooks = pgTable(
 			.default(sql`(CURRENT_TIMESTAMP)`)
 			.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`)
 	},
-	(table) => [index("lorebooks_user_id_idx").on(table.userId)]
+	(table) => [
+		index("lorebooks_user_id_idx").on(table.userId),
+		uniqueIndex("lorebooks_uuid_idx").on(table.uuid)
+	]
 )
 
 export const lorebooksRelations = relations(lorebooks, ({ many, one }) => ({
@@ -854,6 +865,10 @@ export const characters = pgTable(
 	"characters",
 	{
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	// Stable, DB-generated identity for export/import dedup — see lorebooks.uuid.
+	uuid: uuid("uuid")
+		.notNull()
+		.default(sql`(gen_random_uuid ())`),
 	userId: integer("user_id")
 		.notNull()
 		.references(() => users.id, { onDelete: "cascade" }), // FK to users.id
@@ -916,7 +931,10 @@ export const characters = pgTable(
 	embeddingModel: text("embedding_model"),
 	vectorizedAt: timestamp("vectorized_at")
 	},
-	(table) => [index("characters_user_id_idx").on(table.userId)]
+	(table) => [
+		index("characters_user_id_idx").on(table.userId),
+		uniqueIndex("characters_uuid_idx").on(table.uuid)
+	]
 )
 
 export const charactersRelations = relations(characters, ({ many, one }) => ({
@@ -930,13 +948,52 @@ export const charactersRelations = relations(characters, ({ many, one }) => ({
 	}),
 	characterTags: many(characterTags),
 	chatCharacters: many(chatCharacters),
-	chatMessages: many(chatMessages)
+	chatMessages: many(chatMessages),
+	galleryImages: many(characterGalleryImages)
 }))
+
+// Tracks display order for a character's uploaded gallery images. The
+// images themselves are plain files on disk (see getCharacterDataDir) —
+// this table exists purely so drag-to-reorder has somewhere persistent to
+// write to; filenames are never renamed on reorder (only `position`
+// changes), so `characters.avatar` — which stores a full image path — can
+// never be invalidated by a reorder.
+export const characterGalleryImages = pgTable(
+	"character_gallery_images",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		characterId: integer("character_id")
+			.notNull()
+			.references(() => characters.id, { onDelete: "cascade" }),
+		path: text("path").notNull(),
+		position: integer("position").notNull().default(0),
+		createdAt: date("created_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`)
+	},
+	(t) => [
+		uniqueIndex("character_gallery_images_unique").on(t.characterId, t.path)
+	]
+)
+
+export const characterGalleryImagesRelations = relations(
+	characterGalleryImages,
+	({ one }) => ({
+		character: one(characters, {
+			fields: [characterGalleryImages.characterId],
+			references: [characters.id]
+		})
+	})
+)
 
 export const personas = pgTable(
 	"personas",
 	{
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	// Stable, DB-generated identity for export/import dedup — see lorebooks.uuid.
+	uuid: uuid("uuid")
+		.notNull()
+		.default(sql`(gen_random_uuid ())`),
 	userId: integer("user_id")
 		.notNull()
 		.references(() => users.id, { onDelete: "cascade" }), // FK to users.id
@@ -963,7 +1020,10 @@ export const personas = pgTable(
 	embeddingModel: text("embedding_model"),
 	vectorizedAt: timestamp("vectorized_at")
 	},
-	(table) => [index("personas_user_id_idx").on(table.userId)]
+	(table) => [
+		index("personas_user_id_idx").on(table.userId),
+		uniqueIndex("personas_uuid_idx").on(table.uuid)
+	]
 )
 
 export const personasRelations = relations(personas, ({ one, many }) => ({
@@ -975,8 +1035,39 @@ export const personasRelations = relations(personas, ({ one, many }) => ({
 		fields: [personas.lorebookId],
 		references: [lorebooks.id]
 	}),
-	personaTags: many(personaTags)
+	personaTags: many(personaTags),
+	galleryImages: many(personaGalleryImages)
 }))
+
+// Mirrors characterGalleryImages — see its comment for the "why a table,
+// not filename renaming" rationale.
+export const personaGalleryImages = pgTable(
+	"persona_gallery_images",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		personaId: integer("persona_id")
+			.notNull()
+			.references(() => personas.id, { onDelete: "cascade" }),
+		path: text("path").notNull(),
+		position: integer("position").notNull().default(0),
+		createdAt: date("created_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`)
+	},
+	(t) => [
+		uniqueIndex("persona_gallery_images_unique").on(t.personaId, t.path)
+	]
+)
+
+export const personaGalleryImagesRelations = relations(
+	personaGalleryImages,
+	({ one }) => ({
+		persona: one(personas, {
+			fields: [personaGalleryImages.personaId],
+			references: [personas.id]
+		})
+	})
+)
 
 // Chats (group or 1:1)
 export const chats = pgTable(

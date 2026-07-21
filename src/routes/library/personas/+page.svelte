@@ -3,10 +3,13 @@
 	import { Tabs } from "@skeletonlabs/skeleton-svelte"
 	import type { ValueChangeDetails } from "@zag-js/tabs"
 	import { goto } from "$app/navigation"
+	import { v4 as uuid } from "uuid"
+	import { onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 	import LibraryPortraitCard from "$lib/client/components/library/LibraryPortraitCard.svelte"
 	import type { LibraryCatalogItem, CardSourceId } from "$lib/shared/library/types"
+	import { imageUrlFor } from "$lib/shared/library/imageUrlFor"
 	import LibraryDetailsModal from "$lib/client/components/library/LibraryDetailsModal.svelte"
 
 	const socket = useTypedSocket()
@@ -35,15 +38,6 @@
 		capabilities?.sources.find((s) => s.id === activeSource) ?? null
 	)
 
-	function imageUrlFor(item: LibraryCatalogItem): string | null {
-		if (item.source === "charavault") {
-			// Proxied server-side — charavault.net's images are blocked by a
-			// Cross-Origin-Resource-Policy header when loaded directly.
-			return `/library/cardImage/charavault/${item.file}`
-		}
-		if (!item.file.endsWith(".png")) return null
-		return `https://raw.githubusercontent.com/doolijb/serene-pub-chara-list/main/${item.file}`
-	}
 
 	// New searches are always sent immediately — never blocked or queued
 	// behind a slow one (a previous version waited for the in-flight
@@ -53,6 +47,11 @@
 	// responses whose id doesn't match the most recently sent request are
 	// just stale results arriving late and are silently discarded.
 	let latestRequestId = ""
+	// Same staleness-guard idea, for the details-modal detail fetch: opening
+	// item A (triggers a detail fetch), closing it, and opening item B
+	// before A's response arrives would otherwise let A's response land
+	// after B is already open and overwrite B's fields with A's data.
+	let latestDetailRequestId = ""
 
 	const debouncedFetchLibrary = (() => {
 		let timeoutId: ReturnType<typeof setTimeout> | undefined
@@ -63,7 +62,7 @@
 	})()
 
 	function fetchLibrary(showLoading: boolean = false) {
-		const requestId = crypto.randomUUID()
+		const requestId = uuid()
 		latestRequestId = requestId
 		if (showLoading) isLoading = true
 		unreachable = false
@@ -91,10 +90,13 @@
 		// Other sources already return the complete description, so this
 		// only fires when it's actually missing for them.
 		if (item.source === "charavault" || !item.description) {
+			const requestId = uuid()
+			latestDetailRequestId = requestId
 			loadingDetail = true
 			socket.emit("cardSources:cardDetail", {
 				source: item.source,
-				ref: item.sourceRef
+				ref: item.sourceRef,
+				requestId
 			})
 		}
 	}
@@ -118,50 +120,65 @@
 		return Array.from(categories.entries()).sort((a, b) => a[0].localeCompare(b[0]))
 	})
 
-	socket.on("personas:searchLibrary", (msg: Sockets.Personas.SearchLibrary.Response) => {
-		if (msg.requestId !== latestRequestId) return
-		libraryPersonas = msg.personas
-		isLoading = false
-	})
-	socket.on("personas:searchLibrary:error", (msg: any) => {
-		if (msg.requestId !== latestRequestId) return
-		libraryPersonas = []
-		unreachable = !!msg.unreachable
-		rateLimited = !!msg.rateLimited
-		retryAfterMs = msg.retryAfterMs ?? null
-		isLoading = false
-		if (rateLimited && retryAfterMs) {
-			clearTimeout(retryTimer)
-			retryTimer = setTimeout(() => fetchLibrary(true), retryAfterMs)
-		}
-		if (!unreachable && !rateLimited) {
-			toaster.error({ title: msg.error || "Failed to search the persona library" })
-		}
-	})
-	socket.on("personas:importFromLibrary", (msg: Sockets.Personas.ImportFromLibrary.Response) => {
-		toaster.success({ title: `Downloaded ${msg.persona.name}` })
-		downloading = false
-		showDetails = false
-	})
-	socket.on("personas:importFromLibrary:error", (msg: Sockets.ErrorResponse) => {
-		toaster.error({ title: msg.error || "Failed to download persona" })
-		downloading = false
-	})
-	socket.on("cardSources:capabilities", (msg: Sockets.CardSources.Capabilities.Response) => {
-		capabilities = msg
-	})
-	socket.on("cardSources:cardDetail", (msg: Sockets.CardSources.CardDetail.Response) => {
-		loadingDetail = false
-		if (selectedPersona) {
-			selectedPersona = { ...selectedPersona, ...msg }
-		}
-	})
-	socket.on("cardSources:cardDetail:error", () => {
-		loadingDetail = false
-	})
+	onMount(() => {
+		socket.on("personas:searchLibrary", (msg: Sockets.Personas.SearchLibrary.Response) => {
+			if (msg.requestId !== latestRequestId) return
+			libraryPersonas = msg.personas
+			isLoading = false
+		})
+		socket.on("personas:searchLibrary:error", (msg: Sockets.SearchLibraryErrorResponse) => {
+			if (msg.requestId !== latestRequestId) return
+			libraryPersonas = []
+			unreachable = !!msg.unreachable
+			rateLimited = !!msg.rateLimited
+			retryAfterMs = msg.retryAfterMs ?? null
+			isLoading = false
+			if (rateLimited && retryAfterMs) {
+				clearTimeout(retryTimer)
+				retryTimer = setTimeout(() => fetchLibrary(true), retryAfterMs)
+			}
+			if (!unreachable && !rateLimited) {
+				toaster.error({ title: msg.error || "Failed to search the persona library" })
+			}
+		})
+		socket.on("personas:importFromLibrary", (msg: Sockets.Personas.ImportFromLibrary.Response) => {
+			toaster.success({ title: `Downloaded ${msg.persona.name}` })
+			downloading = false
+			showDetails = false
+		})
+		socket.on("personas:importFromLibrary:error", (msg: Sockets.ErrorResponse) => {
+			toaster.error({ title: msg.error || "Failed to download persona" })
+			downloading = false
+		})
+		socket.on("cardSources:capabilities", (msg: Sockets.CardSources.Capabilities.Response) => {
+			capabilities = msg
+		})
+		socket.on("cardSources:cardDetail", (msg: Sockets.CardSources.CardDetail.Response) => {
+			if (msg.requestId !== latestDetailRequestId) return
+			loadingDetail = false
+			if (selectedPersona) {
+				selectedPersona = { ...selectedPersona, ...msg }
+			}
+		})
+		socket.on("cardSources:cardDetail:error", (msg: any) => {
+			if (msg.requestId !== latestDetailRequestId) return
+			loadingDetail = false
+		})
 
-	socket.emit("cardSources:capabilities", {})
-	fetchLibrary(true)
+		socket.emit("cardSources:capabilities", {})
+		fetchLibrary(true)
+
+		return () => {
+			clearTimeout(retryTimer)
+			socket.off("personas:searchLibrary")
+			socket.off("personas:searchLibrary:error")
+			socket.off("personas:importFromLibrary")
+			socket.off("personas:importFromLibrary:error")
+			socket.off("cardSources:capabilities")
+			socket.off("cardSources:cardDetail")
+			socket.off("cardSources:cardDetail:error")
+		}
+	})
 </script>
 
 <div class="mx-4 mt-4 mb-8 min-h-[calc(100%-3rem)] rounded-lg p-6 shadow-md preset-tonal">

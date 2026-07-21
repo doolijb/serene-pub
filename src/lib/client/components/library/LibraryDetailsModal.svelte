@@ -29,6 +29,7 @@
 	}: Props = $props()
 
 	function handleClose() {
+		if (downloading) return
 		onOpenChange?.({ open: false })
 	}
 </script>

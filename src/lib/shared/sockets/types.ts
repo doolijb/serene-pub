@@ -14,6 +14,15 @@ declare global {
 			description?: string
 		}
 
+		/** Shape of the `*:searchLibrary:error` events (characters and personas both emit this). */
+		interface SearchLibraryErrorResponse {
+			error: string
+			unreachable?: boolean
+			rateLimited?: boolean
+			retryAfterMs?: number
+			requestId?: string
+		}
+
 		// Authentication namespace
 		namespace Auth {
 			namespace Login {
@@ -116,6 +125,24 @@ declare global {
 					file: string // base64 encoded file (JSON or PNG)
 				}
 				interface Response {
+					status: "created" | "unchanged" | "conflict"
+					character: SelectCharacter | null
+					book: SpecV3.Lorebook | null
+					conflict?: {
+						existingCharacter: SelectCharacter
+						// The raw base64 file, held so the client can hand it
+						// back verbatim in ImportResolve.Params.
+						file: string
+					}
+				}
+			}
+			namespace ImportResolve {
+				interface Params {
+					action: "overwrite" | "createNew"
+					file: string
+					existingId: number
+				}
+				interface Response {
 					character: SelectCharacter
 					book: SpecV3.Lorebook | null
 				}
@@ -124,6 +151,8 @@ declare global {
 				interface Params {
 					id: number
 					format?: "json" | "png"
+					/** Optional — embeds the whole shared lorebook (must be bound to this character) into the export. */
+					lorebookId?: number | null
 				}
 				interface Response {
 					blob: Buffer
@@ -135,7 +164,6 @@ declare global {
 					searchTerm?: string
 					source?: CardSourceId
 					category?: string
-					nsfw?: boolean
 					sort?: CardSourceSort
 					/** Only CharaVault honors this (its ?has_book= param) — ignored by other sources. */
 					hasBook?: boolean
@@ -203,6 +231,16 @@ declare global {
 				}
 				interface Response {
 					character: any
+				}
+			}
+			namespace ReorderGallery {
+				interface Params {
+					characterId: number
+					/** Full gallery in the desired new order (paths as returned by ListGallery). */
+					paths: string[]
+				}
+				interface Response {
+					images: string[]
 				}
 			}
 		}
@@ -334,7 +372,32 @@ declare global {
 					file: string // base64 encoded file (JSON or PNG)
 				}
 				interface Response {
+					status: "created" | "unchanged" | "conflict"
+					persona: SelectPersona | null
+					conflict?: {
+						existingPersona: SelectPersona
+						file: string
+					}
+				}
+			}
+			namespace ImportResolve {
+				interface Params {
+					action: "overwrite" | "createNew"
+					file: string
+					existingId: number
+				}
+				interface Response {
 					persona: SelectPersona
+				}
+			}
+			namespace ExportCard {
+				interface Params {
+					id: number
+					format?: "json" | "png"
+				}
+				interface Response {
+					blob: Buffer
+					filename: string
 				}
 			}
 			namespace SearchLibrary {
@@ -342,7 +405,6 @@ declare global {
 					searchTerm?: string
 					source?: CardSourceId
 					category?: string
-					nsfw?: boolean
 					sort?: CardSourceSort
 					cursor?: { limit: number; offset: number }
 					/**
@@ -405,6 +467,16 @@ declare global {
 				}
 				interface Response {
 					persona: any
+				}
+			}
+			namespace ReorderGallery {
+				interface Params {
+					personaId: number
+					/** Full gallery in the desired new order (paths as returned by ListGallery). */
+					paths: string[]
+				}
+				interface Response {
+					images: string[]
 				}
 			}
 		}
@@ -1013,6 +1085,15 @@ declare global {
 			namespace Export {
 				interface Params {
 					id: number
+					// All default to true (matches the original always-include-
+					// everything behavior) when omitted — the binding structure
+					// itself (bindings[]) always exports regardless of these
+					// flags; they only control whether the embedded character/
+					// persona card payloads and the narrativeGraph block are
+					// included.
+					includeCharacters?: boolean
+					includePersonas?: boolean
+					includeNarrativeGraph?: boolean
 				}
 				interface Response {
 					blob: Buffer
@@ -1022,6 +1103,31 @@ declare global {
 			namespace Import {
 				interface Params {
 					lorebookData: object
+				}
+				interface Response {
+					// "created": no uuid match, a fresh lorebook was inserted.
+					// "unchanged": uuid matched an existing lorebook AND the
+					//   content hash matched too — nothing was inserted, the
+					//   existing lorebook is returned as-is.
+					// "conflict": uuid matched an existing lorebook but the
+					//   content differs — nothing was inserted; the client
+					//   should prompt via lorebooks:importResolve.
+					status: "created" | "unchanged" | "conflict"
+					lorebook: SelectLorebook | null
+					conflict?: {
+						existingLorebook: SelectLorebook
+						// The raw parsed import payload, held so the client
+						// can hand it back verbatim in ImportResolve.Params
+						// without re-uploading/re-parsing the file.
+						lorebookData: object
+					}
+				}
+			}
+			namespace ImportResolve {
+				interface Params {
+					action: "overwrite" | "createNew"
+					lorebookData: object
+					existingId: number
 				}
 				interface Response {
 					lorebook: SelectLorebook
@@ -1040,6 +1146,18 @@ declare global {
 						character?: SelectCharacter | null
 						persona?: SelectPersona | null
 					})[]
+				}
+			}
+			namespace BindingsForCharacter {
+				interface Params {
+					characterId: number
+				}
+				interface Response {
+					characterId: number
+					// Distinct lorebooks that have a binding referencing this
+					// character — the candidate list for charactersExportCard's
+					// optional lorebookId, NOT the same as character.lorebookId.
+					lorebooks: { id: number; name: string }[]
 				}
 			}
 			namespace CreateBinding {
@@ -2071,6 +2189,7 @@ declare global {
 				interface Params {}
 				interface Response {
 					success: boolean
+					error?: string
 				}
 			}
 			namespace SubprocessStatus {
@@ -2080,6 +2199,11 @@ declare global {
 					startedAt: string | null
 					lastError: string | null
 					restartCount: number
+					// True when this "running" status is an already-active koboldcpp
+					// instance found on the configured port that this Manager can't
+					// verify it spawned (no matching PID-file record) — Stop/Unload
+					// can't act on a process the app doesn't actually control.
+					isExternal: boolean
 				}
 			}
 			namespace GetSubprocessStatus {
@@ -2271,10 +2395,13 @@ declare global {
 				interface Params {
 					source: CardSourceId
 					ref: unknown
+					/** Client-generated, echoed back verbatim — lets the client discard a response for an item that's no longer the open one (eg. closed and reopened a different card before the first fetch resolved). */
+					requestId?: string
 				}
 				interface Response {
 					description?: string
 					hasLorebook?: boolean
+					requestId?: string
 				}
 			}
 		}

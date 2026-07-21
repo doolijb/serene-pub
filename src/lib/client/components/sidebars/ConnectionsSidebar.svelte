@@ -20,7 +20,8 @@
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import {
 		CONNECTION_DEFAULTS,
-		OPENAI_CHAT_PRESETS
+		OPENAI_CHAT_PRESETS,
+		stableStringify
 	} from "$lib/shared/utils/connectionDefaults"
 	import EmbeddingConnectionPanel from "./EmbeddingConnectionPanel.svelte"
 
@@ -48,7 +49,11 @@
 	let originalConnection: any = $state()
 	let unsavedChanges = $derived.by(() => {
 		if (!connection || !originalConnection) return false
-		return JSON.stringify(connection) !== JSON.stringify(originalConnection)
+		// stableStringify (not JSON.stringify) so two logically-identical
+		// connections with differently-ordered object keys — e.g. because a
+		// form rebuilt extraJson from its own fields — don't register as a
+		// false "unsaved changes."
+		return stableStringify(connection) !== stableStringify(originalConnection)
 	})
 	let editingField: string | null = $state(null)
 	let showConfirmModal = $state(false)

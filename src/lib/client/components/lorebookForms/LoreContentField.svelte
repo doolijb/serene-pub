@@ -163,13 +163,12 @@
 			onOpenChange={(e) => (addBindingOpenState = e.open)}
 			positioning={{ placement: "bottom" }}
 		>
-			<Popover.Trigger class="underline">
-				<button
-					class="btn btn-sm preset-filled-surface-500"
-					title="Insert Character Tag"
-				>
-					<Icons.UserPlus size={16} />
-				</button>
+			<Popover.Trigger
+				class="btn btn-sm preset-filled-surface-500"
+				title="Insert Character Tag"
+				aria-label="Insert Character Tag"
+			>
+				<Icons.UserPlus size={16} />
 			</Popover.Trigger>
 			<Portal>
 				<Popover.Positioner class="z-[1000]!">

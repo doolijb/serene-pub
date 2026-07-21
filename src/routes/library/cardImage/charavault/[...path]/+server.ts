@@ -57,10 +57,15 @@ export const GET: RequestHandler = async (event) => {
 		const upstream = await fetchCharaVaultCardResponse({ folder, file })
 		const [toClient, toCache] = upstream.body!.tee()
 
-		setCachedCardBytes(
-			cacheKey,
-			Buffer.from(await new Response(toCache).arrayBuffer())
-		).catch(() => {})
+		// Deliberately not awaited — the whole point of tee() is to let the
+		// client response return immediately while this runs concurrently.
+		// Awaiting it here (even just to build the Buffer argument) would
+		// block the `return` below until the entire upstream body finished
+		// downloading, defeating the streaming intent entirely.
+		new Response(toCache)
+			.arrayBuffer()
+			.then((buf) => setCachedCardBytes(cacheKey, Buffer.from(buf)))
+			.catch(() => {})
 
 		return new Response(toClient, {
 			headers: {

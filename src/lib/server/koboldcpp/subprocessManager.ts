@@ -13,6 +13,7 @@ export interface SubprocessStatusEvent {
 	startedAt: string | null
 	lastError: string | null
 	restartCount: number
+	isExternal: boolean
 }
 
 interface SubprocessState {
@@ -22,6 +23,8 @@ interface SubprocessState {
 	startedAt: Date | null
 	lastError: string | null
 	restartCount: number
+	// See SubprocessStatusEvent.isExternal.
+	isExternal: boolean
 }
 
 const state: SubprocessState = {
@@ -30,7 +33,8 @@ const state: SubprocessState = {
 	pid: null,
 	startedAt: null,
 	lastError: null,
-	restartCount: 0
+	restartCount: 0,
+	isExternal: false
 }
 
 let emitStatusFn: ((s: SubprocessStatusEvent) => void) | null = null
@@ -136,6 +140,31 @@ async function killStaleOrphan(binaryDir: string, binaryPath: string): Promise<v
 	await clearPidFile(binaryDir)
 }
 
+/**
+ * Non-destructive counterpart to killStaleOrphan(): is there a live process
+ * matching our own recorded PID file, verified (on Linux) to actually be
+ * our binary? If so, an already-active port is a process we genuinely
+ * launched in a past session (e.g. this Node process restarted without a
+ * clean shutdown) — safe to treat as fully ours, including for Stop.
+ * Returns null for a genuinely external process we have no ownership record
+ * for, or when running off-Linux where the match can't be verified.
+ */
+async function findVerifiedOwnedPid(
+	binaryDir: string,
+	binaryPath: string
+): Promise<number | null> {
+	let recordedPid: number | null = null
+	try {
+		const raw = await fsPromises.readFile(pidFilePath(binaryDir), "utf8")
+		recordedPid = parseInt(raw.trim(), 10) || null
+	} catch {
+		return null
+	}
+	if (!recordedPid || !isPidAlive(recordedPid)) return null
+	if (!pidLooksLikeOurBinary(recordedPid, binaryPath)) return null
+	return recordedPid
+}
+
 export function setEmitter(fn: (s: SubprocessStatusEvent) => void) {
 	emitStatusFn = fn
 }
@@ -146,8 +175,13 @@ function snapshot(): SubprocessStatusEvent {
 		pid: state.pid,
 		startedAt: state.startedAt?.toISOString() ?? null,
 		lastError: state.lastError,
-		restartCount: state.restartCount
+		restartCount: state.restartCount,
+		isExternal: state.isExternal
 	}
+}
+
+export function isExternal(): boolean {
+	return state.isExternal
 }
 
 function emitStatus() {
@@ -264,7 +298,28 @@ function failStart(message: string): never {
 }
 
 export async function start(): Promise<void> {
-	if (state.status === "running" || state.status === "starting") return
+	if (state.status === "starting") return
+	if (state.status === "running") {
+		// A process we spawned (state.process) or a verified-owned PID from a
+		// previous session is trustworthy without re-pinging — a real crash
+		// gets caught by the health check within its own tolerance window. An
+		// *adopted external* process has neither: no live handle, and it can
+		// disappear at any moment outside our control or the health check's
+		// ~90s-tolerant cadence. Trusting stale "running" state for it left
+		// start() silently no-op'ing after the external process vanished,
+		// which then made preflight blame the resulting ECONNREFUSED on a
+		// bogus "credentials mismatch" (see KoboldCppManagedAdapter) instead
+		// of just restarting our own instance like it should.
+		if (state.process || !state.isExternal) return
+		const settingsForPing = await db.query.koboldCppSettings.findFirst()
+		const port = settingsForPing?.koboldCppManagedPort ?? 5001
+		if (await pingKoboldCpp(`http://localhost:${port}`, 2000)) return
+		stopHealthCheck()
+		clearIdleTimer()
+		state.status = "stopped"
+		state.isExternal = false
+		state.pid = null
+	}
 
 	const settings = await db.query.koboldCppSettings.findFirst()
 	if (!settings?.koboldCppManagerEnabled || settings?.koboldCppManagedMode !== "managed") {
@@ -295,8 +350,15 @@ export async function start(): Promise<void> {
 	// If KoboldCPP is already reachable (e.g. left over from a previous server session),
 	// adopt it rather than spawning a second instance on the same port.
 	if (await pingKoboldCpp(`http://localhost:${port}`, 2000)) {
-		console.log(`[KoboldCPP] Port ${port} already active — adopting existing instance`)
+		const ownedPid = await findVerifiedOwnedPid(binaryDir, binaryPath)
+		if (ownedPid) {
+			console.log(`[KoboldCPP] Port ${port} already active — adopting our own process (pid ${ownedPid}) from a previous session`)
+		} else {
+			console.log(`[KoboldCPP] Port ${port} already active — adopting external instance we didn't start; Stop/Unload won't be available for it`)
+		}
 		state.status = "running"
+		state.pid = ownedPid
+		state.isExternal = !ownedPid
 		state.startedAt = new Date()
 		state.lastError = null
 		emitStatus()
@@ -312,6 +374,7 @@ export async function start(): Promise<void> {
 
 	state.status = "starting"
 	state.lastError = null
+	state.isExternal = false
 	emitStatus()
 
 	// --admindir must be explicit: koboldcpp's admin reload/list-options endpoints jail
@@ -404,53 +467,104 @@ export async function start(): Promise<void> {
 export async function stop(): Promise<void> {
 	clearIdleTimer()
 
-	if (!state.process) {
+	// Nothing we're tracking as running at all — plain no-op.
+	if (!state.process && state.status !== "running") {
 		state.status = "stopped"
 		state.pid = null
+		state.isExternal = false
 		emitStatus()
 		return
+	}
+
+	// Adopted a process we can't verify we own (no matching PID-file record)
+	// — refuse rather than silently flipping our own bookkeeping to
+	// "stopped" while the real process keeps running untouched. That
+	// silent-no-op is exactly the bug this branch exists to prevent: Stop
+	// (and a subsequent Start) would otherwise look like they worked —
+	// fresh "Started" timestamp and all — without ever touching the actual
+	// process, which is precisely what generation preflight then fails
+	// against.
+	if (!state.process && state.isExternal) {
+		throw new Error(
+			"This KoboldCpp instance is running externally and wasn't started by Serene Pub's Manager, so it can't be stopped from here. Stop it manually, or point the Manager at a different port."
+		)
 	}
 
 	state.status = "stopping"
 	emitStatus()
 	stopHealthCheck()
 
-	const proc = state.process
-	const pid = proc.pid
-	state.process = null
+	if (state.process) {
+		// We hold a live handle from spawning it this session.
+		const proc = state.process
+		const pid = proc.pid
+		state.process = null
 
-	await new Promise<void>((resolve) => {
-		const forceKill = setTimeout(() => {
-			if (pid) {
-				try {
-					process.kill(-pid, "SIGKILL")
-				} catch {
+		await new Promise<void>((resolve) => {
+			const forceKill = setTimeout(() => {
+				if (pid) {
+					try {
+						process.kill(-pid, "SIGKILL")
+					} catch {
+						proc.kill("SIGKILL")
+					}
+				} else {
 					proc.kill("SIGKILL")
 				}
+				resolve()
+			}, 10_000)
+
+			proc.once("exit", () => {
+				clearTimeout(forceKill)
+				resolve()
+			})
+
+			if (pid) {
+				try {
+					process.kill(-pid, "SIGTERM")
+				} catch {
+					proc.kill("SIGTERM")
+				}
 			} else {
-				proc.kill("SIGKILL")
+				proc.kill("SIGTERM")
 			}
-			resolve()
-		}, 10_000)
-
-		proc.once("exit", () => {
-			clearTimeout(forceKill)
-			state.status = "stopped"
-			state.pid = null
-			emitStatus()
-			resolve()
 		})
-
-		if (pid) {
+	} else if (state.pid) {
+		// Adopted from a previous session, verified ours via the PID file —
+		// no live ChildProcess handle in this process, but a real, verified
+		// PID we can signal directly (same approach as killStaleOrphan).
+		const pid = state.pid
+		await new Promise<void>((resolve) => {
 			try {
 				process.kill(-pid, "SIGTERM")
 			} catch {
-				proc.kill("SIGTERM")
+				try {
+					process.kill(pid, "SIGTERM")
+				} catch {}
 			}
-		} else {
-			proc.kill("SIGTERM")
-		}
-	})
+			const deadline = Date.now() + 10_000
+			const poll = setInterval(() => {
+				if (!isPidAlive(pid) || Date.now() > deadline) {
+					clearInterval(poll)
+					if (isPidAlive(pid)) {
+						try {
+							process.kill(-pid, "SIGKILL")
+						} catch {
+							try {
+								process.kill(pid, "SIGKILL")
+							} catch {}
+						}
+					}
+					resolve()
+				}
+			}, 250)
+		})
+	}
+
+	state.status = "stopped"
+	state.pid = null
+	state.isExternal = false
+	emitStatus()
 
 	if (lastBinaryDir) await clearPidFile(lastBinaryDir)
 }

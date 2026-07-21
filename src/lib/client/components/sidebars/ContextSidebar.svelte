@@ -162,8 +162,9 @@
 		}
 	}
 
-	// Keyed by typeId (not card.key) since these field cards are singleton — a
-	// stable identifier across re-parses, unlike the repeatable card types.
+	// Keyed by typeId (not card.key) — simpler than card.key for these,
+	// since they're singleton (at most one card per typeId), so typeId
+	// alone is already a unique, stable identifier across re-parses.
 	let expandedFieldCards: Set<string> = $state(new Set())
 	function toggleFieldCardExpanded(typeId: string) {
 		const next = new Set(expandedFieldCards)
@@ -570,13 +571,59 @@
 										dragDisabled: !(systemCardsDnd.length > 1),
 										dropFromOthersDisabled: true
 									}}
-									onconsider={(e) => (systemCardsDnd = e.detail.items)}
+									onconsider={(e) => {
+										// svelte-dnd-action can momentarily hand back an items array
+										// that's short a card during a fast/erratic pointer move (its
+										// own internal collision tracking hiccups, especially under
+										// synthetic/very-fast drags) — never render that, since if the
+										// gesture then fails to cleanly finalize (eg. released outside
+										// the zone), the mirror would otherwise be left permanently
+										// short a card with nothing to correct it.
+										if (e.detail.items.length === systemCardsDnd.length) {
+											systemCardsDnd = e.detail.items
+										}
+									}}
 									onfinalize={(e) => {
-										systemCardsDnd = e.detail.items
-										reorderSystemCards(e.detail.items.map((c) => c.key))
+										if (e.detail.items.length === systemCards.length) {
+											// Deliberately NOT also setting `systemCardsDnd = e.detail.items`
+											// here (unlike onconsider) — reorderSystemCards below updates
+											// contextConfig.template, which the $effect above picks up and
+											// applies to systemCardsDnd on its own, with freshly re-parsed
+											// start/end offsets. Writing the mirror here too raced that
+											// effect-driven write (which lands a tick later, with different
+											// object references) right as svelte-dnd-action's own
+											// flipDurationMs drop-settle animation was still running,
+											// which is what made cards intermittently vanish right after a
+											// drop. onconsider already keeps the mirror showing the correct
+											// order up to the moment of drop, so nothing is lost by leaving
+											// the post-drop update to the single reactive path.
+											reorderSystemCards(e.detail.items.map((c) => c.key))
+										} else {
+											// The gesture ended with a card count that doesn't match
+											// reality (see onconsider above) — don't persist a corrupt
+											// order. Force the mirror back to the authoritative,
+											// still-persisted card list instead of leaving whatever bad
+											// state the gesture produced on screen indefinitely.
+											systemCardsDnd = systemCards.map((c) => ({ ...c, id: c.key }))
+										}
 									}}
 								>
-									{#each systemCardsDnd as card, i (card.key)}
+									<!--
+										Keyed by `card.id`, NOT `card.key` — svelte-dnd-action tracks
+										items by `id` internally (it's the field it swaps to its own
+										shadow-placeholder marker while a card is mid-drag, then back
+										to the real value on drop). `key` is OUR identifier and never
+										changes during a gesture, so keying Svelte's own reconciliation
+										on it meant Svelte saw "nothing changed" throughout an entire
+										drag — including the moment the library swapped the dragged
+										card's DOM node out for its shadow placeholder — and never
+										restored/recreated that node afterward, since Svelte's diffing
+										never got a signal anything needed touching. Keying on `id`
+										keeps Svelte's reconciliation in sync with what the library is
+										actually doing to the DOM, so the swapped-out node gets
+										properly recreated once the real id comes back at drop.
+									-->
+									{#each systemCardsDnd as card, i (card.id)}
 										{@const cardType = getContextCardType(card.typeId)!}
 										<div
 											class="preset-outlined-surface-400-600 bg-surface-100-800 hover:bg-surface-200-800 flex flex-col gap-2 rounded-xl p-3 shadow-sm transition-colors"
@@ -605,7 +652,7 @@
 																class="text-surface-400 shrink-0"
 															/>
 														{/if}
-														<span class="truncate font-semibold select-none">
+														<span class="font-semibold break-words select-none">
 															{cardType.label}
 														</span>
 														{#if card.typeId === "block"}
@@ -876,7 +923,7 @@
 										<div class="flex items-start gap-2">
 											<div class="min-w-0 flex-1">
 												<div class="flex items-center gap-1">
-													<span class="truncate font-semibold select-none">
+													<span class="font-semibold break-words select-none">
 														{cardType.label}
 													</span>
 													<Popover positioning={{ placement: "top" }}>

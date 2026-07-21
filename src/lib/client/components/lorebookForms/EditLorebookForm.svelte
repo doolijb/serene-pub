@@ -17,9 +17,15 @@
 		lorebookId: number
 		hasUnsavedChanges?: boolean
 		mode?: "view" | "edit"
+		onExport?: (lorebookId: number) => void
 	}
 
-	let { lorebookId, hasUnsavedChanges = $bindable(false), mode = $bindable("view") }: Props = $props()
+	let {
+		lorebookId,
+		hasUnsavedChanges = $bindable(false),
+		mode = $bindable("view"),
+		onExport
+	}: Props = $props()
 
 	const socket = useTypedSocket()
 
@@ -204,9 +210,20 @@
 {:else if editLorebook}
 	{#if mode === "view"}
 		<div class="flex flex-col gap-4">
-			<button class="btn btn-sm preset-filled-primary-500 self-start" onclick={() => (mode = "edit")}>
-				<Icons.Pencil size={14} /> Edit
-			</button>
+			<div class="flex gap-2">
+				<button class="btn btn-sm preset-filled-primary-500" onclick={() => (mode = "edit")}>
+					<Icons.Pencil size={14} /> Edit
+				</button>
+				{#if onExport}
+					<button
+						class="btn btn-sm preset-filled-surface-400-600"
+						onclick={() => onExport?.(lorebookId)}
+						title="Export lorebook"
+					>
+						<Icons.Download size={14} /> Export
+					</button>
+				{/if}
+			</div>
 			<div>
 				<p class="text-base font-semibold">{editLorebook.name}</p>
 				{#if editLorebook.description}

@@ -11,7 +11,11 @@ import { acquire } from "./rateLimiter"
 import { hasActiveSession, withCharaVaultSession } from "./session"
 import { getOrFetchCardBytes } from "../diskCache"
 import { parseCharacterCard } from "$lib/server/utils/characterCardParser"
-import { applyDefaultContentFilter, hasExcludedTag } from "./contentFilter"
+import {
+	applyDefaultContentFilter,
+	hasExcludedTag,
+	hasExcludedNameMatch
+} from "./contentFilter"
 
 const API_BASE = "https://charavault.net"
 const DEFAULT_LIMIT = 24
@@ -19,6 +23,51 @@ const DEFAULT_LIMIT = 24
 interface CharaVaultCardRef {
 	folder: string
 	file: string
+}
+
+// folder/file ultimately come from client-supplied data (socket params,
+// URL path segments in the image-proxy route) and get interpolated
+// straight into a CharaVault URL path. encodeURIComponent doesn't escape
+// "." — a folder of ".." survives encoding intact, and WHATWG URL parsing
+// (used internally by fetch()) collapses ../ path segments before the
+// request leaves the process. Without this check, a crafted ref could
+// make the server issue an authenticated request (using the shared admin
+// session cookie) to ANY path on charavault.net, with the image-proxy
+// route streaming the raw response back to whoever asked — a
+// confused-deputy/SSRF vector reachable by any authenticated user, not
+// just admins.
+//
+// Real CharaVault folder/file values are NOT restricted to a tidy
+// alphanumeric charset (a live sample confirmed this session) — they
+// routinely contain spaces, parentheses, quotes, plus signs, and unicode/
+// emoji (eg. `"00 - INFO + REQUEST_...png"`, `'+˚｡ᡣ🍔  007n7
+// (RobloxForsaken)_....png'`). An allowlist regex narrow enough to stop
+// traversal ended up rejecting the vast majority of real cards. The actual
+// exploit only needs a literal "/" (to add path segments) or an exact ".."
+// / "." segment (special-cased by URL normalization) — encodeURIComponent
+// already safely escapes everything else (spaces, unicode, parens, etc.)
+// into a single opaque path segment. So block only those, not the rest of
+// the printable character space.
+function isSafeCardRefSegment(value: unknown): value is string {
+	return (
+		typeof value === "string" &&
+		value.length > 0 &&
+		value.length <= 512 &&
+		!value.includes("/") &&
+		!value.includes("\\") &&
+		// eslint-disable-next-line no-control-regex
+		!/[\x00-\x1f]/.test(value) &&
+		value !== "." &&
+		value !== ".."
+	)
+}
+
+function toCharaVaultCardRef(ref: unknown): CharaVaultCardRef {
+	const { folder, file } = (ref ?? {}) as Partial<CharaVaultCardRef>
+	if (!isSafeCardRefSegment(folder) || !isSafeCardRefSegment(file)) {
+		throw new CardSourceUnavailableError("Invalid CharaVault card reference")
+	}
+	return { folder, file }
 }
 
 /**
@@ -96,7 +145,7 @@ async function charaVaultFetch(path: string): Promise<Response> {
  * the file).
  */
 export async function fetchCharaVaultCardResponse(ref: unknown): Promise<Response> {
-	const { folder, file } = ref as CharaVaultCardRef
+	const { folder, file } = toCharaVaultCardRef(ref)
 	const response = await charaVaultFetch(
 		`/cards/${encodeURIComponent(folder)}/${encodeURIComponent(file)}`
 	)
@@ -132,7 +181,11 @@ export const charaVaultSource: CardSource = {
 		params: CardSourceSearchParams,
 		_ctx: CardSourceContext
 	): Promise<CardSourceSearchResult> {
-		const limit = params.cursor?.limit ?? DEFAULT_LIMIT
+		// Clamped once, up front — used both for the outbound request and
+		// for the hasMore comparison below, so a caller requesting >200
+		// can't end up comparing rawItems.length against a ceiling CharaVault
+		// was never actually asked (or able) to honor.
+		const limit = Math.min(params.cursor?.limit ?? DEFAULT_LIMIT, 200)
 		const offset = params.cursor?.offset ?? 0
 
 		const query = new URLSearchParams()
@@ -149,7 +202,7 @@ export const charaVaultSource: CardSource = {
 		if (params.hasBook) query.set("has_book", "true")
 		if (params.creatorFilter) query.set("creator", params.creatorFilter)
 		query.set("nsfw", params.nsfw ? "true" : "false")
-		query.set("limit", String(Math.min(limit, 200)))
+		query.set("limit", String(limit))
 		query.set("offset", String(offset))
 
 		const response = await charaVaultFetch(`/api/cards?${query.toString()}`)
@@ -177,8 +230,13 @@ export const charaVaultSource: CardSource = {
 		// this is the actual enforcement, checked against each card's real
 		// CharaVault-assigned tags rather than trusting their undocumented
 		// "-word" query grammar to have matched everything it should have.
+		// Also checks the name directly (hasExcludedNameMatch) for terms
+		// that reliably signal content on their own even without a matching
+		// tag (eg. "milf"/"milfy" shows up in plenty of untagged card names).
 		if (!params.nsfw) {
-			items = items.filter((item) => !hasExcludedTag(item.tags))
+			items = items.filter(
+				(item) => !hasExcludedTag(item.tags) && !hasExcludedNameMatch(item.name)
+			)
 		}
 
 		return {
@@ -187,7 +245,7 @@ export const charaVaultSource: CardSource = {
 		}
 	},
 	async getCardBytes(ref: unknown, _ctx: CardSourceContext): Promise<Buffer> {
-		const { folder, file } = ref as CharaVaultCardRef
+		const { folder, file } = toCharaVaultCardRef(ref)
 		return getOrFetchCardBytes(`charavault:${folder}/${file}`, async () => {
 			const response = await fetchCharaVaultCardResponse(ref)
 			return Buffer.from(await response.arrayBuffer())
@@ -208,16 +266,18 @@ export const charaVaultSource: CardSource = {
 		// cost an extra CharaVault request for a card that's already been
 		// viewed/downloaded.
 		const buffer = await charaVaultSource.getCardBytes(ref, ctx)
-		try {
-			const { card, lorebook } = await parseCharacterCard(buffer)
-			const data = card.toSpecV3().data
-			return {
-				description: data.description || undefined,
-				hasLorebook: !!lorebook
-			}
-		} catch (e) {
-			console.warn("[CharaVault] Failed to parse card PNG for detail:", e)
-			return {}
+		// Deliberately NOT caught-and-swallowed into a resolved {} — a
+		// resolved value gets cached by cachedCardDetail()'s TtlCache for
+		// 24h, so a transient parse failure (eg. a half-written disk-cache
+		// file) would otherwise wrongly cache "no description" long after
+		// the real issue is gone. Let it reject; the cache correctly skips
+		// caching a rejection, and the client's existing "No description
+		// provided" fallback already degrades gracefully either way.
+		const { card, lorebook } = await parseCharacterCard(buffer)
+		const data = card.toSpecV3().data
+		return {
+			description: data.description || undefined,
+			hasLorebook: !!lorebook
 		}
 	}
 }

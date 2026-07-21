@@ -700,7 +700,7 @@
 						onOpenChange={(e) => (openMenuEntryId = e.open ? entry.id : null)}
 						positioning={{ placement: "bottom-end" }}
 					>
-						<Popover.Trigger class="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0">
+						<Popover.Trigger class="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0" title="More options" aria-label="More options for Year {entry.year}">
 							<Icons.Ellipsis size={16} />
 						</Popover.Trigger>
 						<Portal>
@@ -985,7 +985,7 @@
 										onOpenChange={(e) => (openMenuSceneId = e.open ? scene.id : null)}
 										positioning={{ placement: "bottom-end" }}
 									>
-										<Popover.Trigger class="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0"><Icons.Ellipsis size={14} /></Popover.Trigger>
+										<Popover.Trigger class="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0" title="More options" aria-label="More options for {scene.name ?? 'Unnamed Scene'}"><Icons.Ellipsis size={14} /></Popover.Trigger>
 										<Portal>
 											<Popover.Positioner class="z-[1000]!">
 												<Popover.Content class="card bg-surface-100-900 shadow-xl p-2 flex flex-col gap-1 min-w-36">
@@ -1049,16 +1049,18 @@
 			</h3>
 		</div>
 
-		<!-- Content | Scenes tabs (scenes only available when editing existing entry) -->
-		<div class="flex gap-1 border-b border-surface-300-700 pb-1">
-			<button
-				class="btn btn-sm {focusedEntryTab === 'content' ? 'preset-filled-primary-500' : 'preset-filled-surface-400-600'}"
-				onclick={() => (focusedEntryTab = "content")}
-				disabled={hasUnsavedChanges && focusedEntryTab !== "content"}
-			>
-				Content
-			</button>
-			{#if !isNewEntry}
+		<!-- Content | Scenes tabs (scenes only available when editing existing entry —
+		     for a brand-new entry there's nothing to switch between, so the bar is
+		     hidden entirely rather than showing a single, purposeless-looking button) -->
+		{#if !isNewEntry}
+			<div class="flex gap-1 border-b border-surface-300-700 pb-1">
+				<button
+					class="btn btn-sm {focusedEntryTab === 'content' ? 'preset-filled-primary-500' : 'preset-filled-surface-400-600'}"
+					onclick={() => (focusedEntryTab = "content")}
+					disabled={hasUnsavedChanges && focusedEntryTab !== "content"}
+				>
+					Content
+				</button>
 				<button
 					class="btn btn-sm {focusedEntryTab === 'scenes' ? 'preset-filled-primary-500' : 'preset-filled-surface-400-600'}"
 					onclick={() => (focusedEntryTab = "scenes")}
@@ -1069,8 +1071,8 @@
 						<span class="badge-icon preset-filled-secondary-500 ml-1 h-4 min-w-4 rounded-full text-xs">{editScenes.length}</span>
 					{/if}
 				</button>
-			{/if}
-		</div>
+			</div>
+		{/if}
 
 		<!-- Content form tab -->
 		{#if focusedEntryTab === "content"}
@@ -1276,7 +1278,7 @@
 										onOpenChange={(e) => (openMenuSceneId = e.open ? scene.id : null)}
 										positioning={{ placement: "bottom-end" }}
 									>
-										<Popover.Trigger class="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0"><Icons.Ellipsis size={14} /></Popover.Trigger>
+										<Popover.Trigger class="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0" title="More options" aria-label="More options for {scene.name ?? 'Unnamed Scene'}"><Icons.Ellipsis size={14} /></Popover.Trigger>
 										<Portal>
 											<Popover.Positioner class="z-[1000]!">
 												<Popover.Content class="card bg-surface-100-900 shadow-xl p-2 flex flex-col gap-1 min-w-36">

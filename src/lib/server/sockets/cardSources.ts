@@ -158,8 +158,27 @@ export const cardSourcesCharaVaultStatus: Handler<
 				columns: { charaVaultEmail: true, charaVaultEncryptedToken: true }
 			})
 
+			const hasCredential = !!(
+				settings?.charaVaultEmail && settings?.charaVaultEncryptedToken
+			)
+			// A saved credential isn't the same as a working one — actually
+			// attempt (or reuse a cached) login so "Connected" reflects real
+			// auth health rather than just "something is saved". Login
+			// failures (bad/revoked credential, corrupt token, CharaVault
+			// unreachable) are reported here as simply disconnected rather
+			// than surfaced as a status-fetch error — the admin only cares
+			// whether requests will actually authenticate.
+			let connected = false
+			if (hasCredential) {
+				try {
+					connected = !!(await getSessionCookie())
+				} catch {
+					connected = false
+				}
+			}
+
 			const res: Sockets.CardSources.CharaVaultStatus.Response = {
-				connected: !!(settings?.charaVaultEmail && settings?.charaVaultEncryptedToken),
+				connected,
 				email: settings?.charaVaultEmail ?? null
 			}
 			emitToUser("cardSources:charaVault:status", res)
@@ -184,13 +203,17 @@ export const cardSourcesCardDetail: Handler<
 			const detail = await cachedCardDetail(params.source, params.ref, {
 				userId: socket.user!.id
 			})
-			const res: Sockets.CardSources.CardDetail.Response = detail
+			const res: Sockets.CardSources.CardDetail.Response = {
+				...detail,
+				requestId: params.requestId
+			}
 			emitToUser("cardSources:cardDetail", res)
 			return res
 		} catch (error: any) {
 			console.error("Card detail fetch error:", error)
 			emitToUser("cardSources:cardDetail:error", {
-				error: error.message || "Failed to fetch card detail"
+				error: error.message || "Failed to fetch card detail",
+				requestId: params.requestId
 			})
 			throw error
 		}

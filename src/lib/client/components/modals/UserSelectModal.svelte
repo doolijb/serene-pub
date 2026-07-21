@@ -4,6 +4,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { onMount } from "svelte"
 	import { getContext } from "svelte"
+	import { resolveUserHandle } from "$lib/shared/utils/resolveCharacterName"
 
 	interface Props {
 		open: boolean
@@ -53,8 +54,11 @@
 
 	let filtered = $derived.by(() => {
 		if (!search.trim()) return availableUsers
-		return availableUsers.filter((u) =>
-			u.username!.toLowerCase().includes(search.toLowerCase())
+		const term = search.toLowerCase()
+		return availableUsers.filter(
+			(u) =>
+				u.username!.toLowerCase().includes(term) ||
+				u.displayName?.toLowerCase().includes(term)
 		)
 	})
 
@@ -145,7 +149,7 @@
 								<Icons.User size={20} />
 								<div class="text-left">
 									<div class="font-semibold">
-										{user.username}
+										{resolveUserHandle(user)}
 									</div>
 									{#if user.isAdmin}
 										<div

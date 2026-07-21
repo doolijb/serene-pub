@@ -333,17 +333,17 @@
 		<div
 			class="animate-fade-in border-surface-500/25 min-h-full rounded-lg border p-2 shadow-lg"
 		>
-			<div class="mb-4 flex items-center gap-2">
+			<div class="mb-4 flex items-start gap-2">
 				<button
 					type="button"
-					class="btn btn-sm preset-filled-surface-400-600"
+					class="btn btn-sm preset-filled-surface-400-600 shrink-0"
 					onclick={handleBackToSidebar}
 					title="Back"
 				>
 					<Icons.ChevronLeft size={16} />
 					Back
 				</button>
-				<h2 class="flex-1 truncate font-semibold">Enable/Disable Weight Options</h2>
+				<h2 class="min-w-0 flex-1 font-semibold">Enable/Disable Weight Options</h2>
 			</div>
 			<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 				{#each Object.entries(fieldMeta) as [key, meta]}
@@ -424,10 +424,19 @@
 				{/each}
 			</select>
 		</div>
-		<div class="mb-4 flex gap-2">
+		{#if sampling && sampling.isImmutable}
+			<div
+				class="preset-tonal-warning mb-4 flex items-center gap-2 rounded-xl p-2 text-sm"
+			>
+				<Icons.Info size={16} class="shrink-0" />
+				This is a built-in config (marked with a trailing *) — edit freely, then use "New" to save
+				your changes as a copy.
+			</div>
+		{/if}
+		<div class="mb-4 flex flex-wrap gap-2">
 			<button
 				type="button"
-				class="btn btn-sm preset-tonal-primary flex-1"
+				class="btn btn-sm preset-tonal-primary flex-1 min-w-[8.5rem]"
 				onclick={handleSelectSamplingConfig}
 			>
 				<Icons.CheckSquare size={16} />
@@ -435,7 +444,7 @@
 			</button>
 			<button
 				type="button"
-				class="btn btn-sm preset-filled-success-500 flex-1"
+				class="btn btn-sm preset-filled-success-500 flex-1 min-w-[6rem]"
 				onclick={handleUpdate}
 				disabled={(!!sampling && sampling.isImmutable) ||
 					!unsavedChanges}

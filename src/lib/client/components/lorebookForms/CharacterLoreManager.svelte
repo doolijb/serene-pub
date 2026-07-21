@@ -467,7 +467,7 @@
 						onOpenChange={(e) => (openMenuEntryId = e.open ? entry.id : null)}
 						positioning={{ placement: "bottom-end" }}
 					>
-						<Popover.Trigger class="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0">
+						<Popover.Trigger class="btn btn-sm preset-filled-surface-400-600 p-1 shrink-0" title="More options" aria-label="More options for {entry.name}">
 							<Icons.Ellipsis size={16} />
 						</Popover.Trigger>
 						<Portal>
