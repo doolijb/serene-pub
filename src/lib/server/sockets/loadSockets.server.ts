@@ -38,9 +38,19 @@ export function getPublicSocketsEndpoint(url?: URL) {
 			? explicitMode
 			: null
 
+	// Deliberately NOT falling back to `url.protocol` here. Under
+	// @sveltejs/adapter-node, `event.url` is built from the adapter's own
+	// get_origin(), which — absent an explicit PROTOCOL_HEADER env var that a
+	// real reverse proxy is actually setting — hardcodes the protocol to
+	// "https" for every request, including plain-http direct/curl requests
+	// with zero proxy involved (adapter-node assumes TLS termination happens
+	// upstream by default). Trusting it here made this endpoint report
+	// "https://...:3001" for genuinely plain-http traffic on unproxied,
+	// direct installs — the common case for this app. The only sources of
+	// truth for https should be the explicit opt-ins below.
 	const protocol = getHttpsHosts().includes(hostname.toLowerCase())
 		? "https"
-		: (explicitProtocol ?? (url ? url.protocol.replace(":", "") : "http"))
+		: (explicitProtocol ?? "http")
 
 	return `${protocol}://${hostname}:${getSocketsPort()}`
 }

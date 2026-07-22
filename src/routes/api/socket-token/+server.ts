@@ -17,7 +17,10 @@ export async function GET({
 		if (!systemSettings?.isAccountsEnabled) {
 			return new Response(JSON.stringify({ token: null }), {
 				status: 200,
-				headers: { "Content-Type": "application/json" }
+				headers: {
+					"Content-Type": "application/json",
+					"Cache-Control": "no-store"
+				}
 			})
 		}
 
@@ -28,7 +31,8 @@ export async function GET({
 			return new Response(JSON.stringify({ token: null }), {
 				status: 200,
 				headers: {
-					"Content-Type": "application/json"
+					"Content-Type": "application/json",
+					"Cache-Control": "no-store"
 				}
 			})
 		}
@@ -40,7 +44,8 @@ export async function GET({
 			return new Response(JSON.stringify({ token: null }), {
 				status: 200,
 				headers: {
-					"Content-Type": "application/json"
+					"Content-Type": "application/json",
+					"Cache-Control": "no-store"
 				}
 			})
 		}
@@ -80,7 +85,8 @@ export async function GET({
 			return new Response(JSON.stringify({ token: null }), {
 				status: 200,
 				headers: {
-					"Content-Type": "application/json"
+					"Content-Type": "application/json",
+					"Cache-Control": "no-store"
 				}
 			})
 		}
@@ -89,7 +95,8 @@ export async function GET({
 		return new Response(JSON.stringify({ token: userToken }), {
 			status: 200,
 			headers: {
-				"Content-Type": "application/json"
+				"Content-Type": "application/json",
+				"Cache-Control": "no-store"
 			}
 		})
 	} catch (error) {
@@ -97,7 +104,8 @@ export async function GET({
 		return new Response(JSON.stringify({ token: null }), {
 			status: 200,
 			headers: {
-				"Content-Type": "application/json"
+				"Content-Type": "application/json",
+				"Cache-Control": "no-store"
 			}
 		})
 	}
