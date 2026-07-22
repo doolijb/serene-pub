@@ -494,8 +494,15 @@ export const lorebookBindingsForCharacterHandler: Handler<
 			}
 
 			const bindings = await db.query.lorebookBindings.findMany({
-				where: eq(schema.lorebookBindings.characterId, params.characterId),
-				with: { lorebook: { columns: { id: true, name: true, userId: true } } }
+				where: eq(
+					schema.lorebookBindings.characterId,
+					params.characterId
+				),
+				with: {
+					lorebook: {
+						columns: { id: true, name: true, userId: true }
+					}
+				}
 			})
 
 			const seen = new Set<number>()
@@ -504,8 +511,13 @@ export const lorebookBindingsForCharacterHandler: Handler<
 				// Only this user's own lorebooks are exportable candidates —
 				// a binding could in principle reference a lorebook owned by
 				// whoever the character was shared with, not the exporter.
-				.filter((lb): lb is NonNullable<typeof lb> => !!lb && lb.userId === userId)
-				.filter((lb) => (seen.has(lb.id) ? false : (seen.add(lb.id), true)))
+				.filter(
+					(lb): lb is NonNullable<typeof lb> =>
+						!!lb && lb.userId === userId
+				)
+				.filter((lb) =>
+					seen.has(lb.id) ? false : (seen.add(lb.id), true)
+				)
 				.map((lb) => ({ id: lb.id, name: lb.name }))
 
 			const res: Sockets.Lorebooks.BindingsForCharacter.Response = {
@@ -515,9 +527,13 @@ export const lorebookBindingsForCharacterHandler: Handler<
 			emitToUser("lorebooks:bindingsForCharacter", res)
 			return res
 		} catch (error: any) {
-			console.error("Error fetching lorebook bindings for character:", error)
+			console.error(
+				"Error fetching lorebook bindings for character:",
+				error
+			)
 			emitToUser("lorebooks:bindingsForCharacter:error", {
-				error: error.message || "Failed to fetch lorebooks for character."
+				error:
+					error.message || "Failed to fetch lorebooks for character."
 			})
 			throw error
 		}
@@ -575,7 +591,9 @@ export const createLorebookBindingHandler: Handler<
 
 		if (!book) throw new Error("Lorebook not found.")
 
-		if (!(await verifyBindingTargetAccess(params.lorebookBinding, userId))) {
+		if (
+			!(await verifyBindingTargetAccess(params.lorebookBinding, userId))
+		) {
 			throw new Error(
 				"Access denied. You don't have permission to bind that character or persona."
 			)
@@ -601,7 +619,9 @@ export const createLorebookBindingHandler: Handler<
 			const allBindings = await db.query.lorebookBindings.findMany({
 				where: eq(schema.lorebookBindings.lorebookId, book.id)
 			})
-			runBindingNodeCheck(book.id, allBindings, emitToUser).catch(console.error)
+			runBindingNodeCheck(book.id, allBindings, emitToUser).catch(
+				console.error
+			)
 		}
 
 		const res: Sockets.Lorebooks.CreateBinding.Response = {
@@ -648,7 +668,9 @@ export const updateLorebookBindingHandler: Handler<
 			throw new Error("Access denied.")
 		}
 
-		if (!(await verifyBindingTargetAccess(params.lorebookBinding, userId))) {
+		if (
+			!(await verifyBindingTargetAccess(params.lorebookBinding, userId))
+		) {
 			throw new Error(
 				"Access denied. You don't have permission to bind that character or persona."
 			)
@@ -672,13 +694,22 @@ export const updateLorebookBindingHandler: Handler<
 
 		// Flow 2: node-link check (skip if unlinking a character/persona)
 		const isUnlinking =
-			("characterId" in params.lorebookBinding && params.lorebookBinding.characterId === null) ||
-			("personaId" in params.lorebookBinding && params.lorebookBinding.personaId === null)
+			("characterId" in params.lorebookBinding &&
+				params.lorebookBinding.characterId === null) ||
+			("personaId" in params.lorebookBinding &&
+				params.lorebookBinding.personaId === null)
 		if (!isUnlinking && emitToUser) {
 			const allBindings = await db.query.lorebookBindings.findMany({
-				where: eq(schema.lorebookBindings.lorebookId, existingBinding.lorebookId)
+				where: eq(
+					schema.lorebookBindings.lorebookId,
+					existingBinding.lorebookId
+				)
 			})
-			runBindingNodeCheck(existingBinding.lorebookId, allBindings, emitToUser).catch(console.error)
+			runBindingNodeCheck(
+				existingBinding.lorebookId,
+				allBindings,
+				emitToUser
+			).catch(console.error)
 		}
 
 		const res: Sockets.Lorebooks.UpdateBinding.Response = {
@@ -771,7 +802,10 @@ async function buildLorebookExportData(
 				// own character_book recursively.
 				card: buildCharacterCardV3({
 					...binding.character,
-					tags: binding.character.characterTags?.map((ct) => ct.tag.name) || []
+					tags:
+						binding.character.characterTags?.map(
+							(ct) => ct.tag.name
+						) || []
 				})
 			})
 		}
@@ -835,9 +869,10 @@ async function buildLorebookExportData(
 		const narrativeNodeRows = await db.query.narrativeNodes.findMany({
 			where: eq(schema.narrativeNodes.lorebookId, lorebook.id)
 		})
-		const narrativeRelationshipRows = await db.query.narrativeRelationships.findMany(
-			{ where: eq(schema.narrativeRelationships.lorebookId, lorebook.id) }
-		)
+		const narrativeRelationshipRows =
+			await db.query.narrativeRelationships.findMany({
+				where: eq(schema.narrativeRelationships.lorebookId, lorebook.id)
+			})
 
 		const nodeLocalIdByRealId = new Map<number, number>()
 		narrativeNodeRows.forEach((node) => {
@@ -883,7 +918,11 @@ async function buildLorebookExportData(
 			)
 			.filter((r): r is NonNullable<typeof r> => r !== null)
 
-		specBookWithGraph = attachNarrativeGraph(specBook, narrativeNodes, narrativeRelationships)
+		specBookWithGraph = attachNarrativeGraph(
+			specBook,
+			narrativeNodes,
+			narrativeRelationships
+		)
 	}
 
 	return { name: lorebook.name, specBookWithGraph }
@@ -933,8 +972,12 @@ export const lorebookExportHandler: Handler<
 // every future re-export/hash-comparison with fabricated values.
 function extractLorebookLevelExtraJson(rawData: any): Record<string, any> {
 	return {
-		...(rawData?.scan_depth !== undefined ? { scanDepth: rawData.scan_depth } : {}),
-		...(rawData?.token_budget !== undefined ? { tokenBudget: rawData.token_budget } : {}),
+		...(rawData?.scan_depth !== undefined
+			? { scanDepth: rawData.scan_depth }
+			: {}),
+		...(rawData?.token_budget !== undefined
+			? { tokenBudget: rawData.token_budget }
+			: {}),
 		...(rawData?.recursive_scanning !== undefined
 			? { recursiveScanning: rawData.recursive_scanning }
 			: {})
@@ -955,7 +998,10 @@ const LOREBOOK_IMPORT_LIMITS = {
 } as const
 
 /** Rejects an oversized import up front, before any DB work begins. */
-function assertLorebookImportWithinLimits(card: CharacterBook, lorebookData: any) {
+function assertLorebookImportWithinLimits(
+	card: CharacterBook,
+	lorebookData: any
+) {
 	const serenepub = (lorebookData as any)?.extensions?.serenepub
 	const entryCount = Array.isArray(card.entries) ? card.entries.length : 0
 	const characterCount = Array.isArray(serenepub?.characters)
@@ -1025,7 +1071,10 @@ async function restoreBoundEntities(
 	for (const embedded of serenepub?.characters ?? []) {
 		const cardData = embedded?.card?.data
 		if (!cardData) continue
-		const character = await resolveOrOverwriteEmbeddedCharacter(cardData, userId)
+		const character = await resolveOrOverwriteEmbeddedCharacter(
+			cardData,
+			userId
+		)
 		characterLocalIdToRealId.set(embedded.localId, character.id)
 	}
 
@@ -1033,14 +1082,18 @@ async function restoreBoundEntities(
 	for (const embedded of serenepub?.personas ?? []) {
 		const cardData = embedded?.card
 		if (!cardData) continue
-		const persona = await resolveOrOverwriteEmbeddedPersona(cardData, userId)
+		const persona = await resolveOrOverwriteEmbeddedPersona(
+			cardData,
+			userId
+		)
 		personaLocalIdToRealId.set(embedded.localId, persona.id)
 	}
 
 	for (const binding of rawBindings) {
 		const characterId =
 			binding.characterLocalId != null
-				? (characterLocalIdToRealId.get(binding.characterLocalId) ?? null)
+				? (characterLocalIdToRealId.get(binding.characterLocalId) ??
+					null)
 				: null
 		const personaId =
 			binding.personaLocalId != null
@@ -1062,7 +1115,10 @@ async function restoreBoundEntities(
 	return bindingLocalIdToRealId
 }
 
-async function resolveOrOverwriteEmbeddedCharacter(cardData: any, userId: number) {
+async function resolveOrOverwriteEmbeddedCharacter(
+	cardData: any,
+	userId: number
+) {
 	const incomingUuid = extractCharacterUuid(cardData)
 	if (incomingUuid) {
 		const existing = await db.query.characters.findFirst({
@@ -1073,10 +1129,14 @@ async function resolveOrOverwriteEmbeddedCharacter(cardData: any, userId: number
 			columns: { id: true }
 		})
 		if (existing) {
-			const comparison = await buildExistingCharacterComparisonData(existing.id)
+			const comparison = await buildExistingCharacterComparisonData(
+				existing.id
+			)
 			if (comparison) {
 				const { character_book, ...incomingForHash } = cardData
-				const existingHash = hashCanonicalJson(comparison.comparisonData)
+				const existingHash = hashCanonicalJson(
+					comparison.comparisonData
+				)
 				const incomingHash = hashCanonicalJson(incomingForHash)
 				if (existingHash === incomingHash) return comparison.character
 				return overwriteCharacterFromParsedData(
@@ -1091,7 +1151,10 @@ async function resolveOrOverwriteEmbeddedCharacter(cardData: any, userId: number
 	return createCharacterFromParsedData(cardData, undefined, userId)
 }
 
-async function resolveOrOverwriteEmbeddedPersona(cardData: any, userId: number) {
+async function resolveOrOverwriteEmbeddedPersona(
+	cardData: any,
+	userId: number
+) {
 	const incomingUuid = extractPersonaUuid(cardData)
 	if (incomingUuid) {
 		const existing = await db.query.personas.findFirst({
@@ -1101,12 +1164,20 @@ async function resolveOrOverwriteEmbeddedPersona(cardData: any, userId: number) 
 			)
 		})
 		if (existing) {
-			const existingHash = hashCanonicalJson(canonicalPersonaContent(existing))
+			const existingHash = hashCanonicalJson(
+				canonicalPersonaContent(existing)
+			)
 			const incomingHash = hashCanonicalJson(
-				canonicalPersonaContent(personaFieldsFromParsedData(cardData) as any)
+				canonicalPersonaContent(
+					personaFieldsFromParsedData(cardData) as any
+				)
 			)
 			if (existingHash === incomingHash) return existing
-			return overwritePersonaFromParsedData(existing.id, cardData, undefined)
+			return overwritePersonaFromParsedData(
+				existing.id,
+				cardData,
+				undefined
+			)
 		}
 	}
 	return createPersonaFromParsedData(cardData, undefined, userId)
@@ -1148,7 +1219,10 @@ async function insertLorebookEntries(
 					: null
 			queries.push(
 				db.insert(schema.characterLoreEntries).values({
-					...mapLorebookEntryToCharacterLoreEntry(entry, characterPosition),
+					...mapLorebookEntryToCharacterLoreEntry(
+						entry,
+						characterPosition
+					),
 					lorebookId,
 					lorebookBindingId
 				})
@@ -1161,13 +1235,19 @@ async function insertLorebookEntries(
 					const [historyRow] = await db
 						.insert(schema.historyEntries)
 						.values({
-							...mapLorebookEntryToHistoryEntry(entry, historyPosition),
+							...mapLorebookEntryToHistoryEntry(
+								entry,
+								historyPosition
+							),
 							lorebookId
 						})
 						.returning()
 
 					if (typeof meta.localId === "number") {
-						historyEntryLocalIdToRealId.set(meta.localId, historyRow.id)
+						historyEntryLocalIdToRealId.set(
+							meta.localId,
+							historyRow.id
+						)
 					}
 
 					// Nested scenes — each still gets its own document-scoped
@@ -1186,8 +1266,10 @@ async function insertLorebookEntries(
 								name: scene?.name ?? null,
 								selectedMessageIds: [],
 								summary: scene?.summary ?? null,
-								participantCharacters: scene?.participantCharacters ?? [],
-								mentionedCharacters: scene?.mentionedCharacters ?? []
+								participantCharacters:
+									scene?.participantCharacters ?? [],
+								mentionedCharacters:
+									scene?.mentionedCharacters ?? []
 							})
 							.returning()
 						if (typeof scene?.localId === "number") {
@@ -1269,7 +1351,8 @@ async function restoreNarrativeGraph(
 			try {
 				const lorebookBindingId =
 					typeof node?.bindingLocalId === "number"
-						? (bindingLocalIdToRealId.get(node.bindingLocalId) ?? null)
+						? (bindingLocalIdToRealId.get(node.bindingLocalId) ??
+							null)
 						: null
 				const historyEntryId =
 					typeof node?.historyEntryLocalId === "number"
@@ -1279,13 +1362,20 @@ async function restoreNarrativeGraph(
 						: null
 				const sceneId =
 					typeof node?.sceneLocalId === "number"
-						? (historyRefs.sceneLocalIdToRealId.get(node.sceneLocalId) ?? null)
+						? (historyRefs.sceneLocalIdToRealId.get(
+								node.sceneLocalId
+							) ?? null)
 						: null
 				const characterIds = (
-					Array.isArray(node?.characterUuids) ? node.characterUuids : []
+					Array.isArray(node?.characterUuids)
+						? node.characterUuids
+						: []
 				)
 					.map((uuid: string) => characterIdByUuid.get(uuid))
-					.filter((id: number | undefined): id is number => id !== undefined)
+					.filter(
+						(id: number | undefined): id is number =>
+							id !== undefined
+					)
 
 				const [row] = await db
 					.insert(schema.narrativeNodes)
@@ -1294,7 +1384,9 @@ async function restoreNarrativeGraph(
 						name: node?.name || "",
 						nodeState: node?.nodeState || "active",
 						nodeVisibility: node?.nodeVisibility || "normal",
-						aliases: Array.isArray(node?.aliases) ? node.aliases : [],
+						aliases: Array.isArray(node?.aliases)
+							? node.aliases
+							: [],
 						summary: node?.summary ?? null,
 						lorebookBindingId,
 						historyEntryId,
@@ -1317,7 +1409,10 @@ async function restoreNarrativeGraph(
 		// Pass 2: now that every node exists, resolve parentLocalId links —
 		// self-references and 3rd-level chains are dropped by
 		// resolveParentNodeLinks (narrativeNodes.parentNodeId is 2-level max).
-		const parentLinks = resolveParentNodeLinks(rawNodes, nodeLocalIdToRealId)
+		const parentLinks = resolveParentNodeLinks(
+			rawNodes,
+			nodeLocalIdToRealId
+		)
 		for (const { realId, parentRealId } of parentLinks) {
 			try {
 				await db
@@ -1346,7 +1441,9 @@ async function restoreNarrativeGraph(
 						: null
 				const sceneId =
 					typeof rel?.sceneLocalId === "number"
-						? (historyRefs.sceneLocalIdToRealId.get(rel.sceneLocalId) ?? null)
+						? (historyRefs.sceneLocalIdToRealId.get(
+								rel.sceneLocalId
+							) ?? null)
 						: null
 
 				await db.insert(schema.narrativeRelationships).values({
@@ -1501,15 +1598,20 @@ export const lorebookImportHandler: Handler<
 			// Normalizes legacy shapes (object-keyed entries, singular
 			// key/keysecondary fields) that CharacterBook.from_json() on its
 			// own would silently turn into an empty book rather than error on.
-			const lorebookData = normalizeLegacyLorebookData(params.lorebookData)
+			const lorebookData = normalizeLegacyLorebookData(
+				params.lorebookData
+			)
 			const card = CharacterBook.from_json(lorebookData)
 			if (!card) {
 				throw new Error("No lorebook data provided.")
 			}
 			assertLorebookImportWithinLimits(card, lorebookData)
 
-			const rawIncomingUuid = (lorebookData as any)?.extensions?.serenepub?.uuid
-			const incomingUuid = isValidUuid(rawIncomingUuid) ? rawIncomingUuid : undefined
+			const rawIncomingUuid = (lorebookData as any)?.extensions?.serenepub
+				?.uuid
+			const incomingUuid = isValidUuid(rawIncomingUuid)
+				? rawIncomingUuid
+				: undefined
 
 			if (incomingUuid) {
 				const existing = await db.query.lorebooks.findFirst({
@@ -1607,7 +1709,9 @@ export const lorebookImportResolveHandler: Handler<
 		try {
 			const userId = socket.user!.id
 
-			const lorebookData = normalizeLegacyLorebookData(params.lorebookData)
+			const lorebookData = normalizeLegacyLorebookData(
+				params.lorebookData
+			)
 			const card = CharacterBook.from_json(lorebookData)
 			if (!card) {
 				throw new Error("No lorebook data provided.")

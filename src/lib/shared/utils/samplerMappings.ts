@@ -121,7 +121,7 @@ export const llamaCppSamplingKeyMap: Record<string, string> = {
 	stop: "stop"
 }
 
-// KoboldCpp sampling key mappings
+// KoboldCPP sampling key mappings
 export const koboldCppSamplingKeyMap: Record<string, string> = {
 	// Core sampling parameters
 	temperature: "temperature",
@@ -136,7 +136,7 @@ export const koboldCppSamplingKeyMap: Record<string, string> = {
 	// Typical sampling
 	typicalP: "typical",
 
-	// Top-A sampling (KoboldCpp specific)
+	// Top-A sampling (KoboldCPP specific)
 	topA: "top_a",
 
 	// Mirostat sampling
@@ -152,7 +152,7 @@ export const koboldCppSamplingKeyMap: Record<string, string> = {
 	dynatempRange: "dynatemp_range",
 	dynatempExponent: "dynatemp_exponent",
 
-	// Smoothing factor (KoboldCpp specific)
+	// Smoothing factor (KoboldCPP specific)
 	smoothingFactor: "smoothing_factor",
 
 	// DRY (Don't Repeat Yourself) sampling
@@ -165,7 +165,7 @@ export const koboldCppSamplingKeyMap: Record<string, string> = {
 	xtcProbability: "xtc_probability",
 	xtcThreshold: "xtc_threshold",
 
-	// N-Sigma sampling (KoboldCpp specific)
+	// N-Sigma sampling (KoboldCPP specific)
 	nsigma: "nsigma",
 
 	// Generation limits
@@ -497,7 +497,7 @@ export const samplerMetadata: Record<
 		default: []
 	},
 
-	// KoboldCpp-specific samplers
+	// KoboldCPP-specific samplers
 	topA: {
 		label: "Top A",
 		description: "Top-a sampling value (KoboldCPP only)",
@@ -563,7 +563,7 @@ export function getUnsupportedSamplers(
 					break
 				case CONNECTION_TYPE.KOBOLDCPP:
 				case CONNECTION_TYPE.KOBOLDCPP_MANAGED:
-					explanation = "KoboldCpp does not support this sampler"
+					explanation = "KoboldCPP does not support this sampler"
 					break
 				case CONNECTION_TYPE.ANTHROPIC:
 					explanation = "Anthropic API does not support this sampler"

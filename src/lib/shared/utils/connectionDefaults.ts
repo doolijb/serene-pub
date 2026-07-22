@@ -261,9 +261,10 @@ function deepMerge<T>(base: T, override: Partial<T> | undefined | null): T {
 	for (const key of Object.keys(override)) {
 		const overrideVal = (override as any)[key]
 		if (overrideVal === undefined) continue
-		result[key] = isPlainObject(overrideVal) && isPlainObject(result[key])
-			? deepMerge(result[key], overrideVal)
-			: overrideVal
+		result[key] =
+			isPlainObject(overrideVal) && isPlainObject(result[key])
+				? deepMerge(result[key], overrideVal)
+				: overrideVal
 	}
 	return result
 }
@@ -276,8 +277,11 @@ function deepMerge<T>(base: T, override: Partial<T> | undefined | null): T {
  * value a form displays always matches what generation actually falls back
  * to, instead of each side keeping its own separate copy of "the defaults."
  */
-export function withConnectionDefaults<T extends { type: string }>(connection: T): T {
-	const defaults = CONNECTION_DEFAULTS[connection.type as keyof typeof CONNECTION_DEFAULTS]
+export function withConnectionDefaults<T extends { type: string }>(
+	connection: T
+): T {
+	const defaults =
+		CONNECTION_DEFAULTS[connection.type as keyof typeof CONNECTION_DEFAULTS]
 	if (!defaults) return connection
 	return deepMerge(defaults as any, connection as any)
 }
@@ -290,7 +294,8 @@ export function withConnectionDefaults<T extends { type: string }>(connection: T
  * differently-ordered keys as different strings.
  */
 export function stableStringify(value: any): string {
-	if (value === null || typeof value !== "object") return JSON.stringify(value)
+	if (value === null || typeof value !== "object")
+		return JSON.stringify(value)
 	if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`
 	const keys = Object.keys(value).sort()
 	return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`

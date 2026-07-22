@@ -3,7 +3,11 @@
 
 	interface Props {
 		label?: string
-		connectionsList: { id?: number | null; name?: string | null; type?: string | null }[]
+		connectionsList: {
+			id?: number | null
+			name?: string | null
+			type?: string | null
+		}[]
 		samplingList: { id?: number | null; name?: string | null }[]
 		connectionId?: number | null
 		samplingConfigId?: number | null
@@ -28,7 +32,9 @@
 	<select class="select text-xs" bind:value={connectionId} {disabled}>
 		<option value={null}>System default</option>
 		{#each connectionsList.filter((c) => c.id != null) as c (c.id)}
-			{@const typeLabel = CONNECTION_TYPE.options.find((t) => t.value === c.type)?.label ?? c.type}
+			{@const typeLabel =
+				CONNECTION_TYPE.options.find((t) => t.value === c.type)
+					?.label ?? c.type}
 			<option value={c.id}>{c.name ?? c.id} ({typeLabel})</option>
 		{/each}
 	</select>

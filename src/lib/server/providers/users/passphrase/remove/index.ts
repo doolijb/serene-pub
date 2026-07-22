@@ -14,7 +14,10 @@ export async function remove({
 
 	// Returning?
 	if (returning) {
-		return await tx.delete(schema.passphrases).where(where).returning(returning)
+		return await tx
+			.delete(schema.passphrases)
+			.where(where)
+			.returning(returning)
 	}
 
 	// Return result

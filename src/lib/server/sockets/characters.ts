@@ -22,8 +22,15 @@ import {
 } from "../utils/characterCardParser"
 import { autoEnqueueCharacter } from "$lib/server/embedding/vectorizationQueue"
 import { canViewCharacter } from "$lib/server/utils/chatAccess"
-import { resolveCardSource, cachedSearch, resolveNsfwParam } from "$lib/server/cardSources"
-import { CardSourceUnavailableError, CardSourceRateLimitedError } from "$lib/server/cardSources/types"
+import {
+	resolveCardSource,
+	cachedSearch,
+	resolveNsfwParam
+} from "$lib/server/cardSources"
+import {
+	CardSourceUnavailableError,
+	CardSourceRateLimitedError
+} from "$lib/server/cardSources/types"
 import { buildSpecV3Lorebook } from "$lib/server/utils/lorebookExportMapper"
 import { hashCanonicalJson } from "$lib/server/utils/contentHash"
 import { isValidUuid } from "$lib/server/utils/uuid"
@@ -116,7 +123,10 @@ async function processCharacterTags(
 	}
 }
 
-export const charactersList: Handler<Sockets.Characters.List.Params, Sockets.Characters.List.Response> = {
+export const charactersList: Handler<
+	Sockets.Characters.List.Params,
+	Sockets.Characters.List.Response
+> = {
 	event: "characters:list",
 	handler: async (socket, params, emitToUser) => {
 		const characterList = await db.query.characters.findMany({
@@ -146,7 +156,10 @@ export const charactersList: Handler<Sockets.Characters.List.Params, Sockets.Cha
 	}
 }
 
-export const charactersGet: Handler<Sockets.Characters.Get.Params, Sockets.Characters.Get.Response> = {
+export const charactersGet: Handler<
+	Sockets.Characters.Get.Params,
+	Sockets.Characters.Get.Response
+> = {
 	event: "characters:get",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
@@ -174,11 +187,17 @@ export const charactersGet: Handler<Sockets.Characters.Get.Params, Sockets.Chara
 				...character,
 				tags: character.characterTags.map((ct) => ct.tag.name),
 				isOwner,
-				ownerName: character.user?.displayName || character.user?.username || null
+				ownerName:
+					character.user?.displayName ||
+					character.user?.username ||
+					null
 			}
-			const { characterTags, user, ...characterWithoutTags } = characterWithTags
+			const { characterTags, user, ...characterWithoutTags } =
+				characterWithTags
 
-			const res: Sockets.Characters.Get.Response = { character: characterWithoutTags }
+			const res: Sockets.Characters.Get.Response = {
+				character: characterWithoutTags
+			}
 			emitToUser("characters:get", res)
 			return res
 		}
@@ -188,7 +207,10 @@ export const charactersGet: Handler<Sockets.Characters.Get.Params, Sockets.Chara
 	}
 }
 
-export const charactersCreate: Handler<Sockets.Characters.Create.Params, Sockets.Characters.Create.Response> = {
+export const charactersCreate: Handler<
+	Sockets.Characters.Create.Params,
+	Sockets.Characters.Create.Response
+> = {
 	event: "characters:create",
 	handler: async (socket, params, emitToUser) => {
 		try {
@@ -197,9 +219,9 @@ export const charactersCreate: Handler<Sockets.Characters.Create.Params, Sockets
 
 			// Remove fields that shouldn't be in the database insert
 			// @ts-ignore - Remove avatar from character data to avoid conflicts
-			delete data.avatar 
+			delete data.avatar
 			// @ts-ignore - Remove tags - will be handled separately
-			delete (data as any).tags 
+			delete (data as any).tags
 
 			const [character] = await db
 				.insert(schema.characters)
@@ -218,7 +240,9 @@ export const charactersCreate: Handler<Sockets.Characters.Create.Params, Sockets
 				})
 			}
 
-			autoEnqueueCharacter(character.id, character.name).catch(console.error)
+			autoEnqueueCharacter(character.id, character.name).catch(
+				console.error
+			)
 			await charactersList.handler(socket, {}, emitToUser)
 
 			const res: Sockets.Characters.Create.Response = { character }
@@ -234,7 +258,10 @@ export const charactersCreate: Handler<Sockets.Characters.Create.Params, Sockets
 	}
 }
 
-export const charactersUpdate: Handler<Sockets.Characters.Update.Params, Sockets.Characters.Update.Response> = {
+export const charactersUpdate: Handler<
+	Sockets.Characters.Update.Params,
+	Sockets.Characters.Update.Response
+> = {
 	event: "characters:update",
 	handler: async (socket, params, emitToUser) => {
 		try {
@@ -258,7 +285,12 @@ export const charactersUpdate: Handler<Sockets.Characters.Update.Params, Sockets
 
 			const [updated] = await db
 				.update(schema.characters)
-				.set({ ...data, embedding: null, embeddingModel: null, vectorizedAt: null })
+				.set({
+					...data,
+					embedding: null,
+					embeddingModel: null,
+					vectorizedAt: null
+				})
 				.where(
 					and(
 						eq(schema.characters.id, id),
@@ -282,7 +314,9 @@ export const charactersUpdate: Handler<Sockets.Characters.Update.Params, Sockets
 			}
 
 			autoEnqueueCharacter(id, updated.name).catch(console.error)
-			const res: Sockets.Characters.Update.Response = { character: updated }
+			const res: Sockets.Characters.Update.Response = {
+				character: updated
+			}
 			await charactersList.handler(socket, {}, emitToUser)
 			emitToUser("characters:update", res)
 			return res
@@ -296,7 +330,10 @@ export const charactersUpdate: Handler<Sockets.Characters.Update.Params, Sockets
 	}
 }
 
-export const charactersDelete: Handler<Sockets.Characters.Delete.Params, Sockets.Characters.Delete.Response> = {
+export const charactersDelete: Handler<
+	Sockets.Characters.Delete.Params,
+	Sockets.Characters.Delete.Response
+> = {
 	event: "characters:delete",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
@@ -316,7 +353,7 @@ export const charactersDelete: Handler<Sockets.Characters.Delete.Params, Sockets
 					eq(schema.characters.userId, userId)
 				)
 			)
-		
+
 		// Delete the character data directory if it exists
 		const avatarDir = getCharacterDataDir({
 			characterId: params.id,
@@ -327,11 +364,13 @@ export const charactersDelete: Handler<Sockets.Characters.Delete.Params, Sockets
 		} catch (err) {
 			console.error("Error deleting character data directory:", err)
 		}
-		
+
 		await charactersList.handler(socket, {}, emitToUser)
-		
+
 		// Emit the delete event
-		const res: Sockets.Characters.Delete.Response = { success: "Character deleted successfully" }
+		const res: Sockets.Characters.Delete.Response = {
+			success: "Character deleted successfully"
+		}
 		emitToUser("characters:delete", res)
 		return res
 	}
@@ -370,7 +409,10 @@ export function characterFieldsFromParsedData(
 		creator: data.creator || null,
 		source: data.extensions?.source || [],
 		groupOnlyGreetings: data.extensions?.group_only_greetings || null,
-		aliases: data.extensions?.serenepub?.aliases ?? data.extensions?.aliases ?? [],
+		aliases:
+			data.extensions?.serenepub?.aliases ??
+			data.extensions?.aliases ??
+			[],
 		summary: data.extensions?.serenepub?.summary ?? null,
 		category: data.extensions?.serenepub?.category ?? null
 	}
@@ -383,7 +425,10 @@ async function applyAvatarAndTags(
 	userId: number
 ) {
 	if (avatarBuffer) {
-		await handleCharacterAvatarUpload({ character, avatarFile: avatarBuffer })
+		await handleCharacterAvatarUpload({
+			character,
+			avatarFile: avatarBuffer
+		})
 		const updatedCharacter = await db.query.characters.findFirst({
 			where: eq(schema.characters.id, character.id)
 		})
@@ -403,7 +448,11 @@ export async function createCharacterFromParsedData(
 ) {
 	const [character] = await db
 		.insert(schema.characters)
-		.values({ ...characterFieldsFromParsedData(data), userId, isFavorite: false })
+		.values({
+			...characterFieldsFromParsedData(data),
+			userId,
+			isFavorite: false
+		})
 		.returning()
 	return applyAvatarAndTags(character, avatarBuffer, data.tags, userId)
 }
@@ -438,7 +487,9 @@ export async function overwriteCharacterFromParsedData(
  * before comparing, or an exported-with-lorebook character would always
  * look "changed".
  */
-export async function buildExistingCharacterComparisonData(characterId: number) {
+export async function buildExistingCharacterComparisonData(
+	characterId: number
+) {
 	const character = await db.query.characters.findFirst({
 		where: eq(schema.characters.id, characterId),
 		with: { characterTags: { with: { tag: true } } }
@@ -451,7 +502,10 @@ export async function buildExistingCharacterComparisonData(characterId: number) 
 	return { character, comparisonData: built.data }
 }
 
-export const charactersImportCard: Handler<Sockets.Characters.ImportCard.Params, Sockets.Characters.ImportCard.Response> = {
+export const charactersImportCard: Handler<
+	Sockets.Characters.ImportCard.Params,
+	Sockets.Characters.ImportCard.Response
+> = {
 	event: "characters:importCard",
 	handler: async (socket, params, emitToUser) => {
 		try {
@@ -477,22 +531,23 @@ export const charactersImportCard: Handler<Sockets.Characters.ImportCard.Params,
 				})
 
 				if (existing) {
-					const existingComparison = await buildExistingCharacterComparisonData(
-						existing.id
-					)
+					const existingComparison =
+						await buildExistingCharacterComparisonData(existing.id)
 					if (existingComparison) {
-						const { character_book, ...incomingForHash } = data as any
+						const { character_book, ...incomingForHash } =
+							data as any
 						const existingHash = hashCanonicalJson(
 							existingComparison.comparisonData
 						)
 						const incomingHash = hashCanonicalJson(incomingForHash)
 
 						if (existingHash === incomingHash) {
-							const res: Sockets.Characters.ImportCard.Response = {
-								status: "unchanged",
-								character: existingComparison.character,
-								book: lorebook ?? null
-							}
+							const res: Sockets.Characters.ImportCard.Response =
+								{
+									status: "unchanged",
+									character: existingComparison.character,
+									book: lorebook ?? null
+								}
 							emitToUser("characters:importCard", res)
 							return res
 						}
@@ -551,9 +606,8 @@ export const charactersImportResolve: Handler<
 	handler: async (socket, params, emitToUser) => {
 		try {
 			const userId = socket.user!.id
-			const { card, avatarBuffer, lorebook } = await parseCharacterCardFromBase64(
-				params.file
-			)
+			const { card, avatarBuffer, lorebook } =
+				await parseCharacterCardFromBase64(params.file)
 			const data = getRobustSpecV3Data(card)
 
 			let character
@@ -573,7 +627,11 @@ export const charactersImportResolve: Handler<
 					userId
 				)
 			} else {
-				character = await createCharacterFromParsedData(data, avatarBuffer, userId)
+				character = await createCharacterFromParsedData(
+					data,
+					avatarBuffer,
+					userId
+				)
 			}
 
 			await charactersList.handler(socket, {}, emitToUser)
@@ -594,7 +652,10 @@ export const charactersImportResolve: Handler<
 	}
 }
 
-export const charactersSearchLibrary: Handler<Sockets.Characters.SearchLibrary.Params, Sockets.Characters.SearchLibrary.Response> = {
+export const charactersSearchLibrary: Handler<
+	Sockets.Characters.SearchLibrary.Params,
+	Sockets.Characters.SearchLibrary.Response
+> = {
 	event: "characters:searchLibrary",
 	handler: async (socket, params, emitToUser) => {
 		try {
@@ -638,8 +699,10 @@ export const charactersSearchLibrary: Handler<Sockets.Characters.SearchLibrary.P
 					error instanceof CardSourceRateLimitedError
 						? error.message
 						: "Failed to search character library",
-				unreachable: error instanceof CardSourceUnavailableError || undefined,
-				rateLimited: error instanceof CardSourceRateLimitedError || undefined,
+				unreachable:
+					error instanceof CardSourceUnavailableError || undefined,
+				rateLimited:
+					error instanceof CardSourceRateLimitedError || undefined,
 				retryAfterMs:
 					error instanceof CardSourceRateLimitedError
 						? error.retryAfterMs
@@ -651,7 +714,10 @@ export const charactersSearchLibrary: Handler<Sockets.Characters.SearchLibrary.P
 	}
 }
 
-export const charactersImportFromLibrary: Handler<Sockets.Characters.ImportFromLibrary.Params, Sockets.Characters.ImportFromLibrary.Response> = {
+export const charactersImportFromLibrary: Handler<
+	Sockets.Characters.ImportFromLibrary.Params,
+	Sockets.Characters.ImportFromLibrary.Response
+> = {
 	event: "characters:importFromLibrary",
 	handler: async (socket, params, emitToUser) => {
 		try {
@@ -703,7 +769,10 @@ export const charactersImportFromLibrary: Handler<Sockets.Characters.ImportFromL
 	}
 }
 
-export const charactersExportCard: Handler<Sockets.Characters.ExportCard.Params, Sockets.Characters.ExportCard.Response> = {
+export const charactersExportCard: Handler<
+	Sockets.Characters.ExportCard.Params,
+	Sockets.Characters.ExportCard.Response
+> = {
 	event: "characters:exportCard",
 	handler: async (socket, params, emitToUser) => {
 		try {
@@ -740,7 +809,10 @@ export const charactersExportCard: Handler<Sockets.Characters.ExportCard.Params,
 			if (params.lorebookId) {
 				const binding = await db.query.lorebookBindings.findFirst({
 					where: and(
-						eq(schema.lorebookBindings.lorebookId, params.lorebookId),
+						eq(
+							schema.lorebookBindings.lorebookId,
+							params.lorebookId
+						),
 						eq(schema.lorebookBindings.characterId, params.id)
 					)
 				})
@@ -781,7 +853,7 @@ export const charactersExportCard: Handler<Sockets.Characters.ExportCard.Params,
 				// Export as JSON
 				const jsonString = JSON.stringify(charCardData, null, 2)
 				const blob = Buffer.from(jsonString, "utf-8")
-				const filename = `${character.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.v3.json`
+				const filename = `${character.name.replace(/[^a-z0-9]/gi, "_").toLowerCase()}.v3.json`
 
 				const res: Sockets.Characters.ExportCard.Response = {
 					blob,
@@ -792,18 +864,23 @@ export const charactersExportCard: Handler<Sockets.Characters.ExportCard.Params,
 			} else {
 				// Export as PNG with embedded data
 				if (!character.avatar) {
-					throw new Error("Character has no avatar to embed data into")
+					throw new Error(
+						"Character has no avatar to embed data into"
+					)
 				}
 
 				// Read the avatar file
-				const avatarDir = getCharacterDataDir({ characterId: params.id, userId })
+				const avatarDir = getCharacterDataDir({
+					characterId: params.id,
+					userId
+				})
 				// Extract just the filename from the avatar path (it may contain full path)
 				const avatarFilename = path.basename(character.avatar)
 				const avatarPath = path.join(avatarDir, avatarFilename)
 				const avatarBuffer = await fsPromises.readFile(avatarPath)
 
 				const blob = embedCharacterCardInPng(avatarBuffer, charCardData)
-				const filename = `${character.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.v3.png`
+				const filename = `${character.name.replace(/[^a-z0-9]/gi, "_").toLowerCase()}.v3.png`
 
 				const res: Sockets.Characters.ExportCard.Response = {
 					blob,
@@ -822,23 +899,33 @@ export const charactersExportCard: Handler<Sockets.Characters.ExportCard.Params,
 	}
 }
 
-export const charactersListGallery: Handler<Sockets.Characters.ListGallery.Params, Sockets.Characters.ListGallery.Response> = {
+export const charactersListGallery: Handler<
+	Sockets.Characters.ListGallery.Params,
+	Sockets.Characters.ListGallery.Response
+> = {
 	event: "characters:listGallery",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
-		const images = await listCharacterGallery({ characterId: params.characterId, userId })
+		const images = await listCharacterGallery({
+			characterId: params.characterId,
+			userId
+		})
 		const res: Sockets.Characters.ListGallery.Response = { images }
 		emitToUser("characters:listGallery", res)
 		return res
 	}
 }
 
-export const charactersUploadGalleryImage: Handler<Sockets.Characters.UploadGalleryImage.Params, Sockets.Characters.UploadGalleryImage.Response> = {
+export const charactersUploadGalleryImage: Handler<
+	Sockets.Characters.UploadGalleryImage.Params,
+	Sockets.Characters.UploadGalleryImage.Response
+> = {
 	event: "characters:uploadGalleryImage",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const character = await db.query.characters.findFirst({
-			where: (c, { and, eq }) => and(eq(c.id, params.characterId), eq(c.userId, userId))
+			where: (c, { and, eq }) =>
+				and(eq(c.id, params.characterId), eq(c.userId, userId))
 		})
 		if (!character) throw new Error("Character not found or access denied")
 
@@ -849,68 +936,119 @@ export const charactersUploadGalleryImage: Handler<Sockets.Characters.UploadGall
 			mimeType: params.mimeType
 		})
 
-		const res: Sockets.Characters.UploadGalleryImage.Response = { success: true, path: imgPath }
+		const res: Sockets.Characters.UploadGalleryImage.Response = {
+			success: true,
+			path: imgPath
+		}
 		emitToUser("characters:uploadGalleryImage", res)
-		await charactersListGallery.handler(socket, { characterId: params.characterId }, emitToUser)
-		await charactersGet.handler(socket, { id: params.characterId }, emitToUser)
+		await charactersListGallery.handler(
+			socket,
+			{ characterId: params.characterId },
+			emitToUser
+		)
+		await charactersGet.handler(
+			socket,
+			{ id: params.characterId },
+			emitToUser
+		)
 		return res
 	}
 }
 
-export const charactersDeleteGalleryImage: Handler<Sockets.Characters.DeleteGalleryImage.Params, Sockets.Characters.DeleteGalleryImage.Response> = {
+export const charactersDeleteGalleryImage: Handler<
+	Sockets.Characters.DeleteGalleryImage.Params,
+	Sockets.Characters.DeleteGalleryImage.Response
+> = {
 	event: "characters:deleteGalleryImage",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const character = await db.query.characters.findFirst({
-			where: (c, { and, eq }) => and(eq(c.id, params.characterId), eq(c.userId, userId))
+			where: (c, { and, eq }) =>
+				and(eq(c.id, params.characterId), eq(c.userId, userId))
 		})
 		if (!character) throw new Error("Character not found or access denied")
 
-		await deleteCharacterGalleryImage({ characterId: params.characterId, userId, path: params.path })
+		await deleteCharacterGalleryImage({
+			characterId: params.characterId,
+			userId,
+			path: params.path
+		})
 
-		const res: Sockets.Characters.DeleteGalleryImage.Response = { success: true }
+		const res: Sockets.Characters.DeleteGalleryImage.Response = {
+			success: true
+		}
 		emitToUser("characters:deleteGalleryImage", res)
-		await charactersListGallery.handler(socket, { characterId: params.characterId }, emitToUser)
+		await charactersListGallery.handler(
+			socket,
+			{ characterId: params.characterId },
+			emitToUser
+		)
 		return res
 	}
 }
 
-export const charactersReorderGallery: Handler<Sockets.Characters.ReorderGallery.Params, Sockets.Characters.ReorderGallery.Response> = {
+export const charactersReorderGallery: Handler<
+	Sockets.Characters.ReorderGallery.Params,
+	Sockets.Characters.ReorderGallery.Response
+> = {
 	event: "characters:reorderGallery",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const character = await db.query.characters.findFirst({
-			where: (c, { and, eq }) => and(eq(c.id, params.characterId), eq(c.userId, userId))
+			where: (c, { and, eq }) =>
+				and(eq(c.id, params.characterId), eq(c.userId, userId))
 		})
 		if (!character) throw new Error("Character not found or access denied")
 
-		await reorderCharacterGalleryImages({ characterId: params.characterId, paths: params.paths })
+		await reorderCharacterGalleryImages({
+			characterId: params.characterId,
+			paths: params.paths
+		})
 
-		const listRes = await charactersListGallery.handler(socket, { characterId: params.characterId }, emitToUser)
+		const listRes = await charactersListGallery.handler(
+			socket,
+			{ characterId: params.characterId },
+			emitToUser
+		)
 		const res: Sockets.Characters.ReorderGallery.Response = listRes
 		emitToUser("characters:reorderGallery", res)
 		return res
 	}
 }
 
-export const charactersSetAvatar: Handler<Sockets.Characters.SetAvatar.Params, Sockets.Characters.SetAvatar.Response> = {
+export const charactersSetAvatar: Handler<
+	Sockets.Characters.SetAvatar.Params,
+	Sockets.Characters.SetAvatar.Response
+> = {
 	event: "characters:setAvatar",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const character = await db.query.characters.findFirst({
-			where: (c, { and, eq }) => and(eq(c.id, params.characterId), eq(c.userId, userId))
+			where: (c, { and, eq }) =>
+				and(eq(c.id, params.characterId), eq(c.userId, userId))
 		})
 		if (!character) throw new Error("Character not found or access denied")
 
 		const [updated] = await db
 			.update(schema.characters)
 			.set({ avatar: params.path })
-			.where(and(eq(schema.characters.id, params.characterId), eq(schema.characters.userId, userId)))
+			.where(
+				and(
+					eq(schema.characters.id, params.characterId),
+					eq(schema.characters.userId, userId)
+				)
+			)
 			.returning()
 
-		const res: Sockets.Characters.SetAvatar.Response = { character: updated }
+		const res: Sockets.Characters.SetAvatar.Response = {
+			character: updated
+		}
 		emitToUser("characters:setAvatar", res)
-		await charactersGet.handler(socket, { id: params.characterId }, emitToUser)
+		await charactersGet.handler(
+			socket,
+			{ id: params.characterId },
+			emitToUser
+		)
 		return res
 	}
 }
@@ -919,7 +1057,11 @@ export const charactersSetAvatar: Handler<Sockets.Characters.SetAvatar.Params, S
 export function registerCharacterHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
-	register: (socket: any, handler: Handler<any, any>, emitToUser: (event: string, data: any) => void) => void
+	register: (
+		socket: any,
+		handler: Handler<any, any>,
+		emitToUser: (event: string, data: any) => void
+	) => void
 ) {
 	register(socket, charactersList, emitToUser)
 	register(socket, charactersGet, emitToUser)

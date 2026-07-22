@@ -14,13 +14,13 @@ This is a one-way switch — see [Enabling Multi-User Accounts](#enabling-multi-
 
 Multi-user accounts are turned on from **Settings → System** (the System tab only appears for admins), under the **Account Management** section. There's a single **Enable User Accounts** switch there.
 
-Flipping it on opens an **Enable User Accounts** confirmation dialog that warns, in the app's own words: *"Enabling user accounts will activate authentication and multi-user support. This change is permanent and cannot be reversed."* It also notes that after enabling accounts, you'll need to create accounts for all new users.
+Flipping it on opens an **Enable User Accounts** confirmation dialog that warns, in the app's own words: _"Enabling user accounts will activate authentication and multi-user support. This change is permanent and cannot be reversed."_ It also notes that after enabling accounts, you'll need to create accounts for all new users.
 
 ### The passphrase requirement before enabling
 
-If your own (admin) account doesn't already have a passphrase set, the same dialog expands to ask for one before you can confirm. You'll see your username (read-only) and fields for **Passphrase** and **Confirm Passphrase**, with these requirements listed directly in the dialog:
+If your own (admin) account doesn't already have a passphrase set, the same dialog expands to ask for one before you can confirm. You'll see your username (read-only) and fields for **Passphrase** and **Confirm Passphrase**. The server enforces:
 
-- At least 6 characters long
+- At least 10 characters long (128 maximum)
 - At least one lowercase letter
 - At least one uppercase letter
 - At least one special character
@@ -33,7 +33,7 @@ Once accounts are enabled, the app permanently requires authentication for every
 
 ## Signing In
 
-With accounts enabled, anyone opening Serene Pub without a valid session is shown a login screen (username and passphrase, with a show/hide toggle for the passphrase field) instead of the app. There's no self-service "forgot passphrase" link on this screen — the footer simply says *"Need help? Contact your administrator."* Getting a new passphrase requires an admin to reset it for you, as described in [Resetting a Passphrase](#resetting-a-passphrase) below.
+With accounts enabled, anyone opening Serene Pub without a valid session is shown a login screen (username and passphrase, with a show/hide toggle for the passphrase field) instead of the app. There's no self-service "forgot passphrase" link on this screen — the footer simply says _"Need help? Contact your administrator."_ Getting a new passphrase requires an admin to reset it for you, as described in [Resetting a Passphrase](#resetting-a-passphrase) below.
 
 ## The Users Panel
 
@@ -52,7 +52,7 @@ Admins create a user from the Users panel's **+** button, which opens a form wit
 - **Administrator** — a checkbox. Checking it (when it wasn't already checked) pops up a **Grant Administrator Privileges?** confirmation listing what admins can do (manage all users and permissions, access and modify all chats and characters, change system settings, delete content across the system) and warns this should only be done for trusted users.
 - **Passphrase\*** / **Confirm Passphrase** — required when creating a new user. A **Generate Random** button produces a passphrase in the pattern of three capitalized dictionary words, a 3-digit number, and a special character (e.g. `Ocean-Ember-Quartz482!`), and a **Copy** button copies it to the clipboard. An eye icon toggles the field between hidden and plain text.
 
-The form enforces: at least 6 characters, at least one lowercase letter, one uppercase letter, and one number (the in-form helper text reads *"Passphrase must be at least 6 characters with uppercase, lowercase, and numbers."*). Saving emits a **Create** action and the new account appears in the Users list immediately.
+The form's helper text reads _"Passphrase must be at least 6 characters with uppercase, lowercase, and numbers"_ — but this is a client-side hint only. The server doesn't actually enforce length or complexity on a passphrase an admin sets for someone else (creating or editing a user); it only requires the field be non-empty on creation. This is different from every self-service passphrase flow (initial admin setup and **Change Passphrase**, below), where the server strictly enforces the 10-character/upper/lower/special-character rule. In practice this means an admin _can_ set another user a passphrase that wouldn't pass the self-service rules — worth keeping in mind if you rely on the in-form hint as a real guarantee. Saving emits a **Create** action and the new account appears in the Users list immediately.
 
 ### Editing an existing user
 
@@ -63,12 +63,14 @@ The same form is reused for editing, with two differences: the passphrase fields
 Every account has a single `isAdmin` flag — there's no tiered permission system beyond admin/non-admin. In practice:
 
 **Administrators can:**
+
 - View, create, edit, and delete any user account (except they can't delete their own account — the server explicitly blocks that).
 - Grant or revoke admin status on other accounts.
 - Access the **System** settings tab (server-wide connection, summarization, RAG, and account settings — see [System Settings](./system-settings.md)).
 - Import data from SillyTavern via the **Data Import** section of their own Settings tab.
 
 **Standard (non-admin) users:**
+
 - Have their own private characters, personas, chats, lorebooks, and tags, scoped only to their account.
 - Can view the Users list (to see who else is on the server) but cannot create, edit, or delete accounts.
 - Only see the **User** and **Themes** tabs in Settings — no System tab.
@@ -109,7 +111,7 @@ This section is hidden entirely when accounts are disabled, since there's no sep
 Any logged-in user can change their own passphrase from **Settings → User → Change Passphrase**, which opens a modal asking for:
 
 - **Current Passphrase**
-- **New Passphrase** (helper text: *"Must be at least 6 characters with uppercase, lowercase, and special character"*)
+- **New Passphrase** (the UI's helper text may still say 6 characters, but the server actually requires at least **10**, with uppercase, lowercase, and a special character)
 - **Confirm New Passphrase**
 
 The server verifies your current passphrase before accepting the change, and rejects the new one if it doesn't meet the length/case/special-character requirements or if the confirmation doesn't match. On success the modal closes and a confirmation toast appears.
@@ -126,15 +128,13 @@ There are two different ways a passphrase gets reset, depending on who's locked 
 
 If a standard user (or a second admin) forgets their passphrase, an administrator resets it the same way they'd edit any other field: open the Users panel, select the user, click **Edit**, and fill in the **New Passphrase** / **Confirm Passphrase** fields (using **Generate Random** and **Copy** if convenient), then **Update**. Leaving those fields blank on an edit leaves the existing passphrase untouched, so this only takes effect when you deliberately type a new one.
 
-### Emergency admin passphrase reset
+### If the admin account itself is locked out
 
-If the **admin** account itself is locked out — the one exception being nobody with admin rights can log in to use the Users panel to fix it — Serene Pub exposes a dedicated recovery endpoint at `/api/reset-admin-passphrase`. Posting JSON of the form `{"newPassphrase": "..."}` to that endpoint resets the passphrase for the account with username `admin` (the default administrator account created automatically the first time the server runs) directly at the database level, bypassing the normal login-protected UI entirely.
+There is currently **no self-service or API-based recovery path** if the sole/last admin account gets locked out — no emergency endpoint, no CLI script, no environment-variable override. If nobody with admin rights can log in, the only way back in is direct access to the server's database (updating the stored passphrase hash by hand), which is outside the scope of the app itself.
 
-This is meant to be used by whoever has direct access to the server itself (for example, via `curl` from the machine or container running Serene Pub), not from within the app's own interface — there's no button for it anywhere in the UI.
+Because of this, it's worth treating admin lockout as a real risk to plan around rather than something recoverable from the app later: keep at least one admin's passphrase somewhere safe, and consider creating a second admin account once accounts are enabled so a single forgotten passphrase can't strand the whole instance.
 
 ### Security considerations
 
-- The emergency reset endpoint does **not** require you to already be logged in or otherwise prove you're an administrator — it only requires network access to the server. Don't expose your Serene Pub instance's HTTP endpoints to an untrusted network without separately restricting access to routes like this one (a firewall, reverse-proxy rule, or simply keeping the server off the public internet).
-- Because it always targets the account literally named `admin`, renaming or removing that specific account removes your ability to use this recovery path — plan account naming with that in mind if you expect to rely on it.
-- Passphrase requirements differ slightly depending on where you set one: the admin-facing Create/Edit User form asks for uppercase, lowercase, and a number, while self-service passphrase changes (first-time setup and **Change Passphrase**) ask for uppercase, lowercase, and a special character. Either style is accepted server-side for its respective flow — there's no single universal rule, so if a passphrase is rejected, check the specific requirement text shown next to that field.
+- Passphrase requirements are asymmetric and worth knowing precisely: **self-service** passphrases (the initial admin setup dialog and **Change Passphrase**) are strictly enforced server-side at a minimum of 10 characters (128 maximum), with at least one uppercase letter, one lowercase letter, and one special character. Passphrases an **admin sets for someone else** (the Create/Edit User form) are only required to be non-empty server-side — the form's "6 characters, uppercase, lowercase, numbers" helper text is a client-side suggestion, not an enforced rule. If you need a guaranteed-strong passphrase for another user's account, don't rely on the form alone.
 - Admin status is powerful and, once granted, has no separate approval step beyond the initial confirmation dialog — grant it only to people you'd trust with full server access, since admins can read and modify every other user's characters, personas, and chats in addition to managing accounts.

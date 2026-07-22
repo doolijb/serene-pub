@@ -234,8 +234,12 @@ export function normalizeTimestamp(timestamp: number | string): Date {
 		)
 	}
 
-	// Fallback to Date parser
-	return new Date(timestamp)
+	// Fallback to Date parser. Node's V8 rejects a 12-hour time with no space
+	// before am/pm (eg. "3:45pm") even though it accepts "3:45 pm" — and
+	// ST's send_date is commonly a toLocaleString()-style string in exactly
+	// that no-space form — so insert the space before handing off.
+	const spaced = timestamp.replace(/(\d)(am|pm)\b/i, "$1 $2")
+	return new Date(spaced)
 }
 
 /**

@@ -23,20 +23,23 @@
 	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 
 	// ── Chat Prompts state ───────────────────────────────────────────────────
-	let chatList: Sockets.PromptConfigs.List.Response["promptConfigsList"] = $state([])
+	let chatList: Sockets.PromptConfigs.List.Response["promptConfigsList"] =
+		$state([])
 	let selectedChatId: number | undefined = $state(
 		userSettingsCtx.settings?.activePromptConfigId || undefined
 	)
 	let chatConfig: Sockets.PromptConfigs.Get.Response["promptConfig"] = $state(
 		{} as Sockets.PromptConfigs.Get.Response["promptConfig"]
 	)
-	let chatOriginal: Sockets.PromptConfigs.Get.Response["promptConfig"] = $state(
-		{} as Sockets.PromptConfigs.Get.Response["promptConfig"]
+	let chatOriginal: Sockets.PromptConfigs.Get.Response["promptConfig"] =
+		$state({} as Sockets.PromptConfigs.Get.Response["promptConfig"])
+	let chatUnsaved = $derived(
+		JSON.stringify(chatConfig) !== JSON.stringify(chatOriginal)
 	)
-	let chatUnsaved = $derived(JSON.stringify(chatConfig) !== JSON.stringify(chatOriginal))
 
 	let activeChatName = $derived.by(() => {
-		const id = userSettingsCtx.settings?.activePromptConfigId ?? chatList[0]?.id
+		const id =
+			userSettingsCtx.settings?.activePromptConfigId ?? chatList[0]?.id
 		return chatList.find((p) => p.id === id)?.name ?? null
 	})
 
@@ -46,32 +49,45 @@
 	let selectedNarratorId: number | undefined = $state(
 		userSettingsCtx.settings?.activeNarratorPromptConfigId || undefined
 	)
-	let narratorConfig: Sockets.NarratorPromptConfigs.Get.Response["narratorPromptConfig"] = $state(
-		{} as Sockets.NarratorPromptConfigs.Get.Response["narratorPromptConfig"]
+	let narratorConfig: Sockets.NarratorPromptConfigs.Get.Response["narratorPromptConfig"] =
+		$state(
+			{} as Sockets.NarratorPromptConfigs.Get.Response["narratorPromptConfig"]
+		)
+	let narratorOriginal: Sockets.NarratorPromptConfigs.Get.Response["narratorPromptConfig"] =
+		$state(
+			{} as Sockets.NarratorPromptConfigs.Get.Response["narratorPromptConfig"]
+		)
+	let narratorUnsaved = $derived(
+		JSON.stringify(narratorConfig) !== JSON.stringify(narratorOriginal)
 	)
-	let narratorOriginal: Sockets.NarratorPromptConfigs.Get.Response["narratorPromptConfig"] = $state(
-		{} as Sockets.NarratorPromptConfigs.Get.Response["narratorPromptConfig"]
-	)
-	let narratorUnsaved = $derived(JSON.stringify(narratorConfig) !== JSON.stringify(narratorOriginal))
 
 	let activeNarratorName = $derived.by(() => {
-		const id = userSettingsCtx.settings?.activeNarratorPromptConfigId ?? narratorPromptList[0]?.id
+		const id =
+			userSettingsCtx.settings?.activeNarratorPromptConfigId ??
+			narratorPromptList[0]?.id
 		return narratorPromptList.find((p) => p.id === id)?.name ?? null
 	})
 
 	// ── World Summarize state ─────────────────────────────────────────────────
-	let worldList: Sockets.WorldSummarizeConfigs.List.Response["worldSummarizeConfigsList"] = $state([])
+	let worldList: Sockets.WorldSummarizeConfigs.List.Response["worldSummarizeConfigsList"] =
+		$state([])
 	let selectedWorldId: number | undefined = $state(undefined)
-	let worldConfig: Sockets.WorldSummarizeConfigs.Get.Response["worldSummarizeConfig"] = $state(
-		{} as Sockets.WorldSummarizeConfigs.Get.Response["worldSummarizeConfig"]
+	let worldConfig: Sockets.WorldSummarizeConfigs.Get.Response["worldSummarizeConfig"] =
+		$state(
+			{} as Sockets.WorldSummarizeConfigs.Get.Response["worldSummarizeConfig"]
+		)
+	let worldOriginal: Sockets.WorldSummarizeConfigs.Get.Response["worldSummarizeConfig"] =
+		$state(
+			{} as Sockets.WorldSummarizeConfigs.Get.Response["worldSummarizeConfig"]
+		)
+	let worldUnsaved = $derived(
+		JSON.stringify(worldConfig) !== JSON.stringify(worldOriginal)
 	)
-	let worldOriginal: Sockets.WorldSummarizeConfigs.Get.Response["worldSummarizeConfig"] = $state(
-		{} as Sockets.WorldSummarizeConfigs.Get.Response["worldSummarizeConfig"]
-	)
-	let worldUnsaved = $derived(JSON.stringify(worldConfig) !== JSON.stringify(worldOriginal))
 
 	let activeWorldName = $derived.by(() => {
-		const id = userSettingsCtx.settings?.activeSummarizeWorldConfigId ?? worldList[0]?.id
+		const id =
+			userSettingsCtx.settings?.activeSummarizeWorldConfigId ??
+			worldList[0]?.id
 		return worldList.find((p) => p.id === id)?.name ?? null
 	})
 
@@ -80,29 +96,44 @@
 		$state([])
 	let selectedCharacterId: number | undefined = $state(undefined)
 	let characterConfig: Sockets.CharacterSummarizeConfigs.Get.Response["characterSummarizeConfig"] =
-		$state({} as Sockets.CharacterSummarizeConfigs.Get.Response["characterSummarizeConfig"])
+		$state(
+			{} as Sockets.CharacterSummarizeConfigs.Get.Response["characterSummarizeConfig"]
+		)
 	let characterOriginal: Sockets.CharacterSummarizeConfigs.Get.Response["characterSummarizeConfig"] =
-		$state({} as Sockets.CharacterSummarizeConfigs.Get.Response["characterSummarizeConfig"])
-	let characterUnsaved = $derived(JSON.stringify(characterConfig) !== JSON.stringify(characterOriginal))
+		$state(
+			{} as Sockets.CharacterSummarizeConfigs.Get.Response["characterSummarizeConfig"]
+		)
+	let characterUnsaved = $derived(
+		JSON.stringify(characterConfig) !== JSON.stringify(characterOriginal)
+	)
 
 	let activeCharacterName = $derived.by(() => {
-		const id = userSettingsCtx.settings?.activeSummarizeCharacterConfigId ?? characterList[0]?.id
+		const id =
+			userSettingsCtx.settings?.activeSummarizeCharacterConfigId ??
+			characterList[0]?.id
 		return characterList.find((p) => p.id === id)?.name ?? null
 	})
 
 	// ── Scene Summarize state ─────────────────────────────────────────────────
-	let sceneList: Sockets.SceneSummarizeConfigs.List.Response["sceneSummarizeConfigsList"] = $state([])
+	let sceneList: Sockets.SceneSummarizeConfigs.List.Response["sceneSummarizeConfigsList"] =
+		$state([])
 	let selectedSceneId: number | undefined = $state(undefined)
-	let sceneConfig: Sockets.SceneSummarizeConfigs.Get.Response["sceneSummarizeConfig"] = $state(
-		{} as Sockets.SceneSummarizeConfigs.Get.Response["sceneSummarizeConfig"]
+	let sceneConfig: Sockets.SceneSummarizeConfigs.Get.Response["sceneSummarizeConfig"] =
+		$state(
+			{} as Sockets.SceneSummarizeConfigs.Get.Response["sceneSummarizeConfig"]
+		)
+	let sceneOriginal: Sockets.SceneSummarizeConfigs.Get.Response["sceneSummarizeConfig"] =
+		$state(
+			{} as Sockets.SceneSummarizeConfigs.Get.Response["sceneSummarizeConfig"]
+		)
+	let sceneUnsaved = $derived(
+		JSON.stringify(sceneConfig) !== JSON.stringify(sceneOriginal)
 	)
-	let sceneOriginal: Sockets.SceneSummarizeConfigs.Get.Response["sceneSummarizeConfig"] = $state(
-		{} as Sockets.SceneSummarizeConfigs.Get.Response["sceneSummarizeConfig"]
-	)
-	let sceneUnsaved = $derived(JSON.stringify(sceneConfig) !== JSON.stringify(sceneOriginal))
 
 	let activeSceneName = $derived.by(() => {
-		const id = userSettingsCtx.settings?.activeSummarizeSceneConfigId ?? sceneList[0]?.id
+		const id =
+			userSettingsCtx.settings?.activeSummarizeSceneConfigId ??
+			sceneList[0]?.id
 		return sceneList.find((p) => p.id === id)?.name ?? null
 	})
 
@@ -112,11 +143,15 @@
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
 
 	// ── Connection / Sampling lists (for override pickers) ────────────────────
-	let connectionsList: Sockets.Connections.List.Response["connectionsList"] = $state([])
-	let samplingList: Sockets.SamplingConfigs.List.Response["samplingConfigsList"] = $state([])
+	let connectionsList: Sockets.Connections.List.Response["connectionsList"] =
+		$state([])
+	let samplingList: Sockets.SamplingConfigs.List.Response["samplingConfigsList"] =
+		$state([])
 
 	// ── Validation ────────────────────────────────────────────────────────────
-	const nameSchema = z.object({ name: z.string().min(1, "Name is required").trim() })
+	const nameSchema = z.object({
+		name: z.string().min(1, "Name is required").trim()
+	})
 	type ValidationErrors = Record<string, string>
 	let validationErrors: ValidationErrors = $state({})
 
@@ -131,9 +166,14 @@
 
 	function validateForm(): boolean {
 		const result = nameSchema.safeParse({ name: currentName() })
-		if (result.success) { validationErrors = {}; return true }
+		if (result.success) {
+			validationErrors = {}
+			return true
+		}
 		const errors: ValidationErrors = {}
-		result.error.errors.forEach((e) => { if (e.path.length > 0) errors[e.path[0] as string] = e.message })
+		result.error.errors.forEach((e) => {
+			if (e.path.length > 0) errors[e.path[0] as string] = e.message
+		})
 		validationErrors = errors
 		return false
 	}
@@ -151,23 +191,35 @@
 	async function checkUnsaved(): Promise<boolean> {
 		if (!hasUnsaved()) return true
 		showUnsavedChangesModal = true
-		return new Promise<boolean>((resolve) => { confirmCloseSidebarResolve = resolve })
+		return new Promise<boolean>((resolve) => {
+			confirmCloseSidebarResolve = resolve
+		})
 	}
 
-	async function handleOnClose() { return checkUnsaved() }
+	async function handleOnClose() {
+		return checkUnsaved()
+	}
 
 	async function navigateBack() {
-		if (await checkUnsaved()) { view = "index"; validationErrors = {} }
+		if (await checkUnsaved()) {
+			view = "index"
+			validationErrors = {}
+		}
 	}
 
 	function handleUnsavedChangesModalConfirm() {
-		showUnsavedChangesModal = false; confirmCloseSidebarResolve?.(true)
+		showUnsavedChangesModal = false
+		confirmCloseSidebarResolve?.(true)
 	}
 	function handleUnsavedChangesModalCancel() {
-		showUnsavedChangesModal = false; confirmCloseSidebarResolve?.(false)
+		showUnsavedChangesModal = false
+		confirmCloseSidebarResolve?.(false)
 	}
 	function handleUnsavedChangesModalOpenChange(e: OpenChangeDetails) {
-		if (!e.open) { showUnsavedChangesModal = false; confirmCloseSidebarResolve?.(false) }
+		if (!e.open) {
+			showUnsavedChangesModal = false
+			confirmCloseSidebarResolve?.(false)
+		}
 	}
 
 	// ── Guard selection changes against unsaved edits ─────────────────────────
@@ -225,87 +277,184 @@
 	// ── Chat actions ──────────────────────────────────────────────────────────
 	function handleChatSave() {
 		if (!validateForm()) return
-		socket.emit("promptConfigs:update", { promptConfig: { ...chatConfig, id: chatConfig.id } })
+		socket.emit("promptConfigs:update", {
+			promptConfig: { ...chatConfig, id: chatConfig.id }
+		})
 	}
 	function handleChatDelete() {
-		if (!chatConfig.isImmutable) { socket.emit("promptConfigs:delete", { id: chatConfig.id }); selectedChatId = undefined }
+		if (!chatConfig.isImmutable) {
+			socket.emit("promptConfigs:delete", { id: chatConfig.id })
+			selectedChatId = undefined
+		}
 	}
-	function handleChatReset() { chatConfig = { ...chatOriginal } }
-	function handleChatNew() { showNewNameModal = true }
+	function handleChatReset() {
+		chatConfig = { ...chatOriginal }
+	}
+	function handleChatNew() {
+		showNewNameModal = true
+	}
 
 	// ── Narrator actions ─────────────────────────────────────────────────────
 	function handleNarratorSave() {
 		if (!validateForm()) return
-		socket.emit("narratorPromptConfigs:update", { narratorPromptConfig: { ...narratorConfig, id: narratorConfig.id } })
+		socket.emit("narratorPromptConfigs:update", {
+			narratorPromptConfig: { ...narratorConfig, id: narratorConfig.id }
+		})
 	}
 	function handleNarratorDelete() {
-		if (!narratorConfig.isImmutable) { socket.emit("narratorPromptConfigs:delete", { id: narratorConfig.id }); selectedNarratorId = undefined }
+		if (!narratorConfig.isImmutable) {
+			socket.emit("narratorPromptConfigs:delete", {
+				id: narratorConfig.id
+			})
+			selectedNarratorId = undefined
+		}
 	}
-	function handleNarratorReset() { narratorConfig = { ...narratorOriginal } }
-	function handleNarratorNew() { showNewNameModal = true }
+	function handleNarratorReset() {
+		narratorConfig = { ...narratorOriginal }
+	}
+	function handleNarratorNew() {
+		showNewNameModal = true
+	}
 
 	// ── World actions ─────────────────────────────────────────────────────────
 	function handleWorldSave() {
 		if (!validateForm()) return
-		socket.emit("worldSummarizeConfigs:update", { worldSummarizeConfig: { ...worldConfig, id: worldConfig.id } })
+		socket.emit("worldSummarizeConfigs:update", {
+			worldSummarizeConfig: { ...worldConfig, id: worldConfig.id }
+		})
 	}
 	function handleWorldDelete() {
-		if (!worldConfig.isImmutable) { socket.emit("worldSummarizeConfigs:delete", { id: worldConfig.id }); selectedWorldId = undefined }
+		if (!worldConfig.isImmutable) {
+			socket.emit("worldSummarizeConfigs:delete", { id: worldConfig.id })
+			selectedWorldId = undefined
+		}
 	}
-	function handleWorldReset() { worldConfig = { ...worldOriginal } }
-	function handleWorldNew() { showNewNameModal = true }
+	function handleWorldReset() {
+		worldConfig = { ...worldOriginal }
+	}
+	function handleWorldNew() {
+		showNewNameModal = true
+	}
 
 	// ── Character actions ─────────────────────────────────────────────────────
 	function handleCharacterSave() {
 		if (!validateForm()) return
-		socket.emit("characterSummarizeConfigs:update", { characterSummarizeConfig: { ...characterConfig, id: characterConfig.id } })
+		socket.emit("characterSummarizeConfigs:update", {
+			characterSummarizeConfig: {
+				...characterConfig,
+				id: characterConfig.id
+			}
+		})
 	}
 	function handleCharacterDelete() {
-		if (!characterConfig.isImmutable) { socket.emit("characterSummarizeConfigs:delete", { id: characterConfig.id }); selectedCharacterId = undefined }
+		if (!characterConfig.isImmutable) {
+			socket.emit("characterSummarizeConfigs:delete", {
+				id: characterConfig.id
+			})
+			selectedCharacterId = undefined
+		}
 	}
-	function handleCharacterReset() { characterConfig = { ...characterOriginal } }
-	function handleCharacterNew() { showNewNameModal = true }
+	function handleCharacterReset() {
+		characterConfig = { ...characterOriginal }
+	}
+	function handleCharacterNew() {
+		showNewNameModal = true
+	}
 
 	// ── Scene actions ─────────────────────────────────────────────────────────
 	function handleSceneSave() {
 		if (!validateForm()) return
-		socket.emit("sceneSummarizeConfigs:update", { sceneSummarizeConfig: { ...sceneConfig, id: sceneConfig.id } })
+		socket.emit("sceneSummarizeConfigs:update", {
+			sceneSummarizeConfig: { ...sceneConfig, id: sceneConfig.id }
+		})
 	}
 	function handleSceneDelete() {
-		if (!sceneConfig.isImmutable) { socket.emit("sceneSummarizeConfigs:delete", { id: sceneConfig.id }); selectedSceneId = undefined }
+		if (!sceneConfig.isImmutable) {
+			socket.emit("sceneSummarizeConfigs:delete", { id: sceneConfig.id })
+			selectedSceneId = undefined
+		}
 	}
-	function handleSceneReset() { sceneConfig = { ...sceneOriginal } }
-	function handleSceneNew() { showNewNameModal = true }
+	function handleSceneReset() {
+		sceneConfig = { ...sceneOriginal }
+	}
+	function handleSceneNew() {
+		showNewNameModal = true
+	}
 
 	// ── New-name modal dispatch ───────────────────────────────────────────────
 	function handleNewNameConfirm(name: string) {
 		if (!name.trim()) return
 		if (view === "chat") {
 			const { id: _id, ...rest } = chatConfig
-			socket.emit("promptConfigs:create", { promptConfig: { ...rest, name: name.trim(), isImmutable: false } })
+			socket.emit("promptConfigs:create", {
+				promptConfig: { ...rest, name: name.trim(), isImmutable: false }
+			})
 		} else if (view === "narrator") {
 			const { id: _id, ...rest } = narratorConfig
-			socket.emit("narratorPromptConfigs:create", { narratorPromptConfig: { ...rest, name: name.trim(), isImmutable: false } })
+			socket.emit("narratorPromptConfigs:create", {
+				narratorPromptConfig: {
+					...rest,
+					name: name.trim(),
+					isImmutable: false
+				}
+			})
 		} else if (view === "world") {
 			const { id: _id, ...rest } = worldConfig
-			socket.emit("worldSummarizeConfigs:create", { worldSummarizeConfig: { ...rest, name: name.trim(), isImmutable: false } })
+			socket.emit("worldSummarizeConfigs:create", {
+				worldSummarizeConfig: {
+					...rest,
+					name: name.trim(),
+					isImmutable: false
+				}
+			})
 		} else if (view === "character") {
 			const { id: _id, ...rest } = characterConfig
-			socket.emit("characterSummarizeConfigs:create", { characterSummarizeConfig: { ...rest, name: name.trim(), isImmutable: false } })
+			socket.emit("characterSummarizeConfigs:create", {
+				characterSummarizeConfig: {
+					...rest,
+					name: name.trim(),
+					isImmutable: false
+				}
+			})
 		} else if (view === "scene") {
 			const { id: _id, ...rest } = sceneConfig
-			socket.emit("sceneSummarizeConfigs:create", { sceneSummarizeConfig: { ...rest, name: name.trim(), isImmutable: false } })
+			socket.emit("sceneSummarizeConfigs:create", {
+				sceneSummarizeConfig: {
+					...rest,
+					name: name.trim(),
+					isImmutable: false
+				}
+			})
 		}
 		showNewNameModal = false
 	}
-	function handleNewNameCancel() { showNewNameModal = false }
+	function handleNewNameCancel() {
+		showNewNameModal = false
+	}
 
 	// ── Reactive: load config when selection changes ──────────────────────────
-	$effect(() => { if (selectedChatId) socket.emit("promptConfigs:get", { id: selectedChatId }) })
-	$effect(() => { if (selectedNarratorId) socket.emit("narratorPromptConfigs:get", { id: selectedNarratorId }) })
-	$effect(() => { if (selectedWorldId) socket.emit("worldSummarizeConfigs:get", { id: selectedWorldId }) })
-	$effect(() => { if (selectedCharacterId) socket.emit("characterSummarizeConfigs:get", { id: selectedCharacterId }) })
-	$effect(() => { if (selectedSceneId) socket.emit("sceneSummarizeConfigs:get", { id: selectedSceneId }) })
+	$effect(() => {
+		if (selectedChatId)
+			socket.emit("promptConfigs:get", { id: selectedChatId })
+	})
+	$effect(() => {
+		if (selectedNarratorId)
+			socket.emit("narratorPromptConfigs:get", { id: selectedNarratorId })
+	})
+	$effect(() => {
+		if (selectedWorldId)
+			socket.emit("worldSummarizeConfigs:get", { id: selectedWorldId })
+	})
+	$effect(() => {
+		if (selectedCharacterId)
+			socket.emit("characterSummarizeConfigs:get", {
+				id: selectedCharacterId
+			})
+	})
+	$effect(() => {
+		if (selectedSceneId)
+			socket.emit("sceneSummarizeConfigs:get", { id: selectedSceneId })
+	})
 
 	// ── Set default actions ────────────────────────────────────────────────────
 	function handleChatSetDefault() {
@@ -314,157 +463,262 @@
 	}
 	function handleNarratorSetDefault() {
 		if (!selectedNarratorId) return
-		socket.emit("narratorPromptConfigs:setUserActive", { id: selectedNarratorId })
+		socket.emit("narratorPromptConfigs:setUserActive", {
+			id: selectedNarratorId
+		})
 	}
 	function handleWorldSetDefault() {
 		if (!selectedWorldId) return
-		socket.emit("worldSummarizeConfigs:setUserActive", { id: selectedWorldId })
+		socket.emit("worldSummarizeConfigs:setUserActive", {
+			id: selectedWorldId
+		})
 	}
 	function handleCharacterSetDefault() {
 		if (!selectedCharacterId) return
-		socket.emit("characterSummarizeConfigs:setUserActive", { id: selectedCharacterId })
+		socket.emit("characterSummarizeConfigs:setUserActive", {
+			id: selectedCharacterId
+		})
 	}
 	function handleSceneSetDefault() {
 		if (!selectedSceneId) return
-		socket.emit("sceneSummarizeConfigs:setUserActive", { id: selectedSceneId })
+		socket.emit("sceneSummarizeConfigs:setUserActive", {
+			id: selectedSceneId
+		})
 	}
 
 	onMount(() => {
 		// Chat listeners
-		socket.on("promptConfigs:list", (msg: Sockets.PromptConfigs.List.Response) => {
-			chatList = msg.promptConfigsList
-			if (!selectedChatId && chatList.length > 0) {
-				selectedChatId = userSettingsCtx.settings?.activePromptConfigId ?? chatList[0].id
+		socket.on(
+			"promptConfigs:list",
+			(msg: Sockets.PromptConfigs.List.Response) => {
+				chatList = msg.promptConfigsList
+				if (!selectedChatId && chatList.length > 0) {
+					selectedChatId =
+						userSettingsCtx.settings?.activePromptConfigId ??
+						chatList[0].id
+				}
 			}
-		})
-		socket.on("promptConfigs:get", (msg: Sockets.PromptConfigs.Get.Response) => {
-			if (msg.promptConfig.id !== selectedChatId) return
-			chatConfig = { ...msg.promptConfig }; chatOriginal = { ...msg.promptConfig }
-		})
-		socket.on("promptConfigs:create", (msg: Sockets.PromptConfigs.Create.Response) => {
-			selectedChatId = msg.promptConfig.id
-		})
-		socket.on("promptConfigs:update", (msg: Sockets.PromptConfigs.Update.Response) => {
-			if (msg.promptConfig.id === chatConfig.id) {
-				chatConfig = { ...msg.promptConfig }; chatOriginal = { ...msg.promptConfig }
-				toaster.success({ title: "Prompt Config Updated" })
+		)
+		socket.on(
+			"promptConfigs:get",
+			(msg: Sockets.PromptConfigs.Get.Response) => {
+				if (msg.promptConfig.id !== selectedChatId) return
+				chatConfig = { ...msg.promptConfig }
+				chatOriginal = { ...msg.promptConfig }
 			}
-		})
+		)
+		socket.on(
+			"promptConfigs:create",
+			(msg: Sockets.PromptConfigs.Create.Response) => {
+				selectedChatId = msg.promptConfig.id
+			}
+		)
+		socket.on(
+			"promptConfigs:update",
+			(msg: Sockets.PromptConfigs.Update.Response) => {
+				if (msg.promptConfig.id === chatConfig.id) {
+					chatConfig = { ...msg.promptConfig }
+					chatOriginal = { ...msg.promptConfig }
+					toaster.success({ title: "Prompt Config Updated" })
+				}
+			}
+		)
 
 		// Narrator listeners
-		socket.on("narratorPromptConfigs:list", (msg: Sockets.NarratorPromptConfigs.List.Response) => {
-			narratorPromptList = msg.narratorPromptConfigsList
-			if (!selectedNarratorId && narratorPromptList.length > 0) {
-				selectedNarratorId = userSettingsCtx.settings?.activeNarratorPromptConfigId ?? narratorPromptList[0].id
+		socket.on(
+			"narratorPromptConfigs:list",
+			(msg: Sockets.NarratorPromptConfigs.List.Response) => {
+				narratorPromptList = msg.narratorPromptConfigsList
+				if (!selectedNarratorId && narratorPromptList.length > 0) {
+					selectedNarratorId =
+						userSettingsCtx.settings
+							?.activeNarratorPromptConfigId ??
+						narratorPromptList[0].id
+				}
 			}
-		})
-		socket.on("narratorPromptConfigs:get", (msg: Sockets.NarratorPromptConfigs.Get.Response) => {
-			if (msg.narratorPromptConfig.id !== selectedNarratorId) return
-			narratorConfig = { ...msg.narratorPromptConfig }; narratorOriginal = { ...msg.narratorPromptConfig }
-		})
-		socket.on("narratorPromptConfigs:create", (msg: Sockets.NarratorPromptConfigs.Create.Response) => {
-			selectedNarratorId = msg.narratorPromptConfig.id
-		})
-		socket.on("narratorPromptConfigs:update", (msg: Sockets.NarratorPromptConfigs.Update.Response) => {
-			if (msg.narratorPromptConfig.id === narratorConfig.id) {
-				narratorConfig = { ...msg.narratorPromptConfig }; narratorOriginal = { ...msg.narratorPromptConfig }
-				toaster.success({ title: "Narrator Prompt Config Updated" })
+		)
+		socket.on(
+			"narratorPromptConfigs:get",
+			(msg: Sockets.NarratorPromptConfigs.Get.Response) => {
+				if (msg.narratorPromptConfig.id !== selectedNarratorId) return
+				narratorConfig = { ...msg.narratorPromptConfig }
+				narratorOriginal = { ...msg.narratorPromptConfig }
 			}
-		})
+		)
+		socket.on(
+			"narratorPromptConfigs:create",
+			(msg: Sockets.NarratorPromptConfigs.Create.Response) => {
+				selectedNarratorId = msg.narratorPromptConfig.id
+			}
+		)
+		socket.on(
+			"narratorPromptConfigs:update",
+			(msg: Sockets.NarratorPromptConfigs.Update.Response) => {
+				if (msg.narratorPromptConfig.id === narratorConfig.id) {
+					narratorConfig = { ...msg.narratorPromptConfig }
+					narratorOriginal = { ...msg.narratorPromptConfig }
+					toaster.success({ title: "Narrator Prompt Config Updated" })
+				}
+			}
+		)
 
 		// World listeners
-		socket.on("worldSummarizeConfigs:list", (msg: Sockets.WorldSummarizeConfigs.List.Response) => {
-			worldList = msg.worldSummarizeConfigsList
-			if (!selectedWorldId && worldList.length > 0) {
-				selectedWorldId = userSettingsCtx.settings?.activeSummarizeWorldConfigId ?? worldList[0].id
+		socket.on(
+			"worldSummarizeConfigs:list",
+			(msg: Sockets.WorldSummarizeConfigs.List.Response) => {
+				worldList = msg.worldSummarizeConfigsList
+				if (!selectedWorldId && worldList.length > 0) {
+					selectedWorldId =
+						userSettingsCtx.settings
+							?.activeSummarizeWorldConfigId ?? worldList[0].id
+				}
 			}
-		})
-		socket.on("worldSummarizeConfigs:get", (msg: Sockets.WorldSummarizeConfigs.Get.Response) => {
-			if (msg.worldSummarizeConfig.id !== selectedWorldId) return
-			worldConfig = { ...msg.worldSummarizeConfig }; worldOriginal = { ...msg.worldSummarizeConfig }
-		})
-		socket.on("worldSummarizeConfigs:create", (msg: Sockets.WorldSummarizeConfigs.Create.Response) => {
-			selectedWorldId = msg.worldSummarizeConfig.id
-		})
-		socket.on("worldSummarizeConfigs:update", (msg: Sockets.WorldSummarizeConfigs.Update.Response) => {
-			if (msg.worldSummarizeConfig.id === worldConfig.id) {
-				worldConfig = { ...msg.worldSummarizeConfig }; worldOriginal = { ...msg.worldSummarizeConfig }
-				toaster.success({ title: "World Summarize Config Updated" })
+		)
+		socket.on(
+			"worldSummarizeConfigs:get",
+			(msg: Sockets.WorldSummarizeConfigs.Get.Response) => {
+				if (msg.worldSummarizeConfig.id !== selectedWorldId) return
+				worldConfig = { ...msg.worldSummarizeConfig }
+				worldOriginal = { ...msg.worldSummarizeConfig }
 			}
-		})
+		)
+		socket.on(
+			"worldSummarizeConfigs:create",
+			(msg: Sockets.WorldSummarizeConfigs.Create.Response) => {
+				selectedWorldId = msg.worldSummarizeConfig.id
+			}
+		)
+		socket.on(
+			"worldSummarizeConfigs:update",
+			(msg: Sockets.WorldSummarizeConfigs.Update.Response) => {
+				if (msg.worldSummarizeConfig.id === worldConfig.id) {
+					worldConfig = { ...msg.worldSummarizeConfig }
+					worldOriginal = { ...msg.worldSummarizeConfig }
+					toaster.success({ title: "World Summarize Config Updated" })
+				}
+			}
+		)
 
 		// Character listeners
-		socket.on("characterSummarizeConfigs:list", (msg: Sockets.CharacterSummarizeConfigs.List.Response) => {
-			characterList = msg.characterSummarizeConfigsList
-			if (!selectedCharacterId && characterList.length > 0) {
-				selectedCharacterId = userSettingsCtx.settings?.activeSummarizeCharacterConfigId ?? characterList[0].id
+		socket.on(
+			"characterSummarizeConfigs:list",
+			(msg: Sockets.CharacterSummarizeConfigs.List.Response) => {
+				characterList = msg.characterSummarizeConfigsList
+				if (!selectedCharacterId && characterList.length > 0) {
+					selectedCharacterId =
+						userSettingsCtx.settings
+							?.activeSummarizeCharacterConfigId ??
+						characterList[0].id
+				}
 			}
-		})
-		socket.on("characterSummarizeConfigs:get", (msg: Sockets.CharacterSummarizeConfigs.Get.Response) => {
-			if (msg.characterSummarizeConfig.id !== selectedCharacterId) return
-			characterConfig = { ...msg.characterSummarizeConfig }; characterOriginal = { ...msg.characterSummarizeConfig }
-		})
-		socket.on("characterSummarizeConfigs:create", (msg: Sockets.CharacterSummarizeConfigs.Create.Response) => {
-			selectedCharacterId = msg.characterSummarizeConfig.id
-		})
-		socket.on("characterSummarizeConfigs:update", (msg: Sockets.CharacterSummarizeConfigs.Update.Response) => {
-			if (msg.characterSummarizeConfig.id === characterConfig.id) {
-				characterConfig = { ...msg.characterSummarizeConfig }; characterOriginal = { ...msg.characterSummarizeConfig }
-				toaster.success({ title: "Character Summarize Config Updated" })
+		)
+		socket.on(
+			"characterSummarizeConfigs:get",
+			(msg: Sockets.CharacterSummarizeConfigs.Get.Response) => {
+				if (msg.characterSummarizeConfig.id !== selectedCharacterId)
+					return
+				characterConfig = { ...msg.characterSummarizeConfig }
+				characterOriginal = { ...msg.characterSummarizeConfig }
 			}
-		})
+		)
+		socket.on(
+			"characterSummarizeConfigs:create",
+			(msg: Sockets.CharacterSummarizeConfigs.Create.Response) => {
+				selectedCharacterId = msg.characterSummarizeConfig.id
+			}
+		)
+		socket.on(
+			"characterSummarizeConfigs:update",
+			(msg: Sockets.CharacterSummarizeConfigs.Update.Response) => {
+				if (msg.characterSummarizeConfig.id === characterConfig.id) {
+					characterConfig = { ...msg.characterSummarizeConfig }
+					characterOriginal = { ...msg.characterSummarizeConfig }
+					toaster.success({
+						title: "Character Summarize Config Updated"
+					})
+				}
+			}
+		)
 
 		// Scene listeners
-		socket.on("sceneSummarizeConfigs:list", (msg: Sockets.SceneSummarizeConfigs.List.Response) => {
-			sceneList = msg.sceneSummarizeConfigsList
-			if (!selectedSceneId && sceneList.length > 0) {
-				selectedSceneId = userSettingsCtx.settings?.activeSummarizeSceneConfigId ?? sceneList[0].id
+		socket.on(
+			"sceneSummarizeConfigs:list",
+			(msg: Sockets.SceneSummarizeConfigs.List.Response) => {
+				sceneList = msg.sceneSummarizeConfigsList
+				if (!selectedSceneId && sceneList.length > 0) {
+					selectedSceneId =
+						userSettingsCtx.settings
+							?.activeSummarizeSceneConfigId ?? sceneList[0].id
+				}
 			}
-		})
-		socket.on("sceneSummarizeConfigs:get", (msg: Sockets.SceneSummarizeConfigs.Get.Response) => {
-			if (msg.sceneSummarizeConfig.id !== selectedSceneId) return
-			sceneConfig = { ...msg.sceneSummarizeConfig }; sceneOriginal = { ...msg.sceneSummarizeConfig }
-		})
-		socket.on("sceneSummarizeConfigs:create", (msg: Sockets.SceneSummarizeConfigs.Create.Response) => {
-			selectedSceneId = msg.sceneSummarizeConfig.id
-		})
-		socket.on("sceneSummarizeConfigs:update", (msg: Sockets.SceneSummarizeConfigs.Update.Response) => {
-			if (msg.sceneSummarizeConfig.id === sceneConfig.id) {
-				sceneConfig = { ...msg.sceneSummarizeConfig }; sceneOriginal = { ...msg.sceneSummarizeConfig }
-				toaster.success({ title: "Scene Summarize Config Updated" })
+		)
+		socket.on(
+			"sceneSummarizeConfigs:get",
+			(msg: Sockets.SceneSummarizeConfigs.Get.Response) => {
+				if (msg.sceneSummarizeConfig.id !== selectedSceneId) return
+				sceneConfig = { ...msg.sceneSummarizeConfig }
+				sceneOriginal = { ...msg.sceneSummarizeConfig }
 			}
-		})
+		)
+		socket.on(
+			"sceneSummarizeConfigs:create",
+			(msg: Sockets.SceneSummarizeConfigs.Create.Response) => {
+				selectedSceneId = msg.sceneSummarizeConfig.id
+			}
+		)
+		socket.on(
+			"sceneSummarizeConfigs:update",
+			(msg: Sockets.SceneSummarizeConfigs.Update.Response) => {
+				if (msg.sceneSummarizeConfig.id === sceneConfig.id) {
+					sceneConfig = { ...msg.sceneSummarizeConfig }
+					sceneOriginal = { ...msg.sceneSummarizeConfig }
+					toaster.success({ title: "Scene Summarize Config Updated" })
+				}
+			}
+		)
 
 		// Set-default response listeners (just toast — userSettings:get updates context)
 		socket.on("promptConfigs:setUserActive", () => {
 			toaster.success({ title: "Default chat prompt updated" })
 		})
 		socket.on("promptConfigs:setUserActive:error", (msg: any) => {
-			toaster.error({ title: msg?.error || "Failed to set default chat prompt" })
+			toaster.error({
+				title: msg?.error || "Failed to set default chat prompt"
+			})
 		})
 		socket.on("narratorPromptConfigs:setUserActive", () => {
 			toaster.success({ title: "Default Narrator prompt updated" })
 		})
 		socket.on("narratorPromptConfigs:setUserActive:error", (msg: any) => {
-			toaster.error({ title: msg?.error || "Failed to set default Narrator prompt" })
+			toaster.error({
+				title: msg?.error || "Failed to set default Narrator prompt"
+			})
 		})
 		socket.on("worldSummarizeConfigs:setUserActive", () => {
 			toaster.success({ title: "Default world summarization updated" })
 		})
 		socket.on("characterSummarizeConfigs:setUserActive", () => {
-			toaster.success({ title: "Default character summarization updated" })
+			toaster.success({
+				title: "Default character summarization updated"
+			})
 		})
 		socket.on("sceneSummarizeConfigs:setUserActive", () => {
 			toaster.success({ title: "Default scene summarization updated" })
 		})
 
 		// Connection / sampling lists for override pickers
-		socket.on("connections:list", (msg: Sockets.Connections.List.Response) => {
-			connectionsList = msg.connectionsList
-		})
-		socket.on("samplingConfigs:list", (msg: Sockets.SamplingConfigs.List.Response) => {
-			samplingList = msg.samplingConfigsList
-		})
+		socket.on(
+			"connections:list",
+			(msg: Sockets.Connections.List.Response) => {
+				connectionsList = msg.connectionsList
+			}
+		)
+		socket.on(
+			"samplingConfigs:list",
+			(msg: Sockets.SamplingConfigs.List.Response) => {
+				samplingList = msg.samplingConfigsList
+			}
+		)
 
 		// Initial fetches
 		socket.emit("promptConfigs:list", {})
@@ -522,19 +776,35 @@
 			onclick={() => (view = "chat")}
 		>
 			<div class="flex items-start gap-3">
-				<div class="bg-primary-500/10 text-primary-500 mt-0.5 rounded-lg p-2 shrink-0">
+				<div
+					class="bg-primary-500/10 text-primary-500 mt-0.5 shrink-0 rounded-lg p-2"
+				>
 					<Icons.MessageSquareText size={20} />
 				</div>
 				<div class="min-w-0 flex-1">
 					<div class="flex items-center justify-between gap-2">
-						<span class="font-semibold">Chat Prompts: Character</span>
-						<Icons.ChevronRight size={16} class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5" />
+						<span class="font-semibold">
+							Chat Prompts: Character
+						</span>
+						<Icons.ChevronRight
+							size={16}
+							class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5"
+						/>
 					</div>
-					<p class="text-muted-foreground mt-0.5 text-sm">System instructions injected into every chat.</p>
+					<p class="text-muted-foreground mt-0.5 text-sm">
+						System instructions injected into every chat.
+					</p>
 					{#if activeChatName}
 						<div class="mt-2 flex items-center gap-1.5">
-							<Icons.CheckCircle size={12} class="text-success-500 shrink-0" />
-							<span class="text-success-600 dark:text-success-400 truncate text-xs font-medium">{activeChatName}</span>
+							<Icons.CheckCircle
+								size={12}
+								class="text-success-500 shrink-0"
+							/>
+							<span
+								class="text-success-600 dark:text-success-400 truncate text-xs font-medium"
+							>
+								{activeChatName}
+							</span>
 						</div>
 					{/if}
 				</div>
@@ -547,19 +817,36 @@
 			onclick={() => (view = "narrator")}
 		>
 			<div class="flex items-start gap-3">
-				<div class="bg-primary-500/10 text-primary-500 mt-0.5 rounded-lg p-2 shrink-0">
+				<div
+					class="bg-primary-500/10 text-primary-500 mt-0.5 shrink-0 rounded-lg p-2"
+				>
 					<Icons.CloudSun size={20} />
 				</div>
 				<div class="min-w-0 flex-1">
 					<div class="flex items-center justify-between gap-2">
-						<span class="font-semibold">Chat Prompts: Narrator</span>
-						<Icons.ChevronRight size={16} class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5" />
+						<span class="font-semibold">
+							Chat Prompts: Narrator
+						</span>
+						<Icons.ChevronRight
+							size={16}
+							class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5"
+						/>
 					</div>
-					<p class="text-muted-foreground mt-0.5 text-sm">System instructions for manually-triggered Narrator responses.</p>
+					<p class="text-muted-foreground mt-0.5 text-sm">
+						System instructions for manually-triggered Narrator
+						responses.
+					</p>
 					{#if activeNarratorName}
 						<div class="mt-2 flex items-center gap-1.5">
-							<Icons.CheckCircle size={12} class="text-success-500 shrink-0" />
-							<span class="text-success-600 dark:text-success-400 truncate text-xs font-medium">{activeNarratorName}</span>
+							<Icons.CheckCircle
+								size={12}
+								class="text-success-500 shrink-0"
+							/>
+							<span
+								class="text-success-600 dark:text-success-400 truncate text-xs font-medium"
+							>
+								{activeNarratorName}
+							</span>
 						</div>
 					{/if}
 				</div>
@@ -568,29 +855,41 @@
 
 		<!-- Summarize type cards — only shown when summarization is enabled -->
 		{#if systemSettingsCtx.settings?.summarizationEnabled}
-			{#each [
-				{ v: "world" as const, label: "World Lore Summarization", desc: "System instructions for world lore summarization.", icon: Icons.Globe, activeName: activeWorldName },
-				{ v: "character" as const, label: "Character Lore Summarization", desc: "System instructions for character lore summarization.", icon: Icons.User, activeName: activeCharacterName },
-				{ v: "scene" as const, label: "Scene Summarization", desc: "System instructions for scene summarization.", icon: Icons.Film, activeName: activeSceneName }
-			] as card}
+			{#each [{ v: "world" as const, label: "World Lore Summarization", desc: "System instructions for world lore summarization.", icon: Icons.Globe, activeName: activeWorldName }, { v: "character" as const, label: "Character Lore Summarization", desc: "System instructions for character lore summarization.", icon: Icons.User, activeName: activeCharacterName }, { v: "scene" as const, label: "Scene Summarization", desc: "System instructions for scene summarization.", icon: Icons.Film, activeName: activeSceneName }] as card}
 				<button
 					class="card preset-tonal hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
 					onclick={() => (view = card.v)}
 				>
 					<div class="flex items-start gap-3">
-						<div class="bg-primary-500/10 text-primary-500 mt-0.5 rounded-lg p-2 shrink-0">
+						<div
+							class="bg-primary-500/10 text-primary-500 mt-0.5 shrink-0 rounded-lg p-2"
+						>
 							<card.icon size={20} />
 						</div>
 						<div class="min-w-0 flex-1">
-							<div class="flex items-center justify-between gap-2">
+							<div
+								class="flex items-center justify-between gap-2"
+							>
 								<span class="font-semibold">{card.label}</span>
-								<Icons.ChevronRight size={16} class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5" />
+								<Icons.ChevronRight
+									size={16}
+									class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5"
+								/>
 							</div>
-							<p class="text-muted-foreground mt-0.5 text-sm">{card.desc}</p>
+							<p class="text-muted-foreground mt-0.5 text-sm">
+								{card.desc}
+							</p>
 							{#if card.activeName}
 								<div class="mt-2 flex items-center gap-1.5">
-									<Icons.CheckCircle size={12} class="text-success-500 shrink-0" />
-									<span class="text-success-600 dark:text-success-400 truncate text-xs font-medium">{card.activeName}</span>
+									<Icons.CheckCircle
+										size={12}
+										class="text-success-500 shrink-0"
+									/>
+									<span
+										class="text-success-600 dark:text-success-400 truncate text-xs font-medium"
+									>
+										{card.activeName}
+									</span>
 								</div>
 							{/if}
 						</div>
@@ -600,68 +899,183 @@
 		{/if}
 	</div>
 
-<!-- ── CHAT PROMPTS EDITOR ────────────────────────────────────────────────── -->
+	<!-- ── CHAT PROMPTS EDITOR ────────────────────────────────────────────────── -->
 {:else if view === "chat"}
 	<div class="text-foreground flex h-full flex-col">
-		<div class="border-b border-surface-200-800 px-4 py-3">
+		<div class="border-surface-200-800 border-b px-4 py-3">
 			<div class="flex items-center gap-2">
-				<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={navigateBack} title="Back" aria-label="Back to prompt types">
+				<button
+					class="btn btn-sm preset-filled-surface-400-600 p-2"
+					onclick={navigateBack}
+					title="Back"
+					aria-label="Back to prompt types"
+				>
 					<Icons.ChevronLeft size={16} />
 				</button>
-				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">Chat Prompts: Character</h2>
+				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">
+					Chat Prompts: Character
+				</h2>
 			</div>
-			<div class="mt-2 flex gap-2" role="toolbar" aria-label="Chat prompt config actions">
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleChatNew} title="Clone to new config" aria-label="Clone to new config"><Icons.Plus size={14} /> Clone</button>
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleChatReset} disabled={!chatUnsaved} title="Discard changes" aria-label="Discard changes"><Icons.RefreshCcw size={14} /> Discard</button>
-				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleChatDelete} disabled={!chatConfig || chatConfig.isImmutable} title="Delete config" aria-label="Delete config"><Icons.Trash2 size={14} /> Delete</button>
+			<div
+				class="mt-2 flex gap-2"
+				role="toolbar"
+				aria-label="Chat prompt config actions"
+			>
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-surface-400-600"
+					onclick={handleChatNew}
+					title="Clone to new config"
+					aria-label="Clone to new config"
+				>
+					<Icons.Plus size={14} /> Clone
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-surface-400-600"
+					onclick={handleChatReset}
+					disabled={!chatUnsaved}
+					title="Discard changes"
+					aria-label="Discard changes"
+				>
+					<Icons.RefreshCcw size={14} /> Discard
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-error"
+					onclick={handleChatDelete}
+					disabled={!chatConfig || chatConfig.isImmutable}
+					title="Delete config"
+					aria-label="Delete config"
+				>
+					<Icons.Trash2 size={14} /> Delete
+				</button>
 			</div>
 		</div>
 		<div class="flex-1 overflow-y-auto p-4">
 			<div class="mb-4">
-				<select class="select w-full" value={selectedChatId} onchange={handleChatSelectChange}>
+				<select
+					class="select w-full"
+					value={selectedChatId}
+					onchange={handleChatSelectChange}
+				>
 					{#each chatList.filter((c) => c.isImmutable) as c}
-						{@const isDefault = c.id === userSettingsCtx.settings?.activePromptConfigId}
-						<option value={c.id}>{isDefault ? "★ " : ""}{c.name} *</option>
+						{@const isDefault =
+							c.id ===
+							userSettingsCtx.settings?.activePromptConfigId}
+						<option value={c.id}>
+							{isDefault ? "★ " : ""}{c.name} *
+						</option>
 					{/each}
 					{#each chatList.filter((c) => !c.isImmutable) as c}
-						{@const isDefault = c.id === userSettingsCtx.settings?.activePromptConfigId}
-						<option value={c.id}>{isDefault ? "★ " : ""}{c.name}</option>
+						{@const isDefault =
+							c.id ===
+							userSettingsCtx.settings?.activePromptConfigId}
+						<option value={c.id}>
+							{isDefault ? "★ " : ""}{c.name}
+						</option>
 					{/each}
 				</select>
 			</div>
 			{#if chatConfig?.id}
 				<div class="flex flex-col gap-4">
 					<div class="flex gap-2">
-						<button class="btn btn-sm preset-filled-success-500 flex-1" onclick={handleChatSave} disabled={!chatUnsaved}>
+						<button
+							class="btn btn-sm preset-filled-success-500 flex-1"
+							onclick={handleChatSave}
+							disabled={!chatUnsaved}
+						>
 							<Icons.Save size={14} /> Update
 						</button>
-						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleChatSetDefault}
-							disabled={!selectedChatId || selectedChatId === userSettingsCtx.settings?.activePromptConfigId}
-							title={selectedChatId && selectedChatId === userSettingsCtx.settings?.activePromptConfigId ? "Already the default" : "Set as default"}
-							aria-label={selectedChatId && selectedChatId === userSettingsCtx.settings?.activePromptConfigId ? "Already the default" : "Set as default"}>
+						<button
+							class="btn btn-sm preset-filled-warning-500 shrink-0"
+							onclick={handleChatSetDefault}
+							disabled={!selectedChatId ||
+								selectedChatId ===
+									userSettingsCtx.settings
+										?.activePromptConfigId}
+							title={selectedChatId &&
+							selectedChatId ===
+								userSettingsCtx.settings?.activePromptConfigId
+								? "Already the default"
+								: "Set as default"}
+							aria-label={selectedChatId &&
+							selectedChatId ===
+								userSettingsCtx.settings?.activePromptConfigId
+								? "Already the default"
+								: "Set as default"}
+						>
 							<Icons.Star
 								size={14}
-								fill={selectedChatId && selectedChatId === userSettingsCtx.settings?.activePromptConfigId ? "currentColor" : "none"}
+								fill={selectedChatId &&
+								selectedChatId ===
+									userSettingsCtx.settings
+										?.activePromptConfigId
+									? "currentColor"
+									: "none"}
 							/>
-							{selectedChatId && selectedChatId === userSettingsCtx.settings?.activePromptConfigId ? "Default" : "Set Default"}
+							{selectedChatId &&
+							selectedChatId ===
+								userSettingsCtx.settings?.activePromptConfigId
+								? "Default"
+								: "Set Default"}
 						</button>
 					</div>
 					<div class="flex flex-col gap-1">
-						<label class="text-sm font-semibold" for="promptConfigChatName">Name *</label>
-						<input id="promptConfigChatName" type="text" bind:value={chatConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={chatConfig.isImmutable}
-							oninput={() => { if (validationErrors.name) { const { name, ...rest } = validationErrors; validationErrors = rest } }} />
-						{#if validationErrors.name}<p class="text-error-500 text-sm" role="alert">{validationErrors.name}</p>{/if}
+						<label
+							class="text-sm font-semibold"
+							for="promptConfigChatName"
+						>
+							Name *
+						</label>
+						<input
+							id="promptConfigChatName"
+							type="text"
+							bind:value={chatConfig.name}
+							class="input w-full {validationErrors.name
+								? 'border-error-500'
+								: ''}"
+							disabled={chatConfig.isImmutable}
+							oninput={() => {
+								if (validationErrors.name) {
+									const { name, ...rest } = validationErrors
+									validationErrors = rest
+								}
+							}}
+						/>
+						{#if validationErrors.name}<p
+								class="text-error-500 text-sm"
+								role="alert"
+							>
+								{validationErrors.name}
+							</p>{/if}
 					</div>
 					<div class="flex flex-col gap-1">
-						<label class="text-sm font-semibold" for="chatSystemPrompt">System Instructions</label>
-						<textarea id="chatSystemPrompt" rows="15" bind:value={chatConfig.systemPrompt} class="textarea w-full" disabled={chatConfig.isImmutable}></textarea>
+						<label
+							class="text-sm font-semibold"
+							for="chatSystemPrompt"
+						>
+							System Instructions
+						</label>
+						<textarea
+							id="chatSystemPrompt"
+							rows="15"
+							bind:value={chatConfig.systemPrompt}
+							class="textarea w-full"
+							disabled={chatConfig.isImmutable}
+						></textarea>
 					</div>
-					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
+					<div
+						class="border-surface-200-800 flex flex-col gap-2 border-t pt-3"
+					>
 						<p class="text-sm font-semibold">AI Override</p>
-						<p class="text-muted-foreground text-xs">Overrides the system default connection and sampling for this template.</p>
+						<p class="text-muted-foreground text-xs">
+							Overrides the system default connection and sampling
+							for this template.
+						</p>
 						<ConnectionSamplingPicker
 							{connectionsList}
-							samplingList={samplingList}
+							{samplingList}
 							bind:connectionId={chatConfig.connectionId}
 							bind:samplingConfigId={chatConfig.samplingConfigId}
 						/>
@@ -671,76 +1085,218 @@
 		</div>
 	</div>
 
-<!-- ── CHAT PROMPTS: NARRATOR EDITOR ──────────────────────────────────────── -->
+	<!-- ── CHAT PROMPTS: NARRATOR EDITOR ──────────────────────────────────────── -->
 {:else if view === "narrator"}
 	<div class="text-foreground flex h-full flex-col">
-		<div class="border-b border-surface-200-800 px-4 py-3">
+		<div class="border-surface-200-800 border-b px-4 py-3">
 			<div class="flex items-center gap-2">
-				<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={navigateBack} title="Back" aria-label="Back to prompt types">
+				<button
+					class="btn btn-sm preset-filled-surface-400-600 p-2"
+					onclick={navigateBack}
+					title="Back"
+					aria-label="Back to prompt types"
+				>
 					<Icons.ChevronLeft size={16} />
 				</button>
-				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">Chat Prompts: Narrator</h2>
+				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">
+					Chat Prompts: Narrator
+				</h2>
 			</div>
-			<div class="mt-2 flex gap-2" role="toolbar" aria-label="Narrator prompt config actions">
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleNarratorNew} title="Clone to new config" aria-label="Clone to new config"><Icons.Plus size={14} /> Clone</button>
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleNarratorReset} disabled={!narratorUnsaved} title="Discard changes" aria-label="Discard changes"><Icons.RefreshCcw size={14} /> Discard</button>
-				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleNarratorDelete} disabled={!narratorConfig || narratorConfig.isImmutable} title="Delete config" aria-label="Delete config"><Icons.Trash2 size={14} /> Delete</button>
+			<div
+				class="mt-2 flex gap-2"
+				role="toolbar"
+				aria-label="Narrator prompt config actions"
+			>
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-surface-400-600"
+					onclick={handleNarratorNew}
+					title="Clone to new config"
+					aria-label="Clone to new config"
+				>
+					<Icons.Plus size={14} /> Clone
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-surface-400-600"
+					onclick={handleNarratorReset}
+					disabled={!narratorUnsaved}
+					title="Discard changes"
+					aria-label="Discard changes"
+				>
+					<Icons.RefreshCcw size={14} /> Discard
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-error"
+					onclick={handleNarratorDelete}
+					disabled={!narratorConfig || narratorConfig.isImmutable}
+					title="Delete config"
+					aria-label="Delete config"
+				>
+					<Icons.Trash2 size={14} /> Delete
+				</button>
 			</div>
 		</div>
 		<div class="flex-1 overflow-y-auto p-4">
 			<div class="mb-4">
-				<select class="select w-full" value={selectedNarratorId} onchange={handleNarratorSelectChange}>
+				<select
+					class="select w-full"
+					value={selectedNarratorId}
+					onchange={handleNarratorSelectChange}
+				>
 					{#each narratorPromptList.filter((c) => c.isImmutable) as c}
-						{@const isDefault = c.id === userSettingsCtx.settings?.activeNarratorPromptConfigId}
-						<option value={c.id}>{isDefault ? "★ " : ""}{c.name} *</option>
+						{@const isDefault =
+							c.id ===
+							userSettingsCtx.settings
+								?.activeNarratorPromptConfigId}
+						<option value={c.id}>
+							{isDefault ? "★ " : ""}{c.name} *
+						</option>
 					{/each}
 					{#each narratorPromptList.filter((c) => !c.isImmutable) as c}
-						{@const isDefault = c.id === userSettingsCtx.settings?.activeNarratorPromptConfigId}
-						<option value={c.id}>{isDefault ? "★ " : ""}{c.name}</option>
+						{@const isDefault =
+							c.id ===
+							userSettingsCtx.settings
+								?.activeNarratorPromptConfigId}
+						<option value={c.id}>
+							{isDefault ? "★ " : ""}{c.name}
+						</option>
 					{/each}
 				</select>
 			</div>
 			{#if narratorConfig?.id}
 				<div class="flex flex-col gap-4">
 					<div class="flex gap-2">
-						<button class="btn btn-sm preset-filled-success-500 flex-1" onclick={handleNarratorSave} disabled={!narratorUnsaved}>
+						<button
+							class="btn btn-sm preset-filled-success-500 flex-1"
+							onclick={handleNarratorSave}
+							disabled={!narratorUnsaved}
+						>
 							<Icons.Save size={14} /> Update
 						</button>
-						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleNarratorSetDefault}
-							disabled={!selectedNarratorId || selectedNarratorId === userSettingsCtx.settings?.activeNarratorPromptConfigId}
-							title={selectedNarratorId && selectedNarratorId === userSettingsCtx.settings?.activeNarratorPromptConfigId ? "Already the default" : "Set as default"}
-							aria-label={selectedNarratorId && selectedNarratorId === userSettingsCtx.settings?.activeNarratorPromptConfigId ? "Already the default" : "Set as default"}>
+						<button
+							class="btn btn-sm preset-filled-warning-500 shrink-0"
+							onclick={handleNarratorSetDefault}
+							disabled={!selectedNarratorId ||
+								selectedNarratorId ===
+									userSettingsCtx.settings
+										?.activeNarratorPromptConfigId}
+							title={selectedNarratorId &&
+							selectedNarratorId ===
+								userSettingsCtx.settings
+									?.activeNarratorPromptConfigId
+								? "Already the default"
+								: "Set as default"}
+							aria-label={selectedNarratorId &&
+							selectedNarratorId ===
+								userSettingsCtx.settings
+									?.activeNarratorPromptConfigId
+								? "Already the default"
+								: "Set as default"}
+						>
 							<Icons.Star
 								size={14}
-								fill={selectedNarratorId && selectedNarratorId === userSettingsCtx.settings?.activeNarratorPromptConfigId ? "currentColor" : "none"}
+								fill={selectedNarratorId &&
+								selectedNarratorId ===
+									userSettingsCtx.settings
+										?.activeNarratorPromptConfigId
+									? "currentColor"
+									: "none"}
 							/>
-							{selectedNarratorId && selectedNarratorId === userSettingsCtx.settings?.activeNarratorPromptConfigId ? "Default" : "Set Default"}
+							{selectedNarratorId &&
+							selectedNarratorId ===
+								userSettingsCtx.settings
+									?.activeNarratorPromptConfigId
+								? "Default"
+								: "Set Default"}
 						</button>
 					</div>
 					<div class="flex flex-col gap-1">
-						<label class="text-sm font-semibold" for="promptConfigNarratorName">Name *</label>
-						<input id="promptConfigNarratorName" type="text" bind:value={narratorConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={narratorConfig.isImmutable}
-							oninput={() => { if (validationErrors.name) { const { name, ...rest } = validationErrors; validationErrors = rest } }} />
-						{#if validationErrors.name}<p class="text-error-500 text-sm" role="alert">{validationErrors.name}</p>{/if}
+						<label
+							class="text-sm font-semibold"
+							for="promptConfigNarratorName"
+						>
+							Name *
+						</label>
+						<input
+							id="promptConfigNarratorName"
+							type="text"
+							bind:value={narratorConfig.name}
+							class="input w-full {validationErrors.name
+								? 'border-error-500'
+								: ''}"
+							disabled={narratorConfig.isImmutable}
+							oninput={() => {
+								if (validationErrors.name) {
+									const { name, ...rest } = validationErrors
+									validationErrors = rest
+								}
+							}}
+						/>
+						{#if validationErrors.name}<p
+								class="text-error-500 text-sm"
+								role="alert"
+							>
+								{validationErrors.name}
+							</p>{/if}
 					</div>
 					<div class="flex flex-col gap-1">
-						<label class="text-sm font-semibold" for="promptConfigNarratorDisplayName">Display Name</label>
-						<p class="text-muted-foreground text-xs">Shown in the chat instead of "Narrator" (e.g. "The World", "Fate") when a message is generated with this config.</p>
-						<input id="promptConfigNarratorDisplayName" type="text" bind:value={narratorConfig.narratorName} class="input w-full" disabled={narratorConfig.isImmutable} placeholder="Narrator" />
+						<label
+							class="text-sm font-semibold"
+							for="promptConfigNarratorDisplayName"
+						>
+							Display Name
+						</label>
+						<p class="text-muted-foreground text-xs">
+							Shown in the chat instead of "Narrator" (e.g. "The
+							World", "Fate") when a message is generated with
+							this config.
+						</p>
+						<input
+							id="promptConfigNarratorDisplayName"
+							type="text"
+							bind:value={narratorConfig.narratorName}
+							class="input w-full"
+							disabled={narratorConfig.isImmutable}
+							placeholder="Narrator"
+						/>
 					</div>
 					<div class="flex flex-col gap-1">
-						<label class="text-sm font-semibold" for="narratorSystemPrompt">System Instructions</label>
-						<p class="text-muted-foreground text-xs">Used when the Narrator is manually triggered to narrate the environment, atmosphere, or side characters instead of a chat character.</p>
-						<textarea id="narratorSystemPrompt" rows="15" bind:value={narratorConfig.systemPrompt} class="textarea w-full" disabled={narratorConfig.isImmutable}></textarea>
+						<label
+							class="text-sm font-semibold"
+							for="narratorSystemPrompt"
+						>
+							System Instructions
+						</label>
+						<p class="text-muted-foreground text-xs">
+							Used when the Narrator is manually triggered to
+							narrate the environment, atmosphere, or side
+							characters instead of a chat character.
+						</p>
+						<textarea
+							id="narratorSystemPrompt"
+							rows="15"
+							bind:value={narratorConfig.systemPrompt}
+							class="textarea w-full"
+							disabled={narratorConfig.isImmutable}
+						></textarea>
 					</div>
-					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
+					<div
+						class="border-surface-200-800 flex flex-col gap-2 border-t pt-3"
+					>
 						<p class="text-sm font-semibold">AI Override</p>
-						<p class="text-muted-foreground text-xs">Overrides the system default connection and sampling for this template.</p>
+						<p class="text-muted-foreground text-xs">
+							Overrides the system default connection and sampling
+							for this template.
+						</p>
 						<ConnectionSamplingPicker
 							{connectionsList}
-							samplingList={samplingList}
+							{samplingList}
 							bind:connectionId={narratorConfig.connectionId}
-							bind:samplingConfigId={narratorConfig.samplingConfigId}
+							bind:samplingConfigId={
+								narratorConfig.samplingConfigId
+							}
 						/>
 					</div>
 				</div>
@@ -748,92 +1304,248 @@
 		</div>
 	</div>
 
-<!-- ── WORLD LORE SUMMARIZE EDITOR ───────────────────────────────────────── -->
+	<!-- ── WORLD LORE SUMMARIZE EDITOR ───────────────────────────────────────── -->
 {:else if view === "world"}
 	<div class="text-foreground flex h-full flex-col">
-		<div class="border-b border-surface-200-800 px-4 py-3">
+		<div class="border-surface-200-800 border-b px-4 py-3">
 			<div class="flex items-center gap-2">
-				<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={navigateBack} title="Back" aria-label="Back to prompt types">
+				<button
+					class="btn btn-sm preset-filled-surface-400-600 p-2"
+					onclick={navigateBack}
+					title="Back"
+					aria-label="Back to prompt types"
+				>
 					<Icons.ChevronLeft size={16} />
 				</button>
-				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">World Lore Summarization</h2>
+				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">
+					World Lore Summarization
+				</h2>
 			</div>
-			<div class="mt-2 flex gap-2" role="toolbar" aria-label="World lore summarization config actions">
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleWorldNew} title="Clone to new config" aria-label="Clone to new config"><Icons.Plus size={14} /> Clone</button>
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleWorldReset} disabled={!worldUnsaved} title="Discard changes" aria-label="Discard changes"><Icons.RefreshCcw size={14} /> Discard</button>
-				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleWorldDelete} disabled={!worldConfig || worldConfig.isImmutable} title="Delete config" aria-label="Delete config"><Icons.Trash2 size={14} /> Delete</button>
+			<div
+				class="mt-2 flex gap-2"
+				role="toolbar"
+				aria-label="World lore summarization config actions"
+			>
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-surface-400-600"
+					onclick={handleWorldNew}
+					title="Clone to new config"
+					aria-label="Clone to new config"
+				>
+					<Icons.Plus size={14} /> Clone
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-surface-400-600"
+					onclick={handleWorldReset}
+					disabled={!worldUnsaved}
+					title="Discard changes"
+					aria-label="Discard changes"
+				>
+					<Icons.RefreshCcw size={14} /> Discard
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-error"
+					onclick={handleWorldDelete}
+					disabled={!worldConfig || worldConfig.isImmutable}
+					title="Delete config"
+					aria-label="Delete config"
+				>
+					<Icons.Trash2 size={14} /> Delete
+				</button>
 			</div>
 		</div>
 		<div class="flex-1 overflow-y-auto p-4">
 			<div class="mb-4">
-				<select class="select w-full" value={selectedWorldId} onchange={handleWorldSelectChange}>
+				<select
+					class="select w-full"
+					value={selectedWorldId}
+					onchange={handleWorldSelectChange}
+				>
 					{#each worldList.filter((c) => c.isImmutable) as c}
-						{@const isDefault = c.id === userSettingsCtx.settings?.activeSummarizeWorldConfigId}
-						<option value={c.id}>{isDefault ? "★ " : ""}{c.name} *</option>
+						{@const isDefault =
+							c.id ===
+							userSettingsCtx.settings
+								?.activeSummarizeWorldConfigId}
+						<option value={c.id}>
+							{isDefault ? "★ " : ""}{c.name} *
+						</option>
 					{/each}
 					{#each worldList.filter((c) => !c.isImmutable) as c}
-						{@const isDefault = c.id === userSettingsCtx.settings?.activeSummarizeWorldConfigId}
-						<option value={c.id}>{isDefault ? "★ " : ""}{c.name}</option>
+						{@const isDefault =
+							c.id ===
+							userSettingsCtx.settings
+								?.activeSummarizeWorldConfigId}
+						<option value={c.id}>
+							{isDefault ? "★ " : ""}{c.name}
+						</option>
 					{/each}
 				</select>
 			</div>
 			{#if worldConfig?.id}
 				<div class="flex flex-col gap-4">
 					<div class="flex gap-2">
-						<button class="btn btn-sm preset-filled-success-500 flex-1" onclick={handleWorldSave} disabled={!worldUnsaved}>
+						<button
+							class="btn btn-sm preset-filled-success-500 flex-1"
+							onclick={handleWorldSave}
+							disabled={!worldUnsaved}
+						>
 							<Icons.Save size={14} /> Update
 						</button>
-						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleWorldSetDefault}
-							disabled={!selectedWorldId || selectedWorldId === userSettingsCtx.settings?.activeSummarizeWorldConfigId}
-							title={selectedWorldId && selectedWorldId === userSettingsCtx.settings?.activeSummarizeWorldConfigId ? "Already the default" : "Set as default"}
-							aria-label={selectedWorldId && selectedWorldId === userSettingsCtx.settings?.activeSummarizeWorldConfigId ? "Already the default" : "Set as default"}>
+						<button
+							class="btn btn-sm preset-filled-warning-500 shrink-0"
+							onclick={handleWorldSetDefault}
+							disabled={!selectedWorldId ||
+								selectedWorldId ===
+									userSettingsCtx.settings
+										?.activeSummarizeWorldConfigId}
+							title={selectedWorldId &&
+							selectedWorldId ===
+								userSettingsCtx.settings
+									?.activeSummarizeWorldConfigId
+								? "Already the default"
+								: "Set as default"}
+							aria-label={selectedWorldId &&
+							selectedWorldId ===
+								userSettingsCtx.settings
+									?.activeSummarizeWorldConfigId
+								? "Already the default"
+								: "Set as default"}
+						>
 							<Icons.Star
 								size={14}
-								fill={selectedWorldId && selectedWorldId === userSettingsCtx.settings?.activeSummarizeWorldConfigId ? "currentColor" : "none"}
+								fill={selectedWorldId &&
+								selectedWorldId ===
+									userSettingsCtx.settings
+										?.activeSummarizeWorldConfigId
+									? "currentColor"
+									: "none"}
 							/>
-							{selectedWorldId && selectedWorldId === userSettingsCtx.settings?.activeSummarizeWorldConfigId ? "Default" : "Set Default"}
+							{selectedWorldId &&
+							selectedWorldId ===
+								userSettingsCtx.settings
+									?.activeSummarizeWorldConfigId
+								? "Default"
+								: "Set Default"}
 						</button>
 					</div>
 					<div class="flex flex-col gap-1">
-						<label class="text-sm font-semibold" for="promptConfigWorldName">Name *</label>
-						<input id="promptConfigWorldName" type="text" bind:value={worldConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={worldConfig.isImmutable}
-							oninput={() => { if (validationErrors.name) { const { name, ...rest } = validationErrors; validationErrors = rest } }} />
-						{#if validationErrors.name}<p class="text-error-500 text-sm" role="alert">{validationErrors.name}</p>{/if}
+						<label
+							class="text-sm font-semibold"
+							for="promptConfigWorldName"
+						>
+							Name *
+						</label>
+						<input
+							id="promptConfigWorldName"
+							type="text"
+							bind:value={worldConfig.name}
+							class="input w-full {validationErrors.name
+								? 'border-error-500'
+								: ''}"
+							disabled={worldConfig.isImmutable}
+							oninput={() => {
+								if (validationErrors.name) {
+									const { name, ...rest } = validationErrors
+									validationErrors = rest
+								}
+							}}
+						/>
+						{#if validationErrors.name}<p
+								class="text-error-500 text-sm"
+								role="alert"
+							>
+								{validationErrors.name}
+							</p>{/if}
 					</div>
-					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
-						<label class="text-sm font-semibold" for="worldBatch">Batch Instructions</label>
-						<p class="text-muted-foreground text-xs">Used during the drafting phase (per batch of messages).</p>
-						<textarea id="worldBatch" rows="8" bind:value={worldConfig.batchSystemPrompt} class="textarea w-full" disabled={worldConfig.isImmutable}></textarea>
-						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+					<div
+						class="border-surface-200-800 flex flex-col gap-2 border-t pt-3"
+					>
+						<label class="text-sm font-semibold" for="worldBatch">
+							Batch Instructions
+						</label>
+						<p class="text-muted-foreground text-xs">
+							Used during the drafting phase (per batch of
+							messages).
+						</p>
+						<textarea
+							id="worldBatch"
+							rows="8"
+							bind:value={worldConfig.batchSystemPrompt}
+							class="textarea w-full"
+							disabled={worldConfig.isImmutable}
+						></textarea>
+						<p
+							class="text-muted-foreground mt-1 text-xs font-medium"
+						>
+							AI Override
+						</p>
 						<ConnectionSamplingPicker
-							connectionsList={connectionsList}
-							samplingList={samplingList}
+							{connectionsList}
+							{samplingList}
 							bind:connectionId={worldConfig.batchConnectionId}
-							bind:samplingConfigId={worldConfig.batchSamplingConfigId}
+							bind:samplingConfigId={
+								worldConfig.batchSamplingConfigId
+							}
 						/>
 					</div>
 					<div class="flex flex-col gap-2">
-						<label class="text-sm font-semibold" for="worldSynth">Synthesis Instructions</label>
-						<p class="text-muted-foreground text-xs">Used during the synthesis phase (merging all drafts).</p>
-						<textarea id="worldSynth" rows="8" bind:value={worldConfig.synthSystemPrompt} class="textarea w-full" disabled={worldConfig.isImmutable}></textarea>
-						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+						<label class="text-sm font-semibold" for="worldSynth">
+							Synthesis Instructions
+						</label>
+						<p class="text-muted-foreground text-xs">
+							Used during the synthesis phase (merging all
+							drafts).
+						</p>
+						<textarea
+							id="worldSynth"
+							rows="8"
+							bind:value={worldConfig.synthSystemPrompt}
+							class="textarea w-full"
+							disabled={worldConfig.isImmutable}
+						></textarea>
+						<p
+							class="text-muted-foreground mt-1 text-xs font-medium"
+						>
+							AI Override
+						</p>
 						<ConnectionSamplingPicker
-							connectionsList={connectionsList}
-							samplingList={samplingList}
+							{connectionsList}
+							{samplingList}
 							bind:connectionId={worldConfig.synthConnectionId}
-							bind:samplingConfigId={worldConfig.synthSamplingConfigId}
+							bind:samplingConfigId={
+								worldConfig.synthSamplingConfigId
+							}
 						/>
 					</div>
 					<div class="flex flex-col gap-2">
-						<label class="text-sm font-semibold" for="worldName2">Title Generation Instructions</label>
-						<p class="text-muted-foreground text-xs">Used when generating a title for the entry.</p>
-						<textarea id="worldName2" rows="4" bind:value={worldConfig.nameSystemPrompt} class="textarea w-full" disabled={worldConfig.isImmutable}></textarea>
-						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+						<label class="text-sm font-semibold" for="worldName2">
+							Title Generation Instructions
+						</label>
+						<p class="text-muted-foreground text-xs">
+							Used when generating a title for the entry.
+						</p>
+						<textarea
+							id="worldName2"
+							rows="4"
+							bind:value={worldConfig.nameSystemPrompt}
+							class="textarea w-full"
+							disabled={worldConfig.isImmutable}
+						></textarea>
+						<p
+							class="text-muted-foreground mt-1 text-xs font-medium"
+						>
+							AI Override
+						</p>
 						<ConnectionSamplingPicker
-							connectionsList={connectionsList}
-							samplingList={samplingList}
+							{connectionsList}
+							{samplingList}
 							bind:connectionId={worldConfig.nameConnectionId}
-							bind:samplingConfigId={worldConfig.nameSamplingConfigId}
+							bind:samplingConfigId={
+								worldConfig.nameSamplingConfigId
+							}
 						/>
 					</div>
 				</div>
@@ -841,92 +1553,252 @@
 		</div>
 	</div>
 
-<!-- ── CHARACTER LORE SUMMARIZE EDITOR ───────────────────────────────────── -->
+	<!-- ── CHARACTER LORE SUMMARIZE EDITOR ───────────────────────────────────── -->
 {:else if view === "character"}
 	<div class="text-foreground flex h-full flex-col">
-		<div class="border-b border-surface-200-800 px-4 py-3">
+		<div class="border-surface-200-800 border-b px-4 py-3">
 			<div class="flex items-center gap-2">
-				<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={navigateBack} title="Back" aria-label="Back to prompt types">
+				<button
+					class="btn btn-sm preset-filled-surface-400-600 p-2"
+					onclick={navigateBack}
+					title="Back"
+					aria-label="Back to prompt types"
+				>
 					<Icons.ChevronLeft size={16} />
 				</button>
-				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">Character Lore Summarization</h2>
+				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">
+					Character Lore Summarization
+				</h2>
 			</div>
-			<div class="mt-2 flex gap-2" role="toolbar" aria-label="Character lore summarization config actions">
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleCharacterNew} title="Clone to new config" aria-label="Clone to new config"><Icons.Plus size={14} /> Clone</button>
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleCharacterReset} disabled={!characterUnsaved} title="Discard changes" aria-label="Discard changes"><Icons.RefreshCcw size={14} /> Discard</button>
-				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleCharacterDelete} disabled={!characterConfig || characterConfig.isImmutable} title="Delete config" aria-label="Delete config"><Icons.Trash2 size={14} /> Delete</button>
+			<div
+				class="mt-2 flex gap-2"
+				role="toolbar"
+				aria-label="Character lore summarization config actions"
+			>
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-surface-400-600"
+					onclick={handleCharacterNew}
+					title="Clone to new config"
+					aria-label="Clone to new config"
+				>
+					<Icons.Plus size={14} /> Clone
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-surface-400-600"
+					onclick={handleCharacterReset}
+					disabled={!characterUnsaved}
+					title="Discard changes"
+					aria-label="Discard changes"
+				>
+					<Icons.RefreshCcw size={14} /> Discard
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-error"
+					onclick={handleCharacterDelete}
+					disabled={!characterConfig || characterConfig.isImmutable}
+					title="Delete config"
+					aria-label="Delete config"
+				>
+					<Icons.Trash2 size={14} /> Delete
+				</button>
 			</div>
 		</div>
 		<div class="flex-1 overflow-y-auto p-4">
 			<div class="mb-4">
-				<select class="select w-full" value={selectedCharacterId} onchange={handleCharacterSelectChange}>
+				<select
+					class="select w-full"
+					value={selectedCharacterId}
+					onchange={handleCharacterSelectChange}
+				>
 					{#each characterList.filter((c) => c.isImmutable) as c}
-						{@const isDefault = c.id === userSettingsCtx.settings?.activeSummarizeCharacterConfigId}
-						<option value={c.id}>{isDefault ? "★ " : ""}{c.name} *</option>
+						{@const isDefault =
+							c.id ===
+							userSettingsCtx.settings
+								?.activeSummarizeCharacterConfigId}
+						<option value={c.id}>
+							{isDefault ? "★ " : ""}{c.name} *
+						</option>
 					{/each}
 					{#each characterList.filter((c) => !c.isImmutable) as c}
-						{@const isDefault = c.id === userSettingsCtx.settings?.activeSummarizeCharacterConfigId}
-						<option value={c.id}>{isDefault ? "★ " : ""}{c.name}</option>
+						{@const isDefault =
+							c.id ===
+							userSettingsCtx.settings
+								?.activeSummarizeCharacterConfigId}
+						<option value={c.id}>
+							{isDefault ? "★ " : ""}{c.name}
+						</option>
 					{/each}
 				</select>
 			</div>
 			{#if characterConfig?.id}
 				<div class="flex flex-col gap-4">
 					<div class="flex gap-2">
-						<button class="btn btn-sm preset-filled-success-500 flex-1" onclick={handleCharacterSave} disabled={!characterUnsaved}>
+						<button
+							class="btn btn-sm preset-filled-success-500 flex-1"
+							onclick={handleCharacterSave}
+							disabled={!characterUnsaved}
+						>
 							<Icons.Save size={14} /> Update
 						</button>
-						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleCharacterSetDefault}
-							disabled={!selectedCharacterId || selectedCharacterId === userSettingsCtx.settings?.activeSummarizeCharacterConfigId}
-							title={selectedCharacterId && selectedCharacterId === userSettingsCtx.settings?.activeSummarizeCharacterConfigId ? "Already the default" : "Set as default"}
-							aria-label={selectedCharacterId && selectedCharacterId === userSettingsCtx.settings?.activeSummarizeCharacterConfigId ? "Already the default" : "Set as default"}>
+						<button
+							class="btn btn-sm preset-filled-warning-500 shrink-0"
+							onclick={handleCharacterSetDefault}
+							disabled={!selectedCharacterId ||
+								selectedCharacterId ===
+									userSettingsCtx.settings
+										?.activeSummarizeCharacterConfigId}
+							title={selectedCharacterId &&
+							selectedCharacterId ===
+								userSettingsCtx.settings
+									?.activeSummarizeCharacterConfigId
+								? "Already the default"
+								: "Set as default"}
+							aria-label={selectedCharacterId &&
+							selectedCharacterId ===
+								userSettingsCtx.settings
+									?.activeSummarizeCharacterConfigId
+								? "Already the default"
+								: "Set as default"}
+						>
 							<Icons.Star
 								size={14}
-								fill={selectedCharacterId && selectedCharacterId === userSettingsCtx.settings?.activeSummarizeCharacterConfigId ? "currentColor" : "none"}
+								fill={selectedCharacterId &&
+								selectedCharacterId ===
+									userSettingsCtx.settings
+										?.activeSummarizeCharacterConfigId
+									? "currentColor"
+									: "none"}
 							/>
-							{selectedCharacterId && selectedCharacterId === userSettingsCtx.settings?.activeSummarizeCharacterConfigId ? "Default" : "Set Default"}
+							{selectedCharacterId &&
+							selectedCharacterId ===
+								userSettingsCtx.settings
+									?.activeSummarizeCharacterConfigId
+								? "Default"
+								: "Set Default"}
 						</button>
 					</div>
 					<div class="flex flex-col gap-1">
-						<label class="text-sm font-semibold" for="promptConfigCharName">Name *</label>
-						<input id="promptConfigCharName" type="text" bind:value={characterConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={characterConfig.isImmutable}
-							oninput={() => { if (validationErrors.name) { const { name, ...rest } = validationErrors; validationErrors = rest } }} />
-						{#if validationErrors.name}<p class="text-error-500 text-sm" role="alert">{validationErrors.name}</p>{/if}
+						<label
+							class="text-sm font-semibold"
+							for="promptConfigCharName"
+						>
+							Name *
+						</label>
+						<input
+							id="promptConfigCharName"
+							type="text"
+							bind:value={characterConfig.name}
+							class="input w-full {validationErrors.name
+								? 'border-error-500'
+								: ''}"
+							disabled={characterConfig.isImmutable}
+							oninput={() => {
+								if (validationErrors.name) {
+									const { name, ...rest } = validationErrors
+									validationErrors = rest
+								}
+							}}
+						/>
+						{#if validationErrors.name}<p
+								class="text-error-500 text-sm"
+								role="alert"
+							>
+								{validationErrors.name}
+							</p>{/if}
 					</div>
-					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
-						<label class="text-sm font-semibold" for="charBatch">Batch Instructions</label>
-						<p class="text-muted-foreground text-xs">Used during the drafting phase (per batch of messages).</p>
-						<textarea id="charBatch" rows="8" bind:value={characterConfig.batchSystemPrompt} class="textarea w-full" disabled={characterConfig.isImmutable}></textarea>
-						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+					<div
+						class="border-surface-200-800 flex flex-col gap-2 border-t pt-3"
+					>
+						<label class="text-sm font-semibold" for="charBatch">
+							Batch Instructions
+						</label>
+						<p class="text-muted-foreground text-xs">
+							Used during the drafting phase (per batch of
+							messages).
+						</p>
+						<textarea
+							id="charBatch"
+							rows="8"
+							bind:value={characterConfig.batchSystemPrompt}
+							class="textarea w-full"
+							disabled={characterConfig.isImmutable}
+						></textarea>
+						<p
+							class="text-muted-foreground mt-1 text-xs font-medium"
+						>
+							AI Override
+						</p>
 						<ConnectionSamplingPicker
-							connectionsList={connectionsList}
-							samplingList={samplingList}
-							bind:connectionId={characterConfig.batchConnectionId}
-							bind:samplingConfigId={characterConfig.batchSamplingConfigId}
+							{connectionsList}
+							{samplingList}
+							bind:connectionId={
+								characterConfig.batchConnectionId
+							}
+							bind:samplingConfigId={
+								characterConfig.batchSamplingConfigId
+							}
 						/>
 					</div>
 					<div class="flex flex-col gap-2">
-						<label class="text-sm font-semibold" for="charSynth">Synthesis Instructions</label>
-						<p class="text-muted-foreground text-xs">Used during the synthesis phase (merging all drafts).</p>
-						<textarea id="charSynth" rows="8" bind:value={characterConfig.synthSystemPrompt} class="textarea w-full" disabled={characterConfig.isImmutable}></textarea>
-						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+						<label class="text-sm font-semibold" for="charSynth">
+							Synthesis Instructions
+						</label>
+						<p class="text-muted-foreground text-xs">
+							Used during the synthesis phase (merging all
+							drafts).
+						</p>
+						<textarea
+							id="charSynth"
+							rows="8"
+							bind:value={characterConfig.synthSystemPrompt}
+							class="textarea w-full"
+							disabled={characterConfig.isImmutable}
+						></textarea>
+						<p
+							class="text-muted-foreground mt-1 text-xs font-medium"
+						>
+							AI Override
+						</p>
 						<ConnectionSamplingPicker
-							connectionsList={connectionsList}
-							samplingList={samplingList}
-							bind:connectionId={characterConfig.synthConnectionId}
-							bind:samplingConfigId={characterConfig.synthSamplingConfigId}
+							{connectionsList}
+							{samplingList}
+							bind:connectionId={
+								characterConfig.synthConnectionId
+							}
+							bind:samplingConfigId={
+								characterConfig.synthSamplingConfigId
+							}
 						/>
 					</div>
 					<div class="flex flex-col gap-2">
-						<label class="text-sm font-semibold" for="charName2">Title Generation Instructions</label>
-						<p class="text-muted-foreground text-xs">Used when generating a title for the entry.</p>
-						<textarea id="charName2" rows="4" bind:value={characterConfig.nameSystemPrompt} class="textarea w-full" disabled={characterConfig.isImmutable}></textarea>
-						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+						<label class="text-sm font-semibold" for="charName2">
+							Title Generation Instructions
+						</label>
+						<p class="text-muted-foreground text-xs">
+							Used when generating a title for the entry.
+						</p>
+						<textarea
+							id="charName2"
+							rows="4"
+							bind:value={characterConfig.nameSystemPrompt}
+							class="textarea w-full"
+							disabled={characterConfig.isImmutable}
+						></textarea>
+						<p
+							class="text-muted-foreground mt-1 text-xs font-medium"
+						>
+							AI Override
+						</p>
 						<ConnectionSamplingPicker
-							connectionsList={connectionsList}
-							samplingList={samplingList}
+							{connectionsList}
+							{samplingList}
 							bind:connectionId={characterConfig.nameConnectionId}
-							bind:samplingConfigId={characterConfig.nameSamplingConfigId}
+							bind:samplingConfigId={
+								characterConfig.nameSamplingConfigId
+							}
 						/>
 					</div>
 				</div>
@@ -934,98 +1806,270 @@
 		</div>
 	</div>
 
-<!-- ── SCENE SUMMARIZE EDITOR ─────────────────────────────────────────────── -->
+	<!-- ── SCENE SUMMARIZE EDITOR ─────────────────────────────────────────────── -->
 {:else if view === "scene"}
 	<div class="text-foreground flex h-full flex-col">
-		<div class="border-b border-surface-200-800 px-4 py-3">
+		<div class="border-surface-200-800 border-b px-4 py-3">
 			<div class="flex items-center gap-2">
-				<button class="btn btn-sm preset-filled-surface-400-600 p-2" onclick={navigateBack} title="Back" aria-label="Back to prompt types">
+				<button
+					class="btn btn-sm preset-filled-surface-400-600 p-2"
+					onclick={navigateBack}
+					title="Back"
+					aria-label="Back to prompt types"
+				>
 					<Icons.ChevronLeft size={16} />
 				</button>
-				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">Scene Summarization</h2>
+				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">
+					Scene Summarization
+				</h2>
 			</div>
-			<div class="mt-2 flex gap-2" role="toolbar" aria-label="Scene summarization config actions">
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleSceneNew} title="Clone to new config" aria-label="Clone to new config"><Icons.Plus size={14} /> Clone</button>
-				<button type="button" class="btn btn-sm preset-filled-surface-400-600" onclick={handleSceneReset} disabled={!sceneUnsaved} title="Discard changes" aria-label="Discard changes"><Icons.RefreshCcw size={14} /> Discard</button>
-				<button type="button" class="btn btn-sm preset-tonal-error" onclick={handleSceneDelete} disabled={!sceneConfig || sceneConfig.isImmutable} title="Delete config" aria-label="Delete config"><Icons.Trash2 size={14} /> Delete</button>
+			<div
+				class="mt-2 flex gap-2"
+				role="toolbar"
+				aria-label="Scene summarization config actions"
+			>
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-surface-400-600"
+					onclick={handleSceneNew}
+					title="Clone to new config"
+					aria-label="Clone to new config"
+				>
+					<Icons.Plus size={14} /> Clone
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-surface-400-600"
+					onclick={handleSceneReset}
+					disabled={!sceneUnsaved}
+					title="Discard changes"
+					aria-label="Discard changes"
+				>
+					<Icons.RefreshCcw size={14} /> Discard
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-error"
+					onclick={handleSceneDelete}
+					disabled={!sceneConfig || sceneConfig.isImmutable}
+					title="Delete config"
+					aria-label="Delete config"
+				>
+					<Icons.Trash2 size={14} /> Delete
+				</button>
 			</div>
 		</div>
 		<div class="flex-1 overflow-y-auto p-4">
 			<div class="mb-4">
-				<select class="select w-full" value={selectedSceneId} onchange={handleSceneSelectChange}>
+				<select
+					class="select w-full"
+					value={selectedSceneId}
+					onchange={handleSceneSelectChange}
+				>
 					{#each sceneList.filter((c) => c.isImmutable) as c}
-						{@const isDefault = c.id === userSettingsCtx.settings?.activeSummarizeSceneConfigId}
-						<option value={c.id}>{isDefault ? "★ " : ""}{c.name} *</option>
+						{@const isDefault =
+							c.id ===
+							userSettingsCtx.settings
+								?.activeSummarizeSceneConfigId}
+						<option value={c.id}>
+							{isDefault ? "★ " : ""}{c.name} *
+						</option>
 					{/each}
 					{#each sceneList.filter((c) => !c.isImmutable) as c}
-						{@const isDefault = c.id === userSettingsCtx.settings?.activeSummarizeSceneConfigId}
-						<option value={c.id}>{isDefault ? "★ " : ""}{c.name}</option>
+						{@const isDefault =
+							c.id ===
+							userSettingsCtx.settings
+								?.activeSummarizeSceneConfigId}
+						<option value={c.id}>
+							{isDefault ? "★ " : ""}{c.name}
+						</option>
 					{/each}
 				</select>
 			</div>
 			{#if sceneConfig?.id}
 				<div class="flex flex-col gap-4">
 					<div class="flex gap-2">
-						<button class="btn btn-sm preset-filled-success-500 flex-1" onclick={handleSceneSave} disabled={!sceneUnsaved}>
+						<button
+							class="btn btn-sm preset-filled-success-500 flex-1"
+							onclick={handleSceneSave}
+							disabled={!sceneUnsaved}
+						>
 							<Icons.Save size={14} /> Update
 						</button>
-						<button class="btn btn-sm preset-filled-warning-500 shrink-0" onclick={handleSceneSetDefault}
-							disabled={!selectedSceneId || selectedSceneId === userSettingsCtx.settings?.activeSummarizeSceneConfigId}
-							title={selectedSceneId && selectedSceneId === userSettingsCtx.settings?.activeSummarizeSceneConfigId ? "Already the default" : "Set as default"}
-							aria-label={selectedSceneId && selectedSceneId === userSettingsCtx.settings?.activeSummarizeSceneConfigId ? "Already the default" : "Set as default"}>
+						<button
+							class="btn btn-sm preset-filled-warning-500 shrink-0"
+							onclick={handleSceneSetDefault}
+							disabled={!selectedSceneId ||
+								selectedSceneId ===
+									userSettingsCtx.settings
+										?.activeSummarizeSceneConfigId}
+							title={selectedSceneId &&
+							selectedSceneId ===
+								userSettingsCtx.settings
+									?.activeSummarizeSceneConfigId
+								? "Already the default"
+								: "Set as default"}
+							aria-label={selectedSceneId &&
+							selectedSceneId ===
+								userSettingsCtx.settings
+									?.activeSummarizeSceneConfigId
+								? "Already the default"
+								: "Set as default"}
+						>
 							<Icons.Star
 								size={14}
-								fill={selectedSceneId && selectedSceneId === userSettingsCtx.settings?.activeSummarizeSceneConfigId ? "currentColor" : "none"}
+								fill={selectedSceneId &&
+								selectedSceneId ===
+									userSettingsCtx.settings
+										?.activeSummarizeSceneConfigId
+									? "currentColor"
+									: "none"}
 							/>
-							{selectedSceneId && selectedSceneId === userSettingsCtx.settings?.activeSummarizeSceneConfigId ? "Default" : "Set Default"}
+							{selectedSceneId &&
+							selectedSceneId ===
+								userSettingsCtx.settings
+									?.activeSummarizeSceneConfigId
+								? "Default"
+								: "Set Default"}
 						</button>
 					</div>
 					<div class="flex flex-col gap-1">
-						<label class="text-sm font-semibold" for="promptConfigSceneName">Name *</label>
-						<input id="promptConfigSceneName" type="text" bind:value={sceneConfig.name} class="input w-full {validationErrors.name ? 'border-error-500' : ''}" disabled={sceneConfig.isImmutable}
-							oninput={() => { if (validationErrors.name) { const { name, ...rest } = validationErrors; validationErrors = rest } }} />
-						{#if validationErrors.name}<p class="text-error-500 text-sm" role="alert">{validationErrors.name}</p>{/if}
+						<label
+							class="text-sm font-semibold"
+							for="promptConfigSceneName"
+						>
+							Name *
+						</label>
+						<input
+							id="promptConfigSceneName"
+							type="text"
+							bind:value={sceneConfig.name}
+							class="input w-full {validationErrors.name
+								? 'border-error-500'
+								: ''}"
+							disabled={sceneConfig.isImmutable}
+							oninput={() => {
+								if (validationErrors.name) {
+									const { name, ...rest } = validationErrors
+									validationErrors = rest
+								}
+							}}
+						/>
+						{#if validationErrors.name}<p
+								class="text-error-500 text-sm"
+								role="alert"
+							>
+								{validationErrors.name}
+							</p>{/if}
 					</div>
-					<div class="border-surface-200-800 flex flex-col gap-2 border-t pt-3">
-						<label class="text-sm font-semibold" for="sceneBatch">Batch Instructions</label>
-						<p class="text-muted-foreground text-xs">Used during the drafting phase (per batch of messages).</p>
-						<textarea id="sceneBatch" rows="8" bind:value={sceneConfig.batchSystemPrompt} class="textarea w-full" disabled={sceneConfig.isImmutable}></textarea>
-						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+					<div
+						class="border-surface-200-800 flex flex-col gap-2 border-t pt-3"
+					>
+						<label class="text-sm font-semibold" for="sceneBatch">
+							Batch Instructions
+						</label>
+						<p class="text-muted-foreground text-xs">
+							Used during the drafting phase (per batch of
+							messages).
+						</p>
+						<textarea
+							id="sceneBatch"
+							rows="8"
+							bind:value={sceneConfig.batchSystemPrompt}
+							class="textarea w-full"
+							disabled={sceneConfig.isImmutable}
+						></textarea>
+						<p
+							class="text-muted-foreground mt-1 text-xs font-medium"
+						>
+							AI Override
+						</p>
 						<ConnectionSamplingPicker
-							connectionsList={connectionsList}
-							samplingList={samplingList}
+							{connectionsList}
+							{samplingList}
 							bind:connectionId={sceneConfig.batchConnectionId}
-							bind:samplingConfigId={sceneConfig.batchSamplingConfigId}
+							bind:samplingConfigId={
+								sceneConfig.batchSamplingConfigId
+							}
 						/>
 					</div>
 					<div class="flex flex-col gap-2">
-						<label class="text-sm font-semibold" for="sceneSynth">Synthesis Instructions</label>
-						<p class="text-muted-foreground text-xs">Used during the synthesis phase (merging all drafts).</p>
-						<textarea id="sceneSynth" rows="8" bind:value={sceneConfig.synthSystemPrompt} class="textarea w-full" disabled={sceneConfig.isImmutable}></textarea>
-						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+						<label class="text-sm font-semibold" for="sceneSynth">
+							Synthesis Instructions
+						</label>
+						<p class="text-muted-foreground text-xs">
+							Used during the synthesis phase (merging all
+							drafts).
+						</p>
+						<textarea
+							id="sceneSynth"
+							rows="8"
+							bind:value={sceneConfig.synthSystemPrompt}
+							class="textarea w-full"
+							disabled={sceneConfig.isImmutable}
+						></textarea>
+						<p
+							class="text-muted-foreground mt-1 text-xs font-medium"
+						>
+							AI Override
+						</p>
 						<ConnectionSamplingPicker
-							connectionsList={connectionsList}
-							samplingList={samplingList}
+							{connectionsList}
+							{samplingList}
 							bind:connectionId={sceneConfig.synthConnectionId}
-							bind:samplingConfigId={sceneConfig.synthSamplingConfigId}
+							bind:samplingConfigId={
+								sceneConfig.synthSamplingConfigId
+							}
 						/>
 					</div>
 					<div class="flex flex-col gap-2">
-						<label class="text-sm font-semibold" for="sceneName2">Title Generation Instructions</label>
-						<p class="text-muted-foreground text-xs">Used when generating a title for the entry.</p>
-						<textarea id="sceneName2" rows="4" bind:value={sceneConfig.nameSystemPrompt} class="textarea w-full" disabled={sceneConfig.isImmutable}></textarea>
-						<p class="text-muted-foreground mt-1 text-xs font-medium">AI Override</p>
+						<label class="text-sm font-semibold" for="sceneName2">
+							Title Generation Instructions
+						</label>
+						<p class="text-muted-foreground text-xs">
+							Used when generating a title for the entry.
+						</p>
+						<textarea
+							id="sceneName2"
+							rows="4"
+							bind:value={sceneConfig.nameSystemPrompt}
+							class="textarea w-full"
+							disabled={sceneConfig.isImmutable}
+						></textarea>
+						<p
+							class="text-muted-foreground mt-1 text-xs font-medium"
+						>
+							AI Override
+						</p>
 						<ConnectionSamplingPicker
-							connectionsList={connectionsList}
-							samplingList={samplingList}
+							{connectionsList}
+							{samplingList}
 							bind:connectionId={sceneConfig.nameConnectionId}
-							bind:samplingConfigId={sceneConfig.nameSamplingConfigId}
+							bind:samplingConfigId={
+								sceneConfig.nameSamplingConfigId
+							}
 						/>
 					</div>
 					<div class="flex flex-col gap-2">
-						<label class="text-sm font-semibold" for="sceneCharacterExtraction">Character Extraction Instructions</label>
-						<p class="text-muted-foreground text-xs">Used when extracting participant and mentioned characters from the scene summary.</p>
-						<textarea id="sceneCharacterExtraction" rows="6" bind:value={sceneConfig.characterExtractionSystemPrompt} class="textarea w-full" disabled={sceneConfig.isImmutable}></textarea>
+						<label
+							class="text-sm font-semibold"
+							for="sceneCharacterExtraction"
+						>
+							Character Extraction Instructions
+						</label>
+						<p class="text-muted-foreground text-xs">
+							Used when extracting participant and mentioned
+							characters from the scene summary.
+						</p>
+						<textarea
+							id="sceneCharacterExtraction"
+							rows="6"
+							bind:value={
+								sceneConfig.characterExtractionSystemPrompt
+							}
+							class="textarea w-full"
+							disabled={sceneConfig.isImmutable}
+						></textarea>
 					</div>
 				</div>
 			{/if}
@@ -1044,6 +2088,14 @@
 	onOpenChange={(e) => (showNewNameModal = e.open)}
 	onConfirm={handleNewNameConfirm}
 	onCancel={handleNewNameCancel}
-	title={view === "chat" ? "New Prompt Config" : view === "narrator" ? "New Narrator Prompt Config" : view === "world" ? "New World Lore Summarization Config" : view === "character" ? "New Character Lore Summarization Config" : "New Scene Summarization Config"}
+	title={view === "chat"
+		? "New Prompt Config"
+		: view === "narrator"
+			? "New Narrator Prompt Config"
+			: view === "world"
+				? "New World Lore Summarization Config"
+				: view === "character"
+					? "New Character Lore Summarization Config"
+					: "New Scene Summarization Config"}
 	description="Your current settings will be copied."
 />

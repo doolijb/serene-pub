@@ -1,6 +1,6 @@
 # Personas
 
-A persona is how *you* show up inside a chat — your name, your avatar, your written description — separate from the [Characters](./characters.md) the AI plays. This page covers persona fields, the two ways to create one, the community persona library, and how to manage several personas at once.
+A persona is how _you_ show up inside a chat — your name, your avatar, your written description — separate from the [Characters](./characters.md) the AI plays. This page covers persona fields, the two ways to create one, the community persona library, and how to manage several personas at once.
 
 ## Overview
 
@@ -32,13 +32,17 @@ A required, longer free-text field. This is the persona's main body of text — 
 
 An optional multi-select field shared with the same tagging system used elsewhere in the app. Type into the tag box to see autocomplete suggestions from your existing tags, press Enter to add a new one on the fly, or click an existing tag chip to remove it from the persona. See [Tags](./tags.md) for how tags work across the app.
 
+### Creator and Category
+
+Two optional free-text fields, always visible on the full Persona Form (not hidden behind any toggle): **Creator** names whoever authored the persona card, and **Category** is used to group the persona within the community persona library.
+
 ### Avatar and Image Gallery
 
-An avatar image can be uploaded via a drag-and-drop dropzone (JPG, PNG, or GIF). While editing an existing persona, a full **Image Gallery** section also appears, letting you upload multiple images, click any thumbnail to set it as the active avatar, or delete images you no longer want. The currently active avatar is highlighted with a ring and checkmark in the gallery grid.
+An avatar image can be uploaded via a drag-and-drop dropzone (JPG, PNG, or GIF) directly in the persona form. The gallery of additional images is separate from the form, though — once a persona exists, open its **View** panel and switch to the **Gallery** tab to upload more images, click a thumbnail to open it in a lightbox, use its **⋮** menu to **Set as avatar** or **Delete** it, or drag thumbnails to reorder them. The currently active avatar is highlighted in the gallery grid.
 
 ### Default Persona Flag
 
-Each persona can be marked as your default persona (shown as a "Default" badge on its view panel). The persona the setup wizard creates for you is flagged this way automatically.
+A persona can be flagged as your default persona (shown as a "Default" badge on its view panel) — the starter persona the setup wizard creates for you is flagged this way automatically. There is currently no control in the persona form (or anywhere else in the UI) to change which persona holds this flag afterward; it's set once, at creation, by the setup wizard's starter-persona flow specifically, and every other persona you create is not flagged as default.
 
 ### Required vs. Optional Fields
 

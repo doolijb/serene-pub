@@ -15,7 +15,8 @@ export interface ManagedConfig {
 // form and connections:create/get backfilling use) rather than a separate
 // local copy, so a launch config and the form displaying it can never drift.
 const SHARED_MANAGED_DEFAULTS =
-	CONNECTION_DEFAULTS[CONNECTION_TYPE.KOBOLDCPP_MANAGED].extraJson.managedConfig!
+	CONNECTION_DEFAULTS[CONNECTION_TYPE.KOBOLDCPP_MANAGED].extraJson
+		.managedConfig!
 
 export const DEFAULT_MANAGED_CONFIG: ManagedConfig = {
 	modelFile: "",
@@ -75,7 +76,9 @@ function normalizeModelName(name: string): string {
 	return path.basename(name).replace(/\.gguf$/i, "")
 }
 
-async function getCurrentModelBasename(baseUrl: string): Promise<string | null> {
+async function getCurrentModelBasename(
+	baseUrl: string
+): Promise<string | null> {
 	const result = await fetchCurrentModelName(baseUrl)
 	return result ? normalizeModelName(result) : null
 }
@@ -94,7 +97,9 @@ async function waitForModelReady(
 		if (current && current === expected) return
 		await new Promise((r) => setTimeout(r, 2000))
 	}
-	throw new Error(`Model "${expectedFile}" did not finish loading within timeout`)
+	throw new Error(
+		`Model "${expectedFile}" did not finish loading within timeout`
+	)
 }
 
 export async function ensureModelLoaded(opts: {
@@ -108,7 +113,17 @@ export async function ensureModelLoaded(opts: {
 	contextSize?: number
 	signal?: AbortSignal
 }): Promise<void> {
-	const { connectionId, managedConfig, baseUrl, modelsDir, adminDir, adminPassword, ttlSecs, contextSize, signal } = opts
+	const {
+		connectionId,
+		managedConfig,
+		baseUrl,
+		modelsDir,
+		adminDir,
+		adminPassword,
+		ttlSecs,
+		contextSize,
+		signal
+	} = opts
 
 	// A previous caller's load may still be in flight. Wait for it, but don't
 	// hang forever if that caller was cancelled and its own fetch is still
@@ -119,7 +134,12 @@ export async function ensureModelLoaded(opts: {
 				loadingPromise.catch(() => {}),
 				new Promise<void>((_, reject) => {
 					if (signal.aborted) reject(signal.reason)
-					else signal.addEventListener("abort", () => reject(signal.reason), { once: true })
+					else
+						signal.addEventListener(
+							"abort",
+							() => reject(signal.reason),
+							{ once: true }
+						)
 				})
 			])
 			signal.throwIfAborted()
@@ -159,7 +179,9 @@ export async function ensureModelLoaded(opts: {
 		}
 	}
 
-	const modelPath = modelsDir ? path.join(modelsDir, managedConfig.modelFile) : managedConfig.modelFile
+	const modelPath = modelsDir
+		? path.join(modelsDir, managedConfig.modelFile)
+		: managedConfig.modelFile
 	// koboldcpp's admin reload_config only accepts .kcpps files that live inside
 	// its --admindir (validated against a jailed allowlist), referenced by a path
 	// relative to that directory — an absolute /tmp path is silently rejected.
@@ -174,7 +196,10 @@ export async function ensureModelLoaded(opts: {
 	const configJson = JSON.stringify(configContent, null, 2)
 
 	loadingPromise = (async () => {
-		await fsPromises.writeFile(path.join(adminDir, configFilename), configJson)
+		await fsPromises.writeFile(
+			path.join(adminDir, configFilename),
+			configJson
+		)
 
 		const timeoutSignal = AbortSignal.timeout(600_000)
 		const resp = await fetch(`${baseUrl}/api/admin/reload_config`, {
@@ -184,7 +209,9 @@ export async function ensureModelLoaded(opts: {
 				Authorization: `Bearer ${adminPassword}`
 			},
 			body: JSON.stringify({ filename: configFilename }),
-			signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
+			signal: signal
+				? AbortSignal.any([signal, timeoutSignal])
+				: timeoutSignal
 		})
 
 		if (!resp.ok) {
@@ -193,7 +220,9 @@ export async function ensureModelLoaded(opts: {
 		}
 		const data = await resp.json().catch(() => ({}))
 		if (!data.success) {
-			throw new Error("reload_config rejected the request (success: false)")
+			throw new Error(
+				"reload_config rejected the request (success: false)"
+			)
 		}
 
 		await waitForModelReady(baseUrl, managedConfig.modelFile, signal)
@@ -216,7 +245,10 @@ export async function ensureModelLoaded(opts: {
 	resetTtl(baseUrl, adminPassword, ttlSecs)
 }
 
-export async function unloadModel(baseUrl: string, adminPassword: string): Promise<boolean> {
+export async function unloadModel(
+	baseUrl: string,
+	adminPassword: string
+): Promise<boolean> {
 	try {
 		// There is no dedicated unload endpoint — koboldcpp's admin API treats the
 		// literal filename "unload_model" as a special reload_config target.

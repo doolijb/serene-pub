@@ -96,7 +96,10 @@ export interface GraphBuilderInput {
 	/** If provided, restore this checkpoint and resume the build from its sceneIndex. */
 	resumeState?: GraphBuilderResumeState
 	/** Fetch raw messages for a scene — called during node description generation for newly introduced nodes */
-	fetchSceneMessages?: (chatId: number, messageIds: number[]) => Promise<Array<{senderName: string; content: string}>>
+	fetchSceneMessages?: (
+		chatId: number,
+		messageIds: number[]
+	) => Promise<Array<{ senderName: string; content: string }>>
 }
 
 export interface GraphBuilderResult {
@@ -165,7 +168,9 @@ async function runLLM(
 		(opts.connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
 	)
 	const tokenLimit: number =
-		(opts.connection as any).tokenLimit ?? (opts.connection as any).contextSize ?? 4096
+		(opts.connection as any).tokenLimit ??
+		(opts.connection as any).contextSize ??
+		4096
 
 	const fakeChat = buildMinimalChat(userPrompt)
 
@@ -204,7 +209,11 @@ async function runLLM(
 	return raw
 }
 
-function formatEntryDate(entry: { year: number; month: number | null; day: number | null }): string {
+function formatEntryDate(entry: {
+	year: number
+	month: number | null
+	day: number | null
+}): string {
 	let label = `Year ${entry.year}`
 	if (entry.month != null) label += `, Month ${entry.month}`
 	if (entry.day != null) label += `, Day ${entry.day}`
@@ -213,14 +222,42 @@ function formatEntryDate(entry: { year: number; month: number | null; day: numbe
 
 // Words stripped before comparing names — honorifics, titles, filler prepositions
 const TITLE_WORDS = new Set([
-	'lord', 'lady', 'sir', 'dame', 'king', 'queen', 'prince', 'princess',
-	'duke', 'duchess', 'count', 'countess', 'baron', 'baroness', 'emperor',
-	'empress', 'captain', 'general', 'admiral', 'commander', 'the', 'of', 'von',
-	'de', 'van', 'der', 'el', 'al'
+	"lord",
+	"lady",
+	"sir",
+	"dame",
+	"king",
+	"queen",
+	"prince",
+	"princess",
+	"duke",
+	"duchess",
+	"count",
+	"countess",
+	"baron",
+	"baroness",
+	"emperor",
+	"empress",
+	"captain",
+	"general",
+	"admiral",
+	"commander",
+	"the",
+	"of",
+	"von",
+	"de",
+	"van",
+	"der",
+	"el",
+	"al"
 ])
 
 function distinctiveWords(name: string): string[] {
-	return name.toLowerCase().trim().split(/\s+/).filter((w) => w.length > 1 && !TITLE_WORDS.has(w))
+	return name
+		.toLowerCase()
+		.trim()
+		.split(/\s+/)
+		.filter((w) => w.length > 1 && !TITLE_WORDS.has(w))
 }
 
 /**
@@ -228,7 +265,10 @@ function distinctiveWords(name: string): string[] {
  * superset of the incoming name's distinctive words. Returns the matched tempId,
  * or undefined if zero or multiple candidates match (ambiguity → create new).
  */
-function fuzzyMatchName(incomingName: string, nameToTempId: Map<string, string>): string | undefined {
+function fuzzyMatchName(
+	incomingName: string,
+	nameToTempId: Map<string, string>
+): string | undefined {
 	const incomingWords = distinctiveWords(incomingName)
 	if (incomingWords.length === 0) return undefined
 	const candidates: string[] = []
@@ -243,13 +283,17 @@ function fuzzyMatchName(incomingName: string, nameToTempId: Map<string, string>)
 
 function messageContainsName(text: string, name: string): boolean {
 	const lower = text.toLowerCase()
-	return distinctiveWords(name).some(w => lower.includes(w))
+	return distinctiveWords(name).some((w) => lower.includes(w))
 }
 
 function extractJson(raw: string): string {
-	const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim()
+	const stripped = raw
+		.replace(/^```(?:json)?\s*/i, "")
+		.replace(/\s*```\s*$/, "")
+		.trim()
 	const start = stripped.indexOf("{")
-	if (start === -1) throw new GraphParseError("No JSON object found in LLM response", raw)
+	if (start === -1)
+		throw new GraphParseError("No JSON object found in LLM response", raw)
 	// Walk forward tracking depth to find the balanced closing brace,
 	// correctly handling strings and escape sequences so embedded {} don't confuse the match.
 	let depth = 0
@@ -257,16 +301,28 @@ function extractJson(raw: string): string {
 	let escape = false
 	for (let i = start; i < stripped.length; i++) {
 		const ch = stripped[i]
-		if (escape) { escape = false; continue }
-		if (ch === "\\" && inString) { escape = true; continue }
-		if (ch === '"') { inString = !inString; continue }
+		if (escape) {
+			escape = false
+			continue
+		}
+		if (ch === "\\" && inString) {
+			escape = true
+			continue
+		}
+		if (ch === '"') {
+			inString = !inString
+			continue
+		}
 		if (inString) continue
 		if (ch === "{") depth++
 		else if (ch === "}") {
 			if (--depth === 0) return stripped.slice(start, i + 1)
 		}
 	}
-	throw new GraphParseError("No complete JSON object found in LLM response", raw)
+	throw new GraphParseError(
+		"No complete JSON object found in LLM response",
+		raw
+	)
 }
 
 // ─── System prompts ───────────────────────────────────────────────────────────
@@ -433,7 +489,10 @@ function nodeStateDetectionUserPrompt(
 	presentNodes: Array<{ name: string; nodeState: string; aliases: string[] }>
 ): string {
 	const nodeLines = presentNodes.map((n) => {
-		const aliasPart = n.aliases.length > 0 ? ` (also known as: ${n.aliases.join(", ")})` : ""
+		const aliasPart =
+			n.aliases.length > 0
+				? ` (also known as: ${n.aliases.join(", ")})`
+				: ""
 		return `- ${n.name}${aliasPart} — current state: ${n.nodeState}`
 	})
 	return `Scene summary:
@@ -450,13 +509,17 @@ JSON output:
 
 function nodeDescriptionUserPrompt(
 	name: string,
-	messages: Array<{senderName: string; content: string}>,
+	messages: Array<{ senderName: string; content: string }>,
 	fallbackText?: string
 ): string {
 	if (messages.length > 0) {
 		const formatted = JSON.stringify(
-			messages.map(m => ({ speaker: m.senderName, text: m.content.trim() })),
-			null, 2
+			messages.map((m) => ({
+				speaker: m.senderName,
+				text: m.content.trim()
+			})),
+			null,
+			2
 		)
 		return `Character: ${name}\n\nScene messages:\n${formatted}\n\nWrite a two-sentence description of ${name}:`
 	}
@@ -477,7 +540,13 @@ function characterPerspectiveUserPrompt(
 		presence: "present" | "mentioned"
 		existingRelationships: GraphBuilderSeedRelationship[]
 	}>,
-	establishedRels: Array<{ toName: string; type: string; status: string; visibility: string; description: string }>
+	establishedRels: Array<{
+		toName: string
+		type: string
+		status: string
+		visibility: string
+		description: string
+	}>
 ): string {
 	const payload = {
 		scene: {
@@ -510,12 +579,14 @@ function characterPerspectiveUserPrompt(
 				presence: o.presence
 			}
 			if (o.existingRelationships.length > 0) {
-				entry.existingRelationships = o.existingRelationships.map((r) => ({
-					type: r.relationshipType,
-					description: r.description,
-					visibility: r.visibility,
-					status: r.status
-				}))
+				entry.existingRelationships = o.existingRelationships.map(
+					(r) => ({
+						type: r.relationshipType,
+						description: r.description,
+						visibility: r.visibility,
+						status: r.status
+					})
+				)
 			}
 			return entry
 		})
@@ -543,13 +614,24 @@ function parseNodeStateChanges(
 	nameToTempId: Map<string, string>
 ): Array<{ tempId: string; newState: string; reason: string }> {
 	let jsonStr: string
-	try { jsonStr = extractJson(raw) } catch { return [] }
+	try {
+		jsonStr = extractJson(raw)
+	} catch {
+		return []
+	}
 	let parsed: any
-	try { parsed = JSON.parse(jsonStr) } catch { return [] }
+	try {
+		parsed = JSON.parse(jsonStr)
+	} catch {
+		return []
+	}
 	if (!Array.isArray(parsed.changes)) return []
-	const results: Array<{ tempId: string; newState: string; reason: string }> = []
+	const results: Array<{ tempId: string; newState: string; reason: string }> =
+		[]
 	for (const c of parsed.changes) {
-		const newState = String(c.newState ?? "").toLowerCase().trim()
+		const newState = String(c.newState ?? "")
+			.toLowerCase()
+			.trim()
 		if (!VALID_NODE_STATES.has(newState)) continue
 		const rawName = String(c.name ?? "").trim()
 		if (!rawName) continue
@@ -607,7 +689,9 @@ function parseCharacterPerspectives(
 
 // ─── Chronological sort ───────────────────────────────────────────────────────
 
-export function sortScenesChronologically(scenes: GraphBuilderScene[]): GraphBuilderScene[] {
+export function sortScenesChronologically(
+	scenes: GraphBuilderScene[]
+): GraphBuilderScene[] {
 	return [...scenes].sort((a, b) => {
 		const aHe = a.historyEntry
 		const bHe = b.historyEntry
@@ -627,9 +711,24 @@ export function sortScenesChronologically(scenes: GraphBuilderScene[]): GraphBui
 
 // ─── Main builder ─────────────────────────────────────────────────────────────
 
-export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<GraphBuilderResult> {
-	const { scenes, connection, sampling, contextConfig, promptConfig, seedNodes, seedRelationships, onProgress, onLlmCall, signal, onSceneStart, resumeState, fetchSceneMessages } =
-		input
+export async function buildGraphFromScenes(
+	input: GraphBuilderInput
+): Promise<GraphBuilderResult> {
+	const {
+		scenes,
+		connection,
+		sampling,
+		contextConfig,
+		promptConfig,
+		seedNodes,
+		seedRelationships,
+		onProgress,
+		onLlmCall,
+		signal,
+		onSceneStart,
+		resumeState,
+		fetchSceneMessages
+	} = input
 
 	if (scenes.length === 0) throw new Error("No scenes to build graph from.")
 
@@ -637,7 +736,9 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 	const scenesWithSummaries = orderedScenes.filter((s) => s.summary?.trim())
 
 	if (scenesWithSummaries.length === 0) {
-		throw new Error("No scenes have summaries. Generate scene summaries first.")
+		throw new Error(
+			"No scenes have summaries. Generate scene summaries first."
+		)
 	}
 
 	const sceneLabels = scenesWithSummaries.map((s) =>
@@ -646,7 +747,11 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 
 	const llmOpts = { connection, sampling, contextConfig, promptConfig }
 
-	async function llm(label: string, system: string, user: string): Promise<string> {
+	async function llm(
+		label: string,
+		system: string,
+		user: string
+	): Promise<string> {
 		const response = await runLLM(system, user, llmOpts, label)
 		onLlmCall?.({ label, system, user, response })
 		return response
@@ -655,7 +760,10 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 	// Running node state keyed by tempId
 	const nodeMap = new Map<string, Sockets.NarrativeGraph.NodeProposal>()
 	// Running relationship state keyed by "fromTempId|toTempId|relationshipType"
-	const relMap = new Map<string, Sockets.NarrativeGraph.RelationshipProposal>()
+	const relMap = new Map<
+		string,
+		Sockets.NarrativeGraph.RelationshipProposal
+	>()
 
 	let nextNodeIndex = 1
 	const seedTempIdMap: Record<string, number> = {}
@@ -669,10 +777,17 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 	// Seed with existing nodes (extend mode) or binding-derived nodes (replace mode)
 	if (seedNodes?.length) {
 		for (const seed of seedNodes) {
-			const tempId = seed.bindingId ? `binding_${seed.bindingId}` : `existing_${seed.id!}`
+			const tempId = seed.bindingId
+				? `binding_${seed.bindingId}`
+				: `existing_${seed.id!}`
 			if (!seed.bindingId && seed.id) seedTempIdMap[tempId] = seed.id
 			if (seed.bindingId) newNodeTempIds.add(tempId)
-			nodeMap.set(tempId, { tempId, name: seed.name, nodeState: seed.nodeState, summary: seed.summary ?? "" })
+			nodeMap.set(tempId, {
+				tempId,
+				name: seed.name,
+				nodeState: seed.nodeState,
+				summary: seed.summary ?? ""
+			})
 			if (seed.aliases?.length) nodeAliasMap.set(tempId, seed.aliases)
 		}
 	}
@@ -706,7 +821,8 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 		for (const [k, v] of resumeState.relMap) relMap.set(k, v)
 		Object.assign(seedTempIdMap, resumeState.seedTempIdMap)
 		for (const k of resumeState.seedRelKeys) seedRelKeys.add(k)
-		for (const k of resumeState.updatedSeedRelKeys) updatedSeedRelKeys.add(k)
+		for (const k of resumeState.updatedSeedRelKeys)
+			updatedSeedRelKeys.add(k)
 		for (const k of resumeState.newNodeTempIds) newNodeTempIds.add(k)
 		for (const k of resumeState.newRelKeys) newRelKeys.add(k)
 		for (const [k, v] of resumeState.nodeAliasMap) nodeAliasMap.set(k, v)
@@ -748,13 +864,17 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 		// Convert pre-extracted name lists to minimal node proposals.
 		// resolveAndStoreNode will match names against existing nodes by name/alias,
 		// so tempIds assigned here are only used for genuinely new nodes.
-		const presentNodes: Sockets.NarrativeGraph.NodeProposal[] = (scene.participantCharacters ?? []).map((name: string) => ({
+		const presentNodes: Sockets.NarrativeGraph.NodeProposal[] = (
+			scene.participantCharacters ?? []
+		).map((name: string) => ({
 			tempId: `node_${nextNodeIndex++}`,
 			name,
 			nodeState: "active" as const,
 			summary: ""
 		}))
-		const mentionedNodes: Sockets.NarrativeGraph.NodeProposal[] = (scene.mentionedCharacters ?? []).map((name) => ({
+		const mentionedNodes: Sockets.NarrativeGraph.NodeProposal[] = (
+			scene.mentionedCharacters ?? []
+		).map((name) => ({
 			tempId: `node_${nextNodeIndex++}`,
 			name,
 			nodeState: "active" as const,
@@ -767,9 +887,10 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 		const nameToTempId = new Map<string, string>()
 		for (const [tid, n] of nodeMap) {
 			nameToTempId.set(n.name.toLowerCase().trim(), tid)
-			for (const alias of (nodeAliasMap.get(tid) ?? [])) {
+			for (const alias of nodeAliasMap.get(tid) ?? []) {
 				const aliasLower = alias.toLowerCase().trim()
-				if (!nameToTempId.has(aliasLower)) nameToTempId.set(aliasLower, tid)
+				if (!nameToTempId.has(aliasLower))
+					nameToTempId.set(aliasLower, tid)
 			}
 		}
 
@@ -794,7 +915,9 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 			// Aliases include merged child node names, so a merged "Alice Doe" → parent node
 			// resolves correctly when the scene only names "Alice".
 			const exactMatch = nameToTempId.get(nameLower)
-			const fuzzyMatch = exactMatch ? undefined : fuzzyMatchName(node.name, nameToTempId)
+			const fuzzyMatch = exactMatch
+				? undefined
+				: fuzzyMatchName(node.name, nameToTempId)
 			const effectiveTempId = exactMatch ?? fuzzyMatch ?? node.tempId
 
 			// Skip if two different names in this scene resolved to the same existing node
@@ -815,7 +938,9 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 					tempId: effectiveTempId,
 					sceneIndex: i,
 					sceneId: isDirectEntry ? undefined : scene.id,
-					historyEntryId: isDirectEntry ? scene.sourceHistoryEntryId : undefined
+					historyEntryId: isDirectEntry
+						? scene.sourceHistoryEntryId
+						: undefined
 				})
 				newNodeTempIds.add(effectiveTempId)
 				newNodesThisScene.add(effectiveTempId)
@@ -841,10 +966,19 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 				currentSceneLabel: sceneLabel
 			})
 
-			let rawMessages: Array<{senderName: string; content: string}> | undefined
-			if (fetchSceneMessages && scene.chatId && scene.selectedMessageIds?.length) {
+			let rawMessages:
+				| Array<{ senderName: string; content: string }>
+				| undefined
+			if (
+				fetchSceneMessages &&
+				scene.chatId &&
+				scene.selectedMessageIds?.length
+			) {
 				try {
-					rawMessages = await fetchSceneMessages(scene.chatId, scene.selectedMessageIds)
+					rawMessages = await fetchSceneMessages(
+						scene.chatId,
+						scene.selectedMessageIds
+					)
 				} catch {
 					// fall through to scene summary fallback
 				}
@@ -855,9 +989,12 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 				const node = nodeMap.get(tempId)
 				if (!node || node.summary) continue
 
-				const relevant = rawMessages?.filter(
-					m => messageContainsName(m.senderName, node.name) || messageContainsName(m.content, node.name)
-				) ?? []
+				const relevant =
+					rawMessages?.filter(
+						(m) =>
+							messageContainsName(m.senderName, node.name) ||
+							messageContainsName(m.content, node.name)
+					) ?? []
 
 				const desc = await llm(
 					`Node Description · ${node.name}`,
@@ -882,14 +1019,16 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 				currentSceneLabel: sceneLabel
 			})
 
-			const stateDetectionNodes = [...presentTempIdsThisScene].map((tid) => {
-				const node = nodeMap.get(tid)!
-				return {
-					name: node.name,
-					nodeState: node.nodeState,
-					aliases: nodeAliasMap.get(tid) ?? []
+			const stateDetectionNodes = [...presentTempIdsThisScene].map(
+				(tid) => {
+					const node = nodeMap.get(tid)!
+					return {
+						name: node.name,
+						nodeState: node.nodeState,
+						aliases: nodeAliasMap.get(tid) ?? []
+					}
 				}
-			})
+			)
 
 			const stateRaw = await llm(
 				`State Detection · ${sceneLabel}`,
@@ -908,7 +1047,10 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 				}
 			}
 
-			const stateChanges = parseNodeStateChanges(stateRaw, presentNameToTempId)
+			const stateChanges = parseNodeStateChanges(
+				stateRaw,
+				presentNameToTempId
+			)
 			for (const { tempId, newState, reason: _reason } of stateChanges) {
 				const node = nodeMap.get(tempId)
 				if (!node || node.nodeState === newState) continue
@@ -935,9 +1077,18 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 
 		for (const fromNode of presentNodeList) {
 			const sceneOtherTempIds = new Set(
-				[...presentTempIdsThisScene, ...mentionedTempIdsThisScene].filter((tid) => tid !== fromNode.tempId)
+				[
+					...presentTempIdsThisScene,
+					...mentionedTempIdsThisScene
+				].filter((tid) => tid !== fromNode.tempId)
 			)
-			const speakerEstablishedRels: Array<{ toName: string; type: string; status: string; visibility: string; description: string }> = []
+			const speakerEstablishedRels: Array<{
+				toName: string
+				type: string
+				status: string
+				visibility: string
+				description: string
+			}> = []
 			for (const [key, relEntry] of relMap) {
 				if (!key.startsWith(`${fromNode.tempId}|`)) continue
 				if (!sceneOtherTempIds.has(relEntry.toTempId)) continue
@@ -956,7 +1107,8 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 				.filter((n) => n.tempId !== fromNode.tempId)
 				.map((n) => {
 					const pairPrefix = `${fromNode.tempId}|${n.tempId}|`
-					const existingRelationships: GraphBuilderSeedRelationship[] = []
+					const existingRelationships: GraphBuilderSeedRelationship[] =
+						[]
 					for (const [key, relEntry] of relMap) {
 						if (key.startsWith(pairPrefix)) {
 							existingRelationships.push({
@@ -970,14 +1122,30 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 							})
 						}
 					}
-					if (existingRelationships.length === 0 && seedRelationships?.length) {
+					if (
+						existingRelationships.length === 0 &&
+						seedRelationships?.length
+					) {
 						for (const r of seedRelationships) {
-							if (`existing_${r.fromNodeId}` === fromNode.tempId && `existing_${r.toNodeId}` === n.tempId) {
+							if (
+								`existing_${r.fromNodeId}` ===
+									fromNode.tempId &&
+								`existing_${r.toNodeId}` === n.tempId
+							) {
 								existingRelationships.push(r)
 							}
 						}
 					}
-					return { tempId: n.tempId, name: n.name, nodeState: n.nodeState, summary: n.summary ?? "", presence: (presentTempIdsThisScene.has(n.tempId) ? "present" : "mentioned") as "present" | "mentioned", existingRelationships }
+					return {
+						tempId: n.tempId,
+						name: n.name,
+						nodeState: n.nodeState,
+						summary: n.summary ?? "",
+						presence: (presentTempIdsThisScene.has(n.tempId)
+							? "present"
+							: "mentioned") as "present" | "mentioned",
+						existingRelationships
+					}
 				})
 
 			onProgress?.({
@@ -1005,8 +1173,14 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 				)
 			)
 
-			const otherNameToTempId = new Map(others.map((o) => [o.name.toLowerCase().trim(), o.tempId]))
-			const rels = parseCharacterPerspectives(perspRaw, fromNode.tempId, otherNameToTempId)
+			const otherNameToTempId = new Map(
+				others.map((o) => [o.name.toLowerCase().trim(), o.tempId])
+			)
+			const rels = parseCharacterPerspectives(
+				perspRaw,
+				fromNode.tempId,
+				otherNameToTempId
+			)
 
 			for (const rel of rels) {
 				const key = `${rel.fromTempId}|${rel.toTempId}|${rel.relationshipType}`
@@ -1014,7 +1188,9 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 					...rel,
 					sceneIndex: i,
 					sceneId: isDirectEntry ? undefined : scene.id,
-					historyEntryId: isDirectEntry ? scene.sourceHistoryEntryId : undefined
+					historyEntryId: isDirectEntry
+						? scene.sourceHistoryEntryId
+						: undefined
 				})
 				if (seedRelKeys.has(key)) updatedSeedRelKeys.add(key)
 				newRelKeys.add(key)
@@ -1035,7 +1211,9 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 		relationshipsFound: newRelKeys.size
 	})
 
-	const proposalNodes = [...nodeMap.values()].filter((n) => newNodeTempIds.has(n.tempId))
+	const proposalNodes = [...nodeMap.values()].filter((n) =>
+		newNodeTempIds.has(n.tempId)
+	)
 	const proposalRelationships = [...relMap.values()].filter((r) => {
 		const key = `${r.fromTempId}|${r.toTempId}|${r.relationshipType}`
 		if (seedRelKeys.has(key)) return updatedSeedRelKeys.has(key)
@@ -1048,7 +1226,10 @@ export async function buildGraphFromScenes(input: GraphBuilderInput): Promise<Gr
 	}
 
 	return {
-		proposal: { nodes: proposalNodes, relationships: proposalRelationships },
+		proposal: {
+			nodes: proposalNodes,
+			relationships: proposalRelationships
+		},
 		sceneLabels,
 		seedTempIdMap,
 		seedNodeNames

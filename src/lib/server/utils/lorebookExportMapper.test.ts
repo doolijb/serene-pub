@@ -40,7 +40,9 @@ describe("mapWorldEntry", () => {
 			comment: "Entry Name",
 			priority: 2,
 			id: 1,
-			extensions: { serenepub: { entryType: "world", category: "Locations" } }
+			extensions: {
+				serenepub: { entryType: "world", category: "Locations" }
+			}
 		})
 	})
 
@@ -61,7 +63,10 @@ describe("mapWorldEntry", () => {
 	})
 
 	test("defaults use_regex to false when the DB column is null", () => {
-		const mapped = mapWorldEntry({ ...baseEntry, category: null, useRegex: null }, 0)
+		const mapped = mapWorldEntry(
+			{ ...baseEntry, category: null, useRegex: null },
+			0
+		)
 		expect(mapped.use_regex).toBe(false)
 	})
 })
@@ -76,7 +81,9 @@ describe("mapCharacterEntry", () => {
 
 	test("omits bindingLocalId when null (unbound entry)", () => {
 		const mapped = mapCharacterEntry(baseEntry, 0, null)
-		expect(mapped.extensions).toEqual({ serenepub: { entryType: "character" } })
+		expect(mapped.extensions).toEqual({
+			serenepub: { entryType: "character" }
+		})
 	})
 })
 
@@ -126,7 +133,12 @@ describe("mapHistoryEntry", () => {
 describe("buildSpecV3Lorebook", () => {
 	test("concatenates world, character, then history entries with renumbered insertion_order", () => {
 		const book = buildSpecV3Lorebook(
-			{ name: "My Book", description: "A book", uuid: "abc-123", extraJson: {} },
+			{
+				name: "My Book",
+				description: "A book",
+				uuid: "abc-123",
+				extraJson: {}
+			},
 			[{ ...baseEntry, id: 1, category: null, position: 0 }],
 			[{ ...baseEntry, id: 2, position: 0, lorebookBindingId: null }],
 			[
@@ -142,11 +154,9 @@ describe("buildSpecV3Lorebook", () => {
 				}
 			]
 		)
-		expect(book.entries.map((e) => e.extensions.serenepub.entryType)).toEqual([
-			"world",
-			"character",
-			"history"
-		])
+		expect(
+			book.entries.map((e) => e.extensions.serenepub.entryType)
+		).toEqual(["world", "character", "history"])
 		expect(book.entries.map((e) => e.insertion_order)).toEqual([0, 1, 2])
 	})
 
@@ -189,7 +199,9 @@ describe("buildSpecV3Lorebook", () => {
 			[],
 			[]
 		)
-		expect(book.extensions).toEqual({ serenepub: { version: 1, uuid: "the-uuid" } })
+		expect(book.extensions).toEqual({
+			serenepub: { version: 1, uuid: "the-uuid" }
+		})
 	})
 
 	test("restores scan_depth/token_budget/recursive_scanning from lorebook.extraJson", () => {
@@ -198,7 +210,11 @@ describe("buildSpecV3Lorebook", () => {
 				name: "Book",
 				description: "",
 				uuid: "u1",
-				extraJson: { scanDepth: 15, tokenBudget: 500, recursiveScanning: true }
+				extraJson: {
+					scanDepth: 15,
+					tokenBudget: 500,
+					recursiveScanning: true
+				}
 			},
 			[],
 			[],
@@ -259,7 +275,13 @@ const baseNode = {
 describe("mapNarrativeNode", () => {
 	test("resolves bindingLocalId/parentLocalId/historyEntryLocalId/sceneLocalId via the provided maps", () => {
 		const mapped = mapNarrativeNode(
-			{ ...baseNode, lorebookBindingId: 10, parentNodeId: 20, historyEntryId: 30, sceneId: 40 },
+			{
+				...baseNode,
+				lorebookBindingId: 10,
+				parentNodeId: 20,
+				historyEntryId: 30,
+				sceneId: 40
+			},
 			1,
 			["uuid-a"],
 			new Map([[10, 100]]),
@@ -352,7 +374,15 @@ describe("attachNarrativeGraph", () => {
 	})
 
 	test("attaches versioned nodes/relationships when present", () => {
-		const node = mapNarrativeNode(baseNode, 1, [], new Map(), new Map(), new Map(), new Map())
+		const node = mapNarrativeNode(
+			baseNode,
+			1,
+			[],
+			new Map(),
+			new Map(),
+			new Map(),
+			new Map()
+		)
 		const book = attachNarrativeGraph(emptyBook, [node], [])
 		expect(book.extensions.serenepub.narrativeGraph).toEqual({
 			version: 1,

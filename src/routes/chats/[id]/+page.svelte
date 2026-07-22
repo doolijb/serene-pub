@@ -50,8 +50,12 @@
 		openChatCtx.isOwner = !!chat && chat.userId === userCtx.user?.id
 	})
 
-	let summarizationEnabled = $derived(!!systemSettingsCtx.settings?.summarizationEnabled)
-	let vectorizationEnabled = $derived(!!systemSettingsCtx.settings?.vectorizationEnabled)
+	let summarizationEnabled = $derived(
+		!!systemSettingsCtx.settings?.summarizationEnabled
+	)
+	let vectorizationEnabled = $derived(
+		!!systemSettingsCtx.settings?.vectorizationEnabled
+	)
 
 	// ── Typing indicator ──────────────────────────────────────────────────────
 	// Other participants' personas currently typing, keyed by personaId. Purely
@@ -460,7 +464,8 @@
 
 	$effect(() => {
 		const _connection = systemSettingsCtx.settings?.defaultConnectionId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
-		const _samplingConfig = systemSettingsCtx.settings?.defaultSamplingConfigId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
+		const _samplingConfig =
+			systemSettingsCtx.settings?.defaultSamplingConfigId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
 		const _contextConfig = userSettingsCtx.settings?.activeContextConfigId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
 		const _promptConfig = userSettingsCtx.settings?.activePromptConfigId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
 		const _newMessage = newMessage // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
@@ -622,7 +627,8 @@
 
 	/** True when selected messages (for a scene) have a visible gap between them */
 	let hasSceneGap = $derived.by(() => {
-		if (!chat?.chatMessages.length || selectedMessageIds.size === 0) return false
+		if (!chat?.chatMessages.length || selectedMessageIds.size === 0)
+			return false
 		const msgs = chat.chatMessages
 		const selectedIndices = msgs
 			.map((m, i) => (selectedMessageIds.has(m.id) ? i : -1))
@@ -779,14 +785,22 @@
 	}
 
 	async function loadOlderMessages() {
-		if (loadingOlderMessages || !pagination?.hasMore || !chat || chat.chatMessages.length === 0) return
+		if (
+			loadingOlderMessages ||
+			!pagination?.hasMore ||
+			!chat ||
+			chat.chatMessages.length === 0
+		)
+			return
 
 		loadingOlderMessages = true
 
 		// Save scroll anchor before the DOM changes so we can restore position after prepend
 		if (chatMessagesContainer) {
-			chatMessagesContainer.dataset.previousScrollHeight = chatMessagesContainer.scrollHeight.toString()
-			chatMessagesContainer.dataset.previousScrollTop = chatMessagesContainer.scrollTop.toString()
+			chatMessagesContainer.dataset.previousScrollHeight =
+				chatMessagesContainer.scrollHeight.toString()
+			chatMessagesContainer.dataset.previousScrollTop =
+				chatMessagesContainer.scrollTop.toString()
 		}
 
 		const beforeId = Math.min(...chat.chatMessages.map((m) => m.id))
@@ -885,20 +899,35 @@
 			if (msg.chat?.id === chatId) {
 				if (chat && loadingOlderMessages && msg.beforeId != null) {
 					// Load-more: prepend older messages (server already deduped via cursor)
-					const existingIds = new Set(chat.chatMessages.map((m) => m.id))
-					const olderMessages = msg.chat.chatMessages.filter((m) => !existingIds.has(m.id))
+					const existingIds = new Set(
+						chat.chatMessages.map((m) => m.id)
+					)
+					const olderMessages = msg.chat.chatMessages.filter(
+						(m) => !existingIds.has(m.id)
+					)
 					const allMessages = [...olderMessages, ...chat.chatMessages]
 					chat.chatMessages = allMessages.sort((a, b) => a.id - b.id)
 
 					// Restore scroll position: account for the height added above the old content
 					setTimeout(() => {
 						if (chatMessagesContainer) {
-							const prevScrollHeight = parseInt(chatMessagesContainer.dataset.previousScrollHeight || "0")
-							const prevScrollTop = parseInt(chatMessagesContainer.dataset.previousScrollTop || "0")
-							const addedHeight = chatMessagesContainer.scrollHeight - prevScrollHeight
-							chatMessagesContainer.scrollTop = addedHeight + prevScrollTop
-							delete chatMessagesContainer.dataset.previousScrollHeight
-							delete chatMessagesContainer.dataset.previousScrollTop
+							const prevScrollHeight = parseInt(
+								chatMessagesContainer.dataset
+									.previousScrollHeight || "0"
+							)
+							const prevScrollTop = parseInt(
+								chatMessagesContainer.dataset
+									.previousScrollTop || "0"
+							)
+							const addedHeight =
+								chatMessagesContainer.scrollHeight -
+								prevScrollHeight
+							chatMessagesContainer.scrollTop =
+								addedHeight + prevScrollTop
+							delete chatMessagesContainer.dataset
+								.previousScrollHeight
+							delete chatMessagesContainer.dataset
+								.previousScrollTop
 						}
 						loadingOlderMessages = false
 					}, 10)
@@ -907,7 +936,9 @@
 					const isFirstLoad = !chat
 					chat = {
 						...msg.chat,
-						chatMessages: msg.chat.chatMessages.sort((a, b) => a.id - b.id)
+						chatMessages: msg.chat.chatMessages.sort(
+							(a, b) => a.id - b.id
+						)
 					}
 					if (isFirstLoad && msg.userDraft) {
 						newMessage = msg.userDraft
@@ -1083,9 +1114,12 @@
 			}
 		})
 
-		socket?.on("scenes:scenedMessageIds", (msg: Sockets.Scenes.SenedMessageIds.Response) => {
-			scenedMessageIds = new Set(msg.scenedMessageIds)
-		})
+		socket?.on(
+			"scenes:scenedMessageIds",
+			(msg: Sockets.Scenes.SenedMessageIds.Response) => {
+				scenedMessageIds = new Set(msg.scenedMessageIds)
+			}
+		)
 		socket?.on("scenes:scenedMessageIds:error", () => {
 			chatNotFound = true
 		})
@@ -1100,7 +1134,9 @@
 		})
 
 		socket?.emit("scenes:scenedMessageIds", { chatId })
-		socket?.emit("scenes:list", { chatId } satisfies Sockets.Scenes.List.Params)
+		socket?.emit("scenes:list", {
+			chatId
+		} satisfies Sockets.Scenes.List.Params)
 
 		socket.on(
 			"chats:getNarratorName",
@@ -1176,7 +1212,10 @@
 		const left = leftSceneImage
 		const right = rightSceneImage
 		if (left || right) {
-			localStorage.setItem(`sceneImages:${id}`, JSON.stringify({ left, right }))
+			localStorage.setItem(
+				`sceneImages:${id}`,
+				JSON.stringify({ left, right })
+			)
 		} else {
 			localStorage.removeItem(`sceneImages:${id}`)
 		}
@@ -1197,7 +1236,9 @@
 		char: SelectCharacter | SelectPersona | undefined
 	) {
 		if (!char) return
-		const isPersona = chat?.chatPersonas?.some((cp) => cp.persona?.id === char.id)
+		const isPersona = chat?.chatPersonas?.some(
+			(cp) => cp.persona?.id === char.id
+		)
 		avatarModalEntity = {
 			type: isPersona ? "persona" : "character",
 			id: char.id,
@@ -1213,962 +1254,1612 @@
 </script>
 
 <svelte:head>
-	<title>Serene Pub - {chatNotFound ? "Not Found" : (chat?.name ?? "Loading...")}</title>
+	<title>
+		Serene Pub - {chatNotFound ? "Not Found" : (chat?.name ?? "Loading...")}
+	</title>
 	<meta name="description" content="Serene Pub" />
 </svelte:head>
 
 {#if chatNotFound}
-	<div class="flex h-full flex-col items-center justify-center gap-4 opacity-60">
+	<div
+		class="flex h-full flex-col items-center justify-center gap-4 opacity-60"
+	>
 		<Icons.MessageSquareOff size={48} />
 		<p class="text-lg font-semibold">Chat not found</p>
-		<p class="text-sm">This chat may have been deleted or you don't have access to it.</p>
+		<p class="text-sm">
+			This chat may have been deleted or you don't have access to it.
+		</p>
 	</div>
 {:else}
-<div class="relative flex h-full flex-col">
-	<ChatContainer
-		{chat}
-		{pagination}
-		{loadingOlderMessages}
-		bind:chatMessagesContainer
-		onScroll={handleScroll}
-		{getMessageCharacter}
-		{canControlMessage}
-		{showSwipeControls}
-		{canSwipeRight}
-		{canRegenerateLastMessage}
-		onSwipeLeft={swipeLeft}
-		onSwipeRight={swipeRight}
-		onEditMessage={handleEditMessage}
-		onDeleteMessage={handleDeleteMessage}
-		onHideMessage={handleHideMessage}
-		onRegenerateMessage={handleRegenerateMessage}
-		onContinueMessage={handleContinueMessage}
-		onAbortMessage={handleAbortMessage}
-		onBranchMessage={handleBranchMessage}
-		{editChatMessage}
-		{hasGeneratingMessage}
-		{isGuest}
-		{sceneList}
-		onHistoryEntryClick={({ historyEntryId, lorebookId }) => {
-			panelsCtx.digest.lorebookId = lorebookId
-			panelsCtx.digest.historyEntryId = historyEntryId
-			panelsCtx.digest.historyEntryTab = "content"
-			panelsCtx.openPanel({ key: "lorebooks", toggle: false })
-		}}
-		onSceneClick={({ sceneId, historyEntryId, lorebookId }) => {
-			panelsCtx.digest.lorebookId = lorebookId
-			panelsCtx.digest.historyEntryId = historyEntryId
-			panelsCtx.digest.historyEntryTab = "scenes"
-			panelsCtx.digest.sceneId = sceneId
-			panelsCtx.openPanel({ key: "lorebooks", toggle: false })
-		}}
-		onNewHistoryEntry={({ lorebookId }) => {
-			panelsCtx.digest.lorebookId = lorebookId
-			panelsCtx.digest.historyEntryTab = "content"
-			panelsCtx.openPanel({ key: "lorebooks", toggle: false })
-		}}
-		onAttachLorebook={() => {
-			panelsCtx.openPanel({ key: "lorebooks", toggle: false })
-		}}
-	>
-		{#snippet MessageComponent(props)}
-			<ChatMessage
-				{...props}
-				onCharacterNameClick={handleCharacterNameClick}
-				onAvatarClick={handleAvatarClick}
-				onCancelEditMessage={handleCancelEditMessage}
-				onSaveEditMessage={handleSaveEditMessage}
-				bind:openMsgControlsMenu
-				{lastPersonaMessage}
-				isSummarizationMode={isSummarizationMode}
-				isSelected={selectedMessageIds.has(props.msg.id)}
-				onStartSummarization={summarizationEnabled && !isSummarizationMode ? enterSummarizationMode : undefined}
-			>
-				{#snippet GeneratingAnimationComponent()}
-					{@const character = props.getMessageCharacter(props.msg)}
-					{@const speakerName = props.msg.isNarratorResponse
-						? props.msg.metadata?.narratorName || "Narrator"
-						: resolveCharacterName(character, "User")}
-					<GeneratingAnimation text={`${speakerName} is typing`} />
-				{/snippet}
-				{#snippet messageControls(msg)}
-					{#if isSummarizationMode}
-						{@const isScened = scenedMessageIds.has(msg.id)}
-						<div class="flex gap-2" role="group" aria-label="Selection controls">
-							{#if isScened}
-								<span
-									class="btn btn-sm preset-filled-surface-400-600 opacity-60 cursor-not-allowed"
-									title="Already captured in a scene"
-								>
-									<Icons.Film size={16} />
-									<span class="lg:hidden">In Scene</span>
-								</span>
-							{:else}
-								<button
-									class="btn btn-sm {selectedMessageIds.has(msg.id)
-										? 'preset-filled-secondary-500'
-										: 'preset-filled-surface-400-600'}"
-									title={selectedMessageIds.has(msg.id) ? 'Deselect message' : 'Select message'}
-									onclick={() => toggleSummarizationMessage(msg.id)}
-								>
-									{#if selectedMessageIds.has(msg.id)}
-										<Icons.CheckSquare size={16} />
-									{:else}
-										<Icons.Square size={16} />
-									{/if}
-									<span class="lg:hidden">
-										{selectedMessageIds.has(msg.id) ? 'Deselect' : 'Select'}
+	<div class="relative flex h-full flex-col">
+		<ChatContainer
+			{chat}
+			{pagination}
+			{loadingOlderMessages}
+			bind:chatMessagesContainer
+			onScroll={handleScroll}
+			{getMessageCharacter}
+			{canControlMessage}
+			{showSwipeControls}
+			{canSwipeRight}
+			{canRegenerateLastMessage}
+			onSwipeLeft={swipeLeft}
+			onSwipeRight={swipeRight}
+			onEditMessage={handleEditMessage}
+			onDeleteMessage={handleDeleteMessage}
+			onHideMessage={handleHideMessage}
+			onRegenerateMessage={handleRegenerateMessage}
+			onContinueMessage={handleContinueMessage}
+			onAbortMessage={handleAbortMessage}
+			onBranchMessage={handleBranchMessage}
+			{editChatMessage}
+			{hasGeneratingMessage}
+			{isGuest}
+			{sceneList}
+			onHistoryEntryClick={({ historyEntryId, lorebookId }) => {
+				panelsCtx.digest.lorebookId = lorebookId
+				panelsCtx.digest.historyEntryId = historyEntryId
+				panelsCtx.digest.historyEntryTab = "content"
+				panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+			}}
+			onSceneClick={({ sceneId, historyEntryId, lorebookId }) => {
+				panelsCtx.digest.lorebookId = lorebookId
+				panelsCtx.digest.historyEntryId = historyEntryId
+				panelsCtx.digest.historyEntryTab = "scenes"
+				panelsCtx.digest.sceneId = sceneId
+				panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+			}}
+			onNewHistoryEntry={({ lorebookId }) => {
+				panelsCtx.digest.lorebookId = lorebookId
+				panelsCtx.digest.historyEntryTab = "content"
+				panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+			}}
+			onAttachLorebook={() => {
+				panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+			}}
+		>
+			{#snippet MessageComponent(props)}
+				<ChatMessage
+					{...props}
+					onCharacterNameClick={handleCharacterNameClick}
+					onAvatarClick={handleAvatarClick}
+					onCancelEditMessage={handleCancelEditMessage}
+					onSaveEditMessage={handleSaveEditMessage}
+					bind:openMsgControlsMenu
+					{lastPersonaMessage}
+					{isSummarizationMode}
+					isSelected={selectedMessageIds.has(props.msg.id)}
+					onStartSummarization={summarizationEnabled &&
+					!isSummarizationMode
+						? enterSummarizationMode
+						: undefined}
+				>
+					{#snippet GeneratingAnimationComponent()}
+						{@const character = props.getMessageCharacter(
+							props.msg
+						)}
+						{@const speakerName = props.msg.isNarratorResponse
+							? props.msg.metadata?.narratorName || "Narrator"
+							: resolveCharacterName(character, "User")}
+						<GeneratingAnimation
+							text={`${speakerName} is typing`}
+						/>
+					{/snippet}
+					{#snippet messageControls(msg)}
+						{#if isSummarizationMode}
+							{@const isScened = scenedMessageIds.has(msg.id)}
+							<div
+								class="flex gap-2"
+								role="group"
+								aria-label="Selection controls"
+							>
+								{#if isScened}
+									<span
+										class="btn btn-sm preset-filled-surface-400-600 cursor-not-allowed opacity-60"
+										title="Already captured in a scene"
+									>
+										<Icons.Film size={16} />
+										<span class="lg:hidden">In Scene</span>
 									</span>
-								</button>
-								<button
-									class="btn btn-sm preset-filled-surface-400-600"
-									title="Select all above up to nearest selected"
-									onclick={() => selectAllAbove(props.index)}
-								>
-									<Icons.ChevronsUp size={16} />
-									<span class="lg:hidden">Select All Above</span>
-								</button>
-								<button
-									class="btn btn-sm preset-filled-surface-400-600"
-									title="Select all below up to nearest selected"
-									onclick={() => selectAllBelow(props.index)}
-								>
-									<Icons.ChevronsDown size={16} />
-									<span class="lg:hidden">Select All Below</span>
-								</button>
-							{/if}
-						</div>
-					{:else}
-						<MessageControls
-							{msg}
-							isLastMessage={props.isLastMessage}
-							canRegenerateLastMessage={props.canRegenerateLastMessage}
-							editChatMessage={props.editChatMessage}
-							hasGeneratingMessage={props.hasGeneratingMessage}
-							onEditMessage={props.onEditMessage}
-							onHideMessage={props.onHideMessage}
-							onDeleteMessage={props.onDeleteMessage}
-							onRegenerateMessage={props.onRegenerateMessage}
-							onContinueMessage={props.onContinueMessage}
-							onAbortMessage={props.onAbortMessage}
-							onBranchMessage={props.onBranchMessage}
-							onStartSummarization={summarizationEnabled ? enterSummarizationMode : undefined}
-							debugMeta={systemSettingsCtx.settings?.contextDebuggingEnabled ? (msg.debugMeta ?? null) : null}
-							onShowDebugMeta={systemSettingsCtx.settings?.contextDebuggingEnabled
-								? (meta: any) => {
-									draftCompiledPrompt = {
-										prompt: meta?.prompt,
-										messages: meta?.messages,
-										meta
-									}
-									showDraftCompiledPromptModal = true
-								  }
-								: undefined}
+								{:else}
+									<button
+										class="btn btn-sm {selectedMessageIds.has(
+											msg.id
+										)
+											? 'preset-filled-secondary-500'
+											: 'preset-filled-surface-400-600'}"
+										title={selectedMessageIds.has(msg.id)
+											? "Deselect message"
+											: "Select message"}
+										onclick={() =>
+											toggleSummarizationMessage(msg.id)}
+									>
+										{#if selectedMessageIds.has(msg.id)}
+											<Icons.CheckSquare size={16} />
+										{:else}
+											<Icons.Square size={16} />
+										{/if}
+										<span class="lg:hidden">
+											{selectedMessageIds.has(msg.id)
+												? "Deselect"
+												: "Select"}
+										</span>
+									</button>
+									<button
+										class="btn btn-sm preset-filled-surface-400-600"
+										title="Select all above up to nearest selected"
+										onclick={() =>
+											selectAllAbove(props.index)}
+									>
+										<Icons.ChevronsUp size={16} />
+										<span class="lg:hidden">
+											Select All Above
+										</span>
+									</button>
+									<button
+										class="btn btn-sm preset-filled-surface-400-600"
+										title="Select all below up to nearest selected"
+										onclick={() =>
+											selectAllBelow(props.index)}
+									>
+										<Icons.ChevronsDown size={16} />
+										<span class="lg:hidden">
+											Select All Below
+										</span>
+									</button>
+								{/if}
+							</div>
+						{:else}
+							<MessageControls
+								{msg}
+								isLastMessage={props.isLastMessage}
+								canRegenerateLastMessage={props.canRegenerateLastMessage}
+								editChatMessage={props.editChatMessage}
+								hasGeneratingMessage={props.hasGeneratingMessage}
+								onEditMessage={props.onEditMessage}
+								onHideMessage={props.onHideMessage}
+								onDeleteMessage={props.onDeleteMessage}
+								onRegenerateMessage={props.onRegenerateMessage}
+								onContinueMessage={props.onContinueMessage}
+								onAbortMessage={props.onAbortMessage}
+								onBranchMessage={props.onBranchMessage}
+								onStartSummarization={summarizationEnabled
+									? enterSummarizationMode
+									: undefined}
+								debugMeta={systemSettingsCtx.settings
+									?.contextDebuggingEnabled
+									? (msg.debugMeta ?? null)
+									: null}
+								onShowDebugMeta={systemSettingsCtx.settings
+									?.contextDebuggingEnabled
+									? (meta: any) => {
+											draftCompiledPrompt = {
+												prompt: meta?.prompt,
+												messages: meta?.messages,
+												meta
+											}
+											showDraftCompiledPromptModal = true
+										}
+									: undefined}
 								open={openMsgControlsMenu === msg.id}
 								onOpenChange={(isOpen) =>
-									(openMsgControlsMenu = isOpen ? msg.id : undefined)}
+									(openMsgControlsMenu = isOpen
+										? msg.id
+										: undefined)}
 							/>
 						{/if}
-				{/snippet}
-			</ChatMessage>
-		{/snippet}
-		{#snippet ComposerComponent()}
-			{#if isSummarizationMode && summarizationEnabled}
-				<div class="preset-tonal-secondary flex flex-wrap items-center gap-2 p-3 lg:rounded-t-lg">
-					<span class="text-sm font-semibold">
-						{selectedMessageIds.size}
-						{selectedMessageIds.size === 1 ? 'message' : 'messages'} selected
-					</span>
-					<div class="flex gap-2">
-						<button
-							class="btn btn-sm preset-filled-surface-400-600"
-							title="Select All"
-							onclick={() => {
-								selectedMessageIds = new Set(
-									chat!.chatMessages
-										.filter((m) => !scenedMessageIds.has(m.id))
-										.map((m) => m.id)
-								)
-							}}
-						>
-							<Icons.CheckSquare size={16} />
-							<span class="hidden sm:inline">Select All</span>
-						</button>
-						<button
-							class="btn btn-sm preset-filled-surface-400-600"
-							title="Select None"
-							onclick={() => (selectedMessageIds = new Set())}
-						>
-							<Icons.Square size={16} />
-							<span class="hidden sm:inline">Select None</span>
-						</button>
-					</div>
-					<div class="ml-auto flex flex-wrap gap-2">
-						<button
-							class="btn btn-sm preset-filled-surface-500"
-							title="Cancel"
-							onclick={exitSummarizationMode}
-						>
-							<Icons.X size={16} />
-							<span class="hidden sm:inline">Cancel</span>
-						</button>
-						<button
-							class="btn btn-sm preset-filled-secondary-500"
-							title="Scene"
-							disabled={selectedMessageIds.size === 0}
-							onclick={() => openSummarizeModal('scene')}
-						>
-							<Icons.Film size={16} />
-							<span class="hidden sm:inline">Scene</span>
-						</button>
-						<button
-							class="btn btn-sm preset-filled-primary-500"
-							title="World Lore"
-							disabled={selectedMessageIds.size === 0}
-							onclick={() => openSummarizeModal('world')}
-						>
-							<Icons.Globe size={16} />
-							<span class="hidden sm:inline">World Lore</span>
-						</button>
-						<button
-							class="btn btn-sm preset-filled-tertiary-500"
-							title="Character Lore"
-							disabled={selectedMessageIds.size === 0}
-							onclick={() => openSummarizeModal('character')}
-						>
-							<Icons.User size={16} />
-							<span class="hidden sm:inline">Character Lore</span>
-						</button>
-					</div>
-				</div>
-			{:else}
-				{#each [...typingPersonas.values()] as typingPersona (typingPersona.name)}
-					<div class="flex items-center gap-2 px-2 pb-1">
-						<p class="text-surface-600-400 animate-pulse text-sm">
-							{typingPersona.name} is typing...
-						</p>
-						<div
-							class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"
-						></div>
-					</div>
-				{/each}
-				<ChatComposer
-					bind:newMessage
-					onSend={handleSend}
-					{draftCompiledPrompt}
-					{currentUserPersona}
-					{userPersonasInChat}
-					onSwitchPersona={switchPersona}
-					chat={chat ?? undefined}
-					{lastMessage}
-					{editChatMessage}
-					{isGuest}
-					{showAddPersonaCTA}
-					onAddPersonaClick={() => {
-						showAddPersonaModal = true
-					}}
-					onAbortLastMessage={handleAbortLastMessage}
-					extraTabs={isGuest
-						? []
-						: [		{
-									value: "extraControls",
-									title: "Extra Controls",
-									control: extraControlsButton,
-									content: extraControlsContent
-								},
-								...(chat?.lorebookId
-									? [{ value: "workflow", title: "Lore", control: workflowButton, content: workflowContent }]
-									: []),
-								{
-									value: "sceneImages",
-									title: "Pinned Images",
-									control: sceneImagesButton,
-									content: sceneImagesContent
-								},
-								...(systemSettingsCtx.settings?.contextDebuggingEnabled
-									? [{ value: "statistics", title: "Statistics", control: statisticsButton, content: statisticsContent }]
-									: [])
-							]}
-				/>
-			{/if}
-		{/snippet}
-		{#snippet NextCharacterComponent()}
-			{#if shouldShowNextCharacterBlock}
-				<NextCharacterBlock
-					{nextCharacter}
-					shouldShow={shouldShowNextCharacterBlock}
-					onContinueWithNextCharacter={handleContinueWithNextCharacter}
-					onChooseDifferentCharacter={handleChooseDifferentCharacter}
-				/>
-			{/if}
-		{/snippet}
-	</ChatContainer>
-</div>
-
-<SummarizeLoreModal
-	bind:open={showSummarizeModal}
-	onOpenChange={(e) => (showSummarizeModal = e.open)}
-	{chatId}
-	lorebookId={chat?.lorebookId ?? null}
-	selectedMessageIds={[...selectedMessageIds]}
-	initialLoreType={summarizeLoreType}
-	onSaved={() => {
-		socket?.emit("scenes:scenedMessageIds", { chatId })
-		socket?.emit("scenes:list", { chatId } satisfies Sockets.Scenes.List.Params)
-		exitSummarizationMode()
-	}}
-	onLorebookSet={handleLorebookSet}
-	chatCharacters={(chat?.chatCharacters ?? []).map(cc => ({ type: "character" as const, id: cc.character.id, name: resolveCharacterName(cc.character, cc.character.name) }))}
-	chatPersonas={(chat?.chatPersonas ?? []).map(cp => ({ type: "persona" as const, id: cp.persona.id, name: cp.persona.name }))}
-	hasSceneMessageGap={hasSceneGap}
-/>
-
-<Dialog open={showDeleteMessageModal} onOpenChange={onOpenMessageDeleteChange}>
-	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700">
-				<header class="flex justify-between">
-					<h2 class="h2">Confirm</h2>
-				</header>
-				<article>
-					<p class="opacity-60">
-						Are you sure you want to delete this message?
-					</p>
-				</article>
-				<footer class="flex justify-end gap-4">
-					<button
-						class="btn preset-filled-surface-500"
-						onclick={onDeleteMessageCancel}
+					{/snippet}
+				</ChatMessage>
+			{/snippet}
+			{#snippet ComposerComponent()}
+				{#if isSummarizationMode && summarizationEnabled}
+					<div
+						class="preset-tonal-secondary flex flex-wrap items-center gap-2 p-3 lg:rounded-t-lg"
 					>
-						Cancel
-					</button>
-					<button
-						class="btn preset-filled-error-500"
-						onclick={onDeleteMessageConfirm}
-					>
-						Delete
-					</button>
-				</footer>
-			</Dialog.Content>
-		</Dialog.Positioner>
-	</Portal>
-</Dialog>
-
-<Dialog
-	open={showDraftCompiledPromptModal}
-	onOpenChange={(details) => (showDraftCompiledPromptModal = details.open)}
->
-	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-full w-[70em] max-h-[90dvh] flex flex-col border border-surface-300-700">
-		<header class="flex shrink-0 items-center justify-between">
-			<h2 class="h2">Prompt Details</h2>
-			<button
-				class="btn btn-sm"
-				onclick={() => (showDraftCompiledPromptModal = false)}
-			>
-				<Icons.X size={20} />
-			</button>
-		</header>
-
-		{#if draftCompiledPrompt?.meta}
-			{@const rag = draftCompiledPrompt.meta.rag}
-			{@const tokens = draftCompiledPrompt.meta.tokenCounts}
-			{@const msgs = draftCompiledPrompt.meta.chatMessages}
-			{@const src = draftCompiledPrompt.meta.sources}
-			{@const tokenPct = Math.min(100, Math.round((tokens.total / tokens.limit) * 100))}
-			{@const truncReason = draftCompiledPrompt.meta.truncationReason}
-			{@const ragScores = rag?.used ? rag.scores : undefined}
-			{@const msgScoreMin = ragScores?.messageScores?.length ? Math.min(...ragScores.messageScores) : null}
-			{@const msgScoreMax = ragScores?.messageScores?.length ? Math.max(...ragScores.messageScores) : null}
-			{@const msgScoreAvg = ragScores?.messageScores?.length ? ragScores.messageScores.reduce((a, b) => a + b, 0) / ragScores.messageScores.length : null}
-			{@const loreScoreMin = ragScores?.loreScores?.length ? Math.min(...ragScores.loreScores) : null}
-			{@const loreScoreMax = ragScores?.loreScores?.length ? Math.max(...ragScores.loreScores) : null}
-			{@const loreScoreAvg = ragScores?.loreScores?.length ? ragScores.loreScores.reduce((a, b) => a + b, 0) / ragScores.loreScores.length : null}
-
-			<div class="min-h-0 flex-1 overflow-y-auto space-y-4 pr-1">
-				<!-- ── Token Budget ──────────────────────────────────────────────── -->
-				<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
-					<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-700-300">Token Budget</h3>
-					<div class="flex items-center justify-between text-sm">
-						<span class:text-error-500={contextExceeded} class:text-success-500={!contextExceeded}>
-							{tokens.total.toLocaleString()} / {tokens.limit.toLocaleString()} tokens
+						<span class="text-sm font-semibold">
+							{selectedMessageIds.size}
+							{selectedMessageIds.size === 1
+								? "message"
+								: "messages"} selected
 						</span>
-						<span class="text-surface-700-300 text-xs">{tokenPct}%</span>
+						<div class="flex gap-2">
+							<button
+								class="btn btn-sm preset-filled-surface-400-600"
+								title="Select All"
+								onclick={() => {
+									selectedMessageIds = new Set(
+										chat!.chatMessages
+											.filter(
+												(m) =>
+													!scenedMessageIds.has(m.id)
+											)
+											.map((m) => m.id)
+									)
+								}}
+							>
+								<Icons.CheckSquare size={16} />
+								<span class="hidden sm:inline">Select All</span>
+							</button>
+							<button
+								class="btn btn-sm preset-filled-surface-400-600"
+								title="Select None"
+								onclick={() => (selectedMessageIds = new Set())}
+							>
+								<Icons.Square size={16} />
+								<span class="hidden sm:inline">
+									Select None
+								</span>
+							</button>
+						</div>
+						<div class="ml-auto flex flex-wrap gap-2">
+							<button
+								class="btn btn-sm preset-filled-surface-500"
+								title="Cancel"
+								onclick={exitSummarizationMode}
+							>
+								<Icons.X size={16} />
+								<span class="hidden sm:inline">Cancel</span>
+							</button>
+							<button
+								class="btn btn-sm preset-filled-secondary-500"
+								title="Scene"
+								disabled={selectedMessageIds.size === 0}
+								onclick={() => openSummarizeModal("scene")}
+							>
+								<Icons.Film size={16} />
+								<span class="hidden sm:inline">Scene</span>
+							</button>
+							<button
+								class="btn btn-sm preset-filled-primary-500"
+								title="World Lore"
+								disabled={selectedMessageIds.size === 0}
+								onclick={() => openSummarizeModal("world")}
+							>
+								<Icons.Globe size={16} />
+								<span class="hidden sm:inline">World Lore</span>
+							</button>
+							<button
+								class="btn btn-sm preset-filled-tertiary-500"
+								title="Character Lore"
+								disabled={selectedMessageIds.size === 0}
+								onclick={() => openSummarizeModal("character")}
+							>
+								<Icons.User size={16} />
+								<span class="hidden sm:inline">
+									Character Lore
+								</span>
+							</button>
+						</div>
 					</div>
-					<div class="bg-surface-300-700 h-2 w-full overflow-hidden rounded-full">
+				{:else}
+					{#each [...typingPersonas.values()] as typingPersona (typingPersona.name)}
+						<div class="flex items-center gap-2 px-2 pb-1">
+							<p
+								class="text-surface-600-400 animate-pulse text-sm"
+							>
+								{typingPersona.name} is typing...
+							</p>
+							<div
+								class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"
+							></div>
+						</div>
+					{/each}
+					<ChatComposer
+						bind:newMessage
+						onSend={handleSend}
+						{draftCompiledPrompt}
+						{currentUserPersona}
+						{userPersonasInChat}
+						onSwitchPersona={switchPersona}
+						chat={chat ?? undefined}
+						{lastMessage}
+						{editChatMessage}
+						{isGuest}
+						{showAddPersonaCTA}
+						onAddPersonaClick={() => {
+							showAddPersonaModal = true
+						}}
+						onAbortLastMessage={handleAbortLastMessage}
+						extraTabs={isGuest
+							? []
+							: [
+									{
+										value: "extraControls",
+										title: "Extra Controls",
+										control: extraControlsButton,
+										content: extraControlsContent
+									},
+									...(chat?.lorebookId
+										? [
+												{
+													value: "workflow",
+													title: "Lore",
+													control: workflowButton,
+													content: workflowContent
+												}
+											]
+										: []),
+									{
+										value: "sceneImages",
+										title: "Pinned Images",
+										control: sceneImagesButton,
+										content: sceneImagesContent
+									},
+									...(systemSettingsCtx.settings
+										?.contextDebuggingEnabled
+										? [
+												{
+													value: "statistics",
+													title: "Statistics",
+													control: statisticsButton,
+													content: statisticsContent
+												}
+											]
+										: [])
+								]}
+					/>
+				{/if}
+			{/snippet}
+			{#snippet NextCharacterComponent()}
+				{#if shouldShowNextCharacterBlock}
+					<NextCharacterBlock
+						{nextCharacter}
+						shouldShow={shouldShowNextCharacterBlock}
+						onContinueWithNextCharacter={handleContinueWithNextCharacter}
+						onChooseDifferentCharacter={handleChooseDifferentCharacter}
+					/>
+				{/if}
+			{/snippet}
+		</ChatContainer>
+	</div>
+
+	<SummarizeLoreModal
+		bind:open={showSummarizeModal}
+		onOpenChange={(e) => (showSummarizeModal = e.open)}
+		{chatId}
+		lorebookId={chat?.lorebookId ?? null}
+		selectedMessageIds={[...selectedMessageIds]}
+		initialLoreType={summarizeLoreType}
+		onSaved={() => {
+			socket?.emit("scenes:scenedMessageIds", { chatId })
+			socket?.emit("scenes:list", {
+				chatId
+			} satisfies Sockets.Scenes.List.Params)
+			exitSummarizationMode()
+		}}
+		onLorebookSet={handleLorebookSet}
+		chatCharacters={(chat?.chatCharacters ?? []).map((cc) => ({
+			type: "character" as const,
+			id: cc.character.id,
+			name: resolveCharacterName(cc.character, cc.character.name)
+		}))}
+		chatPersonas={(chat?.chatPersonas ?? []).map((cp) => ({
+			type: "persona" as const,
+			id: cp.persona.id,
+			name: cp.persona.name
+		}))}
+		hasSceneMessageGap={hasSceneGap}
+	/>
+
+	<Dialog
+		open={showDeleteMessageModal}
+		onOpenChange={onOpenMessageDeleteChange}
+	>
+		<Portal>
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
+			>
+				<Dialog.Content
+					class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
+				>
+					<header class="flex justify-between">
+						<h2 class="h2">Confirm</h2>
+					</header>
+					<article>
+						<p class="opacity-60">
+							Are you sure you want to delete this message?
+						</p>
+					</article>
+					<footer class="flex justify-end gap-4">
+						<button
+							class="btn preset-filled-surface-500"
+							onclick={onDeleteMessageCancel}
+						>
+							Cancel
+						</button>
+						<button
+							class="btn preset-filled-error-500"
+							onclick={onDeleteMessageConfirm}
+						>
+							Delete
+						</button>
+					</footer>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
+
+	<Dialog
+		open={showDraftCompiledPromptModal}
+		onOpenChange={(details) =>
+			(showDraftCompiledPromptModal = details.open)}
+	>
+		<Portal>
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
+			>
+				<Dialog.Content
+					class="card bg-surface-100-900 border-surface-300-700 flex max-h-[90dvh] w-[70em] max-w-full flex-col space-y-4 border p-4 shadow-xl"
+				>
+					<header class="flex shrink-0 items-center justify-between">
+						<h2 class="h2">Prompt Details</h2>
+						<button
+							class="btn btn-sm"
+							onclick={() =>
+								(showDraftCompiledPromptModal = false)}
+						>
+							<Icons.X size={20} />
+						</button>
+					</header>
+
+					{#if draftCompiledPrompt?.meta}
+						{@const rag = draftCompiledPrompt.meta.rag}
+						{@const tokens = draftCompiledPrompt.meta.tokenCounts}
+						{@const msgs = draftCompiledPrompt.meta.chatMessages}
+						{@const src = draftCompiledPrompt.meta.sources}
+						{@const tokenPct = Math.min(
+							100,
+							Math.round((tokens.total / tokens.limit) * 100)
+						)}
+						{@const truncReason =
+							draftCompiledPrompt.meta.truncationReason}
+						{@const ragScores = rag?.used ? rag.scores : undefined}
+						{@const msgScoreMin = ragScores?.messageScores?.length
+							? Math.min(...ragScores.messageScores)
+							: null}
+						{@const msgScoreMax = ragScores?.messageScores?.length
+							? Math.max(...ragScores.messageScores)
+							: null}
+						{@const msgScoreAvg = ragScores?.messageScores?.length
+							? ragScores.messageScores.reduce(
+									(a, b) => a + b,
+									0
+								) / ragScores.messageScores.length
+							: null}
+						{@const loreScoreMin = ragScores?.loreScores?.length
+							? Math.min(...ragScores.loreScores)
+							: null}
+						{@const loreScoreMax = ragScores?.loreScores?.length
+							? Math.max(...ragScores.loreScores)
+							: null}
+						{@const loreScoreAvg = ragScores?.loreScores?.length
+							? ragScores.loreScores.reduce((a, b) => a + b, 0) /
+								ragScores.loreScores.length
+							: null}
+
 						<div
-							class="h-full rounded-full transition-all {contextExceeded ? 'bg-error-500' : tokenPct > 85 ? 'bg-warning-500' : 'bg-success-500'}"
-							style="width: {tokenPct}%"
-						></div>
-					</div>
-					<div class="flex flex-wrap gap-4 text-xs text-surface-700-300">
-						<span>Format: <span class="text-surface-300-700">{draftCompiledPrompt.meta.promptFormat || "—"}</span></span>
-						{#if draftCompiledPrompt.meta.templateName}
-							<span>Template: <span class="text-surface-300-700">{draftCompiledPrompt.meta.templateName}</span></span>
-						{/if}
-						{#if rag?.used === true}
-							<span class="text-primary-400 font-medium">RAG Context Infill Engine</span>
-						{:else if rag?.used === false}
-							<span class="text-surface-400">Keyword Context Infill Engine</span>
-						{:else}
-							<span class="text-surface-400">Context Infill Engine</span>
-						{/if}
-					</div>
-					{#if truncReason}
-						<div class="flex items-center gap-1.5 rounded bg-warning-500/10 border border-warning-500/30 px-2 py-1.5 text-xs text-warning-400">
-							<Icons.TriangleAlert size={12} class="shrink-0" />
-							<span>Truncated: <span class="font-medium">{truncReason.replace(/_/g, " ")}</span></span>
-						</div>
-					{/if}
-				</section>
-
-				<!-- ── Messages ─────────────────────────────────────────────────── -->
-				<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
-					<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-700-300">Messages</h3>
-					<div class="flex items-baseline gap-2 text-sm">
-						<span><span class="font-medium">{msgs.included}</span><span class="text-surface-700-300"> / {msgs.total} included</span></span>
-						{#if msgs.total > msgs.included}
-							<span class="text-warning-400 text-xs">{msgs.total - msgs.included} excluded</span>
-						{/if}
-					</div>
-					{#if rag?.used === true}
-						<div class="grid grid-cols-3 gap-2 text-xs">
-							<div class="bg-surface-300-700 rounded p-2 text-center">
-								<div class="font-semibold">{rag.messages.guaranteed}</div>
-								<div class="text-surface-700-300">Guaranteed</div>
-							</div>
-							<div class="bg-surface-300-700 rounded p-2 text-center">
-								<div class="font-semibold text-primary-400">{rag.messages.ragOlder}</div>
-								<div class="text-surface-700-300">RAG recalled</div>
-							</div>
-							<div class="bg-surface-300-700 rounded p-2 text-center">
-								<div class="font-semibold">{rag.messages.filledIn}</div>
-								<div class="text-surface-700-300">Fill-in</div>
-							</div>
-						</div>
-					{:else if rag?.used === false}
-						<div class="grid grid-cols-3 gap-2 text-xs">
-							<div class="bg-surface-300-700 rounded p-2 text-center">
-								<div class="font-semibold">{rag.messages.guaranteed}</div>
-								<div class="text-surface-700-300">Guaranteed</div>
-							</div>
-							<div class="bg-surface-300-700 rounded p-2 text-center">
-								<div class="font-semibold">{rag.messages.filledIn}</div>
-								<div class="text-surface-700-300">Scored fill</div>
-							</div>
-							<div class="bg-surface-300-700 rounded p-2 text-center">
-								<div class="font-semibold text-surface-400">{rag.messages.budget}</div>
-								<div class="text-surface-700-300">Budget</div>
-							</div>
-						</div>
-					{/if}
-					{#if msgs.excludedIds?.length > 0}
-						<p class="text-surface-700-300 text-xs">Excluded message IDs: {msgs.excludedIds.join(", ")}</p>
-					{/if}
-				</section>
-
-				<!-- ── Lore & Graph ──────────────────────────────────────────────── -->
-				{#if rag?.used === true}
-					{@const wl = rag.lore.worldLore}
-					{@const cl = rag.lore.characterLore}
-					{@const hi = rag.lore.history}
-					<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
-						<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-700-300">Lore & Graph</h3>
-						<div class="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-							<div class="bg-surface-300-700 rounded p-2">
-								<div class="text-surface-400 mb-1">World Lore</div>
-								{#if wl.pinned + wl.rag > 0}
-									<div class="font-medium">{wl.pinned + wl.rag} included</div>
-									<div class="text-surface-700-300">{wl.pinned} pinned · {wl.rag} RAG</div>
-								{:else}
-									<div class="text-surface-700-300">None</div>
-								{/if}
-							</div>
-							<div class="bg-surface-300-700 rounded p-2">
-								<div class="text-surface-400 mb-1">Char Lore</div>
-								{#if cl.pinned + cl.rag > 0}
-									<div class="font-medium">{cl.pinned + cl.rag} included</div>
-									<div class="text-surface-700-300">{cl.pinned} pinned · {cl.rag} RAG</div>
-								{:else}
-									<div class="text-surface-700-300">None</div>
-								{/if}
-							</div>
-							<div class="bg-surface-300-700 rounded p-2">
-								<div class="text-surface-400 mb-1">History</div>
-								{#if hi.pinned + hi.rag > 0}
-									<div class="font-medium">{hi.pinned + hi.rag} included</div>
-									<div class="text-surface-700-300">{hi.pinned} pinned · {hi.rag} RAG</div>
-								{:else}
-									<div class="text-surface-700-300">None</div>
-								{/if}
-							</div>
-							<div class="bg-surface-300-700 rounded p-2">
-								<div class="text-surface-400 mb-1">Graph Pairs</div>
-								{#if rag.graphPairs > 0}
-									<div class="font-medium text-primary-400">{rag.graphPairs} pairs</div>
-									<div class="text-surface-700-300">relationship context</div>
-								{:else}
-									<div class="text-surface-700-300">None matched</div>
-								{/if}
-							</div>
-						</div>
-					</section>
-				{:else if rag?.used === false}
-					{@const wl = rag.lore.worldLore}
-					{@const cl = rag.lore.characterLore}
-					{@const hi = rag.lore.history}
-					<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
-						<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-700-300">Lore</h3>
-						<div class="grid grid-cols-3 gap-2 text-xs">
-							<div class="bg-surface-300-700 rounded p-2">
-								<div class="text-surface-400 mb-1">World Lore</div>
-								{#if wl.included > 0}
-									<div class="font-medium">{wl.included} / {wl.budget}</div>
-									<div class="text-surface-700-300">{wl.pinned} pinned · top {wl.topScore.toFixed(2)}</div>
-								{:else}
-									<div class="text-surface-700-300">None</div>
-								{/if}
-							</div>
-							<div class="bg-surface-300-700 rounded p-2">
-								<div class="text-surface-400 mb-1">Char Lore</div>
-								{#if cl.included > 0}
-									<div class="font-medium">{cl.included} / {cl.budget}</div>
-									<div class="text-surface-700-300">{cl.pinned} pinned · top {cl.topScore.toFixed(2)}</div>
-								{:else}
-									<div class="text-surface-700-300">None</div>
-								{/if}
-							</div>
-							<div class="bg-surface-300-700 rounded p-2">
-								<div class="text-surface-400 mb-1">History</div>
-								{#if hi.included > 0}
-									<div class="font-medium">{hi.included} / {hi.budget}</div>
-									<div class="text-surface-700-300">{hi.pinned} pinned · top {hi.topScore.toFixed(2)}</div>
-								{:else}
-									<div class="text-surface-700-300">None</div>
-								{/if}
-							</div>
-						</div>
-						{#if rag.entries.length > 0}
-							<div class="space-y-1 pt-1">
-								<div class="text-xs text-surface-700-300 font-medium">Top scored entries</div>
-								{#each rag.entries.slice(0, 8) as entry}
-									<div class="flex items-center justify-between gap-2 text-xs">
-										<span class="truncate text-surface-300-700">{entry.name || entry.type}</span>
-										<span class="shrink-0 font-mono text-surface-700-300">{entry.score.total.toFixed(3)}</span>
-										<span class="shrink-0 rounded px-1 text-[10px] {entry.score.includedReason.startsWith('filled') || entry.score.includedReason.startsWith('reserved') ? 'bg-success-500/20 text-success-400' : 'bg-surface-400/20 text-surface-700-300'}">{entry.score.includedReason.replace(/_/g, " ")}</span>
+							class="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1"
+						>
+							<!-- ── Token Budget ──────────────────────────────────────────────── -->
+							<section
+								class="bg-surface-200-800 space-y-2 rounded-lg p-3"
+							>
+								<h3
+									class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+								>
+									Token Budget
+								</h3>
+								<div
+									class="flex items-center justify-between text-sm"
+								>
+									<span
+										class:text-error-500={contextExceeded}
+										class:text-success-500={!contextExceeded}
+									>
+										{tokens.total.toLocaleString()} / {tokens.limit.toLocaleString()}
+										tokens
+									</span>
+									<span class="text-surface-700-300 text-xs">
+										{tokenPct}%
+									</span>
+								</div>
+								<div
+									class="bg-surface-300-700 h-2 w-full overflow-hidden rounded-full"
+								>
+									<div
+										class="h-full rounded-full transition-all {contextExceeded
+											? 'bg-error-500'
+											: tokenPct > 85
+												? 'bg-warning-500'
+												: 'bg-success-500'}"
+										style="width: {tokenPct}%"
+									></div>
+								</div>
+								<div
+									class="text-surface-700-300 flex flex-wrap gap-4 text-xs"
+								>
+									<span>
+										Format: <span
+											class="text-surface-300-700"
+										>
+											{draftCompiledPrompt.meta
+												.promptFormat || "—"}
+										</span>
+									</span>
+									{#if draftCompiledPrompt.meta.templateName}
+										<span>
+											Template: <span
+												class="text-surface-300-700"
+											>
+												{draftCompiledPrompt.meta
+													.templateName}
+											</span>
+										</span>
+									{/if}
+									{#if rag?.used === true}
+										<span
+											class="text-primary-400 font-medium"
+										>
+											RAG Context Infill Engine
+										</span>
+									{:else if rag?.used === false}
+										<span class="text-surface-400">
+											Keyword Context Infill Engine
+										</span>
+									{:else}
+										<span class="text-surface-400">
+											Context Infill Engine
+										</span>
+									{/if}
+								</div>
+								{#if truncReason}
+									<div
+										class="bg-warning-500/10 border-warning-500/30 text-warning-400 flex items-center gap-1.5 rounded border px-2 py-1.5 text-xs"
+									>
+										<Icons.TriangleAlert
+											size={12}
+											class="shrink-0"
+										/>
+										<span>
+											Truncated: <span
+												class="font-medium"
+											>
+												{truncReason.replace(/_/g, " ")}
+											</span>
+										</span>
 									</div>
-								{/each}
-							</div>
-						{/if}
-					</section>
-				{/if}
+								{/if}
+							</section>
 
-				<!-- ── RAG Retrieval Scores ──────────────────────────────────────── -->
-				{#if ragScores}
-					<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
-						<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-700-300">RAG Retrieval Scores</h3>
-						<div class="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
-							<div class="bg-surface-300-700 rounded p-2">
-								<div class="text-surface-400 mb-1">Threshold</div>
-								<div class="font-medium font-mono">{ragScores.thresholdUsed.toFixed(3)}</div>
-								<div class="text-surface-700-300">adaptive cutoff</div>
-							</div>
-							<div class="bg-surface-300-700 rounded p-2">
-								<div class="text-surface-400 mb-1">Query Window</div>
-								<div class="font-medium">{ragScores.queryMessageCount}</div>
-								<div class="text-surface-700-300">messages embedded</div>
-							</div>
-							<div class="bg-surface-300-700 rounded p-2">
-								<div class="text-surface-400 mb-1">Msg Scores</div>
-								{#if msgScoreMin !== null}
-									<div class="font-medium font-mono">{msgScoreMin.toFixed(3)} – {msgScoreMax?.toFixed(3)}</div>
-									<div class="text-surface-700-300">avg {msgScoreAvg?.toFixed(3)} · {ragScores.messageScores.length} retrieved</div>
-								{:else}
-									<div class="text-surface-700-300">None retrieved</div>
+							<!-- ── Messages ─────────────────────────────────────────────────── -->
+							<section
+								class="bg-surface-200-800 space-y-2 rounded-lg p-3"
+							>
+								<h3
+									class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+								>
+									Messages
+								</h3>
+								<div class="flex items-baseline gap-2 text-sm">
+									<span>
+										<span class="font-medium">
+											{msgs.included}
+										</span>
+										<span class="text-surface-700-300">
+											/ {msgs.total} included
+										</span>
+									</span>
+									{#if msgs.total > msgs.included}
+										<span class="text-warning-400 text-xs">
+											{msgs.total - msgs.included} excluded
+										</span>
+									{/if}
+								</div>
+								{#if rag?.used === true}
+									<div class="grid grid-cols-3 gap-2 text-xs">
+										<div
+											class="bg-surface-300-700 rounded p-2 text-center"
+										>
+											<div class="font-semibold">
+												{rag.messages.guaranteed}
+											</div>
+											<div class="text-surface-700-300">
+												Guaranteed
+											</div>
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2 text-center"
+										>
+											<div
+												class="text-primary-400 font-semibold"
+											>
+												{rag.messages.ragOlder}
+											</div>
+											<div class="text-surface-700-300">
+												RAG recalled
+											</div>
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2 text-center"
+										>
+											<div class="font-semibold">
+												{rag.messages.filledIn}
+											</div>
+											<div class="text-surface-700-300">
+												Fill-in
+											</div>
+										</div>
+									</div>
+								{:else if rag?.used === false}
+									<div class="grid grid-cols-3 gap-2 text-xs">
+										<div
+											class="bg-surface-300-700 rounded p-2 text-center"
+										>
+											<div class="font-semibold">
+												{rag.messages.guaranteed}
+											</div>
+											<div class="text-surface-700-300">
+												Guaranteed
+											</div>
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2 text-center"
+										>
+											<div class="font-semibold">
+												{rag.messages.filledIn}
+											</div>
+											<div class="text-surface-700-300">
+												Scored fill
+											</div>
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2 text-center"
+										>
+											<div
+												class="text-surface-400 font-semibold"
+											>
+												{rag.messages.budget}
+											</div>
+											<div class="text-surface-700-300">
+												Budget
+											</div>
+										</div>
+									</div>
 								{/if}
-							</div>
-							<div class="bg-surface-300-700 rounded p-2">
-								<div class="text-surface-400 mb-1">Lore Scores</div>
-								{#if loreScoreMin !== null}
-									<div class="font-medium font-mono">{loreScoreMin.toFixed(3)} – {loreScoreMax?.toFixed(3)}</div>
-									<div class="text-surface-700-300">avg {loreScoreAvg?.toFixed(3)} · {ragScores.loreScores.length} retrieved</div>
-								{:else}
-									<div class="text-surface-700-300">None retrieved</div>
+								{#if msgs.excludedIds?.length > 0}
+									<p class="text-surface-700-300 text-xs">
+										Excluded message IDs: {msgs.excludedIds.join(
+											", "
+										)}
+									</p>
 								{/if}
-							</div>
-						</div>
-						<!-- Score distribution bars -->
-						{#if ragScores.messageScores.length > 0 || ragScores.loreScores.length > 0}
-							<div class="space-y-1.5 pt-1">
-								{#if ragScores.messageScores.length > 0}
-									<div class="flex items-center gap-2 text-xs">
-										<span class="w-16 shrink-0 text-surface-700-300">Messages</span>
-										<div class="flex h-3 flex-1 gap-px overflow-hidden rounded">
-											{#each [...ragScores.messageScores].sort((a, b) => b - a) as score}
+							</section>
+
+							<!-- ── Lore & Graph ──────────────────────────────────────────────── -->
+							{#if rag?.used === true}
+								{@const wl = rag.lore.worldLore}
+								{@const cl = rag.lore.characterLore}
+								{@const hi = rag.lore.history}
+								<section
+									class="bg-surface-200-800 space-y-2 rounded-lg p-3"
+								>
+									<h3
+										class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+									>
+										Lore & Graph
+									</h3>
+									<div
+										class="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4"
+									>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												World Lore
+											</div>
+											{#if wl.pinned + wl.rag > 0}
+												<div class="font-medium">
+													{wl.pinned + wl.rag} included
+												</div>
 												<div
-													class="h-full shrink-0 bg-primary-500/70"
-													style="width: {Math.max(2, (score / (ragScores.thresholdUsed > 0 ? 1 : 1)) * 100 / ragScores.messageScores.length)}%; opacity: {0.4 + score * 0.6}"
-													title="Score: {score.toFixed(3)}"
-												></div>
+													class="text-surface-700-300"
+												>
+													{wl.pinned} pinned · {wl.rag}
+													RAG
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None
+												</div>
+											{/if}
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												Char Lore
+											</div>
+											{#if cl.pinned + cl.rag > 0}
+												<div class="font-medium">
+													{cl.pinned + cl.rag} included
+												</div>
+												<div
+													class="text-surface-700-300"
+												>
+													{cl.pinned} pinned · {cl.rag}
+													RAG
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None
+												</div>
+											{/if}
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												History
+											</div>
+											{#if hi.pinned + hi.rag > 0}
+												<div class="font-medium">
+													{hi.pinned + hi.rag} included
+												</div>
+												<div
+													class="text-surface-700-300"
+												>
+													{hi.pinned} pinned · {hi.rag}
+													RAG
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None
+												</div>
+											{/if}
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												Graph Pairs
+											</div>
+											{#if rag.graphPairs > 0}
+												<div
+													class="text-primary-400 font-medium"
+												>
+													{rag.graphPairs} pairs
+												</div>
+												<div
+													class="text-surface-700-300"
+												>
+													relationship context
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None matched
+												</div>
+											{/if}
+										</div>
+									</div>
+								</section>
+							{:else if rag?.used === false}
+								{@const wl = rag.lore.worldLore}
+								{@const cl = rag.lore.characterLore}
+								{@const hi = rag.lore.history}
+								<section
+									class="bg-surface-200-800 space-y-2 rounded-lg p-3"
+								>
+									<h3
+										class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+									>
+										Lore
+									</h3>
+									<div class="grid grid-cols-3 gap-2 text-xs">
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												World Lore
+											</div>
+											{#if wl.included > 0}
+												<div class="font-medium">
+													{wl.included} / {wl.budget}
+												</div>
+												<div
+													class="text-surface-700-300"
+												>
+													{wl.pinned} pinned · top {wl.topScore.toFixed(
+														2
+													)}
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None
+												</div>
+											{/if}
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												Char Lore
+											</div>
+											{#if cl.included > 0}
+												<div class="font-medium">
+													{cl.included} / {cl.budget}
+												</div>
+												<div
+													class="text-surface-700-300"
+												>
+													{cl.pinned} pinned · top {cl.topScore.toFixed(
+														2
+													)}
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None
+												</div>
+											{/if}
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												History
+											</div>
+											{#if hi.included > 0}
+												<div class="font-medium">
+													{hi.included} / {hi.budget}
+												</div>
+												<div
+													class="text-surface-700-300"
+												>
+													{hi.pinned} pinned · top {hi.topScore.toFixed(
+														2
+													)}
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None
+												</div>
+											{/if}
+										</div>
+									</div>
+									{#if rag.entries.length > 0}
+										<div class="space-y-1 pt-1">
+											<div
+												class="text-surface-700-300 text-xs font-medium"
+											>
+												Top scored entries
+											</div>
+											{#each rag.entries.slice(0, 8) as entry}
+												<div
+													class="flex items-center justify-between gap-2 text-xs"
+												>
+													<span
+														class="text-surface-300-700 truncate"
+													>
+														{entry.name ||
+															entry.type}
+													</span>
+													<span
+														class="text-surface-700-300 shrink-0 font-mono"
+													>
+														{entry.score.total.toFixed(
+															3
+														)}
+													</span>
+													<span
+														class="shrink-0 rounded px-1 text-[10px] {entry.score.includedReason.startsWith(
+															'filled'
+														) ||
+														entry.score.includedReason.startsWith(
+															'reserved'
+														)
+															? 'bg-success-500/20 text-success-400'
+															: 'bg-surface-400/20 text-surface-700-300'}"
+													>
+														{entry.score.includedReason.replace(
+															/_/g,
+															" "
+														)}
+													</span>
+												</div>
 											{/each}
 										</div>
-										<span class="w-10 shrink-0 text-right text-surface-700-300">{ragScores.messageScores.length}</span>
-									</div>
-								{/if}
-								{#if ragScores.loreScores.length > 0}
-									<div class="flex items-center gap-2 text-xs">
-										<span class="w-16 shrink-0 text-surface-700-300">Lore</span>
-										<div class="flex h-3 flex-1 gap-px overflow-hidden rounded">
-											{#each [...ragScores.loreScores].sort((a, b) => b - a) as score}
-												<div
-													class="h-full shrink-0 bg-secondary-500/70"
-													style="width: {Math.max(2, (score / (ragScores.thresholdUsed > 0 ? 1 : 1)) * 100 / ragScores.loreScores.length)}%; opacity: {0.4 + score * 0.6}"
-													title="Score: {score.toFixed(3)}"
-												></div>
-											{/each}
+									{/if}
+								</section>
+							{/if}
+
+							<!-- ── RAG Retrieval Scores ──────────────────────────────────────── -->
+							{#if ragScores}
+								<section
+									class="bg-surface-200-800 space-y-2 rounded-lg p-3"
+								>
+									<h3
+										class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+									>
+										RAG Retrieval Scores
+									</h3>
+									<div
+										class="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4"
+									>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												Threshold
+											</div>
+											<div class="font-mono font-medium">
+												{ragScores.thresholdUsed.toFixed(
+													3
+												)}
+											</div>
+											<div class="text-surface-700-300">
+												adaptive cutoff
+											</div>
 										</div>
-										<span class="w-10 shrink-0 text-right text-surface-700-300">{ragScores.loreScores.length}</span>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												Query Window
+											</div>
+											<div class="font-medium">
+												{ragScores.queryMessageCount}
+											</div>
+											<div class="text-surface-700-300">
+												messages embedded
+											</div>
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												Msg Scores
+											</div>
+											{#if msgScoreMin !== null}
+												<div
+													class="font-mono font-medium"
+												>
+													{msgScoreMin.toFixed(3)} – {msgScoreMax?.toFixed(
+														3
+													)}
+												</div>
+												<div
+													class="text-surface-700-300"
+												>
+													avg {msgScoreAvg?.toFixed(
+														3
+													)} · {ragScores
+														.messageScores.length} retrieved
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None retrieved
+												</div>
+											{/if}
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												Lore Scores
+											</div>
+											{#if loreScoreMin !== null}
+												<div
+													class="font-mono font-medium"
+												>
+													{loreScoreMin.toFixed(3)} – {loreScoreMax?.toFixed(
+														3
+													)}
+												</div>
+												<div
+													class="text-surface-700-300"
+												>
+													avg {loreScoreAvg?.toFixed(
+														3
+													)} · {ragScores.loreScores
+														.length} retrieved
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None retrieved
+												</div>
+											{/if}
+										</div>
 									</div>
-								{/if}
-							</div>
-						{/if}
-					</section>
-				{/if}
-
-				<!-- ── Sources ───────────────────────────────────────────────────── -->
-				<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
-					<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-700-300">Sources</h3>
-					<div class="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
-						<div>
-							<p class="text-surface-400 mb-1 text-xs">Characters</p>
-							{#if src.characters.length > 0}
-								<ul class="space-y-0.5">
-									{#each src.characters as char}
-										<li class="flex items-center gap-1">
-											<Icons.User size={12} class="text-surface-700-300 shrink-0" />
-											<span class="truncate text-xs">{char.name}{char.nickname ? ` (${char.nickname})` : ""}</span>
-										</li>
-									{/each}
-								</ul>
-							{:else}
-								<p class="text-surface-700-300 text-xs">None</p>
+									<!-- Score distribution bars -->
+									{#if ragScores.messageScores.length > 0 || ragScores.loreScores.length > 0}
+										<div class="space-y-1.5 pt-1">
+											{#if ragScores.messageScores.length > 0}
+												<div
+													class="flex items-center gap-2 text-xs"
+												>
+													<span
+														class="text-surface-700-300 w-16 shrink-0"
+													>
+														Messages
+													</span>
+													<div
+														class="flex h-3 flex-1 gap-px overflow-hidden rounded"
+													>
+														{#each [...ragScores.messageScores].sort((a, b) => b - a) as score}
+															<div
+																class="bg-primary-500/70 h-full shrink-0"
+																style="width: {Math.max(
+																	2,
+																	((score /
+																		(ragScores.thresholdUsed >
+																		0
+																			? 1
+																			: 1)) *
+																		100) /
+																		ragScores
+																			.messageScores
+																			.length
+																)}%; opacity: {0.4 +
+																	score *
+																		0.6}"
+																title="Score: {score.toFixed(
+																	3
+																)}"
+															></div>
+														{/each}
+													</div>
+													<span
+														class="text-surface-700-300 w-10 shrink-0 text-right"
+													>
+														{ragScores.messageScores
+															.length}
+													</span>
+												</div>
+											{/if}
+											{#if ragScores.loreScores.length > 0}
+												<div
+													class="flex items-center gap-2 text-xs"
+												>
+													<span
+														class="text-surface-700-300 w-16 shrink-0"
+													>
+														Lore
+													</span>
+													<div
+														class="flex h-3 flex-1 gap-px overflow-hidden rounded"
+													>
+														{#each [...ragScores.loreScores].sort((a, b) => b - a) as score}
+															<div
+																class="bg-secondary-500/70 h-full shrink-0"
+																style="width: {Math.max(
+																	2,
+																	((score /
+																		(ragScores.thresholdUsed >
+																		0
+																			? 1
+																			: 1)) *
+																		100) /
+																		ragScores
+																			.loreScores
+																			.length
+																)}%; opacity: {0.4 +
+																	score *
+																		0.6}"
+																title="Score: {score.toFixed(
+																	3
+																)}"
+															></div>
+														{/each}
+													</div>
+													<span
+														class="text-surface-700-300 w-10 shrink-0 text-right"
+													>
+														{ragScores.loreScores
+															.length}
+													</span>
+												</div>
+											{/if}
+										</div>
+									{/if}
+								</section>
 							{/if}
-						</div>
-						<div>
-							<p class="text-surface-400 mb-1 text-xs">Personas</p>
-							{#if src.personas.length > 0}
-								<ul class="space-y-0.5">
-									{#each src.personas as persona}
-										<li class="flex items-center gap-1">
-											<Icons.User2 size={12} class="text-surface-700-300 shrink-0" />
-											<span class="truncate text-xs">{persona.name}</span>
-										</li>
-									{/each}
-								</ul>
-							{:else}
-								<p class="text-surface-700-300 text-xs">None</p>
-							{/if}
-						</div>
-						<div>
-							<p class="text-surface-400 mb-1 text-xs">Scenario</p>
-							<p class="text-xs capitalize">{src.scenario ?? "None"}</p>
-						</div>
-					</div>
-				</section>
 
-				<!-- ── Prompt Preview ────────────────────────────────────────────── -->
-				<section class="bg-surface-200-800 rounded-lg p-3 space-y-2">
-					<h3 class="text-xs font-semibold uppercase tracking-wide text-surface-700-300">Prompt Preview</h3>
-					{#if draftCompiledPrompt.messages && draftCompiledPrompt.messages.length > 0}
-						<!-- Chat format: render each message block -->
-						<div class="max-h-96 overflow-y-auto space-y-2">
-							{#each draftCompiledPrompt.messages as msg, i}
-								<div class="rounded border {msg.role === 'system' ? 'border-warning-500/30 bg-warning-500/5' : msg.role === 'assistant' ? 'border-primary-500/30 bg-primary-500/5' : 'border-surface-400/30 bg-surface-300-700'} overflow-hidden">
-									<div class="flex items-center gap-2 border-b border-inherit px-2 py-1">
-										<span class="text-xs font-semibold uppercase tracking-wide {msg.role === 'system' ? 'text-warning-400' : msg.role === 'assistant' ? 'text-primary-400' : 'text-surface-400'}">{msg.role}</span>
-										{#if msg.name}
-											<span class="text-surface-700-300 text-xs">({msg.name})</span>
+							<!-- ── Sources ───────────────────────────────────────────────────── -->
+							<section
+								class="bg-surface-200-800 space-y-2 rounded-lg p-3"
+							>
+								<h3
+									class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+								>
+									Sources
+								</h3>
+								<div
+									class="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3"
+								>
+									<div>
+										<p
+											class="text-surface-400 mb-1 text-xs"
+										>
+											Characters
+										</p>
+										{#if src.characters.length > 0}
+											<ul class="space-y-0.5">
+												{#each src.characters as char}
+													<li
+														class="flex items-center gap-1"
+													>
+														<Icons.User
+															size={12}
+															class="text-surface-700-300 shrink-0"
+														/>
+														<span
+															class="truncate text-xs"
+														>
+															{char.name}{char.nickname
+																? ` (${char.nickname})`
+																: ""}
+														</span>
+													</li>
+												{/each}
+											</ul>
+										{:else}
+											<p
+												class="text-surface-700-300 text-xs"
+											>
+												None
+											</p>
 										{/if}
-										<span class="ml-auto text-surface-600 text-xs">#{i + 1}</span>
 									</div>
-									<pre class="whitespace-pre-wrap px-2 py-1.5 text-xs leading-relaxed">{typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content, null, 2)}</pre>
+									<div>
+										<p
+											class="text-surface-400 mb-1 text-xs"
+										>
+											Personas
+										</p>
+										{#if src.personas.length > 0}
+											<ul class="space-y-0.5">
+												{#each src.personas as persona}
+													<li
+														class="flex items-center gap-1"
+													>
+														<Icons.User2
+															size={12}
+															class="text-surface-700-300 shrink-0"
+														/>
+														<span
+															class="truncate text-xs"
+														>
+															{persona.name}
+														</span>
+													</li>
+												{/each}
+											</ul>
+										{:else}
+											<p
+												class="text-surface-700-300 text-xs"
+											>
+												None
+											</p>
+										{/if}
+									</div>
+									<div>
+										<p
+											class="text-surface-400 mb-1 text-xs"
+										>
+											Scenario
+										</p>
+										<p class="text-xs capitalize">
+											{src.scenario ?? "None"}
+										</p>
+									</div>
+								</div>
+							</section>
+
+							<!-- ── Prompt Preview ────────────────────────────────────────────── -->
+							<section
+								class="bg-surface-200-800 space-y-2 rounded-lg p-3"
+							>
+								<h3
+									class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+								>
+									Prompt Preview
+								</h3>
+								{#if draftCompiledPrompt.messages && draftCompiledPrompt.messages.length > 0}
+									<!-- Chat format: render each message block -->
+									<div
+										class="max-h-96 space-y-2 overflow-y-auto"
+									>
+										{#each draftCompiledPrompt.messages as msg, i}
+											<div
+												class="rounded border {msg.role ===
+												'system'
+													? 'border-warning-500/30 bg-warning-500/5'
+													: msg.role === 'assistant'
+														? 'border-primary-500/30 bg-primary-500/5'
+														: 'border-surface-400/30 bg-surface-300-700'} overflow-hidden"
+											>
+												<div
+													class="flex items-center gap-2 border-b border-inherit px-2 py-1"
+												>
+													<span
+														class="text-xs font-semibold tracking-wide uppercase {msg.role ===
+														'system'
+															? 'text-warning-400'
+															: msg.role ===
+																  'assistant'
+																? 'text-primary-400'
+																: 'text-surface-400'}"
+													>
+														{msg.role}
+													</span>
+													{#if msg.name}
+														<span
+															class="text-surface-700-300 text-xs"
+														>
+															({msg.name})
+														</span>
+													{/if}
+													<span
+														class="text-surface-600 ml-auto text-xs"
+													>
+														#{i + 1}
+													</span>
+												</div>
+												<pre
+													class="px-2 py-1.5 text-xs leading-relaxed whitespace-pre-wrap">{typeof msg.content ===
+													"string"
+														? msg.content
+														: JSON.stringify(
+																msg.content,
+																null,
+																2
+															)}</pre>
+											</div>
+										{/each}
+									</div>
+								{:else if draftCompiledPrompt.prompt}
+									<!-- Raw text format -->
+									<pre
+										class="bg-surface-300-700 max-h-96 overflow-y-auto rounded p-2 text-xs leading-relaxed whitespace-pre-wrap">{draftCompiledPrompt.prompt}</pre>
+								{:else}
+									<p class="text-surface-700-300 text-xs">
+										No prompt content available.
+									</p>
+								{/if}
+							</section>
+						</div>
+					{:else}
+						<div
+							class="text-surface-700-300 py-8 text-center text-sm"
+						>
+							No compiled prompt data available.
+						</div>
+					{/if}
+
+					<footer class="flex shrink-0 justify-end gap-4 pt-2">
+						<button
+							class="btn preset-filled-surface-500"
+							onclick={() =>
+								(showDraftCompiledPromptModal = false)}
+						>
+							Close
+						</button>
+					</footer>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
+
+	<Dialog
+		open={showTriggerCharacterMessageModal}
+		onOpenChange={(e) => (showTriggerCharacterMessageModal = e.open)}
+	>
+		<Portal>
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
+			>
+				<Dialog.Content
+					class="card bg-surface-100-900 relative max-h-[95dvh] w-[min(95vw,800px)] space-y-4 overflow-hidden p-4 shadow-xl"
+				>
+					<header class="mb-2 flex items-center justify-between">
+						<h2 class="h2">Trigger Character</h2>
+						<button
+							class="btn btn-sm"
+							onclick={() =>
+								(showTriggerCharacterMessageModal = false)}
+						>
+							<Icons.X size={20} />
+						</button>
+					</header>
+					<button
+						class="group preset-outlined-primary-400-600 hover:preset-filled-primary-500 mb-4 flex w-full items-center gap-3 rounded p-2"
+						onclick={(e) => handleTriggerNarratorResponse(e)}
+					>
+						<div
+							class="bg-primary-500/10 text-primary-500 group-hover:text-primary-950 shrink-0 rounded-lg p-2"
+						>
+							<Icons.CloudSun size={20} />
+						</div>
+						<div class="flex-1 text-left">
+							<div class="font-semibold">{narratorName}</div>
+							<div
+								class="text-surface-700-300 group-hover:text-surface-800-200 text-xs"
+							>
+								Narrate the environment, atmosphere, or side
+								characters instead
+							</div>
+						</div>
+					</button>
+					<input
+						class="input mb-4 w-full"
+						type="text"
+						placeholder="Search characters..."
+						bind:value={triggerCharacterSearch}
+					/>
+					<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
+						<div
+							class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap"
+						>
+							{#each (chat?.chatCharacters || []).filter((cc) => {
+								const c = cc.character
+								if (!c) return false
+								const s = triggerCharacterSearch
+									.trim()
+									.toLowerCase()
+								if (!s) return true
+								return c.name
+										?.toLowerCase()
+										.includes(s) || c.nickname
+										?.toLowerCase()
+										.includes(s) || c.description
+										?.toLowerCase()
+										.includes(s) || c.creatorNotes
+										?.toLowerCase()
+										.includes(s)
+							}) as filtered}
+								<div class="flex p-1 lg:basis-1/2">
+									<button
+										class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
+										onclick={() =>
+											onSelectTriggerCharacterMessage(
+												filtered.character.id
+											)}
+									>
+										<div class="w-fit">
+											<Avatar char={filtered.character} />
+										</div>
+										<div
+											class="relative flex w-0 min-w-0 flex-1 flex-col"
+										>
+											<div
+												class="w-full truncate text-left font-semibold"
+											>
+												{filtered.character.nickname ||
+													filtered.character.name}
+											</div>
+											<div
+												class="text-surface-700-300 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
+											>
+												{filtered.character
+													.creatorNotes ||
+													filtered.character
+														.description ||
+													"No description"}
+											</div>
+										</div>
+									</button>
 								</div>
 							{/each}
 						</div>
-					{:else if draftCompiledPrompt.prompt}
-						<!-- Raw text format -->
-						<pre class="max-h-96 overflow-y-auto whitespace-pre-wrap rounded bg-surface-300-700 p-2 text-xs leading-relaxed">{draftCompiledPrompt.prompt}</pre>
-					{:else}
-						<p class="text-surface-700-300 text-xs">No prompt content available.</p>
-					{/if}
-				</section>
-			</div>
-		{:else}
-			<div class="text-surface-700-300 py-8 text-center text-sm">No compiled prompt data available.</div>
-		{/if}
-
-		<footer class="flex shrink-0 justify-end gap-4 pt-2">
-			<button
-				class="btn preset-filled-surface-500"
-				onclick={() => (showDraftCompiledPromptModal = false)}
-			>
-				Close
-			</button>
-		</footer>
-			</Dialog.Content>
-		</Dialog.Positioner>
-	</Portal>
-</Dialog>
-
-<Dialog
-	open={showTriggerCharacterMessageModal}
-	onOpenChange={(e) => (showTriggerCharacterMessageModal = e.open)}
->
-	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-h-[95dvh] relative overflow-hidden w-[min(95vw,800px)]">
-		<header class="mb-2 flex items-center justify-between">
-			<h2 class="h2">Trigger Character</h2>
-			<button
-				class="btn btn-sm"
-				onclick={() => (showTriggerCharacterMessageModal = false)}
-			>
-				<Icons.X size={20} />
-			</button>
-		</header>
-		<button
-			class="group preset-outlined-primary-400-600 hover:preset-filled-primary-500 mb-4 flex w-full items-center gap-3 rounded p-2"
-			onclick={(e) => handleTriggerNarratorResponse(e)}
-		>
-			<div class="bg-primary-500/10 text-primary-500 group-hover:text-primary-950 shrink-0 rounded-lg p-2">
-				<Icons.CloudSun size={20} />
-			</div>
-			<div class="flex-1 text-left">
-				<div class="font-semibold">{narratorName}</div>
-				<div class="text-surface-700-300 group-hover:text-surface-800-200 text-xs">
-					Narrate the environment, atmosphere, or side characters instead
-				</div>
-			</div>
-		</button>
-		<input
-			class="input mb-4 w-full"
-			type="text"
-			placeholder="Search characters..."
-			bind:value={triggerCharacterSearch}
-		/>
-		<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
-			<div class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap">
-				{#each (chat?.chatCharacters || []).filter((cc) => {
-					const c = cc.character
-					if (!c) return false
-					const s = triggerCharacterSearch.trim().toLowerCase()
-					if (!s) return true
-					return c.name?.toLowerCase().includes(s) || c.nickname
-							?.toLowerCase()
-							.includes(s) || c.description
-							?.toLowerCase()
-							.includes(s) || c.creatorNotes
-							?.toLowerCase()
-							.includes(s)
-				}) as filtered}
-					<div class="flex p-1 lg:basis-1/2">
-						<button
-							class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
-							onclick={() =>
-								onSelectTriggerCharacterMessage(
-									filtered.character.id
-								)}
-						>
-							<div class="w-fit">
-								<Avatar char={filtered.character} />
-							</div>
-							<div
-								class="relative flex w-0 min-w-0 flex-1 flex-col"
-							>
-								<div
-									class="w-full truncate text-left font-semibold"
-								>
-									{filtered.character.nickname ||
-										filtered.character.name}
-								</div>
-								<div
-									class="text-surface-700-300 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
-								>
-									{filtered.character.creatorNotes ||
-										filtered.character.description ||
-										"No description"}
-								</div>
-							</div>
-						</button>
 					</div>
-				{/each}
-			</div>
-		</div>
-			</Dialog.Content>
-		</Dialog.Positioner>
-	</Portal>
-</Dialog>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
 
-<TriggerNarratorResponseModal
-	open={showTriggerNarratorResponseModal}
-	onOpenChange={(e) => (showTriggerNarratorResponseModal = e.open)}
-	onTrigger={handleConfirmTriggerNarratorResponse}
-	onCancel={handleCancelTriggerNarratorResponse}
-	{narratorName}
-/>
-
-<AvatarGalleryModal
-	bind:open={showAvatarModal}
-	onOpenChange={(e) => (showAvatarModal = e.open)}
-	entity={avatarModalEntity}
-/>
-
-<PersonaSelectModal
-	open={showAddPersonaModal}
-	onclose={() => (showAddPersonaModal = false)}
-	onSelect={handleAddPersona}
-	personas={availablePersonas}
-	title="Add Persona to Chat"
-	description="Select a persona to add to this chat. You'll be able to send messages as this persona."
-/>
-
-<BranchChatModal
-	open={showBranchChatModal}
-	onOpenChange={(e) => (showBranchChatModal = e.open)}
-	onConfirm={onBranchChatConfirm}
-	onCancel={onBranchChatCancel}
-	initialTitle={chat?.name ?? undefined}
-/>
-
-{#snippet generatingAnimation()}
-	<div class="wrapper">
-		<div class="circle"></div>
-		<div class="circle"></div>
-		<div class="circle"></div>
-		<div class="shadow"></div>
-		<div class="shadow"></div>
-		<div class="shadow"></div>
-	</div>
-{/snippet}
-
-{#snippet workflowButton()}
-	<Icons.BookOpen size="0.75em" class="block" />
-{/snippet}
-
-{#snippet workflowContent()}
-	{#if chat?.lorebookId}
-		<ChatWorkflowTab
-			lorebookId={chat.lorebookId}
-			{sceneList}
-			onOpenEntry={handleOpenEntry}
-			onEnterSummarizationMode={summarizationEnabled ? enterSummarizationModeEmpty : undefined}
-		/>
-	{/if}
-{/snippet}
-
-{#snippet sceneImagesButton()}
-	<Icons.Images size="0.75em" />
-{/snippet}
-
-{#snippet sceneImagesContent()}
-	<ChatSceneImagesTab
-		chatCharacters={chat?.chatCharacters ?? []}
-		chatPersonas={chat?.chatPersonas ?? []}
-		bind:leftImage={leftSceneImage}
-		bind:rightImage={rightSceneImage}
+	<TriggerNarratorResponseModal
+		open={showTriggerNarratorResponseModal}
+		onOpenChange={(e) => (showTriggerNarratorResponseModal = e.open)}
+		onTrigger={handleConfirmTriggerNarratorResponse}
+		onCancel={handleCancelTriggerNarratorResponse}
+		{narratorName}
 	/>
-{/snippet}
 
-{#snippet extraControlsButton()}
-	<Icons.MessageSquare size="0.75em" />
-{/snippet}
+	<AvatarGalleryModal
+		bind:open={showAvatarModal}
+		onOpenChange={(e) => (showAvatarModal = e.open)}
+		entity={avatarModalEntity}
+	/>
 
-{#snippet extraControlsContent()}
-	<div class="flex flex-wrap gap-2 mb-[0.5em]">
-		<button
-			class="btn btn-sm preset-tonal-primary"
-			title="Continue Conversation"
-			onclick={handleTriggerContinueConversation}
-			disabled={!chat ||
-				!chat.chatPersonas?.[0]?.personaId ||
-				lastMessage?.isGenerating}
-		>
-			<Icons.MessageSquareMore size={14} />
-			Continue
-		</button>
-		<button
-			class="btn btn-sm preset-tonal-secondary"
-			title="Trigger Character"
-			onclick={handleTriggerCharacterMessage}
-			disabled={!chat ||
-				!chat.chatPersonas?.[0]?.personaId ||
-				lastMessage?.isGenerating}
-		>
-			<Icons.MessageSquarePlus size={14} />
-			Trigger Character
-		</button>
-		<button
-			class="btn btn-sm preset-tonal-warning"
-			title="Regenerate Last Message"
-			onclick={handleRegenerateLastMessage}
-			disabled={!canRegenerateLastMessage}
-		>
-			<Icons.RefreshCw size={14} />
-			Regenerate
-		</button>
-		<button
-			class="btn btn-sm preset-tonal-success"
-			title="Trigger Narrator Response"
-			onclick={handleTriggerNarratorResponse}
-			disabled={!chat || lastMessage?.isGenerating}
-		>
-			<Icons.CloudSun size={14} />
-			{narratorName}
-		</button>
-	</div>
-{/snippet}
+	<PersonaSelectModal
+		open={showAddPersonaModal}
+		onclose={() => (showAddPersonaModal = false)}
+		onSelect={handleAddPersona}
+		personas={availablePersonas}
+		title="Add Persona to Chat"
+		description="Select a persona to add to this chat. You'll be able to send messages as this persona."
+	/>
 
-{#snippet statisticsButton()}
-	<Icons.BarChart2 size="0.75em" />
-{/snippet}
+	<BranchChatModal
+		open={showBranchChatModal}
+		onOpenChange={(e) => (showBranchChatModal = e.open)}
+		onConfirm={onBranchChatConfirm}
+		onCancel={onBranchChatCancel}
+		initialTitle={chat?.name ?? undefined}
+	/>
 
-{#snippet statisticsContent()}
-	<div class="flex flex-wrap items-center gap-3 mb-[0.5em]">
-		<button
-			class="btn btn-sm preset-tonal-primary"
-			title="View full prompt details"
-			onclick={() => (showDraftCompiledPromptModal = true)}
-			disabled={!draftCompiledPrompt?.meta}
-		>
-			<Icons.Info size={14} />
-			Details
-		</button>
-		{#if draftCompiledPrompt?.meta}
-			<div class="flex gap-4 text-xs">
-				<div class="flex flex-col gap-0.5">
-					<span class="text-surface-700-300 uppercase tracking-wide" style="font-size:0.65rem">Tokens</span>
-					<span class:text-error-500={contextExceeded} class="font-medium tabular-nums">
-						{draftCompiledPrompt.meta.tokenCounts.total} / {draftCompiledPrompt.meta.tokenCounts.limit}
-					</span>
-				</div>
-				<div class="flex flex-col gap-0.5">
-					<span class="text-surface-700-300 uppercase tracking-wide" style="font-size:0.65rem">Messages</span>
-					<span class="font-medium tabular-nums">
-						{draftCompiledPrompt.meta.chatMessages.included} / {draftCompiledPrompt.meta.chatMessages.total}
-					</span>
-				</div>
-			</div>
-		{:else if draftCompiledPrompt?.error}
-			<span class="text-error-500 text-xs">{draftCompiledPrompt.error}</span>
-		{:else}
-			<span class="text-surface-700-300 text-xs">No statistics yet — send a message first.</span>
+	{#snippet generatingAnimation()}
+		<div class="wrapper">
+			<div class="circle"></div>
+			<div class="circle"></div>
+			<div class="circle"></div>
+			<div class="shadow"></div>
+			<div class="shadow"></div>
+			<div class="shadow"></div>
+		</div>
+	{/snippet}
+
+	{#snippet workflowButton()}
+		<Icons.BookOpen size="0.75em" class="block" />
+	{/snippet}
+
+	{#snippet workflowContent()}
+		{#if chat?.lorebookId}
+			<ChatWorkflowTab
+				lorebookId={chat.lorebookId}
+				{sceneList}
+				onOpenEntry={handleOpenEntry}
+				onEnterSummarizationMode={summarizationEnabled
+					? enterSummarizationModeEmpty
+					: undefined}
+			/>
 		{/if}
-	</div>
-{/snippet}
+	{/snippet}
+
+	{#snippet sceneImagesButton()}
+		<Icons.Images size="0.75em" />
+	{/snippet}
+
+	{#snippet sceneImagesContent()}
+		<ChatSceneImagesTab
+			chatCharacters={chat?.chatCharacters ?? []}
+			chatPersonas={chat?.chatPersonas ?? []}
+			bind:leftImage={leftSceneImage}
+			bind:rightImage={rightSceneImage}
+		/>
+	{/snippet}
+
+	{#snippet extraControlsButton()}
+		<Icons.MessageSquare size="0.75em" />
+	{/snippet}
+
+	{#snippet extraControlsContent()}
+		<div class="mb-[0.5em] flex flex-wrap gap-2">
+			<button
+				class="btn btn-sm preset-tonal-primary"
+				title="Continue Conversation"
+				onclick={handleTriggerContinueConversation}
+				disabled={!chat ||
+					!chat.chatPersonas?.[0]?.personaId ||
+					lastMessage?.isGenerating}
+			>
+				<Icons.MessageSquareMore size={14} />
+				Continue
+			</button>
+			<button
+				class="btn btn-sm preset-tonal-secondary"
+				title="Trigger Character"
+				onclick={handleTriggerCharacterMessage}
+				disabled={!chat ||
+					!chat.chatPersonas?.[0]?.personaId ||
+					lastMessage?.isGenerating}
+			>
+				<Icons.MessageSquarePlus size={14} />
+				Trigger Character
+			</button>
+			<button
+				class="btn btn-sm preset-tonal-warning"
+				title="Regenerate Last Message"
+				onclick={handleRegenerateLastMessage}
+				disabled={!canRegenerateLastMessage}
+			>
+				<Icons.RefreshCw size={14} />
+				Regenerate
+			</button>
+			<button
+				class="btn btn-sm preset-tonal-success"
+				title="Trigger Narrator Response"
+				onclick={handleTriggerNarratorResponse}
+				disabled={!chat || lastMessage?.isGenerating}
+			>
+				<Icons.CloudSun size={14} />
+				{narratorName}
+			</button>
+		</div>
+	{/snippet}
+
+	{#snippet statisticsButton()}
+		<Icons.BarChart2 size="0.75em" />
+	{/snippet}
+
+	{#snippet statisticsContent()}
+		<div class="mb-[0.5em] flex flex-wrap items-center gap-3">
+			<button
+				class="btn btn-sm preset-tonal-primary"
+				title="View full prompt details"
+				onclick={() => (showDraftCompiledPromptModal = true)}
+				disabled={!draftCompiledPrompt?.meta}
+			>
+				<Icons.Info size={14} />
+				Details
+			</button>
+			{#if draftCompiledPrompt?.meta}
+				<div class="flex gap-4 text-xs">
+					<div class="flex flex-col gap-0.5">
+						<span
+							class="text-surface-700-300 tracking-wide uppercase"
+							style="font-size:0.65rem"
+						>
+							Tokens
+						</span>
+						<span
+							class:text-error-500={contextExceeded}
+							class="font-medium tabular-nums"
+						>
+							{draftCompiledPrompt.meta.tokenCounts.total} / {draftCompiledPrompt
+								.meta.tokenCounts.limit}
+						</span>
+					</div>
+					<div class="flex flex-col gap-0.5">
+						<span
+							class="text-surface-700-300 tracking-wide uppercase"
+							style="font-size:0.65rem"
+						>
+							Messages
+						</span>
+						<span class="font-medium tabular-nums">
+							{draftCompiledPrompt.meta.chatMessages.included} / {draftCompiledPrompt
+								.meta.chatMessages.total}
+						</span>
+					</div>
+				</div>
+			{:else if draftCompiledPrompt?.error}
+				<span class="text-error-500 text-xs">
+					{draftCompiledPrompt.error}
+				</span>
+			{:else}
+				<span class="text-surface-700-300 text-xs">
+					No statistics yet — send a message first.
+				</span>
+			{/if}
+		</div>
+	{/snippet}
 {/if}
 
 <style lang="postcss">

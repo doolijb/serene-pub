@@ -2,7 +2,11 @@
 	import { getContext } from "svelte"
 	import { page } from "$app/state"
 	import { afterNavigate, goto } from "$app/navigation"
-	import { getAllSections, getDoc, type DocSection } from "$lib/shared/utils/docsIndex"
+	import {
+		getAllSections,
+		getDoc,
+		type DocSection
+	} from "$lib/shared/utils/docsIndex"
 	import DocResultsGrid from "$lib/client/components/docs/DocResultsGrid.svelte"
 	import type { DocsSearchCtx } from "../+layout.svelte"
 
@@ -26,7 +30,11 @@
 
 	function selectSection(section: DocSection) {
 		docsSearchCtx.query = ""
-		goto(section.anchor ? `/docs/${section.slug}#${section.anchor}` : `/docs/${section.slug}`)
+		goto(
+			section.anchor
+				? `/docs/${section.slug}#${section.anchor}`
+				: `/docs/${section.slug}`
+		)
 	}
 
 	afterNavigate(() => {
@@ -38,7 +46,9 @@
 </script>
 
 <svelte:head>
-	<title>{doc ? `${doc.title} — Documentation` : "Documentation"} — Serene Pub</title>
+	<title>
+		{doc ? `${doc.title} — Documentation` : "Documentation"} — Serene Pub
+	</title>
 </svelte:head>
 
 {#if doc}
@@ -52,7 +62,11 @@
 		<div
 			class="border-surface-300-700 preset-tonal absolute inset-x-0 top-0 z-20 border-b p-4 shadow-lg"
 		>
-			<DocResultsGrid sections={filteredSections} compact onSelect={selectSection} />
+			<DocResultsGrid
+				sections={filteredSections}
+				compact
+				onSelect={selectSection}
+			/>
 		</div>
 	{/if}
 {/if}

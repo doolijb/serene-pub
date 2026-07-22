@@ -13,7 +13,9 @@ export async function runBindingNodeCheck(
 	}>,
 	emitToUser: (event: string, data: unknown) => void
 ): Promise<void> {
-	const relevantBindings = bindings.filter((b) => b.characterId || b.personaId)
+	const relevantBindings = bindings.filter(
+		(b) => b.characterId || b.personaId
+	)
 	if (relevantBindings.length === 0) return
 
 	// Find which bindings already have a node linked to them
@@ -26,10 +28,14 @@ export async function runBindingNodeCheck(
 		columns: { lorebookBindingId: true }
 	})
 	const linkedBindingIds = new Set(
-		linkedNodes.map((n) => n.lorebookBindingId).filter((id): id is number => id !== null)
+		linkedNodes
+			.map((n) => n.lorebookBindingId)
+			.filter((id): id is number => id !== null)
 	)
 
-	const bindingsNeedingNode = relevantBindings.filter((b) => !linkedBindingIds.has(b.id))
+	const bindingsNeedingNode = relevantBindings.filter(
+		(b) => !linkedBindingIds.has(b.id)
+	)
 	if (bindingsNeedingNode.length === 0) return
 
 	// Find parent nodes not yet linked to any binding (exclude alias children)
@@ -65,9 +71,15 @@ export async function runBindingNodeCheck(
 				...n,
 				score: scoreNameSimilarity(entityName, n.name)
 			}))
-			scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+			scored.sort(
+				(a, b) => b.score - a.score || a.name.localeCompare(b.name)
+			)
 			return {
-				binding: { bindingId: binding.id, binding: binding.binding, entityName },
+				binding: {
+					bindingId: binding.id,
+					binding: binding.binding,
+					entityName
+				},
 				unlinkedNodes: scored
 			}
 		})

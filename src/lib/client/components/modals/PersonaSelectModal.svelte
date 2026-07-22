@@ -55,97 +55,106 @@
 	}}
 >
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-h-[95dvh] relative overflow-hidden w-[min(95vw,800px)]">
-		<header class="flex items-center justify-between">
-			<h2 class="h2">{title}</h2>
-			<button
-				class="btn btn-sm"
-				onclick={() => {
-					if (onOpenChange) {
-						onOpenChange({ open: false })
-					} else if (onclose) {
-						onclose()
-					}
-				}}
-			>
-				<Icons.X size={20} />
-			</button>
-		</header>
-		{#if description}
-			<p class="text-surface-600-400">{description}</p>
-		{/if}
-		<input
-			class="input w-full"
-			type="text"
-			placeholder="Search personas..."
-			bind:value={search}
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
 		/>
-		<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
-			<div class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap">
-				{#if filtered.length === 0}
-					<div class="text-surface-700-300 text-center">
-						No personas found
-					</div>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 relative max-h-[95dvh] w-[min(95vw,800px)] space-y-6 overflow-hidden p-6 shadow-xl"
+			>
+				<header class="flex items-center justify-between">
+					<h2 class="h2">{title}</h2>
+					<button
+						class="btn btn-sm"
+						onclick={() => {
+							if (onOpenChange) {
+								onOpenChange({ open: false })
+							} else if (onclose) {
+								onclose()
+							}
+						}}
+					>
+						<Icons.X size={20} />
+					</button>
+				</header>
+				{#if description}
+					<p class="text-surface-600-400">{description}</p>
 				{/if}
-				{#each filtered as p}
-					{#if p.id}
-						<div class="flex p-1 lg:basis-1/2">
-							<button
-								class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
-								onclick={() => {
-									if (returnFullPersona) {
-										// For EditChatForm - return full persona object
-										;(
-											onSelect as (
-												persona: Partial<SelectPersona> & {
-													id: number
-												}
-											) => void
-										)(
-											p as Partial<SelectPersona> & {
-												id: number
+				<input
+					class="input w-full"
+					type="text"
+					placeholder="Search personas..."
+					bind:value={search}
+				/>
+				<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
+					<div
+						class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap"
+					>
+						{#if filtered.length === 0}
+							<div class="text-surface-700-300 text-center">
+								No personas found
+							</div>
+						{/if}
+						{#each filtered as p}
+							{#if p.id}
+								<div class="flex p-1 lg:basis-1/2">
+									<button
+										class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
+										onclick={() => {
+											if (returnFullPersona) {
+												// For EditChatForm - return full persona object
+												;(
+													onSelect as (
+														persona: Partial<SelectPersona> & {
+															id: number
+														}
+													) => void
+												)(
+													p as Partial<SelectPersona> & {
+														id: number
+													}
+												)
+											} else {
+												// For chat page - return just ID
+												;(
+													onSelect as (
+														personaId: number
+													) => void
+												)(p.id!)
 											}
-										)
-									} else {
-										// For chat page - return just ID
-										;(
-											onSelect as (
-												personaId: number
-											) => void
-										)(p.id!)
-									}
-									if (onOpenChange) {
-										onOpenChange({ open: false })
-									} else if (onclose) {
-										onclose()
-									}
-								}}
-							>
-								<div class="w-fit">
-									<Avatar char={p} />
-								</div>
-								<div
-									class="relative flex w-0 min-w-0 flex-1 flex-col"
-								>
-									<div
-										class="w-full truncate text-left font-semibold"
+											if (onOpenChange) {
+												onOpenChange({ open: false })
+											} else if (onclose) {
+												onclose()
+											}
+										}}
 									>
-										{p.name}
-									</div>
-									<div
-										class="text-surface-700-300 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
-									>
-										{p.description || "No description"}
-									</div>
+										<div class="w-fit">
+											<Avatar char={p} />
+										</div>
+										<div
+											class="relative flex w-0 min-w-0 flex-1 flex-col"
+										>
+											<div
+												class="w-full truncate text-left font-semibold"
+											>
+												{p.name}
+											</div>
+											<div
+												class="text-surface-700-300 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
+											>
+												{p.description ||
+													"No description"}
+											</div>
+										</div>
+									</button>
 								</div>
-							</button>
-						</div>
-					{/if}
-				{/each}
-			</div>
-		</div>
+							{/if}
+						{/each}
+					</div>
+				</div>
 			</Dialog.Content>
 		</Dialog.Positioner>
 	</Portal>

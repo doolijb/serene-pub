@@ -17,9 +17,7 @@
 </script>
 
 {#if shouldShow && nextCharacter}
-	<li
-		class="my-2 flex min-w-0 items-center justify-between gap-2 px-4"
-	>
+	<li class="my-2 flex min-w-0 items-center justify-between gap-2 px-4">
 		<div class="flex min-w-0 flex-col">
 			<span class="text-surface-700-300 truncate text-sm font-medium">
 				{nextCharacter.nickname || nextCharacter.name}

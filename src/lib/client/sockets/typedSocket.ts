@@ -81,13 +81,25 @@ export type SocketEventMap = {
 		params: Sockets.Users.Create.Params
 		response: Sockets.Users.Create.Response
 	}
+	"users:create:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"users:update": {
 		params: Sockets.Users.Update.Params
 		response: Sockets.Users.Update.Response
 	}
+	"users:update:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"users:delete": {
 		params: Sockets.Users.Delete.Params
 		response: Sockets.Users.Delete.Response
+	}
+	"users:delete:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 
 	// Character events
@@ -123,6 +135,10 @@ export type SocketEventMap = {
 		params: Sockets.Characters.Delete.Params
 		response: Sockets.Characters.Delete.Response
 	}
+	"characters:delete:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"characters:importCard": {
 		params: Sockets.Characters.ImportCard.Params
 		response: Sockets.Characters.ImportCard.Response
@@ -152,8 +168,8 @@ export type SocketEventMap = {
 		response: Sockets.Characters.SearchLibrary.Response
 	}
 	"characters:searchLibrary:error": {
-		params: Sockets.ErrorResponse
-		response: Sockets.ErrorResponse
+		params: Sockets.SearchLibraryErrorResponse
+		response: Sockets.SearchLibraryErrorResponse
 	}
 	"characters:importFromLibrary": {
 		params: Sockets.Characters.ImportFromLibrary.Params
@@ -201,9 +217,17 @@ export type SocketEventMap = {
 		params: Sockets.Connections.Create.Params
 		response: Sockets.Connections.Create.Response
 	}
+	"connections:create:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"connections:update": {
 		params: Sockets.Connections.Update.Params
 		response: Sockets.Connections.Update.Response
+	}
+	"connections:update:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	"connections:delete": {
 		params: Sockets.Connections.Delete.Params
@@ -259,13 +283,17 @@ export type SocketEventMap = {
 		params: Sockets.Personas.Delete.Params
 		response: Sockets.Personas.Delete.Response
 	}
+	"personas:delete:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"personas:searchLibrary": {
 		params: Sockets.Personas.SearchLibrary.Params
 		response: Sockets.Personas.SearchLibrary.Response
 	}
 	"personas:searchLibrary:error": {
-		params: Sockets.ErrorResponse
-		response: Sockets.ErrorResponse
+		params: Sockets.SearchLibraryErrorResponse
+		response: Sockets.SearchLibraryErrorResponse
 	}
 	"personas:importCard": {
 		params: Sockets.Personas.ImportCard.Params
@@ -764,113 +792,117 @@ export type SocketEventMap = {
 
 	// KoboldCPP events
 	"koboldcpp:setBaseUrl": {
-		params: Sockets.KoboldCpp.SetBaseUrl.Params
-		response: Sockets.KoboldCpp.SetBaseUrl.Response
+		params: Sockets.KoboldCPP.SetBaseUrl.Params
+		response: Sockets.KoboldCPP.SetBaseUrl.Response
 	}
 	"koboldcpp:setModelsDir": {
-		params: Sockets.KoboldCpp.SetModelsDir.Params
-		response: Sockets.KoboldCpp.SetModelsDir.Response
+		params: Sockets.KoboldCPP.SetModelsDir.Params
+		response: Sockets.KoboldCPP.SetModelsDir.Response
 	}
 	"koboldcpp:searchModels": {
-		params: Sockets.KoboldCpp.SearchModels.Params
-		response: Sockets.KoboldCpp.SearchModels.Response
+		params: Sockets.KoboldCPP.SearchModels.Params
+		response: Sockets.KoboldCPP.SearchModels.Response
 	}
 	"koboldcpp:downloadModel": {
-		params: Sockets.KoboldCpp.DownloadModel.Params
-		response: Sockets.KoboldCpp.DownloadModel.Response
+		params: Sockets.KoboldCPP.DownloadModel.Params
+		response: Sockets.KoboldCPP.DownloadModel.Response
 	}
 	"koboldcpp:cancelDownload": {
-		params: Sockets.KoboldCpp.CancelDownload.Params
-		response: Sockets.KoboldCpp.CancelDownload.Response
+		params: Sockets.KoboldCPP.CancelDownload.Params
+		response: Sockets.KoboldCPP.CancelDownload.Response
 	}
 	"koboldcpp:getDownloadProgress": {
-		params: Sockets.KoboldCpp.GetDownloadProgress.Params
-		response: Sockets.KoboldCpp.GetDownloadProgress.Response
+		params: Sockets.KoboldCPP.GetDownloadProgress.Params
+		response: Sockets.KoboldCPP.GetDownloadProgress.Response
 	}
 	"koboldcpp:clearDownloadHistory": {
-		params: Sockets.KoboldCpp.ClearDownloadHistory.Params
-		response: Sockets.KoboldCpp.ClearDownloadHistory.Response
+		params: Sockets.KoboldCPP.ClearDownloadHistory.Params
+		response: Sockets.KoboldCPP.ClearDownloadHistory.Response
 	}
 	"koboldcpp:version": {
-		params: Sockets.KoboldCpp.Version.Params
-		response: Sockets.KoboldCpp.Version.Response
+		params: Sockets.KoboldCPP.Version.Params
+		response: Sockets.KoboldCPP.Version.Response
 	}
 	"koboldcpp:isUpdateAvailable": {
-		params: Sockets.KoboldCpp.IsUpdateAvailable.Params
-		response: Sockets.KoboldCpp.IsUpdateAvailable.Response
+		params: Sockets.KoboldCPP.IsUpdateAvailable.Params
+		response: Sockets.KoboldCPP.IsUpdateAvailable.Response
 	}
 	"koboldcpp:listModels": {
-		params: Sockets.KoboldCpp.ListModels.Params
-		response: Sockets.KoboldCpp.ListModels.Response
+		params: Sockets.KoboldCPP.ListModels.Params
+		response: Sockets.KoboldCPP.ListModels.Response
 	}
 	"koboldcpp:loadModel": {
-		params: Sockets.KoboldCpp.LoadModel.Params
-		response: Sockets.KoboldCpp.LoadModel.Response
+		params: Sockets.KoboldCPP.LoadModel.Params
+		response: Sockets.KoboldCPP.LoadModel.Response
 	}
 	"koboldcpp:connectModel": {
-		params: Sockets.KoboldCpp.ConnectModel.Params
-		response: Sockets.KoboldCpp.ConnectModel.Response
+		params: Sockets.KoboldCPP.ConnectModel.Params
+		response: Sockets.KoboldCPP.ConnectModel.Response
 	}
 	"koboldcpp:perf": {
-		params: Sockets.KoboldCpp.Perf.Params
-		response: Sockets.KoboldCpp.Perf.Response
+		params: Sockets.KoboldCPP.Perf.Params
+		response: Sockets.KoboldCPP.Perf.Response
 	}
 	"koboldcpp:getLoadedConfig": {
-		params: Sockets.KoboldCpp.GetLoadedConfig.Params
-		response: Sockets.KoboldCpp.GetLoadedConfig.Response
+		params: Sockets.KoboldCPP.GetLoadedConfig.Params
+		response: Sockets.KoboldCPP.GetLoadedConfig.Response
 	}
 	// Managed mode events
 	"koboldcpp:setManagedMode": {
-		params: Sockets.KoboldCpp.SetManagedMode.Params
-		response: Sockets.KoboldCpp.SetManagedMode.Response
+		params: Sockets.KoboldCPP.SetManagedMode.Params
+		response: Sockets.KoboldCPP.SetManagedMode.Response
 	}
 	"koboldcpp:setManagedPort": {
-		params: Sockets.KoboldCpp.SetManagedPort.Params
-		response: Sockets.KoboldCpp.SetManagedPort.Response
+		params: Sockets.KoboldCPP.SetManagedPort.Params
+		response: Sockets.KoboldCPP.SetManagedPort.Response
 	}
 	"koboldcpp:setManagedBinaryDir": {
-		params: Sockets.KoboldCpp.SetManagedBinaryDir.Params
-		response: Sockets.KoboldCpp.SetManagedBinaryDir.Response
+		params: Sockets.KoboldCPP.SetManagedBinaryDir.Params
+		response: Sockets.KoboldCPP.SetManagedBinaryDir.Response
+	}
+	"koboldcpp:setManagedAdminPassword": {
+		params: Sockets.KoboldCPP.SetManagedAdminPassword.Params
+		response: Sockets.KoboldCPP.SetManagedAdminPassword.Response
 	}
 	"koboldcpp:setModelTtl": {
-		params: Sockets.KoboldCpp.SetModelTtl.Params
-		response: Sockets.KoboldCpp.SetModelTtl.Response
+		params: Sockets.KoboldCPP.SetModelTtl.Params
+		response: Sockets.KoboldCPP.SetModelTtl.Response
 	}
 	"koboldcpp:listBinaryVariants": {
-		params: Sockets.KoboldCpp.ListBinaryVariants.Params
-		response: Sockets.KoboldCpp.ListBinaryVariants.Response
+		params: Sockets.KoboldCPP.ListBinaryVariants.Params
+		response: Sockets.KoboldCPP.ListBinaryVariants.Response
 	}
 	"koboldcpp:downloadBinary": {
-		params: Sockets.KoboldCpp.DownloadBinary.Params
-		response: Sockets.KoboldCpp.DownloadBinary.Response
+		params: Sockets.KoboldCPP.DownloadBinary.Params
+		response: Sockets.KoboldCPP.DownloadBinary.Response
 	}
 	"koboldcpp:getBinaryDownloadProgress": {
-		params: Sockets.KoboldCpp.GetBinaryDownloadProgress.Params
-		response: Sockets.KoboldCpp.GetBinaryDownloadProgress.Response
+		params: Sockets.KoboldCPP.GetBinaryDownloadProgress.Params
+		response: Sockets.KoboldCPP.GetBinaryDownloadProgress.Response
 	}
 	"koboldcpp:cancelBinaryDownload": {
-		params: Sockets.KoboldCpp.CancelBinaryDownload.Params
-		response: Sockets.KoboldCpp.CancelBinaryDownload.Response
+		params: Sockets.KoboldCPP.CancelBinaryDownload.Params
+		response: Sockets.KoboldCPP.CancelBinaryDownload.Response
 	}
 	"koboldcpp:startSubprocess": {
-		params: Sockets.KoboldCpp.StartSubprocess.Params
-		response: Sockets.KoboldCpp.StartSubprocess.Response
+		params: Sockets.KoboldCPP.StartSubprocess.Params
+		response: Sockets.KoboldCPP.StartSubprocess.Response
 	}
 	"koboldcpp:stopSubprocess": {
-		params: Sockets.KoboldCpp.StopSubprocess.Params
-		response: Sockets.KoboldCpp.StopSubprocess.Response
+		params: Sockets.KoboldCPP.StopSubprocess.Params
+		response: Sockets.KoboldCPP.StopSubprocess.Response
 	}
 	"koboldcpp:getSubprocessStatus": {
-		params: Sockets.KoboldCpp.GetSubprocessStatus.Params
-		response: Sockets.KoboldCpp.GetSubprocessStatus.Response
+		params: Sockets.KoboldCPP.GetSubprocessStatus.Params
+		response: Sockets.KoboldCPP.GetSubprocessStatus.Response
 	}
 	"koboldcpp:unloadModel": {
-		params: Sockets.KoboldCpp.UnloadModel.Params
-		response: Sockets.KoboldCpp.UnloadModel.Response
+		params: Sockets.KoboldCPP.UnloadModel.Params
+		response: Sockets.KoboldCPP.UnloadModel.Response
 	}
 	"koboldcpp:deleteModel": {
-		params: Sockets.KoboldCpp.DeleteModel.Params
-		response: Sockets.KoboldCpp.DeleteModel.Response
+		params: Sockets.KoboldCPP.DeleteModel.Params
+		response: Sockets.KoboldCPP.DeleteModel.Response
 	}
 	"koboldcpp:deleteModel:error": {
 		params: Sockets.ErrorResponse
@@ -905,8 +937,8 @@ export type SocketEventMap = {
 		response: Sockets.ErrorResponse
 	}
 	"koboldcpp:recommendedModels": {
-		params: Sockets.KoboldCpp.RecommendedModels.Params
-		response: Sockets.KoboldCpp.RecommendedModels.Response
+		params: Sockets.KoboldCPP.RecommendedModels.Params
+		response: Sockets.KoboldCPP.RecommendedModels.Response
 	}
 	"koboldcpp:recommendedModels:error": {
 		params: Sockets.ErrorResponse
@@ -914,15 +946,15 @@ export type SocketEventMap = {
 	}
 	"koboldcpp:downloadProgress": {
 		params: never
-		response: Sockets.KoboldCpp.DownloadProgress.Response
+		response: Sockets.KoboldCPP.DownloadProgress.Response
 	}
 	"koboldcpp:setSubprocessTimeout": {
-		params: Sockets.KoboldCpp.SetSubprocessTimeout.Params
-		response: Sockets.KoboldCpp.SetSubprocessTimeout.Response
+		params: Sockets.KoboldCPP.SetSubprocessTimeout.Params
+		response: Sockets.KoboldCPP.SetSubprocessTimeout.Response
 	}
 	"koboldcpp:listReleaseVersions": {
-		params: Sockets.KoboldCpp.ListReleaseVersions.Params
-		response: Sockets.KoboldCpp.ListReleaseVersions.Response
+		params: Sockets.KoboldCPP.ListReleaseVersions.Params
+		response: Sockets.KoboldCPP.ListReleaseVersions.Response
 	}
 	"koboldcpp:listReleaseVersions:error": {
 		params: Sockets.ErrorResponse
@@ -933,8 +965,8 @@ export type SocketEventMap = {
 		response: Sockets.ErrorResponse
 	}
 	"koboldcpp:checkManagedBinaryUpdate": {
-		params: Sockets.KoboldCpp.CheckManagedBinaryUpdate.Params
-		response: Sockets.KoboldCpp.CheckManagedBinaryUpdate.Response
+		params: Sockets.KoboldCPP.CheckManagedBinaryUpdate.Params
+		response: Sockets.KoboldCPP.CheckManagedBinaryUpdate.Response
 	}
 	"koboldcpp:checkManagedBinaryUpdate:error": {
 		params: Sockets.ErrorResponse
@@ -942,7 +974,7 @@ export type SocketEventMap = {
 	}
 	"koboldcpp:binaryDownloadProgress": {
 		params: never
-		response: Sockets.KoboldCpp.BinaryDownloadProgress.Response
+		response: Sockets.KoboldCPP.BinaryDownloadProgress.Response
 	}
 	"koboldcpp:startSubprocess:error": {
 		params: Sockets.ErrorResponse
@@ -950,7 +982,7 @@ export type SocketEventMap = {
 	}
 	"koboldcpp:subprocessStatus": {
 		params: never
-		response: Sockets.KoboldCpp.SubprocessStatus.Response
+		response: Sockets.KoboldCPP.SubprocessStatus.Response
 	}
 	"koboldcpp:setManagedMode:error": {
 		params: Sockets.ErrorResponse
@@ -970,9 +1002,17 @@ export type SocketEventMap = {
 		params: Sockets.Ollama.DeleteModel.Params
 		response: Sockets.Ollama.DeleteModel.Response
 	}
+	"ollama:deleteModel:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"ollama:connectModel": {
 		params: Sockets.Ollama.ConnectModel.Params
 		response: Sockets.Ollama.ConnectModel.Response
+	}
+	"ollama:connectModel:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	"ollama:pullModel": {
 		params: Sockets.Ollama.PullModel.Params
@@ -981,6 +1021,10 @@ export type SocketEventMap = {
 	"ollama:version": {
 		params: Sockets.Ollama.Version.Params
 		response: Sockets.Ollama.Version.Response
+	}
+	"ollama:version:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	"ollama:setBaseUrl:error": {
 		params: Sockets.ErrorResponse
@@ -1005,6 +1049,10 @@ export type SocketEventMap = {
 	"ollama:searchAvailableModels": {
 		params: Sockets.Ollama.SearchAvailableModels.Params
 		response: Sockets.Ollama.SearchAvailableModels.Response
+	}
+	"ollama:searchAvailableModels:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	"ollama:clearDownloadHistory": {
 		params: Sockets.Ollama.ClearDownloadHistory.Params
@@ -1052,6 +1100,10 @@ export type SocketEventMap = {
 		params: Sockets.SystemSettings.UpdateAccountsEnabled.Params
 		response: Sockets.SystemSettings.UpdateAccountsEnabled.Response
 	}
+	"systemSettings:updateAccountsEnabled:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"systemSettings:updateSummarizationEnabled": {
 		params: Sockets.SystemSettings.UpdateSummarizationEnabled.Params
 		response: Sockets.SystemSettings.UpdateSummarizationEnabled.Response
@@ -1085,6 +1137,10 @@ export type SocketEventMap = {
 	"vectorization:setModel": {
 		params: Sockets.Vectorization.SetModel.Params
 		response: Sockets.Vectorization.SetModel.Response
+	}
+	"vectorization:setApiConfig": {
+		params: Sockets.Vectorization.SetApiConfig.Params
+		response: Sockets.Vectorization.SetApiConfig.Response
 	}
 	"vectorization:startQueue": {
 		params: Sockets.Vectorization.StartQueue.Params
@@ -1536,7 +1592,9 @@ export type SocketEventMap = {
 		response: Sockets.NarrativeGraph.ApplyProposal.Response
 	}
 	"narrativeGraph:updateNode": {
-		params: { node: Partial<Sockets.NarrativeGraph.NarrativeNode> & { id: number } }
+		params: {
+			node: Partial<Sockets.NarrativeGraph.NarrativeNode> & { id: number }
+		}
 		response: { node: Sockets.NarrativeGraph.NarrativeNode }
 	}
 	"narrativeGraph:deleteNode": {
@@ -1544,7 +1602,11 @@ export type SocketEventMap = {
 		response: { success: string }
 	}
 	"narrativeGraph:updateRelationship": {
-		params: { relationship: Partial<Sockets.NarrativeGraph.NarrativeRelationship> & { id: number } }
+		params: {
+			relationship: Partial<Sockets.NarrativeGraph.NarrativeRelationship> & {
+				id: number
+			}
+		}
 		response: { relationship: Sockets.NarrativeGraph.NarrativeRelationship }
 	}
 	"narrativeGraph:deleteRelationship": {
@@ -1609,13 +1671,19 @@ export type SocketEventMap = {
 	"setup:get": {
 		params: Record<string, never>
 		response: {
-			setup: { summarizationStepComplete: boolean; ragStepComplete: boolean } | null
+			setup: {
+				summarizationStepComplete: boolean
+				ragStepComplete: boolean
+			} | null
 		}
 	}
 	"setup:markComplete": {
 		params: { step: "summarization" | "rag" }
 		response: {
-			setup: { summarizationStepComplete: boolean; ragStepComplete: boolean }
+			setup: {
+				summarizationStepComplete: boolean
+				ragStepComplete: boolean
+			}
 		}
 	}
 
@@ -1626,7 +1694,18 @@ export type SocketEventMap = {
 	}
 	"taskQueue:update": {
 		params: never
-		response: { tasks: Array<{ id: string; taskType: string; connectionName: string; samplingName: string; startedAt: string; chatId?: number; lorebookId?: number; label?: string }> }
+		response: {
+			tasks: Array<{
+				id: string
+				taskType: string
+				connectionName: string
+				samplingName: string
+				startedAt: string
+				chatId?: number
+				lorebookId?: number
+				label?: string
+			}>
+		}
 	}
 
 	// Activity events

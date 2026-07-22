@@ -42,14 +42,22 @@ declare global {
 		onMobilePanelClose?: () => Promise<boolean>
 		leftNav: Record<
 			string,
-			| { icon: Component<Icons.IconProps, {}, "">; title: string; imgSrc?: undefined }
+			| {
+					icon: Component<Icons.IconProps, {}, "">
+					title: string
+					imgSrc?: undefined
+			  }
 			// KoboldCPP's nav entry uses an image mask instead of a lucide icon
 			// component — see the `item.imgSrc` branch in Layout.svelte's mobile nav.
 			| { icon?: undefined; imgSrc: string; title: string }
 		>
 		rightNav: Record<
 			string,
-			| { icon: Component<Icons.IconProps, {}, "">; title: string; imgSrc?: undefined }
+			| {
+					icon: Component<Icons.IconProps, {}, "">
+					title: string
+					imgSrc?: undefined
+			  }
 			| { icon?: undefined; imgSrc: string; title: string }
 		>
 		digest: {
@@ -107,10 +115,12 @@ declare global {
 	interface KoboldCppSettingsCtx {
 		// koboldCppManagedAdminPassword is never sent to the client (server-only
 		// secret) — see the `columns` filter in systemSettingsGet.
+		// koboldCppManagedAdminPasswordSet indicates whether one is already
+		// stored, without revealing it, for showing a bullet placeholder.
 		settings?: Omit<
 			SelectKoboldCppSettings,
 			"id" | "koboldCppManagedAdminPassword"
-		>
+		> & { koboldCppManagedAdminPasswordSet: boolean }
 	}
 
 	interface UserSettingsCtx {
@@ -171,7 +181,11 @@ declare global {
 		activeBuild: GraphBuildState | null
 		/** Set by notification dropdown to trigger a GraphManager to reopen its build modal */
 		reopenLorebookId: number | null
-		startBuild: (params: { lorebookId: number; mode: "replace" | "extend"; lorebookLabel?: string }) => void
+		startBuild: (params: {
+			lorebookId: number
+			mode: "replace" | "extend"
+			lorebookLabel?: string
+		}) => void
 		clearBuild: () => void
 	}
 

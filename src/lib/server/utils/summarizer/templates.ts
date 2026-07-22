@@ -201,15 +201,20 @@ export function buildCharacterExtractionPrompt(
 ): SummaryPrompt {
 	let castBlock = ""
 	if (knownCast && knownCast.length > 0) {
-		const lines = knownCast.map(e => {
-			const aliasPart = e.aliases.length > 0 ? ` (aliases: ${e.aliases.join(", ")})` : ""
+		const lines = knownCast.map((e) => {
+			const aliasPart =
+				e.aliases.length > 0
+					? ` (aliases: ${e.aliases.join(", ")})`
+					: ""
 			return `- ${e.name}${aliasPart}`
 		})
 		castBlock = `\nKnown characters in this story (reference only — do NOT assume any are present):\n${lines.join("\n")}\n`
 	}
 
 	return {
-		systemPrompt: systemPromptOverride?.trim() || DEFAULT_CHARACTER_EXTRACTION_SYSTEM_PROMPT,
+		systemPrompt:
+			systemPromptOverride?.trim() ||
+			DEFAULT_CHARACTER_EXTRACTION_SYSTEM_PROMPT,
 		userPrompt: `Scene summary:
 ${sceneSummary}
 ${castBlock}

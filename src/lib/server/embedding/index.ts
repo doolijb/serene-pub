@@ -62,11 +62,14 @@ function resetTtlTimer() {
 	if (ttlTimer) clearTimeout(ttlTimer)
 	ttlTimer = null
 	if (!pipeline || ttlMinutes <= 0) return
-	ttlTimer = setTimeout(() => {
-		ttlTimer = null
-		unloadEmbeddingModel()
-		console.log(`[embedding] Model unloaded after ${ttlMinutes}m idle`)
-	}, ttlMinutes * 60 * 1000)
+	ttlTimer = setTimeout(
+		() => {
+			ttlTimer = null
+			unloadEmbeddingModel()
+			console.log(`[embedding] Model unloaded after ${ttlMinutes}m idle`)
+		},
+		ttlMinutes * 60 * 1000
+	)
 }
 
 export type DownloadProgressCallback = (progress: {
@@ -84,7 +87,8 @@ export async function loadEmbeddingModel(
 	modelId: string,
 	onProgress?: DownloadProgressCallback
 ): Promise<void> {
-	if (activeBackend === "local" && loadedModelId === modelId && pipeline) return
+	if (activeBackend === "local" && loadedModelId === modelId && pipeline)
+		return
 	if (isLoading) throw new Error("Model is already loading")
 
 	const modelDef = findModel(modelId)
@@ -185,13 +189,18 @@ export async function activateApiEmbedding(
 		loadedModelId = modelId
 		activeBackend = "api"
 		onProgress?.({ modelId, status: "ready" })
-		console.log(`[embedding] API backend activated: ${modelId} (${dimensions}d)`)
+		console.log(
+			`[embedding] API backend activated: ${modelId} (${dimensions}d)`
+		)
 		resetTtlTimer()
 		return { dimensions }
 	} catch (err: any) {
 		loadError = err?.message ?? "Unknown error validating embeddings API"
 		onProgress?.({ modelId, status: "error" })
-		console.error(`[embedding] Failed to activate API backend ${modelId}:`, err)
+		console.error(
+			`[embedding] Failed to activate API backend ${modelId}:`,
+			err
+		)
 		throw err
 	} finally {
 		isLoading = false
@@ -200,7 +209,10 @@ export async function activateApiEmbedding(
 
 /** Unload the current model/API config and free memory */
 export function unloadEmbeddingModel(): void {
-	if (ttlTimer) { clearTimeout(ttlTimer); ttlTimer = null }
+	if (ttlTimer) {
+		clearTimeout(ttlTimer)
+		ttlTimer = null
+	}
 	pipeline = null
 	loadedModelId = null
 	apiConfig = null
@@ -222,8 +234,10 @@ export function getLoadedModelId(): string | null {
  * skip RagInfillEngine rather than surface broken/empty RAG context.
  */
 export function isModelReady(): boolean {
-	if (activeBackend === "local") return pipeline !== null && loadedModelId !== null
-	if (activeBackend === "api") return apiConfig !== null && loadedModelId !== null
+	if (activeBackend === "local")
+		return pipeline !== null && loadedModelId !== null
+	if (activeBackend === "api")
+		return apiConfig !== null && loadedModelId !== null
 	return false
 }
 
@@ -349,13 +363,16 @@ export function cosineSimilarity(a: number[], b: number[]): number {
  */
 export function rankBySimilarity<T>(
 	queryEmbedding: number[],
-	items: Array<T & { embedding: number[] | null; embeddingModel?: string | null }>,
+	items: Array<
+		T & { embedding: number[] | null; embeddingModel?: string | null }
+	>,
 	opts?: { topK?: number; modelId?: string }
 ): Array<T & { score: number }> {
 	const scored = items
 		.filter((item) => {
 			if (item.embedding == null) return false
-			if (opts?.modelId && item.embeddingModel !== opts.modelId) return false
+			if (opts?.modelId && item.embeddingModel !== opts.modelId)
+				return false
 			return true
 		})
 		.map((item) => ({

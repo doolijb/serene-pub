@@ -5,7 +5,6 @@
 	import { slide } from "svelte/transition"
 	import Avatar from "../Avatar.svelte"
 
-
 	type EntityType = "characters" | "personas" | "chats" | "lorebooks"
 
 	interface EntityResult {
@@ -47,7 +46,6 @@
 		onSelectionComplete
 	}: Props = $props()
 
-
 	const socket = useTypedSocket()
 
 	let isExpanded = $state(false)
@@ -59,7 +57,6 @@
 
 	// Auto-expand when pending selection appears
 	$effect(() => {
-
 		if (pendingSelection && pendingSelection.results.length > 0) {
 			isExpanded = true
 		} else {
@@ -112,7 +109,6 @@
 
 	// Get linked entities organized by type
 	const linkedEntities = $derived.by(() => {
-
 		const entities: Record<EntityType, LinkedEntity[]> = {
 			characters: [],
 			personas: [],
@@ -155,8 +151,7 @@
 		Object.values(linkedEntities).reduce((sum, arr) => sum + arr.length, 0)
 	)
 
-	$effect(() => {
-	})
+	$effect(() => {})
 
 	// Count pending selections
 	const hasPendingSelection = $derived(
@@ -268,7 +263,6 @@
 	async function loadLinkedCharacters(characterIds: number[]) {
 		if (!socket || !characterIds.length) return
 
-
 		// Check if we already have all the characters loaded
 		const allLoaded = characterIds.every((id) => loadedCharacters.has(id))
 		if (allLoaded) {
@@ -283,7 +277,6 @@
 					const relevantChars = response.characterList.filter(
 						(char: any) => characterIds.includes(char.id)
 					)
-
 
 					// Update the map with only id, name, nickname, avatar (lightweight)
 					const newMap = new Map(loadedCharacters)
@@ -531,12 +524,22 @@
 	}}
 >
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-h-[95dvh] relative overflow-hidden w-[min(95vw,800px)]">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 relative max-h-[95dvh] w-[min(95vw,800px)] space-y-6 overflow-hidden p-6 shadow-xl"
+			>
 				<header class="flex items-center justify-between">
 					<h2 class="h2">Add Character</h2>
-					<button class="btn btn-sm" aria-label="Close" onclick={closeAddDataModal}>
+					<button
+						class="btn btn-sm"
+						aria-label="Close"
+						onclick={closeAddDataModal}
+					>
 						<Icons.X size={20} />
 					</button>
 				</header>
@@ -549,9 +552,13 @@
 				/>
 
 				<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
-					<div class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap">
+					<div
+						class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap"
+					>
 						{#if filteredCharacters.length === 0}
-							<div class="text-surface-700-300 w-full py-8 text-center">
+							<div
+								class="text-surface-700-300 w-full py-8 text-center"
+							>
 								{#if isLoading}
 									Loading characters...
 								{:else if availableCharacters.length === 0}
@@ -565,7 +572,8 @@
 							<div class="flex p-1 lg:basis-1/2">
 								<button
 									class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
-									onclick={() => handleCharacterSelect(character)}
+									onclick={() =>
+										handleCharacterSelect(character)}
 								>
 									<div class="w-fit">
 										<Avatar char={character} />
@@ -576,7 +584,8 @@
 										<div
 											class="w-full truncate text-left font-semibold"
 										>
-											{character.nickname || character.name}
+											{character.nickname ||
+												character.name}
 										</div>
 										<div
 											class="text-surface-700-300 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
@@ -604,9 +613,15 @@
 	}}
 >
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-md">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 max-w-md space-y-6 p-6 shadow-xl"
+			>
 				<header class="flex justify-between">
 					<h2 class="h2">Confirm</h2>
 				</header>
@@ -618,10 +633,16 @@
 					</p>
 				</article>
 				<footer class="flex justify-end gap-4">
-					<button class="btn preset-filled-surface-500" onclick={cancelUnlink}>
+					<button
+						class="btn preset-filled-surface-500"
+						onclick={cancelUnlink}
+					>
 						Cancel
 					</button>
-					<button class="btn preset-filled-error-500" onclick={confirmUnlink}>
+					<button
+						class="btn preset-filled-error-500"
+						onclick={confirmUnlink}
+					>
 						Unlink
 					</button>
 				</footer>

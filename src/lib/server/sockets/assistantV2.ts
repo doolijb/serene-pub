@@ -18,7 +18,10 @@ import { ChatTypes } from "$lib/shared/constants/ChatTypes"
 import { broadcastToChatUsers } from "./utils/broadcastHelpers"
 import { v4 as uuidv4 } from "uuid"
 import { llmQueue, isQueueCancellation } from "$lib/server/utils/llmQueue"
-import { persistGenerationStage, persistGenerationErrorRow } from "$lib/server/utils/generationStatus"
+import {
+	persistGenerationStage,
+	persistGenerationErrorRow
+} from "$lib/server/utils/generationStatus"
 
 export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 	console.log("[AssistantV2] Registering handlers for user", userId)
@@ -29,7 +32,9 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 	socket.on(
 		"assistant:sendMessageV2",
 		async (data: { chatId: number; content: string }) => {
-			let assistantMessage: typeof schema.chatMessages.$inferSelect | undefined
+			let assistantMessage:
+				| typeof schema.chatMessages.$inferSelect
+				| undefined
 			const { chatId } = data
 			try {
 				const { content } = data
@@ -180,7 +185,9 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 					await getUserConfigurations(userId)
 
 				if (!connection) {
-					throw new Error("No AI connection configured. Please set up a connection first.")
+					throw new Error(
+						"No AI connection configured. Please set up a connection first."
+					)
 				}
 
 				// 5. Create adapter instance
@@ -188,7 +195,8 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 				// Honor the connection's own configured tokenizer — see the
 				// identical fix/comment in generateResponse.ts.
 				const tokenCounter = new TokenCounters(
-					(connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
+					(connection as any).tokenCounter ||
+						TokenCounterOptions.ESTIMATE
 				)
 				const tokenLimit = 4096
 				const contextThresholdPercent = 0.8
@@ -207,8 +215,11 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 					...chat,
 					chatCharacters: (chat.chatCharacters ?? [])
 						.filter(
-							(cc): cc is typeof cc & { character: SelectCharacter } =>
-								cc.character !== null
+							(
+								cc
+							): cc is typeof cc & {
+								character: SelectCharacter
+							} => cc.character !== null
 						)
 						.map((cc) => ({
 							...cc,
@@ -266,10 +277,16 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 						label: "assistant",
 						userId,
 						preflight: (signal) => adapter.preflight(signal),
-						execute: () => assistantService.generateResponse(trimmedContent),
+						execute: () =>
+							assistantService.generateResponse(trimmedContent),
 						onCancel: () => adapter.abort(),
 						onStatusChange: (status) =>
-							persistGenerationStage(assistantMessage!.id, chatId, io, status)
+							persistGenerationStage(
+								assistantMessage!.id,
+								chatId,
+								io,
+								status
+							)
 					},
 					queueItemId
 				)
@@ -344,7 +361,11 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 							isGenerating: false,
 							generationStage: null,
 							queueItemId: null,
-							error: { message: result.error || "Failed to generate response" },
+							error: {
+								message:
+									result.error ||
+									"Failed to generate response"
+							},
 							metadata: { error: true } as any
 						})
 						.where(eq(schema.chatMessages.id, assistantMessage.id))
@@ -374,7 +395,12 @@ export function handleAssistantV2(io: Server, socket: Socket, userId: number) {
 					return
 				}
 				if (assistantMessage) {
-					await persistGenerationErrorRow(io, chatId, assistantMessage.id, error)
+					await persistGenerationErrorRow(
+						io,
+						chatId,
+						assistantMessage.id,
+						error
+					)
 				}
 				socket.emit("assistant:errorV2", {
 					chatId,

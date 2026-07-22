@@ -1,7 +1,10 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, desc, eq, inArray } from "drizzle-orm"
-import type { NodeVisibility, RelationshipVisibility } from "$lib/server/db/schema"
+import type {
+	NodeVisibility,
+	RelationshipVisibility
+} from "$lib/server/db/schema"
 
 interface RelRow {
 	fromNodeId: number
@@ -23,27 +26,37 @@ async function fetchNodeMap(nodeIds: number[]) {
 	if (nodeIds.length === 0) return new Map<number, NodeInfo>()
 	const nodes = await db.query.narrativeNodes.findMany({
 		where: inArray(schema.narrativeNodes.id, nodeIds),
-		columns: { id: true, name: true, nodeState: true, nodeVisibility: true, parentNodeId: true, aliases: true }
+		columns: {
+			id: true,
+			name: true,
+			nodeState: true,
+			nodeVisibility: true,
+			parentNodeId: true,
+			aliases: true
+		}
 	})
-	return new Map(nodes.map((n) => [n.id, {
-		name: n.name,
-		nodeState: n.nodeState,
-		nodeVisibility: n.nodeVisibility,
-		parentNodeId: n.parentNodeId,
-		aliases: n.aliases ?? []
-	}]))
+	return new Map(
+		nodes.map((n) => [
+			n.id,
+			{
+				name: n.name,
+				nodeState: n.nodeState,
+				nodeVisibility: n.nodeVisibility,
+				parentNodeId: n.parentNodeId,
+				aliases: n.aliases ?? []
+			}
+		])
+	)
 }
 
 function nodeName(info: NodeInfo | undefined, fallback: string): string {
 	if (!info) return fallback
-	if (info.aliases.length > 0) return `${info.name} (a.k.a. ${info.aliases.join(", ")})`
+	if (info.aliases.length > 0)
+		return `${info.name} (a.k.a. ${info.aliases.join(", ")})`
 	return info.name
 }
 
-function formatRel(
-	r: RelRow,
-	nodeMap: Map<number, NodeInfo>
-): string {
+function formatRel(r: RelRow, nodeMap: Map<number, NodeInfo>): string {
 	const from = nodeMap.get(r.fromNodeId)?.name ?? `node#${r.fromNodeId}`
 	const to = nodeMap.get(r.toNodeId)?.name ?? `node#${r.toNodeId}`
 	return `${from} → ${to} [${r.relationshipType}${r.visibility !== "public" ? `, ${r.visibility}` : ""}]: ${r.description}`
@@ -99,33 +112,54 @@ export async function buildGraphContext(params: {
 		)
 	})
 
-	const l1NodeIds = [...new Set([...speakerRels.map((r) => r.fromNodeId), ...speakerRels.map((r) => r.toNodeId)])]
+	const l1NodeIds = [
+		...new Set([
+			...speakerRels.map((r) => r.fromNodeId),
+			...speakerRels.map((r) => r.toNodeId)
+		])
+	]
 	const l1NodeMap = await fetchNodeMap(l1NodeIds)
 
 	// For alias-aware filtering: collect parentNodeIds of alias targets
 	const aliasTargetParentIds = new Set<number>()
 	for (const r of speakerRels) {
 		const toNode = l1NodeMap.get(r.toNodeId)
-		if (toNode?.parentNodeId != null) aliasTargetParentIds.add(toNode.parentNodeId)
+		if (toNode?.parentNodeId != null)
+			aliasTargetParentIds.add(toNode.parentNodeId)
 	}
 	// Check which of those parents already have a direct rel from speaker
-	const speakerToParentRels = aliasTargetParentIds.size > 0
-		? await db.query.narrativeRelationships.findMany({
-			where: and(
-				eq(schema.narrativeRelationships.lorebookId, lorebookId),
-				eq(schema.narrativeRelationships.fromNodeId, speakerNodeId),
-				inArray(schema.narrativeRelationships.toNodeId, [...aliasTargetParentIds])
-			),
-			columns: { toNodeId: true }
-		})
-		: []
-	const parentWithDirectRel = new Set(speakerToParentRels.map((r) => r.toNodeId))
+	const speakerToParentRels =
+		aliasTargetParentIds.size > 0
+			? await db.query.narrativeRelationships.findMany({
+					where: and(
+						eq(
+							schema.narrativeRelationships.lorebookId,
+							lorebookId
+						),
+						eq(
+							schema.narrativeRelationships.fromNodeId,
+							speakerNodeId
+						),
+						inArray(schema.narrativeRelationships.toNodeId, [
+							...aliasTargetParentIds
+						])
+					),
+					columns: { toNodeId: true }
+				})
+			: []
+	const parentWithDirectRel = new Set(
+		speakerToParentRels.map((r) => r.toNodeId)
+	)
 
 	const l1Rels = speakerRels.filter((r) => {
 		const toNode = l1NodeMap.get(r.toNodeId)
 		if (toNode?.nodeVisibility === "hidden") return false
 		// Suppress alias rel if speaker already has a direct rel to the real (parent) node
-		if (toNode?.parentNodeId != null && parentWithDirectRel.has(toNode.parentNodeId)) return false
+		if (
+			toNode?.parentNodeId != null &&
+			parentWithDirectRel.has(toNode.parentNodeId)
+		)
+			return false
 		return true
 	})
 
@@ -146,37 +180,55 @@ export async function buildGraphContext(params: {
 		.filter((id): id is number => id !== null && id !== speakerCharacterId)
 	const chatPersonaIds = chatPersonas
 		.map((p) => p.personaId)
-		.filter((id): id is number => id !== null && id !== (speakerPersonaId ?? -1))
+		.filter(
+			(id): id is number => id !== null && id !== (speakerPersonaId ?? -1)
+		)
 
 	let l2Rels: RelRow[] = []
 	if (chatCharIds.length > 0 || chatPersonaIds.length > 0) {
-		const charConditions = [eq(schema.lorebookBindings.lorebookId, lorebookId)]
+		const charConditions = [
+			eq(schema.lorebookBindings.lorebookId, lorebookId)
+		]
 		if (chatCharIds.length > 0)
-			charConditions.push(inArray(schema.lorebookBindings.characterId, chatCharIds))
+			charConditions.push(
+				inArray(schema.lorebookBindings.characterId, chatCharIds)
+			)
 		const charBindings = await db.query.lorebookBindings.findMany({
 			where: and(...charConditions),
 			columns: { id: true }
 		})
-		const personaBindings = chatPersonaIds.length > 0
-			? await db.query.lorebookBindings.findMany({
-				where: and(
-					eq(schema.lorebookBindings.lorebookId, lorebookId),
-					inArray(schema.lorebookBindings.personaId, chatPersonaIds)
-				),
-				columns: { id: true }
-			})
-			: []
-		const participantBindingIds = [...charBindings, ...personaBindings].map((b) => b.id)
-		const participantParentNodes = participantBindingIds.length > 0
-			? await db.query.narrativeNodes.findMany({
-				where: and(
-					eq(schema.narrativeNodes.lorebookId, lorebookId),
-					inArray(schema.narrativeNodes.lorebookBindingId, participantBindingIds)
-				),
-				columns: { id: true }
-			})
-			: []
-		const participantParentIds = participantParentNodes.map((n) => n.id).filter((id) => id !== speakerNodeId)
+		const personaBindings =
+			chatPersonaIds.length > 0
+				? await db.query.lorebookBindings.findMany({
+						where: and(
+							eq(schema.lorebookBindings.lorebookId, lorebookId),
+							inArray(
+								schema.lorebookBindings.personaId,
+								chatPersonaIds
+							)
+						),
+						columns: { id: true }
+					})
+				: []
+		const participantBindingIds = [...charBindings, ...personaBindings].map(
+			(b) => b.id
+		)
+		const participantParentNodes =
+			participantBindingIds.length > 0
+				? await db.query.narrativeNodes.findMany({
+						where: and(
+							eq(schema.narrativeNodes.lorebookId, lorebookId),
+							inArray(
+								schema.narrativeNodes.lorebookBindingId,
+								participantBindingIds
+							)
+						),
+						columns: { id: true }
+					})
+				: []
+		const participantParentIds = participantParentNodes
+			.map((n) => n.id)
+			.filter((id) => id !== speakerNodeId)
 
 		if (participantParentIds.length > 0) {
 			// Fetch direct rels from participant parent nodes → speaker
@@ -184,47 +236,82 @@ export async function buildGraphContext(params: {
 				where: and(
 					eq(schema.narrativeRelationships.lorebookId, lorebookId),
 					eq(schema.narrativeRelationships.toNodeId, speakerNodeId),
-					inArray(schema.narrativeRelationships.fromNodeId, participantParentIds),
-					inArray(schema.narrativeRelationships.visibility, ["acknowledged", "public"] as RelationshipVisibility[])
+					inArray(
+						schema.narrativeRelationships.fromNodeId,
+						participantParentIds
+					),
+					inArray(schema.narrativeRelationships.visibility, [
+						"acknowledged",
+						"public"
+					] as RelationshipVisibility[])
 				)
 			})
 			const coveredByDirect = new Set(directRels.map((r) => r.fromNodeId))
 			l2Rels = [...directRels]
 
 			// For participants with no direct rel, check their alias children
-			const needsFallback = participantParentIds.filter((id) => !coveredByDirect.has(id))
+			const needsFallback = participantParentIds.filter(
+				(id) => !coveredByDirect.has(id)
+			)
 			if (needsFallback.length > 0) {
 				const aliasChildren = await db.query.narrativeNodes.findMany({
 					where: and(
 						eq(schema.narrativeNodes.lorebookId, lorebookId),
-						inArray(schema.narrativeNodes.parentNodeId, needsFallback)
+						inArray(
+							schema.narrativeNodes.parentNodeId,
+							needsFallback
+						)
 					),
 					columns: { id: true }
 				})
 				const aliasChildIds = aliasChildren.map((n) => n.id)
 				if (aliasChildIds.length > 0) {
-					const aliasRels = await db.query.narrativeRelationships.findMany({
-						where: and(
-							eq(schema.narrativeRelationships.lorebookId, lorebookId),
-							eq(schema.narrativeRelationships.toNodeId, speakerNodeId),
-							inArray(schema.narrativeRelationships.fromNodeId, aliasChildIds),
-							inArray(schema.narrativeRelationships.visibility, ["acknowledged", "public"] as RelationshipVisibility[])
-						)
-					})
+					const aliasRels =
+						await db.query.narrativeRelationships.findMany({
+							where: and(
+								eq(
+									schema.narrativeRelationships.lorebookId,
+									lorebookId
+								),
+								eq(
+									schema.narrativeRelationships.toNodeId,
+									speakerNodeId
+								),
+								inArray(
+									schema.narrativeRelationships.fromNodeId,
+									aliasChildIds
+								),
+								inArray(
+									schema.narrativeRelationships.visibility,
+									[
+										"acknowledged",
+										"public"
+									] as RelationshipVisibility[]
+								)
+							)
+						})
 					l2Rels.push(...aliasRels)
 				}
 			}
 		}
 	}
 
-	const l2NodeIds = [...new Set([...l2Rels.map((r) => r.fromNodeId), ...l2Rels.map((r) => r.toNodeId)])]
+	const l2NodeIds = [
+		...new Set([
+			...l2Rels.map((r) => r.fromNodeId),
+			...l2Rels.map((r) => r.toNodeId)
+		])
+	]
 	const l2NodeMap = await fetchNodeMap(l2NodeIds)
 
 	// ── Layer 3: legendary nodes (nodeVisibility = "legendary") + public relationships ──
 	const legendaryNodes = await db.query.narrativeNodes.findMany({
 		where: and(
 			eq(schema.narrativeNodes.lorebookId, lorebookId),
-			eq(schema.narrativeNodes.nodeVisibility, "legendary" as NodeVisibility)
+			eq(
+				schema.narrativeNodes.nodeVisibility,
+				"legendary" as NodeVisibility
+			)
 		),
 		orderBy: desc(schema.narrativeNodes.updatedAt),
 		limit: 5
@@ -236,10 +323,15 @@ export async function buildGraphContext(params: {
 			where: and(
 				eq(schema.narrativeRelationships.lorebookId, lorebookId),
 				eq(schema.narrativeRelationships.fromNodeId, node.id),
-				eq(schema.narrativeRelationships.visibility, "public" as RelationshipVisibility)
+				eq(
+					schema.narrativeRelationships.visibility,
+					"public" as RelationshipVisibility
+				)
 			)
 		})
-		const l3NodeIds = [...new Set([node.id, ...pubRels.map((r) => r.toNodeId)])]
+		const l3NodeIds = [
+			...new Set([node.id, ...pubRels.map((r) => r.toNodeId)])
+		]
 		const l3NodeMap = await fetchNodeMap(l3NodeIds)
 		l3NodeMap.set(node.id, {
 			name: node.name,
@@ -248,7 +340,9 @@ export async function buildGraphContext(params: {
 			parentNodeId: null,
 			aliases: node.aliases ?? []
 		})
-		const relLines = pubRels.map((r) => `  - ${formatRel(r, l3NodeMap)}`).join("\n")
+		const relLines = pubRels
+			.map((r) => `  - ${formatRel(r, l3NodeMap)}`)
+			.join("\n")
 		const header = nodeName(l3NodeMap.get(node.id), node.name)
 		const entry = node.summary
 			? `[${header}] ${node.summary}${relLines ? "\n" + relLines : ""}`
@@ -278,7 +372,9 @@ export async function buildGraphContext(params: {
 	}
 
 	if (legendaryEntries.length > 0) {
-		sections.push(`[Legendary / historical figures]\n` + legendaryEntries.join("\n"))
+		sections.push(
+			`[Legendary / historical figures]\n` + legendaryEntries.join("\n")
+		)
 	}
 
 	if (sections.length === 0) return null

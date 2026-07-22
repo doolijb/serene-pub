@@ -177,8 +177,9 @@
 	// "characters:list"/"personas:list") — Partial<...> reflects the latter.
 	let selectedCharacters: (Partial<SelectCharacter> & { id: number })[] =
 		$state([])
-	let selectedPersonas: (Partial<SelectPersona> & { id: number })[] =
-		$state([])
+	let selectedPersonas: (Partial<SelectPersona> & { id: number })[] = $state(
+		[]
+	)
 	let selectedGuests: NonNullable<
 		NonNullable<Sockets.Chats.Get.Response["chat"]>["chatGuests"]
 	> = $state([])
@@ -196,9 +197,7 @@
 	// same restriction enforced server-side in chatsUpdateHandler, which
 	// silently ignores those fields for non-owners regardless of what this
 	// form sends, so this is UX clarity, not the actual security boundary.
-	let isGuest: boolean = $derived(
-		!!chat && chat.userId !== userCtx.user?.id
-	)
+	let isGuest: boolean = $derived(!!chat && chat.userId !== userCtx.user?.id)
 
 	// Filtered tags for suggestions
 	let filteredTags = $derived.by(() => {
@@ -286,7 +285,9 @@
 		}
 	})
 
-	function handleAddCharacter(char: Partial<SelectCharacter> & { id: number }) {
+	function handleAddCharacter(
+		char: Partial<SelectCharacter> & { id: number }
+	) {
 		if (!selectedCharacters.some((c) => c.id === char.id))
 			selectedCharacters = [...selectedCharacters, char]
 		showCharacterModal = false
@@ -373,15 +374,14 @@
 			selectedPersonas.length === 0
 		)
 			return
-		
+
 		// Ensure data is synced with current selections
 		const characterIds = selectedCharacters.map((c) => c.id)
 		const personaIds = selectedPersonas.map((p) => p.id)
 		const characterPositions = Object.fromEntries(
 			selectedCharacters.map((cc, i) => [cc.id, i])
 		)
-		
-		
+
 		// Update data to ensure everything is in sync
 		if (data) {
 			data = {
@@ -397,7 +397,7 @@
 				}
 			}
 		}
-		
+
 		if (chat && chat.id) {
 			const updateChat: Sockets.Chats.Update.Params = {
 				...data!,
@@ -536,8 +536,7 @@
 			groupReplyStrategy = chat.groupReplyStrategy || "ordered"
 			selectedCharacters =
 				chat.chatCharacters?.map((cc) => cc.character) || []
-			selectedPersonas =
-				chat.chatPersonas?.map((cp) => cp.persona) || []
+			selectedPersonas = chat.chatPersonas?.map((cp) => cp.persona) || []
 			selectedGuests = chat.chatGuests || []
 			lorebookId = chat.lorebookId || null
 			selectedTags = chat.tags || []
@@ -683,10 +682,31 @@
 
 		// Admin-only: load connections, sampling configs, and prompt configs for override pickers
 		if (userCtx.user?.isAdmin) {
-			socket.on("connections:list", (msg: Sockets.Connections.List.Response) => { adminConnectionsList = msg.connectionsList || [] })
-			socket.on("samplingConfigs:list", (msg: Sockets.SamplingConfigs.List.Response) => { adminSamplingList = msg.samplingConfigsList || [] })
-			socket.on("promptConfigs:list", (msg: Sockets.PromptConfigs.List.Response) => { adminPromptConfigsList = msg.promptConfigsList || [] })
-			socket.on("narratorPromptConfigs:list", (msg: Sockets.NarratorPromptConfigs.List.Response) => { adminNarratorPromptConfigsList = msg.narratorPromptConfigsList || [] })
+			socket.on(
+				"connections:list",
+				(msg: Sockets.Connections.List.Response) => {
+					adminConnectionsList = msg.connectionsList || []
+				}
+			)
+			socket.on(
+				"samplingConfigs:list",
+				(msg: Sockets.SamplingConfigs.List.Response) => {
+					adminSamplingList = msg.samplingConfigsList || []
+				}
+			)
+			socket.on(
+				"promptConfigs:list",
+				(msg: Sockets.PromptConfigs.List.Response) => {
+					adminPromptConfigsList = msg.promptConfigsList || []
+				}
+			)
+			socket.on(
+				"narratorPromptConfigs:list",
+				(msg: Sockets.NarratorPromptConfigs.List.Response) => {
+					adminNarratorPromptConfigsList =
+						msg.narratorPromptConfigsList || []
+				}
+			)
 			socket.emit("connections:list", {})
 			socket.emit("samplingConfigs:list", {})
 			socket.emit("promptConfigs:list", {})
@@ -822,9 +842,9 @@
 		</div>
 		{#if isGuest}
 			<p class="preset-tonal-surface rounded-lg p-3 text-sm">
-				You're a guest in this chat. You can manage characters, personas,
-				and guests below — chat settings (name, scenario, lorebook, tags,
-				etc.) can only be changed by the chat owner.
+				You're a guest in this chat. You can manage characters,
+				personas, and guests below — chat settings (name, scenario,
+				lorebook, tags, etc.) can only be changed by the chat owner.
 			</p>
 		{/if}
 		<div>
@@ -847,7 +867,7 @@
 				}}
 			/>
 			{#if validationErrors.name}
-				<p class="mt-1 text-sm text-error-500" role="alert">
+				<p class="text-error-500 mt-1 text-sm" role="alert">
 					{validationErrors.name}
 				</p>
 			{/if}
@@ -878,9 +898,11 @@
 								)?.visibility || ChatCharacterVisibility.VISIBLE
 							: ChatCharacterVisibility.VISIBLE}
 						{@const VisibilityIcon = getVisibilityIcon(visibility)}
-						{@const isSaved = !chat || !!chat.chatCharacters?.some(
-							(cc) => cc.characterId === c.id
-						)}
+						{@const isSaved =
+							!chat ||
+							!!chat.chatCharacters?.some(
+								(cc) => cc.characterId === c.id
+							)}
 						<div
 							class="preset-outlined-surface-400-600 bg-surface-100-800 hover:bg-surface-200-800 flex flex-col gap-3 rounded-xl p-3 shadow-sm transition-colors"
 							data-dnd-handle
@@ -899,7 +921,9 @@
 									<Avatar char={c} />
 								</div>
 								<div class="min-w-0 flex-1">
-									<div class="truncate font-semibold select-none">
+									<div
+										class="truncate font-semibold select-none"
+									>
 										{c.nickname || c.name}
 									</div>
 									<div
@@ -915,16 +939,19 @@
 											onclick={() => moveCharacterUp(i)}
 											disabled={i === 0}
 											title="Move up"
-											aria-label="Move {c.nickname || c.name} up"
+											aria-label="Move {c.nickname ||
+												c.name} up"
 										>
 											<Icons.ChevronUp size={16} />
 										</button>
 										<button
 											class="btn-ghost rounded p-0.5 disabled:opacity-30"
 											onclick={() => moveCharacterDown(i)}
-											disabled={i === selectedCharacters.length - 1}
+											disabled={i ===
+												selectedCharacters.length - 1}
 											title="Move down"
-											aria-label="Move {c.nickname || c.name} down"
+											aria-label="Move {c.nickname ||
+												c.name} down"
 										>
 											<Icons.ChevronDown size={16} />
 										</button>
@@ -950,11 +977,13 @@
 											aria-label="Toggle character {c.name} active status"
 										>
 											<Switch.Control
-												class="w-9 preset-filled-surface-500 data-[state=checked]:preset-filled-success-500"
+												class="preset-filled-surface-500 data-[state=checked]:preset-filled-success-500 w-9"
 											>
 												<Switch.Thumb>
 													{#if isActive}
-														<Icons.Smile size="14" />
+														<Icons.Smile
+															size="14"
+														/>
 													{:else}
 														<Icons.Meh size="14" />
 													{/if}
@@ -962,7 +991,9 @@
 											</Switch.Control>
 											<Switch.HiddenInput />
 										</Switch>
-										<span class="text-surface-700-300 text-xs">
+										<span
+											class="text-surface-700-300 text-xs"
+										>
 											{isActive ? "Active" : "Inactive"}
 										</span>
 									</span>
@@ -977,7 +1008,8 @@
 											)}
 										title="When not speaking: {ChatCharacterVisibility.options.find(
 											(opt) => opt.value === visibility
-										)?.description || 'Full character info is included even when they\'re not speaking'}"
+										)?.description ||
+											"Full character info is included even when they're not speaking"}"
 									>
 										<VisibilityIcon size={16} />
 										{ChatCharacterVisibility.options.find(
@@ -1068,7 +1100,8 @@
 									<button
 										class="btn-ghost rounded p-0.5 disabled:opacity-30"
 										onclick={() => movePersonaDown(i)}
-										disabled={i === selectedPersonas.length - 1}
+										disabled={i ===
+											selectedPersonas.length - 1}
 										title="Move down"
 										aria-label="Move {p.name} down"
 									>
@@ -1082,7 +1115,8 @@
 						>
 							<button
 								class="preset-tonal-error btn btn-sm"
-								onclick={() => confirmRemovePersona(p.id, p.name || "")}
+								onclick={() =>
+									confirmRemovePersona(p.id, p.name || "")}
 								title="Remove from chat"
 							>
 								<Icons.X size={16} /> Remove
@@ -1122,7 +1156,9 @@
 						</div>
 					{/if}
 					{#each selectedGuests as guest}
-						<div class="preset-outlined-surface-400-600 bg-surface-100-800 rounded-xl p-3">
+						<div
+							class="preset-outlined-surface-400-600 bg-surface-100-800 rounded-xl p-3"
+						>
 							<div class="flex flex-col gap-2">
 								<div class="flex items-center justify-between">
 									<div class="flex items-center gap-2">
@@ -1219,25 +1255,42 @@
 		{#if userCtx.user?.isAdmin}
 			<div class="flex flex-col gap-2">
 				<p class="font-semibold">AI Override</p>
-				<p class="text-muted-foreground text-xs">Overrides system defaults for this chat. Leave as "System default" to use the global setting.</p>
+				<p class="text-muted-foreground text-xs">
+					Overrides system defaults for this chat. Leave as "System
+					default" to use the global setting.
+				</p>
 				<ConnectionSamplingPicker
 					connectionsList={adminConnectionsList}
 					samplingList={adminSamplingList}
 					bind:connectionId={chatConnectionId}
 					bind:samplingConfigId={chatSamplingConfigId}
 				/>
-				<div class="grid grid-cols-[5.5rem_1fr] items-center gap-x-2 gap-y-1.5">
-					<span class="text-muted-foreground text-xs">Character Prompt</span>
-					<select class="select text-xs" bind:value={chatPromptConfigId}>
+				<div
+					class="grid grid-cols-[5.5rem_1fr] items-center gap-x-2 gap-y-1.5"
+				>
+					<span class="text-muted-foreground text-xs">
+						Character Prompt
+					</span>
+					<select
+						class="select text-xs"
+						bind:value={chatPromptConfigId}
+					>
 						<option value={null}>System default</option>
 						{#each adminPromptConfigsList.filter((p) => p.id != null) as p}
 							<option value={p.id}>{p.name}</option>
 						{/each}
 					</select>
 				</div>
-				<div class="grid grid-cols-[5.5rem_1fr] items-center gap-x-2 gap-y-1.5">
-					<span class="text-muted-foreground text-xs">Narrator Prompt</span>
-					<select class="select text-xs" bind:value={narratorPromptConfigId}>
+				<div
+					class="grid grid-cols-[5.5rem_1fr] items-center gap-x-2 gap-y-1.5"
+				>
+					<span class="text-muted-foreground text-xs">
+						Narrator Prompt
+					</span>
+					<select
+						class="select text-xs"
+						bind:value={narratorPromptConfigId}
+					>
 						<option value={null}>System default</option>
 						{#each adminNarratorPromptConfigsList.filter((p) => p.id != null) as p}
 							<option value={p.id}>{p.name}</option>

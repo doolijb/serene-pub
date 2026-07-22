@@ -160,8 +160,10 @@ export global {
 	export type SelectOllamaSettings = typeof schema.ollamaSettings.$inferSelect
 	export type InsertOllamaSettings = typeof schema.ollamaSettings.$inferInsert
 
-	export type SelectKoboldCppSettings = typeof schema.koboldCppSettings.$inferSelect
-	export type InsertKoboldCppSettings = typeof schema.koboldCppSettings.$inferInsert
+	export type SelectKoboldCppSettings =
+		typeof schema.koboldCppSettings.$inferSelect
+	export type InsertKoboldCppSettings =
+		typeof schema.koboldCppSettings.$inferInsert
 
 	export type SelectUserSettings = typeof schema.userSettings.$inferSelect
 	export type InsertUserSettings = typeof schema.userSettings.$inferInsert
@@ -174,33 +176,52 @@ export global {
 	// Narrative graph types
 	export type SelectNarrativeNode = typeof schema.narrativeNodes.$inferSelect
 	export type InsertNarrativeNode = typeof schema.narrativeNodes.$inferInsert
-	export type UpdateNarrativeNode = Partial<SelectNarrativeNode> & { id: number }
+	export type UpdateNarrativeNode = Partial<SelectNarrativeNode> & {
+		id: number
+	}
 
-	export type SelectNarrativeRelationship = typeof schema.narrativeRelationships.$inferSelect
-	export type InsertNarrativeRelationship = typeof schema.narrativeRelationships.$inferInsert
-	export type UpdateNarrativeRelationship = Partial<SelectNarrativeRelationship> & { id: number }
+	export type SelectNarrativeRelationship =
+		typeof schema.narrativeRelationships.$inferSelect
+	export type InsertNarrativeRelationship =
+		typeof schema.narrativeRelationships.$inferInsert
+	export type UpdateNarrativeRelationship =
+		Partial<SelectNarrativeRelationship> & { id: number }
 
 	// World Summarize Config types
-	export type SelectWorldSummarizeConfig = typeof schema.worldSummarizeConfigs.$inferSelect
-	export type InsertWorldSummarizeConfig = typeof schema.worldSummarizeConfigs.$inferInsert
-	export type UpdateWorldSummarizeConfig = Partial<SelectWorldSummarizeConfig> & { id: number }
+	export type SelectWorldSummarizeConfig =
+		typeof schema.worldSummarizeConfigs.$inferSelect
+	export type InsertWorldSummarizeConfig =
+		typeof schema.worldSummarizeConfigs.$inferInsert
+	export type UpdateWorldSummarizeConfig =
+		Partial<SelectWorldSummarizeConfig> & { id: number }
 
 	// Character Summarize Config types
-	export type SelectCharacterSummarizeConfig = typeof schema.characterSummarizeConfigs.$inferSelect
-	export type InsertCharacterSummarizeConfig = typeof schema.characterSummarizeConfigs.$inferInsert
-	export type UpdateCharacterSummarizeConfig = Partial<SelectCharacterSummarizeConfig> & { id: number }
+	export type SelectCharacterSummarizeConfig =
+		typeof schema.characterSummarizeConfigs.$inferSelect
+	export type InsertCharacterSummarizeConfig =
+		typeof schema.characterSummarizeConfigs.$inferInsert
+	export type UpdateCharacterSummarizeConfig =
+		Partial<SelectCharacterSummarizeConfig> & { id: number }
 
 	// Scene Summarize Config types
-	export type SelectSceneSummarizeConfig = typeof schema.sceneSummarizeConfigs.$inferSelect
-	export type InsertSceneSummarizeConfig = typeof schema.sceneSummarizeConfigs.$inferInsert
-	export type UpdateSceneSummarizeConfig = Partial<SelectSceneSummarizeConfig> & { id: number }
+	export type SelectSceneSummarizeConfig =
+		typeof schema.sceneSummarizeConfigs.$inferSelect
+	export type InsertSceneSummarizeConfig =
+		typeof schema.sceneSummarizeConfigs.$inferInsert
+	export type UpdateSceneSummarizeConfig =
+		Partial<SelectSceneSummarizeConfig> & { id: number }
 
 	// Graph Build Config types
-	export type SelectGraphBuildConfig = typeof schema.graphBuildConfigs.$inferSelect
-	export type InsertGraphBuildConfig = typeof schema.graphBuildConfigs.$inferInsert
-	export type UpdateGraphBuildConfig = Partial<SelectGraphBuildConfig> & { id: number }
+	export type SelectGraphBuildConfig =
+		typeof schema.graphBuildConfigs.$inferSelect
+	export type InsertGraphBuildConfig =
+		typeof schema.graphBuildConfigs.$inferInsert
+	export type UpdateGraphBuildConfig = Partial<SelectGraphBuildConfig> & {
+		id: number
+	}
 
 	// Convenient re-exports of narrative graph inline types for server-side handlers
 	export type NarrativeNodeShape = Sockets.NarrativeGraph.NarrativeNode
-	export type NarrativeRelationshipShape = Sockets.NarrativeGraph.NarrativeRelationship
+	export type NarrativeRelationshipShape =
+		Sockets.NarrativeGraph.NarrativeRelationship
 }

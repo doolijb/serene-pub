@@ -1,7 +1,11 @@
 <script lang="ts">
 	import { getContext } from "svelte"
 	import { goto } from "$app/navigation"
-	import { docsIndex, getAllSections, type DocSection } from "$lib/shared/utils/docsIndex"
+	import {
+		docsIndex,
+		getAllSections,
+		type DocSection
+	} from "$lib/shared/utils/docsIndex"
 	import DocResultsGrid from "$lib/client/components/docs/DocResultsGrid.svelte"
 	import type { DocsSearchCtx } from "./+layout.svelte"
 
@@ -19,7 +23,11 @@
 
 	function selectSection(section: DocSection) {
 		docsSearchCtx.query = ""
-		goto(section.anchor ? `/docs/${section.slug}#${section.anchor}` : `/docs/${section.slug}`)
+		goto(
+			section.anchor
+				? `/docs/${section.slug}#${section.anchor}`
+				: `/docs/${section.slug}`
+		)
 	}
 </script>
 

@@ -307,7 +307,15 @@
 
 	<!-- Attribution -->
 	<p class="text-muted-foreground text-center text-xs">
-		Ollama is developed and owned by <a href="https://ollama.com" target="_blank" rel="noopener noreferrer" class="hover:text-primary-500 underline">Ollama, Inc.</a>
-		Serene Pub's Ollama Manager is an independent integration and is not affiliated with or endorsed by Ollama, Inc.
+		Ollama is developed and owned by <a
+			href="https://ollama.com"
+			target="_blank"
+			rel="noopener noreferrer"
+			class="hover:text-primary-500 underline"
+		>
+			Ollama, Inc.
+		</a>
+		Serene Pub's Ollama Manager is an independent integration and is not affiliated
+		with or endorsed by Ollama, Inc.
 	</p>
 </div>

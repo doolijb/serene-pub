@@ -122,7 +122,8 @@
 		const enabledKey = key + "Enabled"
 		return (
 			key !== "isImmutable" &&
-			((sampling as any)?.[enabledKey] === undefined || (sampling as any)?.[enabledKey])
+			((sampling as any)?.[enabledKey] === undefined ||
+				(sampling as any)?.[enabledKey])
 		)
 	}
 
@@ -176,7 +177,9 @@
 		delete newSamplingConfig.id
 		delete newSamplingConfig.isImmutable
 		newSamplingConfig.name = name.trim()
-		socket.emit("samplingConfigs:create", { sampling: { ...newSamplingConfig, name: name.trim() } })
+		socket.emit("samplingConfigs:create", {
+			sampling: { ...newSamplingConfig, name: name.trim() }
+		})
 		showNewNameModal = false
 	}
 	function handleNewNameCancel() {
@@ -306,10 +309,13 @@
 				toaster.success({ title: "Sampling Config Created" })
 			}
 		)
-		socket.on("samplingConfigs:get", (message: Sockets.SamplingConfigs.Get.Response) => {
-			sampling = { ...message.sampling }
-			originalSamplingConfig = { ...message.sampling }
-		})
+		socket.on(
+			"samplingConfigs:get",
+			(message: Sockets.SamplingConfigs.Get.Response) => {
+				sampling = { ...message.sampling }
+				originalSamplingConfig = { ...message.sampling }
+			}
+		)
 		socket.on("samplingConfigs:setUserActive", () => {
 			toaster.success({ title: "Default sampling config updated" })
 		})
@@ -343,7 +349,9 @@
 					<Icons.ChevronLeft size={16} />
 					Back
 				</button>
-				<h2 class="min-w-0 flex-1 font-semibold">Enable/Disable Weight Options</h2>
+				<h2 class="min-w-0 flex-1 font-semibold">
+					Enable/Disable Weight Options
+				</h2>
 			</div>
 			<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 				{#each Object.entries(fieldMeta) as [key, meta]}
@@ -355,15 +363,19 @@
 							<input
 								id="{key}Enabled"
 								type="checkbox"
-								checked={(sampling as any)?.[key + "Enabled"] ?? false}
+								checked={(sampling as any)?.[key + "Enabled"] ??
+									false}
 								onchange={(e) => {
 									if (sampling) {
-										(sampling as any)[key + "Enabled"] = (e.target as HTMLInputElement).checked
+										;(sampling as any)[key + "Enabled"] = (
+											e.target as HTMLInputElement
+										).checked
 									}
 								}}
 								class="accent-primary"
-								disabled={(sampling as any)?.[key + "Enabled"] ===
-									undefined}
+								disabled={(sampling as any)?.[
+									key + "Enabled"
+								] === undefined}
 							/>
 							<span class="font-medium">{meta.label}</span>
 						</label>
@@ -429,14 +441,14 @@
 				class="preset-tonal-warning mb-4 flex items-center gap-2 rounded-xl p-2 text-sm"
 			>
 				<Icons.Info size={16} class="shrink-0" />
-				This is a built-in config (marked with a trailing *) — edit freely, then use "New" to save
-				your changes as a copy.
+				This is a built-in config (marked with a trailing *) — edit freely,
+				then use "New" to save your changes as a copy.
 			</div>
 		{/if}
 		<div class="mb-4 flex flex-wrap gap-2">
 			<button
 				type="button"
-				class="btn btn-sm preset-tonal-primary flex-1 min-w-[8.5rem]"
+				class="btn btn-sm preset-tonal-primary min-w-[8.5rem] flex-1"
 				onclick={handleSelectSamplingConfig}
 			>
 				<Icons.CheckSquare size={16} />
@@ -444,7 +456,7 @@
 			</button>
 			<button
 				type="button"
-				class="btn btn-sm preset-filled-success-500 flex-1 min-w-[6rem]"
+				class="btn btn-sm preset-filled-success-500 min-w-[6rem] flex-1"
 				onclick={handleUpdate}
 				disabled={(!!sampling && sampling.isImmutable) ||
 					!unsavedChanges}
@@ -455,13 +467,21 @@
 				type="button"
 				class="btn btn-sm preset-filled-warning-500 shrink-0"
 				onclick={handleSetDefault}
-				disabled={!selectedSamplingId || selectedSamplingId === activeSamplingConfigId}
+				disabled={!selectedSamplingId ||
+					selectedSamplingId === activeSamplingConfigId}
 				title={selectedSamplingId === activeSamplingConfigId
 					? "Already the default"
 					: "Set as default"}
 			>
-				<Icons.Star size={16} fill={selectedSamplingId === activeSamplingConfigId ? "currentColor" : "none"} />
-				{selectedSamplingId === activeSamplingConfigId ? "Default" : "Set Default"}
+				<Icons.Star
+					size={16}
+					fill={selectedSamplingId === activeSamplingConfigId
+						? "currentColor"
+						: "none"}
+				/>
+				{selectedSamplingId === activeSamplingConfigId
+					? "Default"
+					: "Set Default"}
 			</button>
 		</div>
 
@@ -484,7 +504,7 @@
 					}}
 				/>
 				{#if validationErrors.name}
-					<p class="mt-1 text-sm text-error-500" role="alert">
+					<p class="text-error-500 mt-1 text-sm" role="alert">
 						{validationErrors.name}
 					</p>
 				{/if}
@@ -506,7 +526,12 @@
 									value={(sampling as any)?.[key] ?? 0}
 									oninput={(e) => {
 										if (sampling) {
-											(sampling as any)[key] = parseFloat((e.target as HTMLInputElement).value)
+											;(sampling as any)[key] =
+												parseFloat(
+													(
+														e.target as HTMLInputElement
+													).value
+												)
 										}
 									}}
 									class="accent-primary w-full"
@@ -526,10 +551,16 @@
 											min={meta.min}
 											max={getFieldMax(key)}
 											step={meta.step}
-											value={(sampling as any)?.[key] ?? 0}
+											value={(sampling as any)?.[key] ??
+												0}
 											oninput={(e) => {
 												if (sampling) {
-													(sampling as any)[key] = parseFloat((e.target as HTMLInputElement).value)
+													;(sampling as any)[key] =
+														parseFloat(
+															(
+																e.target as HTMLInputElement
+															).value
+														)
 												}
 											}}
 											id={key + "-manual"}
@@ -608,7 +639,9 @@
 								checked={(sampling as any)?.[key] ?? false}
 								onchange={(e) => {
 									if (sampling) {
-										(sampling as any)[key] = (e.target as HTMLInputElement).checked
+										;(sampling as any)[key] = (
+											e.target as HTMLInputElement
+										).checked
 									}
 								}}
 								class="accent-primary"
@@ -620,7 +653,9 @@
 								value={(sampling as any)?.[key] ?? ""}
 								oninput={(e) => {
 									if (sampling) {
-										(sampling as any)[key] = (e.target as HTMLInputElement).value
+										;(sampling as any)[key] = (
+											e.target as HTMLInputElement
+										).value
 									}
 								}}
 								class="input"
@@ -650,16 +685,23 @@
 
 <Dialog open={showDeleteModal} onOpenChange={(e) => (showDeleteModal = e.open)}>
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw]">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 max-w-[95vw] space-y-4 p-4 shadow-xl"
+			>
 				<header class="flex justify-between">
 					<h2 class="h2">Delete Sampling Configuration</h2>
 				</header>
 				<article>
 					<p class="opacity-60">
-						Are you sure you want to delete the sampling configuration "{sampling?.name}"?
-						This action cannot be undone.
+						Are you sure you want to delete the sampling
+						configuration "{sampling?.name}"? This action cannot be
+						undone.
 					</p>
 				</article>
 				<footer class="flex justify-end gap-4">
@@ -669,7 +711,10 @@
 					>
 						Cancel
 					</button>
-					<button class="btn preset-filled-error-500" onclick={confirmDelete}>
+					<button
+						class="btn preset-filled-error-500"
+						onclick={confirmDelete}
+					>
 						Delete
 					</button>
 				</footer>

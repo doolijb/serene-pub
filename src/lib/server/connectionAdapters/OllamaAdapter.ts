@@ -262,13 +262,28 @@ class OllamaAdapter extends BaseConnectionAdapter {
 									return
 								}
 								if (firstPart) {
-									console.log("[OllamaAdapter] first stream part keys:", Object.keys(part), "message keys:", part.message ? Object.keys(part.message) : "no message", "message.thinking:", (part.message as any)?.thinking?.substring(0, 50))
+									console.log(
+										"[OllamaAdapter] first stream part keys:",
+										Object.keys(part),
+										"message keys:",
+										part.message
+											? Object.keys(part.message)
+											: "no message",
+										"message.thinking:",
+										(
+											part.message as any
+										)?.thinking?.substring(0, 50)
+									)
 									firstPart = false
 								}
 								if (part.message) {
 									// Forward thinking chunks before content starts
 									if (part.message.thinking) {
-										console.log("[OllamaAdapter] thinking chunk:", part.message.thinking.length, "chars")
+										console.log(
+											"[OllamaAdapter] thinking chunk:",
+											part.message.thinking.length,
+											"chars"
+										)
 										thinkingCb?.(part.message.thinking)
 									}
 									if (part.message.content) {
@@ -295,11 +310,24 @@ class OllamaAdapter extends BaseConnectionAdapter {
 									return
 								}
 								if (genFirstPart || part.done) {
-									console.log("[OllamaAdapter] generate part keys:", Object.keys(part), "thinking:", (part as any).thinking?.length ?? 0, "response:", part.response?.length ?? 0, "done:", part.done)
+									console.log(
+										"[OllamaAdapter] generate part keys:",
+										Object.keys(part),
+										"thinking:",
+										(part as any).thinking?.length ?? 0,
+										"response:",
+										part.response?.length ?? 0,
+										"done:",
+										part.done
+									)
 									genFirstPart = false
 								}
 								if (part.thinking) {
-									console.log("[OllamaAdapter] generate thinking chunk:", part.thinking.length, "chars")
+									console.log(
+										"[OllamaAdapter] generate thinking chunk:",
+										part.thinking.length,
+										"chars"
+									)
 									thinkingCb?.(part.thinking)
 								}
 								if (part.response) {
@@ -311,7 +339,10 @@ class OllamaAdapter extends BaseConnectionAdapter {
 						// No need to apply stop strings here, Ollama will handle it
 					} catch (e: any) {
 						if (!abortedEarly)
-							console.error("[OllamaAdapter] stream error:", e.message || String(e))
+							console.error(
+								"[OllamaAdapter] stream error:",
+								e.message || String(e)
+							)
 					}
 				},
 				compiledPrompt,
@@ -331,14 +362,27 @@ class OllamaAdapter extends BaseConnectionAdapter {
 						if (this.isAborting) {
 							return { content: undefined, thinking: undefined }
 						}
-						if (res && typeof res === "object" && "message" in res) {
-							console.log("[OllamaAdapter] non-stream chat thinking:", res.message.thinking ? res.message.thinking.length + " chars" : "none")
+						if (
+							res &&
+							typeof res === "object" &&
+							"message" in res
+						) {
+							console.log(
+								"[OllamaAdapter] non-stream chat thinking:",
+								res.message.thinking
+									? res.message.thinking.length + " chars"
+									: "none"
+							)
 							return {
 								content: res.message.content || "",
 								thinking: res.message.thinking
 							}
 						} else {
-							return { content: "FAILURE: Unexpected Ollama result type", thinking: undefined }
+							return {
+								content:
+									"FAILURE: Unexpected Ollama result type",
+								thinking: undefined
+							}
 						}
 					} else {
 						const res = await ollama.generate({
@@ -348,18 +392,34 @@ class OllamaAdapter extends BaseConnectionAdapter {
 						if (this.isAborting) {
 							return { content: undefined, thinking: undefined }
 						}
-						if (res && typeof res === "object" && "response" in res) {
-							console.log("[OllamaAdapter] non-stream generate thinking:", res.thinking ? res.thinking.length + " chars" : "none")
+						if (
+							res &&
+							typeof res === "object" &&
+							"response" in res
+						) {
+							console.log(
+								"[OllamaAdapter] non-stream generate thinking:",
+								res.thinking
+									? res.thinking.length + " chars"
+									: "none"
+							)
 							return {
 								content: res.response || "",
 								thinking: res.thinking
 							}
 						} else {
-							return { content: "FAILURE: Unexpected Ollama result type", thinking: undefined }
+							return {
+								content:
+									"FAILURE: Unexpected Ollama result type",
+								thinking: undefined
+							}
 						}
 					}
 				} catch (e: any) {
-					return { content: "FAILURE: " + (e.message || String(e)), thinking: undefined }
+					return {
+						content: "FAILURE: " + (e.message || String(e)),
+						thinking: undefined
+					}
 				}
 			})()
 			return {

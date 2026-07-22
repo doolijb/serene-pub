@@ -23,18 +23,27 @@ export interface CastEntry {
 // ── Fuzzy matching ────────────────────────────────────────────────────────────
 
 function normalize(s: string): string {
-	return s.toLowerCase().trim().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ")
+	return s
+		.toLowerCase()
+		.trim()
+		.replace(/[^a-z0-9 ]/g, "")
+		.replace(/\s+/g, " ")
 }
 
 function levenshtein(a: string, b: string): number {
-	const m = a.length, n = b.length
-	const dp: number[][] = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)])
+	const m = a.length,
+		n = b.length
+	const dp: number[][] = Array.from({ length: m + 1 }, (_, i) => [
+		i,
+		...Array(n).fill(0)
+	])
 	for (let j = 0; j <= n; j++) dp[0][j] = j
 	for (let i = 1; i <= m; i++) {
 		for (let j = 1; j <= n; j++) {
-			dp[i][j] = a[i - 1] === b[j - 1]
-				? dp[i - 1][j - 1]
-				: 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1])
+			dp[i][j] =
+				a[i - 1] === b[j - 1]
+					? dp[i - 1][j - 1]
+					: 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1])
 		}
 	}
 	return dp[m][n]
@@ -50,8 +59,8 @@ function namesMatch(a: string, b: string): boolean {
 	// Word-subset: "Alice" matches "Alice Vance" and vice-versa
 	const wa = na.split(" ")
 	const wb = nb.split(" ")
-	if (wa.every(w => wb.includes(w))) return true
-	if (wb.every(w => wa.includes(w))) return true
+	if (wa.every((w) => wb.includes(w))) return true
+	if (wb.every((w) => wa.includes(w))) return true
 
 	// Levenshtein for short strings (handles LLM typos)
 	const shorter = Math.min(na.length, nb.length)
@@ -65,23 +74,36 @@ function namesMatch(a: string, b: string): boolean {
 
 /** True if `name` matches the canonical name or any alias of `entry`. */
 function entryMatches(entry: CastEntry, name: string): boolean {
-	return namesMatch(entry.name, name) || entry.aliases.some(a => namesMatch(a, name))
+	return (
+		namesMatch(entry.name, name) ||
+		entry.aliases.some((a) => namesMatch(a, name))
+	)
 }
 
 /**
  * Try to merge `name` + `extraAliases` into an existing entry.
  * Returns true if a match was found (and the entry was updated).
  */
-function mergeIntoExisting(entries: CastEntry[], name: string, extraAliases: string[]): boolean {
+function mergeIntoExisting(
+	entries: CastEntry[],
+	name: string,
+	extraAliases: string[]
+): boolean {
 	for (const entry of entries) {
 		if (!entryMatches(entry, name)) continue
 
 		// Add name as alias if it's meaningfully different from the canonical
-		if (!namesMatch(entry.name, name) && !entry.aliases.some(a => namesMatch(a, name))) {
+		if (
+			!namesMatch(entry.name, name) &&
+			!entry.aliases.some((a) => namesMatch(a, name))
+		) {
 			entry.aliases.push(name)
 		}
 		for (const alias of extraAliases) {
-			if (!namesMatch(entry.name, alias) && !entry.aliases.some(a => namesMatch(a, alias))) {
+			if (
+				!namesMatch(entry.name, alias) &&
+				!entry.aliases.some((a) => namesMatch(a, alias))
+			) {
 				entry.aliases.push(alias)
 			}
 		}
@@ -101,13 +123,17 @@ interface TimelinePos {
 
 /** True if position A is strictly before position B (or same entry, earlier scene). */
 function isStrictlyBefore(
-	a: TimelinePos, aSceneId: number | null,
-	b: TimelinePos, bSceneId: number
+	a: TimelinePos,
+	aSceneId: number | null,
+	b: TimelinePos,
+	bSceneId: number
 ): boolean {
 	if (a.year !== b.year) return a.year < b.year
-	const am = a.month ?? 0, bm = b.month ?? 0
+	const am = a.month ?? 0,
+		bm = b.month ?? 0
 	if (am !== bm) return am < bm
-	const ad = a.day ?? 0, bd = b.day ?? 0
+	const ad = a.day ?? 0,
+		bd = b.day ?? 0
 	if (ad !== bd) return ad < bd
 	if (a.entryId !== b.entryId) return a.entryId < b.entryId
 	// Same history entry — scene id is the tiebreaker
@@ -126,7 +152,7 @@ export async function buildSceneCastList(
 	// ── 1. Current scene's timeline position ─────────────────────────────────
 	const currentScene = await db.query.scenes.findFirst({
 		where: eq(schema.scenes.id, sceneId),
-		columns: { historyEntryId: true },
+		columns: { historyEntryId: true }
 	})
 	const currentHistoryEntryId = currentScene?.historyEntryId ?? null
 
@@ -137,7 +163,12 @@ export async function buildSceneCastList(
 			columns: { id: true, year: true, month: true, day: true }
 		})
 		if (he) {
-			currentPos = { entryId: he.id, year: he.year ?? 0, month: he.month, day: he.day }
+			currentPos = {
+				entryId: he.id,
+				year: he.year ?? 0,
+				month: he.month,
+				day: he.day
+			}
 		}
 	}
 
@@ -148,7 +179,12 @@ export async function buildSceneCastList(
 				where: eq(schema.chatCharacters.chatId, chatId),
 				with: {
 					character: {
-						columns: { id: true, name: true, nickname: true, aliases: true }
+						columns: {
+							id: true,
+							name: true,
+							nickname: true,
+							aliases: true
+						}
 					}
 				}
 			}),
@@ -177,7 +213,9 @@ export async function buildSceneCastList(
 		for (const cp of chatPersonas) {
 			const persona = (cp as any).persona
 			if (!persona?.name) continue
-			const aliases = (persona.aliases ?? []).filter((a: string) => !namesMatch(a, persona.name))
+			const aliases = (persona.aliases ?? []).filter(
+				(a: string) => !namesMatch(a, persona.name)
+			)
 			if (!mergeIntoExisting(entries, persona.name, aliases)) {
 				entries.push({ name: persona.name, aliases })
 			}
@@ -188,7 +226,9 @@ export async function buildSceneCastList(
 	const bindings = await db.query.lorebookBindings.findMany({
 		where: eq(schema.lorebookBindings.lorebookId, lorebookId),
 		with: {
-			character: { columns: { id: true, name: true, nickname: true, aliases: true } },
+			character: {
+				columns: { id: true, name: true, nickname: true, aliases: true }
+			},
 			persona: { columns: { id: true, name: true, aliases: true } }
 		}
 	})
@@ -206,7 +246,9 @@ export async function buildSceneCastList(
 		}
 		const persona = (binding as any).persona
 		if (persona?.name) {
-			const aliases = (persona.aliases ?? []).filter((a: string) => !namesMatch(a, persona.name))
+			const aliases = (persona.aliases ?? []).filter(
+				(a: string) => !namesMatch(a, persona.name)
+			)
 			if (!mergeIntoExisting(entries, persona.name, aliases)) {
 				entries.push({ name: persona.name, aliases })
 			}
@@ -217,11 +259,17 @@ export async function buildSceneCastList(
 	const allNodes = await db.query.narrativeNodes.findMany({
 		where: eq(schema.narrativeNodes.lorebookId, lorebookId),
 		columns: {
-			id: true, name: true, aliases: true,
-			historyEntryId: true, sceneId: true, parentNodeId: true
+			id: true,
+			name: true,
+			aliases: true,
+			historyEntryId: true,
+			sceneId: true,
+			parentNodeId: true
 		},
 		with: {
-			historyEntry: { columns: { id: true, year: true, month: true, day: true } }
+			historyEntry: {
+				columns: { id: true, year: true, month: true, day: true }
+			}
 		}
 	})
 
@@ -238,8 +286,11 @@ export async function buildSceneCastList(
 			day: (node as any).historyEntry.day
 		}
 		// Include if node appeared at or before current scene
-		return isStrictlyBefore(nodePos, node.sceneId, currentPos, sceneId)
-			|| (nodePos.entryId === currentPos.entryId && (node.sceneId ?? 0) <= sceneId)
+		return (
+			isStrictlyBefore(nodePos, node.sceneId, currentPos, sceneId) ||
+			(nodePos.entryId === currentPos.entryId &&
+				(node.sceneId ?? 0) <= sceneId)
+		)
 	})
 
 	for (const node of eligibleNodes) {
@@ -251,13 +302,18 @@ export async function buildSceneCastList(
 			if (parent) {
 				nodeAliases.push(...((parent as any).aliases ?? []))
 				// Also include the parent's name as an alias if different
-				if ((parent as any).name && !namesMatch((parent as any).name, (node as any).name)) {
+				if (
+					(parent as any).name &&
+					!namesMatch((parent as any).name, (node as any).name)
+				) {
 					nodeAliases.push((parent as any).name)
 				}
 			}
 		}
 
-		const uniqueAliases = nodeAliases.filter(a => !namesMatch(a, (node as any).name))
+		const uniqueAliases = nodeAliases.filter(
+			(a) => !namesMatch(a, (node as any).name)
+		)
 
 		if (!mergeIntoExisting(entries, (node as any).name, uniqueAliases)) {
 			entries.push({ name: (node as any).name, aliases: uniqueAliases })
@@ -269,11 +325,15 @@ export async function buildSceneCastList(
 		const allScenes = await db.query.scenes.findMany({
 			where: eq(schema.scenes.lorebookId, lorebookId),
 			columns: {
-				id: true, historyEntryId: true,
-				participantCharacters: true, mentionedCharacters: true
+				id: true,
+				historyEntryId: true,
+				participantCharacters: true,
+				mentionedCharacters: true
 			},
 			with: {
-				historyEntry: { columns: { id: true, year: true, month: true, day: true } }
+				historyEntry: {
+					columns: { id: true, year: true, month: true, day: true }
+				}
 			}
 		})
 
@@ -281,9 +341,17 @@ export async function buildSceneCastList(
 			if (s.id === sceneId) continue
 			const he = (s as any).historyEntry
 			if (!he) continue
-			const sPos: TimelinePos = { entryId: he.id, year: he.year ?? 0, month: he.month, day: he.day }
-			if (!isStrictlyBefore(sPos, s.id, currentPos, sceneId)
-				&& !(sPos.entryId === currentPos.entryId && s.id < sceneId)) continue
+			const sPos: TimelinePos = {
+				entryId: he.id,
+				year: he.year ?? 0,
+				month: he.month,
+				day: he.day
+			}
+			if (
+				!isStrictlyBefore(sPos, s.id, currentPos, sceneId) &&
+				!(sPos.entryId === currentPos.entryId && s.id < sceneId)
+			)
+				continue
 
 			const names = [
 				...((s.participantCharacters as string[]) ?? []),
@@ -302,7 +370,10 @@ export async function buildSceneCastList(
 	const merged: CastEntry[] = []
 	for (const entry of entries) {
 		if (!mergeIntoExisting(merged, entry.name, entry.aliases)) {
-			merged.push({ name: entry.name, aliases: [...new Set(entry.aliases)] })
+			merged.push({
+				name: entry.name,
+				aliases: [...new Set(entry.aliases)]
+			})
 		}
 	}
 

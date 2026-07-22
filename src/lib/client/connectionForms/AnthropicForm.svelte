@@ -26,7 +26,8 @@
 
 	type ValidationErrors = Record<string, string>
 
-	let { connection = $bindable() }: { connection: SelectConnection } = $props()
+	let { connection = $bindable() }: { connection: SelectConnection } =
+		$props()
 
 	const socket = useTypedSocket()
 	const defaultExtraJson: ExtraFieldData = {
@@ -101,7 +102,10 @@
 	})
 
 	onMount(() => {
-		fields = extraJsonToFields({ ...defaultExtraJson, ...(connection.extraJson || {}) })
+		fields = extraJsonToFields({
+			...defaultExtraJson,
+			...(connection.extraJson || {})
+		})
 		handleRefreshModels()
 	})
 
@@ -127,7 +131,9 @@
 			{/each}
 		</select>
 		{#if validationErrors.model}
-			<p class="mt-1 text-sm text-error-500" role="alert">{validationErrors.model}</p>
+			<p class="text-error-500 mt-1 text-sm" role="alert">
+				{validationErrors.model}
+			</p>
 		{/if}
 	</div>
 
@@ -155,7 +161,9 @@
 		</button>
 	</div>
 	{#if testResult?.ok === false && testResult.error}
-		<p class="mt-1 text-sm text-error-500" role="alert">{testResult.error}</p>
+		<p class="text-error-500 mt-1 text-sm" role="alert">
+			{testResult.error}
+		</p>
 	{/if}
 
 	<div class="mt-2 flex flex-col gap-1">
@@ -181,42 +189,52 @@
 			class="input {validationErrors.apiKey ? 'border-error-500' : ''}"
 		/>
 		{#if validationErrors.apiKey}
-			<p class="mt-1 text-sm text-error-500" role="alert">{validationErrors.apiKey}</p>
+			<p class="text-error-500 mt-1 text-sm" role="alert">
+				{validationErrors.apiKey}
+			</p>
 		{/if}
 	</div>
 
 	<details class="mt-4">
-		<summary class="cursor-pointer font-semibold">Advanced Settings</summary>
+		<summary class="cursor-pointer font-semibold">
+			Advanced Settings
+		</summary>
 		<section class="w-full space-y-4 pt-2">
-			<div class="flex items-center justify-between gap-4">
-				<label class="font-semibold" for="stream">Stream</label>
-				<Switch
-					name="stream"
-					checked={fields.stream}
-					onCheckedChange={(e) => (fields!.stream = e.checked)}
+			<Switch
+				name="stream"
+				checked={fields.stream}
+				onCheckedChange={(e) => (fields!.stream = e.checked)}
+				class="flex items-center justify-between gap-4"
+			>
+				<Switch.Label class="font-semibold">Stream</Switch.Label>
+				<Switch.Control
+					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 				>
-					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-				</Switch>
-			</div>
-			<div class="flex items-center justify-between gap-4">
+					<Switch.Thumb />
+				</Switch.Control>
+				<Switch.HiddenInput />
+			</Switch>
+			<Switch
+				name="thinking"
+				checked={fields.thinking}
+				onCheckedChange={(e) => (fields!.thinking = e.checked)}
+				class="flex items-center justify-between gap-4"
+			>
 				<div>
-					<label class="font-semibold" for="thinking">Extended Thinking</label>
-					<p class="text-muted-foreground text-xs">Requires Claude 3.7+ models</p>
+					<Switch.Label class="font-semibold">
+						Extended Thinking
+					</Switch.Label>
+					<p class="text-muted-foreground text-xs">
+						Requires Claude 3.7+ models
+					</p>
 				</div>
-				<Switch
-					name="thinking"
-					checked={fields.thinking}
-					onCheckedChange={(e) => (fields!.thinking = e.checked)}
+				<Switch.Control
+					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 				>
-					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-				</Switch>
-			</div>
+					<Switch.Thumb />
+				</Switch.Control>
+				<Switch.HiddenInput />
+			</Switch>
 			{#if fields.thinking}
 				<div class="flex flex-col gap-1">
 					<label class="font-semibold" for="thinkingBudget">

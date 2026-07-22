@@ -4,7 +4,10 @@ import { eq } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { isAndroidWrapper } from "$lib/server/utils"
 
-export const systemSettingsGet: Handler<Sockets.SystemSettings.Get.Params, Sockets.SystemSettings.Get.Response> = {
+export const systemSettingsGet: Handler<
+	Sockets.SystemSettings.Get.Params,
+	Sockets.SystemSettings.Get.Response
+> = {
 	event: "systemSettings:get",
 	handler: async (socket, params, emitToUser) => {
 		try {
@@ -14,7 +17,12 @@ export const systemSettingsGet: Handler<Sockets.SystemSettings.Get.Params, Socke
 			// authenticated user's browser, not just hidden by client UI. The
 			// CharaVault connection status is surfaced separately via the
 			// admin-only cardSources:charaVault:status event instead.
-			const [settings, ollamaSettings, koboldCppSettings] = await Promise.all([
+			const [
+				settings,
+				ollamaSettings,
+				koboldCppSettings,
+				koboldCppAdminPasswordRow
+			] = await Promise.all([
 				db.query.systemSettings.findFirst({
 					where: eq(schema.systemSettings.id, 1),
 					columns: {
@@ -25,10 +33,20 @@ export const systemSettingsGet: Handler<Sockets.SystemSettings.Get.Params, Socke
 						charaVaultTokenAuthTag: false
 					}
 				}),
-				db.query.ollamaSettings.findFirst({ where: eq(schema.ollamaSettings.id, 1), columns: { id: false } }),
+				db.query.ollamaSettings.findFirst({
+					where: eq(schema.ollamaSettings.id, 1),
+					columns: { id: false }
+				}),
 				db.query.koboldCppSettings.findFirst({
 					where: eq(schema.koboldCppSettings.id, 1),
 					columns: { id: false, koboldCppManagedAdminPassword: false }
+				}),
+				// Separate, minimal query just for presence -- the password value
+				// itself must never enter a variable that could end up in a
+				// response object, even transiently.
+				db.query.koboldCppSettings.findFirst({
+					where: eq(schema.koboldCppSettings.id, 1),
+					columns: { koboldCppManagedAdminPassword: true }
 				})
 			])
 
@@ -37,7 +55,11 @@ export const systemSettingsGet: Handler<Sockets.SystemSettings.Get.Params, Socke
 			const res: Sockets.SystemSettings.Get.Response = {
 				systemSettings: settings as any,
 				ollamaSettings: (ollamaSettings ?? {}) as any,
-				koboldCppSettings: (koboldCppSettings ?? {}) as any,
+				koboldCppSettings: {
+					...(koboldCppSettings ?? {}),
+					koboldCppManagedAdminPasswordSet:
+						!!koboldCppAdminPasswordRow?.koboldCppManagedAdminPassword
+				} as any,
 				isAndroidWrapper: isAndroidWrapper()
 			}
 
@@ -45,12 +67,13 @@ export const systemSettingsGet: Handler<Sockets.SystemSettings.Get.Params, Socke
 			return res
 		} catch (error: any) {
 			console.error("Error fetching system settings:", error)
-			emitToUser("systemSettings:get:error", { error: "Failed to fetch system settings" })
+			emitToUser("systemSettings:get:error", {
+				error: "Failed to fetch system settings"
+			})
 			throw error
 		}
 	}
 }
-
 
 export const systemSettingsUpdateSummarizationEnabled: Handler<
 	Sockets.SystemSettings.UpdateSummarizationEnabled.Params,
@@ -65,10 +88,11 @@ export const systemSettingsUpdateSummarizationEnabled: Handler<
 				.set({ summarizationEnabled: params.enabled })
 				.where(eq(schema.systemSettings.id, 1))
 
-			const res: Sockets.SystemSettings.UpdateSummarizationEnabled.Response = {
-				success: true,
-				enabled: params.enabled
-			}
+			const res: Sockets.SystemSettings.UpdateSummarizationEnabled.Response =
+				{
+					success: true,
+					enabled: params.enabled
+				}
 			emitToUser("systemSettings:updateSummarizationEnabled", res)
 			await systemSettingsGet.handler(socket, {}, emitToUser)
 			return res
@@ -94,10 +118,11 @@ export const systemSettingsUpdateContextDebuggingEnabled: Handler<
 				.update(schema.systemSettings)
 				.set({ contextDebuggingEnabled: params.enabled })
 				.where(eq(schema.systemSettings.id, 1))
-			const res: Sockets.SystemSettings.UpdateContextDebuggingEnabled.Response = {
-				success: true,
-				enabled: params.enabled
-			}
+			const res: Sockets.SystemSettings.UpdateContextDebuggingEnabled.Response =
+				{
+					success: true,
+					enabled: params.enabled
+				}
 			emitToUser("systemSettings:updateContextDebuggingEnabled", res)
 			await systemSettingsGet.handler(socket, {}, emitToUser)
 			return res
@@ -127,11 +152,16 @@ export const systemSettingsUpdateAccountsEnabled: Handler<
 			if (params.enabled) {
 				const currentPassphrase = await db.query.passphrases.findFirst({
 					where: (p, { eq, and, isNull }) =>
-						and(eq(p.userId, socket.user!.id), isNull(p.invalidatedAt)),
+						and(
+							eq(p.userId, socket.user!.id),
+							isNull(p.invalidatedAt)
+						),
 					orderBy: (p, { desc }) => [desc(p.createdAt)]
 				})
 				if (!currentPassphrase) {
-					throw new Error("Set a passphrase before enabling user accounts")
+					throw new Error(
+						"Set a passphrase before enabling user accounts"
+					)
 				}
 			}
 
@@ -160,7 +190,11 @@ export const systemSettingsUpdateAccountsEnabled: Handler<
 export function registerSystemSettingsHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
-	register: (socket: any, handler: Handler<any, any>, emitToUser: (event: string, data: any) => void) => void
+	register: (
+		socket: any,
+		handler: Handler<any, any>,
+		emitToUser: (event: string, data: any) => void
+	) => void
 ) {
 	register(socket, systemSettingsGet, emitToUser)
 	register(socket, systemSettingsUpdateSummarizationEnabled, emitToUser)

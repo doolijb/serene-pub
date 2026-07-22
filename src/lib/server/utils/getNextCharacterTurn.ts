@@ -231,7 +231,9 @@ function getNextCharacterTurnUserSplit({
 export function getNextCharacterTurn(
 	chat: {
 		chatMessages: SelectChatMessage[]
-		chatCharacters: (SelectChatCharacter & { character: SelectCharacter | null })[]
+		chatCharacters: (SelectChatCharacter & {
+			character: SelectCharacter | null
+		})[]
 		chatPersonas: (SelectChatPersona & { persona: SelectPersona | null })[]
 	},
 	groupReplyStrategy?: string | null
@@ -251,7 +253,8 @@ export function getNextCharacterTurn(
 			cc.character !== null
 	)
 	const validChatPersonas = chat.chatPersonas.filter(
-		(cp): cp is typeof cp & { persona: SelectPersona } => cp.persona !== null
+		(cp): cp is typeof cp & { persona: SelectPersona } =>
+			cp.persona !== null
 	)
 	if (!validChatCharacters.length || !validChatPersonas.length) {
 		return null
@@ -290,5 +293,10 @@ export function getNextCharacterTurn(
 	const personaIds = validChatPersonas.map((cp) => cp.persona.id)
 	const characterIds = activeCharacters.map((cc) => cc.character.id)
 
-	return computeDueCharacter({ activeCharacters, personaIds, characterIds, messages })
+	return computeDueCharacter({
+		activeCharacters,
+		personaIds,
+		characterIds,
+		messages
+	})
 }

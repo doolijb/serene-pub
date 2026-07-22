@@ -12,7 +12,10 @@ import { generateChatTitle } from "./generateChatTitle"
 import { parseReasoningFormat } from "./parseReasoningFormat"
 import { buildGraphContext } from "./graphContextFormatter"
 import { llmQueue, isQueueCancellation } from "./llmQueue"
-import { persistGenerationStage, persistGenerationErrorRow } from "./generationStatus"
+import {
+	persistGenerationStage,
+	persistGenerationErrorRow
+} from "./generationStatus"
 import { resolveTaskConfig } from "./resolveTaskConfig"
 import { resolveNarratorPromptConfig } from "./resolveNarratorPromptConfig"
 import { autoEnqueueChat } from "$lib/server/embedding/vectorizationQueue"
@@ -47,8 +50,11 @@ function buildThinkingMetadata(
 		}
 
 		// Build thinkingHistory always parallel (same length) as history
-		const thinkingHistory: (string | null)[] = [...(swipes.thinkingHistory || [])]
-		while (thinkingHistory.length < history.length) thinkingHistory.push(null)
+		const thinkingHistory: (string | null)[] = [
+			...(swipes.thinkingHistory || [])
+		]
+		while (thinkingHistory.length < history.length)
+			thinkingHistory.push(null)
 		if (hasThinking && typeof idx === "number") {
 			thinkingHistory[idx] = thinking!
 		}
@@ -358,8 +364,11 @@ export async function generateResponse({
 
 	// Get context/prompt config from user settings; resolve connection+sampling via
 	// resolveTaskConfig (chat override → prompt config override → system default)
-	const { sampling: defaultSampling, contextConfig, promptConfig } =
-		await getUserConfigurations(userId)
+	const {
+		sampling: defaultSampling,
+		contextConfig,
+		promptConfig
+	} = await getUserConfigurations(userId)
 
 	// Narrator response: a manually-triggered, non-character narration/environment
 	// message — uses its own "Chat Prompts: Narrator" config instead of the
@@ -402,7 +411,9 @@ export async function generateResponse({
 			socket.io,
 			generatingMessage.chatId,
 			generatingMessage.id,
-			new Error("No AI connection configured. Please set up a connection first.")
+			new Error(
+				"No AI connection configured. Please set up a connection first."
+			)
 		)
 		return false
 	}
@@ -432,7 +443,8 @@ export async function generateResponse({
 		where: eq(schema.systemSettings.id, 1),
 		columns: { contextDebuggingEnabled: true }
 	})
-	const contextDebuggingEnabled = sysSettings?.contextDebuggingEnabled ?? false
+	const contextDebuggingEnabled =
+		sysSettings?.contextDebuggingEnabled ?? false
 
 	// Get fresh metadata from the generating message (important for reasoning
 	// detection) — isNarratorResponse rides along here rather than as a separate
@@ -465,10 +477,13 @@ export async function generateResponse({
 		connection: connection,
 		sampling: sampling,
 		contextConfig: contextConfig,
-		promptConfig: isNarratorResponseMode ? narratorPromptConfig! : promptConfig,
-		currentCharacterId: isAssistantMode || isNarratorResponseMode
-			? null
-			: generatingMessage.characterId!,
+		promptConfig: isNarratorResponseMode
+			? narratorPromptConfig!
+			: promptConfig,
+		currentCharacterId:
+			isAssistantMode || isNarratorResponseMode
+				? null
+				: generatingMessage.characterId!,
 		tokenCounter,
 		tokenLimit,
 		contextThresholdPercent,
@@ -493,7 +508,10 @@ export async function generateResponse({
 				adapter.promptBuilder.instructions += graphCtx
 			}
 		} catch (err) {
-			console.warn("[generateResponse] graph context injection failed:", err)
+			console.warn(
+				"[generateResponse] graph context injection failed:",
+				err
+			)
 		}
 	}
 
@@ -561,7 +579,12 @@ export async function generateResponse({
 				}),
 			onCancel: () => adapter.abort(),
 			onStatusChange: (status) =>
-				persistGenerationStage(generatingMessage.id, generatingMessage.chatId, socket.io, status)
+				persistGenerationStage(
+					generatingMessage.id,
+					generatingMessage.chatId,
+					socket.io,
+					status
+				)
 		},
 		queueItemId
 	)
@@ -586,9 +609,14 @@ export async function generateResponse({
 			chatMessage: updatedMsg!
 		}
 		socket.io.to("user_" + userId).emit("personaMessageReceived", response)
-		await broadcastToChatUsers(socket.io, updatedMsg!.chatId, "chatMessage", {
-			chatMessage: updatedMsg!
-		})
+		await broadcastToChatUsers(
+			socket.io,
+			updatedMsg!.chatId,
+			"chatMessage",
+			{
+				chatMessage: updatedMsg!
+			}
+		)
 
 		// ASYNC: Generate chat title if this is the first assistant message in an assistant chat
 		if (isAssistantMode && chat && !isAborted) {
@@ -667,8 +695,12 @@ async function runGenerateAndPersist({
 	queueItemId: string
 }): Promise<GenerateExecuteResult> {
 	// Generate completion
-	let { completionResult, compiledPrompt, isAborted, thinkingContent: adapterThinking } =
-		await adapter.generate() // TODO: save compiledPrompt to chatMessages
+	let {
+		completionResult,
+		compiledPrompt,
+		isAborted,
+		thinkingContent: adapterThinking
+	} = await adapter.generate() // TODO: save compiledPrompt to chatMessages
 	let content = ""
 	let thinking = "" // accumulated thinking from streaming thinkingCb
 
@@ -751,15 +783,21 @@ async function runGenerateAndPersist({
 					const thinkingHistory: (string | null)[] = [
 						...(swipes.thinkingHistory || [])
 					]
-					while (thinkingHistory.length < history.length) thinkingHistory.push(null)
-					if (currentThinking !== undefined && typeof idx === "number") {
+					while (thinkingHistory.length < history.length)
+						thinkingHistory.push(null)
+					if (
+						currentThinking !== undefined &&
+						typeof idx === "number"
+					) {
 						thinkingHistory[idx] = currentThinking
 					}
 					updateData = {
 						...updateData,
 						metadata: {
 							...generatingMessage.metadata,
-							...(currentThinking !== undefined ? { thinking: currentThinking } : {}),
+							...(currentThinking !== undefined
+								? { thinking: currentThinking }
+								: {}),
 							swipes: {
 								...swipes,
 								history,
@@ -927,7 +965,9 @@ async function runGenerateAndPersist({
 					generationStage: null,
 					queueItemId: null,
 					error: null,
-					...(finalMetadata !== null ? { metadata: finalMetadata } : {}),
+					...(finalMetadata !== null
+						? { metadata: finalMetadata }
+						: {}),
 					debugMeta: streamingDebugMetaValue
 				}
 			}
@@ -1033,7 +1073,9 @@ async function runGenerateAndPersist({
 					generationStage: null,
 					queueItemId: null,
 					error: null,
-					...(updateData.metadata ? { metadata: updateData.metadata } : {}),
+					...(updateData.metadata
+						? { metadata: updateData.metadata }
+						: {}),
 					debugMeta: nonStreamDebugMetaValue
 				}
 			}

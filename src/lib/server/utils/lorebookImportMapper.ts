@@ -15,7 +15,8 @@
 export function hasLorebookEntries(book: unknown): boolean {
 	const entries = (book as any)?.entries
 	if (Array.isArray(entries)) return entries.length > 0
-	if (entries && typeof entries === "object") return Object.keys(entries).length > 0
+	if (entries && typeof entries === "object")
+		return Object.keys(entries).length > 0
 	return false
 }
 
@@ -92,14 +93,20 @@ export function resolveParentNodeLinks(
 ): Array<{ realId: number; parentRealId: number }> {
 	const parentLocalIdByLocalId = new Map<number, number>()
 	for (const node of rawNodes) {
-		if (typeof node?.localId === "number" && typeof node?.parentLocalId === "number") {
+		if (
+			typeof node?.localId === "number" &&
+			typeof node?.parentLocalId === "number"
+		) {
 			parentLocalIdByLocalId.set(node.localId, node.parentLocalId)
 		}
 	}
 
 	const links: Array<{ realId: number; parentRealId: number }> = []
 	for (const node of rawNodes) {
-		if (typeof node?.localId !== "number" || typeof node?.parentLocalId !== "number") {
+		if (
+			typeof node?.localId !== "number" ||
+			typeof node?.parentLocalId !== "number"
+		) {
 			continue
 		}
 		const { localId, parentLocalId } = node as {
@@ -169,7 +176,9 @@ export function normalizeLorebookEntryPriority(
  * falls back to world lore — the most agnostic table, matching this
  * importer's pre-existing behavior for non-Serene-Pub sources.
  */
-export function entryTypeOf(entry: LorebookEntryLike): "world" | "character" | "history" {
+export function entryTypeOf(
+	entry: LorebookEntryLike
+): "world" | "character" | "history" {
 	const marked = entry.extensions?.serenepub?.entryType
 	if (marked === "character" || marked === "history") return marked
 	return "world"

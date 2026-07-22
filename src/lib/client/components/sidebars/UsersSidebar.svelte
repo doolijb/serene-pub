@@ -137,8 +137,11 @@
 			}
 		})
 
+		// Setting isMounted here is enough to trigger the $effect above (it
+		// reads isMounted as a dependency) — an explicit loadUsers() call here
+		// too would double-fire it, since the effect re-runs the instant this
+		// flips true.
 		isMounted = true
-		loadUsers()
 	})
 
 	onDestroy(() => {
@@ -151,11 +154,7 @@
 
 <div class="flex h-full flex-col p-4">
 	{#if isCreating || isEditing}
-		<UserForm
-			user={selectedUser}
-			onSave={resetForm}
-			onCancel={resetForm}
-		/>
+		<UserForm user={selectedUser} onSave={resetForm} onCancel={resetForm} />
 	{:else if viewingUser}
 		{#key viewingUser.id}
 			<UserViewPanel
@@ -199,11 +198,16 @@
 		<div class="flex-1 overflow-y-auto">
 			{#if isLoading}
 				<div class="flex items-center justify-center py-8">
-					<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+					<Icons.Loader2
+						size={20}
+						class="text-surface-400 animate-spin"
+					/>
 				</div>
 			{:else if filteredUsers.length === 0}
 				<div class="text-surface-700-300 py-8 text-center text-sm">
-					{search ? `No users matching "${search}".` : "No users found."}
+					{search
+						? `No users matching "${search}".`
+						: "No users found."}
 				</div>
 			{:else}
 				<div class="space-y-2">
@@ -221,12 +225,16 @@
 									{user.displayName || user.username}
 								</span>
 								{#if user.displayName}
-									<span class="text-surface-700-300 shrink-0 text-xs">
+									<span
+										class="text-surface-700-300 shrink-0 text-xs"
+									>
 										@{user.username}
 									</span>
 								{/if}
 								{#if user.isAdmin}
-									<span class="preset-filled-primary-500 shrink-0 rounded px-1.5 py-0.5 text-xs">
+									<span
+										class="preset-filled-primary-500 shrink-0 rounded px-1.5 py-0.5 text-xs"
+									>
 										Admin
 									</span>
 								{/if}
@@ -236,11 +244,15 @@
 								<div
 									class="ml-2 flex shrink-0 gap-1"
 									role="group"
-									aria-label="Actions for {user.displayName || user.username}"
+									aria-label="Actions for {user.displayName ||
+										user.username}"
 								>
 									<button
 										class="btn btn-sm preset-filled-surface-400-600"
-										onclick={(e) => { e.stopPropagation(); startEdit(user) }}
+										onclick={(e) => {
+											e.stopPropagation()
+											startEdit(user)
+										}}
 										title="Edit user"
 										type="button"
 									>
@@ -249,7 +261,10 @@
 									</button>
 									<button
 										class="btn btn-sm preset-tonal-error"
-										onclick={(e) => { e.stopPropagation(); confirmDelete(user) }}
+										onclick={(e) => {
+											e.stopPropagation()
+											confirmDelete(user)
+										}}
 										title="Delete user"
 										type="button"
 									>
@@ -277,23 +292,36 @@
 	}}
 >
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
+			>
 				<div class="p-6">
 					<h3 class="mb-4 text-lg font-semibold">Delete User</h3>
 					<p class="text-surface-700-300 mb-6">
 						Are you sure you want to delete "{userToDelete?.displayName ||
-							userToDelete?.username}"? This action cannot be undone.
+							userToDelete?.username}"? This action cannot be
+						undone.
 					</p>
 					<div class="flex justify-end gap-2">
 						<button
 							class="btn btn-sm preset-filled-surface-500"
-							onclick={() => { showDeleteModal = false; userToDelete = undefined }}
+							onclick={() => {
+								showDeleteModal = false
+								userToDelete = undefined
+							}}
 						>
 							Cancel
 						</button>
-						<button class="btn btn-sm preset-filled-error-500" onclick={deleteUser}>
+						<button
+							class="btn btn-sm preset-filled-error-500"
+							onclick={deleteUser}
+						>
 							Delete
 						</button>
 					</div>

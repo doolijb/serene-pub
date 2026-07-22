@@ -146,7 +146,10 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 	async generate(): Promise<{
 		completionResult:
 			| string
-			| ((contentCb: (chunk: string) => void, thinkingCb?: (chunk: string) => void) => Promise<void>)
+			| ((
+					contentCb: (chunk: string) => void,
+					thinkingCb?: (chunk: string) => void
+			  ) => Promise<void>)
 		compiledPrompt: CompiledPrompt
 		isAborted: boolean
 		thinkingContent?: string
@@ -178,8 +181,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			format: promptFormat,
 			characters:
 				this.chat.chatCharacters?.map((cc) => cc.character) || [],
-			personas:
-				this.chat.chatPersonas?.map((cp) => cp.persona) || [],
+			personas: this.chat.chatPersonas?.map((cp) => cp.persona) || [],
 			currentCharacterId: this.currentCharacterId ?? undefined
 		})
 		const characterName = resolveCharacterName(
@@ -221,7 +223,10 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 
 		if (stream) {
 			return {
-				completionResult: async (contentCb: (chunk: string) => void, _thinkingCb?: (chunk: string) => void) => {
+				completionResult: async (
+					contentCb: (chunk: string) => void,
+					_thinkingCb?: (chunk: string) => void
+				) => {
 					try {
 						if (useChat && messages) {
 							this.prediction = modelClient.respond(

@@ -1,4 +1,7 @@
-import type { TypedSocket, SocketEventMap } from "$lib/client/sockets/typedSocket"
+import type {
+	TypedSocket,
+	SocketEventMap
+} from "$lib/client/sockets/typedSocket"
 import {
 	resolveSillyTavernDataRoot,
 	relativeToDataRoot,
@@ -33,7 +36,9 @@ function isChatHistoryPath(relativePath: string): boolean {
  * flow actually needs. Returns null if no recognizable SillyTavern data was
  * found in the picked folder.
  */
-export function resolvePickedFolder(fileList: FileList): FolderPickResult | null {
+export function resolvePickedFolder(
+	fileList: FileList
+): FolderPickResult | null {
 	const all = Array.from(fileList)
 	const relPaths = all.map((f) => f.webkitRelativePath || f.name)
 	const root = resolveSillyTavernDataRoot(relPaths)
@@ -98,7 +103,11 @@ function requestOnce<K extends keyof SocketEventMap>(
 
 /** Starts a new import staging session, returning its id. */
 export async function startImportSession(socket: TypedSocket): Promise<string> {
-	const response = await requestOnce(socket, "import:sillytavern:startSession", {})
+	const response = await requestOnce(
+		socket,
+		"import:sillytavern:startSession",
+		{}
+	)
 	if (!response.success || !response.importSessionId) {
 		throw new Error(response.error || "Failed to start import session")
 	}

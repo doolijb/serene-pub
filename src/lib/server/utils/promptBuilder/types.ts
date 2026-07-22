@@ -64,15 +64,15 @@ export type RagDiagnostics = {
 }
 
 export type InclusionReason =
-	| "reserved_constant"    // pinned/constant entry
-	| "reserved_guaranteed"  // message in last MIN_GUARANTEED_MESSAGES window
-	| "filled_scored"        // added in fill phase, score.total > 0
-	| "filled_zero_score"    // added in fill phase, score.total === 0, budget remained
-	| "excluded_budget"      // score > 0 but type cap exhausted
+	| "reserved_constant" // pinned/constant entry
+	| "reserved_guaranteed" // message in last MIN_GUARANTEED_MESSAGES window
+	| "filled_scored" // added in fill phase, score.total > 0
+	| "filled_zero_score" // added in fill phase, score.total === 0, budget remained
+	| "excluded_budget" // score > 0 but type cap exhausted
 	| "excluded_token_limit" // would have been included but hit token limit
-	| "excluded_zero_score"  // score === 0 and budget was consumed
-	| "excluded_visibility"  // filtered by character visibility rules
-	| "excluded_disabled"    // entry.enabled === false
+	| "excluded_zero_score" // score === 0 and budget was consumed
+	| "excluded_visibility" // filtered by character visibility rules
+	| "excluded_disabled" // entry.enabled === false
 
 export interface ScoreBreakdown {
 	total: number
@@ -117,13 +117,13 @@ interface MessagesDiag {
 export type NonRagDiagnostics = {
 	used: false
 	lore: {
-		worldLore:     LoreTypeDiag
+		worldLore: LoreTypeDiag
 		characterLore: LoreTypeDiag
-		history:       HistoryTypeDiag
+		history: HistoryTypeDiag
 	}
 	messages: MessagesDiag
 	tokens: { reserve: number; total: number; limit: number; threshold: number }
-	entries: ScoredEntry[]   // ALL candidates sorted by score.total descending
+	entries: ScoredEntry[] // ALL candidates sorted by score.total descending
 }
 
 export type CompiledPrompt = {
@@ -197,6 +197,10 @@ export type InfillResult = {
 	renderedPrompt: string | undefined
 	renderedMessages: any[] | undefined
 	totalTokens: number
-	chatMessages: { included: number; includedIds: number[]; excludedIds: number[] }
+	chatMessages: {
+		included: number
+		includedIds: number[]
+		excludedIds: number[]
+	}
 	rag?: RagDiagnostics | NonRagDiagnostics
 }

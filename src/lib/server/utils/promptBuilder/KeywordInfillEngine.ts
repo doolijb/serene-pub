@@ -7,24 +7,38 @@
  */
 
 import type { BasePromptChat } from "../../connectionAdapters/BaseConnectionAdapter"
-import { ChatMessageProcessor, type ProcessedChatMessage } from "./ContentProcessors"
+import {
+	ChatMessageProcessor,
+	type ProcessedChatMessage
+} from "./ContentProcessors"
 import { attachCharacterLoreToCharacters } from "./LorebookBindingUtils"
 import { parseSplitChatPrompt } from "./utils"
-import type { NonRagDiagnostics, ScoredEntry, ScoreBreakdown, TemplateContext, InfillContentOptions, InfillResult } from "./types"
+import type {
+	NonRagDiagnostics,
+	ScoredEntry,
+	ScoreBreakdown,
+	TemplateContext,
+	InfillContentOptions,
+	InfillResult
+} from "./types"
 import { ChatCharacterVisibility } from "$lib/shared/constants/ChatCharacterVisibility"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray, ne, or } from "drizzle-orm"
 import { BaseInfillEngine } from "./BaseInfillEngine"
-import { MAX_GRAPH_PAIRS, fetchActiveRelationshipsAmongNodes, serializeGraphPairs } from "./NarrativeGraphContext"
+import {
+	MAX_GRAPH_PAIRS,
+	fetchActiveRelationshipsAmongNodes,
+	serializeGraphPairs
+} from "./NarrativeGraphContext"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const FILL_BUDGET = {
-	worldLore:     20,
+	worldLore: 20,
 	characterLore: 15,
-	history:       10,
-	messages:      50,
+	history: 10,
+	messages: 50
 } as const
 
 // ─── Internal types ───────────────────────────────────────────────────────────
@@ -36,22 +50,22 @@ interface SceneRow {
 }
 
 interface ScoringContext {
-	guaranteedWindowText: string   // lowercase concat of guaranteed message content
-	guaranteedWindowRaw: string    // original concat (for caseSensitive matching)
+	guaranteedWindowText: string // lowercase concat of guaranteed message content
+	guaranteedWindowRaw: string // original concat (for caseSensitive matching)
 	idfMap: Map<string, number>
 	guaranteedTermFreq: Map<string, number>
 	allMessages: SelectChatMessage[]
 	guaranteedMessages: SelectChatMessage[]
 	olderMessages: SelectChatMessage[]
 	avgMessageLength: number
-	lastRefMap: Map<number, number>  // entryId → last message index containing a key
+	lastRefMap: Map<number, number> // entryId → last message index containing a key
 	guaranteedWindowCharacterIds: Set<number>
-	chatCharacterNames: Set<string>   // lowercase
-	chatPersonaNames: Set<string>     // lowercase
+	chatCharacterNames: Set<string> // lowercase
+	chatPersonaNames: Set<string> // lowercase
 	currentSceneIds: Set<number>
-	messageToSceneId: Map<number, number>   // messageId → sceneId
+	messageToSceneId: Map<number, number> // messageId → sceneId
 	historyEntryToSceneId: Map<number, number> // historyEntryId → sceneId
-	historyRecencyMap: Map<number, number>  // entryId → 0–1 (1 = newest)
+	historyRecencyMap: Map<number, number> // entryId → 0–1 (1 = newest)
 }
 
 // ─── Engine ───────────────────────────────────────────────────────────────────
@@ -60,7 +74,10 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 	constructor(
 		chat: BasePromptChat,
 		interpolationEngine: any,
-		populateLorebookEntryBindings: (entry: any, chat: BasePromptChat) => any,
+		populateLorebookEntryBindings: (
+			entry: any,
+			chat: BasePromptChat
+		) => any,
 		private currentCharacterId: number | null
 	) {
 		super(chat, interpolationEngine, populateLorebookEntryBindings)
@@ -78,10 +95,11 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		handlebars,
 		contextConfig
 	}: InfillContentOptions): Promise<InfillResult> {
-		const interpolationContext = this.interpolationEngine.createInterpolationContext({
-			currentCharacterName: charName,
-			currentPersonaName: personaName
-		})
+		const interpolationContext =
+			this.interpolationEngine.createInterpolationContext({
+				currentCharacterName: charName,
+				currentPersonaName: personaName
+			})
 
 		// ── Phase 0: Pre-computation ──────────────────────────────────────────
 
@@ -89,18 +107,28 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		const guaranteedMessages =
 			allMessages.length <= KeywordInfillEngine.MIN_GUARANTEED_MESSAGES
 				? allMessages.slice()
-				: allMessages.slice(-KeywordInfillEngine.MIN_GUARANTEED_MESSAGES)
+				: allMessages.slice(
+						-KeywordInfillEngine.MIN_GUARANTEED_MESSAGES
+					)
 		const olderMessages =
 			allMessages.length <= KeywordInfillEngine.MIN_GUARANTEED_MESSAGES
 				? []
-				: allMessages.slice(0, -KeywordInfillEngine.MIN_GUARANTEED_MESSAGES)
+				: allMessages.slice(
+						0,
+						-KeywordInfillEngine.MIN_GUARANTEED_MESSAGES
+					)
 
 		// Guaranteed window text
-		const guaranteedWindowRaw = guaranteedMessages.map((m) => m.content ?? "").join(" ")
+		const guaranteedWindowRaw = guaranteedMessages
+			.map((m) => m.content ?? "")
+			.join(" ")
 		const guaranteedWindowText = guaranteedWindowRaw.toLowerCase()
 
 		// TF-IDF: build term frequency over all messages
-		const allText = allMessages.map((m) => m.content ?? "").join(" ").toLowerCase()
+		const allText = allMessages
+			.map((m) => m.content ?? "")
+			.join(" ")
+			.toLowerCase()
 		const allTerms = tokenize(allText)
 		const corpusTermFreq = buildTermFreq(allTerms)
 
@@ -113,15 +141,20 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		// Average message length
 		const avgMessageLength =
 			allMessages.length > 0
-				? allMessages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0) / allMessages.length
+				? allMessages.reduce(
+						(sum, m) => sum + (m.content?.length ?? 0),
+						0
+					) / allMessages.length
 				: 1
 
 		// lastRefMap: last message index (in allMessages) where any key of entry appears
-		const lorebook = (this.chat as any).lorebook as {
-			worldLoreEntries?: SelectWorldLoreEntry[]
-			characterLoreEntries?: SelectCharacterLoreEntry[]
-			historyEntries?: SelectHistoryEntry[]
-		} | undefined
+		const lorebook = (this.chat as any).lorebook as
+			| {
+					worldLoreEntries?: SelectWorldLoreEntry[]
+					characterLoreEntries?: SelectCharacterLoreEntry[]
+					historyEntries?: SelectHistoryEntry[]
+			  }
+			| undefined
 
 		const lastRefMap = buildLastRefMap(allMessages, lorebook)
 
@@ -136,12 +169,15 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		// Chat character and persona names (lowercase)
 		const chatCharacterNames = new Set<string>()
 		for (const cc of (this.chat.chatCharacters || []) as any[]) {
-			if (cc.character?.name) chatCharacterNames.add(cc.character.name.toLowerCase())
-			if (cc.character?.nickname) chatCharacterNames.add(cc.character.nickname.toLowerCase())
+			if (cc.character?.name)
+				chatCharacterNames.add(cc.character.name.toLowerCase())
+			if (cc.character?.nickname)
+				chatCharacterNames.add(cc.character.nickname.toLowerCase())
 		}
 		const chatPersonaNames = new Set<string>()
 		for (const cp of (this.chat.chatPersonas || []) as any[]) {
-			if (cp.persona?.name) chatPersonaNames.add(cp.persona.name.toLowerCase())
+			if (cp.persona?.name)
+				chatPersonaNames.add(cp.persona.name.toLowerCase())
 		}
 
 		// Scene DB query
@@ -164,7 +200,7 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		const messageToSceneId = new Map<number, number>()
 		const historyEntryToSceneId = new Map<number, number>()
 		for (const scene of scenes) {
-			for (const msgId of (scene.selectedMessageIds || [])) {
+			for (const msgId of scene.selectedMessageIds || []) {
 				messageToSceneId.set(msgId, scene.id)
 			}
 			if (scene.historyEntryId) {
@@ -180,18 +216,29 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		}
 
 		// History recency map
-		const historyRecencyMap = buildHistoryRecencyMap(lorebook?.historyEntries ?? [])
+		const historyRecencyMap = buildHistoryRecencyMap(
+			lorebook?.historyEntries ?? []
+		)
 
 		// mostRecentHistory: from full lorebook history list
-		let mostRecentHistory: { year: number; month: number | null; day: number | null } | null = null
+		let mostRecentHistory: {
+			year: number
+			month: number | null
+			day: number | null
+		} | null = null
 		if (lorebook?.historyEntries?.length) {
 			let latestVal = -Infinity
 			for (const e of lorebook.historyEntries as any[]) {
 				if (e.year == null) continue
-				const val = (e.year ?? 0) * 10000 + (e.month ?? 0) * 100 + (e.day ?? 0)
+				const val =
+					(e.year ?? 0) * 10000 + (e.month ?? 0) * 100 + (e.day ?? 0)
 				if (val > latestVal) {
 					latestVal = val
-					mostRecentHistory = { year: e.year, month: e.month ?? null, day: e.day ?? null }
+					mostRecentHistory = {
+						year: e.year,
+						month: e.month ?? null,
+						day: e.day ?? null
+					}
 				}
 			}
 		}
@@ -224,7 +271,9 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 			message: (this.chat as any)._continuationPrefill ?? ""
 		}
 
-		const processMsg = (msg: SelectChatMessage): ProcessedChatMessage | null =>
+		const processMsg = (
+			msg: SelectChatMessage
+		): ProcessedChatMessage | null =>
 			this.chatMessageProcessor.processItem(msg, {
 				interpolationContext,
 				charName,
@@ -239,28 +288,34 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 			.map(processMsg)
 			.filter((m): m is ProcessedChatMessage => m !== null)
 
-		const chatMessages: ProcessedChatMessage[] = [placeholder, ...processedGuaranteed]
+		const chatMessages: ProcessedChatMessage[] = [
+			placeholder,
+			...processedGuaranteed
+		]
 
 		// Reserved lore: constant === true && enabled !== false
 		const reservedWorldLore: SelectWorldLoreEntry[] = []
 		const reservedCharacterLore: SelectCharacterLoreEntry[] = []
 		const reservedHistory: SelectHistoryEntry[] = []
 
-		for (const entry of (lorebook?.worldLoreEntries ?? [])) {
+		for (const entry of lorebook?.worldLoreEntries ?? []) {
 			if (entry.constant === true && entry.enabled !== false) {
 				reservedWorldLore.push({ ...entry })
 			}
 		}
 
-		for (const entry of (lorebook?.characterLoreEntries ?? [])) {
+		for (const entry of lorebook?.characterLoreEntries ?? []) {
 			if (entry.constant === true && entry.enabled !== false) {
 				if (!this.isCharacterLoreVisible(entry)) continue
 				reservedCharacterLore.push({ ...entry })
 			}
 		}
 
-		for (const entry of (lorebook?.historyEntries ?? [])) {
-			if ((entry as any).constant === true && (entry as any).enabled !== false) {
+		for (const entry of lorebook?.historyEntries ?? []) {
+			if (
+				(entry as any).constant === true &&
+				(entry as any).enabled !== false
+			) {
 				reservedHistory.push({ ...entry } as SelectHistoryEntry)
 			}
 		}
@@ -268,26 +323,43 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		// Populate bindings on reserved entries
 		const populatedReservedWorldLore = reservedWorldLore.map((e) => {
 			const cloned = { ...e }
-			return this.populateLorebookEntryBindings(cloned, this.chat) as SelectWorldLoreEntry
+			return this.populateLorebookEntryBindings(
+				cloned,
+				this.chat
+			) as SelectWorldLoreEntry
 		})
 		const populatedReservedCharLore = reservedCharacterLore.map((e) => {
 			const cloned = { ...e }
-			return this.populateLorebookEntryBindings(cloned, this.chat) as SelectCharacterLoreEntry
+			return this.populateLorebookEntryBindings(
+				cloned,
+				this.chat
+			) as SelectCharacterLoreEntry
 		})
 		const populatedReservedHistory = reservedHistory.map((e) => {
 			const cloned = { ...e }
-			return this.populateLorebookEntryBindings(cloned, this.chat) as SelectHistoryEntry
+			return this.populateLorebookEntryBindings(
+				cloned,
+				this.chat
+			) as SelectHistoryEntry
 		})
 
 		// Track sets of reserved IDs
 		const reservedWorldLoreIds = new Set(reservedWorldLore.map((e) => e.id))
-		const reservedCharLoreIds = new Set(reservedCharacterLore.map((e) => e.id))
+		const reservedCharLoreIds = new Set(
+			reservedCharacterLore.map((e) => e.id)
+		)
 		const reservedHistoryIds = new Set(reservedHistory.map((e) => e.id))
 
 		// Working included lore arrays (start with reserved)
-		const includedWorldLore: SelectWorldLoreEntry[] = [...populatedReservedWorldLore]
-		const includedCharLore: SelectCharacterLoreEntry[] = [...populatedReservedCharLore]
-		const includedHistory: SelectHistoryEntry[] = [...populatedReservedHistory]
+		const includedWorldLore: SelectWorldLoreEntry[] = [
+			...populatedReservedWorldLore
+		]
+		const includedCharLore: SelectCharacterLoreEntry[] = [
+			...populatedReservedCharLore
+		]
+		const includedHistory: SelectHistoryEntry[] = [
+			...populatedReservedHistory
+		]
 
 		// Build reserve token count
 		const buildCtx = () =>
@@ -303,8 +375,12 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 			)
 
 		const countTokens = this.makeCountTokens(
-			handlebars, contextConfig.template, useChatFormat ?? false,
-			tokenCounter, chatMessages, buildCtx
+			handlebars,
+			contextConfig.template,
+			useChatFormat ?? false,
+			tokenCounter,
+			chatMessages,
+			buildCtx
 		)
 
 		const reserveTokens = await countTokens()
@@ -312,51 +388,99 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		// ── Phase 2: Score all non-reserved candidates ────────────────────────
 
 		// Candidate lists (non-reserved, enabled)
-		const candidateWorldLore: SelectWorldLoreEntry[] = (lorebook?.worldLoreEntries ?? [])
-			.filter((e) => !reservedWorldLoreIds.has(e.id) && e.enabled !== false)
-		const candidateCharLore: SelectCharacterLoreEntry[] = (lorebook?.characterLoreEntries ?? [])
-			.filter((e) => !reservedCharLoreIds.has(e.id) && e.enabled !== false)
+		const candidateWorldLore: SelectWorldLoreEntry[] = (
+			lorebook?.worldLoreEntries ?? []
+		).filter((e) => !reservedWorldLoreIds.has(e.id) && e.enabled !== false)
+		const candidateCharLore: SelectCharacterLoreEntry[] = (
+			lorebook?.characterLoreEntries ?? []
+		)
+			.filter(
+				(e) => !reservedCharLoreIds.has(e.id) && e.enabled !== false
+			)
 			.filter((e) => this.isCharacterLoreVisible(e))
-		const visibilityFilteredCharLore: SelectCharacterLoreEntry[] = (lorebook?.characterLoreEntries ?? [])
-			.filter((e) => !reservedCharLoreIds.has(e.id) && e.enabled !== false)
+		const visibilityFilteredCharLore: SelectCharacterLoreEntry[] = (
+			lorebook?.characterLoreEntries ?? []
+		)
+			.filter(
+				(e) => !reservedCharLoreIds.has(e.id) && e.enabled !== false
+			)
 			.filter((e) => !this.isCharacterLoreVisible(e))
-		const candidateHistory: SelectHistoryEntry[] = (lorebook?.historyEntries ?? [])
-			.filter((e) => !reservedHistoryIds.has((e as any).id) && (e as any).enabled !== false) as SelectHistoryEntry[]
-		const candidateOlderMessages: SelectChatMessage[] = olderMessages.slice()
+		const candidateHistory: SelectHistoryEntry[] = (
+			lorebook?.historyEntries ?? []
+		).filter(
+			(e) =>
+				!reservedHistoryIds.has((e as any).id) &&
+				(e as any).enabled !== false
+		) as SelectHistoryEntry[]
+		const candidateOlderMessages: SelectChatMessage[] =
+			olderMessages.slice()
 
 		// Also track disabled entries for diagnostics
-		const disabledWorldLore = (lorebook?.worldLoreEntries ?? []).filter((e) => e.enabled === false)
-		const disabledCharLore = (lorebook?.characterLoreEntries ?? []).filter((e) => (e as any).enabled === false)
-		const disabledHistory = (lorebook?.historyEntries ?? []).filter((e) => (e as any).enabled === false)
+		const disabledWorldLore = (lorebook?.worldLoreEntries ?? []).filter(
+			(e) => e.enabled === false
+		)
+		const disabledCharLore = (lorebook?.characterLoreEntries ?? []).filter(
+			(e) => (e as any).enabled === false
+		)
+		const disabledHistory = (lorebook?.historyEntries ?? []).filter(
+			(e) => (e as any).enabled === false
+		)
 
 		// Score worldLore candidates (raw tfidf)
-		interface ScoredWorldLore { entry: SelectWorldLoreEntry; score: ScoreBreakdown }
-		const scoredWorldLore: ScoredWorldLore[] = candidateWorldLore.map((entry) => ({
-			entry,
-			score: this.scoreWorldLore(entry, scoringCtx, 0)
-		}))
+		interface ScoredWorldLore {
+			entry: SelectWorldLoreEntry
+			score: ScoreBreakdown
+		}
+		const scoredWorldLore: ScoredWorldLore[] = candidateWorldLore.map(
+			(entry) => ({
+				entry,
+				score: this.scoreWorldLore(entry, scoringCtx, 0)
+			})
+		)
 
 		// Score characterLore candidates
-		interface ScoredCharLore { entry: SelectCharacterLoreEntry; score: ScoreBreakdown }
-		const scoredCharLore: ScoredCharLore[] = candidateCharLore.map((entry) => ({
-			entry,
-			score: this.scoreCharacterLore(entry, scoringCtx, 0)
-		}))
+		interface ScoredCharLore {
+			entry: SelectCharacterLoreEntry
+			score: ScoreBreakdown
+		}
+		const scoredCharLore: ScoredCharLore[] = candidateCharLore.map(
+			(entry) => ({
+				entry,
+				score: this.scoreCharacterLore(entry, scoringCtx, 0)
+			})
+		)
 
 		// Score history candidates
-		interface ScoredHistory { entry: SelectHistoryEntry; score: ScoreBreakdown }
-		const scoredHistory: ScoredHistory[] = candidateHistory.map((entry) => ({
-			entry,
-			score: this.scoreHistory(entry as any, scoringCtx, 0)
-		}))
+		interface ScoredHistory {
+			entry: SelectHistoryEntry
+			score: ScoreBreakdown
+		}
+		const scoredHistory: ScoredHistory[] = candidateHistory.map(
+			(entry) => ({
+				entry,
+				score: this.scoreHistory(entry as any, scoringCtx, 0)
+			})
+		)
 
 		// Score older messages
-		interface ScoredMessage { msg: SelectChatMessage; idx: number; score: ScoreBreakdown }
-		const scoredMessages: ScoredMessage[] = candidateOlderMessages.map((msg, idx) => ({
-			msg,
-			idx,
-			score: this.scoreMessage(msg, idx, candidateOlderMessages.length, scoringCtx, 0)
-		}))
+		interface ScoredMessage {
+			msg: SelectChatMessage
+			idx: number
+			score: ScoreBreakdown
+		}
+		const scoredMessages: ScoredMessage[] = candidateOlderMessages.map(
+			(msg, idx) => ({
+				msg,
+				idx,
+				score: this.scoreMessage(
+					msg,
+					idx,
+					candidateOlderMessages.length,
+					scoringCtx,
+					0
+				)
+			})
+		)
 
 		// TF-IDF normalization: normalize raw tfidf across all candidates by global max
 		const allRawTfidf = [
@@ -381,7 +505,13 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 			// idx captured during the initial 1:1 map over candidateOlderMessages above
 			// (array is never mutated/reordered in between), so it's safe to reuse here
 			// instead of re-deriving it via an O(n) indexOf lookup per message.
-			s.score = this.scoreMessage(s.msg, s.idx, candidateOlderMessages.length, scoringCtx, maxTfidf)
+			s.score = this.scoreMessage(
+				s.msg,
+				s.idx,
+				candidateOlderMessages.length,
+				scoringCtx,
+				maxTfidf
+			)
 		}
 
 		// ── Phase 3: Fill ─────────────────────────────────────────────────────
@@ -392,7 +522,11 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 			id: number
 			name: string
 			score: ScoreBreakdown
-			payload: SelectWorldLoreEntry | SelectCharacterLoreEntry | SelectHistoryEntry | SelectChatMessage
+			payload:
+				| SelectWorldLoreEntry
+				| SelectCharacterLoreEntry
+				| SelectHistoryEntry
+				| SelectChatMessage
 		}
 
 		const fillPool: FillCandidate[] = [
@@ -481,17 +615,37 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		}
 		// Add disabled entries
 		for (const entry of disabledWorldLore) {
-			allScoredEntries.push({ type: "worldLore", id: entry.id, name: entry.name ?? String(entry.id), score: zeroScoreWith("excluded_disabled") })
+			allScoredEntries.push({
+				type: "worldLore",
+				id: entry.id,
+				name: entry.name ?? String(entry.id),
+				score: zeroScoreWith("excluded_disabled")
+			})
 		}
 		for (const entry of disabledCharLore) {
-			allScoredEntries.push({ type: "characterLore", id: (entry as any).id, name: (entry as any).name ?? String((entry as any).id), score: zeroScoreWith("excluded_disabled") })
+			allScoredEntries.push({
+				type: "characterLore",
+				id: (entry as any).id,
+				name: (entry as any).name ?? String((entry as any).id),
+				score: zeroScoreWith("excluded_disabled")
+			})
 		}
 		for (const entry of disabledHistory) {
-			allScoredEntries.push({ type: "history", id: (entry as any).id, name: formatHistoryDateKey(entry as any), score: zeroScoreWith("excluded_disabled") })
+			allScoredEntries.push({
+				type: "history",
+				id: (entry as any).id,
+				name: formatHistoryDateKey(entry as any),
+				score: zeroScoreWith("excluded_disabled")
+			})
 		}
 		// Add visibility-filtered char lore entries
 		for (const entry of visibilityFilteredCharLore) {
-			allScoredEntries.push({ type: "characterLore", id: entry.id, name: (entry as any).name ?? String(entry.id), score: zeroScoreWith("excluded_visibility") })
+			allScoredEntries.push({
+				type: "characterLore",
+				id: entry.id,
+				name: (entry as any).name ?? String(entry.id),
+				score: zeroScoreWith("excluded_visibility")
+			})
 		}
 
 		// Budget split: reserve MESSAGE_FILL_FRACTION of available budget for chat
@@ -499,28 +653,46 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		const contentBudget = Math.max(0, tokenLimit - reserveTokens)
 		const messageBudget = Math.max(
 			KeywordInfillEngine.MIN_MESSAGE_FILL_TOKENS,
-			Math.floor(contentBudget * KeywordInfillEngine.MESSAGE_FILL_FRACTION)
+			Math.floor(
+				contentBudget * KeywordInfillEngine.MESSAGE_FILL_FRACTION
+			)
 		)
-		const messageTarget = reserveTokens + messageBudget  // ceiling for message fill pass
+		const messageTarget = reserveTokens + messageBudget // ceiling for message fill pass
 
-		const messageFillPool = fillPool.filter(c => c.type === "message")
-		const loreFillPool    = fillPool.filter(c => c.type !== "message")
+		const messageFillPool = fillPool.filter((c) => c.type === "message")
+		const loreFillPool = fillPool.filter((c) => c.type !== "message")
 
 		let totalTokens = reserveTokens
 
 		// ── Phase 3a: Messages first ──────────────────────────────────────────────
 		// Fill older messages (sorted by score) up to messageTarget before lore competes.
 		for (const candidate of messageFillPool) {
-			if (typeCounts[candidate.type] >= (typeBudgets[candidate.type] ?? 999)) {
+			if (
+				typeCounts[candidate.type] >=
+				(typeBudgets[candidate.type] ?? 999)
+			) {
 				candidate.score.includedReason = "excluded_budget"
-				allScoredEntries.push({ type: candidate.type, id: candidate.id, name: candidate.name, score: { ...candidate.score } })
+				allScoredEntries.push({
+					type: candidate.type,
+					id: candidate.id,
+					name: candidate.name,
+					score: { ...candidate.score }
+				})
 				continue
 			}
 
 			const msg = candidate.payload as SelectChatMessage
 			const processed = processMsg(msg)
 			if (!processed) {
-				allScoredEntries.push({ type: candidate.type, id: candidate.id, name: candidate.name, score: { ...candidate.score, includedReason: "excluded_budget" } })
+				allScoredEntries.push({
+					type: candidate.type,
+					id: candidate.id,
+					name: candidate.name,
+					score: {
+						...candidate.score,
+						includedReason: "excluded_budget"
+					}
+				})
 				continue
 			}
 			chatMessages.push(processed)
@@ -529,39 +701,75 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 				chatMessages.pop()
 				totalTokens = await countTokens()
 				candidate.score.includedReason = "excluded_token_limit"
-				allScoredEntries.push({ type: candidate.type, id: candidate.id, name: candidate.name, score: { ...candidate.score } })
+				allScoredEntries.push({
+					type: candidate.type,
+					id: candidate.id,
+					name: candidate.name,
+					score: { ...candidate.score }
+				})
 				continue
 			}
 			typeCounts[candidate.type]++
-			candidate.score.includedReason = candidate.score.total > 0 ? "filled_scored" : "filled_zero_score"
-			allScoredEntries.push({ type: candidate.type, id: candidate.id, name: candidate.name, score: { ...candidate.score } })
+			candidate.score.includedReason =
+				candidate.score.total > 0
+					? "filled_scored"
+					: "filled_zero_score"
+			allScoredEntries.push({
+				type: candidate.type,
+				id: candidate.id,
+				name: candidate.name,
+				score: { ...candidate.score }
+			})
 		}
 
 		// ── Phase 3b: Lore fills remaining budget ─────────────────────────────────
 		// Lore candidates (sorted by score) fill whatever budget remains up to tokenLimit.
 		for (const candidate of loreFillPool) {
-			if (typeCounts[candidate.type] >= (typeBudgets[candidate.type] ?? 999)) {
+			if (
+				typeCounts[candidate.type] >=
+				(typeBudgets[candidate.type] ?? 999)
+			) {
 				candidate.score.includedReason = "excluded_budget"
-				allScoredEntries.push({ type: candidate.type, id: candidate.id, name: candidate.name, score: { ...candidate.score } })
+				allScoredEntries.push({
+					type: candidate.type,
+					id: candidate.id,
+					name: candidate.name,
+					score: { ...candidate.score }
+				})
 				continue
 			}
 
 			let rollback: (() => void) | null = null
 			if (candidate.type === "worldLore") {
 				const entry = candidate.payload as SelectWorldLoreEntry
-				const populated = this.populateLorebookEntryBindings({ ...entry }, this.chat) as SelectWorldLoreEntry
+				const populated = this.populateLorebookEntryBindings(
+					{ ...entry },
+					this.chat
+				) as SelectWorldLoreEntry
 				includedWorldLore.push(populated)
-				rollback = () => { includedWorldLore.pop() }
+				rollback = () => {
+					includedWorldLore.pop()
+				}
 			} else if (candidate.type === "characterLore") {
 				const entry = candidate.payload as SelectCharacterLoreEntry
-				const populated = this.populateLorebookEntryBindings({ ...entry }, this.chat) as SelectCharacterLoreEntry
+				const populated = this.populateLorebookEntryBindings(
+					{ ...entry },
+					this.chat
+				) as SelectCharacterLoreEntry
 				includedCharLore.push(populated)
-				rollback = () => { includedCharLore.pop() }
+				rollback = () => {
+					includedCharLore.pop()
+				}
 			} else if (candidate.type === "history") {
 				const entry = candidate.payload as SelectHistoryEntry
-				const populated = this.populateLorebookEntryBindings({ ...entry }, this.chat) as SelectHistoryEntry
+				const populated = this.populateLorebookEntryBindings(
+					{ ...entry },
+					this.chat
+				) as SelectHistoryEntry
 				includedHistory.push(populated)
-				rollback = () => { includedHistory.pop() }
+				rollback = () => {
+					includedHistory.pop()
+				}
 			}
 
 			totalTokens = await countTokens()
@@ -569,12 +777,25 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 				rollback?.()
 				totalTokens = await countTokens()
 				candidate.score.includedReason = "excluded_token_limit"
-				allScoredEntries.push({ type: candidate.type, id: candidate.id, name: candidate.name, score: { ...candidate.score } })
+				allScoredEntries.push({
+					type: candidate.type,
+					id: candidate.id,
+					name: candidate.name,
+					score: { ...candidate.score }
+				})
 				continue
 			}
 			typeCounts[candidate.type]++
-			candidate.score.includedReason = candidate.score.total > 0 ? "filled_scored" : "filled_zero_score"
-			allScoredEntries.push({ type: candidate.type, id: candidate.id, name: candidate.name, score: { ...candidate.score } })
+			candidate.score.includedReason =
+				candidate.score.total > 0
+					? "filled_scored"
+					: "filled_zero_score"
+			allScoredEntries.push({
+				type: candidate.type,
+				id: candidate.id,
+				name: candidate.name,
+				score: { ...candidate.score }
+			})
 		}
 
 		// ── Phase 4: Enforce budget ───────────────────────────────────────────
@@ -582,7 +803,10 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		// messages may need trimming here (as a safety net for reserve overflows).
 		if (totalTokens > tokenLimit) {
 			totalTokens = await this.enforceTokenBudget(
-				[], chatMessages, tokenLimit, countTokens
+				[],
+				chatMessages,
+				tokenLimit,
+				countTokens
 			)
 		}
 
@@ -590,7 +814,7 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		chatMessages.sort((a, b) => {
 			if (a.id === -2) return -1
 			if (b.id === -2) return 1
-			return b.id - a.id  // newest-first
+			return b.id - a.id // newest-first
 		})
 
 		const finalCtx = buildCtx()
@@ -601,10 +825,15 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		// and how others see them, unconditionally, for every mode — this is
 		// the keyword-mode equivalent of RagInfillEngine's broader semantic
 		// sweep, seeded by chat co-occurrence instead of similarity search.
-		const lorebookId = (this.chat as any).lorebookId as number | null | undefined
+		const lorebookId = (this.chat as any).lorebookId as
+			| number
+			| null
+			| undefined
 		if (lorebookId) {
 			try {
-				const chatCharacterIds = ((this.chat.chatCharacters || []) as any[])
+				const chatCharacterIds = (
+					(this.chat.chatCharacters || []) as any[]
+				)
 					.map((cc) => cc.character?.id)
 					.filter((id): id is number => id != null)
 				const chatPersonaIds = ((this.chat.chatPersonas || []) as any[])
@@ -614,13 +843,26 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 				if (chatCharacterIds.length > 0 || chatPersonaIds.length > 0) {
 					const bindingConditions = []
 					if (chatCharacterIds.length > 0) {
-						bindingConditions.push(inArray(schema.lorebookBindings.characterId, chatCharacterIds))
+						bindingConditions.push(
+							inArray(
+								schema.lorebookBindings.characterId,
+								chatCharacterIds
+							)
+						)
 					}
 					if (chatPersonaIds.length > 0) {
-						bindingConditions.push(inArray(schema.lorebookBindings.personaId, chatPersonaIds))
+						bindingConditions.push(
+							inArray(
+								schema.lorebookBindings.personaId,
+								chatPersonaIds
+							)
+						)
 					}
 					const bindings = await db.query.lorebookBindings.findMany({
-						where: and(eq(schema.lorebookBindings.lorebookId, lorebookId), or(...bindingConditions)),
+						where: and(
+							eq(schema.lorebookBindings.lorebookId, lorebookId),
+							or(...bindingConditions)
+						),
 						columns: { id: true }
 					})
 					const bindingIds = bindings.map((b) => b.id)
@@ -628,22 +870,41 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 					if (bindingIds.length > 0) {
 						const nodes = await db.query.narrativeNodes.findMany({
 							where: and(
-								eq(schema.narrativeNodes.lorebookId, lorebookId),
-								inArray(schema.narrativeNodes.lorebookBindingId, bindingIds),
-								ne(schema.narrativeNodes.nodeVisibility, "hidden")
+								eq(
+									schema.narrativeNodes.lorebookId,
+									lorebookId
+								),
+								inArray(
+									schema.narrativeNodes.lorebookBindingId,
+									bindingIds
+								),
+								ne(
+									schema.narrativeNodes.nodeVisibility,
+									"hidden"
+								)
 							),
 							columns: { id: true }
 						})
 						const nodeIds = nodes.map((n) => n.id)
-						const includedHistoryIds = new Set(includedHistory.map((e) => e.id))
-						const graphPairs = await fetchActiveRelationshipsAmongNodes(
-							nodeIds, lorebookId, MAX_GRAPH_PAIRS, includedHistoryIds
+						const includedHistoryIds = new Set(
+							includedHistory.map((e) => e.id)
 						)
-						finalCtx.narrativeGraph = serializeGraphPairs(graphPairs)
+						const graphPairs =
+							await fetchActiveRelationshipsAmongNodes(
+								nodeIds,
+								lorebookId,
+								MAX_GRAPH_PAIRS,
+								includedHistoryIds
+							)
+						finalCtx.narrativeGraph =
+							serializeGraphPairs(graphPairs)
 					}
 				}
 			} catch (err) {
-				console.warn("[KeywordInfillEngine] narrative graph fill failed:", err)
+				console.warn(
+					"[KeywordInfillEngine] narrative graph fill failed:",
+					err
+				)
 			}
 		}
 
@@ -661,32 +922,51 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 			renderedPrompt = rendered
 		}
 
-		const includedIds = chatMessages.filter((m) => m.id !== -2).map((m) => m.id)
+		const includedIds = chatMessages
+			.filter((m) => m.id !== -2)
+			.map((m) => m.id)
 		const allMessageIds = allMessages.map((m) => m.id)
-		const excludedIds = allMessageIds.filter((id) => !includedIds.includes(id))
+		const excludedIds = allMessageIds.filter(
+			(id) => !includedIds.includes(id)
+		)
 
 		// ── Diagnostics ───────────────────────────────────────────────────────
 		allScoredEntries.sort((a, b) => b.score.total - a.score.total)
 
 		const worldLoreIncluded = includedWorldLore.length
 		const worldLoreCandidates = candidateWorldLore.length
-		const worldLoreTopScore = scoredWorldLore.length > 0 ? Math.max(...scoredWorldLore.map((s) => s.score.total)) : 0
+		const worldLoreTopScore =
+			scoredWorldLore.length > 0
+				? Math.max(...scoredWorldLore.map((s) => s.score.total))
+				: 0
 
 		const charLoreIncluded = includedCharLore.length
 		const charLoreCandidates = candidateCharLore.length
-		const charLoreTopScore = scoredCharLore.length > 0 ? Math.max(...scoredCharLore.map((s) => s.score.total)) : 0
+		const charLoreTopScore =
+			scoredCharLore.length > 0
+				? Math.max(...scoredCharLore.map((s) => s.score.total))
+				: 0
 
 		const historyIncluded = includedHistory.length
 		const historyCandidates = candidateHistory.length
-		const historyTopScore = scoredHistory.length > 0 ? Math.max(...scoredHistory.map((s) => s.score.total)) : 0
+		const historyTopScore =
+			scoredHistory.length > 0
+				? Math.max(...scoredHistory.map((s) => s.score.total))
+				: 0
 
 		let mostRecentDateStr: string | undefined
 		if (mostRecentHistory) {
-			mostRecentDateStr = formatDate(mostRecentHistory.year, mostRecentHistory.month, mostRecentHistory.day)
+			mostRecentDateStr = formatDate(
+				mostRecentHistory.year,
+				mostRecentHistory.month,
+				mostRecentHistory.day
+			)
 		}
 
 		const guaranteedCount = guaranteedMessages.length
-		const filledMessages = chatMessages.filter((m) => m.id !== -2 && !guaranteedMessages.some((g) => g.id === m.id)).length
+		const filledMessages = chatMessages.filter(
+			(m) => m.id !== -2 && !guaranteedMessages.some((g) => g.id === m.id)
+		).length
 
 		const rag: NonRagDiagnostics = {
 			used: false,
@@ -719,7 +999,7 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 				candidates: candidateOlderMessages.length,
 				filledIn: filledMessages,
 				budget: FILL_BUDGET.messages,
-				total: chatMessages.length - 1  // excluding placeholder
+				total: chatMessages.length - 1 // excluding placeholder
 			},
 			tokens: {
 				reserve: reserveTokens,
@@ -767,8 +1047,10 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 
 			// Exclude hidden or minimal
 			if (
-				(chatCharacter as any).visibility === ChatCharacterVisibility.HIDDEN ||
-				(chatCharacter as any).visibility === ChatCharacterVisibility.MINIMAL
+				(chatCharacter as any).visibility ===
+					ChatCharacterVisibility.HIDDEN ||
+				(chatCharacter as any).visibility ===
+					ChatCharacterVisibility.MINIMAL
 			) {
 				return false
 			}
@@ -788,9 +1070,20 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		ctx: ScoringContext,
 		maxTfidf: number
 	): ScoreBreakdown {
-		const keyword = computeKeywordSignal(entry, ctx.guaranteedWindowText, ctx.guaranteedWindowRaw)
-		const nameMatch = entry.name ? (ctx.guaranteedWindowText.includes(entry.name.toLowerCase()) ? 1 : 0) : 0
-		const entityCooccurrence = computeWorldLoreEntityCooccurrence(entry, ctx)
+		const keyword = computeKeywordSignal(
+			entry,
+			ctx.guaranteedWindowText,
+			ctx.guaranteedWindowRaw
+		)
+		const nameMatch = entry.name
+			? ctx.guaranteedWindowText.includes(entry.name.toLowerCase())
+				? 1
+				: 0
+			: 0
+		const entityCooccurrence = computeWorldLoreEntityCooccurrence(
+			entry,
+			ctx
+		)
 		const tfidfRaw = computeTfidfSignal(entry.keys + " " + entry.name, ctx)
 		const tfidf = maxTfidf > 0 ? tfidfRaw / maxTfidf : 0
 		const lastRefRecency = computeLastRefRecency(entry.id, ctx)
@@ -798,9 +1091,9 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		const total =
 			0.35 * keyword +
 			0.25 * nameMatch +
-			0.20 * entityCooccurrence +
-			0.10 * tfidf +
-			0.10 * lastRefRecency
+			0.2 * entityCooccurrence +
+			0.1 * tfidf +
+			0.1 * lastRefRecency
 
 		return {
 			total,
@@ -821,22 +1114,36 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		ctx: ScoringContext,
 		maxTfidf: number
 	): ScoreBreakdown {
-		const keyword = computeKeywordSignal(entry, ctx.guaranteedWindowText, ctx.guaranteedWindowRaw)
+		const keyword = computeKeywordSignal(
+			entry,
+			ctx.guaranteedWindowText,
+			ctx.guaranteedWindowRaw
+		)
 		const nameMatch = (entry as any).name
-			? (ctx.guaranteedWindowText.includes(((entry as any).name as string).toLowerCase()) ? 1 : 0)
+			? ctx.guaranteedWindowText.includes(
+					((entry as any).name as string).toLowerCase()
+				)
+				? 1
+				: 0
 			: 0
 
 		// entityCooccurrence: 1 if binding's characterId is in guaranteedWindowCharacterIds
 		let entityCooccurrence = 0
 		const lorebook = (this.chat as any).lorebook as any
 		if (lorebook && entry.lorebookBindingId) {
-			const binding = lorebook.lorebookBindings?.find((b: any) => b.id === entry.lorebookBindingId)
-			if (binding?.characterId && ctx.guaranteedWindowCharacterIds.has(binding.characterId)) {
+			const binding = lorebook.lorebookBindings?.find(
+				(b: any) => b.id === entry.lorebookBindingId
+			)
+			if (
+				binding?.characterId &&
+				ctx.guaranteedWindowCharacterIds.has(binding.characterId)
+			) {
 				entityCooccurrence = 1
 			}
 		}
 
-		const entryText = ((entry as any).keys ?? "") + " " + ((entry as any).name ?? "")
+		const entryText =
+			((entry as any).keys ?? "") + " " + ((entry as any).name ?? "")
 		const tfidfRaw = computeTfidfSignal(entryText, ctx)
 		const tfidf = maxTfidf > 0 ? tfidfRaw / maxTfidf : 0
 		const lastRefRecency = computeLastRefRecency(entry.id, ctx)
@@ -844,9 +1151,9 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		const total =
 			0.35 * keyword +
 			0.25 * nameMatch +
-			0.20 * entityCooccurrence +
-			0.10 * tfidf +
-			0.10 * lastRefRecency
+			0.2 * entityCooccurrence +
+			0.1 * tfidf +
+			0.1 * lastRefRecency
 
 		return {
 			total,
@@ -863,26 +1170,43 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 	}
 
 	private scoreHistory(
-		entry: { id: number; year: number; month: number | null; day: number | null; keys?: string; content?: string; caseSensitive?: boolean; useRegex?: boolean },
+		entry: {
+			id: number
+			year: number
+			month: number | null
+			day: number | null
+			keys?: string
+			content?: string
+			caseSensitive?: boolean
+			useRegex?: boolean
+		},
 		ctx: ScoringContext,
 		maxTfidf: number
 	): ScoreBreakdown {
 		const recency = ctx.historyRecencyMap.get(entry.id) ?? 0
 		const keyword = entry.keys
-			? computeKeywordSignal(entry as any, ctx.guaranteedWindowText, ctx.guaranteedWindowRaw)
+			? computeKeywordSignal(
+					entry as any,
+					ctx.guaranteedWindowText,
+					ctx.guaranteedWindowRaw
+				)
 			: 0
-		const tfidfRaw = computeTfidfSignal((entry.keys ?? "") + " " + (entry.content ?? ""), ctx)
+		const tfidfRaw = computeTfidfSignal(
+			(entry.keys ?? "") + " " + (entry.content ?? ""),
+			ctx
+		)
 		const tfidf = maxTfidf > 0 ? tfidfRaw / maxTfidf : 0
 		const sceneId = ctx.historyEntryToSceneId.get(entry.id)
-		const sceneAffinity = sceneId != null && ctx.currentSceneIds.has(sceneId) ? 1 : 0
+		const sceneAffinity =
+			sceneId != null && ctx.currentSceneIds.has(sceneId) ? 1 : 0
 		const lastRefRecency = computeLastRefRecency(entry.id, ctx)
 
 		const total =
-			0.20 * recency +
+			0.2 * recency +
 			0.35 * keyword +
-			0.10 * tfidf +
-			0.10 * sceneAffinity +
-			0.10 * lastRefRecency
+			0.1 * tfidf +
+			0.1 * sceneAffinity +
+			0.1 * lastRefRecency
 
 		return {
 			total,
@@ -905,19 +1229,18 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		ctx: ScoringContext,
 		maxTfidf: number
 	): ScoreBreakdown {
-		const recency = totalOlderMessages > 1 ? idx / (totalOlderMessages - 1) : 0
+		const recency =
+			totalOlderMessages > 1 ? idx / (totalOlderMessages - 1) : 0
 		const tfidfRaw = computeTfidfSignal(msg.content ?? "", ctx)
 		const tfidf = maxTfidf > 0 ? tfidfRaw / maxTfidf : 0
 		const sceneId = ctx.messageToSceneId.get(msg.id)
-		const sceneAffinity = sceneId != null && ctx.currentSceneIds.has(sceneId) ? 1 : 0
+		const sceneAffinity =
+			sceneId != null && ctx.currentSceneIds.has(sceneId) ? 1 : 0
 		const msgLen = msg.content?.length ?? 0
 		const density = Math.min(1, msgLen / Math.max(ctx.avgMessageLength, 1))
 
 		const total =
-			0.30 * recency +
-			0.10 * tfidf +
-			0.15 * sceneAffinity +
-			0.10 * density
+			0.3 * recency + 0.1 * tfidf + 0.15 * sceneAffinity + 0.1 * density
 
 		return {
 			total,
@@ -943,7 +1266,11 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		characterLoreEntries: SelectCharacterLoreEntry[],
 		worldLoreEntries: SelectWorldLoreEntry[],
 		historyEntries: SelectHistoryEntry[],
-		mostRecentHistory: { year: number; month: number | null; day: number | null } | null
+		mostRecentHistory: {
+			year: number
+			month: number | null
+			day: number | null
+		} | null
 	): any {
 		const context: any = { ...base }
 		context.chatMessages = chatMessages
@@ -962,31 +1289,58 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 				.map((cc: any) => ({
 					name: cc.character.name,
 					nickname: cc.character.nickname || undefined,
-					aliases: cc.character.aliases?.length ? cc.character.aliases.filter((a: string) => a.trim()) : undefined,
+					aliases: cc.character.aliases?.length
+						? cc.character.aliases.filter((a: string) => a.trim())
+						: undefined,
 					description: cc.character.description,
 					personality: cc.character.personality || undefined
 				}))
 				.map((c: any) =>
-					this.interpolationEngine.interpolateObject(c, interpolationContext, [
-						"name", "nickname", "aliases", "description", "personality"
-					])
+					this.interpolationEngine.interpolateObject(
+						c,
+						interpolationContext,
+						[
+							"name",
+							"nickname",
+							"aliases",
+							"description",
+							"personality"
+						]
+					)
 				)
 		}
 
 		context.characters = JSON.stringify(
-			attachCharacterLoreToCharacters(assistantCharacters, characterLoreEntries, this.chat),
-			null, 2
+			attachCharacterLoreToCharacters(
+				assistantCharacters,
+				characterLoreEntries,
+				this.chat
+			),
+			null,
+			2
 		)
 
 		const userCharacters = (this.chat.chatPersonas || [])
-			.map((cp: any) => ({ name: cp.persona.name, description: cp.persona.description }))
+			.map((cp: any) => ({
+				name: cp.persona.name,
+				description: cp.persona.description
+			}))
 			.map((p: any) =>
-				this.interpolationEngine.interpolateObject(p, interpolationContext, ["name", "description"])
+				this.interpolationEngine.interpolateObject(
+					p,
+					interpolationContext,
+					["name", "description"]
+				)
 			)
 
 		context.personas = JSON.stringify(
-			attachCharacterLoreToCharacters(userCharacters, characterLoreEntries, this.chat),
-			null, 2
+			attachCharacterLoreToCharacters(
+				userCharacters,
+				characterLoreEntries,
+				this.chat
+			),
+			null,
+			2
 		)
 
 		// World lore: JSON.stringify({ [entry.name]: entry.content })
@@ -997,9 +1351,10 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 					worldLoreObj[entry.name] = entry.content
 				}
 			}
-			context.worldLore = Object.keys(worldLoreObj).length > 0
-				? JSON.stringify(worldLoreObj)
-				: undefined
+			context.worldLore =
+				Object.keys(worldLoreObj).length > 0
+					? JSON.stringify(worldLoreObj)
+					: undefined
 		} else {
 			context.worldLore = undefined
 		}
@@ -1009,8 +1364,14 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 			const historyObj: Record<string, string> = {}
 			// Sort history newest-first
 			const sortedHistory = historyEntries.slice().sort((a, b) => {
-				const aVal = ((a as any).year ?? 0) * 10000 + ((a as any).month ?? 0) * 100 + ((a as any).day ?? 0)
-				const bVal = ((b as any).year ?? 0) * 10000 + ((b as any).month ?? 0) * 100 + ((b as any).day ?? 0)
+				const aVal =
+					((a as any).year ?? 0) * 10000 +
+					((a as any).month ?? 0) * 100 +
+					((a as any).day ?? 0)
+				const bVal =
+					((b as any).year ?? 0) * 10000 +
+					((b as any).month ?? 0) * 100 +
+					((b as any).day ?? 0)
 				return bVal - aVal
 			})
 			for (const entry of sortedHistory) {
@@ -1019,16 +1380,21 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 				const dateKey = formatHistoryDateKey(entry as any)
 				historyObj[dateKey] = content
 			}
-			context.history = Object.keys(historyObj).length > 0
-				? JSON.stringify(historyObj)
-				: undefined
+			context.history =
+				Object.keys(historyObj).length > 0
+					? JSON.stringify(historyObj)
+					: undefined
 		} else {
 			context.history = undefined
 		}
 
 		// currentDate from mostRecentHistory
 		if (mostRecentHistory) {
-			context.currentDate = formatDate(mostRecentHistory.year, mostRecentHistory.month, mostRecentHistory.day)
+			context.currentDate = formatDate(
+				mostRecentHistory.year,
+				mostRecentHistory.month,
+				mostRecentHistory.day
+			)
 		} else {
 			context.currentDate = undefined
 		}
@@ -1042,7 +1408,10 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 // ─── Pure helper functions ────────────────────────────────────────────────────
 
 function tokenize(text: string): string[] {
-	return text.toLowerCase().split(/\W+/).filter((t) => t.length > 1)
+	return text
+		.toLowerCase()
+		.split(/\W+/)
+		.filter((t) => t.length > 1)
 }
 
 function buildTermFreq(terms: string[]): Map<string, number> {
@@ -1078,11 +1447,22 @@ function buildIdf(messages: SelectChatMessage[]): Map<string, number> {
  */
 function buildLastRefMap(
 	allMessages: SelectChatMessage[],
-	lorebook: { worldLoreEntries?: any[]; characterLoreEntries?: any[]; historyEntries?: any[] } | undefined
+	lorebook:
+		| {
+				worldLoreEntries?: any[]
+				characterLoreEntries?: any[]
+				historyEntries?: any[]
+		  }
+		| undefined
 ): Map<number, number> {
 	const refMap = new Map<number, number>()
 
-	const allEntries: Array<{ id: number; keys: string; caseSensitive?: boolean; useRegex?: boolean }> = [
+	const allEntries: Array<{
+		id: number
+		keys: string
+		caseSensitive?: boolean
+		useRegex?: boolean
+	}> = [
 		...(lorebook?.worldLoreEntries ?? []),
 		...(lorebook?.characterLoreEntries ?? []),
 		...(lorebook?.historyEntries ?? [])
@@ -1092,11 +1472,19 @@ function buildLastRefMap(
 		const msgContent = allMessages[i].content ?? ""
 		for (const entry of allEntries) {
 			const keys = entry.keys.split(",")
-			const msgText = entry.caseSensitive ? msgContent : msgContent.toLowerCase()
+			const msgText = entry.caseSensitive
+				? msgContent
+				: msgContent.toLowerCase()
 			const matched = keys.some((key) => {
-				const k = entry.caseSensitive ? key.trim() : key.trim().toLowerCase()
+				const k = entry.caseSensitive
+					? key.trim()
+					: key.trim().toLowerCase()
 				if (entry.useRegex) {
-					try { return new RegExp(k).test(msgText) } catch { return msgText.includes(k) }
+					try {
+						return new RegExp(k).test(msgText)
+					} catch {
+						return msgText.includes(k)
+					}
 				}
 				return msgText.includes(k)
 			})
@@ -1119,7 +1507,10 @@ function buildHistoryRecencyMap(historyEntries: any[]): Map<number, number> {
 	// Sort by date ascending
 	const sorted = historyEntries
 		.filter((e) => e.year != null)
-		.map((e) => ({ id: e.id, val: (e.year ?? 0) * 10000 + (e.month ?? 0) * 100 + (e.day ?? 0) }))
+		.map((e) => ({
+			id: e.id,
+			val: (e.year ?? 0) * 10000 + (e.month ?? 0) * 100 + (e.day ?? 0)
+		}))
 		.sort((a, b) => a.val - b.val)
 
 	if (sorted.length === 0) return map
@@ -1139,17 +1530,26 @@ function buildHistoryRecencyMap(historyEntries: any[]): Map<number, number> {
  * Compute keyword signal: fraction of entry keys matched in the guaranteed window text.
  */
 function computeKeywordSignal(
-	entry: { keys?: string; caseSensitive?: boolean | null; useRegex?: boolean | null },
+	entry: {
+		keys?: string
+		caseSensitive?: boolean | null
+		useRegex?: boolean | null
+	},
 	guaranteedWindowText: string,
 	guaranteedWindowRaw: string
 ): number {
 	if (!entry.keys) return 0
-	const keys = entry.keys.split(",").map((k) => k.trim()).filter((k) => k.length > 0)
+	const keys = entry.keys
+		.split(",")
+		.map((k) => k.trim())
+		.filter((k) => k.length > 0)
 	if (keys.length === 0) return 0
 
 	let matched = 0
 	for (const key of keys) {
-		const text = entry.caseSensitive ? guaranteedWindowRaw : guaranteedWindowText
+		const text = entry.caseSensitive
+			? guaranteedWindowRaw
+			: guaranteedWindowText
 		const k = entry.caseSensitive ? key : key.toLowerCase()
 		if (entry.useRegex) {
 			try {
@@ -1172,7 +1572,11 @@ function computeWorldLoreEntityCooccurrence(
 	entry: SelectWorldLoreEntry,
 	ctx: ScoringContext
 ): number {
-	const entryText = ((entry.name ?? "") + " " + (entry.keys ?? "")).toLowerCase()
+	const entryText = (
+		(entry.name ?? "") +
+		" " +
+		(entry.keys ?? "")
+	).toLowerCase()
 	for (const name of ctx.chatCharacterNames) {
 		if (entryText.includes(name)) return 1
 	}
@@ -1193,7 +1597,9 @@ function computeTfidfSignal(entryText: string, ctx: ScoringContext): number {
 
 	let score = 0
 	for (const t of terms) {
-		const tf = (ctx.guaranteedTermFreq.get(t) ?? 0) / Math.max(ctx.guaranteedMessages.length, 1)
+		const tf =
+			(ctx.guaranteedTermFreq.get(t) ?? 0) /
+			Math.max(ctx.guaranteedMessages.length, 1)
 		const idf = ctx.idfMap.get(t) ?? 0
 		score += tf * idf
 	}
@@ -1210,18 +1616,28 @@ function computeLastRefRecency(entryId: number, ctx: ScoringContext): number {
 	return Math.exp(-0.01 * (totalMessages - lastIdx))
 }
 
-function formatHistoryDateKey(entry: { year?: number; month?: number | null; day?: number | null }): string {
+function formatHistoryDateKey(entry: {
+	year?: number
+	month?: number | null
+	day?: number | null
+}): string {
 	return formatDate(entry.year ?? 0, entry.month ?? null, entry.day ?? null)
 }
 
-function formatDate(year: number, month: number | null | undefined, day: number | null | undefined): string {
+function formatDate(
+	year: number,
+	month: number | null | undefined,
+	day: number | null | undefined
+): string {
 	let key = String(year)
 	if (month != null) key += `-${String(month).padStart(2, "0")}`
 	if (day != null) key += `-${String(day).padStart(2, "0")}`
 	return key
 }
 
-function zeroScoreWith(reason: import("./types").InclusionReason): ScoreBreakdown {
+function zeroScoreWith(
+	reason: import("./types").InclusionReason
+): ScoreBreakdown {
 	return {
 		total: 1,
 		keyword: 0,

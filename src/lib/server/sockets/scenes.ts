@@ -3,7 +3,10 @@ import * as schema from "$lib/server/db/schema"
 import { eq, inArray, asc } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
-import { compileScenesForEntry, generateSummary } from "$lib/server/utils/summarizer"
+import {
+	compileScenesForEntry,
+	generateSummary
+} from "$lib/server/utils/summarizer"
 import { buildSceneCastList } from "$lib/server/utils/summarizer/availableSceneCast"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 import { resolveTaskConfig } from "$lib/server/utils/resolveTaskConfig"
@@ -31,19 +34,38 @@ export const sceneListHandler: Handler<
 			orderBy: (s, { asc }) => asc(s.id),
 			with: {
 				historyEntry: {
-					columns: { id: true, year: true, month: true, day: true, isCompleted: true }
+					columns: {
+						id: true,
+						year: true,
+						month: true,
+						day: true,
+						isCompleted: true
+					}
 				}
 			}
 		})
 
 		// Build nextEntry for each history entry (ordered by year, month, day, then id)
 		const lorebookId = scenes[0]?.lorebookId
-		let nextEntryMap = new Map<number, { id: number; year: number; month: number | null; day: number | null } | null>()
+		let nextEntryMap = new Map<
+			number,
+			{
+				id: number
+				year: number
+				month: number | null
+				day: number | null
+			} | null
+		>()
 		if (lorebookId) {
 			const allEntries = await db.query.historyEntries.findMany({
 				where: eq(schema.historyEntries.lorebookId, lorebookId),
 				columns: { id: true, year: true, month: true, day: true },
-				orderBy: [asc(schema.historyEntries.year), asc(schema.historyEntries.month), asc(schema.historyEntries.day), asc(schema.historyEntries.id)]
+				orderBy: [
+					asc(schema.historyEntries.year),
+					asc(schema.historyEntries.month),
+					asc(schema.historyEntries.day),
+					asc(schema.historyEntries.id)
+				]
 			})
 			for (let i = 0; i < allEntries.length; i++) {
 				nextEntryMap.set(allEntries[i].id, allEntries[i + 1] ?? null)
@@ -53,11 +75,17 @@ export const sceneListHandler: Handler<
 		const sceneList = (scenes as any[]).map((s) => ({
 			...s,
 			historyEntry: s.historyEntry
-				? { ...s.historyEntry, nextEntry: nextEntryMap.get(s.historyEntry.id) ?? null }
+				? {
+						...s.historyEntry,
+						nextEntry: nextEntryMap.get(s.historyEntry.id) ?? null
+					}
 				: null
 		}))
 
-		const res = { sceneList: sceneList as unknown as Sockets.Scenes.List.SceneWithEntry[] }
+		const res = {
+			sceneList:
+				sceneList as unknown as Sockets.Scenes.List.SceneWithEntry[]
+		}
 		emitToUser("scenes:list", res)
 		return res
 	}
@@ -85,14 +113,18 @@ export const sceneCreateHandler: Handler<
 		// If chatId provided, verify chat ownership
 		if (data.chatId) {
 			const chat = await db.query.chats.findFirst({
-				where: (c, { and, eq }) => and(eq(c.id, data.chatId!), eq(c.userId, userId))
+				where: (c, { and, eq }) =>
+					and(eq(c.id, data.chatId!), eq(c.userId, userId))
 			})
 			if (!chat) {
 				throw new Error("Chat not found or access denied.")
 			}
 		}
 
-		const [newScene] = await db.insert(schema.scenes).values(data).returning()
+		const [newScene] = await db
+			.insert(schema.scenes)
+			.values(data)
+			.returning()
 
 		// Refresh scene list for the chat
 		if (emitToUser && newScene.chatId) {
@@ -133,7 +165,8 @@ export const sceneUpdateHandler: Handler<
 		if (!existing) throw new Error("Scene not found.")
 
 		const lorebook = await db.query.lorebooks.findFirst({
-			where: (l, { and, eq }) => and(eq(l.id, existing.lorebookId), eq(l.userId, userId))
+			where: (l, { and, eq }) =>
+				and(eq(l.id, existing.lorebookId), eq(l.userId, userId))
 		})
 
 		if (!lorebook) {
@@ -181,7 +214,8 @@ export const sceneDeleteHandler: Handler<
 		if (!existing) throw new Error("Scene not found.")
 
 		const lorebook = await db.query.lorebooks.findFirst({
-			where: (l, { and, eq }) => and(eq(l.id, existing.lorebookId), eq(l.userId, userId))
+			where: (l, { and, eq }) =>
+				and(eq(l.id, existing.lorebookId), eq(l.userId, userId))
 		})
 
 		if (!lorebook) {
@@ -194,7 +228,11 @@ export const sceneDeleteHandler: Handler<
 
 		// Refresh scene list and scened message IDs
 		if (emitToUser && chatId) {
-			const listRes = await sceneListHandler.handler(socket, { chatId }, emitToUser)
+			const listRes = await sceneListHandler.handler(
+				socket,
+				{ chatId },
+				emitToUser
+			)
 			emitToUser("scenes:list", listRes)
 
 			const scenedRes = await scenedMessageIdsHandler.handler(
@@ -228,7 +266,9 @@ export const scenedMessageIdsHandler: Handler<
 			columns: { selectedMessageIds: true }
 		})
 
-		const scenedMessageIds = scenes.flatMap((s) => s.selectedMessageIds ?? [])
+		const scenedMessageIds = scenes.flatMap(
+			(s) => s.selectedMessageIds ?? []
+		)
 
 		const res = { scenedMessageIds }
 		emitToUser("scenes:scenedMessageIds", res)
@@ -246,7 +286,8 @@ export const sceneListByLorebookHandler: Handler<
 
 		// Verify lorebook ownership
 		const lorebook = await db.query.lorebooks.findFirst({
-			where: (l, { and, eq }) => and(eq(l.id, params.lorebookId), eq(l.userId, userId))
+			where: (l, { and, eq }) =>
+				and(eq(l.id, params.lorebookId), eq(l.userId, userId))
 		})
 		if (!lorebook) throw new Error("Lorebook not found or access denied.")
 
@@ -256,7 +297,9 @@ export const sceneListByLorebookHandler: Handler<
 		})
 
 		// Resolve chat names in a single query
-		const chatIds = [...new Set(scenes.filter((s) => s.chatId).map((s) => s.chatId!))]
+		const chatIds = [
+			...new Set(scenes.filter((s) => s.chatId).map((s) => s.chatId!))
+		]
 		const chats =
 			chatIds.length > 0
 				? await db.query.chats.findMany({
@@ -290,7 +333,10 @@ export const sceneCompileHandler: Handler<
 			where: eq(schema.historyEntries.id, params.historyEntryId),
 			with: { lorebook: true }
 		})
-		if (!historyEntry || (historyEntry as any).lorebook?.userId !== userId) {
+		if (
+			!historyEntry ||
+			(historyEntry as any).lorebook?.userId !== userId
+		) {
 			throw new Error("History entry not found or access denied.")
 		}
 
@@ -308,7 +354,9 @@ export const sceneCompileHandler: Handler<
 			await getUserConfigurations(userId)
 
 		if (!connection) {
-			throw new Error("No AI connection configured. Please set up a connection first.")
+			throw new Error(
+				"No AI connection configured. Please set up a connection first."
+			)
 		}
 
 		const lorebook = (historyEntry as any).lorebook
@@ -336,13 +384,17 @@ export const sceneCompileHandler: Handler<
 						batch: data.batch,
 						totalBatches: data.totalBatches
 					})
-					emitToUser("scenes:compile:progress", data satisfies Sockets.Scenes.Compile.Progress)
+					emitToUser(
+						"scenes:compile:progress",
+						data satisfies Sockets.Scenes.Compile.Progress
+					)
 				}
 			})
 		} catch (err) {
 			activityStore.updateCompile(activityId, {
 				status: "error",
-				errorMessage: err instanceof Error ? err.message : "Unknown error"
+				errorMessage:
+					err instanceof Error ? err.message : "Unknown error"
 			})
 			throw err
 		}
@@ -376,7 +428,8 @@ export const sceneProcessHandler: Handler<
 		if (!scene) throw new Error("Scene not found.")
 
 		const lorebook = await db.query.lorebooks.findFirst({
-			where: (l, { and, eq }) => and(eq(l.id, scene.lorebookId), eq(l.userId, userId))
+			where: (l, { and, eq }) =>
+				and(eq(l.id, scene.lorebookId), eq(l.userId, userId))
 		})
 		if (!lorebook) throw new Error("Scene not found or access denied.")
 
@@ -390,7 +443,10 @@ export const sceneProcessHandler: Handler<
 
 		const rawMessages = await db.query.chatMessages.findMany({
 			where: (cm, { and, eq, inArray }) =>
-				and(eq(cm.chatId, scene.chatId!), inArray(cm.id, scene.selectedMessageIds!)),
+				and(
+					eq(cm.chatId, scene.chatId!),
+					inArray(cm.id, scene.selectedMessageIds!)
+				),
 			orderBy: (cm, { asc }) => asc(cm.id)
 		})
 
@@ -402,30 +458,49 @@ export const sceneProcessHandler: Handler<
 			return null as any
 		}
 
-		const charIds = [...new Set(rawMessages.filter((m) => m.characterId).map((m) => m.characterId!))]
-		const personaIds = [...new Set(rawMessages.filter((m) => m.personaId).map((m) => m.personaId!))]
+		const charIds = [
+			...new Set(
+				rawMessages
+					.filter((m) => m.characterId)
+					.map((m) => m.characterId!)
+			)
+		]
+		const personaIds = [
+			...new Set(
+				rawMessages.filter((m) => m.personaId).map((m) => m.personaId!)
+			)
+		]
 
 		const [characters, personas] = await Promise.all([
 			charIds.length > 0
-				? db.query.characters.findMany({ where: inArray(schema.characters.id, charIds) })
+				? db.query.characters.findMany({
+						where: inArray(schema.characters.id, charIds)
+					})
 				: Promise.resolve([]),
 			personaIds.length > 0
-				? db.query.personas.findMany({ where: inArray(schema.personas.id, personaIds) })
+				? db.query.personas.findMany({
+						where: inArray(schema.personas.id, personaIds)
+					})
 				: Promise.resolve([])
 		])
 
 		const characterMap = new Map(characters.map((c) => [c.id, c.name]))
-		const personaMap = new Map(personas.map((p) => [p.id, resolvePersonaName(p)]))
+		const personaMap = new Map(
+			personas.map((p) => [p.id, resolvePersonaName(p)])
+		)
 
 		const messages = rawMessages.map((msg) => {
 			let senderName = "Unknown"
-			if (msg.characterId && characterMap.has(msg.characterId)) senderName = characterMap.get(msg.characterId)!
-			else if (msg.personaId && personaMap.has(msg.personaId)) senderName = personaMap.get(msg.personaId)!
+			if (msg.characterId && characterMap.has(msg.characterId))
+				senderName = characterMap.get(msg.characterId)!
+			else if (msg.personaId && personaMap.has(msg.personaId))
+				senderName = personaMap.get(msg.personaId)!
 			else if (msg.role === "user") senderName = "User"
 			return { senderName, content: msg.content }
 		})
 
-		const { contextConfig, promptConfig } = await getUserConfigurations(userId)
+		const { contextConfig, promptConfig } =
+			await getUserConfigurations(userId)
 
 		const systemSettings = await db.query.systemSettings.findFirst()
 		const userSettings = await db.query.userSettings.findFirst({
@@ -433,9 +508,15 @@ export const sceneProcessHandler: Handler<
 		})
 
 		const summarizeConfigId =
-			userSettings?.activeSummarizeSceneConfigId ?? systemSettings?.defaultSummarizeSceneConfigId
+			userSettings?.activeSummarizeSceneConfigId ??
+			systemSettings?.defaultSummarizeSceneConfigId
 
-		let summarizePromptConfig: { batchSystemPrompt: string; synthSystemPrompt: string; nameSystemPrompt: string; characterExtractionSystemPrompt?: string | null } | null = null
+		let summarizePromptConfig: {
+			batchSystemPrompt: string
+			synthSystemPrompt: string
+			nameSystemPrompt: string
+			characterExtractionSystemPrompt?: string | null
+		} | null = null
 		if (summarizeConfigId) {
 			summarizePromptConfig =
 				(await db.query.sceneSummarizeConfigs.findFirst({
@@ -444,9 +525,21 @@ export const sceneProcessHandler: Handler<
 		}
 
 		const [batchResolved, synthResolved, nameResolved] = await Promise.all([
-			resolveTaskConfig({ taskType: "summarize_batch", summarizeConfigId, summarizeConfigType: "scene" }),
-			resolveTaskConfig({ taskType: "summarize_synth", summarizeConfigId, summarizeConfigType: "scene" }),
-			resolveTaskConfig({ taskType: "summarize_name", summarizeConfigId, summarizeConfigType: "scene" })
+			resolveTaskConfig({
+				taskType: "summarize_batch",
+				summarizeConfigId,
+				summarizeConfigType: "scene"
+			}),
+			resolveTaskConfig({
+				taskType: "summarize_synth",
+				summarizeConfigId,
+				summarizeConfigType: "scene"
+			}),
+			resolveTaskConfig({
+				taskType: "summarize_name",
+				summarizeConfigId,
+				summarizeConfigType: "scene"
+			})
 		])
 
 		if (!batchResolved.connection) {
@@ -457,7 +550,11 @@ export const sceneProcessHandler: Handler<
 			return null as any
 		}
 
-		const knownCast = await buildSceneCastList(params.sceneId, scene.lorebookId, scene.chatId ?? null)
+		const knownCast = await buildSceneCastList(
+			params.sceneId,
+			scene.lorebookId,
+			scene.chatId ?? null
+		)
 
 		const activityId = activityStore.startScene({
 			userId,
@@ -487,7 +584,10 @@ export const sceneProcessHandler: Handler<
 				nameSampling: nameResolved.sampling,
 				onProgress: (data) => {
 					activityStore.updateScene(activityId, {
-						phase: data.phase === "synthesizing" ? "synthesizing" : "drafting",
+						phase:
+							data.phase === "synthesizing"
+								? "synthesizing"
+								: "drafting",
 						batch: data.batch,
 						totalBatches: data.totalBatches
 					})
@@ -506,7 +606,8 @@ export const sceneProcessHandler: Handler<
 		} catch (err) {
 			activityStore.updateScene(activityId, {
 				status: "error",
-				errorMessage: err instanceof Error ? err.message : "Unknown error"
+				errorMessage:
+					err instanceof Error ? err.message : "Unknown error"
 			})
 			throw err
 		}

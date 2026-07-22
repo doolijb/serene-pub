@@ -180,7 +180,9 @@ export const CONTEXT_CARD_TYPES: ContextCardTypeDef[] = [
 	}
 ]
 
-export function getContextCardType(typeId: string): ContextCardTypeDef | undefined {
+export function getContextCardType(
+	typeId: string
+): ContextCardTypeDef | undefined {
 	return CONTEXT_CARD_TYPES.find((c) => c.id === typeId)
 }
 
@@ -310,11 +312,17 @@ export function parseContextTemplate(template: string): ParsedContextTemplate {
 				: containerStart
 		const afterIdx = template.indexOf("\n\n", end)
 		const pEnd =
-			afterIdx !== -1 && afterIdx <= containerEnd ? afterIdx : containerEnd
+			afterIdx !== -1 && afterIdx <= containerEnd
+				? afterIdx
+				: containerEnd
 		return { start: pStart, end: pEnd }
 	}
 
-	const walk = (program: any, containerStart: number, containerEnd: number) => {
+	const walk = (
+		program: any,
+		containerStart: number,
+		containerEnd: number
+	) => {
 		const body = program.body
 		for (let idx = 0; idx < body.length; idx++) {
 			const stmt = body[idx]

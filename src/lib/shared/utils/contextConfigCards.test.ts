@@ -130,7 +130,10 @@ describe("realistic default-template drag simulation", () => {
 				i,
 				i + 1
 			)
-			expect(parseError, `parse error after swap ${i}<->${i + 1}`).toBeNull()
+			expect(
+				parseError,
+				`parse error after swap ${i}<->${i + 1}`
+			).toBeNull()
 			expect(
 				new Set(keysAfter),
 				`key set changed after swap ${i}<->${i + 1}`
@@ -189,7 +192,9 @@ describe("parseContextTemplate key stability", () => {
 			(c) => c.typeId === "customText"
 		)
 
-		const alphaKeyBefore = beforeCards.find((c) => c.content === "alpha")!.key
+		const alphaKeyBefore = beforeCards.find(
+			(c) => c.content === "alpha"
+		)!.key
 		const betaKeyBefore = beforeCards.find((c) => c.content === "beta")!.key
 		const alphaKeyAfter = afterCards.find((c) => c.content === "alpha")!.key
 		const betaKeyAfter = afterCards.find((c) => c.content === "beta")!.key

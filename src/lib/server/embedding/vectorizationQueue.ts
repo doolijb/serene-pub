@@ -13,9 +13,25 @@
  */
 
 import { db } from "$lib/server/db"
-import { and, eq, inArray, isNull, isNotNull, asc, desc, ne, or, gt } from "drizzle-orm"
+import {
+	and,
+	eq,
+	inArray,
+	isNull,
+	isNotNull,
+	asc,
+	desc,
+	ne,
+	or,
+	gt
+} from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { embed, isModelReady, getLoadedModelId, loadEmbeddingModel } from "./index"
+import {
+	embed,
+	isModelReady,
+	getLoadedModelId,
+	loadEmbeddingModel
+} from "./index"
 import { randomUUID } from "crypto"
 
 // ---------------------------------------------------------------------------
@@ -25,7 +41,15 @@ import { randomUUID } from "crypto"
 export type VectorizationProgressEvent = {
 	status: "idle" | "running" | "paused"
 	currentItem?: {
-		type: "message" | "worldLore" | "characterLore" | "historyEntry" | "narrativeNode" | "narrativeRelationship" | "character" | "persona"
+		type:
+			| "message"
+			| "worldLore"
+			| "characterLore"
+			| "historyEntry"
+			| "narrativeNode"
+			| "narrativeRelationship"
+			| "character"
+			| "persona"
 		label: string
 	}
 	queued: number
@@ -53,7 +77,7 @@ export type PriorityGroup = {
 }
 
 export type CompletedGroup = PriorityGroup & {
-	completedAt: string  // ISO timestamp
+	completedAt: string // ISO timestamp
 }
 
 const HISTORY_MAX = 20
@@ -124,7 +148,9 @@ export function isVectorizationRunning() {
 	return isRunning
 }
 
-export async function startVectorizationQueue(opts?: { startFromBeginning?: boolean }) {
+export async function startVectorizationQueue(opts?: {
+	startFromBeginning?: boolean
+}) {
 	if (isRunning) return
 	if (opts?.startFromBeginning) {
 		totalCompleted = 0
@@ -196,7 +222,7 @@ export async function enqueueChatGroup(chatId: number): Promise<PriorityGroup> {
 		where: eq(schema.users.id, chat.userId),
 		columns: { username: true, displayName: true }
 	})
-	const ownerDisplayName = owner?.displayName ?? owner?.username ?? 'Unknown'
+	const ownerDisplayName = owner?.displayName ?? owner?.username ?? "Unknown"
 
 	const group: PriorityGroup = {
 		groupId: randomUUID(),
@@ -221,7 +247,11 @@ export async function enqueueChatGroup(chatId: number): Promise<PriorityGroup> {
 /**
  * Enqueue a lorebook (and only its entries) at the front of the queue.
  */
-export function enqueueLorebookGroup(lorebookId: number, label: string, ownerDisplayName: string): PriorityGroup {
+export function enqueueLorebookGroup(
+	lorebookId: number,
+	label: string,
+	ownerDisplayName: string
+): PriorityGroup {
 	const group: PriorityGroup = {
 		groupId: randomUUID(),
 		label,
@@ -235,7 +265,12 @@ export function enqueueLorebookGroup(lorebookId: number, label: string, ownerDis
 	priorityQueue = [
 		group,
 		...priorityQueue.filter(
-			(g) => !(g.lorebookIds.includes(lorebookId) && !g.chatId && g.characterIds.length === 0)
+			(g) =>
+				!(
+					g.lorebookIds.includes(lorebookId) &&
+					!g.chatId &&
+					g.characterIds.length === 0
+				)
 		)
 	]
 
@@ -259,7 +294,7 @@ export async function enqueueCharacterGroup(
 		where: eq(schema.users.id, char!.userId),
 		columns: { username: true, displayName: true }
 	})
-	const ownerDisplayName = owner?.displayName ?? owner?.username ?? 'Unknown'
+	const ownerDisplayName = owner?.displayName ?? owner?.username ?? "Unknown"
 
 	const group: PriorityGroup = {
 		groupId: randomUUID(),
@@ -285,13 +320,19 @@ export async function enqueueCharacterGroup(
 /**
  * Enqueue a persona at the front of the queue.
  */
-export async function enqueuePersonaGroup(personaId: number, name: string): Promise<PriorityGroup> {
+export async function enqueuePersonaGroup(
+	personaId: number,
+	name: string
+): Promise<PriorityGroup> {
 	const persona = await db.query.personas.findFirst({
 		where: eq(schema.personas.id, personaId),
 		columns: { userId: true }
 	})
 	const owner = persona
-		? await db.query.users.findFirst({ where: eq(schema.users.id, persona.userId), columns: { username: true, displayName: true } })
+		? await db.query.users.findFirst({
+				where: eq(schema.users.id, persona.userId),
+				columns: { username: true, displayName: true }
+			})
 		: null
 	const ownerDisplayName = owner?.displayName ?? owner?.username ?? "Unknown"
 
@@ -304,19 +345,38 @@ export async function enqueuePersonaGroup(personaId: number, name: string): Prom
 		personaIds: [personaId]
 	}
 
-	priorityQueue = [group, ...priorityQueue.filter((g) => !(g.personaIds.includes(personaId) && !g.chatId && g.characterIds.length === 0))]
+	priorityQueue = [
+		group,
+		...priorityQueue.filter(
+			(g) =>
+				!(
+					g.personaIds.includes(personaId) &&
+					!g.chatId &&
+					g.characterIds.length === 0
+				)
+		)
+	]
 	if (!isRunning && !isPaused) runQueue()
 	return group
 }
 
-export function moveQueueGroup(groupId: string, direction: "up" | "down"): void {
+export function moveQueueGroup(
+	groupId: string,
+	direction: "up" | "down"
+): void {
 	const idx = priorityQueue.findIndex((g) => g.groupId === groupId)
 	if (idx === -1) return
 
 	if (direction === "up" && idx > 0) {
-		;[priorityQueue[idx - 1], priorityQueue[idx]] = [priorityQueue[idx], priorityQueue[idx - 1]]
+		;[priorityQueue[idx - 1], priorityQueue[idx]] = [
+			priorityQueue[idx],
+			priorityQueue[idx - 1]
+		]
 	} else if (direction === "down" && idx < priorityQueue.length - 1) {
-		;[priorityQueue[idx], priorityQueue[idx + 1]] = [priorityQueue[idx + 1], priorityQueue[idx]]
+		;[priorityQueue[idx], priorityQueue[idx + 1]] = [
+			priorityQueue[idx + 1],
+			priorityQueue[idx]
+		]
 	}
 }
 
@@ -357,16 +417,27 @@ async function runQueue() {
 			if (!isModelReady()) {
 				// Try to auto-load the model from system settings
 				const settings = await db.query.systemSettings.findFirst({
-					columns: { vectorizationEnabled: true, embeddingModelName: true }
+					columns: {
+						vectorizationEnabled: true,
+						embeddingModelName: true
+					}
 				})
-				if (!settings?.vectorizationEnabled || !settings.embeddingModelName) {
-					console.warn("[vectorization] Queue stopped: vectorization disabled or no model configured")
+				if (
+					!settings?.vectorizationEnabled ||
+					!settings.embeddingModelName
+				) {
+					console.warn(
+						"[vectorization] Queue stopped: vectorization disabled or no model configured"
+					)
 					break
 				}
 				try {
 					await loadEmbeddingModel(settings.embeddingModelName)
 				} catch (err) {
-					console.error("[vectorization] Failed to auto-load model:", err)
+					console.error(
+						"[vectorization] Failed to auto-load model:",
+						err
+					)
 					break
 				}
 				if (!isModelReady()) break
@@ -381,7 +452,11 @@ async function runQueue() {
 				await processItem(item)
 				totalCompleted++
 			} catch (err) {
-				console.error("[vectorization] Failed to embed item:", item.label, err)
+				console.error(
+					"[vectorization] Failed to embed item:",
+					item.label,
+					err
+				)
 			}
 		}
 	} finally {
@@ -415,7 +490,10 @@ function needsEmbedding(
 	const base = or(isNull(embeddingCol), ne(modelCol, currentModel))
 	if (updatedAtCol && vectorizedAtCol) {
 		// Re-embed if content changed after the last vectorization (both timestamps must be set)
-		return or(base, and(isNotNull(vectorizedAtCol), gt(updatedAtCol, vectorizedAtCol)))
+		return or(
+			base,
+			and(isNotNull(vectorizedAtCol), gt(updatedAtCol, vectorizedAtCol))
+		)
 	}
 	return base
 }
@@ -431,7 +509,10 @@ async function pickNextItem(): Promise<QueueItem | null> {
 		if (item) return item
 		// Group fully processed — record in history and remove it
 		const finished = priorityQueue.shift()!
-		completedHistory.unshift({ ...finished, completedAt: new Date().toISOString() })
+		completedHistory.unshift({
+			...finished,
+			completedAt: new Date().toISOString()
+		})
 		if (completedHistory.length > HISTORY_MAX) completedHistory.pop()
 		broadcastStatus("running")
 	}
@@ -440,7 +521,10 @@ async function pickNextItem(): Promise<QueueItem | null> {
 	return pickGlobalNextItem(currentModel)
 }
 
-async function pickFromGroup(group: PriorityGroup, currentModel: string): Promise<QueueItem | null> {
+async function pickFromGroup(
+	group: PriorityGroup,
+	currentModel: string
+): Promise<QueueItem | null> {
 	// 1. Chat messages
 	if (group.chatId) {
 		const item = await pickChatMessage(currentModel, group.chatId)
@@ -480,7 +564,9 @@ async function pickFromGroup(group: PriorityGroup, currentModel: string): Promis
 	return null
 }
 
-async function pickGlobalNextItem(currentModel: string): Promise<QueueItem | null> {
+async function pickGlobalNextItem(
+	currentModel: string
+): Promise<QueueItem | null> {
 	return (
 		(await pickChatMessage(currentModel)) ??
 		(await pickWorldLoreEntry(currentModel)) ??
@@ -514,7 +600,10 @@ async function pickChatMessage(
 		: staleness
 
 	const rows = await db
-		.select({ id: schema.chatMessages.id, content: schema.chatMessages.content })
+		.select({
+			id: schema.chatMessages.id,
+			content: schema.chatMessages.content
+		})
 		.from(schema.chatMessages)
 		.where(where)
 		.orderBy(desc(schema.chatMessages.chatId), asc(schema.chatMessages.id))
@@ -530,7 +619,11 @@ async function pickChatMessage(
 			const vector = await embed(content)
 			await db
 				.update(schema.chatMessages)
-				.set({ embedding: vector, embeddingModel: currentModel, vectorizedAt: new Date() })
+				.set({
+					embedding: vector,
+					embeddingModel: currentModel,
+					vectorizedAt: new Date()
+				})
 				.where(eq(schema.chatMessages.id, id))
 		}
 	}
@@ -574,7 +667,11 @@ async function pickWorldLoreEntry(
 			const vector = await embed(text)
 			await db
 				.update(schema.worldLoreEntries)
-				.set({ embedding: vector, embeddingModel: currentModel, vectorizedAt: new Date() })
+				.set({
+					embedding: vector,
+					embeddingModel: currentModel,
+					vectorizedAt: new Date()
+				})
 				.where(eq(schema.worldLoreEntries.id, id))
 		}
 	}
@@ -610,7 +707,10 @@ async function pickCharacterLoreEntry(
 	const { id, content, name, lorebookId: rowLorebookId } = rows[0]
 	const text = name ? `${name}\n${content}` : content
 	return {
-		label: { type: "characterLore", label: `Character lore: ${name || id}` },
+		label: {
+			type: "characterLore",
+			label: `Character lore: ${name || id}`
+		},
 		id,
 		lorebookId: rowLorebookId,
 		embeddingModel: currentModel,
@@ -618,7 +718,11 @@ async function pickCharacterLoreEntry(
 			const vector = await embed(text)
 			await db
 				.update(schema.characterLoreEntries)
-				.set({ embedding: vector, embeddingModel: currentModel, vectorizedAt: new Date() })
+				.set({
+					embedding: vector,
+					embeddingModel: currentModel,
+					vectorizedAt: new Date()
+				})
 				.where(eq(schema.characterLoreEntries.id, id))
 		}
 	}
@@ -660,7 +764,11 @@ async function pickHistoryEntry(
 			const vector = await embed(content)
 			await db
 				.update(schema.historyEntries)
-				.set({ embedding: vector, embeddingModel: currentModel, vectorizedAt: new Date() })
+				.set({
+					embedding: vector,
+					embeddingModel: currentModel,
+					vectorizedAt: new Date()
+				})
 				.where(eq(schema.historyEntries.id, id))
 		}
 	}
@@ -704,7 +812,11 @@ async function pickNarrativeNode(
 			const vector = await embed(text)
 			await db
 				.update(schema.narrativeNodes)
-				.set({ embedding: vector, embeddingModel: currentModel, vectorizedAt: new Date() })
+				.set({
+					embedding: vector,
+					embeddingModel: currentModel,
+					vectorizedAt: new Date()
+				})
 				.where(eq(schema.narrativeNodes.id, id))
 		}
 	}
@@ -722,7 +834,10 @@ async function pickNarrativeRelationship(
 		schema.narrativeRelationships.vectorizedAt
 	)
 	const where = lorebookId
-		? and(eq(schema.narrativeRelationships.lorebookId, lorebookId), staleness)
+		? and(
+				eq(schema.narrativeRelationships.lorebookId, lorebookId),
+				staleness
+			)
 		: staleness
 
 	const rows = await db
@@ -740,7 +855,15 @@ async function pickNarrativeRelationship(
 		.limit(1)
 
 	if (!rows.length) return null
-	const { id, fromNodeId, toNodeId, relationshipType, description, reason, lorebookId: rowLorebookId } = rows[0]
+	const {
+		id,
+		fromNodeId,
+		toNodeId,
+		relationshipType,
+		description,
+		reason,
+		lorebookId: rowLorebookId
+	} = rows[0]
 
 	// Fetch node names for richer embedding text
 	const [fromNode, toNode] = await Promise.all([
@@ -761,7 +884,10 @@ async function pickNarrativeRelationship(
 	if (reason) text += `. ${reason}`
 
 	return {
-		label: { type: "narrativeRelationship", label: `Narrative relationship: ${fromName} → ${toName}` },
+		label: {
+			type: "narrativeRelationship",
+			label: `Narrative relationship: ${fromName} → ${toName}`
+		},
 		id,
 		lorebookId: rowLorebookId,
 		embeddingModel: currentModel,
@@ -769,7 +895,11 @@ async function pickNarrativeRelationship(
 			const vector = await embed(text)
 			await db
 				.update(schema.narrativeRelationships)
-				.set({ embedding: vector, embeddingModel: currentModel, vectorizedAt: new Date() })
+				.set({
+					embedding: vector,
+					embeddingModel: currentModel,
+					vectorizedAt: new Date()
+				})
 				.where(eq(schema.narrativeRelationships.id, id))
 		}
 	}
@@ -814,7 +944,11 @@ async function pickCharacter(
 			const vector = await embed(text)
 			await db
 				.update(schema.characters)
-				.set({ embedding: vector, embeddingModel: currentModel, vectorizedAt: new Date() })
+				.set({
+					embedding: vector,
+					embeddingModel: currentModel,
+					vectorizedAt: new Date()
+				})
 				.where(eq(schema.characters.id, id))
 		}
 	}
@@ -859,7 +993,11 @@ async function pickPersona(
 			const vector = await embed(text)
 			await db
 				.update(schema.personas)
-				.set({ embedding: vector, embeddingModel: currentModel, vectorizedAt: new Date() })
+				.set({
+					embedding: vector,
+					embeddingModel: currentModel,
+					vectorizedAt: new Date()
+				})
 				.where(eq(schema.personas.id, id))
 		}
 	}
@@ -904,11 +1042,17 @@ export async function countUnembedded(currentModel?: string): Promise<number> {
 	const counts = await Promise.all([
 		db.$count(
 			schema.chatMessages,
-			condition(schema.chatMessages.embedding, schema.chatMessages.embeddingModel)
+			condition(
+				schema.chatMessages.embedding,
+				schema.chatMessages.embeddingModel
+			)
 		),
 		db.$count(
 			schema.worldLoreEntries,
-			condition(schema.worldLoreEntries.embedding, schema.worldLoreEntries.embeddingModel)
+			condition(
+				schema.worldLoreEntries.embedding,
+				schema.worldLoreEntries.embeddingModel
+			)
 		),
 		db.$count(
 			schema.characterLoreEntries,
@@ -919,19 +1063,31 @@ export async function countUnembedded(currentModel?: string): Promise<number> {
 		),
 		db.$count(
 			schema.historyEntries,
-			condition(schema.historyEntries.embedding, schema.historyEntries.embeddingModel)
+			condition(
+				schema.historyEntries.embedding,
+				schema.historyEntries.embeddingModel
+			)
 		),
 		db.$count(
 			schema.narrativeNodes,
-			condition(schema.narrativeNodes.embedding, schema.narrativeNodes.embeddingModel)
+			condition(
+				schema.narrativeNodes.embedding,
+				schema.narrativeNodes.embeddingModel
+			)
 		),
 		db.$count(
 			schema.narrativeRelationships,
-			condition(schema.narrativeRelationships.embedding, schema.narrativeRelationships.embeddingModel)
+			condition(
+				schema.narrativeRelationships.embedding,
+				schema.narrativeRelationships.embeddingModel
+			)
 		),
 		db.$count(
 			schema.characters,
-			condition(schema.characters.embedding, schema.characters.embeddingModel)
+			condition(
+				schema.characters.embedding,
+				schema.characters.embeddingModel
+			)
 		),
 		db.$count(
 			schema.personas,
@@ -946,26 +1102,38 @@ export async function countUnembedded(currentModel?: string): Promise<number> {
 // ---------------------------------------------------------------------------
 
 async function isVectorizationEnabled(): Promise<boolean> {
-	const settings = await db.query.systemSettings.findFirst({ columns: { vectorizationEnabled: true } })
+	const settings = await db.query.systemSettings.findFirst({
+		columns: { vectorizationEnabled: true }
+	})
 	return settings?.vectorizationEnabled ?? false
 }
 
-export async function autoEnqueueLorebook(lorebookId: number, lorebookLabel: string, ownerDisplayName: string) {
-	if (!await isVectorizationEnabled()) return
+export async function autoEnqueueLorebook(
+	lorebookId: number,
+	lorebookLabel: string,
+	ownerDisplayName: string
+) {
+	if (!(await isVectorizationEnabled())) return
 	enqueueLorebookGroup(lorebookId, lorebookLabel, ownerDisplayName)
 }
 
-export async function autoEnqueueCharacter(characterId: number, characterName: string) {
-	if (!await isVectorizationEnabled()) return
+export async function autoEnqueueCharacter(
+	characterId: number,
+	characterName: string
+) {
+	if (!(await isVectorizationEnabled())) return
 	await enqueueCharacterGroup(characterId, characterName)
 }
 
-export async function autoEnqueuePersona(personaId: number, personaName: string) {
-	if (!await isVectorizationEnabled()) return
+export async function autoEnqueuePersona(
+	personaId: number,
+	personaName: string
+) {
+	if (!(await isVectorizationEnabled())) return
 	await enqueuePersonaGroup(personaId, personaName)
 }
 
 export async function autoEnqueueChat(chatId: number) {
-	if (!await isVectorizationEnabled()) return
+	if (!(await isVectorizationEnabled())) return
 	await enqueueChatGroup(chatId)
 }

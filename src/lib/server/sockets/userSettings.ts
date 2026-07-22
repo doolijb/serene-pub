@@ -23,7 +23,9 @@ function getDefaultBackgrounds(): string[] {
 			"defaults",
 			"manifest.json"
 		)
-		const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as string[]
+		const manifest = JSON.parse(
+			readFileSync(manifestPath, "utf-8")
+		) as string[]
 		return manifest.map((f) => `/backgrounds/defaults/${f}`)
 	} catch {
 		return []
@@ -99,7 +101,8 @@ export const userSettingsGet: Handler<
 					showAllCharacterFields: settings.showAllCharacterFields,
 					backgroundImagePath: settings.backgroundImagePath ?? null,
 					backgroundOpacity: settings.backgroundOpacity ?? 75,
-					charaVaultIncludeNsfw: settings.charaVaultIncludeNsfw ?? false
+					charaVaultIncludeNsfw:
+						settings.charaVaultIncludeNsfw ?? false
 				}
 			}
 

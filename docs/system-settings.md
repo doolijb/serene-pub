@@ -22,13 +22,15 @@ By default, accounts are **not** enabled: the app automatically signs everyone i
 
 This is presented as a **permanent, one-way change** — once accounts are enabled the switch becomes disabled (locked on) and the surrounding text confirms "User accounts are enabled. This setting cannot be reversed." Before that point, the description under the switch reads: "Enable user authentication and multi-user support. This is a permanent change."
 
-Because of this, turning the switch on first opens an **Enable User Accounts** confirmation dialog with a "Warning: Permanent Change" notice. If your own admin account doesn't already have a passphrase set, the same dialog asks you to create one first — showing your username (read-only) alongside **Passphrase** and **Confirm Passphrase** fields — before it will let you proceed. Passphrases must be at least 6 characters long and include at least one uppercase letter, one lowercase letter, and one special character. Once confirmed, a success toast reads "User accounts enabled successfully" with the description "Authentication is now required for all users."
+Because of this, turning the switch on first opens an **Enable User Accounts** confirmation dialog with a "Warning: Permanent Change" notice. If your own admin account doesn't already have a passphrase set, the same dialog asks you to create one first — showing your username (read-only) alongside **Passphrase** and **Confirm Passphrase** fields — before it will let you proceed. Passphrases must be at least 10 characters long (128 maximum) and include at least one uppercase letter, one lowercase letter, and one special character. Once confirmed, a success toast reads "User accounts enabled successfully" with the description "Authentication is now required for all users."
 
 ### Why This Matters
 
 Until accounts are enabled, Serene Pub runs in single-admin mode: every connection is automatically treated as the instance's first admin user, with no login screen at all. This is convenient for a personal, single-user install, but means anyone who can reach the app has full admin access. Enabling accounts is how you turn a personal install into a properly authenticated, multi-user instance.
 
 See [Users & Accounts](./users-and-accounts.md) for how account creation, passphrases, and login work once this is turned on.
+
+Once accounts are enabled, a **Users** icon appears in the main left navigation for managing accounts — but only for admins. Non-admin users never see this entry, regardless of whether accounts are enabled.
 
 ## AI Manager Toggles
 
@@ -43,6 +45,10 @@ Toggling either manager shows a confirmation toast — e.g. "Ollama Manager enab
 ### KoboldCPP Manager
 
 **Enable KoboldCPP Manager** turns on built-in management of a KoboldCPP server, mirroring the Ollama toggle. When enabled, a **KoboldCPP Server URL** field appears (default `http://localhost:5001`) with the same validation and a **Save URL** button.
+
+#### Keeping the Server URL and the Managed Port in sync
+
+This **Server URL** field is what Serene Pub actually connects to — it's independent from the **Port** setting configured in the KoboldCPP Manager sidebar's Settings tab (the port the managed subprocess itself listens on). The two are expected to stay in agreement, but nothing keeps them linked automatically. When KoboldCPP is running in **Managed** mode, this tab checks the Server URL's port against the Manager's configured Port and shows an inline warning under the field if they don't match, explaining that everything talks to the Server URL, not the Manager's Port setting — update one to match the other.
 
 ### Managed vs. External Backends
 

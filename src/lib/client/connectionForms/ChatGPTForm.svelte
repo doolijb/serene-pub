@@ -85,7 +85,7 @@
 		{#if validationErrors.baseUrl}
 			<p
 				id="baseUrl-error"
-				class="mt-1 text-sm text-error-500"
+				class="text-error-500 mt-1 text-sm"
 				role="alert"
 			>
 				{validationErrors.baseUrl}
@@ -111,7 +111,11 @@
 			}}
 		/>
 		{#if validationErrors.model}
-			<p id="model-error" class="mt-1 text-sm text-error-500" role="alert">
+			<p
+				id="model-error"
+				class="text-error-500 mt-1 text-sm"
+				role="alert"
+			>
 				{validationErrors.model}
 			</p>
 		{/if}
@@ -144,7 +148,11 @@
 			}}
 		/>
 		{#if validationErrors.apiKey}
-			<p id="apiKey-error" class="mt-1 text-sm text-error-500" role="alert">
+			<p
+				id="apiKey-error"
+				class="text-error-500 mt-1 text-sm"
+				role="alert"
+			>
 				{validationErrors.apiKey}
 			</p>
 		{/if}

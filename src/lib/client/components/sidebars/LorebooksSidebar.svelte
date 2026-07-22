@@ -4,7 +4,12 @@
 	import * as Icons from "@lucide/svelte"
 	import NewNameModal from "../modals/NewNameModal.svelte"
 	import EditLorebookForm from "../lorebookForms/EditLorebookForm.svelte"
-	import { FileUpload, Dialog, Portal, Tabs } from "@skeletonlabs/skeleton-svelte"
+	import {
+		FileUpload,
+		Dialog,
+		Portal,
+		Tabs
+	} from "@skeletonlabs/skeleton-svelte"
 	import LorebookBindingsManager from "../lorebookForms/LorebookBindingsManager.svelte"
 	import WorldLoreManager from "../lorebookForms/WorldLoreManager.svelte"
 	import type { ValueChangeDetails } from "@zag-js/tabs"
@@ -45,7 +50,9 @@
 	let nextEditGroup: EditGroup | undefined = $state()
 	let tabHasUnsavedChanges: boolean = $state(false)
 	let lorebookFormMode = $state<"view" | "edit">("view")
-	let tabsDisabled = $derived(lorebookFormMode === "edit" || tabHasUnsavedChanges)
+	let tabsDisabled = $derived(
+		lorebookFormMode === "edit" || tabHasUnsavedChanges
+	)
 	let showUnsavedChangesModal: boolean = $state(false)
 	let showUnsavedTabChangesModal: boolean = $state(false)
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
@@ -62,29 +69,41 @@
 	let deletingLorebookId: number | undefined = $state(undefined)
 	let showDeleteConfirmationModal: boolean = $state(false)
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
-	let systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
+	let systemSettingsCtx: SystemSettingsCtx = $state(
+		getContext("systemSettingsCtx")
+	)
 	let openChatCtx: OpenChatCtx = $state(getContext("openChatCtx"))
 
 	// Building a graph is pure LLM extraction from scene summaries — it never
 	// touches embeddings (see graphBuilder.ts), so this only needs summarization
 	// on, not vectorization too. The keyword-based infill path can now surface
 	// graph content without RAG as well (see KeywordInfillEngine.ts).
-	let graphEnabled = $derived(!!systemSettingsCtx.settings?.summarizationEnabled)
+	let graphEnabled = $derived(
+		!!systemSettingsCtx.settings?.summarizationEnabled
+	)
 
 	// Guests can view a shared chat but can't reconfigure it — the server
 	// rejects chats:setLorebook for non-owners anyway, this just avoids
 	// showing an action that would fail with an error toast.
-	let hasOpenChat = $derived(openChatCtx.chatId !== null && openChatCtx.isOwner)
+	let hasOpenChat = $derived(
+		openChatCtx.chatId !== null && openChatCtx.isOwner
+	)
 	let openChatHasLorebook = $derived(openChatCtx.lorebookId !== null)
 
 	function handleAttachToChat(lorebookId: number) {
 		if (openChatCtx.chatId === null) return
-		socket.emit("chats:setLorebook", { chatId: openChatCtx.chatId, lorebookId })
+		socket.emit("chats:setLorebook", {
+			chatId: openChatCtx.chatId,
+			lorebookId
+		})
 	}
 
 	function handleDetachFromChat() {
 		if (openChatCtx.chatId === null) return
-		socket.emit("chats:setLorebook", { chatId: openChatCtx.chatId, lorebookId: null })
+		socket.emit("chats:setLorebook", {
+			chatId: openChatCtx.chatId,
+			lorebookId: null
+		})
 	}
 
 	// If graph tab is active but graph becomes unavailable, fall back to world lore
@@ -116,7 +135,11 @@
 
 	function handleLorebookClick(
 		e: Event,
-		{ lorebook, tab, startEditing = false }: { lorebook: SelectLorebook; tab?: EditGroup; startEditing?: boolean }
+		{
+			lorebook,
+			tab,
+			startEditing = false
+		}: { lorebook: SelectLorebook; tab?: EditGroup; startEditing?: boolean }
 	) {
 		e.preventDefault()
 		e.stopPropagation()
@@ -441,9 +464,14 @@
 				// Server automatically emits updated list
 			}
 		)
-		socket.on("lorebooks:importResolve:error", (msg: Sockets.ErrorResponse) => {
-			toaster.error({ title: msg.error || "Failed to resolve lorebook import" })
-		})
+		socket.on(
+			"lorebooks:importResolve:error",
+			(msg: Sockets.ErrorResponse) => {
+				toaster.error({
+					title: msg.error || "Failed to resolve lorebook import"
+				})
+			}
+		)
 		socket.on(
 			"lorebooks:export",
 			(msg: Sockets.Lorebooks.Export.Response) => {
@@ -467,9 +495,16 @@
 		socket.on(
 			"chats:setLorebook",
 			(msg: Sockets.Chats.SetLorebook.Response) => {
-				if (!msg.chat || openChatCtx.chatId === null || msg.chat.id !== openChatCtx.chatId) return
+				if (
+					!msg.chat ||
+					openChatCtx.chatId === null ||
+					msg.chat.id !== openChatCtx.chatId
+				)
+					return
 				toaster.success({
-					title: msg.chat.lorebookId ? "Lorebook Attached" : "Lorebook Detached"
+					title: msg.chat.lorebookId
+						? "Lorebook Attached"
+						: "Lorebook Detached"
 				})
 				// Full reload of the open chat, not just a field patch — lore-bound
 				// content (RAG notices, etc.) can depend on the chat's lorebook.
@@ -502,7 +537,9 @@
 		<div class="mb-4 flex items-center gap-2">
 			<button
 				class="btn btn-sm preset-filled-surface-400-600"
-				onclick={() => { isEditingLorebook = false }}
+				onclick={() => {
+					isEditingLorebook = false
+				}}
 				title="Back to lorebooks"
 			>
 				<Icons.ChevronLeft size={16} />
@@ -538,8 +575,15 @@
 		</div>
 		<Tabs value={editGroup} onValueChange={(e) => handleSwitchTabGroup(e)}>
 			<Tabs.List class="flex flex-wrap gap-1">
-				<Tabs.Trigger value="lorebook" disabled={tabsDisabled && editGroup !== "lorebook"}>
-					<span title="Lorebook" aria-label="Lorebook tab" class="flex items-center gap-1">
+				<Tabs.Trigger
+					value="lorebook"
+					disabled={tabsDisabled && editGroup !== "lorebook"}
+				>
+					<span
+						title="Lorebook"
+						aria-label="Lorebook tab"
+						class="flex items-center gap-1"
+					>
 						<Icons.Book size={20} class="inline" />
 						{#if editGroup === "lorebook"}
 							Lorebook
@@ -547,7 +591,11 @@
 					</span>
 				</Tabs.Trigger>
 				<Tabs.Trigger value="bindings" disabled={tabsDisabled}>
-					<span title="Bindings" aria-label="Bindings tab" class="flex items-center gap-1">
+					<span
+						title="Bindings"
+						aria-label="Bindings tab"
+						class="flex items-center gap-1"
+					>
 						<Icons.Link size={20} class="inline" />
 						{#if editGroup === "bindings"}
 							Bindings
@@ -555,7 +603,11 @@
 					</span>
 				</Tabs.Trigger>
 				<Tabs.Trigger value="world" disabled={tabsDisabled}>
-					<span title="World Lore" aria-label="World Lore tab" class="flex items-center gap-1">
+					<span
+						title="World Lore"
+						aria-label="World Lore tab"
+						class="flex items-center gap-1"
+					>
 						<Icons.Globe size={20} class="inline" />
 						{#if editGroup === "world"}
 							World Lore
@@ -563,7 +615,11 @@
 					</span>
 				</Tabs.Trigger>
 				<Tabs.Trigger value="characters" disabled={tabsDisabled}>
-					<span title="Character Lore" aria-label="Character Lore tab" class="flex items-center gap-1">
+					<span
+						title="Character Lore"
+						aria-label="Character Lore tab"
+						class="flex items-center gap-1"
+					>
 						<Icons.User size={20} class="inline" />
 						{#if editGroup === "characters"}
 							Character Lore
@@ -571,7 +627,11 @@
 					</span>
 				</Tabs.Trigger>
 				<Tabs.Trigger value="history" disabled={tabsDisabled}>
-					<span title="History" aria-label="History tab" class="flex items-center gap-1">
+					<span
+						title="History"
+						aria-label="History tab"
+						class="flex items-center gap-1"
+					>
 						<Icons.Calendar size={20} class="inline" />
 						{#if editGroup === "history"}
 							History
@@ -580,7 +640,11 @@
 				</Tabs.Trigger>
 				{#if graphEnabled}
 					<Tabs.Trigger value="graph" disabled={tabsDisabled}>
-						<span title="Graph" aria-label="Graph tab" class="flex items-center gap-1">
+						<span
+							title="Graph"
+							aria-label="Graph tab"
+							class="flex items-center gap-1"
+						>
 							<Icons.Network size={20} class="inline" />
 							{#if editGroup === "graph"}
 								Graph
@@ -601,9 +665,7 @@
 			</Tabs.Content>
 			<Tabs.Content value="bindings">
 				{#if editGroup == "bindings" && selectedLorebook}
-					<LorebookBindingsManager
-						lorebookId={selectedLorebook.id}
-					/>
+					<LorebookBindingsManager lorebookId={selectedLorebook.id} />
 				{/if}
 			</Tabs.Content>
 			<Tabs.Content value="world">
@@ -627,10 +689,14 @@
 					<HistoryEntryManager
 						lorebookId={selectedLorebook.id}
 						bind:hasUnsavedChanges={tabHasUnsavedChanges}
-						focusHistoryEntryId={focusHistoryEntryId}
+						{focusHistoryEntryId}
 						focusEntryTab={focusHistoryEntryTab}
-						focusSceneId={focusSceneId}
-						onNavigateToGraph={graphEnabled ? () => { editGroup = "graph" } : undefined}
+						{focusSceneId}
+						onNavigateToGraph={graphEnabled
+							? () => {
+									editGroup = "graph"
+								}
+							: undefined}
 					/>
 				{/if}
 			</Tabs.Content>
@@ -673,7 +739,10 @@
 		<div class="flex flex-col gap-2">
 			{#if isLoading}
 				<div class="flex items-center justify-center py-8">
-					<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+					<Icons.Loader2
+						size={20}
+						class="text-surface-400 animate-spin"
+					/>
 				</div>
 			{:else if filteredLorebooks.length === 0}
 				<EmptyState
@@ -782,13 +851,21 @@
 		}}
 	>
 		<Portal>
-			<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-				<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700">
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
+			>
+				<Dialog.Content
+					class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
+				>
 					<div class="p-6">
 						<h2 class="mb-2 text-lg font-bold">Import Lorebook</h2>
 						{#if !importingBook}
-							<label class="mb-2" for="file-upload">Select a file.</label>
+							<label class="mb-2" for="file-upload">
+								Select a file.
+							</label>
 							<FileUpload
 								name="file-upload"
 								accept=".json"
@@ -799,11 +876,17 @@
 								<FileUpload.Dropzone
 									class="border-surface-300-700 bg-surface-50-950 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
 								>
-									<Icons.Upload class="text-surface-700-300 h-8 w-8" />
-									<FileUpload.Trigger class="btn btn-sm preset-filled-primary-500">
+									<Icons.Upload
+										class="text-surface-700-300 h-8 w-8"
+									/>
+									<FileUpload.Trigger
+										class="btn btn-sm preset-filled-primary-500"
+									>
 										Browse
 									</FileUpload.Trigger>
-									<span class="text-surface-700-300 text-xs">or drag and drop</span>
+									<span class="text-surface-700-300 text-xs">
+										or drag and drop
+									</span>
 									<FileUpload.HiddenInput />
 								</FileUpload.Dropzone>
 							</FileUpload>
@@ -853,16 +936,22 @@
 		}}
 	>
 		<Portal>
-			<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-				<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700">
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
+			>
+				<Dialog.Content
+					class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
+				>
 					<div class="p-6">
 						<h2 class="text-error-500 mb-2 text-lg font-bold">
 							Delete Lorebook?
 						</h2>
 						<p class="mb-4">
-							Are you sure you want to delete this lorebook? This action
-							cannot be undone.
+							Are you sure you want to delete this lorebook? This
+							action cannot be undone.
 						</p>
 						<div class="mt-4 flex items-end gap-2">
 							<button

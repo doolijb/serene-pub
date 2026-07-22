@@ -74,16 +74,32 @@ describe("BaseConnectionAdapter.compilePrompt() mode dispatch", () => {
 		spies = {
 			summarizer: vi
 				.spyOn(adapter as any, "compileSummarizerPrompt")
-				.mockResolvedValue({ prompt: "x", messages: [], meta: {} as any }),
+				.mockResolvedValue({
+					prompt: "x",
+					messages: [],
+					meta: {} as any
+				}),
 			assistant: vi
 				.spyOn(adapter as any, "compileAssistantPrompt")
-				.mockResolvedValue({ prompt: "x", messages: [], meta: {} as any }),
+				.mockResolvedValue({
+					prompt: "x",
+					messages: [],
+					meta: {} as any
+				}),
 			narrator: vi
 				.spyOn(adapter as any, "compileNarratorResponsePrompt")
-				.mockResolvedValue({ prompt: "x", messages: [], meta: {} as any }),
+				.mockResolvedValue({
+					prompt: "x",
+					messages: [],
+					meta: {} as any
+				}),
 			default: vi
 				.spyOn(adapter.promptBuilder, "compilePrompt")
-				.mockResolvedValue({ prompt: "x", messages: [], meta: {} as any })
+				.mockResolvedValue({
+					prompt: "x",
+					messages: [],
+					meta: {} as any
+				})
 		}
 	})
 
@@ -150,7 +166,11 @@ describe("BaseConnectionAdapter.compileNarratorResponsePrompt()", () => {
 		adapter.isNarratorResponseMode = true
 		const spy = vi
 			.spyOn(adapter.promptBuilder, "compilePrompt")
-			.mockResolvedValue({ prompt: "x", messages: undefined, meta: {} as any })
+			.mockResolvedValue({
+				prompt: "x",
+				messages: undefined,
+				meta: {} as any
+			})
 
 		await adapter.compilePrompt({ useChatFormat: false } as any)
 		expect(spy).toHaveBeenCalledWith(
@@ -173,7 +193,11 @@ describe("BaseConnectionAdapter.compileNarratorResponsePrompt()", () => {
 		adapter.isNarratorResponseMode = true
 		const spy = vi
 			.spyOn(adapter.promptBuilder, "compilePrompt")
-			.mockResolvedValue({ prompt: "x", messages: undefined, meta: {} as any })
+			.mockResolvedValue({
+				prompt: "x",
+				messages: undefined,
+				meta: {} as any
+			})
 
 		await adapter.compilePrompt({ useChatFormat: true } as any)
 		expect(spy).toHaveBeenCalledWith(
@@ -190,7 +214,11 @@ describe("BaseConnectionAdapter.compileNarratorResponsePrompt()", () => {
 		adapter.isNarratorResponseMode = true
 		const spy = vi
 			.spyOn(adapter.promptBuilder, "compilePrompt")
-			.mockResolvedValue({ prompt: "x", messages: undefined, meta: {} as any })
+			.mockResolvedValue({
+				prompt: "x",
+				messages: undefined,
+				meta: {} as any
+			})
 
 		await adapter.compilePrompt({} as any)
 		expect(spy).toHaveBeenCalledWith(

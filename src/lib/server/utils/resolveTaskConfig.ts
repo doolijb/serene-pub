@@ -42,7 +42,15 @@ export async function resolveTaskConfig(params: {
 	/** ID of the chat (optional per-chat override) */
 	chatId?: number | null
 }): Promise<ResolvedTaskConfig> {
-	const { taskType, promptConfigId, narratorPromptConfigId, summarizeConfigId, summarizeConfigType, graphBuildConfigId, chatId } = params
+	const {
+		taskType,
+		promptConfigId,
+		narratorPromptConfigId,
+		summarizeConfigId,
+		summarizeConfigType,
+		graphBuildConfigId,
+		chatId
+	} = params
 
 	const systemSettings = await db.query.systemSettings.findFirst()
 
@@ -75,24 +83,66 @@ export async function resolveTaskConfig(params: {
 			})
 			overrideConnectionId = cfg?.connectionId ?? null
 			overrideSamplingId = cfg?.samplingConfigId ?? null
-		} else if (taskType.startsWith("summarize_") && summarizeConfigId && summarizeConfigType) {
-			const subTask = taskType.replace("summarize_", "") as "batch" | "synth" | "name"
-			type SumCfgCols = { batchConnectionId: number | null; batchSamplingConfigId: number | null; synthConnectionId: number | null; synthSamplingConfigId: number | null; nameConnectionId: number | null; nameSamplingConfigId: number | null }
+		} else if (
+			taskType.startsWith("summarize_") &&
+			summarizeConfigId &&
+			summarizeConfigType
+		) {
+			const subTask = taskType.replace("summarize_", "") as
+				| "batch"
+				| "synth"
+				| "name"
+			type SumCfgCols = {
+				batchConnectionId: number | null
+				batchSamplingConfigId: number | null
+				synthConnectionId: number | null
+				synthSamplingConfigId: number | null
+				nameConnectionId: number | null
+				nameSamplingConfigId: number | null
+			}
 			let cfg: SumCfgCols | undefined
 			if (summarizeConfigType === "world") {
-				cfg = await db.query.worldSummarizeConfigs.findFirst({ where: (c, { eq }) => eq(c.id, summarizeConfigId!), columns: { batchConnectionId: true, batchSamplingConfigId: true, synthConnectionId: true, synthSamplingConfigId: true, nameConnectionId: true, nameSamplingConfigId: true } }) as SumCfgCols | undefined
+				cfg = (await db.query.worldSummarizeConfigs.findFirst({
+					where: (c, { eq }) => eq(c.id, summarizeConfigId!),
+					columns: {
+						batchConnectionId: true,
+						batchSamplingConfigId: true,
+						synthConnectionId: true,
+						synthSamplingConfigId: true,
+						nameConnectionId: true,
+						nameSamplingConfigId: true
+					}
+				})) as SumCfgCols | undefined
 			} else if (summarizeConfigType === "character") {
-				cfg = await db.query.characterSummarizeConfigs.findFirst({ where: (c, { eq }) => eq(c.id, summarizeConfigId!), columns: { batchConnectionId: true, batchSamplingConfigId: true, synthConnectionId: true, synthSamplingConfigId: true, nameConnectionId: true, nameSamplingConfigId: true } }) as SumCfgCols | undefined
+				cfg = (await db.query.characterSummarizeConfigs.findFirst({
+					where: (c, { eq }) => eq(c.id, summarizeConfigId!),
+					columns: {
+						batchConnectionId: true,
+						batchSamplingConfigId: true,
+						synthConnectionId: true,
+						synthSamplingConfigId: true,
+						nameConnectionId: true,
+						nameSamplingConfigId: true
+					}
+				})) as SumCfgCols | undefined
 			} else {
-				cfg = await db.query.sceneSummarizeConfigs.findFirst({ where: (c, { eq }) => eq(c.id, summarizeConfigId!), columns: { batchConnectionId: true, batchSamplingConfigId: true, synthConnectionId: true, synthSamplingConfigId: true, nameConnectionId: true, nameSamplingConfigId: true } }) as SumCfgCols | undefined
+				cfg = (await db.query.sceneSummarizeConfigs.findFirst({
+					where: (c, { eq }) => eq(c.id, summarizeConfigId!),
+					columns: {
+						batchConnectionId: true,
+						batchSamplingConfigId: true,
+						synthConnectionId: true,
+						synthSamplingConfigId: true,
+						nameConnectionId: true,
+						nameSamplingConfigId: true
+					}
+				})) as SumCfgCols | undefined
 			}
 			overrideConnectionId = cfg?.[`${subTask}ConnectionId`] ?? null
 			overrideSamplingId = cfg?.[`${subTask}SamplingConfigId`] ?? null
 		} else if (taskType.startsWith("graph_") && graphBuildConfigId) {
 			const subTask =
-				taskType === "graph_pre_filter"
-					? "preFilter"
-					: "perspective"
+				taskType === "graph_pre_filter" ? "preFilter" : "perspective"
 			const cfg = await db.query.graphBuildConfigs.findFirst({
 				where: (c, { eq }) => eq(c.id, graphBuildConfigId),
 				columns: {
@@ -100,21 +150,29 @@ export async function resolveTaskConfig(params: {
 					[`${subTask}SamplingConfigId`]: true
 				} as any
 			})
-			overrideConnectionId = (cfg as any)?.[`${subTask}ConnectionId`] ?? null
-			overrideSamplingId = (cfg as any)?.[`${subTask}SamplingConfigId`] ?? null
+			overrideConnectionId =
+				(cfg as any)?.[`${subTask}ConnectionId`] ?? null
+			overrideSamplingId =
+				(cfg as any)?.[`${subTask}SamplingConfigId`] ?? null
 		}
 	}
 
 	// ── System default (fallback) ─────────────────────────────────────────────
-	const connectionId = overrideConnectionId ?? systemSettings?.defaultConnectionId ?? null
-	const samplingId = overrideSamplingId ?? systemSettings?.defaultSamplingConfigId ?? null
+	const connectionId =
+		overrideConnectionId ?? systemSettings?.defaultConnectionId ?? null
+	const samplingId =
+		overrideSamplingId ?? systemSettings?.defaultSamplingConfigId ?? null
 
 	const [connection, sampling] = await Promise.all([
 		connectionId
-			? db.query.connections.findFirst({ where: (c, { eq }) => eq(c.id, connectionId) })
+			? db.query.connections.findFirst({
+					where: (c, { eq }) => eq(c.id, connectionId)
+				})
 			: Promise.resolve(undefined),
 		samplingId
-			? db.query.samplingConfigs.findFirst({ where: (c, { eq }) => eq(c.id, samplingId) })
+			? db.query.samplingConfigs.findFirst({
+					where: (c, { eq }) => eq(c.id, samplingId)
+				})
 			: Promise.resolve(undefined)
 	])
 

@@ -8,7 +8,10 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 	import LibraryPortraitCard from "$lib/client/components/library/LibraryPortraitCard.svelte"
-	import type { LibraryCatalogItem, CardSourceId } from "$lib/shared/library/types"
+	import type {
+		LibraryCatalogItem,
+		CardSourceId
+	} from "$lib/shared/library/types"
 	import { imageUrlFor } from "$lib/shared/library/imageUrlFor"
 	import LibraryDetailsModal from "$lib/client/components/library/LibraryDetailsModal.svelte"
 
@@ -26,7 +29,8 @@
 	let retryAfterMs = $state<number | null>(null)
 	let retryTimer: ReturnType<typeof setTimeout> | undefined
 
-	let capabilities: Sockets.CardSources.Capabilities.Response | null = $state(null)
+	let capabilities: Sockets.CardSources.Capabilities.Response | null =
+		$state(null)
 	let activeSource = $state<CardSourceId>("github-serenepub")
 	// CharaVault has no persona catalog, so this will only ever have one
 	// entry in practice — the tab strip stays hidden when there's nothing
@@ -34,10 +38,9 @@
 	let sourcesForPersonas = $derived.by(
 		() => capabilities?.sources.filter((s) => s.supportsPersonas) ?? []
 	)
-	let activeSourceInfo = $derived.by(() =>
-		capabilities?.sources.find((s) => s.id === activeSource) ?? null
+	let activeSourceInfo = $derived.by(
+		() => capabilities?.sources.find((s) => s.id === activeSource) ?? null
 	)
-
 
 	// New searches are always sent immediately — never blocked or queued
 	// behind a slow one (a previous version waited for the in-flight
@@ -117,49 +120,77 @@
 			if (!categories.has(category)) categories.set(category, [])
 			categories.get(category)!.push(persona)
 		}
-		return Array.from(categories.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+		return Array.from(categories.entries()).sort((a, b) =>
+			a[0].localeCompare(b[0])
+		)
 	})
 
 	onMount(() => {
-		socket.on("personas:searchLibrary", (msg: Sockets.Personas.SearchLibrary.Response) => {
-			if (msg.requestId !== latestRequestId) return
-			libraryPersonas = msg.personas
-			isLoading = false
-		})
-		socket.on("personas:searchLibrary:error", (msg: Sockets.SearchLibraryErrorResponse) => {
-			if (msg.requestId !== latestRequestId) return
-			libraryPersonas = []
-			unreachable = !!msg.unreachable
-			rateLimited = !!msg.rateLimited
-			retryAfterMs = msg.retryAfterMs ?? null
-			isLoading = false
-			if (rateLimited && retryAfterMs) {
-				clearTimeout(retryTimer)
-				retryTimer = setTimeout(() => fetchLibrary(true), retryAfterMs)
+		socket.on(
+			"personas:searchLibrary",
+			(msg: Sockets.Personas.SearchLibrary.Response) => {
+				if (msg.requestId !== latestRequestId) return
+				libraryPersonas = msg.personas
+				isLoading = false
 			}
-			if (!unreachable && !rateLimited) {
-				toaster.error({ title: msg.error || "Failed to search the persona library" })
+		)
+		socket.on(
+			"personas:searchLibrary:error",
+			(msg: Sockets.SearchLibraryErrorResponse) => {
+				if (msg.requestId !== latestRequestId) return
+				libraryPersonas = []
+				unreachable = !!msg.unreachable
+				rateLimited = !!msg.rateLimited
+				retryAfterMs = msg.retryAfterMs ?? null
+				isLoading = false
+				if (rateLimited && retryAfterMs) {
+					clearTimeout(retryTimer)
+					retryTimer = setTimeout(
+						() => fetchLibrary(true),
+						retryAfterMs
+					)
+				}
+				if (!unreachable && !rateLimited) {
+					toaster.error({
+						title:
+							msg.error || "Failed to search the persona library"
+					})
+				}
 			}
-		})
-		socket.on("personas:importFromLibrary", (msg: Sockets.Personas.ImportFromLibrary.Response) => {
-			toaster.success({ title: `Downloaded ${msg.persona.name}` })
-			downloading = false
-			showDetails = false
-		})
-		socket.on("personas:importFromLibrary:error", (msg: Sockets.ErrorResponse) => {
-			toaster.error({ title: msg.error || "Failed to download persona" })
-			downloading = false
-		})
-		socket.on("cardSources:capabilities", (msg: Sockets.CardSources.Capabilities.Response) => {
-			capabilities = msg
-		})
-		socket.on("cardSources:cardDetail", (msg: Sockets.CardSources.CardDetail.Response) => {
-			if (msg.requestId !== latestDetailRequestId) return
-			loadingDetail = false
-			if (selectedPersona) {
-				selectedPersona = { ...selectedPersona, ...msg }
+		)
+		socket.on(
+			"personas:importFromLibrary",
+			(msg: Sockets.Personas.ImportFromLibrary.Response) => {
+				toaster.success({ title: `Downloaded ${msg.persona.name}` })
+				downloading = false
+				showDetails = false
 			}
-		})
+		)
+		socket.on(
+			"personas:importFromLibrary:error",
+			(msg: Sockets.ErrorResponse) => {
+				toaster.error({
+					title: msg.error || "Failed to download persona"
+				})
+				downloading = false
+			}
+		)
+		socket.on(
+			"cardSources:capabilities",
+			(msg: Sockets.CardSources.Capabilities.Response) => {
+				capabilities = msg
+			}
+		)
+		socket.on(
+			"cardSources:cardDetail",
+			(msg: Sockets.CardSources.CardDetail.Response) => {
+				if (msg.requestId !== latestDetailRequestId) return
+				loadingDetail = false
+				if (selectedPersona) {
+					selectedPersona = { ...selectedPersona, ...msg }
+				}
+			}
+		)
 		socket.on("cardSources:cardDetail:error", (msg: any) => {
 			if (msg.requestId !== latestDetailRequestId) return
 			loadingDetail = false
@@ -181,7 +212,9 @@
 	})
 </script>
 
-<div class="mx-4 mt-4 mb-8 min-h-[calc(100%-3rem)] rounded-lg p-6 shadow-md preset-tonal">
+<div
+	class="preset-tonal mx-4 mt-4 mb-8 min-h-[calc(100%-3rem)] rounded-lg p-6 shadow-md"
+>
 	<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
 		<div class="flex items-center gap-3">
 			<button
@@ -198,7 +231,8 @@
 					Persona Library
 				</h1>
 				<p class="text-surface-700-300 mt-1 text-sm">
-					Browse and download ready-made personas from the Serene Pub community library.
+					Browse and download ready-made personas from the Serene Pub
+					community library.
 				</p>
 			</div>
 		</div>
@@ -209,16 +243,22 @@
 			<Tabs value={activeSource} onValueChange={handleTabChange}>
 				<Tabs.List class="flex flex-wrap gap-1">
 					{#each sourcesForPersonas as source}
-						<Tabs.Trigger value={source.id}>{source.label}</Tabs.Trigger>
+						<Tabs.Trigger value={source.id}>
+							{source.label}
+						</Tabs.Trigger>
 					{/each}
-					<Tabs.Indicator class="rounded-full preset-filled-primary-500" />
+					<Tabs.Indicator
+						class="preset-filled-primary-500 rounded-full"
+					/>
 				</Tabs.List>
 			</Tabs>
 		</div>
 	{/if}
 
 	{#if activeSourceInfo}
-		<p class="text-surface-700-300 mb-4 flex flex-wrap items-center gap-x-2 text-sm">
+		<p
+			class="text-surface-700-300 mb-4 flex flex-wrap items-center gap-x-2 text-sm"
+		>
 			<span>{activeSourceInfo.description}</span>
 			<a
 				href={activeSourceInfo.url}
@@ -246,19 +286,32 @@
 
 	{#if isLoading}
 		<div class="flex items-center justify-center py-16">
-			<Icons.Loader2 size={32} class="text-surface-700-300 animate-spin" />
+			<Icons.Loader2
+				size={32}
+				class="text-surface-700-300 animate-spin"
+			/>
 		</div>
 	{:else if unreachable}
-		<div class="text-surface-700-300 flex flex-col items-center gap-3 py-16 text-center">
+		<div
+			class="text-surface-700-300 flex flex-col items-center gap-3 py-16 text-center"
+		>
 			<Icons.WifiOff size={40} class="opacity-40" />
-			<p>{capabilities?.sources.find((s) => s.id === activeSource)?.label ?? "This source"} is unreachable right now.</p>
-			<button class="btn btn-sm preset-filled-primary-500" onclick={() => fetchLibrary(true)}>
+			<p>
+				{capabilities?.sources.find((s) => s.id === activeSource)
+					?.label ?? "This source"} is unreachable right now.
+			</p>
+			<button
+				class="btn btn-sm preset-filled-primary-500"
+				onclick={() => fetchLibrary(true)}
+			>
 				<Icons.RotateCw size={16} />
 				Retry
 			</button>
 		</div>
 	{:else if rateLimited}
-		<div class="text-surface-700-300 flex flex-col items-center gap-2 py-16 text-center">
+		<div
+			class="text-surface-700-300 flex flex-col items-center gap-2 py-16 text-center"
+		>
 			<Icons.Clock size={40} class="opacity-40" />
 			<p>
 				This source is busy right now{#if retryAfterMs}
@@ -266,7 +319,9 @@
 			</p>
 		</div>
 	{:else if libraryPersonas.length === 0}
-		<div class="text-surface-700-300 flex flex-col items-center gap-2 py-16 text-center">
+		<div
+			class="text-surface-700-300 flex flex-col items-center gap-2 py-16 text-center"
+		>
 			<Icons.Search size={40} class="opacity-40" />
 			<p>No personas found</p>
 		</div>
@@ -274,10 +329,14 @@
 		<div class="space-y-8">
 			{#each categorizedPersonas as [category, personas]}
 				<section>
-					<h2 class="text-surface-400 mb-3 text-xs font-semibold tracking-wider uppercase">
+					<h2
+						class="text-surface-400 mb-3 text-xs font-semibold tracking-wider uppercase"
+					>
 						{category}
 					</h2>
-					<div class="grid grid-cols-[repeat(auto-fill,minmax(16.625rem,1fr))] gap-4">
+					<div
+						class="grid grid-cols-[repeat(auto-fill,minmax(16.625rem,1fr))] gap-4"
+					>
 						{#each personas as persona (`${persona.source}:${persona.file}`)}
 							<LibraryPortraitCard
 								item={persona}

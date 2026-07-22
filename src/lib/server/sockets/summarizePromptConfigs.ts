@@ -9,7 +9,9 @@ import type { Handler } from "$lib/shared/events"
 
 function adminGuard(socket: any, emitToUser: (e: string, d: any) => void) {
 	if (!socket.user!.isAdmin) {
-		emitToUser("error", { error: "Access denied. Only admin users can manage summarize configurations." })
+		emitToUser("error", {
+			error: "Access denied. Only admin users can manage summarize configurations."
+		})
 		throw new Error("Access denied.")
 	}
 }
@@ -23,11 +25,14 @@ export const worldSummarizeConfigsListHandler: Handler<
 	event: "worldSummarizeConfigs:list",
 	handler: async (socket, _params, emitToUser) => {
 		adminGuard(socket, emitToUser)
-		const worldSummarizeConfigsList = await db.query.worldSummarizeConfigs.findMany({
-			columns: { id: true, name: true, isImmutable: true },
-			orderBy: (c, { asc }) => [asc(c.isImmutable), asc(c.name)]
-		})
-		const res: Sockets.WorldSummarizeConfigs.List.Response = { worldSummarizeConfigsList }
+		const worldSummarizeConfigsList =
+			await db.query.worldSummarizeConfigs.findMany({
+				columns: { id: true, name: true, isImmutable: true },
+				orderBy: (c, { asc }) => [asc(c.isImmutable), asc(c.name)]
+			})
+		const res: Sockets.WorldSummarizeConfigs.List.Response = {
+			worldSummarizeConfigsList
+		}
 		emitToUser("worldSummarizeConfigs:list", res)
 		return res
 	}
@@ -40,14 +45,19 @@ export const worldSummarizeConfigsGetHandler: Handler<
 	event: "worldSummarizeConfigs:get",
 	handler: async (socket, params, emitToUser) => {
 		adminGuard(socket, emitToUser)
-		const worldSummarizeConfig = await db.query.worldSummarizeConfigs.findFirst({
-			where: (c, { eq }) => eq(c.id, params.id)
-		})
+		const worldSummarizeConfig =
+			await db.query.worldSummarizeConfigs.findFirst({
+				where: (c, { eq }) => eq(c.id, params.id)
+			})
 		if (!worldSummarizeConfig) {
-			emitToUser("worldSummarizeConfigs:get:error", { error: "Config not found" })
+			emitToUser("worldSummarizeConfigs:get:error", {
+				error: "Config not found"
+			})
 			throw new Error("World summarize config not found")
 		}
-		const res: Sockets.WorldSummarizeConfigs.Get.Response = { worldSummarizeConfig }
+		const res: Sockets.WorldSummarizeConfigs.Get.Response = {
+			worldSummarizeConfig
+		}
 		emitToUser("worldSummarizeConfigs:get", res)
 		return res
 	}
@@ -65,7 +75,9 @@ export const worldSummarizeConfigsCreateHandler: Handler<
 			.values(params.worldSummarizeConfig)
 			.returning()
 		await worldSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
-		const res: Sockets.WorldSummarizeConfigs.Create.Response = { worldSummarizeConfig }
+		const res: Sockets.WorldSummarizeConfigs.Create.Response = {
+			worldSummarizeConfig
+		}
 		emitToUser("worldSummarizeConfigs:create", res)
 		return res
 	}
@@ -86,7 +98,9 @@ export const worldSummarizeConfigsUpdateHandler: Handler<
 			.where(eq(schema.worldSummarizeConfigs.id, id))
 			.returning()
 		await worldSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
-		const res: Sockets.WorldSummarizeConfigs.Update.Response = { worldSummarizeConfig }
+		const res: Sockets.WorldSummarizeConfigs.Update.Response = {
+			worldSummarizeConfig
+		}
 		emitToUser("worldSummarizeConfigs:update", res)
 		return res
 	}
@@ -108,9 +122,13 @@ export const worldSummarizeConfigsDeleteHandler: Handler<
 			})
 			throw new Error("Cannot delete a built-in summarize config.")
 		}
-		await db.delete(schema.worldSummarizeConfigs).where(eq(schema.worldSummarizeConfigs.id, params.id))
+		await db
+			.delete(schema.worldSummarizeConfigs)
+			.where(eq(schema.worldSummarizeConfigs.id, params.id))
 		await worldSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
-		const res: Sockets.WorldSummarizeConfigs.Delete.Response = { success: "Deleted successfully" }
+		const res: Sockets.WorldSummarizeConfigs.Delete.Response = {
+			success: "Deleted successfully"
+		}
 		emitToUser("worldSummarizeConfigs:delete", res)
 		return res
 	}
@@ -124,14 +142,30 @@ export const worldSummarizeConfigsSetUserActiveHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		adminGuard(socket, emitToUser)
 		const userId = socket.user!.id
-		let userSettings = await db.query.userSettings.findFirst({ where: (us, { eq }) => eq(us.userId, userId) })
-		if (!userSettings) await db.insert(schema.userSettings).values({ userId })
-		await db.update(schema.userSettings).set({ activeSummarizeWorldConfigId: params.id }).where(eq(schema.userSettings.userId, userId))
+		let userSettings = await db.query.userSettings.findFirst({
+			where: (us, { eq }) => eq(us.userId, userId)
+		})
+		if (!userSettings)
+			await db.insert(schema.userSettings).values({ userId })
+		await db
+			.update(schema.userSettings)
+			.set({ activeSummarizeWorldConfigId: params.id })
+			.where(eq(schema.userSettings.userId, userId))
 		await loadUser(socket, {}, emitToUser)
 		await userSettingsGet.handler(socket, {}, emitToUser)
-		if (params.id) await worldSummarizeConfigsGetHandler.handler(socket, { id: params.id }, emitToUser)
-		const updatedUser = await db.query.users.findFirst({ where: (u, { eq }) => eq(u.id, userId), with: { userSettings: true } })
-		const res: Sockets.WorldSummarizeConfigs.SetUserActive.Response = { user: updatedUser! }
+		if (params.id)
+			await worldSummarizeConfigsGetHandler.handler(
+				socket,
+				{ id: params.id },
+				emitToUser
+			)
+		const updatedUser = await db.query.users.findFirst({
+			where: (u, { eq }) => eq(u.id, userId),
+			with: { userSettings: true }
+		})
+		const res: Sockets.WorldSummarizeConfigs.SetUserActive.Response = {
+			user: updatedUser!
+		}
 		emitToUser("worldSummarizeConfigs:setUserActive", res)
 		return res
 	}
@@ -146,11 +180,14 @@ export const characterSummarizeConfigsListHandler: Handler<
 	event: "characterSummarizeConfigs:list",
 	handler: async (socket, _params, emitToUser) => {
 		adminGuard(socket, emitToUser)
-		const characterSummarizeConfigsList = await db.query.characterSummarizeConfigs.findMany({
-			columns: { id: true, name: true, isImmutable: true },
-			orderBy: (c, { asc }) => [asc(c.isImmutable), asc(c.name)]
-		})
-		const res: Sockets.CharacterSummarizeConfigs.List.Response = { characterSummarizeConfigsList }
+		const characterSummarizeConfigsList =
+			await db.query.characterSummarizeConfigs.findMany({
+				columns: { id: true, name: true, isImmutable: true },
+				orderBy: (c, { asc }) => [asc(c.isImmutable), asc(c.name)]
+			})
+		const res: Sockets.CharacterSummarizeConfigs.List.Response = {
+			characterSummarizeConfigsList
+		}
 		emitToUser("characterSummarizeConfigs:list", res)
 		return res
 	}
@@ -163,14 +200,19 @@ export const characterSummarizeConfigsGetHandler: Handler<
 	event: "characterSummarizeConfigs:get",
 	handler: async (socket, params, emitToUser) => {
 		adminGuard(socket, emitToUser)
-		const characterSummarizeConfig = await db.query.characterSummarizeConfigs.findFirst({
-			where: (c, { eq }) => eq(c.id, params.id)
-		})
+		const characterSummarizeConfig =
+			await db.query.characterSummarizeConfigs.findFirst({
+				where: (c, { eq }) => eq(c.id, params.id)
+			})
 		if (!characterSummarizeConfig) {
-			emitToUser("characterSummarizeConfigs:get:error", { error: "Config not found" })
+			emitToUser("characterSummarizeConfigs:get:error", {
+				error: "Config not found"
+			})
 			throw new Error("Character summarize config not found")
 		}
-		const res: Sockets.CharacterSummarizeConfigs.Get.Response = { characterSummarizeConfig }
+		const res: Sockets.CharacterSummarizeConfigs.Get.Response = {
+			characterSummarizeConfig
+		}
 		emitToUser("characterSummarizeConfigs:get", res)
 		return res
 	}
@@ -187,8 +229,14 @@ export const characterSummarizeConfigsCreateHandler: Handler<
 			.insert(schema.characterSummarizeConfigs)
 			.values(params.characterSummarizeConfig)
 			.returning()
-		await characterSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
-		const res: Sockets.CharacterSummarizeConfigs.Create.Response = { characterSummarizeConfig }
+		await characterSummarizeConfigsListHandler.handler(
+			socket,
+			{},
+			emitToUser
+		)
+		const res: Sockets.CharacterSummarizeConfigs.Create.Response = {
+			characterSummarizeConfig
+		}
 		emitToUser("characterSummarizeConfigs:create", res)
 		return res
 	}
@@ -208,8 +256,14 @@ export const characterSummarizeConfigsUpdateHandler: Handler<
 			.set(updateData)
 			.where(eq(schema.characterSummarizeConfigs.id, id))
 			.returning()
-		await characterSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
-		const res: Sockets.CharacterSummarizeConfigs.Update.Response = { characterSummarizeConfig }
+		await characterSummarizeConfigsListHandler.handler(
+			socket,
+			{},
+			emitToUser
+		)
+		const res: Sockets.CharacterSummarizeConfigs.Update.Response = {
+			characterSummarizeConfig
+		}
 		emitToUser("characterSummarizeConfigs:update", res)
 		return res
 	}
@@ -222,18 +276,27 @@ export const characterSummarizeConfigsDeleteHandler: Handler<
 	event: "characterSummarizeConfigs:delete",
 	handler: async (socket, params, emitToUser) => {
 		adminGuard(socket, emitToUser)
-		const currentConfig = await db.query.characterSummarizeConfigs.findFirst({
-			where: (c, { eq }) => eq(c.id, params.id)
-		})
+		const currentConfig =
+			await db.query.characterSummarizeConfigs.findFirst({
+				where: (c, { eq }) => eq(c.id, params.id)
+			})
 		if (currentConfig?.isImmutable) {
 			emitToUser("characterSummarizeConfigs:delete:error", {
 				error: "Cannot delete a built-in summarize config."
 			})
 			throw new Error("Cannot delete a built-in summarize config.")
 		}
-		await db.delete(schema.characterSummarizeConfigs).where(eq(schema.characterSummarizeConfigs.id, params.id))
-		await characterSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
-		const res: Sockets.CharacterSummarizeConfigs.Delete.Response = { success: "Deleted successfully" }
+		await db
+			.delete(schema.characterSummarizeConfigs)
+			.where(eq(schema.characterSummarizeConfigs.id, params.id))
+		await characterSummarizeConfigsListHandler.handler(
+			socket,
+			{},
+			emitToUser
+		)
+		const res: Sockets.CharacterSummarizeConfigs.Delete.Response = {
+			success: "Deleted successfully"
+		}
 		emitToUser("characterSummarizeConfigs:delete", res)
 		return res
 	}
@@ -247,14 +310,30 @@ export const characterSummarizeConfigsSetUserActiveHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		adminGuard(socket, emitToUser)
 		const userId = socket.user!.id
-		let userSettings = await db.query.userSettings.findFirst({ where: (us, { eq }) => eq(us.userId, userId) })
-		if (!userSettings) await db.insert(schema.userSettings).values({ userId })
-		await db.update(schema.userSettings).set({ activeSummarizeCharacterConfigId: params.id }).where(eq(schema.userSettings.userId, userId))
+		let userSettings = await db.query.userSettings.findFirst({
+			where: (us, { eq }) => eq(us.userId, userId)
+		})
+		if (!userSettings)
+			await db.insert(schema.userSettings).values({ userId })
+		await db
+			.update(schema.userSettings)
+			.set({ activeSummarizeCharacterConfigId: params.id })
+			.where(eq(schema.userSettings.userId, userId))
 		await loadUser(socket, {}, emitToUser)
 		await userSettingsGet.handler(socket, {}, emitToUser)
-		if (params.id) await characterSummarizeConfigsGetHandler.handler(socket, { id: params.id }, emitToUser)
-		const updatedUser = await db.query.users.findFirst({ where: (u, { eq }) => eq(u.id, userId), with: { userSettings: true } })
-		const res: Sockets.CharacterSummarizeConfigs.SetUserActive.Response = { user: updatedUser! }
+		if (params.id)
+			await characterSummarizeConfigsGetHandler.handler(
+				socket,
+				{ id: params.id },
+				emitToUser
+			)
+		const updatedUser = await db.query.users.findFirst({
+			where: (u, { eq }) => eq(u.id, userId),
+			with: { userSettings: true }
+		})
+		const res: Sockets.CharacterSummarizeConfigs.SetUserActive.Response = {
+			user: updatedUser!
+		}
 		emitToUser("characterSummarizeConfigs:setUserActive", res)
 		return res
 	}
@@ -269,11 +348,14 @@ export const sceneSummarizeConfigsListHandler: Handler<
 	event: "sceneSummarizeConfigs:list",
 	handler: async (socket, _params, emitToUser) => {
 		adminGuard(socket, emitToUser)
-		const sceneSummarizeConfigsList = await db.query.sceneSummarizeConfigs.findMany({
-			columns: { id: true, name: true, isImmutable: true },
-			orderBy: (c, { asc }) => [asc(c.isImmutable), asc(c.name)]
-		})
-		const res: Sockets.SceneSummarizeConfigs.List.Response = { sceneSummarizeConfigsList }
+		const sceneSummarizeConfigsList =
+			await db.query.sceneSummarizeConfigs.findMany({
+				columns: { id: true, name: true, isImmutable: true },
+				orderBy: (c, { asc }) => [asc(c.isImmutable), asc(c.name)]
+			})
+		const res: Sockets.SceneSummarizeConfigs.List.Response = {
+			sceneSummarizeConfigsList
+		}
 		emitToUser("sceneSummarizeConfigs:list", res)
 		return res
 	}
@@ -286,14 +368,19 @@ export const sceneSummarizeConfigsGetHandler: Handler<
 	event: "sceneSummarizeConfigs:get",
 	handler: async (socket, params, emitToUser) => {
 		adminGuard(socket, emitToUser)
-		const sceneSummarizeConfig = await db.query.sceneSummarizeConfigs.findFirst({
-			where: (c, { eq }) => eq(c.id, params.id)
-		})
+		const sceneSummarizeConfig =
+			await db.query.sceneSummarizeConfigs.findFirst({
+				where: (c, { eq }) => eq(c.id, params.id)
+			})
 		if (!sceneSummarizeConfig) {
-			emitToUser("sceneSummarizeConfigs:get:error", { error: "Config not found" })
+			emitToUser("sceneSummarizeConfigs:get:error", {
+				error: "Config not found"
+			})
 			throw new Error("Scene summarize config not found")
 		}
-		const res: Sockets.SceneSummarizeConfigs.Get.Response = { sceneSummarizeConfig }
+		const res: Sockets.SceneSummarizeConfigs.Get.Response = {
+			sceneSummarizeConfig
+		}
 		emitToUser("sceneSummarizeConfigs:get", res)
 		return res
 	}
@@ -311,7 +398,9 @@ export const sceneSummarizeConfigsCreateHandler: Handler<
 			.values(params.sceneSummarizeConfig)
 			.returning()
 		await sceneSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
-		const res: Sockets.SceneSummarizeConfigs.Create.Response = { sceneSummarizeConfig }
+		const res: Sockets.SceneSummarizeConfigs.Create.Response = {
+			sceneSummarizeConfig
+		}
 		emitToUser("sceneSummarizeConfigs:create", res)
 		return res
 	}
@@ -332,7 +421,9 @@ export const sceneSummarizeConfigsUpdateHandler: Handler<
 			.where(eq(schema.sceneSummarizeConfigs.id, id))
 			.returning()
 		await sceneSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
-		const res: Sockets.SceneSummarizeConfigs.Update.Response = { sceneSummarizeConfig }
+		const res: Sockets.SceneSummarizeConfigs.Update.Response = {
+			sceneSummarizeConfig
+		}
 		emitToUser("sceneSummarizeConfigs:update", res)
 		return res
 	}
@@ -354,9 +445,13 @@ export const sceneSummarizeConfigsDeleteHandler: Handler<
 			})
 			throw new Error("Cannot delete a built-in summarize config.")
 		}
-		await db.delete(schema.sceneSummarizeConfigs).where(eq(schema.sceneSummarizeConfigs.id, params.id))
+		await db
+			.delete(schema.sceneSummarizeConfigs)
+			.where(eq(schema.sceneSummarizeConfigs.id, params.id))
 		await sceneSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
-		const res: Sockets.SceneSummarizeConfigs.Delete.Response = { success: "Deleted successfully" }
+		const res: Sockets.SceneSummarizeConfigs.Delete.Response = {
+			success: "Deleted successfully"
+		}
 		emitToUser("sceneSummarizeConfigs:delete", res)
 		return res
 	}
@@ -370,14 +465,30 @@ export const sceneSummarizeConfigsSetUserActiveHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		adminGuard(socket, emitToUser)
 		const userId = socket.user!.id
-		let userSettings = await db.query.userSettings.findFirst({ where: (us, { eq }) => eq(us.userId, userId) })
-		if (!userSettings) await db.insert(schema.userSettings).values({ userId })
-		await db.update(schema.userSettings).set({ activeSummarizeSceneConfigId: params.id }).where(eq(schema.userSettings.userId, userId))
+		let userSettings = await db.query.userSettings.findFirst({
+			where: (us, { eq }) => eq(us.userId, userId)
+		})
+		if (!userSettings)
+			await db.insert(schema.userSettings).values({ userId })
+		await db
+			.update(schema.userSettings)
+			.set({ activeSummarizeSceneConfigId: params.id })
+			.where(eq(schema.userSettings.userId, userId))
 		await loadUser(socket, {}, emitToUser)
 		await userSettingsGet.handler(socket, {}, emitToUser)
-		if (params.id) await sceneSummarizeConfigsGetHandler.handler(socket, { id: params.id }, emitToUser)
-		const updatedUser = await db.query.users.findFirst({ where: (u, { eq }) => eq(u.id, userId), with: { userSettings: true } })
-		const res: Sockets.SceneSummarizeConfigs.SetUserActive.Response = { user: updatedUser! }
+		if (params.id)
+			await sceneSummarizeConfigsGetHandler.handler(
+				socket,
+				{ id: params.id },
+				emitToUser
+			)
+		const updatedUser = await db.query.users.findFirst({
+			where: (u, { eq }) => eq(u.id, userId),
+			with: { userSettings: true }
+		})
+		const res: Sockets.SceneSummarizeConfigs.SetUserActive.Response = {
+			user: updatedUser!
+		}
 		emitToUser("sceneSummarizeConfigs:setUserActive", res)
 		return res
 	}
@@ -388,7 +499,11 @@ export const sceneSummarizeConfigsSetUserActiveHandler: Handler<
 export function registerSummarizePromptConfigHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
-	register: (socket: any, handler: Handler<any, any>, emitToUser: (event: string, data: any) => void) => void
+	register: (
+		socket: any,
+		handler: Handler<any, any>,
+		emitToUser: (event: string, data: any) => void
+	) => void
 ) {
 	// World
 	register(socket, worldSummarizeConfigsListHandler, emitToUser)

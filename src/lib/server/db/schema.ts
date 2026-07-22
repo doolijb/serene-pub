@@ -81,24 +81,20 @@ export const userSettings = pgTable("user_settings", {
 			onDelete: "set null"
 		}
 	),
-	activeNarratorPromptConfigId: integer("active_narrator_prompt_config_id").references(
-		() => narratorPromptConfigs.id,
-		{
-			onDelete: "set null"
-		}
-	),
-	activeSummarizeWorldConfigId: integer("active_summarize_world_config_id").references(
-		() => worldSummarizeConfigs.id,
-		{ onDelete: "set null" }
-	),
-	activeSummarizeCharacterConfigId: integer("active_summarize_character_config_id").references(
-		() => characterSummarizeConfigs.id,
-		{ onDelete: "set null" }
-	),
-	activeSummarizeSceneConfigId: integer("active_summarize_scene_config_id").references(
-		() => sceneSummarizeConfigs.id,
-		{ onDelete: "set null" }
-	),
+	activeNarratorPromptConfigId: integer(
+		"active_narrator_prompt_config_id"
+	).references(() => narratorPromptConfigs.id, {
+		onDelete: "set null"
+	}),
+	activeSummarizeWorldConfigId: integer(
+		"active_summarize_world_config_id"
+	).references(() => worldSummarizeConfigs.id, { onDelete: "set null" }),
+	activeSummarizeCharacterConfigId: integer(
+		"active_summarize_character_config_id"
+	).references(() => characterSummarizeConfigs.id, { onDelete: "set null" }),
+	activeSummarizeSceneConfigId: integer(
+		"active_summarize_scene_config_id"
+	).references(() => sceneSummarizeConfigs.id, { onDelete: "set null" }),
 	theme: text("theme").notNull().default("hamlindigo"),
 	darkMode: boolean("dark_mode").notNull().default(true),
 	showHomePageBanner: boolean("show_home_page_banner").default(true),
@@ -369,13 +365,24 @@ export const promptConfigs = pgTable("prompt_configs", {
 	isImmutable: boolean("is_immutable").notNull().default(false),
 	name: text("name").notNull(),
 	systemPrompt: text("system_prompt").notNull(),
-	connectionId: integer("connection_id").references(() => connections.id, { onDelete: "set null" }),
-	samplingConfigId: integer("sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" })
+	connectionId: integer("connection_id").references(() => connections.id, {
+		onDelete: "set null"
+	}),
+	samplingConfigId: integer("sampling_config_id").references(
+		() => samplingConfigs.id,
+		{ onDelete: "set null" }
+	)
 })
 
 export const promptConfigsRelations = relations(promptConfigs, ({ one }) => ({
-	connection: one(connections, { fields: [promptConfigs.connectionId], references: [connections.id] }),
-	samplingConfig: one(samplingConfigs, { fields: [promptConfigs.samplingConfigId], references: [samplingConfigs.id] })
+	connection: one(connections, {
+		fields: [promptConfigs.connectionId],
+		references: [connections.id]
+	}),
+	samplingConfig: one(samplingConfigs, {
+		fields: [promptConfigs.samplingConfigId],
+		references: [samplingConfigs.id]
+	})
 }))
 
 // "chat" prefix is deliberate: this is a prompt config scoped to the
@@ -390,14 +397,28 @@ export const narratorPromptConfigs = pgTable("narrator_prompt_configs", {
 	// `name` above, which only identifies the config itself in the sidebar.
 	narratorName: text("narrator_name").notNull().default("Narrator"),
 	systemPrompt: text("system_prompt").notNull(),
-	connectionId: integer("connection_id").references(() => connections.id, { onDelete: "set null" }),
-	samplingConfigId: integer("sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" })
+	connectionId: integer("connection_id").references(() => connections.id, {
+		onDelete: "set null"
+	}),
+	samplingConfigId: integer("sampling_config_id").references(
+		() => samplingConfigs.id,
+		{ onDelete: "set null" }
+	)
 })
 
-export const narratorPromptConfigsRelations = relations(narratorPromptConfigs, ({ one }) => ({
-	connection: one(connections, { fields: [narratorPromptConfigs.connectionId], references: [connections.id] }),
-	samplingConfig: one(samplingConfigs, { fields: [narratorPromptConfigs.samplingConfigId], references: [samplingConfigs.id] })
-}))
+export const narratorPromptConfigsRelations = relations(
+	narratorPromptConfigs,
+	({ one }) => ({
+		connection: one(connections, {
+			fields: [narratorPromptConfigs.connectionId],
+			references: [connections.id]
+		}),
+		samplingConfig: one(samplingConfigs, {
+			fields: [narratorPromptConfigs.samplingConfigId],
+			references: [samplingConfigs.id]
+		})
+	})
+)
 
 export const worldSummarizeConfigs = pgTable("world_summarize_configs", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
@@ -406,46 +427,127 @@ export const worldSummarizeConfigs = pgTable("world_summarize_configs", {
 	batchSystemPrompt: text("batch_system_prompt").notNull(),
 	synthSystemPrompt: text("synth_system_prompt").notNull(),
 	nameSystemPrompt: text("name_system_prompt").notNull(),
-	batchConnectionId: integer("batch_connection_id").references(() => connections.id, { onDelete: "set null" }),
-	batchSamplingConfigId: integer("batch_sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" }),
-	synthConnectionId: integer("synth_connection_id").references(() => connections.id, { onDelete: "set null" }),
-	synthSamplingConfigId: integer("synth_sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" }),
-	nameConnectionId: integer("name_connection_id").references(() => connections.id, { onDelete: "set null" }),
-	nameSamplingConfigId: integer("name_sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" })
+	batchConnectionId: integer("batch_connection_id").references(
+		() => connections.id,
+		{ onDelete: "set null" }
+	),
+	batchSamplingConfigId: integer("batch_sampling_config_id").references(
+		() => samplingConfigs.id,
+		{ onDelete: "set null" }
+	),
+	synthConnectionId: integer("synth_connection_id").references(
+		() => connections.id,
+		{ onDelete: "set null" }
+	),
+	synthSamplingConfigId: integer("synth_sampling_config_id").references(
+		() => samplingConfigs.id,
+		{ onDelete: "set null" }
+	),
+	nameConnectionId: integer("name_connection_id").references(
+		() => connections.id,
+		{ onDelete: "set null" }
+	),
+	nameSamplingConfigId: integer("name_sampling_config_id").references(
+		() => samplingConfigs.id,
+		{ onDelete: "set null" }
+	)
 })
 
-export const worldSummarizeConfigsRelations = relations(worldSummarizeConfigs, ({ one }) => ({
-	batchConnection: one(connections, { fields: [worldSummarizeConfigs.batchConnectionId], references: [connections.id] }),
-	batchSamplingConfig: one(samplingConfigs, { fields: [worldSummarizeConfigs.batchSamplingConfigId], references: [samplingConfigs.id] }),
-	synthConnection: one(connections, { fields: [worldSummarizeConfigs.synthConnectionId], references: [connections.id] }),
-	synthSamplingConfig: one(samplingConfigs, { fields: [worldSummarizeConfigs.synthSamplingConfigId], references: [samplingConfigs.id] }),
-	nameConnection: one(connections, { fields: [worldSummarizeConfigs.nameConnectionId], references: [connections.id] }),
-	nameSamplingConfig: one(samplingConfigs, { fields: [worldSummarizeConfigs.nameSamplingConfigId], references: [samplingConfigs.id] })
-}))
+export const worldSummarizeConfigsRelations = relations(
+	worldSummarizeConfigs,
+	({ one }) => ({
+		batchConnection: one(connections, {
+			fields: [worldSummarizeConfigs.batchConnectionId],
+			references: [connections.id]
+		}),
+		batchSamplingConfig: one(samplingConfigs, {
+			fields: [worldSummarizeConfigs.batchSamplingConfigId],
+			references: [samplingConfigs.id]
+		}),
+		synthConnection: one(connections, {
+			fields: [worldSummarizeConfigs.synthConnectionId],
+			references: [connections.id]
+		}),
+		synthSamplingConfig: one(samplingConfigs, {
+			fields: [worldSummarizeConfigs.synthSamplingConfigId],
+			references: [samplingConfigs.id]
+		}),
+		nameConnection: one(connections, {
+			fields: [worldSummarizeConfigs.nameConnectionId],
+			references: [connections.id]
+		}),
+		nameSamplingConfig: one(samplingConfigs, {
+			fields: [worldSummarizeConfigs.nameSamplingConfigId],
+			references: [samplingConfigs.id]
+		})
+	})
+)
 
-export const characterSummarizeConfigs = pgTable("character_summarize_configs", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	isImmutable: boolean("is_immutable").notNull().default(false),
-	name: text("name").notNull(),
-	batchSystemPrompt: text("batch_system_prompt").notNull(),
-	synthSystemPrompt: text("synth_system_prompt").notNull(),
-	nameSystemPrompt: text("name_system_prompt").notNull(),
-	batchConnectionId: integer("batch_connection_id").references(() => connections.id, { onDelete: "set null" }),
-	batchSamplingConfigId: integer("batch_sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" }),
-	synthConnectionId: integer("synth_connection_id").references(() => connections.id, { onDelete: "set null" }),
-	synthSamplingConfigId: integer("synth_sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" }),
-	nameConnectionId: integer("name_connection_id").references(() => connections.id, { onDelete: "set null" }),
-	nameSamplingConfigId: integer("name_sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" })
-})
+export const characterSummarizeConfigs = pgTable(
+	"character_summarize_configs",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		isImmutable: boolean("is_immutable").notNull().default(false),
+		name: text("name").notNull(),
+		batchSystemPrompt: text("batch_system_prompt").notNull(),
+		synthSystemPrompt: text("synth_system_prompt").notNull(),
+		nameSystemPrompt: text("name_system_prompt").notNull(),
+		batchConnectionId: integer("batch_connection_id").references(
+			() => connections.id,
+			{ onDelete: "set null" }
+		),
+		batchSamplingConfigId: integer("batch_sampling_config_id").references(
+			() => samplingConfigs.id,
+			{ onDelete: "set null" }
+		),
+		synthConnectionId: integer("synth_connection_id").references(
+			() => connections.id,
+			{ onDelete: "set null" }
+		),
+		synthSamplingConfigId: integer("synth_sampling_config_id").references(
+			() => samplingConfigs.id,
+			{ onDelete: "set null" }
+		),
+		nameConnectionId: integer("name_connection_id").references(
+			() => connections.id,
+			{ onDelete: "set null" }
+		),
+		nameSamplingConfigId: integer("name_sampling_config_id").references(
+			() => samplingConfigs.id,
+			{ onDelete: "set null" }
+		)
+	}
+)
 
-export const characterSummarizeConfigsRelations = relations(characterSummarizeConfigs, ({ one }) => ({
-	batchConnection: one(connections, { fields: [characterSummarizeConfigs.batchConnectionId], references: [connections.id] }),
-	batchSamplingConfig: one(samplingConfigs, { fields: [characterSummarizeConfigs.batchSamplingConfigId], references: [samplingConfigs.id] }),
-	synthConnection: one(connections, { fields: [characterSummarizeConfigs.synthConnectionId], references: [connections.id] }),
-	synthSamplingConfig: one(samplingConfigs, { fields: [characterSummarizeConfigs.synthSamplingConfigId], references: [samplingConfigs.id] }),
-	nameConnection: one(connections, { fields: [characterSummarizeConfigs.nameConnectionId], references: [connections.id] }),
-	nameSamplingConfig: one(samplingConfigs, { fields: [characterSummarizeConfigs.nameSamplingConfigId], references: [samplingConfigs.id] })
-}))
+export const characterSummarizeConfigsRelations = relations(
+	characterSummarizeConfigs,
+	({ one }) => ({
+		batchConnection: one(connections, {
+			fields: [characterSummarizeConfigs.batchConnectionId],
+			references: [connections.id]
+		}),
+		batchSamplingConfig: one(samplingConfigs, {
+			fields: [characterSummarizeConfigs.batchSamplingConfigId],
+			references: [samplingConfigs.id]
+		}),
+		synthConnection: one(connections, {
+			fields: [characterSummarizeConfigs.synthConnectionId],
+			references: [connections.id]
+		}),
+		synthSamplingConfig: one(samplingConfigs, {
+			fields: [characterSummarizeConfigs.synthSamplingConfigId],
+			references: [samplingConfigs.id]
+		}),
+		nameConnection: one(connections, {
+			fields: [characterSummarizeConfigs.nameConnectionId],
+			references: [connections.id]
+		}),
+		nameSamplingConfig: one(samplingConfigs, {
+			fields: [characterSummarizeConfigs.nameSamplingConfigId],
+			references: [samplingConfigs.id]
+		})
+	})
+)
 
 export const sceneSummarizeConfigs = pgTable("scene_summarize_configs", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
@@ -454,47 +556,129 @@ export const sceneSummarizeConfigs = pgTable("scene_summarize_configs", {
 	batchSystemPrompt: text("batch_system_prompt").notNull(),
 	synthSystemPrompt: text("synth_system_prompt").notNull(),
 	nameSystemPrompt: text("name_system_prompt").notNull(),
-	characterExtractionSystemPrompt: text("character_extraction_system_prompt").notNull().default(""),
-	batchConnectionId: integer("batch_connection_id").references(() => connections.id, { onDelete: "set null" }),
-	batchSamplingConfigId: integer("batch_sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" }),
-	synthConnectionId: integer("synth_connection_id").references(() => connections.id, { onDelete: "set null" }),
-	synthSamplingConfigId: integer("synth_sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" }),
-	nameConnectionId: integer("name_connection_id").references(() => connections.id, { onDelete: "set null" }),
-	nameSamplingConfigId: integer("name_sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" })
+	characterExtractionSystemPrompt: text("character_extraction_system_prompt")
+		.notNull()
+		.default(""),
+	batchConnectionId: integer("batch_connection_id").references(
+		() => connections.id,
+		{ onDelete: "set null" }
+	),
+	batchSamplingConfigId: integer("batch_sampling_config_id").references(
+		() => samplingConfigs.id,
+		{ onDelete: "set null" }
+	),
+	synthConnectionId: integer("synth_connection_id").references(
+		() => connections.id,
+		{ onDelete: "set null" }
+	),
+	synthSamplingConfigId: integer("synth_sampling_config_id").references(
+		() => samplingConfigs.id,
+		{ onDelete: "set null" }
+	),
+	nameConnectionId: integer("name_connection_id").references(
+		() => connections.id,
+		{ onDelete: "set null" }
+	),
+	nameSamplingConfigId: integer("name_sampling_config_id").references(
+		() => samplingConfigs.id,
+		{ onDelete: "set null" }
+	)
 })
 
-export const sceneSummarizeConfigsRelations = relations(sceneSummarizeConfigs, ({ one }) => ({
-	batchConnection: one(connections, { fields: [sceneSummarizeConfigs.batchConnectionId], references: [connections.id] }),
-	batchSamplingConfig: one(samplingConfigs, { fields: [sceneSummarizeConfigs.batchSamplingConfigId], references: [samplingConfigs.id] }),
-	synthConnection: one(connections, { fields: [sceneSummarizeConfigs.synthConnectionId], references: [connections.id] }),
-	synthSamplingConfig: one(samplingConfigs, { fields: [sceneSummarizeConfigs.synthSamplingConfigId], references: [samplingConfigs.id] }),
-	nameConnection: one(connections, { fields: [sceneSummarizeConfigs.nameConnectionId], references: [connections.id] }),
-	nameSamplingConfig: one(samplingConfigs, { fields: [sceneSummarizeConfigs.nameSamplingConfigId], references: [samplingConfigs.id] })
-}))
+export const sceneSummarizeConfigsRelations = relations(
+	sceneSummarizeConfigs,
+	({ one }) => ({
+		batchConnection: one(connections, {
+			fields: [sceneSummarizeConfigs.batchConnectionId],
+			references: [connections.id]
+		}),
+		batchSamplingConfig: one(samplingConfigs, {
+			fields: [sceneSummarizeConfigs.batchSamplingConfigId],
+			references: [samplingConfigs.id]
+		}),
+		synthConnection: one(connections, {
+			fields: [sceneSummarizeConfigs.synthConnectionId],
+			references: [connections.id]
+		}),
+		synthSamplingConfig: one(samplingConfigs, {
+			fields: [sceneSummarizeConfigs.synthSamplingConfigId],
+			references: [samplingConfigs.id]
+		}),
+		nameConnection: one(connections, {
+			fields: [sceneSummarizeConfigs.nameConnectionId],
+			references: [connections.id]
+		}),
+		nameSamplingConfig: one(samplingConfigs, {
+			fields: [sceneSummarizeConfigs.nameSamplingConfigId],
+			references: [samplingConfigs.id]
+		})
+	})
+)
 
 export const graphBuildConfigs = pgTable("graph_build_configs", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 	isImmutable: boolean("is_immutable").notNull().default(false),
 	name: text("name").notNull(),
-	nodeResolutionSystemPrompt: text("node_resolution_system_prompt").notNull().default(""),
-	preFilterSystemPrompt: text("pre_filter_system_prompt").notNull().default(""),
-	perspectiveSystemPrompt: text("perspective_system_prompt").notNull().default(""),
-	nodeResolutionConnectionId: integer("node_resolution_connection_id").references(() => connections.id, { onDelete: "set null" }),
-	nodeResolutionSamplingConfigId: integer("node_resolution_sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" }),
-	preFilterConnectionId: integer("pre_filter_connection_id").references(() => connections.id, { onDelete: "set null" }),
-	preFilterSamplingConfigId: integer("pre_filter_sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" }),
-	perspectiveConnectionId: integer("perspective_connection_id").references(() => connections.id, { onDelete: "set null" }),
-	perspectiveSamplingConfigId: integer("perspective_sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" })
+	nodeResolutionSystemPrompt: text("node_resolution_system_prompt")
+		.notNull()
+		.default(""),
+	preFilterSystemPrompt: text("pre_filter_system_prompt")
+		.notNull()
+		.default(""),
+	perspectiveSystemPrompt: text("perspective_system_prompt")
+		.notNull()
+		.default(""),
+	nodeResolutionConnectionId: integer(
+		"node_resolution_connection_id"
+	).references(() => connections.id, { onDelete: "set null" }),
+	nodeResolutionSamplingConfigId: integer(
+		"node_resolution_sampling_config_id"
+	).references(() => samplingConfigs.id, { onDelete: "set null" }),
+	preFilterConnectionId: integer("pre_filter_connection_id").references(
+		() => connections.id,
+		{ onDelete: "set null" }
+	),
+	preFilterSamplingConfigId: integer(
+		"pre_filter_sampling_config_id"
+	).references(() => samplingConfigs.id, { onDelete: "set null" }),
+	perspectiveConnectionId: integer("perspective_connection_id").references(
+		() => connections.id,
+		{ onDelete: "set null" }
+	),
+	perspectiveSamplingConfigId: integer(
+		"perspective_sampling_config_id"
+	).references(() => samplingConfigs.id, { onDelete: "set null" })
 })
 
-export const graphBuildConfigsRelations = relations(graphBuildConfigs, ({ one }) => ({
-	nodeResolutionConnection: one(connections, { fields: [graphBuildConfigs.nodeResolutionConnectionId], references: [connections.id] }),
-	nodeResolutionSamplingConfig: one(samplingConfigs, { fields: [graphBuildConfigs.nodeResolutionSamplingConfigId], references: [samplingConfigs.id] }),
-	preFilterConnection: one(connections, { fields: [graphBuildConfigs.preFilterConnectionId], references: [connections.id] }),
-	preFilterSamplingConfig: one(samplingConfigs, { fields: [graphBuildConfigs.preFilterSamplingConfigId], references: [samplingConfigs.id] }),
-	perspectiveConnection: one(connections, { fields: [graphBuildConfigs.perspectiveConnectionId], references: [connections.id] }),
-	perspectiveSamplingConfig: one(samplingConfigs, { fields: [graphBuildConfigs.perspectiveSamplingConfigId], references: [samplingConfigs.id] })
-}))
+export const graphBuildConfigsRelations = relations(
+	graphBuildConfigs,
+	({ one }) => ({
+		nodeResolutionConnection: one(connections, {
+			fields: [graphBuildConfigs.nodeResolutionConnectionId],
+			references: [connections.id]
+		}),
+		nodeResolutionSamplingConfig: one(samplingConfigs, {
+			fields: [graphBuildConfigs.nodeResolutionSamplingConfigId],
+			references: [samplingConfigs.id]
+		}),
+		preFilterConnection: one(connections, {
+			fields: [graphBuildConfigs.preFilterConnectionId],
+			references: [connections.id]
+		}),
+		preFilterSamplingConfig: one(samplingConfigs, {
+			fields: [graphBuildConfigs.preFilterSamplingConfigId],
+			references: [samplingConfigs.id]
+		}),
+		perspectiveConnection: one(connections, {
+			fields: [graphBuildConfigs.perspectiveConnectionId],
+			references: [connections.id]
+		}),
+		perspectiveSamplingConfig: one(samplingConfigs, {
+			fields: [graphBuildConfigs.perspectiveSamplingConfigId],
+			references: [samplingConfigs.id]
+		})
+	})
+)
 
 export const lorebooks = pgTable(
 	"lorebooks",
@@ -557,7 +741,7 @@ export const lorebookBindings = pgTable(
 		personaId: integer("persona_id").references(() => personas.id, {
 			onDelete: "set null"
 		}),
-		binding: text("binding").notNull(), // e.g. "{{char:1}}" (preferred) or "{char:1}" (deprecated)
+		binding: text("binding").notNull() // e.g. "{{char:1}}" (preferred) or "{char:1}" (deprecated)
 	},
 	(table) => ({
 		uniqueBinding: uniqueIndex("lorebook_bindings_unique").on(
@@ -619,7 +803,9 @@ export const worldLoreEntries = pgTable(
 		embeddingModel: text("embedding_model"),
 		vectorizedAt: timestamp("vectorized_at")
 	},
-	(table) => [index("world_lore_entries_lorebook_id_idx").on(table.lorebookId)]
+	(table) => [
+		index("world_lore_entries_lorebook_id_idx").on(table.lorebookId)
+	]
 )
 
 export const worldLoreEntriesRelations = relations(
@@ -723,13 +909,16 @@ export const historyEntries = pgTable(
 	(table) => [index("history_entries_lorebook_id_idx").on(table.lorebookId)]
 )
 
-export const historyEntriesRelations = relations(historyEntries, ({ one, many }) => ({
-	lorebook: one(lorebooks, {
-		fields: [historyEntries.lorebookId],
-		references: [lorebooks.id]
-	}),
-	scenes: many(scenes)
-}))
+export const historyEntriesRelations = relations(
+	historyEntries,
+	({ one, many }) => ({
+		lorebook: one(lorebooks, {
+			fields: [historyEntries.lorebookId],
+			references: [lorebooks.id]
+		}),
+		scenes: many(scenes)
+	})
+)
 
 export const tags = pgTable(
 	"tags",
@@ -864,72 +1053,72 @@ export const chatTagsRelations = relations(chatTags, ({ one }) => ({
 export const characters = pgTable(
 	"characters",
 	{
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	// Stable, DB-generated identity for export/import dedup — see lorebooks.uuid.
-	uuid: uuid("uuid")
-		.notNull()
-		.default(sql`(gen_random_uuid ())`),
-	userId: integer("user_id")
-		.notNull()
-		.references(() => users.id, { onDelete: "cascade" }), // FK to users.id
-	name: text("name").notNull(),
-	nickname: text("nickname"), // Optional nickname
-	characterVersion: text("character_version").default("1.0"), // Version of the character schema
-	description: text("description").notNull(),
-	personality: text("personality"), // Persona field
-	scenario: text("scenario"),
-	firstMessage: text("first_message"),
-	alternateGreetings: json("alternate_greetings")
-		.notNull()
-		.default([])
-		.$type<string[]>(), // JSON array of alternate greetings
-	exampleDialogues: json("example_dialogues")
-		.notNull()
-		.default([])
-		.$type<string[]>(), // JSON/text
-	metadata: json("metadata")
-		.notNull()
-		.default({})
-		.$type<Record<string, any>>(), // JSON/text for extra fields
-	avatar: text("avatar"), // Path or URL to avatar image
-	creatorNotes: text("creator_notes"), // Notes from the character creator
-	creatorNotesMultilingual: json("creator_notes_multilingual").$type<
-		Record<string, string>
-	>(),
-	groupOnlyGreetings: json("group_only_greetings").$type<string[]>(), // JSON array of greetings for group chats
-	postHistoryInstructions: text("post_history_instructions"), // Instructions for post-history processing
-	source: json("source").notNull().default([]).$type<string[]>(), // JSON array of sources (e.g., URLs, books)
-	assets: json("assets").notNull().default([]).$type<
-		Array<{
-			type: string
-			uri: string
-			name: string
-			ext: string
-		}>
-	>(), // JSON array of asset paths or URLs
-	createdAt: date("created_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`),
-	updatedAt: timestamp("updated_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`)
-		.$onUpdate(() => new Date()),
-	lorebookId: integer("lorebook_id").references(() => lorebooks.id, {
-		onDelete: "set null"
-	}), // Optional FK to lorebooks.id
-	extensions: json("extensions")
-		.notNull()
-		.default({})
-		.$type<Record<string, any>>(),
-	aliases: json("aliases").notNull().default([]).$type<string[]>(),
-	summary: text("summary"),
-	creator: text("creator"), // Card creator/author, per Character Card V3 spec
-	category: text("category"), // Serene Pub-specific grouping/filter tag
-	isFavorite: boolean("is_favorite").notNull().default(false), // 1 if favorite, 0 otherwise
-	isDeleted: boolean("is_deleted").notNull().default(false),
-	embedding: real("embedding").array(),
-	embeddingModel: text("embedding_model"),
-	vectorizedAt: timestamp("vectorized_at")
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		// Stable, DB-generated identity for export/import dedup — see lorebooks.uuid.
+		uuid: uuid("uuid")
+			.notNull()
+			.default(sql`(gen_random_uuid ())`),
+		userId: integer("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }), // FK to users.id
+		name: text("name").notNull(),
+		nickname: text("nickname"), // Optional nickname
+		characterVersion: text("character_version").default("1.0"), // Version of the character schema
+		description: text("description").notNull(),
+		personality: text("personality"), // Persona field
+		scenario: text("scenario"),
+		firstMessage: text("first_message"),
+		alternateGreetings: json("alternate_greetings")
+			.notNull()
+			.default([])
+			.$type<string[]>(), // JSON array of alternate greetings
+		exampleDialogues: json("example_dialogues")
+			.notNull()
+			.default([])
+			.$type<string[]>(), // JSON/text
+		metadata: json("metadata")
+			.notNull()
+			.default({})
+			.$type<Record<string, any>>(), // JSON/text for extra fields
+		avatar: text("avatar"), // Path or URL to avatar image
+		creatorNotes: text("creator_notes"), // Notes from the character creator
+		creatorNotesMultilingual: json("creator_notes_multilingual").$type<
+			Record<string, string>
+		>(),
+		groupOnlyGreetings: json("group_only_greetings").$type<string[]>(), // JSON array of greetings for group chats
+		postHistoryInstructions: text("post_history_instructions"), // Instructions for post-history processing
+		source: json("source").notNull().default([]).$type<string[]>(), // JSON array of sources (e.g., URLs, books)
+		assets: json("assets").notNull().default([]).$type<
+			Array<{
+				type: string
+				uri: string
+				name: string
+				ext: string
+			}>
+		>(), // JSON array of asset paths or URLs
+		createdAt: date("created_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`)
+			.$onUpdate(() => new Date()),
+		lorebookId: integer("lorebook_id").references(() => lorebooks.id, {
+			onDelete: "set null"
+		}), // Optional FK to lorebooks.id
+		extensions: json("extensions")
+			.notNull()
+			.default({})
+			.$type<Record<string, any>>(),
+		aliases: json("aliases").notNull().default([]).$type<string[]>(),
+		summary: text("summary"),
+		creator: text("creator"), // Card creator/author, per Character Card V3 spec
+		category: text("category"), // Serene Pub-specific grouping/filter tag
+		isFavorite: boolean("is_favorite").notNull().default(false), // 1 if favorite, 0 otherwise
+		isDeleted: boolean("is_deleted").notNull().default(false),
+		embedding: real("embedding").array(),
+		embeddingModel: text("embedding_model"),
+		vectorizedAt: timestamp("vectorized_at")
 	},
 	(table) => [
 		index("characters_user_id_idx").on(table.userId),
@@ -989,36 +1178,36 @@ export const characterGalleryImagesRelations = relations(
 export const personas = pgTable(
 	"personas",
 	{
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	// Stable, DB-generated identity for export/import dedup — see lorebooks.uuid.
-	uuid: uuid("uuid")
-		.notNull()
-		.default(sql`(gen_random_uuid ())`),
-	userId: integer("user_id")
-		.notNull()
-		.references(() => users.id, { onDelete: "cascade" }), // FK to users.id
-	isDefault: boolean("is_default").notNull(), // Is this the default persona for the user?
-	avatar: text("avatar"), // e.g. 'user-default.png', '1747379438925-Ryvn.png'
-	name: text("name").notNull(), // e.g. 'Warren', 'Master Desir'
-	description: text("description").notNull(), // Persona description (long text)
-	position: integer("position").default(0),
-	createdAt: date("created_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`), // Created at timestamp
-	updatedAt: timestamp("updated_at")
-		.default(sql`(CURRENT_TIMESTAMP)`)
-		.$onUpdate(() => new Date()), // Updated at timestamp
-	lorebookId: integer("lorebook_id").references(() => lorebooks.id, {
-		onDelete: "set null"
-	}), // Optional lorebook for this persona
-	aliases: json("aliases").notNull().default([]).$type<string[]>(),
-	summary: text("summary"),
-	creator: text("creator"), // Card creator/author, per Character Card V3 spec
-	category: text("category"), // Serene Pub-specific grouping/filter tag
-	isDeleted: boolean("is_deleted").notNull().default(false),
-	embedding: real("embedding").array(),
-	embeddingModel: text("embedding_model"),
-	vectorizedAt: timestamp("vectorized_at")
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		// Stable, DB-generated identity for export/import dedup — see lorebooks.uuid.
+		uuid: uuid("uuid")
+			.notNull()
+			.default(sql`(gen_random_uuid ())`),
+		userId: integer("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }), // FK to users.id
+		isDefault: boolean("is_default").notNull(), // Is this the default persona for the user?
+		avatar: text("avatar"), // e.g. 'user-default.png', '1747379438925-Ryvn.png'
+		name: text("name").notNull(), // e.g. 'Warren', 'Master Desir'
+		description: text("description").notNull(), // Persona description (long text)
+		position: integer("position").default(0),
+		createdAt: date("created_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`), // Created at timestamp
+		updatedAt: timestamp("updated_at")
+			.default(sql`(CURRENT_TIMESTAMP)`)
+			.$onUpdate(() => new Date()), // Updated at timestamp
+		lorebookId: integer("lorebook_id").references(() => lorebooks.id, {
+			onDelete: "set null"
+		}), // Optional lorebook for this persona
+		aliases: json("aliases").notNull().default([]).$type<string[]>(),
+		summary: text("summary"),
+		creator: text("creator"), // Card creator/author, per Character Card V3 spec
+		category: text("category"), // Serene Pub-specific grouping/filter tag
+		isDeleted: boolean("is_deleted").notNull().default(false),
+		embedding: real("embedding").array(),
+		embeddingModel: text("embedding_model"),
+		vectorizedAt: timestamp("vectorized_at")
 	},
 	(table) => [
 		index("personas_user_id_idx").on(table.userId),
@@ -1073,39 +1262,51 @@ export const personaGalleryImagesRelations = relations(
 export const chats = pgTable(
 	"chats",
 	{
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	name: text("name"), // Optional chat/group name
-	isGroup: boolean("is_group").notNull(), // 1 for group chat, 0 for 1:1
-	chatType: text("chat_type").notNull().default(ChatTypes.ROLEPLAY), // "roleplay" | "assistant"
-	userId: integer("user_id")
-		.notNull()
-		.references(() => users.id, { onDelete: "cascade" }),
-	createdAt: date("created_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`),
-	updatedAt: date("updated_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`)
-		.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`),
-	scenario: text("scenario"),
-	metadata: json("metadata")
-		.notNull()
-		.default({})
-		.$type<Record<string, any>>(), // JSON for extra settings
-	groupReplyStrategy: text("group_reply_strategy").default(
-		GroupReplyStrategies.ORDERED
-	),
-	lorebookId: integer("lorebook_id").references(() => lorebooks.id, {
-		onDelete: "set null"
-	}),
-	connectionId: integer("connection_id").references(() => connections.id, { onDelete: "set null" }),
-	samplingConfigId: integer("sampling_config_id").references(() => samplingConfigs.id, { onDelete: "set null" }),
-	promptConfigId: integer("prompt_config_id").references(() => promptConfigs.id, { onDelete: "set null" }),
-	narratorPromptConfigId: integer("narrator_prompt_config_id").references(() => narratorPromptConfigs.id, { onDelete: "set null" }),
-	drafts: json("drafts")
-		.$type<Record<string, string>>()
-		.notNull()
-		.default({})
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		name: text("name"), // Optional chat/group name
+		isGroup: boolean("is_group").notNull(), // 1 for group chat, 0 for 1:1
+		chatType: text("chat_type").notNull().default(ChatTypes.ROLEPLAY), // "roleplay" | "assistant"
+		userId: integer("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		createdAt: date("created_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`),
+		updatedAt: date("updated_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`)
+			.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`),
+		scenario: text("scenario"),
+		metadata: json("metadata")
+			.notNull()
+			.default({})
+			.$type<Record<string, any>>(), // JSON for extra settings
+		groupReplyStrategy: text("group_reply_strategy").default(
+			GroupReplyStrategies.ORDERED
+		),
+		lorebookId: integer("lorebook_id").references(() => lorebooks.id, {
+			onDelete: "set null"
+		}),
+		connectionId: integer("connection_id").references(
+			() => connections.id,
+			{ onDelete: "set null" }
+		),
+		samplingConfigId: integer("sampling_config_id").references(
+			() => samplingConfigs.id,
+			{ onDelete: "set null" }
+		),
+		promptConfigId: integer("prompt_config_id").references(
+			() => promptConfigs.id,
+			{ onDelete: "set null" }
+		),
+		narratorPromptConfigId: integer("narrator_prompt_config_id").references(
+			() => narratorPromptConfigs.id,
+			{ onDelete: "set null" }
+		),
+		drafts: json("drafts")
+			.$type<Record<string, string>>()
+			.notNull()
+			.default({})
 	},
 	(table) => [index("chats_user_id_idx").on(table.userId)]
 )
@@ -1170,7 +1371,9 @@ export const chatMessages = pgTable(
 		// True for a manually-triggered Narrator response (narration/environment
 		// flavor, not a character) — characterId/personaId stay null, role stays
 		// "assistant" so existing history-building code keeps including it.
-		isNarratorResponse: boolean("is_narrator_response").notNull().default(false),
+		isNarratorResponse: boolean("is_narrator_response")
+			.notNull()
+			.default(false),
 		content: text("content").notNull(),
 		createdAt: date("created_at")
 			.notNull()
@@ -1277,10 +1480,7 @@ export const chatCharacters = pgTable(
 			.default(ChatCharacterVisibility.VISIBLE) // Controls how much character info is shown when not responding
 	},
 	(table) => [
-		uniqueIndex("chat_characters_pk").on(
-			table.chatId,
-			table.characterId
-		),
+		uniqueIndex("chat_characters_pk").on(table.chatId, table.characterId),
 		// canViewCharacter() looks up chatCharacters by characterId alone.
 		index("chat_characters_character_id_idx").on(table.characterId)
 	]
@@ -1386,10 +1586,9 @@ export const systemSettings = pgTable("system_settings", {
 		}
 	),
 	lockPromptConfig: boolean("lock_prompt_config").notNull().default(false),
-	defaultNarratorPromptConfigId: integer("default_narrator_prompt_config_id").references(
-		() => narratorPromptConfigs.id,
-		{ onDelete: "set null" }
-	),
+	defaultNarratorPromptConfigId: integer(
+		"default_narrator_prompt_config_id"
+	).references(() => narratorPromptConfigs.id, { onDelete: "set null" }),
 	isAccountsEnabled: boolean("is_accounts_enabled").notNull().default(false),
 	vectorizationEnabled: boolean("vectorization_enabled")
 		.notNull()
@@ -1399,23 +1598,21 @@ export const systemSettings = pgTable("system_settings", {
 	summarizationEnabled: boolean("summarization_enabled")
 		.notNull()
 		.default(false),
-	contextDebuggingEnabled: boolean("context_debugging_enabled").notNull().default(false),
-	defaultSummarizeWorldConfigId: integer("default_summarize_world_config_id").references(
-		() => worldSummarizeConfigs.id,
-		{ onDelete: "set null" }
-	),
-	defaultSummarizeCharacterConfigId: integer("default_summarize_character_config_id").references(
-		() => characterSummarizeConfigs.id,
-		{ onDelete: "set null" }
-	),
-	defaultSummarizeSceneConfigId: integer("default_summarize_scene_config_id").references(
-		() => sceneSummarizeConfigs.id,
-		{ onDelete: "set null" }
-	),
-	defaultGraphBuildConfigId: integer("default_graph_build_config_id").references(
-		() => graphBuildConfigs.id,
-		{ onDelete: "set null" }
-	),
+	contextDebuggingEnabled: boolean("context_debugging_enabled")
+		.notNull()
+		.default(false),
+	defaultSummarizeWorldConfigId: integer(
+		"default_summarize_world_config_id"
+	).references(() => worldSummarizeConfigs.id, { onDelete: "set null" }),
+	defaultSummarizeCharacterConfigId: integer(
+		"default_summarize_character_config_id"
+	).references(() => characterSummarizeConfigs.id, { onDelete: "set null" }),
+	defaultSummarizeSceneConfigId: integer(
+		"default_summarize_scene_config_id"
+	).references(() => sceneSummarizeConfigs.id, { onDelete: "set null" }),
+	defaultGraphBuildConfigId: integer(
+		"default_graph_build_config_id"
+	).references(() => graphBuildConfigs.id, { onDelete: "set null" }),
 	// Admin-configured CharaVault account, shared instance-wide across all
 	// users (not a per-user credential). Never sent to the client — see
 	// systemSettingsGet's column exclusions.
@@ -1466,22 +1663,38 @@ export const systemSettingsRelations = relations(systemSettings, ({ one }) => ({
 
 export const ollamaSettings = pgTable("ollama_settings", {
 	id: integer("id").primaryKey().default(1),
-	ollamaManagerEnabled: boolean("ollama_manager_enabled").notNull().default(false),
-	ollamaManagerBaseUrl: text("ollama_base_url").notNull().default("http://localhost:11434/")
+	ollamaManagerEnabled: boolean("ollama_manager_enabled")
+		.notNull()
+		.default(false),
+	ollamaManagerBaseUrl: text("ollama_base_url")
+		.notNull()
+		.default("http://localhost:11434/")
 })
 
 export const koboldCppSettings = pgTable("koboldcpp_settings", {
 	id: integer("id").primaryKey().default(1),
-	koboldCppManagerEnabled: boolean("koboldcpp_manager_enabled").notNull().default(false),
-	koboldCppManagerBaseUrl: text("koboldcpp_base_url").notNull().default("http://localhost:5001"),
+	koboldCppManagerEnabled: boolean("koboldcpp_manager_enabled")
+		.notNull()
+		.default(false),
+	koboldCppManagerBaseUrl: text("koboldcpp_base_url")
+		.notNull()
+		.default("http://localhost:5001"),
 	koboldCppManagerModelsDir: text("koboldcpp_models_dir"),
 	koboldCppManagedMode: text("koboldcpp_managed_mode"), // null | "managed" | "external"
 	koboldCppManagedBinaryVariant: text("koboldcpp_managed_binary_variant"),
 	koboldCppManagedBinaryDir: text("koboldcpp_managed_binary_dir"),
-	koboldCppManagedPort: integer("koboldcpp_managed_port").notNull().default(5001),
+	koboldCppManagedPort: integer("koboldcpp_managed_port")
+		.notNull()
+		.default(5001),
 	koboldCppManagedAdminPassword: text("koboldcpp_managed_admin_password"),
-	koboldCppManagedModelTtlSecs: integer("koboldcpp_managed_model_ttl_secs").notNull().default(300),
-	koboldCppManagedSubprocessTimeoutSecs: integer("koboldcpp_managed_subprocess_timeout_secs").notNull().default(1800),
+	koboldCppManagedModelTtlSecs: integer("koboldcpp_managed_model_ttl_secs")
+		.notNull()
+		.default(300),
+	koboldCppManagedSubprocessTimeoutSecs: integer(
+		"koboldcpp_managed_subprocess_timeout_secs"
+	)
+		.notNull()
+		.default(1800),
 	koboldCppManagedReleaseTag: text("koboldcpp_managed_release_tag")
 })
 
@@ -1501,7 +1714,10 @@ export const koboldCppModels = pgTable("koboldcpp_models", {
 	status: text("status").notNull().default("downloading"), // "downloading" | "complete" | "error"
 	errorMessage: text("error_message"),
 	createdAt: timestamp("created_at").notNull().defaultNow(),
-	updatedAt: timestamp("updated_at").notNull().defaultNow().$onUpdate(() => new Date())
+	updatedAt: timestamp("updated_at")
+		.notNull()
+		.defaultNow()
+		.$onUpdate(() => new Date())
 })
 
 export type SelectKoboldCppModel = typeof koboldCppModels.$inferSelect
@@ -1514,37 +1730,45 @@ export type InsertKoboldCppModel = typeof koboldCppModels.$inferInsert
 export const scenes = pgTable(
 	"scenes",
 	{
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	// Chat is nullable — chat deletion sets this to null; scenes persist until lorebook is deleted
-	chatId: integer("chat_id").references(() => chats.id, { onDelete: "set null" }),
-	lorebookId: integer("lorebook_id")
-		.notNull()
-		.references(() => lorebooks.id, { onDelete: "cascade" }),
-	// History entry this scene contributes to — cascade so scenes don't outlive their entry
-	historyEntryId: integer("history_entry_id")
-		.notNull()
-		.references(() => historyEntries.id, { onDelete: "cascade" }),
-	name: text("name"),
-	// The IDs of chatMessages included in this scene
-	selectedMessageIds: json("selected_message_ids")
-		.notNull()
-		.default([])
-		.$type<number[]>(),
-	summary: text("summary"),
-	// Characters extracted from the scene summary at summarization time
-	participantCharacters: json("participant_characters").notNull().default([]).$type<string[]>(),
-	mentionedCharacters: json("mentioned_characters").notNull().default([]).$type<string[]>(),
-	embedding: real("embedding").array(),
-	embeddingModel: text("embedding_model"),
-	// Whether this scene has been processed into the causal graph
-	graphed: boolean("graphed").notNull().default(false),
-	createdAt: date("created_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`),
-	updatedAt: date("updated_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`)
-		.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`)
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		// Chat is nullable — chat deletion sets this to null; scenes persist until lorebook is deleted
+		chatId: integer("chat_id").references(() => chats.id, {
+			onDelete: "set null"
+		}),
+		lorebookId: integer("lorebook_id")
+			.notNull()
+			.references(() => lorebooks.id, { onDelete: "cascade" }),
+		// History entry this scene contributes to — cascade so scenes don't outlive their entry
+		historyEntryId: integer("history_entry_id")
+			.notNull()
+			.references(() => historyEntries.id, { onDelete: "cascade" }),
+		name: text("name"),
+		// The IDs of chatMessages included in this scene
+		selectedMessageIds: json("selected_message_ids")
+			.notNull()
+			.default([])
+			.$type<number[]>(),
+		summary: text("summary"),
+		// Characters extracted from the scene summary at summarization time
+		participantCharacters: json("participant_characters")
+			.notNull()
+			.default([])
+			.$type<string[]>(),
+		mentionedCharacters: json("mentioned_characters")
+			.notNull()
+			.default([])
+			.$type<string[]>(),
+		embedding: real("embedding").array(),
+		embeddingModel: text("embedding_model"),
+		// Whether this scene has been processed into the causal graph
+		graphed: boolean("graphed").notNull().default(false),
+		createdAt: date("created_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`),
+		updatedAt: date("updated_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`)
+			.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`)
 	},
 	(table) => [
 		index("scenes_lorebook_id_idx").on(table.lorebookId),
@@ -1575,44 +1799,63 @@ export const scenesRelations = relations(scenes, ({ one, many }) => ({
 export const narrativeNodes = pgTable(
 	"narrative_nodes",
 	{
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	lorebookId: integer("lorebook_id")
-		.notNull()
-		.references(() => lorebooks.id, { onDelete: "cascade" }),
-	// Scene where this node first appeared (optional)
-	sceneId: integer("scene_id").references(() => scenes.id, { onDelete: "set null" }),
-	// History entry where this node first appeared (optional)
-	historyEntryId: integer("history_entry_id").references(() => historyEntries.id, {
-		onDelete: "set null"
-	}),
-	// Display name
-	name: text("name").notNull().default(""),
-	// Lifecycle state — see NodeState type (active/deceased/missing/departed)
-	nodeState: text("node_state").notNull().default("active").$type<NodeState>(),
-	// Visibility in RAG/context injection — see NodeVisibility type (user-set only)
-	nodeVisibility: text("node_visibility").notNull().default("normal").$type<NodeVisibility>(),
-	// Alternative names for this node (populated from bound character/persona aliases)
-	aliases: json("aliases").notNull().default([]).$type<string[]>(),
-	// Short summary for context infill
-	summary: text("summary"),
-	embedding: real("embedding").array(),
-	embeddingModel: text("embedding_model"),
-	vectorizedAt: timestamp("vectorized_at"),
-	// Lorebook binding (character/persona) this node represents — unique per node
-	lorebookBindingId: integer("lorebook_binding_id").unique().references(() => lorebookBindings.id, {
-		onDelete: "set null"
-	}),
-	// Character IDs associated with this node (for character-type nodes)
-	characterIds: json("character_ids").notNull().default([]).$type<number[]>(),
-	// Parent node — set when this node is an alias/child of another (2-level max)
-	parentNodeId: integer("parent_node_id").references((): AnyPgColumn => narrativeNodes.id, {
-		onDelete: "set null"
-	}),
-	createdAt: timestamp("created_at").notNull().defaultNow(),
-	updatedAt: timestamp("updated_at")
-		.notNull()
-		.defaultNow()
-		.$onUpdate(() => new Date())
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		lorebookId: integer("lorebook_id")
+			.notNull()
+			.references(() => lorebooks.id, { onDelete: "cascade" }),
+		// Scene where this node first appeared (optional)
+		sceneId: integer("scene_id").references(() => scenes.id, {
+			onDelete: "set null"
+		}),
+		// History entry where this node first appeared (optional)
+		historyEntryId: integer("history_entry_id").references(
+			() => historyEntries.id,
+			{
+				onDelete: "set null"
+			}
+		),
+		// Display name
+		name: text("name").notNull().default(""),
+		// Lifecycle state — see NodeState type (active/deceased/missing/departed)
+		nodeState: text("node_state")
+			.notNull()
+			.default("active")
+			.$type<NodeState>(),
+		// Visibility in RAG/context injection — see NodeVisibility type (user-set only)
+		nodeVisibility: text("node_visibility")
+			.notNull()
+			.default("normal")
+			.$type<NodeVisibility>(),
+		// Alternative names for this node (populated from bound character/persona aliases)
+		aliases: json("aliases").notNull().default([]).$type<string[]>(),
+		// Short summary for context infill
+		summary: text("summary"),
+		embedding: real("embedding").array(),
+		embeddingModel: text("embedding_model"),
+		vectorizedAt: timestamp("vectorized_at"),
+		// Lorebook binding (character/persona) this node represents — unique per node
+		lorebookBindingId: integer("lorebook_binding_id")
+			.unique()
+			.references(() => lorebookBindings.id, {
+				onDelete: "set null"
+			}),
+		// Character IDs associated with this node (for character-type nodes)
+		characterIds: json("character_ids")
+			.notNull()
+			.default([])
+			.$type<number[]>(),
+		// Parent node — set when this node is an alias/child of another (2-level max)
+		parentNodeId: integer("parent_node_id").references(
+			(): AnyPgColumn => narrativeNodes.id,
+			{
+				onDelete: "set null"
+			}
+		),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
 	},
 	(table) => [index("narrative_nodes_lorebook_id_idx").on(table.lorebookId)]
 )
@@ -1642,8 +1885,12 @@ export const narrativeNodesRelations = relations(
 			relationName: "nodeAliases"
 		}),
 		aliasChildren: many(narrativeNodes, { relationName: "nodeAliases" }),
-		outgoingRelationships: many(narrativeRelationships, { relationName: "fromNode" }),
-		incomingRelationships: many(narrativeRelationships, { relationName: "toNode" })
+		outgoingRelationships: many(narrativeRelationships, {
+			relationName: "fromNode"
+		}),
+		incomingRelationships: many(narrativeRelationships, {
+			relationName: "toNode"
+		})
 	})
 )
 
@@ -1659,40 +1906,50 @@ export const narrativeNodesRelations = relations(
 export const narrativeRelationships = pgTable(
 	"narrative_relationships",
 	{
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	lorebookId: integer("lorebook_id")
-		.notNull()
-		.references(() => lorebooks.id, { onDelete: "cascade" }),
-	fromNodeId: integer("from_node_id")
-		.notNull()
-		.references(() => narrativeNodes.id, { onDelete: "cascade" }),
-	toNodeId: integer("to_node_id")
-		.notNull()
-		.references(() => narrativeNodes.id, { onDelete: "cascade" }),
-	// History entry this relationship state was established in (optional)
-	historyEntryId: integer("history_entry_id").references(() => historyEntries.id, {
-		onDelete: "set null"
-	}),
-	// Scene that establishes/changes this relationship (optional)
-	sceneId: integer("scene_id").references(() => scenes.id, { onDelete: "set null" }),
-	// Relationship type: ally | enemy | rival | mentor | family | romantic | neutral | complicated | life_debt | etc.
-	relationshipType: text("relationship_type").notNull().default("neutral"),
-	// Description of the relationship at this point in time
-	description: text("description").notNull().default(""),
-	// Who can see this relationship — see RelationshipVisibility type
-	visibility: text("visibility").notNull().default("acknowledged").$type<RelationshipVisibility>(),
-	// Current state: active | resolved | broken | evolved
-	status: text("status").notNull().default("active"),
-	// Why this relationship changed (for non-initial entries)
-	reason: text("reason"),
-	embedding: real("embedding").array(),
-	embeddingModel: text("embedding_model"),
-	vectorizedAt: timestamp("vectorized_at"),
-	createdAt: timestamp("created_at").notNull().defaultNow(),
-	updatedAt: timestamp("updated_at")
-		.notNull()
-		.defaultNow()
-		.$onUpdate(() => new Date())
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		lorebookId: integer("lorebook_id")
+			.notNull()
+			.references(() => lorebooks.id, { onDelete: "cascade" }),
+		fromNodeId: integer("from_node_id")
+			.notNull()
+			.references(() => narrativeNodes.id, { onDelete: "cascade" }),
+		toNodeId: integer("to_node_id")
+			.notNull()
+			.references(() => narrativeNodes.id, { onDelete: "cascade" }),
+		// History entry this relationship state was established in (optional)
+		historyEntryId: integer("history_entry_id").references(
+			() => historyEntries.id,
+			{
+				onDelete: "set null"
+			}
+		),
+		// Scene that establishes/changes this relationship (optional)
+		sceneId: integer("scene_id").references(() => scenes.id, {
+			onDelete: "set null"
+		}),
+		// Relationship type: ally | enemy | rival | mentor | family | romantic | neutral | complicated | life_debt | etc.
+		relationshipType: text("relationship_type")
+			.notNull()
+			.default("neutral"),
+		// Description of the relationship at this point in time
+		description: text("description").notNull().default(""),
+		// Who can see this relationship — see RelationshipVisibility type
+		visibility: text("visibility")
+			.notNull()
+			.default("acknowledged")
+			.$type<RelationshipVisibility>(),
+		// Current state: active | resolved | broken | evolved
+		status: text("status").notNull().default("active"),
+		// Why this relationship changed (for non-initial entries)
+		reason: text("reason"),
+		embedding: real("embedding").array(),
+		embeddingModel: text("embedding_model"),
+		vectorizedAt: timestamp("vectorized_at"),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
 	},
 	(table) => [
 		index("narrative_relationships_from_node_id_idx").on(table.fromNodeId),
@@ -1734,20 +1991,24 @@ export const setup = pgTable("setup", {
 		.notNull()
 		.references(() => users.id, { onDelete: "cascade" })
 		.unique(),
-	summarizationStepComplete: boolean("summarization_step_complete").notNull().default(false),
-	ragStepComplete: boolean("rag_step_complete").notNull().default(false),
+	summarizationStepComplete: boolean("summarization_step_complete")
+		.notNull()
+		.default(false),
+	ragStepComplete: boolean("rag_step_complete").notNull().default(false)
 })
 
 export const setupRelations = relations(setup, ({ one }) => ({
 	user: one(users, {
 		fields: [setup.userId],
 		references: [users.id]
-	}),
+	})
 }))
 
 export const vectorizationConfigs = pgTable("vectorization_configs", {
 	id: integer("id").primaryKey().default(1),
-	embeddingModelTtlMinutes: integer("embedding_model_ttl_minutes").notNull().default(5),
+	embeddingModelTtlMinutes: integer("embedding_model_ttl_minutes")
+		.notNull()
+		.default(5),
 	// "local" (in-process ONNX model) or "api" (external OpenAI-compatible
 	// embeddings endpoint). Only one is ever active, so this singleton table
 	// holds both configs rather than a dedicated multi-row connections table.
@@ -1755,7 +2016,7 @@ export const vectorizationConfigs = pgTable("vectorization_configs", {
 	apiBaseUrl: text("api_base_url"),
 	apiKey: text("api_key"),
 	apiModel: text("api_model"),
-	apiDimensions: integer("api_dimensions"),
+	apiDimensions: integer("api_dimensions")
 })
 
 export const customThemes = pgTable("custom_themes", {
@@ -1764,10 +2025,15 @@ export const customThemes = pgTable("custom_themes", {
 	label: text("label").notNull(),
 	css: text("css").notNull(),
 	cssKey: text("css_key").notNull().default(""),
-	uploadedBy: integer("uploaded_by").references(() => users.id, { onDelete: "set null" }),
+	uploadedBy: integer("uploaded_by").references(() => users.id, {
+		onDelete: "set null"
+	}),
 	isInstanceTheme: boolean("is_instance_theme").notNull().default(false),
 	createdAt: timestamp("created_at").notNull().defaultNow(),
-	updatedAt: timestamp("updated_at").notNull().defaultNow().$onUpdate(() => new Date()),
+	updatedAt: timestamp("updated_at")
+		.notNull()
+		.defaultNow()
+		.$onUpdate(() => new Date())
 })
 
 export const customThemesRelations = relations(customThemes, ({ one }) => ({

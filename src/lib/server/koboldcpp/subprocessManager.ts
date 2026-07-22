@@ -3,9 +3,14 @@ import * as fs from "fs"
 import * as fsPromises from "fs/promises"
 import * as path from "path"
 import { db } from "$lib/server/db"
-import { pingKoboldCpp } from "./kcppHttp"
+import { pingKoboldCPP } from "./kcppHttp"
 
-export type SubprocessStatus = "stopped" | "starting" | "running" | "crashed" | "stopping"
+export type SubprocessStatus =
+	| "stopped"
+	| "starting"
+	| "running"
+	| "crashed"
+	| "stopping"
 
 export interface SubprocessStatusEvent {
 	status: SubprocessStatus
@@ -103,7 +108,10 @@ function pidLooksLikeOurBinary(pid: number, binaryPath: string): boolean {
  * or otherwise stuck — it'll block a fresh spawn from binding the port.
  * Detect and clear that out before spawning.
  */
-async function killStaleOrphan(binaryDir: string, binaryPath: string): Promise<void> {
+async function killStaleOrphan(
+	binaryDir: string,
+	binaryPath: string
+): Promise<void> {
 	let recordedPid: number | null = null
 	try {
 		const raw = await fsPromises.readFile(pidFilePath(binaryDir), "utf8")
@@ -207,8 +215,12 @@ export function pingActivity() {
 	clearIdleTimer()
 	if (state.status !== "running" || subprocessTimeoutSecs <= 0) return
 	idleTimer = setTimeout(() => {
-		console.log("[KoboldCPP] Subprocess idle timeout reached, shutting down…")
-		stop().catch((err) => console.error("[KoboldCPP] Auto-stop failed:", err))
+		console.log(
+			"[KoboldCPP] Subprocess idle timeout reached, shutting down…"
+		)
+		stop().catch((err) =>
+			console.error("[KoboldCPP] Auto-stop failed:", err)
+		)
 	}, subprocessTimeoutSecs * 1000)
 }
 
@@ -220,7 +232,7 @@ export function setSubprocessTimeout(secs: number) {
 async function waitForReady(port: number, timeoutMs = 120_000): Promise<void> {
 	const deadline = Date.now() + timeoutMs
 	while (Date.now() < deadline) {
-		if (await pingKoboldCpp(`http://localhost:${port}`, 2000)) return
+		if (await pingKoboldCPP(`http://localhost:${port}`, 2000)) return
 		await new Promise((r) => setTimeout(r, 1500))
 	}
 	throw new Error("KoboldCPP did not become ready within 2 minutes")
@@ -257,13 +269,16 @@ function startHealthCheck(port: number) {
 	stopHealthCheck()
 	healthInterval = setInterval(async () => {
 		if (state.status !== "running" || healthCheckSuspended) return
-		const ok = await pingKoboldCpp(`http://localhost:${port}`, 5000)
+		const ok = await pingKoboldCPP(`http://localhost:${port}`, 5000)
 		if (ok) {
 			healthCheckFailures = 0
 			return
 		}
 		healthCheckFailures++
-		if (healthCheckFailures >= HEALTH_CHECK_FAILURE_THRESHOLD && state.status === "running") {
+		if (
+			healthCheckFailures >= HEALTH_CHECK_FAILURE_THRESHOLD &&
+			state.status === "running"
+		) {
 			clearIdleTimer()
 			state.status = "crashed"
 			state.lastError = "Health check failed — process may have crashed"
@@ -313,7 +328,7 @@ export async function start(): Promise<void> {
 		if (state.process || !state.isExternal) return
 		const settingsForPing = await db.query.koboldCppSettings.findFirst()
 		const port = settingsForPing?.koboldCppManagedPort ?? 5001
-		if (await pingKoboldCpp(`http://localhost:${port}`, 2000)) return
+		if (await pingKoboldCPP(`http://localhost:${port}`, 2000)) return
 		stopHealthCheck()
 		clearIdleTimer()
 		state.status = "stopped"
@@ -322,12 +337,17 @@ export async function start(): Promise<void> {
 	}
 
 	const settings = await db.query.koboldCppSettings.findFirst()
-	if (!settings?.koboldCppManagerEnabled || settings?.koboldCppManagedMode !== "managed") {
+	if (
+		!settings?.koboldCppManagerEnabled ||
+		settings?.koboldCppManagedMode !== "managed"
+	) {
 		failStart("Managed mode is not enabled")
 	}
 
-	const { koboldCppManagedBinaryDir: binaryDir, koboldCppManagedBinaryVariant: binaryVariant } =
-		settings
+	const {
+		koboldCppManagedBinaryDir: binaryDir,
+		koboldCppManagedBinaryVariant: binaryVariant
+	} = settings
 	if (!binaryDir || !binaryVariant) failStart("Binary not configured")
 
 	lastBinaryDir = binaryDir
@@ -345,16 +365,21 @@ export async function start(): Promise<void> {
 
 	const port = settings.koboldCppManagedPort ?? 5001
 	const password = settings.koboldCppManagedAdminPassword ?? "serene"
-	subprocessTimeoutSecs = settings.koboldCppManagedSubprocessTimeoutSecs ?? 1800
+	subprocessTimeoutSecs =
+		settings.koboldCppManagedSubprocessTimeoutSecs ?? 1800
 
 	// If KoboldCPP is already reachable (e.g. left over from a previous server session),
 	// adopt it rather than spawning a second instance on the same port.
-	if (await pingKoboldCpp(`http://localhost:${port}`, 2000)) {
+	if (await pingKoboldCPP(`http://localhost:${port}`, 2000)) {
 		const ownedPid = await findVerifiedOwnedPid(binaryDir, binaryPath)
 		if (ownedPid) {
-			console.log(`[KoboldCPP] Port ${port} already active — adopting our own process (pid ${ownedPid}) from a previous session`)
+			console.log(
+				`[KoboldCPP] Port ${port} already active — adopting our own process (pid ${ownedPid}) from a previous session`
+			)
 		} else {
-			console.log(`[KoboldCPP] Port ${port} already active — adopting external instance we didn't start; Stop/Unload won't be available for it`)
+			console.log(
+				`[KoboldCPP] Port ${port} already active — adopting external instance we didn't start; Stop/Unload won't be available for it`
+			)
 		}
 		state.status = "running"
 		state.pid = ownedPid
@@ -380,13 +405,19 @@ export async function start(): Promise<void> {
 	// --admindir must be explicit: koboldcpp's admin reload/list-options endpoints jail
 	// requests to this directory, and ensureModelLoaded() writes its .kcpps files here.
 	// --host is bound to loopback only: the app always reaches this subprocess via
-	// localhost (see pingKoboldCpp calls below), and koboldcpp's own generation/completion
+	// localhost (see pingKoboldCPP calls below), and koboldcpp's own generation/completion
 	// endpoints (e.g. /lcpp/) aren't gated by --adminpassword, so binding 0.0.0.0 would
 	// expose an unauthenticated inference API to the whole LAN on non-Docker deployments.
 	const args = [
-		"--host", "127.0.0.1",
-		"--port", String(port),
-		"--admin", "--adminpassword", password, "--admindir", binaryDir,
+		"--host",
+		"127.0.0.1",
+		"--port",
+		String(port),
+		"--admin",
+		"--adminpassword",
+		password,
+		"--admindir",
+		binaryDir,
 		"--nomodel"
 	]
 
@@ -486,7 +517,7 @@ export async function stop(): Promise<void> {
 	// against.
 	if (!state.process && state.isExternal) {
 		throw new Error(
-			"This KoboldCpp instance is running externally and wasn't started by Serene Pub's Manager, so it can't be stopped from here. Stop it manually, or point the Manager at a different port."
+			"This KoboldCPP instance is running externally and wasn't started by Serene Pub's Manager, so it can't be stopped from here. Stop it manually, or point the Manager at a different port."
 		)
 	}
 

@@ -152,6 +152,7 @@ to be `dlopen()`'d and driven via `node::Start()`, not executed as a
 standalone binary.
 
 On first launch:
+
 - `MainActivity` starts `NodeService` as a foreground service immediately
 - `NodeService` extracts the app bundle (not Node itself) to the app data
   directory, then calls into `NodeBridge.startNodeWithArguments()` on a
@@ -170,13 +171,13 @@ a duplicate in-process call, and the recovery UI's "Restart" button
 
 - APK size: ~80-100MB (compressed)
 - Installed size: ~500MB
-  - `libnode.so`: ~60MB (nodejs-mobile's prebuilt Bionic build, packaged as a
-    native library, not the extracted assets)
-  - node_modules: production dependencies only (`npm install --omit=dev` runs as
-    part of `android:full` before bundling — dev tooling like vite/typescript/
-    vitest/drizzle-kit is excluded)
-  - App code: ~50MB
-  - Data/cache: grows with use
+    - `libnode.so`: ~60MB (nodejs-mobile's prebuilt Bionic build, packaged as a
+      native library, not the extracted assets)
+    - node_modules: production dependencies only (`npm install --omit=dev` runs as
+      part of `android:full` before bundling — dev tooling like vite/typescript/
+      vitest/drizzle-kit is excluded)
+    - App code: ~50MB
+    - Data/cache: grows with use
 
 ## Permissions
 
@@ -209,7 +210,7 @@ picker actually needs it.
   mandate and hasn't been updated (last release Oct 2024, verified against both
   the `nodejs-mobile-react-native` npm package and the upstream
   `nodejs-mobile/nodejs-mobile` GitHub releases). `node-bridge.so` (our own
-  code, see `src/main/cpp/CMakeLists.txt`) *is* correctly 16 KB-aligned via an
+  code, see `src/main/cpp/CMakeLists.txt`) _is_ correctly 16 KB-aligned via an
   explicit linker flag. This surfaces as an install-time "isn't 16 KB
   compatible" notice on Android 15+ — not a hard failure, since Android runs
   4 KB-aligned libraries via a compatibility shim on 16 KB-page devices. No
@@ -221,18 +222,18 @@ picker actually needs it.
   not offered in the setup wizard, not shown in the sidebar nav, not
   toggleable from System Settings, and rejected server-side if triggered
   directly. Reasons:
-  - **KoboldCPP Manager's managed/local-subprocess mode** can't work regardless of
-    engineering effort here — upstream `LostRuins/koboldcpp` only publishes
-    `linux-x64`/`mac-arm64`/Windows release binaries, no `linux-arm64` exists to
-    download and run on-device.
-  - **Ollama Manager** has no local-subprocess story in this codebase at all (it's
-    always been a pure HTTP client to an already-running Ollama server) — hidden
-    here as a scope decision to keep the Android build simple, not a hard technical
-    blocker. A remote Ollama instance running on another machine can still be
-    reached via a plain connection in the Connections panel.
-  - Remote/external KoboldCPP and Ollama **connections** (as opposed to the
-    Manager sub-systems) are unaffected — configure them manually via the
-    Connections panel, same as any other provider.
+    - **KoboldCPP Manager's managed/local-subprocess mode** can't work regardless of
+      engineering effort here — upstream `LostRuins/koboldcpp` only publishes
+      `linux-x64`/`mac-arm64`/Windows release binaries, no `linux-arm64` exists to
+      download and run on-device.
+    - **Ollama Manager** has no local-subprocess story in this codebase at all (it's
+      always been a pure HTTP client to an already-running Ollama server) — hidden
+      here as a scope decision to keep the Android build simple, not a hard technical
+      blocker. A remote Ollama instance running on another machine can still be
+      reached via a plain connection in the Connections panel.
+    - Remote/external KoboldCPP and Ollama **connections** (as opposed to the
+      Manager sub-systems) are unaffected — configure them manually via the
+      Connections panel, same as any other provider.
 - **Local vectorization (the in-process ONNX embedding model) is disabled on
   Android** — confirmed via `readelf` that `onnxruntime-node`'s prebuilt Linux
   ARM64 binaries depend on `ld-linux-aarch64.so.1`/`libc.so.6`/`libpthread.so.0`,
@@ -246,63 +247,64 @@ picker actually needs it.
   Vectorization sidebar's Settings tab → External API.
 - **nodejs-mobile's V8 build lacks full ICU/Unicode support** — any regex
   using a Unicode property escape (`\p{L}`, `\p{N}`, `\p{Lu}`, etc.) throws a
-  `SyntaxError` while the containing module is *parsed*, not run. This isn't
+  `SyntaxError` while the containing module is _parsed_, not run. This isn't
   a corner case: it's the standard tiktoken-style BPE pretokenization pattern,
   so it shows up in multiple otherwise-unrelated dependencies:
-  - `@lmstudio/sdk` (used by `LMStudioAdapter.ts`)
-  - `gpt-tokenizer` (all four OpenAI GPT2/3.5/4/4o token counters)
-  - `llama3-tokenizer-js` (the Llama 3 token counter)
-  - `@lenml/tokenizer-gemma` (used, slightly confusingly, by the *Cohere*
-    token counter)
+    - `@lmstudio/sdk` (used by `LMStudioAdapter.ts`)
+    - `gpt-tokenizer` (all four OpenAI GPT2/3.5/4/4o token counters)
+    - `llama3-tokenizer-js` (the Llama 3 token counter)
+    - `@lenml/tokenizer-gemma` (used, slightly confusingly, by the _Cohere_
+      token counter)
 
-  Because a `SyntaxError` at module-parse time crashes the whole in-process
-  Node runtime — not just the code path that needed the broken module — the
-  real risk was these being pulled in by *static* imports in code that's part
-  of the server's eager startup graph. Two files had exactly that problem and
-  were fixed by switching to dynamic `import()`, deferred until the specific
-  feature is actually used, instead of a static top-level import evaluated
-  the moment the containing module loads:
-  - `src/lib/server/utils/getConnectionAdapter.ts` — each connection adapter
-    (including `LMStudioAdapter`) is now dynamically imported per connection
-    type, so only actually selecting an LM Studio connection can trigger this.
-  - `src/lib/server/utils/TokenCounterManager.ts` — this one was more
-    dangerous, since `TokenCounters` is core infrastructure used by every
-    connection adapter (not optional like a single connection type). The
-    affected counter classes (`OpenAIGPT2/35/4/4oTokenCounter`,
-    `Llama3TokenCounter`, `CohereTokenCounter`) now lazy-import their
-    tokenizer on first use instead of at module load. `llama-tokenizer-js`
-    and `mistral-tokenizer-js` don't use `\p{...}` and stay as ordinary
-    static imports.
+    Because a `SyntaxError` at module-parse time crashes the whole in-process
+    Node runtime — not just the code path that needed the broken module — the
+    real risk was these being pulled in by _static_ imports in code that's part
+    of the server's eager startup graph. Two files had exactly that problem and
+    were fixed by switching to dynamic `import()`, deferred until the specific
+    feature is actually used, instead of a static top-level import evaluated
+    the moment the containing module loads:
+    - `src/lib/server/utils/getConnectionAdapter.ts` — each connection adapter
+      (including `LMStudioAdapter`) is now dynamically imported per connection
+      type, so only actually selecting an LM Studio connection can trigger this.
+    - `src/lib/server/utils/TokenCounterManager.ts` — this one was more
+      dangerous, since `TokenCounters` is core infrastructure used by every
+      connection adapter (not optional like a single connection type). The
+      affected counter classes (`OpenAIGPT2/35/4/4oTokenCounter`,
+      `Llama3TokenCounter`, `CohereTokenCounter`) now lazy-import their
+      tokenizer on first use instead of at module load. `llama-tokenizer-js`
+      and `mistral-tokenizer-js` don't use `\p{...}` and stay as ordinary
+      static imports.
 
-  **Still unresolved**: actually *using* an LM Studio connection, or an
-  affected token counter, on Android will still fail at that point (same
-  underlying ICU gap) — this only stops it from crashing the app for
-  everyone else at boot. If this surfaces again in practice, either add a
-  friendlier error for that specific path, or find/build a nodejs-mobile
-  variant with full ICU.
+    **Still unresolved**: actually _using_ an LM Studio connection, or an
+    affected token counter, on Android will still fail at that point (same
+    underlying ICU gap) — this only stops it from crashing the app for
+    everyone else at boot. If this surfaces again in practice, either add a
+    friendlier error for that specific path, or find/build a nodejs-mobile
+    variant with full ICU.
 
-  A more severe symptom of the same root cause: nodejs-mobile's Android
-  build doesn't just lack Unicode *regex* support, it has **no `Intl` global
-  at all** (`ReferenceError: Intl is not defined`) — not missing locale
-  data, the entire namespace absent. Unlike the `\p{...}` cases above, this
-  isn't confined to a handful of dependencies behind lazy imports — `Intl`
-  is an ambient global that SvelteKit's own generated page code (and
-  presumably other UI code, via `.toLocaleDateString()`/`.toLocaleString()`)
-  references directly, so every page request 500'd. Fixed with a global
-  polyfill instead of tracking down every call site:
-  - `scripts/android-intl-polyfill.cjs` — `require("intl")`; the `intl` npm
-    package (added as a regular dependency) self-detects a missing
-    `global.Intl` and polyfills it, including patching
-    `Date.prototype`/`Number.prototype`'s locale-sensitive methods.
-  - `scripts/build-android.js` copies it into the assets bundle.
-  - `NodeService.kt` passes it via `node --require <path>`, ahead of the
-    main script, so it's in place before any app code runs — this only
-    works because it's preloaded as a real file; `intl`'s internal
-    `global.IntlPolyfill` assignment doesn't reliably propagate when eval'd
-    another way (e.g. `node -e`).
-  - No-op on every other platform, where a real `Intl` already exists.
+    A more severe symptom of the same root cause: nodejs-mobile's Android
+    build doesn't just lack Unicode _regex_ support, it has **no `Intl` global
+    at all** (`ReferenceError: Intl is not defined`) — not missing locale
+    data, the entire namespace absent. Unlike the `\p{...}` cases above, this
+    isn't confined to a handful of dependencies behind lazy imports — `Intl`
+    is an ambient global that SvelteKit's own generated page code (and
+    presumably other UI code, via `.toLocaleDateString()`/`.toLocaleString()`)
+    references directly, so every page request 500'd. Fixed with a global
+    polyfill instead of tracking down every call site:
+    - `scripts/android-intl-polyfill.cjs` — `require("intl")`; the `intl` npm
+      package (added as a regular dependency) self-detects a missing
+      `global.Intl` and polyfills it, including patching
+      `Date.prototype`/`Number.prototype`'s locale-sensitive methods.
+    - `scripts/build-android.js` copies it into the assets bundle.
+    - `NodeService.kt` passes it via `node --require <path>`, ahead of the
+      main script, so it's in place before any app code runs — this only
+      works because it's preloaded as a real file; `intl`'s internal
+      `global.IntlPolyfill` assignment doesn't reliably propagate when eval'd
+      another way (e.g. `node -e`).
+    - No-op on every other platform, where a real `Intl` already exists.
+
 - **The WebView's own HTTP cache is disabled entirely** (`cacheMode =
-  WebSettings.LOAD_NO_CACHE`, plus an explicit `webView.clearCache(true)` on
+WebSettings.LOAD_NO_CACHE`, plus an explicit `webView.clearCache(true)` on
   launch, in `MainActivity.kt`) — a broken/still-starting server response
   (a 404 or 500 hit while Node is still coming up) could otherwise get
   cached against `http://localhost:3000/...` and get served back on a later,
@@ -325,6 +327,7 @@ cd android
 Check logs: `adb logcat | grep "pub.serene"`
 
 Common issues:
+
 - `UnsatisfiedLinkError: dlopen failed: library "libc++_shared.so" not found` —
   `ANDROID_STL=c++_shared` is missing from `app/build.gradle`'s
   `externalNativeBuild.cmake.arguments` (libnode.so was built against the
@@ -344,6 +347,7 @@ Common issues:
 
 The app shows "Server startup timeout" if Node.js doesn't respond on
 `localhost:3000` within the wait window. Check:
+
 - `adb logcat | grep NodeJS` for Node's own stdout/stderr, redirected to
   logcat by `node-bridge.cpp`
 - `adb logcat | grep NodeService` for an "App entrypoint not found" error,

@@ -4,7 +4,11 @@
 
 import type { ListResponse } from "ollama"
 import type { SpecV3 } from "@lenml/char-card-reader"
-import type { LibraryCatalogItem, CardSourceId, CardSourceSort } from "$lib/shared/library/types"
+import type {
+	LibraryCatalogItem,
+	CardSourceId,
+	CardSourceSort
+} from "$lib/shared/library/types"
 
 declare global {
 	namespace Sockets {
@@ -86,7 +90,11 @@ declare global {
 				}
 				interface Response {
 					character:
-						| (SelectCharacter & { isOwner: boolean; ownerName: string | null; tags: string[] })
+						| (SelectCharacter & {
+								isOwner: boolean
+								ownerName: string | null
+								tags: string[]
+						  })
 						| null
 				}
 			}
@@ -333,7 +341,11 @@ declare global {
 				}
 				interface Response {
 					persona:
-						| (SelectPersona & { isOwner: boolean; ownerName: string | null; tags: string[] })
+						| (SelectPersona & {
+								isOwner: boolean
+								ownerName: string | null
+								tags: string[]
+						  })
 						| null
 				}
 			}
@@ -725,61 +737,95 @@ declare global {
 							personas: any[]
 							scenario: string | null
 						}
-						rag?: (
-							{
-								used: true
-								lore: {
-									worldLore: { pinned: number; rag: number }
-									characterLore: { pinned: number; rag: number }
-									history: { pinned: number; rag: number }
-								}
-								graphPairs: number
-								messages: {
-									guaranteed: number
-									ragOlder: number
-									filledIn: number
-									total: number
-								}
-								scores: {
-									messageScores: number[]
-									loreScores: number[]
-									thresholdUsed: number
-									queryMessageCount: number
-								}
-							} | {
-								used: false
-								lore: {
-									worldLore: { pinned: number; candidates: number; included: number; budget: number; topScore: number }
-									characterLore: { pinned: number; candidates: number; included: number; budget: number; topScore: number }
-									history: { pinned: number; candidates: number; included: number; budget: number; topScore: number; mostRecentDate: string | undefined }
-								}
-								messages: {
-									guaranteed: number
-									candidates: number
-									filledIn: number
-									budget: number
-									total: number
-								}
-								tokens: { reserve: number; total: number; limit: number; threshold: number }
-								entries: Array<{
-									type: "worldLore" | "characterLore" | "history" | "message"
-									id: number
-									name: string
-									score: {
-										total: number
-										keyword: number
-										nameMatch: number
-										entityCooccurrence: number
-										tfidf: number
-										sceneAffinity: number
-										lastRefRecency: number
-										recency: number
-										density: number
-										includedReason: string
+						rag?:
+							| {
+									used: true
+									lore: {
+										worldLore: {
+											pinned: number
+											rag: number
+										}
+										characterLore: {
+											pinned: number
+											rag: number
+										}
+										history: { pinned: number; rag: number }
 									}
-								}>
-							}
-						)
+									graphPairs: number
+									messages: {
+										guaranteed: number
+										ragOlder: number
+										filledIn: number
+										total: number
+									}
+									scores: {
+										messageScores: number[]
+										loreScores: number[]
+										thresholdUsed: number
+										queryMessageCount: number
+									}
+							  }
+							| {
+									used: false
+									lore: {
+										worldLore: {
+											pinned: number
+											candidates: number
+											included: number
+											budget: number
+											topScore: number
+										}
+										characterLore: {
+											pinned: number
+											candidates: number
+											included: number
+											budget: number
+											topScore: number
+										}
+										history: {
+											pinned: number
+											candidates: number
+											included: number
+											budget: number
+											topScore: number
+											mostRecentDate: string | undefined
+										}
+									}
+									messages: {
+										guaranteed: number
+										candidates: number
+										filledIn: number
+										budget: number
+										total: number
+									}
+									tokens: {
+										reserve: number
+										total: number
+										limit: number
+										threshold: number
+									}
+									entries: Array<{
+										type:
+											| "worldLore"
+											| "characterLore"
+											| "history"
+											| "message"
+										id: number
+										name: string
+										score: {
+											total: number
+											keyword: number
+											nameMatch: number
+											entityCooccurrence: number
+											tfidf: number
+											sceneAffinity: number
+											lastRefRecency: number
+											recency: number
+											density: number
+											includedReason: string
+										}
+									}>
+							  }
 					}
 				}
 			}
@@ -863,8 +909,8 @@ declare global {
 			namespace Summarize {
 				interface Params {
 					chatId: number
-					messageIds: number[] | 'all'
-					loreType: 'world' | 'history' | 'character' | 'scene'
+					messageIds: number[] | "all"
+					loreType: "world" | "history" | "character" | "scene"
 					topic?: string
 					/** Character to bind the lore entry to (character lore only) */
 					lorebookBindingCharacterId?: number | null
@@ -872,7 +918,7 @@ declare global {
 					lorebookBindingPersonaId?: number | null
 				}
 				interface Progress {
-					phase: 'drafting' | 'synthesizing'
+					phase: "drafting" | "synthesizing"
 					batch: number
 					totalBatches: number
 					partial: {
@@ -894,7 +940,10 @@ declare global {
 					mentionedCharacters?: string[]
 				}
 				interface ErrorResponse {
-					reason: 'no_lorebook' | 'no_connection' | 'generation_failed'
+					reason:
+						| "no_lorebook"
+						| "no_connection"
+						| "generation_failed"
 					error: string
 				}
 				interface TraceEntry {
@@ -1539,7 +1588,9 @@ declare global {
 				}
 			}
 			namespace Get {
-				interface Params { id: number }
+				interface Params {
+					id: number
+				}
 				interface Response {
 					worldSummarizeConfig: SelectWorldSummarizeConfig
 				}
@@ -1561,12 +1612,21 @@ declare global {
 				}
 			}
 			namespace Delete {
-				interface Params { id: number }
-				interface Response { success?: string; error?: string }
+				interface Params {
+					id: number
+				}
+				interface Response {
+					success?: string
+					error?: string
+				}
 			}
 			namespace SetUserActive {
-				interface Params { id: number | null }
-				interface Response { user: SelectUser }
+				interface Params {
+					id: number | null
+				}
+				interface Response {
+					user: SelectUser
+				}
 			}
 		}
 
@@ -1579,7 +1639,9 @@ declare global {
 				}
 			}
 			namespace Get {
-				interface Params { id: number }
+				interface Params {
+					id: number
+				}
 				interface Response {
 					characterSummarizeConfig: SelectCharacterSummarizeConfig
 				}
@@ -1601,12 +1663,21 @@ declare global {
 				}
 			}
 			namespace Delete {
-				interface Params { id: number }
-				interface Response { success?: string; error?: string }
+				interface Params {
+					id: number
+				}
+				interface Response {
+					success?: string
+					error?: string
+				}
 			}
 			namespace SetUserActive {
-				interface Params { id: number | null }
-				interface Response { user: SelectUser }
+				interface Params {
+					id: number | null
+				}
+				interface Response {
+					user: SelectUser
+				}
 			}
 		}
 
@@ -1619,7 +1690,9 @@ declare global {
 				}
 			}
 			namespace Get {
-				interface Params { id: number }
+				interface Params {
+					id: number
+				}
 				interface Response {
 					sceneSummarizeConfig: SelectSceneSummarizeConfig
 				}
@@ -1641,12 +1714,21 @@ declare global {
 				}
 			}
 			namespace Delete {
-				interface Params { id: number }
-				interface Response { success?: string; error?: string }
+				interface Params {
+					id: number
+				}
+				interface Response {
+					success?: string
+					error?: string
+				}
 			}
 			namespace SetUserActive {
-				interface Params { id: number | null }
-				interface Response { user: SelectUser }
+				interface Params {
+					id: number | null
+				}
+				interface Response {
+					user: SelectUser
+				}
 			}
 		}
 
@@ -1801,7 +1883,12 @@ declare global {
 				}
 			}
 			namespace Version {
-				interface Params {}
+				interface Params {
+					/** Test this URL instead of the saved ollamaManagerBaseUrl — lets the
+					 * setup screen's "Test" button check what's currently typed rather
+					 * than whatever was last persisted. */
+					baseUrl?: string
+				}
 				interface Response {
 					version: string
 				}
@@ -1865,7 +1952,7 @@ declare global {
 			}
 		}
 
-		namespace KoboldCpp {
+		namespace KoboldCPP {
 			namespace SetBaseUrl {
 				interface Params {
 					baseUrl: string
@@ -1883,7 +1970,12 @@ declare global {
 				}
 			}
 			namespace Version {
-				interface Params {}
+				interface Params {
+					/** Test this URL instead of the saved koboldCppManagerBaseUrl — lets
+					 * the setup screen's "Test" button check what's currently typed
+					 * rather than whatever was last persisted. */
+					baseUrl?: string
+				}
 				interface Capabilities {
 					txt2img: boolean
 					vision: boolean
@@ -2040,7 +2132,7 @@ declare global {
 			namespace GetDownloadProgress {
 				interface Params {}
 				interface Response {
-					downloads: DownloadProgress.Response['downloads']
+					downloads: DownloadProgress.Response["downloads"]
 				}
 			}
 			namespace ClearDownloadHistory {
@@ -2083,6 +2175,16 @@ declare global {
 				interface Params {
 					dir: string
 					variant?: string
+				}
+				interface Response {
+					success: boolean
+					error?: string
+				}
+			}
+			namespace SetManagedAdminPassword {
+				interface Params {
+					/** Empty string clears the stored password. */
+					password: string
 				}
 				interface Response {
 					success: boolean
@@ -2157,7 +2259,12 @@ declare global {
 			namespace BinaryDownloadProgress {
 				interface DownloadState {
 					assetName: string
-					status: "starting" | "downloading" | "success" | "error" | "cancelled"
+					status:
+						| "starting"
+						| "downloading"
+						| "success"
+						| "error"
+						| "cancelled"
 					downloaded: number
 					total: number
 					isDone: boolean
@@ -2194,7 +2301,12 @@ declare global {
 			}
 			namespace SubprocessStatus {
 				interface Response {
-					status: "stopped" | "starting" | "running" | "crashed" | "stopping"
+					status:
+						| "stopped"
+						| "starting"
+						| "running"
+						| "crashed"
+						| "stopping"
 					pid: number | null
 					startedAt: string | null
 					lastError: string | null
@@ -2360,12 +2472,12 @@ declare global {
 				interface Response {
 					unsafeBrowsingEnabled: boolean
 					sources: {
-					id: CardSourceId
-					label: string
-					description: string
-					url: string
-					supportsPersonas: boolean
-				}[]
+						id: CardSourceId
+						label: string
+						description: string
+						url: string
+						supportsPersonas: boolean
+					}[]
 					charaVaultConnected: boolean
 				}
 			}
@@ -2427,11 +2539,13 @@ declare global {
 					ollamaSettings: Omit<SelectOllamaSettings, "id">
 					// koboldCppManagedAdminPassword is deliberately never sent to
 					// the client (server-only secret) — see the `columns` filter
-					// in systemSettingsGet.
+					// in systemSettingsGet. koboldCppManagedAdminPasswordSet tells the
+					// client whether one is already stored, without ever revealing it,
+					// so the UI can show a bullet placeholder vs. an empty field.
 					koboldCppSettings: Omit<
 						SelectKoboldCppSettings,
 						"id" | "koboldCppManagedAdminPassword"
-					>
+					> & { koboldCppManagedAdminPasswordSet: boolean }
 					isAndroidWrapper: boolean
 				}
 			}
@@ -2644,7 +2758,12 @@ declare global {
 						day: number | null
 						isCompleted: boolean
 						/** The next history entry in date order for this lorebook, if any */
-						nextEntry: { id: number; year: number; month: number | null; day: number | null } | null
+						nextEntry: {
+							id: number
+							year: number
+							month: number | null
+							day: number | null
+						} | null
 					} | null
 				}
 				interface Response {
@@ -2698,7 +2817,7 @@ declare global {
 					historyEntryId: number
 				}
 				interface Progress {
-					phase: 'drafting' | 'synthesizing'
+					phase: "drafting" | "synthesizing"
 					batch: number
 					totalBatches: number
 					partial: { content?: string; raw?: string }
@@ -3154,7 +3273,13 @@ declare global {
 					resume?: boolean
 				}
 				interface Progress {
-					phase: "loading" | "extracting_characters" | "generating_descriptions" | "detecting_state_changes" | "extracting_perspectives" | "parsing"
+					phase:
+						| "loading"
+						| "extracting_characters"
+						| "generating_descriptions"
+						| "detecting_state_changes"
+						| "extracting_perspectives"
+						| "parsing"
 					sceneIndex: number
 					totalScenes: number
 					nodesFound: number
@@ -3208,7 +3333,9 @@ declare global {
 			}
 			namespace UpdateRelationship {
 				interface Params {
-					relationship: Partial<NarrativeRelationship> & { id: number }
+					relationship: Partial<NarrativeRelationship> & {
+						id: number
+					}
 				}
 				interface Response {
 					relationship: NarrativeRelationship
@@ -3399,7 +3526,10 @@ declare global {
 					 */
 					interface Params {
 						importSessionId: string
-						manifest: Array<{ relativePath: string; length: number }>
+						manifest: Array<{
+							relativePath: string
+							length: number
+						}>
 						blob: Uint8Array
 					}
 					interface Response {
@@ -3411,6 +3541,13 @@ declare global {
 				namespace Scan {
 					interface Params {
 						importSessionId: string
+						// Individual chat logs (chats/<CharacterName>/<file>.jsonl) are
+						// deliberately never staged at scan time -- only their content
+						// (potentially large) gets uploaded later for whatever the user
+						// actually selects. Their relative paths are sent here instead,
+						// purely so the scan can list what's available without needing
+						// the files themselves on disk yet.
+						deferredChatPaths?: string[]
 					}
 					interface Response {
 						success: boolean
@@ -3565,184 +3702,209 @@ declare global {
 			}
 		}
 
-	// Assistant namespace
-	namespace Assistant {
-		// Draft progress event - emitted during character draft generation
-		namespace DraftProgress {
-			interface Params {}
-			interface Response {
-				chatId: number
-				timestamp: number
-				status:
-					| "started"
-					| "generating_field"
-					| "field_complete"
-					| "field_error"
-					| "validating"
-					| "correcting"
-					| "complete"
-					| "validation_failed"
-				message?: string
-				field?: string
-				fieldStatus?: "generating" | "validating" | "complete" | "error"
-				value?: any
-				error?: string
-				currentField?: number
-				totalFields?: number
-				attempt?: number
-				fields?: string[]
-				draft?: any
-				errors?: any[]
-				generatedFields?: string[]
-				correctedFields?: string[]
-			}
-		}
-
-		namespace Setup {
-			namespace Get {
+		// Assistant namespace
+		namespace Assistant {
+			// Draft progress event - emitted during character draft generation
+			namespace DraftProgress {
 				interface Params {}
 				interface Response {
-					setup: {
-						summarizationStepComplete: boolean
-						ragStepComplete: boolean
-					} | null
+					chatId: number
+					timestamp: number
+					status:
+						| "started"
+						| "generating_field"
+						| "field_complete"
+						| "field_error"
+						| "validating"
+						| "correcting"
+						| "complete"
+						| "validation_failed"
+					message?: string
+					field?: string
+					fieldStatus?:
+						| "generating"
+						| "validating"
+						| "complete"
+						| "error"
+					value?: any
+					error?: string
+					currentField?: number
+					totalFields?: number
+					attempt?: number
+					fields?: string[]
+					draft?: any
+					errors?: any[]
+					generatedFields?: string[]
+					correctedFields?: string[]
 				}
 			}
-			namespace MarkComplete {
-				interface Params {
-					step: "summarization" | "rag"
+
+			namespace Setup {
+				namespace Get {
+					interface Params {}
+					interface Response {
+						setup: {
+							summarizationStepComplete: boolean
+							ragStepComplete: boolean
+						} | null
+					}
 				}
-				interface Response {
-					setup: {
-						summarizationStepComplete: boolean
-						ragStepComplete: boolean
+				namespace MarkComplete {
+					interface Params {
+						step: "summarization" | "rag"
+					}
+					interface Response {
+						setup: {
+							summarizationStepComplete: boolean
+							ragStepComplete: boolean
+						}
+					}
+				}
+			}
+
+			namespace TaskQueue {
+				interface QueuedTask {
+					id: string
+					taskType: string
+					connectionName: string
+					samplingName: string
+					status:
+						| "queued"
+						| "loading"
+						| "generating"
+						| "done"
+						| "error"
+						| "cancelled"
+					startedAt: string
+					chatId?: number
+					lorebookId?: number
+					label?: string
+				}
+				namespace Update {
+					interface Response {
+						tasks: QueuedTask[]
 					}
 				}
 			}
 		}
 
-		namespace TaskQueue {
-			interface QueuedTask {
-				id: string
-				taskType: string
-				connectionName: string
-				samplingName: string
-				status: "queued" | "loading" | "generating" | "done" | "error" | "cancelled"
-				startedAt: string
-				chatId?: number
-				lorebookId?: number
-				label?: string
+		// Additional interfaces used by socket types
+		export interface CharaImportMetadata {
+			data: {
+				alternate_greetings?: string[]
+				avatar?: string
+				character_version?: string
+				creator?: string
+				creator_notes?: string
+				description: string
+				extensions: Record<string, any>
+				first_mes: string
+				mes_example: string
+				name: string
+				personality: string
+				post_history_instructions?: string
+				scenario: string
+				system_prompt?: string
+				tags?: string[]
 			}
-			namespace Update {
+			spec: string
+			spec_version: string
+		}
+
+		export interface ConnectionSummary {
+			connections: SelectConnection[]
+			models: {
+				[baseUrl: string]: ListResponse["models"]
+			}
+		}
+
+		export interface FileCharacter {
+			character: SelectCharacter
+			avatar?: Buffer
+		}
+
+		export interface ConnectionHealthDetails {
+			status: "ok" | "unreachable" | "error"
+			url: string
+			pingTime?: number
+			details?: string
+		}
+
+		export interface ServerInfoDetails {
+			info: any
+		}
+
+		namespace CustomThemes {
+			interface ThemeMeta {
+				id: number
+				name: string
+				label: string
+				cssKey: string
+				isInstanceTheme: boolean
+				uploadedBy?: number | null
+				uploaderName?: string | null
+				createdAt: string
+			}
+
+			namespace List {
+				interface Params {}
 				interface Response {
-					tasks: QueuedTask[]
+					myThemes: ThemeMeta[]
+					instanceThemes: ThemeMeta[]
+				}
+			}
+
+			namespace GetCss {
+				interface Params {
+					name: string
+				}
+				interface Response {
+					name: string
+					css: string
+					cssKey: string
+				}
+			}
+
+			namespace Save {
+				interface Params {
+					id?: number
+					name: string
+					label: string
+					css: string
+				}
+				interface Response {
+					theme: ThemeMeta
+				}
+			}
+
+			namespace Delete {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+
+			namespace SetInstanceTheme {
+				interface Params {
+					id: number
+					enabled: boolean
+				}
+				interface Response {
+					success: boolean
 				}
 			}
 		}
 
-	}
-
-	// Additional interfaces used by socket types
-	export interface CharaImportMetadata {
-		data: {
-			alternate_greetings?: string[]
-			avatar?: string
-			character_version?: string
-			creator?: string
-			creator_notes?: string
-			description: string
-			extensions: Record<string, any>
-			first_mes: string
-			mes_example: string
-			name: string
-			personality: string
-			post_history_instructions?: string
-			scenario: string
-			system_prompt?: string
-			tags?: string[]
-		}
-		spec: string
-		spec_version: string
-	}
-
-	export interface ConnectionSummary {
-		connections: SelectConnection[]
-		models: {
-			[baseUrl: string]: ListResponse["models"]
-		}
-	}
-
-	export interface FileCharacter {
-		character: SelectCharacter
-		avatar?: Buffer
-	}
-
-	export interface ConnectionHealthDetails {
-		status: "ok" | "unreachable" | "error"
-		url: string
-		pingTime?: number
-		details?: string
-	}
-
-	export interface ServerInfoDetails {
-		info: any
-	}
-
-	namespace CustomThemes {
-		interface ThemeMeta {
-			id: number
-			name: string
-			label: string
-			cssKey: string
-			isInstanceTheme: boolean
-			uploadedBy?: number | null
-			uploaderName?: string | null
-			createdAt: string
+		export interface SyncDetails {
+			syncSource: Partial<SelectUser> | null
+			scenario: null | "character" | "chat"
 		}
 
-		namespace List {
-			interface Params {}
-			interface Response {
-				myThemes: ThemeMeta[]
-				instanceThemes: ThemeMeta[]
-			}
+		interface FileAcceptDetails {
+			files: File[]
 		}
-
-		namespace GetCss {
-			interface Params { name: string }
-			interface Response { name: string; css: string; cssKey: string }
-		}
-
-		namespace Save {
-			interface Params {
-				id?: number
-				name: string
-				label: string
-				css: string
-			}
-			interface Response { theme: ThemeMeta }
-		}
-
-		namespace Delete {
-			interface Params { id: number }
-			interface Response { success: boolean }
-		}
-
-		namespace SetInstanceTheme {
-			interface Params { id: number; enabled: boolean }
-			interface Response { success: boolean }
-		}
-	}
-
-	export interface SyncDetails {
-		syncSource: Partial<SelectUser> | null
-		scenario: null | "character" | "chat"
-	}
-
-	interface FileAcceptDetails {
-		files: File[]
-	}
-
 	}
 }
 

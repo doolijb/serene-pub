@@ -23,8 +23,12 @@
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
 	)
-	let ollamaSettingsCtx: OllamaSettingsCtx = $state(getContext("ollamaSettingsCtx"))
-	let koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
+	let ollamaSettingsCtx: OllamaSettingsCtx = $state(
+		getContext("ollamaSettingsCtx")
+	)
+	let koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(
+		getContext("koboldCppSettingsCtx")
+	)
 	let userCtx: UserCtx = $state(getContext("userCtx"))
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
 	let disablingEmbeddings = $state(false)
@@ -62,7 +66,7 @@
 
 	// State for the CharaVault integration — a single instance-wide
 	// credential, admin-configured (not per-user), same shared-config
-	// pattern as Connections/Ollama Manager/KoboldCpp Manager above.
+	// pattern as Connections/Ollama Manager/KoboldCPP Manager above.
 	let charaVaultConnected = $state(false)
 	let charaVaultConnectedEmail = $state<string | null>(null)
 	let charaVaultEmailField = $state("")
@@ -76,7 +80,26 @@
 			ollamaBaseUrlField = ollamaSettingsCtx.settings.ollamaManagerBaseUrl
 		}
 		if (koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl) {
-			koboldCppBaseUrlField = koboldCppSettingsCtx.settings.koboldCppManagerBaseUrl
+			koboldCppBaseUrlField =
+				koboldCppSettingsCtx.settings.koboldCppManagerBaseUrl
+		}
+	})
+
+	// See the matching check in KoboldCppSettingsTab.svelte — this URL and the
+	// Manager's own "Port" setting are supposed to stay in sync (this is what
+	// everything actually talks to; the managed subprocess always listens on
+	// the Port), but this field can be edited here independently of that one.
+	let koboldCppPortMismatch = $derived.by(() => {
+		if (koboldCppSettingsCtx.settings?.koboldCppManagedMode !== "managed")
+			return false
+		const managedPort = koboldCppSettingsCtx.settings?.koboldCppManagedPort
+		const baseUrl = koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl
+		if (!managedPort || !baseUrl) return false
+		try {
+			const urlPort = Number(new URL(baseUrl).port) || 80
+			return urlPort !== managedPort
+		} catch {
+			return false
 		}
 	})
 
@@ -208,10 +231,15 @@
 
 	function handleContextDebuggingEnabledClick(event: { checked: boolean }) {
 		if (!userCtx.user?.isAdmin) {
-			toaster.error({ title: "Access denied", description: "Admin privileges required" })
+			toaster.error({
+				title: "Access denied",
+				description: "Admin privileges required"
+			})
 			return
 		}
-		socket?.emit("systemSettings:updateContextDebuggingEnabled", { enabled: event.checked })
+		socket?.emit("systemSettings:updateContextDebuggingEnabled", {
+			enabled: event.checked
+		})
 	}
 
 	// ── Account functions ────────────────────────────────────────────────────
@@ -464,7 +492,9 @@
 			}
 		}
 
-		const handleCharaVaultDisconnectError = (message: { error?: string }) => {
+		const handleCharaVaultDisconnectError = (message: {
+			error?: string
+		}) => {
 			isDisconnectingCharaVault = false
 			toaster.error({
 				title: "Failed to disconnect CharaVault account",
@@ -573,7 +603,10 @@
 			socket.off("users:current:hasPassphrase", handleHasPassphrase)
 			socket.off("users:current:setPassphrase", handleSetPassphrase)
 			socket.off("cardSources:charaVault:status", handleCharaVaultStatus)
-			socket.off("cardSources:charaVault:connect", handleCharaVaultConnect)
+			socket.off(
+				"cardSources:charaVault:connect",
+				handleCharaVaultConnect
+			)
 			;(socket as any).off(
 				"cardSources:charaVault:connect:error",
 				handleCharaVaultConnectError
@@ -596,168 +629,196 @@
 			<div class="space-y-4">
 				<h3 class="text-lg font-semibold">Local Model Managers</h3>
 				<p class="text-muted-foreground text-sm">
-					Ollama Manager and KoboldCPP Manager aren't available in the Android
-					app — they depend on locally-run binaries this build can't bundle.
-					Connect to a remote Ollama or KoboldCPP instance from the Connections
-					panel instead. Local embeddings aren't available either, for the same
-					reason, but an external embeddings API works fine — set it up from the
+					Ollama Manager and KoboldCPP Manager aren't available in the
+					Android app — they depend on locally-run binaries this build
+					can't bundle. Connect to a remote Ollama or KoboldCPP
+					instance from the Connections panel instead. Local
+					embeddings aren't available either, for the same reason, but
+					an external embeddings API works fine — set it up from the
 					Embeddings panel.
 				</p>
 			</div>
 		{:else}
+			<!-- Ollama Manager Settings -->
+			<div class="space-y-4">
+				<h3 class="text-lg font-semibold">Ollama Manager</h3>
 
-		<!-- Ollama Manager Settings -->
-		<div class="space-y-4">
-			<h3 class="text-lg font-semibold">Ollama Manager</h3>
-
-			<div class="flex items-center gap-2">
-				<Switch
-					name="ollama-manager"
-					checked={ollamaSettingsCtx.settings?.ollamaManagerEnabled}
-					onCheckedChange={onOllamaManagerEnabledClick}
-				>
-					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-				</Switch>
-				<label for="ollama-manager" class="font-semibold">
-					Enable Ollama Manager
-				</label>
-			</div>
-
-			{#if ollamaSettingsCtx.settings?.ollamaManagerEnabled}
-				<div class="ml-6 space-y-3">
-					<div>
-						<label
-							class="text-foreground mb-1 block text-sm font-medium"
-							for="ollamaBaseUrl"
-						>
-							Ollama Server URL
-						</label>
-						<input
-							id="ollamaBaseUrl"
-							type="text"
-							bind:value={ollamaBaseUrlField}
-							placeholder="http://localhost:11434"
-							class="input w-full {ollamaBaseUrlError
-								? 'border-error-500'
-								: ''}"
-						/>
-						{#if ollamaBaseUrlError}
-							<p class="text-error-500 mt-1 text-sm">
-								{ollamaBaseUrlError}
-							</p>
-						{/if}
-					</div>
-
-					<button
-						class="btn preset-filled-primary-500"
-						onclick={handleSaveOllamaBaseUrl}
-						disabled={isSavingBaseUrl}
+				<div class="flex items-center gap-2">
+					<Switch
+						name="ollama-manager"
+						checked={ollamaSettingsCtx.settings
+							?.ollamaManagerEnabled}
+						onCheckedChange={onOllamaManagerEnabledClick}
 					>
-						{#if isSavingBaseUrl}
-							<Icons.Loader2 class="h-4 w-4 animate-spin" />
-							Saving...
-						{:else}
-							<Icons.Save class="h-4 w-4" />
-							Save URL
-						{/if}
-					</button>
-				</div>
-			{/if}
-		</div>
-
-		<!-- KoboldCPP Manager Settings -->
-		<div class="space-y-4">
-			<h3 class="text-lg font-semibold">KoboldCPP Manager</h3>
-
-			<div class="flex items-center gap-2">
-				<Switch
-					name="koboldcpp-manager"
-					checked={koboldCppSettingsCtx.settings?.koboldCppManagerEnabled}
-					onCheckedChange={onKoboldCppManagerEnabledClick}
-				>
-					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-				</Switch>
-				<label for="koboldcpp-manager" class="font-semibold">
-					Enable KoboldCPP Manager
-				</label>
-			</div>
-
-			{#if koboldCppSettingsCtx.settings?.koboldCppManagerEnabled}
-				<div class="ml-6 space-y-3">
-					<div>
-						<label
-							class="text-foreground mb-1 block text-sm font-medium"
-							for="koboldCppBaseUrl"
+						<Switch.Control
+							class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 						>
-							KoboldCPP Server URL
-						</label>
-						<input
-							id="koboldCppBaseUrl"
-							type="text"
-							bind:value={koboldCppBaseUrlField}
-							placeholder="http://localhost:5001"
-							class="input w-full {koboldCppBaseUrlError
-								? 'border-error-500'
-								: ''}"
-						/>
-						{#if koboldCppBaseUrlError}
-							<p class="text-error-500 mt-1 text-sm">
-								{koboldCppBaseUrlError}
-							</p>
-						{/if}
-					</div>
-
-					<button
-						class="btn preset-filled-primary-500"
-						onclick={handleSaveKoboldCppBaseUrl}
-						disabled={isSavingKoboldCppBaseUrl}
-					>
-						{#if isSavingKoboldCppBaseUrl}
-							<Icons.Loader2 class="h-4 w-4 animate-spin" />
-							Saving...
-						{:else}
-							<Icons.Save class="h-4 w-4" />
-							Save URL
-						{/if}
-					</button>
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+						<Switch.Label class="font-semibold">
+							Enable Ollama Manager
+						</Switch.Label>
+					</Switch>
 				</div>
-			{/if}
-		</div>
 
-		<!-- Embeddings Settings -->
-		<div class="space-y-4">
-			<h3 class="text-lg font-semibold">Embeddings</h3>
+				{#if ollamaSettingsCtx.settings?.ollamaManagerEnabled}
+					<div class="ml-6 space-y-3">
+						<div>
+							<label
+								class="text-foreground mb-1 block text-sm font-medium"
+								for="ollamaBaseUrl"
+							>
+								Ollama Server URL
+							</label>
+							<input
+								id="ollamaBaseUrl"
+								type="text"
+								bind:value={ollamaBaseUrlField}
+								placeholder="http://localhost:11434"
+								class="input w-full {ollamaBaseUrlError
+									? 'border-error-500'
+									: ''}"
+							/>
+							{#if ollamaBaseUrlError}
+								<p class="text-error-500 mt-1 text-sm">
+									{ollamaBaseUrlError}
+								</p>
+							{/if}
+						</div>
 
-			<p class="text-muted-foreground text-sm">
-				Powers retrieval-augmented context (RAG) for lore, history, and past
-				messages. Turning this on opens the Embeddings panel to choose a
-				local or API-based model — there's no in-place default to switch to.
-			</p>
-
-			<div class="flex items-center gap-2">
-				<Switch
-					name="embeddings-enabled"
-					checked={systemSettingsCtx.settings?.vectorizationEnabled}
-					disabled={disablingEmbeddings}
-					onCheckedChange={onEmbeddingsEnabledClick}
-				>
-					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-				</Switch>
-				<label for="embeddings-enabled" class="font-semibold">
-					Enable Embeddings
-				</label>
+						<button
+							class="btn preset-filled-primary-500"
+							onclick={handleSaveOllamaBaseUrl}
+							disabled={isSavingBaseUrl}
+						>
+							{#if isSavingBaseUrl}
+								<Icons.Loader2 class="h-4 w-4 animate-spin" />
+								Saving...
+							{:else}
+								<Icons.Save class="h-4 w-4" />
+								Save URL
+							{/if}
+						</button>
+					</div>
+				{/if}
 			</div>
-		</div>
 
+			<!-- KoboldCPP Manager Settings -->
+			<div class="space-y-4">
+				<h3 class="text-lg font-semibold">KoboldCPP Manager</h3>
+
+				<div class="flex items-center gap-2">
+					<Switch
+						name="koboldcpp-manager"
+						checked={koboldCppSettingsCtx.settings
+							?.koboldCppManagerEnabled}
+						onCheckedChange={onKoboldCppManagerEnabledClick}
+					>
+						<Switch.Control
+							class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+						>
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+						<Switch.Label class="font-semibold">
+							Enable KoboldCPP Manager
+						</Switch.Label>
+					</Switch>
+				</div>
+
+				{#if koboldCppSettingsCtx.settings?.koboldCppManagerEnabled}
+					<div class="ml-6 space-y-3">
+						<div>
+							<label
+								class="text-foreground mb-1 block text-sm font-medium"
+								for="koboldCppBaseUrl"
+							>
+								KoboldCPP Server URL
+							</label>
+							<input
+								id="koboldCppBaseUrl"
+								type="text"
+								bind:value={koboldCppBaseUrlField}
+								placeholder="http://localhost:5001"
+								class="input w-full {koboldCppBaseUrlError
+									? 'border-error-500'
+									: ''}"
+							/>
+							{#if koboldCppBaseUrlError}
+								<p class="text-error-500 mt-1 text-sm">
+									{koboldCppBaseUrlError}
+								</p>
+							{/if}
+							{#if koboldCppPortMismatch}
+								<div
+									class="border-warning-500 bg-warning-500/10 mt-2 flex items-start gap-2 rounded-lg border p-3"
+								>
+									<Icons.AlertTriangle
+										size={16}
+										class="text-warning-700-300 mt-0.5 shrink-0"
+									/>
+									<p class="text-warning-700-300 text-sm">
+										This doesn't match the managed
+										subprocess's Port ({koboldCppSettingsCtx
+											.settings?.koboldCppManagedPort}) in
+										the KoboldCPP Manager panel's Settings
+										tab. Everything talks to this URL, not
+										that port — update one to match the
+										other.
+									</p>
+								</div>
+							{/if}
+						</div>
+
+						<button
+							class="btn preset-filled-primary-500"
+							onclick={handleSaveKoboldCppBaseUrl}
+							disabled={isSavingKoboldCppBaseUrl}
+						>
+							{#if isSavingKoboldCppBaseUrl}
+								<Icons.Loader2 class="h-4 w-4 animate-spin" />
+								Saving...
+							{:else}
+								<Icons.Save class="h-4 w-4" />
+								Save URL
+							{/if}
+						</button>
+					</div>
+				{/if}
+			</div>
+
+			<!-- Embeddings Settings -->
+			<div class="space-y-4">
+				<h3 class="text-lg font-semibold">Embeddings</h3>
+
+				<p class="text-muted-foreground text-sm">
+					Powers retrieval-augmented context (RAG) for lore, history,
+					and past messages. Turning this on opens the Embeddings
+					panel to choose a local or API-based model — there's no
+					in-place default to switch to.
+				</p>
+
+				<div class="flex items-center gap-2">
+					<Switch
+						name="embeddings-enabled"
+						checked={systemSettingsCtx.settings
+							?.vectorizationEnabled}
+						disabled={disablingEmbeddings}
+						onCheckedChange={onEmbeddingsEnabledClick}
+					>
+						<Switch.Control
+							class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+						>
+							<Switch.Thumb />
+						</Switch.Control>
+						<Switch.HiddenInput />
+						<Switch.Label class="font-semibold">
+							Enable Embeddings
+						</Switch.Label>
+					</Switch>
+				</div>
+			</div>
 		{/if}
 
 		<!-- Summarization Settings -->
@@ -765,10 +826,12 @@
 			<h3 class="text-lg font-semibold">Summarization</h3>
 
 			<p class="text-muted-foreground text-sm">
-				When enabled, older chat messages may be condensed into summaries to
-				preserve context while staying within token limits. Summaries are
-				generated automatically in the background and are used in place of the
-				original messages during prompt construction.
+				When enabled, you can select a range of chat messages and
+				generate a Scene Summary from them (via an LLM), which feeds the
+				Narrative Graph and can become a lorebook history entry. This is
+				a manual, per-chat action — nothing runs automatically, and the
+				original messages are never removed or replaced during prompt
+				construction.
 			</p>
 
 			<div class="flex items-center gap-2">
@@ -777,16 +840,18 @@
 					checked={systemSettingsCtx.settings?.summarizationEnabled}
 					onCheckedChange={handleSummarizationEnabledClick}
 				>
-					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+					>
 						<Switch.Thumb />
 					</Switch.Control>
 					<Switch.HiddenInput />
+					<Switch.Label class="font-semibold">
+						{systemSettingsCtx.settings?.summarizationEnabled
+							? "Summarization Enabled"
+							: "Enable Summarization"}
+					</Switch.Label>
 				</Switch>
-				<label for="enable-summarization" class="font-semibold">
-					{systemSettingsCtx.settings?.summarizationEnabled
-						? "Summarization Enabled"
-						: "Enable Summarization"}
-				</label>
 			</div>
 		</div>
 
@@ -794,26 +859,30 @@
 		<div class="space-y-4">
 			<h3 class="text-lg font-semibold">Context Debugging</h3>
 			<p class="text-muted-foreground text-sm">
-				When enabled, shows the prompt inspector tab in the chat UI, computes full
-				RAG and infill diagnostics, and saves compiled prompt metadata alongside
-				each generated message for later inspection.
+				When enabled, shows the prompt inspector tab in the chat UI,
+				computes full RAG and infill diagnostics, and saves compiled
+				prompt metadata alongside each generated message for later
+				inspection.
 			</p>
 			<div class="flex items-center gap-2">
 				<Switch
 					name="enable-context-debugging"
-					checked={systemSettingsCtx.settings?.contextDebuggingEnabled}
+					checked={systemSettingsCtx.settings
+						?.contextDebuggingEnabled}
 					onCheckedChange={handleContextDebuggingEnabledClick}
 				>
-					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+					>
 						<Switch.Thumb />
 					</Switch.Control>
 					<Switch.HiddenInput />
+					<Switch.Label class="font-semibold">
+						{systemSettingsCtx.settings?.contextDebuggingEnabled
+							? "Context Debugging Enabled"
+							: "Enable Context Debugging"}
+					</Switch.Label>
 				</Switch>
-				<label for="enable-context-debugging" class="font-semibold">
-					{systemSettingsCtx.settings?.contextDebuggingEnabled
-						? "Context Debugging Enabled"
-						: "Enable Context Debugging"}
-				</label>
 			</div>
 		</div>
 
@@ -822,10 +891,11 @@
 			<h3 class="text-lg font-semibold">Community Library: CharaVault</h3>
 			<p class="text-muted-foreground text-sm">
 				Connect one CharaVault account to enable browsing charavault.net
-				from the Character Library. This account is shared instance-wide —
-				it raises the search rate limit for every user on this Serene Pub
-				instance, not just you. Create an App Password at charavault.net
-				named "Serene Pub" and paste it below along with the account email.
+				from the Character Library. This account is shared instance-wide
+				— it raises the search rate limit for every user on this Serene
+				Pub instance, not just you. Create an App Password at
+				charavault.net named "Serene Pub" and paste it below along with
+				the account email.
 			</p>
 
 			{#if charaVaultConnected}
@@ -833,8 +903,9 @@
 					<Icons.CheckCircle2 size={18} class="text-success-500" />
 					<span class="text-sm">
 						Connected{#if charaVaultConnectedEmail}
-							as <span class="font-semibold">{charaVaultConnectedEmail}</span
-							>{/if}
+							as <span class="font-semibold">
+								{charaVaultConnectedEmail}
+							</span>{/if}
 					</span>
 					<button
 						type="button"
@@ -896,14 +967,16 @@
 					onCheckedChange={handleEnableAccountsClick}
 					disabled={systemSettingsCtx.settings?.isAccountsEnabled}
 				>
-					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+					>
 						<Switch.Thumb />
 					</Switch.Control>
 					<Switch.HiddenInput />
+					<Switch.Label class="font-semibold">
+						Enable User Accounts
+					</Switch.Label>
 				</Switch>
-				<label for="enable-accounts" class="font-semibold">
-					Enable User Accounts
-				</label>
 			</div>
 
 			{#if systemSettingsCtx.settings?.isAccountsEnabled}
@@ -929,139 +1002,159 @@
 {/if}
 
 <!-- Enable Accounts Confirmation Modal -->
-<Dialog open={showEnableAccountsModal} onOpenChange={(e) => (showEnableAccountsModal = e.open)}>
+<Dialog
+	open={showEnableAccountsModal}
+	onOpenChange={(e) => (showEnableAccountsModal = e.open)}
+>
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-lg">
-		<header class="flex items-center justify-between">
-			<h2 class="text-xl font-bold">Enable User Accounts</h2>
-			<button class="btn-ghost" aria-label="Close" onclick={cancelEnableAccounts}>
-				<Icons.X class="h-5 w-5" />
-			</button>
-		</header>
-		<article class="space-y-4">
-			<div class="text-warning-500 flex items-center gap-2">
-				<Icons.AlertTriangle class="h-5 w-5" />
-				<span class="font-semibold">Warning: Permanent Change</span>
-			</div>
-			<p>
-				Enabling user accounts will activate authentication and
-				multi-user support. This change is <strong>
-					permanent and cannot be reversed
-				</strong>
-				.
-			</p>
-			<p class="text-muted-foreground text-sm">
-				After enabling accounts, you will need to create accounts for
-				all new users.
-			</p>
-
-			{#if !hasPassphrase}
-				<div
-					class="bg-warning-500/10 border-warning-500/20 space-y-3 rounded-lg border p-4"
-				>
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 max-w-lg space-y-6 p-6 shadow-xl"
+			>
+				<header class="flex items-center justify-between">
+					<h2 class="text-xl font-bold">Enable User Accounts</h2>
+					<button
+						class="btn-ghost"
+						aria-label="Close"
+						onclick={cancelEnableAccounts}
+					>
+						<Icons.X class="h-5 w-5" />
+					</button>
+				</header>
+				<article class="space-y-4">
 					<div class="text-warning-500 flex items-center gap-2">
-						<Icons.Key class="h-4 w-4" />
-						<span class="font-semibold">Passphrase Required</span>
+						<Icons.AlertTriangle class="h-5 w-5" />
+						<span class="font-semibold">
+							Warning: Permanent Change
+						</span>
 					</div>
-					<p class="text-sm">
-						You need to set a passphrase for your account to
-						continue.
+					<p>
+						Enabling user accounts will activate authentication and
+						multi-user support. This change is <strong>
+							permanent and cannot be reversed
+						</strong>
+						.
+					</p>
+					<p class="text-muted-foreground text-sm">
+						After enabling accounts, you will need to create
+						accounts for all new users.
 					</p>
 
-					<div class="space-y-3">
-						<p class="text-sm">
-							<label
-								class="mb-1 block text-sm font-medium"
-								for="username"
+					{#if !hasPassphrase}
+						<div
+							class="bg-warning-500/10 border-warning-500/20 space-y-3 rounded-lg border p-4"
+						>
+							<div
+								class="text-warning-500 flex items-center gap-2"
 							>
-								Username
-							</label>
-							<input
-								id="username"
-								value={userCtx.user!.username}
-								class="input w-full"
-								disabled
-							/>
-						</p>
-						<div>
-							<label
-								class="mb-1 block text-sm font-medium"
-								for="passphrase"
-							>
-								Passphrase
-							</label>
-							<input
-								id="passphrase"
-								type="password"
-								bind:value={passphrase}
-								placeholder="Enter your passphrase"
-								class="input w-full {passphraseError
-									? 'border-error-500'
-									: ''}"
-							/>
-						</div>
-						<div>
-							<label
-								class="mb-1 block text-sm font-medium"
-								for="confirmPassphrase"
-							>
-								Confirm Passphrase
-							</label>
-							<input
-								id="confirmPassphrase"
-								type="password"
-								bind:value={confirmPassphrase}
-								placeholder="Confirm your passphrase"
-								class="input w-full {passphraseError
-									? 'border-error-500'
-									: ''}"
-							/>
-						</div>
-						{#if passphraseError}
-							<p class="text-error-500 text-sm">
-								{passphraseError}
+								<Icons.Key class="h-4 w-4" />
+								<span class="font-semibold">
+									Passphrase Required
+								</span>
+							</div>
+							<p class="text-sm">
+								You need to set a passphrase for your account to
+								continue.
 							</p>
-						{/if}
-						<div class="text-muted-foreground text-xs">
-							<p>Requirements:</p>
-							<ul class="ml-2 list-inside list-disc space-y-1">
-								<li>At least 6 characters long</li>
-								<li>At least one lowercase letter</li>
-								<li>At least one uppercase letter</li>
-								<li>At least one special character</li>
-							</ul>
+
+							<div class="space-y-3">
+								<p class="text-sm">
+									<label
+										class="mb-1 block text-sm font-medium"
+										for="username"
+									>
+										Username
+									</label>
+									<input
+										id="username"
+										value={userCtx.user!.username}
+										class="input w-full"
+										disabled
+									/>
+								</p>
+								<div>
+									<label
+										class="mb-1 block text-sm font-medium"
+										for="passphrase"
+									>
+										Passphrase
+									</label>
+									<input
+										id="passphrase"
+										type="password"
+										bind:value={passphrase}
+										placeholder="Enter your passphrase"
+										class="input w-full {passphraseError
+											? 'border-error-500'
+											: ''}"
+									/>
+								</div>
+								<div>
+									<label
+										class="mb-1 block text-sm font-medium"
+										for="confirmPassphrase"
+									>
+										Confirm Passphrase
+									</label>
+									<input
+										id="confirmPassphrase"
+										type="password"
+										bind:value={confirmPassphrase}
+										placeholder="Confirm your passphrase"
+										class="input w-full {passphraseError
+											? 'border-error-500'
+											: ''}"
+									/>
+								</div>
+								{#if passphraseError}
+									<p class="text-error-500 text-sm">
+										{passphraseError}
+									</p>
+								{/if}
+								<div class="text-muted-foreground text-xs">
+									<p>Requirements:</p>
+									<ul
+										class="ml-2 list-inside list-disc space-y-1"
+									>
+										<li>At least 6 characters long</li>
+										<li>At least one lowercase letter</li>
+										<li>At least one uppercase letter</li>
+										<li>At least one special character</li>
+									</ul>
+								</div>
+							</div>
 						</div>
-					</div>
-				</div>
-			{/if}
-		</article>
-		<footer class="flex justify-end gap-2">
-			<button
-				class="btn preset-filled-surface-400-600"
-				onclick={cancelEnableAccounts}
-			>
-				Cancel
-			</button>
-			<button
-				class="btn preset-filled-warning-500"
-				onclick={confirmEnableAccounts}
-				disabled={isSettingPassphrase}
-			>
-				{#if isSettingPassphrase}
-					<Icons.Loader2 class="h-4 w-4 animate-spin" />
-					Setting up...
-				{:else}
-					<Icons.Shield class="h-4 w-4" />
-					{hasPassphrase
-						? "Enable Accounts"
-						: "Set Passphrase & Enable"}
-				{/if}
-			</button>
-		</footer>
+					{/if}
+				</article>
+				<footer class="flex justify-end gap-2">
+					<button
+						class="btn preset-filled-surface-400-600"
+						onclick={cancelEnableAccounts}
+					>
+						Cancel
+					</button>
+					<button
+						class="btn preset-filled-warning-500"
+						onclick={confirmEnableAccounts}
+						disabled={isSettingPassphrase}
+					>
+						{#if isSettingPassphrase}
+							<Icons.Loader2 class="h-4 w-4 animate-spin" />
+							Setting up...
+						{:else}
+							<Icons.Shield class="h-4 w-4" />
+							{hasPassphrase
+								? "Enable Accounts"
+								: "Set Passphrase & Enable"}
+						{/if}
+					</button>
+				</footer>
 			</Dialog.Content>
 		</Dialog.Positioner>
 	</Portal>
 </Dialog>
-

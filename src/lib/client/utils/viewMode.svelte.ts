@@ -5,7 +5,10 @@ export type ViewMode = "list" | "cards"
  * under its own key so characters sidebar, personas sidebar, and the home
  * page each remember the user's choice independently.
  */
-export function createViewMode(storageKey: string, defaultMode: ViewMode = "list") {
+export function createViewMode(
+	storageKey: string,
+	defaultMode: ViewMode = "list"
+) {
 	function load(): ViewMode {
 		if (typeof localStorage === "undefined") return defaultMode
 		const stored = localStorage.getItem(storageKey)

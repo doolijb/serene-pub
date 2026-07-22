@@ -1,106 +1,106 @@
 name: Docker
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
-      - "v*.*.*-dev"
-      - "v*.*.*-alpha"
-      - "v*.*.*-beta"
-      - "v*.*.*-pr-*"
-      - "v*.*.*-rc-*"
+    push:
+        tags:
+            - "v*.*.*"
+            - "v*.*.*-dev"
+            - "v*.*.*-alpha"
+            - "v*.*.*-beta"
+            - "v*.*.*-pr-*"
+            - "v*.*.*-rc-*"
 
 jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      packages: write
+    build-and-push:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+            packages: write
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
 
-      # -------------------------------------------------------
-      # Determine whether this tag is a stable release.
-      # Stable = vX.Y.Z or vX.Y.Z-beta (beta is a release, not a pre-release).
-      # Only stable releases receive the `latest` tag and the
-      # short major/minor convenience aliases (e.g. "1", "1.2").
-      # -------------------------------------------------------
-      - name: Classify release
-        id: classify
-        run: |
-          TAG="${{ github.ref_name }}"
-          VERSION="${TAG#v}"
-          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-beta)?$ ]]; then
-            echo "stable=true" >> "$GITHUB_OUTPUT"
-            echo "compose_tag=latest" >> "$GITHUB_OUTPUT"
-          else
-            echo "stable=false" >> "$GITHUB_OUTPUT"
-            echo "compose_tag=$VERSION" >> "$GITHUB_OUTPUT"
-          fi
-          echo "Tag: $TAG  →  stable=$( [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-beta)?$ ]] && echo true || echo false )"
+            # -------------------------------------------------------
+            # Determine whether this tag is a stable release.
+            # Stable = vX.Y.Z or vX.Y.Z-beta (beta is a release, not a pre-release).
+            # Only stable releases receive the `latest` tag and the
+            # short major/minor convenience aliases (e.g. "1", "1.2").
+            # -------------------------------------------------------
+            - name: Classify release
+              id: classify
+              run: |
+                  TAG="${{ github.ref_name }}"
+                  VERSION="${TAG#v}"
+                  if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-beta)?$ ]]; then
+                    echo "stable=true" >> "$GITHUB_OUTPUT"
+                    echo "compose_tag=latest" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "stable=false" >> "$GITHUB_OUTPUT"
+                    echo "compose_tag=$VERSION" >> "$GITHUB_OUTPUT"
+                  fi
+                  echo "Tag: $TAG  →  stable=$( [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-beta)?$ ]] && echo true || echo false )"
 
-      - name: Set up QEMU (multi-platform support)
-        uses: docker/setup-qemu-action@v3
+            - name: Set up QEMU (multi-platform support)
+              uses: docker/setup-qemu-action@v3
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+            - name: Log in to GitHub Container Registry
+              uses: docker/login-action@v3
+              with:
+                  registry: ghcr.io
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
 
-      # -------------------------------------------------------
-      # Tag strategy:
-      #
-      #   Stable  (v1.2.3)          → 1.2.3, 1.2, 1, latest
-      #   Stable  (v1.2.3-beta)     → 1.2.3-beta, 1.2, 1, latest
-      #   Pre-release (v1.2.3-rc-1) → 1.2.3-rc-1         only
-      #   Pre-release (v1.2.3-pr-5) → 1.2.3-pr-5         only
-      #
-      # Beta is treated as a stable release — it receives `latest`
-      # and the short major/minor aliases.
-      # The major (1) and minor (1.2) aliases are omitted for
-      # pre-releases so that "latest", "1", and "1.2" always
-      # resolve to a stable image.
-      # -------------------------------------------------------
-      - name: Generate Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          flavor: |
-            latest=${{ steps.classify.outputs.stable }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.classify.outputs.stable }}
-            type=semver,pattern={{major}},enable=${{ steps.classify.outputs.stable }}
+            # -------------------------------------------------------
+            # Tag strategy:
+            #
+            #   Stable  (v1.2.3)          → 1.2.3, 1.2, 1, latest
+            #   Stable  (v1.2.3-beta)     → 1.2.3-beta, 1.2, 1, latest
+            #   Pre-release (v1.2.3-rc-1) → 1.2.3-rc-1         only
+            #   Pre-release (v1.2.3-pr-5) → 1.2.3-pr-5         only
+            #
+            # Beta is treated as a stable release — it receives `latest`
+            # and the short major/minor aliases.
+            # The major (1) and minor (1.2) aliases are omitted for
+            # pre-releases so that "latest", "1", and "1.2" always
+            # resolve to a stable image.
+            # -------------------------------------------------------
+            - name: Generate Docker metadata
+              id: meta
+              uses: docker/metadata-action@v5
+              with:
+                  images: ghcr.io/${{ github.repository }}
+                  flavor: |
+                      latest=${{ steps.classify.outputs.stable }}
+                  tags: |
+                      type=semver,pattern={{version}}
+                      type=semver,pattern={{major}}.{{minor}},enable=${{ steps.classify.outputs.stable }}
+                      type=semver,pattern={{major}},enable=${{ steps.classify.outputs.stable }}
 
-      - name: Build and push image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # Layer cache via GitHub Actions cache (speeds up repeat builds)
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            - name: Build and push image
+              uses: docker/build-push-action@v6
+              with:
+                  context: .
+                  platforms: linux/amd64,linux/arm64
+                  push: true
+                  tags: ${{ steps.meta.outputs.tags }}
+                  labels: ${{ steps.meta.outputs.labels }}
+                  # Layer cache via GitHub Actions cache (speeds up repeat builds)
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
 
-      - name: Publish docker-compose.dist.yml to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          sed 's|ghcr.io/doolijb/serene-pub:latest|ghcr.io/doolijb/serene-pub:${{ steps.classify.outputs.compose_tag }}|' \
-            docker-compose.dist.yml > /tmp/docker-compose.yml
-          # Retry a few times — release.yml may still be creating the release
-          for i in 1 2 3 4 5; do
-            gh release upload "${{ github.ref_name }}" /tmp/docker-compose.yml --clobber && break
-            echo "Attempt $i failed, retrying in 30s..."
-            sleep 30
-          done
+            - name: Publish docker-compose.dist.yml to release
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  sed 's|ghcr.io/doolijb/serene-pub:latest|ghcr.io/doolijb/serene-pub:${{ steps.classify.outputs.compose_tag }}|' \
+                    docker-compose.dist.yml > /tmp/docker-compose.yml
+                  # Retry a few times — release.yml may still be creating the release
+                  for i in 1 2 3 4 5; do
+                    gh release upload "${{ github.ref_name }}" /tmp/docker-compose.yml --clobber && break
+                    echo "Attempt $i failed, retrying in 30s..."
+                    sleep 30
+                  done

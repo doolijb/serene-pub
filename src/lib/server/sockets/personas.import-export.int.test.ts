@@ -101,8 +101,11 @@ describe("personas import/export (PGlite integration)", () => {
 	})
 
 	test("importing an edited version of an already-imported persona (same uuid, different content) conflicts, then resolves via overwrite/createNew", async () => {
-		const { personasImportCard, personasImportResolve, personasExportCard } =
-			await import("./personas")
+		const {
+			personasImportCard,
+			personasImportResolve,
+			personasExportCard
+		} = await import("./personas")
 		const user = await makeUser("persona-conflict-user")
 
 		const created = await personasImportCard.handler(
@@ -128,7 +131,9 @@ describe("personas import/export (PGlite integration)", () => {
 			noopEmit
 		)
 		expect(conflictRes.status).toBe("conflict")
-		expect(conflictRes.conflict?.existingPersona.id).toBe(created.persona!.id)
+		expect(conflictRes.conflict?.existingPersona.id).toBe(
+			created.persona!.id
+		)
 
 		const overwritten = await personasImportResolve.handler(
 			fakeSocket(user.id),

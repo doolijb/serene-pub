@@ -31,7 +31,7 @@
 
 <Avatar class={size}>
 	<Avatar.Image
-		src={src ? src : char ? char.avatar || "" : ""}
+		src={src ? src : char ? char.avatar || undefined : undefined}
 		alt={char
 			? "nickname" in char && char.nickname
 				? char.nickname

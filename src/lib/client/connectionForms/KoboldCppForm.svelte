@@ -55,7 +55,9 @@
 	let { connection = $bindable() } = $props()
 
 	const socket = useTypedSocket()
-	const koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
+	const koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(
+		getContext("koboldCppSettingsCtx")
+	)
 	const defaultExtraJson =
 		CONNECTION_DEFAULTS[CONNECTION_TYPE.KOBOLDCPP].extraJson
 
@@ -69,7 +71,11 @@
 		$state(null)
 
 	socket.on("connections:test", (msg) => {
-		testResult = { ok: msg.ok, error: msg.error ?? undefined, models: msg.models }
+		testResult = {
+			ok: msg.ok,
+			error: msg.error ?? undefined,
+			models: msg.models
+		}
 	})
 
 	function handleTestConnection() {
@@ -114,7 +120,8 @@
 			bypassEos: extraJson.bypassEos ?? false,
 			grammarRetainState: extraJson.grammarRetainState ?? false,
 			logprobs: extraJson.logprobs ?? false,
-			replaceInstructPlaceholders: extraJson.replaceInstructPlaceholders ?? false,
+			replaceInstructPlaceholders:
+				extraJson.replaceInstructPlaceholders ?? false,
 			enableThinking: extraJson.enableThinking ?? null
 		}
 	}
@@ -161,11 +168,15 @@
 		<div
 			class="border-warning-500 bg-warning-500/10 mt-4 flex items-start gap-2 rounded-lg border p-3"
 		>
-			<Icons.AlertTriangle size={16} class="text-warning-700-300 mt-0.5 shrink-0" />
+			<Icons.AlertTriangle
+				size={16}
+				class="text-warning-700-300 mt-0.5 shrink-0"
+			/>
 			<p class="text-warning-700-300 text-sm">
-				KoboldCpp Manager is enabled — consider using a
-				<b>KCPP Manager</b> connection instead, unless this connects
-				to a different/external KoboldCpp instance.
+				KoboldCPP Manager is enabled — consider using a
+				<b>KCPP Manager</b>
+				connection instead, unless this connects to a different/external
+				KoboldCPP instance.
 			</p>
 		</div>
 	{/if}
@@ -237,59 +248,59 @@
 		</div>
 		{#if koboldCppFields}
 			<section class="w-full space-y-4 pt-4">
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="useChat">
+				<Switch
+					name="useChat"
+					checked={koboldCppFields.useChat}
+					onCheckedChange={(e) =>
+						(koboldCppFields!.useChat = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">
 						Use Chat Mode
-					</label>
-					<Switch
-						name="useChat"
-						checked={koboldCppFields.useChat}
-						onCheckedChange={(e) =>
-							(koboldCppFields!.useChat = e.checked)}
-						aria-labelledby="useChat"
+					</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 					>
-						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-							<Switch.Thumb />
-						</Switch.Control>
-						<Switch.HiddenInput />
-					</Switch>
-				</div>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
 				<p class="text-muted-foreground text-xs">
 					Enable to use OpenAI-style chat completion format instead of
 					text completion
 				</p>
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="stream">Stream</label>
-					<Switch
-						name="stream"
-						checked={koboldCppFields.stream}
-						onCheckedChange={(e) =>
-							(koboldCppFields!.stream = e.checked)}
-						aria-labelledby="stream"
+				<Switch
+					name="stream"
+					checked={koboldCppFields.stream}
+					onCheckedChange={(e) =>
+						(koboldCppFields!.stream = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">Stream</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 					>
-						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-							<Switch.Thumb />
-						</Switch.Control>
-						<Switch.HiddenInput />
-					</Switch>
-				</div>
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="useMemory">
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
+				<Switch
+					name="useMemory"
+					checked={koboldCppFields.useMemory}
+					onCheckedChange={(e) =>
+						(koboldCppFields!.useMemory = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">
 						Use Memory
-					</label>
-					<Switch
-						name="useMemory"
-						checked={koboldCppFields.useMemory}
-						onCheckedChange={(e) =>
-							(koboldCppFields!.useMemory = e.checked)}
-						aria-labelledby="useMemory"
+					</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 					>
-						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-							<Switch.Thumb />
-						</Switch.Control>
-						<Switch.HiddenInput />
-					</Switch>
-				</div>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
 				{#if koboldCppFields.useMemory}
 					<div class="flex flex-col gap-1">
 						<label class="font-semibold" for="memory">
@@ -307,125 +318,129 @@
 						</p>
 					</div>
 				{/if}
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="trimStop">
+				<Switch
+					name="trimStop"
+					checked={koboldCppFields.trimStop}
+					onCheckedChange={(e) =>
+						(koboldCppFields!.trimStop = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">
 						Trim Stop Sequences
-					</label>
-					<Switch
-						name="trimStop"
-						checked={koboldCppFields.trimStop}
-						onCheckedChange={(e) =>
-							(koboldCppFields!.trimStop = e.checked)}
-						aria-labelledby="trimStop"
+					</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 					>
-						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-							<Switch.Thumb />
-						</Switch.Control>
-						<Switch.HiddenInput />
-					</Switch>
-				</div>
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="renderSpecial">
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
+				<Switch
+					name="renderSpecial"
+					checked={koboldCppFields.renderSpecial}
+					onCheckedChange={(e) =>
+						(koboldCppFields!.renderSpecial = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">
 						Render Special Tokens
-					</label>
-					<Switch
-						name="renderSpecial"
-						checked={koboldCppFields.renderSpecial}
-						onCheckedChange={(e) =>
-							(koboldCppFields!.renderSpecial = e.checked)}
-						aria-labelledby="renderSpecial"
+					</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 					>
-						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-							<Switch.Thumb />
-						</Switch.Control>
-						<Switch.HiddenInput />
-					</Switch>
-				</div>
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="bypassEos">
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
+				<Switch
+					name="bypassEos"
+					checked={koboldCppFields.bypassEos}
+					onCheckedChange={(e) =>
+						(koboldCppFields!.bypassEos = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">
 						Bypass EOS Token
-					</label>
-					<Switch
-						name="bypassEos"
-						checked={koboldCppFields.bypassEos}
-						onCheckedChange={(e) =>
-							(koboldCppFields!.bypassEos = e.checked)}
-						aria-labelledby="bypassEos"
+					</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 					>
-						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-							<Switch.Thumb />
-						</Switch.Control>
-						<Switch.HiddenInput />
-					</Switch>
-				</div>
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="grammarRetainState">
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
+				<Switch
+					name="grammarRetainState"
+					checked={koboldCppFields.grammarRetainState}
+					onCheckedChange={(e) =>
+						(koboldCppFields!.grammarRetainState = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">
 						Retain Grammar State
-					</label>
-					<Switch
-						name="grammarRetainState"
-						checked={koboldCppFields.grammarRetainState}
-						onCheckedChange={(e) =>
-							(koboldCppFields!.grammarRetainState = e.checked)}
-						aria-labelledby="grammarRetainState"
+					</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 					>
-						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-							<Switch.Thumb />
-						</Switch.Control>
-						<Switch.HiddenInput />
-					</Switch>
-				</div>
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="logprobs">
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
+				<Switch
+					name="logprobs"
+					checked={koboldCppFields.logprobs}
+					onCheckedChange={(e) =>
+						(koboldCppFields!.logprobs = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">
 						Return Logprobs
-					</label>
-					<Switch
-						name="logprobs"
-						checked={koboldCppFields.logprobs}
-						onCheckedChange={(e) =>
-							(koboldCppFields!.logprobs = e.checked)}
-						aria-labelledby="logprobs"
+					</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 					>
-						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-							<Switch.Thumb />
-						</Switch.Control>
-						<Switch.HiddenInput />
-					</Switch>
-				</div>
-				<div class="flex items-center justify-between gap-4">
-					<label
-						class="font-semibold"
-						for="replaceInstructPlaceholders"
-					>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
+				<Switch
+					name="replaceInstructPlaceholders"
+					checked={koboldCppFields.replaceInstructPlaceholders}
+					onCheckedChange={(e) =>
+						(koboldCppFields!.replaceInstructPlaceholders =
+							e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">
 						Replace Instruct Placeholders
-					</label>
-					<Switch
-						name="replaceInstructPlaceholders"
-						checked={koboldCppFields.replaceInstructPlaceholders}
-						onCheckedChange={(e) =>
-							(koboldCppFields!.replaceInstructPlaceholders =
-								e.checked)}
-						aria-labelledby="replaceInstructPlaceholders"
+					</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 					>
-						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-							<Switch.Thumb />
-						</Switch.Control>
-						<Switch.HiddenInput />
-					</Switch>
-				</div>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
 				<div class="flex items-center justify-between gap-4">
 					<div>
 						<p class="font-semibold">Thinking / Reasoning</p>
-						<p class="text-muted-foreground text-xs">Auto lets the model decide based on its template</p>
+						<p class="text-muted-foreground text-xs">
+							Auto lets the model decide based on its template
+						</p>
 					</div>
-					<div class="flex rounded overflow-hidden border border-surface-300-700 text-sm">
+					<div
+						class="border-surface-300-700 flex overflow-hidden rounded border text-sm"
+					>
 						{#each [{ label: "Auto", value: null }, { label: "On", value: true }, { label: "Off", value: false }] as opt}
 							<button
 								type="button"
-								class="px-3 py-1 transition-colors {koboldCppFields.enableThinking === opt.value
+								class="px-3 py-1 transition-colors {koboldCppFields.enableThinking ===
+								opt.value
 									? 'preset-filled-primary-500'
 									: 'preset-filled-surface-400-600'}"
-								onclick={() => (koboldCppFields!.enableThinking = opt.value)}
+								onclick={() =>
+									(koboldCppFields!.enableThinking =
+										opt.value)}
 							>
 								{opt.label}
 							</button>

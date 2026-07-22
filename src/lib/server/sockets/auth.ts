@@ -34,7 +34,9 @@ export async function authMiddleware(
 		const origin = socket.handshake.headers.origin as string | undefined
 		const requestHost = socket.handshake.headers.host as string | undefined
 		if (!isOriginAllowed(origin, requestHost)) {
-			console.log(`Socket connection from disallowed origin "${origin}" — rejecting`)
+			console.log(
+				`Socket connection from disallowed origin "${origin}" — rejecting`
+			)
 			socket.disconnect()
 			return next(new Error("Origin not allowed"))
 		}

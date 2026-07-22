@@ -86,7 +86,6 @@
 			return
 		}
 
-
 		// Clear existing timer
 		if (autoSaveTimer) {
 			clearTimeout(autoSaveTimer)
@@ -102,7 +101,6 @@
 		if (!socket || !chatId || isGenerating) {
 			return
 		}
-
 
 		// Extract only the draft fields (exclude UI-only fields)
 		const draftToSave: Partial<AssistantCreateCharacter> = {
@@ -127,7 +125,6 @@
 			source: updatedData.source?.length ? updatedData.source : undefined,
 			characterVersion: updatedData.characterVersion || undefined
 		}
-
 
 		// Update the draft in chat metadata via socket
 		socket.emit(

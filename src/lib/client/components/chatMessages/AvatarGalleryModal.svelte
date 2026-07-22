@@ -36,7 +36,9 @@
 			loading = true
 			pendingId = entity.id
 			if (entity.type === "character") {
-				socket.emit("characters:listGallery", { characterId: entity.id })
+				socket.emit("characters:listGallery", {
+					characterId: entity.id
+				})
 			} else {
 				socket.emit("personas:listGallery", { personaId: entity.id })
 			}
@@ -45,7 +47,12 @@
 
 	onMount(() => {
 		const charHandler = (data: Sockets.Characters.ListGallery.Response) => {
-			if (!open || entity?.type !== "character" || entity.id !== pendingId) return
+			if (
+				!open ||
+				entity?.type !== "character" ||
+				entity.id !== pendingId
+			)
+				return
 			let imgs = data.images
 			// Ensure current avatar is in the list
 			if (entity.avatar && !imgs.includes(entity.avatar)) {
@@ -55,8 +62,11 @@
 			loading = false
 		}
 
-		const personaHandler = (data: Sockets.Personas.ListGallery.Response) => {
-			if (!open || entity?.type !== "persona" || entity.id !== pendingId) return
+		const personaHandler = (
+			data: Sockets.Personas.ListGallery.Response
+		) => {
+			if (!open || entity?.type !== "persona" || entity.id !== pendingId)
+				return
 			let imgs = data.images
 			if (entity.avatar && !imgs.includes(entity.avatar)) {
 				imgs = [entity.avatar, ...imgs]
@@ -77,17 +87,28 @@
 
 <Dialog {open} {onOpenChange}>
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl w-[min(95vw,560px)] max-h-[90vh] flex flex-col border border-surface-300-700">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 border-surface-300-700 flex max-h-[90vh] w-[min(95vw,560px)] flex-col space-y-4 border p-4 shadow-xl"
+			>
 				<header class="flex shrink-0 items-center justify-between">
 					<h2 class="h2">{entity?.name ?? "Avatar"}</h2>
-					<button class="btn btn-sm" onclick={() => onOpenChange({ open: false })}>
+					<button
+						class="btn btn-sm"
+						onclick={() => onOpenChange({ open: false })}
+					>
 						<Icons.X size={20} />
 					</button>
 				</header>
 
-				<article class="flex min-h-0 flex-1 flex-col items-center gap-4 overflow-y-auto">
+				<article
+					class="flex min-h-0 flex-1 flex-col items-center gap-4 overflow-y-auto"
+				>
 					<!-- Main image -->
 					{#if selectedSrc}
 						<img
@@ -96,12 +117,16 @@
 							class="border-surface-300-700 max-h-[55vh] max-w-full shrink-0 rounded-lg border object-contain"
 						/>
 					{:else}
-						<div class="text-surface-700-300 py-12 text-sm">No image available.</div>
+						<div class="text-surface-700-300 py-12 text-sm">
+							No image available.
+						</div>
 					{/if}
 
 					<!-- Gallery strip -->
 					{#if loading}
-						<div class="text-surface-700-300 flex shrink-0 items-center gap-2 text-sm">
+						<div
+							class="text-surface-700-300 flex shrink-0 items-center gap-2 text-sm"
+						>
 							<Icons.Loader size={16} class="animate-spin" />
 							Loading gallery…
 						</div>
@@ -110,7 +135,8 @@
 							{#each images as imgPath}
 								{#if !brokenPaths.has(imgPath)}
 									<button
-										class="overflow-hidden rounded border-2 transition-colors {selectedSrc === imgPath
+										class="overflow-hidden rounded border-2 transition-colors {selectedSrc ===
+										imgPath
 											? 'border-primary-500'
 											: 'border-surface-300-700 hover:border-surface-500'}"
 										onclick={() => (selectedSrc = imgPath)}
@@ -121,7 +147,10 @@
 											alt=""
 											class="h-16 w-16 object-cover"
 											onerror={() => {
-												brokenPaths = new Set([...brokenPaths, imgPath])
+												brokenPaths = new Set([
+													...brokenPaths,
+													imgPath
+												])
 											}}
 										/>
 									</button>

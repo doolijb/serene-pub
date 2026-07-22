@@ -6,7 +6,10 @@ import type {
 	CardSourceSearchParams,
 	CardSourceSearchResult
 } from "../types"
-import { CardSourceRateLimitedError, CardSourceUnavailableError } from "../types"
+import {
+	CardSourceRateLimitedError,
+	CardSourceUnavailableError
+} from "../types"
 import { acquire } from "./rateLimiter"
 import { hasActiveSession, withCharaVaultSession } from "./session"
 import { getOrFetchCardBytes } from "../diskCache"
@@ -65,7 +68,9 @@ function isSafeCardRefSegment(value: unknown): value is string {
 function toCharaVaultCardRef(ref: unknown): CharaVaultCardRef {
 	const { folder, file } = (ref ?? {}) as Partial<CharaVaultCardRef>
 	if (!isSafeCardRefSegment(folder) || !isSafeCardRefSegment(file)) {
-		throw new CardSourceUnavailableError("Invalid CharaVault card reference")
+		throw new CardSourceUnavailableError(
+			"Invalid CharaVault card reference"
+		)
 	}
 	return { folder, file }
 }
@@ -93,7 +98,11 @@ function mapCharaVaultItem(raw: any): LibraryCatalogItem | null {
 		// full description. `description`/`desc`/`summary` kept as fallbacks
 		// in case a differently-shaped payload ever comes through.
 		description:
-			raw.description_preview ?? raw.description ?? raw.desc ?? raw.summary ?? "",
+			raw.description_preview ??
+			raw.description ??
+			raw.desc ??
+			raw.summary ??
+			"",
 		tags: Array.isArray(raw.tags) ? raw.tags : [],
 		author: raw.creator ?? raw.author ?? "",
 		version: raw.version ?? raw.card_version ?? "",
@@ -144,7 +153,9 @@ async function charaVaultFetch(path: string): Promise<Response> {
  * genuinely need the complete bytes up front (import, which parses/embeds
  * the file).
  */
-export async function fetchCharaVaultCardResponse(ref: unknown): Promise<Response> {
+export async function fetchCharaVaultCardResponse(
+	ref: unknown
+): Promise<Response> {
 	const { folder, file } = toCharaVaultCardRef(ref)
 	const response = await charaVaultFetch(
 		`/cards/${encodeURIComponent(folder)}/${encodeURIComponent(file)}`
@@ -235,7 +246,9 @@ export const charaVaultSource: CardSource = {
 		// tag (eg. "milf"/"milfy" shows up in plenty of untagged card names).
 		if (!params.nsfw) {
 			items = items.filter(
-				(item) => !hasExcludedTag(item.tags) && !hasExcludedNameMatch(item.name)
+				(item) =>
+					!hasExcludedTag(item.tags) &&
+					!hasExcludedNameMatch(item.name)
 			)
 		}
 

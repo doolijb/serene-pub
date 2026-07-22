@@ -6,14 +6,46 @@
 
 	// Visually distinct, readable scene colors (work in both light and dark)
 	const SCENE_COLORS = [
-		{ bar: "hsl(220,65%,62%)", text: "hsl(220,65%,65%)", bg: "hsl(220,65%,62%,0.10)" },  // blue
-		{ bar: "hsl(150,52%,48%)", text: "hsl(150,52%,52%)", bg: "hsl(150,52%,48%,0.10)" },  // green
-		{ bar: "hsl(35, 75%,55%)", text: "hsl(35, 75%,58%)", bg: "hsl(35, 75%,55%,0.10)" },  // amber
-		{ bar: "hsl(280,55%,62%)", text: "hsl(280,55%,66%)", bg: "hsl(280,55%,62%,0.10)" },  // purple
-		{ bar: "hsl(340,60%,58%)", text: "hsl(340,60%,62%)", bg: "hsl(340,60%,58%,0.10)" },  // rose
-		{ bar: "hsl(190,60%,48%)", text: "hsl(190,60%,52%)", bg: "hsl(190,60%,48%,0.10)" },  // teal
-		{ bar: "hsl(55, 70%,50%)", text: "hsl(55, 70%,54%)", bg: "hsl(55, 70%,50%,0.10)" },  // yellow
-		{ bar: "hsl(15, 70%,55%)", text: "hsl(15, 70%,59%)", bg: "hsl(15, 70%,55%,0.10)" },  // orange
+		{
+			bar: "hsl(220,65%,62%)",
+			text: "hsl(220,65%,65%)",
+			bg: "hsl(220,65%,62%,0.10)"
+		}, // blue
+		{
+			bar: "hsl(150,52%,48%)",
+			text: "hsl(150,52%,52%)",
+			bg: "hsl(150,52%,48%,0.10)"
+		}, // green
+		{
+			bar: "hsl(35, 75%,55%)",
+			text: "hsl(35, 75%,58%)",
+			bg: "hsl(35, 75%,55%,0.10)"
+		}, // amber
+		{
+			bar: "hsl(280,55%,62%)",
+			text: "hsl(280,55%,66%)",
+			bg: "hsl(280,55%,62%,0.10)"
+		}, // purple
+		{
+			bar: "hsl(340,60%,58%)",
+			text: "hsl(340,60%,62%)",
+			bg: "hsl(340,60%,58%,0.10)"
+		}, // rose
+		{
+			bar: "hsl(190,60%,48%)",
+			text: "hsl(190,60%,52%)",
+			bg: "hsl(190,60%,48%,0.10)"
+		}, // teal
+		{
+			bar: "hsl(55, 70%,50%)",
+			text: "hsl(55, 70%,54%)",
+			bg: "hsl(55, 70%,50%,0.10)"
+		}, // yellow
+		{
+			bar: "hsl(15, 70%,55%)",
+			text: "hsl(15, 70%,59%)",
+			bg: "hsl(15, 70%,55%,0.10)"
+		} // orange
 	]
 
 	// Props for customizing the components used
@@ -28,9 +60,16 @@
 		sceneList?: Sockets.Scenes.List.SceneWithEntry[]
 
 		/** Called when user clicks a history-entry divider */
-		onHistoryEntryClick?: (info: { historyEntryId: number; lorebookId: number }) => void
+		onHistoryEntryClick?: (info: {
+			historyEntryId: number
+			lorebookId: number
+		}) => void
 		/** Called when user clicks a scene chip */
-		onSceneClick?: (info: { sceneId: number; historyEntryId: number; lorebookId: number }) => void
+		onSceneClick?: (info: {
+			sceneId: number
+			historyEntryId: number
+			lorebookId: number
+		}) => void
 		/** Called when user clicks "Start New Entry" after a completed entry with no successor */
 		onNewHistoryEntry?: (info: { lorebookId: number }) => void
 		/** Called when user clicks the "attach lorebook" suggestion shown when no lorebook is set */
@@ -194,7 +233,10 @@
 		if (!sceneList.length || !chat?.chatMessages.length) return map
 
 		// Build messageId → scene lookup
-		const messageToScene = new Map<number, Sockets.Scenes.List.SceneWithEntry>()
+		const messageToScene = new Map<
+			number,
+			Sockets.Scenes.List.SceneWithEntry
+		>()
 		for (const scene of sceneList) {
 			for (const msgId of scene.selectedMessageIds ?? []) {
 				messageToScene.set(msgId, scene)
@@ -206,8 +248,14 @@
 		for (const scene of sceneList) {
 			const ids = new Set(scene.selectedMessageIds ?? [])
 			if (!ids.size) continue
-			const ordered = chat.chatMessages.filter((m) => ids.has(m.id)).map((m) => m.id)
-			if (ordered.length) sceneBounds.set(scene.id, { first: ordered[0], last: ordered[ordered.length - 1] })
+			const ordered = chat.chatMessages
+				.filter((m) => ids.has(m.id))
+				.map((m) => m.id)
+			if (ordered.length)
+				sceneBounds.set(scene.id, {
+					first: ordered[0],
+					last: ordered[ordered.length - 1]
+				})
 		}
 
 		// For each history entry, find the last message across all its scenes
@@ -231,7 +279,10 @@
 		for (const msg of chat.chatMessages) {
 			const scene = messageToScene.get(msg.id)
 			if (scene && !sceneColorIndex.has(scene.id)) {
-				sceneColorIndex.set(scene.id, colorCounter % SCENE_COLORS.length)
+				sceneColorIndex.set(
+					scene.id,
+					colorCounter % SCENE_COLORS.length
+				)
 				colorCounter++
 			}
 		}
@@ -247,9 +298,11 @@
 			const isFirstInScene = bounds.first === msg.id
 			const isLastInScene = bounds.last === msg.id
 			const entryId = scene.historyEntryId
-			const isFirstOfEntry = isFirstInScene && !!entryId && !seenEntryIds.has(entryId)
+			const isFirstOfEntry =
+				isFirstInScene && !!entryId && !seenEntryIds.has(entryId)
 			if (isFirstOfEntry) seenEntryIds.add(entryId)
-			const isLastOfEntry = !!entryId && entryLastMsgId.get(entryId) === msg.id
+			const isLastOfEntry =
+				!!entryId && entryLastMsgId.get(entryId) === msg.id
 
 			map.set(msg.id, {
 				scene,
@@ -265,7 +318,11 @@
 		return map
 	}
 
-	function formatEntryDate(he: { year: number; month: number | null; day: number | null }): string {
+	function formatEntryDate(he: {
+		year: number
+		month: number | null
+		day: number | null
+	}): string {
 		let s = `Year ${he.year}`
 		if (he.month) s += `, Mo. ${he.month}`
 		if (he.day) s += `, Day ${he.day}`
@@ -290,12 +347,18 @@
 				     empty chat below, otherwise "No messages yet." flashes on
 				     every chat open even when it has hundreds of messages. -->
 				<div class="flex flex-col items-center gap-2 py-16">
-					<Icons.Loader2 size={28} class="text-surface-400 animate-spin" />
+					<Icons.Loader2
+						size={28}
+						class="text-surface-400 animate-spin"
+					/>
 					<span class="text-muted text-sm">Loading chat…</span>
 				</div>
 			{:else if chat.chatMessages.length === 0}
 				<div class="flex flex-col items-center gap-2 py-16 text-center">
-					<Icons.MessageSquareText size={28} class="text-surface-400" />
+					<Icons.MessageSquareText
+						size={28}
+						class="text-surface-400"
+					/>
 					<span class="text-muted text-sm">
 						Send a message to begin the roleplay
 					</span>
@@ -314,10 +377,12 @@
 				<ul
 					class="flex flex-1 flex-col gap-3"
 					role="group"
-					aria-label="Chat conversation with {chat.chatMessages.length} messages"
+					aria-label="Chat conversation with {chat.chatMessages
+						.length} messages"
 				>
 					{#each chat.chatMessages as msg, index (msg.id)}
-						{@const isLastMessage = index === chat.chatMessages.length - 1}
+						{@const isLastMessage =
+							index === chat.chatMessages.length - 1}
 						{@const si = msgSceneMap.get(msg.id)}
 						{@const color = si ? SCENE_COLORS[si.colorIndex] : null}
 
@@ -325,29 +390,51 @@
 						{#if si?.isFirstOfEntry && si.historyEntry}
 							<li class="w-full" role="separator">
 								<div class="my-1 flex items-center gap-2">
-									<div class="bg-surface-300-700 h-px flex-1"></div>
+									<div
+										class="bg-surface-300-700 h-px flex-1"
+									></div>
 									{#if onHistoryEntryClick}
 										<button
-											class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-semibold uppercase tracking-widest transition-all duration-100 select-none"
+											class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-semibold tracking-widest uppercase transition-all duration-100 select-none"
 											style="color: hsl(var(--color-surface-400)); background: transparent;"
-											onmouseenter={(e) => { const el = e.currentTarget as HTMLElement; el.style.background = "hsl(var(--color-surface-400))"; el.style.color = "white" }}
-											onmouseleave={(e) => { const el = e.currentTarget as HTMLElement; el.style.background = "transparent"; el.style.color = "hsl(var(--color-surface-400))" }}
-											onclick={() => onHistoryEntryClick!({
-												historyEntryId: si.scene.historyEntryId,
-												lorebookId: si.scene.lorebookId
-											})}
+											onmouseenter={(e) => {
+												const el =
+													e.currentTarget as HTMLElement
+												el.style.background =
+													"hsl(var(--color-surface-400))"
+												el.style.color = "white"
+											}}
+											onmouseleave={(e) => {
+												const el =
+													e.currentTarget as HTMLElement
+												el.style.background =
+													"transparent"
+												el.style.color =
+													"hsl(var(--color-surface-400))"
+											}}
+											onclick={() =>
+												onHistoryEntryClick!({
+													historyEntryId:
+														si.scene.historyEntryId,
+													lorebookId:
+														si.scene.lorebookId
+												})}
 											title="Open history entry in lorebook"
 										>
 											<Icons.Calendar size={11} />
 											{formatEntryDate(si.historyEntry)}
 										</button>
 									{:else}
-										<span class="text-surface-400 flex items-center gap-1.5 px-2 py-0.5 text-xs font-semibold uppercase tracking-widest whitespace-nowrap">
+										<span
+											class="text-surface-400 flex items-center gap-1.5 px-2 py-0.5 text-xs font-semibold tracking-widest whitespace-nowrap uppercase"
+										>
 											<Icons.Calendar size={11} />
 											{formatEntryDate(si.historyEntry)}
 										</span>
 									{/if}
-									<div class="bg-surface-300-700 h-px flex-1"></div>
+									<div
+										class="bg-surface-300-700 h-px flex-1"
+									></div>
 								</div>
 							</li>
 						{/if}
@@ -360,13 +447,27 @@
 										<button
 											class="inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium transition-all duration-100 select-none"
 											style="color: {color.text}; background: transparent;"
-											onmouseenter={(e) => { const el = e.currentTarget as HTMLElement; el.style.background = color.bar; el.style.color = "white" }}
-											onmouseleave={(e) => { const el = e.currentTarget as HTMLElement; el.style.background = "transparent"; el.style.color = color.text }}
-											onclick={() => onSceneClick!({
-												sceneId: si.scene.id,
-												historyEntryId: si.scene.historyEntryId,
-												lorebookId: si.scene.lorebookId
-											})}
+											onmouseenter={(e) => {
+												const el =
+													e.currentTarget as HTMLElement
+												el.style.background = color.bar
+												el.style.color = "white"
+											}}
+											onmouseleave={(e) => {
+												const el =
+													e.currentTarget as HTMLElement
+												el.style.background =
+													"transparent"
+												el.style.color = color.text
+											}}
+											onclick={() =>
+												onSceneClick!({
+													sceneId: si.scene.id,
+													historyEntryId:
+														si.scene.historyEntryId,
+													lorebookId:
+														si.scene.lorebookId
+												})}
 											title="Open scene in lorebook"
 										>
 											<Icons.Film size={11} />
@@ -434,41 +535,83 @@
 						{#if si?.isLastOfEntry && si.historyEntry?.isCompleted}
 							<li class="w-full" role="separator">
 								<div class="my-1 flex items-center gap-2">
-									<div class="bg-surface-300-700 h-px flex-1"></div>
+									<div
+										class="bg-surface-300-700 h-px flex-1"
+									></div>
 									{#if si.historyEntry.nextEntry}
-										{@const next = si.historyEntry.nextEntry}
+										{@const next =
+											si.historyEntry.nextEntry}
 										{#if onHistoryEntryClick}
 											<button
-												class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-semibold uppercase tracking-widest transition-all duration-100 select-none"
+												class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-semibold tracking-widest uppercase transition-all duration-100 select-none"
 												style="color: hsl(var(--color-surface-400)); background: transparent;"
-												onmouseenter={(e) => { const el = e.currentTarget as HTMLElement; el.style.background = "hsl(var(--color-surface-400))"; el.style.color = "white" }}
-												onmouseleave={(e) => { const el = e.currentTarget as HTMLElement; el.style.background = "transparent"; el.style.color = "hsl(var(--color-surface-400))" }}
-												onclick={() => onHistoryEntryClick!({ historyEntryId: next.id, lorebookId: si.scene.lorebookId })}
+												onmouseenter={(e) => {
+													const el =
+														e.currentTarget as HTMLElement
+													el.style.background =
+														"hsl(var(--color-surface-400))"
+													el.style.color = "white"
+												}}
+												onmouseleave={(e) => {
+													const el =
+														e.currentTarget as HTMLElement
+													el.style.background =
+														"transparent"
+													el.style.color =
+														"hsl(var(--color-surface-400))"
+												}}
+												onclick={() =>
+													onHistoryEntryClick!({
+														historyEntryId: next.id,
+														lorebookId:
+															si.scene.lorebookId
+													})}
 												title="Open next history entry in lorebook"
 											>
 												<Icons.Calendar size={11} />
 												Next: {formatEntryDate(next)}
 											</button>
 										{:else}
-											<span class="text-surface-400 flex items-center gap-1.5 px-2 py-0.5 text-xs font-semibold uppercase tracking-widest whitespace-nowrap">
+											<span
+												class="text-surface-400 flex items-center gap-1.5 px-2 py-0.5 text-xs font-semibold tracking-widest whitespace-nowrap uppercase"
+											>
 												<Icons.Calendar size={11} />
 												Next: {formatEntryDate(next)}
 											</span>
 										{/if}
 									{:else}
 										<button
-											class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-semibold uppercase tracking-widest transition-all duration-100 select-none"
+											class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-semibold tracking-widest uppercase transition-all duration-100 select-none"
 											style="color: hsl(var(--color-primary-500)); background: transparent;"
-											onmouseenter={(e) => { const el = e.currentTarget as HTMLElement; el.style.background = "hsl(var(--color-primary-500))"; el.style.color = "white" }}
-											onmouseleave={(e) => { const el = e.currentTarget as HTMLElement; el.style.background = "transparent"; el.style.color = "hsl(var(--color-primary-500))" }}
-											onclick={() => onNewHistoryEntry?.({ lorebookId: si.scene.lorebookId })}
+											onmouseenter={(e) => {
+												const el =
+													e.currentTarget as HTMLElement
+												el.style.background =
+													"hsl(var(--color-primary-500))"
+												el.style.color = "white"
+											}}
+											onmouseleave={(e) => {
+												const el =
+													e.currentTarget as HTMLElement
+												el.style.background =
+													"transparent"
+												el.style.color =
+													"hsl(var(--color-primary-500))"
+											}}
+											onclick={() =>
+												onNewHistoryEntry?.({
+													lorebookId:
+														si.scene.lorebookId
+												})}
 											title="Start a new history entry"
 										>
 											<Icons.CalendarPlus size={11} />
 											Start New Entry
 										</button>
 									{/if}
-									<div class="bg-surface-300-700 h-px flex-1"></div>
+									<div
+										class="bg-surface-300-700 h-px flex-1"
+									></div>
 								</div>
 							</li>
 						{/if}
@@ -481,10 +624,19 @@
 				<div class="my-2 flex items-center gap-2">
 					<div class="bg-surface-300-700 h-px flex-1"></div>
 					<button
-						class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-semibold uppercase tracking-widest transition-all duration-100 select-none"
+						class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-semibold tracking-widest uppercase transition-all duration-100 select-none"
 						style="color: hsl(var(--color-primary-500)); background: transparent;"
-						onmouseenter={(e) => { const el = e.currentTarget as HTMLElement; el.style.background = "hsl(var(--color-primary-500))"; el.style.color = "white" }}
-						onmouseleave={(e) => { const el = e.currentTarget as HTMLElement; el.style.background = "transparent"; el.style.color = "hsl(var(--color-primary-500))" }}
+						onmouseenter={(e) => {
+							const el = e.currentTarget as HTMLElement
+							el.style.background =
+								"hsl(var(--color-primary-500))"
+							el.style.color = "white"
+						}}
+						onmouseleave={(e) => {
+							const el = e.currentTarget as HTMLElement
+							el.style.background = "transparent"
+							el.style.color = "hsl(var(--color-primary-500))"
+						}}
 						onclick={() => onAttachLorebook?.()}
 						title="Attach a lorebook to track history entries and scenes"
 					>

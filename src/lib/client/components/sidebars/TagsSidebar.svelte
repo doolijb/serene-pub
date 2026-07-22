@@ -426,13 +426,17 @@
 			<div class="mb-4 flex items-center gap-2">
 				<button
 					class="btn btn-sm preset-filled-surface-400-600"
-					onclick={() => { selectedTag = null }}
+					onclick={() => {
+						selectedTag = null
+					}}
 					title="Back to tags"
 				>
 					<Icons.ChevronLeft size={16} />
 					Back
 				</button>
-				<h2 class="min-w-0 flex-1 truncate font-semibold">{selectedTag.name}</h2>
+				<h2 class="min-w-0 flex-1 truncate font-semibold">
+					{selectedTag.name}
+				</h2>
 				<button
 					class="btn btn-sm preset-filled-surface-400-600"
 					onclick={handleEditClick}
@@ -452,7 +456,9 @@
 			</div>
 
 			{#if selectedTag.description}
-				<div class="border-primary-500 bg-surface-50-950 mb-4 rounded-lg border p-4">
+				<div
+					class="border-primary-500 bg-surface-50-950 mb-4 rounded-lg border p-4"
+				>
 					<p class="text-muted-foreground text-sm">
 						{selectedTag.description}
 					</p>
@@ -602,7 +608,7 @@
 					{#if validationErrors.name}
 						<p
 							id="name-error"
-							class="mt-1 text-sm text-error-500"
+							class="text-error-500 mt-1 text-sm"
 							role="alert"
 						>
 							{validationErrors.name}
@@ -705,7 +711,7 @@
 					{#if editValidationErrors.name}
 						<p
 							id="edit-name-error"
-							class="mt-1 text-sm text-error-500"
+							class="text-error-500 mt-1 text-sm"
 							role="alert"
 						>
 							{editValidationErrors.name}
@@ -782,7 +788,10 @@
 
 		{#if isLoading}
 			<div class="flex items-center justify-center py-8">
-				<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+				<Icons.Loader2
+					size={20}
+					class="text-surface-400 animate-spin"
+				/>
 			</div>
 		{:else if filteredTags.length === 0}
 			<EmptyState
@@ -814,17 +823,26 @@
 
 <!-- Delete confirmation modal -->
 {#if showDeleteModal}
-	<Dialog open={showDeleteModal} onOpenChange={(e) => (showDeleteModal = e.open)}>
+	<Dialog
+		open={showDeleteModal}
+		onOpenChange={(e) => (showDeleteModal = e.open)}
+	>
 		<Portal>
-			<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-				<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw]">
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
+			>
+				<Dialog.Content
+					class="card bg-surface-100-900 max-w-[95vw] space-y-4 p-4 shadow-xl"
+				>
 					<div class="p-6">
 						<h2 class="mb-2 text-lg font-bold">Delete Tag?</h2>
 						<p class="mb-4">
 							Are you sure you want to delete the tag "{tagToDelete?.name}"?
-							This action cannot be undone and will remove the tag from
-							all associated items.
+							This action cannot be undone and will remove the tag
+							from all associated items.
 						</p>
 						<div class="flex justify-end gap-2">
 							<button

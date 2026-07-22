@@ -59,7 +59,11 @@
 		<Tabs value={activeTab} onValueChange={handleTabChange}>
 			<Tabs.List class="flex flex-wrap gap-1">
 				<Tabs.Trigger value="user">
-					<span title="User" aria-label="User tab" class="flex items-center gap-1">
+					<span
+						title="User"
+						aria-label="User tab"
+						class="flex items-center gap-1"
+					>
 						<Icons.UserCog size={20} class="inline" />
 						{#if activeTab === "user"}
 							User
@@ -68,7 +72,11 @@
 				</Tabs.Trigger>
 				{#if userCtx.user?.isAdmin}
 					<Tabs.Trigger value="system">
-						<span title="System" aria-label="System tab" class="flex items-center gap-1">
+						<span
+							title="System"
+							aria-label="System tab"
+							class="flex items-center gap-1"
+						>
 							<Icons.Server size={20} class="inline" />
 							{#if activeTab === "system"}
 								System
@@ -77,7 +85,11 @@
 					</Tabs.Trigger>
 				{/if}
 				<Tabs.Trigger value="themes">
-					<span title="Themes" aria-label="Themes tab" class="flex items-center gap-1">
+					<span
+						title="Themes"
+						aria-label="Themes tab"
+						class="flex items-center gap-1"
+					>
 						<Icons.Palette size={20} class="inline" />
 						{#if activeTab === "themes"}
 							Themes
@@ -85,7 +97,11 @@
 					</span>
 				</Tabs.Trigger>
 				<Tabs.Trigger value="about">
-					<span title="About" aria-label="About tab" class="flex items-center gap-1">
+					<span
+						title="About"
+						aria-label="About tab"
+						class="flex items-center gap-1"
+					>
 						<Icons.Info size={20} class="inline" />
 						{#if activeTab === "about"}
 							About
@@ -112,110 +128,101 @@
 			</Tabs.Content>
 			<Tabs.Content value="about">
 				{#if activeTab === "about"}
-						<div class="flex flex-col gap-4">
-							<div class="mb-1 flex items-center gap-2">
-								<Icons.Info
-									size={20}
-									class="text-primary-500"
-								/>
-								<span class="text-lg font-bold tracking-wide">
-									Serene Pub
-								</span>
-								<span
-									class="bg-primary-200-800 text-primary-700 dark:text-primary-200 ml-2 rounded px-2 py-0.5 font-mono text-xs"
-								>
-									{appVersionDisplay}
-								</span>
-							</div>
-							<div class="text-surface-700-300 mb-2 text-xs">
-								Build: <span class="font-mono">
-									{appVersion}
-								</span>
-							</div>
-							<div class="flex flex-wrap items-center gap-3">
-								<a
-									href="https://github.com/doolijb/serene-pub"
-									target="_blank"
-									rel="noopener noreferrer"
-									class="btn preset-filled-primary-500 gap-1"
-									aria-label="Visit Serene Pub GitHub repository"
-								>
-									<Icons.GitBranch
-										size={16}
-										aria-hidden="true"
-									/>
-									<span>Repository</span>
-								</a>
-								<a
-									href="https://github.com/doolijb/serene-pub/wiki"
-									target="_blank"
-									rel="noopener noreferrer"
-									class="btn preset-filled-surface-500"
-									aria-label="Visit Serene Pub wiki documentation"
-								>
-									<Icons.BookOpen
-										size={16}
-										aria-hidden="true"
-									/>
-									<span>Wiki</span>
-								</a>
-								<a
-									href="https://discord.gg/3kUx3MDcSa"
-									target="_blank"
-									rel="noopener noreferrer"
-									class="btn preset-filled-tertiary-500"
-									aria-label="Join Serene Pub Discord community"
-								>
-									<Icons.MessageSquare
-										size={16}
-										aria-hidden="true"
-									/>
-									<span>Discord</span>
-								</a>
-								<a
-									href="https://github.com/doolijb/serene-pub/issues"
-									target="_blank"
-									rel="noopener noreferrer"
-									class="btn preset-filled-error-500"
-									aria-label="Report issues on GitHub"
-								>
-									<Icons.AlertCircle
-										size={16}
-										aria-hidden="true"
-									/>
-									<span>Issues</span>
-								</a>
-								<a
-									href="https://github.com/doolijb/serene-pub/discussions"
-									target="_blank"
-									rel="noopener noreferrer"
-									class="btn preset-filled-secondary-500"
-									aria-label="Join discussions on GitHub"
-								>
-									<Icons.MessageCircle
-										size={16}
-										aria-hidden="true"
-									/>
-									<span>Discussions</span>
-								</a>
-							</div>
-							<div class="text-muted-foreground mt-2 text-xs">
-								&copy; {new Date().getFullYear()} Serene Pub (
-								<a
-									href="https://github.com/doolijb"
-									target="_blank"
-									rel="noopener noreferrer"
-									class="text-primary-500 hover:underline"
-								>
-									Jody Doolittle
-								</a>
-								).
-							</div>
-							<div class="text-muted-foreground mt-2 text-xs">
-								Distributed under the AGPL-3.0 License.
-							</div>
+					<div class="flex flex-col gap-4">
+						<div class="mb-1 flex items-center gap-2">
+							<Icons.Info size={20} class="text-primary-500" />
+							<span class="text-lg font-bold tracking-wide">
+								Serene Pub
+							</span>
+							<span
+								class="bg-primary-200-800 text-primary-700 dark:text-primary-200 ml-2 rounded px-2 py-0.5 font-mono text-xs"
+							>
+								{appVersionDisplay}
+							</span>
 						</div>
-					{/if}
+						<div class="text-surface-700-300 mb-2 text-xs">
+							Build: <span class="font-mono">
+								{appVersion}
+							</span>
+						</div>
+						<div class="flex flex-wrap items-center gap-3">
+							<a
+								href="https://github.com/doolijb/serene-pub"
+								target="_blank"
+								rel="noopener noreferrer"
+								class="btn preset-filled-primary-500 gap-1"
+								aria-label="Visit Serene Pub GitHub repository"
+							>
+								<Icons.GitBranch size={16} aria-hidden="true" />
+								<span>Repository</span>
+							</a>
+							<a
+								href="https://github.com/doolijb/serene-pub/wiki"
+								target="_blank"
+								rel="noopener noreferrer"
+								class="btn preset-filled-surface-500"
+								aria-label="Visit Serene Pub wiki documentation"
+							>
+								<Icons.BookOpen size={16} aria-hidden="true" />
+								<span>Wiki</span>
+							</a>
+							<a
+								href="https://discord.gg/3kUx3MDcSa"
+								target="_blank"
+								rel="noopener noreferrer"
+								class="btn preset-filled-tertiary-500"
+								aria-label="Join Serene Pub Discord community"
+							>
+								<Icons.MessageSquare
+									size={16}
+									aria-hidden="true"
+								/>
+								<span>Discord</span>
+							</a>
+							<a
+								href="https://github.com/doolijb/serene-pub/issues"
+								target="_blank"
+								rel="noopener noreferrer"
+								class="btn preset-filled-error-500"
+								aria-label="Report issues on GitHub"
+							>
+								<Icons.AlertCircle
+									size={16}
+									aria-hidden="true"
+								/>
+								<span>Issues</span>
+							</a>
+							<a
+								href="https://github.com/doolijb/serene-pub/discussions"
+								target="_blank"
+								rel="noopener noreferrer"
+								class="btn preset-filled-secondary-500"
+								aria-label="Join discussions on GitHub"
+							>
+								<Icons.MessageCircle
+									size={16}
+									aria-hidden="true"
+								/>
+								<span>Discussions</span>
+							</a>
+						</div>
+						<div class="text-muted-foreground mt-2 text-xs">
+							&copy; {new Date().getFullYear()} Serene Pub (
+							<a
+								href="https://github.com/doolijb"
+								target="_blank"
+								rel="noopener noreferrer"
+								class="text-primary-500 hover:underline"
+							>
+								Jody Doolittle
+							</a>
+							).
+						</div>
+						<div class="text-muted-foreground mt-2 text-xs">
+							Distributed under the AGPL-3.0 License.
+						</div>
+					</div>
+				{/if}
 			</Tabs.Content>
 		</Tabs>
 	</div>

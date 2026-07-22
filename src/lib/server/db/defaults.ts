@@ -287,15 +287,16 @@ Example dialogue:
 		const existingNarratorPromptConfigs =
 			await db.query.narratorPromptConfigs.findMany()
 
-		const defaultNarratorPromptConfigs: Partial<SelectNarratorPromptConfig>[] = [
-			{
-				id: 1,
-				name: "Narrator",
-				isImmutable: true,
-				narratorName: "Narrator",
-				systemPrompt: `You are narrating the world of this fictional roleplay — not any single character. Describe the environment, atmosphere, weather, and any side characters, shopkeepers, monsters, or other third parties present. Voice any minor NPCs directly if the scene calls for it. Do not speak or act as {{characterNames}} or {{personaNames}}. Keep the response focused on scene-setting and flavor, not advancing {{characterNames}}'s own actions or dialogue.`
-			}
-		]
+		const defaultNarratorPromptConfigs: Partial<SelectNarratorPromptConfig>[] =
+			[
+				{
+					id: 1,
+					name: "Narrator",
+					isImmutable: true,
+					narratorName: "Narrator",
+					systemPrompt: `You are narrating the world of this fictional roleplay — not any single character. Describe the environment, atmosphere, weather, and any side characters, shopkeepers, monsters, or other third parties present. Voice any minor NPCs directly if the scene calls for it. Do not speak or act as {{characterNames}} or {{personaNames}}. Keep the response focused on scene-setting and flavor, not advancing {{characterNames}}'s own actions or dialogue.`
+				}
+			]
 
 		const narratorPromptConfigQueries: Promise<any>[] = []
 
@@ -328,33 +329,41 @@ Example dialogue:
 
 		// World Summarize Configs
 
-		const existingWorldSummarizeConfigs = await db.query.worldSummarizeConfigs.findMany()
-		const defaultWorldSummarizeConfigs: Partial<SelectWorldSummarizeConfig>[] = [
-			{
-				id: 1,
-				name: "Default World Summarization",
-				isImmutable: true,
-				batchSystemPrompt:
-					"You are an archivist recording world-building facts from a roleplay exchange. Your records are concise bullet points that capture facts, changes, and discoveries about the setting. You write only what is directly shown — no invention, no embellishment.",
-				synthSystemPrompt:
-					"You are a master archivist. Given draft bullet points covering a roleplay exchange, you merge them into a single clean world lore entry. You write only what the drafts contain — no invention, no embellishment.",
-				nameSystemPrompt:
-					"You generate short titles for world lore entries. The title should describe the subject of the entry."
-			}
-		]
+		const existingWorldSummarizeConfigs =
+			await db.query.worldSummarizeConfigs.findMany()
+		const defaultWorldSummarizeConfigs: Partial<SelectWorldSummarizeConfig>[] =
+			[
+				{
+					id: 1,
+					name: "Default World Summarization",
+					isImmutable: true,
+					batchSystemPrompt:
+						"You are an archivist recording world-building facts from a roleplay exchange. Your records are concise bullet points that capture facts, changes, and discoveries about the setting. You write only what is directly shown — no invention, no embellishment.",
+					synthSystemPrompt:
+						"You are a master archivist. Given draft bullet points covering a roleplay exchange, you merge them into a single clean world lore entry. You write only what the drafts contain — no invention, no embellishment.",
+					nameSystemPrompt:
+						"You generate short titles for world lore entries. The title should describe the subject of the entry."
+				}
+			]
 		const worldSummarizeConfigQueries: Promise<any>[] = []
 		defaultWorldSummarizeConfigs.forEach((data) => {
-			const found = existingWorldSummarizeConfigs.find((c) => c.id === data.id)
+			const found = existingWorldSummarizeConfigs.find(
+				(c) => c.id === data.id
+			)
 			if (!found) {
 				worldSummarizeConfigQueries.push(
-					db.insert(schema.worldSummarizeConfigs).values(data as InsertWorldSummarizeConfig)
+					db
+						.insert(schema.worldSummarizeConfigs)
+						.values(data as InsertWorldSummarizeConfig)
 				)
 			} else {
 				worldSummarizeConfigQueries.push(
 					db
 						.update(schema.worldSummarizeConfigs)
-						.set({ ...data, // @ts-ignore
-							id: undefined })
+						.set({
+							...data, // @ts-ignore
+							id: undefined
+						})
 						.where(eq(schema.worldSummarizeConfigs.id, found.id))
 				)
 			}
@@ -363,34 +372,44 @@ Example dialogue:
 
 		// Character Summarize Configs
 
-		const existingCharacterSummarizeConfigs = await db.query.characterSummarizeConfigs.findMany()
-		const defaultCharacterSummarizeConfigs: Partial<SelectCharacterSummarizeConfig>[] = [
-			{
-				id: 1,
-				name: "Default Character Summarization",
-				isImmutable: true,
-				batchSystemPrompt:
-					"You are a character archivist recording facts about a specific character from a roleplay exchange. Your records are concise bullet points that capture who the character is, what they did, and how they relate to others. You write only what is directly shown — no invention, no embellishment.",
-				synthSystemPrompt:
-					"You are a master character archivist. Given draft bullet points about a character from a roleplay exchange, you merge them into a single clean character lore entry. You write only what the drafts contain — no invention, no embellishment.",
-				nameSystemPrompt:
-					"You generate short titles for character lore entries. The title should describe the subject matter of the entry (e.g. an ability, relationship, or past event)."
-			}
-		]
+		const existingCharacterSummarizeConfigs =
+			await db.query.characterSummarizeConfigs.findMany()
+		const defaultCharacterSummarizeConfigs: Partial<SelectCharacterSummarizeConfig>[] =
+			[
+				{
+					id: 1,
+					name: "Default Character Summarization",
+					isImmutable: true,
+					batchSystemPrompt:
+						"You are a character archivist recording facts about a specific character from a roleplay exchange. Your records are concise bullet points that capture who the character is, what they did, and how they relate to others. You write only what is directly shown — no invention, no embellishment.",
+					synthSystemPrompt:
+						"You are a master character archivist. Given draft bullet points about a character from a roleplay exchange, you merge them into a single clean character lore entry. You write only what the drafts contain — no invention, no embellishment.",
+					nameSystemPrompt:
+						"You generate short titles for character lore entries. The title should describe the subject matter of the entry (e.g. an ability, relationship, or past event)."
+				}
+			]
 		const characterSummarizeConfigQueries: Promise<any>[] = []
 		defaultCharacterSummarizeConfigs.forEach((data) => {
-			const found = existingCharacterSummarizeConfigs.find((c) => c.id === data.id)
+			const found = existingCharacterSummarizeConfigs.find(
+				(c) => c.id === data.id
+			)
 			if (!found) {
 				characterSummarizeConfigQueries.push(
-					db.insert(schema.characterSummarizeConfigs).values(data as InsertCharacterSummarizeConfig)
+					db
+						.insert(schema.characterSummarizeConfigs)
+						.values(data as InsertCharacterSummarizeConfig)
 				)
 			} else {
 				characterSummarizeConfigQueries.push(
 					db
 						.update(schema.characterSummarizeConfigs)
-						.set({ ...data, // @ts-ignore
-							id: undefined })
-						.where(eq(schema.characterSummarizeConfigs.id, found.id))
+						.set({
+							...data, // @ts-ignore
+							id: undefined
+						})
+						.where(
+							eq(schema.characterSummarizeConfigs.id, found.id)
+						)
 				)
 			}
 		})
@@ -398,35 +417,43 @@ Example dialogue:
 
 		// Scene Summarize Configs
 
-		const existingSceneSummarizeConfigs = await db.query.sceneSummarizeConfigs.findMany()
-		const defaultSceneSummarizeConfigs: Partial<SelectSceneSummarizeConfig>[] = [
-			{
-				id: 1,
-				name: "Default Scene Summarization",
-				isImmutable: true,
-				batchSystemPrompt:
-					"You are a scene archivist capturing what happened in a discrete story moment from a roleplay exchange. You write a tight narrative summary — past tense, plain prose — that captures the key beats, actions, and emotional turning points. No invention, no embellishment.",
-				synthSystemPrompt:
-					"You are a master scene editor. Given draft scene summaries covering a roleplay exchange in chronological order, you merge them into a single coherent scene narrative. You write only what the drafts contain — no invention, no embellishment.",
-				nameSystemPrompt:
-					"You generate short titles for scene summaries. The title should capture the key moment or action of the scene.",
-				characterExtractionSystemPrompt:
-					"You extract character names from a scene summary into two groups.\n\nPARTICIPANTS — characters who are physically present and doing something in this scene: speaking, fighting, moving, reacting, making decisions, or otherwise taking part in events as they unfold. If the scene describes them acting, it belongs here.\n\nMENTIONED — characters who are brought up in conversation or thought but are not present and not acting in the scene. They are talked about, remembered, referenced, or discussed by others — but they themselves do nothing in this scene.\n\nRules:\n- A character who acts in the scene is always a participant, even if they are also talked about.\n- A character who only appears in someone's dialogue, memory, or backstory — and never acts — is mentioned only.\n- Include named characters and named creatures only. No unnamed extras, no places, no objects.\n- Output ONLY a raw JSON object. No explanation, no markdown, no code fences."
-			}
-		]
+		const existingSceneSummarizeConfigs =
+			await db.query.sceneSummarizeConfigs.findMany()
+		const defaultSceneSummarizeConfigs: Partial<SelectSceneSummarizeConfig>[] =
+			[
+				{
+					id: 1,
+					name: "Default Scene Summarization",
+					isImmutable: true,
+					batchSystemPrompt:
+						"You are a scene archivist capturing what happened in a discrete story moment from a roleplay exchange. You write a tight narrative summary — past tense, plain prose — that captures the key beats, actions, and emotional turning points. No invention, no embellishment.",
+					synthSystemPrompt:
+						"You are a master scene editor. Given draft scene summaries covering a roleplay exchange in chronological order, you merge them into a single coherent scene narrative. You write only what the drafts contain — no invention, no embellishment.",
+					nameSystemPrompt:
+						"You generate short titles for scene summaries. The title should capture the key moment or action of the scene.",
+					characterExtractionSystemPrompt:
+						"You extract character names from a scene summary into two groups.\n\nPARTICIPANTS — characters who are physically present and doing something in this scene: speaking, fighting, moving, reacting, making decisions, or otherwise taking part in events as they unfold. If the scene describes them acting, it belongs here.\n\nMENTIONED — characters who are brought up in conversation or thought but are not present and not acting in the scene. They are talked about, remembered, referenced, or discussed by others — but they themselves do nothing in this scene.\n\nRules:\n- A character who acts in the scene is always a participant, even if they are also talked about.\n- A character who only appears in someone's dialogue, memory, or backstory — and never acts — is mentioned only.\n- Include named characters and named creatures only. No unnamed extras, no places, no objects.\n- Output ONLY a raw JSON object. No explanation, no markdown, no code fences."
+				}
+			]
 		const sceneSummarizeConfigQueries: Promise<any>[] = []
 		defaultSceneSummarizeConfigs.forEach((data) => {
-			const found = existingSceneSummarizeConfigs.find((c) => c.id === data.id)
+			const found = existingSceneSummarizeConfigs.find(
+				(c) => c.id === data.id
+			)
 			if (!found) {
 				sceneSummarizeConfigQueries.push(
-					db.insert(schema.sceneSummarizeConfigs).values(data as InsertSceneSummarizeConfig)
+					db
+						.insert(schema.sceneSummarizeConfigs)
+						.values(data as InsertSceneSummarizeConfig)
 				)
 			} else {
 				sceneSummarizeConfigQueries.push(
 					db
 						.update(schema.sceneSummarizeConfigs)
-						.set({ ...data, // @ts-ignore
-							id: undefined })
+						.set({
+							...data, // @ts-ignore
+							id: undefined
+						})
 						.where(eq(schema.sceneSummarizeConfigs.id, found.id))
 				)
 			}
@@ -440,7 +467,8 @@ Example dialogue:
 		// and so systemSettings.defaultGraphBuildConfigId isn't left dangling
 		// at null, matching every sibling immutable-config table's convention.
 
-		const existingGraphBuildConfigs = await db.query.graphBuildConfigs.findMany()
+		const existingGraphBuildConfigs =
+			await db.query.graphBuildConfigs.findMany()
 		const defaultGraphBuildConfigs: Partial<SelectGraphBuildConfig>[] = [
 			{
 				id: 1,
@@ -456,17 +484,23 @@ Example dialogue:
 		]
 		const graphBuildConfigQueries: Promise<any>[] = []
 		defaultGraphBuildConfigs.forEach((data) => {
-			const found = existingGraphBuildConfigs.find((c) => c.id === data.id)
+			const found = existingGraphBuildConfigs.find(
+				(c) => c.id === data.id
+			)
 			if (!found) {
 				graphBuildConfigQueries.push(
-					db.insert(schema.graphBuildConfigs).values(data as InsertGraphBuildConfig)
+					db
+						.insert(schema.graphBuildConfigs)
+						.values(data as InsertGraphBuildConfig)
 				)
 			} else {
 				graphBuildConfigQueries.push(
 					db
 						.update(schema.graphBuildConfigs)
-						.set({ ...data, // @ts-ignore
-							id: undefined })
+						.set({
+							...data, // @ts-ignore
+							id: undefined
+						})
 						.where(eq(schema.graphBuildConfigs.id, found.id))
 				)
 			}
@@ -534,16 +568,22 @@ Example dialogue:
 	}
 
 	try {
-		const vecConfig = await db.query.vectorizationConfigs.findFirst({ where: (c, { eq }) => eq(c.id, 1) })
+		const vecConfig = await db.query.vectorizationConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, 1)
+		})
 		if (!vecConfig) {
-			await db.insert(schema.vectorizationConfigs).values({ id: 1, embeddingModelTtlMinutes: 5 })
+			await db
+				.insert(schema.vectorizationConfigs)
+				.values({ id: 1, embeddingModelTtlMinutes: 5 })
 		}
 	} catch (error) {
 		console.error("Error syncing vectorization config:", error)
 	}
 
 	try {
-		const res = await db.query.systemSettings.findFirst({ where: (s, { eq }) => eq(s.id, 1) })
+		const res = await db.query.systemSettings.findFirst({
+			where: (s, { eq }) => eq(s.id, 1)
+		})
 		if (!res) {
 			await db.insert(schema.systemSettings).values({
 				id: 1,
@@ -574,7 +614,9 @@ Example dialogue:
 	}
 
 	try {
-		const ollamaRes = await db.query.ollamaSettings.findFirst({ where: (s, { eq }) => eq(s.id, 1) })
+		const ollamaRes = await db.query.ollamaSettings.findFirst({
+			where: (s, { eq }) => eq(s.id, 1)
+		})
 		if (!ollamaRes) {
 			await db.insert(schema.ollamaSettings).values({ id: 1 })
 		}
@@ -592,12 +634,20 @@ Example dialogue:
 		const envBinaryDir = process.env.KOBOLDCPP_BINARY_DIR
 		const envBinaryName = process.env.KOBOLDCPP_BINARY_NAME
 
-		const kcppRes = await db.query.koboldCppSettings.findFirst({ where: (s, { eq }) => eq(s.id, 1) })
+		const kcppRes = await db.query.koboldCppSettings.findFirst({
+			where: (s, { eq }) => eq(s.id, 1)
+		})
 		if (!kcppRes) {
 			await db.insert(schema.koboldCppSettings).values({
 				id: 1,
-				koboldCppManagerModelsDir: path.join(getAppDataDir(), "models", "llm"),
-				...(envBinaryDir ? { koboldCppManagedBinaryDir: envBinaryDir } : {}),
+				koboldCppManagerModelsDir: path.join(
+					getAppDataDir(),
+					"models",
+					"llm"
+				),
+				...(envBinaryDir
+					? { koboldCppManagedBinaryDir: envBinaryDir }
+					: {}),
 				...(envBinaryDir && envBinaryName
 					? { koboldCppManagedBinaryVariant: envBinaryName }
 					: {})
@@ -605,12 +655,20 @@ Example dialogue:
 		} else {
 			const patch: Partial<typeof kcppRes> = {}
 			if (!kcppRes.koboldCppManagerModelsDir) {
-				patch.koboldCppManagerModelsDir = path.join(getAppDataDir(), "models", "llm")
+				patch.koboldCppManagerModelsDir = path.join(
+					getAppDataDir(),
+					"models",
+					"llm"
+				)
 			}
 			if (!kcppRes.koboldCppManagedBinaryDir && envBinaryDir) {
 				patch.koboldCppManagedBinaryDir = envBinaryDir
 			}
-			if (!kcppRes.koboldCppManagedBinaryVariant && envBinaryDir && envBinaryName) {
+			if (
+				!kcppRes.koboldCppManagedBinaryVariant &&
+				envBinaryDir &&
+				envBinaryName
+			) {
 				patch.koboldCppManagedBinaryVariant = envBinaryName
 			}
 			if (Object.keys(patch).length > 0) {

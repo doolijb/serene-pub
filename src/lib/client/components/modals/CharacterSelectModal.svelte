@@ -37,9 +37,15 @@
 
 <Dialog {open} {onOpenChange}>
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-h-[95dvh] relative overflow-hidden w-[min(95vw,800px)]">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 relative max-h-[95dvh] w-[min(95vw,800px)] space-y-6 overflow-hidden p-6 shadow-xl"
+			>
 				<header class="flex items-center justify-between">
 					<h2 class="h2">Select Character</h2>
 					<button
@@ -56,7 +62,9 @@
 					bind:value={search}
 				/>
 				<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
-					<div class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap">
+					<div
+						class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap"
+					>
 						{#if filtered.length === 0}
 							<div class="text-surface-700-300 text-center">
 								No characters found
@@ -67,7 +75,12 @@
 								<div class="flex p-1 lg:basis-1/2">
 									<button
 										class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
-										onclick={() => onSelect(c as Partial<SelectCharacter> & { id: number })}
+										onclick={() =>
+											onSelect(
+												c as Partial<SelectCharacter> & {
+													id: number
+												}
+											)}
 									>
 										<div class="w-fit">
 											<Avatar char={c} />

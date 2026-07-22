@@ -685,10 +685,7 @@
 		pendingDeleteMessageId = null
 	}
 
-	function handleRegenerateMessage(
-		event: Event,
-		msg: SelectChatMessage
-	) {
+	function handleRegenerateMessage(event: Event, msg: SelectChatMessage) {
 		if (!chat || !socket) return
 		socket.emit("chatMessages:regenerate", { id: msg.id })
 	}
@@ -886,9 +883,15 @@
 		}}
 	>
 		<Portal>
-			<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-				<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-md">
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
+			>
+				<Dialog.Content
+					class="card bg-surface-100-900 max-w-md space-y-6 p-6 shadow-xl"
+				>
 					<header class="flex justify-between">
 						<h2 class="h2">Confirm</h2>
 					</header>

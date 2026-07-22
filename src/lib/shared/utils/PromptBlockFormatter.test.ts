@@ -171,7 +171,9 @@ describe("PromptBlockFormatter.makeBlock", () => {
 		})
 
 		test("LLAMA2_INST_CLOSE constant is the real Llama-2 close template, no stray '>' before </s>", () => {
-			expect(PromptBlockFormatter.LLAMA2_INST_CLOSE).toBe(" [/INST]</s>\n")
+			expect(PromptBlockFormatter.LLAMA2_INST_CLOSE).toBe(
+				" [/INST]</s>\n"
+			)
 		})
 	})
 

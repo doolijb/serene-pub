@@ -287,7 +287,10 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 	async generate(): Promise<{
 		completionResult:
 			| string
-			| ((contentCb: (chunk: string) => void, thinkingCb?: (chunk: string) => void) => Promise<void>)
+			| ((
+					contentCb: (chunk: string) => void,
+					thinkingCb?: (chunk: string) => void
+			  ) => Promise<void>)
 		compiledPrompt: CompiledPrompt
 		isAborted: boolean
 		thinkingContent?: string
@@ -344,7 +347,10 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 
 		if (stream) {
 			return {
-				completionResult: async (contentCb: (chunk: string) => void, _thinkingCb?: (chunk: string) => void) => {
+				completionResult: async (
+					contentCb: (chunk: string) => void,
+					_thinkingCb?: (chunk: string) => void
+				) => {
 					let content = ""
 					let cancelTokenSource = axios.CancelToken.source()
 					try {

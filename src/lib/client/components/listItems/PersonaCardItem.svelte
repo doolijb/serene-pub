@@ -52,15 +52,22 @@
 				class="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
 			/>
 		{:else}
-			<div class="bg-surface-300-700 absolute inset-0 flex items-center justify-center">
-				<Icons.UserRound class="text-surface-400 h-16 w-16" aria-hidden="true" />
+			<div
+				class="bg-surface-300-700 absolute inset-0 flex items-center justify-center"
+			>
+				<Icons.UserRound
+					class="text-surface-400 h-16 w-16"
+					aria-hidden="true"
+				/>
 			</div>
 		{/if}
 
 		<div
 			class="absolute inset-x-0 bottom-0 flex flex-col gap-0.5 bg-gradient-to-t from-black/90 via-black/50 to-transparent p-3 pt-10"
 		>
-			<span class="flex items-center gap-1 truncate text-sm font-bold text-white drop-shadow-sm">
+			<span
+				class="flex items-center gap-1 truncate text-sm font-bold text-white drop-shadow-sm"
+			>
 				<span class="truncate">{persona.name}</span>
 				<EmbeddingStatusIcon embeddingModel={persona.embeddingModel} />
 			</span>
@@ -73,7 +80,11 @@
 	</button>
 
 	{#if showControls && (onclick || onEdit || onExport || onDelete)}
-		<div class="absolute top-2 right-2" role="none" onclick={(e) => e.stopPropagation()}>
+		<div
+			class="absolute top-2 right-2"
+			role="none"
+			onclick={(e) => e.stopPropagation()}
+		>
 			<Popover
 				open={menuOpen}
 				onOpenChange={(e) => (menuOpen = e.open)}
@@ -89,7 +100,9 @@
 				</Popover.Trigger>
 				<Portal>
 					<Popover.Positioner class="z-[1000]!">
-						<Popover.Content class="card bg-primary-200-800 shadow-xl p-4 space-y-4 w-[min(90vw,240px)]">
+						<Popover.Content
+							class="card bg-primary-200-800 w-[min(90vw,240px)] space-y-4 p-4 shadow-xl"
+						>
 							<header class="popover-menu-title">
 								<Icons.UserCog size={18} aria-hidden="true" />
 								<p>Persona Options</p>
@@ -98,46 +111,72 @@
 								{#if onclick}
 									<button
 										class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-										onclick={() => { menuOpen = false; handleClick() }}
+										onclick={() => {
+											menuOpen = false
+											handleClick()
+										}}
 										type="button"
 									>
-										<Icons.Eye size={16} aria-hidden="true" />
+										<Icons.Eye
+											size={16}
+											aria-hidden="true"
+										/>
 										<span>View</span>
 									</button>
 								{/if}
 								{#if onEdit}
 									<button
 										class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
-										onclick={() => { menuOpen = false; onEdit?.(persona.id!) }}
+										onclick={() => {
+											menuOpen = false
+											onEdit?.(persona.id!)
+										}}
 										type="button"
 									>
-										<Icons.Pencil size={16} aria-hidden="true" />
+										<Icons.Pencil
+											size={16}
+											aria-hidden="true"
+										/>
 										<span>Edit</span>
 									</button>
 								{/if}
 								{#if onExport}
 									<button
 										class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
-										onclick={() => { menuOpen = false; onExport?.(persona) }}
+										onclick={() => {
+											menuOpen = false
+											onExport?.(persona)
+										}}
 										type="button"
 									>
-										<Icons.Download size={16} aria-hidden="true" />
+										<Icons.Download
+											size={16}
+											aria-hidden="true"
+										/>
 										<span>Export</span>
 									</button>
 								{/if}
 								{#if onDelete}
 									<button
 										class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
-										onclick={() => { menuOpen = false; onDelete?.(persona.id!) }}
+										onclick={() => {
+											menuOpen = false
+											onDelete?.(persona.id!)
+										}}
 										type="button"
 									>
-										<Icons.Trash2 size={16} aria-hidden="true" />
+										<Icons.Trash2
+											size={16}
+											aria-hidden="true"
+										/>
 										<span>Delete</span>
 									</button>
 								{/if}
 							</article>
 							<Popover.Arrow>
-								<Popover.ArrowTip class="!bg-primary-200 dark:!bg-primary-800" />
+								<Popover.ArrowTip
+									class="!bg-primary-200 dark:!bg-primary-800"
+								/>
 							</Popover.Arrow>
 						</Popover.Content>
 					</Popover.Positioner>

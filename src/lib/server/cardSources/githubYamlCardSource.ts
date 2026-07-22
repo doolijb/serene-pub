@@ -80,18 +80,30 @@ function parseGithubYaml(yamlText: string): GithubYamlEntry[] {
 				} else if (line.match(/^      /)) {
 					descriptionBuffer += line.substring(6) + "\n"
 				}
-			} else if (trimmed.startsWith("tags:") && line.match(/^    tags:/)) {
+			} else if (
+				trimmed.startsWith("tags:") &&
+				line.match(/^    tags:/)
+			) {
 				let j = i + 1
 				while (j < lines.length && lines[j].match(/^      - /)) {
 					const tag = lines[j].trim().replace("- ", "")
 					if (tag) currentCard.tags.push(tag)
 					j++
 				}
-			} else if (trimmed.startsWith("author:") && line.match(/^    author:/)) {
+			} else if (
+				trimmed.startsWith("author:") &&
+				line.match(/^    author:/)
+			) {
 				currentCard.author = trimmed.replace("author:", "").trim()
-			} else if (trimmed.startsWith("version:") && line.match(/^    version:/)) {
+			} else if (
+				trimmed.startsWith("version:") &&
+				line.match(/^    version:/)
+			) {
 				currentCard.version = trimmed.replace("version:", "").trim()
-			} else if (trimmed.startsWith("file:") && line.match(/^    file:/)) {
+			} else if (
+				trimmed.startsWith("file:") &&
+				line.match(/^    file:/)
+			) {
 				currentCard.file = trimmed.replace("file:", "").trim()
 			} else if (
 				trimmed.startsWith("category:") &&
@@ -107,7 +119,8 @@ function parseGithubYaml(yamlText: string): GithubYamlEntry[] {
 
 	if (currentCard) {
 		if (inDescriptionBlock) {
-			;(currentCard as GithubYamlEntry).description = descriptionBuffer.trim()
+			;(currentCard as GithubYamlEntry).description =
+				descriptionBuffer.trim()
 		}
 		entries.push(currentCard)
 	}
@@ -127,7 +140,8 @@ const catalogCache = new TtlCache<GithubYamlEntry[]>(60 * 60_000)
 
 async function fetchYamlEntries(kind: CardKind): Promise<GithubYamlEntry[]> {
 	return catalogCache.getOrFetch(kind, async () => {
-		const filename = kind === "character" ? "characters.yaml" : "personas.yaml"
+		const filename =
+			kind === "character" ? "characters.yaml" : "personas.yaml"
 		let response: Response
 		try {
 			response = await fetch(`${REPO_BASE}/${filename}`)
@@ -137,7 +151,9 @@ async function fetchYamlEntries(kind: CardKind): Promise<GithubYamlEntry[]> {
 			)
 		}
 		if (!response.ok) {
-			throw new CardSourceUnavailableError(`GitHub API error: ${response.status}`)
+			throw new CardSourceUnavailableError(
+				`GitHub API error: ${response.status}`
+			)
 		}
 		const yamlText = await response.text()
 		const entries = parseGithubYaml(yamlText)

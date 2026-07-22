@@ -556,7 +556,7 @@ export async function searchDocumentation(
 		{
 			title: "Setting up AI Connections",
 			content:
-				"Serene Pub supports multiple AI backends: OpenAI, Ollama, LM Studio, Llama.cpp, KoboldCpp, and Anthropic. Configure your connections in the settings.",
+				"Serene Pub supports multiple AI backends: OpenAI, Ollama, LM Studio, Llama.cpp, KoboldCPP, and Anthropic. Configure your connections in the settings.",
 			category: "connections",
 			relevance: 0.8
 		}

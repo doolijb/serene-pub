@@ -56,12 +56,21 @@ import {
 } from "./ContentProcessors"
 import { parseSplitChatPrompt } from "./utils"
 import { attachCharacterLoreToCharacters } from "./LorebookBindingUtils"
-import type { RagDiagnostics, TemplateContext, InfillContentOptions, InfillResult } from "./types"
+import type {
+	RagDiagnostics,
+	TemplateContext,
+	InfillContentOptions,
+	InfillResult
+} from "./types"
 import { db } from "$lib/server/db"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { BaseInfillEngine } from "./BaseInfillEngine"
-import { MAX_GRAPH_PAIRS, serializeGraphPairs, type GraphPairOutput as SharedGraphPairOutput } from "./NarrativeGraphContext"
+import {
+	MAX_GRAPH_PAIRS,
+	serializeGraphPairs,
+	type GraphPairOutput as SharedGraphPairOutput
+} from "./NarrativeGraphContext"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -81,11 +90,11 @@ const RAG_RECENT_WINDOW = 3
 
 /** Per-source-type budget caps applied after RRF + MMR */
 const RAG_SOURCE_BUDGET = {
-	message:               12,
-	worldLore:             8,
-	characterLore:         6,
-	historyEntry:          6,
-	narrativeRelationship: 5,
+	message: 12,
+	worldLore: 8,
+	characterLore: 6,
+	historyEntry: 6,
+	narrativeRelationship: 5
 } as const
 
 /** Recency boost amplitude for message scores */
@@ -177,7 +186,10 @@ function mmrRerank(items: ScoredRagItem[]): ScoredRagItem[] {
 /**
  * Format a chat message for query embedding, including speaker attribution.
  */
-function formatMessageForQuery(msg: SelectChatMessage, chat: BasePromptChat): string {
+function formatMessageForQuery(
+	msg: SelectChatMessage,
+	chat: BasePromptChat
+): string {
 	const char = (chat.chatCharacters as any[])?.find(
 		(cc: any) => cc.character?.id === msg.characterId
 	)?.character
@@ -185,7 +197,8 @@ function formatMessageForQuery(msg: SelectChatMessage, chat: BasePromptChat): st
 		(cp: any) => cp.persona?.id === msg.personaId
 	)?.persona
 	const nickname = (char as any)?.nickname
-	const speakerName = nickname || char?.name || persona?.name || msg.role || "Unknown"
+	const speakerName =
+		nickname || char?.name || persona?.name || msg.role || "Unknown"
 	const cleanContent = (msg.content ?? "").replace(/^\*+|\*+$/gm, "").trim()
 	return `[${speakerName}]: ${cleanContent}`
 }
@@ -196,7 +209,10 @@ export class RagInfillEngine extends BaseInfillEngine {
 	constructor(
 		chat: BasePromptChat,
 		interpolationEngine: any,
-		populateLorebookEntryBindings: (entry: any, chat: BasePromptChat) => any,
+		populateLorebookEntryBindings: (
+			entry: any,
+			chat: BasePromptChat
+		) => any,
 		private diagnosticsEnabled: boolean = true
 	) {
 		super(chat, interpolationEngine, populateLorebookEntryBindings)
@@ -234,13 +250,29 @@ export class RagInfillEngine extends BaseInfillEngine {
 
 		// ── 2. Two-pass RAG retrieval ──────────────────────────────────────────
 		const ragOlderMessageIds = new Set<number>()
-		const ragWorldLoreItems: Array<{ id: number; name: string; content: string }> = []
-		const ragCharLoreItems: Array<{ id: number; lorebookId: number; name: string; content: string }> = []
-		const ragHistoryItems: Array<{
-			id: number; lorebookId: number; content: string
-			year: number; month: number | null; day: number | null
+		const ragWorldLoreItems: Array<{
+			id: number
+			name: string
+			content: string
 		}> = []
-		const ragRelPairMap = new Map<string, { fromNodeId: number; toNodeId: number; lorebookId: number }>()
+		const ragCharLoreItems: Array<{
+			id: number
+			lorebookId: number
+			name: string
+			content: string
+		}> = []
+		const ragHistoryItems: Array<{
+			id: number
+			lorebookId: number
+			content: string
+			year: number
+			month: number | null
+			day: number | null
+		}> = []
+		const ragRelPairMap = new Map<
+			string,
+			{ fromNodeId: number; toNodeId: number; lorebookId: number }
+		>()
 
 		// Diagnostic score tracking
 		let diagnosticMessageScores: number[] = []
@@ -253,7 +285,8 @@ export class RagInfillEngine extends BaseInfillEngine {
 				const ragContext = await getChatRagContext(this.chat.id)
 				const modelId = getLoadedModelId()!
 
-				const currentMessages = guaranteedMessages.slice(-RAG_CURRENT_WINDOW)
+				const currentMessages =
+					guaranteedMessages.slice(-RAG_CURRENT_WINDOW)
 				const recentMessages = guaranteedMessages.slice(
 					-(RAG_CURRENT_WINDOW + RAG_RECENT_WINDOW),
 					-RAG_CURRENT_WINDOW
@@ -277,7 +310,9 @@ export class RagInfillEngine extends BaseInfillEngine {
 						embeddings = await batchEmbed(texts)
 					} catch {
 						// Fallback: embed individually if batchEmbed fails
-						embeddings = await Promise.all(texts.map((t) => embed(t)))
+						embeddings = await Promise.all(
+							texts.map((t) => embed(t))
+						)
 					}
 
 					// Run a separate scopedRankBySimilarity for each embedding
@@ -285,14 +320,21 @@ export class RagInfillEngine extends BaseInfillEngine {
 						embeddings.map((emb) =>
 							scopedRankBySimilarity(emb, ragContext, {
 								modelId,
-								topK: Math.max(
-									RAG_SOURCE_BUDGET.message,
-									RAG_SOURCE_BUDGET.worldLore,
-									RAG_SOURCE_BUDGET.characterLore,
-									RAG_SOURCE_BUDGET.historyEntry,
-									RAG_SOURCE_BUDGET.narrativeRelationship
-								) * 3,
-								sources: ["message", "worldLore", "characterLore", "historyEntry", "narrativeRelationship"],
+								topK:
+									Math.max(
+										RAG_SOURCE_BUDGET.message,
+										RAG_SOURCE_BUDGET.worldLore,
+										RAG_SOURCE_BUDGET.characterLore,
+										RAG_SOURCE_BUDGET.historyEntry,
+										RAG_SOURCE_BUDGET.narrativeRelationship
+									) * 3,
+								sources: [
+									"message",
+									"worldLore",
+									"characterLore",
+									"historyEntry",
+									"narrativeRelationship"
+								],
 								excludeRecentMessages: guaranteedMessages.length
 							})
 						)
@@ -306,7 +348,9 @@ export class RagInfillEngine extends BaseInfillEngine {
 					const rrfEntries = Array.from(rrfMap.values())
 					if (rrfEntries.length === 0) return []
 
-					const maxRRF = Math.max(...rrfEntries.map((e) => e.rrfScore))
+					const maxRRF = Math.max(
+						...rrfEntries.map((e) => e.rrfScore)
+					)
 
 					// Produce items with normalised score for threshold filtering & MMR
 					const scored = rrfEntries.map(({ item, rrfScore }) => ({
@@ -319,11 +363,18 @@ export class RagInfillEngine extends BaseInfillEngine {
 					for (const item of scored) {
 						if (item.source !== "message") continue
 						// Find position from the end (newer = smaller ageInMessages)
-						const idx = allMessages.findIndex((m) => m.id === item.id)
-						const ageInMessages = idx >= 0 ? msgCount - 1 - idx : msgCount
+						const idx = allMessages.findIndex(
+							(m) => m.id === item.id
+						)
+						const ageInMessages =
+							idx >= 0 ? msgCount - 1 - idx : msgCount
 						const boosted =
 							item.score *
-							(1 + RAG_RECENCY_BOOST * Math.exp(-RAG_RECENCY_DECAY * ageInMessages))
+							(1 +
+								RAG_RECENCY_BOOST *
+									Math.exp(
+										-RAG_RECENCY_DECAY * ageInMessages
+									))
 						item.score = boosted
 					}
 
@@ -337,15 +388,20 @@ export class RagInfillEngine extends BaseInfillEngine {
 					diagnosticThresholdUsed = adaptiveThreshold
 
 					// ── MMR reranking ────────────────────────────────────────────────
-					const aboveThreshold = scored.filter((s) => s.score >= adaptiveThreshold)
+					const aboveThreshold = scored.filter(
+						(s) => s.score >= adaptiveThreshold
+					)
 					const reranked = mmrRerank(aboveThreshold as any)
 
 					// ── Per-source budget caps ───────────────────────────────────────
 					const sourceCounts: Record<string, number> = {}
 					const budgeted = reranked.filter((item) => {
-						const src = item.source as keyof typeof RAG_SOURCE_BUDGET
+						const src =
+							item.source as keyof typeof RAG_SOURCE_BUDGET
 						const budget =
-							src in RAG_SOURCE_BUDGET ? RAG_SOURCE_BUDGET[src] : 20
+							src in RAG_SOURCE_BUDGET
+								? RAG_SOURCE_BUDGET[src]
+								: 20
 						const count = sourceCounts[src] ?? 0
 						if (count >= budget) return false
 						sourceCounts[src] = count + 1
@@ -355,7 +411,9 @@ export class RagInfillEngine extends BaseInfillEngine {
 					return budgeted
 				}
 
-				const mergeResults = (results: Awaited<ReturnType<typeof runQuery>>) => {
+				const mergeResults = (
+					results: Awaited<ReturnType<typeof runQuery>>
+				) => {
 					for (const item of results) {
 						const key = `${item.source}:${item.id}`
 						if (seenIds.has(key)) continue
@@ -377,9 +435,18 @@ export class RagInfillEngine extends BaseInfillEngine {
 						if (item.source === "message") {
 							ragOlderMessageIds.add(item.id)
 						} else if (item.source === "worldLore") {
-							ragWorldLoreItems.push({ id: item.id, name: (item as any).name, content: item.content })
+							ragWorldLoreItems.push({
+								id: item.id,
+								name: (item as any).name,
+								content: item.content
+							})
 						} else if (item.source === "characterLore") {
-							ragCharLoreItems.push({ id: item.id, lorebookId: (item as any).lorebookId, name: (item as any).name, content: item.content })
+							ragCharLoreItems.push({
+								id: item.id,
+								lorebookId: (item as any).lorebookId,
+								name: (item as any).name,
+								content: item.content
+							})
 						} else if (item.source === "historyEntry") {
 							ragHistoryItems.push({
 								id: item.id,
@@ -403,21 +470,35 @@ export class RagInfillEngine extends BaseInfillEngine {
 				}
 
 				// Current-pass results fill slots first; recent-pass fills what remains
-				diagnosticQueryMessageCount = currentMessages.length + recentMessages.length
+				diagnosticQueryMessageCount =
+					currentMessages.length + recentMessages.length
 				mergeResults(await runQuery(currentMessages))
 				mergeResults(await runQuery(recentMessages))
 			} catch (err) {
-				console.warn("[RagInfillEngine] RAG retrieval failed, continuing without RAG results:", err)
+				console.warn(
+					"[RagInfillEngine] RAG retrieval failed, continuing without RAG results:",
+					err
+				)
 			}
 		}
 
 		// ── 3. Build lore context ──────────────────────────────────────────────
 		const lorebook = (this.chat as any).lorebook as
-			| { worldLoreEntries?: any[]; characterLoreEntries?: any[]; historyEntries?: any[] }
+			| {
+					worldLoreEntries?: any[]
+					characterLoreEntries?: any[]
+					historyEntries?: any[]
+			  }
 			| undefined
 
 		type WorldLoreItem = { id: number; name: string; content: string }
-		type HistoryItem = { id: number; year: number; month: number | null; day: number | null; content: string }
+		type HistoryItem = {
+			id: number
+			year: number
+			month: number | null
+			day: number | null
+			content: string
+		}
 
 		// Pinned (constant=true) — never trimmed. RAG-added — trimmable (lowest-score at back).
 		const pinnedWorldLoreArr: WorldLoreItem[] = []
@@ -432,38 +513,69 @@ export class RagInfillEngine extends BaseInfillEngine {
 		const includedHistoryIds = new Set<number>()
 
 		// Populate pinned entries first
-		for (const entry of (lorebook?.worldLoreEntries ?? []).filter((e: any) => e.constant === true && e.enabled !== false)) {
-			const populated = this.populateLorebookEntryBindings(entry, this.chat)
+		for (const entry of (lorebook?.worldLoreEntries ?? []).filter(
+			(e: any) => e.constant === true && e.enabled !== false
+		)) {
+			const populated = this.populateLorebookEntryBindings(
+				entry,
+				this.chat
+			)
 			if (populated?.name && populated?.content) {
-				pinnedWorldLoreArr.push({ id: entry.id, name: populated.name, content: populated.content })
+				pinnedWorldLoreArr.push({
+					id: entry.id,
+					name: populated.name,
+					content: populated.content
+				})
 			}
 			includedWorldLoreIds.add(entry.id)
 		}
-		for (const entry of (lorebook?.characterLoreEntries ?? []).filter((e: any) => e.constant === true && e.enabled !== false)) {
+		for (const entry of (lorebook?.characterLoreEntries ?? []).filter(
+			(e: any) => e.constant === true && e.enabled !== false
+		)) {
 			pinnedCharLoreArr.push(entry)
 			includedCharLoreIds.add(entry.id)
 		}
 
 		// currentDate = most recent history entry across ALL lorebook entries — a world-state
 		// fact, not a RAG-filtered result.
-		let mostRecentHistory: { year: number; month: number | null; day: number | null } | null = null
+		let mostRecentHistory: {
+			year: number
+			month: number | null
+			day: number | null
+		} | null = null
 		if (lorebook?.historyEntries?.length) {
 			let latestVal = -Infinity
 			for (const e of lorebook.historyEntries as any[]) {
 				if (e.year == null) continue
-				const val = (e.year ?? 0) * 10000 + (e.month ?? 0) * 100 + (e.day ?? 0)
+				const val =
+					(e.year ?? 0) * 10000 + (e.month ?? 0) * 100 + (e.day ?? 0)
 				if (val > latestVal) {
 					latestVal = val
-					mostRecentHistory = { year: e.year, month: e.month ?? null, day: e.day ?? null }
+					mostRecentHistory = {
+						year: e.year,
+						month: e.month ?? null,
+						day: e.day ?? null
+					}
 				}
 			}
 		}
 
-		for (const entry of (lorebook?.historyEntries ?? []).filter((e: any) => e.constant === true && e.enabled !== false)) {
-			const populated = this.populateLorebookEntryBindings(entry, this.chat)
+		for (const entry of (lorebook?.historyEntries ?? []).filter(
+			(e: any) => e.constant === true && e.enabled !== false
+		)) {
+			const populated = this.populateLorebookEntryBindings(
+				entry,
+				this.chat
+			)
 			const content = populated?.content ?? entry.content ?? ""
 			if (!content.trim()) continue
-			pinnedHistoryArr.push({ id: entry.id, year: entry.year ?? 0, month: entry.month ?? null, day: entry.day ?? null, content })
+			pinnedHistoryArr.push({
+				id: entry.id,
+				year: entry.year ?? 0,
+				month: entry.month ?? null,
+				day: entry.day ?? null,
+				content
+			})
 			includedHistoryIds.add(entry.id)
 		}
 		// Sort pinned history newest-first so the template renders in chronological order
@@ -476,29 +588,46 @@ export class RagInfillEngine extends BaseInfillEngine {
 		// Populate RAG-added entries
 		for (const item of ragWorldLoreItems) {
 			if (includedWorldLoreIds.has(item.id)) continue
-			const fullEntry = lorebook?.worldLoreEntries?.find((e: any) => e.id === item.id)
+			const fullEntry = lorebook?.worldLoreEntries?.find(
+				(e: any) => e.id === item.id
+			)
 			const name = fullEntry
-				? this.populateLorebookEntryBindings(fullEntry, this.chat)?.name ?? item.name
+				? (this.populateLorebookEntryBindings(fullEntry, this.chat)
+						?.name ?? item.name)
 				: item.name
 			const content = fullEntry
-				? this.populateLorebookEntryBindings(fullEntry, this.chat)?.content ?? item.content
+				? (this.populateLorebookEntryBindings(fullEntry, this.chat)
+						?.content ?? item.content)
 				: item.content
-			if (name && content) ragWorldLoreArr.push({ id: item.id, name, content })
+			if (name && content)
+				ragWorldLoreArr.push({ id: item.id, name, content })
 			includedWorldLoreIds.add(item.id)
 		}
 		for (const item of ragCharLoreItems) {
 			if (includedCharLoreIds.has(item.id)) continue
-			const fullEntry = lorebook?.characterLoreEntries?.find((e: any) => e.id === item.id)
+			const fullEntry = lorebook?.characterLoreEntries?.find(
+				(e: any) => e.id === item.id
+			)
 			if (fullEntry) ragCharLoreArr.push(fullEntry)
 			includedCharLoreIds.add(item.id)
 		}
 		for (const item of ragHistoryItems) {
-			if (includedHistoryIds.has(item.id) || !item.content.trim()) continue
-			const fullEntry = lorebook?.historyEntries?.find((e: any) => e.id === item.id)
+			if (includedHistoryIds.has(item.id) || !item.content.trim())
+				continue
+			const fullEntry = lorebook?.historyEntries?.find(
+				(e: any) => e.id === item.id
+			)
 			const content = fullEntry
-				? this.populateLorebookEntryBindings(fullEntry, this.chat)?.content ?? item.content
+				? (this.populateLorebookEntryBindings(fullEntry, this.chat)
+						?.content ?? item.content)
 				: item.content
-			ragHistoryArr.push({ id: item.id, year: item.year, month: item.month, day: item.day, content })
+			ragHistoryArr.push({
+				id: item.id,
+				year: item.year,
+				month: item.month,
+				day: item.day,
+				content
+			})
 			includedHistoryIds.add(item.id)
 		}
 		// RAG history: newest-first so least-recent (oldest) entries are at the back for trimming
@@ -517,11 +646,17 @@ export class RagInfillEngine extends BaseInfillEngine {
 
 		if (ragRelPairMap.size > 0) {
 			// Current-pass pairs are at the front of the Map — they get priority slots
-			const pairsToProcess = Array.from(ragRelPairMap.values()).slice(0, MAX_GRAPH_PAIRS)
+			const pairsToProcess = Array.from(ragRelPairMap.values()).slice(
+				0,
+				MAX_GRAPH_PAIRS
+			)
 
 			// Batch-fetch node names, summaries, and binding status
 			const nodeIdSet = new Set<number>()
-			for (const p of pairsToProcess) { nodeIdSet.add(p.fromNodeId); nodeIdSet.add(p.toNodeId) }
+			for (const p of pairsToProcess) {
+				nodeIdSet.add(p.fromNodeId)
+				nodeIdSet.add(p.toNodeId)
+			}
 			const nodeRows = await db
 				.select({
 					id: schema.narrativeNodes.id,
@@ -531,11 +666,16 @@ export class RagInfillEngine extends BaseInfillEngine {
 				})
 				.from(schema.narrativeNodes)
 				.where(inArray(schema.narrativeNodes.id, Array.from(nodeIdSet)))
-			const nodeInfoMap = new Map(nodeRows.map((n) => [n.id, {
-				name: n.name,
-				summary: n.summary,
-				bound: n.lorebookBindingId != null
-			}]))
+			const nodeInfoMap = new Map(
+				nodeRows.map((n) => [
+					n.id,
+					{
+						name: n.name,
+						summary: n.summary,
+						bound: n.lorebookBindingId != null
+					}
+				])
+			)
 
 			for (const pair of pairsToProcess) {
 				const fromInfo = nodeInfoMap.get(pair.fromNodeId)
@@ -547,18 +687,31 @@ export class RagInfillEngine extends BaseInfillEngine {
 				const allRows = await db
 					.select({
 						id: schema.narrativeRelationships.id,
-						relationshipType: schema.narrativeRelationships.relationshipType,
+						relationshipType:
+							schema.narrativeRelationships.relationshipType,
 						description: schema.narrativeRelationships.description,
 						status: schema.narrativeRelationships.status,
 						reason: schema.narrativeRelationships.reason,
-						historyEntryId: schema.narrativeRelationships.historyEntryId
+						historyEntryId:
+							schema.narrativeRelationships.historyEntryId
 					})
 					.from(schema.narrativeRelationships)
-					.where(and(
-						eq(schema.narrativeRelationships.lorebookId, pair.lorebookId),
-						eq(schema.narrativeRelationships.fromNodeId, pair.fromNodeId),
-						eq(schema.narrativeRelationships.toNodeId, pair.toNodeId)
-					))
+					.where(
+						and(
+							eq(
+								schema.narrativeRelationships.lorebookId,
+								pair.lorebookId
+							),
+							eq(
+								schema.narrativeRelationships.fromNodeId,
+								pair.fromNodeId
+							),
+							eq(
+								schema.narrativeRelationships.toNodeId,
+								pair.toNodeId
+							)
+						)
+					)
 					.orderBy(asc(schema.narrativeRelationships.id))
 
 				// Dedup by type+status — the retrieved row (possibly historical) plus all active rows
@@ -568,21 +721,29 @@ export class RagInfillEngine extends BaseInfillEngine {
 					const key = `${r.relationshipType}:${r.status}`
 					if (seen.has(key)) continue
 					seen.add(key)
-					const entry: InternalRelEntry = { type: r.relationshipType, status: r.status, historyEntryId: r.historyEntryId }
+					const entry: InternalRelEntry = {
+						type: r.relationshipType,
+						status: r.status,
+						historyEntryId: r.historyEntryId
+					}
 					if (r.description) entry.description = r.description
 					if (r.reason) entry.reason = r.reason
 					rels.push(entry)
 				}
 
 				const fromBound = fromInfo?.bound ?? false
-				const toBound   = toInfo?.bound ?? false
+				const toBound = toInfo?.bound ?? false
 				graphPairs.push({
 					from: fromName,
 					fromBound,
-					fromDescription: fromBound ? undefined : (fromInfo?.summary ?? undefined),
+					fromDescription: fromBound
+						? undefined
+						: (fromInfo?.summary ?? undefined),
 					to: toName,
 					toBound,
-					toDescription: toBound ? undefined : (toInfo?.summary ?? undefined),
+					toDescription: toBound
+						? undefined
+						: (toInfo?.summary ?? undefined),
 					fromNodeId: pair.fromNodeId,
 					toNodeId: pair.toNodeId,
 					lorebookId: pair.lorebookId,
@@ -595,7 +756,10 @@ export class RagInfillEngine extends BaseInfillEngine {
 		//        already included in the lore section, its reason is redundant ────
 		for (const pair of graphPairs) {
 			for (const rel of pair.rels) {
-				if (rel.historyEntryId != null && includedHistoryIds.has(rel.historyEntryId)) {
+				if (
+					rel.historyEntryId != null &&
+					includedHistoryIds.has(rel.historyEntryId)
+				) {
 					delete rel.reason
 				}
 			}
@@ -620,28 +784,57 @@ export class RagInfillEngine extends BaseInfillEngine {
 
 			if (sharedLorebookId !== null && nodeIdArr.length >= 2) {
 				// Reuse already-fetched node info (name + summary + bound) for cross-pair entries
-				const knownInfo = new Map(graphPairs.flatMap((p) => [
-					[p.fromNodeId, { name: p.from, summary: p.fromDescription, bound: p.fromBound }],
-					[p.toNodeId,   { name: p.to,   summary: p.toDescription,   bound: p.toBound   }]
-				]))
+				const knownInfo = new Map(
+					graphPairs.flatMap((p) => [
+						[
+							p.fromNodeId,
+							{
+								name: p.from,
+								summary: p.fromDescription,
+								bound: p.fromBound
+							}
+						],
+						[
+							p.toNodeId,
+							{
+								name: p.to,
+								summary: p.toDescription,
+								bound: p.toBound
+							}
+						]
+					])
+				)
 
 				const crossRels = await db
 					.select({
 						fromNodeId: schema.narrativeRelationships.fromNodeId,
 						toNodeId: schema.narrativeRelationships.toNodeId,
-						relationshipType: schema.narrativeRelationships.relationshipType,
+						relationshipType:
+							schema.narrativeRelationships.relationshipType,
 						description: schema.narrativeRelationships.description,
 						status: schema.narrativeRelationships.status,
 						reason: schema.narrativeRelationships.reason,
-						historyEntryId: schema.narrativeRelationships.historyEntryId
+						historyEntryId:
+							schema.narrativeRelationships.historyEntryId
 					})
 					.from(schema.narrativeRelationships)
-					.where(and(
-						eq(schema.narrativeRelationships.lorebookId, sharedLorebookId),
-						eq(schema.narrativeRelationships.status, "active"),
-						inArray(schema.narrativeRelationships.fromNodeId, nodeIdArr),
-						inArray(schema.narrativeRelationships.toNodeId, nodeIdArr)
-					))
+					.where(
+						and(
+							eq(
+								schema.narrativeRelationships.lorebookId,
+								sharedLorebookId
+							),
+							eq(schema.narrativeRelationships.status, "active"),
+							inArray(
+								schema.narrativeRelationships.fromNodeId,
+								nodeIdArr
+							),
+							inArray(
+								schema.narrativeRelationships.toNodeId,
+								nodeIdArr
+							)
+						)
+					)
 					.orderBy(asc(schema.narrativeRelationships.id))
 
 				let added = 0
@@ -655,22 +848,36 @@ export class RagInfillEngine extends BaseInfillEngine {
 					const toInfo = knownInfo.get(r.toNodeId)
 					const fromName = fromInfo?.name ?? String(r.fromNodeId)
 					const toName = toInfo?.name ?? String(r.toNodeId)
-					const rel: InternalRelEntry = { type: r.relationshipType, status: r.status, historyEntryId: r.historyEntryId }
+					const rel: InternalRelEntry = {
+						type: r.relationshipType,
+						status: r.status,
+						historyEntryId: r.historyEntryId
+					}
 					if (r.description) rel.description = r.description
 					// Apply reason-omission for cross-pair entries too
-					if (r.reason && !(r.historyEntryId != null && includedHistoryIds.has(r.historyEntryId))) {
+					if (
+						r.reason &&
+						!(
+							r.historyEntryId != null &&
+							includedHistoryIds.has(r.historyEntryId)
+						)
+					) {
 						rel.reason = r.reason
 					}
 
 					const fromBound = fromInfo?.bound ?? false
-					const toBound   = toInfo?.bound ?? false
+					const toBound = toInfo?.bound ?? false
 					graphPairs.push({
 						from: fromName,
 						fromBound,
-						fromDescription: fromBound ? undefined : (fromInfo?.summary ?? undefined),
+						fromDescription: fromBound
+							? undefined
+							: (fromInfo?.summary ?? undefined),
 						to: toName,
 						toBound,
-						toDescription: toBound ? undefined : (toInfo?.summary ?? undefined),
+						toDescription: toBound
+							? undefined
+							: (toInfo?.summary ?? undefined),
 						fromNodeId: r.fromNodeId,
 						toNodeId: r.toNodeId,
 						lorebookId: sharedLorebookId,
@@ -694,9 +901,12 @@ export class RagInfillEngine extends BaseInfillEngine {
 		// If lore content was found, historical RAG messages are lower priority
 		// (fill-in only). If no lore was found, promote them to the initial set.
 		const loreHasContent =
-			pinnedWorldLoreArr.length > 0 || ragWorldLoreArr.length > 0 ||
-			pinnedCharLoreArr.length > 0 || ragCharLoreArr.length > 0 ||
-			pinnedHistoryArr.length > 0 || ragHistoryArr.length > 0
+			pinnedWorldLoreArr.length > 0 ||
+			ragWorldLoreArr.length > 0 ||
+			pinnedCharLoreArr.length > 0 ||
+			ragCharLoreArr.length > 0 ||
+			pinnedHistoryArr.length > 0 ||
+			ragHistoryArr.length > 0
 
 		let initialOlderMessages: SelectChatMessage[]
 		let fillInMessages: SelectChatMessage[]
@@ -704,9 +914,10 @@ export class RagInfillEngine extends BaseInfillEngine {
 		if (loreHasContent) {
 			// Lore present — RAG messages join the fill-in pool with unified scoring
 			initialOlderMessages = []
-			const maxMsgId = olderMessages.length > 0
-				? Math.max(...olderMessages.map((m) => m.id), 1)
-				: 1
+			const maxMsgId =
+				olderMessages.length > 0
+					? Math.max(...olderMessages.map((m) => m.id), 1)
+					: 1
 			fillInMessages = olderMessages
 				.map((m) => ({
 					msg: m,
@@ -718,10 +929,13 @@ export class RagInfillEngine extends BaseInfillEngine {
 				.map((x) => x.msg)
 		} else {
 			// No lore — promote RAG messages into the initial set
-			initialOlderMessages = olderMessages.filter((m) => ragOlderMessageIds.has(m.id))
-			const maxMsgId = olderMessages.length > 0
-				? Math.max(...olderMessages.map((m) => m.id), 1)
-				: 1
+			initialOlderMessages = olderMessages.filter((m) =>
+				ragOlderMessageIds.has(m.id)
+			)
+			const maxMsgId =
+				olderMessages.length > 0
+					? Math.max(...olderMessages.map((m) => m.id), 1)
+					: 1
 			fillInMessages = olderMessages
 				.filter((m) => !ragOlderMessageIds.has(m.id))
 				.map((m) => ({
@@ -732,7 +946,9 @@ export class RagInfillEngine extends BaseInfillEngine {
 				.map((x) => x.msg)
 		}
 
-		const processMsg = (msg: SelectChatMessage): ProcessedChatMessage | null =>
+		const processMsg = (
+			msg: SelectChatMessage
+		): ProcessedChatMessage | null =>
 			this.chatMessageProcessor.processItem(msg, {
 				interpolationContext,
 				charName,
@@ -774,8 +990,12 @@ export class RagInfillEngine extends BaseInfillEngine {
 			)
 
 		const countTokens = this.makeCountTokens(
-			handlebars, contextConfig.template, useChatFormat ?? false,
-			tokenCounter, chatMessages, buildCtx
+			handlebars,
+			contextConfig.template,
+			useChatFormat ?? false,
+			tokenCounter,
+			chatMessages,
+			buildCtx
 		)
 
 		// ── 6. Token budget management ─────────────────────────────────────────
@@ -784,18 +1004,29 @@ export class RagInfillEngine extends BaseInfillEngine {
 		// and message history, so lore can't crowd out all conversation context.
 		const baseRendered = handlebars.compile(contextConfig.template)({
 			...this.buildTemplateContext(
-				templateContext, charName, interpolationContext,
-				chatMessages, [], [], [], [], [], [],  // empty lore for base measurement
-				mostRecentHistory, undefined
+				templateContext,
+				charName,
+				interpolationContext,
+				chatMessages,
+				[],
+				[],
+				[],
+				[],
+				[],
+				[], // empty lore for base measurement
+				mostRecentHistory,
+				undefined
 			),
 			chatMessages: [...chatMessages].reverse()
 		})
-		const baseFinal = (useChatFormat ?? false)
-			? JSON.stringify(parseSplitChatPrompt(baseRendered))
-			: baseRendered
-		const baseTokens: number = typeof tokenCounter.countTokens === "function"
-			? await tokenCounter.countTokens(baseFinal)
-			: 0
+		const baseFinal =
+			(useChatFormat ?? false)
+				? JSON.stringify(parseSplitChatPrompt(baseRendered))
+				: baseRendered
+		const baseTokens: number =
+			typeof tokenCounter.countTokens === "function"
+				? await tokenCounter.countTokens(baseFinal)
+				: 0
 
 		// Split the available budget: MESSAGE_FILL_FRACTION goes to message history,
 		// the rest goes to lore. Lore is trimmed to its ceiling first; the fill phase
@@ -812,13 +1043,20 @@ export class RagInfillEngine extends BaseInfillEngine {
 		// charLore → guaranteed messages if still over ceiling).
 		let totalTokens = await this.enforceTokenBudget(
 			[graphSlot, ragHistoryArr, ragWorldLoreArr, ragCharLoreArr],
-			chatMessages, loreCeiling, countTokens
+			chatMessages,
+			loreCeiling,
+			countTokens
 		)
 
 		// Fill older messages into the reserved message budget up to threshold.
 		totalTokens = await this.fillFromPool(
-			fillInMessages, chatMessages, tokenLimit, threshold,
-			totalTokens, processMsg, countTokens
+			fillInMessages,
+			chatMessages,
+			tokenLimit,
+			threshold,
+			totalTokens,
+			processMsg,
+			countTokens
 		)
 
 		// ── 7. Re-sort chatMessages chronologically ───────────────────────────
@@ -848,7 +1086,9 @@ export class RagInfillEngine extends BaseInfillEngine {
 			renderedPrompt = rendered
 		}
 
-		const includedIds = chatMessages.filter((m) => m.id !== -2).map((m) => m.id)
+		const includedIds = chatMessages
+			.filter((m) => m.id !== -2)
+			.map((m) => m.id)
 		const allMessageIds = allMessages.map((m) => m.id)
 		const excludedIds = allMessageIds.filter(
 			(id) => !includedIds.includes(id)
@@ -856,31 +1096,48 @@ export class RagInfillEngine extends BaseInfillEngine {
 
 		// ── 9. Build RAG diagnostics ───────────────────────────────────────────
 		const includedMsgIdSet = new Set(includedIds)
-		const guaranteedIncluded = guaranteedMessages.filter((m) => includedMsgIdSet.has(m.id)).length
-		const ragOlderIncluded = olderMessages.filter((m) => ragOlderMessageIds.has(m.id) && includedMsgIdSet.has(m.id)).length
-		const filledInIncluded = olderMessages.filter((m) => !ragOlderMessageIds.has(m.id) && includedMsgIdSet.has(m.id)).length
+		const guaranteedIncluded = guaranteedMessages.filter((m) =>
+			includedMsgIdSet.has(m.id)
+		).length
+		const ragOlderIncluded = olderMessages.filter(
+			(m) => ragOlderMessageIds.has(m.id) && includedMsgIdSet.has(m.id)
+		).length
+		const filledInIncluded = olderMessages.filter(
+			(m) => !ragOlderMessageIds.has(m.id) && includedMsgIdSet.has(m.id)
+		).length
 
-		const rag: RagDiagnostics | undefined = this.diagnosticsEnabled ? {
-			used: true,
-			lore: {
-				worldLore: { pinned: pinnedWorldLoreArr.length, rag: ragWorldLoreArr.length },
-				characterLore: { pinned: pinnedCharLoreArr.length, rag: ragCharLoreArr.length },
-				history: { pinned: pinnedHistoryArr.length, rag: ragHistoryArr.length }
-			},
-			graphPairs: graphPairs.length,
-			messages: {
-				guaranteed: guaranteedIncluded,
-				ragOlder: ragOlderIncluded,
-				filledIn: filledInIncluded,
-				total: includedIds.length
-			},
-			scores: {
-				messageScores: diagnosticMessageScores,
-				loreScores: diagnosticLoreScores,
-				thresholdUsed: diagnosticThresholdUsed,
-				queryMessageCount: diagnosticQueryMessageCount
-			}
-		} : undefined
+		const rag: RagDiagnostics | undefined = this.diagnosticsEnabled
+			? {
+					used: true,
+					lore: {
+						worldLore: {
+							pinned: pinnedWorldLoreArr.length,
+							rag: ragWorldLoreArr.length
+						},
+						characterLore: {
+							pinned: pinnedCharLoreArr.length,
+							rag: ragCharLoreArr.length
+						},
+						history: {
+							pinned: pinnedHistoryArr.length,
+							rag: ragHistoryArr.length
+						}
+					},
+					graphPairs: graphPairs.length,
+					messages: {
+						guaranteed: guaranteedIncluded,
+						ragOlder: ragOlderIncluded,
+						filledIn: filledInIncluded,
+						total: includedIds.length
+					},
+					scores: {
+						messageScores: diagnosticMessageScores,
+						loreScores: diagnosticLoreScores,
+						thresholdUsed: diagnosticThresholdUsed,
+						queryMessageCount: diagnosticQueryMessageCount
+					}
+				}
+			: undefined
 
 		return {
 			renderedPrompt,
@@ -908,9 +1165,25 @@ export class RagInfillEngine extends BaseInfillEngine {
 		ragCharLore: SelectCharacterLoreEntry[],
 		pinnedWorldLore: Array<{ id: number; name: string; content: string }>,
 		ragWorldLore: Array<{ id: number; name: string; content: string }>,
-		pinnedHistory: Array<{ id: number; year: number; month: number | null; day: number | null; content: string }>,
-		ragHistory: Array<{ id: number; year: number; month: number | null; day: number | null; content: string }>,
-		mostRecentHistory: { year: number; month: number | null; day: number | null } | null,
+		pinnedHistory: Array<{
+			id: number
+			year: number
+			month: number | null
+			day: number | null
+			content: string
+		}>,
+		ragHistory: Array<{
+			id: number
+			year: number
+			month: number | null
+			day: number | null
+			content: string
+		}>,
+		mostRecentHistory: {
+			year: number
+			month: number | null
+			day: number | null
+		} | null,
 		narrativeGraph?: string
 	): any {
 		const characterLoreEntries = [...pinnedCharLore, ...ragCharLore]
@@ -936,29 +1209,45 @@ export class RagInfillEngine extends BaseInfillEngine {
 					personality: cc.character.personality || undefined
 				}))
 				.map((c: any) =>
-					this.interpolationEngine.interpolateObject(c, interpolationContext, [
-						"name",
-						"nickname",
-						"description",
-						"personality"
-					])
+					this.interpolationEngine.interpolateObject(
+						c,
+						interpolationContext,
+						["name", "nickname", "description", "personality"]
+					)
 				)
 		}
 
 		context.characters = JSON.stringify(
-			attachCharacterLoreToCharacters(assistantCharacters, characterLoreEntries, this.chat),
-			null, 2
+			attachCharacterLoreToCharacters(
+				assistantCharacters,
+				characterLoreEntries,
+				this.chat
+			),
+			null,
+			2
 		)
 
 		const userCharacters = (this.chat.chatPersonas || [])
-			.map((cp: any) => ({ name: cp.persona.name, description: cp.persona.description }))
+			.map((cp: any) => ({
+				name: cp.persona.name,
+				description: cp.persona.description
+			}))
 			.map((p: any) =>
-				this.interpolationEngine.interpolateObject(p, interpolationContext, ["name", "description"])
+				this.interpolationEngine.interpolateObject(
+					p,
+					interpolationContext,
+					["name", "description"]
+				)
 			)
 
 		context.personas = JSON.stringify(
-			attachCharacterLoreToCharacters(userCharacters, characterLoreEntries, this.chat),
-			null, 2
+			attachCharacterLoreToCharacters(
+				userCharacters,
+				characterLoreEntries,
+				this.chat
+			),
+			null,
+			2
 		)
 
 		// Build worldLore object from combined pinned + RAG arrays
@@ -966,11 +1255,13 @@ export class RagInfillEngine extends BaseInfillEngine {
 		if (allWorldLore.length > 0) {
 			const worldLoreObj: Record<string, string> = {}
 			for (const entry of allWorldLore) {
-				if (entry.name && entry.content) worldLoreObj[entry.name] = entry.content
+				if (entry.name && entry.content)
+					worldLoreObj[entry.name] = entry.content
 			}
-			context.worldLore = Object.keys(worldLoreObj).length > 0
-				? JSON.stringify(worldLoreObj, null, 2)
-				: undefined
+			context.worldLore =
+				Object.keys(worldLoreObj).length > 0
+					? JSON.stringify(worldLoreObj, null, 2)
+					: undefined
 		} else {
 			context.worldLore = undefined
 		}
@@ -982,13 +1273,16 @@ export class RagInfillEngine extends BaseInfillEngine {
 			for (const he of allHistory) {
 				if (!he.content.trim()) continue
 				let dateKey = String(he.year)
-				if (he.month !== null) dateKey += `-${String(he.month).padStart(2, "0")}`
-				if (he.day !== null) dateKey += `-${String(he.day).padStart(2, "0")}`
+				if (he.month !== null)
+					dateKey += `-${String(he.month).padStart(2, "0")}`
+				if (he.day !== null)
+					dateKey += `-${String(he.day).padStart(2, "0")}`
 				historyObj[dateKey] = he.content
 			}
-			context.history = Object.keys(historyObj).length > 0
-				? JSON.stringify(historyObj)
-				: undefined
+			context.history =
+				Object.keys(historyObj).length > 0
+					? JSON.stringify(historyObj)
+					: undefined
 		} else {
 			context.history = undefined
 		}

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { DOC_ORDER, docsIndex, getAllSections, getDoc, rewriteDocHref } from "./docsIndex"
+import {
+	DOC_ORDER,
+	docsIndex,
+	getAllSections,
+	getDoc,
+	rewriteDocHref
+} from "./docsIndex"
 
 describe("rewriteDocHref", () => {
 	it("rewrites a relative .md link to an in-app doc route", () => {
@@ -30,13 +36,19 @@ describe("rewriteDocHref", () => {
 describe("docsIndex", () => {
 	it("has an entry for every slug in DOC_ORDER", () => {
 		for (const slug of DOC_ORDER) {
-			expect(getDoc(slug), `missing doc file for slug "${slug}"`).toBeDefined()
+			expect(
+				getDoc(slug),
+				`missing doc file for slug "${slug}"`
+			).toBeDefined()
 		}
 	})
 
 	it("every doc has a non-empty title and description", () => {
 		for (const doc of docsIndex) {
-			expect(doc.title.length, `doc "${doc.slug}" has an empty title`).toBeGreaterThan(0)
+			expect(
+				doc.title.length,
+				`doc "${doc.slug}" has an empty title`
+			).toBeGreaterThan(0)
 		}
 	})
 
@@ -81,7 +93,10 @@ describe("getAllSections", () => {
 		const sections = getAllSections()
 		const slugsWithSections = new Set(sections.map((s) => s.slug))
 		for (const slug of DOC_ORDER) {
-			expect(slugsWithSections.has(slug), `doc "${slug}" produced no sections`).toBe(true)
+			expect(
+				slugsWithSections.has(slug),
+				`doc "${slug}" produced no sections`
+			).toBe(true)
 		}
 	})
 })

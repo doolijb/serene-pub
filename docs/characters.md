@@ -10,7 +10,7 @@ Characters are private to your account — the character list is scoped to the l
 
 ### Characters vs. Personas
 
-A **character** is the persona the AI plays; a [persona](./personas.md) is the persona *you* play as when chatting. Both are configured separately but follow a similar create/edit/avatar pattern — this page covers characters specifically.
+A **character** is the persona the AI plays; a [persona](./personas.md) is the persona _you_ play as when chatting. Both are configured separately but follow a similar create/edit/avatar pattern — this page covers characters specifically.
 
 ### Searching the Character List
 
@@ -24,12 +24,12 @@ Each character row shows a small status icon next to its name reflecting whether
 
 The character edit form (opened via **Edit** on any character) exposes the following fields. Fields marked with the eye icon are explicitly noted in the UI as "This field will be visible in prompts" — meaning they get sent to the LLM as part of the character's context.
 
-- **Name*** — required. The character's full or primary name.
+- **Name\*** — required. The character's full or primary name.
 - **Nickname** — optional. If set, the nickname is used in conversations and prompts instead of the full name.
 - **Aliases** — a list of alternate names/spellings for the character (collapsible, advanced field).
 - **Summary** — a short (up to 200 characters) one- or two-sentence description. The form notes this is "used as a concise graph node description" and is **not** injected into chat context — it exists for [RAG/graph](./embeddings-and-rag.md) lookups, not for prompting.
-- **Description*** — required. The character's core description (appearance, background, role).
-- **Personality** — the character's personality traits and behavior.
+- **Description\*** — required. The character's core description (appearance, background, role).
+- **Personality** — the character's personality traits and behavior. Marked visible in prompts.
 - **Scenario** — the setting/situation the character is placed in. The UI notes this field is excluded from group chats. Hidden behind "Show All Fields" unless that setting is enabled.
 - **Greeting (First Message)** — the character's opening message when a chat starts.
 - **Alternate Greetings** — a list of additional possible opening messages (advanced field).
@@ -39,6 +39,8 @@ The character edit form (opened via **Edit** on any character) exposes the follo
 - **Group-Only Greetings** — greetings that are only used when the character is part of a group chat (advanced field).
 - **Post-History Instructions** — instructions injected after the chat history, useful for steering behavior late in the prompt (advanced field).
 - **Character Version** — a free-text version string (e.g. "1.0") for the character card (advanced field).
+- **Creator** — a free-text field naming whoever authored the character card (advanced field).
+- **Category** — a free-text field used to group the character within the Character Library (advanced field).
 - **Tags** — searchable labels attached to the character; see [Tags](./tags.md).
 - **Favorite** — a toggle that pins the character to the top of your character list.
 
@@ -60,7 +62,7 @@ The **Tags** field is a search-and-create combo box: type to filter your existin
 
 ### Fields Marked Visible in Prompts
 
-Several fields — Name, Nickname, Aliases, Description, Scenario, Example Dialogues, and Post-History Instructions — are marked in the form with a small eye icon and the tooltip "This field will be visible in prompts." This is a direct signal from the UI about which fields the LLM actually sees versus fields like **Summary** or **Creator Notes** that are for your own organization or for RAG/graph lookups rather than being injected into the prompt every turn.
+Several fields — Name, Nickname, Aliases, Description, Personality, Scenario, Example Dialogues, and Post-History Instructions — are marked in the form with a small eye icon and the tooltip "This field will be visible in prompts." This is a direct signal from the UI about which fields the LLM actually sees versus fields like **Summary** or **Creator Notes** that are for your own organization or for RAG/graph lookups rather than being injected into the prompt every turn.
 
 ### Saving, Canceling, and Unsaved Changes
 
@@ -68,15 +70,17 @@ While editing, **Ctrl+S** (or **Cmd+S** on Mac) saves the form and **Escape** ca
 
 ## Avatar & Gallery
 
-Each character has one active **avatar** image plus an optional image gallery of alternates.
+Each character has one active **avatar** image plus an optional image gallery of alternates. The two live in different places: the avatar picker is part of the create/edit form, but the gallery itself is only available from a character's read-only **View** panel, in a dedicated **Gallery** tab — it's not part of the edit form.
 
 - In the create/edit form, drop or click the dashed upload box to select an avatar image (JPG, PNG, or GIF). The image is only staged locally as a preview until you save the character — nothing uploads until you click **Create**/**Update**.
 - Use **Clear Selection** to discard a staged (not-yet-saved) avatar file before saving.
-- Once a character exists, an **Image Gallery** section appears beneath the avatar picker. Here you can:
-  - **Upload** additional images to the character's gallery.
-  - Click any gallery thumbnail to instantly **set it as the active avatar** (a checkmark badge marks the current avatar; a primary-colored ring highlights it in the grid).
-  - Hover a thumbnail and click the **X** button to delete it from the gallery (with a confirmation dialog).
+- Once a character exists, open its **View** panel and switch to the **Gallery** tab to manage additional images. Here you can:
+    - **Upload** additional images to the character's gallery.
+    - Click a thumbnail to open it in a **lightbox** for a closer look.
+    - Use each thumbnail's **⋮** (overflow) menu to **Set as avatar** or **Delete** it (deletion asks for confirmation).
+    - **Drag to reorder** gallery images using each thumbnail's grip handle.
 - Broken/missing gallery images are automatically hidden from the grid rather than showing a broken-image icon.
+- Deleting a gallery image that's currently set as the character's active avatar automatically clears the avatar field too, so the character falls back to the no-avatar placeholder instead of pointing at a now-missing file.
 
 Gallery and avatar changes take effect immediately (they're saved via their own socket calls, independent of the rest of the character form).
 
@@ -142,11 +146,11 @@ Beyond the character's own fields, each character has a **per-chat visibility** 
 
 Each character row in the chat's participant list has a visibility button (an eye icon) that cycles through three levels on click:
 
-- **Full Visibility** — the character's complete information is shown even when they aren't the one responding.
-- **Minimal Visibility** — only the character's name/nickname is shown when they aren't responding.
+- **Full Info** — the character's complete information is shown even when they aren't the one responding.
+- **Name Only** — only the character's name/nickname is shown when they aren't responding.
 - **Hidden** — the character's info is fully hidden from the prompt when they aren't responding.
 
-The button's tooltip labels this as "Context Optimization," reflecting its purpose: trimming prompt size in multi-character group chats by hiding detail for characters who aren't currently active in the conversation.
+The button's tooltip states what happens on the character's _other_ turns — e.g. "When not speaking: Only name/nickname is included" — since a character's own information is always fully included on their own turn regardless of this setting. Its purpose is trimming prompt size in multi-character group chats by hiding detail for characters who aren't currently active in the conversation.
 
 ### Active vs. Visible
 

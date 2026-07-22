@@ -79,7 +79,9 @@ export async function generateFieldWithLLM({
 		await getUserConfigurations(userId)
 
 	if (!connection) {
-		throw new Error("No AI connection configured. Please set up a connection first.")
+		throw new Error(
+			"No AI connection configured. Please set up a connection first."
+		)
 	}
 
 	const { Adapter } = await getConnectionAdapter(connection.type)
@@ -96,7 +98,9 @@ export async function generateFieldWithLLM({
 		currentCharacterId: null,
 		tokenCounter,
 		tokenLimit:
-			typeof sampling.contextTokens === "number" ? sampling.contextTokens : 4096,
+			typeof sampling.contextTokens === "number"
+				? sampling.contextTokens
+				: 4096,
 		contextThresholdPercent: 0.9,
 		isAssistantMode: false
 	})

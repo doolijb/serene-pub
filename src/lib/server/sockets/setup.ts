@@ -36,7 +36,10 @@ export const setupGet: Handler<Record<string, never>, { setup: SetupData }> = {
 	}
 }
 
-export const setupMarkComplete: Handler<{ step: "summarization" | "rag" }, { setup: SetupData }> = {
+export const setupMarkComplete: Handler<
+	{ step: "summarization" | "rag" },
+	{ setup: SetupData }
+> = {
 	event: "setup:markComplete",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
@@ -68,7 +71,11 @@ export const setupMarkComplete: Handler<{ step: "summarization" | "rag" }, { set
 export function registerSetupHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
-	register: (socket: any, handler: Handler<any, any>, emitToUser: (event: string, data: any) => void) => void
+	register: (
+		socket: any,
+		handler: Handler<any, any>,
+		emitToUser: (event: string, data: any) => void
+	) => void
 ) {
 	register(socket, setupGet, emitToUser)
 	register(socket, setupMarkComplete, emitToUser)

@@ -28,16 +28,23 @@
 	let runningModels: ListResponse["models"] = $state([])
 	let showDeleteModal = $state(false)
 	let modelToDelete: OllamaModel | null = $state(null)
-	let connectionsList: Sockets.Connections.List.Response["connectionsList"] = $state([])
+	let connectionsList: Sockets.Connections.List.Response["connectionsList"] =
+		$state([])
 
 	// Context
-	let systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
+	let systemSettingsCtx: SystemSettingsCtx = $state(
+		getContext("systemSettingsCtx")
+	)
 	const panelsCtx: PanelsCtx = getContext("panelsCtx")
 
 	function findConnectionForModel(
 		modelName: string
-	): Sockets.Connections.List.Response["connectionsList"][number] | undefined {
-		return connectionsList.find((c) => c.type === "ollama" && c.model === modelName)
+	):
+		| Sockets.Connections.List.Response["connectionsList"][number]
+		| undefined {
+		return connectionsList.find(
+			(c) => c.type === "ollama" && c.model === modelName
+		)
 	}
 
 	function openConnectionSidebar(modelName: string) {
@@ -74,8 +81,7 @@
 		return null
 	})
 
-	$effect(() => {
-	})
+	$effect(() => {})
 
 	// Format file size
 	function formatSize(bytes: number): string {
@@ -221,9 +227,12 @@
 			}
 		)
 
-		socket.on("connections:list", (msg: Sockets.Connections.List.Response) => {
-			connectionsList = msg.connectionsList ?? []
-		})
+		socket.on(
+			"connections:list",
+			(msg: Sockets.Connections.List.Response) => {
+				connectionsList = msg.connectionsList ?? []
+			}
+		)
 
 		// Initial load
 		refreshModels()
@@ -358,7 +367,8 @@
 						{#if existingConn}
 							<button
 								class="btn btn-sm preset-filled-surface-500"
-								onclick={() => openConnectionSidebar(model.name)}
+								onclick={() =>
+									openConnectionSidebar(model.name)}
 								title="Open connection settings"
 								aria-label={`Open connection settings for ${model.name}`}
 							>
@@ -390,35 +400,42 @@
 
 <Dialog open={showDeleteModal} onOpenChange={(e) => (showDeleteModal = e.open)}>
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700">
-		<header class="flex justify-between">
-			<h2 class="h2">Delete Model</h2>
-		</header>
-		<article>
-			<p class="opacity-60">
-				Are you sure you want to delete "{modelToDelete}" from Ollama?
-				This action cannot be undone.
-			</p>
-			<p class="opacity-60">
-				Any associated connections to this model will be removed.
-			</p>
-		</article>
-		<footer class="flex justify-end gap-4">
-			<button
-				class="btn preset-filled-surface-500"
-				onclick={handleDeleteModalCancel}
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
 			>
-				Cancel
-			</button>
-			<button
-				class="btn preset-filled-error-500"
-				onclick={handleDeleteModalConfirm}
-			>
-				Delete
-			</button>
-		</footer>
+				<header class="flex justify-between">
+					<h2 class="h2">Delete Model</h2>
+				</header>
+				<article>
+					<p class="opacity-60">
+						Are you sure you want to delete "{modelToDelete}" from
+						Ollama? This action cannot be undone.
+					</p>
+					<p class="opacity-60">
+						Any associated connections to this model will be
+						removed.
+					</p>
+				</article>
+				<footer class="flex justify-end gap-4">
+					<button
+						class="btn preset-filled-surface-500"
+						onclick={handleDeleteModalCancel}
+					>
+						Cancel
+					</button>
+					<button
+						class="btn preset-filled-error-500"
+						onclick={handleDeleteModalConfirm}
+					>
+						Delete
+					</button>
+				</footer>
 			</Dialog.Content>
 		</Dialog.Positioner>
 	</Portal>

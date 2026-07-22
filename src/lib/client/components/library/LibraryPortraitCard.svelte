@@ -33,7 +33,9 @@
 			class="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
 		/>
 	{:else}
-		<div class="bg-surface-300-700 absolute inset-0 flex items-center justify-center">
+		<div
+			class="bg-surface-300-700 absolute inset-0 flex items-center justify-center"
+		>
 			<Icons.User class="text-surface-400 h-16 w-16" aria-hidden="true" />
 		</div>
 	{/if}
@@ -42,7 +44,9 @@
 	<div
 		class="absolute inset-x-0 bottom-0 flex flex-col gap-0.5 bg-gradient-to-t from-black/90 via-black/50 to-transparent p-3 pt-10"
 	>
-		<span class="truncate text-sm font-bold text-white drop-shadow-sm">{item.name}</span>
+		<span class="truncate text-sm font-bold text-white drop-shadow-sm">
+			{item.name}
+		</span>
 		<span class="line-clamp-2 text-xs leading-snug text-white/80">
 			{getExcerpt(item.description)}
 		</span>

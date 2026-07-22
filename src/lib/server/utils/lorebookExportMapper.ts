@@ -49,7 +49,10 @@ interface NamedEntryLike extends BaseEntryLike {
 
 function baseEntryFields(entry: BaseEntryLike, insertionOrder: number) {
 	return {
-		keys: entry.keys.split(",").map((k) => k.trim()).filter(Boolean),
+		keys: entry.keys
+			.split(",")
+			.map((k) => k.trim())
+			.filter(Boolean),
 		content: entry.content,
 		enabled: entry.enabled,
 		insertion_order: insertionOrder,
@@ -187,7 +190,10 @@ export function assignHistoryEntryLocalIds(
  */
 export function buildSpecV3Lorebook(
 	lorebook: LorebookLike,
-	worldEntries: (NamedEntryLike & { category: string | null; position: number })[],
+	worldEntries: (NamedEntryLike & {
+		category: string | null
+		position: number
+	})[],
 	characterEntries: (NamedEntryLike & {
 		position: number
 		lorebookBindingId: number | null
@@ -197,9 +203,15 @@ export function buildSpecV3Lorebook(
 	scenesByHistoryEntryId: Map<number, ExportedScene[]> = new Map(),
 	historyEntryLocalIdByRealId: Map<number, number> = new Map()
 ): SpecV3LorebookLike {
-	const sortedWorld = [...worldEntries].sort((a, b) => a.position - b.position)
-	const sortedChar = [...characterEntries].sort((a, b) => a.position - b.position)
-	const sortedHistory = [...historyEntries].sort((a, b) => a.position - b.position)
+	const sortedWorld = [...worldEntries].sort(
+		(a, b) => a.position - b.position
+	)
+	const sortedChar = [...characterEntries].sort(
+		(a, b) => a.position - b.position
+	)
+	const sortedHistory = [...historyEntries].sort(
+		(a, b) => a.position - b.position
+	)
 
 	const entries: SpecV3Entry[] = [
 		...sortedWorld.map((e, i) => mapWorldEntry(e, i)),
@@ -361,7 +373,9 @@ export function mapNarrativeNode(
 				? (historyEntryLocalIdByRealId.get(node.historyEntryId) ?? null)
 				: null,
 		sceneLocalId:
-			node.sceneId !== null ? (sceneLocalIdByRealId.get(node.sceneId) ?? null) : null,
+			node.sceneId !== null
+				? (sceneLocalIdByRealId.get(node.sceneId) ?? null)
+				: null,
 		characterUuids
 	}
 }
@@ -416,7 +430,9 @@ export function mapNarrativeRelationship(
 				? (historyEntryLocalIdByRealId.get(rel.historyEntryId) ?? null)
 				: null,
 		sceneLocalId:
-			rel.sceneId !== null ? (sceneLocalIdByRealId.get(rel.sceneId) ?? null) : null
+			rel.sceneId !== null
+				? (sceneLocalIdByRealId.get(rel.sceneId) ?? null)
+				: null
 	}
 }
 

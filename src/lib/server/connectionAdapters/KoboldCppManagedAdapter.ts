@@ -1,17 +1,23 @@
 import { KoboldCppAdapter } from "./KoboldCppAdapter"
-import { fetchCurrentModelName, pingKoboldCpp } from "$lib/server/koboldcpp/kcppHttp"
+import {
+	fetchCurrentModelName,
+	pingKoboldCPP
+} from "$lib/server/koboldcpp/kcppHttp"
 import type { AdapterExports } from "./BaseConnectionAdapter"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { koboldCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { db } from "$lib/server/db"
 import * as subprocessManager from "$lib/server/koboldcpp/subprocessManager"
-import { ensureModelLoaded, DEFAULT_MANAGED_CONFIG } from "$lib/server/koboldcpp/modelManager"
+import {
+	ensureModelLoaded,
+	DEFAULT_MANAGED_CONFIG
+} from "$lib/server/koboldcpp/modelManager"
 
 const PREFLIGHT_RETRY_DELAY_MS = 2000
 
 /**
- * A KoboldCpp connection that works with Serene Pub's built-in KoboldCPP
+ * A KoboldCPP connection that works with Serene Pub's built-in KoboldCPP
  * Manager: model loading/swapping via the admin API, optionally with a
  * subprocess Serene Pub itself spawns and owns. Everything about sending a
  * generation request (generate(), mapSamplingConfig(), etc.) is identical to
@@ -25,7 +31,7 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 		const settings = await db.query.koboldCppSettings.findFirst()
 		if (!settings?.koboldCppManagerEnabled) {
 			throw new Error(
-				"KoboldCpp Manager is disabled. Enable it in Settings to use this connection."
+				"KoboldCPP Manager is disabled. Enable it in Settings to use this connection."
 			)
 		}
 		if (!this.connection.model) {
@@ -34,7 +40,7 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 		const adminDir = settings.koboldCppManagedBinaryDir
 		if (!adminDir) {
 			throw new Error(
-				"KoboldCpp Manager needs an Admin Directory configured — set one in Settings."
+				"KoboldCPP Manager needs an Admin Directory configured — set one in Settings."
 			)
 		}
 
@@ -42,7 +48,10 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 		// talk to whatever address the manager is configured for. Mutating
 		// the in-memory connection here means generate()/getContextTokenLimit()
 		// (inherited unchanged from KoboldCppAdapter) automatically pick this up.
-		this.connection = { ...this.connection, baseUrl: settings.koboldCppManagerBaseUrl }
+		this.connection = {
+			...this.connection,
+			baseUrl: settings.koboldCppManagerBaseUrl
+		}
 
 		try {
 			await this.attemptPreflight(settings, adminDir, signal, 1)
@@ -63,13 +72,15 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 	 * restarted outside this app's tracking) — so every generation gets a
 	 * fresh check, not just the first one after a cold start. */
 	private async attemptPreflight(
-		settings: NonNullable<Awaited<ReturnType<typeof db.query.koboldCppSettings.findFirst>>>,
+		settings: NonNullable<
+			Awaited<ReturnType<typeof db.query.koboldCppSettings.findFirst>>
+		>,
 		adminDir: string,
 		signal: AbortSignal | undefined,
 		attemptNum: number
 	): Promise<void> {
 		const baseUrl = settings.koboldCppManagerBaseUrl
-		const alreadyResponding = await pingKoboldCpp(baseUrl, 3000)
+		const alreadyResponding = await pingKoboldCPP(baseUrl, 3000)
 
 		// Only spawn a subprocess in "managed" mode — in "external" mode the
 		// user's own koboldcpp instance is expected to already be running
@@ -82,7 +93,7 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 			// "External" or disabled from the settings screen — possibly
 			// mid-generation — while nothing external was actually running).
 			throw new Error(
-				`KoboldCpp is not reachable at ${baseUrl} and the Manager is in "${settings.koboldCppManagedMode ?? "unset"}" mode, so it can't be auto-started. Either start KoboldCpp externally, or switch the Manager to "Managed" mode in Settings.`
+				`KoboldCPP is not reachable at ${baseUrl} and the Manager is in "${settings.koboldCppManagedMode ?? "unset"}" mode, so it can't be auto-started. Either start KoboldCPP externally, or switch the Manager to "Managed" mode in Settings.`
 			)
 		}
 		if (settings.koboldCppManagedMode === "managed" && !alreadyResponding) {
@@ -97,10 +108,12 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 					err
 				)
 				throw new Error(
-					`KoboldCpp managed subprocess failed to start: ${err?.message || err}`
+					`KoboldCPP managed subprocess failed to start: ${err?.message || err}`
 				)
 			}
-			console.log(`[KoboldCPP] preflight attempt ${attemptNum}: subprocess started`)
+			console.log(
+				`[KoboldCPP] preflight attempt ${attemptNum}: subprocess started`
+			)
 		}
 
 		const managedConfig = {
@@ -150,12 +163,19 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 			// with, so the admin API call above (reload_config) is expected to
 			// be rejected — surface that explanation instead of the raw,
 			// undiagnosable "rejected the request" error.
-			if (subprocessManager.isExternal()) {
+			if (settings.koboldCppManagedMode === "external") {
 				throw new Error(
-					`KoboldCpp is running on this port but wasn't started by this Manager, so its admin password/directory don't match — model loading was rejected: ${err?.message || err}. Stop the external instance and let the Manager start its own, or point this Manager at a different port.`
+					`KoboldCPP at ${baseUrl} rejected the model-load request: ${err?.message || err}. Make sure it was started with --admin --adminpassword <matching the one configured here> --admindir <matching the one configured here>.`
 				)
 			}
-			throw new Error(`KoboldCpp model load failed: ${err?.message || err}`)
+			if (subprocessManager.isExternal()) {
+				throw new Error(
+					`KoboldCPP is running on this port but wasn't started by this Manager, so its admin password/directory don't match — model loading was rejected: ${err?.message || err}. Stop the external instance and let the Manager start its own, or point this Manager at a different port.`
+				)
+			}
+			throw new Error(
+				`KoboldCPP model load failed: ${err?.message || err}`
+			)
 		} finally {
 			subprocessManager.resumeHealthCheck()
 		}
@@ -170,7 +190,10 @@ async function testConnection(
 ): Promise<{ ok: boolean; error?: string }> {
 	try {
 		const settings = await db.query.koboldCppSettings.findFirst()
-		const baseUrl = settings?.koboldCppManagerBaseUrl || connection.baseUrl || "http://localhost:5001"
+		const baseUrl =
+			settings?.koboldCppManagerBaseUrl ||
+			connection.baseUrl ||
+			"http://localhost:5001"
 		const response = await fetch(`${baseUrl}/api/extra/version`, {
 			method: "GET",
 			headers: { "Content-Type": "application/json" },
@@ -186,14 +209,17 @@ async function testConnection(
 
 		const data = await response.json()
 		if (!data.version) {
-			return { ok: false, error: "Invalid response from KoboldCpp server" }
+			return {
+				ok: false,
+				error: "Invalid response from KoboldCPP server"
+			}
 		}
 
 		return { ok: true }
 	} catch (e: any) {
 		return {
 			ok: false,
-			error: e.message || "Failed to connect to KoboldCpp server"
+			error: e.message || "Failed to connect to KoboldCPP server"
 		}
 	}
 }
@@ -206,20 +232,27 @@ async function listModels(
 ): Promise<{ models: any[]; error?: string }> {
 	try {
 		const settings = await db.query.koboldCppSettings.findFirst()
-		const baseUrl = settings?.koboldCppManagerBaseUrl || connection.baseUrl || "http://localhost:5001"
+		const baseUrl =
+			settings?.koboldCppManagerBaseUrl ||
+			connection.baseUrl ||
+			"http://localhost:5001"
 
-		const currentModel = (await fetchCurrentModelName(baseUrl)) || "No model loaded"
+		const currentModel =
+			(await fetchCurrentModelName(baseUrl)) || "No model loaded"
 
 		let availableModels: string[] = []
 		try {
-			const availableModelsResponse = await fetch(`${baseUrl}/api/admin/list_options`, {
-				method: "GET",
-				headers: {
-					"Content-Type": "application/json",
-					Authorization: `Bearer ${settings?.koboldCppManagedAdminPassword ?? ""}`
-				},
-				signal: AbortSignal.timeout(5000)
-			})
+			const availableModelsResponse = await fetch(
+				`${baseUrl}/api/admin/list_options`,
+				{
+					method: "GET",
+					headers: {
+						"Content-Type": "application/json",
+						Authorization: `Bearer ${settings?.koboldCppManagedAdminPassword ?? ""}`
+					},
+					signal: AbortSignal.timeout(5000)
+				}
+			)
 			if (availableModelsResponse.ok) {
 				availableModels = await availableModelsResponse.json()
 			}

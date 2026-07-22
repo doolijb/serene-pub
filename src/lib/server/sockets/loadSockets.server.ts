@@ -3,7 +3,10 @@ import os from "os"
 import * as skio from "sveltekit-io"
 import { connectSockets } from "$lib/server/sockets/index"
 import { authMiddleware } from "$lib/server/sockets/auth"
-import { getHttpsHosts, isOriginAllowed } from "$lib/server/sockets/originAllowlist"
+import {
+	getHttpsHosts,
+	isOriginAllowed
+} from "$lib/server/sockets/originAllowlist"
 
 dotenv.config()
 
@@ -31,7 +34,9 @@ export function getPublicSocketsEndpoint(url?: URL) {
 	// the auto-detect fallback below dead code, always winning via `||`.
 	const explicitMode = process.env.SOCKETS_HTTP_MODE?.trim().toLowerCase()
 	const explicitProtocol =
-		explicitMode === "http" || explicitMode === "https" ? explicitMode : null
+		explicitMode === "http" || explicitMode === "https"
+			? explicitMode
+			: null
 
 	const protocol = getHttpsHosts().includes(hostname.toLowerCase())
 		? "https"
@@ -65,7 +70,10 @@ export async function loadSocketsServer() {
 		// reach this server, so comparing against the request's own Host header
 		// works for localhost/LAN IPs/custom domains without requiring
 		// SOCKETS_HTTPS_HOSTS/SOCKETS_ALLOWED_ORIGINS to be configured at all.
-		cors: (req: any, callback: (err: Error | null, options?: any) => void) => {
+		cors: (
+			req: any,
+			callback: (err: Error | null, options?: any) => void
+		) => {
 			const origin = req.headers?.origin
 			const requestHost = req.headers?.host
 			callback(null, {
@@ -104,9 +112,12 @@ async function autoLoadEmbeddingModel() {
 			columns: { vectorizationEnabled: true, embeddingModelName: true }
 		})
 
-		if (!settings?.vectorizationEnabled || !settings.embeddingModelName) return
+		if (!settings?.vectorizationEnabled || !settings.embeddingModelName)
+			return
 
-		const { setEmbeddingTtlMinutes } = await import("$lib/server/embedding/index")
+		const { setEmbeddingTtlMinutes } = await import(
+			"$lib/server/embedding/index"
+		)
 
 		const vecConfig = await db.query.vectorizationConfigs.findFirst({
 			where: eq(schema.vectorizationConfigs.id, 1),
@@ -119,16 +130,21 @@ async function autoLoadEmbeddingModel() {
 			}
 		})
 		// Load TTL config before loading the model so the timer starts correctly
-		if (vecConfig) setEmbeddingTtlMinutes(vecConfig.embeddingModelTtlMinutes)
+		if (vecConfig)
+			setEmbeddingTtlMinutes(vecConfig.embeddingModelTtlMinutes)
 
 		if (vecConfig?.mode === "api") {
 			if (!vecConfig.apiBaseUrl || !vecConfig.apiModel) {
-				throw new Error("API vectorization is enabled but not fully configured")
+				throw new Error(
+					"API vectorization is enabled but not fully configured"
+				)
 			}
 			console.log(
 				`[embedding] Auto-activating API backend on startup: ${vecConfig.apiBaseUrl}`
 			)
-			const { activateApiEmbedding } = await import("$lib/server/embedding/index")
+			const { activateApiEmbedding } = await import(
+				"$lib/server/embedding/index"
+			)
 			await activateApiEmbedding({
 				baseUrl: vecConfig.apiBaseUrl,
 				apiKey: vecConfig.apiKey,
@@ -138,7 +154,9 @@ async function autoLoadEmbeddingModel() {
 			console.log(
 				`[embedding] Auto-loading model on startup: ${settings.embeddingModelName}`
 			)
-			const { loadEmbeddingModel } = await import("$lib/server/embedding/index")
+			const { loadEmbeddingModel } = await import(
+				"$lib/server/embedding/index"
+			)
 			await loadEmbeddingModel(settings.embeddingModelName)
 		}
 		console.log("[embedding] Model ready.")

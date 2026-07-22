@@ -163,7 +163,14 @@
 			"users",
 			"settings"
 		],
-		rightNavOrder: ["activity", "tags", "personas", "characters", "lorebooks", "chats"],
+		rightNavOrder: [
+			"activity",
+			"tags",
+			"personas",
+			"characters",
+			"lorebooks",
+			"chats"
+		],
 		getOrderedEntries: (nav: Record<string, any>, order: string[]) => {
 			// First, get entries that are in the order array
 			const orderedEntries = order
@@ -180,7 +187,9 @@
 	})
 	let systemSettingsCtx: SystemSettingsCtx = $state({ settings: undefined })
 	let ollamaSettingsCtx: OllamaSettingsCtx = $state({ settings: undefined })
-	let koboldCppSettingsCtx: KoboldCppSettingsCtx = $state({ settings: undefined })
+	let koboldCppSettingsCtx: KoboldCppSettingsCtx = $state({
+		settings: undefined
+	})
 	let userSettingsCtx: UserSettingsCtx = $state({ settings: undefined })
 	let customThemeCssKeys = $state<Record<string, string>>({})
 	let vectorizationCtx: VectorizationCtx = $state({
@@ -192,7 +201,11 @@
 		history: []
 	})
 	let taskQueueCtx: TaskQueueCtx = $state({ tasks: [] })
-	let openChatCtx: OpenChatCtx = $state({ chatId: null, lorebookId: null, isOwner: false })
+	let openChatCtx: OpenChatCtx = $state({
+		chatId: null,
+		lorebookId: null,
+		isOwner: false
+	})
 	let graphBuildsCtx: GraphBuildsCtx = $state({
 		activeBuild: null,
 		reopenLorebookId: null,
@@ -222,7 +235,10 @@
 		reviewSceneId: null,
 		dismiss: (activityId: string) => {
 			socket.emit("activity:dismiss", { id: activityId })
-			sceneSummarizesCtx.activities = sceneSummarizesCtx.activities.filter((a) => a.activityId !== activityId)
+			sceneSummarizesCtx.activities =
+				sceneSummarizesCtx.activities.filter(
+					(a) => a.activityId !== activityId
+				)
 		},
 		setReviewSceneId: (id: number | null) => {
 			sceneSummarizesCtx.reviewSceneId = id
@@ -233,15 +249,16 @@
 		reviewHistoryEntryId: null,
 		dismiss: (activityId: string) => {
 			socket.emit("activity:dismiss", { id: activityId })
-			compileEntriesCtx.activities = compileEntriesCtx.activities.filter((a) => a.activityId !== activityId)
+			compileEntriesCtx.activities = compileEntriesCtx.activities.filter(
+				(a) => a.activityId !== activityId
+			)
 		},
 		setReviewHistoryEntryId: (id: number | null) => {
 			compileEntriesCtx.reviewHistoryEntryId = id
 		}
 	})
 
-	$effect(() => {
-	})
+	$effect(() => {})
 
 	// Derived state for authentication flow
 	let isSettingsLoaded = $derived(!!systemSettingsCtx?.settings)
@@ -257,19 +274,27 @@
 	// local ONNX models can't load under Bionic, but external-API embeddings
 	// work fine, so its nav entry stays visible and the sidebar itself gates
 	// the local-model option (VectorizationSetupScreen).
-	let isAndroidWrapper = $derived(!!systemSettingsCtx?.settings?.isAndroidWrapper)
+	let isAndroidWrapper = $derived(
+		!!systemSettingsCtx?.settings?.isAndroidWrapper
+	)
 
 	// Update leftNav based on Ollama Manager setting
 	$effect(() => {
 		if (!isSettingsLoaded) return
 
 		// Add Users sidebar if accounts are enabled
-		if (isAccountsEnabled) {
+		if (isAccountsEnabled && isAdmin) {
 			panelsCtx.leftNav.users = { icon: Icons.Users, title: "Users" }
+		} else {
+			delete panelsCtx.leftNav.users
 		}
 
 		// Add/remove Ollama Manager based on setting
-		if (ollamaSettingsCtx?.settings?.ollamaManagerEnabled && isAdmin && !isAndroidWrapper) {
+		if (
+			ollamaSettingsCtx?.settings?.ollamaManagerEnabled &&
+			isAdmin &&
+			!isAndroidWrapper
+		) {
 			panelsCtx.leftNav.ollama = {
 				icon: OllamaIcon,
 				title: "Ollama Manager"
@@ -279,7 +304,11 @@
 		}
 
 		// Add/remove KoboldCPP Manager based on setting
-		if (koboldCppSettingsCtx?.settings?.koboldCppManagerEnabled && isAdmin && !isAndroidWrapper) {
+		if (
+			koboldCppSettingsCtx?.settings?.koboldCppManagerEnabled &&
+			isAdmin &&
+			!isAndroidWrapper
+		) {
 			panelsCtx.leftNav.koboldcpp = {
 				imgSrc: "/koboldcpp/koboldcpp-icon.svg",
 				title: "KoboldCPP Manager"
@@ -435,7 +464,9 @@
 	// Remove all style elements for a given theme name, then inject a fresh one keyed by cssKey.
 	// Using cssKey in the element ID ensures browsers always parse a new stylesheet on update.
 	function injectCustomThemeCss(name: string, cssKey: string, css: string) {
-		document.querySelectorAll(`style[data-custom-theme="${name}"]`).forEach((el) => el.remove())
+		document
+			.querySelectorAll(`style[data-custom-theme="${name}"]`)
+			.forEach((el) => el.remove())
 		const el = document.createElement("style")
 		el.id = `custom-theme-${cssKey}`
 		el.dataset.customTheme = name
@@ -444,40 +475,65 @@
 	}
 
 	function removeCustomThemeCss(name: string) {
-		document.querySelectorAll(`style[data-custom-theme="${name}"]`).forEach((el) => el.remove())
+		document
+			.querySelectorAll(`style[data-custom-theme="${name}"]`)
+			.forEach((el) => el.remove())
 	}
 
 	onMount(() => {
-		socket.on("customThemes:list", (msg: Sockets.CustomThemes.List.Response) => {
-			const allMeta = [...msg.myThemes, ...msg.instanceThemes]
-			const customNames = new Set(allMeta.map((t) => t.name))
-			const builtinNames = new Set(Theme.options.map(([v]) => v))
+		socket.on(
+			"customThemes:list",
+			(msg: Sockets.CustomThemes.List.Response) => {
+				const allMeta = [...msg.myThemes, ...msg.instanceThemes]
+				const customNames = new Set(allMeta.map((t) => t.name))
+				const builtinNames = new Set(Theme.options.map(([v]) => v))
 
-			// Pre-populate cssKey map so data-theme updates before getCss response arrives
-			allMeta.forEach((t) => { if (t.cssKey) customThemeCssKeys[t.name] = t.cssKey })
+				// Pre-populate cssKey map so data-theme updates before getCss response arrives
+				allMeta.forEach((t) => {
+					if (t.cssKey) customThemeCssKeys[t.name] = t.cssKey
+				})
 
-			// Fall back to hamlindigo if the active theme is a custom theme that no longer exists
-			const currentTheme = userSettingsCtx.settings?.theme
-			if (currentTheme && !builtinNames.has(currentTheme) && !customNames.has(currentTheme)) {
-				socket.emit("userSettings:updateTheme", { theme: Theme.HAMLINDIGO })
+				// Fall back to hamlindigo if the active theme is a custom theme that no longer exists
+				const currentTheme = userSettingsCtx.settings?.theme
+				if (
+					currentTheme &&
+					!builtinNames.has(currentTheme) &&
+					!customNames.has(currentTheme)
+				) {
+					socket.emit("userSettings:updateTheme", {
+						theme: Theme.HAMLINDIGO
+					})
+				}
+
+				// Fetch CSS for current themes
+				allMeta.forEach((t) =>
+					socket.emit("customThemes:getCss", { name: t.name })
+				)
 			}
-
-			// Fetch CSS for current themes
-			allMeta.forEach((t) => socket.emit("customThemes:getCss", { name: t.name }))
-		})
-		socket.on("customThemes:getCss", (msg: Sockets.CustomThemes.GetCss.Response) => {
-			customThemeCssKeys[msg.name] = msg.cssKey
-			// Filename (element ID) = cssKey — fresh element per cssKey, never stale
-			injectCustomThemeCss(msg.name, msg.cssKey, `[data-theme='${msg.cssKey}'] {\n${msg.css}\n}`)
-		})
+		)
+		socket.on(
+			"customThemes:getCss",
+			(msg: Sockets.CustomThemes.GetCss.Response) => {
+				customThemeCssKeys[msg.name] = msg.cssKey
+				// Filename (element ID) = cssKey — fresh element per cssKey, never stale
+				injectCustomThemeCss(
+					msg.name,
+					msg.cssKey,
+					`[data-theme='${msg.cssKey}'] {\n${msg.css}\n}`
+				)
+			}
+		)
 		socket.on("customThemes:delete", () => {
 			socket.emit("customThemes:list", {})
 		})
-		socket.on("customThemes:save", (msg: Sockets.CustomThemes.Save.Response) => {
-			// Update cssKey immediately so data-theme snaps to new selector before CSS arrives
-			customThemeCssKeys[msg.theme.name] = msg.theme.cssKey
-			socket.emit("customThemes:getCss", { name: msg.theme.name })
-		})
+		socket.on(
+			"customThemes:save",
+			(msg: Sockets.CustomThemes.Save.Response) => {
+				// Update cssKey immediately so data-theme snaps to new selector before CSS arrives
+				customThemeCssKeys[msg.theme.name] = msg.theme.cssKey
+				socket.emit("customThemes:getCss", { name: msg.theme.name })
+			}
+		)
 		socket.emit("customThemes:list", {})
 	})
 
@@ -602,19 +658,26 @@
 
 		socket.on("activity:update", (data) => {
 			const activities = data.activities ?? []
-			const graphActivities = activities.filter((a: any) => a.kind === "graph_build")
-			const sceneActivities = activities.filter((a: any) => a.kind === "scene_summarize")
+			const graphActivities = activities.filter(
+				(a: any) => a.kind === "graph_build"
+			)
+			const sceneActivities = activities.filter(
+				(a: any) => a.kind === "scene_summarize"
+			)
 
 			// Graph build: take the most recent one
 			const latestGraph = [...graphActivities].sort(
-				(a: any, b: any) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
+				(a: any, b: any) =>
+					new Date(b.startedAt).getTime() -
+					new Date(a.startedAt).getTime()
 			)[0] as any
 			if (!latestGraph) {
 				graphBuildsCtx.activeBuild = null
 			} else {
-				const prevTrace = graphBuildsCtx.activeBuild?.activityId === latestGraph.id
-					? graphBuildsCtx.activeBuild?.trace
-					: undefined
+				const prevTrace =
+					graphBuildsCtx.activeBuild?.activityId === latestGraph.id
+						? graphBuildsCtx.activeBuild?.trace
+						: undefined
 				graphBuildsCtx.activeBuild = {
 					activityId: latestGraph.id,
 					userId: latestGraph.userId,
@@ -659,7 +722,9 @@
 			}))
 
 			// History entry compile activities
-			const compileActivities = activities.filter((a: any) => a.kind === "compile_history_entry")
+			const compileActivities = activities.filter(
+				(a: any) => a.kind === "compile_history_entry"
+			)
 			compileEntriesCtx.activities = compileActivities.map((a: any) => ({
 				activityId: a.id,
 				userId: a.userId,
@@ -745,7 +810,6 @@
 	$effect(() => {
 		if (!systemSettingsCtx) return
 
-
 		// Only proceed if we have system settings
 		if (!systemSettingsCtx.settings) return
 
@@ -783,10 +847,12 @@
 	>
 		<!-- Background image layer -->
 		{#if userSettingsCtx.settings?.backgroundImagePath}
-			{@const bgOpacity = (userSettingsCtx.settings.backgroundOpacity ?? 75) / 100}
+			{@const bgOpacity =
+				(userSettingsCtx.settings.backgroundOpacity ?? 75) / 100}
 			<div
 				class="pointer-events-none fixed inset-0 z-0 bg-cover bg-center bg-no-repeat"
-				style="background-image: url({userSettingsCtx.settings.backgroundImagePath}); opacity: {bgOpacity};"
+				style="background-image: url({userSettingsCtx.settings
+					.backgroundImagePath}); opacity: {bgOpacity};"
 				aria-hidden="true"
 			></div>
 		{/if}
@@ -806,7 +872,7 @@
 		{/if}
 		{#if $sceneImages.right}
 			<div
-				class="pointer-events-none fixed bottom-0 right-0 z-[2] hidden w-1/4 lg:block"
+				class="pointer-events-none fixed right-0 bottom-0 z-[2] hidden w-1/4 lg:block"
 				style="height: 80svh;"
 				aria-hidden="true"
 			>
@@ -1109,10 +1175,14 @@
 							onclick={() => handleMobilePanelClick(key)}
 						>
 							{#if item.imgSrc}
-							<span class="text-foreground block h-5 w-5" style="background-color: currentColor; mask: url({item.imgSrc}) no-repeat center / contain; -webkit-mask: url({item.imgSrc}) no-repeat center / contain;" aria-hidden="true"></span>
-						{:else}
-							<item.icon class="text-foreground h-5 w-5" />
-						{/if}
+								<span
+									class="text-foreground block h-5 w-5"
+									style="background-color: currentColor; mask: url({item.imgSrc}) no-repeat center / contain; -webkit-mask: url({item.imgSrc}) no-repeat center / contain;"
+									aria-hidden="true"
+								></span>
+							{:else}
+								<item.icon class="text-foreground h-5 w-5" />
+							{/if}
 							<span>{item.title}</span>
 						</button>
 					{/each}

@@ -214,7 +214,9 @@ export const personaSchemaForLLM = {
  * Note: Using @ts-expect-error to suppress known drizzle-zod type incompatibilities
  * The schemas work correctly at runtime, the types are just complex
  */
+// prettier-ignore
 // @ts-expect-error - drizzle-zod type compatibility
 export type AssistantCreateCharacter = z.infer<typeof assistantCreateCharacterSchema>
+// prettier-ignore
 // @ts-expect-error - drizzle-zod type compatibility
 export type AssistantCreatePersona = z.infer<typeof assistantCreatePersonaSchema>

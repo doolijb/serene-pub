@@ -8,7 +8,11 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 	import LibraryPortraitCard from "$lib/client/components/library/LibraryPortraitCard.svelte"
-	import type { LibraryCatalogItem, CardSourceId, CardSourceSort } from "$lib/shared/library/types"
+	import type {
+		LibraryCatalogItem,
+		CardSourceId,
+		CardSourceSort
+	} from "$lib/shared/library/types"
 	import { imageUrlFor } from "$lib/shared/library/imageUrlFor"
 	import LibraryDetailsModal from "$lib/client/components/library/LibraryDetailsModal.svelte"
 
@@ -48,7 +52,8 @@
 	let retryAfterMs = $state<number | null>(null)
 	let retryTimer: ReturnType<typeof setTimeout> | undefined
 
-	let capabilities: Sockets.CardSources.Capabilities.Response | null = $state(null)
+	let capabilities: Sockets.CardSources.Capabilities.Response | null =
+		$state(null)
 	let activeSource = $state<CardSourceId>("github-serenepub")
 	// Only CharaVault's /api/cards supports ?sort= — this is what "browse
 	// with nothing searched" defaults to instead of whatever CharaVault's
@@ -57,8 +62,8 @@
 	let hasBookOnly = $state(false)
 	let creatorFilter = $state("")
 	let sourcesForCharacters = $derived.by(() => capabilities?.sources ?? [])
-	let activeSourceInfo = $derived.by(() =>
-		capabilities?.sources.find((s) => s.id === activeSource) ?? null
+	let activeSourceInfo = $derived.by(
+		() => capabilities?.sources.find((s) => s.id === activeSource) ?? null
 	)
 
 	// New searches are always sent immediately — never blocked or queued
@@ -87,7 +92,10 @@
 		searchDebounceTimeoutId = setTimeout(() => fetchLibrary(false), 500)
 	}
 
-	function fetchLibrary(showLoading: boolean = false, append: boolean = false) {
+	function fetchLibrary(
+		showLoading: boolean = false,
+		append: boolean = false
+	) {
 		const requestId = uuid()
 		latestRequestId = requestId
 		pendingIsAppend = append
@@ -105,9 +113,12 @@
 			searchTerm: searchString,
 			source: activeSource,
 			sort: activeSource === "charavault" ? activeSort : undefined,
-			hasBook: activeSource === "charavault" && hasBookOnly ? true : undefined,
+			hasBook:
+				activeSource === "charavault" && hasBookOnly ? true : undefined,
 			creatorFilter:
-				activeSource === "charavault" && creatorFilter ? creatorFilter : undefined,
+				activeSource === "charavault" && creatorFilter
+					? creatorFilter
+					: undefined,
 			cursor: {
 				limit: PAGE_SIZE,
 				offset: append ? libraryCharacters.length : 0
@@ -193,77 +204,111 @@
 			if (!categories.has(category)) categories.set(category, [])
 			categories.get(category)!.push(character)
 		}
-		return Array.from(categories.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+		return Array.from(categories.entries()).sort((a, b) =>
+			a[0].localeCompare(b[0])
+		)
 	})
 
 	onMount(() => {
-		socket.on("characters:searchLibrary", (msg: Sockets.Characters.SearchLibrary.Response) => {
-			if (msg.requestId !== latestRequestId) return
-			libraryCharacters = pendingIsAppend
-				? [...libraryCharacters, ...msg.characters]
-				: msg.characters
-			hasMoreResults = msg.hasMore
-			isLoading = false
-			searching = false
-			loadingMore = false
-		})
-		socket.on("characters:searchLibrary:error", (msg: Sockets.SearchLibraryErrorResponse) => {
-			if (msg.requestId !== latestRequestId) return
-			// Capture now — by the time a retryTimer fires, pendingIsAppend may
-			// have already been overwritten by a newer, unrelated request.
-			const wasAppend = pendingIsAppend
-			const isRateLimited = !!msg.rateLimited
-			const errorRetryAfterMs = msg.retryAfterMs ?? null
-			isLoading = false
-			searching = false
-			loadingMore = false
+		socket.on(
+			"characters:searchLibrary",
+			(msg: Sockets.Characters.SearchLibrary.Response) => {
+				if (msg.requestId !== latestRequestId) return
+				libraryCharacters = pendingIsAppend
+					? [...libraryCharacters, ...msg.characters]
+					: msg.characters
+				hasMoreResults = msg.hasMore
+				isLoading = false
+				searching = false
+				loadingMore = false
+			}
+		)
+		socket.on(
+			"characters:searchLibrary:error",
+			(msg: Sockets.SearchLibraryErrorResponse) => {
+				if (msg.requestId !== latestRequestId) return
+				// Capture now — by the time a retryTimer fires, pendingIsAppend may
+				// have already been overwritten by a newer, unrelated request.
+				const wasAppend = pendingIsAppend
+				const isRateLimited = !!msg.rateLimited
+				const errorRetryAfterMs = msg.retryAfterMs ?? null
+				isLoading = false
+				searching = false
+				loadingMore = false
 
-			if (wasAppend) {
-				// A failed "Load More" shouldn't blank out the already-loaded
-				// cards still on screen — just stop the loading-more spinner. A
-				// rate-limited append still auto-retries (resuming the append,
-				// not replacing) same as a fresh search would; anything else
-				// just toasts and leaves the existing grid alone.
+				if (wasAppend) {
+					// A failed "Load More" shouldn't blank out the already-loaded
+					// cards still on screen — just stop the loading-more spinner. A
+					// rate-limited append still auto-retries (resuming the append,
+					// not replacing) same as a fresh search would; anything else
+					// just toasts and leaves the existing grid alone.
+					if (isRateLimited && errorRetryAfterMs) {
+						clearTimeout(retryTimer)
+						retryTimer = setTimeout(
+							() => fetchLibrary(true, true),
+							errorRetryAfterMs
+						)
+					} else {
+						toaster.error({
+							title: msg.error || "Failed to load more characters"
+						})
+					}
+					return
+				}
+
+				libraryCharacters = []
+				unreachable = !!msg.unreachable
+				rateLimited = isRateLimited
+				retryAfterMs = errorRetryAfterMs
 				if (isRateLimited && errorRetryAfterMs) {
 					clearTimeout(retryTimer)
-					retryTimer = setTimeout(() => fetchLibrary(true, true), errorRetryAfterMs)
-				} else {
-					toaster.error({ title: msg.error || "Failed to load more characters" })
+					retryTimer = setTimeout(
+						() => fetchLibrary(true, false),
+						errorRetryAfterMs
+					)
 				}
-				return
+				if (!unreachable && !isRateLimited) {
+					toaster.error({
+						title:
+							msg.error ||
+							"Failed to search the character library"
+					})
+				}
 			}
-
-			libraryCharacters = []
-			unreachable = !!msg.unreachable
-			rateLimited = isRateLimited
-			retryAfterMs = errorRetryAfterMs
-			if (isRateLimited && errorRetryAfterMs) {
-				clearTimeout(retryTimer)
-				retryTimer = setTimeout(() => fetchLibrary(true, false), errorRetryAfterMs)
+		)
+		socket.on(
+			"characters:importFromLibrary",
+			(msg: Sockets.Characters.ImportFromLibrary.Response) => {
+				toaster.success({ title: `Downloaded ${msg.character.name}` })
+				downloading = false
+				showDetails = false
 			}
-			if (!unreachable && !isRateLimited) {
-				toaster.error({ title: msg.error || "Failed to search the character library" })
+		)
+		socket.on(
+			"characters:importFromLibrary:error",
+			(msg: Sockets.ErrorResponse) => {
+				toaster.error({
+					title: msg.error || "Failed to download character"
+				})
+				downloading = false
 			}
-		})
-		socket.on("characters:importFromLibrary", (msg: Sockets.Characters.ImportFromLibrary.Response) => {
-			toaster.success({ title: `Downloaded ${msg.character.name}` })
-			downloading = false
-			showDetails = false
-		})
-		socket.on("characters:importFromLibrary:error", (msg: Sockets.ErrorResponse) => {
-			toaster.error({ title: msg.error || "Failed to download character" })
-			downloading = false
-		})
-		socket.on("cardSources:capabilities", (msg: Sockets.CardSources.Capabilities.Response) => {
-			capabilities = msg
-		})
-		socket.on("cardSources:cardDetail", (msg: Sockets.CardSources.CardDetail.Response) => {
-			if (msg.requestId !== latestDetailRequestId) return
-			loadingDetail = false
-			if (selectedCharacter) {
-				selectedCharacter = { ...selectedCharacter, ...msg }
+		)
+		socket.on(
+			"cardSources:capabilities",
+			(msg: Sockets.CardSources.Capabilities.Response) => {
+				capabilities = msg
 			}
-		})
+		)
+		socket.on(
+			"cardSources:cardDetail",
+			(msg: Sockets.CardSources.CardDetail.Response) => {
+				if (msg.requestId !== latestDetailRequestId) return
+				loadingDetail = false
+				if (selectedCharacter) {
+					selectedCharacter = { ...selectedCharacter, ...msg }
+				}
+			}
+		)
 		socket.on("cardSources:cardDetail:error", (msg: any) => {
 			if (msg.requestId !== latestDetailRequestId) return
 			loadingDetail = false
@@ -286,7 +331,9 @@
 	})
 </script>
 
-<div class="mx-4 mt-4 mb-8 min-h-[calc(100%-3rem)] rounded-lg p-6 shadow-md preset-tonal">
+<div
+	class="preset-tonal mx-4 mt-4 mb-8 min-h-[calc(100%-3rem)] rounded-lg p-6 shadow-md"
+>
 	<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
 		<div class="flex items-center gap-3">
 			<button
@@ -303,7 +350,8 @@
 					Character Library
 				</h1>
 				<p class="text-surface-700-300 mt-1 text-sm">
-					Browse and download ready-made characters from the Serene Pub community library.
+					Browse and download ready-made characters from the Serene
+					Pub community library.
 				</p>
 			</div>
 		</div>
@@ -314,16 +362,22 @@
 			<Tabs value={activeSource} onValueChange={handleTabChange}>
 				<Tabs.List class="flex flex-wrap gap-1">
 					{#each sourcesForCharacters as source}
-						<Tabs.Trigger value={source.id}>{source.label}</Tabs.Trigger>
+						<Tabs.Trigger value={source.id}>
+							{source.label}
+						</Tabs.Trigger>
 					{/each}
-					<Tabs.Indicator class="rounded-full preset-filled-primary-500" />
+					<Tabs.Indicator
+						class="preset-filled-primary-500 rounded-full"
+					/>
 				</Tabs.List>
 			</Tabs>
 		</div>
 	{/if}
 
 	{#if activeSourceInfo}
-		<p class="text-surface-700-300 mb-4 flex flex-wrap items-center gap-x-2 text-sm">
+		<p
+			class="text-surface-700-300 mb-4 flex flex-wrap items-center gap-x-2 text-sm"
+		>
 			<span>{activeSourceInfo.description}</span>
 			<a
 				href={activeSourceInfo.url}
@@ -362,14 +416,23 @@
 
 	{#if activeSource === "charavault"}
 		<p class="text-surface-700-300 mb-3 text-xs">
-			Supports <code>tag:name</code>, <code>-exclude</code>,
-			<code>creator:name</code>, and <code>"exact phrase"</code> — combine
-			freely, e.g. <code>elf tag:fantasy -romance creator:anon</code>.
+			Supports <code>tag:name</code>
+			,
+			<code>-exclude</code>
+			,
+			<code>creator:name</code>
+			, and
+			<code>"exact phrase"</code>
+			— combine freely, e.g.
+			<code>elf tag:fantasy -romance creator:anon</code>
+			.
 		</p>
 
 		{#if creatorFilter}
 			<div class="mb-3 flex items-center gap-2">
-				<span class="chip preset-filled-primary-500 inline-flex items-center gap-1.5">
+				<span
+					class="chip preset-filled-primary-500 inline-flex items-center gap-1.5"
+				>
 					Creator: {creatorFilter}
 					<button
 						type="button"
@@ -386,7 +449,15 @@
 		<div class="mb-4 flex flex-wrap items-center gap-3">
 			<label class="flex items-center gap-2 text-sm" for="sort-select">
 				<span class="text-surface-700-300 font-semibold">Sort:</span>
-				<select id="sort-select" class="select" value={activeSort} onchange={(e) => handleSortChange(e.currentTarget.value as CardSourceSort)}>
+				<select
+					id="sort-select"
+					class="select"
+					value={activeSort}
+					onchange={(e) =>
+						handleSortChange(
+							e.currentTarget.value as CardSourceSort
+						)}
+				>
 					{#each SORT_OPTIONS as option}
 						<option value={option.value}>{option.label}</option>
 					{/each}
@@ -398,11 +469,15 @@
 				onCheckedChange={handleHasBookChange}
 				class="flex items-center gap-2"
 			>
-				<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+				<Switch.Control
+					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+				>
 					<Switch.Thumb />
 				</Switch.Control>
 				<Switch.HiddenInput />
-				<Switch.Label class="text-sm font-semibold">Only cards with a lorebook</Switch.Label>
+				<Switch.Label class="text-sm font-semibold">
+					Only cards with a lorebook
+				</Switch.Label>
 			</Switch>
 		</div>
 	{/if}
@@ -411,34 +486,52 @@
 		<div class="mb-6">
 			<Switch
 				name="include-nsfw"
-				checked={userSettingsCtx.settings?.charaVaultIncludeNsfw ?? false}
+				checked={userSettingsCtx.settings?.charaVaultIncludeNsfw ??
+					false}
 				onCheckedChange={onIncludeNsfwChange}
 				class="flex items-center gap-2"
 			>
-				<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+				<Switch.Control
+					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+				>
 					<Switch.Thumb />
 				</Switch.Control>
 				<Switch.HiddenInput />
-				<Switch.Label class="text-sm font-semibold">Include NSFW results</Switch.Label>
+				<Switch.Label class="text-sm font-semibold">
+					Include NSFW results
+				</Switch.Label>
 			</Switch>
 		</div>
 	{/if}
 
 	{#if isLoading}
 		<div class="flex items-center justify-center py-16">
-			<Icons.Loader2 size={32} class="text-surface-700-300 animate-spin" />
+			<Icons.Loader2
+				size={32}
+				class="text-surface-700-300 animate-spin"
+			/>
 		</div>
 	{:else if unreachable}
-		<div class="text-surface-700-300 flex flex-col items-center gap-3 py-16 text-center">
+		<div
+			class="text-surface-700-300 flex flex-col items-center gap-3 py-16 text-center"
+		>
 			<Icons.WifiOff size={40} class="opacity-40" />
-			<p>{capabilities?.sources.find((s) => s.id === activeSource)?.label ?? "This source"} is unreachable right now.</p>
-			<button class="btn btn-sm preset-filled-primary-500" onclick={() => fetchLibrary(true)}>
+			<p>
+				{capabilities?.sources.find((s) => s.id === activeSource)
+					?.label ?? "This source"} is unreachable right now.
+			</p>
+			<button
+				class="btn btn-sm preset-filled-primary-500"
+				onclick={() => fetchLibrary(true)}
+			>
 				<Icons.RotateCw size={16} />
 				Retry
 			</button>
 		</div>
 	{:else if rateLimited}
-		<div class="text-surface-700-300 flex flex-col items-center gap-2 py-16 text-center">
+		<div
+			class="text-surface-700-300 flex flex-col items-center gap-2 py-16 text-center"
+		>
 			<Icons.Clock size={40} class="opacity-40" />
 			<p>
 				This source is busy right now{#if retryAfterMs}
@@ -446,7 +539,9 @@
 			</p>
 		</div>
 	{:else if libraryCharacters.length === 0}
-		<div class="text-surface-700-300 flex flex-col items-center gap-2 py-16 text-center">
+		<div
+			class="text-surface-700-300 flex flex-col items-center gap-2 py-16 text-center"
+		>
 			<Icons.Search size={40} class="opacity-40" />
 			<p>No characters found</p>
 		</div>
@@ -454,7 +549,9 @@
 		<!-- CharaVault's "category" (folder) grouping doesn't map to a
 			meaningful browsing structure the way the curated GitHub catalog's
 			categories do — flat grid instead of sectioned-by-category. -->
-		<div class="grid grid-cols-[repeat(auto-fill,minmax(16.625rem,1fr))] gap-4">
+		<div
+			class="grid grid-cols-[repeat(auto-fill,minmax(16.625rem,1fr))] gap-4"
+		>
 			{#each libraryCharacters as character (`${character.source}:${character.file}`)}
 				<LibraryPortraitCard
 					item={character}
@@ -467,10 +564,14 @@
 		<div class="space-y-8">
 			{#each categorizedCharacters as [category, characters]}
 				<section>
-					<h2 class="text-surface-400 mb-3 text-xs font-semibold tracking-wider uppercase">
+					<h2
+						class="text-surface-400 mb-3 text-xs font-semibold tracking-wider uppercase"
+					>
 						{category}
 					</h2>
-					<div class="grid grid-cols-[repeat(auto-fill,minmax(16.625rem,1fr))] gap-4">
+					<div
+						class="grid grid-cols-[repeat(auto-fill,minmax(16.625rem,1fr))] gap-4"
+					>
 						{#each characters as character (`${character.source}:${character.file}`)}
 							<LibraryPortraitCard
 								item={character}

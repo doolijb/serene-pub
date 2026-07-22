@@ -54,7 +54,9 @@ export class OpenAIGPT4TokenCounter implements TokenCounter {
 
 export class OpenAIGPT4oTokenCounter implements TokenCounter {
 	async countTokens(text: string): Promise<number> {
-		const { countTokens } = await import("gpt-tokenizer/encoding/o200k_base")
+		const { countTokens } = await import(
+			"gpt-tokenizer/encoding/o200k_base"
+		)
 		return countTokens(text)
 	}
 }
@@ -94,9 +96,7 @@ export class CohereTokenCounter implements TokenCounter {
 	// value) is cached so concurrent calls before the first load finishes
 	// share one in-flight load instead of racing to build it twice.
 	private tokenizerPromise?: Promise<
-		ReturnType<
-			typeof import("@lenml/tokenizer-gemma").fromPreTrained
-		>
+		ReturnType<typeof import("@lenml/tokenizer-gemma").fromPreTrained>
 	>
 
 	private getTokenizer() {

@@ -14,7 +14,7 @@ import { koboldCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { fetchCurrentModelName } from "$lib/server/koboldcpp/kcppHttp"
 
-// Plain/"dumb" KoboldCpp connection: the user runs and configures their own
+// Plain/"dumb" KoboldCPP connection: the user runs and configures their own
 // koboldcpp instance entirely themselves. No admin API is assumed, so there's
 // no preflight — generate() just sends the request. For a connection that
 // works with Serene Pub's KoboldCPP Manager (subprocess lifecycle, model
@@ -70,7 +70,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 	mapSamplingConfig(): Record<string, any> {
 		const result: Record<string, any> = {}
 
-		// Map the sampling parameters according to KoboldCpp API
+		// Map the sampling parameters according to KoboldCPP API
 		for (const [key, value] of Object.entries(this.sampling)) {
 			if (key.endsWith("Enabled")) continue
 			const enabledKey = key + "Enabled"
@@ -84,7 +84,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		// Handle special mappings for KoboldCpp
 		// Ensure we handle sampler_order if needed
 		if (!result.sampler_order) {
-			// Default sampler order for KoboldCpp - must be at least 6 items
+			// Default sampler order for KoboldCPP - must be at least 6 items
 			result.sampler_order = [6, 0, 1, 3, 4, 2, 5]
 		}
 
@@ -104,12 +104,16 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		const samplingLimit = await super.getContextTokenLimit()
 		const baseUrl = this.connection.baseUrl || "http://localhost:5001"
 		try {
-			const res = await fetch(`${baseUrl}/api/extra/true_max_context_length`, {
-				signal: AbortSignal.timeout(3000)
-			})
+			const res = await fetch(
+				`${baseUrl}/api/extra/true_max_context_length`,
+				{
+					signal: AbortSignal.timeout(3000)
+				}
+			)
 			if (res.ok) {
 				const data = await res.json()
-				const serverMax = typeof data.value === "number" ? data.value : null
+				const serverMax =
+					typeof data.value === "number" ? data.value : null
 				if (serverMax) return Math.min(samplingLimit, serverMax)
 			}
 		} catch {
@@ -132,7 +136,10 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 	async generate(): Promise<{
 		completionResult:
 			| string
-			| ((contentCb: (chunk: string) => void, thinkingCb?: (chunk: string) => void) => Promise<void>)
+			| ((
+					contentCb: (chunk: string) => void,
+					thinkingCb?: (chunk: string) => void
+			  ) => Promise<void>)
 		compiledPrompt: CompiledPrompt
 		isAborted: boolean
 		thinkingContent?: string
@@ -148,7 +155,8 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		// in-flight generation to actually stop computing.
 		this.genKey = crypto.randomUUID()
 		// null = Auto (omit from request), true/false = explicit override
-		const enableThinking: boolean | null = this.connection.extraJson?.enableThinking ?? null
+		const enableThinking: boolean | null =
+			this.connection.extraJson?.enableThinking ?? null
 
 		// Prepare stop strings
 		const stopStrings = StopStrings.get({
@@ -176,7 +184,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		// Map sampling config
 		const samplingParams = this.mapSamplingConfig()
 
-		// Prepare the request body according to KoboldCpp API
+		// Prepare the request body according to KoboldCPP API
 		let requestBody: Record<string, any>
 
 		if (useChat) {
@@ -194,7 +202,9 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				stream,
 				genkey: this.genKey,
 				...samplingParams,
-				...(enableThinking !== null ? { enable_thinking: enableThinking } : {})
+				...(enableThinking !== null
+					? { enable_thinking: enableThinking }
+					: {})
 			}
 		} else {
 			// Use text completion format
@@ -208,7 +218,9 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				stop_sequence,
 				genkey: this.genKey,
 				...samplingParams,
-				...(enableThinking !== null ? { enable_thinking: enableThinking } : {})
+				...(enableThinking !== null
+					? { enable_thinking: enableThinking }
+					: {})
 			}
 
 			// Add memory if enabled (only for text completion)
@@ -220,7 +232,10 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		// Handle streaming vs non-streaming
 		if (stream) {
 			return {
-				completionResult: async (contentCb: (chunk: string) => void, _thinkingCb?: (chunk: string) => void) => {
+				completionResult: async (
+					contentCb: (chunk: string) => void,
+					_thinkingCb?: (chunk: string) => void
+				) => {
 					this.abortController = new AbortController()
 					let content = ""
 
@@ -271,6 +286,21 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 										const data = JSON.parse(line.slice(6))
 										if (useChat) {
 											// OpenAI chat format
+											// A 200 stream doesn't guarantee a real
+											// completion — eg. no model loaded comes
+											// back as a single chunk with an empty
+											// delta and finish_reason "error", then
+											// [DONE]. Left unchecked, that silently
+											// produces an empty-but-"successful" reply.
+											if (
+												data.choices?.[0]
+													?.finish_reason === "error"
+											) {
+												contentCb(
+													"FAILURE: KoboldCPP rejected the request (finish_reason: error) — is a model loaded?"
+												)
+												return
+											}
 											if (
 												data.choices?.[0]?.delta
 													?.content
@@ -282,7 +312,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 												contentCb(chunk)
 											}
 										} else {
-											// KoboldCpp text format
+											// KoboldCPP text format
 											if (data.token) {
 												content += data.token
 												contentCb(data.token)
@@ -332,18 +362,29 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				if (!response.ok) {
 					const error = await response.text()
 					throw new Error(
-						`KoboldCpp API error: ${response.status} ${error}`
+						`KoboldCPP API error: ${response.status} ${error}`
 					)
 				}
 
 				const data = await response.json()
+
+				// A 200 response doesn't guarantee a real completion — eg. no
+				// model loaded (--nomodel, or nothing loaded yet) comes back as
+				// HTTP 200 with an empty message and finish_reason "error".
+				// Silently accepting that as a successful-but-empty reply leaves
+				// the user staring at a blank message with no explanation.
+				if (useChat && data.choices?.[0]?.finish_reason === "error") {
+					throw new Error(
+						"KoboldCPP rejected the request (finish_reason: error) — is a model loaded?"
+					)
+				}
 
 				let content: string
 				if (useChat) {
 					// OpenAI chat format response
 					content = data.choices?.[0]?.message?.content || ""
 				} else {
-					// KoboldCpp text format response
+					// KoboldCPP text format response
 					content = data.results?.[0]?.text || ""
 				}
 
@@ -382,7 +423,10 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				body: JSON.stringify({ genkey: this.genKey }),
 				signal: AbortSignal.timeout(5000)
 			}).catch((err) => {
-				console.warn("[KoboldCppAdapter] Failed to send abort to KoboldCPP:", err)
+				console.warn(
+					"[KoboldCppAdapter] Failed to send abort to KoboldCPP:",
+					err
+				)
 			})
 		}
 	}
@@ -413,7 +457,7 @@ export async function testConnection(
 		if (!data.version) {
 			return {
 				ok: false,
-				error: "Invalid response from KoboldCpp server"
+				error: "Invalid response from KoboldCPP server"
 			}
 		}
 
@@ -421,7 +465,7 @@ export async function testConnection(
 	} catch (e: any) {
 		return {
 			ok: false,
-			error: e.message || "Failed to connect to KoboldCpp server"
+			error: e.message || "Failed to connect to KoboldCPP server"
 		}
 	}
 }
@@ -435,7 +479,8 @@ async function listModels(
 	try {
 		const baseUrl = connection.baseUrl || "http://localhost:5001"
 
-		const currentModel = (await fetchCurrentModelName(baseUrl)) || "No model loaded"
+		const currentModel =
+			(await fetchCurrentModelName(baseUrl)) || "No model loaded"
 
 		const models = [
 			{

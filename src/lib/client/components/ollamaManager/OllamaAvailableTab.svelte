@@ -48,8 +48,11 @@
 
 	// Track the system-wide default connection (admin-only screen, so a
 	// straight connections:list fetch is safe here — see ConnectionsSidebar).
-	let systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
-	let connectionsList: Sockets.Connections.List.Response["connectionsList"] = $state([])
+	let systemSettingsCtx: SystemSettingsCtx = $state(
+		getContext("systemSettingsCtx")
+	)
+	let connectionsList: Sockets.Connections.List.Response["connectionsList"] =
+		$state([])
 
 	// Track which models are being downloaded locally (for UI state only).
 	// Uses SvelteSet (not a plain Set in $state) so .add()/.delete() mutations
@@ -146,7 +149,6 @@
 		modelId: string,
 		pullOption: { label: string; pull: string }
 	) {
-
 		// Track this model as currently downloading
 		currentlyDownloading.add(modelId)
 
@@ -163,14 +165,12 @@
 		showOllamaManualPullModal = true
 	}
 
-
 	function closeOllamaManualPullModal() {
 		showOllamaManualPullModal = false
 		selectedModelForDownload = null
 	}
 
 	function handleOllamaInstallConfirm(cleanedModelName: string) {
-
 		// Track this model as currently downloading
 		currentlyDownloading.add(cleanedModelName)
 
@@ -444,7 +444,11 @@
 								<Icons.Check size={14} aria-hidden="true" />
 								Installed
 							{:else if downloading}
-								<Icons.Loader2 size={14} class="animate-spin" aria-hidden="true" />
+								<Icons.Loader2
+									size={14}
+									class="animate-spin"
+									aria-hidden="true"
+								/>
 								Installing
 							{:else}
 								<Icons.Download size={14} aria-hidden="true" />
@@ -639,4 +643,3 @@
 	onclose={closeOllamaManualPullModal}
 	onconfirm={handleOllamaInstallConfirm}
 />
-

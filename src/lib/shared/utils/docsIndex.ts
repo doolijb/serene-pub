@@ -30,6 +30,7 @@ export const DOC_ORDER: string[] = [
 	"tags",
 	"users-and-accounts",
 	"themes-and-settings",
+	"document-view",
 	"system-settings",
 	"importing-from-sillytavern"
 ]
@@ -122,9 +123,16 @@ function buildDocMeta(path: string, raw: string): DocMeta {
 	const h1Match = raw.match(/^#\s+(.+)$/m)
 	const title = h1Match?.[1]?.trim() ?? slug
 
-	const withoutH1 = h1Match ? raw.slice(raw.indexOf(h1Match[0]) + h1Match[0].length) : raw
-	const firstParaMatch = withoutH1.match(/^\s*\n+([^\n#][^\n]*(?:\n[^\n#][^\n]*)*)/m)
-	const description = stripInlineMarkdown(firstParaMatch?.[1] ?? "").slice(0, 200)
+	const withoutH1 = h1Match
+		? raw.slice(raw.indexOf(h1Match[0]) + h1Match[0].length)
+		: raw
+	const firstParaMatch = withoutH1.match(
+		/^\s*\n+([^\n#][^\n]*(?:\n[^\n#][^\n]*)*)/m
+	)
+	const description = stripInlineMarkdown(firstParaMatch?.[1] ?? "").slice(
+		0,
+		200
+	)
 
 	return {
 		slug,

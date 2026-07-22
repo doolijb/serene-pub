@@ -262,13 +262,19 @@ export const samplingConfigsDelete: Handler<
 			throw new Error("Cannot delete immutable samplingConfigs")
 		}
 		// If the deleted config is the system default, fall back to the first immutable config
-		const systemSettings = await db.query.systemSettings.findFirst({ columns: { id: true, defaultSamplingConfigId: true } })
+		const systemSettings = await db.query.systemSettings.findFirst({
+			columns: { id: true, defaultSamplingConfigId: true }
+		})
 		if (systemSettings?.defaultSamplingConfigId === params.id) {
 			const fallback = await db.query.samplingConfigs.findFirst({
 				where: (sc, { eq }) => eq(sc.isImmutable, true),
 				columns: { id: true }
 			})
-			await samplingConfigsSetUserActive.handler(socket, { id: fallback?.id ?? 1 }, emitToUser)
+			await samplingConfigsSetUserActive.handler(
+				socket,
+				{ id: fallback?.id ?? 1 },
+				emitToUser
+			)
 		}
 		await db
 			.delete(schema.samplingConfigs)

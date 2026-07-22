@@ -71,8 +71,7 @@
 		}
 	}
 
-	$effect(() => {
-	})
+	$effect(() => {})
 
 	$effect(() => {
 		const fixed = new Set(["compose", "preview"])
@@ -90,28 +89,56 @@
 	role="region"
 	aria-label="Message composer"
 >
-	<Tabs.List class="border-none flex flex-wrap items-center gap-1 pt-[0.2em] pb-[0]">
-		<Tabs.Trigger value="compose" class="flex min-h-[2em] items-center justify-center">
-			<span title="Compose" aria-label="Compose tab" class="flex items-center gap-1">
+	<Tabs.List
+		class="flex flex-wrap items-center gap-1 border-none pt-[0.2em] pb-[0]"
+	>
+		<Tabs.Trigger
+			value="compose"
+			class="flex min-h-[2em] items-center justify-center"
+		>
+			<span
+				title="Compose"
+				aria-label="Compose tab"
+				class="flex items-center gap-1"
+			>
 				<Icons.Pen size="0.75em" aria-hidden="true" />
-				{#if tabGroup === "compose"}<span class="text-xs">Compose</span>{/if}
+				{#if tabGroup === "compose"}<span class="text-xs">
+						Compose
+					</span>{/if}
 			</span>
 		</Tabs.Trigger>
-		<Tabs.Trigger value="preview" class="flex min-h-[2em] items-center justify-center">
-			<span title="Preview" aria-label="Preview tab" class="flex items-center gap-1">
+		<Tabs.Trigger
+			value="preview"
+			class="flex min-h-[2em] items-center justify-center"
+		>
+			<span
+				title="Preview"
+				aria-label="Preview tab"
+				class="flex items-center gap-1"
+			>
 				<Icons.Eye size="0.75em" aria-hidden="true" />
-				{#if tabGroup === "preview"}<span class="text-xs">Preview</span>{/if}
+				{#if tabGroup === "preview"}<span class="text-xs">
+						Preview
+					</span>{/if}
 			</span>
 		</Tabs.Trigger>
 		{#if extraTabs}
 			{#each extraTabs as tab}
 				<Tabs.Trigger
 					value={tab.value}
-					class="flex min-h-[2em] items-center justify-center {tab.alwaysVisible ? '' : 'max-lg:hidden'}"
+					class="flex min-h-[2em] items-center justify-center {tab.alwaysVisible
+						? ''
+						: 'max-lg:hidden'}"
 				>
-					<span title={tab.title} aria-label="{tab.title} tab" class="flex items-center gap-1">
+					<span
+						title={tab.title}
+						aria-label="{tab.title} tab"
+						class="flex items-center gap-1"
+					>
 						{@render tab.control?.()}
-						{#if tabGroup === tab.value}<span class="text-xs">{tab.title}</span>{/if}
+						{#if tabGroup === tab.value}<span class="text-xs">
+								{tab.title}
+							</span>{/if}
 					</span>
 				</Tabs.Trigger>
 			{/each}
@@ -123,30 +150,46 @@
 						positioning={{ placement: "top" }}
 					>
 						<Popover.Trigger
-							class="btn btn-sm min-h-[2em] pt-[0.7em] justify-center {activeExtraTab ? 'preset-tonal-primary' : ''}"
+							class="btn btn-sm min-h-[2em] justify-center pt-[0.7em] {activeExtraTab
+								? 'preset-tonal-primary'
+								: ''}"
 							aria-label="More composer tabs"
 						>
-							<span class="flex w-full items-center justify-center gap-1">
+							<span
+								class="flex w-full items-center justify-center gap-1"
+							>
 								{#if activeExtraTab}
 									{@render activeExtraTab.control?.()}
-									<span class="text-xs">{activeExtraTab.title}</span>
+									<span class="text-xs">
+										{activeExtraTab.title}
+									</span>
 								{:else}
-									<Icons.EllipsisVertical size="0.9em" class="block" aria-hidden="true" />
+									<Icons.EllipsisVertical
+										size="0.9em"
+										class="block"
+										aria-hidden="true"
+									/>
 								{/if}
 							</span>
 						</Popover.Trigger>
 						<Portal>
 							<Popover.Positioner class="z-[1000]!">
-								<Popover.Content class="card bg-primary-200-800 shadow-xl p-4 space-y-4 w-[min(90vw,240px)]">
+								<Popover.Content
+									class="card bg-primary-200-800 w-[min(90vw,240px)] space-y-4 p-4 shadow-xl"
+								>
 									<header class="popover-menu-title">
-										<Icons.EllipsisVertical size={18} aria-hidden="true" />
+										<Icons.EllipsisVertical
+											size={18}
+											aria-hidden="true"
+										/>
 										<p>More</p>
 									</header>
 									<article class="flex flex-col gap-2">
 										{#each collapsibleExtraTabs as tab}
 											<button
 												type="button"
-												class="btn btn-sm popover-menu-btn {tabGroup === tab.value
+												class="btn btn-sm popover-menu-btn {tabGroup ===
+												tab.value
 													? 'preset-tonal-primary'
 													: 'hover:preset-filled-primary-500'}"
 												onclick={() => {
@@ -160,7 +203,9 @@
 										{/each}
 									</article>
 									<Popover.Arrow>
-										<Popover.ArrowTip class="!bg-primary-200 dark:!bg-primary-800" />
+										<Popover.ArrowTip
+											class="!bg-primary-200 dark:!bg-primary-800"
+										/>
 									</Popover.Arrow>
 								</Popover.Content>
 							</Popover.Positioner>
@@ -225,7 +270,7 @@
 			</Tabs.Content>
 			<Tabs.Content value="preview">
 				<div
-					class="card bg-surface-100-900 min-h-[2em] lg:min-h-[4em] w-full rounded-xl p-2 mb-[1em]"
+					class="card bg-surface-100-900 mb-[1em] min-h-[2em] w-full rounded-xl p-2 lg:min-h-[4em]"
 					role="region"
 					aria-label="Message preview"
 				>

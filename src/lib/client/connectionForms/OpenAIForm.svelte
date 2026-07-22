@@ -52,7 +52,11 @@
 	})
 
 	socket.on("connections:test", (msg) => {
-		testResult = { ok: msg.ok, error: msg.error ?? undefined, models: msg.models }
+		testResult = {
+			ok: msg.ok,
+			error: msg.error ?? undefined,
+			models: msg.models
+		}
 	})
 
 	function handleRefreshModels() {
@@ -165,7 +169,11 @@
 			{/each}
 		</select>
 		{#if validationErrors.model}
-			<p id="model-error" class="mt-1 text-sm text-error-500" role="alert">
+			<p
+				id="model-error"
+				class="text-error-500 mt-1 text-sm"
+				role="alert"
+			>
 				{validationErrors.model}
 			</p>
 		{/if}
@@ -244,7 +252,7 @@
 		{#if validationErrors.baseUrl}
 			<p
 				id="baseUrl-error"
-				class="mt-1 text-sm text-error-500"
+				class="text-error-500 mt-1 text-sm"
 				role="alert"
 			>
 				{validationErrors.baseUrl}
@@ -259,7 +267,9 @@
 				type="password"
 				bind:value={openAIFields.apiKey}
 				placeholder="sk-..."
-				class="input {validationErrors.apiKey ? 'border-error-500' : ''}"
+				class="input {validationErrors.apiKey
+					? 'border-error-500'
+					: ''}"
 				aria-invalid={validationErrors.apiKey ? "true" : "false"}
 				aria-describedby={validationErrors.apiKey
 					? "apiKey-error"
@@ -274,7 +284,7 @@
 			{#if validationErrors.apiKey}
 				<p
 					id="apiKey-error"
-					class="mt-1 text-sm text-error-500"
+					class="text-error-500 mt-1 text-sm"
 					role="alert"
 				>
 					{validationErrors.apiKey}
@@ -286,38 +296,37 @@
 				Advanced Settings
 			</summary>
 			<section class="w-full space-y-4 pt-2">
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="stream">Stream</label>
-					<Switch
-						name="stream"
-						checked={openAIFields.stream}
-						onCheckedChange={(e) =>
-							(openAIFields!.stream = e.checked)}
-						aria-labelledby="stream"
+				<Switch
+					name="stream"
+					checked={openAIFields.stream}
+					onCheckedChange={(e) => (openAIFields!.stream = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">Stream</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 					>
-						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-							<Switch.Thumb />
-						</Switch.Control>
-						<Switch.HiddenInput />
-					</Switch>
-				</div>
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="prerenderPrompt">
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
+				<Switch
+					name="prerenderPrompt"
+					checked={openAIFields.prerenderPrompt}
+					onCheckedChange={(e) =>
+						(openAIFields!.prerenderPrompt = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">
 						Prerender Prompt
-					</label>
-					<Switch
-						name="prerenderPrompt"
-						checked={openAIFields.prerenderPrompt}
-						onCheckedChange={(e) =>
-							(openAIFields!.prerenderPrompt = e.checked)}
-						aria-labelledby="prerenderPrompt"
+					</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 					>
-						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-							<Switch.Thumb />
-						</Switch.Control>
-						<Switch.HiddenInput />
-					</Switch>
-				</div>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
 			</section>
 		</details>
 	{/if}

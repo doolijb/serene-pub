@@ -234,7 +234,9 @@
 			<Icons.ChevronLeft size={16} />
 		</button>
 		<h1 class="flex-1 truncate font-semibold">
-			{isCreating ? "New User" : (user?.displayName || user?.username || "Edit User")}
+			{isCreating
+				? "New User"
+				: user?.displayName || user?.username || "Edit User"}
 		</h1>
 		<button
 			class="btn btn-sm preset-filled-primary-500 shrink-0"
@@ -383,28 +385,44 @@
 	}}
 >
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-lg">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 max-w-lg space-y-6 p-6 shadow-xl"
+			>
 				<header class="flex items-center justify-between">
-					<h2 class="text-xl font-bold">Grant Administrator Privileges?</h2>
-					<button class="btn-ghost" aria-label="Close" onclick={cancelAdminChange}>
+					<h2 class="text-xl font-bold">
+						Grant Administrator Privileges?
+					</h2>
+					<button
+						class="btn-ghost"
+						aria-label="Close"
+						onclick={cancelAdminChange}
+					>
 						<Icons.X class="h-5 w-5" />
 					</button>
 				</header>
 				<article class="space-y-4">
 					<div class="text-warning-500 flex items-center gap-2">
 						<Icons.ShieldAlert class="h-5 w-5" />
-						<span class="font-semibold">Warning: Powerful Access</span>
+						<span class="font-semibold">
+							Warning: Powerful Access
+						</span>
 					</div>
 					<p>
-						Are you sure you want to grant administrator privileges to this
-						user? Administrators have full access to all system features
-						including:
+						Are you sure you want to grant administrator privileges
+						to this user? Administrators have full access to all
+						system features including:
 					</p>
 					<ul class="ml-4 list-inside list-disc space-y-1">
 						<li>Managing all users and their permissions</li>
-						<li>Accessing and modifying all chats and characters</li>
+						<li>
+							Accessing and modifying all chats and characters
+						</li>
 						<li>Changing system settings</li>
 						<li>Deleting content across the system</li>
 					</ul>

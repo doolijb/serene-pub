@@ -15,7 +15,8 @@
 		currentAvatar: string | null
 	}
 
-	let { entityType, entityId, entityName, isOwner, currentAvatar }: Props = $props()
+	let { entityType, entityId, entityName, isOwner, currentAvatar }: Props =
+		$props()
 
 	const socket = useTypedSocket()
 
@@ -40,7 +41,9 @@
 	type Tile = { id: string; path: string }
 	let tiles = $state<Tile[]>([])
 	$effect(() => {
-		tiles = images.filter((p) => !brokenPaths.has(p)).map((p) => ({ id: p, path: p }))
+		tiles = images
+			.filter((p) => !brokenPaths.has(p))
+			.map((p) => ({ id: p, path: p }))
 	})
 
 	function handleImageError(imgPath: string) {
@@ -104,9 +107,15 @@
 	function confirmDelete() {
 		if (!pendingDeletePath) return
 		if (entityType === "character") {
-			socket.emit("characters:deleteGalleryImage", { characterId: entityId, path: pendingDeletePath })
+			socket.emit("characters:deleteGalleryImage", {
+				characterId: entityId,
+				path: pendingDeletePath
+			})
 		} else {
-			socket.emit("personas:deleteGalleryImage", { personaId: entityId, path: pendingDeletePath })
+			socket.emit("personas:deleteGalleryImage", {
+				personaId: entityId,
+				path: pendingDeletePath
+			})
 		}
 		pendingDeletePath = null
 	}
@@ -123,9 +132,15 @@
 		tiles = e.detail.items
 		const paths = tiles.map((t) => t.path)
 		if (entityType === "character") {
-			socket.emit("characters:reorderGallery", { characterId: entityId, paths })
+			socket.emit("characters:reorderGallery", {
+				characterId: entityId,
+				paths
+			})
 		} else {
-			socket.emit("personas:reorderGallery", { personaId: entityId, paths })
+			socket.emit("personas:reorderGallery", {
+				personaId: entityId,
+				paths
+			})
 		}
 	}
 
@@ -144,19 +159,26 @@
 			toaster.error({ title: "Upload failed" })
 		}
 		const handleDeleteOk = () => toaster.success({ title: "Image deleted" })
-		const handleSetAvatarOk = () => toaster.success({ title: "Avatar updated" })
+		const handleSetAvatarOk = () =>
+			toaster.success({ title: "Avatar updated" })
 
 		if (entityType === "character") {
 			socket.on("characters:listGallery", handleList)
 			socket.on("characters:uploadGalleryImage", handleUploadOk)
-			socket.on("characters:uploadGalleryImage:error" as any, handleUploadErr)
+			socket.on(
+				"characters:uploadGalleryImage:error" as any,
+				handleUploadErr
+			)
 			socket.on("characters:deleteGalleryImage", handleDeleteOk)
 			socket.on("characters:setAvatar", handleSetAvatarOk)
 			socket.emit("characters:listGallery", { characterId: entityId })
 		} else {
 			socket.on("personas:listGallery", handleList)
 			socket.on("personas:uploadGalleryImage", handleUploadOk)
-			socket.on("personas:uploadGalleryImage:error" as any, handleUploadErr)
+			socket.on(
+				"personas:uploadGalleryImage:error" as any,
+				handleUploadErr
+			)
 			socket.on("personas:deleteGalleryImage", handleDeleteOk)
 			socket.on("personas:setAvatar", handleSetAvatarOk)
 			socket.emit("personas:listGallery", { personaId: entityId })
@@ -269,10 +291,15 @@
 					{/if}
 
 					{#if isOwner}
-						<div class="absolute top-1 right-1" role="none" onclick={(e) => e.stopPropagation()}>
+						<div
+							class="absolute top-1 right-1"
+							role="none"
+							onclick={(e) => e.stopPropagation()}
+						>
 							<Popover
 								open={menuOpenFor === tile.path}
-								onOpenChange={(e) => (menuOpenFor = e.open ? tile.path : null)}
+								onOpenChange={(e) =>
+									(menuOpenFor = e.open ? tile.path : null)}
 								positioning={{ placement: "bottom-end" }}
 							>
 								<Popover.Trigger
@@ -287,26 +314,45 @@
 											class="card bg-primary-200-800 w-[min(90vw,200px)] space-y-3 p-3 shadow-xl"
 										>
 											<header class="popover-menu-title">
-												<Icons.Image size={16} aria-hidden="true" />
+												<Icons.Image
+													size={16}
+													aria-hidden="true"
+												/>
 												<p>Image Options</p>
 											</header>
-											<article class="flex flex-col gap-2">
+											<article
+												class="flex flex-col gap-2"
+											>
 												{#if currentAvatar !== tile.path}
 													<button
 														type="button"
 														class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-														onclick={() => setAsAvatar(tile.path)}
+														onclick={() =>
+															setAsAvatar(
+																tile.path
+															)}
 													>
-														<Icons.Star size={16} aria-hidden="true" />
-														<span>Set as avatar</span>
+														<Icons.Star
+															size={16}
+															aria-hidden="true"
+														/>
+														<span>
+															Set as avatar
+														</span>
 													</button>
 												{/if}
 												<button
 													type="button"
 													class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
-													onclick={() => requestDelete(tile.path)}
+													onclick={() =>
+														requestDelete(
+															tile.path
+														)}
 												>
-													<Icons.Trash2 size={16} aria-hidden="true" />
+													<Icons.Trash2
+														size={16}
+														aria-hidden="true"
+													/>
 													<span>Delete</span>
 												</button>
 											</article>
@@ -331,26 +377,50 @@
 	{/if}
 </div>
 
-<Dialog open={showDeleteModal} onOpenChange={(e) => { if (!e.open) cancelDelete() }}>
+<Dialog
+	open={showDeleteModal}
+	onOpenChange={(e) => {
+		if (!e.open) cancelDelete()
+	}}
+>
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 max-w-sm space-y-4 p-6 shadow-xl">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 max-w-sm space-y-4 p-6 shadow-xl"
+			>
 				<header class="flex items-center gap-3">
 					<Icons.Trash2 class="text-error-500 h-5 w-5 shrink-0" />
 					<h2 class="text-lg font-bold">Delete Image</h2>
 				</header>
 				{#if pendingDeletePath}
 					<div class="overflow-hidden rounded-lg">
-						<img src={pendingDeletePath} alt="Preview of item to delete" class="h-24 w-full object-cover" />
+						<img
+							src={pendingDeletePath}
+							alt="Preview of item to delete"
+							class="h-24 w-full object-cover"
+						/>
 					</div>
 				{/if}
 				<p class="text-muted-foreground text-sm">
-					Are you sure you want to delete this image? This cannot be undone.
+					Are you sure you want to delete this image? This cannot be
+					undone.
 				</p>
 				<footer class="flex justify-end gap-2">
-					<button class="btn preset-filled-surface-400-600" onclick={cancelDelete}>Cancel</button>
-					<button class="btn preset-filled-error-500" onclick={confirmDelete}>
+					<button
+						class="btn preset-filled-surface-400-600"
+						onclick={cancelDelete}
+					>
+						Cancel
+					</button>
+					<button
+						class="btn preset-filled-error-500"
+						onclick={confirmDelete}
+					>
 						<Icons.Trash2 class="h-4 w-4" />
 						Delete
 					</button>
@@ -363,5 +433,10 @@
 <AvatarGalleryModal
 	bind:open={lightboxOpen}
 	onOpenChange={(e) => (lightboxOpen = e.open)}
-	entity={{ type: entityType, id: entityId, name: entityName, avatar: lightboxPath }}
+	entity={{
+		type: entityType,
+		id: entityId,
+		name: entityName,
+		avatar: lightboxPath
+	}}
 />

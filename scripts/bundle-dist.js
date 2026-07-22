@@ -31,8 +31,8 @@ function copyRecursive(src, dest) {
 // Whitelist for packages with UNKNOWN license but known to be MIT
 const LICENSE_WHITELIST = [
 	{ name: "json-bignum", version: "0.0.3" },
-	{ name: "xmlhttprequest-ssl", version: "2.1.2" }
-	,{ name: "@img/sharp-libvips-linux-x64", version: "1.2.4" },
+	{ name: "xmlhttprequest-ssl", version: "2.1.2" },
+	{ name: "@img/sharp-libvips-linux-x64", version: "1.2.4" },
 	{ name: "@img/sharp-libvips-linuxmusl-x64", version: "1.2.4" },
 	{ name: "@img/sharp-libvips-darwin-arm64", version: "1.2.4" },
 	{ name: "@img/sharp-libvips-darwin-x64", version: "1.2.4" },
@@ -156,7 +156,9 @@ function isAcceptableLicense(license, name, version) {
 	// Handle license objects and arrays from package.json
 	if (typeof license === "object") {
 		if (Array.isArray(license)) {
-			license = license.map((l) => (typeof l === "string" ? l : l.type || "")).join(" or ")
+			license = license
+				.map((l) => (typeof l === "string" ? l : l.type || ""))
+				.join(" or ")
 		} else {
 			license = license.type || license.license || ""
 		}

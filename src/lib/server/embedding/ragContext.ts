@@ -45,7 +45,9 @@ export type ChatRagContext = {
  * Resolve all content IDs that are in scope for RAG search in a given chat.
  * Results from outside this set should not be used as RAG context.
  */
-export async function getChatRagContext(chatId: number): Promise<ChatRagContext> {
+export async function getChatRagContext(
+	chatId: number
+): Promise<ChatRagContext> {
 	const [chat, chatCharsRows, chatPersonasRows] = await Promise.all([
 		db.query.chats.findFirst({
 			where: eq(schema.chats.id, chatId),
@@ -68,7 +70,10 @@ export async function getChatRagContext(chatId: number): Promise<ChatRagContext>
 				personaLorebookId: schema.personas.lorebookId
 			})
 			.from(schema.chatPersonas)
-			.leftJoin(schema.personas, eq(schema.chatPersonas.personaId, schema.personas.id))
+			.leftJoin(
+				schema.personas,
+				eq(schema.chatPersonas.personaId, schema.personas.id)
+			)
 			.where(eq(schema.chatPersonas.chatId, chatId))
 	])
 
@@ -111,7 +116,10 @@ export async function getChatRagContext(chatId: number): Promise<ChatRagContext>
 		const rows = await db
 			.selectDistinct({ id: schema.chats.id })
 			.from(schema.chats)
-			.innerJoin(schema.chatCharacters, eq(schema.chatCharacters.chatId, schema.chats.id))
+			.innerJoin(
+				schema.chatCharacters,
+				eq(schema.chatCharacters.chatId, schema.chats.id)
+			)
 			.where(
 				and(
 					eq(schema.chats.lorebookId, lorebookId),
@@ -122,7 +130,16 @@ export async function getChatRagContext(chatId: number): Promise<ChatRagContext>
 		relatedChatIds = rows.map((r) => r.id)
 	}
 
-	return { chatId, characterIds, personaIds, lorebookId, allLorebookIds, characterLorebookMap, personaLorebookMap, relatedChatIds }
+	return {
+		chatId,
+		characterIds,
+		personaIds,
+		lorebookId,
+		allLorebookIds,
+		characterLorebookMap,
+		personaLorebookMap,
+		relatedChatIds
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -301,7 +318,6 @@ export async function scopedRankBySimilarity(
 
 	// Lorebook content (world lore, character lore, history entries)
 	if (context.allLorebookIds.length > 0) {
-
 		if (include("worldLore")) {
 			const wles = await db
 				.select({
@@ -315,7 +331,10 @@ export async function scopedRankBySimilarity(
 				.from(schema.worldLoreEntries)
 				.where(
 					and(
-						inArray(schema.worldLoreEntries.lorebookId, context.allLorebookIds),
+						inArray(
+							schema.worldLoreEntries.lorebookId,
+							context.allLorebookIds
+						),
 						eq(schema.worldLoreEntries.enabled, true),
 						isNotNull(schema.worldLoreEntries.embedding),
 						eq(schema.worldLoreEntries.embeddingModel, modelId)
@@ -350,7 +369,10 @@ export async function scopedRankBySimilarity(
 				.from(schema.characterLoreEntries)
 				.where(
 					and(
-						inArray(schema.characterLoreEntries.lorebookId, context.allLorebookIds),
+						inArray(
+							schema.characterLoreEntries.lorebookId,
+							context.allLorebookIds
+						),
 						eq(schema.characterLoreEntries.enabled, true),
 						isNotNull(schema.characterLoreEntries.embedding),
 						eq(schema.characterLoreEntries.embeddingModel, modelId)
@@ -387,7 +409,10 @@ export async function scopedRankBySimilarity(
 				.from(schema.historyEntries)
 				.where(
 					and(
-						inArray(schema.historyEntries.lorebookId, context.allLorebookIds),
+						inArray(
+							schema.historyEntries.lorebookId,
+							context.allLorebookIds
+						),
 						eq(schema.historyEntries.enabled, true),
 						isNotNull(schema.historyEntries.embedding),
 						eq(schema.historyEntries.embeddingModel, modelId)
@@ -425,7 +450,10 @@ export async function scopedRankBySimilarity(
 				.from(schema.narrativeNodes)
 				.where(
 					and(
-						inArray(schema.narrativeNodes.lorebookId, context.allLorebookIds),
+						inArray(
+							schema.narrativeNodes.lorebookId,
+							context.allLorebookIds
+						),
 						isNotNull(schema.narrativeNodes.embedding),
 						eq(schema.narrativeNodes.embeddingModel, modelId)
 					)
@@ -452,7 +480,8 @@ export async function scopedRankBySimilarity(
 					lorebookId: schema.narrativeRelationships.lorebookId,
 					fromNodeId: schema.narrativeRelationships.fromNodeId,
 					toNodeId: schema.narrativeRelationships.toNodeId,
-					relationshipType: schema.narrativeRelationships.relationshipType,
+					relationshipType:
+						schema.narrativeRelationships.relationshipType,
 					description: schema.narrativeRelationships.description,
 					status: schema.narrativeRelationships.status,
 					reason: schema.narrativeRelationships.reason,
@@ -462,9 +491,15 @@ export async function scopedRankBySimilarity(
 				.from(schema.narrativeRelationships)
 				.where(
 					and(
-						inArray(schema.narrativeRelationships.lorebookId, context.allLorebookIds),
+						inArray(
+							schema.narrativeRelationships.lorebookId,
+							context.allLorebookIds
+						),
 						isNotNull(schema.narrativeRelationships.embedding),
-						eq(schema.narrativeRelationships.embeddingModel, modelId)
+						eq(
+							schema.narrativeRelationships.embeddingModel,
+							modelId
+						)
 					)
 				)
 			for (const rel of rels) {

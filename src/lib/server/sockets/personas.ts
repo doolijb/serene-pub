@@ -19,8 +19,15 @@ import {
 } from "../utils/characterCardParser"
 import { autoEnqueuePersona } from "$lib/server/embedding/vectorizationQueue"
 import { canViewPersona } from "$lib/server/utils/chatAccess"
-import { resolveCardSource, cachedSearch, resolveNsfwParam } from "$lib/server/cardSources"
-import { CardSourceUnavailableError, CardSourceRateLimitedError } from "$lib/server/cardSources/types"
+import {
+	resolveCardSource,
+	cachedSearch,
+	resolveNsfwParam
+} from "$lib/server/cardSources"
+import {
+	CardSourceUnavailableError,
+	CardSourceRateLimitedError
+} from "$lib/server/cardSources/types"
 import { hashCanonicalJson } from "$lib/server/utils/contentHash"
 import { isValidUuid } from "$lib/server/utils/uuid"
 
@@ -138,7 +145,8 @@ export const personasList: Handler<
 					}
 				}
 			},
-			where: (p, { and, eq }) => and(eq(p.userId, userId), eq(p.isDeleted, false))
+			where: (p, { and, eq }) =>
+				and(eq(p.userId, userId), eq(p.isDeleted, false))
 		})
 		const res: Sockets.Personas.List.Response = { personaList }
 		emitToUser("personas:list", res)
@@ -154,7 +162,8 @@ export const personasGet: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const persona = await db.query.personas.findFirst({
-			where: (p, { and, eq }) => and(eq(p.id, params.id), eq(p.isDeleted, false)),
+			where: (p, { and, eq }) =>
+				and(eq(p.id, params.id), eq(p.isDeleted, false)),
 			with: {
 				personaTags: {
 					with: {
@@ -168,13 +177,17 @@ export const personasGet: Handler<
 		})
 
 		const isOwner = persona?.userId === userId
-		if (persona && (isOwner || (await canViewPersona(persona.id, userId)))) {
+		if (
+			persona &&
+			(isOwner || (await canViewPersona(persona.id, userId)))
+		) {
 			// Transform the persona data to include tags as string array
 			const personaWithTags: any = {
 				...persona,
 				tags: persona.personaTags.map((pt) => pt.tag.name),
 				isOwner,
-				ownerName: persona.user?.displayName || persona.user?.username || null
+				ownerName:
+					persona.user?.displayName || persona.user?.username || null
 			}
 			delete personaWithTags.personaTags
 			delete personaWithTags.user
@@ -264,7 +277,12 @@ export const personasUpdate: Handler<
 
 			const [updated] = await db
 				.update(schema.personas)
-				.set({ ...data, embedding: null, embeddingModel: null, vectorizedAt: null })
+				.set({
+					...data,
+					embedding: null,
+					embeddingModel: null,
+					vectorizedAt: null
+				})
 				.where(
 					and(
 						eq(schema.personas.id, id),
@@ -330,7 +348,10 @@ export const personasDelete: Handler<
 	}
 }
 
-export const personasSearchLibrary: Handler<Sockets.Personas.SearchLibrary.Params, Sockets.Personas.SearchLibrary.Response> = {
+export const personasSearchLibrary: Handler<
+	Sockets.Personas.SearchLibrary.Params,
+	Sockets.Personas.SearchLibrary.Response
+> = {
 	event: "personas:searchLibrary",
 	handler: async (socket, params, emitToUser) => {
 		try {
@@ -372,8 +393,10 @@ export const personasSearchLibrary: Handler<Sockets.Personas.SearchLibrary.Param
 					error instanceof CardSourceRateLimitedError
 						? error.message
 						: "Failed to search persona library",
-				unreachable: error instanceof CardSourceUnavailableError || undefined,
-				rateLimited: error instanceof CardSourceRateLimitedError || undefined,
+				unreachable:
+					error instanceof CardSourceUnavailableError || undefined,
+				rateLimited:
+					error instanceof CardSourceRateLimitedError || undefined,
 				retryAfterMs:
 					error instanceof CardSourceRateLimitedError
 						? error.retryAfterMs
@@ -471,10 +494,18 @@ async function applyPersonaAvatar(
 	return persona
 }
 
-export async function createPersonaFromParsedData(data: any, avatarBuffer: Buffer | undefined, userId: number) {
+export async function createPersonaFromParsedData(
+	data: any,
+	avatarBuffer: Buffer | undefined,
+	userId: number
+) {
 	const [persona] = await db
 		.insert(schema.personas)
-		.values({ ...personaFieldsFromParsedData(data), userId, isDefault: false })
+		.values({
+			...personaFieldsFromParsedData(data),
+			userId,
+			isDefault: false
+		})
 		.returning()
 	return applyPersonaAvatar(persona, avatarBuffer)
 }
@@ -495,14 +526,19 @@ export async function overwritePersonaFromParsedData(
 	return applyPersonaAvatar(persona, avatarBuffer)
 }
 
-export const personasImportCard: Handler<Sockets.Personas.ImportCard.Params, Sockets.Personas.ImportCard.Response> = {
+export const personasImportCard: Handler<
+	Sockets.Personas.ImportCard.Params,
+	Sockets.Personas.ImportCard.Response
+> = {
 	event: "personas:importCard",
 	handler: async (socket, params, emitToUser) => {
 		try {
 			const userId = socket.user!.id
 
 			// Parse persona card using shared utility
-			const { card, avatarBuffer } = await parseCharacterCardFromBase64(params.file)
+			const { card, avatarBuffer } = await parseCharacterCardFromBase64(
+				params.file
+			)
 
 			// getRobustSpecV3Data (not a bare card.toSpecV3()) so older/V1
 			// cards import with full fidelity — see its own doc comment.
@@ -523,7 +559,9 @@ export const personasImportCard: Handler<Sockets.Personas.ImportCard.Params, Soc
 						canonicalPersonaContent(existing)
 					)
 					const incomingHash = hashCanonicalJson(
-						canonicalPersonaContent(personaFieldsFromParsedData(data) as any)
+						canonicalPersonaContent(
+							personaFieldsFromParsedData(data) as any
+						)
 					)
 
 					if (existingHash === incomingHash) {
@@ -538,14 +576,21 @@ export const personasImportCard: Handler<Sockets.Personas.ImportCard.Params, Soc
 					const res: Sockets.Personas.ImportCard.Response = {
 						status: "conflict",
 						persona: null,
-						conflict: { existingPersona: existing, file: params.file }
+						conflict: {
+							existingPersona: existing,
+							file: params.file
+						}
 					}
 					emitToUser("personas:importCard", res)
 					return res
 				}
 			}
 
-			const persona = await createPersonaFromParsedData(data, avatarBuffer, userId)
+			const persona = await createPersonaFromParsedData(
+				data,
+				avatarBuffer,
+				userId
+			)
 
 			await personasList.handler(socket, {}, emitToUser)
 			const res: Sockets.Personas.ImportCard.Response = {
@@ -577,7 +622,9 @@ export const personasImportResolve: Handler<
 	handler: async (socket, params, emitToUser) => {
 		try {
 			const userId = socket.user!.id
-			const { card, avatarBuffer } = await parseCharacterCardFromBase64(params.file)
+			const { card, avatarBuffer } = await parseCharacterCardFromBase64(
+				params.file
+			)
 			const data = getRobustSpecV3Data(card)
 
 			let persona
@@ -590,9 +637,17 @@ export const personasImportResolve: Handler<
 					columns: { id: true }
 				})
 				if (!existing) throw new Error("Persona not found.")
-				persona = await overwritePersonaFromParsedData(existing.id, data, avatarBuffer)
+				persona = await overwritePersonaFromParsedData(
+					existing.id,
+					data,
+					avatarBuffer
+				)
 			} else {
-				persona = await createPersonaFromParsedData(data, avatarBuffer, userId)
+				persona = await createPersonaFromParsedData(
+					data,
+					avatarBuffer,
+					userId
+				)
 			}
 
 			await personasList.handler(socket, {}, emitToUser)
@@ -640,7 +695,10 @@ export const personasExportCard: Handler<
 				const blob = Buffer.from(jsonString, "utf-8")
 				const filename = `${persona.name.replace(/[^a-z0-9]/gi, "_").toLowerCase()}.v3.json`
 
-				const res: Sockets.Personas.ExportCard.Response = { blob, filename }
+				const res: Sockets.Personas.ExportCard.Response = {
+					blob,
+					filename
+				}
 				emitToUser("personas:exportCard", res)
 				return res
 			} else {
@@ -648,7 +706,10 @@ export const personasExportCard: Handler<
 					throw new Error("Persona has no avatar to embed data into")
 				}
 
-				const avatarDir = getPersonaDataDir({ personaId: params.id, userId })
+				const avatarDir = getPersonaDataDir({
+					personaId: params.id,
+					userId
+				})
 				const avatarFilename = path.basename(persona.avatar)
 				const avatarPath = path.join(avatarDir, avatarFilename)
 				const avatarBuffer = await fsPromises.readFile(avatarPath)
@@ -656,7 +717,10 @@ export const personasExportCard: Handler<
 				const blob = embedCharacterCardInPng(avatarBuffer, cardData)
 				const filename = `${persona.name.replace(/[^a-z0-9]/gi, "_").toLowerCase()}.v3.png`
 
-				const res: Sockets.Personas.ExportCard.Response = { blob, filename }
+				const res: Sockets.Personas.ExportCard.Response = {
+					blob,
+					filename
+				}
 				emitToUser("personas:exportCard", res)
 				return res
 			}
@@ -670,7 +734,10 @@ export const personasExportCard: Handler<
 	}
 }
 
-export const personasImportFromLibrary: Handler<Sockets.Personas.ImportFromLibrary.Params, Sockets.Personas.ImportFromLibrary.Response> = {
+export const personasImportFromLibrary: Handler<
+	Sockets.Personas.ImportFromLibrary.Params,
+	Sockets.Personas.ImportFromLibrary.Response
+> = {
 	event: "personas:importFromLibrary",
 	handler: async (socket, params, emitToUser) => {
 		try {
@@ -721,23 +788,33 @@ export const personasImportFromLibrary: Handler<Sockets.Personas.ImportFromLibra
 	}
 }
 
-export const personasListGallery: Handler<Sockets.Personas.ListGallery.Params, Sockets.Personas.ListGallery.Response> = {
+export const personasListGallery: Handler<
+	Sockets.Personas.ListGallery.Params,
+	Sockets.Personas.ListGallery.Response
+> = {
 	event: "personas:listGallery",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
-		const images = await listPersonaGallery({ personaId: params.personaId, userId })
+		const images = await listPersonaGallery({
+			personaId: params.personaId,
+			userId
+		})
 		const res: Sockets.Personas.ListGallery.Response = { images }
 		emitToUser("personas:listGallery", res)
 		return res
 	}
 }
 
-export const personasUploadGalleryImage: Handler<Sockets.Personas.UploadGalleryImage.Params, Sockets.Personas.UploadGalleryImage.Response> = {
+export const personasUploadGalleryImage: Handler<
+	Sockets.Personas.UploadGalleryImage.Params,
+	Sockets.Personas.UploadGalleryImage.Response
+> = {
 	event: "personas:uploadGalleryImage",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const persona = await db.query.personas.findFirst({
-			where: (p, { and, eq }) => and(eq(p.id, params.personaId), eq(p.userId, userId))
+			where: (p, { and, eq }) =>
+				and(eq(p.id, params.personaId), eq(p.userId, userId))
 		})
 		if (!persona) throw new Error("Persona not found or access denied")
 
@@ -748,63 +825,104 @@ export const personasUploadGalleryImage: Handler<Sockets.Personas.UploadGalleryI
 			mimeType: params.mimeType
 		})
 
-		const res: Sockets.Personas.UploadGalleryImage.Response = { success: true, path: imgPath }
+		const res: Sockets.Personas.UploadGalleryImage.Response = {
+			success: true,
+			path: imgPath
+		}
 		emitToUser("personas:uploadGalleryImage", res)
-		await personasListGallery.handler(socket, { personaId: params.personaId }, emitToUser)
+		await personasListGallery.handler(
+			socket,
+			{ personaId: params.personaId },
+			emitToUser
+		)
 		await personasGet.handler(socket, { id: params.personaId }, emitToUser)
 		return res
 	}
 }
 
-export const personasDeleteGalleryImage: Handler<Sockets.Personas.DeleteGalleryImage.Params, Sockets.Personas.DeleteGalleryImage.Response> = {
+export const personasDeleteGalleryImage: Handler<
+	Sockets.Personas.DeleteGalleryImage.Params,
+	Sockets.Personas.DeleteGalleryImage.Response
+> = {
 	event: "personas:deleteGalleryImage",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const persona = await db.query.personas.findFirst({
-			where: (p, { and, eq }) => and(eq(p.id, params.personaId), eq(p.userId, userId))
+			where: (p, { and, eq }) =>
+				and(eq(p.id, params.personaId), eq(p.userId, userId))
 		})
 		if (!persona) throw new Error("Persona not found or access denied")
 
-		await deletePersonaGalleryImage({ personaId: params.personaId, userId, path: params.path })
+		await deletePersonaGalleryImage({
+			personaId: params.personaId,
+			userId,
+			path: params.path
+		})
 
-		const res: Sockets.Personas.DeleteGalleryImage.Response = { success: true }
+		const res: Sockets.Personas.DeleteGalleryImage.Response = {
+			success: true
+		}
 		emitToUser("personas:deleteGalleryImage", res)
-		await personasListGallery.handler(socket, { personaId: params.personaId }, emitToUser)
+		await personasListGallery.handler(
+			socket,
+			{ personaId: params.personaId },
+			emitToUser
+		)
 		return res
 	}
 }
 
-export const personasReorderGallery: Handler<Sockets.Personas.ReorderGallery.Params, Sockets.Personas.ReorderGallery.Response> = {
+export const personasReorderGallery: Handler<
+	Sockets.Personas.ReorderGallery.Params,
+	Sockets.Personas.ReorderGallery.Response
+> = {
 	event: "personas:reorderGallery",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const persona = await db.query.personas.findFirst({
-			where: (p, { and, eq }) => and(eq(p.id, params.personaId), eq(p.userId, userId))
+			where: (p, { and, eq }) =>
+				and(eq(p.id, params.personaId), eq(p.userId, userId))
 		})
 		if (!persona) throw new Error("Persona not found or access denied")
 
-		await reorderPersonaGalleryImages({ personaId: params.personaId, paths: params.paths })
+		await reorderPersonaGalleryImages({
+			personaId: params.personaId,
+			paths: params.paths
+		})
 
-		const listRes = await personasListGallery.handler(socket, { personaId: params.personaId }, emitToUser)
+		const listRes = await personasListGallery.handler(
+			socket,
+			{ personaId: params.personaId },
+			emitToUser
+		)
 		const res: Sockets.Personas.ReorderGallery.Response = listRes
 		emitToUser("personas:reorderGallery", res)
 		return res
 	}
 }
 
-export const personasSetAvatar: Handler<Sockets.Personas.SetAvatar.Params, Sockets.Personas.SetAvatar.Response> = {
+export const personasSetAvatar: Handler<
+	Sockets.Personas.SetAvatar.Params,
+	Sockets.Personas.SetAvatar.Response
+> = {
 	event: "personas:setAvatar",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const persona = await db.query.personas.findFirst({
-			where: (p, { and, eq }) => and(eq(p.id, params.personaId), eq(p.userId, userId))
+			where: (p, { and, eq }) =>
+				and(eq(p.id, params.personaId), eq(p.userId, userId))
 		})
 		if (!persona) throw new Error("Persona not found or access denied")
 
 		const [updated] = await db
 			.update(schema.personas)
 			.set({ avatar: params.path })
-			.where(and(eq(schema.personas.id, params.personaId), eq(schema.personas.userId, userId)))
+			.where(
+				and(
+					eq(schema.personas.id, params.personaId),
+					eq(schema.personas.userId, userId)
+				)
+			)
 			.returning()
 
 		const res: Sockets.Personas.SetAvatar.Response = { persona: updated }

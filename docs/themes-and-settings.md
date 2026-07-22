@@ -75,10 +75,14 @@ Once a background is selected, an **Opacity** slider (10-100%, in 5% steps) cont
 When account support is enabled on this instance, the **User** tab also includes a **User Profile** section with:
 
 - **Display Name** — an editable text field with an **Update** button. Names must be 3-50 characters.
-- **Change Passphrase** — opens a modal asking for your current passphrase, a new passphrase, and confirmation. New passphrases must be at least 6 characters and include an uppercase letter, a lowercase letter, and a special character.
+- **Change Passphrase** — opens a modal asking for your current passphrase, a new passphrase, and confirmation. New passphrases must be at least 10 characters (128 maximum) and include an uppercase letter, a lowercase letter, and a special character.
 - **Logout** — signs you out and returns you to the login/home screen.
 
 These are covered in more detail in [Users & Accounts](./users-and-accounts.md).
+
+## Document View
+
+The **User** tab also has a **Document View** section with a **Switch to Document View** button — a separate, high-contrast, keyboard- and screen-reader-friendly interface. See [Document View](./document-view.md) for what it covers and how to get back.
 
 ## Importing Data (Admin Only)
 

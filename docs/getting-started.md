@@ -9,6 +9,7 @@ The very first screen you see in Serene Pub (the app's home route) is a step-by-
 Once every required step is complete, the exact same screen switches to a normal home dashboard showing your characters and recent chats. There's no separate "setup mode" you have to exit; the page just notices you're done and changes what it shows. If you later delete your only character or persona, or the wizard otherwise detects something incomplete, this same screen will show the relevant step again the next time you land on it.
 
 The wizard adapts to who you are:
+
 - The **first admin** to set up a brand-new server sees the full wizard, including connecting an AI provider.
 - An **admin logging in after the server is already configured** sees a shorter welcome message but still gets the connection/summarization/RAG steps if those aren't done yet.
 - **Non-admin users** never see the connection, summarization, or RAG steps at all — those are server-wide settings an admin controls. Non-admins only go through Welcome, Character, Persona, and Create Chat. See [Users and Accounts](./users-and-accounts.md) for how admin vs. non-admin roles work.
@@ -42,6 +43,7 @@ Full details on connection types, managers, and configuration options live in [C
 If the KoboldCPP manager is enabled, the wizard tells you to open the **KoboldCPP Manager** (via the footer button of the same name) to download and load a model — the wizard automatically advances once a model connects successfully.
 
 If you turn the manager off, the wizard instead walks you through a manual setup:
+
 1. Download KoboldCPP from GitHub.
 2. Download a GGUF model (a Hugging Face link is provided).
 3. Launch KoboldCPP and load your model.
@@ -54,6 +56,7 @@ Once detected, a dropdown lists the models currently loaded in KoboldCPP so you 
 If the Ollama manager is enabled, the wizard tells you to open the **Ollama Manager** (footer button) to download and activate a model; the wizard advances automatically once a model connects.
 
 With the manager off, you get manual instructions instead:
+
 1. Download and install Ollama from ollama.com.
 2. Run `ollama pull llama3.2` in a terminal.
 3. Come back and pick a model from the dropdown — the wizard offers Llama 3.2 (Recommended), Llama 3.2 1B (faster/lighter), Qwen 2.5, and Mistral 7B as quick-pick options.
@@ -83,29 +86,31 @@ Admin-only, and only shown right after the Summarization step (reachable on Andr
 Unlike the connection setup steps, this step doesn't have its own inline configuration UI — its footer's **Open Embeddings Settings** button opens the real Embeddings sidebar (the same panel described in [Embeddings & RAG](./embeddings-and-rag.md)), and the wizard waits for it to report ready before advancing, updating live with no page reload needed:
 
 - Not yet enabled: **Skip for now** and **Open Embeddings Settings** are both offered.
-- Enabled but not ready yet (still loading or misconfigured): a status message points you back to the Embeddings panel.
-- Enabled and ready: the footer's button becomes **Continue**, plus a **Disable & Skip** option if you'd rather back out after already enabling something mid-wizard.
+- Enabled but not ready yet (still loading or misconfigured): a status message points you back to the Embeddings panel, and a **Disable & Skip** option is already available at this point too, not just once it's ready.
+- Enabled and ready: the footer's button becomes **Continue**.
 
 See [Embeddings & RAG](./embeddings-and-rag.md) for what the Local Model vs. External API choice means and how to reconfigure it later.
 
-## Creating Your First Character
-
-Shown to every user, admin or not. The heading reads "Add Your First Character," and you're given four ways to get one:
-
-- **Browse Library** — opens the built-in character library to pick a ready-made character.
-- **Import from SillyTavern** *(admin only)* — leaves the wizard and takes you to the app's import page for pulling characters (and personas/chats) from an existing SillyTavern install. See [Importing from SillyTavern](./importing-from-sillytavern.md).
-- **Import from File** — drag-and-drop or browse for a character card file (`.png`, `.apng`, `.jpeg`, `.jpg`, `.webp`, or `.json`).
-- **Create from Scratch** — opens the character creator to build one manually with a name, avatar, and personality.
-
-Any of these completing successfully advances the wizard automatically. There's also a **Skip for now** button if you'd rather come back to this later. Full character-building details are covered in [Characters](./characters.md).
-
 ## Creating Your First Persona
 
-Immediately follows the Character step, for every user. The heading reads "Set Up Your Identity," with the same four options as the character step (Browse Library, Import from SillyTavern, Import from File — same accepted file types, Create from Scratch), plus one extra shortcut at the bottom:
+For every user, and — note the order — this comes **before** the Character step, not after it. The heading reads "Set Up Your Identity," and you're given four ways to get one:
+
+- **Browse Library** — opens the built-in persona library to pick a ready-made persona.
+- **Import from SillyTavern** — leaves the wizard and takes you to the app's import page for pulling personas (and characters/chats) from an existing SillyTavern install. Unlike the same option on the Character step, this one is **not** admin-gated — any user can reach it from here, admin or not. See [Importing from SillyTavern](./importing-from-sillytavern.md).
+- **Import from File** — drag-and-drop or browse for a persona card file (`.png`, `.apng`, `.jpeg`, `.jpg`, `.webp`, or `.json`).
+- **Create from Scratch** — opens the persona creator to build one manually.
+
+Plus one extra shortcut at the bottom:
 
 > **Use a "You" placeholder persona** — instantly creates a default persona named "You" with a generic description you can edit later.
 
-As with the character step, any successful creation or import advances the wizard, and a **Skip for now** button is available. See [Personas](./personas.md) for everything a persona can contain.
+Any of these completing successfully advances the wizard automatically, and a **Skip for now** button is available if you'd rather come back later. See [Personas](./personas.md) for everything a persona can contain.
+
+## Creating Your First Character
+
+Immediately follows the Persona step, for every user. The heading reads "Add Your First Character," with the same four options as the persona step (Browse Library, Import from File — same accepted file types, Create from Scratch), plus **Import from SillyTavern**, which — unlike on the Persona step — _is_ admin-only here.
+
+As with the persona step, any successful creation or import advances the wizard, and a **Skip for now** button is available. Full character-building details are covered in [Characters](./characters.md).
 
 ## Starting Your First Chat
 
@@ -117,10 +122,10 @@ If you haven't created a character yet, this step shows a reminder to go back an
 
 Once every required step is complete, this same screen stops showing the wizard and instead displays:
 
-- A **Characters** grid of everything you've created or imported — clicking a character jumps to that character's chats.
+- A **Characters** grid of everything you've created or imported — clicking a character jumps to that character's chats. A list/card view toggle lets you switch how this grid displays; your choice is remembered locally in your browser. The Recent Chats grid below has no equivalent toggle.
 - A **Recent Chats** grid (your most recent, up to six) if you have any chats yet — clicking one opens it directly.
 
-You'll also always see a dismissible welcome banner (with a small × button to hide it) and a small alpha-status notice reminding you the app is under active development, regardless of whether the wizard or dashboard is showing.
+You'll also usually see a dismissible welcome banner (with a small × button to hide it) and a small alpha-status notice reminding you the app is under active development, regardless of whether the wizard or dashboard is showing — though the banner itself is hidden on narrow/mobile screens. A **Documentation** link, pointing at the in-app `/docs` page, is always shown above the wizard or dashboard content as well.
 
 ## Returning to This Screen Later
 
@@ -136,8 +141,12 @@ While the wizard is open, the step indicator at the top is a row of numbered cir
 
 ### Skipping steps
 
-Summarization, RAG, character, and persona can all be explicitly skipped with a **Skip for now** button without actually completing the underlying setup. Skipping summarization or RAG simply records that step as acknowledged on your account (so the wizard won't nag you again) without turning either feature on. Skipping character or persona just moves you forward — since the dashboard view requires an actual character/persona/chat to appear, skipping those steps means you'll see the wizard again next time until you actually create one.
+Summarization, RAG, persona, and character can all be explicitly skipped with a **Skip for now** button without actually completing the underlying setup. Skipping summarization or RAG simply records that step as acknowledged on your account (so the wizard won't nag you again) without turning either feature on. Skipping persona or character just moves you forward — since the dashboard view requires an actual character/persona/chat to appear, skipping those steps means you'll see the wizard again next time until you actually create one.
 
 ### What non-admin users see
 
-Because connecting an AI provider, enabling summarization, and configuring RAG are all server-wide settings, they only ever appear for admin accounts. A non-admin user's wizard is just four steps: Welcome, Character, Persona, Create Chat. Everything else about how the wizard behaves — auto-skipping, step indicators, the dashboard hand-off — works identically for admins and non-admins alike.
+Because connecting an AI provider, enabling summarization, and configuring RAG are all server-wide settings, they only ever appear for admin accounts. A non-admin user's wizard is just four steps: Welcome, Persona, Character, Create Chat. Everything else about how the wizard behaves — auto-skipping, step indicators, the dashboard hand-off — works identically for admins and non-admins alike.
+
+### Android differences
+
+On the Android app build, the AI Provider step's **KoboldCPP — Easy** and **Ollama — Easy** cards aren't offered at all — only **Manual Setup** is shown, taking you straight to the Connections panel. See [Android App](./android.md) for the full list of Android-specific limitations.

@@ -6,14 +6,18 @@
 	import RagNotice from "$lib/client/components/chatMessages/RagNotice.svelte"
 	import { getContext } from "svelte"
 
-	let systemSettingsCtx: SystemSettingsCtx = $state(getContext("systemSettingsCtx"))
+	let systemSettingsCtx: SystemSettingsCtx = $state(
+		getContext("systemSettingsCtx")
+	)
 
 	interface Props {
 		newMessage: string
 		onSend: () => void
 		draftCompiledPrompt?: Sockets.Chats.PromptTokenCount.Response
 		currentUserPersona?: SelectChatPersona & { persona?: SelectPersona }
-		userPersonasInChat?: Array<SelectChatPersona & { persona?: SelectPersona }>
+		userPersonasInChat?: Array<
+			SelectChatPersona & { persona?: SelectPersona }
+		>
 		onSwitchPersona?: (personaId: number) => void
 		chat?: Sockets.Chats.Get.Response["chat"] & {
 			chatPersonas?: Array<
@@ -108,12 +112,16 @@
 					{#if cp.persona && cp.personaId != null}
 						<button
 							class="flex flex-col items-center gap-2 rounded-lg p-2 text-center text-sm transition"
-							class:preset-filled-primary-500={cp.personaId === currentUserPersona?.personaId}
-							class:preset-filled-surface-400-600={cp.personaId !== currentUserPersona?.personaId}
+							class:preset-filled-primary-500={cp.personaId ===
+								currentUserPersona?.personaId}
+							class:preset-filled-surface-400-600={cp.personaId !==
+								currentUserPersona?.personaId}
 							onclick={() => onSwitchPersona?.(cp.personaId!)}
 						>
 							<Avatar char={cp.persona} />
-							<span class="w-full truncate text-xs">{cp.persona.name}</span>
+							<span class="w-full truncate text-xs">
+								{cp.persona.name}
+							</span>
 						</button>
 					{/if}
 				{/each}
@@ -126,43 +134,67 @@
 			compiledPrompt={draftCompiledPrompt}
 			classes=""
 			extraTabs={userPersonasInChat.length > 1
-				? [{ value: "personaSwitcher", title: "Switch Persona", control: personaSwitcherControl, content: personaSwitcherContent, alwaysVisible: true }, ...(extraTabs ?? [])]
+				? [
+						{
+							value: "personaSwitcher",
+							title: "Switch Persona",
+							control: personaSwitcherControl,
+							content: personaSwitcherContent,
+							alwaysVisible: true
+						},
+						...(extraTabs ?? [])
+					]
 				: extraTabs}
 		>
 			{#snippet leftControls()}
-				{@const activePersona = currentUserPersona?.persona ?? (!isGuest ? chat?.chatPersonas?.[0]?.persona : undefined)}
+				{@const activePersona =
+					currentUserPersona?.persona ??
+					(!isGuest ? chat?.chatPersonas?.[0]?.persona : undefined)}
 				{#if activePersona}
-					<div class="max-lg:hidden flex flex-col lg:gap-2">
+					<div class="flex flex-col max-lg:hidden lg:gap-2">
 						{#if userPersonasInChat.length > 1}
 							<Popover
 								open={personaSwitcherOpen}
-								onOpenChange={(e) => (personaSwitcherOpen = e.open)}
+								onOpenChange={(e) =>
+									(personaSwitcherOpen = e.open)}
 								positioning={{ placement: "top" }}
 							>
 								<Popover.Trigger
-									class="relative p-0 cursor-pointer"
+									class="relative cursor-pointer p-0"
 									title="Switch persona"
 									aria-label="Switch persona (currently {activePersona.name})"
 								>
 									<span class="block">
 										<Avatar char={activePersona} />
 									</span>
-									<span class="bg-surface-300-700 absolute -bottom-1 -right-1 flex items-center justify-center rounded-full p-0.5 shadow">
+									<span
+										class="bg-surface-300-700 absolute -right-1 -bottom-1 flex items-center justify-center rounded-full p-0.5 shadow"
+									>
 										<Icons.ChevronDown size={10} />
 									</span>
 								</Popover.Trigger>
 								<Portal>
 									<Popover.Positioner class="z-[1000]!">
-										<Popover.Content class="card preset-tonal-surface p-2 space-y-1 min-w-[180px]">
-											<p class="text-surface-700-300 px-2 pb-1 text-xs font-semibold uppercase tracking-wider">Switch Persona</p>
+										<Popover.Content
+											class="card preset-tonal-surface min-w-[180px] space-y-1 p-2"
+										>
+											<p
+												class="text-surface-700-300 px-2 pb-1 text-xs font-semibold tracking-wider uppercase"
+											>
+												Switch Persona
+											</p>
 											{#each userPersonasInChat as cp (cp.personaId)}
 												{#if cp.persona && cp.personaId != null}
 													<button
 														class="btn btn-sm w-full justify-start rounded-lg text-left"
-														class:preset-filled-primary-500={cp.personaId === currentUserPersona?.personaId}
-														class:preset-filled-surface-400-600={cp.personaId !== currentUserPersona?.personaId}
+														class:preset-filled-primary-500={cp.personaId ===
+															currentUserPersona?.personaId}
+														class:preset-filled-surface-400-600={cp.personaId !==
+															currentUserPersona?.personaId}
 														onclick={() => {
-															onSwitchPersona?.(cp.personaId!)
+															onSwitchPersona?.(
+																cp.personaId!
+															)
 															personaSwitcherOpen = false
 														}}
 													>

@@ -22,10 +22,15 @@ export interface BinaryDownloadState {
 	error?: string
 }
 
-let currentDownload: (BinaryDownloadState & { abort?: () => void }) | null = null
-let emitProgressFn: ((d: { download: BinaryDownloadState | null }) => void) | null = null
+let currentDownload: (BinaryDownloadState & { abort?: () => void }) | null =
+	null
+let emitProgressFn:
+	| ((d: { download: BinaryDownloadState | null }) => void)
+	| null = null
 
-export function setEmitter(fn: (d: { download: BinaryDownloadState | null }) => void) {
+export function setEmitter(
+	fn: (d: { download: BinaryDownloadState | null }) => void
+) {
 	emitProgressFn = fn
 }
 
@@ -66,7 +71,8 @@ function makeDescription(name: string): string {
 	if (/metal/i.test(lower)) return "Metal (Apple GPU)"
 	if (/mac|osx/i.test(lower)) return "Metal (Apple GPU)"
 	// Base build: no suffix after koboldcpp
-	if (/^koboldcpp(\.exe)?$/i.test(name)) return "CPU + Vulkan + OpenCL — works on any hardware (recommended)"
+	if (/^koboldcpp(\.exe)?$/i.test(name))
+		return "CPU + Vulkan + OpenCL — works on any hardware (recommended)"
 	return "CPU"
 }
 
@@ -80,25 +86,43 @@ export interface ReleaseVersion {
 	isLatest: boolean
 }
 
-export async function listVariants(tag?: string): Promise<{ variants: BinaryVariant[]; releaseTag: string }> {
+export async function listVariants(
+	tag?: string
+): Promise<{ variants: BinaryVariant[]; releaseTag: string }> {
 	const url =
 		tag && tag !== "latest"
 			? `https://api.github.com/repos/LostRuins/koboldcpp/releases/tags/${encodeURIComponent(tag)}`
 			: "https://api.github.com/repos/LostRuins/koboldcpp/releases/latest"
 
-	const resp = await fetch(url, { headers: { Accept: "application/vnd.github.v3+json" } })
+	const resp = await fetch(url, {
+		headers: { Accept: "application/vnd.github.v3+json" }
+	})
 	if (!resp.ok) throw new Error(`GitHub API returned ${resp.status}`)
 
 	const release = await resp.json()
 	const releaseTag: string = release.tag_name ?? "unknown"
-	const assets = (release.assets ?? []) as { name: string; browser_download_url: string; size: number }[]
+	const assets = (release.assets ?? []) as {
+		name: string
+		browser_download_url: string
+		size: number
+	}[]
 
 	const variants = assets
 		.filter((a) => {
 			const lower = a.name.toLowerCase()
 			if (!lower.startsWith("koboldcpp")) return false
-			if (lower.endsWith(".sha256") || lower.endsWith(".sha1") || lower.endsWith(".md5")) return false
-			if (lower.endsWith(".tar.gz") || lower.endsWith(".tar") || lower.endsWith(".7z")) return false
+			if (
+				lower.endsWith(".sha256") ||
+				lower.endsWith(".sha1") ||
+				lower.endsWith(".md5")
+			)
+				return false
+			if (
+				lower.endsWith(".tar.gz") ||
+				lower.endsWith(".tar") ||
+				lower.endsWith(".7z")
+			)
+				return false
 			return true
 		})
 		.map((a) => ({
@@ -113,7 +137,9 @@ export async function listVariants(tag?: string): Promise<{ variants: BinaryVari
 	return { variants, releaseTag }
 }
 
-export async function listReleaseVersions(count = 10): Promise<ReleaseVersion[]> {
+export async function listReleaseVersions(
+	count = 10
+): Promise<ReleaseVersion[]> {
 	const [listResp, latestResp] = await Promise.all([
 		fetch(
 			`https://api.github.com/repos/LostRuins/koboldcpp/releases?per_page=${count}`,
@@ -145,7 +171,13 @@ export async function downloadVariant(opts: {
 	const { assetName, downloadUrl, destDir } = opts
 	const destPath = path.join(destDir, assetName)
 
-	currentDownload = { assetName, status: "starting", downloaded: 0, total: 0, isDone: false }
+	currentDownload = {
+		assetName,
+		status: "starting",
+		downloaded: 0,
+		total: 0,
+		isDone: false
+	}
 	emitProgress()
 
 	try {
@@ -162,13 +194,24 @@ export async function downloadVariant(opts: {
 				const lib = urlObj.protocol === "https:" ? https : http
 
 				const req = lib.get(url, (res) => {
-					if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-						if (redirectsLeft <= 0) { reject(new Error("Too many redirects")); return }
+					if (
+						res.statusCode &&
+						res.statusCode >= 300 &&
+						res.statusCode < 400 &&
+						res.headers.location
+					) {
+						if (redirectsLeft <= 0) {
+							reject(new Error("Too many redirects"))
+							return
+						}
 						request(res.headers.location, redirectsLeft - 1)
 						return
 					}
 
-					currentDownload!.total = parseInt(res.headers["content-length"] ?? "0", 10)
+					currentDownload!.total = parseInt(
+						res.headers["content-length"] ?? "0",
+						10
+					)
 					currentDownload!.status = "downloading"
 					emitProgress()
 

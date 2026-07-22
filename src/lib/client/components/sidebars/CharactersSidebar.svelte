@@ -430,7 +430,9 @@
 		socket.on(
 			"characters:importResolve:error",
 			(msg: Sockets.ErrorResponse) => {
-				toaster.error({ title: msg.error || "Failed to resolve character import" })
+				toaster.error({
+					title: msg.error || "Failed to resolve character import"
+				})
 			}
 		)
 		socket.on("characters:exportCard", (msg) => {
@@ -440,27 +442,35 @@
 				description: `Character card exported as ${msg.filename}`
 			})
 		})
-		socket.on("characters:exportCard:error", (msg: Sockets.ErrorResponse) => {
-			toaster.error({ title: msg.error || "Failed to export character" })
-		})
-		socket.on("lorebooks:import", (msg: Sockets.Lorebooks.Import.Response) => {
-			if (msg.status === "conflict" && msg.conflict) {
-				lorebookImportConflict = msg.conflict
-				showLorebookImportConflictModal = true
-				return
-			}
-			if (msg.status === "unchanged") {
-				toaster.success({
-					title: "Lorebook Already Imported",
-					description: `"${msg.lorebook?.name}" is unchanged — using the existing lorebook.`
+		socket.on(
+			"characters:exportCard:error",
+			(msg: Sockets.ErrorResponse) => {
+				toaster.error({
+					title: msg.error || "Failed to export character"
 				})
-				return
 			}
-			toaster.success({
-				title: `Lorebook Imported`,
-				description: `Lorebook imported successfully.`
-			})
-		})
+		)
+		socket.on(
+			"lorebooks:import",
+			(msg: Sockets.Lorebooks.Import.Response) => {
+				if (msg.status === "conflict" && msg.conflict) {
+					lorebookImportConflict = msg.conflict
+					showLorebookImportConflictModal = true
+					return
+				}
+				if (msg.status === "unchanged") {
+					toaster.success({
+						title: "Lorebook Already Imported",
+						description: `"${msg.lorebook?.name}" is unchanged — using the existing lorebook.`
+					})
+					return
+				}
+				toaster.success({
+					title: `Lorebook Imported`,
+					description: `Lorebook imported successfully.`
+				})
+			}
+		)
 		socket.on("lorebooks:import:error", (msg: Sockets.ErrorResponse) => {
 			toaster.error({ title: msg.error || "Failed to import lorebook" })
 		})
@@ -473,9 +483,14 @@
 				})
 			}
 		)
-		socket.on("lorebooks:importResolve:error", (msg: Sockets.ErrorResponse) => {
-			toaster.error({ title: msg.error || "Failed to resolve lorebook import" })
-		})
+		socket.on(
+			"lorebooks:importResolve:error",
+			(msg: Sockets.ErrorResponse) => {
+				toaster.error({
+					title: msg.error || "Failed to resolve lorebook import"
+				})
+			}
+		)
 		// The background vectorization queue updates a row's embeddingModel
 		// directly in the DB — without this, the list here only ever refreshes
 		// on the next explicit characters:list, leaving the embedding-status
@@ -597,10 +612,16 @@
 				bind:value={search}
 				aria-label="Search characters by name, description, or tags"
 			/>
-			<div class="flex shrink-0 gap-1" role="group" aria-label="View mode">
+			<div
+				class="flex shrink-0 gap-1"
+				role="group"
+				aria-label="View mode"
+			>
 				<button
 					type="button"
-					class="btn btn-sm p-2 {viewMode.value === 'list' ? 'preset-filled-primary-500' : 'preset-tonal-surface'}"
+					class="btn btn-sm p-2 {viewMode.value === 'list'
+						? 'preset-filled-primary-500'
+						: 'preset-tonal-surface'}"
 					onclick={() => (viewMode.value = "list")}
 					title="List view"
 					aria-label="List view"
@@ -610,7 +631,9 @@
 				</button>
 				<button
 					type="button"
-					class="btn btn-sm p-2 {viewMode.value === 'cards' ? 'preset-filled-primary-500' : 'preset-tonal-surface'}"
+					class="btn btn-sm p-2 {viewMode.value === 'cards'
+						? 'preset-filled-primary-500'
+						: 'preset-tonal-surface'}"
 					onclick={() => (viewMode.value = "cards")}
 					title="Card view"
 					aria-label="Card view"
@@ -622,7 +645,10 @@
 		</div>
 		{#if isLoading}
 			<div class="flex items-center justify-center py-8">
-				<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+				<Icons.Loader2
+					size={20}
+					class="text-surface-400 animate-spin"
+				/>
 			</div>
 		{:else if filteredCharacters.length === 0}
 			<EmptyState
@@ -634,9 +660,16 @@
 				onCta={search ? undefined : () => (isCreating = true)}
 			/>
 		{:else if viewMode.value === "list"}
-			<div class="flex flex-col gap-2" role="list" aria-label="Characters list">
+			<div
+				class="flex flex-col gap-2"
+				role="list"
+				aria-label="Characters list"
+			>
 				{#each filteredCharacters as c (c.id)}
-					<div animate:flip={{ duration: 200 }} out:fade={{ duration: 150 }}>
+					<div
+						animate:flip={{ duration: 200 }}
+						out:fade={{ duration: 150 }}
+					>
 						<CharacterListItem
 							character={c}
 							onclick={handleCharacterClick}
@@ -666,7 +699,10 @@
 					aria-label="Characters list"
 				>
 					{#each filteredCharacters as c (c.id)}
-						<div animate:flip={{ duration: 200 }} out:fade={{ duration: 150 }}>
+						<div
+							animate:flip={{ duration: 200 }}
+							out:fade={{ duration: 150 }}
+						>
 							<CharacterCardItem
 								character={c}
 								onclick={handleCharacterClick}
@@ -689,21 +725,28 @@
 		onOpenChange={(e) => (showDeleteModal = e.open)}
 	>
 		<Portal>
-			<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
+			>
 				<Dialog.Content
-					class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700"
+					class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
 					role="alertdialog"
 					aria-labelledby="delete-modal-title"
 					aria-describedby="delete-modal-description"
 				>
 					<div class="p-6">
-						<h2 id="delete-modal-title" class="mb-2 text-lg font-bold">
+						<h2
+							id="delete-modal-title"
+							class="mb-2 text-lg font-bold"
+						>
 							Delete Character?
 						</h2>
 						<p id="delete-modal-description" class="mb-4">
-							Are you sure you want to delete this character? This action
-							cannot be undone.
+							Are you sure you want to delete this character? This
+							action cannot be undone.
 						</p>
 						<div
 							class="flex justify-end gap-2"
@@ -735,17 +778,29 @@
 {/if}
 
 {#if showImportModal}
-	<Dialog open={showImportModal} onOpenChange={(e) => (showImportModal = e.open)}>
+	<Dialog
+		open={showImportModal}
+		onOpenChange={(e) => (showImportModal = e.open)}
+	>
 		<Portal>
-			<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-				<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl w-[min(95vw,560px)]">
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
+			>
+				<Dialog.Content
+					class="card bg-surface-100-900 w-[min(95vw,560px)] space-y-4 p-4 shadow-xl"
+				>
 					<div class="p-6">
 						<h2 class="mb-2 text-lg font-bold">Import Character</h2>
 						<div class="space-y-2">
 							<div>
-								<p class="text-sm text-surface-600 dark:text-surface-400 mb-2">
-									Upload a file (PNG, APNG, JPEG, JPG, WEBP, JSON):
+								<p
+									class="text-surface-600 dark:text-surface-400 mb-2 text-sm"
+								>
+									Upload a file (PNG, APNG, JPEG, JPG, WEBP,
+									JSON):
 								</p>
 								<FileUpload
 									name="example"
@@ -757,11 +812,19 @@
 									<FileUpload.Dropzone
 										class="border-surface-300-700 bg-surface-50-950 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
 									>
-										<Icons.Upload class="text-surface-700-300 h-8 w-8" />
-										<FileUpload.Trigger class="btn btn-sm preset-filled-primary-500">
+										<Icons.Upload
+											class="text-surface-700-300 h-8 w-8"
+										/>
+										<FileUpload.Trigger
+											class="btn btn-sm preset-filled-primary-500"
+										>
 											Browse
 										</FileUpload.Trigger>
-										<span class="text-surface-700-300 text-xs">or drag and drop</span>
+										<span
+											class="text-surface-700-300 text-xs"
+										>
+											or drag and drop
+										</span>
 										<FileUpload.HiddenInput />
 									</FileUpload.Dropzone>
 								</FileUpload>
@@ -792,16 +855,25 @@
 		}}
 	>
 		<Portal>
-			<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-				<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700">
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
+			>
+				<Dialog.Content
+					class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
+				>
 					<div class="p-6">
 						<h2 class="mb-2 text-lg font-bold">Import Lorebook?</h2>
 						<p class="mb-4">
-							A lorebook is associated with this character card. Would you
-							like to import it?
+							A lorebook is associated with this character card.
+							Would you like to import it?
 						</p>
-						<label class="mb-2 block font-semibold" for="lorebookName">
+						<label
+							class="mb-2 block font-semibold"
+							for="lorebookName"
+						>
 							Lorebook Name
 						</label>
 						<input

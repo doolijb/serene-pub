@@ -35,7 +35,10 @@
 				<h4 class="h4 font-semibold">{doc?.title ?? slug}</h4>
 				<div class="grid grid-cols-1 gap-2">
 					{#each groupSections as section}
-						<DocResultCard {section} onclick={() => onSelect(section)} />
+						<DocResultCard
+							{section}
+							onclick={() => onSelect(section)}
+						/>
 					{/each}
 				</div>
 			</div>

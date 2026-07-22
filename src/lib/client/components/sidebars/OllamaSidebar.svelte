@@ -46,12 +46,14 @@
 
 	// Check connection to Ollama
 	function checkConnection() {
-		socket.emit("ollama:version", {})
+		socket.emit("ollama:version", {
+			baseUrl: baseUrlField.trim() || undefined
+		})
 	}
 
 	// Save base URL
 	function handleSaveBaseUrl() {
-		if (!ollamaSettingsCtx.settings?.ollamaManagerBaseUrl.trim()) {
+		if (!baseUrlField.trim()) {
 			toaster.error({ title: "Base URL cannot be empty" })
 			return
 		}
@@ -79,6 +81,14 @@
 			}
 		)
 
+		socket.on("ollama:version:error", (message: { error?: string }) => {
+			toaster.error({
+				title: "Connection test failed",
+				description:
+					message.error || "Could not reach Ollama at that URL."
+			})
+		})
+
 		socket.on(
 			"ollama:setBaseUrl",
 			(message: Sockets.Ollama.SetBaseUrl.Response) => {
@@ -101,6 +111,7 @@
 
 	onDestroy(() => {
 		socket.off("ollama:version")
+		socket.off("ollama:version:error")
 		socket.off("ollama:setBaseUrl")
 	})
 
@@ -224,7 +235,11 @@
 			<Tabs value={activeTab} onValueChange={handleTabChange}>
 				<Tabs.List class="flex flex-wrap gap-1">
 					<Tabs.Trigger value="installed">
-						<span title="Installed" aria-label="Installed tab" class="flex items-center gap-1">
+						<span
+							title="Installed"
+							aria-label="Installed tab"
+							class="flex items-center gap-1"
+						>
 							<Icons.Package size={20} class="inline" />
 							{#if activeTab === "installed"}
 								Installed
@@ -232,7 +247,11 @@
 						</span>
 					</Tabs.Trigger>
 					<Tabs.Trigger value="available">
-						<span title="Available" aria-label="Available tab" class="flex items-center gap-1">
+						<span
+							title="Available"
+							aria-label="Available tab"
+							class="flex items-center gap-1"
+						>
 							<Icons.Search size={20} class="inline" />
 							{#if activeTab === "available"}
 								Available
@@ -240,7 +259,11 @@
 						</span>
 					</Tabs.Trigger>
 					<Tabs.Trigger value="downloads">
-						<span title="Downloads" aria-label="Downloads tab" class="flex items-center gap-1">
+						<span
+							title="Downloads"
+							aria-label="Downloads tab"
+							class="flex items-center gap-1"
+						>
 							<Icons.Download size={20} class="inline" />
 							{#if activeTab === "downloads"}
 								Downloads
@@ -248,7 +271,11 @@
 						</span>
 					</Tabs.Trigger>
 					<Tabs.Trigger value="settings">
-						<span title="Settings" aria-label="Settings tab" class="flex items-center gap-1">
+						<span
+							title="Settings"
+							aria-label="Settings tab"
+							class="flex items-center gap-1"
+						>
 							<Icons.Settings size={20} class="inline" />
 							{#if activeTab === "settings"}
 								Settings

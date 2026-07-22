@@ -422,20 +422,27 @@
 	}}
 >
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-6 w-[90vw] max-w-md">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 w-[90vw] max-w-md p-6"
+			>
 				<div class="space-y-4">
 					<div class="flex items-start gap-3">
 						<div class="flex-1">
 							<h3 class="h3">Delete Conversation?</h3>
 							<p class="mt-2 text-sm opacity-80">
-								Are you sure you want to delete this conversation? This
-								action cannot be undone.
+								Are you sure you want to delete this
+								conversation? This action cannot be undone.
 							</p>
 							{#if chatToDelete}
 								<p class="mt-2 text-sm font-medium">
-									"{chatToDelete.name || "Untitled Conversation"}"
+									"{chatToDelete.name ||
+										"Untitled Conversation"}"
 								</p>
 							{/if}
 						</div>
@@ -470,9 +477,15 @@
 	}}
 >
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-6 w-[90vw] max-w-md">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 w-[90vw] max-w-md p-6"
+			>
 				<div class="space-y-4">
 					<div class="flex items-start gap-3">
 						<div class="flex-1">
@@ -483,9 +496,10 @@
 									: ""}?
 							</h3>
 							<p class="mt-2 text-sm opacity-80">
-								Are you sure you want to delete {selectedChatIds.size} selected
-								conversation{selectedChatIds.size !== 1 ? "s" : ""}?
-								This action cannot be undone.
+								Are you sure you want to delete {selectedChatIds.size}
+								selected conversation{selectedChatIds.size !== 1
+									? "s"
+									: ""}? This action cannot be undone.
 							</p>
 						</div>
 					</div>

@@ -39,8 +39,12 @@
 }
 
 @keyframes spin-slow {
-	from { transform: rotate(0deg); }
-	to { transform: rotate(360deg); }
+	from {
+		transform: rotate(0deg);
+	}
+	to {
+		transform: rotate(360deg);
+	}
 }
 
 .animate-spin-slow {
@@ -104,7 +108,7 @@
 }
 
 .btn:focus-visible {
-	@apply ring-primary-500 outline-none ring-2 ring-offset-2;
+	@apply ring-primary-500 ring-2 ring-offset-2 outline-none;
 }
 
 .tiptap.ProseMirror {

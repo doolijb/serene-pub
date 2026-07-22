@@ -35,13 +35,17 @@ import { hasLorebookEntries } from "./lorebookImportMapper"
  * @throws Error if the card has no real name — see the `name` handling
  * above; a missing name means the input wasn't actually a character card.
  */
-export function getRobustSpecV3Data(card: CharacterCard): SpecV3.CharacterCardV3["data"] {
+export function getRobustSpecV3Data(
+	card: CharacterCard
+): SpecV3.CharacterCardV3["data"] {
 	const v3 = card.toSpecV3().data
 	const raw = card.raw_data as any
 	const rawTop = raw ?? {}
 	const rawNested = raw?.data ?? {}
 
-	const tags = v3.tags?.length ? v3.tags : (rawNested.tags ?? rawTop.tags ?? [])
+	const tags = v3.tags?.length
+		? v3.tags
+		: (rawNested.tags ?? rawTop.tags ?? [])
 	const alternateGreetings = v3.alternate_greetings?.length
 		? v3.alternate_greetings
 		: (rawNested.alternate_greetings ?? rawTop.alternate_greetings ?? [])
@@ -51,7 +55,9 @@ export function getRobustSpecV3Data(card: CharacterCard): SpecV3.CharacterCardV3
 	// mismatch in the library itself, hence the `typeof` check rather than a
 	// same-type comparison.
 	const creationDate =
-		v3.creation_date && typeof v3.creation_date !== "string" ? v3.creation_date : undefined
+		v3.creation_date && typeof v3.creation_date !== "string"
+			? v3.creation_date
+			: undefined
 	const modificationDate =
 		v3.modification_date && typeof v3.modification_date !== "string"
 			? v3.modification_date
@@ -60,7 +66,9 @@ export function getRobustSpecV3Data(card: CharacterCard): SpecV3.CharacterCardV3
 	// name/description — checked against the raw source rather than assumed
 	// fake outright, since a card could legitimately be raw-named "unknown".
 	const name =
-		v3.name === "unknown" && rawNested.name === undefined && rawTop.name === undefined
+		v3.name === "unknown" &&
+		rawNested.name === undefined &&
+		rawTop.name === undefined
 			? ""
 			: v3.name
 	const description =
@@ -96,7 +104,7 @@ export interface ParsedCharacterCard {
 /**
  * Parse a character card from a buffer (PNG or JSON)
  * Extracts card instance, avatar, and lorebook if present
- * 
+ *
  * @param buffer - Buffer containing the character card file (PNG or JSON)
  * @returns ParsedCharacterCard with card instance, avatarBuffer, and lorebook (if present)
  * @throws Error if parsing fails
@@ -121,10 +129,7 @@ export async function parseCharacterCard(
 	let avatarBuffer: Buffer | undefined
 	if (card.avatar) {
 		// Avatar is base64 data URL - extract the buffer
-		const base64Data = card.avatar.replace(
-			/^data:image\/\w+;base64,/,
-			""
-		)
+		const base64Data = card.avatar.replace(/^data:image\/\w+;base64,/, "")
 		avatarBuffer = Buffer.from(base64Data, "base64")
 	}
 
@@ -143,7 +148,9 @@ export async function parseCharacterCard(
 	// import an empty book for every single card.
 	const rawData = card.raw_data as any
 	const candidateBook =
-		rawData?.character_book ?? rawData?.data?.character_book ?? card.character_book
+		rawData?.character_book ??
+		rawData?.data?.character_book ??
+		card.character_book
 	let lorebook: SpecV3.Lorebook | undefined
 	if (candidateBook && hasLorebookEntries(candidateBook)) {
 		lorebook = candidateBook as SpecV3.Lorebook
@@ -158,7 +165,7 @@ export async function parseCharacterCard(
 
 /**
  * Convenience function to parse character card from base64 string
- * 
+ *
  * @param base64String - Base64-encoded character card file
  * @returns ParsedCharacterCard
  */
@@ -226,7 +233,9 @@ export function buildCharacterCardV3(character: CharacterCardV3Input) {
 			tags: character.tags || [],
 			creator: character.creator || "",
 			character_version: character.characterVersion || "",
-			...(character.lorebook ? { character_book: character.lorebook } : {}),
+			...(character.lorebook
+				? { character_book: character.lorebook }
+				: {}),
 			extensions: {
 				depth_prompt: {
 					prompt: character.depthPrompt || "",
@@ -245,8 +254,12 @@ export function buildCharacterCardV3(character: CharacterCardV3Input) {
 					...(character.aliases && character.aliases.length > 0
 						? { aliases: character.aliases }
 						: {}),
-					...(character.summary ? { summary: character.summary } : {}),
-					...(character.category ? { category: character.category } : {})
+					...(character.summary
+						? { summary: character.summary }
+						: {}),
+					...(character.category
+						? { category: character.category }
+						: {})
 				}
 			}
 		}

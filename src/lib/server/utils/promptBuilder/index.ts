@@ -15,7 +15,12 @@ import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import { InterpolationEngine } from "./InterpolationEngine"
 import { KeywordInfillEngine } from "./KeywordInfillEngine"
 import { RagInfillEngine } from "./RagInfillEngine"
-import type { CompiledPrompt, CompileOptions, InfillResult, TemplateContext } from "./types"
+import type {
+	CompiledPrompt,
+	CompileOptions,
+	InfillResult,
+	TemplateContext
+} from "./types"
 import "./utils"
 import { isModelReady } from "$lib/server/embedding"
 
@@ -171,7 +176,9 @@ export class PromptBuilder {
 		const char: any = {
 			name: this.contextBuildCharacterName(character),
 			nickname: this.contextBuildCharacterNickname(character),
-			aliases: character.aliases?.length ? character.aliases.filter((a) => a.trim()) : undefined
+			aliases: character.aliases?.length
+				? character.aliases.filter((a) => a.trim())
+				: undefined
 		}
 
 		// For minimal visibility, only include name/nickname and description
@@ -599,7 +606,9 @@ export class PromptBuilder {
 		// the same default ContentProcessors.ts uses for already-saved Narrator
 		// response messages in history (narratorName metadata || "Narrator"),
 		// so the seed is consistent with how every other narration line reads.
-		const seedName = currentCharacter ? resolveCharacterName(currentCharacter) : "Narrator"
+		const seedName = currentCharacter
+			? resolveCharacterName(currentCharacter)
+			: "Narrator"
 		const personaName = currentCharacter
 			? (this.chat.chatPersonas &&
 					this.chat.chatPersonas[0]?.persona?.name) ||

@@ -95,7 +95,9 @@ export const createWorldLoreEntryHandler: Handler<
 			.returning()
 
 		await syncLorebookBindings({ lorebookId: newEntry.lorebookId })
-		autoEnqueueLorebook(newEntry.lorebookId, existingBook.name, "").catch(console.error)
+		autoEnqueueLorebook(newEntry.lorebookId, existingBook.name, "").catch(
+			console.error
+		)
 
 		// Refresh binding list and entry list
 		if (emitToUser) {
@@ -146,12 +148,21 @@ export const updateWorldLoreEntryHandler: Handler<
 
 		const [updatedEntry] = await db
 			.update(schema.worldLoreEntries)
-			.set({ ...updateData, embedding: null, embeddingModel: null, vectorizedAt: null })
+			.set({
+				...updateData,
+				embedding: null,
+				embeddingModel: null,
+				vectorizedAt: null
+			})
 			.where(eq(schema.worldLoreEntries.id, params.worldLoreEntry.id!))
 			.returning()
 
 		await syncLorebookBindings({ lorebookId: existingEntry.lorebookId })
-		autoEnqueueLorebook(existingEntry.lorebookId, existingEntry.lorebook?.name ?? "", "").catch(console.error)
+		autoEnqueueLorebook(
+			existingEntry.lorebookId,
+			existingEntry.lorebook?.name ?? "",
+			""
+		).catch(console.error)
 
 		// Refresh binding list and entry list
 		if (emitToUser) {

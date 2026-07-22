@@ -4,7 +4,9 @@ import { eq, or, and } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 
 function toMeta(
-	row: typeof schema.customThemes.$inferSelect & { uploader?: { username: string } | null },
+	row: typeof schema.customThemes.$inferSelect & {
+		uploader?: { username: string } | null
+	},
 	includeUploader: boolean
 ): Sockets.CustomThemes.ThemeMeta {
 	return {
@@ -14,14 +16,19 @@ function toMeta(
 		cssKey: row.cssKey,
 		isInstanceTheme: row.isInstanceTheme,
 		uploadedBy: includeUploader ? row.uploadedBy : undefined,
-		uploaderName: includeUploader ? (row.uploader?.username ?? null) : undefined,
+		uploaderName: includeUploader
+			? (row.uploader?.username ?? null)
+			: undefined,
 		createdAt: row.createdAt.toISOString()
 	}
 }
 
 function stripDataThemeWrapper(css: string): string {
 	// Strip [data-theme='...'] { ... } selector wrapper
-	const withSelector = css.replace(/^\s*\[data-theme=[^\]]*\]\s*\{([\s\S]*)\}\s*$/, (_, inner) => inner.trim())
+	const withSelector = css.replace(
+		/^\s*\[data-theme=[^\]]*\]\s*\{([\s\S]*)\}\s*$/,
+		(_, inner) => inner.trim()
+	)
 	if (withSelector !== css) return withSelector
 	// Strip bare { ... } wrapper (Skeleton generator outputs this format)
 	return css.replace(/^\s*\{([\s\S]*)\}\s*$/, (_, inner) => inner.trim())
@@ -48,7 +55,10 @@ export const customThemesList: Handler<
 			.filter((r) => r.isInstanceTheme && r.uploadedBy !== userId)
 			.map((r) => toMeta(r, isAdmin))
 
-		const res: Sockets.CustomThemes.List.Response = { myThemes, instanceThemes }
+		const res: Sockets.CustomThemes.List.Response = {
+			myThemes,
+			instanceThemes
+		}
 		emitToUser("customThemes:list", res)
 		return res
 	}
@@ -76,10 +86,17 @@ export const customThemesGetCss: Handler<
 		let cssKey = row.cssKey
 		if (!cssKey) {
 			cssKey = crypto.randomUUID()
-			await db.update(schema.customThemes).set({ cssKey }).where(eq(schema.customThemes.id, row.id))
+			await db
+				.update(schema.customThemes)
+				.set({ cssKey })
+				.where(eq(schema.customThemes.id, row.id))
 		}
 
-		const res: Sockets.CustomThemes.GetCss.Response = { name: row.name, css: row.css, cssKey }
+		const res: Sockets.CustomThemes.GetCss.Response = {
+			name: row.name,
+			css: row.css,
+			cssKey
+		}
 		emitToUser("customThemes:getCss", res)
 		return res
 	}
@@ -101,18 +118,26 @@ export const customThemesSave: Handler<
 		const rawCss = stripDataThemeWrapper(params.css)
 		const newCssKey = crypto.randomUUID()
 
-		let row: typeof schema.customThemes.$inferSelect & { uploader?: { username: string } | null }
+		let row: typeof schema.customThemes.$inferSelect & {
+			uploader?: { username: string } | null
+		}
 
 		if (params.id) {
 			const existing = await db.query.customThemes.findFirst({
 				where: eq(schema.customThemes.id, params.id)
 			})
 			if (!existing) throw new Error("Theme not found")
-			if (!isAdmin && existing.uploadedBy !== userId) throw new Error("Unauthorized")
+			if (!isAdmin && existing.uploadedBy !== userId)
+				throw new Error("Unauthorized")
 
 			const [updated] = await db
 				.update(schema.customThemes)
-				.set({ name: params.name, label: params.label, css: rawCss, cssKey: newCssKey })
+				.set({
+					name: params.name,
+					label: params.label,
+					css: rawCss,
+					cssKey: newCssKey
+				})
 				.where(eq(schema.customThemes.id, params.id))
 				.returning()
 
@@ -120,7 +145,13 @@ export const customThemesSave: Handler<
 		} else {
 			const [inserted] = await db
 				.insert(schema.customThemes)
-				.values({ name: params.name, label: params.label, css: rawCss, cssKey: newCssKey, uploadedBy: userId })
+				.values({
+					name: params.name,
+					label: params.label,
+					css: rawCss,
+					cssKey: newCssKey,
+					uploadedBy: userId
+				})
 				.returning()
 
 			row = { ...inserted, uploader: null }
@@ -153,9 +184,12 @@ export const customThemesDelete: Handler<
 			where: eq(schema.customThemes.id, params.id)
 		})
 		if (!existing) throw new Error("Theme not found")
-		if (!isAdmin && existing.uploadedBy !== userId) throw new Error("Unauthorized")
+		if (!isAdmin && existing.uploadedBy !== userId)
+			throw new Error("Unauthorized")
 
-		await db.delete(schema.customThemes).where(eq(schema.customThemes.id, params.id))
+		await db
+			.delete(schema.customThemes)
+			.where(eq(schema.customThemes.id, params.id))
 
 		const res: Sockets.CustomThemes.Delete.Response = { success: true }
 		emitToUser("customThemes:delete", res)
@@ -176,7 +210,9 @@ export const customThemesSetInstanceTheme: Handler<
 			.set({ isInstanceTheme: params.enabled })
 			.where(eq(schema.customThemes.id, params.id))
 
-		const res: Sockets.CustomThemes.SetInstanceTheme.Response = { success: true }
+		const res: Sockets.CustomThemes.SetInstanceTheme.Response = {
+			success: true
+		}
 		emitToUser("customThemes:setInstanceTheme", res)
 		return res
 	}
@@ -185,7 +221,11 @@ export const customThemesSetInstanceTheme: Handler<
 export function registerCustomThemeHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
-	register: (socket: any, handler: Handler<any, any>, emitToUser: (event: string, data: any) => void) => void
+	register: (
+		socket: any,
+		handler: Handler<any, any>,
+		emitToUser: (event: string, data: any) => void
+	) => void
 ) {
 	register(socket, customThemesList, emitToUser)
 	register(socket, customThemesGetCss, emitToUser)

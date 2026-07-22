@@ -32,7 +32,10 @@ function emitDownloadProgress(emitToAll: (event: string, data: any) => void) {
 	emitToAll("ollamaDownloadProgress", { downloadingQuants })
 }
 
-export const ollamaGetDownloadProgress: Handler<Sockets.Ollama.GetDownloadProgress.Params, Sockets.Ollama.GetDownloadProgress.Response> = {
+export const ollamaGetDownloadProgress: Handler<
+	Sockets.Ollama.GetDownloadProgress.Params,
+	Sockets.Ollama.GetDownloadProgress.Response
+> = {
 	event: "ollama:getDownloadProgress",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
@@ -45,7 +48,10 @@ export const ollamaGetDownloadProgress: Handler<Sockets.Ollama.GetDownloadProgre
 	}
 }
 
-export const ollamaSetBaseUrl: Handler<Sockets.Ollama.SetBaseUrl.Params, Sockets.Ollama.SetBaseUrl.Response> = {
+export const ollamaSetBaseUrl: Handler<
+	Sockets.Ollama.SetBaseUrl.Params,
+	Sockets.Ollama.SetBaseUrl.Response
+> = {
 	event: "ollama:setBaseUrl",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
@@ -60,9 +66,12 @@ export const ollamaSetBaseUrl: Handler<Sockets.Ollama.SetBaseUrl.Params, Sockets
 				throw new Error("Invalid URL protocol")
 			}
 
-			await db.update(schema.ollamaSettings).set({
-				ollamaManagerBaseUrl: params.baseUrl
-			}).where(eq(schema.ollamaSettings.id, 1))
+			await db
+				.update(schema.ollamaSettings)
+				.set({
+					ollamaManagerBaseUrl: params.baseUrl
+				})
+				.where(eq(schema.ollamaSettings.id, 1))
 
 			const res: Sockets.Ollama.SetBaseUrl.Response = {
 				success: "Base URL updated successfully"
@@ -79,7 +88,10 @@ export const ollamaSetBaseUrl: Handler<Sockets.Ollama.SetBaseUrl.Params, Sockets
 	}
 }
 
-export const ollamaModelsList: Handler<Sockets.Ollama.ModelsList.Params, Sockets.Ollama.ModelsList.Response> = {
+export const ollamaModelsList: Handler<
+	Sockets.Ollama.ModelsList.Params,
+	Sockets.Ollama.ModelsList.Response
+> = {
 	event: "ollama:modelsList",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
@@ -106,7 +118,10 @@ export const ollamaModelsList: Handler<Sockets.Ollama.ModelsList.Params, Sockets
 	}
 }
 
-export const ollamaDeleteModelHandler: Handler<Sockets.Ollama.DeleteModel.Params, Sockets.Ollama.DeleteModel.Response> = {
+export const ollamaDeleteModelHandler: Handler<
+	Sockets.Ollama.DeleteModel.Params,
+	Sockets.Ollama.DeleteModel.Response
+> = {
 	event: "ollama:deleteModel",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
@@ -131,17 +146,22 @@ export const ollamaDeleteModelHandler: Handler<Sockets.Ollama.DeleteModel.Params
 						eq(schema.connections.model, params.modelName)
 					)
 				)
-			
+
 			return res
 		} catch (error: any) {
 			console.error("Ollama delete model error:", error)
-			emitToUser("ollama:deleteModel:error", { error: "Failed to delete model" })
+			emitToUser("ollama:deleteModel:error", {
+				error: "Failed to delete model"
+			})
 			throw error
 		}
 	}
 }
 
-export const ollamaConnectModelHandler: Handler<Sockets.Ollama.ConnectModel.Params, Sockets.Ollama.ConnectModel.Response> = {
+export const ollamaConnectModelHandler: Handler<
+	Sockets.Ollama.ConnectModel.Params,
+	Sockets.Ollama.ConnectModel.Response
+> = {
 	event: "ollama:connectModel",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
@@ -192,7 +212,10 @@ export const ollamaConnectModelHandler: Handler<Sockets.Ollama.ConnectModel.Para
 	}
 }
 
-export const ollamaListRunningModelsHandler: Handler<Sockets.Ollama.ListRunningModels.Params, Sockets.Ollama.ListRunningModels.Response> = {
+export const ollamaListRunningModelsHandler: Handler<
+	Sockets.Ollama.ListRunningModels.Params,
+	Sockets.Ollama.ListRunningModels.Response
+> = {
 	event: "ollama:listRunningModels",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
@@ -219,7 +242,10 @@ export const ollamaListRunningModelsHandler: Handler<Sockets.Ollama.ListRunningM
 	}
 }
 
-export const ollamaPullModelHandler: Handler<Sockets.Ollama.PullModel.Params, Sockets.Ollama.PullModel.Response> = {
+export const ollamaPullModelHandler: Handler<
+	Sockets.Ollama.PullModel.Params,
+	Sockets.Ollama.PullModel.Response
+> = {
 	event: "ollama:pullModel",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
@@ -286,9 +312,12 @@ export const ollamaPullModelHandler: Handler<Sockets.Ollama.PullModel.Params, So
 							fileName = chunk.status.split("pulling ")[1]
 						}
 
-						downloadingQuants[params.modelName].status = chunk.status
+						downloadingQuants[params.modelName].status =
+							chunk.status
 						if (fileName) {
-							downloadingQuants[params.modelName].files[fileName] = {
+							downloadingQuants[params.modelName].files[
+								fileName
+							] = {
 								total: chunk.total || 0,
 								completed: chunk.completed || 0
 							}
@@ -340,17 +369,23 @@ export const ollamaPullModelHandler: Handler<Sockets.Ollama.PullModel.Params, So
 	}
 }
 
-export const ollamaVersionHandler: Handler<Sockets.Ollama.Version.Params, Sockets.Ollama.Version.Response> = {
+export const ollamaVersionHandler: Handler<
+	Sockets.Ollama.Version.Params,
+	Sockets.Ollama.Version.Response
+> = {
 	event: "ollama:version",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
-			const { ollamaManagerBaseUrl: baseUrl } =
+			const { ollamaManagerBaseUrl } =
 				(await db.query.ollamaSettings.findFirst())!
+			const baseUrl = params.baseUrl || ollamaManagerBaseUrl
 			const response = await fetch(`${baseUrl}/api/version`)
 
 			if (!response.ok) {
-				throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+				throw new Error(
+					`HTTP ${response.status}: ${response.statusText}`
+				)
 			}
 
 			const result = await response.json()
@@ -369,7 +404,10 @@ export const ollamaVersionHandler: Handler<Sockets.Ollama.Version.Params, Socket
 	}
 }
 
-export const ollamaIsUpdateAvailableHandler: Handler<Sockets.Ollama.IsUpdateAvailable.Params, Sockets.Ollama.IsUpdateAvailable.Response> = {
+export const ollamaIsUpdateAvailableHandler: Handler<
+	Sockets.Ollama.IsUpdateAvailable.Params,
+	Sockets.Ollama.IsUpdateAvailable.Response
+> = {
 	event: "ollama:isUpdateAvailable",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
@@ -425,7 +463,10 @@ export const ollamaIsUpdateAvailableHandler: Handler<Sockets.Ollama.IsUpdateAvai
 	}
 }
 
-export const ollamaSearchAvailableModelsHandler: Handler<Sockets.Ollama.SearchAvailableModels.Params, Sockets.Ollama.SearchAvailableModels.Response> = {
+export const ollamaSearchAvailableModelsHandler: Handler<
+	Sockets.Ollama.SearchAvailableModels.Params,
+	Sockets.Ollama.SearchAvailableModels.Response
+> = {
 	event: "ollama:searchAvailableModels",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
@@ -452,7 +493,9 @@ export const ollamaSearchAvailableModelsHandler: Handler<Sockets.Ollama.SearchAv
 				)
 
 				if (!response.ok) {
-					throw new Error(`Hugging Face API error: ${response.status}`)
+					throw new Error(
+						`Hugging Face API error: ${response.status}`
+					)
 				}
 
 				const data = await response.json()
@@ -481,11 +524,12 @@ export const ollamaSearchAvailableModelsHandler: Handler<Sockets.Ollama.SearchAv
 					const pullOptions: { label: string; pull: string }[] =
 						ggufSiblings
 							.filter((sibling: { rfilename: string }) => {
-								const stem = sibling.rfilename
-									.replace(".gguf", "")
-									.split("-")
-									.pop()
-									?.toUpperCase() ?? ""
+								const stem =
+									sibling.rfilename
+										.replace(".gguf", "")
+										.split("-")
+										.pop()
+										?.toUpperCase() ?? ""
 								return /^(Q|IQ|BF|F)\d/.test(stem)
 							})
 							.map((sibling: { rfilename: string }) => {
@@ -512,7 +556,9 @@ export const ollamaSearchAvailableModelsHandler: Handler<Sockets.Ollama.SearchAv
 				})
 
 				// Filter out models that don't have pull options
-				models = models.filter((model) => model.pullOptions && model.pullOptions.length > 0)
+				models = models.filter(
+					(model) => model.pullOptions && model.pullOptions.length > 0
+				)
 			}
 
 			const res: Sockets.Ollama.SearchAvailableModels.Response = {
@@ -530,7 +576,10 @@ export const ollamaSearchAvailableModelsHandler: Handler<Sockets.Ollama.SearchAv
 	}
 }
 
-export const ollamaClearDownloadHistoryHandler: Handler<Sockets.Ollama.ClearDownloadHistory.Params, Sockets.Ollama.ClearDownloadHistory.Response> = {
+export const ollamaClearDownloadHistoryHandler: Handler<
+	Sockets.Ollama.ClearDownloadHistory.Params,
+	Sockets.Ollama.ClearDownloadHistory.Response
+> = {
 	event: "ollama:clearDownloadHistory",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
@@ -558,7 +607,10 @@ export const ollamaClearDownloadHistoryHandler: Handler<Sockets.Ollama.ClearDown
 	}
 }
 
-export const ollamaCancelPullHandler: Handler<Sockets.Ollama.CancelPull.Params, Sockets.Ollama.CancelPull.Response> = {
+export const ollamaCancelPullHandler: Handler<
+	Sockets.Ollama.CancelPull.Params,
+	Sockets.Ollama.CancelPull.Response
+> = {
 	event: "ollama:cancelPull",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
@@ -589,7 +641,10 @@ export const ollamaCancelPullHandler: Handler<Sockets.Ollama.CancelPull.Params, 
 	}
 }
 
-export const ollamaRecommendedModelsHandler: Handler<Sockets.Ollama.RecommendedModels.Params, Sockets.Ollama.RecommendedModels.Response> = {
+export const ollamaRecommendedModelsHandler: Handler<
+	Sockets.Ollama.RecommendedModels.Params,
+	Sockets.Ollama.RecommendedModels.Response
+> = {
 	event: "ollama:recommendedModels",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
@@ -734,7 +789,11 @@ export async function ollamaSearchAvailableModelsLegacy(
 	message: any,
 	emitToUser: (event: string, data: any) => void
 ) {
-	await ollamaSearchAvailableModelsHandler.handler(socket, message, emitToUser)
+	await ollamaSearchAvailableModelsHandler.handler(
+		socket,
+		message,
+		emitToUser
+	)
 }
 
 export async function ollamaDeleteModelLegacy(
@@ -811,10 +870,16 @@ export const ollamaUpdateManagerEnabled: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		if (params.enabled && isAndroidWrapper()) {
-			throw new Error("Ollama Manager is not available in the Android app")
+			throw new Error(
+				"Ollama Manager is not available in the Android app"
+			)
 		}
-		await db.update(schema.ollamaSettings).set({ ollamaManagerEnabled: params.enabled }).where(eq(schema.ollamaSettings.id, 1))
-		const res: Sockets.SystemSettings.UpdateOllamaManagerEnabled.Response = { success: true, enabled: params.enabled }
+		await db
+			.update(schema.ollamaSettings)
+			.set({ ollamaManagerEnabled: params.enabled })
+			.where(eq(schema.ollamaSettings.id, 1))
+		const res: Sockets.SystemSettings.UpdateOllamaManagerEnabled.Response =
+			{ success: true, enabled: params.enabled }
 		emitToUser("systemSettings:updateOllamaManagerEnabled", res)
 		await systemSettingsGet.handler(socket, {}, emitToUser)
 		return res
@@ -825,7 +890,11 @@ export const ollamaUpdateManagerEnabled: Handler<
 export function registerOllamaHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
-	register: (socket: any, handler: Handler<any, any>, emitToUser: (event: string, data: any) => void) => void
+	register: (
+		socket: any,
+		handler: Handler<any, any>,
+		emitToUser: (event: string, data: any) => void
+	) => void
 ) {
 	register(socket, ollamaUpdateManagerEnabled, emitToUser)
 	register(socket, ollamaSetBaseUrl, emitToUser)

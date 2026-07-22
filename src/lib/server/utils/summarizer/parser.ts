@@ -36,7 +36,10 @@ export function parseSummaryOutput(raw: string): ParsedSummary {
 	return {
 		name: extractTag(trimmed, "name"),
 		date: extractTag(trimmed, "date"),
-		content: rawContent !== undefined ? normalizeBulletPunctuation(rawContent) : undefined,
+		content:
+			rawContent !== undefined
+				? normalizeBulletPunctuation(rawContent)
+				: undefined,
 		raw: trimmed
 	}
 }

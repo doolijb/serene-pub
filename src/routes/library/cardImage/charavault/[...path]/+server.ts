@@ -14,8 +14,14 @@
 import type { RequestHandler } from "@sveltejs/kit"
 import { authenticateRequest } from "$lib/server/auth/authenticateRequest"
 import { fetchCharaVaultCardResponse } from "$lib/server/cardSources/charaVault/charaVaultSource"
-import { CardSourceRateLimitedError, CardSourceUnavailableError } from "$lib/server/cardSources/types"
-import { getCachedCardBytes, setCachedCardBytes } from "$lib/server/cardSources/diskCache"
+import {
+	CardSourceRateLimitedError,
+	CardSourceUnavailableError
+} from "$lib/server/cardSources/types"
+import {
+	getCachedCardBytes,
+	setCachedCardBytes
+} from "$lib/server/cardSources/diskCache"
 
 export const GET: RequestHandler = async (event) => {
 	const user = await authenticateRequest(event)
@@ -69,7 +75,8 @@ export const GET: RequestHandler = async (event) => {
 
 		return new Response(toClient, {
 			headers: {
-				"Content-Type": upstream.headers.get("content-type") ?? "image/png",
+				"Content-Type":
+					upstream.headers.get("content-type") ?? "image/png",
 				"Cache-Control": "public, max-age=86400"
 			}
 		})

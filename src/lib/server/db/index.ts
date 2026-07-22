@@ -361,7 +361,10 @@ db.update(schema.koboldCppModels)
 import("$lib/server/koboldcpp/subprocessManager").then(async (mgr) => {
 	try {
 		const settings = await db.query.koboldCppSettings.findFirst()
-		if (settings?.koboldCppManagerEnabled && settings?.koboldCppManagedMode === "managed") {
+		if (
+			settings?.koboldCppManagerEnabled &&
+			settings?.koboldCppManagedMode === "managed"
+		) {
 			await mgr.start()
 			console.log("KoboldCPP managed subprocess started.")
 		}

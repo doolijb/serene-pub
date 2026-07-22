@@ -5,7 +5,10 @@ import { user as loadUser, user, usersCurrent } from "./users"
 import { userSettingsGet } from "./userSettings"
 import { systemSettingsGet } from "./systemSettings"
 import { getConnectionAdapter } from "../utils/getConnectionAdapter"
-import { withConnectionDefaults, stableStringify } from "$lib/shared/utils/connectionDefaults"
+import {
+	withConnectionDefaults,
+	stableStringify
+} from "$lib/shared/utils/connectionDefaults"
 import type { Handler } from "$lib/shared/events"
 
 // --- CONNECTIONS SOCKET HANDLERS ---
@@ -123,9 +126,15 @@ export const connectionsCreate: Handler<
 			.values(data)
 			.returning()
 		// Auto-set as default only when no default exists yet (first connection)
-		const sysSettings = await db.query.systemSettings.findFirst({ columns: { defaultConnectionId: true } })
+		const sysSettings = await db.query.systemSettings.findFirst({
+			columns: { defaultConnectionId: true }
+		})
 		if (!sysSettings?.defaultConnectionId) {
-			await connectionsSetUserActive.handler(socket, { id: conn.id }, emitToUser)
+			await connectionsSetUserActive.handler(
+				socket,
+				{ id: conn.id },
+				emitToUser
+			)
 		}
 		await connectionsList.handler(socket, {}, emitToUser)
 		const res: Sockets.Connections.Create.Response = { connection: conn }
@@ -183,9 +192,15 @@ export const connectionsDelete: Handler<
 		}
 
 		// Clear default connection in system settings if it's the one being deleted
-		const systemSettings = await db.query.systemSettings.findFirst({ columns: { id: true, defaultConnectionId: true } })
+		const systemSettings = await db.query.systemSettings.findFirst({
+			columns: { id: true, defaultConnectionId: true }
+		})
 		if (systemSettings?.defaultConnectionId === params.id) {
-			await connectionsSetUserActive.handler(socket, { id: null }, emitToUser)
+			await connectionsSetUserActive.handler(
+				socket,
+				{ id: null },
+				emitToUser
+			)
 		}
 
 		await db
@@ -205,7 +220,9 @@ export const connectionsSetUserActive: Handler<
 	event: "connections:setUserActive",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) {
-			const res = { error: "Access denied. Only admin users can set the default connection." }
+			const res = {
+				error: "Access denied. Only admin users can set the default connection."
+			}
 			emitToUser("error", res)
 			throw new Error("Access denied.")
 		}
@@ -219,7 +236,10 @@ export const connectionsSetUserActive: Handler<
 		if (params.id)
 			await connectionsGet.handler(socket, { id: params.id }, emitToUser)
 
-		const res: Sockets.Connections.SetUserActive.Response = { ok: true, id: params.id }
+		const res: Sockets.Connections.SetUserActive.Response = {
+			ok: true,
+			id: params.id
+		}
 		emitToUser("connections:setUserActive", res)
 
 		// Push updated system settings and user so clients reflect the new default immediately
@@ -248,9 +268,8 @@ export const connectionsTest: Handler<
 			)
 		}
 
-		const { Adapter, testConnection, listModels } = await getConnectionAdapter(
-			params.connection.type
-		)
+		const { Adapter, testConnection, listModels } =
+			await getConnectionAdapter(params.connection.type)
 		if (!Adapter) {
 			const res: Sockets.Connections.Test.Response = {
 				ok: false,
@@ -315,7 +334,9 @@ export const connectionsRefreshModels: Handler<
 			)
 		}
 
-		const { listModels } = await getConnectionAdapter(params.connection.type)
+		const { listModels } = await getConnectionAdapter(
+			params.connection.type
+		)
 
 		try {
 			const result = await listModels(params.connection)

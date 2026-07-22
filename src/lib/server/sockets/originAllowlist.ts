@@ -62,7 +62,10 @@ export function isOriginAllowed(
 	try {
 		const originHostname = new URL(origin).hostname.toLowerCase()
 		if (requestHost) {
-			const requestHostname = requestHost.split(":")[0].trim().toLowerCase()
+			const requestHostname = requestHost
+				.split(":")[0]
+				.trim()
+				.toLowerCase()
 			if (originHostname === requestHostname) return true
 		}
 		return getAllowedOriginHosts().has(originHostname)

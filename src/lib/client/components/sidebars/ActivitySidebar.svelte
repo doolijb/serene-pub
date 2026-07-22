@@ -12,8 +12,12 @@
 	const socket = useTypedSocket()
 
 	let graphBuildsCtx: GraphBuildsCtx = $state(getContext("graphBuildsCtx"))
-	let sceneSummarizesCtx: SceneSummarizesCtx = $state(getContext("sceneSummarizesCtx"))
-	let compileEntriesCtx: CompileEntriesCtx = $state(getContext("compileEntriesCtx"))
+	let sceneSummarizesCtx: SceneSummarizesCtx = $state(
+		getContext("sceneSummarizesCtx")
+	)
+	let compileEntriesCtx: CompileEntriesCtx = $state(
+		getContext("compileEntriesCtx")
+	)
 	let taskQueueCtx: TaskQueueCtx = $state(getContext("taskQueueCtx"))
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
 	let userCtx: UserCtx = $state(getContext("userCtx"))
@@ -21,19 +25,28 @@
 	let build = $derived(graphBuildsCtx?.activeBuild)
 	let sceneActivities = $derived(sceneSummarizesCtx?.activities ?? [])
 	let compileActivities = $derived(compileEntriesCtx?.activities ?? [])
-	let hasActivity = $derived(!!build || sceneActivities.length > 0 || compileActivities.length > 0)
-	let activityCount = $derived((build ? 1 : 0) + sceneActivities.length + compileActivities.length)
+	let hasActivity = $derived(
+		!!build || sceneActivities.length > 0 || compileActivities.length > 0
+	)
+	let activityCount = $derived(
+		(build ? 1 : 0) + sceneActivities.length + compileActivities.length
+	)
 	let queueCount = $derived(taskQueueCtx?.tasks?.length ?? 0)
 
 	let isAdmin = $derived(!!userCtx?.user?.isAdmin)
 	let isOwnActivity = $derived(!!build && build.userId === userCtx?.user?.id)
-	let canStop = $derived(!!build && build.status === "building" && (isOwnActivity || isAdmin))
+	let canStop = $derived(
+		!!build && build.status === "building" && (isOwnActivity || isAdmin)
+	)
 	let activeTab = $state<"activity" | "queue">("activity")
 
 	$effect(() => {
 		if (activeTab !== "queue" || !isAdmin) return
 		socket.emit("taskQueue:get", {})
-		const interval = setInterval(() => socket.emit("taskQueue:get", {}), 1000)
+		const interval = setInterval(
+			() => socket.emit("taskQueue:get", {}),
+			1000
+		)
 		return () => clearInterval(interval)
 	})
 	let expandedTaskId = $state<string | null>(null)
@@ -43,7 +56,9 @@
 	}
 
 	function elapsedLabel(startedAt: string): string {
-		const s = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000)
+		const s = Math.floor(
+			(Date.now() - new Date(startedAt).getTime()) / 1000
+		)
 		if (s < 60) return `${s}s`
 		const m = Math.floor(s / 60)
 		if (m < 60) return `${m}m ${s % 60}s`
@@ -99,26 +114,36 @@
 <!-- Tabs -->
 <div class="border-surface-200-800 flex shrink-0 border-b">
 	<button
-		class="flex-1 px-4 py-2 text-sm font-medium transition-colors {activeTab === 'activity'
-			? 'border-b-2 border-primary-500 text-primary-500'
+		class="flex-1 px-4 py-2 text-sm font-medium transition-colors {activeTab ===
+		'activity'
+			? 'border-primary-500 text-primary-500 border-b-2'
 			: 'text-surface-700-300 hover:text-surface-700-300'}"
 		onclick={() => (activeTab = "activity")}
 	>
 		Activity
 		{#if hasActivity}
-			<span class="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary-500/20 px-1 text-[10px] text-primary-500">{activityCount}</span>
+			<span
+				class="bg-primary-500/20 text-primary-500 ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px]"
+			>
+				{activityCount}
+			</span>
 		{/if}
 	</button>
 	{#if isAdmin}
 		<button
-			class="flex-1 px-4 py-2 text-sm font-medium transition-colors {activeTab === 'queue'
-				? 'border-b-2 border-primary-500 text-primary-500'
+			class="flex-1 px-4 py-2 text-sm font-medium transition-colors {activeTab ===
+			'queue'
+				? 'border-primary-500 text-primary-500 border-b-2'
 				: 'text-surface-700-300 hover:text-surface-700-300'}"
 			onclick={() => (activeTab = "queue")}
 		>
 			LLM Queue
 			{#if queueCount > 0}
-				<span class="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-warning-500/20 px-1 text-[10px] text-warning-500">{queueCount}</span>
+				<span
+					class="bg-warning-500/20 text-warning-500 ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px]"
+				>
+					{queueCount}
+				</span>
 			{/if}
 		</button>
 	{/if}
@@ -129,31 +154,38 @@
 	{#if activeTab === "activity"}
 		{#if build}
 			<div class="m-4 mb-0">
-				<div class="bg-surface-200-800 border border-surface-300-700 rounded-lg p-3 space-y-3">
+				<div
+					class="bg-surface-200-800 border-surface-300-700 space-y-3 rounded-lg border p-3"
+				>
 					<!-- Card header: title + dismiss -->
 					<div class="flex items-start justify-between gap-2">
 						<div class="min-w-0 flex-1">
 							{#if isOwnActivity}
 								<button
-									class="block w-full truncate text-left text-sm font-medium hover:text-primary-500 transition-colors"
+									class="hover:text-primary-500 block w-full truncate text-left text-sm font-medium transition-colors"
 									onclick={navigateToGraphTab}
 									title="Go to graph tab"
 								>
-									{build.lorebookLabel ?? `Lorebook #${build.lorebookId}`}
+									{build.lorebookLabel ??
+										`Lorebook #${build.lorebookId}`}
 								</button>
 							{:else}
 								<p class="truncate text-sm font-medium">
-									{build.lorebookLabel ?? `Lorebook #${build.lorebookId}`}
+									{build.lorebookLabel ??
+										`Lorebook #${build.lorebookId}`}
 								</p>
 							{/if}
 							<p class="text-surface-700-300 text-xs">
-								{build.mode === "extend" ? "Extend" : "Build"} graph ·
-								<span class="{BUILD_STATUS_COLOR[build.status]}">{BUILD_STATUS_LABEL[build.status]}</span>
+								{build.mode === "extend" ? "Extend" : "Build"} graph
+								·
+								<span class={BUILD_STATUS_COLOR[build.status]}>
+									{BUILD_STATUS_LABEL[build.status]}
+								</span>
 							</p>
 						</div>
 						{#if build.status !== "building"}
 							<button
-								class="text-surface-400 hover:text-surface-600-400 transition-colors shrink-0"
+								class="text-surface-400 hover:text-surface-600-400 shrink-0 transition-colors"
 								onclick={() => graphBuildsCtx?.clearBuild()}
 								title="Dismiss"
 							>
@@ -164,18 +196,34 @@
 
 					{#if build.status === "building"}
 						<div class="space-y-1">
-							<p class="text-surface-700-300 capitalize text-xs">
+							<p class="text-surface-700-300 text-xs capitalize">
 								{build.phase.replace(/_/g, " ")}
-								{#if build.totalScenes > 0}· scene {build.sceneIndex + 1}/{build.totalScenes}{/if}
+								{#if build.totalScenes > 0}· scene {build.sceneIndex +
+										1}/{build.totalScenes}{/if}
 							</p>
-							<div class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full">
+							<div
+								class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full"
+							>
 								<div
 									class="bg-primary-500 h-full rounded-full transition-all duration-500"
-									style="width: {build.totalScenes > 0 ? Math.max(10, Math.round((build.sceneIndex / build.totalScenes) * 80) + 5) : 5}%"
+									style="width: {build.totalScenes > 0
+										? Math.max(
+												10,
+												Math.round(
+													(build.sceneIndex /
+														build.totalScenes) *
+														80
+												) + 5
+											)
+										: 5}%"
 								></div>
 							</div>
 							{#if build.currentPair}
-								<p class="text-surface-400 text-xs font-mono truncate">{build.currentPair}</p>
+								<p
+									class="text-surface-400 truncate font-mono text-xs"
+								>
+									{build.currentPair}
+								</p>
 							{/if}
 						</div>
 					{/if}
@@ -185,22 +233,35 @@
 						{#if canStop}
 							<button
 								class="btn btn-sm preset-tonal-error"
-								onclick={() => build?.activityId && socket.emit("activity:cancel", { id: build.activityId })}
+								onclick={() =>
+									build?.activityId &&
+									socket.emit("activity:cancel", {
+										id: build.activityId
+									})}
 							>
 								<Icons.Square size={14} /> Stop
 							</button>
 						{/if}
 						{#if isOwnActivity}
 							{#if build.status === "building"}
-								<button class="btn btn-sm preset-filled-surface-400-600" onclick={openModal}>
+								<button
+									class="btn btn-sm preset-filled-surface-400-600"
+									onclick={openModal}
+								>
 									<Icons.Eye size={14} /> View Progress
 								</button>
 							{:else if build.status === "review"}
-								<button class="btn btn-sm preset-filled-primary-500" onclick={openModal}>
+								<button
+									class="btn btn-sm preset-filled-primary-500"
+									onclick={openModal}
+								>
 									<Icons.Check size={14} /> Review & Apply
 								</button>
 							{:else if build.status === "error"}
-								<button class="btn btn-sm preset-tonal-error" onclick={openModal}>
+								<button
+									class="btn btn-sm preset-tonal-error"
+									onclick={openModal}
+								>
 									<Icons.AlertCircle size={14} /> View Error
 								</button>
 							{/if}
@@ -212,29 +273,44 @@
 		{#each sceneActivities as activity (activity.activityId)}
 			{@const isOwn = activity.userId === userCtx?.user?.id}
 			<div class="m-4 mb-0">
-				<div class="bg-surface-200-800 border border-surface-300-700 rounded-lg p-3 space-y-3">
+				<div
+					class="bg-surface-200-800 border-surface-300-700 space-y-3 rounded-lg border p-3"
+				>
 					<div class="flex items-start justify-between gap-2">
 						<div class="min-w-0 flex-1">
 							{#if isOwn}
 								<button
-									class="block w-full truncate text-left text-sm font-medium hover:text-primary-500 transition-colors"
+									class="hover:text-primary-500 block w-full truncate text-left text-sm font-medium transition-colors"
 									onclick={() => {
-										sceneSummarizesCtx.setReviewSceneId(activity.sceneId)
+										sceneSummarizesCtx.setReviewSceneId(
+											activity.sceneId
+										)
 										navigateToScene(activity)
 									}}
-									title={activity.status === "running" ? "View progress" : "Go to scene"}
+									title={activity.status === "running"
+										? "View progress"
+										: "Go to scene"}
 								>
-									{activity.sceneName ?? `Scene #${activity.sceneId}`}
+									{activity.sceneName ??
+										`Scene #${activity.sceneId}`}
 								</button>
 							{:else}
-								<p class="truncate text-sm font-medium">{activity.sceneName ?? `Scene #${activity.sceneId}`}</p>
+								<p class="truncate text-sm font-medium">
+									{activity.sceneName ??
+										`Scene #${activity.sceneId}`}
+								</p>
 							{/if}
 							<p class="text-surface-700-300 text-xs">
-								{activity.lorebookLabel ?? `Lorebook #${activity.lorebookId}`} · Scene
+								{activity.lorebookLabel ??
+									`Lorebook #${activity.lorebookId}`} · Scene
 								{#if activity.status === "running"}
-									· <span class="text-primary-500">Processing…</span>
+									· <span class="text-primary-500">
+										Processing…
+									</span>
 								{:else if activity.status === "review"}
-									· <span class="text-warning-500">Ready to review</span>
+									· <span class="text-warning-500">
+										Ready to review
+									</span>
 								{:else if activity.status === "error"}
 									· <span class="text-error-500">Failed</span>
 								{/if}
@@ -242,8 +318,11 @@
 						</div>
 						{#if activity.status !== "running"}
 							<button
-								class="text-surface-400 hover:text-surface-600-400 transition-colors shrink-0"
-								onclick={() => sceneSummarizesCtx.dismiss(activity.activityId)}
+								class="text-surface-400 hover:text-surface-600-400 shrink-0 transition-colors"
+								onclick={() =>
+									sceneSummarizesCtx.dismiss(
+										activity.activityId
+									)}
 								title="Dismiss"
 							>
 								<Icons.X size={14} />
@@ -252,29 +331,51 @@
 					</div>
 					{#if activity.status === "running" && activity.phase}
 						<div class="space-y-1">
-							<p class="text-surface-700-300 capitalize text-xs">
+							<p class="text-surface-700-300 text-xs capitalize">
 								{activity.phase}
 								{#if activity.totalBatches && activity.totalBatches > 1}
-									· batch {activity.batch ?? 0}/{activity.totalBatches}
+									· batch {activity.batch ??
+										0}/{activity.totalBatches}
 								{/if}
 							</p>
-							<div class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full">
+							<div
+								class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full"
+							>
 								<div
 									class="bg-primary-500 h-full rounded-full transition-all duration-500"
-									style="width: {activity.phase === 'extracting' ? 95 : activity.totalBatches && activity.totalBatches > 1 ? Math.max(5, Math.round(((activity.batch ?? 0) / activity.totalBatches) * 80)) : activity.phase === 'synthesizing' ? 80 : 40}%"
+									style="width: {activity.phase ===
+									'extracting'
+										? 95
+										: activity.totalBatches &&
+											  activity.totalBatches > 1
+											? Math.max(
+													5,
+													Math.round(
+														((activity.batch ?? 0) /
+															activity.totalBatches) *
+															80
+													)
+												)
+											: activity.phase === 'synthesizing'
+												? 80
+												: 40}%"
 								></div>
 							</div>
 						</div>
 					{/if}
 					{#if activity.status === "error" && activity.errorMessage}
-						<p class="text-error-500 text-xs">{activity.errorMessage}</p>
+						<p class="text-error-500 text-xs">
+							{activity.errorMessage}
+						</p>
 					{/if}
 					{#if isOwn && activity.status === "review"}
 						<div class="flex items-center gap-2">
 							<button
 								class="btn btn-sm preset-filled-warning-500"
 								onclick={() => {
-									sceneSummarizesCtx.setReviewSceneId(activity.sceneId)
+									sceneSummarizesCtx.setReviewSceneId(
+										activity.sceneId
+									)
 									navigateToScene(activity)
 								}}
 							>
@@ -283,7 +384,10 @@
 						</div>
 					{:else if isOwn && activity.status === "error"}
 						<div class="flex items-center gap-2">
-							<button class="btn btn-sm preset-filled-surface-400-600" onclick={() => navigateToScene(activity)}>
+							<button
+								class="btn btn-sm preset-filled-surface-400-600"
+								onclick={() => navigateToScene(activity)}
+							>
 								<Icons.ExternalLink size={14} /> Go to Scene
 							</button>
 						</div>
@@ -294,26 +398,35 @@
 		{#each compileActivities as activity (activity.activityId)}
 			{@const isOwn = activity.userId === userCtx?.user?.id}
 			<div class="m-4 mb-0">
-				<div class="bg-surface-200-800 border border-surface-300-700 rounded-lg p-3 space-y-3">
+				<div
+					class="bg-surface-200-800 border-surface-300-700 space-y-3 rounded-lg border p-3"
+				>
 					<div class="flex items-start justify-between gap-2">
 						<div class="min-w-0 flex-1">
 							{#if isOwn}
 								<button
-									class="block w-full truncate text-left text-sm font-medium hover:text-primary-500 transition-colors"
-									onclick={() => navigateToCompileEntry(activity)}
+									class="hover:text-primary-500 block w-full truncate text-left text-sm font-medium transition-colors"
+									onclick={() =>
+										navigateToCompileEntry(activity)}
 									title="Go to history entry"
 								>
 									{activity.historyEntryDate}
 								</button>
 							{:else}
-								<p class="truncate text-sm font-medium">{activity.historyEntryDate}</p>
+								<p class="truncate text-sm font-medium">
+									{activity.historyEntryDate}
+								</p>
 							{/if}
 							<p class="text-surface-700-300 text-xs">
 								{activity.lorebookLabel} · Compile
 								{#if activity.status === "running"}
-									· <span class="text-primary-500">Compiling…</span>
+									· <span class="text-primary-500">
+										Compiling…
+									</span>
 								{:else if activity.status === "review"}
-									· <span class="text-warning-500">Ready to review</span>
+									· <span class="text-warning-500">
+										Ready to review
+									</span>
 								{:else if activity.status === "error"}
 									· <span class="text-error-500">Failed</span>
 								{/if}
@@ -321,8 +434,11 @@
 						</div>
 						{#if activity.status !== "running"}
 							<button
-								class="text-surface-400 hover:text-surface-600-400 transition-colors shrink-0"
-								onclick={() => compileEntriesCtx.dismiss(activity.activityId)}
+								class="text-surface-400 hover:text-surface-600-400 shrink-0 transition-colors"
+								onclick={() =>
+									compileEntriesCtx.dismiss(
+										activity.activityId
+									)}
 								title="Dismiss"
 							>
 								<Icons.X size={14} />
@@ -331,29 +447,49 @@
 					</div>
 					{#if activity.status === "running" && activity.phase}
 						<div class="space-y-1">
-							<p class="text-surface-700-300 capitalize text-xs">
+							<p class="text-surface-700-300 text-xs capitalize">
 								{activity.phase}
 								{#if activity.totalBatches && activity.totalBatches > 1}
-									· batch {activity.batch ?? 0}/{activity.totalBatches}
+									· batch {activity.batch ??
+										0}/{activity.totalBatches}
 								{/if}
 							</p>
-							<div class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full">
+							<div
+								class="bg-surface-300-700 h-1.5 w-full overflow-hidden rounded-full"
+							>
 								<div
 									class="bg-primary-500 h-full rounded-full transition-all duration-500"
-									style="width: {activity.phase === 'synthesizing' ? 80 : activity.totalBatches && activity.totalBatches > 1 ? Math.max(5, Math.round(((activity.batch ?? 0) / activity.totalBatches) * 75)) : 40}%"
+									style="width: {activity.phase ===
+									'synthesizing'
+										? 80
+										: activity.totalBatches &&
+											  activity.totalBatches > 1
+											? Math.max(
+													5,
+													Math.round(
+														((activity.batch ?? 0) /
+															activity.totalBatches) *
+															75
+													)
+												)
+											: 40}%"
 								></div>
 							</div>
 						</div>
 					{/if}
 					{#if activity.status === "error" && activity.errorMessage}
-						<p class="text-error-500 text-xs">{activity.errorMessage}</p>
+						<p class="text-error-500 text-xs">
+							{activity.errorMessage}
+						</p>
 					{/if}
 					{#if isOwn && activity.status === "review"}
 						<div class="flex items-center gap-2">
 							<button
 								class="btn btn-sm preset-filled-warning-500"
 								onclick={() => {
-									compileEntriesCtx.setReviewHistoryEntryId(activity.historyEntryId)
+									compileEntriesCtx.setReviewHistoryEntryId(
+										activity.historyEntryId
+									)
 									navigateToCompileEntry(activity)
 								}}
 							>
@@ -362,7 +498,10 @@
 						</div>
 					{:else if isOwn && activity.status === "error"}
 						<div class="flex items-center gap-2">
-							<button class="btn btn-sm preset-filled-surface-400-600" onclick={() => navigateToCompileEntry(activity)}>
+							<button
+								class="btn btn-sm preset-filled-surface-400-600"
+								onclick={() => navigateToCompileEntry(activity)}
+							>
 								<Icons.ExternalLink size={14} /> Go to Entry
 							</button>
 						</div>
@@ -371,7 +510,9 @@
 			</div>
 		{/each}
 		{#if !build && sceneActivities.length === 0 && compileActivities.length === 0}
-			<div class="text-surface-700-300 flex flex-col items-center gap-2 py-12 text-sm">
+			<div
+				class="text-surface-700-300 flex flex-col items-center gap-2 py-12 text-sm"
+			>
 				<Icons.CheckCircle size={28} class="opacity-30" />
 				No active tasks
 			</div>
@@ -380,7 +521,9 @@
 		{/if}
 	{:else if activeTab === "queue" && isAdmin}
 		{#if queueCount === 0}
-			<div class="text-surface-700-300 flex flex-col items-center gap-2 py-12 text-sm">
+			<div
+				class="text-surface-700-300 flex flex-col items-center gap-2 py-12 text-sm"
+			>
 				<Icons.Cpu size={28} class="opacity-30" />
 				Queue is empty
 			</div>
@@ -390,58 +533,104 @@
 					{@const expanded = expandedTaskId === task.id}
 					<div class="divide-surface-200-800 divide-y">
 						<button
-							class="flex w-full items-center gap-2 px-4 py-3 text-left transition-colors hover:bg-surface-100-900"
+							class="hover:bg-surface-100-900 flex w-full items-center gap-2 px-4 py-3 text-left transition-colors"
 							onclick={() => toggleTask(task.id)}
 						>
 							<div class="min-w-0 flex-1">
-								<p class="truncate text-sm font-medium">{task.label ?? task.taskType}</p>
+								<p class="truncate text-sm font-medium">
+									{task.label ?? task.taskType}
+								</p>
 								<p class="text-surface-700-300 text-xs">
-									{task.connectionName}{#if task.samplingName} · {task.samplingName}{/if}
+									{task.connectionName}{#if task.samplingName}
+										· {task.samplingName}{/if}
 								</p>
 							</div>
 							<div class="flex shrink-0 items-center gap-2">
 								{#if task.status !== "generating"}
-									<span class="text-surface-700-300 text-xs capitalize">{task.status}</span>
+									<span
+										class="text-surface-700-300 text-xs capitalize"
+									>
+										{task.status}
+									</span>
 								{/if}
-								<div class="bg-primary-500 h-1.5 w-1.5 animate-pulse rounded-full"></div>
-								<Icons.ChevronDown size={14} class="text-surface-400 transition-transform {expanded ? 'rotate-180' : ''}" />
+								<div
+									class="bg-primary-500 h-1.5 w-1.5 animate-pulse rounded-full"
+								></div>
+								<Icons.ChevronDown
+									size={14}
+									class="text-surface-400 transition-transform {expanded
+										? 'rotate-180'
+										: ''}"
+								/>
 							</div>
 						</button>
 						{#if expanded}
-							<div class="bg-surface-100-900 px-4 py-3 text-xs space-y-1.5">
+							<div
+								class="bg-surface-100-900 space-y-1.5 px-4 py-3 text-xs"
+							>
 								<div class="flex justify-between gap-2">
-									<span class="text-surface-700-300">Status</span>
-									<span class="font-mono text-right capitalize">{task.status}</span>
+									<span class="text-surface-700-300">
+										Status
+									</span>
+									<span
+										class="text-right font-mono capitalize"
+									>
+										{task.status}
+									</span>
 								</div>
 								<div class="flex justify-between gap-2">
-									<span class="text-surface-700-300">Type</span>
-									<span class="font-mono text-right">{task.taskType}</span>
+									<span class="text-surface-700-300">
+										Type
+									</span>
+									<span class="text-right font-mono">
+										{task.taskType}
+									</span>
 								</div>
 								<div class="flex justify-between gap-2">
-									<span class="text-surface-700-300">Connection</span>
-									<span class="truncate text-right">{task.connectionName}</span>
+									<span class="text-surface-700-300">
+										Connection
+									</span>
+									<span class="truncate text-right">
+										{task.connectionName}
+									</span>
 								</div>
 								{#if task.samplingName}
 									<div class="flex justify-between gap-2">
-										<span class="text-surface-700-300">Sampling</span>
-										<span class="truncate text-right">{task.samplingName}</span>
+										<span class="text-surface-700-300">
+											Sampling
+										</span>
+										<span class="truncate text-right">
+											{task.samplingName}
+										</span>
 									</div>
 								{/if}
 								{#if task.chatId}
 									<div class="flex justify-between gap-2">
-										<span class="text-surface-700-300">Chat ID</span>
-										<span class="font-mono">{task.chatId}</span>
+										<span class="text-surface-700-300">
+											Chat ID
+										</span>
+										<span class="font-mono">
+											{task.chatId}
+										</span>
 									</div>
 								{/if}
 								{#if task.lorebookId}
 									<div class="flex justify-between gap-2">
-										<span class="text-surface-700-300">Lorebook ID</span>
-										<span class="font-mono">{task.lorebookId}</span>
+										<span class="text-surface-700-300">
+											Lorebook ID
+										</span>
+										<span class="font-mono">
+											{task.lorebookId}
+										</span>
 									</div>
 								{/if}
 								<div class="flex justify-between gap-2">
-									<span class="text-surface-700-300">Running</span>
-									<span class="font-mono">{elapsedLabel(task.startedAt)}</span>
+									<span class="text-surface-700-300">
+										Running
+									</span>
+									<span class="font-mono">
+										{elapsedLabel(task.startedAt)}
+									</span>
 								</div>
 							</div>
 						{/if}

@@ -172,13 +172,16 @@
 			</Popover.Trigger>
 			<Portal>
 				<Popover.Positioner class="z-[1000]!">
-					<Popover.Content class="card preset-filled-surface-100-900 shadow-xl p-4">
+					<Popover.Content
+						class="card preset-filled-surface-100-900 p-4 shadow-xl"
+					>
 						<div class="flex flex-col gap-2">
 							<div class="mb-2 text-sm font-semibold">
 								Insert Character Tag
 							</div>
 							{#each lorebookBindingList as binding}
-								{@const char = binding.character || binding.persona}
+								{@const char =
+									binding.character || binding.persona}
 								<button
 									class="btn"
 									class:preset-filled-primary-500={!!binding.characterId}
@@ -195,7 +198,9 @@
 										: binding.binding}
 								>
 									{char
-										? ("nickname" in char && char.nickname) || char.name
+										? ("nickname" in char &&
+												char.nickname) ||
+											char.name
 										: binding.binding}
 								</button>
 							{/each}

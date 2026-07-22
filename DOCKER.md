@@ -22,14 +22,14 @@ The first startup runs database migrations automatically and creates an admin ac
 
 ## Image tags
 
-| Tag | What you get |
-|-----|--------------|
-| `latest` | Latest **stable** or **beta** release |
-| `1`, `1.2` | Latest stable or beta within that major / minor line |
-| `1.2.3` | Exact stable version |
-| `1.2.3-beta` | Beta release |
-| `1.2.3-rc-1` | Pre-release — release candidate |
-| `1.2.3-pr-5` | Pre-release build |
+| Tag          | What you get                                         |
+| ------------ | ---------------------------------------------------- |
+| `latest`     | Latest **stable** or **beta** release                |
+| `1`, `1.2`   | Latest stable or beta within that major / minor line |
+| `1.2.3`      | Exact stable version                                 |
+| `1.2.3-beta` | Beta release                                         |
+| `1.2.3-rc-1` | Pre-release — release candidate                      |
+| `1.2.3-pr-5` | Pre-release build                                    |
 
 **`latest`, major, and minor aliases are updated on stable and beta releases.**  
 Release candidates (`-rc-*`) and pre-release builds (`-pr-*`) are published but never assigned to `latest`, so pinning to `latest` will not pull those builds.
@@ -59,11 +59,11 @@ Everything that needs to survive container restarts lives under `SERENE_PUB_DATA
 
 The data directory contains:
 
-| Path | Contents |
-|------|----------|
-| `data/serene-pub.db` | PGLite database (characters, chats, lorebooks, settings…) |
-| `transformers-cache/` | Downloaded AI embedding models |
-| `koboldcpp/models/` | Default KoboldCPP model directory (managed mode) |
+| Path                  | Contents                                                  |
+| --------------------- | --------------------------------------------------------- |
+| `data/serene-pub.db`  | PGLite database (characters, chats, lorebooks, settings…) |
+| `transformers-cache/` | Downloaded AI embedding models                            |
+| `koboldcpp/models/`   | Default KoboldCPP model directory (managed mode)          |
 
 ### Bind-mount instead of a named volume
 
@@ -71,7 +71,7 @@ If you prefer a host directory (e.g. for easy backups):
 
 ```yaml
 volumes:
-  - ./serene-pub-data:/data
+    - ./serene-pub-data:/data
 ```
 
 ---
@@ -84,16 +84,16 @@ for the full reference, including reverse-proxy trust settings
 (`SOCKETS_HTTPS_HOSTS`/`PUBLIC_SOCKETS_ENDPOINT`), see
 [HOSTING.md](./HOSTING.md).
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SERENE_PUB_DATA_DIR` | `/data` | Directory for all persistent data |
-| `PORT` | `3000` | HTTP port the web server listens on |
-| `SOCKETS_PORT` | `3001` | WebSocket server port |
-| `SERENE_AUTO_OPEN` | unset (auto-open enabled) | Always effectively disabled in containers (no browser to open) — irrelevant for Docker, listed for completeness |
-| `NODE_ENV` | `production` | Node.js environment |
-| `USER_TOKEN_EXPIRATION_HOURS` | `168` | Session lifetime in hours (168 = 7 days) |
-| `TRANSFORMERS_CACHE` | `$SERENE_PUB_DATA_DIR/transformers-cache` | Override embedding model cache directory |
-| `KOBOLDCPP_BINARY_DIR` / `KOBOLDCPP_BINARY_NAME` | unset | Point managed KoboldCPP mode at a binary you mounted yourself — see [Managed mode](#koboldcpp--managed-mode) below |
+| Variable                                         | Default                                   | Description                                                                                                        |
+| ------------------------------------------------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `SERENE_PUB_DATA_DIR`                            | `/data`                                   | Directory for all persistent data                                                                                  |
+| `PORT`                                           | `3000`                                    | HTTP port the web server listens on                                                                                |
+| `SOCKETS_PORT`                                   | `3001`                                    | WebSocket server port                                                                                              |
+| `SERENE_AUTO_OPEN`                               | unset (auto-open enabled)                 | Always effectively disabled in containers (no browser to open) — irrelevant for Docker, listed for completeness    |
+| `NODE_ENV`                                       | `production`                              | Node.js environment                                                                                                |
+| `USER_TOKEN_EXPIRATION_HOURS`                    | `168`                                     | Session lifetime in hours (168 = 7 days)                                                                           |
+| `TRANSFORMERS_CACHE`                             | `$SERENE_PUB_DATA_DIR/transformers-cache` | Override embedding model cache directory                                                                           |
+| `KOBOLDCPP_BINARY_DIR` / `KOBOLDCPP_BINARY_NAME` | unset                                     | Point managed KoboldCPP mode at a binary you mounted yourself — see [Managed mode](#koboldcpp--managed-mode) below |
 
 ---
 
@@ -103,11 +103,11 @@ Update both the `ports` mapping **and** the corresponding environment variable:
 
 ```yaml
 ports:
-  - "8080:8080"   # host:container
-  - "8081:8081"
+    - "8080:8080" # host:container
+    - "8081:8081"
 environment:
-  PORT: 8080
-  SOCKETS_PORT: 8081
+    PORT: 8080
+    SOCKETS_PORT: 8081
 ```
 
 ---
@@ -134,21 +134,21 @@ Run Ollama in a separate container and point Serene Pub at it:
 
 ```yaml
 services:
-  serene-pub:
-    image: ghcr.io/doolijb/serene-pub:latest
-    environment:
-      # Serene Pub connects to Ollama via its container name
-    depends_on:
-      - ollama
+    serene-pub:
+        image: ghcr.io/doolijb/serene-pub:latest
+        environment:
+            # Serene Pub connects to Ollama via its container name
+        depends_on:
+            - ollama
 
-  ollama:
-    image: ollama/ollama
-    volumes:
-      - ollama-data:/root/.ollama
+    ollama:
+        image: ollama/ollama
+        volumes:
+            - ollama-data:/root/.ollama
 
 volumes:
-  serene-pub-data:
-  ollama-data:
+    serene-pub-data:
+    ollama-data:
 ```
 
 In Serene Pub's connection settings, set the Ollama base URL to `http://ollama:11434`.
@@ -167,12 +167,12 @@ Managed mode lets Serene Pub spawn and control the KoboldCPP process directly. I
 
 ```yaml
 services:
-  serene-pub:
-    image: ghcr.io/doolijb/serene-pub:latest
-    volumes:
-      - serene-pub-data:/data
-      - /path/to/koboldcpp:/koboldcpp:ro     # binary directory
-      - /path/to/models:/data/koboldcpp/models  # model files
+    serene-pub:
+        image: ghcr.io/doolijb/serene-pub:latest
+        volumes:
+            - serene-pub-data:/data
+            - /path/to/koboldcpp:/koboldcpp:ro # binary directory
+            - /path/to/models:/data/koboldcpp/models # model files
 ```
 
 After mounting, configure the binary path in **Settings → KoboldCPP Manager**.
@@ -182,6 +182,14 @@ After mounting, configure the binary path in **Settings → KoboldCPP Manager**.
 ---
 
 ## Building locally
+
+Simplest option — [`docker-compose.dev.yml`](docker-compose.dev.yml) builds from your local source and runs it with its own isolated data volume (`serene-pub-dev-data`, separate from the one `docker-compose.dist.yml` uses), so it won't collide with a pre-built instance running alongside it:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build
+```
+
+Or by hand:
 
 ```bash
 docker build -t serene-pub:local .

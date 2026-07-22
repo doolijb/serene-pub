@@ -65,7 +65,10 @@ export type CompileHistoryEntryActivity = {
 	startedAt: string
 }
 
-export type Activity = GraphBuildActivity | SceneSummarizeActivity | CompileHistoryEntryActivity
+export type Activity =
+	| GraphBuildActivity
+	| SceneSummarizeActivity
+	| CompileHistoryEntryActivity
 
 type Emitter = (event: string, data: unknown) => void
 
@@ -96,7 +99,9 @@ class ActivityStore {
 		for (const [fn, { userId, isAdmin }] of this.emitters) {
 			if (isAdmin || changed.userId === userId) {
 				try {
-					fn("activity:update", { activities: this.getFor(userId, isAdmin) })
+					fn("activity:update", {
+						activities: this.getFor(userId, isAdmin)
+					})
 				} catch {}
 			}
 		}
@@ -136,7 +141,11 @@ class ActivityStore {
 	}): string {
 		// Remove any existing activity for this scene + user before starting a new one
 		for (const [existingId, activity] of this.activities) {
-			if (activity.kind === "scene_summarize" && activity.sceneId === params.sceneId && activity.userId === params.userId) {
+			if (
+				activity.kind === "scene_summarize" &&
+				activity.sceneId === params.sceneId &&
+				activity.userId === params.userId
+			) {
 				this.abortControllers.get(existingId)?.abort()
 				this.abortControllers.delete(existingId)
 				this.activities.delete(existingId)
@@ -155,7 +164,10 @@ class ActivityStore {
 		return id
 	}
 
-	update(id: string, patch: Partial<Omit<GraphBuildActivity, "id" | "userId" | "kind">>) {
+	update(
+		id: string,
+		patch: Partial<Omit<GraphBuildActivity, "id" | "userId" | "kind">>
+	) {
 		const existing = this.activities.get(id)
 		if (!existing) return
 		const updated = { ...existing, ...patch } as GraphBuildActivity
@@ -163,7 +175,10 @@ class ActivityStore {
 		this.broadcast(updated)
 	}
 
-	updateScene(id: string, patch: Partial<Omit<SceneSummarizeActivity, "id" | "userId" | "kind">>) {
+	updateScene(
+		id: string,
+		patch: Partial<Omit<SceneSummarizeActivity, "id" | "userId" | "kind">>
+	) {
 		const existing = this.activities.get(id)
 		if (!existing) return
 		const updated = { ...existing, ...patch } as SceneSummarizeActivity
@@ -179,7 +194,11 @@ class ActivityStore {
 		lorebookLabel: string
 	}): string {
 		for (const [existingId, activity] of this.activities) {
-			if (activity.kind === "compile_history_entry" && activity.historyEntryId === params.historyEntryId && activity.userId === params.userId) {
+			if (
+				activity.kind === "compile_history_entry" &&
+				activity.historyEntryId === params.historyEntryId &&
+				activity.userId === params.userId
+			) {
 				this.activities.delete(existingId)
 			}
 		}
@@ -196,7 +215,12 @@ class ActivityStore {
 		return id
 	}
 
-	updateCompile(id: string, patch: Partial<Omit<CompileHistoryEntryActivity, "id" | "userId" | "kind">>) {
+	updateCompile(
+		id: string,
+		patch: Partial<
+			Omit<CompileHistoryEntryActivity, "id" | "userId" | "kind">
+		>
+	) {
 		const existing = this.activities.get(id)
 		if (!existing) return
 		const updated = { ...existing, ...patch } as CompileHistoryEntryActivity
@@ -225,7 +249,9 @@ class ActivityStore {
 		for (const [fn, { userId, isAdmin }] of this.emitters) {
 			if (isAdmin || existing.userId === userId) {
 				try {
-					fn("activity:update", { activities: this.getFor(userId, isAdmin) })
+					fn("activity:update", {
+						activities: this.getFor(userId, isAdmin)
+					})
 				} catch {}
 			}
 		}

@@ -63,7 +63,8 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 			tokenCounter:
 				tokenCounter ||
 				new TokenCounters(
-					connection.tokenCounter || TokenCounterOptions.ANTHROPIC_CLAUDE
+					connection.tokenCounter ||
+						TokenCounterOptions.ANTHROPIC_CLAUDE
 				),
 			tokenLimit:
 				tokenLimit ||
@@ -126,7 +127,10 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 				msg.role === "assistant" ? "assistant" : "user"
 
 			// Merge consecutive same-role messages (Anthropic requirement)
-			if (messages.length > 0 && messages[messages.length - 1].role === role) {
+			if (
+				messages.length > 0 &&
+				messages[messages.length - 1].role === role
+			) {
 				const last = messages[messages.length - 1]
 				if (typeof last.content === "string") {
 					last.content = last.content + "\n\n" + msg.content
@@ -138,7 +142,10 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 
 		// Anthropic requires the last message to be from user
 		// If it's assistant, add a placeholder user message
-		if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+		if (
+			messages.length > 0 &&
+			messages[messages.length - 1].role === "assistant"
+		) {
 			messages.push({ role: "user", content: "Please continue." })
 		}
 
@@ -175,12 +182,15 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 		const samplingConfig = this.mapSamplingConfig()
 		const maxTokens: number =
 			samplingConfig.max_tokens ||
-			(this.sampling.responseTokensEnabled ? this.sampling.responseTokens || 1024 : 1024)
+			(this.sampling.responseTokensEnabled
+				? this.sampling.responseTokens || 1024
+				: 1024)
 
 		// Extended thinking: requires betas header and disables temperature/top_p/top_k
-		const thinkingParam: Anthropic.ThinkingConfigParam | undefined = useThinking
-			? { type: "enabled", budget_tokens: thinkingBudget }
-			: undefined
+		const thinkingParam: Anthropic.ThinkingConfigParam | undefined =
+			useThinking
+				? { type: "enabled", budget_tokens: thinkingBudget }
+				: undefined
 
 		// When thinking is enabled, sampling params are restricted
 		const allowedSampling = useThinking
@@ -226,7 +236,13 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 						const streamResp = await client.messages.stream(
 							{
 								...baseParams,
-								...(thinkingParam ? { betas: ["interleaved-thinking-2025-05-14"] } : {})
+								...(thinkingParam
+									? {
+											betas: [
+												"interleaved-thinking-2025-05-14"
+											]
+										}
+									: {})
 							} as any,
 							{ signal: this.abortController?.signal }
 						)
@@ -239,9 +255,15 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 
 							if (event.type === "content_block_delta") {
 								const delta = event.delta as any
-								if (delta.type === "thinking_delta" && delta.thinking) {
+								if (
+									delta.type === "thinking_delta" &&
+									delta.thinking
+								) {
 									thinkingCb?.(delta.thinking)
-								} else if (delta.type === "text_delta" && delta.text) {
+								} else if (
+									delta.type === "text_delta" &&
+									delta.text
+								) {
 									contentCb(delta.text)
 								}
 							}
@@ -260,13 +282,19 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 		} else {
 			try {
 				if (this.isAborting) {
-					return { completionResult: "", compiledPrompt, isAborted: true }
+					return {
+						completionResult: "",
+						compiledPrompt,
+						isAborted: true
+					}
 				}
 
 				const response = await client.messages.create(
 					{
 						...baseParams,
-						...(thinkingParam ? { betas: ["interleaved-thinking-2025-05-14"] } : {})
+						...(thinkingParam
+							? { betas: ["interleaved-thinking-2025-05-14"] }
+							: {})
 					} as any,
 					{ signal: this.abortController?.signal }
 				)
@@ -290,7 +318,11 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 				}
 			} catch (e: any) {
 				if (this.isAborting) {
-					return { completionResult: "", compiledPrompt, isAborted: true }
+					return {
+						completionResult: "",
+						compiledPrompt,
+						isAborted: true
+					}
 				}
 				return {
 					completionResult: "FAILURE: " + (e.message || String(e)),

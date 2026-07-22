@@ -89,13 +89,21 @@
 	onMount(() => {
 		const charHandler = (data: Sockets.Characters.ListGallery.Response) => {
 			if (pendingGalleryKey?.startsWith("character:")) {
-				galleryCache = { ...galleryCache, [pendingGalleryKey]: data.images }
+				galleryCache = {
+					...galleryCache,
+					[pendingGalleryKey]: data.images
+				}
 				pendingGalleryKey = null
 			}
 		}
-		const personaHandler = (data: Sockets.Personas.ListGallery.Response) => {
+		const personaHandler = (
+			data: Sockets.Personas.ListGallery.Response
+		) => {
 			if (pendingGalleryKey?.startsWith("persona:")) {
-				galleryCache = { ...galleryCache, [pendingGalleryKey]: data.images }
+				galleryCache = {
+					...galleryCache,
+					[pendingGalleryKey]: data.images
+				}
 				pendingGalleryKey = null
 			}
 		}
@@ -116,7 +124,11 @@
 		<div class="flex gap-3">
 			<!-- Left -->
 			<div class="flex min-w-0 flex-1 flex-col gap-1">
-				<span class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Left</span>
+				<span
+					class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+				>
+					Left
+				</span>
 				{#if leftImage}
 					<div class="relative">
 						<img
@@ -125,7 +137,7 @@
 							class="border-surface-300-700 h-20 w-full rounded border object-cover"
 						/>
 						<button
-							class="btn-icon preset-filled-error-500 absolute -right-1 -top-1 h-5 w-5 min-h-0 p-0 text-xs"
+							class="btn-icon preset-filled-error-500 absolute -top-1 -right-1 h-5 min-h-0 w-5 p-0 text-xs"
 							onclick={clearLeft}
 							title="Clear left image"
 						>
@@ -142,9 +154,11 @@
 			</div>
 			<!-- Right -->
 			<div class="flex min-w-0 flex-1 flex-col gap-1">
-				<span class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide"
-					>Right</span
+				<span
+					class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
 				>
+					Right
+				</span>
 				{#if rightImage}
 					<div class="relative">
 						<img
@@ -153,7 +167,7 @@
 							class="border-surface-300-700 h-20 w-full rounded border object-cover"
 						/>
 						<button
-							class="btn-icon preset-filled-error-500 absolute -right-1 -top-1 h-5 w-5 min-h-0 p-0 text-xs"
+							class="btn-icon preset-filled-error-500 absolute -top-1 -right-1 h-5 min-h-0 w-5 p-0 text-xs"
 							onclick={clearRight}
 							title="Clear right image"
 						>
@@ -174,7 +188,9 @@
 
 	<!-- Entity list -->
 	{#if entities.length === 0}
-		<p class="text-surface-700-300 text-sm">No characters or personas in this chat.</p>
+		<p class="text-surface-700-300 text-sm">
+			No characters or personas in this chat.
+		</p>
 	{:else}
 		<div class="space-y-1">
 			{#each entities as e (entityKey(e))}
@@ -185,47 +201,74 @@
 				{@const isLeft = !!e.avatar && leftImage === e.avatar}
 				{@const isRight = !!e.avatar && rightImage === e.avatar}
 
-				<div class="rounded-lg border border-surface-300-700 overflow-hidden">
+				<div
+					class="border-surface-300-700 overflow-hidden rounded-lg border"
+				>
 					<!-- Entity row -->
 					<div class="flex items-center gap-2 px-2 py-1.5">
 						<!-- Avatar -->
-						<div class="shrink-0 scale-75 origin-left">
+						<div class="shrink-0 origin-left scale-75">
 							<Avatar char={e.entity} />
 						</div>
 						<!-- Name -->
-						<span class="min-w-0 flex-1 truncate text-sm font-medium">{e.name}</span>
+						<span
+							class="min-w-0 flex-1 truncate text-sm font-medium"
+						>
+							{e.name}
+						</span>
 						<!-- Controls -->
 						<div class="flex shrink-0 gap-1">
 							{#if e.avatar}
 								<button
-									class="btn btn-sm text-xs px-2 py-1 {isLeft ? 'preset-filled-primary-500' : 'preset-tonal-primary'}"
-									onclick={() => isLeft ? clearLeft() : setLeft(e.avatar!)}
+									class="btn btn-sm px-2 py-1 text-xs {isLeft
+										? 'preset-filled-primary-500'
+										: 'preset-tonal-primary'}"
+									onclick={() =>
+										isLeft
+											? clearLeft()
+											: setLeft(e.avatar!)}
 									title={isLeft ? "Unpin left" : "Pin left"}
 								>
 									<Icons.PanelLeft size={12} />
 									Left
 								</button>
 								<button
-									class="btn btn-sm text-xs px-2 py-1 {isRight ? 'preset-filled-secondary-500' : 'preset-tonal-secondary'}"
-									onclick={() => isRight ? clearRight() : setRight(e.avatar!)}
-									title={isRight ? "Unpin right" : "Pin right"}
+									class="btn btn-sm px-2 py-1 text-xs {isRight
+										? 'preset-filled-secondary-500'
+										: 'preset-tonal-secondary'}"
+									onclick={() =>
+										isRight
+											? clearRight()
+											: setRight(e.avatar!)}
+									title={isRight
+										? "Unpin right"
+										: "Pin right"}
 								>
 									Right
 									<Icons.PanelRight size={12} />
 								</button>
 							{/if}
 							<button
-								class="btn btn-sm preset-filled-surface-400-600 text-xs px-2 py-1 {isExpanded ? 'preset-filled-surface-500' : ''}"
+								class="btn btn-sm preset-filled-surface-400-600 px-2 py-1 text-xs {isExpanded
+									? 'preset-filled-surface-500'
+									: ''}"
 								onclick={() => toggleGallery(e)}
-								title={isExpanded ? "Hide gallery" : "Show gallery"}
+								title={isExpanded
+									? "Hide gallery"
+									: "Show gallery"}
 							>
 								{#if isLoadingGallery}
-									<Icons.Loader size={12} class="animate-spin" />
+									<Icons.Loader
+										size={12}
+										class="animate-spin"
+									/>
 								{:else}
 									<Icons.Images size={12} />
 									<Icons.ChevronDown
 										size={10}
-										class="transition-transform {isExpanded ? 'rotate-180' : ''}"
+										class="transition-transform {isExpanded
+											? 'rotate-180'
+											: ''}"
 									/>
 								{/if}
 							</button>
@@ -234,14 +277,23 @@
 
 					<!-- Gallery thumbnails (expanded) -->
 					{#if isExpanded}
-						<div class="border-t border-surface-300-700 bg-surface-50-950 p-2">
+						<div
+							class="border-surface-300-700 bg-surface-50-950 border-t p-2"
+						>
 							{#if isLoadingGallery}
-								<div class="text-surface-700-300 flex items-center gap-2 text-xs">
-									<Icons.Loader size={12} class="animate-spin" />
+								<div
+									class="text-surface-700-300 flex items-center gap-2 text-xs"
+								>
+									<Icons.Loader
+										size={12}
+										class="animate-spin"
+									/>
 									Loading…
 								</div>
 							{:else if galleryImages.length === 0}
-								<p class="text-surface-700-300 text-xs">No gallery images.</p>
+								<p class="text-surface-700-300 text-xs">
+									No gallery images.
+								</p>
 							{:else}
 								<div class="flex flex-wrap gap-1.5">
 									{#each galleryImages as imgPath}
@@ -250,13 +302,17 @@
 												<img
 													src={imgPath}
 													alt=""
-													class="h-14 w-14 cursor-pointer rounded object-cover border-2 {leftImage === imgPath
+													class="h-14 w-14 cursor-pointer rounded border-2 object-cover {leftImage ===
+													imgPath
 														? 'border-primary-500'
 														: rightImage === imgPath
 															? 'border-secondary-500'
 															: 'border-surface-300-700'}"
 													onerror={() => {
-														brokenPaths = new Set([...brokenPaths, imgPath])
+														brokenPaths = new Set([
+															...brokenPaths,
+															imgPath
+														])
 													}}
 												/>
 												<!-- Pin overlay buttons on hover -->
@@ -264,18 +320,46 @@
 													class="absolute inset-0 flex items-center justify-center gap-0.5 rounded bg-black/60 max-lg:opacity-100 lg:opacity-0 lg:transition-opacity lg:group-hover:opacity-100"
 												>
 													<button
-														class="btn btn-sm h-6 min-h-0 px-1.5 py-0 text-xs {leftImage === imgPath ? 'preset-filled-primary-500' : 'preset-tonal-primary'}"
-														onclick={() => leftImage === imgPath ? clearLeft() : setLeft(imgPath)}
-														title={leftImage === imgPath ? "Unpin left" : "Pin left"}
+														class="btn btn-sm h-6 min-h-0 px-1.5 py-0 text-xs {leftImage ===
+														imgPath
+															? 'preset-filled-primary-500'
+															: 'preset-tonal-primary'}"
+														onclick={() =>
+															leftImage ===
+															imgPath
+																? clearLeft()
+																: setLeft(
+																		imgPath
+																	)}
+														title={leftImage ===
+														imgPath
+															? "Unpin left"
+															: "Pin left"}
 													>
-														<Icons.PanelLeft size={10} />
+														<Icons.PanelLeft
+															size={10}
+														/>
 													</button>
 													<button
-														class="btn btn-sm h-6 min-h-0 px-1.5 py-0 text-xs {rightImage === imgPath ? 'preset-filled-secondary-500' : 'preset-tonal-secondary'}"
-														onclick={() => rightImage === imgPath ? clearRight() : setRight(imgPath)}
-														title={rightImage === imgPath ? "Unpin right" : "Pin right"}
+														class="btn btn-sm h-6 min-h-0 px-1.5 py-0 text-xs {rightImage ===
+														imgPath
+															? 'preset-filled-secondary-500'
+															: 'preset-tonal-secondary'}"
+														onclick={() =>
+															rightImage ===
+															imgPath
+																? clearRight()
+																: setRight(
+																		imgPath
+																	)}
+														title={rightImage ===
+														imgPath
+															? "Unpin right"
+															: "Pin right"}
 													>
-														<Icons.PanelRight size={10} />
+														<Icons.PanelRight
+															size={10}
+														/>
 													</button>
 												</div>
 											</div>

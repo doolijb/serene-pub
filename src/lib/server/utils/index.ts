@@ -300,7 +300,9 @@ export async function listCharacterGallery({
 		orderBy: (t, { asc }) => asc(t.position)
 	})
 
-	const staleIds = rows.filter((r) => !onDiskPaths.has(r.path)).map((r) => r.id)
+	const staleIds = rows
+		.filter((r) => !onDiskPaths.has(r.path))
+		.map((r) => r.id)
 	if (staleIds.length > 0) {
 		await db
 			.delete(schema.characterGalleryImages)
@@ -359,6 +361,19 @@ export async function deleteCharacterGalleryImage({
 				eq(schema.characterGalleryImages.path, imgPath)
 			)
 		)
+	// The deleted file may have been the character's avatar — leaving that
+	// column pointing at a now-nonexistent path renders as a broken image
+	// everywhere the avatar is shown (character cards, chat messages, etc.),
+	// so clear it rather than leave a dangling reference.
+	await db
+		.update(schema.characters)
+		.set({ avatar: null })
+		.where(
+			and(
+				eq(schema.characters.id, characterId),
+				eq(schema.characters.avatar, imgPath)
+			)
+		)
 }
 
 /**
@@ -381,7 +396,10 @@ export async function reorderCharacterGalleryImages({
 				.set({ position })
 				.where(
 					and(
-						eq(schema.characterGalleryImages.characterId, characterId),
+						eq(
+							schema.characterGalleryImages.characterId,
+							characterId
+						),
 						eq(schema.characterGalleryImages.path, p)
 					)
 				)
@@ -453,7 +471,9 @@ export async function listPersonaGallery({
 		orderBy: (t, { asc }) => asc(t.position)
 	})
 
-	const staleIds = rows.filter((r) => !onDiskPaths.has(r.path)).map((r) => r.id)
+	const staleIds = rows
+		.filter((r) => !onDiskPaths.has(r.path))
+		.map((r) => r.id)
 	if (staleIds.length > 0) {
 		await db
 			.delete(schema.personaGalleryImages)
@@ -510,6 +530,17 @@ export async function deletePersonaGalleryImage({
 			and(
 				eq(schema.personaGalleryImages.personaId, personaId),
 				eq(schema.personaGalleryImages.path, imgPath)
+			)
+		)
+	// See deleteCharacterGalleryImage — clear a dangling avatar reference
+	// rather than leave it pointing at a deleted file.
+	await db
+		.update(schema.personas)
+		.set({ avatar: null })
+		.where(
+			and(
+				eq(schema.personas.id, personaId),
+				eq(schema.personas.avatar, imgPath)
 			)
 		)
 }

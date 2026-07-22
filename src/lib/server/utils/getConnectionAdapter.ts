@@ -14,21 +14,26 @@ export async function getConnectionAdapter(
 ): Promise<AdapterExports> {
 	switch (connectionType) {
 		case CONNECTION_TYPE.LM_STUDIO:
-			return (await import("../connectionAdapters/LMStudioAdapter")).default
+			return (await import("../connectionAdapters/LMStudioAdapter"))
+				.default
 		case CONNECTION_TYPE.OLLAMA:
 			return (await import("../connectionAdapters/OllamaAdapter")).default
 		case CONNECTION_TYPE.OPENAI_CHAT:
-			return (await import("../connectionAdapters/OpenAIChatAdapter")).default
+			return (await import("../connectionAdapters/OpenAIChatAdapter"))
+				.default
 		case CONNECTION_TYPE.LLAMACPP_COMPLETION:
-			return (await import("../connectionAdapters/LlamaCppAdapter")).default
+			return (await import("../connectionAdapters/LlamaCppAdapter"))
+				.default
 		case CONNECTION_TYPE.KOBOLDCPP:
-			return (await import("../connectionAdapters/KoboldCppAdapter")).default
+			return (await import("../connectionAdapters/KoboldCppAdapter"))
+				.default
 		case CONNECTION_TYPE.KOBOLDCPP_MANAGED:
 			return (
 				await import("../connectionAdapters/KoboldCppManagedAdapter")
 			).default
 		case CONNECTION_TYPE.ANTHROPIC:
-			return (await import("../connectionAdapters/AnthropicAdapter")).default
+			return (await import("../connectionAdapters/AnthropicAdapter"))
+				.default
 		default:
 			throw new Error(`Unsupported connection type: ${connectionType}`)
 	}

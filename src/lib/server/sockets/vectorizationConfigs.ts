@@ -38,7 +38,9 @@ export const vectorizationConfigUpdateHandler: Handler<
 			.set({ embeddingModelTtlMinutes: params.embeddingModelTtlMinutes })
 			.where(eq(schema.vectorizationConfigs.id, 1))
 		setEmbeddingTtlMinutes(params.embeddingModelTtlMinutes)
-		const res: Sockets.VectorizationConfig.Update.Response = { success: true }
+		const res: Sockets.VectorizationConfig.Update.Response = {
+			success: true
+		}
 		emitToUser("vectorizationConfig:update", res)
 		await vectorizationConfigGetHandler.handler(socket, {}, emitToUser)
 		return res
@@ -48,7 +50,11 @@ export const vectorizationConfigUpdateHandler: Handler<
 export function registerVectorizationConfigHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
-	register: (socket: any, handler: Handler<any, any>, emitToUser: (event: string, data: any) => void) => void
+	register: (
+		socket: any,
+		handler: Handler<any, any>,
+		emitToUser: (event: string, data: any) => void
+	) => void
 ) {
 	register(socket, vectorizationConfigGetHandler, emitToUser)
 	register(socket, vectorizationConfigUpdateHandler, emitToUser)

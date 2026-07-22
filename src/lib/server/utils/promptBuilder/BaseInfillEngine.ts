@@ -1,5 +1,8 @@
 import type { BasePromptChat } from "../../connectionAdapters/BaseConnectionAdapter"
-import { ChatMessageProcessor, type ProcessedChatMessage } from "./ContentProcessors"
+import {
+	ChatMessageProcessor,
+	type ProcessedChatMessage
+} from "./ContentProcessors"
 import { parseSplitChatPrompt } from "./utils"
 import type { InfillContentOptions, InfillResult } from "./types"
 
@@ -14,9 +17,15 @@ export abstract class BaseInfillEngine {
 	constructor(
 		protected chat: BasePromptChat,
 		protected interpolationEngine: any,
-		protected populateLorebookEntryBindings: (entry: any, chat: BasePromptChat) => any
+		protected populateLorebookEntryBindings: (
+			entry: any,
+			chat: BasePromptChat
+		) => any
 	) {
-		this.chatMessageProcessor = new ChatMessageProcessor(chat, interpolationEngine)
+		this.chatMessageProcessor = new ChatMessageProcessor(
+			chat,
+			interpolationEngine
+		)
 	}
 
 	abstract infillContent(options: InfillContentOptions): Promise<InfillResult>
@@ -110,7 +119,8 @@ export abstract class BaseInfillEngine {
 		processMsg: (msg: SelectChatMessage) => ProcessedChatMessage | null,
 		countTokens: () => Promise<number>
 	): Promise<number> {
-		if (currentTokens >= threshold || candidates.length === 0) return currentTokens
+		if (currentTokens >= threshold || candidates.length === 0)
+			return currentTokens
 		let total = currentTokens
 		for (const msg of candidates) {
 			// Re-check saturation each iteration (not just before the loop): once total

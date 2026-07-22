@@ -37,9 +37,9 @@ describe("InterpolationEngine.interpolateString", () => {
 	test("substitutes additional context variables", () => {
 		const engine = new InterpolationEngine()
 		const context = makeContext({ scene: "a dark forest" })
-		expect(
-			engine.interpolateString("Setting: {{scene}}", context)
-		).toBe("Setting: a dark forest")
+		expect(engine.interpolateString("Setting: {{scene}}", context)).toBe(
+			"Setting: a dark forest"
+		)
 	})
 
 	test("returns undefined unchanged when template is undefined", () => {

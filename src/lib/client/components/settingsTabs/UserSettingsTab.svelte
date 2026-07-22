@@ -2,8 +2,10 @@
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { getContext, onMount, onDestroy } from "svelte"
+	import { goto } from "$app/navigation"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { enableAccessibility } from "$lib/client/accessibility/state.svelte"
 	import { z } from "zod"
 	import * as Icons from "@lucide/svelte"
 
@@ -77,7 +79,8 @@
 			if (message.success) {
 				toaster.success({
 					title: "Passphrase changed successfully",
-					description: message.message || "Your passphrase has been updated"
+					description:
+						message.message || "Your passphrase has been updated"
 				})
 				closeChangePasswordModal()
 			} else {
@@ -282,6 +285,11 @@
 		})
 	}
 
+	function switchToDocumentView() {
+		enableAccessibility()
+		goto("/document-view")
+	}
+
 	async function logout() {
 		isLoggingOut = true
 
@@ -314,7 +322,6 @@
 			isLoggingOut = false
 		}
 	}
-
 </script>
 
 <div class="flex flex-col gap-4">
@@ -324,14 +331,16 @@
 			checked={userSettingsCtx.settings?.showAllCharacterFields ?? false}
 			onCheckedChange={onShowAllCharacterFieldsClick}
 		>
-			<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+			<Switch.Control
+				class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+			>
 				<Switch.Thumb />
 			</Switch.Control>
 			<Switch.HiddenInput />
+			<Switch.Label class="font-semibold">
+				Show All Character Fields
+			</Switch.Label>
 		</Switch>
-		<label for="show-all-character-fields" class="font-semibold">
-			Show All Character Fields
-		</label>
 	</div>
 
 	<div class="flex gap-2">
@@ -341,14 +350,16 @@
 				true}
 			onCheckedChange={onEasyCharacterCreationClick}
 		>
-			<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+			<Switch.Control
+				class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+			>
 				<Switch.Thumb />
 			</Switch.Control>
 			<Switch.HiddenInput />
+			<Switch.Label class="font-semibold">
+				Easy Character Creation
+			</Switch.Label>
 		</Switch>
-		<label for="easy-character-creation" class="font-semibold">
-			Easy Character Creation
-		</label>
 	</div>
 
 	<div class="flex gap-2">
@@ -358,14 +369,16 @@
 				true}
 			onCheckedChange={onEasyPersonaCreationClick}
 		>
-			<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+			<Switch.Control
+				class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+			>
 				<Switch.Thumb />
 			</Switch.Control>
 			<Switch.HiddenInput />
+			<Switch.Label class="font-semibold">
+				Easy Persona Creation
+			</Switch.Label>
 		</Switch>
-		<label for="easy-persona-creation" class="font-semibold">
-			Easy Persona Creation
-		</label>
 	</div>
 
 	<div class="flex gap-2">
@@ -374,33 +387,53 @@
 			checked={userSettingsCtx.settings?.showHomePageBanner ?? true}
 			onCheckedChange={onShowHomePageBannerClick}
 		>
-			<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+			<Switch.Control
+				class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+			>
 				<Switch.Thumb />
 			</Switch.Control>
 			<Switch.HiddenInput />
+			<Switch.Label class="font-semibold">
+				Show Home Page Banner
+			</Switch.Label>
 		</Switch>
-		<label for="show-home-page-banner" class="font-semibold">
-			Show Home Page Banner
-		</label>
+	</div>
+
+	<!-- Document View Section -->
+	<div class="mt-4 border-t pt-4">
+		<h3 class="mb-2 text-lg font-semibold">Document View</h3>
+		<p class="text-surface-700-300 mb-3 text-sm">
+			A simplified, high-contrast, keyboard- and screen-reader-friendly
+			alternative to this interface. You can also switch to it any time
+			with Ctrl+Shift+Y.
+		</p>
+		<button
+			type="button"
+			class="btn preset-filled-primary-500 w-fit"
+			onclick={switchToDocumentView}
+		>
+			<Icons.Accessibility size={16} />
+			Switch to Document View
+		</button>
 	</div>
 
 	<!-- Import Section -->
 	{#if userCtx.user?.isAdmin && !systemSettingsCtx.settings?.isAndroidWrapper}
-	<div class="mt-4 border-t pt-4">
-		<h3 class="mb-4 text-lg font-semibold">Data Import</h3>
-		<p class="text-surface-700-300 mb-3 text-sm">
-			Import your characters, personas, chats, and lorebooks from other
-			applications.
-		</p>
-		<a
-			href="/import"
-			class="btn preset-filled-primary-500 w-fit"
-			aria-label="Import from SillyTavern"
-		>
-			<Icons.Download size={16} />
-			Import from SillyTavern
-		</a>
-	</div>
+		<div class="mt-4 border-t pt-4">
+			<h3 class="mb-4 text-lg font-semibold">Data Import</h3>
+			<p class="text-surface-700-300 mb-3 text-sm">
+				Import your characters, personas, chats, and lorebooks from
+				other applications.
+			</p>
+			<a
+				href="/import"
+				class="btn preset-filled-primary-500 w-fit"
+				aria-label="Import from SillyTavern"
+			>
+				<Icons.Download size={16} />
+				Import from SillyTavern
+			</a>
+		</div>
 	{/if}
 
 	<!-- User Profile Section - Only show when accounts are enabled -->
@@ -474,14 +507,27 @@
 </div>
 
 <!-- Change Password Modal -->
-<Dialog open={showChangePasswordModal} onOpenChange={(e) => (showChangePasswordModal = e.open)}>
+<Dialog
+	open={showChangePasswordModal}
+	onOpenChange={(e) => (showChangePasswordModal = e.open)}
+>
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-lg">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 max-w-lg space-y-6 p-6 shadow-xl"
+			>
 				<header class="flex items-center justify-between">
 					<h2 class="text-xl font-bold">Change Passphrase</h2>
-					<button class="btn-ghost" aria-label="Close" onclick={closeChangePasswordModal}>
+					<button
+						class="btn-ghost"
+						aria-label="Close"
+						onclick={closeChangePasswordModal}
+					>
 						<Icons.X class="h-5 w-5" />
 					</button>
 				</header>
@@ -514,8 +560,8 @@
 							disabled={isChangingPassword}
 						/>
 						<p class="text-muted-foreground mt-1 text-sm">
-							Must be at least 6 characters with uppercase, lowercase, and
-							special character
+							Must be at least 6 characters with uppercase,
+							lowercase, and special character
 						</p>
 					</div>
 

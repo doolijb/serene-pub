@@ -18,7 +18,10 @@ import * as http from "http"
 import { randomUUID } from "crypto"
 import * as subprocessManager from "$lib/server/koboldcpp/subprocessManager"
 import * as binaryManager from "$lib/server/koboldcpp/binaryManager"
-import { unloadModel, getLoadedSignature } from "$lib/server/koboldcpp/modelManager"
+import {
+	unloadModel,
+	getLoadedSignature
+} from "$lib/server/koboldcpp/modelManager"
 import { isAndroidWrapper } from "$lib/server/utils"
 
 // --- KOBOLDCPP MANAGER HANDLERS ---
@@ -37,15 +40,17 @@ function compareVersions(v1: string, v2: string): number {
 }
 
 export const koboldCppSetBaseUrl: Handler<
-	Sockets.KoboldCpp.SetBaseUrl.Params,
-	Sockets.KoboldCpp.SetBaseUrl.Response
+	Sockets.KoboldCPP.SetBaseUrl.Params,
+	Sockets.KoboldCPP.SetBaseUrl.Response
 > = {
 	event: "koboldcpp:setBaseUrl",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const url = new URL(params.baseUrl)
 		if (!["http:", "https:"].includes(url.protocol)) {
-			emitToUser("koboldcpp:setBaseUrl:error", { error: "Invalid URL protocol" })
+			emitToUser("koboldcpp:setBaseUrl:error", {
+				error: "Invalid URL protocol"
+			})
 			throw new Error("Invalid URL protocol")
 		}
 
@@ -54,7 +59,7 @@ export const koboldCppSetBaseUrl: Handler<
 			.set({ koboldCppManagerBaseUrl: params.baseUrl })
 			.where(eq(schema.koboldCppSettings.id, 1))
 
-		const res: Sockets.KoboldCpp.SetBaseUrl.Response = { success: true }
+		const res: Sockets.KoboldCPP.SetBaseUrl.Response = { success: true }
 		emitToUser("koboldcpp:setBaseUrl", res)
 		await systemSettingsGet.handler(socket, {}, emitToUser)
 		return res
@@ -62,8 +67,8 @@ export const koboldCppSetBaseUrl: Handler<
 }
 
 export const koboldCppSetModelsDir: Handler<
-	Sockets.KoboldCpp.SetModelsDir.Params,
-	Sockets.KoboldCpp.SetModelsDir.Response
+	Sockets.KoboldCPP.SetModelsDir.Params,
+	Sockets.KoboldCPP.SetModelsDir.Response
 > = {
 	event: "koboldcpp:setModelsDir",
 	handler: async (socket, params, emitToUser) => {
@@ -72,7 +77,7 @@ export const koboldCppSetModelsDir: Handler<
 			.update(schema.koboldCppSettings)
 			.set({ koboldCppManagerModelsDir: params.dir || null })
 			.where(eq(schema.koboldCppSettings.id, 1))
-		const res: Sockets.KoboldCpp.SetModelsDir.Response = { success: true }
+		const res: Sockets.KoboldCPP.SetModelsDir.Response = { success: true }
 		emitToUser("koboldcpp:setModelsDir", res)
 		await systemSettingsGet.handler(socket, {}, emitToUser)
 		return res
@@ -80,14 +85,15 @@ export const koboldCppSetModelsDir: Handler<
 }
 
 export const koboldCppVersionHandler: Handler<
-	Sockets.KoboldCpp.Version.Params,
-	Sockets.KoboldCpp.Version.Response
+	Sockets.KoboldCPP.Version.Params,
+	Sockets.KoboldCPP.Version.Response
 > = {
 	event: "koboldcpp:version",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		const { koboldCppManagerBaseUrl: baseUrl } =
+		const { koboldCppManagerBaseUrl } =
 			(await db.query.koboldCppSettings.findFirst())!
+		const baseUrl = params.baseUrl || koboldCppManagerBaseUrl
 
 		const response = await fetch(`${baseUrl}/api/extra/version`, {
 			signal: AbortSignal.timeout(5000)
@@ -100,7 +106,7 @@ export const koboldCppVersionHandler: Handler<
 		const data = await response.json()
 		const hostname = new URL(baseUrl).hostname
 		const isLocal = ["localhost", "127.0.0.1", "::1"].includes(hostname)
-		const res: Sockets.KoboldCpp.Version.Response = {
+		const res: Sockets.KoboldCPP.Version.Response = {
 			version: data.version || "unknown",
 			isLocal,
 			capabilities: {
@@ -120,8 +126,8 @@ export const koboldCppVersionHandler: Handler<
 }
 
 export const koboldCppIsUpdateAvailableHandler: Handler<
-	Sockets.KoboldCpp.IsUpdateAvailable.Params,
-	Sockets.KoboldCpp.IsUpdateAvailable.Response
+	Sockets.KoboldCPP.IsUpdateAvailable.Params,
+	Sockets.KoboldCPP.IsUpdateAvailable.Response
 > = {
 	event: "koboldcpp:isUpdateAvailable",
 	handler: async (socket, params, emitToUser) => {
@@ -158,7 +164,7 @@ export const koboldCppIsUpdateAvailableHandler: Handler<
 				? compareVersions(latestVersion, currentVersion) > 0
 				: false
 
-		const res: Sockets.KoboldCpp.IsUpdateAvailable.Response = {
+		const res: Sockets.KoboldCPP.IsUpdateAvailable.Response = {
 			isUpdateAvailable,
 			currentVersion,
 			latestVersion,
@@ -170,14 +176,17 @@ export const koboldCppIsUpdateAvailableHandler: Handler<
 }
 
 export const koboldCppListModelsHandler: Handler<
-	Sockets.KoboldCpp.ListModels.Params,
-	Sockets.KoboldCpp.ListModels.Response
+	Sockets.KoboldCPP.ListModels.Params,
+	Sockets.KoboldCPP.ListModels.Response
 > = {
 	event: "koboldcpp:listModels",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const settings = (await db.query.koboldCppSettings.findFirst())!
-		const { koboldCppManagerBaseUrl: baseUrl, koboldCppManagerModelsDir: modelsDir } = settings
+		const {
+			koboldCppManagerBaseUrl: baseUrl,
+			koboldCppManagerModelsDir: modelsDir
+		} = settings
 
 		let currentModel: string | null = null
 		try {
@@ -196,16 +205,20 @@ export const koboldCppListModelsHandler: Handler<
 		const dbModels = await db.query.koboldCppModels.findMany()
 		const dbByFilename = new Map(dbModels.map((m) => [m.filename, m]))
 		const incompleteFilenames = new Set(
-			dbModels.filter((m) => m.status !== "complete").map((m) => m.filename)
+			dbModels
+				.filter((m) => m.status !== "complete")
+				.map((m) => m.filename)
 		)
 
 		// Scan modelsDir for .gguf files with sizes, skip incomplete downloads
-		let availableModels: Sockets.KoboldCpp.ListModels.ModelFile[] = []
+		let availableModels: Sockets.KoboldCPP.ListModels.ModelFile[] = []
 		if (modelsDir) {
 			try {
 				const entries = await fsPromises.readdir(modelsDir)
 				const ggufFiles = entries.filter(
-					(f) => f.toLowerCase().endsWith(".gguf") && !incompleteFilenames.has(f)
+					(f) =>
+						f.toLowerCase().endsWith(".gguf") &&
+						!incompleteFilenames.has(f)
 				)
 				const ggufFileSet = new Set(ggufFiles)
 
@@ -214,19 +227,30 @@ export const koboldCppListModelsHandler: Handler<
 				// above, so this only prevents koboldCppModels from
 				// accumulating rows for files that no longer exist.
 				const staleFilenames = dbModels
-					.filter((m) => m.status === "complete" && !ggufFileSet.has(m.filename))
+					.filter(
+						(m) =>
+							m.status === "complete" &&
+							!ggufFileSet.has(m.filename)
+					)
 					.map((m) => m.filename)
 				if (staleFilenames.length > 0) {
 					await db
 						.delete(schema.koboldCppModels)
-						.where(inArray(schema.koboldCppModels.filename, staleFilenames))
+						.where(
+							inArray(
+								schema.koboldCppModels.filename,
+								staleFilenames
+							)
+						)
 				}
 
 				availableModels = await Promise.all(
 					ggufFiles.map(async (name) => {
 						let size = 0
 						try {
-							const stat = await fsPromises.stat(path.join(modelsDir, name))
+							const stat = await fsPromises.stat(
+								path.join(modelsDir, name)
+							)
 							size = stat.size
 						} catch {}
 
@@ -255,13 +279,17 @@ export const koboldCppListModelsHandler: Handler<
 						return {
 							name,
 							size,
-							...(rec ? {
-								modelName: rec.modelName,
-								modelUrl: rec.modelUrl ?? undefined,
-								description: rec.description ?? undefined,
-								quantization: rec.quantization ?? undefined,
-								sizeBytes: rec.sizeBytes ?? undefined
-							} : {})
+							...(rec
+								? {
+										modelName: rec.modelName,
+										modelUrl: rec.modelUrl ?? undefined,
+										description:
+											rec.description ?? undefined,
+										quantization:
+											rec.quantization ?? undefined,
+										sizeBytes: rec.sizeBytes ?? undefined
+									}
+								: {})
 						}
 					})
 				)
@@ -270,7 +298,7 @@ export const koboldCppListModelsHandler: Handler<
 			}
 		}
 
-		const res: Sockets.KoboldCpp.ListModels.Response = {
+		const res: Sockets.KoboldCPP.ListModels.Response = {
 			currentModel,
 			availableModels,
 			modelsDirSet: !!modelsDir
@@ -281,14 +309,16 @@ export const koboldCppListModelsHandler: Handler<
 }
 
 export const koboldCppLoadModelHandler: Handler<
-	Sockets.KoboldCpp.LoadModel.Params,
-	Sockets.KoboldCpp.LoadModel.Response
+	Sockets.KoboldCPP.LoadModel.Params,
+	Sockets.KoboldCPP.LoadModel.Response
 > = {
 	event: "koboldcpp:loadModel",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		const { koboldCppManagerBaseUrl: baseUrl, koboldCppManagedAdminPassword: adminPassword } =
-			(await db.query.koboldCppSettings.findFirst())!
+		const {
+			koboldCppManagerBaseUrl: baseUrl,
+			koboldCppManagedAdminPassword: adminPassword
+		} = (await db.query.koboldCppSettings.findFirst())!
 
 		const response = await fetch(`${baseUrl}/api/admin/reload_config`, {
 			method: "POST",
@@ -306,10 +336,12 @@ export const koboldCppLoadModelHandler: Handler<
 		}
 		const data = await response.json().catch(() => ({}))
 		if (!data.success) {
-			throw new Error("reload_config rejected the request (success: false)")
+			throw new Error(
+				"reload_config rejected the request (success: false)"
+			)
 		}
 
-		const res: Sockets.KoboldCpp.LoadModel.Response = {
+		const res: Sockets.KoboldCPP.LoadModel.Response = {
 			success: `Model "${params.filename}" loaded successfully`
 		}
 		emitToUser("koboldcpp:loadModel", res)
@@ -318,15 +350,15 @@ export const koboldCppLoadModelHandler: Handler<
 }
 
 export const koboldCppConnectModelHandler: Handler<
-	Sockets.KoboldCpp.ConnectModel.Params,
-	Sockets.KoboldCpp.ConnectModel.Response
+	Sockets.KoboldCPP.ConnectModel.Params,
+	Sockets.KoboldCPP.ConnectModel.Response
 > = {
 	event: "koboldcpp:connectModel",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const settings = (await db.query.koboldCppSettings.findFirst())!
 		if (!settings.koboldCppManagerEnabled) {
-			throw new Error("KoboldCpp Manager is disabled")
+			throw new Error("KoboldCPP Manager is disabled")
 		}
 		const { koboldCppManagerBaseUrl: baseUrl } = settings
 
@@ -358,7 +390,9 @@ export const koboldCppConnectModelHandler: Handler<
 				name: connectionName,
 				model: params.modelName,
 				baseUrl,
-				extraJson: { ...koboldCppManagedAdapter.connectionDefaults.extraJson }
+				extraJson: {
+					...koboldCppManagedAdapter.connectionDefaults.extraJson
+				}
 			}
 
 			const [newConnection] = await db
@@ -378,7 +412,7 @@ export const koboldCppConnectModelHandler: Handler<
 		// Model loading is deferred to generation time (see KoboldCppManagedAdapter.preflight) —
 		// setting a connection as default should not eagerly load/swap the koboldcpp model.
 
-		const res: Sockets.KoboldCpp.ConnectModel.Response = {
+		const res: Sockets.KoboldCPP.ConnectModel.Response = {
 			success: "Model set as default"
 		}
 		emitToUser("koboldcpp:connectModel", res)
@@ -387,8 +421,8 @@ export const koboldCppConnectModelHandler: Handler<
 }
 
 export const koboldCppPerfHandler: Handler<
-	Sockets.KoboldCpp.Perf.Params,
-	Sockets.KoboldCpp.Perf.Response
+	Sockets.KoboldCPP.Perf.Params,
+	Sockets.KoboldCPP.Perf.Response
 > = {
 	event: "koboldcpp:perf",
 	handler: async (socket, params, emitToUser) => {
@@ -415,7 +449,7 @@ export const koboldCppPerfHandler: Handler<
 		}
 
 		const data = await response.json()
-		const res: Sockets.KoboldCpp.Perf.Response = {
+		const res: Sockets.KoboldCPP.Perf.Response = {
 			lastProcess: data.last_process ?? 0,
 			lastEval: data.last_eval ?? 0,
 			lastTokenCount: data.last_token_count ?? 0,
@@ -432,14 +466,14 @@ export const koboldCppPerfHandler: Handler<
 }
 
 export const koboldCppGetLoadedConfigHandler: Handler<
-	Sockets.KoboldCpp.GetLoadedConfig.Params,
-	Sockets.KoboldCpp.GetLoadedConfig.Response
+	Sockets.KoboldCPP.GetLoadedConfig.Params,
+	Sockets.KoboldCPP.GetLoadedConfig.Response
 > = {
 	event: "koboldcpp:getLoadedConfig",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const signature = getLoadedSignature()
-		const res: Sockets.KoboldCpp.GetLoadedConfig.Response = {
+		const res: Sockets.KoboldCPP.GetLoadedConfig.Response = {
 			config: signature
 				? {
 						model: signature.model,
@@ -459,12 +493,24 @@ export const koboldCppGetLoadedConfigHandler: Handler<
 // --- RECOMMENDED MODELS (cached to avoid hammering HF on every open) ---
 
 const RECOMMENDED_CACHE_TTL_MS = 60 * 60 * 1000 // 1 hour
-let recommendedCache: { models: Sockets.KoboldCpp.RecommendedModels.RecommendedModel[]; cachedAt: number } | null = null
+let recommendedCache: {
+	models: Sockets.KoboldCPP.RecommendedModels.RecommendedModel[]
+	cachedAt: number
+} | null = null
 
 const GGUF_QUANT_RE = /^(Q|IQ|BF|F)\d/i
 
-async function fetchRecommendedYaml(): Promise<Array<{ name: string; pull: string; recommended_vram: number; details: { parameter_size: string; description: string } }>> {
-	const resp = await fetch("https://raw.githubusercontent.com/doolijb/serene-pub-gguf-list/main/recommended.yaml")
+async function fetchRecommendedYaml(): Promise<
+	Array<{
+		name: string
+		pull: string
+		recommended_vram: number
+		details: { parameter_size: string; description: string }
+	}>
+> {
+	const resp = await fetch(
+		"https://raw.githubusercontent.com/doolijb/serene-pub-gguf-list/main/recommended.yaml"
+	)
 	if (!resp.ok) throw new Error(`YAML fetch failed: ${resp.status}`)
 	const text = await resp.text()
 
@@ -475,15 +521,30 @@ async function fetchRecommendedYaml(): Promise<Array<{ name: string; pull: strin
 		const t = line.trim()
 		if (t.startsWith("- name:")) {
 			if (cur) models.push(cur)
-			cur = { name: t.replace("- name:", "").trim(), pull: "", recommended_vram: 0, details: { parameter_size: "", description: "" } }
+			cur = {
+				name: t.replace("- name:", "").trim(),
+				pull: "",
+				recommended_vram: 0,
+				details: { parameter_size: "", description: "" }
+			}
 			inDetails = false
 		} else if (cur) {
 			if (t.startsWith("pull:")) cur.pull = t.replace("pull:", "").trim()
-			else if (t.startsWith("recommended_vram:")) cur.recommended_vram = parseInt(t.replace("recommended_vram:", "").trim()) || 0
+			else if (t.startsWith("recommended_vram:"))
+				cur.recommended_vram =
+					parseInt(t.replace("recommended_vram:", "").trim()) || 0
 			else if (t === "details:") inDetails = true
 			else if (inDetails) {
-				if (t.startsWith("parameter_size:")) cur.details.parameter_size = t.replace("parameter_size:", "").trim().replace(/"/g, "")
-				else if (t.startsWith("description:")) cur.details.description = t.replace("description:", "").trim().replace(/"/g, "")
+				if (t.startsWith("parameter_size:"))
+					cur.details.parameter_size = t
+						.replace("parameter_size:", "")
+						.trim()
+						.replace(/"/g, "")
+				else if (t.startsWith("description:"))
+					cur.details.description = t
+						.replace("description:", "")
+						.trim()
+						.replace(/"/g, "")
 			}
 		}
 	}
@@ -491,7 +552,9 @@ async function fetchRecommendedYaml(): Promise<Array<{ name: string; pull: strin
 	return models
 }
 
-async function resolveHfModel(ollamaName: string): Promise<Sockets.KoboldCpp.SearchModels.ModelResult | null> {
+async function resolveHfModel(
+	ollamaName: string
+): Promise<Sockets.KoboldCPP.SearchModels.ModelResult | null> {
 	try {
 		const resp = await fetch(
 			`https://huggingface.co/api/models?search=${encodeURIComponent(ollamaName)}&filter=gguf&limit=5&sort=downloads&full=True&config=True`,
@@ -502,11 +565,23 @@ async function resolveHfModel(ollamaName: string): Promise<Sockets.KoboldCpp.Sea
 
 		for (const m of data) {
 			if (m.private || m.gated === true || m.gated === "auto") continue
-			const pullOptions: Sockets.KoboldCpp.SearchModels.PullOption[] = (m.siblings as any[])
+			const pullOptions: Sockets.KoboldCPP.SearchModels.PullOption[] = (
+				m.siblings as any[]
+			)
 				.filter((s: any) => s.rfilename.endsWith(".gguf"))
-				.filter((s: any) => GGUF_QUANT_RE.test(s.rfilename.replace(".gguf", "").split("-").pop()?.toUpperCase() ?? ""))
+				.filter((s: any) =>
+					GGUF_QUANT_RE.test(
+						s.rfilename
+							.replace(".gguf", "")
+							.split("-")
+							.pop()
+							?.toUpperCase() ?? ""
+					)
+				)
 				.map((s: any) => ({
-					label: s.rfilename.replace(".gguf", "").split("-").pop() ?? s.rfilename,
+					label:
+						s.rfilename.replace(".gguf", "").split("-").pop() ??
+						s.rfilename,
 					filename: s.rfilename,
 					downloadUrl: `https://huggingface.co/${m.id}/resolve/main/${s.rfilename}`,
 					sizeBytes: typeof s.size === "number" ? s.size : undefined
@@ -530,13 +605,16 @@ async function resolveHfModel(ollamaName: string): Promise<Sockets.KoboldCpp.Sea
 }
 
 export const koboldCppRecommendedModelsHandler: Handler<
-	Sockets.KoboldCpp.RecommendedModels.Params,
-	Sockets.KoboldCpp.RecommendedModels.Response
+	Sockets.KoboldCPP.RecommendedModels.Params,
+	Sockets.KoboldCPP.RecommendedModels.Response
 > = {
 	event: "koboldcpp:recommendedModels",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		if (recommendedCache && Date.now() - recommendedCache.cachedAt < RECOMMENDED_CACHE_TTL_MS) {
+		if (
+			recommendedCache &&
+			Date.now() - recommendedCache.cachedAt < RECOMMENDED_CACHE_TTL_MS
+		) {
 			const res = { models: recommendedCache.models }
 			emitToUser("koboldcpp:recommendedModels", res)
 			return res
@@ -548,7 +626,7 @@ export const koboldCppRecommendedModelsHandler: Handler<
 			yamlModels.map(
 				async (
 					ym
-				): Promise<Sockets.KoboldCpp.RecommendedModels.RecommendedModel | null> => {
+				): Promise<Sockets.KoboldCPP.RecommendedModels.RecommendedModel | null> => {
 					const hf = await resolveHfModel(ym.name)
 					if (!hf) return null
 					return {
@@ -556,21 +634,27 @@ export const koboldCppRecommendedModelsHandler: Handler<
 						ollamaName: ym.name,
 						recommendedVram: ym.recommended_vram || undefined,
 						parameterSize: ym.details.parameter_size || undefined,
-						description: hf.description || ym.details.description || undefined
+						description:
+							hf.description ||
+							ym.details.description ||
+							undefined
 					}
 				}
 			)
 		)
 
 		const models = settled
-			.filter((r): r is PromiseFulfilledResult<Sockets.KoboldCpp.RecommendedModels.RecommendedModel> =>
-				r.status === "fulfilled" && r.value !== null
+			.filter(
+				(
+					r
+				): r is PromiseFulfilledResult<Sockets.KoboldCPP.RecommendedModels.RecommendedModel> =>
+					r.status === "fulfilled" && r.value !== null
 			)
 			.map((r) => r.value)
 
 		recommendedCache = { models, cachedAt: Date.now() }
 
-		const res: Sockets.KoboldCpp.RecommendedModels.Response = { models }
+		const res: Sockets.KoboldCPP.RecommendedModels.Response = { models }
 		emitToUser("koboldcpp:recommendedModels", res)
 		return res
 	}
@@ -578,13 +662,18 @@ export const koboldCppRecommendedModelsHandler: Handler<
 
 // --- DOWNLOAD STATE (module-level so downloads survive tab changes) ---
 
-type DownloadEntry = Sockets.KoboldCpp.DownloadProgress.DownloadEntry & { abort?: () => void }
+type DownloadEntry = Sockets.KoboldCPP.DownloadProgress.DownloadEntry & {
+	abort?: () => void
+}
 let activeDownloads: Record<string, DownloadEntry> = {}
-let emitDownloadProgressFn: ((data: Sockets.KoboldCpp.DownloadProgress.Response) => void) | null = null
+let emitDownloadProgressFn:
+	| ((data: Sockets.KoboldCPP.DownloadProgress.Response) => void)
+	| null = null
 
 function emitDownloadProgress() {
 	if (!emitDownloadProgressFn) return
-	const downloads: Sockets.KoboldCpp.DownloadProgress.Response["downloads"] = {}
+	const downloads: Sockets.KoboldCPP.DownloadProgress.Response["downloads"] =
+		{}
 	for (const [key, entry] of Object.entries(activeDownloads)) {
 		const { abort: _abort, ...rest } = entry
 		downloads[key] = rest
@@ -593,8 +682,8 @@ function emitDownloadProgress() {
 }
 
 export const koboldCppSearchModelsHandler: Handler<
-	Sockets.KoboldCpp.SearchModels.Params,
-	Sockets.KoboldCpp.SearchModels.Response
+	Sockets.KoboldCPP.SearchModels.Params,
+	Sockets.KoboldCPP.SearchModels.Response
 > = {
 	event: "koboldcpp:searchModels",
 	handler: async (socket, params, emitToUser) => {
@@ -603,7 +692,8 @@ export const koboldCppSearchModelsHandler: Handler<
 		const response = await fetch(
 			`https://huggingface.co/api/models?search=${encodeURIComponent(searchTerm)}&filter=gguf&limit=50&sort=trendingScore&full=True&config=True`
 		)
-		if (!response.ok) throw new Error(`Hugging Face API error: ${response.status}`)
+		if (!response.ok)
+			throw new Error(`Hugging Face API error: ${response.status}`)
 		const data = await response.json()
 
 		const models = (data as any[])
@@ -612,17 +702,28 @@ export const koboldCppSearchModelsHandler: Handler<
 				const ggufFiles = (m.siblings as any[]).filter((s: any) =>
 					s.rfilename.endsWith(".gguf")
 				)
-				const pullOptions: Sockets.KoboldCpp.SearchModels.PullOption[] = ggufFiles
-					.filter((s: any) => {
-						const stem = s.rfilename.replace(".gguf", "").split("-").pop()?.toUpperCase() ?? ""
-						return /^(Q|IQ|BF|F)\d/.test(stem)
-					})
-					.map((s: any) => ({
-						label: s.rfilename.replace(".gguf", "").split("-").pop() ?? s.rfilename,
-						filename: s.rfilename,
-						downloadUrl: `https://huggingface.co/${m.id}/resolve/main/${s.rfilename}`,
-						sizeBytes: typeof s.size === "number" ? s.size : undefined
-					}))
+				const pullOptions: Sockets.KoboldCPP.SearchModels.PullOption[] =
+					ggufFiles
+						.filter((s: any) => {
+							const stem =
+								s.rfilename
+									.replace(".gguf", "")
+									.split("-")
+									.pop()
+									?.toUpperCase() ?? ""
+							return /^(Q|IQ|BF|F)\d/.test(stem)
+						})
+						.map((s: any) => ({
+							label:
+								s.rfilename
+									.replace(".gguf", "")
+									.split("-")
+									.pop() ?? s.rfilename,
+							filename: s.rfilename,
+							downloadUrl: `https://huggingface.co/${m.id}/resolve/main/${s.rfilename}`,
+							sizeBytes:
+								typeof s.size === "number" ? s.size : undefined
+						}))
 				return {
 					name: m.id,
 					description: m.description || m.pipeline_tag,
@@ -635,15 +736,15 @@ export const koboldCppSearchModelsHandler: Handler<
 			})
 			.filter((m) => m.pullOptions.length > 0)
 
-		const res: Sockets.KoboldCpp.SearchModels.Response = { models }
+		const res: Sockets.KoboldCPP.SearchModels.Response = { models }
 		emitToUser("koboldcpp:searchModels", res)
 		return res
 	}
 }
 
 export const koboldCppDownloadModelHandler: Handler<
-	Sockets.KoboldCpp.DownloadModel.Params,
-	Sockets.KoboldCpp.DownloadModel.Response
+	Sockets.KoboldCPP.DownloadModel.Params,
+	Sockets.KoboldCPP.DownloadModel.Response
 > = {
 	event: "koboldcpp:downloadModel",
 	handler: async (socket, params, emitToUser) => {
@@ -654,7 +755,15 @@ export const koboldCppDownloadModelHandler: Handler<
 
 		await fsPromises.mkdir(modelsDir, { recursive: true })
 
-		const { filename, downloadUrl, modelName, modelUrl, description, quantization, sizeBytes } = params
+		const {
+			filename,
+			downloadUrl,
+			modelName,
+			modelUrl,
+			description,
+			quantization,
+			sizeBytes
+		} = params
 		const destPath = path.resolve(path.join(modelsDir, filename))
 		const resolvedModelsDir = path.resolve(modelsDir)
 		// filename is client-supplied — without containment, a path-traversal
@@ -667,17 +776,42 @@ export const koboldCppDownloadModelHandler: Handler<
 		}
 
 		if (activeDownloads[filename] && !activeDownloads[filename].isDone) {
-			emitToUser("koboldcpp:downloadModel:error", { error: "Already downloading this file" })
+			emitToUser("koboldcpp:downloadModel:error", {
+				error: "Already downloading this file"
+			})
 			return { success: false }
 		}
 
 		// Upsert DB record before starting so the file is excluded from the available list immediately
-		await db.insert(schema.koboldCppModels)
-			.values({ filename, modelName, modelUrl, description, quantization, sizeBytes: sizeBytes ?? null, downloadUrl, status: "downloading" })
-			.onConflictDoUpdate({ target: schema.koboldCppModels.filename, set: { modelName, modelUrl, description, quantization, sizeBytes: sizeBytes ?? null, downloadUrl, status: "downloading", errorMessage: null } })
+		await db
+			.insert(schema.koboldCppModels)
+			.values({
+				filename,
+				modelName,
+				modelUrl,
+				description,
+				quantization,
+				sizeBytes: sizeBytes ?? null,
+				downloadUrl,
+				status: "downloading"
+			})
+			.onConflictDoUpdate({
+				target: schema.koboldCppModels.filename,
+				set: {
+					modelName,
+					modelUrl,
+					description,
+					quantization,
+					sizeBytes: sizeBytes ?? null,
+					downloadUrl,
+					status: "downloading",
+					errorMessage: null
+				}
+			})
 
 		// Bind the emitter so progress events reach this user
-		emitDownloadProgressFn = (data) => emitToUser("koboldcpp:downloadProgress", data)
+		emitDownloadProgressFn = (data) =>
+			emitToUser("koboldcpp:downloadProgress", data)
 
 		activeDownloads[filename] = {
 			filename,
@@ -696,17 +830,28 @@ export const koboldCppDownloadModelHandler: Handler<
 					const urlObj = new URL(downloadUrl)
 					const lib = urlObj.protocol === "https:" ? https : http
 					const req = lib.get(downloadUrl, (res) => {
-						if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+						if (
+							res.statusCode &&
+							res.statusCode >= 300 &&
+							res.statusCode < 400 &&
+							res.headers.location
+						) {
 							// Follow redirect
 							const redirectUrl = res.headers.location
-							const rLib = redirectUrl.startsWith("https") ? https : http
+							const rLib = redirectUrl.startsWith("https")
+								? https
+								: http
 							rLib.get(redirectUrl, (rRes) => {
-								const total = parseInt(rRes.headers["content-length"] ?? "0", 10)
+								const total = parseInt(
+									rRes.headers["content-length"] ?? "0",
+									10
+								)
 								activeDownloads[filename].total = total
 								activeDownloads[filename].status = "downloading"
 								const writer = fs.createWriteStream(destPath)
 								rRes.on("data", (chunk: Buffer) => {
-									activeDownloads[filename].downloaded += chunk.length
+									activeDownloads[filename].downloaded +=
+										chunk.length
 									emitDownloadProgress()
 								})
 								rRes.pipe(writer)
@@ -716,7 +861,10 @@ export const koboldCppDownloadModelHandler: Handler<
 							}).on("error", reject)
 							return
 						}
-						const total = parseInt(res.headers["content-length"] ?? "0", 10)
+						const total = parseInt(
+							res.headers["content-length"] ?? "0",
+							10
+						)
 						activeDownloads[filename].total = total
 						activeDownloads[filename].status = "downloading"
 						const writer = fs.createWriteStream(destPath)
@@ -739,12 +887,15 @@ export const koboldCppDownloadModelHandler: Handler<
 				activeDownloads[filename].status = "success"
 				activeDownloads[filename].isDone = true
 				emitDownloadProgress()
-				await db.update(schema.koboldCppModels)
+				await db
+					.update(schema.koboldCppModels)
 					.set({ status: "complete" })
 					.where(eq(schema.koboldCppModels.filename, filename))
 			} catch (err: any) {
 				const isCancelled = err.message === "cancelled"
-				activeDownloads[filename].status = isCancelled ? "cancelled" : "error"
+				activeDownloads[filename].status = isCancelled
+					? "cancelled"
+					: "error"
 				activeDownloads[filename].isDone = true
 				if (isCancelled) {
 					// Clean up partial file and DB record
@@ -753,23 +904,27 @@ export const koboldCppDownloadModelHandler: Handler<
 						.where(eq(schema.koboldCppModels.filename, filename))
 						.catch(() => {})
 				} else {
-					await db.update(schema.koboldCppModels)
-						.set({ status: "error", errorMessage: err.message ?? "Unknown error" })
+					await db
+						.update(schema.koboldCppModels)
+						.set({
+							status: "error",
+							errorMessage: err.message ?? "Unknown error"
+						})
 						.where(eq(schema.koboldCppModels.filename, filename))
 				}
 				emitDownloadProgress()
 			}
 		})()
 
-		const res: Sockets.KoboldCpp.DownloadModel.Response = { success: true }
+		const res: Sockets.KoboldCPP.DownloadModel.Response = { success: true }
 		emitToUser("koboldcpp:downloadModel", res)
 		return res
 	}
 }
 
 export const koboldCppCancelDownloadHandler: Handler<
-	Sockets.KoboldCpp.CancelDownload.Params,
-	Sockets.KoboldCpp.CancelDownload.Response
+	Sockets.KoboldCPP.CancelDownload.Params,
+	Sockets.KoboldCPP.CancelDownload.Response
 > = {
 	event: "koboldcpp:cancelDownload",
 	handler: async (socket, params, emitToUser) => {
@@ -778,35 +933,39 @@ export const koboldCppCancelDownloadHandler: Handler<
 		if (entry && !entry.isDone && entry.abort) {
 			entry.abort()
 		}
-		const res: Sockets.KoboldCpp.CancelDownload.Response = { success: true }
+		const res: Sockets.KoboldCPP.CancelDownload.Response = { success: true }
 		emitToUser("koboldcpp:cancelDownload", res)
 		return res
 	}
 }
 
 export const koboldCppGetDownloadProgressHandler: Handler<
-	Sockets.KoboldCpp.GetDownloadProgress.Params,
-	Sockets.KoboldCpp.GetDownloadProgress.Response
+	Sockets.KoboldCPP.GetDownloadProgress.Params,
+	Sockets.KoboldCPP.GetDownloadProgress.Response
 > = {
 	event: "koboldcpp:getDownloadProgress",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		// Re-bind emitter on reconnect
-		emitDownloadProgressFn = (data) => emitToUser("koboldcpp:downloadProgress", data)
-		const downloads: Sockets.KoboldCpp.GetDownloadProgress.Response["downloads"] = {}
+		emitDownloadProgressFn = (data) =>
+			emitToUser("koboldcpp:downloadProgress", data)
+		const downloads: Sockets.KoboldCPP.GetDownloadProgress.Response["downloads"] =
+			{}
 		for (const [key, entry] of Object.entries(activeDownloads)) {
 			const { abort: _abort, ...rest } = entry
 			downloads[key] = rest
 		}
-		const res: Sockets.KoboldCpp.GetDownloadProgress.Response = { downloads }
+		const res: Sockets.KoboldCPP.GetDownloadProgress.Response = {
+			downloads
+		}
 		emitToUser("koboldcpp:getDownloadProgress", res)
 		return res
 	}
 }
 
 export const koboldCppClearDownloadHistoryHandler: Handler<
-	Sockets.KoboldCpp.ClearDownloadHistory.Params,
-	Sockets.KoboldCpp.ClearDownloadHistory.Response
+	Sockets.KoboldCPP.ClearDownloadHistory.Params,
+	Sockets.KoboldCPP.ClearDownloadHistory.Response
 > = {
 	event: "koboldcpp:clearDownloadHistory",
 	handler: async (socket, params, emitToUser) => {
@@ -814,7 +973,9 @@ export const koboldCppClearDownloadHistoryHandler: Handler<
 		for (const key of Object.keys(activeDownloads)) {
 			if (activeDownloads[key].isDone) delete activeDownloads[key]
 		}
-		const res: Sockets.KoboldCpp.ClearDownloadHistory.Response = { success: true }
+		const res: Sockets.KoboldCPP.ClearDownloadHistory.Response = {
+			success: true
+		}
 		emitToUser("koboldcpp:clearDownloadHistory", res)
 		return res
 	}
@@ -823,14 +984,16 @@ export const koboldCppClearDownloadHistoryHandler: Handler<
 // --- MANAGED MODE HANDLERS ---
 
 export const koboldCppSetManagedMode: Handler<
-	Sockets.KoboldCpp.SetManagedMode.Params,
-	Sockets.KoboldCpp.SetManagedMode.Response
+	Sockets.KoboldCPP.SetManagedMode.Params,
+	Sockets.KoboldCPP.SetManagedMode.Response
 > = {
 	event: "koboldcpp:setManagedMode",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		if (params.mode === "managed" && isAndroidWrapper()) {
-			throw new Error("Managed KoboldCPP mode is not available in the Android app")
+			throw new Error(
+				"Managed KoboldCPP mode is not available in the Android app"
+			)
 		}
 		const settings = (await db.query.koboldCppSettings.findFirst())!
 
@@ -841,7 +1004,9 @@ export const koboldCppSetManagedMode: Handler<
 
 		await db.update(schema.koboldCppSettings).set({
 			koboldCppManagedMode: params.mode,
-			...(adminPassword ? { koboldCppManagedAdminPassword: adminPassword } : {})
+			...(adminPassword
+				? { koboldCppManagedAdminPassword: adminPassword }
+				: {})
 		})
 
 		// Stop subprocess if switching away from managed
@@ -849,7 +1014,7 @@ export const koboldCppSetManagedMode: Handler<
 			subprocessManager.stop().catch(() => {})
 		}
 
-		const res: Sockets.KoboldCpp.SetManagedMode.Response = { success: true }
+		const res: Sockets.KoboldCPP.SetManagedMode.Response = { success: true }
 		emitToUser("koboldcpp:setManagedMode", res)
 		await systemSettingsGet.handler(socket, {}, emitToUser)
 		return res
@@ -857,8 +1022,8 @@ export const koboldCppSetManagedMode: Handler<
 }
 
 export const koboldCppSetManagedPort: Handler<
-	Sockets.KoboldCpp.SetManagedPort.Params,
-	Sockets.KoboldCpp.SetManagedPort.Response
+	Sockets.KoboldCPP.SetManagedPort.Params,
+	Sockets.KoboldCPP.SetManagedPort.Response
 > = {
 	event: "koboldcpp:setManagedPort",
 	handler: async (socket, params, emitToUser) => {
@@ -868,7 +1033,7 @@ export const koboldCppSetManagedPort: Handler<
 			koboldCppManagedPort: port,
 			koboldCppManagerBaseUrl: `http://localhost:${port}`
 		})
-		const res: Sockets.KoboldCpp.SetManagedPort.Response = { success: true }
+		const res: Sockets.KoboldCPP.SetManagedPort.Response = { success: true }
 		emitToUser("koboldcpp:setManagedPort", res)
 		await systemSettingsGet.handler(socket, {}, emitToUser)
 		return res
@@ -876,30 +1041,55 @@ export const koboldCppSetManagedPort: Handler<
 }
 
 export const koboldCppSetManagedBinaryDir: Handler<
-	Sockets.KoboldCpp.SetManagedBinaryDir.Params,
-	Sockets.KoboldCpp.SetManagedBinaryDir.Response
+	Sockets.KoboldCPP.SetManagedBinaryDir.Params,
+	Sockets.KoboldCPP.SetManagedBinaryDir.Response
 > = {
 	event: "koboldcpp:setManagedBinaryDir",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		await db.update(schema.koboldCppSettings).set({ koboldCppManagedBinaryDir: params.dir || null })
-		const res: Sockets.KoboldCpp.SetManagedBinaryDir.Response = { success: true }
+		await db
+			.update(schema.koboldCppSettings)
+			.set({ koboldCppManagedBinaryDir: params.dir || null })
+		const res: Sockets.KoboldCPP.SetManagedBinaryDir.Response = {
+			success: true
+		}
 		emitToUser("koboldcpp:setManagedBinaryDir", res)
 		await systemSettingsGet.handler(socket, {}, emitToUser)
 		return res
 	}
 }
 
+export const koboldCppSetManagedAdminPassword: Handler<
+	Sockets.KoboldCPP.SetManagedAdminPassword.Params,
+	Sockets.KoboldCPP.SetManagedAdminPassword.Response
+> = {
+	event: "koboldcpp:setManagedAdminPassword",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		await db.update(schema.koboldCppSettings).set({
+			koboldCppManagedAdminPassword: params.password.trim() || null
+		})
+		const res: Sockets.KoboldCPP.SetManagedAdminPassword.Response = {
+			success: true
+		}
+		emitToUser("koboldcpp:setManagedAdminPassword", res)
+		await systemSettingsGet.handler(socket, {}, emitToUser)
+		return res
+	}
+}
+
 export const koboldCppSetModelTtl: Handler<
-	Sockets.KoboldCpp.SetModelTtl.Params,
-	Sockets.KoboldCpp.SetModelTtl.Response
+	Sockets.KoboldCPP.SetModelTtl.Params,
+	Sockets.KoboldCPP.SetModelTtl.Response
 > = {
 	event: "koboldcpp:setModelTtl",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const ttl = Math.max(0, Math.floor(params.ttlSecs))
-		await db.update(schema.koboldCppSettings).set({ koboldCppManagedModelTtlSecs: ttl })
-		const res: Sockets.KoboldCpp.SetModelTtl.Response = { success: true }
+		await db
+			.update(schema.koboldCppSettings)
+			.set({ koboldCppManagedModelTtlSecs: ttl })
+		const res: Sockets.KoboldCPP.SetModelTtl.Response = { success: true }
 		emitToUser("koboldcpp:setModelTtl", res)
 		await systemSettingsGet.handler(socket, {}, emitToUser)
 		return res
@@ -907,16 +1097,20 @@ export const koboldCppSetModelTtl: Handler<
 }
 
 export const koboldCppSetSubprocessTimeout: Handler<
-	Sockets.KoboldCpp.SetSubprocessTimeout.Params,
-	Sockets.KoboldCpp.SetSubprocessTimeout.Response
+	Sockets.KoboldCPP.SetSubprocessTimeout.Params,
+	Sockets.KoboldCPP.SetSubprocessTimeout.Response
 > = {
 	event: "koboldcpp:setSubprocessTimeout",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const secs = Math.max(0, Math.floor(params.timeoutSecs))
-		await db.update(schema.koboldCppSettings).set({ koboldCppManagedSubprocessTimeoutSecs: secs })
+		await db
+			.update(schema.koboldCppSettings)
+			.set({ koboldCppManagedSubprocessTimeoutSecs: secs })
 		subprocessManager.setSubprocessTimeout(secs)
-		const res: Sockets.KoboldCpp.SetSubprocessTimeout.Response = { success: true }
+		const res: Sockets.KoboldCPP.SetSubprocessTimeout.Response = {
+			success: true
+		}
 		emitToUser("koboldcpp:setSubprocessTimeout", res)
 		await systemSettingsGet.handler(socket, {}, emitToUser)
 		return res
@@ -924,20 +1118,24 @@ export const koboldCppSetSubprocessTimeout: Handler<
 }
 
 export const koboldCppListBinaryVariants: Handler<
-	Sockets.KoboldCpp.ListBinaryVariants.Params,
-	Sockets.KoboldCpp.ListBinaryVariants.Response
+	Sockets.KoboldCPP.ListBinaryVariants.Params,
+	Sockets.KoboldCPP.ListBinaryVariants.Response
 > = {
 	event: "koboldcpp:listBinaryVariants",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 
-		const { variants, releaseTag } = await binaryManager.listVariants(params.tag)
-		const res: Sockets.KoboldCpp.ListBinaryVariants.Response = {
+		const { variants, releaseTag } = await binaryManager.listVariants(
+			params.tag
+		)
+		const res: Sockets.KoboldCPP.ListBinaryVariants.Response = {
 			variants,
 			releaseTag,
 			// Respect KOBOLDCPP_BINARY_DIR when set, so a fresh in-app download lands
 			// in the same directory a Docker deployment was configured to expect.
-			defaultDir: process.env.KOBOLDCPP_BINARY_DIR || path.join(getAppDataDir(), "koboldcpp")
+			defaultDir:
+				process.env.KOBOLDCPP_BINARY_DIR ||
+				path.join(getAppDataDir(), "koboldcpp")
 		}
 		emitToUser("koboldcpp:listBinaryVariants", res)
 		return res
@@ -945,23 +1143,23 @@ export const koboldCppListBinaryVariants: Handler<
 }
 
 export const koboldCppListReleaseVersions: Handler<
-	Sockets.KoboldCpp.ListReleaseVersions.Params,
-	Sockets.KoboldCpp.ListReleaseVersions.Response
+	Sockets.KoboldCPP.ListReleaseVersions.Params,
+	Sockets.KoboldCPP.ListReleaseVersions.Response
 > = {
 	event: "koboldcpp:listReleaseVersions",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 
 		const versions = await binaryManager.listReleaseVersions(10)
-		const res: Sockets.KoboldCpp.ListReleaseVersions.Response = { versions }
+		const res: Sockets.KoboldCPP.ListReleaseVersions.Response = { versions }
 		emitToUser("koboldcpp:listReleaseVersions", res)
 		return res
 	}
 }
 
 export const koboldCppCheckManagedBinaryUpdate: Handler<
-	Sockets.KoboldCpp.CheckManagedBinaryUpdate.Params,
-	Sockets.KoboldCpp.CheckManagedBinaryUpdate.Response
+	Sockets.KoboldCPP.CheckManagedBinaryUpdate.Params,
+	Sockets.KoboldCPP.CheckManagedBinaryUpdate.Response
 > = {
 	event: "koboldcpp:checkManagedBinaryUpdate",
 	handler: async (socket, params, emitToUser) => {
@@ -980,9 +1178,11 @@ export const koboldCppCheckManagedBinaryUpdate: Handler<
 		const releaseUrl: string = release.html_url ?? ""
 
 		const isUpdateAvailable =
-			!!installedTag && !!latestTag ? compareVersions(latestTag, installedTag) > 0 : false
+			!!installedTag && !!latestTag
+				? compareVersions(latestTag, installedTag) > 0
+				: false
 
-		const res: Sockets.KoboldCpp.CheckManagedBinaryUpdate.Response = {
+		const res: Sockets.KoboldCPP.CheckManagedBinaryUpdate.Response = {
 			isUpdateAvailable,
 			installedTag,
 			latestTag,
@@ -994,15 +1194,19 @@ export const koboldCppCheckManagedBinaryUpdate: Handler<
 }
 
 export const koboldCppDownloadBinary: Handler<
-	Sockets.KoboldCpp.DownloadBinary.Params,
-	Sockets.KoboldCpp.DownloadBinary.Response
+	Sockets.KoboldCPP.DownloadBinary.Params,
+	Sockets.KoboldCPP.DownloadBinary.Response
 > = {
 	event: "koboldcpp:downloadBinary",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 
-		binaryManager.setEmitter((d) => emitToUser("koboldcpp:binaryDownloadProgress", d))
-		subprocessManager.setEmitter((s) => emitToUser("koboldcpp:subprocessStatus", s))
+		binaryManager.setEmitter((d) =>
+			emitToUser("koboldcpp:binaryDownloadProgress", d)
+		)
+		subprocessManager.setEmitter((s) =>
+			emitToUser("koboldcpp:subprocessStatus", s)
+		)
 
 		// Run async so we can return immediately
 		;(async () => {
@@ -1037,21 +1241,23 @@ export const koboldCppDownloadBinary: Handler<
 			}
 		})()
 
-		const res: Sockets.KoboldCpp.DownloadBinary.Response = { success: true }
+		const res: Sockets.KoboldCPP.DownloadBinary.Response = { success: true }
 		emitToUser("koboldcpp:downloadBinary", res)
 		return res
 	}
 }
 
 export const koboldCppGetBinaryDownloadProgress: Handler<
-	Sockets.KoboldCpp.GetBinaryDownloadProgress.Params,
-	Sockets.KoboldCpp.GetBinaryDownloadProgress.Response
+	Sockets.KoboldCPP.GetBinaryDownloadProgress.Params,
+	Sockets.KoboldCPP.GetBinaryDownloadProgress.Response
 > = {
 	event: "koboldcpp:getBinaryDownloadProgress",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		binaryManager.setEmitter((d) => emitToUser("koboldcpp:binaryDownloadProgress", d))
-		const res: Sockets.KoboldCpp.GetBinaryDownloadProgress.Response = {
+		binaryManager.setEmitter((d) =>
+			emitToUser("koboldcpp:binaryDownloadProgress", d)
+		)
+		const res: Sockets.KoboldCPP.GetBinaryDownloadProgress.Response = {
 			download: binaryManager.getDownloadState()
 		}
 		emitToUser("koboldcpp:getBinaryDownloadProgress", res)
@@ -1060,53 +1266,63 @@ export const koboldCppGetBinaryDownloadProgress: Handler<
 }
 
 export const koboldCppCancelBinaryDownload: Handler<
-	Sockets.KoboldCpp.CancelBinaryDownload.Params,
-	Sockets.KoboldCpp.CancelBinaryDownload.Response
+	Sockets.KoboldCPP.CancelBinaryDownload.Params,
+	Sockets.KoboldCPP.CancelBinaryDownload.Response
 > = {
 	event: "koboldcpp:cancelBinaryDownload",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		binaryManager.cancelDownload()
-		const res: Sockets.KoboldCpp.CancelBinaryDownload.Response = { success: true }
+		const res: Sockets.KoboldCPP.CancelBinaryDownload.Response = {
+			success: true
+		}
 		emitToUser("koboldcpp:cancelBinaryDownload", res)
 		return res
 	}
 }
 
 export const koboldCppStartSubprocess: Handler<
-	Sockets.KoboldCpp.StartSubprocess.Params,
-	Sockets.KoboldCpp.StartSubprocess.Response
+	Sockets.KoboldCPP.StartSubprocess.Params,
+	Sockets.KoboldCPP.StartSubprocess.Response
 > = {
 	event: "koboldcpp:startSubprocess",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		subprocessManager.setEmitter((s) => emitToUser("koboldcpp:subprocessStatus", s))
+		subprocessManager.setEmitter((s) =>
+			emitToUser("koboldcpp:subprocessStatus", s)
+		)
 		subprocessManager.start().catch((err) => {
 			console.error("[KoboldCPP startSubprocess]", err.message)
 		})
-		const res: Sockets.KoboldCpp.StartSubprocess.Response = { success: true }
+		const res: Sockets.KoboldCPP.StartSubprocess.Response = {
+			success: true
+		}
 		emitToUser("koboldcpp:startSubprocess", res)
 		return res
 	}
 }
 
 export const koboldCppStopSubprocess: Handler<
-	Sockets.KoboldCpp.StopSubprocess.Params,
-	Sockets.KoboldCpp.StopSubprocess.Response
+	Sockets.KoboldCPP.StopSubprocess.Params,
+	Sockets.KoboldCPP.StopSubprocess.Response
 > = {
 	event: "koboldcpp:stopSubprocess",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		subprocessManager.setEmitter((s) => emitToUser("koboldcpp:subprocessStatus", s))
+		subprocessManager.setEmitter((s) =>
+			emitToUser("koboldcpp:subprocessStatus", s)
+		)
 		try {
 			await subprocessManager.stop()
-			const res: Sockets.KoboldCpp.StopSubprocess.Response = { success: true }
+			const res: Sockets.KoboldCPP.StopSubprocess.Response = {
+				success: true
+			}
 			emitToUser("koboldcpp:stopSubprocess", res)
 			return res
 		} catch (err: any) {
 			// e.g. an adopted process we can't verify we own — surface the
 			// reason instead of a bare "failed" with no explanation.
-			const res: Sockets.KoboldCpp.StopSubprocess.Response = {
+			const res: Sockets.KoboldCPP.StopSubprocess.Response = {
 				success: false,
 				error: err.message
 			}
@@ -1117,14 +1333,16 @@ export const koboldCppStopSubprocess: Handler<
 }
 
 export const koboldCppGetSubprocessStatus: Handler<
-	Sockets.KoboldCpp.GetSubprocessStatus.Params,
-	Sockets.KoboldCpp.GetSubprocessStatus.Response
+	Sockets.KoboldCPP.GetSubprocessStatus.Params,
+	Sockets.KoboldCPP.GetSubprocessStatus.Response
 > = {
 	event: "koboldcpp:getSubprocessStatus",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		subprocessManager.setEmitter((s) => emitToUser("koboldcpp:subprocessStatus", s))
-		const res: Sockets.KoboldCpp.GetSubprocessStatus.Response = {
+		subprocessManager.setEmitter((s) =>
+			emitToUser("koboldcpp:subprocessStatus", s)
+		)
+		const res: Sockets.KoboldCPP.GetSubprocessStatus.Response = {
 			status: subprocessManager.getStatus()
 		}
 		emitToUser("koboldcpp:getSubprocessStatus", res)
@@ -1133,8 +1351,8 @@ export const koboldCppGetSubprocessStatus: Handler<
 }
 
 export const koboldCppUnloadModel: Handler<
-	Sockets.KoboldCpp.UnloadModel.Params,
-	Sockets.KoboldCpp.UnloadModel.Response
+	Sockets.KoboldCPP.UnloadModel.Params,
+	Sockets.KoboldCPP.UnloadModel.Response
 > = {
 	event: "koboldcpp:unloadModel",
 	handler: async (socket, params, emitToUser) => {
@@ -1143,7 +1361,7 @@ export const koboldCppUnloadModel: Handler<
 		const baseUrl = settings.koboldCppManagerBaseUrl
 		const adminPassword = settings.koboldCppManagedAdminPassword ?? ""
 		const success = await unloadModel(baseUrl, adminPassword)
-		const res: Sockets.KoboldCpp.UnloadModel.Response = { success }
+		const res: Sockets.KoboldCPP.UnloadModel.Response = { success }
 		emitToUser("koboldcpp:unloadModel", res)
 		return res
 	}
@@ -1157,10 +1375,16 @@ export const koboldCppUpdateManagerEnabled: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		if (params.enabled && isAndroidWrapper()) {
-			throw new Error("KoboldCPP Manager is not available in the Android app")
+			throw new Error(
+				"KoboldCPP Manager is not available in the Android app"
+			)
 		}
-		await db.update(schema.koboldCppSettings).set({ koboldCppManagerEnabled: params.enabled }).where(eq(schema.koboldCppSettings.id, 1))
-		const res: Sockets.SystemSettings.UpdateKoboldCppManagerEnabled.Response = { success: true, enabled: params.enabled }
+		await db
+			.update(schema.koboldCppSettings)
+			.set({ koboldCppManagerEnabled: params.enabled })
+			.where(eq(schema.koboldCppSettings.id, 1))
+		const res: Sockets.SystemSettings.UpdateKoboldCppManagerEnabled.Response =
+			{ success: true, enabled: params.enabled }
 		emitToUser("systemSettings:updateKoboldCppManagerEnabled", res)
 		await systemSettingsGet.handler(socket, {}, emitToUser)
 		return res
@@ -1168,13 +1392,14 @@ export const koboldCppUpdateManagerEnabled: Handler<
 }
 
 export const koboldCppDeleteModelHandler: Handler<
-	Sockets.KoboldCpp.DeleteModel.Params,
-	Sockets.KoboldCpp.DeleteModel.Response
+	Sockets.KoboldCPP.DeleteModel.Params,
+	Sockets.KoboldCPP.DeleteModel.Response
 > = {
 	event: "koboldcpp:deleteModel",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		const { koboldCppManagerModelsDir: modelsDir } = (await db.query.koboldCppSettings.findFirst())!
+		const { koboldCppManagerModelsDir: modelsDir } =
+			(await db.query.koboldCppSettings.findFirst())!
 		if (!modelsDir) throw new Error("Models directory not configured")
 
 		const filePath = path.resolve(path.join(modelsDir, params.modelName))
@@ -1191,16 +1416,23 @@ export const koboldCppDeleteModelHandler: Handler<
 		await fsPromises.unlink(filePath)
 
 		// Remove DB record and any connections pointing to this model
-		await db.delete(schema.koboldCppModels).where(eq(schema.koboldCppModels.filename, params.modelName))
-		await db.delete(schema.connections).where(
-			and(
-				eq(schema.connections.type, CONNECTION_TYPE.KOBOLDCPP_MANAGED),
-				eq(schema.connections.model, params.modelName)
+		await db
+			.delete(schema.koboldCppModels)
+			.where(eq(schema.koboldCppModels.filename, params.modelName))
+		await db
+			.delete(schema.connections)
+			.where(
+				and(
+					eq(
+						schema.connections.type,
+						CONNECTION_TYPE.KOBOLDCPP_MANAGED
+					),
+					eq(schema.connections.model, params.modelName)
+				)
 			)
-		)
 		await connectionsList.handler(socket, {}, emitToUser)
 
-		const res: Sockets.KoboldCpp.DeleteModel.Response = { success: true }
+		const res: Sockets.KoboldCPP.DeleteModel.Response = { success: true }
 		emitToUser("koboldcpp:deleteModel", res)
 		return res
 	}
@@ -1235,6 +1467,7 @@ export function registerKoboldCppHandlers(
 	register(socket, koboldCppSetManagedMode, emitToUser)
 	register(socket, koboldCppSetManagedPort, emitToUser)
 	register(socket, koboldCppSetManagedBinaryDir, emitToUser)
+	register(socket, koboldCppSetManagedAdminPassword, emitToUser)
 	register(socket, koboldCppSetModelTtl, emitToUser)
 	register(socket, koboldCppSetSubprocessTimeout, emitToUser)
 	register(socket, koboldCppListBinaryVariants, emitToUser)

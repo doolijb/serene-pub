@@ -175,7 +175,8 @@ export const tagsGetRelatedData: Handler<
 		const characters = characterTagRows
 			.map((ct) => ct.character)
 			.filter(
-				(c): c is NonNullable<typeof c> => c !== null && c.userId === userId
+				(c): c is NonNullable<typeof c> =>
+					c !== null && c.userId === userId
 			)
 			.map(({ userId: _userId, ...c }) => c)
 
@@ -197,7 +198,8 @@ export const tagsGetRelatedData: Handler<
 		const personas = personaTagRows
 			.map((pt) => pt.persona)
 			.filter(
-				(p): p is NonNullable<typeof p> => p !== null && p.userId === userId
+				(p): p is NonNullable<typeof p> =>
+					p !== null && p.userId === userId
 			)
 			.map(({ userId: _userId, ...p }) => p)
 
@@ -218,7 +220,8 @@ export const tagsGetRelatedData: Handler<
 		const lorebooks = lorebookTagRows
 			.map((lt) => lt.lorebook)
 			.filter(
-				(l): l is NonNullable<typeof l> => l !== null && l.userId === userId
+				(l): l is NonNullable<typeof l> =>
+					l !== null && l.userId === userId
 			)
 			.map(({ userId: _userId, ...l }) => l)
 

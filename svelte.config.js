@@ -46,7 +46,11 @@ const config = {
 			mode: "auto",
 			directives: {
 				"default-src": ["self"],
-				"connect-src": ["self", ...socketConnectSrc, ...cspList("CSP_EXTRA_CONNECT_SRC")],
+				"connect-src": [
+					"self",
+					...socketConnectSrc,
+					...cspList("CSP_EXTRA_CONNECT_SRC")
+				],
 				// raw.githubusercontent.com serves character/persona portrait
 				// images for the community library (src/routes/library/*) —
 				// fetched directly by the browser, not proxied through this app.
@@ -57,7 +61,12 @@ const config = {
 				// same-origin server-side proxy) instead. All other CharaVault
 				// API traffic already happens server-side (fetch isn't subject
 				// to page CSP either way).
-				"img-src": ["self", "data:", "blob:", "https://raw.githubusercontent.com"],
+				"img-src": [
+					"self",
+					"data:",
+					"blob:",
+					"https://raw.githubusercontent.com"
+				],
 				"style-src": [
 					"self",
 					"unsafe-inline",

@@ -61,7 +61,10 @@ const minimalCharacterCard = {
 	}
 }
 
-async function makeCharacter(userId: number, overrides: Partial<{ name: string }> = {}) {
+async function makeCharacter(
+	userId: number,
+	overrides: Partial<{ name: string }> = {}
+) {
 	const { createCharacterFromParsedData } = await import("./characters")
 	return createCharacterFromParsedData(
 		{ ...minimalCharacterCard.data, ...overrides },
@@ -70,7 +73,10 @@ async function makeCharacter(userId: number, overrides: Partial<{ name: string }
 	)
 }
 
-async function makePersona(userId: number, overrides: Partial<{ name: string }> = {}) {
+async function makePersona(
+	userId: number,
+	overrides: Partial<{ name: string }> = {}
+) {
 	const { createPersonaFromParsedData } = await import("./personas")
 	return createPersonaFromParsedData(
 		{ name: "Bound Persona", description: "A bound persona", ...overrides },
@@ -81,8 +87,11 @@ async function makePersona(userId: number, overrides: Partial<{ name: string }> 
 
 describe("lorebooks import/export (PGlite integration)", () => {
 	test("export then re-import unchanged reports status unchanged", async () => {
-		const { lorebooksCreateHandler, lorebookExportHandler, lorebookImportHandler } =
-			await import("./lorebooks")
+		const {
+			lorebooksCreateHandler,
+			lorebookExportHandler,
+			lorebookImportHandler
+		} = await import("./lorebooks")
 		const user = await makeUser("lb-unchanged-user")
 
 		const { lorebook } = await lorebooksCreateHandler.handler(
@@ -184,12 +193,19 @@ describe("lorebooks import/export (PGlite integration)", () => {
 	})
 
 	test("export with bound characters/personas, delete everything, re-import restores characters/personas/bindings/entry-binding-scoping", async () => {
-		const { lorebooksCreateHandler, lorebookExportHandler, lorebookImportHandler } =
-			await import("./lorebooks")
+		const {
+			lorebooksCreateHandler,
+			lorebookExportHandler,
+			lorebookImportHandler
+		} = await import("./lorebooks")
 		const user = await makeUser("lb-restore-user")
 
-		const character = await makeCharacter(user.id, { name: "Restorable Char" })
-		const persona = await makePersona(user.id, { name: "Restorable Persona" })
+		const character = await makeCharacter(user.id, {
+			name: "Restorable Char"
+		})
+		const persona = await makePersona(user.id, {
+			name: "Restorable Persona"
+		})
 
 		const { lorebook } = await lorebooksCreateHandler.handler(
 			fakeSocket(user.id),
@@ -198,7 +214,11 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		)
 		const [charBinding] = await testDb
 			.insert(schema.lorebookBindings)
-			.values({ lorebookId: lorebook.id, characterId: character.id, binding: "{{char:1}}" })
+			.values({
+				lorebookId: lorebook.id,
+				characterId: character.id,
+				binding: "{{char:1}}"
+			})
 			.returning()
 		await testDb.insert(schema.lorebookBindings).values({
 			lorebookId: lorebook.id,
@@ -225,9 +245,15 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		// Delete everything — the lorebook (cascades bindings/entries) and the
 		// bound character/persona rows themselves, so the importer must
 		// recreate them from the embedded cards rather than just rewiring ids.
-		await testDb.delete(schema.lorebooks).where(eq(schema.lorebooks.id, lorebook.id))
-		await testDb.delete(schema.characters).where(eq(schema.characters.id, character.id))
-		await testDb.delete(schema.personas).where(eq(schema.personas.id, persona.id))
+		await testDb
+			.delete(schema.lorebooks)
+			.where(eq(schema.lorebooks.id, lorebook.id))
+		await testDb
+			.delete(schema.characters)
+			.where(eq(schema.characters.id, character.id))
+		await testDb
+			.delete(schema.personas)
+			.where(eq(schema.personas.id, persona.id))
 
 		const imported = await lorebookImportHandler.handler(
 			fakeSocket(user.id),
@@ -253,22 +279,33 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			where: (b, { eq }) => eq(b.lorebookId, newLorebookId)
 		})
 		expect(newBindings).toHaveLength(2)
-		const restoredCharBinding = newBindings.find((b) => b.characterId !== null)
+		const restoredCharBinding = newBindings.find(
+			(b) => b.characterId !== null
+		)
 		expect(restoredCharBinding?.characterId).toBe(newCharacters[0].id)
 
-		const newCharEntries = await testDb.query.characterLoreEntries.findMany({
-			where: (e, { eq }) => eq(e.lorebookId, newLorebookId)
-		})
+		const newCharEntries = await testDb.query.characterLoreEntries.findMany(
+			{
+				where: (e, { eq }) => eq(e.lorebookId, newLorebookId)
+			}
+		)
 		expect(newCharEntries).toHaveLength(1)
-		expect(newCharEntries[0].lorebookBindingId).toBe(restoredCharBinding!.id)
+		expect(newCharEntries[0].lorebookBindingId).toBe(
+			restoredCharBinding!.id
+		)
 	})
 
 	test("include flags toggled off omit characters/personas/narrativeGraph from export, bindings restore as empty slots", async () => {
-		const { lorebooksCreateHandler, lorebookExportHandler, lorebookImportHandler } =
-			await import("./lorebooks")
+		const {
+			lorebooksCreateHandler,
+			lorebookExportHandler,
+			lorebookImportHandler
+		} = await import("./lorebooks")
 		const user = await makeUser("lb-flags-user")
 
-		const character = await makeCharacter(user.id, { name: "Excluded Char" })
+		const character = await makeCharacter(user.id, {
+			name: "Excluded Char"
+		})
 		const { lorebook } = await lorebooksCreateHandler.handler(
 			fakeSocket(user.id),
 			{ name: "Flags Book" },
@@ -301,9 +338,13 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		expect(exportedData.extensions.serenepub.narrativeGraph).toBeUndefined()
 		// The binding itself still round-trips, just with no embedded card.
 		expect(exportedData.extensions.serenepub.bindings).toHaveLength(1)
-		expect(exportedData.extensions.serenepub.bindings[0].characterLocalId).toBeNull()
+		expect(
+			exportedData.extensions.serenepub.bindings[0].characterLocalId
+		).toBeNull()
 
-		await testDb.delete(schema.lorebooks).where(eq(schema.lorebooks.id, lorebook.id))
+		await testDb
+			.delete(schema.lorebooks)
+			.where(eq(schema.lorebooks.id, lorebook.id))
 
 		const imported = await lorebookImportHandler.handler(
 			fakeSocket(user.id),

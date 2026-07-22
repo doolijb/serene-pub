@@ -5,12 +5,17 @@
  * array directly) rather than a real Uint8Array, so that shape has to be
  * normalized before it can be wrapped in a Blob.
  */
-export function downloadBlob(payload: { blob: unknown; filename: string }): void {
+export function downloadBlob(payload: {
+	blob: unknown
+	filename: string
+}): void {
 	const bufferData = Array.isArray(payload.blob)
 		? payload.blob
 		: (payload.blob as any).data || payload.blob
 	const blob = new Blob([new Uint8Array(bufferData)], {
-		type: payload.filename.endsWith(".json") ? "application/json" : "image/png"
+		type: payload.filename.endsWith(".json")
+			? "application/json"
+			: "image/png"
 	})
 
 	const url = URL.createObjectURL(blob)

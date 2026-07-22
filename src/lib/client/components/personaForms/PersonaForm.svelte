@@ -417,7 +417,11 @@
 	aria-labelledby="form-title"
 	aria-modal="false"
 >
-	<div class="mb-4 flex items-center gap-2" role="group" aria-label="Form actions">
+	<div
+		class="mb-4 flex items-center gap-2"
+		role="group"
+		aria-label="Form actions"
+	>
 		<button
 			type="button"
 			class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
@@ -443,7 +447,11 @@
 			aria-label={`${mode === "edit" ? "Update" : "Create"} persona${hasChanges ? " (has unsaved changes)" : ""}`}
 		>
 			{#if isSaving}
-				<Icons.Loader2 size={16} class="animate-spin" aria-hidden="true" />
+				<Icons.Loader2
+					size={16}
+					class="animate-spin"
+					aria-hidden="true"
+				/>
 			{:else}
 				<Icons.Save size={16} aria-hidden="true" />
 			{/if}
@@ -473,7 +481,7 @@
 							class="flex w-full flex-col items-center justify-center"
 						>
 							<svg
-								class="my-4 h-8 w-8 text-surface-700-300 dark:text-surface-400"
+								class="text-surface-700-300 dark:text-surface-400 my-4 h-8 w-8"
 								aria-hidden="true"
 								xmlns="http://www.w3.org/2000/svg"
 								fill="none"
@@ -552,7 +560,7 @@
 			/>
 			{#if validationErrors.name}
 				<p
-					class="mt-1 text-sm text-error-500"
+					class="text-error-500 mt-1 text-sm"
 					id="name-error"
 					role="alert"
 				>
@@ -595,7 +603,10 @@
 								class="btn btn-sm preset-tonal-error"
 								type="button"
 								onclick={() => {
-									editPersonaData.aliases = editPersonaData.aliases.filter((_, i) => i !== idx)
+									editPersonaData.aliases =
+										editPersonaData.aliases.filter(
+											(_, i) => i !== idx
+										)
 								}}
 							>
 								<Icons.Minus class="h-4 w-4" />
@@ -606,7 +617,10 @@
 						class="btn btn-sm preset-filled-primary-500 mt-1"
 						type="button"
 						onclick={() => {
-							editPersonaData.aliases = [...editPersonaData.aliases, ""]
+							editPersonaData.aliases = [
+								...editPersonaData.aliases,
+								""
+							]
 						}}
 					>
 						<Icons.Plus class="h-4 w-4" />
@@ -635,7 +649,10 @@
 					<p class="text-surface-700-300 text-right text-xs">
 						{editPersonaData.summary.length} / 200
 					</p>
-					<p class="text-surface-400 text-xs">Used as a concise graph node description. Not injected into chat context.</p>
+					<p class="text-surface-400 text-xs">
+						Used as a concise graph node description. Not injected
+						into chat context.
+					</p>
 				</div>
 			{/if}
 		</div>
@@ -677,7 +694,7 @@
 			></textarea>
 			{#if validationErrors.description}
 				<p
-					class="mt-1 text-sm text-error-500"
+					class="text-error-500 mt-1 text-sm"
 					id="description-error"
 					role="alert"
 				>

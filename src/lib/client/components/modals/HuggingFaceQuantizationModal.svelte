@@ -46,64 +46,76 @@
 
 <Dialog {open} onOpenChange={(e) => (open = e.open)}>
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl w-[min(95vw,800px)] border border-surface-300-700">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 border-surface-300-700 w-[min(95vw,800px)] space-y-6 border p-6 shadow-xl"
+			>
 				<header class="flex justify-between">
-			<h2 class="h2">Select Quantization</h2>
-		</header>
-		<article class="space-y-4">
-			<div>
-				<p class="text-surface-700-300 mb-2 text-sm">
-					Choose a quantization level for <strong>
-						{selectedModelForDownload}
-					</strong>
-				</p>
-				<div class="bg-surface-200-800 rounded-lg p-3">
-					<p class="text-surface-600-400 text-xs">
-						<strong>About Quantizations:</strong>
-						These are compressed variants of the model that reduce file
-						size and memory usage while maintaining good performance.
-						Higher numbers (Q8) preserve more quality but use more resources,
-						while lower numbers (Q4) are more efficient but with slight
-						quality trade-offs.
-					</p>
-				</div>
-			</div>
+					<h2 class="h2">Select Quantization</h2>
+				</header>
+				<article class="space-y-4">
+					<div>
+						<p class="text-surface-700-300 mb-2 text-sm">
+							Choose a quantization level for <strong>
+								{selectedModelForDownload}
+							</strong>
+						</p>
+						<div class="bg-surface-200-800 rounded-lg p-3">
+							<p class="text-surface-600-400 text-xs">
+								<strong>About Quantizations:</strong>
+								These are compressed variants of the model that reduce
+								file size and memory usage while maintaining good
+								performance. Higher numbers (Q8) preserve more quality
+								but use more resources, while lower numbers (Q4)
+								are more efficient but with slight quality trade-offs.
+							</p>
+						</div>
+					</div>
 
-			{#if !selectedModel}
-				<div class="p-6 text-center">
-					<Icons.Loader2
-						class="mx-auto mb-4 animate-spin"
-						size={32}
-					/>
-					<p class="text-sm opacity-75">
-						Loading model information...
-					</p>
-				</div>
-			{:else if sortedPullOptions.length === 0}
-				<div class="p-6 text-center">
-					<Icons.AlertCircle
-						class="text-surface-700-300 mx-auto mb-4"
-						size={48}
-					/>
-					<p class="text-sm opacity-75">
-						No GGUF quantizations are available for this model.
-					</p>
-				</div>
-			{:else}
-				<div class="max-h-96 space-y-3 overflow-y-auto">
-					{#each sortedPullOptions as pullOption, index}
-						<div class="card bg-surface-200-800 p-4">
-							<div class="flex items-center justify-between">
-								<div class="flex-1">
-									<div class="mb-2 flex items-center gap-2">
-										<h5 class="font-semibold">
-											{pullOption.label || "Unknown file"}
-										</h5>
+					{#if !selectedModel}
+						<div class="p-6 text-center">
+							<Icons.Loader2
+								class="mx-auto mb-4 animate-spin"
+								size={32}
+							/>
+							<p class="text-sm opacity-75">
+								Loading model information...
+							</p>
+						</div>
+					{:else if sortedPullOptions.length === 0}
+						<div class="p-6 text-center">
+							<Icons.AlertCircle
+								class="text-surface-700-300 mx-auto mb-4"
+								size={48}
+							/>
+							<p class="text-sm opacity-75">
+								No GGUF quantizations are available for this
+								model.
+							</p>
+						</div>
+					{:else}
+						<div class="max-h-96 space-y-3 overflow-y-auto">
+							{#each sortedPullOptions as pullOption, index}
+								<div class="card bg-surface-200-800 p-4">
+									<div
+										class="flex items-center justify-between"
+									>
+										<div class="flex-1">
+											<div
+												class="mb-2 flex items-center gap-2"
+											>
+												<h5 class="font-semibold">
+													{pullOption.label ||
+														"Unknown file"}
+												</h5>
 
-										<!-- Add special labels -->
-										<!-- {#if index === 0 && sortedPullOptions.length > 1}
+												<!-- Add special labels -->
+												<!-- {#if index === 0 && sortedPullOptions.length > 1}
 											<span
 												class="badge rounded bg-primary-500 px-2 py-1 text-xs text-white"
 											>
@@ -117,16 +129,16 @@
 											</span>
 										{/if} -->
 
-										{#if pullOption.label.includes("Q4_K_M")}
-											<span
-												class="badge rounded bg-warning-500 px-2 py-1 text-xs text-white"
-											>
-												Recommended
-											</span>
-										{/if}
-									</div>
+												{#if pullOption.label.includes("Q4_K_M")}
+													<span
+														class="badge bg-warning-500 rounded px-2 py-1 text-xs text-white"
+													>
+														Recommended
+													</span>
+												{/if}
+											</div>
 
-									<!-- <div
+											<!-- <div
 										class="text-surface-700-300 flex items-center gap-4 text-xs"
 									>
 										{#if pullOption.size}
@@ -143,34 +155,36 @@
 											</div>
 										{/if}
 									</div> -->
-								</div>
+										</div>
 
-								<button
-									class="btn btn-sm preset-filled-primary-500"
-									onclick={() => {
-										if (
-											selectedModelForDownload &&
-											pullOption.label
-										) {
-											onDownload(
-												selectedModelForDownload,
-												pullOption
-											)
-										}
-									}}
-								>
-									<Icons.Download size={14} />
-									Download
-								</button>
-							</div>
+										<button
+											class="btn btn-sm preset-filled-primary-500"
+											onclick={() => {
+												if (
+													selectedModelForDownload &&
+													pullOption.label
+												) {
+													onDownload(
+														selectedModelForDownload,
+														pullOption
+													)
+												}
+											}}
+										>
+											<Icons.Download size={14} />
+											Download
+										</button>
+									</div>
+								</div>
+							{/each}
 						</div>
-					{/each}
-				</div>
-			{/if}
-		</article>
-		<footer class="flex justify-end gap-4">
-			<button class="btn preset-tonal" onclick={onClose}>Cancel</button>
-		</footer>
+					{/if}
+				</article>
+				<footer class="flex justify-end gap-4">
+					<button class="btn preset-tonal" onclick={onClose}>
+						Cancel
+					</button>
+				</footer>
 			</Dialog.Content>
 		</Dialog.Positioner>
 	</Portal>

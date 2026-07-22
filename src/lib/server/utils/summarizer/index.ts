@@ -46,7 +46,12 @@ export interface SummarizeInput {
 	sampling: SelectSamplingConfig
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
-	summarizePromptConfig?: { batchSystemPrompt: string; synthSystemPrompt: string; nameSystemPrompt: string; characterExtractionSystemPrompt?: string | null } | null
+	summarizePromptConfig?: {
+		batchSystemPrompt: string
+		synthSystemPrompt: string
+		nameSystemPrompt: string
+		characterExtractionSystemPrompt?: string | null
+	} | null
 	/** Per-sub-task connection/sampling overrides — fall back to connection/sampling if not set */
 	batchConnection?: SelectConnection | null
 	batchSampling?: SelectSamplingConfig | null
@@ -57,7 +62,12 @@ export interface SummarizeInput {
 	/** Known cast for scene character extraction — seeded from prior scenes and bindings */
 	knownCast?: CastEntry[]
 	onProgress?: (data: SummarizeProgressData) => void
-	onLlmCall?: (entry: { label: string; system: string; user: string; response: string }) => void
+	onLlmCall?: (entry: {
+		label: string
+		system: string
+		user: string
+		response: string
+	}) => void
 }
 
 export interface SummarizeResult {
@@ -85,7 +95,10 @@ function batchMessages(
 	let currentTokens = 0
 
 	for (const msg of messages) {
-		const msgTokens = estimateTokens(JSON.stringify({ speaker: msg.senderName, text: msg.content })) + 5
+		const msgTokens =
+			estimateTokens(
+				JSON.stringify({ speaker: msg.senderName, text: msg.content })
+			) + 5
 		if (current.length > 0 && currentTokens + msgTokens > budget) {
 			batches.push(current)
 			current = [msg]
@@ -158,7 +171,10 @@ async function runGeneration(
 		connection: opts.connection,
 		sampling: { ...opts.sampling, maxTokens: opts.maxTokens },
 		contextConfig: opts.contextConfig,
-		promptConfig: { ...opts.promptConfig, systemPrompt: promptData.systemPrompt },
+		promptConfig: {
+			...opts.promptConfig,
+			systemPrompt: promptData.systemPrompt
+		},
 		chat: fakeChat,
 		currentCharacterId: null,
 		tokenCounter: opts.tokenCounter,
@@ -191,16 +207,35 @@ export interface CompileInput {
  * Synthesize scene summaries into a single history entry content string.
  * Skips the batch-drafting phase — scenes are already drafted.
  */
-export async function compileScenesForEntry(input: CompileInput): Promise<SummarizeResult> {
-	const { scenes, connection, sampling, contextConfig, promptConfig, onProgress } = input
+export async function compileScenesForEntry(
+	input: CompileInput
+): Promise<SummarizeResult> {
+	const {
+		scenes,
+		connection,
+		sampling,
+		contextConfig,
+		promptConfig,
+		onProgress
+	} = input
 
 	// Honor the connection's own configured tokenizer — see the identical
 	// fix/comment in generateResponse.ts.
 	const tokenCounter = new TokenCounters(
 		(connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
 	)
-	const tokenLimit: number = (connection as any).tokenLimit ?? (connection as any).contextSize ?? 4096
-	const genOpts = { connection, sampling, contextConfig, promptConfig, tokenCounter, tokenLimit }
+	const tokenLimit: number =
+		(connection as any).tokenLimit ??
+		(connection as any).contextSize ??
+		4096
+	const genOpts = {
+		connection,
+		sampling,
+		contextConfig,
+		promptConfig,
+		tokenCounter,
+		tokenLimit
+	}
 
 	const drafts: JsonDraft[] = scenes
 		.filter((s) => s.summary?.trim())
@@ -210,16 +245,30 @@ export async function compileScenesForEntry(input: CompileInput): Promise<Summar
 		throw new Error("No scene summaries to compile.")
 	}
 
-	onProgress?.({ phase: "synthesizing", batch: 1, totalBatches: 1, partial: {} })
+	onProgress?.({
+		phase: "synthesizing",
+		batch: 1,
+		totalBatches: 1,
+		partial: {}
+	})
 
 	if (drafts.length === 1) {
 		const content = drafts[0].draft
-		onProgress?.({ phase: "synthesizing", batch: 1, totalBatches: 1, partial: { content } })
+		onProgress?.({
+			phase: "synthesizing",
+			batch: 1,
+			totalBatches: 1,
+			partial: { content }
+		})
 		return { content, name: undefined, raw: content, batchCount: 1 }
 	}
 
 	const jsonDrafts = JSON.stringify(drafts, null, 2)
-	const synthesisPrompt = buildSynthesisPrompt({ jsonDrafts, loreType: "history", topic: undefined })
+	const synthesisPrompt = buildSynthesisPrompt({
+		jsonDrafts,
+		loreType: "history",
+		topic: undefined
+	})
 	const synthesisRaw = await runGeneration(synthesisPrompt, {
 		...genOpts,
 		maxTokens: 2000,
@@ -237,16 +286,35 @@ export async function compileScenesForEntry(input: CompileInput): Promise<Summar
 		partial: { content: finalParsed.content, raw: synthesisRaw }
 	})
 
-	return { content, name: undefined, raw: synthesisRaw, batchCount: drafts.length }
+	return {
+		content,
+		name: undefined,
+		raw: synthesisRaw,
+		batchCount: drafts.length
+	}
 }
 
 export async function generateSummary(
 	input: SummarizeInput
 ): Promise<SummarizeResult> {
 	const {
-		messages, loreType, topic, connection, sampling, contextConfig, promptConfig,
-		summarizePromptConfig, onProgress, onLlmCall, knownCast,
-		batchConnection, batchSampling, synthConnection, synthSampling, nameConnection, nameSampling
+		messages,
+		loreType,
+		topic,
+		connection,
+		sampling,
+		contextConfig,
+		promptConfig,
+		summarizePromptConfig,
+		onProgress,
+		onLlmCall,
+		knownCast,
+		batchConnection,
+		batchSampling,
+		synthConnection,
+		synthSampling,
+		nameConnection,
+		nameSampling
 	} = input
 
 	const batchConn = batchConnection ?? connection
@@ -269,10 +337,38 @@ export async function generateSummary(
 	const nameTokenCounter = new TokenCounters(
 		(nameConn as any).tokenCounter || TokenCounterOptions.ESTIMATE
 	)
-	const tokenLimit: number = (batchConn as any).tokenLimit ?? (batchConn as any).contextSize ?? 4096
-	const batchOpts = { connection: batchConn, sampling: batchSamp, contextConfig, promptConfig, tokenCounter: batchTokenCounter, tokenLimit }
-	const synthOpts = { connection: synthConn, sampling: synthSamp, contextConfig, promptConfig, tokenCounter: synthTokenCounter, tokenLimit: (synthConn as any).tokenLimit ?? (synthConn as any).contextSize ?? 4096 }
-	const nameOpts = { connection: nameConn, sampling: nameSamp, contextConfig, promptConfig, tokenCounter: nameTokenCounter, tokenLimit: (nameConn as any).tokenLimit ?? (nameConn as any).contextSize ?? 4096 }
+	const tokenLimit: number =
+		(batchConn as any).tokenLimit ?? (batchConn as any).contextSize ?? 4096
+	const batchOpts = {
+		connection: batchConn,
+		sampling: batchSamp,
+		contextConfig,
+		promptConfig,
+		tokenCounter: batchTokenCounter,
+		tokenLimit
+	}
+	const synthOpts = {
+		connection: synthConn,
+		sampling: synthSamp,
+		contextConfig,
+		promptConfig,
+		tokenCounter: synthTokenCounter,
+		tokenLimit:
+			(synthConn as any).tokenLimit ??
+			(synthConn as any).contextSize ??
+			4096
+	}
+	const nameOpts = {
+		connection: nameConn,
+		sampling: nameSamp,
+		contextConfig,
+		promptConfig,
+		tokenCounter: nameTokenCounter,
+		tokenLimit:
+			(nameConn as any).tokenLimit ??
+			(nameConn as any).contextSize ??
+			4096
+	}
 
 	const batches = batchMessages(messages, tokenLimit)
 	const totalBatches = batches.length
@@ -282,14 +378,24 @@ export async function generateSummary(
 
 	for (let i = 0; i < batches.length; i++) {
 		const jsonMessages = formatMessagesAsJson(batches[i])
-		const promptData = buildBatchPrompt({ jsonMessages, loreType, topic, systemPromptOverride: summarizePromptConfig?.batchSystemPrompt })
+		const promptData = buildBatchPrompt({
+			jsonMessages,
+			loreType,
+			topic,
+			systemPromptOverride: summarizePromptConfig?.batchSystemPrompt
+		})
 		const raw = await runGeneration(promptData, {
 			...batchOpts,
 			maxTokens: 1000,
 			taskType: "summarize_batch",
 			label: `${loreType} batch ${i + 1}/${totalBatches}`
 		})
-		onLlmCall?.({ label: `Batch ${i + 1} / ${totalBatches}`, system: promptData.systemPrompt, user: promptData.userPrompt, response: raw })
+		onLlmCall?.({
+			label: `Batch ${i + 1} / ${totalBatches}`,
+			system: promptData.systemPrompt,
+			user: promptData.userPrompt,
+			response: raw
+		})
 		const parsed = parseSummaryOutput(raw)
 		const draftContent = parsed.content || raw
 
@@ -314,7 +420,11 @@ export async function generateSummary(
 	// ── Name generation helper ───────────────────────────────────────────────
 	async function generateName(content: string): Promise<string | undefined> {
 		try {
-			const namePrompt = buildNamePrompt({ content, loreType, systemPromptOverride: summarizePromptConfig?.nameSystemPrompt })
+			const namePrompt = buildNamePrompt({
+				content,
+				loreType,
+				systemPromptOverride: summarizePromptConfig?.nameSystemPrompt
+			})
 			const nameRaw = await runGeneration(namePrompt, {
 				...nameOpts,
 				maxTokens: 30,
@@ -329,24 +439,50 @@ export async function generateSummary(
 	}
 
 	// ── Character extraction helper (scene type only) ────────────────────────
-	async function extractCharacters(content: string): Promise<{ participantCharacters: string[]; mentionedCharacters: string[] }> {
+	async function extractCharacters(content: string): Promise<{
+		participantCharacters: string[]
+		mentionedCharacters: string[]
+	}> {
 		try {
-			const extractionPrompt = buildCharacterExtractionPrompt(content, summarizePromptConfig?.characterExtractionSystemPrompt, knownCast)
+			const extractionPrompt = buildCharacterExtractionPrompt(
+				content,
+				summarizePromptConfig?.characterExtractionSystemPrompt,
+				knownCast
+			)
 			const raw = await runGeneration(extractionPrompt, {
 				...nameOpts,
 				maxTokens: 500,
 				taskType: "character_extraction",
 				label: "character extraction"
 			})
-			onLlmCall?.({ label: "Character Extraction", system: extractionPrompt.systemPrompt, user: extractionPrompt.userPrompt, response: raw })
+			onLlmCall?.({
+				label: "Character Extraction",
+				system: extractionPrompt.systemPrompt,
+				user: extractionPrompt.userPrompt,
+				response: raw
+			})
 			// Strip markdown code fences if present, then extract the first {...} block
-			const stripped = raw.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "").trim()
+			const stripped = raw
+				.replace(/```(?:json)?\s*/gi, "")
+				.replace(/```/g, "")
+				.trim()
 			const jsonMatch = stripped.match(/\{[\s\S]*\}/)
-			if (!jsonMatch) throw new Error("No JSON object found in character extraction response")
+			if (!jsonMatch)
+				throw new Error(
+					"No JSON object found in character extraction response"
+				)
 			const parsed = JSON.parse(jsonMatch[0])
 			return {
-				participantCharacters: Array.isArray(parsed.participants) ? parsed.participants.filter((n: unknown) => typeof n === "string") : [],
-				mentionedCharacters: Array.isArray(parsed.mentioned) ? parsed.mentioned.filter((n: unknown) => typeof n === "string") : []
+				participantCharacters: Array.isArray(parsed.participants)
+					? parsed.participants.filter(
+							(n: unknown) => typeof n === "string"
+						)
+					: [],
+				mentionedCharacters: Array.isArray(parsed.mentioned)
+					? parsed.mentioned.filter(
+							(n: unknown) => typeof n === "string"
+						)
+					: []
 			}
 		} catch {
 			return { participantCharacters: [], mentionedCharacters: [] }
@@ -356,20 +492,43 @@ export async function generateSummary(
 	// If only one batch, skip synthesis — the single draft is the final result
 	if (drafts.length === 1) {
 		const content = drafts[0].draft
-		const name = (loreType === "world" || loreType === "character" || loreType === "scene") ? await generateName(content) : undefined
-		const { participantCharacters, mentionedCharacters } = loreType === "scene" ? await extractCharacters(content) : {}
-		return { content, name, raw: drafts[0].draft, batchCount: totalBatches, participantCharacters, mentionedCharacters }
+		const name =
+			loreType === "world" ||
+			loreType === "character" ||
+			loreType === "scene"
+				? await generateName(content)
+				: undefined
+		const { participantCharacters, mentionedCharacters } =
+			loreType === "scene" ? await extractCharacters(content) : {}
+		return {
+			content,
+			name,
+			raw: drafts[0].draft,
+			batchCount: totalBatches,
+			participantCharacters,
+			mentionedCharacters
+		}
 	}
 
 	const jsonDrafts = JSON.stringify(drafts, null, 2)
-	const synthesisPrompt = buildSynthesisPrompt({ jsonDrafts, loreType, topic, systemPromptOverride: summarizePromptConfig?.synthSystemPrompt })
+	const synthesisPrompt = buildSynthesisPrompt({
+		jsonDrafts,
+		loreType,
+		topic,
+		systemPromptOverride: summarizePromptConfig?.synthSystemPrompt
+	})
 	const synthesisRaw = await runGeneration(synthesisPrompt, {
 		...synthOpts,
 		maxTokens: 2000,
 		taskType: "summarize_synth",
 		label: loreType
 	})
-	onLlmCall?.({ label: "Synthesis", system: synthesisPrompt.systemPrompt, user: synthesisPrompt.userPrompt, response: synthesisRaw })
+	onLlmCall?.({
+		label: "Synthesis",
+		system: synthesisPrompt.systemPrompt,
+		user: synthesisPrompt.userPrompt,
+		response: synthesisRaw
+	})
 	const finalParsed = parseSummaryOutput(synthesisRaw)
 
 	const fallbackContent = drafts.map((d) => d.draft).join("\n\n")
@@ -382,8 +541,19 @@ export async function generateSummary(
 		partial: { content: finalParsed.content, raw: synthesisRaw }
 	})
 
-	const name = (loreType === "world" || loreType === "character" || loreType === "scene") ? await generateName(finalContent) : undefined
-	const { participantCharacters, mentionedCharacters } = loreType === "scene" ? await extractCharacters(finalContent) : {}
+	const name =
+		loreType === "world" || loreType === "character" || loreType === "scene"
+			? await generateName(finalContent)
+			: undefined
+	const { participantCharacters, mentionedCharacters } =
+		loreType === "scene" ? await extractCharacters(finalContent) : {}
 
-	return { content: finalContent, name, raw: synthesisRaw, batchCount: totalBatches, participantCharacters, mentionedCharacters }
+	return {
+		content: finalContent,
+		name,
+		raw: synthesisRaw,
+		batchCount: totalBatches,
+		participantCharacters,
+		mentionedCharacters
+	}
 }

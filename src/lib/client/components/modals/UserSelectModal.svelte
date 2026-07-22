@@ -111,79 +111,93 @@
 	}}
 >
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-h-[95dvh] relative overflow-hidden w-[min(95vw,800px)]">
-		<header class="flex items-center justify-between">
-			<h2 class="h2">{title}</h2>
-			<button class="btn btn-sm" aria-label="Close" onclick={onclose}>
-				<Icons.X size={20} />
-			</button>
-		</header>
-		{#if description}
-			<p class="text-surface-600-400">{description}</p>
-		{/if}
-		<input
-			class="input w-full"
-			type="text"
-			placeholder="Search users..."
-			bind:value={search}
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
 		/>
-		<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
-			<div class="relative flex flex-col gap-2 pr-2">
-				{#if filtered.length === 0}
-					<div class="text-surface-700-300 text-center">
-						No users found
-					</div>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 relative max-h-[95dvh] w-[min(95vw,800px)] space-y-6 overflow-hidden p-6 shadow-xl"
+			>
+				<header class="flex items-center justify-between">
+					<h2 class="h2">{title}</h2>
+					<button
+						class="btn btn-sm"
+						aria-label="Close"
+						onclick={onclose}
+					>
+						<Icons.X size={20} />
+					</button>
+				</header>
+				{#if description}
+					<p class="text-surface-600-400">{description}</p>
 				{/if}
-				{#each filtered as user}
-					{#if user.id}
-						<button
-							class="preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full items-center gap-3 overflow-hidden rounded p-3 {multiSelect &&
-							selectedUserIds.has(user.id)
-								? 'preset-filled-primary-500'
-								: ''}"
-							onclick={() => handleUserSelect(user.id!)}
-						>
-							<div class="flex flex-1 items-center gap-3">
-								<Icons.User size={20} />
-								<div class="text-left">
-									<div class="font-semibold">
-										{resolveUserHandle(user)}
-									</div>
-									{#if user.isAdmin}
-										<div
-											class="text-surface-600-400 text-xs"
-										>
-											Admin
-										</div>
-									{/if}
-								</div>
+				<input
+					class="input w-full"
+					type="text"
+					placeholder="Search users..."
+					bind:value={search}
+				/>
+				<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
+					<div class="relative flex flex-col gap-2 pr-2">
+						{#if filtered.length === 0}
+							<div class="text-surface-700-300 text-center">
+								No users found
 							</div>
-							{#if multiSelect && selectedUserIds.has(user.id)}
-								<Icons.Check size={20} />
+						{/if}
+						{#each filtered as user}
+							{#if user.id}
+								<button
+									class="preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full items-center gap-3 overflow-hidden rounded p-3 {multiSelect &&
+									selectedUserIds.has(user.id)
+										? 'preset-filled-primary-500'
+										: ''}"
+									onclick={() => handleUserSelect(user.id!)}
+								>
+									<div class="flex flex-1 items-center gap-3">
+										<Icons.User size={20} />
+										<div class="text-left">
+											<div class="font-semibold">
+												{resolveUserHandle(user)}
+											</div>
+											{#if user.isAdmin}
+												<div
+													class="text-surface-600-400 text-xs"
+												>
+													Admin
+												</div>
+											{/if}
+										</div>
+									</div>
+									{#if multiSelect && selectedUserIds.has(user.id)}
+										<Icons.Check size={20} />
+									{/if}
+								</button>
 							{/if}
+						{/each}
+					</div>
+				</div>
+				{#if multiSelect}
+					<footer class="flex justify-end gap-2">
+						<button
+							class="btn preset-filled-surface-500"
+							onclick={onclose}
+						>
+							Cancel
 						</button>
-					{/if}
-				{/each}
-			</div>
-		</div>
-		{#if multiSelect}
-			<footer class="flex justify-end gap-2">
-				<button class="btn preset-filled-surface-500" onclick={onclose}>
-					Cancel
-				</button>
-				<button
-					class="btn preset-filled-primary-500"
-					onclick={handleConfirmMultiSelect}
-					disabled={selectedUserIds.size === 0}
-				>
-					Add {selectedUserIds.size} Guest{selectedUserIds.size !== 1
-						? "s"
-						: ""}
-				</button>
-			</footer>
-		{/if}
+						<button
+							class="btn preset-filled-primary-500"
+							onclick={handleConfirmMultiSelect}
+							disabled={selectedUserIds.size === 0}
+						>
+							Add {selectedUserIds.size} Guest{selectedUserIds.size !==
+							1
+								? "s"
+								: ""}
+						</button>
+					</footer>
+				{/if}
 			</Dialog.Content>
 		</Dialog.Positioner>
 	</Portal>

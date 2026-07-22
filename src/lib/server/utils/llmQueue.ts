@@ -49,7 +49,9 @@ export class CancelledError extends Error {
 }
 
 export class ForceDetachedError extends Error {
-	constructor(message = "Cancelled request did not stop in time; queue forced ahead") {
+	constructor(
+		message = "Cancelled request did not stop in time; queue forced ahead"
+	) {
 		super(message)
 		this.name = "ForceDetachedError"
 	}
@@ -130,7 +132,10 @@ class LLMQueue {
 	 * run can possibly start — generate it, persist it, then enqueue with it,
 	 * so the id is always resolvable the moment the run exists.
 	 */
-	enqueue<T>(item: LLMQueueItemInput<T>, presetId?: string): { id: string; done: Promise<T> } {
+	enqueue<T>(
+		item: LLMQueueItemInput<T>,
+		presetId?: string
+	): { id: string; done: Promise<T> } {
 		const id = presetId ?? uuidv4()
 		const laneKey = getConcurrencyKey(item)
 
@@ -199,7 +204,9 @@ class LLMQueue {
 			this.settle(run, "done", () => run.resolve(result))
 		} catch (err: any) {
 			if (controller.signal.aborted) {
-				this.settle(run, "cancelled", () => run.reject(new CancelledError()))
+				this.settle(run, "cancelled", () =>
+					run.reject(new CancelledError())
+				)
 			} else {
 				this.settle(run, "error", () => run.reject(err))
 			}
@@ -230,7 +237,9 @@ class LLMQueue {
 			const lane = this.getLane(laneKey)
 			const idx = lane.queue.indexOf(run)
 			if (idx !== -1) lane.queue.splice(idx, 1)
-			this.settle(run, "cancelled", () => run.reject(new CancelledError()))
+			this.settle(run, "cancelled", () =>
+				run.reject(new CancelledError())
+			)
 			this.runsById.delete(run.id)
 			return
 		}
@@ -250,7 +259,9 @@ class LLMQueue {
 				)
 				const laneKey = getConcurrencyKey(run.item)
 				const lane = this.getLane(laneKey)
-				this.settle(run, "cancelled", () => run.reject(new ForceDetachedError()))
+				this.settle(run, "cancelled", () =>
+					run.reject(new ForceDetachedError())
+				)
 				this.runsById.delete(run.id)
 				if (lane.running === run) {
 					lane.running = null

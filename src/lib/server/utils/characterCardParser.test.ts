@@ -81,7 +81,10 @@ describe("parseCharacterCard", () => {
 	})
 
 	test("extracts the embedded lorebook when present", async () => {
-		const buffer = Buffer.from(JSON.stringify(cardJsonWithLorebook), "utf-8")
+		const buffer = Buffer.from(
+			JSON.stringify(cardJsonWithLorebook),
+			"utf-8"
+		)
 		const result = await parseCharacterCard(buffer)
 
 		expect(result.lorebook).toBeDefined()
@@ -126,7 +129,9 @@ describe("parseCharacterCard", () => {
 				description: "...",
 				character_book: {
 					name: "Legacy Book",
-					entries: { "0": { keys: ["trigger"], content: "Some lore" } }
+					entries: {
+						"0": { keys: ["trigger"], content: "Some lore" }
+					}
 				}
 			}),
 			"utf-8"
@@ -219,8 +224,12 @@ describe("getRobustSpecV3Data", () => {
 		// name/description/etc to the literal string "unknown" for this
 		// rather than failing, which previously let this import as a
 		// garbage "unknown" character with no validation error at all.
-		const card = CharacterCard.from_json({ this_is: "not a character card" } as any)
-		expect(() => getRobustSpecV3Data(card)).toThrow(/no character name was found/)
+		const card = CharacterCard.from_json({
+			this_is: "not a character card"
+		} as any)
+		expect(() => getRobustSpecV3Data(card)).toThrow(
+			/no character name was found/
+		)
 	})
 
 	test("preserves a real card whose actual name is literally 'unknown'", () => {
@@ -294,7 +303,9 @@ describe("buildCharacterCardV3", () => {
 			summary: "a summary",
 			uuid: "u2"
 		})
-		expect(withExtras.data.extensions.source).toEqual(["https://example.com"])
+		expect(withExtras.data.extensions.source).toEqual([
+			"https://example.com"
+		])
 		expect(withExtras.data.extensions.group_only_greetings).toEqual([
 			"group hi"
 		])

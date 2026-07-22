@@ -14,15 +14,15 @@ Creating a connection is done via the **+** button (or Ctrl/Cmd+N) in the Connec
 
 Serene Pub ships seven connection types, each with its own form and its own difficulty rating (shown in the New Connection modal):
 
-| Type | Label | Difficulty |
-|---|---|---|
-| `lmstudio` | LM Studio | Beginner (GUI) - Minimal setup required |
-| `ollama` | Ollama | Beginner (No GUI) - Minimal setup required |
-| `openai` | OpenAI Chat | Beginner - Nothing to install |
-| `llamacpp_completion` | Llama.cpp | Intermediate - Not for beginners |
-| `koboldcpp` | KoboldCPP | Beginner (GUI) - Simple setup |
-| `koboldcpp_managed` | KoboldCPP Manager | Beginner (GUI) - Managed by Serene Pub |
-| `anthropic` | Anthropic (Claude) | Beginner - Nothing to install |
+| Type                  | Label              | Difficulty                                 |
+| --------------------- | ------------------ | ------------------------------------------ |
+| `lmstudio`            | LM Studio          | Beginner (GUI) - Minimal setup required    |
+| `ollama`              | Ollama             | Beginner (No GUI) - Minimal setup required |
+| `openai`              | OpenAI Chat        | Beginner - Nothing to install              |
+| `llamacpp_completion` | Llama.cpp          | Intermediate - Not for beginners           |
+| `koboldcpp`           | KoboldCPP          | Beginner (GUI) - Simple setup              |
+| `koboldcpp_managed`   | KoboldCPP Manager  | Beginner (GUI) - Managed by Serene Pub     |
+| `anthropic`           | Anthropic (Claude) | Beginner - Nothing to install              |
 
 Every form shares a similar skeleton — a **Test Connection** button that reports "Test: Okay!" or "Test: Failed!" (with the underlying error message shown below it), a **Token Counter** dropdown, and a collapsible **Advanced Settings** section holding the Base URL and stream/behavior toggles. Forms that talk to a chat-completion API also expose a **Use Chat Mode** toggle; when it's switched off, a **Prompt Format** dropdown appears so you can pick how the raw text prompt is assembled instead.
 
@@ -40,20 +40,20 @@ OpenAI Chat is Serene Pub's generic OpenAI-compatible connection type, meant for
 
 Because so many providers speak this same protocol, creating a new **OpenAI Chat** connection shows an extra **Service Preset** dropdown in the New Connection modal, pre-filling the Base URL and a sensible Token Counter/Prompt Format for each:
 
-| Preset | Base URL |
-|---|---|
-| Empty | *(blank — fill in your own)* |
-| Ollama | `http://localhost:11434/v1/` |
-| OpenRouter | `https://openrouter.ai/api/v1/` |
-| OpenAI (Official) | `https://api.openai.com/v1/` |
-| LocalAI | `http://localhost:8080/v1/` |
-| AnyScale | `https://api.endpoints.anyscale.com/v1/` |
-| Groq | `https://api.groq.com/openai/v1/` |
-| Together AI | `https://api.together.xyz/v1/` |
-| DeepInfra | `https://api.deepinfra.com/v1/openai/` |
-| Fireworks AI | `https://api.fireworks.ai/inference/v1/` |
-| Perplexity AI | `https://api.perplexity.ai/v1/` |
-| KoboldCPP | `http://localhost:5001/v1/` |
+| Preset            | Base URL                                 |
+| ----------------- | ---------------------------------------- |
+| Empty             | _(blank — fill in your own)_             |
+| Ollama            | `http://localhost:11434/v1/`             |
+| OpenRouter        | `https://openrouter.ai/api/v1/`          |
+| OpenAI (Official) | `https://api.openai.com/v1/`             |
+| LocalAI           | `http://localhost:8080/v1/`              |
+| AnyScale          | `https://api.endpoints.anyscale.com/v1/` |
+| Groq              | `https://api.groq.com/openai/v1/`        |
+| Together AI       | `https://api.together.xyz/v1/`           |
+| DeepInfra         | `https://api.deepinfra.com/v1/openai/`   |
+| Fireworks AI      | `https://api.fireworks.ai/inference/v1/` |
+| Perplexity AI     | `https://api.perplexity.ai/v1/`          |
+| KoboldCPP         | `http://localhost:5001/v1/`              |
 
 These presets only set the initial Base URL, Prompt Format, and Token Counter — you can change any of them afterward, and you'll still need to supply an API key for services that require one.
 
@@ -71,7 +71,7 @@ For OpenAI Chat and Anthropic, obtain a key from the respective provider's conso
 
 ## KoboldCPP (Remote)
 
-The plain **KoboldCPP** connection type talks to a KoboldCPP instance you run and manage yourself — either on the same machine or a remote one — via KoboldCPP's native API. If the [KoboldCPP Manager](#koboldcpp-manager) is enabled system-wide, this form shows a warning banner suggesting you use a **KCPP Manager** connection instead, unless this particular connection is deliberately pointed at a *different* KoboldCPP instance than the one the manager controls.
+The plain **KoboldCPP** connection type talks to a KoboldCPP instance you run and manage yourself — either on the same machine or a remote one — via KoboldCPP's native API. If the [KoboldCPP Manager](#koboldcpp-manager) is enabled system-wide, this form shows a warning banner suggesting you use a **KCPP Manager** connection instead, unless this particular connection is deliberately pointed at a _different_ KoboldCPP instance than the one the manager controls.
 
 The form has a **Test Connection** button, a **Prompt Format** dropdown (shown only when Use Chat Mode is off), a **Token Counter** dropdown, and an Advanced Settings section with the **Base URL** (default `http://localhost:5001`) plus a long list of KoboldCPP-specific request options, all as toggle switches unless noted:
 
@@ -103,6 +103,8 @@ The first time you open the KoboldCPP Manager sidebar, you're shown a setup scre
 
 Choosing Managed mode takes you straight into the binary variant picker (below). Choosing External mode shows a **Connect to KoboldCPP** screen where you enter the **Server URL** of your already-running instance and click **Save & Connect** (or **Test** to just check reachability) — your KoboldCPP process must have been started with `--admin` for model-swap and status features to work. A **Reconfigure** button (in the Settings tab, or a **Back**/**Switch to Managed Mode** option on the setup screens) lets you reset the mode and start over.
 
+**Test** always checks whatever URL is currently typed into the field — including an edit you haven't saved yet — rather than re-checking the last-saved address. A failed test shows a **"Connection test failed"** toast with the specific error returned by the server (or a generic reachability message if none is available), instead of failing silently.
+
 ### Downloading the KoboldCPP binary
 
 In Managed mode, the **Download KoboldCPP** screen lets you pick a **Version** (defaults to "Latest", or choose a specific tagged GitHub release) and then choose a **build variant**, grouped by platform (Linux, Windows, macOS, Other) — each variant shows its filename, a short description, and its download size. Below the variant list is a **Download directory** field, pre-filled with a default directory and editable if you want the binary stored somewhere else.
@@ -117,7 +119,7 @@ The **Models** tab lists every GGUF model file present in the configured Models 
 
 ### Available and Downloads tabs
 
-The **Available** tab is where you find new models to download — a **Recommended** list of curated options (with VRAM-tier badges from "Ultra Budget" up to "Enthusiast" based on estimated VRAM need) or a **Hugging Face** search box for GGUF repos. Picking a model opens a **Select Quantization** modal listing each available quant file with its size; Q4_K_M is flagged as "Recommended" when present. Starting a download switches you to the **Downloads** tab, which shows active downloads with progress bars and a per-item **Cancel** button, plus a **Completed** section with a **Clear History** button. Model downloads (GGUF files into the Models Directory) are a separate download queue from the KoboldCPP *binary* download described above — both have their own progress UI but work the same way under the hood.
+The **Available** tab is where you find new models to download — a **Recommended** list of curated options (with VRAM-tier badges from "Ultra Budget" up to "Enthusiast" based on estimated VRAM need) or a **Hugging Face** search box for GGUF repos. Picking a model opens a **Select Quantization** modal listing each available quant file with its size; Q4*K_M is flagged as "Recommended" when present. Starting a download switches you to the **Downloads** tab, which shows active downloads with progress bars and a per-item **Cancel** button, plus a **Completed** section with a **Clear History** button. Model downloads (GGUF files into the Models Directory) are a separate download queue from the KoboldCPP \_binary* download described above — both have their own progress UI but work the same way under the hood.
 
 ### Performance tab: live status and model lifecycle
 
@@ -128,14 +130,20 @@ The **Performance** tab is the operational heart of the Manager. In Managed mode
 The **Settings** tab holds everything that configures the Manager itself rather than an individual model:
 
 - **Binary** info (Managed mode) — installed variant, installed version, and latest available version, with **Check for updates** and **Change binary** buttons; an "Update available" badge and an **Update Binary** button appear when a newer release exists.
-- **Managed Settings** — **Model unload timer** (seconds of inactivity before the loaded model is unloaded from memory; 0 means never, default 300s/5 min), **Subprocess idle timeout** (seconds before the whole subprocess is shut down when idle; 0 means never, default 1800s/30 min), and **Port** (default 5001; changing it requires a restart to take effect).
+- **Managed Settings** — **Model unload timer** (seconds of inactivity before the loaded model is unloaded from memory; 0 means never, default 300s/5 min), **Subprocess idle timeout** (seconds before the whole subprocess is shut down when idle; 0 means never, default 1800s/30 min), and **Port** (default 5001; changing it requires a restart to take effect). This Port setting can drift out of sync with the KoboldCPP **Server URL** configured on the [System Settings](./system-settings.md) tab, since the two are edited in different places — if they disagree, a warning appears under the Port field explaining that every request actually goes to the Server URL, not this Port, and the subprocess running here may be orphaned until you reconcile the two.
 - **Base URL** (External mode only — in Managed mode the URL is derived automatically from the configured port) and version/update-check info.
 - **Models Directory** — the server-side path where GGUF files are stored and downloaded to; this must be set before the Models/Available tabs can list or fetch anything.
 - **Active Capabilities** — a badge row reporting what the connected KoboldCPP build supports: Image Gen, Vision, TTS, Speech-to-Text, Embeddings, Multiplayer, Web Search, and Admin API.
 
 ### Power-user note: GPU layers, flash attention, batch size, and reload-on-change
 
-Per-model launch settings — **GPU Layers**, **Flash Attention**, and **Batch Size** — aren't set in the Manager sidebar at all; they live on each individual **KoboldCPP Manager**-type *connection* (see below), because different models on the same machine often need different settings. Whenever a chat generates against a KoboldCPP Manager connection, Serene Pub runs a preflight check before the request: it asks KoboldCPP which model is currently loaded and compares it (plus the last-applied GPU Layers/Flash Attention/Batch Size, and the requested context size from the active Sampling Config) against what this connection wants. If everything already matches, generation proceeds immediately with no reload. If the model, any of those three launch settings, or a larger context size than what's currently loaded don't match, Serene Pub writes a `.kcpps` config file into the Admin Directory and calls KoboldCPP's admin `reload_config` endpoint, then waits (up to 10 minutes) for the new model to finish loading before the request continues. In practice this means: switching which connection/model you're using, or editing GPU Layers/Flash Attention/Batch Size on a connection, causes a model reload the *next* time that connection is used to generate — not immediately when you save the connection.
+Per-model launch settings — **GPU Layers**, **Flash Attention**, and **Batch Size** — aren't set in the Manager sidebar at all; they live on each individual **KoboldCPP Manager**-type _connection_ (see below), because different models on the same machine often need different settings. Whenever a chat generates against a KoboldCPP Manager connection, Serene Pub runs a preflight check before the request: it asks KoboldCPP which model is currently loaded and compares it (plus the last-applied GPU Layers/Flash Attention/Batch Size, and the requested context size from the active Sampling Config) against what this connection wants. If everything already matches, generation proceeds immediately with no reload. If the model, any of those three launch settings, or a larger context size than what's currently loaded don't match, Serene Pub writes a `.kcpps` config file into the Admin Directory and calls KoboldCPP's admin `reload_config` endpoint, then waits (up to 10 minutes) for the new model to finish loading before the request continues. In practice this means: switching which connection/model you're using, or editing GPU Layers/Flash Attention/Batch Size on a connection, causes a model reload the _next_ time that connection is used to generate — not immediately when you save the connection.
+
+### Troubleshooting: no model loaded, or a rejected model load
+
+If KoboldCPP returns a response with `finish_reason: "error"` — which it can do with a normal-looking `200 OK` when no model is actually loaded (or it was started with `--nomodel`) — Serene Pub now surfaces this explicitly as an error ("KoboldCPP rejected the request — is a model loaded?") instead of silently showing a blank reply as if generation had succeeded.
+
+In External mode specifically, if KoboldCPP's admin API rejects a model-load request outright, the error names the likely cause: a mismatched admin password or admin directory between what's configured in this Manager and what KoboldCPP was actually started with (`--admin --adminpassword ... --admindir ...`).
 
 ### Troubleshooting: download or start failures
 
@@ -147,7 +155,7 @@ A common cause on Docker and NAS-hosted deployments: the app's data directory (w
 
 Once the Manager has a binary installed (or is connected to an external instance with `--admin` enabled) and at least one model downloaded, you create a **KoboldCPP Manager**-type connection to actually use a model in chats — this is the `koboldcpp_managed` connection type from the [types table](#connection-types-at-a-glance) above, distinct from the manager sidebar itself. Its form is disabled (with a warning banner) until the Manager is enabled system-wide.
 
-The form's **Model** dropdown is populated straight from the Manager's model list (with its own refresh button) — picking one here is equivalent to using **Set Default** from the Models tab. Prompt Format, Token Counter, and the same long list of KoboldCPP request switches (Use Chat Mode, Stream, Use Memory, Trim Stop Sequences, Render Special Tokens, Bypass EOS Token, Retain Grammar State, Return Logprobs, Replace Instruct Placeholders, Thinking/Reasoning) all work exactly as on the plain KoboldCPP form. The Base URL field is hidden entirely — Advanced Settings notes "Base URL is managed by KoboldCpp Manager's configured address and isn't set per-connection." Underneath those familiar fields, a **Managed mode launch settings** section holds:
+The form's **Model** dropdown is populated straight from the Manager's model list (with its own refresh button) — picking one here is equivalent to using **Set Default** from the Models tab. Prompt Format, Token Counter, and the same long list of KoboldCPP request switches (Use Chat Mode, Stream, Use Memory, Trim Stop Sequences, Render Special Tokens, Bypass EOS Token, Retain Grammar State, Return Logprobs, Replace Instruct Placeholders, Thinking/Reasoning) all work exactly as on the plain KoboldCPP form. The Base URL field is hidden entirely — Advanced Settings notes "Base URL is managed by KoboldCPP Manager's configured address and isn't set per-connection." Underneath those familiar fields, a **Managed mode launch settings** section holds:
 
 - **GPU Layers** — number of model layers to offload to GPU; `-1` autofits as many as will fit, `0` forces CPU-only. Default `-1`.
 - **Flash Attention** — toggle KoboldCPP's flash-attention kernel. Default off.
@@ -160,6 +168,8 @@ These three are exactly the settings described in the reload-on-change note abov
 Ollama Manager is the equivalent local-model dashboard for an Ollama installation, but with an important structural difference from KoboldCPP Manager: Ollama itself is a separate program you install and run outside Serene Pub (there's no KoboldCPP-style "download a binary and let us launch it" flow). Ollama Manager's job is purely to talk to an already-running Ollama server's API to browse, pull, and manage models — the underlying `ollama` process's own lifecycle is entirely outside Serene Pub's control.
 
 When you first open the Ollama Manager sidebar without a working connection, you get a **Connect to Ollama** screen with a link to download Ollama directly from `ollama.com/download`, plus a **Server URL** field (default `http://localhost:11434`) and **Save & Connect** / **Test** buttons. Once connected, the sidebar shows four tabs: **Installed**, **Available**, **Downloads**, and **Settings**.
+
+As with KoboldCPP's setup screen, **Test** checks the URL currently typed into the field (not necessarily what's already saved), and a failed test shows a **"Connection test failed"** toast naming the specific error instead of failing silently.
 
 ### Installed tab
 
@@ -185,17 +195,17 @@ A Sampling Config is a named, reusable bundle of generation parameters — the k
 
 The editor exposes nine core parameters, each as a slider with a min/max range and a click-to-edit numeric readout in the middle:
 
-| Parameter | Range | Step |
-|---|---|---|
-| Response Tokens | 1 – 4096 (unlockable to 65536) | 1 |
-| Context Tokens | 1 – 32768 (unlockable to 524288) | 1 |
-| Temperature | 0 – 2 | 0.01 |
-| Top P | 0 – 1 | 0.01 |
-| Top K | 0 – 200 | 1 |
-| Repetition Penalty | 0.5 – 2 | 0.01 |
-| Frequency Penalty | 0 – 2 | 0.01 |
-| Presence Penalty | 0 – 2 | 0.01 |
-| Seed | -1 – 999999 | 1 |
+| Parameter          | Range                            | Step |
+| ------------------ | -------------------------------- | ---- |
+| Response Tokens    | 1 – 4096 (unlockable to 65536)   | 1    |
+| Context Tokens     | 1 – 32768 (unlockable to 524288) | 1    |
+| Temperature        | 0 – 2                            | 0.01 |
+| Top P              | 0 – 1                            | 0.01 |
+| Top K              | 0 – 200                          | 1    |
+| Repetition Penalty | 0.5 – 2                          | 0.01 |
+| Frequency Penalty  | 0 – 2                            | 0.01 |
+| Presence Penalty   | 0 – 2                            | 0.01 |
+| Seed               | -1 – 999999                      | 1    |
 
 Response Tokens and Context Tokens each have an **Unlock max** checkbox next to the slider that raises their ceiling well past the normal range (to 65,536 and 524,288 respectively) for unusually long-context models.
 
@@ -213,9 +223,9 @@ Serene Pub ships two built-in, non-deletable Sampling Configs: **Default** (all 
 
 ## Context Configs
 
-Where a Sampling Config controls *how* a model samples tokens, a Context Config controls *what* gets sent to it — the full Handlebars-style template that assembles the system block, character/persona data, scenario, lorebook entries, chat history, and any post-history instructions into the final request. The **Contexts** sidebar manages these with the same dropdown/toolbar pattern as Sampling Configs (built-ins marked `*`, **+**/refresh/delete, **Update**, **Set Default**). A **Show Advanced** / **Hide Advanced** button reveals the raw **Template** textarea — this is deliberately hidden by default since editing it means writing valid Handlebars.
+Where a Sampling Config controls _how_ a model samples tokens, a Context Config controls _what_ gets sent to it — the full Handlebars-style template that assembles the system block, character/persona data, scenario, lorebook entries, chat history, and any post-history instructions into the final request. The **Contexts** sidebar manages these with the same dropdown/toolbar pattern as Sampling Configs (built-ins marked `*`, **+**/refresh/delete, **Update**, **Set Default**). A **Show Advanced** / **Hide Advanced** button reveals the raw **Template** textarea — this is deliberately hidden by default since editing it means writing valid Handlebars.
 
-**Context Configs are distinct from Prompt Configs.** A Prompt Config (see [Prompt Configs](./prompt-configs.md)) supplies the free-text *instructions* — writing style, tone, rules — that get slotted into a Context Config's template via the `{{{instructions}}}` variable below. The Context Config is the structural template itself.
+**Context Configs are distinct from Prompt Configs.** A Prompt Config (see [Prompt Configs](./prompt-configs.md)) supplies the free-text _instructions_ — writing style, tone, rules — that get slotted into a Context Config's template via the `{{{instructions}}}` variable below. The Context Config is the structural template itself.
 
 ### The default template and available variables
 
@@ -223,80 +233,76 @@ The built-in **Default** Context Config's template (shown here verbatim) illustr
 
 ````handlebars
 {{#systemBlock}}
-Instructions:
-"""
-{{#if currentDate}} 
-The current date in the story is {{{currentDate}}}.
-{{/if}}
+	Instructions: """
+	{{#if currentDate}}
+		The current date in the story is {{{currentDate}}}.
+	{{/if}}
 
-{{{instructions}}}
-"""
+	{{{instructions}}}
+	""" Assistant Characters (AI-controlled): ```json
+	{{{characters}}}
+	``` User Characters (player-controlled): ```json
+	{{{personas}}}
+	``` Scenario: """
+	{{{scenario}}}
+	"""
 
-Assistant Characters (AI-controlled):
-```json
-{{{characters}}}
-```
+	{{#if worldLore}}
+		World lore: ```json
+		{{{worldLore}}}
+		```
+	{{/if}}
 
-User Characters (player-controlled):
-```json
-{{{personas}}}
-```
+	{{#if history}}
+		Story history: ```json
+		{{{history}}}
+		```
+	{{/if}}
 
-Scenario:
-"""
-{{{scenario}}}
-"""
+	{{#if narrativeGraph}}
+		Story relationships: ```json
+		{{{narrativeGraph}}}
+		```
+	{{/if}}
 
-{{#if worldLore}}
-World lore: 
-```json
-{{{worldLore}}}
-```
-{{/if}}
-
-{{#if history}}
-Story history:
-```json
-{{{history}}}
-```
-{{/if}}
-
-{{#if narrativeGraph}}
-Story relationships:
-```json
-{{{narrativeGraph}}}
-```
-{{/if}}
-
-{{#if exampleDialogue}}
-Example dialogue:
-"""
-{{{exampleDialogue}}}
-"""
-{{/if}}
+	{{#if exampleDialogue}}
+		Example dialogue: """
+		{{{exampleDialogue}}}
+		"""
+	{{/if}}
 {{/systemBlock}}
 
 {{#each chatMessages}}
-{{#if (eq role "assistant")}}
-{{#assistantBlock}}
-{{{name}}}: {{{message}}}
-{{/assistantBlock}}
-{{/if}}
-{{#if (eq role "user")}}
-{{#userBlock}}
-{{{name}}}: {{{message}}}
-{{/userBlock}}
-{{/if}}
+	{{#if (eq role "assistant")}}
+		{{#assistantBlock}}
+			{{{name}}}: {{{message}}}
+		{{/assistantBlock}}
+	{{/if}}
+	{{#if (eq role "user")}}
+		{{#userBlock}}
+			{{{name}}}: {{{message}}}
+		{{/userBlock}}
+	{{/if}}
 {{/each}}
 
 {{#if postHistoryInstructions}}
-{{#systemBlock}}
-{{{postHistoryInstructions}}}
-{{/systemBlock}}
+	{{#systemBlock}}
+		{{{postHistoryInstructions}}}
+	{{/systemBlock}}
 {{/if}}
 ````
 
 Available variables include `currentDate`, `instructions` (from the active Chat Prompt), `characters` and `personas` (each rendered as JSON), `scenario`, `worldLore`, `history`, `narrativeGraph`, and `exampleDialogue` (all optional — wrap them in `{{#if ...}}` since they may be empty), `chatMessages` (an array iterated with `{{#each}}`, each entry exposing `role`, `name`, and `message`), and `postHistoryInstructions`. Triple-brace `{{{...}}}` is used throughout to output raw text/JSON without HTML-escaping.
+
+### Why character, persona, and lore data is JSON, not prose
+
+Notice that `characters`, `personas`, `worldLore`, `history`, and `narrativeGraph` are all fenced as ` ```json ` blocks, while `instructions`, `scenario`, and `exampleDialogue` stay wrapped in plain `"""` prose fences. That split is deliberate: the JSON-fenced fields are _facts_ (who someone is, what they know, what happened), and the prose-fenced fields are _directives_ (how to write, what tone to take, what's happening right now) — the template keeps those two kinds of content visibly distinct rather than blending everything into one undifferentiated paragraph.
+
+The reasoning behind serializing the factual side as JSON specifically:
+
+- **Explicit key boundaries reduce attribute bleed.** In a group chat with several characters, prose descriptions concatenated back-to-back are genuinely ambiguous for a model to attribute correctly — a trait mentioned near the end of one character's paragraph can get picked up as belonging to the next one. A JSON array of objects with explicit `name` keys removes that ambiguity structurally, independent of how any individual field is written.
+- **It's a base-model competency, not a roleplay one.** The instinct is that RP-oriented models — fine-tuned mostly on the prose/PList-style character cards common across other popular roleplay applications — would parse JSON _worse_ than the format they were tuned on. In practice, RP fine-tuning mostly reshapes _output_ voice and pacing, not _input_ parsing; general structured-data comprehension (reinforced heavily in most base/instruct training via function-calling and tool-use data) tends to survive underneath a lighter RP fine-tune layer largely intact.
+- **It keeps the retrieval paths consistent.** Both Context Infill Engines (keyword matching and RAG — see [Embeddings & RAG](./embeddings-and-rag.md)) serialize these same fields to JSON before injection, so switching retrieval modes doesn't also change the shape of what the model sees.
 
 ### Block helpers: systemBlock, assistantBlock, userBlock
 
@@ -318,7 +324,7 @@ Every connection form that can operate in text-completion mode (Use Chat Mode of
 - **Claude (Human/Assistant)**
 - **Instruct (Alpaca)**
 
-Picking the wrong format for a given model typically shows up as the model ignoring turn boundaries or continuing past where it should stop — if a text-completion connection is producing garbled or run-on output, checking this dropdown against the model's actual training format is a good first step. Prompt Format is unrelated to Chat Prompts (the free-text instruction templates covered in [Prompt Configs](./prompt-configs.md)) despite the name similarity — Chat Prompts supply *what* to say, Prompt Format controls *how it's laid out* on the wire.
+Picking the wrong format for a given model typically shows up as the model ignoring turn boundaries or continuing past where it should stop — if a text-completion connection is producing garbled or run-on output, checking this dropdown against the model's actual training format is a good first step. Prompt Format is unrelated to Chat Prompts (the free-text instruction templates covered in [Prompt Configs](./prompt-configs.md)) despite the name similarity — Chat Prompts supply _what_ to say, Prompt Format controls _how it's laid out_ on the wire.
 
 Every connection form also has a **Token Counter** dropdown, used for client-side token-budget estimates (for example, deciding how much lorebook/history content fits under a Sampling Config's Context Tokens limit) rather than for anything sent to the model itself. Options are **Estimate** (a fast heuristic, the default, and the only sensible choice for models without a dedicated counter below) plus tokenizer-specific counters for **OpenAI GPT-2/3**, **GPT-3.5 Turbo**, **GPT-4**, **GPT-4o**, **Llama**, **Llama 3**, **Mistral/Mixtral**, **Anthropic Claude**, **Cohere**, **Google Gemini/PaLM**, and **Google Gemma**. Picking the counter that actually matches your model gives more accurate context-budget math; picking the wrong one (or leaving it on Estimate for a model with unusual tokenization) can cause the app to under- or over-estimate how much history/lore fits in the remaining context.
 

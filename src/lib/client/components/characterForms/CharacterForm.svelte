@@ -478,27 +478,21 @@
 			}
 		})
 
-		socket.on(
-			"characters:create:error",
-			(msg: Sockets.ErrorResponse) => {
-				isSaving = false
-				toaster.error({
-					title: "Failed to create character",
-					description: msg.error
-				})
-			}
-		)
+		socket.on("characters:create:error", (msg: Sockets.ErrorResponse) => {
+			isSaving = false
+			toaster.error({
+				title: "Failed to create character",
+				description: msg.error
+			})
+		})
 
-		socket.on(
-			"characters:update:error",
-			(msg: Sockets.ErrorResponse) => {
-				isSaving = false
-				toaster.error({
-					title: "Failed to update character",
-					description: msg.error
-				})
-			}
-		)
+		socket.on("characters:update:error", (msg: Sockets.ErrorResponse) => {
+			isSaving = false
+			toaster.error({
+				title: "Failed to update character",
+				description: msg.error
+			})
+		})
 
 		socket.on(
 			"lorebooks:list",
@@ -558,22 +552,35 @@
 						id: characterData.id,
 						name: characterData.name,
 						nickname: characterData.nickname ?? "",
-						aliases: Array.isArray(characterData.aliases) ? characterData.aliases : [],
+						aliases: Array.isArray(characterData.aliases)
+							? characterData.aliases
+							: [],
 						summary: characterData.summary ?? "",
 						avatar: characterData.avatar ?? "",
 						description: characterData.description ?? "",
 						personality: characterData.personality ?? "",
 						scenario: characterData.scenario ?? "",
 						firstMessage: characterData.firstMessage ?? "",
-						alternateGreetings: Array.isArray(characterData.alternateGreetings) ? characterData.alternateGreetings : [],
+						alternateGreetings: Array.isArray(
+							characterData.alternateGreetings
+						)
+							? characterData.alternateGreetings
+							: [],
 						exampleDialogues: characterData.exampleDialogues,
 						creatorNotes: characterData.creatorNotes ?? "",
-						creatorNotesMultilingual: characterData.creatorNotesMultilingual ?? {},
-						groupOnlyGreetings: Array.isArray(characterData.groupOnlyGreetings) ? characterData.groupOnlyGreetings : [],
-						postHistoryInstructions: characterData.postHistoryInstructions ?? "",
+						creatorNotesMultilingual:
+							characterData.creatorNotesMultilingual ?? {},
+						groupOnlyGreetings: Array.isArray(
+							characterData.groupOnlyGreetings
+						)
+							? characterData.groupOnlyGreetings
+							: [],
+						postHistoryInstructions:
+							characterData.postHistoryInstructions ?? "",
 						isFavorite: characterData.isFavorite ?? false,
 						lorebookId: characterData.lorebookId ?? null,
-						characterVersion: characterData.characterVersion ?? undefined,
+						characterVersion:
+							characterData.characterVersion ?? undefined,
 						creator: characterData.creator ?? "",
 						category: characterData.category ?? "",
 						tags: characterData.tags ?? [],
@@ -646,7 +653,11 @@
 	aria-modal="false"
 >
 	{#if !hideTitle || !hideActionButtons}
-		<div class="mb-4 flex items-center gap-2" role="group" aria-label="Form actions">
+		<div
+			class="mb-4 flex items-center gap-2"
+			role="group"
+			aria-label="Form actions"
+		>
 			{#if !hideActionButtons}
 				<button
 					type="button"
@@ -680,7 +691,11 @@
 					aria-label={`${mode === "edit" ? "Update" : "Create"} character${hasChanges ? " (has unsaved changes)" : ""}`}
 				>
 					{#if isSaving}
-						<Icons.Loader2 size={16} class="animate-spin" aria-hidden="true" />
+						<Icons.Loader2
+							size={16}
+							class="animate-spin"
+							aria-hidden="true"
+						/>
 					{:else}
 						<Icons.Save size={16} aria-hidden="true" />
 					{/if}
@@ -716,7 +731,7 @@
 								class="flex w-full flex-col items-center justify-center"
 							>
 								<svg
-									class="my-4 h-8 w-8 text-surface-700-300 dark:text-surface-400"
+									class="text-surface-700-300 dark:text-surface-400 my-4 h-8 w-8"
 									aria-hidden="true"
 									xmlns="http://www.w3.org/2000/svg"
 									fill="none"
@@ -796,7 +811,7 @@
 			/>
 			{#if validationErrors.name}
 				<p
-					class="mt-1 text-sm text-error-500"
+					class="text-error-500 mt-1 text-sm"
 					id="name-error"
 					role="alert"
 				>
@@ -859,7 +874,11 @@
 							<button
 								class="btn btn-sm preset-tonal-error"
 								type="button"
-								onclick={() => removeFromArray(editCharacterData.aliases, idx)}
+								onclick={() =>
+									removeFromArray(
+										editCharacterData.aliases,
+										idx
+									)}
 							>
 								<Icons.Minus class="h-4 w-4" />
 							</button>
@@ -896,7 +915,10 @@
 					<p class="text-surface-700-300 text-right text-xs">
 						{editCharacterData.summary.length} / 200
 					</p>
-					<p class="text-surface-400 text-xs">Used as a concise graph node description. Not injected into chat context.</p>
+					<p class="text-surface-400 text-xs">
+						Used as a concise graph node description. Not injected
+						into chat context.
+					</p>
 				</div>
 			{/if}
 		</div>
@@ -958,7 +980,7 @@
 					></textarea>
 					{#if validationErrors.description}
 						<p
-							class="mt-1 text-sm text-error-500"
+							class="text-error-500 mt-1 text-sm"
 							id="description-error"
 							role="alert"
 						>
@@ -1416,9 +1438,7 @@
 				/>
 			</div>
 			<div class="flex flex-col gap-1">
-				<label class="font-semibold" for="charCreator">
-					Creator
-				</label>
+				<label class="font-semibold" for="charCreator">Creator</label>
 				<input
 					id="charCreator"
 					type="text"
@@ -1428,9 +1448,7 @@
 				/>
 			</div>
 			<div class="flex flex-col gap-1">
-				<label class="font-semibold" for="charCategory">
-					Category
-				</label>
+				<label class="font-semibold" for="charCategory">Category</label>
 				<input
 					id="charCategory"
 					type="text"
@@ -1543,12 +1561,14 @@
 						(editCharacterData.isFavorite = e.checked)}
 					aria-describedby="favorite-description"
 				>
-					<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+					>
 						<Switch.Thumb />
 					</Switch.Control>
 					<Switch.HiddenInput />
+					<Switch.Label class="font-semibold">Favorite</Switch.Label>
 				</Switch>
-				<label for="favorite" class="font-semibold">Favorite</label>
 				<span id="favorite-description" class="sr-only">
 					Mark this character as a favorite for easier access
 				</span>
@@ -1562,14 +1582,16 @@
 				onCheckedChange={onShowAllCharacterFieldsClick}
 				aria-describedby="show-all-fields-description"
 			>
-				<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
+				<Switch.Control
+					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+				>
 					<Switch.Thumb />
 				</Switch.Control>
 				<Switch.HiddenInput />
+				<Switch.Label class="font-semibold">
+					Show All Fields
+				</Switch.Label>
 			</Switch>
-			<label for="show-all-character-fields" class="font-semibold">
-				Show All Fields
-			</label>
 			<span id="show-all-fields-description" class="sr-only">
 				Show all character fields including advanced options
 			</span>
@@ -1583,7 +1605,6 @@
 	onConfirm={handleCancelModalDiscard}
 	onCancel={handleCancelModalCancel}
 />
-
 
 <style>
 	.sr-only {

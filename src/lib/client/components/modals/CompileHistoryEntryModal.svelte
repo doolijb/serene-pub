@@ -33,7 +33,11 @@
 	let internalActivityId = $state(untrack(() => activityId))
 
 	let step = $state<AiTaskStep>(
-		untrack(() => initialStep === "review" || (pendingResult != null && !initialStep) ? "review" : "running")
+		untrack(() =>
+			initialStep === "review" || (pendingResult != null && !initialStep)
+				? "review"
+				: "running"
+		)
 	)
 
 	let errorMessage = $state("")
@@ -47,7 +51,9 @@
 	let genTotalBatches = $state(1)
 	let genPartial = $state<{ content?: string; raw?: string }>({})
 
-	let hasExistingContent = $derived((historyEntry.content?.trim().length ?? 0) > 0)
+	let hasExistingContent = $derived(
+		(historyEntry.content?.trim().length ?? 0) > 0
+	)
 
 	let diffParts = $derived.by(() => {
 		if (!hasExistingContent || step !== "review") return []
@@ -56,15 +62,19 @@
 	let hasDiff = $derived(diffParts.some((p) => p.added || p.removed))
 
 	let progressPercent = $derived(
-		genPhase === "synthesizing" ? 80
-		: genTotalBatches > 1 ? Math.max(5, Math.round((genBatch / genTotalBatches) * 75))
-		: 40
+		genPhase === "synthesizing"
+			? 80
+			: genTotalBatches > 1
+				? Math.max(5, Math.round((genBatch / genTotalBatches) * 75))
+				: 40
 	)
 
 	let progressLabel = $derived(
-		genPhase === "synthesizing" ? "Synthesizing…"
-		: genBatch > 0 ? `Drafting part ${genBatch} of ${genTotalBatches}…`
-		: "Starting…"
+		genPhase === "synthesizing"
+			? "Synthesizing…"
+			: genBatch > 0
+				? `Drafting part ${genBatch} of ${genTotalBatches}…`
+				: "Starting…"
 	)
 
 	let canSave = $derived(editableContent.trim().length > 0)
@@ -81,7 +91,9 @@
 		genTotalBatches = 1
 		genPartial = {}
 		errorMessage = ""
-		socket.emit("scenes:compile", { historyEntryId: historyEntry.id } satisfies Sockets.Scenes.Compile.Params)
+		socket.emit("scenes:compile", {
+			historyEntryId: historyEntry.id
+		} satisfies Sockets.Scenes.Compile.Params)
 	}
 
 	function handleProgress(data: Sockets.Scenes.Compile.Progress) {
@@ -125,9 +137,14 @@
 			isCompleted: true
 		}
 		socket.emit("historyEntries:update", { historyEntry: updated })
-		if (internalActivityId) socket.emit("activity:dismiss", { id: internalActivityId })
+		if (internalActivityId)
+			socket.emit("activity:dismiss", { id: internalActivityId })
 		toaster.success({ title: "History entry updated" })
-		onSaved({ ...historyEntry, content: editableContent.trim(), isCompleted: true })
+		onSaved({
+			...historyEntry,
+			content: editableContent.trim(),
+			isCompleted: true
+		})
 		onOpenChange({ open: false })
 	}
 
@@ -143,7 +160,8 @@
 		if (step === "running") {
 			discard()
 		} else {
-			if (internalActivityId) socket.emit("activity:dismiss", { id: internalActivityId })
+			if (internalActivityId)
+				socket.emit("activity:dismiss", { id: internalActivityId })
 			onOpenChange({ open: false })
 		}
 	}
@@ -157,20 +175,34 @@
 {#snippet previewBlock()}
 	{#if genPartial.content || genPartial.raw}
 		<div class="space-y-1">
-			<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">
-				{genPhase === "synthesizing" ? "Synthesizing" : `Draft ${genBatch}`}
+			<p
+				class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+			>
+				{genPhase === "synthesizing"
+					? "Synthesizing"
+					: `Draft ${genBatch}`}
 			</p>
 			<div class="bg-surface-200-800 rounded-lg p-3 text-sm">
 				{#if genPartial.content}
-					<p class="text-surface-700-300 line-clamp-6 whitespace-pre-wrap">{genPartial.content}</p>
+					<p
+						class="text-surface-700-300 line-clamp-6 whitespace-pre-wrap"
+					>
+						{genPartial.content}
+					</p>
 				{:else if genPartial.raw}
-					<p class="text-surface-700-300 line-clamp-6 whitespace-pre-wrap text-xs italic">{genPartial.raw}</p>
+					<p
+						class="text-surface-700-300 line-clamp-6 text-xs whitespace-pre-wrap italic"
+					>
+						{genPartial.raw}
+					</p>
 				{/if}
 			</div>
 		</div>
 	{:else}
 		<div class="text-surface-700-300 py-4 text-center text-sm">
-			<div class="bg-primary-500 mx-auto mb-2 h-2 w-2 animate-pulse rounded-full"></div>
+			<div
+				class="bg-primary-500 mx-auto mb-2 h-2 w-2 animate-pulse rounded-full"
+			></div>
 			Waiting for synthesis…
 		</div>
 	{/if}
@@ -180,11 +212,21 @@
 	<div class="space-y-4">
 		{#if hasExistingContent && hasDiff}
 			<div class="space-y-1">
-				<p class="text-surface-700-300 text-xs font-semibold uppercase tracking-wide">Changes</p>
-				<div class="bg-surface-200-800 rounded-lg p-3 text-sm leading-relaxed whitespace-pre-wrap">
+				<p
+					class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+				>
+					Changes
+				</p>
+				<div
+					class="bg-surface-200-800 rounded-lg p-3 text-sm leading-relaxed whitespace-pre-wrap"
+				>
 					{#each diffParts as part}
 						{#if part.removed}
-							<span class="text-error-500 line-through opacity-70">{part.value}</span>
+							<span
+								class="text-error-500 line-through opacity-70"
+							>
+								{part.value}
+							</span>
 						{:else if part.added}
 							<span class="text-success-500">{part.value}</span>
 						{:else}

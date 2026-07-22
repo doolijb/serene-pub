@@ -6,10 +6,14 @@ export function registerContextHandlebarsHelpers(
 	handlebars: typeof Handlebars,
 	{ promptFormat }: { promptFormat: string }
 ) {
-	if (!handlebars.helpers.eq) handlebars.registerHelper("eq", (a, b) => a === b)
-	if (!handlebars.helpers.ne) handlebars.registerHelper("ne", (a, b) => a !== b)
-	if (!handlebars.helpers.and) handlebars.registerHelper("and", (a, b) => a && b)
-	if (!handlebars.helpers.or) handlebars.registerHelper("or", (a, b) => a || b)
+	if (!handlebars.helpers.eq)
+		handlebars.registerHelper("eq", (a, b) => a === b)
+	if (!handlebars.helpers.ne)
+		handlebars.registerHelper("ne", (a, b) => a !== b)
+	if (!handlebars.helpers.and)
+		handlebars.registerHelper("and", (a, b) => a && b)
+	if (!handlebars.helpers.or)
+		handlebars.registerHelper("or", (a, b) => a || b)
 
 	if (!handlebars.helpers.systemBlock) {
 		handlebars.registerHelper(
@@ -28,7 +32,9 @@ export function registerContextHandlebarsHelpers(
 			"assistantBlock",
 			function (this: any, options: any) {
 				const messageId =
-					this.id !== undefined ? this.id : options.data && options.data.id
+					this.id !== undefined
+						? this.id
+						: options.data && options.data.id
 				return PromptBlockFormatter.makeBlock({
 					format: promptFormat,
 					role: "assistant",

@@ -6,6 +6,7 @@
 		useTypedSocket,
 		refreshAuthAfterLogin
 	} from "$lib/client/sockets/loadSockets.client"
+	import { enableAccessibility } from "$lib/client/accessibility/state.svelte"
 
 	// Login form schema
 	const loginSchema = z.object({
@@ -259,6 +260,17 @@
 				<p class="text-muted-foreground text-xs">
 					Need help? Contact your administrator.
 				</p>
+				<button
+					type="button"
+					class="text-muted-foreground hover:text-foreground mt-3 inline-flex items-center gap-1 text-xs underline"
+					onclick={enableAccessibility}
+				>
+					<Icons.Accessibility
+						class="h-3.5 w-3.5"
+						aria-hidden="true"
+					/>
+					Switch to Document View (Accessible)
+				</button>
 			</div>
 		</div>
 	</div>

@@ -47,12 +47,18 @@ export type GraphPairOutput = {
  * have descriptions in the character/persona context sections).
  * Relationships are grouped by "from" node perspective to avoid repetition.
  */
-export function serializeGraphPairs(graphPairs: GraphPairOutput[]): string | undefined {
+export function serializeGraphPairs(
+	graphPairs: GraphPairOutput[]
+): string | undefined {
 	if (graphPairs.length === 0) return undefined
 
 	const nodeDescriptions = new Map<string, string>()
 	for (const p of graphPairs) {
-		if (!p.fromBound && p.fromDescription && !nodeDescriptions.has(p.from)) {
+		if (
+			!p.fromBound &&
+			p.fromDescription &&
+			!nodeDescriptions.has(p.from)
+		) {
 			nodeDescriptions.set(p.from, p.fromDescription)
 		}
 		if (!p.toBound && p.toDescription && !nodeDescriptions.has(p.to)) {
@@ -60,12 +66,17 @@ export function serializeGraphPairs(graphPairs: GraphPairOutput[]): string | und
 		}
 	}
 
-	const perspectiveMap = new Map<string, Array<{ with: string; relationships: any[] }>>()
+	const perspectiveMap = new Map<
+		string,
+		Array<{ with: string; relationships: any[] }>
+	>()
 	for (const p of graphPairs) {
 		if (!perspectiveMap.has(p.from)) perspectiveMap.set(p.from, [])
 		perspectiveMap.get(p.from)!.push({
 			with: p.to,
-			relationships: p.rels.map(({ historyEntryId: _he, ...rest }) => rest)
+			relationships: p.rels.map(
+				({ historyEntryId: _he, ...rest }) => rest
+			)
 		})
 	}
 
@@ -109,7 +120,14 @@ export async function fetchActiveRelationshipsAmongNodes(
 		.from(schema.narrativeNodes)
 		.where(inArray(schema.narrativeNodes.id, nodeIds))
 	const nodeInfoMap = new Map(
-		nodeRows.map((n) => [n.id, { name: n.name, summary: n.summary, bound: n.lorebookBindingId != null }])
+		nodeRows.map((n) => [
+			n.id,
+			{
+				name: n.name,
+				summary: n.summary,
+				bound: n.lorebookBindingId != null
+			}
+		])
 	)
 
 	const rels = await db
@@ -146,10 +164,14 @@ export async function fetchActiveRelationshipsAmongNodes(
 			pair = {
 				from: fromInfo?.name ?? String(r.fromNodeId),
 				fromBound,
-				fromDescription: fromBound ? undefined : (fromInfo?.summary ?? undefined),
+				fromDescription: fromBound
+					? undefined
+					: (fromInfo?.summary ?? undefined),
 				to: toInfo?.name ?? String(r.toNodeId),
 				toBound,
-				toDescription: toBound ? undefined : (toInfo?.summary ?? undefined),
+				toDescription: toBound
+					? undefined
+					: (toInfo?.summary ?? undefined),
 				fromNodeId: r.fromNodeId,
 				toNodeId: r.toNodeId,
 				lorebookId,
@@ -157,9 +179,19 @@ export async function fetchActiveRelationshipsAmongNodes(
 			}
 			pairMap.set(pairKey, pair)
 		}
-		const rel: InternalRelEntry = { type: r.relationshipType, status: r.status, historyEntryId: r.historyEntryId }
+		const rel: InternalRelEntry = {
+			type: r.relationshipType,
+			status: r.status,
+			historyEntryId: r.historyEntryId
+		}
 		if (r.description) rel.description = r.description
-		if (r.reason && !(r.historyEntryId != null && includedHistoryIds.has(r.historyEntryId))) {
+		if (
+			r.reason &&
+			!(
+				r.historyEntryId != null &&
+				includedHistoryIds.has(r.historyEntryId)
+			)
+		) {
 			rel.reason = r.reason
 		}
 		pair.rels.push(rel)

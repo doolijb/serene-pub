@@ -178,8 +178,11 @@ describe("characters import/export (PGlite integration)", () => {
 	})
 
 	test("importing an edited version of an already-imported card (same uuid, different content) conflicts, then resolves via overwrite/createNew", async () => {
-		const { charactersImportCard, charactersImportResolve, charactersExportCard } =
-			await import("./characters")
+		const {
+			charactersImportCard,
+			charactersImportResolve,
+			charactersExportCard
+		} = await import("./characters")
 		const user = await makeUser("conflict-user")
 
 		const created = await charactersImportCard.handler(

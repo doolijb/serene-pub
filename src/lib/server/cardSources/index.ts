@@ -1,4 +1,7 @@
-import type { CardSourceId, LibraryCatalogItem } from "$lib/shared/library/types"
+import type {
+	CardSourceId,
+	LibraryCatalogItem
+} from "$lib/shared/library/types"
 import type {
 	CardSource,
 	CardSourceContext,
@@ -48,7 +51,10 @@ export async function cachedSearch(
 	params: CardSourceSearchParams,
 	ctx: CardSourceContext
 ): Promise<CardSourceSearchResult> {
-	const key = stableSearchKey({ sourceId, ...params } as Record<string, unknown>)
+	const key = stableSearchKey({ sourceId, ...params } as Record<
+		string,
+		unknown
+	>)
 	return searchCache.getOrFetch(key, () =>
 		resolveCardSource(sourceId).search(params, ctx)
 	) as Promise<CardSourceSearchResult>

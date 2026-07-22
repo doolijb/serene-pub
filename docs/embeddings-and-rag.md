@@ -19,13 +19,15 @@ When you send a message, Serene Pub's prompt builder checks whether embeddings a
 
 Everything embeddings touch falls into one of these buckets: chat messages, character descriptions, persona descriptions, and everything inside a lorebook — world lore entries, character lore entries, history entries, and (if the lorebook has one) narrative graph nodes and relationships. See [Lorebooks](./lorebooks.md) for what those lorebook content types are and how the narrative graph itself is built. A row only ever counts as "embedded" for the specific model (and, in External API mode, the specific endpoint) that produced it — switching models or backends effectively resets everything to needing re-embedding, as covered below.
 
+Narrative graph **nodes** are embedded and tracked for staleness like everything else, but they're not actually part of RAG's similarity search — retrieval only searches messages, world lore, character lore, history entries, and narrative _relationships_. Graph context that reaches the prompt comes from relationship matches plus a direct node lookup, not from a node's own embedding being found by meaning.
+
 ### Why some short chats never show RAG activity
 
-RAG scoring only ever considers messages *older* than the most recent ten in a chat — those ten are always included in the prompt directly, so there's nothing for retrieval to add. This also means chats with ten or fewer messages are treated as not applicable for RAG at all: there's no [RAG notice](#understanding-rag-notices), and nothing gets prioritized in the queue for them, because everything already fits in the guaranteed window.
+RAG scoring only ever considers messages _older_ than the most recent ten in a chat — those ten are always included in the prompt directly, so there's nothing for retrieval to add. This also means chats with ten or fewer messages are treated as not applicable for RAG at all: there's no [RAG notice](#understanding-rag-notices), and nothing gets prioritized in the queue for them, because everything already fits in the guaranteed window.
 
 ## Enabling Embeddings
 
-Embeddings are configured from the **Embeddings** panel (lightning-bolt icon in the left navigation, always visible to admins — it doesn't require anything to already be enabled to open it). The first time it's opened with nothing configured, it shows a two-card chooser:
+Embeddings don't have their own left-navigation icon. They're configured from an **Embedding** card inside the **Connections** sidebar (the `Icons.Cable`-icon nav entry) — and that card is itself hidden until an admin has already turned embeddings on. The actual first-time entry point is the **Enable Embeddings** toggle on the [System Settings](./system-settings.md) tab (or the onboarding wizard's Embeddings/RAG step, which does the same thing) — either one jumps you straight into the Connections sidebar with the now-visible Embedding card open. Once configured, the card shows a two-card chooser the first time it has nothing set up yet:
 
 - **Local Model** — runs a small embedding model on this device; one-time download, then works fully offline with no per-request cost. Not offered on Android (see below).
 - **External API** — points at any OpenAI-compatible `/embeddings` endpoint: OpenAI itself, or a self-hosted Ollama/LM Studio/llama.cpp server elsewhere on your network. The base URL, API key, and model name are tested against a real embed call before anything is saved.
@@ -40,11 +42,11 @@ The onboarding wizard's Embeddings/RAG step doesn't duplicate this setup UI — 
 
 If you choose Local Model, you pick from three tiers, each trading speed for retrieval quality:
 
-| Tier | Model | Dimensions | Size | Notes |
-|---|---|---|---|---|
-| Fast | all-MiniLM-L6-v2 | 384 | ~80 MB | Lightweight; good for shorter lorebook entries and fact-style lore; best if RAM is limited or you want to get started immediately. |
-| Balanced | EmbeddingGemma-300M | 768 | ~300 MB | Google's current-generation embedding model; multilingual, with strong semantic understanding of longer prose and character descriptions; a good default for most setups. |
-| Best | bge-m3 | 1024 | ~570 MB | Top-tier, multilingual retrieval quality with an 8192-token context window — 16x the reach of the previous best-tier model, useful for long character and lorebook entries; recommended if you have the hardware. |
+| Tier     | Model               | Dimensions | Size    | Notes                                                                                                                                                                                                             |
+| -------- | ------------------- | ---------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fast     | all-MiniLM-L6-v2    | 384        | ~80 MB  | Lightweight; good for shorter lorebook entries and fact-style lore; best if RAM is limited or you want to get started immediately.                                                                                |
+| Balanced | EmbeddingGemma-300M | 768        | ~300 MB | Google's current-generation embedding model; multilingual, with strong semantic understanding of longer prose and character descriptions; a good default for most setups.                                         |
+| Best     | bge-m3              | 1024       | ~570 MB | Top-tier, multilingual retrieval quality with an 8192-token context window — 16x the reach of the previous best-tier model, useful for long character and lorebook entries; recommended if you have the hardware. |
 
 All three run fully locally via an ONNX-based embedding runtime — nothing is sent to an external API. Balanced and Best load int8-quantized weights (a small quality tradeoff for a much smaller download than full precision); Fast already downloads a small enough model that quantizing it further isn't worthwhile. Models are downloaded once and cached; switching models later re-downloads only if the new one isn't cached yet.
 
@@ -101,11 +103,15 @@ Rather than a single similarity search, retrieval runs two passes: a "current" q
 
 ### Blending and de-duplicating results
 
-Because two separate ranked lists come back from the two query passes, they're combined using Reciprocal Rank Fusion (an item's position in each list counts more than its raw score) and then re-ranked with Maximal Marginal Relevance, which intentionally trades a little relevance for diversity so the retrieved set doesn't fill up with five near-duplicate restatements of the same fact. A small recency boost is also applied to message scores, and only results that clear an adaptive similarity threshold are kept.
+Each of the two passes (current and recent) actually embeds every message in its query window individually, runs a separate similarity search per message-embedding, and combines those per-message result lists with Reciprocal Rank Fusion (an item's position in each list counts more than its raw score) before re-ranking with Maximal Marginal Relevance, which intentionally trades a little relevance for diversity so the retrieved set doesn't fill up with five near-duplicate restatements of the same fact — all of this RRF+MMR work happens _within_ a single pass. The current-pass and recent-pass results are then combined by simple de-duplication (the current pass's items win; the recent pass only contributes items not already seen), not by a second round of RRF across passes. A small recency boost is also applied to message scores, and only results that clear an adaptive similarity threshold are kept.
+
+One consequence worth knowing: the per-content-type budget described below is enforced separately inside each of the two passes, not globally across both. If the current and recent passes surface mostly disjoint items, the effective number of results for a given content type in one generation can end up close to double the stated per-pass budget, not capped at it.
 
 ### Always-included content
 
 Two categories bypass ranking entirely: the most recent handful of chat messages (the "guaranteed window") are always in the prompt regardless of token budget, and any lorebook entry marked **constant** is always included as long as it's enabled — constant entries are lore the model should never forget, so they skip the relevance contest altogether. See [Lorebooks](./lorebooks.md) for how the constant flag is set on an entry.
+
+Bypassing the relevance contest also means bypassing token-budget trimming — pinned/constant world lore, character lore, and history entries aren't among the content types the token-budget enforcement step is allowed to shrink. In practice this is rarely an issue, but if the combined content you've marked constant/pinned in a lorebook is large enough on its own, there's currently no mechanism to trim it back down to fit the model's context limit the way ordinary RAG-recalled content is.
 
 ## Understanding RAG Notices
 
@@ -124,3 +130,5 @@ Elsewhere in the UI (character and persona editors, for example), a small icon n
 ## Context Debugging
 
 A System Settings toggle, **Enable Context Debugging**, is worth knowing about alongside RAG: when turned on, it adds a Statistics tab and a debug icon to chat messages, computes full RAG and prompt-infill diagnostics for each generation, and saves that metadata alongside the message so you can inspect exactly what content the model saw — including which RAG results were retrieved — after the fact. This is an admin-only, opt-in setting since the extra computation and stored metadata add overhead; it's primarily useful when troubleshooting why a particular reply did or didn't seem to "remember" something. See [System Settings](./system-settings.md) for the rest of the settings on this screen.
+
+One diagnostic gotcha worth knowing: because the current and recent passes each compute their own adaptive similarity threshold, and the recorded value is simply whatever ran last, the "adaptive similarity threshold" figure shown in Prompt Details reflects only the **recent** pass's threshold, not the current pass's — keep that in mind if the number looks like it doesn't match what you'd expect from the most recent messages specifically.

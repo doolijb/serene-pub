@@ -851,7 +851,9 @@ export class ContentInfillEngine {
 		const char = {
 			name: character.name,
 			nickname: character.nickname || undefined,
-			aliases: character.aliases?.length ? character.aliases.filter((a) => a.trim()) : undefined,
+			aliases: character.aliases?.length
+				? character.aliases.filter((a) => a.trim())
+				: undefined,
 			description: character.description,
 			personality: character.personality || undefined
 		}

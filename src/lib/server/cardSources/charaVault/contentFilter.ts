@@ -69,8 +69,8 @@ const EXCLUDED_TAGS_LOWER = new Set(
 // substring, but both are listed explicitly for clarity.
 export const CHARAVAULT_EXCLUDED_NAME_SUBSTRINGS = ["milf", "milfy"]
 
-const EXCLUDED_NAME_SUBSTRINGS_LOWER = CHARAVAULT_EXCLUDED_NAME_SUBSTRINGS.map((s) =>
-	s.toLowerCase()
+const EXCLUDED_NAME_SUBSTRINGS_LOWER = CHARAVAULT_EXCLUDED_NAME_SUBSTRINGS.map(
+	(s) => s.toLowerCase()
 )
 
 /**
@@ -83,8 +83,12 @@ const EXCLUDED_NAME_SUBSTRINGS_LOWER = CHARAVAULT_EXCLUDED_NAME_SUBSTRINGS.map((
  * below is the actual, reliable enforcement — it checks the real tags array
  * CharaVault returns per card, not a guess at their query grammar.
  */
-export function applyDefaultContentFilter(searchTerm: string | undefined): string {
-	const exclusions = CHARAVAULT_DEFAULT_EXCLUDED_TAGS.map((t) => `-${t}`).join(" ")
+export function applyDefaultContentFilter(
+	searchTerm: string | undefined
+): string {
+	const exclusions = CHARAVAULT_DEFAULT_EXCLUDED_TAGS.map(
+		(t) => `-${t}`
+	).join(" ")
 	return searchTerm ? `${searchTerm} ${exclusions}` : exclusions
 }
 

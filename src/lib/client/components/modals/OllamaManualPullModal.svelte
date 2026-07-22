@@ -72,78 +72,89 @@
 	}}
 >
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl w-[min(95vw,480px)] border border-surface-300-700">
-		<div class="space-y-2">
-			<div class="mb-2 flex items-center gap-3">
-				<h3 class="text-foreground text-lg font-bold">Install Model</h3>
-			</div>
-			<p class="text-muted-foreground text-sm">
-				Enter the model name to download. You can use formats like:
-				<br />
-				<code class="code">ollama pull {exampleModelName}</code>
-				<br />
-				<code class="code">ollama run {exampleModelName}</code>
-				<br />
-				or
-				<code class="code">{exampleModelName}</code>
-			</p>
-		</div>
-
-		<div class="space-y-3">
-			<div>
-				<label
-					class="text-foreground mb-1 block text-sm font-medium"
-					for="modelNameInput"
-				>
-					Model Name or Pull Command
-				</label>
-				<input
-					id="modelNameInput"
-					type="text"
-					bind:value={inputValue}
-					onkeydown={handleKeydown}
-					placeholder="{exampleModelName}, ollama pull {exampleModelName}"
-					class="input w-full"
-					disabled={isLoading}
-				/>
-			</div>
-
-			{#if inputValue.trim()}
-				<div class="bg-surface-100-900 rounded border p-3">
-					<div class="text-muted-foreground mb-1 text-xs font-medium">
-						Will install:
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 border-surface-300-700 w-[min(95vw,480px)] space-y-6 border p-6 shadow-xl"
+			>
+				<div class="space-y-2">
+					<div class="mb-2 flex items-center gap-3">
+						<h3 class="text-foreground text-lg font-bold">
+							Install Model
+						</h3>
 					</div>
-					<div class="text-foreground font-mono text-sm">
-						{cleanModelName(inputValue)}
-					</div>
+					<p class="text-muted-foreground text-sm">
+						Enter the model name to download. You can use formats
+						like:
+						<br />
+						<code class="code">ollama pull {exampleModelName}</code>
+						<br />
+						<code class="code">ollama run {exampleModelName}</code>
+						<br />
+						or
+						<code class="code">{exampleModelName}</code>
+					</p>
 				</div>
-			{/if}
-		</div>
 
-		<div class="flex gap-4">
-			<button
-				class="btn preset-filled-surface-500 flex-1"
-				onclick={onclose}
-				disabled={isLoading}
-			>
-				Cancel
-			</button>
-			<button
-				class="btn preset-filled-primary-500 flex-1"
-				onclick={handleConfirm}
-				disabled={isLoading || !inputValue.trim()}
-			>
-				{#if isLoading}
-					<Icons.Loader2 size={14} class="animate-spin" />
-					Installing...
-				{:else}
-					<Icons.Download size={14} />
-					Install
-				{/if}
-			</button>
-		</div>
+				<div class="space-y-3">
+					<div>
+						<label
+							class="text-foreground mb-1 block text-sm font-medium"
+							for="modelNameInput"
+						>
+							Model Name or Pull Command
+						</label>
+						<input
+							id="modelNameInput"
+							type="text"
+							bind:value={inputValue}
+							onkeydown={handleKeydown}
+							placeholder="{exampleModelName}, ollama pull {exampleModelName}"
+							class="input w-full"
+							disabled={isLoading}
+						/>
+					</div>
+
+					{#if inputValue.trim()}
+						<div class="bg-surface-100-900 rounded border p-3">
+							<div
+								class="text-muted-foreground mb-1 text-xs font-medium"
+							>
+								Will install:
+							</div>
+							<div class="text-foreground font-mono text-sm">
+								{cleanModelName(inputValue)}
+							</div>
+						</div>
+					{/if}
+				</div>
+
+				<div class="flex gap-4">
+					<button
+						class="btn preset-filled-surface-500 flex-1"
+						onclick={onclose}
+						disabled={isLoading}
+					>
+						Cancel
+					</button>
+					<button
+						class="btn preset-filled-primary-500 flex-1"
+						onclick={handleConfirm}
+						disabled={isLoading || !inputValue.trim()}
+					>
+						{#if isLoading}
+							<Icons.Loader2 size={14} class="animate-spin" />
+							Installing...
+						{:else}
+							<Icons.Download size={14} />
+							Install
+						{/if}
+					</button>
+				</div>
 			</Dialog.Content>
 		</Dialog.Positioner>
 	</Portal>

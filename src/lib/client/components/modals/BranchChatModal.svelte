@@ -63,19 +63,27 @@
 
 <Dialog {open} {onOpenChange}>
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-md">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 max-w-md space-y-6 p-6 shadow-xl"
+			>
 				<header class="flex justify-between">
 					<h2 id="modal-title" class="h2">Branch Chat</h2>
 				</header>
 				<article class="space-y-4">
 					<p id="modal-description" class="text-muted-foreground">
-						Create a new chat branch from this message. The new chat will
-						include all messages up to this point.
+						Create a new chat branch from this message. The new chat
+						will include all messages up to this point.
 					</p>
 					<div class="form-field">
-						<label for="title-input" class="sr-only">Chat Title</label>
+						<label for="title-input" class="sr-only">
+							Chat Title
+						</label>
 						<input
 							id="title-input"
 							bind:this={inputRef}
@@ -107,7 +115,7 @@
 						{#if validationErrors.title}
 							<p
 								id="title-error"
-								class="mt-1 text-sm text-error-500"
+								class="text-error-500 mt-1 text-sm"
 								role="alert"
 							>
 								{validationErrors.title}

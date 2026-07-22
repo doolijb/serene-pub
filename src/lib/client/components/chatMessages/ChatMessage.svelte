@@ -118,7 +118,9 @@
 
 	// Derived values
 	const character = $derived(getMessageCharacter(msg))
-	const narratorDisplayName = $derived(msg.metadata?.narratorName || "Narrator")
+	const narratorDisplayName = $derived(
+		msg.metadata?.narratorName || "Narrator"
+	)
 	const speakerDisplayName = $derived(
 		msg.isNarratorResponse
 			? narratorDisplayName
@@ -176,14 +178,18 @@
 			? 'preset-filled-secondary-100-900'
 			: 'preset-tonal-surface opacity-60'
 		: 'preset-filled-primary-50-950'} flex flex-col rounded-lg p-2 transition-colors duration-150"
-	class:opacity-50={!isSummarizationMode && msg.isHidden && editChatMessage?.id !== msg.id}
+	class:opacity-50={!isSummarizationMode &&
+		msg.isHidden &&
+		editChatMessage?.id !== msg.id}
 	tabindex="-1"
 	role="article"
-	aria-label="Message {index + 1} of {chat.chatMessages.length} from {msg.isNarratorResponse
+	aria-label="Message {index + 1} of {chat.chatMessages
+		.length} from {msg.isNarratorResponse
 		? narratorDisplayName
-		: resolveCharacterName(character, 'Unknown')}: {msg.content.slice(0, 100)}{msg.content.length > 100
-		? '...'
-		: ''}"
+		: resolveCharacterName(character, 'Unknown')}: {msg.content.slice(
+		0,
+		100
+	)}{msg.content.length > 100 ? '...' : ''}"
 >
 	<div class="flex justify-between gap-2">
 		<div class="group flex gap-2">
@@ -212,8 +218,12 @@
 			<div class="flex flex-col">
 				<span class="flex gap-1">
 					{#if msg.isNarratorResponse}
-						<span class="funnel-display mx-0 inline-block w-fit px-0 text-[1.1em] font-bold">
-							<span class="text-nowrap">{narratorDisplayName}</span>
+						<span
+							class="funnel-display mx-0 inline-block w-fit px-0 text-[1.1em] font-bold"
+						>
+							<span class="text-nowrap">
+								{narratorDisplayName}
+							</span>
 						</span>
 					{:else}
 						<button
@@ -235,7 +245,9 @@
 						</span>
 					{/if}
 					<span class="mt-1">
-						<EmbeddingStatusIcon embeddingModel={msg.embeddingModel} />
+						<EmbeddingStatusIcon
+							embeddingModel={msg.embeddingModel}
+						/>
 					</span>
 				</span>
 			</div>
@@ -281,7 +293,9 @@
 							{onStartSummarization}
 							open={openMsgControlsMenu === msg.id}
 							onOpenChange={(isOpen) =>
-								(openMsgControlsMenu = isOpen ? msg.id : undefined)}
+								(openMsgControlsMenu = isOpen
+									? msg.id
+									: undefined)}
 						/>
 					{/if}
 				</div>
@@ -289,7 +303,7 @@
 					<div class="ml-auto flex items-center gap-2">
 						{#if msg.metadata?.swipes?.currentIdx !== null && msg.metadata?.swipes?.currentIdx !== undefined && msg.metadata?.swipes?.history && msg.metadata?.swipes.history.length > 1}
 							<button
-								class="btn btn-sm h-8 w-8 rounded-full p-0 hover:preset-tonal-success"
+								class="btn btn-sm hover:preset-tonal-success h-8 w-8 rounded-full p-0"
 								title="Swipe Left"
 								onclick={() => onSwipeLeft(msg)}
 								disabled={!!editChatMessage ||
@@ -300,16 +314,20 @@
 							>
 								<Icons.ChevronLeft size={20} />
 							</button>
-							<span class="text-surface-700-300 select-none text-sm">
+							<span
+								class="text-surface-700-300 text-sm select-none"
+							>
 								{(msg.metadata.swipes.currentIdx || 0) + 1}/{msg
 									.metadata.swipes.history.length}
 							</span>
 						{/if}
 						<button
-							class="btn btn-sm h-8 w-8 rounded-full p-0 hover:preset-tonal-success"
+							class="btn btn-sm hover:preset-tonal-success h-8 w-8 rounded-full p-0"
 							title="Swipe Right"
 							onclick={() => onSwipeRight(msg)}
-							disabled={!!editChatMessage || !canSwipeRightVal || !canControl}
+							disabled={!!editChatMessage ||
+								!canSwipeRightVal ||
+								!canControl}
 						>
 							<Icons.ChevronRight size={20} />
 						</button>
@@ -325,7 +343,9 @@
 			<button
 				class="flex w-full items-center gap-2 py-2 text-sm opacity-70 transition-opacity hover:opacity-100"
 				onclick={toggleThinking}
-				title={isThinkingExpanded ? "Collapse thinking" : "Expand thinking"}
+				title={isThinkingExpanded
+					? "Collapse thinking"
+					: "Expand thinking"}
 			>
 				<Icons.BrainCircuit size={16} />
 				<span>Thinking</span>
@@ -335,7 +355,9 @@
 				/>
 			</button>
 			{#if isThinkingExpanded}
-				<div class="rendered-chat-message-content pb-2 text-sm opacity-80">
+				<div
+					class="rendered-chat-message-content pb-2 text-sm opacity-80"
+				>
 					{@html renderMarkdownWithQuotedText(thinkingContent)}
 				</div>
 			{/if}
@@ -348,7 +370,9 @@
 			<button
 				class="flex w-full items-center gap-2 py-2 text-sm opacity-70 transition-opacity hover:opacity-100"
 				onclick={toggleReasoning}
-				title={isReasoningExpanded ? "Collapse reasoning" : "Expand reasoning"}
+				title={isReasoningExpanded
+					? "Collapse reasoning"
+					: "Expand reasoning"}
 			>
 				<Icons.Brain size={16} />
 				<span>Reasoning</span>
@@ -358,7 +382,9 @@
 				/>
 			</button>
 			{#if isReasoningExpanded}
-				<div class="rendered-chat-message-content pb-2 text-sm opacity-80">
+				<div
+					class="rendered-chat-message-content pb-2 text-sm opacity-80"
+				>
 					{@html renderMarkdownWithQuotedText(reasoningContent)}
 				</div>
 			{/if}
@@ -379,7 +405,9 @@
 					<Icons.AlertTriangle size={16} />
 					<span class="text-sm font-medium">{msg.error.message}</span>
 					{#if msg.error.code}
-						<span class="text-xs opacity-60">({msg.error.code})</span>
+						<span class="text-xs opacity-60">
+							({msg.error.code})
+						</span>
 					{/if}
 				</div>
 				<button
@@ -398,8 +426,12 @@
 				</div>
 			{:else if msg.generationStage === "loading"}
 				<div class="flex items-center gap-2">
-					<div class="text-surface-700-300 text-sm">Loading model…</div>
-					<div class="bg-surface-400-600 h-2 w-2 animate-pulse rounded-full"></div>
+					<div class="text-surface-700-300 text-sm">
+						Loading model…
+					</div>
+					<div
+						class="bg-surface-400-600 h-2 w-2 animate-pulse rounded-full"
+					></div>
 				</div>
 			{:else if GeneratingAnimationComponent}
 				{@render GeneratingAnimationComponent()}

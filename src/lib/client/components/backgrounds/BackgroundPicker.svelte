@@ -11,8 +11,11 @@
 		onchange?: (path: string | null, opacity: number) => void
 	}
 
-	let { selectedPath = $bindable(), opacity = $bindable(), onchange }: Props =
-		$props()
+	let {
+		selectedPath = $bindable(),
+		opacity = $bindable(),
+		onchange
+	}: Props = $props()
 
 	const socket = useTypedSocket()
 
@@ -77,7 +80,9 @@
 
 	function confirmDelete() {
 		if (!pendingDeletePath) return
-		socket.emit("userSettings:deleteBackground", { path: pendingDeletePath })
+		socket.emit("userSettings:deleteBackground", {
+			path: pendingDeletePath
+		})
 		if (selectedPath === pendingDeletePath) select(null)
 		pendingDeletePath = null
 	}
@@ -205,7 +210,9 @@
 		<!-- Defaults -->
 		{#if visibleDefaults.length > 0}
 			<div>
-				<h4 class="text-muted-foreground mb-2 text-xs font-semibold uppercase tracking-wide">
+				<h4
+					class="text-muted-foreground mb-2 text-xs font-semibold tracking-wide uppercase"
+				>
 					Defaults
 				</h4>
 				<div class="grid grid-cols-3 gap-2">
@@ -248,7 +255,9 @@
 		<!-- Uploads -->
 		<div>
 			<div class="mb-2 flex items-center justify-between">
-				<h4 class="text-muted-foreground text-xs font-semibold uppercase tracking-wide">
+				<h4
+					class="text-muted-foreground text-xs font-semibold tracking-wide uppercase"
+				>
 					My Uploads
 				</h4>
 				<button
@@ -333,12 +342,20 @@
 
 <Dialog
 	open={showDeleteModal}
-	onOpenChange={(e) => { if (!e.open) cancelDelete() }}
+	onOpenChange={(e) => {
+		if (!e.open) cancelDelete()
+	}}
 >
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-4 shadow-xl max-w-sm">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 max-w-sm space-y-4 p-6 shadow-xl"
+			>
 				<header class="flex items-center gap-3">
 					<Icons.Trash2 class="text-error-500 h-5 w-5 shrink-0" />
 					<h2 class="text-lg font-bold">Delete Background</h2>
@@ -353,13 +370,20 @@
 					</div>
 				{/if}
 				<p class="text-muted-foreground text-sm">
-					Are you sure you want to delete this background? This cannot be undone.
+					Are you sure you want to delete this background? This cannot
+					be undone.
 				</p>
 				<footer class="flex justify-end gap-2">
-					<button class="btn preset-filled-surface-400-600" onclick={cancelDelete}>
+					<button
+						class="btn preset-filled-surface-400-600"
+						onclick={cancelDelete}
+					>
 						Cancel
 					</button>
-					<button class="btn preset-filled-error-500" onclick={confirmDelete}>
+					<button
+						class="btn preset-filled-error-500"
+						onclick={confirmDelete}
+					>
 						<Icons.Trash2 class="h-4 w-4" />
 						Delete
 					</button>

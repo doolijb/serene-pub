@@ -95,7 +95,12 @@ describe("getNextCharacterTurn", () => {
 		// anyone could be picked, which made this permanently null — a
 		// character added to an in-progress chat could never get a first
 		// turn. Character 20 must win regardless of character 10's recency.
-		const messages = [assistantMsg(10), userMsg(1), userMsg(2), assistantMsg(10)]
+		const messages = [
+			assistantMsg(10),
+			userMsg(1),
+			userMsg(2),
+			assistantMsg(10)
+		]
 		const chat = buildChat({
 			messages,
 			characterIds: [10, 20],
@@ -107,7 +112,12 @@ describe("getNextCharacterTurn", () => {
 	test("healthy window precondition: a due character is only selected once every persona and character has appeared within the last castSize messages", () => {
 		// Same cast as above, but now every cast member (persona 1, persona 2,
 		// character 10, character 20) appears somewhere in the last 4 messages.
-		const messages = [assistantMsg(10), assistantMsg(20), userMsg(1), userMsg(2)]
+		const messages = [
+			assistantMsg(10),
+			assistantMsg(20),
+			userMsg(1),
+			userMsg(2)
+		]
 		const chat = buildChat({
 			messages,
 			characterIds: [10, 20],
@@ -211,7 +221,11 @@ describe("getNextCharacterTurn", () => {
 	})
 
 	test("hidden messages are excluded from the rotation window entirely", () => {
-		const messages = [assistantMsg(1), userMsg(1, { isHidden: true }), userMsg(1)]
+		const messages = [
+			assistantMsg(1),
+			userMsg(1, { isHidden: true }),
+			userMsg(1)
+		]
 		const chat = buildChat({
 			messages,
 			characterIds: [1],
@@ -257,13 +271,23 @@ function buildUserSplitChat({
 	personas
 }: {
 	messages: any[]
-	characters: { id: number; position: number; userId: number; isActive?: boolean }[]
+	characters: {
+		id: number
+		position: number
+		userId: number
+		isActive?: boolean
+	}[]
 	personas: { id: number; userId: number }[]
 }) {
 	return {
 		chatMessages: messages,
 		chatCharacters: characters.map((c) =>
-			chatCharacterWithUser(c.id, c.position, c.userId, c.isActive ?? true)
+			chatCharacterWithUser(
+				c.id,
+				c.position,
+				c.userId,
+				c.isActive ?? true
+			)
 		),
 		chatPersonas: personas.map((p) => chatPersonaWithUser(p.id, p.userId))
 	} as any
@@ -296,7 +320,9 @@ describe("getNextCharacterTurn - User-Split strategy", () => {
 			characters: allCharacters,
 			personas: allPersonas
 		})
-		expect(getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)).toBe(10)
+		expect(
+			getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)
+		).toBe(10)
 	})
 
 	test("a user's whole sub-cast is offered (never-replied bootstrap) before the rotation ever moves to the next user", () => {
@@ -311,7 +337,9 @@ describe("getNextCharacterTurn - User-Split strategy", () => {
 			characters: allCharacters,
 			personas: allPersonas
 		})
-		expect(getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)).toBe(30)
+		expect(
+			getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)
+		).toBe(30)
 	})
 
 	test("a quiet other user's interleaved messages don't block or skew this user's own healthy-window/due calculation", () => {
@@ -343,7 +371,9 @@ describe("getNextCharacterTurn - User-Split strategy", () => {
 		// interleaved messages weren't filtered out of the scoped history, this
 		// would compute a different (wrong) answer.
 		const chat = buildUserSplitChat({ messages, characters, personas })
-		expect(getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)).toBe(10)
+		expect(
+			getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)
+		).toBe(10)
 	})
 
 	test("a user with characters but no persona of their own can still be selected as the due group", () => {
@@ -355,7 +385,9 @@ describe("getNextCharacterTurn - User-Split strategy", () => {
 		const chat = buildUserSplitChat({ messages: [], characters, personas })
 		// Both groups tie at "never active" -> ascending userId picks user 1,
 		// whose only character (never replied) is immediately due.
-		expect(getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)).toBe(10)
+		expect(
+			getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)
+		).toBe(10)
 	})
 
 	test("due-group tie-break sorts by ascending userId, independent of position/insertion order", () => {
@@ -368,6 +400,8 @@ describe("getNextCharacterTurn - User-Split strategy", () => {
 			{ id: 2, userId: 2 }
 		]
 		const chat = buildUserSplitChat({ messages: [], characters, personas })
-		expect(getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)).toBe(11)
+		expect(
+			getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)
+		).toBe(11)
 	})
 })

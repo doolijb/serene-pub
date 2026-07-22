@@ -25,8 +25,16 @@ describe("sortKeysDeep", () => {
 
 describe("hashCanonicalJson", () => {
 	test("produces identical hashes for the same content in different key order", () => {
-		const h1 = hashCanonicalJson({ name: "Aria", tags: ["a", "b"], nested: { x: 1, y: 2 } })
-		const h2 = hashCanonicalJson({ nested: { y: 2, x: 1 }, tags: ["a", "b"], name: "Aria" })
+		const h1 = hashCanonicalJson({
+			name: "Aria",
+			tags: ["a", "b"],
+			nested: { x: 1, y: 2 }
+		})
+		const h2 = hashCanonicalJson({
+			nested: { y: 2, x: 1 },
+			tags: ["a", "b"],
+			name: "Aria"
+		})
 		expect(h1).toBe(h2)
 	})
 

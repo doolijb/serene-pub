@@ -64,7 +64,13 @@ describe("mapLorebookEntryToWorldLoreEntry", () => {
 
 	test("restores case_sensitive/use_regex from the incoming entry", () => {
 		const mapped = mapLorebookEntryToWorldLoreEntry(
-			{ keys: [], content: "", enabled: true, case_sensitive: true, use_regex: true },
+			{
+				keys: [],
+				content: "",
+				enabled: true,
+				case_sensitive: true,
+				use_regex: true
+			},
 			0
 		)
 		expect(mapped.caseSensitive).toBe(true)
@@ -81,7 +87,11 @@ describe("mapLorebookEntryToWorldLoreEntry", () => {
 			},
 			0
 		)
-		expect(mapped.extraJson).toEqual({ probability: 80, depth: 4, group: "weather" })
+		expect(mapped.extraJson).toEqual({
+			probability: 80,
+			depth: 4,
+			group: "weather"
+		})
 	})
 
 	test("strips a previously-exported serenepub key out of extraJson, restoring category instead", () => {
@@ -143,7 +153,9 @@ describe("mapLorebookEntryToWorldLoreEntry", () => {
 
 describe("entryTypeOf", () => {
 	test("defaults to 'world' for entries with no serenepub marker", () => {
-		expect(entryTypeOf({ keys: [], content: "", enabled: true })).toBe("world")
+		expect(entryTypeOf({ keys: [], content: "", enabled: true })).toBe(
+			"world"
+		)
 	})
 
 	test("defaults to 'world' for an unrecognized entryType value", () => {
@@ -180,7 +192,13 @@ describe("entryTypeOf", () => {
 describe("mapLorebookEntryToCharacterLoreEntry", () => {
 	test("maps shared fields, with no category field (world-only)", () => {
 		const mapped = mapLorebookEntryToCharacterLoreEntry(
-			{ keys: ["a"], content: "c", enabled: true, name: "N", priority: 2 },
+			{
+				keys: ["a"],
+				content: "c",
+				enabled: true,
+				name: "N",
+				priority: 2
+			},
 			1
 		)
 		expect(mapped).toEqual({
@@ -206,7 +224,14 @@ describe("mapLorebookEntryToHistoryEntry", () => {
 				content: "c",
 				enabled: true,
 				extensions: {
-					serenepub: { entryType: "history", year: 5, month: 3, day: 12, isCompleted: true, graphed: true }
+					serenepub: {
+						entryType: "history",
+						year: 5,
+						month: 3,
+						day: 12,
+						isCompleted: true,
+						graphed: true
+					}
 				}
 			},
 			2
@@ -283,7 +308,9 @@ describe("normalizeLegacyLorebookData", () => {
 
 	test("prefers an existing 'keys' array over a singular 'key' when both are present", () => {
 		const result = normalizeLegacyLorebookData({
-			entries: [{ key: "ignored", keys: ["real", "keys"], content: "..." }]
+			entries: [
+				{ key: "ignored", keys: ["real", "keys"], content: "..." }
+			]
 		})
 		expect(result.entries[0].keys).toEqual(["real", "keys"])
 	})
@@ -330,10 +357,7 @@ describe("normalizeLegacyLorebookData", () => {
 
 describe("resolveParentNodeLinks", () => {
 	test("resolves a simple parent link", () => {
-		const nodes = [
-			{ localId: 1, parentLocalId: 2 },
-			{ localId: 2 }
-		]
+		const nodes = [{ localId: 1, parentLocalId: 2 }, { localId: 2 }]
 		const realIds = new Map([
 			[1, 101],
 			[2, 102]

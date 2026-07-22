@@ -92,14 +92,15 @@ export abstract class BaseConnectionAdapter {
 		this.isAssistantMode =
 			isAssistantMode || chat.chatType === ChatTypes.ASSISTANT
 		// Deliberately derived from generatingMessageMetadata rather than its
-		// own constructor param: every adapter subclass (KoboldCpp, Ollama,
+		// own constructor param: every adapter subclass (KoboldCPP, Ollama,
 		// LMStudio, OpenAI, Anthropic, LlamaCpp) has its own constructor with
 		// an explicit destructured field list and forwards generatingMessageMetadata
 		// faithfully, but a plain boolean param added here would silently need
 		// updating in all six of those subclasses too — easy to miss (this
 		// exact bug happened once already). Piggybacking on a field that's
 		// already reliably threaded through avoids that whole class of bug.
-		this.isNarratorResponseMode = !!generatingMessageMetadata?.isNarratorResponse
+		this.isNarratorResponseMode =
+			!!generatingMessageMetadata?.isNarratorResponse
 		this.isSummarizerMode = chat.chatType === ChatTypes.SUMMARIZE
 		this.generatingMessageMetadata = generatingMessageMetadata
 		this.promptBuilder = new PromptBuilder({
@@ -296,7 +297,7 @@ export abstract class BaseConnectionAdapter {
 	 * character-perspective path — still need to produce a real `prompt` on
 	 * any text-completion connection. Without this, `prompt` was always left
 	 * undefined here, so any connection not in chat-completion mode (e.g.
-	 * KoboldCpp's default) silently generated from an empty prompt — the
+	 * KoboldCPP's default) silently generated from an empty prompt — the
 	 * exact bug Narrator response had until it was fixed by delegating into the
 	 * shared context-block pipeline instead; summarizer/assistant modes
 	 * intentionally stay minimal (no lore/character context), so they need

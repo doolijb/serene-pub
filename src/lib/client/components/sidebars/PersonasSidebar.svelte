@@ -48,8 +48,11 @@
 		| { existingPersona: SelectPersona; file: string }
 		| undefined = $state(undefined)
 	let showPersonaImportConflictModal = $state(false)
-	let exportingPersona: { id: number; name: string; avatar?: string | null } | null =
-		$state(null)
+	let exportingPersona: {
+		id: number
+		name: string
+		avatar?: string | null
+	} | null = $state(null)
 	let showExportModal = $state(false)
 	let isCreating = $state(false)
 	let showPersonaCreator = $state(false)
@@ -98,7 +101,11 @@
 		avatar?: string | null
 	}) {
 		if (!persona.id || !persona.name) return
-		exportingPersona = { id: persona.id, name: persona.name, avatar: persona.avatar }
+		exportingPersona = {
+			id: persona.id,
+			name: persona.name,
+			avatar: persona.avatar
+		}
 		showExportModal = true
 	}
 
@@ -188,7 +195,9 @@
 		socket.on(
 			"personas:importResolve:error",
 			(msg: Sockets.ErrorResponse) => {
-				toaster.error({ title: msg.error || "Failed to resolve persona import" })
+				toaster.error({
+					title: msg.error || "Failed to resolve persona import"
+				})
 			}
 		)
 		socket.on("personas:exportCard", (msg) => {
@@ -452,10 +461,16 @@
 				class="input"
 				bind:value={search}
 			/>
-			<div class="flex shrink-0 gap-1" role="group" aria-label="View mode">
+			<div
+				class="flex shrink-0 gap-1"
+				role="group"
+				aria-label="View mode"
+			>
 				<button
 					type="button"
-					class="btn btn-sm p-2 {viewMode.value === 'list' ? 'preset-filled-primary-500' : 'preset-tonal-surface'}"
+					class="btn btn-sm p-2 {viewMode.value === 'list'
+						? 'preset-filled-primary-500'
+						: 'preset-tonal-surface'}"
 					onclick={() => (viewMode.value = "list")}
 					title="List view"
 					aria-label="List view"
@@ -465,7 +480,9 @@
 				</button>
 				<button
 					type="button"
-					class="btn btn-sm p-2 {viewMode.value === 'cards' ? 'preset-filled-primary-500' : 'preset-tonal-surface'}"
+					class="btn btn-sm p-2 {viewMode.value === 'cards'
+						? 'preset-filled-primary-500'
+						: 'preset-tonal-surface'}"
 					onclick={() => (viewMode.value = "cards")}
 					title="Card view"
 					aria-label="Card view"
@@ -477,7 +494,10 @@
 		</div>
 		{#if isLoading}
 			<div class="flex items-center justify-center py-8">
-				<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+				<Icons.Loader2
+					size={20}
+					class="text-surface-400 animate-spin"
+				/>
 			</div>
 		{:else if filteredPersonas.length === 0}
 			<EmptyState
@@ -489,9 +509,16 @@
 				onCta={search ? undefined : () => (isCreating = true)}
 			/>
 		{:else if viewMode.value === "list"}
-			<div class="flex flex-col gap-2" role="list" aria-label="Personas list">
+			<div
+				class="flex flex-col gap-2"
+				role="list"
+				aria-label="Personas list"
+			>
 				{#each filteredPersonas as p (p.id)}
-					<div animate:flip={{ duration: 200 }} out:fade={{ duration: 150 }}>
+					<div
+						animate:flip={{ duration: 200 }}
+						out:fade={{ duration: 150 }}
+					>
 						<PersonaListItem
 							persona={p}
 							onclick={handlePersonaClick}
@@ -515,7 +542,10 @@
 					aria-label="Personas list"
 				>
 					{#each filteredPersonas as p (p.id)}
-						<div animate:flip={{ duration: 200 }} out:fade={{ duration: 150 }}>
+						<div
+							animate:flip={{ duration: 200 }}
+							out:fade={{ duration: 150 }}
+						>
 							<PersonaCardItem
 								persona={p}
 								onclick={handlePersonaClick}
@@ -534,14 +564,20 @@
 
 <Dialog open={showDeleteModal} onOpenChange={(e) => (showDeleteModal = e.open)}>
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
+			>
 				<div class="p-6">
 					<h2 class="mb-2 text-lg font-bold">Delete Persona?</h2>
 					<p class="mb-4">
-						Are you sure you want to delete this persona? This action
-						cannot be undone.
+						Are you sure you want to delete this persona? This
+						action cannot be undone.
 					</p>
 					<div class="flex justify-end gap-2">
 						<button
@@ -598,17 +634,29 @@
 />
 
 {#if showImportModal}
-	<Dialog open={showImportModal} onOpenChange={(e) => (showImportModal = e.open)}>
+	<Dialog
+		open={showImportModal}
+		onOpenChange={(e) => (showImportModal = e.open)}
+	>
 		<Portal>
-			<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-			<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-				<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl w-[min(95vw,560px)]">
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
+			>
+				<Dialog.Content
+					class="card bg-surface-100-900 w-[min(95vw,560px)] space-y-4 p-4 shadow-xl"
+				>
 					<div class="p-6">
 						<h2 class="mb-2 text-lg font-bold">Import Persona</h2>
 						<div class="space-y-2">
 							<div>
-								<p class="text-sm text-surface-600 dark:text-surface-400 mb-2">
-									Upload a file (PNG, APNG, JPEG, JPG, WEBP, JSON):
+								<p
+									class="text-surface-600 dark:text-surface-400 mb-2 text-sm"
+								>
+									Upload a file (PNG, APNG, JPEG, JPG, WEBP,
+									JSON):
 								</p>
 								<FileUpload
 									name="example"
@@ -620,11 +668,19 @@
 									<FileUpload.Dropzone
 										class="border-surface-300-700 bg-surface-50-950 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
 									>
-										<Icons.Upload class="text-surface-700-300 h-8 w-8" />
-										<FileUpload.Trigger class="btn btn-sm preset-filled-primary-500">
+										<Icons.Upload
+											class="text-surface-700-300 h-8 w-8"
+										/>
+										<FileUpload.Trigger
+											class="btn btn-sm preset-filled-primary-500"
+										>
 											Browse
 										</FileUpload.Trigger>
-										<span class="text-surface-700-300 text-xs">or drag and drop</span>
+										<span
+											class="text-surface-700-300 text-xs"
+										>
+											or drag and drop
+										</span>
 										<FileUpload.HiddenInput />
 									</FileUpload.Dropzone>
 								</FileUpload>

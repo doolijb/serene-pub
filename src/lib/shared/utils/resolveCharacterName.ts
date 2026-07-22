@@ -15,7 +15,10 @@
  * future fixes to edge cases like the one above) converge on one place.
  */
 export function resolveCharacterName(
-	character: { name?: string | null; nickname?: string | null } | null | undefined,
+	character:
+		| { name?: string | null; nickname?: string | null }
+		| null
+		| undefined,
 	fallback = "assistant"
 ): string {
 	return character?.nickname?.trim() || character?.name?.trim() || fallback
@@ -44,7 +47,10 @@ export function resolvePersonaName(
  * is `NOT NULL`), so only `fallback` is used for a genuinely missing user.
  */
 export function resolveUserHandle(
-	user: { username?: string | null; displayName?: string | null } | null | undefined,
+	user:
+		| { username?: string | null; displayName?: string | null }
+		| null
+		| undefined,
 	fallback = "Unknown User"
 ): string {
 	const username = user?.username?.trim()

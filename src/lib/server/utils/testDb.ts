@@ -62,7 +62,8 @@ export async function createTestUser(db: TestDb, username?: string) {
 	const [user] = await db
 		.insert(schema.users)
 		.values({
-			username: username ?? `test-user-${Math.random().toString(36).slice(2)}`
+			username:
+				username ?? `test-user-${Math.random().toString(36).slice(2)}`
 		})
 		.returning()
 	return user

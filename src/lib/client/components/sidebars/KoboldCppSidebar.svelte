@@ -20,7 +20,9 @@
 	let { onclose = $bindable() }: Props = $props()
 
 	const socket = useTypedSocket()
-	const koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
+	const koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(
+		getContext("koboldCppSettingsCtx")
+	)
 
 	let activeTab = $state("models")
 	let isConnected = $state(false)
@@ -33,7 +35,9 @@
 	let missingBinaryError: string | null = $state(null)
 
 	// Derive mode from system settings
-	let managedMode = $derived(koboldCppSettingsCtx.settings?.koboldCppManagedMode ?? null)
+	let managedMode = $derived(
+		koboldCppSettingsCtx.settings?.koboldCppManagedMode ?? null
+	)
 	let isManaged = $derived(managedMode === "managed")
 	let isExternal = $derived(managedMode === "external")
 	let isUnconfigured = $derived(managedMode === null)
@@ -44,7 +48,9 @@
 
 	function checkConnection() {
 		isTesting = true
-		socket.emit("koboldcpp:version", {})
+		socket.emit("koboldcpp:version", {
+			baseUrl: baseUrlField.trim() || undefined
+		})
 	}
 
 	function handleSaveBaseUrl() {
@@ -63,7 +69,8 @@
 	}
 
 	$effect(() => {
-		baseUrlField = koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl ?? ""
+		baseUrlField =
+			koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl ?? ""
 	})
 
 	// Auto-check connection for external mode
@@ -75,61 +82,85 @@
 
 	// When managed mode is set: if binary not yet chosen, show picker
 	$effect(() => {
-		if (isManaged && !koboldCppSettingsCtx.settings?.koboldCppManagedBinaryVariant) {
+		if (
+			isManaged &&
+			!koboldCppSettingsCtx.settings?.koboldCppManagedBinaryVariant
+		) {
 			showVariantPicker = true
-		} else if (isManaged && koboldCppSettingsCtx.settings?.koboldCppManagedBinaryVariant) {
+		} else if (
+			isManaged &&
+			koboldCppSettingsCtx.settings?.koboldCppManagedBinaryVariant
+		) {
 			showVariantPicker = false
 		}
 	})
 
 	onMount(() => {
-		socket.on("koboldcpp:version", (message: Sockets.KoboldCpp.Version.Response) => {
-			isTesting = false
-			isLocal = message.isLocal
-			if (!isConnected) {
-				isConnected = !!message.version
-				if (message.version) {
-					toaster.success({ title: "Connected to KoboldCPP", description: `Version ${message.version}` })
+		socket.on(
+			"koboldcpp:version",
+			(message: Sockets.KoboldCPP.Version.Response) => {
+				isTesting = false
+				isLocal = message.isLocal
+				if (!isConnected) {
+					isConnected = !!message.version
+					if (message.version) {
+						toaster.success({
+							title: "Connected to KoboldCPP",
+							description: `Version ${message.version}`
+						})
+					}
 				}
 			}
-		})
-		socket.on("koboldcpp:version:error", () => {
+		)
+		socket.on("koboldcpp:version:error", (message: { error?: string }) => {
 			isTesting = false
+			toaster.error({
+				title: "Connection test failed",
+				description:
+					message.error || "Could not reach KoboldCPP at that URL."
+			})
 		})
-		socket.on("koboldcpp:setBaseUrl", (message: Sockets.KoboldCpp.SetBaseUrl.Response) => {
-			isSavingBaseUrl = false
-			if (message.success) {
-				toaster.success({ title: "URL updated" })
-				checkConnection()
-			} else {
-				toaster.error({ title: "Failed to update URL" })
+		socket.on(
+			"koboldcpp:setBaseUrl",
+			(message: Sockets.KoboldCPP.SetBaseUrl.Response) => {
+				isSavingBaseUrl = false
+				if (message.success) {
+					toaster.success({ title: "URL updated" })
+					checkConnection()
+				} else {
+					toaster.error({ title: "Failed to update URL" })
+				}
 			}
-		})
+		)
 		socket.on("koboldcpp:setManagedMode", () => {
 			// Mode change is reflected via systemSettingsCtx push
 		})
-		socket.on("koboldcpp:subprocessStatus", (msg: Sockets.KoboldCpp.SubprocessStatus.Response) => {
-			if (msg.status === "running" && !isConnected) {
-				isConnected = true
+		socket.on(
+			"koboldcpp:subprocessStatus",
+			(msg: Sockets.KoboldCPP.SubprocessStatus.Response) => {
+				if (msg.status === "running" && !isConnected) {
+					isConnected = true
+				}
+				// The binary can go missing without any in-app action (eg. the host lost
+				// the volume between restarts) — without this, the failure only ever
+				// shows as a small error line buried in the Perf tab, which the sidebar
+				// doesn't default to, so a crash on auto-start can go unnoticed.
+				const isMissingBinary =
+					msg.status === "crashed" &&
+					!!msg.lastError &&
+					(msg.lastError.includes("Binary not found") ||
+						msg.lastError.includes("Binary not configured"))
+				missingBinaryError = isMissingBinary ? msg.lastError : null
+				if (isMissingBinary && msg.lastError !== lastToastedError) {
+					lastToastedError = msg.lastError
+					toaster.error({
+						title: "KoboldCPP binary is missing",
+						description:
+							"It may have been lost from storage between restarts. Re-download it below."
+					})
+				}
 			}
-			// The binary can go missing without any in-app action (eg. the host lost
-			// the volume between restarts) — without this, the failure only ever
-			// shows as a small error line buried in the Perf tab, which the sidebar
-			// doesn't default to, so a crash on auto-start can go unnoticed.
-			const isMissingBinary =
-				msg.status === "crashed" &&
-				!!msg.lastError &&
-				(msg.lastError.includes("Binary not found") ||
-					msg.lastError.includes("Binary not configured"))
-			missingBinaryError = isMissingBinary ? msg.lastError : null
-			if (isMissingBinary && msg.lastError !== lastToastedError) {
-				lastToastedError = msg.lastError
-				toaster.error({
-					title: "KoboldCPP binary is missing",
-					description: "It may have been lost from storage between restarts. Re-download it below."
-				})
-			}
-		})
+		)
 	})
 
 	onDestroy(() => {
@@ -148,17 +179,28 @@
 		<!-- Feature disabled by admin -->
 		<div class="flex flex-1 items-center justify-center p-4">
 			<div class="text-center">
-				<Icons.AlertCircle class="text-warning-500 mx-auto mb-4 h-12 w-12" />
-				<h3 class="mb-2 text-lg font-semibold">KoboldCPP Manager Disabled</h3>
-				<p class="text-surface-700-300 text-sm">Enable KoboldCPP Manager in Settings to use this feature.</p>
+				<Icons.AlertCircle
+					class="text-warning-500 mx-auto mb-4 h-12 w-12"
+				/>
+				<h3 class="mb-2 text-lg font-semibold">
+					KoboldCPP Manager Disabled
+				</h3>
+				<p class="text-surface-700-300 text-sm">
+					Enable KoboldCPP Manager in Settings to use this feature.
+				</p>
 			</div>
 		</div>
-
 	{:else if isUnconfigured}
 		<!-- First-time setup: choose mode -->
-		<div class="flex items-center justify-between border-b border-surface-300-700 px-3 py-2">
+		<div
+			class="border-surface-300-700 flex items-center justify-between border-b px-3 py-2"
+		>
 			<div class="flex items-center gap-2">
-				<span class="inline-block h-5 w-5 flex-shrink-0" style="background-color: currentColor; mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain; -webkit-mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain;" aria-hidden="true"></span>
+				<span
+					class="inline-block h-5 w-5 flex-shrink-0"
+					style="background-color: currentColor; mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain; -webkit-mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain;"
+					aria-hidden="true"
+				></span>
 				<span class="text-sm font-semibold">KoboldCPP Setup</span>
 			</div>
 		</div>
@@ -168,15 +210,23 @@
 				onChooseExternal={() => {}}
 			/>
 		</div>
-
 	{:else if isManaged && showVariantPicker}
 		<!-- Managed: pick & download binary -->
-		<div class="flex items-center justify-between border-b border-surface-300-700 px-3 py-2">
+		<div
+			class="border-surface-300-700 flex items-center justify-between border-b px-3 py-2"
+		>
 			<div class="flex items-center gap-2">
-				<span class="inline-block h-5 w-5 flex-shrink-0" style="background-color: currentColor; mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain; -webkit-mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain;" aria-hidden="true"></span>
+				<span
+					class="inline-block h-5 w-5 flex-shrink-0"
+					style="background-color: currentColor; mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain; -webkit-mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain;"
+					aria-hidden="true"
+				></span>
 				<span class="text-sm font-semibold">Download KoboldCPP</span>
 			</div>
-			<button class="btn btn-sm preset-filled-surface-400-600 text-xs" onclick={handleReset}>
+			<button
+				class="btn btn-sm preset-filled-surface-400-600 text-xs"
+				onclick={handleReset}
+			>
 				<Icons.ArrowLeft size={12} />
 				Back
 			</button>
@@ -194,15 +244,23 @@
 				}}
 			/>
 		</div>
-
 	{:else if isExternal && !isConnected}
 		<!-- External: URL setup -->
-		<div class="flex items-center justify-between border-b border-surface-300-700 px-3 py-2">
+		<div
+			class="border-surface-300-700 flex items-center justify-between border-b px-3 py-2"
+		>
 			<div class="flex items-center gap-2">
-				<span class="inline-block h-5 w-5 flex-shrink-0" style="background-color: currentColor; mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain; -webkit-mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain;" aria-hidden="true"></span>
+				<span
+					class="inline-block h-5 w-5 flex-shrink-0"
+					style="background-color: currentColor; mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain; -webkit-mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain;"
+					aria-hidden="true"
+				></span>
 				<span class="text-sm font-semibold">Connect to KoboldCPP</span>
 			</div>
-			<button class="btn btn-sm preset-filled-surface-400-600 text-xs" onclick={handleReset}>
+			<button
+				class="btn btn-sm preset-filled-surface-400-600 text-xs"
+				onclick={handleReset}
+			>
 				<Icons.ArrowLeft size={12} />
 				Back
 			</button>
@@ -212,7 +270,10 @@
 				Enter the URL of your running KoboldCPP instance.
 			</p>
 			<div>
-				<label class="text-surface-600-400 mb-1 block text-xs font-medium" for="koboldBaseUrl">
+				<label
+					class="text-surface-600-400 mb-1 block text-xs font-medium"
+					for="koboldBaseUrl"
+				>
 					Server URL
 				</label>
 				<input
@@ -253,14 +314,18 @@
 				</button>
 			</div>
 			<div class="border-surface-300-700 mt-2 border-t pt-4">
-				<p class="text-surface-700-300 mb-2 text-xs">Want Serene Pub to manage KoboldCPP for you?</p>
-				<button class="btn btn-sm preset-tonal-primary w-full" onclick={handleReset}>
+				<p class="text-surface-700-300 mb-2 text-xs">
+					Want Serene Pub to manage KoboldCPP for you?
+				</p>
+				<button
+					class="btn btn-sm preset-tonal-primary w-full"
+					onclick={handleReset}
+				>
 					<Icons.Bot size={14} />
 					Switch to Managed Mode
 				</button>
 			</div>
 		</div>
-
 	{:else}
 		<!-- Main tab view (managed running OR external connected) -->
 		{#if missingBinaryError}
@@ -281,61 +346,88 @@
 			<Tabs value={activeTab} onValueChange={handleTabChange}>
 				<Tabs.List class="flex flex-wrap gap-1">
 					<Tabs.Trigger value="models">
-						<span title="Models" aria-label="Models tab" class="flex items-center gap-1">
+						<span
+							title="Models"
+							aria-label="Models tab"
+							class="flex items-center gap-1"
+						>
 							<Icons.Package size={20} class="inline" />
 							{#if activeTab === "models"}Models{/if}
 						</span>
 					</Tabs.Trigger>
 					<Tabs.Trigger value="available">
-						<span title="Available" aria-label="Available tab" class="flex items-center gap-1">
+						<span
+							title="Available"
+							aria-label="Available tab"
+							class="flex items-center gap-1"
+						>
 							<Icons.Search size={20} class="inline" />
 							{#if activeTab === "available"}Available{/if}
 						</span>
 					</Tabs.Trigger>
 					<Tabs.Trigger value="downloads">
-						<span title="Downloads" aria-label="Downloads tab" class="flex items-center gap-1">
+						<span
+							title="Downloads"
+							aria-label="Downloads tab"
+							class="flex items-center gap-1"
+						>
 							<Icons.Download size={20} class="inline" />
 							{#if activeTab === "downloads"}Downloads{/if}
 						</span>
 					</Tabs.Trigger>
 					<Tabs.Trigger value="perf">
-						<span title="Performance" aria-label="Performance tab" class="flex items-center gap-1">
+						<span
+							title="Performance"
+							aria-label="Performance tab"
+							class="flex items-center gap-1"
+						>
 							<Icons.Gauge size={20} class="inline" />
 							{#if activeTab === "perf"}Performance{/if}
 						</span>
 					</Tabs.Trigger>
 					<Tabs.Trigger value="settings">
-						<span title="Settings" aria-label="Settings tab" class="flex items-center gap-1">
+						<span
+							title="Settings"
+							aria-label="Settings tab"
+							class="flex items-center gap-1"
+						>
 							<Icons.Settings size={20} class="inline" />
 							{#if activeTab === "settings"}Settings{/if}
 						</span>
 					</Tabs.Trigger>
 				</Tabs.List>
 				<Tabs.Content value="models">
-						{#if activeTab === "models"}
-							<KoboldCppModelsTab />
-						{/if}
-					</Tabs.Content>
-					<Tabs.Content value="available">
-						{#if activeTab === "available"}
-							<KoboldCppDownloadTab {isLocal} onDownloadStart={() => (activeTab = "downloads")} />
-						{/if}
-					</Tabs.Content>
-					<Tabs.Content value="downloads">
-						{#if activeTab === "downloads"}
-							<KoboldCppDownloadsTab />
-						{/if}
-					</Tabs.Content>
-					<Tabs.Content value="perf">
-						{#if activeTab === "perf"}
-							<KoboldCppPerfTab {isManaged} />
-						{/if}
-					</Tabs.Content>
-					<Tabs.Content value="settings">
-						{#if activeTab === "settings"}
-							<KoboldCppSettingsTab onReset={handleReset} {isManaged} onUpdateBinary={() => (showVariantPicker = true)} />
-						{/if}
-					</Tabs.Content>
+					{#if activeTab === "models"}
+						<KoboldCppModelsTab />
+					{/if}
+				</Tabs.Content>
+				<Tabs.Content value="available">
+					{#if activeTab === "available"}
+						<KoboldCppDownloadTab
+							{isLocal}
+							onDownloadStart={() => (activeTab = "downloads")}
+						/>
+					{/if}
+				</Tabs.Content>
+				<Tabs.Content value="downloads">
+					{#if activeTab === "downloads"}
+						<KoboldCppDownloadsTab />
+					{/if}
+				</Tabs.Content>
+				<Tabs.Content value="perf">
+					{#if activeTab === "perf"}
+						<KoboldCppPerfTab {isManaged} />
+					{/if}
+				</Tabs.Content>
+				<Tabs.Content value="settings">
+					{#if activeTab === "settings"}
+						<KoboldCppSettingsTab
+							onReset={handleReset}
+							{isManaged}
+							onUpdateBinary={() => (showVariantPicker = true)}
+						/>
+					{/if}
+				</Tabs.Content>
 			</Tabs>
 		</div>
 	{/if}

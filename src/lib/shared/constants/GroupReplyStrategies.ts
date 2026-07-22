@@ -11,7 +11,10 @@ export class GroupReplyStrategies {
 
 	static options = [
 		{ value: GroupReplyStrategies.ORDERED, label: "Ordered (Round-robin)" },
-		{ value: GroupReplyStrategies.USER_SPLIT, label: "User-Split (Round-robin by user)" },
+		{
+			value: GroupReplyStrategies.USER_SPLIT,
+			label: "User-Split (Round-robin by user)"
+		},
 		{ value: GroupReplyStrategies.MANUAL, label: "Manual (User selects)" }
 		// [GroupReplyStrategies.NATURAL, "Natural (Conversation flow)"]
 	]

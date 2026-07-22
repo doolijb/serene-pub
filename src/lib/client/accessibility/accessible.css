@@ -1,0 +1,528 @@
+/*
+ * Document View (accessible) stylesheet.
+ *
+ * Deliberately NOT importing app.css / Tailwind / Skeleton — plain CSS,
+ * scoped entirely under `.a11y-root` so it can never leak into (or be
+ * affected by) the main app's styling, even though this file ends up in the
+ * same global bundle (Layout.svelte's app.css import works the same way).
+ * Dark/light mode uses its own `data-a11y-mode` attribute on `.a11y-root`,
+ * never the main app's `data-mode`/`data-theme` on <html>.
+ *
+ * Contrast targets: body text and interactive elements meet WCAG AAA
+ * (>=7:1) against their background in both modes. Only two colors carry
+ * meaning (the accent, and the error red) — everything else is pure
+ * black/white/gray so nothing depends on color perception alone (all
+ * interactive/error states also carry a text label or icon-free symbol).
+ */
+
+.a11y-root {
+	--a11y-font-scale: 1;
+	--a11y-space: 1em;
+
+	font-family:
+		system-ui,
+		-apple-system,
+		"Segoe UI",
+		Roboto,
+		Helvetica,
+		Arial,
+		sans-serif;
+	font-size: calc(16px * var(--a11y-font-scale));
+	line-height: 1.6;
+	min-height: 100vh;
+	display: flex;
+	flex-direction: column;
+	/* Inherited, so this covers every text node in Document View: a single
+	   long unbroken word (a heading like "Documentation" at 200% text
+	   scale on a narrow viewport, a URL, a path, a hyphen-free compound
+	   like "variant/directory" in doc prose) has no default break
+	   opportunity and would otherwise widen the whole page past the
+	   viewport instead of wrapping — the same WCAG 1.4.10 Reflow failure
+	   this file has now hit in three unrelated places (the .a11y-inline-add
+	   <select> fix above, inline <code>, and a plain page <h1>), which is
+	   why this is set once here instead of chased per-component. */
+	overflow-wrap: anywhere;
+}
+
+/* Deliberately NOT pure #000/#fff: flat black-on-white (or white-on-black)
+   maximizes contrast (21:1) but that same extremity causes "halation" —
+   text visibly blurring/vibrating — for people with astigmatism, and can
+   trigger visual stress for some photosensitive/dyslexic users. These
+   values still land around 17:1, comfortably clear of the WCAG AAA 7:1
+   floor, while taking the harshest edge off. */
+.a11y-root[data-a11y-mode="dark"] {
+	--a11y-bg: #0d0d0d;
+	--a11y-bg-raised: #1c1c1c;
+	--a11y-fg: #f0f0ee;
+	--a11y-fg-muted: #cacac8;
+	--a11y-border: #7a7a7a;
+	--a11y-accent: #7fd9ff;
+	--a11y-accent-fg: #000000;
+	--a11y-error: #ff8a8a;
+	--a11y-error-fg: #000000;
+	background: var(--a11y-bg);
+	color: var(--a11y-fg);
+}
+
+.a11y-root[data-a11y-mode="light"] {
+	--a11y-bg: #f7f6f2;
+	--a11y-bg-raised: #efeee9;
+	--a11y-fg: #161616;
+	--a11y-fg-muted: #3a3a3a;
+	--a11y-border: #4a4a4a;
+	--a11y-accent: #004f7c;
+	--a11y-accent-fg: #ffffff;
+	--a11y-error: #8a0000;
+	--a11y-error-fg: #ffffff;
+	background: var(--a11y-bg);
+	color: var(--a11y-fg);
+}
+
+.a11y-root * {
+	box-sizing: border-box;
+}
+
+.a11y-root :where(h1, h2, h3, h4) {
+	line-height: 1.25;
+	margin: 0 0 0.5em 0;
+}
+.a11y-root h1 {
+	font-size: 1.75em;
+}
+.a11y-root h2 {
+	font-size: 1.4em;
+	/* Pages like System Settings stack several h2 sections in a row — a top
+	   margin keeps each new section visually separated from whatever the
+	   previous one ended with, instead of the two colliding together. Reset
+	   to 0 when it's the first thing in its container (eg. a list-item card
+	   title): the container's own padding/border already separates it from
+	   whatever comes before, so the extra margin only added uneven empty
+	   space above the heading in every card. */
+	margin-top: 1.75em;
+}
+.a11y-root h2:first-child {
+	margin-top: 0;
+}
+.a11y-root h3 {
+	font-size: 1.15em;
+}
+
+.a11y-root p {
+	margin: 0 0 1.1em 0;
+}
+
+/* :where() keeps this at the same specificity as `.a11y-root` alone (zero
+   contribution from the `a`), so a later, single-class rule like `.a11y-btn`
+   can actually win by source order instead of losing to a plain-element
+   selector that happens to include a class + tag combo — without this, an
+   <a class="a11y-btn"> (used throughout for "Create a new X", "Browse
+   Library", etc.) rendered with the accent link color instead of its
+   button's intended text color, on top of the button's own background. */
+.a11y-root :where(a) {
+	color: var(--a11y-accent);
+	text-decoration: underline;
+	text-underline-offset: 0.15em;
+}
+/* :visited written INSIDE :where() (not `:where(a):visited`) — a bare
+   `:visited` outside the :where() group still counts as a real pseudo-class
+   toward specificity, which was enough to beat component-specific rules
+   like `.a11y-nav a` (a visited-but-not-yet-revisited nav link would render
+   in the accent/"visited" color instead of matching its unvisited
+   siblings, an inconsistency with no signal value here — visited-state only
+   matters for plain reference links, not navigation chrome). */
+.a11y-root :where(a:visited) {
+	color: var(--a11y-accent);
+}
+
+/* Every interactive element gets a thick, high-contrast, always-visible-on-
+   keyboard-focus outline — never rely on the browser default, which several
+   browsers suppress or under-style. */
+.a11y-root
+	:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+	outline: 0.2em solid var(--a11y-accent);
+	outline-offset: 0.15em;
+}
+
+.a11y-skip-link {
+	position: absolute;
+	top: -999px;
+	left: 0;
+	background: var(--a11y-accent);
+	color: var(--a11y-accent-fg);
+	padding: 0.75em 1em;
+	font-weight: 700;
+	z-index: 1000;
+}
+.a11y-skip-link:focus {
+	top: 0;
+	position: fixed;
+}
+
+.a11y-header {
+	border-bottom: 0.15em solid var(--a11y-border);
+	padding: 0.9em 1em;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1em;
+}
+
+.a11y-header .a11y-brand {
+	font-weight: 700;
+	font-size: 1.1em;
+	text-decoration: none;
+	color: var(--a11y-fg);
+}
+
+.a11y-header-controls {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75em;
+	align-items: center;
+}
+
+.a11y-nav {
+	border-bottom: 0.15em solid var(--a11y-border);
+	padding: 0.75em 1em;
+}
+.a11y-nav ul {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-wrap: wrap;
+	/* Generous gap between nav links — adjacent targets that sit too close
+	   together are the single easiest way to mis-click/mis-tap the wrong
+	   one, especially for anyone with limited motor precision. */
+	gap: 0.75em;
+}
+.a11y-nav a {
+	display: inline-flex;
+	align-items: center;
+	min-height: 2.75em;
+	padding: 0.4em 0.9em;
+	text-decoration: none;
+	border: 0.1em solid var(--a11y-border);
+	color: var(--a11y-fg);
+}
+.a11y-nav a[aria-current="page"] {
+	background: var(--a11y-accent);
+	color: var(--a11y-accent-fg);
+	border-color: var(--a11y-accent);
+	font-weight: 700;
+}
+.a11y-nav a:hover {
+	background: var(--a11y-bg-raised);
+}
+.a11y-nav a[aria-current="page"]:hover {
+	background: var(--a11y-accent);
+}
+
+.a11y-main {
+	flex: 1;
+	padding: 1em;
+	max-width: 60em;
+	width: 100%;
+	margin: 0 auto;
+}
+
+.a11y-footer {
+	border-top: 0.15em solid var(--a11y-border);
+	padding: 0.75em 1em;
+	font-size: 0.9em;
+	color: var(--a11y-fg-muted);
+}
+
+/* Buttons */
+.a11y-btn {
+	font: inherit;
+	font-weight: 700;
+	/* Meets the WCAG 2.5.5 (AAA) 44x44 CSS px target size even for a
+	   single-character label, not just whatever padding+content happens to
+	   add up to. */
+	min-height: 2.75em;
+	min-width: 2.75em;
+	padding: 0.6em 1.1em;
+	border: 0.15em solid var(--a11y-fg);
+	background: var(--a11y-fg);
+	color: var(--a11y-bg);
+	cursor: pointer;
+	/* A <button> centers its content by default; an <a class="a11y-btn">
+	   (used throughout for "Create a new X", "Browse Library", etc.) is
+	   inline by default and would otherwise sit top-left once min-height
+	   forces it taller than a single line of text. inline-flex keeps both
+	   element types visually identical. */
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	/* The border/fill already signal "this is a button" — an underline on
+	   top of that is redundant noise, unlike a plain inline text link where
+	   the underline IS the non-color affordance (see the :where(a) rule
+	   above, which this deliberately overrides for anything button-styled). */
+	text-decoration: none;
+}
+.a11y-btn:hover {
+	opacity: 0.85;
+}
+.a11y-btn:disabled {
+	cursor: not-allowed;
+	opacity: 0.5;
+}
+.a11y-btn-secondary {
+	background: transparent;
+	color: var(--a11y-fg);
+}
+.a11y-btn-danger {
+	background: var(--a11y-error);
+	color: var(--a11y-error-fg);
+	border-color: var(--a11y-error);
+}
+.a11y-btn-small {
+	/* Smaller, but still clears the WCAG 2.5.8 (AA) 24x24 CSS px minimum —
+	   used for repeated per-row actions (edit/delete) where full-size
+	   buttons would overwhelm a list; always paired with generous gaps
+	   (see .a11y-list-item-actions) so adjacent small buttons stay easy to
+	   tell apart and hit correctly. */
+	min-height: 2em;
+	min-width: 2em;
+	padding: 0.4em 0.75em;
+	font-size: 0.9em;
+}
+
+/* Forms */
+.a11y-field {
+	display: flex;
+	flex-direction: column;
+	gap: 0.35em;
+	margin-bottom: 1.5em;
+}
+.a11y-field label {
+	font-weight: 700;
+}
+.a11y-field .a11y-hint {
+	font-size: 0.85em;
+	color: var(--a11y-fg-muted);
+	margin: 0;
+}
+.a11y-root :where(input, select, textarea) {
+	font: inherit;
+	color: var(--a11y-fg);
+	background: var(--a11y-bg);
+	border: 0.15em solid var(--a11y-border);
+	padding: 0.5em 0.6em;
+	min-height: 2.75em;
+	width: 100%;
+	max-width: 40em;
+}
+.a11y-root input[type="checkbox"] {
+	min-height: 0;
+}
+.a11y-root textarea {
+	min-height: 6em;
+	resize: vertical;
+}
+.a11y-root fieldset {
+	border: 0.15em solid var(--a11y-border);
+	padding: 1em;
+	margin: 0 0 1.25em 0;
+}
+.a11y-root legend {
+	font-weight: 700;
+	padding: 0 0.4em;
+}
+.a11y-checkbox-field {
+	display: flex;
+	align-items: center;
+	gap: 0.6em;
+	margin-bottom: 1.1em;
+}
+.a11y-checkbox-field input {
+	width: auto;
+	/* Large hit target for switch-access/motor-impaired users. */
+	width: 1.4em;
+	height: 1.4em;
+}
+
+/* A <select>/<input> paired with an "Add" button (chat characters/personas/tags). */
+.a11y-inline-add {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75em;
+	align-items: center;
+	margin-bottom: 0.75em;
+}
+.a11y-inline-add select,
+.a11y-inline-add input {
+	width: auto;
+	flex: 1 1 16em;
+	/* Flex items refuse to shrink below their own content's intrinsic size
+	   by default (min-width: auto) — for a <select>, that's driven by its
+	   widest option text, which easily exceeds a narrow viewport once font
+	   scaling is on. Without this override that forces horizontal page
+	   scroll instead of wrapping, which fails WCAG 1.4.10 Reflow. */
+	min-width: 0;
+}
+
+/* Rendered markdown documentation content (see /document-view/docs). Scoped
+   under its own wrapper class rather than bare ul/li/table/etc. selectors so
+   it can't leak into unrelated markup elsewhere in Document View — .a11y-list
+   in particular already gives <ul> its own bullet-free, bordered-card look
+   for nav/list pages, and a global list-style reset here would fight it. */
+.a11y-doc-content h5 {
+	font-size: 1em;
+	font-weight: 700;
+	margin: 0 0 0.5em 0;
+}
+.a11y-doc-content h6 {
+	font-size: 0.95em;
+	font-weight: 700;
+	margin: 0 0 0.5em 0;
+}
+.a11y-doc-content :where(ul, ol) {
+	margin: 0 0 1.1em 0;
+	padding-left: 1.75em;
+}
+.a11y-doc-content li {
+	margin-bottom: 0.4em;
+}
+.a11y-doc-content code {
+	font-family: ui-monospace, "SFMono-Regular", Consolas, Menlo, monospace;
+	/* The globally-bundled Tailwind/Skeleton CSS sets its own explicit color
+	   on <code> (present in the bundle regardless of which shell renders —
+	   see the html/body background-bleed note in AccessibleShell.svelte).
+	   An inherited value always loses to ANY explicit rule on the element
+	   itself, no matter the specificity math, so simply not setting color
+	   here isn't enough — it must be set explicitly to win. Without this,
+	   inline code rendered as near-black text on the dark theme's
+	   near-black raised background: readable in neither mode. */
+	color: var(--a11y-fg);
+	background: var(--a11y-bg-raised);
+	border: 0.1em solid var(--a11y-border);
+	padding: 0.1em 0.35em;
+	font-size: 0.9em;
+	/* Some browsers default inline <code> to white-space: nowrap, which on
+	   its own defeats overflow-wrap below (nowrap forbids every break
+	   opportunity, including "anywhere" ones) — reset to normal first so
+	   long unbroken tokens (URLs, env var names, paths) actually get a
+	   chance to wrap instead of widening the whole page (WCAG 1.4.10
+	   Reflow, same class of bug as the earlier <select> and table cases).
+	   Restored to `inherit` for code *inside* <pre> below, since multi-line
+	   code samples should keep their real formatting and scroll instead. */
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+.a11y-doc-content pre {
+	background: var(--a11y-bg-raised);
+	border: 0.15em solid var(--a11y-border);
+	padding: 1em;
+	margin: 0 0 1.1em 0;
+	/* Long unwrapped code lines get their own scroll region rather than
+	   forcing the whole page to scroll horizontally (WCAG 1.4.10 Reflow) —
+	   the same fix as the .a11y-inline-add select overflow, applied here
+	   pre-emptively since code samples are exactly this kind of content. */
+	overflow-x: auto;
+}
+.a11y-doc-content pre code {
+	background: none;
+	border: none;
+	padding: 0;
+	font-size: 0.9em;
+	white-space: inherit;
+}
+.a11y-doc-content blockquote {
+	border-left: 0.25em solid var(--a11y-border);
+	margin: 0 0 1.1em 0;
+	padding: 0.1em 0 0.1em 1em;
+	color: var(--a11y-fg-muted);
+}
+.a11y-doc-content hr {
+	border: none;
+	border-top: 0.15em solid var(--a11y-border);
+	margin: 1.75em 0;
+}
+.a11y-doc-content table {
+	border-collapse: collapse;
+	margin: 0 0 1.1em 0;
+	max-width: 100%;
+	/* Same reflow concern as the pre/code block above — a wide table scrolls
+	   within itself instead of pushing the whole page wider than the
+	   viewport. */
+	display: block;
+	overflow-x: auto;
+}
+.a11y-doc-content :where(th, td) {
+	border: 0.1em solid var(--a11y-border);
+	padding: 0.5em 0.75em;
+	text-align: left;
+}
+.a11y-doc-content th {
+	background: var(--a11y-bg-raised);
+}
+
+.a11y-root kbd {
+	font-family: inherit;
+	font-size: 0.9em;
+	font-weight: 700;
+	border: 0.15em solid var(--a11y-border);
+	border-radius: 0.25em;
+	padding: 0.15em 0.5em;
+	background: var(--a11y-bg-raised);
+}
+
+.a11y-error-text {
+	color: var(--a11y-error);
+	font-weight: 700;
+}
+
+/* Status / live regions */
+.a11y-status {
+	border: 0.15em solid var(--a11y-border);
+	background: var(--a11y-bg-raised);
+	padding: 0.9em 1.1em;
+	margin-bottom: 1.25em;
+}
+.a11y-status-error {
+	border-color: var(--a11y-error);
+}
+
+/* Lists (personas, characters, chats, connections, models, users, ...) */
+.a11y-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+.a11y-list-item {
+	border: 0.15em solid var(--a11y-border);
+	padding: 1em 1.1em;
+	margin-bottom: 1em;
+}
+.a11y-list-item h3 {
+	margin: 0 0 0.3em 0;
+}
+.a11y-list-item-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.6em;
+	margin-top: 0.75em;
+}
+
+/* Visually hidden but screen-reader accessible. */
+.a11y-sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.a11y-root * {
+		animation: none !important;
+		transition: none !important;
+	}
+}

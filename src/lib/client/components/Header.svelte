@@ -3,19 +3,33 @@
 	import { getContext, onMount, onDestroy } from "svelte"
 
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
-	let vectorizationCtx: VectorizationCtx = $state(getContext("vectorizationCtx"))
+	let vectorizationCtx: VectorizationCtx = $state(
+		getContext("vectorizationCtx")
+	)
 	let taskQueueCtx: TaskQueueCtx = $state(getContext("taskQueueCtx"))
 	let graphBuildsCtx: GraphBuildsCtx = $state(getContext("graphBuildsCtx"))
-	let sceneSummarizesCtx: SceneSummarizesCtx = $state(getContext("sceneSummarizesCtx"))
-	let compileEntriesCtx: CompileEntriesCtx = $state(getContext("compileEntriesCtx"))
+	let sceneSummarizesCtx: SceneSummarizesCtx = $state(
+		getContext("sceneSummarizesCtx")
+	)
+	let compileEntriesCtx: CompileEntriesCtx = $state(
+		getContext("compileEntriesCtx")
+	)
 	let userCtx: UserCtx = $state(getContext("userCtx"))
 
 	let reviewCount = $derived(
-		((graphBuildsCtx?.activeBuild?.status === "review" || graphBuildsCtx?.activeBuild?.status === "error") ? 1 : 0) +
-		(sceneSummarizesCtx?.activities?.filter((a) => a.status === "review").length ?? 0) +
-		(compileEntriesCtx?.activities?.filter((a) => a.status === "review").length ?? 0)
+		(graphBuildsCtx?.activeBuild?.status === "review" ||
+		graphBuildsCtx?.activeBuild?.status === "error"
+			? 1
+			: 0) +
+			(sceneSummarizesCtx?.activities?.filter(
+				(a) => a.status === "review"
+			).length ?? 0) +
+			(compileEntriesCtx?.activities?.filter((a) => a.status === "review")
+				.length ?? 0)
 	)
-	let activityBadgeCount = $derived(reviewCount + (taskQueueCtx?.tasks?.length ?? 0))
+	let activityBadgeCount = $derived(
+		reviewCount + (taskQueueCtx?.tasks?.length ?? 0)
+	)
 
 	// Prevent body scroll when mobile menu is open
 	$effect(() => {
@@ -46,12 +60,13 @@
 		<nav
 			class="hidden flex-1 justify-start gap-2 lg:flex"
 			aria-label="Left navigation"
-
 		>
 			{#each panelsCtx.getOrderedEntries(panelsCtx.leftNav, panelsCtx.leftNavOrder || []) as [key, item]}
 				{#if item?.icon}
 					{@const isOpen = panelsCtx.leftPanel === key}
-					{@const isVectorizationRunning = key === "connections" && vectorizationCtx?.status === "running"}
+					{@const isVectorizationRunning =
+						key === "connections" &&
+						vectorizationCtx?.status === "running"}
 					<button
 						title={item.title}
 						onclick={() => panelsCtx.openPanel({ key })}
@@ -106,7 +121,6 @@
 		<nav
 			class="hidden flex-1 items-center justify-end gap-2 lg:flex"
 			aria-label="Right navigation"
-
 		>
 			{#each Object.entries(panelsCtx.rightNav) as [key, item]}
 				{#if item?.icon}
@@ -126,8 +140,12 @@
 							aria-hidden="true"
 						/>
 						{#if key === "activity" && activityBadgeCount > 0}
-							<span class="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-warning-500 text-[10px] font-bold text-white">
-								{activityBadgeCount > 9 ? "9+" : activityBadgeCount}
+							<span
+								class="bg-warning-500 absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold text-white"
+							>
+								{activityBadgeCount > 9
+									? "9+"
+									: activityBadgeCount}
 							</span>
 						{/if}
 					</button>

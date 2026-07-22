@@ -16,33 +16,42 @@ export function buildMockTemplateContext(): TemplateContext {
 			name: "Old Marrow",
 			description:
 				"A moss-covered stone golem who has guarded the Sunken Archive for three hundred years and is very tired of it.",
-			personality: "Patient to the point of exasperation. Speaks in short, weighty sentences."
+			personality:
+				"Patient to the point of exasperation. Speaks in short, weighty sentences."
 		}
 	]
 
 	const personas = [
 		{
 			name: "Ana",
-			description: "A freelance cartographer chasing rumors of a library that moves itself."
+			description:
+				"A freelance cartographer chasing rumors of a library that moves itself."
 		}
 	]
 
 	const worldLore = [
 		{
 			name: "The Sunken Archive",
-			content: "A library that submerges itself at dawn and resurfaces at dusk, somewhere different each time."
+			content:
+				"A library that submerges itself at dawn and resurfaces at dusk, somewhere different each time."
 		}
 	]
 
 	const history = [
 		{
 			name: "The Storm Over Verath",
-			content: "Three nights ago, Kestrel's airship was grounded by a storm that wasn't on any chart."
+			content:
+				"Three nights ago, Kestrel's airship was grounded by a storm that wasn't on any chart."
 		}
 	]
 
 	const narrativeGraph = [
-		{ a: "Kestrel Vane", b: "Old Marrow", relation: "uneasy allies", strength: 2 },
+		{
+			a: "Kestrel Vane",
+			b: "Old Marrow",
+			relation: "uneasy allies",
+			strength: 2
+		},
 		{ a: "Ana", b: "The Sunken Archive", relation: "seeking", strength: 3 }
 	]
 
@@ -58,13 +67,18 @@ export function buildMockTemplateContext(): TemplateContext {
 		postHistoryInstructions:
 			"Keep responses to 2-3 paragraphs. End on a hook that invites Ana to act.",
 		chatMessages: [
-			{ id: 1, role: "user", name: "Ana", message: "How much further to the ridge?" },
+			{
+				id: 1,
+				role: "user",
+				name: "Ana",
+				message: "How much further to the ridge?"
+			},
 			{
 				id: 2,
 				role: "assistant",
 				name: "Kestrel",
 				message:
-					'Kestrel squinted at the horizon, then at the map, then back at the horizon. "If the map\'s honest today, an hour. If it\'s lying, could be three."'
+					"Kestrel squinted at the horizon, then at the map, then back at the horizon. \"If the map's honest today, an hour. If it's lying, could be three.\""
 			},
 			{ id: 3, role: "user", name: "Ana", message: "And if it's lying?" }
 		],

@@ -168,7 +168,7 @@ describe("normalizeTimestamp", () => {
 		expect(date.getTime()).toBe(1704067200000)
 	})
 
-	test("parses SillyTavern's \"YYYY-MM-DD @HHh MMm SSs MSms\" format", () => {
+	test('parses SillyTavern\'s "YYYY-MM-DD @HHh MMm SSs MSms" format', () => {
 		const date = normalizeTimestamp("2024-03-15 @14h 30m 45s 123ms")
 
 		expect(date.getFullYear()).toBe(2024)

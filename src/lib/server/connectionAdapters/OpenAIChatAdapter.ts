@@ -84,7 +84,10 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 	async generate(): Promise<{
 		completionResult:
 			| string
-			| ((contentCb: (chunk: string) => void, thinkingCb?: (chunk: string) => void) => Promise<void>)
+			| ((
+					contentCb: (chunk: string) => void,
+					thinkingCb?: (chunk: string) => void
+			  ) => Promise<void>)
 		compiledPrompt: CompiledPrompt
 		isAborted: boolean
 		thinkingContent?: string
@@ -122,19 +125,22 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		// Only apply stop strings when pre-rendering, where role labels are plain text.
 		params["stop"] = this.connection?.extraJson?.prerenderPrompt
 			? StopStrings.get({
-				format: promptFormat,
-				characters:
-					this.chat.chatCharacters?.map((cc) => cc.character) || [],
-				personas:
-					this.chat.chatPersonas?.map((cp) => cp.persona) || [],
-				currentCharacterId: this.currentCharacterId ?? undefined
-			}) || []
+					format: promptFormat,
+					characters:
+						this.chat.chatCharacters?.map((cc) => cc.character) ||
+						[],
+					personas:
+						this.chat.chatPersonas?.map((cp) => cp.persona) || [],
+					currentCharacterId: this.currentCharacterId ?? undefined
+				}) || []
 			: []
 
 		const openaiClient = new OpenAI({
 			apiKey,
 			baseURL: baseURL || undefined,
-			defaultHeaders: { "User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)" }
+			defaultHeaders: {
+				"User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)"
+			}
 		})
 
 		this.abortController = new AbortController()
@@ -142,7 +148,10 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		try {
 			if (stream) {
 				return {
-					completionResult: async (contentCb: (chunk: string) => void, _thinkingCb?: (chunk: string) => void) => {
+					completionResult: async (
+						contentCb: (chunk: string) => void,
+						_thinkingCb?: (chunk: string) => void
+					) => {
 						const streamResp =
 							await openaiClient.chat.completions.create(
 								{ ...params, stream: true },
@@ -164,11 +173,10 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 					isAborted: this.isAborting
 				}
 			} else {
-				const response =
-					await openaiClient.chat.completions.create(
-						{ ...params, stream: false },
-						{ signal: this.abortController?.signal }
-					)
+				const response = await openaiClient.chat.completions.create(
+					{ ...params, stream: false },
+					{ signal: this.abortController?.signal }
+				)
 				let content = ""
 				if (
 					response.choices &&
@@ -233,7 +241,9 @@ async function listModels(
 		const openai = new OpenAI({
 			apiKey,
 			baseURL: baseURL || undefined,
-			defaultHeaders: { "User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)" }
+			defaultHeaders: {
+				"User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)"
+			}
 		})
 		const res = await openai.models.list()
 		if (res && Array.isArray(res.data)) {
@@ -261,7 +271,9 @@ async function testConnection(
 		const openai = new OpenAI({
 			apiKey,
 			baseURL: baseURL || undefined,
-			defaultHeaders: { "User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)" }
+			defaultHeaders: {
+				"User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)"
+			}
 		})
 		// Try to list models as a test
 		try {

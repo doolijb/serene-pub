@@ -31,7 +31,11 @@
 
 	type Status = "pending" | "picking" | "done" | "skipped"
 	let statuses = $state<Record<number, Status>>(
-		untrack(() => Object.fromEntries(orphanedBindings.map((b) => [b.id, "pending" as Status])))
+		untrack(() =>
+			Object.fromEntries(
+				orphanedBindings.map((b) => [b.id, "pending" as Status])
+			)
+		)
 	)
 
 	let currentIndex = $state(0)
@@ -75,20 +79,34 @@
 
 <Dialog {open} {onOpenChange}>
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-5 shadow-xl max-h-[95dvh] relative overflow-hidden w-[min(95vw,576px)]">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 relative max-h-[95dvh] w-[min(95vw,576px)] space-y-5 overflow-hidden p-6 shadow-xl"
+			>
 				<header class="flex items-center justify-between">
-					<h2 class="text-lg font-semibold">Unlinked Lorebook Binding</h2>
-					<button class="btn btn-sm preset-tonal" onclick={() => onOpenChange({ open: false })}>
+					<h2 class="text-lg font-semibold">
+						Unlinked Lorebook Binding
+					</h2>
+					<button
+						class="btn btn-sm preset-tonal"
+						onclick={() => onOpenChange({ open: false })}
+					>
 						<Icons.X size={18} />
 					</button>
 				</header>
 
 				{#if currentBinding}
 					<p class="text-surface-600-400 text-sm">
-						The binding token <code class="code">{currentBinding.binding}</code> exists in your
-						lorebook but isn't linked to any character or persona. How would you like to handle it?
+						The binding token <code class="code">
+							{currentBinding.binding}
+						</code>
+						exists in your lorebook but isn't linked to any character
+						or persona. How would you like to handle it?
 					</p>
 
 					{#if !showPicker}
@@ -100,7 +118,10 @@
 									onclick={() => (showPicker = true)}
 								>
 									<Icons.Link2 size={18} />
-									<span>Link to a character or persona from this chat</span>
+									<span>
+										Link to a character or persona from this
+										chat
+									</span>
 								</button>
 							{/if}
 
@@ -110,18 +131,31 @@
 								onclick={() => skip(currentBinding.id)}
 							>
 								<Icons.SkipForward size={18} />
-								<span>Skip — leave this binding unlinked for now</span>
+								<span>
+									Skip — leave this binding unlinked for now
+								</span>
 							</button>
 						</div>
 					{:else}
 						<div class="space-y-2">
-							<p class="text-surface-700-300 text-xs">Select who <code class="code">{currentBinding.binding}</code> refers to:</p>
-							<div class="max-h-48 overflow-y-auto space-y-1 pr-1">
+							<p class="text-surface-700-300 text-xs">
+								Select who <code class="code">
+									{currentBinding.binding}
+								</code>
+								refers to:
+							</p>
+							<div
+								class="max-h-48 space-y-1 overflow-y-auto pr-1"
+							>
 								{#each unboundEntities as entity}
 									<button
 										class="preset-outlined-surface-300-700 hover:preset-filled-surface-500 btn w-full justify-start gap-2 text-sm"
 										disabled={isBusy}
-										onclick={() => linkEntity(currentBinding.id, entity)}
+										onclick={() =>
+											linkEntity(
+												currentBinding.id,
+												entity
+											)}
 									>
 										{#if entity.type === "character"}
 											<Icons.User size={16} />
@@ -129,7 +163,11 @@
 											<Icons.UserSquare size={16} />
 										{/if}
 										<span>{entity.name}</span>
-										<span class="text-surface-400 ml-auto text-xs">{entity.type}</span>
+										<span
+											class="text-surface-400 ml-auto text-xs"
+										>
+											{entity.type}
+										</span>
 									</button>
 								{/each}
 							</div>
@@ -143,7 +181,9 @@
 						</div>
 					{/if}
 
-					<div class="text-surface-700-300 border-t pt-2 text-right text-xs">
+					<div
+						class="text-surface-700-300 border-t pt-2 text-right text-xs"
+					>
 						Binding {currentIndex + 1} of {orphanedBindings.length}
 					</div>
 				{/if}

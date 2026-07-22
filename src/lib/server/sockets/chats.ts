@@ -314,7 +314,10 @@ export const chatsListHandler: Handler<
 			where: (c, { or, eq, inArray, and }) =>
 				guestChatIds.length > 0
 					? and(
-							or(eq(c.userId, userId), inArray(c.id, guestChatIds)),
+							or(
+								eq(c.userId, userId),
+								inArray(c.id, guestChatIds)
+							),
 							eq(c.chatType, chatType)
 						)
 					: and(eq(c.userId, userId), eq(c.chatType, chatType)),
@@ -339,12 +342,18 @@ export const chatsListHandler: Handler<
 				// onDelete: "set null") — filter those out, matching the same
 				// fix in generateResponse.ts/assistantV2.ts.
 				chatCharacters: chat.chatCharacters.filter(
-					(cc): cc is typeof cc & { character: NonNullable<typeof cc.character> } =>
-						cc.character !== null
+					(
+						cc
+					): cc is typeof cc & {
+						character: NonNullable<typeof cc.character>
+					} => cc.character !== null
 				),
 				chatPersonas: chat.chatPersonas.filter(
-					(cp): cp is typeof cp & { persona: NonNullable<typeof cp.persona> } =>
-						cp.persona !== null
+					(
+						cp
+					): cp is typeof cp & {
+						persona: NonNullable<typeof cp.persona>
+					} => cp.persona !== null
 				)
 			}
 		})
@@ -379,11 +388,16 @@ export const chatsTypingHandler: Handler<
 
 		// Fire-and-forget broadcast — receiving clients own their own 10s
 		// expiry, so there's no matching "stopped typing" event to send.
-		await broadcastToChatUsers(socket.io, params.chatId, "chats:userTyping", {
-			chatId: params.chatId,
-			personaId: persona.id,
-			personaName: persona.name
-		} satisfies Sockets.Chats.UserTyping.Response)
+		await broadcastToChatUsers(
+			socket.io,
+			params.chatId,
+			"chats:userTyping",
+			{
+				chatId: params.chatId,
+				personaId: persona.id,
+				personaName: persona.name
+			} satisfies Sockets.Chats.UserTyping.Response
+		)
 
 		const res: Sockets.Chats.Typing.Response = { success: true }
 		return res
@@ -547,9 +561,8 @@ async function getChatFromDB(
 			},
 			chatCharacters: { with: { character: true } },
 			chatMessages: {
-				where: beforeId != null
-					? (cm) => lt(cm.id, beforeId)
-					: undefined,
+				where:
+					beforeId != null ? (cm) => lt(cm.id, beforeId) : undefined,
 				orderBy: (cm, { desc }) => desc(cm.id),
 				limit: limit
 			},
@@ -732,7 +745,12 @@ export const chatsGetHandler: Handler<
 				return res
 			}
 
-			const chatData = await getChatFromDB(params.id, userId, limit, beforeId)
+			const chatData = await getChatFromDB(
+				params.id,
+				userId,
+				limit,
+				beforeId
+			)
 
 			if (!chatData) {
 				const res: Sockets.Chats.Get.Response = {
@@ -750,11 +768,15 @@ export const chatsGetHandler: Handler<
 				.where(eq(schema.chatMessages.chatId, params.id))
 
 			const loadedCount = (chatData as any).chatMessages.length
-			const hasMore = beforeId != null
-				? loadedCount === limit  // cursor mode: full page implies more exist
-				: total > limit          // initial load: more exist than we fetched
+			const hasMore =
+				beforeId != null
+					? loadedCount === limit // cursor mode: full page implies more exist
+					: total > limit // initial load: more exist than we fetched
 
-			const drafts = (chatData as any).drafts as Record<string, string> | null | undefined
+			const drafts = (chatData as any).drafts as
+				| Record<string, string>
+				| null
+				| undefined
 			const userDraft = drafts?.[String(userId)] || null
 
 			const res: Sockets.Chats.Get.Response = {
@@ -834,8 +856,16 @@ async function runLorebookBindingCheck(
 		})
 	])
 
-	const bindingsByChar = new Map(existingBindings.filter((b) => b.characterId).map((b) => [b.characterId!, b]))
-	const bindingsByPersona = new Map(existingBindings.filter((b) => b.personaId).map((b) => [b.personaId!, b]))
+	const bindingsByChar = new Map(
+		existingBindings
+			.filter((b) => b.characterId)
+			.map((b) => [b.characterId!, b])
+	)
+	const bindingsByPersona = new Map(
+		existingBindings
+			.filter((b) => b.personaId)
+			.map((b) => [b.personaId!, b])
+	)
 
 	// Flow 1a: Create missing bindings for chars/personas
 	const nextIndex = existingBindings.length + 1
@@ -864,20 +894,33 @@ async function runLorebookBindingCheck(
 	}
 
 	// Flow 1b: Collect orphaned bindings (no char or persona)
-	const orphaned = existingBindings.filter((b) => !b.characterId && !b.personaId)
+	const orphaned = existingBindings.filter(
+		(b) => !b.characterId && !b.personaId
+	)
 	if (orphaned.length > 0) {
 		const unboundChars = chatChars
 			.filter((c) => c.characterId && !bindingsByChar.get(c.characterId))
-			.map((c) => ({ type: "character" as const, id: c.characterId!, name: "" }))
+			.map((c) => ({
+				type: "character" as const,
+				id: c.characterId!,
+				name: ""
+			}))
 		const unboundPersonas = chatPersonas
 			.filter((p) => p.personaId && !bindingsByPersona.get(p.personaId))
-			.map((p) => ({ type: "persona" as const, id: p.personaId!, name: "" }))
+			.map((p) => ({
+				type: "persona" as const,
+				id: p.personaId!,
+				name: ""
+			}))
 
 		const bindingCheckRes: Sockets.BindingCheck.Result.Response = {
 			lorebookId,
 			chatId,
 			unboundEntities: [...unboundChars, ...unboundPersonas],
-			orphanedBindings: orphaned.map((b) => ({ id: b.id, binding: b.binding }))
+			orphanedBindings: orphaned.map((b) => ({
+				id: b.id,
+				binding: b.binding
+			}))
 		}
 		emitToUser("bindingCheck:result", bindingCheckRes)
 	}
@@ -934,7 +977,11 @@ export const chatsUpdateHandler: Handler<
 				const existingCCs = await db.query.chatCharacters.findMany({
 					where: (cc, { eq }) => eq(cc.chatId, params.chat.id!)
 				})
-				const existingCharacterIds = new Set(existingCCs.map((cc) => cc.characterId).filter((id): id is number => id !== null))
+				const existingCharacterIds = new Set(
+					existingCCs
+						.map((cc) => cc.characterId)
+						.filter((id): id is number => id !== null)
+				)
 				const newCharacterIds = new Set(params.characterIds)
 
 				// Only characters the requesting user owns can be newly added —
@@ -961,23 +1008,52 @@ export const chatsUpdateHandler: Handler<
 				for (const cc of existingCCs) {
 					if (cc.characterId === null) continue
 					if (!newCharacterIds.has(cc.characterId)) {
-						await db.delete(schema.chatCharacters).where(
-							and(eq(schema.chatCharacters.chatId, params.chat.id!), eq(schema.chatCharacters.characterId, cc.characterId))
-						)
+						await db
+							.delete(schema.chatCharacters)
+							.where(
+								and(
+									eq(
+										schema.chatCharacters.chatId,
+										params.chat.id!
+									),
+									eq(
+										schema.chatCharacters.characterId,
+										cc.characterId
+									)
+								)
+							)
 					}
 				}
 				for (let i = 0; i < params.characterIds.length; i++) {
 					const characterId = params.characterIds[i]
-					const position = (params.characterPositions ?? {})[characterId] ?? i
+					const position =
+						(params.characterPositions ?? {})[characterId] ?? i
 					if (existingCharacterIds.has(characterId)) {
-						await db.update(schema.chatCharacters)
+						await db
+							.update(schema.chatCharacters)
 							.set({ position })
-							.where(and(eq(schema.chatCharacters.chatId, params.chat.id!), eq(schema.chatCharacters.characterId, characterId)))
+							.where(
+								and(
+									eq(
+										schema.chatCharacters.chatId,
+										params.chat.id!
+									),
+									eq(
+										schema.chatCharacters.characterId,
+										characterId
+									)
+								)
+							)
 					} else {
-						await db.insert(schema.chatCharacters).values({ chatId: params.chat.id!, characterId, position })
+						await db.insert(schema.chatCharacters).values({
+							chatId: params.chat.id!,
+							characterId,
+							position
+						})
 					}
 				}
-				await db.update(schema.chats)
+				await db
+					.update(schema.chats)
 					.set({ isGroup: params.characterIds.length > 1 })
 					.where(eq(schema.chats.id, params.chat.id!))
 			}
@@ -987,7 +1063,11 @@ export const chatsUpdateHandler: Handler<
 				const existingCPs = await db.query.chatPersonas.findMany({
 					where: (cp, { eq }) => eq(cp.chatId, params.chat.id!)
 				})
-				const existingPersonaIds = new Set(existingCPs.map((cp) => cp.personaId).filter((id): id is number => id !== null))
+				const existingPersonaIds = new Set(
+					existingCPs
+						.map((cp) => cp.personaId)
+						.filter((id): id is number => id !== null)
+				)
 				const newPersonaIds = new Set(params.personaIds)
 
 				// Only personas the requesting user owns can be newly added —
@@ -1014,19 +1094,43 @@ export const chatsUpdateHandler: Handler<
 				for (const cp of existingCPs) {
 					if (cp.personaId === null) continue
 					if (!newPersonaIds.has(cp.personaId)) {
-						await db.delete(schema.chatPersonas).where(
-							and(eq(schema.chatPersonas.chatId, params.chat.id!), eq(schema.chatPersonas.personaId, cp.personaId))
-						)
+						await db
+							.delete(schema.chatPersonas)
+							.where(
+								and(
+									eq(
+										schema.chatPersonas.chatId,
+										params.chat.id!
+									),
+									eq(
+										schema.chatPersonas.personaId,
+										cp.personaId
+									)
+								)
+							)
 					}
 				}
 				for (let i = 0; i < params.personaIds.length; i++) {
 					const personaId = params.personaIds[i]
 					if (existingPersonaIds.has(personaId)) {
-						await db.update(schema.chatPersonas)
+						await db
+							.update(schema.chatPersonas)
 							.set({ position: i })
-							.where(and(eq(schema.chatPersonas.chatId, params.chat.id!), eq(schema.chatPersonas.personaId, personaId)))
+							.where(
+								and(
+									eq(
+										schema.chatPersonas.chatId,
+										params.chat.id!
+									),
+									eq(schema.chatPersonas.personaId, personaId)
+								)
+							)
 					} else {
-						await db.insert(schema.chatPersonas).values({ chatId: params.chat.id!, personaId, position: i })
+						await db.insert(schema.chatPersonas).values({
+							chatId: params.chat.id!,
+							personaId,
+							position: i
+						})
 					}
 				}
 			}
@@ -1046,7 +1150,11 @@ export const chatsUpdateHandler: Handler<
 			// Flow 1+2: binding and node checks (fire-and-forget, errors are non-fatal)
 			const lorebookId = (updatedChat as any).lorebookId
 			if (lorebookId) {
-				runLorebookBindingCheck(params.chat.id!, lorebookId, emitToUser).catch(console.error)
+				runLorebookBindingCheck(
+					params.chat.id!,
+					lorebookId,
+					emitToUser
+				).catch(console.error)
 			}
 
 			return res
@@ -1438,17 +1546,20 @@ export const chatsBranchHandler: Handler<
 
 				if (messagesToCopy.length > 0) {
 					await tx.insert(schema.chatMessages).values(
-						messagesToCopy.map((message) => ({
-							chatId: newChat.id,
-							userId: message.userId,
-							personaId: message.personaId,
-							characterId: message.characterId,
-							role: message.role,
-							content: message.content,
-							isHidden: message.isHidden,
-							isGenerating: false, // Always set to false for copied messages
-							metadata: message.metadata
-						}) satisfies InsertChatMessage)
+						messagesToCopy.map(
+							(message) =>
+								({
+									chatId: newChat.id,
+									userId: message.userId,
+									personaId: message.personaId,
+									characterId: message.characterId,
+									role: message.role,
+									content: message.content,
+									isHidden: message.isHidden,
+									isGenerating: false, // Always set to false for copied messages
+									metadata: message.metadata
+								}) satisfies InsertChatMessage
+						)
 					)
 				}
 
@@ -2168,7 +2279,8 @@ export const chatMessagesSwipeRightHandler: Handler<
 					// Keep thinkingHistory in sync when initialising swipes for the first time
 					const th: (string | null)[] =
 						data.metadata!.swipes!.thinkingHistory || []
-					while (th.length < data.metadata!.swipes!.history.length) th.push(null)
+					while (th.length < data.metadata!.swipes!.history.length)
+						th.push(null)
 					data.metadata!.swipes!.thinkingHistory = th
 				}
 				// Now increment the current index and push a new empty generation slot
@@ -2183,7 +2295,8 @@ export const chatMessagesSwipeRightHandler: Handler<
 				// Push a matching null into thinkingHistory to keep lengths equal
 				const th: (string | null)[] =
 					data.metadata!.swipes!.thinkingHistory || []
-				while (th.length < data.metadata!.swipes!.history.length - 1) th.push(null)
+				while (th.length < data.metadata!.swipes!.history.length - 1)
+					th.push(null)
 				th.push(null)
 				data.metadata!.swipes!.thinkingHistory = th
 				// Clear active thinking — new slot has no thinking yet
@@ -2364,9 +2477,14 @@ export const chatMessagesCancelHandler: Handler<
 					)
 					.returning()
 				if (updated) {
-					await broadcastToChatUsers(socket.io, params.chatId, "chatMessage", {
-						chatMessage: updated
-					})
+					await broadcastToChatUsers(
+						socket.io,
+						params.chatId,
+						"chatMessage",
+						{
+							chatMessage: updated
+						}
+					)
 				}
 			}
 
@@ -2611,7 +2729,8 @@ export const promptTokenCountHandler: Handler<
 
 			// Get context/prompt config from user settings; resolve connection+sampling via
 			// resolveTaskConfig (chat override → prompt config override → system default)
-			const { contextConfig, promptConfig } = await getUserConfigurations(userId)
+			const { contextConfig, promptConfig } =
+				await getUserConfigurations(userId)
 			const { connection, sampling } = await resolveTaskConfig({
 				taskType: "chat",
 				promptConfigId: promptConfig?.id,
@@ -2646,28 +2765,76 @@ export const promptTokenCountHandler: Handler<
 			// "set null") — filter those out, matching the same fix in
 			// generateResponse.ts/assistantV2.ts/chatsListHandler.
 			const activeChatCharacters = chat.chatCharacters.filter(
-				(cc): cc is typeof cc & { character: NonNullable<typeof cc.character> } =>
-					cc.character !== null && cc.isActive
+				(
+					cc
+				): cc is typeof cc & {
+					character: NonNullable<typeof cc.character>
+				} => cc.character !== null && cc.isActive
 			)
 			const chatCharactersWithCharacter = chat.chatCharacters.filter(
-				(cc): cc is typeof cc & { character: NonNullable<typeof cc.character> } =>
-					cc.character !== null
+				(
+					cc
+				): cc is typeof cc & {
+					character: NonNullable<typeof cc.character>
+				} => cc.character !== null
 			)
 			const chatPersonasWithPersona = chat.chatPersonas.filter(
-				(cp): cp is typeof cp & { persona: NonNullable<typeof cp.persona> } =>
-					cp.persona !== null
+				(
+					cp
+				): cp is typeof cp & {
+					persona: NonNullable<typeof cp.persona>
+				} => cp.persona !== null
 			)
+
+			// The caller (the chat page's live "draft compiled prompt" preview)
+			// sends the not-yet-sent draft text via params.content/personaId/role
+			// specifically so this preview can reflect what would actually be
+			// sent if the user hit Send right now — including whose turn becomes
+			// due as a result. Without splicing it in here, this preview only
+			// ever sees already-persisted history, so as soon as the last real
+			// message is a character reply (i.e. it's the user's turn to type)
+			// it permanently reports "No character available" regardless of what
+			// the user drafts, since nothing is actually due until their draft
+			// is accounted for.
+			const messagesWithDraft = params.content?.trim()
+				? [
+						...chat.chatMessages,
+						{
+							id: -1,
+							chatId: params.chatId,
+							userId,
+							characterId: null,
+							personaId: params.personaId ?? null,
+							role: params.role || "user",
+							isNarratorResponse: false,
+							content: params.content,
+							createdAt: new Date().toISOString(),
+							updatedAt: new Date(),
+							isEdited: false,
+							metadata: {},
+							isGenerating: false,
+							generationStage: null,
+							error: null,
+							queueItemId: null,
+							isHidden: false,
+							debugMeta: null,
+							embedding: null,
+							embeddingModel: null,
+							vectorizedAt: null
+						} as SelectChatMessage
+					]
+				: chat.chatMessages
 
 			let chatForPrompt = {
 				...chat,
-				chatMessages: [...chat.chatMessages],
+				chatMessages: messagesWithDraft,
 				chatCharacters: chatCharactersWithCharacter,
 				chatPersonas: chatPersonasWithPersona
 			}
 
 			const currentCharacterId = getNextCharacterTurn(
 				{
-					chatMessages: chat.chatMessages,
+					chatMessages: messagesWithDraft,
 					chatCharacters: activeChatCharacters.sort(
 						(a, b) => (a.position ?? 0) - (b.position ?? 0)
 					),
@@ -2686,7 +2853,9 @@ export const promptTokenCountHandler: Handler<
 
 			const { Adapter } = await getConnectionAdapter(connection.type)
 
-			const tokenCounter = new TokenCounters((connection as any).tokenCounter || TokenCounterOptions.ESTIMATE)
+			const tokenCounter = new TokenCounters(
+				(connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
+			)
 			const contextThresholdPercent = 0.8
 
 			const adapter = new Adapter({
@@ -2727,136 +2896,143 @@ export const triggerGenerateMessageHandler: Handler<
 	event: "chats:triggerGenerateMessage",
 	handler: async (socket, params, emitToUser) =>
 		withChatTriggerLock(params.chatId, async () => {
-		try {
-			const userId = socket.user!.id
-			const msgLimit = 10
-			let currentMsg = 1
-			let ok = true
+			try {
+				const userId = socket.user!.id
+				const msgLimit = 10
+				let currentMsg = 1
+				let ok = true
 
-			console.log(
-				`[triggerGenerateMessage] Starting generation for chat ${params.chatId}, once: ${params.once}, characterId: ${params.characterId}`
-			)
-
-			while (currentMsg <= msgLimit && ok) {
-				let chat = await getPromptChatFromDb(params.chatId, userId)
-				if (!chat) {
-					return {
-						error: "Error Triggering Chat Message: Chat not found."
-					}
-				}
-
-				// Check if there are any ongoing generations before starting a new one
-				const hasGeneratingMessages = chat.chatMessages.some(
-					(msg) => msg.isGenerating
-				)
-				if (hasGeneratingMessages) {
-					console.log(
-						"Generation already in progress, stopping trigger loop"
-					)
-					break
-				}
-
-				// Get active characters
-				const activeCharacters = chat.chatCharacters.filter(
-					(cc) => cc.character !== null && cc.isActive
+				console.log(
+					`[triggerGenerateMessage] Starting generation for chat ${params.chatId}, once: ${params.once}, characterId: ${params.characterId}`
 				)
 
-				// Find the next character who should reply — an explicit
-				// characterId always wins (manual out-of-turn trigger, and the
-				// only way a "Manual" chat ever advances at all). Otherwise ask
-				// getNextCharacterTurn who's actually due right now, but only for
-				// non-"Manual" chats — a "Manual" chat's whole point is that nobody
-				// auto-advances, so calls with no explicit characterId (e.g. the
-				// automatic re-check after every persona message) are a no-op.
-				const nextCharacterId =
-					params.characterId ||
-					(chat.groupReplyStrategy !== GroupReplyStrategies.MANUAL
-						? getNextCharacterTurn(
-								{
-									chatMessages: chat.chatMessages,
-									chatCharacters: activeCharacters.sort(
-										(a, b) => (a.position ?? 0) - (b.position ?? 0)
-									) as any,
-									chatPersonas: chat.chatPersonas.filter(
-										(cp) => cp.persona !== null
-									) as any
-								},
-								chat.groupReplyStrategy
-							)
-						: null)
-
-				if (!nextCharacterId) {
-					break
-				}
-
-				if (chat && chat.chatCharacters.length > 0 && nextCharacterId) {
-					const nextCharacter = chat.chatCharacters.find(
-						(cc) =>
-							cc.character && cc.character.id === nextCharacterId
-					)
-					if (!nextCharacter || !nextCharacter.character) break
-
-					const assistantMessage: InsertChatMessage = {
-						userId,
-						chatId: params.chatId,
-						personaId: null,
-						characterId: nextCharacter.character.id,
-						content: "",
-						role: "assistant",
-						isGenerating: true,
-						generationStage: "queued"
+				while (currentMsg <= msgLimit && ok) {
+					let chat = await getPromptChatFromDb(params.chatId, userId)
+					if (!chat) {
+						return {
+							error: "Error Triggering Chat Message: Chat not found."
+						}
 					}
 
-					const [generatingMessage] = await db
-						.insert(schema.chatMessages)
-						.values(assistantMessage)
-						.returning()
-
-					// emitToUser is always provided by the handler dispatcher (see
-					// Handler in $lib/shared/events.ts — non-optional), so this
-					// unconditionally broadcasts.
-					await broadcastToChatUsers(
-						socket.io,
-						generatingMessage.chatId,
-						"chatMessage",
-						{ chatMessage: generatingMessage }
+					// Check if there are any ongoing generations before starting a new one
+					const hasGeneratingMessages = chat.chatMessages.some(
+						(msg) => msg.isGenerating
 					)
-					// chatMessage was already broadcasted above, no need for duplicate emission
-
-					ok = await generateResponse({
-						socket,
-						emitToUser,
-						chatId: params.chatId,
-						userId,
-						generatingMessage: generatingMessage as any
-					})
-
-					// If generation was aborted, stop the loop
-					if (!ok) {
+					if (hasGeneratingMessages) {
 						console.log(
-							"Generation was aborted, stopping trigger loop"
+							"Generation already in progress, stopping trigger loop"
 						)
 						break
 					}
 
-					console.log(
-						`[triggerGenerateMessage] Message ${currentMsg}/${msgLimit} generated successfully=${ok}, once: ${params.once}`
+					// Get active characters
+					const activeCharacters = chat.chatCharacters.filter(
+						(cc) => cc.character !== null && cc.isActive
 					)
+
+					// Find the next character who should reply — an explicit
+					// characterId always wins (manual out-of-turn trigger, and the
+					// only way a "Manual" chat ever advances at all). Otherwise ask
+					// getNextCharacterTurn who's actually due right now, but only for
+					// non-"Manual" chats — a "Manual" chat's whole point is that nobody
+					// auto-advances, so calls with no explicit characterId (e.g. the
+					// automatic re-check after every persona message) are a no-op.
+					const nextCharacterId =
+						params.characterId ||
+						(chat.groupReplyStrategy !== GroupReplyStrategies.MANUAL
+							? getNextCharacterTurn(
+									{
+										chatMessages: chat.chatMessages,
+										chatCharacters: activeCharacters.sort(
+											(a, b) =>
+												(a.position ?? 0) -
+												(b.position ?? 0)
+										) as any,
+										chatPersonas: chat.chatPersonas.filter(
+											(cp) => cp.persona !== null
+										) as any
+									},
+									chat.groupReplyStrategy
+								)
+							: null)
+
+					if (!nextCharacterId) {
+						break
+					}
+
+					if (
+						chat &&
+						chat.chatCharacters.length > 0 &&
+						nextCharacterId
+					) {
+						const nextCharacter = chat.chatCharacters.find(
+							(cc) =>
+								cc.character &&
+								cc.character.id === nextCharacterId
+						)
+						if (!nextCharacter || !nextCharacter.character) break
+
+						const assistantMessage: InsertChatMessage = {
+							userId,
+							chatId: params.chatId,
+							personaId: null,
+							characterId: nextCharacter.character.id,
+							content: "",
+							role: "assistant",
+							isGenerating: true,
+							generationStage: "queued"
+						}
+
+						const [generatingMessage] = await db
+							.insert(schema.chatMessages)
+							.values(assistantMessage)
+							.returning()
+
+						// emitToUser is always provided by the handler dispatcher (see
+						// Handler in $lib/shared/events.ts — non-optional), so this
+						// unconditionally broadcasts.
+						await broadcastToChatUsers(
+							socket.io,
+							generatingMessage.chatId,
+							"chatMessage",
+							{ chatMessage: generatingMessage }
+						)
+						// chatMessage was already broadcasted above, no need for duplicate emission
+
+						ok = await generateResponse({
+							socket,
+							emitToUser,
+							chatId: params.chatId,
+							userId,
+							generatingMessage: generatingMessage as any
+						})
+
+						// If generation was aborted, stop the loop
+						if (!ok) {
+							console.log(
+								"Generation was aborted, stopping trigger loop"
+							)
+							break
+						}
+
+						console.log(
+							`[triggerGenerateMessage] Message ${currentMsg}/${msgLimit} generated successfully=${ok}, once: ${params.once}`
+						)
+					}
+
+					// If once is true, exit after the first message
+					if (params.once) break
+
+					currentMsg++
 				}
 
-				// If once is true, exit after the first message
-				if (params.once) break
-
-				currentMsg++
+				return { success: true }
+			} catch (error) {
+				console.error("Error in triggerGenerateMessageHandler:", error)
+				return {
+					error: "Failed to trigger message generation."
+				}
 			}
-
-			return { success: true }
-		} catch (error) {
-			console.error("Error in triggerGenerateMessageHandler:", error)
-			return {
-				error: "Failed to trigger message generation."
-			}
-		}
 		})
 }
 
@@ -2876,7 +3052,9 @@ export const triggerNarratorResponseHandler: Handler<
 
 			const chat = await getPromptChatFromDb(params.chatId, userId)
 			if (!chat) {
-				return { error: "Error triggering Narrator response: Chat not found." }
+				return {
+					error: "Error triggering Narrator response: Chat not found."
+				}
 			}
 
 			const hasGeneratingMessages = chat.chatMessages.some(
@@ -2897,7 +3075,8 @@ export const triggerNarratorResponseHandler: Handler<
 				chat,
 				userId
 			)
-			const narratorName = effectiveNarratorConfig?.narratorName || "Narrator"
+			const narratorName =
+				effectiveNarratorConfig?.narratorName || "Narrator"
 
 			const narratorMessage: InsertChatMessage = {
 				userId,

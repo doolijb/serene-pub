@@ -17,9 +17,13 @@
 	let ignoring = $state(false)
 
 	function fetchStatus() {
-		socket.emit("vectorization:checkRagStatus", { chatId }, (res: RagStatus) => {
-			ragStatus = res
-		})
+		socket.emit(
+			"vectorization:checkRagStatus",
+			{ chatId },
+			(res: RagStatus) => {
+				ragStatus = res
+			}
+		)
 	}
 
 	$effect(() => {
@@ -50,7 +54,8 @@
 			"vectorization:setChatRagIgnored",
 			{ chatId, ignored },
 			(res: Sockets.Vectorization.SetChatRagIgnored.Response) => {
-				if (ragStatus) ragStatus = { ...ragStatus, ragIgnored: res.ragIgnored }
+				if (ragStatus)
+					ragStatus = { ...ragStatus, ragIgnored: res.ragIgnored }
 				ignoring = false
 			}
 		)
@@ -60,14 +65,30 @@
 	let totals = $derived.by(() => {
 		if (!ragStatus) return null
 		const { messages, characters, personas, lorebook } = ragStatus
-		const lb = lorebook ?? { total: 0, nullCount: 0, staleCount: 0, readyCount: 0 }
+		const lb = lorebook ?? {
+			total: 0,
+			nullCount: 0,
+			staleCount: 0,
+			readyCount: 0
+		}
 		return {
-			total: messages.total + characters.total + personas.total + lb.total,
-			nullCount: messages.nullCount + characters.nullCount + personas.nullCount + lb.nullCount,
+			total:
+				messages.total + characters.total + personas.total + lb.total,
+			nullCount:
+				messages.nullCount +
+				characters.nullCount +
+				personas.nullCount +
+				lb.nullCount,
 			staleCount:
-				messages.staleCount + characters.staleCount + personas.staleCount + lb.staleCount,
+				messages.staleCount +
+				characters.staleCount +
+				personas.staleCount +
+				lb.staleCount,
 			readyCount:
-				messages.readyCount + characters.readyCount + personas.readyCount + lb.readyCount
+				messages.readyCount +
+				characters.readyCount +
+				personas.readyCount +
+				lb.readyCount
 		}
 	})
 
@@ -78,7 +99,8 @@
 	 *   "processing" — partially indexed (mix of ready + pending)
 	 */
 	let variant = $derived.by((): "none" | "stale" | "processing" | null => {
-		if (!ragStatus?.applicable || ragStatus.ragIgnored || !totals) return null
+		if (!ragStatus?.applicable || ragStatus.ragIgnored || !totals)
+			return null
 		const { total, nullCount, staleCount, readyCount } = totals
 		if (total === 0) return null
 		if (readyCount === total) return null // all good
@@ -93,7 +115,10 @@
 		const parts: string[] = []
 		if (ragStatus.messages.nullCount + ragStatus.messages.staleCount > 0)
 			parts.push("messages")
-		if (ragStatus.characters.nullCount + ragStatus.characters.staleCount > 0)
+		if (
+			ragStatus.characters.nullCount + ragStatus.characters.staleCount >
+			0
+		)
 			parts.push("characters")
 		if (ragStatus.personas.nullCount + ragStatus.personas.staleCount > 0)
 			parts.push("personas")
@@ -134,20 +159,26 @@
 					{#if variant === "none"}
 						<p class="font-medium">RAG content not yet indexed</p>
 						<p class="text-surface-600-400 text-xs">
-							Older {needsSummary} haven't been embedded yet — RAG won't surface
-							relevant context from this chat.
+							Older {needsSummary} haven't been embedded yet — RAG
+							won't surface relevant context from this chat.
 						</p>
 					{:else if variant === "stale"}
-						<p class="font-medium">RAG content indexed with a different model</p>
+						<p class="font-medium">
+							RAG content indexed with a different model
+						</p>
 						<p class="text-surface-600-400 text-xs">
-							{needsSummary} were embedded with a previous model and need
-							re-indexing with
-							<span class="font-mono">{ragStatus.activeModelName}</span>.
+							{needsSummary} were embedded with a previous model and
+							need re-indexing with
+							<span class="font-mono">
+								{ragStatus.activeModelName}
+							</span>
+							.
 						</p>
 					{:else if variant === "processing"}
 						<p class="font-medium">Indexing in progress…</p>
 						<p class="text-surface-600-400 text-xs">
-							{totals?.readyCount} of {totals?.total} items indexed ({needsSummary} pending).
+							{totals?.readyCount} of {totals?.total} items indexed
+							({needsSummary} pending).
 							{#if !ragStatus.queueRunning}Queue paused.{/if}
 						</p>
 					{/if}
@@ -162,7 +193,11 @@
 					title="Move this chat and its linked content to the top of the embedding queue"
 				>
 					{#if prioritizing}
-						<Icons.Loader size={12} class="animate-spin" aria-hidden="true" />
+						<Icons.Loader
+							size={12}
+							class="animate-spin"
+							aria-hidden="true"
+						/>
 					{:else}
 						<Icons.ArrowUpToLine size={12} aria-hidden="true" />
 					{/if}
@@ -184,7 +219,10 @@
 	<div class="mx-2 mb-1 flex items-center gap-2 px-3 py-1 text-xs opacity-60">
 		<Icons.SearchX size={12} aria-hidden="true" />
 		<span>RAG disabled for this chat.</span>
-		<button class="hover:text-primary-500 underline" onclick={() => handleSetRagIgnored(false)}>
+		<button
+			class="hover:text-primary-500 underline"
+			onclick={() => handleSetRagIgnored(false)}
+		>
 			Re-enable
 		</button>
 	</div>

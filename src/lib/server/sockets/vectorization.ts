@@ -36,7 +36,11 @@ import {
 // ---------------------------------------------------------------------------
 
 /** Count rows matching needsEmbedding for a given condition combo */
-function needsEmbedding(embeddingCol: any, modelCol: any, currentModel: string) {
+function needsEmbedding(
+	embeddingCol: any,
+	modelCol: any,
+	currentModel: string
+) {
 	return or(isNull(embeddingCol), ne(modelCol, currentModel))
 }
 
@@ -48,15 +52,25 @@ async function ragTypeCounts(
 	scopeCondition?: any
 ): Promise<Sockets.Vectorization.RagTypeCounts> {
 	const base = scopeCondition
-		? and(scopeCondition, needsEmbedding(embeddingCol, modelCol, currentModel))
+		? and(
+				scopeCondition,
+				needsEmbedding(embeddingCol, modelCol, currentModel)
+			)
 		: needsEmbedding(embeddingCol, modelCol, currentModel)
 
 	const [total, nullCount, staleCount] = await Promise.all([
 		db.$count(table, scopeCondition ?? undefined),
-		db.$count(table, and(scopeCondition ?? undefined, isNull(embeddingCol))),
 		db.$count(
 			table,
-			and(scopeCondition ?? undefined, ne(modelCol, currentModel), isNull(embeddingCol) ? undefined : undefined)
+			and(scopeCondition ?? undefined, isNull(embeddingCol))
+		),
+		db.$count(
+			table,
+			and(
+				scopeCondition ?? undefined,
+				ne(modelCol, currentModel),
+				isNull(embeddingCol) ? undefined : undefined
+			)
 		)
 	])
 
@@ -416,14 +430,22 @@ export const vectorizationAddToQueue: Handler<
 				where: eq(schema.lorebooks.id, params.lorebookId),
 				columns: { name: true, userId: true }
 			})
-			const owner = lb?.userId ? await db.query.users.findFirst({
-				where: eq(schema.users.id, lb.userId),
-				columns: { username: true, displayName: true }
-			}) : null
-			const ownerDisplayName = owner?.displayName ?? owner?.username ?? 'Unknown'
-			enqueueLorebookGroup(params.lorebookId, lb?.name ?? `Lorebook #${params.lorebookId}`, ownerDisplayName)
+			const owner = lb?.userId
+				? await db.query.users.findFirst({
+						where: eq(schema.users.id, lb.userId),
+						columns: { username: true, displayName: true }
+					})
+				: null
+			const ownerDisplayName =
+				owner?.displayName ?? owner?.username ?? "Unknown"
+			enqueueLorebookGroup(
+				params.lorebookId,
+				lb?.name ?? `Lorebook #${params.lorebookId}`,
+				ownerDisplayName
+			)
 		} else if (params.characterId != null) {
-			const name = params.characterName ?? `Character #${params.characterId}`
+			const name =
+				params.characterName ?? `Character #${params.characterId}`
 			await enqueueCharacterGroup(params.characterId, name)
 		}
 
@@ -485,7 +507,9 @@ export const vectorizationCheckRagStatus: Handler<
 		const userId = socket.user!.id
 		const chatAccess = await checkChatAccess(params.chatId, userId)
 		if (!chatAccess.hasAccess) {
-			throw new Error("Access denied. Chat not found or no permission to access.")
+			throw new Error(
+				"Access denied. Chat not found or no permission to access."
+			)
 		}
 
 		const settings = await db.query.systemSettings.findFirst({
@@ -551,7 +575,10 @@ export const vectorizationCheckRagStatus: Handler<
 
 		for (const cc of chatCharsRows) {
 			if (cc.characterId) characterIds.push(cc.characterId)
-			if (cc.charLorebookId && !allLorebookIds.includes(cc.charLorebookId)) {
+			if (
+				cc.charLorebookId &&
+				!allLorebookIds.includes(cc.charLorebookId)
+			) {
 				allLorebookIds.push(cc.charLorebookId)
 			}
 		}
@@ -605,7 +632,10 @@ export const vectorizationCheckRagStatus: Handler<
 
 		const [msgTotal, msgNull, msgStale] = await Promise.all([
 			db.$count(schema.chatMessages, olderWhere),
-			db.$count(schema.chatMessages, and(olderWhere, isNull(schema.chatMessages.embedding))),
+			db.$count(
+				schema.chatMessages,
+				and(olderWhere, isNull(schema.chatMessages.embedding))
+			),
 			db.$count(
 				schema.chatMessages,
 				and(
@@ -629,7 +659,10 @@ export const vectorizationCheckRagStatus: Handler<
 			const charWhere = inArray(schema.characters.id, characterIds)
 			const [cTotal, cNull, cStale] = await Promise.all([
 				db.$count(schema.characters, charWhere),
-				db.$count(schema.characters, and(charWhere, isNull(schema.characters.embedding))),
+				db.$count(
+					schema.characters,
+					and(charWhere, isNull(schema.characters.embedding))
+				),
 				db.$count(
 					schema.characters,
 					and(
@@ -653,7 +686,10 @@ export const vectorizationCheckRagStatus: Handler<
 			const personaWhere = inArray(schema.personas.id, personaIds)
 			const [pTotal, pNull, pStale] = await Promise.all([
 				db.$count(schema.personas, personaWhere),
-				db.$count(schema.personas, and(personaWhere, isNull(schema.personas.embedding))),
+				db.$count(
+					schema.personas,
+					and(personaWhere, isNull(schema.personas.embedding))
+				),
 				db.$count(
 					schema.personas,
 					and(
@@ -674,39 +710,147 @@ export const vectorizationCheckRagStatus: Handler<
 		// Lorebook content (aggregate across all linked lorebooks)
 		let lorebook: Sockets.Vectorization.RagTypeCounts | null = null
 		if (allLorebookIds.length > 0) {
-			const lbWhere = inArray(schema.worldLoreEntries.lorebookId, allLorebookIds)
-			const clWhere = inArray(schema.characterLoreEntries.lorebookId, allLorebookIds)
-			const heWhere = inArray(schema.historyEntries.lorebookId, allLorebookIds)
-			const nnWhere = inArray(schema.narrativeNodes.lorebookId, allLorebookIds)
-			const nrWhere = inArray(schema.narrativeRelationships.lorebookId, allLorebookIds)
+			const lbWhere = inArray(
+				schema.worldLoreEntries.lorebookId,
+				allLorebookIds
+			)
+			const clWhere = inArray(
+				schema.characterLoreEntries.lorebookId,
+				allLorebookIds
+			)
+			const heWhere = inArray(
+				schema.historyEntries.lorebookId,
+				allLorebookIds
+			)
+			const nnWhere = inArray(
+				schema.narrativeNodes.lorebookId,
+				allLorebookIds
+			)
+			const nrWhere = inArray(
+				schema.narrativeRelationships.lorebookId,
+				allLorebookIds
+			)
 
 			const [
-				wleTotal, wleNull, wleStale,
-				cleTotal, cleNull, cleStale,
-				heTotal, heNull, heStale,
-				nnTotal, nnNull, nnStale,
-				nrTotal, nrNull, nrStale
+				wleTotal,
+				wleNull,
+				wleStale,
+				cleTotal,
+				cleNull,
+				cleStale,
+				heTotal,
+				heNull,
+				heStale,
+				nnTotal,
+				nnNull,
+				nnStale,
+				nrTotal,
+				nrNull,
+				nrStale
 			] = await Promise.all([
 				db.$count(schema.worldLoreEntries, lbWhere),
-				db.$count(schema.worldLoreEntries, and(lbWhere, isNull(schema.worldLoreEntries.embedding))),
-				db.$count(schema.worldLoreEntries, and(lbWhere, sql`${schema.worldLoreEntries.embedding} IS NOT NULL`, ne(schema.worldLoreEntries.embeddingModel, activeModelName))),
+				db.$count(
+					schema.worldLoreEntries,
+					and(lbWhere, isNull(schema.worldLoreEntries.embedding))
+				),
+				db.$count(
+					schema.worldLoreEntries,
+					and(
+						lbWhere,
+						sql`${schema.worldLoreEntries.embedding} IS NOT NULL`,
+						ne(
+							schema.worldLoreEntries.embeddingModel,
+							activeModelName
+						)
+					)
+				),
 				db.$count(schema.characterLoreEntries, clWhere),
-				db.$count(schema.characterLoreEntries, and(clWhere, isNull(schema.characterLoreEntries.embedding))),
-				db.$count(schema.characterLoreEntries, and(clWhere, sql`${schema.characterLoreEntries.embedding} IS NOT NULL`, ne(schema.characterLoreEntries.embeddingModel, activeModelName))),
+				db.$count(
+					schema.characterLoreEntries,
+					and(clWhere, isNull(schema.characterLoreEntries.embedding))
+				),
+				db.$count(
+					schema.characterLoreEntries,
+					and(
+						clWhere,
+						sql`${schema.characterLoreEntries.embedding} IS NOT NULL`,
+						ne(
+							schema.characterLoreEntries.embeddingModel,
+							activeModelName
+						)
+					)
+				),
 				db.$count(schema.historyEntries, heWhere),
-				db.$count(schema.historyEntries, and(heWhere, isNull(schema.historyEntries.embedding))),
-				db.$count(schema.historyEntries, and(heWhere, sql`${schema.historyEntries.embedding} IS NOT NULL`, ne(schema.historyEntries.embeddingModel, activeModelName))),
+				db.$count(
+					schema.historyEntries,
+					and(heWhere, isNull(schema.historyEntries.embedding))
+				),
+				db.$count(
+					schema.historyEntries,
+					and(
+						heWhere,
+						sql`${schema.historyEntries.embedding} IS NOT NULL`,
+						ne(
+							schema.historyEntries.embeddingModel,
+							activeModelName
+						)
+					)
+				),
 				db.$count(schema.narrativeNodes, nnWhere),
-				db.$count(schema.narrativeNodes, and(nnWhere, isNull(schema.narrativeNodes.embedding))),
-				db.$count(schema.narrativeNodes, and(nnWhere, sql`${schema.narrativeNodes.embedding} IS NOT NULL`, ne(schema.narrativeNodes.embeddingModel, activeModelName))),
+				db.$count(
+					schema.narrativeNodes,
+					and(nnWhere, isNull(schema.narrativeNodes.embedding))
+				),
+				db.$count(
+					schema.narrativeNodes,
+					and(
+						nnWhere,
+						sql`${schema.narrativeNodes.embedding} IS NOT NULL`,
+						ne(
+							schema.narrativeNodes.embeddingModel,
+							activeModelName
+						)
+					)
+				),
 				db.$count(schema.narrativeRelationships, nrWhere),
-				db.$count(schema.narrativeRelationships, and(nrWhere, isNull(schema.narrativeRelationships.embedding))),
-				db.$count(schema.narrativeRelationships, and(nrWhere, sql`${schema.narrativeRelationships.embedding} IS NOT NULL`, ne(schema.narrativeRelationships.embeddingModel, activeModelName)))
+				db.$count(
+					schema.narrativeRelationships,
+					and(
+						nrWhere,
+						isNull(schema.narrativeRelationships.embedding)
+					)
+				),
+				db.$count(
+					schema.narrativeRelationships,
+					and(
+						nrWhere,
+						sql`${schema.narrativeRelationships.embedding} IS NOT NULL`,
+						ne(
+							schema.narrativeRelationships.embeddingModel,
+							activeModelName
+						)
+					)
+				)
 			])
 
-			const lbTotal = Number(wleTotal) + Number(cleTotal) + Number(heTotal) + Number(nnTotal) + Number(nrTotal)
-			const lbNull = Number(wleNull) + Number(cleNull) + Number(heNull) + Number(nnNull) + Number(nrNull)
-			const lbStale = Number(wleStale) + Number(cleStale) + Number(heStale) + Number(nnStale) + Number(nrStale)
+			const lbTotal =
+				Number(wleTotal) +
+				Number(cleTotal) +
+				Number(heTotal) +
+				Number(nnTotal) +
+				Number(nrTotal)
+			const lbNull =
+				Number(wleNull) +
+				Number(cleNull) +
+				Number(heNull) +
+				Number(nnNull) +
+				Number(nrNull)
+			const lbStale =
+				Number(wleStale) +
+				Number(cleStale) +
+				Number(heStale) +
+				Number(nnStale) +
+				Number(nrStale)
 
 			lorebook = {
 				total: lbTotal,
@@ -749,7 +893,9 @@ export const vectorizationSetChatRagIgnored: Handler<
 		// reconfigure it for everyone else in the chat.
 		const chatAccess = await checkChatAccess(params.chatId, userId)
 		if (!chatAccess.hasAccess || !chatAccess.isOwner) {
-			throw new Error("Access denied. Only the chat owner can change this.")
+			throw new Error(
+				"Access denied. Only the chat owner can change this."
+			)
 		}
 
 		const chat = await db.query.chats.findFirst({

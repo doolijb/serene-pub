@@ -110,52 +110,79 @@
 					positioning={{ placement: "bottom-end" }}
 				>
 					<Popover.Trigger
-						class="btn btn-sm p-3 shrink-0 hover:bg-primary-600-400 {menuOpen ? 'bg-primary-600-400' : ''}"
+						class="btn btn-sm hover:bg-primary-600-400 shrink-0 p-3 {menuOpen
+							? 'bg-primary-600-400'
+							: ''}"
 						aria-label="Chat options"
 					>
 						<Icons.EllipsisVertical size={16} />
 					</Popover.Trigger>
 					<Portal>
 						<Popover.Positioner class="z-[1000]!">
-							<Popover.Content class="card bg-primary-200-800 shadow-xl p-4 space-y-4 w-[min(90vw,240px)]">
+							<Popover.Content
+								class="card bg-primary-200-800 w-[min(90vw,240px)] space-y-4 p-4 shadow-xl"
+							>
 								<header class="popover-menu-title">
-									<Icons.MessageSquare size={18} aria-hidden="true" />
+									<Icons.MessageSquare
+										size={18}
+										aria-hidden="true"
+									/>
 									<p>Chat Options</p>
 								</header>
 								<article class="flex flex-col gap-2">
 									{#if onclick}
 										<button
 											class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-											onclick={() => { menuOpen = false; handleClick() }}
+											onclick={() => {
+												menuOpen = false
+												handleClick()
+											}}
 											type="button"
 										>
-											<Icons.Eye size={16} aria-hidden="true" />
+											<Icons.Eye
+												size={16}
+												aria-hidden="true"
+											/>
 											<span>View</span>
 										</button>
 									{/if}
 									{#if onEdit}
 										<button
 											class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
-											onclick={() => { menuOpen = false; onEdit?.(chat.id!) }}
+											onclick={() => {
+												menuOpen = false
+												onEdit?.(chat.id!)
+											}}
 											type="button"
 										>
-											<Icons.Pencil size={16} aria-hidden="true" />
+											<Icons.Pencil
+												size={16}
+												aria-hidden="true"
+											/>
 											<span>Edit</span>
 										</button>
 									{/if}
 									{#if onDelete && chat.isOwner}
 										<button
 											class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
-											onclick={() => { menuOpen = false; onDelete?.(chat.id!) }}
+											onclick={() => {
+												menuOpen = false
+												onDelete?.(chat.id!)
+											}}
 											type="button"
 										>
-											<Icons.Trash2 size={16} aria-hidden="true" />
+											<Icons.Trash2
+												size={16}
+												aria-hidden="true"
+											/>
 											<span>Delete</span>
 										</button>
 									{/if}
 								</article>
 								<Popover.Arrow>
-									<Popover.ArrowTip class="!bg-primary-200 dark:!bg-primary-800" />
+									<Popover.ArrowTip
+										class="!bg-primary-200 dark:!bg-primary-800"
+									/>
 								</Popover.Arrow>
 							</Popover.Content>
 						</Popover.Positioner>

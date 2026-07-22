@@ -74,7 +74,9 @@ export const createHistoryEntryHandler: Handler<
 			.values(data)
 			.returning()
 
-		autoEnqueueLorebook(newEntry.lorebookId, book.name, "").catch(console.error)
+		autoEnqueueLorebook(newEntry.lorebookId, book.name, "").catch(
+			console.error
+		)
 
 		// Refresh lorebook bindings
 		if (emitToUser) {
@@ -119,12 +121,25 @@ export const updateHistoryEntryHandler: Handler<
 			throw new Error("History entry not found.")
 		}
 
-		const { id, createdAt, updatedAt, embedding, embeddingModel, vectorizedAt, ...fields } = { ...params.historyEntry }
+		const {
+			id,
+			createdAt,
+			updatedAt,
+			embedding,
+			embeddingModel,
+			vectorizedAt,
+			...fields
+		} = { ...params.historyEntry }
 
 		// Update the entry; reset embedding so the queue re-vectorizes it
 		await db
 			.update(schema.historyEntries)
-			.set({ ...fields, embedding: null, embeddingModel: null, vectorizedAt: null })
+			.set({
+				...fields,
+				embedding: null,
+				embeddingModel: null,
+				vectorizedAt: null
+			})
 			.where(eq(schema.historyEntries.id, id))
 
 		// Get updated entry
@@ -133,7 +148,11 @@ export const updateHistoryEntryHandler: Handler<
 			.from(schema.historyEntries)
 			.where(eq(schema.historyEntries.id, id))
 
-		autoEnqueueLorebook(existingEntry.lorebookId, existingEntry.lorebook?.name ?? "", "").catch(console.error)
+		autoEnqueueLorebook(
+			existingEntry.lorebookId,
+			existingEntry.lorebook?.name ?? "",
+			""
+		).catch(console.error)
 
 		// Refresh lorebook bindings and entry list
 		if (emitToUser) {

@@ -10,17 +10,20 @@ export class ChatCharacterVisibility {
 		{
 			value: ChatCharacterVisibility.VISIBLE,
 			label: "Full Info",
-			description: "Full character info is included even when they're not speaking"
+			description:
+				"Full character info is included even when they're not speaking"
 		},
 		{
 			value: ChatCharacterVisibility.MINIMAL,
 			label: "Name Only",
-			description: "Only name/nickname is included when they're not speaking"
+			description:
+				"Only name/nickname is included when they're not speaking"
 		},
 		{
 			value: ChatCharacterVisibility.HIDDEN,
 			label: "Hidden",
-			description: "No character info is included when they're not speaking"
+			description:
+				"No character info is included when they're not speaking"
 		}
 	]
 }

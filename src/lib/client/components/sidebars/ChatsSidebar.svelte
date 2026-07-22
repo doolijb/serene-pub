@@ -245,7 +245,9 @@
 		if (searchByCharacterId) {
 			// TypedSocket has no `.once()` — self-unsubscribe after the first
 			// response to replicate the same "fire once" semantics.
-			const handleCharacterGet = (msg: Sockets.Characters.Get.Response) => {
+			const handleCharacterGet = (
+				msg: Sockets.Characters.Get.Response
+			) => {
 				searchCharacter = msg.character
 				socket.off("characters:get", handleCharacterGet)
 			}
@@ -354,7 +356,10 @@
 		<div class="flex-1 overflow-y-auto">
 			{#if isLoading}
 				<div class="flex items-center justify-center py-8">
-					<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+					<Icons.Loader2
+						size={20}
+						class="text-surface-400 animate-spin"
+					/>
 				</div>
 			{:else if filteredChats.length === 0}
 				<EmptyState
@@ -387,9 +392,15 @@
 
 <Dialog open={showDeleteModal} onOpenChange={(e) => (showDeleteModal = e.open)}>
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-[95vw] border border-surface-300-700">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
+			>
 				<div class="p-6">
 					<h2 class="mb-2 text-lg font-bold">Delete Chat?</h2>
 					<p class="mb-4">
@@ -410,7 +421,11 @@
 							disabled={isDeleting}
 						>
 							{#if isDeleting}
-								<Icons.Loader2 size={16} class="animate-spin" aria-hidden="true" />
+								<Icons.Loader2
+									size={16}
+									class="animate-spin"
+									aria-hidden="true"
+								/>
 							{/if}
 							Delete
 						</button>

@@ -53,7 +53,11 @@
 	})
 
 	socket.on("connections:test", (msg) => {
-		testResult = { ok: msg.ok, error: msg.error ?? undefined, models: msg.models }
+		testResult = {
+			ok: msg.ok,
+			error: msg.error ?? undefined,
+			models: msg.models
+		}
 	})
 
 	function handleRefreshModels() {
@@ -254,53 +258,50 @@
 				</div>
 			</div>
 			<section class="w-full space-y-4 pt-4">
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="useChat">
+				<Switch
+					name="useChat"
+					checked={ollamaFields.useChat}
+					onCheckedChange={(e) => (ollamaFields!.useChat = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">
 						Use Chat Mode
-					</label>
-					<Switch
-						name="useChat"
-						checked={ollamaFields.useChat}
-						onCheckedChange={(e) =>
-							(ollamaFields!.useChat = e.checked)}
-						aria-labelledby="useChat"
+					</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 					>
-						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-							<Switch.Thumb />
-						</Switch.Control>
-						<Switch.HiddenInput />
-					</Switch>
-				</div>
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="stream">Stream</label>
-					<Switch
-						name="stream"
-						checked={ollamaFields.stream}
-						onCheckedChange={(e) =>
-							(ollamaFields!.stream = e.checked)}
-						aria-labelledby="stream"
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
+				<Switch
+					name="stream"
+					checked={ollamaFields.stream}
+					onCheckedChange={(e) => (ollamaFields!.stream = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">Stream</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 					>
-						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-							<Switch.Thumb />
-						</Switch.Control>
-						<Switch.HiddenInput />
-					</Switch>
-				</div>
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="think">Think</label>
-					<Switch
-						name="think"
-						checked={ollamaFields.think}
-						onCheckedChange={(e) =>
-							(ollamaFields!.think = e.checked)}
-						aria-labelledby="think"
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
+				<Switch
+					name="think"
+					checked={ollamaFields.think}
+					onCheckedChange={(e) => (ollamaFields!.think = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">Think</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 					>
-						<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-							<Switch.Thumb />
-						</Switch.Control>
-						<Switch.HiddenInput />
-					</Switch>
-				</div>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
 			</section>
 		{/if}
 	</details>

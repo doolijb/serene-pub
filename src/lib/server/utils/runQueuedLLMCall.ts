@@ -43,10 +43,15 @@ export async function runQueuedLLMCall({
 		label,
 		preflight: (signal) => adapter.preflight(signal),
 		execute: async (signal) => {
-			const { completionResult, isAborted, thinkingContent } = await adapter.generate()
+			const { completionResult, isAborted, thinkingContent } =
+				await adapter.generate()
 
 			if (typeof completionResult === "string") {
-				return { text: completionResult.trim(), thinkingContent, isAborted }
+				return {
+					text: completionResult.trim(),
+					thinkingContent,
+					isAborted
+				}
 			}
 
 			let text = ""

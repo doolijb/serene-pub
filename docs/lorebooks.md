@@ -20,7 +20,7 @@ Opening a lorebook switches the panel into an editor with up to six tabs across 
 5. **History** — a dated timeline, with scenes captured from chats underneath each entry.
 6. **Graph** — a visual map of entities and relationships extracted from your history.
 
-The Graph tab only appears when both vectorization and summarization are turned on in [System Settings](./system-settings.md) — narrative-graph extraction depends on the same LLM summarization pipeline used elsewhere in the app. If you're on the Graph tab and those settings get turned off, the panel automatically falls back to the World Lore tab so you're never stuck on a tab that no longer applies.
+The Graph tab only appears when **Summarization** is turned on in [System Settings](./system-settings.md) — narrative-graph extraction is pure LLM extraction from summarized scenes, so it depends on that pipeline but not on vectorization/embeddings at all. If you're on the Graph tab and those settings get turned off, the panel automatically falls back to the World Lore tab so you're never stuck on a tab that no longer applies.
 
 ### Two retrieval modes change what fields you see
 
@@ -33,7 +33,13 @@ Regardless of mode, a **Pinned** entry is always included in context, bypassing 
 
 ### Creating, importing, and deleting a lorebook
 
-The `+` button in the list view creates a new lorebook from just a name. The upload button imports a SillyTavern-style lorebook JSON file: on import, **every** entry in the file — regardless of what type it was in the source format — is created as a World Lore entry in a brand-new lorebook, since world entries are the most format-agnostic starting point and don't require a binding. You're prompted to confirm or edit the new lorebook's name before the import commits. Export is present in the toolbar but currently disabled.
+The `+` button in the list view creates a new lorebook from just a name.
+
+**Importing a foreign file** (a SillyTavern-style lorebook JSON, or any file without Serene Pub's own export metadata): every entry in the file — regardless of what type it was in the source format — is created as a World Lore entry in a brand-new lorebook, since world entries are the most format-agnostic starting point and don't require a binding. You're prompted to confirm or edit the new lorebook's name before the import commits.
+
+**Re-importing a lorebook Serene Pub itself exported** is a different, much more faithful path: the importer detects Serene Pub's own export metadata and does a full round-trip instead of flattening everything to World Lore — entries are routed back to their original World/Character/History tables, Scenes are restored under their History entries, and Bindings and the entire narrative graph (nodes, relationships, aliases, and parent links) are restored too. If you re-import a lorebook that already exists, Serene Pub detects the conflict by content hash and asks whether to **Overwrite Existing** or **Import as New** (or reports that nothing changed, if the content is identical).
+
+**Exporting** a lorebook is a real, working feature (not disabled) — available from a lorebook's toolbar or its row menu in the list view. It opens an **Export Options** dialog letting you choose whether to include bound characters, bound personas, and the narrative graph (all on by default) before downloading the file.
 
 ### Attaching a lorebook to the currently open chat
 
@@ -62,7 +68,9 @@ Bindings can also exist **unlinked** — a placeholder number that was created (
 
 ### How binding placeholders resolve in content
 
-World Lore, Character Lore, and History entries all share the same rich-text content editor, which recognizes `{{char:N}}` tokens (and the legacy single-brace `{char:N}` form, kept for backward compatibility) as special inline tags rather than plain text. An "Insert Character Tag" toolbar button opens a picker listing every binding in the lorebook — colored by whether it's linked to a character, a persona, or nothing — and inserts the chosen tag directly into the content at the cursor. While editing, the tag renders as the bound character or persona's nickname (or name); underneath, it's stored as the raw `{{char:N}}` token, so renaming a character elsewhere in the app doesn't require touching your lore text at all.
+World Lore, Character Lore, and History entries all share the same rich-text content editor, which recognizes `{{char:N}}` tokens as special inline tags rather than plain text. An "Insert Character Tag" toolbar button opens a picker listing every binding in the lorebook — colored by whether it's linked to a character, a persona, or nothing — and inserts the chosen tag directly into the content at the cursor. While editing, the tag renders as the bound character or persona's nickname (or name); underneath, it's stored as the raw `{{char:N}}` token, so renaming a character elsewhere in the app doesn't require touching your lore text at all.
+
+The legacy single-brace `{char:N}` form is still supported for backward compatibility, but only at the server/prompt level — binding auto-discovery and prompt-time resolution both still recognize it, so old content using it keeps working. The editor itself, however, doesn't give it the same special inline-tag treatment: typing or pasting `{char:N}` shows as plain text rather than a resolvable chip, so new content is best written with the double-brace `{{char:N}}` form via the Insert Character Tag picker.
 
 ### Automatic binding discovery and cleanup
 
@@ -76,6 +84,8 @@ In practice this means deleting the last `{{char:3}}` mention from your lore, an
 ### Bindings and the narrative graph
 
 Linking a character or persona to a binding also tries to connect that binding to a node in the [Graph tab](#graph-tab): if an existing unbound graph node's name is a close match for the character's name, the app offers to link them; if no reasonable candidate exists, a fresh node is created automatically. This keeps a character's graph presence tied to the same binding used everywhere else in the lorebook, so relationships extracted from your story attach to the right entity without manual relinking.
+
+This same reconciliation isn't limited to the Bindings tab itself — opening a chat that has a lorebook attached proactively re-runs the same orphaned-binding and node-linking checks, surfacing a linking prompt mid-chat if something needs attention rather than only when you happen to visit the Bindings or Graph tab directly.
 
 ## World Lore Tab
 
@@ -113,7 +123,7 @@ The list, search, sort, and reorder behavior is otherwise identical to the World
 
 ## History Tab
 
-The History tab is a chronological timeline of your story, distinct from World/Character Lore in that every entry is anchored to a date rather than a topic.
+The History tab is a chronological timeline of your story, distinct from World/Character Lore in that every entry is anchored to a date rather than a topic. It has the same free-text search box as World/Character Lore, plus a sort dropdown (Entry Date, Date Created, Date Updated, each ascending/descending) — but no drag-to-reorder mode, since entries are always ordered by date rather than a manually-set position.
 
 Each **History Entry** has:
 
@@ -147,7 +157,7 @@ A history entry's Content field and its Scenes are separate things until you exp
 
 ## Graph Tab
 
-The Graph tab visualizes a narrative graph: nodes representing characters, factions, or other recurring entities, connected by directed relationships (e.g. "ally," "rival," "romantic") that the LLM extracts from your summarized scenes and history entries. It's only available when vectorization and summarization are both enabled system-wide, and it's the most power-user-facing part of the lorebook system — most of what appears here starts out generated, then gets refined by hand.
+The Graph tab visualizes a narrative graph: nodes representing characters, factions, or other recurring entities, connected by directed relationships (e.g. "ally," "rival," "romantic") that the LLM extracts from your summarized scenes and history entries. It's only available when Summarization is enabled system-wide (vectorization/embeddings has no bearing on it), and it's the most power-user-facing part of the lorebook system — most of what appears here starts out generated, then gets refined by hand.
 
 The toolbar switches between a force-directed **graph view** and a flat **list view** of every node and relationship, offers **Build Graph** (relabeled **Rebuild Graph** once nodes already exist) and **Extend** actions covered below, and a manual **+** button that opens a form to add a single node by hand without going through extraction at all.
 
@@ -175,7 +185,7 @@ Clicking a node in graph view opens a detail card where you can add a new relati
 
 Two different actions grow the graph, and picking the right one matters:
 
-- **Build Graph** processes every summarized scene in the lorebook (plus any history entry that has direct content) and proposes a **complete** graph from scratch. If a graph already exists, building again **replaces it entirely** — the confirmation screen warns you exactly how many existing unbound nodes and relationships will be permanently deleted before you can proceed.
+- **Build Graph** processes every summarized scene in the lorebook (plus any history entry that has direct content) and proposes a **complete** graph from scratch. If a graph already exists, building again **replaces it entirely** — the confirmation screen states how many existing unbound nodes and relationships will be permanently deleted, but in practice _every_ existing node and relationship is deleted, not just unbound ones. Nodes tied to a lorebook binding are recreated fresh from that binding afterward, so a bound character doesn't lose its graph presence entirely — but any manual edits you'd made to that node (state, visibility, summary, aliases, its History Entry link) are lost along with everything else, not preserved the way the confirmation text might suggest.
 - **Extend** only processes scenes and history entries that haven't been graphed yet, adding new nodes and relationships to what's already there without touching or deleting anything existing.
 
 In both cases, scenes that don't yet have a generated summary are listed as "skipped" in the confirmation screen, since the extraction step only has text to work with once a scene has been summarized — an unprocessed scene simply doesn't contribute anything to the graph yet.
@@ -218,7 +228,7 @@ With scenes summarized and history entries compiled, the [Graph tab](#graph-tab)
 
 A few conditions block each step, and knowing them ahead of time saves a trip through an error message:
 
-- The Graph tab (and therefore Step 4) is entirely unavailable unless both vectorization and summarization are enabled in [System Settings](./system-settings.md).
+- The Graph tab (and therefore Step 4) is entirely unavailable unless Summarization is enabled in [System Settings](./system-settings.md) — vectorization being on or off doesn't affect this.
 - Step 1's Scene option refuses to generate if the selected messages have a gap — reselect a truly consecutive run of visible messages.
 - Step 1's Character Lore option won't generate without a focus topic; World Lore's topic is optional.
 - Step 4 silently skips any scene that hasn't been through Step 2 (or the review from Step 1) yet — if your "ready to process" count seems low, check for scenes still missing a summary.

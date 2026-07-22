@@ -1,18 +1,18 @@
 /**
  * Socket Registration Hub
- * 
+ *
  * This file registers all socket handlers for the application using modular registration functions.
  * Each handler module exports its own registration function to keep handlers grouped logically.
- * 
+ *
  * MIGRATION STATUS:
  * ✅ All modules: Fully migrated to type-safe handlers with modular registration
  * ✅ Refactored: Individual imports replaced with registration functions per module
- * 
+ *
  * ARCHITECTURE:
  * �️ MODULAR REGISTRATION: Each module exports a registration function
  * 🎯 TYPE SAFETY: All handlers use Handler<Params, Ack> interface
  * 🔧 MAINTAINABILITY: Clean separation of concerns, easy to add/modify handlers
- * 
+ *
  * PROGRESS: 🎉 100% complete with modular architecture - Production ready!
  */
 
@@ -112,10 +112,10 @@ export function connectSockets(io: {
 
 /**
  * MODULAR ARCHITECTURE COMPLETE! 🎉
- * 
+ *
  * All socket functions have been successfully migrated to type-safe handlers using modular
  * registration functions. Each module now manages its own handler registration.
- * 
+ *
  * ✅ BENEFITS ACHIEVED:
  * - Type safety for all socket parameters and responses
  * - Consistent error handling with {event}:error pattern
@@ -123,18 +123,18 @@ export function connectSockets(io: {
  * - Modular registration functions per module for better organization
  * - Reduced coupling between modules and central registration
  * - Easy to add/modify handlers within each module
- * 
+ *
  * ✅ ARCHITECTURE:
  * - Each module exports a register{Module}Handlers() function
  * - Central index.ts imports only registration functions, not individual handlers
  * - Clean separation of concerns with logical grouping
  * - Consistent patterns across all modules
- * 
+ *
  * 📊 FINAL STATISTICS:
  * - 54+ handlers migrated to type-safe pattern
  * - 12 modules with modular registration functions
  * - 100% migration and refactoring complete
- * 
+ *
  * The register() function handles all type-safe handlers that implement:
  * - Handler<Params, Ack> interface from $lib/shared/events
  * - Consistent error handling with {event}:error pattern

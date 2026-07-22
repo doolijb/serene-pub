@@ -87,8 +87,7 @@ export const cardSourcesCharaVaultConnect: Handler<
 					.where(eq(schema.systemSettings.id, 1))
 
 				emitToUser("cardSources:charaVault:connect:error", {
-					error:
-						"Could not sign in to CharaVault with that email and App Password."
+					error: "Could not sign in to CharaVault with that email and App Password."
 				})
 				throw new Error("CharaVault login verification failed")
 			}
@@ -102,7 +101,8 @@ export const cardSourcesCharaVaultConnect: Handler<
 			console.error("CharaVault connect error:", error)
 			if (!error?.message?.includes("verification failed")) {
 				emitToUser("cardSources:charaVault:connect:error", {
-					error: error.message || "Failed to connect CharaVault account"
+					error:
+						error.message || "Failed to connect CharaVault account"
 				})
 			}
 			throw error
@@ -155,7 +155,10 @@ export const cardSourcesCharaVaultStatus: Handler<
 		try {
 			const settings = await db.query.systemSettings.findFirst({
 				where: eq(schema.systemSettings.id, 1),
-				columns: { charaVaultEmail: true, charaVaultEncryptedToken: true }
+				columns: {
+					charaVaultEmail: true,
+					charaVaultEncryptedToken: true
+				}
 			})
 
 			const hasCredential = !!(

@@ -38,7 +38,11 @@
 	let validationErrors: ValidationErrors = $state({})
 
 	socket.on("connections:test", (msg) => {
-		testResult = { ok: msg.ok, error: msg.error ?? undefined, models: msg.models }
+		testResult = {
+			ok: msg.ok,
+			error: msg.error ?? undefined,
+			models: msg.models
+		}
 	})
 
 	let testResult: { ok: boolean; error?: string; models?: any[] } | null =
@@ -169,7 +173,9 @@
 				bind:value={connection.baseUrl}
 				placeholder="http://localhost:8080/"
 				required
-				class="input {validationErrors.baseUrl ? 'border-error-500' : ''}"
+				class="input {validationErrors.baseUrl
+					? 'border-error-500'
+					: ''}"
 				aria-invalid={validationErrors.baseUrl ? "true" : "false"}
 				aria-describedby={validationErrors.baseUrl
 					? "baseUrl-error"
@@ -184,7 +190,7 @@
 			{#if validationErrors.baseUrl}
 				<p
 					id="baseUrl-error"
-					class="mt-1 text-sm text-error-500"
+					class="text-error-500 mt-1 text-sm"
 					role="alert"
 				>
 					{validationErrors.baseUrl}

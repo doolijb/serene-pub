@@ -8,7 +8,9 @@ export function registerActivityHandlers(socket: any) {
 	activityStore.registerEmitter(emitter, userId, isAdmin)
 
 	socket.on("activity:get", () => {
-		socket.emit("activity:update", { activities: activityStore.getFor(userId, isAdmin) })
+		socket.emit("activity:update", {
+			activities: activityStore.getFor(userId, isAdmin)
+		})
 	})
 
 	socket.on("activity:dismiss", (req: { id: string }) => {

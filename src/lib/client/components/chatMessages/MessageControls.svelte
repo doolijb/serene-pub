@@ -57,7 +57,11 @@
 	}
 </script>
 
-<div role="group" aria-label="Message actions" class="ml-auto flex items-center gap-2">
+<div
+	role="group"
+	aria-label="Message actions"
+	class="ml-auto flex items-center gap-2"
+>
 	{#if msg.isGenerating}
 		<button
 			class="btn btn-sm preset-filled-error-500 h-min px-3 py-2 text-[1em] lg:px-2 lg:py-1"
@@ -74,14 +78,18 @@
 		positioning={{ placement: "bottom" }}
 	>
 		<Popover.Trigger
-			class="btn btn-sm p-3 hover:bg-primary-600-400 {open ? 'bg-primary-600-400' : ''}"
+			class="btn btn-sm hover:bg-primary-600-400 p-3 {open
+				? 'bg-primary-600-400'
+				: ''}"
 			aria-label="Message options"
 		>
 			<Icons.EllipsisVertical size={20} />
 		</Popover.Trigger>
 		<Portal>
 			<Popover.Positioner class="z-[1000]!">
-				<Popover.Content class="card bg-primary-200-800 p-4 space-y-4 w-[min(90vw,320px)]">
+				<Popover.Content
+					class="card bg-primary-200-800 w-[min(90vw,320px)] space-y-4 p-4"
+				>
 					<header class="popover-menu-title">
 						<Icons.EllipsisVertical size={18} aria-hidden="true" />
 						<p>Message Options</p>
@@ -91,8 +99,12 @@
 							<button
 								class="btn btn-sm popover-menu-btn hover:preset-filled-warning-500"
 								title="Regenerate Response"
-								disabled={!canRegenerateLastMessage || !canControl}
-								onclick={(e) => { closeMenu(); onRegenerateMessage(e, msg) }}
+								disabled={!canRegenerateLastMessage ||
+									!canControl}
+								onclick={(e) => {
+									closeMenu()
+									onRegenerateMessage(e, msg)
+								}}
 							>
 								<Icons.RefreshCw size={16} />
 								<span>Regenerate Response</span>
@@ -104,7 +116,10 @@
 								title="Continue Response"
 								aria-label="Continue generating this response"
 								disabled={!!editChatMessage || !canControl}
-								onclick={(e) => { closeMenu(); onContinueMessage(e, msg) }}
+								onclick={(e) => {
+									closeMenu()
+									onContinueMessage(e, msg)
+								}}
 							>
 								<Icons.ArrowDown size={16} aria-hidden="true" />
 								<span>Continue Response</span>
@@ -114,8 +129,14 @@
 							class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
 							title="Edit Message"
 							aria-label="Edit this message"
-							disabled={!!editChatMessage || hasGeneratingMessage || msg.isHidden || !canControl}
-							onclick={(e) => { closeMenu(); onEditMessage(e, msg) }}
+							disabled={!!editChatMessage ||
+								hasGeneratingMessage ||
+								msg.isHidden ||
+								!canControl}
+							onclick={(e) => {
+								closeMenu()
+								onEditMessage(e, msg)
+							}}
 						>
 							<Icons.Edit size={16} aria-hidden="true" />
 							<span>Edit Message</span>
@@ -125,8 +146,12 @@
 								class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
 								title="Branch Chat"
 								aria-label="Create a new chat branch from this message"
-								disabled={!!editChatMessage || hasGeneratingMessage}
-								onclick={(e) => { closeMenu(); onBranchMessage(e, msg) }}
+								disabled={!!editChatMessage ||
+									hasGeneratingMessage}
+								onclick={(e) => {
+									closeMenu()
+									onBranchMessage(e, msg)
+								}}
 							>
 								<Icons.GitBranch size={16} aria-hidden="true" />
 								<span>Branch Chat</span>
@@ -137,10 +162,17 @@
 								class="btn btn-sm popover-menu-btn hover:preset-filled-warning-500"
 								title="Select for Summarization"
 								aria-label="Select this message for summarization"
-								disabled={!!editChatMessage || hasGeneratingMessage}
-								onclick={() => { closeMenu(); onStartSummarization!(msg) }}
+								disabled={!!editChatMessage ||
+									hasGeneratingMessage}
+								onclick={() => {
+									closeMenu()
+									onStartSummarization!(msg)
+								}}
 							>
-								<Icons.BookMarked size={16} aria-hidden="true" />
+								<Icons.BookMarked
+									size={16}
+									aria-hidden="true"
+								/>
 								<span>Select for Summarization</span>
 							</button>
 						{/if}
@@ -148,7 +180,10 @@
 							<button
 								class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
 								title="View Prompt Details"
-								onclick={() => { closeMenu(); onShowDebugMeta!(debugMeta!) }}
+								onclick={() => {
+									closeMenu()
+									onShowDebugMeta!(debugMeta!)
+								}}
 							>
 								<Icons.Info size={16} />
 								<span>Prompt Details</span>
@@ -157,29 +192,47 @@
 						<button
 							class="btn btn-sm popover-menu-btn hover:preset-filled-secondary-500"
 							class:preset-filled-secondary-500={msg.isHidden}
-							title={msg.isHidden ? "Unhide Message" : "Hide Message"}
-							aria-label={msg.isHidden ? "Unhide this message" : "Hide this message"}
-							disabled={!!editChatMessage || hasGeneratingMessage || !canControl}
-							onclick={(e) => { closeMenu(); onHideMessage(e, msg) }}
+							title={msg.isHidden
+								? "Unhide Message"
+								: "Hide Message"}
+							aria-label={msg.isHidden
+								? "Unhide this message"
+								: "Hide this message"}
+							disabled={!!editChatMessage ||
+								hasGeneratingMessage ||
+								!canControl}
+							onclick={(e) => {
+								closeMenu()
+								onHideMessage(e, msg)
+							}}
 						>
 							<Icons.Ghost size={16} aria-hidden="true" />
 							<span>
-								{msg.isHidden ? "Unhide Message" : "Hide Message"}
+								{msg.isHidden
+									? "Unhide Message"
+									: "Hide Message"}
 							</span>
 						</button>
 						<button
 							class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
 							title="Delete Message"
 							aria-label="Delete this message"
-							disabled={!!editChatMessage || hasGeneratingMessage || !canControl}
-							onclick={(e) => { closeMenu(); onDeleteMessage(e, msg) }}
+							disabled={!!editChatMessage ||
+								hasGeneratingMessage ||
+								!canControl}
+							onclick={(e) => {
+								closeMenu()
+								onDeleteMessage(e, msg)
+							}}
 						>
 							<Icons.Trash2 size={16} aria-hidden="true" />
 							<span>Delete Message</span>
 						</button>
 					</article>
 					<Popover.Arrow>
-						<Popover.ArrowTip class="!bg-primary-200 dark:!bg-primary-800" />
+						<Popover.ArrowTip
+							class="!bg-primary-200 dark:!bg-primary-800"
+						/>
 					</Popover.Arrow>
 				</Popover.Content>
 			</Popover.Positioner>

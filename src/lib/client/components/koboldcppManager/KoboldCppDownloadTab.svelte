@@ -19,9 +19,13 @@
 	]
 
 	const socket = useTypedSocket()
-	let koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(getContext("koboldCppSettingsCtx"))
+	let koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(
+		getContext("koboldCppSettingsCtx")
+	)
 
-	let modelsDir = $state(koboldCppSettingsCtx.settings?.koboldCppManagerModelsDir ?? "")
+	let modelsDir = $state(
+		koboldCppSettingsCtx.settings?.koboldCppManagerModelsDir ?? ""
+	)
 	let selectedSource = $state(SOURCE_RECOMMENDED)
 	let searchString = $state("")
 	let isSearching = $state(false)
@@ -31,11 +35,14 @@
 	// Enter (the only way to actually trigger search()) was ever pressed.
 	let hasSearched = $state(false)
 
-	let searchResults = $state<Sockets.KoboldCpp.SearchModels.ModelResult[]>([])
-	let recommendedModels = $state<Sockets.KoboldCpp.RecommendedModels.RecommendedModel[]>([])
+	let searchResults = $state<Sockets.KoboldCPP.SearchModels.ModelResult[]>([])
+	let recommendedModels = $state<
+		Sockets.KoboldCPP.RecommendedModels.RecommendedModel[]
+	>([])
 	let isLoadingRecommended = $state(false)
 
-	let selectedModel = $state<Sockets.KoboldCpp.SearchModels.ModelResult | null>(null)
+	let selectedModel =
+		$state<Sockets.KoboldCPP.SearchModels.ModelResult | null>(null)
 	let showQuantModal = $state(false)
 
 	function vramColor(gb: number): string {
@@ -59,10 +66,15 @@
 		isSearching = true
 		hasSearched = true
 		searchResults = []
-		socket.emit("koboldcpp:searchModels", { searchTerm: searchString.trim() })
+		socket.emit("koboldcpp:searchModels", {
+			searchTerm: searchString.trim()
+		})
 	}
 
-	function startDownload(model: Sockets.KoboldCpp.SearchModels.ModelResult, opt: Sockets.KoboldCpp.SearchModels.PullOption) {
+	function startDownload(
+		model: Sockets.KoboldCPP.SearchModels.ModelResult,
+		opt: Sockets.KoboldCPP.SearchModels.PullOption
+	) {
 		showQuantModal = false
 		selectedModel = null
 		socket.emit("koboldcpp:downloadModel", {
@@ -74,33 +86,52 @@
 			quantization: opt.label,
 			sizeBytes: opt.sizeBytes
 		})
-		toaster.success({ title: "Download started", description: opt.filename })
+		toaster.success({
+			title: "Download started",
+			description: opt.filename
+		})
 		onDownloadStart?.()
 	}
 
 	onMount(() => {
-		socket.on("systemSettings:get", (message: Sockets.SystemSettings.Get.Response) => {
-			modelsDir = message.koboldCppSettings?.koboldCppManagerModelsDir ?? ""
-		})
+		socket.on(
+			"systemSettings:get",
+			(message: Sockets.SystemSettings.Get.Response) => {
+				modelsDir =
+					message.koboldCppSettings?.koboldCppManagerModelsDir ?? ""
+			}
+		)
 
-		socket.on("koboldcpp:searchModels", (msg: Sockets.KoboldCpp.SearchModels.Response) => {
-			isSearching = false
-			searchResults = msg.models
-		})
+		socket.on(
+			"koboldcpp:searchModels",
+			(msg: Sockets.KoboldCPP.SearchModels.Response) => {
+				isSearching = false
+				searchResults = msg.models
+			}
+		)
 		socket.on("koboldcpp:searchModels:error", () => {
 			isSearching = false
 			toaster.error({ title: "Search failed" })
 		})
 
 		socket.on("koboldcpp:downloadModel", () => {})
-		socket.on("koboldcpp:downloadModel:error", (msg: Sockets.ErrorResponse) => {
-			toaster.error({ title: "Download failed", description: msg.error })
-		})
+		socket.on(
+			"koboldcpp:downloadModel:error",
+			(msg: Sockets.ErrorResponse) => {
+				toaster.error({
+					title: "Download failed",
+					description: msg.error
+				})
+			}
+		)
 
-		socket.on("koboldcpp:recommendedModels", (msg: Sockets.KoboldCpp.RecommendedModels.Response) => {
-			isLoadingRecommended = false
-			recommendedModels = msg.models
-		})
+		socket.on(
+			"koboldcpp:recommendedModels",
+			(msg: Sockets.KoboldCPP.RecommendedModels.Response) => {
+				isLoadingRecommended = false
+				recommendedModels = msg.models
+			}
+		)
 		socket.on("koboldcpp:recommendedModels:error", () => {
 			isLoadingRecommended = false
 			toaster.error({ title: "Failed to load recommended models" })
@@ -123,13 +154,24 @@
 
 {#if !isLocal}
 	<div class="p-4">
-		<div class="bg-warning-100 dark:bg-warning-900 border-warning-300 dark:border-warning-700 rounded-lg border p-4">
+		<div
+			class="bg-warning-100 dark:bg-warning-900 border-warning-300 dark:border-warning-700 rounded-lg border p-4"
+		>
 			<div class="flex items-start gap-3">
-				<Icons.AlertTriangle class="text-warning-600 mt-0.5 h-5 w-5 shrink-0" />
+				<Icons.AlertTriangle
+					class="text-warning-600 mt-0.5 h-5 w-5 shrink-0"
+				/>
 				<div>
-					<h4 class="text-warning-800 dark:text-warning-200 font-medium">Remote instance detected</h4>
-					<p class="text-warning-700 dark:text-warning-300 mt-1 text-sm">
-						Model downloads are only available when KoboldCPP is running on the same machine as Serene Pub.
+					<h4
+						class="text-warning-800 dark:text-warning-200 font-medium"
+					>
+						Remote instance detected
+					</h4>
+					<p
+						class="text-warning-700 dark:text-warning-300 mt-1 text-sm"
+					>
+						Model downloads are only available when KoboldCPP is
+						running on the same machine as Serene Pub.
 					</p>
 				</div>
 			</div>
@@ -138,10 +180,13 @@
 {:else if !modelsDir}
 	<div class="p-4">
 		<div class="bg-surface-100-800 rounded-lg border p-6 text-center">
-			<Icons.FolderOpen class="text-muted-foreground mx-auto mb-3 h-10 w-10 opacity-50" />
+			<Icons.FolderOpen
+				class="text-muted-foreground mx-auto mb-3 h-10 w-10 opacity-50"
+			/>
 			<h3 class="mb-1 font-semibold">Models directory not configured</h3>
 			<p class="text-muted-foreground text-sm">
-				Set a <strong>Models Directory</strong> in the Settings tab before downloading models.
+				Set a <strong>Models Directory</strong>
+				in the Settings tab before downloading models.
 			</p>
 		</div>
 	</div>
@@ -162,7 +207,8 @@
 				type="button"
 				class="text-surface-700-300 hover:text-foreground absolute top-1/2 left-3 -translate-y-1/2 disabled:cursor-not-allowed"
 				onclick={search}
-				disabled={selectedSource === SOURCE_RECOMMENDED || !searchString.trim()}
+				disabled={selectedSource === SOURCE_RECOMMENDED ||
+					!searchString.trim()}
 				title="Search"
 				aria-label="Search"
 			>
@@ -186,13 +232,23 @@
 		{#if selectedSource === SOURCE_RECOMMENDED}
 			{#if isLoadingRecommended}
 				<div class="p-6 text-center">
-					<Icons.Loader2 class="mx-auto mb-4 animate-spin" size={32} />
-					<p class="text-sm opacity-75">Loading recommended models…</p>
+					<Icons.Loader2
+						class="mx-auto mb-4 animate-spin"
+						size={32}
+					/>
+					<p class="text-sm opacity-75">
+						Loading recommended models…
+					</p>
 				</div>
 			{:else if recommendedModels.length === 0}
 				<div class="p-6 text-center">
-					<Icons.Search class="text-surface-700-300 mx-auto mb-4" size={48} />
-					<p class="text-sm opacity-75">No recommended models available.</p>
+					<Icons.Search
+						class="text-surface-700-300 mx-auto mb-4"
+						size={48}
+					/>
+					<p class="text-sm opacity-75">
+						No recommended models available.
+					</p>
 				</div>
 			{:else}
 				{#each recommendedModels as model}
@@ -200,18 +256,30 @@
 						<div class="flex flex-col gap-3">
 							<div class="flex items-start justify-between">
 								<div class="flex-1">
-									<h4 class="text-foreground mb-1 text-lg font-semibold">
+									<h4
+										class="text-foreground mb-1 text-lg font-semibold"
+									>
 										{model.ollamaName ?? model.name}
 									</h4>
-									<div class="mb-2 flex flex-wrap items-center gap-2">
+									<div
+										class="mb-2 flex flex-wrap items-center gap-2"
+									>
 										{#if model.parameterSize}
-											<span class="badge preset-filled-primary-500 rounded-full px-2 py-1 text-xs">
+											<span
+												class="badge preset-filled-primary-500 rounded-full px-2 py-1 text-xs"
+											>
 												{model.parameterSize}
 											</span>
 										{/if}
 										{#if model.recommendedVram != null}
-											<span class="badge bg-surface-200 dark:bg-surface-800 rounded-full px-2 py-1 text-xs {vramColor(model.recommendedVram)}">
-												{model.recommendedVram}GB VRAM • {vramTier(model.recommendedVram)}
+											<span
+												class="badge bg-surface-200 dark:bg-surface-800 rounded-full px-2 py-1 text-xs {vramColor(
+													model.recommendedVram
+												)}"
+											>
+												{model.recommendedVram}GB VRAM • {vramTier(
+													model.recommendedVram
+												)}
 											</span>
 										{/if}
 									</div>
@@ -219,32 +287,50 @@
 							</div>
 
 							{#if model.description}
-								<p class="text-muted-foreground text-sm leading-relaxed">{model.description}</p>
+								<p
+									class="text-muted-foreground text-sm leading-relaxed"
+								>
+									{model.description}
+								</p>
 							{/if}
 
-							<div class="text-surface-700-300 flex flex-wrap items-center gap-4 text-xs">
+							<div
+								class="text-surface-700-300 flex flex-wrap items-center gap-4 text-xs"
+							>
 								{#if model.downloads != null}
 									<div class="flex items-center gap-1">
 										<Icons.Download size={12} />
-										<span>{model.downloads.toLocaleString()} downloads</span>
+										<span>
+											{model.downloads.toLocaleString()} downloads
+										</span>
 									</div>
 								{/if}
 								{#if model.likes != null}
 									<div class="flex items-center gap-1">
 										<Icons.Heart size={12} />
-										<span>{model.likes.toLocaleString()} likes</span>
+										<span>
+											{model.likes.toLocaleString()} likes
+										</span>
 									</div>
 								{/if}
 								<div class="flex items-center gap-1">
 									<Icons.Layers size={12} />
-									<span>{model.pullOptions.length} quant{model.pullOptions.length !== 1 ? "s" : ""}</span>
+									<span>
+										{model.pullOptions.length} quant{model
+											.pullOptions.length !== 1
+											? "s"
+											: ""}
+									</span>
 								</div>
 							</div>
 
 							<div class="flex gap-2">
 								<button
 									class="btn btn-sm preset-filled-primary-500"
-									onclick={() => { selectedModel = model; showQuantModal = true }}
+									onclick={() => {
+										selectedModel = model
+										showQuantModal = true
+									}}
 								>
 									<Icons.Download size={14} />
 									Download
@@ -265,23 +351,35 @@
 					</div>
 				{/each}
 			{/if}
-
 		{:else}
 			<!-- Hugging Face search results -->
 			{#if isSearching}
 				<div class="p-6 text-center">
-					<Icons.Loader2 class="mx-auto mb-4 animate-spin" size={32} />
+					<Icons.Loader2
+						class="mx-auto mb-4 animate-spin"
+						size={32}
+					/>
 					<p class="text-sm opacity-75">Searching…</p>
 				</div>
 			{:else if searchResults.length === 0 && hasSearched}
 				<div class="p-6 text-center">
-					<Icons.Search class="text-surface-700-300 mx-auto mb-4" size={48} />
-					<p class="text-sm opacity-75">No models found for "{searchString}".</p>
+					<Icons.Search
+						class="text-surface-700-300 mx-auto mb-4"
+						size={48}
+					/>
+					<p class="text-sm opacity-75">
+						No models found for "{searchString}".
+					</p>
 				</div>
 			{:else if searchResults.length === 0}
 				<div class="p-6 text-center">
-					<Icons.Search class="text-surface-700-300 mx-auto mb-4" size={48} />
-					<p class="text-sm opacity-75">Search Hugging Face for GGUF models, then press Enter.</p>
+					<Icons.Search
+						class="text-surface-700-300 mx-auto mb-4"
+						size={48}
+					/>
+					<p class="text-sm opacity-75">
+						Search Hugging Face for GGUF models, then press Enter.
+					</p>
 				</div>
 			{:else}
 				{#each searchResults as model}
@@ -290,32 +388,50 @@
 							<h4 class="text-lg font-semibold">{model.name}</h4>
 
 							{#if model.description}
-								<p class="text-surface-700-300 line-clamp-2 text-sm">{model.description}</p>
+								<p
+									class="text-surface-700-300 line-clamp-2 text-sm"
+								>
+									{model.description}
+								</p>
 							{/if}
 
-							<div class="text-surface-700-300 flex flex-wrap items-center gap-4 text-xs">
+							<div
+								class="text-surface-700-300 flex flex-wrap items-center gap-4 text-xs"
+							>
 								{#if model.downloads != null}
 									<div class="flex items-center gap-1">
 										<Icons.Download size={12} />
-										<span>{model.downloads.toLocaleString()} downloads</span>
+										<span>
+											{model.downloads.toLocaleString()} downloads
+										</span>
 									</div>
 								{/if}
 								{#if model.likes != null}
 									<div class="flex items-center gap-1">
 										<Icons.Heart size={12} />
-										<span>{model.likes.toLocaleString()} likes</span>
+										<span>
+											{model.likes.toLocaleString()} likes
+										</span>
 									</div>
 								{/if}
 								<div class="flex items-center gap-1">
 									<Icons.Layers size={12} />
-									<span>{model.pullOptions.length} quant{model.pullOptions.length !== 1 ? "s" : ""}</span>
+									<span>
+										{model.pullOptions.length} quant{model
+											.pullOptions.length !== 1
+											? "s"
+											: ""}
+									</span>
 								</div>
 							</div>
 
 							<div class="flex gap-2">
 								<button
 									class="btn btn-sm preset-filled-primary-500"
-									onclick={() => { selectedModel = model; showQuantModal = true }}
+									onclick={() => {
+										selectedModel = model
+										showQuantModal = true
+									}}
 								>
 									<Icons.Download size={14} />
 									Download
@@ -348,31 +464,54 @@
 		aria-modal="true"
 		aria-label="Select quantization"
 	>
-		<div class="card bg-surface-100-900 border-surface-300-700 w-[36rem] max-w-[95vw] space-y-4 border p-6 shadow-xl">
+		<div
+			class="card bg-surface-100-900 border-surface-300-700 w-[36rem] max-w-[95vw] space-y-4 border p-6 shadow-xl"
+		>
 			<div class="flex items-start justify-between">
 				<div>
 					<h2 class="text-lg font-bold">Select Quantization</h2>
-					<p class="text-muted-foreground mt-0.5 text-sm">{selectedModel.name}</p>
+					<p class="text-muted-foreground mt-0.5 text-sm">
+						{selectedModel.name}
+					</p>
 				</div>
-				<button class="btn btn-sm preset-filled-surface-400-600" onclick={() => { showQuantModal = false; selectedModel = null }}>
+				<button
+					class="btn btn-sm preset-filled-surface-400-600"
+					onclick={() => {
+						showQuantModal = false
+						selectedModel = null
+					}}
+				>
 					<Icons.X size={16} />
 				</button>
 			</div>
 
 			<div class="bg-surface-200-800 rounded-lg p-3 text-xs">
-				Higher quantizations (Q8) preserve more quality but require more memory. Q4_K_M is a good balance for most systems.
+				Higher quantizations (Q8) preserve more quality but require more
+				memory. Q4_K_M is a good balance for most systems.
 			</div>
 
 			<div class="max-h-80 space-y-2 overflow-y-auto">
 				{#each selectedModel.pullOptions as opt}
-					<div class="card bg-surface-200-800 flex items-center justify-between p-3">
+					<div
+						class="card bg-surface-200-800 flex items-center justify-between p-3"
+					>
 						<div class="flex items-center gap-2">
-							<span class="font-mono text-sm font-medium">{opt.label}</span>
+							<span class="font-mono text-sm font-medium">
+								{opt.label}
+							</span>
 							{#if opt.label.includes("Q4_K_M")}
-								<span class="rounded bg-warning-500 px-1.5 py-0.5 text-xs text-white">Recommended</span>
+								<span
+									class="bg-warning-500 rounded px-1.5 py-0.5 text-xs text-white"
+								>
+									Recommended
+								</span>
 							{/if}
 							{#if opt.sizeBytes}
-								<span class="text-surface-700-300 text-xs">{(opt.sizeBytes / 1_073_741_824).toFixed(1)}GB</span>
+								<span class="text-surface-700-300 text-xs">
+									{(opt.sizeBytes / 1_073_741_824).toFixed(
+										1
+									)}GB
+								</span>
 							{/if}
 						</div>
 						<button
@@ -387,7 +526,13 @@
 			</div>
 
 			<div class="flex justify-end">
-				<button class="btn preset-filled-surface-400-600" onclick={() => { showQuantModal = false; selectedModel = null }}>
+				<button
+					class="btn preset-filled-surface-400-600"
+					onclick={() => {
+						showQuantModal = false
+						selectedModel = null
+					}}
+				>
 					Cancel
 				</button>
 			</div>

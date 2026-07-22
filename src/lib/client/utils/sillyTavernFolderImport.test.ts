@@ -85,7 +85,8 @@ describe("stageFilesToServer transport", () => {
 			})
 
 			const socket = {
-				emit: (event: string, params: unknown) => rawClient.emit(event, params),
+				emit: (event: string, params: unknown) =>
+					rawClient.emit(event, params),
 				on: (event: string, listener: (...args: any[]) => void) =>
 					rawClient.on(event, listener),
 				off: (event: string, listener: (...args: any[]) => void) =>

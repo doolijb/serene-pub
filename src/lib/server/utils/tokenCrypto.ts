@@ -19,9 +19,7 @@ const KEY_INFO = "serene-pub:cardSourceToken:v1"
 
 function deriveKey(): Buffer {
 	const secret = getCryptoSecretKey()
-	return Buffer.from(
-		crypto.hkdfSync("sha256", secret, "", KEY_INFO, 32)
-	)
+	return Buffer.from(crypto.hkdfSync("sha256", secret, "", KEY_INFO, 32))
 }
 
 export interface EncryptedToken {

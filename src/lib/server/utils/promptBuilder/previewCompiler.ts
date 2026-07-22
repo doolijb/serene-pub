@@ -10,9 +10,10 @@ export type PreviewMessage = { role: string; content: string }
 // using the same helper set as the real prompt builder, without touching any chat/connection state.
 // Renders with the role-tagged SPLIT_CHAT format so the result can be shown as distinct
 // system/user/assistant blocks rather than one flat wall of text.
-export function compileContextTemplatePreview(
-	template: string
-): { messages?: PreviewMessage[]; error?: string } {
+export function compileContextTemplatePreview(template: string): {
+	messages?: PreviewMessage[]
+	error?: string
+} {
 	try {
 		const handlebars = Handlebars.create()
 		registerContextHandlebarsHelpers(handlebars, {
@@ -20,7 +21,9 @@ export function compileContextTemplatePreview(
 		})
 		const compiled = handlebars.compile(template)
 		const rendered = compiled(buildMockTemplateContext())
-		const messages = parseSplitChatPrompt(rendered) as unknown as PreviewMessage[]
+		const messages = parseSplitChatPrompt(
+			rendered
+		) as unknown as PreviewMessage[]
 		return { messages }
 	} catch (err: any) {
 		return { error: err?.message || "Failed to render template" }

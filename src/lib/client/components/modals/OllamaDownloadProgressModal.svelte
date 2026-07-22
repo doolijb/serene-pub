@@ -91,192 +91,216 @@
 	}}
 >
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-md bg-black/20" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-6 space-y-6 shadow-2xl border border-surface-300-700 w-[min(95vw,640px)] max-h-[90dvh]">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 bg-black/20 backdrop-blur-md"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 border-surface-300-700 max-h-[90dvh] w-[min(95vw,640px)] space-y-6 border p-6 shadow-2xl"
+			>
 				<header class="border-surface-300-700 border-b pb-4">
-			<div class="flex items-center gap-3">
-				<div class="bg-primary-500/10 rounded-full p-2">
-					<Icons.Download size={20} class="text-primary-500" />
-				</div>
-				<div>
-					<h2 class="h3 font-bold">Model Downloads</h2>
-					<p class="text-surface-700-300 text-sm">
-						{Object.keys(downloadingQuants).length} model{Object.keys(
-							downloadingQuants
-						).length !== 1
-							? "s"
-							: ""} downloading
-					</p>
-				</div>
-			</div>
-		</header>
-		<article class="max-h-80 space-y-6 overflow-y-auto pr-2">
-			{#each Object.entries(downloadingQuants) as [key, progress]}
-				{#if key === "undefined"}
-					<!-- Skip undefined keys -->
-				{:else}
-					{@const fileStats = getFileStats(progress)}
-					<div
-						class="bg-surface-200-800 border-surface-300-700 rounded-lg border p-4"
-					>
-						<div class="flex items-start gap-4">
+					<div class="flex items-center gap-3">
+						<div class="bg-primary-500/10 rounded-full p-2">
+							<Icons.Download
+								size={20}
+								class="text-primary-500"
+							/>
+						</div>
+						<div>
+							<h2 class="h3 font-bold">Model Downloads</h2>
+							<p class="text-surface-700-300 text-sm">
+								{Object.keys(downloadingQuants).length} model{Object.keys(
+									downloadingQuants
+								).length !== 1
+									? "s"
+									: ""} downloading
+							</p>
+						</div>
+					</div>
+				</header>
+				<article class="max-h-80 space-y-6 overflow-y-auto pr-2">
+					{#each Object.entries(downloadingQuants) as [key, progress]}
+						{#if key === "undefined"}
+							<!-- Skip undefined keys -->
+						{:else}
+							{@const fileStats = getFileStats(progress)}
 							<div
-								class="bg-primary-500/10 mt-1 rounded-full p-2"
+								class="bg-surface-200-800 border-surface-300-700 rounded-lg border p-4"
 							>
-								{#if isDone(progress)}
-									{#if progress.status.toLowerCase() === "canceled"}
-										<Icons.X
-											size={16}
-											class="text-warning-500"
-										/>
-									{:else if progress.status.toLowerCase() === "error"}
-										<Icons.AlertTriangle
-											size={16}
-											class="text-error-500"
-										/>
-									{:else}
-										<Icons.Check
-											size={16}
-											class="text-success-500"
-										/>
-									{/if}
-								{:else}
-									<Icons.Download
-										size={16}
-										class="text-primary-500 animate-pulse"
-									/>
-								{/if}
-							</div>
-							<div class="min-w-0 flex-1">
-								<div
-									class="mb-3 flex items-center justify-between"
-								>
-									<h4
-										class="text-surface-900-100 truncate font-semibold"
+								<div class="flex items-start gap-4">
+									<div
+										class="bg-primary-500/10 mt-1 rounded-full p-2"
 									>
-										{progress.modelName}
-									</h4>
-									<div class="ml-2 flex items-center gap-2">
-										{#if onCancel && !isDone(progress)}
-											<button
-												class="btn btn-sm preset-filled-error-500"
-												onclick={() =>
-													onCancel?.(
-														progress.modelName
-													)}
-												title="Cancel download"
-											>
-												<Icons.X size={14} />
-												Cancel
-											</button>
+										{#if isDone(progress)}
+											{#if progress.status.toLowerCase() === "canceled"}
+												<Icons.X
+													size={16}
+													class="text-warning-500"
+												/>
+											{:else if progress.status.toLowerCase() === "error"}
+												<Icons.AlertTriangle
+													size={16}
+													class="text-error-500"
+												/>
+											{:else}
+												<Icons.Check
+													size={16}
+													class="text-success-500"
+												/>
+											{/if}
+										{:else}
+											<Icons.Download
+												size={16}
+												class="text-primary-500 animate-pulse"
+											/>
 										{/if}
 									</div>
-								</div>
-
-								<div class="space-y-3">
-									<!-- Individual file progress bars -->
-									<div class="space-y-3">
-										{#each Object.entries(progress.files) as [fileName, fileProgress]}
-											<div class="space-y-1">
-												<div
-													class="flex items-center justify-between text-xs"
-												>
-													<span
-														class="text-surface-700-300 max-w-[60%] truncate font-mono"
-														title={fileName}
+									<div class="min-w-0 flex-1">
+										<div
+											class="mb-3 flex items-center justify-between"
+										>
+											<h4
+												class="text-surface-900-100 truncate font-semibold"
+											>
+												{progress.modelName}
+											</h4>
+											<div
+												class="ml-2 flex items-center gap-2"
+											>
+												{#if onCancel && !isDone(progress)}
+													<button
+														class="btn btn-sm preset-filled-error-500"
+														onclick={() =>
+															onCancel?.(
+																progress.modelName
+															)}
+														title="Cancel download"
 													>
-														{fileName}
-													</span>
-													<span
-														class="text-surface-400 font-mono"
-													>
-														{fileProgress.total > 0
-															? `${((fileProgress.completed / fileProgress.total) * 100).toFixed(1)}%`
-															: "0%"}
-													</span>
-												</div>
-												<div class="w-full">
-													<Progress value={fileProgress.completed} max={fileProgress.total}>
-														<Progress.Track class="bg-surface-200-800">
-															<Progress.Range class="bg-primary-500" />
-														</Progress.Track>
-													</Progress>
-												</div>
-												{#if fileProgress.total > 0}
-													<div
-														class="text-surface-400 flex justify-end font-mono text-[10px]"
-													>
-														{(
-															fileProgress.completed /
-															(1024 * 1024)
-														).toFixed(1)}MB /
-														{(
-															fileProgress.total /
-															(1024 * 1024)
-														).toFixed(1)}MB
-													</div>
+														<Icons.X size={14} />
+														Cancel
+													</button>
 												{/if}
 											</div>
-										{/each}
-									</div>
+										</div>
 
-									<div
-										class="border-surface-300-700 flex items-center justify-between border-t pt-2 text-xs"
-									>
-										<div class="flex items-center gap-2">
+										<div class="space-y-3">
+											<!-- Individual file progress bars -->
+											<div class="space-y-3">
+												{#each Object.entries(progress.files) as [fileName, fileProgress]}
+													<div class="space-y-1">
+														<div
+															class="flex items-center justify-between text-xs"
+														>
+															<span
+																class="text-surface-700-300 max-w-[60%] truncate font-mono"
+																title={fileName}
+															>
+																{fileName}
+															</span>
+															<span
+																class="text-surface-400 font-mono"
+															>
+																{fileProgress.total >
+																0
+																	? `${((fileProgress.completed / fileProgress.total) * 100).toFixed(1)}%`
+																	: "0%"}
+															</span>
+														</div>
+														<div class="w-full">
+															<Progress
+																value={fileProgress.completed}
+																max={fileProgress.total}
+															>
+																<Progress.Track
+																	class="bg-surface-200-800"
+																>
+																	<Progress.Range
+																		class="bg-primary-500"
+																	/>
+																</Progress.Track>
+															</Progress>
+														</div>
+														{#if fileProgress.total > 0}
+															<div
+																class="text-surface-400 flex justify-end font-mono text-[10px]"
+															>
+																{(
+																	fileProgress.completed /
+																	(1024 *
+																		1024)
+																).toFixed(1)}MB
+																/
+																{(
+																	fileProgress.total /
+																	(1024 *
+																		1024)
+																).toFixed(1)}MB
+															</div>
+														{/if}
+													</div>
+												{/each}
+											</div>
+
 											<div
-												class="h-2 w-2 rounded-full {isDone(
-													progress
-												)
-													? ''
-													: 'animate-pulse'} {progress.status.toLowerCase() ===
-												'canceled'
-													? 'bg-warning-500'
-													: progress.status.toLowerCase() ===
-														  'error'
-														? 'bg-error-500'
-														: progress.status.toLowerCase() ===
-																	'success' ||
-															  isComplete(
-																	progress
-															  )
-															? 'bg-success-500'
-															: 'bg-primary-500'}"
-											></div>
-											<span
-												class="text-surface-600-400 font-medium"
+												class="border-surface-300-700 flex items-center justify-between border-t pt-2 text-xs"
 											>
-												{progress.status}
-											</span>
+												<div
+													class="flex items-center gap-2"
+												>
+													<div
+														class="h-2 w-2 rounded-full {isDone(
+															progress
+														)
+															? ''
+															: 'animate-pulse'} {progress.status.toLowerCase() ===
+														'canceled'
+															? 'bg-warning-500'
+															: progress.status.toLowerCase() ===
+																  'error'
+																? 'bg-error-500'
+																: progress.status.toLowerCase() ===
+																			'success' ||
+																	  isComplete(
+																			progress
+																	  )
+																	? 'bg-success-500'
+																	: 'bg-primary-500'}"
+													></div>
+													<span
+														class="text-surface-600-400 font-medium"
+													>
+														{progress.status}
+													</span>
+												</div>
+											</div>
 										</div>
 									</div>
 								</div>
 							</div>
-						</div>
-					</div>
-				{/if}
-			{/each}
-		</article>
-		<footer class="border-surface-300-700 border-t pt-4">
-			<div
-				class="text-surface-700-300 flex items-center justify-between text-xs"
-			>
-				<!-- <div class="flex items-center gap-2">
+						{/if}
+					{/each}
+				</article>
+				<footer class="border-surface-300-700 border-t pt-4">
+					<div
+						class="text-surface-700-300 flex items-center justify-between text-xs"
+					>
+						<!-- <div class="flex items-center gap-2">
 					<Icons.Info size={14} />
 					<span>Downloads will continue in the background</span>
 				</div> -->
-				{#if areAllDownloadsDone()}
-					<button
-						class="btn btn-sm preset-filled-primary-500"
-						onclick={handleClose}
-					>
-						<Icons.X size={14} />
-						Close
-					</button>
-				{/if}
-			</div>
-		</footer>
+						{#if areAllDownloadsDone()}
+							<button
+								class="btn btn-sm preset-filled-primary-500"
+								onclick={handleClose}
+							>
+								<Icons.X size={14} />
+								Close
+							</button>
+						{/if}
+					</div>
+				</footer>
 			</Dialog.Content>
 		</Dialog.Positioner>
 	</Portal>

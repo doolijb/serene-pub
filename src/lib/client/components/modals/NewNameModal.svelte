@@ -58,87 +58,96 @@
 
 <Dialog {open} {onOpenChange}>
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
 			<Dialog.Content
-				class="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-md"
+				class="card bg-surface-100-900 max-w-md space-y-6 p-6 shadow-xl"
 				role="dialog"
 				aria-labelledby="new-name-modal-title"
 				aria-describedby="new-name-modal-description"
 			>
 				<header class="flex justify-between">
-			<h2 id="new-name-modal-title" class="h2">{title ? title : "Create new"}</h2>
-		</header>
-		<article class="space-y-4">
-			{#if description}
-				<p id="new-name-modal-description" class="text-muted-foreground">
-					{description}
-				</p>
-			{/if}
-			<div class="form-field">
-				<label for="name-input" class="sr-only">Name</label>
-				<input
-					id="name-input"
-					bind:this={inputRef}
-					bind:value={name}
-					class="input w-full {validationErrors.name
-						? 'border-error-500'
-						: ''}"
-					type="text"
-					placeholder="Enter a name..."
-					aria-required="true"
-					aria-invalid={!!validationErrors.name}
-					aria-describedby={validationErrors.name
-						? "name-error"
-						: undefined}
-					onkeydown={(e) => {
-						if (e.key === "Enter" && isValid) {
+					<h2 id="new-name-modal-title" class="h2">
+						{title ? title : "Create new"}
+					</h2>
+				</header>
+				<article class="space-y-4">
+					{#if description}
+						<p
+							id="new-name-modal-description"
+							class="text-muted-foreground"
+						>
+							{description}
+						</p>
+					{/if}
+					<div class="form-field">
+						<label for="name-input" class="sr-only">Name</label>
+						<input
+							id="name-input"
+							bind:this={inputRef}
+							bind:value={name}
+							class="input w-full {validationErrors.name
+								? 'border-error-500'
+								: ''}"
+							type="text"
+							placeholder="Enter a name..."
+							aria-required="true"
+							aria-invalid={!!validationErrors.name}
+							aria-describedby={validationErrors.name
+								? "name-error"
+								: undefined}
+							onkeydown={(e) => {
+								if (e.key === "Enter" && isValid) {
+									if (validateForm()) {
+										onConfirm(name)
+									}
+								}
+							}}
+							oninput={() => {
+								if (validationErrors.name) {
+									const { name, ...rest } = validationErrors
+									validationErrors = rest
+								}
+							}}
+						/>
+						{#if validationErrors.name}
+							<p
+								id="name-error"
+								class="text-error-500 mt-1 text-sm"
+								role="alert"
+							>
+								{validationErrors.name}
+							</p>
+						{/if}
+					</div>
+				</article>
+				<footer class="flex justify-end gap-4">
+					<button
+						class="btn preset-filled-surface-500"
+						onclick={onCancel}
+						type="button"
+						aria-label="Cancel and close modal"
+					>
+						Cancel
+					</button>
+					<button
+						class="btn preset-filled-primary-500"
+						onclick={() => {
 							if (validateForm()) {
 								onConfirm(name)
 							}
-						}
-					}}
-					oninput={() => {
-						if (validationErrors.name) {
-							const { name, ...rest } = validationErrors
-							validationErrors = rest
-						}
-					}}
-				/>
-				{#if validationErrors.name}
-					<p
-						id="name-error"
-						class="mt-1 text-sm text-error-500"
-						role="alert"
+						}}
+						disabled={!isValid}
+						type="button"
+						aria-label="Confirm and create new item"
 					>
-						{validationErrors.name}
-					</p>
-				{/if}
-			</div>
-		</article>
-		<footer class="flex justify-end gap-4">
-			<button
-				class="btn preset-filled-surface-500"
-				onclick={onCancel}
-				type="button"
-				aria-label="Cancel and close modal"
-			>
-				Cancel
-			</button>
-			<button
-				class="btn preset-filled-primary-500"
-				onclick={() => {
-					if (validateForm()) {
-						onConfirm(name)
-					}
-				}}
-				disabled={!isValid}
-				type="button"
-				aria-label="Confirm and create new item"
-			>
-				Confirm
-			</button>
-		</footer>
+						Confirm
+					</button>
+				</footer>
 			</Dialog.Content>
 		</Dialog.Positioner>
 	</Portal>

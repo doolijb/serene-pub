@@ -16,11 +16,20 @@
 		open: boolean
 		onOpenChange: (e: OpenChangeDetails) => void
 		character: ExportableCharacter | null
-		onConfirm: (options: { format: "json" | "png"; lorebookId: number | null }) => void
+		onConfirm: (options: {
+			format: "json" | "png"
+			lorebookId: number | null
+		}) => void
 		onCancel: () => void
 	}
 
-	let { open = $bindable(), onOpenChange, character, onConfirm, onCancel }: Props = $props()
+	let {
+		open = $bindable(),
+		onOpenChange,
+		character,
+		onConfirm,
+		onCancel
+	}: Props = $props()
 
 	const socket = useTypedSocket()
 
@@ -35,7 +44,9 @@
 		if (open && character) {
 			selectedExportLorebookId = null
 			exportableLorebooks = []
-			socket.emit("lorebooks:bindingsForCharacter", { characterId: character.id })
+			socket.emit("lorebooks:bindingsForCharacter", {
+				characterId: character.id
+			})
 		}
 	})
 
@@ -51,7 +62,9 @@
 			"lorebooks:bindingsForCharacter:error",
 			(msg: Sockets.ErrorResponse) => {
 				toaster.error({
-					title: msg.error || "Failed to fetch lorebooks for this character"
+					title:
+						msg.error ||
+						"Failed to fetch lorebooks for this character"
 				})
 			}
 		)
@@ -73,18 +86,27 @@
 
 <Dialog {open} {onOpenChange}>
 	<Portal>
-		<Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50-950/50 backdrop-blur-sm" />
-		<Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<Dialog.Content class="card bg-surface-100-900 p-4 space-y-4 shadow-xl w-[min(95vw,560px)]">
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 w-[min(95vw,560px)] space-y-4 p-4 shadow-xl"
+			>
 				{#if character}
-				<div class="p-6">
+					<div class="p-6">
 						<h2 class="mb-2 text-lg font-bold">Export Character</h2>
 						<p class="mb-4">
 							Choose the export format for "{character.nickname ||
 								character.name}":
 						</p>
 						{#if exportableLorebooks.length > 0}
-							<label class="mb-4 block text-sm" for="export-lorebook-select">
+							<label
+								class="mb-4 block text-sm"
+								for="export-lorebook-select"
+							>
 								<span class="mb-1 block font-semibold">
 									Include a lorebook (optional)
 								</span>
@@ -113,7 +135,10 @@
 									class="btn preset-filled-primary-500 justify-start"
 									onclick={handleExportAsPng}
 								>
-									<Icons.FileImage size={20} aria-hidden="true" />
+									<Icons.FileImage
+										size={20}
+										aria-hidden="true"
+									/>
 									<span>Export as PNG Card</span>
 								</button>
 							{:else}
@@ -122,13 +147,19 @@
 									disabled
 									title="Character has no avatar image"
 								>
-									<Icons.FileImage size={20} aria-hidden="true" />
+									<Icons.FileImage
+										size={20}
+										aria-hidden="true"
+									/>
 									<span>Export as PNG Card (No Avatar)</span>
 								</button>
 							{/if}
 						</div>
 						<div class="mt-4 flex justify-end gap-2">
-							<button class="btn preset-filled-surface-500" onclick={onCancel}>
+							<button
+								class="btn preset-filled-surface-500"
+								onclick={onCancel}
+							>
 								Cancel
 							</button>
 						</div>

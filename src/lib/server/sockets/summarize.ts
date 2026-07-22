@@ -20,13 +20,20 @@ async function resolveOrCreateBinding({
 	characterId?: number | null
 	personaId?: number | null
 }): Promise<number> {
-	if (!characterId && !personaId) throw new Error("characterId or personaId required")
+	if (!characterId && !personaId)
+		throw new Error("characterId or personaId required")
 
 	// Check for an existing binding
 	const existing = await db.query.lorebookBindings.findFirst({
 		where: characterId
-			? and(eq(schema.lorebookBindings.lorebookId, lorebookId), eq(schema.lorebookBindings.characterId, characterId))
-			: and(eq(schema.lorebookBindings.lorebookId, lorebookId), eq(schema.lorebookBindings.personaId, personaId!))
+			? and(
+					eq(schema.lorebookBindings.lorebookId, lorebookId),
+					eq(schema.lorebookBindings.characterId, characterId)
+				)
+			: and(
+					eq(schema.lorebookBindings.lorebookId, lorebookId),
+					eq(schema.lorebookBindings.personaId, personaId!)
+				)
 	})
 	if (existing) return existing.id
 
@@ -46,7 +53,12 @@ async function resolveOrCreateBinding({
 
 	const [created] = await db
 		.insert(schema.lorebookBindings)
-		.values({ lorebookId, binding: bindingStr, characterId: characterId ?? null, personaId: personaId ?? null })
+		.values({
+			lorebookId,
+			binding: bindingStr,
+			characterId: characterId ?? null,
+			personaId: personaId ?? null
+		})
 		.returning()
 	return created.id
 }
@@ -58,7 +70,14 @@ export const chatsSummarizeHandler: Handler<
 	event: "chats:summarize",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
-		const { chatId, messageIds, loreType, topic, lorebookBindingCharacterId, lorebookBindingPersonaId } = params
+		const {
+			chatId,
+			messageIds,
+			loreType,
+			topic,
+			lorebookBindingCharacterId,
+			lorebookBindingPersonaId
+		} = params
 
 		// Verify the user owns the chat
 		const chat = await db.query.chats.findFirst({
@@ -101,19 +120,37 @@ export const chatsSummarizeHandler: Handler<
 		}
 
 		// Collect unique character and persona IDs from messages
-		const charIds = [...new Set(rawMessages.filter((m) => m.characterId).map((m) => m.characterId!))]
-		const personaIds = [...new Set(rawMessages.filter((m) => m.personaId).map((m) => m.personaId!))]
+		const charIds = [
+			...new Set(
+				rawMessages
+					.filter((m) => m.characterId)
+					.map((m) => m.characterId!)
+			)
+		]
+		const personaIds = [
+			...new Set(
+				rawMessages.filter((m) => m.personaId).map((m) => m.personaId!)
+			)
+		]
 
 		// Fetch names directly from the entity tables
-		const characters = charIds.length > 0
-			? await db.query.characters.findMany({ where: inArray(schema.characters.id, charIds) })
-			: []
-		const personas = personaIds.length > 0
-			? await db.query.personas.findMany({ where: inArray(schema.personas.id, personaIds) })
-			: []
+		const characters =
+			charIds.length > 0
+				? await db.query.characters.findMany({
+						where: inArray(schema.characters.id, charIds)
+					})
+				: []
+		const personas =
+			personaIds.length > 0
+				? await db.query.personas.findMany({
+						where: inArray(schema.personas.id, personaIds)
+					})
+				: []
 
 		const characterMap = new Map(characters.map((c) => [c.id, c.name]))
-		const personaMap = new Map(personas.map((p) => [p.id, resolvePersonaName(p)]))
+		const personaMap = new Map(
+			personas.map((p) => [p.id, resolvePersonaName(p)])
+		)
 
 		const messages = rawMessages.map((msg) => {
 			let senderName = "Unknown"
@@ -128,36 +165,78 @@ export const chatsSummarizeHandler: Handler<
 		})
 
 		// Get context/prompt configs (connection+sampling resolved per sub-task below)
-		const { contextConfig, promptConfig } = await getUserConfigurations(userId)
+		const { contextConfig, promptConfig } =
+			await getUserConfigurations(userId)
 
 		const systemSettings = await db.query.systemSettings.findFirst()
-		const userSettings = await db.query.userSettings.findFirst({ where: (us, { eq }) => eq(us.userId, userId) })
+		const userSettings = await db.query.userSettings.findFirst({
+			where: (us, { eq }) => eq(us.userId, userId)
+		})
 
 		// Determine which summarize config to use
-		const summarizeConfigType = loreType === "world" ? "world" : loreType === "character" ? "character" : "scene"
+		const summarizeConfigType =
+			loreType === "world"
+				? "world"
+				: loreType === "character"
+					? "character"
+					: "scene"
 		const summarizeConfigId =
 			loreType === "world"
-				? (userSettings?.activeSummarizeWorldConfigId ?? systemSettings?.defaultSummarizeWorldConfigId)
+				? (userSettings?.activeSummarizeWorldConfigId ??
+					systemSettings?.defaultSummarizeWorldConfigId)
 				: loreType === "character"
-					? (userSettings?.activeSummarizeCharacterConfigId ?? systemSettings?.defaultSummarizeCharacterConfigId)
-					: (userSettings?.activeSummarizeSceneConfigId ?? systemSettings?.defaultSummarizeSceneConfigId)
+					? (userSettings?.activeSummarizeCharacterConfigId ??
+						systemSettings?.defaultSummarizeCharacterConfigId)
+					: (userSettings?.activeSummarizeSceneConfigId ??
+						systemSettings?.defaultSummarizeSceneConfigId)
 
-		let summarizePromptConfig: { batchSystemPrompt: string; synthSystemPrompt: string; nameSystemPrompt: string; characterExtractionSystemPrompt?: string | null } | null = null
+		let summarizePromptConfig: {
+			batchSystemPrompt: string
+			synthSystemPrompt: string
+			nameSystemPrompt: string
+			characterExtractionSystemPrompt?: string | null
+		} | null = null
 		if (summarizeConfigId) {
-			if (loreType === "world") summarizePromptConfig = await db.query.worldSummarizeConfigs.findFirst({ where: (c, { eq }) => eq(c.id, summarizeConfigId) }) ?? null
-			else if (loreType === "character") summarizePromptConfig = await db.query.characterSummarizeConfigs.findFirst({ where: (c, { eq }) => eq(c.id, summarizeConfigId) }) ?? null
-			else summarizePromptConfig = await db.query.sceneSummarizeConfigs.findFirst({ where: (c, { eq }) => eq(c.id, summarizeConfigId) }) ?? null
+			if (loreType === "world")
+				summarizePromptConfig =
+					(await db.query.worldSummarizeConfigs.findFirst({
+						where: (c, { eq }) => eq(c.id, summarizeConfigId)
+					})) ?? null
+			else if (loreType === "character")
+				summarizePromptConfig =
+					(await db.query.characterSummarizeConfigs.findFirst({
+						where: (c, { eq }) => eq(c.id, summarizeConfigId)
+					})) ?? null
+			else
+				summarizePromptConfig =
+					(await db.query.sceneSummarizeConfigs.findFirst({
+						where: (c, { eq }) => eq(c.id, summarizeConfigId)
+					})) ?? null
 		}
 
 		// Resolve per-sub-task connection + sampling
 		const [batchResolved, synthResolved, nameResolved] = await Promise.all([
-			resolveTaskConfig({ taskType: "summarize_batch", summarizeConfigId, summarizeConfigType }),
-			resolveTaskConfig({ taskType: "summarize_synth", summarizeConfigId, summarizeConfigType }),
-			resolveTaskConfig({ taskType: "summarize_name", summarizeConfigId, summarizeConfigType })
+			resolveTaskConfig({
+				taskType: "summarize_batch",
+				summarizeConfigId,
+				summarizeConfigType
+			}),
+			resolveTaskConfig({
+				taskType: "summarize_synth",
+				summarizeConfigId,
+				summarizeConfigType
+			}),
+			resolveTaskConfig({
+				taskType: "summarize_name",
+				summarizeConfigId,
+				summarizeConfigType
+			})
 		])
 
 		if (!batchResolved.connection) {
-			throw new Error("No AI connection configured. Please set up a connection first.")
+			throw new Error(
+				"No AI connection configured. Please set up a connection first."
+			)
 		}
 
 		// Run iterative summarization, streaming progress back to client
@@ -177,16 +256,25 @@ export const chatsSummarizeHandler: Handler<
 			nameConnection: nameResolved.connection,
 			nameSampling: nameResolved.sampling,
 			onProgress: (data) => {
-				emitToUser("chats:summarize:progress", data satisfies Sockets.Chats.Summarize.Progress)
+				emitToUser(
+					"chats:summarize:progress",
+					data satisfies Sockets.Chats.Summarize.Progress
+				)
 			},
 			onLlmCall: (entry) => {
-				emitToUser("chats:summarize:trace", entry satisfies Sockets.Chats.Summarize.TraceEntry)
+				emitToUser(
+					"chats:summarize:trace",
+					entry satisfies Sockets.Chats.Summarize.TraceEntry
+				)
 			}
 		})
 
 		// For character lore, resolve or create the lorebook binding
 		let lorebookBindingId: number | null = null
-		if (loreType === "character" && (lorebookBindingCharacterId || lorebookBindingPersonaId)) {
+		if (
+			loreType === "character" &&
+			(lorebookBindingCharacterId || lorebookBindingPersonaId)
+		) {
 			lorebookBindingId = await resolveOrCreateBinding({
 				lorebookId: chat.lorebookId!,
 				characterId: lorebookBindingCharacterId,
@@ -221,7 +309,8 @@ export const chatsSetLorebookHandler: Handler<
 
 		// Verify ownership
 		const chat = await db.query.chats.findFirst({
-			where: (c, { and, eq }) => and(eq(c.id, chatId), eq(c.userId, userId))
+			where: (c, { and, eq }) =>
+				and(eq(c.id, chatId), eq(c.userId, userId))
 		})
 
 		if (!chat) {

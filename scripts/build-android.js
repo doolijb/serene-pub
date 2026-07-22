@@ -26,8 +26,8 @@ console.log("🤖 Building Serene Pub for Android...")
 
 // 1. Clean assets directory
 if (fs.existsSync(assetsDir)) {
-    console.log("Cleaning assets directory...")
-    fs.rmSync(assetsDir, { recursive: true, force: true })
+	console.log("Cleaning assets directory...")
+	fs.rmSync(assetsDir, { recursive: true, force: true })
 }
 fs.mkdirSync(assetsDir, { recursive: true })
 
@@ -43,10 +43,10 @@ copyRecursive(buildDir, path.join(assetsDir, "build"))
 // the actual cause was a skipped build step here.
 const assetsMain = path.join(assetsDir, "build/index.js")
 if (!fs.existsSync(assetsMain)) {
-    console.error(
-        `Error: ${assetsMain} was not created — is ${buildDir} missing or stale? Run \`npm run build\` first.`
-    )
-    process.exit(1)
+	console.error(
+		`Error: ${assetsMain} was not created — is ${buildDir} missing or stale? Run \`npm run build\` first.`
+	)
+	process.exit(1)
 }
 
 // 3. Copy node_modules (production only)
@@ -54,10 +54,10 @@ console.log("Copying node_modules...")
 copyRecursive(nodeModulesDir, path.join(assetsDir, "node_modules"))
 
 if (fs.readdirSync(path.join(assetsDir, "node_modules")).length === 0) {
-    console.error(
-        `Error: ${path.join(assetsDir, "node_modules")} is empty — is ${nodeModulesDir} missing? Run \`npm install\` first.`
-    )
-    process.exit(1)
+	console.error(
+		`Error: ${path.join(assetsDir, "node_modules")} is empty — is ${nodeModulesDir} missing? Run \`npm install\` first.`
+	)
+	process.exit(1)
 }
 
 // 4. Copy static assets
@@ -90,48 +90,58 @@ const nodeMobilePkg = "nodejs-mobile-react-native@18.20.4"
 const tempDir = path.join(rootDir, "temp-nodejs-mobile")
 
 if (fs.existsSync(libnodeDir)) {
-    fs.rmSync(libnodeDir, { recursive: true, force: true })
+	fs.rmSync(libnodeDir, { recursive: true, force: true })
 }
 if (fs.existsSync(tempDir)) {
-    fs.rmSync(tempDir, { recursive: true, force: true })
+	fs.rmSync(tempDir, { recursive: true, force: true })
 }
 fs.mkdirSync(tempDir, { recursive: true })
 
 try {
-    execSync(`npm pack ${nodeMobilePkg} --pack-destination ${tempDir}`, {
-        stdio: "inherit",
-        cwd: tempDir
-    })
+	execSync(`npm pack ${nodeMobilePkg} --pack-destination ${tempDir}`, {
+		stdio: "inherit",
+		cwd: tempDir
+	})
 
-    const tarball = fs.readdirSync(tempDir).find((f) => f.endsWith(".tgz"))
-    if (!tarball) {
-        throw new Error("npm pack did not produce a .tgz file")
-    }
-    execSync(`tar -xzf ${path.join(tempDir, tarball)} -C ${tempDir}`, { stdio: "inherit" })
+	const tarball = fs.readdirSync(tempDir).find((f) => f.endsWith(".tgz"))
+	if (!tarball) {
+		throw new Error("npm pack did not produce a .tgz file")
+	}
+	execSync(`tar -xzf ${path.join(tempDir, tarball)} -C ${tempDir}`, {
+		stdio: "inherit"
+	})
 
-    const pkgLibnodeDir = path.join(tempDir, "package/android/libnode")
-    fs.mkdirSync(libnodeDir, { recursive: true })
-    copyRecursive(path.join(pkgLibnodeDir, "bin/arm64-v8a"), path.join(libnodeDir, "bin/arm64-v8a"))
-    copyRecursive(path.join(pkgLibnodeDir, "include"), path.join(libnodeDir, "include"))
+	const pkgLibnodeDir = path.join(tempDir, "package/android/libnode")
+	fs.mkdirSync(libnodeDir, { recursive: true })
+	copyRecursive(
+		path.join(pkgLibnodeDir, "bin/arm64-v8a"),
+		path.join(libnodeDir, "bin/arm64-v8a")
+	)
+	copyRecursive(
+		path.join(pkgLibnodeDir, "include"),
+		path.join(libnodeDir, "include")
+	)
 
-    console.log("✅ libnode.so + Node headers extracted to android/app/src/main/cpp/libnode")
+	console.log(
+		"✅ libnode.so + Node headers extracted to android/app/src/main/cpp/libnode"
+	)
 } catch (error) {
-    console.error("Error fetching nodejs-mobile runtime:", error)
-    process.exit(1)
+	console.error("Error fetching nodejs-mobile runtime:", error)
+	process.exit(1)
 } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true })
+	fs.rmSync(tempDir, { recursive: true, force: true })
 }
 
 // 7. Create package.json for runtime
 const runtimePackage = {
-    type: "module",
-    name: "serene-pub-android",
-    version: "0.5.0",
-    private: true
+	type: "module",
+	name: "serene-pub-android",
+	version: "0.5.0",
+	private: true
 }
 fs.writeFileSync(
-    path.join(assetsDir, "package.json"),
-    JSON.stringify(runtimePackage, null, 2)
+	path.join(assetsDir, "package.json"),
+	JSON.stringify(runtimePackage, null, 2)
 )
 
 // 8. Copy the Intl polyfill bootstrap script — nodejs-mobile's Android Node
@@ -139,8 +149,8 @@ fs.writeFileSync(
 // NodeService.kt passes this to `node --require` ahead of the main script.
 console.log("Copying Intl polyfill bootstrap...")
 fs.copyFileSync(
-    path.join(rootDir, "scripts/android-intl-polyfill.cjs"),
-    path.join(assetsDir, "android-intl-polyfill.cjs")
+	path.join(rootDir, "scripts/android-intl-polyfill.cjs"),
+	path.join(assetsDir, "android-intl-polyfill.cjs")
 )
 
 console.log("\n✅ Assets prepared successfully!")
@@ -152,34 +162,34 @@ console.log("  ./gradlew assembleDebug")
 
 // Helper function
 function copyRecursive(src, dest) {
-    if (!fs.existsSync(src)) {
-        console.warn(`Warning: ${src} does not exist, skipping...`)
-        return
-    }
+	if (!fs.existsSync(src)) {
+		console.warn(`Warning: ${src} does not exist, skipping...`)
+		return
+	}
 
-    // adapter-node's build output includes pre-compressed .gz/.br siblings
-    // alongside the originals (e.g. robots.txt + robots.txt.gz) for HTTP
-    // compression negotiation. Android's asset merger treats a file and its
-    // compressed variant as the same logical resource and fails the build on
-    // the "duplicate". There's no reason to ship them anyway — this is a
-    // loopback-only on-device server, not bandwidth-constrained.
-    if (/\.(gz|br)$/i.test(src)) {
-        return
-    }
+	// adapter-node's build output includes pre-compressed .gz/.br siblings
+	// alongside the originals (e.g. robots.txt + robots.txt.gz) for HTTP
+	// compression negotiation. Android's asset merger treats a file and its
+	// compressed variant as the same logical resource and fails the build on
+	// the "duplicate". There's no reason to ship them anyway — this is a
+	// loopback-only on-device server, not bandwidth-constrained.
+	if (/\.(gz|br)$/i.test(src)) {
+		return
+	}
 
-    const stats = fs.statSync(src)
-    if (stats.isDirectory()) {
-        if (!fs.existsSync(dest)) {
-            fs.mkdirSync(dest, { recursive: true })
-        }
-        const entries = fs.readdirSync(src, { withFileTypes: true })
-        for (const entry of entries) {
-            copyRecursive(
-                path.join(src, entry.name),
-                path.join(dest, entry.name)
-            )
-        }
-    } else {
-        fs.copyFileSync(src, dest)
-    }
+	const stats = fs.statSync(src)
+	if (stats.isDirectory()) {
+		if (!fs.existsSync(dest)) {
+			fs.mkdirSync(dest, { recursive: true })
+		}
+		const entries = fs.readdirSync(src, { withFileTypes: true })
+		for (const entry of entries) {
+			copyRecursive(
+				path.join(src, entry.name),
+				path.join(dest, entry.name)
+			)
+		}
+	} else {
+		fs.copyFileSync(src, dest)
+	}
 }
