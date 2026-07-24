@@ -11,7 +11,10 @@ import {
 	ChatMessageProcessor,
 	type ProcessedChatMessage
 } from "./ContentProcessors"
-import { attachCharacterLoreToCharacters } from "./LorebookBindingUtils"
+import {
+	attachCharacterLoreToCharacters,
+	isCharacterLoreEntryVisible
+} from "./LorebookBindingUtils"
 import { parseSplitChatPrompt } from "./utils"
 import type {
 	NonRagDiagnostics,
@@ -21,7 +24,6 @@ import type {
 	InfillContentOptions,
 	InfillResult
 } from "./types"
-import { ChatCharacterVisibility } from "$lib/shared/constants/ChatCharacterVisibility"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray, ne, or } from "drizzle-orm"
@@ -31,8 +33,21 @@ import {
 	fetchActiveRelationshipsAmongNodes,
 	serializeGraphPairs
 } from "./NarrativeGraphContext"
+import { resolvePostHistoryContext } from "./PostHistoryContext"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
+
+/**
+ * Additive score bonus per priority tier above Normal (1) — worldLore/
+ * characterLore entries only (historyEntries has no priority column).
+ * VeryHigh (3) gets 2x this. Additive rather than a hard gate (the old
+ * ContentInfillEngine's tier-based behavior) so it's zero for the default
+ * Normal priority — the overwhelming majority of existing entries score
+ * exactly as before — and only measurably boosts entries an author
+ * explicitly marked High/VeryHigh, fitting this engine's weighted-sum score
+ * model instead of bolting a discrete tier system onto it.
+ */
+const PRIORITY_SCORE_BONUS = 0.15
 
 const FILL_BUDGET = {
 	worldLore: 20,
@@ -93,7 +108,9 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		contextThresholdPercent,
 		tokenCounter,
 		handlebars,
-		contextConfig
+		contextConfig,
+		postHistoryDepth,
+		postHistoryTokenTrigger
 	}: InfillContentOptions): Promise<InfillResult> {
 		const interpolationContext =
 			this.interpolationEngine.createInterpolationContext({
@@ -560,7 +577,15 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 			}))
 		]
 
-		fillPool.sort((a, b) => b.score.total - a.score.total)
+		// Position is a secondary sort key, breaking ties in authored list
+		// order (worldLore/characterLore/history entries all have it; chat
+		// messages don't, so they fall back to 0 and keep their relative order).
+		fillPool.sort((a, b) => {
+			if (b.score.total !== a.score.total) return b.score.total - a.score.total
+			const posA = (a.payload as any).position ?? 0
+			const posB = (b.payload as any).position ?? 0
+			return posA - posB
+		})
 
 		// Per-type counters
 		const typeCounts: Record<string, number> = {
@@ -819,12 +844,19 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 
 		const finalCtx = buildCtx()
 
-		// Narrative graph: relationships between co-present characters/personas
-		// that don't involve the current speaker. buildGraphContext() in
-		// generateResponse.ts already injects the speaker's own relationships
-		// and how others see them, unconditionally, for every mode — this is
-		// the keyword-mode equivalent of RagInfillEngine's broader semantic
-		// sweep, seeded by chat co-occurrence instead of similarity search.
+		// Narrative graph: relationships between characters/personas in the
+		// chat's lorebook. buildGraphContext() in generateResponse.ts already
+		// injects the speaker's own relationships and how others see them,
+		// unconditionally, for every mode — this is the keyword-mode equivalent
+		// of RagInfillEngine's broader semantic sweep, seeded by chat
+		// co-occurrence instead of similarity search. Scope is the whole
+		// lorebook, not just the chat's own roster — chatCharacters.visibility
+		// and chat attachment only govern description-block display, not
+		// relationships, which are public story-world content. Chat-roster
+		// membership is still used as a relevance signal though (this function
+		// has no scoring, unlike RAG's embedding similarity): candidates are
+		// tiered by fetchActiveRelationshipsAmongNodes so in-chat relationships
+		// fill first, then ones bridging to an outside character, then the rest.
 		const lorebookId = (this.chat as any).lorebookId as
 			| number
 			| null
@@ -840,6 +872,7 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 					.map((cp) => cp.persona?.id)
 					.filter((id): id is number => id != null)
 
+				let chatBindingIds: number[] = []
 				if (chatCharacterIds.length > 0 || chatPersonaIds.length > 0) {
 					const bindingConditions = []
 					if (chatCharacterIds.length > 0) {
@@ -865,40 +898,38 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 						),
 						columns: { id: true }
 					})
-					const bindingIds = bindings.map((b) => b.id)
+					chatBindingIds = bindings.map((b) => b.id)
+				}
+				const chatBindingIdSet = new Set(chatBindingIds)
 
-					if (bindingIds.length > 0) {
-						const nodes = await db.query.narrativeNodes.findMany({
-							where: and(
-								eq(
-									schema.narrativeNodes.lorebookId,
-									lorebookId
-								),
-								inArray(
-									schema.narrativeNodes.lorebookBindingId,
-									bindingIds
-								),
-								ne(
-									schema.narrativeNodes.nodeVisibility,
-									"hidden"
-								)
-							),
-							columns: { id: true }
-						})
-						const nodeIds = nodes.map((n) => n.id)
-						const includedHistoryIds = new Set(
-							includedHistory.map((e) => e.id)
-						)
-						const graphPairs =
-							await fetchActiveRelationshipsAmongNodes(
-								nodeIds,
-								lorebookId,
-								MAX_GRAPH_PAIRS,
-								includedHistoryIds
-							)
-						finalCtx.narrativeGraph =
-							serializeGraphPairs(graphPairs)
-					}
+				const allNodeRows = await db.query.narrativeNodes.findMany({
+					where: and(
+						eq(schema.narrativeNodes.lorebookId, lorebookId),
+						ne(schema.narrativeNodes.nodeVisibility, "hidden")
+					),
+					columns: { id: true, lorebookBindingId: true }
+				})
+				const allNodeIds = allNodeRows.map((n) => n.id)
+				const chatNodeIds = allNodeRows
+					.filter(
+						(n) =>
+							n.lorebookBindingId != null &&
+							chatBindingIdSet.has(n.lorebookBindingId)
+					)
+					.map((n) => n.id)
+
+				if (allNodeIds.length > 0) {
+					const includedHistoryIds = new Set(
+						includedHistory.map((e) => e.id)
+					)
+					const graphPairs = await fetchActiveRelationshipsAmongNodes(
+						chatNodeIds,
+						allNodeIds,
+						lorebookId,
+						MAX_GRAPH_PAIRS,
+						includedHistoryIds
+					)
+					finalCtx.narrativeGraph = serializeGraphPairs(graphPairs)
 				}
 			} catch (err) {
 				console.warn(
@@ -908,9 +939,21 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 			}
 		}
 
+		const renderMessages = [...chatMessages].reverse()
+		const postHistoryResult = await resolvePostHistoryContext({
+			renderMessages,
+			instructions: finalCtx.postHistory?.instructions,
+			charInstructions: finalCtx.postHistory?.charInstructions,
+			exampleDialogue: finalCtx.postHistory?.exampleDialogue,
+			postHistoryDepth,
+			postHistoryTokenTrigger,
+			tokenCounter
+		})
+		finalCtx.postHistory = postHistoryResult.postHistory
+
 		const rendered = handlebars.compile(contextConfig.template)({
 			...finalCtx,
-			chatMessages: [...chatMessages].reverse()
+			chatMessages: renderMessages
 		})
 
 		let renderedPrompt: string | undefined
@@ -1007,7 +1050,8 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 				limit: tokenLimit,
 				threshold: Math.floor(tokenLimit * contextThresholdPercent)
 			},
-			entries: allScoredEntries
+			entries: allScoredEntries,
+			postHistory: postHistoryResult.diagnostics
 		}
 
 		return {
@@ -1026,41 +1070,11 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 	// ── Visibility filter for characterLore ──────────────────────────────────────
 
 	private isCharacterLoreVisible(entry: SelectCharacterLoreEntry): boolean {
-		if (!entry.lorebookBindingId) return false
-		const lorebook = (this.chat as any).lorebook as any
-		if (!lorebook) return false
-		if (this.chat.lorebookId !== entry.lorebookId) return false
-
-		const binding = lorebook.lorebookBindings?.find(
-			(b: any) => b.id === entry.lorebookBindingId
+		return isCharacterLoreEntryVisible(
+			entry,
+			this.chat,
+			this.currentCharacterId
 		)
-		if (!binding) return false
-
-		if (binding.characterId) {
-			// Always include current character
-			if (binding.characterId === this.currentCharacterId) return true
-
-			const chatCharacter = (this.chat.chatCharacters || []).find(
-				(cc: any) => cc.character.id === binding.characterId
-			)
-			if (!chatCharacter) return false
-
-			// Exclude hidden or minimal
-			if (
-				(chatCharacter as any).visibility ===
-					ChatCharacterVisibility.HIDDEN ||
-				(chatCharacter as any).visibility ===
-					ChatCharacterVisibility.MINIMAL
-			) {
-				return false
-			}
-			return true
-		} else if (binding.personaId) {
-			return (this.chat.chatPersonas || []).some(
-				(cp: any) => cp.persona.id === binding.personaId
-			)
-		}
-		return false
 	}
 
 	// ── Scoring methods ──────────────────────────────────────────────────────────
@@ -1087,13 +1101,15 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		const tfidfRaw = computeTfidfSignal(entry.keys + " " + entry.name, ctx)
 		const tfidf = maxTfidf > 0 ? tfidfRaw / maxTfidf : 0
 		const lastRefRecency = computeLastRefRecency(entry.id, ctx)
+		const priorityBonus = ((entry.priority ?? 1) - 1) * PRIORITY_SCORE_BONUS
 
 		const total =
 			0.35 * keyword +
 			0.25 * nameMatch +
 			0.2 * entityCooccurrence +
 			0.1 * tfidf +
-			0.1 * lastRefRecency
+			0.1 * lastRefRecency +
+			priorityBonus
 
 		return {
 			total,
@@ -1105,6 +1121,7 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 			lastRefRecency,
 			recency: 0,
 			density: 0,
+			priorityBonus,
 			includedReason: "excluded_zero_score"
 		}
 	}
@@ -1147,13 +1164,16 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		const tfidfRaw = computeTfidfSignal(entryText, ctx)
 		const tfidf = maxTfidf > 0 ? tfidfRaw / maxTfidf : 0
 		const lastRefRecency = computeLastRefRecency(entry.id, ctx)
+		const priorityBonus =
+			(((entry as any).priority ?? 1) - 1) * PRIORITY_SCORE_BONUS
 
 		const total =
 			0.35 * keyword +
 			0.25 * nameMatch +
 			0.2 * entityCooccurrence +
 			0.1 * tfidf +
-			0.1 * lastRefRecency
+			0.1 * lastRefRecency +
+			priorityBonus
 
 		return {
 			total,
@@ -1165,6 +1185,7 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 			lastRefRecency,
 			recency: 0,
 			density: 0,
+			priorityBonus,
 			includedReason: "excluded_zero_score"
 		}
 	}

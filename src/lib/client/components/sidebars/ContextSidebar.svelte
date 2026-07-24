@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getContext, onDestroy, onMount } from "svelte"
+	import { SvelteSet } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
 	import ContextConfigUnsavedChangesModal from "../modals/ContextConfigUnsavedChangesModal.svelte"
 	import NewNameModal from "../modals/NewNameModal.svelte"
@@ -9,19 +10,14 @@
 	import { dndzone } from "svelte-dnd-action"
 	import { Popover, Tabs, Portal } from "@skeletonlabs/skeleton-svelte"
 	import {
-		CONTEXT_CARD_TYPES,
-		getContextCardType,
 		parseContextTemplate,
-		insertContextCard,
-		insertContextCardAt,
-		removeContextCard,
-		reorderContextCards,
-		updateCustomTextCard,
-		updateBlockCard,
-		updateFieldCardContent,
-		type ParsedContextCard,
-		type ContextBlockRole
+		lintContextTemplate,
+		INSERTABLE_CARD_OPTIONS,
+		type InsertableKind
 	} from "$lib/shared/utils/contextConfigCards"
+	import { makeCardListActions } from "$lib/shared/utils/contextCardListActions"
+	import CardListDnd from "./CardListDnd.svelte"
+	import ContextCardNode from "./ContextCardNode.svelte"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -49,171 +45,98 @@
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
 	let activeView: "cards" | "raw" | "preview" = $state("cards")
 
+	// The Cards tab's tree editor isn't usable at mobile widths yet — hidden
+	// there for now (same lg breakpoint Layout.svelte/MessageComposer use for
+	// mobile detection elsewhere). Bounce off "cards" to "raw" so a load (or
+	// a resize down from desktop) never strands the user on a tab whose
+	// trigger just disappeared.
+	let isMobile = $state(false)
+	onMount(() => {
+		const mq = window.matchMedia("(min-width: 1024px)")
+		const update = () => (isMobile = !mq.matches)
+		update()
+		mq.addEventListener("change", update)
+		return () => mq.removeEventListener("change", update)
+	})
+	$effect(() => {
+		if (isMobile && activeView === "cards") activeView = "raw"
+	})
+
 	let parsedTemplate = $derived(
 		parseContextTemplate(contextConfig.template || "")
 	)
-	let systemCards = $derived(
-		parsedTemplate.cards.filter(
-			(c) => c.zone === "systemMessage"
-		) as (ParsedContextCard & {
-			id: string
-		})[]
-	)
-	let chatMessagesCard = $derived(
-		parsedTemplate.cards.find((c) => c.zone === "chatMessages")
-	)
-	let postHistoryCard = $derived(
-		parsedTemplate.cards.find((c) => c.zone === "postHistory")
-	)
-	let addableSystemCardTypes = $derived(
-		CONTEXT_CARD_TYPES.filter(
-			(t) =>
-				t.zone === "systemMessage" &&
-				(t.repeatable || !systemCards.some((c) => c.typeId === t.id))
-		)
+
+	// Top-level cards default to collapsed the first time their id is seen,
+	// except ids just created via an Add Card/Insert-above action (queued in
+	// pendingExpandIds by the two root-level insertAt call sites below) —
+	// those should stay open so the user immediately sees what they added.
+	// Both tracking sets are plain (non-reactive) — they only gate what the
+	// effect below does the FIRST time an id shows up, not something the UI
+	// re-renders off of directly.
+	// A plain $state(new Set()) doesn't give fine-grained reactivity on Set
+	// mutations (add/delete don't touch the tracked own-property, so nothing
+	// re-renders) — SvelteSet from svelte/reactivity is the reactive
+	// collection type Svelte 5 provides for exactly this.
+	let collapsedIds: Set<string> = new SvelteSet()
+	let seenTopLevelIds = new Set<string>()
+	let pendingExpandIds = new Set<string>()
+
+	$effect(() => {
+		const currentIds = new Set(parsedTemplate.cards.map((c) => c.id))
+		for (const id of currentIds) {
+			if (seenTopLevelIds.has(id)) continue
+			seenTopLevelIds.add(id)
+			if (pendingExpandIds.has(id)) {
+				pendingExpandIds.delete(id)
+			} else {
+				collapsedIds.add(id)
+			}
+		}
+		for (const id of seenTopLevelIds) {
+			if (!currentIds.has(id)) seenTopLevelIds.delete(id)
+		}
+	})
+
+	function toggleCollapsed(id: string) {
+		if (collapsedIds.has(id)) collapsedIds.delete(id)
+		else collapsedIds.add(id)
+	}
+
+	// Line numbers for display only — lintContextTemplate itself works in
+	// plain byte offsets, same as every other card position in this file.
+	let templateLintIssues = $derived(
+		parsedTemplate.parseError
+			? []
+			: lintContextTemplate(parsedTemplate.cards).map((issue) => ({
+					...issue,
+					line:
+						(contextConfig.template || "")
+							.slice(0, issue.start)
+							.split("\n").length
+				}))
 	)
 
-	// svelte-dnd-action expects to own the array it's given during a drag
-	// gesture (via `id`-keyed reconciliation) — re-deriving `systemCards`
-	// fresh from a re-parsed template on every `consider` tick desyncs its
-	// internal drag state and makes the dragged card vanish mid-gesture. This
-	// local mirror is what dndzone actually drives; the template is only
-	// re-spliced once, on `finalize`.
-	let systemCardsDnd: (ParsedContextCard & { id: string })[] = $state([])
-	$effect(() => {
-		systemCardsDnd = systemCards.map((c) => ({ ...c, id: c.key }))
-	})
+	function updateTemplate(newTemplate: string) {
+		contextConfig = { ...contextConfig, template: newTemplate }
+	}
+
+	// Root-level card list actions — same factory each block card uses for
+	// its own children/elseChildren (see ContextCardNode.svelte), applied
+	// here to the top-level card list.
+	let rootActions = $derived(
+		makeCardListActions({
+			template: contextConfig.template || "",
+			siblings: parsedTemplate.cards,
+			parentBodyStart: 0,
+			parentBodyEnd: (contextConfig.template || "").length,
+			onTemplateChange: updateTemplate
+		})
+	)
 
 	let previewLoading = $state(false)
 	let previewMessages: { role: string; content: string }[] | undefined =
 		$state(undefined)
 	let previewError: string | undefined = $state(undefined)
-
-	function addCardAt(index: number, typeId: string) {
-		const { template, error } = insertContextCardAt(
-			contextConfig.template || "",
-			typeId,
-			{ zone: "systemMessage", index }
-		)
-		if (error) {
-			toaster.error({ title: error })
-			return
-		}
-		contextConfig = { ...contextConfig, template }
-	}
-
-	function addPostHistoryCard() {
-		const { template, error } = insertContextCard(
-			contextConfig.template || "",
-			"postHistoryInstructions"
-		)
-		if (error) {
-			toaster.error({ title: error })
-			return
-		}
-		contextConfig = { ...contextConfig, template }
-	}
-
-	function removeCard(card: Pick<ParsedContextCard, "start" | "end">) {
-		contextConfig = {
-			...contextConfig,
-			template: removeContextCard(contextConfig.template || "", card)
-		}
-	}
-
-	function updateCustomTextContent(
-		card: Pick<ParsedContextCard, "start" | "end" | "content">,
-		newContent: string
-	) {
-		if (newContent === card.content) return
-		contextConfig = {
-			...contextConfig,
-			template: updateCustomTextCard(
-				contextConfig.template || "",
-				card,
-				newContent
-			)
-		}
-	}
-
-	function updateBlockContent(
-		card: Pick<ParsedContextCard, "start" | "end" | "content" | "role">,
-		newContent: string
-	) {
-		if (newContent === card.content) return
-		contextConfig = {
-			...contextConfig,
-			template: updateBlockCard(contextConfig.template || "", card, {
-				role: card.role || "system",
-				content: newContent
-			})
-		}
-	}
-
-	function updateBlockRole(
-		card: Pick<ParsedContextCard, "start" | "end" | "content" | "role">,
-		newRole: ContextBlockRole
-	) {
-		if (newRole === card.role) return
-		contextConfig = {
-			...contextConfig,
-			template: updateBlockCard(contextConfig.template || "", card, {
-				role: newRole,
-				content: card.content || ""
-			})
-		}
-	}
-
-	// Keyed by typeId (not card.key) — simpler than card.key for these,
-	// since they're singleton (at most one card per typeId), so typeId
-	// alone is already a unique, stable identifier across re-parses.
-	let expandedFieldCards: Set<string> = $state(new Set())
-	function toggleFieldCardExpanded(typeId: string) {
-		const next = new Set(expandedFieldCards)
-		if (next.has(typeId)) next.delete(typeId)
-		else next.add(typeId)
-		expandedFieldCards = next
-	}
-
-	function updateFieldContent(
-		card: Pick<ParsedContextCard, "start" | "end" | "typeId" | "content">,
-		newContent: string
-	) {
-		if (newContent === card.content) return
-		contextConfig = {
-			...contextConfig,
-			template: updateFieldCardContent(
-				contextConfig.template || "",
-				card,
-				newContent
-			)
-		}
-	}
-
-	function reorderSystemCards(orderedKeys: string[]) {
-		contextConfig = {
-			...contextConfig,
-			template: reorderContextCards(
-				contextConfig.template || "",
-				"systemMessage",
-				orderedKeys
-			)
-		}
-	}
-
-	function moveSystemCardUp(index: number) {
-		if (index <= 0) return
-		const keys = systemCardsDnd.map((c) => c.key)
-		;[keys[index - 1], keys[index]] = [keys[index], keys[index - 1]]
-		reorderSystemCards(keys)
-	}
-
-	function moveSystemCardDown(index: number) {
-		if (index >= systemCardsDnd.length - 1) return
-		const keys = systemCardsDnd.map((c) => c.key)
-		;[keys[index], keys[index + 1]] = [keys[index + 1], keys[index]]
-		reorderSystemCards(keys)
-	}
 
 	function requestPreview() {
 		previewLoading = true
@@ -541,7 +464,7 @@
 					(activeView = e.value as typeof activeView)}
 			>
 				<Tabs.List class="flex flex-wrap gap-1">
-					<Tabs.Trigger value="cards">
+					<Tabs.Trigger value="cards" class="max-lg:hidden">
 						<Icons.LayoutList size={16} class="inline" /> Cards
 					</Tabs.Trigger>
 					<Tabs.Trigger value="raw">
@@ -552,343 +475,43 @@
 					</Tabs.Trigger>
 				</Tabs.List>
 				<Tabs.Content value="cards">
-					<div class="flex flex-col gap-4">
-						<!-- System Message zone -->
-						<div
-							class="preset-outlined-surface-300-700 flex flex-col gap-3 rounded-2xl p-3"
-						>
-							<div class="flex items-start gap-2">
-								<div
-									class="preset-tonal-primary shrink-0 rounded-lg p-1.5"
-								>
-									<Icons.ScrollText size={18} />
-								</div>
-								<div class="min-w-0">
-									<div class="font-semibold">
-										System Message
-									</div>
-									<p class="text-surface-700-300 text-xs">
-										Everything the model sees as
-										scene-setting context, wrapped in one
-										system-role block.
-									</p>
-								</div>
+					<div class="flex flex-col gap-3">
+						{#if parsedTemplate.parseError}
+							<div
+								class="preset-outlined-error-500 bg-error-100-900 rounded-xl p-3 text-sm whitespace-pre-wrap"
+							>
+								{parsedTemplate.parseError}
 							</div>
-
-							{#if systemCardsDnd.length === 0}
+						{:else}
+							{#if parsedTemplate.cards.length === 0}
 								<p class="text-surface-700-300 text-sm">
 									No cards yet — add one below.
 								</p>
 							{/if}
-							<div
-								class="flex flex-col gap-2"
-								use:dndzone={{
-									items: systemCardsDnd,
-									flipDurationMs: 150,
-									dragDisabled: !(systemCardsDnd.length > 1),
-									dropFromOthersDisabled: true
-								}}
-								onconsider={(e) => {
-									// svelte-dnd-action can momentarily hand back an items array
-									// that's short a card during a fast/erratic pointer move (its
-									// own internal collision tracking hiccups, especially under
-									// synthetic/very-fast drags) — never render that, since if the
-									// gesture then fails to cleanly finalize (eg. released outside
-									// the zone), the mirror would otherwise be left permanently
-									// short a card with nothing to correct it.
-									if (
-										e.detail.items.length ===
-										systemCardsDnd.length
-									) {
-										systemCardsDnd = e.detail.items
-									}
-								}}
-								onfinalize={(e) => {
-									if (
-										e.detail.items.length ===
-										systemCards.length
-									) {
-										// Deliberately NOT also setting `systemCardsDnd = e.detail.items`
-										// here (unlike onconsider) — reorderSystemCards below updates
-										// contextConfig.template, which the $effect above picks up and
-										// applies to systemCardsDnd on its own, with freshly re-parsed
-										// start/end offsets. Writing the mirror here too raced that
-										// effect-driven write (which lands a tick later, with different
-										// object references) right as svelte-dnd-action's own
-										// flipDurationMs drop-settle animation was still running,
-										// which is what made cards intermittently vanish right after a
-										// drop. onconsider already keeps the mirror showing the correct
-										// order up to the moment of drop, so nothing is lost by leaving
-										// the post-drop update to the single reactive path.
-										reorderSystemCards(
-											e.detail.items.map((c) => c.key)
-										)
-									} else {
-										// The gesture ended with a card count that doesn't match
-										// reality (see onconsider above) — don't persist a corrupt
-										// order. Force the mirror back to the authoritative,
-										// still-persisted card list instead of leaving whatever bad
-										// state the gesture produced on screen indefinitely.
-										systemCardsDnd = systemCards.map(
-											(c) => ({ ...c, id: c.key })
-										)
-									}
-								}}
+							<CardListDnd
+								cards={parsedTemplate.cards}
+								onReorder={(ids) => rootActions.reorder(ids)}
 							>
-								<!--
-										Keyed by `card.id`, NOT `card.key` — svelte-dnd-action tracks
-										items by `id` internally (it's the field it swaps to its own
-										shadow-placeholder marker while a card is mid-drag, then back
-										to the real value on drop). `key` is OUR identifier and never
-										changes during a gesture, so keying Svelte's own reconciliation
-										on it meant Svelte saw "nothing changed" throughout an entire
-										drag — including the moment the library swapped the dragged
-										card's DOM node out for its shadow placeholder — and never
-										restored/recreated that node afterward, since Svelte's diffing
-										never got a signal anything needed touching. Keying on `id`
-										keeps Svelte's reconciliation in sync with what the library is
-										actually doing to the DOM, so the swapped-out node gets
-										properly recreated once the real id comes back at drop.
-									-->
-								{#each systemCardsDnd as card, i (card.id)}
-									{@const cardType = getContextCardType(
-										card.typeId
-									)!}
-									<div
-										class="preset-outlined-surface-400-600 bg-surface-100-800 hover:bg-surface-200-800 flex flex-col gap-2 rounded-xl p-3 shadow-sm transition-colors"
-										data-dnd-handle
-									>
-										<div class="flex items-start gap-2">
-											{#if systemCardsDnd.length > 1}
-												<span
-													class="text-surface-400 hover:text-primary-500 mt-0.5 cursor-grab"
-													data-dnd-handle
-													title="Drag to reorder"
-												>
-													<Icons.GripVertical
-														size={18}
-													/>
-												</span>
-											{/if}
-											<div class="min-w-0 flex-1">
-												<div
-													class="flex items-center gap-1"
-												>
-													{#if card.typeId === "customText"}
-														<Icons.Type
-															size={14}
-															class="text-surface-400 shrink-0"
-														/>
-													{:else if card.typeId === "block"}
-														<Icons.Layers
-															size={14}
-															class="text-surface-400 shrink-0"
-														/>
-													{/if}
-													<span
-														class="font-semibold break-words select-none"
-													>
-														{cardType.label}
-													</span>
-													{#if card.typeId === "block"}
-														<select
-															class="select w-auto py-0.5 text-xs"
-															value={card.role ||
-																"system"}
-															onchange={(e) =>
-																updateBlockRole(
-																	card,
-																	e
-																		.currentTarget
-																		.value as ContextBlockRole
-																)}
-														>
-															<option
-																value="system"
-															>
-																System
-															</option>
-															<option
-																value="user"
-															>
-																User
-															</option>
-															<option
-																value="assistant"
-															>
-																Assistant
-															</option>
-														</select>
-													{/if}
-													<Popover
-														positioning={{
-															placement: "top"
-														}}
-													>
-														<Popover.Trigger
-															class="btn-ghost rounded p-0.5"
-															aria-label="About {cardType.label}"
-														>
-															<Icons.Info
-																size={14}
-															/>
-														</Popover.Trigger>
-														<Portal>
-															<Popover.Positioner
-																class="z-[1000]!"
-															>
-																<Popover.Content
-																	class="card preset-tonal-surface max-w-xs p-2 text-sm"
-																>
-																	{cardType.description}
-																</Popover.Content>
-															</Popover.Positioner>
-														</Portal>
-													</Popover>
-												</div>
-											</div>
-											<div
-												class="flex shrink-0 items-center gap-0.5"
-											>
-												<Popover
-													positioning={{
-														placement: "bottom-end"
-													}}
-												>
-													<Popover.Trigger
-														class="btn-ghost rounded p-0.5"
-														aria-label="Insert card above {cardType.label}"
-													>
-														<Icons.Plus size={16} />
-													</Popover.Trigger>
-													<Portal>
-														<Popover.Positioner
-															class="z-[1000]!"
-														>
-															<Popover.Content
-																class="card preset-tonal-surface flex max-w-[16rem] flex-col gap-1 p-2"
-															>
-																<p
-																	class="text-surface-700-300 px-1 pb-1 text-xs font-semibold tracking-wide uppercase"
-																>
-																	Insert above
-																</p>
-																{#each addableSystemCardTypes as insertType}
-																	<button
-																		type="button"
-																		class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-																		onclick={() =>
-																			addCardAt(
-																				i,
-																				insertType.id
-																			)}
-																	>
-																		<Icons.Plus
-																			size={14}
-																		/>
-																		{insertType.label}
-																	</button>
-																{/each}
-															</Popover.Content>
-														</Popover.Positioner>
-													</Portal>
-												</Popover>
-												{#if systemCardsDnd.length > 1}
-													<button
-														class="btn-ghost rounded p-0.5 disabled:opacity-30"
-														onclick={() =>
-															moveSystemCardUp(i)}
-														disabled={i === 0}
-														title="Move up"
-														aria-label="Move {cardType.label} up"
-													>
-														<Icons.ChevronUp
-															size={16}
-														/>
-													</button>
-													<button
-														class="btn-ghost rounded p-0.5 disabled:opacity-30"
-														onclick={() =>
-															moveSystemCardDown(
-																i
-															)}
-														disabled={i ===
-															systemCardsDnd.length -
-																1}
-														title="Move down"
-														aria-label="Move {cardType.label} down"
-													>
-														<Icons.ChevronDown
-															size={16}
-														/>
-													</button>
-												{/if}
-												{#if card.content !== undefined && card.typeId !== "customText" && card.typeId !== "block"}
-													<button
-														class="btn-ghost rounded p-0.5"
-														onclick={() =>
-															toggleFieldCardExpanded(
-																card.typeId
-															)}
-														title="Edit wrapper text"
-														aria-label="Edit {cardType.label} wrapper text"
-													>
-														<Icons.Pencil
-															size={14}
-														/>
-													</button>
-												{/if}
-												<button
-													class="btn-ghost text-error-500 rounded p-0.5"
-													onclick={() =>
-														removeCard(card)}
-													title="Remove {cardType.label}"
-													aria-label="Remove {cardType.label}"
-												>
-													<Icons.X size={16} />
-												</button>
-											</div>
-										</div>
-										{#if card.content !== undefined && card.typeId !== "customText" && card.typeId !== "block" && expandedFieldCards.has(card.typeId)}
-											<textarea
-												class="input w-full font-mono text-xs"
-												rows="4"
-												value={card.content}
-												onblur={(e) =>
-													updateFieldContent(
-														card,
-														e.currentTarget.value
-													)}
-											></textarea>
-										{/if}
-										{#if card.typeId === "customText"}
-											<textarea
-												class="input w-full text-sm"
-												rows="3"
-												value={card.content}
-												placeholder="Write anything here."
-												onblur={(e) =>
-													updateCustomTextContent(
-														card,
-														e.currentTarget.value
-													)}
-											></textarea>
-										{:else if card.typeId === "block"}
-											<textarea
-												class="input w-full text-sm"
-												rows="3"
-												value={card.content}
-												placeholder="Write anything here."
-												onblur={(e) =>
-													updateBlockContent(
-														card,
-														e.currentTarget.value
-													)}
-											></textarea>
-										{/if}
-									</div>
-								{/each}
-							</div>
+								{#snippet row(card, i)}
+									<ContextCardNode
+										{card}
+										template={contextConfig.template || ""}
+										onTemplateChange={updateTemplate}
+										onRemove={() => rootActions.remove(i)}
+										onMoveUp={() => rootActions.moveUp(i)}
+										onMoveDown={() => rootActions.moveDown(i)}
+										canMoveUp={i > 0}
+										canMoveDown={i < parsedTemplate.cards.length - 1}
+										onInsertAbove={(spec) => {
+											const { insertedId } = rootActions.insertAt(i, spec)
+											if (insertedId) pendingExpandIds.add(insertedId)
+										}}
+										showDragHandle={parsedTemplate.cards.length > 1}
+										{collapsedIds}
+										onToggleCollapsed={toggleCollapsed}
+									/>
+								{/snippet}
+							</CardListDnd>
 							<Popover positioning={{ placement: "bottom" }}>
 								<Popover.Trigger
 									class="btn btn-sm preset-outlined-primary-500 self-start"
@@ -902,209 +525,28 @@
 										<Popover.Content
 											class="card preset-tonal-surface flex max-w-[16rem] flex-col gap-1 p-2"
 										>
-											<p
-												class="text-surface-700-300 px-1 pb-1 text-xs font-semibold tracking-wide uppercase"
-											>
-												Add to end
-											</p>
-											{#each addableSystemCardTypes as insertType}
+											{#each INSERTABLE_CARD_OPTIONS as option}
 												<button
 													type="button"
 													class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-													onclick={() =>
-														addCardAt(
-															systemCardsDnd.length,
-															insertType.id
-														)}
+													onclick={() => {
+														const { insertedId } = rootActions.insertAt(
+															parsedTemplate.cards.length,
+															option.spec
+														)
+														if (insertedId) pendingExpandIds.add(insertedId)
+													}}
+													title={option.description}
 												>
 													<Icons.Plus size={14} />
-													{insertType.label}
+													{option.label}
 												</button>
 											{/each}
 										</Popover.Content>
 									</Popover.Positioner>
 								</Portal>
 							</Popover>
-						</div>
-
-						<!-- Chat Messages zone -->
-						<div
-							class="preset-outlined-surface-300-700 flex flex-col gap-3 rounded-2xl p-3"
-						>
-							<div class="flex items-start gap-2">
-								<div
-									class="preset-tonal-secondary shrink-0 rounded-lg p-1.5"
-								>
-									<Icons.MessagesSquare size={18} />
-								</div>
-								<div class="min-w-0">
-									<div class="font-semibold">
-										Chat Messages
-									</div>
-									<p class="text-surface-700-300 text-xs">
-										The conversation itself. Fixed in place
-										— always present, can't be reordered or
-										removed.
-									</p>
-								</div>
-							</div>
-							{#if chatMessagesCard}
-								{@const cardType =
-									getContextCardType("chatMessages")!}
-								<div
-									class="preset-outlined-surface-400-600 bg-surface-100-800 flex items-start gap-2 rounded-xl p-3 shadow-sm"
-								>
-									<div class="min-w-0 flex-1">
-										<div class="flex items-center gap-1">
-											<span
-												class="truncate font-semibold select-none"
-											>
-												{cardType.label}
-											</span>
-											<Popover
-												positioning={{
-													placement: "top"
-												}}
-											>
-												<Popover.Trigger
-													class="btn-ghost rounded p-0.5"
-													aria-label="About {cardType.label}"
-												>
-													<Icons.Info size={14} />
-												</Popover.Trigger>
-												<Portal>
-													<Popover.Positioner
-														class="z-[1000]!"
-													>
-														<Popover.Content
-															class="card preset-tonal-surface max-w-xs p-2 text-sm"
-														>
-															{cardType.description}
-														</Popover.Content>
-													</Popover.Positioner>
-												</Portal>
-											</Popover>
-										</div>
-									</div>
-								</div>
-							{:else}
-								<div
-									class="preset-outlined-warning-500 bg-warning-100-900 rounded-xl p-3 text-sm"
-								>
-									This template doesn't include the chat
-									history. Add it back from the Raw tab.
-								</div>
-							{/if}
-						</div>
-
-						<!-- Post-History Instructions zone -->
-						<div
-							class="preset-outlined-surface-300-700 flex flex-col gap-3 rounded-2xl p-3"
-						>
-							<div class="flex items-start gap-2">
-								<div
-									class="preset-tonal-tertiary shrink-0 rounded-lg p-1.5"
-								>
-									<Icons.ListEnd size={18} />
-								</div>
-								<div class="min-w-0">
-									<div class="font-semibold">
-										Post-History Instructions
-									</div>
-									<p class="text-surface-700-300 text-xs">
-										A reminder injected right after the chat
-										history, closest to where the model
-										starts writing.
-									</p>
-								</div>
-							</div>
-							{#if postHistoryCard}
-								{@const cardType = getContextCardType(
-									"postHistoryInstructions"
-								)!}
-								<div
-									class="preset-outlined-surface-400-600 bg-surface-100-800 flex flex-col gap-2 rounded-xl p-3 shadow-sm"
-								>
-									<div class="flex items-start gap-2">
-										<div class="min-w-0 flex-1">
-											<div
-												class="flex items-center gap-1"
-											>
-												<span
-													class="font-semibold break-words select-none"
-												>
-													{cardType.label}
-												</span>
-												<Popover
-													positioning={{
-														placement: "top"
-													}}
-												>
-													<Popover.Trigger
-														class="btn-ghost rounded p-0.5"
-														aria-label="About {cardType.label}"
-													>
-														<Icons.Info size={14} />
-													</Popover.Trigger>
-													<Portal>
-														<Popover.Positioner
-															class="z-[1000]!"
-														>
-															<Popover.Content
-																class="card preset-tonal-surface max-w-xs p-2 text-sm"
-															>
-																{cardType.description}
-															</Popover.Content>
-														</Popover.Positioner>
-													</Portal>
-												</Popover>
-											</div>
-										</div>
-										<button
-											class="btn-ghost rounded p-0.5"
-											onclick={() =>
-												toggleFieldCardExpanded(
-													"postHistoryInstructions"
-												)}
-											title="Edit wrapper text"
-											aria-label="Edit {cardType.label} wrapper text"
-										>
-											<Icons.Pencil size={14} />
-										</button>
-										<button
-											class="btn-ghost text-error-500 rounded p-0.5"
-											onclick={() =>
-												removeCard(postHistoryCard)}
-											title="Remove {cardType.label}"
-											aria-label="Remove {cardType.label}"
-										>
-											<Icons.X size={16} />
-										</button>
-									</div>
-									{#if expandedFieldCards.has("postHistoryInstructions")}
-										<textarea
-											class="input w-full font-mono text-xs"
-											rows="4"
-											value={postHistoryCard.content}
-											onblur={(e) =>
-												updateFieldContent(
-													postHistoryCard,
-													e.currentTarget.value
-												)}
-										></textarea>
-									{/if}
-								</div>
-							{:else}
-								<button
-									type="button"
-									class="btn btn-sm preset-outlined-primary-500 self-start"
-									onclick={addPostHistoryCard}
-								>
-									<Icons.Plus size={14} />
-									Post-History Instructions
-								</button>
-							{/if}
-						</div>
+						{/if}
 					</div>
 				</Tabs.Content>
 				<Tabs.Content value="raw">
@@ -1118,6 +560,28 @@
 							bind:value={contextConfig.template}
 							class="input w-full font-mono text-xs"
 						></textarea>
+						{#if templateLintIssues.length > 0}
+							<div
+								class="preset-outlined-warning-500 bg-warning-100-900 flex flex-col gap-1 rounded-xl p-2 text-xs"
+							>
+								<p class="font-semibold">
+									{templateLintIssues.length}
+									{templateLintIssues.length === 1
+										? "issue"
+										: "issues"} found
+								</p>
+								<ul class="flex flex-col gap-0.5">
+									{#each templateLintIssues as issue}
+										<li>
+											<span class="font-mono"
+												>Line {issue.line}:</span
+											>
+											{issue.message}
+										</li>
+									{/each}
+								</ul>
+							</div>
+						{/if}
 					</div>
 				</Tabs.Content>
 				<Tabs.Content value="preview">

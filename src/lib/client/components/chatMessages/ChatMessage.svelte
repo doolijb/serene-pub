@@ -144,8 +144,19 @@
 	const reasoningContent = $derived(msg.metadata?.reasoning || "")
 	const hasReasoning = $derived(reasoningContent.trim().length > 0)
 
+	// Optional per-trigger focus note for a Narrator response (e.g. "Focus on
+	// the weather turning stormy") — set once at trigger time, see chats.ts's
+	// narratorMessage.metadata.narratorInstructions.
+	const narratorInstructionsContent = $derived(
+		msg.metadata?.narratorInstructions || ""
+	)
+	const hasNarratorInstructions = $derived(
+		narratorInstructionsContent.trim().length > 0
+	)
+
 	let isThinkingExpanded = $state(false)
 	let isReasoningExpanded = $state(false)
+	let isNarratorInstructionsExpanded = $state(false)
 
 	// Local edit buffer: bound to MessageComposer instead of binding directly
 	// into `editChatMessage.content` (a prop this component doesn't own) —
@@ -168,6 +179,10 @@
 
 	function toggleReasoning() {
 		isReasoningExpanded = !isReasoningExpanded
+	}
+
+	function toggleNarratorInstructions() {
+		isNarratorInstructionsExpanded = !isNarratorInstructionsExpanded
 	}
 </script>
 
@@ -336,6 +351,35 @@
 			</div>
 		{/if}
 	</div>
+
+	<!-- Extra instructions block (Narrator's optional per-trigger focus note) -->
+	{#if hasNarratorInstructions}
+		<div class="mx-2 mt-2">
+			<button
+				class="flex w-full items-center gap-2 py-2 text-sm opacity-70 transition-opacity hover:opacity-100"
+				onclick={toggleNarratorInstructions}
+				title={isNarratorInstructionsExpanded
+					? "Collapse extra instructions"
+					: "Expand extra instructions"}
+			>
+				<Icons.Target size={16} />
+				<span>Extra Instructions</span>
+				<Icons.ChevronDown
+					size={16}
+					class={`transition-transform ${isNarratorInstructionsExpanded ? "rotate-180" : ""}`}
+				/>
+			</button>
+			{#if isNarratorInstructionsExpanded}
+				<div
+					class="rendered-chat-message-content pb-2 text-sm opacity-80"
+				>
+					{@html renderMarkdownWithQuotedText(
+						narratorInstructionsContent
+					)}
+				</div>
+			{/if}
+		</div>
+	{/if}
 
 	<!-- Thinking block (native model thinking, e.g. Ollama think: true) -->
 	{#if hasThinking}

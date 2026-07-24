@@ -1,0 +1,1 @@
+ALTER TABLE "narrator_prompt_configs" ADD COLUMN "post_history_instructions" text;

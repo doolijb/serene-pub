@@ -43,6 +43,11 @@ export class PromptBuilder {
 	instructions?: string
 	exampleDialogue?: string
 	postHistoryInstructions?: string
+	charExampleDialogue?: string
+	promptPostHistoryInstructions?: string
+	charPostHistory?: string
+	postHistoryDepth: number = 0
+	postHistoryTokenTrigger: number = 0
 
 	handlebars: typeof Handlebars
 
@@ -143,8 +148,35 @@ export class PromptBuilder {
 	contextBuildPostHistoryInstructions(
 		character: SelectCharacter | null
 	): string | undefined {
-		if (!character?.postHistoryInstructions) return undefined
-		return character.postHistoryInstructions
+		if (character?.postHistoryInstructions)
+			return character.postHistoryInstructions
+		// No current character means no-perspective (Narrator) mode — fall
+		// back to the narrator config's own postHistoryInstructions field.
+		// this.promptConfig is actually the narratorPromptConfigs row at
+		// runtime here (see the narratorName cast above for why), which
+		// carries this field even though the declared type doesn't.
+		if (!character) {
+			return (
+				(this.promptConfig as { postHistoryInstructions?: string })
+					.postHistoryInstructions || undefined
+			)
+		}
+		return undefined
+	}
+	/** The prompt config's own reinforcement text — works uniformly for
+	 * character AND narrator prompt configs, both of which carry this
+	 * column. Distinct from contextBuildCharPostHistory below, which reads
+	 * only the character's own authored field with no config fallback. */
+	contextBuildPromptPostHistoryInstructions(): string | undefined {
+		return (
+			(this.promptConfig as { postHistoryInstructions?: string })
+				.postHistoryInstructions || undefined
+		)
+	}
+	contextBuildCharPostHistory(
+		character: SelectCharacter | null
+	): string | undefined {
+		return character?.postHistoryInstructions || undefined
 	}
 	contextBuildCharacterName(character: SelectCharacter): string {
 		return character.name
@@ -304,6 +336,16 @@ export class PromptBuilder {
 			this.contextBuildCharacterExampleDialogues(currentCharacter)
 		this.postHistoryInstructions =
 			this.contextBuildPostHistoryInstructions(currentCharacter)
+		this.charExampleDialogue = this.exampleDialogue
+		this.promptPostHistoryInstructions =
+			this.contextBuildPromptPostHistoryInstructions()
+		this.charPostHistory = this.contextBuildCharPostHistory(currentCharacter)
+		this.postHistoryDepth =
+			(this.promptConfig as { postHistoryDepth?: number })
+				.postHistoryDepth ?? 0
+		this.postHistoryTokenTrigger =
+			(this.promptConfig as { postHistoryTokenTrigger?: number })
+				.postHistoryTokenTrigger ?? 0
 	}
 
 	// --- Modularized section: scenario interpolation and source ---
@@ -368,6 +410,9 @@ export class PromptBuilder {
 		scenarioInterpolated,
 		exampleDialogue,
 		postHistoryInstructions,
+		charExampleDialogue,
+		promptPostHistoryInstructions,
+		charPostHistory,
 		charName,
 		personaName
 	}: any): TemplateContext {
@@ -386,6 +431,21 @@ export class PromptBuilder {
 			scenario: scenarioInterpolated,
 			exampleDialogue,
 			postHistoryInstructions,
+			// targetIndex/hasContent are placeholders — the final message array
+			// isn't known yet at this point, so each infill engine overwrites
+			// this whole object with the real values from
+			// resolvePostHistoryContext() right before render.
+			postHistory: {
+				targetIndex: 0,
+				instructions: promptPostHistoryInstructions,
+				charInstructions: charPostHistory,
+				exampleDialogue: charExampleDialogue,
+				hasContent: Boolean(
+					promptPostHistoryInstructions ||
+						charPostHistory ||
+						charExampleDialogue
+				)
+			},
 			chatMessages: [],
 			char: charName,
 			character: charName,
@@ -424,7 +484,9 @@ export class PromptBuilder {
 			contextThresholdPercent: this.contextThresholdPercent,
 			tokenCounter: this.tokenCounter,
 			handlebars: this.handlebars,
-			contextConfig: this.contextConfig
+			contextConfig: this.contextConfig,
+			postHistoryDepth: this.postHistoryDepth,
+			postHistoryTokenTrigger: this.postHistoryTokenTrigger
 		})
 	}
 
@@ -590,6 +652,21 @@ export class PromptBuilder {
 			this.instructions = this.instructions
 				? `${this.instructions}\n\nAdditional focus for this response: ${extraInstructions}`
 				: extraInstructions
+			// Also reinforce it right before the generation point, not just at
+			// the top of the prompt — the same reasoning as
+			// postHistoryInstructions generally: a per-trigger note (e.g. the
+			// Narrator's optional "focus on X" field) is exactly the kind of
+			// instruction that needs to be near the seed to actually be
+			// followed after a long conversation history, not buried in the
+			// system prompt alongside everything else. Combines with the
+			// config's own postHistoryInstructions when both are present
+			// rather than one replacing the other.
+			this.postHistoryInstructions = this.postHistoryInstructions
+				? `${this.postHistoryInstructions}\n\nAdditional focus for this response: ${extraInstructions}`
+				: `Additional focus for this response: ${extraInstructions}`
+			this.promptPostHistoryInstructions = this.promptPostHistoryInstructions
+				? `${this.promptPostHistoryInstructions}\n\nAdditional focus for this response: ${extraInstructions}`
+				: `Additional focus for this response: ${extraInstructions}`
 		}
 
 		// No single current character/persona to name in no-perspective mode —
@@ -599,25 +676,57 @@ export class PromptBuilder {
 		const charName = currentCharacter
 			? resolveCharacterName(currentCharacter)
 			: joinWithAnd(this.getVisibleCharacterNames())
+		// this.promptConfig is actually the narratorPromptConfigs row at
+		// runtime in no-perspective mode (see BaseConnectionAdapter's
+		// constructor), which — unlike the base prompt config type it's
+		// declared as — carries a user-configurable narratorName (e.g. "The
+		// GM", default "Narrator"). Cast rather than widen the field's type
+		// project-wide for one narrator-only property.
+		const narratorName =
+			(this.promptConfig as { narratorName?: string }).narratorName ||
+			"Narrator"
 		// Unlike charName, seedName must NOT fall back to the joined cast list —
 		// it primes the trailing assistant placeholder turn ("Name:"), and a
 		// multi-name seed teaches the model to write joint dialogue as those
-		// characters instead of narrating as the Narrator. "Narrator" matches
-		// the same default ContentProcessors.ts uses for already-saved Narrator
-		// response messages in history (narratorName metadata || "Narrator"),
-		// so the seed is consistent with how every other narration line reads.
+		// characters instead of narrating as the Narrator. Uses the actual
+		// configured narratorName (not a hardcoded "Narrator" literal) so a
+		// renamed narrator (e.g. "The GM") seeds and reads consistently with
+		// ContentProcessors.ts's handling of already-saved Narrator response
+		// messages in history (narratorName metadata || "Narrator") and with
+		// every other place narratorName is surfaced (UI, message metadata).
 		const seedName = currentCharacter
 			? resolveCharacterName(currentCharacter)
-			: "Narrator"
+			: narratorName
 		const personaName = currentCharacter
 			? (this.chat.chatPersonas &&
 					this.chat.chatPersonas[0]?.persona?.name) ||
 				"user"
 			: joinWithAnd(this.getPersonaNames())
+		// characterNames/personaNames must be available here, not just in
+		// buildTemplateContext() below — this.instructions (the prompt config's
+		// raw systemPrompt, e.g. the built-in Narrator config's "Do not speak or
+		// act as {{characterNames}} or {{personaNames}}") is interpolated with
+		// this exact context a few lines down. Omitting them here left those
+		// placeholders resolving to "" (Handlebars' default for an unknown key)
+		// by the time buildTemplateContext's copy became available — too late,
+		// since the instructions string was already finalized.
 		const interpolationContext =
 			this.interpolationEngine.createInterpolationContext({
 				currentCharacterName: charName,
-				currentPersonaName: personaName
+				currentPersonaName: personaName,
+				additionalContext: {
+					characterNames: joinWithAnd(
+						this.getVisibleCharacterNames()
+					),
+					personaNames: joinWithAnd(this.getPersonaNames()),
+					// Lets a Narrator prompt config's own text reference its
+					// configured display name directly, e.g. "You are
+					// {{narratorName}}, narrating this scene..." — meaningful
+					// in narrator/no-perspective mode only; a plain character
+					// response just gets the "Narrator" default back, same as
+					// every unused placeholder resolves to its passed value.
+					narratorName
+				}
 			})
 
 		const instructions = this.interpolationEngine.interpolateString(
@@ -633,6 +742,19 @@ export class PromptBuilder {
 				this.postHistoryInstructions,
 				interpolationContext
 			)
+		const charExampleDialogue = this.interpolationEngine.interpolateString(
+			this.charExampleDialogue,
+			interpolationContext
+		)
+		const promptPostHistoryInstructions =
+			this.interpolationEngine.interpolateString(
+				this.promptPostHistoryInstructions,
+				interpolationContext
+			)
+		const charPostHistory = this.interpolationEngine.interpolateString(
+			this.charPostHistory,
+			interpolationContext
+		)
 
 		const { scenarioInterpolated, scenarioSource } =
 			this.getScenarioInterpolated(currentCharacter, interpolationContext)
@@ -640,7 +762,7 @@ export class PromptBuilder {
 			this.getInterpolatedCharacters(interpolationContext)
 		const assistantCharactersWithLore = attachCharacterLoreToCharacters(
 			assistantCharacters,
-			[], // Character lore is now handled by ContentInfillEngine
+			[], // Character lore is now handled by KeywordInfillEngine/RagInfillEngine
 			this.chat
 		)
 		const charactersInterpolated = JSON.stringify(
@@ -650,7 +772,7 @@ export class PromptBuilder {
 		)
 		const userCharactersWithLore = attachCharacterLoreToCharacters(
 			this.getInterpolatedPersonas(interpolationContext),
-			[], // Character lore is now handled by ContentInfillEngine
+			[], // Character lore is now handled by KeywordInfillEngine/RagInfillEngine
 			this.chat
 		)
 		const personasInterpolated = JSON.stringify(
@@ -665,6 +787,9 @@ export class PromptBuilder {
 			scenarioInterpolated,
 			exampleDialogue,
 			postHistoryInstructions,
+			charExampleDialogue,
+			promptPostHistoryInstructions,
+			charPostHistory,
 			charName,
 			personaName
 		})
@@ -684,6 +809,7 @@ export class PromptBuilder {
 						this.chat,
 						this.interpolationEngine,
 						populateLorebookEntryBindings,
+						this.currentCharacterId,
 						this.diagnosticsEnabled
 					)
 					infillResult = await ragEngine.infillContent({
@@ -696,7 +822,9 @@ export class PromptBuilder {
 						contextThresholdPercent: this.contextThresholdPercent,
 						tokenCounter: this.tokenCounter,
 						handlebars: this.handlebars,
-						contextConfig: this.contextConfig
+						contextConfig: this.contextConfig,
+						postHistoryDepth: this.postHistoryDepth,
+						postHistoryTokenTrigger: this.postHistoryTokenTrigger
 					})
 				}
 			} catch (err) {

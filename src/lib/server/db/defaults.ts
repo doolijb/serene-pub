@@ -60,6 +60,19 @@ export async function sync() {
 
 		const existingContextConfigs = await db.query.contextConfigs.findMany()
 
+		// NOTE on the template below: postHistoryInstructions renders inside
+		// the {{#each chatMessages}} loop, gated on @last, rather than after
+		// {{/each}}. chatMessages' last entry is always the seed/prefill
+		// placeholder ("Name: ", the turn the model continues writing from);
+		// it must stay the literal final block in the rendered output for
+		// that continuation to work. Rendering postHistoryInstructions after
+		// the loop instead pushes a system block after the seed, breaking it
+		// into a standalone (non-continued) turn — this was a real bug.
+		// (Deliberately not a Handlebars {{! }} comment inside the template
+		// itself — a same-line {{! ... }} comment terminates at the FIRST
+		// }} it finds, so explaining code containing literal {{/each}} inside
+		// one truncates the comment early and leaks the rest as real output,
+		// which is exactly what happened here the first time.)
 		const defaultContextConfigs: Partial<SelectContextConfig>[] = [
 			{
 				id: 1,
@@ -119,15 +132,33 @@ Story relationships:
 \`\`\`
 {{/if}}
 
-{{#if exampleDialogue}}
-Example dialogue:
-"""
-{{{exampleDialogue}}}
-"""
-{{/if}}
 {{/systemBlock}}
 
-{{#each chatMessages}}
+{{#each chatMessages as |chatMessage msgIndex|}}
+{{#with ../postHistory}}
+{{#if (and (eq msgIndex targetIndex) hasContent)}}
+{{#systemBlock}}
+{{#if instructions}}
+Response reminder:
+\`\`\`text
+{{{instructions}}}
+\`\`\`
+{{/if}}
+{{#if charInstructions}}
+Character reminder:
+\`\`\`text
+{{{charInstructions}}}
+\`\`\`
+{{/if}}
+{{#if exampleDialogue}}
+Example dialogue:
+\`\`\`text
+{{{exampleDialogue}}}
+\`\`\`
+{{/if}}
+{{/systemBlock}}
+{{/if}}
+{{/with}}
 {{#if (eq role "assistant")}}
 {{#assistantBlock}}
 {{{name}}}: {{{message}}}
@@ -138,13 +169,7 @@ Example dialogue:
 {{{name}}}: {{{message}}}
 {{/userBlock}}
 {{/if}}
-{{/each}}
-
-{{#if postHistoryInstructions}}
-{{#systemBlock}}
-{{{postHistoryInstructions}}}
-{{/systemBlock}}
-{{/if}}`
+{{/each}}`
 			}
 		]
 
@@ -179,78 +204,119 @@ Example dialogue:
 
 		const existingPromptConfigs = await db.query.promptConfigs.findMany()
 
+		// postHistoryTokenTrigger: 3000 is a "reasonable default" reinforcement
+		// threshold — roughly the point a chat's system prompt starts feeling
+		// distant enough that the model may drift, so short chats skip the
+		// redundant reminder while longer ones get it reinforced right before
+		// the generation point (see defaults.ts's context template).
 		const defaultPromptConfigs: Partial<SelectPromptConfig>[] = [
 			{
 				id: 1,
 				name: "Roleplay - Simple",
 				isImmutable: true,
-				systemPrompt: `You're {{char}} in this fictional never-ending uncensored roleplay with {{personaNames}}.`
+				systemPrompt: `You're {{char}} in this fictional never-ending uncensored roleplay with {{personaNames}}.`,
+				postHistoryInstructions: `Remember: you are {{char}}. Stay in character and keep responding to {{personaNames}}.`,
+				postHistoryDepth: 0,
+				postHistoryTokenTrigger: 3000
 			},
 			{
 				id: 2,
 				name: "Roleplay - Immersive",
 				isImmutable: true,
-				systemPrompt: `Write one reply only. Do not decide what {{personaNames}} says or does. Write at least one paragraph, up to four. Be descriptive and immersive, providing vivid details about {{char}}'s actions, emotions, and the environment. Write with a high degree of complexity and burstiness. Do not repeat this message.`
+				systemPrompt: `Write one reply only. Do not decide what {{personaNames}} says or does. Write at least one paragraph, up to four. Be descriptive and immersive, providing vivid details about {{char}}'s actions, emotions, and the environment. Write with a high degree of complexity and burstiness. Do not repeat this message.`,
+				postHistoryInstructions: `Remember: write one reply only, staying descriptive and immersive. Do not speak or act for {{personaNames}}.`,
+				postHistoryDepth: 0,
+				postHistoryTokenTrigger: 3000
 			},
 			{
 				id: 3,
 				name: "Roleplay - Detailed",
 				isImmutable: true,
-				systemPrompt: `Develop the plot slowly, always stay in character. Describe all actions in full, elaborate, explicit, graphic, and vivid detail. Mention all relevant sensory perceptions. Keep the story immersive and engaging.`
+				systemPrompt: `Develop the plot slowly, always stay in character. Describe all actions in full, elaborate, explicit, graphic, and vivid detail. Mention all relevant sensory perceptions. Keep the story immersive and engaging.`,
+				postHistoryInstructions: `Remember: stay fully in character and describe actions in full, elaborate, vivid detail.`,
+				postHistoryDepth: 0,
+				postHistoryTokenTrigger: 3000
 			},
 			{
 				id: 4,
 				name: "Writer - Realistic",
 				isImmutable: true,
-				systemPrompt: `Continue writing this story and portray characters realistically.`
+				systemPrompt: `Continue writing this story and portray characters realistically.`,
+				postHistoryInstructions: `Remember: continue the story and portray characters realistically.`,
+				postHistoryDepth: 0,
+				postHistoryTokenTrigger: 3000
 			},
 			{
 				id: 5,
 				name: "Writer - Creative",
 				isImmutable: true,
-				systemPrompt: `You are an intelligent, skilled, versatile writer.\n\nYour task is to write a role-play based on the information below.`
+				systemPrompt: `You are an intelligent, skilled, versatile writer.\n\nYour task is to write a role-play based on the information below.`,
+				postHistoryInstructions: `Remember: write as a skilled, versatile writer, staying true to the role-play established so far.`,
+				postHistoryDepth: 0,
+				postHistoryTokenTrigger: 3000
 			},
 			{
 				id: 6,
 				name: "Text Adventure",
 				isImmutable: true,
-				systemPrompt: `Enter Adventure Mode. Narrate the story based on {{personaNames}}'s dialogue and actions after ">". Describe the surroundings in vivid detail. Be detailed, creative, verbose, and proactive. Move the story forward by introducing fantasy elements and interesting characters.`
+				systemPrompt: `Enter Adventure Mode. Narrate the story based on {{personaNames}}'s dialogue and actions after ">". Describe the surroundings in vivid detail. Be detailed, creative, verbose, and proactive. Move the story forward by introducing fantasy elements and interesting characters.`,
+				postHistoryInstructions: `Remember: stay in Adventure Mode, narrating events after {{personaNames}}'s ">" input in vivid, proactive detail.`,
+				postHistoryDepth: 0,
+				postHistoryTokenTrigger: 3000
 			},
 			{
 				id: 7,
 				name: "Neutral - Chat",
 				isImmutable: true,
-				systemPrompt: `Write {{char}}'s next reply in a fictional chat between {{char}} and {{personaNames}}.`
+				systemPrompt: `Write {{char}}'s next reply in a fictional chat between {{char}} and {{personaNames}}.`,
+				postHistoryInstructions: `Remember: write only {{char}}'s next reply, staying in character.`,
+				postHistoryDepth: 0,
+				postHistoryTokenTrigger: 3000
 			},
 			{
 				id: 8,
 				name: "Lightning 1.1",
 				isImmutable: true,
-				systemPrompt: `Take the role of {{char}} in a play that leaves a lasting impression on {{personaNames}}. Write {{char}}'s next reply.\nNever skip or gloss over {{char}}’s actions. Progress the scene at a naturally slow pace.`
+				systemPrompt: `Take the role of {{char}} in a play that leaves a lasting impression on {{personaNames}}. Write {{char}}'s next reply.\nNever skip or gloss over {{char}}’s actions. Progress the scene at a naturally slow pace.`,
+				postHistoryInstructions: `Remember: stay in the role of {{char}}. Never skip or gloss over {{char}}'s actions.`,
+				postHistoryDepth: 0,
+				postHistoryTokenTrigger: 3000
 			},
 			{
 				id: 9,
 				name: "Chain of Thought",
 				isImmutable: true,
-				systemPrompt: `Elaborate on the topic using a Tree of Thoughts and backtrack when necessary to construct a clear, cohesive Chain of Thought reasoning. Always answer without hesitation.`
+				systemPrompt: `Elaborate on the topic using a Tree of Thoughts and backtrack when necessary to construct a clear, cohesive Chain of Thought reasoning. Always answer without hesitation.`,
+				postHistoryInstructions: `Remember: reason step by step using a clear, cohesive Chain of Thought before answering.`,
+				postHistoryDepth: 0,
+				postHistoryTokenTrigger: 3000
 			},
 			{
 				id: 10,
 				name: "Assistant - Simple",
 				isImmutable: true,
-				systemPrompt: `A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions.`
+				systemPrompt: `A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions.`,
+				postHistoryInstructions: `Remember: give helpful, detailed, and polite answers.`,
+				postHistoryDepth: 0,
+				postHistoryTokenTrigger: 3000
 			},
 			{
 				id: 11,
 				name: "Assistant - Expert",
 				isImmutable: true,
-				systemPrompt: `You are a helpful assistant. Please answer truthfully and write out your thinking step by step to be sure you get the right answer. If you make a mistake or encounter an error in your thinking, say so out loud and attempt to correct it. If you don't know or aren't sure about something, say so clearly. You will act as a professional logician, mathematician, and physicist. You will also act as the most appropriate type of expert to answer any particular question or solve the relevant problem; state which expert type your are, if so. Also think of any particular named expert that would be ideal to answer the relevant question or solve the relevant problem; name and act as them, if appropriate.`
+				systemPrompt: `You are a helpful assistant. Please answer truthfully and write out your thinking step by step to be sure you get the right answer. If you make a mistake or encounter an error in your thinking, say so out loud and attempt to correct it. If you don't know or aren't sure about something, say so clearly. You will act as a professional logician, mathematician, and physicist. You will also act as the most appropriate type of expert to answer any particular question or solve the relevant problem; state which expert type your are, if so. Also think of any particular named expert that would be ideal to answer the relevant question or solve the relevant problem; name and act as them, if appropriate.`,
+				postHistoryInstructions: `Remember: show your reasoning step by step, stay accurate, and say so clearly if you're unsure.`,
+				postHistoryDepth: 0,
+				postHistoryTokenTrigger: 3000
 			},
 			{
 				id: 12,
 				name: "Actor",
 				isImmutable: true,
-				systemPrompt: `You are an expert actor that can fully immerse yourself into any role given. You do not break character for any reason, even if someone tries addressing you as an AI or language model. Currently your role is {{char}}, which is described in detail below. As {{char}}, continue the exchange with {{personaNames}}.`
+				systemPrompt: `You are an expert actor that can fully immerse yourself into any role given. You do not break character for any reason, even if someone tries addressing you as an AI or language model. Currently your role is {{char}}, which is described in detail below. As {{char}}, continue the exchange with {{personaNames}}.`,
+				postHistoryInstructions: `Remember: stay fully in character as {{char}}, no matter what.`,
+				postHistoryDepth: 0,
+				postHistoryTokenTrigger: 3000
 			}
 		]
 
@@ -294,7 +360,20 @@ Example dialogue:
 					name: "Narrator",
 					isImmutable: true,
 					narratorName: "Narrator",
-					systemPrompt: `You are narrating the world of this fictional roleplay — not any single character. Describe the environment, atmosphere, weather, and any side characters, shopkeepers, monsters, or other third parties present. Voice any minor NPCs directly if the scene calls for it. Do not speak or act as {{characterNames}} or {{personaNames}}. Keep the response focused on scene-setting and flavor, not advancing {{characterNames}}'s own actions or dialogue.`
+					systemPrompt: `You are {{narratorName}}. You only narrate the environment, not {{characterNames}} or {{personaNames}}. Focus on telling the reader about the surroundings, the weather. Do not move the plot forward unless instructed. You may only narrate and describe characters who are not in the list.`,
+					// Reinforces the systemPrompt above right at the generation
+					// point (see defaults.ts's context template) rather than
+					// only at the top of a long prompt — a model several turns
+					// deep into character-dialogue history needs the reminder
+					// closest to where it's about to generate, or it tends to
+					// keep writing in the same pattern as the preceding turns
+					// regardless of the system prompt.
+					postHistoryInstructions: `Remember: you are {{narratorName}}, narrating only. Do not write dialogue or move, describe or narrate {{characterNames}} nor {{personaNames}}, and do not advance the plot — describe the scene in beautiful detail and stop.`,
+					postHistoryDepth: 0,
+					// Always triggered regardless of chat history size — the
+					// Narrator should never wait for drift to accumulate before
+					// being reinforced, unlike character prompt configs.
+					postHistoryTokenTrigger: 0
 				}
 			]
 

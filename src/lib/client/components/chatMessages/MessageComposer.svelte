@@ -214,25 +214,6 @@
 				</div>
 			{/if}
 		{/if}
-		{#if compiledPrompt?.meta}
-			<Tabs.Trigger
-				value="tokenCount"
-				class="flex min-h-[2em] w-full items-center justify-end text-right"
-				disabled
-			>
-				<span
-					title="Token Count"
-					class="text-xs"
-					class:text-error-500={contextExceeded}
-					aria-label="Token count: {compiledPrompt.meta.tokenCounts
-						.total} of {compiledPrompt.meta.tokenCounts.limit}"
-					aria-live="polite"
-				>
-					{compiledPrompt.meta.tokenCounts.total} / {compiledPrompt
-						.meta.tokenCounts.limit}
-				</span>
-			</Tabs.Trigger>
-		{/if}
 	</Tabs.List>
 	<div class="flex items-center gap-4">
 		<div role="group" aria-label="Message controls">

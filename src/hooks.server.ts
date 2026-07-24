@@ -1,5 +1,4 @@
 import { dev } from "$app/environment"
-import { loadSocketsServer } from "$lib/server/sockets/loadSockets.server"
 import { appVersion } from "$lib/shared/constants/version"
 import type { Handle, RequestEvent } from "@sveltejs/kit"
 // import { userAuthentication, routeGuard } from "$server/middleware"
@@ -8,7 +7,6 @@ type Middleware = (event: RequestEvent) => Promise<void> | void
 
 const middleware: Middleware[] = [] // [userAuthentication, routeGuard]
 
-loadSocketsServer()
 declare module "@sveltejs/kit" {
 	interface Locals {
 		latestRelease?: string
@@ -39,7 +37,8 @@ async function checkForUpdates() {
 	try {
 		console.log("[VersionCheck] Checking for new release...")
 		const res = await fetch(GITHUB_API_URL, {
-			headers: { Accept: "application/vnd.github+json" }
+			headers: { Accept: "application/vnd.github+json" },
+			signal: AbortSignal.timeout(5000)
 		})
 		if (res.ok) {
 			const data = await res.json()
@@ -68,7 +67,13 @@ async function checkForUpdates() {
 			)
 		}
 	} catch (err) {
-		console.error("[VersionCheck] Error checking for new release:", err)
+		// Most likely cause is no internet connection (DNS failure, timeout,
+		// offline); this is expected in offline/air-gapped deployments, so
+		// don't log a scary stack trace for it.
+		const reason = err instanceof Error ? err.message : String(err)
+		console.warn(
+			`[VersionCheck] Could not check for new release (likely no internet connection): ${reason}`
+		)
 	}
 }
 
@@ -98,7 +103,9 @@ export const handle: Handle = async ({ event, resolve }) => {
 
 	if (!dev && !hasCheckedForUpdates) {
 		hasCheckedForUpdates = true
-		await checkForUpdates()
+		// Fire-and-forget: don't let a slow/unreachable network delay this
+		// (or any) request. Results populate event.locals on later requests.
+		void checkForUpdates()
 	}
 	event.locals.latestReleaseTag = latestReleaseTag
 	event.locals.isNewerReleaseAvailable = isNewerReleaseAvailable

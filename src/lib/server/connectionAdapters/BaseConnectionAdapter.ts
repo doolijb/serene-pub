@@ -19,8 +19,8 @@ export interface BasePromptChat extends SelectChat {
 	// A chat's lorebookId is nullable, and the relational query result mirrors
 	// that (null when unset) — every consumer already guards for this (see
 	// hasLorebookEntries() and the `chat.lorebook && ...` checks in
-	// LorebookBindingUtils.ts/PromptIterators.ts), so this stays optional
-	// rather than falsely promising it's always populated.
+	// LorebookBindingUtils.ts), so this stays optional rather than falsely
+	// promising it's always populated.
 	lorebook?:
 		| (SelectLorebook & {
 				lorebookBindings: (SelectLorebookBinding & {
@@ -399,7 +399,10 @@ export abstract class BaseConnectionAdapter {
 	 * {{char}}/{{user}} resolving to the joined cast lists instead of one
 	 * name. The optional per-trigger focus note is layered on as
 	 * extraInstructions rather than hand-appended here, so it's interpolated
-	 * and included in the same system block the context pipeline builds.
+	 * and included in both the system block the context pipeline builds and
+	 * — combined with the config's own postHistoryInstructions, if set — the
+	 * reinforcement block right before the generation point (see
+	 * PromptBuilder.compilePrompt's handling of extraInstructions).
 	 */
 	protected async compileNarratorResponsePrompt(
 		args: any = {}

@@ -7,6 +7,8 @@
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import Placeholder from "@tiptap/extension-placeholder"
 	import LegacyTag from "$lib/client/utils/tiptapLegacyTag"
+	import HandlebarsLint from "$lib/client/utils/tiptapHandlebarsLint"
+	import { INSERTABLE_MACRO_OPTIONS } from "$lib/shared/utils/handlebarsLint"
 	import type { EditorView } from "prosemirror-view"
 
 	interface Props {
@@ -23,6 +25,7 @@
 	let canUndo = $state(false)
 	let canRedo = $state(false)
 	let addBindingOpenState = $state(false)
+	let addMacroOpenState = $state(false)
 
 	function getLabel(tag: string) {
 		const binding = lorebookBindingList.find((b) => b.binding == tag)
@@ -138,7 +141,8 @@
 			extensions: [
 				StarterKit,
 				LorebookBindingTag.configure({ getLabel, getCharType }),
-				LegacyTag.configure({})
+				LegacyTag.configure({}),
+				HandlebarsLint
 				// Placeholder.configure({
 				//     placeholder: ({ node }) => "A subterranean metropolis carved into the bones of a long-dead titan..."
 				// }),
@@ -209,6 +213,46 @@
 				</Popover.Positioner>
 			</Portal>
 		</Popover>
+		<Popover
+			open={addMacroOpenState}
+			onOpenChange={(e) => (addMacroOpenState = e.open)}
+			positioning={{ placement: "bottom" }}
+		>
+			<Popover.Trigger
+				class="btn btn-sm preset-filled-surface-500"
+				title="Insert Macro"
+				aria-label="Insert Macro"
+			>
+				<Icons.Braces size={16} />
+			</Popover.Trigger>
+			<Portal>
+				<Popover.Positioner class="z-[1000]!">
+					<Popover.Content
+						class="card preset-filled-surface-100-900 p-4 shadow-xl"
+					>
+						<div class="flex flex-col gap-2">
+							<div class="mb-2 text-sm font-semibold">
+								Insert Macro
+							</div>
+							{#each INSERTABLE_MACRO_OPTIONS as macro}
+								<button
+									class="btn preset-filled-surface-500"
+									onclick={() => {
+										editor.commands.insertContent(
+											macro.snippet
+										)
+										addMacroOpenState = false
+									}}
+									title={macro.description}
+								>
+									{macro.label}
+								</button>
+							{/each}
+						</div>
+					</Popover.Content>
+				</Popover.Positioner>
+			</Portal>
+		</Popover>
 		<button
 			class="btn btn-sm preset-filled-surface-500"
 			title="Undo"
@@ -244,5 +288,10 @@
 	@reference "tailwindcss";
 
 	:global {
+		.handlebars-lint-issue {
+			text-decoration: underline wavy #dc2626;
+			text-underline-offset: 3px;
+			cursor: help;
+		}
 	}
 </style>

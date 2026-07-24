@@ -312,20 +312,48 @@ function failStart(message: string): never {
 	throw new Error(message)
 }
 
+// Guards the whole body of start() below against concurrent invocation —
+// e.g. a group chat where several characters each trigger their own
+// preflight() at nearly the same moment right as the process is discovered
+// dead. Without this, two calls can both slip past the state checks (there
+// are several `await`s — a DB query, a port ping, a binary-existence check —
+// before state.status ever flips to "starting") and both proceed to spawn,
+// leaving two koboldcpp processes racing for the same port. Concurrent
+// callers now await the same in-flight attempt instead, same pattern as
+// modelManager.ts's loadingPromise for concurrent model loads.
+let startingPromise: Promise<void> | null = null
+
 export async function start(): Promise<void> {
+	if (startingPromise) return startingPromise
+	startingPromise = doStart()
+	try {
+		await startingPromise
+	} finally {
+		startingPromise = null
+	}
+}
+
+async function doStart(): Promise<void> {
 	if (state.status === "starting") return
 	if (state.status === "running") {
-		// A process we spawned (state.process) or a verified-owned PID from a
-		// previous session is trustworthy without re-pinging — a real crash
-		// gets caught by the health check within its own tolerance window. An
-		// *adopted external* process has neither: no live handle, and it can
-		// disappear at any moment outside our control or the health check's
-		// ~90s-tolerant cadence. Trusting stale "running" state for it left
-		// start() silently no-op'ing after the external process vanished,
-		// which then made preflight blame the resulting ECONNREFUSED on a
-		// bogus "credentials mismatch" (see KoboldCppManagedAdapter) instead
-		// of just restarting our own instance like it should.
-		if (state.process || !state.isExternal) return
+		// Only a process we spawned ourselves (a live state.process handle) is
+		// trustworthy without re-pinging — a real crash gets caught by its
+		// own proc.on("exit") handler, or by the health check within its
+		// tolerance window. Any *adopted* process — whether "owned" (a
+		// verified-but-unhandled PID from a previous session) or fully
+		// external — has neither: no live handle, and it can disappear at
+		// any moment outside our control or the health check's ~90s-tolerant
+		// cadence (which is itself suspended for the whole duration of a
+		// model load — see suspendHealthCheck()/resumeHealthCheck() — so a
+		// crash mid-load goes completely unnoticed until something re-pings).
+		// Trusting stale "running" state for either adopted case left start()
+		// silently no-op'ing after the process vanished, which then made
+		// preflight blame the resulting ECONNREFUSED on a bogus "credentials
+		// mismatch" (see KoboldCppManagedAdapter) instead of just restarting
+		// our own instance like it should — this is also why a manual
+		// Stop/Start "always works": Stop unconditionally clears state,
+		// removing the stale trust this check was granting.
+		if (state.process) return
 		const settingsForPing = await db.query.koboldCppSettings.findFirst()
 		const port = settingsForPing?.koboldCppManagedPort ?? 5001
 		if (await pingKoboldCPP(`http://localhost:${port}`, 2000)) return

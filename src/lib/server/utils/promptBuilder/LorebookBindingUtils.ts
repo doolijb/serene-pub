@@ -3,11 +3,18 @@
 import type { BasePromptChat } from "../../connectionAdapters/BaseConnectionAdapter"
 import type { TemplateContextCharacter, TemplateContextPersona } from "./index"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
+import { stripCardDecorators } from "./characterCardDecorators"
 
 export function populateLorebookEntryBindings(
 	entry: SelectWorldLoreEntry | SelectCharacterLoreEntry | SelectHistoryEntry,
 	chat: BasePromptChat
 ): SelectWorldLoreEntry | SelectCharacterLoreEntry | SelectHistoryEntry {
+	// Applies regardless of whether {{char:#}} binding substitution below
+	// also applies (the early return right after this doesn't cover every
+	// entry), since decorator lines must never leak into the rendered
+	// prompt as literal text either way.
+	entry.content = stripCardDecorators(entry.content).content
+
 	const lorebook =
 		chat.lorebook && chat.lorebook.id === entry.lorebookId
 			? chat.lorebook
@@ -54,6 +61,40 @@ export function populateLorebookEntryBindings(
 		}
 	})
 	return entry
+}
+
+/**
+ * Character-lore privacy rule, shared by KeywordInfillEngine and
+ * RagInfillEngine: a characterLoreEntry bound to a specific character is
+ * that character's own private self-knowledge — visible only when
+ * generating as that exact character, regardless of chatCharacters.visibility
+ * (HIDDEN/MINIMAL only governs description-block display, not lore) or
+ * whether that character is even attached to this chat. World lore has no
+ * such binding and is never gated by this function.
+ */
+export function isCharacterLoreEntryVisible(
+	entry: SelectCharacterLoreEntry,
+	chat: BasePromptChat,
+	currentCharacterId: number | null
+): boolean {
+	if (!entry.lorebookBindingId) return false
+	const lorebook = chat.lorebook
+	if (!lorebook) return false
+	if (chat.lorebookId !== entry.lorebookId) return false
+
+	const binding = lorebook.lorebookBindings?.find(
+		(b: SelectLorebookBinding) => b.id === entry.lorebookBindingId
+	)
+	if (!binding) return false
+
+	if (binding.characterId) {
+		return binding.characterId === currentCharacterId
+	} else if (binding.personaId) {
+		return (chat.chatPersonas || []).some(
+			(cp) => cp.persona.id === binding.personaId
+		)
+	}
+	return false
 }
 
 export function attachCharacterLoreToCharacters(

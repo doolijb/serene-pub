@@ -23,10 +23,12 @@
 		null
 	)
 	let isCheckingVersion = $state(false)
+	let versionCheckFailed = $state(false)
 	let isUpdateAvailable = $state(false)
 	let latestVersion = $state("")
 	let releaseUrl = $state("")
 	let isCheckingUpdates = $state(false)
+	let updateCheckFailed = $state(false)
 	let isSavingBaseUrl = $state(false)
 	let isSavingModelsDir = $state(false)
 	let baseUrlField = $state("")
@@ -106,11 +108,13 @@
 
 	function checkVersion() {
 		isCheckingVersion = true
+		versionCheckFailed = false
 		socket.emit("koboldcpp:version", {})
 	}
 
 	function checkForUpdates() {
 		isCheckingUpdates = true
+		updateCheckFailed = false
 		socket.emit("koboldcpp:isUpdateAvailable", {})
 	}
 
@@ -172,30 +176,30 @@
 			"koboldcpp:version",
 			(message: Sockets.KoboldCPP.Version.Response) => {
 				isCheckingVersion = false
+				versionCheckFailed = false
 				currentVersion = message.version || "Unknown"
 				capabilities = message.capabilities
 			}
 		)
 		socket.on(
 			"koboldcpp:version:error",
-			(message: Sockets.ErrorResponse) => {
+			() => {
+				// Not reachable is a common, often-transient state in both modes
+				// (subprocess/instance not started yet, briefly restarting, etc.)
+				// — this fires eagerly on every mount, so a toast here would pop
+				// up immediately just from opening the tab. Surfaced instead as a
+				// quiet inline indicator next to the version fields below.
 				isCheckingVersion = false
-				// In managed mode "not reachable" is a normal, common transient state
-				// (subprocess not started yet, or stopped) — the Perf tab's status
-				// indicator already covers that. Only external mode's user-provided
-				// URL failing to respond is unexpected enough to warrant a toast.
-				if (!isManaged) {
-					toaster.error({
-						title: "Cannot reach KoboldCPP",
-						description: message.error
-					})
-				}
+				versionCheckFailed = true
+				currentVersion = ""
+				capabilities = null
 			}
 		)
 		socket.on(
 			"koboldcpp:isUpdateAvailable",
 			(message: Sockets.KoboldCPP.IsUpdateAvailable.Response) => {
 				isCheckingUpdates = false
+				updateCheckFailed = false
 				isUpdateAvailable = message.isUpdateAvailable
 				latestVersion = message.latestVersion ?? ""
 				releaseUrl = message.releaseUrl ?? ""
@@ -205,12 +209,11 @@
 		)
 		socket.on(
 			"koboldcpp:isUpdateAvailable:error",
-			(message: Sockets.ErrorResponse) => {
+			() => {
+				// Same reasoning as koboldcpp:version:error above — eager check,
+				// quiet inline indicator instead of a toast.
 				isCheckingUpdates = false
-				toaster.error({
-					title: "Failed to check for updates",
-					description: message.error
-				})
+				updateCheckFailed = true
 			}
 		)
 		socket.on(
@@ -659,13 +662,35 @@
 				<div class="flex flex-col gap-2">
 					<div class="flex items-center justify-between">
 						<span class="text-surface-600">Current Version:</span>
-						<span class="font-mono">{currentVersion || "—"}</span>
+						{#if isCheckingVersion}
+							<span
+								class="text-surface-700-300 flex items-center gap-1 font-mono text-xs"
+							>
+								<Icons.Loader2 size={12} class="animate-spin" />
+								Checking...
+							</span>
+						{:else if versionCheckFailed}
+							<span
+								class="text-warning-600 dark:text-warning-400 flex items-center gap-1 text-xs"
+							>
+								<Icons.AlertTriangle size={12} />
+								Not reachable
+							</span>
+						{:else}
+							<span class="font-mono">{currentVersion || "—"}</span>
+						{/if}
 					</div>
 					<div class="flex items-center justify-between">
 						<span class="text-surface-600">Latest Version:</span>
-						<span class="text-warning-500 font-mono">
-							{latestVersion || "—"}
-						</span>
+						{#if updateCheckFailed}
+							<span class="text-surface-700-300 text-xs">
+								Couldn't check
+							</span>
+						{:else}
+							<span class="text-warning-500 font-mono">
+								{latestVersion || "—"}
+							</span>
+						{/if}
 					</div>
 				</div>
 

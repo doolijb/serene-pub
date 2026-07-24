@@ -1,197 +1,78 @@
 import Handlebars from "handlebars"
 
-// Recognizes known Handlebars idioms in a context config template's raw text (the source of truth)
-// and exposes their exact source ranges so cards can be added/removed/reordered as surgical splices.
+// Parses a context config template's raw text (the source of truth) into a
+// generic tree of cards that mirrors the template's actual Handlebars AST
+// structure — no fixed/hardcoded list of "known" section names. Any block
+// helper ({{#if}}/{{#each}}/{{#with}}/{{#unless}}/{{#systemBlock}}/any custom
+// helper) becomes a card exposing its tag and holding its body as children;
+// any variable reference standing alone on its own line becomes its own leaf
+// card; any run of prose (optionally with inline variables sharing a line,
+// e.g. "{{{name}}}: {{{message}}}") becomes one text card. Every mutation
+// (update/remove/reorder/insert) works by splicing the original template
+// string at AST-derived source offsets — never rebuilding from a mutated
+// AST (Handlebars has no public AST→source serializer).
 
-export type ContextCardZone = "systemMessage" | "chatMessages" | "postHistory"
+export type CardKind = "block" | "variable" | "text"
 
-export const CUSTOM_TEXT_OPEN_MARKER = "context-card:custom-text"
-export const CUSTOM_TEXT_CLOSE_MARKER = "/context-card:custom-text"
-
-export type ContextBlockRole = "system" | "user" | "assistant"
-
-const BLOCK_HELPER_ROLES: Record<string, ContextBlockRole> = {
-	systemBlock: "system",
-	userBlock: "user",
-	assistantBlock: "assistant"
-}
-
-export interface ContextCardTypeDef {
+export interface BaseCard {
 	id: string
-	zone: ContextCardZone
-	label: string
-	description: string
-	fixed?: boolean
-	repeatable?: boolean
-	field: string
-	kinds: ("mustache" | "ifBlock" | "eachBlock")[]
-	defaultSnippet: string
-}
-
-export interface ParsedContextCard {
-	key: string
-	typeId: string
-	zone: ContextCardZone
+	kind: CardKind
 	start: number
 	end: number
-	content?: string
-	role?: ContextBlockRole
 }
 
+export interface BlockCard extends BaseCard {
+	kind: "block"
+	/** e.g. "if" | "each" | "with" | "unless" | "systemBlock" | any custom helper name. */
+	helperName: string
+	/** True for systemBlock/userBlock/assistantBlock — always-zero-param role wrappers. */
+	isRoleWrapper: boolean
+	/**
+	 * Raw source text of the tag's params/hash/block-params, sliced verbatim
+	 * from the original open-tag source (e.g. "(and (eq msgIndex targetIndex) hasContent)"
+	 * or "chatMessages as |chatMessage msgIndex|") — never reconstructed from
+	 * AST param nodes, so nothing about it needs re-printing.
+	 */
+	tagSource: string
+	/** Source range of the block's own body (between the open and close tags). */
+	bodyStart: number
+	bodyEnd: number
+	children: Card[]
+	hasElse: boolean
+	elseBodyStart?: number
+	elseBodyEnd?: number
+	elseChildren?: Card[]
+}
+
+export interface VariableCard extends BaseCard {
+	kind: "variable"
+	/** Raw text between the stashes, e.g. "worldLore" or "../postHistory.instructions". */
+	expressionSource: string
+	/** true = {{x}} (HTML-escaped), false = {{{x}}} (raw). */
+	escaped: boolean
+}
+
+export interface TextCard extends BaseCard {
+	kind: "text"
+	/** Raw source text, verbatim — may contain inline {{mustaches}}. */
+	content: string
+}
+
+export type Card = BlockCard | VariableCard | TextCard
+
 export interface ParsedContextTemplate {
-	cards: ParsedContextCard[]
-	systemMessageContainer: { start: number; end: number } | null
+	cards: Card[]
 	parseError: string | null
 }
 
-export const CONTEXT_CARD_TYPES: ContextCardTypeDef[] = [
-	{
-		id: "currentDate",
-		zone: "systemMessage",
-		label: "Current Date",
-		description:
-			"Shows the in-story current date, when the chat has one set. Only appears when a date is set.",
-		field: "currentDate",
-		kinds: ["ifBlock"],
-		defaultSnippet: `{{#if currentDate}}\nThe current date in the story is {{{currentDate}}}.\n{{/if}}`
-	},
-	{
-		id: "instructions",
-		zone: "systemMessage",
-		label: "Instructions",
-		description:
-			"The active chat prompt's system instructions (from the Prompts sidebar). Only appears when set.",
-		field: "instructions",
-		kinds: ["mustache", "ifBlock"],
-		defaultSnippet: `{{#if instructions}}\nInstructions:\n"""\n{{{instructions}}}\n"""\n{{/if}}`
-	},
-	{
-		id: "characters",
-		zone: "systemMessage",
-		label: "Assistant Characters",
-		description:
-			"The AI-controlled characters in this chat, serialized as JSON (name, description, personality, lore, etc). Only appears when there's at least one.",
-		field: "characters",
-		kinds: ["mustache", "ifBlock"],
-		defaultSnippet: `{{#if characters}}\nAssistant Characters (AI-controlled):\n\`\`\`json\n{{{characters}}}\n\`\`\`\n{{/if}}`
-	},
-	{
-		id: "personas",
-		zone: "systemMessage",
-		label: "User Personas",
-		description:
-			"The player-controlled personas in this chat, serialized as JSON. Only appears when there's at least one.",
-		field: "personas",
-		kinds: ["mustache", "ifBlock"],
-		defaultSnippet: `{{#if personas}}\nUser Characters (player-controlled):\n\`\`\`json\n{{{personas}}}\n\`\`\`\n{{/if}}`
-	},
-	{
-		id: "scenario",
-		zone: "systemMessage",
-		label: "Scenario",
-		description:
-			"The chat's scenario text, falling back to the current character's scenario when the chat doesn't set one. Only appears when set.",
-		field: "scenario",
-		kinds: ["mustache", "ifBlock"],
-		defaultSnippet: `{{#if scenario}}\nScenario:\n"""\n{{{scenario}}}\n"""\n{{/if}}`
-	},
-	{
-		id: "worldLore",
-		zone: "systemMessage",
-		label: "World Lore",
-		description:
-			"World lorebook entries selected for relevance, serialized as JSON. Only appears when at least one is included.",
-		field: "worldLore",
-		kinds: ["ifBlock"],
-		defaultSnippet: `{{#if worldLore}}\nWorld lore: \n\`\`\`json\n{{{worldLore}}}\n\`\`\`\n{{/if}}`
-	},
-	{
-		id: "history",
-		zone: "systemMessage",
-		label: "Story History",
-		description:
-			"History lorebook entries selected for relevance, serialized as JSON. Only appears when at least one is included.",
-		field: "history",
-		kinds: ["ifBlock"],
-		defaultSnippet: `{{#if history}}\nStory history:\n\`\`\`json\n{{{history}}}\n\`\`\`\n{{/if}}`
-	},
-	{
-		id: "narrativeGraph",
-		zone: "systemMessage",
-		label: "Story Relationships",
-		description:
-			"A relationship graph inferred from recent messages (who/what co-occurs with whom), serialized as JSON. Only appears when there's enough signal.",
-		field: "narrativeGraph",
-		kinds: ["ifBlock"],
-		defaultSnippet: `{{#if narrativeGraph}}\nStory relationships:\n\`\`\`json\n{{{narrativeGraph}}}\n\`\`\`\n{{/if}}`
-	},
-	{
-		id: "exampleDialogue",
-		zone: "systemMessage",
-		label: "Example Dialogue",
-		description:
-			"One randomly-selected example dialogue from the current character. Only appears when they have any defined.",
-		field: "exampleDialogue",
-		kinds: ["ifBlock"],
-		defaultSnippet: `{{#if exampleDialogue}}\nExample dialogue:\n"""\n{{{exampleDialogue}}}\n"""\n{{/if}}`
-	},
-	{
-		id: "customText",
-		zone: "systemMessage",
-		label: "Custom Text",
-		description:
-			"Freeform text you write yourself. Add as many as you like, anywhere in the system message. Can also contain simple {{placeholders}}.",
-		repeatable: true,
-		field: "",
-		kinds: [],
-		defaultSnippet: `{{!-- ${CUSTOM_TEXT_OPEN_MARKER} --}}\nWrite anything here.\n{{!-- ${CUSTOM_TEXT_CLOSE_MARKER} --}}`
-	},
-	{
-		id: "block",
-		zone: "systemMessage",
-		label: "Block",
-		description:
-			"A generic wrapper, like the one that already wraps Instructions and Date into a system message. Pick a role and write anything inside it — useful for grouping content or adding a separate system/user/assistant-tagged section.",
-		repeatable: true,
-		field: "",
-		kinds: [],
-		defaultSnippet: `{{#systemBlock}}\nWrite anything here.\n{{/systemBlock}}`
-	},
-	{
-		id: "chatMessages",
-		zone: "chatMessages",
-		label: "Chat Messages",
-		description:
-			"The conversation history itself. Always present and can't be removed — every context template needs somewhere for the actual chat to go.",
-		fixed: true,
-		field: "chatMessages",
-		kinds: ["eachBlock"],
-		defaultSnippet: `{{#each chatMessages}}\n{{#if (eq role "assistant")}}\n{{#assistantBlock}}\n{{{name}}}: {{{message}}}\n{{/assistantBlock}}\n{{/if}}\n{{#if (eq role "user")}}\n{{#userBlock}}\n{{{name}}}: {{{message}}}\n{{/userBlock}}\n{{/if}}\n{{/each}}`
-	},
-	{
-		id: "postHistoryInstructions",
-		zone: "postHistory",
-		label: "Post-History Instructions",
-		description:
-			"Extra instructions injected after the chat history, from the current character's Post-History Instructions field. Only appears when the character sets any.",
-		field: "postHistoryInstructions",
-		kinds: ["ifBlock"],
-		defaultSnippet: `{{#if postHistoryInstructions}}\n{{#systemBlock}}\n{{{postHistoryInstructions}}}\n{{/systemBlock}}\n{{/if}}`
-	}
-]
-
-export function getContextCardType(
-	typeId: string
-): ContextCardTypeDef | undefined {
-	return CONTEXT_CARD_TYPES.find((c) => c.id === typeId)
-}
+const ROLE_WRAPPER_HELPERS = new Set(["systemBlock", "userBlock", "assistantBlock"])
 
 /**
  * Deterministic (FNV-1a) string hash — not cryptographic, just needs to be
- * stable and cheap so a card's derived `key` doesn't change when its
- * position in the template does. Collisions only matter between two cards
- * of the same type with byte-identical content, which pushCard's dupCount
- * suffix already disambiguates.
+ * stable and cheap so a card's derived `id` doesn't change when its position
+ * in the template does (reordering must not change identity). Collisions
+ * only matter between two cards with byte-identical source text, which
+ * makeId's dup-counter suffix disambiguates.
  */
 function fingerprint(text: string): string {
 	let hash = 0x811c9dc5
@@ -210,40 +91,38 @@ function buildLineOffsets(text: string): number[] {
 	return offsets
 }
 
-function matchMustache(stmt: any): string | null {
-	if (stmt.params?.length) return null
-	if (stmt.path?.type !== "PathExpression") return null
-	const field = stmt.path.original
-	const def = CONTEXT_CARD_TYPES.find(
-		(c) => c.kinds.includes("mustache") && c.field === field
-	)
-	return def?.id ?? null
+function isWhitespace(s: string): boolean {
+	return /^\s*$/.test(s)
 }
 
-function matchBlock(stmt: any): ContextCardTypeDef | null {
-	const pathName = stmt.path?.original
-	if (
-		(pathName === "if" || pathName === "each") &&
-		stmt.params?.length === 1 &&
-		stmt.params[0]?.type === "PathExpression"
-	) {
-		const kind = pathName === "if" ? "ifBlock" : "eachBlock"
-		const field = stmt.params[0].original
-		return (
-			CONTEXT_CARD_TYPES.find(
-				(c) => c.kinds.includes(kind as any) && c.field === field
-			) ?? null
-		)
+/** Splits an accumulated text run into blank-line-separated paragraphs, each
+ * keeping its own absolute source offsets — a single run of non-blank lines
+ * (no blank line inside) stays one card; a blank line (2+ newlines) splits
+ * into separate cards, mirroring how block-card gaps already work. */
+function splitTextRun(
+	raw: string,
+	base: number
+): Array<{ text: string; start: number; end: number }> {
+	const parts: Array<{ text: string; start: number; end: number }> = []
+	const boundary = /\n[ \t]*\n+/g
+	let segStart = 0
+	let m: RegExpExecArray | null
+	while ((m = boundary.exec(raw)) !== null) {
+		const text = raw.slice(segStart, m.index)
+		if (text.trim().length > 0) {
+			parts.push({ text, start: base + segStart, end: base + m.index })
+		}
+		segStart = boundary.lastIndex
 	}
-	return null
+	const tail = raw.slice(segStart)
+	if (tail.trim().length > 0) {
+		parts.push({ text: tail, start: base + segStart, end: base + raw.length })
+	}
+	return parts
 }
 
 export function parseContextTemplate(template: string): ParsedContextTemplate {
-	const result: ParsedContextTemplate = {
-		cards: [],
-		systemMessageContainer: null,
-		parseError: null
-	}
+	const result: ParsedContextTemplate = { cards: [], parseError: null }
 
 	let ast: any
 	try {
@@ -257,427 +136,683 @@ export function parseContextTemplate(template: string): ParsedContextTemplate {
 	const offsetOf = (pos: { line: number; column: number }) =>
 		lineOffsets[pos.line - 1] + pos.column
 
-	const seenKeys = new Map<string, number>()
-	const pushCard = (
-		typeId: string,
-		zone: ContextCardZone,
-		start: number,
-		end: number,
-		content?: string,
-		role?: ContextBlockRole
-	) => {
-		// Keys are derived from content, not scan-order occurrence, so a
-		// card's identity survives being moved to a different position by a
-		// reorder — reorderContextCards (below) and ContextSidebar's drag
-		// mirror both depend on the SAME card keeping the SAME key across a
-		// reorder + re-parse cycle. Occurrence-based keys broke that: after
-		// swapping two same-typed cards, re-parsing renumbered by new scan
-		// position, so eg. "customText:1" silently started referring to a
-		// different card's content — which svelte-dnd-action (keyed on this
-		// value) can't distinguish from that card being deleted and a new
-		// one inserted, causing it to visually vanish mid-drop.
-		const baseKey =
-			content !== undefined ? `${typeId}:${fingerprint(content)}` : typeId
-		// Falls back to the old occurrence-numbering only to disambiguate
-		// two cards of the same type with byte-identical content (or no
-		// content at all, eg. the fixed chatMessages card) — a rare,
-		// harmless case since such cards are indistinguishable to the user
-		// too.
-		const dupCount = seenKeys.get(baseKey) ?? 0
-		seenKeys.set(baseKey, dupCount + 1)
-		const key = dupCount === 0 ? baseKey : `${baseKey}:${dupCount}`
-		result.cards.push({
-			key,
-			typeId,
-			zone,
-			start,
-			end,
-			...(content !== undefined ? { content } : {}),
-			...(role !== undefined ? { role } : {})
-		})
+	/** Slices the raw open-tag text (from the tag's `{{` to its own `}}`) and
+	 * pulls out everything after the helper name as `tagSource` — reusing the
+	 * ORIGINAL source text rather than reconstructing it from AST param
+	 * nodes, so block-params (`as |a b|`) and hash args come along for free. */
+	const extractTagSource = (openStart: number): string => {
+		const closeIdx = template.indexOf("}}", openStart)
+		const raw = template.slice(openStart, closeIdx + 2)
+		const m = /^\{\{~?#\s*[^\s}]+([\s\S]*?)~?\}\}$/.exec(raw)
+		return m ? m[1].trim() : ""
 	}
 
-	// Bare mustache cards only cover the placeholder itself; expand to the surrounding
-	// blank-line-delimited paragraph (clamped to the enclosing block) to capture label/fence text too.
-	const expandToParagraph = (
-		start: number,
-		end: number,
-		containerStart: number,
-		containerEnd: number
-	) => {
-		const beforeIdx = template.lastIndexOf("\n\n", start)
-		const pStart =
-			beforeIdx !== -1 && beforeIdx + 2 >= containerStart
-				? beforeIdx + 2
-				: containerStart
-		const afterIdx = template.indexOf("\n\n", end)
-		const pEnd =
-			afterIdx !== -1 && afterIdx <= containerEnd
-				? afterIdx
-				: containerEnd
-		return { start: pStart, end: pEnd }
-	}
+	const walkProgram = (program: any): Card[] => {
+		const cards: Card[] = []
+		let textStart: number | null = null
+		let textEnd: number | null = null
 
-	const walk = (
-		program: any,
-		containerStart: number,
-		containerEnd: number
-	) => {
+		// Scoped to THIS call (one parent's own direct children), not shared
+		// across the whole tree — so two identical-content cards colliding
+		// only ever affects disambiguation among their own true siblings.
+		// Inserting/removing an identical-content card anywhere ELSE in the
+		// tree (a different parent, or not a sibling of these two at all)
+		// can't perturb a suffix number here. A truly global counter would
+		// mean an edit far away, under an unrelated parent, could flip which
+		// of two unrelated identical-content cards gets ":1" — this narrows
+		// that blast radius to only matter when it's the same set of
+		// siblings under the same parent that changed.
+		const seenKeys = new Map<string, number>()
+		const makeId = (rawText: string): string => {
+			const base = fingerprint(rawText)
+			const dup = seenKeys.get(base) ?? 0
+			seenKeys.set(base, dup + 1)
+			return dup === 0 ? base : `${base}:${dup}`
+		}
+
+		const flushText = () => {
+			if (textStart === null || textEnd === null) return
+			const raw = template.slice(textStart, textEnd)
+			for (const p of splitTextRun(raw, textStart)) {
+				// Trim exactly one leading/trailing newline for display/editing
+				// (matches the surrounding block's own open/close-tag newlines,
+				// which read as structural, not part of the prose) — start/end
+				// stay untrimmed so a splice against them still removes the
+				// full original range; updateTextCard re-adds whichever of
+				// these were present so a save doesn't collapse the block onto
+				// one line.
+				cards.push({
+					id: makeId(p.text),
+					kind: "text",
+					start: p.start,
+					end: p.end,
+					content: p.text.replace(/^\n/, "").replace(/\n$/, "")
+				})
+			}
+			textStart = null
+			textEnd = null
+		}
+		const appendToText = (start: number, end: number) => {
+			if (textStart === null) textStart = start
+			textEnd = end
+		}
+
 		const body = program.body
-		for (let idx = 0; idx < body.length; idx++) {
-			const stmt = body[idx]
+		for (const stmt of body) {
+			const start = offsetOf(stmt.loc.start)
+			const end = offsetOf(stmt.loc.end)
 
 			if (
-				stmt.type === "CommentStatement" &&
-				stmt.value?.trim() === CUSTOM_TEXT_OPEN_MARKER
+				stmt.type === "ContentStatement" ||
+				stmt.type === "CommentStatement"
 			) {
-				let closeIdx = -1
-				for (let j = idx + 1; j < body.length; j++) {
-					const s = body[j]
-					if (
-						s.type === "CommentStatement" &&
-						s.value?.trim() === CUSTOM_TEXT_CLOSE_MARKER
-					) {
-						closeIdx = j
-						break
-					}
-				}
-				if (closeIdx !== -1) {
-					const closeStmt = body[closeIdx]
-					const openEnd = offsetOf(stmt.loc.end)
-					const closeStart = offsetOf(closeStmt.loc.start)
-					const content = template
-						.slice(openEnd, closeStart)
-						.replace(/^\n/, "")
-						.replace(/\n$/, "")
-					pushCard(
-						"customText",
-						"systemMessage",
-						offsetOf(stmt.loc.start),
-						offsetOf(closeStmt.loc.end),
-						content
-					)
-					idx = closeIdx
-					continue
-				}
+				appendToText(start, end)
+				continue
 			}
 
 			if (stmt.type === "MustacheStatement") {
-				const typeId = matchMustache(stmt)
-				if (typeId) {
-					const { start, end } = expandToParagraph(
-						offsetOf(stmt.loc.start),
-						offsetOf(stmt.loc.end),
-						containerStart,
-						containerEnd
-					)
-					// No {{#if}} wrapper to hide here — the whole captured paragraph
-					// (label text, fences, and the {{{field}}} placeholder itself) is
-					// the editable content.
-					const content = template
-						.slice(start, end)
-						.replace(/^\n/, "")
-						.replace(/\n$/, "")
-					pushCard(typeId, "systemMessage", start, end, content)
+				// Standalone (alone on its own line) vs inline (shares a line
+				// with other text/mustaches, e.g. "{{{name}}}: {{{message}}}")
+				// — checked against raw source text on that line, not AST
+				// siblings, so it's correct regardless of what produced the
+				// surrounding text.
+				const lineStart = template.lastIndexOf("\n", start - 1) + 1
+				const nlIdx = template.indexOf("\n", end)
+				const lineEnd = nlIdx === -1 ? template.length : nlIdx
+				const before = template.slice(lineStart, start)
+				const after = template.slice(end, lineEnd)
+				if (isWhitespace(before) && isWhitespace(after)) {
+					flushText()
+					const raw = template.slice(start, end)
+					const escaped = stmt.escaped
+					const expressionSource = escaped
+						? raw.replace(/^\{\{\s*/, "").replace(/\s*\}\}$/, "")
+						: raw.replace(/^\{\{\{\s*/, "").replace(/\s*\}\}\}$/, "")
+					cards.push({
+						id: makeId(raw),
+						kind: "variable",
+						start,
+						end,
+						expressionSource,
+						escaped
+					})
+				} else {
+					appendToText(start, end)
 				}
 				continue
 			}
+
 			if (stmt.type === "BlockStatement") {
-				const def = matchBlock(stmt)
-				if (def) {
-					const start = offsetOf(stmt.loc.start)
-					const end = offsetOf(stmt.loc.end)
-					// "each" (chatMessages) stays opaque/fixed; "if" blocks expose their
-					// inner text (label, fences, the {{{field}}} placeholder) as editable
-					// content, same as Block cards do.
-					const content =
-						stmt.path?.original === "if"
-							? template
-									.slice(
-										offsetOf(stmt.program.loc.start),
-										offsetOf(stmt.program.loc.end)
-									)
-									.replace(/^\n/, "")
-									.replace(/\n$/, "")
-							: undefined
-					pushCard(def.id, def.zone, start, end, content)
-					// Recognized cards are opaque leaves — their contents aren't
-					// decomposed into further sub-cards.
-					continue
-				}
+				flushText()
+				const helperName: string = stmt.path?.original ?? ""
+				const tagSource = extractTagSource(start)
+				const bodyStart = offsetOf(stmt.program.loc.start)
+				const bodyEnd = offsetOf(stmt.program.loc.end)
+				const children = walkProgram(stmt.program)
 
-				const blockRole = BLOCK_HELPER_ROLES[stmt.path?.original]
-				if (blockRole) {
-					// The first systemBlock found is the implicit "System Message" zone
-					// container (not a card itself) — everything else is recursed into
-					// flatly. Any OTHER block-helper usage (a second systemBlock, or a
-					// userBlock/assistantBlock anywhere) is a generic, opaque "Block" card.
-					if (
-						stmt.path.original === "systemBlock" &&
-						!result.systemMessageContainer
-					) {
-						result.systemMessageContainer = {
-							start: offsetOf(stmt.program.loc.start),
-							end: offsetOf(stmt.program.loc.end)
-						}
-						if (stmt.program) {
-							walk(
-								stmt.program,
-								offsetOf(stmt.program.loc.start),
-								offsetOf(stmt.program.loc.end)
-							)
-						}
-						continue
-					}
-					const content = template
-						.slice(
-							offsetOf(stmt.program.loc.start),
-							offsetOf(stmt.program.loc.end)
-						)
-						.replace(/^\n/, "")
-						.replace(/\n$/, "")
-					pushCard(
-						"block",
-						"systemMessage",
-						offsetOf(stmt.loc.start),
-						offsetOf(stmt.loc.end),
-						content,
-						blockRole
-					)
-					continue
-				}
-
-				if (stmt.program) {
-					walk(
-						stmt.program,
-						offsetOf(stmt.program.loc.start),
-						offsetOf(stmt.program.loc.end)
-					)
-				}
+				let elseBodyStart: number | undefined
+				let elseBodyEnd: number | undefined
+				let elseChildren: Card[] | undefined
 				if (stmt.inverse) {
-					walk(
-						stmt.inverse,
-						offsetOf(stmt.inverse.loc.start),
-						offsetOf(stmt.inverse.loc.end)
-					)
+					elseBodyStart = offsetOf(stmt.inverse.loc.start)
+					elseBodyEnd = offsetOf(stmt.inverse.loc.end)
+					elseChildren = walkProgram(stmt.inverse)
 				}
+
+				const raw = template.slice(start, end)
+				cards.push({
+					id: makeId(raw),
+					kind: "block",
+					start,
+					end,
+					helperName,
+					isRoleWrapper: ROLE_WRAPPER_HELPERS.has(helperName),
+					tagSource,
+					bodyStart,
+					bodyEnd,
+					children,
+					hasElse: !!stmt.inverse,
+					elseBodyStart,
+					elseBodyEnd,
+					elseChildren
+				})
+				continue
 			}
+			// PartialStatement/DecoratorBlock/etc. aren't used by this app's
+			// templates — silently skipped (never produced by defaults.ts, and
+			// a user-authored one would just not appear as its own card,
+			// same "invisible unless you use Raw" fallback as everything used
+			// to have before this rewrite, now limited to a much narrower set
+			// of genuinely exotic constructs instead of ordinary blocks).
 		}
+		flushText()
+		return cards
 	}
 
-	walk(ast, 0, template.length)
-	result.cards.sort((a, b) => a.start - b.start)
+	result.cards = walkProgram(ast)
 	return result
 }
 
-/** Appends a new card at the end of its zone (or wraps a fresh system block if the zone is empty). */
-export function insertContextCard(
-	template: string,
-	typeId: string
-): { template: string; error?: string } {
-	const cardType = getContextCardType(typeId)
-	if (!cardType) return { template, error: "Unknown card type" }
-	if (cardType.fixed)
-		return { template, error: "This card can't be added manually" }
+// ─── Insertable "starter" snippets ──────────────────────────────────────────
+// The one place a short fixed list still exists — not "what can exist" (the
+// parser above represents anything), just "what am I offered when I click
+// Add Card." Inserted content is immediately editable via the mutation
+// functions below, same as every other card.
 
-	const parsed = parseContextTemplate(template)
-	if (parsed.parseError) return { template, error: parsed.parseError }
+export type InsertableKind =
+	| { kind: "block"; helperName: string; tagSource: string; bodyPlaceholder?: string }
+	| { kind: "variable"; expressionSource: string; escaped: boolean }
+	| { kind: "text"; content: string }
 
-	const zoneCards = parsed.cards
-		.filter((c) => c.zone === cardType.zone)
-		.sort((a, b) => a.start - b.start)
-
-	if (zoneCards.length > 0) {
-		const insertAt = zoneCards[zoneCards.length - 1].end
-		return {
-			template:
-				template.slice(0, insertAt) +
-				"\n\n" +
-				cardType.defaultSnippet +
-				template.slice(insertAt)
-		}
-	}
-
-	if (cardType.zone === "systemMessage" && parsed.systemMessageContainer) {
-		const insertAt = parsed.systemMessageContainer.start
-		return {
-			template:
-				template.slice(0, insertAt) +
-				"\n" +
-				cardType.defaultSnippet +
-				"\n" +
-				template.slice(insertAt)
-		}
-	}
-
-	if (cardType.zone === "systemMessage") {
-		// No system-message container exists yet — wrap our own so the added
-		// content still gets proper prompt-format role wrapping.
-		return {
-			template: `{{#systemBlock}}\n${cardType.defaultSnippet}\n{{/systemBlock}}\n\n${template}`
-		}
-	}
-
-	// postHistory zone with no existing card — append at document end.
-	const trimmed = template.replace(/\s+$/, "")
-	return { template: `${trimmed}\n\n${cardType.defaultSnippet}\n` }
+export interface InsertableCardOption {
+	id: string
+	label: string
+	description: string
+	spec: InsertableKind
 }
 
-/** Inserts a new card at an arbitrary position within its zone's existing card list (0 = before the first). */
-export function insertContextCardAt(
-	template: string,
-	typeId: string,
-	{ zone, index }: { zone: ContextCardZone; index: number }
-): { template: string; error?: string } {
-	const cardType = getContextCardType(typeId)
-	if (!cardType) return { template, error: "Unknown card type" }
-	if (cardType.fixed)
-		return { template, error: "This card can't be added manually" }
+export const INSERTABLE_CARD_OPTIONS: InsertableCardOption[] = [
+	{
+		id: "if",
+		label: "If",
+		description: "Shows its contents only when a condition is true.",
+		spec: { kind: "block", helperName: "if", tagSource: "trigger" }
+	},
+	{
+		id: "unless",
+		label: "Unless",
+		description: "Shows its contents only when a condition is false.",
+		spec: { kind: "block", helperName: "unless", tagSource: "trigger" }
+	},
+	{
+		id: "each",
+		label: "Each (loop)",
+		description: "Repeats its contents once per item in a list.",
+		spec: { kind: "block", helperName: "each", tagSource: "items" }
+	},
+	{
+		id: "with",
+		label: "With",
+		description: "Changes the current scope to a nested value.",
+		spec: { kind: "block", helperName: "with", tagSource: "value" }
+	},
+	{
+		id: "systemBlock",
+		label: "System Message",
+		description: "Wraps its contents as a system-role block.",
+		spec: { kind: "block", helperName: "systemBlock", tagSource: "" }
+	},
+	{
+		id: "userBlock",
+		label: "User Message",
+		description: "Wraps its contents as a user-role block.",
+		spec: { kind: "block", helperName: "userBlock", tagSource: "" }
+	},
+	{
+		id: "assistantBlock",
+		label: "Assistant Message",
+		description: "Wraps its contents as an assistant-role block.",
+		spec: { kind: "block", helperName: "assistantBlock", tagSource: "" }
+	},
+	{
+		id: "variable",
+		label: "Variable",
+		description: "Outputs a single value.",
+		spec: { kind: "variable", expressionSource: "value", escaped: false }
+	},
+	{
+		id: "text",
+		label: "Text",
+		description: "Freeform text you write yourself.",
+		spec: { kind: "text", content: "Write anything here." }
+	}
+]
 
-	const parsed = parseContextTemplate(template)
-	if (parsed.parseError) return { template, error: parsed.parseError }
+function snippetFor(spec: InsertableKind): string {
+	if (spec.kind === "block") {
+		const open = spec.tagSource
+			? `{{#${spec.helperName} ${spec.tagSource}}}`
+			: `{{#${spec.helperName}}}`
+		return `${open}\n${spec.bodyPlaceholder ?? ""}\n{{/${spec.helperName}}}`
+	}
+	if (spec.kind === "variable") {
+		return spec.escaped
+			? `{{${spec.expressionSource}}}`
+			: `{{{${spec.expressionSource}}}}`
+	}
+	return spec.content
+}
 
-	const zoneCards = parsed.cards
-		.filter((c) => c.zone === zone)
-		.sort((a, b) => a.start - b.start)
-
-	if (zoneCards.length === 0) return insertContextCard(template, typeId)
-
-	const clampedIndex = Math.max(0, Math.min(index, zoneCards.length))
-
-	if (clampedIndex >= zoneCards.length) {
-		const insertAt = zoneCards[zoneCards.length - 1].end
-		return {
-			template:
-				template.slice(0, insertAt) +
-				"\n\n" +
-				cardType.defaultSnippet +
-				template.slice(insertAt)
+/** Finds the card whose source range contains `pos`, recursing into a block's
+ * children/elseChildren first (most specific match wins). Containment rather
+ * than an exact `start === pos` match: a text card's range can start earlier
+ * than the position we're probing for, since leading whitespace immediately
+ * before it gets folded into the same ContentStatement (and thus the same
+ * card's range) rather than staying a separate node. */
+function findCardContaining(cards: Card[], pos: number): Card | undefined {
+	for (const c of cards) {
+		if (pos >= c.start && pos < c.end) {
+			if (c.kind === "block") {
+				return (
+					findCardContaining(c.children, pos) ??
+					(c.elseChildren
+						? findCardContaining(c.elseChildren, pos)
+						: undefined) ??
+					c
+				)
+			}
+			return c
 		}
 	}
+	return undefined
+}
 
-	const insertAt = zoneCards[clampedIndex].start
-	return {
-		template:
+/** Describes where to insert: the parent scope's own body range (used only
+ * when it currently has zero children) plus its current sibling list. Pass
+ * `{ parentBodyStart: 0, parentBodyEnd: template.length, siblings: parsed.cards }`
+ * for the root level, or a block card's own `bodyStart`/`bodyEnd`/`children`
+ * (or `elseBodyStart`/`elseBodyEnd`/`elseChildren`) for a nested scope. */
+export function insertCard(
+	template: string,
+	target: {
+		parentBodyStart: number
+		parentBodyEnd: number
+		siblings: Pick<BaseCard, "id" | "start" | "end">[]
+	},
+	atIndex: number,
+	spec: InsertableKind
+): { template: string; error?: string; insertedId?: string } {
+	const snippet = snippetFor(spec)
+	try {
+		Handlebars.parse(snippet)
+	} catch (err: any) {
+		return { template, error: err?.message || "Invalid syntax" }
+	}
+
+	const siblings = [...target.siblings].sort((a, b) => a.start - b.start)
+
+	let newTemplate: string
+	let snippetStart: number
+
+	if (siblings.length === 0) {
+		const insertAt = target.parentBodyStart
+		newTemplate =
 			template.slice(0, insertAt) +
-			cardType.defaultSnippet +
-			"\n\n" +
+			"\n" +
+			snippet +
+			"\n" +
 			template.slice(insertAt)
+		snippetStart = insertAt + 1
+	} else {
+		const clamped = Math.max(0, Math.min(atIndex, siblings.length))
+		if (clamped >= siblings.length) {
+			const insertAt = siblings[siblings.length - 1].end
+			newTemplate =
+				template.slice(0, insertAt) +
+				"\n\n" +
+				snippet +
+				template.slice(insertAt)
+			snippetStart = insertAt + 2
+		} else {
+			const insertAt = siblings[clamped].start
+			newTemplate =
+				template.slice(0, insertAt) +
+				snippet +
+				"\n\n" +
+				template.slice(insertAt)
+			snippetStart = insertAt
+		}
 	}
+
+	// Re-parse once to hand back the freshly-inserted card's own stable id —
+	// callers use this to force a newly-added card open by default instead
+	// of falling in with an ancestor's "collapsed unless freshly created"
+	// rule (see ContextSidebar.svelte).
+	const reparsed = parseContextTemplate(newTemplate)
+	const insertedId = reparsed.parseError
+		? undefined
+		: findCardContaining(reparsed.cards, snippetStart)?.id
+
+	return { template: newTemplate, insertedId }
 }
 
-export function removeContextCard(
+export function removeCard(
 	template: string,
-	card: Pick<ParsedContextCard, "start" | "end">
+	card: Pick<BaseCard, "start" | "end">
 ): string {
 	let end = card.end
 	if (template[end] === "\n") end += 1
 	return template.slice(0, card.start) + template.slice(end)
 }
 
-export function updateCustomTextCard(
+export function updateTextCard(
 	template: string,
-	card: Pick<ParsedContextCard, "start" | "end">,
+	card: Pick<TextCard, "start" | "end">,
 	newContent: string
 ): string {
-	const snippet = `{{!-- ${CUSTOM_TEXT_OPEN_MARKER} --}}\n${newContent}\n{{!-- ${CUSTOM_TEXT_CLOSE_MARKER} --}}`
-	return template.slice(0, card.start) + snippet + template.slice(card.end)
+	// content is displayed/edited with one leading/trailing newline trimmed
+	// (see parseContextTemplate) — re-add whichever were present in the
+	// original so saving doesn't collapse the surrounding block onto one line.
+	const hadLeading = template[card.start] === "\n"
+	const hadTrailing = template[card.end - 1] === "\n"
+	const wrapped =
+		(hadLeading ? "\n" : "") + newContent + (hadTrailing ? "\n" : "")
+	return template.slice(0, card.start) + wrapped + template.slice(card.end)
 }
 
-const BLOCK_ROLE_HELPER: Record<ContextBlockRole, string> = {
-	system: "systemBlock",
-	user: "userBlock",
-	assistant: "assistantBlock"
-}
-
-export function updateBlockCard(
+export function updateVariableCard(
 	template: string,
-	card: Pick<ParsedContextCard, "start" | "end">,
-	{ role, content }: { role: ContextBlockRole; content: string }
-): string {
-	const helper = BLOCK_ROLE_HELPER[role]
-	const snippet = `{{#${helper}}}\n${content}\n{{/${helper}}}`
-	return template.slice(0, card.start) + snippet + template.slice(card.end)
+	card: Pick<VariableCard, "start" | "end">,
+	newExpressionSource: string,
+	newEscaped: boolean
+): { template: string; error?: string } {
+	const snippet = newEscaped
+		? `{{${newExpressionSource}}}`
+		: `{{{${newExpressionSource}}}}`
+	try {
+		Handlebars.parse(snippet)
+	} catch (err: any) {
+		return { template, error: err?.message || "Invalid expression syntax" }
+	}
+	return {
+		template: template.slice(0, card.start) + snippet + template.slice(card.end)
+	}
+}
+
+function extractBlockParamNames(tagSource: string): string[] {
+	const m = /\bas\s*\|([^|]*)\|/.exec(tagSource)
+	if (!m) return []
+	return m[1].trim().split(/\s+/).filter(Boolean)
+}
+
+function collectDescendantExpressions(cards: Card[]): string[] {
+	const out: string[] = []
+	for (const c of cards) {
+		if (c.kind === "block") {
+			out.push(c.tagSource)
+			out.push(...collectDescendantExpressions(c.children))
+			if (c.elseChildren) {
+				out.push(...collectDescendantExpressions(c.elseChildren))
+			}
+		} else if (c.kind === "variable") {
+			out.push(c.expressionSource)
+		} else {
+			// Text cards can contain inline {{mustaches}} that reference a
+			// block param too (e.g. "{{{chatMessage.name}}}: {{{msgIndex}}}").
+			out.push(c.content)
+		}
+	}
+	return out
 }
 
 /**
- * Edits a field-backed card's wrapper text (labels, ``` fences, and the
- * {{{field}}} placeholder itself) — the same freeform text captured on
- * `card.content` for currentDate/instructions/characters/personas/scenario/
- * worldLore/history/narrativeGraph/exampleDialogue/postHistoryInstructions.
- * Always re-serializes as an `{{#if field}}...{{/if}}` block, so editing a
- * legacy bare-mustache card upgrades it to the guarded form in the process.
+ * Checks whether editing a block's tag would drop a block-param name
+ * (`{{#each x as |a b|}}`'s `a`/`b`) that descendant cards still reference.
+ * Handlebars raises no parse error for this — an orphaned reference just
+ * silently renders as undefined at compile time, surfacing later in
+ * Preview, disconnected from the edit that caused it. Callers should surface
+ * the returned names as a confirmation prompt before calling
+ * `updateBlockTag` with the same `newTagSource`, not block the edit outright
+ * — renaming on purpose (with the intent to also fix up descendants
+ * afterward) is still a valid thing to do.
  */
-export function updateFieldCardContent(
+export function findOrphanedBlockParamNames(
+	oldTagSource: string,
+	newTagSource: string,
+	descendants: Card[]
+): string[] {
+	const oldNames = extractBlockParamNames(oldTagSource)
+	const newNames = new Set(extractBlockParamNames(newTagSource))
+	const removedNames = oldNames.filter((n) => !newNames.has(n))
+	if (removedNames.length === 0) return []
+
+	const haystack = collectDescendantExpressions(descendants).join("\n")
+	return removedNames.filter((name) => {
+		const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+		return new RegExp(`\\b${escaped}\\b`).test(haystack)
+	})
+}
+
+/** Replaces a block card's open+close tags only — its body (children, and
+ * any {{else}} branch) is preserved byte-for-byte, sliced out and reinserted
+ * unchanged between the new tags. */
+export function updateBlockTag(
 	template: string,
-	card: Pick<ParsedContextCard, "start" | "end" | "typeId">,
-	newContent: string
+	card: Pick<BlockCard, "start" | "end">,
+	newHelperName: string,
+	newTagSource: string
+): { template: string; error?: string } {
+	const newOpen = newTagSource
+		? `{{#${newHelperName} ${newTagSource}}}`
+		: `{{#${newHelperName}}}`
+	const newClose = `{{/${newHelperName}}}`
+	try {
+		Handlebars.parse(`${newOpen}${newClose}`)
+	} catch (err: any) {
+		return { template, error: err?.message || "Invalid tag syntax" }
+	}
+
+	const openTagEnd = template.indexOf("}}", card.start) + 2
+	const closeTagStart = template.lastIndexOf("{{/", card.end)
+	const body = template.slice(openTagEnd, closeTagStart)
+
+	return {
+		template:
+			template.slice(0, card.start) +
+			newOpen +
+			body +
+			newClose +
+			template.slice(card.end)
+	}
+}
+
+/** Adds an empty {{else}} branch to a block that doesn't have one yet. */
+export function addElseBranch(
+	template: string,
+	card: Pick<BlockCard, "end">
 ): string {
-	const cardType = getContextCardType(card.typeId)
-	if (!cardType?.field) return template
-	const snippet = `{{#if ${cardType.field}}}\n${newContent}\n{{/if}}`
-	return template.slice(0, card.start) + snippet + template.slice(card.end)
+	const closeStart = template.lastIndexOf("{{/", card.end)
+	return template.slice(0, closeStart) + "{{else}}\n\n" + template.slice(closeStart)
+}
+
+/** Removes a block's {{else}} branch entirely, leaving the main body and close tag intact. */
+export function removeElseBranch(
+	template: string,
+	card: Pick<BlockCard, "elseBodyStart" | "elseBodyEnd">
+): string {
+	if (card.elseBodyStart === undefined || card.elseBodyEnd === undefined)
+		return template
+	const elseTagStart = template.lastIndexOf("{{else", card.elseBodyStart)
+	return (
+		template.slice(0, elseTagStart) + template.slice(card.elseBodyEnd)
+	)
 }
 
 /**
- * Rebuilds one zone's cards in a new order. `orderedKeys` must contain
- * exactly the same set of card `key`s currently present in that zone
- * (keys, not type ids, so repeatable card types like Custom Text reorder correctly).
+ * Rebuilds one parent scope's direct children in a new order. `siblingCards`
+ * must be exactly the current sibling list at that scope (root `cards`, a
+ * block's `children`, or its `elseChildren`); `orderedIds` must contain the
+ * same set of `id`s currently present, just reordered.
  */
-export function reorderContextCards(
+export function reorderCards(
 	template: string,
-	zone: ContextCardZone,
-	orderedKeys: string[]
+	siblingCards: Pick<BaseCard, "id" | "start" | "end">[],
+	orderedIds: string[]
 ): string {
-	const parsed = parseContextTemplate(template)
-	const zoneCards = parsed.cards
-		.filter((c) => c.zone === zone)
-		.sort((a, b) => a.start - b.start)
-
-	if (zoneCards.length !== orderedKeys.length || zoneCards.length === 0)
+	const sorted = [...siblingCards].sort((a, b) => a.start - b.start)
+	if (sorted.length !== orderedIds.length || sorted.length === 0)
 		return template
 
-	const textByKey = new Map(
-		zoneCards.map((c) => [c.key, template.slice(c.start, c.end)])
+	const textById = new Map(
+		sorted.map((c) => [c.id, template.slice(c.start, c.end)])
 	)
-	if (orderedKeys.some((key) => !textByKey.has(key))) return template
+	if (orderedIds.some((id) => !textById.has(id))) return template
 
-	// Each gap (whitespace, or hand-written prose the parser doesn't
-	// recognize as its own card) "belongs" to the card immediately before
-	// it — kept attached to that card, not to a position, so reordering
-	// can't relocate text written between two specific cards to sit between
-	// a different, unrelated pair just because they end up adjacent.
-	const gapAfterKey = new Map<string, string>()
-	for (let i = 0; i < zoneCards.length - 1; i++) {
-		gapAfterKey.set(
-			zoneCards[i].key,
-			template.slice(zoneCards[i].end, zoneCards[i + 1].start)
-		)
+	// Each gap (whitespace, or hand-written prose between two cards) "belongs"
+	// to the card immediately before it — kept attached to that card, not to
+	// a position, so reordering can't relocate text written between two
+	// specific cards to sit between a different, unrelated pair just because
+	// they end up adjacent.
+	const gapAfterId = new Map<string, string>()
+	for (let i = 0; i < sorted.length - 1; i++) {
+		gapAfterId.set(sorted[i].id, template.slice(sorted[i].end, sorted[i + 1].start))
 	}
 
-	let rebuilt = textByKey.get(orderedKeys[0])!
-	const usedGapKeys = new Set<string>()
-	for (let i = 1; i < orderedKeys.length; i++) {
-		const prevKey = orderedKeys[i - 1]
-		// A card that used to be last (no recorded gap) may now have a
-		// successor for the first time — fall back to the same "\n\n"
-		// separator insertContextCard/insertContextCardAt use elsewhere.
-		const gap = gapAfterKey.get(prevKey) ?? "\n\n"
-		usedGapKeys.add(prevKey)
-		rebuilt += gap + textByKey.get(orderedKeys[i])!
+	let rebuilt = textById.get(orderedIds[0])!
+	const usedGaps = new Set<string>()
+	for (let i = 1; i < orderedIds.length; i++) {
+		const prevId = orderedIds[i - 1]
+		const gap = gapAfterId.get(prevId) ?? "\n\n"
+		usedGaps.add(prevId)
+		rebuilt += gap + textById.get(orderedIds[i])!
 	}
-	// A gap whose card no longer has anything after it (eg. that card moved
-	// to the last position) would otherwise vanish entirely — append it
-	// after the rebuilt content instead of dropping it. It can no longer
-	// sit "between these two specific cards" (there's no longer a second
-	// card for it to precede), but the text itself is never lost.
-	for (const [key, gap] of gapAfterKey) {
-		if (!usedGapKeys.has(key)) rebuilt += gap
+	for (const [id, gap] of gapAfterId) {
+		if (!usedGaps.has(id)) rebuilt += gap
 	}
 
 	return (
-		template.slice(0, zoneCards[0].start) +
+		template.slice(0, sorted[0].start) +
 		rebuilt +
-		template.slice(zoneCards[zoneCards.length - 1].end)
+		template.slice(sorted[sorted.length - 1].end)
 	)
+}
+
+// ─── Unrecognized-tag lint ──────────────────────────────────────────────────
+// Distinct vocabulary from handlebarsLint.ts (lorebook entry CBS macros) —
+// context config templates use real Handlebars block helpers and reference
+// TemplateContext's own field names (src/lib/server/utils/promptBuilder/
+// types.ts), so this checks against THAT vocabulary instead.
+
+const KNOWN_HELPER_NAMES = new Set([
+	"if",
+	"unless",
+	"each",
+	"with",
+	"eq",
+	"ne",
+	"and",
+	"or",
+	"systemBlock",
+	"userBlock",
+	"assistantBlock"
+])
+
+// Mirrors TemplateContext (promptBuilder/types.ts) — only the top-level
+// field names, since anything reached through {{#each}}/{{#with}} (which
+// shift scope) can't be validated without knowing that helper's own target
+// shape, which this lint deliberately doesn't attempt (see lintContextTemplate).
+const KNOWN_TOP_LEVEL_FIELDS = new Set([
+	"instructions",
+	"characters",
+	"personas",
+	"scenario",
+	"exampleDialogue",
+	"postHistoryInstructions",
+	"postHistory",
+	"chatMessages",
+	"char",
+	"character",
+	"user",
+	"persona",
+	"characterNames",
+	"personaNames",
+	"worldLore",
+	"characterLore",
+	"history",
+	"currentDate",
+	"narrativeGraph"
+])
+
+export interface TemplateLintIssue {
+	cardId: string
+	start: number
+	end: number
+	message: string
+}
+
+/** Extracts the leading field/path a block's tagSource refers to, when it's
+ * unambiguous — a bare path, or a `some.field as |a b|` each-loop target.
+ * Returns null for anything else (a subexpression condition like
+ * `(and ...)`, or multi-arg tagSource this lint isn't confident reading). */
+function fieldNameFromTagSource(tagSource: string): string | null {
+	const trimmed = tagSource.trim()
+	if (!trimmed || trimmed.startsWith("(")) return null
+	const asIdx = trimmed.indexOf(" as |")
+	if (asIdx !== -1) return trimmed.slice(0, asIdx).trim()
+	if (/\s/.test(trimmed)) return null
+	return trimmed
+}
+
+function isCheckableField(field: string): boolean {
+	return !field.startsWith("../") && !field.startsWith("@")
+}
+
+/**
+ * Flags unrecognized helper names and unrecognized top-level field
+ * references in a parsed context config template. Helper names are checked
+ * at every nesting depth (a helper's identity never depends on scope), but
+ * field references are only checked in scopes this lint can fully resolve:
+ * top-level, and inside if/unless/systemBlock/userBlock/assistantBlock
+ * (none of which shift Handlebars context) — checking stops once a
+ * descendant enters an each/with block, since those introduce local names
+ * (block params, or the with-target's own fields) this lint doesn't attempt
+ * to resolve, and a false "unrecognized" flag on a legitimately-scoped name
+ * is worse than missing a real typo deep in a custom nested block.
+ */
+export function lintContextTemplate(cards: Card[]): TemplateLintIssue[] {
+	const issues: TemplateLintIssue[] = []
+
+	function visit(list: Card[], fieldsResolvable: boolean) {
+		for (const card of list) {
+			if (card.kind === "block") {
+				if (!KNOWN_HELPER_NAMES.has(card.helperName)) {
+					issues.push({
+						cardId: card.id,
+						start: card.start,
+						end: card.end,
+						message: `"${card.helperName}" isn't a recognized helper.`
+					})
+				}
+				if (fieldsResolvable) {
+					const field = fieldNameFromTagSource(card.tagSource)
+					if (
+						field &&
+						isCheckableField(field) &&
+						!KNOWN_TOP_LEVEL_FIELDS.has(field)
+					) {
+						issues.push({
+							cardId: card.id,
+							start: card.start,
+							end: card.end,
+							message: `"${field}" isn't a recognized field at this scope.`
+						})
+					}
+				}
+				const stillResolvable =
+					fieldsResolvable &&
+					card.helperName !== "each" &&
+					card.helperName !== "with"
+				visit(card.children, stillResolvable)
+				if (card.elseChildren) visit(card.elseChildren, stillResolvable)
+			} else if (card.kind === "variable" && fieldsResolvable) {
+				const field = card.expressionSource.trim()
+				if (
+					field &&
+					!/\s/.test(field) &&
+					isCheckableField(field) &&
+					!KNOWN_TOP_LEVEL_FIELDS.has(field)
+				) {
+					issues.push({
+						cardId: card.id,
+						start: card.start,
+						end: card.end,
+						message: `"${field}" isn't a recognized field at this scope.`
+					})
+				}
+			}
+		}
+	}
+
+	visit(cards, true)
+	return issues
 }

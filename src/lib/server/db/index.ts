@@ -290,19 +290,17 @@ async function runMigrations() {
 	console.log("Migrations applied.")
 }
 
-// Check if database has been initialized by looking for a specific table
-let hasTables = false
-try {
-	// Try to query a table that should exist after migrations
-	await db.execute("SELECT 1 FROM users LIMIT 1")
-	hasTables = true
-} catch (error) {
-	// Table doesn't exist, database needs initialization
-	hasTables = false
-}
-
-// Run migrations if in production environment
-if (!dev || !hasTables) {
+// In dev, always run migrations unconditionally — never gated by the
+// meta.json/app version comparison below. Dev iteration adds new migration
+// files constantly without bumping the app version for each one (that
+// mismatch is exactly what silently skipped a real migration for an entire
+// debugging session once already), so version-gating in dev just means
+// "sometimes skip a migration that actually needs to run." drizzle's own
+// migrate() is idempotent — safe to call every startup regardless of the
+// stored meta.json version, it only applies what isn't already applied.
+if (dev) {
+	await runMigrations()
+} else {
 	// @ts-ignore
 	const appVersion = __APP_VERSION__
 	if (!appVersion) {
@@ -339,8 +337,6 @@ if (!dev || !hasTables) {
 			)
 			throw new Error("Unexpected version comparison result")
 	}
-} else {
-	await runMigrations()
 }
 
 // Keep immutable seed rows (default prompt configs, etc.) in sync with the
@@ -356,19 +352,3 @@ db.update(schema.koboldCppModels)
 	.set({ status: "error", errorMessage: "Server restarted during download" })
 	.where(eq(schema.koboldCppModels.status, "downloading"))
 	.catch(() => {})
-
-// Auto-start managed KoboldCPP subprocess if configured
-import("$lib/server/koboldcpp/subprocessManager").then(async (mgr) => {
-	try {
-		const settings = await db.query.koboldCppSettings.findFirst()
-		if (
-			settings?.koboldCppManagerEnabled &&
-			settings?.koboldCppManagedMode === "managed"
-		) {
-			await mgr.start()
-			console.log("KoboldCPP managed subprocess started.")
-		}
-	} catch (err: any) {
-		console.warn("KoboldCPP auto-start failed:", err.message)
-	}
-})

@@ -1,4 +1,4 @@
-name: Release
+name: Build Desktop Releases
 
 on:
     push:
@@ -11,62 +11,19 @@ on:
             - "v*.*.*-rc-*"
 
 jobs:
-    build-and-release:
-        strategy:
-            matrix:
-                include:
-                    - target: linux-x64
-                      os: ubuntu-latest
-                    # - target: linux-arm64
-                    #   os: ubuntu-latest
-                    #   NOTE: GitHub-hosted runners don't offer native
-                    #   linux-arm64 hardware, and there's no cross-compile
-                    #   setup here (no QEMU, no npm_config_arch/--target_arch
-                    #   overrides) — `npm install` on an x64 ubuntu-latest
-                    #   runner resolves x64-arch native optional deps (eg.
-                    #   sharp, a transitive dep of @huggingface/transformers,
-                    #   which src/lib/server/embedding/ actually imports) and
-                    #   bundles them into a zip labeled "linux-arm64",
-                    #   producing an artifact that's broken on real arm64
-                    #   hardware. Disabled until real cross-compilation is
-                    #   set up.
-                    # - target: linux-ppc64
-                    #   os: ubuntu-latest
-                    #   NOTE: same cross-arch issue as linux-arm64 above.
-                    # - target: linux-arm
-                    #   os: ubuntu-latest
-                    #   NOTE: Node.js does not provide armv7l builds
-                    - target: macos-x64
-                      # NOT macos-latest: GitHub's "-latest" label now points
-                      # to Apple Silicon (macos-15, arm64) — building the
-                      # x64 target there would resolve x64-labeled but
-                      # actually-arm64 native optional deps (eg. sharp, a
-                      # transitive dep of @huggingface/transformers) via
-                      # npm's platform/arch-matching install logic, silently
-                      # shipping an arm64 binary inside a "macos-x64" zip
-                      # that would fail to load on real Intel Macs.
-                      # NOT macos-latest-large either — that's a paid
-                      # "larger runner" (GitHub Team/Enterprise only,
-                      # triggered a billing requirement when tried).
-                      # macos-15-intel is the plain, free-tier Intel runner
-                      # that matches macos-latest's current OS version
-                      # (macOS 15) — just x64 instead of arm64, no paid plan
-                      # needed.
-                      os: macos-15-intel
-                    - target: macos-arm64
-                      os: macos-latest
-                    - target: windows-x64
-                      os: windows-latest
-                    # - target: windows-arm64
-                    #   os: windows-latest
-                    #   NOTE: same cross-arch native-dependency issue as
-                    #   linux-arm64 above — windows-latest is x64, and there's
-                    #   no cross-compile setup, so this would ship an x64
-                    #   sharp binary inside a "windows-arm64" zip. Disabled
-                    #   until real cross-compilation is set up.
-        runs-on: ${{ matrix.os }}
-        env:
-            NODE_OPTIONS: "--max-old-space-size=4096"
+    test:
+        # Gates every platform build below on a single, OS-agnostic test run —
+        # extracted out of the matrix (rather than re-run per-platform) so a
+        # failure here stops the whole release before any build starts,
+        # instead of racing against other in-flight matrix jobs that might
+        # finish (and publish their asset) before a same-tag failure elsewhere
+        # gets noticed. dev/unknown-suffix tags still skip tests by design —
+        # see the release-type breakdown below.
+        runs-on: ubuntu-latest
+        outputs:
+            title: ${{ steps.release_title.outputs.title }}
+            is_prerelease: ${{ steps.release_title.outputs.is_prerelease }}
+            base_version: ${{ steps.release_title.outputs.base_version }}
         steps:
             - name: Checkout repository
               uses: actions/checkout@v4
@@ -152,6 +109,89 @@ jobs:
             - name: Prepare SvelteKit
               run: npx @sveltejs/kit sync
 
+            - name: Run tests
+              # No continue-on-error here, unlike typecheck below in
+              # build-and-release — a failure must stop the release. Skipped
+              # entirely (not just non-blocking) for dev/unknown-suffix tags,
+              # matching run_tests above.
+              if: steps.release_title.outputs.run_tests == 'true'
+              run: npm test
+
+    build-and-release:
+        needs: test
+        strategy:
+            matrix:
+                include:
+                    - target: linux-x64
+                      os: ubuntu-latest
+                    # - target: linux-arm64
+                    #   os: ubuntu-latest
+                    #   NOTE: GitHub-hosted runners don't offer native
+                    #   linux-arm64 hardware, and there's no cross-compile
+                    #   setup here (no QEMU, no npm_config_arch/--target_arch
+                    #   overrides) — `npm install` on an x64 ubuntu-latest
+                    #   runner resolves x64-arch native optional deps (eg.
+                    #   sharp, a transitive dep of @huggingface/transformers,
+                    #   which src/lib/server/embedding/ actually imports) and
+                    #   bundles them into a zip labeled "linux-arm64",
+                    #   producing an artifact that's broken on real arm64
+                    #   hardware. Disabled until real cross-compilation is
+                    #   set up.
+                    # - target: linux-ppc64
+                    #   os: ubuntu-latest
+                    #   NOTE: same cross-arch issue as linux-arm64 above.
+                    # - target: linux-arm
+                    #   os: ubuntu-latest
+                    #   NOTE: Node.js does not provide armv7l builds
+                    - target: macos-x64
+                      # NOT macos-latest: GitHub's "-latest" label now points
+                      # to Apple Silicon (macos-15, arm64) — building the
+                      # x64 target there would resolve x64-labeled but
+                      # actually-arm64 native optional deps (eg. sharp, a
+                      # transitive dep of @huggingface/transformers) via
+                      # npm's platform/arch-matching install logic, silently
+                      # shipping an arm64 binary inside a "macos-x64" zip
+                      # that would fail to load on real Intel Macs.
+                      # NOT macos-latest-large either — that's a paid
+                      # "larger runner" (GitHub Team/Enterprise only,
+                      # triggered a billing requirement when tried).
+                      # macos-15-intel is the plain, free-tier Intel runner
+                      # that matches macos-latest's current OS version
+                      # (macOS 15) — just x64 instead of arm64, no paid plan
+                      # needed.
+                      os: macos-15-intel
+                    - target: macos-arm64
+                      os: macos-latest
+                    - target: windows-x64
+                      os: windows-latest
+                    # - target: windows-arm64
+                    #   os: windows-latest
+                    #   NOTE: same cross-arch native-dependency issue as
+                    #   linux-arm64 above — windows-latest is x64, and there's
+                    #   no cross-compile setup, so this would ship an x64
+                    #   sharp binary inside a "windows-arm64" zip. Disabled
+                    #   until real cross-compilation is set up.
+        runs-on: ${{ matrix.os }}
+        env:
+            NODE_OPTIONS: "--max-old-space-size=4096"
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "24"
+
+            - name: Install dependencies
+              shell: bash
+              run: |
+                  node -e "const fs = require('fs'); try { fs.unlinkSync('package-lock.json'); } catch (e) { /* ignore */ }"
+                  for i in 1 2 3; do npm install --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 && break || sleep 15; done
+
+            - name: Prepare SvelteKit
+              run: npx @sveltejs/kit sync
+
             - name: Run typecheck
               # Non-blocking: the codebase currently carries a large pre-existing
               # type-error backlog (see project history) that predates this gate.
@@ -159,10 +199,6 @@ jobs:
               # this blocking again once the backlog is cleared.
               continue-on-error: true
               run: npm run check
-
-            - name: Run tests
-              if: steps.release_title.outputs.run_tests == 'true'
-              run: npm test
 
             - name: Build app
               run: npm run build
@@ -265,7 +301,7 @@ jobs:
                     exit 1
                   fi
                   cat > "$DIST_DIR/.env.example" << EOF
-                  # Serene Pub ${{ steps.release_title.outputs.base_version }} - Production Configuration
+                  # Serene Pub ${{ needs.test.outputs.base_version }} - Production Configuration
                   # Copy this file to .env in the same directory to customize settings
 
                   # ===========================================
@@ -322,8 +358,8 @@ jobs:
             - name: Upload release assets
               uses: softprops/action-gh-release@v2
               with:
-                  name: ${{ steps.release_title.outputs.title }}
+                  name: ${{ needs.test.outputs.title }}
                   files: serene-pub-*.zip
-                  prerelease: ${{ steps.release_title.outputs.is_prerelease }}
+                  prerelease: ${{ needs.test.outputs.is_prerelease }}
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

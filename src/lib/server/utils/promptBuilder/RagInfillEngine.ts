@@ -1,9 +1,9 @@
 /**
  * RAG-based content infill engine.
  *
- * Replaces ContentInfillEngine when vectorization is active and the embedding
- * model is ready. Uses semantic similarity search to select the most relevant
- * lore and older messages instead of keyword matching.
+ * Used instead of KeywordInfillEngine when vectorization is active and the
+ * embedding model is ready. Uses semantic similarity search to select the
+ * most relevant lore and older messages instead of keyword matching.
  *
  * ## Algorithm
  *
@@ -55,7 +55,10 @@ import {
 	type ProcessedChatMessage
 } from "./ContentProcessors"
 import { parseSplitChatPrompt } from "./utils"
-import { attachCharacterLoreToCharacters } from "./LorebookBindingUtils"
+import {
+	attachCharacterLoreToCharacters,
+	isCharacterLoreEntryVisible
+} from "./LorebookBindingUtils"
 import type {
 	RagDiagnostics,
 	TemplateContext,
@@ -71,6 +74,7 @@ import {
 	serializeGraphPairs,
 	type GraphPairOutput as SharedGraphPairOutput
 } from "./NarrativeGraphContext"
+import { resolvePostHistoryContext } from "./PostHistoryContext"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -213,6 +217,7 @@ export class RagInfillEngine extends BaseInfillEngine {
 			entry: any,
 			chat: BasePromptChat
 		) => any,
+		private currentCharacterId: number | null,
 		private diagnosticsEnabled: boolean = true
 	) {
 		super(chat, interpolationEngine, populateLorebookEntryBindings)
@@ -228,7 +233,9 @@ export class RagInfillEngine extends BaseInfillEngine {
 		contextThresholdPercent,
 		tokenCounter,
 		handlebars,
-		contextConfig
+		contextConfig,
+		postHistoryDepth,
+		postHistoryTokenTrigger
 	}: InfillContentOptions): Promise<InfillResult> {
 		const interpolationContext =
 			this.interpolationEngine.createInterpolationContext({
@@ -530,7 +537,10 @@ export class RagInfillEngine extends BaseInfillEngine {
 			includedWorldLoreIds.add(entry.id)
 		}
 		for (const entry of (lorebook?.characterLoreEntries ?? []).filter(
-			(e: any) => e.constant === true && e.enabled !== false
+			(e: any) =>
+				e.constant === true &&
+				e.enabled !== false &&
+				isCharacterLoreEntryVisible(e, this.chat, this.currentCharacterId)
 		)) {
 			pinnedCharLoreArr.push(entry)
 			includedCharLoreIds.add(entry.id)
@@ -588,19 +598,24 @@ export class RagInfillEngine extends BaseInfillEngine {
 		// Populate RAG-added entries
 		for (const item of ragWorldLoreItems) {
 			if (includedWorldLoreIds.has(item.id)) continue
+			// allLorebookIds is scoped to just chat.lorebook (see ragContext.ts),
+			// so every RAG-retrieved item is guaranteed to be found here.
 			const fullEntry = lorebook?.worldLoreEntries?.find(
 				(e: any) => e.id === item.id
 			)
-			const name = fullEntry
-				? (this.populateLorebookEntryBindings(fullEntry, this.chat)
-						?.name ?? item.name)
-				: item.name
-			const content = fullEntry
-				? (this.populateLorebookEntryBindings(fullEntry, this.chat)
-						?.content ?? item.content)
-				: item.content
-			if (name && content)
-				ragWorldLoreArr.push({ id: item.id, name, content })
+			if (fullEntry) {
+				const populated = this.populateLorebookEntryBindings(
+					fullEntry,
+					this.chat
+				)
+				if (populated?.name && populated?.content) {
+					ragWorldLoreArr.push({
+						id: item.id,
+						name: populated.name,
+						content: populated.content
+					})
+				}
+			}
 			includedWorldLoreIds.add(item.id)
 		}
 		for (const item of ragCharLoreItems) {
@@ -608,26 +623,39 @@ export class RagInfillEngine extends BaseInfillEngine {
 			const fullEntry = lorebook?.characterLoreEntries?.find(
 				(e: any) => e.id === item.id
 			)
-			if (fullEntry) ragCharLoreArr.push(fullEntry)
+			if (
+				fullEntry &&
+				isCharacterLoreEntryVisible(
+					fullEntry,
+					this.chat,
+					this.currentCharacterId
+				)
+			)
+				ragCharLoreArr.push(fullEntry)
 			includedCharLoreIds.add(item.id)
 		}
 		for (const item of ragHistoryItems) {
 			if (includedHistoryIds.has(item.id) || !item.content.trim())
 				continue
+			// allLorebookIds is scoped to just chat.lorebook (see ragContext.ts),
+			// so every RAG-retrieved item is guaranteed to be found here.
 			const fullEntry = lorebook?.historyEntries?.find(
 				(e: any) => e.id === item.id
 			)
-			const content = fullEntry
-				? (this.populateLorebookEntryBindings(fullEntry, this.chat)
-						?.content ?? item.content)
-				: item.content
-			ragHistoryArr.push({
-				id: item.id,
-				year: item.year,
-				month: item.month,
-				day: item.day,
-				content
-			})
+			if (fullEntry) {
+				const content =
+					this.populateLorebookEntryBindings(fullEntry, this.chat)
+						?.content ?? item.content
+				if (content.trim()) {
+					ragHistoryArr.push({
+						id: item.id,
+						year: item.year,
+						month: item.month,
+						day: item.day,
+						content
+					})
+				}
+			}
 			includedHistoryIds.add(item.id)
 		}
 		// RAG history: newest-first so least-recent (oldest) entries are at the back for trimming
@@ -1071,9 +1099,22 @@ export class RagInfillEngine extends BaseInfillEngine {
 		})
 
 		// ── 8. Final render ────────────────────────────────────────────────────
+		const renderMessages = [...chatMessages].reverse()
+		const finalCtx = buildCtx()
+		const postHistoryResult = await resolvePostHistoryContext({
+			renderMessages,
+			instructions: finalCtx.postHistory?.instructions,
+			charInstructions: finalCtx.postHistory?.charInstructions,
+			exampleDialogue: finalCtx.postHistory?.exampleDialogue,
+			postHistoryDepth,
+			postHistoryTokenTrigger,
+			tokenCounter
+		})
+		finalCtx.postHistory = postHistoryResult.postHistory
+
 		const rendered = handlebars.compile(contextConfig.template)({
-			...buildCtx(),
-			chatMessages: [...chatMessages].reverse()
+			...finalCtx,
+			chatMessages: renderMessages
 		})
 
 		let renderedPrompt: string | undefined
@@ -1135,7 +1176,8 @@ export class RagInfillEngine extends BaseInfillEngine {
 						loreScores: diagnosticLoreScores,
 						thresholdUsed: diagnosticThresholdUsed,
 						queryMessageCount: diagnosticQueryMessageCount
-					}
+					},
+					postHistory: postHistoryResult.diagnostics
 				}
 			: undefined
 

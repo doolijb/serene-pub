@@ -11,7 +11,7 @@
  */
 
 import { db } from "$lib/server/db"
-import { and, asc, desc, eq, inArray, isNotNull, ne } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { cosineSimilarity } from "./index"
 
@@ -27,18 +27,14 @@ export type ChatRagContext = {
 	personaIds: number[]
 	/** The chat's primary lorebook ID, if any */
 	lorebookId: number | null
-	/** IDs of all lorebooks in scope (chat lorebook + each character's lorebook + each persona's lorebook) */
-	allLorebookIds: number[]
-	/** Map of characterId → that character's lorebookId (only populated characters that have a lorebook) */
-	characterLorebookMap: Record<number, number>
-	/** Map of personaId → that persona's lorebookId (only populated personas that have a lorebook) */
-	personaLorebookMap: Record<number, number>
 	/**
-	 * IDs of other chats (≠ chatId) that share the chat's lorebook and contain at least one
-	 * of the current characters. Messages from these chats are included in RAG message search
-	 * so the model can draw on related roleplay history for the same characters.
+	 * IDs of lorebooks in scope for lore/history/relationship retrieval — just
+	 * the chat's own lorebook (if any). Deliberately does NOT include a chat
+	 * character's or persona's own separate lorebook — RAG should only ever
+	 * draw on the story world the chat itself is scoped to, not unrelated
+	 * lorebooks a cast member happens to also be attached to elsewhere.
 	 */
-	relatedChatIds: number[]
+	allLorebookIds: number[]
 }
 
 /**
@@ -54,91 +50,31 @@ export async function getChatRagContext(
 			columns: { lorebookId: true }
 		}),
 		db
-			.select({
-				characterId: schema.chatCharacters.characterId,
-				charLorebookId: schema.characters.lorebookId
-			})
+			.select({ characterId: schema.chatCharacters.characterId })
 			.from(schema.chatCharacters)
-			.leftJoin(
-				schema.characters,
-				eq(schema.chatCharacters.characterId, schema.characters.id)
-			)
 			.where(eq(schema.chatCharacters.chatId, chatId)),
 		db
-			.select({
-				personaId: schema.chatPersonas.personaId,
-				personaLorebookId: schema.personas.lorebookId
-			})
+			.select({ personaId: schema.chatPersonas.personaId })
 			.from(schema.chatPersonas)
-			.leftJoin(
-				schema.personas,
-				eq(schema.chatPersonas.personaId, schema.personas.id)
-			)
 			.where(eq(schema.chatPersonas.chatId, chatId))
 	])
 
 	const lorebookId = chat?.lorebookId ?? null
 	const allLorebookIds: number[] = lorebookId ? [lorebookId] : []
 
-	const characterIds: number[] = []
-	const characterLorebookMap: Record<number, number> = {}
-	for (const cc of chatCharsRows) {
-		if (cc.characterId) {
-			characterIds.push(cc.characterId)
-			if (cc.charLorebookId) {
-				characterLorebookMap[cc.characterId] = cc.charLorebookId
-				if (!allLorebookIds.includes(cc.charLorebookId)) {
-					allLorebookIds.push(cc.charLorebookId)
-				}
-			}
-		}
-	}
-
-	const personaIds: number[] = []
-	const personaLorebookMap: Record<number, number> = {}
-	for (const cp of chatPersonasRows) {
-		if (cp.personaId) {
-			personaIds.push(cp.personaId)
-			if (cp.personaLorebookId) {
-				personaLorebookMap[cp.personaId] = cp.personaLorebookId
-				if (!allLorebookIds.includes(cp.personaLorebookId)) {
-					allLorebookIds.push(cp.personaLorebookId)
-				}
-			}
-		}
-	}
-
-	// Other chats attached to the same lorebook that contain at least one of the current characters.
-	// Messages from those chats are folded into the RAG message pool so the model can recall
-	// relevant history involving the same characters across different conversations.
-	let relatedChatIds: number[] = []
-	if (lorebookId !== null && characterIds.length > 0) {
-		const rows = await db
-			.selectDistinct({ id: schema.chats.id })
-			.from(schema.chats)
-			.innerJoin(
-				schema.chatCharacters,
-				eq(schema.chatCharacters.chatId, schema.chats.id)
-			)
-			.where(
-				and(
-					eq(schema.chats.lorebookId, lorebookId),
-					inArray(schema.chatCharacters.characterId, characterIds),
-					ne(schema.chats.id, chatId)
-				)
-			)
-		relatedChatIds = rows.map((r) => r.id)
-	}
+	const characterIds = chatCharsRows
+		.map((cc) => cc.characterId)
+		.filter((id): id is number => id != null)
+	const personaIds = chatPersonasRows
+		.map((cp) => cp.personaId)
+		.filter((id): id is number => id != null)
 
 	return {
 		chatId,
 		characterIds,
 		personaIds,
 		lorebookId,
-		allLorebookIds,
-		characterLorebookMap,
-		personaLorebookMap,
-		relatedChatIds
+		allLorebookIds
 	}
 }
 
@@ -261,9 +197,10 @@ export async function scopedRankBySimilarity(
 
 	const candidates: ScopedRagItem[] = []
 
-	// Messages from this chat and related chats (same lorebook + shared character).
-	// Recent messages from the *current* chat are excluded since they're already in the
-	// guaranteed context window; messages from related chats are always eligible.
+	// Messages from this chat only. Recent messages are excluded since they're
+	// already in the guaranteed context window. Cross-chat context (other
+	// conversations sharing this lorebook) flows through lore/history entries
+	// instead — raw messages from another chat are never pulled in here.
 	if (include("message")) {
 		let recentIds: number[] = []
 		if (excludeRecentMessages > 0) {
@@ -276,12 +213,6 @@ export async function scopedRankBySimilarity(
 			recentIds = recent.map((r) => r.id)
 		}
 
-		const allChatIds = [context.chatId, ...context.relatedChatIds]
-		const chatFilter =
-			allChatIds.length === 1
-				? eq(schema.chatMessages.chatId, context.chatId)
-				: inArray(schema.chatMessages.chatId, allChatIds)
-
 		const messages = await db
 			.select({
 				id: schema.chatMessages.id,
@@ -293,7 +224,7 @@ export async function scopedRankBySimilarity(
 			.from(schema.chatMessages)
 			.where(
 				and(
-					chatFilter,
+					eq(schema.chatMessages.chatId, context.chatId),
 					eq(schema.chatMessages.isHidden, false),
 					isNotNull(schema.chatMessages.embedding),
 					eq(schema.chatMessages.embeddingModel, modelId)

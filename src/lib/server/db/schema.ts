@@ -365,6 +365,21 @@ export const promptConfigs = pgTable("prompt_configs", {
 	isImmutable: boolean("is_immutable").notNull().default(false),
 	name: text("name").notNull(),
 	systemPrompt: text("system_prompt").notNull(),
+	// Reinforcement inserted right before the model's generation point —
+	// after all chat history, immediately preceding the seed turn — rather
+	// than only at the top of a long prompt alongside systemPrompt. Mirrors
+	// narratorPromptConfigs.postHistoryInstructions below.
+	postHistoryInstructions: text("post_history_instructions"),
+	// Number of messages back from the last message the post-history block
+	// is positioned at. 0 = immediately after the last message (default).
+	postHistoryDepth: integer("post_history_depth").notNull().default(0),
+	// Minimum token count of chat history required before
+	// postHistoryInstructions is included — lets short chats skip the
+	// reminder since the system prompt is still close by. 0 = always
+	// included.
+	postHistoryTokenTrigger: integer("post_history_token_trigger")
+		.notNull()
+		.default(0),
 	connectionId: integer("connection_id").references(() => connections.id, {
 		onDelete: "set null"
 	}),
@@ -396,6 +411,22 @@ export const narratorPromptConfigs = pgTable("narrator_prompt_configs", {
 	// config (e.g. "Narrator", "The World", "Fate") — distinct from
 	// `name` above, which only identifies the config itself in the sidebar.
 	narratorName: text("narrator_name").notNull().default("Narrator"),
+	// Reinforcement inserted right before the model's generation point —
+	// after all chat history, immediately preceding the seed turn — rather
+	// than only at the top of a long prompt alongside systemPrompt. Far more
+	// effective against a model drifting back into character-dialogue
+	// patterns established over many prior turns. See defaults.ts's context
+	// template for exactly where this lands relative to the seed.
+	postHistoryInstructions: text("post_history_instructions"),
+	// Number of messages back from the last message the post-history block
+	// is positioned at. 0 = immediately after the last message (default).
+	postHistoryDepth: integer("post_history_depth").notNull().default(0),
+	// Minimum token count of chat history required before
+	// postHistoryInstructions is included. 0 = always included — the
+	// Narrator's own seed keeps this at 0 so it's always reinforced.
+	postHistoryTokenTrigger: integer("post_history_token_trigger")
+		.notNull()
+		.default(0),
 	systemPrompt: text("system_prompt").notNull(),
 	connectionId: integer("connection_id").references(() => connections.id, {
 		onDelete: "set null"

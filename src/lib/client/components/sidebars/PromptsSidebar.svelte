@@ -1065,6 +1065,70 @@
 							disabled={chatConfig.isImmutable}
 						></textarea>
 					</div>
+					<div class="flex flex-col gap-1">
+						<label
+							class="text-sm font-semibold"
+							for="chatPostHistoryInstructions"
+						>
+							Post-History Instructions
+						</label>
+						<p class="text-muted-foreground text-xs">
+							Reinforces the System Instructions above, placed right
+							before the character generates instead of at the top of
+							the prompt — much harder for the model to drift away
+							from after a long conversation history. Optional.
+						</p>
+						<textarea
+							id="chatPostHistoryInstructions"
+							rows="4"
+							bind:value={chatConfig.postHistoryInstructions}
+							class="textarea w-full"
+							disabled={chatConfig.isImmutable}
+							placeholder="e.g. Remember: stay in character and keep responding to {'{{'}personaNames{'}}'}."
+						></textarea>
+					</div>
+					<div class="flex gap-2">
+						<div class="flex flex-1 flex-col gap-1">
+							<label
+								class="text-sm font-semibold"
+								for="chatPostHistoryDepth"
+							>
+								Post-History Depth
+							</label>
+							<p class="text-muted-foreground text-xs">
+								Messages back from the last message to place the
+								reminder at. 0 = right after the last message.
+							</p>
+							<input
+								id="chatPostHistoryDepth"
+								class="input w-full"
+								type="number"
+								min="0"
+								bind:value={chatConfig.postHistoryDepth}
+								disabled={chatConfig.isImmutable}
+							/>
+						</div>
+						<div class="flex flex-1 flex-col gap-1">
+							<label
+								class="text-sm font-semibold"
+								for="chatPostHistoryTokenTrigger"
+							>
+								Post-History Token Trigger
+							</label>
+							<p class="text-muted-foreground text-xs">
+								Minimum chat history tokens before the reminder is
+								included. 0 = always included.
+							</p>
+							<input
+								id="chatPostHistoryTokenTrigger"
+								class="input w-full"
+								type="number"
+								min="0"
+								bind:value={chatConfig.postHistoryTokenTrigger}
+								disabled={chatConfig.isImmutable}
+							/>
+						</div>
+					</div>
 					<div
 						class="border-surface-200-800 flex flex-col gap-2 border-t pt-3"
 					>
@@ -1281,6 +1345,73 @@
 							class="textarea w-full"
 							disabled={narratorConfig.isImmutable}
 						></textarea>
+					</div>
+					<div class="flex flex-col gap-1">
+						<label
+							class="text-sm font-semibold"
+							for="narratorPostHistoryInstructions"
+						>
+							Post-History Instructions
+						</label>
+						<p class="text-muted-foreground text-xs">
+							Reinforces the instructions above, placed right
+							before the Narrator generates instead of at the
+							top of the prompt — much harder for the model to
+							drift away from after a long conversation history.
+							Optional, but recommended if the Narrator keeps
+							slipping into writing dialogue/actions for chat
+							characters despite the System Instructions above.
+						</p>
+						<textarea
+							id="narratorPostHistoryInstructions"
+							rows="4"
+							bind:value={narratorConfig.postHistoryInstructions}
+							class="textarea w-full"
+							disabled={narratorConfig.isImmutable}
+							placeholder="e.g. Remember: narrate only. Do not write dialogue or actions for {'{{'}characterNames{'}}'} or {'{{'}personaNames{'}}'}."
+						></textarea>
+					</div>
+					<div class="flex gap-2">
+						<div class="flex flex-1 flex-col gap-1">
+							<label
+								class="text-sm font-semibold"
+								for="narratorPostHistoryDepth"
+							>
+								Post-History Depth
+							</label>
+							<p class="text-muted-foreground text-xs">
+								Messages back from the last message to place the
+								reminder at. 0 = right after the last message.
+							</p>
+							<input
+								id="narratorPostHistoryDepth"
+								class="input w-full"
+								type="number"
+								min="0"
+								bind:value={narratorConfig.postHistoryDepth}
+								disabled={narratorConfig.isImmutable}
+							/>
+						</div>
+						<div class="flex flex-1 flex-col gap-1">
+							<label
+								class="text-sm font-semibold"
+								for="narratorPostHistoryTokenTrigger"
+							>
+								Post-History Token Trigger
+							</label>
+							<p class="text-muted-foreground text-xs">
+								Minimum chat history tokens before the reminder is
+								included. 0 = always included.
+							</p>
+							<input
+								id="narratorPostHistoryTokenTrigger"
+								class="input w-full"
+								type="number"
+								min="0"
+								bind:value={narratorConfig.postHistoryTokenTrigger}
+								disabled={narratorConfig.isImmutable}
+							/>
+						</div>
 					</div>
 					<div
 						class="border-surface-200-800 flex flex-col gap-2 border-t pt-3"

@@ -92,23 +92,38 @@ export function serializeGraphPairs(
 }
 
 /**
- * Finds active relationships where both endpoints are within `nodeIds`, up to
- * `maxPairs` distinct pairs (grouping multiple relationship types between the
- * same pair together), and shapes them into GraphPairOutput.
+ * Finds active relationships where both endpoints are within `allNodeIds`, up
+ * to `maxPairs` distinct pairs (grouping multiple relationship types between
+ * the same pair together), and shapes them into GraphPairOutput.
  *
- * Used by KeywordInfillEngine's co-occurrence-based graph fill — nodeIds there
- * are narrative nodes bound to characters/personas already present in the
- * chat. RagInfillEngine does its own semantic-seed variant of this inline,
- * since it also needs full (non-active-only) relationship history for its
- * directly-retrieved seed pairs, not just cross-pair completion.
+ * Used by KeywordInfillEngine's co-occurrence-based graph fill. `chatNodeIds`
+ * are narrative nodes bound to characters/personas actually present in the
+ * chat; `allNodeIds` is every non-hidden node in the chat's lorebook. A
+ * character being chat-attached or visible only pertains to whether their
+ * own description block is shown — it's not a privacy gate on lore or
+ * relationships, so relationships aren't restricted to the chat's roster.
+ * But since this function (unlike RAG) has no semantic relevance ranking —
+ * it just takes rows in id order — an unrestricted pull could surface
+ * arbitrary relationships once a lorebook has a large cast. So candidates are
+ * bucketed into three tiers and filled in priority order, each still capped
+ * at `maxPairs` overall: (0) both endpoints in the chat's roster, (1) exactly
+ * one endpoint in the chat's roster (bridges to an outside character), (2)
+ * neither (other public relationships elsewhere in the story world).
+ *
+ * RagInfillEngine does its own semantic-seed variant of this inline, since it
+ * also needs full (non-active-only) relationship history for its
+ * directly-retrieved seed pairs, not just cross-pair completion — it doesn't
+ * need this tiering since embedding similarity already ranks by relevance.
  */
 export async function fetchActiveRelationshipsAmongNodes(
-	nodeIds: number[],
+	chatNodeIds: number[],
+	allNodeIds: number[],
 	lorebookId: number,
 	maxPairs: number,
 	includedHistoryIds: Set<number>
 ): Promise<GraphPairOutput[]> {
-	if (nodeIds.length < 2) return []
+	if (allNodeIds.length < 2) return []
+	const chatNodeIdSet = new Set(chatNodeIds)
 
 	const nodeRows = await db
 		.select({
@@ -118,7 +133,7 @@ export async function fetchActiveRelationshipsAmongNodes(
 			lorebookBindingId: schema.narrativeNodes.lorebookBindingId
 		})
 		.from(schema.narrativeNodes)
-		.where(inArray(schema.narrativeNodes.id, nodeIds))
+		.where(inArray(schema.narrativeNodes.id, allNodeIds))
 	const nodeInfoMap = new Map(
 		nodeRows.map((n) => [
 			n.id,
@@ -145,14 +160,25 @@ export async function fetchActiveRelationshipsAmongNodes(
 			and(
 				eq(schema.narrativeRelationships.lorebookId, lorebookId),
 				eq(schema.narrativeRelationships.status, "active"),
-				inArray(schema.narrativeRelationships.fromNodeId, nodeIds),
-				inArray(schema.narrativeRelationships.toNodeId, nodeIds)
+				inArray(schema.narrativeRelationships.fromNodeId, allNodeIds),
+				inArray(schema.narrativeRelationships.toNodeId, allNodeIds)
 			)
 		)
 		.orderBy(asc(schema.narrativeRelationships.id))
 
+	// Tier 0: both endpoints in the chat's roster. Tier 1: exactly one. Tier
+	// 2: neither. A stable sort preserves ascending-id order within a tier.
+	function tierOf(r: (typeof rels)[number]): number {
+		const fromIn = chatNodeIdSet.has(r.fromNodeId)
+		const toIn = chatNodeIdSet.has(r.toNodeId)
+		if (fromIn && toIn) return 0
+		if (fromIn || toIn) return 1
+		return 2
+	}
+	const orderedRels = [...rels].sort((a, b) => tierOf(a) - tierOf(b))
+
 	const pairMap = new Map<string, GraphPairOutput>()
-	for (const r of rels) {
+	for (const r of orderedRels) {
 		const pairKey = `${r.fromNodeId}:${r.toNodeId}`
 		let pair = pairMap.get(pairKey)
 		if (!pair) {

@@ -17,13 +17,44 @@ export type TemplateContextPersona = {
 	description: string
 }
 
+/**
+ * The unified Post-History block's template-facing shape — one namespaced
+ * object instead of loose top-level fields, so a template only ever needs
+ * `../postHistory` once (via `{{#with}}`) rather than a `../` prefix on
+ * every individual field. `targetIndex`/`hasContent` are precomputed
+ * decisions (index math, "is there anything to show" existence checks),
+ * not lookups — the template has no variadic `or` helper to express
+ * "any of these 3 fields populated" itself, and the index depends on the
+ * final message array a template can't see, so both are resolved here
+ * rather than in Handlebars. See PostHistoryContext.ts.
+ */
+export type PostHistoryTemplateContext = {
+	/** Index into the (already-reversed, oldest-first) chatMessages array
+	 * where the block should render. */
+	targetIndex: number
+	/** Prompt config's own reinforcement text — gated by postHistoryTokenTrigger. */
+	instructions?: string
+	/** Character's own authored reinforcement text — always rendered when populated. */
+	charInstructions?: string
+	/** Character's example dialogue — always rendered when populated. */
+	exampleDialogue?: string
+	/** True if any of the three fields above are populated — the template
+	 * renders the whole block's wrapper only when this is true. */
+	hasContent: boolean
+}
+
 export type TemplateContext = {
 	instructions: string
 	characters: TemplateContextCharacter[] | string // can be JSON stringified
 	personas: TemplateContextPersona[] | string // can be JSON stringified
 	scenario: string
+	/** Deprecated in favor of the unified Post-History block (postHistory
+	 * below) — kept populated for backward compatibility with custom
+	 * context configs still referencing {{exampleDialogue}}/
+	 * {{postHistoryInstructions}} directly. */
 	exampleDialogue?: string
 	postHistoryInstructions?: string
+	postHistory?: PostHistoryTemplateContext
 	chatMessages: any[]
 	char: string
 	character: string
@@ -61,6 +92,12 @@ export type RagDiagnostics = {
 		thresholdUsed: number
 		queryMessageCount: number
 	}
+	postHistory?: PostHistoryDiag
+}
+
+export type PostHistoryDiag = {
+	included: boolean
+	reason: "included" | "below_token_trigger" | "empty"
 }
 
 export type InclusionReason =
@@ -84,6 +121,8 @@ export interface ScoreBreakdown {
 	lastRefRecency: number
 	recency: number
 	density: number
+	/** Additive bonus from the entry's authored priority tier (worldLore/characterLore only). */
+	priorityBonus?: number
 	includedReason: InclusionReason
 }
 
@@ -124,6 +163,7 @@ export type NonRagDiagnostics = {
 	messages: MessagesDiag
 	tokens: { reserve: number; total: number; limit: number; threshold: number }
 	entries: ScoredEntry[] // ALL candidates sorted by score.total descending
+	postHistory?: PostHistoryDiag
 }
 
 export type CompiledPrompt = {
@@ -191,6 +231,12 @@ export type InfillContentOptions = {
 	tokenCounter: any
 	handlebars: any
 	contextConfig: any
+	/** Number of messages back from the last message the Post-History block
+	 * is positioned at. 0 = immediately after the last message. */
+	postHistoryDepth: number
+	/** Minimum chat-history token count required before
+	 * promptPostHistoryInstructions is included. 0 = always included. */
+	postHistoryTokenTrigger: number
 }
 
 export type InfillResult = {

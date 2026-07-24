@@ -1,4 +1,8 @@
 import Handlebars from "handlebars"
+import {
+	registerCardMacroHelpers,
+	translateCardMacros
+} from "./characterCardMacros"
 
 /**
  * Context for template interpolation containing character and persona information
@@ -45,6 +49,7 @@ export class InterpolationEngine {
 
 	constructor(handlebarsInstance?: typeof Handlebars) {
 		this.handlebars = handlebarsInstance || Handlebars.create()
+		registerCardMacroHelpers(this.handlebars)
 	}
 
 	/**
@@ -80,7 +85,9 @@ export class InterpolationEngine {
 		if (!template) return template
 
 		try {
-			return this.handlebars.compile(template)(context)
+			return this.handlebars.compile(translateCardMacros(template))(
+				context
+			)
 		} catch (error) {
 			console.warn("Template interpolation failed:", error)
 			return template

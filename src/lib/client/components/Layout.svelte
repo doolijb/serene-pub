@@ -130,6 +130,14 @@
 	let rightSidebarRef = $state<HTMLElement | null>(null)
 	let keyboardNavManager: KeyboardNavigationManager
 
+	// Only one side can be fullscreen at a time — expanding to cover the
+	// whole viewport while another panel also claims it doesn't make sense.
+	// Desktop-only: the mobile single-panel overlay already fills the
+	// screen, and the toggle button lives inside the `.desktop-sidebar`
+	// asides (`hidden ... lg:block`), so it's never rendered on mobile in
+	// the first place — no separate mobile check needed here.
+	let fullscreenPanel: "left" | "right" | null = $state(null)
+
 	let userCtx: { user: SelectUser } = $state({} as { user: any })
 	let panelsCtx: PanelsCtx = $state({
 		leftPanel: null,
@@ -429,11 +437,13 @@
 				? ((await panelsCtx.onLeftPanelClose()) ?? true)
 				: true
 			panelsCtx.leftPanel = res ? null : panelsCtx.leftPanel
+			if (res && fullscreenPanel === "left") fullscreenPanel = null
 		} else if (panel === "right") {
 			res = panelsCtx.onRightPanelClose
 				? ((await panelsCtx.onRightPanelClose()) ?? true)
 				: true
 			panelsCtx.rightPanel = res ? null : panelsCtx.rightPanel
+			if (res && fullscreenPanel === "right") fullscreenPanel = null
 		}
 		return res
 	}
@@ -894,7 +904,10 @@
 						panelsCtx.leftPanel}
 					<div
 						bind:this={leftSidebarRef}
-						class="bg-surface-50-950 me-2 flex h-full w-full flex-col overflow-y-auto rounded-r-lg"
+						class="bg-surface-50-950 flex h-full w-full flex-col overflow-y-auto {fullscreenPanel ===
+						'left'
+							? 'fixed inset-0 z-[500] rounded-none'
+							: 'me-2 rounded-r-lg'}"
 						in:fly={{ x: -100, duration: 200 }}
 						out:fly={{ x: -100, duration: 200 }}
 						role="region"
@@ -913,17 +926,44 @@
 							>
 								{title}
 							</h2>
-							<button
-								class="btn-ghost"
-								onclick={() => closePanel({ panel: "left" })}
-								aria-label="Close {title} panel"
-								type="button"
-							>
-								<Icons.X
-									class="text-foreground h-5 w-5"
-									aria-hidden="true"
-								/>
-							</button>
+							<div class="flex items-center gap-2">
+								<button
+									class="btn-ghost"
+									onclick={() =>
+										(fullscreenPanel =
+											fullscreenPanel === "left" ? null : "left")}
+									aria-label={fullscreenPanel === "left"
+										? "Exit fullscreen"
+										: "Fullscreen"}
+									title={fullscreenPanel === "left"
+										? "Exit fullscreen"
+										: "Fullscreen"}
+									type="button"
+								>
+									{#if fullscreenPanel === "left"}
+										<Icons.Minimize2
+											class="text-foreground h-4 w-4"
+											aria-hidden="true"
+										/>
+									{:else}
+										<Icons.Maximize2
+											class="text-foreground h-4 w-4"
+											aria-hidden="true"
+										/>
+									{/if}
+								</button>
+								<button
+									class="btn-ghost"
+									onclick={() => closePanel({ panel: "left" })}
+									aria-label="Close {title} panel"
+									type="button"
+								>
+									<Icons.X
+										class="text-foreground h-5 w-5"
+										aria-hidden="true"
+									/>
+								</button>
+							</div>
 						</div>
 						<div class="flex-1 overflow-y-auto">
 							{#if panelsCtx.leftPanel === "sampling"}
@@ -985,7 +1025,10 @@
 						panelsCtx.rightPanel}
 					<div
 						bind:this={rightSidebarRef}
-						class="bg-surface-50-950 flex h-full w-full flex-col overflow-y-auto rounded-l-lg"
+						class="bg-surface-50-950 flex h-full w-full flex-col overflow-y-auto {fullscreenPanel ===
+						'right'
+							? 'fixed inset-0 z-[500] rounded-none'
+							: 'rounded-l-lg'}"
 						in:fly={{ x: 100, duration: 200 }}
 						out:fly={{ x: 100, duration: 200 }}
 						role="region"
@@ -1004,17 +1047,44 @@
 							>
 								{title}
 							</h2>
-							<button
-								class="btn-ghost"
-								onclick={() => closePanel({ panel: "right" })}
-								aria-label="Close {title} panel"
-								type="button"
-							>
-								<Icons.X
-									class="text-foreground h-5 w-5"
-									aria-hidden="true"
-								/>
-							</button>
+							<div class="flex items-center gap-2">
+								<button
+									class="btn-ghost"
+									onclick={() =>
+										(fullscreenPanel =
+											fullscreenPanel === "right" ? null : "right")}
+									aria-label={fullscreenPanel === "right"
+										? "Exit fullscreen"
+										: "Fullscreen"}
+									title={fullscreenPanel === "right"
+										? "Exit fullscreen"
+										: "Fullscreen"}
+									type="button"
+								>
+									{#if fullscreenPanel === "right"}
+										<Icons.Minimize2
+											class="text-foreground h-4 w-4"
+											aria-hidden="true"
+										/>
+									{:else}
+										<Icons.Maximize2
+											class="text-foreground h-4 w-4"
+											aria-hidden="true"
+										/>
+									{/if}
+								</button>
+								<button
+									class="btn-ghost"
+									onclick={() => closePanel({ panel: "right" })}
+									aria-label="Close {title} panel"
+									type="button"
+								>
+									<Icons.X
+										class="text-foreground h-5 w-5"
+										aria-hidden="true"
+									/>
+								</button>
+							</div>
 						</div>
 						<nav class="flex-1 overflow-y-auto">
 							{#if panelsCtx.rightPanel === "activity"}

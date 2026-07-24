@@ -1,6 +1,6 @@
 import * as path from "path"
 import * as fsPromises from "fs/promises"
-import { fetchCurrentModelName } from "./kcppHttp"
+import { fetchCurrentModelName, fetchModelStatusForPoll } from "./kcppHttp"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
@@ -83,6 +83,12 @@ async function getCurrentModelBasename(
 	return result ? normalizeModelName(result) : null
 }
 
+// Consecutive (not single) connection-refused results are required before
+// treating the process as dead — koboldcpp briefly doesn't have its port
+// open yet in the first moment of a legitimate startup, and one stray
+// refusal there shouldn't be mistaken for a crash mid-load.
+const CONNECTION_REFUSED_FAILURE_THRESHOLD = 3
+
 async function waitForModelReady(
 	baseUrl: string,
 	expectedFile: string,
@@ -91,10 +97,22 @@ async function waitForModelReady(
 ): Promise<void> {
 	const deadline = Date.now() + timeoutMs
 	const expected = normalizeModelName(expectedFile)
+	let consecutiveRefusals = 0
 	while (Date.now() < deadline) {
 		signal?.throwIfAborted()
-		const current = await getCurrentModelBasename(baseUrl)
+		const { modelName, refused } = await fetchModelStatusForPoll(baseUrl)
+		const current = modelName ? normalizeModelName(modelName) : null
 		if (current && current === expected) return
+		if (refused) {
+			consecutiveRefusals++
+			if (consecutiveRefusals >= CONNECTION_REFUSED_FAILURE_THRESHOLD) {
+				throw new Error(
+					`KoboldCPP process is not reachable at ${baseUrl} — it appears to have crashed while loading "${expectedFile}"`
+				)
+			}
+		} else {
+			consecutiveRefusals = 0
+		}
 		await new Promise((r) => setTimeout(r, 2000))
 	}
 	throw new Error(

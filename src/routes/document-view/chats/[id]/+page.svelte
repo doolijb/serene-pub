@@ -138,22 +138,35 @@
 		}
 	}
 
-	function triggerNextResponse() {
-		socket.emit("chats:triggerGenerateMessage", { chatId, triggered: true })
-	}
-
-	// "Get Next Response" (above) asks the server to work out whose turn it
-	// is from the group reply strategy — which can quietly do nothing once a
-	// full round has already completed, and gives no way to choose WHICH
-	// character responds when more than one is in the chat. This bypasses
-	// that entirely: characterId + once:true forces exactly that character
-	// to generate a reply right now, regardless of turn order.
-	let triggerCharacterId: number | "" = $state("")
-	function triggerSpecificCharacter() {
-		if (triggerCharacterId === "") return
+	// Replaces a separate "Get Next Response" button, which asked the server
+	// to work out whose turn it is via chats:triggerGenerateMessage's
+	// `triggered: true` path — that could quietly do nothing once a full
+	// round had already completed, with no way to tell it happened and no
+	// way to choose who goes instead. This single selector always shows a
+	// live, real due-character (or Narrator) and always does something when
+	// used: characterId + once:true forces exactly that responder right now,
+	// regardless of turn order.
+	let chatResponseOrder: Sockets.Chats.GetResponseOrder.Response | undefined =
+		$state()
+	let triggerResponseFrom: number | "narrator" | "" = $state("")
+	// Keep the selection tracking the live due-rotation rather than a
+	// one-time default — chatResponseOrder is re-queried after every message
+	// (see onMount below), so this re-syncs each time whoever's actually due
+	// next changes. A manual pick right before clicking "Get Response" still
+	// works fine; it just resets on the next refresh, same as the response
+	// order itself would have moved on anyway.
+	$effect(() => {
+		triggerResponseFrom = chatResponseOrder?.nextCharacterId ?? ""
+	})
+	function triggerSelectedResponse() {
+		if (triggerResponseFrom === "") return
+		if (triggerResponseFrom === "narrator") {
+			socket.emit("chats:triggerNarratorResponse", { chatId })
+			return
+		}
 		socket.emit("chats:triggerGenerateMessage", {
 			chatId,
-			characterId: triggerCharacterId,
+			characterId: triggerResponseFrom,
 			once: true
 		})
 	}
@@ -260,6 +273,7 @@
 			error = ""
 			upsertMessage(m)
 			messageAnnouncement = `${speakerName(m)} replied.`
+			socket.emit("chats:getResponseOrder", { chatId })
 		})
 		socket.on(
 			"chatMessages:delete",
@@ -272,6 +286,7 @@
 						(m) => m.id !== msg.id
 					)
 				}
+				socket.emit("chats:getResponseOrder", { chatId })
 			}
 		)
 		socket.on(
@@ -304,6 +319,7 @@
 				if (msg.chatMessage) {
 					error = ""
 					upsertMessage(msg.chatMessage)
+					socket.emit("chats:getResponseOrder", { chatId })
 				}
 			}
 		)
@@ -318,6 +334,7 @@
 				if (msg.chatMessage) {
 					error = ""
 					upsertMessage(msg.chatMessage)
+					socket.emit("chats:getResponseOrder", { chatId })
 				}
 			}
 		)
@@ -340,7 +357,14 @@
 		socket.on("personas:list", (msg) => {
 			personas = msg.personaList || []
 		})
+		socket.on(
+			"chats:getResponseOrder",
+			(msg: Sockets.Chats.GetResponseOrder.Response) => {
+				if (msg.chatId === chatId) chatResponseOrder = msg
+			}
+		)
 		socket.emit("personas:list", {})
+		socket.emit("chats:getResponseOrder", { chatId })
 		load()
 		return () => {
 			socket.off("chats:get")
@@ -352,6 +376,7 @@
 			socket.off("chatMessages:cancel")
 			socket.off("chats:addPersona")
 			socket.off("personas:list")
+			socket.off("chats:getResponseOrder")
 		}
 	})
 </script>
@@ -567,50 +592,40 @@
 			>
 				Send
 			</button>
-			<button
-				type="button"
-				class="a11y-btn a11y-btn-secondary"
-				onclick={triggerNextResponse}
-				disabled={!!generatingStatus}
-			>
-				Get Next Response
-			</button>
-			{#if chat.chatCharacters.length > 0}
-				<div class="a11y-field">
-					<label for="a11y-chat-trigger-character">
-						Get a Response From a Specific Character
-					</label>
-					<p class="a11y-hint">
-						Forces that character to reply right now — use this if
-						"Get Next Response" doesn't do anything, or to pick
-						which character goes when there's more than one.
-					</p>
-					<div class="a11y-inline-add">
-						<select
-							id="a11y-chat-trigger-character"
-							bind:value={triggerCharacterId}
-							disabled={!!generatingStatus}
-						>
-							<option value="">Choose a character…</option>
-							{#each chat.chatCharacters as cc (cc.characterId)}
-								<option value={cc.characterId}>
-									{cc.character?.nickname ||
-										cc.character?.name}
-								</option>
-							{/each}
-						</select>
-						<button
-							type="button"
-							class="a11y-btn a11y-btn-secondary a11y-btn-small"
-							onclick={triggerSpecificCharacter}
-							disabled={triggerCharacterId === "" ||
-								!!generatingStatus}
-						>
-							Get Response
-						</button>
-					</div>
+			<div class="a11y-field">
+				<label for="a11y-chat-trigger-character">
+					Get a Response From
+				</label>
+				<p class="a11y-hint">
+					Defaults to whoever's due next in the turn order. Pick a
+					different character, or Narrator, to make them reply
+					instead.
+				</p>
+				<div class="a11y-inline-add">
+					<select
+						id="a11y-chat-trigger-character"
+						bind:value={triggerResponseFrom}
+						disabled={!!generatingStatus}
+					>
+						<option value="">Choose…</option>
+						<option value="narrator">Narrator</option>
+						{#each chat.chatCharacters as cc (cc.characterId)}
+							<option value={cc.characterId}>
+								{cc.character?.nickname || cc.character?.name}
+							</option>
+						{/each}
+					</select>
+					<button
+						type="button"
+						class="a11y-btn a11y-btn-secondary a11y-btn-small"
+						onclick={triggerSelectedResponse}
+						disabled={triggerResponseFrom === "" ||
+							!!generatingStatus}
+					>
+						Get Response
+					</button>
 				</div>
-			{/if}
+			</div>
 			{#if isOwner && chat.chatMessages.length > 0}
 				<button
 					type="button"

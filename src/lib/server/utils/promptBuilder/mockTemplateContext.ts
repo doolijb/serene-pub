@@ -66,6 +66,18 @@ export function buildMockTemplateContext(): TemplateContext {
 			'Kestrel: "Maps lie. Mine just lie less than most." She tapped the brass casing of her arm against the hull, listening for the hollow spot that meant trouble.',
 		postHistoryInstructions:
 			"Keep responses to 2-3 paragraphs. End on a hook that invites Ana to act.",
+		postHistory: {
+			// Matches depth 0 (default) against the 3-message mock array below —
+			// the last index, i.e. immediately after the last message.
+			targetIndex: 2,
+			instructions:
+				"Remember: stay in character as Kestrel. Do not speak or act for Ana.",
+			charInstructions:
+				"Keep responses to 2-3 paragraphs. End on a hook that invites Ana to act.",
+			exampleDialogue:
+				'Kestrel: "Maps lie. Mine just lie less than most." She tapped the brass casing of her arm against the hull, listening for the hollow spot that meant trouble.',
+			hasContent: true
+		},
 		chatMessages: [
 			{
 				id: 1,

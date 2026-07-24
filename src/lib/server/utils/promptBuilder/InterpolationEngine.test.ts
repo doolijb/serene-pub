@@ -67,6 +67,64 @@ describe("InterpolationEngine.interpolateString", () => {
 	})
 })
 
+describe("InterpolationEngine.interpolateString — Character Card V3 macros", () => {
+	test("resolves {{random:...}} to one of the given values, alongside a plain {{char}} lookup", () => {
+		const engine = new InterpolationEngine()
+		const rendered = engine.interpolateString(
+			"{{char}} says {{random:hi,hey,hello}}",
+			makeContext()
+		)
+		expect(rendered).toMatch(/^Alice says (hi|hey|hello)$/)
+	})
+
+	test("resolves {{roll:d6}} to a number between 1 and 6", () => {
+		const engine = new InterpolationEngine()
+		const rendered = engine.interpolateString("{{roll:d6}}", makeContext())
+		const n = Number(rendered)
+		expect(n).toBeGreaterThanOrEqual(1)
+		expect(n).toBeLessThanOrEqual(6)
+	})
+
+	test("resolves {{reverse:abc}} to the reversed string", () => {
+		const engine = new InterpolationEngine()
+		expect(
+			engine.interpolateString("{{reverse:abc}}", makeContext())
+		).toBe("cba")
+	})
+
+	test("{{comment: ...}}/{{// ...}}/{{hidden_key:...}} all render empty", () => {
+		const engine = new InterpolationEngine()
+		expect(
+			engine.interpolateString("[{{comment: hidden}}]", makeContext())
+		).toBe("[]")
+		expect(
+			engine.interpolateString("[{{// hidden}}]", makeContext())
+		).toBe("[]")
+		expect(
+			engine.interpolateString("[{{hidden_key:hidden}}]", makeContext())
+		).toBe("[]")
+	})
+
+	test("{{pick:...}} (not implemented) renders empty without breaking the rest of the field", () => {
+		const engine = new InterpolationEngine()
+		expect(
+			engine.interpolateString(
+				"{{char}} picks {{pick:a,b,c}} then leaves.",
+				makeContext()
+			)
+		).toBe("Alice picks  then leaves.")
+	})
+
+	test("two separate InterpolationEngine instances don't error re-registering the same helpers", () => {
+		expect(() => {
+			const a = new InterpolationEngine()
+			const b = new InterpolationEngine()
+			a.interpolateString("{{roll:d4}}", makeContext())
+			b.interpolateString("{{roll:d4}}", makeContext())
+		}).not.toThrow()
+	})
+})
+
 describe("InterpolationEngine.interpolateObject", () => {
 	test("without a stringFields filter, interpolates every string value on the object", () => {
 		const engine = new InterpolationEngine()
