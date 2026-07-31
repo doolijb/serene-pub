@@ -49,42 +49,48 @@
 		socket.emit("users:delete", { id: userId })
 	}
 
+	function handleUsersList(msg: any) {
+		loaded = true
+		const found = (msg.users || []).find((u: any) => u.id === userId)
+		if (!found) {
+			notFound = true
+			return
+		}
+		username = found.username
+		displayName = found.displayName || ""
+		isAdmin = found.isAdmin
+	}
+	function handleUsersUpdate(msg: any) {
+		saving = false
+		if (msg.user) goto("/document-view/settings/users")
+	}
+	function handleUsersUpdateError(msg: { error?: string }) {
+		saving = false
+		error = msg.error || "Failed to save user."
+		announce(error)
+	}
+	function handleUsersDelete() {
+		goto("/document-view/settings/users")
+	}
+	function handleUsersDeleteError(msg: { error?: string }) {
+		deleting = false
+		error = msg.error || "Failed to delete user."
+		announce(error)
+	}
+
 	onMount(() => {
-		socket.on("users:list", (msg) => {
-			loaded = true
-			const found = (msg.users || []).find((u) => u.id === userId)
-			if (!found) {
-				notFound = true
-				return
-			}
-			username = found.username
-			displayName = found.displayName || ""
-			isAdmin = found.isAdmin
-		})
-		socket.on("users:update", (msg) => {
-			saving = false
-			if (msg.user) goto("/document-view/settings/users")
-		})
-		socket.on("users:update:error", (msg: { error?: string }) => {
-			saving = false
-			error = msg.error || "Failed to save user."
-			announce(error)
-		})
-		socket.on("users:delete", () => {
-			goto("/document-view/settings/users")
-		})
-		socket.on("users:delete:error", (msg: { error?: string }) => {
-			deleting = false
-			error = msg.error || "Failed to delete user."
-			announce(error)
-		})
+		socket.on("users:list", handleUsersList)
+		socket.on("users:update", handleUsersUpdate)
+		socket.on("users:update:error", handleUsersUpdateError)
+		socket.on("users:delete", handleUsersDelete)
+		socket.on("users:delete:error", handleUsersDeleteError)
 		load()
 		return () => {
-			socket.off("users:list")
-			socket.off("users:update")
-			socket.off("users:update:error")
-			socket.off("users:delete")
-			socket.off("users:delete:error")
+			socket.off("users:list", handleUsersList)
+			socket.off("users:update", handleUsersUpdate)
+			socket.off("users:update:error", handleUsersUpdateError)
+			socket.off("users:delete", handleUsersDelete)
+			socket.off("users:delete:error", handleUsersDeleteError)
 		}
 	})
 </script>

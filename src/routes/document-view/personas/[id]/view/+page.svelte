@@ -21,18 +21,20 @@
 		socket.emit("personas:get", { id: personaId })
 	}
 
+	function handlePersonasGet(msg: any) {
+		loaded = true
+		if (!msg.persona) {
+			notFound = true
+			return
+		}
+		persona = msg.persona
+	}
+
 	onMount(() => {
-		socket.on("personas:get", (msg) => {
-			loaded = true
-			if (!msg.persona) {
-				notFound = true
-				return
-			}
-			persona = msg.persona
-		})
+		socket.on("personas:get", handlePersonasGet)
 		load()
 		return () => {
-			socket.off("personas:get")
+			socket.off("personas:get", handlePersonasGet)
 		}
 	})
 </script>

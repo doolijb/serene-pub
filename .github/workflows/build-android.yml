@@ -14,6 +14,11 @@ jobs:
     build-android:
         name: Build Android APK
         runs-on: ubuntu-latest
+        # Explicit, narrowed from whatever the repo-wide GITHUB_TOKEN default
+        # is — this job uploads an APK asset to the tagged release, nothing
+        # else.
+        permissions:
+            contents: write
         steps:
             - name: Checkout code
               uses: actions/checkout@v4
@@ -24,8 +29,13 @@ jobs:
             - name: Determine prerelease status
               id: release_info
               shell: bash
+              env:
+                  # Never interpolate ${{ github.ref_name }} directly into a
+                  # run: script body — see release.yml's identical fix for
+                  # why (script-injection via a crafted tag name).
+                  REF_NAME: ${{ github.ref_name }}
               run: |
-                  TAG="${{ github.ref_name }}"
+                  TAG="$REF_NAME"
                   VERSION="${TAG#v}"
 
                   if [[ "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(-(.+))?$ ]]; then

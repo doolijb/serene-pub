@@ -13,18 +13,21 @@
 		socket.emit("users:delete", { id })
 	}
 
+	function handleUsersList(msg: any) {
+		users = msg.users || []
+		loaded = true
+	}
+	function handleUsersDelete() {
+		socket.emit("users:list", {})
+	}
+
 	onMount(() => {
-		socket.on("users:list", (msg) => {
-			users = msg.users || []
-			loaded = true
-		})
-		socket.on("users:delete", () => {
-			socket.emit("users:list", {})
-		})
+		socket.on("users:list", handleUsersList)
+		socket.on("users:delete", handleUsersDelete)
 		socket.emit("users:list", {})
 		return () => {
-			socket.off("users:list")
-			socket.off("users:delete")
+			socket.off("users:list", handleUsersList)
+			socket.off("users:delete", handleUsersDelete)
 		}
 	})
 </script>

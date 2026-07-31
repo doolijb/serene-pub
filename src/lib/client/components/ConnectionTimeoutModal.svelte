@@ -103,6 +103,13 @@
 
 	// Close modal and refresh page
 	function handleRefreshPage() {
+		if (
+			!window.confirm(
+				"Refreshing will lose any unsent message draft or in-progress edit. Refresh anyway?"
+			)
+		) {
+			return
+		}
 		window.location.reload()
 	}
 

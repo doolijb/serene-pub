@@ -14,6 +14,7 @@
  *    backed by the real in-memory PGlite instance from testDb.ts.
  */
 import Handlebars from "handlebars"
+import { eq } from "drizzle-orm"
 import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { registerContextHandlebarsHelpers } from "$lib/shared/utils/contextHandlebarsHelpers"
@@ -430,14 +431,39 @@ export async function insertLorebookBindingRow(
 	return row
 }
 
+/**
+ * Post-merge (see the lorebookBindings/narrativeNodes merge plan), a "node"
+ * IS a lorebookBindings row — this writes the node-shaped fields onto the
+ * binding row named by `overrides.lorebookBindingId` (an UPDATE, not a
+ * separate table insert) and returns it, so the returned `.id` equals the
+ * binding's own id. Kept as a distinctly-named helper (rather than folding
+ * call sites into insertLorebookBindingRow directly) since most tests build
+ * the binding and its graph-state overrides at different points.
+ */
 export async function insertNarrativeNodeRow(
 	db: TestDb,
 	lorebookId: number,
-	overrides: Partial<InsertNarrativeNode> = {}
+	overrides: Partial<InsertNarrativeNode> & { lorebookBindingId?: number } = {}
 ) {
+	const { lorebookBindingId, ...rest } = overrides
+	if (lorebookBindingId != null) {
+		const [row] = await db
+			.update(schema.lorebookBindings)
+			.set({ name: "Node", ...rest } as any)
+			.where(eq(schema.lorebookBindings.id, lorebookBindingId))
+			.returning()
+		return row
+	}
+	// No binding supplied — create a standalone unbound row (background/NPC
+	// node with no character/persona attached).
 	const [row] = await db
-		.insert(schema.narrativeNodes)
-		.values({ lorebookId, name: "Node", ...overrides })
+		.insert(schema.lorebookBindings)
+		.values({
+			lorebookId,
+			name: "Node",
+			binding: `{{char:test-${lorebookId}-${Math.random().toString(36).slice(2)}}}`,
+			...rest
+		} as any)
 		.returning()
 	return row
 }

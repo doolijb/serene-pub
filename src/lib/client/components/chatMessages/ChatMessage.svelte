@@ -207,8 +207,8 @@
 	)}{msg.content.length > 100 ? '...' : ''}"
 >
 	<div class="flex justify-between gap-2">
-		<div class="group flex gap-2">
-			<span>
+		<div class="group flex min-w-0 flex-1 gap-2">
+			<span class="shrink-0">
 				{#if msg.isNarratorResponse}
 					<span
 						class="bg-primary-500/10 text-primary-500 flex h-12 w-12 items-center justify-center rounded-full lg:h-[4em] lg:w-[4em]"
@@ -230,25 +230,22 @@
 					</button>
 				{/if}
 			</span>
-			<div class="flex flex-col">
-				<span class="flex gap-1">
+			<div class="flex min-w-0 flex-1 flex-col">
+				<span class="flex min-w-0 gap-1">
 					{#if msg.isNarratorResponse}
 						<span
-							class="funnel-display mx-0 inline-block w-fit px-0 text-[1.1em] font-bold"
+							class="funnel-display mx-0 min-w-0 truncate px-0 text-[1.1em] font-bold"
+							title={narratorDisplayName}
 						>
-							<span class="text-nowrap">
-								{narratorDisplayName}
-							</span>
+							{narratorDisplayName}
 						</span>
 					{:else}
 						<button
-							class="funnel-display mx-0 inline-block w-fit px-0 text-[1.1em] font-bold hover:underline"
+							class="funnel-display mx-0 min-w-0 truncate px-0 text-[1.1em] font-bold hover:underline"
 							onclick={(e) => onCharacterNameClick(msg)}
-							title="Edit"
+							title={resolveCharacterName(character, "Unknown")}
 						>
-							<span class="text-nowrap">
-								{resolveCharacterName(character, "Unknown")}
-							</span>
+							{resolveCharacterName(character, "Unknown")}
 						</button>
 					{/if}
 					{#if isGreeting}
@@ -286,7 +283,7 @@
 				</button>
 			</div>
 		{:else}
-			<div class="flex w-full flex-col gap-2">
+			<div class="flex shrink-0 flex-col gap-2">
 				<div class="ml-auto flex flex-wrap justify-end gap-2">
 					{#if messageControls}
 						{@render messageControls(msg)}
@@ -331,6 +328,7 @@
 							</button>
 							<span
 								class="text-surface-700-300 text-sm select-none"
+								aria-live="polite"
 							>
 								{(msg.metadata.swipes.currentIdx || 0) + 1}/{msg
 									.metadata.swipes.history.length}

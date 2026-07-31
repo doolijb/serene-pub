@@ -52,21 +52,21 @@ By default, the character form only shows the core fields (Name, Nickname, Alias
 
 Each character has an **isFavorite** flag, toggled with the **Favorite** switch in the edit form. Favorited characters get a highlighted border in the character list and are always sorted before non-favorites.
 
-### Binding a Character to a Lorebook
-
-Characters can be linked to a single [lorebook](./lorebooks.md) via a `lorebookId`. When you import a character card that has an embedded lorebook, Serene Pub will prompt you after import to confirm the lorebook name and import it, associating it with that character.
-
 ### Tagging a Character
 
 The **Tags** field is a search-and-create combo box: type to filter your existing tags, click a suggestion to attach it, or press Enter (or click **Create "…"**) to create and attach a brand-new tag on the spot. Selected tags render as removable pills below the field, each colored according to the tag's assigned color preset. See [Tags](./tags.md) for how tags are managed globally.
 
-### Fields Marked Visible in Prompts
-
-Several fields — Name, Nickname, Aliases, Description, Personality, Scenario, Example Dialogues, and Post-History Instructions — are marked in the form with a small eye icon and the tooltip "This field will be visible in prompts." This is a direct signal from the UI about which fields the LLM actually sees versus fields like **Summary** or **Creator Notes** that are for your own organization or for RAG/graph lookups rather than being injected into the prompt every turn.
-
 ### Saving, Canceling, and Unsaved Changes
 
 While editing, **Ctrl+S** (or **Cmd+S** on Mac) saves the form and **Escape** cancels, provided the form has focus. If you try to close a character with unsaved edits — via the Cancel button, Escape, or navigating away — a confirmation dialog appears asking whether to discard the changes. The **Create**/**Update** button itself changes color (filled vs. tonal) to indicate whether there are unsaved changes pending.
+
+### Binding a Character to a Lorebook
+
+Characters can be linked to a single [lorebook](./lorebooks.md) via a `lorebookId`. When you import a character card that has an embedded lorebook, Serene Pub will prompt you after import to confirm the lorebook name and import it, associating it with that character.
+
+### Fields Marked Visible in Prompts
+
+Several fields — Name, Nickname, Aliases, Description, Personality, Scenario, Example Dialogues, and Post-History Instructions — are marked in the form with a small eye icon and the tooltip "This field will be visible in prompts." This is a direct signal from the UI about which fields the LLM actually sees versus fields like **Summary** or **Creator Notes** that are for your own organization or for RAG/graph lookups rather than being injected into the prompt every turn.
 
 ## Avatar & Gallery
 
@@ -90,14 +90,14 @@ Uploaded avatar and gallery images are stored per-character on the server (in th
 
 ## Creating a Character
 
-There are two ways to create a character, both reachable from the **+** button in the Characters sidebar:
+There are two ways to create a character, both reachable from the **New** button (plus icon) in the Characters sidebar:
 
 - **Character Creator** (guided wizard) — used when the **Easy Character Creation** user setting is enabled (this is the default). It's a 5-step wizard: **Name**, **Avatar**, **Description**, **Personality**, **First Message**. Name and Description are required steps; Avatar, Personality, and First Message can be skipped. Each step includes an inline example and writing guidelines (e.g. what to include in a description vs. a personality). A progress bar shows which step you're on, and leaving with unsaved data prompts a **Discard Character?** confirmation.
 - **Full Character Form** — used when Easy Character Creation is disabled. This opens the same detailed form used for editing (see Character Fields above), with every field available immediately (subject to the Show All Fields setting).
 
 ### Easy Character Creation Setting
 
-The **Easy Character Creation** switch on the User Settings tab controls which of the two creation flows the **+** button opens. It's on by default. Turning it off routes new-character creation straight to the full form instead of the wizard.
+The **Easy Character Creation** switch on the User Settings tab controls which of the two creation flows the **New** button opens. It's on by default. Turning it off routes new-character creation straight to the full form instead of the wizard.
 
 ### Editing and Deleting
 
@@ -109,19 +109,20 @@ Clicking a character in the list (rather than its menu) opens a read-only **View
 
 ## Browsing the Character Library
 
-The **Character Library** is a searchable catalog of community-contributed character cards, browsed and imported without leaving the app. Open it from the Characters sidebar's **Import Character** button, then choose **Search Library**.
+The **Character Library** is a searchable catalog of community-contributed character cards, browsed and imported without leaving the app. Open it from the Characters sidebar's dedicated **Browse** button — unlike creating or importing a file, this takes you to a full-page Character Library rather than opening a dialog in the sidebar.
 
-- The library list is fetched live and grouped by **category**, with each entry showing its thumbnail, name, an excerpt of its description, author, and card spec version.
-- Type in the search box (debounced) or press **Search** to filter by name, description, category, or tags.
-- Clicking an entry opens a detail view with the full description, tags, author, version, spec, and category, plus an **Import Character** button to pull it directly into your own character list. An **Import Character** action also triggers the same lorebook-import prompt as a manual file import if the card includes an embedded lorebook.
+- If more than one catalog is available, a row of tabs lets you switch between sources. Today there are two: the original **Serene Pub** catalog (the `serene-pub-chara-list` GitHub repository, grouped into named categories) and **CharaVault**, a much larger third-party card catalog shown as a flat grid instead, since CharaVault's own category/folder structure doesn't map onto a meaningful browsing grouping the way the curated catalog's does.
+- Each entry shows its thumbnail, name, an excerpt of its description, author, and card spec version. Type in the search box to filter by name, description, category, or tags — it searches as you type (debounced) or immediately on Enter; there's no separate Search button.
+- When browsing CharaVault specifically, you also get a **Sort** dropdown (Top Rated, Most Downloaded, Newest, Oldest, Name A–Z/Z–A, Token Count, Most Discussed), an **Only cards with a lorebook** toggle, a creator filter (click an author's name in a card's detail view to filter the whole list to their cards, removable via the chip that appears above the results), and support for advanced query syntax in the search box — `tag:name`, `-exclude`, `creator:name`, and `"exact phrase"`, which can be combined freely (e.g. `elf tag:fantasy -romance creator:anon`). If the admin has enabled unsafe/NSFW browsing, an **Include NSFW results** toggle also appears. Results load a page at a time with a **Load More** button rather than infinite scroll, and a source that's unreachable or rate-limited shows its own message with a **Retry** button instead of an empty grid.
+- Clicking an entry opens a detail view with the full description, tags, author, version, spec, category, and (if the card carries one) a note that it includes a lorebook, plus a **Download Character** button to pull it directly into your own character list. Downloading also triggers the same lorebook-import prompt as a manual file import if the card includes an embedded lorebook.
 
 ### Library Source
 
-The library is sourced live from a public, community-maintained catalog (the `serene-pub-chara-list` repository) rather than being bundled with the app — searching and importing require an internet connection, and new characters added to that catalog show up automatically the next time you open the Character Library.
+The Serene Pub catalog is sourced live from a public, community-maintained catalog (the `serene-pub-chara-list` repository) rather than being bundled with the app, and CharaVault is queried live from its own public API — both require an internet connection to search or import from, and new or updated cards on either source show up automatically the next time you open the Character Library.
 
 ## Importing a Character from a File
 
-Besides the library, the **Import Character** dialog also accepts a local file upload in PNG, APNG, JPEG, JPG, WEBP, or JSON format — this covers standard character card formats (including cards exported from other apps). See [Importing from SillyTavern](./importing-from-sillytavern.md) for details on cross-compatibility with SillyTavern-style cards. On import, fields such as name, nickname, description, personality, scenario, first message, example dialogues, alternate greetings, creator notes, post-history instructions, character version, aliases, summary, and tags are all mapped in from the card, and the avatar image (if embedded) is extracted and set automatically.
+Besides the library, the Characters sidebar's **Import** button opens a dialog that accepts a local file upload in PNG, APNG, JPEG, JPG, WEBP, or JSON format — this covers standard character card formats (including cards exported from other apps). See [Importing from SillyTavern](./importing-from-sillytavern.md) for details on cross-compatibility with SillyTavern-style cards. On import, fields such as name, nickname, description, personality, scenario, first message, example dialogues, alternate greetings, creator notes, post-history instructions, character version, aliases, summary, and tags are all mapped in from the card, and the avatar image (if embedded) is extracted and set automatically.
 
 ### What Happens After Import
 
@@ -133,6 +134,8 @@ From the edit form of an existing character, click the **export button** (upload
 
 - **Export as JSON** — downloads the character as a standard character-card JSON file.
 - **Export as PNG Card** — embeds the character card data into the character's avatar image and downloads it as a PNG. This option is disabled ("No Avatar") if the character has no avatar image set.
+
+If the character has one or more lorebooks bound to it, the dialog also shows an **Include a lorebook (optional)** dropdown above the format buttons, letting you embed one of those bound lorebooks into the exported card so it travels with the character on import (see [Lorebooks](./lorebooks.md)). Leave it set to "None" to export the character without any lorebook data.
 
 Both formats build a CharacterCard V2-compatible structure, including the character's tags, so exported characters can be re-imported into Serene Pub or shared with compatible apps.
 

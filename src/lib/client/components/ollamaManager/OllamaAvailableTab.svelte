@@ -119,11 +119,48 @@
 		return currentConnectionModelName.startsWith(modelName)
 	}
 
+	// Neither response event carries a request-echo, so a per-dispatch
+	// self-unsubscribing listener (matching ChatsSidebar's search pattern) is
+	// the only way to tell a stale response apart from the latest one: the
+	// token check below discards a response if a newer search has since been
+	// dispatched, instead of letting an out-of-order response overwrite
+	// fresher results.
+	let searchToken = 0
+
 	function searchAvailableModels() {
+		const token = ++searchToken
 		isSearching = true
 		if (selectedSource === OllamaModelSearchSource.RECOMMENDED) {
+			const handler = (
+				message: Sockets.Ollama.RecommendedModels.Response
+			) => {
+				socket.off("ollama:recommendedModels", handler)
+				if (token !== searchToken) return
+				isSearching = false
+				if (message.error) {
+					toaster.error({ title: message.error })
+					recommendedModels = []
+				} else {
+					recommendedModels = message.recommendedModels || []
+				}
+			}
+			socket.on("ollama:recommendedModels", handler)
 			socket.emit("ollama:recommendedModels", {})
 		} else {
+			const handler = (
+				message: Sockets.Ollama.SearchAvailableModels.Response
+			) => {
+				socket.off("ollama:searchAvailableModels", handler)
+				if (token !== searchToken) return
+				isSearching = false
+				if (message.error) {
+					toaster.error({ title: message.error })
+					availableModels = []
+				} else {
+					availableModels = message.models || []
+				}
+			}
+			socket.on("ollama:searchAvailableModels", handler)
 			socket.emit("ollama:searchAvailableModels", {
 				searchTerm: searchString.trim(),
 				source: selectedSource
@@ -196,73 +233,47 @@
 		socket.emit("ollama:modelsList", {})
 	}
 
-	onMount(() => {
-		// Socket event listeners
-		socket.on(
-			"ollama:modelsList",
-			(message: Sockets.Ollama.ModelsList.Response) => {
-				installedModels = message.models
-			}
-		)
+	// Named handlers for the persistent (non-search) listeners — cleanup
+	// must pass the exact same reference to .off(); a no-arg .off() call
+	// removes *every* listener for that event, not just this component's.
+	function handleOllamaModelsList(
+		message: Sockets.Ollama.ModelsList.Response
+	) {
+		installedModels = message.models
+	}
 
-		socket.on(
-			"ollama:searchAvailableModels",
-			(message: Sockets.Ollama.SearchAvailableModels.Response) => {
-				isSearching = false
-				if (message.error) {
-					toaster.error({ title: message.error })
-					availableModels = []
-				} else {
-					availableModels = message.models || []
-				}
-			}
-		)
+	function handleOllamaPullModel(message: Sockets.Ollama.PullModel.Response) {
+		// Handle model pull completion only - errors arrive on the separate
+		// "ollama:pullModel:error" event (registered below), not as an
+		// `error` field on this event.
+		currentlyDownloading.clear()
+		if (message.success) {
+			socket.emit("ollama:modelsList", {})
+			toaster.success({ title: "Model downloaded successfully" })
+			closeHuggingFaceModal()
+		}
+	}
 
-		socket.on(
-			"ollama:recommendedModels",
-			(message: Sockets.Ollama.RecommendedModels.Response) => {
-				isSearching = false
-				if (message.error) {
-					toaster.error({ title: message.error })
-					recommendedModels = []
-				} else {
-					recommendedModels = message.recommendedModels || []
-				}
-			}
-		)
-
-		socket.on(
-			"ollama:pullModel",
-			(message: Sockets.Ollama.PullModel.Response) => {
-				// Handle model pull completion only - errors arrive on the
-				// separate "ollama:pullModel:error" event (registered below),
-				// not as an `error` field on this event.
-				currentlyDownloading.clear()
-				if (message.success) {
-					socket.emit("ollama:modelsList", {})
-					toaster.success({ title: "Model downloaded successfully" })
-					closeHuggingFaceModal()
-				}
-			}
-		)
-
-		// The server response doesn't carry which model failed, so this just
-		// clears the whole in-flight set - the per-model progress/error state
-		// lives in the Downloads tab (driven by "ollamaPullProgress").
-		socket.on("ollama:pullModel:error", (message) => {
-			currentlyDownloading.clear()
-			toaster.error({
-				title: "Model download failed",
-				description: message?.error
-			})
+	// The server response doesn't carry which model failed, so this just
+	// clears the whole in-flight set - the per-model progress/error state
+	// lives in the Downloads tab (driven by "ollamaPullProgress").
+	function handleOllamaPullModelError(message: { error?: string }) {
+		currentlyDownloading.clear()
+		toaster.error({
+			title: "Model download failed",
+			description: message?.error
 		})
+	}
 
-		socket.on(
-			"connections:list",
-			(message: Sockets.Connections.List.Response) => {
-				connectionsList = message.connectionsList
-			}
-		)
+	function handleConnectionsList(message: Sockets.Connections.List.Response) {
+		connectionsList = message.connectionsList
+	}
+
+	onMount(() => {
+		socket.on("ollama:modelsList", handleOllamaModelsList)
+		socket.on("ollama:pullModel", handleOllamaPullModel)
+		socket.on("ollama:pullModel:error", handleOllamaPullModelError)
+		socket.on("connections:list", handleConnectionsList)
 		socket.emit("connections:list", {})
 
 		// Load initial installed models
@@ -270,13 +281,10 @@
 	})
 
 	onDestroy(() => {
-		socket.off("ollama:modelsList")
-		socket.off("connections:list")
-		socket.off("ollama:searchAvailableModels")
-		socket.off("ollama:recommendedModels")
-		socket.off("ollama:pullModel")
-		socket.off("ollama:pullModel:error")
-		socket.off("ollama:cancelPull")
+		socket.off("ollama:modelsList", handleOllamaModelsList)
+		socket.off("connections:list", handleConnectionsList)
+		socket.off("ollama:pullModel", handleOllamaPullModel)
+		socket.off("ollama:pullModel:error", handleOllamaPullModelError)
 	})
 </script>
 

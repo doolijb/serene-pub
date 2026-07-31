@@ -8,7 +8,8 @@ import {
 	parseCharacterCardFromBase64,
 	buildCharacterCardV3,
 	embedCharacterCardInPng,
-	getRobustSpecV3Data
+	getRobustSpecV3Data,
+	validatePngChunkLengths
 } from "./characterCardParser"
 
 const minimalCardJson = {
@@ -366,5 +367,36 @@ describe("embedCharacterCardInPng / parseCharacterCard round-trip", () => {
 			})
 
 		expect(chunks).toHaveLength(1)
+	})
+})
+
+describe("validatePngChunkLengths", () => {
+	test("accepts a genuine, well-formed PNG", () => {
+		expect(() => validatePngChunkLengths(makeTestPngBuffer())).not.toThrow()
+	})
+
+	test("rejects a non-PNG buffer", () => {
+		expect(() =>
+			validatePngChunkLengths(Buffer.from("not a png", "utf-8"))
+		).toThrow("Invalid .png file header")
+	})
+
+	test("rejects a chunk that declares a length larger than the buffer — before png-chunks-extract would over-allocate for it", () => {
+		const buffer = Buffer.from(makeTestPngBuffer())
+		// First chunk's 4-byte length field starts right after the 8-byte
+		// signature. Overwrite it with a huge declared length (~4GB) that
+		// the actual (tiny, 1x1) test PNG doesn't remotely have.
+		buffer.writeUInt32BE(0xfffffffe, 8)
+
+		expect(() => validatePngChunkLengths(buffer)).toThrow(
+			/larger than the file/
+		)
+	})
+
+	test("rejects a buffer truncated mid-chunk-header", () => {
+		const buffer = Buffer.from(makeTestPngBuffer()).subarray(0, 10)
+		expect(() => validatePngChunkLengths(buffer)).toThrow(
+			/truncated chunk header/
+		)
 	})
 })

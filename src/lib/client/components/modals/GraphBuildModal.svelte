@@ -190,6 +190,18 @@
 		} satisfies Sockets.NarrativeGraph.Build.Params)
 	}
 
+	// Shared by the error step's "Start Over" and the review step's
+	// "Rebuild" — both mean the same thing: discard whatever build is
+	// parked (error or stale/unapplied review) and return to a clean
+	// preflight so the user can actually kick a new one.
+	function startOver() {
+		graphBuildsCtx?.clearBuild()
+		step = "preflight"
+		errorMessage = ""
+		errorRaw = undefined
+		showRaw = false
+	}
+
 	function apply() {
 		isApplying = true
 
@@ -697,10 +709,7 @@
 	>
 		Close
 	</button>
-	<button
-		class="btn preset-tonal-warning"
-		onclick={() => (step = "preflight")}
-	>
+	<button class="btn preset-tonal-warning" onclick={startOver}>
 		<Icons.RefreshCw size={16} /> Rebuild
 	</button>
 {/snippet}
@@ -835,13 +844,7 @@
 			resume: true
 		} satisfies Sockets.NarrativeGraph.Build.Params)
 	}}
-	onStartOver={() => {
-		graphBuildsCtx?.clearBuild()
-		step = "preflight"
-		errorMessage = ""
-		errorRaw = undefined
-		showRaw = false
-	}}
+	onStartOver={startOver}
 	onDiscard={() => {
 		graphBuildsCtx?.clearBuild()
 		onOpenChange({ open: false })

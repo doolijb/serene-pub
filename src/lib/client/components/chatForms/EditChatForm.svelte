@@ -2,13 +2,14 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import CharacterSelectModal from "../modals/CharacterSelectModal.svelte"
 	import PersonaSelectModal from "../modals/PersonaSelectModal.svelte"
+	import ReassignChatParticipantModal from "../modals/ReassignChatParticipantModal.svelte"
 	import UserSelectModal from "../modals/UserSelectModal.svelte"
 	import Avatar from "../Avatar.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { dndzone } from "svelte-dnd-action"
 	import RemoveFromChatModal from "../modals/RemoveFromChatModal.svelte"
 	import { onDestroy, onMount, getContext, untrack } from "svelte"
-	import { Switch } from "@skeletonlabs/skeleton-svelte"
+	import { Switch, Tabs } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 	import { ChatCharacterVisibility } from "$lib/shared/constants/ChatCharacterVisibility"
@@ -122,10 +123,18 @@
 	let adminNarratorPromptConfigsList: Sockets.NarratorPromptConfigs.List.Response["narratorPromptConfigsList"] =
 		$state([])
 
+	let activeChatTab = $state<"participants" | "settings">("participants")
+
 	// MODALS
 	let showCharacterModal = $state(false)
 	let showPersonaModal = $state(false)
 	let showGuestModal = $state(false)
+	let showReassignModal = $state(false)
+	let reassignTarget: {
+		type: "character" | "persona"
+		oldId: number
+		name: string
+	} | null = $state(null)
 
 	// FORM SUBMIT STATE
 	let isDirty: boolean = $derived(
@@ -341,6 +350,56 @@
 		}
 	}
 
+	// Removed (soft-deleted) participants — kept out of selectedCharacters/
+	// selectedPersonas above, surfaced here instead with a way to reassign
+	// their message history onto a new character/persona. Display-name
+	// precedence: prefer the live entity's name if it still exists (a
+	// rename should still show up here), fall back to the removedName
+	// snapshot only once the entity itself is gone — same rule as
+	// getMessageCharacter on the chat page.
+	let removedCharacters = $derived(
+		(chat?.chatCharacters || [])
+			.filter((cc) => cc.removedAt)
+			.map((cc) => ({
+				id: cc.characterId!,
+				name:
+					cc.character?.nickname ||
+					cc.character?.name ||
+					cc.removedName ||
+					"Unknown"
+			}))
+	)
+	let removedPersonas = $derived(
+		(chat?.chatPersonas || [])
+			.filter((cp) => cp.removedAt)
+			.map((cp) => ({
+				id: cp.personaId!,
+				name: cp.persona?.name || cp.removedName || "Unknown"
+			}))
+	)
+
+	function openReassignModal(
+		type: "character" | "persona",
+		oldId: number,
+		name: string
+	) {
+		reassignTarget = { type, oldId, name }
+		showReassignModal = true
+	}
+
+	function handleReassignSelect(newId: number) {
+		if (!chat?.id || !reassignTarget) return
+		const req: Sockets.Chats.ReassignRemovedParticipant.Params = {
+			chatId: chat.id,
+			type: reassignTarget.type,
+			oldId: reassignTarget.oldId,
+			newId
+		}
+		socket.emit("chats:reassignRemovedParticipant", req)
+		showReassignModal = false
+		reassignTarget = null
+	}
+
 	function handleAddGuests(userIds: number[]) {
 		if (!chat?.id) return
 		const chatId = chat.id
@@ -534,9 +593,17 @@
 			name = chat.name || ""
 			scenario = chat.scenario || ""
 			groupReplyStrategy = chat.groupReplyStrategy || "ordered"
+			// Removed participants stay out of the editable "active cast"
+			// list (and so don't get silently re-submitted on the next
+			// Save) — they surface instead in the "Removed" section below.
 			selectedCharacters =
-				chat.chatCharacters?.map((cc) => cc.character) || []
-			selectedPersonas = chat.chatPersonas?.map((cp) => cp.persona) || []
+				chat.chatCharacters
+					?.filter((cc) => !cc.removedAt)
+					.map((cc) => cc.character) || []
+			selectedPersonas =
+				chat.chatPersonas
+					?.filter((cp) => !cp.removedAt)
+					.map((cp) => cp.persona) || []
 			selectedGuests = chat.chatGuests || []
 			lorebookId = chat.lorebookId || null
 			selectedTags = chat.tags || []
@@ -660,6 +727,42 @@
 		}
 	}
 
+	const handleReassignRemovedParticipant = (
+		res: Sockets.Chats.ReassignRemovedParticipant.Response
+	) => {
+		if (res.error) {
+			toaster.error({ title: "Error reassigning", description: res.error })
+			return
+		}
+		if (res.success) {
+			toaster.success({ title: "History reassigned" })
+			// The server also broadcasts a "chats:get" to every participant
+			// (including this socket), which handleChatsGet already applies —
+			// no separate local state update needed here.
+		}
+	}
+
+	const handleAdminConnectionsList = (
+		msg: Sockets.Connections.List.Response
+	) => {
+		adminConnectionsList = msg.connectionsList || []
+	}
+	const handleAdminSamplingConfigsList = (
+		msg: Sockets.SamplingConfigs.List.Response
+	) => {
+		adminSamplingList = msg.samplingConfigsList || []
+	}
+	const handleAdminPromptConfigsList = (
+		msg: Sockets.PromptConfigs.List.Response
+	) => {
+		adminPromptConfigsList = msg.promptConfigsList || []
+	}
+	const handleAdminNarratorPromptConfigsList = (
+		msg: Sockets.NarratorPromptConfigs.List.Response
+	) => {
+		adminNarratorPromptConfigsList = msg.narratorPromptConfigsList || []
+	}
+
 	onMount(() => {
 		// Register all socket event handlers
 		socket.on("chats:get", handleChatsGet)
@@ -679,33 +782,22 @@
 		socket.on("chats:update", handleChatsUpdate)
 		socket.on("chats:addGuest", handleChatsAddGuest)
 		socket.on("chats:removeGuest", handleChatsRemoveGuest)
+		socket.on(
+			"chats:reassignRemovedParticipant",
+			handleReassignRemovedParticipant
+		)
 
 		// Admin-only: load connections, sampling configs, and prompt configs for override pickers
 		if (userCtx.user?.isAdmin) {
-			socket.on(
-				"connections:list",
-				(msg: Sockets.Connections.List.Response) => {
-					adminConnectionsList = msg.connectionsList || []
-				}
-			)
+			socket.on("connections:list", handleAdminConnectionsList)
 			socket.on(
 				"samplingConfigs:list",
-				(msg: Sockets.SamplingConfigs.List.Response) => {
-					adminSamplingList = msg.samplingConfigsList || []
-				}
+				handleAdminSamplingConfigsList
 			)
-			socket.on(
-				"promptConfigs:list",
-				(msg: Sockets.PromptConfigs.List.Response) => {
-					adminPromptConfigsList = msg.promptConfigsList || []
-				}
-			)
+			socket.on("promptConfigs:list", handleAdminPromptConfigsList)
 			socket.on(
 				"narratorPromptConfigs:list",
-				(msg: Sockets.NarratorPromptConfigs.List.Response) => {
-					adminNarratorPromptConfigsList =
-						msg.narratorPromptConfigsList || []
-				}
+				handleAdminNarratorPromptConfigsList
 			)
 			socket.emit("connections:list", {})
 			socket.emit("samplingConfigs:list", {})
@@ -721,10 +813,13 @@
 	})
 
 	onDestroy(() => {
-		socket.off("connections:list")
-		socket.off("samplingConfigs:list")
-		socket.off("promptConfigs:list")
-		socket.off("narratorPromptConfigs:list")
+		socket.off("connections:list", handleAdminConnectionsList)
+		socket.off("samplingConfigs:list", handleAdminSamplingConfigsList)
+		socket.off("promptConfigs:list", handleAdminPromptConfigsList)
+		socket.off(
+			"narratorPromptConfigs:list",
+			handleAdminNarratorPromptConfigsList
+		)
 		// Properly remove event handlers by passing the function references
 		socket.off("chats:get", handleChatsGet)
 		socket.off("characters:list", handleCharactersList)
@@ -743,6 +838,10 @@
 		socket.off("chats:update", handleChatsUpdate)
 		socket.off("chats:addGuest", handleChatsAddGuest)
 		socket.off("chats:removeGuest", handleChatsRemoveGuest)
+		socket.off(
+			"chats:reassignRemovedParticipant",
+			handleReassignRemovedParticipant
+		)
 	})
 
 	function toggleCharacterActive(
@@ -872,10 +971,25 @@
 				</p>
 			{/if}
 		</div>
-		<div>
-			<span class="mb-2 font-semibold">Characters*</span>
-			{#key chat?.chatCharacters}
-				<div
+
+		<Tabs
+			value={activeChatTab}
+			onValueChange={(e) => (activeChatTab = e.value as typeof activeChatTab)}
+		>
+			<Tabs.List class="flex flex-wrap gap-1">
+				<Tabs.Trigger value="participants">
+					<Icons.Users size={16} /> Participants
+				</Tabs.Trigger>
+				<Tabs.Trigger value="settings">
+					<Icons.Settings size={16} /> Chat Settings
+				</Tabs.Trigger>
+			</Tabs.List>
+			<Tabs.Content value="participants">
+				<div class="flex flex-col gap-6 pt-4">
+					<div>
+						<span class="mb-2 font-semibold">Characters*</span>
+						{#key chat?.chatCharacters}
+							<div
 					class="relative mb-2 flex flex-col gap-2"
 					use:dndzone={{
 						items: selectedCharacters,
@@ -904,7 +1018,7 @@
 								(cc) => cc.characterId === c.id
 							)}
 						<div
-							class="preset-outlined-surface-400-600 bg-surface-100-800 hover:bg-surface-200-800 flex flex-col gap-3 rounded-xl p-3 shadow-sm transition-colors"
+							class="card preset-tonal flex flex-col gap-3 p-3 shadow-sm transition-colors"
 							data-dnd-handle
 						>
 							<div class="flex items-start gap-3">
@@ -1061,7 +1175,7 @@
 			>
 				{#each selectedPersonas as p, i (p.id)}
 					<div
-						class="preset-outlined-surface-400-600 bg-surface-100-800 hover:bg-surface-200-800 flex flex-col gap-3 rounded-xl p-3 shadow-sm transition-colors"
+						class="card preset-tonal flex flex-col gap-3 p-3 shadow-sm transition-colors"
 						data-dnd-handle
 					>
 						<div class="flex items-start gap-3">
@@ -1135,6 +1249,51 @@
 			</div>
 		</div>
 
+		{#if chat && (removedCharacters.length > 0 || removedPersonas.length > 0)}
+			<div>
+				<span class="mb-2 font-semibold">Removed</span>
+				<p class="text-surface-700-300 mb-2 text-xs">
+					These were removed from the chat, but their past messages
+					are kept. Reassign a removed participant's history to a
+					character or persona you own.
+				</p>
+				<div class="flex flex-col gap-2">
+					{#each removedCharacters as rc (rc.id)}
+						<div
+							class="card preset-tonal flex items-center justify-between gap-3 p-3"
+						>
+							<span class="truncate text-sm">{rc.name}</span>
+							<button
+								class="btn btn-sm preset-tonal"
+								onclick={() =>
+									openReassignModal(
+										"character",
+										rc.id,
+										rc.name
+									)}
+							>
+								Reassign…
+							</button>
+						</div>
+					{/each}
+					{#each removedPersonas as rp (rp.id)}
+						<div
+							class="card preset-tonal flex items-center justify-between gap-3 p-3"
+						>
+							<span class="truncate text-sm">{rp.name}</span>
+							<button
+								class="btn btn-sm preset-tonal"
+								onclick={() =>
+									openReassignModal("persona", rp.id, rp.name)}
+							>
+								Reassign…
+							</button>
+						</div>
+					{/each}
+				</div>
+			</div>
+		{/if}
+
 		{#if editChatId && systemSettingsCtx?.settings?.isAccountsEnabled}
 			<!-- Guests Section (only show in edit mode and when accounts are enabled) -->
 			<div>
@@ -1157,7 +1316,7 @@
 					{/if}
 					{#each selectedGuests as guest}
 						<div
-							class="preset-outlined-surface-400-600 bg-surface-100-800 rounded-xl p-3"
+							class="card preset-tonal p-3"
 						>
 							<div class="flex flex-col gap-2">
 								<div class="flex items-center justify-between">
@@ -1205,6 +1364,10 @@
 				</select>
 			</div>
 		{/if}
+				</div>
+			</Tabs.Content>
+			<Tabs.Content value="settings">
+				<div class="flex flex-col gap-6 pt-4">
 		<div>
 			<label class="flex gap-1 font-semibold" for="scenario">
 				Scenario <span
@@ -1369,6 +1532,9 @@
 				</div>
 			{/if}
 		</div>
+				</div>
+			</Tabs.Content>
+		</Tabs>
 	</div>
 {/if}
 <CharacterSelectModal
@@ -1387,6 +1553,22 @@
 	onOpenChange={(e) => (showPersonaModal = e.open)}
 	onSelect={handleAddPersona}
 	returnFullPersona={true}
+/>
+<ReassignChatParticipantModal
+	open={showReassignModal}
+	type={reassignTarget?.type ?? "character"}
+	removedName={reassignTarget?.name ?? ""}
+	characters={characters.filter(
+		(c) => !selectedCharacters.some((sel) => sel.id === c.id)
+	)}
+	personas={personas.filter(
+		(p) => !selectedPersonas.some((sel) => sel.id === p.id)
+	)}
+	onOpenChange={(e) => {
+		showReassignModal = e.open
+		if (!e.open) reassignTarget = null
+	}}
+	onSelect={handleReassignSelect}
 />
 <!-- RemoveFromChatModal only models "character" | "persona" (its ternaries
 	fall back to the "character" copy for anything else, including its own

@@ -41,20 +41,26 @@
 		})
 	}
 
+	function handleCharactersCreate(msg: any) {
+		saving = false
+		if (msg.character)
+			goto(`/document-view/characters/${msg.character.id}/edit`)
+	}
+	function handleCharactersCreateError(msg: { error?: string }) {
+		saving = false
+		error = msg.error || "Failed to create character."
+		announce(error)
+	}
+
 	onMount(() => {
-		socket.on("characters:create", (msg) => {
-			saving = false
-			if (msg.character)
-				goto(`/document-view/characters/${msg.character.id}/edit`)
-		})
-		socket.on("characters:create:error", (msg: { error?: string }) => {
-			saving = false
-			error = msg.error || "Failed to create character."
-			announce(error)
-		})
+		socket.on("characters:create", handleCharactersCreate)
+		socket.on("characters:create:error", handleCharactersCreateError)
 		return () => {
-			socket.off("characters:create")
-			socket.off("characters:create:error")
+			socket.off("characters:create", handleCharactersCreate)
+			socket.off(
+				"characters:create:error",
+				handleCharactersCreateError
+			)
 		}
 	})
 </script>

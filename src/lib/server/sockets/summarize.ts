@@ -6,62 +6,23 @@ import { generateSummary } from "$lib/server/utils/summarizer"
 import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 import { resolveTaskConfig } from "$lib/server/utils/resolveTaskConfig"
+import { resolveOrCreateBinding } from "$lib/server/utils/characterBindingSync"
+import {
+	buildSceneCastList,
+	reconcileParticipantsAndMentioned,
+	reconcileSuggestedNames,
+	resolveCharacterRefs
+} from "$lib/server/utils/summarizer/availableSceneCast"
+import { lorebookBindingListHandler } from "./lorebooks"
+import { withChatTriggerLock } from "$lib/server/utils/chatTriggerLock"
+import { checkChatAccess } from "$lib/server/utils/chatAccess"
 
-/**
- * Find an existing lorebook binding for the given character or persona, or create
- * a new one with an auto-incremented binding string (e.g. {{char:3}}).
- */
-async function resolveOrCreateBinding({
-	lorebookId,
-	characterId,
-	personaId
-}: {
-	lorebookId: number
-	characterId?: number | null
-	personaId?: number | null
-}): Promise<number> {
-	if (!characterId && !personaId)
-		throw new Error("characterId or personaId required")
-
-	// Check for an existing binding
-	const existing = await db.query.lorebookBindings.findFirst({
-		where: characterId
-			? and(
-					eq(schema.lorebookBindings.lorebookId, lorebookId),
-					eq(schema.lorebookBindings.characterId, characterId)
-				)
-			: and(
-					eq(schema.lorebookBindings.lorebookId, lorebookId),
-					eq(schema.lorebookBindings.personaId, personaId!)
-				)
-	})
-	if (existing) return existing.id
-
-	// Auto-generate next binding string
-	const allBindings = await db.query.lorebookBindings.findMany({
-		where: eq(schema.lorebookBindings.lorebookId, lorebookId)
-	})
-	let maxNum = 0
-	for (const b of allBindings) {
-		const match = b.binding.match(/\{\{char:(\d+)\}\}/)
-		if (match) {
-			const n = parseInt(match[1], 10)
-			if (n > maxNum) maxNum = n
-		}
-	}
-	const bindingStr = `{{char:${maxNum + 1}}}`
-
-	const [created] = await db
-		.insert(schema.lorebookBindings)
-		.values({
-			lorebookId,
-			binding: bindingStr,
-			characterId: characterId ?? null,
-			personaId: personaId ?? null
-		})
-		.returning()
-	return created.id
-}
+// Reject-fast dedup for chatsSummarizeHandler — withChatTriggerLock alone
+// only serializes (queues) a second concurrent request for the same chat;
+// each run here is a full batch+synthesis LLM pipeline, so a double-click
+// or multiple tabs should be rejected outright, not silently re-run right
+// after the first finishes.
+const inFlightSummarizeChatIds = new Set<number>()
 
 export const chatsSummarizeHandler: Handler<
 	Sockets.Chats.Summarize.Params,
@@ -79,10 +40,25 @@ export const chatsSummarizeHandler: Handler<
 			lorebookBindingPersonaId
 		} = params
 
-		// Verify the user owns the chat
+		// topic is re-interpolated into every batch prompt plus the synthesis
+		// prompt, so an oversized value multiplies LLM cost by batch count
+		// with no cap otherwise — this is the one check that actually
+		// matters, since it's reachable by a raw socket emit regardless of
+		// the client's own maxlength.
+		if (topic && topic.length > 300) {
+			throw new Error("Topic must be 300 characters or fewer.")
+		}
+
+		// Verify the user owns the chat — shared helper, not an ad-hoc
+		// reimplementation (see chatAccess.ts's own comment: a local
+		// eq(chats.userId, userId)-only check is exactly how a guest-lockout
+		// bug happened here before).
+		const chatAccess = await checkChatAccess(chatId, userId)
+		if (!chatAccess.isOwner) {
+			throw new Error("Chat not found or access denied.")
+		}
 		const chat = await db.query.chats.findFirst({
-			where: (c, { and, eq }) =>
-				and(eq(c.id, chatId), eq(c.userId, userId))
+			where: eq(schema.chats.id, chatId)
 		})
 
 		if (!chat) {
@@ -98,203 +74,306 @@ export const chatsSummarizeHandler: Handler<
 			return null as any
 		}
 
-		// Fetch the specified messages in order
-		const whereClause =
-			messageIds === "all"
-				? and(
-						eq(schema.chatMessages.chatId, chatId),
-						eq(schema.chatMessages.isHidden, false)
+		// Serializes against Regenerate/Continue/SwipeRight etc. on this same
+		// chat (withChatTriggerLock, same lock chats.ts's generation handlers
+		// use), and rejects a second concurrent chats:summarize for this chat
+		// outright rather than queuing it to run again right after the first
+		// finishes — each run is a full batch+synthesis LLM pipeline, not
+		// something a double-click/multiple tabs should silently multiply.
+		if (inFlightSummarizeChatIds.has(chatId)) {
+			throw new Error("A summarization is already running for this chat.")
+		}
+		inFlightSummarizeChatIds.add(chatId)
+		return await withChatTriggerLock(chatId, async () => {
+			try {
+
+				// Fetch the specified messages in order
+				const whereClause =
+					messageIds === "all"
+						? and(
+								eq(schema.chatMessages.chatId, chatId),
+								eq(schema.chatMessages.isHidden, false)
+							)
+						: and(
+								eq(schema.chatMessages.chatId, chatId),
+								inArray(schema.chatMessages.id, messageIds)
+							)
+
+				const rawMessages = await db.query.chatMessages.findMany({
+					where: whereClause,
+					orderBy: (cm, { asc }) => asc(cm.id)
+				})
+
+				if (rawMessages.length === 0) {
+					throw new Error("No messages found to summarize.")
+				}
+
+				// Collect unique character and persona IDs from messages
+				const charIds = [
+					...new Set(
+						rawMessages
+							.filter((m) => m.characterId)
+							.map((m) => m.characterId!)
 					)
-				: and(
-						eq(schema.chatMessages.chatId, chatId),
-						inArray(schema.chatMessages.id, messageIds)
+				]
+				const personaIds = [
+					...new Set(
+						rawMessages.filter((m) => m.personaId).map((m) => m.personaId!)
 					)
+				]
 
-		const rawMessages = await db.query.chatMessages.findMany({
-			where: whereClause,
-			orderBy: (cm, { asc }) => asc(cm.id)
-		})
+				// Fetch names directly from the entity tables
+				const characters =
+					charIds.length > 0
+						? await db.query.characters.findMany({
+								where: inArray(schema.characters.id, charIds)
+							})
+						: []
+				const personas =
+					personaIds.length > 0
+						? await db.query.personas.findMany({
+								where: inArray(schema.personas.id, personaIds)
+							})
+						: []
 
-		if (rawMessages.length === 0) {
-			throw new Error("No messages found to summarize.")
-		}
-
-		// Collect unique character and persona IDs from messages
-		const charIds = [
-			...new Set(
-				rawMessages
-					.filter((m) => m.characterId)
-					.map((m) => m.characterId!)
-			)
-		]
-		const personaIds = [
-			...new Set(
-				rawMessages.filter((m) => m.personaId).map((m) => m.personaId!)
-			)
-		]
-
-		// Fetch names directly from the entity tables
-		const characters =
-			charIds.length > 0
-				? await db.query.characters.findMany({
-						where: inArray(schema.characters.id, charIds)
-					})
-				: []
-		const personas =
-			personaIds.length > 0
-				? await db.query.personas.findMany({
-						where: inArray(schema.personas.id, personaIds)
-					})
-				: []
-
-		const characterMap = new Map(characters.map((c) => [c.id, c.name]))
-		const personaMap = new Map(
-			personas.map((p) => [p.id, resolvePersonaName(p)])
-		)
-
-		const messages = rawMessages.map((msg) => {
-			let senderName = "Unknown"
-			if (msg.characterId && characterMap.has(msg.characterId)) {
-				senderName = characterMap.get(msg.characterId)!
-			} else if (msg.personaId && personaMap.has(msg.personaId)) {
-				senderName = personaMap.get(msg.personaId)!
-			} else if (msg.role === "user") {
-				senderName = "User"
-			}
-			return { senderName, content: msg.content }
-		})
-
-		// Get context/prompt configs (connection+sampling resolved per sub-task below)
-		const { contextConfig, promptConfig } =
-			await getUserConfigurations(userId)
-
-		const systemSettings = await db.query.systemSettings.findFirst()
-		const userSettings = await db.query.userSettings.findFirst({
-			where: (us, { eq }) => eq(us.userId, userId)
-		})
-
-		// Determine which summarize config to use
-		const summarizeConfigType =
-			loreType === "world"
-				? "world"
-				: loreType === "character"
-					? "character"
-					: "scene"
-		const summarizeConfigId =
-			loreType === "world"
-				? (userSettings?.activeSummarizeWorldConfigId ??
-					systemSettings?.defaultSummarizeWorldConfigId)
-				: loreType === "character"
-					? (userSettings?.activeSummarizeCharacterConfigId ??
-						systemSettings?.defaultSummarizeCharacterConfigId)
-					: (userSettings?.activeSummarizeSceneConfigId ??
-						systemSettings?.defaultSummarizeSceneConfigId)
-
-		let summarizePromptConfig: {
-			batchSystemPrompt: string
-			synthSystemPrompt: string
-			nameSystemPrompt: string
-			characterExtractionSystemPrompt?: string | null
-		} | null = null
-		if (summarizeConfigId) {
-			if (loreType === "world")
-				summarizePromptConfig =
-					(await db.query.worldSummarizeConfigs.findFirst({
-						where: (c, { eq }) => eq(c.id, summarizeConfigId)
-					})) ?? null
-			else if (loreType === "character")
-				summarizePromptConfig =
-					(await db.query.characterSummarizeConfigs.findFirst({
-						where: (c, { eq }) => eq(c.id, summarizeConfigId)
-					})) ?? null
-			else
-				summarizePromptConfig =
-					(await db.query.sceneSummarizeConfigs.findFirst({
-						where: (c, { eq }) => eq(c.id, summarizeConfigId)
-					})) ?? null
-		}
-
-		// Resolve per-sub-task connection + sampling
-		const [batchResolved, synthResolved, nameResolved] = await Promise.all([
-			resolveTaskConfig({
-				taskType: "summarize_batch",
-				summarizeConfigId,
-				summarizeConfigType
-			}),
-			resolveTaskConfig({
-				taskType: "summarize_synth",
-				summarizeConfigId,
-				summarizeConfigType
-			}),
-			resolveTaskConfig({
-				taskType: "summarize_name",
-				summarizeConfigId,
-				summarizeConfigType
-			})
-		])
-
-		if (!batchResolved.connection) {
-			throw new Error(
-				"No AI connection configured. Please set up a connection first."
-			)
-		}
-
-		// Run iterative summarization, streaming progress back to client
-		const result = await generateSummary({
-			messages,
-			loreType,
-			topic,
-			connection: batchResolved.connection,
-			sampling: batchResolved.sampling!,
-			contextConfig,
-			promptConfig,
-			summarizePromptConfig,
-			batchConnection: batchResolved.connection,
-			batchSampling: batchResolved.sampling,
-			synthConnection: synthResolved.connection,
-			synthSampling: synthResolved.sampling,
-			nameConnection: nameResolved.connection,
-			nameSampling: nameResolved.sampling,
-			onProgress: (data) => {
-				emitToUser(
-					"chats:summarize:progress",
-					data satisfies Sockets.Chats.Summarize.Progress
+				const characterMap = new Map(characters.map((c) => [c.id, c.name]))
+				const personaMap = new Map(
+					personas.map((p) => [p.id, resolvePersonaName(p)])
 				)
-			},
-			onLlmCall: (entry) => {
-				emitToUser(
-					"chats:summarize:trace",
-					entry satisfies Sockets.Chats.Summarize.TraceEntry
-				)
+
+				const messages = rawMessages.map((msg) => {
+					let senderName = "Unknown"
+					if (msg.characterId && characterMap.has(msg.characterId)) {
+						senderName = characterMap.get(msg.characterId)!
+					} else if (msg.personaId && personaMap.has(msg.personaId)) {
+						senderName = personaMap.get(msg.personaId)!
+					} else if (msg.role === "user") {
+						senderName = "User"
+					}
+					return { senderName, content: msg.content }
+				})
+
+				// Get context/prompt configs (connection+sampling resolved per sub-task below)
+				const { contextConfig, promptConfig } =
+					await getUserConfigurations(userId)
+
+				const systemSettings = await db.query.systemSettings.findFirst()
+				const userSettings = await db.query.userSettings.findFirst({
+					where: (us, { eq }) => eq(us.userId, userId)
+				})
+
+				// Determine which summarize config to use
+				const summarizeConfigType =
+					loreType === "world"
+						? "world"
+						: loreType === "character"
+							? "character"
+							: "scene"
+				const summarizeConfigId =
+					loreType === "world"
+						? (userSettings?.activeSummarizeWorldConfigId ??
+							systemSettings?.defaultSummarizeWorldConfigId)
+						: loreType === "character"
+							? (userSettings?.activeSummarizeCharacterConfigId ??
+								systemSettings?.defaultSummarizeCharacterConfigId)
+							: (userSettings?.activeSummarizeSceneConfigId ??
+								systemSettings?.defaultSummarizeSceneConfigId)
+
+				let summarizePromptConfig: {
+					batchSystemPrompt: string
+					synthSystemPrompt: string
+					nameSystemPrompt: string
+					characterExtractionSystemPrompt?: string | null
+				} | null = null
+				if (summarizeConfigId) {
+					if (loreType === "world")
+						summarizePromptConfig =
+							(await db.query.worldSummarizeConfigs.findFirst({
+								where: (c, { eq }) => eq(c.id, summarizeConfigId)
+							})) ?? null
+					else if (loreType === "character")
+						summarizePromptConfig =
+							(await db.query.characterSummarizeConfigs.findFirst({
+								where: (c, { eq }) => eq(c.id, summarizeConfigId)
+							})) ?? null
+					else
+						summarizePromptConfig =
+							(await db.query.sceneSummarizeConfigs.findFirst({
+								where: (c, { eq }) => eq(c.id, summarizeConfigId)
+							})) ?? null
+				}
+
+				// Resolve per-sub-task connection + sampling
+				const [batchResolved, synthResolved, nameResolved] = await Promise.all([
+					resolveTaskConfig({
+						taskType: "summarize_batch",
+						summarizeConfigId,
+						summarizeConfigType
+					}),
+					resolveTaskConfig({
+						taskType: "summarize_synth",
+						summarizeConfigId,
+						summarizeConfigType
+					}),
+					resolveTaskConfig({
+						taskType: "summarize_name",
+						summarizeConfigId,
+						summarizeConfigType
+					})
+				])
+
+				if (!batchResolved.connection) {
+					throw new Error(
+						"No AI connection configured. Please set up a connection first."
+					)
+				}
+
+				// For a fresh scene draft, build the lorebook's known cast *before*
+				// generation — no sceneId exists yet (scenes:create hasn't run), so
+				// the cast list is built untimelined (see buildSceneCastList's
+				// null-sceneId handling). This must reach the extraction prompt
+				// itself (via generateSummary's knownCast option below), not just
+				// the post-hoc resolve step — otherwise the model has no [id: N]
+				// list to reference and the resolve step silently drops every
+				// castId it hallucinates in response to the output contract's
+				// example (see the plan for this fix).
+				const knownCast =
+					loreType === "scene"
+						? await buildSceneCastList(null, chat.lorebookId!, chatId)
+						: undefined
+
+				// Run iterative summarization, streaming progress back to client
+				const result = await generateSummary({
+					messages,
+					loreType,
+					topic,
+					connection: batchResolved.connection,
+					sampling: batchResolved.sampling!,
+					contextConfig,
+					promptConfig,
+					summarizePromptConfig,
+					knownCast,
+					batchConnection: batchResolved.connection,
+					batchSampling: batchResolved.sampling,
+					synthConnection: synthResolved.connection,
+					synthSampling: synthResolved.sampling,
+					nameConnection: nameResolved.connection,
+					nameSampling: nameResolved.sampling,
+					onProgress: (data) => {
+						emitToUser(
+							"chats:summarize:progress",
+							data satisfies Sockets.Chats.Summarize.Progress
+						)
+					},
+					onLlmCall: (entry) => {
+						emitToUser(
+							"chats:summarize:trace",
+							entry satisfies Sockets.Chats.Summarize.TraceEntry
+						)
+					}
+				})
+
+				// For character lore, resolve or create the lorebook binding
+				let lorebookBindingId: number | null = null
+				if (
+					loreType === "character" &&
+					(lorebookBindingCharacterId || lorebookBindingPersonaId)
+				) {
+					lorebookBindingId = await resolveOrCreateBinding({
+						lorebookId: chat.lorebookId!,
+						characterId: lorebookBindingCharacterId,
+						personaId: lorebookBindingPersonaId
+					})
+				}
+
+				let participantCharacters: number[] | undefined
+				let mentionedCharacters: number[] | undefined
+				let suggestedParticipantCharacters: string[] | undefined
+				let suggestedMentionedCharacters: string[] | undefined
+				if (loreType === "scene") {
+					const participants = resolveCharacterRefs(
+						result.participantCharacters ?? [],
+						knownCast!
+					)
+					const mentioned = resolveCharacterRefs(
+						result.mentionedCharacters ?? [],
+						knownCast!
+					)
+					participantCharacters = participants.ids
+					mentionedCharacters = mentioned.ids
+					;({
+						participants: suggestedParticipantCharacters,
+						mentioned: suggestedMentionedCharacters
+					} = reconcileSuggestedNames(
+						participants.suggestedNames,
+						mentioned.suggestedNames
+					))
+
+					// Guarantee: whoever actually sent a message in this range is a
+					// participant, regardless of what the extraction LLM decided —
+					// charIds/personaIds (every distinct sender) were already
+					// computed above for building sender names.
+					const senderBindingIds = new Set<number>()
+					for (const characterId of charIds) {
+						senderBindingIds.add(
+							await resolveOrCreateBinding({
+								lorebookId: chat.lorebookId!,
+								characterId
+							})
+						)
+					}
+					for (const personaId of personaIds) {
+						senderBindingIds.add(
+							await resolveOrCreateBinding({
+								lorebookId: chat.lorebookId!,
+								personaId
+							})
+						)
+					}
+
+					;({
+						participants: participantCharacters,
+						mentioned: mentionedCharacters
+					} = reconcileParticipantsAndMentioned(
+						participantCharacters,
+						mentionedCharacters,
+						senderBindingIds
+					))
+				}
+
+				// A new unbound "background" binding can still be minted above via
+				// resolveOrCreateBinding for a message sender's first appearance in
+				// this lorebook (unrelated to extraction — extracted-but-unmatched
+				// names are now deferred suggestions, not eager rows) — push a fresh
+				// list to the client now, before chats:summarize:complete, so the
+				// modal's dropdown/chip names are warm.
+				if (emitToUser) {
+					await lorebookBindingListHandler.handler(
+						socket,
+						{ lorebookId: chat.lorebookId! },
+						emitToUser
+					)
+				}
+
+				const response: Sockets.Chats.Summarize.Response = {
+					content: result.content ?? result.raw,
+					name: result.name,
+					raw: result.raw,
+					lorebookId: chat.lorebookId!,
+					batchCount: result.batchCount,
+					lorebookBindingId,
+					participantCharacters,
+					mentionedCharacters,
+					suggestedParticipantCharacters,
+					suggestedMentionedCharacters
+				}
+
+				emitToUser("chats:summarize:complete", response)
+				return response
+			} finally {
+				inFlightSummarizeChatIds.delete(chatId)
 			}
 		})
-
-		// For character lore, resolve or create the lorebook binding
-		let lorebookBindingId: number | null = null
-		if (
-			loreType === "character" &&
-			(lorebookBindingCharacterId || lorebookBindingPersonaId)
-		) {
-			lorebookBindingId = await resolveOrCreateBinding({
-				lorebookId: chat.lorebookId!,
-				characterId: lorebookBindingCharacterId,
-				personaId: lorebookBindingPersonaId
-			})
-		}
-
-		const response: Sockets.Chats.Summarize.Response = {
-			content: result.content ?? result.raw,
-			name: result.name,
-			raw: result.raw,
-			lorebookId: chat.lorebookId!,
-			batchCount: result.batchCount,
-			lorebookBindingId,
-			participantCharacters: result.participantCharacters,
-			mentionedCharacters: result.mentionedCharacters
-		}
-
-		emitToUser("chats:summarize:complete", response)
-		return response
 	}
 }
 
@@ -307,10 +386,13 @@ export const chatsSetLorebookHandler: Handler<
 		const userId = socket.user!.id
 		const { chatId, lorebookId } = params
 
-		// Verify ownership
+		// Verify ownership — shared helper, see chatsSummarizeHandler above.
+		const chatAccess = await checkChatAccess(chatId, userId)
+		if (!chatAccess.isOwner) {
+			throw new Error("Chat not found or access denied.")
+		}
 		const chat = await db.query.chats.findFirst({
-			where: (c, { and, eq }) =>
-				and(eq(c.id, chatId), eq(c.userId, userId))
+			where: eq(schema.chats.id, chatId)
 		})
 
 		if (!chat) {

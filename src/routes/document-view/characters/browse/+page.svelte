@@ -33,7 +33,23 @@
 
 	let results: LibraryCatalogItem[] = $state([])
 	let loading = $state(false)
+	// A "Load More" click made while one is already in flight is remembered
+	// instead of silently dropped — fires immediately once the in-flight one
+	// settles rather than requiring the user to notice and re-click.
+	let loadMoreQueued = $state(false)
+	// Content filtering can make a page come back with zero visible items
+	// even though more upstream pages exist — a single click shouldn't
+	// "succeed" into nothing. Bounded so a heavily filtered query can't spin
+	// forever / compound rate-limit pressure.
+	let loadMoreAutoContinueAttempts = 0
+	const MAX_LOAD_MORE_AUTO_CONTINUE = 3
+	let stillFiltering = $state(false)
 	let hasMore = $state(false)
+	// Raw upstream offset for the next page, from the server's
+	// CardSourceSearchResult.nextOffset — can differ from results.length
+	// once content filtering has removed items, so it must be tracked
+	// separately rather than derived from the (filtered) results array.
+	let nextOffset = $state(0)
 	let error = $state("")
 	let unreachable = $state(false)
 
@@ -41,6 +57,10 @@
 	let loadingDetail = $state(false)
 	let downloadingKey: string | null = $state(null)
 	let status = $state("")
+
+	let sourcesForCharacters = $derived.by(
+		() => capabilities?.sources.filter((s) => s.supportsCharacters) ?? []
+	)
 
 	let latestRequestId = ""
 	let latestDetailRequestId = ""
@@ -66,13 +86,18 @@
 			sort: activeSource === "charavault" ? activeSort : undefined,
 			hasBook:
 				activeSource === "charavault" && hasBookOnly ? true : undefined,
-			cursor: { limit: PAGE_SIZE, offset: append ? results.length : 0 },
+			cursor: { limit: PAGE_SIZE, offset: append ? nextOffset : 0 },
 			requestId
 		})
 	}
 
 	function loadMore() {
-		if (!hasMore || loading) return
+		if (!hasMore) return
+		if (loading) {
+			loadMoreQueued = true
+			return
+		}
+		loadMoreAutoContinueAttempts = 0
 		fetchLibrary(true)
 	}
 
@@ -103,59 +128,121 @@
 		fetchLibrary(false)
 	}
 
-	onMount(() => {
-		socket.on("cardSources:capabilities", (msg) => {
-			capabilities = msg
-		})
-		socket.on("characters:searchLibrary", (msg) => {
-			if (msg.requestId !== latestRequestId) return
-			results = pendingIsAppend
-				? [...results, ...msg.characters]
-				: msg.characters
-			hasMore = msg.hasMore
-			loading = false
-		})
-		socket.on("characters:searchLibrary:error", (msg) => {
-			if (msg.requestId !== latestRequestId) return
-			loading = false
-			if (!pendingIsAppend) results = []
-			unreachable = !!msg.unreachable
-			error =
-				msg.error ||
-				(msg.rateLimited
-					? "This source is busy right now — try again shortly."
-					: "Failed to search the character library.")
-			announce(error)
-		})
-		socket.on("cardSources:cardDetail", (msg) => {
-			if (msg.requestId !== latestDetailRequestId) return
-			loadingDetail = false
-			if (detailsFor) detailsFor = { ...detailsFor, ...msg }
-		})
-		socket.on("characters:importFromLibrary", (msg) => {
-			downloadingKey = null
-			if (msg.character) {
-				announce(`Downloaded ${msg.character.name}.`)
-				goto(`/document-view/characters/${msg.character.id}/edit`)
+	function handleCardSourcesCapabilities(
+		msg: Sockets.CardSources.Capabilities.Response
+	) {
+		capabilities = msg
+	}
+	function handleCharactersSearchLibrary(msg: any) {
+		if (msg.requestId !== latestRequestId) return
+		results = pendingIsAppend
+			? [...results, ...msg.characters]
+			: msg.characters
+		hasMore = msg.hasMore
+		nextOffset =
+			msg.nextOffset ??
+			(pendingIsAppend
+				? nextOffset + msg.characters.length
+				: msg.characters.length)
+		loading = false
+
+		if (pendingIsAppend) {
+			if (
+				msg.characters.length === 0 &&
+				hasMore &&
+				loadMoreAutoContinueAttempts < MAX_LOAD_MORE_AUTO_CONTINUE
+			) {
+				// This page filtered down to nothing but more upstream pages
+				// exist — keep going automatically rather than leaving the
+				// click looking like it did nothing.
+				loadMoreAutoContinueAttempts++
+				loadMoreQueued = false
+				stillFiltering = true
+				announce("Still filtering, loading more results…")
+				fetchLibrary(true)
+				return
 			}
-		})
+			loadMoreAutoContinueAttempts = 0
+			stillFiltering = false
+		}
+		if (loadMoreQueued) {
+			loadMoreQueued = false
+			loadMore()
+		}
+	}
+	function handleCharactersSearchLibraryError(msg: any) {
+		if (msg.requestId !== latestRequestId) return
+		loading = false
+		loadMoreQueued = false
+		loadMoreAutoContinueAttempts = 0
+		stillFiltering = false
+		if (!pendingIsAppend) results = []
+		unreachable = !!msg.unreachable
+		error =
+			msg.error ||
+			(msg.rateLimited
+				? "This source is busy right now — try again shortly."
+				: "Failed to search the character library.")
+		announce(error)
+	}
+	function handleCardSourcesCardDetail(msg: any) {
+		if (msg.requestId !== latestDetailRequestId) return
+		loadingDetail = false
+		if (detailsFor) detailsFor = { ...detailsFor, ...msg }
+	}
+	function handleCharactersImportFromLibrary(msg: any) {
+		downloadingKey = null
+		if (msg.character) {
+			announce(`Downloaded ${msg.character.name}.`)
+			goto(`/document-view/characters/${msg.character.id}/edit`)
+		}
+	}
+	function handleCharactersImportFromLibraryError(msg: { error?: string }) {
+		downloadingKey = null
+		status = msg.error || "Failed to download character."
+		announce(status)
+	}
+
+	onMount(() => {
+		socket.on("cardSources:capabilities", handleCardSourcesCapabilities)
+		socket.on("characters:searchLibrary", handleCharactersSearchLibrary)
+		socket.on(
+			"characters:searchLibrary:error",
+			handleCharactersSearchLibraryError
+		)
+		socket.on("cardSources:cardDetail", handleCardSourcesCardDetail)
+		socket.on(
+			"characters:importFromLibrary",
+			handleCharactersImportFromLibrary
+		)
 		socket.on(
 			"characters:importFromLibrary:error",
-			(msg: { error?: string }) => {
-				downloadingKey = null
-				status = msg.error || "Failed to download character."
-				announce(status)
-			}
+			handleCharactersImportFromLibraryError
 		)
 		socket.emit("cardSources:capabilities", {})
 		fetchLibrary(false)
 		return () => {
-			socket.off("cardSources:capabilities")
-			socket.off("characters:searchLibrary")
-			socket.off("characters:searchLibrary:error")
-			socket.off("cardSources:cardDetail")
-			socket.off("characters:importFromLibrary")
-			socket.off("characters:importFromLibrary:error")
+			socket.off(
+				"cardSources:capabilities",
+				handleCardSourcesCapabilities
+			)
+			socket.off(
+				"characters:searchLibrary",
+				handleCharactersSearchLibrary
+			)
+			socket.off(
+				"characters:searchLibrary:error",
+				handleCharactersSearchLibraryError
+			)
+			socket.off("cardSources:cardDetail", handleCardSourcesCardDetail)
+			socket.off(
+				"characters:importFromLibrary",
+				handleCharactersImportFromLibrary
+			)
+			socket.off(
+				"characters:importFromLibrary:error",
+				handleCharactersImportFromLibraryError
+			)
 		}
 	})
 </script>
@@ -177,7 +264,7 @@
 	</div>
 {/if}
 
-{#if capabilities && capabilities.sources.length > 1}
+{#if sourcesForCharacters.length > 1}
 	<div class="a11y-field">
 		<label for="a11y-char-browse-source">Source</label>
 		<select
@@ -185,7 +272,7 @@
 			bind:value={activeSource}
 			onchange={() => fetchLibrary(false)}
 		>
-			{#each capabilities.sources as s}
+			{#each sourcesForCharacters as s}
 				<option value={s.id}>{s.label}</option>
 			{/each}
 		</select>
@@ -320,6 +407,6 @@
 		onclick={loadMore}
 		disabled={loading}
 	>
-		{loading ? "Loading…" : "Load More"}
+		{loading ? (stillFiltering ? "Filtering…" : "Loading…") : "Load More"}
 	</button>
 {/if}

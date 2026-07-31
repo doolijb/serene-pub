@@ -25,13 +25,20 @@
 
 	type ValidationErrors = Record<string, string>
 
-	let title = $state(initialTitle)
+	// Branching is a cheap, reversible action — default to a generated title
+	// so the Create button is enabled immediately instead of forcing the
+	// user to type something first. Still fully editable before confirming.
+	function defaultTitle() {
+		return initialTitle || `Branch – ${new Date().toLocaleString()}`
+	}
+
+	let title = $state(defaultTitle())
 	let inputRef: HTMLInputElement | null = null
 	let validationErrors: ValidationErrors = $state({})
 
 	// Update title when initialTitle changes
 	$effect(() => {
-		title = initialTitle
+		title = defaultTitle()
 	})
 
 	$effect(() => {

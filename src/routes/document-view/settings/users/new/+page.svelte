@@ -36,19 +36,22 @@
 		})
 	}
 
+	function handleUsersCreate(msg: any) {
+		saving = false
+		if (msg.user) goto("/document-view/settings/users")
+	}
+	function handleUsersCreateError(msg: { error?: string }) {
+		saving = false
+		error = msg.error || "Failed to create user."
+		announce(error)
+	}
+
 	onMount(() => {
-		socket.on("users:create", (msg) => {
-			saving = false
-			if (msg.user) goto("/document-view/settings/users")
-		})
-		socket.on("users:create:error", (msg: { error?: string }) => {
-			saving = false
-			error = msg.error || "Failed to create user."
-			announce(error)
-		})
+		socket.on("users:create", handleUsersCreate)
+		socket.on("users:create:error", handleUsersCreateError)
 		return () => {
-			socket.off("users:create")
-			socket.off("users:create:error")
+			socket.off("users:create", handleUsersCreate)
+			socket.off("users:create:error", handleUsersCreateError)
 		}
 	})
 </script>

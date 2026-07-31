@@ -5,7 +5,6 @@
 	import CharacterCreator from "$lib/client/components/modals/CharacterCreatorModal.svelte"
 	import PersonaCreator from "$lib/client/components/modals/PersonaCreatorModal.svelte"
 	import BindingLinkerModal from "$lib/client/components/modals/BindingLinkerModal.svelte"
-	import NodeLinkerModal from "$lib/client/components/modals/NodeLinkerModal.svelte"
 	import OllamaIcon from "$lib/client/components/icons/OllamaIcon.svelte"
 	import { FileUpload } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
@@ -68,14 +67,12 @@
 	let showCharacterCreator = $state(false)
 	let showPersonaCreator = $state(false)
 
-	// Binding / node linker modals (Flow 1 + 2)
+	// Binding linker modal (Flow 1) — Flow 2 (node linking) is gone, binding
+	// IS the graph row now, see the lorebookBindings/narrativeNodes merge plan.
 	let bindingLinkerOpen = $state(false)
 	let bindingLinkerData = $state<Sockets.BindingCheck.Result.Response | null>(
 		null
 	)
-	let nodeLinkerOpen = $state(false)
-	let nodeLinkerData =
-		$state<Sockets.BindingCheck.NodeResult.Response | null>(null)
 
 	// Connection setup state
 	let connectionChoice: "ollama" | "koboldcpp" | "manual" | null =
@@ -117,6 +114,16 @@
 	)
 	let hasCharacter = $derived(characters.length > 0)
 	let hasPersona = $derived(personas.length > 0)
+	// Same "favorites first" sort as CharactersSidebar.svelte's filteredCharacters
+	let sortedCharacters = $derived.by(() => {
+		const list = [...characters]
+		list.sort((a, b) => {
+			if (a.isFavorite && !b.isFavorite) return -1
+			if (!a.isFavorite && b.isFavorite) return 1
+			return 0
+		})
+		return list
+	})
 
 	// Wizard path drives welcome copy
 	let wizardPath = $derived.by(
@@ -545,17 +552,11 @@
 			})
 		})
 
-		// Binding / node linker modals
+		// Binding linker modal
 		socket.on("bindingCheck:result", (data) => {
 			if (data.orphanedBindings.length > 0) {
 				bindingLinkerData = data
 				bindingLinkerOpen = true
-			}
-		})
-		socket.on("bindingCheck:nodeResult", (data) => {
-			if (data.pendingBindings.length > 0) {
-				nodeLinkerData = data
-				nodeLinkerOpen = true
 			}
 		})
 
@@ -573,7 +574,6 @@
 
 	onDestroy(() => {
 		socket.off("bindingCheck:result")
-		socket.off("bindingCheck:nodeResult")
 		socket.off("characters:list")
 		socket.off("personas:list")
 		socket.off("chats:list")
@@ -708,7 +708,7 @@
 				<div
 					class="grid grid-cols-1 justify-between gap-2 lg:grid-cols-2"
 				>
-					{#each characters as character (character.id)}
+					{#each sortedCharacters as character (character.id)}
 						<SidebarListItem
 							onclick={() => {
 								panelsCtx.digest.chatCharacterId = character.id
@@ -751,7 +751,7 @@
 				<div
 					class="grid grid-cols-[repeat(auto-fill,minmax(16.625rem,1fr))] gap-3"
 				>
-					{#each characters as character (character.id)}
+					{#each sortedCharacters as character (character.id)}
 						<CharacterCardItem
 							{character}
 							onclick={() => {
@@ -2036,16 +2036,6 @@
 		unboundEntities={bindingLinkerData.unboundEntities}
 		onOpenChange={(e) => (bindingLinkerOpen = e.open)}
 		onDone={() => (bindingLinkerData = null)}
-	/>
-{/if}
-
-{#if nodeLinkerData}
-	<NodeLinkerModal
-		bind:open={nodeLinkerOpen}
-		lorebookId={nodeLinkerData.lorebookId}
-		pendingBindings={nodeLinkerData.pendingBindings}
-		onOpenChange={(e) => (nodeLinkerOpen = e.open)}
-		onDone={() => (nodeLinkerData = null)}
 	/>
 {/if}
 

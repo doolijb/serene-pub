@@ -114,8 +114,12 @@ export interface ExportedScene {
 	localId: number
 	name: string | null
 	summary: string | null
-	participantCharacters: string[]
-	mentionedCharacters: string[]
+	// localIds into the export's bindings[] array, not raw DB ids (see the
+	// merge plan — these used to be name strings, matched by name on
+	// import; now they're direct binding references, translated the same
+	// way bindingLocalId is elsewhere in this format).
+	participantCharacters: number[]
+	mentionedCharacters: number[]
 }
 
 export function mapHistoryEntry(
@@ -300,17 +304,22 @@ export function mapSceneForExport(
 	scene: {
 		name: string | null
 		summary: string | null
-		participantCharacters: string[]
-		mentionedCharacters: string[]
+		participantCharacters: number[]
+		mentionedCharacters: number[]
 	},
-	localId: number
+	localId: number,
+	bindingLocalIdByRealId: Map<number, number>
 ): ExportedScene {
+	const toLocalIds = (ids: number[]) =>
+		ids
+			.map((id) => bindingLocalIdByRealId.get(id))
+			.filter((id): id is number => id !== undefined)
 	return {
 		localId,
 		name: scene.name,
 		summary: scene.summary,
-		participantCharacters: scene.participantCharacters,
-		mentionedCharacters: scene.mentionedCharacters
+		participantCharacters: toLocalIds(scene.participantCharacters ?? []),
+		mentionedCharacters: toLocalIds(scene.mentionedCharacters ?? [])
 	}
 }
 
@@ -320,6 +329,11 @@ export interface ExportedNarrativeNode {
 	nodeState: string
 	nodeVisibility: string
 	aliases: string[]
+	// Identity names folded in via a completed graph "Absorb" merge — kept
+	// separate from `aliases` (see lorebookBindings.absorbedAliases) and,
+	// unlike aliases, never entity-synced even for a character/persona-linked
+	// binding, so it must always round-trip regardless of link status.
+	absorbedAliases: string[]
 	summary: string | null
 	bindingLocalId: number | null
 	parentLocalId: number | null
@@ -333,12 +347,17 @@ export interface ExportedNarrativeNode {
 }
 
 interface NarrativeNodeLike {
+	// Post-merge (see the lorebookBindings/narrativeNodes merge plan): a
+	// node's own id doubles as its binding id — this row IS the binding —
+	// so bindingLocalId resolves via the node's own id, not a separate FK
+	// field like the old lorebookBindingId.
+	id: number
 	name: string
 	nodeState: string
 	nodeVisibility: string
 	aliases: string[]
+	absorbedAliases: string[]
 	summary: string | null
-	lorebookBindingId: number | null
 	parentNodeId: number | null
 	historyEntryId: number | null
 	sceneId: number | null
@@ -359,11 +378,9 @@ export function mapNarrativeNode(
 		nodeState: node.nodeState,
 		nodeVisibility: node.nodeVisibility,
 		aliases: node.aliases,
+		absorbedAliases: node.absorbedAliases,
 		summary: node.summary,
-		bindingLocalId:
-			node.lorebookBindingId !== null
-				? (bindingLocalIdByRealId.get(node.lorebookBindingId) ?? null)
-				: null,
+		bindingLocalId: bindingLocalIdByRealId.get(node.id) ?? null,
 		parentLocalId:
 			node.parentNodeId !== null
 				? (nodeLocalIdByRealId.get(node.parentNodeId) ?? null)

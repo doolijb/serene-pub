@@ -1,4 +1,5 @@
 import type { ChatCompletionMessageParam } from "openai/resources/index.mjs"
+import { ROLE_MARKER_PATTERN } from "$lib/shared/utils/PromptBlockFormatter"
 
 // Every rendered message block follows the same "Name: message" convention
 // (see assistantBlock/userBlock in defaults.ts's context templates) — used
@@ -39,11 +40,13 @@ function extractSpeakerName(content: string): string | null {
 export function parseSplitChatPrompt(
 	prompt: string
 ): ChatCompletionMessageParam[] {
-	const blocks = prompt.split(/(?=<@role:(user|assistant|system)>\s*)/g)
+	const blocks = prompt.split(
+		new RegExp(`(?=${ROLE_MARKER_PATTERN}\\s*)`, "g")
+	)
 	const parsed = blocks
 		.map((block) => {
 			const match = block.match(
-				/^<@role:(user|assistant|system)>\s*([\s\S]*)$/
+				new RegExp(`^${ROLE_MARKER_PATTERN}\\s*([\\s\\S]*)$`)
 			)
 			return match ? { role: match[1], content: match[2].trim() } : null
 		})

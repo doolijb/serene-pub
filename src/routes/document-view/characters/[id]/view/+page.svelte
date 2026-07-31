@@ -21,18 +21,20 @@
 		socket.emit("characters:get", { id: characterId })
 	}
 
+	function handleCharactersGet(msg: any) {
+		loaded = true
+		if (!msg.character) {
+			notFound = true
+			return
+		}
+		character = msg.character
+	}
+
 	onMount(() => {
-		socket.on("characters:get", (msg) => {
-			loaded = true
-			if (!msg.character) {
-				notFound = true
-				return
-			}
-			character = msg.character
-		})
+		socket.on("characters:get", handleCharactersGet)
 		load()
 		return () => {
-			socket.off("characters:get")
+			socket.off("characters:get", handleCharactersGet)
 		}
 	})
 </script>

@@ -1,5 +1,8 @@
 import type { InterpolationContext } from "./InterpolationEngine"
-import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
+import {
+	resolveCharacterName,
+	resolvePersonaName
+} from "$lib/shared/utils/resolveCharacterName"
 
 // Define processed chat message format
 export interface ProcessedChatMessage {
@@ -77,13 +80,30 @@ export class ChatMessageProcessor
 			}
 		}
 		// Handle character-specific context
-		else if (message.characterId && this.chat.chatCharacters) {
-			const foundChar = this.chat.chatCharacters.find(
+		else if (message.characterId) {
+			// Active participants first; a removed participant's row won't
+			// be in this.chat.chatCharacters (getPromptChatFromDb filters it
+			// out for every "who's active" consumer), but their past
+			// messages still need to resolve a name — fall back to the
+			// separately-supplied removed list, then to the removedAt-time
+			// name snapshot if the entity itself has since been deleted
+			// globally too.
+			const foundChar = this.chat.chatCharacters?.find(
 				(cc: any) => cc.character.id === message.characterId
 			)?.character
 			let foundName: string | undefined
 			if (foundChar) {
 				foundName = resolveCharacterName(foundChar)
+			} else {
+				const removedCC = this.chat.removedChatCharacters?.find(
+					(cc: any) => cc.characterId === message.characterId
+				)
+				if (removedCC) {
+					foundName = resolveCharacterName(
+						removedCC.character,
+						removedCC.removedName ?? "Unknown"
+					)
+				}
 			}
 			if (message.role === "assistant") {
 				assistantName = foundName || charName
@@ -96,12 +116,26 @@ export class ChatMessageProcessor
 		}
 
 		// Handle persona-specific context
-		if (message.personaId && this.chat.chatPersonas) {
-			const foundPersona = this.chat.chatPersonas.find(
+		if (message.personaId) {
+			const foundPersona = this.chat.chatPersonas?.find(
 				(cp: any) => cp.persona.id === message.personaId
 			)?.persona
+			let foundName: string | undefined
 			if (foundPersona) {
-				userName = foundPersona.name
+				foundName = resolvePersonaName(foundPersona)
+			} else {
+				const removedCP = this.chat.removedChatPersonas?.find(
+					(cp: any) => cp.personaId === message.personaId
+				)
+				if (removedCP) {
+					foundName = resolvePersonaName(
+						removedCP.persona,
+						removedCP.removedName ?? "Unknown"
+					)
+				}
+			}
+			if (foundName) {
+				userName = foundName
 				msgInterpolationContext = {
 					...msgInterpolationContext,
 					user: userName,

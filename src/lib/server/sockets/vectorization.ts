@@ -2,7 +2,6 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
-import { isAndroidWrapper } from "$lib/server/utils"
 import { EMBEDDING_MODELS, findModel } from "$lib/server/embedding/models"
 import {
 	loadEmbeddingModel,
@@ -12,15 +11,22 @@ import {
 	getLoadedModelId,
 	isModelReady,
 	isModelCached,
-	getLoadError
+	getLoadError,
+	getLocalEmbeddingUnsupportedReason,
+	resolveVectorizationApiKey
 } from "$lib/server/embedding/index"
+import {
+	encryptToken,
+	VECTORIZATION_API_KEY_INFO
+} from "$lib/server/utils/tokenCrypto"
 import { systemSettingsGet } from "./systemSettings"
 import { checkChatAccess } from "$lib/server/utils/chatAccess"
 import {
 	startVectorizationQueue,
 	stopVectorization,
 	isVectorizationRunning,
-	setProgressEmitter,
+	registerProgressEmitter,
+	unregisterProgressEmitter,
 	countUnembedded,
 	getPriorityQueue,
 	getCompletedHistory,
@@ -28,7 +34,8 @@ import {
 	enqueueLorebookGroup,
 	enqueueCharacterGroup,
 	moveQueueGroup,
-	removeQueueGroup
+	removeQueueGroup,
+	clearVectorizationFailureTracking
 } from "$lib/server/embedding/vectorizationQueue"
 
 // ---------------------------------------------------------------------------
@@ -42,54 +49,6 @@ function needsEmbedding(
 	currentModel: string
 ) {
 	return or(isNull(embeddingCol), ne(modelCol, currentModel))
-}
-
-async function ragTypeCounts(
-	table: any,
-	embeddingCol: any,
-	modelCol: any,
-	currentModel: string,
-	scopeCondition?: any
-): Promise<Sockets.Vectorization.RagTypeCounts> {
-	const base = scopeCondition
-		? and(
-				scopeCondition,
-				needsEmbedding(embeddingCol, modelCol, currentModel)
-			)
-		: needsEmbedding(embeddingCol, modelCol, currentModel)
-
-	const [total, nullCount, staleCount] = await Promise.all([
-		db.$count(table, scopeCondition ?? undefined),
-		db.$count(
-			table,
-			and(scopeCondition ?? undefined, isNull(embeddingCol))
-		),
-		db.$count(
-			table,
-			and(
-				scopeCondition ?? undefined,
-				ne(modelCol, currentModel),
-				isNull(embeddingCol) ? undefined : undefined
-			)
-		)
-	])
-
-	// stale = has embedding but wrong model
-	const staleOnly = await db.$count(
-		table,
-		and(
-			scopeCondition ?? undefined,
-			sql`${embeddingCol} IS NOT NULL`,
-			ne(modelCol, currentModel)
-		)
-	)
-
-	return {
-		total: Number(total),
-		nullCount: Number(nullCount),
-		staleCount: Number(staleOnly),
-		readyCount: Number(total) - Number(nullCount) - Number(staleOnly)
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +75,8 @@ export const vectorizationListModels: Handler<
 				mode: true,
 				apiBaseUrl: true,
 				apiKey: true,
+				apiKeyIv: true,
+				apiKeyAuthTag: true,
 				apiModel: true,
 				apiDimensions: true
 			}
@@ -139,7 +100,15 @@ export const vectorizationListModels: Handler<
 			loadError: getLoadError(),
 			mode,
 			apiBaseUrl: vecConfig?.apiBaseUrl ?? null,
-			apiKey: vecConfig?.apiKey ?? null,
+			// Decrypted here, not switched to a masked/boolean field —
+			// EmbeddingConnectionPanel.svelte binds this straight into an
+			// editable input to populate the edit form (the same "load the
+			// real value back on edit" pattern connections:get already uses),
+			// so the client genuinely needs the plaintext value. Admin-only
+			// exposure over the wire was already an accepted tradeoff before
+			// this fix; what changes here is that the DB row is no longer
+			// stored in plaintext, not who gets to see it decrypted.
+			apiKey: vecConfig ? resolveVectorizationApiKey(vecConfig) : null,
 			apiModel: vecConfig?.apiModel ?? null,
 			apiDimensions: vecConfig?.apiDimensions ?? null
 		}
@@ -155,14 +124,10 @@ export const vectorizationEnableVectorization: Handler<
 	event: "vectorization:enable",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		if (isAndroidWrapper()) {
-			// Local vectorization needs onnxruntime-node, a native addon whose
-			// prebuilt binaries are glibc-linked and can't load under Android's
-			// Bionic userspace. External API vectorization (vectorizationSetApiConfig)
-			// has no such restriction — it's plain HTTP.
-			throw new Error(
-				"Local vectorization is not available in the Android app — use an external API instead"
-			)
+		const unsupportedReason = await getLocalEmbeddingUnsupportedReason()
+		if (unsupportedReason) {
+			emitToUser("vectorization:enable:error", { error: unsupportedReason })
+			throw new Error(unsupportedReason)
 		}
 		const modelDef = findModel(params.modelName)
 		if (!modelDef) {
@@ -198,8 +163,6 @@ export const vectorizationEnableVectorization: Handler<
 			.update(schema.vectorizationConfigs)
 			.set({ mode: "local" })
 			.where(eq(schema.vectorizationConfigs.id, 1))
-
-		setProgressEmitter(emitToUser)
 
 		if (params.startNow) {
 			startVectorizationQueue({ startFromBeginning: true })
@@ -254,12 +217,30 @@ export const vectorizationSetApiConfig: Handler<
 
 		const modelId = buildApiModelId(params.baseUrl, params.model)
 
+		// Encrypted at rest (tokenCrypto.ts) — stored plaintext before this
+		// fix. Omitting apiKey/apiKeyIv/apiKeyAuthTag entirely when no key was
+		// supplied leaves any previously-saved key (iv/authTag included)
+		// untouched rather than clobbering it with nulls.
+		const apiKeyColumns = params.apiKey
+			? (() => {
+					const enc = encryptToken(
+						params.apiKey!,
+						VECTORIZATION_API_KEY_INFO
+					)
+					return {
+						apiKey: enc.ciphertext,
+						apiKeyIv: enc.iv,
+						apiKeyAuthTag: enc.authTag
+					}
+				})()
+			: {}
+
 		await db
 			.update(schema.vectorizationConfigs)
 			.set({
 				mode: "api",
 				apiBaseUrl: params.baseUrl,
-				apiKey: params.apiKey,
+				...apiKeyColumns,
 				apiModel: params.model,
 				apiDimensions: dimensions
 			})
@@ -274,7 +255,10 @@ export const vectorizationSetApiConfig: Handler<
 			})
 			.where(eq(schema.systemSettings.id, 1))
 
-		setProgressEmitter(emitToUser)
+		// A corrected config might be exactly what fixes an item that was
+		// previously failing — don't leave it excluded from picking until
+		// the next full queue restart.
+		clearVectorizationFailureTracking()
 
 		if (params.startNow) {
 			startVectorizationQueue({ startFromBeginning: true })
@@ -322,6 +306,11 @@ export const vectorizationSetModel: Handler<
 	event: "vectorization:setModel",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		const unsupportedReason = await getLocalEmbeddingUnsupportedReason()
+		if (unsupportedReason) {
+			emitToUser("vectorization:setModel:error", { error: unsupportedReason })
+			throw new Error(unsupportedReason)
+		}
 		const modelDef = findModel(params.modelName)
 		if (!modelDef) {
 			emitToUser("vectorization:setModel:error", {
@@ -353,6 +342,10 @@ export const vectorizationSetModel: Handler<
 			.update(schema.vectorizationConfigs)
 			.set({ mode: "local" })
 			.where(eq(schema.vectorizationConfigs.id, 1))
+		// A model switch might be exactly what fixes an item that was
+		// previously failing (e.g. dimension mismatch) — don't leave it
+		// excluded from picking until the next full queue restart.
+		clearVectorizationFailureTracking()
 
 		const res: Sockets.Vectorization.SetModel.Response = {
 			success: true,
@@ -371,7 +364,6 @@ export const vectorizationStartQueue: Handler<
 	event: "vectorization:startQueue",
 	handler: async (socket, _params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		setProgressEmitter(emitToUser)
 		await startVectorizationQueue()
 
 		const res: Sockets.Vectorization.StartQueue.Response = { success: true }
@@ -723,7 +715,7 @@ export const vectorizationCheckRagStatus: Handler<
 				allLorebookIds
 			)
 			const nnWhere = inArray(
-				schema.narrativeNodes.lorebookId,
+				schema.lorebookBindings.lorebookId,
 				allLorebookIds
 			)
 			const nrWhere = inArray(
@@ -796,18 +788,18 @@ export const vectorizationCheckRagStatus: Handler<
 						)
 					)
 				),
-				db.$count(schema.narrativeNodes, nnWhere),
+				db.$count(schema.lorebookBindings, nnWhere),
 				db.$count(
-					schema.narrativeNodes,
-					and(nnWhere, isNull(schema.narrativeNodes.embedding))
+					schema.lorebookBindings,
+					and(nnWhere, isNull(schema.lorebookBindings.embedding))
 				),
 				db.$count(
-					schema.narrativeNodes,
+					schema.lorebookBindings,
 					and(
 						nnWhere,
-						sql`${schema.narrativeNodes.embedding} IS NOT NULL`,
+						sql`${schema.lorebookBindings.embedding} IS NOT NULL`,
 						ne(
-							schema.narrativeNodes.embeddingModel,
+							schema.lorebookBindings.embeddingModel,
 							activeModelName
 						)
 					)
@@ -945,6 +937,13 @@ export function registerVectorizationHandlers(
 	register(socket, vectorizationCheckRagStatus, emitToUser)
 	register(socket, vectorizationSetChatRagIgnored, emitToUser)
 
-	// Re-attach progress emitter whenever a new socket connects
-	setProgressEmitter(emitToUser)
+	// Progress telemetry (priorityQueue/history) spans every user's chats/
+	// lorebooks/characters instance-wide — only admins should ever receive
+	// it. vectorizationCheckRagStatus/vectorizationSetChatRagIgnored above
+	// are correctly per-chat-scoped for any user; this is the one piece of
+	// this module that isn't for everyone.
+	if (socket.user?.isAdmin) {
+		registerProgressEmitter(emitToUser)
+		socket.on("disconnect", () => unregisterProgressEmitter(emitToUser))
+	}
 }

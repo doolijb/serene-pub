@@ -351,6 +351,7 @@
 
 	function handleChatClick(chat: Sockets.Chats.List.Response["chatList"][0]) {
 		goto(`/chats/${chat.id}`)
+		panelsCtx.fullscreenPanel = null
 	}
 
 	function handleChatEditClick(

@@ -54,47 +54,53 @@
 		socket.emit("personas:delete", { id: personaId })
 	}
 
-	onMount(() => {
-		socket.on("personas:get", (msg) => {
-			loaded = true
-			if (!msg.persona) {
-				notFound = true
-				return
-			}
+	function handlePersonasGet(msg: any) {
+		loaded = true
+		if (!msg.persona) {
+			notFound = true
+			return
+		}
+		name = msg.persona.name
+		description = msg.persona.description
+		isDefault = msg.persona.isDefault
+		isOwner = msg.persona.isOwner
+	}
+	function handlePersonasUpdate(msg: any) {
+		saving = false
+		if (msg.persona) {
 			name = msg.persona.name
 			description = msg.persona.description
 			isDefault = msg.persona.isDefault
-			isOwner = msg.persona.isOwner
-		})
-		socket.on("personas:update", (msg) => {
-			saving = false
-			if (msg.persona) {
-				name = msg.persona.name
-				description = msg.persona.description
-				isDefault = msg.persona.isDefault
-				announce("Persona saved.")
-			}
-		})
-		socket.on("personas:update:error", (msg: { error?: string }) => {
-			saving = false
-			error = msg.error || "Failed to save persona."
-			announce(error)
-		})
-		socket.on("personas:delete", () => {
-			goto("/document-view/personas")
-		})
-		socket.on("personas:delete:error", (msg: { error?: string }) => {
-			deleting = false
-			error = msg.error || "Failed to delete persona."
-			announce(error)
-		})
+			announce("Persona saved.")
+		}
+	}
+	function handlePersonasUpdateError(msg: { error?: string }) {
+		saving = false
+		error = msg.error || "Failed to save persona."
+		announce(error)
+	}
+	function handlePersonasDelete() {
+		goto("/document-view/personas")
+	}
+	function handlePersonasDeleteError(msg: { error?: string }) {
+		deleting = false
+		error = msg.error || "Failed to delete persona."
+		announce(error)
+	}
+
+	onMount(() => {
+		socket.on("personas:get", handlePersonasGet)
+		socket.on("personas:update", handlePersonasUpdate)
+		socket.on("personas:update:error", handlePersonasUpdateError)
+		socket.on("personas:delete", handlePersonasDelete)
+		socket.on("personas:delete:error", handlePersonasDeleteError)
 		load()
 		return () => {
-			socket.off("personas:get")
-			socket.off("personas:update")
-			socket.off("personas:update:error")
-			socket.off("personas:delete")
-			socket.off("personas:delete:error")
+			socket.off("personas:get", handlePersonasGet)
+			socket.off("personas:update", handlePersonasUpdate)
+			socket.off("personas:update:error", handlePersonasUpdateError)
+			socket.off("personas:delete", handlePersonasDelete)
+			socket.off("personas:delete:error", handlePersonasDeleteError)
 		}
 	})
 </script>

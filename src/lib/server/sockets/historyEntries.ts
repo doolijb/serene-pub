@@ -1,6 +1,6 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { asc, eq, desc } from "drizzle-orm"
+import { and, asc, eq, desc, gte, sql } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 // InsertHistoryEntry/SelectHistoryEntry are declared globally in
 // $lib/server/db/types.d.ts (ambient `export global {}` block, same pattern
@@ -31,6 +31,7 @@ export const historyEntryListHandler: Handler<
 		}
 
 		const res = {
+			lorebookId: params.lorebookId,
 			historyEntryList: book.historyEntries
 		}
 		emitToUser("historyEntries:list", res)
@@ -58,41 +59,46 @@ export const createHistoryEntryHandler: Handler<
 			throw new Error("Lorebook not found.")
 		}
 
-		// Get next position if not provided
-		if (data.position === undefined || data.position === null) {
-			const maxPosition = await db.query.historyEntries.findFirst({
-				where: (he, { eq }) => eq(he.lorebookId, data.lorebookId),
-				orderBy: (he, { desc }) => desc(he.position),
-				columns: { position: true }
-			})
-			data.position = (maxPosition?.position ?? -1) + 1
-		}
+		// Advisory lock scoped to lorebookId — without it, two concurrent
+		// creates that both need to compute a position can both read the same
+		// max and insert with the same position. Same fix, same reason, as
+		// resolveOrCreateBinding's already-fixed race.
+		const [newEntry] = await db.transaction(async (tx) => {
+			await tx.execute(
+				sql`select pg_advisory_xact_lock(${data.lorebookId})`
+			)
 
-		// Insert the new entry
-		const [newEntry] = await db
-			.insert(schema.historyEntries)
-			.values(data)
-			.returning()
+			// Get next position if not provided
+			if (data.position === undefined || data.position === null) {
+				const maxPosition = await tx.query.historyEntries.findFirst({
+					where: (he, { eq }) => eq(he.lorebookId, data.lorebookId),
+					orderBy: (he, { desc }) => desc(he.position),
+					columns: { position: true }
+				})
+				data.position = (maxPosition?.position ?? -1) + 1
+			}
+
+			return tx.insert(schema.historyEntries).values(data).returning()
+		})
 
 		autoEnqueueLorebook(newEntry.lorebookId, book.name, "").catch(
 			console.error
 		)
 
-		// Refresh lorebook bindings
+		// Refresh lorebook bindings — both handler calls already emit their
+		// own response internally ("lorebooks:bindingList" /
+		// "historyEntries:list"), so no separate emit is needed here.
 		if (emitToUser) {
-			const bindingListResult = await lorebookBindingListHandler.handler(
+			await lorebookBindingListHandler.handler(
 				socket,
 				{ lorebookId: newEntry.lorebookId },
 				emitToUser
 			)
-			emitToUser("lorebookBindingList", bindingListResult)
-
-			const entryListResult = await historyEntryListHandler.handler(
+			await historyEntryListHandler.handler(
 				socket,
 				{ lorebookId: newEntry.lorebookId },
 				emitToUser
 			)
-			emitToUser("historyEntries:list", entryListResult)
 			emitToUser("historyEntries:create", { historyEntry: newEntry })
 		}
 
@@ -121,13 +127,22 @@ export const updateHistoryEntryHandler: Handler<
 			throw new Error("History entry not found.")
 		}
 
+		// lorebookId is deliberately excluded — ownership is only verified
+		// against the entry's *current* lorebook above; a client-supplied
+		// replacement value here would let a user relocate their own entry
+		// into a lorebook they don't own with no re-validation. position is
+		// also excluded — the real reorder UI goes through the separately
+		// IDOR-checked updatePositions batch handler; this singular update
+		// shouldn't let a raw client set an arbitrary/colliding value.
 		const {
 			id,
+			lorebookId: _lorebookId,
 			createdAt,
 			updatedAt,
 			embedding,
 			embeddingModel,
 			vectorizedAt,
+			position: _position,
 			...fields
 		} = { ...params.historyEntry }
 
@@ -279,11 +294,29 @@ export const iterateNextHistoryEntryHandler: Handler<
 			position: existingEntry.position + 1
 		}
 
-		// Insert the new entry
-		const [newEntry] = await db
-			.insert(schema.historyEntries)
-			.values(data)
-			.returning()
+		// Insert the new entry, first shifting every entry already at or past
+		// the target position forward by one — otherwise the new entry and
+		// whatever was already at position+1 end up sharing a position, with
+		// ambiguous ordering until someone manually fixes it.
+		const [newEntry] = await db.transaction(async (tx) => {
+			await tx
+				.update(schema.historyEntries)
+				.set({ position: sql`${schema.historyEntries.position} + 1` })
+				.where(
+					and(
+						eq(
+							schema.historyEntries.lorebookId,
+							existingEntry.lorebookId
+						),
+						gte(schema.historyEntries.position, data.position!)
+					)
+				)
+
+			return await tx
+				.insert(schema.historyEntries)
+				.values(data)
+				.returning()
+		})
 
 		// Refresh history entry list
 		if (emitToUser) {

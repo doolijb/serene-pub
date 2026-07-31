@@ -89,8 +89,15 @@ declare global {
 					id: number
 				}
 				interface Response {
+					// embedding/embeddingModel/vectorizedAt are deliberately
+					// excluded — see the `columns` restriction in
+					// charactersGet (characters.ts) — unlike Create/Update
+					// below, which return the full row.
 					character:
-						| (SelectCharacter & {
+						| (Omit<
+								SelectCharacter,
+								"embedding" | "embeddingModel" | "vectorizedAt"
+						  > & {
 								isOwner: boolean
 								ownerName: string | null
 								tags: string[]
@@ -191,6 +198,8 @@ declare global {
 				interface Response {
 					characters: LibraryCatalogItem[]
 					hasMore: boolean
+					/** Raw upstream offset for the next page's cursor — see CardSourceSearchResult.nextOffset. */
+					nextOffset?: number
 					requestId?: string
 				}
 			}
@@ -210,6 +219,7 @@ declare global {
 				}
 				interface Response {
 					images: string[]
+					characterId: number
 				}
 			}
 			namespace UploadGalleryImage {
@@ -221,6 +231,7 @@ declare global {
 				interface Response {
 					success: boolean
 					path: string
+					characterId: number
 				}
 			}
 			namespace DeleteGalleryImage {
@@ -230,6 +241,7 @@ declare global {
 				}
 				interface Response {
 					success: boolean
+					characterId: number
 				}
 			}
 			namespace SetAvatar {
@@ -310,6 +322,13 @@ declare global {
 					ok: boolean
 					error: string | null
 					models: any[]
+					// Echoes params.connection?.id — undefined for a
+					// not-yet-created connection being tested before its
+					// first save. Lets a listener discard a broadcast for a
+					// different connection than the one it's currently
+					// showing (this response is emitToUser, i.e. every open
+					// tab, not just the requester).
+					connectionId?: number
 				}
 			}
 			namespace RefreshModels {
@@ -319,6 +338,7 @@ declare global {
 				interface Response {
 					models: any[]
 					error: string | null
+					connectionId?: number
 				}
 			}
 		}
@@ -340,8 +360,14 @@ declare global {
 					id: number
 				}
 				interface Response {
+					// embedding/embeddingModel/vectorizedAt are deliberately
+					// excluded — see the `columns` restriction in
+					// personasGet (personas.ts).
 					persona:
-						| (SelectPersona & {
+						| (Omit<
+								SelectPersona,
+								"embedding" | "embeddingModel" | "vectorizedAt"
+						  > & {
 								isOwner: boolean
 								ownerName: string | null
 								tags: string[]
@@ -450,6 +476,7 @@ declare global {
 				}
 				interface Response {
 					images: string[]
+					personaId: number
 				}
 			}
 			namespace UploadGalleryImage {
@@ -461,6 +488,7 @@ declare global {
 				interface Response {
 					success: boolean
 					path: string
+					personaId: number
 				}
 			}
 			namespace DeleteGalleryImage {
@@ -470,6 +498,7 @@ declare global {
 				}
 				interface Response {
 					success: boolean
+					personaId: number
 				}
 			}
 			namespace SetAvatar {
@@ -489,6 +518,14 @@ declare global {
 				}
 				interface Response {
 					images: string[]
+				}
+			}
+			namespace SetDefault {
+				interface Params {
+					personaId: number
+				}
+				interface Response {
+					success: boolean
 				}
 			}
 		}
@@ -872,6 +909,25 @@ declare global {
 					error?: string
 				}
 			}
+			/**
+			 * Re-points a removed (soft-deleted) chat participant's message
+			 * history to a new character/persona, and makes the new one an
+			 * active participant. See chatsReassignRemovedParticipantHandler
+			 * in chats.ts.
+			 */
+			namespace ReassignRemovedParticipant {
+				interface Params {
+					chatId: number
+					type: "character" | "persona"
+					oldId: number
+					newId: number
+				}
+				interface Response {
+					success?: boolean
+					chat?: SelectChat
+					error?: string
+				}
+			}
 			// Assistant chat specific handlers
 			namespace CreateAssistant {
 				interface Params {}
@@ -918,7 +974,7 @@ declare global {
 					lorebookBindingPersonaId?: number | null
 				}
 				interface Progress {
-					phase: "drafting" | "synthesizing"
+					phase: "drafting" | "synthesizing" | "naming" | "extracting"
 					batch: number
 					totalBatches: number
 					partial: {
@@ -934,10 +990,14 @@ declare global {
 					batchCount: number
 					/** Resolved lorebook binding ID (character lore only) */
 					lorebookBindingId?: number | null
-					/** Characters physically present in the scene (scene type only) */
-					participantCharacters?: string[]
-					/** Characters referenced but not physically present (scene type only) */
-					mentionedCharacters?: string[]
+					/** Lorebook binding ids physically present in the scene (scene type only) */
+					participantCharacters?: number[]
+					/** Lorebook binding ids referenced but not physically present (scene type only) */
+					mentionedCharacters?: number[]
+					/** Extracted names not yet backed by a binding — suggested, physically present (scene type only) */
+					suggestedParticipantCharacters?: string[]
+					/** Extracted names not yet backed by a binding — suggested, referenced but absent (scene type only) */
+					suggestedMentionedCharacters?: string[]
 				}
 				interface ErrorResponse {
 					reason:
@@ -1225,6 +1285,19 @@ declare global {
 					lorebookBinding: SelectLorebookBinding
 				}
 			}
+			namespace ResolveOrCreateBindingByName {
+				interface Params {
+					lorebookId: number
+					name: string
+					/** Client-generated correlation id, echoed back verbatim in the response */
+					requestId: string
+				}
+				interface Response {
+					lorebookBindingId: number
+					created: boolean
+					requestId: string
+				}
+			}
 		}
 
 		// World Lore Entries namespace
@@ -1328,6 +1401,7 @@ declare global {
 					lorebookId: number
 				}
 				interface Response {
+					lorebookId: number
 					historyEntryList: SelectHistoryEntry[]
 				}
 			}
@@ -2477,6 +2551,7 @@ declare global {
 						description: string
 						url: string
 						supportsPersonas: boolean
+						supportsCharacters: boolean
 					}[]
 					charaVaultConnected: boolean
 				}
@@ -2547,6 +2622,12 @@ declare global {
 						"id" | "koboldCppManagedAdminPassword"
 					> & { koboldCppManagedAdminPasswordSet: boolean }
 					isAndroidWrapper: boolean
+					// Capability, not platform — true unless the current process
+					// can't load onnxruntime-node's native binary (Android's Bionic
+					// userspace, Intel Macs since onnxruntime-node 1.24.3, or any
+					// future platform gap). See embedding/index.ts's
+					// getLocalEmbeddingUnsupportedReason().
+					localEmbeddingsSupported: boolean
 				}
 			}
 			namespace UpdateOllamaManagerEnabled {
@@ -2837,7 +2918,7 @@ declare global {
 				}
 				interface Progress {
 					sceneId: number
-					phase: "drafting" | "synthesizing" | "extracting"
+					phase: "drafting" | "synthesizing" | "naming" | "extracting"
 					batch: number
 					totalBatches: number
 					partial?: { content?: string; raw?: string }
@@ -2847,8 +2928,12 @@ declare global {
 					activityId: string
 					content: string
 					name?: string
-					participantCharacters: string[]
-					mentionedCharacters: string[]
+					participantCharacters: number[]
+					mentionedCharacters: number[]
+					/** Extracted names not yet backed by a binding — suggested, physically present */
+					suggestedParticipantCharacters?: string[]
+					/** Extracted names not yet backed by a binding — suggested, referenced but absent */
+					suggestedMentionedCharacters?: string[]
 					raw: string
 				}
 				interface ErrorResponse {
@@ -3168,22 +3253,29 @@ declare global {
 
 		// Narrative Graph namespace
 		namespace NarrativeGraph {
-			// Inline shape of a persisted narrative node (mirrors schema.narrativeNodes)
+			// Inline shape of a persisted narrative node (mirrors
+			// schema.lorebookBindings — merged with the former
+			// narrativeNodes table, see the merge plan; "node" naming kept
+			// here for minimal API churn even though it's the same row as
+			// a lorebook binding now)
 			interface NarrativeNode {
 				id: number
 				lorebookId: number
+				characterId: number | null
+				personaId: number | null
+				binding: string
 				sceneId: number | null
 				historyEntryId: number | null
-				lorebookBindingId: number | null
 				parentNodeId: number | null
 				name: string
 				nodeState: string
 				nodeVisibility: string
 				aliases: string[]
+				/** Identities absorbed via narrativeGraph:mergeNode — see schema.ts */
+				absorbedAliases: string[]
 				summary: string | null
 				embedding: number[] | null
 				embeddingModel: string | null
-				characterIds: number[]
 				createdAt: Date | string
 				updatedAt: Date | string
 			}
@@ -3331,6 +3423,14 @@ declare global {
 					success: string
 				}
 			}
+			namespace CheckNodeMergeReferences {
+				interface Params {
+					nodeId: number
+				}
+				interface Response {
+					referencedByMergeLog: boolean
+				}
+			}
 			namespace UpdateRelationship {
 				interface Params {
 					relationship: Partial<NarrativeRelationship> & {
@@ -3411,18 +3511,6 @@ declare global {
 					legendaryNodes: LegendaryNodeEntry[]
 				}
 			}
-			/** Link a binding to an existing node or request a new one */
-			namespace LinkBindingNode {
-				interface Params {
-					bindingId: number
-					/** null = create a new node automatically */
-					nodeId: number | null
-				}
-				interface Response {
-					bindingId: number
-					nodeId: number
-				}
-			}
 			/** Link an orphaned lorebook binding to a character/persona, or create/skip */
 			namespace LinkOrphanBinding {
 				interface Params {
@@ -3436,24 +3524,78 @@ declare global {
 					success: boolean
 				}
 			}
-			/** Merge a node as an alias child of a parent node */
+			/**
+			 * Absorb one binding into another — a real, consolidating merge:
+			 * the absorbed row is deleted and every reference to it
+			 * (relationships, scene participant/mentioned arrays, character
+			 * lore) is rewritten onto the survivor, whose absorbedAliases
+			 * gains the absorbed identity's name/aliases. Destructive, but
+			 * reversible via UndoMerge (see the audit log this writes).
+			 * `nodeId`/`parentNodeId` name the two sides being combined —
+			 * which one actually survives is decided server-side (a bound
+			 * row always wins via auto-swap), not necessarily `parentNodeId`.
+			 */
 			namespace MergeNode {
 				interface Params {
 					nodeId: number
 					parentNodeId: number
 				}
 				interface Response {
-					parentNode: NarrativeNode
-					childNode: NarrativeNode
+					survivorNode: NarrativeNode
 				}
 			}
-			/** Unlink a child alias node from its parent, restoring it as an independent node */
-			namespace DemergeNode {
+			/** Reverses a previous MergeNode (absorb) via its audit log entry */
+			namespace UndoMerge {
 				interface Params {
-					nodeId: number
+					mergeLogId: number
 				}
 				interface Response {
-					node: NarrativeNode
+					restoredNode: NarrativeNode
+				}
+			}
+			/** Recent absorbs for this lorebook, for the Bindings tab's undo list */
+			namespace ListMergeLogs {
+				interface Params {
+					lorebookId: number
+				}
+				interface MergeLogEntry {
+					id: number
+					survivorId: number | null
+					survivorName: string | null
+					absorbedName: string
+					createdAt: Date | string
+				}
+				interface Response {
+					lorebookId: number
+					mergeLogs: MergeLogEntry[]
+				}
+			}
+			/** Likely-duplicate binding pairs for a lorebook's proactive review affordance */
+			namespace DuplicateCandidates {
+				interface Params {
+					lorebookId: number
+				}
+				interface Candidate {
+					bindingIdA: number
+					bindingIdB: number
+					nameA: string
+					nameB: string
+				}
+				interface Response {
+					lorebookId: number
+					candidates: Candidate[]
+				}
+			}
+			/** Marks a binding pair as reviewed-and-not-a-duplicate — never re-flagged */
+			namespace DismissDuplicate {
+				interface Params {
+					lorebookId: number
+					bindingIdA: number
+					bindingIdB: number
+				}
+				interface Response {
+					lorebookId: number
+					candidates: DuplicateCandidates.Candidate[]
 				}
 			}
 		}
@@ -3477,28 +3619,6 @@ declare global {
 					unboundEntities: UnboundEntity[]
 					/** Existing bindings in the lorebook with no char/persona linked */
 					orphanedBindings: OrphanedBinding[]
-				}
-			}
-			/** Emitted when a binding has no graph node and unlinked nodes exist to choose from */
-			namespace NodeResult {
-				interface UnlinkedNode {
-					id: number
-					name: string
-					nodeState: string
-					summary: string | null
-					score?: number
-				}
-				interface PendingBinding {
-					bindingId: number
-					binding: string
-					entityName: string
-				}
-				interface Response {
-					lorebookId: number
-					pendingBindings: Array<{
-						binding: PendingBinding
-						unlinkedNodes: UnlinkedNode[]
-					}>
 				}
 			}
 		}

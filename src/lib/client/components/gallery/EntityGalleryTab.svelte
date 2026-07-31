@@ -5,7 +5,7 @@
 	import { dragHandleZone, dragHandle } from "svelte-dnd-action"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
-	import AvatarGalleryModal from "$lib/client/components/chatMessages/AvatarGalleryModal.svelte"
+	import EntityGalleryViewModal from "$lib/client/components/chatMessages/EntityGalleryViewModal.svelte"
 
 	interface Props {
 		entityType: "character" | "persona"
@@ -144,24 +144,57 @@
 		}
 	}
 
-	onMount(() => {
-		const handleList = (msg: { images: string[] }) => {
-			isLoading = false
-			images = msg.images
-		}
-		const handleUploadOk = (msg: { success: boolean }) => {
-			isUploading = false
-			if (msg.success) toaster.success({ title: "Image uploaded" })
-			else toaster.error({ title: "Upload failed" })
-		}
-		const handleUploadErr = () => {
-			isUploading = false
-			toaster.error({ title: "Upload failed" })
-		}
-		const handleDeleteOk = () => toaster.success({ title: "Image deleted" })
-		const handleSetAvatarOk = () =>
-			toaster.success({ title: "Avatar updated" })
+	function matchesEntity(msg: { characterId?: number; personaId?: number }) {
+		return entityType === "character"
+			? msg.characterId === entityId
+			: msg.personaId === entityId
+	}
 
+	function handleList(msg: {
+		images: string[]
+		characterId?: number
+		personaId?: number
+	}) {
+		if (!matchesEntity(msg)) return
+		isLoading = false
+		images = msg.images
+	}
+	function handleUploadOk(msg: {
+		success: boolean
+		characterId?: number
+		personaId?: number
+	}) {
+		if (!matchesEntity(msg)) return
+		isUploading = false
+		if (msg.success) toaster.success({ title: "Image uploaded" })
+		else toaster.error({ title: "Upload failed" })
+	}
+	function handleUploadErr(msg: {
+		characterId?: number
+		personaId?: number
+	}) {
+		if (!matchesEntity(msg)) return
+		isUploading = false
+		toaster.error({ title: "Upload failed" })
+	}
+	function handleDeleteOk(msg: {
+		characterId?: number
+		personaId?: number
+	}) {
+		if (!matchesEntity(msg)) return
+		toaster.success({ title: "Image deleted" })
+	}
+	function handleSetAvatarOk(msg: {
+		character?: { id: number }
+		persona?: { id: number }
+	}) {
+		const id =
+			entityType === "character" ? msg.character?.id : msg.persona?.id
+		if (id !== entityId) return
+		toaster.success({ title: "Avatar updated" })
+	}
+
+	onMount(() => {
 		if (entityType === "character") {
 			socket.on("characters:listGallery", handleList)
 			socket.on("characters:uploadGalleryImage", handleUploadOk)
@@ -186,16 +219,22 @@
 	})
 
 	onDestroy(() => {
-		socket.off("characters:listGallery")
-		socket.off("characters:uploadGalleryImage")
-		socket.off("characters:uploadGalleryImage:error" as any)
-		socket.off("characters:deleteGalleryImage")
-		socket.off("characters:setAvatar")
-		socket.off("personas:listGallery")
-		socket.off("personas:uploadGalleryImage")
-		socket.off("personas:uploadGalleryImage:error" as any)
-		socket.off("personas:deleteGalleryImage")
-		socket.off("personas:setAvatar")
+		socket.off("characters:listGallery", handleList)
+		socket.off("characters:uploadGalleryImage", handleUploadOk)
+		socket.off(
+			"characters:uploadGalleryImage:error" as any,
+			handleUploadErr
+		)
+		socket.off("characters:deleteGalleryImage", handleDeleteOk)
+		socket.off("characters:setAvatar", handleSetAvatarOk)
+		socket.off("personas:listGallery", handleList)
+		socket.off("personas:uploadGalleryImage", handleUploadOk)
+		socket.off(
+			"personas:uploadGalleryImage:error" as any,
+			handleUploadErr
+		)
+		socket.off("personas:deleteGalleryImage", handleDeleteOk)
+		socket.off("personas:setAvatar", handleSetAvatarOk)
 	})
 </script>
 
@@ -430,7 +469,7 @@
 	</Portal>
 </Dialog>
 
-<AvatarGalleryModal
+<EntityGalleryViewModal
 	bind:open={lightboxOpen}
 	onOpenChange={(e) => (lightboxOpen = e.open)}
 	entity={{

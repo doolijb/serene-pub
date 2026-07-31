@@ -1,8 +1,14 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, eq } from "drizzle-orm"
-import { broadcastToChatUsers } from "../sockets/utils/broadcastHelpers"
+import {
+	broadcastToChatUsers,
+	broadcastToChatUsersVaryingByRole
+} from "../sockets/utils/broadcastHelpers"
 import type { LLMQueueStatus } from "./llmQueue"
+
+const GUEST_FACING_GENERATION_ERROR_MESSAGE =
+	"Generation failed. Ask the chat owner to check their connection settings."
 
 export function friendlyErrorFromUnknown(err: unknown): {
 	message: string
@@ -49,6 +55,15 @@ export async function persistGenerationStage(
 	}
 }
 
+/**
+ * Round-12 audit fix (MEDIUM): the raw upstream provider error (eg. "HTTP
+ * 401: Unauthorized", a KoboldCPP model-load failure with an embedded
+ * response body) used to be broadcast verbatim to the whole chat room,
+ * including guests who have no relationship to the owner's LLM connection
+ * or credentials. The stored DB row still keeps the real error — the owner
+ * needs it to troubleshoot their own connection — only the guest-facing
+ * broadcast is redacted.
+ */
 export async function persistGenerationErrorRow(
 	socketIo: any,
 	chatId: number,
@@ -73,8 +88,16 @@ export async function persistGenerationErrorRow(
 		)
 		.returning()
 	if (updated) {
-		await broadcastToChatUsers(socketIo, chatId, "chatMessage", {
-			chatMessage: updated
-		})
+		const guestFacing = {
+			...updated,
+			error: { message: GUEST_FACING_GENERATION_ERROR_MESSAGE }
+		}
+		await broadcastToChatUsersVaryingByRole(
+			socketIo,
+			chatId,
+			"chatMessage",
+			{ chatMessage: updated },
+			{ chatMessage: guestFacing }
+		)
 	}
 }

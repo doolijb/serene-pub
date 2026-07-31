@@ -10,6 +10,40 @@ import {
 
 dotenv.config()
 
+/**
+ * Round-12 audit fix (MEDIUM): the compose files' own comment already
+ * documents the tradeoff of SOCKETS_ALLOWED_ORIGINS=* (the Docker Compose
+ * default), but there was no *runtime* signal of it — only something an
+ * admin has to go read. Disabled-accounts mode (the default) auto-attaches
+ * every connection to the first admin with no token at all (see auth.ts);
+ * combined with the wildcard origin, a self-hoster running this with no
+ * reverse proxy in front exposes that unauthenticated admin session to
+ * whatever can route to this port. Purely informational — logs a warning,
+ * doesn't change behavior; the compose defaults are a deliberate,
+ * already-documented choice, not something to override here. Called once
+ * at startup (see loadSocketsServer below); factored out as its own
+ * function so it's testable without spinning up a real server.
+ */
+export async function warnIfOpenAdminExposure() {
+	const { isWildcardAllowed } = await import(
+		"$lib/server/sockets/originAllowlist"
+	)
+	if (!isWildcardAllowed()) return
+
+	const { db } = await import("$lib/server/db")
+	const systemSettings = await db.query.systemSettings.findFirst({
+		columns: { isAccountsEnabled: true }
+	})
+	if (systemSettings?.isAccountsEnabled) return
+
+	console.warn(
+		"WARNING: user accounts are disabled and SOCKETS_ALLOWED_ORIGINS=* is set — " +
+			"every connection that can reach this port is auto-attached as an unauthenticated admin. " +
+			"If this instance isn't behind a reverse proxy or otherwise network-isolated, see HOSTING.md's " +
+			'"Running behind a reverse proxy" section, or enable user accounts (Settings > System) to require login.'
+	)
+}
+
 export function getSocketsHttpMode() {
 	const SOCKETS_HTTP_MODE = process.env.SOCKETS_HTTP_MODE
 	if (!SOCKETS_HTTP_MODE) return "http"
@@ -107,9 +141,47 @@ export async function loadSocketsServer() {
 	if (process.env.NODE_ENV !== "production") {
 		console.log("Socket server ready at", host)
 	}
+	// Always printed (including production) — this is exactly the
+	// information an admin needs to confirm their deployment's actual
+	// exposure without reading docs, not just a dev convenience.
+	const { describeOriginAllowlistConfig } = await import(
+		"$lib/server/sockets/originAllowlist"
+	)
+	console.log(describeOriginAllowlistConfig())
+	await warnIfOpenAdminExposure()
 
 	// Auto-load embedding model on startup if vectorization was previously enabled
 	autoLoadEmbeddingModel()
+
+	// Fire-and-forget: warms the local-embedding support probe (a cached,
+	// one-time dynamic import attempt — see embedding/index.ts) so it's
+	// usually already resolved by the time a client's first
+	// systemSettings:get request needs the localEmbeddingsSupported flag,
+	// instead of that request paying the one-time import cost.
+	warmLocalEmbeddingSupportProbe()
+
+	// Sweep for a KoboldCPP managed subprocess orphaned by a previous,
+	// ungraceful shutdown (kill -9, a crash) rather than waiting for the
+	// next generation attempt to discover and clean it up.
+	const { checkForOrphanOnBoot } = await import(
+		"$lib/server/koboldcpp/subprocessManager"
+	)
+	checkForOrphanOnBoot()
+}
+
+async function warmLocalEmbeddingSupportProbe() {
+	try {
+		const { isLocalEmbeddingSupported } = await import(
+			"$lib/server/embedding/index"
+		)
+		await isLocalEmbeddingSupported()
+	} catch (err) {
+		// The probe itself caches a "not supported" result on a caught
+		// import failure — this catch is only for something going wrong
+		// around that (e.g. the dynamic import of the module itself), not
+		// a case that needs surfacing anywhere.
+		console.error("[embedding] Local-embedding support probe failed:", err)
+	}
 }
 
 async function autoLoadEmbeddingModel() {
@@ -136,6 +208,8 @@ async function autoLoadEmbeddingModel() {
 				mode: true,
 				apiBaseUrl: true,
 				apiKey: true,
+				apiKeyIv: true,
+				apiKeyAuthTag: true,
 				apiModel: true
 			}
 		})
@@ -152,12 +226,11 @@ async function autoLoadEmbeddingModel() {
 			console.log(
 				`[embedding] Auto-activating API backend on startup: ${vecConfig.apiBaseUrl}`
 			)
-			const { activateApiEmbedding } = await import(
-				"$lib/server/embedding/index"
-			)
+			const { activateApiEmbedding, resolveVectorizationApiKey } =
+				await import("$lib/server/embedding/index")
 			await activateApiEmbedding({
 				baseUrl: vecConfig.apiBaseUrl,
-				apiKey: vecConfig.apiKey,
+				apiKey: resolveVectorizationApiKey(vecConfig),
 				model: vecConfig.apiModel
 			})
 		} else {

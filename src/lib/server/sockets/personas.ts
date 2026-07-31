@@ -30,18 +30,30 @@ import {
 } from "$lib/server/cardSources/types"
 import { hashCanonicalJson } from "$lib/server/utils/contentHash"
 import { isValidUuid } from "$lib/server/utils/uuid"
+import { syncLorebookBindingsForPersona } from "$lib/server/utils/characterBindingSync"
+import { findOrCreateTagId } from "$lib/server/utils/tags"
+import type { ExtractTablesWithRelations } from "drizzle-orm"
+import type { PgliteDatabase, PgliteTransaction } from "drizzle-orm/pglite"
+
+type Executor =
+	| PgliteDatabase<typeof schema>
+	| PgliteTransaction<
+			typeof schema,
+			ExtractTablesWithRelations<typeof schema>
+	  >
 
 // Helper function to process tags for persona creation/update
 async function processPersonaTags(
 	personaId: number,
 	tagNames: string[],
-	userId: number
+	userId: number,
+	dbOrTx: Executor = db
 ) {
 	// Without this, a caller supplying another user's personaId could still
 	// attach its own tags to (or strip tags from) a persona it doesn't own,
 	// even though the persona's own field update is already ownership-scoped
 	// and would no-op for an unowned id.
-	const persona = await db.query.personas.findFirst({
+	const persona = await dbOrTx.query.personas.findFirst({
 		where: (p, { and, eq }) =>
 			and(eq(p.id, personaId), eq(p.userId, userId)),
 		columns: { id: true }
@@ -49,7 +61,7 @@ async function processPersonaTags(
 	if (!persona) return
 
 	// Get existing tags for this persona that belong to the user
-	const existingPersonaTags = await db.query.personaTags.findMany({
+	const existingPersonaTags = await dbOrTx.query.personaTags.findMany({
 		where: eq(schema.personaTags.personaId, personaId),
 		with: {
 			tag: true
@@ -80,7 +92,7 @@ async function processPersonaTags(
 	// Remove tags that are no longer in the list
 	if (tagsToRemove.length > 0) {
 		const tagIdsToRemove = tagsToRemove.map((pt) => pt.tagId)
-		await db
+		await dbOrTx
 			.delete(schema.personaTags)
 			.where(
 				and(
@@ -90,32 +102,16 @@ async function processPersonaTags(
 			)
 	}
 
-	// Add new tags
+	// Add new tags — findOrCreateTagId adopts an existing case-insensitive
+	// match instead of creating a duplicate.
 	for (const tagName of tagsToAdd) {
-		// Check if tag exists for this user
-		let existingTag = await db.query.tags.findFirst({
-			where: (t, { and, eq }) =>
-				and(eq(t.name, tagName), eq(t.userId, userId))
-		})
-
-		// Create tag if it doesn't exist
-		if (!existingTag) {
-			const [newTag] = await db
-				.insert(schema.tags)
-				.values({
-					name: tagName,
-					userId
-				})
-				.returning()
-			existingTag = newTag
-		}
-
-		// Link tag to persona
-		await db
+		const tagId = await findOrCreateTagId(userId, tagName, dbOrTx)
+		if (!tagId) continue
+		await dbOrTx
 			.insert(schema.personaTags)
 			.values({
 				personaId,
-				tagId: existingTag.id
+				tagId
 			})
 			.onConflictDoNothing()
 	}
@@ -164,6 +160,14 @@ export const personasGet: Handler<
 		const persona = await db.query.personas.findFirst({
 			where: (p, { and, eq }) =>
 				and(eq(p.id, params.id), eq(p.isDeleted, false)),
+			// Unlike personasList (which already allowlists columns), this
+			// findFirst had no columns restriction and spread the full row —
+			// including the raw embedding vector — into the response.
+			columns: {
+				embedding: false,
+				embeddingModel: false,
+				vectorizedAt: false
+			},
 			with: {
 				personaTags: {
 					with: {
@@ -219,6 +223,14 @@ export const personasCreate: Handler<
 			// Remove fields that shouldn't be in the database insert
 			delete (data as any).avatar // Remove avatar from persona data to avoid conflicts
 			delete (data as any).tags // Remove tags - will be handled separately
+			// uuid is reserved for the import path's stamp-or-fallback logic
+			// (see createPersonaFromParsedData) — this generic create
+			// handler always gets a fresh DB-generated uuid. id is likewise
+			// client-overridable on an identity column. Both must always be
+			// server-generated, same as personasUpdate already strips uuid
+			// for the same reason.
+			delete (data as any).uuid
+			delete (data as any).id
 
 			const [persona] = await db
 				.insert(schema.personas)
@@ -274,6 +286,15 @@ export const personasUpdate: Handler<
 			delete (data as any).vectorizedAt
 			delete (data as any).embedding
 			delete (data as any).embeddingModel
+			// lorebookId: no ownership check exists for it here (unlike chats,
+			// nothing currently reads a persona's own lorebookId for prompt
+			// content), so blocking it outright is the correct minimal fix —
+			// a future feature needing this should validate ownership first.
+			// uuid is reserved for the import path — letting a client set it
+			// directly here would silently break this user's own
+			// import-dedup identity.
+			delete (data as any).lorebookId
+			delete (data as any).uuid
 
 			const [updated] = await db
 				.update(schema.personas)
@@ -304,6 +325,12 @@ export const personasUpdate: Handler<
 					avatarFile: params.avatarFile
 				})
 			}
+
+			// Keep every bound lorebookBindings row's name/aliases in sync with
+			// this persona's current name/aliases (decision 2, merge plan) — a
+			// persona can be bound in multiple lorebooks. Cheap no-op if
+			// nothing is bound.
+			await syncLorebookBindingsForPersona(id)
 
 			autoEnqueuePersona(id, updated.name).catch(console.error)
 			await personasGet.handler(socket, { id }, emitToUser)
@@ -420,6 +447,29 @@ export function extractPersonaUuid(data: any): string | undefined {
 }
 
 /**
+ * Resolves the uuid a newly-created persona row should be stamped with —
+ * mirrors claimIncomingCharacterUuid in characters.ts. `personas_uuid_idx`
+ * is unique per-owner (userId, uuid); a same-user collision would already
+ * have been caught by the caller's dedup lookup, so it's always safe to
+ * fall back to a fresh uuid here.
+ */
+async function claimIncomingPersonaUuid(
+	incomingUuid: string | undefined,
+	userId: number,
+	dbOrTx: Executor
+): Promise<string | undefined> {
+	if (!incomingUuid) return undefined
+	const existing = await dbOrTx.query.personas.findFirst({
+		where: and(
+			eq(schema.personas.uuid, incomingUuid),
+			eq(schema.personas.userId, userId)
+		),
+		columns: { id: true }
+	})
+	return existing ? undefined : incomingUuid
+}
+
+/**
  * Personas have no spec-format export/card-builder (no persona export
  * feature exists yet) — this is a small flat comparison shape used purely
  * for import-dedup hashing, not a portable file format.
@@ -482,11 +532,12 @@ export function personaFieldsFromParsedData(
 
 async function applyPersonaAvatar(
 	persona: typeof schema.personas.$inferSelect,
-	avatarBuffer: Buffer | undefined
+	avatarBuffer: Buffer | undefined,
+	dbOrTx: Executor = db
 ) {
 	if (avatarBuffer) {
 		await handlePersonaAvatarUpload({ persona, avatarFile: avatarBuffer })
-		const updatedPersona = await db.query.personas.findFirst({
+		const updatedPersona = await dbOrTx.query.personas.findFirst({
 			where: eq(schema.personas.id, persona.id)
 		})
 		if (updatedPersona) Object.assign(persona, updatedPersona)
@@ -497,33 +548,41 @@ async function applyPersonaAvatar(
 export async function createPersonaFromParsedData(
 	data: any,
 	avatarBuffer: Buffer | undefined,
-	userId: number
+	userId: number,
+	dbOrTx: Executor = db
 ) {
-	const [persona] = await db
+	const uuidToStamp = await claimIncomingPersonaUuid(
+		extractPersonaUuid(data),
+		userId,
+		dbOrTx
+	)
+	const [persona] = await dbOrTx
 		.insert(schema.personas)
 		.values({
 			...personaFieldsFromParsedData(data),
+			...(uuidToStamp ? { uuid: uuidToStamp } : {}),
 			userId,
 			isDefault: false
 		})
 		.returning()
-	return applyPersonaAvatar(persona, avatarBuffer)
+	return applyPersonaAvatar(persona, avatarBuffer, dbOrTx)
 }
 
 export async function overwritePersonaFromParsedData(
 	existingId: number,
 	data: any,
-	avatarBuffer: Buffer | undefined
+	avatarBuffer: Buffer | undefined,
+	dbOrTx: Executor = db
 ) {
-	await db
+	await dbOrTx
 		.update(schema.personas)
 		.set(personaFieldsFromParsedData(data))
 		.where(eq(schema.personas.id, existingId))
-	const persona = await db.query.personas.findFirst({
+	const persona = await dbOrTx.query.personas.findFirst({
 		where: eq(schema.personas.id, existingId)
 	})
 	if (!persona) throw new Error("Persona not found.")
-	return applyPersonaAvatar(persona, avatarBuffer)
+	return applyPersonaAvatar(persona, avatarBuffer, dbOrTx)
 }
 
 export const personasImportCard: Handler<
@@ -794,14 +853,25 @@ export const personasListGallery: Handler<
 > = {
 	event: "personas:listGallery",
 	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-		const images = await listPersonaGallery({
-			personaId: params.personaId,
-			userId
-		})
-		const res: Sockets.Personas.ListGallery.Response = { images }
-		emitToUser("personas:listGallery", res)
-		return res
+		try {
+			const userId = socket.user!.id
+			const images = await listPersonaGallery({
+				personaId: params.personaId,
+				userId
+			})
+			const res: Sockets.Personas.ListGallery.Response = {
+				images,
+				personaId: params.personaId
+			}
+			emitToUser("personas:listGallery", res)
+			return res
+		} catch (error: any) {
+			emitToUser("personas:listGallery:error", {
+				error: error.message || "Failed to list gallery.",
+				personaId: params.personaId
+			})
+			throw error
+		}
 	}
 }
 
@@ -811,32 +881,45 @@ export const personasUploadGalleryImage: Handler<
 > = {
 	event: "personas:uploadGalleryImage",
 	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-		const persona = await db.query.personas.findFirst({
-			where: (p, { and, eq }) =>
-				and(eq(p.id, params.personaId), eq(p.userId, userId))
-		})
-		if (!persona) throw new Error("Persona not found or access denied")
+		try {
+			const userId = socket.user!.id
+			const persona = await db.query.personas.findFirst({
+				where: (p, { and, eq }) =>
+					and(eq(p.id, params.personaId), eq(p.userId, userId))
+			})
+			if (!persona) throw new Error("Persona not found or access denied")
 
-		const imgPath = await uploadPersonaGalleryImage({
-			personaId: params.personaId,
-			userId,
-			imageFile: Buffer.from(params.imageFile as Uint8Array),
-			mimeType: params.mimeType
-		})
+			const imgPath = await uploadPersonaGalleryImage({
+				personaId: params.personaId,
+				userId,
+				imageFile: Buffer.from(params.imageFile as Uint8Array),
+				mimeType: params.mimeType
+			})
 
-		const res: Sockets.Personas.UploadGalleryImage.Response = {
-			success: true,
-			path: imgPath
+			const res: Sockets.Personas.UploadGalleryImage.Response = {
+				success: true,
+				path: imgPath,
+				personaId: params.personaId
+			}
+			emitToUser("personas:uploadGalleryImage", res)
+			await personasListGallery.handler(
+				socket,
+				{ personaId: params.personaId },
+				emitToUser
+			)
+			await personasGet.handler(
+				socket,
+				{ id: params.personaId },
+				emitToUser
+			)
+			return res
+		} catch (error: any) {
+			emitToUser("personas:uploadGalleryImage:error", {
+				error: error.message || "Failed to upload image.",
+				personaId: params.personaId
+			})
+			throw error
 		}
-		emitToUser("personas:uploadGalleryImage", res)
-		await personasListGallery.handler(
-			socket,
-			{ personaId: params.personaId },
-			emitToUser
-		)
-		await personasGet.handler(socket, { id: params.personaId }, emitToUser)
-		return res
 	}
 }
 
@@ -846,29 +929,38 @@ export const personasDeleteGalleryImage: Handler<
 > = {
 	event: "personas:deleteGalleryImage",
 	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-		const persona = await db.query.personas.findFirst({
-			where: (p, { and, eq }) =>
-				and(eq(p.id, params.personaId), eq(p.userId, userId))
-		})
-		if (!persona) throw new Error("Persona not found or access denied")
+		try {
+			const userId = socket.user!.id
+			const persona = await db.query.personas.findFirst({
+				where: (p, { and, eq }) =>
+					and(eq(p.id, params.personaId), eq(p.userId, userId))
+			})
+			if (!persona) throw new Error("Persona not found or access denied")
 
-		await deletePersonaGalleryImage({
-			personaId: params.personaId,
-			userId,
-			path: params.path
-		})
+			await deletePersonaGalleryImage({
+				personaId: params.personaId,
+				userId,
+				path: params.path
+			})
 
-		const res: Sockets.Personas.DeleteGalleryImage.Response = {
-			success: true
+			const res: Sockets.Personas.DeleteGalleryImage.Response = {
+				success: true,
+				personaId: params.personaId
+			}
+			emitToUser("personas:deleteGalleryImage", res)
+			await personasListGallery.handler(
+				socket,
+				{ personaId: params.personaId },
+				emitToUser
+			)
+			return res
+		} catch (error: any) {
+			emitToUser("personas:deleteGalleryImage:error", {
+				error: error.message || "Failed to delete image.",
+				personaId: params.personaId
+			})
+			throw error
 		}
-		emitToUser("personas:deleteGalleryImage", res)
-		await personasListGallery.handler(
-			socket,
-			{ personaId: params.personaId },
-			emitToUser
-		)
-		return res
 	}
 }
 
@@ -914,6 +1006,18 @@ export const personasSetAvatar: Handler<
 		})
 		if (!persona) throw new Error("Persona not found or access denied")
 
+		// params.path must be one of this persona's own gallery images —
+		// without this, the client could point avatar at an arbitrary
+		// external URL, which every other viewer's browser would then fetch
+		// directly (avatar isn't routed through the authenticated /images
+		// proxy unless it happens to start with /images/...), bypassing the
+		// per-viewer authorization that route exists to enforce.
+		const galleryImage = await db.query.personaGalleryImages.findFirst({
+			where: (g, { and, eq }) =>
+				and(eq(g.personaId, params.personaId), eq(g.path, params.path))
+		})
+		if (!galleryImage) throw new Error("Invalid avatar path.")
+
 		const [updated] = await db
 			.update(schema.personas)
 			.set({ avatar: params.path })
@@ -928,6 +1032,50 @@ export const personasSetAvatar: Handler<
 		const res: Sockets.Personas.SetAvatar.Response = { persona: updated }
 		emitToUser("personas:setAvatar", res)
 		await personasGet.handler(socket, { id: params.personaId }, emitToUser)
+		return res
+	}
+}
+
+export const personasSetDefault: Handler<
+	Sockets.Personas.SetDefault.Params,
+	Sockets.Personas.SetDefault.Response
+> = {
+	event: "personas:setDefault",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const persona = await db.query.personas.findFirst({
+			where: (p, { and, eq }) =>
+				and(eq(p.id, params.personaId), eq(p.userId, userId))
+		})
+		if (!persona) throw new Error("Persona not found or access denied")
+
+		await db.transaction(async (tx) => {
+			// Scoped to this user only — a bare "WHERE is_default = true"
+			// here would clear every user's default on a multi-account
+			// instance, not just the caller's.
+			await tx
+				.update(schema.personas)
+				.set({ isDefault: false })
+				.where(
+					and(
+						eq(schema.personas.userId, userId),
+						eq(schema.personas.isDefault, true)
+					)
+				)
+			await tx
+				.update(schema.personas)
+				.set({ isDefault: true })
+				.where(
+					and(
+						eq(schema.personas.id, params.personaId),
+						eq(schema.personas.userId, userId)
+					)
+				)
+		})
+
+		const res: Sockets.Personas.SetDefault.Response = { success: true }
+		emitToUser("personas:setDefault", res)
+		await personasList.handler(socket, {}, emitToUser)
 		return res
 	}
 }
@@ -957,4 +1105,5 @@ export function registerPersonaHandlers(
 	register(socket, personasDeleteGalleryImage, emitToUser)
 	register(socket, personasReorderGallery, emitToUser)
 	register(socket, personasSetAvatar, emitToUser)
+	register(socket, personasSetDefault, emitToUser)
 }

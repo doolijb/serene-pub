@@ -2,8 +2,12 @@ import { spawn, type ChildProcess } from "child_process"
 import * as fs from "fs"
 import * as fsPromises from "fs/promises"
 import * as path from "path"
+import { randomUUID } from "crypto"
+import { eq } from "drizzle-orm"
 import { db } from "$lib/server/db"
+import * as schema from "$lib/server/db/schema"
 import { pingKoboldCPP } from "./kcppHttp"
+import { pollUntilReady } from "./pollUntilReady"
 
 export type SubprocessStatus =
 	| "stopped"
@@ -42,7 +46,16 @@ const state: SubprocessState = {
 	isExternal: false
 }
 
-let emitStatusFn: ((s: SubprocessStatusEvent) => void) | null = null
+// Map<userId, {emit, connections}>, not a single nullable slot or a
+// Set<EmitFn> — see binaryManager.ts's registerEmitter for the full
+// rationale (same anti-pattern: a Set overcorrects the old single-slot bug
+// into an N² broadcast when the same admin has multiple tabs open, since
+// registration happens once per connection but emitToUser already
+// broadcasts to every one of that user's connections).
+const statusEmitters = new Map<
+	number,
+	{ emit: (s: SubprocessStatusEvent) => void; connections: number }
+>()
 let healthInterval: ReturnType<typeof setInterval> | null = null
 let idleTimer: ReturnType<typeof setTimeout> | null = null
 let subprocessTimeoutSecs = 1800
@@ -52,13 +65,48 @@ let lastBinaryDir: string | null = null
 // or a caught signal that leads to exit), take the managed koboldcpp
 // process group down with it rather than leaving it orphaned. This can't
 // catch SIGKILL or a suspend (SIGSTOP) — nothing running in-process can —
-// but it covers the common "dev server restarted/crashed" case.
+// but it covers the common "dev server restarted/crashed" case. 'exit'
+// handlers must be synchronous, so this only handles the "we hold a live
+// process handle from this session" case with a direct signal — the fuller,
+// async-capable cleanup (which also covers an adopted-from-a-previous-
+// session process) lives in the SIGINT/SIGTERM handlers below.
 process.on("exit", () => {
 	if (state.process?.pid) {
 		try {
 			process.kill(-state.process.pid, "SIGKILL")
 		} catch {}
 	}
+})
+
+// Covers the common graceful-shutdown paths this app's own process actually
+// receives — Ctrl+C in a dev terminal, `kill` (no -9), a process manager or
+// container runtime stopping the service normally — so a managed koboldcpp
+// subprocess doesn't outlive a shutdown that had every opportunity to clean
+// up after itself. Still can't do anything about SIGKILL/power loss; that
+// residue is what checkForOrphanOnBoot() exists to sweep up on next start.
+let shuttingDown = false
+async function gracefulShutdown(signal: NodeJS.Signals) {
+	if (shuttingDown) return
+	shuttingDown = true
+	console.log(
+		`[KoboldCPP] Received ${signal} — stopping managed subprocess before exit…`
+	)
+	try {
+		await stop()
+	} catch (err) {
+		console.error(
+			"[KoboldCPP] Error stopping managed subprocess during shutdown:",
+			err
+		)
+	} finally {
+		process.exit(0)
+	}
+}
+process.on("SIGINT", () => {
+	gracefulShutdown("SIGINT")
+})
+process.on("SIGTERM", () => {
+	gracefulShutdown("SIGTERM")
 })
 
 function pidFilePath(binaryDir: string): string {
@@ -173,8 +221,94 @@ async function findVerifiedOwnedPid(
 	return recordedPid
 }
 
-export function setEmitter(fn: (s: SubprocessStatusEvent) => void) {
-	emitStatusFn = fn
+/**
+ * Shared by doStart() and the boot-time orphan check below: if something is
+ * already answering on the configured port, adopt it into our state
+ * tracking (own or external) instead of spawning a second instance on top
+ * of it; otherwise clean up anything stale left behind by a previous,
+ * ungracefully-terminated session. Returns true if an already-running
+ * instance was adopted (caller has nothing further to do), false if the
+ * port was free (after any stale cleanup) and a fresh spawn is up to the
+ * caller.
+ */
+async function adoptIfAlreadyRunning(
+	binaryDir: string,
+	binaryPath: string,
+	port: number
+): Promise<boolean> {
+	if (await pingKoboldCPP(`http://localhost:${port}`, 2000)) {
+		const ownedPid = await findVerifiedOwnedPid(binaryDir, binaryPath)
+		console.log(
+			ownedPid
+				? `[KoboldCPP] Port ${port} already active — adopting our own process (pid ${ownedPid}) from a previous session`
+				: `[KoboldCPP] Port ${port} already active — adopting external instance we didn't start; Stop/Unload won't be available for it`
+		)
+		state.status = "running"
+		state.pid = ownedPid
+		state.isExternal = !ownedPid
+		state.startedAt = new Date()
+		state.lastError = null
+		emitStatus()
+		startHealthCheck(port)
+		pingActivity()
+		return true
+	}
+	// Port is free (or the process behind it is unresponsive) — check for
+	// and clean up a stale process left behind by a previous session before
+	// anything tries to spawn on top of it.
+	await killStaleOrphan(binaryDir, binaryPath)
+	return false
+}
+
+/**
+ * Best-effort adopt-or-clean-up pass, run once at server boot — independent
+ * of doStart()'s own copy of this logic, which only ever runs lazily on the
+ * first actual generation request. Without this, a process orphaned by an
+ * ungraceful shutdown (kill -9, a crash, anything the SIGINT/SIGTERM
+ * handlers below can't catch) sits around indefinitely: nothing reaps it
+ * until someone happens to trigger a generation, however long that takes.
+ * Running the same adopt/clean-up check immediately on boot means a stale
+ * orphan gets terminated (or a still-healthy one gets adopted into state
+ * tracking, so status UI is accurate right away) without waiting on that.
+ */
+export async function checkForOrphanOnBoot(): Promise<void> {
+	try {
+		const settings = await db.query.koboldCppSettings.findFirst()
+		if (
+			!settings?.koboldCppManagerEnabled ||
+			settings?.koboldCppManagedMode !== "managed"
+		)
+			return
+		const {
+			koboldCppManagedBinaryDir: binaryDir,
+			koboldCppManagedBinaryVariant: binaryVariant
+		} = settings
+		if (!binaryDir || !binaryVariant) return
+		const binaryPath = path.join(binaryDir, binaryVariant)
+		const port = settings.koboldCppManagedPort ?? 5001
+		await adoptIfAlreadyRunning(binaryDir, binaryPath, port)
+	} catch (err) {
+		console.error("[KoboldCPP] Boot-time orphan check failed:", err)
+	}
+}
+
+export function registerEmitter(
+	userId: number,
+	fn: (s: SubprocessStatusEvent) => void
+) {
+	const existing = statusEmitters.get(userId)
+	if (existing) {
+		existing.connections++
+		return
+	}
+	statusEmitters.set(userId, { emit: fn, connections: 1 })
+}
+
+export function unregisterEmitter(userId: number) {
+	const existing = statusEmitters.get(userId)
+	if (!existing) return
+	existing.connections--
+	if (existing.connections <= 0) statusEmitters.delete(userId)
 }
 
 function snapshot(): SubprocessStatusEvent {
@@ -193,7 +327,12 @@ export function isExternal(): boolean {
 }
 
 function emitStatus() {
-	emitStatusFn?.(snapshot())
+	const payload = snapshot()
+	for (const { emit } of statusEmitters.values()) {
+		try {
+			emit(payload)
+		} catch {}
+	}
 }
 
 export function getStatus(): SubprocessStatusEvent {
@@ -229,13 +368,27 @@ export function setSubprocessTimeout(secs: number) {
 	if (state.status === "running") pingActivity()
 }
 
-async function waitForReady(port: number, timeoutMs = 120_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs
-	while (Date.now() < deadline) {
-		if (await pingKoboldCPP(`http://localhost:${port}`, 2000)) return
-		await new Promise((r) => setTimeout(r, 1500))
-	}
-	throw new Error("KoboldCPP did not become ready within 2 minutes")
+async function waitForReady(port: number, proc: ChildProcess): Promise<void> {
+	await pollUntilReady(
+		async () =>
+			(await pingKoboldCPP(`http://localhost:${port}`, 2000))
+				? "ready"
+				: "not-ready",
+		{
+			// The bare --nomodel bootstrap has no model to load, so it should
+			// come up quickly on any machine — but as long as the process we
+			// just spawned hasn't actually exited, keep waiting rather than
+			// guessing a fixed timeout for how slow "quickly" can be on a
+			// loaded/slow disk system.
+			isAlive: () => proc.exitCode === null && !proc.killed,
+			hardTimeoutMs: 10 * 60_000,
+			label: "KoboldCPP startup",
+			onTick: (elapsed) =>
+				console.log(
+					`[KoboldCPP] still waiting for the subprocess to open its port… (${Math.round(elapsed / 1000)}s)`
+				)
+		}
+	)
 }
 
 // Loading a real model via the admin API (ensureModelLoaded's reload_config
@@ -392,37 +545,25 @@ async function doStart(): Promise<void> {
 	}
 
 	const port = settings.koboldCppManagedPort ?? 5001
-	const password = settings.koboldCppManagedAdminPassword ?? "serene"
+	let password = settings.koboldCppManagedAdminPassword
+	if (!password) {
+		// Mirrors koboldCppSetManagedMode's generation — a missing password
+		// here (e.g. cleared while already in managed mode) must not silently
+		// fall back to a shared, predictable literal on the next spawn.
+		password = randomUUID().replace(/-/g, "")
+		await db
+			.update(schema.koboldCppSettings)
+			.set({ koboldCppManagedAdminPassword: password })
+			.where(eq(schema.koboldCppSettings.id, 1))
+	}
 	subprocessTimeoutSecs =
 		settings.koboldCppManagedSubprocessTimeoutSecs ?? 1800
 
-	// If KoboldCPP is already reachable (e.g. left over from a previous server session),
-	// adopt it rather than spawning a second instance on the same port.
-	if (await pingKoboldCPP(`http://localhost:${port}`, 2000)) {
-		const ownedPid = await findVerifiedOwnedPid(binaryDir, binaryPath)
-		if (ownedPid) {
-			console.log(
-				`[KoboldCPP] Port ${port} already active — adopting our own process (pid ${ownedPid}) from a previous session`
-			)
-		} else {
-			console.log(
-				`[KoboldCPP] Port ${port} already active — adopting external instance we didn't start; Stop/Unload won't be available for it`
-			)
-		}
-		state.status = "running"
-		state.pid = ownedPid
-		state.isExternal = !ownedPid
-		state.startedAt = new Date()
-		state.lastError = null
-		emitStatus()
-		startHealthCheck(port)
-		pingActivity()
+	// If KoboldCPP is already reachable (e.g. left over from a previous server
+	// session) adopt it rather than spawning a second instance on the same
+	// port; otherwise clean up anything stale before spawning on top of it.
+	if (await adoptIfAlreadyRunning(binaryDir, binaryPath, port)) {
 		return
-	} else {
-		// Port is free (or the process behind it is unresponsive) — check for
-		// and clean up a stale process left behind by a previous session
-		// before we try to spawn on top of it.
-		await killStaleOrphan(binaryDir, binaryPath)
 	}
 
 	state.status = "starting"
@@ -446,7 +587,20 @@ async function doStart(): Promise<void> {
 		password,
 		"--admindir",
 		binaryDir,
-		"--nomodel"
+		"--nomodel",
+		// Without this, koboldcpp renders /v1/chat/completions through its
+		// own generic built-in formatter instead of the loaded model's real
+		// chat template — which it already auto-extracts from the GGUF on
+		// every model load (handle.get_chat_template(), unconditional, no
+		// extra config needed) but silently never uses without this flag.
+		// Scoped to the chat-completions endpoint only (koboldcpp's own
+		// docs: "Other endpoints are unaffected. Tool calls are done
+		// without jinja."), so this only matters for connections with "Use
+		// Chat Mode" on — which is this app's own default. Model-specific
+		// template behavior (eg. Gemma 4's <|think|> enable_thinking
+		// token) is otherwise completely inert regardless of what this app
+		// sends in the request body.
+		"--jinja"
 	]
 
 	// detached: true makes koboldcpp the leader of its own process group (setsid),
@@ -498,7 +652,7 @@ async function doStart(): Promise<void> {
 	})
 
 	try {
-		await waitForReady(port)
+		await waitForReady(port, proc)
 	} catch (err: any) {
 		// Process may still be starting — kill the whole group and propagate
 		if (proc.pid) {

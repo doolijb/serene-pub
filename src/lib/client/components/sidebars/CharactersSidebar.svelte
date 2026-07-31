@@ -243,6 +243,7 @@
 			if (!closed) return
 		}
 		goto("/library/characters")
+		panelsCtx.fullscreenPanel = null
 	}
 
 	async function handleFileImport(details: FileAcceptDetails) {
@@ -272,8 +273,7 @@
 
 	function confirmLorebookImport() {
 		const req = {
-			lorebookData: importingLorebook!,
-			characterId: importingLorebookCharacter?.id
+			lorebookData: importingLorebook!
 		}
 		socket.emit("lorebooks:import", req)
 		showLorebookImportConfirmationModal = false
@@ -687,14 +687,16 @@
 				25% of viewport), not the viewport's width — a viewport-based
 				breakpoint (sm/md/lg) gives the same column count whether this
 				sidebar is 300px wide (a 1440px window) or 950px wide (a 4K
-				window), which is exactly why a single fixed min-width made
-				cards either too cramped on modest screens or too tiny (too
-				many columns) on very large ones. @container queries the
-				actual pixel width of the wrapper below instead.
+				window). A fixed set of named breakpoints has the same problem
+				at the other end: capping at grid-cols-5 forever means a 4K
+				fullscreen panel (3800px+ wide) renders 5 columns of ~750px
+				cards instead of more, smaller ones. auto-fill/minmax scales
+				column count continuously off the grid's own width with no
+				named breakpoints (and no ceiling) at all.
 			-->
-			<div class="@container">
+			<div>
 				<div
-					class="grid grid-cols-1 gap-3 @md:grid-cols-2 @xl:grid-cols-3 @3xl:grid-cols-4 @5xl:grid-cols-5"
+					class="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-3"
 					role="list"
 					aria-label="Characters list"
 				>

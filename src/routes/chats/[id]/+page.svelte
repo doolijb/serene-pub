@@ -18,7 +18,7 @@
 	import BranchChatModal from "$lib/client/components/modals/BranchChatModal.svelte"
 	import SummarizeLoreModal from "$lib/client/components/modals/SummarizeLoreModal.svelte"
 	import TriggerNarratorResponseModal from "$lib/client/components/modals/TriggerNarratorResponseModal.svelte"
-	import AvatarGalleryModal from "$lib/client/components/chatMessages/AvatarGalleryModal.svelte"
+	import EntityGalleryViewModal from "$lib/client/components/chatMessages/EntityGalleryViewModal.svelte"
 	import ChatSceneImagesTab from "$lib/client/components/chatMessages/ChatSceneImagesTab.svelte"
 	import ChatWorkflowTab from "$lib/client/components/chatMessages/ChatWorkflowTab.svelte"
 	import { sceneImages } from "$lib/client/stores/sceneImages"
@@ -340,19 +340,39 @@
 		socket.emit("chats:getResponseOrder", { chatId })
 	}
 
+	// Display-name precedence for a message's speaker: prefer the LIVE
+	// character/persona if it still exists (so a rename propagates to past
+	// messages too, same as everywhere else in the app), falling back to the
+	// `removedName` snapshot taken at removal time only once the entity is
+	// itself globally deleted (its FK on the chatCharacters/chatPersonas row
+	// nulls out via onDelete: "set null"). A removed-but-still-existing
+	// participant's row is found here too (chat.chatCharacters/chatPersonas
+	// is deliberately unfiltered client-side, see getChatFromDB), so this
+	// already resolves the common case for free — the removedName fallback
+	// only ever matters once .character/.persona is null.
 	function getMessageCharacter(
 		msg: SelectChatMessage
 	): SelectCharacter | SelectPersona | undefined {
 		if (msg.personaId) {
-			const persona = chat?.chatPersonas?.find(
+			const cp = chat?.chatPersonas?.find(
 				(p: SelectChatPersona) => p.personaId === msg.personaId
-			)?.persona
-			return persona
+			)
+			return (
+				cp?.persona ??
+				(cp?.removedName
+					? ({ name: cp.removedName } as SelectPersona)
+					: undefined)
+			)
 		} else if (msg.characterId) {
-			const character = chat?.chatCharacters?.find(
+			const cc = chat?.chatCharacters?.find(
 				(c: SelectChatCharacter) => c.characterId === msg.characterId
-			)?.character
-			return character
+			)
+			return (
+				cc?.character ??
+				(cc?.removedName
+					? ({ name: cc.removedName } as SelectCharacter)
+					: undefined)
+			)
 		}
 	}
 
@@ -856,29 +876,260 @@
 		return res
 	}
 
+	// Named handlers (not inline in onMount) so cleanup can pass the exact
+	// same reference to .off() — a no-arg .off() call (or one with a
+	// different function reference than what was registered) removes
+	// *every* listener for that event, not just this component's.
+	function handlePersonasList(msg: Sockets.Personas.List.Response) {
+		availablePersonas = msg.personaList
+	}
+
+	function handleChatsUserTyping(msg: Sockets.Chats.UserTyping.Response) {
+		if (msg.chatId !== chatId) return
+		const myPersonaId =
+			currentUserPersona?.personaId || chat?.chatPersonas?.[0]?.personaId
+		if (msg.personaId === myPersonaId) return
+		typingPersonas.set(msg.personaId, {
+			name: msg.personaName,
+			lastTypingAt: Date.now()
+		})
+		typingPersonas = new Map(typingPersonas)
+	}
+
+	function handleChatsGet(msg: Sockets.Chats.Get.Response) {
+		if (msg.chat === null && !loadingOlderMessages) {
+			chatNotFound = true
+			return
+		}
+		if (msg.chat?.id === chatId) {
+			if (chat && loadingOlderMessages && msg.beforeId != null) {
+				// Load-more: prepend older messages (server already deduped via cursor)
+				const existingIds = new Set(chat.chatMessages.map((m) => m.id))
+				const olderMessages = msg.chat.chatMessages.filter(
+					(m) => !existingIds.has(m.id)
+				)
+				const allMessages = [...olderMessages, ...chat.chatMessages]
+				chat.chatMessages = allMessages.sort((a, b) => a.id - b.id)
+
+				// Restore scroll position: account for the height added above the old content
+				setTimeout(() => {
+					if (chatMessagesContainer) {
+						const prevScrollHeight = parseInt(
+							chatMessagesContainer.dataset
+								.previousScrollHeight || "0"
+						)
+						const prevScrollTop = parseInt(
+							chatMessagesContainer.dataset.previousScrollTop ||
+								"0"
+						)
+						const addedHeight =
+							chatMessagesContainer.scrollHeight -
+							prevScrollHeight
+						chatMessagesContainer.scrollTop =
+							addedHeight + prevScrollTop
+						delete chatMessagesContainer.dataset
+							.previousScrollHeight
+						delete chatMessagesContainer.dataset.previousScrollTop
+					}
+					loadingOlderMessages = false
+				}, 10)
+			} else {
+				// Initial load or chat switch — restore draft only on first load
+				const isFirstLoad = !chat
+				chat = {
+					...msg.chat,
+					chatMessages: msg.chat.chatMessages.sort(
+						(a, b) => a.id - b.id
+					)
+				}
+				if (isFirstLoad && msg.userDraft) {
+					newMessage = msg.userDraft
+				}
+				loadingOlderMessages = false
+			}
+			pagination = msg.pagination
+			// Auto-scroll is handled by the $effect
+		}
+	}
+
+	function handleChatMessage(msg: Sockets.ChatMessage.Response) {
+		const currentChat = chat
+		if (
+			currentChat != null &&
+			msg.chatMessage &&
+			msg.chatMessage.chatId === chatId
+		) {
+			const chatMessage = msg.chatMessage
+			const existingIndex = currentChat.chatMessages.findIndex(
+				(m: SelectChatMessage) => m.id === chatMessage.id
+			)
+			if (existingIndex !== -1) {
+				const updatedMessages = [...currentChat.chatMessages]
+				updatedMessages[existingIndex] = chatMessage
+				chat = { ...currentChat, chatMessages: updatedMessages }
+			} else {
+				// Add new message and maintain chronological order
+				const updatedMessages = [...currentChat.chatMessages, chatMessage]
+				chat = {
+					...currentChat,
+					chatMessages: updatedMessages.sort((a, b) => a.id - b.id)
+				}
+			}
+			// Refresh response order when messages change
+			socket.emit("chats:getResponseOrder", { chatId })
+			// Auto-scroll is handled by the $effect
+		}
+	}
+
+	// "chatMessage" (singular) is the server's event for a single message
+	// fetch/echo (distinct from the "chatMessages:*" bulk/action events used
+	// elsewhere) - this surfaces a toast if that ever fails.
+	function handleChatMessageError(msg: { error?: string }) {
+		toaster.error({
+			title: "Failed to load message",
+			description: msg?.error
+		})
+	}
+
+	function handleCharactersUpdate(msg: Sockets.Characters.Update.Response) {
+		const charId = msg.character?.id
+		if (!charId || !chat) return
+
+		// Update chat characters if the character is in the chat
+		const chatCharacterIndex = chat.chatCharacters.findIndex(
+			(c: SelectChatCharacter) => c.characterId === charId
+		)
+		if (chatCharacterIndex !== -1) {
+			const updatedChatCharacters = [...chat.chatCharacters]
+			updatedChatCharacters[chatCharacterIndex] = {
+				...updatedChatCharacters[chatCharacterIndex],
+				character: msg.character
+			}
+			chat = { ...chat, chatCharacters: updatedChatCharacters }
+		}
+	}
+
+	function handlePersonasUpdate(msg: Sockets.Personas.Update.Response) {
+		const personaId = msg.persona?.id
+		if (!personaId || !chat) return
+
+		// Update chat personas if the persona is in the chat
+		const chatPersonaIndex = chat.chatPersonas.findIndex(
+			(p: SelectChatPersona) => p.personaId === personaId
+		)
+		if (chatPersonaIndex !== -1) {
+			const updatedChatPersonas = [...chat.chatPersonas]
+			updatedChatPersonas[chatPersonaIndex] = {
+				...updatedChatPersonas[chatPersonaIndex],
+				persona: msg.persona
+			}
+			chat = { ...chat, chatPersonas: updatedChatPersonas }
+		}
+	}
+
+	function handleChatsPromptTokenCount(
+		msg: Sockets.Chats.PromptTokenCount.Response
+	) {
+		draftCompiledPrompt = msg
+	}
+
+	function handleChatMessagesDelete(
+		msg: Sockets.ChatMessages.Delete.Response
+	) {
+		if (chat) {
+			// Check if we're deleting the last message
+			const wasLastMessage = lastSeenMessageId === msg.id
+
+			// Remove the deleted message from the chat messages array
+			const filteredMessages = chat.chatMessages.filter(
+				(m: SelectChatMessage) => m.id !== msg.id
+			)
+
+			// Ensure messages remain sorted chronologically
+			chat = {
+				...chat,
+				chatMessages: filteredMessages.sort((a, b) => a.id - b.id)
+			}
+
+			// Update tracking state if we deleted the last message
+			if (wasLastMessage && chat.chatMessages.length > 0) {
+				const newLastMessage =
+					chat.chatMessages[chat.chatMessages.length - 1]
+				lastSeenMessageId = newLastMessage.id
+				lastSeenMessageContent = newLastMessage.content || ""
+			} else if (chat.chatMessages.length === 0) {
+				lastSeenMessageId = null
+				lastSeenMessageContent = ""
+			}
+
+			// Refresh response order after deletion
+			socket.emit("chats:getResponseOrder", { chatId })
+		}
+	}
+
+	function handleChatsGetResponseOrder(
+		msg: Sockets.Chats.GetResponseOrder.Response
+	) {
+		if (msg.chatId === chatId) {
+			chatResponseOrder = msg
+		}
+	}
+
+	function handleChatsAddPersona(msg: Sockets.Chats.AddPersona.Response) {
+		if (msg.success) {
+			toaster.success({
+				title: "Persona added to chat successfully"
+			})
+		} else if (msg.error) {
+			toaster.error({ title: msg.error })
+		}
+	}
+
+	function handleChatsBranch(msg: Sockets.Chats.Branch.Response) {
+		if (msg.chat) {
+			toaster.success({
+				title: "Chat branched successfully"
+			})
+			// Navigate to the new branched chat
+			goto(`/chats/${msg.chat.id}`)
+		} else if (msg.error) {
+			toaster.error({ title: msg.error })
+		}
+	}
+
+	function handleScenesScenedMessageIds(
+		msg: Sockets.Scenes.SenedMessageIds.Response
+	) {
+		scenedMessageIds = new Set(msg.scenedMessageIds)
+	}
+
+	function handleScenesScenedMessageIdsError() {
+		chatNotFound = true
+	}
+
+	function handleScenesList(msg: Sockets.Scenes.List.Response) {
+		if (!msg.sceneList.length || msg.sceneList[0].chatId === chatId) {
+			sceneList = msg.sceneList
+		}
+	}
+
+	function handleScenesListError() {
+		chatNotFound = true
+	}
+
+	function handleChatsGetNarratorName(
+		msg: Sockets.Chats.GetNarratorName.Response
+	) {
+		if (msg.chatId !== chatId) return
+		narratorName = msg.narratorName
+	}
+
 	onMount(() => {
 		// Fetch available personas for guest users
 		socket.emit("personas:list", {})
 
-		socket.on("personas:list", (msg: Sockets.Personas.List.Response) => {
-			availablePersonas = msg.personaList
-		})
-
-		socket.on(
-			"chats:userTyping",
-			(msg: Sockets.Chats.UserTyping.Response) => {
-				if (msg.chatId !== chatId) return
-				const myPersonaId =
-					currentUserPersona?.personaId ||
-					chat?.chatPersonas?.[0]?.personaId
-				if (msg.personaId === myPersonaId) return
-				typingPersonas.set(msg.personaId, {
-					name: msg.personaName,
-					lastTypingAt: Date.now()
-				})
-				typingPersonas = new Map(typingPersonas)
-			}
-		)
+		socket.on("personas:list", handlePersonasList)
+		socket.on("chats:userTyping", handleChatsUserTyping)
 		typingPruneInterval = setInterval(() => {
 			const cutoff = Date.now() - 10_000
 			let changed = false
@@ -891,260 +1142,29 @@
 			if (changed) typingPersonas = new Map(typingPersonas)
 		}, 1000)
 
-		socket.on("chats:get", (msg: Sockets.Chats.Get.Response) => {
-			if (msg.chat === null && !loadingOlderMessages) {
-				chatNotFound = true
-				return
-			}
-			if (msg.chat?.id === chatId) {
-				if (chat && loadingOlderMessages && msg.beforeId != null) {
-					// Load-more: prepend older messages (server already deduped via cursor)
-					const existingIds = new Set(
-						chat.chatMessages.map((m) => m.id)
-					)
-					const olderMessages = msg.chat.chatMessages.filter(
-						(m) => !existingIds.has(m.id)
-					)
-					const allMessages = [...olderMessages, ...chat.chatMessages]
-					chat.chatMessages = allMessages.sort((a, b) => a.id - b.id)
-
-					// Restore scroll position: account for the height added above the old content
-					setTimeout(() => {
-						if (chatMessagesContainer) {
-							const prevScrollHeight = parseInt(
-								chatMessagesContainer.dataset
-									.previousScrollHeight || "0"
-							)
-							const prevScrollTop = parseInt(
-								chatMessagesContainer.dataset
-									.previousScrollTop || "0"
-							)
-							const addedHeight =
-								chatMessagesContainer.scrollHeight -
-								prevScrollHeight
-							chatMessagesContainer.scrollTop =
-								addedHeight + prevScrollTop
-							delete chatMessagesContainer.dataset
-								.previousScrollHeight
-							delete chatMessagesContainer.dataset
-								.previousScrollTop
-						}
-						loadingOlderMessages = false
-					}, 10)
-				} else {
-					// Initial load or chat switch — restore draft only on first load
-					const isFirstLoad = !chat
-					chat = {
-						...msg.chat,
-						chatMessages: msg.chat.chatMessages.sort(
-							(a, b) => a.id - b.id
-						)
-					}
-					if (isFirstLoad && msg.userDraft) {
-						newMessage = msg.userDraft
-					}
-					loadingOlderMessages = false
-				}
-				pagination = msg.pagination
-				// Auto-scroll is handled by the $effect
-			}
-		})
-
-		socket.on("chatMessage", (msg: Sockets.ChatMessage.Response) => {
-			const currentChat = chat
-			if (
-				currentChat != null &&
-				msg.chatMessage &&
-				msg.chatMessage.chatId === chatId
-			) {
-				const chatMessage = msg.chatMessage
-				const existingIndex = currentChat.chatMessages.findIndex(
-					(m: SelectChatMessage) => m.id === chatMessage.id
-				)
-				if (existingIndex !== -1) {
-					const updatedMessages = [...currentChat.chatMessages]
-					updatedMessages[existingIndex] = chatMessage
-					chat = { ...currentChat, chatMessages: updatedMessages }
-				} else {
-					// Add new message and maintain chronological order
-					const updatedMessages = [
-						...currentChat.chatMessages,
-						chatMessage
-					]
-					chat = {
-						...currentChat,
-						chatMessages: updatedMessages.sort(
-							(a, b) => a.id - b.id
-						)
-					}
-				}
-				// Refresh response order when messages change
-				socket.emit("chats:getResponseOrder", { chatId })
-				// Auto-scroll is handled by the $effect
-			}
-		})
-
-		// "chatMessage" (singular) is the server's event for a single message
-		// fetch/echo (distinct from the "chatMessages:*" bulk/action events
-		// used elsewhere) - this surfaces a toast if that ever fails.
-		socket.on("chatMessage:error", (msg: { error?: string }) => {
-			toaster.error({
-				title: "Failed to load message",
-				description: msg?.error
-			})
-		})
-
+		socket.on("chats:get", handleChatsGet)
+		socket.on("chatMessage", handleChatMessage)
+		socket.on("chatMessage:error", handleChatMessageError)
+		socket.on("characters:update", handleCharactersUpdate)
+		socket.on("personas:update", handlePersonasUpdate)
+		socket.on("chats:promptTokenCount", handleChatsPromptTokenCount)
+		socket.on("chatMessages:delete", handleChatMessagesDelete)
+		socket.on("chats:getResponseOrder", handleChatsGetResponseOrder)
+		socket.on("chats:addPersona", handleChatsAddPersona)
+		socket.on("chats:branch", handleChatsBranch)
+		socket.on("scenes:scenedMessageIds", handleScenesScenedMessageIds)
 		socket.on(
-			"characters:update",
-			(msg: Sockets.Characters.Update.Response) => {
-				const charId = msg.character?.id
-				if (!charId || !chat) return
-
-				// Update chat characters if the character is in the chat
-				const chatCharacterIndex = chat.chatCharacters.findIndex(
-					(c: SelectChatCharacter) => c.characterId === charId
-				)
-				if (chatCharacterIndex !== -1) {
-					const updatedChatCharacters = [...chat.chatCharacters]
-					updatedChatCharacters[chatCharacterIndex] = {
-						...updatedChatCharacters[chatCharacterIndex],
-						character: msg.character
-					}
-					chat = { ...chat, chatCharacters: updatedChatCharacters }
-				}
-			}
+			"scenes:scenedMessageIds:error",
+			handleScenesScenedMessageIdsError
 		)
+		socket.on("scenes:list", handleScenesList)
+		socket.on("scenes:list:error", handleScenesListError)
+		socket.on("chats:getNarratorName", handleChatsGetNarratorName)
 
-		socket.on(
-			"personas:update",
-			(msg: Sockets.Personas.Update.Response) => {
-				const personaId = msg.persona?.id
-				if (!personaId || !chat) return
-
-				// Update chat personas if the persona is in the chat
-				const chatPersonaIndex = chat.chatPersonas.findIndex(
-					(p: SelectChatPersona) => p.personaId === personaId
-				)
-				if (chatPersonaIndex !== -1) {
-					const updatedChatPersonas = [...chat.chatPersonas]
-					updatedChatPersonas[chatPersonaIndex] = {
-						...updatedChatPersonas[chatPersonaIndex],
-						persona: msg.persona
-					}
-					chat = { ...chat, chatPersonas: updatedChatPersonas }
-				}
-			}
-		)
-
-		socket.on(
-			"chats:promptTokenCount",
-			(msg: Sockets.Chats.PromptTokenCount.Response) => {
-				draftCompiledPrompt = msg
-			}
-		)
-
-		socket.on(
-			"chatMessages:delete",
-			(msg: Sockets.ChatMessages.Delete.Response) => {
-				if (chat) {
-					// Check if we're deleting the last message
-					const wasLastMessage = lastSeenMessageId === msg.id
-
-					// Remove the deleted message from the chat messages array
-					const filteredMessages = chat.chatMessages.filter(
-						(m: SelectChatMessage) => m.id !== msg.id
-					)
-
-					// Ensure messages remain sorted chronologically
-					chat = {
-						...chat,
-						chatMessages: filteredMessages.sort(
-							(a, b) => a.id - b.id
-						)
-					}
-
-					// Update tracking state if we deleted the last message
-					if (wasLastMessage && chat.chatMessages.length > 0) {
-						const newLastMessage =
-							chat.chatMessages[chat.chatMessages.length - 1]
-						lastSeenMessageId = newLastMessage.id
-						lastSeenMessageContent = newLastMessage.content || ""
-					} else if (chat.chatMessages.length === 0) {
-						lastSeenMessageId = null
-						lastSeenMessageContent = ""
-					}
-
-					// Refresh response order after deletion
-					socket.emit("chats:getResponseOrder", { chatId })
-				}
-			}
-		)
-
-		socket.on(
-			"chats:getResponseOrder",
-			(msg: Sockets.Chats.GetResponseOrder.Response) => {
-				if (msg.chatId === chatId) {
-					chatResponseOrder = msg
-				}
-			}
-		)
-
-		socket.on(
-			"chats:addPersona",
-			(msg: Sockets.Chats.AddPersona.Response) => {
-				if (msg.success) {
-					toaster.success({
-						title: "Persona added to chat successfully"
-					})
-				} else if (msg.error) {
-					toaster.error({ title: msg.error })
-				}
-			}
-		)
-
-		socket.on("chats:branch", (msg: Sockets.Chats.Branch.Response) => {
-			if (msg.chat) {
-				toaster.success({
-					title: "Chat branched successfully"
-				})
-				// Navigate to the new branched chat
-				goto(`/chats/${msg.chat.id}`)
-			} else if (msg.error) {
-				toaster.error({ title: msg.error })
-			}
-		})
-
-		socket?.on(
-			"scenes:scenedMessageIds",
-			(msg: Sockets.Scenes.SenedMessageIds.Response) => {
-				scenedMessageIds = new Set(msg.scenedMessageIds)
-			}
-		)
-		socket?.on("scenes:scenedMessageIds:error", () => {
-			chatNotFound = true
-		})
-
-		socket?.on("scenes:list", (msg: Sockets.Scenes.List.Response) => {
-			if (!msg.sceneList.length || msg.sceneList[0].chatId === chatId) {
-				sceneList = msg.sceneList
-			}
-		})
-		socket?.on("scenes:list:error", () => {
-			chatNotFound = true
-		})
-
-		socket?.emit("scenes:scenedMessageIds", { chatId })
-		socket?.emit("scenes:list", {
+		socket.emit("scenes:scenedMessageIds", { chatId })
+		socket.emit("scenes:list", {
 			chatId
 		} satisfies Sockets.Scenes.List.Params)
-
-		socket.on(
-			"chats:getNarratorName",
-			(msg: Sockets.Chats.GetNarratorName.Response) => {
-				if (msg.chatId !== chatId) return
-				narratorName = msg.narratorName
-			}
-		)
 
 		// Cleanup function
 		return () => {
@@ -1158,8 +1178,29 @@
 			if (typingPruneInterval) {
 				clearInterval(typingPruneInterval)
 			}
-			socket.off("chats:userTyping")
-			socket.off("chats:getNarratorName")
+			socket.off("personas:list", handlePersonasList)
+			socket.off("chats:userTyping", handleChatsUserTyping)
+			socket.off("chats:get", handleChatsGet)
+			socket.off("chatMessage", handleChatMessage)
+			socket.off("chatMessage:error", handleChatMessageError)
+			socket.off("characters:update", handleCharactersUpdate)
+			socket.off("personas:update", handlePersonasUpdate)
+			socket.off("chats:promptTokenCount", handleChatsPromptTokenCount)
+			socket.off("chatMessages:delete", handleChatMessagesDelete)
+			socket.off("chats:getResponseOrder", handleChatsGetResponseOrder)
+			socket.off("chats:addPersona", handleChatsAddPersona)
+			socket.off("chats:branch", handleChatsBranch)
+			socket.off(
+				"scenes:scenedMessageIds",
+				handleScenesScenedMessageIds
+			)
+			socket.off(
+				"scenes:scenedMessageIds:error",
+				handleScenesScenedMessageIdsError
+			)
+			socket.off("scenes:list", handleScenesList)
+			socket.off("scenes:list:error", handleScenesListError)
+			socket.off("chats:getNarratorName", handleChatsGetNarratorName)
 		}
 	})
 
@@ -2691,7 +2732,7 @@
 		{narratorName}
 	/>
 
-	<AvatarGalleryModal
+	<EntityGalleryViewModal
 		bind:open={showAvatarModal}
 		onOpenChange={(e) => (showAvatarModal = e.open)}
 		entity={avatarModalEntity}

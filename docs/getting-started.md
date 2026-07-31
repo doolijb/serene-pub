@@ -12,7 +12,7 @@ The wizard adapts to who you are:
 
 - The **first admin** to set up a brand-new server sees the full wizard, including connecting an AI provider.
 - An **admin logging in after the server is already configured** sees a shorter welcome message but still gets the connection/summarization/RAG steps if those aren't done yet.
-- **Non-admin users** never see the connection, summarization, or RAG steps at all — those are server-wide settings an admin controls. Non-admins only go through Welcome, Character, Persona, and Create Chat. See [Users and Accounts](./users-and-accounts.md) for how admin vs. non-admin roles work.
+- **Non-admin users** never see the connection, summarization, or RAG steps at all — those are server-wide settings an admin controls. Non-admins only go through Welcome, Persona, Character, and Create Chat. See [Users and Accounts](./users-and-accounts.md) for how admin vs. non-admin roles work.
 
 ## Step 1: Welcome
 
@@ -125,7 +125,7 @@ Once every required step is complete, this same screen stops showing the wizard 
 - A **Characters** grid of everything you've created or imported — clicking a character jumps to that character's chats. A list/card view toggle lets you switch how this grid displays; your choice is remembered locally in your browser. The Recent Chats grid below has no equivalent toggle.
 - A **Recent Chats** grid (your most recent, up to six) if you have any chats yet — clicking one opens it directly.
 
-You'll also usually see a dismissible welcome banner (with a small × button to hide it) and a small alpha-status notice reminding you the app is under active development, regardless of whether the wizard or dashboard is showing — though the banner itself is hidden on narrow/mobile screens. A **Documentation** link, pointing at the in-app `/docs` page, is always shown above the wizard or dashboard content as well.
+You'll also usually see a dismissible welcome banner (with a small × button to hide it) and a small alpha-status notice reminding you the app is under active development, regardless of whether the wizard or dashboard is showing — though the banner itself is hidden on narrow/mobile screens. A **Documentation** link, pointing at the in-app `/docs` page, is always shown above the wizard or dashboard content as well, alongside a **Document View** button that switches to a simplified, high-contrast, keyboard- and screen-reader-friendly layout (also reachable via Ctrl+Shift+Y) — see [Document View](./document-view.md) for what that mode changes.
 
 ## Returning to This Screen Later
 

@@ -9,14 +9,15 @@ export const vectorizationConfigGetHandler: Handler<
 	Sockets.VectorizationConfig.Get.Response
 > = {
 	event: "vectorizationConfig:get",
-	handler: async (_socket, _params, emitToUser) => {
-		// apiKey deliberately excluded — the client never reads it from this
-		// event (only from the admin-gated vectorization:listModels), so any
-		// authenticated non-admin user could otherwise read the plaintext
-		// embedding-provider API key straight off this response.
+	handler: async (socket, _params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		// Explicit allowlist, not a denylist of just apiKey — the client
+		// (EmbeddingConnectionPanel.svelte) only ever reads
+		// embeddingModelTtlMinutes; mode/apiBaseUrl/apiModel/apiDimensions
+		// have no legitimate reason to leave the server via this event.
 		const config = await db.query.vectorizationConfigs.findFirst({
 			where: eq(schema.vectorizationConfigs.id, 1),
-			columns: { apiKey: false }
+			columns: { embeddingModelTtlMinutes: true }
 		})
 		const res: Sockets.VectorizationConfig.Get.Response = {
 			config: config ?? { embeddingModelTtlMinutes: 5 }

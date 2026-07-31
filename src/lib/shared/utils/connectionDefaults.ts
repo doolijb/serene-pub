@@ -58,6 +58,19 @@ export const CONNECTION_DEFAULTS = {
 			useChat: true,
 			useMemory: false,
 			memory: "",
+			// Must match KoboldCppForm.svelte's own extraJsonToExtraFields
+			// defaults exactly — these 6 fields are invented by the form
+			// (not read anywhere by KoboldCppAdapter.ts today), and any
+			// mismatch here makes a freshly-opened connection look dirty
+			// before the user has touched anything (the form's mount effect
+			// writes them into `connection`, while the server-sourced
+			// `originalConnection` baseline never had them).
+			trimStop: true,
+			renderSpecial: false,
+			bypassEos: false,
+			grammarRetainState: false,
+			logprobs: false,
+			replaceInstructPlaceholders: false,
 			enableThinking: null as boolean | null
 		}
 	},
@@ -73,6 +86,14 @@ export const CONNECTION_DEFAULTS = {
 			useChat: true,
 			useMemory: false,
 			memory: "",
+			// See CONNECTION_TYPE.KOBOLDCPP above — same fix, same reason,
+			// matching KoboldCppManagedForm.svelte's own defaults.
+			trimStop: true,
+			renderSpecial: false,
+			bypassEos: false,
+			grammarRetainState: false,
+			logprobs: false,
+			replaceInstructPlaceholders: false,
 			enableThinking: null as boolean | null,
 			managedConfig: {
 				gpuLayers: -1,
@@ -101,6 +122,7 @@ export const OPENAI_CHAT_PRESETS = [
 	{
 		name: "Empty",
 		value: 0,
+		category: "custom",
 		connectionDefaults: {
 			baseUrl: "",
 			promptFormat: PromptFormats.VICUNA,
@@ -113,6 +135,7 @@ export const OPENAI_CHAT_PRESETS = [
 	{
 		name: "Ollama",
 		value: 1,
+		category: "local",
 		connectionDefaults: {
 			baseUrl: "http://localhost:11434/v1/",
 			promptFormat: PromptFormats.VICUNA,
@@ -125,6 +148,7 @@ export const OPENAI_CHAT_PRESETS = [
 	{
 		name: "OpenRouter",
 		value: 3,
+		category: "cloud",
 		connectionDefaults: {
 			baseUrl: "https://openrouter.ai/api/v1/",
 			promptFormat: PromptFormats.OPENAI,
@@ -137,6 +161,7 @@ export const OPENAI_CHAT_PRESETS = [
 	{
 		name: "OpenAI (Official)",
 		value: 4,
+		category: "cloud",
 		connectionDefaults: {
 			baseUrl: "https://api.openai.com/v1/",
 			promptFormat: PromptFormats.OPENAI,
@@ -149,6 +174,7 @@ export const OPENAI_CHAT_PRESETS = [
 	{
 		name: "LocalAI",
 		value: 5,
+		category: "local",
 		connectionDefaults: {
 			baseUrl: "http://localhost:8080/v1/",
 			promptFormat: PromptFormats.OPENAI,
@@ -161,6 +187,7 @@ export const OPENAI_CHAT_PRESETS = [
 	{
 		name: "AnyScale",
 		value: 6,
+		category: "cloud",
 		connectionDefaults: {
 			baseUrl: "https://api.endpoints.anyscale.com/v1/",
 			promptFormat: PromptFormats.OPENAI,
@@ -173,6 +200,7 @@ export const OPENAI_CHAT_PRESETS = [
 	{
 		name: "Groq",
 		value: 7,
+		category: "cloud",
 		connectionDefaults: {
 			baseUrl: "https://api.groq.com/openai/v1/",
 			promptFormat: PromptFormats.OPENAI,
@@ -185,6 +213,7 @@ export const OPENAI_CHAT_PRESETS = [
 	{
 		name: "Together AI",
 		value: 8,
+		category: "cloud",
 		connectionDefaults: {
 			baseUrl: "https://api.together.xyz/v1/",
 			promptFormat: PromptFormats.OPENAI,
@@ -197,6 +226,7 @@ export const OPENAI_CHAT_PRESETS = [
 	{
 		name: "DeepInfra",
 		value: 9,
+		category: "cloud",
 		connectionDefaults: {
 			baseUrl: "https://api.deepinfra.com/v1/openai/",
 			promptFormat: PromptFormats.OPENAI,
@@ -209,6 +239,7 @@ export const OPENAI_CHAT_PRESETS = [
 	{
 		name: "Fireworks AI",
 		value: 10,
+		category: "cloud",
 		connectionDefaults: {
 			baseUrl: "https://api.fireworks.ai/inference/v1/",
 			promptFormat: PromptFormats.OPENAI,
@@ -221,6 +252,7 @@ export const OPENAI_CHAT_PRESETS = [
 	{
 		name: "Perplexity AI",
 		value: 11,
+		category: "cloud",
 		connectionDefaults: {
 			baseUrl: "https://api.perplexity.ai/v1/",
 			promptFormat: PromptFormats.OPENAI,
@@ -233,8 +265,158 @@ export const OPENAI_CHAT_PRESETS = [
 	{
 		name: "KoboldCPP",
 		value: 12,
+		category: "local",
 		connectionDefaults: {
 			baseUrl: "http://localhost:5001/v1/",
+			promptFormat: PromptFormats.OPENAI,
+			tokenCounter: TokenCounterOptions.ESTIMATE,
+			extraJson: {
+				apiKey: ""
+			}
+		}
+	},
+	// ── Experimental presets ──────────────────────────────────────────────
+	// Added from their official OpenAI-compatibility endpoints, not yet
+	// verified end-to-end against a live account/server by us — the request
+	// shape and auth match the documented contract, but sampler param
+	// support, streaming edge cases, etc. haven't been soak-tested the way
+	// the presets above have. Report issues and we'll drop "Experimental".
+	{
+		name: "Mistral AI (Experimental)",
+		value: 13,
+		category: "cloud",
+		connectionDefaults: {
+			baseUrl: "https://api.mistral.ai/v1/",
+			promptFormat: PromptFormats.OPENAI,
+			tokenCounter: TokenCounterOptions.ESTIMATE,
+			extraJson: {
+				apiKey: ""
+			}
+		}
+	},
+	{
+		name: "xAI Grok (Experimental)",
+		value: 14,
+		category: "cloud",
+		connectionDefaults: {
+			baseUrl: "https://api.x.ai/v1/",
+			promptFormat: PromptFormats.OPENAI,
+			tokenCounter: TokenCounterOptions.ESTIMATE,
+			extraJson: {
+				apiKey: ""
+			}
+		}
+	},
+	{
+		name: "DeepSeek (Experimental)",
+		value: 15,
+		category: "cloud",
+		connectionDefaults: {
+			baseUrl: "https://api.deepseek.com/v1/",
+			promptFormat: PromptFormats.OPENAI,
+			tokenCounter: TokenCounterOptions.ESTIMATE,
+			extraJson: {
+				apiKey: ""
+			}
+		}
+	},
+	{
+		name: "Google Gemini (Experimental)",
+		value: 16,
+		category: "cloud",
+		connectionDefaults: {
+			baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
+			promptFormat: PromptFormats.OPENAI,
+			tokenCounter: TokenCounterOptions.ESTIMATE,
+			extraJson: {
+				apiKey: ""
+			}
+		}
+	},
+	{
+		name: "Cohere (Experimental)",
+		value: 17,
+		category: "cloud",
+		connectionDefaults: {
+			baseUrl: "https://api.cohere.ai/compatibility/v1/",
+			promptFormat: PromptFormats.OPENAI,
+			tokenCounter: TokenCounterOptions.ESTIMATE,
+			extraJson: {
+				apiKey: ""
+			}
+		}
+	},
+	{
+		name: "Novita AI (Experimental)",
+		value: 18,
+		category: "cloud",
+		connectionDefaults: {
+			baseUrl: "https://api.novita.ai/openai/",
+			promptFormat: PromptFormats.OPENAI,
+			tokenCounter: TokenCounterOptions.ESTIMATE,
+			extraJson: {
+				apiKey: ""
+			}
+		}
+	},
+	{
+		name: "Featherless AI (Experimental)",
+		value: 19,
+		category: "cloud",
+		connectionDefaults: {
+			baseUrl: "https://api.featherless.ai/v1/",
+			promptFormat: PromptFormats.OPENAI,
+			tokenCounter: TokenCounterOptions.ESTIMATE,
+			extraJson: {
+				apiKey: ""
+			}
+		}
+	},
+	{
+		name: "text-generation-webui (Experimental)",
+		value: 20,
+		category: "local",
+		connectionDefaults: {
+			baseUrl: "http://127.0.0.1:5000/v1/",
+			promptFormat: PromptFormats.OPENAI,
+			tokenCounter: TokenCounterOptions.ESTIMATE,
+			extraJson: {
+				apiKey: ""
+			}
+		}
+	},
+	{
+		name: "vLLM (Experimental)",
+		value: 21,
+		category: "local",
+		connectionDefaults: {
+			baseUrl: "http://localhost:8000/v1/",
+			promptFormat: PromptFormats.OPENAI,
+			tokenCounter: TokenCounterOptions.ESTIMATE,
+			extraJson: {
+				apiKey: ""
+			}
+		}
+	},
+	{
+		name: "SGLang (Experimental)",
+		value: 22,
+		category: "local",
+		connectionDefaults: {
+			baseUrl: "http://localhost:30000/v1/",
+			promptFormat: PromptFormats.OPENAI,
+			tokenCounter: TokenCounterOptions.ESTIMATE,
+			extraJson: {
+				apiKey: ""
+			}
+		}
+	},
+	{
+		name: "Aphrodite Engine (Experimental)",
+		value: 23,
+		category: "local",
+		connectionDefaults: {
+			baseUrl: "http://localhost:2242/v1/",
 			promptFormat: PromptFormats.OPENAI,
 			tokenCounter: TokenCounterOptions.ESTIMATE,
 			extraJson: {

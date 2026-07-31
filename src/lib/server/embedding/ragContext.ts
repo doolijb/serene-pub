@@ -158,6 +158,20 @@ export type ScopedRagItem =
 			score: number
 	  }
 
+// Plain `Omit<ScopedRagItem, "score">` would NOT distribute correctly over
+// this discriminated union — `keyof ScopedRagItem` collapses to the
+// *intersection* of all variants' keys (just "source"/"score"), so a
+// non-distributive Omit would silently lose every variant's own exclusive
+// fields (year/month/day, fromNodeId/toNodeId, etc.) instead of preserving
+// them. The `T extends any ? ... : never` form forces TS to apply Omit to
+// each union member separately, then re-union the results.
+type DistributiveOmit<T, K extends PropertyKey> = T extends any
+	? Omit<T, K>
+	: never
+export type ScopedRagCandidate = DistributiveOmit<ScopedRagItem, "score">
+
+export const RAG_CANDIDATE_FETCH_CAP = 500
+
 export type ScopedRagOptions = {
 	topK?: number
 	/** Only return results from these content types */
@@ -181,21 +195,29 @@ export type ScopedRagOptions = {
 }
 
 /**
- * Run a similarity search over all content associated with the given chat context.
- * Results are scoped to only include content linked to this chat, filtered to the
- * active embedding model, and sorted by cosine similarity descending.
+ * Fetches every candidate item in scope for a chat context — the DB-bound
+ * half of a similarity search, with no query embedding involved and
+ * nothing scored yet. Callers doing multiple similarity passes against the
+ * same chat context within one turn (eg. RagInfillEngine.ts scoring
+ * several query-message embeddings) should fetch once via this and call
+ * rankScopedCandidates() per query embedding, rather than re-running the
+ * whole fetch for each one. Each source query is capped at
+ * RAG_CANDIDATE_FETCH_CAP rows (newest first) — bounds worst-case
+ * latency/memory on a pathologically large lorebook/chat; there's no
+ * pgvector index backing these queries, so ranking by similarity still
+ * requires scoring whatever's fetched in-process rather than letting SQL
+ * pick the closest matches.
  */
-export async function scopedRankBySimilarity(
-	queryEmbedding: number[],
+export async function fetchScopedCandidates(
 	context: ChatRagContext,
-	opts: ScopedRagOptions
-): Promise<ScopedRagItem[]> {
-	const { modelId, topK, sources, excludeRecentMessages = 10 } = opts
+	opts: Omit<ScopedRagOptions, "topK">
+): Promise<ScopedRagCandidate[]> {
+	const { modelId, sources, excludeRecentMessages = 10 } = opts
 
 	const include = (source: ScopedRagItem["source"]) =>
 		!sources || sources.includes(source as any)
 
-	const candidates: ScopedRagItem[] = []
+	const candidates: ScopedRagCandidate[] = []
 
 	// Messages from this chat only. Recent messages are excluded since they're
 	// already in the guaranteed context window. Cross-chat context (other
@@ -230,7 +252,8 @@ export async function scopedRankBySimilarity(
 					eq(schema.chatMessages.embeddingModel, modelId)
 				)
 			)
-			.orderBy(asc(schema.chatMessages.id))
+			.orderBy(desc(schema.chatMessages.id))
+			.limit(RAG_CANDIDATE_FETCH_CAP)
 
 		for (const msg of messages) {
 			if (recentIds.includes(msg.id)) continue
@@ -241,8 +264,7 @@ export async function scopedRankBySimilarity(
 				id: msg.id,
 				content: msg.content,
 				embedding: msg.embedding,
-				embeddingModel: msg.embeddingModel,
-				score: cosineSimilarity(queryEmbedding, msg.embedding)
+				embeddingModel: msg.embeddingModel
 			})
 		}
 	}
@@ -271,6 +293,8 @@ export async function scopedRankBySimilarity(
 						eq(schema.worldLoreEntries.embeddingModel, modelId)
 					)
 				)
+				.orderBy(desc(schema.worldLoreEntries.id))
+				.limit(RAG_CANDIDATE_FETCH_CAP)
 
 			for (const wle of wles) {
 				if (!wle.embedding) continue
@@ -281,8 +305,7 @@ export async function scopedRankBySimilarity(
 					name: wle.name,
 					content: wle.content,
 					embedding: wle.embedding,
-					embeddingModel: wle.embeddingModel,
-					score: cosineSimilarity(queryEmbedding, wle.embedding)
+					embeddingModel: wle.embeddingModel
 				})
 			}
 		}
@@ -309,6 +332,8 @@ export async function scopedRankBySimilarity(
 						eq(schema.characterLoreEntries.embeddingModel, modelId)
 					)
 				)
+				.orderBy(desc(schema.characterLoreEntries.id))
+				.limit(RAG_CANDIDATE_FETCH_CAP)
 
 			for (const cle of cles) {
 				if (!cle.embedding) continue
@@ -319,8 +344,7 @@ export async function scopedRankBySimilarity(
 					name: cle.name,
 					content: cle.content,
 					embedding: cle.embedding,
-					embeddingModel: cle.embeddingModel,
-					score: cosineSimilarity(queryEmbedding, cle.embedding)
+					embeddingModel: cle.embeddingModel
 				})
 			}
 		}
@@ -349,6 +373,8 @@ export async function scopedRankBySimilarity(
 						eq(schema.historyEntries.embeddingModel, modelId)
 					)
 				)
+				.orderBy(desc(schema.historyEntries.id))
+				.limit(RAG_CANDIDATE_FETCH_CAP)
 
 			for (const he of hes) {
 				if (!he.embedding) continue
@@ -362,8 +388,7 @@ export async function scopedRankBySimilarity(
 					month: he.month,
 					day: he.day,
 					embedding: he.embedding,
-					embeddingModel: he.embeddingModel,
-					score: cosineSimilarity(queryEmbedding, he.embedding)
+					embeddingModel: he.embeddingModel
 				})
 			}
 		}
@@ -371,24 +396,26 @@ export async function scopedRankBySimilarity(
 		if (include("narrativeNode")) {
 			const nodes = await db
 				.select({
-					id: schema.narrativeNodes.id,
-					lorebookId: schema.narrativeNodes.lorebookId,
-					name: schema.narrativeNodes.name,
-					summary: schema.narrativeNodes.summary,
-					embedding: schema.narrativeNodes.embedding,
-					embeddingModel: schema.narrativeNodes.embeddingModel
+					id: schema.lorebookBindings.id,
+					lorebookId: schema.lorebookBindings.lorebookId,
+					name: schema.lorebookBindings.name,
+					summary: schema.lorebookBindings.summary,
+					embedding: schema.lorebookBindings.embedding,
+					embeddingModel: schema.lorebookBindings.embeddingModel
 				})
-				.from(schema.narrativeNodes)
+				.from(schema.lorebookBindings)
 				.where(
 					and(
 						inArray(
-							schema.narrativeNodes.lorebookId,
+							schema.lorebookBindings.lorebookId,
 							context.allLorebookIds
 						),
-						isNotNull(schema.narrativeNodes.embedding),
-						eq(schema.narrativeNodes.embeddingModel, modelId)
+						isNotNull(schema.lorebookBindings.embedding),
+						eq(schema.lorebookBindings.embeddingModel, modelId)
 					)
 				)
+				.orderBy(desc(schema.lorebookBindings.id))
+				.limit(RAG_CANDIDATE_FETCH_CAP)
 			for (const node of nodes) {
 				if (!node.embedding) continue
 				candidates.push({
@@ -398,8 +425,7 @@ export async function scopedRankBySimilarity(
 					name: node.name,
 					summary: node.summary,
 					embedding: node.embedding,
-					embeddingModel: node.embeddingModel,
-					score: cosineSimilarity(queryEmbedding, node.embedding)
+					embeddingModel: node.embeddingModel
 				})
 			}
 		}
@@ -433,6 +459,8 @@ export async function scopedRankBySimilarity(
 						)
 					)
 				)
+				.orderBy(desc(schema.narrativeRelationships.id))
+				.limit(RAG_CANDIDATE_FETCH_CAP)
 			for (const rel of rels) {
 				if (!rel.embedding) continue
 				candidates.push({
@@ -446,8 +474,7 @@ export async function scopedRankBySimilarity(
 					status: rel.status,
 					reason: rel.reason,
 					embedding: rel.embedding,
-					embeddingModel: rel.embeddingModel,
-					score: cosineSimilarity(queryEmbedding, rel.embedding)
+					embeddingModel: rel.embeddingModel
 				})
 			}
 		}
@@ -471,6 +498,8 @@ export async function scopedRankBySimilarity(
 					eq(schema.characters.embeddingModel, modelId)
 				)
 			)
+			.orderBy(desc(schema.characters.id))
+			.limit(RAG_CANDIDATE_FETCH_CAP)
 
 		for (const char of chars) {
 			if (!char.embedding) continue
@@ -480,8 +509,7 @@ export async function scopedRankBySimilarity(
 				name: char.name,
 				description: char.description,
 				embedding: char.embedding,
-				embeddingModel: char.embeddingModel,
-				score: cosineSimilarity(queryEmbedding, char.embedding)
+				embeddingModel: char.embeddingModel
 			})
 		}
 	}
@@ -504,6 +532,8 @@ export async function scopedRankBySimilarity(
 					eq(schema.personas.embeddingModel, modelId)
 				)
 			)
+			.orderBy(desc(schema.personas.id))
+			.limit(RAG_CANDIDATE_FETCH_CAP)
 
 		for (const p of ps) {
 			if (!p.embedding) continue
@@ -513,13 +543,51 @@ export async function scopedRankBySimilarity(
 				name: p.name,
 				description: p.description,
 				embedding: p.embedding,
-				embeddingModel: p.embeddingModel,
-				score: cosineSimilarity(queryEmbedding, p.embedding)
+				embeddingModel: p.embeddingModel
 			})
 		}
 	}
 
-	// Sort by score descending and apply topK
-	candidates.sort((a, b) => b.score - a.score)
-	return topK ? candidates.slice(0, topK) : candidates
+	return candidates
+}
+
+/**
+ * Scores a candidate set (from fetchScopedCandidates()) against one query
+ * embedding and returns the topK results, sorted by cosine similarity
+ * descending. Pure and synchronous — cheap enough to call once per query
+ * embedding without re-fetching.
+ */
+export function rankScopedCandidates(
+	candidates: ScopedRagCandidate[],
+	queryEmbedding: number[],
+	topK?: number
+): ScopedRagItem[] {
+	const scored = candidates.map(
+		(c) =>
+			({
+				...c,
+				score: cosineSimilarity(queryEmbedding, c.embedding)
+			}) as ScopedRagItem
+	)
+	scored.sort((a, b) => b.score - a.score)
+	return topK ? scored.slice(0, topK) : scored
+}
+
+/**
+ * Run a similarity search over all content associated with the given chat context.
+ * Results are scoped to only include content linked to this chat, filtered to the
+ * active embedding model, and sorted by cosine similarity descending.
+ *
+ * Thin wrapper around fetchScopedCandidates()+rankScopedCandidates() for
+ * single-query callers — a caller scoring multiple query embeddings
+ * against the same chat context in one turn should call those two
+ * directly instead, fetching once and reusing the candidate set.
+ */
+export async function scopedRankBySimilarity(
+	queryEmbedding: number[],
+	context: ChatRagContext,
+	opts: ScopedRagOptions
+): Promise<ScopedRagItem[]> {
+	const candidates = await fetchScopedCandidates(context, opts)
+	return rankScopedCandidates(candidates, queryEmbedding, opts.topK)
 }

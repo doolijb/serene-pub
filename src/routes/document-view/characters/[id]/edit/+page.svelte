@@ -60,53 +60,65 @@
 		socket.emit("characters:delete", { id: characterId })
 	}
 
-	onMount(() => {
-		socket.on("characters:get", (msg) => {
-			loaded = true
-			if (!msg.character) {
-				notFound = true
-				return
-			}
+	function handleCharactersGet(msg: any) {
+		loaded = true
+		if (!msg.character) {
+			notFound = true
+			return
+		}
+		name = msg.character.name
+		nickname = msg.character.nickname || ""
+		description = msg.character.description
+		personality = msg.character.personality || ""
+		scenario = msg.character.scenario || ""
+		firstMessage = msg.character.firstMessage || ""
+		isOwner = msg.character.isOwner
+	}
+	function handleCharactersUpdate(msg: any) {
+		saving = false
+		if (msg.character) {
 			name = msg.character.name
 			nickname = msg.character.nickname || ""
 			description = msg.character.description
 			personality = msg.character.personality || ""
 			scenario = msg.character.scenario || ""
 			firstMessage = msg.character.firstMessage || ""
-			isOwner = msg.character.isOwner
-		})
-		socket.on("characters:update", (msg) => {
-			saving = false
-			if (msg.character) {
-				name = msg.character.name
-				nickname = msg.character.nickname || ""
-				description = msg.character.description
-				personality = msg.character.personality || ""
-				scenario = msg.character.scenario || ""
-				firstMessage = msg.character.firstMessage || ""
-				announce("Character saved.")
-			}
-		})
-		socket.on("characters:update:error", (msg: { error?: string }) => {
-			saving = false
-			error = msg.error || "Failed to save character."
-			announce(error)
-		})
-		socket.on("characters:delete", () => {
-			goto("/document-view/characters")
-		})
-		socket.on("characters:delete:error", (msg: { error?: string }) => {
-			deleting = false
-			error = msg.error || "Failed to delete character."
-			announce(error)
-		})
+			announce("Character saved.")
+		}
+	}
+	function handleCharactersUpdateError(msg: { error?: string }) {
+		saving = false
+		error = msg.error || "Failed to save character."
+		announce(error)
+	}
+	function handleCharactersDelete() {
+		goto("/document-view/characters")
+	}
+	function handleCharactersDeleteError(msg: { error?: string }) {
+		deleting = false
+		error = msg.error || "Failed to delete character."
+		announce(error)
+	}
+
+	onMount(() => {
+		socket.on("characters:get", handleCharactersGet)
+		socket.on("characters:update", handleCharactersUpdate)
+		socket.on("characters:update:error", handleCharactersUpdateError)
+		socket.on("characters:delete", handleCharactersDelete)
+		socket.on("characters:delete:error", handleCharactersDeleteError)
 		load()
 		return () => {
-			socket.off("characters:get")
-			socket.off("characters:update")
-			socket.off("characters:update:error")
-			socket.off("characters:delete")
-			socket.off("characters:delete:error")
+			socket.off("characters:get", handleCharactersGet)
+			socket.off("characters:update", handleCharactersUpdate)
+			socket.off(
+				"characters:update:error",
+				handleCharactersUpdateError
+			)
+			socket.off("characters:delete", handleCharactersDelete)
+			socket.off(
+				"characters:delete:error",
+				handleCharactersDeleteError
+			)
 		}
 	})
 </script>

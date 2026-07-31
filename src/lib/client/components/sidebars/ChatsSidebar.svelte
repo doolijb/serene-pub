@@ -24,8 +24,14 @@
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
 	let searchByCharacterId: number | null = $state(null)
 	let searchByPersonaId: number | null = $state(null)
-	let searchCharacter: SelectCharacter | null = $state(null)
-	let searchPersona: SelectPersona | null = $state(null)
+	// embedding/embeddingModel/vectorizedAt are deliberately excluded from
+	// the "characters:get"/"personas:get" responses (see charactersGet/
+	// personasGet's `columns` restrictions) — these types mirror that
+	// rather than hand-declaring the full Select* shape.
+	let searchCharacter: Sockets.Characters.Get.Response["character"] =
+		$state(null)
+	let searchPersona: Sockets.Personas.Get.Response["persona"] =
+		$state(null)
 	let editChatId: number | null = $state(null)
 	let viewingId: number | null = $state(null)
 	let returnToViewId: number | null = $state(null)
@@ -95,6 +101,7 @@
 
 	function handleOpenChat(chatId: number) {
 		goto(`/chats/${chatId}`)
+		panelsCtx.fullscreenPanel = null
 		if (panelsCtx.isMobileMenuOpen) {
 			panelsCtx.isMobileMenuOpen = false
 		}
@@ -135,6 +142,7 @@
 			if (page.params.id === chatToDelete.toString()) {
 				// If the current chat is being deleted, navigate away
 				goto("/")
+				panelsCtx.fullscreenPanel = null
 			}
 			isDeleting = true
 			socket.emit("chats:delete", { id: chatToDelete })
@@ -243,35 +251,51 @@
 
 	$effect(() => {
 		if (searchByCharacterId) {
+			const requestedId = searchByCharacterId
 			// TypedSocket has no `.once()` — self-unsubscribe after the first
-			// response to replicate the same "fire once" semantics.
+			// response to replicate the same "fire once" semantics. Also
+			// guards against a stale response: if searchByCharacterId changes
+			// again before this response arrives, a second listener for a
+			// different id registers alongside this one — without the id
+			// check, whichever response lands first (or last) can overwrite
+			// searchCharacter with data for the wrong id.
 			const handleCharacterGet = (
 				msg: Sockets.Characters.Get.Response
 			) => {
-				searchCharacter = msg.character
 				socket.off("characters:get", handleCharacterGet)
+				if (msg.character?.id !== requestedId) return
+				searchCharacter = msg.character
 			}
 			socket.on("characters:get", handleCharacterGet)
 			const charIdReq: Sockets.Characters.Get.Params = {
 				id: searchByCharacterId
 			}
 			socket.emit("characters:get", charIdReq)
+
+			// Covers the case where searchByCharacterId changes again (or the
+			// component unmounts) before a response ever arrives — the
+			// self-unsub above only fires on a real response.
+			return () => socket.off("characters:get", handleCharacterGet)
 		}
 	})
 
 	$effect(() => {
 		if (searchByPersonaId) {
-			// TypedSocket has no `.once()` — self-unsubscribe after the first
-			// response to replicate the same "fire once" semantics.
+			const requestedId = searchByPersonaId
+			// Same staleness guard + always-cleanup as the character search
+			// effect above.
 			const handlePersonaGet = (msg: Sockets.Personas.Get.Response) => {
-				searchPersona = msg.persona
 				socket.off("personas:get", handlePersonaGet)
+				if (msg.persona?.id !== requestedId) return
+				searchPersona = msg.persona
 			}
 			socket.on("personas:get", handlePersonaGet)
 			const personaIdReq: Sockets.Personas.Get.Params = {
 				id: searchByPersonaId
 			}
 			socket.emit("personas:get", personaIdReq)
+
+			return () => socket.off("personas:get", handlePersonaGet)
 		}
 	})
 

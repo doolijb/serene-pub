@@ -872,7 +872,7 @@
 					name="koboldModelsDir"
 					type="text"
 					class="input flex-1 font-mono text-sm"
-					placeholder="/home/user/koboldcpp/models"
+					placeholder="<app data dir>/models/llm"
 					bind:value={modelsDirField}
 				/>
 				<button

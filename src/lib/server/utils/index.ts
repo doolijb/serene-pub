@@ -4,11 +4,21 @@ import envPaths from "env-paths"
 import { db } from "$lib/server/db"
 import { and, eq, inArray, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { writeFile, mkdir } from "fs/promises"
+import { writeFile, mkdir, unlink } from "fs/promises"
 import { v4 as uuid } from "uuid"
 import { fileTypeFromBuffer } from "file-type"
 
 const ALLOWED_IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif"])
+
+// Round-12 audit fix (MEDIUM): none of the five upload functions in this
+// file (avatar x2, gallery x2, background) checked the incoming buffer's
+// byte length — the only ceiling anywhere was Socket.IO's global
+// maxHttpBufferSize (100MB, loadSockets.server.ts), applied per-EVENT, not
+// per-field. 10MB is generous for a high-res avatar/gallery image while
+// staying far under that global ceiling. Enforced inside
+// sniffImageExtension since every upload path already calls it — a single
+// choke point instead of five separate checks.
+const MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024
 
 /**
  * Sniffs the real file type from the uploaded bytes and returns a safe
@@ -19,6 +29,11 @@ const ALLOWED_IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif"])
 async function sniffImageExtension(
 	buffer: Buffer | Uint8Array
 ): Promise<string> {
+	if (buffer.length > MAX_IMAGE_UPLOAD_BYTES) {
+		throw new Error(
+			`Uploaded image is too large (max ${MAX_IMAGE_UPLOAD_BYTES / (1024 * 1024)}MB).`
+		)
+	}
 	const detected = await fileTypeFromBuffer(buffer)
 	const ext = detected?.ext?.toLowerCase()
 	if (!ext || !ALLOWED_IMAGE_EXTENSIONS.has(ext)) {
@@ -27,6 +42,31 @@ async function sniffImageExtension(
 		)
 	}
 	return ext === "jpeg" ? "jpg" : ext
+}
+
+/**
+ * Deletes a previously-stored avatar file, given its stored `avatar` URL
+ * (or null/undefined — a no-op) and the entity's own data directory —
+ * reuses the same URL-to-filesystem-path pattern already established at
+ * the PNG card-export call sites (getCharacterDataDir/getPersonaDataDir +
+ * path.basename(avatar) + path.join). Errors (already gone, permission
+ * issue) are swallowed, same safety shape as deleteUserBackground — a
+ * failed cleanup shouldn't fail the upload that already succeeded.
+ */
+async function deleteOldAvatarIfPresent(
+	previousAvatar: string | null | undefined,
+	avatarDir: string
+): Promise<void> {
+	if (!previousAvatar) return
+	const filename = path.basename(previousAvatar)
+	const fullPath = path.join(avatarDir, filename)
+	if (!fullPath.startsWith(avatarDir)) return
+	try {
+		await unlink(fullPath)
+	} catch {
+		// File already gone, or never existed on disk (eg. an imported
+		// card's avatar) — ignore.
+	}
 }
 
 /**
@@ -139,6 +179,11 @@ export async function handleCharacterAvatarUpload({
 		.update(schema.characters)
 		.set({ avatar })
 		.where(eq(schema.characters.id, character.id))
+	// Round-12 audit fix (MEDIUM): the previous avatar file was never
+	// deleted on re-upload — unbounded orphan growth on disk on every
+	// re-upload. `character.avatar` here is the pre-update value (the
+	// caller fetched this row before calling this function).
+	await deleteOldAvatarIfPresent(character.avatar, avatarDir)
 }
 
 export function getUserBackgroundsDir({ userId }: { userId: number }) {
@@ -221,6 +266,9 @@ export async function handlePersonaAvatarUpload({
 		.update(schema.personas)
 		.set({ avatar })
 		.where(eq(schema.personas.id, persona.id))
+	// Round-12 audit fix (MEDIUM): see handleCharacterAvatarUpload — same
+	// orphan-cleanup fix, same reasoning.
+	await deleteOldAvatarIfPresent(persona.avatar, avatarDir)
 }
 
 /**

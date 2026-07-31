@@ -69,65 +69,60 @@
 		}
 	})
 
+	function handleHistoryEntriesList(msg: Sockets.HistoryEntries.List.Response) {
+		if (msg.lorebookId === lorebookId) {
+			historyEntryList = msg.historyEntryList
+		}
+	}
+
+	function handleIterateNext(
+		msg: Sockets.HistoryEntries.IterateNext.Response
+	) {
+		isCreatingEntry = false
+		if (msg.historyEntry) {
+			const exists = historyEntryList.some(
+				(e) => e.id === msg.historyEntry.id
+			)
+			if (!exists)
+				historyEntryList = [...historyEntryList, msg.historyEntry]
+			onOpenEntry(lorebookId, msg.historyEntry.id)
+		}
+	}
+
+	function handleHistoryEntryCreate(
+		msg: Sockets.HistoryEntries.Create.Response
+	) {
+		if (msg.historyEntry?.lorebookId === lorebookId) {
+			const exists = historyEntryList.some(
+				(e) => e.id === msg.historyEntry.id
+			)
+			if (!exists)
+				historyEntryList = [...historyEntryList, msg.historyEntry]
+		}
+	}
+
+	function handleHistoryEntryUpdate(
+		msg: Sockets.HistoryEntries.Update.Response
+	) {
+		if (msg.historyEntry) {
+			historyEntryList = historyEntryList.map((e) =>
+				e.id === msg.historyEntry.id ? msg.historyEntry : e
+			)
+		}
+	}
+
 	onMount(() => {
-		socket.on(
-			"historyEntries:list",
-			(msg: Sockets.HistoryEntries.List.Response) => {
-				historyEntryList = msg.historyEntryList
-			}
-		)
-
-		socket.on(
-			"historyEntries:iterateNext",
-			(msg: Sockets.HistoryEntries.IterateNext.Response) => {
-				isCreatingEntry = false
-				if (msg.historyEntry) {
-					const exists = historyEntryList.some(
-						(e) => e.id === msg.historyEntry.id
-					)
-					if (!exists)
-						historyEntryList = [
-							...historyEntryList,
-							msg.historyEntry
-						]
-					onOpenEntry(lorebookId, msg.historyEntry.id)
-				}
-			}
-		)
-
-		socket.on(
-			"historyEntries:create",
-			(msg: Sockets.HistoryEntries.Create.Response) => {
-				if (msg.historyEntry?.lorebookId === lorebookId) {
-					const exists = historyEntryList.some(
-						(e) => e.id === msg.historyEntry.id
-					)
-					if (!exists)
-						historyEntryList = [
-							...historyEntryList,
-							msg.historyEntry
-						]
-				}
-			}
-		)
-
-		socket.on(
-			"historyEntries:update",
-			(msg: Sockets.HistoryEntries.Update.Response) => {
-				if (msg.historyEntry) {
-					historyEntryList = historyEntryList.map((e) =>
-						e.id === msg.historyEntry.id ? msg.historyEntry : e
-					)
-				}
-			}
-		)
+		socket.on("historyEntries:list", handleHistoryEntriesList)
+		socket.on("historyEntries:iterateNext", handleIterateNext)
+		socket.on("historyEntries:create", handleHistoryEntryCreate)
+		socket.on("historyEntries:update", handleHistoryEntryUpdate)
 	})
 
 	onDestroy(() => {
-		socket.off("historyEntries:list")
-		socket.off("historyEntries:iterateNext")
-		socket.off("historyEntries:create")
-		socket.off("historyEntries:update")
+		socket.off("historyEntries:list", handleHistoryEntriesList)
+		socket.off("historyEntries:iterateNext", handleIterateNext)
+		socket.off("historyEntries:create", handleHistoryEntryCreate)
+		socket.off("historyEntries:update", handleHistoryEntryUpdate)
 	})
 </script>
 

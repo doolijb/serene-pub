@@ -1,6 +1,6 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { asc, eq, inArray } from "drizzle-orm"
+import { asc, eq, inArray, sql } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 // InsertWorldLoreEntry is declared globally in $lib/server/db/types.d.ts
 // (ambient `export global {}` block, same pattern as the Sockets namespace)
@@ -46,56 +46,63 @@ export const createWorldLoreEntryHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 
-		const data: InsertWorldLoreEntry = { ...params.worldLoreEntry }
+		// Same denylist as updateWorldLoreEntryHandler's — a raw client
+		// payload should never be able to set these directly on create
+		// either (eg. a forged vectorizedAt/embedding would make
+		// vectorizationQueue.ts's needsEmbedding check wrongly treat this
+		// entry as already current, permanently skipping real embedding).
+		const {
+			id: _id,
+			createdAt: _createdAt,
+			updatedAt: _updatedAt,
+			vectorizedAt: _vectorizedAt,
+			embedding: _embedding,
+			embeddingModel: _embeddingModel,
+			position: _position,
+			...safeInsert
+		} = params.worldLoreEntry
+		const data: InsertWorldLoreEntry = { ...safeInsert }
 		data.name = data.name.trim()
 		data.content = data.content?.trim() || ""
 
-		// Get next available position for the lore entry
-		const existingBook = await db.query.lorebooks.findFirst({
+		const book = await db.query.lorebooks.findFirst({
 			where: (l, { and, eq }) =>
 				and(eq(l.id, data.lorebookId), eq(l.userId, userId)),
-			columns: {
-				id: true,
-				name: true,
-				userId: true
-			},
-			with: {
-				worldLoreEntries: {
-					columns: {
-						id: true,
-						position: true
-					},
-					orderBy: asc(schema.worldLoreEntries.position)
-				}
-			}
+			columns: { id: true, name: true, userId: true }
 		})
-
-		if (!existingBook) {
+		if (!book) {
 			throw new Error(
 				"Lorebook not found or you do not have permission to create an entry."
 			)
 		}
 
-		const existingEntries = existingBook.worldLoreEntries
+		// Advisory lock scoped to lorebookId — without it, two concurrent
+		// creates can both read the same "first available position" gap and
+		// insert with the same position. Same fix, same reason, as
+		// resolveOrCreateBinding's already-fixed race.
+		const [newEntry] = await db.transaction(async (tx) => {
+			await tx.execute(
+				sql`select pg_advisory_xact_lock(${data.lorebookId})`
+			)
 
-		let nextPosition = 1
-		if (existingEntries.length > 0) {
-			// Find the first available position
+			const existingEntries = await tx.query.worldLoreEntries.findMany({
+				where: eq(schema.worldLoreEntries.lorebookId, data.lorebookId),
+				columns: { id: true, position: true },
+				orderBy: asc(schema.worldLoreEntries.position)
+			})
+
+			let nextPosition = 1
 			const positions = existingEntries.map((e) => e.position)
 			while (positions.includes(nextPosition)) {
 				nextPosition++
 			}
-		}
+			data.position = nextPosition
 
-		data.position = nextPosition
-
-		const [newEntry] = await db
-			.insert(schema.worldLoreEntries)
-			.values(data)
-			.returning()
+			return tx.insert(schema.worldLoreEntries).values(data).returning()
+		})
 
 		await syncLorebookBindings({ lorebookId: newEntry.lorebookId })
-		autoEnqueueLorebook(newEntry.lorebookId, existingBook.name, "").catch(
+		autoEnqueueLorebook(newEntry.lorebookId, book.name, "").catch(
 			console.error
 		)
 
@@ -142,7 +149,24 @@ export const updateWorldLoreEntryHandler: Handler<
 			throw new Error("World lore entry not found or access denied.")
 		}
 
-		const updateData = { ...params.worldLoreEntry }
+		// lorebookId is deliberately excluded — ownership is only verified
+		// against the entry's *current* lorebook above; a client-supplied
+		// replacement value here would let a user relocate their own entry
+		// into a lorebook they don't own with no re-validation. position is
+		// also excluded — the real reorder UI goes through the separately
+		// IDOR-checked updatePositions batch handler; this singular update
+		// shouldn't let a raw client set an arbitrary/colliding value.
+		const {
+			id: _id,
+			lorebookId: _lorebookId,
+			createdAt: _createdAt,
+			updatedAt: _updatedAt,
+			vectorizedAt: _vectorizedAt,
+			embedding: _embedding,
+			embeddingModel: _embeddingModel,
+			position: _position,
+			...updateData
+		} = params.worldLoreEntry
 		if (updateData.name) updateData.name = updateData.name.trim()
 		if (updateData.content) updateData.content = updateData.content.trim()
 

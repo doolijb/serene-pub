@@ -486,238 +486,311 @@
 		})
 	}
 
+	// Named handlers (not inline in onMount) so cleanup can pass the exact
+	// same reference to .off() — a no-arg .off() call removes *every*
+	// listener for that event, not just this component's. Two of these
+	// (the ":setUserActive:error" pair) previously had no cleanup call at
+	// all, leaking unconditionally on every unmount.
+	function handlePromptConfigsList(msg: Sockets.PromptConfigs.List.Response) {
+		chatList = msg.promptConfigsList
+		if (!selectedChatId && chatList.length > 0) {
+			selectedChatId =
+				userSettingsCtx.settings?.activePromptConfigId ??
+				chatList[0].id
+		}
+	}
+	function handlePromptConfigsGet(msg: Sockets.PromptConfigs.Get.Response) {
+		if (msg.promptConfig.id !== selectedChatId) return
+		chatConfig = { ...msg.promptConfig }
+		chatOriginal = { ...msg.promptConfig }
+	}
+	function handlePromptConfigsCreate(
+		msg: Sockets.PromptConfigs.Create.Response
+	) {
+		selectedChatId = msg.promptConfig.id
+	}
+	function handlePromptConfigsUpdate(
+		msg: Sockets.PromptConfigs.Update.Response
+	) {
+		if (msg.promptConfig.id === chatConfig.id) {
+			chatConfig = { ...msg.promptConfig }
+			chatOriginal = { ...msg.promptConfig }
+			toaster.success({ title: "Prompt Config Updated" })
+		}
+	}
+
+	function handleNarratorPromptConfigsList(
+		msg: Sockets.NarratorPromptConfigs.List.Response
+	) {
+		narratorPromptList = msg.narratorPromptConfigsList
+		if (!selectedNarratorId && narratorPromptList.length > 0) {
+			selectedNarratorId =
+				userSettingsCtx.settings?.activeNarratorPromptConfigId ??
+				narratorPromptList[0].id
+		}
+	}
+	function handleNarratorPromptConfigsGet(
+		msg: Sockets.NarratorPromptConfigs.Get.Response
+	) {
+		if (msg.narratorPromptConfig.id !== selectedNarratorId) return
+		narratorConfig = { ...msg.narratorPromptConfig }
+		narratorOriginal = { ...msg.narratorPromptConfig }
+	}
+	function handleNarratorPromptConfigsCreate(
+		msg: Sockets.NarratorPromptConfigs.Create.Response
+	) {
+		selectedNarratorId = msg.narratorPromptConfig.id
+	}
+	function handleNarratorPromptConfigsUpdate(
+		msg: Sockets.NarratorPromptConfigs.Update.Response
+	) {
+		if (msg.narratorPromptConfig.id === narratorConfig.id) {
+			narratorConfig = { ...msg.narratorPromptConfig }
+			narratorOriginal = { ...msg.narratorPromptConfig }
+			toaster.success({ title: "Narrator Prompt Config Updated" })
+		}
+	}
+
+	function handleWorldSummarizeConfigsList(
+		msg: Sockets.WorldSummarizeConfigs.List.Response
+	) {
+		worldList = msg.worldSummarizeConfigsList
+		if (!selectedWorldId && worldList.length > 0) {
+			selectedWorldId =
+				userSettingsCtx.settings?.activeSummarizeWorldConfigId ??
+				worldList[0].id
+		}
+	}
+	function handleWorldSummarizeConfigsGet(
+		msg: Sockets.WorldSummarizeConfigs.Get.Response
+	) {
+		if (msg.worldSummarizeConfig.id !== selectedWorldId) return
+		worldConfig = { ...msg.worldSummarizeConfig }
+		worldOriginal = { ...msg.worldSummarizeConfig }
+	}
+	function handleWorldSummarizeConfigsCreate(
+		msg: Sockets.WorldSummarizeConfigs.Create.Response
+	) {
+		selectedWorldId = msg.worldSummarizeConfig.id
+	}
+	function handleWorldSummarizeConfigsUpdate(
+		msg: Sockets.WorldSummarizeConfigs.Update.Response
+	) {
+		if (msg.worldSummarizeConfig.id === worldConfig.id) {
+			worldConfig = { ...msg.worldSummarizeConfig }
+			worldOriginal = { ...msg.worldSummarizeConfig }
+			toaster.success({ title: "World Summarize Config Updated" })
+		}
+	}
+
+	function handleCharacterSummarizeConfigsList(
+		msg: Sockets.CharacterSummarizeConfigs.List.Response
+	) {
+		characterList = msg.characterSummarizeConfigsList
+		if (!selectedCharacterId && characterList.length > 0) {
+			selectedCharacterId =
+				userSettingsCtx.settings?.activeSummarizeCharacterConfigId ??
+				characterList[0].id
+		}
+	}
+	function handleCharacterSummarizeConfigsGet(
+		msg: Sockets.CharacterSummarizeConfigs.Get.Response
+	) {
+		if (msg.characterSummarizeConfig.id !== selectedCharacterId) return
+		characterConfig = { ...msg.characterSummarizeConfig }
+		characterOriginal = { ...msg.characterSummarizeConfig }
+	}
+	function handleCharacterSummarizeConfigsCreate(
+		msg: Sockets.CharacterSummarizeConfigs.Create.Response
+	) {
+		selectedCharacterId = msg.characterSummarizeConfig.id
+	}
+	function handleCharacterSummarizeConfigsUpdate(
+		msg: Sockets.CharacterSummarizeConfigs.Update.Response
+	) {
+		if (msg.characterSummarizeConfig.id === characterConfig.id) {
+			characterConfig = { ...msg.characterSummarizeConfig }
+			characterOriginal = { ...msg.characterSummarizeConfig }
+			toaster.success({
+				title: "Character Summarize Config Updated"
+			})
+		}
+	}
+
+	function handleSceneSummarizeConfigsList(
+		msg: Sockets.SceneSummarizeConfigs.List.Response
+	) {
+		sceneList = msg.sceneSummarizeConfigsList
+		if (!selectedSceneId && sceneList.length > 0) {
+			selectedSceneId =
+				userSettingsCtx.settings?.activeSummarizeSceneConfigId ??
+				sceneList[0].id
+		}
+	}
+	function handleSceneSummarizeConfigsGet(
+		msg: Sockets.SceneSummarizeConfigs.Get.Response
+	) {
+		if (msg.sceneSummarizeConfig.id !== selectedSceneId) return
+		sceneConfig = { ...msg.sceneSummarizeConfig }
+		sceneOriginal = { ...msg.sceneSummarizeConfig }
+	}
+	function handleSceneSummarizeConfigsCreate(
+		msg: Sockets.SceneSummarizeConfigs.Create.Response
+	) {
+		selectedSceneId = msg.sceneSummarizeConfig.id
+	}
+	function handleSceneSummarizeConfigsUpdate(
+		msg: Sockets.SceneSummarizeConfigs.Update.Response
+	) {
+		if (msg.sceneSummarizeConfig.id === sceneConfig.id) {
+			sceneConfig = { ...msg.sceneSummarizeConfig }
+			sceneOriginal = { ...msg.sceneSummarizeConfig }
+			toaster.success({ title: "Scene Summarize Config Updated" })
+		}
+	}
+
+	// Set-default response listeners (just toast — userSettings:get updates context)
+	function handlePromptConfigsSetUserActive() {
+		toaster.success({ title: "Default chat prompt updated" })
+	}
+	function handlePromptConfigsSetUserActiveError(msg: any) {
+		toaster.error({
+			title: msg?.error || "Failed to set default chat prompt"
+		})
+	}
+	function handleNarratorPromptConfigsSetUserActive() {
+		toaster.success({ title: "Default Narrator prompt updated" })
+	}
+	function handleNarratorPromptConfigsSetUserActiveError(msg: any) {
+		toaster.error({
+			title: msg?.error || "Failed to set default Narrator prompt"
+		})
+	}
+	function handleWorldSummarizeConfigsSetUserActive() {
+		toaster.success({ title: "Default world summarization updated" })
+	}
+	function handleCharacterSummarizeConfigsSetUserActive() {
+		toaster.success({
+			title: "Default character summarization updated"
+		})
+	}
+	function handleSceneSummarizeConfigsSetUserActive() {
+		toaster.success({ title: "Default scene summarization updated" })
+	}
+
+	// Connection / sampling lists for override pickers
+	function handleConnectionsList(msg: Sockets.Connections.List.Response) {
+		connectionsList = msg.connectionsList
+	}
+	function handleSamplingConfigsListForPickers(
+		msg: Sockets.SamplingConfigs.List.Response
+	) {
+		samplingList = msg.samplingConfigsList
+	}
+
 	onMount(() => {
 		// Chat listeners
-		socket.on(
-			"promptConfigs:list",
-			(msg: Sockets.PromptConfigs.List.Response) => {
-				chatList = msg.promptConfigsList
-				if (!selectedChatId && chatList.length > 0) {
-					selectedChatId =
-						userSettingsCtx.settings?.activePromptConfigId ??
-						chatList[0].id
-				}
-			}
-		)
-		socket.on(
-			"promptConfigs:get",
-			(msg: Sockets.PromptConfigs.Get.Response) => {
-				if (msg.promptConfig.id !== selectedChatId) return
-				chatConfig = { ...msg.promptConfig }
-				chatOriginal = { ...msg.promptConfig }
-			}
-		)
-		socket.on(
-			"promptConfigs:create",
-			(msg: Sockets.PromptConfigs.Create.Response) => {
-				selectedChatId = msg.promptConfig.id
-			}
-		)
-		socket.on(
-			"promptConfigs:update",
-			(msg: Sockets.PromptConfigs.Update.Response) => {
-				if (msg.promptConfig.id === chatConfig.id) {
-					chatConfig = { ...msg.promptConfig }
-					chatOriginal = { ...msg.promptConfig }
-					toaster.success({ title: "Prompt Config Updated" })
-				}
-			}
-		)
+		socket.on("promptConfigs:list", handlePromptConfigsList)
+		socket.on("promptConfigs:get", handlePromptConfigsGet)
+		socket.on("promptConfigs:create", handlePromptConfigsCreate)
+		socket.on("promptConfigs:update", handlePromptConfigsUpdate)
 
 		// Narrator listeners
 		socket.on(
 			"narratorPromptConfigs:list",
-			(msg: Sockets.NarratorPromptConfigs.List.Response) => {
-				narratorPromptList = msg.narratorPromptConfigsList
-				if (!selectedNarratorId && narratorPromptList.length > 0) {
-					selectedNarratorId =
-						userSettingsCtx.settings
-							?.activeNarratorPromptConfigId ??
-						narratorPromptList[0].id
-				}
-			}
+			handleNarratorPromptConfigsList
 		)
-		socket.on(
-			"narratorPromptConfigs:get",
-			(msg: Sockets.NarratorPromptConfigs.Get.Response) => {
-				if (msg.narratorPromptConfig.id !== selectedNarratorId) return
-				narratorConfig = { ...msg.narratorPromptConfig }
-				narratorOriginal = { ...msg.narratorPromptConfig }
-			}
-		)
+		socket.on("narratorPromptConfigs:get", handleNarratorPromptConfigsGet)
 		socket.on(
 			"narratorPromptConfigs:create",
-			(msg: Sockets.NarratorPromptConfigs.Create.Response) => {
-				selectedNarratorId = msg.narratorPromptConfig.id
-			}
+			handleNarratorPromptConfigsCreate
 		)
 		socket.on(
 			"narratorPromptConfigs:update",
-			(msg: Sockets.NarratorPromptConfigs.Update.Response) => {
-				if (msg.narratorPromptConfig.id === narratorConfig.id) {
-					narratorConfig = { ...msg.narratorPromptConfig }
-					narratorOriginal = { ...msg.narratorPromptConfig }
-					toaster.success({ title: "Narrator Prompt Config Updated" })
-				}
-			}
+			handleNarratorPromptConfigsUpdate
 		)
 
 		// World listeners
 		socket.on(
 			"worldSummarizeConfigs:list",
-			(msg: Sockets.WorldSummarizeConfigs.List.Response) => {
-				worldList = msg.worldSummarizeConfigsList
-				if (!selectedWorldId && worldList.length > 0) {
-					selectedWorldId =
-						userSettingsCtx.settings
-							?.activeSummarizeWorldConfigId ?? worldList[0].id
-				}
-			}
+			handleWorldSummarizeConfigsList
 		)
-		socket.on(
-			"worldSummarizeConfigs:get",
-			(msg: Sockets.WorldSummarizeConfigs.Get.Response) => {
-				if (msg.worldSummarizeConfig.id !== selectedWorldId) return
-				worldConfig = { ...msg.worldSummarizeConfig }
-				worldOriginal = { ...msg.worldSummarizeConfig }
-			}
-		)
+		socket.on("worldSummarizeConfigs:get", handleWorldSummarizeConfigsGet)
 		socket.on(
 			"worldSummarizeConfigs:create",
-			(msg: Sockets.WorldSummarizeConfigs.Create.Response) => {
-				selectedWorldId = msg.worldSummarizeConfig.id
-			}
+			handleWorldSummarizeConfigsCreate
 		)
 		socket.on(
 			"worldSummarizeConfigs:update",
-			(msg: Sockets.WorldSummarizeConfigs.Update.Response) => {
-				if (msg.worldSummarizeConfig.id === worldConfig.id) {
-					worldConfig = { ...msg.worldSummarizeConfig }
-					worldOriginal = { ...msg.worldSummarizeConfig }
-					toaster.success({ title: "World Summarize Config Updated" })
-				}
-			}
+			handleWorldSummarizeConfigsUpdate
 		)
 
 		// Character listeners
 		socket.on(
 			"characterSummarizeConfigs:list",
-			(msg: Sockets.CharacterSummarizeConfigs.List.Response) => {
-				characterList = msg.characterSummarizeConfigsList
-				if (!selectedCharacterId && characterList.length > 0) {
-					selectedCharacterId =
-						userSettingsCtx.settings
-							?.activeSummarizeCharacterConfigId ??
-						characterList[0].id
-				}
-			}
+			handleCharacterSummarizeConfigsList
 		)
 		socket.on(
 			"characterSummarizeConfigs:get",
-			(msg: Sockets.CharacterSummarizeConfigs.Get.Response) => {
-				if (msg.characterSummarizeConfig.id !== selectedCharacterId)
-					return
-				characterConfig = { ...msg.characterSummarizeConfig }
-				characterOriginal = { ...msg.characterSummarizeConfig }
-			}
+			handleCharacterSummarizeConfigsGet
 		)
 		socket.on(
 			"characterSummarizeConfigs:create",
-			(msg: Sockets.CharacterSummarizeConfigs.Create.Response) => {
-				selectedCharacterId = msg.characterSummarizeConfig.id
-			}
+			handleCharacterSummarizeConfigsCreate
 		)
 		socket.on(
 			"characterSummarizeConfigs:update",
-			(msg: Sockets.CharacterSummarizeConfigs.Update.Response) => {
-				if (msg.characterSummarizeConfig.id === characterConfig.id) {
-					characterConfig = { ...msg.characterSummarizeConfig }
-					characterOriginal = { ...msg.characterSummarizeConfig }
-					toaster.success({
-						title: "Character Summarize Config Updated"
-					})
-				}
-			}
+			handleCharacterSummarizeConfigsUpdate
 		)
 
 		// Scene listeners
 		socket.on(
 			"sceneSummarizeConfigs:list",
-			(msg: Sockets.SceneSummarizeConfigs.List.Response) => {
-				sceneList = msg.sceneSummarizeConfigsList
-				if (!selectedSceneId && sceneList.length > 0) {
-					selectedSceneId =
-						userSettingsCtx.settings
-							?.activeSummarizeSceneConfigId ?? sceneList[0].id
-				}
-			}
+			handleSceneSummarizeConfigsList
 		)
-		socket.on(
-			"sceneSummarizeConfigs:get",
-			(msg: Sockets.SceneSummarizeConfigs.Get.Response) => {
-				if (msg.sceneSummarizeConfig.id !== selectedSceneId) return
-				sceneConfig = { ...msg.sceneSummarizeConfig }
-				sceneOriginal = { ...msg.sceneSummarizeConfig }
-			}
-		)
+		socket.on("sceneSummarizeConfigs:get", handleSceneSummarizeConfigsGet)
 		socket.on(
 			"sceneSummarizeConfigs:create",
-			(msg: Sockets.SceneSummarizeConfigs.Create.Response) => {
-				selectedSceneId = msg.sceneSummarizeConfig.id
-			}
+			handleSceneSummarizeConfigsCreate
 		)
 		socket.on(
 			"sceneSummarizeConfigs:update",
-			(msg: Sockets.SceneSummarizeConfigs.Update.Response) => {
-				if (msg.sceneSummarizeConfig.id === sceneConfig.id) {
-					sceneConfig = { ...msg.sceneSummarizeConfig }
-					sceneOriginal = { ...msg.sceneSummarizeConfig }
-					toaster.success({ title: "Scene Summarize Config Updated" })
-				}
-			}
+			handleSceneSummarizeConfigsUpdate
 		)
 
-		// Set-default response listeners (just toast — userSettings:get updates context)
-		socket.on("promptConfigs:setUserActive", () => {
-			toaster.success({ title: "Default chat prompt updated" })
-		})
-		socket.on("promptConfigs:setUserActive:error", (msg: any) => {
-			toaster.error({
-				title: msg?.error || "Failed to set default chat prompt"
-			})
-		})
-		socket.on("narratorPromptConfigs:setUserActive", () => {
-			toaster.success({ title: "Default Narrator prompt updated" })
-		})
-		socket.on("narratorPromptConfigs:setUserActive:error", (msg: any) => {
-			toaster.error({
-				title: msg?.error || "Failed to set default Narrator prompt"
-			})
-		})
-		socket.on("worldSummarizeConfigs:setUserActive", () => {
-			toaster.success({ title: "Default world summarization updated" })
-		})
-		socket.on("characterSummarizeConfigs:setUserActive", () => {
-			toaster.success({
-				title: "Default character summarization updated"
-			})
-		})
-		socket.on("sceneSummarizeConfigs:setUserActive", () => {
-			toaster.success({ title: "Default scene summarization updated" })
-		})
-
-		// Connection / sampling lists for override pickers
 		socket.on(
-			"connections:list",
-			(msg: Sockets.Connections.List.Response) => {
-				connectionsList = msg.connectionsList
-			}
+			"promptConfigs:setUserActive",
+			handlePromptConfigsSetUserActive
 		)
+		socket.on(
+			"promptConfigs:setUserActive:error",
+			handlePromptConfigsSetUserActiveError
+		)
+		socket.on(
+			"narratorPromptConfigs:setUserActive",
+			handleNarratorPromptConfigsSetUserActive
+		)
+		socket.on(
+			"narratorPromptConfigs:setUserActive:error",
+			handleNarratorPromptConfigsSetUserActiveError
+		)
+		socket.on(
+			"worldSummarizeConfigs:setUserActive",
+			handleWorldSummarizeConfigsSetUserActive
+		)
+		socket.on(
+			"characterSummarizeConfigs:setUserActive",
+			handleCharacterSummarizeConfigsSetUserActive
+		)
+		socket.on(
+			"sceneSummarizeConfigs:setUserActive",
+			handleSceneSummarizeConfigsSetUserActive
+		)
+
+		socket.on("connections:list", handleConnectionsList)
 		socket.on(
 			"samplingConfigs:list",
-			(msg: Sockets.SamplingConfigs.List.Response) => {
-				samplingList = msg.samplingConfigsList
-			}
+			handleSamplingConfigsListForPickers
 		)
 
 		// Initial fetches
@@ -733,33 +806,104 @@
 	})
 
 	onDestroy(() => {
-		socket.off("connections:list")
-		socket.off("samplingConfigs:list")
-		socket.off("promptConfigs:list")
-		socket.off("promptConfigs:get")
-		socket.off("promptConfigs:create")
-		socket.off("promptConfigs:update")
-		socket.off("promptConfigs:setUserActive")
-		socket.off("narratorPromptConfigs:list")
-		socket.off("narratorPromptConfigs:get")
-		socket.off("narratorPromptConfigs:create")
-		socket.off("narratorPromptConfigs:update")
-		socket.off("narratorPromptConfigs:setUserActive")
-		socket.off("worldSummarizeConfigs:list")
-		socket.off("worldSummarizeConfigs:get")
-		socket.off("worldSummarizeConfigs:create")
-		socket.off("worldSummarizeConfigs:update")
-		socket.off("worldSummarizeConfigs:setUserActive")
-		socket.off("characterSummarizeConfigs:list")
-		socket.off("characterSummarizeConfigs:get")
-		socket.off("characterSummarizeConfigs:create")
-		socket.off("characterSummarizeConfigs:update")
-		socket.off("characterSummarizeConfigs:setUserActive")
-		socket.off("sceneSummarizeConfigs:list")
-		socket.off("sceneSummarizeConfigs:get")
-		socket.off("sceneSummarizeConfigs:create")
-		socket.off("sceneSummarizeConfigs:update")
-		socket.off("sceneSummarizeConfigs:setUserActive")
+		socket.off("connections:list", handleConnectionsList)
+		socket.off(
+			"samplingConfigs:list",
+			handleSamplingConfigsListForPickers
+		)
+		socket.off("promptConfigs:list", handlePromptConfigsList)
+		socket.off("promptConfigs:get", handlePromptConfigsGet)
+		socket.off("promptConfigs:create", handlePromptConfigsCreate)
+		socket.off("promptConfigs:update", handlePromptConfigsUpdate)
+		socket.off(
+			"promptConfigs:setUserActive",
+			handlePromptConfigsSetUserActive
+		)
+		socket.off(
+			"promptConfigs:setUserActive:error",
+			handlePromptConfigsSetUserActiveError
+		)
+		socket.off(
+			"narratorPromptConfigs:list",
+			handleNarratorPromptConfigsList
+		)
+		socket.off(
+			"narratorPromptConfigs:get",
+			handleNarratorPromptConfigsGet
+		)
+		socket.off(
+			"narratorPromptConfigs:create",
+			handleNarratorPromptConfigsCreate
+		)
+		socket.off(
+			"narratorPromptConfigs:update",
+			handleNarratorPromptConfigsUpdate
+		)
+		socket.off(
+			"narratorPromptConfigs:setUserActive",
+			handleNarratorPromptConfigsSetUserActive
+		)
+		socket.off(
+			"narratorPromptConfigs:setUserActive:error",
+			handleNarratorPromptConfigsSetUserActiveError
+		)
+		socket.off(
+			"worldSummarizeConfigs:list",
+			handleWorldSummarizeConfigsList
+		)
+		socket.off(
+			"worldSummarizeConfigs:get",
+			handleWorldSummarizeConfigsGet
+		)
+		socket.off(
+			"worldSummarizeConfigs:create",
+			handleWorldSummarizeConfigsCreate
+		)
+		socket.off(
+			"worldSummarizeConfigs:update",
+			handleWorldSummarizeConfigsUpdate
+		)
+		socket.off(
+			"worldSummarizeConfigs:setUserActive",
+			handleWorldSummarizeConfigsSetUserActive
+		)
+		socket.off(
+			"characterSummarizeConfigs:list",
+			handleCharacterSummarizeConfigsList
+		)
+		socket.off(
+			"characterSummarizeConfigs:get",
+			handleCharacterSummarizeConfigsGet
+		)
+		socket.off(
+			"characterSummarizeConfigs:create",
+			handleCharacterSummarizeConfigsCreate
+		)
+		socket.off(
+			"characterSummarizeConfigs:update",
+			handleCharacterSummarizeConfigsUpdate
+		)
+		socket.off(
+			"characterSummarizeConfigs:setUserActive",
+			handleCharacterSummarizeConfigsSetUserActive
+		)
+		socket.off(
+			"sceneSummarizeConfigs:list",
+			handleSceneSummarizeConfigsList
+		)
+		socket.off("sceneSummarizeConfigs:get", handleSceneSummarizeConfigsGet)
+		socket.off(
+			"sceneSummarizeConfigs:create",
+			handleSceneSummarizeConfigsCreate
+		)
+		socket.off(
+			"sceneSummarizeConfigs:update",
+			handleSceneSummarizeConfigsUpdate
+		)
+		socket.off(
+			"sceneSummarizeConfigs:setUserActive",
+			handleSceneSummarizeConfigsSetUserActive
+		)
 	})
 </script>
 
@@ -2201,6 +2345,21 @@
 							class="textarea w-full"
 							disabled={sceneConfig.isImmutable}
 						></textarea>
+						<p
+							class="text-muted-foreground mt-1 text-xs font-medium"
+						>
+							AI Override
+						</p>
+						<ConnectionSamplingPicker
+							{connectionsList}
+							{samplingList}
+							bind:connectionId={
+								sceneConfig.characterExtractionConnectionId
+							}
+							bind:samplingConfigId={
+								sceneConfig.characterExtractionSamplingConfigId
+							}
+						/>
 					</div>
 				</div>
 			{/if}

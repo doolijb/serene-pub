@@ -196,7 +196,6 @@ export class PromptBuilder {
 	): {
 		name: string
 		nickname?: string
-		aliases?: string[]
 		description: string
 		personality?: string
 	} | null {
@@ -207,10 +206,7 @@ export class PromptBuilder {
 
 		const char: any = {
 			name: this.contextBuildCharacterName(character),
-			nickname: this.contextBuildCharacterNickname(character),
-			aliases: character.aliases?.length
-				? character.aliases.filter((a) => a.trim())
-				: undefined
+			nickname: this.contextBuildCharacterNickname(character)
 		}
 
 		// For minimal visibility, only include name/nickname and description
@@ -388,7 +384,7 @@ export class PromptBuilder {
 			this.interpolationEngine.interpolateObject(
 				c,
 				interpolationContext,
-				["name", "nickname", "aliases", "description", "personality"]
+				["name", "nickname", "description", "personality"]
 			)
 		)
 	}

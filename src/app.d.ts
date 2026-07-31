@@ -33,6 +33,10 @@ declare global {
 		rightPanel: string | null
 		mobilePanel: string | null
 		isMobileMenuOpen: boolean
+		/** Which side's sidebar (if any) is expanded to cover the whole
+		 * viewport — set null to exit fullscreen from anywhere with context
+		 * access, e.g. a sidebar button that navigates to a different page. */
+		fullscreenPanel: "left" | "right" | null
 		openPanel: (args: { key: string; toggle?: boolean }) => void
 		closePanel: (args: {
 			panel: "left" | "right" | "mobile"
@@ -105,7 +109,7 @@ declare global {
 			| "charaVaultEncryptedToken"
 			| "charaVaultTokenIv"
 			| "charaVaultTokenAuthTag"
-		> & { isAndroidWrapper?: boolean }
+		> & { isAndroidWrapper?: boolean; localEmbeddingsSupported?: boolean }
 	}
 
 	interface OllamaSettingsCtx {
@@ -198,15 +202,17 @@ declare global {
 		lorebookLabel?: string
 		historyEntryId?: number
 		status: "running" | "review" | "error"
-		phase?: "drafting" | "synthesizing" | "extracting"
+		phase?: "drafting" | "synthesizing" | "naming" | "extracting"
 		batch?: number
 		totalBatches?: number
 		errorMessage?: string
 		pendingResult?: {
 			content: string
 			name?: string
-			participantCharacters: string[]
-			mentionedCharacters: string[]
+			participantCharacters: number[]
+			mentionedCharacters: number[]
+			suggestedParticipantCharacters?: string[]
+			suggestedMentionedCharacters?: string[]
 			raw: string
 		}
 		startedAt: string

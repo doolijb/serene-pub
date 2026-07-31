@@ -5,6 +5,15 @@ import type { Handle, RequestEvent } from "@sveltejs/kit"
 
 type Middleware = (event: RequestEvent) => Promise<void> | void
 
+// Intentionally empty — there's no generic HTTP-route auth backstop here.
+// Every sensitive surface in this app is a socket handler, gated by
+// authMiddleware (src/lib/server/sockets/auth.ts), not an HTTP route; the
+// few HTTP routes that do need auth (e.g. /api/login) call
+// authenticateRequest() themselves. A generic allowlist-based backstop here
+// would need permanent upkeep to stay in sync with every future route, or
+// duplicate a check with no clear behavioral difference — not worth adding
+// speculatively. Revisit if a genuinely sensitive HTTP route is added that
+// can't call authenticateRequest() itself.
 const middleware: Middleware[] = [] // [userAuthentication, routeGuard]
 
 declare module "@sveltejs/kit" {
@@ -81,6 +90,19 @@ let latestReleaseTag: string | undefined = undefined
 let isNewerReleaseAvailable: boolean | undefined = undefined
 let hasCheckedForUpdates = false
 
+// One-time warning (same pattern as hasCheckedForUpdates above) for a
+// login-rate-limiting footgun: loginRateLimit.ts keys its buckets on
+// getClientAddress(), which only reflects the real client IP if
+// ADDRESS_HEADER is set to match a trusted reverse proxy's forwarded-for
+// header. Unset (the default) behind a real proxy, every real user shares
+// the proxy's address — one bad actor's failed logins lock out everyone.
+// This can't safely auto-detect "is there a trusted proxy" (that's a
+// deployment fact, not something inferable from a single request), but an
+// X-Forwarded-For header arriving at all, while ADDRESS_HEADER is unset, is
+// an always-correct-direction signal: an unproxied direct client should
+// never send that header itself under normal use.
+let hasWarnedAboutAddressHeader = false
+
 // Content-Security-Policy is configured via svelte.config.js's kit.csp
 // instead of set here — SvelteKit needs to own that header so it can inject
 // a correct hash/nonce for its own generated inline hydration script; a
@@ -106,6 +128,20 @@ export const handle: Handle = async ({ event, resolve }) => {
 		// Fire-and-forget: don't let a slow/unreachable network delay this
 		// (or any) request. Results populate event.locals on later requests.
 		void checkForUpdates()
+	}
+
+	if (
+		!hasWarnedAboutAddressHeader &&
+		!process.env.ADDRESS_HEADER &&
+		event.request.headers.has("x-forwarded-for")
+	) {
+		hasWarnedAboutAddressHeader = true
+		console.warn(
+			"[Security] This request arrived with an X-Forwarded-For header, but ADDRESS_HEADER is not set — " +
+				"login rate limiting is keying on the wrong address (most likely your reverse proxy's, bucketing every real user together). " +
+				"See HOSTING.md's reverse-proxy section: set ADDRESS_HEADER=x-forwarded-for, but only if you're actually behind a trusted proxy — " +
+				"setting it without one lets a client bypass rate limiting entirely by spoofing the header."
+		)
 	}
 	event.locals.latestReleaseTag = latestReleaseTag
 	event.locals.isNewerReleaseAvailable = isNewerReleaseAvailable

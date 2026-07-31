@@ -6,13 +6,17 @@
 		onOpenChange: (e: OpenChangeDetails) => void
 		onConfirm: () => void
 		onCancel: () => void
+		title?: string
+		message?: string
 	}
 
 	let {
 		open = $bindable(),
 		onOpenChange,
 		onConfirm,
-		onCancel
+		onCancel,
+		title = "Confirm",
+		message = "Are you sure you want to delete this lorebook entry? This action cannot be undone."
 	}: Props = $props()
 </script>
 
@@ -28,12 +32,11 @@
 				class="card bg-surface-100-900 max-w-md space-y-6 p-6 shadow-xl"
 			>
 				<header class="flex justify-between">
-					<h2 class="h2">Confirm</h2>
+					<h2 class="h2">{title}</h2>
 				</header>
 				<article>
 					<p class="opacity-60">
-						Are you sure you want to delete this lorebook entry?
-						This action cannot be undone.
+						{message}
 					</p>
 				</article>
 				<footer class="flex justify-end gap-4">

@@ -124,41 +124,46 @@
 		})
 	}
 
-	onMount(() => {
-		socket.on("characters:list", (msg) => {
-			characters = msg.characterList || []
-			const preselectId = Number(page.url.searchParams.get("characterId"))
-			if (preselectId) {
-				const found = characters.find((c) => c.id === preselectId)
-				if (
-					found?.id != null &&
-					!selectedCharacters.some((s) => s.id === found.id)
-				) {
-					selectedCharacters = [
-						...selectedCharacters,
-						{ ...found, id: found.id }
-					]
-				}
+	function handleCharactersList(msg: Sockets.Characters.List.Response) {
+		characters = msg.characterList || []
+		const preselectId = Number(page.url.searchParams.get("characterId"))
+		if (preselectId) {
+			const found = characters.find((c) => c.id === preselectId)
+			if (
+				found?.id != null &&
+				!selectedCharacters.some((s) => s.id === found.id)
+			) {
+				selectedCharacters = [
+					...selectedCharacters,
+					{ ...found, id: found.id }
+				]
 			}
-		})
-		socket.on("personas:list", (msg) => {
-			personas = msg.personaList || []
-		})
-		socket.on("chats:create", (msg) => {
-			saving = false
-			if (msg.chat) goto(`/document-view/chats/${msg.chat.id}`)
-		})
-		socket.on("chats:create:error", (msg: { error?: string }) => {
-			saving = false
-			error = msg.error || "Failed to create chat."
-		})
+		}
+	}
+	function handlePersonasList(msg: Sockets.Personas.List.Response) {
+		personas = msg.personaList || []
+	}
+	function handleChatsCreate(msg: any) {
+		saving = false
+		if (msg.chat) goto(`/document-view/chats/${msg.chat.id}`)
+	}
+	function handleChatsCreateError(msg: { error?: string }) {
+		saving = false
+		error = msg.error || "Failed to create chat."
+	}
+
+	onMount(() => {
+		socket.on("characters:list", handleCharactersList)
+		socket.on("personas:list", handlePersonasList)
+		socket.on("chats:create", handleChatsCreate)
+		socket.on("chats:create:error", handleChatsCreateError)
 		socket.emit("characters:list", {})
 		socket.emit("personas:list", {})
 		return () => {
-			socket.off("characters:list")
-			socket.off("personas:list")
-			socket.off("chats:create")
-			socket.off("chats:create:error")
+			socket.off("characters:list", handleCharactersList)
+			socket.off("personas:list", handlePersonasList)
+			socket.off("chats:create", handleChatsCreate)
+			socket.off("chats:create:error", handleChatsCreateError)
 		}
 	})
 </script>

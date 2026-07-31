@@ -21,18 +21,21 @@
 		socket.emit("chats:delete", { id })
 	}
 
+	function handleChatsList(msg: Sockets.Chats.List.Response) {
+		chats = msg.chatList || []
+		loaded = true
+	}
+	function handleChatsDelete() {
+		socket.emit("chats:list", {})
+	}
+
 	onMount(() => {
-		socket.on("chats:list", (msg) => {
-			chats = msg.chatList || []
-			loaded = true
-		})
-		socket.on("chats:delete", () => {
-			socket.emit("chats:list", {})
-		})
+		socket.on("chats:list", handleChatsList)
+		socket.on("chats:delete", handleChatsDelete)
 		socket.emit("chats:list", {})
 		return () => {
-			socket.off("chats:list")
-			socket.off("chats:delete")
+			socket.off("chats:list", handleChatsList)
+			socket.off("chats:delete", handleChatsDelete)
 		}
 	})
 </script>

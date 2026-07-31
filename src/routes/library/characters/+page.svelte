@@ -42,7 +42,24 @@
 	// spinner so those searches don't silently look like nothing happened.
 	let searching = $state(false)
 	let loadingMore = $state(false)
+	// A "Load More" click made while one is already in flight is remembered
+	// instead of silently dropped — the moment the in-flight one settles, it
+	// fires immediately rather than requiring the user to notice and re-click.
+	let loadMoreQueued = $state(false)
+	// Content filtering can make a page come back with zero visible items even
+	// though more upstream pages exist (see charaVaultSource.ts's search()) —
+	// a single click shouldn't "succeed" into nothing. Bounded so a heavily
+	// filtered query can't spin forever / compound rate-limit pressure.
+	let loadMoreAutoContinueAttempts = 0
+	const MAX_LOAD_MORE_AUTO_CONTINUE = 3
+	let stillFiltering = $state(false)
 	let hasMoreResults = $state(false)
+	// The raw upstream offset for the next "Load More" page, as reported by
+	// the server (CardSourceSearchResult.nextOffset). Content filtering can
+	// remove items after upstream pagination already accounted for them, so
+	// this can differ from libraryCharacters.length — using the filtered
+	// count here would re-request an overlapping range from CharaVault.
+	let nextOffset = $state(0)
 	let downloading = $state(false)
 	let selectedCharacter: LibraryCatalogItem | null = $state(null)
 	let showDetails = $state(false)
@@ -61,7 +78,9 @@
 	let activeSort = $state<CardSourceSort>("top_rated")
 	let hasBookOnly = $state(false)
 	let creatorFilter = $state("")
-	let sourcesForCharacters = $derived.by(() => capabilities?.sources ?? [])
+	let sourcesForCharacters = $derived.by(
+		() => capabilities?.sources.filter((s) => s.supportsCharacters) ?? []
+	)
 	let activeSourceInfo = $derived.by(
 		() => capabilities?.sources.find((s) => s.id === activeSource) ?? null
 	)
@@ -121,14 +140,19 @@
 					: undefined,
 			cursor: {
 				limit: PAGE_SIZE,
-				offset: append ? libraryCharacters.length : 0
+				offset: append ? nextOffset : 0
 			},
 			requestId
 		})
 	}
 
 	function loadMore() {
-		if (!hasMoreResults || loadingMore || isLoading) return
+		if (!hasMoreResults) return
+		if (loadingMore || isLoading) {
+			loadMoreQueued = true
+			return
+		}
+		loadMoreAutoContinueAttempts = 0
 		fetchLibrary(false, true)
 	}
 
@@ -218,9 +242,38 @@
 					? [...libraryCharacters, ...msg.characters]
 					: msg.characters
 				hasMoreResults = msg.hasMore
+				nextOffset =
+					msg.nextOffset ??
+					(pendingIsAppend
+						? nextOffset + msg.characters.length
+						: msg.characters.length)
 				isLoading = false
 				searching = false
 				loadingMore = false
+
+				if (pendingIsAppend) {
+					if (
+						msg.characters.length === 0 &&
+						hasMoreResults &&
+						loadMoreAutoContinueAttempts <
+							MAX_LOAD_MORE_AUTO_CONTINUE
+					) {
+						// This page filtered down to nothing but more upstream
+						// pages exist — keep going automatically rather than
+						// leaving the click looking like it did nothing.
+						loadMoreAutoContinueAttempts++
+						loadMoreQueued = false
+						stillFiltering = true
+						fetchLibrary(false, true)
+						return
+					}
+					loadMoreAutoContinueAttempts = 0
+					stillFiltering = false
+				}
+				if (loadMoreQueued) {
+					loadMoreQueued = false
+					loadMore()
+				}
 			}
 		)
 		socket.on(
@@ -242,6 +295,11 @@
 					// rate-limited append still auto-retries (resuming the append,
 					// not replacing) same as a fresh search would; anything else
 					// just toasts and leaves the existing grid alone.
+					//
+					// Either way, a queued click is already superseded by (or
+					// moot alongside) this outcome — clear it rather than
+					// letting it fire an extra request once the retry lands.
+					loadMoreQueued = false
 					if (isRateLimited && errorRetryAfterMs) {
 						clearTimeout(retryTimer)
 						retryTimer = setTimeout(
@@ -249,6 +307,8 @@
 							errorRetryAfterMs
 						)
 					} else {
+						loadMoreAutoContinueAttempts = 0
+						stillFiltering = false
 						toaster.error({
 							title: msg.error || "Failed to load more characters"
 						})
@@ -332,7 +392,7 @@
 </script>
 
 <div
-	class="preset-tonal mx-4 mt-4 mb-8 min-h-[calc(100%-3rem)] rounded-lg p-6 shadow-md"
+	class="preset-tonal mt-4 min-h-[calc(100%-3rem)] rounded-lg p-6 shadow-md"
 >
 	<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
 		<div class="flex items-center gap-3">
@@ -530,13 +590,20 @@
 		</div>
 	{:else if rateLimited}
 		<div
-			class="text-surface-700-300 flex flex-col items-center gap-2 py-16 text-center"
+			class="text-surface-700-300 flex flex-col items-center gap-3 py-16 text-center"
 		>
 			<Icons.Clock size={40} class="opacity-40" />
 			<p>
 				This source is busy right now{#if retryAfterMs}
 					— retrying in {Math.ceil(retryAfterMs / 1000)}s{/if}.
 			</p>
+			<button
+				class="btn btn-sm preset-filled-primary-500"
+				onclick={() => fetchLibrary(true)}
+			>
+				<Icons.RotateCw size={16} />
+				Retry
+			</button>
 		</div>
 	{:else if libraryCharacters.length === 0}
 		<div
@@ -595,7 +662,7 @@
 			>
 				{#if loadingMore}
 					<Icons.Loader2 size={16} class="animate-spin" />
-					Loading…
+					{stillFiltering ? "Filtering…" : "Loading…"}
 				{:else}
 					<Icons.ChevronDown size={16} />
 					Load More

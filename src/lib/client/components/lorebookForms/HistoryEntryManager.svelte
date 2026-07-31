@@ -78,6 +78,11 @@
 		persona?: { name: string } | null
 	}
 	let lorebookBindingList: BindingWithRelations[] = $state([])
+	let bindingNameById = $derived.by(() => {
+		const map = new Map<number, string>()
+		for (const b of lorebookBindingList) map.set(b.id, b.name || b.binding)
+		return map
+	})
 	let isReady = $state(false)
 	let orderBy = $state("entry-date-desc")
 	let search = $state("")
@@ -131,10 +136,10 @@
 	let editingSceneId = $state<number | null>(null)
 	let editingSceneName = $state("")
 	let editingSceneSummary = $state("")
-	let editingSceneParticipants = $state<string[]>([])
-	let editingSceneMentioned = $state<string[]>([])
-	let newParticipantInput = $state("")
-	let newMentionedInput = $state("")
+	let editingSceneParticipants = $state<number[]>([])
+	let editingSceneMentioned = $state<number[]>([])
+	let newParticipantId = $state<number | "">("")
+	let newMentionedId = $state<number | "">("")
 	let showCompileModal = $state(false)
 	let compileTargetEntry = $state<SelectHistoryEntry | null>(null)
 	let compileActivityId = $state<string | null>(null)
@@ -487,8 +492,8 @@
 		editingSceneSummary = scene.summary ?? ""
 		editingSceneParticipants = [...(scene.participantCharacters ?? [])]
 		editingSceneMentioned = [...(scene.mentionedCharacters ?? [])]
-		newParticipantInput = ""
-		newMentionedInput = ""
+		newParticipantId = ""
+		newMentionedId = ""
 	}
 
 	function saveEditScene() {
@@ -506,19 +511,21 @@
 	}
 
 	function addParticipant() {
-		const name = newParticipantInput.trim()
-		if (name && !editingSceneParticipants.includes(name)) {
-			editingSceneParticipants = [...editingSceneParticipants, name]
+		if (newParticipantId === "") return
+		const id = Number(newParticipantId)
+		if (!editingSceneParticipants.includes(id)) {
+			editingSceneParticipants = [...editingSceneParticipants, id]
 		}
-		newParticipantInput = ""
+		newParticipantId = ""
 	}
 
 	function addMentioned() {
-		const name = newMentionedInput.trim()
-		if (name && !editingSceneMentioned.includes(name)) {
-			editingSceneMentioned = [...editingSceneMentioned, name]
+		if (newMentionedId === "") return
+		const id = Number(newMentionedId)
+		if (!editingSceneMentioned.includes(id)) {
+			editingSceneMentioned = [...editingSceneMentioned, id]
 		}
-		newMentionedInput = ""
+		newMentionedId = ""
 	}
 
 	function processScene(sceneId: number) {
@@ -554,21 +561,29 @@
 		compileEntriesCtx?.dismiss(_activityId)
 	}
 
-	// Watch for activity sidebar "Review & Apply" trigger
-	$effect(() => {
-		const reviewId = compileEntriesCtx?.reviewHistoryEntryId
-		if (!reviewId) return
-		const activity = compileEntriesCtx.activities.find(
-			(a) => a.historyEntryId === reviewId
-		)
-		if (!activity) return
-		const entry = historyEntryList.find((e) => e.id === reviewId)
-		if (entry) {
+	// Starts a fresh compile, or reopens a pending/running one exactly
+	// where it left off — used by the list card's "..." menu, its status
+	// badges, and the activity-sidebar reopen effect below.
+	function openOrReopenCompile(entry: SelectHistoryEntry) {
+		const activity = compileActivityByEntryId.get(entry.id)
+		if (activity) {
 			openCompileModal(entry, {
 				activityId: activity.activityId,
 				pendingResult: activity.pendingResult ?? null,
 				initialStep: activity.status === "review" ? "review" : "running"
 			})
+		} else {
+			openCompileModal(entry)
+		}
+	}
+
+	// Watch for activity sidebar "Review & Apply" trigger
+	$effect(() => {
+		const reviewId = compileEntriesCtx?.reviewHistoryEntryId
+		if (!reviewId) return
+		const entry = historyEntryList.find((e) => e.id === reviewId)
+		if (entry && compileActivityByEntryId.has(reviewId)) {
+			openOrReopenCompile(entry)
 		}
 		compileEntriesCtx.setReviewHistoryEntryId(null)
 	})
@@ -581,127 +596,119 @@
 	}
 
 	// ── Socket setup ──────────────────────────────────────────────
+	async function handleHistoryEntriesList(
+		msg: Sockets.HistoryEntries.List.Response
+	) {
+		if (msg.lorebookId === lorebookId) {
+			historyEntryList = msg.historyEntryList
+			// Keep focusedEntry in sync
+			if (focusedEntry) {
+				const updated = msg.historyEntryList.find(
+					(e: SelectHistoryEntry) => e.id === focusedEntry!.id
+				)
+				if (updated) focusedEntry = updated
+			}
+		}
+		await tick()
+	}
+
+	function handleHistoryEntryCreate(
+		msg: Sockets.HistoryEntries.Create.Response
+	) {
+		if (msg.historyEntry?.lorebookId === lorebookId) {
+			toaster.success({ title: "History Entry created" })
+		}
+	}
+
+	function handleHistoryEntryUpdate(
+		msg: Sockets.HistoryEntries.Update.Response
+	) {
+		if (msg.historyEntry?.lorebookId === lorebookId) {
+			toaster.success({ title: "History Entry updated" })
+		}
+	}
+
+	function handleHistoryEntryDelete(msg: Sockets.HistoryEntries.Delete.Response) {
+		if (
+			(msg as any).id &&
+			historyEntryList.some((e) => e.id === (msg as any).id)
+		) {
+			toaster.success({ title: "History Entry deleted" })
+		}
+	}
+
+	async function handleLorebooksBindingList(
+		msg: Sockets.Lorebooks.BindingList.Response
+	) {
+		if (msg.lorebookId === lorebookId) {
+			lorebookBindingList = [
+				...msg.lorebookBindingList
+			] as BindingWithRelations[]
+		}
+		await tick()
+	}
+
+	function handleIterateNext(
+		_msg: Sockets.HistoryEntries.IterateNext.Response
+	) {
+		toaster.success({ title: "The story's date has moved forward" })
+	}
+
+	function handleScenesListByLorebook(
+		msg: Sockets.Scenes.ListByLorebook.Response
+	) {
+		sceneList = msg.sceneList
+	}
+
+	function handleSceneUpdate(msg: Sockets.Scenes.Update.Response) {
+		if (msg.scene) {
+			sceneList = sceneList.map((s) =>
+				s.id === msg.scene.id ? { ...s, ...msg.scene } : s
+			)
+		}
+	}
+
+	function handleSceneDelete(_msg: Sockets.Scenes.Delete.Response) {
+		fetchScenes()
+	}
+
+	function handleSceneCreate(_msg: Sockets.Scenes.Create.Response) {
+		fetchScenes()
+	}
+
+	function handleScenesProcessError(msg: Sockets.Scenes.Process.ErrorResponse) {
+		toaster.error({
+			title: "Scene processing failed",
+			description: msg.error
+		})
+	}
+
+	// The background vectorization queue updates a row's embeddingModel
+	// directly in the DB — without this, the badge here only ever refreshes
+	// on the next explicit CRUD action, leaving it stale until a manual refresh.
+	function handleVectorizationItemUpdated(
+		msg: Sockets.Vectorization.ItemUpdated.Response
+	) {
+		if (msg.type !== "historyEntry" || msg.lorebookId !== lorebookId) return
+		const target = historyEntryList.find((e: any) => e.id === msg.id)
+		if (target) (target as any).embeddingModel = msg.embeddingModel
+		if (focusedEntry?.id === msg.id)
+			(focusedEntry as any).embeddingModel = msg.embeddingModel
+	}
+
 	onMount(() => {
-		socket.on(
-			"historyEntries:list",
-			async (msg: Sockets.HistoryEntries.List.Response) => {
-				if (
-					msg.historyEntryList.length &&
-					msg.historyEntryList[0].lorebookId === lorebookId
-				) {
-					historyEntryList = msg.historyEntryList
-					// Keep focusedEntry in sync
-					if (focusedEntry) {
-						const updated = msg.historyEntryList.find(
-							(e: SelectHistoryEntry) => e.id === focusedEntry!.id
-						)
-						if (updated) focusedEntry = updated
-					}
-				}
-				await tick()
-			}
-		)
-
-		socket.on(
-			"historyEntries:create",
-			(msg: Sockets.HistoryEntries.Create.Response) => {
-				if (msg.historyEntry?.lorebookId === lorebookId) {
-					toaster.success({ title: "History Entry created" })
-				}
-			}
-		)
-
-		socket.on(
-			"historyEntries:update",
-			(msg: Sockets.HistoryEntries.Update.Response) => {
-				if (msg.historyEntry?.lorebookId === lorebookId) {
-					toaster.success({ title: "History Entry updated" })
-				}
-			}
-		)
-
-		socket.on(
-			"historyEntries:delete",
-			(msg: Sockets.HistoryEntries.Delete.Response) => {
-				if (
-					(msg as any).id &&
-					historyEntryList.some((e) => e.id === (msg as any).id)
-				) {
-					toaster.success({ title: "History Entry deleted" })
-				}
-			}
-		)
-
-		socket.on(
-			"lorebooks:bindingList",
-			async (msg: Sockets.Lorebooks.BindingList.Response) => {
-				if (msg.lorebookId === lorebookId) {
-					lorebookBindingList = [
-						...msg.lorebookBindingList
-					] as BindingWithRelations[]
-				}
-				await tick()
-			}
-		)
-
-		socket.on(
-			"historyEntries:iterateNext",
-			(_msg: Sockets.HistoryEntries.IterateNext.Response) => {
-				toaster.success({ title: "The story's date has moved forward" })
-			}
-		)
-
-		socket.on(
-			"scenes:listByLorebook",
-			(msg: Sockets.Scenes.ListByLorebook.Response) => {
-				sceneList = msg.sceneList
-			}
-		)
-
-		socket.on("scenes:update", (msg: Sockets.Scenes.Update.Response) => {
-			if (msg.scene) {
-				sceneList = sceneList.map((s) =>
-					s.id === msg.scene.id ? { ...s, ...msg.scene } : s
-				)
-			}
-		})
-
-		socket.on("scenes:delete", (_msg: Sockets.Scenes.Delete.Response) => {
-			fetchScenes()
-		})
-		socket.on("scenes:create", (_msg: Sockets.Scenes.Create.Response) => {
-			fetchScenes()
-		})
-
-		socket.on(
-			"scenes:process:error",
-			(msg: Sockets.Scenes.Process.ErrorResponse) => {
-				toaster.error({
-					title: "Scene processing failed",
-					description: msg.error
-				})
-			}
-		)
-
-		// The background vectorization queue updates a row's embeddingModel
-		// directly in the DB — without this, the badge here only ever refreshes
-		// on the next explicit CRUD action, leaving it stale until a manual refresh.
-		socket.on(
-			"vectorization:itemUpdated",
-			(msg: Sockets.Vectorization.ItemUpdated.Response) => {
-				if (
-					msg.type !== "historyEntry" ||
-					msg.lorebookId !== lorebookId
-				)
-					return
-				const target = historyEntryList.find(
-					(e: any) => e.id === msg.id
-				)
-				if (target) (target as any).embeddingModel = msg.embeddingModel
-				if (focusedEntry?.id === msg.id)
-					(focusedEntry as any).embeddingModel = msg.embeddingModel
-			}
-		)
+		socket.on("historyEntries:list", handleHistoryEntriesList)
+		socket.on("historyEntries:create", handleHistoryEntryCreate)
+		socket.on("historyEntries:update", handleHistoryEntryUpdate)
+		socket.on("historyEntries:delete", handleHistoryEntryDelete)
+		socket.on("lorebooks:bindingList", handleLorebooksBindingList)
+		socket.on("historyEntries:iterateNext", handleIterateNext)
+		socket.on("scenes:listByLorebook", handleScenesListByLorebook)
+		socket.on("scenes:update", handleSceneUpdate)
+		socket.on("scenes:delete", handleSceneDelete)
+		socket.on("scenes:create", handleSceneCreate)
+		socket.on("scenes:process:error", handleScenesProcessError)
+		socket.on("vectorization:itemUpdated", handleVectorizationItemUpdated)
 
 		socket.emit("historyEntries:list", {
 			lorebookId
@@ -715,18 +722,18 @@
 
 	onDestroy(() => {
 		hasUnsavedChanges = false
-		socket.off("historyEntries:list")
-		socket.off("historyEntries:create")
-		socket.off("historyEntries:update")
-		socket.off("historyEntries:delete")
-		socket.off("lorebooks:bindingList")
-		socket.off("historyEntries:iterateNext")
-		socket.off("scenes:listByLorebook")
-		socket.off("scenes:update")
-		socket.off("scenes:delete")
-		socket.off("scenes:create")
-		socket.off("scenes:process:error")
-		socket.off("vectorization:itemUpdated")
+		socket.off("historyEntries:list", handleHistoryEntriesList)
+		socket.off("historyEntries:create", handleHistoryEntryCreate)
+		socket.off("historyEntries:update", handleHistoryEntryUpdate)
+		socket.off("historyEntries:delete", handleHistoryEntryDelete)
+		socket.off("lorebooks:bindingList", handleLorebooksBindingList)
+		socket.off("historyEntries:iterateNext", handleIterateNext)
+		socket.off("scenes:listByLorebook", handleScenesListByLorebook)
+		socket.off("scenes:update", handleSceneUpdate)
+		socket.off("scenes:delete", handleSceneDelete)
+		socket.off("scenes:create", handleSceneCreate)
+		socket.off("scenes:process:error", handleScenesProcessError)
+		socket.off("vectorization:itemUpdated", handleVectorizationItemUpdated)
 	})
 </script>
 
@@ -860,22 +867,30 @@
 									</span>
 								{/if}
 								{#if entryCompileActivity?.status === "running"}
-									<span
+									<button
 										class="preset-filled-tertiary-500 rounded px-1.5 py-0.5 text-xs"
-										title="Compiling…"
+										title="Compiling… — click to view progress"
+										onclick={(e) => {
+											e.stopPropagation()
+											openOrReopenCompile(entry)
+										}}
 									>
 										<Icons.Loader
 											size={11}
 											class="inline animate-spin"
 										/> Compiling…
-									</span>
+									</button>
 								{:else if entryCompileActivity?.status === "review"}
-									<span
+									<button
 										class="preset-filled-warning-500 rounded px-1.5 py-0.5 text-xs"
-										title="Review pending"
+										title="Review pending — click to review"
+										onclick={(e) => {
+											e.stopPropagation()
+											openOrReopenCompile(entry)
+										}}
 									>
 										<Icons.Eye size={11} class="inline" /> Review
-									</span>
+									</button>
 								{/if}
 							</div>
 						</div>
@@ -921,6 +936,27 @@
 												}}
 											>
 												<Icons.Pencil size={14} /> Edit
+											</button>
+											<button
+												class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+												disabled={entryScenes.length === 0}
+												title={entryScenes.length === 0
+													? "Add scenes first"
+													: undefined}
+												onclick={(e) => {
+													e.stopPropagation()
+													openMenuEntryId = null
+													openOrReopenCompile(entry)
+												}}
+											>
+												<Icons.Wand size={14} />
+												{entryCompileActivity?.status ===
+												"review"
+													? "Review Compile"
+													: entryCompileActivity?.status ===
+														  "running"
+														? "View Progress"
+														: "Compile to Entry"}
 											</button>
 											<hr
 												class="border-surface-300-700"
@@ -1105,14 +1141,16 @@
 								Participants
 							</p>
 							<div class="flex flex-wrap gap-1">
-								{#each editingSceneParticipants as name, i}
+								{#each editingSceneParticipants as id, i}
 									<span
 										class="chip preset-tonal-primary flex items-center gap-0.5 py-0 text-[10px]"
 									>
-										{name}
+										{bindingNameById.get(id) ?? `#${id}`}
 										<button
 											class="p-1.5"
-											aria-label="Remove participant {name}"
+											aria-label="Remove participant {bindingNameById.get(
+												id
+											) ?? id}"
 											onclick={() =>
 												(editingSceneParticipants =
 													editingSceneParticipants.filter(
@@ -1125,19 +1163,21 @@
 								{/each}
 							</div>
 							<div class="flex gap-1">
-								<input
-									class="input input-sm flex-1 text-xs"
-									type="text"
-									placeholder="Add participant…"
-									bind:value={newParticipantInput}
-									onkeydown={(e) =>
-										e.key === "Enter" &&
-										(e.preventDefault(), addParticipant())}
-								/>
+								<select
+									class="select select-sm flex-1 text-xs"
+									bind:value={newParticipantId}
+								>
+									<option value="">Add character…</option>
+									{#each lorebookBindingList.filter((b) => !editingSceneParticipants.includes(b.id)) as b}
+										<option value={b.id}
+											>{b.name || b.binding}</option
+										>
+									{/each}
+								</select>
 								<button
 									class="btn btn-sm preset-filled-surface-400-600 p-1"
 									onclick={addParticipant}
-									disabled={!newParticipantInput.trim()}
+									disabled={newParticipantId === ""}
 								>
 									<Icons.Plus size={12} />
 								</button>
@@ -1150,14 +1190,16 @@
 								Mentioned
 							</p>
 							<div class="flex flex-wrap gap-1">
-								{#each editingSceneMentioned as name, i}
+								{#each editingSceneMentioned as id, i}
 									<span
 										class="chip preset-tonal-surface flex items-center gap-0.5 py-0 text-[10px]"
 									>
-										{name}
+										{bindingNameById.get(id) ?? `#${id}`}
 										<button
 											class="p-1.5"
-											aria-label="Remove mention {name}"
+											aria-label="Remove mention {bindingNameById.get(
+												id
+											) ?? id}"
 											onclick={() =>
 												(editingSceneMentioned =
 													editingSceneMentioned.filter(
@@ -1170,19 +1212,21 @@
 								{/each}
 							</div>
 							<div class="flex gap-1">
-								<input
-									class="input input-sm flex-1 text-xs"
-									type="text"
-									placeholder="Add mentioned…"
-									bind:value={newMentionedInput}
-									onkeydown={(e) =>
-										e.key === "Enter" &&
-										(e.preventDefault(), addMentioned())}
-								/>
+								<select
+									class="select select-sm flex-1 text-xs"
+									bind:value={newMentionedId}
+								>
+									<option value="">Add character…</option>
+									{#each lorebookBindingList.filter((b) => !editingSceneMentioned.includes(b.id)) as b}
+										<option value={b.id}
+											>{b.name || b.binding}</option
+										>
+									{/each}
+								</select>
 								<button
 									class="btn btn-sm preset-filled-surface-400-600 p-1"
 									onclick={addMentioned}
-									disabled={!newMentionedInput.trim()}
+									disabled={newMentionedId === ""}
 								>
 									<Icons.Plus size={12} />
 								</button>
@@ -1288,11 +1332,12 @@
 											>
 												Present:
 											</span>
-											{#each scene.participantCharacters ?? [] as name}
+											{#each scene.participantCharacters ?? [] as id}
 												<span
 													class="chip preset-tonal-primary py-0 text-[10px]"
 												>
-													{name}
+													{bindingNameById.get(id) ??
+														`#${id}`}
 												</span>
 											{/each}
 										</div>
@@ -1306,11 +1351,12 @@
 											>
 												Mentioned:
 											</span>
-											{#each scene.mentionedCharacters ?? [] as name}
+											{#each scene.mentionedCharacters ?? [] as id}
 												<span
 													class="chip preset-tonal-surface py-0 text-[10px]"
 												>
-													{name}
+													{bindingNameById.get(id) ??
+														`#${id}`}
 												</span>
 											{/each}
 										</div>
@@ -1873,14 +1919,16 @@
 							Participants
 						</p>
 						<div class="flex flex-wrap gap-1">
-							{#each editingSceneParticipants as name, i}
+							{#each editingSceneParticipants as id, i}
 								<span
 									class="chip preset-tonal-primary flex items-center gap-0.5 py-0 text-[10px]"
 								>
-									{name}
+									{bindingNameById.get(id) ?? `#${id}`}
 									<button
 										class="p-1.5"
-										aria-label="Remove participant {name}"
+										aria-label="Remove participant {bindingNameById.get(
+											id
+										) ?? id}"
 										onclick={() =>
 											(editingSceneParticipants =
 												editingSceneParticipants.filter(
@@ -1893,19 +1941,21 @@
 							{/each}
 						</div>
 						<div class="flex gap-1">
-							<input
-								class="input input-sm flex-1 text-xs"
-								type="text"
-								placeholder="Add participant…"
-								bind:value={newParticipantInput}
-								onkeydown={(e) =>
-									e.key === "Enter" &&
-									(e.preventDefault(), addParticipant())}
-							/>
+							<select
+								class="select select-sm flex-1 text-xs"
+								bind:value={newParticipantId}
+							>
+								<option value="">Add character…</option>
+								{#each lorebookBindingList.filter((b) => !editingSceneParticipants.includes(b.id)) as b}
+									<option value={b.id}
+										>{b.name || b.binding}</option
+									>
+								{/each}
+							</select>
 							<button
 								class="btn btn-sm preset-filled-surface-400-600 p-1"
 								onclick={addParticipant}
-								disabled={!newParticipantInput.trim()}
+								disabled={newParticipantId === ""}
 							>
 								<Icons.Plus size={12} />
 							</button>
@@ -1918,14 +1968,16 @@
 							Mentioned
 						</p>
 						<div class="flex flex-wrap gap-1">
-							{#each editingSceneMentioned as name, i}
+							{#each editingSceneMentioned as id, i}
 								<span
 									class="chip preset-tonal-surface flex items-center gap-0.5 py-0 text-[10px]"
 								>
-									{name}
+									{bindingNameById.get(id) ?? `#${id}`}
 									<button
 										class="p-1.5"
-										aria-label="Remove mention {name}"
+										aria-label="Remove mention {bindingNameById.get(
+											id
+										) ?? id}"
 										onclick={() =>
 											(editingSceneMentioned =
 												editingSceneMentioned.filter(
@@ -1938,19 +1990,21 @@
 							{/each}
 						</div>
 						<div class="flex gap-1">
-							<input
-								class="input input-sm flex-1 text-xs"
-								type="text"
-								placeholder="Add mentioned…"
-								bind:value={newMentionedInput}
-								onkeydown={(e) =>
-									e.key === "Enter" &&
-									(e.preventDefault(), addMentioned())}
-							/>
+							<select
+								class="select select-sm flex-1 text-xs"
+								bind:value={newMentionedId}
+							>
+								<option value="">Add character…</option>
+								{#each lorebookBindingList.filter((b) => !editingSceneMentioned.includes(b.id)) as b}
+									<option value={b.id}
+										>{b.name || b.binding}</option
+									>
+								{/each}
+							</select>
 							<button
 								class="btn btn-sm preset-filled-surface-400-600 p-1"
 								onclick={addMentioned}
-								disabled={!newMentionedInput.trim()}
+								disabled={newMentionedId === ""}
 							>
 								<Icons.Plus size={12} />
 							</button>
@@ -2160,11 +2214,13 @@
 												>
 													Present:
 												</span>
-												{#each scene.participantCharacters ?? [] as name}
+												{#each scene.participantCharacters ?? [] as id}
 													<span
 														class="chip preset-tonal-primary py-0 text-[10px]"
 													>
-														{name}
+														{bindingNameById.get(
+															id
+														) ?? `#${id}`}
 													</span>
 												{/each}
 											</div>
@@ -2178,11 +2234,13 @@
 												>
 													Mentioned:
 												</span>
-												{#each scene.mentionedCharacters ?? [] as name}
+												{#each scene.mentionedCharacters ?? [] as id}
 													<span
 														class="chip preset-tonal-surface py-0 text-[10px]"
 													>
-														{name}
+														{bindingNameById.get(
+															id
+														) ?? `#${id}`}
 													</span>
 												{/each}
 											</div>
@@ -2245,6 +2303,8 @@
 		sceneId={processModalSceneId}
 		activityId={processModalActivityId}
 		pendingResult={processModalPendingResult ?? null}
+		{lorebookId}
+		{lorebookBindingList}
 		onApplied={(_sceneId) => {
 			showProcessModal = false
 		}}

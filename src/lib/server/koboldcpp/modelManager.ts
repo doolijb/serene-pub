@@ -3,6 +3,7 @@ import * as fsPromises from "fs/promises"
 import { fetchCurrentModelName, fetchModelStatusForPoll } from "./kcppHttp"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import { pollUntilReady } from "./pollUntilReady"
 
 export interface ManagedConfig {
 	modelFile: string
@@ -83,40 +84,35 @@ async function getCurrentModelBasename(
 	return result ? normalizeModelName(result) : null
 }
 
-// Consecutive (not single) connection-refused results are required before
-// treating the process as dead — koboldcpp briefly doesn't have its port
-// open yet in the first moment of a legitimate startup, and one stray
-// refusal there shouldn't be mistaken for a crash mid-load.
-const CONNECTION_REFUSED_FAILURE_THRESHOLD = 3
-
 async function waitForModelReady(
 	baseUrl: string,
 	expectedFile: string,
 	signal?: AbortSignal,
-	timeoutMs = 600_000
+	isAlive?: () => boolean
 ): Promise<void> {
-	const deadline = Date.now() + timeoutMs
 	const expected = normalizeModelName(expectedFile)
-	let consecutiveRefusals = 0
-	while (Date.now() < deadline) {
-		signal?.throwIfAborted()
-		const { modelName, refused } = await fetchModelStatusForPoll(baseUrl)
-		const current = modelName ? normalizeModelName(modelName) : null
-		if (current && current === expected) return
-		if (refused) {
-			consecutiveRefusals++
-			if (consecutiveRefusals >= CONNECTION_REFUSED_FAILURE_THRESHOLD) {
-				throw new Error(
-					`KoboldCPP process is not reachable at ${baseUrl} — it appears to have crashed while loading "${expectedFile}"`
+	await pollUntilReady(
+		async () => {
+			const { modelName, refused } = await fetchModelStatusForPoll(baseUrl)
+			const current = modelName ? normalizeModelName(modelName) : null
+			if (current && current === expected) return "ready"
+			return refused ? "refused" : "not-ready"
+		},
+		{
+			signal,
+			isAlive,
+			// With a real liveness check (managed mode, we hold the process
+			// handle), there's no need to guess how long a huge model can
+			// take on slow hardware — wait as long as it's actually alive.
+			// Without one (an external instance we merely ping), fall back
+			// to a fixed, conservative ceiling since we have no better signal.
+			hardTimeoutMs: isAlive ? 30 * 60_000 : 600_000,
+			label: `model "${expectedFile}"`,
+			onTick: (elapsed) =>
+				console.log(
+					`[KoboldCPP] still waiting for "${expectedFile}" to finish loading… (${Math.round(elapsed / 1000)}s)`
 				)
-			}
-		} else {
-			consecutiveRefusals = 0
 		}
-		await new Promise((r) => setTimeout(r, 2000))
-	}
-	throw new Error(
-		`Model "${expectedFile}" did not finish loading within timeout`
 	)
 }
 
@@ -130,6 +126,12 @@ export async function ensureModelLoaded(opts: {
 	ttlSecs: number
 	contextSize?: number
 	signal?: AbortSignal
+	/** Ground-truth "is the koboldcpp process we spawned still alive"
+	 * check — only available when the caller owns the subprocess (managed
+	 * mode). When given, waits described below are gated on this rather
+	 * than a fixed timeout, so a huge model on slow hardware isn't cut off
+	 * just because it's slower than whatever number was guessed here. */
+	isAlive?: () => boolean
 }): Promise<void> {
 	const {
 		connectionId,
@@ -140,7 +142,8 @@ export async function ensureModelLoaded(opts: {
 		adminPassword,
 		ttlSecs,
 		contextSize,
-		signal
+		signal,
+		isAlive
 	} = opts
 
 	// A previous caller's load may still be in flight. Wait for it, but don't
@@ -209,7 +212,18 @@ export async function ensureModelLoaded(opts: {
 		gpulayers: managedConfig.gpuLayers,
 		contextsize: contextSize ?? 4096,
 		flashattention: managedConfig.flashAttention,
-		batchsize: managedConfig.batchSize
+		batchsize: managedConfig.batchSize,
+		// Must be set HERE, not just as a base spawn arg (subprocessManager.ts)
+		// — koboldcpp's own admin reload_config handler resets every non-
+		// protected arg to its argparse default before reapplying whatever
+		// keys this .kcpps file contains (confirmed by reading koboldcpp.py's
+		// reload path: the final branch always runs
+		// reload_from_new_args(defaultargs) first). "jinja" isn't in
+		// koboldcpp's protected-args list, so a spawn-time-only --jinja flag
+		// is silently wiped the moment the first model loads through this
+		// file. See subprocessManager.ts's --jinja comment for what this
+		// actually enables.
+		jinja: true
 	}
 	const configJson = JSON.stringify(configContent, null, 2)
 
@@ -219,31 +233,56 @@ export async function ensureModelLoaded(opts: {
 			configJson
 		)
 
-		const timeoutSignal = AbortSignal.timeout(600_000)
-		const resp = await fetch(`${baseUrl}/api/admin/reload_config`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${adminPassword}`
+		// koboldcpp's admin API can briefly stop accepting connections while
+		// swapping models internally (a prior load winding down, or its own
+		// reload machinery restarting the listener) — a request landing in
+		// that exact window gets a raw ECONNREFUSED with no HTTP response at
+		// all. Retry through that exact same way waitForModelReady() below
+		// tolerates it: trust isAlive when we have it, otherwise a bounded
+		// consecutive-refusal count.
+		let data: any
+		await pollUntilReady(
+			async () => {
+				const timeoutSignal = AbortSignal.timeout(600_000)
+				let resp: Response
+				try {
+					resp = await fetch(`${baseUrl}/api/admin/reload_config`, {
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							Authorization: `Bearer ${adminPassword}`
+						},
+						body: JSON.stringify({ filename: configFilename }),
+						signal: signal
+							? AbortSignal.any([signal, timeoutSignal])
+							: timeoutSignal
+					})
+				} catch (err) {
+					const cause = (err as { cause?: { code?: string } })?.cause
+					if (cause?.code === "ECONNREFUSED") return "refused"
+					throw err
+				}
+				if (!resp.ok) {
+					const text = await resp.text().catch(() => "")
+					throw new Error(`reload_config failed: ${resp.status} ${text}`)
+				}
+				data = await resp.json().catch(() => ({}))
+				return "ready"
 			},
-			body: JSON.stringify({ filename: configFilename }),
-			signal: signal
-				? AbortSignal.any([signal, timeoutSignal])
-				: timeoutSignal
-		})
-
-		if (!resp.ok) {
-			const text = await resp.text().catch(() => "")
-			throw new Error(`reload_config failed: ${resp.status} ${text}`)
-		}
-		const data = await resp.json().catch(() => ({}))
+			{
+				signal,
+				isAlive,
+				hardTimeoutMs: isAlive ? 30 * 60_000 : 60_000,
+				label: "reload_config request"
+			}
+		)
 		if (!data.success) {
 			throw new Error(
 				"reload_config rejected the request (success: false)"
 			)
 		}
 
-		await waitForModelReady(baseUrl, managedConfig.modelFile, signal)
+		await waitForModelReady(baseUrl, managedConfig.modelFile, signal, isAlive)
 	})()
 
 	try {

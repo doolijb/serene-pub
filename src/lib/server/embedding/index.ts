@@ -2,10 +2,17 @@
  * Embedding service — Node.js only.
  *
  * Two interchangeable backends behind one API:
- *  - "local": @huggingface/transformers, an in-process ONNX pipeline. Not
- *    usable on Android — onnxruntime-node's prebuilt binaries are glibc-linked
- *    and can't load under Bionic (same ABI issue as the original Node.js
- *    binary this project's Android build had to work around).
+ *  - "local": @huggingface/transformers, an in-process ONNX pipeline. Whether
+ *    this actually works on the current system is *probed*, not predicted —
+ *    onnxruntime-node (the native addon transformers' Node backend loads)
+ *    bundles prebuilt binaries for some platform/arch combos and not others,
+ *    and that list has already changed once (Intel Mac support silently
+ *    dropped as of 1.24.3) and will again. Rather than hardcode a platform
+ *    denylist that's guaranteed to go stale, getLocalEmbeddingUnsupportedReason()
+ *    below actually attempts the import once, caches whether it threw, and
+ *    reports that. See that function for the one hardcoded exception
+ *    (Android), which is a fast path for a genuine architectural
+ *    impossibility, not a prediction.
  *  - "api": a plain OpenAI-compatible /embeddings HTTP endpoint (also
  *    implemented by Ollama, LM Studio, llama.cpp server, etc.) — just an
  *    HTTP request, so it works everywhere including Android.
@@ -25,8 +32,107 @@
 
 import type { FeatureExtractionPipeline } from "@huggingface/transformers"
 import { findModel } from "./models"
-import { getAppDataDir } from "$lib/server/utils"
+import { getAppDataDir, isAndroidWrapper } from "$lib/server/utils"
 import path from "path"
+import {
+	decryptToken,
+	VECTORIZATION_API_KEY_INFO
+} from "$lib/server/utils/tokenCrypto"
+
+/**
+ * Decrypts a vectorizationConfigs row's apiKey (encrypted at rest via
+ * tokenCrypto.ts) for actual use — every DB read site that's about to pass
+ * the key to activateApiEmbedding() or echo it back to the admin client
+ * should go through this, not read `.apiKey` directly off the row.
+ * activateApiEmbedding()/apiEmbed() themselves stay encryption-agnostic —
+ * they only ever see the already-decrypted value threaded through here.
+ */
+export function resolveVectorizationApiKey(vecConfig: {
+	apiKey: string | null
+	apiKeyIv: string | null
+	apiKeyAuthTag: string | null
+}): string | null {
+	if (!vecConfig.apiKey || !vecConfig.apiKeyIv || !vecConfig.apiKeyAuthTag) {
+		return null
+	}
+	return decryptToken(
+		{
+			ciphertext: vecConfig.apiKey,
+			iv: vecConfig.apiKeyIv,
+			authTag: vecConfig.apiKeyAuthTag
+		},
+		VECTORIZATION_API_KEY_INFO
+	)
+}
+
+type LocalEmbeddingProbeResult = { supported: boolean; reason: string | null }
+
+// In-memory only, per process lifetime — deliberately never persisted.
+// A persisted "unsupported" verdict would survive an onnxruntime-node
+// upgrade that fixes this exact platform, which is precisely the class of
+// upstream churn this probe exists to stop chasing. One dynamic import per
+// server boot is cheap enough to never need a durable cache.
+let probeResult: LocalEmbeddingProbeResult | null = null
+let probePromise: Promise<LocalEmbeddingProbeResult> | null = null
+
+/**
+ * Attempts the real dynamic import once and caches whether it threw. This
+ * is a pure loadability check — it must stay a bare `import()` with nothing
+ * else in the try block. Do not fold model-loading (loadEmbeddingModel's
+ * createPipeline(...) call) into this function or its try/catch: a later
+ * failure to download model weights or write to disk is a transient error,
+ * not a capability fact, and would otherwise get cached here as a
+ * false-permanent "platform unsupported" verdict.
+ */
+async function probeLocalEmbeddingSupport(): Promise<LocalEmbeddingProbeResult> {
+	if (probeResult) return probeResult
+	if (!probePromise) {
+		probePromise = (async () => {
+			try {
+				await import("@huggingface/transformers")
+				probeResult = { supported: true, reason: null }
+			} catch (err: any) {
+				probeResult = {
+					supported: false,
+					reason: `Local embeddings are not available on this system (${err?.message ?? "failed to load the local embedding engine"}) — use an external API instead.`
+				}
+			}
+			return probeResult
+		})()
+	}
+	return probePromise
+}
+
+/**
+ * Checked before the dynamic import in loadEmbeddingModel() below so every
+ * caller — vectorization.ts's handlers, vectorizationQueue.ts's
+ * resume-on-boot retry, and loadSockets.server.ts's auto-load — gets this
+ * specific message instead of the socket dispatcher's generic "An error
+ * occurred" fallback (thrown errors aren't forwarded verbatim to the
+ * client, see sockets/index.ts's register()). Exported so systemSettings.ts
+ * can surface the same condition to the client as a single
+ * `localEmbeddingsSupported` capability flag — named by capability, not by
+ * platform, so the setup UI (which only cares "can I offer Local as a
+ * choice") doesn't need a new prop every time upstream drops support for
+ * another platform.
+ */
+export async function getLocalEmbeddingUnsupportedReason(): Promise<
+	string | null
+> {
+	if (isAndroidWrapper()) {
+		// A genuine architectural impossibility (Bionic can't dlopen glibc
+		// binaries), not a "true today" fact that could change with an
+		// onnxruntime-node release — worth a fast, specific message without
+		// waiting on an import attempt that would fail anyway.
+		return "Local embeddings are not available in the Android app — use an external API instead."
+	}
+	return (await probeLocalEmbeddingSupport()).reason
+}
+
+/** The capability flag sent to the client — see getLocalEmbeddingUnsupportedReason() above. */
+export async function isLocalEmbeddingSupported(): Promise<boolean> {
+	return (await getLocalEmbeddingUnsupportedReason()) === null
+}
 
 type ApiEmbeddingConfig = {
 	baseUrl: string
@@ -90,6 +196,9 @@ export async function loadEmbeddingModel(
 	if (activeBackend === "local" && loadedModelId === modelId && pipeline)
 		return
 	if (isLoading) throw new Error("Model is already loading")
+
+	const unsupportedReason = await getLocalEmbeddingUnsupportedReason()
+	if (unsupportedReason) throw new Error(unsupportedReason)
 
 	const modelDef = findModel(modelId)
 	if (!modelDef) throw new Error(`Unknown embedding model: ${modelId}`)

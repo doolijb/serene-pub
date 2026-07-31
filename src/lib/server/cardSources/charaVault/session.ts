@@ -1,7 +1,10 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
-import { decryptToken } from "$lib/server/utils/tokenCrypto"
+import {
+	decryptToken,
+	CHARAVAULT_KEY_INFO
+} from "$lib/server/utils/tokenCrypto"
 import { CardSourceUnavailableError } from "../types"
 import { acquire } from "./rateLimiter"
 
@@ -16,6 +19,13 @@ const SESSION_TTL_MS = 30 * 60_000
 // is both wasteful and, under rapid searching, the exact kind of repeated-
 // network-call pileup that made search feel like it hung.
 const LOGIN_FAILURE_COOLDOWN_MS = 5 * 60_000
+// Node's fetch has no default timeout — an upstream connection that accepts
+// the TCP handshake but never responds would otherwise hang this call
+// forever. That's especially bad here: a login attempt is de-duplicated
+// through the shared loginPromise below, so every concurrent CharaVault
+// caller across the whole instance would be stuck awaiting the same dead
+// promise. Shared with charaVaultSource.ts's own fetch for the same reason.
+export const CHARAVAULT_FETCH_TIMEOUT_MS = 20_000
 
 interface CachedSession {
 	cookie: string
@@ -75,11 +85,14 @@ async function loginAndCacheSession(): Promise<string | null> {
 
 	let password: string
 	try {
-		password = decryptToken({
-			ciphertext: settings.charaVaultEncryptedToken,
-			iv: settings.charaVaultTokenIv,
-			authTag: settings.charaVaultTokenAuthTag
-		})
+		password = decryptToken(
+			{
+				ciphertext: settings.charaVaultEncryptedToken,
+				iv: settings.charaVaultTokenIv,
+				authTag: settings.charaVaultTokenAuthTag
+			},
+			CHARAVAULT_KEY_INFO
+		)
 	} catch (e) {
 		// The stored token is corrupt or the app's crypto secret changed
 		// since it was encrypted (eg. a redeploy with a regenerated .env) —
@@ -105,7 +118,8 @@ async function loginAndCacheSession(): Promise<string | null> {
 		response = await fetch(`${API_BASE}/api/auth/login`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ email: settings.charaVaultEmail, password })
+			body: JSON.stringify({ email: settings.charaVaultEmail, password }),
+			signal: AbortSignal.timeout(CHARAVAULT_FETCH_TIMEOUT_MS)
 		})
 	} catch (e) {
 		// CharaVault unreachable — cool down before retrying so a network

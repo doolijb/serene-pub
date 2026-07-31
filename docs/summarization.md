@@ -6,7 +6,7 @@ This is a separate system from [Embeddings & RAG](./embeddings-and-rag.md), whic
 
 ## Enabling Summarization
 
-Summarization is controlled from **System Settings**, under the "Summarization" section, and requires admin privileges to change. It's a single switch — its in-app description: "When enabled, older chat messages may be condensed into summaries to preserve context while staying within token limits. Summaries are generated automatically in the background and are used in place of the original messages during prompt construction."
+Summarization is controlled from **System Settings**, under the "Summarization" section, and requires admin privileges to change. It's a single switch — its in-app description: "When enabled, you can select a range of chat messages and generate a Scene Summary from them (via an LLM), which feeds the Narrative Graph and can become a lorebook history entry. This is a manual, per-chat action — nothing runs automatically, and the original messages are never removed or replaced during prompt construction."
 
 The onboarding wizard's Summarization step offers **Skip for now** (marks the step done without turning summarization on) and **Enable Summarization** (turns the feature on server-wide and marks the step done). Either choice advances the wizard. This step is tracked per-user on the server, independent of whether you actually have any chats yet.
 
@@ -18,7 +18,7 @@ Scene entries require selecting a [history entry](./lorebooks.md) to attach to (
 
 ### Re-processing a scene
 
-Once a scene exists, its **Process Scene** action can regenerate its summary and character list from scratch using the same drafting/synthesizing flow, replacing the previous result after you confirm. This is useful if the scene's underlying messages changed, or if an earlier summary came out wrong.
+Once a scene exists, its **Process** action (relabeled **Reprocess** once it already has a summary) opens the **Scene Summary** modal and can regenerate its summary and character list from scratch using the same drafting/synthesizing flow, replacing the previous result after you confirm. This is useful if the scene's underlying messages changed, or if an earlier summary came out wrong.
 
 ### Compiling scenes into a history entry
 
@@ -36,7 +36,7 @@ The Activity Sidebar tracks the live progress of longer-running background jobs 
 
 The Activity tab shows a card per in-progress or awaiting-review job relevant to the current user (plus other users' jobs, shown read-only). Card types include:
 
-- **Graph build/extend** jobs — building or extending a lorebook's narrative graph, showing the current phase and a "scene X/Y" progress indicator. This is a separate, RAG-related content-generation pipeline — see [Lorebooks](./lorebooks.md) for what the narrative graph is and [Embeddings & RAG](./embeddings-and-rag.md) for how graph content gets indexed.
+- **Graph build/extend** jobs — building or extending a lorebook's narrative graph, showing the current phase and a "scene X/Y" progress indicator. Extraction here is pure LLM text-processing of already-summarized scenes and history entries, so it depends on Summarization being enabled, not on vectorization/RAG — see [Lorebooks](./lorebooks.md#graph-tab) for what the narrative graph is. Once built, graph nodes are lorebook bindings like any other, so their content is also picked up by [Embeddings & RAG](./embeddings-and-rag.md)'s background indexing if that's separately enabled.
 - **Scene** summarization jobs — shows "Processing…", then "Ready to review" or "Failed," with a "Review Results" button that jumps straight to the scene.
 - **Compile** jobs — history-entry compilation, with the same running/review/error states and a "Review & Apply" button.
 

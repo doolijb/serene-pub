@@ -315,6 +315,11 @@
 	}
 
 	const handlePersonasUpdate = (res: Sockets.Personas.Update.Response) => {
+		// personas:update is emitToUser — broadcast to every open tab for
+		// this user, not just the requester. Without this check, a save in
+		// another tab (for a different persona) silently closes this form
+		// and discards whatever is being edited here.
+		if (res.persona?.id !== personaId) return
 		isSaving = false
 		if (res.persona) {
 			validationErrors = {} // Clear any validation errors on success

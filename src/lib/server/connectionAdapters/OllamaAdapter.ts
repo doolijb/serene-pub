@@ -15,6 +15,12 @@ import { type CompiledPrompt } from "../utils/promptBuilder"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { ollamaSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
+import {
+	createIdleWatchdog,
+	LLM_IDLE_TIMEOUT_MS,
+	LLM_NONSTREAMING_TIMEOUT_MS
+} from "./idleTimeout"
 
 class OllamaAdapter extends BaseConnectionAdapter {
 	private _client?: Ollama
@@ -84,8 +90,8 @@ class OllamaAdapter extends BaseConnectionAdapter {
 
 	getClient() {
 		if (!this._client) {
-			const host = this.connection.baseUrl ?? undefined
-			this._client = new Ollama({ host: host ?? undefined })
+			const host = normalizeBaseUrl(this.connection.baseUrl) || undefined
+			this._client = new Ollama({ host })
 		}
 		return this._client
 	}
@@ -240,10 +246,13 @@ class OllamaAdapter extends BaseConnectionAdapter {
 					thinkingCb?: (chunk: string) => void
 				) => {
 					let content = ""
-					let abortedEarly = false
+					let idleTimedOut = false
+					const ollama = this.getClient()
+					const idle = createIdleWatchdog(LLM_IDLE_TIMEOUT_MS, () => {
+						idleTimedOut = true
+						ollama.abort()
+					})
 					try {
-						const ollama = this.getClient()
-
 						if (useChat) {
 							// Use Ollama's chat api
 							const result = await ollama.chat({
@@ -257,6 +266,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 							}
 							let firstPart = true
 							for await (const part of result) {
+								idle.poke()
 								if (this.isAborting) {
 									ollama.abort()
 									return
@@ -305,6 +315,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 							}
 							let genFirstPart = true
 							for await (const part of result) {
+								idle.poke()
 								if (this.isAborting) {
 									ollama.abort()
 									return
@@ -338,11 +349,24 @@ class OllamaAdapter extends BaseConnectionAdapter {
 						}
 						// No need to apply stop strings here, Ollama will handle it
 					} catch (e: any) {
-						if (!abortedEarly)
-							console.error(
-								"[OllamaAdapter] stream error:",
-								e.message || String(e)
+						if (idleTimedOut) {
+							throw new Error(
+								`Ollama did not respond for ${LLM_IDLE_TIMEOUT_MS / 60_000} minutes — connection may be hung.`
 							)
+						}
+						// A genuine cancellation isn't an error to surface —
+						// everything else must propagate so it lands in the
+						// message's error column (generateResponse.ts) instead
+						// of being silently swallowed into a stream that just
+						// stops with no signal at all.
+						if (this.isAborting) return
+						console.error(
+							"[OllamaAdapter] stream error:",
+							e.message || String(e)
+						)
+						throw e
+					} finally {
+						idle.clear()
 					}
 				},
 				compiledPrompt,
@@ -350,8 +374,18 @@ class OllamaAdapter extends BaseConnectionAdapter {
 			}
 		} else {
 			const result = await (async () => {
+				// No intermediate chunks to reset an idle timer against for a
+				// non-streaming response — a genuine, documented exception to
+				// the idle-based design used in the streaming branch above: a
+				// flat bound, sized generously to cover a full slow
+				// generation end-to-end.
+				let idleTimedOut = false
+				const ollama = this.getClient()
+				const idleTimer = setTimeout(() => {
+					idleTimedOut = true
+					ollama.abort()
+				}, LLM_NONSTREAMING_TIMEOUT_MS)
 				try {
-					const ollama = this.getClient()
 					if (useChat) {
 						console.log("Using non-steaming chat API")
 						// Use Ollama's chat api
@@ -378,11 +412,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 								thinking: res.message.thinking
 							}
 						} else {
-							return {
-								content:
-									"FAILURE: Unexpected Ollama result type",
-								thinking: undefined
-							}
+							throw new Error("Unexpected Ollama result type")
 						}
 					} else {
 						const res = await ollama.generate({
@@ -408,18 +438,21 @@ class OllamaAdapter extends BaseConnectionAdapter {
 								thinking: res.thinking
 							}
 						} else {
-							return {
-								content:
-									"FAILURE: Unexpected Ollama result type",
-								thinking: undefined
-							}
+							throw new Error("Unexpected Ollama result type")
 						}
 					}
 				} catch (e: any) {
-					return {
-						content: "FAILURE: " + (e.message || String(e)),
-						thinking: undefined
+					if (idleTimedOut) {
+						throw new Error(
+							`Ollama did not respond within ${LLM_NONSTREAMING_TIMEOUT_MS / 60_000} minutes.`
+						)
 					}
+					if (this.isAborting) {
+						return { content: undefined, thinking: undefined }
+					}
+					throw e
+				} finally {
+					clearTimeout(idleTimer)
 				}
 			})()
 			return {
@@ -446,7 +479,7 @@ async function listModels(
 	try {
 		const ollama = new Ollama({
 			// Patch: ensure host is never null
-			host: connection.baseUrl ?? undefined
+			host: normalizeBaseUrl(connection.baseUrl) || undefined
 		})
 		const res = await ollama.list()
 		if (res && Array.isArray(res.models)) {
@@ -469,7 +502,7 @@ async function testConnection(
 	try {
 		const ollama = new Ollama({
 			// Patch: ensure host is never null
-			host: connection.baseUrl ?? undefined
+			host: normalizeBaseUrl(connection.baseUrl) || undefined
 		})
 		const res = await ollama.list()
 		if (res && Array.isArray(res.models)) {

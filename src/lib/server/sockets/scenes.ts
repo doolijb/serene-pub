@@ -1,17 +1,48 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { eq, inArray, asc } from "drizzle-orm"
+import { eq, inArray, asc, and } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
 import {
 	compileScenesForEntry,
 	generateSummary
 } from "$lib/server/utils/summarizer"
-import { buildSceneCastList } from "$lib/server/utils/summarizer/availableSceneCast"
+import {
+	buildSceneCastList,
+	reconcileParticipantsAndMentioned,
+	reconcileSuggestedNames,
+	resolveCharacterRefs
+} from "$lib/server/utils/summarizer/availableSceneCast"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 import { resolveTaskConfig } from "$lib/server/utils/resolveTaskConfig"
 import { activityStore } from "$lib/server/utils/activityStore"
 import { checkChatAccess } from "$lib/server/utils/chatAccess"
+import { resolveOrCreateBinding } from "$lib/server/utils/characterBindingSync"
+
+/**
+ * Every downstream consumer (graphBuilder.ts, lorebookExportMapper.ts,
+ * narrativeGraph.ts) already re-scopes participantCharacters/
+ * mentionedCharacters to the scene's own lorebook and silently drops
+ * anything foreign — this validates at write time too, matching that same
+ * "drop, don't error" tolerance, so a future consumer that trusts these
+ * arrays directly without re-scoping doesn't reopen a cross-lorebook leak.
+ */
+async function filterCharacterIdsToLorebook(
+	lorebookId: number,
+	characterIds: number[]
+): Promise<number[]> {
+	if (characterIds.length === 0) return []
+	const bindings = await db.query.lorebookBindings.findMany({
+		where: (b, { and, eq, inArray }) =>
+			and(
+				eq(b.lorebookId, lorebookId),
+				inArray(b.characterId, characterIds)
+			),
+		columns: { characterId: true }
+	})
+	const validIds = new Set(bindings.map((b) => b.characterId))
+	return characterIds.filter((id) => validIds.has(id))
+}
 
 export const sceneListHandler: Handler<
 	Sockets.Scenes.List.Params,
@@ -121,6 +152,34 @@ export const sceneCreateHandler: Handler<
 			}
 		}
 
+		// Without this, a scene could be created with an attacker's own
+		// lorebookId/chatId but a guessed historyEntryId from a victim's
+		// private lorebook — sceneCompileHandler queries scenes by
+		// historyEntryId alone, so the injected scene's content would feed
+		// directly into the victim's own LLM-driven compile call the next
+		// time they compile that history entry.
+		const historyEntry = await db.query.historyEntries.findFirst({
+			where: (h, { eq }) => eq(h.id, data.historyEntryId)
+		})
+		if (!historyEntry || historyEntry.lorebookId !== data.lorebookId) {
+			throw new Error(
+				"History entry not found or does not belong to this lorebook."
+			)
+		}
+
+		if (data.participantCharacters?.length) {
+			data.participantCharacters = await filterCharacterIdsToLorebook(
+				data.lorebookId,
+				data.participantCharacters
+			)
+		}
+		if (data.mentionedCharacters?.length) {
+			data.mentionedCharacters = await filterCharacterIdsToLorebook(
+				data.lorebookId,
+				data.mentionedCharacters
+			)
+		}
+
 		const [newScene] = await db
 			.insert(schema.scenes)
 			.values(data)
@@ -128,12 +187,11 @@ export const sceneCreateHandler: Handler<
 
 		// Refresh scene list for the chat
 		if (emitToUser && newScene.chatId) {
-			const listRes = await sceneListHandler.handler(
+			await sceneListHandler.handler(
 				socket,
 				{ chatId: newScene.chatId },
 				emitToUser
 			)
-			emitToUser("scenes:list", listRes)
 
 			// Also refresh scened message IDs
 			const scenedRes = await scenedMessageIdsHandler.handler(
@@ -173,9 +231,50 @@ export const sceneUpdateHandler: Handler<
 			throw new Error("Scene not found or access denied.")
 		}
 
+		// Explicit allowlist, not a spread — ownership above is only checked
+		// against the scene's *current* lorebookId; without this, a client
+		// could redirect their own scene into another user's lorebook/chat/
+		// history entry by including a foreign id in the payload, with no
+		// re-validation (sceneCreateHandler validates its target ids on
+		// insert — this was the one outlier that didn't).
+		let {
+			name,
+			summary,
+			selectedMessageIds,
+			participantCharacters,
+			mentionedCharacters,
+			graphed
+		} = params.scene
+
+		if (participantCharacters?.length) {
+			participantCharacters = await filterCharacterIdsToLorebook(
+				existing.lorebookId,
+				participantCharacters
+			)
+		}
+		if (mentionedCharacters?.length) {
+			mentionedCharacters = await filterCharacterIdsToLorebook(
+				existing.lorebookId,
+				mentionedCharacters
+			)
+		}
+
 		await db
 			.update(schema.scenes)
-			.set(params.scene)
+			.set({
+				...(name !== undefined ? { name } : {}),
+				...(summary !== undefined ? { summary } : {}),
+				...(selectedMessageIds !== undefined
+					? { selectedMessageIds }
+					: {}),
+				...(participantCharacters !== undefined
+					? { participantCharacters }
+					: {}),
+				...(mentionedCharacters !== undefined
+					? { mentionedCharacters }
+					: {}),
+				...(graphed !== undefined ? { graphed } : {})
+			})
 			.where(eq(schema.scenes.id, params.scene.id))
 
 		const [updated] = await db
@@ -185,12 +284,11 @@ export const sceneUpdateHandler: Handler<
 
 		// Refresh scene list
 		if (emitToUser && updated.chatId) {
-			const listRes = await sceneListHandler.handler(
+			await sceneListHandler.handler(
 				socket,
 				{ chatId: updated.chatId },
 				emitToUser
 			)
-			emitToUser("scenes:list", listRes)
 		}
 
 		const res = { scene: updated }
@@ -228,12 +326,11 @@ export const sceneDeleteHandler: Handler<
 
 		// Refresh scene list and scened message IDs
 		if (emitToUser && chatId) {
-			const listRes = await sceneListHandler.handler(
+			await sceneListHandler.handler(
 				socket,
 				{ chatId },
 				emitToUser
 			)
-			emitToUser("scenes:list", listRes)
 
 			const scenedRes = await scenedMessageIdsHandler.handler(
 				socket,
@@ -340,9 +437,16 @@ export const sceneCompileHandler: Handler<
 			throw new Error("History entry not found or access denied.")
 		}
 
-		// Fetch scenes for this history entry
+		// Fetch scenes for this history entry — defense-in-depth: also scope
+		// to this lorebook (already known-owned, checked above), not just
+		// historyEntryId, in case any other scene-creation path ever again
+		// allows historyEntryId/lorebookId to drift apart the way
+		// scenes:create used to.
 		const scenes = await db.query.scenes.findMany({
-			where: eq(schema.scenes.historyEntryId, params.historyEntryId),
+			where: and(
+				eq(schema.scenes.historyEntryId, params.historyEntryId),
+				eq(schema.scenes.lorebookId, (historyEntry as any).lorebookId)
+			),
 			orderBy: asc(schema.scenes.id)
 		})
 
@@ -524,23 +628,29 @@ export const sceneProcessHandler: Handler<
 				})) ?? null
 		}
 
-		const [batchResolved, synthResolved, nameResolved] = await Promise.all([
-			resolveTaskConfig({
-				taskType: "summarize_batch",
-				summarizeConfigId,
-				summarizeConfigType: "scene"
-			}),
-			resolveTaskConfig({
-				taskType: "summarize_synth",
-				summarizeConfigId,
-				summarizeConfigType: "scene"
-			}),
-			resolveTaskConfig({
-				taskType: "summarize_name",
-				summarizeConfigId,
-				summarizeConfigType: "scene"
-			})
-		])
+		const [batchResolved, synthResolved, nameResolved, characterExtractionResolved] =
+			await Promise.all([
+				resolveTaskConfig({
+					taskType: "summarize_batch",
+					summarizeConfigId,
+					summarizeConfigType: "scene"
+				}),
+				resolveTaskConfig({
+					taskType: "summarize_synth",
+					summarizeConfigId,
+					summarizeConfigType: "scene"
+				}),
+				resolveTaskConfig({
+					taskType: "summarize_name",
+					summarizeConfigId,
+					summarizeConfigType: "scene"
+				}),
+				resolveTaskConfig({
+					taskType: "character_extraction",
+					summarizeConfigId,
+					summarizeConfigType: "scene"
+				})
+			])
 
 		if (!batchResolved.connection) {
 			emitToUser("scenes:process:error", {
@@ -582,12 +692,11 @@ export const sceneProcessHandler: Handler<
 				synthSampling: synthResolved.sampling,
 				nameConnection: nameResolved.connection,
 				nameSampling: nameResolved.sampling,
+				characterExtractionConnection: characterExtractionResolved.connection,
+				characterExtractionSampling: characterExtractionResolved.sampling,
 				onProgress: (data) => {
 					activityStore.updateScene(activityId, {
-						phase:
-							data.phase === "synthesizing"
-								? "synthesizing"
-								: "drafting",
+						phase: data.phase,
 						batch: data.batch,
 						totalBatches: data.totalBatches
 					})
@@ -612,17 +721,78 @@ export const sceneProcessHandler: Handler<
 			throw err
 		}
 
+		// Resolve the LLM's raw name output against the same knownCast built
+		// above — a name that matches nothing becomes a suggested name
+		// instead of an immediate new binding, so the user gets to accept or
+		// reject it on the Review & Save screen before anything is created
+		// (see resolveOrCreateBindingByName, called at Save time).
+		const {
+			participantIds,
+			mentionedIds,
+			suggestedParticipants,
+			suggestedMentioned
+		} = (() => {
+			const participants = resolveCharacterRefs(
+				result.participantCharacters ?? [],
+				knownCast
+			)
+			const mentioned = resolveCharacterRefs(
+				result.mentionedCharacters ?? [],
+				knownCast
+			)
+			const suggested = reconcileSuggestedNames(
+				participants.suggestedNames,
+				mentioned.suggestedNames
+			)
+			return {
+				participantIds: participants.ids,
+				mentionedIds: mentioned.ids,
+				suggestedParticipants: suggested.participants,
+				suggestedMentioned: suggested.mentioned
+			}
+		})()
+
+		// Guarantee: whoever actually sent a message in this scene is a
+		// participant, regardless of what the extraction LLM decided —
+		// charIds/personaIds (every distinct sender) were already computed
+		// above for building sender names.
+		const senderBindingIds = new Set<number>()
+		for (const characterId of charIds) {
+			senderBindingIds.add(
+				await resolveOrCreateBinding({
+					lorebookId: scene.lorebookId,
+					characterId
+				})
+			)
+		}
+		for (const personaId of personaIds) {
+			senderBindingIds.add(
+				await resolveOrCreateBinding({
+					lorebookId: scene.lorebookId,
+					personaId
+				})
+			)
+		}
+
+		const { participants: resolvedParticipants, mentioned: resolvedMentioned } =
+			reconcileParticipantsAndMentioned(
+				participantIds,
+				mentionedIds,
+				senderBindingIds
+			)
+
 		const pendingResult = {
 			content: result.content ?? result.raw ?? "",
 			name: result.name ?? scene.name ?? undefined,
-			participantCharacters: result.participantCharacters ?? [],
-			mentionedCharacters: result.mentionedCharacters ?? [],
+			participantCharacters: resolvedParticipants,
+			mentionedCharacters: resolvedMentioned,
+			suggestedParticipantCharacters: suggestedParticipants,
+			suggestedMentionedCharacters: suggestedMentioned,
 			raw: result.raw
 		}
 
 		activityStore.updateScene(activityId, {
 			status: "review",
-			phase: "extracting",
 			sceneName: pendingResult.name,
 			pendingResult
 		})

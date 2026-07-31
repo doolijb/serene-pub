@@ -496,6 +496,17 @@ export async function generateResponse({
 	// Inject narrative graph context into system instructions (if lorebook + node
 	// present) — skipped for Narrator response, which has no character perspective
 	// of its own to build graph context from.
+	//
+	// This used to append directly to adapter.promptBuilder.instructions,
+	// but that field is only ever set inside PromptBuilder.buildContextData(),
+	// which runs later — inside compilePrompt(), called from within
+	// adapter.generate() — so it was always undefined here and this
+	// injection silently never reached the model. Setting
+	// graphContextInstructions on the adapter instead lets
+	// BaseConnectionAdapter.compilePrompt() merge it into extraInstructions
+	// once instructions actually exists, the same mechanism
+	// narratorInstructions already uses for the equivalent per-trigger-note
+	// case.
 	if (!isAssistantMode && !isNarratorResponseMode && chat?.lorebookId) {
 		try {
 			const graphCtx = await buildGraphContext({
@@ -504,8 +515,8 @@ export async function generateResponse({
 				speakerCharacterId: generatingMessage.characterId ?? null,
 				speakerPersonaId: null
 			})
-			if (graphCtx && adapter.promptBuilder.instructions) {
-				adapter.promptBuilder.instructions += graphCtx
+			if (graphCtx) {
+				adapter.graphContextInstructions = graphCtx
 			}
 		} catch (err) {
 			console.warn(

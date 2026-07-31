@@ -6,7 +6,7 @@ System Settings hold the instance-wide configuration for a Serene Pub deployment
 
 Open the **Settings** panel (gear icon in the main navigation) and select the **System** tab. This tab only appears for users whose account has admin privileges — everyone else sees only the **User**, **Themes**, and **About** tabs.
 
-Everything on this tab is separate from your own personal preferences (theme, dark mode, background image, easy-creation toggles, and so on), which live on the **User** tab instead and are covered in [Custom Themes & User Settings](./themes-and-settings.md). System Settings changes apply globally: turning a manager or feature on or off here changes what every user on the instance sees and can do.
+Everything on this tab is separate from your own personal preferences — easy-creation toggles and so on live on the **User** tab, while theme, dark mode, and background image live on the separate **Themes** tab — all covered in [Custom Themes & User Settings](./themes-and-settings.md). System Settings changes apply globally: turning a manager or feature on or off here changes what every user on the instance sees and can do.
 
 ### Who Can Access This Tab
 
@@ -22,7 +22,7 @@ By default, accounts are **not** enabled: the app automatically signs everyone i
 
 This is presented as a **permanent, one-way change** — once accounts are enabled the switch becomes disabled (locked on) and the surrounding text confirms "User accounts are enabled. This setting cannot be reversed." Before that point, the description under the switch reads: "Enable user authentication and multi-user support. This is a permanent change."
 
-Because of this, turning the switch on first opens an **Enable User Accounts** confirmation dialog with a "Warning: Permanent Change" notice. If your own admin account doesn't already have a passphrase set, the same dialog asks you to create one first — showing your username (read-only) alongside **Passphrase** and **Confirm Passphrase** fields — before it will let you proceed. Passphrases must be at least 10 characters long (128 maximum) and include at least one uppercase letter, one lowercase letter, and one special character. Once confirmed, a success toast reads "User accounts enabled successfully" with the description "Authentication is now required for all users."
+Because of this, turning the switch on first opens an **Enable User Accounts** confirmation dialog with a "Warning: Permanent Change" notice. If your own admin account doesn't already have a passphrase set, the same dialog asks you to create one first — showing your username (read-only) alongside **Passphrase** and **Confirm Passphrase** fields — before it will let you proceed. The server enforces a minimum of 10 characters (128 maximum) with at least one uppercase letter, one lowercase letter, and one special character, regardless of what the dialog's own on-screen requirements list happens to say (it currently displays a stale "at least 6 characters" hint — trust the server-enforced rule, not that text). Once confirmed, a success toast reads "User accounts enabled successfully" with the description "Authentication is now required for all users."
 
 ### Why This Matters
 
@@ -58,11 +58,21 @@ The System Settings tab only covers whether a manager is on and which URL it tal
 
 Both the Ollama and KoboldCPP base URL fields use the same validation rule: the value must be a well-formed URL, and it must either include an explicit port or use `localhost` as the hostname. An invalid entry shows an inline error (e.g. "URL must include a port (e.g., http://localhost:11434)") instead of saving.
 
+### On Android
+
+**In the Android app**, this whole section is replaced by a short explanatory note instead of the toggles above: Ollama Manager and KoboldCPP Manager aren't offered at all, since both depend on locally-run binaries the Android build can't bundle. You can still connect to a remote Ollama or KoboldCPP instance from the Connections panel, and local embeddings are unavailable for the same reason — an external embeddings API works fine instead, configured from the Embeddings panel. See [Android App](./android.md) for the full list of Android-specific limitations.
+
 ## Summarization
 
-**Enable Summarization** turns on automatic background condensation of older chat messages into summaries, which are then used in place of the original messages during prompt construction so long conversations stay within a model's context limit. Off by default. Full behavior is documented in [Summarization](./summarization.md).
+**Enable Summarization** turns on the ability to select a range of chat messages and generate a Scene Summary from them via an LLM, which feeds the Narrative Graph and can become a lorebook history entry. This is a manual, per-chat action, not a background process — nothing runs automatically, and the original messages are never removed or replaced during prompt construction. Off by default. Full behavior is documented in [Summarization](./summarization.md).
 
-Embeddings/RAG has no switch on this tab — unlike Summarization, it's entirely enabled, disabled, and reconfigured from the **Embeddings** sidebar panel itself (always available in the left navigation for admins). See [Embeddings & RAG](./embeddings-and-rag.md) for how that works.
+An **Embeddings** card sits below Summarization, with its own **Enable Embeddings** switch — but unlike every other switch on this tab, it doesn't turn the feature on in place. Because enabling embeddings first requires choosing a backend (local model vs. external API, and which model), flipping it on routes you straight to the **Embedding** card in the Connections sidebar to complete that setup instead of doing anything itself. Flipping it back off (once already enabled) does act immediately, though — it disables embeddings right away via the same action as the **Disable Embeddings** button described below, with a "Embeddings disabled" confirmation toast. See [Embeddings & RAG](./embeddings-and-rag.md) for the full setup flow and how RAG uses whatever's configured there.
+
+## Community Library: CharaVault
+
+A **Community Library: CharaVault** card lets an admin connect one [CharaVault](https://charavault.net) account so everyone on the instance can browse charavault.net directly from the in-app Character Library. The credential is shared instance-wide, not per-user — connecting it raises the search rate limit for every user on this Serene Pub instance, not just the admin who set it up. Unlike the local-model managers above, this integration is a plain HTTP connection with no native binary involved, so the card is available on every platform, including the Android app.
+
+To connect, create an App Password at charavault.net named "Serene Pub," then enter the account's **email** and that **App Password** (placeholder `cv_...`) into the two fields and click **Connect**. On success, a "CharaVault account connected" toast appears and the card switches to a **Connected as `<email>`** state with a **Disconnect** button; disconnecting shows a "CharaVault account disconnected" toast and returns the card to its empty form. Both actions have their own error toasts if the connect/disconnect request fails.
 
 ## Diagnostics
 

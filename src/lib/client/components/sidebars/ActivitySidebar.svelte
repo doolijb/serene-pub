@@ -346,19 +346,21 @@
 									style="width: {activity.phase ===
 									'extracting'
 										? 95
-										: activity.totalBatches &&
-											  activity.totalBatches > 1
-											? Math.max(
-													5,
-													Math.round(
-														((activity.batch ?? 0) /
-															activity.totalBatches) *
-															80
+										: activity.phase === 'naming'
+											? 90
+											: activity.totalBatches &&
+												  activity.totalBatches > 1
+												? Math.max(
+														5,
+														Math.round(
+															((activity.batch ?? 0) /
+																activity.totalBatches) *
+																80
+														)
 													)
-												)
-											: activity.phase === 'synthesizing'
-												? 80
-												: 40}%"
+												: activity.phase === 'synthesizing'
+													? 80
+													: 40}%"
 								></div>
 							</div>
 						</div>

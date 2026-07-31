@@ -26,6 +26,9 @@ vite.config.ts.timestamp-*
 # SQLite
 *.db
 
+# One-off data-migration scratch artifact (see scripts/migrate-lorebook-bindings-data.ts)
+/drizzle/.node-binding-map.json
+
 .claude
 
 # TODO

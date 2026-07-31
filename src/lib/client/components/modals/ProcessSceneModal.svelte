@@ -3,15 +3,23 @@
 	import { onDestroy, onMount, untrack } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { resolveOrCreateBindingByName } from "$lib/client/utils/createLorebookBinding"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
 
 	type PendingResult = {
 		content: string
 		name?: string
-		participantCharacters: string[]
-		mentionedCharacters: string[]
+		participantCharacters: number[]
+		mentionedCharacters: number[]
+		suggestedParticipantCharacters?: string[]
+		suggestedMentionedCharacters?: string[]
 		raw: string
 	}
+
+	/** A name not yet backed by a real lorebookBindings id — either
+	 * suggested by character extraction or typed manually in review. Only
+	 * resolved to a real binding (matched or newly created) at Save. */
+	type PendingNewCharacter = { name: string; source: "suggested" | "manual" }
 
 	interface Props {
 		open: boolean
@@ -20,6 +28,8 @@
 		activityId: string | null
 		pendingResult: PendingResult | null
 		initialStep?: "review" | "generating"
+		lorebookId: number
+		lorebookBindingList: { id: number; name: string; binding: string }[]
 		onApplied?: (sceneId: number) => void
 		onDiscarded?: (activityId: string) => void
 	}
@@ -31,9 +41,17 @@
 		activityId,
 		pendingResult,
 		initialStep,
+		lorebookId,
+		lorebookBindingList,
 		onApplied,
 		onDiscarded
 	}: Props = $props()
+
+	let bindingNameById = $derived.by(() => {
+		const map = new Map<number, string>()
+		for (const b of lorebookBindingList) map.set(b.id, b.name || b.binding)
+		return map
+	})
 
 	const socket = useTypedSocket()
 
@@ -52,17 +70,36 @@
 	// Review state
 	let reviewName = $state(untrack(() => pendingResult?.name ?? ""))
 	let reviewContent = $state(untrack(() => pendingResult?.content ?? ""))
-	let reviewParticipants = $state<string[]>(
+	let reviewParticipants = $state<number[]>(
 		untrack(() => [...(pendingResult?.participantCharacters ?? [])])
 	)
-	let reviewMentioned = $state<string[]>(
+	let reviewMentioned = $state<number[]>(
 		untrack(() => [...(pendingResult?.mentionedCharacters ?? [])])
 	)
-	let newParticipantInput = $state("")
-	let newMentionedInput = $state("")
+	let newParticipantId = $state<number | "">("")
+	let newMentionedId = $state<number | "">("")
+	let pendingNewParticipants = $state<PendingNewCharacter[]>(
+		untrack(() =>
+			(pendingResult?.suggestedParticipantCharacters ?? []).map((name) => ({
+				name,
+				source: "suggested" as const
+			}))
+		)
+	)
+	let pendingNewMentioned = $state<PendingNewCharacter[]>(
+		untrack(() =>
+			(pendingResult?.suggestedMentionedCharacters ?? []).map((name) => ({
+				name,
+				source: "suggested" as const
+			}))
+		)
+	)
+	let newParticipantName = $state("")
+	let newMentionedName = $state("")
+	let isSaving = $state(false)
 
 	// Running state
-	let genPhase = $state<"drafting" | "synthesizing" | "extracting">(
+	let genPhase = $state<"drafting" | "synthesizing" | "naming" | "extracting">(
 		"drafting"
 	)
 	let genBatch = $state(0)
@@ -83,21 +120,25 @@
 	let progressPercent = $derived(
 		genPhase === "extracting"
 			? 95
-			: genPhase === "synthesizing"
-				? 80
-				: genTotalBatches > 1
-					? Math.max(5, Math.round((genBatch / genTotalBatches) * 75))
-					: 40
+			: genPhase === "naming"
+				? 88
+				: genPhase === "synthesizing"
+					? 80
+					: genTotalBatches > 1
+						? Math.max(5, Math.round((genBatch / genTotalBatches) * 75))
+						: 40
 	)
 
 	let progressLabel = $derived(
 		genPhase === "extracting"
 			? "Extracting characters…"
-			: genPhase === "synthesizing"
-				? "Synthesizing…"
-				: genBatch > 0
-					? `Drafting part ${genBatch} of ${genTotalBatches}…`
-					: "Starting…"
+			: genPhase === "naming"
+				? "Naming scene…"
+				: genPhase === "synthesizing"
+					? "Synthesizing…"
+					: genBatch > 0
+						? `Drafting part ${genBatch} of ${genTotalBatches}…`
+						: "Starting…"
 	)
 
 	let canSave = $derived(reviewContent.trim().length > 0)
@@ -108,38 +149,98 @@
 		reviewContent = pendingResult.content
 		reviewParticipants = [...pendingResult.participantCharacters]
 		reviewMentioned = [...pendingResult.mentionedCharacters]
+		pendingNewParticipants = (
+			pendingResult.suggestedParticipantCharacters ?? []
+		).map((name) => ({ name, source: "suggested" as const }))
+		pendingNewMentioned = (
+			pendingResult.suggestedMentionedCharacters ?? []
+		).map((name) => ({ name, source: "suggested" as const }))
 	})
 
 	function addParticipant() {
-		const name = newParticipantInput.trim()
-		if (name && !reviewParticipants.includes(name))
-			reviewParticipants = [...reviewParticipants, name]
-		newParticipantInput = ""
+		if (newParticipantId === "") return
+		const id = Number(newParticipantId)
+		if (!reviewParticipants.includes(id)) {
+			reviewParticipants = [...reviewParticipants, id]
+		}
+		newParticipantId = ""
 	}
 
 	function addMentioned() {
-		const name = newMentionedInput.trim()
-		if (name && !reviewMentioned.includes(name))
-			reviewMentioned = [...reviewMentioned, name]
-		newMentionedInput = ""
+		if (newMentionedId === "") return
+		const id = Number(newMentionedId)
+		if (!reviewMentioned.includes(id)) {
+			reviewMentioned = [...reviewMentioned, id]
+		}
+		newMentionedId = ""
 	}
 
-	function apply() {
-		if (!canSave) return
-		socket.emit("scenes:update", {
-			scene: {
-				id: sceneId,
-				name: reviewName.trim() || null,
-				summary: reviewContent.trim(),
-				participantCharacters: reviewParticipants,
-				mentionedCharacters: reviewMentioned
+	function pendingNameTaken(name: string, list: PendingNewCharacter[]) {
+		return list.some((p) => p.name.toLowerCase() === name.toLowerCase())
+	}
+
+	function addManualParticipant() {
+		const name = newParticipantName.trim()
+		if (!name || pendingNameTaken(name, pendingNewParticipants)) return
+		pendingNewParticipants = [
+			...pendingNewParticipants,
+			{ name, source: "manual" }
+		]
+		newParticipantName = ""
+	}
+
+	function addManualMentioned() {
+		const name = newMentionedName.trim()
+		if (!name || pendingNameTaken(name, pendingNewMentioned)) return
+		pendingNewMentioned = [...pendingNewMentioned, { name, source: "manual" }]
+		newMentionedName = ""
+	}
+
+	async function apply() {
+		if (!canSave || isSaving) return
+		isSaving = true
+		try {
+			const participantIds = [...reviewParticipants]
+			const mentionedIds = [...reviewMentioned]
+			for (const p of pendingNewParticipants) {
+				const { id } = await resolveOrCreateBindingByName(
+					socket,
+					lorebookId,
+					p.name
+				)
+				participantIds.push(id)
 			}
-		} satisfies Sockets.Scenes.Update.Params)
-		if (internalActivityId)
-			socket.emit("activity:dismiss", { id: internalActivityId })
-		toaster.success({ title: "Scene updated" })
-		onApplied?.(sceneId)
-		onOpenChange({ open: false })
+			for (const m of pendingNewMentioned) {
+				const { id } = await resolveOrCreateBindingByName(
+					socket,
+					lorebookId,
+					m.name
+				)
+				mentionedIds.push(id)
+			}
+
+			socket.emit("scenes:update", {
+				scene: {
+					id: sceneId,
+					name: reviewName.trim() || null,
+					summary: reviewContent.trim(),
+					participantCharacters: [...new Set(participantIds)],
+					mentionedCharacters: [...new Set(mentionedIds)]
+				}
+			} satisfies Sockets.Scenes.Update.Params)
+			if (internalActivityId)
+				socket.emit("activity:dismiss", { id: internalActivityId })
+			toaster.success({ title: "Scene updated" })
+			onApplied?.(sceneId)
+			onOpenChange({ open: false })
+		} catch (err) {
+			toaster.error({
+				title: "Failed to save new character",
+				description: err instanceof Error ? err.message : undefined
+			})
+		} finally {
+			isSaving = false
+		}
 	}
 
 	function discard() {
@@ -159,6 +260,8 @@
 		trace = []
 		expandedTraceIdx = null
 		errorMessage = ""
+		pendingNewParticipants = []
+		pendingNewMentioned = []
 		socket.emit("scenes:process", {
 			sceneId
 		} satisfies Sockets.Scenes.Process.Params)
@@ -179,6 +282,12 @@
 		reviewContent = msg.content
 		reviewParticipants = [...msg.participantCharacters]
 		reviewMentioned = [...msg.mentionedCharacters]
+		pendingNewParticipants = (msg.suggestedParticipantCharacters ?? []).map(
+			(name) => ({ name, source: "suggested" as const })
+		)
+		pendingNewMentioned = (msg.suggestedMentionedCharacters ?? []).map(
+			(name) => ({ name, source: "suggested" as const })
+		)
 		step = "review"
 	}
 
@@ -311,14 +420,16 @@
 					</span>
 				</p>
 				<div class="flex flex-wrap gap-1.5">
-					{#each reviewParticipants as name, i}
+					{#each reviewParticipants as id, i}
 						<span
 							class="chip preset-tonal-primary flex items-center gap-1 text-xs"
 						>
-							{name}
+							{bindingNameById.get(id) ?? `#${id}`}
 							<button
 								class="hover:text-error-500 p-1.5"
-								aria-label="Remove participant {name}"
+								aria-label="Remove participant {bindingNameById.get(
+									id
+								) ?? id}"
 								onclick={() =>
 									(reviewParticipants =
 										reviewParticipants.filter(
@@ -330,18 +441,21 @@
 						</span>
 					{/each}
 					<div class="flex gap-1">
-						<input
-							class="input input-sm w-28 text-xs"
-							placeholder="Add name…"
-							bind:value={newParticipantInput}
-							onkeydown={(e) =>
-								e.key === "Enter" && addParticipant()}
-							onblur={addParticipant}
-						/>
+						<select
+							class="select select-sm w-32 text-xs"
+							bind:value={newParticipantId}
+						>
+							<option value="">Add character…</option>
+							{#each lorebookBindingList.filter((b) => !reviewParticipants.includes(b.id)) as b}
+								<option value={b.id}
+									>{b.name || b.binding}</option
+								>
+							{/each}
+						</select>
 						<button
 							class="btn btn-sm preset-filled-surface-400-600"
 							onclick={addParticipant}
-							disabled={!newParticipantInput.trim()}
+							disabled={newParticipantId === ""}
 						>
 							<Icons.Plus size={12} />
 						</button>
@@ -350,6 +464,50 @@
 				{#if reviewParticipants.length === 0}
 					<p class="text-surface-400 text-xs italic">None.</p>
 				{/if}
+				{#if pendingNewParticipants.length > 0}
+					<div class="flex flex-wrap gap-1.5">
+						{#each pendingNewParticipants as p, i}
+							<span
+								class="chip preset-tonal-warning flex items-center gap-1 border border-dashed text-xs"
+							>
+								{p.name}
+								<span class="text-[10px] opacity-70">(new)</span>
+								<button
+									class="hover:text-error-500 p-1.5"
+									aria-label="Remove suggested character {p.name}"
+									onclick={() =>
+										(pendingNewParticipants =
+											pendingNewParticipants.filter(
+												(_, j) => j !== i
+											))}
+								>
+									<Icons.X size={10} />
+								</button>
+							</span>
+						{/each}
+					</div>
+				{/if}
+				<div class="flex gap-1">
+					<input
+						class="input input-sm w-32 text-xs"
+						type="text"
+						placeholder="Add new character…"
+						bind:value={newParticipantName}
+						onkeydown={(e) => {
+							if (e.key === "Enter") {
+								e.preventDefault()
+								addManualParticipant()
+							}
+						}}
+					/>
+					<button
+						class="btn btn-sm preset-filled-surface-400-600"
+						onclick={addManualParticipant}
+						disabled={!newParticipantName.trim()}
+					>
+						<Icons.Plus size={12} />
+					</button>
+				</div>
 			</div>
 
 			<div class="space-y-1.5">
@@ -361,14 +519,16 @@
 					</span>
 				</p>
 				<div class="flex flex-wrap gap-1.5">
-					{#each reviewMentioned as name, i}
+					{#each reviewMentioned as id, i}
 						<span
 							class="chip preset-tonal-surface flex items-center gap-1 text-xs"
 						>
-							{name}
+							{bindingNameById.get(id) ?? `#${id}`}
 							<button
 								class="hover:text-error-500 p-1.5"
-								aria-label="Remove mention {name}"
+								aria-label="Remove mention {bindingNameById.get(
+									id
+								) ?? id}"
 								onclick={() =>
 									(reviewMentioned = reviewMentioned.filter(
 										(_, j) => j !== i
@@ -379,18 +539,21 @@
 						</span>
 					{/each}
 					<div class="flex gap-1">
-						<input
-							class="input input-sm w-28 text-xs"
-							placeholder="Add name…"
-							bind:value={newMentionedInput}
-							onkeydown={(e) =>
-								e.key === "Enter" && addMentioned()}
-							onblur={addMentioned}
-						/>
+						<select
+							class="select select-sm w-32 text-xs"
+							bind:value={newMentionedId}
+						>
+							<option value="">Add character…</option>
+							{#each lorebookBindingList.filter((b) => !reviewMentioned.includes(b.id)) as b}
+								<option value={b.id}
+									>{b.name || b.binding}</option
+								>
+							{/each}
+						</select>
 						<button
 							class="btn btn-sm preset-filled-surface-400-600"
 							onclick={addMentioned}
-							disabled={!newMentionedInput.trim()}
+							disabled={newMentionedId === ""}
 						>
 							<Icons.Plus size={12} />
 						</button>
@@ -399,6 +562,50 @@
 				{#if reviewMentioned.length === 0}
 					<p class="text-surface-400 text-xs italic">None.</p>
 				{/if}
+				{#if pendingNewMentioned.length > 0}
+					<div class="flex flex-wrap gap-1.5">
+						{#each pendingNewMentioned as p, i}
+							<span
+								class="chip preset-tonal-warning flex items-center gap-1 border border-dashed text-xs"
+							>
+								{p.name}
+								<span class="text-[10px] opacity-70">(new)</span>
+								<button
+									class="hover:text-error-500 p-1.5"
+									aria-label="Remove suggested character {p.name}"
+									onclick={() =>
+										(pendingNewMentioned =
+											pendingNewMentioned.filter(
+												(_, j) => j !== i
+											))}
+								>
+									<Icons.X size={10} />
+								</button>
+							</span>
+						{/each}
+					</div>
+				{/if}
+				<div class="flex gap-1">
+					<input
+						class="input input-sm w-32 text-xs"
+						type="text"
+						placeholder="Add new character…"
+						bind:value={newMentionedName}
+						onkeydown={(e) => {
+							if (e.key === "Enter") {
+								e.preventDefault()
+								addManualMentioned()
+							}
+						}}
+					/>
+					<button
+						class="btn btn-sm preset-filled-surface-400-600"
+						onclick={addManualMentioned}
+						disabled={!newMentionedName.trim()}
+					>
+						<Icons.Plus size={12} />
+					</button>
+				</div>
 			</div>
 		</div>
 	</div>
@@ -497,6 +704,7 @@
 	startLabel="Re-process"
 	{canSave}
 	saveLabel="Apply"
+	{isSaving}
 	{errorMessage}
 	hasReviewContent={reviewContent.trim().length > 0}
 	onStart={startRerun}

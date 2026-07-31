@@ -19,7 +19,6 @@ const assetsDir = path.join(androidDir, "app/src/main/assets/serene-pub")
 const libnodeDir = path.join(androidDir, "app/src/main/cpp/libnode")
 const buildDir = path.join(rootDir, "build")
 const nodeModulesDir = path.join(rootDir, "node_modules")
-const staticDir = path.join(rootDir, "static")
 const drizzleDir = path.join(rootDir, "drizzle")
 
 console.log("🤖 Building Serene Pub for Android...")
@@ -60,9 +59,11 @@ if (fs.readdirSync(path.join(assetsDir, "node_modules")).length === 0) {
 	process.exit(1)
 }
 
-// 4. Copy static assets
-console.log("Copying static files...")
-copyRecursive(staticDir, path.join(assetsDir, "static"))
+// 4. static/ is NOT copied separately — build/client already contains
+// everything SvelteKit put there from static/ at build time (the same
+// dedup applied to scripts/bundle-dist.js's desktop bundling), and
+// userSettings.ts's getDefaultBackgrounds() reads build/client first with a
+// static/ fallback for exactly this reason.
 
 // 5. Copy drizzle migrations
 console.log("Copying database migrations...")

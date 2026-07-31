@@ -1,7 +1,10 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { and, eq, inArray } from "drizzle-orm"
-import { runBindingNodeCheck } from "$lib/server/utils/bindingNodeCheck"
+import { and, eq, inArray, sql } from "drizzle-orm"
+import {
+	syncLorebookBindingsForCharacter,
+	syncLorebookBindingsForPersona
+} from "$lib/server/utils/characterBindingSync"
 import { canViewCharacter, canViewPersona } from "$lib/server/utils/chatAccess"
 import { CharacterBook } from "@lenml/char-card-reader"
 import {
@@ -12,22 +15,14 @@ import {
 	normalizeLegacyLorebookData,
 	resolveParentNodeLinks
 } from "$lib/server/utils/lorebookImportMapper"
-import {
-	buildSpecV3Lorebook,
-	assignHistoryEntryLocalIds,
-	attachBoundEntities,
-	mapSceneForExport,
-	mapNarrativeNode,
-	mapNarrativeRelationship,
-	attachNarrativeGraph,
-	type ExportedBoundCharacter,
-	type ExportedBoundPersona,
-	type ExportedBinding,
-	type ExportedScene
-} from "$lib/server/utils/lorebookExportMapper"
+import { buildLorebookExportData } from "$lib/server/utils/lorebookExportBuilder"
+import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
+import { resolveOrCreateBindingByName } from "$lib/server/utils/summarizer/availableSceneCast"
 import { hashCanonicalJson } from "$lib/server/utils/contentHash"
-import { buildCharacterCardV3 } from "$lib/server/utils/characterCardParser"
 import { isValidUuid } from "$lib/server/utils/uuid"
+import { findOrCreateTagId } from "$lib/server/utils/tags"
+import type { ExtractTablesWithRelations } from "drizzle-orm"
+import type { PgliteDatabase, PgliteTransaction } from "drizzle-orm/pglite"
 import {
 	extractCharacterUuid,
 	buildExistingCharacterComparisonData,
@@ -38,7 +33,6 @@ import {
 	extractPersonaUuid,
 	canonicalPersonaContent,
 	personaFieldsFromParsedData,
-	buildPersonaExportCard,
 	createPersonaFromParsedData,
 	overwritePersonaFromParsedData
 } from "./personas"
@@ -47,45 +41,77 @@ import type { Handler } from "$lib/shared/events"
 // $lib/server/db/types.d.ts (ambient `export global {}` block, same pattern
 // as the Sockets namespace) — no import needed/available for them.
 
+type Executor =
+	| PgliteDatabase<typeof schema>
+	| PgliteTransaction<
+			typeof schema,
+			ExtractTablesWithRelations<typeof schema>
+	  >
+
+// `parentNodeId`/`sceneId`/`historyEntryId` are foreign keys into rows that
+// must belong to the SAME lorebook as the binding being written — allowlisting
+// the field isn't enough on its own, since the value could still point at
+// another tenant's row (eg. another user's lorebookBindings id as
+// parentNodeId), creating a cross-tenant reference the graph-context builder
+// could later join through into prompt content. Same re-fetch-and-compare
+// shape (and error copy) as narrativeGraphUpdateNodeHandler
+// (narrativeGraph.ts), which already guards this exact pattern for the same
+// table's same columns via a different entry point.
+async function validateBindingCrossRefs(
+	fields: {
+		parentNodeId?: number | null
+		sceneId?: number | null
+		historyEntryId?: number | null
+	},
+	lorebookId: number
+) {
+	if (fields.parentNodeId != null) {
+		const parent = await db.query.lorebookBindings.findFirst({
+			where: eq(schema.lorebookBindings.id, fields.parentNodeId)
+		})
+		if (!parent || parent.lorebookId !== lorebookId) {
+			throw new Error("Parent node not found.")
+		}
+	}
+	if (fields.sceneId != null) {
+		const scene = await db.query.scenes.findFirst({
+			where: eq(schema.scenes.id, fields.sceneId)
+		})
+		if (!scene || scene.lorebookId !== lorebookId) {
+			throw new Error("Scene not found.")
+		}
+	}
+	if (fields.historyEntryId != null) {
+		const historyEntry = await db.query.historyEntries.findFirst({
+			where: eq(schema.historyEntries.id, fields.historyEntryId)
+		})
+		if (!historyEntry || historyEntry.lorebookId !== lorebookId) {
+			throw new Error("History entry not found.")
+		}
+	}
+}
+
 // Helper function to process tags for lorebook creation/update
 async function processLorebookTags(
 	lorebookId: number,
 	tagNames: string[],
-	userId: number
+	userId: number,
+	dbOrTx: Executor = db
 ) {
 	if (!tagNames || tagNames.length === 0) return
 
 	// First, remove all existing tags for this lorebook
-	await db
+	await dbOrTx
 		.delete(schema.lorebookTags)
 		.where(eq(schema.lorebookTags.lorebookId, lorebookId))
 
-	// Process each tag name
+	// Process each tag name — findOrCreateTagId adopts an existing
+	// case-insensitive match instead of creating a duplicate.
 	const tagIds: number[] = []
 
 	for (const tagName of tagNames) {
-		if (!tagName.trim()) continue
-
-		// Check if tag exists for this user
-		let existingTag = await db.query.tags.findFirst({
-			where: (t, { and, eq }) =>
-				and(eq(t.name, tagName.trim()), eq(t.userId, userId))
-		})
-
-		// Create tag if it doesn't exist
-		if (!existingTag) {
-			const [newTag] = await db
-				.insert(schema.tags)
-				.values({
-					name: tagName.trim(),
-					userId
-					// description and colorPreset will use database defaults
-				})
-				.returning()
-			existingTag = newTag
-		}
-
-		tagIds.push(existingTag.id)
+		const tagId = await findOrCreateTagId(userId, tagName, dbOrTx)
+		if (tagId) tagIds.push(tagId)
 	}
 
 	// Link all tags to the lorebook
@@ -95,7 +121,7 @@ async function processLorebookTags(
 			tagId
 		}))
 
-		await db
+		await dbOrTx
 			.insert(schema.lorebookTags)
 			.values(lorebookTagsData)
 			.onConflictDoNothing() // In case of race conditions
@@ -187,6 +213,7 @@ export const lorebooksCreateHandler: Handler<
 					emitToUser
 				)
 				emitToUser("lorebooks:list", lorebookListResult)
+				emitToUser("lorebooks:create", { lorebook: newBook })
 			}
 
 			return { lorebook: newBook }
@@ -267,10 +294,24 @@ export const lorebooksUpdateHandler: Handler<
 		try {
 			const userId = socket.user!.id
 
+			// Explicit allowlist, not a spread — never writable here: userId
+			// (would donate the lorebook into another account), uuid (export/
+			// import dedup identity), or nextBindingNumber. That counter is
+			// load-bearing for more than "future {{char:N}} collisions": every
+			// past bindingMergeLogs entry's absorb/undo restore relies on a
+			// binding number never being reissued (see deriveNextBindingToken),
+			// so rewinding it here would silently invalidate the restore-safety
+			// proof for every merge already on record for this lorebook.
+			const { name, description, extraJson } = params.lorebook
+
 			// Update the lorebook
 			const [updated] = await db
 				.update(schema.lorebooks)
-				.set(params.lorebook)
+				.set({
+					...(name !== undefined ? { name } : {}),
+					...(description !== undefined ? { description } : {}),
+					...(extraJson !== undefined ? { extraJson } : {})
+				})
 				.where(
 					and(
 						eq(schema.lorebooks.id, params.lorebook.id!),
@@ -335,6 +376,19 @@ export const lorebooksDeleteHandler: Handler<
 	}
 }
 
+/**
+ * Auto-creates a lorebookBindings row for any {{char:N}}-style token found
+ * in stored content that doesn't already have one. Never deletes a row —
+ * a prior "delete any binding whose token isn't literally present in
+ * content anymore" heuristic here was removed (same false-positive class
+ * removed from the graph-rebuild path this session): bindingMergeLogs
+ * references node ids as plain JSON with no real FK, so deleting one left
+ * relationship endpoints dangling, or silently nulled a past merge's
+ * survivorId, permanently disabling that merge's undo, on completely
+ * routine lore edits. Manual per-node deletion via
+ * narrativeGraph:deleteNode remains the only way to remove an unwanted
+ * node.
+ */
 export async function syncLorebookBindings({
 	lorebookId
 }: {
@@ -344,9 +398,7 @@ export async function syncLorebookBindings({
 	// Query all lorebook bindings for the given lorebook
 	const existingBindings = await db.query.lorebookBindings.findMany({
 		where: (b, { eq }) => eq(b.lorebookId, lorebookId),
-		with: {
-			characterLoreEntries: true
-		}
+		columns: { id: true, binding: true }
 	})
 	// Query all world, character and history entries for the given lorebook
 	const worldEntries = await db.query.worldLoreEntries.findMany({
@@ -391,26 +443,26 @@ export async function syncLorebookBindings({
 					personaId: null
 				}) as any as () => Promise<any>
 			)
-		}
-	})
-	// If a binding exists in the lorebook bindings without a bound character or persona, consider it orphaned and delete it
-	existingBindings.forEach((eb) => {
-		if (
-			!!eb.characterId ||
-			!!eb.personaId ||
-			!!eb.characterLoreEntries.length
-		) {
-			return
-		} // Skip bindings that are still in use
-		const isBindingUsed = foundBindings.some((fb) => fb === eb.binding)
-		if (!isBindingUsed) {
-			queries.push(
-				db
-					.delete(schema.lorebookBindings)
-					.where(
-						eq(schema.lorebookBindings.id, eb.id)
-					) as any as () => Promise<any>
-			)
+			// This binding wasn't minted via deriveNextBindingToken's atomic
+			// counter — it came straight from content text (pasted export,
+			// manually typed, or a stale reference). binding has no
+			// uniqueness constraint, so if the counter later reaches this
+			// same number through normal creation, deriveNextBindingToken
+			// would issue it again, producing two rows silently sharing one
+			// token. Advance the counter past it now so that can't happen.
+			const parsedNumber = Number(fb.match(/:(\d+)\}\}$/)?.[1])
+			if (Number.isInteger(parsedNumber)) {
+				queries.push(
+					db
+						.update(schema.lorebooks)
+						.set({
+							nextBindingNumber: sql`GREATEST(${schema.lorebooks.nextBindingNumber}, ${parsedNumber + 1})`
+						})
+						.where(
+							eq(schema.lorebooks.id, lorebookId)
+						) as any as () => Promise<any>
+				)
+			}
 		}
 	})
 	// Execute all queries in parallel
@@ -548,7 +600,7 @@ export const lorebookBindingsForCharacterHandler: Handler<
 // personaId could be supplied regardless of who it belongs to, and the
 // bound entity's name/aliases/summary would later be disclosed through the
 // binding (and copied into narrative-graph nodes derived from it).
-async function verifyBindingTargetAccess(
+export async function verifyBindingTargetAccess(
 	binding: { characterId?: number | null; personaId?: number | null },
 	userId: number
 ): Promise<boolean> {
@@ -599,10 +651,68 @@ export const createLorebookBindingHandler: Handler<
 			)
 		}
 
-		const [binding] = await db
-			.insert(schema.lorebookBindings)
-			.values(params.lorebookBinding)
-			.returning()
+		// `binding` is never trusted from the client — the token is always
+		// server-derived from the row's own real id (never reused after a
+		// delete, unlike the old max+1 scheme). `name`/`aliases` are only
+		// stripped when the row is bound to a real character/persona — for
+		// that case they must only ever come from the entity sync below,
+		// never a direct write (decision 2). An unbound/background row has
+		// no entity to sync from, so its name is exactly what the client
+		// supplies here — the only way to name a background character.
+		// embedding/embeddingModel/vectorizedAt/absorbedAliases/createdAt/
+		// updatedAt are never client-writable either — all server-derived
+		// or pipeline-owned.
+		const isBound = !!params.lorebookBinding.characterId ||
+			!!params.lorebookBinding.personaId
+		const {
+			binding: _ignoredBinding,
+			embedding: _ignoredEmbedding,
+			embeddingModel: _ignoredEmbeddingModel,
+			vectorizedAt: _ignoredVectorizedAt,
+			absorbedAliases: _ignoredAbsorbedAliases,
+			createdAt: _ignoredCreatedAt,
+			updatedAt: _ignoredUpdatedAt,
+			...rest
+		} = params.lorebookBinding
+		const safeInsert = isBound
+			? (({ name, aliases, ...r }) => r)(rest)
+			: rest
+
+		await validateBindingCrossRefs(
+			safeInsert,
+			params.lorebookBinding.lorebookId
+		)
+
+		let binding = await db.transaction(async (tx) => {
+			const token = await deriveNextBindingToken(
+				params.lorebookBinding.lorebookId,
+				tx
+			)
+			const [inserted] = await tx
+				.insert(schema.lorebookBindings)
+				.values({ ...safeInsert, binding: token })
+				.returning()
+			return inserted
+		})
+
+		// Attach-time sync: a fresh characterId/personaId attachment should
+		// pull in that entity's name/aliases immediately. Re-fetch afterward
+		// so the response/emitted row reflects the synced name/aliases
+		// rather than the pre-sync (empty) values captured by the INSERT's
+		// own .returning().
+		if (binding.characterId) {
+			await syncLorebookBindingsForCharacter(binding.characterId)
+			;[binding] = await db
+				.select()
+				.from(schema.lorebookBindings)
+				.where(eq(schema.lorebookBindings.id, binding.id))
+		} else if (binding.personaId) {
+			await syncLorebookBindingsForPersona(binding.personaId)
+			;[binding] = await db
+				.select()
+				.from(schema.lorebookBindings)
+				.where(eq(schema.lorebookBindings.id, binding.id))
+		}
 
 		// Refresh binding list
 		if (emitToUser) {
@@ -612,16 +722,6 @@ export const createLorebookBindingHandler: Handler<
 				emitToUser
 			)
 			emitToUser("lorebooks:bindingList", listResult)
-		}
-
-		// Flow 2: node-link check for the new binding
-		if (emitToUser) {
-			const allBindings = await db.query.lorebookBindings.findMany({
-				where: eq(schema.lorebookBindings.lorebookId, book.id)
-			})
-			runBindingNodeCheck(book.id, allBindings, emitToUser).catch(
-				console.error
-			)
 		}
 
 		const res: Sockets.Lorebooks.CreateBinding.Response = {
@@ -676,11 +776,70 @@ export const updateLorebookBindingHandler: Handler<
 			)
 		}
 
-		const [updatedBinding] = await db
+		// `binding` is never client-writable here either — an existing token
+		// is never rewritten (decision 1's preservation guarantee). `name`/
+		// `aliases` are only stripped when the row is (or is becoming, via
+		// this same update) bound to a real character/persona — that case's
+		// name/aliases only ever come from the entity sync below. A row
+		// that's unbound both before and after this update has no entity to
+		// sync from, so its name is exactly what the client supplies here —
+		// the only way to rename a background character after creation.
+		const willBeBound =
+			(params.lorebookBinding.characterId !== undefined
+				? params.lorebookBinding.characterId
+				: existingBinding.characterId) != null ||
+			(params.lorebookBinding.personaId !== undefined
+				? params.lorebookBinding.personaId
+				: existingBinding.personaId) != null
+		// lorebookId is deliberately excluded too — ownership is only
+		// verified against the binding's *current* lorebook above; a
+		// client-supplied replacement value here would let a user relocate
+		// their own binding (and any bound character/persona) into a
+		// lorebook they don't own with no re-validation.
+		// embedding/embeddingModel/vectorizedAt/absorbedAliases/createdAt/
+		// updatedAt are never client-writable either — all server-derived
+		// or pipeline-owned.
+		const {
+			binding: _ignoredBinding,
+			lorebookId: _ignoredLorebookId,
+			embedding: _ignoredEmbedding,
+			embeddingModel: _ignoredEmbeddingModel,
+			vectorizedAt: _ignoredVectorizedAt,
+			absorbedAliases: _ignoredAbsorbedAliases,
+			createdAt: _ignoredCreatedAt,
+			updatedAt: _ignoredUpdatedAt,
+			...restUpdate
+		} = params.lorebookBinding
+		const safeUpdate = willBeBound
+			? (({ name, aliases, ...r }) => r)(restUpdate)
+			: restUpdate
+
+		await validateBindingCrossRefs(safeUpdate, existingBinding.lorebookId)
+
+		let [updatedBinding] = await db
 			.update(schema.lorebookBindings)
-			.set(params.lorebookBinding)
+			.set(safeUpdate)
 			.where(eq(schema.lorebookBindings.id, params.lorebookBinding.id!))
 			.returning()
+
+		// Attach-time sync: a fresh characterId/personaId attachment should
+		// pull in that entity's name/aliases immediately, not wait for an
+		// unrelated future edit to that entity. Re-fetch afterward so the
+		// response/emitted row reflects the synced name/aliases rather than
+		// the pre-sync values captured by the UPDATE's own .returning().
+		if (updatedBinding.characterId) {
+			await syncLorebookBindingsForCharacter(updatedBinding.characterId)
+			;[updatedBinding] = await db
+				.select()
+				.from(schema.lorebookBindings)
+				.where(eq(schema.lorebookBindings.id, updatedBinding.id))
+		} else if (updatedBinding.personaId) {
+			await syncLorebookBindingsForPersona(updatedBinding.personaId)
+			;[updatedBinding] = await db
+				.select()
+				.from(schema.lorebookBindings)
+				.where(eq(schema.lorebookBindings.id, updatedBinding.id))
+		}
 
 		// Refresh binding list
 		if (emitToUser) {
@@ -690,26 +849,6 @@ export const updateLorebookBindingHandler: Handler<
 				emitToUser
 			)
 			emitToUser("lorebooks:bindingList", listResult)
-		}
-
-		// Flow 2: node-link check (skip if unlinking a character/persona)
-		const isUnlinking =
-			("characterId" in params.lorebookBinding &&
-				params.lorebookBinding.characterId === null) ||
-			("personaId" in params.lorebookBinding &&
-				params.lorebookBinding.personaId === null)
-		if (!isUnlinking && emitToUser) {
-			const allBindings = await db.query.lorebookBindings.findMany({
-				where: eq(
-					schema.lorebookBindings.lorebookId,
-					existingBinding.lorebookId
-				)
-			})
-			runBindingNodeCheck(
-				existingBinding.lorebookId,
-				allBindings,
-				emitToUser
-			).catch(console.error)
 		}
 
 		const res: Sockets.Lorebooks.UpdateBinding.Response = {
@@ -725,208 +864,62 @@ export const updateLorebookBindingHandler: Handler<
 }
 
 /**
+ * Resolves a name suggested on the summarize Review & Save screen (either
+ * from character extraction or manually typed) to a real lorebookBindings
+ * id, creating one only if it doesn't already match something in the
+ * lorebook's current cast — see resolveOrCreateBindingByName's own doc
+ * comment for why this has to be a save-time, server-side check rather than
+ * a client-side "just create it" call.
+ */
+export const resolveOrCreateBindingByNameHandler: Handler<
+	Sockets.Lorebooks.ResolveOrCreateBindingByName.Params,
+	Sockets.Lorebooks.ResolveOrCreateBindingByName.Response
+> = {
+	event: "lorebooks:resolveOrCreateBindingByName",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+
+		const book = await db.query.lorebooks.findFirst({
+			where: (l, { and, eq }) =>
+				and(eq(l.id, params.lorebookId), eq(l.userId, userId))
+		})
+		if (!book) throw new Error("Lorebook not found.")
+
+		const { id, created } = await resolveOrCreateBindingByName(
+			params.lorebookId,
+			params.name
+		)
+
+		// A matched-existing result changed nothing, so only a genuinely new
+		// row needs to push a binding-list refresh to other viewers.
+		if (created && emitToUser) {
+			const listResult = await lorebookBindingListHandler.handler(
+				socket,
+				{ lorebookId: params.lorebookId },
+				emitToUser
+			)
+			emitToUser("lorebooks:bindingList", listResult)
+		}
+
+		const res: Sockets.Lorebooks.ResolveOrCreateBindingByName.Response = {
+			lorebookBindingId: id,
+			created,
+			requestId: params.requestId
+		}
+
+		if (emitToUser) {
+			emitToUser("lorebooks:resolveOrCreateBindingByName", res)
+		}
+
+		return res
+	}
+}
+
+/**
  * ====================================================================
  * LOREBOOK EXPORT / IMPORT TYPE-SAFE HANDLERS
  * ====================================================================
  */
-
-/**
- * Builds the full spec-compliant export representation of a lorebook —
- * shared by lorebookExportHandler (the actual file download) and
- * lorebookImportHandler's "unchanged vs conflict" hash comparison, so the
- * two can never drift apart. They used to be separate implementations; the
- * comparison side rebuilt a bare buildSpecV3Lorebook() with no bindings/
- * characters/personas/narrativeGraph attached, which meant a straight,
- * unedited re-import of a previously-exported lorebook always hashed
- * differently from the version that was actually exported and reported a
- * spurious "conflict" on every re-import, never "unchanged".
- */
-async function buildLorebookExportData(
-	lorebookId: number,
-	userId: number,
-	options: {
-		includeCharacters?: boolean
-		includePersonas?: boolean
-		includeNarrativeGraph?: boolean
-	} = {}
-) {
-	const lorebook = await db.query.lorebooks.findFirst({
-		where: and(
-			eq(schema.lorebooks.id, lorebookId),
-			eq(schema.lorebooks.userId, userId)
-		),
-		with: {
-			worldLoreEntries: true,
-			characterLoreEntries: true,
-			historyEntries: true,
-			scenes: true
-		}
-	})
-
-	if (!lorebook) {
-		throw new Error("Lorebook not found.")
-	}
-
-	// All default to true — matches the original always-include-everything
-	// behavior for any caller that doesn't specify.
-	const includeCharacters = options.includeCharacters ?? true
-	const includePersonas = options.includePersonas ?? true
-	const includeNarrativeGraph = options.includeNarrativeGraph ?? true
-
-	// Embed every bound character/persona's full card (when opted into),
-	// plus the binding structure itself (always, even for bindings whose
-	// card isn't embedded) — see attachBoundEntities.
-	const bindingRows = await db.query.lorebookBindings.findMany({
-		where: eq(schema.lorebookBindings.lorebookId, lorebook.id),
-		with: {
-			character: { with: { characterTags: { with: { tag: true } } } },
-			persona: true
-		}
-	})
-
-	let nextLocalId = 1
-	const characters: ExportedBoundCharacter[] = []
-	const personas: ExportedBoundPersona[] = []
-	const bindings: ExportedBinding[] = []
-	const bindingLocalIdByRealId = new Map<number, number>()
-
-	for (const binding of bindingRows) {
-		let characterLocalId: number | null = null
-		let personaLocalId: number | null = null
-
-		if (binding.character && includeCharacters) {
-			characterLocalId = nextLocalId++
-			characters.push({
-				localId: characterLocalId,
-				// No `lorebook` passed — avoids embedding this character's
-				// own character_book recursively.
-				card: buildCharacterCardV3({
-					...binding.character,
-					tags:
-						binding.character.characterTags?.map(
-							(ct) => ct.tag.name
-						) || []
-				})
-			})
-		}
-		if (binding.persona && includePersonas) {
-			personaLocalId = nextLocalId++
-			personas.push({
-				localId: personaLocalId,
-				card: buildPersonaExportCard(binding.persona)
-			})
-		}
-
-		const bindingLocalId = nextLocalId++
-		bindingLocalIdByRealId.set(binding.id, bindingLocalId)
-		bindings.push({
-			localId: bindingLocalId,
-			bindingText: binding.binding,
-			kind: binding.characterId ? "character" : "persona",
-			characterLocalId,
-			personaLocalId
-		})
-	}
-
-	// Scenes nest under their owning history entry rather than a separate
-	// top-level array (a scene belongs to exactly one history entry) —
-	// assign each a document-scoped localId here so narrativeGraph nodes/
-	// relationships below can reference one.
-	const historyEntryLocalIdByRealId = assignHistoryEntryLocalIds(
-		lorebook.historyEntries
-	)
-	const sceneLocalIdByRealId = new Map<number, number>()
-	const scenesByHistoryEntryId = new Map<number, ExportedScene[]>()
-	lorebook.scenes.forEach((scene) => {
-		const localId = nextLocalId++
-		sceneLocalIdByRealId.set(scene.id, localId)
-		const mapped = mapSceneForExport(scene, localId)
-		const existing = scenesByHistoryEntryId.get(scene.historyEntryId) ?? []
-		existing.push(mapped)
-		scenesByHistoryEntryId.set(scene.historyEntryId, existing)
-	})
-
-	const specBook = attachBoundEntities(
-		buildSpecV3Lorebook(
-			lorebook,
-			lorebook.worldLoreEntries,
-			lorebook.characterLoreEntries,
-			lorebook.historyEntries,
-			bindingLocalIdByRealId,
-			scenesByHistoryEntryId,
-			historyEntryLocalIdByRealId
-		),
-		characters,
-		personas,
-		bindings
-	)
-
-	// Narrative graph — skipped entirely (no DB queries either) when the
-	// caller opted out, or omitted from the output (attachNarrativeGraph's
-	// own job) when the lorebook simply has no nodes/relationships at all.
-	let specBookWithGraph = specBook
-	if (includeNarrativeGraph) {
-		const narrativeNodeRows = await db.query.narrativeNodes.findMany({
-			where: eq(schema.narrativeNodes.lorebookId, lorebook.id)
-		})
-		const narrativeRelationshipRows =
-			await db.query.narrativeRelationships.findMany({
-				where: eq(schema.narrativeRelationships.lorebookId, lorebook.id)
-			})
-
-		const nodeLocalIdByRealId = new Map<number, number>()
-		narrativeNodeRows.forEach((node) => {
-			nodeLocalIdByRealId.set(node.id, nextLocalId++)
-		})
-
-		// characterIds are this install's raw DB ids — meaningless on a
-		// different install, so resolve each to its character's stable uuid
-		// instead (silently dropping any that no longer exist).
-		const allCharacterIds = Array.from(
-			new Set(narrativeNodeRows.flatMap((n) => n.characterIds ?? []))
-		)
-		const characterUuidById = new Map<number, string>()
-		if (allCharacterIds.length > 0) {
-			const rows = await db.query.characters.findMany({
-				where: inArray(schema.characters.id, allCharacterIds),
-				columns: { id: true, uuid: true }
-			})
-			rows.forEach((c) => characterUuidById.set(c.id, c.uuid))
-		}
-
-		const narrativeNodes = narrativeNodeRows.map((node) =>
-			mapNarrativeNode(
-				node,
-				nodeLocalIdByRealId.get(node.id)!,
-				(node.characterIds ?? [])
-					.map((id) => characterUuidById.get(id))
-					.filter((uuid): uuid is string => !!uuid),
-				bindingLocalIdByRealId,
-				nodeLocalIdByRealId,
-				historyEntryLocalIdByRealId,
-				sceneLocalIdByRealId
-			)
-		)
-		const narrativeRelationships = narrativeRelationshipRows
-			.map((rel) =>
-				mapNarrativeRelationship(
-					rel,
-					nodeLocalIdByRealId,
-					historyEntryLocalIdByRealId,
-					sceneLocalIdByRealId
-				)
-			)
-			.filter((r): r is NonNullable<typeof r> => r !== null)
-
-		specBookWithGraph = attachNarrativeGraph(
-			specBook,
-			narrativeNodes,
-			narrativeRelationships
-		)
-	}
-
-	return { name: lorebook.name, specBookWithGraph }
-}
 
 export const lorebookExportHandler: Handler<
 	Sockets.Lorebooks.Export.Params,
@@ -1056,16 +1049,41 @@ function assertLorebookImportWithinLimits(
  *
  * Returns a map from each binding's exported localId to its newly-created
  * real lorebookBindings id, so character-lore entries (which reference
- * bindings by localId) can be wired up by insertLorebookEntries afterward.
+ * bindings by localId) can be wired up by insertLorebookEntries afterward,
+ * plus the sets of character/persona ids that got bound — name/alias sync
+ * for those (see below) is deliberately deferred to the caller rather than
+ * done here.
  */
 async function restoreBoundEntities(
 	lorebookId: number,
 	serenepub: any,
-	userId: number
-): Promise<Map<number, number>> {
+	userId: number,
+	dbOrTx: Executor = db
+): Promise<{
+	bindingLocalIdToRealId: Map<number, number>
+	syncCharacterIds: Set<number>
+	syncPersonaIds: Set<number>
+	boundEntityByRealId: Map<
+		number,
+		{ characterId: number | null; personaId: number | null }
+	>
+}> {
 	const bindingLocalIdToRealId = new Map<number, number>()
+	const syncCharacterIds = new Set<number>()
+	const syncPersonaIds = new Set<number>()
+	const boundEntityByRealId = new Map<
+		number,
+		{ characterId: number | null; personaId: number | null }
+	>()
 	const rawBindings = serenepub?.bindings
-	if (!Array.isArray(rawBindings)) return bindingLocalIdToRealId
+	if (!Array.isArray(rawBindings)) {
+		return {
+			bindingLocalIdToRealId,
+			syncCharacterIds,
+			syncPersonaIds,
+			boundEntityByRealId
+		}
+	}
 
 	const characterLocalIdToRealId = new Map<number, number>()
 	for (const embedded of serenepub?.characters ?? []) {
@@ -1073,7 +1091,8 @@ async function restoreBoundEntities(
 		if (!cardData) continue
 		const character = await resolveOrOverwriteEmbeddedCharacter(
 			cardData,
-			userId
+			userId,
+			dbOrTx
 		)
 		characterLocalIdToRealId.set(embedded.localId, character.id)
 	}
@@ -1084,7 +1103,8 @@ async function restoreBoundEntities(
 		if (!cardData) continue
 		const persona = await resolveOrOverwriteEmbeddedPersona(
 			cardData,
-			userId
+			userId,
+			dbOrTx
 		)
 		personaLocalIdToRealId.set(embedded.localId, persona.id)
 	}
@@ -1100,7 +1120,7 @@ async function restoreBoundEntities(
 				? (personaLocalIdToRealId.get(binding.personaLocalId) ?? null)
 				: null
 
-		const [row] = await db
+		const [row] = await dbOrTx
 			.insert(schema.lorebookBindings)
 			.values({
 				lorebookId,
@@ -1110,18 +1130,41 @@ async function restoreBoundEntities(
 			})
 			.returning()
 		bindingLocalIdToRealId.set(binding.localId, row.id)
+		boundEntityByRealId.set(row.id, { characterId, personaId })
+
+		// Every other bound-insert site syncs name/aliases from the entity
+		// immediately (see characterBindingSync.ts) — without this, an
+		// imported bound row's name stays permanently NULL, and every
+		// consumer that displays `name || binding` falls through to the raw
+		// {{char:N}} token forever. Deferred to after this transaction
+		// commits (see the caller) rather than called here — same
+		// inside-tx/outside-tx split resolveOrCreateBinding
+		// (characterBindingSync.ts) already uses for this exact call, and
+		// these sync helpers' own `dbInstance?: DbLike` type doesn't accept
+		// a transaction handle anyway.
+		if (characterId) {
+			syncCharacterIds.add(characterId)
+		} else if (personaId) {
+			syncPersonaIds.add(personaId)
+		}
 	}
 
-	return bindingLocalIdToRealId
+	return {
+		bindingLocalIdToRealId,
+		syncCharacterIds,
+		syncPersonaIds,
+		boundEntityByRealId
+	}
 }
 
 async function resolveOrOverwriteEmbeddedCharacter(
 	cardData: any,
-	userId: number
+	userId: number,
+	dbOrTx: Executor = db
 ) {
 	const incomingUuid = extractCharacterUuid(cardData)
 	if (incomingUuid) {
-		const existing = await db.query.characters.findFirst({
+		const existing = await dbOrTx.query.characters.findFirst({
 			where: and(
 				eq(schema.characters.uuid, incomingUuid),
 				eq(schema.characters.userId, userId)
@@ -1130,7 +1173,8 @@ async function resolveOrOverwriteEmbeddedCharacter(
 		})
 		if (existing) {
 			const comparison = await buildExistingCharacterComparisonData(
-				existing.id
+				existing.id,
+				dbOrTx
 			)
 			if (comparison) {
 				const { character_book, ...incomingForHash } = cardData
@@ -1143,21 +1187,23 @@ async function resolveOrOverwriteEmbeddedCharacter(
 					existing.id,
 					cardData,
 					undefined,
-					userId
+					userId,
+					dbOrTx
 				)
 			}
 		}
 	}
-	return createCharacterFromParsedData(cardData, undefined, userId)
+	return createCharacterFromParsedData(cardData, undefined, userId, dbOrTx)
 }
 
 async function resolveOrOverwriteEmbeddedPersona(
 	cardData: any,
-	userId: number
+	userId: number,
+	dbOrTx: Executor = db
 ) {
 	const incomingUuid = extractPersonaUuid(cardData)
 	if (incomingUuid) {
-		const existing = await db.query.personas.findFirst({
+		const existing = await dbOrTx.query.personas.findFirst({
 			where: and(
 				eq(schema.personas.uuid, incomingUuid),
 				eq(schema.personas.userId, userId)
@@ -1176,11 +1222,12 @@ async function resolveOrOverwriteEmbeddedPersona(
 			return overwritePersonaFromParsedData(
 				existing.id,
 				cardData,
-				undefined
+				undefined,
+				dbOrTx
 			)
 		}
 	}
-	return createPersonaFromParsedData(cardData, undefined, userId)
+	return createPersonaFromParsedData(cardData, undefined, userId, dbOrTx)
 }
 
 /**
@@ -1200,7 +1247,8 @@ interface RestoredHistoryRefs {
 async function insertLorebookEntries(
 	lorebookId: number,
 	entries: any[],
-	bindingLocalIdToRealId: Map<number, number>
+	bindingLocalIdToRealId: Map<number, number>,
+	dbOrTx: Executor = db
 ): Promise<RestoredHistoryRefs> {
 	let worldPosition = 0
 	let characterPosition = 0
@@ -1218,7 +1266,7 @@ async function insertLorebookEntries(
 					? (bindingLocalIdToRealId.get(bindingLocalId) ?? null)
 					: null
 			queries.push(
-				db.insert(schema.characterLoreEntries).values({
+				dbOrTx.insert(schema.characterLoreEntries).values({
 					...mapLorebookEntryToCharacterLoreEntry(
 						entry,
 						characterPosition
@@ -1232,7 +1280,7 @@ async function insertLorebookEntries(
 			const meta = entry.extensions?.serenepub ?? {}
 			queries.push(
 				(async () => {
-					const [historyRow] = await db
+					const [historyRow] = await dbOrTx
 						.insert(schema.historyEntries)
 						.values({
 							...mapLorebookEntryToHistoryEntry(
@@ -1255,9 +1303,29 @@ async function insertLorebookEntries(
 					// reference one via sceneLocalId. chatId/
 					// selectedMessageIds were deliberately never exported —
 					// they're chat-instance-specific and can't round-trip.
+					// participantCharacters/mentionedCharacters are binding
+					// localIds now (see the merge plan) — resolve back to
+					// real ids via the same map bindingLocalId elsewhere in
+					// this format uses. A legacy export's name-string arrays
+					// silently resolve to nothing here (every entry fails
+					// the `=== "number"` check) rather than erroring — the
+					// scene still imports, just without its old cast list,
+					// consistent with this whole function's best-effort
+					// philosophy.
 					const scenes = Array.isArray(meta.scenes) ? meta.scenes : []
+					const resolveBindingIds = (raw: unknown): number[] =>
+						Array.isArray(raw)
+							? raw
+									.filter(
+										(v): v is number => typeof v === "number"
+									)
+									.map((localId) =>
+										bindingLocalIdToRealId.get(localId)
+									)
+									.filter((id): id is number => id !== undefined)
+							: []
 					for (const scene of scenes) {
-						const [sceneRow] = await db
+						const [sceneRow] = await dbOrTx
 							.insert(schema.scenes)
 							.values({
 								lorebookId,
@@ -1266,10 +1334,12 @@ async function insertLorebookEntries(
 								name: scene?.name ?? null,
 								selectedMessageIds: [],
 								summary: scene?.summary ?? null,
-								participantCharacters:
-									scene?.participantCharacters ?? [],
-								mentionedCharacters:
-									scene?.mentionedCharacters ?? []
+								participantCharacters: resolveBindingIds(
+									scene?.participantCharacters
+								),
+								mentionedCharacters: resolveBindingIds(
+									scene?.mentionedCharacters
+								)
 							})
 							.returning()
 						if (typeof scene?.localId === "number") {
@@ -1281,7 +1351,7 @@ async function insertLorebookEntries(
 			historyPosition++
 		} else {
 			queries.push(
-				db.insert(schema.worldLoreEntries).values({
+				dbOrTx.insert(schema.worldLoreEntries).values({
 					...mapLorebookEntryToWorldLoreEntry(entry, worldPosition),
 					lorebookId
 				})
@@ -1301,13 +1371,39 @@ async function insertLorebookEntries(
  * malformed entry, a bad reference, or a future schema version this
  * importer doesn't understand yet never fails the surrounding lorebook
  * import; it just gets skipped with a warning.
+ *
+ * Post-merge (see the lorebookBindings/narrativeNodes merge plan): a
+ * "node" entry whose bindingLocalId resolves to an already-restored
+ * lorebookBindings row (from restoreBoundEntities, run before this) is no
+ * longer a separate INSERT — it's an UPDATE onto that same row, since
+ * binding IS the node now. Every real binding row — character/persona-linked
+ * AND background — gets a bindingLocalId on export (see
+ * lorebookExportBuilder.ts), so this UPDATE path is the normal case for
+ * both; only a bindingLocalId-less entry (a pure graph node with no
+ * corresponding binding row at all — not expected from a real export today,
+ * but tolerated defensively, e.g. legacy/hand-built payloads) actually
+ * creates a new row, deriving its token from the lorebook's own
+ * per-lorebook counter (see lorebookBindingToken.ts). Whether the UPDATE
+ * applies a node's name/aliases depends on whether the restored row is
+ * actually character/persona-linked (see boundEntityByRealId below) — a
+ * background binding, or one whose card was scoped out of this export via
+ * includeCharacters/includePersonas, has no other source for that data and
+ * must take it from the graph node. The old characterUuids/characterIds
+ * resolution is gone — that field was already vestigial pre-merge
+ * (populated on export/import only, never read by any privacy/graph/prompt
+ * logic) and has no merged-schema equivalent; a legacy exported file that
+ * still has it on a node is simply ignored, not an error.
  */
 async function restoreNarrativeGraph(
 	lorebookId: number,
 	serenepub: any,
 	userId: number,
 	bindingLocalIdToRealId: Map<number, number>,
-	historyRefs: RestoredHistoryRefs
+	historyRefs: RestoredHistoryRefs,
+	boundEntityByRealId: Map<
+		number,
+		{ characterId: number | null; personaId: number | null }
+	>
 ) {
 	try {
 		const graph = serenepub?.narrativeGraph
@@ -1322,34 +1418,14 @@ async function restoreNarrativeGraph(
 			: []
 		if (rawNodes.length === 0 && rawRelationships.length === 0) return
 
-		// characterIds are this install's raw DB ids on export, resolved to
-		// portable uuids instead (see mapNarrativeNode) — resolve them back
-		// to this user's real character ids in one query.
-		const allUuids = Array.from(
-			new Set<string>(
-				rawNodes.flatMap((n: any) =>
-					Array.isArray(n?.characterUuids) ? n.characterUuids : []
-				)
-			)
-		)
-		const characterIdByUuid = new Map<string, number>()
-		if (allUuids.length > 0) {
-			const rows = await db.query.characters.findMany({
-				where: and(
-					inArray(schema.characters.uuid, allUuids),
-					eq(schema.characters.userId, userId)
-				),
-				columns: { id: true, uuid: true }
-			})
-			rows.forEach((c) => characterIdByUuid.set(c.uuid, c.id))
-		}
-
-		// Pass 1: insert every node without parentNodeId (a parent may be
-		// defined later in the array), tracking localId -> real id.
+		// Pass 1: resolve every node to a real lorebookBindings row —
+		// update in place if bindingLocalId points at an already-restored
+		// binding, otherwise insert a new unbound row. Track localId -> real
+		// id either way (a parent may be defined later in the array).
 		const nodeLocalIdToRealId = new Map<number, number>()
 		for (const node of rawNodes) {
 			try {
-				const lorebookBindingId =
+				const boundRealId =
 					typeof node?.bindingLocalId === "number"
 						? (bindingLocalIdToRealId.get(node.bindingLocalId) ??
 							null)
@@ -1366,37 +1442,64 @@ async function restoreNarrativeGraph(
 								node.sceneLocalId
 							) ?? null)
 						: null
-				const characterIds = (
-					Array.isArray(node?.characterUuids)
-						? node.characterUuids
-						: []
-				)
-					.map((uuid: string) => characterIdByUuid.get(uuid))
-					.filter(
-						(id: number | undefined): id is number =>
-							id !== undefined
-					)
+				const nodeFields = {
+					name: node?.name || "",
+					nodeState: node?.nodeState || "active",
+					nodeVisibility: node?.nodeVisibility || "normal",
+					aliases: Array.isArray(node?.aliases) ? node.aliases : [],
+					// Unlike name/aliases, absorbedAliases has no other source
+					// of truth — characterBindingSync never touches it, even
+					// for entity-linked bindings (that's exactly why it's a
+					// separate column). So it's always graph-authoritative and
+					// must stay out of the entity-linked strip below.
+					absorbedAliases: Array.isArray(node?.absorbedAliases)
+						? node.absorbedAliases
+						: [],
+					summary: node?.summary ?? null,
+					historyEntryId,
+					sceneId
+				}
 
-				const [row] = await db
-					.insert(schema.narrativeNodes)
-					.values({
-						lorebookId,
-						name: node?.name || "",
-						nodeState: node?.nodeState || "active",
-						nodeVisibility: node?.nodeVisibility || "normal",
-						aliases: Array.isArray(node?.aliases)
-							? node.aliases
-							: [],
-						summary: node?.summary ?? null,
-						lorebookBindingId,
-						historyEntryId,
-						sceneId,
-						characterIds
-					})
-					.returning()
+				let realId: number
+				if (boundRealId !== null) {
+					// A bound row's name/aliases are entity-derived (kept in
+					// sync by characterBindingSync, restoreBoundEntities
+					// already called it) — never overwritten from graph-node
+					// data, same rule createBinding's isBound branch already
+					// applies. This only holds for rows actually linked to a
+					// character/persona, though — a background binding (or one
+					// scoped out of this export via includeCharacters/
+					// includePersonas) has no other source for its name/
+					// aliases, so the graph node's copy is all that survives
+					// and must be applied.
+					const boundEntity = boundEntityByRealId.get(boundRealId)
+					const isEntityLinked =
+						!!boundEntity?.characterId || !!boundEntity?.personaId
+					const { name, aliases, ...rest } = nodeFields
+					const fieldsToApply = isEntityLinked ? rest : nodeFields
+					const [row] = await db
+						.update(schema.lorebookBindings)
+						.set(fieldsToApply)
+						.where(eq(schema.lorebookBindings.id, boundRealId))
+						.returning({ id: schema.lorebookBindings.id })
+					realId = row.id
+				} else {
+					const token = await deriveNextBindingToken(lorebookId, db)
+					const [inserted] = await db
+						.insert(schema.lorebookBindings)
+						.values({
+							lorebookId,
+							characterId: null,
+							personaId: null,
+							binding: token,
+							...nodeFields
+						})
+						.returning()
+					realId = inserted.id
+				}
 
 				if (typeof node?.localId === "number") {
-					nodeLocalIdToRealId.set(node.localId, row.id)
+					nodeLocalIdToRealId.set(node.localId, realId)
 				}
 			} catch (e) {
 				console.warn(
@@ -1408,7 +1511,7 @@ async function restoreNarrativeGraph(
 
 		// Pass 2: now that every node exists, resolve parentLocalId links —
 		// self-references and 3rd-level chains are dropped by
-		// resolveParentNodeLinks (narrativeNodes.parentNodeId is 2-level max).
+		// resolveParentNodeLinks (lorebookBindings.parentNodeId is 2-level max).
 		const parentLinks = resolveParentNodeLinks(
 			rawNodes,
 			nodeLocalIdToRealId
@@ -1416,9 +1519,9 @@ async function restoreNarrativeGraph(
 		for (const { realId, parentRealId } of parentLinks) {
 			try {
 				await db
-					.update(schema.narrativeNodes)
+					.update(schema.lorebookBindings)
 					.set({ parentNodeId: parentRealId })
-					.where(eq(schema.narrativeNodes.id, realId))
+					.where(eq(schema.lorebookBindings.id, realId))
 			} catch (e) {
 				console.warn(
 					"[lorebooks] Skipping malformed narrative node parent link on import:",
@@ -1487,38 +1590,117 @@ async function fetchCompletedLorebook(lorebookId: number) {
 	return completedBook
 }
 
+/**
+ * Resolves the uuid a newly-created lorebook row should be stamped with —
+ * mirrors claimIncomingCharacterUuid/claimIncomingPersonaUuid.
+ * `lorebooks_uuid_idx` is unique per-owner (userId, uuid); a same-user
+ * collision means this user already owns a row with that uuid (e.g. the
+ * "Import as New" path after a same-user conflict), so falling back to a
+ * fresh uuid is always the correct, safe behavior.
+ */
+async function claimIncomingLorebookUuid(
+	incomingUuid: string | undefined,
+	userId: number,
+	dbOrTx: Executor
+): Promise<string | undefined> {
+	if (!incomingUuid) return undefined
+	const existing = await dbOrTx.query.lorebooks.findFirst({
+		where: and(
+			eq(schema.lorebooks.uuid, incomingUuid),
+			eq(schema.lorebooks.userId, userId)
+		),
+		columns: { id: true }
+	})
+	return existing ? undefined : incomingUuid
+}
+
 /** Creates a brand-new lorebook (+ bound entities, bindings, entries) from a parsed CharacterBook. */
 async function createLorebookFromParsedCard(
 	card: CharacterBook,
 	rawData: any,
-	userId: number
+	userId: number,
+	uuid?: string
 ) {
-	const [book] = await db
-		.insert(schema.lorebooks)
-		.values({
-			name: card.name || "Imported Lorebook",
-			description: card.description,
-			userId,
-			extraJson: extractLorebookLevelExtraJson(rawData)
-		})
-		.returning()
+	// The insert + bound-entity/entry restoration must be atomic — a
+	// failure partway through (a malformed embedded character card, a
+	// transient DB error) previously left an orphaned, partially-populated
+	// lorebook with no way to retry cleanly. Kept OUT of this transaction,
+	// deliberately: the bound-entity name/alias sync (see
+	// characterBindingSync.ts's own resolveOrCreateBinding, which already
+	// splits the same way) and restoreNarrativeGraph — the latter's own
+	// per-node/per-relationship try/catch swallows individual failures so
+	// one malformed graph node doesn't fail the whole import, a resilience
+	// property that would break if it ran inside this shared transaction
+	// (a caught-but-unhandled statement failure still poisons the rest of
+	// a Postgres transaction, which would silently roll back everything
+	// else restored above it once the outer transaction tried to commit).
+	const {
+		book,
+		bindingLocalIdToRealId,
+		historyRefs,
+		syncCharacterIds,
+		syncPersonaIds,
+		boundEntityByRealId
+	} = await db.transaction(async (tx) => {
+			const uuidToStamp = await claimIncomingLorebookUuid(uuid, userId, tx)
+			const [book] = await tx
+				.insert(schema.lorebooks)
+				.values({
+					name: card.name || "Imported Lorebook",
+					description: card.description,
+					userId,
+					extraJson: extractLorebookLevelExtraJson(rawData),
+					// Preserves the imported file's own uuid (when it has one
+					// and this user doesn't already own a row with it — see
+					// claimIncomingLorebookUuid) so a future re-import of this
+					// exact file can find it again. Omitting this left every
+					// "created" import with a random DB-default uuid instead,
+					// silently defeating that dedup on the very next re-import
+					// of an unedited file.
+					...(uuidToStamp ? { uuid: uuidToStamp } : {})
+				})
+				.returning()
 
-	const bindingLocalIdToRealId = await restoreBoundEntities(
-		book.id,
-		card.extensions?.serenepub,
-		userId
-	)
-	const historyRefs = await insertLorebookEntries(
-		book.id,
-		card.entries,
-		bindingLocalIdToRealId
-	)
+			const {
+				bindingLocalIdToRealId,
+				syncCharacterIds,
+				syncPersonaIds,
+				boundEntityByRealId
+			} = await restoreBoundEntities(
+				book.id,
+				card.extensions?.serenepub,
+				userId,
+				tx
+			)
+			const historyRefs = await insertLorebookEntries(
+				book.id,
+				card.entries,
+				bindingLocalIdToRealId,
+				tx
+			)
+			return {
+				book,
+				bindingLocalIdToRealId,
+				historyRefs,
+				syncCharacterIds,
+				syncPersonaIds,
+				boundEntityByRealId
+			}
+		})
+
+	for (const characterId of syncCharacterIds) {
+		await syncLorebookBindingsForCharacter(characterId)
+	}
+	for (const personaId of syncPersonaIds) {
+		await syncLorebookBindingsForPersona(personaId)
+	}
 	await restoreNarrativeGraph(
 		book.id,
 		card.extensions?.serenepub,
 		userId,
 		bindingLocalIdToRealId,
-		historyRefs
+		historyRefs,
+		boundEntityByRealId
 	)
 	return fetchCompletedLorebook(book.id)
 }
@@ -1536,52 +1718,89 @@ async function overwriteLorebookFromParsedCard(
 	rawData: any,
 	userId: number
 ) {
-	await db
-		.update(schema.lorebooks)
-		.set({
-			name: card.name || "Imported Lorebook",
-			description: card.description,
-			extraJson: extractLorebookLevelExtraJson(rawData)
+	// Same atomicity boundary as createLorebookFromParsedCard above — the
+	// deletes and the rebuild must commit together or not at all, or a
+	// failure partway through leaves the lorebook's old content already
+	// gone with only some/none of the new content in its place. See that
+	// function's comment for why restoreNarrativeGraph and the bound-entity
+	// sync calls stay outside this transaction.
+	const {
+		bindingLocalIdToRealId,
+		historyRefs,
+		syncCharacterIds,
+		syncPersonaIds,
+		boundEntityByRealId
+	} = await db.transaction(async (tx) => {
+			await tx
+				.update(schema.lorebooks)
+				.set({
+					name: card.name || "Imported Lorebook",
+					description: card.description,
+					extraJson: extractLorebookLevelExtraJson(rawData)
+				})
+				.where(eq(schema.lorebooks.id, existingId))
+
+			await tx
+				.delete(schema.worldLoreEntries)
+				.where(eq(schema.worldLoreEntries.lorebookId, existingId))
+			await tx
+				.delete(schema.characterLoreEntries)
+				.where(eq(schema.characterLoreEntries.lorebookId, existingId))
+			await tx
+				.delete(schema.historyEntries)
+				.where(eq(schema.historyEntries.lorebookId, existingId))
+			// narrativeRelationships before lorebookBindings — relationships FK
+			// straight to bindings, not lorebookId-cascaded on binding deletion
+			// (deleting bindings first would cascade-delete them anyway via
+			// onDelete: cascade, but explicit ordering keeps this readable). Post-
+			// merge, this single lorebookBindings delete covers what used to be two
+			// separate deletes (bindings + narrativeNodes) — see the merge plan.
+			await tx
+				.delete(schema.narrativeRelationships)
+				.where(eq(schema.narrativeRelationships.lorebookId, existingId))
+			await tx
+				.delete(schema.lorebookBindings)
+				.where(eq(schema.lorebookBindings.lorebookId, existingId))
+
+			const {
+				bindingLocalIdToRealId,
+				syncCharacterIds,
+				syncPersonaIds,
+				boundEntityByRealId
+			} = await restoreBoundEntities(
+				existingId,
+				card.extensions?.serenepub,
+				userId,
+				tx
+			)
+			const historyRefs = await insertLorebookEntries(
+				existingId,
+				card.entries,
+				bindingLocalIdToRealId,
+				tx
+			)
+			return {
+				bindingLocalIdToRealId,
+				historyRefs,
+				syncCharacterIds,
+				syncPersonaIds,
+				boundEntityByRealId
+			}
 		})
-		.where(eq(schema.lorebooks.id, existingId))
 
-	await db
-		.delete(schema.worldLoreEntries)
-		.where(eq(schema.worldLoreEntries.lorebookId, existingId))
-	await db
-		.delete(schema.characterLoreEntries)
-		.where(eq(schema.characterLoreEntries.lorebookId, existingId))
-	await db
-		.delete(schema.historyEntries)
-		.where(eq(schema.historyEntries.lorebookId, existingId))
-	await db
-		.delete(schema.lorebookBindings)
-		.where(eq(schema.lorebookBindings.lorebookId, existingId))
-	// narrativeRelationships before narrativeNodes — relationships FK
-	// straight to nodes, not lorebookId-cascaded on node deletion.
-	await db
-		.delete(schema.narrativeRelationships)
-		.where(eq(schema.narrativeRelationships.lorebookId, existingId))
-	await db
-		.delete(schema.narrativeNodes)
-		.where(eq(schema.narrativeNodes.lorebookId, existingId))
-
-	const bindingLocalIdToRealId = await restoreBoundEntities(
-		existingId,
-		card.extensions?.serenepub,
-		userId
-	)
-	const historyRefs = await insertLorebookEntries(
-		existingId,
-		card.entries,
-		bindingLocalIdToRealId
-	)
+	for (const characterId of syncCharacterIds) {
+		await syncLorebookBindingsForCharacter(characterId)
+	}
+	for (const personaId of syncPersonaIds) {
+		await syncLorebookBindingsForPersona(personaId)
+	}
 	await restoreNarrativeGraph(
 		existingId,
 		card.extensions?.serenepub,
 		userId,
 		bindingLocalIdToRealId,
-		historyRefs
+		historyRefs,
+		boundEntityByRealId
 	)
 	return fetchCompletedLorebook(existingId)
 }
@@ -1667,7 +1886,8 @@ export const lorebookImportHandler: Handler<
 			const completedBook = await createLorebookFromParsedCard(
 				card,
 				lorebookData,
-				userId
+				userId,
+				incomingUuid
 			)
 
 			if (emitToUser) {
@@ -1737,10 +1957,16 @@ export const lorebookImportResolveHandler: Handler<
 					userId
 				)
 			} else {
+				const rawIncomingUuid = (lorebookData as any)?.extensions
+					?.serenepub?.uuid
+				const incomingUuid = isValidUuid(rawIncomingUuid)
+					? rawIncomingUuid
+					: undefined
 				completedBook = await createLorebookFromParsedCard(
 					card,
 					lorebookData,
-					userId
+					userId,
+					incomingUuid
 				)
 			}
 
@@ -1790,6 +2016,7 @@ export function registerLorebookHandlers(
 	register(socket, lorebookBindingsForCharacterHandler, emitToUser)
 	register(socket, createLorebookBindingHandler, emitToUser)
 	register(socket, updateLorebookBindingHandler, emitToUser)
+	register(socket, resolveOrCreateBindingByNameHandler, emitToUser)
 
 	// Lorebook export / import handlers
 	register(socket, lorebookExportHandler, emitToUser)

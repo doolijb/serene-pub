@@ -85,41 +85,52 @@
 		})
 	}
 
-	onMount(() => {
-		socket.on("connections:refreshModels", (msg) => {
-			availableModels = msg.models || []
-			if (msg.error) {
-				error = msg.error
-				announce(error)
-			} else {
-				announce(
-					`${availableModels.length} model${availableModels.length === 1 ? "" : "s"} found.`
-				)
-			}
-		})
-		socket.on("connections:test", (msg) => {
-			testing = false
-			testResult = { ok: msg.ok, error: msg.error ?? undefined }
-			announce(
-				testResult.ok
-					? "Connection test succeeded."
-					: `Connection test failed: ${testResult.error || "Unknown error"}`
-			)
-		})
-		socket.on("connections:create", (msg) => {
-			saving = false
-			if (msg.connection) goto("/document-view/connections")
-		})
-		socket.on("connections:create:error", (msg: { error?: string }) => {
-			saving = false
-			error = msg.error || "Failed to create connection."
+	function handleConnectionsRefreshModels(msg: any) {
+		availableModels = msg.models || []
+		if (msg.error) {
+			error = msg.error
 			announce(error)
-		})
+		} else {
+			announce(
+				`${availableModels.length} model${availableModels.length === 1 ? "" : "s"} found.`
+			)
+		}
+	}
+	function handleConnectionsTest(msg: Sockets.Connections.Test.Response) {
+		testing = false
+		testResult = { ok: msg.ok, error: msg.error ?? undefined }
+		announce(
+			testResult.ok
+				? "Connection test succeeded."
+				: `Connection test failed: ${testResult.error || "Unknown error"}`
+		)
+	}
+	function handleConnectionsCreate(msg: any) {
+		saving = false
+		if (msg.connection) goto("/document-view/connections")
+	}
+	function handleConnectionsCreateError(msg: { error?: string }) {
+		saving = false
+		error = msg.error || "Failed to create connection."
+		announce(error)
+	}
+
+	onMount(() => {
+		socket.on("connections:refreshModels", handleConnectionsRefreshModels)
+		socket.on("connections:test", handleConnectionsTest)
+		socket.on("connections:create", handleConnectionsCreate)
+		socket.on("connections:create:error", handleConnectionsCreateError)
 		return () => {
-			socket.off("connections:refreshModels")
-			socket.off("connections:test")
-			socket.off("connections:create")
-			socket.off("connections:create:error")
+			socket.off(
+				"connections:refreshModels",
+				handleConnectionsRefreshModels
+			)
+			socket.off("connections:test", handleConnectionsTest)
+			socket.off("connections:create", handleConnectionsCreate)
+			socket.off(
+				"connections:create:error",
+				handleConnectionsCreateError
+			)
 		}
 	})
 </script>

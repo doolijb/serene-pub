@@ -71,6 +71,14 @@ export function populateLorebookEntryBindings(
  * (HIDDEN/MINIMAL only governs description-block display, not lore) or
  * whether that character is even attached to this chat. World lore has no
  * such binding and is never gated by this function.
+ *
+ * A binding with neither characterId nor personaId is a background/NPC
+ * row — its lore is visible only to the Narrator (currentCharacterId ===
+ * null, i.e. no-perspective mode), since no specific character can know
+ * about a background character's private knowledge, but the omniscient
+ * Narrator can. An entry with no lorebookBindingId at all (not bound to
+ * any row) stays invisible in every mode — there's no legitimate consumer
+ * for it, narrator included.
  */
 export function isCharacterLoreEntryVisible(
 	entry: SelectCharacterLoreEntry,
@@ -94,7 +102,9 @@ export function isCharacterLoreEntryVisible(
 			(cp) => cp.persona.id === binding.personaId
 		)
 	}
-	return false
+	// Background/NPC binding — only the Narrator (no-perspective mode) can
+	// know about it.
+	return currentCharacterId === null
 }
 
 export function attachCharacterLoreToCharacters(

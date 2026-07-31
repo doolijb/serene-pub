@@ -9,6 +9,7 @@ import {
 	insertChatMessageRow,
 	insertChatRow,
 	insertCharacterLoreEntryRow,
+	insertHistoryEntryRow,
 	insertLorebook,
 	insertLorebookBindingRow,
 	insertWorldLoreEntryRow,
@@ -383,5 +384,140 @@ describe("RagInfillEngine — RAG retrieval (embeddings)", () => {
 		expect(otherResult.renderedPrompt).not.toContain(
 			"Retrieved by similarity, not pinned."
 		)
+	})
+
+	test("lore priority (Normal/VeryHigh) measurably boosts a RAG-retrieved entry's score", async () => {
+		const user = await makeUser()
+		const lorebook = await insertLorebook(testDb, user.id)
+
+		// Identical embeddings — RRF-normalized scores would otherwise differ
+		// only by tiny (~0.016) rank-order noise. A VeryHigh-priority entry
+		// should be boosted by 2 * PRIORITY_SCORE_BONUS (0.3) over Normal,
+		// dwarfing that noise regardless of which one happens to rank first.
+		const normalEntry = await insertWorldLoreEntryRow(testDb, lorebook.id, {
+			name: "Normal Fact",
+			content: "An ordinary fact.",
+			priority: 1,
+			embedding: QUERY_VECTOR,
+			embeddingModel: MODEL_ID
+		})
+		const veryHighEntry = await insertWorldLoreEntryRow(testDb, lorebook.id, {
+			name: "Very High Priority Fact",
+			content: "An author-flagged important fact.",
+			priority: 3,
+			embedding: QUERY_VECTOR,
+			embeddingModel: MODEL_ID
+		})
+
+		const chatRow = await insertChatRow(testDb, user.id, {
+			lorebookId: lorebook.id
+		})
+		const chat = buildChat({
+			id: chatRow.id,
+			lorebookId: lorebook.id,
+			chatMessages: [chatMessage({ id: 1, content: "tell me something" })],
+			// The priority-boost lookup reads .priority off the in-memory
+			// lorebook entries (same shape PromptBuilder attaches at runtime),
+			// not off the DB rows used for the embedding similarity search.
+			lorebook: buildLorebook({
+				id: lorebook.id,
+				worldLoreEntries: [normalEntry, veryHighEntry]
+			})
+		})
+		const engine = makeEngine(chat)
+		const result = await engine.infillContent(makeInfillOptions())
+
+		const loreScores = (result.rag as any).scores.loreScores as number[]
+		expect(loreScores.length).toBe(2)
+		const gap = Math.max(...loreScores) - Math.min(...loreScores)
+		expect(gap).toBeGreaterThan(0.2)
+	})
+
+	test("history entries are sorted globally by date, not by pinned-then-RAG concatenation order", async () => {
+		const user = await makeUser()
+		const lorebook = await insertLorebook(testDb, user.id)
+
+		// Pinned (constant) entry is OLDER than the RAG-retrieved one — a naive
+		// [...pinned, ...rag] concatenation would list the older pinned entry
+		// first even though it should render newest-first.
+		const oldPinned = await insertHistoryEntryRow(testDb, lorebook.id, {
+			year: 2000,
+			month: 1,
+			day: 1,
+			content: "Old pinned event.",
+			constant: true,
+			enabled: true
+		})
+		const newRag = await insertHistoryEntryRow(testDb, lorebook.id, {
+			year: 2020,
+			month: 6,
+			day: 15,
+			content: "Newer RAG-retrieved event.",
+			constant: false,
+			enabled: true,
+			embedding: QUERY_VECTOR,
+			embeddingModel: MODEL_ID
+		})
+
+		const chatRow = await insertChatRow(testDb, user.id, {
+			lorebookId: lorebook.id
+		})
+		const chat = buildChat({
+			id: chatRow.id,
+			lorebookId: lorebook.id,
+			chatMessages: [chatMessage({ id: 1, content: "what happened" })],
+			lorebook: buildLorebook({
+				id: lorebook.id,
+				historyEntries: [oldPinned, newRag]
+			})
+		})
+		const engine = makeEngine(chat)
+		const result = await engine.infillContent(makeInfillOptions())
+
+		const historyMatch = result.renderedPrompt!.match(
+			/HISTORY:([\s\S]*?)\nCURRENTDATE:/
+		)
+		expect(historyMatch).toBeTruthy()
+		const history = JSON.parse(historyMatch![1].trim())
+		const keys = Object.keys(history)
+		expect(keys).toEqual(["2020-06-15", "2000-01-01"])
+	})
+
+	test("fetches the RAG candidate set exactly once per generation turn, even though it's scored against multiple query-message embeddings (current + recent windows)", async () => {
+		const ragContextModule = await import("$lib/server/embedding/ragContext")
+		const fetchSpy = vi.spyOn(ragContextModule, "fetchScopedCandidates")
+
+		const user = await makeUser()
+		const lorebook = await insertLorebook(testDb, user.id)
+		await insertWorldLoreEntryRow(testDb, lorebook.id, {
+			name: "Some Fact",
+			content: "Retrievable by similarity.",
+			embedding: QUERY_VECTOR,
+			embeddingModel: MODEL_ID
+		})
+
+		const chatRow = await insertChatRow(testDb, user.id, {
+			lorebookId: lorebook.id
+		})
+		// RAG_CURRENT_WINDOW (2) + RAG_RECENT_WINDOW (3) = 5 — enough
+		// guaranteed messages that runQuery() actually runs for BOTH the
+		// current and recent windows, each embedding its own set of
+		// messages and scoring against the shared candidate set. Before
+		// this fix, each of those two runQuery() calls independently
+		// re-ran the whole unbounded DB fetch per embedded message.
+		const chat = buildChat({
+			id: chatRow.id,
+			lorebookId: lorebook.id,
+			chatMessages: [1, 2, 3, 4, 5, 6].map((n) =>
+				chatMessage({ id: n, content: `message number ${n}` })
+			),
+			lorebook: buildLorebook({ id: lorebook.id })
+		})
+
+		const engine = makeEngine(chat)
+		await engine.infillContent(makeInfillOptions())
+
+		expect(fetchSpy).toHaveBeenCalledTimes(1)
+		fetchSpy.mockRestore()
 	})
 })

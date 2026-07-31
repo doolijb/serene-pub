@@ -11,6 +11,7 @@
 	import { dndzone } from "svelte-dnd-action"
 	import DeleteLorebookEntryConfirmModal from "../modals/DeleteLorebookEntryConfirmModal.svelte"
 	import { Priorities } from "$lib/shared/constants/Priorities"
+	import { getCharacterLoreVisibility } from "$lib/shared/utils/characterLoreVisibility"
 
 	interface Props {
 		lorebookId: number
@@ -172,6 +173,20 @@
 		return binding.binding
 	}
 
+	// Thin binding to this list's current lorebookBindingList — see
+	// getCharacterLoreVisibility()'s own doc comment for the actual rule.
+	function getVisibility(lorebookBindingId: number | null | undefined) {
+		return getCharacterLoreVisibility(
+			lorebookBindingId,
+			lorebookBindingList
+		)
+	}
+	// Recomputed live as the edit form's Binding <select> changes, so the
+	// helper text under it always reflects what saving right now would do.
+	let editVisibility = $derived(
+		getVisibility(editingEntry?.lorebookBindingId)
+	)
+
 	function previewContent(entry: SelectCharacterLoreEntry): string {
 		let content = entry.content || ""
 		lorebookBindingList.forEach((binding) => {
@@ -275,87 +290,100 @@
 		} satisfies Sockets.CharacterLoreEntries.UpdatePositions.Params)
 	}
 
+	async function handleLorebooksBindingList(
+		msg: Sockets.Lorebooks.BindingList.Response
+	) {
+		if (msg.lorebookId === lorebookId) {
+			lorebookBindingList = [
+				...msg.lorebookBindingList
+			] as BindingWithRelations[]
+		}
+		await tick()
+	}
+
 	// ── Socket setup ───────────────────────────────────────────────
+	async function handleCharacterLoreEntriesList(
+		msg: Sockets.CharacterLoreEntries.List.Response
+	) {
+		if (msg.lorebookId === lorebookId) {
+			characterLoreEntryList = msg.characterLoreEntryList
+			if (focusedEntry) {
+				const updated = msg.characterLoreEntryList.find(
+					(e) => e.id === focusedEntry!.id
+				)
+				if (updated) focusedEntry = updated
+			}
+		}
+		await tick()
+	}
+
+	function handleCharacterLoreEntriesCreate(
+		msg: Sockets.CharacterLoreEntries.Create.Response
+	) {
+		if (msg.characterLoreEntry?.lorebookId === lorebookId) {
+			toaster.success({ title: "Character Lore Entry created" })
+		}
+	}
+
+	function handleCharacterLoreEntriesUpdate(
+		msg: Sockets.CharacterLoreEntries.Update.Response
+	) {
+		if (msg.characterLoreEntry?.lorebookId === lorebookId) {
+			toaster.success({ title: "Character Lore Entry updated" })
+		}
+	}
+
+	function handleCharacterLoreEntriesDelete(
+		_msg: Sockets.CharacterLoreEntries.Delete.Response
+	) {
+		toaster.success({ title: "Character Lore Entry deleted" })
+	}
+
+	function handleCharacterLoreEntriesUpdatePositions(
+		msg: Sockets.CharacterLoreEntries.UpdatePositions.Response
+	) {
+		if (msg.success) toaster.success({ title: "Entries reordered" })
+	}
+
+	// The background vectorization queue updates a row's embeddingModel
+	// directly in the DB — without this, the badge here only ever refreshes
+	// on the next explicit CRUD action, leaving it stale until a manual refresh.
+	function handleVectorizationItemUpdated(
+		msg: Sockets.Vectorization.ItemUpdated.Response
+	) {
+		if (msg.type !== "characterLore" || msg.lorebookId !== lorebookId)
+			return
+		const target = characterLoreEntryList.find(
+			(e: any) => e.id === msg.id
+		)
+		if (target) (target as any).embeddingModel = msg.embeddingModel
+		if (focusedEntry?.id === msg.id)
+			(focusedEntry as any).embeddingModel = msg.embeddingModel
+	}
+
 	onMount(() => {
 		socket.on(
 			"characterLoreEntries:list",
-			async (msg: Sockets.CharacterLoreEntries.List.Response) => {
-				if (msg.lorebookId === lorebookId) {
-					characterLoreEntryList = msg.characterLoreEntryList
-					if (focusedEntry) {
-						const updated = msg.characterLoreEntryList.find(
-							(e) => e.id === focusedEntry!.id
-						)
-						if (updated) focusedEntry = updated
-					}
-				}
-				await tick()
-			}
+			handleCharacterLoreEntriesList
 		)
-
 		socket.on(
 			"characterLoreEntries:create",
-			(msg: Sockets.CharacterLoreEntries.Create.Response) => {
-				if (msg.characterLoreEntry?.lorebookId === lorebookId) {
-					toaster.success({ title: "Character Lore Entry created" })
-				}
-			}
+			handleCharacterLoreEntriesCreate
 		)
-
 		socket.on(
 			"characterLoreEntries:update",
-			(msg: Sockets.CharacterLoreEntries.Update.Response) => {
-				if (msg.characterLoreEntry?.lorebookId === lorebookId) {
-					toaster.success({ title: "Character Lore Entry updated" })
-				}
-			}
+			handleCharacterLoreEntriesUpdate
 		)
-
 		socket.on(
 			"characterLoreEntries:delete",
-			(_msg: Sockets.CharacterLoreEntries.Delete.Response) => {
-				toaster.success({ title: "Character Lore Entry deleted" })
-			}
+			handleCharacterLoreEntriesDelete
 		)
-
-		socket.on(
-			"lorebooks:bindingList",
-			async (msg: Sockets.Lorebooks.BindingList.Response) => {
-				if (msg.lorebookId === lorebookId) {
-					lorebookBindingList = [
-						...msg.lorebookBindingList
-					] as BindingWithRelations[]
-				}
-				await tick()
-			}
-		)
-
+		socket.on("lorebooks:bindingList", handleLorebooksBindingList)
 		socket.on(
 			"characterLoreEntries:updatePositions",
-			(msg: Sockets.CharacterLoreEntries.UpdatePositions.Response) => {
-				if (msg.success) toaster.success({ title: "Entries reordered" })
-			}
+			handleCharacterLoreEntriesUpdatePositions
 		)
-
-		// The background vectorization queue updates a row's embeddingModel
-		// directly in the DB — without this, the badge here only ever refreshes
-		// on the next explicit CRUD action, leaving it stale until a manual refresh.
-		socket.on(
-			"vectorization:itemUpdated",
-			(msg: Sockets.Vectorization.ItemUpdated.Response) => {
-				if (
-					msg.type !== "characterLore" ||
-					msg.lorebookId !== lorebookId
-				)
-					return
-				const target = characterLoreEntryList.find(
-					(e: any) => e.id === msg.id
-				)
-				if (target) (target as any).embeddingModel = msg.embeddingModel
-				if (focusedEntry?.id === msg.id)
-					(focusedEntry as any).embeddingModel = msg.embeddingModel
-			}
-		)
+		socket.on("vectorization:itemUpdated", handleVectorizationItemUpdated)
 
 		socket.emit("characterLoreEntries:list", {
 			lorebookId
@@ -368,13 +396,31 @@
 
 	onDestroy(() => {
 		hasUnsavedChanges = false
-		socket.off("characterLoreEntries:list")
-		socket.off("characterLoreEntries:create")
-		socket.off("characterLoreEntries:update")
-		socket.off("characterLoreEntries:delete")
-		socket.off("lorebooks:bindingList")
-		socket.off("characterLoreEntries:updatePositions")
-		socket.off("vectorization:itemUpdated")
+		socket.off(
+			"characterLoreEntries:list",
+			handleCharacterLoreEntriesList
+		)
+		socket.off(
+			"characterLoreEntries:create",
+			handleCharacterLoreEntriesCreate
+		)
+		socket.off(
+			"characterLoreEntries:update",
+			handleCharacterLoreEntriesUpdate
+		)
+		socket.off(
+			"characterLoreEntries:delete",
+			handleCharacterLoreEntriesDelete
+		)
+		socket.off("lorebooks:bindingList", handleLorebooksBindingList)
+		socket.off(
+			"characterLoreEntries:updatePositions",
+			handleCharacterLoreEntriesUpdatePositions
+		)
+		socket.off(
+			"vectorization:itemUpdated",
+			handleVectorizationItemUpdated
+		)
 	})
 </script>
 
@@ -492,15 +538,18 @@
 				</p>
 			{:else}
 				{#each filteredEntries as entry}
-					{@const isUnbound = !entry.lorebookBindingId}
+					{@const visibility = getVisibility(entry.lorebookBindingId)}
+					{@const isOrphaned = visibility.kind === "orphaned"}
+					{@const isUnbound = visibility.kind === "unbound"}
+					{@const needsAttention = isOrphaned || isUnbound}
 					<!-- svelte-ignore a11y_click_events_have_key_events -->
 					<div
 						role="button"
 						tabindex="0"
 						class="preset-filled-surface-100-900 hover:bg-surface-200-800 flex cursor-pointer items-start gap-2 rounded-lg p-3 transition-colors"
 						class:opacity-50={!entry.enabled}
-						class:border-2={isUnbound}
-						class:border-warning-500={isUnbound}
+						class:border-2={needsAttention}
+						class:border-warning-500={needsAttention}
 						onclick={() => viewEntry(entry)}
 					>
 						<div class="min-w-0 flex-1">
@@ -508,23 +557,40 @@
 								class="mb-1 flex items-center gap-2 text-sm font-semibold"
 							>
 								<span class="truncate">{entry.name}</span>
-								{#if entry.lorebookBindingId}
-									<span
-										class="text-surface-700-300 shrink-0 text-xs font-normal"
-									>
-										<Icons.Link2 size={11} class="inline" />
-										{getBindingLabel(
-											entry.lorebookBindingId
-										)}
-									</span>
-								{:else}
+								{#if isOrphaned}
 									<span
 										class="text-warning-500 shrink-0 text-xs font-normal"
+										title={visibility.description}
 									>
 										<Icons.AlertTriangle
 											size={11}
 											class="inline"
-										/> Unbound
+										/>
+										{visibility.label}
+									</span>
+								{:else if isUnbound}
+									<span
+										class="text-warning-500 shrink-0 text-xs font-normal"
+										title={visibility.description}
+									>
+										<Icons.LockOpen size={11} class="inline" />
+										{visibility.label}
+									</span>
+								{:else if visibility.kind === "narrator"}
+									<span
+										class="text-tertiary-600-400 shrink-0 text-xs font-normal"
+										title={visibility.description}
+									>
+										<Icons.Drama size={11} class="inline" />
+										{visibility.label}
+									</span>
+								{:else}
+									<span
+										class="text-surface-700-300 shrink-0 text-xs font-normal"
+										title={visibility.description}
+									>
+										<Icons.Lock size={11} class="inline" />
+										{visibility.label}
 									</span>
 								{/if}
 							</div>
@@ -681,15 +747,7 @@
      VIEW MODE
 ════════════════════════════════════════════════════════════════ -->
 	{:else if panelMode === "view" && focusedEntry}
-		{@const viewBinding = focusedEntry.lorebookBindingId
-			? lorebookBindingList.find(
-					(b) => b.id === focusedEntry!.lorebookBindingId
-				)
-			: null}
-		{@const isUnbound = !focusedEntry.lorebookBindingId}
-		{@const isBindingUnlinked = viewBinding
-			? !viewBinding.characterId && !viewBinding.personaId
-			: false}
+		{@const visibility = getVisibility(focusedEntry.lorebookBindingId)}
 		<div class="flex flex-col gap-4">
 			<!-- Header -->
 			<div class="flex items-center gap-2">
@@ -712,28 +770,37 @@
 			</div>
 
 			<div class="flex flex-col gap-3 text-sm">
-				<!-- Binding -->
+				<!-- Visibility -->
 				<div>
 					<p
 						class="text-surface-700-300 mb-1 text-xs font-semibold tracking-wide uppercase"
 					>
-						Binding
+						Visibility
 					</p>
-					{#if isUnbound}
-						<span class="text-warning-500">
-							<Icons.AlertTriangle size={14} class="inline" /> Unbound
+					{#if visibility.kind === "character" || visibility.kind === "persona"}
+						<span>
+							<Icons.Lock size={14} class="inline" />
+							{visibility.label}
 						</span>
-					{:else if isBindingUnlinked}
+					{:else if visibility.kind === "unbound"}
 						<span class="text-warning-500">
-							<Icons.AlertTriangle size={14} class="inline" /> Binding
-							has no linked character or persona
+							<Icons.LockOpen size={14} class="inline" />
+							{visibility.label}
+						</span>
+					{:else if visibility.kind === "narrator"}
+						<span class="text-tertiary-600-400">
+							<Icons.Drama size={14} class="inline" />
+							{visibility.label}
 						</span>
 					{:else}
-						<span>
-							<Icons.Link2 size={14} class="inline" />
-							{getBindingLabel(focusedEntry.lorebookBindingId!)}
+						<span class="text-warning-500">
+							<Icons.AlertTriangle size={14} class="inline" />
+							{visibility.label}
 						</span>
 					{/if}
+					<p class="text-surface-700-300 mt-0.5 text-xs">
+						{visibility.description}
+					</p>
 				</div>
 
 				{#if focusedEntry.content?.trim()}
@@ -895,6 +962,22 @@
 							</option>
 						{/each}
 					</select>
+					<p
+						class="text-xs"
+						class:text-warning-500={editVisibility.kind ===
+							"orphaned" || editVisibility.kind === "unbound"}
+						class:text-surface-700-300={editVisibility.kind !==
+							"orphaned" && editVisibility.kind !== "unbound"}
+					>
+						{#if editVisibility.kind === "orphaned"}
+							<Icons.AlertTriangle size={12} class="inline" />
+						{:else if editVisibility.kind === "unbound"}
+							<Icons.LockOpen size={12} class="inline" />
+						{:else}
+							<Icons.Lock size={12} class="inline" />
+						{/if}
+						{editVisibility.description}
+					</p>
 				</div>
 
 				<!-- Content -->

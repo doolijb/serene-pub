@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
+import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -280,6 +281,181 @@ describe("characters import/export (PGlite integration)", () => {
 				noopEmit
 			)
 		).rejects.toThrow(/no avatar/i)
+	})
+
+	test("importing a card with an explicit external uuid stamps that uuid onto the new row", async () => {
+		const { charactersImportCard, charactersExportCard } = await import(
+			"./characters"
+		)
+		const user = await makeUser("external-uuid-user")
+		const fixedUuid = "11111111-1111-1111-1111-111111111111"
+
+		const cardWithUuid = {
+			...minimalV2Card,
+			data: {
+				...minimalV2Card.data,
+				extensions: { serenepub: { uuid: fixedUuid } }
+			}
+		}
+
+		const res = await charactersImportCard.handler(
+			fakeSocket(user.id),
+			{ file: toBase64(cardWithUuid) },
+			noopEmit
+		)
+
+		expect(res.status).toBe("created")
+		expect(res.character?.uuid).toBe(fixedUuid)
+
+		// Re-import via the row's own freshly-exported bytes (not the original
+		// hand-crafted card) — buildCharacterCardV3 fills in normalized
+		// defaults for fields the minimal hand-crafted card omits, so
+		// comparing the hand-crafted card directly against the stored row's
+		// own comparison data would spuriously "conflict" on that formatting
+		// drift alone, independent of the uuid fix under test here.
+		const exported = await charactersExportCard.handler(
+			fakeSocket(user.id),
+			{ id: res.character!.id, format: "json" },
+			noopEmit
+		)
+		const reimported = await charactersImportCard.handler(
+			fakeSocket(user.id),
+			{ file: exported.blob.toString("base64") },
+			noopEmit
+		)
+		expect(reimported.status).toBe("unchanged")
+		expect(reimported.character?.id).toBe(res.character!.id)
+
+		const rows = await testDb.query.characters.findMany({
+			where: (c, { eq }) => eq(c.userId, user.id)
+		})
+		expect(rows).toHaveLength(1)
+	})
+
+	test("two different users importing cards that share the same external uuid both succeed and each keep that uuid", async () => {
+		const { charactersImportCard } = await import("./characters")
+		const userA = await makeUser("uuid-collision-user-a")
+		const userB = await makeUser("uuid-collision-user-b")
+		const sharedUuid = "22222222-2222-2222-2222-222222222222"
+
+		const cardForA = {
+			...minimalV2Card,
+			data: {
+				...minimalV2Card.data,
+				name: "Aria",
+				extensions: { serenepub: { uuid: sharedUuid } }
+			}
+		}
+		const cardForB = {
+			...minimalV2Card,
+			data: {
+				...minimalV2Card.data,
+				name: "Different Name Entirely",
+				extensions: { serenepub: { uuid: sharedUuid } }
+			}
+		}
+
+		const resA = await charactersImportCard.handler(
+			fakeSocket(userA.id),
+			{ file: toBase64(cardForA) },
+			noopEmit
+		)
+		expect(resA.status).toBe("created")
+		expect(resA.character?.uuid).toBe(sharedUuid)
+
+		const resB = await charactersImportCard.handler(
+			fakeSocket(userB.id),
+			{ file: toBase64(cardForB) },
+			noopEmit
+		)
+		expect(resB.status).toBe("created")
+		expect(resB.character?.uuid).toBe(sharedUuid)
+		expect(resB.character?.id).not.toBe(resA.character?.id)
+	})
+
+	test("importing a character card with an embedded lorebook links the primary character to the imported lorebook with no duplicate character row", async () => {
+		const {
+			charactersImportCard,
+			charactersExportCard
+		} = await import("./characters")
+		const { lorebookImportHandler } = await import("./lorebooks")
+		const user = await makeUser("embedded-book-relink-user")
+
+		const created = await charactersImportCard.handler(
+			fakeSocket(user.id),
+			{ file: toBase64(minimalV2Card) },
+			noopEmit
+		)
+		const characterId = created.character!.id
+
+		const [lorebook] = await testDb
+			.insert(schema.lorebooks)
+			.values({ name: "Aria's Lore", userId: user.id })
+			.returning()
+		await testDb.insert(schema.lorebookBindings).values({
+			lorebookId: lorebook.id,
+			characterId,
+			binding: "{{char:1}}"
+		})
+		// hasLorebookEntries (in parseCharacterCardFromBase64) treats a
+		// genuinely entry-less book as absent, same as v2/v3's own bookless
+		// placeholder — a real entry is needed for `book` to come back
+		// non-null on re-import below.
+		await testDb.insert(schema.worldLoreEntries).values({
+			lorebookId: lorebook.id,
+			name: "Ancient Ruins",
+			content: "Ruins in the desert",
+			keys: "ruins"
+		})
+
+		const exported = await charactersExportCard.handler(
+			fakeSocket(user.id),
+			{ id: characterId, format: "json", lorebookId: lorebook.id },
+			noopEmit
+		)
+		const exportedCard = JSON.parse(exported.blob.toString("utf-8"))
+
+		// Simulate a fresh account importing this exact exported file: delete
+		// the original character and lorebook first, matching what a
+		// different user's empty account would look like.
+		await testDb
+			.delete(schema.lorebookBindings)
+			.where(eq(schema.lorebookBindings.lorebookId, lorebook.id))
+		await testDb
+			.delete(schema.lorebooks)
+			.where(eq(schema.lorebooks.id, lorebook.id))
+		await testDb
+			.delete(schema.characters)
+			.where(eq(schema.characters.id, characterId))
+
+		const reimportedCharacter = await charactersImportCard.handler(
+			fakeSocket(user.id),
+			{ file: toBase64(exportedCard) },
+			noopEmit
+		)
+		expect(reimportedCharacter.status).toBe("created")
+		expect(reimportedCharacter.book).not.toBeNull()
+
+		const reimportedBook = await lorebookImportHandler.handler(
+			fakeSocket(user.id),
+			{ lorebookData: reimportedCharacter.book! },
+			noopEmit
+		)
+		expect(reimportedBook.status).toBe("created")
+
+		const characterRows = await testDb.query.characters.findMany({
+			where: (c, { eq }) => eq(c.userId, user.id)
+		})
+		expect(characterRows).toHaveLength(1)
+
+		const bindingRows = await testDb.query.lorebookBindings.findMany({
+			where: (b, { eq }) =>
+				eq(b.lorebookId, (reimportedBook.lorebook as any).id)
+		})
+		expect(bindingRows).toHaveLength(1)
+		expect(bindingRows[0].characterId).toBe(
+			reimportedCharacter.character!.id
+		)
 	})
 
 	test("exporting with an embedded lorebook selected includes character_book matching the source lorebook's entries", async () => {

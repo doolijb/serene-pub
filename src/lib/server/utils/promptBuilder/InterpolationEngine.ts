@@ -85,9 +85,14 @@ export class InterpolationEngine {
 		if (!template) return template
 
 		try {
-			return this.handlebars.compile(translateCardMacros(template))(
-				context
-			)
+			// noEscape: this is interpolated into a plain-text LLM prompt, never
+			// HTML — Handlebars' default HTML-entity escaping would otherwise
+			// mangle any name/macro result containing ', ", &, <, or > (eg.
+			// "D'Artagnan" -> "D&#x27;Artagnan") straight into the literal text
+			// sent to the model.
+			return this.handlebars.compile(translateCardMacros(template), {
+				noEscape: true
+			})(context)
 		} catch (error) {
 			console.warn("Template interpolation failed:", error)
 			return template

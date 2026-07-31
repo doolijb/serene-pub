@@ -127,20 +127,21 @@ export async function fetchActiveRelationshipsAmongNodes(
 
 	const nodeRows = await db
 		.select({
-			id: schema.narrativeNodes.id,
-			name: schema.narrativeNodes.name,
-			summary: schema.narrativeNodes.summary,
-			lorebookBindingId: schema.narrativeNodes.lorebookBindingId
+			id: schema.lorebookBindings.id,
+			name: schema.lorebookBindings.name,
+			summary: schema.lorebookBindings.summary,
+			characterId: schema.lorebookBindings.characterId,
+			personaId: schema.lorebookBindings.personaId
 		})
-		.from(schema.narrativeNodes)
-		.where(inArray(schema.narrativeNodes.id, allNodeIds))
+		.from(schema.lorebookBindings)
+		.where(inArray(schema.lorebookBindings.id, allNodeIds))
 	const nodeInfoMap = new Map(
 		nodeRows.map((n) => [
 			n.id,
 			{
 				name: n.name,
 				summary: n.summary,
-				bound: n.lorebookBindingId != null
+				bound: n.characterId != null || n.personaId != null
 			}
 		])
 	)

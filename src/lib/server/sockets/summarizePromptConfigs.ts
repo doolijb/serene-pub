@@ -16,6 +16,34 @@ function adminGuard(socket: any, emitToUser: (e: string, d: any) => void) {
 	}
 }
 
+// Immutable (built-in) summarize configs may still have their AI Override
+// (connection/sampling, per batch/synth/name/characterExtraction phase)
+// changed — that's the one thing the UI leaves editable for them — but
+// nothing else. Every other field (name, the *SystemPrompt fields, etc.)
+// must come only from seeding. characterExtraction{Connection,
+// SamplingConfig}Id only exist on sceneSummarizeConfigs (character
+// extraction is a scene-only sub-task) — harmless to share this list with
+// the world/character update handlers too, since their own Update.Params
+// types structurally can't carry those keys in the first place.
+const SUMMARIZE_OVERRIDE_FIELDS = [
+	"batchConnectionId",
+	"batchSamplingConfigId",
+	"synthConnectionId",
+	"synthSamplingConfigId",
+	"nameConnectionId",
+	"nameSamplingConfigId",
+	"characterExtractionConnectionId",
+	"characterExtractionSamplingConfigId"
+] as const
+
+function pickOverrideFields(data: Record<string, any>) {
+	const picked: Record<string, any> = {}
+	for (const key of SUMMARIZE_OVERRIDE_FIELDS) {
+		if (key in data) picked[key] = data[key]
+	}
+	return picked
+}
+
 // ── World Summarize Configs ───────────────────────────────────────────────────
 
 export const worldSummarizeConfigsListHandler: Handler<
@@ -91,12 +119,28 @@ export const worldSummarizeConfigsUpdateHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		adminGuard(socket, emitToUser)
 		const id = params.worldSummarizeConfig.id!
-		const { id: _, ...updateData } = params.worldSummarizeConfig
-		const [worldSummarizeConfig] = await db
-			.update(schema.worldSummarizeConfigs)
-			.set(updateData)
-			.where(eq(schema.worldSummarizeConfigs.id, id))
-			.returning()
+		const { id: _, ...rawUpdateData } = params.worldSummarizeConfig
+
+		const currentConfig = await db.query.worldSummarizeConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, id)
+		})
+		const updateData = currentConfig?.isImmutable
+			? pickOverrideFields(rawUpdateData)
+			: rawUpdateData
+
+		// pickOverrideFields can return a genuinely empty object when a raw
+		// client targets an immutable row with none of the override fields
+		// present at all — an empty .set() throws rather than being a
+		// legitimate no-op.
+		const worldSummarizeConfig = Object.keys(updateData).length
+			? (
+					await db
+						.update(schema.worldSummarizeConfigs)
+						.set(updateData)
+						.where(eq(schema.worldSummarizeConfigs.id, id))
+						.returning()
+				)[0]
+			: currentConfig!
 		await worldSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
 		const res: Sockets.WorldSummarizeConfigs.Update.Response = {
 			worldSummarizeConfig
@@ -146,7 +190,10 @@ export const worldSummarizeConfigsSetUserActiveHandler: Handler<
 			where: (us, { eq }) => eq(us.userId, userId)
 		})
 		if (!userSettings)
-			await db.insert(schema.userSettings).values({ userId })
+			await db
+				.insert(schema.userSettings)
+				.values({ userId })
+				.onConflictDoNothing()
 		await db
 			.update(schema.userSettings)
 			.set({ activeSummarizeWorldConfigId: params.id })
@@ -250,12 +297,29 @@ export const characterSummarizeConfigsUpdateHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		adminGuard(socket, emitToUser)
 		const id = params.characterSummarizeConfig.id!
-		const { id: _, ...updateData } = params.characterSummarizeConfig
-		const [characterSummarizeConfig] = await db
-			.update(schema.characterSummarizeConfigs)
-			.set(updateData)
-			.where(eq(schema.characterSummarizeConfigs.id, id))
-			.returning()
+		const { id: _, ...rawUpdateData } = params.characterSummarizeConfig
+
+		const currentConfig =
+			await db.query.characterSummarizeConfigs.findFirst({
+				where: (c, { eq }) => eq(c.id, id)
+			})
+		const updateData = currentConfig?.isImmutable
+			? pickOverrideFields(rawUpdateData)
+			: rawUpdateData
+
+		// pickOverrideFields can return a genuinely empty object when a raw
+		// client targets an immutable row with none of the override fields
+		// present at all — an empty .set() throws rather than being a
+		// legitimate no-op.
+		const characterSummarizeConfig = Object.keys(updateData).length
+			? (
+					await db
+						.update(schema.characterSummarizeConfigs)
+						.set(updateData)
+						.where(eq(schema.characterSummarizeConfigs.id, id))
+						.returning()
+				)[0]
+			: currentConfig!
 		await characterSummarizeConfigsListHandler.handler(
 			socket,
 			{},
@@ -314,7 +378,10 @@ export const characterSummarizeConfigsSetUserActiveHandler: Handler<
 			where: (us, { eq }) => eq(us.userId, userId)
 		})
 		if (!userSettings)
-			await db.insert(schema.userSettings).values({ userId })
+			await db
+				.insert(schema.userSettings)
+				.values({ userId })
+				.onConflictDoNothing()
 		await db
 			.update(schema.userSettings)
 			.set({ activeSummarizeCharacterConfigId: params.id })
@@ -414,12 +481,28 @@ export const sceneSummarizeConfigsUpdateHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		adminGuard(socket, emitToUser)
 		const id = params.sceneSummarizeConfig.id!
-		const { id: _, ...updateData } = params.sceneSummarizeConfig
-		const [sceneSummarizeConfig] = await db
-			.update(schema.sceneSummarizeConfigs)
-			.set(updateData)
-			.where(eq(schema.sceneSummarizeConfigs.id, id))
-			.returning()
+		const { id: _, ...rawUpdateData } = params.sceneSummarizeConfig
+
+		const currentConfig = await db.query.sceneSummarizeConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, id)
+		})
+		const updateData = currentConfig?.isImmutable
+			? pickOverrideFields(rawUpdateData)
+			: rawUpdateData
+
+		// pickOverrideFields can return a genuinely empty object when a raw
+		// client targets an immutable row with none of the override fields
+		// present at all — an empty .set() throws rather than being a
+		// legitimate no-op.
+		const sceneSummarizeConfig = Object.keys(updateData).length
+			? (
+					await db
+						.update(schema.sceneSummarizeConfigs)
+						.set(updateData)
+						.where(eq(schema.sceneSummarizeConfigs.id, id))
+						.returning()
+				)[0]
+			: currentConfig!
 		await sceneSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
 		const res: Sockets.SceneSummarizeConfigs.Update.Response = {
 			sceneSummarizeConfig
@@ -469,7 +552,10 @@ export const sceneSummarizeConfigsSetUserActiveHandler: Handler<
 			where: (us, { eq }) => eq(us.userId, userId)
 		})
 		if (!userSettings)
-			await db.insert(schema.userSettings).values({ userId })
+			await db
+				.insert(schema.userSettings)
+				.values({ userId })
+				.onConflictDoNothing()
 		await db
 			.update(schema.userSettings)
 			.set({ activeSummarizeSceneConfigId: params.id })

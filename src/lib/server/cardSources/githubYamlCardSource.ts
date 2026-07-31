@@ -6,12 +6,57 @@ import type {
 	CardSourceSearchParams,
 	CardSourceSearchResult
 } from "./types"
-import { CardSourceUnavailableError } from "./types"
+import {
+	CardSourceInvalidRefError,
+	CardSourceRateLimitedError,
+	CardSourceUnavailableError
+} from "./types"
 import { TtlCache } from "./cache"
 import { getOrFetchCardBytes } from "./diskCache"
 
 const REPO_BASE =
 	"https://raw.githubusercontent.com/doolijb/serene-pub-chara-list/main"
+const REPO_PATH_PREFIX = new URL(REPO_BASE).pathname + "/"
+
+// A segment-level string check is the primary guard and gives a clear
+// error for the common case, but URL normalization treats percent-encoded
+// dot-segments (%2e%2e) as equivalent to a literal ".." — a bare string
+// comparison won't catch those. fetchGithubCardBytes's post-construction
+// pathname-prefix check below is the authoritative guard against any
+// traversal primitive this misses.
+export function isSafeGithubFileRef(value: unknown): value is string {
+	if (typeof value !== "string") return false
+	if (value.length === 0 || value.length > 512) return false
+	// eslint-disable-next-line no-control-regex
+	if (/[\x00-\x1f]/.test(value)) return false
+	if (value.startsWith("/") || value.includes("://")) return false
+	return value
+		.split("/")
+		.every((seg) => seg !== "" && seg !== "." && seg !== "..")
+}
+
+const GITHUB_FETCH_WINDOW_MS = 60_000
+// Bounds this server's own worst-case outbound fetch volume if `file` refs
+// are abused — not avoiding an upstream ban the way CharaVault's rate
+// limiter does; raw.githubusercontent.com has no documented per-IP quota
+// this app needs to self-throttle against.
+const GITHUB_FETCH_CEILING = 60
+let githubFetchTimestamps: number[] = []
+export function checkGithubFetchRateLimit() {
+	const now = Date.now()
+	githubFetchTimestamps = githubFetchTimestamps.filter(
+		(t) => now - t < GITHUB_FETCH_WINDOW_MS
+	)
+	if (githubFetchTimestamps.length >= GITHUB_FETCH_CEILING) {
+		throw new CardSourceRateLimitedError(GITHUB_FETCH_WINDOW_MS)
+	}
+	githubFetchTimestamps.push(now)
+}
+
+/** Test-only: reset the shared rate-limit window between test cases. */
+export function _resetGithubFetchRateLimitForTests() {
+	githubFetchTimestamps = []
+}
 
 interface GithubYamlEntry {
 	name: string
@@ -220,17 +265,28 @@ export const githubYamlCardSource: CardSource = {
 		}
 	},
 	async getCardBytes(ref: unknown, _ctx: CardSourceContext): Promise<Buffer> {
-		const { file } = ref as { file: string }
+		const { file } = (ref ?? {}) as { file?: unknown }
+		if (!isSafeGithubFileRef(file)) {
+			throw new CardSourceInvalidRefError("Invalid GitHub card reference")
+		}
 		return getOrFetchCardBytes(`github-serenepub:${file}`, () =>
 			fetchGithubCardBytes(file)
 		)
 	}
 }
 
-async function fetchGithubCardBytes(file: string): Promise<Buffer> {
+export async function fetchGithubCardBytes(file: string): Promise<Buffer> {
+	checkGithubFetchRateLimit()
+	const url = new URL(`${REPO_BASE}/${file}`)
+	// Authoritative guard: asserts the fully resolved pathname never left
+	// the fixed repo/branch, regardless of what encoding trick produced
+	// the input (see isSafeGithubFileRef's doc comment above).
+	if (!url.pathname.startsWith(REPO_PATH_PREFIX)) {
+		throw new CardSourceInvalidRefError("Invalid GitHub card reference")
+	}
 	let response: Response
 	try {
-		response = await fetch(`${REPO_BASE}/${file}`)
+		response = await fetch(url)
 	} catch (e) {
 		throw new CardSourceUnavailableError(
 			`Failed to reach GitHub: ${(e as Error).message}`

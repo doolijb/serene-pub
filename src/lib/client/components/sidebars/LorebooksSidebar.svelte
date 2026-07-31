@@ -48,6 +48,11 @@
 	let selectedLorebook: any = $state(undefined)
 	let editGroup: EditGroup = $state("lorebook")
 	let nextEditGroup: EditGroup | undefined = $state()
+	// Cross-tab focus: set when navigating Graph -> Bindings (edit a
+	// binding's identity) or Bindings -> Graph (view a character's
+	// relationships), so the target tab can jump straight to the right row.
+	let focusBindingId = $state<number | null>(null)
+	let focusNodeId = $state<number | null>(null)
 	let tabHasUnsavedChanges: boolean = $state(false)
 	let lorebookFormMode = $state<"view" | "edit">("view")
 	let tabsDisabled = $derived(
@@ -135,17 +140,13 @@
 
 	function handleLorebookClick(
 		e: Event,
-		{
-			lorebook,
-			tab,
-			startEditing = false
-		}: { lorebook: SelectLorebook; tab?: EditGroup; startEditing?: boolean }
+		{ lorebook, tab }: { lorebook: SelectLorebook; tab?: EditGroup }
 	) {
 		e.preventDefault()
 		e.stopPropagation()
 		selectedLorebook = lorebook
 		isEditingLorebook = true
-		lorebookFormMode = startEditing ? "edit" : "view"
+		lorebookFormMode = "view"
 		if (tab) {
 			editGroup = tab
 		} else {
@@ -404,6 +405,16 @@
 		}
 	})
 
+	function handleLorebooksCreate(msg: Sockets.Lorebooks.Create.Response) {
+		if (msg.lorebook) {
+			toaster.success({
+				title: "Lorebook Created",
+				description: `"${msg.lorebook.name}" created successfully.`
+			})
+			// Server automatically emits updated list
+		}
+	}
+
 	onMount(() => {
 		socket.on("lorebooks:list", (msg: Sockets.Lorebooks.List.Response) => {
 			if (msg.lorebookList) {
@@ -417,18 +428,7 @@
 		socket.on("lorebooks:list:error", () => {
 			isLoading = false
 		})
-		socket.on(
-			"lorebooks:create",
-			(msg: Sockets.Lorebooks.Create.Response) => {
-				if (msg.lorebook) {
-					toaster.success({
-						title: "Lorebook Created",
-						description: `"${msg.lorebook.name}" created successfully.`
-					})
-					// Server automatically emits updated list
-				}
-			}
-		)
+		socket.on("lorebooks:create", handleLorebooksCreate)
 		socket.on(
 			"lorebooks:update",
 			(msg: Sockets.Lorebooks.Update.Response) => {
@@ -518,7 +518,7 @@
 	onDestroy(() => {
 		socket.off("lorebooks:list")
 		socket.off("lorebooks:list:error")
-		socket.off("lorebooks:create")
+		socket.off("lorebooks:create", handleLorebooksCreate)
 		socket.off("lorebooks:update")
 		socket.off("lorebooks:import")
 		socket.off("lorebooks:import:error")
@@ -548,6 +548,16 @@
 			<h2 class="flex-1 truncate font-semibold">
 				{selectedLorebook?.name || "Lorebook"}
 			</h2>
+			{#if selectedLorebook}
+				<button
+					class="btn btn-sm preset-filled-surface-400-600"
+					onclick={() => handleExportLorebook(selectedLorebook.id)}
+					title="Export lorebook"
+				>
+					<Icons.Download size={16} />
+					Export
+				</button>
+			{/if}
 			{#if hasOpenChat && selectedLorebook}
 				{#if openChatCtx.lorebookId === selectedLorebook.id}
 					<button
@@ -659,13 +669,20 @@
 						lorebookId={selectedLorebook.id}
 						bind:mode={lorebookFormMode}
 						bind:hasUnsavedChanges={tabHasUnsavedChanges}
-						onExport={handleExportLorebook}
 					/>
 				{/if}
 			</Tabs.Content>
 			<Tabs.Content value="bindings">
 				{#if editGroup == "bindings" && selectedLorebook}
-					<LorebookBindingsManager lorebookId={selectedLorebook.id} />
+					<LorebookBindingsManager
+						lorebookId={selectedLorebook.id}
+						{focusBindingId}
+						onFocusHandled={() => (focusBindingId = null)}
+						onNavigateToGraph={(bindingId) => {
+							focusNodeId = bindingId
+							editGroup = "graph"
+						}}
+					/>
 				{/if}
 			</Tabs.Content>
 			<Tabs.Content value="world">
@@ -703,7 +720,15 @@
 			{#if graphEnabled}
 				<Tabs.Content value="graph">
 					{#if editGroup == "graph" && selectedLorebook}
-						<GraphManager lorebookId={selectedLorebook.id} />
+						<GraphManager
+							lorebookId={selectedLorebook.id}
+							{focusNodeId}
+							onFocusHandled={() => (focusNodeId = null)}
+							onNavigateToBindings={(bindingId) => {
+								focusBindingId = bindingId ?? null
+								editGroup = "bindings"
+							}}
+						/>
 					{/if}
 				</Tabs.Content>
 			{/if}
@@ -762,17 +787,6 @@
 							handleLorebookClick(new MouseEvent("click"), {
 								lorebook
 							})}
-						onEdit={(id) => {
-							const lorebook = lorebookList.find(
-								(lb) => lb.id === id
-							)
-							if (lorebook) {
-								handleLorebookClick(new MouseEvent("click"), {
-									lorebook,
-									startEditing: true
-								})
-							}
-						}}
 						onDelete={onDeleteClick}
 						onExport={handleExportLorebook}
 						bindingsCount={l.lorebookBindings?.length || 0}

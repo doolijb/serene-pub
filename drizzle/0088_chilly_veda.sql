@@ -1,0 +1,4 @@
+ALTER TABLE "scene_summarize_configs" ADD COLUMN "character_extraction_connection_id" integer;--> statement-breakpoint
+ALTER TABLE "scene_summarize_configs" ADD COLUMN "character_extraction_sampling_config_id" integer;--> statement-breakpoint
+ALTER TABLE "scene_summarize_configs" ADD CONSTRAINT "scene_summarize_configs_character_extraction_connection_id_connections_id_fk" FOREIGN KEY ("character_extraction_connection_id") REFERENCES "public"."connections"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "scene_summarize_configs" ADD CONSTRAINT "scene_summarize_configs_character_extraction_sampling_config_id_sampling_configs_id_fk" FOREIGN KEY ("character_extraction_sampling_config_id") REFERENCES "public"."sampling_configs"("id") ON DELETE set null ON UPDATE no action;

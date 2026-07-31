@@ -24,22 +24,29 @@
 		socket.emit("connections:delete", { id })
 	}
 
+	function handleConnectionsList(msg: Sockets.Connections.List.Response) {
+		connections = msg.connectionsList || []
+		loaded = true
+	}
+	function handleConnectionsDelete() {
+		socket.emit("connections:list", {})
+	}
+	function handleConnectionsSetUserActive() {
+		socket.emit("connections:list", {})
+	}
+
 	onMount(() => {
-		socket.on("connections:list", (msg) => {
-			connections = msg.connectionsList || []
-			loaded = true
-		})
-		socket.on("connections:delete", () => {
-			socket.emit("connections:list", {})
-		})
-		socket.on("connections:setUserActive", () => {
-			socket.emit("connections:list", {})
-		})
+		socket.on("connections:list", handleConnectionsList)
+		socket.on("connections:delete", handleConnectionsDelete)
+		socket.on("connections:setUserActive", handleConnectionsSetUserActive)
 		socket.emit("connections:list", {})
 		return () => {
-			socket.off("connections:list")
-			socket.off("connections:delete")
-			socket.off("connections:setUserActive")
+			socket.off("connections:list", handleConnectionsList)
+			socket.off("connections:delete", handleConnectionsDelete)
+			socket.off(
+				"connections:setUserActive",
+				handleConnectionsSetUserActive
+			)
 		}
 	})
 </script>

@@ -1,23 +1,45 @@
 /**
  * Builds a temporally-scoped "known cast" list for character extraction.
  *
- * Sources (in merge priority):
- *  1. Chat characters + personas — always in scope
- *  2. Lorebook bindings → characters/personas — always in scope
- *  3. Narrative nodes filtered to ≤ current timeline position (brings aliases from merges)
- *  4. participantCharacters + mentionedCharacters from prior scenes (chronologically earlier)
+ * Post-merge (see the lorebookBindings/narrativeNodes merge plan), every
+ * character — real or background/NPC — is exactly one lorebookBindings row,
+ * so this now runs a single query instead of the three separate ones
+ * (chat characters/personas, lorebook bindings, narrative nodes) it used to.
+ * A fourth former source — names mined from prior scenes'
+ * participantCharacters/mentionedCharacters — is gone entirely: those
+ * columns now store binding ids directly (resolved via this file's
+ * resolveCharacterNamesToBindingIds(), called from scenes.ts right after
+ * extraction), so every character a prior scene ever mentioned already has
+ * a binding row, already covered by the single query below.
  *
- * Names are fuzzy-matched and deduplicated so LLM-invented variants collapse onto the
- * canonical name and their aliases are collected in one entry.
+ * Real characters/personas (characterId/personaId set) are always in scope
+ * regardless of timeline. Background/NPC bindings (neither set) are only
+ * in scope once their own historyEntryId/sceneId position is at or before
+ * the scene being extracted for — matching how narrativeNodes' timeline
+ * filter worked pre-merge.
+ *
+ * Names are fuzzy-matched and deduplicated so LLM-invented variants collapse
+ * onto the canonical entry and their aliases are collected in one place.
  */
 
-import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { eq, and } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
+import type { CastEntry, ExtractedCastRef } from "./templates"
+import type { PgliteDatabase } from "drizzle-orm/pglite"
+import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
 
-export interface CastEntry {
-	name: string
-	aliases: string[]
+export type { CastEntry, ExtractedCastRef }
+
+// Optional trailing `dbInstance` param on both exports below (defaulting
+// to a lazy dynamic import of the app's shared `db`) so the scene-presence
+// backfill script (scripts/backfill-scene-character-ids.ts) can reuse this
+// exact resolution logic against its own standalone PGlite connection,
+// without pulling in `$lib/server/db`'s `$app/environment` dependency —
+// same pattern as characterBindingSync.ts's `defaultDb()`.
+type DbLike = PgliteDatabase<typeof schema>
+
+async function defaultDb(): Promise<DbLike> {
+	return (await import("$lib/server/db")).db
 }
 
 // ── Fuzzy matching ────────────────────────────────────────────────────────────
@@ -50,7 +72,7 @@ function levenshtein(a: string, b: string): number {
 }
 
 /** True if a and b refer to the same person. */
-function namesMatch(a: string, b: string): boolean {
+export function namesMatch(a: string, b: string): boolean {
 	const na = normalize(a)
 	const nb = normalize(b)
 	if (!na || !nb) return false
@@ -73,7 +95,7 @@ function namesMatch(a: string, b: string): boolean {
 }
 
 /** True if `name` matches the canonical name or any alias of `entry`. */
-function entryMatches(entry: CastEntry, name: string): boolean {
+export function entryMatches(entry: CastEntry, name: string): boolean {
 	return (
 		namesMatch(entry.name, name) ||
 		entry.aliases.some((a) => namesMatch(a, name))
@@ -82,13 +104,14 @@ function entryMatches(entry: CastEntry, name: string): boolean {
 
 /**
  * Try to merge `name` + `extraAliases` into an existing entry.
- * Returns true if a match was found (and the entry was updated).
+ * Returns the matched entry if found (and updates it in place), else null.
  */
 function mergeIntoExisting(
 	entries: CastEntry[],
 	name: string,
-	extraAliases: string[]
-): boolean {
+	extraAliases: string[],
+	id: number | null
+): CastEntry | null {
 	for (const entry of entries) {
 		if (!entryMatches(entry, name)) continue
 
@@ -107,9 +130,39 @@ function mergeIntoExisting(
 				entry.aliases.push(alias)
 			}
 		}
-		return true
+		// A real binding id always wins over a placeholder null — this can
+		// happen if an earlier merge (e.g. a chat character resolved before
+		// its binding was confirmed) recorded null first.
+		if (entry.id === null && id !== null) entry.id = id
+		return entry
 	}
-	return false
+	return null
+}
+
+// Round-12 audit fix (MEDIUM): mergeIntoExisting is O(entries) per call, and
+// buildSceneCastList calls it once per chat char/persona and once per
+// binding — net O(n^2) Levenshtein-based fuzzy matching, synchronous JS on
+// Node's single event loop. Same cap/rationale as the sibling
+// duplicateBindingDetection.ts's MAX_BINDINGS_FOR_DUPLICATE_DETECTION, but
+// this list is actively used (not purely advisory), so above the cap this
+// skips only the fuzzy-dedup scan — entries are still pushed directly,
+// just without cross-entry name-matching merges — rather than returning
+// nothing.
+export const MAX_BINDINGS_FOR_SCENE_CAST = 300
+
+/** mergeIntoExisting, or an unconditional push when skipDedup (over the cap) — see MAX_BINDINGS_FOR_SCENE_CAST above. */
+function mergeOrPush(
+	entries: CastEntry[],
+	name: string,
+	aliases: string[],
+	id: number | null,
+	skipDedup: boolean
+): void {
+	if (!skipDedup) {
+		const existing = mergeIntoExisting(entries, name, aliases, id)
+		if (existing) return
+	}
+	entries.push({ name, aliases, id })
 }
 
 // ── Timeline comparison ───────────────────────────────────────────────────────
@@ -143,17 +196,26 @@ function isStrictlyBefore(
 // ── Main export ───────────────────────────────────────────────────────────────
 
 export async function buildSceneCastList(
-	sceneId: number,
+	sceneId: number | null,
 	lorebookId: number,
-	chatId: number | null
+	chatId: number | null,
+	dbInstance?: DbLike
 ): Promise<CastEntry[]> {
+	const db = dbInstance ?? (await defaultDb())
 	const entries: CastEntry[] = []
 
-	// ── 1. Current scene's timeline position ─────────────────────────────────
-	const currentScene = await db.query.scenes.findFirst({
-		where: eq(schema.scenes.id, sceneId),
-		columns: { historyEntryId: true }
-	})
+	// ── Current scene's timeline position ─────────────────────────────────
+	// `sceneId` is null when drafting a brand-new scene that doesn't exist
+	// yet (chats:summarize, before scenes:create) — there's no timeline
+	// position to filter against, so every background/NPC binding is left
+	// in scope (see the `currentPos` guard below, which then never fires).
+	const currentScene =
+		sceneId !== null
+			? await db.query.scenes.findFirst({
+					where: eq(schema.scenes.id, sceneId),
+					columns: { historyEntryId: true }
+				})
+			: null
 	const currentHistoryEntryId = currentScene?.historyEntryId ?? null
 
 	let currentPos: TimelinePos | null = null
@@ -172,7 +234,34 @@ export async function buildSceneCastList(
 		}
 	}
 
-	// ── 2. Chat characters + personas ────────────────────────────────────────
+	// ── Every binding in the lorebook, in one query ──────────────────────────
+	const allBindings = await db.query.lorebookBindings.findMany({
+		where: eq(schema.lorebookBindings.lorebookId, lorebookId),
+		with: {
+			historyEntry: {
+				columns: { id: true, year: true, month: true, day: true }
+			}
+		}
+	})
+	const bindingById = new Map(allBindings.map((b) => [b.id, b]))
+	const bindingByCharacterId = new Map(
+		allBindings
+			.filter((b) => b.characterId != null)
+			.map((b) => [b.characterId!, b])
+	)
+	const bindingByPersonaId = new Map(
+		allBindings.filter((b) => b.personaId != null).map((b) => [b.personaId!, b])
+	)
+
+	const skipDedup = allBindings.length > MAX_BINDINGS_FOR_SCENE_CAST
+	if (skipDedup) {
+		console.warn(
+			`buildSceneCastList: skipping fuzzy dedup for lorebook ${lorebookId} — ${allBindings.length} bindings exceeds the ${MAX_BINDINGS_FOR_SCENE_CAST} cap.`
+		)
+	}
+
+	// ── Chat characters/personas — priority merge slot (their binding, if
+	// one exists yet, always wins the canonical name/id) ────────────────────
 	if (chatId) {
 		const [chatChars, chatPersonas] = await Promise.all([
 			db.query.chatCharacters.findMany({
@@ -201,178 +290,93 @@ export async function buildSceneCastList(
 		for (const cc of chatChars) {
 			const char = (cc as any).character
 			if (!char?.name) continue
+			const binding = bindingByCharacterId.get(char.id)
+			const name = binding ? binding.name || char.name : char.name
 			const aliases = [
 				...(char.nickname ? [char.nickname] : []),
 				...(char.aliases ?? [])
-			].filter((a: string) => !namesMatch(a, char.name))
-			if (!mergeIntoExisting(entries, char.name, aliases)) {
-				entries.push({ name: char.name, aliases })
-			}
+			].filter((a: string) => !namesMatch(a, name))
+			mergeOrPush(entries, name, aliases, binding?.id ?? null, skipDedup)
 		}
 
 		for (const cp of chatPersonas) {
 			const persona = (cp as any).persona
 			if (!persona?.name) continue
+			const binding = bindingByPersonaId.get(persona.id)
+			const name = binding ? binding.name || persona.name : persona.name
 			const aliases = (persona.aliases ?? []).filter(
-				(a: string) => !namesMatch(a, persona.name)
+				(a: string) => !namesMatch(a, name)
 			)
-			if (!mergeIntoExisting(entries, persona.name, aliases)) {
-				entries.push({ name: persona.name, aliases })
-			}
+			mergeOrPush(entries, name, aliases, binding?.id ?? null, skipDedup)
 		}
 	}
 
-	// ── 3. Lorebook bindings → characters/personas not already in chat ───────
-	const bindings = await db.query.lorebookBindings.findMany({
-		where: eq(schema.lorebookBindings.lorebookId, lorebookId),
-		with: {
-			character: {
-				columns: { id: true, name: true, nickname: true, aliases: true }
-			},
-			persona: { columns: { id: true, name: true, aliases: true } }
-		}
-	})
+	// ── Every binding: real characters/personas always in scope,
+	// background/NPC bindings only once chronologically eligible ────────────
+	for (const binding of allBindings) {
+		const isReal = binding.characterId != null || binding.personaId != null
 
-	for (const binding of bindings) {
-		const char = (binding as any).character
-		if (char?.name) {
-			const aliases = [
-				...(char.nickname ? [char.nickname] : []),
-				...(char.aliases ?? [])
-			].filter((a: string) => !namesMatch(a, char.name))
-			if (!mergeIntoExisting(entries, char.name, aliases)) {
-				entries.push({ name: char.name, aliases })
+		if (!isReal) {
+			const he = (binding as any).historyEntry
+			if (binding.historyEntryId && he && currentPos && sceneId !== null) {
+				const bindingPos: TimelinePos = {
+					entryId: he.id,
+					year: he.year ?? 0,
+					month: he.month,
+					day: he.day
+				}
+				const eligible =
+					isStrictlyBefore(
+						bindingPos,
+						binding.sceneId,
+						currentPos,
+						sceneId
+					) ||
+					(bindingPos.entryId === currentPos.entryId &&
+						(binding.sceneId ?? 0) <= sceneId)
+				if (!eligible) continue
 			}
 		}
-		const persona = (binding as any).persona
-		if (persona?.name) {
-			const aliases = (persona.aliases ?? []).filter(
-				(a: string) => !namesMatch(a, persona.name)
-			)
-			if (!mergeIntoExisting(entries, persona.name, aliases)) {
-				entries.push({ name: persona.name, aliases })
-			}
-		}
-	}
 
-	// ── 4. Narrative nodes (chronologically eligible) ────────────────────────
-	const allNodes = await db.query.narrativeNodes.findMany({
-		where: eq(schema.narrativeNodes.lorebookId, lorebookId),
-		columns: {
-			id: true,
-			name: true,
-			aliases: true,
-			historyEntryId: true,
-			sceneId: true,
-			parentNodeId: true
-		},
-		with: {
-			historyEntry: {
-				columns: { id: true, year: true, month: true, day: true }
-			}
-		}
-	})
+		const name = binding.name?.trim()
+		if (!name) continue
 
-	// Build parent map for alias inheritance from merged nodes
-	const nodeById = new Map(allNodes.map((n: any) => [n.id, n]))
-
-	const eligibleNodes = allNodes.filter((node: any) => {
-		if (!node.historyEntryId || !(node as any).historyEntry) return true // unlinked = always eligible
-		if (!currentPos) return true
-		const nodePos: TimelinePos = {
-			entryId: (node as any).historyEntry.id,
-			year: (node as any).historyEntry.year ?? 0,
-			month: (node as any).historyEntry.month,
-			day: (node as any).historyEntry.day
-		}
-		// Include if node appeared at or before current scene
-		return (
-			isStrictlyBefore(nodePos, node.sceneId, currentPos, sceneId) ||
-			(nodePos.entryId === currentPos.entryId &&
-				(node.sceneId ?? 0) <= sceneId)
-		)
-	})
-
-	for (const node of eligibleNodes) {
-		const nodeAliases: string[] = [...((node as any).aliases ?? [])]
-
-		// Inherit aliases from parent (merged) node
-		if ((node as any).parentNodeId) {
-			const parent = nodeById.get((node as any).parentNodeId)
+		// Union `aliases` (synced from the bound entity, see decision 2) with
+		// `absorbedAliases` (identities absorbed via narrativeGraph:mergeNode
+		// — deliberately stored separately so an absorbed name survives the
+		// entity's own aliases being replaced wholesale on the next sync).
+		const nodeAliases: string[] = [
+			...(binding.aliases ?? []),
+			...(binding.absorbedAliases ?? [])
+		]
+		// Inherit aliases from parent (merged) binding — legacy pre-absorb
+		// merge data (parentNodeId tagging); kept for backward compatibility
+		// with pairs merged before the consolidating absorb redesign.
+		if (binding.parentNodeId) {
+			const parent = bindingById.get(binding.parentNodeId)
 			if (parent) {
-				nodeAliases.push(...((parent as any).aliases ?? []))
-				// Also include the parent's name as an alias if different
-				if (
-					(parent as any).name &&
-					!namesMatch((parent as any).name, (node as any).name)
-				) {
-					nodeAliases.push((parent as any).name)
+				nodeAliases.push(...(parent.aliases ?? []))
+				if (parent.name && !namesMatch(parent.name, name)) {
+					nodeAliases.push(parent.name)
 				}
 			}
 		}
+		const uniqueAliases = nodeAliases.filter((a) => !namesMatch(a, name))
 
-		const uniqueAliases = nodeAliases.filter(
-			(a) => !namesMatch(a, (node as any).name)
-		)
-
-		if (!mergeIntoExisting(entries, (node as any).name, uniqueAliases)) {
-			entries.push({ name: (node as any).name, aliases: uniqueAliases })
-		}
+		mergeOrPush(entries, name, uniqueAliases, binding.id, skipDedup)
 	}
 
-	// ── 5. Names from prior scenes ────────────────────────────────────────────
-	if (currentPos) {
-		const allScenes = await db.query.scenes.findMany({
-			where: eq(schema.scenes.lorebookId, lorebookId),
-			columns: {
-				id: true,
-				historyEntryId: true,
-				participantCharacters: true,
-				mentionedCharacters: true
-			},
-			with: {
-				historyEntry: {
-					columns: { id: true, year: true, month: true, day: true }
-				}
-			}
-		})
-
-		for (const s of allScenes) {
-			if (s.id === sceneId) continue
-			const he = (s as any).historyEntry
-			if (!he) continue
-			const sPos: TimelinePos = {
-				entryId: he.id,
-				year: he.year ?? 0,
-				month: he.month,
-				day: he.day
-			}
-			if (
-				!isStrictlyBefore(sPos, s.id, currentPos, sceneId) &&
-				!(sPos.entryId === currentPos.entryId && s.id < sceneId)
-			)
-				continue
-
-			const names = [
-				...((s.participantCharacters as string[]) ?? []),
-				...((s.mentionedCharacters as string[]) ?? [])
-			]
-			for (const name of names) {
-				if (!name?.trim()) continue
-				if (!mergeIntoExisting(entries, name, [])) {
-					entries.push({ name, aliases: [] })
-				}
-			}
-		}
-	}
-
-	// ── 6. Final dedup pass — collapse entries whose canonical names match ────
+	// ── Final dedup pass — collapse entries whose canonical names match ────
 	const merged: CastEntry[] = []
 	for (const entry of entries) {
-		if (!mergeIntoExisting(merged, entry.name, entry.aliases)) {
+		const match = skipDedup
+			? null
+			: mergeIntoExisting(merged, entry.name, entry.aliases, entry.id)
+		if (!match) {
 			merged.push({
 				name: entry.name,
-				aliases: [...new Set(entry.aliases)]
+				aliases: [...new Set(entry.aliases)],
+				id: entry.id
 			})
 		}
 	}
@@ -383,4 +387,210 @@ export async function buildSceneCastList(
 	}
 
 	return merged
+}
+
+/**
+ * Resolves character-extraction refs against a known-cast list WITHOUT
+ * creating any new lorebookBindings rows — pure, no I/O, does not mutate
+ * `castEntries`. A `{castId}` ref resolves the same way
+ * resolveCharacterNamesToBindingIds does (trusted only if it verifies
+ * against castEntries). A `{name}` ref that fuzzy-matches an existing entry
+ * resolves to that entry's id. A name that matches nothing is returned as a
+ * plain suggested name (deduped case-insensitively) instead of being minted
+ * into a row — creation is deferred to the caller's own review/Save step
+ * (see resolveOrCreateBindingByName below, used at Save time by the
+ * scenes:process and chats:summarize review screens).
+ */
+export function resolveCharacterRefs(
+	refs: ExtractedCastRef[],
+	castEntries: CastEntry[]
+): { ids: number[]; suggestedNames: string[] } {
+	const ids: number[] = []
+	const suggestedNames: string[] = []
+	for (const ref of refs) {
+		if ("castId" in ref) {
+			const existing = castEntries.find((e) => e.id === ref.castId)
+			if (existing?.id != null) ids.push(existing.id)
+			continue
+		}
+
+		const name = ref.name.trim()
+		if (!name) continue
+
+		const existing = castEntries.find((e) => entryMatches(e, name))
+		if (existing?.id != null) {
+			ids.push(existing.id)
+			continue
+		}
+
+		if (!suggestedNames.some((n) => n.toLowerCase() === name.toLowerCase())) {
+			suggestedNames.push(name)
+		}
+	}
+	return { ids: [...new Set(ids)], suggestedNames }
+}
+
+/**
+ * Resolves character-extraction output to real lorebookBindings ids,
+ * against a known-cast list already built for this scene by
+ * buildSceneCastList(). Delegates matching to resolveCharacterRefs() above,
+ * then creates a brand-new unbound (background/NPC) binding on the spot for
+ * every name that didn't match — this is the same "unmatched name → new
+ * node" responsibility graphBuilder.ts's old Phase 1 used to have, now
+ * resolved once, here, at summarization time instead of later at
+ * graph-build time (see the merge plan's scene character presence
+ * redesign).
+ *
+ * Only used by callers with no review step downstream (narrativeGraph.ts's
+ * direct-history-entry path and the scene-character-ids backfill script) —
+ * scenes:process and chats:summarize, which do have a Review & Save screen,
+ * use resolveCharacterRefs()'s non-creating suggestions instead and only
+ * create bindings via resolveOrCreateBindingByName() once the user accepts
+ * them at Save.
+ *
+ * `castEntries` is mutated in place — a name that appears in both the
+ * participants and mentioned lists (or repeats across calls for the same
+ * scene) resolves to the same newly-created row rather than two duplicates.
+ */
+export async function resolveCharacterNamesToBindingIds(
+	refs: ExtractedCastRef[],
+	lorebookId: number,
+	castEntries: CastEntry[],
+	dbInstance?: DbLike
+): Promise<number[]> {
+	const db = dbInstance ?? (await defaultDb())
+	const { ids, suggestedNames } = resolveCharacterRefs(refs, castEntries)
+
+	for (const name of suggestedNames) {
+		// New name — create an unbound background/NPC binding for it.
+		// Token derived from the lorebook's own per-lorebook counter
+		// (decision 1), never a recomputed max/count.
+		const newId = await db.transaction(async (tx) => {
+			const token = await deriveNextBindingToken(lorebookId, tx)
+			const [inserted] = await tx
+				.insert(schema.lorebookBindings)
+				.values({
+					lorebookId,
+					characterId: null,
+					personaId: null,
+					binding: token,
+					name
+				})
+				.returning({ id: schema.lorebookBindings.id })
+			return inserted.id
+		})
+
+		// A transitional null-id entry for this name (shouldn't normally
+		// happen post-migration, but handled defensively) gets backfilled
+		// with the new row's id rather than duplicated.
+		const existing = castEntries.find((e) => entryMatches(e, name))
+		if (existing) {
+			existing.id = newId
+		} else {
+			castEntries.push({ name, aliases: [], id: newId })
+		}
+		ids.push(newId)
+	}
+	return [...new Set(ids)]
+}
+
+/**
+ * Resolves a single free-form name to a real lorebookBindings id, creating
+ * a new unbound (background/NPC) binding only if nothing in the lorebook's
+ * current cast already matches — used at Save time by scenes:process and
+ * chats:summarize's review screens to turn an accepted "suggested new
+ * character" (from extraction or manually typed) into a real binding,
+ * without risking a duplicate.
+ *
+ * Unlike resolveCharacterNamesToBindingIds (which resolves against a
+ * `castEntries` snapshot built earlier in the request), this re-reads the
+ * lorebook's *current* bindings right before matching — the whole point is
+ * to catch a match that appeared after extraction ran (another user, or an
+ * earlier suggestion in the same save, created it in the meantime). A
+ * Postgres advisory lock scoped to `lorebookId` serializes concurrent calls
+ * for the same lorebook so two callers racing to resolve the same unmatched
+ * name can't both insert a row for it.
+ */
+export async function resolveOrCreateBindingByName(
+	lorebookId: number,
+	name: string,
+	dbInstance?: DbLike
+): Promise<{ id: number; created: boolean }> {
+	const db = dbInstance ?? (await defaultDb())
+	const trimmed = name.trim()
+	if (!trimmed) throw new Error("Name required")
+
+	return db.transaction(async (tx) => {
+		await tx.execute(sql`select pg_advisory_xact_lock(${lorebookId})`)
+
+		const rows = await tx.query.lorebookBindings.findMany({
+			where: eq(schema.lorebookBindings.lorebookId, lorebookId),
+			columns: { id: true, name: true, aliases: true, absorbedAliases: true }
+		})
+		const existing = rows.find((r) =>
+			entryMatches(
+				{
+					name: r.name,
+					aliases: [...r.aliases, ...r.absorbedAliases],
+					id: r.id
+				},
+				trimmed
+			)
+		)
+		if (existing) return { id: existing.id, created: false }
+
+		const token = await deriveNextBindingToken(lorebookId, tx)
+		const [inserted] = await tx
+			.insert(schema.lorebookBindings)
+			.values({
+				lorebookId,
+				characterId: null,
+				personaId: null,
+				binding: token,
+				name: trimmed
+			})
+			.returning({ id: schema.lorebookBindings.id })
+		return { id: inserted.id, created: true }
+	})
+}
+
+/**
+ * Merge auto-detected message-sender binding ids into the LLM-extracted
+ * participant list, then remove any resulting participant from the
+ * mentioned list. `mentioned = mentioned - participants`, evaluated
+ * against the *final* participant set (LLM-extracted plus every actual
+ * sender) — not narrowly scoped to just the sender-derived ids — so a
+ * character the LLM itself double-listed in both arrays never survives in
+ * mentioned just because it wasn't a message sender. Pure/no I/O: used by
+ * both chats:summarize and scenes:process after each resolves its own
+ * sender binding ids.
+ */
+export function reconcileParticipantsAndMentioned(
+	participants: number[],
+	mentioned: number[],
+	senderBindingIds: Iterable<number>
+): { participants: number[]; mentioned: number[] } {
+	const participantSet = new Set(participants)
+	for (const id of senderBindingIds) participantSet.add(id)
+	const finalMentioned = mentioned.filter((id) => !participantSet.has(id))
+	return { participants: [...participantSet], mentioned: finalMentioned }
+}
+
+/**
+ * Same "participant wins over mentioned" rule as
+ * reconcileParticipantsAndMentioned, applied to suggested (not-yet-created)
+ * names instead of resolved ids — a name suggested in both lists is kept
+ * only as a participant suggestion. Case-insensitive.
+ */
+export function reconcileSuggestedNames(
+	participantNames: string[],
+	mentionedNames: string[]
+): { participants: string[]; mentioned: string[] } {
+	const participantLower = new Set(participantNames.map((n) => n.toLowerCase()))
+	return {
+		participants: participantNames,
+		mentioned: mentionedNames.filter(
+			(n) => !participantLower.has(n.toLowerCase())
+		)
+	}
 }

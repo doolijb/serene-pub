@@ -134,6 +134,7 @@
 			if (!closed) return
 		}
 		goto("/library/personas")
+		panelsCtx.fullscreenPanel = null
 	}
 
 	async function handleFileImport(details: FileAcceptDetails) {
@@ -358,6 +359,10 @@
 		personaToDelete = undefined
 	}
 
+	function handleSetDefaultClick(id: number) {
+		socket.emit("personas:setDefault", { personaId: id })
+	}
+
 	async function handleOnClose() {
 		if (personaFormHasChanges) {
 			showUnsavedChangesModal = true
@@ -525,6 +530,7 @@
 							onEdit={handleEditClick}
 							onDelete={handleDeleteClick}
 							onExport={handleExportPersona}
+							onSetDefault={handleSetDefaultClick}
 							contentTitle="Go to persona chats"
 						/>
 					</div>
@@ -532,12 +538,14 @@
 			</div>
 		{:else}
 			<!-- See CharactersSidebar.svelte's matching grid for why this uses
-				a @container query instead of a fixed min-width or viewport
-				breakpoints — the sidebar's own pixel width doesn't track
-				viewport width proportionally. -->
-			<div class="@container">
+				auto-fill/minmax instead of a fixed min-width, viewport
+				breakpoints, or a fixed set of named @container breakpoints —
+				the sidebar's own pixel width doesn't track viewport width
+				proportionally, and a capped column count leaves oversized
+				cards on very wide (eg. 4K fullscreen) containers. -->
+			<div>
 				<div
-					class="grid grid-cols-1 gap-3 @md:grid-cols-2 @xl:grid-cols-3 @3xl:grid-cols-4 @5xl:grid-cols-5"
+					class="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-3"
 					role="list"
 					aria-label="Personas list"
 				>
@@ -552,6 +560,7 @@
 								onEdit={handleEditClick}
 								onDelete={handleDeleteClick}
 								onExport={handleExportPersona}
+								onSetDefault={handleSetDefaultClick}
 								contentTitle="Go to persona chats"
 							/>
 						</div>

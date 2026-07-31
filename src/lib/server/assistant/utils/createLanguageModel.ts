@@ -5,6 +5,7 @@
 import { createOpenAI } from "@ai-sdk/openai"
 import type { LanguageModel } from "ai"
 import type { BaseConnectionAdapter } from "../../connectionAdapters/BaseConnectionAdapter"
+import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 
 export function createLanguageModelFromAdapter(
 	adapter: BaseConnectionAdapter
@@ -16,13 +17,13 @@ export function createLanguageModelFromAdapter(
 	const apiKey = extraJson.apiKey || extraJson.api_key || "ollama" // Ollama doesn't require a key
 
 	// Determine the base URL
-	let baseURL = connection.baseUrl
+	let baseURL = normalizeBaseUrl(connection.baseUrl) || undefined
 
 	// For Ollama, ensure we're using the OpenAI-compatible endpoint
 	if (connection.type === "ollama" && baseURL) {
 		// Ollama's OpenAI-compatible endpoint is at /v1
 		if (!baseURL.endsWith("/v1")) {
-			baseURL = baseURL.replace(/\/$/, "") + "/v1"
+			baseURL = baseURL + "/v1"
 		}
 	}
 

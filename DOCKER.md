@@ -89,10 +89,11 @@ for the full reference, including reverse-proxy trust settings
 | `SERENE_PUB_DATA_DIR`                            | `/data`                                   | Directory for all persistent data                                                                                  |
 | `PORT`                                           | `3000`                                    | HTTP port the web server listens on                                                                                |
 | `SOCKETS_PORT`                                   | `3001`                                    | WebSocket server port                                                                                              |
-| `SERENE_AUTO_OPEN`                               | unset (auto-open enabled)                 | Always effectively disabled in containers (no browser to open) — irrelevant for Docker, listed for completeness    |
+| `SERENE_AUTO_OPEN`                               | `1` (disabled)                            | Baked into the image (there's no browser to open in a container) and set again in both compose files — no need to touch this yourself |
 | `NODE_ENV`                                       | `production`                              | Node.js environment                                                                                                |
 | `USER_TOKEN_EXPIRATION_HOURS`                    | `168`                                     | Session lifetime in hours (168 = 7 days)                                                                           |
 | `TRANSFORMERS_CACHE`                             | `$SERENE_PUB_DATA_DIR/transformers-cache` | Override embedding model cache directory                                                                           |
+| `SOCKETS_ALLOWED_ORIGINS`                        | `*` (in both compose files)               | Disables the app-level socket origin allowlist. Both `docker-compose.dist.yml` and `docker-compose.dev.yml` ship with this set, since a Docker deployment's network exposure is already controlled by its port mapping and/or a reverse proxy — see the comment above `SOCKETS_ALLOWED_ORIGINS` in either compose file if you'd rather remove it and rely on the app-level allowlist too |
 | `KOBOLDCPP_BINARY_DIR` / `KOBOLDCPP_BINARY_NAME` | unset                                     | Point managed KoboldCPP mode at a binary you mounted yourself — see [Managed mode](#koboldcpp--managed-mode) below |
 
 ---

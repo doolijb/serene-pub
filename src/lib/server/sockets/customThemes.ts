@@ -34,6 +34,33 @@ function stripDataThemeWrapper(css: string): string {
 	return css.replace(/^\s*\{([\s\S]*)\}\s*$/, (_, inner) => inner.trim())
 }
 
+// `@import` and an external `url(...)` are classic CSS-based
+// data-exfiltration vectors (leaking page state/cookies via a background
+// image request to an attacker-controlled host, or pulling in arbitrary
+// remote stylesheet content). Currently neutralized by this app's CSP
+// (style-src/img-src locked down in svelte.config.js), but that CSP has a
+// documented CSP_EXTRA_STYLE_SRC env-var escape hatch (img-src has no such
+// hatch — it's a fixed list) — a real gap that only stays inert as long as
+// that isn't loosened. Rejects (doesn't silently strip) so the upload fails
+// loudly rather than having content silently vanish.
+const CSS_IMPORT_RE = /@import\b/i
+const CSS_URL_RE = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi
+export function assertSafeThemeCss(css: string) {
+	if (CSS_IMPORT_RE.test(css)) {
+		throw new Error("Theme CSS cannot contain @import.")
+	}
+	for (const match of css.matchAll(CSS_URL_RE)) {
+		const target = match[2].trim()
+		// Matches "http://", "https://", and protocol-relative "//" — the
+		// (https?:)? prefix is optional, so this one check covers all three.
+		if (/^(https?:)?\/\//i.test(target)) {
+			throw new Error(
+				"Theme CSS cannot reference external URLs in url(...) — only relative paths or data: URIs are allowed."
+			)
+		}
+	}
+}
+
 export const customThemesList: Handler<
 	Sockets.CustomThemes.List.Params,
 	Sockets.CustomThemes.List.Response
@@ -116,6 +143,7 @@ export const customThemesSave: Handler<
 		}
 
 		const rawCss = stripDataThemeWrapper(params.css)
+		assertSafeThemeCss(rawCss)
 		const newCssKey = crypto.randomUUID()
 
 		let row: typeof schema.customThemes.$inferSelect & {

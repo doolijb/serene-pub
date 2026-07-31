@@ -1,7 +1,6 @@
 export type TemplateContextCharacter = {
 	name: string
 	nickname?: string
-	aliases?: string[]
 	description: string
 	personality?: string
 	loreEntries?: SelectCharacterLoreEntry[]

@@ -29,6 +29,14 @@ export interface CardSourceSearchParams {
 export interface CardSourceSearchResult {
 	items: LibraryCatalogItem[]
 	hasMore: boolean
+	/**
+	 * The raw upstream offset to use for the next page's cursor, if this
+	 * source's pagination can drift from the returned items' count (eg.
+	 * CharaVault's server-side content filtering removes items after
+	 * upstream pagination already accounted for them). Sources without that
+	 * mismatch can omit it — callers fall back to `items.length`.
+	 */
+	nextOffset?: number
 }
 
 export interface CardSource {
@@ -63,6 +71,20 @@ export class CardSourceUnavailableError extends Error {
 	constructor(message = "Card source is unreachable") {
 		super(message)
 		this.name = "CardSourceUnavailableError"
+	}
+}
+
+/**
+ * A card reference failed client-supplied-input validation (eg. a path
+ * traversal attempt) rather than a genuine upstream failure — callers that
+ * want to distinguish "bad request" from "source is down" (eg. for HTTP
+ * status codes) can check for this subclass specifically before falling
+ * back to the base CardSourceUnavailableError handling.
+ */
+export class CardSourceInvalidRefError extends CardSourceUnavailableError {
+	constructor(message = "Invalid card reference") {
+		super(message)
+		this.name = "CardSourceInvalidRefError"
 	}
 }
 

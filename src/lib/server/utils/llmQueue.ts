@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks"
 import { v4 as uuidv4 } from "uuid"
 import type { TaskType } from "./resolveTaskConfig"
 
@@ -85,7 +86,15 @@ const FORCE_DETACH_MS = 10_000
 // LLM call executes at a time across the whole application, regardless of
 // who queued it. There is deliberately no per-user depth cap on top of that;
 // `userId` on a queued item is used only for display (see snapshot()) and
-// isn't a throttle.
+// isn't a throttle. runQueuedLLMCall.ts (the shared wrapper used by
+// summarization/graph-building/title-generation/field-generation) doesn't
+// even thread userId into the queue item today, so a real per-user cap
+// would need that added first. A flat global depth ceiling is the smaller
+// fix for the resource-exhaustion half of the problem: without it, any
+// authenticated user able to trigger repeated LLM calls could queue
+// unbounded items (each a Run<T> holding closures over full chat/adapter
+// state) with no cap at all.
+export const MAX_QUEUE_DEPTH = 20
 
 // Concurrency grouping. Hardcoded to a single global lane today; swap this out
 // for a per-connection/per-connection-type key once that's needed — nothing
@@ -95,6 +104,19 @@ function getConcurrencyKey(_item: LLMQueueItemInput<any>): string {
 }
 
 type SnapshotListener = () => void
+
+// Tracks which lane keys are currently "held" by the causal chain of an
+// in-flight run's execution — set around runIt() in pump() below, and
+// inherited automatically by anything that run awaits (including further
+// enqueue() calls made from deep within it). Exists to detect and fix a
+// specific deadlock: field-generation and similar helpers call
+// runQueuedLLMCall() -> enqueue() on the same "global" lane from *inside*
+// an already-enqueued outer call's execute() (eg. the assistant tool-
+// calling turn). Without this, the inner enqueue() would sit in the lane's
+// queue forever, since the lane never frees up while the outer call is
+// still awaiting it — a permanent deadlock that also freezes every other
+// queued LLM call in the app (the lane is process-global).
+const activeLanes = new AsyncLocalStorage<Set<string>>()
 
 class LLMQueue {
 	private lanes = new Map<string, Lane>()
@@ -136,8 +158,26 @@ class LLMQueue {
 		item: LLMQueueItemInput<T>,
 		presetId?: string
 	): { id: string; done: Promise<T> } {
-		const id = presetId ?? uuidv4()
 		const laneKey = getConcurrencyKey(item)
+
+		// Re-entrant call: the caller is already executing inside this exact
+		// lane's currently-running item (eg. field generation called from
+		// within the assistant's tool-calling turn). The lane is already
+		// legitimately held by that calling chain, so queuing here would
+		// deadlock — run it immediately instead. See the activeLanes comment
+		// above for the full failure mode this avoids.
+		if (activeLanes.getStore()?.has(laneKey)) {
+			return this.runInline(item, laneKey, presetId)
+		}
+
+		const lane = this.getLane(laneKey)
+		if (lane.queue.length >= MAX_QUEUE_DEPTH) {
+			throw new Error(
+				"Too many LLM requests are queued right now. Please try again shortly."
+			)
+		}
+
+		const id = presetId ?? uuidv4()
 
 		let resolve!: (value: T) => void
 		let reject!: (reason: unknown) => void
@@ -159,11 +199,56 @@ class LLMQueue {
 		}
 
 		this.runsById.set(id, run)
-		this.getLane(laneKey).queue.push(run)
+		lane.queue.push(run)
 		item.onStatusChange?.("queued")
 		this.notify()
 
 		this.pump(laneKey)
+
+		return { id, done }
+	}
+
+	/**
+	 * Runs an item immediately, bypassing the lane's queue/running slot
+	 * entirely — used only for the re-entrant case above. Deliberately
+	 * doesn't touch `lane.queue`/`lane.running`: the lane is already held by
+	 * the outer run for the whole duration of this call (runIt() itself
+	 * never touches `lane.running` — only pump()'s wrapping .finally() does,
+	 * and that's bypassed here), so a genuinely queued third item on the
+	 * same lane still correctly waits for the outer run to finish rather
+	 * than starting concurrently with it.
+	 */
+	private runInline<T>(
+		item: LLMQueueItemInput<T>,
+		laneKey: string,
+		presetId?: string
+	): { id: string; done: Promise<T> } {
+		const id = presetId ?? uuidv4()
+
+		let resolve!: (value: T) => void
+		let reject!: (reason: unknown) => void
+		const done = new Promise<T>((res, rej) => {
+			resolve = res
+			reject = rej
+		})
+
+		const run: Run<T> = {
+			id,
+			item,
+			status: "queued",
+			startedAt: new Date().toISOString(),
+			controller: new AbortController(),
+			resolve,
+			reject,
+			settled: false,
+			forceDetachTimer: null
+		}
+
+		this.runsById.set(id, run)
+		item.onStatusChange?.("queued")
+		this.notify()
+
+		void this.runIt(laneKey, run)
 
 		return { id, done }
 	}
@@ -174,16 +259,20 @@ class LLMQueue {
 		this.notify()
 	}
 
-	private async pump(laneKey: string) {
+	private pump(laneKey: string) {
 		const lane = this.getLane(laneKey)
 		if (lane.running) return
 		const run = lane.queue.shift()
 		if (!run) return
 
 		lane.running = run
-		this.runIt(laneKey, run).finally(() => {
-			if (lane.running === run) lane.running = null
-			this.pump(laneKey)
+		const nextActiveLanes = new Set(activeLanes.getStore() ?? [])
+		nextActiveLanes.add(laneKey)
+		activeLanes.run(nextActiveLanes, () => {
+			this.runIt(laneKey, run).finally(() => {
+				if (lane.running === run) lane.running = null
+				this.pump(laneKey)
+			})
 		})
 	}
 

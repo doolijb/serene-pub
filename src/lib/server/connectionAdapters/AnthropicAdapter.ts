@@ -10,6 +10,8 @@ import type { CompiledPrompt } from "../utils/promptBuilder"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { anthropicSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
+import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
 
 // Known Claude models for listModels
 const ANTHROPIC_MODELS = [
@@ -79,8 +81,8 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 
 	getClient(): Anthropic {
 		if (!this._client) {
-			const apiKey = this.connection.extraJson?.apiKey || ""
-			const baseURL = this.connection.baseUrl || undefined
+			const apiKey = decryptApiKeyField(this.connection.extraJson?.apiKey) || ""
+			const baseURL = normalizeBaseUrl(this.connection.baseUrl) || undefined
 			this._client = new Anthropic({
 				apiKey,
 				...(baseURL ? { baseURL } : {})
@@ -270,10 +272,10 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 						}
 					} catch (e: any) {
 						// An intentional abort throws too (the SDK rejects the
-						// aborted request) — don't surface that as a "FAILURE"
-						// completion, the caller already knows this was cancelled.
+						// aborted request) — don't surface that as an error,
+						// the caller already knows this was cancelled.
 						if (this.isAborting) return
-						contentCb("FAILURE: " + (e.message || String(e)))
+						throw e
 					}
 				},
 				compiledPrompt,
@@ -324,11 +326,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 						isAborted: true
 					}
 				}
-				return {
-					completionResult: "FAILURE: " + (e.message || String(e)),
-					compiledPrompt,
-					isAborted: this.isAborting
-				}
+				throw e
 			}
 		}
 	}
@@ -350,7 +348,7 @@ async function testConnection(
 	connection: SelectConnection
 ): Promise<{ ok: boolean; error?: string }> {
 	try {
-		const apiKey = connection.extraJson?.apiKey || ""
+		const apiKey = decryptApiKeyField(connection.extraJson?.apiKey) || ""
 		if (!apiKey) {
 			return { ok: false, error: "API key is required" }
 		}

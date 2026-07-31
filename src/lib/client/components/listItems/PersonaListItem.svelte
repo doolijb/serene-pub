@@ -15,6 +15,7 @@
 		onExport?: (
 			persona: Sockets.Personas.List.Response["personaList"][0]
 		) => void
+		onSetDefault?: (id: number) => void
 		showControls?: boolean
 		contentTitle?: string
 		classes?: string
@@ -26,6 +27,7 @@
 		onEdit,
 		onDelete,
 		onExport,
+		onSetDefault,
 		showControls = true,
 		contentTitle = "Go to persona",
 		classes = ""
@@ -47,10 +49,17 @@
 >
 	{#snippet content()}
 		<Avatar char={persona} size="w-[4em] h-[4em] min-w-[4em] min-h-[4em]" />
-		<div class="relative flex flex-1 gap-2">
-			<div class="relative flex-1">
+		<div class="relative flex min-w-0 flex-1 gap-2">
+			<div class="relative min-w-0 flex-1">
 				<div class="flex items-center gap-1 text-left font-semibold">
 					<span class="truncate">{persona.name}</span>
+					{#if persona.isDefault}
+						<span
+							class="bg-primary-500 shrink-0 rounded px-1.5 py-0.5 text-[0.65rem] font-medium text-white"
+						>
+							Default
+						</span>
+					{/if}
 					<EmbeddingStatusIcon
 						embeddingModel={persona.embeddingModel}
 					/>
@@ -66,7 +75,7 @@
 		</div>
 	{/snippet}
 	{#snippet controls()}
-		{#if showControls && (onclick || onEdit || onExport || onDelete)}
+		{#if showControls && (onclick || onEdit || onExport || onDelete || onSetDefault)}
 			<div role="none" onclick={(e) => e.stopPropagation()}>
 				<Popover
 					open={menuOpen}
@@ -140,6 +149,27 @@
 												aria-hidden="true"
 											/>
 											<span>Export</span>
+										</button>
+									{/if}
+									{#if onSetDefault}
+										<button
+											class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
+											disabled={persona.isDefault}
+											onclick={() => {
+												menuOpen = false
+												onSetDefault?.(persona.id!)
+											}}
+											type="button"
+										>
+											<Icons.Star
+												size={16}
+												aria-hidden="true"
+											/>
+											<span
+												>{persona.isDefault
+													? "Default"
+													: "Set as default"}</span
+											>
 										</button>
 									{/if}
 									{#if onDelete}

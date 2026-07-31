@@ -43,6 +43,12 @@ export const setupMarkComplete: Handler<
 	event: "setup:markComplete",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
+		// Anything other than the literal "summarization" fell into the else
+		// branch and silently set ragStepComplete instead — letting a client
+		// flip that flag without ever completing the rag step.
+		if (params.step !== "summarization" && params.step !== "rag") {
+			throw new Error("Invalid setup step.")
+		}
 		const updates =
 			params.step === "summarization"
 				? { summarizationStepComplete: true }

@@ -1,14 +1,14 @@
 # Connections
 
-Connections tell Serene Pub how to reach a language model — which backend, which model, which API key, and how requests should be shaped. This page covers all seven connection types, the KoboldCPP Manager and Ollama Manager sub-systems for running local models, and the related Sampling Configs, Context Configs, Prompt Formats, and Token Counters that control how a connection actually generates text.
+Connections tell Serene Pub how to reach a language model — which backend, which model, which API key, and how requests should be shaped. This page covers all seven connection types, the KoboldCPP Manager and Ollama Manager sub-systems for running local models, and the related Sampling Configs, Prompt Formats, and Token Counters that control how a connection actually generates text.
 
 ## Overview
 
-The **Connections** sidebar (opened from the main navigation, admin-only) is where you create, edit, test, and delete connections. Alongside it in the nav are three related admin-only sidebars — **Sampling**, **Contexts**, and **Prompts** — plus, when enabled, **KoboldCPP Manager** and **Ollama Manager**. All of these live behind the admin gate: non-admin users benefit from whatever connection/sampling/context/prompt an admin has set as the system default, but can't open these sidebars themselves. [Prompt Configs](./prompt-configs.md) (the "Prompts" sidebar) is covered on its own page since it's a large topic in its own right; this page focuses on Connections, Sampling Configs, and Context Configs.
+The **Connections** sidebar (opened from the main navigation, admin-only) is where you create, edit, test, and delete connections. Alongside it in the nav are three related admin-only sidebars — **Sampling**, **Contexts**, and **Prompts** — plus, when enabled, **KoboldCPP Manager** and **Ollama Manager**. All of these live behind the admin gate: non-admin users benefit from whatever connection/sampling/context/prompt an admin has set as the system default, but can't open these sidebars themselves. [Prompt Configs](./prompt-configs.md) (the "Prompts" sidebar) and [Context Configs](./context-configs.md) (the "Contexts" sidebar) are each covered on their own page since they're large topics in their own right; this page focuses on Connections and Sampling Configs.
 
 Each connection is a named record holding a **type** (which backend adapter to use), a **Base URL** and/or **API Key** where applicable, a selected **Model**, a **Prompt Format**, a **Token Counter**, and a bag of type-specific **Advanced Settings** (stream mode, chat-vs-completion mode, and so on). Exactly one connection can be marked as the system's default (a star icon in the sidebar), and individual Chat Prompts or chats can override it — see [Prompt Configs](./prompt-configs.md) and [Chats](./chats.md) for how that override chain resolves.
 
-Creating a connection is done via the **+** button (or Ctrl/Cmd+N) in the Connections sidebar, which opens a **Create New AI Connection** modal: enter a name, pick a **Connection Type** from the dropdown (each option shows a difficulty rating and a short description), and for **OpenAI Chat** specifically, also pick a **Service Preset** (see below). The editor tracks unsaved changes and will prompt before you switch connections, close the sidebar, or discard edits; a refresh icon reverts to the last-saved values, and a trash icon deletes the connection (with a confirmation modal).
+Creating a connection is done via the **+** button (or Ctrl/Cmd+N) in the Connections sidebar, which opens a **Create New AI Connection** modal: enter a name, then pick an **AI Service** from a single searchable combobox (placeholder text: "Search for a service (Groq, Ollama, Mistral, ...)"). This picker flattens every native connection type *and* every OpenAI-compatible preset (Groq, OpenRouter, Mistral, and so on — see [OpenAI Chat & Compatible Endpoint Presets](#openai-chat--compatible-endpoint-presets) below) into one list, grouped under **Cloud APIs**, **Local / Self-hosted**, and **Custom** — a preset isn't nested two levels deep behind a separate "OpenAI Chat" type selection; you can search and pick it directly. Whichever service you pick, its difficulty rating and description appear below the picker before you confirm. The editor tracks unsaved changes and will prompt before you switch connections, close the sidebar, or discard edits; a refresh icon reverts to the last-saved values, and a trash icon deletes the connection (with a confirmation modal).
 
 ## Connection Types At A Glance
 
@@ -38,24 +38,35 @@ The Ollama connection form has a **Model** dropdown populated via **Refresh Mode
 
 OpenAI Chat is Serene Pub's generic OpenAI-compatible connection type, meant for the real OpenAI API as well as any of the many services that mimic its chat-completion schema. Its form has a **Model** dropdown (via **Refresh Models**), **Test Connection**, a **Base URL** field, and an **API Key** field (password-masked). Advanced Settings hold a **Stream** switch and a **Prerender Prompt** switch — when Prerender Prompt is on, a **Prompt Format** dropdown appears so the prompt is rendered to text client-side before being sent as a single chat message, rather than sent as native multi-message chat.
 
-Because so many providers speak this same protocol, creating a new **OpenAI Chat** connection shows an extra **Service Preset** dropdown in the New Connection modal, pre-filling the Base URL and a sensible Token Counter/Prompt Format for each:
+Because so many providers speak this same protocol, the **AI Service** picker in the New Connection modal (see [Overview](#overview)) lists every OpenAI-compatible preset directly alongside the native connection types, pre-filling the Base URL and a sensible Token Counter/Prompt Format for each. Selecting any preset here still creates an `openai` (OpenAI Chat) connection underneath — the preset only decides the starting values:
 
-| Preset            | Base URL                                 |
-| ----------------- | ---------------------------------------- |
-| Empty             | _(blank — fill in your own)_             |
-| Ollama            | `http://localhost:11434/v1/`             |
-| OpenRouter        | `https://openrouter.ai/api/v1/`          |
-| OpenAI (Official) | `https://api.openai.com/v1/`             |
-| LocalAI           | `http://localhost:8080/v1/`              |
-| AnyScale          | `https://api.endpoints.anyscale.com/v1/` |
-| Groq              | `https://api.groq.com/openai/v1/`        |
-| Together AI       | `https://api.together.xyz/v1/`           |
-| DeepInfra         | `https://api.deepinfra.com/v1/openai/`   |
-| Fireworks AI      | `https://api.fireworks.ai/inference/v1/` |
-| Perplexity AI     | `https://api.perplexity.ai/v1/`          |
-| KoboldCPP         | `http://localhost:5001/v1/`              |
+| Preset                                 | Base URL                                                    |
+| --------------------------------------- | ------------------------------------------------------------ |
+| Custom (OpenAI-Compatible) / Empty      | _(blank — fill in your own)_                                  |
+| Ollama (via OpenAI-Compatible API)      | `http://localhost:11434/v1/`                                  |
+| OpenRouter                              | `https://openrouter.ai/api/v1/`                                |
+| OpenAI (Official)                       | `https://api.openai.com/v1/`                                   |
+| LocalAI                                 | `http://localhost:8080/v1/`                                    |
+| AnyScale                                | `https://api.endpoints.anyscale.com/v1/`                       |
+| Groq                                    | `https://api.groq.com/openai/v1/`                              |
+| Together AI                             | `https://api.together.xyz/v1/`                                 |
+| DeepInfra                               | `https://api.deepinfra.com/v1/openai/`                         |
+| Fireworks AI                            | `https://api.fireworks.ai/inference/v1/`                       |
+| Perplexity AI                           | `https://api.perplexity.ai/v1/`                                |
+| KoboldCPP (via OpenAI-Compatible API)   | `http://localhost:5001/v1/`                                    |
+| Mistral AI *(Experimental)*             | `https://api.mistral.ai/v1/`                                   |
+| xAI Grok *(Experimental)*               | `https://api.x.ai/v1/`                                          |
+| DeepSeek *(Experimental)*               | `https://api.deepseek.com/v1/`                                  |
+| Google Gemini *(Experimental)*          | `https://generativelanguage.googleapis.com/v1beta/openai/`      |
+| Cohere *(Experimental)*                 | `https://api.cohere.ai/compatibility/v1/`                       |
+| Novita AI *(Experimental)*              | `https://api.novita.ai/openai/`                                 |
+| Featherless AI *(Experimental)*         | `https://api.featherless.ai/v1/`                                |
+| text-generation-webui *(Experimental)*  | `http://127.0.0.1:5000/v1/`                                     |
+| vLLM *(Experimental)*                   | `http://localhost:8000/v1/`                                     |
+| SGLang *(Experimental)*                 | `http://localhost:30000/v1/`                                    |
+| Aphrodite Engine *(Experimental)*       | `http://localhost:2242/v1/`                                     |
 
-These presets only set the initial Base URL, Prompt Format, and Token Counter — you can change any of them afterward, and you'll still need to supply an API key for services that require one.
+Presets tagged **Experimental** are newer additions provided as a starting point but not yet as thoroughly exercised against Serene Pub as the original list above — double-check the Base URL and any provider-specific quirks yourself. Every preset only sets the initial Base URL, Prompt Format, and Token Counter — you can change any of them afterward, and you'll still need to supply an API key for services that require one. The Ollama and KoboldCPP presets here talk to those backends' OpenAI-*compatible* endpoints, a different wire protocol from the dedicated [Ollama](#ollama) and [KoboldCPP (Remote)](#koboldcpp-remote) connection types described below — the picker labels them "(via OpenAI-Compatible API)" to keep the two apart.
 
 ## Llama.cpp
 
@@ -213,104 +224,15 @@ Response Tokens and Context Tokens each have an **Unlock max** checkbox next to 
 
 The **Select Samplers** button switches the sidebar into an "Enable/Disable Weight Options" screen — a checkbox grid, one per parameter, controlling whether that field is sent to the model at all (versus left at the provider's own default and hidden from the editor). This is how the built-in **Disabled** preset works: it ships with Temperature, Context Tokens, and Response Tokens all disabled, letting the connection's native defaults take over for those three.
 
-### Power-user note: how sampling maps to each connection type
-
-Internally, each Sampling Config's fields are translated to the parameter names the target API actually expects — for example `repetitionPenalty` becomes `rep_pen` for KoboldCPP but `repeat_penalty` for Ollama and `repetition_penalty` for LM Studio, and `contextTokens` becomes `num_ctx` (Ollama), `max_context_length` (LM Studio/KoboldCPP), or `n_ctx` (Llama.cpp) — OpenAI Chat and Anthropic don't accept a context-size parameter at all, so it's used only for local token-budget accounting on those types. Not every connection type supports every possible sampler in Serene Pub's data model; for example Anthropic maps only Temperature, Top P, Top K, and Response Tokens and has no equivalent for Frequency/Presence Penalty or Seed — unsupported fields are silently omitted from the outgoing request rather than causing an error.
-
 ### Immutable presets
 
 Serene Pub ships two built-in, non-deletable Sampling Configs: **Default** (all nine parameters enabled with standard ranges) and **Disabled** (Temperature, Context Tokens, and Response Tokens turned off, deferring to the connection's own defaults). Both act as safe starting points to clone from via the **+** button.
 
-## Context Configs
+### Power-user note: how sampling maps to each connection type
 
-Where a Sampling Config controls _how_ a model samples tokens, a Context Config controls _what_ gets sent to it — the full Handlebars-style template that assembles the system block, character/persona data, scenario, lorebook entries, chat history, and any post-history instructions into the final request. The **Contexts** sidebar manages these with the same dropdown/toolbar pattern as Sampling Configs (built-ins marked `*`, **+**/refresh/delete, **Update**, **Set Default**). A **Show Advanced** / **Hide Advanced** button reveals the raw **Template** textarea — this is deliberately hidden by default since editing it means writing valid Handlebars.
+Internally, each Sampling Config's fields are translated to the parameter names the target API actually expects — for example `repetitionPenalty` becomes `rep_pen` for KoboldCPP but `repeat_penalty` for Ollama and `repetition_penalty` for LM Studio, and `contextTokens` becomes `num_ctx` (Ollama), `max_context_length` (LM Studio/KoboldCPP), or `n_ctx` (Llama.cpp) — OpenAI Chat and Anthropic don't accept a context-size parameter at all, so it's used only for local token-budget accounting on those types. Not every connection type supports every possible sampler in Serene Pub's data model; for example Anthropic maps only Temperature, Top P, Top K, and Response Tokens and has no equivalent for Frequency/Presence Penalty or Seed — unsupported fields are silently omitted from the outgoing request rather than causing an error.
 
-**Context Configs are distinct from Prompt Configs.** A Prompt Config (see [Prompt Configs](./prompt-configs.md)) supplies the free-text _instructions_ — writing style, tone, rules — that get slotted into a Context Config's template via the `{{{instructions}}}` variable below. The Context Config is the structural template itself.
-
-### The default template and available variables
-
-The built-in **Default** Context Config's template (shown here verbatim) illustrates every variable and helper Serene Pub currently interpolates:
-
-````handlebars
-{{#systemBlock}}
-	Instructions: """
-	{{#if currentDate}}
-		The current date in the story is {{{currentDate}}}.
-	{{/if}}
-
-	{{{instructions}}}
-	""" Assistant Characters (AI-controlled): ```json
-	{{{characters}}}
-	``` User Characters (player-controlled): ```json
-	{{{personas}}}
-	``` Scenario: """
-	{{{scenario}}}
-	"""
-
-	{{#if worldLore}}
-		World lore: ```json
-		{{{worldLore}}}
-		```
-	{{/if}}
-
-	{{#if history}}
-		Story history: ```json
-		{{{history}}}
-		```
-	{{/if}}
-
-	{{#if narrativeGraph}}
-		Story relationships: ```json
-		{{{narrativeGraph}}}
-		```
-	{{/if}}
-
-	{{#if exampleDialogue}}
-		Example dialogue: """
-		{{{exampleDialogue}}}
-		"""
-	{{/if}}
-{{/systemBlock}}
-
-{{#each chatMessages}}
-	{{#if (eq role "assistant")}}
-		{{#assistantBlock}}
-			{{{name}}}: {{{message}}}
-		{{/assistantBlock}}
-	{{/if}}
-	{{#if (eq role "user")}}
-		{{#userBlock}}
-			{{{name}}}: {{{message}}}
-		{{/userBlock}}
-	{{/if}}
-{{/each}}
-
-{{#if postHistoryInstructions}}
-	{{#systemBlock}}
-		{{{postHistoryInstructions}}}
-	{{/systemBlock}}
-{{/if}}
-````
-
-Available variables include `currentDate`, `instructions` (from the active Chat Prompt), `characters` and `personas` (each rendered as JSON), `scenario`, `worldLore`, `history`, `narrativeGraph`, and `exampleDialogue` (all optional — wrap them in `{{#if ...}}` since they may be empty), `chatMessages` (an array iterated with `{{#each}}`, each entry exposing `role`, `name`, and `message`), and `postHistoryInstructions`. Triple-brace `{{{...}}}` is used throughout to output raw text/JSON without HTML-escaping.
-
-### Why character, persona, and lore data is JSON, not prose
-
-Notice that `characters`, `personas`, `worldLore`, `history`, and `narrativeGraph` are all fenced as ` ```json ` blocks, while `instructions`, `scenario`, and `exampleDialogue` stay wrapped in plain `"""` prose fences. That split is deliberate: the JSON-fenced fields are _facts_ (who someone is, what they know, what happened), and the prose-fenced fields are _directives_ (how to write, what tone to take, what's happening right now) — the template keeps those two kinds of content visibly distinct rather than blending everything into one undifferentiated paragraph.
-
-The reasoning behind serializing the factual side as JSON specifically:
-
-- **Explicit key boundaries reduce attribute bleed.** In a group chat with several characters, prose descriptions concatenated back-to-back are genuinely ambiguous for a model to attribute correctly — a trait mentioned near the end of one character's paragraph can get picked up as belonging to the next one. A JSON array of objects with explicit `name` keys removes that ambiguity structurally, independent of how any individual field is written.
-- **It's a base-model competency, not a roleplay one.** The instinct is that RP-oriented models — fine-tuned mostly on the prose/PList-style character cards common across other popular roleplay applications — would parse JSON _worse_ than the format they were tuned on. In practice, RP fine-tuning mostly reshapes _output_ voice and pacing, not _input_ parsing; general structured-data comprehension (reinforced heavily in most base/instruct training via function-calling and tool-use data) tends to survive underneath a lighter RP fine-tune layer largely intact.
-- **It keeps the retrieval paths consistent.** Both Context Infill Engines (keyword matching and RAG — see [Embeddings & RAG](./embeddings-and-rag.md)) serialize these same fields to JSON before injection, so switching retrieval modes doesn't also change the shape of what the model sees.
-
-### Block helpers: systemBlock, assistantBlock, userBlock
-
-Three custom block helpers structure the output by speaker role: `{{#systemBlock}}...{{/systemBlock}}` wraps system-level content, `{{#assistantBlock}}...{{/assistantBlock}}` wraps a line spoken by an AI-controlled character, and `{{#userBlock}}...{{/userBlock}}` wraps a line spoken by the player's persona. The connection adapter is responsible for turning these blocks into whatever shape the target API needs — separate chat messages with `system`/`assistant`/`user` roles for chat-mode connections, or concatenated into one flat prompt (using the connection's selected [Prompt Format](#prompt-formats-and-token-counters)) for text-completion connections. An `{{eq role "assistant"}}` helper is used inside the `{{#each chatMessages}}` loop to branch on each message's role.
-
-### Editing and creating custom templates
-
-Because the built-in **Default** config is immutable, customizing the template means cloning it first via the **+** button (which copies the current template into a new, editable config under a name you choose), then editing the **Template** textarea under **Show Advanced**. This is an advanced, all-or-nothing operation — a malformed template can break every connection that uses it, so it's worth testing changes on a low-stakes chat before setting a custom Context Config as your default.
+Context Configs — the Handlebars-style templates that assemble the full request sent to a model — are covered on their own page: see [Context Configs](./context-configs.md).
 
 ## Prompt Formats and Token Counters
 

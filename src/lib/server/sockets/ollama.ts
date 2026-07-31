@@ -12,6 +12,7 @@ import { OllamaModelSearchSource } from "$lib/shared/constants/OllamaModelSource
 import { emit } from "process"
 import { isAndroidWrapper } from "$lib/server/utils"
 import type { Handler } from "$lib/shared/events"
+import { loginRateLimit } from "$lib/server/services/loginRateLimit"
 
 // --- OLLAMA SPECIFIC FUNCTIONS ---
 
@@ -470,6 +471,13 @@ export const ollamaSearchAvailableModelsHandler: Handler<
 	event: "ollama:searchAvailableModels",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		// Instance-wide budget — the Hugging Face branch below hits that
+		// host on every call with no throttling otherwise, unlike the
+		// recommended-models handler's own TTL cache for the same concern.
+		if (loginRateLimit.isRateLimited("ollama:searchAvailableModels")) {
+			throw new Error("Rate limited. Please wait a moment and try again.")
+		}
+		loginRateLimit.recordFailedAttempt("ollama:searchAvailableModels")
 		try {
 			const { searchTerm: search, source } = params
 			let models: Array<{

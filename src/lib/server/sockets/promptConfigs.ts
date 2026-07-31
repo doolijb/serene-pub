@@ -110,12 +110,35 @@ export const promptConfigsUpdate: Handler<
 		}
 
 		const id = params.promptConfig.id!
-		const { id: _, ...updateData } = params.promptConfig
-		const [promptConfig] = await db
-			.update(schema.promptConfigs)
-			.set(updateData)
-			.where(eq(schema.promptConfigs.id, id))
-			.returning()
+		const { id: _, ...rawUpdateData } = params.promptConfig
+
+		const currentConfig = await db.query.promptConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, id)
+		})
+		// Immutable (built-in) configs may still have their AI Override
+		// (connection/sampling) changed — that's the one thing the UI
+		// leaves editable for them — but nothing else. Every other field
+		// must come only from seeding.
+		const updateData = currentConfig?.isImmutable
+			? {
+					connectionId: rawUpdateData.connectionId,
+					samplingConfigId: rawUpdateData.samplingConfigId
+				}
+			: rawUpdateData
+
+		// A raw client could target an immutable row with neither override
+		// field present at all — updateData then has no defined values, and
+		// an empty .set() throws rather than being a legitimate no-op.
+		const hasUpdates = Object.values(updateData).some((v) => v !== undefined)
+		const promptConfig = hasUpdates
+			? (
+					await db
+						.update(schema.promptConfigs)
+						.set(updateData)
+						.where(eq(schema.promptConfigs.id, id))
+						.returning()
+				)[0]
+			: currentConfig!
 		await promptConfigsListHandler.handler(socket, {}, emitToUser)
 		const res: Sockets.PromptConfigs.Update.Response = { promptConfig }
 		emitToUser("promptConfigs:update", res)
@@ -194,9 +217,12 @@ export const promptConfigsSetUserActive: Handler<
 		})
 
 		if (!userSettings) {
-			await db.insert(schema.userSettings).values({
-				userId: currentUser.id
-			})
+			await db
+				.insert(schema.userSettings)
+				.values({
+					userId: currentUser.id
+				})
+				.onConflictDoNothing()
 		}
 
 		await db

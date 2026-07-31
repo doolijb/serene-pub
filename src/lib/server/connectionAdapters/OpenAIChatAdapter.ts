@@ -16,6 +16,8 @@ import type {
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { openAISamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
+import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
 
 export class OpenAIChatAdapter extends BaseConnectionAdapter {
 	private abortController?: AbortController
@@ -92,10 +94,12 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		isAborted: boolean
 		thinkingContent?: string
 	}> {
-		const apiKey = this.connection.extraJson?.apiKey
+		const apiKey = decryptApiKeyField(this.connection.extraJson?.apiKey)
 		const baseURL =
-			this.connection.baseUrl ||
-			CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT].baseUrl
+			normalizeBaseUrl(this.connection.baseUrl) ||
+			normalizeBaseUrl(
+				CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT].baseUrl
+			)
 		const model = this.connection.model || "gpt-3.5-turbo"
 		const stream = this.connection.extraJson?.stream || false
 		const compiledPrompt: CompiledPrompt = await this.compilePrompt({})
@@ -234,10 +238,12 @@ async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
 	try {
-		const apiKey = connection.extraJson?.apiKey
+		const apiKey = decryptApiKeyField(connection.extraJson?.apiKey)
 		const baseURL =
-			connection.baseUrl ||
-			CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT].baseUrl
+			normalizeBaseUrl(connection.baseUrl) ||
+			normalizeBaseUrl(
+				CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT].baseUrl
+			)
 		const openai = new OpenAI({
 			apiKey,
 			baseURL: baseURL || undefined,
@@ -264,10 +270,12 @@ async function testConnection(
 	connection: SelectConnection
 ): Promise<{ ok: boolean; error?: string }> {
 	try {
-		const apiKey = connection.extraJson?.apiKey
+		const apiKey = decryptApiKeyField(connection.extraJson?.apiKey)
 		const baseURL =
-			connection.baseUrl ||
-			CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT].baseUrl
+			normalizeBaseUrl(connection.baseUrl) ||
+			normalizeBaseUrl(
+				CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT].baseUrl
+			)
 		const openai = new OpenAI({
 			apiKey,
 			baseURL: baseURL || undefined,

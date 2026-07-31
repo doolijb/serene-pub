@@ -10,6 +10,7 @@
 	import * as Icons from "@lucide/svelte"
 
 	const socket = useTypedSocket()
+	const panelsCtx: PanelsCtx = getContext("panelsCtx")
 
 	onMount(() => {
 		socket.on("userSettings:updateShowAllCharacterFields", (message) => {
@@ -288,6 +289,7 @@
 	function switchToDocumentView() {
 		enableAccessibility()
 		goto("/document-view")
+		panelsCtx.fullscreenPanel = null
 	}
 
 	async function logout() {
@@ -325,82 +327,102 @@
 </script>
 
 <div class="flex flex-col gap-4">
-	<div class="flex gap-2">
-		<Switch
-			name="show-all-character-fields"
-			checked={userSettingsCtx.settings?.showAllCharacterFields ?? false}
-			onCheckedChange={onShowAllCharacterFieldsClick}
-		>
-			<Switch.Control
-				class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+	<div class="card preset-tonal divide-surface-300-700 divide-y p-4">
+		<div class="flex flex-col gap-2 pb-4">
+			<p class="text-muted-foreground text-sm">
+				Shows every field on the character form (advanced/less-common
+				ones included), instead of just the commonly-used subset.
+			</p>
+			<Switch
+				name="show-all-character-fields"
+				checked={userSettingsCtx.settings?.showAllCharacterFields ??
+					false}
+				onCheckedChange={onShowAllCharacterFieldsClick}
 			>
-				<Switch.Thumb />
-			</Switch.Control>
-			<Switch.HiddenInput />
-			<Switch.Label class="font-semibold">
-				Show All Character Fields
-			</Switch.Label>
-		</Switch>
-	</div>
+				<Switch.Control
+					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+				>
+					<Switch.Thumb />
+				</Switch.Control>
+				<Switch.HiddenInput />
+				<Switch.Label class="font-semibold">
+					Show All Character Fields
+				</Switch.Label>
+			</Switch>
+		</div>
 
-	<div class="flex gap-2">
-		<Switch
-			name="easy-character-creation"
-			checked={userSettingsCtx.settings?.enableEasyCharacterCreation ??
-				true}
-			onCheckedChange={onEasyCharacterCreationClick}
-		>
-			<Switch.Control
-				class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+		<div class="flex flex-col gap-2 py-4">
+			<p class="text-muted-foreground text-sm">
+				Clicking "New" in the Characters panel opens a quick, simplified
+				creator instead of the full character form. Turn off to always
+				go straight to the full form.
+			</p>
+			<Switch
+				name="easy-character-creation"
+				checked={userSettingsCtx.settings
+					?.enableEasyCharacterCreation ?? true}
+				onCheckedChange={onEasyCharacterCreationClick}
 			>
-				<Switch.Thumb />
-			</Switch.Control>
-			<Switch.HiddenInput />
-			<Switch.Label class="font-semibold">
-				Easy Character Creation
-			</Switch.Label>
-		</Switch>
-	</div>
+				<Switch.Control
+					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+				>
+					<Switch.Thumb />
+				</Switch.Control>
+				<Switch.HiddenInput />
+				<Switch.Label class="font-semibold">
+					Easy Character Creation
+				</Switch.Label>
+			</Switch>
+		</div>
 
-	<div class="flex gap-2">
-		<Switch
-			name="easy-persona-creation"
-			checked={userSettingsCtx.settings?.enableEasyPersonaCreation ??
-				true}
-			onCheckedChange={onEasyPersonaCreationClick}
-		>
-			<Switch.Control
-				class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+		<div class="flex flex-col gap-2 py-4">
+			<p class="text-muted-foreground text-sm">
+				Same as Easy Character Creation above, but for the Personas
+				panel's "New" button.
+			</p>
+			<Switch
+				name="easy-persona-creation"
+				checked={userSettingsCtx.settings?.enableEasyPersonaCreation ??
+					true}
+				onCheckedChange={onEasyPersonaCreationClick}
 			>
-				<Switch.Thumb />
-			</Switch.Control>
-			<Switch.HiddenInput />
-			<Switch.Label class="font-semibold">
-				Easy Persona Creation
-			</Switch.Label>
-		</Switch>
-	</div>
+				<Switch.Control
+					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+				>
+					<Switch.Thumb />
+				</Switch.Control>
+				<Switch.HiddenInput />
+				<Switch.Label class="font-semibold">
+					Easy Persona Creation
+				</Switch.Label>
+			</Switch>
+		</div>
 
-	<div class="flex gap-2">
-		<Switch
-			name="show-home-page-banner"
-			checked={userSettingsCtx.settings?.showHomePageBanner ?? true}
-			onCheckedChange={onShowHomePageBannerClick}
-		>
-			<Switch.Control
-				class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+		<div class="flex flex-col gap-2 pt-4">
+			<p class="text-muted-foreground text-sm">
+				Shows the "Serene Pub is in alpha!" banner at the top of the
+				home page.
+			</p>
+			<Switch
+				name="show-home-page-banner"
+				checked={userSettingsCtx.settings?.showHomePageBanner ?? true}
+				onCheckedChange={onShowHomePageBannerClick}
 			>
-				<Switch.Thumb />
-			</Switch.Control>
-			<Switch.HiddenInput />
-			<Switch.Label class="font-semibold">
-				Show Home Page Banner
-			</Switch.Label>
-		</Switch>
+				<Switch.Control
+					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+				>
+					<Switch.Thumb />
+				</Switch.Control>
+				<Switch.HiddenInput />
+				<Switch.Label class="font-semibold">
+					Show Home Page Banner
+				</Switch.Label>
+			</Switch>
+		</div>
 	</div>
 
 	<!-- Document View Section -->
-	<div class="mt-4 border-t pt-4">
+	<div class="card preset-tonal p-4">
 		<h3 class="mb-2 text-lg font-semibold">Document View</h3>
 		<p class="text-surface-700-300 mb-3 text-sm">
 			A simplified, high-contrast, keyboard- and screen-reader-friendly
@@ -419,7 +441,7 @@
 
 	<!-- Import Section -->
 	{#if userCtx.user?.isAdmin && !systemSettingsCtx.settings?.isAndroidWrapper}
-		<div class="mt-4 border-t pt-4">
+		<div class="card preset-tonal p-4">
 			<h3 class="mb-4 text-lg font-semibold">Data Import</h3>
 			<p class="text-surface-700-300 mb-3 text-sm">
 				Import your characters, personas, chats, and lorebooks from
@@ -438,7 +460,7 @@
 
 	<!-- User Profile Section - Only show when accounts are enabled -->
 	{#if systemSettingsCtx.settings?.isAccountsEnabled && userCtx.user}
-		<div class="mt-4 border-t pt-4">
+		<div class="card preset-tonal p-4">
 			<h3 class="mb-4 text-lg font-semibold">User Profile</h3>
 
 			<!-- Display Name -->

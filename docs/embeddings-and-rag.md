@@ -13,7 +13,7 @@ As a chat gets long, older messages and related lore don't just disappear from t
 
 ### How retrieval fits into a generated reply
 
-When you send a message, Serene Pub's prompt builder checks whether embeddings are enabled and ready. If so, it runs a semantic search scoped to the current chat: the chat's own messages, its lorebook, the lorebooks of any linked characters or personas, and — if characters overlap — messages from other chats that share the same lorebook and cast. Results are ranked by similarity, boosted slightly for recency, and capped per content type (a handful of messages, world lore entries, character lore entries, history entries, and narrative-graph relationships) so retrieved context doesn't crowd out the guaranteed recent messages. If embeddings are off or the model isn't ready, prompt building falls back to non-semantic (keyword/recency-based) content selection instead.
+When you send a message, Serene Pub's prompt builder checks whether embeddings are enabled and ready. If so, it runs a semantic search scoped to the current chat: the chat's own messages plus the content of the chat's own lorebook only — deliberately *not* a linked character's or persona's own separate lorebook, and not messages from other chats, even ones sharing the same lorebook and cast. RAG only ever draws on the story world the chat itself is scoped to, never on an unrelated lorebook a cast member happens to also be attached to elsewhere. Results are ranked by similarity, boosted slightly for recency, and capped per content type (a handful of messages, world lore entries, character lore entries, history entries, and narrative-graph relationships) so retrieved context doesn't crowd out the guaranteed recent messages. If embeddings are off or the model isn't ready, prompt building falls back to non-semantic (keyword/recency-based) content selection instead.
 
 ### What gets embedded
 
@@ -36,7 +36,7 @@ Once configured, the panel switches to its normal Queue/Settings view (below), a
 
 The onboarding wizard's Embeddings/RAG step doesn't duplicate this setup UI — its **Open Embeddings Settings** button opens this same panel and the wizard waits for it to report ready before letting you continue, the same pattern used for the Ollama/KoboldCPP "Easy Setup" steps. A **Disable & Skip** button is offered if you change your mind mid-wizard after already enabling something.
 
-**On Android**, only External API is offered — on-device embedding models depend on a native library that can't run in the Android app's bundled runtime. See [Android App](./android.md) for the full list of Android-specific limitations.
+**On Android**, only External API is offered — on-device embedding models depend on a native library (`onnxruntime-node`) that can't run in the Android app's Bionic-based runtime. This is actually a general capability check, not an Android-only special case: Serene Pub probes whether the local embedding engine can load at all on the current system, and Android is just a fast, always-true instance of that check — the same "Local Model not supported here" path would kick in on any other platform where that native library doesn't ship a working build (Intel Macs have hit this in the past, for example). See [Android App](./android.md) for the full list of Android-specific limitations.
 
 ### Choosing a local embedding model
 
@@ -86,12 +86,26 @@ The Settings tab surfaces:
 The queue has three states, shown by both the sidebar's status card and the header navigation icon:
 
 - **Idle** — nothing queued, or the queue has been explicitly stopped.
-- **Running** — actively embedding items one at a time; the header's Embeddings icon animates and turns green.
+- **Running** — actively embedding items one at a time; since Embeddings has no left-navigation icon of its own (see above), the header's **Connections** icon is what animates and turns green while this is happening.
 - **Paused** — reserved for pausing the queue without fully stopping it (for example, to avoid competing with the model during an active chat generation).
 
 ### Troubleshooting a stuck or empty queue
 
 If the queue looks stuck at "Idle" with items still needing embeddings, check the Settings tab first — the queue silently stops (and logs a warning server-side) if embeddings are disabled, if a local model fails to auto-load (most commonly because it isn't cached and can't be re-downloaded, or the server restarted and the model needs to be reloaded), or if an External API config has stopped validating. Reloading or re-downloading the model from the warning banner, then pressing Start on the Queue tab, resolves most local-mode cases. If a specific chat's content never seems to finish indexing, the RAG notice inside that chat has a "Prioritize in queue" button that jumps its content to the very front of the queue.
+
+## Understanding RAG Notices
+
+Inside a chat, a **RAG notice** banner (the `RagNotice` component) can appear just above the message composer once a conversation has grown past 10 messages — below that threshold everything already fits in the guaranteed context window, so the notice doesn't apply. It checks the embedding status of the chat's older messages, its linked characters, personas, and lorebook content, and shows one of three variants:
+
+- **"RAG content not yet indexed"** — none of the applicable older content has been embedded yet, so RAG can't surface anything from this chat.
+- **"RAG content indexed with a different model"** — everything was embedded with a previous model/backend and needs re-indexing with the currently active one.
+- **"Indexing in progress…"** — a mix of ready and pending content; shows a running count like "12 of 40 items indexed" and notes if the queue itself is paused.
+
+Each notice includes a **Prioritize in queue** button, which moves the chat (and its linked lorebook/characters/personas) to the front of the embeddings queue, and an **Ignore for this chat** button, which silences the notice for that specific chat going forward (shown afterward as a small "RAG disabled for this chat" line with a "Re-enable" link). Once every applicable item is fully indexed with the current model, the notice disappears on its own.
+
+### The per-item vectorization status icon
+
+Elsewhere in the UI (character and persona editors, for example), a small icon next to an entity's name reflects its individual embedding status against the currently active model: a lightning bolt for "vectors up to date," a refresh icon for "vectors stale — model changed," and nothing shown at all if embeddings are disabled or the item has never been embedded.
 
 ## How Serene Pub ranks retrieved content
 
@@ -112,20 +126,6 @@ One consequence worth knowing: the per-content-type budget described below is en
 Two categories bypass ranking entirely: the most recent handful of chat messages (the "guaranteed window") are always in the prompt regardless of token budget, and any lorebook entry marked **constant** is always included as long as it's enabled — constant entries are lore the model should never forget, so they skip the relevance contest altogether. See [Lorebooks](./lorebooks.md) for how the constant flag is set on an entry.
 
 Bypassing the relevance contest also means bypassing token-budget trimming — pinned/constant world lore, character lore, and history entries aren't among the content types the token-budget enforcement step is allowed to shrink. In practice this is rarely an issue, but if the combined content you've marked constant/pinned in a lorebook is large enough on its own, there's currently no mechanism to trim it back down to fit the model's context limit the way ordinary RAG-recalled content is.
-
-## Understanding RAG Notices
-
-Inside a chat, a **RAG notice** banner (the `RagNotice` component) can appear just above the message composer once a conversation has grown past 10 messages — below that threshold everything already fits in the guaranteed context window, so the notice doesn't apply. It checks the embedding status of the chat's older messages, its linked characters, personas, and lorebook content, and shows one of three variants:
-
-- **"RAG content not yet indexed"** — none of the applicable older content has been embedded yet, so RAG can't surface anything from this chat.
-- **"RAG content indexed with a different model"** — everything was embedded with a previous model/backend and needs re-indexing with the currently active one.
-- **"Indexing in progress…"** — a mix of ready and pending content; shows a running count like "12 of 40 items indexed" and notes if the queue itself is paused.
-
-Each notice includes a **Prioritize in queue** button, which moves the chat (and its linked lorebook/characters/personas) to the front of the embeddings queue, and an **Ignore for this chat** button, which silences the notice for that specific chat going forward (shown afterward as a small "RAG disabled for this chat" line with a "Re-enable" link). Once every applicable item is fully indexed with the current model, the notice disappears on its own.
-
-### The per-item vectorization status icon
-
-Elsewhere in the UI (character and persona editors, for example), a small icon next to an entity's name reflects its individual embedding status against the currently active model: a lightning bolt for "vectors up to date," a refresh icon for "vectors stale — model changed," and nothing shown at all if embeddings are disabled or the item has never been embedded.
 
 ## Context Debugging
 

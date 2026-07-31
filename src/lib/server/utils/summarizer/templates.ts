@@ -175,7 +175,7 @@ Title:`
 
 // ── Character extraction prompt (scene type only) ────────────────────────────
 
-const DEFAULT_CHARACTER_EXTRACTION_SYSTEM_PROMPT = `You extract character names from a scene summary into two groups.
+export const DEFAULT_CHARACTER_EXTRACTION_SYSTEM_PROMPT = `You extract characters from a scene summary into two groups.
 
 PARTICIPANTS — characters who are physically present in this scene — speaking, fighting, moving, reacting, waiting, or simply there. If the scene places them in the setting, they belong here.
 
@@ -187,12 +187,27 @@ Rules:
 - If only one character is named or described as present, they are a participant. Do not also add them to mentioned.
 - Include named characters and named creatures only. No unnamed extras, no places, no objects.
 - Either array may be empty. Do not invent entries to fill an empty slot.
+- For each character, check the "Known characters" list below first — including their aliases, nicknames, and titles. If this character is one of them, output {"castId": <their id>} using that exact id, even if the scene calls them by a nickname or title rather than their listed name. Only output {"name": "..."} when the character is genuinely not in that list.
 - Output ONLY a raw JSON object. No explanation, no markdown, no code fences.`
 
 export interface CastEntry {
 	name: string
 	aliases: string[]
+	// The lorebookBindings id this entry resolves to — null only for a
+	// transitional entry that came from a not-yet-backfilled prior scene
+	// (see the merge plan's scene character presence redesign). Used to
+	// resolve the LLM's returned names back to real binding ids after
+	// extraction, without a second matching pass.
+	id: number | null
 }
+
+/**
+ * One resolved entry from the character-extraction LLM call: either a
+ * direct reference to an existing known-cast member (trusted, no fuzzy
+ * matching needed) or a freshly-introduced name (still routed through
+ * fuzzy matching / new-binding creation, same as before this existed).
+ */
+export type ExtractedCastRef = { castId: number } | { name: string }
 
 export function buildCharacterExtractionPrompt(
 	sceneSummary: string,
@@ -206,10 +221,25 @@ export function buildCharacterExtractionPrompt(
 				e.aliases.length > 0
 					? ` (aliases: ${e.aliases.join(", ")})`
 					: ""
-			return `- ${e.name}${aliasPart}`
+			const idPart = e.id !== null ? `[id: ${e.id}] ` : ""
+			return `- ${idPart}${e.name}${aliasPart}`
 		})
 		castBlock = `\nKnown characters in this story (reference only — do NOT assume any are present):\n${lines.join("\n")}\n`
 	}
+
+	// The example must match what the model can actually do: with no known-
+	// cast list in context (a fresh lorebook, or a caller that didn't pass
+	// one), showing a {"castId": N} example anyway nudges the model into
+	// guessing an id it was never given — resolveCharacterNamesToBindingIds
+	// has no name to fall back to for a hallucinated id, so it just drops
+	// the entry, silently. Only show the castId form when there's an actual
+	// list above to reference.
+	const outputContract =
+		castBlock.length > 0
+			? `JSON output — each entry is either {"castId": <id>} for a known character or {"name": "..."} for a new one:
+{"participants":[{"castId":5},{"name":"New Guard"}],"mentioned":[{"castId":12}]}`
+			: `JSON output — each entry is {"name": "..."}:
+{"participants":[{"name":"Name1"}],"mentioned":[{"name":"Name3"}]}`
 
 	return {
 		systemPrompt:
@@ -218,8 +248,7 @@ export function buildCharacterExtractionPrompt(
 		userPrompt: `Scene summary:
 ${sceneSummary}
 ${castBlock}
-JSON output:
-{"participants":["Name1","Name2"],"mentioned":["Name3"]}`
+${outputContract}`
 	}
 }
 

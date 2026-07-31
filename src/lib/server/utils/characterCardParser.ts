@@ -11,6 +11,53 @@ import { fileTypeFromBuffer } from "file-type"
 import { hasLorebookEntries } from "./lorebookImportMapper"
 
 /**
+ * `png-chunks-extract`'s `extractChunks` reads each chunk's 32-bit declared
+ * length and immediately does `new Uint8Array(length)` — BEFORE checking
+ * whether the buffer actually has that many bytes remaining. A crafted PNG
+ * (a normal-sized file with one chunk lying about its length, up to ~4GB)
+ * can trigger a huge allocation from a tiny upload. This walks the same
+ * chunk structure using only bounds checks (no allocation) and throws
+ * before `extract()` ever gets a chance to over-allocate. Call this
+ * immediately before every `extract(buffer)` call on untrusted input.
+ */
+export function validatePngChunkLengths(buffer: Buffer | Uint8Array): void {
+	if (
+		buffer.length < 8 ||
+		buffer[0] !== 0x89 ||
+		buffer[1] !== 0x50 ||
+		buffer[2] !== 0x4e ||
+		buffer[3] !== 0x47 ||
+		buffer[4] !== 0x0d ||
+		buffer[5] !== 0x0a ||
+		buffer[6] !== 0x1a ||
+		buffer[7] !== 0x0a
+	) {
+		throw new Error("Invalid .png file header")
+	}
+
+	let idx = 8
+	while (idx < buffer.length) {
+		if (idx + 8 > buffer.length) {
+			throw new Error(".png file ended prematurely: truncated chunk header")
+		}
+		const length =
+			(buffer[idx] << 24) |
+			(buffer[idx + 1] << 16) |
+			(buffer[idx + 2] << 8) |
+			buffer[idx + 3]
+		const unsignedLength = length >>> 0
+		// name(4) + data(unsignedLength) + crc(4)
+		const chunkEnd = idx + 8 + unsignedLength + 4
+		if (chunkEnd > buffer.length) {
+			throw new Error(
+				"Malformed .png: a chunk declares a length larger than the file"
+			)
+		}
+		idx = chunkEnd
+	}
+}
+
+/**
  * card.toSpecV3() is reliable for V2/V3 cards, but the underlying package's
  * field getters silently drop or corrupt a few fields for older (V1/
  * legacy) cards — which have no `spec`/`data` wrapper at all and fall
@@ -43,12 +90,15 @@ export function getRobustSpecV3Data(
 	const rawTop = raw ?? {}
 	const rawNested = raw?.data ?? {}
 
-	const tags = v3.tags?.length
-		? v3.tags
-		: (rawNested.tags ?? rawTop.tags ?? [])
+	const rawTags = rawNested.tags ?? rawTop.tags
+	const tags = v3.tags?.length ? v3.tags : Array.isArray(rawTags) ? rawTags : []
+	const rawAlternateGreetings =
+		rawNested.alternate_greetings ?? rawTop.alternate_greetings
 	const alternateGreetings = v3.alternate_greetings?.length
 		? v3.alternate_greetings
-		: (rawNested.alternate_greetings ?? rawTop.alternate_greetings ?? [])
+		: Array.isArray(rawAlternateGreetings)
+			? rawAlternateGreetings
+			: []
 	// Typed as `number` (an epoch timestamp) per spec, but the package's own
 	// getter fallback for older cards returns the *string* "unknown" instead
 	// of omitting the field when there's no real date — a runtime/type
@@ -275,6 +325,7 @@ export function embedCharacterCardInPng(
 	pngBuffer: Buffer,
 	cardData: unknown
 ): Buffer {
+	validatePngChunkLengths(pngBuffer)
 	const chunks = extract(pngBuffer)
 
 	const base64Data = Buffer.from(JSON.stringify(cardData), "utf-8").toString(

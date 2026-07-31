@@ -78,63 +78,76 @@
 		socket.emit("connections:delete", { id: connectionId })
 	}
 
-	onMount(() => {
-		socket.on("connections:get", (msg) => {
-			loaded = true
-			if (!msg.connection) {
-				notFound = true
-				return
-			}
-			const c = msg.connection
-			name = c.name
-			type = c.type
-			baseUrl = c.baseUrl || ""
-			model = c.model || ""
-			apiKey = (c.extraJson as any)?.apiKey || ""
-			tokenCounter = c.tokenCounter
-			promptFormat = c.promptFormat || PromptFormats.VICUNA
-		})
-		socket.on("connections:refreshModels", (msg) => {
-			availableModels = msg.models || []
-			if (msg.error) {
-				error = msg.error
-				announce(error)
-			} else {
-				announce(
-					`${availableModels.length} model${availableModels.length === 1 ? "" : "s"} found.`
-				)
-			}
-		})
-		socket.on("connections:test", (msg) => {
-			testing = false
-			testResult = { ok: msg.ok, error: msg.error ?? undefined }
-			announce(
-				testResult.ok
-					? "Connection test succeeded."
-					: `Connection test failed: ${testResult.error || "Unknown error"}`
-			)
-		})
-		socket.on("connections:update", (msg) => {
-			saving = false
-			if (!msg.connection) return
-			announce("Connection saved.")
-		})
-		socket.on("connections:update:error", (msg: { error?: string }) => {
-			saving = false
-			error = msg.error || "Failed to save connection."
+	function handleConnectionsGet(msg: Sockets.Connections.Get.Response) {
+		loaded = true
+		if (!msg.connection) {
+			notFound = true
+			return
+		}
+		const c = msg.connection
+		name = c.name
+		type = c.type
+		baseUrl = c.baseUrl || ""
+		model = c.model || ""
+		apiKey = (c.extraJson as any)?.apiKey || ""
+		tokenCounter = c.tokenCounter
+		promptFormat = c.promptFormat || PromptFormats.VICUNA
+	}
+	function handleConnectionsRefreshModels(msg: any) {
+		availableModels = msg.models || []
+		if (msg.error) {
+			error = msg.error
 			announce(error)
-		})
-		socket.on("connections:delete", () => {
-			goto("/document-view/connections")
-		})
+		} else {
+			announce(
+				`${availableModels.length} model${availableModels.length === 1 ? "" : "s"} found.`
+			)
+		}
+	}
+	function handleConnectionsTest(msg: Sockets.Connections.Test.Response) {
+		testing = false
+		testResult = { ok: msg.ok, error: msg.error ?? undefined }
+		announce(
+			testResult.ok
+				? "Connection test succeeded."
+				: `Connection test failed: ${testResult.error || "Unknown error"}`
+		)
+	}
+	function handleConnectionsUpdate(msg: any) {
+		saving = false
+		if (!msg.connection) return
+		announce("Connection saved.")
+	}
+	function handleConnectionsUpdateError(msg: { error?: string }) {
+		saving = false
+		error = msg.error || "Failed to save connection."
+		announce(error)
+	}
+	function handleConnectionsDelete() {
+		goto("/document-view/connections")
+	}
+
+	onMount(() => {
+		socket.on("connections:get", handleConnectionsGet)
+		socket.on("connections:refreshModels", handleConnectionsRefreshModels)
+		socket.on("connections:test", handleConnectionsTest)
+		socket.on("connections:update", handleConnectionsUpdate)
+		socket.on("connections:update:error", handleConnectionsUpdateError)
+		socket.on("connections:delete", handleConnectionsDelete)
 		socket.emit("connections:get", { id: connectionId })
 		return () => {
-			socket.off("connections:get")
-			socket.off("connections:refreshModels")
-			socket.off("connections:test")
-			socket.off("connections:update")
-			socket.off("connections:update:error")
-			socket.off("connections:delete")
+			socket.off("connections:get", handleConnectionsGet)
+			socket.off(
+				"connections:refreshModels",
+				handleConnectionsRefreshModels
+			)
+			socket.off("connections:test", handleConnectionsTest)
+			socket.off("connections:update", handleConnectionsUpdate)
+			socket.off(
+				"connections:update:error",
+				handleConnectionsUpdateError
+			)
+			socket.off("connections:delete", handleConnectionsDelete)
 		}
 	})
 </script>

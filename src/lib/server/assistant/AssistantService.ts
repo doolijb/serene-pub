@@ -14,6 +14,7 @@ import { eq, desc, asc, and } from "drizzle-orm"
 import type { Socket } from "socket.io"
 import * as toolHandlers from "./tools/handlers"
 import { createLanguageModelFromAdapter } from "./utils/createLanguageModel"
+import { withChatTriggerLock } from "$lib/server/utils/chatTriggerLock"
 
 const SERENITY_SYSTEM_PROMPT = `You are Serenity, the helpful AI assistant for Serene Pub.
 
@@ -1018,6 +1019,11 @@ The system will intelligently generate or update the content based on the user's
 		isUpdate: boolean = false
 	) {
 		try {
+			// Serialized per-chat against assistantSaveDraftHandler (the other
+			// writer of this same chat metadata, triggered by the user's Save
+			// click) — without this, a background field-regeneration write
+			// could race the user saving the draft as a real character.
+			await withChatTriggerLock(this.chatId, async () => {
 			console.log(
 				"[AssistantService] Saving draft to metadata:",
 				draftResult
@@ -1081,6 +1087,7 @@ The system will intelligently generate or update the content based on the user's
 
 				this.socket.emit("assistant:draftProgress", eventData)
 			}
+			})
 		} catch (error) {
 			console.error(
 				"[AssistantService] Error saving draft to metadata:",

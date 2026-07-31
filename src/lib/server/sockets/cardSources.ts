@@ -4,7 +4,10 @@ import { eq } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import type { AuthenticatedSocket } from "./auth"
 import { listCardSources, cachedCardDetail } from "$lib/server/cardSources"
-import { encryptToken } from "$lib/server/utils/tokenCrypto"
+import {
+	encryptToken,
+	CHARAVAULT_KEY_INFO
+} from "$lib/server/utils/tokenCrypto"
 import { isUnsafeCharacterBrowsingEnabled } from "$lib/server/utils"
 import {
 	getSessionCookie,
@@ -34,7 +37,8 @@ export const cardSourcesCapabilities: Handler<
 					label: s.label,
 					description: s.description,
 					url: s.url,
-					supportsPersonas: s.supports("persona")
+					supportsPersonas: s.supports("persona"),
+					supportsCharacters: s.supports("character")
 				})),
 				charaVaultConnected
 			}
@@ -58,7 +62,10 @@ export const cardSourcesCharaVaultConnect: Handler<
 	handler: async (socket: AuthenticatedSocket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
-			const { ciphertext, iv, authTag } = encryptToken(params.token)
+			const { ciphertext, iv, authTag } = encryptToken(
+				params.token,
+				CHARAVAULT_KEY_INFO
+			)
 
 			await db
 				.update(schema.systemSettings)

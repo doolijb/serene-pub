@@ -165,113 +165,161 @@
 		}
 	})
 
-	onMount(() => {
-		socket.on("koboldcpp:listModels", (msg) => {
-			currentModel = msg.currentModel
-			availableModels = msg.availableModels || []
-			modelsDirSet = msg.modelsDirSet
-			loaded = true
-		})
-		socket.on("koboldcpp:setBaseUrl", () => {
-			savingField = ""
-			status = "Base URL saved."
-			announce(status)
-		})
-		socket.on("koboldcpp:setModelsDir", () => {
-			savingField = ""
-			status = "Models directory saved."
-			announce(status)
-			refresh()
-		})
-		socket.on("koboldcpp:setManagedMode", () => {
-			status = "Managed mode saved."
-			announce(status)
-		})
-		socket.on("koboldcpp:setManagedAdminPassword", (msg) => {
-			savingField = ""
-			if (msg.error) {
-				error = msg.error
-				announce(error)
-			} else {
-				status = "Admin password saved."
-				announce(status)
-				adminPassword = ""
-			}
-		})
-		socket.on("koboldcpp:loadModel", () => {
-			status = "Model loaded."
-			announce(status)
-			refresh()
-		})
-		socket.on("koboldcpp:connectModel", () => {
-			status = "Connection set as system default."
-			announce(status)
-		})
-		socket.on("koboldcpp:deleteModel", () => {
-			announce("Model deleted.")
-			refresh()
-		})
-		socket.on("koboldcpp:getSubprocessStatus", (msg) => {
-			subprocessStatus = msg.status
-		})
-		socket.on("koboldcpp:startSubprocess", () => refresh())
-		socket.on("koboldcpp:stopSubprocess", () => refresh())
-		socket.on("koboldcpp:searchModels", (msg) => {
-			searching = false
-			searched = true
-			searchResults = msg.models || []
-			announce(
-				`${searchResults.length} model${searchResults.length === 1 ? "" : "s"} found.`
-			)
-		})
-		socket.on("koboldcpp:downloadModel", () => {
-			socket.emit("koboldcpp:getDownloadProgress", {})
-		})
-		socket.on(
-			"koboldcpp:downloadModel:error",
-			(msg: { error?: string }) => {
-				error = msg.error || "Failed to start download."
-				announce(error)
-			}
-		)
-		socket.on("koboldcpp:getDownloadProgress", (msg) => {
-			downloads = msg.downloads || {}
-		})
-		socket.on("koboldcpp:downloadProgress", (msg) => {
-			downloads = msg.downloads || {}
-			if (Object.values(downloads).some((d) => d.isDone)) refresh()
-		})
-		socket.on("koboldcpp:recommendedModels", (msg) => {
-			recommendedLoaded = true
-			recommendedModels = msg.models || []
-		})
-		socket.on("koboldcpp:recommendedModels:error", () => {
-			recommendedLoaded = true
-			error = "Failed to load recommended models."
+	function handleListModels(msg: Sockets.KoboldCPP.ListModels.Response) {
+		currentModel = msg.currentModel
+		availableModels = msg.availableModels || []
+		modelsDirSet = msg.modelsDirSet
+		loaded = true
+	}
+	function handleSetBaseUrl() {
+		savingField = ""
+		status = "Base URL saved."
+		announce(status)
+	}
+	function handleSetModelsDir() {
+		savingField = ""
+		status = "Models directory saved."
+		announce(status)
+		refresh()
+	}
+	function handleSetManagedMode() {
+		status = "Managed mode saved."
+		announce(status)
+	}
+	function handleSetManagedAdminPassword(msg: { error?: string }) {
+		savingField = ""
+		if (msg.error) {
+			error = msg.error
 			announce(error)
-		})
+		} else {
+			status = "Admin password saved."
+			announce(status)
+			adminPassword = ""
+		}
+	}
+	function handleLoadModel() {
+		status = "Model loaded."
+		announce(status)
+		refresh()
+	}
+	function handleConnectModel() {
+		status = "Connection set as system default."
+		announce(status)
+	}
+	function handleDeleteModel() {
+		announce("Model deleted.")
+		refresh()
+	}
+	function handleGetSubprocessStatus(
+		msg: Sockets.KoboldCPP.GetSubprocessStatus.Response
+	) {
+		subprocessStatus = msg.status
+	}
+	function handleStartSubprocess() {
+		refresh()
+	}
+	function handleStopSubprocess() {
+		refresh()
+	}
+	function handleSearchModels(msg: Sockets.KoboldCPP.SearchModels.Response) {
+		searching = false
+		searched = true
+		searchResults = msg.models || []
+		announce(
+			`${searchResults.length} model${searchResults.length === 1 ? "" : "s"} found.`
+		)
+	}
+	function handleDownloadModel() {
+		socket.emit("koboldcpp:getDownloadProgress", {})
+	}
+	function handleDownloadModelError(msg: { error?: string }) {
+		error = msg.error || "Failed to start download."
+		announce(error)
+	}
+	function handleGetDownloadProgress(msg: any) {
+		downloads = msg.downloads || {}
+	}
+	function handleDownloadProgress(msg: any) {
+		downloads = msg.downloads || {}
+		if (Object.values(downloads).some((d) => d.isDone)) refresh()
+	}
+	function handleRecommendedModels(
+		msg: Sockets.KoboldCPP.RecommendedModels.Response
+	) {
+		recommendedLoaded = true
+		recommendedModels = msg.models || []
+	}
+	function handleRecommendedModelsError() {
+		recommendedLoaded = true
+		error = "Failed to load recommended models."
+		announce(error)
+	}
+
+	onMount(() => {
+		socket.on("koboldcpp:listModels", handleListModels)
+		socket.on("koboldcpp:setBaseUrl", handleSetBaseUrl)
+		socket.on("koboldcpp:setModelsDir", handleSetModelsDir)
+		socket.on("koboldcpp:setManagedMode", handleSetManagedMode)
+		socket.on(
+			"koboldcpp:setManagedAdminPassword",
+			handleSetManagedAdminPassword
+		)
+		socket.on("koboldcpp:loadModel", handleLoadModel)
+		socket.on("koboldcpp:connectModel", handleConnectModel)
+		socket.on("koboldcpp:deleteModel", handleDeleteModel)
+		socket.on("koboldcpp:getSubprocessStatus", handleGetSubprocessStatus)
+		socket.on("koboldcpp:startSubprocess", handleStartSubprocess)
+		socket.on("koboldcpp:stopSubprocess", handleStopSubprocess)
+		socket.on("koboldcpp:searchModels", handleSearchModels)
+		socket.on("koboldcpp:downloadModel", handleDownloadModel)
+		socket.on("koboldcpp:downloadModel:error", handleDownloadModelError)
+		socket.on(
+			"koboldcpp:getDownloadProgress",
+			handleGetDownloadProgress
+		)
+		socket.on("koboldcpp:downloadProgress", handleDownloadProgress)
+		socket.on("koboldcpp:recommendedModels", handleRecommendedModels)
+		socket.on(
+			"koboldcpp:recommendedModels:error",
+			handleRecommendedModelsError
+		)
 
 		socket.emit("koboldcpp:recommendedModels", {})
 		refresh()
 		return () => {
-			socket.off("koboldcpp:listModels")
-			socket.off("koboldcpp:setBaseUrl")
-			socket.off("koboldcpp:setModelsDir")
-			socket.off("koboldcpp:setManagedMode")
-			socket.off("koboldcpp:setManagedAdminPassword")
-			socket.off("koboldcpp:loadModel")
-			socket.off("koboldcpp:connectModel")
-			socket.off("koboldcpp:deleteModel")
-			socket.off("koboldcpp:getSubprocessStatus")
-			socket.off("koboldcpp:startSubprocess")
-			socket.off("koboldcpp:stopSubprocess")
-			socket.off("koboldcpp:searchModels")
-			socket.off("koboldcpp:downloadModel")
-			socket.off("koboldcpp:downloadModel:error")
-			socket.off("koboldcpp:getDownloadProgress")
-			socket.off("koboldcpp:downloadProgress")
-			socket.off("koboldcpp:recommendedModels")
-			socket.off("koboldcpp:recommendedModels:error")
+			socket.off("koboldcpp:listModels", handleListModels)
+			socket.off("koboldcpp:setBaseUrl", handleSetBaseUrl)
+			socket.off("koboldcpp:setModelsDir", handleSetModelsDir)
+			socket.off("koboldcpp:setManagedMode", handleSetManagedMode)
+			socket.off(
+				"koboldcpp:setManagedAdminPassword",
+				handleSetManagedAdminPassword
+			)
+			socket.off("koboldcpp:loadModel", handleLoadModel)
+			socket.off("koboldcpp:connectModel", handleConnectModel)
+			socket.off("koboldcpp:deleteModel", handleDeleteModel)
+			socket.off(
+				"koboldcpp:getSubprocessStatus",
+				handleGetSubprocessStatus
+			)
+			socket.off("koboldcpp:startSubprocess", handleStartSubprocess)
+			socket.off("koboldcpp:stopSubprocess", handleStopSubprocess)
+			socket.off("koboldcpp:searchModels", handleSearchModels)
+			socket.off("koboldcpp:downloadModel", handleDownloadModel)
+			socket.off(
+				"koboldcpp:downloadModel:error",
+				handleDownloadModelError
+			)
+			socket.off(
+				"koboldcpp:getDownloadProgress",
+				handleGetDownloadProgress
+			)
+			socket.off("koboldcpp:downloadProgress", handleDownloadProgress)
+			socket.off("koboldcpp:recommendedModels", handleRecommendedModels)
+			socket.off(
+				"koboldcpp:recommendedModels:error",
+				handleRecommendedModelsError
+			)
 		}
 	})
 </script>

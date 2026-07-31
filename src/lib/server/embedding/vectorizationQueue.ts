@@ -23,7 +23,8 @@ import {
 	desc,
 	ne,
 	or,
-	gt
+	gt,
+	sql
 } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
@@ -82,6 +83,22 @@ export type CompletedGroup = PriorityGroup & {
 
 const HISTORY_MAX = 20
 
+// Chat messages are already bounded to MAX_CHAT_MESSAGE_LENGTH before
+// insert, so their embed() call is implicitly safe. Every other embedded
+// content type (lore entries, narrative nodes/relationships, character/
+// persona descriptions) is an unbounded text column with no cap before it
+// reaches here — this truncates only the text handed to the embedding
+// model, not the stored content itself (which stays full-length for
+// prompt-building/display), as a safety net against a pasted
+// megabyte-scale entry driving an uncapped local-model tokenization cost or
+// an uncapped payload to an external embeddings API.
+export const MAX_EMBED_INPUT_LENGTH = 20_000
+export function truncateForEmbedding(text: string): string {
+	return text.length > MAX_EMBED_INPUT_LENGTH
+		? text.slice(0, MAX_EMBED_INPUT_LENGTH)
+		: text
+}
+
 type EmitFn = (event: string, data: any) => void
 
 type QueueItem = {
@@ -113,16 +130,47 @@ let isPaused = false
 let isRunning = false
 let shouldStop = false
 let totalCompleted = 0
-let emitProgress: EmitFn | null = null
+// A Set, not a single nullable slot — the old single-slot design meant
+// setProgressEmitter() from one admin's connection silently replaced
+// another's, so with 2+ admins (or, before this fix, ANY connected user —
+// see registerVectorizationHandlers) only the most recently (re)connected
+// socket ever received progress, including other users' chat/lorebook/
+// character names via priorityQueue/history. Same
+// registerEmitter/unregisterEmitter shape as utils/taskQueue.ts.
+const progressEmitters = new Set<EmitFn>()
 let priorityQueue: PriorityGroup[] = []
 let completedHistory: CompletedGroup[] = []
+
+// Per-item consecutive-failure tracking for runQueue()'s backoff below. A
+// persistently-failing item (misconfigured endpoint, one malformed row)
+// never gets marked done, so pickNextItem() hands the exact same item back
+// every iteration — without this, that's a true busy-loop hammering the
+// embedding provider at full speed. Keyed by item identity, not object
+// reference, since pickNextItem() re-queries the DB each time.
+const itemFailureCounts = new Map<string, number>()
+
+function itemFailureKey(item: QueueItem): string {
+	return `${item.label?.type ?? "unknown"}:${item.id}`
+}
+
+/** Exported so a config change that could fix a previously-failing item
+ * (e.g. correcting the embedding API endpoint) doesn't leave it excluded
+ * until the next full restart — see vectorization.ts's setApiConfig/
+ * setModel handlers. */
+export function clearVectorizationFailureTracking() {
+	itemFailureCounts.clear()
+}
 
 // ---------------------------------------------------------------------------
 // Public control API
 // ---------------------------------------------------------------------------
 
-export function setProgressEmitter(fn: EmitFn) {
-	emitProgress = fn
+export function registerProgressEmitter(fn: EmitFn) {
+	progressEmitters.add(fn)
+}
+
+export function unregisterProgressEmitter(fn: EmitFn) {
+	progressEmitters.delete(fn)
 }
 
 export function pauseVectorization() {
@@ -156,6 +204,7 @@ export async function startVectorizationQueue(opts?: {
 		totalCompleted = 0
 	}
 	shouldStop = false
+	clearVectorizationFailureTracking()
 	runQueue()
 }
 
@@ -392,14 +441,19 @@ function broadcastStatus(
 	status: VectorizationProgressEvent["status"],
 	currentItem?: VectorizationProgressEvent["currentItem"]
 ) {
-	emitProgress?.("vectorization:progress", {
+	const payload = {
 		status,
 		currentItem,
 		queued: priorityQueue.length,
 		completed: totalCompleted,
 		priorityQueue: getPriorityQueue(),
 		history: getCompletedHistory()
-	} satisfies VectorizationProgressEvent)
+	} satisfies VectorizationProgressEvent
+	for (const emit of progressEmitters) {
+		try {
+			emit("vectorization:progress", payload)
+		} catch {}
+	}
 }
 
 async function runQueue() {
@@ -451,12 +505,21 @@ async function runQueue() {
 			try {
 				await processItem(item)
 				totalCompleted++
+				itemFailureCounts.delete(itemFailureKey(item))
 			} catch (err) {
 				console.error(
 					"[vectorization] Failed to embed item:",
 					item.label,
 					err
 				)
+				const key = itemFailureKey(item)
+				const failures = (itemFailureCounts.get(key) ?? 0) + 1
+				itemFailureCounts.set(key, failures)
+				// Exponential backoff, capped at 30s — since the item still
+				// isn't marked done, pickNextItem() will hand it straight
+				// back next iteration; this just stops that from being an
+				// instant, uncapped retry loop.
+				await sleep(Math.min(2000 * failures, 30_000))
 			}
 		}
 	} finally {
@@ -498,19 +561,30 @@ function needsEmbedding(
 	return base
 }
 
-async function pickNextItem(): Promise<QueueItem | null> {
+// Exported only so tests can exercise the round-robin fairness logic
+// directly — every real caller is runQueue() below.
+export async function pickNextItem(): Promise<QueueItem | null> {
 	const currentModel = getLoadedModelId()
 	if (!currentModel) return null
 
-	// Work through priority groups in order; remove each when exhausted
-	while (priorityQueue.length > 0) {
+	// Round-robin across priority groups — one item from the front group,
+	// then rotate it to the back, rather than fully draining a group before
+	// any other group gets a single item processed. Without this, one large
+	// group (eg. a freshly bulk-imported lorebook) starves every other
+	// user's group until it finishes completely. A group is only removed
+	// (and moved to history) once pickFromGroup returns nothing for it.
+	const groupCount = priorityQueue.length
+	for (let i = 0; i < groupCount; i++) {
 		const group = priorityQueue[0]
 		const item = await pickFromGroup(group, currentModel)
-		if (item) return item
+		if (item) {
+			priorityQueue.push(priorityQueue.shift()!)
+			return item
+		}
 		// Group fully processed — record in history and remove it
-		const finished = priorityQueue.shift()!
+		priorityQueue.shift()
 		completedHistory.unshift({
-			...finished,
+			...group,
 			completedAt: new Date().toISOString()
 		})
 		if (completedHistory.length > HISTORY_MAX) completedHistory.pop()
@@ -584,6 +658,51 @@ async function pickGlobalNextItem(
 // Per-type pickers (optional scope filters)
 // ---------------------------------------------------------------------------
 
+/**
+ * Optimistic-concurrency + model-freshness guarded write, shared by every
+ * pick* function's process() closure below. Two races this closes:
+ *  - Edit-during-embed: if the row changed after it was read (compared via
+ *    updatedAtRaw, captured as text — see the precision note below), the
+ *    write is silently dropped; needsEmbedding()'s existing staleness check
+ *    already ensures the row gets correctly re-picked next iteration.
+ *  - Backend-switch mid-flight: if the active embedding model changed while
+ *    embed() was in flight, skip the write entirely — otherwise a vector
+ *    computed under the new model gets mislabeled as belonging to the old
+ *    one.
+ *
+ * updatedAt is compared as text, not as a JS Date, on purpose: these
+ * timestamp columns have no explicit precision, so Postgres stores them at
+ * microsecond resolution, but Drizzle's default "date" mode reads them back
+ * as a millisecond-precision JS Date — round-tripping the captured value
+ * through that would silently truncate it, so a row that was inserted via
+ * defaultNow() and never since edited would never match on comparison,
+ * permanently blocking its embedding from persisting.
+ */
+export async function writeEmbeddingIfFresh(
+	table: any,
+	idCol: any,
+	updatedAtCol: any,
+	id: number,
+	capturedUpdatedAtRaw: string,
+	currentModel: string,
+	vector: number[]
+): Promise<void> {
+	if (getLoadedModelId() !== currentModel) return
+	await db
+		.update(table)
+		.set({
+			embedding: vector,
+			embeddingModel: currentModel,
+			vectorizedAt: new Date()
+		})
+		.where(
+			and(
+				eq(idCol, id),
+				sql`${updatedAtCol}::text = ${capturedUpdatedAtRaw}`
+			)
+		)
+}
+
 async function pickChatMessage(
 	currentModel: string,
 	chatId?: number
@@ -602,7 +721,8 @@ async function pickChatMessage(
 	const rows = await db
 		.select({
 			id: schema.chatMessages.id,
-			content: schema.chatMessages.content
+			content: schema.chatMessages.content,
+			updatedAtRaw: sql<string>`${schema.chatMessages.updatedAt}::text`
 		})
 		.from(schema.chatMessages)
 		.where(where)
@@ -610,21 +730,22 @@ async function pickChatMessage(
 		.limit(1)
 
 	if (!rows.length) return null
-	const { id, content } = rows[0]
+	const { id, content, updatedAtRaw } = rows[0]
 	return {
 		label: { type: "message", label: `Chat message #${id}` },
 		id,
 		embeddingModel: currentModel,
 		process: async () => {
-			const vector = await embed(content)
-			await db
-				.update(schema.chatMessages)
-				.set({
-					embedding: vector,
-					embeddingModel: currentModel,
-					vectorizedAt: new Date()
-				})
-				.where(eq(schema.chatMessages.id, id))
+			const vector = await embed(truncateForEmbedding(content))
+			await writeEmbeddingIfFresh(
+				schema.chatMessages,
+				schema.chatMessages.id,
+				schema.chatMessages.updatedAt,
+				id,
+				updatedAtRaw,
+				currentModel,
+				vector
+			)
 		}
 	}
 }
@@ -649,14 +770,21 @@ async function pickWorldLoreEntry(
 			id: schema.worldLoreEntries.id,
 			content: schema.worldLoreEntries.content,
 			name: schema.worldLoreEntries.name,
-			lorebookId: schema.worldLoreEntries.lorebookId
+			lorebookId: schema.worldLoreEntries.lorebookId,
+			updatedAtRaw: sql<string>`${schema.worldLoreEntries.updatedAt}::text`
 		})
 		.from(schema.worldLoreEntries)
 		.where(where)
 		.limit(1)
 
 	if (!rows.length) return null
-	const { id, content, name, lorebookId: rowLorebookId } = rows[0]
+	const {
+		id,
+		content,
+		name,
+		lorebookId: rowLorebookId,
+		updatedAtRaw
+	} = rows[0]
 	const text = name ? `${name}\n${content}` : content
 	return {
 		label: { type: "worldLore", label: `World lore: ${name || id}` },
@@ -664,15 +792,16 @@ async function pickWorldLoreEntry(
 		lorebookId: rowLorebookId,
 		embeddingModel: currentModel,
 		process: async () => {
-			const vector = await embed(text)
-			await db
-				.update(schema.worldLoreEntries)
-				.set({
-					embedding: vector,
-					embeddingModel: currentModel,
-					vectorizedAt: new Date()
-				})
-				.where(eq(schema.worldLoreEntries.id, id))
+			const vector = await embed(truncateForEmbedding(text))
+			await writeEmbeddingIfFresh(
+				schema.worldLoreEntries,
+				schema.worldLoreEntries.id,
+				schema.worldLoreEntries.updatedAt,
+				id,
+				updatedAtRaw,
+				currentModel,
+				vector
+			)
 		}
 	}
 }
@@ -697,14 +826,21 @@ async function pickCharacterLoreEntry(
 			id: schema.characterLoreEntries.id,
 			content: schema.characterLoreEntries.content,
 			name: schema.characterLoreEntries.name,
-			lorebookId: schema.characterLoreEntries.lorebookId
+			lorebookId: schema.characterLoreEntries.lorebookId,
+			updatedAtRaw: sql<string>`${schema.characterLoreEntries.updatedAt}::text`
 		})
 		.from(schema.characterLoreEntries)
 		.where(where)
 		.limit(1)
 
 	if (!rows.length) return null
-	const { id, content, name, lorebookId: rowLorebookId } = rows[0]
+	const {
+		id,
+		content,
+		name,
+		lorebookId: rowLorebookId,
+		updatedAtRaw
+	} = rows[0]
 	const text = name ? `${name}\n${content}` : content
 	return {
 		label: {
@@ -715,15 +851,16 @@ async function pickCharacterLoreEntry(
 		lorebookId: rowLorebookId,
 		embeddingModel: currentModel,
 		process: async () => {
-			const vector = await embed(text)
-			await db
-				.update(schema.characterLoreEntries)
-				.set({
-					embedding: vector,
-					embeddingModel: currentModel,
-					vectorizedAt: new Date()
-				})
-				.where(eq(schema.characterLoreEntries.id, id))
+			const vector = await embed(truncateForEmbedding(text))
+			await writeEmbeddingIfFresh(
+				schema.characterLoreEntries,
+				schema.characterLoreEntries.id,
+				schema.characterLoreEntries.updatedAt,
+				id,
+				updatedAtRaw,
+				currentModel,
+				vector
+			)
 		}
 	}
 }
@@ -747,29 +884,31 @@ async function pickHistoryEntry(
 		.select({
 			id: schema.historyEntries.id,
 			content: schema.historyEntries.content,
-			lorebookId: schema.historyEntries.lorebookId
+			lorebookId: schema.historyEntries.lorebookId,
+			updatedAtRaw: sql<string>`${schema.historyEntries.updatedAt}::text`
 		})
 		.from(schema.historyEntries)
 		.where(where)
 		.limit(1)
 
 	if (!rows.length) return null
-	const { id, content, lorebookId: rowLorebookId } = rows[0]
+	const { id, content, lorebookId: rowLorebookId, updatedAtRaw } = rows[0]
 	return {
 		label: { type: "historyEntry", label: `History entry #${id}` },
 		id,
 		lorebookId: rowLorebookId,
 		embeddingModel: currentModel,
 		process: async () => {
-			const vector = await embed(content)
-			await db
-				.update(schema.historyEntries)
-				.set({
-					embedding: vector,
-					embeddingModel: currentModel,
-					vectorizedAt: new Date()
-				})
-				.where(eq(schema.historyEntries.id, id))
+			const vector = await embed(truncateForEmbedding(content))
+			await writeEmbeddingIfFresh(
+				schema.historyEntries,
+				schema.historyEntries.id,
+				schema.historyEntries.updatedAt,
+				id,
+				updatedAtRaw,
+				currentModel,
+				vector
+			)
 		}
 	}
 }
@@ -779,29 +918,36 @@ async function pickNarrativeNode(
 	lorebookId?: number
 ): Promise<QueueItem | null> {
 	const staleness = needsEmbedding(
-		schema.narrativeNodes.embedding,
-		schema.narrativeNodes.embeddingModel,
+		schema.lorebookBindings.embedding,
+		schema.lorebookBindings.embeddingModel,
 		currentModel,
-		schema.narrativeNodes.updatedAt,
-		schema.narrativeNodes.vectorizedAt
+		schema.lorebookBindings.updatedAt,
+		schema.lorebookBindings.vectorizedAt
 	)
 	const where = lorebookId
-		? and(eq(schema.narrativeNodes.lorebookId, lorebookId), staleness)
+		? and(eq(schema.lorebookBindings.lorebookId, lorebookId), staleness)
 		: staleness
 
 	const rows = await db
 		.select({
-			id: schema.narrativeNodes.id,
-			name: schema.narrativeNodes.name,
-			summary: schema.narrativeNodes.summary,
-			lorebookId: schema.narrativeNodes.lorebookId
+			id: schema.lorebookBindings.id,
+			name: schema.lorebookBindings.name,
+			summary: schema.lorebookBindings.summary,
+			lorebookId: schema.lorebookBindings.lorebookId,
+			updatedAtRaw: sql<string>`${schema.lorebookBindings.updatedAt}::text`
 		})
-		.from(schema.narrativeNodes)
+		.from(schema.lorebookBindings)
 		.where(where)
 		.limit(1)
 
 	if (!rows.length) return null
-	const { id, name, summary, lorebookId: rowLorebookId } = rows[0]
+	const {
+		id,
+		name,
+		summary,
+		lorebookId: rowLorebookId,
+		updatedAtRaw
+	} = rows[0]
 	const text = summary ? `${name}\n${summary}` : name
 	return {
 		label: { type: "narrativeNode", label: `Narrative node: ${name}` },
@@ -809,15 +955,16 @@ async function pickNarrativeNode(
 		lorebookId: rowLorebookId,
 		embeddingModel: currentModel,
 		process: async () => {
-			const vector = await embed(text)
-			await db
-				.update(schema.narrativeNodes)
-				.set({
-					embedding: vector,
-					embeddingModel: currentModel,
-					vectorizedAt: new Date()
-				})
-				.where(eq(schema.narrativeNodes.id, id))
+			const vector = await embed(truncateForEmbedding(text))
+			await writeEmbeddingIfFresh(
+				schema.lorebookBindings,
+				schema.lorebookBindings.id,
+				schema.lorebookBindings.updatedAt,
+				id,
+				updatedAtRaw,
+				currentModel,
+				vector
+			)
 		}
 	}
 }
@@ -848,7 +995,8 @@ async function pickNarrativeRelationship(
 			relationshipType: schema.narrativeRelationships.relationshipType,
 			description: schema.narrativeRelationships.description,
 			reason: schema.narrativeRelationships.reason,
-			lorebookId: schema.narrativeRelationships.lorebookId
+			lorebookId: schema.narrativeRelationships.lorebookId,
+			updatedAtRaw: sql<string>`${schema.narrativeRelationships.updatedAt}::text`
 		})
 		.from(schema.narrativeRelationships)
 		.where(where)
@@ -862,17 +1010,18 @@ async function pickNarrativeRelationship(
 		relationshipType,
 		description,
 		reason,
-		lorebookId: rowLorebookId
+		lorebookId: rowLorebookId,
+		updatedAtRaw
 	} = rows[0]
 
 	// Fetch node names for richer embedding text
 	const [fromNode, toNode] = await Promise.all([
-		db.query.narrativeNodes.findFirst({
-			where: eq(schema.narrativeNodes.id, fromNodeId),
+		db.query.lorebookBindings.findFirst({
+			where: eq(schema.lorebookBindings.id, fromNodeId),
 			columns: { name: true }
 		}),
-		db.query.narrativeNodes.findFirst({
-			where: eq(schema.narrativeNodes.id, toNodeId),
+		db.query.lorebookBindings.findFirst({
+			where: eq(schema.lorebookBindings.id, toNodeId),
 			columns: { name: true }
 		})
 	])
@@ -892,15 +1041,16 @@ async function pickNarrativeRelationship(
 		lorebookId: rowLorebookId,
 		embeddingModel: currentModel,
 		process: async () => {
-			const vector = await embed(text)
-			await db
-				.update(schema.narrativeRelationships)
-				.set({
-					embedding: vector,
-					embeddingModel: currentModel,
-					vectorizedAt: new Date()
-				})
-				.where(eq(schema.narrativeRelationships.id, id))
+			const vector = await embed(truncateForEmbedding(text))
+			await writeEmbeddingIfFresh(
+				schema.narrativeRelationships,
+				schema.narrativeRelationships.id,
+				schema.narrativeRelationships.updatedAt,
+				id,
+				updatedAtRaw,
+				currentModel,
+				vector
+			)
 		}
 	}
 }
@@ -927,29 +1077,31 @@ async function pickCharacter(
 		.select({
 			id: schema.characters.id,
 			name: schema.characters.name,
-			description: schema.characters.description
+			description: schema.characters.description,
+			updatedAtRaw: sql<string>`${schema.characters.updatedAt}::text`
 		})
 		.from(schema.characters)
 		.where(where)
 		.limit(1)
 
 	if (!rows.length) return null
-	const { id, name, description } = rows[0]
+	const { id, name, description, updatedAtRaw } = rows[0]
 	const text = `${name}\n${description}`
 	return {
 		label: { type: "character", label: `Character: ${name}` },
 		id,
 		embeddingModel: currentModel,
 		process: async () => {
-			const vector = await embed(text)
-			await db
-				.update(schema.characters)
-				.set({
-					embedding: vector,
-					embeddingModel: currentModel,
-					vectorizedAt: new Date()
-				})
-				.where(eq(schema.characters.id, id))
+			const vector = await embed(truncateForEmbedding(text))
+			await writeEmbeddingIfFresh(
+				schema.characters,
+				schema.characters.id,
+				schema.characters.updatedAt,
+				id,
+				updatedAtRaw,
+				currentModel,
+				vector
+			)
 		}
 	}
 }
@@ -976,29 +1128,31 @@ async function pickPersona(
 		.select({
 			id: schema.personas.id,
 			name: schema.personas.name,
-			description: schema.personas.description
+			description: schema.personas.description,
+			updatedAtRaw: sql<string>`${schema.personas.updatedAt}::text`
 		})
 		.from(schema.personas)
 		.where(where)
 		.limit(1)
 
 	if (!rows.length) return null
-	const { id, name, description } = rows[0]
+	const { id, name, description, updatedAtRaw } = rows[0]
 	const text = `${name}\n${description}`
 	return {
 		label: { type: "persona", label: `Persona: ${name}` },
 		id,
 		embeddingModel: currentModel,
 		process: async () => {
-			const vector = await embed(text)
-			await db
-				.update(schema.personas)
-				.set({
-					embedding: vector,
-					embeddingModel: currentModel,
-					vectorizedAt: new Date()
-				})
-				.where(eq(schema.personas.id, id))
+			const vector = await embed(truncateForEmbedding(text))
+			await writeEmbeddingIfFresh(
+				schema.personas,
+				schema.personas.id,
+				schema.personas.updatedAt,
+				id,
+				updatedAtRaw,
+				currentModel,
+				vector
+			)
 		}
 	}
 }
@@ -1011,13 +1165,18 @@ async function processItem(item: QueueItem) {
 	// UIs only ever refreshed on the next explicit CRUD action, leaving them
 	// showing a stale state until a manual page refresh.
 	if (item.label) {
-		emitProgress?.("vectorization:itemUpdated", {
+		const payload = {
 			type: item.label.type,
 			id: item.id,
 			lorebookId: item.lorebookId,
 			embeddingModel: item.embeddingModel,
 			vectorizedAt: new Date().toISOString()
-		} satisfies VectorizationItemUpdatedEvent)
+		} satisfies VectorizationItemUpdatedEvent
+		for (const emit of progressEmitters) {
+			try {
+				emit("vectorization:itemUpdated", payload)
+			} catch {}
+		}
 	}
 }
 
@@ -1069,10 +1228,10 @@ export async function countUnembedded(currentModel?: string): Promise<number> {
 			)
 		),
 		db.$count(
-			schema.narrativeNodes,
+			schema.lorebookBindings,
 			condition(
-				schema.narrativeNodes.embedding,
-				schema.narrativeNodes.embeddingModel
+				schema.lorebookBindings.embedding,
+				schema.lorebookBindings.embeddingModel
 			)
 		),
 		db.$count(

@@ -123,7 +123,9 @@ export const userSettings = pgTable("user_settings", {
 		.notNull()
 		.default(sql`(CURRENT_TIMESTAMP)`)
 		.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`)
-})
+	},
+	(table) => [uniqueIndex("user_settings_user_id_unique").on(table.userId)]
+)
 
 export const userSettingsRelations = relations(userSettings, ({ one }) => ({
 	user: one(users, {
@@ -613,7 +615,13 @@ export const sceneSummarizeConfigs = pgTable("scene_summarize_configs", {
 	nameSamplingConfigId: integer("name_sampling_config_id").references(
 		() => samplingConfigs.id,
 		{ onDelete: "set null" }
-	)
+	),
+	characterExtractionConnectionId: integer(
+		"character_extraction_connection_id"
+	).references(() => connections.id, { onDelete: "set null" }),
+	characterExtractionSamplingConfigId: integer(
+		"character_extraction_sampling_config_id"
+	).references(() => samplingConfigs.id, { onDelete: "set null" })
 })
 
 export const sceneSummarizeConfigsRelations = relations(
@@ -641,6 +649,14 @@ export const sceneSummarizeConfigsRelations = relations(
 		}),
 		nameSamplingConfig: one(samplingConfigs, {
 			fields: [sceneSummarizeConfigs.nameSamplingConfigId],
+			references: [samplingConfigs.id]
+		}),
+		characterExtractionConnection: one(connections, {
+			fields: [sceneSummarizeConfigs.characterExtractionConnectionId],
+			references: [connections.id]
+		}),
+		characterExtractionSamplingConfig: one(samplingConfigs, {
+			fields: [sceneSummarizeConfigs.characterExtractionSamplingConfigId],
 			references: [samplingConfigs.id]
 		})
 	})
@@ -732,6 +748,15 @@ export const lorebooks = pgTable(
 		userId: integer("user_id")
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }), // FK to users.id
+		// Monotonic per-lorebook counter for {{char:N}} token numbers — never
+		// decrements, even after a binding is deleted, so a number is never
+		// reused within a lorebook (same never-reuse guarantee as before,
+		// just scoped per lorebook instead of derived from the binding row's
+		// own global id). Every binding-creation call site atomically
+		// increments this via an UPDATE...RETURNING in the same transaction
+		// as the insert — see deriveNextBindingToken() in
+		// lorebookBindingToken.ts.
+		nextBindingNumber: integer("next_binding_number").notNull().default(1),
 		createdAt: date("created_at")
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`),
@@ -742,7 +767,10 @@ export const lorebooks = pgTable(
 	},
 	(table) => [
 		index("lorebooks_user_id_idx").on(table.userId),
-		uniqueIndex("lorebooks_uuid_idx").on(table.uuid)
+		// Unique per-owner, not globally — two different users legitimately
+		// importing the same shared lorebook file must each be able to own a
+		// row stamped with that file's uuid.
+		uniqueIndex("lorebooks_uuid_idx").on(table.userId, table.uuid)
 	]
 )
 
@@ -772,12 +800,75 @@ export const lorebookBindings = pgTable(
 		personaId: integer("persona_id").references(() => personas.id, {
 			onDelete: "set null"
 		}),
-		binding: text("binding").notNull() // e.g. "{{char:1}}" (preferred) or "{char:1}" (deprecated)
+		binding: text("binding").notNull(), // e.g. "{{char:1}}" (preferred) or "{char:1}" (deprecated)
+		// ── Narrative-graph fields (merged in from the former narrativeNodes
+		// table — every binding is also this character's graph presence now;
+		// see plan doc for the merge rationale) ──────────────────────────────
+		sceneId: integer("scene_id").references(() => scenes.id, {
+			onDelete: "set null"
+		}),
+		historyEntryId: integer("history_entry_id").references(
+			() => historyEntries.id,
+			{ onDelete: "set null" }
+		),
+		// Display name — kept in sync with the bound character/persona's own
+		// name when characterId/personaId is set (see syncLorebookBindings*
+		// helpers); user/LLM-set directly for unbound/background rows.
+		name: text("name").notNull().default(""),
+		nodeState: text("node_state")
+			.notNull()
+			.default("active")
+			.$type<NodeState>(),
+		nodeVisibility: text("node_visibility")
+			.notNull()
+			.default("normal")
+			.$type<NodeVisibility>(),
+		// Kept in sync with the bound character/persona's own aliases, same
+		// as `name` above.
+		aliases: json("aliases").notNull().default([]).$type<string[]>(),
+		// Identities absorbed via narrativeGraph:mergeNode ("absorb"), kept
+		// deliberately separate from `aliases` — `aliases` is a one-directional
+		// sync target from the bound character/persona (see above), a full
+		// REPLACE on every entity edit; an absorbed name written directly into
+		// `aliases` would silently vanish the next time that sync fires. This
+		// column is never touched by the sync helpers, so an absorbed identity
+		// survives regardless of how many times the bound entity is edited
+		// afterward. Every consumer that reads `aliases` for name-matching or
+		// display must union it with this column — see
+		// availableSceneCast.ts's collectAliases().
+		absorbedAliases: json("absorbed_aliases")
+			.notNull()
+			.default([])
+			.$type<string[]>(),
+		summary: text("summary"),
+		embedding: real("embedding").array(),
+		embeddingModel: text("embedding_model"),
+		vectorizedAt: timestamp("vectorized_at"),
+		// Parent binding — set when this row is an alias/child of another
+		// (2-level max), from graph-merge operations.
+		parentNodeId: integer("parent_node_id").references(
+			(): AnyPgColumn => lorebookBindings.id,
+			{ onDelete: "set null" }
+		),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
 	},
 	(table) => ({
 		uniqueBinding: uniqueIndex("lorebook_bindings_unique").on(
 			table.lorebookId,
 			table.characterId,
+			table.personaId
+		),
+		lorebookIdIdx: index("lorebook_bindings_lorebook_id_idx").on(
+			table.lorebookId
+		),
+		characterIdIdx: index("lorebook_bindings_character_id_idx").on(
+			table.characterId
+		),
+		personaIdIdx: index("lorebook_bindings_persona_id_idx").on(
 			table.personaId
 		)
 	})
@@ -798,7 +889,156 @@ export const lorebookBindingsRelations = relations(
 			fields: [lorebookBindings.personaId],
 			references: [personas.id]
 		}),
-		characterLoreEntries: many(characterLoreEntries)
+		characterLoreEntries: many(characterLoreEntries),
+		// ── Narrative-graph relations (merged in from the former
+		// narrativeNodes table — see the merge plan) ────────────────────────
+		scene: one(scenes, {
+			fields: [lorebookBindings.sceneId],
+			references: [scenes.id]
+		}),
+		historyEntry: one(historyEntries, {
+			fields: [lorebookBindings.historyEntryId],
+			references: [historyEntries.id]
+		}),
+		parentNode: one(lorebookBindings, {
+			fields: [lorebookBindings.parentNodeId],
+			references: [lorebookBindings.id],
+			relationName: "nodeAliases"
+		}),
+		aliasChildren: many(lorebookBindings, { relationName: "nodeAliases" }),
+		outgoingRelationships: many(narrativeRelationships, {
+			relationName: "fromNode"
+		}),
+		incomingRelationships: many(narrativeRelationships, {
+			relationName: "toNode"
+		})
+	})
+)
+
+// Audit log for narrativeGraph:mergeNode ("absorb") — a consolidating,
+// destructive operation (deletes the absorbed row, rewrites its
+// references onto the survivor). This is what makes that safe: enough of
+// the absorbed row's state and every rewrite/deletion performed is
+// recorded here to reverse a mistaken absorb via narrativeGraph:undoMerge.
+export const bindingMergeLogs = pgTable("binding_merge_logs", {
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	lorebookId: integer("lorebook_id")
+		.notNull()
+		.references(() => lorebooks.id, { onDelete: "cascade" }),
+	userId: integer("user_id")
+		.notNull()
+		.references(() => users.id, { onDelete: "cascade" }),
+	// Nullable: if the survivor is later itself deleted/absorbed elsewhere,
+	// the log entry is kept for history but can no longer be undone.
+	survivorId: integer("survivor_id").references(() => lorebookBindings.id, {
+		onDelete: "set null"
+	}),
+	// Full field snapshot of the absorbed row (including its own binding
+	// token) — enough to re-INSERT it verbatim on undo.
+	absorbedSnapshot: json("absorbed_snapshot")
+		.notNull()
+		.$type<Record<string, unknown>>(),
+	// Relationship rows whose fromNodeId/toNodeId were rewritten from the
+	// absorbed id to the survivor's — {id, oldFromNodeId, oldToNodeId} so
+	// undo can point them back.
+	relationshipRewrites: json("relationship_rewrites")
+		.notNull()
+		.default([])
+		.$type<{ id: number; oldFromNodeId: number; oldToNodeId: number }[]>(),
+	// Full row snapshots of relationships deleted outright (self-loops
+	// created by the rewrite, or third-party duplicates) — undo re-inserts
+	// these rather than trying to re-derive them.
+	deletedRelationships: json("deleted_relationships")
+		.notNull()
+		.default([])
+		.$type<Record<string, unknown>[]>(),
+	// Pre-merge participantCharacters/mentionedCharacters for every scene
+	// whose arrays referenced the absorbed id — undo restores these
+	// recorded values directly rather than reverse-computing the rewrite.
+	sceneSnapshots: json("scene_snapshots")
+		.notNull()
+		.default([])
+		.$type<
+			{
+				sceneId: number
+				participantCharacters: number[]
+				mentionedCharacters: number[]
+			}[]
+		>(),
+	// Exact strings appended to the survivor's absorbedAliases by this
+	// merge — undo removes precisely these, not a guess.
+	absorbedAliasesAdded: json("absorbed_aliases_added")
+		.notNull()
+		.default([])
+		.$type<string[]>(),
+	// characterLoreEntries reassigned from the absorbed row to the
+	// survivor — undo moves these back to the recreated absorbed row.
+	reassignedCharacterLoreEntryIds: json(
+		"reassigned_character_lore_entry_ids"
+	)
+		.notNull()
+		.default([])
+		.$type<number[]>(),
+	// lorebookBindings rows whose parentNodeId pointed at the absorbed row,
+	// reassigned to the survivor — without this, those alias-children would
+	// otherwise be silently orphaned (parentNodeId SET NULL by the FK) when
+	// the absorbed row is deleted, and undo would have no way to restore the
+	// link. Undo moves these back to point at the recreated absorbed row.
+	reassignedChildNodeIds: json("reassigned_child_node_ids")
+		.notNull()
+		.default([])
+		.$type<number[]>(),
+	createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(table) => [
+		index("binding_merge_logs_lorebook_id_idx").on(table.lorebookId)
+	]
+)
+
+export const bindingMergeLogsRelations = relations(
+	bindingMergeLogs,
+	({ one }) => ({
+		lorebook: one(lorebooks, {
+			fields: [bindingMergeLogs.lorebookId],
+			references: [lorebooks.id]
+		}),
+		user: one(users, {
+			fields: [bindingMergeLogs.userId],
+			references: [users.id]
+		}),
+		survivor: one(lorebookBindings, {
+			fields: [bindingMergeLogs.survivorId],
+			references: [lorebookBindings.id]
+		})
+	})
+)
+
+// Sticky "not a duplicate" dismissals for the proactive duplicate-review
+// affordance (see availableSceneCast.ts's findDuplicateCandidates) — a
+// dismissed pair is never re-flagged for this lorebook, even across
+// future graph builds. Always stored with bindingIdA < bindingIdB so a
+// pair is looked up the same way regardless of which order it was found.
+export const dismissedDuplicatePairs = pgTable(
+	"dismissed_duplicate_pairs",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		lorebookId: integer("lorebook_id")
+			.notNull()
+			.references(() => lorebooks.id, { onDelete: "cascade" }),
+		bindingIdA: integer("binding_id_a")
+			.notNull()
+			.references(() => lorebookBindings.id, { onDelete: "cascade" }),
+		bindingIdB: integer("binding_id_b")
+			.notNull()
+			.references(() => lorebookBindings.id, { onDelete: "cascade" }),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(table) => ({
+		uniquePair: uniqueIndex("dismissed_duplicate_pairs_unique").on(
+			table.lorebookId,
+			table.bindingIdA,
+			table.bindingIdB
+		)
 	})
 )
 
@@ -958,13 +1198,19 @@ export const tags = pgTable(
 		userId: integer("user_id")
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
-		name: text("name").notNull(), // Tag name (unique)
+		name: text("name").notNull(), // Tag name (unique per user, case-insensitive)
 		description: text("description"),
 		colorPreset: text("color_preset")
 			.notNull()
 			.default("preset-filled-primary-500") // Color preset for the tag
 	},
-	(table) => [index("tags_user_id_idx").on(table.userId)]
+	(table) => [
+		index("tags_user_id_idx").on(table.userId),
+		uniqueIndex("tags_user_id_name_unique").on(
+			table.userId,
+			sql`lower(${table.name})`
+		)
+	]
 )
 
 export const tagsRelations = relations(tags, ({ many, one }) => ({
@@ -1153,7 +1399,8 @@ export const characters = pgTable(
 	},
 	(table) => [
 		index("characters_user_id_idx").on(table.userId),
-		uniqueIndex("characters_uuid_idx").on(table.uuid)
+		// Unique per-owner, not globally — see lorebooks_uuid_idx.
+		uniqueIndex("characters_uuid_idx").on(table.userId, table.uuid)
 	]
 )
 
@@ -1242,7 +1489,8 @@ export const personas = pgTable(
 	},
 	(table) => [
 		index("personas_user_id_idx").on(table.userId),
-		uniqueIndex("personas_uuid_idx").on(table.uuid)
+		// Unique per-owner, not globally — see lorebooks_uuid_idx.
+		uniqueIndex("personas_uuid_idx").on(table.userId, table.uuid)
 	]
 )
 
@@ -1398,7 +1646,7 @@ export const chatMessages = pgTable(
 		personaId: integer("persona_id").references(() => personas.id, {
 			onDelete: "set null"
 		}), // nullable
-		role: text("role"), // 'user', 'character', 'system', etc
+		role: text("role").notNull(), // 'user', 'character', 'system', etc
 		// True for a manually-triggered Narrator response (narration/environment
 		// flavor, not a character) — characterId/personaId stay null, role stays
 		// "assistant" so existing history-building code keeps including it.
@@ -1473,7 +1721,14 @@ export const chatPersonas = pgTable(
 		personaId: integer("persona_id").references(() => personas.id, {
 			onDelete: "set null"
 		}),
-		position: integer("position").default(0) // Position in the chat
+		position: integer("position").default(0), // Position in the chat
+		// Soft-delete: set when this participant is removed from the chat so
+		// past messages can still resolve a speaker name. Null = active.
+		removedAt: timestamp("removed_at"),
+		// Snapshot of the persona's name at removal time, for the case where
+		// the persona is later deleted globally (personaId nulls out via
+		// onDelete: "set null") and no live name is available anymore.
+		removedName: text("removed_name")
 	},
 	(table) => [
 		uniqueIndex("chat_personas_pk").on(table.chatId, table.personaId),
@@ -1508,7 +1763,14 @@ export const chatCharacters = pgTable(
 		// Character visibility optimization setting
 		visibility: text("visibility")
 			.notNull()
-			.default(ChatCharacterVisibility.VISIBLE) // Controls how much character info is shown when not responding
+			.default(ChatCharacterVisibility.VISIBLE), // Controls how much character info is shown when not responding
+		// Soft-delete: set when this participant is removed from the chat so
+		// past messages can still resolve a speaker name. Null = active.
+		removedAt: timestamp("removed_at"),
+		// Snapshot of the character's name at removal time, for the case where
+		// the character is later deleted globally (characterId nulls out via
+		// onDelete: "set null") and no live name is available anymore.
+		removedName: text("removed_name")
 	},
 	(table) => [
 		uniqueIndex("chat_characters_pk").on(table.chatId, table.characterId),
@@ -1780,15 +2042,20 @@ export const scenes = pgTable(
 			.default([])
 			.$type<number[]>(),
 		summary: text("summary"),
-		// Characters extracted from the scene summary at summarization time
+		// Characters extracted from the scene summary at summarization time —
+		// lorebookBindings ids, not name strings (see the merge plan's scene
+		// character presence redesign). The underlying column stays `json`
+		// either way — this is a pure TS-level type change, no DDL needed;
+		// existing rows are backfilled by a data script resolving their old
+		// name strings to binding ids.
 		participantCharacters: json("participant_characters")
 			.notNull()
 			.default([])
-			.$type<string[]>(),
+			.$type<number[]>(),
 		mentionedCharacters: json("mentioned_characters")
 			.notNull()
 			.default([])
-			.$type<string[]>(),
+			.$type<number[]>(),
 		embedding: real("embedding").array(),
 		embeddingModel: text("embedding_model"),
 		// Whether this scene has been processed into the causal graph
@@ -1803,7 +2070,8 @@ export const scenes = pgTable(
 	},
 	(table) => [
 		index("scenes_lorebook_id_idx").on(table.lorebookId),
-		index("scenes_chat_id_idx").on(table.chatId)
+		index("scenes_chat_id_idx").on(table.chatId),
+		index("scenes_history_entry_id_idx").on(table.historyEntryId)
 	]
 )
 
@@ -1820,110 +2088,8 @@ export const scenesRelations = relations(scenes, ({ one, many }) => ({
 		fields: [scenes.historyEntryId],
 		references: [historyEntries.id]
 	}),
-	narrativeNodes: many(narrativeNodes)
+	lorebookBindings: many(lorebookBindings)
 }))
-
-/**
- * Narrative nodes: character/entity nodes in the relationship graph.
- * All nodes represent characters, persons, or sentient entities — no locations or items.
- */
-export const narrativeNodes = pgTable(
-	"narrative_nodes",
-	{
-		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		lorebookId: integer("lorebook_id")
-			.notNull()
-			.references(() => lorebooks.id, { onDelete: "cascade" }),
-		// Scene where this node first appeared (optional)
-		sceneId: integer("scene_id").references(() => scenes.id, {
-			onDelete: "set null"
-		}),
-		// History entry where this node first appeared (optional)
-		historyEntryId: integer("history_entry_id").references(
-			() => historyEntries.id,
-			{
-				onDelete: "set null"
-			}
-		),
-		// Display name
-		name: text("name").notNull().default(""),
-		// Lifecycle state — see NodeState type (active/deceased/missing/departed)
-		nodeState: text("node_state")
-			.notNull()
-			.default("active")
-			.$type<NodeState>(),
-		// Visibility in RAG/context injection — see NodeVisibility type (user-set only)
-		nodeVisibility: text("node_visibility")
-			.notNull()
-			.default("normal")
-			.$type<NodeVisibility>(),
-		// Alternative names for this node (populated from bound character/persona aliases)
-		aliases: json("aliases").notNull().default([]).$type<string[]>(),
-		// Short summary for context infill
-		summary: text("summary"),
-		embedding: real("embedding").array(),
-		embeddingModel: text("embedding_model"),
-		vectorizedAt: timestamp("vectorized_at"),
-		// Lorebook binding (character/persona) this node represents — unique per node
-		lorebookBindingId: integer("lorebook_binding_id")
-			.unique()
-			.references(() => lorebookBindings.id, {
-				onDelete: "set null"
-			}),
-		// Character IDs associated with this node (for character-type nodes)
-		characterIds: json("character_ids")
-			.notNull()
-			.default([])
-			.$type<number[]>(),
-		// Parent node — set when this node is an alias/child of another (2-level max)
-		parentNodeId: integer("parent_node_id").references(
-			(): AnyPgColumn => narrativeNodes.id,
-			{
-				onDelete: "set null"
-			}
-		),
-		createdAt: timestamp("created_at").notNull().defaultNow(),
-		updatedAt: timestamp("updated_at")
-			.notNull()
-			.defaultNow()
-			.$onUpdate(() => new Date())
-	},
-	(table) => [index("narrative_nodes_lorebook_id_idx").on(table.lorebookId)]
-)
-
-export const narrativeNodesRelations = relations(
-	narrativeNodes,
-	({ one, many }) => ({
-		lorebook: one(lorebooks, {
-			fields: [narrativeNodes.lorebookId],
-			references: [lorebooks.id]
-		}),
-		scene: one(scenes, {
-			fields: [narrativeNodes.sceneId],
-			references: [scenes.id]
-		}),
-		historyEntry: one(historyEntries, {
-			fields: [narrativeNodes.historyEntryId],
-			references: [historyEntries.id]
-		}),
-		lorebookBinding: one(lorebookBindings, {
-			fields: [narrativeNodes.lorebookBindingId],
-			references: [lorebookBindings.id]
-		}),
-		parentNode: one(narrativeNodes, {
-			fields: [narrativeNodes.parentNodeId],
-			references: [narrativeNodes.id],
-			relationName: "nodeAliases"
-		}),
-		aliasChildren: many(narrativeNodes, { relationName: "nodeAliases" }),
-		outgoingRelationships: many(narrativeRelationships, {
-			relationName: "fromNode"
-		}),
-		incomingRelationships: many(narrativeRelationships, {
-			relationName: "toNode"
-		})
-	})
-)
 
 /**
  * Narrative relationships: versioned, typed connections between narrative nodes.
@@ -1941,12 +2107,15 @@ export const narrativeRelationships = pgTable(
 		lorebookId: integer("lorebook_id")
 			.notNull()
 			.references(() => lorebooks.id, { onDelete: "cascade" }),
+		// Post-merge: references lorebookBindings.id (formerly narrativeNodes.id
+		// — see the lorebookBindings/narrativeNodes merge plan). Column names
+		// kept as-is; only the FK target changed.
 		fromNodeId: integer("from_node_id")
 			.notNull()
-			.references(() => narrativeNodes.id, { onDelete: "cascade" }),
+			.references(() => lorebookBindings.id, { onDelete: "cascade" }),
 		toNodeId: integer("to_node_id")
 			.notNull()
-			.references(() => narrativeNodes.id, { onDelete: "cascade" }),
+			.references(() => lorebookBindings.id, { onDelete: "cascade" }),
 		// History entry this relationship state was established in (optional)
 		historyEntryId: integer("history_entry_id").references(
 			() => historyEntries.id,
@@ -1984,7 +2153,8 @@ export const narrativeRelationships = pgTable(
 	},
 	(table) => [
 		index("narrative_relationships_from_node_id_idx").on(table.fromNodeId),
-		index("narrative_relationships_to_node_id_idx").on(table.toNodeId)
+		index("narrative_relationships_to_node_id_idx").on(table.toNodeId),
+		index("narrative_relationships_lorebook_id_idx").on(table.lorebookId)
 	]
 )
 
@@ -1995,14 +2165,14 @@ export const narrativeRelationshipsRelations = relations(
 			fields: [narrativeRelationships.lorebookId],
 			references: [lorebooks.id]
 		}),
-		fromNode: one(narrativeNodes, {
+		fromNode: one(lorebookBindings, {
 			fields: [narrativeRelationships.fromNodeId],
-			references: [narrativeNodes.id],
+			references: [lorebookBindings.id],
 			relationName: "fromNode"
 		}),
-		toNode: one(narrativeNodes, {
+		toNode: one(lorebookBindings, {
 			fields: [narrativeRelationships.toNodeId],
-			references: [narrativeNodes.id],
+			references: [lorebookBindings.id],
 			relationName: "toNode"
 		}),
 		historyEntry: one(historyEntries, {
@@ -2045,7 +2215,13 @@ export const vectorizationConfigs = pgTable("vectorization_configs", {
 	// holds both configs rather than a dedicated multi-row connections table.
 	mode: text("mode").notNull().default("local"),
 	apiBaseUrl: text("api_base_url"),
+	// Encrypted at rest (AES-256-GCM via tokenCrypto.ts, VECTORIZATION_API_KEY_INFO)
+	// — apiKey holds the ciphertext, apiKeyIv/apiKeyAuthTag the companion
+	// values needed to decrypt it. Never echoed back to the client in
+	// plaintext (vectorization:listModels returns apiKeySet instead).
 	apiKey: text("api_key"),
+	apiKeyIv: text("api_key_iv"),
+	apiKeyAuthTag: text("api_key_auth_tag"),
 	apiModel: text("api_model"),
 	apiDimensions: integer("api_dimensions")
 })

@@ -45,8 +45,13 @@ function narratorResponseMsg(overrides: Record<string, any> = {}) {
 	}
 }
 
-function chatCharacter(id: number, position: number, isActive = true) {
-	return { position, isActive, character: { id } }
+function chatCharacter(
+	id: number,
+	position: number,
+	isActive = true,
+	removedAt: Date | null = null
+) {
+	return { position, isActive, removedAt, character: { id } }
 }
 
 function chatPersona(id: number) {
@@ -85,6 +90,34 @@ describe("getNextCharacterTurn", () => {
 			characterIds: [1],
 			personaIds: []
 		})
+		expect(getNextCharacterTurn(chat)).toBeNull()
+	})
+
+	// Round-9 audit fix: a soft-removed chatCharacters row (removedAt set)
+	// must never participate in round-robin, even if isActive was somehow
+	// still true — belt-and-suspenders alongside getPromptChatFromDb's own
+	// choke-point filter, since this function's input isn't guaranteed to
+	// always come from that one query.
+	test("never selects a character with removedAt set, even if isActive is true", () => {
+		const chat = {
+			chatMessages: [],
+			chatCharacters: [
+				chatCharacter(1, 0, true, new Date()),
+				chatCharacter(2, 1, true, null)
+			],
+			chatPersonas: [chatPersona(1)]
+		} as any
+		// Both have never replied, so ordinarily character 1 (position 0)
+		// would be picked first — but it's removed, so character 2 must win.
+		expect(getNextCharacterTurn(chat)).toBe(2)
+	})
+
+	test("returns null when the only character is removed", () => {
+		const chat = {
+			chatMessages: [],
+			chatCharacters: [chatCharacter(1, 0, true, new Date())],
+			chatPersonas: [chatPersona(1)]
+		} as any
 		expect(getNextCharacterTurn(chat)).toBeNull()
 	})
 

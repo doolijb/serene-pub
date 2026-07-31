@@ -1,7 +1,11 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { and, asc, count, desc, eq, inArray, lt, or } from "drizzle-orm"
-import { runBindingNodeCheck } from "$lib/server/utils/bindingNodeCheck"
+import { and, asc, count, desc, eq, inArray, isNull, lt, or } from "drizzle-orm"
+import {
+	syncLorebookBindingsForCharacter,
+	syncLorebookBindingsForPersona
+} from "$lib/server/utils/characterBindingSync"
+import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
 import { generateResponse } from "../utils/generateResponse"
 import { getNextCharacterTurn } from "$lib/server/utils/getNextCharacterTurn"
 import { getConnectionAdapter } from "../utils/getConnectionAdapter"
@@ -22,37 +26,25 @@ import {
 	createChatBroadcaster
 } from "./utils/broadcastHelpers"
 import { checkChatAccess } from "$lib/server/utils/chatAccess"
-import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
+import {
+	resolveCharacterName,
+	resolvePersonaName
+} from "$lib/shared/utils/resolveCharacterName"
+import { withChatTriggerLock } from "$lib/server/utils/chatTriggerLock"
+import { findOrCreateTagId } from "$lib/server/utils/tags"
+import type { ExtractTablesWithRelations } from "drizzle-orm"
+import type { PgliteDatabase, PgliteTransaction } from "drizzle-orm/pglite"
 
-// Per-chat in-process mutex serializing triggerGenerateMessageHandler runs
-// for the same chat. Without this, two near-simultaneous triggers (two
-// guests each sending a persona message back to back, or a double-clicked
-// manual "Trigger Character") can both read the "already generating" check
-// as false before either has inserted its own generating-message row,
-// letting both proceed and produce two responses for one turn. The LLM
-// queue's single global lane (llmQueue.ts) still serializes the actual
-// network calls, so this isn't about concurrent compute — it's about the
-// DB check-then-insert race that happens entirely before either reaches the
-// queue. Chats are independent of each other, so only same-chat triggers
-// serialize; different chats still run fully in parallel.
-const chatTriggerLocks = new Map<number, Promise<unknown>>()
-
-async function withChatTriggerLock<T>(
-	chatId: number,
-	fn: () => Promise<T>
-): Promise<T> {
-	const prior = chatTriggerLocks.get(chatId) ?? Promise.resolve()
-	const run = prior.catch(() => {}).then(fn)
-	const tracked = run.catch(() => {})
-	chatTriggerLocks.set(chatId, tracked)
-	try {
-		return await run
-	} finally {
-		if (chatTriggerLocks.get(chatId) === tracked) {
-			chatTriggerLocks.delete(chatId)
-		}
-	}
-}
+type Executor =
+	| PgliteDatabase<typeof schema>
+	| PgliteTransaction<
+			typeof schema,
+			ExtractTablesWithRelations<typeof schema>
+	  >
+import {
+	MAX_CHAT_MESSAGE_LENGTH,
+	MAX_NARRATOR_INSTRUCTIONS_LENGTH
+} from "$lib/shared/constants/MessageLimits"
 
 // ===== SECURITY HELPERS =====
 
@@ -123,6 +115,22 @@ async function checkPersonasOwnership(
 }
 
 /**
+ * lorebooks is a strictly per-user table — a chat's lorebookId must belong
+ * to the requesting user, or a chat could pull another user's private
+ * lore into its prompts and its binding-sync writes.
+ */
+async function checkLorebookOwnership(
+	lorebookId: number,
+	userId: number
+): Promise<boolean> {
+	const lorebook = await db.query.lorebooks.findFirst({
+		where: (l, { and, eq }) => and(eq(l.id, lorebookId), eq(l.userId, userId)),
+		columns: { id: true }
+	})
+	return !!lorebook
+}
+
+/**
  * Check if user can edit/swipe/regenerate a chat message.
  * - Persona messages: only the owner of that specific persona — NOT even the
  *   chat owner, since a persona is another participant's own
@@ -171,10 +179,11 @@ async function checkMessageEditPermission(
 async function processChatTags(
 	chatId: number,
 	tagNames: string[],
-	userId: number
+	userId: number,
+	dbOrTx: Executor = db
 ) {
 	// Get existing tags for this chat that belong to the user
-	const existingChatTags = await db.query.chatTags.findMany({
+	const existingChatTags = await dbOrTx.query.chatTags.findMany({
 		where: eq(schema.chatTags.chatId, chatId),
 		with: {
 			tag: true
@@ -205,7 +214,7 @@ async function processChatTags(
 	// Remove tags that are no longer in the list
 	if (tagsToRemove.length > 0) {
 		const tagIdsToRemove = tagsToRemove.map((ct) => ct.tagId)
-		await db
+		await dbOrTx
 			.delete(schema.chatTags)
 			.where(
 				and(
@@ -215,48 +224,41 @@ async function processChatTags(
 			)
 	}
 
-	// Add new tags
+	// Add new tags — findOrCreateTagId adopts an existing case-insensitive
+	// match instead of duplicating it (tags_user_id_name_unique).
 	for (const tagName of tagsToAdd) {
-		// Check if tag exists for this user
-		let existingTag = await db.query.tags.findFirst({
-			where: (t, { and, eq }) =>
-				and(eq(t.name, tagName), eq(t.userId, userId))
-		})
-
-		// Create tag if it doesn't exist
-		if (!existingTag) {
-			const [newTag] = await db
-				.insert(schema.tags)
-				.values({
-					name: tagName,
-					userId
-				})
-				.returning()
-			existingTag = newTag
-		}
+		const tagId = await findOrCreateTagId(userId, tagName, dbOrTx)
+		if (tagId == null) continue
 
 		// Link tag to chat
-		await db
+		await dbOrTx
 			.insert(schema.chatTags)
 			.values({
 				chatId,
-				tagId: existingTag.id
+				tagId
 			})
 			.onConflictDoNothing()
 	}
 }
 
-export const chatsListHandler: Handler<
-	Sockets.Chats.List.Params,
-	Sockets.Chats.List.Response
-> = {
-	event: "chats:list",
-	async handler(socket, params, emitToUser) {
-		const userId = socket.user!.id
-		// chats:list only returns ROLEPLAY chats
-		// Use chats:listAssistant for assistant chats
-		const chatType = ChatTypes.ROLEPLAY
-		console.log("Fetching chats for user:", userId, "chatType:", chatType)
+/**
+ * The actual chats:list query, pulled out of the handler below so it can be
+ * called for a user who isn't the current socket's own caller — e.g. pushing
+ * a fresh list to a user who was just added/removed as a guest by someone
+ * else's request. Reusing chatsListHandler.handler itself for that would
+ * mean building a synthetic socket/emitToUser standing in for a real caller,
+ * which only works until the handler ever reads something else off socket
+ * (auth context, query params) — an invisible break at that point. This way
+ * there's nothing to keep honest: both call sites just call a plain function
+ * and emit the result themselves.
+ */
+async function buildChatsListFor(
+	userId: number
+): Promise<Sockets.Chats.List.Response> {
+	// chats:list only returns ROLEPLAY chats
+	// Use chats:listAssistant for assistant chats
+	const chatType = ChatTypes.ROLEPLAY
+	console.log("Fetching chats for user:", userId, "chatType:", chatType)
 
 		// First, find all chats where the current user is a guest
 		const guestChats = await db.query.chatGuests.findMany({
@@ -358,7 +360,16 @@ export const chatsListHandler: Handler<
 			}
 		})
 
-		const response = { chatList: chatsWithEditPermission }
+	return { chatList: chatsWithEditPermission }
+}
+
+export const chatsListHandler: Handler<
+	Sockets.Chats.List.Params,
+	Sockets.Chats.List.Response
+> = {
+	event: "chats:list",
+	async handler(socket, params, emitToUser) {
+		const response = await buildChatsListFor(socket.user!.id)
 		emitToUser("chats:list", response)
 		return response
 	}
@@ -437,6 +448,17 @@ export const chatsCreateHandler: Handler<
 			if (ownedPersonaIds.size !== personaIds.length) {
 				throw new Error(
 					"Access denied. You can only add personas you own."
+				)
+			}
+		}
+		if (params.chat.lorebookId != null) {
+			const ownsLorebook = await checkLorebookOwnership(
+				params.chat.lorebookId,
+				userId
+			)
+			if (!ownsLorebook) {
+				throw new Error(
+					"Access denied. You can only attach a lorebook you own."
 				)
 			}
 		}
@@ -622,7 +644,17 @@ async function getPromptChatFromDb(chatId: number, userId: number) {
 				where: (cm, { eq }) => eq(cm.isHidden, false),
 				orderBy: (cm, { asc }) => asc(cm.id)
 			},
+			// Removed-participant rows are deliberately excluded here (unlike
+			// getChatFromDB, which stays unfiltered for client display) —
+			// this function's result feeds the entire prompt-building
+			// pipeline (generateResponse.ts's adapter construction,
+			// promptBuilder, RagInfillEngine, KeywordInfillEngine all derive
+			// their chat from this one query), and a removed participant's
+			// row flowing into that pipeline unfiltered would mean a
+			// character removed from the chat could still be presented to
+			// the model as present/available.
 			chatCharacters: {
+				where: (cc, { isNull }) => isNull(cc.removedAt),
 				with: {
 					character: {
 						// with: { lorebook: true }
@@ -631,6 +663,7 @@ async function getPromptChatFromDb(chatId: number, userId: number) {
 				orderBy: (cc, { asc }) => asc(cc.position ?? 0)
 			},
 			chatPersonas: {
+				where: (cp, { isNull }) => isNull(cp.removedAt),
 				with: {
 					persona: {
 						// with: { lorebook: true }
@@ -671,6 +704,29 @@ async function getPromptChatFromDb(chatId: number, userId: number) {
 				(a, b) => (a.position ?? 0) - (b.position ?? 0)
 			)
 		}
+
+		// Separate query (not a second `with` on the same relation, which
+		// Drizzle's relational query builder doesn't support) so historical
+		// message-speaker resolution (ContentProcessors.ts's
+		// ChatMessageProcessor, RagInfillEngine.ts's formatMessageForQuery)
+		// can still find a removed participant's name — see
+		// BasePromptChat.removedChatCharacters/removedChatPersonas.
+		const [removedChatCharacters, removedChatPersonas] = await Promise.all(
+			[
+				db.query.chatCharacters.findMany({
+					where: (cc, { eq, and, isNotNull }) =>
+						and(eq(cc.chatId, chatId), isNotNull(cc.removedAt)),
+					with: { character: true }
+				}),
+				db.query.chatPersonas.findMany({
+					where: (cp, { eq, and, isNotNull }) =>
+						and(eq(cp.chatId, chatId), isNotNull(cp.removedAt)),
+					with: { persona: true }
+				})
+			]
+		)
+		;(chat as any).removedChatCharacters = removedChatCharacters
+		;(chat as any).removedChatPersonas = removedChatPersonas
 	}
 	return chat
 }
@@ -829,13 +885,15 @@ export const chatsSaveDraftHandler: Handler<
 	}
 }
 
-// ─── Binding + Node check utilities (Flow 1 + 2) ────────────────────────────
+// ─── Binding check utility (Flow 1) ─────────────────────────────────────────
+// Flow 2 (node-linking, bindingCheck:nodeResult / NodeLinkerModal) is gone —
+// see the lorebookBindings/narrativeNodes merge plan. A binding IS the
+// graph row now, so there's no separate "node" to reconcile it with.
 
 /**
  * After a chat is saved with a lorebook:
  * - Quietly create bindings for chars/personas that don't have one yet.
  * - Emit bindingCheck:result for any orphaned bindings (bindings without a char/persona).
- * - Emit bindingCheck:nodeResult for bindings that need a node linked.
  */
 async function runLorebookBindingCheck(
 	chatId: number,
@@ -844,11 +902,17 @@ async function runLorebookBindingCheck(
 ): Promise<void> {
 	const [chatChars, chatPersonas, existingBindings] = await Promise.all([
 		db.query.chatCharacters.findMany({
-			where: eq(schema.chatCharacters.chatId, chatId),
+			where: and(
+				eq(schema.chatCharacters.chatId, chatId),
+				isNull(schema.chatCharacters.removedAt)
+			),
 			columns: { characterId: true }
 		}),
 		db.query.chatPersonas.findMany({
-			where: eq(schema.chatPersonas.chatId, chatId),
+			where: and(
+				eq(schema.chatPersonas.chatId, chatId),
+				isNull(schema.chatPersonas.removedAt)
+			),
 			columns: { personaId: true }
 		}),
 		db.query.lorebookBindings.findMany({
@@ -867,28 +931,36 @@ async function runLorebookBindingCheck(
 			.map((b) => [b.personaId!, b])
 	)
 
-	// Flow 1a: Create missing bindings for chars/personas
-	const nextIndex = existingBindings.length + 1
-	let tokenCounter = nextIndex
-
+	// Flow 1a: Create missing bindings for chars/personas. Each binding's
+	// token is derived from the lorebook's own per-lorebook counter (never
+	// reused after a delete) — never a recomputed max/count, which is what
+	// let deleted binding numbers get silently reused before.
 	for (const { characterId } of chatChars) {
 		if (!characterId || bindingsByChar.has(characterId)) continue
-		const token = `{{char:${tokenCounter++}}}`
-		const [created] = await db
-			.insert(schema.lorebookBindings)
-			.values({ lorebookId, characterId, binding: token })
-			.returning()
+		const created = await db.transaction(async (tx) => {
+			const token = await deriveNextBindingToken(lorebookId, tx)
+			const [inserted] = await tx
+				.insert(schema.lorebookBindings)
+				.values({ lorebookId, characterId, binding: token })
+				.returning()
+			return inserted
+		})
+		await syncLorebookBindingsForCharacter(characterId)
 		bindingsByChar.set(characterId, created)
 		existingBindings.push(created)
 	}
 
 	for (const { personaId } of chatPersonas) {
 		if (!personaId || bindingsByPersona.has(personaId)) continue
-		const token = `{{char:${tokenCounter++}}}`
-		const [created] = await db
-			.insert(schema.lorebookBindings)
-			.values({ lorebookId, personaId, binding: token })
-			.returning()
+		const created = await db.transaction(async (tx) => {
+			const token = await deriveNextBindingToken(lorebookId, tx)
+			const [inserted] = await tx
+				.insert(schema.lorebookBindings)
+				.values({ lorebookId, personaId, binding: token })
+				.returning()
+			return inserted
+		})
+		await syncLorebookBindingsForPersona(personaId)
 		bindingsByPersona.set(personaId, created)
 		existingBindings.push(created)
 	}
@@ -924,9 +996,6 @@ async function runLorebookBindingCheck(
 		}
 		emitToUser("bindingCheck:result", bindingCheckRes)
 	}
-
-	// Flow 2: For each binding with no narrative node, check for unlinked nodes
-	await runBindingNodeCheck(lorebookId, existingBindings, emitToUser)
 }
 
 export const chatsUpdateHandler: Handler<
@@ -958,12 +1027,62 @@ export const chatsUpdateHandler: Handler<
 			if (chatAccess.isOwner) {
 				const tags = params.tags || []
 
-				// Update the chat (Params.chat is UpdateChat, which never has a
-				// `tags` field — tags are handled separately via Params.tags)
+				// lorebookId needs an ownership check (lorebooks is strictly
+				// per-user) before it's accepted — everything else here is
+				// either owner-only data or a reference to an admin-managed
+				// global table (connections/samplingConfigs/promptConfigs/
+				// narratorPromptConfigs), which needs no such check.
+				if (params.chat.lorebookId != null) {
+					const ownsLorebook = await checkLorebookOwnership(
+						params.chat.lorebookId,
+						userId
+					)
+					if (!ownsLorebook) {
+						throw new Error(
+							"Access denied. You can only attach a lorebook you own."
+						)
+					}
+				}
+
+				// Explicit allowlist, not a spread of the full client payload
+				// (Params.chat is UpdateChat = Partial<SelectChat>, so a bare
+				// spread would also accept id/userId/isGroup/createdAt —
+				// isGroup is recomputed separately below when characterIds is
+				// provided, never client-settable directly here). Tags are
+				// handled separately via Params.tags, not this table.
+				const {
+					name,
+					chatType,
+					scenario,
+					metadata,
+					groupReplyStrategy,
+					drafts,
+					lorebookId,
+					connectionId,
+					samplingConfigId,
+					promptConfigId,
+					narratorPromptConfigId
+				} = params.chat
 				await db
 					.update(schema.chats)
 					.set({
-						...params.chat,
+						...(name !== undefined ? { name } : {}),
+						...(chatType !== undefined ? { chatType } : {}),
+						...(scenario !== undefined ? { scenario } : {}),
+						...(metadata !== undefined ? { metadata } : {}),
+						...(groupReplyStrategy !== undefined
+							? { groupReplyStrategy }
+							: {}),
+						...(drafts !== undefined ? { drafts } : {}),
+						...(lorebookId !== undefined ? { lorebookId } : {}),
+						...(connectionId !== undefined ? { connectionId } : {}),
+						...(samplingConfigId !== undefined
+							? { samplingConfigId }
+							: {}),
+						...(promptConfigId !== undefined ? { promptConfigId } : {}),
+						...(narratorPromptConfigId !== undefined
+							? { narratorPromptConfigId }
+							: {}),
 						updatedAt: new Date().toISOString()
 					})
 					.where(eq(schema.chats.id, params.chat.id!))
@@ -975,10 +1094,15 @@ export const chatsUpdateHandler: Handler<
 			// Sync chatCharacters if provided
 			if (params.characterIds !== undefined) {
 				const existingCCs = await db.query.chatCharacters.findMany({
-					where: (cc, { eq }) => eq(cc.chatId, params.chat.id!)
+					where: (cc, { eq }) => eq(cc.chatId, params.chat.id!),
+					with: { character: true }
 				})
+				// Diffing/ownership decisions below are all against currently
+				// *active* participants — a removed row must not block a
+				// re-add, and must not be silently "removed" again.
+				const activeCCs = existingCCs.filter((cc) => !cc.removedAt)
 				const existingCharacterIds = new Set(
-					existingCCs
+					activeCCs
 						.map((cc) => cc.characterId)
 						.filter((id): id is number => id !== null)
 				)
@@ -1005,11 +1129,29 @@ export const chatsUpdateHandler: Handler<
 					}
 				}
 
-				for (const cc of existingCCs) {
+				// Removal is a soft delete, not a hard delete, so past
+				// messages can still resolve who spoke them. Guests may only
+				// remove characters they themselves own; the chat owner may
+				// remove anyone's. A row the caller isn't permitted to touch
+				// is simply left alone (not removed, no error), matching
+				// this handler's existing per-row tolerance.
+				for (const cc of activeCCs) {
 					if (cc.characterId === null) continue
 					if (!newCharacterIds.has(cc.characterId)) {
+						const canRemove =
+							chatAccess.isOwner ||
+							cc.character?.userId === userId
+						if (!canRemove) continue
 						await db
-							.delete(schema.chatCharacters)
+							.update(schema.chatCharacters)
+							.set({
+								removedAt: new Date(),
+								removedName: resolveCharacterName(
+									cc.character,
+									"Unknown"
+								),
+								isActive: false
+							})
 							.where(
 								and(
 									eq(
@@ -1045,11 +1187,29 @@ export const chatsUpdateHandler: Handler<
 								)
 							)
 					} else {
-						await db.insert(schema.chatCharacters).values({
-							chatId: params.chat.id!,
-							characterId,
-							position
-						})
+						// Upsert, not insert: the target character may already
+						// have a soft-removed row for this chat (chatId +
+						// characterId is uniquely indexed), in which case this
+						// re-add must revive it rather than violate that index.
+						await db
+							.insert(schema.chatCharacters)
+							.values({
+								chatId: params.chat.id!,
+								characterId,
+								position
+							})
+							.onConflictDoUpdate({
+								target: [
+									schema.chatCharacters.chatId,
+									schema.chatCharacters.characterId
+								],
+								set: {
+									position,
+									removedAt: null,
+									removedName: null,
+									isActive: true
+								}
+							})
 					}
 				}
 				await db
@@ -1061,10 +1221,12 @@ export const chatsUpdateHandler: Handler<
 			// Sync chatPersonas if provided
 			if (params.personaIds !== undefined) {
 				const existingCPs = await db.query.chatPersonas.findMany({
-					where: (cp, { eq }) => eq(cp.chatId, params.chat.id!)
+					where: (cp, { eq }) => eq(cp.chatId, params.chat.id!),
+					with: { persona: true }
 				})
+				const activeCPs = existingCPs.filter((cp) => !cp.removedAt)
 				const existingPersonaIds = new Set(
-					existingCPs
+					activeCPs
 						.map((cp) => cp.personaId)
 						.filter((id): id is number => id !== null)
 				)
@@ -1091,11 +1253,23 @@ export const chatsUpdateHandler: Handler<
 					}
 				}
 
-				for (const cp of existingCPs) {
+				// Soft delete, same rule as characters above: guests may only
+				// remove personas they own; the chat owner may remove anyone's.
+				for (const cp of activeCPs) {
 					if (cp.personaId === null) continue
 					if (!newPersonaIds.has(cp.personaId)) {
+						const canRemove =
+							chatAccess.isOwner || cp.persona?.userId === userId
+						if (!canRemove) continue
 						await db
-							.delete(schema.chatPersonas)
+							.update(schema.chatPersonas)
+							.set({
+								removedAt: new Date(),
+								removedName: resolvePersonaName(
+									cp.persona,
+									"Unknown"
+								)
+							})
 							.where(
 								and(
 									eq(
@@ -1126,11 +1300,27 @@ export const chatsUpdateHandler: Handler<
 								)
 							)
 					} else {
-						await db.insert(schema.chatPersonas).values({
-							chatId: params.chat.id!,
-							personaId,
-							position: i
-						})
+						// Upsert: revive a soft-removed row if one exists for
+						// this chatId + personaId rather than violating the
+						// unique index on that pair.
+						await db
+							.insert(schema.chatPersonas)
+							.values({
+								chatId: params.chat.id!,
+								personaId,
+								position: i
+							})
+							.onConflictDoUpdate({
+								target: [
+									schema.chatPersonas.chatId,
+									schema.chatPersonas.personaId
+								],
+								set: {
+									position: i,
+									removedAt: null,
+									removedName: null
+								}
+							})
 					}
 				}
 			}
@@ -1286,6 +1476,18 @@ export const chatsAddGuestHandler: Handler<
 			// A soft-deleted user still has a real row (the FK alone wouldn't
 			// catch this), so check explicitly rather than silently adding a
 			// guest who can never actually authenticate as themselves again.
+			//
+			// This check and the "already a guest" one below deliberately
+			// share one generic error message rather than their own specific
+			// ones. Distinguishing "doesn't exist" from "already a guest"
+			// from success lets any chat owner (this is ownership-gated, not
+			// admin-gated) binary-search valid user IDs on a multi-account
+			// instance they otherwise have no visibility into — the picker
+			// UI's own `users:list` call is admin-gated, but this handler
+			// itself has never been, so a non-admin owner could still reach
+			// this via a direct socket emission. A generic message closes
+			// that oracle without changing the ownership check above, which
+			// doesn't leak anything about other users.
 			const guestUser = await db.query.users.findFirst({
 				where: (u, { eq }) => eq(u.id, guestUserId),
 				columns: { id: true, isDeleted: true }
@@ -1293,7 +1495,7 @@ export const chatsAddGuestHandler: Handler<
 			if (!guestUser || guestUser.isDeleted) {
 				const res: Sockets.Chats.AddGuest.Response = {
 					success: false,
-					error: "That user doesn't exist."
+					error: "Unable to add this guest."
 				}
 				emitToUser("chats:addGuest", res)
 				return res
@@ -1310,7 +1512,7 @@ export const chatsAddGuestHandler: Handler<
 			if (existingGuest) {
 				const res: Sockets.Chats.AddGuest.Response = {
 					success: false,
-					error: "This user is already a guest in the chat."
+					error: "Unable to add this guest."
 				}
 				emitToUser("chats:addGuest", res)
 				return res
@@ -1322,6 +1524,13 @@ export const chatsAddGuestHandler: Handler<
 				userId: guestUserId,
 				isPlayer: true
 			})
+
+			// Push a fresh chat list to the newly-added guest — they aren't in
+			// the chat's own broadcast room yet (they haven't opened it), so
+			// without this their sidebar wouldn't show the new chat until a
+			// manual refresh/reconnect.
+			const guestChatsList = await buildChatsListFor(guestUserId)
+			socket.io.to(`user_${guestUserId}`).emit("chats:list", guestChatsList)
 
 			// Broadcast updated chat to all participants
 			const updatedChat = await getChatFromDB(chatId, userId)
@@ -1380,6 +1589,11 @@ export const chatsRemoveGuestHandler: Handler<
 					)
 				)
 
+			// Push a fresh chat list to the removed guest so the chat
+			// disappears from their sidebar without a manual refresh.
+			const guestChatsList = await buildChatsListFor(guestUserId)
+			socket.io.to(`user_${guestUserId}`).emit("chats:list", guestChatsList)
+
 			// Broadcast updated chat to all remaining participants
 			const updatedChat = await getChatFromDB(chatId, userId)
 			if (updatedChat) {
@@ -1421,11 +1635,16 @@ export const chatsBranchHandler: Handler<
 			const userId = socket.user!.id
 			const { chatId, messageId, title } = params
 
-			// Check if user has access to this chat
+			// Branching deep-copies the full message history into a brand
+			// new chat, unbounded by any rate limit — owner-only, same as
+			// delete/guest-management, so a guest can't repeatedly grow the
+			// owner's storage with chats they never asked for. A guest
+			// wanting their "own" copy can start a new chat with the same
+			// cast instead.
 			const chatAccess = await checkChatAccess(chatId, userId)
-			if (!chatAccess.hasAccess) {
+			if (!chatAccess.isOwner) {
 				const res: Sockets.Chats.Branch.Response = {
-					error: "Access denied. Chat not found or no permission to access."
+					error: "Access denied. Only chat owners can branch chats."
 				}
 				emitToUser("chats:branch", res)
 				return res
@@ -1500,7 +1719,12 @@ export const chatsBranchHandler: Handler<
 					.values(newChatData)
 					.returning()
 
-				const chatCharacters = (originalChat as any).chatCharacters
+				// Removed participants aren't copied into the branch at all —
+				// a soft-removed row resurrecting as active in the new chat
+				// would undo the whole point of removing them.
+				const chatCharacters = (
+					originalChat as any
+				).chatCharacters.filter((cc: any) => !cc.removedAt)
 				if (chatCharacters.length > 0) {
 					await tx.insert(schema.chatCharacters).values(
 						chatCharacters.map((chatCharacter: any) => ({
@@ -1513,7 +1737,9 @@ export const chatsBranchHandler: Handler<
 					)
 				}
 
-				const chatPersonas = (originalChat as any).chatPersonas
+				const chatPersonas = (originalChat as any).chatPersonas.filter(
+					(cp: any) => !cp.removedAt
+				)
 				if (chatPersonas.length > 0) {
 					await tx.insert(schema.chatPersonas).values(
 						chatPersonas.map((chatPersona: any) => ({
@@ -1591,6 +1817,230 @@ export const chatsBranchHandler: Handler<
 	}
 }
 
+/**
+ * Re-points a removed (soft-deleted) chat participant's message history to a
+ * new character/persona, and makes the new one an active participant — the
+ * "adopt this removed participant's history" flow paired with the soft
+ * delete in chatsUpdateHandler. Permission mirrors the removal path: the
+ * chat owner can reassign anyone's removed slot; a non-owner can only
+ * reassign a removed slot they themselves originally owned (once the
+ * underlying entity is globally deleted there's no more "original owner" to
+ * check against, so only the chat owner can act at that point).
+ */
+export const chatsReassignRemovedParticipantHandler: Handler<
+	Sockets.Chats.ReassignRemovedParticipant.Params,
+	Sockets.Chats.ReassignRemovedParticipant.Response
+> = {
+	event: "chats:reassignRemovedParticipant",
+	handler: async (socket, params, emitToUser) => {
+		try {
+			const userId = socket.user!.id
+			const { chatId, type, oldId, newId } = params
+
+			const chatAccess = await checkChatAccess(chatId, userId)
+			if (!chatAccess.hasAccess) {
+				const res: Sockets.Chats.ReassignRemovedParticipant.Response = {
+					error: "Access denied. Chat not found or no permission to access."
+				}
+				emitToUser("chats:reassignRemovedParticipant", res)
+				return res
+			}
+
+			if (oldId === newId) {
+				const res: Sockets.Chats.ReassignRemovedParticipant.Response = {
+					error: "Cannot reassign a removed participant to themselves — re-add them normally instead."
+				}
+				emitToUser("chats:reassignRemovedParticipant", res)
+				return res
+			}
+
+			if (type === "character") {
+				const removedCC = await db.query.chatCharacters.findFirst({
+					where: (cc, { and, eq, isNotNull }) =>
+						and(
+							eq(cc.chatId, chatId),
+							eq(cc.characterId, oldId),
+							isNotNull(cc.removedAt)
+						),
+					with: { character: true }
+				})
+				if (!removedCC) {
+					const res: Sockets.Chats.ReassignRemovedParticipant.Response =
+						{ error: "Removed character not found in this chat." }
+					emitToUser("chats:reassignRemovedParticipant", res)
+					return res
+				}
+
+				const canReassign =
+					chatAccess.isOwner ||
+					removedCC.character?.userId === userId
+				if (!canReassign) {
+					const res: Sockets.Chats.ReassignRemovedParticipant.Response =
+						{
+							error: "Access denied. Only the chat owner or this character's original owner can reassign it."
+						}
+					emitToUser("chats:reassignRemovedParticipant", res)
+					return res
+				}
+
+				const ownsNewTarget = await checkCharacterOwnership(
+					newId,
+					userId
+				)
+				if (!ownsNewTarget) {
+					const res: Sockets.Chats.ReassignRemovedParticipant.Response =
+						{
+							error: "Access denied. You can only reassign to a character you own."
+						}
+					emitToUser("chats:reassignRemovedParticipant", res)
+					return res
+				}
+
+				// Atomic: bulk-reassign history, upsert the new active
+				// participant, and remove the old slot all-or-nothing. A
+				// crash between these steps would otherwise either leave
+				// messages repointed with the old removed row still
+				// lingering, or — the dangerous ordering — delete the old
+				// row while messages still reference it, which nulls out
+				// via onDelete: "set null" and reverts to "Unknown": the
+				// exact data loss this handler exists to prevent.
+				await db.transaction(async (tx) => {
+					await tx
+						.update(schema.chatMessages)
+						.set({ characterId: newId })
+						.where(
+							and(
+								eq(schema.chatMessages.chatId, chatId),
+								eq(schema.chatMessages.characterId, oldId)
+							)
+						)
+					await tx
+						.insert(schema.chatCharacters)
+						.values({
+							chatId,
+							characterId: newId,
+							position: removedCC.position ?? 0
+						})
+						.onConflictDoUpdate({
+							target: [
+								schema.chatCharacters.chatId,
+								schema.chatCharacters.characterId
+							],
+							set: {
+								removedAt: null,
+								removedName: null,
+								isActive: true
+							}
+						})
+					await tx
+						.delete(schema.chatCharacters)
+						.where(
+							and(
+								eq(schema.chatCharacters.chatId, chatId),
+								eq(schema.chatCharacters.characterId, oldId)
+							)
+						)
+				})
+			} else {
+				const removedCP = await db.query.chatPersonas.findFirst({
+					where: (cp, { and, eq, isNotNull }) =>
+						and(
+							eq(cp.chatId, chatId),
+							eq(cp.personaId, oldId),
+							isNotNull(cp.removedAt)
+						),
+					with: { persona: true }
+				})
+				if (!removedCP) {
+					const res: Sockets.Chats.ReassignRemovedParticipant.Response =
+						{ error: "Removed persona not found in this chat." }
+					emitToUser("chats:reassignRemovedParticipant", res)
+					return res
+				}
+
+				const canReassign =
+					chatAccess.isOwner || removedCP.persona?.userId === userId
+				if (!canReassign) {
+					const res: Sockets.Chats.ReassignRemovedParticipant.Response =
+						{
+							error: "Access denied. Only the chat owner or this persona's original owner can reassign it."
+						}
+					emitToUser("chats:reassignRemovedParticipant", res)
+					return res
+				}
+
+				const ownsNewTarget = await checkPersonaOwnership(
+					newId,
+					userId
+				)
+				if (!ownsNewTarget) {
+					const res: Sockets.Chats.ReassignRemovedParticipant.Response =
+						{
+							error: "Access denied. You can only reassign to a persona you own."
+						}
+					emitToUser("chats:reassignRemovedParticipant", res)
+					return res
+				}
+
+				await db.transaction(async (tx) => {
+					await tx
+						.update(schema.chatMessages)
+						.set({ personaId: newId })
+						.where(
+							and(
+								eq(schema.chatMessages.chatId, chatId),
+								eq(schema.chatMessages.personaId, oldId)
+							)
+						)
+					await tx
+						.insert(schema.chatPersonas)
+						.values({
+							chatId,
+							personaId: newId,
+							position: removedCP.position ?? 0
+						})
+						.onConflictDoUpdate({
+							target: [
+								schema.chatPersonas.chatId,
+								schema.chatPersonas.personaId
+							],
+							set: { removedAt: null, removedName: null }
+						})
+					await tx
+						.delete(schema.chatPersonas)
+						.where(
+							and(
+								eq(schema.chatPersonas.chatId, chatId),
+								eq(schema.chatPersonas.personaId, oldId)
+							)
+						)
+				})
+			}
+
+			const updatedChat = await getChatFromDB(chatId, userId)
+			const res: Sockets.Chats.ReassignRemovedParticipant.Response = {
+				success: true,
+				chat: updatedChat as any
+			}
+			emitToUser("chats:reassignRemovedParticipant", res)
+			if (updatedChat) {
+				await broadcastToChatUsers(socket.io, chatId, "chats:get", {
+					chat: updatedChat as any,
+					messages: (updatedChat as any).chatMessages || null
+				})
+			}
+			return res
+		} catch (error: any) {
+			console.error("Error reassigning removed chat participant:", error)
+			const res: Sockets.Chats.ReassignRemovedParticipant.Response = {
+				error: "Failed to reassign removed participant."
+			}
+			emitToUser("chats:reassignRemovedParticipant:error", res)
+			throw error
+		}
+	}
+}
+
 export const chatMessagesSendPersonaMessageHandler: Handler<
 	Sockets.ChatMessages.SendPersonaMessage.Params,
 	Sockets.ChatMessages.SendPersonaMessage.Response
@@ -1635,6 +2085,15 @@ export const chatMessagesSendPersonaMessageHandler: Handler<
 				const res: Sockets.ChatMessages.SendPersonaMessage.Response = {
 					chatMessage: undefined,
 					error: "Chat not found"
+				}
+				emitToUser("chatMessages:sendPersonaMessage", res)
+				return res
+			}
+
+			if (content && content.length > MAX_CHAT_MESSAGE_LENGTH) {
+				const res: Sockets.ChatMessages.SendPersonaMessage.Response = {
+					chatMessage: undefined,
+					error: `Message too long (max ${MAX_CHAT_MESSAGE_LENGTH.toLocaleString()} characters).`
 				}
 				emitToUser("chatMessages:sendPersonaMessage", res)
 				return res
@@ -1727,6 +2186,18 @@ export const chatMessagesUpdateHandler: Handler<
 					error: "Message not found"
 				}
 				emitToUser("chatMessages:update", res)
+				return res
+			}
+
+			if (
+				content !== undefined &&
+				content.length > MAX_CHAT_MESSAGE_LENGTH
+			) {
+				const res: Sockets.ChatMessages.Update.Response = {
+					chatMessage: undefined,
+					error: `Message too long (max ${MAX_CHAT_MESSAGE_LENGTH.toLocaleString()} characters).`
+				}
+				emitToUser("chatMessages:update:error", res)
 				return res
 			}
 
@@ -1878,7 +2349,8 @@ export const chatMessagesRegenerateHandler: Handler<
 		try {
 			const userId = socket.user!.id
 
-			// Get the message to regenerate first
+			// Get the message to regenerate first — needed to learn chatId,
+			// which is the lock key, before we can acquire it.
 			const messageToRegenerate = await db.query.chatMessages.findFirst({
 				where: (cm, { eq }) => eq(cm.id, params.id)
 			})
@@ -1892,68 +2364,101 @@ export const chatMessagesRegenerateHandler: Handler<
 				return res
 			}
 
-			// Chat owner or the character's owner (character messages), or the
-			// persona's owner (persona messages) — see checkMessageEditPermission.
-			const canEdit = await checkMessageEditPermission(params.id, userId)
-			if (!canEdit) {
-				const res: Sockets.ChatMessages.Regenerate.Response = {
-					chatMessage: undefined,
-					error: "Access denied. You don't have permission to regenerate this message."
+			return await withChatTriggerLock(
+				messageToRegenerate.chatId,
+				async () => {
+					// Chat owner or the character's owner (character messages), or the
+					// persona's owner (persona messages) — see checkMessageEditPermission.
+					const canEdit = await checkMessageEditPermission(
+						params.id,
+						userId
+					)
+					if (!canEdit) {
+						const res: Sockets.ChatMessages.Regenerate.Response = {
+							chatMessage: undefined,
+							error: "Access denied. You don't have permission to regenerate this message."
+						}
+						emitToUser("chatMessages:regenerate", res)
+						return res
+					}
+
+					// Freshness guard, re-checked now that the lock is held — a
+					// queued call must see whatever the call ahead of it in line
+					// already committed, not a stale pre-lock snapshot. Mirrors
+					// triggerGenerateMessageHandler's own in-lock check.
+					const alreadyGenerating =
+						await db.query.chatMessages.findFirst({
+							where: (cm, { and, eq }) =>
+								and(
+									eq(cm.chatId, messageToRegenerate.chatId),
+									eq(cm.isGenerating, true)
+								)
+						})
+					if (alreadyGenerating) {
+						const res: Sockets.ChatMessages.Regenerate.Response = {
+							chatMessage: undefined,
+							error: "A response is already generating in this chat."
+						}
+						emitToUser("chatMessages:regenerate:error", res)
+						return res
+					}
+
+					// Get current metadata and clear function-calling related flags
+					// BUT preserve the reasoning so it can be displayed with the final response
+					const currentMetadata =
+						(messageToRegenerate.metadata as any) || {}
+					const cleanedMetadata = {
+						...currentMetadata,
+						waitingForFunctionSelection: undefined
+						// Keep reasoning: it will be displayed in the pre-content section
+					}
+
+					// Clear the content, metadata flags, and set as generating
+					const [updated] = await db
+						.update(schema.chatMessages)
+						.set({
+							content: "",
+							isGenerating: true,
+							generationStage: "queued",
+							error: null,
+							metadata: cleanedMetadata
+						})
+						.where(eq(schema.chatMessages.id, params.id))
+						.returning()
+
+					const res: Sockets.ChatMessages.Regenerate.Response = {
+						chatMessage: updated as any
+					}
+					emitToUser("chatMessages:regenerate", res)
+
+					// Broadcast chatMessage to all chat participants
+					await broadcastToChatUsers(
+						socket.io,
+						updated.chatId,
+						"chatMessage",
+						{ chatMessage: updated }
+					)
+
+					// Start generating the response
+					await generateResponse({
+						socket,
+						emitToUser,
+						chatId: messageToRegenerate.chatId,
+						userId,
+						generatingMessage: updated as any
+					})
+
+					return res
 				}
-				emitToUser("chatMessages:regenerate", res)
-				return res
-			}
-
-			// Get current metadata and clear function-calling related flags
-			// BUT preserve the reasoning so it can be displayed with the final response
-			const currentMetadata = (messageToRegenerate.metadata as any) || {}
-			const cleanedMetadata = {
-				...currentMetadata,
-				waitingForFunctionSelection: undefined
-				// Keep reasoning: it will be displayed in the pre-content section
-			}
-
-			// Clear the content, metadata flags, and set as generating
-			const [updated] = await db
-				.update(schema.chatMessages)
-				.set({
-					content: "",
-					isGenerating: true,
-					generationStage: "queued",
-					error: null,
-					metadata: cleanedMetadata
-				})
-				.where(eq(schema.chatMessages.id, params.id))
-				.returning()
-
-			const res: Sockets.ChatMessages.Regenerate.Response = {
-				chatMessage: updated as any
-			}
-			emitToUser("chatMessages:regenerate", res)
-
-			// Broadcast chatMessage to all chat participants
-			await broadcastToChatUsers(
-				socket.io,
-				updated.chatId,
-				"chatMessage",
-				{ chatMessage: updated }
 			)
-
-			// Start generating the response
-			await generateResponse({
-				socket,
-				emitToUser,
-				chatId: messageToRegenerate.chatId,
-				userId,
-				generatingMessage: updated as any
-			})
-
-			return res
 		} catch (error: any) {
 			console.error("Error regenerating chat message:", error)
 			const res: Sockets.ChatMessages.Regenerate.Response = {
 				chatMessage: undefined,
-				error: "Failed to regenerate message"
+				error:
+					error instanceof Error
+						? error.message
+						: "Failed to regenerate message"
 			}
 			emitToUser("chatMessages:regenerate:error", res)
 			throw error
@@ -1970,7 +2475,8 @@ export const chatMessagesContinueHandler: Handler<
 		try {
 			const userId = socket.user!.id
 
-			// Get the message to continue first
+			// Get the message to continue first — needed to learn chatId,
+			// which is the lock key, before we can acquire it.
 			const messageToContinue = await db.query.chatMessages.findFirst({
 				where: (cm, { eq }) => eq(cm.id, params.id)
 			})
@@ -1984,61 +2490,92 @@ export const chatMessagesContinueHandler: Handler<
 				return res
 			}
 
-			// Chat owner or the character's owner — see checkMessageEditPermission.
-			const canEdit = await checkMessageEditPermission(params.id, userId)
-			if (!canEdit) {
-				const res: Sockets.ChatMessages.Continue.Response = {
-					chatMessage: undefined,
-					error: "Access denied. You don't have permission to continue this message."
+			return await withChatTriggerLock(
+				messageToContinue.chatId,
+				async () => {
+					// Chat owner or the character's owner — see checkMessageEditPermission.
+					const canEdit = await checkMessageEditPermission(
+						params.id,
+						userId
+					)
+					if (!canEdit) {
+						const res: Sockets.ChatMessages.Continue.Response = {
+							chatMessage: undefined,
+							error: "Access denied. You don't have permission to continue this message."
+						}
+						emitToUser("chatMessages:continue", res)
+						return res
+					}
+
+					// Freshness guard, re-checked now that the lock is held — see
+					// the identical comment in chatMessagesRegenerateHandler.
+					const alreadyGenerating =
+						await db.query.chatMessages.findFirst({
+							where: (cm, { and, eq }) =>
+								and(
+									eq(cm.chatId, messageToContinue.chatId),
+									eq(cm.isGenerating, true)
+								)
+						})
+					if (alreadyGenerating) {
+						const res: Sockets.ChatMessages.Continue.Response = {
+							chatMessage: undefined,
+							error: "A response is already generating in this chat."
+						}
+						emitToUser("chatMessages:continue:error", res)
+						return res
+					}
+
+					// Get current metadata and preserve it
+					const currentMetadata =
+						(messageToContinue.metadata as any) || {}
+
+					// Set as generating but KEEP existing content
+					// The content will be used as a prefix in generateResponse
+					const [updated] = await db
+						.update(schema.chatMessages)
+						.set({
+							isGenerating: true,
+							generationStage: "queued",
+							error: null,
+							metadata: currentMetadata
+						})
+						.where(eq(schema.chatMessages.id, params.id))
+						.returning()
+
+					const res: Sockets.ChatMessages.Continue.Response = {
+						chatMessage: updated as any
+					}
+					emitToUser("chatMessages:continue", res)
+
+					// Broadcast chatMessage to all chat participants
+					await broadcastToChatUsers(
+						socket.io,
+						updated.chatId,
+						"chatMessage",
+						{ chatMessage: updated }
+					)
+
+					// Start generating the response continuation
+					await generateResponse({
+						socket,
+						emitToUser,
+						chatId: messageToContinue.chatId,
+						userId,
+						generatingMessage: updated as any
+					})
+
+					return res
 				}
-				emitToUser("chatMessages:continue", res)
-				return res
-			}
-
-			// Get current metadata and preserve it
-			const currentMetadata = (messageToContinue.metadata as any) || {}
-
-			// Set as generating but KEEP existing content
-			// The content will be used as a prefix in generateResponse
-			const [updated] = await db
-				.update(schema.chatMessages)
-				.set({
-					isGenerating: true,
-					generationStage: "queued",
-					error: null,
-					metadata: currentMetadata
-				})
-				.where(eq(schema.chatMessages.id, params.id))
-				.returning()
-
-			const res: Sockets.ChatMessages.Continue.Response = {
-				chatMessage: updated as any
-			}
-			emitToUser("chatMessages:continue", res)
-
-			// Broadcast chatMessage to all chat participants
-			await broadcastToChatUsers(
-				socket.io,
-				updated.chatId,
-				"chatMessage",
-				{ chatMessage: updated }
 			)
-
-			// Start generating the response continuation
-			await generateResponse({
-				socket,
-				emitToUser,
-				chatId: messageToContinue.chatId,
-				userId,
-				generatingMessage: updated as any
-			})
-
-			return res
 		} catch (error: any) {
 			console.error("Error continuing chat message:", error)
 			const res: Sockets.ChatMessages.Continue.Response = {
 				chatMessage: undefined,
-				error: "Failed to continue message"
+				error:
+					error instanceof Error
+						? error.message
+						: "Failed to continue message"
 			}
 			emitToUser("chatMessages:continue:error", res)
 			throw error
@@ -2096,97 +2633,107 @@ export const chatMessagesSwipeLeftHandler: Handler<
 				return res
 			}
 
-			// Chat owner or the character's owner — see checkMessageEditPermission.
-			const canEdit = await checkMessageEditPermission(params.id, userId)
-			if (!canEdit) {
-				const res: Sockets.ChatMessages.SwipeLeft.Response = {
-					chatMessage: undefined,
-					error: "Access denied. You don't have permission to swipe this message."
+			// Regenerate/Continue/SwipeRight all wrap their mutation in the
+			// per-chat generation lock; without it here, a SwipeRight/
+			// Regenerate/Continue racing against a concurrent SwipeLeft on
+			// the same message could have its isGenerating/queueItemId
+			// state clobbered back to the stale pre-read values below.
+			return await withChatTriggerLock(message.chatId, async () => {
+				// Chat owner or the character's owner — see checkMessageEditPermission.
+				const canEdit = await checkMessageEditPermission(
+					params.id,
+					userId
+				)
+				if (!canEdit) {
+					const res: Sockets.ChatMessages.SwipeLeft.Response = {
+						chatMessage: undefined,
+						error: "Access denied. You don't have permission to swipe this message."
+					}
+					emitToUser("chatMessages:swipeLeft", res)
+					return res
 				}
-				emitToUser("chatMessages:swipeLeft", res)
-				return res
-			}
 
-			let isOnFirstSwipe = false
+				let isOnFirstSwipe = false
 
-			// Check if metadata.swipes, if not, initialize it
-			const data: SelectChatMessage = {
-				...message,
-				metadata: {
-					...message.metadata,
-					swipes: {
-						currentIdx: null,
-						history: [],
-						...(message.metadata?.swipes || {})
+				// Check if metadata.swipes, if not, initialize it
+				const data: SelectChatMessage = {
+					...message,
+					metadata: {
+						...message.metadata,
+						swipes: {
+							currentIdx: null,
+							history: [],
+							...(message.metadata?.swipes || {})
+						}
 					}
 				}
-			}
 
-			// Check if we are on the first swipe (idx=0|null) (or if there are no swipes)
-			if (
-				!data.metadata!.swipes!.history.length ||
-				data.metadata!.swipes!.currentIdx === null ||
-				data.metadata!.swipes!.currentIdx === 0
-			) {
-				isOnFirstSwipe = true
-			}
+				// Check if we are on the first swipe (idx=0|null) (or if there are no swipes)
+				if (
+					!data.metadata!.swipes!.history.length ||
+					data.metadata!.swipes!.currentIdx === null ||
+					data.metadata!.swipes!.currentIdx === 0
+				) {
+					isOnFirstSwipe = true
+				}
 
-			// If we are on the first swipe, return an error
-			if (isOnFirstSwipe) {
+				// If we are on the first swipe, return an error
+				if (isOnFirstSwipe) {
+					const res: Sockets.ChatMessages.SwipeLeft.Response = {
+						chatMessage: undefined,
+						error: "Already on the first swipe, cannot swipe left."
+					}
+					emitToUser("chatMessages:swipeLeft", res)
+					return res
+				}
+
+				// If not on the first swipe, update the current index and content
+				data.metadata!.swipes!.currentIdx =
+					(data.metadata!.swipes!.currentIdx || 0) - 1
+				data.content =
+					data.metadata!.swipes!.history[
+						data.metadata!.swipes!.currentIdx
+					] || ""
+				// Sync active thinking to the new swipe slot
+				data.metadata!.thinking =
+					data.metadata!.swipes!.thinkingHistory?.[
+						data.metadata!.swipes!.currentIdx
+					] ?? null
+
+				// Update the chat message in the database (drop `id` — it's the
+				// primary key, not an updatable column, and isn't optional on
+				// SelectChatMessage so `delete` can't be used here)
+				const { id: _id, ...dataWithoutId } = data
+				const [updated] = await db
+					.update(schema.chatMessages)
+					.set({ ...dataWithoutId })
+					.where(eq(schema.chatMessages.id, message.id))
+					.returning()
+
+				if (!updated) {
+					const res: Sockets.ChatMessages.SwipeLeft.Response = {
+						chatMessage: undefined,
+						error: "Failed to update chat message."
+					}
+					emitToUser("chatMessages:swipeLeft", res)
+					return res
+				}
+
 				const res: Sockets.ChatMessages.SwipeLeft.Response = {
-					chatMessage: undefined,
-					error: "Already on the first swipe, cannot swipe left."
+					chatMessage: updated as any
 				}
 				emitToUser("chatMessages:swipeLeft", res)
+
+				// Broadcast chatMessage to all chat participants
+				await broadcastToChatUsers(
+					socket.io,
+					updated.chatId,
+					"chatMessage",
+					{ chatMessage: updated }
+				)
+
 				return res
-			}
-
-			// If not on the first swipe, update the current index and content
-			data.metadata!.swipes!.currentIdx =
-				(data.metadata!.swipes!.currentIdx || 0) - 1
-			data.content =
-				data.metadata!.swipes!.history[
-					data.metadata!.swipes!.currentIdx
-				] || ""
-			// Sync active thinking to the new swipe slot
-			data.metadata!.thinking =
-				data.metadata!.swipes!.thinkingHistory?.[
-					data.metadata!.swipes!.currentIdx
-				] ?? null
-
-			// Update the chat message in the database (drop `id` — it's the
-			// primary key, not an updatable column, and isn't optional on
-			// SelectChatMessage so `delete` can't be used here)
-			const { id: _id, ...dataWithoutId } = data
-			const [updated] = await db
-				.update(schema.chatMessages)
-				.set({ ...dataWithoutId })
-				.where(eq(schema.chatMessages.id, message.id))
-				.returning()
-
-			if (!updated) {
-				const res: Sockets.ChatMessages.SwipeLeft.Response = {
-					chatMessage: undefined,
-					error: "Failed to update chat message."
-				}
-				emitToUser("chatMessages:swipeLeft", res)
-				return res
-			}
-
-			const res: Sockets.ChatMessages.SwipeLeft.Response = {
-				chatMessage: updated as any
-			}
-			emitToUser("chatMessages:swipeLeft", res)
-
-			// Broadcast chatMessage to all chat participants
-			await broadcastToChatUsers(
-				socket.io,
-				updated.chatId,
-				"chatMessage",
-				{ chatMessage: updated }
-			)
-
-			return res
+			})
 		} catch (error: any) {
 			console.error("Error swiping left chat message:", error)
 			const res: Sockets.ChatMessages.SwipeLeft.Response = {
@@ -2208,7 +2755,8 @@ export const chatMessagesSwipeRightHandler: Handler<
 		try {
 			const userId = socket.user!.id
 
-			// Get the message first to check chat access
+			// Get the message first — needed to learn chatId, which is the
+			// lock key, before we can acquire it.
 			const message = await db.query.chatMessages.findFirst({
 				where: (cm, { eq }) => eq(cm.id, params.id)
 			})
@@ -2221,146 +2769,177 @@ export const chatMessagesSwipeRightHandler: Handler<
 				emitToUser("chatMessages:swipeRight", res)
 				return res
 			}
-			// Chat owner or the character's owner — see checkMessageEditPermission.
-			const canEdit = await checkMessageEditPermission(params.id, userId)
-			if (!canEdit) {
-				const res: Sockets.ChatMessages.SwipeRight.Response = {
-					chatMessage: undefined,
-					error: "Access denied. You don't have permission to swipe this message."
+
+			return await withChatTriggerLock(message.chatId, async () => {
+				// Chat owner or the character's owner — see checkMessageEditPermission.
+				const canEdit = await checkMessageEditPermission(
+					params.id,
+					userId
+				)
+				if (!canEdit) {
+					const res: Sockets.ChatMessages.SwipeRight.Response = {
+						chatMessage: undefined,
+						error: "Access denied. You don't have permission to swipe this message."
+					}
+					emitToUser("chatMessages:swipeRight", res)
+					return res
 				}
-				emitToUser("chatMessages:swipeRight", res)
-				return res
-			}
 
-			let isOnLastSwipe = false
+				let isOnLastSwipe = false
 
-			// Check if metadata.swipes, if not, initialize it
-			const data: SelectChatMessage = {
-				...message,
-				metadata: {
-					...message.metadata,
-					swipes: {
-						currentIdx: null,
-						history: [],
-						...(message.metadata?.swipes || {})
+				// Check if metadata.swipes, if not, initialize it
+				const data: SelectChatMessage = {
+					...message,
+					metadata: {
+						...message.metadata,
+						swipes: {
+							currentIdx: null,
+							history: [],
+							...(message.metadata?.swipes || {})
+						}
 					}
 				}
-			}
 
-			// Check if we are on the last swipe (or if there are no swipes)
-			if (
-				!data.metadata!.swipes!.history.length ||
-				data.metadata!.swipes!.currentIdx === null
-			) {
-				isOnLastSwipe = true
-			} else {
-				isOnLastSwipe =
-					data.metadata!.swipes!.currentIdx ===
-					data.metadata!.swipes!.history.length - 1
-			}
+				// Check if we are on the last swipe (or if there are no swipes)
+				if (
+					!data.metadata!.swipes!.history.length ||
+					data.metadata!.swipes!.currentIdx === null
+				) {
+					isOnLastSwipe = true
+				} else {
+					isOnLastSwipe =
+						data.metadata!.swipes!.currentIdx ===
+						data.metadata!.swipes!.history.length - 1
+				}
 
-			if (!isOnLastSwipe) {
-				// If not on the last swipe, just update the current index and content
-				data.metadata!.swipes!.currentIdx =
-					(data.metadata!.swipes!.currentIdx || 0) + 1
-				data.content =
-					data.metadata!.swipes!.history[
-						data.metadata!.swipes!.currentIdx
-					] || ""
-				// Sync active thinking to the new swipe slot
-				data.metadata!.thinking =
-					data.metadata!.swipes!.thinkingHistory?.[
-						data.metadata!.swipes!.currentIdx
-					] ?? null
-			} else {
-				if (data.metadata!.swipes!.currentIdx === null) {
-					data.metadata!.swipes!.currentIdx = 0
-					data.metadata!.swipes!.history.push(data.content)
-					// Keep thinkingHistory in sync when initialising swipes for the first time
+				if (!isOnLastSwipe) {
+					// If not on the last swipe, just update the current index and content
+					data.metadata!.swipes!.currentIdx =
+						(data.metadata!.swipes!.currentIdx || 0) + 1
+					data.content =
+						data.metadata!.swipes!.history[
+							data.metadata!.swipes!.currentIdx
+						] || ""
+					// Sync active thinking to the new swipe slot
+					data.metadata!.thinking =
+						data.metadata!.swipes!.thinkingHistory?.[
+							data.metadata!.swipes!.currentIdx
+						] ?? null
+				} else {
+					// About to start a brand-new generation — freshness guard,
+					// re-checked now that the lock is held, matching
+					// regenerate/continue. Pure swipe navigation (the branch
+					// above) never reaches here, so it's never blocked by an
+					// unrelated in-flight generation elsewhere in the chat.
+					const alreadyGenerating =
+						await db.query.chatMessages.findFirst({
+							where: (cm, { and, eq }) =>
+								and(
+									eq(cm.chatId, message.chatId),
+									eq(cm.isGenerating, true)
+								)
+						})
+					if (alreadyGenerating) {
+						const res: Sockets.ChatMessages.SwipeRight.Response = {
+							chatMessage: undefined,
+							error: "A response is already generating in this chat."
+						}
+						emitToUser("chatMessages:swipeRight:error", res)
+						return res
+					}
+
+					if (data.metadata!.swipes!.currentIdx === null) {
+						data.metadata!.swipes!.currentIdx = 0
+						data.metadata!.swipes!.history.push(data.content)
+						// Keep thinkingHistory in sync when initialising swipes for the first time
+						const th: (string | null)[] =
+							data.metadata!.swipes!.thinkingHistory || []
+						while (th.length < data.metadata!.swipes!.history.length)
+							th.push(null)
+						data.metadata!.swipes!.thinkingHistory = th
+					}
+					// Now increment the current index and push a new empty generation slot
+					data.metadata!.swipes!.currentIdx += 1
+					data.content = "" // Clear the message content
+					data.isGenerating = true // Set generating state to true
+					data.generationStage = "queued"
+					data.error = null
+					data.queueItemId = null
+					// Push the new empty content to history
+					data.metadata!.swipes!.history.push("") // Add an empty string to history
+					// Push a matching null into thinkingHistory to keep lengths equal
 					const th: (string | null)[] =
 						data.metadata!.swipes!.thinkingHistory || []
-					while (th.length < data.metadata!.swipes!.history.length)
+					while (th.length < data.metadata!.swipes!.history.length - 1)
 						th.push(null)
-					data.metadata!.swipes!.thinkingHistory = th
-				}
-				// Now increment the current index and push a new empty generation slot
-				data.metadata!.swipes!.currentIdx += 1
-				data.content = "" // Clear the message content
-				data.isGenerating = true // Set generating state to true
-				data.generationStage = "queued"
-				data.error = null
-				data.queueItemId = null
-				// Push the new empty content to history
-				data.metadata!.swipes!.history.push("") // Add an empty string to history
-				// Push a matching null into thinkingHistory to keep lengths equal
-				const th: (string | null)[] =
-					data.metadata!.swipes!.thinkingHistory || []
-				while (th.length < data.metadata!.swipes!.history.length - 1)
 					th.push(null)
-				th.push(null)
-				data.metadata!.swipes!.thinkingHistory = th
-				// Clear active thinking — new slot has no thinking yet
-				data.metadata!.thinking = null
-			}
+					data.metadata!.swipes!.thinkingHistory = th
+					// Clear active thinking — new slot has no thinking yet
+					data.metadata!.thinking = null
+				}
 
-			// Drop `id` — it's the primary key, not an updatable column, and
-			// isn't optional on SelectChatMessage so `delete` can't be used.
-			const { id: _id, ...dataWithoutId } = data
+				// Drop `id` — it's the primary key, not an updatable column, and
+				// isn't optional on SelectChatMessage so `delete` can't be used.
+				const { id: _id, ...dataWithoutId } = data
 
-			// Update the chat message in the database
-			const [updated] = await db
-				.update(schema.chatMessages)
-				.set({ ...dataWithoutId })
-				.where(eq(schema.chatMessages.id, message.id))
-				.returning()
+				// Update the chat message in the database
+				const [updated] = await db
+					.update(schema.chatMessages)
+					.set({ ...dataWithoutId })
+					.where(eq(schema.chatMessages.id, message.id))
+					.returning()
 
-			if (!updated) {
+				if (!updated) {
+					const res: Sockets.ChatMessages.SwipeRight.Response = {
+						chatMessage: undefined,
+						error: "Failed to update chat message."
+					}
+					emitToUser("chatMessages:swipeRight", res)
+					return res
+				}
+
 				const res: Sockets.ChatMessages.SwipeRight.Response = {
-					chatMessage: undefined,
-					error: "Failed to update chat message."
+					chatMessage: updated as any
 				}
 				emitToUser("chatMessages:swipeRight", res)
-				return res
-			}
 
-			const res: Sockets.ChatMessages.SwipeRight.Response = {
-				chatMessage: updated as any
-			}
-			emitToUser("chatMessages:swipeRight", res)
+				if (!updated.isGenerating) {
+					// If the message is not generating, broadcast the updated chatMessage
+					await broadcastToChatUsers(
+						socket.io,
+						updated.chatId,
+						"chatMessage",
+						{ chatMessage: updated }
+					)
+					return res
+				}
 
-			if (!updated.isGenerating) {
-				// If the message is not generating, broadcast the updated chatMessage
+				// If the message is generating, we need to start generating a response
 				await broadcastToChatUsers(
 					socket.io,
 					updated.chatId,
 					"chatMessage",
 					{ chatMessage: updated }
 				)
+
+				await generateResponse({
+					socket,
+					emitToUser,
+					chatId: message.chatId,
+					userId,
+					generatingMessage: updated as any
+				})
+
 				return res
-			}
-
-			// If the message is generating, we need to start generating a response
-			await broadcastToChatUsers(
-				socket.io,
-				updated.chatId,
-				"chatMessage",
-				{ chatMessage: updated }
-			)
-
-			await generateResponse({
-				socket,
-				emitToUser,
-				chatId: message.chatId,
-				userId,
-				generatingMessage: updated as any
 			})
-
-			return res
 		} catch (error: any) {
 			console.error("Error swiping right chat message:", error)
 			const res: Sockets.ChatMessages.SwipeRight.Response = {
 				chatMessage: undefined,
-				error: "Failed to swipe right"
+				error:
+					error instanceof Error
+						? error.message
+						: "Failed to swipe right"
 			}
 			emitToUser("chatMessages:swipeRight:error", res)
 			throw error
@@ -2541,6 +3120,21 @@ export const chatMessageHandler: Handler<
 					emitToUser("chatMessage:error", res)
 					throw new Error("Chat message not found")
 				}
+				// Fetched by message id alone — without this check, any
+				// authenticated user could read any message on the instance
+				// (including debugMeta's full compiled prompt) just by
+				// guessing/incrementing ids.
+				const chatAccess = await checkChatAccess(
+					chatMessage.chatId,
+					socket.user!.id
+				)
+				if (!chatAccess.hasAccess) {
+					const res: Sockets.ChatMessage.Response = {
+						error: "Access denied. Chat not found or no permission to access."
+					}
+					emitToUser("chatMessage:error", res)
+					throw new Error("Access denied.")
+				}
 				const res: Sockets.ChatMessage.Response = { chatMessage }
 				emitToUser("chatMessage", res)
 				return res
@@ -2559,35 +3153,6 @@ export const chatMessageHandler: Handler<
 			emitToUser("chatMessage:error", res)
 			throw error
 		}
-	}
-}
-
-export async function chatMessage(
-	socket: any,
-	message: Sockets.ChatMessage.Call,
-	emitToUser: (event: string, data: any) => void
-) {
-	if (message.chatMessage) {
-		// If chatMessage object is provided, emit it directly
-		const res: Sockets.ChatMessage.Response = {
-			chatMessage: message.chatMessage
-		}
-		emitToUser("chatMessage", res)
-		return
-	} else if (message.id) {
-		// If id is provided, fetch from database
-		const chatMessage = await db.query.chatMessages.findFirst({
-			where: (m, { eq }) => eq(m.id, message.id!)
-		})
-		if (!chatMessage) {
-			emitToUser("error", { error: "Chat message not found." })
-			return
-		}
-		const res: Sockets.ChatMessage.Response = { chatMessage }
-		emitToUser("chatMessage", res)
-		return
-	} else {
-		emitToUser("error", { error: "Must provide either id or chatMessage." })
 	}
 }
 
@@ -2703,6 +3268,20 @@ export const promptTokenCountHandler: Handler<
 			// 		error: "Access denied. Only admin users can get prompt token count."
 			// 	}
 			// }
+
+			// This is the live "draft preview" handler (fired while typing) —
+			// fail fast on oversized content before any DB work, same as the
+			// persisted send/update paths.
+			if (
+				params.content &&
+				params.content.length > MAX_CHAT_MESSAGE_LENGTH
+			) {
+				const res: Sockets.Chats.PromptTokenCount.Response = {
+					error: `Message too long (max ${MAX_CHAT_MESSAGE_LENGTH.toLocaleString()} characters).`
+				}
+				emitToUser("chats:promptTokenCount", res)
+				return res
+			}
 
 			// Check if user has access to this chat
 			const chatAccess = await checkChatAccess(params.chatId, userId)
@@ -3046,84 +3625,93 @@ export const triggerNarratorResponseHandler: Handler<
 	Sockets.Chats.TriggerNarratorResponse.Response
 > = {
 	event: "chats:triggerNarratorResponse",
-	handler: async (socket, params, emitToUser) => {
-		try {
-			const userId = socket.user!.id
+	handler: async (socket, params, emitToUser) =>
+		withChatTriggerLock(params.chatId, async () => {
+			try {
+				const userId = socket.user!.id
 
-			const chat = await getPromptChatFromDb(params.chatId, userId)
-			if (!chat) {
+				if (
+					params.instructions &&
+					params.instructions.length >
+						MAX_NARRATOR_INSTRUCTIONS_LENGTH
+				) {
+					return {
+						error: `Narrator instructions too long (max ${MAX_NARRATOR_INSTRUCTIONS_LENGTH} characters).`
+					}
+				}
+
+				const chat = await getPromptChatFromDb(params.chatId, userId)
+				if (!chat) {
+					return {
+						error: "Error triggering Narrator response: Chat not found."
+					}
+				}
+
+				const hasGeneratingMessages = chat.chatMessages.some(
+					(msg) => msg.isGenerating
+				)
+				if (hasGeneratingMessages) {
+					return {
+						error: "A response is already generating in this chat."
+					}
+				}
+
+				// Resolve the effective narrator config (chat override → user active →
+				// system default) up front so the message's display name is
+				// snapshotted at generation time — later renaming a config, or
+				// changing the chat's override, doesn't retroactively relabel
+				// already-generated messages.
+				const effectiveNarratorConfig =
+					await resolveNarratorPromptConfig(chat, userId)
+				const narratorName =
+					effectiveNarratorConfig?.narratorName || "Narrator"
+
+				const narratorMessage: InsertChatMessage = {
+					userId,
+					chatId: params.chatId,
+					personaId: null,
+					characterId: null,
+					content: "",
+					role: "assistant",
+					isNarratorResponse: true,
+					isGenerating: true,
+					generationStage: "queued",
+					metadata: {
+						narratorName,
+						...(params.instructions
+							? { narratorInstructions: params.instructions }
+							: {})
+					}
+				}
+
+				const [generatingMessage] = await db
+					.insert(schema.chatMessages)
+					.values(narratorMessage)
+					.returning()
+
+				await broadcastToChatUsers(
+					socket.io,
+					generatingMessage.chatId,
+					"chatMessage",
+					{ chatMessage: generatingMessage }
+				)
+
+				const ok = await generateResponse({
+					socket,
+					emitToUser,
+					chatId: params.chatId,
+					userId,
+					generatingMessage: generatingMessage as any
+				})
+
+				return { success: ok }
+			} catch (error) {
+				console.error("Error in triggerNarratorResponseHandler:", error)
 				return {
-					error: "Error triggering Narrator response: Chat not found."
+					error: "Failed to trigger Narrator response."
 				}
 			}
-
-			const hasGeneratingMessages = chat.chatMessages.some(
-				(msg) => msg.isGenerating
-			)
-			if (hasGeneratingMessages) {
-				return {
-					error: "A response is already generating in this chat."
-				}
-			}
-
-			// Resolve the effective narrator config (chat override → user active →
-			// system default) up front so the message's display name is
-			// snapshotted at generation time — later renaming a config, or
-			// changing the chat's override, doesn't retroactively relabel
-			// already-generated messages.
-			const effectiveNarratorConfig = await resolveNarratorPromptConfig(
-				chat,
-				userId
-			)
-			const narratorName =
-				effectiveNarratorConfig?.narratorName || "Narrator"
-
-			const narratorMessage: InsertChatMessage = {
-				userId,
-				chatId: params.chatId,
-				personaId: null,
-				characterId: null,
-				content: "",
-				role: "assistant",
-				isNarratorResponse: true,
-				isGenerating: true,
-				generationStage: "queued",
-				metadata: {
-					narratorName,
-					...(params.instructions
-						? { narratorInstructions: params.instructions }
-						: {})
-				}
-			}
-
-			const [generatingMessage] = await db
-				.insert(schema.chatMessages)
-				.values(narratorMessage)
-				.returning()
-
-			await broadcastToChatUsers(
-				socket.io,
-				generatingMessage.chatId,
-				"chatMessage",
-				{ chatMessage: generatingMessage }
-			)
-
-			const ok = await generateResponse({
-				socket,
-				emitToUser,
-				chatId: params.chatId,
-				userId,
-				generatingMessage: generatingMessage as any
-			})
-
-			return { success: ok }
-		} catch (error) {
-			console.error("Error in triggerNarratorResponseHandler:", error)
-			return {
-				error: "Failed to trigger Narrator response."
-			}
-		}
-	}
+		})
 }
 
 // Lets the client label the Narrator trigger button/modal correctly BEFORE any
@@ -3170,18 +3758,13 @@ export const toggleChatCharacterActiveHandler: Handler<
 		try {
 			const userId = socket.user!.id
 
-			const chat = await db.query.chats.findFirst({
-				where: (c, { eq, and }) =>
-					and(eq(c.id, params.chatId), eq(c.userId, userId)),
-				with: {
-					chatCharacters: {
-						where: (cc, { eq }) =>
-							eq(cc.characterId, params.characterId)
-					}
-				}
-			})
-
-			if (!chat) {
+			// checkChatAccess (owner OR guest), not an owner-only ad-hoc check —
+			// a guest who brought their own character into a shared chat must
+			// be able to toggle that character's own active status; only the
+			// per-row escalation below decides whether *this* character is
+			// theirs to manage.
+			const chatAccess = await checkChatAccess(params.chatId, userId)
+			if (!chatAccess.hasAccess) {
 				return {
 					chatId: params.chatId,
 					characterId: params.characterId,
@@ -3190,7 +3773,21 @@ export const toggleChatCharacterActiveHandler: Handler<
 				}
 			}
 
-			if (!chat.chatCharacters || chat.chatCharacters.length === 0) {
+			const chat = await db.query.chats.findFirst({
+				where: (c, { eq }) => eq(c.id, params.chatId),
+				with: {
+					chatCharacters: {
+						where: (cc, { eq, and, isNull }) =>
+							and(
+								eq(cc.characterId, params.characterId),
+								isNull(cc.removedAt)
+							),
+						with: { character: { columns: { userId: true } } }
+					}
+				}
+			})
+
+			if (!chat?.chatCharacters || chat.chatCharacters.length === 0) {
 				return {
 					chatId: params.chatId,
 					characterId: params.characterId,
@@ -3200,6 +3797,18 @@ export const toggleChatCharacterActiveHandler: Handler<
 			}
 
 			const chatCharacter = chat.chatCharacters[0]
+			const canManage =
+				chatAccess.isOwner || chatCharacter.character?.userId === userId
+			if (!canManage) {
+				return {
+					chatId: params.chatId,
+					characterId: params.characterId,
+					isActive: false,
+					error:
+						"Access denied. Only the chat owner or this character's owner can change this."
+				}
+			}
+
 			const newActiveStatus = !chatCharacter.isActive
 
 			await db
@@ -3253,18 +3862,11 @@ export const updateChatCharacterVisibilityHandler: Handler<
 		try {
 			const userId = socket.user!.id
 
-			const chat = await db.query.chats.findFirst({
-				where: (c, { eq, and }) =>
-					and(eq(c.id, params.chatId), eq(c.userId, userId)),
-				with: {
-					chatCharacters: {
-						where: (cc, { eq }) =>
-							eq(cc.characterId, params.characterId)
-					}
-				}
-			})
-
-			if (!chat) {
+			// See toggleChatCharacterActiveHandler — same "owner OR this
+			// character's own owner" escalation, not an owner-only ad-hoc
+			// check.
+			const chatAccess = await checkChatAccess(params.chatId, userId)
+			if (!chatAccess.hasAccess) {
 				return {
 					chatId: params.chatId,
 					characterId: params.characterId,
@@ -3273,12 +3875,39 @@ export const updateChatCharacterVisibilityHandler: Handler<
 				}
 			}
 
-			if (!chat.chatCharacters || chat.chatCharacters.length === 0) {
+			const chat = await db.query.chats.findFirst({
+				where: (c, { eq }) => eq(c.id, params.chatId),
+				with: {
+					chatCharacters: {
+						where: (cc, { eq, and, isNull }) =>
+							and(
+								eq(cc.characterId, params.characterId),
+								isNull(cc.removedAt)
+							),
+						with: { character: { columns: { userId: true } } }
+					}
+				}
+			})
+
+			if (!chat?.chatCharacters || chat.chatCharacters.length === 0) {
 				return {
 					chatId: params.chatId,
 					characterId: params.characterId,
 					visibility: params.visibility,
 					error: "Chat character not found."
+				}
+			}
+
+			const chatCharacter = chat.chatCharacters[0]
+			const canManage =
+				chatAccess.isOwner || chatCharacter.character?.userId === userId
+			if (!canManage) {
+				return {
+					chatId: params.chatId,
+					characterId: params.characterId,
+					visibility: params.visibility,
+					error:
+						"Access denied. Only the chat owner or this character's owner can change this."
 				}
 			}
 
@@ -3332,9 +3961,13 @@ export const assistantSaveDraftHandler: Handler<
 	event: "assistant:saveDraft",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
+		const { chatId } = params
 		try {
-			const { chatId } = params
-
+			// Serialized per-chat against AssistantService.saveDraftToMetadata
+			// (the other writer of this same chat metadata, from the
+			// background field-regeneration flow) — without this, a save
+			// click could race an in-flight background write.
+			return await withChatTriggerLock(chatId, async () => {
 			// Get the chat
 			const chat = await db.query.chats.findFirst({
 				where: and(
@@ -3440,6 +4073,7 @@ export const assistantSaveDraftHandler: Handler<
 				success: true,
 				characterId: newCharacter.id
 			}
+			})
 		} catch (error) {
 			console.error("Error saving draft:", error)
 			return {
@@ -3474,6 +4108,7 @@ export function registerChatHandlers(
 	register(socket, chatsAddGuestHandler, emitToUser)
 	register(socket, chatsRemoveGuestHandler, emitToUser)
 	register(socket, chatsBranchHandler, emitToUser)
+	register(socket, chatsReassignRemovedParticipantHandler, emitToUser)
 	register(socket, chatMessagesSendPersonaMessageHandler, emitToUser)
 	register(socket, chatMessagesUpdateHandler, emitToUser)
 	register(socket, chatMessagesDeleteHandler, emitToUser)

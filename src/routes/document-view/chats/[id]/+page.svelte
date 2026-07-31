@@ -224,159 +224,165 @@
 		chat = { ...chat, chatMessages: next.sort((a, b) => a.id - b.id) }
 	}
 
-	onMount(() => {
-		socket.on("chats:get", (msg) => {
-			if (msg.chat === null) {
-				loaded = true
-				notFound = true
-				return
-			}
-			if (msg.chat?.id !== chatId) return
-			if (loadingOlder && msg.beforeId != null && chat) {
-				const existingIds = new Set(chat.chatMessages.map((m) => m.id))
-				const older = msg.chat.chatMessages.filter(
-					(m) => !existingIds.has(m.id)
+	function handleChatsGet(msg: Sockets.Chats.Get.Response) {
+		if (msg.chat === null) {
+			loaded = true
+			notFound = true
+			return
+		}
+		if (msg.chat?.id !== chatId) return
+		if (loadingOlder && msg.beforeId != null && chat) {
+			const existingIds = new Set(chat.chatMessages.map((m) => m.id))
+			const older = msg.chat.chatMessages.filter(
+				(m) => !existingIds.has(m.id)
+			)
+			chat = {
+				...chat,
+				chatMessages: [...older, ...chat.chatMessages].sort(
+					(a, b) => a.id - b.id
 				)
-				chat = {
-					...chat,
-					chatMessages: [...older, ...chat.chatMessages].sort(
-						(a, b) => a.id - b.id
-					)
-				}
-				loadingOlder = false
-			} else {
-				chat = {
-					...msg.chat,
-					chatMessages: [...msg.chat.chatMessages].sort(
-						(a, b) => a.id - b.id
-					)
-				}
-				loaded = true
 			}
-			pagination = msg.pagination
-		})
-		socket.on("chatMessage", (msg: Sockets.ChatMessage.Response) => {
-			if (!msg.chatMessage || msg.chatMessage.chatId !== chatId) return
-			const m = msg.chatMessage
-			if (m.isGenerating) {
-				generatingMessageId = m.id
-				generatingStatus = `Generating a response as ${speakerName(m)}…`
-				return
+			loadingOlder = false
+		} else {
+			chat = {
+				...msg.chat,
+				chatMessages: [...msg.chat.chatMessages].sort(
+					(a, b) => a.id - b.id
+				)
 			}
-			generatingMessageId = null
-			generatingStatus = ""
-			if (m.error) {
-				error = m.error.message || "Generation failed."
-				announce(error)
-				return
-			}
+			loaded = true
+		}
+		pagination = msg.pagination
+	}
+	function handleChatMessage(msg: Sockets.ChatMessage.Response) {
+		if (!msg.chatMessage || msg.chatMessage.chatId !== chatId) return
+		const m = msg.chatMessage
+		if (m.isGenerating) {
+			generatingMessageId = m.id
+			generatingStatus = `Generating a response as ${speakerName(m)}…`
+			return
+		}
+		generatingMessageId = null
+		generatingStatus = ""
+		if (m.error) {
+			error = m.error.message || "Generation failed."
+			announce(error)
+			return
+		}
+		error = ""
+		upsertMessage(m)
+		messageAnnouncement = `${speakerName(m)} replied.`
+		socket.emit("chats:getResponseOrder", { chatId })
+	}
+	function handleChatMessagesDelete(msg: Sockets.ChatMessages.Delete.Response) {
+		if (!chat) return
+		error = ""
+		chat = {
+			...chat,
+			chatMessages: chat.chatMessages.filter((m) => m.id !== msg.id)
+		}
+		socket.emit("chats:getResponseOrder", { chatId })
+	}
+	function handleChatMessagesUpdate(msg: Sockets.ChatMessages.Update.Response) {
+		if (msg.error) {
+			error = msg.error
+			announce(error)
+			return
+		}
+		if (msg.chatMessage) {
 			error = ""
-			upsertMessage(m)
-			messageAnnouncement = `${speakerName(m)} replied.`
+			upsertMessage(msg.chatMessage)
+			announce(
+				msg.chatMessage.isHidden
+					? "Message hidden from AI."
+					: "Message unhidden."
+			)
+		}
+	}
+	function handleChatMessagesSwipeLeft(
+		msg: Sockets.ChatMessages.SwipeLeft.Response
+	) {
+		if (msg.error) {
+			error = msg.error
+			announce(error)
+			return
+		}
+		if (msg.chatMessage) {
+			error = ""
+			upsertMessage(msg.chatMessage)
 			socket.emit("chats:getResponseOrder", { chatId })
-		})
-		socket.on(
-			"chatMessages:delete",
-			(msg: Sockets.ChatMessages.Delete.Response) => {
-				if (!chat) return
-				error = ""
-				chat = {
-					...chat,
-					chatMessages: chat.chatMessages.filter(
-						(m) => m.id !== msg.id
-					)
-				}
-				socket.emit("chats:getResponseOrder", { chatId })
-			}
-		)
-		socket.on(
-			"chatMessages:update",
-			(msg: Sockets.ChatMessages.Update.Response) => {
-				if (msg.error) {
-					error = msg.error
-					announce(error)
-					return
-				}
-				if (msg.chatMessage) {
-					error = ""
-					upsertMessage(msg.chatMessage)
-					announce(
-						msg.chatMessage.isHidden
-							? "Message hidden from AI."
-							: "Message unhidden."
-					)
-				}
-			}
-		)
-		socket.on(
-			"chatMessages:swipeLeft",
-			(msg: Sockets.ChatMessages.SwipeLeft.Response) => {
-				if (msg.error) {
-					error = msg.error
-					announce(error)
-					return
-				}
-				if (msg.chatMessage) {
-					error = ""
-					upsertMessage(msg.chatMessage)
-					socket.emit("chats:getResponseOrder", { chatId })
-				}
-			}
-		)
-		socket.on(
-			"chatMessages:swipeRight",
-			(msg: Sockets.ChatMessages.SwipeRight.Response) => {
-				if (msg.error) {
-					error = msg.error
-					announce(error)
-					return
-				}
-				if (msg.chatMessage) {
-					error = ""
-					upsertMessage(msg.chatMessage)
-					socket.emit("chats:getResponseOrder", { chatId })
-				}
-			}
-		)
-		socket.on("chatMessages:cancel", () => {
-			generatingMessageId = null
-			generatingStatus = ""
-		})
-		socket.on(
-			"chats:addPersona",
-			(msg: Sockets.Chats.AddPersona.Response) => {
-				if (msg.error) {
-					error = msg.error
-					announce(error)
-					return
-				}
-				error = ""
-				load()
-			}
-		)
-		socket.on("personas:list", (msg) => {
-			personas = msg.personaList || []
-		})
-		socket.on(
-			"chats:getResponseOrder",
-			(msg: Sockets.Chats.GetResponseOrder.Response) => {
-				if (msg.chatId === chatId) chatResponseOrder = msg
-			}
-		)
+		}
+	}
+	function handleChatMessagesSwipeRight(
+		msg: Sockets.ChatMessages.SwipeRight.Response
+	) {
+		if (msg.error) {
+			error = msg.error
+			announce(error)
+			return
+		}
+		if (msg.chatMessage) {
+			error = ""
+			upsertMessage(msg.chatMessage)
+			socket.emit("chats:getResponseOrder", { chatId })
+		}
+	}
+	function handleChatMessagesCancel() {
+		generatingMessageId = null
+		generatingStatus = ""
+	}
+	function handleChatsAddPersona(msg: Sockets.Chats.AddPersona.Response) {
+		if (msg.error) {
+			error = msg.error
+			announce(error)
+			return
+		}
+		error = ""
+		load()
+	}
+	function handlePersonasList(msg: Sockets.Personas.List.Response) {
+		personas = msg.personaList || []
+	}
+	function handleChatsGetResponseOrder(
+		msg: Sockets.Chats.GetResponseOrder.Response
+	) {
+		if (msg.chatId === chatId) chatResponseOrder = msg
+	}
+
+	onMount(() => {
+		socket.on("chats:get", handleChatsGet)
+		socket.on("chatMessage", handleChatMessage)
+		socket.on("chatMessages:delete", handleChatMessagesDelete)
+		socket.on("chatMessages:update", handleChatMessagesUpdate)
+		socket.on("chatMessages:swipeLeft", handleChatMessagesSwipeLeft)
+		socket.on("chatMessages:swipeRight", handleChatMessagesSwipeRight)
+		socket.on("chatMessages:cancel", handleChatMessagesCancel)
+		socket.on("chats:addPersona", handleChatsAddPersona)
+		socket.on("personas:list", handlePersonasList)
+		socket.on("chats:getResponseOrder", handleChatsGetResponseOrder)
 		socket.emit("personas:list", {})
 		socket.emit("chats:getResponseOrder", { chatId })
 		load()
 		return () => {
-			socket.off("chats:get")
-			socket.off("chatMessage")
-			socket.off("chatMessages:delete")
-			socket.off("chatMessages:update")
-			socket.off("chatMessages:swipeLeft")
-			socket.off("chatMessages:swipeRight")
-			socket.off("chatMessages:cancel")
-			socket.off("chats:addPersona")
-			socket.off("personas:list")
-			socket.off("chats:getResponseOrder")
+			socket.off("chats:get", handleChatsGet)
+			socket.off("chatMessage", handleChatMessage)
+			socket.off("chatMessages:delete", handleChatMessagesDelete)
+			socket.off("chatMessages:update", handleChatMessagesUpdate)
+			socket.off(
+				"chatMessages:swipeLeft",
+				handleChatMessagesSwipeLeft
+			)
+			socket.off(
+				"chatMessages:swipeRight",
+				handleChatMessagesSwipeRight
+			)
+			socket.off("chatMessages:cancel", handleChatMessagesCancel)
+			socket.off("chats:addPersona", handleChatsAddPersona)
+			socket.off("personas:list", handlePersonasList)
+			socket.off(
+				"chats:getResponseOrder",
+				handleChatsGetResponseOrder
+			)
 		}
 	})
 </script>

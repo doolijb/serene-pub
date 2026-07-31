@@ -15,6 +15,21 @@ export interface BasePromptChat extends SelectChat {
 	chatPersonas?: (SelectChatPersona & {
 		persona: SelectPersona & { lorebook?: SelectLorebook }
 	})[]
+	// Removed (soft-deleted) participants, deliberately kept OUT of
+	// chatCharacters/chatPersonas above so every "who's active in this chat"
+	// consumer (visible-character-name lists, turn order, lorebook binding
+	// checks, etc.) doesn't have to re-filter — see getPromptChatFromDb.
+	// Historical-message-speaker resolution is the one legitimate exception
+	// that needs removed rows too (a past message from a since-removed
+	// participant must still show who said it), so that lookup is supplied
+	// here instead, kept separate rather than merged back into the main
+	// lists so no other consumer can accidentally pick a removed row up.
+	removedChatCharacters?: (SelectChatCharacter & {
+		character: SelectCharacter | null
+	})[]
+	removedChatPersonas?: (SelectChatPersona & {
+		persona: SelectPersona | null
+	})[]
 	chatMessages: SelectChatMessage[]
 	// A chat's lorebookId is nullable, and the relational query result mirrors
 	// that (null when unset) — every consumer already guards for this (see
@@ -68,6 +83,14 @@ export abstract class BaseConnectionAdapter {
 	isSummarizerMode = false
 	isNarratorResponseMode = false
 	generatingMessageMetadata: any = {}
+	// Set directly by generateResponse.ts (not a constructor param — it's
+	// computed after the adapter is constructed, from an async
+	// buildGraphContext() call). Merged into extraInstructions by
+	// compilePrompt() below for the regular (non-summarizer/non-assistant/
+	// non-narrator) character-perspective path — narrator's equivalent
+	// per-trigger note already flows through compileNarratorResponsePrompt's
+	// own extraInstructions.
+	graphContextInstructions?: string
 	promptBuilder: PromptBuilder
 
 	constructor({
@@ -133,7 +156,14 @@ export abstract class BaseConnectionAdapter {
 			return await this.compileNarratorResponsePrompt(args)
 		}
 
-		return await this.promptBuilder.compilePrompt(args)
+		// The always-on, speaker-centric narrative-graph relationship summary
+		// (see graphContextFormatter.ts's buildGraphContext, called from
+		// generateResponse.ts) — mirrors how narratorInstructions flows into
+		// compileNarratorResponsePrompt's own extraInstructions just above.
+		return await this.promptBuilder.compilePrompt({
+			...args,
+			extraInstructions: this.graphContextInstructions
+		})
 	}
 
 	abstract generate(): Promise<{

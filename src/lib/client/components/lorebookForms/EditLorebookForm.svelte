@@ -17,14 +17,12 @@
 		lorebookId: number
 		hasUnsavedChanges?: boolean
 		mode?: "view" | "edit"
-		onExport?: (lorebookId: number) => void
 	}
 
 	let {
 		lorebookId,
 		hasUnsavedChanges = $bindable(false),
-		mode = $bindable("view"),
-		onExport
+		mode = $bindable("view")
 	}: Props = $props()
 
 	const socket = useTypedSocket()
@@ -209,7 +207,7 @@
 	</div>
 {:else if editLorebook}
 	{#if mode === "view"}
-		<div class="flex flex-col gap-4">
+		<div class="flex flex-col gap-3">
 			<div class="flex gap-2">
 				<button
 					class="btn btn-sm preset-filled-primary-500"
@@ -217,26 +215,26 @@
 				>
 					<Icons.Pencil size={14} /> Edit
 				</button>
-				{#if onExport}
-					<button
-						class="btn btn-sm preset-filled-surface-400-600"
-						onclick={() => onExport?.(lorebookId)}
-						title="Export lorebook"
-					>
-						<Icons.Download size={14} /> Export
-					</button>
-				{/if}
 			</div>
-			<div>
-				<p class="text-base font-semibold">{editLorebook.name}</p>
+			<!-- Name is already shown in the sidebar's header above these
+			     tabs — repeating it here would just be noise. -->
+			<section class="card preset-tonal space-y-1 p-3">
+				<p
+					class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
+				>
+					<Icons.FileText size={13} />
+					Description
+				</p>
 				{#if editLorebook.description}
-					<p
-						class="text-surface-700-300 mt-2 text-sm whitespace-pre-wrap"
-					>
+					<p class="text-sm leading-relaxed whitespace-pre-wrap">
 						{editLorebook.description}
 					</p>
+				{:else}
+					<p class="text-surface-700-300 text-sm italic">
+						No description yet. Click Edit to add one.
+					</p>
 				{/if}
-			</div>
+			</section>
 			{#if editLorebook.tags && editLorebook.tags.length > 0}
 				<div class="flex flex-wrap gap-2">
 					{#each editLorebook.tags as tagName}
@@ -249,6 +247,10 @@
 						</span>
 					{/each}
 				</div>
+			{:else}
+				<p class="text-surface-700-300 text-sm italic">
+					No tags yet.
+				</p>
 			{/if}
 		</div>
 	{:else}

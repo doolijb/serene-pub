@@ -116,7 +116,7 @@ describe("mapHistoryEntry", () => {
 				localId: 9,
 				name: "Scene A",
 				summary: "Something happened",
-				participantCharacters: ["Aria"],
+				participantCharacters: [1],
 				mentionedCharacters: []
 			}
 		]
@@ -240,33 +240,52 @@ describe("assignHistoryEntryLocalIds", () => {
 })
 
 describe("mapSceneForExport", () => {
-	test("maps scene fields with the given localId", () => {
+	test("maps scene fields with the given localId, translating binding ids to their export localIds", () => {
 		const mapped = mapSceneForExport(
 			{
 				name: "Scene A",
 				summary: "Something happened",
-				participantCharacters: ["Aria"],
-				mentionedCharacters: ["Kael"]
+				participantCharacters: [10],
+				mentionedCharacters: [20]
 			},
-			7
+			7,
+			new Map([
+				[10, 100],
+				[20, 200]
+			])
 		)
 		expect(mapped).toEqual({
 			localId: 7,
 			name: "Scene A",
 			summary: "Something happened",
-			participantCharacters: ["Aria"],
-			mentionedCharacters: ["Kael"]
+			participantCharacters: [100],
+			mentionedCharacters: [200]
 		})
+	})
+
+	test("drops ids with no matching binding in the map", () => {
+		const mapped = mapSceneForExport(
+			{
+				name: "Scene A",
+				summary: null,
+				participantCharacters: [10, 999],
+				mentionedCharacters: []
+			},
+			7,
+			new Map([[10, 100]])
+		)
+		expect(mapped.participantCharacters).toEqual([100])
 	})
 })
 
 const baseNode = {
+	id: 999,
 	name: "Aria",
 	nodeState: "active",
 	nodeVisibility: "normal",
 	aliases: [],
+	absorbedAliases: [],
 	summary: null,
-	lorebookBindingId: null,
 	parentNodeId: null,
 	historyEntryId: null,
 	sceneId: null
@@ -277,7 +296,7 @@ describe("mapNarrativeNode", () => {
 		const mapped = mapNarrativeNode(
 			{
 				...baseNode,
-				lorebookBindingId: 10,
+				id: 10,
 				parentNodeId: 20,
 				historyEntryId: 30,
 				sceneId: 40
@@ -310,6 +329,19 @@ describe("mapNarrativeNode", () => {
 		expect(mapped.parentLocalId).toBeNull()
 		expect(mapped.historyEntryLocalId).toBeNull()
 		expect(mapped.sceneLocalId).toBeNull()
+	})
+
+	test("passes absorbedAliases through unchanged, independent of characterId/personaId", () => {
+		const mapped = mapNarrativeNode(
+			{ ...baseNode, absorbedAliases: ["Old Name", "Prior Alias"] },
+			1,
+			[],
+			new Map(),
+			new Map(),
+			new Map(),
+			new Map()
+		)
+		expect(mapped.absorbedAliases).toEqual(["Old Name", "Prior Alias"])
 	})
 })
 

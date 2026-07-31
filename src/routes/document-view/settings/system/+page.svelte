@@ -120,104 +120,176 @@
 		}
 	})
 
-	onMount(() => {
-		socket.on("systemSettings:updateOllamaManagerEnabled", () => {
-			status = "Ollama Manager setting saved."
-			announce(status)
-		})
-		socket.on("systemSettings:updateOllamaManagerBaseUrl", () => {
-			status = "Ollama base URL saved."
-			announce(status)
-		})
-		socket.on("systemSettings:updateKoboldCppManagerEnabled", () => {
-			status = "KoboldCPP Manager setting saved."
-			announce(status)
-		})
-		socket.on("koboldcpp:setBaseUrl", () => {
-			status = "KoboldCPP base URL saved."
-			announce(status)
-		})
-		socket.on("systemSettings:updateSummarizationEnabled", () => {
-			status = "Summarization setting saved."
-			announce(status)
-		})
-		socket.on("systemSettings:updateContextDebuggingEnabled", () => {
-			status = "Context debugging setting saved."
-			announce(status)
-		})
-		socket.on("systemSettings:updateAccountsEnabled", (msg) => {
+	function handleUpdateOllamaManagerEnabled() {
+		status = "Ollama Manager setting saved."
+		announce(status)
+	}
+	function handleUpdateOllamaManagerBaseUrl() {
+		status = "Ollama base URL saved."
+		announce(status)
+	}
+	function handleUpdateKoboldCppManagerEnabled() {
+		status = "KoboldCPP Manager setting saved."
+		announce(status)
+	}
+	function handleKoboldcppSetBaseUrl() {
+		status = "KoboldCPP base URL saved."
+		announce(status)
+	}
+	function handleUpdateSummarizationEnabled() {
+		status = "Summarization setting saved."
+		announce(status)
+	}
+	function handleUpdateContextDebuggingEnabled() {
+		status = "Context debugging setting saved."
+		announce(status)
+	}
+	function handleUpdateAccountsEnabled(msg: { enabled?: boolean }) {
+		enablingAccounts = false
+		status = msg.enabled
+			? "User accounts are now required."
+			: "User accounts are now optional."
+		announce(status)
+	}
+	function handleUpdateAccountsEnabledError(msg: { error?: string }) {
+		enablingAccounts = false
+		error = msg.error || "Failed to update accounts setting."
+		announce(error)
+	}
+	function handleHasPassphrase(msg: { hasPassphrase: boolean }) {
+		hasPassphrase = msg.hasPassphrase
+	}
+	function handleSetPassphrase(msg: { success?: boolean; message?: string }) {
+		if (msg.success) {
+			hasPassphrase = true
+			newPassphrase = ""
+			// Passphrase is set — proceed to actually turn accounts on.
+			socket.emit("systemSettings:updateAccountsEnabled", {
+				enabled: true
+			})
+		} else {
 			enablingAccounts = false
-			status = msg.enabled
-				? "User accounts are now required."
-				: "User accounts are now optional."
-			announce(status)
-		})
+			error = msg.message || "Failed to set passphrase."
+			announce(error)
+		}
+	}
+	function handleCharaVaultStatus(msg: {
+		connected: boolean
+		email: string | null
+	}) {
+		charaVaultConnected = msg.connected
+		charaVaultEmail = msg.email
+	}
+	function handleCharaVaultConnect(msg: { success?: boolean }) {
+		if (msg.success) {
+			charaVaultEmailField = ""
+			charaVaultTokenField = ""
+			announce("Connected to CharaVault.")
+			socket.emit("cardSources:charaVault:status", {})
+		}
+	}
+	function handleCharaVaultConnectError(msg: { error?: string }) {
+		error = msg.error || "Failed to connect to CharaVault."
+		announce(error)
+	}
+	function handleCharaVaultDisconnect() {
+		announce("Disconnected from CharaVault.")
+		socket.emit("cardSources:charaVault:status", {})
+	}
+
+	onMount(() => {
+		socket.on(
+			"systemSettings:updateOllamaManagerEnabled",
+			handleUpdateOllamaManagerEnabled
+		)
+		socket.on(
+			"systemSettings:updateOllamaManagerBaseUrl",
+			handleUpdateOllamaManagerBaseUrl
+		)
+		socket.on(
+			"systemSettings:updateKoboldCppManagerEnabled",
+			handleUpdateKoboldCppManagerEnabled
+		)
+		socket.on("koboldcpp:setBaseUrl", handleKoboldcppSetBaseUrl)
+		socket.on(
+			"systemSettings:updateSummarizationEnabled",
+			handleUpdateSummarizationEnabled
+		)
+		socket.on(
+			"systemSettings:updateContextDebuggingEnabled",
+			handleUpdateContextDebuggingEnabled
+		)
+		socket.on(
+			"systemSettings:updateAccountsEnabled",
+			handleUpdateAccountsEnabled
+		)
 		socket.on(
 			"systemSettings:updateAccountsEnabled:error",
-			(msg: { error?: string }) => {
-				enablingAccounts = false
-				error = msg.error || "Failed to update accounts setting."
-				announce(error)
-			}
+			handleUpdateAccountsEnabledError
 		)
-		socket.on("users:current:hasPassphrase", (msg) => {
-			hasPassphrase = msg.hasPassphrase
-		})
-		socket.on("users:current:setPassphrase", (msg) => {
-			if (msg.success) {
-				hasPassphrase = true
-				newPassphrase = ""
-				// Passphrase is set — proceed to actually turn accounts on.
-				socket.emit("systemSettings:updateAccountsEnabled", {
-					enabled: true
-				})
-			} else {
-				enablingAccounts = false
-				error = msg.message || "Failed to set passphrase."
-				announce(error)
-			}
-		})
+		socket.on("users:current:hasPassphrase", handleHasPassphrase)
+		socket.on("users:current:setPassphrase", handleSetPassphrase)
 		socket.emit("users:current:hasPassphrase", {})
-		socket.on("cardSources:charaVault:status", (msg) => {
-			charaVaultConnected = msg.connected
-			charaVaultEmail = msg.email
-		})
-		socket.on("cardSources:charaVault:connect", (msg) => {
-			if (msg.success) {
-				charaVaultEmailField = ""
-				charaVaultTokenField = ""
-				announce("Connected to CharaVault.")
-				socket.emit("cardSources:charaVault:status", {})
-			}
-		})
+		socket.on("cardSources:charaVault:status", handleCharaVaultStatus)
+		socket.on("cardSources:charaVault:connect", handleCharaVaultConnect)
 		socket.on(
 			"cardSources:charaVault:connect:error",
-			(msg: { error?: string }) => {
-				error = msg.error || "Failed to connect to CharaVault."
-				announce(error)
-			}
+			handleCharaVaultConnectError
 		)
-		socket.on("cardSources:charaVault:disconnect", () => {
-			announce("Disconnected from CharaVault.")
-			socket.emit("cardSources:charaVault:status", {})
-		})
+		socket.on(
+			"cardSources:charaVault:disconnect",
+			handleCharaVaultDisconnect
+		)
 		socket.emit("cardSources:charaVault:status", {})
 
 		return () => {
-			socket.off("systemSettings:updateOllamaManagerEnabled")
-			socket.off("systemSettings:updateOllamaManagerBaseUrl")
-			socket.off("systemSettings:updateKoboldCppManagerEnabled")
-			socket.off("koboldcpp:setBaseUrl")
-			socket.off("systemSettings:updateSummarizationEnabled")
-			socket.off("systemSettings:updateContextDebuggingEnabled")
-			socket.off("systemSettings:updateAccountsEnabled")
-			socket.off("systemSettings:updateAccountsEnabled:error")
-			socket.off("users:current:hasPassphrase")
-			socket.off("users:current:setPassphrase")
-			socket.off("cardSources:charaVault:status")
-			socket.off("cardSources:charaVault:connect")
-			socket.off("cardSources:charaVault:connect:error")
-			socket.off("cardSources:charaVault:disconnect")
+			socket.off(
+				"systemSettings:updateOllamaManagerEnabled",
+				handleUpdateOllamaManagerEnabled
+			)
+			socket.off(
+				"systemSettings:updateOllamaManagerBaseUrl",
+				handleUpdateOllamaManagerBaseUrl
+			)
+			socket.off(
+				"systemSettings:updateKoboldCppManagerEnabled",
+				handleUpdateKoboldCppManagerEnabled
+			)
+			socket.off("koboldcpp:setBaseUrl", handleKoboldcppSetBaseUrl)
+			socket.off(
+				"systemSettings:updateSummarizationEnabled",
+				handleUpdateSummarizationEnabled
+			)
+			socket.off(
+				"systemSettings:updateContextDebuggingEnabled",
+				handleUpdateContextDebuggingEnabled
+			)
+			socket.off(
+				"systemSettings:updateAccountsEnabled",
+				handleUpdateAccountsEnabled
+			)
+			socket.off(
+				"systemSettings:updateAccountsEnabled:error",
+				handleUpdateAccountsEnabledError
+			)
+			socket.off("users:current:hasPassphrase", handleHasPassphrase)
+			socket.off("users:current:setPassphrase", handleSetPassphrase)
+			socket.off(
+				"cardSources:charaVault:status",
+				handleCharaVaultStatus
+			)
+			socket.off(
+				"cardSources:charaVault:connect",
+				handleCharaVaultConnect
+			)
+			socket.off(
+				"cardSources:charaVault:connect:error",
+				handleCharaVaultConnectError
+			)
+			socket.off(
+				"cardSources:charaVault:disconnect",
+				handleCharaVaultDisconnect
+			)
 		}
 	})
 </script>

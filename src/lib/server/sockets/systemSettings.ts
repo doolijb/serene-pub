@@ -3,6 +3,7 @@ import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { isAndroidWrapper } from "$lib/server/utils"
+import { isLocalEmbeddingSupported } from "$lib/server/embedding"
 
 export const systemSettingsGet: Handler<
 	Sockets.SystemSettings.Get.Params,
@@ -60,7 +61,8 @@ export const systemSettingsGet: Handler<
 					koboldCppManagedAdminPasswordSet:
 						!!koboldCppAdminPasswordRow?.koboldCppManagedAdminPassword
 				} as any,
-				isAndroidWrapper: isAndroidWrapper()
+				isAndroidWrapper: isAndroidWrapper(),
+				localEmbeddingsSupported: await isLocalEmbeddingSupported()
 			}
 
 			emitToUser("systemSettings:get", res)
@@ -144,6 +146,22 @@ export const systemSettingsUpdateAccountsEnabled: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
+			const currentSettings = await db.query.systemSettings.findFirst({
+				where: eq(schema.systemSettings.id, 1),
+				columns: { isAccountsEnabled: true }
+			})
+
+			// The client's own UI states "This setting cannot be reversed"
+			// but only enforces it cosmetically (a disabled Switch) — a
+			// direct socket.emit bypassing that UI could otherwise silently
+			// re-disable accounts, re-exposing the no-auth auto-attach-to-
+			// admin fallback (auth.ts) on an instance an admin had
+			// deliberately locked down. Enforce the one-way transition
+			// server-side.
+			if (params.enabled === false && currentSettings?.isAccountsEnabled) {
+				throw new Error("User accounts cannot be disabled once enabled.")
+			}
+
 			// Once enabled, unauthenticated access is blocked app-wide (see
 			// auth.ts), so the admin flipping this on must already have a
 			// passphrase to log back in with — re-check server-side rather
@@ -175,6 +193,27 @@ export const systemSettingsUpdateAccountsEnabled: Handler<
 			}
 			emitToUser("systemSettings:updateAccountsEnabled", res)
 			await systemSettingsGet.handler(socket, {}, emitToUser)
+
+			// Every socket that connected while accounts were disabled was
+			// auto-attached to the fallback admin with no token (auth.ts) —
+			// authMiddleware only runs at handshake, so those sessions never
+			// re-check once this flips. Evict that whole room now (this
+			// necessarily includes the calling admin's own socket, since
+			// reaching this handler at all required being that fallback
+			// admin) so every such session is forced through the
+			// now-enabled real login flow. Must come after emitToUser above
+			// so the caller sees their own success response first — same
+			// ordering as users.ts's setPassphrase/changePassphrase.
+			if (params.enabled) {
+				const fallbackAdmin = await db.query.users.findFirst({
+					where: (u, { eq }) => eq(u.isAdmin, true),
+					orderBy: (u, { asc }) => [asc(u.id)]
+				})
+				if (fallbackAdmin) {
+					socket.io.to(`user_${fallbackAdmin.id}`).disconnectSockets(true)
+				}
+			}
+
 			return res
 		} catch (error: any) {
 			console.error("Update accounts enabled error:", error)

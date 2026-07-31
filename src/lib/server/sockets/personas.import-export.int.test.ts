@@ -162,6 +162,83 @@ describe("personas import/export (PGlite integration)", () => {
 		expect(rows).toHaveLength(2)
 	})
 
+	test("importing a persona card with an explicit external uuid stamps that uuid onto the new row", async () => {
+		const { personasImportCard, personasExportCard } = await import(
+			"./personas"
+		)
+		const user = await makeUser("persona-external-uuid-user")
+		const fixedUuid = "33333333-3333-3333-3333-333333333333"
+
+		const cardWithUuid = {
+			...minimalPersonaCard,
+			extensions: { serenepub: { uuid: fixedUuid } }
+		}
+
+		const res = await personasImportCard.handler(
+			fakeSocket(user.id),
+			{ file: toBase64(cardWithUuid) },
+			noopEmit
+		)
+		expect(res.status).toBe("created")
+		expect(res.persona?.uuid).toBe(fixedUuid)
+
+		// Re-import via the row's own freshly-exported bytes — see the
+		// equivalent character test for why the hand-crafted card isn't
+		// reimported directly (normalization drift vs. buildPersonaExportCard
+		// output would spuriously "conflict").
+		const exported = await personasExportCard.handler(
+			fakeSocket(user.id),
+			{ id: res.persona!.id, format: "json" },
+			noopEmit
+		)
+		const reimported = await personasImportCard.handler(
+			fakeSocket(user.id),
+			{ file: exported.blob.toString("base64") },
+			noopEmit
+		)
+		expect(reimported.status).toBe("unchanged")
+		expect(reimported.persona?.id).toBe(res.persona!.id)
+
+		const rows = await testDb.query.personas.findMany({
+			where: (p, { eq }) => eq(p.userId, user.id)
+		})
+		expect(rows).toHaveLength(1)
+	})
+
+	test("two different users importing persona cards that share the same external uuid both succeed and each keep that uuid", async () => {
+		const { personasImportCard } = await import("./personas")
+		const userA = await makeUser("persona-uuid-collision-user-a")
+		const userB = await makeUser("persona-uuid-collision-user-b")
+		const sharedUuid = "44444444-4444-4444-4444-444444444444"
+
+		const cardForA = {
+			...minimalPersonaCard,
+			extensions: { serenepub: { uuid: sharedUuid } }
+		}
+		const cardForB = {
+			...minimalPersonaCard,
+			name: "Different Name Entirely",
+			extensions: { serenepub: { uuid: sharedUuid } }
+		}
+
+		const resA = await personasImportCard.handler(
+			fakeSocket(userA.id),
+			{ file: toBase64(cardForA) },
+			noopEmit
+		)
+		expect(resA.status).toBe("created")
+		expect(resA.persona?.uuid).toBe(sharedUuid)
+
+		const resB = await personasImportCard.handler(
+			fakeSocket(userB.id),
+			{ file: toBase64(cardForB) },
+			noopEmit
+		)
+		expect(resB.status).toBe("created")
+		expect(resB.persona?.uuid).toBe(sharedUuid)
+		expect(resB.persona?.id).not.toBe(resA.persona?.id)
+	})
+
 	test("a malformed extensions.serenepub.uuid is treated as absent — imports as new, no raw DB error", async () => {
 		const { personasImportCard } = await import("./personas")
 		const user = await makeUser("persona-malformed-uuid-user")

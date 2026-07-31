@@ -33,7 +33,7 @@ Click any tag chip in the Tags panel to open its detail view. This shows:
 - A **Personas** section listing every persona carrying that tag.
 - A **Lorebooks** section listing every lorebook carrying that tag.
 
-Each listed item can be clicked to jump to it, and has its own edit button to open that item directly for editing. From the tag detail view you can also click the pencil ("Rename Tag") button to edit the tag's name, description, and color, or the trash ("Delete Tag") button to remove it.
+Each listed item can be clicked to jump to it, and has its own edit button to open that item directly for editing. From the tag detail view you can also click the pencil ("Edit Tag") button to edit the tag's name, description, and color, or the trash ("Delete Tag") button to remove it.
 
 ## Deleting a Tag
 

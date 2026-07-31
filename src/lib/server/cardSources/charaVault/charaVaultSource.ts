@@ -7,11 +7,16 @@ import type {
 	CardSourceSearchResult
 } from "../types"
 import {
+	CardSourceInvalidRefError,
 	CardSourceRateLimitedError,
 	CardSourceUnavailableError
 } from "../types"
-import { acquire } from "./rateLimiter"
-import { hasActiveSession, withCharaVaultSession } from "./session"
+import { acquire, type AcquirePriority } from "./rateLimiter"
+import {
+	hasActiveSession,
+	withCharaVaultSession,
+	CHARAVAULT_FETCH_TIMEOUT_MS
+} from "./session"
 import { getOrFetchCardBytes } from "../diskCache"
 import { parseCharacterCard } from "$lib/server/utils/characterCardParser"
 import {
@@ -19,6 +24,49 @@ import {
 	hasExcludedTag,
 	hasExcludedNameMatch
 } from "./contentFilter"
+import { db } from "$lib/server/db"
+import * as schema from "$lib/server/db/schema"
+import { eq } from "drizzle-orm"
+import { isUnsafeCharacterBrowsingEnabled } from "$lib/server/utils"
+
+// Duplicates cardSources/index.ts's resolveNsfwParam exactly (same env-gate
+// + per-user-preference policy) rather than importing it from there —
+// index.ts imports charaVaultSource as one of its registered sources, so
+// importing back from here would be circular.
+async function isNsfwAllowedForUser(userId: number): Promise<boolean> {
+	if (!isUnsafeCharacterBrowsingEnabled()) return false
+	const settings = await db.query.userSettings.findFirst({
+		where: eq(schema.userSettings.userId, userId),
+		columns: { charaVaultIncludeNsfw: true }
+	})
+	return settings?.charaVaultIncludeNsfw ?? false
+}
+
+// getCardBytes/getCardDetail take an opaque {folder,file} ref with no
+// content signal of their own — search()'s filterRawItems (below) is the
+// only place hasExcludedTag/hasExcludedNameMatch get checked, so a user
+// who knows/guesses a valid ref could otherwise fetch/import NSFW content
+// even with browsing disabled instance-wide. Enforced here, at the source
+// level, so every current and future caller (getCardDetail already calls
+// getCardBytes internally) inherits it automatically. Uses the card's own
+// embedded name/tags — the only content signal available from just a ref;
+// CharaVault's own site-tags aren't fetchable without a search call.
+async function assertContentAllowed(
+	buffer: Buffer,
+	ctx: CardSourceContext
+): Promise<Awaited<ReturnType<typeof parseCharacterCard>>> {
+	const parsed = await parseCharacterCard(buffer)
+	if (!(await isNsfwAllowedForUser(ctx.userId))) {
+		const data = parsed.card.toSpecV3().data
+		if (
+			hasExcludedTag(data.tags ?? []) ||
+			hasExcludedNameMatch(data.name ?? "")
+		) {
+			throw new CardSourceUnavailableError("This card is not available.")
+		}
+	}
+	return parsed
+}
 
 const API_BASE = "https://charavault.net"
 const DEFAULT_LIMIT = 24
@@ -68,9 +116,7 @@ function isSafeCardRefSegment(value: unknown): value is string {
 function toCharaVaultCardRef(ref: unknown): CharaVaultCardRef {
 	const { folder, file } = (ref ?? {}) as Partial<CharaVaultCardRef>
 	if (!isSafeCardRefSegment(folder) || !isSafeCardRefSegment(file)) {
-		throw new CardSourceUnavailableError(
-			"Invalid CharaVault card reference"
-		)
+		throw new CardSourceInvalidRefError("Invalid CharaVault card reference")
 	}
 	return { folder, file }
 }
@@ -123,6 +169,16 @@ function mapCharaVaultItem(raw: any): LibraryCatalogItem | null {
 	}
 }
 
+// `Retry-After` is spec-legal as either delta-seconds or an HTTP-date;
+// Number() on a date string (or a literal "0") yields NaN/0, both falsy —
+// which would silently skip the client's auto-retry timer. Fall back to the
+// existing 60s default for anything that doesn't parse as a plain number.
+function parseRetryAfterMs(response: Response): number {
+	const header = response.headers.get("Retry-After")
+	const parsed = header ? Number(header) : NaN
+	return Number.isFinite(parsed) ? parsed * 1000 : 60_000
+}
+
 function extractItems(payload: any): any[] {
 	if (Array.isArray(payload)) return payload
 	if (Array.isArray(payload?.cards)) return payload.cards
@@ -132,13 +188,28 @@ function extractItems(payload: any): any[] {
 	return []
 }
 
-async function charaVaultFetch(path: string): Promise<Response> {
+async function charaVaultFetch(
+	path: string,
+	priority: AcquirePriority = "interactive"
+): Promise<Response> {
 	return withCharaVaultSession(
 		async (cookie) => {
-			await acquire(hasActiveSession())
-			return fetch(`${API_BASE}${path}`, {
-				headers: cookie ? { Cookie: cookie } : undefined
-			})
+			await acquire(hasActiveSession(), priority)
+			try {
+				return await fetch(`${API_BASE}${path}`, {
+					headers: cookie ? { Cookie: cookie } : undefined,
+					signal: AbortSignal.timeout(CHARAVAULT_FETCH_TIMEOUT_MS)
+				})
+			} catch (e) {
+				// Network failure or the timeout above firing (a stalled
+				// upstream connection) — classify consistently rather than
+				// letting an unclassified rejection propagate (eg. the image
+				// proxy route's catch would otherwise fall through to a
+				// misleading 404 for what's actually an unreachable source).
+				throw new CardSourceUnavailableError(
+					`Failed to reach CharaVault: ${(e as Error).message}`
+				)
+			}
 		},
 		async (response) => response
 	)
@@ -154,19 +225,17 @@ async function charaVaultFetch(path: string): Promise<Response> {
  * the file).
  */
 export async function fetchCharaVaultCardResponse(
-	ref: unknown
+	ref: unknown,
+	priority: AcquirePriority = "interactive"
 ): Promise<Response> {
 	const { folder, file } = toCharaVaultCardRef(ref)
 	const response = await charaVaultFetch(
-		`/cards/${encodeURIComponent(folder)}/${encodeURIComponent(file)}`
+		`/cards/${encodeURIComponent(folder)}/${encodeURIComponent(file)}`,
+		priority
 	)
 
 	if (response.status === 429) {
-		const retryAfterHeader = response.headers.get("Retry-After")
-		const retryAfterMs = retryAfterHeader
-			? Number(retryAfterHeader) * 1000
-			: 60_000
-		throw new CardSourceRateLimitedError(retryAfterMs)
+		throw new CardSourceRateLimitedError(parseRetryAfterMs(response))
 	}
 	if (!response.ok) {
 		throw new CardSourceUnavailableError(
@@ -192,14 +261,12 @@ export const charaVaultSource: CardSource = {
 		params: CardSourceSearchParams,
 		_ctx: CardSourceContext
 	): Promise<CardSourceSearchResult> {
-		// Clamped once, up front — used both for the outbound request and
-		// for the hasMore comparison below, so a caller requesting >200
-		// can't end up comparing rawItems.length against a ceiling CharaVault
-		// was never actually asked (or able) to honor.
+		// Clamped once, up front — used both for every outbound page request
+		// and for the "did upstream run out" check below, so a caller
+		// requesting >200 can't end up comparing a raw page's length against a
+		// ceiling CharaVault was never actually asked (or able) to honor.
 		const limit = Math.min(params.cursor?.limit ?? DEFAULT_LIMIT, 200)
-		const offset = params.cursor?.offset ?? 0
 
-		const query = new URLSearchParams()
 		// Once a user has actually opted into NSFW-inclusive browsing
 		// (env var + their own toggle — already resolved into this boolean
 		// by the caller), suppressing borderline-but-technically-SFW tags
@@ -207,62 +274,104 @@ export const charaVaultSource: CardSource = {
 		const q = params.nsfw
 			? params.searchTerm
 			: applyDefaultContentFilter(params.searchTerm)
-		if (q) query.set("q", q)
-		if (params.category) query.set("folder", params.category)
-		if (params.sort) query.set("sort", params.sort)
-		if (params.hasBook) query.set("has_book", "true")
-		if (params.creatorFilter) query.set("creator", params.creatorFilter)
-		query.set("nsfw", params.nsfw ? "true" : "false")
-		query.set("limit", String(limit))
-		query.set("offset", String(offset))
 
-		const response = await charaVaultFetch(`/api/cards?${query.toString()}`)
+		async function fetchRawPage(pageOffset: number): Promise<any[]> {
+			const query = new URLSearchParams()
+			if (q) query.set("q", q)
+			if (params.category) query.set("folder", params.category)
+			if (params.sort) query.set("sort", params.sort)
+			if (params.hasBook) query.set("has_book", "true")
+			if (params.creatorFilter) query.set("creator", params.creatorFilter)
+			query.set("nsfw", params.nsfw ? "true" : "false")
+			query.set("limit", String(limit))
+			query.set("offset", String(pageOffset))
 
-		if (response.status === 429) {
-			const retryAfterHeader = response.headers.get("Retry-After")
-			const retryAfterMs = retryAfterHeader
-				? Number(retryAfterHeader) * 1000
-				: 60_000
-			throw new CardSourceRateLimitedError(retryAfterMs)
-		}
-		if (!response.ok) {
-			throw new CardSourceUnavailableError(
-				`CharaVault API error: ${response.status}`
+			const response = await charaVaultFetch(
+				`/api/cards?${query.toString()}`
 			)
+
+			if (response.status === 429) {
+				throw new CardSourceRateLimitedError(parseRetryAfterMs(response))
+			}
+			if (!response.ok) {
+				throw new CardSourceUnavailableError(
+					`CharaVault API error: ${response.status}`
+				)
+			}
+
+			const payload = await response.json()
+			return extractItems(payload)
 		}
 
-		const payload = await response.json()
-		const rawItems = extractItems(payload)
-		let items = rawItems
-			.map(mapCharaVaultItem)
-			.filter((item): item is LibraryCatalogItem => item !== null)
+		function filterRawItems(rawItems: any[]): LibraryCatalogItem[] {
+			let items = rawItems
+				.map(mapCharaVaultItem)
+				.filter((item): item is LibraryCatalogItem => item !== null)
 
-		// The query-string exclusion above is a courtesy, not a guarantee —
-		// this is the actual enforcement, checked against each card's real
-		// CharaVault-assigned tags rather than trusting their undocumented
-		// "-word" query grammar to have matched everything it should have.
-		// Also checks the name directly (hasExcludedNameMatch) for terms
-		// that reliably signal content on their own even without a matching
-		// tag (eg. "milf"/"milfy" shows up in plenty of untagged card names).
-		if (!params.nsfw) {
-			items = items.filter(
-				(item) =>
-					!hasExcludedTag(item.tags) &&
-					!hasExcludedNameMatch(item.name)
-			)
+			// The query-string exclusion above is a courtesy, not a guarantee —
+			// this is the actual enforcement, checked against each card's real
+			// CharaVault-assigned tags rather than trusting their undocumented
+			// "-word" query grammar to have matched everything it should have.
+			// Also checks the name directly (hasExcludedNameMatch) for terms
+			// that reliably signal content on their own even without a matching
+			// tag (eg. "milf"/"milfy" shows up in plenty of untagged card names).
+			if (!params.nsfw) {
+				items = items.filter(
+					(item) =>
+						!hasExcludedTag(item.tags) &&
+						!hasExcludedNameMatch(item.name)
+				)
+			}
+			return items
+		}
+
+		// A raw page can filter down to few or zero visible items (heavy content
+		// filtering on a broad query) while upstream genuinely has more content.
+		// Rather than surfacing that as a "Load More" click that visibly does
+		// nothing, keep pulling subsequent raw pages in-process — advancing the
+		// real upstream offset each time — until either enough visible items
+		// are found, upstream is confirmed exhausted (a short raw page), or a
+		// small fetch cap is hit. Every internal fetch still goes through
+		// charaVaultFetch() (interactive priority) and so still costs a
+		// rate-limit slot — the cap bounds that cost to a handful of extra
+		// requests per click rather than letting one pathological query loop
+		// unbounded.
+		const MIN_VISIBLE_FLOOR = 4
+		const MAX_INTERNAL_FETCHES = 3
+
+		let offset = params.cursor?.offset ?? 0
+		let accumulated: LibraryCatalogItem[] = []
+		let upstreamExhausted = false
+
+		for (let fetches = 0; fetches < MAX_INTERNAL_FETCHES; fetches++) {
+			const rawItems = await fetchRawPage(offset)
+			offset += rawItems.length
+			accumulated = accumulated.concat(filterRawItems(rawItems))
+
+			if (rawItems.length < limit) {
+				upstreamExhausted = true
+				break
+			}
+			if (accumulated.length >= MIN_VISIBLE_FLOOR) break
 		}
 
 		return {
-			items,
-			hasMore: rawItems.length >= limit
+			items: accumulated,
+			hasMore: !upstreamExhausted,
+			nextOffset: offset
 		}
 	},
-	async getCardBytes(ref: unknown, _ctx: CardSourceContext): Promise<Buffer> {
+	async getCardBytes(ref: unknown, ctx: CardSourceContext): Promise<Buffer> {
 		const { folder, file } = toCharaVaultCardRef(ref)
-		return getOrFetchCardBytes(`charavault:${folder}/${file}`, async () => {
-			const response = await fetchCharaVaultCardResponse(ref)
-			return Buffer.from(await response.arrayBuffer())
-		})
+		const buffer = await getOrFetchCardBytes(
+			`charavault:${folder}/${file}`,
+			async () => {
+				const response = await fetchCharaVaultCardResponse(ref)
+				return Buffer.from(await response.arrayBuffer())
+			}
+		)
+		await assertContentAllowed(buffer, ctx)
+		return buffer
 	},
 	async getCardDetail(
 		ref: unknown,

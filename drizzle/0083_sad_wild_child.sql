@@ -1,0 +1,2 @@
+CREATE INDEX "lorebook_bindings_character_id_idx" ON "lorebook_bindings" USING btree ("character_id");--> statement-breakpoint
+CREATE INDEX "lorebook_bindings_persona_id_idx" ON "lorebook_bindings" USING btree ("persona_id");

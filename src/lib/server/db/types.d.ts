@@ -173,9 +173,12 @@ export global {
 	export type InsertScene = typeof schema.scenes.$inferInsert
 	export type UpdateScene = Partial<SelectScene> & { id: number }
 
-	// Narrative graph types
-	export type SelectNarrativeNode = typeof schema.narrativeNodes.$inferSelect
-	export type InsertNarrativeNode = typeof schema.narrativeNodes.$inferInsert
+	// Narrative graph types — a "node" IS a lorebookBindings row now (see
+	// the merge plan); these names are kept as aliases for call sites that
+	// still think in "node" terms (test fixtures, mostly), rather than
+	// forcing every reference to be renamed.
+	export type SelectNarrativeNode = SelectLorebookBinding
+	export type InsertNarrativeNode = InsertLorebookBinding
 	export type UpdateNarrativeNode = Partial<SelectNarrativeNode> & {
 		id: number
 	}

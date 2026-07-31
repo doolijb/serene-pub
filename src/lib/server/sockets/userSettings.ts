@@ -10,26 +10,96 @@ import {
 } from "$lib/server/utils"
 import { readFileSync } from "fs"
 import { join } from "path"
+import { dev } from "$app/environment"
 
 const DEFAULT_BACKGROUNDS_MANIFEST = "/backgrounds/defaults/manifest.json"
 
-function getDefaultBackgrounds(): string[] {
-	try {
-		// Resolve static folder relative to project root
-		const manifestPath = join(
-			process.cwd(),
-			"static",
-			"backgrounds",
-			"defaults",
-			"manifest.json"
-		)
-		const manifest = JSON.parse(
-			readFileSync(manifestPath, "utf-8")
-		) as string[]
-		return manifest.map((f) => `/backgrounds/defaults/${f}`)
-	} catch {
-		return []
+// The 9 default backgrounds that shipped as .jpg before being re-encoded to
+// .webp (see dist size-reduction pass). A user's stored backgroundImagePath
+// can still reference one of these old .jpg names from before their install
+// was upgraded — the .jpg files themselves are gone from the shipped bundle,
+// so without this rewrite the background would just silently fail to load.
+const LEGACY_DEFAULT_JPG_BASENAMES = new Set([
+	"city-street_tom-w-zwdkxQZu0Ko-unsplash",
+	"garden-walkway_veronica-reverse-qYwyRF9u-uo-unsplash",
+	"granite-hall_ali-lokhandwala-KUr51Y4dOyo-unsplash",
+	"japanese-village_rogerio-toledo-g6se8ozlRV0-unsplash",
+	"modern-home-interior_lotus-design-n-print-WgkA3CSFrjc-unsplash",
+	"mossy-forest_gustav-gullstrand-d6kSvT2xZQo-unsplash",
+	"mountain-castle_andreas-weilguny-2uAVyybMrHI-unsplash",
+	"river-under-forest-overgrowth_tienko-dima-uYoVf9I6ANI-unsplash",
+	"rustic-pub_nikola-jovanovic-QGPmWrclELg-unsplash"
+])
+
+export function resolveBackgroundImagePath(
+	storedPath: string | null | undefined
+): string | null {
+	if (!storedPath) return storedPath ?? null
+	const match = storedPath.match(/^\/backgrounds\/defaults\/(.+)\.jpg$/)
+	if (!match || !LEGACY_DEFAULT_JPG_BASENAMES.has(match[1]))
+		return storedPath
+	return `/backgrounds/defaults/${match[1]}.webp`
+}
+
+export function getDefaultBackgrounds(): string[] {
+	// In dev, `vite dev` only ever serves static/ — there is no build/client
+	// being actively served, so any build/ directory on disk while
+	// developing is necessarily a stale leftover from a past `npm run
+	// build` (possibly out of sync with the current static/ contents, eg.
+	// referencing filenames that no longer exist). Consulting it here would
+	// silently mask what's actually being served. In prod, adapter-node's
+	// build/client is the actual served static root — static/ is only ever
+	// copied into it, never read directly at runtime, and the desktop
+	// bundle stopped shipping a second static/ copy (see bundle-dist.js).
+	// Try that first; fall back to the old static/ path for one release in
+	// case some launch path resolves process.cwd() differently than
+	// expected (dist-assets/*/run.* don't cd into the app directory before
+	// launching node).
+	const candidatePaths = dev
+		? [
+				join(
+					process.cwd(),
+					"static",
+					"backgrounds",
+					"defaults",
+					"manifest.json"
+				)
+			]
+		: [
+				join(
+					process.cwd(),
+					"build",
+					"client",
+					"backgrounds",
+					"defaults",
+					"manifest.json"
+				),
+				join(
+					process.cwd(),
+					"static",
+					"backgrounds",
+					"defaults",
+					"manifest.json"
+				)
+			]
+	for (let i = 0; i < candidatePaths.length; i++) {
+		try {
+			const manifest = JSON.parse(
+				readFileSync(candidatePaths[i], "utf-8")
+			) as string[]
+			if (i > 0) {
+				console.warn(
+					`Default backgrounds manifest not found at ${candidatePaths[0]}; ` +
+						`fell back to ${candidatePaths[i]}. This usually means the ` +
+						`process was launched with an unexpected working directory.`
+				)
+			}
+			return manifest.map((f) => `/backgrounds/defaults/${f}`)
+		} catch {
+			continue
+		}
 	}
+	return []
 }
 
 export const userSettingsGet: Handler<
@@ -54,15 +124,18 @@ export const userSettingsGet: Handler<
 
 			// If no user settings found, create default ones
 			if (!settings) {
-				await db.insert(schema.userSettings).values({
-					userId: userId,
-					theme: "hamlindigo",
-					darkMode: true,
-					showHomePageBanner: true,
-					enableEasyPersonaCreation: true,
-					enableEasyCharacterCreation: true,
-					showAllCharacterFields: false
-				})
+				await db
+					.insert(schema.userSettings)
+					.values({
+						userId: userId,
+						theme: "hamlindigo",
+						darkMode: true,
+						showHomePageBanner: true,
+						enableEasyPersonaCreation: true,
+						enableEasyCharacterCreation: true,
+						showAllCharacterFields: false
+					})
+					.onConflictDoNothing()
 
 				// Fetch the newly created settings
 				settings = await db.query.userSettings.findFirst({
@@ -99,7 +172,9 @@ export const userSettingsGet: Handler<
 					enableEasyCharacterCreation:
 						settings.enableEasyCharacterCreation,
 					showAllCharacterFields: settings.showAllCharacterFields,
-					backgroundImagePath: settings.backgroundImagePath ?? null,
+					backgroundImagePath: resolveBackgroundImagePath(
+						settings.backgroundImagePath
+					),
 					backgroundOpacity: settings.backgroundOpacity ?? 75,
 					charaVaultIncludeNsfw:
 						settings.charaVaultIncludeNsfw ?? false
@@ -437,6 +512,25 @@ export const userSettingsUpdateBackground: Handler<
 	event: "userSettings:updateBackground",
 	handler: async (socket: AuthenticatedSocket, params, emitToUser) => {
 		const userId = socket.user!.id
+
+		// params.path is later interpolated unescaped into a CSS url(...) on
+		// the user's own page (Layout.svelte) — restrict it to an actual
+		// shipped default or one of this user's own uploads, the same two
+		// lists userSettings:listBackgrounds itself offers, rather than
+		// accepting an arbitrary string verbatim.
+		if (params.path !== null) {
+			const [defaults, uploads] = await Promise.all([
+				Promise.resolve(getDefaultBackgrounds()),
+				listUserBackgrounds({ userId })
+			])
+			if (
+				!defaults.includes(params.path) &&
+				!uploads.includes(params.path)
+			) {
+				throw new Error("Invalid background image.")
+			}
+		}
+
 		await db
 			.update(schema.userSettings)
 			.set({

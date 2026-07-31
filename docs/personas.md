@@ -42,7 +42,7 @@ An avatar image can be uploaded via a drag-and-drop dropzone (JPG, PNG, or GIF) 
 
 ### Default Persona Flag
 
-A persona can be flagged as your default persona (shown as a "Default" badge on its view panel) — the starter persona the setup wizard creates for you is flagged this way automatically. There is currently no control in the persona form (or anywhere else in the UI) to change which persona holds this flag afterward; it's set once, at creation, by the setup wizard's starter-persona flow specifically, and every other persona you create is not flagged as default.
+A persona can be flagged as your default persona (shown as a "Default" badge on its view panel) — the starter persona the setup wizard creates for you is flagged this way automatically. You can change which persona holds the flag at any time: each persona's overflow (⋯) menu in the sidebar list (or card view) has a **Set as default** action (disabled, and labeled "Default" instead, on whichever persona currently holds it). Choosing it clears the flag from your previous default and sets it on the newly selected persona — the flag is scoped to your account, so it doesn't affect any other user's personas.
 
 ### Required vs. Optional Fields
 
@@ -54,7 +54,7 @@ It's worth being explicit about the distinction, since the two editors look simi
 
 ## Creating a Persona
 
-From the Personas sidebar panel, click the plus (+) button labeled "Create New Persona." What happens next depends on whether **Easy Persona Creation** is turned on in your [user settings](./users-and-accounts.md) (it is on by default):
+From the Personas sidebar panel, click the **New** button (plus icon, titled "Create New Persona"). What happens next depends on whether **Easy Persona Creation** is turned on in your [user settings](./users-and-accounts.md) (it is on by default):
 
 - **Easy Creation Mode on** — opens the step-by-step Persona Creator wizard in a modal.
 - **Easy Creation Mode off** — opens the full Persona Form directly in the sidebar panel, with every field (name, aliases, summary, description, tags, avatar) available at once.
@@ -81,9 +81,13 @@ Turning Easy Creation Mode off in User Settings switches "Create New Persona" ov
 
 ## Viewing, Editing, and Deleting a Persona
 
-Clicking a persona in the sidebar list opens a compact view panel showing its avatar, name, "Default" badge (if applicable), tags, and description, along with buttons to open its chats or jump into editing. From the view panel's "Chat" button you're taken to the Chats panel with that persona pre-selected, and "Edit" opens the full Persona Form.
+Clicking a persona in the sidebar list opens a compact view panel showing its avatar, name, "Default" badge (if applicable), tags, and description, along with buttons to open its chats, export it, or jump into editing. From the view panel's message-square button you're taken to the Chats panel with that persona pre-selected, the download-icon button opens the export dialog (see Exporting a Persona, below), and "Edit" opens the full Persona Form.
 
-Each persona in the sidebar list also has an overflow (⋯) menu with **View**, **Edit**, and **Delete** actions. Deleting asks for confirmation ("Delete Persona? This action cannot be undone") and performs a soft delete — the persona is hidden from your library rather than immediately purged.
+Each persona in the sidebar list also has an overflow (⋯) menu with **View**, **Edit**, **Export**, **Set as default** (disabled, and labeled "Default," if it already holds the flag — see Default Persona Flag, above), and **Delete** actions. Deleting asks for confirmation ("Delete Persona? This action cannot be undone") and performs a soft delete — the persona is hidden from your library rather than immediately purged.
+
+### Exporting a Persona
+
+Both the view panel's export button and the sidebar list's overflow-menu **Export** action open the same **Export Persona** dialog, offering **Export as JSON** (a standard persona-card JSON file) and **Export as PNG Card** (embeds the card data into the persona's avatar image and downloads it as a PNG). The PNG option is disabled and relabeled "Export as PNG Card (No Avatar)" if the persona has no avatar image set. Unlike character export, there's no option to embed a lorebook — personas aren't bound to a lorebook of their own the way characters can be (see [Characters](./characters.md#exporting-a-character)).
 
 ### Unsaved Changes Protection
 
@@ -91,10 +95,12 @@ Both the full Persona Form and the Persona Creator track whether you've made cha
 
 ## Browsing the Persona Library
 
-The Personas sidebar includes an Import button (download icon) next to "Create New Persona." Clicking it opens an **Import Persona** dialog with two options:
+The Personas sidebar shows three buttons above the list: **New**, **Import**, and **Browse**.
 
-- **Search Library** — opens the Persona Library modal, a browsable catalog of community-contributed personas pulled live from Serene Pub's public persona-list repository. A search box filters by name, description, category, or tag, and results are grouped into category sections. Selecting a result opens a detail view with its full description, tags, author, version, and card spec, plus an image preview if one is provided. An "Import Persona" button downloads that entry and adds it to your own persona library.
-- **Upload a file** — a drag-and-drop file uploader accepting PNG, APNG, JPEG, JPG, WEBP, or JSON files, for importing a persona card you already have on disk.
+- **Import** (upload icon) opens a dialog with a drag-and-drop file uploader accepting PNG, APNG, JPEG, JPG, WEBP, or JSON files, for importing a persona card you already have on disk.
+- **Browse** (library icon) takes you to a full-page **Persona Library** rather than a sidebar dialog — a browsable catalog of community-contributed personas pulled live from Serene Pub's public persona-list repository, grouped into category sections. A search box filters by name, description, category, or tag as you type (debounced) or immediately on Enter. Selecting a result opens a detail view with its full description, tags, author, version, and card spec, plus an image preview if one is provided. A **Download Persona** button in that detail view downloads the entry and adds it to your own persona library.
+
+Unlike the Character Library, the Persona Library currently only draws from that one catalog — there's no equivalent of the larger third-party CharaVault source described in [Characters](./characters.md#library-source), since CharaVault doesn't host a persona catalog.
 
 ### Persona Cards Use the Same Format as Character Cards
 
@@ -116,10 +122,6 @@ The Personas sidebar list is meant to support keeping a whole roster of personas
 
 The search box above the persona list filters as you type, matching against a persona's name, its description text, and any tags attached to it. This is the fastest way to find a specific persona once your library grows beyond a handful of entries.
 
-### Personas and Retrieval
-
-Whenever a persona is created or updated, it is automatically queued for vectorization in the background, making its description and summary available to the app's retrieval-augmented context system. See [Embeddings & RAG](./embeddings-and-rag.md) for how that indexing is used during chat.
-
 ### Personas Are Per Account
 
 Personas belong to the user account that created them — each account has its own private persona library, separate from any other account's. See [Users and Accounts](./users-and-accounts.md) for account-level details.
@@ -127,3 +129,7 @@ Personas belong to the user account that created them — each account has its o
 ### The Setup Wizard's Starter Persona
 
 The first-run setup wizard offers a one-click option that creates a starter persona named "You," pre-filled with a description explaining that it represents you in conversations and can be edited or replaced later. It's created with the default-persona flag set, giving new accounts a working persona without having to go through the creator wizard immediately.
+
+### Personas and Retrieval
+
+Whenever a persona is created or updated, it is automatically queued for vectorization in the background, making its description and summary available to the app's retrieval-augmented context system. See [Embeddings & RAG](./embeddings-and-rag.md) for how that indexing is used during chat.

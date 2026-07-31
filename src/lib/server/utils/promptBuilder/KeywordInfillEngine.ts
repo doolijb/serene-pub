@@ -26,7 +26,7 @@ import type {
 } from "./types"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { and, eq, inArray, ne, or } from "drizzle-orm"
+import { and, eq, ne } from "drizzle-orm"
 import { BaseInfillEngine } from "./BaseInfillEngine"
 import {
 	MAX_GRAPH_PAIRS,
@@ -46,8 +46,12 @@ import { resolvePostHistoryContext } from "./PostHistoryContext"
  * exactly as before — and only measurably boosts entries an author
  * explicitly marked High/VeryHigh, fitting this engine's weighted-sum score
  * model instead of bolting a discrete tier system onto it.
+ *
+ * Exported so RagInfillEngine can apply the same per-tier bonus to its own
+ * (differently-scaled, but still roughly 0-1) similarity scores — otherwise
+ * priority has zero effect in RAG mode despite being a user-facing setting.
  */
-const PRIORITY_SCORE_BONUS = 0.15
+export const PRIORITY_SCORE_BONUS = 0.15
 
 const FILL_BUDGET = {
 	worldLore: 20,
@@ -378,6 +382,13 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 			...populatedReservedHistory
 		]
 
+		// Narrative graph text, computed later (Phase 3c, once includedHistory is
+		// final) but read by buildCtx/countTokens from the very first call —
+		// same mutable-single-slot-array trick as RagInfillEngine's graphSlot,
+		// so its token cost is measured (and, if needed, trimmed) by budget
+		// enforcement instead of being appended to the render after the fact.
+		const graphSlot: (string | undefined)[] = []
+
 		// Build reserve token count
 		const buildCtx = () =>
 			this.buildTemplateContext(
@@ -388,7 +399,8 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 				includedCharLore,
 				includedWorldLore,
 				includedHistory,
-				mostRecentHistory
+				mostRecentHistory,
+				graphSlot[0]
 			)
 
 		const countTokens = this.makeCountTokens(
@@ -401,6 +413,14 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		)
 
 		const reserveTokens = await countTokens()
+
+		// Soft fill target — RagInfillEngine's actual operative ceiling for
+		// lore/message fill-in (its `threshold`); previously only computed here
+		// for the diagnostics readout, with every real fill/enforce decision
+		// below comparing against tokenLimit directly, so contextThresholdPercent
+		// silently had no effect in this engine. tokenLimit remains the hard
+		// safety-net ceiling enforced in Phase 4.
+		const threshold = Math.floor(tokenLimit * contextThresholdPercent)
 
 		// ── Phase 2: Score all non-reserved candidates ────────────────────────
 
@@ -674,8 +694,10 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		}
 
 		// Budget split: reserve MESSAGE_FILL_FRACTION of available budget for chat
-		// messages so that high-scoring lore entries can't crowd out conversation history.
-		const contentBudget = Math.max(0, tokenLimit - reserveTokens)
+		// messages so that high-scoring lore entries can't crowd out conversation
+		// history. Based on `threshold` (the soft fill target), not `tokenLimit`,
+		// so contextThresholdPercent actually shrinks how much gets filled.
+		const contentBudget = Math.max(0, threshold - reserveTokens)
 		const messageBudget = Math.max(
 			KeywordInfillEngine.MIN_MESSAGE_FILL_TOKENS,
 			Math.floor(
@@ -748,7 +770,9 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		}
 
 		// ── Phase 3b: Lore fills remaining budget ─────────────────────────────────
-		// Lore candidates (sorted by score) fill whatever budget remains up to tokenLimit.
+		// Lore candidates (sorted by score) fill whatever budget remains up to
+		// threshold (the soft fill target — tokenLimit is only the hard
+		// safety-net ceiling enforced in Phase 4).
 		for (const candidate of loreFillPool) {
 			if (
 				typeCounts[candidate.type] >=
@@ -798,7 +822,7 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 			}
 
 			totalTokens = await countTokens()
-			if (totalTokens > tokenLimit) {
+			if (totalTokens > threshold) {
 				rollback?.()
 				totalTokens = await countTokens()
 				candidate.score.includedReason = "excluded_token_limit"
@@ -823,32 +847,12 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 			})
 		}
 
-		// ── Phase 4: Enforce budget ───────────────────────────────────────────
-		// The fill pool already rolled back over-budget lore candidates; only
-		// messages may need trimming here (as a safety net for reserve overflows).
-		if (totalTokens > tokenLimit) {
-			totalTokens = await this.enforceTokenBudget(
-				[],
-				chatMessages,
-				tokenLimit,
-				countTokens
-			)
-		}
-
-		// ── Phase 5: Re-sort + Render ─────────────────────────────────────────
-		chatMessages.sort((a, b) => {
-			if (a.id === -2) return -1
-			if (b.id === -2) return 1
-			return b.id - a.id // newest-first
-		})
-
-		const finalCtx = buildCtx()
-
-		// Narrative graph: relationships between characters/personas in the
-		// chat's lorebook. buildGraphContext() in generateResponse.ts already
-		// injects the speaker's own relationships and how others see them,
-		// unconditionally, for every mode — this is the keyword-mode equivalent
-		// of RagInfillEngine's broader semantic sweep, seeded by chat
+		// ── Phase 3c: Narrative graph ──────────────────────────────────────────
+		// Relationships between characters/personas in the chat's lorebook.
+		// buildGraphContext() in generateResponse.ts already injects the
+		// speaker's own relationships and how others see them, unconditionally,
+		// for every mode — this is the keyword-mode equivalent of
+		// RagInfillEngine's broader semantic sweep, seeded by chat
 		// co-occurrence instead of similarity search. Scope is the whole
 		// lorebook, not just the chat's own roster — chatCharacters.visibility
 		// and chat attachment only govern description-block display, not
@@ -857,6 +861,13 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		// has no scoring, unlike RAG's embedding similarity): candidates are
 		// tiered by fetchActiveRelationshipsAmongNodes so in-chat relationships
 		// fill first, then ones bridging to an outside character, then the rest.
+		//
+		// Computed here (after includedHistory is final, before budget
+		// enforcement) and pushed into graphSlot rather than assigned directly
+		// to the render context — countTokens() already closes over graphSlot,
+		// so its token cost is measured and, if it pushes the prompt over
+		// tokenLimit, trimmed by Phase 4 below, mirroring RagInfillEngine's
+		// graphSlot handling instead of appending unmeasured content post-budget.
 		const lorebookId = (this.chat as any).lorebookId as
 			| number
 			| null
@@ -872,49 +883,25 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 					.map((cp) => cp.persona?.id)
 					.filter((id): id is number => id != null)
 
-				let chatBindingIds: number[] = []
-				if (chatCharacterIds.length > 0 || chatPersonaIds.length > 0) {
-					const bindingConditions = []
-					if (chatCharacterIds.length > 0) {
-						bindingConditions.push(
-							inArray(
-								schema.lorebookBindings.characterId,
-								chatCharacterIds
-							)
-						)
-					}
-					if (chatPersonaIds.length > 0) {
-						bindingConditions.push(
-							inArray(
-								schema.lorebookBindings.personaId,
-								chatPersonaIds
-							)
-						)
-					}
-					const bindings = await db.query.lorebookBindings.findMany({
-						where: and(
-							eq(schema.lorebookBindings.lorebookId, lorebookId),
-							or(...bindingConditions)
-						),
-						columns: { id: true }
-					})
-					chatBindingIds = bindings.map((b) => b.id)
-				}
-				const chatBindingIdSet = new Set(chatBindingIds)
-
-				const allNodeRows = await db.query.narrativeNodes.findMany({
+				// One query: every visible binding in the lorebook is itself the
+				// graph row now, so there's no separate bindings-then-nodes
+				// indirection to resolve (post-merge simplification — see the
+				// lorebookBindings/narrativeNodes merge plan).
+				const allNodeRows = await db.query.lorebookBindings.findMany({
 					where: and(
-						eq(schema.narrativeNodes.lorebookId, lorebookId),
-						ne(schema.narrativeNodes.nodeVisibility, "hidden")
+						eq(schema.lorebookBindings.lorebookId, lorebookId),
+						ne(schema.lorebookBindings.nodeVisibility, "hidden")
 					),
-					columns: { id: true, lorebookBindingId: true }
+					columns: { id: true, characterId: true, personaId: true }
 				})
 				const allNodeIds = allNodeRows.map((n) => n.id)
 				const chatNodeIds = allNodeRows
 					.filter(
 						(n) =>
-							n.lorebookBindingId != null &&
-							chatBindingIdSet.has(n.lorebookBindingId)
+							(n.characterId != null &&
+								chatCharacterIds.includes(n.characterId)) ||
+							(n.personaId != null &&
+								chatPersonaIds.includes(n.personaId))
 					)
 					.map((n) => n.id)
 
@@ -929,7 +916,10 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 						MAX_GRAPH_PAIRS,
 						includedHistoryIds
 					)
-					finalCtx.narrativeGraph = serializeGraphPairs(graphPairs)
+					const serializedGraph = serializeGraphPairs(graphPairs)
+					if (serializedGraph !== undefined) {
+						graphSlot.push(serializedGraph)
+					}
 				}
 			} catch (err) {
 				console.warn(
@@ -938,6 +928,29 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 				)
 			}
 		}
+
+		// ── Phase 4: Enforce budget ───────────────────────────────────────────
+		// The fill pool already rolled back over-budget lore candidates; graph
+		// (just computed above) and messages are the only things that may still
+		// need trimming here (as a safety net for reserve overflows).
+		totalTokens = await countTokens()
+		if (totalTokens > tokenLimit) {
+			totalTokens = await this.enforceTokenBudget(
+				[graphSlot],
+				chatMessages,
+				tokenLimit,
+				countTokens
+			)
+		}
+
+		// ── Phase 5: Re-sort + Render ─────────────────────────────────────────
+		chatMessages.sort((a, b) => {
+			if (a.id === -2) return -1
+			if (b.id === -2) return 1
+			return b.id - a.id // newest-first
+		})
+
+		const finalCtx = buildCtx()
 
 		const renderMessages = [...chatMessages].reverse()
 		const postHistoryResult = await resolvePostHistoryContext({
@@ -1048,7 +1061,7 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 				reserve: reserveTokens,
 				total: totalTokens,
 				limit: tokenLimit,
-				threshold: Math.floor(tokenLimit * contextThresholdPercent)
+				threshold
 			},
 			entries: allScoredEntries,
 			postHistory: postHistoryResult.diagnostics
@@ -1291,7 +1304,8 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 			year: number
 			month: number | null
 			day: number | null
-		} | null
+		} | null,
+		narrativeGraph?: string
 	): any {
 		const context: any = { ...base }
 		context.chatMessages = chatMessages
@@ -1310,9 +1324,6 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 				.map((cc: any) => ({
 					name: cc.character.name,
 					nickname: cc.character.nickname || undefined,
-					aliases: cc.character.aliases?.length
-						? cc.character.aliases.filter((a: string) => a.trim())
-						: undefined,
 					description: cc.character.description,
 					personality: cc.character.personality || undefined
 				}))
@@ -1320,13 +1331,7 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 					this.interpolationEngine.interpolateObject(
 						c,
 						interpolationContext,
-						[
-							"name",
-							"nickname",
-							"aliases",
-							"description",
-							"personality"
-						]
+						["name", "nickname", "description", "personality"]
 					)
 				)
 		}
@@ -1420,7 +1425,7 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 			context.currentDate = undefined
 		}
 
-		context.narrativeGraph = undefined
+		context.narrativeGraph = narrativeGraph ?? undefined
 
 		return context
 	}

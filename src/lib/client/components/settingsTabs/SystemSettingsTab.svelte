@@ -626,7 +626,7 @@
 {#if !!systemSettingsCtx.settings && userCtx.user?.isAdmin}
 	<div class="flex flex-col gap-6">
 		{#if systemSettingsCtx.settings?.isAndroidWrapper}
-			<div class="space-y-4">
+			<div class="card preset-tonal space-y-4 p-4">
 				<h3 class="text-lg font-semibold">Local Model Managers</h3>
 				<p class="text-muted-foreground text-sm">
 					Ollama Manager and KoboldCPP Manager aren't available in the
@@ -640,7 +640,7 @@
 			</div>
 		{:else}
 			<!-- Ollama Manager Settings -->
-			<div class="space-y-4">
+			<div class="card preset-tonal space-y-4 p-4">
 				<h3 class="text-lg font-semibold">Ollama Manager</h3>
 
 				<div class="flex items-center gap-2">
@@ -705,7 +705,7 @@
 			</div>
 
 			<!-- KoboldCPP Manager Settings -->
-			<div class="space-y-4">
+			<div class="card preset-tonal space-y-4 p-4">
 				<h3 class="text-lg font-semibold">KoboldCPP Manager</h3>
 
 				<div class="flex items-center gap-2">
@@ -789,7 +789,7 @@
 			</div>
 
 			<!-- Embeddings Settings -->
-			<div class="space-y-4">
+			<div class="card preset-tonal space-y-4 p-4">
 				<h3 class="text-lg font-semibold">Embeddings</h3>
 
 				<p class="text-muted-foreground text-sm">
@@ -822,7 +822,7 @@
 		{/if}
 
 		<!-- Summarization Settings -->
-		<div class="space-y-4">
+		<div class="card preset-tonal space-y-4 p-4">
 			<h3 class="text-lg font-semibold">Summarization</h3>
 
 			<p class="text-muted-foreground text-sm">
@@ -856,7 +856,7 @@
 		</div>
 
 		<!-- Context Debugging -->
-		<div class="space-y-4">
+		<div class="card preset-tonal space-y-4 p-4">
 			<h3 class="text-lg font-semibold">Context Debugging</h3>
 			<p class="text-muted-foreground text-sm">
 				When enabled, shows the prompt inspector tab in the chat UI,
@@ -887,7 +887,7 @@
 		</div>
 
 		<!-- CharaVault Integration -->
-		<div class="space-y-4">
+		<div class="card preset-tonal space-y-4 p-4">
 			<h3 class="text-lg font-semibold">Community Library: CharaVault</h3>
 			<p class="text-muted-foreground text-sm">
 				Connect one CharaVault account to enable browsing charavault.net
@@ -957,7 +957,7 @@
 		</div>
 
 		<!-- Account Settings -->
-		<div class="space-y-4">
+		<div class="card preset-tonal space-y-4 p-4">
 			<h3 class="text-lg font-semibold">Account Management</h3>
 
 			<div class="flex items-center gap-2">

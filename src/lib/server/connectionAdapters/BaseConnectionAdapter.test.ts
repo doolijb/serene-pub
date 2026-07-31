@@ -226,3 +226,65 @@ describe("BaseConnectionAdapter.compileNarratorResponsePrompt()", () => {
 		)
 	})
 })
+
+describe("BaseConnectionAdapter.compilePrompt() — graphContextInstructions (round-6 audit fix)", () => {
+	// Regression test: generateResponse.ts used to append the narrative-graph
+	// relationship summary directly to adapter.promptBuilder.instructions,
+	// but that field is only ever set inside buildContextData() — called
+	// later, from within promptBuilder.compilePrompt() itself — so it was
+	// always undefined at the point generateResponse.ts ran, and the
+	// injection silently never reached the model. It's now set on the
+	// adapter as graphContextInstructions and merged into extraInstructions
+	// here, the same mechanism narratorInstructions already uses.
+
+	test("merges graphContextInstructions into extraInstructions on the default (non-narrator) path", async () => {
+		const adapter = makeAdapter()
+		adapter.graphContextInstructions = "Alice trusts Bob."
+		const spy = vi
+			.spyOn(adapter.promptBuilder, "compilePrompt")
+			.mockResolvedValue({
+				prompt: "x",
+				messages: undefined,
+				meta: {} as any
+			})
+
+		await adapter.compilePrompt({ useChatFormat: true } as any)
+		expect(spy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				extraInstructions: "Alice trusts Bob."
+			})
+		)
+	})
+
+	test("extraInstructions is undefined when no graphContextInstructions were set", async () => {
+		const adapter = makeAdapter()
+		const spy = vi
+			.spyOn(adapter.promptBuilder, "compilePrompt")
+			.mockResolvedValue({
+				prompt: "x",
+				messages: undefined,
+				meta: {} as any
+			})
+
+		await adapter.compilePrompt({} as any)
+		expect(spy).toHaveBeenCalledWith(
+			expect.objectContaining({ extraInstructions: undefined })
+		)
+	})
+
+	test("does not reach the default path when narrator response mode is active (no double-injection)", async () => {
+		const adapter = makeAdapter({
+			generatingMessageMetadata: { isNarratorResponse: true }
+		})
+		adapter.isNarratorResponseMode = true
+		adapter.graphContextInstructions = "Should not be used here."
+		const defaultSpy = vi.spyOn(adapter.promptBuilder, "compilePrompt")
+		const narratorSpy = vi
+			.spyOn(adapter as any, "compileNarratorResponsePrompt")
+			.mockResolvedValue({ prompt: "x", messages: undefined, meta: {} as any })
+
+		await adapter.compilePrompt({} as any)
+		expect(narratorSpy).toHaveBeenCalledTimes(1)
+		expect(defaultSpy).not.toHaveBeenCalled()
+	})
+})

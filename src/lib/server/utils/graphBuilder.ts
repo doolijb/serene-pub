@@ -32,10 +32,10 @@ export interface GraphBuilderScene {
 	} | null
 	/** Present when this item is a direct history entry (no associated scene) */
 	sourceHistoryEntryId?: number
-	/** Characters physically present — populated by character extraction at summarization time */
-	participantCharacters?: string[] | null
-	/** Characters referenced but not present — populated by character extraction at summarization time */
-	mentionedCharacters?: string[] | null
+	/** lorebookBindings ids physically present — resolved by character extraction at summarization time */
+	participantCharacters?: number[] | null
+	/** lorebookBindings ids referenced but not present — resolved by character extraction at summarization time */
+	mentionedCharacters?: number[] | null
 	/** Chat this scene was derived from — used for raw message fetching during node description generation */
 	chatId?: number | null
 	/** Message IDs selected for this scene — used for raw message fetching during node description generation */
@@ -43,10 +43,14 @@ export interface GraphBuilderScene {
 }
 
 export interface GraphBuilderSeedNode {
-	/** Real DB node id — set for extend mode seeds. Omit for binding-only seeds. */
-	id?: number
-	/** Lorebook binding id — set for replace mode seeds derived from bindings. */
-	bindingId?: number
+	/**
+	 * Real lorebookBindings id. Always present now — post-merge, every seed
+	 * (extend or replace mode) is already a real row, since binding IS the
+	 * graph row. Previously this was optional with a separate `bindingId`
+	 * field for replace-mode seeds that had no node row yet; that duality
+	 * is gone (see the lorebookBindings/narrativeNodes merge plan).
+	 */
+	id: number
 	name: string
 	nodeState: string
 	summary: string | null
@@ -774,14 +778,14 @@ export async function buildGraphFromScenes(
 	// Maps tempId → alias names for display in node resolution prompt
 	const nodeAliasMap = new Map<string, string[]>()
 
-	// Seed with existing nodes (extend mode) or binding-derived nodes (replace mode)
+	// Seed with existing rows — every seed is already a real lorebookBindings
+	// row (bound or background/NPC), so every tempId maps into
+	// seedTempIdMap from the start. No more "replace mode seeds have no row
+	// yet" branch (see the lorebookBindings/narrativeNodes merge plan).
 	if (seedNodes?.length) {
 		for (const seed of seedNodes) {
-			const tempId = seed.bindingId
-				? `binding_${seed.bindingId}`
-				: `existing_${seed.id!}`
-			if (!seed.bindingId && seed.id) seedTempIdMap[tempId] = seed.id
-			if (seed.bindingId) newNodeTempIds.add(tempId)
+			const tempId = `existing_${seed.id}`
+			seedTempIdMap[tempId] = seed.id
 			nodeMap.set(tempId, {
 				tempId,
 				name: seed.name,
@@ -861,99 +865,54 @@ export async function buildGraphFromScenes(
 			currentSceneLabel: sceneLabel
 		})
 
-		// Convert pre-extracted name lists to minimal node proposals.
-		// resolveAndStoreNode will match names against existing nodes by name/alias,
-		// so tempIds assigned here are only used for genuinely new nodes.
-		const presentNodes: Sockets.NarrativeGraph.NodeProposal[] = (
-			scene.participantCharacters ?? []
-		).map((name: string) => ({
-			tempId: `node_${nextNodeIndex++}`,
-			name,
-			nodeState: "active" as const,
-			summary: ""
-		}))
-		const mentionedNodes: Sockets.NarrativeGraph.NodeProposal[] = (
-			scene.mentionedCharacters ?? []
-		).map((name) => ({
-			tempId: `node_${nextNodeIndex++}`,
-			name,
-			nodeState: "active" as const,
-			summary: ""
-		}))
-
-		// Build name → tempId reverse lookup for dedup (LLM sometimes hallucinates wrong tempIds).
-		// Includes known aliases so a reference to an alias name resolves to the canonical node
-		// instead of creating a spurious duplicate.
-		const nameToTempId = new Map<string, string>()
-		for (const [tid, n] of nodeMap) {
-			nameToTempId.set(n.name.toLowerCase().trim(), tid)
-			for (const alias of nodeAliasMap.get(tid) ?? []) {
-				const aliasLower = alias.toLowerCase().trim()
-				if (!nameToTempId.has(aliasLower))
-					nameToTempId.set(aliasLower, tid)
-			}
+		// Post-merge (see the lorebookBindings/narrativeNodes merge plan):
+		// scene.participantCharacters/mentionedCharacters are already real
+		// lorebookBindings ids, resolved once at summarization time
+		// (summarizer/index.ts's extractCharacters()) — not name strings
+		// needing to be matched here. Every id should already be present in
+		// seedTempIdMap (built from the full current binding set before this
+		// runs), so this is a direct lookup, not a fuzzy-matching pass. No
+		// "genuinely new" branch is needed here anymore — a scene can only
+		// ever reference a character that already has a binding row by the
+		// time extraction created that reference.
+		const idToTempId = new Map<number, string>()
+		for (const [tempId, id] of Object.entries(seedTempIdMap)) {
+			idToTempId.set(id, tempId)
 		}
 
 		const presentTempIdsThisScene = new Set<string>()
 		const mentionedTempIdsThisScene = new Set<string>()
-		const seenNamesThisScene = new Set<string>()
-		// Guards against double-processing when two different names resolve to the same node
-		// (e.g. "Aria" and "The Wanderer" both in the same scene's output)
-		const seenTempIdsThisScene = new Set<string>()
 		// Tracks nodes first introduced in this specific scene (for description generation)
 		const newNodesThisScene = new Set<string>()
 
-		function resolveAndStoreNode(
-			node: Sockets.NarrativeGraph.NodeProposal,
-			isPresent: boolean
-		) {
-			const nameLower = node.name.toLowerCase().trim()
-			if (seenNamesThisScene.has(nameLower)) return
-			seenNamesThisScene.add(nameLower)
-
-			// Match against existing nodes by exact name, alias, or fuzzy word overlap.
-			// Aliases include merged child node names, so a merged "Alice Doe" → parent node
-			// resolves correctly when the scene only names "Alice".
-			const exactMatch = nameToTempId.get(nameLower)
-			const fuzzyMatch = exactMatch
-				? undefined
-				: fuzzyMatchName(node.name, nameToTempId)
-			const effectiveTempId = exactMatch ?? fuzzyMatch ?? node.tempId
-
-			// Skip if two different names in this scene resolved to the same existing node
-			if (seenTempIdsThisScene.has(effectiveTempId)) return
-			seenTempIdsThisScene.add(effectiveTempId)
-
-			if (nodeMap.has(effectiveTempId)) {
-				const existing = nodeMap.get(effectiveTempId)!
-				nodeMap.set(effectiveTempId, {
-					...existing,
-					name: existing.name || node.name,
-					// Character extraction doesn't track state — preserve the existing nodeState
-					summary: node.summary || existing.summary
-				})
-			} else {
-				nodeMap.set(effectiveTempId, {
-					...node,
-					tempId: effectiveTempId,
-					sceneIndex: i,
-					sceneId: isDirectEntry ? undefined : scene.id,
-					historyEntryId: isDirectEntry
-						? scene.sourceHistoryEntryId
-						: undefined
-				})
-				newNodeTempIds.add(effectiveTempId)
-				newNodesThisScene.add(effectiveTempId)
-				nameToTempId.set(nameLower, effectiveTempId)
+		function resolveSeededNode(id: number, isPresent: boolean) {
+			const effectiveTempId = idToTempId.get(id)
+			if (!effectiveTempId) {
+				console.warn(
+					`[graphBuilder] Scene references binding id ${id} with no ` +
+						`matching seed — it may have been deleted after this ` +
+						`scene was summarized. Skipping.`
+				)
+				return
 			}
-
 			if (isPresent) presentTempIdsThisScene.add(effectiveTempId)
 			else mentionedTempIdsThisScene.add(effectiveTempId)
+			// Redefined post-merge: every character is already seeded before
+			// any scene runs, so "newly introduced" no longer means "didn't
+			// exist in nodeMap yet" — it means "still has no summary." The
+			// description-generation loop below already skips any node
+			// whose summary is non-empty, so it's safe (and simplest) to
+			// just offer every resolved node here each time it's seen.
+			newNodesThisScene.add(effectiveTempId)
 		}
 
-		// Present first (wins the seenNames slot if same character appears in both lists)
-		for (const node of presentNodes) resolveAndStoreNode(node, true)
-		for (const node of mentionedNodes) resolveAndStoreNode(node, false)
+		// Present first (matches the old priority — present wins if a
+		// character somehow appears in both lists)
+		for (const id of scene.participantCharacters ?? [])
+			resolveSeededNode(id, true)
+		for (const id of scene.mentionedCharacters ?? [])
+			if (!presentTempIdsThisScene.has(idToTempId.get(id) ?? ""))
+				resolveSeededNode(id, false)
 
 		// ── Description pass: one LLM call per newly introduced node ─────────
 		if (newNodesThisScene.size > 0) {

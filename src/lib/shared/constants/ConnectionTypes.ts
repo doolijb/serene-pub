@@ -78,48 +78,60 @@ export class CONNECTION_TYPE {
 		label: string
 		description: string
 		difficulty: string
+		/** Used to group this type alongside OPENAI_CHAT_PRESETS entries in the
+		 * unified "New Connection" service picker — "local" for anything that
+		 * talks to a process running on the user's own machine/network,
+		 * "cloud" for a hosted third-party API. */
+		category: "cloud" | "local"
 	}[] = [
 		{
 			value: CONNECTION_TYPE.LM_STUDIO,
 			label: "LM Studio",
 			description: lmStudioDesc,
-			difficulty: lmStudioDiff
+			difficulty: lmStudioDiff,
+			category: "local"
 		},
 		{
 			value: CONNECTION_TYPE.OLLAMA,
 			label: "Ollama",
 			description: ollamaDesc,
-			difficulty: ollamaDiff
+			difficulty: ollamaDiff,
+			category: "local"
 		},
 		{
 			value: CONNECTION_TYPE.OPENAI_CHAT,
 			label: "OpenAI Chat",
 			description: openaiChatDesc,
-			difficulty: openaiChatDiff
+			difficulty: openaiChatDiff,
+			category: "cloud"
 		},
 		{
 			value: CONNECTION_TYPE.LLAMACPP_COMPLETION,
 			label: "Llama.cpp",
 			description: llamaCppCompletionDesc,
-			difficulty: llamaCppCompletionDiff
+			difficulty: llamaCppCompletionDiff,
+			category: "local"
 		},
 		{
 			value: CONNECTION_TYPE.KOBOLDCPP,
 			label: "KoboldCPP",
 			description: koboldCppDesc,
-			difficulty: koboldCppDiff
+			difficulty: koboldCppDiff,
+			category: "local"
 		},
 		{
 			value: CONNECTION_TYPE.KOBOLDCPP_MANAGED,
 			label: "KoboldCPP Manager",
 			description: koboldCppManagedDesc,
-			difficulty: koboldCppManagedDiff
+			difficulty: koboldCppManagedDiff,
+			category: "local"
 		},
 		{
 			value: CONNECTION_TYPE.ANTHROPIC,
 			label: "Anthropic (Claude)",
 			description: anthropicDesc,
-			difficulty: anthropicDiff
+			difficulty: anthropicDiff,
+			category: "cloud"
 		}
 	]
 }

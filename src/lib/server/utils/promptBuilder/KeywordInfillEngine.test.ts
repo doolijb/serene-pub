@@ -370,6 +370,35 @@ describe("KeywordInfillEngine — budget and messages", () => {
 			expect(id).toBeLessThanOrEqual(5) // only the older (1-5), never guaranteed (6-15)
 		}
 	})
+
+	test("contextThresholdPercent actually shrinks how much gets filled, not just a diagnostics number", async () => {
+		const entries = Array.from({ length: 20 }, (_, i) =>
+			worldLoreEntry({
+				name: `Entry ${i}`,
+				keys: "",
+				content: "x".repeat(200)
+			})
+		)
+		const chat = buildChat({
+			lorebook: buildLorebook({ worldLoreEntries: entries })
+		})
+
+		// Generous tokenLimit either way — only contextThresholdPercent differs.
+		const full = await makeEngine(chat).infillContent(
+			makeInfillOptions({ tokenLimit: 100_000, contextThresholdPercent: 1 })
+		)
+		const constrained = await makeEngine(chat).infillContent(
+			makeInfillOptions({
+				tokenLimit: 100_000,
+				contextThresholdPercent: 0.01
+			})
+		)
+
+		expect((full.rag as any).lore.worldLore.included).toBeGreaterThan(
+			(constrained.rag as any).lore.worldLore.included
+		)
+		expect(constrained.totalTokens).toBeLessThan(full.totalTokens)
+	})
 })
 
 describe("KeywordInfillEngine — post-history block", () => {
@@ -563,5 +592,71 @@ describe("KeywordInfillEngine — narrative graph tiering", () => {
 			.filter((v): v is any[] => Array.isArray(v))
 			.reduce((sum, arr) => sum + arr.length, 0)
 		expect(totalPairs).toBe(10)
+	})
+})
+
+describe("KeywordInfillEngine — narrative graph token budget", () => {
+	test("narrative graph is trimmed under a tight budget instead of being appended after enforcement", async () => {
+		const user = await makeUser()
+		const lorebook = await insertLorebook(testDb, user.id)
+
+		const charA = await insertCharacterRow(testDb, user.id, { name: "A" })
+		const charB = await insertCharacterRow(testDb, user.id, { name: "B" })
+		const bindingA = await insertLorebookBindingRow(testDb, lorebook.id, {
+			characterId: charA.id,
+			binding: `{{char:${charA.id}}}`
+		})
+		const bindingB = await insertLorebookBindingRow(testDb, lorebook.id, {
+			characterId: charB.id,
+			binding: `{{char:${charB.id}}}`
+		})
+		const nodeA = await insertNarrativeNodeRow(testDb, lorebook.id, {
+			name: "A",
+			lorebookBindingId: bindingA.id
+		})
+		const nodeB = await insertNarrativeNodeRow(testDb, lorebook.id, {
+			name: "B",
+			lorebookBindingId: bindingB.id
+		})
+		await insertNarrativeRelationshipRow(
+			testDb,
+			lorebook.id,
+			nodeA.id,
+			nodeB.id,
+			{
+				relationshipType: "ally",
+				description: "Longtime allies who trust each other completely."
+			}
+		)
+
+		const chat = buildChat({
+			lorebookId: lorebook.id,
+			lorebook: buildLorebook({ id: lorebook.id, lorebookBindings: [] }),
+			chatCharacters: [
+				chatCharacter({ ...charA } as any),
+				chatCharacter({ ...charB } as any)
+			],
+			chatMessages: [chatMessage({ content: "Hello there." })]
+		})
+		const engine = makeEngine(chat, charA.id)
+
+		// Generous budget — the graph should render.
+		const full = await engine.infillContent(
+			makeInfillOptions({ tokenLimit: 100_000 })
+		)
+		expect(full.renderedPrompt).toMatch(/GRAPH:\{/)
+
+		// One token under what the full render costs: not enough room for both
+		// the guaranteed message AND the graph. Before the graph's token cost
+		// was measured as part of the budget, this content was appended to the
+		// render *after* enforcement — so totalTokens/renderedPrompt could
+		// silently exceed tokenLimit here. It should now be sacrificed first
+		// (mirroring RagInfillEngine's graphSlot), leaving the message intact.
+		const constrained = await engine.infillContent(
+			makeInfillOptions({ tokenLimit: full.totalTokens - 1 })
+		)
+		expect(constrained.renderedPrompt).not.toMatch(/GRAPH:\{/)
+		expect(constrained.totalTokens).toBeLessThanOrEqual(full.totalTokens - 1)
+		expect(constrained.renderedPrompt).toContain("Hello there.")
 	})
 })

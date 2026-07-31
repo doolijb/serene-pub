@@ -283,53 +283,62 @@
 		}
 	}
 
+	function handleSamplingConfigsList(
+		message: Sockets.SamplingConfigs.List.Response
+	) {
+		samplingConfigsList = message.samplingConfigsList
+	}
+	function handleSamplingConfigsDelete(
+		_message: Sockets.SamplingConfigs.Delete.Response
+	) {
+		toaster.success({ title: "Sampling Config Deleted" })
+	}
+	function handleSamplingConfigsUpdate(
+		_message: Sockets.SamplingConfigs.Update.Response
+	) {
+		toaster.success({ title: "Sampling Config Updated" })
+	}
+	function handleSamplingConfigsCreate(
+		message: Sockets.SamplingConfigs.Create.Response
+	) {
+		selectedSamplingId = message.sampling.id
+		toaster.success({ title: "Sampling Config Created" })
+	}
+	function handleSamplingConfigsGet(
+		message: Sockets.SamplingConfigs.Get.Response
+	) {
+		sampling = { ...message.sampling }
+		originalSamplingConfig = { ...message.sampling }
+	}
+	function handleSamplingConfigsSetUserActive() {
+		toaster.success({ title: "Default sampling config updated" })
+	}
+
 	onMount(() => {
 		onclose = handleOnClose
+		socket.on("samplingConfigs:list", handleSamplingConfigsList)
+		socket.on("samplingConfigs:delete", handleSamplingConfigsDelete)
+		socket.on("samplingConfigs:update", handleSamplingConfigsUpdate)
+		socket.on("samplingConfigs:create", handleSamplingConfigsCreate)
+		socket.on("samplingConfigs:get", handleSamplingConfigsGet)
 		socket.on(
-			"samplingConfigs:list",
-			(message: Sockets.SamplingConfigs.List.Response) => {
-				samplingConfigsList = message.samplingConfigsList
-			}
+			"samplingConfigs:setUserActive",
+			handleSamplingConfigsSetUserActive
 		)
-		socket.on(
-			"samplingConfigs:delete",
-			(_message: Sockets.SamplingConfigs.Delete.Response) => {
-				toaster.success({ title: "Sampling Config Deleted" })
-			}
-		)
-		socket.on(
-			"samplingConfigs:update",
-			(_message: Sockets.SamplingConfigs.Update.Response) => {
-				toaster.success({ title: "Sampling Config Updated" })
-			}
-		)
-		socket.on(
-			"samplingConfigs:create",
-			(_message: Sockets.SamplingConfigs.Create.Response) => {
-				toaster.success({ title: "Sampling Config Created" })
-			}
-		)
-		socket.on(
-			"samplingConfigs:get",
-			(message: Sockets.SamplingConfigs.Get.Response) => {
-				sampling = { ...message.sampling }
-				originalSamplingConfig = { ...message.sampling }
-			}
-		)
-		socket.on("samplingConfigs:setUserActive", () => {
-			toaster.success({ title: "Default sampling config updated" })
-		})
 
 		socket.emit("samplingConfigs:list", {})
 	})
 
 	onDestroy(() => {
-		socket.off("samplingConfigs:list")
-		socket.off("samplingConfigs:delete")
-		socket.off("samplingConfigs:update")
-		socket.off("samplingConfigs:create")
-		socket.off("samplingConfigs:get")
-		socket.off("samplingConfigs:setUserActive")
+		socket.off("samplingConfigs:list", handleSamplingConfigsList)
+		socket.off("samplingConfigs:delete", handleSamplingConfigsDelete)
+		socket.off("samplingConfigs:update", handleSamplingConfigsUpdate)
+		socket.off("samplingConfigs:create", handleSamplingConfigsCreate)
+		socket.off("samplingConfigs:get", handleSamplingConfigsGet)
+		socket.off(
+			"samplingConfigs:setUserActive",
+			handleSamplingConfigsSetUserActive
+		)
 	})
 </script>
 

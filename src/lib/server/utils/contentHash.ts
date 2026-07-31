@@ -9,14 +9,24 @@ import crypto from "crypto"
  * array get silently stringified as `{}`. This walks the structure directly
  * instead, so every level is both fully preserved and stably ordered.
  */
-export function sortKeysDeep(value: unknown): unknown {
-	if (Array.isArray(value)) return value.map(sortKeysDeep)
+const MAX_DEPTH = 64
+
+export function sortKeysDeep(value: unknown, depth = 0): unknown {
+	if (depth > MAX_DEPTH) {
+		throw new Error("Content is nested too deeply to process")
+	}
+	if (Array.isArray(value)) {
+		return value.map((v) => sortKeysDeep(v, depth + 1))
+	}
 	if (value !== null && typeof value === "object") {
 		const sorted: Record<string, unknown> = {}
 		for (const key of Object.keys(
 			value as Record<string, unknown>
 		).sort()) {
-			sorted[key] = sortKeysDeep((value as Record<string, unknown>)[key])
+			sorted[key] = sortKeysDeep(
+				(value as Record<string, unknown>)[key],
+				depth + 1
+			)
 		}
 		return sorted
 	}

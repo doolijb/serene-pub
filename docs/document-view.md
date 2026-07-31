@@ -25,14 +25,16 @@ Three entry points exist in the standard app, plus a keyboard shortcut:
 - The **Switch to Document View (Accessible)** link at the bottom of the login screen, so you can reach it before signing in at all.
 - **Ctrl+Shift+Y**, from anywhere in either interface, including the login screen. This is a true toggle: pressing it again from inside Document View switches you straight back to the standard site.
 
-Your choice is remembered in your browser (not tied to your account), so it persists across sessions until you explicitly turn it off again. An admin can also make Document View the default for anyone who hasn't visited yet, via the `PUBLIC_DOCUMENT_VIEW_DEFAULT` environment variable — useful for a deployment primarily used by vision-impaired users. It only ever applies before a given browser has its own stored preference; once someone has toggled Document View on or off themselves, that choice always wins, even if the environment variable changes later.
+Your choice is remembered in your browser (not tied to your account), so it persists across sessions until you explicitly turn it off again.
+
+An admin can also make Document View the default for anyone who hasn't visited yet, via the `PUBLIC_DOCUMENT_VIEW_DEFAULT` environment variable — useful for a deployment primarily used by vision-impaired users. It only ever applies before a given browser has its own stored preference; once someone has toggled Document View on or off themselves, that choice always wins, even if the environment variable changes later.
 
 ## Layout and Navigation
 
 Every page shares the same header and navigation:
 
 - **Header** — the "Serene Pub — Document View (Accessible)" brand link (back to Home), a dark/light mode toggle, an **A−** / **A+** text-size stepper with a live percentage readout between them, and a **Browse Standard Site** button.
-- **Main navigation** — a plain list of links: Home, Chats, Characters, Personas, Documentation, Settings, Help, and About are always shown. Connections, System Settings, and (once the relevant manager is turned on) Ollama Manager and KoboldCPP Manager only appear for admins; Users only appears for admins once multi-user accounts are enabled. This mirrors the same gating the standard app's own sidebars use.
+- **Main navigation** — a plain list of links: Home, Chats, Characters, Personas, Documentation, Settings, Help, and About are always shown. Connections, System Settings, and (once the relevant manager is turned on) Ollama Manager and KoboldCPP Manager only appear for admins; Users only appears for admins once accounts are enabled. This mirrors the same gating the standard app's own sidebars use.
 
 ## Pages
 
@@ -68,7 +70,7 @@ List, create, edit, and set-default for AI provider connections, plus the same d
 
 Covers the Ollama Manager and KoboldCPP Manager toggles and URLs, Summarization, Context Debugging, and CharaVault connection — see [System Settings](./system-settings.md) for what each of these does. Embeddings/RAG setup isn't available here (it requires choosing a model, which doesn't yet have a Document View page) — a status line shows whether it's enabled and points you to the standard site to configure it.
 
-**Enabling User Accounts** works a little differently than the standard site's toggle: it's presented as one-way-on rather than a switch, since turning it on immediately requires everyone — including you — to start logging in. Before you can enable it, you need a passphrase set on your own account; the page shows your username plainly and asks you to make a note of it, since you'll need both it and your new passphrase to log back in once accounts are required. Turning accounts back **off** isn't available from Document View — use the standard site's System Settings if you need to. See [Users & Multi-User Accounts](./users-and-accounts.md).
+**Enabling User Accounts** works a little differently than the standard site's toggle: it's presented as one-way-on rather than a switch, since turning it on immediately requires everyone — including you — to start logging in. Before you can enable it, you need a passphrase set on your own account; the page shows your username plainly and asks you to make a note of it, since you'll need both it and your new passphrase to log back in once accounts are required. Turning accounts back **off** isn't available from Document View — use the standard site's System Settings if you need to. See [Users & Accounts](./users-and-accounts.md).
 
 ### Users (Admin Only, once accounts are enabled)
 

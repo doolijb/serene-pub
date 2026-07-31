@@ -1,6 +1,6 @@
-# Users & Multi-User Accounts
+# Users & Accounts
 
-Serene Pub can run as a single-user app with no login at all, or you can turn on multi-user accounts so several people can share one server, each with their own characters, personas, and settings. This page covers enabling accounts, managing users, the per-user Settings tab, and recovering a lost passphrase.
+Serene Pub can run as a single-user app with no login at all, or you can turn on User Accounts so several people can share one server, each with their own characters, personas, and settings. This page covers enabling accounts, managing users, the per-user Settings tab, and recovering a lost passphrase.
 
 ## Overview
 
@@ -8,11 +8,11 @@ By default, a fresh Serene Pub install has **accounts disabled**. There's no log
 
 Turning on **User Accounts** switches the server into multi-user mode: a login screen appears, every person needs a username and passphrase, and each account gets its own characters, chats, lorebooks, and tags. [Personas](./personas.md) — the "you" side of a conversation — are likewise scoped per account, so each person builds their own set rather than sharing one pool. An administrator (or several) can create accounts for other people, promote or demote admin status, and manage the server as a whole, while standard users are limited to their own content and personal settings.
 
-This is a one-way switch — see [Enabling Multi-User Accounts](#enabling-multi-user-accounts) below for exactly what that means. For the broader distinction between settings an admin controls for the whole server versus settings each person controls for themselves, see [System Settings](./system-settings.md).
+This is a one-way switch — see [Enabling User Accounts](#enabling-user-accounts) below for exactly what that means. For the broader distinction between settings an admin controls for the whole server versus settings each person controls for themselves, see [System Settings](./system-settings.md).
 
-## Enabling Multi-User Accounts
+## Enabling User Accounts
 
-Multi-user accounts are turned on from **Settings → System** (the System tab only appears for admins), under the **Account Management** section. There's a single **Enable User Accounts** switch there.
+User Accounts are turned on from **Settings → System** (the System tab only appears for admins), under the **Account Management** section. There's a single **Enable User Accounts** switch there.
 
 Flipping it on opens an **Enable User Accounts** confirmation dialog that warns, in the app's own words: _"Enabling user accounts will activate authentication and multi-user support. This change is permanent and cannot be reversed."_ It also notes that after enabling accounts, you'll need to create accounts for all new users.
 
@@ -25,11 +25,11 @@ If your own (admin) account doesn't already have a passphrase set, the same dial
 - At least one uppercase letter
 - At least one special character
 
-The confirm button reads **Set Passphrase & Enable Accounts** (or similar wording) until you have a passphrase, then just enables accounts directly if one is already set. Once confirmed, the switch turns on and immediately becomes disabled/greyed out — the UI enforces the one-way nature of this setting directly in the toggle itself.
+The confirm button reads **Set Passphrase & Enable** until you have a passphrase, then reads **Enable Accounts** once one is already set. Once confirmed, the switch turns on and immediately becomes disabled/greyed out — the UI enforces the one-way nature of this setting directly in the toggle itself.
 
 ### Why this can't be undone
 
-Once accounts are enabled, the app permanently requires authentication for every user. There is no toggle or button anywhere in the UI to turn accounts back off; doing so would require direct database access. Treat enabling multi-user accounts as a deliberate, permanent decision for your server.
+Once accounts are enabled, the app permanently requires authentication for every user. There is no toggle or button anywhere in the UI to turn accounts back off; doing so would require direct database access. Treat enabling User Accounts as a deliberate, permanent decision for your server.
 
 ## Signing In
 
@@ -50,13 +50,17 @@ Admins create a user from the Users panel's **+** button, which opens a form wit
 - **Username\*** — required, must be unique across the server.
 - **Display Name** — optional; shown instead of the username throughout the UI when set.
 - **Administrator** — a checkbox. Checking it (when it wasn't already checked) pops up a **Grant Administrator Privileges?** confirmation listing what admins can do (manage all users and permissions, access and modify all chats and characters, change system settings, delete content across the system) and warns this should only be done for trusted users.
-- **Passphrase\*** / **Confirm Passphrase** — required when creating a new user. A **Generate Random** button produces a passphrase in the pattern of three capitalized dictionary words, a 3-digit number, and a special character (e.g. `Ocean-Ember-Quartz482!`), and a **Copy** button copies it to the clipboard. An eye icon toggles the field between hidden and plain text.
+- **Passphrase\*** / **Confirm Passphrase** — required when creating a new user. A **Generate Random** button produces a passphrase in the pattern of three capitalized dictionary words, a 3-digit number, and a special character (e.g. `Ocean-Phoenix-Quartz482!`), and a **Copy** button copies it to the clipboard. An eye icon toggles the field between hidden and plain text.
 
-The form's helper text reads _"Passphrase must be at least 6 characters with uppercase, lowercase, and numbers"_ — but this is a client-side hint only. The server doesn't actually enforce length or complexity on a passphrase an admin sets for someone else (creating or editing a user); it only requires the field be non-empty on creation. This is different from every self-service passphrase flow (initial admin setup and **Change Passphrase**, below), where the server strictly enforces the 10-character/upper/lower/special-character rule. In practice this means an admin _can_ set another user a passphrase that wouldn't pass the self-service rules — worth keeping in mind if you rely on the in-form hint as a real guarantee. Saving emits a **Create** action and the new account appears in the Users list immediately.
+Saving emits a **Create** action and the new account appears in the Users list immediately.
 
 ### Editing an existing user
 
 The same form is reused for editing, with two differences: the passphrase fields are optional (labeled **New Passphrase (leave blank to keep current)**), and the button reads **Update** instead of **Create**. This is also how an admin changes another user's username, display name, or admin flag after the fact.
+
+### Passphrase strength when an admin sets it for someone else
+
+The form's helper text reads _"Passphrase must be at least 6 characters with uppercase, lowercase, and numbers"_ — but this is a client-side hint only. The server doesn't actually enforce length or complexity on a passphrase an admin sets for someone else (creating or editing a user); it only requires the field be non-empty on creation. This is different from every self-service passphrase flow (initial admin setup and **Change Passphrase**, below), where the server strictly enforces the 10-character/upper/lower/special-character rule. In practice this means an admin _can_ set another user a passphrase that wouldn't pass the self-service rules — worth keeping in mind if you rely on the in-form hint as a real guarantee.
 
 ## Admin vs Standard Users
 
@@ -80,31 +84,33 @@ Deleting a user is a **soft delete** — the account is flagged as deleted and d
 
 ## Per-User Settings
 
-Every account — admin or not — has its own **Settings → User** tab (opened via the gear/settings icon, then the **User** tab, which is the default tab and always visible). This is where personal preferences live, as opposed to the server-wide options on the System tab. It contains, top to bottom:
+Every account — admin or not — has its own **Settings → User** tab (opened via the gear/settings icon, then the **User** tab, which is the default tab and always visible). This is where personal preferences live, as opposed to the server-wide options on the System tab. The Settings panel has four tabs in total — **User**, **System** (admins only), **Themes**, and **About** — and theme selection, dark mode, and background image customization live on that separate **Themes** tab rather than on User; see [Themes & Settings](./themes-and-settings.md) for those.
 
-- **Theme** — a dropdown of the built-in color themes, plus **My Themes** (custom themes you've uploaded) and **Instance Themes** (custom themes shared server-wide) if any exist.
-- **Dark Mode** — a switch toggling dark/light mode independently of the chosen theme.
+The **User** tab itself contains, top to bottom:
+
 - **Show All Character Fields** — a switch that expands advanced/optional fields on the character editor by default instead of hiding them behind a "Show All Fields" toggle.
 - **Easy Character Creation** — a switch controlling whether the simplified character-creation flow is offered.
 - **Easy Persona Creation** — the same, for persona creation.
-- **Show Home Page Banner** — a switch controlling whether the dismissible welcome banner appears on the home dashboard.
-- **Background** — a collapsible section (click the header to expand) containing the background image picker and an opacity control, for customizing the app's backdrop.
-
-Full detail on themes, dark mode, and backgrounds lives in [Themes & Settings](./themes-and-settings.md).
+- **Show Home Page Banner** — a switch controlling whether the dismissible logo banner appears at the top of the home page (the "Serene Pub is in alpha!" notice underneath it always shows regardless of this setting).
+- **Document View** — a **Switch to Document View** button that jumps to Serene Pub's simplified, high-contrast, keyboard- and screen-reader-friendly interface, also reachable any time with Ctrl+Shift+Y. See [Document View](./document-view.md).
 
 ### Data Import (admin only)
 
-Admins additionally see a **Data Import** section with a short description and an **Import from SillyTavern** button, linking out to the app's import page for pulling in characters, personas, chats, and lorebooks. See [Importing from SillyTavern](./importing-from-sillytavern.md) for the full process.
+Admins additionally see a **Data Import** section with a short description and an **Import from SillyTavern** button, linking out to the app's import page for pulling in characters, personas, chats, and lorebooks. See [Importing from SillyTavern](./importing-from-sillytavern.md) for the full process. This section doesn't appear at all in the Android app build, regardless of admin status.
 
 ### User Profile (accounts enabled only)
 
-When multi-user accounts are on, a **User Profile** section appears at the bottom of the User settings tab with:
+Once accounts are enabled, a **User Profile** section appears at the bottom of the User settings tab with:
 
 - **Display Name** — a text field and **Update** button (disabled until you change the value) for changing how your name appears throughout the app.
 - **Change Passphrase** — opens a modal (see [Changing Your Own Passphrase](#changing-your-own-passphrase) below).
 - **Logout** — signs you out and returns you to the login screen.
 
 This section is hidden entirely when accounts are disabled, since there's no separate identity to manage in single-user mode.
+
+## Adding Other Users as Chat Guests
+
+When accounts are enabled, editing a chat exposes a **Guests** section (in addition to the chat's personas) with an **Add Guests** button. This lets you invite other accounts on the server into a chat as guests, distinct from the AI-played characters and your own persona. Guest management is part of chat setup rather than user administration — see [Chats](./chats.md) for how guests behave once added to a conversation.
 
 ## Changing Your Own Passphrase
 
@@ -115,10 +121,6 @@ Any logged-in user can change their own passphrase from **Settings → User → 
 - **Confirm New Passphrase**
 
 The server verifies your current passphrase before accepting the change, and rejects the new one if it doesn't meet the length/case/special-character requirements or if the confirmation doesn't match. On success the modal closes and a confirmation toast appears.
-
-## Adding Other Users as Chat Guests
-
-When accounts are enabled, editing a chat exposes a **Guests** section (in addition to the chat's personas) with an **Add Guests** button. This lets you invite other accounts on the server into a chat as guests, distinct from the AI-played characters and your own persona. Guest management is part of chat setup rather than user administration — see [Chats](./chats.md) for how guests behave once added to a conversation.
 
 ## Resetting a Passphrase
 

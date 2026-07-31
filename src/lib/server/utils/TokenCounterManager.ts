@@ -243,15 +243,6 @@ export class TokenCounters {
 					)!.label,
 					counter: new GemmaTokenCounter()
 				}
-			],
-			[
-				TokenCounterOptions.GEMMA,
-				{
-					label: TokenCounterOptions.options.find(
-						(o) => o.value === TokenCounterOptions.GEMMA
-					)!.label,
-					counter: new GemmaTokenCounter()
-				}
 			]
 		])
 

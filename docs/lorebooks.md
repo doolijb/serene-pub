@@ -57,14 +57,26 @@ The tab opens in a read-only view; click **Edit** to change fields, then **Updat
 
 ## Bindings Tab
 
-Bindings are the layer that connects a lorebook's abstract placeholders to concrete characters or personas. Each binding is a token of the form `{{char:1}}`, `{{char:2}}`, `{{char:3}}`, and so on — you insert these tokens into lore content instead of hard-coding a name, and at prompt time (and in the editor's live preview) they're swapped for whichever character or persona nickname is currently linked to that binding number. This indirection means you can reuse the same lorebook across chats with different casts, or swap out who plays "the mentor" without rewriting every entry that mentions them.
+Bindings are the layer that connects a lorebook's abstract placeholders to concrete characters, personas, or standalone background characters. Each binding is a token of the form `{{char:1}}`, `{{char:2}}`, `{{char:3}}`, and so on — you insert these tokens into lore content instead of hard-coding a name, and at prompt time (and in the editor's live preview) they're swapped for whichever character, persona, or background-character name is currently linked to that binding number. This indirection means you can reuse the same lorebook across chats with different casts, or swap out who plays "the mentor" without rewriting every entry that mentions them.
 
-Two buttons drive binding creation:
+Three buttons drive binding creation:
 
 - **Add Character** — opens a character picker; selecting one creates a new binding, assigns it the next free `{{char:N}}` number automatically, and links it to that character immediately.
 - **Add Persona** — the same flow, but for [personas](./personas.md).
+- **Add Background Character** — creates a binding with no linked character or persona sheet at all, identified only by a name you type in (e.g. "The Innkeeper"). Use this for NPCs or background figures you want the lore and graph systems to track without maintaining a full character sheet for them.
 
-Bindings can also exist **unlinked** — a placeholder number that was created (usually automatically, see below) but has no character or persona attached yet. Unlinked bindings are shown with a warning-colored outline and offer **Link Character** / **Link Persona** buttons instead of the usual card content. Hovering a linked binding card reveals an **Unlink** overlay action, which clears the character/persona association but keeps the binding number — and any content already referencing it — intact, so nothing you've written breaks; it just becomes unresolved until you link something new to that number.
+Bindings can also exist **unlinked** — created automatically (see [Automatic binding discovery](#automatic-binding-discovery) below) with no character or persona attached yet, functionally identical to a background character until you attach one. Unlinked binding cards offer **Link character** / **Link persona** actions. Hovering a linked binding card reveals an **Unlink** action, which detaches the character or persona but keeps the row itself — the binding number, and any content already referencing it — intact as a background character; nothing you've written breaks.
+
+### Editing a binding's identity and status
+
+Clicking the pencil icon on a binding card opens an inline edit form:
+
+- **Name** and **Aliases** — editable only for background (unlinked) bindings; a linked binding's name and aliases are always kept in sync with its character's or persona's own name/nickname/aliases and can't be edited here. Aliases help scene summarization recognize a character under a nickname or title instead of minting a duplicate node for them.
+- **Summary** — up to 200 characters, shown to the AI as this character's current situation in the narrative-graph context, even in scenes they don't directly appear in.
+- **State** — active, deceased, missing, or departed, for your own tracking of who's still around in the story.
+- **Visibility** — normal (surfaces by relevance), legendary (always appears as a historical figure), or hidden (excluded from other characters' relationship context).
+
+A **View relationships** link on the edit form jumps straight to this binding's node in the Graph tab. Deleting a binding — linked or background — also permanently deletes any private Character Lore and graph relationships tied to it; the confirmation prompt says so explicitly, and the action cannot be undone.
 
 ### How binding placeholders resolve in content
 
@@ -72,20 +84,24 @@ World Lore, Character Lore, and History entries all share the same rich-text con
 
 The legacy single-brace `{char:N}` form is still supported for backward compatibility, but only at the server/prompt level — binding auto-discovery and prompt-time resolution both still recognize it, so old content using it keeps working. The editor itself, however, doesn't give it the same special inline-tag treatment: typing or pasting `{char:N}` shows as plain text rather than a resolvable chip, so new content is best written with the double-brace `{{char:N}}` form via the Insert Character Tag picker.
 
-### Automatic binding discovery and cleanup
+### Automatic binding discovery
 
-You rarely need to create bindings from scratch, because the server keeps them in sync with what's actually written in your entries:
+You rarely need to create bindings from scratch, because the server keeps them in sync with what's actually written in your entries: whenever a lorebook's entries change, every World Lore, Character Lore, and History entry's content is scanned for `{{char:N}}` / `{char:N}` tokens, and any token found that doesn't already have a binding record gets one created automatically — unlinked, ready for you to attach a character or persona (or leave as a background character).
 
-- Whenever a lorebook's entries change, every World Lore, Character Lore, and History entry's content is scanned for `{{char:N}}` / `{char:N}` tokens. Any token found that doesn't already have a binding record gets one created automatically — unlinked, ready for you to attach a character or persona.
-- Conversely, an existing binding is considered orphaned — and removed — if all three of these are true: it has no linked character or persona, no Character Lore entry references it via its **Binding** field, and no entry's content contains a matching token anymore.
+Bindings are never deleted automatically, even if every reference to them is later removed from your lore — a binding also carries a character's graph presence, lore, and relationships, and silently deleting it out from under someone editing their story turned out to be more surprising than helpful. If a binding is no longer needed, remove it yourself with the **Delete** action on its card.
 
-In practice this means deleting the last `{{char:3}}` mention from your lore, and unlinking its character, will quietly clean the binding up on its own; you don't need to hunt down and delete stray binding rows by hand.
+### Possible duplicates and recent merges
+
+Below the binding list, two sections help keep the cast clean — each only appears when there's something to show:
+
+- **Possible duplicates** appears automatically whenever the app suspects two bindings represent the same person (matched by name/alias similarity) — for example after a graph Build or Extend introduces a new node that closely resembles an existing one. Each suggested pair offers **Yes, absorb** (folds one into the other — see [Merging duplicate bindings](#merging-duplicate-bindings) below) or **No, different people**, which dismisses that specific pair permanently so it won't be suggested again.
+- **Recent merges** is a collapsed-by-default list (click to expand) of absorptions you've performed, each with an **Undo** link that restores the absorbed binding exactly as it was — including its lore, aliases, and relationships. Undo stops being available once the surviving binding has itself been absorbed into something else or deleted, at which point the link is disabled with an explanatory tooltip.
 
 ### Bindings and the narrative graph
 
-Linking a character or persona to a binding also tries to connect that binding to a node in the [Graph tab](#graph-tab): if an existing unbound graph node's name is a close match for the character's name, the app offers to link them; if no reasonable candidate exists, a fresh node is created automatically. This keeps a character's graph presence tied to the same binding used everywhere else in the lorebook, so relationships extracted from your story attach to the right entity without manual relinking.
+A binding is also a lorebook's narrative-graph node — the two used to be separate records, linked together, but they're now the same underlying row. Editing a binding's status fields (in [Editing a binding's identity and status](#editing-a-bindings-identity-and-status) above) is the same thing as editing its node in the [Graph tab](#graph-tab), and creating a binding is the only way to add a node to the graph by hand.
 
-This same reconciliation isn't limited to the Bindings tab itself — opening a chat that has a lorebook attached proactively re-runs the same orphaned-binding and node-linking checks, surfacing a linking prompt mid-chat if something needs attention rather than only when you happen to visit the Bindings or Graph tab directly.
+Because a binding *is* a lorebook's graph node, there's no separate linking or reconciliation step to keep the two in sync — attaching a character to a binding, or renaming it, is immediately reflected everywhere the binding's identity is used, including the Graph tab. Attaching an existing chat's characters and personas to a lorebook works the same way: opening a chat that has a lorebook attached automatically creates any missing bindings for that chat's cast. If any binding still has no character or persona attached (for example, one you added manually, or one whose link was removed), an **Unlinked Lorebook Binding** prompt appears, letting you link it to one of the chat's characters or personas on the spot, or skip it and leave it unlinked for now.
 
 ## World Lore Tab
 
@@ -153,22 +169,24 @@ Scenes can be edited by hand (name, summary, and both character lists), processe
 
 ### Compiling scenes into an entry's content
 
-A history entry's Content field and its Scenes are separate things until you explicitly combine them. Once an entry has one or more scenes with generated summaries, a **Compile to Entry** button appears in the scene list. This opens the Compile modal (detailed in the pipeline section) which synthesizes every one of that entry's scene summaries into a single piece of dated Content — turning a handful of scattered scene notes into one coherent paragraph of "what happened this year."
+A history entry's Content field and its Scenes are separate things until you explicitly combine them. Once an entry has at least one scene, a **Compile to Entry** button becomes available — either at the bottom of the entry's Scenes sub-tab, or directly from the entry's row in the History list itself via its **···** menu, so you don't have to open an entry just to compile it. Either entry point opens the same Compile modal (detailed in the pipeline section), which synthesizes every one of that entry's scene summaries into a single piece of dated Content — turning a handful of scattered scene notes into one coherent paragraph of "what happened this year." A compile running in the background shows a **Compiling…** badge on the entry's list card, and a finished-but-unreviewed compile shows a **Review** badge — both clickable shortcuts back into the same modal, and both persist across closing and reopening the sidebar the same way a Graph build does.
 
 ## Graph Tab
 
 The Graph tab visualizes a narrative graph: nodes representing characters, factions, or other recurring entities, connected by directed relationships (e.g. "ally," "rival," "romantic") that the LLM extracts from your summarized scenes and history entries. It's only available when Summarization is enabled system-wide (vectorization/embeddings has no bearing on it), and it's the most power-user-facing part of the lorebook system — most of what appears here starts out generated, then gets refined by hand.
 
-The toolbar switches between a force-directed **graph view** and a flat **list view** of every node and relationship, offers **Build Graph** (relabeled **Rebuild Graph** once nodes already exist) and **Extend** actions covered below, and a manual **+** button that opens a form to add a single node by hand without going through extraction at all.
+The toolbar switches between a force-directed **graph view** and a flat **list view** of every node and relationship, offers **Build Graph** (relabeled **Rebuild Graph** once nodes already exist) and **Extend** actions covered below, and an **Add Character** button that jumps to the [Bindings tab](#bindings-tab) — since a node is a binding (see above), that's also where a node is added or edited by hand, rather than in a separate form here.
 
 ### Node fields
 
-- **Name.**
+A node's fields are exactly the fields on its underlying binding, described under [Editing a binding's identity and status](#editing-a-bindings-identity-and-status):
+
+- **Name** (and Aliases) — synced from the linked character/persona, or set directly for a background character.
 - **State** — active, deceased, missing, or departed.
 - **Visibility** — normal, legendary (known widely / mythologized), or hidden (secret from most characters).
 - **Summary** — an optional 200-character note used as short context infill when the node is referenced.
-- **Character Binding** — optionally links the node to a lorebook binding, tying it to the same character/persona used across the rest of the lorebook.
-- **First appeared** — an optional link to a History Entry, for temporal anchoring.
+
+There's no separate "which character does this node represent" field to set, because the node and the character binding are the same record — linking a binding to a character in the Bindings tab is what gives that node its identity.
 
 ### Relationship fields
 
@@ -179,22 +197,28 @@ The toolbar switches between a force-directed **graph view** and a flat **list v
 - **Reason for this state** — optional note on why the relationship is at its current status (useful when a relationship changes over time and you want a record of why).
 - An optional link to a History Entry marking when the relationship applies.
 
-Clicking a node in graph view opens a detail card where you can add a new relationship starting from it, edit the node itself, merge it into another node, or delete it — deleting a node also permanently deletes every relationship attached to it, and the confirmation prompt tells you exactly how many that is before you commit.
+Clicking a node in graph view opens a detail card (purely informational — its fields aren't editable inline) where you can add a new relationship starting from it, jump to the Bindings tab to edit it, absorb it into another node, or delete it — deleting a node also permanently deletes every relationship attached to it, and the confirmation prompt tells you exactly how many that is before you commit.
 
 ### Building vs. extending the graph
 
 Two different actions grow the graph, and picking the right one matters:
 
-- **Build Graph** processes every summarized scene in the lorebook (plus any history entry that has direct content) and proposes a **complete** graph from scratch. If a graph already exists, building again **replaces it entirely** — the confirmation screen states how many existing unbound nodes and relationships will be permanently deleted, but in practice _every_ existing node and relationship is deleted, not just unbound ones. Nodes tied to a lorebook binding are recreated fresh from that binding afterward, so a bound character doesn't lose its graph presence entirely — but any manual edits you'd made to that node (state, visibility, summary, aliases, its History Entry link) are lost along with everything else, not preserved the way the confirmation text might suggest.
+- **Build Graph** processes every summarized scene in the lorebook (plus any history entry that has direct content) and proposes a **complete** graph from scratch. If a graph already exists, building again **replaces it entirely** — the confirmation screen states how many existing unbound nodes and relationships will be permanently deleted.
 - **Extend** only processes scenes and history entries that haven't been graphed yet, adding new nodes and relationships to what's already there without touching or deleting anything existing.
 
 In both cases, scenes that don't yet have a generated summary are listed as "skipped" in the confirmation screen, since the extraction step only has text to work with once a scene has been summarized — an unprocessed scene simply doesn't contribute anything to the graph yet.
 
 Either action runs as a background LLM job with a live progress bar showing the current scene being processed and a running count of nodes/relationships found so far. When it finishes, a **review** screen lists every proposed node and relationship individually — each one can be expanded, hand-edited, or removed before you click **Apply Graph** to commit them. A build in progress persists across closing and reopening the sidebar (it's tracked as a background activity, the same way other long-running LLM tasks are), and can be cancelled mid-run without losing the entries it already has.
 
-### Merging and de-merging duplicate nodes
+### What a graph rebuild actually preserves
 
-Extraction — or manual entry — can sometimes produce two nodes for what's really the same underlying character, e.g. "Kira" and "the innkeeper" turning out to be the same person once the story reveals it. The merge action (the git-merge icon on a node's detail card) folds one node into another as an **alias**: the parent node then lists its aliases under "Also known as," and the graph and list views only ever show parent nodes, keeping the visualization uncluttered. Each alias can be de-merged back into an independent node later — a single click restores it if the merge turns out to have been wrong, so merging is a safe, reversible cleanup step rather than a destructive one.
+A rebuild sounds like it should wipe the slate clean, but in practice no binding row is ever deleted by it, bound or unbound: every relationship in the lorebook is wiped and rebuilt from scratch, but every binding instead has its graph-side fields (state, visibility, summary, aliases synced from its character, its scene/history-entry anchor) reset to defaults rather than the row itself being removed. That means a rebuild can't silently detach a character's private Character Lore or delete a background character you added by hand — though any manual edits you'd made to a node's state, visibility, or summary are still lost in the reset, just not the binding itself.
+
+### Merging duplicate bindings
+
+Extraction — or manual entry — can sometimes produce two nodes for what's really the same underlying character, e.g. "Kira" and "the innkeeper" turning out to be the same person once the story reveals it. The **Absorb** action (the git-merge icon on a node's detail card, or the **Yes, absorb** button in the Bindings tab's [Possible duplicates](#possible-duplicates-and-recent-merges) list) folds one binding into another: you pick which duplicate to fold in, its name is added to the survivor's "Also known as" list, its relationships and any private Character Lore are reattached to the survivor, and the absorbed binding row itself is deleted. If the two bindings being merged are both linked to a character or persona, the app refuses — two linked bindings represent genuinely distinct people and can never be folded into each other; a linked binding merging with a background/unlinked one is fine, and the linked one always survives regardless of which you pick as the "target."
+
+This is a safe, reversible cleanup step, not a permanent one: every absorb is logged, and **Undo** in the Bindings tab's **Recent merges** list restores the absorbed binding exactly as it was — until the surviving binding is itself absorbed into something else or deleted, at which point that particular undo is no longer available.
 
 ## The Scene → History → Graph Pipeline
 

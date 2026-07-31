@@ -25,6 +25,13 @@ export async function POST(event: RequestEvent) {
 				{ status: 429 }
 			)
 		}
+		// Recorded immediately, before the expensive DB lookup + PBKDF2
+		// validate below — recording only after that await let concurrent
+		// requests all pass the isRateLimited check above before any of
+		// them recorded an attempt, letting a burst through with no
+		// effective cap. clearRateLimit() on success (below) still resets
+		// the bucket, so a normal single successful login is unaffected.
+		loginRateLimit.recordFailedAttempt(ip)
 
 		// Find user by username
 		const user = await db.query.users.findFirst({
@@ -54,7 +61,6 @@ export async function POST(event: RequestEvent) {
 			: false
 
 		if (!user || !isValidPassphrase) {
-			loginRateLimit.recordFailedAttempt(ip)
 			return json({ error: "Invalid credentials" }, { status: 401 })
 		}
 

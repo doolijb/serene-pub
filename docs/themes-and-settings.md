@@ -9,7 +9,7 @@ Click the **Settings** icon (gear icon) in the main navigation to open the Setti
 - **User** — theme selection, dark mode, display preferences, background image, and (when accounts are enabled) your profile, passphrase, and logout.
 - **System** — admin-only instance configuration, covered in a separate doc.
 - **Themes** — the Custom Themes manager, where you create, edit, import, and delete your own themes.
-- **About** — app version, build info, and links to the GitHub repository, wiki, Discord, and issue tracker.
+- **About** — app version, build info, and links to the GitHub repository, wiki, Discord, issue tracker, and discussions.
 
 Everything described below lives in the **User** and **Themes** tabs. See [Users & Accounts](./users-and-accounts.md) for profile, passphrase, and login-related settings.
 
@@ -35,11 +35,11 @@ The editor has:
 
 A tip in the manager points you to the [Skeleton theme generator](https://themes.skeleton.dev/themes/create) — Serene Pub's UI is built on Skeleton UI, so you can visually design a theme there, download the file, and import it directly into the editor.
 
-> **Note:** Serene Pub upgraded from Skeleton UI v3 to v5, which renamed a number of underlying CSS design tokens. Custom themes created before this upgrade may render incorrectly (wrong colors, missing values) since they were generated against the old token names. If a saved custom theme looks broken after updating, re-open the [theme generator](https://themes.skeleton.dev/themes/create), re-create or re-import your theme there, and re-import the regenerated CSS here. Built-in themes are unaffected.
-
 Once you're happy with the CSS, click **Create** (or **Update** if editing an existing theme) to save it. The theme immediately becomes available in your **Theme** dropdown under "My Themes." The status bar at the bottom of the editor shows a running line count and character count while you work.
 
 To remove a theme, open it for editing and use the trash icon, which asks for a **Confirm delete** before removing it.
+
+> **Note:** Serene Pub upgraded from Skeleton UI v3 to v5, which renamed a number of underlying CSS design tokens. Custom themes created before this upgrade may render incorrectly (wrong colors, missing values) since they were generated against the old token names. If a saved custom theme looks broken after updating, re-open the [theme generator](https://themes.skeleton.dev/themes/create), re-create or re-import your theme there, and re-import the regenerated CSS here. Built-in themes are unaffected.
 
 ### Importing a Theme File
 
@@ -56,7 +56,7 @@ The **User** tab includes several toggles that only affect your own session:
 - **Show All Character Fields** — expands character forms to show every available field instead of a simplified set. See [Characters](./characters.md).
 - **Easy Character Creation** — enables a simplified/guided character creation flow.
 - **Easy Persona Creation** — enables a simplified/guided persona creation flow. See [Personas](./personas.md).
-- **Show Home Page Banner** — shows or hides the update/announcement banner on the home page.
+- **Show Home Page Banner** — shows or hides the dismissible Serene Pub logo banner at the top of the home page. The "Serene Pub is in alpha!" notice underneath it always shows regardless of this setting.
 
 Each toggle saves instantly and shows a confirmation toast (e.g. "Character fields display expanded" or "simplified").
 
@@ -66,7 +66,7 @@ Further down the **User** tab, expand the **Background** section to set a backgr
 
 - **None** — no background image (the default tile in the picker).
 - **Defaults** — a set of built-in background images to choose from.
-- **My Uploads** — your own uploaded images. Click **Upload** to add an image file; hover an uploaded thumbnail to delete it.
+- **My Uploads** — your own uploaded images. Click **Upload** to add an image file; each thumbnail has a small delete button in its corner (always visible on touch devices, shown on hover on desktop) that opens a confirmation dialog before removing it.
 
 Once a background is selected, an **Opacity** slider (10-100%, in 5% steps) controls how strongly the image shows through behind the interface.
 

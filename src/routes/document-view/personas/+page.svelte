@@ -13,18 +13,21 @@
 		socket.emit("personas:delete", { id })
 	}
 
+	function handlePersonasList(msg: Sockets.Personas.List.Response) {
+		personas = msg.personaList || []
+		loaded = true
+	}
+	function handlePersonasDelete() {
+		socket.emit("personas:list", {})
+	}
+
 	onMount(() => {
-		socket.on("personas:list", (msg) => {
-			personas = msg.personaList || []
-			loaded = true
-		})
-		socket.on("personas:delete", () => {
-			socket.emit("personas:list", {})
-		})
+		socket.on("personas:list", handlePersonasList)
+		socket.on("personas:delete", handlePersonasDelete)
 		socket.emit("personas:list", {})
 		return () => {
-			socket.off("personas:list")
-			socket.off("personas:delete")
+			socket.off("personas:list", handlePersonasList)
+			socket.off("personas:delete", handlePersonasDelete)
 		}
 	})
 </script>

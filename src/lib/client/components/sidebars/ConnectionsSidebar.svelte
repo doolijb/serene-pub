@@ -6,10 +6,7 @@
 	import OllamaForm from "$lib/client/connectionForms/OllamaForm.svelte"
 	import OpenAIForm from "$lib/client/connectionForms/OpenAIForm.svelte"
 	import LmStudioForm from "$lib/client/connectionForms/LMStudioForm.svelte"
-	import {
-		CONNECTION_TYPE,
-		CONNECTION_TYPES
-	} from "$lib/shared/constants/ConnectionTypes"
+	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import LlamaCppForm from "$lib/client/connectionForms/LlamaCppForm.svelte"
 	import KoboldCppForm from "$lib/client/connectionForms/KoboldCppForm.svelte"
@@ -24,6 +21,8 @@
 		stableStringify
 	} from "$lib/shared/utils/connectionDefaults"
 	import EmbeddingConnectionPanel from "./EmbeddingConnectionPanel.svelte"
+	import ConnectionServicePicker from "./ConnectionServicePicker.svelte"
+	import type { ConnectionServiceItem } from "$lib/shared/utils/connectionServiceItems"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -70,8 +69,7 @@
 		$state(null)
 	let showNewConnectionModal = $state(false)
 	let newConnectionName = $state("")
-	let newConnectionType = $state(CONNECTION_TYPES[0].value)
-	let newConnectionOAIChatPreset: number | undefined = $state()
+	let newConnectionService: ConnectionServiceItem | undefined = $state()
 	let showDeleteModal = $state(false)
 
 	// Screen reader announcements
@@ -145,7 +143,7 @@
 	}
 	function handleNew() {
 		newConnectionName = ""
-		newConnectionType = CONNECTION_TYPES[0].value
+		newConnectionService = undefined
 		showNewConnectionModal = true
 		// Clear tutorial flag when user interacts with the highlighted button
 		if (panelsCtx.digest.tutorial) {
@@ -159,9 +157,14 @@
 			toaster.error({ title: "Connection name is required" })
 			return
 		}
-		if (newConnectionType === CONNECTION_TYPE.OPENAI_CHAT) {
+		if (!newConnectionService) {
+			toaster.error({ title: "Choose an AI service to connect to" })
+			return
+		}
+		const { type, presetValue } = newConnectionService
+		if (type === CONNECTION_TYPE.OPENAI_CHAT) {
 			const preset = OPENAI_CHAT_PRESETS.find(
-				(p) => p.value === newConnectionOAIChatPreset
+				(p) => p.value === presetValue
 			)
 			if (!preset) {
 				toaster.error({ title: "Invalid OpenAI Chat preset" })
@@ -170,13 +173,12 @@
 		}
 		const newConn = {
 			name: newConnectionName.trim(),
-			type: newConnectionType,
+			type,
 			enabled: true,
-			...(newConnectionType === CONNECTION_TYPE.OPENAI_CHAT
-				? OPENAI_CHAT_PRESETS.find(
-						(p) => p.value === newConnectionOAIChatPreset
-					)?.connectionDefaults
-				: CONNECTION_DEFAULTS[newConnectionType] || {})
+			...(type === CONNECTION_TYPE.OPENAI_CHAT
+				? OPENAI_CHAT_PRESETS.find((p) => p.value === presetValue)
+						?.connectionDefaults
+				: CONNECTION_DEFAULTS[type] || {})
 		}
 		socket.emit("connections:create", { connection: newConn })
 		showNewConnectionModal = false
@@ -230,81 +232,119 @@
 		socket.emit("connections:refreshModels", { connection })
 	}
 
+	function handleConnectionsList(msg: Sockets.Connections.List.Response) {
+		connectionsList = msg.connectionsList
+			.slice()
+			.sort((a, b) => a.name!.localeCompare(b.name!))
+		isLoading = false
+	}
+	// The generic **:error listener in Layout.svelte already toasts this —
+	// this just stops the spinner from spinning forever if the initial
+	// fetch fails, so it settles into the (accurate enough) empty state.
+	function handleConnectionsListError() {
+		isLoading = false
+	}
+	function handleConnectionsRefreshModelsError() {
+		refreshModelsResult = { error: "Failed to refresh models" }
+	}
+	function handleConnectionsGet(msg: Sockets.Connections.Get.Response) {
+		// connections:get is emitToUser — broadcast to every open tab for
+		// this user, not just the requester. Without this check, another
+		// tab loading/saving a different connection silently overwrites
+		// this tab's in-progress edit.
+		if (msg.connection?.id !== selectedConnectionId) return
+		connection = { ...msg.connection }
+		originalConnection = { ...msg.connection }
+	}
+	function handleConnectionsTest(msg: Sockets.Connections.Test.Response) {
+		if (msg.connectionId !== selectedConnectionId) return
+		testResult = {
+			ok: msg.ok,
+			error: msg.error ?? undefined,
+			models: msg.models
+		}
+	}
+	function handleConnectionsRefreshModels(
+		msg: Sockets.Connections.RefreshModels.Response
+	) {
+		if (msg.connectionId !== selectedConnectionId) return
+		refreshModelsResult = {
+			models: msg.models || [],
+			error: msg.error ?? undefined
+		}
+	}
+	function handleConnectionsUpdate(msg: Sockets.Connections.Update.Response) {
+		if (msg.connection?.id !== selectedConnectionId) return
+		// Reset the unsaved-changes baseline synchronously with the save's
+		// own ack, same shape handleConnectionsGet uses — msg.connection is
+		// now the same fully-processed (backfilled + decrypted) record
+		// connections:get produces, safe to use directly. Without this, the
+		// dirty flag only cleared via a second, incidental connections:get
+		// broadcast the server happens to also send — a race that could show
+		// the discard-changes modal right after a successful save.
+		connection = { ...msg.connection }
+		originalConnection = { ...msg.connection }
+		toaster.success({ title: "Connection Updated" })
+		announce(`Connection ${connection?.name} has been updated successfully`)
+	}
+	function handleConnectionsDelete(msg: Sockets.Connections.Delete.Response) {
+		// Only react when the delete actually targeted the connection this
+		// tab currently has open — otherwise an unrelated delete in another
+		// tab would blow away this tab's in-progress edit and show a
+		// misleading "deleted" toast for the wrong connection.
+		if (msg.id !== selectedConnectionId) return
+		const deletedName = connection?.name
+		toaster.success({ title: "Connection Deleted" })
+		announce(`Connection ${deletedName} has been permanently deleted`)
+		connection = undefined
+		originalConnection = undefined
+		// Fall back to viewing the default if one exists
+		const fallbackId =
+			defaultConnectionId && defaultConnectionId !== msg.id
+				? defaultConnectionId
+				: null
+		selectedConnectionId = fallbackId
+		if (fallbackId) socket.emit("connections:get", { id: fallbackId })
+	}
+	function handleConnectionsCreate(msg: Sockets.Connections.Create.Response) {
+		toaster.success({ title: "Connection Created" })
+		announce(
+			`New connection ${msg.connection?.name} has been created successfully`
+		)
+		// View the newly created connection
+		if (msg.connection?.id) {
+			selectedConnectionId = msg.connection.id
+			socket.emit("connections:get", { id: msg.connection.id })
+		}
+	}
+	function handleConnectionsSetUserActive(
+		msg: Sockets.Connections.SetUserActive.Response
+	) {
+		// Update local system settings context so the default indicator updates
+		const s = systemSettingsCtx.settings
+		if (s) {
+			systemSettingsCtx.settings = {
+				...s,
+				defaultConnectionId: msg.id ?? null
+			}
+		}
+		if (msg.id) toaster.success({ title: "Default connection updated" })
+	}
+
 	onMount(() => {
-		socket.on("connections:list", (msg) => {
-			connectionsList = msg.connectionsList
-				.slice()
-				.sort((a, b) => a.name!.localeCompare(b.name!))
-			isLoading = false
-		})
-		// The generic **:error listener in Layout.svelte already toasts this —
-		// this just stops the spinner from spinning forever if the initial
-		// fetch fails, so it settles into the (accurate enough) empty state.
-		socket.on("connections:list:error", () => {
-			isLoading = false
-		})
-		socket.on("connections:refreshModels:error", () => {
-			refreshModelsResult = { error: "Failed to refresh models" }
-		})
-		socket.on("connections:get", (msg) => {
-			connection = { ...msg.connection }
-			originalConnection = { ...msg.connection }
-		})
-		socket.on("connections:test", (msg) => {
-			testResult = {
-				ok: msg.ok,
-				error: msg.error ?? undefined,
-				models: msg.models
-			}
-		})
-		socket.on("connections:refreshModels", (msg) => {
-			refreshModelsResult = {
-				models: msg.models || [],
-				error: msg.error ?? undefined
-			}
-		})
-		socket.on("connections:update", (msg) => {
-			toaster.success({ title: "Connection Updated" })
-			announce(
-				`Connection ${connection?.name} has been updated successfully`
-			)
-		})
-		socket.on("connections:delete", (msg) => {
-			const deletedName = connection?.name
-			toaster.success({ title: "Connection Deleted" })
-			announce(`Connection ${deletedName} has been permanently deleted`)
-			connection = undefined
-			originalConnection = undefined
-			// Fall back to viewing the default if one exists
-			const fallbackId =
-				defaultConnectionId && defaultConnectionId !== msg.id
-					? defaultConnectionId
-					: null
-			selectedConnectionId = fallbackId
-			if (fallbackId) socket.emit("connections:get", { id: fallbackId })
-		})
-		socket.on("connections:create", (msg) => {
-			toaster.success({ title: "Connection Created" })
-			announce(
-				`New connection ${msg.connection?.name} has been created successfully`
-			)
-			// View the newly created connection
-			if (msg.connection?.id) {
-				selectedConnectionId = msg.connection.id
-				socket.emit("connections:get", { id: msg.connection.id })
-			}
-		})
-		socket.on("connections:setUserActive", (msg) => {
-			// Update local system settings context so the default indicator updates
-			const s = systemSettingsCtx.settings
-			if (s) {
-				systemSettingsCtx.settings = {
-					...s,
-					defaultConnectionId: msg.id ?? null
-				}
-			}
-			if (msg.id) toaster.success({ title: "Default connection updated" })
-		})
+		socket.on("connections:list", handleConnectionsList)
+		socket.on("connections:list:error", handleConnectionsListError)
+		socket.on(
+			"connections:refreshModels:error",
+			handleConnectionsRefreshModelsError
+		)
+		socket.on("connections:get", handleConnectionsGet)
+		socket.on("connections:test", handleConnectionsTest)
+		socket.on("connections:refreshModels", handleConnectionsRefreshModels)
+		socket.on("connections:update", handleConnectionsUpdate)
+		socket.on("connections:delete", handleConnectionsDelete)
+		socket.on("connections:create", handleConnectionsCreate)
+		socket.on("connections:setUserActive", handleConnectionsSetUserActive)
 		socket.emit("connections:list", {})
 		// Seed the view: digest.connectionId (from external nav, e.g. Ollama
 		// Manager's "open connection sidebar") always means "go straight to the
@@ -334,16 +374,25 @@
 	})
 
 	onDestroy(() => {
-		socket.off("connections:list")
-		socket.off("connections:list:error")
-		socket.off("connections:refreshModels:error")
-		socket.off("connections:get")
-		socket.off("connections:test")
-		socket.off("connections:refreshModels")
-		socket.off("connections:update")
-		socket.off("connections:delete")
-		socket.off("connections:create")
-		socket.off("connections:setUserActive")
+		socket.off("connections:list", handleConnectionsList)
+		socket.off("connections:list:error", handleConnectionsListError)
+		socket.off(
+			"connections:refreshModels:error",
+			handleConnectionsRefreshModelsError
+		)
+		socket.off("connections:get", handleConnectionsGet)
+		socket.off("connections:test", handleConnectionsTest)
+		socket.off(
+			"connections:refreshModels",
+			handleConnectionsRefreshModels
+		)
+		socket.off("connections:update", handleConnectionsUpdate)
+		socket.off("connections:delete", handleConnectionsDelete)
+		socket.off("connections:create", handleConnectionsCreate)
+		socket.off(
+			"connections:setUserActive",
+			handleConnectionsSetUserActive
+		)
 		onclose = undefined
 	})
 </script>
@@ -771,73 +820,19 @@
 							</div>
 						</div>
 						<div>
-							<label class="font-semibold" for="newConnType">
-								Connection Type
-							</label>
-							<select
-								id="newConnType"
-								class="select w-full"
-								bind:value={newConnectionType}
-								aria-describedby="type-help"
-							>
-								{#each CONNECTION_TYPES.sort( (a, b) => a.label.localeCompare(b.label) ) as t}
-									<option
-										value={t.value}
-										disabled={t.value ===
-											CONNECTION_TYPE.KOBOLDCPP_MANAGED &&
-											!koboldCppSettingsCtx?.settings
-												?.koboldCppManagerEnabled}
-									>
-										{t.label}{t.value ===
-											CONNECTION_TYPE.KOBOLDCPP_MANAGED &&
-										!koboldCppSettingsCtx?.settings
-											?.koboldCppManagerEnabled
-											? " (Manager disabled)"
-											: ""}
-									</option>
-								{/each}
-							</select>
-							<div id="type-help" class="sr-only">
-								Choose the type of AI service to connect to
-							</div>
+							<ConnectionServicePicker
+								label="AI Service"
+								bind:selectedItem={newConnectionService}
+							/>
 						</div>
-						{#if newConnectionType === CONNECTION_TYPE.OPENAI_CHAT}
-							<div class="mt-2">
-								<label
-									class="font-semibold"
-									for="oaiChatPreset"
-								>
-									Service Preset
-								</label>
-								<select
-									id="oaiChatPreset"
-									class="select w-full"
-									bind:value={newConnectionOAIChatPreset}
-									aria-describedby="preset-help"
-								>
-									{#each OPENAI_CHAT_PRESETS as preset}
-										<option value={preset.value}>
-											{preset.name}
-										</option>
-									{/each}
-								</select>
-								<div id="preset-help" class="sr-only">
-									Choose a preset configuration for this AI
-									service
-								</div>
-							</div>
-						{/if}
-						{#if !!newConnectionType}
-							{@const connectionType = CONNECTION_TYPES.find(
-								(t) => t.value === newConnectionType
-							)}
+						{#if newConnectionService}
 							<div
 								class="bg-surface-500/25 mt-4 flex flex-col gap-2 rounded p-4"
 							>
 								<span class="preset-filled-primary-500 p-2">
-									Difficulty: {connectionType?.difficulty}
+									Difficulty: {newConnectionService.difficulty}
 								</span>
-								{@html connectionType?.description}
+								{@html newConnectionService.description}
 							</div>
 						{/if}
 					</form>
@@ -854,10 +849,13 @@
 							type="submit"
 							class="btn preset-filled-primary-500"
 							onclick={handleNewConnectionConfirm}
-							disabled={!newConnectionName.trim()}
-							aria-label={newConnectionName.trim()
-								? `Create connection named ${newConnectionName}`
-								: "Enter a name to create connection"}
+							disabled={!newConnectionName.trim() ||
+								!newConnectionService}
+							aria-label={!newConnectionName.trim()
+								? "Enter a name to create connection"
+								: !newConnectionService
+									? "Choose an AI service to create connection"
+									: `Create connection named ${newConnectionName}`}
 						>
 							Create
 						</button>

@@ -6,7 +6,6 @@
 	interface Props {
 		lorebook: any
 		onclick?: (lorebook: any) => void
-		onEdit?: (id: number) => void
 		onDelete?: (id: number) => void
 		onExport?: (id: number) => void
 		showControls?: boolean
@@ -26,7 +25,6 @@
 	let {
 		lorebook,
 		onclick,
-		onEdit,
 		onDelete,
 		onExport,
 		showControls = true,
@@ -104,7 +102,7 @@
 		</div>
 	{/snippet}
 	{#snippet controls()}
-		{#if showControls && (onclick || onEdit || onDelete || onExport)}
+		{#if showControls && (onclick || onDelete || onExport)}
 			<div role="none" onclick={(e) => e.stopPropagation()}>
 				<Popover
 					open={menuOpen}
@@ -146,22 +144,6 @@
 												aria-hidden="true"
 											/>
 											<span>View</span>
-										</button>
-									{/if}
-									{#if onEdit}
-										<button
-											class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
-											onclick={() => {
-												menuOpen = false
-												onEdit?.(lorebook.id!)
-											}}
-											type="button"
-										>
-											<Icons.Pencil
-												size={16}
-												aria-hidden="true"
-											/>
-											<span>Edit</span>
 										</button>
 									{/if}
 									{#if hasOpenChat && (onAttachToChat || onDetachFromChat)}

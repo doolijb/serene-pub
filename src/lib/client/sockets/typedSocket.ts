@@ -347,6 +347,10 @@ export type SocketEventMap = {
 		params: Sockets.Personas.ReorderGallery.Params
 		response: Sockets.Personas.ReorderGallery.Response
 	}
+	"personas:setDefault": {
+		params: Sockets.Personas.SetDefault.Params
+		response: Sockets.Personas.SetDefault.Response
+	}
 
 	// Card source events
 	"cardSources:capabilities": {
@@ -516,6 +520,14 @@ export type SocketEventMap = {
 		response: Sockets.Chats.Branch.Response
 	}
 	"chats:branch:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"chats:reassignRemovedParticipant": {
+		params: Sockets.Chats.ReassignRemovedParticipant.Params
+		response: Sockets.Chats.ReassignRemovedParticipant.Response
+	}
+	"chats:reassignRemovedParticipant:error": {
 		params: never
 		response: Sockets.ErrorResponse
 	}
@@ -1310,6 +1322,14 @@ export type SocketEventMap = {
 		params: Sockets.Lorebooks.UpdateBinding.Params
 		response: Sockets.Lorebooks.UpdateBinding.Response
 	}
+	"lorebooks:resolveOrCreateBindingByName": {
+		params: Sockets.Lorebooks.ResolveOrCreateBindingByName.Params
+		response: Sockets.Lorebooks.ResolveOrCreateBindingByName.Response
+	}
+	"lorebooks:resolveOrCreateBindingByName:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"lorebooks:bindingList": {
 		params: Sockets.Lorebooks.BindingList.Params
 		response: Sockets.Lorebooks.BindingList.Response
@@ -1601,6 +1621,10 @@ export type SocketEventMap = {
 		params: { id: number }
 		response: { success: string }
 	}
+	"narrativeGraph:checkNodeMergeReferences": {
+		params: Sockets.NarrativeGraph.CheckNodeMergeReferences.Params
+		response: Sockets.NarrativeGraph.CheckNodeMergeReferences.Response
+	}
 	"narrativeGraph:updateRelationship": {
 		params: {
 			relationship: Partial<Sockets.NarrativeGraph.NarrativeRelationship> & {
@@ -1625,10 +1649,6 @@ export type SocketEventMap = {
 		params: Sockets.NarrativeGraph.QueryContext.Params
 		response: Sockets.NarrativeGraph.QueryContext.Response
 	}
-	"narrativeGraph:linkBindingNode": {
-		params: Sockets.NarrativeGraph.LinkBindingNode.Params
-		response: Sockets.NarrativeGraph.LinkBindingNode.Response
-	}
 	"narrativeGraph:linkOrphanBinding": {
 		params: Sockets.NarrativeGraph.LinkOrphanBinding.Params
 		response: Sockets.NarrativeGraph.LinkOrphanBinding.Response
@@ -1637,17 +1657,29 @@ export type SocketEventMap = {
 		params: Sockets.NarrativeGraph.MergeNode.Params
 		response: Sockets.NarrativeGraph.MergeNode.Response
 	}
-	"narrativeGraph:demergeNode": {
-		params: Sockets.NarrativeGraph.DemergeNode.Params
-		response: Sockets.NarrativeGraph.DemergeNode.Response
+	"narrativeGraph:mergeNode:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"narrativeGraph:undoMerge": {
+		params: Sockets.NarrativeGraph.UndoMerge.Params
+		response: Sockets.NarrativeGraph.UndoMerge.Response
+	}
+	"narrativeGraph:listMergeLogs": {
+		params: Sockets.NarrativeGraph.ListMergeLogs.Params
+		response: Sockets.NarrativeGraph.ListMergeLogs.Response
+	}
+	"narrativeGraph:duplicateCandidates": {
+		params: Sockets.NarrativeGraph.DuplicateCandidates.Params
+		response: Sockets.NarrativeGraph.DuplicateCandidates.Response
+	}
+	"narrativeGraph:dismissDuplicate": {
+		params: Sockets.NarrativeGraph.DismissDuplicate.Params
+		response: Sockets.NarrativeGraph.DismissDuplicate.Response
 	}
 	"bindingCheck:result": {
 		params: never
 		response: Sockets.BindingCheck.Result.Response
-	}
-	"bindingCheck:nodeResult": {
-		params: never
-		response: Sockets.BindingCheck.NodeResult.Response
 	}
 
 	// Import events

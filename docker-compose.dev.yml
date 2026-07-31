@@ -20,6 +20,14 @@ services:
             # Disable automatic browser launch (always disabled in containers)
             SERENE_AUTO_OPEN: 1
 
+            # A Docker deployment has already made its own network-exposure
+            # decision via the port mapping above (and/or a reverse proxy in
+            # front of it), so the app's own origin allowlist is redundant
+            # friction here — this opts out of it entirely. Remove this line
+            # (or set specific hostnames) if you want the app-level allowlist
+            # enforced on top of your container's own network boundary.
+            SOCKETS_ALLOWED_ORIGINS: "*"
+
             # --- Optional overrides ---
 
             # Session token lifetime in hours (default: 168 = 7 days)

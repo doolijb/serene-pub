@@ -22,6 +22,12 @@ import {
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { lmStudioSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
+import {
+	createIdleWatchdog,
+	LLM_IDLE_TIMEOUT_MS,
+	LLM_NONSTREAMING_TIMEOUT_MS
+} from "./idleTimeout"
 
 class LMStudioAdapter extends BaseConnectionAdapter {
 	private _client?: LMStudioClient
@@ -83,7 +89,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 	// --- LM Studio client instance ---
 	getClient() {
 		if (!this._client) {
-			const baseUrl = this.connection.baseUrl ?? undefined
+			const baseUrl = normalizeBaseUrl(this.connection.baseUrl) || undefined
 			this._client = new LMStudioClient({ baseUrl })
 		}
 		return this._client
@@ -227,6 +233,11 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 					contentCb: (chunk: string) => void,
 					_thinkingCb?: (chunk: string) => void
 				) => {
+					let idleTimedOut = false
+					const idle = createIdleWatchdog(LLM_IDLE_TIMEOUT_MS, () => {
+						idleTimedOut = true
+						this.prediction?.cancel()
+					})
 					try {
 						if (useChat && messages) {
 							this.prediction = modelClient.respond(
@@ -234,6 +245,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 								options
 							)
 							for await (const part of this.prediction) {
+								idle.poke()
 								// A second line of defense alongside abort()'s
 								// prediction.cancel() call — every other
 								// streaming adapter also polls isAborting
@@ -250,6 +262,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 								options
 							)
 							for await (const part of this.prediction) {
+								idle.poke()
 								if (this.isAborting) break
 								if (part?.content) {
 									contentCb(part.content)
@@ -257,10 +270,17 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 							}
 						}
 					} catch (e: any) {
+						if (idleTimedOut) {
+							throw new Error(
+								`LM Studio did not respond for ${LLM_IDLE_TIMEOUT_MS / 60_000} minutes — connection may be hung.`
+							)
+						}
 						// An intentional cancel() rejects the iterator too —
-						// don't surface that as a "FAILURE" completion.
+						// don't surface that as an error.
 						if (this.isAborting) return
-						contentCb("FAILURE: " + (e.message || String(e)))
+						throw e
+					} finally {
+						idle.clear()
 					}
 				},
 				compiledPrompt,
@@ -268,6 +288,16 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			}
 		} else {
 			const content = await (async () => {
+				// No intermediate chunks to reset an idle timer against for a
+				// non-streaming response — a genuine, documented exception to
+				// the idle-based design used in the streaming branch above: a
+				// flat bound, sized generously to cover a full slow
+				// generation end-to-end.
+				let idleTimedOut = false
+				const idleTimer = setTimeout(() => {
+					idleTimedOut = true
+					this.prediction?.cancel()
+				}, LLM_NONSTREAMING_TIMEOUT_MS)
 				try {
 					if (useChat && messages) {
 						this.prediction = modelClient.respond(messages, options)
@@ -279,7 +309,9 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 						) {
 							return result.content || ""
 						} else {
-							return "FAILURE: Unexpected LM Studio chat result type"
+							throw new Error(
+								"Unexpected LM Studio chat result type"
+							)
 						}
 					} else {
 						this.prediction = modelClient.complete(prompt, options)
@@ -291,11 +323,19 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 						) {
 							return result.content || ""
 						} else {
-							return "FAILURE: Unexpected LM Studio result type"
+							throw new Error("Unexpected LM Studio result type")
 						}
 					}
 				} catch (e: any) {
-					return "FAILURE: " + (e.message || String(e))
+					if (idleTimedOut) {
+						throw new Error(
+							`LM Studio did not respond within ${LLM_NONSTREAMING_TIMEOUT_MS / 60_000} minutes.`
+						)
+					}
+					if (this.isAborting) return ""
+					throw e
+				} finally {
+					clearTimeout(idleTimer)
 				}
 			})()
 			return {
@@ -337,7 +377,7 @@ async function testConnection(
 	connection: SelectConnection
 ): Promise<{ ok: boolean; error?: string }> {
 	try {
-		const client = new LMStudioClient({ baseUrl: connection.baseUrl || "" })
+		const client = new LMStudioClient({ baseUrl: normalizeBaseUrl(connection.baseUrl) })
 		const res = await client.system.getLMStudioVersion()
 		if (res && typeof res === "object" && "version" in res) {
 			// Also check if any models are available
@@ -376,7 +416,7 @@ async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
 	try {
-		const client = new LMStudioClient({ baseUrl: connection.baseUrl || "" })
+		const client = new LMStudioClient({ baseUrl: normalizeBaseUrl(connection.baseUrl) })
 		const res = await client.system.listDownloadedModels()
 		if (res && Array.isArray(res)) {
 			const models = res.map((model) => {

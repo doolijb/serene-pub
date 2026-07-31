@@ -257,87 +257,88 @@
 		} satisfies Sockets.WorldLoreEntries.UpdatePositions.Params)
 	}
 
+	async function handleLorebooksBindingList(
+		msg: Sockets.Lorebooks.BindingList.Response
+	) {
+		if (msg.lorebookId === lorebookId) {
+			lorebookBindingList = [
+				...msg.lorebookBindingList
+			] as BindingWithRelations[]
+		}
+		await tick()
+	}
+
 	// ── Socket setup ───────────────────────────────────────────────
+	async function handleWorldLoreEntriesList(
+		msg: Sockets.WorldLoreEntries.List.Response
+	) {
+		if (
+			msg.worldLoreEntryList.length &&
+			msg.worldLoreEntryList[0].lorebookId === lorebookId
+		) {
+			worldLoreEntryList = msg.worldLoreEntryList
+			if (focusedEntry) {
+				const updated = msg.worldLoreEntryList.find(
+					(e) => e.id === focusedEntry!.id
+				)
+				if (updated) focusedEntry = updated
+			}
+		}
+		await tick()
+	}
+
+	function handleWorldLoreEntriesCreate(
+		msg: Sockets.WorldLoreEntries.Create.Response
+	) {
+		if (msg.worldLoreEntry?.lorebookId === lorebookId) {
+			toaster.success({ title: "World Lore Entry created" })
+		}
+	}
+
+	function handleWorldLoreEntriesUpdate(
+		msg: Sockets.WorldLoreEntries.Update.Response
+	) {
+		if (msg.worldLoreEntry?.lorebookId === lorebookId) {
+			toaster.success({ title: "World Lore Entry updated" })
+		}
+	}
+
+	function handleWorldLoreEntriesDelete(
+		_msg: Sockets.WorldLoreEntries.Delete.Response
+	) {
+		toaster.success({ title: "World Lore Entry deleted" })
+	}
+
+	function handleWorldLoreEntriesUpdatePositions(
+		msg: Sockets.WorldLoreEntries.UpdatePositions.Response
+	) {
+		if (msg.success) toaster.success({ title: "Entries reordered" })
+	}
+
+	// The background vectorization queue updates a row's embeddingModel
+	// directly in the DB — without this, the badge here only ever refreshes
+	// on the next explicit CRUD action, leaving it stale until a manual refresh.
+	function handleVectorizationItemUpdated(
+		msg: Sockets.Vectorization.ItemUpdated.Response
+	) {
+		if (msg.type !== "worldLore" || msg.lorebookId !== lorebookId) return
+		const target = worldLoreEntryList.find((e: any) => e.id === msg.id)
+		if (target) (target as any).embeddingModel = msg.embeddingModel
+		if (focusedEntry?.id === msg.id)
+			(focusedEntry as any).embeddingModel = msg.embeddingModel
+	}
+
 	onMount(() => {
-		socket.on(
-			"worldLoreEntries:list",
-			async (msg: Sockets.WorldLoreEntries.List.Response) => {
-				if (
-					msg.worldLoreEntryList.length &&
-					msg.worldLoreEntryList[0].lorebookId === lorebookId
-				) {
-					worldLoreEntryList = msg.worldLoreEntryList
-					if (focusedEntry) {
-						const updated = msg.worldLoreEntryList.find(
-							(e) => e.id === focusedEntry!.id
-						)
-						if (updated) focusedEntry = updated
-					}
-				}
-				await tick()
-			}
-		)
-
-		socket.on(
-			"worldLoreEntries:create",
-			(msg: Sockets.WorldLoreEntries.Create.Response) => {
-				if (msg.worldLoreEntry?.lorebookId === lorebookId) {
-					toaster.success({ title: "World Lore Entry created" })
-				}
-			}
-		)
-
-		socket.on(
-			"worldLoreEntries:update",
-			(msg: Sockets.WorldLoreEntries.Update.Response) => {
-				if (msg.worldLoreEntry?.lorebookId === lorebookId) {
-					toaster.success({ title: "World Lore Entry updated" })
-				}
-			}
-		)
-
-		socket.on(
-			"worldLoreEntries:delete",
-			(_msg: Sockets.WorldLoreEntries.Delete.Response) => {
-				toaster.success({ title: "World Lore Entry deleted" })
-			}
-		)
-
-		socket.on(
-			"lorebooks:bindingList",
-			async (msg: Sockets.Lorebooks.BindingList.Response) => {
-				if (msg.lorebookId === lorebookId) {
-					lorebookBindingList = [
-						...msg.lorebookBindingList
-					] as BindingWithRelations[]
-				}
-				await tick()
-			}
-		)
-
+		socket.on("worldLoreEntries:list", handleWorldLoreEntriesList)
+		socket.on("worldLoreEntries:create", handleWorldLoreEntriesCreate)
+		socket.on("worldLoreEntries:update", handleWorldLoreEntriesUpdate)
+		socket.on("worldLoreEntries:delete", handleWorldLoreEntriesDelete)
+		socket.on("lorebooks:bindingList", handleLorebooksBindingList)
 		socket.on(
 			"worldLoreEntries:updatePositions",
-			(msg: Sockets.WorldLoreEntries.UpdatePositions.Response) => {
-				if (msg.success) toaster.success({ title: "Entries reordered" })
-			}
+			handleWorldLoreEntriesUpdatePositions
 		)
-
-		// The background vectorization queue updates a row's embeddingModel
-		// directly in the DB — without this, the badge here only ever refreshes
-		// on the next explicit CRUD action, leaving it stale until a manual refresh.
-		socket.on(
-			"vectorization:itemUpdated",
-			(msg: Sockets.Vectorization.ItemUpdated.Response) => {
-				if (msg.type !== "worldLore" || msg.lorebookId !== lorebookId)
-					return
-				const target = worldLoreEntryList.find(
-					(e: any) => e.id === msg.id
-				)
-				if (target) (target as any).embeddingModel = msg.embeddingModel
-				if (focusedEntry?.id === msg.id)
-					(focusedEntry as any).embeddingModel = msg.embeddingModel
-			}
-		)
+		socket.on("vectorization:itemUpdated", handleVectorizationItemUpdated)
 
 		socket.emit("worldLoreEntries:list", {
 			lorebookId
@@ -350,13 +351,19 @@
 
 	onDestroy(() => {
 		hasUnsavedChanges = false
-		socket.off("worldLoreEntries:list")
-		socket.off("worldLoreEntries:create")
-		socket.off("worldLoreEntries:update")
-		socket.off("worldLoreEntries:delete")
-		socket.off("lorebooks:bindingList")
-		socket.off("worldLoreEntries:updatePositions")
-		socket.off("vectorization:itemUpdated")
+		socket.off("worldLoreEntries:list", handleWorldLoreEntriesList)
+		socket.off("worldLoreEntries:create", handleWorldLoreEntriesCreate)
+		socket.off("worldLoreEntries:update", handleWorldLoreEntriesUpdate)
+		socket.off("worldLoreEntries:delete", handleWorldLoreEntriesDelete)
+		socket.off("lorebooks:bindingList", handleLorebooksBindingList)
+		socket.off(
+			"worldLoreEntries:updatePositions",
+			handleWorldLoreEntriesUpdatePositions
+		)
+		socket.off(
+			"vectorization:itemUpdated",
+			handleVectorizationItemUpdated
+		)
 	})
 </script>
 

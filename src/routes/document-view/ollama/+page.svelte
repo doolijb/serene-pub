@@ -121,105 +121,136 @@
 		}
 	})
 
+	function handleModelsList(msg: any) {
+		models = msg.models || []
+		loaded = true
+	}
+	function handleListRunningModels(msg: any) {
+		runningModels = msg.runningModels || []
+	}
+	function handleSetBaseUrl() {
+		baseUrlSaving = false
+		baseUrlStatus = "Base URL saved."
+		announce("Ollama server URL saved.")
+	}
+	function handleSetBaseUrlError(msg: { error?: string }) {
+		baseUrlSaving = false
+		baseUrlStatus = msg.error || "Failed to save base URL."
+		announce(baseUrlStatus)
+	}
+	function handleConnectModel() {
+		baseUrlStatus = "Connection set as system default."
+		announce("Connection set as system default.")
+	}
+	function handleConnectModelError(msg: { error?: string }) {
+		error = msg.error || "Failed to connect model."
+		announce(error)
+	}
+	function handleDeleteModel() {
+		announce("Model deleted.")
+		refresh()
+	}
+	function handleDeleteModelError(msg: { error?: string }) {
+		error = msg.error || "Failed to delete model."
+		announce(error)
+	}
+	function handlePullModel() {
+		pullModelName = ""
+		announce("Model downloaded.")
+		refresh()
+	}
+	function handlePullModelError(msg: { error?: string }) {
+		error = msg.error || "Failed to download model."
+		announce(error)
+	}
+	function handleGetDownloadProgress(msg: any) {
+		downloadingQuants = msg.downloadingQuants || {}
+	}
+	function handleOllamaPullProgress(msg: any) {
+		downloadingQuants = msg.downloadingQuants || {}
+		if (Object.values(downloadingQuants).some((d) => d.isDone)) refresh()
+	}
+	function handleRecommendedModels(
+		msg: Sockets.Ollama.RecommendedModels.Response
+	) {
+		recommendedModels = msg.recommendedModels || []
+		recommendedLoaded = true
+		if (msg.error) {
+			error = msg.error
+			announce(error)
+		}
+	}
+	function handleSearchAvailableModels(
+		msg: Sockets.Ollama.SearchAvailableModels.Response
+	) {
+		searching = false
+		searched = true
+		searchResults = msg.models || []
+		if (msg.error) {
+			error = msg.error
+			announce(error)
+		} else {
+			announce(
+				`${searchResults.length} model${searchResults.length === 1 ? "" : "s"} found.`
+			)
+		}
+	}
+	function handleSearchAvailableModelsError(msg: { error?: string }) {
+		searching = false
+		searched = true
+		error = msg.error || "Search failed."
+		announce(error)
+	}
+
 	onMount(() => {
-		socket.on("ollama:modelsList", (msg) => {
-			models = msg.models || []
-			loaded = true
-		})
-		socket.on("ollama:listRunningModels", (msg) => {
-			runningModels = msg.runningModels || []
-		})
-		socket.on("ollama:setBaseUrl", () => {
-			baseUrlSaving = false
-			baseUrlStatus = "Base URL saved."
-			announce("Ollama server URL saved.")
-		})
-		socket.on("ollama:setBaseUrl:error", (msg: { error?: string }) => {
-			baseUrlSaving = false
-			baseUrlStatus = msg.error || "Failed to save base URL."
-			announce(baseUrlStatus)
-		})
-		socket.on("ollama:connectModel", () => {
-			baseUrlStatus = "Connection set as system default."
-			announce("Connection set as system default.")
-		})
-		socket.on("ollama:connectModel:error", (msg: { error?: string }) => {
-			error = msg.error || "Failed to connect model."
-			announce(error)
-		})
-		socket.on("ollama:deleteModel", () => {
-			announce("Model deleted.")
-			refresh()
-		})
-		socket.on("ollama:deleteModel:error", (msg: { error?: string }) => {
-			error = msg.error || "Failed to delete model."
-			announce(error)
-		})
-		socket.on("ollama:pullModel", () => {
-			pullModelName = ""
-			announce("Model downloaded.")
-			refresh()
-		})
-		socket.on("ollama:pullModel:error", (msg: { error?: string }) => {
-			error = msg.error || "Failed to download model."
-			announce(error)
-		})
-		socket.on("ollama:getDownloadProgress", (msg) => {
-			downloadingQuants = msg.downloadingQuants || {}
-		})
-		socket.on("ollamaPullProgress", (msg) => {
-			downloadingQuants = msg.downloadingQuants || {}
-			if (Object.values(downloadingQuants).some((d) => d.isDone))
-				refresh()
-		})
-		socket.on("ollama:recommendedModels", (msg) => {
-			recommendedModels = msg.recommendedModels || []
-			recommendedLoaded = true
-			if (msg.error) {
-				error = msg.error
-				announce(error)
-			}
-		})
-		socket.on("ollama:searchAvailableModels", (msg) => {
-			searching = false
-			searched = true
-			searchResults = msg.models || []
-			if (msg.error) {
-				error = msg.error
-				announce(error)
-			} else {
-				announce(
-					`${searchResults.length} model${searchResults.length === 1 ? "" : "s"} found.`
-				)
-			}
-		})
+		socket.on("ollama:modelsList", handleModelsList)
+		socket.on("ollama:listRunningModels", handleListRunningModels)
+		socket.on("ollama:setBaseUrl", handleSetBaseUrl)
+		socket.on("ollama:setBaseUrl:error", handleSetBaseUrlError)
+		socket.on("ollama:connectModel", handleConnectModel)
+		socket.on("ollama:connectModel:error", handleConnectModelError)
+		socket.on("ollama:deleteModel", handleDeleteModel)
+		socket.on("ollama:deleteModel:error", handleDeleteModelError)
+		socket.on("ollama:pullModel", handlePullModel)
+		socket.on("ollama:pullModel:error", handlePullModelError)
+		socket.on("ollama:getDownloadProgress", handleGetDownloadProgress)
+		socket.on("ollamaPullProgress", handleOllamaPullProgress)
+		socket.on("ollama:recommendedModels", handleRecommendedModels)
+		socket.on(
+			"ollama:searchAvailableModels",
+			handleSearchAvailableModels
+		)
 		socket.on(
 			"ollama:searchAvailableModels:error",
-			(msg: { error?: string }) => {
-				searching = false
-				searched = true
-				error = msg.error || "Search failed."
-				announce(error)
-			}
+			handleSearchAvailableModelsError
 		)
 		refresh()
 		socket.emit("ollama:recommendedModels", {})
 		return () => {
-			socket.off("ollama:modelsList")
-			socket.off("ollama:listRunningModels")
-			socket.off("ollama:setBaseUrl")
-			socket.off("ollama:setBaseUrl:error")
-			socket.off("ollama:connectModel")
-			socket.off("ollama:connectModel:error")
-			socket.off("ollama:deleteModel")
-			socket.off("ollama:deleteModel:error")
-			socket.off("ollama:pullModel")
-			socket.off("ollama:pullModel:error")
-			socket.off("ollama:getDownloadProgress")
-			socket.off("ollamaPullProgress")
-			socket.off("ollama:recommendedModels")
-			socket.off("ollama:searchAvailableModels")
-			socket.off("ollama:searchAvailableModels:error")
+			socket.off("ollama:modelsList", handleModelsList)
+			socket.off("ollama:listRunningModels", handleListRunningModels)
+			socket.off("ollama:setBaseUrl", handleSetBaseUrl)
+			socket.off("ollama:setBaseUrl:error", handleSetBaseUrlError)
+			socket.off("ollama:connectModel", handleConnectModel)
+			socket.off("ollama:connectModel:error", handleConnectModelError)
+			socket.off("ollama:deleteModel", handleDeleteModel)
+			socket.off("ollama:deleteModel:error", handleDeleteModelError)
+			socket.off("ollama:pullModel", handlePullModel)
+			socket.off("ollama:pullModel:error", handlePullModelError)
+			socket.off(
+				"ollama:getDownloadProgress",
+				handleGetDownloadProgress
+			)
+			socket.off("ollamaPullProgress", handleOllamaPullProgress)
+			socket.off("ollama:recommendedModels", handleRecommendedModels)
+			socket.off(
+				"ollama:searchAvailableModels",
+				handleSearchAvailableModels
+			)
+			socket.off(
+				"ollama:searchAvailableModels:error",
+				handleSearchAvailableModelsError
+			)
 		}
 	})
 </script>

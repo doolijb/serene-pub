@@ -7,12 +7,12 @@ Prompt Configs are the admin-managed library of system-prompt templates that sha
 The **Prompts** sidebar (opened from the main navigation) is a management screen for five distinct kinds of prompt template, each stored as its own list of named, reusable configs:
 
 - **Chat Prompts** (shown in the sidebar as **Chat Prompts: Character**) — the system instructions injected into every chat's generation request. This is what most people mean by "prompt config."
-- **Chat Prompts: Narrator** — the system instructions used for a manually-triggered **Narrator** response (narration as the environment itself, rather than as a character). This feature was previously called "World"/"World Response" — if you see that terminology elsewhere (older screenshots, community posts), it refers to the same thing. See [Chats](./chats.md) for how to trigger one.
+- **Chat Prompts: Narrator** — the system instructions used for a manually-triggered **Narrator** response (narration as the environment itself, rather than as a character). See [Chats](./chats.md) for how to trigger one.
 - **World Lore Summarization**, **Character Lore Summarization**, and **Scene Summarization** — separate templates that drive the automated summarization pipeline described in [Lorebooks](./lorebooks.md) and [Summarization](./summarization.md). These three cards only appear in the Prompts sidebar when the **Summarization Enabled** (or "Enable Summarization") switch on the [System Settings](./system-settings.md) tab is turned on. Chat Prompts and Chat Prompts: Narrator are always shown regardless of that setting, since neither is part of the summarization pipeline.
 
 Opening the sidebar shows an index of cards, one per config type, each with an icon, a one-line description, and — once a config is active — the active config's name next to a green checkmark. Clicking a card drills into a dedicated editor for that type, with a back button to return to the index.
 
-**Prompt Configs are distinct from Context Configs.** A Prompt Config supplies the free-text _instructions_ (writing style, tone, rules) that get slotted into the prompt. A Context Config is the underlying Handlebars template that assembles the _entire_ request sent to the model — system block, character/persona JSON, scenario, lorebook entries, chat history, and so on. Context Configs are covered in depth in [Connections](./connections.md); this page only discusses how Prompt Configs relate to them.
+**Prompt Configs are distinct from Context Configs.** A Prompt Config supplies the free-text _instructions_ (writing style, tone, rules) that get slotted into the prompt. A Context Config is the underlying Handlebars template that assembles the _entire_ request sent to the model — system block, character/persona JSON, scenario, lorebook entries, chat history, and so on. Context Configs are covered in depth in [Context Configs](./context-configs.md); this page only discusses how Prompt Configs relate to them.
 
 ### Admin-only management
 
@@ -46,12 +46,6 @@ The Chat Prompts editor (**Prompts** sidebar → **Chat Prompts** card) shows:
 
 Toolbar buttons in the editor header: a **+** button to clone the current config into a new one (via a name-entry modal — "Your current settings will be copied"), a refresh icon to discard unsaved edits, and a trash icon to delete the config (disabled for built-in configs). Below the dropdown, an **Update** button saves changes and a **Set Default** (star) button marks the selected config as your active Chat Prompt.
 
-### Per-chat prompt override
-
-Beyond your personal default, an admin can pick a specific Chat Prompt in a chat's edit form — an **AI Override** section with a **Prompt** dropdown (alongside Connection and Sampling overrides) defaulting to **System default**.
-
-**This particular override doesn't currently take effect.** Unlike the Connection, Sampling, and Narrator Prompt overrides on the same form — which are all genuinely read and applied at generation time — the chat-level Chat Prompt selection is saved and shown as set in the UI, but generation always resolves the Chat Prompt from your personal active selection (or the system-wide default) and never actually re-checks the chat's own override. In practice, picking a specific Chat Prompt for one chat currently has no effect on what that chat generates; treat it as not-yet-functional rather than as a working per-chat pin until this is fixed.
-
 ### AI Override (connection and sampling)
 
 Every Chat Prompt can optionally pin its own **Connection** and **Sampling** config, overriding whatever connection/sampling the chat would otherwise use. Both pickers default to **System default**, meaning "inherit from the system default connection/sampling config." This lets you pair a particular writing style with a particular model or sampler set — for example, routing a "Chain of Thought" prompt to a larger, more deliberate model.
@@ -64,9 +58,15 @@ Selecting a config in the editor and clicking **Set Default** (star icon) sends 
 
 Click the **+** icon while viewing any existing config (built-in or custom) to open a name-entry modal. Confirming clones the currently-loaded config's System Instructions (and AI Override settings) into a brand-new, editable config under the name you choose. Built-in configs themselves cannot be edited or deleted — cloning is the way to customize one.
 
+### Per-chat prompt override
+
+Beyond your personal default, an admin can pick a specific Chat Prompt in a chat's edit form — an **AI Override** section with a **Prompt** dropdown (alongside Connection and Sampling overrides) defaulting to **System default**.
+
+**This particular override doesn't currently take effect.** Unlike the Connection, Sampling, and Narrator Prompt overrides on the same form — which are all genuinely read and applied at generation time — the chat-level Chat Prompt selection is saved and shown as set in the UI, but generation always resolves the Chat Prompt from your personal active selection (or the system-wide default) and never actually re-checks the chat's own override. In practice, picking a specific Chat Prompt for one chat currently has no effect on what that chat generates; treat it as not-yet-functional rather than as a working per-chat pin until this is fixed.
+
 ## Chat Prompts: Narrator
 
-Chat Prompts: Narrator is a small library of prompt templates for a **Narrator response** — a manually-triggered narration message that speaks as the environment itself (weather, scenery, side characters, shopkeepers, monsters) rather than as any of the chat's defined characters. This feature was previously called "World"/"World Response"; if you see that terminology elsewhere (older screenshots, community posts), it refers to the same thing. See [Chats](./chats.md) for where to trigger one from inside a chat.
+Chat Prompts: Narrator is a small library of prompt templates for a **Narrator response** — a manually-triggered narration message that speaks as the environment itself (weather, scenery, side characters, shopkeepers, monsters) rather than as any of the chat's defined characters. See [Chats](./chats.md) for where to trigger one from inside a chat.
 
 Structurally a Chat Prompts: Narrator config is shaped like a Chat Prompt, not a Summarize config — a single **Name**, a **Display Name**, **System Instructions**, and an **AI Override** — but it's a separate list because it's resolved and triggered completely independently of the chat's regular Chat Prompt, and it deliberately never participates in [round-robin turn order](./chats.md#turn-order-round-robin-replies).
 
@@ -118,7 +118,7 @@ Controls the prompts used when the pipeline generates a **Scene** summary — a 
 
 ### Character Extraction Instructions
 
-Scene Summarize configs have a fourth field not present on World or Character configs: **Character Extraction Instructions**. This prompt is used after the scene summary is written, to extract which characters were **participants** (physically present and acting in the scene) versus merely **mentioned** (referenced in dialogue or thought but not present/acting). The built-in default instructs the model to output raw JSON only, with no markdown or commentary, splitting names into these two groups. This field has no separate AI Override — it runs on the same connection/sampling as the rest of the scene pipeline's resolved task config.
+Scene Summarize configs have a fourth field not present on World or Character configs: **Character Extraction Instructions**. This prompt is used after the scene summary is written, to extract which characters were **participants** (physically present and acting in the scene) versus merely **mentioned** (referenced in dialogue or thought but not present/acting). The built-in default instructs the model to output raw JSON only, with no markdown or commentary, splitting names into these two groups. Like Batch, Synthesis, and Title Generation, this field has its own **AI Override** Connection/Sampling picker — so character extraction can be routed to a different (for example, cheaper or more reliable-at-structured-output) model than the one writing the scene's prose summary.
 
 ## Creating and managing custom Summarize configs
 

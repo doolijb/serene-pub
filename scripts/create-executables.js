@@ -13,6 +13,14 @@ import { fileURLToPath } from "url"
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+const packageJson = JSON.parse(
+	fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf-8")
+)
+// Confirmed stale before this fix: the macOS Info.plist below had "0.4.1"
+// hardcoded while package.json had already moved past it — read live
+// instead of duplicating the version as a literal.
+const appVersion = packageJson.version
+
 const platforms = {
 	windows: {
 		name: "Serene Pub.exe",
@@ -117,31 +125,63 @@ Or use a batch-to-exe converter that supports custom icons.
 }
 
 async function createLinuxExecutable(platformDir, config) {
-	// Create desktop entry file that launches the existing run.sh script
-	const desktopFile = path.join(platformDir, config.desktop)
+	// A .desktop file's Exec=/Icon=/Path= must be absolute paths to wherever
+	// the user actually extracted the release — a value baked in here, at
+	// build time, only ever reflects the build machine's own path (this repo
+	// shipped exactly that bug: the checked-in .desktop file pointed at a
+	// path that exists on no user's machine). Generate an installer script
+	// instead, shipped alongside run.sh, that a user runs once after
+	// extracting — it resolves its own directory at runtime (same pattern
+	// already used by the executable wrapper below) and writes the .desktop
+	// file with the correct local paths right there.
+	const installScript = path.join(platformDir, "install-desktop-shortcut.sh")
+	const installScriptContent = `#!/bin/bash
+# Creates a Linux desktop shortcut for Serene Pub, pointing at wherever this
+# script actually lives — run this once after extracting the release.
+set -e
+DIR="$( cd "$( dirname "\${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
-	const desktopContent = `[Desktop Entry]
+# Only Exec= needs the Desktop Entry spec's own quoting rules — it's the one
+# field parsed as a command line (space-separated arguments), so a value
+# containing a space (the common case here — "Serene Pub" is the app's own
+# name) must be double-quoted, with any literal backslash/backtick/dollar/
+# double-quote within it escaped with a backslash. Icon= and Path= are plain
+# single string values, not argument lists — confirmed against
+# desktop-file-validate, which flags a quoted Icon/Path as *not* looking
+# like a valid path (the quote characters would become part of the value).
+escape_exec_value() {
+    printf '%s' "$1" | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g' -e 's/\`/\\\\\`/g' -e 's/\\$/\\\\$/g'
+}
+ESCAPED_DIR="$(escape_exec_value "$DIR")"
+
+DESKTOP_FILE="$DIR/Serene Pub.desktop"
+cat > "$DESKTOP_FILE" <<EOF
+[Desktop Entry]
 Version=1.0
 Type=Application
 Name=Serene Pub
 Comment=AI Chat Application
-Exec=${platformDir}/run.sh
-Icon=${platformDir}/favicon.png
+Exec="$ESCAPED_DIR/run.sh"
+Icon=$DIR/favicon.png
 Terminal=false
 Categories=Network;Chat;
 StartupNotify=true
-Path=${platformDir}
+Path=$DIR
+EOF
+chmod +x "$DESKTOP_FILE"
+
+echo "Desktop shortcut created: $DESKTOP_FILE"
+echo "Double-click it to launch Serene Pub, or copy it to ~/.local/share/applications/ to add it to your app menu."
 `
 
-	fs.writeFileSync(desktopFile, desktopContent)
+	fs.writeFileSync(installScript, installScriptContent)
 
-	// Make the desktop file executable
 	try {
-		execSync(`chmod +x "${desktopFile}"`)
-		console.log(`   ✓ Linux desktop entry created: ${desktopFile}`)
+		execSync(`chmod +x "${installScript}"`)
+		console.log(`   ✓ Linux desktop-shortcut installer created: ${installScript}`)
 	} catch (error) {
 		console.log(
-			`   ⚠️  Desktop file created but chmod failed: ${desktopFile}`
+			`   ⚠️  Installer script created but chmod failed: ${installScript}`
 		)
 	}
 
@@ -193,9 +233,9 @@ async function createMacOSExecutable(platformDir, config) {
 	<key>CFBundleName</key>
 	<string>Serene Pub</string>
 	<key>CFBundleVersion</key>
-	<string>0.4.1</string>
+	<string>${appVersion}</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.4.1</string>
+	<string>${appVersion}</string>
 	<key>CFBundleIconFile</key>
 	<string>favicon.icns</string>
 	<key>CFBundlePackageType</key>

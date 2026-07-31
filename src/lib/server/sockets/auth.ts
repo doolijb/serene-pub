@@ -1,8 +1,33 @@
 import { db } from "$lib/server/db"
 import { tokens } from "$lib/server/auth"
 import { authenticate } from "$lib/server/providers/users/authenticate"
-import { isOriginAllowed } from "$lib/server/sockets/originAllowlist"
+import {
+	isOriginAllowed,
+	isMissingOriginAllowed
+} from "$lib/server/sockets/originAllowlist"
+import { loginRateLimit } from "$lib/server/services/loginRateLimit"
 import type { Socket } from "socket.io"
+
+// Round-12 audit fix (MEDIUM): no cap on concurrent connections per
+// account — one token (or the disabled-accounts auto-admin fallback) could
+// open unlimited concurrent sockets. Generous on purpose — well above any
+// realistic multi-tab/multi-device usage, purely a runaway/DoS backstop,
+// not a UX-facing limit.
+const MAX_CONCURRENT_SOCKETS_PER_USER = 50
+
+function joinUserRoomWithCap(socket: AuthenticatedSocket, userId: number) {
+	const room = `user_${userId}`
+	const currentSize = socket.nsp?.adapter?.rooms?.get(room)?.size ?? 0
+	if (currentSize >= MAX_CONCURRENT_SOCKETS_PER_USER) {
+		console.log(
+			`Socket connection rejected: user ${userId} already has ${currentSize} concurrent connections (cap ${MAX_CONCURRENT_SOCKETS_PER_USER})`
+		)
+		socket.disconnect()
+		return false
+	}
+	socket.join(room)
+	return true
+}
 
 export interface AuthenticatedSocket extends Socket {
 	user?: {
@@ -23,6 +48,33 @@ export async function authMiddleware(
 	socket: AuthenticatedSocket,
 	next: (err?: Error) => void
 ) {
+	// Round-12 audit fix (MEDIUM): authMiddleware never touched
+	// loginRateLimit at all — unlike the HTTP login route's 5-attempts/60s
+	// limiter, nothing throttled repeated failed handshake attempts
+	// (bad/expired/forged tokens, disallowed origins) from the same
+	// address. Reuses the same shared, generic loginRateLimit service —
+	// round 13 established the "prefix the key by purpose" convention (eg.
+	// `changePassphrase:${userId}`) so this doesn't share a budget with
+	// IP-based HTTP login limiting. Records immediately, before any
+	// origin/token/DB work below — round 13's TOCTOU fix established this
+	// exact pattern (recording only on a late failure branch, after an
+	// expensive await, let concurrent bursts all pass the isRateLimited
+	// check before any of them recorded an attempt). clearRateLimit() on
+	// every success path below (both the disabled-accounts auto-attach and
+	// the authenticated path) unconditionally resets the bucket, so normal
+	// successful connections — including a legitimate burst of multi-tab/
+	// reconnect traffic — are unaffected; only a sustained run of actual
+	// failures from one address trips this.
+	const handshakeRateLimitKey = `socketHandshake:${socket.handshake.address}`
+	if (loginRateLimit.isRateLimited(handshakeRateLimitKey)) {
+		console.log(
+			`Socket handshake rate limited for "${socket.handshake.address}" — rejecting`
+		)
+		socket.disconnect()
+		return next(new Error("Too many connection attempts"))
+	}
+	loginRateLimit.recordFailedAttempt(handshakeRateLimitKey)
+
 	try {
 		// Real enforcement point for the origin allowlist — Socket.IO's own
 		// `cors` option (loadSockets.server.ts) only governs the polling
@@ -33,7 +85,22 @@ export async function authMiddleware(
 		// token at all.
 		const origin = socket.handshake.headers.origin as string | undefined
 		const requestHost = socket.handshake.headers.host as string | undefined
-		if (!isOriginAllowed(origin, requestHost)) {
+		if (!origin) {
+			// No Origin header at all — a non-browser client (CLI tool, the
+			// Android wrapper, server-to-server), not subject to the
+			// browser-mediated attack the check below defends against. Still
+			// scoped to the local network by default: an internet-reachable
+			// instance with accounts disabled (both defaults) would otherwise
+			// auto-attach ANY such connection to the first admin user with no
+			// token at all. See originAllowlist.ts's isMissingOriginAllowed().
+			if (!isMissingOriginAllowed(socket.handshake.address)) {
+				console.log(
+					`Socket connection with no Origin header from "${socket.handshake.address}" — rejecting (not a local-network address; set SOCKETS_ALLOWED_ORIGINS=* to allow non-browser clients from anywhere)`
+				)
+				socket.disconnect()
+				return next(new Error("Origin not allowed"))
+			}
+		} else if (!isOriginAllowed(origin, requestHost)) {
 			console.log(
 				`Socket connection from disallowed origin "${origin}" — rejecting`
 			)
@@ -63,9 +130,12 @@ export async function authMiddleware(
 
 			if (fallbackUser) {
 				socket.user = fallbackUser
-				socket.join(`user_${fallbackUser.id}`)
+				if (!joinUserRoomWithCap(socket, fallbackUser.id)) {
+					return next(new Error("Too many concurrent connections"))
+				}
 			}
 
+			loginRateLimit.clearRateLimit(handshakeRateLimitKey)
 			console.log("Accounts disabled, using default user")
 			return next()
 		}
@@ -138,8 +208,11 @@ export async function authMiddleware(
 		socket.isAuthenticated = true
 
 		// Join user-specific room
-		socket.join(`user_${authResult.user.id}`)
+		if (!joinUserRoomWithCap(socket, authResult.user.id)) {
+			return next(new Error("Too many concurrent connections"))
+		}
 
+		loginRateLimit.clearRateLimit(handshakeRateLimitKey)
 		next()
 	} catch (error: any) {
 		console.error("Socket authentication error:", error)

@@ -3,9 +3,20 @@ import { db } from "."
 import * as schema from "./schema"
 import { getAppDataDir } from "./drizzle.config"
 import * as path from "path"
+import { DEFAULT_CHARACTER_EXTRACTION_SYSTEM_PROMPT } from "$lib/server/utils/summarizer/templates"
+import { backfillMissingBindingNames } from "$lib/server/utils/characterBindingSync"
 
 export async function sync() {
 	console.log("Syncing database defaults...")
+
+	// Fallback ids for wiring up user/system defaults further down, shared
+	// across the try blocks below. Queried fresh (post-upsert) rather than
+	// hardcoded to the seeded id (1) so that if the immutable id:1 row is
+	// ever missing for some reason, this degrades to "whichever prompt
+	// config exists first" instead of pointing every default at a row that
+	// isn't there.
+	let firstPromptConfig: SelectPromptConfig | undefined
+	let firstNarratorPromptConfig: SelectNarratorPromptConfig | undefined
 
 	try {
 		// Sampling Configs
@@ -406,6 +417,14 @@ Example dialogue:
 
 		await Promise.all(narratorPromptConfigQueries)
 
+		firstPromptConfig = await db.query.promptConfigs.findFirst({
+			orderBy: (t, { asc }) => asc(t.id)
+		})
+		firstNarratorPromptConfig =
+			await db.query.narratorPromptConfigs.findFirst({
+				orderBy: (t, { asc }) => asc(t.id)
+			})
+
 		// World Summarize Configs
 
 		const existingWorldSummarizeConfigs =
@@ -511,7 +530,7 @@ Example dialogue:
 					nameSystemPrompt:
 						"You generate short titles for scene summaries. The title should capture the key moment or action of the scene.",
 					characterExtractionSystemPrompt:
-						"You extract character names from a scene summary into two groups.\n\nPARTICIPANTS — characters who are physically present and doing something in this scene: speaking, fighting, moving, reacting, making decisions, or otherwise taking part in events as they unfold. If the scene describes them acting, it belongs here.\n\nMENTIONED — characters who are brought up in conversation or thought but are not present and not acting in the scene. They are talked about, remembered, referenced, or discussed by others — but they themselves do nothing in this scene.\n\nRules:\n- A character who acts in the scene is always a participant, even if they are also talked about.\n- A character who only appears in someone's dialogue, memory, or backstory — and never acts — is mentioned only.\n- Include named characters and named creatures only. No unnamed extras, no places, no objects.\n- Output ONLY a raw JSON object. No explanation, no markdown, no code fences."
+						DEFAULT_CHARACTER_EXTRACTION_SYSTEM_PROMPT
 				}
 			]
 		const sceneSummarizeConfigQueries: Promise<any>[] = []
@@ -626,24 +645,42 @@ Example dialogue:
 			where: (us, { eq }) => eq(us.userId, 1)
 		})
 		if (!existingUserSettings) {
-			await db.insert(schema.userSettings).values({
-				userId: 1,
-				activeContextConfigId: 1,
-				activePromptConfigId: 1,
-				activeNarratorPromptConfigId: 1
-			})
+			await db
+				.insert(schema.userSettings)
+				.values({
+					userId: 1,
+					activeContextConfigId: 1,
+					activePromptConfigId: firstPromptConfig?.id,
+					activeNarratorPromptConfigId: firstNarratorPromptConfig?.id
+				})
+				.onConflictDoNothing()
 		} else if (!existingUserSettings.activeNarratorPromptConfigId) {
 			// Existing installs from before the Narrator feature existed never
 			// got this column backfilled (only set on first-ever userSettings
-			// insert above) — fall back to the first seeded config (id 1) so
+			// insert above) — fall back to the first seeded prompt config so
 			// the Narrator works without requiring a manual pick in Settings.
 			await db
 				.update(schema.userSettings)
-				.set({ activeNarratorPromptConfigId: 1 })
+				.set({
+					activeNarratorPromptConfigId: firstNarratorPromptConfig?.id
+				})
 				.where(eq(schema.userSettings.userId, 1))
 		}
 	} catch (error) {
 		console.error("Error syncing database defaults:", error)
+	}
+
+	// One-off backfill: bound lorebookBindings rows that never went through
+	// characterBindingSync (e.g. lorebook import before that path called it —
+	// see restoreBoundEntities) are left with a permanently NULL name,
+	// falling through to the raw {{char:N}} token everywhere a binding's
+	// name is displayed. Naturally idempotent and cheap after the first
+	// run: once the import path syncs on insert, this matches nothing on
+	// every subsequent boot.
+	try {
+		await backfillMissingBindingNames()
+	} catch (error) {
+		console.error("Error backfilling lorebook binding names:", error)
 	}
 
 	try {
@@ -669,8 +706,8 @@ Example dialogue:
 				defaultConnectionId: null,
 				defaultSamplingConfigId: 1,
 				defaultContextConfigId: 1,
-				defaultPromptConfigId: 1,
-				defaultNarratorPromptConfigId: 1,
+				defaultPromptConfigId: firstPromptConfig?.id,
+				defaultNarratorPromptConfigId: firstNarratorPromptConfig?.id,
 				defaultGraphBuildConfigId: 1
 			})
 		} else {
@@ -678,7 +715,9 @@ Example dialogue:
 				// Same backfill as userSettings above, for the system-wide default.
 				await db
 					.update(schema.systemSettings)
-					.set({ defaultNarratorPromptConfigId: 1 })
+					.set({
+						defaultNarratorPromptConfigId: firstNarratorPromptConfig?.id
+					})
 					.where(eq(schema.systemSettings.id, 1))
 			}
 			if (!res.defaultGraphBuildConfigId) {

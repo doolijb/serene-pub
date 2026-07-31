@@ -84,14 +84,24 @@ export async function resolveTaskConfig(params: {
 			overrideConnectionId = cfg?.connectionId ?? null
 			overrideSamplingId = cfg?.samplingConfigId ?? null
 		} else if (
-			taskType.startsWith("summarize_") &&
+			(taskType.startsWith("summarize_") ||
+				// character_extraction doesn't carry a "summarize_" prefix
+				// (it's shared with the graph-builder's own extraction call,
+				// see graph_* below) — only the scene config table has
+				// dedicated override columns for it, since only scene
+				// summarization has a character-extraction sub-task.
+				(taskType === "character_extraction" &&
+					summarizeConfigType === "scene")) &&
 			summarizeConfigId &&
 			summarizeConfigType
 		) {
-			const subTask = taskType.replace("summarize_", "") as
-				| "batch"
-				| "synth"
-				| "name"
+			const subTask =
+				taskType === "character_extraction"
+					? "characterExtraction"
+					: (taskType.replace("summarize_", "") as
+							| "batch"
+							| "synth"
+							| "name")
 			type SumCfgCols = {
 				batchConnectionId: number | null
 				batchSamplingConfigId: number | null
@@ -99,6 +109,8 @@ export async function resolveTaskConfig(params: {
 				synthSamplingConfigId: number | null
 				nameConnectionId: number | null
 				nameSamplingConfigId: number | null
+				characterExtractionConnectionId?: number | null
+				characterExtractionSamplingConfigId?: number | null
 			}
 			let cfg: SumCfgCols | undefined
 			if (summarizeConfigType === "world") {
@@ -134,7 +146,9 @@ export async function resolveTaskConfig(params: {
 						synthConnectionId: true,
 						synthSamplingConfigId: true,
 						nameConnectionId: true,
-						nameSamplingConfigId: true
+						nameSamplingConfigId: true,
+						characterExtractionConnectionId: true,
+						characterExtractionSamplingConfigId: true
 					}
 				})) as SumCfgCols | undefined
 			}

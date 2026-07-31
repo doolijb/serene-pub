@@ -248,6 +248,11 @@
 						Token limit exceeded. Message may be truncated.
 					</div>
 				{/if}
+				{#if submitOnEnter}
+					<div class="text-surface-500-500 mt-1 text-xs">
+						Enter to send · Shift+Enter for a new line
+					</div>
+				{/if}
 			</Tabs.Content>
 			<Tabs.Content value="preview">
 				<div

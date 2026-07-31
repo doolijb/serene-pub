@@ -10,6 +10,32 @@ import {
 	stableStringify
 } from "$lib/shared/utils/connectionDefaults"
 import type { Handler } from "$lib/shared/events"
+import { loginRateLimit } from "$lib/server/services/loginRateLimit"
+import {
+	encryptApiKeyField,
+	decryptApiKeyField
+} from "$lib/server/utils/tokenCrypto"
+
+// extraJson.apiKey is encrypted at rest (tokenCrypto.ts) — stored plaintext
+// before this fix. A plain-string value is a fresh/edited key from the
+// client (or a legacy row); already-encrypted-envelope values (already
+// re-saved once through this same path) are left untouched rather than
+// re-encrypted on every unrelated field edit.
+function withEncryptedApiKey<T extends { extraJson?: Record<string, any> }>(
+	data: T
+): T {
+	if (!data.extraJson || typeof data.extraJson.apiKey !== "string") {
+		return data
+	}
+	if (!data.extraJson.apiKey) return data
+	return {
+		...data,
+		extraJson: {
+			...data.extraJson,
+			apiKey: encryptApiKeyField(data.extraJson.apiKey)
+		}
+	}
+}
 
 // --- CONNECTIONS SOCKET HANDLERS ---
 
@@ -94,6 +120,23 @@ export const connectionsGet: Handler<
 			connection = updated
 		}
 
+		// The edit form loads the real key back into its input on edit (same
+		// pattern as vectorization:listModels) — decrypt here, at the point
+		// it's about to leave the server, not earlier (the backfill-defaults
+		// comparison above deliberately operates on the still-encrypted
+		// envelope so it round-trips byte-for-byte when nothing actually
+		// changed).
+		if (connection.extraJson) {
+			connection = {
+				...connection,
+				extraJson: {
+					...connection.extraJson,
+					apiKey:
+						decryptApiKeyField(connection.extraJson.apiKey) ?? ""
+				}
+			}
+		}
+
 		const res: Sockets.Connections.Get.Response = { connection }
 		emitToUser("connections:get", res)
 		return res
@@ -118,6 +161,7 @@ export const connectionsCreate: Handler<
 
 		let data = { ...params.connection }
 		data = withConnectionDefaults(data as any)
+		data = withEncryptedApiKey(data)
 		if ("id" in data) delete data.id
 		// Always remove id before insert to let DB auto-increment
 		if ("id" in data) delete data.id
@@ -161,13 +205,27 @@ export const connectionsUpdate: Handler<
 
 		const id = params.connection.id
 		if ("id" in params.connection) delete (params.connection as any).id
+		const updateData = withEncryptedApiKey(params.connection)
 		const [updated] = await db
 			.update(schema.connections)
-			.set(params.connection)
+			.set(updateData)
 			.where(eq(schema.connections.id, id))
 			.returning()
-		await connectionsGet.handler(socket, { id }, emitToUser)
-		const res: Sockets.Connections.Update.Response = { connection: updated }
+		// connectionsGet.handler already builds the fully-processed record
+		// (CONNECTION_DEFAULTS backfill + decrypted apiKey) and broadcasts its
+		// own "connections:get" — reuse its return value here instead of the
+		// raw (still-encrypted, non-backfilled) `updated` row, so the
+		// "connections:update" ack itself carries a client-safe, fully
+		// processed connection the UI can use to reset its unsaved-changes
+		// baseline immediately, without waiting on/racing that second,
+		// incidental broadcast. `getResult.connection` is only null when the
+		// id isn't found, which can't be the case here (the update above just
+		// succeeded against it) — the `?? updated` fallback exists purely to
+		// satisfy Update.Response's non-null `connection` type.
+		const getResult = await connectionsGet.handler(socket, { id }, emitToUser)
+		const res: Sockets.Connections.Update.Response = {
+			connection: getResult.connection ?? updated
+		}
 		emitToUser("connections:update", res)
 		await user(socket, {}, emitToUser)
 		await connectionsList.handler(socket, {}, emitToUser)
@@ -268,19 +326,31 @@ export const connectionsTest: Handler<
 			)
 		}
 
-		const { Adapter, testConnection, listModels } =
-			await getConnectionAdapter(params.connection.type)
-		if (!Adapter) {
+		// Instance-wide budget (not per-user) — every call here can reach an
+		// external host via the connection's own configured base URL, with
+		// no throttling otherwise, unlike the GitHub card source's own
+		// rate limiter for the same class of concern.
+		const rateLimitKey = "connections:test"
+		if (loginRateLimit.isRateLimited(rateLimitKey)) {
 			const res: Sockets.Connections.Test.Response = {
 				ok: false,
-				error: "Unsupported connection type.",
+				error: "Rate limited. Please wait a moment and try again.",
 				models: []
 			}
 			emitToUser("connections:test", res)
 			return res
 		}
+		loginRateLimit.recordFailedAttempt(rateLimitKey)
 
 		try {
+			// getConnectionAdapter always throws for an unsupported type
+			// rather than returning a falsy Adapter — moved inside this try
+			// (was previously outside it) so that throw produces this
+			// handler's own clean {ok:false, error, connectionId} response
+			// instead of an uncaught error.
+			const { testConnection, listModels } = await getConnectionAdapter(
+				params.connection.type
+			)
 			const result = await testConnection(params.connection)
 			let models: any[] = []
 			let error: string | null = null
@@ -300,7 +370,8 @@ export const connectionsTest: Handler<
 			const res: Sockets.Connections.Test.Response = {
 				ok: result.ok,
 				error: error || null,
-				models
+				models,
+				connectionId: params.connection?.id
 			}
 			emitToUser("connections:test", res)
 			return res
@@ -309,7 +380,8 @@ export const connectionsTest: Handler<
 			const res: Sockets.Connections.Test.Response = {
 				ok: false,
 				error: error?.message || String(error) || "Connection failed.",
-				models: []
+				models: [],
+				connectionId: params.connection?.id
 			}
 			emitToUser("connections:test", res)
 			return res
@@ -334,11 +406,24 @@ export const connectionsRefreshModels: Handler<
 			)
 		}
 
-		const { listModels } = await getConnectionAdapter(
-			params.connection.type
-		)
+		const rateLimitKey = "connections:refreshModels"
+		if (loginRateLimit.isRateLimited(rateLimitKey)) {
+			const res: Sockets.Connections.RefreshModels.Response = {
+				error: "Rate limited. Please wait a moment and try again.",
+				models: []
+			}
+			emitToUser("connections:refreshModels", res)
+			return res
+		}
+		loginRateLimit.recordFailedAttempt(rateLimitKey)
 
 		try {
+			// getConnectionAdapter can throw for an unsupported type — moved
+			// inside this try so that surfaces as this handler's own clean
+			// error response instead of an uncaught error.
+			const { listModels } = await getConnectionAdapter(
+				params.connection.type
+			)
 			const result = await listModels(params.connection)
 			if (result.error) {
 				const res = {
@@ -349,14 +434,16 @@ export const connectionsRefreshModels: Handler<
 			} else if (!result.models) {
 				const res: Sockets.Connections.RefreshModels.Response = {
 					error: "Failed to refresh models.",
-					models: []
+					models: [],
+					connectionId: params.connection?.id
 				}
 				emitToUser("connections:refreshModels", res)
 				return res
 			}
 			const res: Sockets.Connections.RefreshModels.Response = {
 				models: result.models,
-				error: null
+				error: null,
+				connectionId: params.connection?.id
 			}
 			emitToUser("connections:refreshModels", res)
 			return res
@@ -364,7 +451,8 @@ export const connectionsRefreshModels: Handler<
 			console.error("Refresh models error:", error)
 			const res: Sockets.Connections.RefreshModels.Response = {
 				error: "Failed to refresh models.",
-				models: []
+				models: [],
+				connectionId: params.connection?.id
 			}
 			emitToUser("connections:refreshModels", res)
 			return res

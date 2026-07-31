@@ -16,6 +16,8 @@ import { Readable } from "stream"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { llamaCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
+import { LLM_IDLE_TIMEOUT_MS } from "./idleTimeout"
 
 // GET /health
 export type HealthResponse =
@@ -229,6 +231,14 @@ export type LoraAdaptersResponse = LoraAdapter[]
 
 class LlamaCppAdapter extends BaseConnectionAdapter {
 	private abortController?: AbortController
+	// Stored on `this` (not a local const, as it was before) for the exact
+	// same reason as abortController above — abort() is called externally
+	// while a streaming request is in flight, and a local variable inside
+	// the streaming closure can never be reached from outside it. Without
+	// this, abort() during a streaming generation did nothing at all until
+	// the next per-chunk isAborting poll (or never, if the server never
+	// sent a first chunk).
+	private cancelTokenSource?: ReturnType<typeof axios.CancelToken.source>
 
 	constructor({
 		connection,
@@ -342,7 +352,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 		}
 
 		const baseUrl =
-			this.connection.baseUrl?.replace(/\/$/, "") ||
+			normalizeBaseUrl(this.connection.baseUrl) ||
 			"http://localhost:8080"
 
 		if (stream) {
@@ -352,21 +362,26 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 					_thinkingCb?: (chunk: string) => void
 				) => {
 					let content = ""
-					let cancelTokenSource = axios.CancelToken.source()
+					this.cancelTokenSource = axios.CancelToken.source()
 					try {
 						const response = await axios.post<CompletionResponse>(
 							baseUrl + "/completion",
 							req,
 							{
 								responseType: "stream",
-								cancelToken: cancelTokenSource.token
+								cancelToken: this.cancelTokenSource.token,
+								// Idle/inactivity timeout, not wall-clock — Node
+								// resets this on any socket activity, including
+								// each streamed chunk (verified against
+								// axios's http adapter source).
+								timeout: LLM_IDLE_TIMEOUT_MS
 							}
 						)
 						const stream = response.data as any
 						let buffer = ""
 						for await (const chunk of Readable.from(stream)) {
 							if (this.isAborting) {
-								cancelTokenSource.cancel(
+								this.cancelTokenSource.cancel(
 									"Request aborted by user."
 								)
 								break
@@ -395,7 +410,18 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 							}
 						}
 					} catch (e: any) {
-						contentCb("FAILURE: " + (e.message || String(e)))
+						// A cancel() call rejects the in-flight request too —
+						// don't surface that as an error, the caller already
+						// knows this was cancelled.
+						const wasCancelled =
+							this.isAborting || axios.isCancel?.(e)
+						if (!wasCancelled) throw e
+					} finally {
+						// Clear the reference once this request is done so a
+						// later, unrelated abort() call (e.g. from the next
+						// generation on this same adapter instance) can't
+						// cancel a stale token.
+						this.cancelTokenSource = undefined
 					}
 				},
 				compiledPrompt,
@@ -411,7 +437,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 			if (this.isAborting) {
 				this.abortController.abort()
 				return {
-					completionResult: "FAILURE: Request aborted by user.",
+					completionResult: "",
 					compiledPrompt,
 					isAborted: true
 				}
@@ -420,7 +446,10 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 				const response = await axios.post<CompletionResponse>(
 					baseUrl + "/completion",
 					req,
-					{ signal: this.abortController.signal }
+					{
+						signal: this.abortController.signal,
+						timeout: LLM_IDLE_TIMEOUT_MS
+					}
 				)
 				const result = response.data
 				const content = result?.content || result?.response || ""
@@ -442,16 +471,12 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 					e?.message?.includes("aborted")
 				if (wasCancelled) {
 					return {
-						completionResult: "FAILURE: Request aborted by user.",
+						completionResult: "",
 						compiledPrompt,
 						isAborted: true
 					}
 				}
-				return {
-					completionResult: "FAILURE: " + (e.message || String(e)),
-					compiledPrompt,
-					isAborted: false
-				}
+				throw e
 			}
 		}
 	}
@@ -459,6 +484,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 	abort() {
 		this.isAborting = true
 		this.abortController?.abort()
+		this.cancelTokenSource?.cancel("Request aborted by user.")
 	}
 }
 
@@ -467,7 +493,7 @@ async function testConnection(
 ): Promise<{ ok: boolean; error?: string }> {
 	try {
 		const baseUrl =
-			connection.baseUrl?.replace(/\/$/, "") || "http://localhost:8080"
+			normalizeBaseUrl(connection.baseUrl) || "http://localhost:8080"
 		const res = await axios.get<HealthResponse>(baseUrl + "/health")
 
 		if (
@@ -493,7 +519,7 @@ async function listModels(
 ): Promise<{ models: any[]; error?: string }> {
 	try {
 		const baseUrl =
-			connection.baseUrl?.replace(/\/$/, "") || "http://localhost:8080"
+			normalizeBaseUrl(connection.baseUrl) || "http://localhost:8080"
 		const res = await axios.get<{ model?: string }>(baseUrl + "/show")
 		if (res && typeof res.data === "object" && res.data.model) {
 			return {

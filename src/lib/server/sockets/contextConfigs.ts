@@ -112,12 +112,31 @@ export const contextConfigsUpdate: Handler<
 
 		const id = params.contextConfig.id!
 		const { id: _, ...updateData } = params.contextConfig
-		console.log("Updating context config with ID:", id, "Data:", updateData)
-		const [contextConfig] = await db
-			.update(schema.contextConfigs)
-			.set(updateData)
-			.where(eq(schema.contextConfigs.id, id))
-			.returning()
+
+		const currentConfig = await db.query.contextConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, id)
+		})
+		if (currentConfig?.isImmutable) {
+			emitToUser("contextConfigs:update:error", {
+				error: "Cannot update a built-in context config."
+			})
+			throw new Error("Cannot update a built-in context config.")
+		}
+
+		// A raw client could target a mutable row with an {id}-only payload
+		// (no other fields present at all) — updateData then has no defined
+		// values, and an empty .set() throws rather than being a legitimate
+		// no-op (same round-8 fix already applied to promptConfigsUpdate).
+		const hasUpdates = Object.values(updateData).some((v) => v !== undefined)
+		const contextConfig = hasUpdates
+			? (
+					await db
+						.update(schema.contextConfigs)
+						.set(updateData)
+						.where(eq(schema.contextConfigs.id, id))
+						.returning()
+				)[0]
+			: currentConfig!
 		await contextConfigsListHandler.handler(socket, {}, emitToUser)
 		const res: Sockets.ContextConfigs.Update.Response = { contextConfig }
 		emitToUser("contextConfigs:update", res)
@@ -208,9 +227,12 @@ export const contextConfigsSetUserActive: Handler<
 		})
 
 		if (!userSettings) {
-			await db.insert(schema.userSettings).values({
-				userId: currentUser.id
-			})
+			await db
+				.insert(schema.userSettings)
+				.values({
+					userId: currentUser.id
+				})
+				.onConflictDoNothing()
 		}
 
 		await db

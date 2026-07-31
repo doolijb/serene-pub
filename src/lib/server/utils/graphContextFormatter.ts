@@ -1,10 +1,57 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { and, desc, eq, inArray } from "drizzle-orm"
+import { and, desc, eq, inArray, isNull } from "drizzle-orm"
 import type {
 	NodeVisibility,
 	RelationshipVisibility
 } from "$lib/server/db/schema"
+
+// Round-12 audit fix (MEDIUM): these are the only structural markers
+// separating one section/entry from another in the context string below,
+// which is spliced directly into the generation prompt. An untrusted
+// name/alias/description/summary containing a literal "]", a fake
+// "[Header]", or the literal header/footer text could inject fake
+// structure into another participant's prompt — a guest can bind their
+// own (attacker-named) character into a shared lorebook (see round 13's
+// binding-ownership work), so this is a genuine cross-user vector, not
+// just self-inflicted. Declared once here and consumed by both the
+// section-building code below and neutralizeGraphMarkers() so a future
+// change to the wrapper text can't silently desync from what's being
+// guarded against — same reason PromptBlockFormatter.ts's
+// ROLE_MARKER_PATTERN is a single shared constant, not two independently-
+// maintained copies.
+const SECTION_OPEN = "["
+const SECTION_CLOSE = "]"
+const GRAPH_CONTEXT_HEADER = "--- Narrative Graph Context ---"
+const GRAPH_CONTEXT_FOOTER = "--- End Narrative Graph Context ---"
+
+// Written as the explicit \u200B escape, never a pasted literal invisible
+// character — an actually-invisible source character is un-greppable and
+// one "strip weird whitespace" cleanup away from silently reopening this
+// (same reasoning as PromptBlockFormatter.ts's identical technique).
+const ZERO_WIDTH_SPACE = "\u200B"
+
+/** Breaks any exact-match occurrence of the structural markers above inside
+ * untrusted content, while staying visually identical to a human reader. */
+function neutralizeGraphMarkers(s: string): string {
+	return s
+		.split(SECTION_OPEN)
+		.join(SECTION_OPEN + ZERO_WIDTH_SPACE)
+		.split(SECTION_CLOSE)
+		.join(ZERO_WIDTH_SPACE + SECTION_CLOSE)
+		.split(GRAPH_CONTEXT_HEADER)
+		.join(
+			GRAPH_CONTEXT_HEADER.slice(0, 1) +
+				ZERO_WIDTH_SPACE +
+				GRAPH_CONTEXT_HEADER.slice(1)
+		)
+		.split(GRAPH_CONTEXT_FOOTER)
+		.join(
+			GRAPH_CONTEXT_FOOTER.slice(0, 1) +
+				ZERO_WIDTH_SPACE +
+				GRAPH_CONTEXT_FOOTER.slice(1)
+		)
+}
 
 interface RelRow {
 	fromNodeId: number
@@ -24,8 +71,8 @@ interface NodeInfo {
 
 async function fetchNodeMap(nodeIds: number[]) {
 	if (nodeIds.length === 0) return new Map<number, NodeInfo>()
-	const nodes = await db.query.narrativeNodes.findMany({
-		where: inArray(schema.narrativeNodes.id, nodeIds),
+	const nodes = await db.query.lorebookBindings.findMany({
+		where: inArray(schema.lorebookBindings.id, nodeIds),
 		columns: {
 			id: true,
 			name: true,
@@ -52,14 +99,18 @@ async function fetchNodeMap(nodeIds: number[]) {
 function nodeName(info: NodeInfo | undefined, fallback: string): string {
 	if (!info) return fallback
 	if (info.aliases.length > 0)
-		return `${info.name} (a.k.a. ${info.aliases.join(", ")})`
-	return info.name
+		return `${neutralizeGraphMarkers(info.name)} (a.k.a. ${info.aliases.map(neutralizeGraphMarkers).join(", ")})`
+	return neutralizeGraphMarkers(info.name)
 }
 
 function formatRel(r: RelRow, nodeMap: Map<number, NodeInfo>): string {
 	const from = nodeMap.get(r.fromNodeId)?.name ?? `node#${r.fromNodeId}`
 	const to = nodeMap.get(r.toNodeId)?.name ?? `node#${r.toNodeId}`
-	return `${from} → ${to} [${r.relationshipType}${r.visibility !== "public" ? `, ${r.visibility}` : ""}]: ${r.description}`
+	return (
+		`${neutralizeGraphMarkers(from)} → ${neutralizeGraphMarkers(to)} ` +
+		`${SECTION_OPEN}${neutralizeGraphMarkers(r.relationshipType)}${r.visibility !== "public" ? `, ${r.visibility}` : ""}${SECTION_CLOSE}: ` +
+		neutralizeGraphMarkers(r.description)
+	)
 }
 
 /**
@@ -94,15 +145,9 @@ export async function buildGraphContext(params: {
 		columns: { id: true }
 	})
 	if (!speakerBinding) return null
-	const speakerNode = await db.query.narrativeNodes.findFirst({
-		where: and(
-			eq(schema.narrativeNodes.lorebookId, lorebookId),
-			eq(schema.narrativeNodes.lorebookBindingId, speakerBinding.id)
-		),
-		columns: { id: true }
-	})
-	if (!speakerNode) return null
-	const speakerNodeId = speakerNode.id
+	// The binding IS the node now (see the lorebookBindings/narrativeNodes
+	// merge plan) — no separate lookup needed.
+	const speakerNodeId = speakerBinding.id
 
 	// ── Layer 1: speaker outbound relationships (all visibilities, non-hidden targets) ──
 	const speakerRels = await db.query.narrativeRelationships.findMany({
@@ -166,11 +211,17 @@ export async function buildGraphContext(params: {
 	// ── Layer 2: inverse rels from chat participants → speaker (acknowledged/public) ──
 	const [chatChars, chatPersonas] = await Promise.all([
 		db.query.chatCharacters.findMany({
-			where: eq(schema.chatCharacters.chatId, chatId),
+			where: and(
+				eq(schema.chatCharacters.chatId, chatId),
+				isNull(schema.chatCharacters.removedAt)
+			),
 			columns: { characterId: true }
 		}),
 		db.query.chatPersonas.findMany({
-			where: eq(schema.chatPersonas.chatId, chatId),
+			where: and(
+				eq(schema.chatPersonas.chatId, chatId),
+				isNull(schema.chatPersonas.removedAt)
+			),
 			columns: { personaId: true }
 		})
 	])
@@ -210,25 +261,14 @@ export async function buildGraphContext(params: {
 						columns: { id: true }
 					})
 				: []
+		// A participant's binding IS their node — no separate lookup needed
+		// (post-merge simplification, see the merge plan).
 		const participantBindingIds = [...charBindings, ...personaBindings].map(
 			(b) => b.id
 		)
-		const participantParentNodes =
-			participantBindingIds.length > 0
-				? await db.query.narrativeNodes.findMany({
-						where: and(
-							eq(schema.narrativeNodes.lorebookId, lorebookId),
-							inArray(
-								schema.narrativeNodes.lorebookBindingId,
-								participantBindingIds
-							)
-						),
-						columns: { id: true }
-					})
-				: []
-		const participantParentIds = participantParentNodes
-			.map((n) => n.id)
-			.filter((id) => id !== speakerNodeId)
+		const participantParentIds = participantBindingIds.filter(
+			(id) => id !== speakerNodeId
+		)
 
 		if (participantParentIds.length > 0) {
 			// Fetch direct rels from participant parent nodes → speaker
@@ -254,11 +294,11 @@ export async function buildGraphContext(params: {
 				(id) => !coveredByDirect.has(id)
 			)
 			if (needsFallback.length > 0) {
-				const aliasChildren = await db.query.narrativeNodes.findMany({
+				const aliasChildren = await db.query.lorebookBindings.findMany({
 					where: and(
-						eq(schema.narrativeNodes.lorebookId, lorebookId),
+						eq(schema.lorebookBindings.lorebookId, lorebookId),
 						inArray(
-							schema.narrativeNodes.parentNodeId,
+							schema.lorebookBindings.parentNodeId,
 							needsFallback
 						)
 					),
@@ -305,15 +345,15 @@ export async function buildGraphContext(params: {
 	const l2NodeMap = await fetchNodeMap(l2NodeIds)
 
 	// ── Layer 3: legendary nodes (nodeVisibility = "legendary") + public relationships ──
-	const legendaryNodes = await db.query.narrativeNodes.findMany({
+	const legendaryNodes = await db.query.lorebookBindings.findMany({
 		where: and(
-			eq(schema.narrativeNodes.lorebookId, lorebookId),
+			eq(schema.lorebookBindings.lorebookId, lorebookId),
 			eq(
-				schema.narrativeNodes.nodeVisibility,
+				schema.lorebookBindings.nodeVisibility,
 				"legendary" as NodeVisibility
 			)
 		),
-		orderBy: desc(schema.narrativeNodes.updatedAt),
+		orderBy: desc(schema.lorebookBindings.updatedAt),
 		limit: 5
 	})
 
@@ -344,9 +384,12 @@ export async function buildGraphContext(params: {
 			.map((r) => `  - ${formatRel(r, l3NodeMap)}`)
 			.join("\n")
 		const header = nodeName(l3NodeMap.get(node.id), node.name)
-		const entry = node.summary
-			? `[${header}] ${node.summary}${relLines ? "\n" + relLines : ""}`
-			: `[${header}]${relLines ? "\n" + relLines : ""}`
+		const summary = node.summary
+			? neutralizeGraphMarkers(node.summary)
+			: node.summary
+		const entry = summary
+			? `${SECTION_OPEN}${header}${SECTION_CLOSE} ${summary}${relLines ? "\n" + relLines : ""}`
+			: `${SECTION_OPEN}${header}${SECTION_CLOSE}${relLines ? "\n" + relLines : ""}`
 		legendaryEntries.push(entry)
 	}
 
@@ -357,27 +400,30 @@ export async function buildGraphContext(params: {
 		const speaker = l1NodeMap.get(speakerNodeId)
 		const speakerHeader = nodeName(speaker, "Speaker")
 		sections.push(
-			`[${speakerHeader}'s relationships]\n` +
+			`${SECTION_OPEN}${speakerHeader}'s relationships${SECTION_CLOSE}\n` +
 				l1Rels.map((r) => `- ${formatRel(r, l1NodeMap)}`).join("\n")
 		)
 	}
 
 	if (l2Rels.length > 0) {
 		const speaker = l1NodeMap.get(speakerNodeId)
-		const speakerLabel = speaker?.name ?? "the speaker"
+		const speakerLabel = speaker
+			? neutralizeGraphMarkers(speaker.name)
+			: "the speaker"
 		sections.push(
-			`[How others in this scene see ${speakerLabel}]\n` +
+			`${SECTION_OPEN}How others in this scene see ${speakerLabel}${SECTION_CLOSE}\n` +
 				l2Rels.map((r) => `- ${formatRel(r, l2NodeMap)}`).join("\n")
 		)
 	}
 
 	if (legendaryEntries.length > 0) {
 		sections.push(
-			`[Legendary / historical figures]\n` + legendaryEntries.join("\n")
+			`${SECTION_OPEN}Legendary / historical figures${SECTION_CLOSE}\n` +
+				legendaryEntries.join("\n")
 		)
 	}
 
 	if (sections.length === 0) return null
 
-	return `\n\n--- Narrative Graph Context ---\n${sections.join("\n\n")}\n--- End Narrative Graph Context ---`
+	return `\n\n${GRAPH_CONTEXT_HEADER}\n${sections.join("\n\n")}\n${GRAPH_CONTEXT_FOOTER}`
 }

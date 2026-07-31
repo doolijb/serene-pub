@@ -13,8 +13,8 @@
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
 	)
-	let isAndroidWrapper = $derived(
-		systemSettingsCtx.settings?.isAndroidWrapper ?? false
+	let localEmbeddingsSupported = $derived(
+		systemSettingsCtx.settings?.localEmbeddingsSupported ?? true
 	)
 
 	let activeTab = $state<"queue" | "settings">("queue")
@@ -65,6 +65,9 @@
 	// Where a setup screen's "Back" link returns to — the raw chooser for a
 	// true first-time setup, or straight back to the configured summary when
 	// this setup screen was reached via "Switch to X" on an already-working setup.
+	let switchToLocalDisabled = $derived(
+		mode === "api" && !localEmbeddingsSupported
+	)
 	let backTarget: SettingsView = $derived(
 		vectorizationEnabled ? "configured" : "chooser"
 	)
@@ -420,7 +423,7 @@
 			{#if settingsView === "chooser"}
 				<!-- First-time setup: choose backend -->
 				<VectorizationSetupScreen
-					{isAndroidWrapper}
+					{localEmbeddingsSupported}
 					onChooseLocal={goToLocalSetup}
 					onChooseApi={goToApiSetup}
 				/>
@@ -1224,19 +1227,34 @@
 						</div>
 					{/if}
 
-					<!-- Switch backend — not offered on Android, where local can't work -->
-					{#if !(isAndroidWrapper && mode === "api")}
-						<button
-							class="btn btn-sm preset-tonal-primary w-full text-xs"
-							onclick={mode === "local"
+					<!-- Switch backend — ghosted/disabled (not hidden) when the
+					     switch target is Local and this platform can't load
+					     onnxruntime-node's native binary (Android, Intel Macs,
+					     ...), so the option stays visible with an explanation
+					     rather than silently disappearing. Switching away from
+					     Local is always allowed — that's the escape hatch for a
+					     data dir inherited from different hardware. -->
+					<button
+						class="btn btn-sm preset-tonal-primary w-full text-xs"
+						class:opacity-50={switchToLocalDisabled}
+						class:cursor-not-allowed={switchToLocalDisabled}
+						disabled={switchToLocalDisabled}
+						aria-disabled={switchToLocalDisabled}
+						onclick={switchToLocalDisabled
+							? undefined
+							: mode === "local"
 								? goToApiSetup
 								: goToLocalSetup}
-						>
-							<Icons.RefreshCw size={12} aria-hidden="true" />
-							Switch to {mode === "local"
-								? "External API"
-								: "Local Model"}
-						</button>
+					>
+						<Icons.RefreshCw size={12} aria-hidden="true" />
+						Switch to {mode === "local"
+							? "External API"
+							: "Local Model"}
+					</button>
+					{#if switchToLocalDisabled}
+						<p class="text-surface-700-300 -mt-2 text-xs">
+							Not supported on this platform
+						</p>
 					{/if}
 
 					<button

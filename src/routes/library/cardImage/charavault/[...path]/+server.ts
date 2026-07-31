@@ -14,7 +14,9 @@
 import type { RequestHandler } from "@sveltejs/kit"
 import { authenticateRequest } from "$lib/server/auth/authenticateRequest"
 import { fetchCharaVaultCardResponse } from "$lib/server/cardSources/charaVault/charaVaultSource"
+import { RateLimitTimeoutError } from "$lib/server/cardSources/charaVault/rateLimiter"
 import {
+	CardSourceInvalidRefError,
 	CardSourceRateLimitedError,
 	CardSourceUnavailableError
 } from "$lib/server/cardSources/types"
@@ -60,7 +62,15 @@ export const GET: RequestHandler = async (event) => {
 		// genuinely needs the complete file up front) while also teeing the
 		// bytes to disk in the background so the next request for this same
 		// card is a cache hit instead of another upstream round trip.
-		const upstream = await fetchCharaVaultCardResponse({ folder, file })
+		// "background" priority: thumbnails are the bulk/opportunistic caller
+		// of the shared CharaVault rate limiter — they must never make an
+		// interactive search or Load More click wait behind them (see
+		// rateLimiter.ts). A slot may time out under sustained interactive
+		// traffic; that's handled below rather than left to hang.
+		const upstream = await fetchCharaVaultCardResponse(
+			{ folder, file },
+			"background"
+		)
 		const [toClient, toCache] = upstream.body!.tee()
 
 		// Deliberately not awaited — the whole point of tee() is to let the
@@ -82,7 +92,23 @@ export const GET: RequestHandler = async (event) => {
 		})
 	} catch (e) {
 		if (e instanceof CardSourceRateLimitedError) {
-			return new Response("Rate limited", { status: 429 })
+			return new Response("Rate limited", {
+				status: 429,
+				headers: { "Retry-After": "5" }
+			})
+		}
+		if (e instanceof RateLimitTimeoutError) {
+			// Queued too long behind higher-priority (search/detail) traffic,
+			// or the background queue was already full — tell the client to
+			// retry rather than hanging the request. The grid already
+			// tolerates a missing/failed thumbnail with a fallback icon.
+			return new Response("Rate limited", {
+				status: 429,
+				headers: { "Retry-After": "5" }
+			})
+		}
+		if (e instanceof CardSourceInvalidRefError) {
+			return new Response("Bad request", { status: 400 })
 		}
 		if (e instanceof CardSourceUnavailableError) {
 			return new Response("Unavailable", { status: 502 })

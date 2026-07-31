@@ -12,18 +12,21 @@
 		socket.emit("characters:delete", { id })
 	}
 
+	function handleCharactersList(msg: Sockets.Characters.List.Response) {
+		characters = msg.characterList || []
+		loaded = true
+	}
+	function handleCharactersDelete() {
+		socket.emit("characters:list", {})
+	}
+
 	onMount(() => {
-		socket.on("characters:list", (msg) => {
-			characters = msg.characterList || []
-			loaded = true
-		})
-		socket.on("characters:delete", () => {
-			socket.emit("characters:list", {})
-		})
+		socket.on("characters:list", handleCharactersList)
+		socket.on("characters:delete", handleCharactersDelete)
 		socket.emit("characters:list", {})
 		return () => {
-			socket.off("characters:list")
-			socket.off("characters:delete")
+			socket.off("characters:list", handleCharactersList)
+			socket.off("characters:delete", handleCharactersDelete)
 		}
 	})
 </script>

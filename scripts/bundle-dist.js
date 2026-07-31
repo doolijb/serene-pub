@@ -7,13 +7,13 @@ import { fileURLToPath } from "url"
 import child_process from "child_process"
 
 import pkg from "../package.json" with { type: "json" }
+import { pruneDist } from "./prune-dist.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const version = pkg.version
 const distDir = path.resolve(__dirname, "../dist")
 const buildDir = path.resolve(__dirname, "../build")
-const staticDir = path.resolve(__dirname, "../static")
 const filesToCopy = ["LICENSE", "README.md", "NOTICE.md", "KEYBINDINGS.md"]
 
 function copyRecursive(src, dest) {
@@ -302,9 +302,12 @@ if (!target) {
 			fs.rmSync(outDir, { recursive: true, force: true })
 		fs.mkdirSync(outDir, { recursive: true })
 
-		// Copy build and static
+		// Copy build. static/ is NOT copied separately — build/client already
+		// contains everything SvelteKit put there from static/ at build time,
+		// so a second copy was pure duplication (see userSettings.ts's
+		// manifest-path fallback for the one runtime reader that used to
+		// depend on the static/ copy specifically).
 		copyRecursive(buildDir, path.join(outDir, "build"))
-		copyRecursive(staticDir, path.join(outDir, "static"))
 
 		// Copy node_modules (assuming it's already prepared for this target)
 		copyRecursive(
@@ -408,6 +411,11 @@ if (!target) {
 			path.resolve(__dirname, "../drizzle"),
 			path.join(outDir, "drizzle")
 		)
+
+		// Strip known-dead weight from the assembled copy — never touches the
+		// developer's real node_modules/build/drizzle, only outDir's copies.
+		console.log("Pruning dist...")
+		pruneDist(outDir, target)
 
 		// Write minimal package.json
 		fs.writeFileSync(

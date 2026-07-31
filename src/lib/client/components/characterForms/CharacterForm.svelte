@@ -440,85 +440,150 @@
 		}
 	})
 
+	function handleCharactersCreate(res: any) {
+		isSaving = false
+		if (res.character) {
+			validationErrors = {} // Clear any validation errors on success
+			toaster.success({
+				title: "Character Created",
+				description: `Character "${res.character.name}" created successfully.`
+			})
+			// Reset original data to match current state before closing
+			originalCharacterData = { ...editCharacterData }
+			// Directly set hasChanges to false to prevent race condition
+			hasChanges = false
+			closeForm()
+		}
+	}
+
+	function handleCharactersUpdate(res: any) {
+		// characters:update is emitToUser — broadcast to every open tab for
+		// this user, not just the requester. Without this check, a save in
+		// another tab (for a different character) silently closes this
+		// form and discards whatever is being edited here.
+		if (res.character?.id !== characterId) return
+		isSaving = false
+		if (res.character) {
+			validationErrors = {} // Clear any validation errors on success
+			toaster.success({
+				title: "Character Updated",
+				description: `Character "${res.character.name}" updated successfully.`
+			})
+			// Reset original data to match current state before closing
+			originalCharacterData = { ...editCharacterData }
+			// Directly set hasChanges to false to prevent race condition
+			hasChanges = false
+			closeForm()
+		}
+	}
+
+	function handleCharactersCreateError(msg: Sockets.ErrorResponse) {
+		isSaving = false
+		toaster.error({
+			title: "Failed to create character",
+			description: msg.error
+		})
+	}
+
+	function handleCharactersUpdateError(msg: Sockets.ErrorResponse) {
+		isSaving = false
+		toaster.error({
+			title: "Failed to update character",
+			description: msg.error
+		})
+	}
+
+	function handleCharactersGet(message: Sockets.Characters.Get.Response) {
+		character = message.character
+		if (!message.character) return
+		const characterData = { ...message.character }
+
+		// Handle migration from old string format to new array format
+		if (typeof characterData.exampleDialogues === "string") {
+			characterData.exampleDialogues = (
+				characterData.exampleDialogues as string
+			)
+				.split("<START>")
+				.map((d: string) => d.trim())
+				.filter((d: string) => d !== "")
+		} else if (!Array.isArray(characterData.exampleDialogues)) {
+			characterData.exampleDialogues = []
+		}
+
+		editCharacterData = {
+			...editCharacterData,
+			id: characterData.id,
+			name: characterData.name,
+			nickname: characterData.nickname ?? "",
+			aliases: Array.isArray(characterData.aliases)
+				? characterData.aliases
+				: [],
+			summary: characterData.summary ?? "",
+			avatar: characterData.avatar ?? "",
+			description: characterData.description ?? "",
+			personality: characterData.personality ?? "",
+			scenario: characterData.scenario ?? "",
+			firstMessage: characterData.firstMessage ?? "",
+			alternateGreetings: Array.isArray(characterData.alternateGreetings)
+				? characterData.alternateGreetings
+				: [],
+			exampleDialogues: characterData.exampleDialogues,
+			creatorNotes: characterData.creatorNotes ?? "",
+			creatorNotesMultilingual:
+				characterData.creatorNotesMultilingual ?? {},
+			groupOnlyGreetings: Array.isArray(characterData.groupOnlyGreetings)
+				? characterData.groupOnlyGreetings
+				: [],
+			postHistoryInstructions: characterData.postHistoryInstructions ?? "",
+			isFavorite: characterData.isFavorite ?? false,
+			lorebookId: characterData.lorebookId ?? null,
+			characterVersion: characterData.characterVersion ?? undefined,
+			creator: characterData.creator ?? "",
+			category: characterData.category ?? "",
+			tags: characterData.tags ?? [],
+			_avatar: "",
+			_avatarFile: undefined
+		}
+		originalCharacterData = { ...editCharacterData }
+	}
+
+	function handleLorebooksList(message: Sockets.Lorebooks.List.Response) {
+		lorebookList =
+			message.lorebookList.sort((a, b) => (a.id ?? 0) - (b.id ?? 0)) || []
+	}
+
+	function handleTagsList(message: any) {
+		availableTags = message.tagsList || []
+	}
+
+	function handleUpdateShowAllCharacterFields(message: any) {
+		if (message.success) {
+			toaster.success({
+				title: `Character fields display ${message.enabled ? "expanded" : "simplified"}`
+			})
+		} else {
+			toaster.error({
+				title: "Failed to update character fields setting"
+			})
+		}
+	}
+
 	onMount(() => {
 		onCancel = handleCancel
 
 		// Add keyboard event listener
 		document.addEventListener("keydown", handleKeydown)
 
-		socket.on("characters:create", (res: any) => {
-			isSaving = false
-			if (res.character) {
-				validationErrors = {} // Clear any validation errors on success
-				toaster.success({
-					title: "Character Created",
-					description: `Character "${res.character.name}" created successfully.`
-				})
-				// Reset original data to match current state before closing
-				originalCharacterData = { ...editCharacterData }
-				// Directly set hasChanges to false to prevent race condition
-				hasChanges = false
-				closeForm()
-			}
-		})
-
-		socket.on("characters:update", (res: any) => {
-			isSaving = false
-			if (res.character) {
-				validationErrors = {} // Clear any validation errors on success
-				toaster.success({
-					title: "Character Updated",
-					description: `Character "${res.character.name}" updated successfully.`
-				})
-				// Reset original data to match current state before closing
-				originalCharacterData = { ...editCharacterData }
-				// Directly set hasChanges to false to prevent race condition
-				hasChanges = false
-				closeForm()
-			}
-		})
-
-		socket.on("characters:create:error", (msg: Sockets.ErrorResponse) => {
-			isSaving = false
-			toaster.error({
-				title: "Failed to create character",
-				description: msg.error
-			})
-		})
-
-		socket.on("characters:update:error", (msg: Sockets.ErrorResponse) => {
-			isSaving = false
-			toaster.error({
-				title: "Failed to update character",
-				description: msg.error
-			})
-		})
-
+		socket.on("characters:create", handleCharactersCreate)
+		socket.on("characters:update", handleCharactersUpdate)
+		socket.on("characters:create:error", handleCharactersCreateError)
+		socket.on("characters:update:error", handleCharactersUpdateError)
+		socket.on("lorebooks:list", handleLorebooksList)
+		socket.on("tags:list", handleTagsList)
 		socket.on(
-			"lorebooks:list",
-			(message: Sockets.Lorebooks.List.Response) => {
-				lorebookList =
-					message.lorebookList.sort(
-						(a, b) => (a.id ?? 0) - (b.id ?? 0)
-					) || []
-			}
+			"userSettings:updateShowAllCharacterFields",
+			handleUpdateShowAllCharacterFields
 		)
-
-		socket.on("tags:list", (message: any) => {
-			availableTags = message.tagsList || []
-		})
-
-		socket.on("userSettings:updateShowAllCharacterFields", (message) => {
-			if (message.success) {
-				toaster.success({
-					title: `Character fields display ${message.enabled ? "expanded" : "simplified"}`
-				})
-			} else {
-				toaster.error({
-					title: "Failed to update character fields setting"
-				})
-			}
-		})
 
 		// Initialize with initialData if provided (for draft mode)
 		if (initialData) {
@@ -528,68 +593,7 @@
 			}
 			originalCharacterData = { ...editCharacterData }
 		} else if (characterId) {
-			socket.once(
-				"characters:get",
-				(message: Sockets.Characters.Get.Response) => {
-					character = message.character
-					if (!message.character) return
-					const characterData = { ...message.character }
-
-					// Handle migration from old string format to new array format
-					if (typeof characterData.exampleDialogues === "string") {
-						characterData.exampleDialogues = (
-							characterData.exampleDialogues as string
-						)
-							.split("<START>")
-							.map((d: string) => d.trim())
-							.filter((d: string) => d !== "")
-					} else if (!Array.isArray(characterData.exampleDialogues)) {
-						characterData.exampleDialogues = []
-					}
-
-					editCharacterData = {
-						...editCharacterData,
-						id: characterData.id,
-						name: characterData.name,
-						nickname: characterData.nickname ?? "",
-						aliases: Array.isArray(characterData.aliases)
-							? characterData.aliases
-							: [],
-						summary: characterData.summary ?? "",
-						avatar: characterData.avatar ?? "",
-						description: characterData.description ?? "",
-						personality: characterData.personality ?? "",
-						scenario: characterData.scenario ?? "",
-						firstMessage: characterData.firstMessage ?? "",
-						alternateGreetings: Array.isArray(
-							characterData.alternateGreetings
-						)
-							? characterData.alternateGreetings
-							: [],
-						exampleDialogues: characterData.exampleDialogues,
-						creatorNotes: characterData.creatorNotes ?? "",
-						creatorNotesMultilingual:
-							characterData.creatorNotesMultilingual ?? {},
-						groupOnlyGreetings: Array.isArray(
-							characterData.groupOnlyGreetings
-						)
-							? characterData.groupOnlyGreetings
-							: [],
-						postHistoryInstructions:
-							characterData.postHistoryInstructions ?? "",
-						isFavorite: characterData.isFavorite ?? false,
-						lorebookId: characterData.lorebookId ?? null,
-						characterVersion:
-							characterData.characterVersion ?? undefined,
-						creator: characterData.creator ?? "",
-						category: characterData.category ?? "",
-						tags: characterData.tags ?? [],
-						_avatar: "",
-						_avatarFile: undefined
-					}
-					originalCharacterData = { ...editCharacterData }
-				}
-			)
+			socket.once("characters:get", handleCharactersGet)
 			socket.emit("characters:get", { id: characterId })
 		}
 		socket.emit("lorebooks:list", {})
@@ -606,13 +610,17 @@
 	})
 
 	onDestroy(() => {
-		socket.off("characters:create")
-		socket.off("characters:update")
-		socket.off("characters:create:error")
-		socket.off("characters:update:error")
-		socket.off("characters:get")
-		socket.off("tags:list")
-		socket.off("userSettings:updateShowAllCharacterFields")
+		socket.off("characters:create", handleCharactersCreate)
+		socket.off("characters:update", handleCharactersUpdate)
+		socket.off("characters:create:error", handleCharactersCreateError)
+		socket.off("characters:update:error", handleCharactersUpdateError)
+		socket.off("characters:get", handleCharactersGet)
+		socket.off("lorebooks:list", handleLorebooksList)
+		socket.off("tags:list", handleTagsList)
+		socket.off(
+			"userSettings:updateShowAllCharacterFields",
+			handleUpdateShowAllCharacterFields
+		)
 
 		// Remove keyboard event listener and clear timeout
 		document.removeEventListener("keydown", handleKeydown)

@@ -31,8 +31,16 @@ jobs:
             - name: Generate release title
               id: release_title
               shell: bash
+              env:
+                  # Never interpolate ${{ github.ref_name }} directly into a
+                  # run: script body — GitHub substitutes it as raw text
+                  # before bash parses the script, so a maliciously crafted
+                  # tag name (anyone with tag-push access) could break out
+                  # and inject arbitrary shell commands. Routing it through
+                  # env: makes it a normal, safe shell variable expansion.
+                  REF_NAME: ${{ github.ref_name }}
               run: |
-                  TAG="${{ github.ref_name }}"
+                  TAG="$REF_NAME"
                   VERSION="${TAG#v}"  # Remove 'v' prefix
 
                   # Extract base version and suffix
@@ -119,6 +127,10 @@ jobs:
 
     build-and-release:
         needs: test
+        # Explicit, narrowed from whatever the repo-wide GITHUB_TOKEN default
+        # is — this job creates releases and uploads assets, nothing else.
+        permissions:
+            contents: write
         strategy:
             matrix:
                 include:
@@ -290,6 +302,10 @@ jobs:
             - name: Bundle for ${{ matrix.target }}
               run: node scripts/bundle-dist.js ${{ matrix.target }}
 
+            - name: Check dist bundle size
+              shell: bash
+              run: node scripts/check-dist-size.js ${{ matrix.target }}
+
             - name: Create production environment example
               shell: bash
               run: |
@@ -332,6 +348,8 @@ jobs:
             - name: Zip dist directory (Windows)
               if: runner.os == 'Windows'
               shell: pwsh
+              env:
+                  REF_NAME: ${{ github.ref_name }}
               run: |
                   cd dist
                   $distDir = Get-ChildItem -Directory -Name "serene-pub-*-${{ matrix.target }}" | Select-Object -First 1
@@ -340,11 +358,13 @@ jobs:
                     Get-ChildItem
                     exit 1
                   }
-                  Compress-Archive -Path $distDir -DestinationPath "../serene-pub-${{ github.ref_name }}-${{ matrix.target }}.zip"
+                  Compress-Archive -Path $distDir -DestinationPath "../serene-pub-$env:REF_NAME-${{ matrix.target }}.zip"
 
             - name: Zip dist directory (Unix)
               if: runner.os != 'Windows'
               shell: bash
+              env:
+                  REF_NAME: ${{ github.ref_name }}
               run: |
                   cd dist
                   DIST_DIR=$(ls -d serene-pub-*-${{ matrix.target }} 2>/dev/null | head -1)
@@ -353,7 +373,7 @@ jobs:
                     ls -la
                     exit 1
                   fi
-                  zip -r "../serene-pub-${{ github.ref_name }}-${{ matrix.target }}.zip" "$DIST_DIR"
+                  zip -r "../serene-pub-$REF_NAME-${{ matrix.target }}.zip" "$DIST_DIR"
 
             - name: Upload release assets
               uses: softprops/action-gh-release@v2

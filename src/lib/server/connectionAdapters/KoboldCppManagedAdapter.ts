@@ -11,10 +11,23 @@ import { db } from "$lib/server/db"
 import * as subprocessManager from "$lib/server/koboldcpp/subprocessManager"
 import {
 	ensureModelLoaded,
-	DEFAULT_MANAGED_CONFIG
+	DEFAULT_MANAGED_CONFIG,
+	resetTtl,
+	getLoadedSignature
 } from "$lib/server/koboldcpp/modelManager"
+import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 
-const PREFLIGHT_RETRY_DELAY_MS = 2000
+// ensureModelLoaded() already waits out a normal, in-progress load — these
+// retries exist only for the rarer case where the subprocess itself needs a
+// fresh respawn (it genuinely crashed rather than just being slow). Each
+// attempt here is a full "check/spawn/load" pass, not a quick recheck, so
+// this stays a small, short list rather than a long one — the whole point
+// of one user action (a summary, a message) failing outright shouldn't be
+// "the respawn needed a 4th try" territory; a handful with light backoff
+// covers a real crash-and-recover without turning a genuine, non-transient
+// failure (bad config, disabled manager) into a long silent wait before the
+// user sees anything.
+const PREFLIGHT_RETRY_DELAYS_MS = [2000, 4000]
 
 /**
  * A KoboldCPP connection that works with Serene Pub's built-in KoboldCPP
@@ -27,6 +40,81 @@ const PREFLIGHT_RETRY_DELAY_MS = 2000
  * on the connection itself.
  */
 class KoboldCppManagedAdapter extends KoboldCppAdapter {
+	/**
+	 * Overrides KoboldCppAdapter.generate() only to reset the managed
+	 * subprocess's TTL unload timer once generation actually completes —
+	 * resetTtl() otherwise only ever runs during preflight (before
+	 * generation starts), so a response slower than ttlSecs (default 300s)
+	 * could have its model unloaded mid-stream by this app's own timer.
+	 *
+	 * The reset is conditioned on a fresh liveness check, not unconditional:
+	 * if the TTL timer is what killed the model mid-generation (the exact
+	 * bug this fixes) or the subprocess crashed, the stream errors out, and
+	 * blindly resetting here would re-arm an unload timer for a model
+	 * that's already gone — masking the real state instead of letting the
+	 * next preflight() reload cleanly. Success always resets; failure only
+	 * resets when the model is confirmed still there.
+	 */
+	async generate() {
+		const resetIfStillAlive = async () => {
+			const settings = await db.query.koboldCppSettings.findFirst()
+			if (!settings) return
+			// Mirrors attemptPreflight's own isAlive construction — only trust
+			// process liveness when we actually spawned/own the subprocess.
+			const isAlive =
+				settings.koboldCppManagedMode === "managed" &&
+				!subprocessManager.isExternal()
+					? subprocessManager.isRunning()
+					: true
+			if (!isAlive) return
+			// getLoadedSignature() resets to null once this process believes
+			// nothing is loaded (e.g. after a confirmed unload) — don't
+			// re-arm a timer for a model already considered gone.
+			if (!getLoadedSignature()) return
+			resetTtl(
+				this.connection.baseUrl!,
+				settings.koboldCppManagedAdminPassword ?? "",
+				settings.koboldCppManagedModelTtlSecs ?? 300
+			)
+		}
+
+		let result: Awaited<ReturnType<KoboldCppAdapter["generate"]>>
+		try {
+			result = await super.generate()
+		} catch (err) {
+			// A non-streaming failure (or a setup error before the streaming
+			// closure was even returned) throws here directly, per B1's fix —
+			// still needs the same liveness-conditioned reset as the
+			// streaming failure path below.
+			await resetIfStillAlive()
+			throw err
+		}
+
+		if (typeof result.completionResult === "function") {
+			const originalStream = result.completionResult
+			return {
+				...result,
+				completionResult: async (
+					contentCb: (chunk: string) => void,
+					thinkingCb?: (chunk: string) => void
+				) => {
+					try {
+						await originalStream(contentCb, thinkingCb)
+						await resetIfStillAlive()
+					} catch (err) {
+						await resetIfStillAlive()
+						throw err
+					}
+				}
+			}
+		}
+
+		// Non-streaming success: generation is already fully complete by the
+		// time generate() returns.
+		await resetIfStillAlive()
+		return result
+	}
+
 	async preflight(signal?: AbortSignal): Promise<void> {
 		const settings = await db.query.koboldCppSettings.findFirst()
 		if (!settings?.koboldCppManagerEnabled) {
@@ -53,15 +141,20 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 			baseUrl: settings.koboldCppManagerBaseUrl
 		}
 
-		try {
-			await this.attemptPreflight(settings, adminDir, signal, 1)
-		} catch (err: any) {
-			if (signal?.aborted) throw err
-			console.warn(
-				`[KoboldCPP] preflight: attempt 1 failed (${err?.message || err}) — retrying once...`
-			)
-			await new Promise((r) => setTimeout(r, PREFLIGHT_RETRY_DELAY_MS))
-			await this.attemptPreflight(settings, adminDir, signal, 2)
+		const totalAttempts = PREFLIGHT_RETRY_DELAYS_MS.length + 1
+		for (let attemptNum = 1; ; attemptNum++) {
+			try {
+				await this.attemptPreflight(settings, adminDir, signal, attemptNum)
+				return
+			} catch (err: any) {
+				if (signal?.aborted) throw err
+				const delayMs = PREFLIGHT_RETRY_DELAYS_MS[attemptNum - 1]
+				if (delayMs === undefined) throw err
+				console.warn(
+					`[KoboldCPP] preflight: attempt ${attemptNum}/${totalAttempts} failed (${err?.message || err}) — retrying in ${delayMs}ms...`
+				)
+				await new Promise((r) => setTimeout(r, delayMs))
+			}
 		}
 	}
 
@@ -147,7 +240,16 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 				adminPassword: settings.koboldCppManagedAdminPassword ?? "",
 				ttlSecs: settings.koboldCppManagedModelTtlSecs ?? 300,
 				contextSize,
-				signal
+				signal,
+				// Only trust process liveness as the wait signal when we
+				// actually spawned/own this subprocess — an adopted external
+				// instance has no such guarantee, so ensureModelLoaded falls
+				// back to its fixed-timeout tolerance for that case instead.
+				isAlive:
+					settings.koboldCppManagedMode === "managed" &&
+					!subprocessManager.isExternal()
+						? () => subprocessManager.isRunning()
+						: undefined
 			})
 			console.log(
 				`[KoboldCPP] preflight attempt ${attemptNum}: ensureModelLoaded completed OK`
@@ -191,8 +293,8 @@ async function testConnection(
 	try {
 		const settings = await db.query.koboldCppSettings.findFirst()
 		const baseUrl =
-			settings?.koboldCppManagerBaseUrl ||
-			connection.baseUrl ||
+			normalizeBaseUrl(settings?.koboldCppManagerBaseUrl) ||
+			normalizeBaseUrl(connection.baseUrl) ||
 			"http://localhost:5001"
 		const response = await fetch(`${baseUrl}/api/extra/version`, {
 			method: "GET",
@@ -233,8 +335,8 @@ async function listModels(
 	try {
 		const settings = await db.query.koboldCppSettings.findFirst()
 		const baseUrl =
-			settings?.koboldCppManagerBaseUrl ||
-			connection.baseUrl ||
+			normalizeBaseUrl(settings?.koboldCppManagerBaseUrl) ||
+			normalizeBaseUrl(connection.baseUrl) ||
 			"http://localhost:5001"
 
 		const currentModel =

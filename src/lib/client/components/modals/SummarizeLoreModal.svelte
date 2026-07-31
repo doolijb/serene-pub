@@ -3,7 +3,14 @@
 	import * as skio from "sveltekit-io"
 	import { onDestroy, onMount } from "svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { resolveOrCreateBindingByName } from "$lib/client/utils/createLorebookBinding"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
+
+	/** A name not yet backed by a real lorebookBindings id — either
+	 * suggested by character extraction or typed manually in review. Only
+	 * resolved to a real binding (matched or newly created) at Save. */
+	type PendingNewCharacter = { name: string; source: "suggested" | "manual" }
 
 	function computeDefaultDate(
 		entries: Sockets.HistoryEntries.List.Response["historyEntryList"]
@@ -61,6 +68,9 @@
 	}: Props = $props()
 
 	const socket = skio.get()!
+	// Only used for resolveOrCreateBindingByName, which needs the type-safe
+	// on/off/emit wrapper the rest of this file's older code predates.
+	const typedSocket = useTypedSocket()
 
 	// ── Internal step (mapped to AiTaskStep for the shell) ───────────
 	type InternalStep = "configure" | "generating" | "review" | "error"
@@ -126,7 +136,9 @@
 	let resolvedBindingId = $state<number | null>(null)
 
 	// ── Generating step state ────────────────────────────────────────
-	let summarizePhase = $state<"drafting" | "synthesizing">("drafting")
+	let summarizePhase = $state<
+		"drafting" | "synthesizing" | "naming" | "extracting"
+	>("drafting")
 	let currentBatch = $state(0)
 	let totalBatches = $state(1)
 	let partialSummary = $state<{ content?: string; raw?: string }>({})
@@ -140,31 +152,48 @@
 	let rawOutput = $state("")
 	let showRaw = $state(false)
 	let isSaving = $state(false)
-	let extractedParticipantCharacters = $state<string[]>([])
-	let extractedMentionedCharacters = $state<string[]>([])
-	let newParticipantInput = $state("")
-	let newMentionedInput = $state("")
+	let extractedParticipantCharacters = $state<number[]>([])
+	let extractedMentionedCharacters = $state<number[]>([])
+	let newParticipantId = $state<number | "">("")
+	let newMentionedId = $state<number | "">("")
+	let pendingNewParticipants = $state<PendingNewCharacter[]>([])
+	let pendingNewMentioned = $state<PendingNewCharacter[]>([])
+	let newParticipantName = $state("")
+	let newMentionedName = $state("")
+	let bindingNameById = $derived.by(() => {
+		const map = new Map<number, string>()
+		for (const b of lorebookBindings) map.set(b.id, b.name || b.binding)
+		return map
+	})
 
 	// ── Error step state ─────────────────────────────────────────────
 	let errorMessage = $state("")
 
 	// ── Derived ─────────────────────────────────────────────────────
 	let progressPercent = $derived(
-		summarizePhase === "synthesizing"
-			? 90
-			: totalBatches > 1
-				? Math.max(5, Math.round((currentBatch / totalBatches) * 80))
-				: currentBatch > 0
-					? 60
-					: 5
+		summarizePhase === "extracting"
+			? 97
+			: summarizePhase === "naming"
+				? 93
+				: summarizePhase === "synthesizing"
+					? 90
+					: totalBatches > 1
+						? Math.max(5, Math.round((currentBatch / totalBatches) * 80))
+						: currentBatch > 0
+							? 60
+							: 5
 	)
 
 	let progressLabel = $derived(
-		summarizePhase === "synthesizing"
-			? "Synthesizing final entry…"
-			: currentBatch > 0
-				? `Drafting part ${currentBatch} of ${totalBatches}…`
-				: "Starting…"
+		summarizePhase === "extracting"
+			? "Extracting characters…"
+			: summarizePhase === "naming"
+				? "Naming entry…"
+				: summarizePhase === "synthesizing"
+					? "Synthesizing final entry…"
+					: currentBatch > 0
+						? `Drafting part ${currentBatch} of ${totalBatches}…`
+						: "Starting…"
 	)
 
 	let canGenerate = $derived(
@@ -212,8 +241,12 @@
 			reviewContent = ""
 			extractedParticipantCharacters = []
 			extractedMentionedCharacters = []
-			newParticipantInput = ""
-			newMentionedInput = ""
+			newParticipantId = ""
+			newMentionedId = ""
+			pendingNewParticipants = []
+			pendingNewMentioned = []
+			newParticipantName = ""
+			newMentionedName = ""
 			trace = []
 			showTrace = false
 			expandedTraceIdx = null
@@ -248,6 +281,12 @@
 		resolvedBindingId = data.lorebookBindingId ?? null
 		extractedParticipantCharacters = data.participantCharacters ?? []
 		extractedMentionedCharacters = data.mentionedCharacters ?? []
+		pendingNewParticipants = (data.suggestedParticipantCharacters ?? []).map(
+			(name) => ({ name, source: "suggested" as const })
+		)
+		pendingNewMentioned = (data.suggestedMentionedCharacters ?? []).map(
+			(name) => ({ name, source: "suggested" as const })
+		)
 		step = "review"
 	}
 
@@ -276,19 +315,54 @@
 		}
 	}
 
+	function handleLorebookCreateError(data: { error: string }) {
+		isCreatingLorebook = false
+		toaster.error({
+			title: "Failed to create lorebook",
+			description: data.error
+		})
+	}
+
 	function handleHistoryEntriesList(
 		data: Sockets.HistoryEntries.List.Response
 	) {
-		historyEntryList = data.historyEntryList
+		if (data.lorebookId === lorebookId) {
+			historyEntryList = data.historyEntryList
+		}
 	}
 
 	function handleHistoryEntryCreate(
 		data: Sockets.HistoryEntries.Create.Response
 	) {
 		isCreatingHistoryEntry = false
-		if (data.historyEntry && loreType === "scene") {
-			selectedHistoryEntryId = data.historyEntry.id
+		if (data.historyEntry) {
+			// Don't rely on a subsequent historyEntries:list refresh to show
+			// this entry — in a busy chat (concurrent message generation,
+			// vectorization), that refresh can be one of several in flight
+			// and an older, slower one can resolve last and overwrite this
+			// entry right back out of the list. Apply it locally so the
+			// modal is correct regardless of refresh ordering.
+			if (!historyEntryList.some((e) => e.id === data.historyEntry!.id)) {
+				historyEntryList = [...historyEntryList, data.historyEntry]
+			}
+			if (loreType === "scene") {
+				selectedHistoryEntryId = data.historyEntry.id
+			}
 		}
+	}
+
+	// Without this, a failed create (e.g. the lorebook was deleted/detached
+	// out from under this modal, or any other server-side error) left
+	// isCreatingHistoryEntry stuck true forever — the "New"/"Create New
+	// Entry" button would spin indefinitely with no way to retry, since
+	// historyEntries:create never fires and this was the only place that
+	// cleared the loading state.
+	function handleHistoryEntryCreateError(data: { error: string }) {
+		isCreatingHistoryEntry = false
+		toaster.error({
+			title: "Failed to create history entry",
+			description: data.error
+		})
 	}
 
 	function handleLorebookBindingList(
@@ -299,16 +373,31 @@
 		}
 	}
 
+	// Per-dispatch staleness guard for the chats:summarize:* events —
+	// generate() below registers fresh listeners closing over the token
+	// current at dispatch time, and stores their cleanup so a superseding
+	// call, a cancel, or unmount can all tear down a stale/in-flight
+	// generation's listeners rather than leaving them registered.
+	let activeGenerationToken = 0
+	let activeCleanup: (() => void) | null = null
+
 	onMount(() => {
-		socket.on("chats:summarize:progress", handleProgress)
-		socket.on("chats:summarize:complete", handleComplete)
-		socket.on("chats:summarize:error", handleError)
-		socket.on("chats:summarize:trace", handleTrace)
+		// chats:summarize:progress/complete/error/trace are NOT registered
+		// here — this component stays mounted for the whole chat page
+		// session (unlike ProcessSceneModal, which remounts fresh per use),
+		// so a single persistent listener can't distinguish a stale,
+		// already-superseded generation's events from the current one. See
+		// generate()'s per-dispatch registration below instead.
 		socket.on("lorebooks:list", handleLorebooksList)
 		socket.on("chats:setLorebook", handleSetLorebook)
 		socket.on("lorebooks:create", handleLorebookCreate)
+		socket.on("lorebooks:create:error", handleLorebookCreateError)
 		socket.on("historyEntries:list", handleHistoryEntriesList)
 		socket.on("historyEntries:create", handleHistoryEntryCreate)
+		socket.on(
+			"historyEntries:create:error",
+			handleHistoryEntryCreateError
+		)
 		socket.on("lorebooks:bindingList", handleLorebookBindingList)
 		socket.emit("lorebooks:list", {})
 	})
@@ -316,15 +405,14 @@
 	onDestroy(() => {
 		// skio.get()! returns Server | Socket union — .off() signatures are incompatible
 		const s = socket as any
-		s.off("chats:summarize:progress", handleProgress)
-		s.off("chats:summarize:complete", handleComplete)
-		s.off("chats:summarize:error", handleError)
-		s.off("chats:summarize:trace", handleTrace)
+		activeCleanup?.()
 		s.off("lorebooks:list", handleLorebooksList)
 		s.off("chats:setLorebook", handleSetLorebook)
 		s.off("lorebooks:create", handleLorebookCreate)
+		s.off("lorebooks:create:error", handleLorebookCreateError)
 		s.off("historyEntries:list", handleHistoryEntriesList)
 		s.off("historyEntries:create", handleHistoryEntryCreate)
+		s.off("historyEntries:create:error", handleHistoryEntryCreateError)
 		s.off("lorebooks:bindingList", handleLorebookBindingList)
 	})
 
@@ -370,12 +458,56 @@
 	}
 
 	function generate() {
+		// A truly-overlapping call (shouldn't normally happen — the UI
+		// disables re-clicking Generate while step === "generating" — but
+		// cheap to guard regardless) would otherwise leak the previous
+		// dispatch's listeners, since its :complete/:error may never arrive
+		// to trigger its own self-unsubscribe.
+		activeCleanup?.()
+
+		activeGenerationToken += 1
+		const token = activeGenerationToken
+
+		const onProgress = (data: Sockets.Chats.Summarize.Progress) => {
+			if (token !== activeGenerationToken) return
+			handleProgress(data)
+		}
+		const onTrace = (entry: Sockets.Chats.Summarize.TraceEntry) => {
+			if (token !== activeGenerationToken) return
+			handleTrace(entry)
+		}
+		const onComplete = (data: Sockets.Chats.Summarize.Response) => {
+			if (token !== activeGenerationToken) return
+			cleanup()
+			handleComplete(data)
+		}
+		const onError = (data: Sockets.Chats.Summarize.ErrorResponse) => {
+			if (token !== activeGenerationToken) return
+			cleanup()
+			handleError(data)
+		}
+		function cleanup() {
+			const s = socket as any
+			s.off("chats:summarize:progress", onProgress)
+			s.off("chats:summarize:complete", onComplete)
+			s.off("chats:summarize:error", onError)
+			s.off("chats:summarize:trace", onTrace)
+			if (activeCleanup === cleanup) activeCleanup = null
+		}
+		activeCleanup = cleanup
+		socket.on("chats:summarize:progress", onProgress)
+		socket.on("chats:summarize:complete", onComplete)
+		socket.on("chats:summarize:error", onError)
+		socket.on("chats:summarize:trace", onTrace)
+
 		step = "generating"
 		summarizePhase = "drafting"
 		currentBatch = 0
 		totalBatches = 1
 		partialSummary = {}
 		resolvedBindingId = null
+		pendingNewParticipants = []
+		pendingNewMentioned = []
 		trace = []
 		showTrace = false
 		expandedTraceIdx = null
@@ -394,25 +526,53 @@
 		} satisfies Sockets.Chats.Summarize.Params)
 	}
 
-	function saveEntry() {
-		if (!canSave || !lorebookId) return
+	async function saveEntry() {
+		if (!canSave || !lorebookId || isSaving) return
 		isSaving = true
 
 		if (loreType === "scene") {
-			socket.emit("scenes:create", {
-				scene: {
-					lorebookId,
-					chatId,
-					historyEntryId: selectedHistoryEntryId
-						? Number(selectedHistoryEntryId)
-						: null,
-					name: reviewName.trim() || null,
-					summary: reviewContent.trim(),
-					selectedMessageIds,
-					participantCharacters: extractedParticipantCharacters,
-					mentionedCharacters: extractedMentionedCharacters
+			try {
+				const participantIds = [...extractedParticipantCharacters]
+				const mentionedIds = [...extractedMentionedCharacters]
+				for (const p of pendingNewParticipants) {
+					const { id } = await resolveOrCreateBindingByName(
+						typedSocket,
+						lorebookId,
+						p.name
+					)
+					participantIds.push(id)
 				}
-			})
+				for (const m of pendingNewMentioned) {
+					const { id } = await resolveOrCreateBindingByName(
+						typedSocket,
+						lorebookId,
+						m.name
+					)
+					mentionedIds.push(id)
+				}
+
+				socket.emit("scenes:create", {
+					scene: {
+						lorebookId,
+						chatId,
+						historyEntryId: selectedHistoryEntryId
+							? Number(selectedHistoryEntryId)
+							: null,
+						name: reviewName.trim() || null,
+						summary: reviewContent.trim(),
+						selectedMessageIds,
+						participantCharacters: [...new Set(participantIds)],
+						mentionedCharacters: [...new Set(mentionedIds)]
+					}
+				})
+			} catch (err) {
+				toaster.error({
+					title: "Failed to save new character",
+					description: err instanceof Error ? err.message : undefined
+				})
+				isSaving = false
+				return
+			}
 		} else if (loreType === "world") {
 			socket.emit("worldLoreEntries:create", {
 				worldLoreEntry: {
@@ -456,25 +616,48 @@
 	}
 
 	function addParticipant() {
-		const name = newParticipantInput.trim()
-		if (name && !extractedParticipantCharacters.includes(name)) {
+		if (newParticipantId === "") return
+		const id = Number(newParticipantId)
+		if (!extractedParticipantCharacters.includes(id)) {
 			extractedParticipantCharacters = [
 				...extractedParticipantCharacters,
-				name
+				id
 			]
 		}
-		newParticipantInput = ""
+		newParticipantId = ""
 	}
 
 	function addMentioned() {
-		const name = newMentionedInput.trim()
-		if (name && !extractedMentionedCharacters.includes(name)) {
+		if (newMentionedId === "") return
+		const id = Number(newMentionedId)
+		if (!extractedMentionedCharacters.includes(id)) {
 			extractedMentionedCharacters = [
 				...extractedMentionedCharacters,
-				name
+				id
 			]
 		}
-		newMentionedInput = ""
+		newMentionedId = ""
+	}
+
+	function pendingNameTaken(name: string, list: PendingNewCharacter[]) {
+		return list.some((p) => p.name.toLowerCase() === name.toLowerCase())
+	}
+
+	function addManualParticipant() {
+		const name = newParticipantName.trim()
+		if (!name || pendingNameTaken(name, pendingNewParticipants)) return
+		pendingNewParticipants = [
+			...pendingNewParticipants,
+			{ name, source: "manual" }
+		]
+		newParticipantName = ""
+	}
+
+	function addManualMentioned() {
+		const name = newMentionedName.trim()
+		if (!name || pendingNameTaken(name, pendingNewMentioned)) return
+		pendingNewMentioned = [...pendingNewMentioned, { name, source: "manual" }]
+		newMentionedName = ""
 	}
 </script>
 
@@ -725,6 +908,7 @@
 					id="summarize-topic"
 					class="input text-sm"
 					type="text"
+					maxlength="300"
 					placeholder={loreType === "character"
 						? 'e.g. "abilities", "relationship with Kira", "past"'
 						: 'e.g. "the guards in the Labyrinth of Descia"'}
@@ -880,14 +1064,16 @@
 						</span>
 					</p>
 					<div class="flex flex-wrap gap-1.5">
-						{#each extractedParticipantCharacters as name, i}
+						{#each extractedParticipantCharacters as id, i}
 							<span
 								class="chip preset-tonal-primary flex items-center gap-1 text-xs"
 							>
-								{name}
+								{bindingNameById.get(id) ?? `#${id}`}
 								<button
 									class="hover:text-error-500 p-1.5"
-									aria-label="Remove participant {name}"
+									aria-label="Remove participant {bindingNameById.get(
+										id
+									) ?? id}"
 									onclick={() =>
 										(extractedParticipantCharacters =
 											extractedParticipantCharacters.filter(
@@ -899,18 +1085,21 @@
 							</span>
 						{/each}
 						<div class="flex gap-1">
-							<input
-								class="input input-sm w-28 text-xs"
-								placeholder="Add name…"
-								bind:value={newParticipantInput}
-								onkeydown={(e) =>
-									e.key === "Enter" && addParticipant()}
-								onblur={addParticipant}
-							/>
+							<select
+								class="select select-sm w-32 text-xs"
+								bind:value={newParticipantId}
+							>
+								<option value="">Add character…</option>
+								{#each lorebookBindings.filter((b) => !extractedParticipantCharacters.includes(b.id)) as b}
+									<option value={b.id}
+										>{b.name || b.binding}</option
+									>
+								{/each}
+							</select>
 							<button
 								class="btn btn-sm preset-filled-surface-400-600"
 								onclick={addParticipant}
-								disabled={!newParticipantInput.trim()}
+								disabled={newParticipantId === ""}
 							>
 								<Icons.Plus size={12} />
 							</button>
@@ -921,6 +1110,51 @@
 							None extracted.
 						</p>
 					{/if}
+					{#if pendingNewParticipants.length > 0}
+						<div class="flex flex-wrap gap-1.5">
+							{#each pendingNewParticipants as p, i}
+								<span
+									class="chip preset-tonal-warning flex items-center gap-1 border border-dashed text-xs"
+								>
+									{p.name}
+									<span class="text-[10px] opacity-70">(new)</span
+									>
+									<button
+										class="hover:text-error-500 p-1.5"
+										aria-label="Remove suggested character {p.name}"
+										onclick={() =>
+											(pendingNewParticipants =
+												pendingNewParticipants.filter(
+													(_, j) => j !== i
+												))}
+									>
+										<Icons.X size={10} />
+									</button>
+								</span>
+							{/each}
+						</div>
+					{/if}
+					<div class="flex gap-1">
+						<input
+							class="input input-sm w-32 text-xs"
+							type="text"
+							placeholder="Add new character…"
+							bind:value={newParticipantName}
+							onkeydown={(e) => {
+								if (e.key === "Enter") {
+									e.preventDefault()
+									addManualParticipant()
+								}
+							}}
+						/>
+						<button
+							class="btn btn-sm preset-filled-surface-400-600"
+							onclick={addManualParticipant}
+							disabled={!newParticipantName.trim()}
+						>
+							<Icons.Plus size={12} />
+						</button>
+					</div>
 				</div>
 
 				<div class="space-y-1.5">
@@ -932,14 +1166,16 @@
 						</span>
 					</p>
 					<div class="flex flex-wrap gap-1.5">
-						{#each extractedMentionedCharacters as name, i}
+						{#each extractedMentionedCharacters as id, i}
 							<span
 								class="chip preset-tonal-surface flex items-center gap-1 text-xs"
 							>
-								{name}
+								{bindingNameById.get(id) ?? `#${id}`}
 								<button
 									class="hover:text-error-500 p-1.5"
-									aria-label="Remove mention {name}"
+									aria-label="Remove mention {bindingNameById.get(
+										id
+									) ?? id}"
 									onclick={() =>
 										(extractedMentionedCharacters =
 											extractedMentionedCharacters.filter(
@@ -951,18 +1187,21 @@
 							</span>
 						{/each}
 						<div class="flex gap-1">
-							<input
-								class="input input-sm w-28 text-xs"
-								placeholder="Add name…"
-								bind:value={newMentionedInput}
-								onkeydown={(e) =>
-									e.key === "Enter" && addMentioned()}
-								onblur={addMentioned}
-							/>
+							<select
+								class="select select-sm w-32 text-xs"
+								bind:value={newMentionedId}
+							>
+								<option value="">Add character…</option>
+								{#each lorebookBindings.filter((b) => !extractedMentionedCharacters.includes(b.id)) as b}
+									<option value={b.id}
+										>{b.name || b.binding}</option
+									>
+								{/each}
+							</select>
 							<button
 								class="btn btn-sm preset-filled-surface-400-600"
 								onclick={addMentioned}
-								disabled={!newMentionedInput.trim()}
+								disabled={newMentionedId === ""}
 							>
 								<Icons.Plus size={12} />
 							</button>
@@ -973,6 +1212,51 @@
 							None extracted.
 						</p>
 					{/if}
+					{#if pendingNewMentioned.length > 0}
+						<div class="flex flex-wrap gap-1.5">
+							{#each pendingNewMentioned as p, i}
+								<span
+									class="chip preset-tonal-warning flex items-center gap-1 border border-dashed text-xs"
+								>
+									{p.name}
+									<span class="text-[10px] opacity-70">(new)</span
+									>
+									<button
+										class="hover:text-error-500 p-1.5"
+										aria-label="Remove suggested character {p.name}"
+										onclick={() =>
+											(pendingNewMentioned =
+												pendingNewMentioned.filter(
+													(_, j) => j !== i
+												))}
+									>
+										<Icons.X size={10} />
+									</button>
+								</span>
+							{/each}
+						</div>
+					{/if}
+					<div class="flex gap-1">
+						<input
+							class="input input-sm w-32 text-xs"
+							type="text"
+							placeholder="Add new character…"
+							bind:value={newMentionedName}
+							onkeydown={(e) => {
+								if (e.key === "Enter") {
+									e.preventDefault()
+									addManualMentioned()
+								}
+							}}
+						/>
+						<button
+							class="btn btn-sm preset-filled-surface-400-600"
+							onclick={addManualMentioned}
+							disabled={!newMentionedName.trim()}
+						>
+							<Icons.Plus size={12} />
+						</button>
+					</div>
 				</div>
 			</div>
 		{/if}
@@ -1095,7 +1379,14 @@
 	hasReviewContent={reviewContent.trim().length > 0}
 	onStart={generate}
 	onSave={saveEntry}
-	onCancel={() => onOpenChange({ open: false })}
+	onCancel={() => {
+		// The modal stays mounted (only `open` toggles), so cancelling a
+		// generation must explicitly tear down its listeners here — without
+		// this, an in-flight generation's :complete/:error would sit
+		// registered indefinitely across repeated cancel/retry cycles.
+		activeCleanup?.()
+		onOpenChange({ open: false })
+	}}
 	onRetry={generate}
 	onDiscard={() => onOpenChange({ open: false })}
 	onBack={() => (step = "configure")}

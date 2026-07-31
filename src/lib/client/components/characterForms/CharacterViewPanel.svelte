@@ -5,27 +5,25 @@
 	import { onDestroy, onMount, getContext } from "svelte"
 	import EntityGalleryTab from "$lib/client/components/gallery/EntityGalleryTab.svelte"
 
+	// embedding/embeddingModel/vectorizedAt are deliberately excluded from
+	// the "characters:get" response (see charactersGet's `columns`
+	// restriction) — this type mirrors that rather than hand-declaring the
+	// full SelectCharacter shape, so the two can't drift out of sync.
+	type ViewedCharacter = NonNullable<Sockets.Characters.Get.Response["character"]>
+
 	interface Props {
 		characterId: number
 		onBack: () => void
 		onEdit: () => void
 		onChat: () => void
-		onExport?: (
-			character: SelectCharacter & {
-				isOwner?: boolean
-				ownerName?: string | null
-			}
-		) => void
+		onExport?: (character: ViewedCharacter) => void
 	}
 
 	let { characterId, onBack, onEdit, onChat, onExport }: Props = $props()
 
 	const socket = useTypedSocket()
 
-	let character = $state<
-		| (SelectCharacter & { isOwner?: boolean; ownerName?: string | null })
-		| null
-	>(null)
+	let character = $state<ViewedCharacter | null>(null)
 	let isLoading = $state(true)
 
 	onMount(() => {
@@ -117,9 +115,9 @@
 				value="details"
 				class="min-h-0 flex-1 overflow-y-auto"
 			>
-				<div class="flex flex-col gap-4">
+				<div class="flex flex-col gap-3">
 					<!-- Avatar + name -->
-					<div class="flex items-center gap-3">
+					<div class="card preset-tonal flex items-center gap-3 p-3">
 						<Avatar class="h-16 min-h-16 w-16 min-w-16">
 							<Avatar.Image
 								src={character.avatar || ""}
@@ -153,28 +151,27 @@
 									Owned by {character.ownerName}
 								</p>
 							{/if}
+							{#if tags.length > 0}
+								<div class="mt-1.5 flex flex-wrap gap-1">
+									{#each tags as tag}
+										<span
+											class="preset-tonal-surface rounded px-2 py-0.5 text-xs"
+										>
+											{tag}
+										</span>
+									{/each}
+								</div>
+							{/if}
 						</div>
 					</div>
 
-					<!-- Tags -->
-					{#if tags.length > 0}
-						<div class="flex flex-wrap gap-1">
-							{#each tags as tag}
-								<span
-									class="preset-tonal-surface rounded px-2 py-0.5 text-xs"
-								>
-									{tag}
-								</span>
-							{/each}
-						</div>
-					{/if}
-
 					<!-- Description -->
 					{#if character.description}
-						<section class="space-y-1">
+						<section class="card preset-tonal space-y-1 p-3">
 							<p
-								class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
 							>
+								<Icons.FileText size={13} />
 								Description
 							</p>
 							<p
@@ -187,10 +184,11 @@
 
 					<!-- Personality -->
 					{#if character.personality}
-						<section class="space-y-1">
+						<section class="card preset-tonal space-y-1 p-3">
 							<p
-								class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
 							>
+								<Icons.Sparkles size={13} />
 								Personality
 							</p>
 							<p
@@ -203,10 +201,11 @@
 
 					<!-- Scenario -->
 					{#if character.scenario}
-						<section class="space-y-1">
+						<section class="card preset-tonal space-y-1 p-3">
 							<p
-								class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
 							>
+								<Icons.Drama size={13} />
 								Scenario
 							</p>
 							<p
@@ -219,10 +218,11 @@
 
 					<!-- First message -->
 					{#if character.firstMessage}
-						<section class="space-y-1">
+						<section class="card preset-tonal space-y-1 p-3">
 							<p
-								class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
 							>
+								<Icons.MessageSquare size={13} />
 								First Message
 							</p>
 							<p
@@ -235,16 +235,17 @@
 
 					<!-- Alternate greetings -->
 					{#if character.alternateGreetings?.length}
-						<section class="space-y-1">
+						<section class="card preset-tonal space-y-1.5 p-3">
 							<p
-								class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
 							>
+								<Icons.MessagesSquare size={13} />
 								Alternate Greetings ({character
 									.alternateGreetings.length})
 							</p>
 							{#each character.alternateGreetings as greeting, i}
 								<details
-									class="bg-surface-200-800 rounded p-2 text-sm"
+									class="preset-tonal-surface rounded p-2 text-sm"
 								>
 									<summary
 										class="cursor-pointer text-xs font-medium"
@@ -263,10 +264,11 @@
 
 					<!-- Creator notes -->
 					{#if character.creatorNotes}
-						<section class="space-y-1">
+						<section class="card preset-tonal space-y-1 p-3">
 							<p
-								class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
 							>
+								<Icons.StickyNote size={13} />
 								Creator Notes
 							</p>
 							<p

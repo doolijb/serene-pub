@@ -187,60 +187,75 @@
 		selectedPersonas = (c.chatPersonas || []).map((cp) => cp.persona)
 	}
 
+	function handleChatsGet(msg: Sockets.Chats.Get.Response) {
+		loaded = true
+		if (!msg.chat) {
+			notFound = true
+			return
+		}
+		applyChat(msg.chat)
+	}
+	function handleChatsUpdate(msg: any) {
+		saving = false
+		if (msg.chat) {
+			applyChat({ ...chat!, ...msg.chat })
+			announce("Chat saved.")
+		}
+	}
+	function handleChatsUpdateError(msg: { error?: string }) {
+		saving = false
+		error = msg.error || "Failed to save chat."
+		announce(error)
+	}
+	function handleChatsDelete() {
+		goto("/document-view/chats")
+	}
+	function handleChatsDeleteError(msg: { error?: string }) {
+		deleting = false
+		error = msg.error || "Failed to delete chat."
+		announce(error)
+	}
+	function handleChatsAddGuest() {
+		load()
+	}
+	function handleChatsRemoveGuest() {
+		load()
+	}
+	function handleCharactersList(msg: Sockets.Characters.List.Response) {
+		characters = msg.characterList || []
+	}
+	function handlePersonasList(msg: Sockets.Personas.List.Response) {
+		personas = msg.personaList || []
+	}
+	function handleUsersList(msg: any) {
+		allUsers = msg.users || []
+	}
+
 	onMount(() => {
-		socket.on("chats:get", (msg) => {
-			loaded = true
-			if (!msg.chat) {
-				notFound = true
-				return
-			}
-			applyChat(msg.chat)
-		})
-		socket.on("chats:update", (msg) => {
-			saving = false
-			if (msg.chat) {
-				applyChat({ ...chat!, ...msg.chat })
-				announce("Chat saved.")
-			}
-		})
-		socket.on("chats:update:error", (msg: { error?: string }) => {
-			saving = false
-			error = msg.error || "Failed to save chat."
-			announce(error)
-		})
-		socket.on("chats:delete", () => {
-			goto("/document-view/chats")
-		})
-		socket.on("chats:delete:error", (msg: { error?: string }) => {
-			deleting = false
-			error = msg.error || "Failed to delete chat."
-			announce(error)
-		})
-		socket.on("chats:addGuest", () => load())
-		socket.on("chats:removeGuest", () => load())
-		socket.on("characters:list", (msg) => {
-			characters = msg.characterList || []
-		})
-		socket.on("personas:list", (msg) => {
-			personas = msg.personaList || []
-		})
-		socket.on("users:list", (msg) => {
-			allUsers = msg.users || []
-		})
+		socket.on("chats:get", handleChatsGet)
+		socket.on("chats:update", handleChatsUpdate)
+		socket.on("chats:update:error", handleChatsUpdateError)
+		socket.on("chats:delete", handleChatsDelete)
+		socket.on("chats:delete:error", handleChatsDeleteError)
+		socket.on("chats:addGuest", handleChatsAddGuest)
+		socket.on("chats:removeGuest", handleChatsRemoveGuest)
+		socket.on("characters:list", handleCharactersList)
+		socket.on("personas:list", handlePersonasList)
+		socket.on("users:list", handleUsersList)
 		socket.emit("characters:list", {})
 		socket.emit("personas:list", {})
 		load()
 		return () => {
-			socket.off("chats:get")
-			socket.off("chats:update")
-			socket.off("chats:update:error")
-			socket.off("chats:delete")
-			socket.off("chats:delete:error")
-			socket.off("chats:addGuest")
-			socket.off("chats:removeGuest")
-			socket.off("characters:list")
-			socket.off("personas:list")
-			socket.off("users:list")
+			socket.off("chats:get", handleChatsGet)
+			socket.off("chats:update", handleChatsUpdate)
+			socket.off("chats:update:error", handleChatsUpdateError)
+			socket.off("chats:delete", handleChatsDelete)
+			socket.off("chats:delete:error", handleChatsDeleteError)
+			socket.off("chats:addGuest", handleChatsAddGuest)
+			socket.off("chats:removeGuest", handleChatsRemoveGuest)
+			socket.off("characters:list", handleCharactersList)
+			socket.off("personas:list", handlePersonasList)
+			socket.off("users:list", handleUsersList)
 		}
 	})
 </script>

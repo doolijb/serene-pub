@@ -213,7 +213,7 @@
 </script>
 
 <div
-	class="preset-tonal mx-4 mt-4 mb-8 min-h-[calc(100%-3rem)] rounded-lg p-6 shadow-md"
+	class="preset-tonal mt-4 min-h-[calc(100%-3rem)] rounded-lg p-6 shadow-md"
 >
 	<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
 		<div class="flex items-center gap-3">
@@ -310,13 +310,20 @@
 		</div>
 	{:else if rateLimited}
 		<div
-			class="text-surface-700-300 flex flex-col items-center gap-2 py-16 text-center"
+			class="text-surface-700-300 flex flex-col items-center gap-3 py-16 text-center"
 		>
 			<Icons.Clock size={40} class="opacity-40" />
 			<p>
 				This source is busy right now{#if retryAfterMs}
 					— retrying in {Math.ceil(retryAfterMs / 1000)}s{/if}.
 			</p>
+			<button
+				class="btn btn-sm preset-filled-primary-500"
+				onclick={() => fetchLibrary(true)}
+			>
+				<Icons.RotateCw size={16} />
+				Retry
+			</button>
 		</div>
 	{:else if libraryPersonas.length === 0}
 		<div

@@ -65,27 +65,32 @@
 		if (hasUser) socket.emit("userSettings:get", {})
 	})
 
+	function handleSystemSettingsGet(message: any) {
+		systemSettingsCtx.settings = {
+			...message.systemSettings,
+			isAndroidWrapper: message.isAndroidWrapper,
+			localEmbeddingsSupported: message.localEmbeddingsSupported
+		}
+		ollamaSettingsCtx.settings = { ...message.ollamaSettings }
+		koboldCppSettingsCtx.settings = { ...message.koboldCppSettings }
+	}
+	function handleUsersCurrent(message: any) {
+		userCtx.user = message.user
+	}
+	function handleUserSettingsGet(message: any) {
+		userSettingsCtx.settings = message.userSettings
+	}
+
 	onMount(() => {
-		socket.on("systemSettings:get", (message) => {
-			systemSettingsCtx.settings = {
-				...message.systemSettings,
-				isAndroidWrapper: message.isAndroidWrapper
-			}
-			ollamaSettingsCtx.settings = { ...message.ollamaSettings }
-			koboldCppSettingsCtx.settings = { ...message.koboldCppSettings }
-		})
-		socket.on("users:current", (message) => {
-			userCtx.user = message.user
-		})
-		socket.on("userSettings:get", (message) => {
-			userSettingsCtx.settings = message.userSettings
-		})
+		socket.on("systemSettings:get", handleSystemSettingsGet)
+		socket.on("users:current", handleUsersCurrent)
+		socket.on("userSettings:get", handleUserSettingsGet)
 		socket.emit("systemSettings:get", {})
 
 		return () => {
-			socket.off("systemSettings:get")
-			socket.off("users:current")
-			socket.off("userSettings:get")
+			socket.off("systemSettings:get", handleSystemSettingsGet)
+			socket.off("users:current", handleUsersCurrent)
+			socket.off("userSettings:get", handleUserSettingsGet)
 		}
 	})
 

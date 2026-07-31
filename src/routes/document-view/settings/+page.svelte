@@ -137,68 +137,90 @@
 		}
 	})
 
+	function handleUpdateDisplayName(msg: { success?: boolean }) {
+		displayNameSaving = false
+		displayNameStatus = msg.success
+			? "Display name saved."
+			: "Failed to save display name."
+		announce(displayNameStatus)
+	}
+	function handleUpdateDisplayNameError(msg: { error?: string }) {
+		displayNameSaving = false
+		displayNameStatus = msg.error || "Failed to save display name."
+		announce(displayNameStatus)
+	}
+	function handleHasPassphrase(msg: { hasPassphrase: boolean }) {
+		hasPassphrase = msg.hasPassphrase
+	}
+	function handleChangePassphrase(msg: {
+		success?: boolean
+		message?: string
+	}) {
+		passphraseSaving = false
+		if (msg.success) {
+			passphraseStatus = msg.message || "Passphrase changed."
+			announce(passphraseStatus)
+			currentPassphrase = ""
+			newPassphrase = ""
+		} else {
+			passphraseError = msg.message || "Failed to change passphrase."
+			announce(passphraseError)
+		}
+	}
+	function handleChangePassphraseError(msg: { error?: string }) {
+		passphraseSaving = false
+		passphraseError = msg.error || "Failed to change passphrase."
+		announce(passphraseError)
+	}
+	function handleSetPassphrase(msg: { success?: boolean; message?: string }) {
+		passphraseSaving = false
+		if (msg.success) {
+			passphraseStatus = msg.message || "Passphrase set."
+			announce(passphraseStatus)
+			newPassphrase = ""
+			hasPassphrase = true
+		} else {
+			passphraseError = msg.message || "Failed to set passphrase."
+			announce(passphraseError)
+		}
+	}
+
 	onMount(() => {
 		darkMode = isDarkMode()
 		fontScaleIndex = getFontScaleIndex()
 
-		socket.on("users:current:updateDisplayName", (msg) => {
-			displayNameSaving = false
-			displayNameStatus = msg.success
-				? "Display name saved."
-				: "Failed to save display name."
-			announce(displayNameStatus)
-		})
+		socket.on("users:current:updateDisplayName", handleUpdateDisplayName)
 		socket.on(
 			"users:current:updateDisplayName:error",
-			(msg: { error?: string }) => {
-				displayNameSaving = false
-				displayNameStatus = msg.error || "Failed to save display name."
-				announce(displayNameStatus)
-			}
+			handleUpdateDisplayNameError
 		)
-		socket.on("users:current:hasPassphrase", (msg) => {
-			hasPassphrase = msg.hasPassphrase
-		})
-		socket.on("users:current:changePassphrase", (msg) => {
-			passphraseSaving = false
-			if (msg.success) {
-				passphraseStatus = msg.message || "Passphrase changed."
-				announce(passphraseStatus)
-				currentPassphrase = ""
-				newPassphrase = ""
-			} else {
-				passphraseError = msg.message || "Failed to change passphrase."
-				announce(passphraseError)
-			}
-		})
+		socket.on("users:current:hasPassphrase", handleHasPassphrase)
+		socket.on("users:current:changePassphrase", handleChangePassphrase)
 		socket.on(
 			"users:current:changePassphrase:error",
-			(msg: { error?: string }) => {
-				passphraseSaving = false
-				passphraseError = msg.error || "Failed to change passphrase."
-				announce(passphraseError)
-			}
+			handleChangePassphraseError
 		)
-		socket.on("users:current:setPassphrase", (msg) => {
-			passphraseSaving = false
-			if (msg.success) {
-				passphraseStatus = msg.message || "Passphrase set."
-				announce(passphraseStatus)
-				newPassphrase = ""
-				hasPassphrase = true
-			} else {
-				passphraseError = msg.message || "Failed to set passphrase."
-				announce(passphraseError)
-			}
-		})
+		socket.on("users:current:setPassphrase", handleSetPassphrase)
 		socket.emit("users:current:hasPassphrase", {})
 		return () => {
-			socket.off("users:current:updateDisplayName")
-			socket.off("users:current:updateDisplayName:error")
-			socket.off("users:current:hasPassphrase")
-			socket.off("users:current:changePassphrase")
-			socket.off("users:current:changePassphrase:error")
-			socket.off("users:current:setPassphrase")
+			socket.off(
+				"users:current:updateDisplayName",
+				handleUpdateDisplayName
+			)
+			socket.off(
+				"users:current:updateDisplayName:error",
+				handleUpdateDisplayNameError
+			)
+			socket.off("users:current:hasPassphrase", handleHasPassphrase)
+			socket.off(
+				"users:current:changePassphrase",
+				handleChangePassphrase
+			)
+			socket.off(
+				"users:current:changePassphrase:error",
+				handleChangePassphraseError
+			)
+			socket.off("users:current:setPassphrase", handleSetPassphrase)
 		}
 	})
 </script>

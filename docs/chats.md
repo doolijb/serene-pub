@@ -28,13 +28,13 @@ Optional fields available on the same form (covered in detail below): **Group Re
 
 Saving calls `chats:create` (or `chats:update` when editing) over the socket; a success toast confirms the save and the form closes. Open the chat itself from its entry in the sidebar list.
 
-### Guests
-
-If accounts are enabled system-wide, editing an existing chat reveals a **Guests** section where the chat owner can add other users as guests via **Add Guests**. Guests can view the chat and participate as their own persona; editing chat settings itself remains owner-only, but regenerating/continuing/swiping a message is available to a guest too if it belongs to a character _they_ own — see [Guest Permission Boundaries](#guest-permission-boundaries) below for the precise rule. See [Users & Accounts](./users-and-accounts.md) for account/guest concepts in general.
-
 ### Editing Chat Settings Later
 
 Reopening a chat's settings (via the sidebar's Edit action, or the Edit button in a chat's view panel) loads the same form used for creation, now pre-filled and with a few extra controls: per-character Active/Visibility toggles and the Guests section. Leaving the form with unsaved changes and trying to close the sidebar prompts a **"Your chat has unsaved changes. Are you sure you want to discard them?"** confirmation before letting you navigate away.
+
+### Guests
+
+If accounts are enabled system-wide, editing an existing chat reveals a **Guests** section where the chat owner can add other users as guests via **Add Guests**. Guests can view the chat and participate as their own persona; editing chat settings itself remains owner-only, but regenerating/continuing/swiping a message is available to a guest too if it belongs to a character _they_ own — see [Guest Permission Boundaries](#guest-permission-boundaries) below for the precise rule. See [Users & Accounts](./users-and-accounts.md) for account/guest concepts in general.
 
 ### Deleting a Chat
 
@@ -61,19 +61,11 @@ Inside a chat, clicking a message's avatar opens an **avatar gallery modal** for
 
 A chat becomes a "group chat" as soon as it has more than one character attached. Group chats add turn-order mechanics that 1:1 chats don't need.
 
-### Turn Order & Round-Robin Replies
-
-Serene Pub decides who's due for a reply by looking at recent message history, not by tracking a persistent "whose turn is it" pointer — the whole rotation is recomputed fresh every time. Let N be the number of active characters plus personas attached to the chat. Serene Pub looks at the last N messages: if every character and persona appears at least once in that window, the rotation is considered "healthy" (nobody's been silently dropped from the conversation), and any character who hasn't sent a message in the last N-1 of those messages is **due**. If more than one character is due at once, whichever has gone the longest without replying (or has never replied at all) is suggested first.
-
-A character who has never sent a single message in the visible history is always treated as immediately due, regardless of whether the window currently looks "healthy" — this is what makes a brand-new chat produce its first reply, and what keeps a character newly added mid-chat from waiting around for the window to catch up.
-
-Because this is recomputed from history rather than tracked as state, a persona doesn't have to wait for every other persona to speak before the next due character can go, and manually triggering a character out of turn (see Triggering Responses Manually, below) never leaves the rotation "stuck" on a character who was skipped — the very next automatic check just re-reads the updated history and picks correctly from it.
-
 ### Group Reply Strategy
 
 When a chat has 2+ characters, _or_ 2+ personas with just one character, the chat settings form shows a **Group Reply Strategy** dropdown with:
 
-- **Ordered (Round-robin)** — the default. Characters take turns in their configured order, as described above.
+- **Ordered (Round-robin)** — the default. Characters take turns in their configured order — see Turn Order & Round-Robin Replies, below, for exactly how Serene Pub decides who's due.
 - **User-Split (Round-robin by user)** — only offered when user accounts are enabled system-wide, since it's meaningless with a single user. Instead of interleaving every participant's cast together, it groups personas and characters by which user owns them — one user's entire cast completes a turn before the next user's does.
 - **Manual (User selects)** — you pick who responds using the Trigger Character controls described below instead of relying on the automatic rotation.
 
@@ -95,6 +87,14 @@ Each character row in the chat settings form (when editing an existing chat) has
 - A **visibility** button that cycles through **Full Info → Name Only → Hidden** (the tooltip states what happens on the character's other turns, e.g. "When not speaking: Only name/nickname is included"). This controls how much of that character's information is sent to the model when it isn't their turn — Name Only keeps just their name/nickname, Hidden omits them from context entirely while inactive-in-turn. Toggling emits `chats:updateChatCharacterVisibility`.
 
 Deactivating a character is the right tool when you want to "bench" a character for a while (they stay in the chat's roster, keep their message history, but stop being generated for) without the disruption of removing and re-adding them later. Visibility, by contrast, is purely a context-budget optimization for chats with many characters — it doesn't affect whether a character can be triggered, only how much of their sheet the model sees when they're not the one speaking.
+
+### Turn Order & Round-Robin Replies
+
+Serene Pub decides who's due for a reply by looking at recent message history, not by tracking a persistent "whose turn is it" pointer — the whole rotation is recomputed fresh every time. Let N be the number of active characters plus personas attached to the chat. Serene Pub looks at the last N messages: if every character and persona appears at least once in that window, the rotation is considered "healthy" (nobody's been silently dropped from the conversation), and any character who hasn't sent a message in the last N-1 of those messages is **due**. If more than one character is due at once, whichever has gone the longest without replying (or has never replied at all) is suggested first.
+
+A character who has never sent a single message in the visible history is always treated as immediately due, regardless of whether the window currently looks "healthy" — this is what makes a brand-new chat produce its first reply, and what keeps a character newly added mid-chat from waiting around for the window to catch up.
+
+Because this is recomputed from history rather than tracked as state, a persona doesn't have to wait for every other persona to speak before the next due character can go, and manually triggering a character out of turn (see Triggering Responses Manually, above) never leaves the rotation "stuck" on a character who was skipped — the very next automatic check just re-reads the updated history and picks correctly from it.
 
 ## Personas & Persona Switching
 
@@ -215,7 +215,7 @@ Unlike Regenerate/Continue/Swipe on an existing message (which enforce the owner
 
 ## Narrator Response
 
-**Narrator Response** — previously called "World Response" in older versions — is a manually-triggered message that narrates as the environment itself: weather, scenery, side characters, shopkeepers, monsters, or other third parties, rather than as any of the chat's defined characters. It has no persistent identity of its own (no avatar, no character sheet) and is never auto-triggered: unlike ordinary character replies, a Narrator response never counts toward or interrupts round-robin turn order, and it's never suggested by the "ready to continue" banner.
+**Narrator Response** is a manually-triggered message that narrates as the environment itself: weather, scenery, side characters, shopkeepers, monsters, or other third parties, rather than as any of the chat's defined characters. It has no persistent identity of its own (no avatar, no character sheet) and is never auto-triggered: unlike ordinary character replies, a Narrator response never counts toward or interrupts round-robin turn order, and it's never suggested by the "ready to continue" banner.
 
 ### Triggering a Narrator Response
 

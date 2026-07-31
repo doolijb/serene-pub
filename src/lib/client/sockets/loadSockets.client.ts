@@ -113,6 +113,19 @@ export async function loadSocketsClient({
 				if (dev) {
 					console.log("Socket disconnected:", reason)
 				}
+				// A server-initiated disconnect (eg. after a passphrase
+				// change/admin demotion revokes this session — see
+				// disconnectSockets() call sites server-side) reports this
+				// exact reason, and unlike other disconnect reasons
+				// (network blips, etc.), Socket.IO does NOT auto-reconnect
+				// after it. Without this, the tab would sit permanently
+				// inert with no visible error. Reloading re-runs
+				// +layout.svelte's checkAuthentication() from scratch,
+				// which will correctly show the login form once the token
+				// is invalid.
+				if (reason === "io server disconnect") {
+					window.location.reload()
+				}
 			})
 		})
 	} catch (error) {

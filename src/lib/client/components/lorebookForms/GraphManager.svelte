@@ -3,15 +3,31 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import * as Icons from "@lucide/svelte"
 	import GraphBuildModal from "../modals/GraphBuildModal.svelte"
-	import MergeNodeModal from "../modals/MergeNodeModal.svelte"
+	import AbsorbBindingModal from "../modals/AbsorbBindingModal.svelte"
 	import GraphVisualization from "../graph/GraphVisualization.svelte"
 	import EmbeddingStatusIcon from "../EmbeddingStatusIcon.svelte"
 
 	interface Props {
 		lorebookId: number
+		// Switches the parent's tab to the Bindings view — the node detail
+		// card here is purely informational; all editing (name, summary,
+		// state, visibility, attach/detach a character/persona) happens in
+		// LorebookBindingsManager (see the merge plan's UI consolidation).
+		// Passing a bindingId sorts that binding to the top of the Bindings
+		// list and opens it in edit mode.
+		onNavigateToBindings?: (bindingId?: number) => void
+		// Jump straight to a node when arriving from the Bindings tab's
+		// "View relationships" button.
+		focusNodeId?: number | null
+		onFocusHandled?: () => void
 	}
 
-	let { lorebookId }: Props = $props()
+	let {
+		lorebookId,
+		onNavigateToBindings,
+		focusNodeId,
+		onFocusHandled
+	}: Props = $props()
 
 	const socket = useTypedSocket()
 	const graphBuildsCtx: GraphBuildsCtx = getContext("graphBuildsCtx")
@@ -73,13 +89,15 @@
 	type ViewMode = "graph" | "list"
 	let viewMode = $state<ViewMode>("graph")
 
-	// Editing
-	let editingNode = $state<NarrativeNode | null>(null)
+	// Editing — nodes are purely informational here now (name/summary/state/
+	// visibility all edit through LorebookBindingsManager); only
+	// relationships are still edited directly in the Graph tab.
 	let editingRel = $state<NarrativeRelationship | null>(null)
 	let isSaving = $state(false)
 
 	// Delete confirmation
 	let pendingDeleteNodeId = $state<number | null>(null)
+	let pendingDeleteNodeReferencedByMergeLog = $state(false)
 
 	// History entries (for optional temporal anchoring)
 	let historyEntries = $state<SelectHistoryEntry[]>([])
@@ -93,15 +111,6 @@
 	let connectVisibility = $state("acknowledged")
 	let connectHistoryEntryId = $state<number | null>(null)
 	let isConnecting = $state(false)
-
-	// Create node (manual)
-	let showCreateNodeForm = $state(false)
-	let createNodeName = $state("")
-	let createNodeState = $state("active")
-	let createNodeVisibility = $state("normal")
-	let createNodeSummary = $state("")
-	let createNodeHistoryEntryId = $state<number | null>(null)
-	let isCreatingNode = $state(false)
 
 	// Lorebook bindings (for linking nodes to characters/personas)
 	type BindingWithRelations = SelectLorebookBinding & {
@@ -120,6 +129,18 @@
 	// Relationship lookup helpers
 	let nodeMap = $derived(new Map(nodes.map((n) => [n.id, n])))
 
+	// Arriving from the Bindings tab's "View relationships" button — select
+	// that node's detail card as soon as it's loaded.
+	$effect(() => {
+		if (focusNodeId == null) return
+		const node = nodeMap.get(focusNodeId)
+		if (!node) return
+		selectedNode = node
+		editingRel = null
+		viewMode = "graph"
+		onFocusHandled?.()
+	})
+
 	function load() {
 		isLoading = true
 		socket.emit("narrativeGraph:list", {
@@ -127,169 +148,176 @@
 		} satisfies Sockets.NarrativeGraph.List.Params)
 	}
 
+	function handleNarrativeGraphList(msg: Sockets.NarrativeGraph.List.Response) {
+		nodes = msg.nodes
+		relationships = msg.relationships
+		ungraphedSceneCount = msg.ungraphedSceneCount ?? 0
+		ungraphedUnsummarizedCount = msg.ungraphedUnsummarizedCount ?? 0
+		totalSummarizedCount = msg.totalSummarizedCount ?? 0
+		ungraphedHistoryEntryCount = msg.ungraphedHistoryEntryCount ?? 0
+		totalDirectHistoryEntryCount = msg.totalDirectHistoryEntryCount ?? 0
+		isLoading = false
+	}
+
+	function handleNarrativeGraphUpdateNode(
+		msg: Sockets.NarrativeGraph.UpdateNode.Response
+	) {
+		nodes = nodes.map((n) => (n.id === msg.node.id ? msg.node : n))
+		if (selectedNode?.id === msg.node.id) selectedNode = msg.node
+		isSaving = false
+	}
+
+	function handleNarrativeGraphDeleteNode() {
+		load()
+		selectedNode = null
+	}
+
+	function handleNarrativeGraphCheckNodeMergeReferences(
+		msg: Sockets.NarrativeGraph.CheckNodeMergeReferences.Response
+	) {
+		pendingDeleteNodeReferencedByMergeLog = msg.referencedByMergeLog
+	}
+
+	function handleNarrativeGraphUpdateRelationship(
+		msg: Sockets.NarrativeGraph.UpdateRelationship.Response
+	) {
+		relationships = relationships.map((r) =>
+			r.id === msg.relationship.id ? msg.relationship : r
+		)
+		if (selectedRel?.id === msg.relationship.id)
+			selectedRel = msg.relationship
+		editingRel = null
+		isSaving = false
+	}
+
+	function handleNarrativeGraphDeleteRelationship() {
+		load()
+		selectedRel = null
+		editingRel = null
+	}
+
+	function handleNarrativeGraphCreateRelationship(
+		msg: Sockets.NarrativeGraph.CreateRelationship.Response
+	) {
+		relationships = [...relationships, msg.relationship]
+		connectingFromNode = null
+		connectToNodeId = null
+		connectRelType = "neutral"
+		connectRelStatus = "active"
+		connectDescription = ""
+		connectVisibility = "acknowledged"
+		connectHistoryEntryId = null
+		isConnecting = false
+	}
+
+	function handleHistoryEntriesList(msg: Sockets.HistoryEntries.List.Response) {
+		if (msg.lorebookId === lorebookId) {
+			historyEntries = msg.historyEntryList
+		}
+	}
+
+	function handleLorebooksBindingList(
+		msg: Sockets.Lorebooks.BindingList.Response
+	) {
+		if (msg.lorebookId === lorebookId)
+			bindings = msg.lorebookBindingList as BindingWithRelations[]
+	}
+
+	function handleNarrativeGraphMergeNode() {
+		// Absorb rewrites/deletes relationships and deletes the absorbed
+		// row outright — simplest and most robust to just reload the
+		// whole graph rather than trying to surgically patch every
+		// affected node/relationship in local state. The selected node's
+		// data (or the node itself) may now be stale/gone either way.
+		showMergeModal = false
+		mergeTargetNode = null
+		selectedNode = null
+		load()
+	}
+
+	function handleNarrativeGraphUndoMerge() {
+		load()
+	}
+
+	// The background vectorization queue updates a row's embeddingModel
+	// directly in the DB — without this, the badge here only ever refreshes
+	// on the next explicit CRUD action, leaving it stale until a manual refresh.
+	function handleVectorizationItemUpdated(
+		msg: Sockets.Vectorization.ItemUpdated.Response
+	) {
+		if (msg.lorebookId !== lorebookId) return
+		if (msg.type === "narrativeNode") {
+			const target = nodes.find((n: any) => n.id === msg.id)
+			if (target) (target as any).embeddingModel = msg.embeddingModel
+		} else if (msg.type === "narrativeRelationship") {
+			const target = relationships.find((r: any) => r.id === msg.id)
+			if (target) (target as any).embeddingModel = msg.embeddingModel
+		}
+	}
+
 	onMount(() => {
+		socket.on("narrativeGraph:list", handleNarrativeGraphList)
+		socket.on("narrativeGraph:updateNode", handleNarrativeGraphUpdateNode)
+		socket.on("narrativeGraph:deleteNode", handleNarrativeGraphDeleteNode)
 		socket.on(
-			"narrativeGraph:list",
-			(msg: Sockets.NarrativeGraph.List.Response) => {
-				nodes = msg.nodes
-				relationships = msg.relationships
-				ungraphedSceneCount = msg.ungraphedSceneCount ?? 0
-				ungraphedUnsummarizedCount = msg.ungraphedUnsummarizedCount ?? 0
-				totalSummarizedCount = msg.totalSummarizedCount ?? 0
-				ungraphedHistoryEntryCount = msg.ungraphedHistoryEntryCount ?? 0
-				totalDirectHistoryEntryCount =
-					msg.totalDirectHistoryEntryCount ?? 0
-				isLoading = false
-			}
+			"narrativeGraph:checkNodeMergeReferences",
+			handleNarrativeGraphCheckNodeMergeReferences
 		)
-		socket.on(
-			"narrativeGraph:updateNode",
-			(msg: Sockets.NarrativeGraph.UpdateNode.Response) => {
-				nodes = nodes.map((n) => (n.id === msg.node.id ? msg.node : n))
-				if (selectedNode?.id === msg.node.id) selectedNode = msg.node
-				editingNode = null
-				isSaving = false
-			}
-		)
-		socket.on("narrativeGraph:deleteNode", () => {
-			load()
-			selectedNode = null
-			editingNode = null
-		})
 		socket.on(
 			"narrativeGraph:updateRelationship",
-			(msg: Sockets.NarrativeGraph.UpdateRelationship.Response) => {
-				relationships = relationships.map((r) =>
-					r.id === msg.relationship.id ? msg.relationship : r
-				)
-				if (selectedRel?.id === msg.relationship.id)
-					selectedRel = msg.relationship
-				editingRel = null
-				isSaving = false
-			}
+			handleNarrativeGraphUpdateRelationship
 		)
-		socket.on("narrativeGraph:deleteRelationship", () => {
-			load()
-			selectedRel = null
-			editingRel = null
-		})
+		socket.on(
+			"narrativeGraph:deleteRelationship",
+			handleNarrativeGraphDeleteRelationship
+		)
 		socket.on(
 			"narrativeGraph:createRelationship",
-			(msg: Sockets.NarrativeGraph.CreateRelationship.Response) => {
-				relationships = [...relationships, msg.relationship]
-				connectingFromNode = null
-				connectToNodeId = null
-				connectRelType = "neutral"
-				connectRelStatus = "active"
-				connectDescription = ""
-				connectVisibility = "acknowledged"
-				connectHistoryEntryId = null
-				isConnecting = false
-			}
+			handleNarrativeGraphCreateRelationship
 		)
-		socket.on(
-			"narrativeGraph:createNode",
-			(msg: Sockets.NarrativeGraph.CreateNode.Response) => {
-				nodes = [...nodes, msg.node]
-				showCreateNodeForm = false
-				createNodeName = ""
-				createNodeState = "active"
-
-				createNodeSummary = ""
-				createNodeHistoryEntryId = null
-				isCreatingNode = false
-			}
-		)
-		socket.on("historyEntries:list", (msg) => {
-			historyEntries = msg.historyEntryList
-		})
-		socket.on("lorebooks:bindingList", (msg) => {
-			if (msg.lorebookId === lorebookId)
-				bindings = msg.lorebookBindingList as BindingWithRelations[]
-		})
-		socket.on(
-			"narrativeGraph:linkBindingNode",
-			(msg: Sockets.NarrativeGraph.LinkBindingNode.Response) => {
-				nodes = nodes.map((n) =>
-					n.lorebookBindingId === msg.bindingId
-						? { ...n, lorebookBindingId: null }
-						: n.id === msg.nodeId
-							? { ...n, lorebookBindingId: msg.bindingId }
-							: n
-				)
-			}
-		)
-		socket.on(
-			"narrativeGraph:mergeNode",
-			(msg: Sockets.NarrativeGraph.MergeNode.Response) => {
-				nodes = nodes.map((n) =>
-					n.id === msg.parentNode.id
-						? msg.parentNode
-						: n.id === msg.childNode.id
-							? msg.childNode
-							: n
-				)
-				showMergeModal = false
-				mergeTargetNode = null
-			}
-		)
-		socket.on(
-			"narrativeGraph:demergeNode",
-			(msg: Sockets.NarrativeGraph.DemergeNode.Response) => {
-				nodes = nodes.map((n) => (n.id === msg.node.id ? msg.node : n))
-			}
-		)
-		// The background vectorization queue updates a row's embeddingModel
-		// directly in the DB — without this, the badge here only ever refreshes
-		// on the next explicit CRUD action, leaving it stale until a manual refresh.
-		socket.on(
-			"vectorization:itemUpdated",
-			(msg: Sockets.Vectorization.ItemUpdated.Response) => {
-				if (msg.lorebookId !== lorebookId) return
-				if (msg.type === "narrativeNode") {
-					const target = nodes.find((n: any) => n.id === msg.id)
-					if (target)
-						(target as any).embeddingModel = msg.embeddingModel
-				} else if (msg.type === "narrativeRelationship") {
-					const target = relationships.find(
-						(r: any) => r.id === msg.id
-					)
-					if (target)
-						(target as any).embeddingModel = msg.embeddingModel
-				}
-			}
-		)
+		socket.on("historyEntries:list", handleHistoryEntriesList)
+		socket.on("lorebooks:bindingList", handleLorebooksBindingList)
+		socket.on("narrativeGraph:mergeNode", handleNarrativeGraphMergeNode)
+		socket.on("narrativeGraph:undoMerge", handleNarrativeGraphUndoMerge)
+		socket.on("vectorization:itemUpdated", handleVectorizationItemUpdated)
 		socket.emit("historyEntries:list", { lorebookId })
 		socket.emit("lorebooks:bindingList", { lorebookId })
 		load()
 	})
 
 	onDestroy(() => {
-		socket.off("narrativeGraph:list")
-		socket.off("narrativeGraph:updateNode")
-		socket.off("narrativeGraph:deleteNode")
-		socket.off("narrativeGraph:updateRelationship")
-		socket.off("narrativeGraph:deleteRelationship")
-		socket.off("narrativeGraph:createRelationship")
-		socket.off("narrativeGraph:createNode")
-		socket.off("historyEntries:list")
-		socket.off("lorebooks:bindingList")
-		socket.off("narrativeGraph:linkBindingNode")
-		socket.off("narrativeGraph:mergeNode")
-		socket.off("narrativeGraph:demergeNode")
-		socket.off("vectorization:itemUpdated")
+		socket.off("narrativeGraph:list", handleNarrativeGraphList)
+		socket.off("narrativeGraph:updateNode", handleNarrativeGraphUpdateNode)
+		socket.off("narrativeGraph:deleteNode", handleNarrativeGraphDeleteNode)
+		socket.off(
+			"narrativeGraph:checkNodeMergeReferences",
+			handleNarrativeGraphCheckNodeMergeReferences
+		)
+		socket.off(
+			"narrativeGraph:updateRelationship",
+			handleNarrativeGraphUpdateRelationship
+		)
+		socket.off(
+			"narrativeGraph:deleteRelationship",
+			handleNarrativeGraphDeleteRelationship
+		)
+		socket.off(
+			"narrativeGraph:createRelationship",
+			handleNarrativeGraphCreateRelationship
+		)
+		socket.off("historyEntries:list", handleHistoryEntriesList)
+		socket.off("lorebooks:bindingList", handleLorebooksBindingList)
+		socket.off("narrativeGraph:mergeNode", handleNarrativeGraphMergeNode)
+		socket.off("narrativeGraph:undoMerge", handleNarrativeGraphUndoMerge)
+		socket.off("vectorization:itemUpdated", handleVectorizationItemUpdated)
 	})
-
-	function saveNode() {
-		if (!editingNode) return
-		isSaving = true
-		socket.emit("narrativeGraph:updateNode", {
-			node: editingNode
-		} satisfies Sockets.NarrativeGraph.UpdateNode.Params)
-	}
 
 	function requestDeleteNode(id: number) {
 		pendingDeleteNodeId = id
+		pendingDeleteNodeReferencedByMergeLog = false
+		socket.emit("narrativeGraph:checkNodeMergeReferences", {
+			nodeId: id
+		} satisfies Sockets.NarrativeGraph.CheckNodeMergeReferences.Params)
 	}
 
 	function confirmDeleteNode() {
@@ -298,6 +326,7 @@
 			id: pendingDeleteNodeId
 		} satisfies Sockets.NarrativeGraph.DeleteNode.Params)
 		pendingDeleteNodeId = null
+		pendingDeleteNodeReferencedByMergeLog = false
 	}
 
 	function saveRel() {
@@ -319,7 +348,6 @@
 		connectToNodeId = null
 		connectRelType = "neutral"
 		connectRelStatus = "active"
-		editingNode = null
 		editingRel = null
 	}
 
@@ -347,48 +375,16 @@
 		isConnecting = false
 	}
 
-	function submitCreateNode() {
-		if (!createNodeName.trim()) return
-		isCreatingNode = true
-		socket.emit("narrativeGraph:createNode", {
-			lorebookId,
-			name: createNodeName.trim(),
-			nodeState: createNodeState,
-			nodeVisibility: createNodeVisibility,
-
-			summary: createNodeSummary || undefined,
-			historyEntryId: createNodeHistoryEntryId ?? null
-		} satisfies Sockets.NarrativeGraph.CreateNode.Params)
-	}
-
-	function cancelCreateNode() {
-		showCreateNodeForm = false
-		createNodeName = ""
-		createNodeState = "active"
-		createNodeVisibility = "normal"
-		createNodeSummary = ""
-		createNodeHistoryEntryId = null
-		isCreatingNode = false
-	}
-
-	function startEditNode(node: NarrativeNode) {
-		editingNode = { ...node }
-		editingRel = null
-		selectedNode = node
-		selectedRel = null
-	}
-
 	function startEditRel(rel: NarrativeRelationship) {
 		editingRel = { ...rel }
-		editingNode = null
 		selectedRel = rel
 		// Don't clear selectedNode — rel may be opened from the node's relationship list
 	}
 
 	function cancelEdit() {
-		editingNode = null
 		editingRel = null
 		pendingDeleteNodeId = null
+		pendingDeleteNodeReferencedByMergeLog = false
 	}
 
 	function nodeName(id: number): string {
@@ -402,15 +398,11 @@
 		departed: "preset-tonal-secondary"
 	}
 
-	const NODE_STATES = ["active", "deceased", "missing", "departed"] as const
-
 	const NODE_VISIBILITY_COLOR: Record<string, string> = {
 		normal: "",
 		legendary: "preset-tonal-warning",
 		hidden: "preset-tonal-surface"
 	}
-
-	const NODE_VISIBILITY = ["normal", "legendary", "hidden"] as const
 
 	const REL_STATUS_BADGE: Record<string, string> = {
 		active: "preset-tonal-success",
@@ -499,18 +491,15 @@
 			</button>
 		{/if}
 		<div class="ml-auto flex gap-1">
-			<button
-				class="btn btn-sm preset-filled-surface-400-600"
-				onclick={() => {
-					showCreateNodeForm = !showCreateNodeForm
-					editingNode = null
-					editingRel = null
-					connectingFromNode = null
-				}}
-				title="Add node manually"
-			>
-				<Icons.Plus size={14} />
-			</button>
+			{#if onNavigateToBindings}
+				<button
+					class="btn btn-sm preset-filled-surface-400-600"
+					onclick={() => onNavigateToBindings?.()}
+					title="Add or edit a character's identity in the Bindings tab"
+				>
+					<Icons.Plus size={14} /> Add Character
+				</button>
+			{/if}
 			<button
 				class="btn btn-sm {viewMode === 'graph'
 					? 'preset-filled-surface-500'
@@ -596,15 +585,28 @@
 					<span class="text-success-500 font-medium">
 						100% complete
 					</span>
-					<button
-						class="btn btn-sm preset-filled-primary-500 ml-auto"
-						onclick={() => {
-							if (activeBuild) buildMode = activeBuild.mode
-							showBuildModal = true
-						}}
-					>
-						<Icons.Check size={14} /> Review & Apply
-					</button>
+					<div class="ml-auto flex gap-2">
+						<button
+							class="btn btn-sm preset-tonal-warning"
+							onclick={() => {
+								graphBuildsCtx?.clearBuild()
+								buildMode = "replace"
+								showBuildModal = true
+							}}
+							title="Discard this unapplied result and start a fresh build"
+						>
+							<Icons.RefreshCw size={14} /> Rebuild Graph
+						</button>
+						<button
+							class="btn btn-sm preset-filled-primary-500"
+							onclick={() => {
+								if (activeBuild) buildMode = activeBuild.mode
+								showBuildModal = true
+							}}
+						>
+							<Icons.Check size={14} /> Review & Apply
+						</button>
+					</div>
 				</div>
 			{:else if activeBuild.status === "error"}
 				<div class="space-y-2">
@@ -631,106 +633,6 @@
 					</button>
 				</div>
 			{/if}
-		</div>
-	{/if}
-
-	<!-- ── Create node form card ───────────────────────────────────────────────── -->
-	{#if showCreateNodeForm}
-		<div
-			class="bg-surface-200-800 border-surface-300-700 space-y-2 rounded-lg border p-3 text-sm"
-		>
-			<p class="text-sm font-semibold">New Node</p>
-			<div class="space-y-1">
-				<p class="text-surface-700-300 text-xs font-semibold uppercase">
-					Name
-				</p>
-				<input
-					class="input text-sm"
-					type="text"
-					placeholder="Node name…"
-					bind:value={createNodeName}
-				/>
-			</div>
-			<div class="grid grid-cols-2 gap-2">
-				<div class="space-y-1">
-					<p
-						class="text-surface-700-300 text-xs font-semibold uppercase"
-					>
-						State
-					</p>
-					<select class="select text-sm" bind:value={createNodeState}>
-						{#each NODE_STATES as s}
-							<option value={s}>{s}</option>
-						{/each}
-					</select>
-				</div>
-				<div class="space-y-1">
-					<p
-						class="text-surface-700-300 text-xs font-semibold uppercase"
-					>
-						Visibility
-					</p>
-					<select
-						class="select text-sm"
-						bind:value={createNodeVisibility}
-					>
-						{#each NODE_VISIBILITY as v}
-							<option value={v}>{v}</option>
-						{/each}
-					</select>
-				</div>
-			</div>
-			<div class="space-y-1">
-				<p class="text-surface-700-300 text-xs font-semibold uppercase">
-					Summary
-				</p>
-				<textarea
-					class="textarea min-h-10 text-sm"
-					placeholder="Short summary for context infill…"
-					maxlength="200"
-					bind:value={createNodeSummary}
-				></textarea>
-				<p class="text-surface-400 text-right text-xs">
-					{createNodeSummary.length} / 200
-				</p>
-			</div>
-			{#if historyEntries.length > 0}
-				<div class="space-y-1">
-					<p
-						class="text-surface-700-300 text-xs font-semibold uppercase"
-					>
-						First appeared (optional)
-					</p>
-					<select
-						class="select text-sm"
-						bind:value={createNodeHistoryEntryId}
-					>
-						<option value={null}>— none —</option>
-						{#each historyEntries as he}
-							<option value={he.id}>
-								Year {he.year}{he.month
-									? `, Mo. ${he.month}`
-									: ""}{he.day ? `, Day ${he.day}` : ""}
-							</option>
-						{/each}
-					</select>
-				</div>
-			{/if}
-			<div class="flex justify-end gap-2">
-				<button
-					class="btn btn-sm preset-filled-surface-400-600"
-					onclick={cancelCreateNode}
-				>
-					Cancel
-				</button>
-				<button
-					class="btn btn-sm preset-filled-primary-500"
-					disabled={!createNodeName.trim() || isCreatingNode}
-					onclick={submitCreateNode}
-				>
-					<Icons.Plus size={13} /> Create Node
-				</button>
-			</div>
 		</div>
 	{/if}
 
@@ -785,23 +687,19 @@
 				onNodeClick={(n) => {
 					selectedNode = n
 					selectedRel = null
-					editingNode = null
 					editingRel = null
 				}}
 				onRelClick={(r) => {
 					selectedRel = r
 					selectedNode = null
-					editingNode = null
 					editingRel = null
 				}}
 			/>
 		</div>
 
-		<!-- Selected node / rel detail -->
-		{#if selectedNode && !editingNode}
-			{@const aliasChildren = nodes.filter(
-				(n) => n.parentNodeId === selectedNode!.id
-			)}
+		<!-- Selected node detail (purely informational — editing happens in
+		     the Bindings tab, see the "Edit" button below) -->
+		{#if selectedNode}
 			{@const nodeRels = relationships.filter(
 				(r) => r.fromNodeId === selectedNode!.id
 			)}
@@ -819,8 +717,8 @@
 						</button>
 						<button
 							class="btn btn-sm preset-filled-surface-400-600"
-							onclick={() => startEditNode(selectedNode!)}
-							title="Edit node"
+							onclick={() => onNavigateToBindings?.(selectedNode!.id)}
+							title="Edit in the Bindings tab"
 						>
 							<Icons.Pencil size={13} />
 						</button>
@@ -830,7 +728,7 @@
 								mergeTargetNode = selectedNode
 								showMergeModal = true
 							}}
-							title="Merge as alias of another node"
+							title="Absorb into another character (they're the same person)"
 						>
 							<Icons.GitMerge size={13} />
 						</button>
@@ -876,28 +774,17 @@
 						{selectedNode.summary}
 					</p>
 				{/if}
-				{#if aliasChildren.length > 0}
+				{#if [...(selectedNode.aliases ?? []), ...(selectedNode.absorbedAliases ?? [])].length > 0}
 					<div class="space-y-1">
 						<span class="text-surface-400 text-xs">
 							Also known as:
 						</span>
 						<div class="flex flex-wrap gap-1">
-							{#each aliasChildren as alias}
+							{#each [...new Set([...(selectedNode.aliases ?? []), ...(selectedNode.absorbedAliases ?? [])])] as alias}
 								<span
-									class="badge preset-tonal-surface flex items-center gap-1 text-xs"
+									class="badge preset-tonal-surface text-xs"
 								>
-									{alias.name}
-									<button
-										class="hover:text-error-500 transition-colors"
-										title="De-merge: restore as independent node"
-										onclick={() =>
-											socket.emit(
-												"narrativeGraph:demergeNode",
-												{ nodeId: alias.id }
-											)}
-									>
-										<Icons.Unlink size={10} />
-									</button>
+									{alias}
 								</span>
 							{/each}
 						</div>
@@ -905,14 +792,18 @@
 				{/if}
 
 				<!-- Relationships -->
-				{#if nodeRels.length > 0 || connectingFromNode?.id === selectedNode.id}
-					<div class="border-surface-300-700 space-y-2 border-t pt-2">
-						<p
-							class="text-surface-700-300 text-xs font-semibold uppercase"
-						>
-							Relationships
+				<div class="border-surface-300-700 space-y-2 border-t pt-2">
+					<p
+						class="text-surface-700-300 text-xs font-semibold uppercase"
+					>
+						Relationships
+					</p>
+					{#if nodeRels.length === 0 && connectingFromNode?.id !== selectedNode.id}
+						<p class="text-surface-400 text-xs italic">
+							No relationships yet.
 						</p>
-						{#each nodeRels as rel (rel.id)}
+					{/if}
+					{#each nodeRels as rel (rel.id)}
 							{#if editingRel?.id === rel.id}
 								<!-- Inline edit card -->
 								<div
@@ -1083,7 +974,6 @@
 							{/if}
 						{/each}
 					</div>
-				{/if}
 			</div>
 		{/if}
 
@@ -1107,10 +997,19 @@
 						.
 					</p>
 				{/if}
+				{#if pendingDeleteNodeReferencedByMergeLog}
+					<p class="text-warning-500 text-xs">
+						This node is referenced by a past merge record —
+						deleting it will permanently disable that merge's undo.
+					</p>
+				{/if}
 				<div class="flex justify-end gap-2">
 					<button
 						class="btn btn-sm preset-filled-surface-400-600"
-						onclick={() => (pendingDeleteNodeId = null)}
+						onclick={() => {
+							pendingDeleteNodeId = null
+							pendingDeleteNodeReferencedByMergeLog = false
+						}}
 					>
 						Cancel
 					</button>
@@ -1242,131 +1141,6 @@
 			</div>
 		{/if}
 
-		{#if selectedNode && editingNode}
-			<div class="bg-surface-200-800 space-y-2 rounded-lg p-3 text-sm">
-				<p class="font-semibold">Edit Node</p>
-				<div class="space-y-1">
-					<p
-						class="text-surface-700-300 text-xs font-semibold uppercase"
-					>
-						Name
-					</p>
-					<input
-						class="input text-sm"
-						type="text"
-						bind:value={editingNode.name}
-					/>
-				</div>
-				<div class="grid grid-cols-2 gap-2">
-					<div class="space-y-1">
-						<p
-							class="text-surface-700-300 text-xs font-semibold uppercase"
-						>
-							State
-						</p>
-						<select
-							class="select text-sm"
-							bind:value={editingNode.nodeState}
-						>
-							{#each NODE_STATES as s}
-								<option value={s}>{s}</option>
-							{/each}
-						</select>
-					</div>
-					<div class="space-y-1">
-						<p
-							class="text-surface-700-300 text-xs font-semibold uppercase"
-						>
-							Visibility
-						</p>
-						<select
-							class="select text-sm"
-							bind:value={editingNode.nodeVisibility}
-						>
-							{#each NODE_VISIBILITY as v}
-								<option value={v}>{v}</option>
-							{/each}
-						</select>
-					</div>
-				</div>
-				<div class="space-y-1">
-					<p
-						class="text-surface-700-300 text-xs font-semibold uppercase"
-					>
-						Summary
-					</p>
-					<textarea
-						class="textarea min-h-10 text-sm"
-						maxlength="200"
-						bind:value={editingNode.summary}
-					></textarea>
-					<p class="text-surface-400 text-right text-xs">
-						{(editingNode.summary ?? "").length} / 200
-					</p>
-				</div>
-				{#if bindings.length > 0}
-					<div class="space-y-1">
-						<p
-							class="text-surface-700-300 text-xs font-semibold uppercase"
-						>
-							Character Binding
-						</p>
-						<select
-							class="select text-sm"
-							bind:value={editingNode.lorebookBindingId}
-						>
-							<option value={null}>— None —</option>
-							{#each bindings.filter((b) => !nodes.some((n) => n.id !== editingNode!.id && n.lorebookBindingId === b.id)) as b}
-								<option value={b.id}>
-									{b.character?.nickname ||
-										b.character?.name ||
-										b.persona?.name ||
-										b.binding}
-								</option>
-							{/each}
-						</select>
-					</div>
-				{/if}
-				{#if historyEntries.length > 0}
-					<div class="space-y-1">
-						<p
-							class="text-surface-700-300 text-xs font-semibold uppercase"
-						>
-							First appeared (optional)
-						</p>
-						<select
-							class="select text-sm"
-							bind:value={editingNode.historyEntryId}
-						>
-							<option value={null}>— none —</option>
-							{#each historyEntries as he}
-								<option value={he.id}>
-									Year {he.year}{he.month
-										? `, Mo. ${he.month}`
-										: ""}{he.day ? `, Day ${he.day}` : ""}
-								</option>
-							{/each}
-						</select>
-					</div>
-				{/if}
-				<div class="flex justify-end gap-2">
-					<button
-						class="btn btn-sm preset-filled-surface-400-600"
-						onclick={cancelEdit}
-					>
-						Cancel
-					</button>
-					<button
-						class="btn btn-sm preset-filled-primary-500"
-						disabled={isSaving}
-						onclick={saveNode}
-					>
-						<Icons.Save size={13} /> Update
-					</button>
-				</div>
-			</div>
-		{/if}
-
 		{#if selectedRel && !editingRel}
 			<div class="bg-surface-200-800 space-y-1 rounded-lg p-3 text-sm">
 				<div class="flex items-center justify-between">
@@ -1419,24 +1193,28 @@
 			<div class="bg-surface-200-800 space-y-2 rounded-lg p-3 text-sm">
 				<p class="font-semibold">Edit Relationship</p>
 				<div class="space-y-1">
-					<p
+					<label
+						for="relType"
 						class="text-surface-700-300 text-xs font-semibold uppercase"
 					>
 						Type
-					</p>
+					</label>
 					<input
+						id="relType"
 						class="input text-sm"
 						type="text"
 						bind:value={editingRel.relationshipType}
 					/>
 				</div>
 				<div class="space-y-1">
-					<p
+					<label
+						for="relStatus"
 						class="text-surface-700-300 text-xs font-semibold uppercase"
 					>
 						Status
-					</p>
+					</label>
 					<select
+						id="relStatus"
 						class="select text-sm"
 						bind:value={editingRel.status}
 					>
@@ -1446,23 +1224,27 @@
 					</select>
 				</div>
 				<div class="space-y-1">
-					<p
+					<label
+						for="relDescription"
 						class="text-surface-700-300 text-xs font-semibold uppercase"
 					>
 						Description
-					</p>
+					</label>
 					<textarea
+						id="relDescription"
 						class="textarea min-h-12 text-sm"
 						bind:value={editingRel.description}
 					></textarea>
 				</div>
 				<div class="space-y-1">
-					<p
+					<label
+						for="relReason"
 						class="text-surface-700-300 text-xs font-semibold uppercase"
 					>
 						Reason for this state
-					</p>
+					</label>
 					<input
+						id="relReason"
 						class="input text-sm"
 						type="text"
 						bind:value={editingRel.reason}
@@ -1470,12 +1252,14 @@
 				</div>
 				{#if historyEntries.length > 0}
 					<div class="space-y-1">
-						<p
+						<label
+							for="relHistoryEntry"
 							class="text-surface-700-300 text-xs font-semibold uppercase"
 						>
 							When (optional)
-						</p>
+						</label>
 						<select
+							id="relHistoryEntry"
 							class="select text-sm"
 							bind:value={editingRel.historyEntryId}
 						>
@@ -1519,150 +1303,67 @@
 				</h3>
 				{#each parentNodes as node}
 					<div
-						class="bg-surface-200-800 border-surface-300-700 rounded-lg border px-3 py-2"
+						class="bg-surface-200-800 border-surface-300-700 hover:preset-filled-surface-300-700 cursor-pointer rounded-lg border px-3 py-2 transition-colors"
+						role="button"
+						tabindex="0"
+						onclick={() => {
+							selectedNode = node
+							viewMode = "graph"
+						}}
+						onkeydown={(e) => {
+							if (e.key === "Enter" || e.key === " ") {
+								selectedNode = node
+								viewMode = "graph"
+							}
+						}}
 					>
-						{#if editingNode?.id === node.id}
-							<div class="space-y-2">
-								<div class="flex items-center gap-2">
-									<input
-										class="input flex-1 text-sm"
-										type="text"
-										bind:value={editingNode.name}
-									/>
-									<button
-										class="btn btn-sm preset-filled-surface-400-600"
-										aria-label="Cancel"
-										onclick={cancelEdit}
-									>
-										<Icons.X size={13} />
-									</button>
-									<button
-										class="btn btn-sm preset-filled-primary-500"
-										aria-label="Save"
-										disabled={isSaving}
-										onclick={saveNode}
-									>
-										<Icons.Save size={13} />
-									</button>
-								</div>
-								<div class="grid grid-cols-2 gap-2">
-									<select
-										class="select text-xs"
-										bind:value={editingNode.nodeState}
-									>
-										{#each NODE_STATES as s}
-											<option value={s}>{s}</option>
-										{/each}
-									</select>
-									<select
-										class="select text-xs"
-										bind:value={editingNode.nodeVisibility}
-									>
-										{#each NODE_VISIBILITY as v}
-											<option value={v}>{v}</option>
-										{/each}
-									</select>
-								</div>
-								<textarea
-									class="textarea min-h-10 text-xs"
-									placeholder="Summary…"
-									maxlength="200"
-									bind:value={editingNode.summary}
-								></textarea>
-								<p class="text-surface-400 text-right text-xs">
-									{(editingNode.summary ?? "").length} / 200
-								</p>
-								{#if bindings.length > 0}
-									<div class="space-y-1">
-										<p
-											class="text-surface-700-300 text-xs font-semibold uppercase"
-										>
-											Character Binding
-										</p>
-										<select
-											class="select text-xs"
-											bind:value={
-												editingNode.lorebookBindingId
-											}
-										>
-											<option value={null}>
-												— None —
-											</option>
-											{#each bindings.filter((b) => !nodes.some((n) => n.id !== editingNode!.id && n.lorebookBindingId === b.id)) as b}
-												<option value={b.id}>
-													{b.character?.nickname ||
-														b.character?.name ||
-														b.persona?.name ||
-														b.binding}
-												</option>
-											{/each}
-										</select>
-									</div>
-								{/if}
-								{#if historyEntries.length > 0}
-									<select
-										class="select text-xs"
-										bind:value={editingNode.historyEntryId}
-									>
-										<option value={null}>
-											— no history entry —
-										</option>
-										{#each historyEntries as he}
-											<option value={he.id}>
-												Year {he.year}{he.month
-													? `, Mo. ${he.month}`
-													: ""}{he.day
-													? `, Day ${he.day}`
-													: ""}
-											</option>
-										{/each}
-									</select>
-								{/if}
-							</div>
-						{:else}
-							<div class="flex items-center gap-2">
+						<div class="flex items-center gap-2">
+							<span class="flex-1 truncate text-sm font-medium">
+								{node.name}
+							</span>
+							<EmbeddingStatusIcon
+								embeddingModel={node.embeddingModel}
+							/>
+							<span
+								class="badge {NODE_STATE_COLOR[
+									node.nodeState
+								] ?? 'preset-tonal-surface'} text-xs"
+							>
+								{node.nodeState}
+							</span>
+							{#if node.nodeVisibility !== "normal"}
 								<span
-									class="flex-1 truncate text-sm font-medium"
-								>
-									{node.name}
-								</span>
-								<EmbeddingStatusIcon
-									embeddingModel={node.embeddingModel}
-								/>
-								<span
-									class="badge {NODE_STATE_COLOR[
-										node.nodeState
+									class="badge {NODE_VISIBILITY_COLOR[
+										node.nodeVisibility
 									] ?? 'preset-tonal-surface'} text-xs"
 								>
-									{node.nodeState}
+									{node.nodeVisibility}
 								</span>
-								{#if node.nodeVisibility !== "normal"}
-									<span
-										class="badge {NODE_VISIBILITY_COLOR[
-											node.nodeVisibility
-										] ?? 'preset-tonal-surface'} text-xs"
-									>
-										{node.nodeVisibility}
-									</span>
-								{/if}
-								<button
-									class="btn btn-sm preset-filled-surface-400-600"
-									onclick={() => startEditNode(node)}
-								>
-									<Icons.Pencil size={13} />
-								</button>
-								<button
-									class="btn btn-sm preset-tonal-error"
-									onclick={() => requestDeleteNode(node.id)}
-								>
-									<Icons.Trash2 size={13} />
-								</button>
-							</div>
-							{#if node.summary}
-								<p class="text-surface-700-300 mt-1 text-xs">
-									{node.summary}
-								</p>
 							{/if}
+							<button
+								class="btn btn-sm preset-filled-surface-400-600"
+								onclick={(e) => {
+									e.stopPropagation()
+									onNavigateToBindings?.(node.id)
+								}}
+								title="Edit in the Bindings tab"
+							>
+								<Icons.Pencil size={13} />
+							</button>
+							<button
+								class="btn btn-sm preset-tonal-error"
+								onclick={(e) => {
+									e.stopPropagation()
+									requestDeleteNode(node.id)
+								}}
+							>
+								<Icons.Trash2 size={13} />
+							</button>
+						</div>
+						{#if node.summary}
+							<p class="text-surface-700-300 mt-1 text-xs">
+								{node.summary}
+							</p>
 						{/if}
 					</div>
 				{/each}
@@ -1838,14 +1539,14 @@
 		? ungraphedHistoryEntryCount
 		: totalDirectHistoryEntryCount}
 	existingUnboundNodeCount={nodes.filter(
-		(n) => !n.lorebookBindingId && !n.parentNodeId
+		(n) => n.characterId == null && n.personaId == null && !n.parentNodeId
 	).length}
 	existingRelationshipCount={relationships.length}
 	onApplied={load}
 />
 
 {#if mergeTargetNode}
-	<MergeNodeModal
+	<AbsorbBindingModal
 		open={showMergeModal}
 		onOpenChange={(e) => {
 			showMergeModal = e.open

@@ -34,7 +34,7 @@ Click **Process Data** to upload the metadata-bearing files (characters, `settin
 When the scan finishes, a **Scan Results** panel lists everything found, broken into five categories:
 
 - **Characters** — parsed from `.png` or `.json` character cards in `characters/`.
-- **Personas** — read from the `power_user.persona_descriptions` entries in `settings.json`.
+- **Personas** — read from the `power_user.persona_descriptions` entries in `settings.json`. If a matching `User Avatars/<persona name>.png` file exists, it's copied over as the persona's avatar.
 - **Individual Chats** — one per `.jsonl` file under `chats/<character name>/`.
 - **Group Chats** — one per `.json` file in `groups/`, each listing its member character names.
 - **Lorebooks** — one per `.json` "World Info" file in `worlds/`.

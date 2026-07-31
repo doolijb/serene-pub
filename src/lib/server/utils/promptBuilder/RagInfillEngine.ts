@@ -43,10 +43,16 @@
  *    added scored by relevance until the budget is consumed.
  */
 
-import { batchEmbed, embed, getLoadedModelId } from "$lib/server/embedding"
+import {
+	batchEmbed,
+	cosineSimilarity,
+	embed,
+	getLoadedModelId
+} from "$lib/server/embedding"
 import {
 	getChatRagContext,
-	scopedRankBySimilarity,
+	fetchScopedCandidates,
+	rankScopedCandidates,
 	type ScopedRagItem
 } from "$lib/server/embedding/ragContext"
 import type { BasePromptChat } from "../../connectionAdapters/BaseConnectionAdapter"
@@ -69,6 +75,7 @@ import { db } from "$lib/server/db"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { BaseInfillEngine } from "./BaseInfillEngine"
+import { PRIORITY_SCORE_BONUS } from "./KeywordInfillEngine"
 import {
 	MAX_GRAPH_PAIRS,
 	serializeGraphPairs,
@@ -142,17 +149,6 @@ function rrfMerge(
 }
 
 /**
- * Dot product of two vectors (used for MMR inter-item similarity).
- * For normalized embeddings this equals cosine similarity.
- */
-function dotProduct(a: number[], b: number[]): number {
-	let sum = 0
-	const len = Math.min(a.length, b.length)
-	for (let i = 0; i < len; i++) sum += a[i] * b[i]
-	return sum
-}
-
-/**
  * Maximal Marginal Relevance reranking.
  * λ=MMR_LAMBDA balances relevance vs. diversity.
  * Returns items reordered by MMR priority.
@@ -173,7 +169,10 @@ function mmrRerank(items: ScoredRagItem[]): ScoredRagItem[] {
 			const relScore = remaining[i].score
 			let maxSim = 0
 			for (const sel of selected) {
-				const sim = dotProduct(remaining[i].embedding, sel.embedding)
+				const sim = cosineSimilarity(
+					remaining[i].embedding,
+					sel.embedding
+				)
 				if (sim > maxSim) maxSim = sim
 			}
 			const mmr = MMR_LAMBDA * relScore - (1 - MMR_LAMBDA) * maxSim
@@ -194,15 +193,40 @@ function formatMessageForQuery(
 	msg: SelectChatMessage,
 	chat: BasePromptChat
 ): string {
-	const char = (chat.chatCharacters as any[])?.find(
+	// Active participants first, same active/removed split as
+	// ChatMessageProcessor.processItem — a removed participant's past
+	// messages still need a speaker name for RAG query embedding, so fall
+	// back to the separately-supplied removed list, then the removedAt-time
+	// name snapshot, before giving up to msg.role/"Unknown".
+	let char = (chat.chatCharacters as any[])?.find(
 		(cc: any) => cc.character?.id === msg.characterId
 	)?.character
-	const persona = (chat.chatPersonas as any[])?.find(
+	let persona = (chat.chatPersonas as any[])?.find(
 		(cp: any) => cp.persona?.id === msg.personaId
 	)?.persona
+	let removedName: string | undefined
+	if (!char && msg.characterId) {
+		const removedCC = (chat.removedChatCharacters as any[])?.find(
+			(cc: any) => cc.characterId === msg.characterId
+		)
+		char = removedCC?.character
+		removedName ??= removedCC?.removedName ?? undefined
+	}
+	if (!persona && msg.personaId) {
+		const removedCP = (chat.removedChatPersonas as any[])?.find(
+			(cp: any) => cp.personaId === msg.personaId
+		)
+		persona = removedCP?.persona
+		removedName ??= removedCP?.removedName ?? undefined
+	}
 	const nickname = (char as any)?.nickname
 	const speakerName =
-		nickname || char?.name || persona?.name || msg.role || "Unknown"
+		nickname ||
+		char?.name ||
+		persona?.name ||
+		removedName ||
+		msg.role ||
+		"Unknown"
 	const cleanContent = (msg.content ?? "").replace(/^\*+|\*+$/gm, "").trim()
 	return `[${speakerName}]: ${cleanContent}`
 }
@@ -299,6 +323,26 @@ export class RagInfillEngine extends BaseInfillEngine {
 					-RAG_CURRENT_WINDOW
 				)
 
+				// Fetched once and reused for every query embedding below
+				// (both runQuery(currentMessages) and runQuery(recentMessages)
+				// score against the exact same candidate pool — only the
+				// query embedding differs) instead of re-running the whole
+				// DB fetch up to 5 times per generation turn.
+				const scopedCandidatesPromise = fetchScopedCandidates(
+					ragContext,
+					{
+						modelId,
+						sources: [
+							"message",
+							"worldLore",
+							"characterLore",
+							"historyEntry",
+							"narrativeRelationship"
+						],
+						excludeRecentMessages: guaranteedMessages.length
+					}
+				)
+
 				const seenIds = new Set<string>()
 
 				/**
@@ -322,29 +366,19 @@ export class RagInfillEngine extends BaseInfillEngine {
 						)
 					}
 
-					// Run a separate scopedRankBySimilarity for each embedding
-					const perMsgResults = await Promise.all(
-						embeddings.map((emb) =>
-							scopedRankBySimilarity(emb, ragContext, {
-								modelId,
-								topK:
-									Math.max(
-										RAG_SOURCE_BUDGET.message,
-										RAG_SOURCE_BUDGET.worldLore,
-										RAG_SOURCE_BUDGET.characterLore,
-										RAG_SOURCE_BUDGET.historyEntry,
-										RAG_SOURCE_BUDGET.narrativeRelationship
-									) * 3,
-								sources: [
-									"message",
-									"worldLore",
-									"characterLore",
-									"historyEntry",
-									"narrativeRelationship"
-								],
-								excludeRecentMessages: guaranteedMessages.length
-							})
-						)
+					// Score the shared candidate set against each query
+					// embedding — cheap, synchronous, in-memory (no re-fetch).
+					const scopedCandidates = await scopedCandidatesPromise
+					const topK =
+						Math.max(
+							RAG_SOURCE_BUDGET.message,
+							RAG_SOURCE_BUDGET.worldLore,
+							RAG_SOURCE_BUDGET.characterLore,
+							RAG_SOURCE_BUDGET.historyEntry,
+							RAG_SOURCE_BUDGET.narrativeRelationship
+						) * 3
+					const perMsgResults = embeddings.map((emb) =>
+						rankScopedCandidates(scopedCandidates, emb, topK)
 					)
 
 					// Merge via RRF
@@ -383,6 +417,32 @@ export class RagInfillEngine extends BaseInfillEngine {
 										-RAG_RECENCY_DECAY * ageInMessages
 									))
 						item.score = boosted
+					}
+
+					// ── Priority boost for lore ───────────────────────────────────────
+					// Mirrors KeywordInfillEngine's PRIORITY_SCORE_BONUS so an
+					// author-set priority tier (Normal/High/VeryHigh) has consistent
+					// influence in both modes — otherwise it's silently ignored by
+					// RAG's pure similarity ranking. worldLore/characterLore only
+					// (historyEntries has no priority column, same as Keyword mode).
+					const chatLorebook = (this.chat as any).lorebook as
+						| { worldLoreEntries?: any[]; characterLoreEntries?: any[] }
+						| undefined
+					for (const item of scored) {
+						if (
+							item.source !== "worldLore" &&
+							item.source !== "characterLore"
+						)
+							continue
+						const pool =
+							item.source === "worldLore"
+								? chatLorebook?.worldLoreEntries
+								: chatLorebook?.characterLoreEntries
+						const entry = pool?.find((e: any) => e.id === item.id)
+						const tier = (entry?.priority ?? 1) - 1
+						if (tier > 0) {
+							item.score = item.score + tier * PRIORITY_SCORE_BONUS
+						}
 					}
 
 					// ── Adaptive score threshold ─────────────────────────────────────
@@ -687,20 +747,21 @@ export class RagInfillEngine extends BaseInfillEngine {
 			}
 			const nodeRows = await db
 				.select({
-					id: schema.narrativeNodes.id,
-					name: schema.narrativeNodes.name,
-					summary: schema.narrativeNodes.summary,
-					lorebookBindingId: schema.narrativeNodes.lorebookBindingId
+					id: schema.lorebookBindings.id,
+					name: schema.lorebookBindings.name,
+					summary: schema.lorebookBindings.summary,
+					characterId: schema.lorebookBindings.characterId,
+					personaId: schema.lorebookBindings.personaId
 				})
-				.from(schema.narrativeNodes)
-				.where(inArray(schema.narrativeNodes.id, Array.from(nodeIdSet)))
+				.from(schema.lorebookBindings)
+				.where(inArray(schema.lorebookBindings.id, Array.from(nodeIdSet)))
 			const nodeInfoMap = new Map(
 				nodeRows.map((n) => [
 					n.id,
 					{
 						name: n.name,
 						summary: n.summary,
-						bound: n.lorebookBindingId != null
+						bound: n.characterId != null || n.personaId != null
 					}
 				])
 			)
@@ -1302,14 +1363,22 @@ export class RagInfillEngine extends BaseInfillEngine {
 			}
 			context.worldLore =
 				Object.keys(worldLoreObj).length > 0
-					? JSON.stringify(worldLoreObj, null, 2)
+					? JSON.stringify(worldLoreObj)
 					: undefined
 		} else {
 			context.worldLore = undefined
 		}
 
-		// Build history object from combined pinned + RAG arrays (both sorted newest-first)
-		const allHistory = [...pinnedHistory, ...ragHistory]
+		// Build history object from combined pinned + RAG arrays. Each array is
+		// already sorted newest-first on its own, but concatenating two
+		// independently-sorted arrays doesn't produce a globally sorted result
+		// (a pinned entry can be older than a RAG-retrieved one) — sort the
+		// combined set by date explicitly, matching KeywordInfillEngine.
+		const allHistory = [...pinnedHistory, ...ragHistory].sort((a, b) => {
+			const aVal = a.year * 10000 + (a.month ?? 0) * 100 + (a.day ?? 0)
+			const bVal = b.year * 10000 + (b.month ?? 0) * 100 + (b.day ?? 0)
+			return bVal - aVal
+		})
 		if (allHistory.length > 0) {
 			const historyObj: Record<string, string> = {}
 			for (const he of allHistory) {

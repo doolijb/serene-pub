@@ -3,6 +3,18 @@ import { eq, and } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { Handler } from "$lib/shared/events"
 
+// Case-insensitive+trimmed match against the tags_user_id_name_unique
+// index (schema.ts) — shared by tagsCreate's adopt-on-collision check and
+// tagsUpdate's rename-collision check below, so the two can never disagree
+// about what counts as a collision.
+function findMatchingTag(userId: number, rawName: string) {
+	const name = rawName.trim()
+	return db.query.tags.findFirst({
+		where: (t, { and, eq, sql }) =>
+			and(eq(t.userId, userId), sql`lower(${t.name}) = lower(${name})`)
+	})
+}
+
 export const tagsList: Handler<
 	Sockets.Tags.List.Params,
 	Sockets.Tags.List.Response
@@ -28,13 +40,22 @@ export const tagsCreate: Handler<
 	handler: async (socket, params, emitToUser) => {
 		try {
 			const userId = socket.user!.id
-			const [tag] = await db
-				.insert(schema.tags)
-				.values({
-					...params.tag,
-					userId
-				})
-				.returning()
+			const name = (params.tag.name ?? "").trim()
+			if (!name) throw new Error("Tag name is required.")
+
+			// Adopt an existing case-insensitive/whitespace-variant match
+			// instead of creating a duplicate — reused as-is, not overwritten
+			// with this request's description/colorPreset, since "adopt"
+			// means reuse the existing tag's own appearance.
+			const existing = await findMatchingTag(userId, name)
+			const tag =
+				existing ??
+				(
+					await db
+						.insert(schema.tags)
+						.values({ ...params.tag, name, userId })
+						.returning()
+				)[0]
 
 			const res: Sockets.Tags.Create.Response = { tag }
 			emitToUser("tags:create", res)
@@ -45,7 +66,7 @@ export const tagsCreate: Handler<
 		} catch (error) {
 			console.error("Error creating tag:", error)
 			emitToUser("tags:create:error", {
-				error: "Failed to create tag. Tag name might already exist."
+				error: "Failed to create tag."
 			})
 			throw error
 		}
@@ -60,10 +81,24 @@ export const tagsUpdate: Handler<
 	handler: async (socket, params, emitToUser) => {
 		try {
 			const userId = socket.user!.id
+			const name = (params.tag.name ?? "").trim()
+
+			// Renaming into a collision with a DIFFERENT existing tag fails
+			// loudly rather than silently merging the two tags' associations
+			// — same case-insensitive predicate as the tags_user_id_name_unique
+			// index itself (findMatchingTag), so this check and the DB
+			// constraint can never disagree about what counts as a collision.
+			if (name) {
+				const collision = await findMatchingTag(userId, name)
+				if (collision && collision.id !== params.tag.id) {
+					throw new Error("A tag with this name already exists.")
+				}
+			}
+
 			const [tag] = await db
 				.update(schema.tags)
 				.set({
-					name: params.tag.name,
+					name: name || params.tag.name,
 					description: params.tag.description,
 					colorPreset: params.tag.colorPreset
 				})
@@ -84,7 +119,10 @@ export const tagsUpdate: Handler<
 		} catch (error) {
 			console.error("Error updating tag:", error)
 			emitToUser("tags:update:error", {
-				error: "Failed to update tag. Tag name might already exist."
+				error:
+					error instanceof Error
+						? error.message
+						: "Failed to update tag."
 			})
 			throw error
 		}

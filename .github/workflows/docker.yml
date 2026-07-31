@@ -29,8 +29,13 @@ jobs:
             # -------------------------------------------------------
             - name: Classify release
               id: classify
+              env:
+                  # Never interpolate ${{ github.ref_name }} directly into a
+                  # run: script body — see release.yml's identical fix for
+                  # why (script-injection via a crafted tag name).
+                  REF_NAME: ${{ github.ref_name }}
               run: |
-                  TAG="${{ github.ref_name }}"
+                  TAG="$REF_NAME"
                   VERSION="${TAG#v}"
                   if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-beta)?$ ]]; then
                     echo "stable=true" >> "$GITHUB_OUTPUT"
@@ -95,12 +100,20 @@ jobs:
             - name: Publish docker-compose.dist.yml to release
               env:
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  # Both derive from the pushed tag (COMPOSE_TAG is the
+                  # classify step's parsed version, still attacker-influenced
+                  # content) — never interpolate ${{ }} expressions directly
+                  # into a run: script body, since GitHub substitutes them as
+                  # raw text before bash parses the script. Routing through
+                  # env: makes both safe, ordinary shell variable expansions.
+                  REF_NAME: ${{ github.ref_name }}
+                  COMPOSE_TAG: ${{ steps.classify.outputs.compose_tag }}
               run: |
-                  sed 's|ghcr.io/doolijb/serene-pub:latest|ghcr.io/doolijb/serene-pub:${{ steps.classify.outputs.compose_tag }}|' \
+                  sed "s|ghcr.io/doolijb/serene-pub:latest|ghcr.io/doolijb/serene-pub:$COMPOSE_TAG|" \
                     docker-compose.dist.yml > /tmp/docker-compose.yml
                   # Retry a few times — release.yml may still be creating the release
                   for i in 1 2 3 4 5; do
-                    gh release upload "${{ github.ref_name }}" /tmp/docker-compose.yml --clobber && break
+                    gh release upload "$REF_NAME" /tmp/docker-compose.yml --clobber && break
                     echo "Attempt $i failed, retrying in 30s..."
                     sleep 30
                   done

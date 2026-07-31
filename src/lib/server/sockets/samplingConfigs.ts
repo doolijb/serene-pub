@@ -7,43 +7,7 @@ import type { Handler } from "$lib/shared/events"
 
 // --- WEIGHTS SOCKET HANDLERS ---
 
-export const samplingHandler: Handler<
-	Sockets.SamplingConfigs.Get.Params,
-	Sockets.SamplingConfigs.Get.Response
-> = {
-	event: "sampling",
-	handler: async (socket, params, emitToUser) => {
-		if (!socket.user!.isAdmin) {
-			const res = {
-				error: "Access denied. Only admin users can manage sampling configurations."
-			}
-			emitToUser("error", res)
-			throw new Error(
-				"Access denied. Only admin users can manage sampling configurations."
-			)
-		}
-
-		const sampling = await db.query.samplingConfigs.findFirst({
-			where: (w, { eq }) => eq(w.id, params.id),
-			orderBy: (w, { asc }) => [asc(w.isImmutable), asc(w.name)]
-		})
-		const res: Sockets.SamplingConfigs.Get.Response = {
-			sampling: sampling!
-		}
-		emitToUser("sampling", res)
-		return res
-	}
-}
-
 // Legacy functions for compatibility
-export async function sampling(
-	socket: any,
-	message: { id: number },
-	emitToUser: (event: string, data: any) => void
-) {
-	await samplingHandler.handler(socket, { id: message.id }, emitToUser)
-}
-
 export async function samplingConfigsList(
 	socket: any,
 	message: {},
@@ -116,9 +80,13 @@ export const samplingConfigsGet: Handler<
 			where: (w, { eq }) => eq(w.id, params.id),
 			orderBy: (w, { asc }) => [asc(w.isImmutable), asc(w.name)]
 		})
-		const res: Sockets.SamplingConfigs.Get.Response = {
-			sampling: sampling!
+		if (!sampling) {
+			emitToUser("samplingConfigs:get:error", {
+				error: "Sampling config not found"
+			})
+			throw new Error("Sampling config not found")
 		}
+		const res: Sockets.SamplingConfigs.Get.Response = { sampling }
 		emitToUser("samplingConfigs:get", res)
 		return res
 	}
@@ -223,11 +191,16 @@ export const samplingConfigsCreate: Handler<
 			.values(params.sampling)
 			.returning()
 
-		await samplingConfigsSetUserActive.handler(
-			socket,
-			{ id: sampling.id },
-			emitToUser
-		)
+		// Unlike every sibling *ConfigsCreate handler, this used to also call
+		// samplingConfigsSetUserActive — which writes
+		// systemSettings.defaultSamplingConfigId, an instance-wide setting,
+		// not per-user — silently making every newly created sampling config
+		// the default for all users. The client already has a separate,
+		// deliberate "Set as Default" action for that
+		// (SamplingSidebar.svelte's handleSetDefault); create doing it too
+		// was a bug, not a UX dependency. samplingConfigsGet still pushes the
+		// new row so the client can show it for editing.
+		await samplingConfigsGet.handler(socket, { id: sampling.id }, emitToUser)
 		await samplingConfigsListHandler.handler(socket, {}, emitToUser)
 
 		const res: Sockets.SamplingConfigs.Create.Response = { sampling }
@@ -255,7 +228,7 @@ export const samplingConfigsDelete: Handler<
 		const currentSamplingConfig = await db.query.samplingConfigs.findFirst({
 			where: (w, { eq }) => eq(w.id, params.id)
 		})
-		if (currentSamplingConfig!.isImmutable) {
+		if (currentSamplingConfig?.isImmutable) {
 			emitToUser("samplingConfigs:delete:error", {
 				error: "Cannot delete immutable samplingConfigs."
 			})
@@ -311,18 +284,27 @@ export const samplingConfigsUpdate: Handler<
 		const currentSamplingConfig = await db.query.samplingConfigs.findFirst({
 			where: (w, { eq }) => eq(w.id, id)
 		})
-		if (currentSamplingConfig!.isImmutable) {
+		if (currentSamplingConfig?.isImmutable) {
 			emitToUser("samplingConfigs:update:error", {
 				error: "Cannot update immutable samplingConfigs."
 			})
 			throw new Error("Cannot update immutable samplingConfigs")
 		}
 
-		const [updatedSamplingConfig] = await db
-			.update(schema.samplingConfigs)
-			.set(updateData)
-			.where(eq(schema.samplingConfigs.id, id))
-			.returning()
+		// A raw client could target a mutable row with an {id}-only payload
+		// (no other fields present at all) — updateData then has no defined
+		// values, and an empty .set() throws rather than being a legitimate
+		// no-op (same round-8 fix already applied to promptConfigsUpdate).
+		const hasUpdates = Object.values(updateData).some((v) => v !== undefined)
+		const updatedSamplingConfig = hasUpdates
+			? (
+					await db
+						.update(schema.samplingConfigs)
+						.set(updateData)
+						.where(eq(schema.samplingConfigs.id, id))
+						.returning()
+				)[0]
+			: currentSamplingConfig!
 
 		await samplingConfigsListHandler.handler(socket, {}, emitToUser)
 		await samplingConfigsGet.handler(socket, { id }, emitToUser)
@@ -352,5 +334,4 @@ export function registerSamplingConfigHandlers(
 	register(socket, samplingConfigsCreate, emitToUser)
 	register(socket, samplingConfigsUpdate, emitToUser)
 	register(socket, samplingConfigsDelete, emitToUser)
-	register(socket, samplingHandler, emitToUser)
 }

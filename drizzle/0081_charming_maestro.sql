@@ -1,0 +1,1 @@
+ALTER TABLE "binding_merge_logs" ADD COLUMN "reassigned_child_node_ids" json DEFAULT '[]'::json NOT NULL;

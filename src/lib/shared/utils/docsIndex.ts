@@ -24,6 +24,7 @@ export const DOC_ORDER: string[] = [
 	"chats",
 	"lorebooks",
 	"connections",
+	"context-configs",
 	"prompt-configs",
 	"summarization",
 	"embeddings-and-rag",
@@ -32,7 +33,8 @@ export const DOC_ORDER: string[] = [
 	"themes-and-settings",
 	"document-view",
 	"system-settings",
-	"importing-from-sillytavern"
+	"importing-from-sillytavern",
+	"environment-variables"
 ]
 
 const rawDocs = import.meta.glob("/docs/**/*.md", {

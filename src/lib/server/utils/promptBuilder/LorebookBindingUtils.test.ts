@@ -1,9 +1,13 @@
 import { describe, expect, test } from "vitest"
-import { populateLorebookEntryBindings } from "./LorebookBindingUtils"
+import {
+	isCharacterLoreEntryVisible,
+	populateLorebookEntryBindings
+} from "./LorebookBindingUtils"
 import {
 	buildChat,
 	buildLorebook,
 	character,
+	characterLoreEntry,
 	lorebookBinding,
 	worldLoreEntry
 } from "./infillTestUtils"
@@ -73,5 +77,57 @@ describe("populateLorebookEntryBindings — @@decorator stripping", () => {
 		})
 		const result = populateLorebookEntryBindings(entry, chat)
 		expect(result.content).toBe("Plain lore content with no decorators.")
+	})
+})
+
+describe("isCharacterLoreEntryVisible — narrator visibility (decision 3)", () => {
+	// A background/NPC binding: bound to neither a character nor a persona.
+	const npcBinding = lorebookBinding({
+		id: 9,
+		lorebookId: 1,
+		characterId: null,
+		personaId: null
+	})
+
+	function chatWithNpcLore() {
+		const entry = characterLoreEntry({
+			lorebookId: 1,
+			lorebookBindingId: npcBinding.id,
+			content: "Secret NPC lore."
+		})
+		return {
+			entry,
+			chat: buildChat({
+				lorebookId: 1,
+				lorebook: buildLorebook({
+					id: 1,
+					lorebookBindings: [npcBinding],
+					characterLoreEntries: [entry]
+				})
+			})
+		}
+	}
+
+	test("a background/NPC-bound entry is visible to the Narrator (no current character)", () => {
+		const { entry, chat } = chatWithNpcLore()
+		expect(isCharacterLoreEntryVisible(entry, chat, null)).toBe(true)
+	})
+
+	test("a background/NPC-bound entry is invisible to any specific character", () => {
+		const { entry, chat } = chatWithNpcLore()
+		expect(isCharacterLoreEntryVisible(entry, chat, 42)).toBe(false)
+	})
+
+	test("an entry with no lorebookBindingId at all stays invisible to the Narrator too", () => {
+		const entry = characterLoreEntry({
+			lorebookId: 1,
+			lorebookBindingId: null,
+			content: "Truly unbound lore."
+		})
+		const chat = buildChat({
+			lorebookId: 1,
+			lorebook: buildLorebook({ id: 1, characterLoreEntries: [entry] })
+		})
+		expect(isCharacterLoreEntryVisible(entry, chat, null)).toBe(false)
 	})
 })

@@ -7,7 +7,7 @@ This page collects the most common ways Serene Pub gets stuck, organized by area
 - **"Test: Failed!" on a connection.** The error shown directly under the Test Connection button is the real cause (bad Base URL, missing/incorrect API key, service not running, wrong port) — read it before assuming the connection type is broken. See [Connections](./connections.md).
 - **Model output is garbled, run-on, or ignores turn boundaries.** This is almost always the wrong **Prompt Format** for a text-completion connection — check it against the model's actual training format. See [Prompt Formats and Token Counters](./connections.md#prompt-formats-and-token-counters).
 - **Context budget seems off (too much or too little history/lore fits).** Check the connection's **Token Counter** — leaving it on the generic **Estimate** for a model with unusual tokenization can under- or over-estimate how much fits under the Sampling Config's Context Tokens limit.
-- **A custom Context Config broke every chat using it.** A malformed Handlebars template can break generation instance-wide. Test edits on a low-stakes chat before setting a custom Context Config as your default. See [Context Configs](./connections.md#context-configs).
+- **A custom Context Config broke every chat using it.** A malformed Handlebars template can break generation instance-wide. Test edits on a low-stakes chat before setting a custom Context Config as your default. See [Context Configs](./context-configs.md).
 
 ## KoboldCPP Manager
 
@@ -35,9 +35,9 @@ This page collects the most common ways Serene Pub gets stuck, organized by area
 
 ## Accounts & Login
 
-- **Locked out of the `admin` account after enabling User Accounts.** There's currently no self-service or API recovery path for this — no reset endpoint, no CLI script. The only way back in is direct database access to update the stored passphrase hash. Avoid this situation by keeping your admin passphrase somewhere safe and creating a second admin account once accounts are enabled. See [If the admin account itself is locked out](./users-and-accounts.md#if-the-admin-account-itself-is-locked-out).
+- **"Enable User Accounts" looks locked/greyed out.** This is intentional — enabling User Accounts is a one-way, permanent switch with no UI path back to single-user mode.
 - **A standard user or second admin forgot their passphrase.** An admin resets it from the Users panel — **Edit** the account and fill in **New Passphrase** / **Confirm Passphrase**; leaving those fields blank leaves the existing passphrase untouched.
-- **"Enable User Accounts" looks locked/greyed out.** This is intentional — enabling multi-user accounts is a one-way, permanent switch with no UI path back to single-user mode.
+- **Locked out of the `admin` account after enabling User Accounts.** There's currently no self-service or API recovery path for this — no reset endpoint, no CLI script. The only way back in is direct database access to update the stored passphrase hash. Avoid this situation by keeping your admin passphrase somewhere safe and creating a second admin account once accounts are enabled. See [If the admin account itself is locked out](./users-and-accounts.md#if-the-admin-account-itself-is-locked-out).
 
 ## Document View
 
@@ -51,4 +51,9 @@ Several features (local embedding models, the KoboldCPP/Ollama Managers, SillyTa
 
 ## Docker & Self-Hosting
 
-Networking, volumes, reverse proxies, and environment variables are covered in [DOCKER.md](../DOCKER.md) and [HOSTING.md](../HOSTING.md) — most "can't reach the server" or "my data disappeared after a restart" issues trace back to the `SERENE_PUB_DATA_DIR` volume not being mounted where you think it is.
+Networking, volumes, reverse proxies, and environment variables are covered in [DOCKER.md](../DOCKER.md) and [HOSTING.md](../HOSTING.md) — most "can't reach the server" or "my data disappeared after a restart" issues trace back to the `SERENE_PUB_DATA_DIR` volume not being mounted where you think it is. A few socket-specific symptoms behind a reverse proxy, from HOSTING.md's own troubleshooting table:
+
+- **Browser console shows "Mixed Content... has been blocked."** The socket endpoint resolved to `http://` on an `https://` page — set `PROTOCOL_HEADER` (if your proxy sets `X-Forwarded-Proto`) or `SOCKETS_HTTPS_HOSTS` for that hostname.
+- **"blocked by CORS policy" pointing at your own domain.** `PUBLIC_SOCKETS_ENDPOINT` (or the auto-detected endpoint) doesn't match the origin the page was actually loaded from — often from testing both a public URL and `localhost` with a hardcoded `PUBLIC_SOCKETS_ENDPOINT` left set.
+- **Socket requests 404 at `/socket.io/...`, or a "Socket connection timeout" with no CORS/404 error at all.** Your proxy isn't routing `/socket.io/` (or the dedicated socket port, 3001 by default) anywhere reachable from outside — add path-based routing or a second port/subdomain mapping for it.
+- **`.env` changes don't seem to apply.** `PORT`, `HOST`, `PROTOCOL_HEADER`, `HOST_HEADER`, and `ORIGIN` are read by adapter-node before the app's own `.env` loading runs — use `node --env-file=.env build/index.js` instead of a bare `node build/index.js`.

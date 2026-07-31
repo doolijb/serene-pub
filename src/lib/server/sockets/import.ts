@@ -21,6 +21,8 @@ import {
 	type WorldInfo
 } from "$lib/server/utils/sillyTavernParsers"
 import { resolveSillyTavernDataRoot } from "$lib/shared/utils/sillyTavernPaths"
+import { characterFieldsFromParsedData } from "./characters"
+import { personaFieldsFromParsedData } from "./personas"
 
 // ==================== Import Staging ====================
 //
@@ -39,6 +41,23 @@ interface ImportSession {
 
 const importSessions = new Map<string, ImportSession>()
 const SESSION_TTL_MS = 30 * 60 * 1000 // 30 minutes of inactivity
+
+// lorebooks:import enforces LOREBOOK_IMPORT_LIMITS for the exact same
+// unbounded-import-DoS reason (lorebooks.ts) — this bulk SillyTavern-folder
+// import has its own, differently-shaped item lists (character_book entries,
+// world-info entries, chat messages), so it gets its own smaller guard here
+// rather than reusing that one, using the same ceiling for consistency.
+export const MAX_BULK_IMPORT_ITEMS = 5000
+export function assertWithinBulkImportLimit(
+	count: number,
+	itemDescription: string
+) {
+	if (count > MAX_BULK_IMPORT_ITEMS) {
+		throw new Error(
+			`${itemDescription} has too many items (${count}); the maximum supported is ${MAX_BULK_IMPORT_ITEMS}.`
+		)
+	}
+}
 
 async function cleanupImportSession(sessionId: string) {
 	const session = importSessions.get(sessionId)
@@ -76,12 +95,14 @@ function getImportSession(sessionId: string, userId: number): ImportSession {
 	return session
 }
 
-/** Resolves a client-supplied relative path to a safe location inside the
- * session's staging dir — rejects traversal and absolute paths. */
-function resolveStagedFilePath(
-	session: ImportSession,
-	relativePath: string
-): string {
+/** Resolves a client-supplied relative path to a safe location inside
+ * `root` — rejects traversal and absolute paths. Shared by the staging
+ * write path (root = session dir) and the execute-phase reads (root = the
+ * relevant SillyTavern subdirectory) — the latter's accepted relative
+ * paths can legitimately contain one subdirectory segment (eg. a chat's
+ * "CharacterName/chat.jsonl"), so this only rejects genuine traversal
+ * (".."/absolute), not slashes in general. */
+function resolveSafePath(root: string, relativePath: string): string {
 	const normalized = relativePath.replace(/\\/g, "/")
 	if (
 		!normalized ||
@@ -91,15 +112,22 @@ function resolveStagedFilePath(
 	) {
 		throw new Error(`Invalid file path: ${relativePath}`)
 	}
-	const sessionRoot = path.resolve(session.dir)
-	const resolved = path.resolve(sessionRoot, normalized)
+	const resolvedRoot = path.resolve(root)
+	const resolved = path.resolve(resolvedRoot, normalized)
 	if (
-		resolved !== sessionRoot &&
-		!resolved.startsWith(sessionRoot + path.sep)
+		resolved !== resolvedRoot &&
+		!resolved.startsWith(resolvedRoot + path.sep)
 	) {
 		throw new Error(`Invalid file path: ${relativePath}`)
 	}
 	return resolved
+}
+
+function resolveStagedFilePath(
+	session: ImportSession,
+	relativePath: string
+): string {
+	return resolveSafePath(session.dir, relativePath)
 }
 
 /** Finds the SillyTavern data directory within a staged session, same
@@ -129,6 +157,12 @@ export const importStartSillyTavernSession: Handler<
 		const userId = socket.user?.id
 		if (!userId) {
 			throw new Error("User not authenticated")
+		}
+		// UI-only restriction (routes/import/+page.svelte) isn't enforcement —
+		// without this, any authenticated non-admin user could drive the whole
+		// SillyTavern import pipeline directly via sockets.
+		if (!socket.user!.isAdmin) {
+			throw new Error("Unauthorized")
 		}
 
 		try {
@@ -170,6 +204,12 @@ export const importStageSillyTavernFiles: Handler<
 		const userId = socket.user?.id
 		if (!userId) {
 			throw new Error("User not authenticated")
+		}
+		// UI-only restriction (routes/import/+page.svelte) isn't enforcement —
+		// without this, any authenticated non-admin user could drive the whole
+		// SillyTavern import pipeline directly via sockets.
+		if (!socket.user!.isAdmin) {
+			throw new Error("Unauthorized")
 		}
 
 		try {
@@ -219,6 +259,12 @@ export const importScanSillyTavern: Handler<
 		const userId = socket.user?.id
 		if (!userId) {
 			throw new Error("User not authenticated")
+		}
+		// UI-only restriction (routes/import/+page.svelte) isn't enforcement —
+		// without this, any authenticated non-admin user could drive the whole
+		// SillyTavern import pipeline directly via sockets.
+		if (!socket.user!.isAdmin) {
+			throw new Error("Unauthorized")
 		}
 
 		const { importSessionId } = message
@@ -439,6 +485,12 @@ export const importExecuteSillyTavern: Handler<
 		if (!userId) {
 			throw new Error("User not authenticated")
 		}
+		// UI-only restriction (routes/import/+page.svelte) isn't enforcement —
+		// without this, any authenticated non-admin user could drive the whole
+		// SillyTavern import pipeline directly via sockets.
+		if (!socket.user!.isAdmin) {
+			throw new Error("Unauthorized")
+		}
 
 		const { importSessionId, selectedData } = message
 
@@ -546,9 +598,8 @@ export const importExecuteSillyTavern: Handler<
 			// ── Phase 1: Characters ──────────────────────────────────────────────
 			for (const charItem of selectedData.characters) {
 				try {
-					const filePath = path.join(
-						dataDir,
-						"characters",
+					const filePath = resolveSafePath(
+						path.join(dataDir, "characters"),
 						charItem.filename
 					)
 					const card = await readCharacterFile(filePath)
@@ -556,31 +607,19 @@ export const importExecuteSillyTavern: Handler<
 
 					const d = card.data
 
-					// Insert character record
+					// Insert character record — routed through the same
+					// canonical field allowlist personas:importCard/
+					// characters:importCard use, rather than a hand-rolled
+					// duplicate, so a future field added to that allowlist
+					// (eg. explicitly stripping a sensitive column) can't
+					// silently drift out of sync with this bulk-import path.
 					const [newChar] = await db
 						.insert(schema.characters)
 						.values({
+							...characterFieldsFromParsedData(d),
 							userId,
-							name: d.name,
-							description: d.description ?? "",
-							personality: d.personality || null,
-							scenario: d.scenario || null,
-							firstMessage: d.first_mes || null,
-							alternateGreetings: d.alternate_greetings ?? [],
-							exampleDialogues: d.mes_example
-								? [d.mes_example]
-								: [],
-							creatorNotes: d.creator_notes || null,
-							postHistoryInstructions:
-								d.post_history_instructions || null,
-							characterVersion: d.character_version || "1.0",
-							metadata: {},
-							extensions: d.extensions ?? {},
-							aliases:
-								d.extensions?.serenepub?.aliases ??
-								d.extensions?.aliases ??
-								[],
-							summary: d.extensions?.serenepub?.summary ?? null
+							isFavorite: false,
+							extensions: d.extensions ?? {}
 						})
 						.returning()
 
@@ -626,6 +665,10 @@ export const importExecuteSillyTavern: Handler<
 
 					// Import embedded character book as lorebook
 					if (d.character_book?.entries?.length) {
+						assertWithinBulkImportLimit(
+							d.character_book.entries.length,
+							`Character "${d.name}"'s embedded lorebook`
+						)
 						const lbName =
 							d.character_book.name || `${d.name} Lorebook`
 						const lbId = await findOrCreateLorebook(
@@ -698,9 +741,11 @@ export const importExecuteSillyTavern: Handler<
 					const [newPersona] = await db
 						.insert(schema.personas)
 						.values({
+							...personaFieldsFromParsedData({
+								name: personaItem.name,
+								description
+							}),
 							userId,
-							name: personaItem.name,
-							description,
 							isDefault: false
 						})
 						.returning()
@@ -710,9 +755,8 @@ export const importExecuteSillyTavern: Handler<
 
 					// Copy persona avatar if present in ST avatars directory
 					const avatarFilename = `${personaItem.name}.png`
-					const avatarSrc = path.join(
-						dataDir,
-						"User Avatars",
+					const avatarSrc = resolveSafePath(
+						path.join(dataDir, "User Avatars"),
 						avatarFilename
 					)
 					try {
@@ -745,9 +789,8 @@ export const importExecuteSillyTavern: Handler<
 			// ── Phase 3: Lorebooks (World Info) ──────────────────────────────────
 			for (const lbItem of selectedData.lorebooks) {
 				try {
-					const worldPath = path.join(
-						dataDir,
-						"worlds",
+					const worldPath = resolveSafePath(
+						path.join(dataDir, "worlds"),
 						lbItem.filename
 					)
 					const content = await fsPromises.readFile(worldPath, "utf8")
@@ -775,6 +818,10 @@ export const importExecuteSillyTavern: Handler<
 							? worldData.entries
 							: Object.values((worldData as any).entries ?? {})
 
+						assertWithinBulkImportLimit(
+							entries.length,
+							`Lorebook "${lbName}"`
+						)
 						for (const entry of entries) {
 							await db.insert(schema.worldLoreEntries).values({
 								lorebookId: lbId,
@@ -818,9 +865,8 @@ export const importExecuteSillyTavern: Handler<
 			// ── Phase 4: Individual chats ────────────────────────────────────────
 			for (const chatItem of selectedData.chats) {
 				try {
-					const chatPath = path.join(
-						dataDir,
-						"chats",
+					const chatPath = resolveSafePath(
+						path.join(dataDir, "chats"),
 						chatItem.filename
 					)
 					const parsed = await parseChatFile(chatPath)
@@ -874,6 +920,10 @@ export const importExecuteSillyTavern: Handler<
 						})
 					}
 
+					assertWithinBulkImportLimit(
+						parsed.messages.length,
+						`Chat "${chatItem.name}"`
+					)
 					for (const msg of parsed.messages) {
 						if (msg.is_system) continue
 						const role = msg.is_user ? "user" : "character"
@@ -912,9 +962,8 @@ export const importExecuteSillyTavern: Handler<
 			for (const groupItem of selectedData.groupChats) {
 				try {
 					// Re-read group JSON to get the id used for the chat file
-					const groupPath = path.join(
-						dataDir,
-						"groups",
+					const groupPath = resolveSafePath(
+						path.join(dataDir, "groups"),
 						groupItem.filename
 					)
 					const groupContent = await fsPromises.readFile(
@@ -933,11 +982,13 @@ export const importExecuteSillyTavern: Handler<
 
 					// Group chat history is parsed later; read the file now so we can check
 					// the world_info in the header before inserting the chat.
+					// groupId can come from groupData.id — parsed JSON content, not
+					// re-validated like groupItem.filename above — so it needs the
+					// same traversal guard before being used in a path.
 					const groupId =
 						groupData.id || groupItem.filename.replace(".json", "")
-					const groupChatFile = path.join(
-						dataDir,
-						"group chats",
+					const groupChatFile = resolveSafePath(
+						path.join(dataDir, "group chats"),
 						`${groupId}.jsonl`
 					)
 					let groupParsed: Awaited<ReturnType<typeof parseChatFile>> =
@@ -998,6 +1049,10 @@ export const importExecuteSillyTavern: Handler<
 					}
 
 					if (groupParsed) {
+						assertWithinBulkImportLimit(
+							groupParsed.messages.length,
+							`Group chat "${groupItem.name}"`
+						)
 						for (const msg of groupParsed.messages) {
 							if (msg.is_system) continue
 							const role = msg.is_user ? "user" : "character"

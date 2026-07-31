@@ -13,6 +13,12 @@ import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { koboldCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { fetchCurrentModelName } from "$lib/server/koboldcpp/kcppHttp"
+import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
+import {
+	createIdleWatchdog,
+	LLM_IDLE_TIMEOUT_MS,
+	LLM_NONSTREAMING_TIMEOUT_MS
+} from "./idleTimeout"
 
 // Plain/"dumb" KoboldCPP connection: the user runs and configures their own
 // koboldcpp instance entirely themselves. No admin API is assumed, so there's
@@ -102,7 +108,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 
 	async getContextTokenLimit(): Promise<number> {
 		const samplingLimit = await super.getContextTokenLimit()
-		const baseUrl = this.connection.baseUrl || "http://localhost:5001"
+		const baseUrl = normalizeBaseUrl(this.connection.baseUrl) || "http://localhost:5001"
 		try {
 			const res = await fetch(
 				`${baseUrl}/api/extra/true_max_context_length`,
@@ -144,7 +150,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		isAborted: boolean
 		thinkingContent?: string
 	}> {
-		const baseUrl = this.connection.baseUrl || "http://localhost:5001"
+		const baseUrl = normalizeBaseUrl(this.connection.baseUrl) || "http://localhost:5001"
 		// Default true — matches CONNECTION_DEFAULTS[KOBOLDCPP].extraJson.stream
 		// (connectionDefaults.ts), same reasoning as useChat below.
 		const stream = this.connection.extraJson?.stream ?? true
@@ -202,12 +208,28 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				stream,
 				genkey: this.genKey,
 				...samplingParams,
+				// Bugfix: koboldcpp never reads a top-level "enable_thinking"
+				// from a request — grepped its source, every occurrence of
+				// that key is in the Tkinter GUI's own launch-config code,
+				// building the --jinja_kwargs CLI argument for someone
+				// running the GUI directly. The actual per-request path
+				// (chatcompletions handler, ~L4348-4354) only reads a nested
+				// chat_template_kwargs object and merges it over the
+				// server's cached/launch-time jinja kwargs — a top-level
+				// field here was silently ignored, so no enable_thinking
+				// value ever reached the model's chat template no matter
+				// what this app sent.
 				...(enableThinking !== null
-					? { enable_thinking: enableThinking }
+					? { chat_template_kwargs: { enable_thinking: enableThinking } }
 					: {})
 			}
 		} else {
-			// Use text completion format
+			// Use text completion format. enable_thinking is deliberately
+			// omitted here — it's a chat-template (Jinja) variable, only
+			// meaningful to the OpenAI-chat-completions code path a model's
+			// template can reference; the raw completion endpoints don't run
+			// the chat-template pipeline at all, so including it here was a
+			// silent no-op regardless of the Thinking/Reasoning setting.
 			requestBody = {
 				prompt: compiledPrompt.prompt,
 				max_length:
@@ -217,10 +239,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				max_context_length: await this.getContextTokenLimit(),
 				stop_sequence,
 				genkey: this.genKey,
-				...samplingParams,
-				...(enableThinking !== null
-					? { enable_thinking: enableThinking }
-					: {})
+				...samplingParams
 			}
 
 			// Add memory if enabled (only for text completion)
@@ -229,15 +248,34 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 			}
 		}
 
+		// TEMPORARY DEBUG — remove after diagnosing the Gemma 4
+		// thinking-not-appearing report.
+		console.log(
+			"[KCPP DEBUG] useChat:",
+			useChat,
+			"stream:",
+			stream,
+			"enableThinking:",
+			enableThinking,
+			"requestBody keys:",
+			Object.keys(requestBody)
+		)
+
 		// Handle streaming vs non-streaming
 		if (stream) {
 			return {
 				completionResult: async (
 					contentCb: (chunk: string) => void,
-					_thinkingCb?: (chunk: string) => void
+					thinkingCb?: (chunk: string) => void
 				) => {
-					this.abortController = new AbortController()
+					const abortController = new AbortController()
+					this.abortController = abortController
 					let content = ""
+					let idleTimedOut = false
+					const idle = createIdleWatchdog(LLM_IDLE_TIMEOUT_MS, () => {
+						idleTimedOut = true
+						abortController.abort()
+					})
 
 					try {
 						const endpoint = useChat
@@ -274,6 +312,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 							}
 
 							const { done, value } = await reader.read()
+							idle.poke()
 							if (done) break
 
 							buffer += decoder.decode(value, { stream: true })
@@ -282,52 +321,85 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 
 							for (const line of lines) {
 								if (line.startsWith("data: ")) {
+									// Parsing alone is wrapped narrowly so a
+									// malformed SSE line is ignored — but a
+									// recognized-and-rejected response (below)
+									// must still propagate to the outer catch,
+									// not be swallowed here as "just a parse
+									// error".
+									let data: any
 									try {
-										const data = JSON.parse(line.slice(6))
-										if (useChat) {
-											// OpenAI chat format
-											// A 200 stream doesn't guarantee a real
-											// completion — eg. no model loaded comes
-											// back as a single chunk with an empty
-											// delta and finish_reason "error", then
-											// [DONE]. Left unchecked, that silently
-											// produces an empty-but-"successful" reply.
-											if (
-												data.choices?.[0]
-													?.finish_reason === "error"
-											) {
-												contentCb(
-													"FAILURE: KoboldCPP rejected the request (finish_reason: error) — is a model loaded?"
-												)
-												return
-											}
-											if (
-												data.choices?.[0]?.delta
-													?.content
-											) {
-												const chunk =
-													data.choices[0].delta
-														.content
-												content += chunk
-												contentCb(chunk)
-											}
-										} else {
-											// KoboldCPP text format
-											if (data.token) {
-												content += data.token
-												contentCb(data.token)
-											}
-										}
+										data = JSON.parse(line.slice(6))
 									} catch (e) {
-										// Ignore parse errors
+										continue
+									}
+									if (useChat) {
+										// TEMPORARY DEBUG — remove after diagnosing
+										// the Gemma 4 thinking-not-appearing report.
+										console.log(
+											"[KCPP DEBUG] raw delta:",
+											JSON.stringify(data.choices?.[0])
+										)
+										// OpenAI chat format
+										// A 200 stream doesn't guarantee a real
+										// completion — eg. no model loaded comes
+										// back as a single chunk with an empty
+										// delta and finish_reason "error", then
+										// [DONE]. Left unchecked, that silently
+										// produces an empty-but-"successful" reply.
+										if (
+											data.choices?.[0]?.finish_reason ===
+											"error"
+										) {
+											throw new Error(
+												"KoboldCPP rejected the request (finish_reason: error) — is a model loaded?"
+											)
+										}
+										// Native reasoning — koboldcpp scans the
+										// model's raw output for known think-tag
+										// pairs and lifts whatever's inside into
+										// reasoning_content (stripped out of
+										// content), gated by its own
+										// encapsulate_thinking genparam (default
+										// true, never overridden by this app).
+										// Only actually appears when the loaded
+										// model emits thinking output at all.
+										if (
+											data.choices?.[0]?.delta
+												?.reasoning_content
+										) {
+											thinkingCb?.(
+												data.choices[0].delta
+													.reasoning_content
+											)
+										}
+										if (data.choices?.[0]?.delta?.content) {
+											const chunk =
+												data.choices[0].delta.content
+											content += chunk
+											contentCb(chunk)
+										}
+									} else {
+										// KoboldCPP text format
+										if (data.token) {
+											content += data.token
+											contentCb(data.token)
+										}
 									}
 								}
 							}
 						}
 					} catch (e: any) {
-						if (e.name !== "AbortError") {
-							contentCb("FAILURE: " + (e.message || String(e)))
+						if (idleTimedOut) {
+							throw new Error(
+								`KoboldCPP connection idle — no response for ${LLM_IDLE_TIMEOUT_MS / 60_000} minutes.`
+							)
 						}
+						if (e.name !== "AbortError") {
+							throw e
+						}
+					} finally {
+						idle.clear()
 					}
 				},
 				compiledPrompt,
@@ -342,13 +414,21 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 					? `${baseUrl}/v1/chat/completions`
 					: `${baseUrl}/api/v1/generate`
 
+				// No intermediate chunks to reset an idle timer against for a
+				// non-streaming response — this is a genuine, documented
+				// exception to the idle-based design used elsewhere in this
+				// file: a flat bound, sized generously to cover a full slow
+				// generation end-to-end.
 				const response = await fetch(endpoint, {
 					method: "POST",
 					headers: {
 						"Content-Type": "application/json"
 					},
 					body: JSON.stringify(requestBody),
-					signal: this.abortController.signal
+					signal: AbortSignal.any([
+						this.abortController.signal,
+						AbortSignal.timeout(LLM_NONSTREAMING_TIMEOUT_MS)
+					])
 				})
 
 				if (this.isAborting) {
@@ -380,9 +460,21 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				}
 
 				let content: string
+				let thinkingContent: string | undefined
 				if (useChat) {
+					// TEMPORARY DEBUG — remove after diagnosing the Gemma 4
+					// thinking-not-appearing report.
+					console.log(
+						"[KCPP DEBUG] non-stream raw message:",
+						JSON.stringify(data.choices?.[0]?.message)
+					)
 					// OpenAI chat format response
 					content = data.choices?.[0]?.message?.content || ""
+					// See the streaming branch's identical read above for why
+					// this is only ever populated in chat mode.
+					thinkingContent =
+						data.choices?.[0]?.message?.reasoning_content ||
+						undefined
 				} else {
 					// KoboldCPP text format response
 					content = data.results?.[0]?.text || ""
@@ -391,7 +483,8 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				return {
 					completionResult: content,
 					compiledPrompt,
-					isAborted: false
+					isAborted: false,
+					thinkingContent
 				}
 			} catch (e: any) {
 				if (e.name === "AbortError") {
@@ -416,7 +509,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		// mode (a single generation slot) blocks every subsequent request until
 		// the zombie generation finishes on its own.
 		if (this.genKey) {
-			const baseUrl = this.connection.baseUrl || "http://localhost:5001"
+			const baseUrl = normalizeBaseUrl(this.connection.baseUrl) || "http://localhost:5001"
 			fetch(`${baseUrl}/api/extra/abort`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -437,7 +530,7 @@ export async function testConnection(
 	connection: SelectConnection
 ): Promise<{ ok: boolean; error?: string }> {
 	try {
-		const baseUrl = connection.baseUrl || "http://localhost:5001"
+		const baseUrl = normalizeBaseUrl(connection.baseUrl) || "http://localhost:5001"
 		const response = await fetch(`${baseUrl}/api/extra/version`, {
 			method: "GET",
 			headers: {
@@ -477,7 +570,7 @@ async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
 	try {
-		const baseUrl = connection.baseUrl || "http://localhost:5001"
+		const baseUrl = normalizeBaseUrl(connection.baseUrl) || "http://localhost:5001"
 
 		const currentModel =
 			(await fetchCurrentModelName(baseUrl)) || "No model loaded"

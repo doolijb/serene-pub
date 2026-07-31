@@ -10,6 +10,17 @@
 
 	let { item, imageUrl, onclick }: Props = $props()
 
+	// A thumbnail request can fail (eg. the CharaVault image proxy returning
+	// 429 when its background-priority rate-limit slot times out behind
+	// interactive traffic) — fall back to the placeholder icon instead of
+	// leaving the browser's broken-image glyph. Resets whenever imageUrl
+	// itself changes (new item, or a retried URL).
+	let imageFailed = $state(false)
+	$effect(() => {
+		void imageUrl
+		imageFailed = false
+	})
+
 	function getExcerpt(text: string, maxLength: number = 90): string {
 		// Iterate by code point (not UTF-16 code unit) so truncation can't
 		// split a surrogate pair (eg. an emoji) in half.
@@ -25,11 +36,12 @@
 	onclick={() => onclick()}
 	aria-label="View details for {item.name}"
 >
-	{#if imageUrl}
+	{#if imageUrl && !imageFailed}
 		<img
 			src={imageUrl}
 			alt=""
 			loading="lazy"
+			onerror={() => (imageFailed = true)}
 			class="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
 		/>
 	{:else}

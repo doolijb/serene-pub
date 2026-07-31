@@ -34,15 +34,17 @@ export type SceneSummarizeActivity = {
 	lorebookLabel?: string
 	historyEntryId?: number
 	status: "running" | "review" | "error"
-	phase?: "drafting" | "synthesizing" | "extracting"
+	phase?: "drafting" | "synthesizing" | "naming" | "extracting"
 	batch?: number
 	totalBatches?: number
 	errorMessage?: string
 	pendingResult?: {
 		content: string
 		name?: string
-		participantCharacters: string[]
-		mentionedCharacters: string[]
+		participantCharacters: number[]
+		mentionedCharacters: number[]
+		suggestedParticipantCharacters?: string[]
+		suggestedMentionedCharacters?: string[]
 		raw: string
 	}
 	startedAt: string
@@ -113,6 +115,22 @@ class ActivityStore {
 		lorebookLabel: string
 		mode: "replace" | "extend"
 	}): string {
+		// Safety net: a fresh build for this lorebook always fully supersedes
+		// any prior graph_build activity left parked for it (stale review the
+		// user never applied/discarded, or — rarer — one still mid-flight,
+		// e.g. a second tab). remove() aborts the old activity's controller
+		// before deleting it, so an in-flight build is actually cancelled
+		// here, not silently orphaned while it keeps running.
+		for (const [existingId, activity] of this.activities) {
+			if (
+				activity.kind === "graph_build" &&
+				activity.lorebookId === params.lorebookId &&
+				activity.userId === params.userId
+			) {
+				this.remove(existingId)
+			}
+		}
+
 		const id = uuidv4()
 		const activity: GraphBuildActivity = {
 			kind: "graph_build",
@@ -199,7 +217,25 @@ class ActivityStore {
 				activity.historyEntryId === params.historyEntryId &&
 				activity.userId === params.userId
 			) {
-				this.activities.delete(existingId)
+				if (activity.status === "running") {
+					// Unlike graph_build/scene_summarize, nothing wires an
+					// AbortController for compile_history_entry (scenes.ts's
+					// scenes:compile handler never calls
+					// setAbortController()) — remove()'s abort() would be a
+					// no-op here, so silently deleting a RUNNING compile
+					// would just orphan its in-flight LLM call: it keeps
+					// running to completion invisibly, and its eventual
+					// updateCompile() call becomes a silent no-op against a
+					// since-deleted id. Reject instead of superseding so the
+					// caller gets an honest error rather than a zombie
+					// generation finishing unseen.
+					throw new Error(
+						"A compile is already in progress for this entry."
+					)
+				}
+				// review/error activities have already finished running —
+				// no in-flight work to orphan, safe to supersede.
+				this.remove(existingId)
 			}
 		}
 		const id = uuidv4()

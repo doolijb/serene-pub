@@ -13,6 +13,7 @@
 		onExport?: (
 			persona: Sockets.Personas.List.Response["personaList"][0]
 		) => void
+		onSetDefault?: (id: number) => void
 		showControls?: boolean
 		contentTitle?: string
 	}
@@ -23,6 +24,7 @@
 		onEdit,
 		onDelete,
 		onExport,
+		onSetDefault,
 		showControls = true,
 		contentTitle = "Go to persona"
 	}: Props = $props()
@@ -69,6 +71,13 @@
 				class="flex items-center gap-1 truncate text-sm font-bold text-white drop-shadow-sm"
 			>
 				<span class="truncate">{persona.name}</span>
+				{#if persona.isDefault}
+					<span
+						class="bg-primary-500 shrink-0 rounded px-1.5 py-0.5 text-[0.65rem] font-medium text-white"
+					>
+						Default
+					</span>
+				{/if}
 				<EmbeddingStatusIcon embeddingModel={persona.embeddingModel} />
 			</span>
 			{#if persona.description}
@@ -79,7 +88,7 @@
 		</div>
 	</button>
 
-	{#if showControls && (onclick || onEdit || onExport || onDelete)}
+	{#if showControls && (onclick || onEdit || onExport || onDelete || onSetDefault)}
 		<div
 			class="absolute top-2 right-2"
 			role="none"
@@ -154,6 +163,27 @@
 											aria-hidden="true"
 										/>
 										<span>Export</span>
+									</button>
+								{/if}
+								{#if onSetDefault}
+									<button
+										class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
+										disabled={persona.isDefault}
+										onclick={() => {
+											menuOpen = false
+											onSetDefault?.(persona.id!)
+										}}
+										type="button"
+									>
+										<Icons.Star
+											size={16}
+											aria-hidden="true"
+										/>
+										<span
+											>{persona.isDefault
+												? "Default"
+												: "Set as default"}</span
+										>
 									</button>
 								{/if}
 								{#if onDelete}

@@ -8,6 +8,7 @@ import * as fsPromises from "fs/promises"
 import { fileTypeFromBuffer } from "file-type"
 import extract from "png-chunks-extract"
 import text from "png-chunk-text"
+import { validatePngChunkLengths } from "./characterCardParser"
 
 // ==================== Types ====================
 
@@ -134,6 +135,7 @@ export async function extractCharacterFromPNG(
 	buffer: Buffer
 ): Promise<CharacterCardV2 | null> {
 	try {
+		validatePngChunkLengths(buffer)
 		const chunks = extract(buffer)
 
 		// Look for V2 format (chara) or V3 format (ccv3)

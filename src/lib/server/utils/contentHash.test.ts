@@ -21,6 +21,24 @@ describe("sortKeysDeep", () => {
 		expect(sortKeysDeep(42)).toBe(42)
 		expect(sortKeysDeep("str")).toBe("str")
 	})
+
+	test("throws a clean error past the depth cap instead of overflowing the stack", () => {
+		let deeplyNested: any = { value: "bottom" }
+		for (let i = 0; i < 100; i++) {
+			deeplyNested = { nested: deeplyNested }
+		}
+		expect(() => sortKeysDeep(deeplyNested)).toThrow(
+			"Content is nested too deeply to process"
+		)
+	})
+
+	test("does not throw for reasonably nested content", () => {
+		let nested: any = { value: "bottom" }
+		for (let i = 0; i < 10; i++) {
+			nested = { nested }
+		}
+		expect(() => sortKeysDeep(nested)).not.toThrow()
+	})
 })
 
 describe("hashCanonicalJson", () => {

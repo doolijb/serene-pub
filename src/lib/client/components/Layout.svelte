@@ -130,20 +130,23 @@
 	let rightSidebarRef = $state<HTMLElement | null>(null)
 	let keyboardNavManager: KeyboardNavigationManager
 
-	// Only one side can be fullscreen at a time — expanding to cover the
-	// whole viewport while another panel also claims it doesn't make sense.
-	// Desktop-only: the mobile single-panel overlay already fills the
-	// screen, and the toggle button lives inside the `.desktop-sidebar`
-	// asides (`hidden ... lg:block`), so it's never rendered on mobile in
-	// the first place — no separate mobile check needed here.
-	let fullscreenPanel: "left" | "right" | null = $state(null)
-
 	let userCtx: { user: SelectUser } = $state({} as { user: any })
 	let panelsCtx: PanelsCtx = $state({
 		leftPanel: null,
 		rightPanel: null,
 		mobilePanel: null,
 		isMobileMenuOpen: false,
+		// Only one side can be fullscreen at a time — expanding to cover the
+		// whole viewport while another panel also claims it doesn't make
+		// sense. Desktop-only: the mobile single-panel overlay already fills
+		// the screen, and the toggle button lives inside the
+		// `.desktop-sidebar` asides (`hidden ... lg:block`), so it's never
+		// rendered on mobile in the first place — no separate mobile check
+		// needed here. Lives on panelsCtx (not a local Layout.svelte
+		// variable) so any sidebar can reset it via context — e.g. a button
+		// that navigates to a different page, where staying fullscreen
+		// would cover up the page it just navigated to.
+		fullscreenPanel: null,
 		openPanel,
 		closePanel,
 		onLeftPanelClose: undefined,
@@ -437,13 +440,15 @@
 				? ((await panelsCtx.onLeftPanelClose()) ?? true)
 				: true
 			panelsCtx.leftPanel = res ? null : panelsCtx.leftPanel
-			if (res && fullscreenPanel === "left") fullscreenPanel = null
+			if (res && panelsCtx.fullscreenPanel === "left")
+				panelsCtx.fullscreenPanel = null
 		} else if (panel === "right") {
 			res = panelsCtx.onRightPanelClose
 				? ((await panelsCtx.onRightPanelClose()) ?? true)
 				: true
 			panelsCtx.rightPanel = res ? null : panelsCtx.rightPanel
-			if (res && fullscreenPanel === "right") fullscreenPanel = null
+			if (res && panelsCtx.fullscreenPanel === "right")
+				panelsCtx.fullscreenPanel = null
 		}
 		return res
 	}
@@ -613,7 +618,8 @@
 		socket.on("systemSettings:get", (message) => {
 			systemSettingsCtx.settings = {
 				...message.systemSettings,
-				isAndroidWrapper: message.isAndroidWrapper
+				isAndroidWrapper: message.isAndroidWrapper,
+				localEmbeddingsSupported: message.localEmbeddingsSupported
 			}
 			ollamaSettingsCtx.settings = { ...message.ollamaSettings }
 			koboldCppSettingsCtx.settings = { ...message.koboldCppSettings }
@@ -904,7 +910,7 @@
 						panelsCtx.leftPanel}
 					<div
 						bind:this={leftSidebarRef}
-						class="bg-surface-50-950 flex h-full w-full flex-col overflow-y-auto {fullscreenPanel ===
+						class="bg-surface-50-950 flex h-full w-full flex-col overflow-y-auto {panelsCtx.fullscreenPanel ===
 						'left'
 							? 'fixed inset-0 z-[500] rounded-none'
 							: 'me-2 rounded-r-lg'}"
@@ -930,17 +936,19 @@
 								<button
 									class="btn-ghost"
 									onclick={() =>
-										(fullscreenPanel =
-											fullscreenPanel === "left" ? null : "left")}
-									aria-label={fullscreenPanel === "left"
+										(panelsCtx.fullscreenPanel =
+											panelsCtx.fullscreenPanel === "left"
+												? null
+												: "left")}
+									aria-label={panelsCtx.fullscreenPanel === "left"
 										? "Exit fullscreen"
 										: "Fullscreen"}
-									title={fullscreenPanel === "left"
+									title={panelsCtx.fullscreenPanel === "left"
 										? "Exit fullscreen"
 										: "Fullscreen"}
 									type="button"
 								>
-									{#if fullscreenPanel === "left"}
+									{#if panelsCtx.fullscreenPanel === "left"}
 										<Icons.Minimize2
 											class="text-foreground h-4 w-4"
 											aria-hidden="true"
@@ -1025,7 +1033,7 @@
 						panelsCtx.rightPanel}
 					<div
 						bind:this={rightSidebarRef}
-						class="bg-surface-50-950 flex h-full w-full flex-col overflow-y-auto {fullscreenPanel ===
+						class="bg-surface-50-950 flex h-full w-full flex-col overflow-y-auto {panelsCtx.fullscreenPanel ===
 						'right'
 							? 'fixed inset-0 z-[500] rounded-none'
 							: 'rounded-l-lg'}"
@@ -1051,17 +1059,19 @@
 								<button
 									class="btn-ghost"
 									onclick={() =>
-										(fullscreenPanel =
-											fullscreenPanel === "right" ? null : "right")}
-									aria-label={fullscreenPanel === "right"
+										(panelsCtx.fullscreenPanel =
+											panelsCtx.fullscreenPanel === "right"
+												? null
+												: "right")}
+									aria-label={panelsCtx.fullscreenPanel === "right"
 										? "Exit fullscreen"
 										: "Fullscreen"}
-									title={fullscreenPanel === "right"
+									title={panelsCtx.fullscreenPanel === "right"
 										? "Exit fullscreen"
 										: "Fullscreen"}
 									type="button"
 								>
-									{#if fullscreenPanel === "right"}
+									{#if panelsCtx.fullscreenPanel === "right"}
 										<Icons.Minimize2
 											class="text-foreground h-4 w-4"
 											aria-hidden="true"

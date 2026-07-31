@@ -73,56 +73,83 @@
 		})
 	}
 
+	function handleCardSourcesCapabilities(
+		msg: Sockets.CardSources.Capabilities.Response
+	) {
+		capabilities = msg
+	}
+	function handlePersonasSearchLibrary(msg: any) {
+		if (msg.requestId !== latestRequestId) return
+		results = msg.personas
+		loading = false
+	}
+	function handlePersonasSearchLibraryError(msg: any) {
+		if (msg.requestId !== latestRequestId) return
+		loading = false
+		results = []
+		unreachable = !!msg.unreachable
+		error =
+			msg.error ||
+			(msg.rateLimited
+				? "This source is busy right now — try again shortly."
+				: "Failed to search the persona library.")
+		announce(error)
+	}
+	function handleCardSourcesCardDetail(msg: any) {
+		if (msg.requestId !== latestDetailRequestId) return
+		loadingDetail = false
+		if (detailsFor) detailsFor = { ...detailsFor, ...msg }
+	}
+	function handlePersonasImportFromLibrary(msg: any) {
+		downloadingKey = null
+		if (msg.persona) {
+			announce(`Downloaded ${msg.persona.name}.`)
+			goto(`/document-view/personas/${msg.persona.id}/edit`)
+		}
+	}
+	function handlePersonasImportFromLibraryError(msg: { error?: string }) {
+		downloadingKey = null
+		status = msg.error || "Failed to download persona."
+		announce(status)
+	}
+
 	onMount(() => {
-		socket.on("cardSources:capabilities", (msg) => {
-			capabilities = msg
-		})
-		socket.on("personas:searchLibrary", (msg) => {
-			if (msg.requestId !== latestRequestId) return
-			results = msg.personas
-			loading = false
-		})
-		socket.on("personas:searchLibrary:error", (msg) => {
-			if (msg.requestId !== latestRequestId) return
-			loading = false
-			results = []
-			unreachable = !!msg.unreachable
-			error =
-				msg.error ||
-				(msg.rateLimited
-					? "This source is busy right now — try again shortly."
-					: "Failed to search the persona library.")
-			announce(error)
-		})
-		socket.on("cardSources:cardDetail", (msg) => {
-			if (msg.requestId !== latestDetailRequestId) return
-			loadingDetail = false
-			if (detailsFor) detailsFor = { ...detailsFor, ...msg }
-		})
-		socket.on("personas:importFromLibrary", (msg) => {
-			downloadingKey = null
-			if (msg.persona) {
-				announce(`Downloaded ${msg.persona.name}.`)
-				goto(`/document-view/personas/${msg.persona.id}/edit`)
-			}
-		})
+		socket.on("cardSources:capabilities", handleCardSourcesCapabilities)
+		socket.on("personas:searchLibrary", handlePersonasSearchLibrary)
+		socket.on(
+			"personas:searchLibrary:error",
+			handlePersonasSearchLibraryError
+		)
+		socket.on("cardSources:cardDetail", handleCardSourcesCardDetail)
+		socket.on(
+			"personas:importFromLibrary",
+			handlePersonasImportFromLibrary
+		)
 		socket.on(
 			"personas:importFromLibrary:error",
-			(msg: { error?: string }) => {
-				downloadingKey = null
-				status = msg.error || "Failed to download persona."
-				announce(status)
-			}
+			handlePersonasImportFromLibraryError
 		)
 		socket.emit("cardSources:capabilities", {})
 		fetchLibrary()
 		return () => {
-			socket.off("cardSources:capabilities")
-			socket.off("personas:searchLibrary")
-			socket.off("personas:searchLibrary:error")
-			socket.off("cardSources:cardDetail")
-			socket.off("personas:importFromLibrary")
-			socket.off("personas:importFromLibrary:error")
+			socket.off(
+				"cardSources:capabilities",
+				handleCardSourcesCapabilities
+			)
+			socket.off("personas:searchLibrary", handlePersonasSearchLibrary)
+			socket.off(
+				"personas:searchLibrary:error",
+				handlePersonasSearchLibraryError
+			)
+			socket.off("cardSources:cardDetail", handleCardSourcesCardDetail)
+			socket.off(
+				"personas:importFromLibrary",
+				handlePersonasImportFromLibrary
+			)
+			socket.off(
+				"personas:importFromLibrary:error",
+				handlePersonasImportFromLibraryError
+			)
 		}
 	})
 </script>

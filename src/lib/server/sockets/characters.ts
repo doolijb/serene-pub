@@ -31,9 +31,20 @@ import {
 	CardSourceUnavailableError,
 	CardSourceRateLimitedError
 } from "$lib/server/cardSources/types"
-import { buildSpecV3Lorebook } from "$lib/server/utils/lorebookExportMapper"
+import { buildLorebookExportData } from "$lib/server/utils/lorebookExportBuilder"
+import { syncLorebookBindingsForCharacter } from "$lib/server/utils/characterBindingSync"
 import { hashCanonicalJson } from "$lib/server/utils/contentHash"
 import { isValidUuid } from "$lib/server/utils/uuid"
+import { findOrCreateTagId } from "$lib/server/utils/tags"
+import type { ExtractTablesWithRelations } from "drizzle-orm"
+import type { PgliteDatabase, PgliteTransaction } from "drizzle-orm/pglite"
+
+type Executor =
+	| PgliteDatabase<typeof schema>
+	| PgliteTransaction<
+			typeof schema,
+			ExtractTablesWithRelations<typeof schema>
+	  >
 
 // Helper function to process tags for character creation/update. Tags are
 // per-user (schema.tags.userId): lookups/creates must stay scoped to the
@@ -45,9 +56,10 @@ import { isValidUuid } from "$lib/server/utils/uuid"
 async function processCharacterTags(
 	characterId: number,
 	tagNames: string[],
-	userId: number
+	userId: number,
+	dbOrTx: Executor = db
 ) {
-	const character = await db.query.characters.findFirst({
+	const character = await dbOrTx.query.characters.findFirst({
 		where: (c, { and, eq }) =>
 			and(eq(c.id, characterId), eq(c.userId, userId)),
 		columns: { id: true }
@@ -55,7 +67,7 @@ async function processCharacterTags(
 	if (!character) return
 
 	// Get existing tags for this character that belong to the user
-	const existingCharacterTags = await db.query.characterTags.findMany({
+	const existingCharacterTags = await dbOrTx.query.characterTags.findMany({
 		where: eq(schema.characterTags.characterId, characterId),
 		with: { tag: true }
 	})
@@ -82,7 +94,7 @@ async function processCharacterTags(
 	// Remove tags that are no longer in the list
 	if (tagsToRemove.length > 0) {
 		const tagIdsToRemove = tagsToRemove.map((ct) => ct.tagId)
-		await db
+		await dbOrTx
 			.delete(schema.characterTags)
 			.where(
 				and(
@@ -92,32 +104,16 @@ async function processCharacterTags(
 			)
 	}
 
-	// Add new tags
+	// Add new tags — findOrCreateTagId adopts an existing case-insensitive
+	// match instead of creating a duplicate.
 	for (const tagName of tagsToAdd) {
-		// Check if tag exists for this user
-		let existingTag = await db.query.tags.findFirst({
-			where: (t, { and, eq }) =>
-				and(eq(t.name, tagName), eq(t.userId, userId))
-		})
-
-		// Create tag if it doesn't exist
-		if (!existingTag) {
-			const [newTag] = await db
-				.insert(schema.tags)
-				.values({
-					name: tagName,
-					userId
-				})
-				.returning()
-			existingTag = newTag
-		}
-
-		// Link tag to character
-		await db
+		const tagId = await findOrCreateTagId(userId, tagName, dbOrTx)
+		if (!tagId) continue
+		await dbOrTx
 			.insert(schema.characterTags)
 			.values({
 				characterId,
-				tagId: existingTag.id
+				tagId
 			})
 			.onConflictDoNothing() // In case of race conditions
 	}
@@ -147,7 +143,8 @@ export const charactersList: Handler<
 					}
 				}
 			},
-			where: (c, { eq }) => eq(c.userId, socket.user!.id),
+			where: (c, { and, eq }) =>
+				and(eq(c.userId, socket.user!.id), eq(c.isDeleted, false)),
 			orderBy: (c, { asc }) => asc(c.id)
 		})
 		const res: Sockets.Characters.List.Response = { characterList }
@@ -164,7 +161,16 @@ export const charactersGet: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const character = await db.query.characters.findFirst({
-			where: (c, { eq }) => eq(c.id, params.id),
+			where: (c, { and, eq }) =>
+				and(eq(c.id, params.id), eq(c.isDeleted, false)),
+			// Unlike charactersList (which already allowlists columns), this
+			// findFirst had no columns restriction and spread the full row —
+			// including the raw embedding vector — into the response.
+			columns: {
+				embedding: false,
+				embeddingModel: false,
+				vectorizedAt: false
+			},
 			with: {
 				characterTags: {
 					with: {
@@ -222,6 +228,14 @@ export const charactersCreate: Handler<
 			delete data.avatar
 			// @ts-ignore - Remove tags - will be handled separately
 			delete (data as any).tags
+			// uuid carries a table-wide (not per-user) unique index — a
+			// client-supplied value could collide with another user's row,
+			// permanently blocking their future import of that exact card.
+			// id is likewise client-overridable on an identity column. Both
+			// must always be server-generated, same as charactersUpdate
+			// already strips uuid for the same reason.
+			delete (data as any).uuid
+			delete (data as any).id
 
 			const [character] = await db
 				.insert(schema.characters)
@@ -282,6 +296,15 @@ export const charactersUpdate: Handler<
 			delete (data as any).vectorizedAt
 			delete (data as any).embedding
 			delete (data as any).embeddingModel
+			// lorebookId: no ownership check exists for it here (unlike chats,
+			// nothing currently reads a character's own lorebookId for prompt
+			// content), so blocking it outright is the correct minimal fix —
+			// a future feature needing this should validate ownership first.
+			// uuid: table-wide unique index, not per-user — a client-supplied
+			// collision would throw on someone else's row, and otherwise lets
+			// a user silently break their own import-dedup identity.
+			delete (data as any).lorebookId
+			delete (data as any).uuid
 
 			const [updated] = await db
 				.update(schema.characters)
@@ -313,6 +336,12 @@ export const charactersUpdate: Handler<
 				})
 			}
 
+			// Keep every bound lorebookBindings row's name/aliases in sync with
+			// this character's current name/nickname/aliases (decision 2, merge
+			// plan) — a character can be bound in multiple lorebooks, so this
+			// isn't scoped to one. Cheap no-op if nothing is bound.
+			await syncLorebookBindingsForCharacter(id)
+
 			autoEnqueueCharacter(id, updated.name).catch(console.error)
 			const res: Sockets.Characters.Update.Response = {
 				character: updated
@@ -338,32 +367,26 @@ export const charactersDelete: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 
-		// character_tags.characterId already declares onDelete: "cascade" from
-		// characters.id, so a separate manual delete here is redundant — and
-		// was wrong: it ran unconditionally on any supplied id BEFORE this
-		// ownership-scoped delete, so any user could wipe another user's
-		// character's tag associations just by guessing the id, even though
-		// the character row itself correctly survived (same bug class already
-		// fixed for tags:delete).
+		// Soft delete, mirroring personasDelete exactly — a real DELETE here
+		// cascades chatMessages.characterId -> SET NULL with no name
+		// snapshot, so every historical message this character ever
+		// authored would permanently fall back to the generic "assistant"
+		// label (resolveCharacterName()) the moment the row was gone. Soft
+		// delete keeps the row (and its name/nickname) around so that
+		// resolution keeps working, while charactersList/charactersGet hide
+		// it going forward. The avatar directory is deliberately NOT removed
+		// either, for the same reason personasDelete doesn't remove a
+		// persona's — old chat messages may still render this character's
+		// avatar.
 		await db
-			.delete(schema.characters)
+			.update(schema.characters)
+			.set({ isDeleted: true })
 			.where(
 				and(
 					eq(schema.characters.id, params.id),
 					eq(schema.characters.userId, userId)
 				)
 			)
-
-		// Delete the character data directory if it exists
-		const avatarDir = getCharacterDataDir({
-			characterId: params.id,
-			userId
-		})
-		try {
-			await fsPromises.rmdir(avatarDir, { recursive: true })
-		} catch (err) {
-			console.error("Error deleting character data directory:", err)
-		}
 
 		await charactersList.handler(socket, {}, emitToUser)
 
@@ -387,6 +410,30 @@ export function extractCharacterUuid(data: any): string | undefined {
 	return isValidUuid(uuid) ? uuid : undefined
 }
 
+/**
+ * Resolves the uuid a newly-created character row should be stamped with.
+ * `characters_uuid_idx` is unique per-owner (userId, uuid), so an incoming
+ * uuid is only safe to stamp if this same user doesn't already have a row
+ * with it — if they do, that row would have been found by the caller's own
+ * dedup lookup already, so reaching here with a same-user collision would
+ * mean stamping a duplicate; falling back to a fresh uuid is always safe.
+ */
+async function claimIncomingCharacterUuid(
+	incomingUuid: string | undefined,
+	userId: number,
+	dbOrTx: Executor
+): Promise<string | undefined> {
+	if (!incomingUuid) return undefined
+	const existing = await dbOrTx.query.characters.findFirst({
+		where: and(
+			eq(schema.characters.uuid, incomingUuid),
+			eq(schema.characters.userId, userId)
+		),
+		columns: { id: true }
+	})
+	return existing ? undefined : incomingUuid
+}
+
 export function characterFieldsFromParsedData(
 	data: any
 ): Omit<typeof schema.characters.$inferInsert, "userId" | "isFavorite"> {
@@ -407,12 +454,17 @@ export function characterFieldsFromParsedData(
 		postHistoryInstructions: data.post_history_instructions || null,
 		characterVersion: data.character_version || null,
 		creator: data.creator || null,
-		source: data.extensions?.source || [],
-		groupOnlyGreetings: data.extensions?.group_only_greetings || null,
-		aliases:
-			data.extensions?.serenepub?.aliases ??
-			data.extensions?.aliases ??
-			[],
+		source: Array.isArray(data.extensions?.source)
+			? data.extensions.source
+			: [],
+		groupOnlyGreetings: Array.isArray(data.extensions?.group_only_greetings)
+			? data.extensions.group_only_greetings
+			: null,
+		aliases: Array.isArray(
+			data.extensions?.serenepub?.aliases ?? data.extensions?.aliases
+		)
+			? (data.extensions?.serenepub?.aliases ?? data.extensions?.aliases)
+			: [],
 		summary: data.extensions?.serenepub?.summary ?? null,
 		category: data.extensions?.serenepub?.category ?? null
 	}
@@ -422,20 +474,21 @@ async function applyAvatarAndTags(
 	character: typeof schema.characters.$inferSelect,
 	avatarBuffer: Buffer | undefined,
 	tags: string[] | undefined,
-	userId: number
+	userId: number,
+	dbOrTx: Executor = db
 ) {
 	if (avatarBuffer) {
 		await handleCharacterAvatarUpload({
 			character,
 			avatarFile: avatarBuffer
 		})
-		const updatedCharacter = await db.query.characters.findFirst({
+		const updatedCharacter = await dbOrTx.query.characters.findFirst({
 			where: eq(schema.characters.id, character.id)
 		})
 		if (updatedCharacter) Object.assign(character, updatedCharacter)
 	}
 	if (tags && tags.length > 0) {
-		await processCharacterTags(character.id, tags, userId)
+		await processCharacterTags(character.id, tags, userId, dbOrTx)
 	}
 	return character
 }
@@ -444,17 +497,24 @@ async function applyAvatarAndTags(
 export async function createCharacterFromParsedData(
 	data: any,
 	avatarBuffer: Buffer | undefined,
-	userId: number
+	userId: number,
+	dbOrTx: Executor = db
 ) {
-	const [character] = await db
+	const uuidToStamp = await claimIncomingCharacterUuid(
+		extractCharacterUuid(data),
+		userId,
+		dbOrTx
+	)
+	const [character] = await dbOrTx
 		.insert(schema.characters)
 		.values({
 			...characterFieldsFromParsedData(data),
+			...(uuidToStamp ? { uuid: uuidToStamp } : {}),
 			userId,
 			isFavorite: false
 		})
 		.returning()
-	return applyAvatarAndTags(character, avatarBuffer, data.tags, userId)
+	return applyAvatarAndTags(character, avatarBuffer, data.tags, userId, dbOrTx)
 }
 
 /**
@@ -465,17 +525,18 @@ export async function overwriteCharacterFromParsedData(
 	existingId: number,
 	data: any,
 	avatarBuffer: Buffer | undefined,
-	userId: number
+	userId: number,
+	dbOrTx: Executor = db
 ) {
-	await db
+	await dbOrTx
 		.update(schema.characters)
 		.set(characterFieldsFromParsedData(data))
 		.where(eq(schema.characters.id, existingId))
-	const character = await db.query.characters.findFirst({
+	const character = await dbOrTx.query.characters.findFirst({
 		where: eq(schema.characters.id, existingId)
 	})
 	if (!character) throw new Error("Character not found.")
-	return applyAvatarAndTags(character, avatarBuffer, data.tags, userId)
+	return applyAvatarAndTags(character, avatarBuffer, data.tags, userId, dbOrTx)
 }
 
 /**
@@ -488,9 +549,10 @@ export async function overwriteCharacterFromParsedData(
  * look "changed".
  */
 export async function buildExistingCharacterComparisonData(
-	characterId: number
+	characterId: number,
+	dbOrTx: Executor = db
 ) {
-	const character = await db.query.characters.findFirst({
+	const character = await dbOrTx.query.characters.findFirst({
 		where: eq(schema.characters.id, characterId),
 		with: { characterTags: { with: { tag: true } } }
 	})
@@ -669,7 +731,7 @@ export const charactersSearchLibrary: Handler<
 			}
 
 			const nsfw = await resolveNsfwParam(userId)
-			const { items, hasMore } = await cachedSearch(
+			const { items, hasMore, nextOffset } = await cachedSearch(
 				sourceId,
 				{
 					kind: "character",
@@ -687,6 +749,7 @@ export const charactersSearchLibrary: Handler<
 			const res: Sockets.Characters.SearchLibrary.Response = {
 				characters: items,
 				hasMore,
+				nextOffset,
 				requestId: params.requestId
 			}
 			emitToUser("characters:searchLibrary", res)
@@ -804,7 +867,14 @@ export const charactersExportCard: Handler<
 			// one from this character's own binding list (verified below, not
 			// just trusted from the client), matching the "whole shared book"
 			// scope decision: every world/character/history entry in the book
-			// is included, not just entries scoped to this one character.
+			// is included, not just entries scoped to this one character —
+			// and, per the same scope decision, its bindings and narrative
+			// graph now come along too (see the merge plan's decision 5).
+			// Reuses buildLorebookExportData — the exact function backing the
+			// lorebook's own export handler — instead of a bespoke bare
+			// buildSpecV3Lorebook() call, which used to silently drop every
+			// character-lore entry's privacy binding and all graph data on
+			// this path specifically.
 			let lorebook: SpecV3.Lorebook | undefined
 			if (params.lorebookId) {
 				const binding = await db.query.lorebookBindings.findFirst({
@@ -821,26 +891,11 @@ export const charactersExportCard: Handler<
 						"That lorebook isn't bound to this character."
 					)
 				}
-				const boundLorebook = await db.query.lorebooks.findFirst({
-					where: and(
-						eq(schema.lorebooks.id, params.lorebookId),
-						eq(schema.lorebooks.userId, userId)
-					),
-					with: {
-						worldLoreEntries: true,
-						characterLoreEntries: true,
-						historyEntries: true
-					}
-				})
-				if (!boundLorebook) {
-					throw new Error("Lorebook not found.")
-				}
-				lorebook = buildSpecV3Lorebook(
-					boundLorebook,
-					boundLorebook.worldLoreEntries,
-					boundLorebook.characterLoreEntries,
-					boundLorebook.historyEntries
-				) as unknown as SpecV3.Lorebook
+				const { specBookWithGraph } = await buildLorebookExportData(
+					params.lorebookId,
+					userId
+				)
+				lorebook = specBookWithGraph as unknown as SpecV3.Lorebook
 			}
 
 			const charCardData = buildCharacterCardV3({
@@ -876,6 +931,15 @@ export const charactersExportCard: Handler<
 				})
 				// Extract just the filename from the avatar path (it may contain full path)
 				const avatarFilename = path.basename(character.avatar)
+				// Stored avatars aren't guaranteed to be PNGs (jpg/webp/gif are
+				// all valid per ALLOWED_IMAGE_EXTENSIONS) — embedCharacterCardInPng
+				// would otherwise throw the PNG library's opaque "Invalid .png
+				// file header" for those, with no indication of why to the user.
+				if (path.extname(avatarFilename).toLowerCase() !== ".png") {
+					throw new Error(
+						"This character's avatar isn't a PNG, so it can't be used for PNG card export — try JSON export instead, or update the avatar to a PNG image first."
+					)
+				}
 				const avatarPath = path.join(avatarDir, avatarFilename)
 				const avatarBuffer = await fsPromises.readFile(avatarPath)
 
@@ -905,14 +969,25 @@ export const charactersListGallery: Handler<
 > = {
 	event: "characters:listGallery",
 	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-		const images = await listCharacterGallery({
-			characterId: params.characterId,
-			userId
-		})
-		const res: Sockets.Characters.ListGallery.Response = { images }
-		emitToUser("characters:listGallery", res)
-		return res
+		try {
+			const userId = socket.user!.id
+			const images = await listCharacterGallery({
+				characterId: params.characterId,
+				userId
+			})
+			const res: Sockets.Characters.ListGallery.Response = {
+				images,
+				characterId: params.characterId
+			}
+			emitToUser("characters:listGallery", res)
+			return res
+		} catch (error: any) {
+			emitToUser("characters:listGallery:error", {
+				error: error.message || "Failed to list gallery.",
+				characterId: params.characterId
+			})
+			throw error
+		}
 	}
 }
 
@@ -922,36 +997,46 @@ export const charactersUploadGalleryImage: Handler<
 > = {
 	event: "characters:uploadGalleryImage",
 	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-		const character = await db.query.characters.findFirst({
-			where: (c, { and, eq }) =>
-				and(eq(c.id, params.characterId), eq(c.userId, userId))
-		})
-		if (!character) throw new Error("Character not found or access denied")
+		try {
+			const userId = socket.user!.id
+			const character = await db.query.characters.findFirst({
+				where: (c, { and, eq }) =>
+					and(eq(c.id, params.characterId), eq(c.userId, userId))
+			})
+			if (!character)
+				throw new Error("Character not found or access denied")
 
-		const imgPath = await uploadCharacterGalleryImage({
-			characterId: params.characterId,
-			userId,
-			imageFile: Buffer.from(params.imageFile as Uint8Array),
-			mimeType: params.mimeType
-		})
+			const imgPath = await uploadCharacterGalleryImage({
+				characterId: params.characterId,
+				userId,
+				imageFile: Buffer.from(params.imageFile as Uint8Array),
+				mimeType: params.mimeType
+			})
 
-		const res: Sockets.Characters.UploadGalleryImage.Response = {
-			success: true,
-			path: imgPath
+			const res: Sockets.Characters.UploadGalleryImage.Response = {
+				success: true,
+				path: imgPath,
+				characterId: params.characterId
+			}
+			emitToUser("characters:uploadGalleryImage", res)
+			await charactersListGallery.handler(
+				socket,
+				{ characterId: params.characterId },
+				emitToUser
+			)
+			await charactersGet.handler(
+				socket,
+				{ id: params.characterId },
+				emitToUser
+			)
+			return res
+		} catch (error: any) {
+			emitToUser("characters:uploadGalleryImage:error", {
+				error: error.message || "Failed to upload image.",
+				characterId: params.characterId
+			})
+			throw error
 		}
-		emitToUser("characters:uploadGalleryImage", res)
-		await charactersListGallery.handler(
-			socket,
-			{ characterId: params.characterId },
-			emitToUser
-		)
-		await charactersGet.handler(
-			socket,
-			{ id: params.characterId },
-			emitToUser
-		)
-		return res
 	}
 }
 
@@ -961,29 +1046,39 @@ export const charactersDeleteGalleryImage: Handler<
 > = {
 	event: "characters:deleteGalleryImage",
 	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-		const character = await db.query.characters.findFirst({
-			where: (c, { and, eq }) =>
-				and(eq(c.id, params.characterId), eq(c.userId, userId))
-		})
-		if (!character) throw new Error("Character not found or access denied")
+		try {
+			const userId = socket.user!.id
+			const character = await db.query.characters.findFirst({
+				where: (c, { and, eq }) =>
+					and(eq(c.id, params.characterId), eq(c.userId, userId))
+			})
+			if (!character)
+				throw new Error("Character not found or access denied")
 
-		await deleteCharacterGalleryImage({
-			characterId: params.characterId,
-			userId,
-			path: params.path
-		})
+			await deleteCharacterGalleryImage({
+				characterId: params.characterId,
+				userId,
+				path: params.path
+			})
 
-		const res: Sockets.Characters.DeleteGalleryImage.Response = {
-			success: true
+			const res: Sockets.Characters.DeleteGalleryImage.Response = {
+				success: true,
+				characterId: params.characterId
+			}
+			emitToUser("characters:deleteGalleryImage", res)
+			await charactersListGallery.handler(
+				socket,
+				{ characterId: params.characterId },
+				emitToUser
+			)
+			return res
+		} catch (error: any) {
+			emitToUser("characters:deleteGalleryImage:error", {
+				error: error.message || "Failed to delete image.",
+				characterId: params.characterId
+			})
+			throw error
 		}
-		emitToUser("characters:deleteGalleryImage", res)
-		await charactersListGallery.handler(
-			socket,
-			{ characterId: params.characterId },
-			emitToUser
-		)
-		return res
 	}
 }
 
@@ -1028,6 +1123,21 @@ export const charactersSetAvatar: Handler<
 				and(eq(c.id, params.characterId), eq(c.userId, userId))
 		})
 		if (!character) throw new Error("Character not found or access denied")
+
+		// params.path must be one of this character's own gallery images —
+		// without this, the client could point avatar at an arbitrary
+		// external URL, which every other viewer's browser would then fetch
+		// directly (avatar isn't routed through the authenticated /images
+		// proxy unless it happens to start with /images/...), bypassing the
+		// per-viewer authorization that route exists to enforce.
+		const galleryImage = await db.query.characterGalleryImages.findFirst({
+			where: (g, { and, eq }) =>
+				and(
+					eq(g.characterId, params.characterId),
+					eq(g.path, params.path)
+				)
+		})
+		if (!galleryImage) throw new Error("Invalid avatar path.")
 
 		const [updated] = await db
 			.update(schema.characters)

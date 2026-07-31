@@ -248,13 +248,18 @@ export function getNextCharacterTurn(
 	// entity. Every current caller already filters these out first, but that
 	// discipline isn't enforced by the type — guard here too so a future
 	// caller that skips the filter can't crash on `.id` of null.
+	// A removed-but-still-soft-present row (removedAt set) must never
+	// participate in round-robin, even if isActive was somehow still true —
+	// belt-and-suspenders alongside getPromptChatFromDb's own filter, since
+	// this function's chat.chatCharacters/chatPersonas input isn't guaranteed
+	// to always come from that one choke point.
 	const validChatCharacters = chat.chatCharacters.filter(
 		(cc): cc is typeof cc & { character: SelectCharacter } =>
-			cc.character !== null
+			cc.character !== null && !cc.removedAt
 	)
 	const validChatPersonas = chat.chatPersonas.filter(
 		(cp): cp is typeof cp & { persona: SelectPersona } =>
-			cp.persona !== null
+			cp.persona !== null && !cp.removedAt
 	)
 	if (!validChatCharacters.length || !validChatPersonas.length) {
 		return null

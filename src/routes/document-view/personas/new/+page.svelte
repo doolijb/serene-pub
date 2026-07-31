@@ -37,20 +37,22 @@
 		})
 	}
 
+	function handlePersonasCreate(msg: any) {
+		saving = false
+		if (msg.persona) goto(`/document-view/personas/${msg.persona.id}/edit`)
+	}
+	function handlePersonasCreateError(msg: { error?: string }) {
+		saving = false
+		error = msg.error || "Failed to create persona."
+		announce(error)
+	}
+
 	onMount(() => {
-		socket.on("personas:create", (msg) => {
-			saving = false
-			if (msg.persona)
-				goto(`/document-view/personas/${msg.persona.id}/edit`)
-		})
-		socket.on("personas:create:error", (msg: { error?: string }) => {
-			saving = false
-			error = msg.error || "Failed to create persona."
-			announce(error)
-		})
+		socket.on("personas:create", handlePersonasCreate)
+		socket.on("personas:create:error", handlePersonasCreateError)
 		return () => {
-			socket.off("personas:create")
-			socket.off("personas:create:error")
+			socket.off("personas:create", handlePersonasCreate)
+			socket.off("personas:create:error", handlePersonasCreateError)
 		}
 	})
 </script>

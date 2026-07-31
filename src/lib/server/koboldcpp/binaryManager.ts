@@ -3,6 +3,7 @@ import * as http from "http"
 import * as fs from "fs"
 import * as fsPromises from "fs/promises"
 import * as path from "path"
+import * as crypto from "crypto"
 
 export interface BinaryVariant {
 	name: string
@@ -11,6 +12,8 @@ export interface BinaryVariant {
 	description: string
 	downloadUrl: string
 	sizeBytes: number
+	/** URL of this asset's published `.sha256` checksum file, if the release has one. */
+	sha256Url?: string
 }
 
 export interface BinaryDownloadState {
@@ -24,24 +27,60 @@ export interface BinaryDownloadState {
 
 let currentDownload: (BinaryDownloadState & { abort?: () => void }) | null =
 	null
-let emitProgressFn:
-	| ((d: { download: BinaryDownloadState | null }) => void)
-	| null = null
+type ProgressEmitter = (d: { download: BinaryDownloadState | null }) => void
+// Map<userId, {emit, connections}>, not a single nullable slot or a
+// Set<ProgressEmitter> — the old single-slot design meant whichever admin
+// socket most recently called setEmitter() became the sole recipient of
+// binary-download progress, silently cutting off any other connected
+// admin's UI. A Set<ProgressEmitter> fixes that but overcorrects:
+// registration happens once per *connection*, and emitToUser already
+// broadcasts to every open tab/connection for a user — so N tabs for the
+// same admin would mean N entries in the Set, each independently
+// re-broadcasting to all N sockets (N² transmissions per tick instead of
+// N). Keying by userId with a connection refcount collapses that back to
+// one broadcast per user regardless of tab count, and only unregisters
+// once every one of their connections has disconnected.
+const progressEmitters = new Map<
+	number,
+	{ emit: ProgressEmitter; connections: number }
+>()
 
-export function setEmitter(
-	fn: (d: { download: BinaryDownloadState | null }) => void
-) {
-	emitProgressFn = fn
-}
-
-function emitProgress() {
-	if (!emitProgressFn) return
-	if (!currentDownload) {
-		emitProgressFn({ download: null })
+export function registerEmitter(userId: number, fn: ProgressEmitter) {
+	const existing = progressEmitters.get(userId)
+	if (existing) {
+		existing.connections++
 		return
 	}
-	const { abort: _, ...rest } = currentDownload
-	emitProgressFn({ download: rest })
+	progressEmitters.set(userId, { emit: fn, connections: 1 })
+}
+
+export function unregisterEmitter(userId: number) {
+	const existing = progressEmitters.get(userId)
+	if (!existing) return
+	existing.connections--
+	if (existing.connections <= 0) progressEmitters.delete(userId)
+}
+
+// Progress ticks arrive on every TCP chunk of a streaming download (up to
+// hundreds of thousands of times for a multi-GB binary) — each broadcast
+// is a synchronous JSON-serialize + Socket.IO emit, competing with the
+// download's own network I/O on Node's single event loop. Throttling the
+// broadcast (not the byte-counter update) is the single biggest win for
+// actual download throughput. Single-flight download (one `currentDownload`
+// slot at a time), so a single global timer is enough — no per-key map
+// needed the way koboldcpp.ts's multi-download model download needs.
+const PROGRESS_EMIT_THROTTLE_MS = 250
+let lastProgressEmitAt = 0
+
+function emitProgress() {
+	const payload = currentDownload
+		? { download: (({ abort: _, ...rest }) => rest)(currentDownload) }
+		: { download: null }
+	for (const { emit } of progressEmitters.values()) {
+		try {
+			emit(payload)
+		} catch {}
+	}
 }
 
 export function getDownloadState(): BinaryDownloadState | null {
@@ -78,6 +117,22 @@ function makeDescription(name: string): string {
 
 function makeDisplayName(name: string): string {
 	return name.replace(/\.exe$/i, "").replace(/_/g, " ")
+}
+
+// GitHub serves release assets via a redirect off github.com — historically
+// to objects.githubusercontent.com, migrating to
+// release-assets.githubusercontent.com since mid-2025. Both are live
+// depending on when a given release's assets were uploaded, so both must be
+// allowed. Exact-match (not suffix-match): these are fixed, known single
+// hosts, not a wildcard-subdomain CDN.
+const ALLOWED_GITHUB_RELEASE_HOSTS = new Set([
+	"github.com",
+	"objects.githubusercontent.com",
+	"release-assets.githubusercontent.com"
+])
+
+export function isAllowedGithubReleaseHost(hostname: string): boolean {
+	return ALLOWED_GITHUB_RELEASE_HOSTS.has(hostname.toLowerCase())
 }
 
 export interface ReleaseVersion {
@@ -131,7 +186,9 @@ export async function listVariants(
 			platform: detectPlatform(a.name),
 			description: makeDescription(a.name),
 			downloadUrl: a.browser_download_url,
-			sizeBytes: a.size
+			sizeBytes: a.size,
+			sha256Url: assets.find((s) => s.name === `${a.name}.sha256`)
+				?.browser_download_url
 		}))
 
 	return { variants, releaseTag }
@@ -167,8 +224,23 @@ export async function downloadVariant(opts: {
 	assetName: string
 	downloadUrl: string
 	destDir: string
+	/** Published checksum URL, if the release has one — verified after download. */
+	sha256Url?: string
 }): Promise<void> {
-	const { assetName, downloadUrl, destDir } = opts
+	const { assetName, downloadUrl, destDir, sha256Url } = opts
+
+	if (currentDownload && !currentDownload.isDone) {
+		throw new Error("A binary download is already in progress.")
+	}
+
+	// Defense in depth: callers are expected to have already revalidated
+	// assetName against the real GitHub release list (real asset names never
+	// contain path separators), but this is cheap insurance against a
+	// crafted name escaping destDir via path.join below.
+	if (assetName.includes("/") || assetName.includes("\\")) {
+		throw new Error("Invalid asset name.")
+	}
+
 	const destPath = path.join(destDir, assetName)
 
 	currentDownload = {
@@ -191,6 +263,14 @@ export async function downloadVariant(opts: {
 		await new Promise<void>((resolve, reject) => {
 			function request(url: string, redirectsLeft: number) {
 				const urlObj = new URL(url)
+				if (!isAllowedGithubReleaseHost(urlObj.hostname)) {
+					reject(
+						new Error(
+							`Refusing to download from disallowed host: ${urlObj.hostname}`
+						)
+					)
+					return
+				}
 				const lib = urlObj.protocol === "https:" ? https : http
 
 				const req = lib.get(url, (res) => {
@@ -219,7 +299,11 @@ export async function downloadVariant(opts: {
 
 					res.on("data", (chunk: Buffer) => {
 						currentDownload!.downloaded += chunk.length
-						emitProgress()
+						const now = Date.now()
+						if (now - lastProgressEmitAt >= PROGRESS_EMIT_THROTTLE_MS) {
+							lastProgressEmitAt = now
+							emitProgress()
+						}
 					})
 					res.pipe(writer)
 					writer.on("finish", resolve)
@@ -238,6 +322,29 @@ export async function downloadVariant(opts: {
 			request(downloadUrl, 5)
 		})
 
+		// Best-effort: not every release publishes a .sha256 asset, so a
+		// missing one just skips verification rather than failing the
+		// download outright.
+		if (sha256Url) {
+			const checksumResp = await fetch(sha256Url)
+			if (checksumResp.ok) {
+				const checksumText = await checksumResp.text()
+				// Typical sha256sum format is "<hex>  <filename>" — take just
+				// the leading hex token.
+				const expectedHex = checksumText.trim().split(/\s+/)[0]?.toLowerCase()
+				const fileBuffer = await fsPromises.readFile(destPath)
+				const actualHex = crypto
+					.createHash("sha256")
+					.update(fileBuffer)
+					.digest("hex")
+				if (expectedHex && expectedHex !== actualHex) {
+					throw new Error(
+						"Downloaded binary failed checksum verification."
+					)
+				}
+			}
+		}
+
 		// Make executable on Unix
 		if (process.platform !== "win32") {
 			await fsPromises.chmod(destPath, 0o755)
@@ -253,9 +360,10 @@ export async function downloadVariant(opts: {
 		currentDownload!.isDone = true
 		emitProgress()
 
-		if (cancelled) {
-			fsPromises.unlink(destPath).catch(() => {})
-		}
+		// Clean up the partial file regardless of why the download stopped —
+		// a genuine error leaves the same half-written file behind as a
+		// cancellation does.
+		fsPromises.unlink(destPath).catch(() => {})
 
 		if (!cancelled) throw err
 	}

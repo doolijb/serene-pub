@@ -112,33 +112,39 @@
 		socket.emit("setup:markComplete", { step })
 	}
 
+	function handleCharactersList(msg: Sockets.Characters.List.Response) {
+		characters = msg.characterList || []
+	}
+	function handlePersonasList(msg: Sockets.Personas.List.Response) {
+		personas = msg.personaList || []
+	}
+	function handleChatsList(msg: Sockets.Chats.List.Response) {
+		chats = msg.chatList || []
+		loaded = true
+	}
+	function handleSetupGet(msg: any) {
+		setupData = msg.setup
+	}
+	function handleSetupMarkComplete(msg: any) {
+		if (msg.setup) setupData = msg.setup
+	}
+
 	onMount(() => {
-		socket.on("characters:list", (msg) => {
-			characters = msg.characterList || []
-		})
-		socket.on("personas:list", (msg) => {
-			personas = msg.personaList || []
-		})
-		socket.on("chats:list", (msg) => {
-			chats = msg.chatList || []
-			loaded = true
-		})
-		socket.on("setup:get", (msg) => {
-			setupData = msg.setup
-		})
-		socket.on("setup:markComplete", (msg) => {
-			if (msg.setup) setupData = msg.setup
-		})
+		socket.on("characters:list", handleCharactersList)
+		socket.on("personas:list", handlePersonasList)
+		socket.on("chats:list", handleChatsList)
+		socket.on("setup:get", handleSetupGet)
+		socket.on("setup:markComplete", handleSetupMarkComplete)
 		socket.emit("characters:list", {})
 		socket.emit("personas:list", {})
 		socket.emit("chats:list", {})
 		socket.emit("setup:get", {})
 		return () => {
-			socket.off("characters:list")
-			socket.off("personas:list")
-			socket.off("chats:list")
-			socket.off("setup:get")
-			socket.off("setup:markComplete")
+			socket.off("characters:list", handleCharactersList)
+			socket.off("personas:list", handlePersonasList)
+			socket.off("chats:list", handleChatsList)
+			socket.off("setup:get", handleSetupGet)
+			socket.off("setup:markComplete", handleSetupMarkComplete)
 		}
 	})
 </script>

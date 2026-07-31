@@ -25,11 +25,12 @@ import {
 	buildSynthesisPrompt,
 	formatMessagesAsJson,
 	type CastEntry,
+	type ExtractedCastRef,
 	type JsonDraft
 } from "./templates"
 import { parseSummaryOutput } from "./parser"
 
-export type SummarizePhase = "drafting" | "synthesizing"
+export type SummarizePhase = "drafting" | "synthesizing" | "naming" | "extracting"
 
 export interface SummarizeProgressData {
 	phase: SummarizePhase
@@ -59,6 +60,8 @@ export interface SummarizeInput {
 	synthSampling?: SelectSamplingConfig | null
 	nameConnection?: SelectConnection | null
 	nameSampling?: SelectSamplingConfig | null
+	characterExtractionConnection?: SelectConnection | null
+	characterExtractionSampling?: SelectSamplingConfig | null
 	/** Known cast for scene character extraction — seeded from prior scenes and bindings */
 	knownCast?: CastEntry[]
 	onProgress?: (data: SummarizeProgressData) => void
@@ -76,8 +79,8 @@ export interface SummarizeResult {
 	raw: string
 	batchCount: number
 	/** Populated for loreType === "scene" only */
-	participantCharacters?: string[]
-	mentionedCharacters?: string[]
+	participantCharacters?: ExtractedCastRef[]
+	mentionedCharacters?: ExtractedCastRef[]
 }
 
 function estimateTokens(text: string): number {
@@ -194,13 +197,137 @@ async function runGeneration(
 	return text
 }
 
+/**
+ * Extracts character names present/mentioned in a piece of prose via a
+ * dedicated LLM call, resolved against a known-cast list. Standalone (not
+ * scoped to generateSummary()'s batch/synthesis pipeline) so it can run
+ * against content that's already final text — e.g. a history entry with no
+ * scenes — not just freshly-drafted scene summaries. generateSummary()
+ * itself delegates to this for loreType === "scene", so there's exactly
+ * one implementation of the extraction call, not two.
+ */
+export async function extractCharactersFromContent(params: {
+	content: string
+	connection: SelectConnection
+	sampling: SelectSamplingConfig
+	contextConfig: SelectContextConfig
+	promptConfig: SelectPromptConfig
+	characterExtractionSystemPrompt?: string | null
+	knownCast?: CastEntry[]
+	onLlmCall?: (entry: {
+		label: string
+		system: string
+		user: string
+		response: string
+	}) => void
+}): Promise<{
+	participantCharacters: ExtractedCastRef[]
+	mentionedCharacters: ExtractedCastRef[]
+}> {
+	const {
+		content,
+		connection,
+		sampling,
+		contextConfig,
+		promptConfig,
+		characterExtractionSystemPrompt,
+		knownCast,
+		onLlmCall
+	} = params
+	const tokenCounter = new TokenCounters(
+		(connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
+	)
+	const tokenLimit: number =
+		(connection as any).tokenLimit ?? (connection as any).contextSize ?? 4096
+
+	try {
+		const extractionPrompt = buildCharacterExtractionPrompt(
+			content,
+			characterExtractionSystemPrompt,
+			knownCast
+		)
+		const raw = await runGeneration(extractionPrompt, {
+			connection,
+			sampling,
+			contextConfig,
+			promptConfig,
+			tokenCounter,
+			tokenLimit,
+			maxTokens: 500,
+			taskType: "character_extraction",
+			label: "character extraction"
+		})
+		onLlmCall?.({
+			label: "Character Extraction",
+			system: extractionPrompt.systemPrompt,
+			user: extractionPrompt.userPrompt,
+			response: raw
+		})
+		// Strip markdown code fences if present, then extract the first {...} block
+		const stripped = raw
+			.replace(/```(?:json)?\s*/gi, "")
+			.replace(/```/g, "")
+			.trim()
+		const jsonMatch = stripped.match(/\{[\s\S]*\}/)
+		if (!jsonMatch)
+			throw new Error(
+				"No JSON object found in character extraction response"
+			)
+		const parsed = JSON.parse(jsonMatch[0])
+		return {
+			participantCharacters: normalizeCastRefs(parsed.participants),
+			mentionedCharacters: normalizeCastRefs(parsed.mentioned)
+		}
+	} catch {
+		return { participantCharacters: [], mentionedCharacters: [] }
+	}
+}
+
+/**
+ * Normalizes one participants/mentioned array from the extraction LLM's raw
+ * JSON into ExtractedCastRef[] — accepting both the current
+ * `{"castId": N}` / `{"name": "..."}` object shape and the legacy bare
+ * string[] shape (models sometimes ignore structured-output instructions,
+ * or a custom prompt override still asks for the old format — this is
+ * defense in depth, not a hard cutover).
+ */
+function normalizeCastRefs(value: unknown): ExtractedCastRef[] {
+	if (!Array.isArray(value)) return []
+	const refs: ExtractedCastRef[] = []
+	for (const entry of value) {
+		if (typeof entry === "string") {
+			if (entry.trim()) refs.push({ name: entry })
+		} else if (entry && typeof entry === "object") {
+			const obj = entry as Record<string, unknown>
+			if (typeof obj.castId === "number") {
+				refs.push({ castId: obj.castId })
+			} else if (typeof obj.name === "string" && obj.name.trim()) {
+				refs.push({ name: obj.name })
+			}
+		}
+	}
+	return refs
+}
+
+// Compile (history-entry synthesis from prior scenes) has no naming or
+// character-extraction step, unlike generateSummary() — a narrower phase
+// union than SummarizePhase, kept separate rather than reused, so callers
+// can't be handed a "naming"/"extracting" value compileScenesForEntry never
+// actually emits.
+export interface CompileProgressData {
+	phase: "drafting" | "synthesizing"
+	batch: number
+	totalBatches: number
+	partial: { content?: string; raw?: string }
+}
+
 export interface CompileInput {
 	scenes: { name: string | null; summary: string | null }[]
 	connection: SelectConnection
 	sampling: SelectSamplingConfig
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
-	onProgress?: (data: SummarizeProgressData) => void
+	onProgress?: (data: CompileProgressData) => void
 }
 
 /**
@@ -314,7 +441,9 @@ export async function generateSummary(
 		synthConnection,
 		synthSampling,
 		nameConnection,
-		nameSampling
+		nameSampling,
+		characterExtractionConnection,
+		characterExtractionSampling
 	} = input
 
 	const batchConn = batchConnection ?? connection
@@ -323,6 +452,8 @@ export async function generateSummary(
 	const synthSamp = synthSampling ?? sampling
 	const nameConn = nameConnection ?? connection
 	const nameSamp = nameSampling ?? sampling
+	const characterExtractionConn = characterExtractionConnection ?? connection
+	const characterExtractionSamp = characterExtractionSampling ?? sampling
 
 	// Each phase can use a different connection (batch/synth/name overrides),
 	// so each gets its own tokenCounter matching its own connection's
@@ -336,6 +467,10 @@ export async function generateSummary(
 	)
 	const nameTokenCounter = new TokenCounters(
 		(nameConn as any).tokenCounter || TokenCounterOptions.ESTIMATE
+	)
+	const characterExtractionTokenCounter = new TokenCounters(
+		(characterExtractionConn as any).tokenCounter ||
+			TokenCounterOptions.ESTIMATE
 	)
 	const tokenLimit: number =
 		(batchConn as any).tokenLimit ?? (batchConn as any).contextSize ?? 4096
@@ -367,6 +502,17 @@ export async function generateSummary(
 		tokenLimit:
 			(nameConn as any).tokenLimit ??
 			(nameConn as any).contextSize ??
+			4096
+	}
+	const extractionOpts = {
+		connection: characterExtractionConn,
+		sampling: characterExtractionSamp,
+		contextConfig,
+		promptConfig,
+		tokenCounter: characterExtractionTokenCounter,
+		tokenLimit:
+			(characterExtractionConn as any).tokenLimit ??
+			(characterExtractionConn as any).contextSize ??
 			4096
 	}
 
@@ -419,6 +565,12 @@ export async function generateSummary(
 
 	// ── Name generation helper ───────────────────────────────────────────────
 	async function generateName(content: string): Promise<string | undefined> {
+		onProgress?.({
+			phase: "naming",
+			batch: totalBatches,
+			totalBatches,
+			partial: {}
+		})
 		try {
 			const namePrompt = buildNamePrompt({
 				content,
@@ -431,6 +583,12 @@ export async function generateSummary(
 				taskType: "summarize_name",
 				label: loreType
 			})
+			onLlmCall?.({
+				label: "Naming",
+				system: namePrompt.systemPrompt,
+				user: namePrompt.userPrompt,
+				response: nameRaw
+			})
 			const name = nameRaw.trim().replace(/['".,!?]+$/g, "")
 			return name.length > 0 ? name : undefined
 		} catch {
@@ -439,54 +597,29 @@ export async function generateSummary(
 	}
 
 	// ── Character extraction helper (scene type only) ────────────────────────
-	async function extractCharacters(content: string): Promise<{
-		participantCharacters: string[]
-		mentionedCharacters: string[]
-	}> {
-		try {
-			const extractionPrompt = buildCharacterExtractionPrompt(
-				content,
+	// Delegates to the standalone extractCharactersFromContent() — the same
+	// implementation the graph-builder uses for scene-less history entries
+	// — using extractionOpts's own resolved connection/sampling/tokenCounter
+	// (falls back to the base connection/sampling if no dedicated override
+	// is configured, same pattern as batch/synth/name).
+	async function extractCharacters(content: string) {
+		onProgress?.({
+			phase: "extracting",
+			batch: totalBatches,
+			totalBatches,
+			partial: {}
+		})
+		return extractCharactersFromContent({
+			content,
+			connection: extractionOpts.connection,
+			sampling: extractionOpts.sampling,
+			contextConfig: extractionOpts.contextConfig,
+			promptConfig: extractionOpts.promptConfig,
+			characterExtractionSystemPrompt:
 				summarizePromptConfig?.characterExtractionSystemPrompt,
-				knownCast
-			)
-			const raw = await runGeneration(extractionPrompt, {
-				...nameOpts,
-				maxTokens: 500,
-				taskType: "character_extraction",
-				label: "character extraction"
-			})
-			onLlmCall?.({
-				label: "Character Extraction",
-				system: extractionPrompt.systemPrompt,
-				user: extractionPrompt.userPrompt,
-				response: raw
-			})
-			// Strip markdown code fences if present, then extract the first {...} block
-			const stripped = raw
-				.replace(/```(?:json)?\s*/gi, "")
-				.replace(/```/g, "")
-				.trim()
-			const jsonMatch = stripped.match(/\{[\s\S]*\}/)
-			if (!jsonMatch)
-				throw new Error(
-					"No JSON object found in character extraction response"
-				)
-			const parsed = JSON.parse(jsonMatch[0])
-			return {
-				participantCharacters: Array.isArray(parsed.participants)
-					? parsed.participants.filter(
-							(n: unknown) => typeof n === "string"
-						)
-					: [],
-				mentionedCharacters: Array.isArray(parsed.mentioned)
-					? parsed.mentioned.filter(
-							(n: unknown) => typeof n === "string"
-						)
-					: []
-			}
-		} catch {
-			return { participantCharacters: [], mentionedCharacters: [] }
-		}
+			knownCast,
+			onLlmCall
+		})
 	}
 
 	// If only one batch, skip synthesis — the single draft is the final result

@@ -18,6 +18,24 @@ import * as http from "http"
 import { randomUUID } from "crypto"
 import * as subprocessManager from "$lib/server/koboldcpp/subprocessManager"
 import * as binaryManager from "$lib/server/koboldcpp/binaryManager"
+import { loginRateLimit } from "$lib/server/services/loginRateLimit"
+
+// Every legitimate model downloadUrl this app ever constructs points at
+// huggingface.co (search/recommended-models flows below). Hugging Face's
+// large-file storage (Xet) commonly redirects a real `.../resolve/main/...`
+// download to a host under hf.co — eg. cas-bridge.xethub.hf.co — which is
+// NOT a subdomain of huggingface.co, so both roots need covering. Suffix
+// checks, not exact-subdomain matches — deeper subdomains under xethub.hf.co
+// exist and a single-label wildcard would miss them.
+export function isAllowedHuggingFaceHost(hostname: string): boolean {
+	const h = hostname.toLowerCase()
+	return (
+		h === "huggingface.co" ||
+		h.endsWith(".huggingface.co") ||
+		h === "hf.co" ||
+		h.endsWith(".hf.co")
+	)
+}
 import {
 	unloadModel,
 	getLoadedSignature
@@ -95,9 +113,38 @@ export const koboldCppVersionHandler: Handler<
 			(await db.query.koboldCppSettings.findFirst())!
 		const baseUrl = params.baseUrl || koboldCppManagerBaseUrl
 
-		const response = await fetch(`${baseUrl}/api/extra/version`, {
-			signal: AbortSignal.timeout(5000)
-		})
+		// Not reachable is an expected, routine state (nothing started yet,
+		// no managed/external instance configured, or it's mid-restart) —
+		// same reasoning as koboldCppPerfHandler below. Emitting a clean
+		// :error and returning here (rather than throwing) also keeps this
+		// out of the generic handler wrapper's console.error, which fires
+		// unconditionally on every throw regardless of message quality —
+		// this is routine client-facing state, not a server-side fault
+		// worth logging.
+		let response: Response
+		try {
+			response = await fetch(`${baseUrl}/api/extra/version`, {
+				signal: AbortSignal.timeout(5000)
+			})
+		} catch {
+			emitToUser("koboldcpp:version:error", {
+				error: "KoboldCPP is not reachable"
+			})
+			return {
+				version: "",
+				isLocal: false,
+				capabilities: {
+					txt2img: false,
+					vision: false,
+					tts: false,
+					transcribe: false,
+					embeddings: false,
+					multiplayer: false,
+					websearch: false,
+					adminEnabled: false
+				}
+			}
+		}
 
 		if (!response.ok) {
 			throw new Error(`HTTP ${response.status}: ${response.statusText}`)
@@ -436,12 +483,28 @@ export const koboldCppPerfHandler: Handler<
 				signal: AbortSignal.timeout(5000)
 			})
 		} catch {
-			// Not reachable is an expected, common state (nothing started yet,
-			// no managed/external instance configured) — throw a short, clean
-			// message instead of letting the raw fetch failure (with its nested
-			// AggregateError/ECONNREFUSED cause chain) hit the generic handler
-			// wrapper's console.error on every poll.
-			throw new Error("KoboldCPP is not reachable")
+			// Not reachable is an expected, routine state (nothing started
+			// yet, no managed/external instance configured, or it's
+			// mid-restart) — emit a clean :error and return here instead of
+			// throwing. Throwing a "clean" message still made it into the
+			// generic handler wrapper's console.error on every check (that
+			// wrapper logs unconditionally on any throw, regardless of
+			// message quality) — this is routine client-facing state, not a
+			// server-side fault worth logging.
+			emitToUser("koboldcpp:perf:error", {
+				error: "KoboldCPP is not reachable"
+			})
+			return {
+				lastProcess: 0,
+				lastEval: 0,
+				lastTokenCount: 0,
+				queue: 0,
+				idle: false,
+				uptime: 0,
+				avgGenSpeed: 0,
+				avgPromptSpeed: 0,
+				totalGens: 0
+			}
 		}
 
 		if (!response.ok) {
@@ -666,19 +729,106 @@ type DownloadEntry = Sockets.KoboldCPP.DownloadProgress.DownloadEntry & {
 	abort?: () => void
 }
 let activeDownloads: Record<string, DownloadEntry> = {}
-let emitDownloadProgressFn:
-	| ((data: Sockets.KoboldCPP.DownloadProgress.Response) => void)
-	| null = null
+// koboldCppDownloadModelHandler already guards re-downloading the same
+// filename, but nothing capped the number of distinct concurrent downloads
+// — an admin session could launch many simultaneous multi-GB downloads with
+// no bandwidth/disk cap, unlike binaryManager's own single-flight guard.
+// This caps distinct *files* downloading at once — unrelated to
+// MAX_PARALLEL_CHUNKS_PER_DOWNLOAD below, which caps concurrent connections
+// *within* a single file's download.
+const MAX_CONCURRENT_MODEL_DOWNLOADS = 3
+
+// A single sequential HTTP connection to Hugging Face's CDN is
+// throughput-capped well below what the link can sustain in aggregate —
+// the same reason HF's own hf_transfer tool and third-party aria2c-based
+// downloaders exist. Splitting the file into byte-range chunks and pulling
+// them concurrently (bounded worker pool below) gets meaningfully closer to
+// real link speed. Chunk *size*, not chunk *count*, is fixed so a 70GB
+// model doesn't degrade into a handful of multi-GB chunks that leave the
+// pool under-saturated for most of the download.
+const PARALLEL_CHUNK_SIZE_BYTES = 64 * 1024 * 1024 // 64MB
+// Within the 4-16 range aria2c -x/hf_transfer commonly use — enough to beat
+// a single connection, conservative enough not to look abusive to HF's CDN.
+const MAX_PARALLEL_CHUNKS_PER_DOWNLOAD = 6
+// Map<userId, {emit, connections}>, not a single nullable slot or a
+// Set<EmitFn> — the old single-slot design meant whichever admin most
+// recently called koboldCppDownloadModelHandler/
+// koboldCppGetDownloadProgressHandler became the sole recipient of model
+// download progress, silently cutting off any other connected admin. A
+// Set<EmitFn> fixes that but overcorrects: registerKoboldCppHandlers runs
+// once per *connection*, and emitToUser already broadcasts to every open
+// tab/connection for a user (io.to("user_"+userId).emit(...)) — so N tabs
+// for the same admin would mean N entries in the Set, each independently
+// re-broadcasting to all N sockets (N² transmissions per tick instead of
+// N). Keying by userId with a connection refcount collapses that back to
+// one broadcast per user regardless of how many tabs they have open, and
+// only unregisters once every one of their connections has disconnected.
+const downloadProgressEmitters = new Map<
+	number,
+	{
+		emit: (data: Sockets.KoboldCPP.DownloadProgress.Response) => void
+		connections: number
+	}
+>()
+
+function registerDownloadProgressEmitter(
+	userId: number,
+	fn: (data: Sockets.KoboldCPP.DownloadProgress.Response) => void
+) {
+	const existing = downloadProgressEmitters.get(userId)
+	if (existing) {
+		existing.connections++
+		return
+	}
+	downloadProgressEmitters.set(userId, { emit: fn, connections: 1 })
+}
+
+function unregisterDownloadProgressEmitter(userId: number) {
+	const existing = downloadProgressEmitters.get(userId)
+	if (!existing) return
+	existing.connections--
+	if (existing.connections <= 0) downloadProgressEmitters.delete(userId)
+}
+
+// Progress ticks arrive on every TCP chunk of a streaming download (up to
+// hundreds of thousands of times for a multi-GB file) — each broadcast is
+// a synchronous JSON-serialize + Socket.IO emit, competing with the
+// download's own network I/O on Node's single event loop. Throttling the
+// broadcast (not the byte-counter update, which stays real-time for the
+// pull-based koboldCppGetDownloadProgressHandler) is the single biggest
+// win for actual download throughput.
+const PROGRESS_EMIT_THROTTLE_MS = 250
+const lastProgressEmitAt: Record<string, number> = {}
 
 function emitDownloadProgress() {
-	if (!emitDownloadProgressFn) return
 	const downloads: Sockets.KoboldCPP.DownloadProgress.Response["downloads"] =
 		{}
 	for (const [key, entry] of Object.entries(activeDownloads)) {
 		const { abort: _abort, ...rest } = entry
 		downloads[key] = rest
 	}
-	emitDownloadProgressFn({ downloads })
+	for (const { emit } of downloadProgressEmitters.values()) {
+		try {
+			emit({ downloads })
+		} catch {}
+	}
+}
+
+// Gates emitDownloadProgress() itself, not the underlying byte counter —
+// call sites that update activeDownloads[filename] on every chunk should
+// still call this on every chunk; the throttle lives here so state
+// transitions (start/success/error, called via emitDownloadProgress()
+// directly) are never accidentally throttled away.
+function maybeEmitDownloadProgress(filename: string) {
+	const now = Date.now()
+	if (
+		now - (lastProgressEmitAt[filename] ?? 0) <
+		PROGRESS_EMIT_THROTTLE_MS
+	) {
+		return
+	}
+	lastProgressEmitAt[filename] = now
+	emitDownloadProgress()
 }
 
 export const koboldCppSearchModelsHandler: Handler<
@@ -688,6 +838,13 @@ export const koboldCppSearchModelsHandler: Handler<
 	event: "koboldcpp:searchModels",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		// Instance-wide budget — hits Hugging Face on every call with no
+		// throttling otherwise, unlike the recommended-models handler's own
+		// TTL cache for the same external host.
+		if (loginRateLimit.isRateLimited("koboldcpp:searchModels")) {
+			throw new Error("Rate limited. Please wait a moment and try again.")
+		}
+		loginRateLimit.recordFailedAttempt("koboldcpp:searchModels")
 		const { searchTerm } = params
 		const response = await fetch(
 			`https://huggingface.co/api/models?search=${encodeURIComponent(searchTerm)}&filter=gguf&limit=50&sort=trendingScore&full=True&config=True`
@@ -742,6 +899,204 @@ export const koboldCppSearchModelsHandler: Handler<
 	}
 }
 
+// --- PARALLEL CHUNKED DOWNLOAD HELPERS ---
+
+type ResolvedDownload =
+	| { kind: "ranged"; resolvedUrl: string; total: number }
+	| {
+			kind: "fallback"
+			resolvedUrl: string
+			total: number
+			initialResponse: import("http").IncomingMessage
+	  }
+
+// Issues a 1-byte range probe against downloadUrl (following at most one
+// redirect, same validation as the real download below) to cheaply learn
+// (a) whether the eventual host supports range requests at all and (b) the
+// true total size — read from content-range's "/TOTAL" suffix in the 206
+// case, since content-length for a 1-byte range response is just "1".
+// registerRequest is called with every ClientRequest issued here so the
+// caller can track them for cancellation before this promise settles.
+function resolveHuggingFaceDownload(
+	downloadUrl: string,
+	registerRequest: (req: import("http").ClientRequest) => void
+): Promise<ResolvedDownload> {
+	return new Promise((resolve, reject) => {
+		function probe(url: string, isRedirect: boolean) {
+			const lib = url.startsWith("https") ? https : http
+			const req = lib.get(
+				url,
+				{ headers: { Range: "bytes=0-0" } },
+				(res) => {
+					if (
+						!isRedirect &&
+						res.statusCode &&
+						res.statusCode >= 300 &&
+						res.statusCode < 400 &&
+						res.headers.location
+					) {
+						const redirectUrl = res.headers.location
+						let parsedRedirectUrl: URL
+						try {
+							parsedRedirectUrl = new URL(redirectUrl)
+						} catch {
+							res.resume()
+							reject(new Error("Invalid redirect URL"))
+							return
+						}
+						if (!isAllowedHuggingFaceHost(parsedRedirectUrl.hostname)) {
+							res.resume()
+							reject(
+								new Error(
+									"Redirect target is not a Hugging Face URL"
+								)
+							)
+							return
+						}
+						res.resume()
+						probe(redirectUrl, true)
+						return
+					}
+
+					if (res.statusCode === 206) {
+						const contentRange = res.headers["content-range"]
+						const match =
+							typeof contentRange === "string"
+								? contentRange.match(/\/(\d+)\s*$/)
+								: null
+						const total = match ? parseInt(match[1], 10) : 0
+						res.resume() // discard the 1-byte probe body
+						resolve({ kind: "ranged", resolvedUrl: url, total })
+						return
+					}
+
+					if (res.statusCode && res.statusCode < 300) {
+						const total = parseInt(
+							res.headers["content-length"] ?? "0",
+							10
+						)
+						// This response IS the full body starting at byte 0 —
+						// don't discard it, hand it to the fallback path.
+						resolve({
+							kind: "fallback",
+							resolvedUrl: url,
+							total,
+							initialResponse: res
+						})
+						return
+					}
+
+					res.resume()
+					reject(
+						new Error(
+							`Download request failed with status ${res.statusCode}`
+						)
+					)
+				}
+			)
+			req.on("error", reject)
+			registerRequest(req)
+		}
+		probe(downloadUrl, false)
+	})
+}
+
+// Downloads [resolvedUrl] as concurrent byte-range chunks into a
+// pre-allocated file, using a bounded worker pool. Each chunk is written at
+// its exact offset via a shared FileHandle's positional write (POSIX
+// pwrite), which is safe for concurrent non-overlapping writers on one fd —
+// unlike multiple concurrent fs.createWriteStream instances against the
+// same path, which aren't designed for that.
+async function downloadFileInParallelChunks(opts: {
+	resolvedUrl: string
+	total: number
+	destPath: string
+	filename: string
+	registerRequest: (req: import("http").ClientRequest) => void
+	isAborted: () => boolean
+}): Promise<void> {
+	const { resolvedUrl, total, destPath, filename, registerRequest, isAborted } =
+		opts
+	const chunkCount = Math.max(
+		1,
+		Math.ceil(total / PARALLEL_CHUNK_SIZE_BYTES)
+	)
+	const lib = resolvedUrl.startsWith("https") ? https : http
+	const AgentCtor = resolvedUrl.startsWith("https")
+		? https.Agent
+		: http.Agent
+	const agent = new AgentCtor({
+		keepAlive: true,
+		maxSockets: MAX_PARALLEL_CHUNKS_PER_DOWNLOAD
+	})
+
+	const fileHandle = await fsPromises.open(destPath, "w")
+	try {
+		await fileHandle.truncate(total)
+
+		let nextChunkIndex = 0
+		function downloadChunk(idx: number): Promise<void> {
+			const start = idx * PARALLEL_CHUNK_SIZE_BYTES
+			const end = Math.min(start + PARALLEL_CHUNK_SIZE_BYTES, total) - 1
+			return new Promise((resolve, reject) => {
+				const req = lib.get(
+					resolvedUrl,
+					{ headers: { Range: `bytes=${start}-${end}` }, agent },
+					async (res) => {
+						if (res.statusCode !== 206) {
+							res.resume()
+							reject(
+								new Error(
+									`Chunk request failed with status ${res.statusCode}`
+								)
+							)
+							return
+						}
+						try {
+							let position = start
+							for await (const buf of res as AsyncIterable<Buffer>) {
+								await fileHandle.write(
+									buf,
+									0,
+									buf.length,
+									position
+								)
+								position += buf.length
+								activeDownloads[filename].downloaded +=
+									buf.length
+								maybeEmitDownloadProgress(filename)
+							}
+							resolve()
+						} catch (err) {
+							reject(err)
+						}
+					}
+				)
+				req.on("error", reject)
+				registerRequest(req)
+			})
+		}
+
+		async function worker(): Promise<void> {
+			while (!isAborted() && nextChunkIndex < chunkCount) {
+				const idx = nextChunkIndex++
+				await downloadChunk(idx)
+			}
+		}
+
+		const workerCount = Math.min(
+			MAX_PARALLEL_CHUNKS_PER_DOWNLOAD,
+			chunkCount
+		)
+		await Promise.all(
+			Array.from({ length: workerCount }, () => worker())
+		)
+	} finally {
+		await fileHandle.close().catch(() => {})
+		agent.destroy()
+	}
+}
+
 export const koboldCppDownloadModelHandler: Handler<
 	Sockets.KoboldCPP.DownloadModel.Params,
 	Sockets.KoboldCPP.DownloadModel.Response
@@ -775,9 +1130,34 @@ export const koboldCppDownloadModelHandler: Handler<
 			throw new Error("Invalid filename")
 		}
 
+		// downloadUrl is client-supplied — without this, an admin session (or
+		// forged socket emission) could point the server at an arbitrary
+		// internal address, streaming the response into a file later fed to
+		// the native koboldcpp/GGUF loader. Every legitimate downloadUrl this
+		// app ever constructs is huggingface.co — see isAllowedHuggingFaceHost.
+		let parsedDownloadUrl: URL
+		try {
+			parsedDownloadUrl = new URL(downloadUrl)
+		} catch {
+			throw new Error("Invalid download URL")
+		}
+		if (!isAllowedHuggingFaceHost(parsedDownloadUrl.hostname)) {
+			throw new Error("Download URL must be a Hugging Face URL")
+		}
+
 		if (activeDownloads[filename] && !activeDownloads[filename].isDone) {
 			emitToUser("koboldcpp:downloadModel:error", {
 				error: "Already downloading this file"
+			})
+			return { success: false }
+		}
+
+		const activeCount = Object.values(activeDownloads).filter(
+			(d) => !d.isDone
+		).length
+		if (activeCount >= MAX_CONCURRENT_MODEL_DOWNLOADS) {
+			emitToUser("koboldcpp:downloadModel:error", {
+				error: `Too many downloads already in progress (max ${MAX_CONCURRENT_MODEL_DOWNLOADS}).`
 			})
 			return { success: false }
 		}
@@ -809,10 +1189,6 @@ export const koboldCppDownloadModelHandler: Handler<
 				}
 			})
 
-		// Bind the emitter so progress events reach this user
-		emitDownloadProgressFn = (data) =>
-			emitToUser("koboldcpp:downloadProgress", data)
-
 		activeDownloads[filename] = {
 			filename,
 			modelName,
@@ -825,64 +1201,85 @@ export const koboldCppDownloadModelHandler: Handler<
 
 		// Run download asynchronously so we can return immediately
 		;(async () => {
+			// Declared outside the inner try so the catch block below can
+			// also destroy any still-open connections on ANY terminal
+			// failure — not just a user-initiated cancel. A chunk request
+			// erroring out (eg. a transient 500) must not leave its sibling
+			// in-flight chunk requests dangling.
+			let aborted = false
+			const inFlightRequests = new Set<import("http").ClientRequest>()
 			try {
-				await new Promise<void>((resolve, reject) => {
-					const urlObj = new URL(downloadUrl)
-					const lib = urlObj.protocol === "https:" ? https : http
-					const req = lib.get(downloadUrl, (res) => {
-						if (
-							res.statusCode &&
-							res.statusCode >= 300 &&
-							res.statusCode < 400 &&
-							res.headers.location
-						) {
-							// Follow redirect
-							const redirectUrl = res.headers.location
-							const rLib = redirectUrl.startsWith("https")
-								? https
-								: http
-							rLib.get(redirectUrl, (rRes) => {
-								const total = parseInt(
-									rRes.headers["content-length"] ?? "0",
-									10
-								)
-								activeDownloads[filename].total = total
-								activeDownloads[filename].status = "downloading"
-								const writer = fs.createWriteStream(destPath)
-								rRes.on("data", (chunk: Buffer) => {
-									activeDownloads[filename].downloaded +=
-										chunk.length
-									emitDownloadProgress()
-								})
-								rRes.pipe(writer)
-								writer.on("finish", resolve)
-								writer.on("error", reject)
-								rRes.on("error", reject)
-							}).on("error", reject)
-							return
-						}
-						const total = parseInt(
-							res.headers["content-length"] ?? "0",
-							10
-						)
-						activeDownloads[filename].total = total
-						activeDownloads[filename].status = "downloading"
+				let cancelReject: ((err: Error) => void) | null = null
+				activeDownloads[filename].abort = () => {
+					aborted = true
+					for (const req of inFlightRequests) req.destroy()
+					cancelReject?.(new Error("cancelled"))
+				}
+				const registerRequest = (req: import("http").ClientRequest) => {
+					inFlightRequests.add(req)
+					// .on, not .once — each request object is only ever
+					// registered once, so they behave identically here, but
+					// .on works against minimal test doubles that only
+					// implement the base emitter method.
+					req.on("close", () => inFlightRequests.delete(req))
+				}
+
+				let resolved: ResolvedDownload
+				try {
+					resolved = await resolveHuggingFaceDownload(
+						downloadUrl,
+						registerRequest
+					)
+				} catch (err) {
+					// A destroy()'d probe request surfaces as a raw
+					// socket/ECONNRESET-style error, not "cancelled" — but if
+					// abort() is what caused it, normalize the message so the
+					// catch block below picks the cancelled-cleanup branch
+					// instead of the error branch.
+					if (aborted) throw new Error("cancelled")
+					throw err
+				}
+				if (aborted) throw new Error("cancelled")
+
+				activeDownloads[filename].total = resolved.total
+				activeDownloads[filename].status = "downloading"
+
+				if (resolved.kind === "ranged" && resolved.total > 0) {
+					await new Promise<void>((resolve, reject) => {
+						cancelReject = reject
+						downloadFileInParallelChunks({
+							resolvedUrl: resolved.resolvedUrl,
+							total: resolved.total,
+							destPath,
+							filename,
+							registerRequest,
+							isAborted: () => aborted
+						}).then(resolve, reject)
+					})
+				} else {
+					// Range unsupported, or size unknown — fall back to the
+					// original single-stream path, fed by the resolve step's
+					// own in-flight response (no second request needed).
+					await new Promise<void>((resolve, reject) => {
+						cancelReject = reject
+						// The underlying request was already registered for
+						// abort-tracking inside resolveHuggingFaceDownload's
+						// probe() — no need to register it again here.
+						const res = (resolved as Extract<
+							ResolvedDownload,
+							{ kind: "fallback" }
+						>).initialResponse
 						const writer = fs.createWriteStream(destPath)
 						res.on("data", (chunk: Buffer) => {
 							activeDownloads[filename].downloaded += chunk.length
-							emitDownloadProgress()
+							maybeEmitDownloadProgress(filename)
 						})
 						res.pipe(writer)
 						writer.on("finish", resolve)
 						writer.on("error", reject)
 						res.on("error", reject)
 					})
-					req.on("error", reject)
-					activeDownloads[filename].abort = () => {
-						req.destroy()
-						reject(new Error("cancelled"))
-					}
-				})
+				}
 
 				activeDownloads[filename].status = "success"
 				activeDownloads[filename].isDone = true
@@ -892,6 +1289,10 @@ export const koboldCppDownloadModelHandler: Handler<
 					.set({ status: "complete" })
 					.where(eq(schema.koboldCppModels.filename, filename))
 			} catch (err: any) {
+				// Whatever ended the download — cancel or a genuine chunk
+				// error — any request still marked in-flight at this point
+				// is orphaned; destroy it rather than leave it dangling.
+				for (const req of inFlightRequests) req.destroy()
 				const isCancelled = err.message === "cancelled"
 				activeDownloads[filename].status = isCancelled
 					? "cancelled"
@@ -946,9 +1347,6 @@ export const koboldCppGetDownloadProgressHandler: Handler<
 	event: "koboldcpp:getDownloadProgress",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		// Re-bind emitter on reconnect
-		emitDownloadProgressFn = (data) =>
-			emitToUser("koboldcpp:downloadProgress", data)
 		const downloads: Sockets.KoboldCPP.GetDownloadProgress.Response["downloads"] =
 			{}
 		for (const [key, entry] of Object.entries(activeDownloads)) {
@@ -971,7 +1369,10 @@ export const koboldCppClearDownloadHistoryHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		for (const key of Object.keys(activeDownloads)) {
-			if (activeDownloads[key].isDone) delete activeDownloads[key]
+			if (activeDownloads[key].isDone) {
+				delete activeDownloads[key]
+				delete lastProgressEmitAt[key]
+			}
 		}
 		const res: Sockets.KoboldCPP.ClearDownloadHistory.Response = {
 			success: true
@@ -1002,12 +1403,15 @@ export const koboldCppSetManagedMode: Handler<
 			adminPassword = randomUUID().replace(/-/g, "")
 		}
 
-		await db.update(schema.koboldCppSettings).set({
-			koboldCppManagedMode: params.mode,
-			...(adminPassword
-				? { koboldCppManagedAdminPassword: adminPassword }
-				: {})
-		})
+		await db
+			.update(schema.koboldCppSettings)
+			.set({
+				koboldCppManagedMode: params.mode,
+				...(adminPassword
+					? { koboldCppManagedAdminPassword: adminPassword }
+					: {})
+			})
+			.where(eq(schema.koboldCppSettings.id, 1))
 
 		// Stop subprocess if switching away from managed
 		if (params.mode !== "managed" && subprocessManager.isRunning()) {
@@ -1029,10 +1433,13 @@ export const koboldCppSetManagedPort: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const port = Math.max(1024, Math.min(65535, Math.floor(params.port)))
-		await db.update(schema.koboldCppSettings).set({
-			koboldCppManagedPort: port,
-			koboldCppManagerBaseUrl: `http://localhost:${port}`
-		})
+		await db
+			.update(schema.koboldCppSettings)
+			.set({
+				koboldCppManagedPort: port,
+				koboldCppManagerBaseUrl: `http://localhost:${port}`
+			})
+			.where(eq(schema.koboldCppSettings.id, 1))
 		const res: Sockets.KoboldCPP.SetManagedPort.Response = { success: true }
 		emitToUser("koboldcpp:setManagedPort", res)
 		await systemSettingsGet.handler(socket, {}, emitToUser)
@@ -1050,6 +1457,7 @@ export const koboldCppSetManagedBinaryDir: Handler<
 		await db
 			.update(schema.koboldCppSettings)
 			.set({ koboldCppManagedBinaryDir: params.dir || null })
+			.where(eq(schema.koboldCppSettings.id, 1))
 		const res: Sockets.KoboldCPP.SetManagedBinaryDir.Response = {
 			success: true
 		}
@@ -1066,9 +1474,12 @@ export const koboldCppSetManagedAdminPassword: Handler<
 	event: "koboldcpp:setManagedAdminPassword",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		await db.update(schema.koboldCppSettings).set({
-			koboldCppManagedAdminPassword: params.password.trim() || null
-		})
+		await db
+			.update(schema.koboldCppSettings)
+			.set({
+				koboldCppManagedAdminPassword: params.password.trim() || null
+			})
+			.where(eq(schema.koboldCppSettings.id, 1))
 		const res: Sockets.KoboldCPP.SetManagedAdminPassword.Response = {
 			success: true
 		}
@@ -1089,6 +1500,7 @@ export const koboldCppSetModelTtl: Handler<
 		await db
 			.update(schema.koboldCppSettings)
 			.set({ koboldCppManagedModelTtlSecs: ttl })
+			.where(eq(schema.koboldCppSettings.id, 1))
 		const res: Sockets.KoboldCPP.SetModelTtl.Response = { success: true }
 		emitToUser("koboldcpp:setModelTtl", res)
 		await systemSettingsGet.handler(socket, {}, emitToUser)
@@ -1107,6 +1519,7 @@ export const koboldCppSetSubprocessTimeout: Handler<
 		await db
 			.update(schema.koboldCppSettings)
 			.set({ koboldCppManagedSubprocessTimeoutSecs: secs })
+			.where(eq(schema.koboldCppSettings.id, 1))
 		subprocessManager.setSubprocessTimeout(secs)
 		const res: Sockets.KoboldCPP.SetSubprocessTimeout.Response = {
 			success: true
@@ -1201,20 +1614,37 @@ export const koboldCppDownloadBinary: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 
-		binaryManager.setEmitter((d) =>
-			emitToUser("koboldcpp:binaryDownloadProgress", d)
+		// releaseTag flows into listVariants()'s GitHub API URL path below —
+		// a value shaped like a legitimate tag but crafted otherwise could
+		// retarget which release gets fetched, undermining the revalidation
+		// this handler relies on.
+		if (params.releaseTag && !/^[\w.-]+$/.test(params.releaseTag)) {
+			throw new Error("Invalid release tag.")
+		}
+
+		// Never trust the client-supplied assetName/downloadUrl pairing
+		// directly — without revalidating against the real GitHub release
+		// list, an admin's session (or a forged socket emission) could point
+		// the server at an arbitrary URL, which it would then download,
+		// chmod +x, and (via the auto-start below) execute.
+		const { variants } = await binaryManager.listVariants(
+			params.releaseTag
 		)
-		subprocessManager.setEmitter((s) =>
-			emitToUser("koboldcpp:subprocessStatus", s)
-		)
+		const variant = variants.find((v) => v.name === params.assetName)
+		if (!variant) {
+			throw new Error(
+				"That binary isn't part of the current release list."
+			)
+		}
 
 		// Run async so we can return immediately
 		;(async () => {
 			try {
 				await binaryManager.downloadVariant({
-					assetName: params.assetName,
-					downloadUrl: params.downloadUrl,
-					destDir: params.destDir
+					assetName: variant.name,
+					downloadUrl: variant.downloadUrl,
+					destDir: params.destDir,
+					sha256Url: variant.sha256Url
 				})
 				// Only record the binary as installed once the file is actually
 				// on disk — persisting this before a successful download meant a
@@ -1222,19 +1652,25 @@ export const koboldCppDownloadBinary: Handler<
 				// still left settings claiming a binary was configured at a path
 				// where nothing existed, so the next auto-start attempt would
 				// fail with a confusing "Binary not found" and no download to retry.
-				await db.update(schema.koboldCppSettings).set({
-					koboldCppManagedBinaryVariant: params.assetName,
-					koboldCppManagedBinaryDir: params.destDir,
-					koboldCppManagedReleaseTag: params.releaseTag
-				})
+				await db
+					.update(schema.koboldCppSettings)
+					.set({
+						koboldCppManagedBinaryVariant: params.assetName,
+						koboldCppManagedBinaryDir: params.destDir,
+						koboldCppManagedReleaseTag: params.releaseTag
+					})
+					.where(eq(schema.koboldCppSettings.id, 1))
 				// Auto-start subprocess after successful download
 				await subprocessManager.start()
 				// Update baseUrl to match managed port
 				const settings = (await db.query.koboldCppSettings.findFirst())!
 				const port = settings.koboldCppManagedPort ?? 5001
-				await db.update(schema.koboldCppSettings).set({
-					koboldCppManagerBaseUrl: `http://localhost:${port}`
-				})
+				await db
+					.update(schema.koboldCppSettings)
+					.set({
+						koboldCppManagerBaseUrl: `http://localhost:${port}`
+					})
+					.where(eq(schema.koboldCppSettings.id, 1))
 				await systemSettingsGet.handler(socket, {}, emitToUser)
 			} catch (err: any) {
 				console.error("[KoboldCPP binary download]", err.message)
@@ -1254,9 +1690,6 @@ export const koboldCppGetBinaryDownloadProgress: Handler<
 	event: "koboldcpp:getBinaryDownloadProgress",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		binaryManager.setEmitter((d) =>
-			emitToUser("koboldcpp:binaryDownloadProgress", d)
-		)
 		const res: Sockets.KoboldCPP.GetBinaryDownloadProgress.Response = {
 			download: binaryManager.getDownloadState()
 		}
@@ -1288,9 +1721,6 @@ export const koboldCppStartSubprocess: Handler<
 	event: "koboldcpp:startSubprocess",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		subprocessManager.setEmitter((s) =>
-			emitToUser("koboldcpp:subprocessStatus", s)
-		)
 		subprocessManager.start().catch((err) => {
 			console.error("[KoboldCPP startSubprocess]", err.message)
 		})
@@ -1309,9 +1739,6 @@ export const koboldCppStopSubprocess: Handler<
 	event: "koboldcpp:stopSubprocess",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		subprocessManager.setEmitter((s) =>
-			emitToUser("koboldcpp:subprocessStatus", s)
-		)
 		try {
 			await subprocessManager.stop()
 			const res: Sockets.KoboldCPP.StopSubprocess.Response = {
@@ -1339,9 +1766,6 @@ export const koboldCppGetSubprocessStatus: Handler<
 	event: "koboldcpp:getSubprocessStatus",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		subprocessManager.setEmitter((s) =>
-			emitToUser("koboldcpp:subprocessStatus", s)
-		)
 		const res: Sockets.KoboldCPP.GetSubprocessStatus.Response = {
 			status: subprocessManager.getStatus()
 		}
@@ -1481,4 +1905,31 @@ export function registerKoboldCppHandlers(
 	register(socket, koboldCppGetSubprocessStatus, emitToUser)
 	register(socket, koboldCppUnloadModel, emitToUser)
 	register(socket, koboldCppDeleteModelHandler, emitToUser)
+
+	// Model-download/binary-download/subprocess-status telemetry, admin-only
+	// (every handler in this module already self-checks isAdmin — this
+	// registration function itself wasn't gated, which is what let the old
+	// single-slot emitters get bound from a non-admin call in the first
+	// place). Registered once per connection instead of re-bound from
+	// individual handlers, so every connected admin keeps receiving updates
+	// rather than the most recently (re)connected one silently taking over.
+	if (socket.user?.isAdmin) {
+		const userId: number = socket.user.id
+		const downloadEmit = (data: Sockets.KoboldCPP.DownloadProgress.Response) =>
+			emitToUser("koboldcpp:downloadProgress", data)
+		const binaryEmit = (d: any) =>
+			emitToUser("koboldcpp:binaryDownloadProgress", d)
+		const statusEmit = (s: any) =>
+			emitToUser("koboldcpp:subprocessStatus", s)
+
+		registerDownloadProgressEmitter(userId, downloadEmit)
+		binaryManager.registerEmitter(userId, binaryEmit)
+		subprocessManager.registerEmitter(userId, statusEmit)
+
+		socket.on("disconnect", () => {
+			unregisterDownloadProgressEmitter(userId)
+			binaryManager.unregisterEmitter(userId)
+			subprocessManager.unregisterEmitter(userId)
+		})
+	}
 }

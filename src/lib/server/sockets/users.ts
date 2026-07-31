@@ -6,6 +6,7 @@ import { z } from "zod"
 import * as passphrase from "$lib/server/providers/users/passphrase"
 import { cookies } from "$lib/server/auth"
 import * as userTokens from "$lib/server/providers/users/tokens"
+import { loginRateLimit } from "$lib/server/services/loginRateLimit"
 
 // Passphrase validation schema. Max length bounds the PBKDF2 cost an
 // attacker-supplied passphrase can force the server to pay.
@@ -126,6 +127,26 @@ export const usersCurrentSetPassphrase: Handler<
 			throw new Error("Not authenticated")
 		}
 
+		// This handler is only meant for first-time setup — the client only
+		// emits it when it has no passphrase yet. usersCurrentChangePassphrase
+		// is the path that verifies a current passphrase before replacing it;
+		// without this check, anyone with momentary access to an already-
+		// authenticated session (a stolen cookie, XSS, an unlocked device)
+		// could silently overwrite an existing passphrase with no knowledge
+		// of the old one — permanent account takeover from transient access.
+		const existingPassphrase = await db.query.passphrases.findFirst({
+			where: (p, { and, eq, isNull }) =>
+				and(eq(p.userId, userId), isNull(p.invalidatedAt))
+		})
+		if (existingPassphrase) {
+			const res: Sockets.Users.SetPassphrase.Response = {
+				success: false,
+				message: "Passphrase already set. Use change passphrase instead."
+			}
+			emitToUser("users:current:setPassphrase:error", res)
+			throw new Error("Passphrase already set.")
+		}
+
 		try {
 			// Validate passphrase
 			passphraseSchema.parse(params.passphrase)
@@ -155,6 +176,16 @@ export const usersCurrentSetPassphrase: Handler<
 			message: "Passphrase set successfully"
 		}
 		emitToUser("users:current:setPassphrase", res)
+
+		// Revoke every token AND every live socket for this user — setting a
+		// passphrase on a previously-unsecured account should invalidate every
+		// session that existed before the account had any credential at all.
+		// Must come after the emitToUser above: the caller shares this same
+		// user room, so disconnecting first would cut them off before they
+		// see their own action succeeded.
+		await userTokens.expireAll({ userId: userId.toString() })
+		socket.io.to("user_" + userId).disconnectSockets(true)
+
 		return res
 	}
 }
@@ -309,6 +340,26 @@ export const usersCurrentChangePassphrase: Handler<
 			throw new Error("Not authenticated")
 		}
 
+		// A hijacked session (XSS, momentarily-stolen cookie) could otherwise
+		// brute-force the real plaintext passphrase purely to harvest it for
+		// credential-reuse against other services — reuse the same
+		// rate-limit service /api/login uses, namespaced separately so it
+		// doesn't share a budget with IP-based login limiting.
+		const rateLimitKey = `changePassphrase:${userId}`
+		if (loginRateLimit.isRateLimited(rateLimitKey)) {
+			emitToUser("users:current:changePassphrase:error", {
+				error: "Too many attempts. Please wait a moment and try again."
+			})
+			throw new Error("Rate limited")
+		}
+		// Recorded immediately, before the expensive passphrase.validate()
+		// await below — recording only after that await let concurrent
+		// requests all pass the isRateLimited check above before any of
+		// them recorded an attempt. clearRateLimit() on success (below)
+		// still resets the bucket, so a normal single successful change is
+		// unaffected.
+		loginRateLimit.recordFailedAttempt(rateLimitKey)
+
 		try {
 			// Validate current passphrase first
 			const isCurrentValid = await passphrase.validate({
@@ -325,6 +376,7 @@ export const usersCurrentChangePassphrase: Handler<
 				})
 				throw new Error("Invalid current passphrase")
 			}
+			loginRateLimit.clearRateLimit(rateLimitKey)
 
 			// Validate new passphrase format
 			passphraseSchema.parse(params.newPassphrase)
@@ -358,6 +410,19 @@ export const usersCurrentChangePassphrase: Handler<
 			}
 
 			emitToUser("users:current:changePassphrase", res)
+
+			// Revoke every token AND every live socket for this user — a stolen
+			// session surviving a passphrase change (up to
+			// USER_TOKEN_EXPIRATION_HOURS on the token, indefinitely on an
+			// already-open socket, since socket.user is only ever set at
+			// connect time) would completely undermine passphrase rotation as
+			// an incident-response action. Must come after the emitToUser
+			// above: the caller shares this same user room, so disconnecting
+			// first would cut them off before they see their own action
+			// succeeded.
+			await userTokens.expireAll({ userId: userId.toString() })
+			socket.io.to("user_" + userId).disconnectSockets(true)
+
 			return res
 		} catch (error: any) {
 			console.error(
@@ -393,6 +458,11 @@ export const usersCurrentLogout: Handler<
 			}
 
 			emitToUser("users:current:logout", res)
+			// Every subsequent event on this socket would otherwise hit a
+			// non-null-assertion TypeError on the now-cleared socket.user
+			// (caught generically by register(), but ungracefully) and the
+			// connection stays registered in the user_${id} room indefinitely.
+			socket.disconnect(true)
 			return res
 		} catch (error: any) {
 			console.error("[usersCurrentLogout] Logout error:", error)
@@ -586,6 +656,30 @@ export const usersUpdate: Handler<
 
 		const res: Sockets.Users.Update.Response = { user: updatedUser }
 		emitToUser("users:update", res)
+
+		// socket.user is only ever set at connect time and never
+		// re-validated — without forcing a reconnect here, a demoted (or
+		// promoted) user's already-open socket keeps using its stale cached
+		// isAdmin indefinitely, on every one of the ~90+ admin-gated
+		// handlers across the app that check it. Must come after the
+		// emitToUser above: when an admin demotes themselves, caller and
+		// target share this same user room, so disconnecting first would
+		// cut them off before they see their own action succeeded.
+		if (params.isAdmin !== undefined) {
+			socket.io.to("user_" + params.id).disconnectSockets(true)
+		}
+
+		// An admin-initiated passphrase reset must invalidate the target's
+		// existing session token too, not just force a reconnect — otherwise
+		// the same already-issued token (still valid for up to
+		// USER_TOKEN_EXPIRATION_HOURS) just re-authenticates immediately,
+		// defeating the standard incident-response use of this action
+		// ("reset this compromised account's passphrase"). Mirrors
+		// usersCurrentChangePassphrase's own revocation.
+		if (params.passphrase) {
+			await userTokens.expireAll({ userId: String(params.id) })
+			socket.io.to("user_" + params.id).disconnectSockets(true)
+		}
 		return res
 	}
 }
@@ -637,6 +731,12 @@ export const usersDelete: Handler<
 
 		const res: Sockets.Users.Delete.Response = { success: true }
 		emitToUser("users:delete", res)
+
+		// Token revocation above prevents the deleted user from
+		// reconnecting, but does nothing about a socket they already have
+		// open — force it closed too, same reasoning as usersUpdate's
+		// isAdmin-change disconnect above.
+		socket.io.to("user_" + params.id).disconnectSockets(true)
 		return res
 	}
 }
