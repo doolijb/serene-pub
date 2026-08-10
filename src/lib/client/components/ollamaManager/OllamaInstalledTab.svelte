@@ -310,8 +310,8 @@
 			{@const isConnected = currentConnectionModelName === model.name}
 			{@const existingConn = findConnectionForModel(model.name)}
 			<div class="card preset-tonal flex flex-col gap-2 p-4">
-				<div class="flex items-center justify-between">
-					<h4 class="font-semibold">
+				<div class="flex items-center justify-between gap-2">
+					<h4 class="min-w-0 font-semibold break-all">
 						{#if isConnected}
 							<Icons.Check
 								size={14}
@@ -350,7 +350,7 @@
 					{/if}
 				</div>
 				<div class="flex justify-between gap-2">
-					<div class="flex gap-2">
+					<div class="panel-actions">
 						<button
 							class="btn btn-sm preset-filled-success-500"
 							title="Set as default connection"

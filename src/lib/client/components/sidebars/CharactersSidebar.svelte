@@ -5,6 +5,7 @@
 	import { fade } from "svelte/transition"
 	import { FileUpload, Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
+	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import { goto } from "$app/navigation"
 	import CharacterForm from "../characterForms/CharacterForm.svelte"
 	import CharacterCreator from "../modals/CharacterCreatorModal.svelte"
@@ -565,11 +566,7 @@
 			</section>
 		{/key}
 	{:else}
-		<div
-			class="mb-2 flex gap-2"
-			role="toolbar"
-			aria-label="Character actions"
-		>
+		<PanelToolbar label="Character actions" class="mb-2">
 			<button
 				class="btn btn-sm preset-filled-primary-500 {panelsCtx.digest
 					.tutorial
@@ -603,7 +600,7 @@
 				<Icons.Library size={16} aria-hidden="true" />
 				Browse
 			</button>
-		</div>
+		</PanelToolbar>
 		<div class="mb-4 flex items-center gap-2">
 			<label for="character-search" class="sr-only">
 				Search characters

@@ -2,6 +2,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getContext, onDestroy, onMount, tick } from "svelte"
 	import * as Icons from "@lucide/svelte"
+	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import SamplingConfigUnsavedChangesModal from "../modals/PromptConfigUnsavedChangesModal.svelte"
@@ -389,7 +390,7 @@
 		</div>
 	{:else if !!sampling}
 		<!-- MANAGE WEIGHTS -->
-		<div class="mt-2 mb-2 flex gap-2 sm:mt-0">
+		<div class="panel-actions mt-2 mb-2 sm:mt-0">
 			<button
 				type="button"
 				class="btn btn-sm preset-filled-primary-500"
@@ -449,7 +450,7 @@
 				then use "New" to save your changes as a copy.
 			</div>
 		{/if}
-		<div class="mb-4 flex flex-wrap gap-2">
+		<PanelToolbar label="Sampling config actions" class="mb-4">
 			<button
 				type="button"
 				class="btn btn-sm preset-tonal-primary min-w-[8.5rem] flex-1"
@@ -487,7 +488,7 @@
 					? "Default"
 					: "Set Default"}
 			</button>
-		</div>
+		</PanelToolbar>
 
 		<form class="space-y-4">
 			<div class="flex flex-col gap-1">

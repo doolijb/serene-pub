@@ -286,7 +286,7 @@
 						</div>
 					</div>
 				{/if}
-				<div class="flex justify-between gap-2">
+				<div class="panel-actions justify-between">
 					<div class="flex gap-2">
 						<button
 							class="btn btn-sm preset-filled-success-500"

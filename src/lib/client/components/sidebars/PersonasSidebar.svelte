@@ -5,6 +5,7 @@
 	import { fade } from "svelte/transition"
 	import { Dialog, Portal, FileUpload } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
+	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import { goto } from "$app/navigation"
 	import PersonaForm from "../personaForms/PersonaForm.svelte"
 	import PersonaCreator from "../modals/PersonaCreatorModal.svelte"
@@ -428,7 +429,7 @@
 			/>
 		{/key}
 	{:else}
-		<div class="mb-2 flex gap-2">
+		<PanelToolbar label="Persona actions" class="mb-2">
 			<button
 				class="btn btn-sm preset-filled-primary-500 {panelsCtx.digest
 					.tutorial
@@ -462,7 +463,7 @@
 				<Icons.Library size={16} aria-hidden="true" />
 				Browse
 			</button>
-		</div>
+		</PanelToolbar>
 		<div class="mb-4 flex items-center gap-2">
 			<input
 				type="text"

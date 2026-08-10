@@ -419,8 +419,8 @@
 
 		<div class="flex flex-col gap-2 pt-4">
 			<p class="text-muted-foreground text-sm">
-				Shows the "Serene Pub is in beta!" banner at the top of the
-				home page.
+				Shows the "Serene Pub is in beta!" banner at the top of the home
+				page.
 			</p>
 			<Switch
 				name="show-home-page-banner"
@@ -450,7 +450,7 @@
 		</p>
 		<button
 			type="button"
-			class="btn preset-filled-primary-500 w-fit"
+			class="btn preset-filled-primary-500 w-fit max-w-full whitespace-normal"
 			onclick={switchToDocumentView}
 		>
 			<Icons.Accessibility size={16} />
@@ -468,7 +468,7 @@
 			</p>
 			<a
 				href="/import"
-				class="btn preset-filled-primary-500 w-fit"
+				class="btn preset-filled-primary-500 w-fit max-w-full whitespace-normal"
 				aria-label="Import from SillyTavern"
 			>
 				<Icons.Download size={16} />
