@@ -18,14 +18,24 @@
 		title: string
 		/** Rendered right-aligned on the same line as the title. */
 		actions?: Snippet
+		/** Extra classes. The vertical rhythm below is the default and should
+		    not be re-specified per call site — it was, at all six, which is
+		    exactly how spacing drifts apart. */
 		class?: string
 	}
 
 	let { title, actions, class: className = "" }: Props = $props()
 </script>
 
-<div class="flex min-w-0 items-center justify-between gap-2 {className}">
-	<h3 class="text-foreground min-w-0 flex-1 truncate font-semibold">
+<!-- mt-3/mb-2 lives here rather than at each call site so every panel gets the
+     same rhythm between the tab strip and its content. -->
+<div
+	class="mt-3 mb-2 flex min-w-0 items-center justify-between gap-2 {className}"
+>
+	<!-- text-lg matches PanelHeader's own title: this names the content you are
+	     actually looking at, so it shouldn't read as smaller than the chrome
+	     above it. -->
+	<h3 class="text-foreground min-w-0 flex-1 truncate text-lg font-semibold">
 		{title}
 	</h3>
 	{#if actions}

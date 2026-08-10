@@ -501,7 +501,7 @@
 				>
 					Model unload timer
 				</label>
-				<div class="flex items-center gap-2">
+				<div class="panel-actions">
 					<input
 						id="ttlInput"
 						type="number"
@@ -537,7 +537,7 @@
 				>
 					Subprocess idle timeout
 				</label>
-				<div class="flex items-center gap-2">
+				<div class="panel-actions">
 					<input
 						id="subprocessTimeoutInput"
 						type="number"
@@ -574,7 +574,7 @@
 				>
 					Port
 				</label>
-				<div class="flex items-center gap-2">
+				<div class="panel-actions">
 					<input
 						id="portInput"
 						type="number"
@@ -725,7 +725,7 @@
 					<div
 						class="bg-success-100 dark:bg-success-900 border-success-300 dark:border-success-700 rounded-lg border p-3"
 					>
-						<div class="flex items-center gap-2">
+						<div class="panel-actions">
 							<Icons.Check size={16} class="text-success-600" />
 							<span
 								class="text-success-800 dark:text-success-200 font-medium"

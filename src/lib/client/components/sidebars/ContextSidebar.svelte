@@ -490,7 +490,7 @@
 						icon={Icons.Eye}
 					/>
 				</PanelTabList>
-				<PanelSectionTitle title={sectionLabel} class="mt-3 mb-2" />
+				<PanelSectionTitle title={sectionLabel} />
 				<Tabs.Content value="cards">
 					<div class="flex flex-col gap-3">
 						{#if parsedTemplate.parseError}

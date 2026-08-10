@@ -349,7 +349,10 @@
 						</div>
 					{/if}
 				</div>
-				<div class="flex justify-between gap-2">
+				<!-- One wrapping group for all of this card's actions. A nested
+				     group inside a non-wrapping justify-between row can only
+				     resolve by shrinking, which clipped "Set Default". -->
+				<div class="panel-actions justify-between">
 					<div class="panel-actions">
 						<button
 							class="btn btn-sm preset-filled-success-500"

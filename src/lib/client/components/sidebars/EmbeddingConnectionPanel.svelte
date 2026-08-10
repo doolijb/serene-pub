@@ -416,7 +416,7 @@
 	}
 </script>
 
-<div class="flex h-full flex-col overflow-hidden">
+<div class="flex h-full flex-col overflow-hidden px-4 pt-4">
 	{#if !settingsViewInitialized}
 		<div class="flex flex-1 flex-col items-center justify-center gap-2 p-4">
 			<Icons.Loader2
@@ -430,7 +430,7 @@
 		<!-- Not yet configured: the setup flow is the whole panel, no tabs —
              mirrors KoboldCppSidebar's isUnconfigured/setup-screen pattern,
              so opening this panel always lands on setup first until done. -->
-		<div class="flex flex-col gap-4 overflow-y-auto p-4">
+		<div class="flex flex-col gap-4 overflow-y-auto pb-4">
 			{#if settingsView === "chooser"}
 				<!-- First-time setup: choose backend -->
 				<VectorizationSetupScreen
@@ -648,11 +648,11 @@
 					icon={Icons.Settings}
 				/>
 			</PanelTabList>
-			<PanelSectionTitle title={sectionLabel} class="mt-3 mb-2" />
+			<PanelSectionTitle title={sectionLabel} />
 
 			<!-- Queue Tab -->
 			<Tabs.Content value="queue">
-				<div class="flex flex-col gap-4 overflow-y-auto p-4">
+				<div class="flex flex-col gap-4 overflow-y-auto pb-4">
 					<!-- Status card -->
 					<div class="preset-tonal-surface rounded-lg p-3">
 						<div class="flex items-center justify-between">
@@ -932,7 +932,7 @@
 
 			<!-- Settings Tab -->
 			<Tabs.Content value="settings">
-				<div class="flex flex-col gap-4 overflow-y-auto p-4">
+				<div class="flex flex-col gap-4 overflow-y-auto pb-4">
 					<!-- Configured: summary + reconfigure/disable -->
 					{#if !modelReady}
 						<div

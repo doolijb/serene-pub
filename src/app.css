@@ -101,26 +101,51 @@
    `btn w-full`, and three `w-full` buttons in one row would then demand 300%
    of it instead of shrinking to thirds.
 
-   The `& > *` rules are only a floor for the pathological case of a single
-   label wider than the whole row (a 252px panel at a 1024px viewport):
-   min-width:0 lets it shrink, max-width:100% stops it escaping the panel,
-   and white-space:normal lets the label wrap onto a second line INSIDE the
-   button rather than being clipped — keeping the full text, which is the
-   only degradation consistent with "wrap, don't collapse to icons". */
+   `max-width: 100%` stops a single over-wide child escaping the row.
+
+   Two things deliberately NOT done here, both tried and both wrong:
+
+   - `min-width: 0` on the children. It defeats the wrapping this utility
+     exists for: a flex item's default `min-width: auto` is its min-content
+     width, which is what pushes an item that doesn't fit onto the next line.
+     Setting it to 0 lets the item shrink below min-content instead, so it
+     stays on the line and its label gets clipped — Ollama's model cards
+     rendered "Set Defau|" cut off mid-word.
+   - `white-space: normal` on the buttons. Intended as a floor for a label
+     wider than the entire row, it misfires on the far more common case of
+     three labelled buttons that simply need separate lines: each broke
+     mid-label instead, stacking "Set / Default" inside one button.
+
+   So buttons keep .btn's nowrap and their intrinsic width, and take a new
+   line when they don't fit. The genuinely-wider-than-the-row case is rare
+   enough to handle at the call site — see UserSettingsTab's "Switch to
+   Document View", which opts in with `max-w-full whitespace-normal`.
+
+   Note there is no `min-width: 0` on the group itself either, for the same
+   family of reason: when this row is a flex child sitting beside a text
+   sibling, min-width:0 makes it lose every sizing contest and collapse — it
+   was measured at 44px against 64px of content inside Ollama's model cards,
+   clipping "Set Defau|". Keeping its min-content width means it either fits
+   or forces its parent to wrap, which is the honest outcome. */
 @utility panel-actions {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
 	gap: --spacing(2);
-	min-width: 0;
 
 	& > * {
-		min-width: 0;
 		max-width: 100%;
 	}
 
-	& > :where(.btn, .btn-icon) {
-		white-space: normal;
+	/* Non-button children DO get min-width:0 — the distinction is whether the
+	   element is expected to wrap or to shrink. A button should keep its
+	   min-content width and move to a new line; a text input (which carries a
+	   wide intrinsic min-width from its `size` attribute) has to be able to
+	   shrink, or an input+Save pair overflows instead of the input narrowing.
+	   Both shapes occur: Ollama's model cards are the former, KoboldCPP's
+	   base-URL row the latter. */
+	& > :not(.btn):not(.btn-icon) {
+		min-width: 0;
 	}
 }
 

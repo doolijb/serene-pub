@@ -174,7 +174,7 @@
 	}
 </script>
 
-<div class="flex h-full flex-col">
+<div class="flex h-full flex-col p-4">
 	<!-- Check if Ollama Manager is enabled -->
 	{#if !ollamaSettingsCtx.settings?.ollamaManagerEnabled}
 		<div class="flex flex-1 items-center justify-center p-4">
@@ -308,7 +308,7 @@
 						icon={Icons.Settings}
 					/>
 				</PanelTabList>
-				<PanelSectionTitle title={sectionLabel} class="mt-3 mb-2" />
+				<PanelSectionTitle title={sectionLabel} />
 				<Tabs.Content value="installed">
 					{#if activeTab === "installed"}
 						<OllamaInstalledTab />

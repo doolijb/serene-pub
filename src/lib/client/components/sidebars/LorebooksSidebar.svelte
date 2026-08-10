@@ -669,7 +669,7 @@
 					/>
 				{/if}
 			</PanelTabList>
-			<PanelSectionTitle title={sectionLabel} class="mt-3 mb-2" />
+			<PanelSectionTitle title={sectionLabel} />
 			<Tabs.Content value="lorebook">
 				{#if editGroup == "lorebook" && selectedLorebook}
 					<EditLorebookForm

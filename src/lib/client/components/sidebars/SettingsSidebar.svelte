@@ -134,7 +134,7 @@
 				<PanelTab value="themes" label="Themes" icon={Icons.Palette} />
 				<PanelTab value="about" label="About" icon={Icons.Info} />
 			</PanelTabList>
-			<PanelSectionTitle title={sectionLabel} class="mt-3 mb-2" />
+			<PanelSectionTitle title={sectionLabel} />
 			<Tabs.Content value="user">
 				{#if activeTab === "user"}
 					<UserSettingsTab
