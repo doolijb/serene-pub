@@ -68,7 +68,12 @@
 		<Icon size={16} aria-hidden="true" />
 	{/if}
 	{#if active}
-		<span class="min-w-0 truncate">{label}</span>
+		<!-- max-w bounds the widest a trigger can get. Without it the longest
+		     label ("Character Lore") pushed the Lorebooks+ strip from two rows
+		     to three, which defeats PanelTabList's reserved height; truncate
+		     alone doesn't help, because in a wrapping row the trigger simply
+		     takes a line of its own at full width rather than shrinking. -->
+		<span class="max-w-[5.5rem] min-w-0 truncate">{label}</span>
 	{/if}
 	{@render badge?.()}
 </Tabs.Trigger>

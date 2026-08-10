@@ -3,6 +3,8 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import * as Icons from "@lucide/svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
+	import PanelTabList from "$lib/client/components/panels/PanelTabList.svelte"
+	import PanelTab from "$lib/client/components/panels/PanelTab.svelte"
 	import NewNameModal from "../modals/NewNameModal.svelte"
 	import EditLorebookForm from "../lorebookForms/EditLorebookForm.svelte"
 	import {
@@ -613,85 +615,57 @@
 			</PanelNavHeader>
 		</div>
 		<Tabs value={editGroup} onValueChange={(e) => handleSwitchTabGroup(e)}>
-			<Tabs.List class="flex flex-wrap gap-1">
-				<Tabs.Trigger
+			<!-- reserveRows={2}: six icon-only triggers measure ~224px against
+			     this panel's ~220px tab-list content box at a 1024px viewport, so
+			     this strip cannot fit on one row and must be allowed to wrap.
+			     Reserving the height keeps the content below from jumping as the
+			     active tab's label changes width. See PanelTabList. -->
+			<PanelTabList reserveRows={2}>
+				<PanelTab
 					value="lorebook"
+					label="Lorebook"
+					icon={Icons.Book}
+					active={editGroup === "lorebook"}
 					disabled={tabsDisabled && editGroup !== "lorebook"}
-				>
-					<span
-						title="Lorebook"
-						aria-label="Lorebook tab"
-						class="flex items-center gap-1"
-					>
-						<Icons.Book size={20} class="inline" />
-						{#if editGroup === "lorebook"}
-							Lorebook
-						{/if}
-					</span>
-				</Tabs.Trigger>
-				<Tabs.Trigger value="bindings" disabled={tabsDisabled}>
-					<span
-						title="Bindings"
-						aria-label="Bindings tab"
-						class="flex items-center gap-1"
-					>
-						<Icons.Link size={20} class="inline" />
-						{#if editGroup === "bindings"}
-							Bindings
-						{/if}
-					</span>
-				</Tabs.Trigger>
-				<Tabs.Trigger value="world" disabled={tabsDisabled}>
-					<span
-						title="World Lore"
-						aria-label="World Lore tab"
-						class="flex items-center gap-1"
-					>
-						<Icons.Globe size={20} class="inline" />
-						{#if editGroup === "world"}
-							World Lore
-						{/if}
-					</span>
-				</Tabs.Trigger>
-				<Tabs.Trigger value="characters" disabled={tabsDisabled}>
-					<span
-						title="Character Lore"
-						aria-label="Character Lore tab"
-						class="flex items-center gap-1"
-					>
-						<Icons.User size={20} class="inline" />
-						{#if editGroup === "characters"}
-							Character Lore
-						{/if}
-					</span>
-				</Tabs.Trigger>
-				<Tabs.Trigger value="history" disabled={tabsDisabled}>
-					<span
-						title="History"
-						aria-label="History tab"
-						class="flex items-center gap-1"
-					>
-						<Icons.Calendar size={20} class="inline" />
-						{#if editGroup === "history"}
-							History
-						{/if}
-					</span>
-				</Tabs.Trigger>
+				/>
+				<PanelTab
+					value="bindings"
+					label="Bindings"
+					icon={Icons.Link}
+					active={editGroup === "bindings"}
+					disabled={tabsDisabled}
+				/>
+				<PanelTab
+					value="world"
+					label="World Lore"
+					icon={Icons.Globe}
+					active={editGroup === "world"}
+					disabled={tabsDisabled}
+				/>
+				<PanelTab
+					value="characters"
+					label="Character Lore"
+					icon={Icons.User}
+					active={editGroup === "characters"}
+					disabled={tabsDisabled}
+				/>
+				<PanelTab
+					value="history"
+					label="History"
+					icon={Icons.Calendar}
+					active={editGroup === "history"}
+					disabled={tabsDisabled}
+				/>
 				{#if graphEnabled}
-					<Tabs.Trigger value="graph" disabled={tabsDisabled}>
-						<span
-							title="Graph"
-							aria-label="Graph tab"
-							class="flex items-center gap-1"
-						>
-							<Icons.Network size={20} class="inline" />
-							{#if editGroup === "graph"}
-								Graph
-							{/if}
-						</span>
-					</Tabs.Trigger>
+					<PanelTab
+						value="graph"
+						label="Graph"
+						icon={Icons.Network}
+						active={editGroup === "graph"}
+						disabled={tabsDisabled}
+					/>
 				{/if}
-			</Tabs.List>
+			</PanelTabList>
 			<Tabs.Content value="lorebook">
 				{#if editGroup == "lorebook" && selectedLorebook}
 					<EditLorebookForm
