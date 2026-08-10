@@ -71,6 +71,9 @@ export interface SummarizeInput {
 		user: string
 		response: string
 	}) => void
+	/** Bridged to every runGeneration() call below — cancelling stops the
+	 * call actually in flight (via runQueuedLLMCall), not just future ones. */
+	signal?: AbortSignal
 }
 
 export interface SummarizeResult {
@@ -165,8 +168,13 @@ async function runGeneration(
 		maxTokens: number
 		taskType: TaskType
 		label?: string
+		signal?: AbortSignal
 	}
 ): Promise<string> {
+	// Fast path: don't even start a new call if cancellation was already
+	// requested between batches/phases.
+	opts.signal?.throwIfAborted()
+
 	const AdapterClass = await getConnectionAdapter(opts.connection.type)
 	const fakeChat = buildMinimalChat(promptData.userPrompt)
 
@@ -182,19 +190,31 @@ async function runGeneration(
 		currentCharacterId: null,
 		tokenCounter: opts.tokenCounter,
 		tokenLimit: opts.tokenLimit,
-		contextThresholdPercent: 0.9,
-		isAssistantMode: false
+		contextThresholdPercent: 0.9
 	})
 
-	const { text } = await runQueuedLLMCall({
+	const result = await runQueuedLLMCall({
 		adapter,
 		taskType: opts.taskType,
 		connectionName: opts.connection.name,
 		samplingName: opts.sampling.name,
-		label: opts.label
+		label: opts.label,
+		signal: opts.signal
 	})
 
-	return text
+	if (result.isAborted) {
+		opts.signal?.throwIfAborted() // the expected path — our own signal really was aborted
+		// isAborted true but OUR signal isn't — the adapter/queue stopped for
+		// a reason of its own, not our cancellation. Don't dress this up as
+		// an AbortError: that label means "the user cancelled this," which
+		// scenes.ts's catch guard keys on via abortController.signal
+		// specifically, not by error name/type.
+		throw new Error(
+			"Generation stopped unexpectedly (reported aborted without a matching cancellation signal)"
+		)
+	}
+
+	return result.text
 }
 
 /**
@@ -220,6 +240,7 @@ export async function extractCharactersFromContent(params: {
 		user: string
 		response: string
 	}) => void
+	signal?: AbortSignal
 }): Promise<{
 	participantCharacters: ExtractedCastRef[]
 	mentionedCharacters: ExtractedCastRef[]
@@ -232,7 +253,8 @@ export async function extractCharactersFromContent(params: {
 		promptConfig,
 		characterExtractionSystemPrompt,
 		knownCast,
-		onLlmCall
+		onLlmCall,
+		signal
 	} = params
 	const tokenCounter = new TokenCounters(
 		(connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
@@ -255,7 +277,8 @@ export async function extractCharactersFromContent(params: {
 			tokenLimit,
 			maxTokens: 500,
 			taskType: "character_extraction",
-			label: "character extraction"
+			label: "character extraction",
+			signal
 		})
 		onLlmCall?.({
 			label: "Character Extraction",
@@ -278,7 +301,14 @@ export async function extractCharactersFromContent(params: {
 			participantCharacters: normalizeCastRefs(parsed.participants),
 			mentionedCharacters: normalizeCastRefs(parsed.mentioned)
 		}
-	} catch {
+	} catch (err) {
+		// An aborted generation must not degrade into "nobody was in this
+		// scene". Callers act on this result — the summarize path persists it,
+		// and the graph build feeds it into a proposal the user then reviews
+		// and commits — so swallowing a cancel either writes an empty cast over
+		// real data or silently produces a proposal missing characters.
+		// Non-abort parse/LLM failures still degrade to empty, as before.
+		if (signal?.aborted) throw err
 		return { participantCharacters: [], mentionedCharacters: [] }
 	}
 }
@@ -328,6 +358,7 @@ export interface CompileInput {
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
 	onProgress?: (data: CompileProgressData) => void
+	signal?: AbortSignal
 }
 
 /**
@@ -343,7 +374,8 @@ export async function compileScenesForEntry(
 		sampling,
 		contextConfig,
 		promptConfig,
-		onProgress
+		onProgress,
+		signal
 	} = input
 
 	// Honor the connection's own configured tokenizer — see the identical
@@ -361,7 +393,8 @@ export async function compileScenesForEntry(
 		contextConfig,
 		promptConfig,
 		tokenCounter,
-		tokenLimit
+		tokenLimit,
+		signal
 	}
 
 	const drafts: JsonDraft[] = scenes
@@ -443,7 +476,8 @@ export async function generateSummary(
 		nameConnection,
 		nameSampling,
 		characterExtractionConnection,
-		characterExtractionSampling
+		characterExtractionSampling,
+		signal
 	} = input
 
 	const batchConn = batchConnection ?? connection
@@ -480,7 +514,8 @@ export async function generateSummary(
 		contextConfig,
 		promptConfig,
 		tokenCounter: batchTokenCounter,
-		tokenLimit
+		tokenLimit,
+		signal
 	}
 	const synthOpts = {
 		connection: synthConn,
@@ -491,7 +526,8 @@ export async function generateSummary(
 		tokenLimit:
 			(synthConn as any).tokenLimit ??
 			(synthConn as any).contextSize ??
-			4096
+			4096,
+		signal
 	}
 	const nameOpts = {
 		connection: nameConn,
@@ -502,7 +538,8 @@ export async function generateSummary(
 		tokenLimit:
 			(nameConn as any).tokenLimit ??
 			(nameConn as any).contextSize ??
-			4096
+			4096,
+		signal
 	}
 	const extractionOpts = {
 		connection: characterExtractionConn,
@@ -513,7 +550,8 @@ export async function generateSummary(
 		tokenLimit:
 			(characterExtractionConn as any).tokenLimit ??
 			(characterExtractionConn as any).contextSize ??
-			4096
+			4096,
+		signal
 	}
 
 	const batches = batchMessages(messages, tokenLimit)
@@ -618,7 +656,8 @@ export async function generateSummary(
 			characterExtractionSystemPrompt:
 				summarizePromptConfig?.characterExtractionSystemPrompt,
 			knownCast,
-			onLlmCall
+			onLlmCall,
+			signal: extractionOpts.signal
 		})
 	}
 

@@ -2,6 +2,7 @@
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import type { LibraryCatalogItem } from "$lib/shared/library/types"
+	import RetryableImage from "./RetryableImage.svelte"
 
 	interface Props {
 		open: boolean
@@ -65,9 +66,10 @@
 					<div class="flex flex-col gap-5 sm:flex-row">
 						{#if imageUrl}
 							<div class="flex shrink-0 justify-center sm:w-56">
-								<img
+								<RetryableImage
 									src={imageUrl}
 									alt={item.name}
+									loading="eager"
 									class="max-h-96 w-full rounded-lg object-contain shadow-lg sm:max-h-none"
 								/>
 							</div>

@@ -12,6 +12,7 @@
 	import KoboldCppBinaryVariantPicker from "../koboldcppManager/KoboldCppBinaryVariantPicker.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
+	import KoboldCppUnsavedChangesModal from "../modals/KoboldCppUnsavedChangesModal.svelte"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -33,6 +34,15 @@
 	let showVariantPicker = $state(false)
 	let lastToastedError: string | null = $state(null)
 	let missingBinaryError: string | null = $state(null)
+	let showUnsavedChangesModal = $state(false)
+	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
+
+	// baseUrlField re-syncs from context below whenever a save succeeds, so
+	// this self-resolves back to false without an explicit post-save reset.
+	let hasUnsavedChanges = $derived(
+		baseUrlField.trim() !==
+			(koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl ?? "")
+	)
 
 	// Derive mode from system settings
 	let managedMode = $derived(
@@ -171,7 +181,39 @@
 		socket.off("koboldcpp:subprocessStatus")
 	})
 
-	onclose = async () => true
+	function handleUnsavedChangesModalOnOpenChange(e: OpenChangeDetails) {
+		if (!e.open) {
+			showUnsavedChangesModal = false
+			if (confirmCloseSidebarResolve) {
+				confirmCloseSidebarResolve(false)
+				confirmCloseSidebarResolve = null
+			}
+		}
+	}
+
+	function handleUnsavedChangesModalConfirm() {
+		showUnsavedChangesModal = false
+		if (confirmCloseSidebarResolve) {
+			confirmCloseSidebarResolve(true)
+			confirmCloseSidebarResolve = null
+		}
+	}
+
+	function handleUnsavedChangesModalCancel() {
+		showUnsavedChangesModal = false
+		if (confirmCloseSidebarResolve) {
+			confirmCloseSidebarResolve(false)
+			confirmCloseSidebarResolve = null
+		}
+	}
+
+	onclose = async () => {
+		if (!hasUnsavedChanges) return true
+		showUnsavedChangesModal = true
+		return new Promise<boolean>((resolve) => {
+			confirmCloseSidebarResolve = resolve
+		})
+	}
 </script>
 
 <div class="flex h-full flex-col">
@@ -432,3 +474,10 @@
 		</div>
 	{/if}
 </div>
+
+<KoboldCppUnsavedChangesModal
+	open={showUnsavedChangesModal}
+	onOpenChange={handleUnsavedChangesModalOnOpenChange}
+	onConfirm={handleUnsavedChangesModalConfirm}
+	onCancel={handleUnsavedChangesModalCancel}
+/>

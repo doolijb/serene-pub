@@ -17,13 +17,15 @@
 		// "View relationships" in the detail card — switches the parent's
 		// tab to Graph and selects this character's node there.
 		onNavigateToGraph?: (bindingId: number) => void
+		hasUnsavedChanges?: boolean
 	}
 
 	let {
 		lorebookId,
 		focusBindingId,
 		onFocusHandled,
-		onNavigateToGraph
+		onNavigateToGraph,
+		hasUnsavedChanges = $bindable(false)
 	}: Props = $props()
 
 	const NODE_STATES = ["active", "deceased", "missing", "departed"] as const
@@ -75,6 +77,35 @@
 	let editingNodeState = $state<(typeof NODE_STATES)[number]>("active")
 	let editingNodeVisibility =
 		$state<(typeof NODE_VISIBILITY)[number]>("normal")
+
+	// ── Unsaved changes ────────────────────────────────────────────
+	$effect(() => {
+		if (!editingBindingId) {
+			hasUnsavedChanges = false
+			return
+		}
+		const original = lorebookBindingList.find(
+			(b) => b.id === editingBindingId
+		)
+		// Decided, not inherited: if the binding was deleted out from under
+		// an open editor (another tab, a concurrent edit), there's nothing
+		// left to discard back to — treat as not-dirty rather than blocking
+		// a close on a comparison against nothing. Same decision applies in
+		// GraphManager's equivalent effect.
+		if (!original) {
+			hasUnsavedChanges = false
+			return
+		}
+		const isBound = !!original.characterId || !!original.personaId
+		hasUnsavedChanges =
+			editingSummary.trim() !== (original.summary ?? "") ||
+			editingNodeState !== original.nodeState ||
+			editingNodeVisibility !== original.nodeVisibility ||
+			(!isBound &&
+				(editingName.trim() !== (original.name ?? "") ||
+					editingAliases !==
+						(original.aliases ?? []).join(", ")))
+	})
 
 	// Arriving from the Graph tab — pin the target binding to the top of
 	// the list and open it in edit mode. Stays pinned locally even after
@@ -518,6 +549,7 @@
 	}
 
 	onDestroy(() => {
+		hasUnsavedChanges = false
 		if (!socket) return
 		socket.off("characters:list", handleCharactersList)
 		socket.off("personas:list", handlePersonasList)

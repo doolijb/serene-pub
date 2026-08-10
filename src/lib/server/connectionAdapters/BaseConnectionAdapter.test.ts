@@ -79,13 +79,6 @@ describe("BaseConnectionAdapter.compilePrompt() mode dispatch", () => {
 					messages: [],
 					meta: {} as any
 				}),
-			assistant: vi
-				.spyOn(adapter as any, "compileAssistantPrompt")
-				.mockResolvedValue({
-					prompt: "x",
-					messages: [],
-					meta: {} as any
-				}),
 			narrator: vi
 				.spyOn(adapter as any, "compileNarratorResponsePrompt")
 				.mockResolvedValue({
@@ -107,16 +100,6 @@ describe("BaseConnectionAdapter.compilePrompt() mode dispatch", () => {
 		adapter.isSummarizerMode = true
 		await adapter.compilePrompt({ useChatFormat: true } as any)
 		expect(spies.summarizer).toHaveBeenCalledTimes(1)
-		expect(spies.assistant).not.toHaveBeenCalled()
-		expect(spies.narrator).not.toHaveBeenCalled()
-		expect(spies.default).not.toHaveBeenCalled()
-	})
-
-	test("assistant mode calls compileAssistantPrompt only", async () => {
-		adapter.isAssistantMode = true
-		await adapter.compilePrompt({} as any)
-		expect(spies.assistant).toHaveBeenCalledTimes(1)
-		expect(spies.summarizer).not.toHaveBeenCalled()
 		expect(spies.narrator).not.toHaveBeenCalled()
 		expect(spies.default).not.toHaveBeenCalled()
 	})
@@ -126,7 +109,6 @@ describe("BaseConnectionAdapter.compilePrompt() mode dispatch", () => {
 		await adapter.compilePrompt({} as any)
 		expect(spies.narrator).toHaveBeenCalledTimes(1)
 		expect(spies.summarizer).not.toHaveBeenCalled()
-		expect(spies.assistant).not.toHaveBeenCalled()
 		expect(spies.default).not.toHaveBeenCalled()
 	})
 
@@ -134,17 +116,14 @@ describe("BaseConnectionAdapter.compilePrompt() mode dispatch", () => {
 		await adapter.compilePrompt({} as any)
 		expect(spies.default).toHaveBeenCalledTimes(1)
 		expect(spies.summarizer).not.toHaveBeenCalled()
-		expect(spies.assistant).not.toHaveBeenCalled()
 		expect(spies.narrator).not.toHaveBeenCalled()
 	})
 
-	test("summarizer mode wins over assistant/narrator if multiple flags are set", async () => {
+	test("summarizer mode wins over narrator if both flags are set", async () => {
 		adapter.isSummarizerMode = true
-		adapter.isAssistantMode = true
 		adapter.isNarratorResponseMode = true
 		await adapter.compilePrompt({} as any)
 		expect(spies.summarizer).toHaveBeenCalledTimes(1)
-		expect(spies.assistant).not.toHaveBeenCalled()
 		expect(spies.narrator).not.toHaveBeenCalled()
 	})
 })

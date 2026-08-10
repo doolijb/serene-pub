@@ -55,8 +55,15 @@ export async function cachedSearch(
 		string,
 		unknown
 	>)
-	return searchCache.getOrFetch(key, () =>
-		resolveCardSource(sourceId).search(params, ctx)
+	// ctx.signal (this caller's own) drives attach/detach on the shared
+	// cache entry; the group signal getOrFetch hands back is what actually
+	// reaches source.search() — only fires once every attached caller has
+	// given up, so one caller's cancellation can't cut off another caller
+	// still waiting on an identical in-flight search.
+	return searchCache.getOrFetch(
+		key,
+		(signal) => resolveCardSource(sourceId).search(params, { ...ctx, signal }),
+		ctx.signal
 	) as Promise<CardSourceSearchResult>
 }
 
@@ -77,8 +84,10 @@ export async function cachedCardDetail(
 	if (!source.getCardDetail) return {}
 
 	const key = stableSearchKey({ sourceId, ref } as Record<string, unknown>)
-	return cardDetailCache.getOrFetch(key, () =>
-		source.getCardDetail!(ref, ctx)
+	return cardDetailCache.getOrFetch(
+		key,
+		(signal) => source.getCardDetail!(ref, { ...ctx, signal }),
+		ctx.signal
 	) as Promise<Partial<LibraryCatalogItem>>
 }
 

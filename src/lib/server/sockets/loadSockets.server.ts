@@ -150,8 +150,15 @@ export async function loadSocketsServer() {
 	console.log(describeOriginAllowlistConfig())
 	await warnIfOpenAdminExposure()
 
-	// Auto-load embedding model on startup if vectorization was previously enabled
-	autoLoadEmbeddingModel()
+	// Periodically (re-)start the vectorization queue if enabled — first
+	// tick runs immediately, so this is also the boot-time trigger. Does NOT
+	// eagerly load the embedding model itself; the queue only loads it (via
+	// loadConfiguredEmbeddingModel(), mode-aware) once it actually finds
+	// something to embed. See vectorizationQueue.ts's own doc comment.
+	const { startPeriodicVectorizationScan } = await import(
+		"$lib/server/embedding/vectorizationQueue"
+	)
+	startPeriodicVectorizationScan()
 
 	// Fire-and-forget: warms the local-embedding support probe (a cached,
 	// one-time dynamic import attempt — see embedding/index.ts) so it's
@@ -184,69 +191,3 @@ async function warmLocalEmbeddingSupportProbe() {
 	}
 }
 
-async function autoLoadEmbeddingModel() {
-	try {
-		const { db } = await import("$lib/server/db")
-		const { schema } = await import("$lib/server/db")
-		const { eq } = await import("drizzle-orm")
-		const settings = await db.query.systemSettings.findFirst({
-			where: eq(schema.systemSettings.id, 1),
-			columns: { vectorizationEnabled: true, embeddingModelName: true }
-		})
-
-		if (!settings?.vectorizationEnabled || !settings.embeddingModelName)
-			return
-
-		const { setEmbeddingTtlMinutes } = await import(
-			"$lib/server/embedding/index"
-		)
-
-		const vecConfig = await db.query.vectorizationConfigs.findFirst({
-			where: eq(schema.vectorizationConfigs.id, 1),
-			columns: {
-				embeddingModelTtlMinutes: true,
-				mode: true,
-				apiBaseUrl: true,
-				apiKey: true,
-				apiKeyIv: true,
-				apiKeyAuthTag: true,
-				apiModel: true
-			}
-		})
-		// Load TTL config before loading the model so the timer starts correctly
-		if (vecConfig)
-			setEmbeddingTtlMinutes(vecConfig.embeddingModelTtlMinutes)
-
-		if (vecConfig?.mode === "api") {
-			if (!vecConfig.apiBaseUrl || !vecConfig.apiModel) {
-				throw new Error(
-					"API vectorization is enabled but not fully configured"
-				)
-			}
-			console.log(
-				`[embedding] Auto-activating API backend on startup: ${vecConfig.apiBaseUrl}`
-			)
-			const { activateApiEmbedding, resolveVectorizationApiKey } =
-				await import("$lib/server/embedding/index")
-			await activateApiEmbedding({
-				baseUrl: vecConfig.apiBaseUrl,
-				apiKey: resolveVectorizationApiKey(vecConfig),
-				model: vecConfig.apiModel
-			})
-		} else {
-			console.log(
-				`[embedding] Auto-loading model on startup: ${settings.embeddingModelName}`
-			)
-			const { loadEmbeddingModel } = await import(
-				"$lib/server/embedding/index"
-			)
-			await loadEmbeddingModel(settings.embeddingModelName)
-		}
-		console.log("[embedding] Model ready.")
-	} catch (err) {
-		console.error(
-			"[embedding] Failed to auto-load embedding backend on startup — vectorization will be unavailable until reconfigured:",
-			err
-		)
-	}
-}

@@ -15,7 +15,8 @@ import { acquire, type AcquirePriority } from "./rateLimiter"
 import {
 	hasActiveSession,
 	withCharaVaultSession,
-	CHARAVAULT_FETCH_TIMEOUT_MS
+	CHARAVAULT_FETCH_TIMEOUT_MS,
+	CHARAVAULT_IMAGE_FETCH_TIMEOUT_MS
 } from "./session"
 import { getOrFetchCardBytes } from "../diskCache"
 import { parseCharacterCard } from "$lib/server/utils/characterCardParser"
@@ -55,7 +56,12 @@ async function assertContentAllowed(
 	buffer: Buffer,
 	ctx: CardSourceContext
 ): Promise<Awaited<ReturnType<typeof parseCharacterCard>>> {
-	const parsed = await parseCharacterCard(buffer)
+	// includeAvatar: false — neither this check nor getCardDetail (the only
+	// other caller of the shared getCardBytesAndParsed helper below) ever
+	// reads avatarBuffer, and most real-world cards fall back to a
+	// whole-file re-encoded string for it, making the decode genuinely
+	// wasted work for both callers.
+	const parsed = await parseCharacterCard(buffer, { includeAvatar: false })
 	if (!(await isNsfwAllowedForUser(ctx.userId))) {
 		const data = parsed.card.toSpecV3().data
 		if (
@@ -190,15 +196,20 @@ function extractItems(payload: any): any[] {
 
 async function charaVaultFetch(
 	path: string,
-	priority: AcquirePriority = "interactive"
+	priority: AcquirePriority = "interactive",
+	signal?: AbortSignal,
+	timeoutMs: number = CHARAVAULT_FETCH_TIMEOUT_MS
 ): Promise<Response> {
 	return withCharaVaultSession(
 		async (cookie) => {
-			await acquire(hasActiveSession(), priority)
+			await acquire(hasActiveSession(), priority, signal)
+			const timeoutSignal = AbortSignal.timeout(timeoutMs)
 			try {
 				return await fetch(`${API_BASE}${path}`, {
 					headers: cookie ? { Cookie: cookie } : undefined,
-					signal: AbortSignal.timeout(CHARAVAULT_FETCH_TIMEOUT_MS)
+					signal: signal
+						? AbortSignal.any([signal, timeoutSignal])
+						: timeoutSignal
 				})
 			} catch (e) {
 				// Network failure or the timeout above firing (a stalled
@@ -226,12 +237,19 @@ async function charaVaultFetch(
  */
 export async function fetchCharaVaultCardResponse(
 	ref: unknown,
-	priority: AcquirePriority = "interactive"
+	priority: AcquirePriority = "interactive",
+	signal?: AbortSignal,
+	// This function only ever fetches card files, so the file-sized timeout
+	// is its own default rather than something every caller has to
+	// remember to pass — see CHARAVAULT_IMAGE_FETCH_TIMEOUT_MS's comment.
+	timeoutMs: number = CHARAVAULT_IMAGE_FETCH_TIMEOUT_MS
 ): Promise<Response> {
 	const { folder, file } = toCharaVaultCardRef(ref)
 	const response = await charaVaultFetch(
 		`/cards/${encodeURIComponent(folder)}/${encodeURIComponent(file)}`,
-		priority
+		priority,
+		signal,
+		timeoutMs
 	)
 
 	if (response.status === 429) {
@@ -244,6 +262,40 @@ export async function fetchCharaVaultCardResponse(
 	}
 
 	return response
+}
+
+/**
+ * Fetches (via the disk cache) and parses a card's bytes exactly once,
+ * shared by getCardBytes (needs the raw bytes) and getCardDetail (needs the
+ * parsed description/lorebook presence) — previously each caller triggered
+ * its own full parseCharacterCard() call, a confirmed duplicate parse on
+ * every card-detail view.
+ */
+async function getCardBytesAndParsed(
+	ref: unknown,
+	ctx: CardSourceContext
+): Promise<{
+	buffer: Buffer
+	parsed: Awaited<ReturnType<typeof parseCharacterCard>>
+}> {
+	const { folder, file } = toCharaVaultCardRef(ref)
+	const buffer = await getOrFetchCardBytes(
+		`charavault:${folder}/${file}`,
+		async (signal) => {
+			const response = await fetchCharaVaultCardResponse(
+				ref,
+				"interactive",
+				signal
+			)
+			return Buffer.from(await response.arrayBuffer())
+		},
+		ctx.signal
+	)
+	// assertContentAllowed already parses (skipping the avatar decode
+	// neither caller needs) and returns the parsed result — reused here
+	// instead of re-parsing the same buffer a second time.
+	const parsed = await assertContentAllowed(buffer, ctx)
+	return { buffer, parsed }
 }
 
 export const charaVaultSource: CardSource = {
@@ -259,7 +311,7 @@ export const charaVaultSource: CardSource = {
 	},
 	async search(
 		params: CardSourceSearchParams,
-		_ctx: CardSourceContext
+		ctx: CardSourceContext
 	): Promise<CardSourceSearchResult> {
 		// Clamped once, up front — used both for every outbound page request
 		// and for the "did upstream run out" check below, so a caller
@@ -287,7 +339,9 @@ export const charaVaultSource: CardSource = {
 			query.set("offset", String(pageOffset))
 
 			const response = await charaVaultFetch(
-				`/api/cards?${query.toString()}`
+				`/api/cards?${query.toString()}`,
+				"interactive",
+				ctx.signal
 			)
 
 			if (response.status === 429) {
@@ -344,6 +398,10 @@ export const charaVaultSource: CardSource = {
 		let upstreamExhausted = false
 
 		for (let fetches = 0; fetches < MAX_INTERNAL_FETCHES; fetches++) {
+			// Stop before starting another internal page fetch if we've
+			// already been superseded — no point spending another rate-limit
+			// slot on a page nobody will see.
+			ctx.signal?.throwIfAborted()
 			const rawItems = await fetchRawPage(offset)
 			offset += rawItems.length
 			accumulated = accumulated.concat(filterRawItems(rawItems))
@@ -362,15 +420,7 @@ export const charaVaultSource: CardSource = {
 		}
 	},
 	async getCardBytes(ref: unknown, ctx: CardSourceContext): Promise<Buffer> {
-		const { folder, file } = toCharaVaultCardRef(ref)
-		const buffer = await getOrFetchCardBytes(
-			`charavault:${folder}/${file}`,
-			async () => {
-				const response = await fetchCharaVaultCardResponse(ref)
-				return Buffer.from(await response.arrayBuffer())
-			}
-		)
-		await assertContentAllowed(buffer, ctx)
+		const { buffer } = await getCardBytesAndParsed(ref, ctx)
 		return buffer
 	},
 	async getCardDetail(
@@ -387,7 +437,7 @@ export const charaVaultSource: CardSource = {
 		// data instead. Reuses getCardBytes()'s disk cache — this doesn't
 		// cost an extra CharaVault request for a card that's already been
 		// viewed/downloaded.
-		const buffer = await charaVaultSource.getCardBytes(ref, ctx)
+		//
 		// Deliberately NOT caught-and-swallowed into a resolved {} — a
 		// resolved value gets cached by cachedCardDetail()'s TtlCache for
 		// 24h, so a transient parse failure (eg. a half-written disk-cache
@@ -395,7 +445,8 @@ export const charaVaultSource: CardSource = {
 		// the real issue is gone. Let it reject; the cache correctly skips
 		// caching a rejection, and the client's existing "No description
 		// provided" fallback already degrades gracefully either way.
-		const { card, lorebook } = await parseCharacterCard(buffer)
+		const { parsed } = await getCardBytesAndParsed(ref, ctx)
+		const { card, lorebook } = parsed
 		const data = card.toSpecV3().data
 		return {
 			description: data.description || undefined,

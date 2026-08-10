@@ -141,6 +141,68 @@ describe("parseCharacterCard", () => {
 
 		expect(result.lorebook).toBeDefined()
 	})
+
+	describe("includeAvatar option", () => {
+		const avatarBytes = Buffer.from("fake-avatar-bytes")
+		const cardJsonWithAvatar = {
+			...minimalCardJson,
+			data: {
+				...minimalCardJson.data,
+				avatar: `data:image/png;base64,${avatarBytes.toString("base64")}`
+			}
+		}
+
+		test("decodes avatarBuffer by default when omitted", async () => {
+			const buffer = Buffer.from(
+				JSON.stringify(cardJsonWithAvatar),
+				"utf-8"
+			)
+			const result = await parseCharacterCard(buffer)
+
+			expect(result.avatarBuffer).toBeDefined()
+			expect(result.avatarBuffer!.equals(avatarBytes)).toBe(true)
+		})
+
+		test("decodes avatarBuffer when includeAvatar is explicitly true", async () => {
+			const buffer = Buffer.from(
+				JSON.stringify(cardJsonWithAvatar),
+				"utf-8"
+			)
+			const result = await parseCharacterCard(buffer, {
+				includeAvatar: true
+			})
+
+			expect(result.avatarBuffer).toBeDefined()
+			expect(result.avatarBuffer!.equals(avatarBytes)).toBe(true)
+		})
+
+		test("skips avatarBuffer entirely when includeAvatar is false, even though card.avatar is present", async () => {
+			const buffer = Buffer.from(
+				JSON.stringify(cardJsonWithAvatar),
+				"utf-8"
+			)
+			const result = await parseCharacterCard(buffer, {
+				includeAvatar: false
+			})
+
+			expect(result.avatarBuffer).toBeUndefined()
+			// Everything else about the card is still parsed normally —
+			// includeAvatar only affects avatarBuffer.
+			expect(result.card.name).toBe("Test Character")
+		})
+
+		test("has no avatarBuffer either way when the card has no avatar field at all", async () => {
+			const buffer = Buffer.from(JSON.stringify(minimalCardJson), "utf-8")
+
+			const withDefault = await parseCharacterCard(buffer)
+			expect(withDefault.avatarBuffer).toBeUndefined()
+
+			const withExplicitTrue = await parseCharacterCard(buffer, {
+				includeAvatar: true
+			})
+			expect(withExplicitTrue.avatarBuffer).toBeUndefined()
+		})
+	})
 })
 
 describe("parseCharacterCardFromBase64", () => {

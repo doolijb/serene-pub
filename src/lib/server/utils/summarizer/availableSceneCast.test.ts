@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { createTestDb, createTestUser, type TestDb } from "$lib/server/utils/testDb"
+import { writeSceneCast } from "$lib/server/utils/sceneCast"
 import {
 	buildSceneCastList,
 	MAX_BINDINGS_FOR_SCENE_CAST,
@@ -484,10 +485,11 @@ describe("buildSceneCastList", () => {
 			historyEntryId: historyEntry.id,
 			sceneId: priorScene.id
 		})
-		await testDb
-			.update(schema.scenes)
-			.set({ participantCharacters: [npcBinding.id] })
-			.where(eq(schema.scenes.id, priorScene.id))
+		await writeSceneCast(
+			priorScene.id,
+			{ participantCharacters: [npcBinding.id] },
+			testDb as any
+		)
 
 		const cast = await buildSceneCastList(nextScene.id, lorebook.id, null, testDb)
 		expect(cast.map((c) => c.id)).toContain(npcBinding.id)

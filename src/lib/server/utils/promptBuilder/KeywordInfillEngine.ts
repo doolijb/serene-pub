@@ -941,6 +941,7 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 				tokenLimit,
 				countTokens
 			)
+			this.warnIfStillOverBudget(totalTokens, tokenLimit)
 		}
 
 		// ── Phase 5: Re-sort + Render ─────────────────────────────────────────

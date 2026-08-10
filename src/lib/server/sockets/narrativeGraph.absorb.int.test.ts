@@ -14,6 +14,10 @@ import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
+import {
+	readSceneCast,
+	writeSceneCast
+} from "$lib/server/utils/sceneCast"
 
 let testDb: TestDb
 let dataDir: string
@@ -383,11 +387,15 @@ describe("narrativeGraphMergeNodeHandler — absorb (PGlite integration)", () =>
 			.insert(schema.scenes)
 			.values({
 				lorebookId: lorebook.id,
-				historyEntryId: historyEntry.id,
-				participantCharacters: [unbound.id, bound.id],
-				mentionedCharacters: [unbound.id]
+				historyEntryId: historyEntry.id
 			})
 			.returning()
+		// Cast lives in scene_characters now; seed it through the same helper
+		// the handlers use rather than hand-writing rows.
+		await writeSceneCast(scene.id, {
+			participantCharacters: [unbound.id, bound.id],
+			mentionedCharacters: [unbound.id]
+		})
 
 		await narrativeGraphMergeNodeHandler.handler(
 			fakeSocket(user.id),
@@ -395,13 +403,15 @@ describe("narrativeGraphMergeNodeHandler — absorb (PGlite integration)", () =>
 			noopEmit
 		)
 
-		const afterScene = await testDb.query.scenes.findFirst({
-			where: eq(schema.scenes.id, scene.id)
-		})
+		const afterScene = await readSceneCast(scene.id)
 		// Deduped — bound.id was already present alongside the rewritten
-		// unbound.id -> bound.id, must not appear twice.
-		expect(afterScene?.participantCharacters).toEqual([bound.id])
-		expect(afterScene?.mentionedCharacters).toEqual([bound.id])
+		// unbound.id -> bound.id, must not appear twice. The unique index on
+		// (scene, binding, role) is what enforces this now; absorb drops the
+		// conflicting row instead of creating a duplicate.
+		expect(afterScene.participantCharacters).toEqual([bound.id])
+		// Both roles survive independently — this pair is exactly why the
+		// unique index includes `role`.
+		expect(afterScene.mentionedCharacters).toEqual([bound.id])
 	})
 
 	test("appends the absorbed identity to absorbedAliases (not aliases) — survives a subsequent character sync", async () => {
@@ -548,11 +558,13 @@ describe("narrativeGraphUndoMergeHandler (PGlite integration)", () => {
 			.insert(schema.scenes)
 			.values({
 				lorebookId: lorebook.id,
-				historyEntryId: historyEntry.id,
-				participantCharacters: [unbound.id],
-				mentionedCharacters: []
+				historyEntryId: historyEntry.id
 			})
 			.returning()
+		await writeSceneCast(scene.id, {
+			participantCharacters: [unbound.id],
+			mentionedCharacters: []
+		})
 		const [lore] = await testDb
 			.insert(schema.characterLoreEntries)
 			.values({
@@ -586,10 +598,8 @@ describe("narrativeGraphUndoMergeHandler (PGlite integration)", () => {
 		expect(afterRel?.fromNodeId).toBe(restoredId)
 		expect(afterRel?.toNodeId).toBe(thirdParty.id)
 
-		const afterScene = await testDb.query.scenes.findFirst({
-			where: eq(schema.scenes.id, scene.id)
-		})
-		expect(afterScene?.participantCharacters).toEqual([restoredId])
+		const afterScene = await readSceneCast(scene.id)
+		expect(afterScene.participantCharacters).toEqual([restoredId])
 
 		const afterLore = await testDb.query.characterLoreEntries.findFirst({
 			where: eq(schema.characterLoreEntries.id, lore.id)

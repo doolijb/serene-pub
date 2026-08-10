@@ -54,7 +54,11 @@ export async function buildLorebookExportData(
 			worldLoreEntries: true,
 			characterLoreEntries: true,
 			historyEntries: true,
-			scenes: true
+			// `characters` are the scene_characters join rows; the export
+			// mapper still wants the flat id arrays, so they're projected
+			// below. Ordered so export bytes stay stable — import compares
+			// them to detect "unchanged vs conflict".
+			scenes: { with: { characters: true } }
 		}
 	})
 
@@ -155,7 +159,26 @@ export async function buildLorebookExportData(
 	lorebook.scenes.forEach((scene) => {
 		const localId = nextLocalId++
 		sceneLocalIdByRealId.set(scene.id, localId)
-		const mapped = mapSceneForExport(scene, localId, bindingLocalIdByRealId)
+		// Project join rows back to the flat arrays the export format uses.
+		// Sorted by ordinal so the serialized order matches what was stored —
+		// import hashes these bytes to detect "unchanged vs conflict", so an
+		// unstable order would mark every lorebook conflicted on re-import.
+		const cast = [...((scene as any).characters ?? [])].sort(
+			(a: any, b: any) => a.ordinal - b.ordinal || a.id - b.id
+		)
+		const mapped = mapSceneForExport(
+			{
+				...scene,
+				participantCharacters: cast
+					.filter((c: any) => c.role === "participant")
+					.map((c: any) => c.bindingId),
+				mentionedCharacters: cast
+					.filter((c: any) => c.role === "mentioned")
+					.map((c: any) => c.bindingId)
+			},
+			localId,
+			bindingLocalIdByRealId
+		)
 		const existing = scenesByHistoryEntryId.get(scene.historyEntryId) ?? []
 		existing.push(mapped)
 		scenesByHistoryEntryId.set(scene.historyEntryId, existing)

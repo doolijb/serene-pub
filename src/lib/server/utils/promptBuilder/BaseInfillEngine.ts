@@ -102,6 +102,24 @@ export abstract class BaseInfillEngine {
 	}
 
 	/**
+	 * Call after enforcing against the real, hard `tokenLimit` (not a derived
+	 * soft ceiling — RagInfillEngine's `loreCeiling` pass, for instance, is
+	 * *expected* to sometimes fall short by design, so warning there would be
+	 * a false alarm on every chat with substantial pinned lore). Guaranteed
+	 * messages plus un-trimmable pinned/constant lore can together exceed
+	 * tokenLimit with nothing left to cut — that's a real generation-failure
+	 * risk against a model's actual context window, so it's worth surfacing
+	 * even though there's nothing more this trimming pass can do about it.
+	 */
+	protected warnIfStillOverBudget(totalTokens: number, tokenLimit: number): void {
+		if (totalTokens > tokenLimit) {
+			console.warn(
+				`[InfillEngine] Unable to fit within tokenLimit (${tokenLimit}) after trimming all optional content and messages down to the guaranteed floor — final size ${totalTokens}. Guaranteed messages plus pinned/constant lore alone exceed the model's context budget; reduce pinned lore or increase tokenLimit.`
+			)
+		}
+	}
+
+	/**
 	 * Fill chatMessages from a sorted candidate pool up to tokenLimit.
 	 *
 	 * For each candidate: tentatively push, recount. If over tokenLimit, pop and

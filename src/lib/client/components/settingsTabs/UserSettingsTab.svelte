@@ -9,6 +9,12 @@
 	import { z } from "zod"
 	import * as Icons from "@lucide/svelte"
 
+	interface Props {
+		hasUnsavedChanges?: boolean
+	}
+
+	let { hasUnsavedChanges = $bindable(false) }: Props = $props()
+
 	const socket = useTypedSocket()
 	const panelsCtx: PanelsCtx = getContext("panelsCtx")
 
@@ -129,6 +135,7 @@
 	})
 
 	onDestroy(() => {
+		hasUnsavedChanges = false
 		socket?.off("userSettings:updateShowAllCharacterFields")
 		socket?.off("userSettings:updateEasyCharacterCreation")
 		socket?.off("userSettings:updateEasyPersonaCreation")
@@ -183,6 +190,18 @@
 
 	$effect(() => {
 		displayName = userCtx.user?.displayName || ""
+	})
+
+	// A successful save updates userCtx.user.displayName (see the server's
+	// updateDisplayName handler, which re-runs the users:current handler),
+	// which the effect above re-syncs displayName from — so this doesn't
+	// need its own explicit reset after a save. Empty is "unsaveable," not
+	// "unsaved" — an emptied field shouldn't prompt a discard-confirmation
+	// for a value that was never going to be saved anyway.
+	$effect(() => {
+		hasUnsavedChanges =
+			displayName.trim() !== "" &&
+			displayName !== (userCtx.user?.displayName ?? "")
 	})
 
 	async function onShowAllCharacterFieldsClick(event: { checked: boolean }) {
@@ -400,7 +419,7 @@
 
 		<div class="flex flex-col gap-2 pt-4">
 			<p class="text-muted-foreground text-sm">
-				Shows the "Serene Pub is in alpha!" banner at the top of the
+				Shows the "Serene Pub is in beta!" banner at the top of the
 				home page.
 			</p>
 			<Switch

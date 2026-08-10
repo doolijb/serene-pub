@@ -22,7 +22,10 @@ import type {
 	TemplateContext
 } from "./types"
 import "./utils"
-import { isModelReady } from "$lib/server/embedding"
+import {
+	isModelReady,
+	loadConfiguredEmbeddingModelOpportunistically
+} from "$lib/server/embedding"
 
 export class PromptBuilder {
 	connection: SelectConnection
@@ -34,7 +37,6 @@ export class PromptBuilder {
 	tokenCounter: TokenCounters
 	tokenLimit: number
 	contextThresholdPercent: number
-	isAssistantMode: boolean
 	diagnosticsEnabled: boolean = true
 
 	// Legacy properties (gradually being moved to modules)
@@ -63,8 +65,7 @@ export class PromptBuilder {
 		currentCharacterId,
 		tokenCounter,
 		tokenLimit,
-		contextThresholdPercent,
-		isAssistantMode = false
+		contextThresholdPercent
 	}: {
 		connection: SelectConnection
 		sampling: SelectSamplingConfig
@@ -75,7 +76,6 @@ export class PromptBuilder {
 		tokenCounter: TokenCounters
 		tokenLimit: number
 		contextThresholdPercent: number
-		isAssistantMode?: boolean
 	}) {
 		this.connection = connection
 		this.sampling = sampling
@@ -87,7 +87,6 @@ export class PromptBuilder {
 		this.tokenCounter = tokenCounter
 		this.tokenLimit = tokenLimit
 		this.contextThresholdPercent = contextThresholdPercent
-		this.isAssistantMode = isAssistantMode
 
 		// Initialize the interpolation engine with the same handlebars instance
 		this.interpolationEngine = new InterpolationEngine(this.handlebars)
@@ -551,68 +550,6 @@ export class PromptBuilder {
 		}
 	}
 
-	// --- Load tagged entities for assistant mode ---
-	private async loadTaggedEntities(): Promise<string> {
-		if (!this.isAssistantMode) {
-			return ""
-		}
-
-		const metadata = this.chat.metadata as any
-		if (!metadata || !metadata.taggedEntities) {
-			return ""
-		}
-
-		const sections: string[] = []
-
-		// Load tagged characters
-		if (
-			metadata.taggedEntities.characters &&
-			Array.isArray(metadata.taggedEntities.characters)
-		) {
-			const { db } = await import("../../db")
-			const characterIds = metadata.taggedEntities.characters
-
-			if (characterIds.length > 0) {
-				const characters = await db.query.characters.findMany({
-					where: (c: any, { inArray, eq, and }: any) =>
-						and(
-							inArray(c.id, characterIds),
-							eq(c.userId, this.chat.userId)
-						),
-					columns: {
-						id: true,
-						name: true,
-						nickname: true,
-						description: true,
-						avatar: true,
-						createdAt: true
-					}
-				})
-
-				if (characters.length > 0) {
-					sections.push("## Tagged Characters\n")
-					for (const char of characters) {
-						sections.push(
-							`### ${char.name}${char.nickname ? ` (${char.nickname})` : ""}`
-						)
-						sections.push(`- ID: ${char.id}`)
-						if (char.description) {
-							sections.push(`- Description: ${char.description}`)
-						}
-						if (char.avatar) {
-							sections.push(`- Avatar: ${char.avatar}`)
-						}
-						sections.push(
-							`- Created: ${new Date(char.createdAt).toLocaleDateString()}\n`
-						)
-					}
-				}
-			}
-		}
-
-		return sections.length > 0 ? "\n" + sections.join("\n") + "\n" : ""
-	}
-
 	// --- Main compilePrompt ---
 	async compilePrompt({
 		useChatFormat = false,
@@ -829,6 +766,39 @@ export class PromptBuilder {
 					err
 				)
 				infillResult = null
+			}
+		} else if (!ragIgnored && !isModelReady()) {
+			// Model isn't warm for THIS turn — don't block the response
+			// waiting for it (a local model load can take real seconds).
+			// Fall through to keyword-mode below same as always, but kick
+			// off a background load so a *following* turn has a warm model
+			// instead of staying cold until the vectorization queue happens
+			// to load it as a side effect of an unrelated embedding write
+			// (which, post-generation auto-enqueue aside, could be the next
+			// periodic scan — up to 15 minutes away). Bounded/cooldown-
+			// limited internally (see loadConfiguredEmbeddingModelOpportunistically's
+			// own doc comment) so a sustained slow-paced session doesn't
+			// load-then-idle-unload on every single turn for no benefit.
+			try {
+				const { db } = await import("../../db")
+				const settings = await db.query.systemSettings.findFirst({
+					columns: { vectorizationEnabled: true }
+				})
+				if (settings?.vectorizationEnabled) {
+					void loadConfiguredEmbeddingModelOpportunistically().catch(
+						(err) => {
+							console.warn(
+								"[PromptBuilder] Background embedding model load failed:",
+								err
+							)
+						}
+					)
+				}
+			} catch (err) {
+				console.warn(
+					"[PromptBuilder] Failed to check vectorization settings for background model load:",
+					err
+				)
 			}
 		}
 

@@ -264,14 +264,14 @@
 		}
 		generatingMessageId = null
 		generatingStatus = ""
+		upsertMessage(m)
 		if (m.error) {
 			error = m.error.message || "Generation failed."
 			announce(error)
-			return
+		} else {
+			error = ""
+			messageAnnouncement = `${speakerName(m)} replied.`
 		}
-		error = ""
-		upsertMessage(m)
-		messageAnnouncement = `${speakerName(m)} replied.`
 		socket.emit("chats:getResponseOrder", { chatId })
 	}
 	function handleChatMessagesDelete(msg: Sockets.ChatMessages.Delete.Response) {
@@ -450,7 +450,19 @@
 						here to you.
 					</p>
 				{/if}
-				<p>{msg.content}</p>
+				{#if msg.content}
+					<p>{msg.content}</p>
+				{/if}
+				{#if msg.error}
+					<div class="a11y-status a11y-status-error" role="alert">
+						<p class="a11y-error-text">
+							{msg.error.message}
+							{#if msg.error.code}
+								<span class="a11y-hint">({msg.error.code})</span>
+							{/if}
+						</p>
+					</div>
+				{/if}
 				{#if swipes}
 					<p class="a11y-hint">
 						Response {swipes.current} of {swipes.total}

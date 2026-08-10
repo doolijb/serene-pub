@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import type { LibraryCatalogItem } from "$lib/shared/library/types"
+	import RetryableImage from "./RetryableImage.svelte"
 
 	interface Props {
 		item: LibraryCatalogItem
@@ -9,17 +10,6 @@
 	}
 
 	let { item, imageUrl, onclick }: Props = $props()
-
-	// A thumbnail request can fail (eg. the CharaVault image proxy returning
-	// 429 when its background-priority rate-limit slot times out behind
-	// interactive traffic) — fall back to the placeholder icon instead of
-	// leaving the browser's broken-image glyph. Resets whenever imageUrl
-	// itself changes (new item, or a retried URL).
-	let imageFailed = $state(false)
-	$effect(() => {
-		void imageUrl
-		imageFailed = false
-	})
 
 	function getExcerpt(text: string, maxLength: number = 90): string {
 		// Iterate by code point (not UTF-16 code unit) so truncation can't
@@ -36,20 +26,24 @@
 	onclick={() => onclick()}
 	aria-label="View details for {item.name}"
 >
-	{#if imageUrl && !imageFailed}
-		<img
-			src={imageUrl}
-			alt=""
-			loading="lazy"
-			onerror={() => (imageFailed = true)}
-			class="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-		/>
-	{:else}
+	{#snippet placeholder()}
 		<div
 			class="bg-surface-300-700 absolute inset-0 flex items-center justify-center"
 		>
 			<Icons.User class="text-surface-400 h-16 w-16" aria-hidden="true" />
 		</div>
+	{/snippet}
+
+	{#if imageUrl}
+		<RetryableImage
+			src={imageUrl}
+			alt=""
+			loading="lazy"
+			class="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+			fallback={placeholder}
+		/>
+	{:else}
+		{@render placeholder()}
 	{/if}
 
 	<!-- Bottom fade with name + excerpt -->

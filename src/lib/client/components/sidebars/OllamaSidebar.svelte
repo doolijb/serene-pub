@@ -10,6 +10,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 	import OllamaIcon from "../icons/OllamaIcon.svelte"
+	import OllamaUnsavedChangesModal from "../modals/OllamaUnsavedChangesModal.svelte"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -29,6 +30,15 @@
 	)
 	let isSavingBaseUrl = $state(false)
 	let baseUrlField = $state("")
+	let showUnsavedChangesModal = $state(false)
+	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
+
+	// baseUrlField re-syncs from context below whenever a save succeeds, so
+	// this self-resolves back to false without an explicit post-save reset.
+	let hasUnsavedChanges = $derived(
+		baseUrlField.trim() !==
+			(ollamaSettingsCtx.settings?.ollamaManagerBaseUrl ?? "")
+	)
 
 	// Handle tab switching
 	function handleTabChange(e: ValueChangeDetails): void {
@@ -115,9 +125,39 @@
 		socket.off("ollama:setBaseUrl")
 	})
 
+	function handleUnsavedChangesModalOnOpenChange(e: OpenChangeDetails) {
+		if (!e.open) {
+			showUnsavedChangesModal = false
+			if (confirmCloseSidebarResolve) {
+				confirmCloseSidebarResolve(false)
+				confirmCloseSidebarResolve = null
+			}
+		}
+	}
+
+	function handleUnsavedChangesModalConfirm() {
+		showUnsavedChangesModal = false
+		if (confirmCloseSidebarResolve) {
+			confirmCloseSidebarResolve(true)
+			confirmCloseSidebarResolve = null
+		}
+	}
+
+	function handleUnsavedChangesModalCancel() {
+		showUnsavedChangesModal = false
+		if (confirmCloseSidebarResolve) {
+			confirmCloseSidebarResolve(false)
+			confirmCloseSidebarResolve = null
+		}
+	}
+
 	// Sidebar close handler
 	onclose = async () => {
-		return true // Allow closing
+		if (!hasUnsavedChanges) return true
+		showUnsavedChangesModal = true
+		return new Promise<boolean>((resolve) => {
+			confirmCloseSidebarResolve = resolve
+		})
 	}
 </script>
 
@@ -309,3 +349,10 @@
 		</div>
 	{/if}
 </div>
+
+<OllamaUnsavedChangesModal
+	open={showUnsavedChangesModal}
+	onOpenChange={handleUnsavedChangesModalOnOpenChange}
+	onConfirm={handleUnsavedChangesModalConfirm}
+	onCancel={handleUnsavedChangesModalCancel}
+/>

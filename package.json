@@ -1,7 +1,7 @@
 {
 	"name": "serene-pub",
 	"private": true,
-	"version": "0.5.0-rc-2",
+	"version": "0.5.0-rc-3",
 	"type": "module",
 	"license": "AGPL-3.0",
 	"bin": "build/index.js",
@@ -83,7 +83,6 @@
 		"vitest": "^4.1.10"
 	},
 	"dependencies": {
-		"@ai-sdk/openai": "^2.0.64",
 		"@anthropic-ai/sdk": "^0.105.0",
 		"@codemirror/autocomplete": "^6.20.3",
 		"@codemirror/commands": "^6.10.4",
@@ -102,7 +101,6 @@
 		"@tiptap/core": "^2.22.3",
 		"@tiptap/extension-placeholder": "^2.22.3",
 		"@tiptap/starter-kit": "^2.22.3",
-		"ai": "^5.0.90",
 		"diff": "^9.0.0",
 		"dompurify": "^3.4.12",
 		"dotenv": "^16.5.0",
@@ -121,6 +119,7 @@
 		"open": "^10.1.2",
 		"openai": "^5.3.0",
 		"paseto": "^3.1.4",
+		"picocolors": "^1.1.1",
 		"png-chunk-text": "^1.0.0",
 		"png-chunks-encode": "^1.0.0",
 		"png-chunks-extract": "^1.0.0",

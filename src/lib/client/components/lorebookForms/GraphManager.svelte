@@ -20,13 +20,15 @@
 		// "View relationships" button.
 		focusNodeId?: number | null
 		onFocusHandled?: () => void
+		hasUnsavedChanges?: boolean
 	}
 
 	let {
 		lorebookId,
 		onNavigateToBindings,
 		focusNodeId,
-		onFocusHandled
+		onFocusHandled,
+		hasUnsavedChanges = $bindable(false)
 	}: Props = $props()
 
 	const socket = useTypedSocket()
@@ -41,6 +43,8 @@
 	let ungraphedUnsummarizedCount = $state(0)
 	let totalSummarizedCount = $state(0)
 	let ungraphedHistoryEntryCount = $state(0)
+	let unresolvedCastSceneCount = $state(0)
+	let namelessBindingCount = $state(0)
 	let totalDirectHistoryEntryCount = $state(0)
 	let isLoading = $state(true)
 
@@ -94,6 +98,34 @@
 	// relationships are still edited directly in the Graph tab.
 	let editingRel = $state<NarrativeRelationship | null>(null)
 	let isSaving = $state(false)
+
+	// ── Unsaved changes ────────────────────────────────────────────
+	// Compares only the fields the two edit forms below actually bind to —
+	// NOT a whole-object diff. `NarrativeRelationship.embedding` changes
+	// server-side whenever the app re-vectorizes (independent of anything
+	// the user typed here), so diffing the whole object would report dirty
+	// for a field the user never touched.
+	$effect(() => {
+		const current = editingRel
+		if (!current) {
+			hasUnsavedChanges = false
+			return
+		}
+		const original = relationships.find((r) => r.id === current.id)
+		// Same decision as LorebookBindingsManager's equivalent effect:
+		// original gone → not dirty, nothing left to discard back to.
+		if (!original) {
+			hasUnsavedChanges = false
+			return
+		}
+		hasUnsavedChanges =
+			current.relationshipType !== original.relationshipType ||
+			current.status !== original.status ||
+			current.visibility !== original.visibility ||
+			current.description !== original.description ||
+			current.reason !== original.reason ||
+			current.historyEntryId !== original.historyEntryId
+	})
 
 	// Delete confirmation
 	let pendingDeleteNodeId = $state<number | null>(null)
@@ -156,6 +188,8 @@
 		totalSummarizedCount = msg.totalSummarizedCount ?? 0
 		ungraphedHistoryEntryCount = msg.ungraphedHistoryEntryCount ?? 0
 		totalDirectHistoryEntryCount = msg.totalDirectHistoryEntryCount ?? 0
+		unresolvedCastSceneCount = msg.unresolvedCastSceneCount ?? 0
+		namelessBindingCount = msg.namelessBindingCount ?? 0
 		isLoading = false
 	}
 
@@ -286,6 +320,7 @@
 	})
 
 	onDestroy(() => {
+		hasUnsavedChanges = false
 		socket.off("narrativeGraph:list", handleNarrativeGraphList)
 		socket.off("narrativeGraph:updateNode", handleNarrativeGraphUpdateNode)
 		socket.off("narrativeGraph:deleteNode", handleNarrativeGraphDeleteNode)
@@ -376,7 +411,7 @@
 	}
 
 	function startEditRel(rel: NarrativeRelationship) {
-		editingRel = { ...rel }
+		editingRel = $state.snapshot(rel)
 		selectedRel = rel
 		// Don't clear selectedNode — rel may be opened from the node's relationship list
 	}
@@ -387,8 +422,21 @@
 		pendingDeleteNodeReferencedByMergeLog = false
 	}
 
+	/**
+	 * A binding's display label. `??` alone was not enough: lorebook_bindings.name
+	 * is NOT NULL DEFAULT '' (migration 0075, never backfilled, and the boot-time
+	 * repair only covers *bound* rows), so unbound/legacy rows carry an empty
+	 * string — which `??` passes straight through and renders as nothing at all.
+	 * Fall back to the {{char:N}} token, which characterBindingSync's comment
+	 * already claims happens "everywhere a binding's name is displayed".
+	 */
+	function displayName(node: { name?: string; binding?: string } | undefined) {
+		return node?.name?.trim() || node?.binding || ""
+	}
+
 	function nodeName(id: number): string {
-		return nodeMap.get(id)?.name ?? `Node #${id}`
+		const node = nodeMap.get(id)
+		return displayName(node) || `Node #${id}`
 	}
 
 	const NODE_STATE_COLOR: Record<string, string> = {
@@ -633,6 +681,35 @@
 					</button>
 				</div>
 			{/if}
+		</div>
+	{/if}
+
+
+	{#if namelessBindingCount > 0}
+		<!--
+			These rows have an empty `name`, so no extracted character name can
+			ever match them and a build will propose a fresh node beside each.
+			They come from migration 0075 adding the column with DEFAULT '' and
+			no backfill (the boot-time repair only covers *bound* rows), and
+			their original names were lost when narrative_nodes was dropped.
+			Nothing can recover them automatically — surfaced so they can be
+			named or deleted by hand.
+		-->
+		<div
+			class="bg-surface-200-800 border-surface-400-600 mt-2 flex items-center gap-2 rounded-lg border p-3 text-sm"
+		>
+			<Icons.HelpCircle
+				size={14}
+				class="text-surface-600-400 shrink-0"
+			/>
+			<span class="text-surface-700-300">
+				{namelessBindingCount} graph {namelessBindingCount === 1
+					? "entry has"
+					: "entries have"} no name, so
+				{namelessBindingCount === 1 ? "it can't" : "they can't"} be matched
+				to any character a build finds. Rename or delete
+				{namelessBindingCount === 1 ? "it" : "them"} in the list below.
+			</span>
 		</div>
 	{/if}
 
@@ -945,10 +1022,7 @@
 										<div class="ml-auto flex gap-1">
 											<button
 												class="btn btn-sm preset-filled-surface-400-600 p-1"
-												onclick={() => {
-													editingRel = { ...rel }
-													selectedRel = rel
-												}}
+												onclick={() => startEditRel(rel)}
 												title="Edit relationship"
 											>
 												<Icons.Pencil size={11} />
@@ -1040,7 +1114,7 @@
 					<select class="select text-sm" bind:value={connectToNodeId}>
 						<option value={null} disabled>Select a node…</option>
 						{#each nodes.filter((n) => n.id !== connectingFromNode!.id) as n}
-							<option value={n.id}>{n.name}</option>
+							<option value={n.id}>{displayName(n)}</option>
 						{/each}
 					</select>
 				</div>
@@ -1319,7 +1393,7 @@
 					>
 						<div class="flex items-center gap-2">
 							<span class="flex-1 truncate text-sm font-medium">
-								{node.name}
+								{displayName(node)}
 							</span>
 							<EmbeddingStatusIcon
 								embeddingModel={node.embeddingModel}
@@ -1542,6 +1616,7 @@
 		(n) => n.characterId == null && n.personaId == null && !n.parentNodeId
 	).length}
 	existingRelationshipCount={relationships.length}
+	{unresolvedCastSceneCount}
 	onApplied={load}
 />
 
@@ -1557,3 +1632,4 @@
 		{lorebookId}
 	/>
 {/if}
+

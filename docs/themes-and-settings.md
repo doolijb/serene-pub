@@ -56,7 +56,7 @@ The **User** tab includes several toggles that only affect your own session:
 - **Show All Character Fields** — expands character forms to show every available field instead of a simplified set. See [Characters](./characters.md).
 - **Easy Character Creation** — enables a simplified/guided character creation flow.
 - **Easy Persona Creation** — enables a simplified/guided persona creation flow. See [Personas](./personas.md).
-- **Show Home Page Banner** — shows or hides the dismissible Serene Pub logo banner at the top of the home page. The "Serene Pub is in alpha!" notice underneath it always shows regardless of this setting.
+- **Show Home Page Banner** — shows or hides the dismissible Serene Pub logo banner at the top of the home page. The "Serene Pub is in beta!" notice underneath it always shows regardless of this setting.
 
 Each toggle saves instantly and shows a confirmation toast (e.g. "Character fields display expanded" or "simplified").
 

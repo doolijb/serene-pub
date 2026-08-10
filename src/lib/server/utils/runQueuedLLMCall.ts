@@ -10,6 +10,12 @@ export interface RunQueuedLLMCallParams {
 	chatId?: number
 	lorebookId?: number
 	label?: string
+	/** External cancellation signal — bridged to llmQueue.cancel() so
+	 * cancelling stops THIS run via the adapter's own abort() (every adapter
+	 * implements it — sets an internal flag polled by its streaming loop and
+	 * aborts its own fetch/request controller), not just prevents a future
+	 * call from starting. */
+	signal?: AbortSignal
 }
 
 export interface RunQueuedLLMCallResult {
@@ -32,9 +38,12 @@ export async function runQueuedLLMCall({
 	samplingName,
 	chatId,
 	lorebookId,
-	label
+	label,
+	signal
 }: RunQueuedLLMCallParams): Promise<RunQueuedLLMCallResult> {
-	const { done } = llmQueue.enqueue<RunQueuedLLMCallResult>({
+	if (signal?.aborted) return { text: "", isAborted: true }
+
+	const { id, done } = llmQueue.enqueue<RunQueuedLLMCallResult>({
 		taskType,
 		connectionName,
 		samplingName,
@@ -75,5 +84,22 @@ export async function runQueuedLLMCall({
 		onCancel: () => adapter.abort()
 	})
 
-	return await done
+	const onAbort = () => {
+		// Runs as an AbortSignal listener — an exception here escapes via
+		// dispatchEvent, not this function's own try/catch below, and can
+		// crash the process. llmQueue.cancel() is exception-safe today (it
+		// no-ops on an unknown/already-settled id, and its only
+		// side-effecting call is already wrapped in its own try/catch), but
+		// that's its implementation, not its contract — wrapped anyway as
+		// cheap insurance.
+		try {
+			llmQueue.cancel(id)
+		} catch {}
+	}
+	signal?.addEventListener("abort", onAbort)
+	try {
+		return await done
+	} finally {
+		signal?.removeEventListener("abort", onAbort)
+	}
 }

@@ -404,7 +404,7 @@ export const promptConfigsRelations = relations(promptConfigs, ({ one }) => ({
 
 // "chat" prefix is deliberate: this is a prompt config scoped to the
 // standard roleplay chat type specifically, so a future narrator/environment
-// config for a different chat type (e.g. Assistant) can't collide with it.
+// config for a different chat type can't collide with it.
 export const narratorPromptConfigs = pgTable("narrator_prompt_configs", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 	isImmutable: boolean("is_immutable").notNull().default(false),
@@ -890,6 +890,8 @@ export const lorebookBindingsRelations = relations(
 			references: [personas.id]
 		}),
 		characterLoreEntries: many(characterLoreEntries),
+		/** Scenes this binding appears in, via the scene_characters join. */
+		sceneAppearances: many(sceneCharacters),
 		// ── Narrative-graph relations (merged in from the former
 		// narrativeNodes table — see the merge plan) ────────────────────────
 		scene: one(scenes, {
@@ -1544,7 +1546,7 @@ export const chats = pgTable(
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 		name: text("name"), // Optional chat/group name
 		isGroup: boolean("is_group").notNull(), // 1 for group chat, 0 for 1:1
-		chatType: text("chat_type").notNull().default(ChatTypes.ROLEPLAY), // "roleplay" | "assistant"
+		chatType: text("chat_type").notNull().default(ChatTypes.ROLEPLAY), // "roleplay" | "summarize"
 		userId: integer("user_id")
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
@@ -1669,8 +1671,6 @@ export const chatMessages = pgTable(
 				history: string[]
 				thinkingHistory?: (string | null)[]
 			}
-			waitingForFunctionSelection?: boolean
-			reasoning?: string // Assistant reasoning/thinking before response
 			// Native model thinking content (e.g. Ollama `think: true`) for the
 			// message's currently-active swipe — mirrors swipes.thinkingHistory[currentIdx],
 			// kept denormalized here since that's what ChatMessage.svelte reads.
@@ -2042,20 +2042,21 @@ export const scenes = pgTable(
 			.default([])
 			.$type<number[]>(),
 		summary: text("summary"),
-		// Characters extracted from the scene summary at summarization time —
-		// lorebookBindings ids, not name strings (see the merge plan's scene
-		// character presence redesign). The underlying column stays `json`
-		// either way — this is a pure TS-level type change, no DDL needed;
-		// existing rows are backfilled by a data script resolving their old
-		// name strings to binding ids.
-		participantCharacters: json("participant_characters")
-			.notNull()
-			.default([])
-			.$type<number[]>(),
-		mentionedCharacters: json("mentioned_characters")
-			.notNull()
-			.default([])
-			.$type<number[]>(),
+		// Scene cast lives in the `scene_characters` join table now — see it
+		// for why the old participant_characters/mentioned_characters JSON
+		// arrays had to go. Read/write them through
+		// src/lib/server/utils/sceneCast.ts, which projects the join rows back
+		// into the `number[]` shape the socket payloads and client still use.
+		//
+		// When this scene's cast was last genuinely resolved to binding ids.
+		// NULL means "never resolved" — which is NOT the same as "resolved and
+		// nobody was in it", and that distinction is the whole point: without
+		// it, a legitimately castless scene is indistinguishable from an
+		// unprocessed one and would be re-extracted on every single build.
+		// Written by scene create/update (only when the payload actually
+		// carries cast — a rename must not mark a scene resolved) and by
+		// graph-build apply. Used for cost disclosure, never as a gate.
+		castResolvedAt: timestamp("cast_resolved_at"),
 		embedding: real("embedding").array(),
 		embeddingModel: text("embedding_model"),
 		// Whether this scene has been processed into the causal graph
@@ -2088,8 +2089,76 @@ export const scenesRelations = relations(scenes, ({ one, many }) => ({
 		fields: [scenes.historyEntryId],
 		references: [historyEntries.id]
 	}),
-	lorebookBindings: many(lorebookBindings)
+	lorebookBindings: many(lorebookBindings),
+	characters: many(sceneCharacters)
 }))
+
+export type SceneCharacterRole = "participant" | "mentioned"
+
+/**
+ * Which characters are in a scene, and how — replacing the untyped
+ * `participant_characters` / `mentioned_characters` JSON arrays.
+ *
+ * Those arrays had no FK, no type constraint and no index, and every one of
+ * those gaps produced a real bug:
+ *   - No FK → a deleted binding left a dangling id, which graphBuilder had to
+ *     silently warn-and-skip, and which deleteNode had to hand-clean by
+ *     loading every scene in the lorebook. ON DELETE cascade does both.
+ *   - No type constraint → the column physically held ids OR pre-merge name
+ *     strings OR nothing, so "is this scene's cast resolved?" was answered by
+ *     sniffing array shapes at runtime. `binding_id integer` cannot hold a
+ *     name.
+ *   - No index → "which scenes feature X" meant loading every scene and
+ *     filtering in JS, in four separate places.
+ *
+ * UNIQUE is (scene, binding, ROLE) and the role component is load-bearing: a
+ * character legitimately appears as both participant and mentioned (absorb
+ * remaps each array independently, and narrativeGraph.absorb's tests assert
+ * the survivor lands in both), so a role-less constraint would reject real
+ * data at migration time.
+ *
+ * `ordinal` preserves the arrays' observable order. Export serialization
+ * writes the cast in stored order, and lorebook import compares exported
+ * bytes to detect "unchanged vs conflict" — reordering would silently mark
+ * every lorebook conflicted on re-import.
+ */
+export const sceneCharacters = pgTable(
+	"scene_characters",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		sceneId: integer("scene_id")
+			.notNull()
+			.references(() => scenes.id, { onDelete: "cascade" }),
+		bindingId: integer("binding_id")
+			.notNull()
+			.references(() => lorebookBindings.id, { onDelete: "cascade" }),
+		role: text("role").notNull().$type<SceneCharacterRole>(),
+		ordinal: integer("ordinal").notNull().default(0)
+	},
+	(table) => [
+		uniqueIndex("scene_characters_unique").on(
+			table.sceneId,
+			table.bindingId,
+			table.role
+		),
+		index("scene_characters_scene_id_idx").on(table.sceneId),
+		index("scene_characters_binding_id_idx").on(table.bindingId)
+	]
+)
+
+export const sceneCharactersRelations = relations(
+	sceneCharacters,
+	({ one }) => ({
+		scene: one(scenes, {
+			fields: [sceneCharacters.sceneId],
+			references: [scenes.id]
+		}),
+		binding: one(lorebookBindings, {
+			fields: [sceneCharacters.bindingId],
+			references: [lorebookBindings.id]
+		})
+	})
+)
 
 /**
  * Narrative relationships: versioned, typed connections between narrative nodes.

@@ -71,6 +71,10 @@
 	@apply text-tertiary-950-50;
 }
 
+.rendered-chat-message-content img {
+	@apply border-surface-300-700 max-h-48 max-w-full cursor-pointer rounded-lg border object-cover;
+}
+
 .sidebar-list-item {
 	@apply card hover:preset-filled-surface-200-800 flex cursor-pointer items-center gap-2 rounded-lg p-2 transition;
 }

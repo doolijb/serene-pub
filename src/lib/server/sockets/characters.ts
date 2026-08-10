@@ -31,6 +31,7 @@ import {
 	CardSourceUnavailableError,
 	CardSourceRateLimitedError
 } from "$lib/server/cardSources/types"
+import { withSupersession } from "$lib/server/cardSources/inFlightRequests"
 import { buildLorebookExportData } from "$lib/server/utils/lorebookExportBuilder"
 import { syncLorebookBindingsForCharacter } from "$lib/server/utils/characterBindingSync"
 import { hashCanonicalJson } from "$lib/server/utils/contentHash"
@@ -716,64 +717,83 @@ export const charactersImportResolve: Handler<
 
 export const charactersSearchLibrary: Handler<
 	Sockets.Characters.SearchLibrary.Params,
-	Sockets.Characters.SearchLibrary.Response
+	// | undefined: a superseded request (see withSupersession below)
+	// resolves with no response at all rather than throwing — honestly
+	// widened here rather than suppressed with `as any`, since register()
+	// (sockets/index.ts) never actually reads a handler's resolved value.
+	Sockets.Characters.SearchLibrary.Response | undefined
 > = {
 	event: "characters:searchLibrary",
 	handler: async (socket, params, emitToUser) => {
-		try {
-			const userId = socket.user!.id
-			const sourceId = params.source ?? "github-serenepub"
-			const source = resolveCardSource(sourceId)
-			if (!source.supports("character")) {
-				throw new CardSourceUnavailableError(
-					`${source.label} does not support browsing characters`
-				)
-			}
+		return withSupersession(
+			socket.id,
+			"characters:searchLibrary",
+			async (signal) => {
+				try {
+					const userId = socket.user!.id
+					const sourceId = params.source ?? "github-serenepub"
+					const source = resolveCardSource(sourceId)
+					if (!source.supports("character")) {
+						throw new CardSourceUnavailableError(
+							`${source.label} does not support browsing characters`
+						)
+					}
 
-			const nsfw = await resolveNsfwParam(userId)
-			const { items, hasMore, nextOffset } = await cachedSearch(
-				sourceId,
-				{
-					kind: "character",
-					searchTerm: params.searchTerm,
-					category: params.category,
-					nsfw,
-					sort: params.sort,
-					hasBook: params.hasBook,
-					creatorFilter: params.creatorFilter,
-					cursor: params.cursor
-				},
-				{ userId }
-			)
+					const nsfw = await resolveNsfwParam(userId)
+					const { items, hasMore, nextOffset } = await cachedSearch(
+						sourceId,
+						{
+							kind: "character",
+							searchTerm: params.searchTerm,
+							category: params.category,
+							nsfw,
+							sort: params.sort,
+							hasBook: params.hasBook,
+							creatorFilter: params.creatorFilter,
+							cursor: params.cursor
+						},
+						{ userId, signal }
+					)
 
-			const res: Sockets.Characters.SearchLibrary.Response = {
-				characters: items,
-				hasMore,
-				nextOffset,
-				requestId: params.requestId
+					const res: Sockets.Characters.SearchLibrary.Response = {
+						characters: items,
+						hasMore,
+						nextOffset,
+						requestId: params.requestId
+					}
+					emitToUser("characters:searchLibrary", res)
+					return res
+				} catch (error: any) {
+					if (signal.aborted) {
+						// Superseded by a newer search from this same socket — the
+						// client already only cares about the newest requestId (see
+						// +page.svelte's staleness guard), so a superseded request's
+						// response was always going to be thrown away even before
+						// this fix — this just also stops spending rate-limit
+						// budget on producing it. Routine, not worth logging.
+						return undefined
+					}
+					console.error("Character library search error:", error)
+					emitToUser("characters:searchLibrary:error", {
+						error:
+							error instanceof CardSourceUnavailableError ||
+							error instanceof CardSourceRateLimitedError
+								? error.message
+								: "Failed to search character library",
+						unreachable:
+							error instanceof CardSourceUnavailableError || undefined,
+						rateLimited:
+							error instanceof CardSourceRateLimitedError || undefined,
+						retryAfterMs:
+							error instanceof CardSourceRateLimitedError
+								? error.retryAfterMs
+								: undefined,
+						requestId: params.requestId
+					})
+					throw error
+				}
 			}
-			emitToUser("characters:searchLibrary", res)
-			return res
-		} catch (error: any) {
-			console.error("Character library search error:", error)
-			emitToUser("characters:searchLibrary:error", {
-				error:
-					error instanceof CardSourceUnavailableError ||
-					error instanceof CardSourceRateLimitedError
-						? error.message
-						: "Failed to search character library",
-				unreachable:
-					error instanceof CardSourceUnavailableError || undefined,
-				rateLimited:
-					error instanceof CardSourceRateLimitedError || undefined,
-				retryAfterMs:
-					error instanceof CardSourceRateLimitedError
-						? error.retryAfterMs
-						: undefined,
-				requestId: params.requestId
-			})
-			throw error
-		}
+		)
 	}
 }
 

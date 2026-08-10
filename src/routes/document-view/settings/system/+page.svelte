@@ -11,7 +11,6 @@
 		"koboldCppSettingsCtx"
 	)
 
-	let ollamaBaseUrl = $state("")
 	let koboldCppBaseUrl = $state("")
 	let status = $state("")
 	let error = $state("")
@@ -31,12 +30,6 @@
 
 	function toggleOllamaManager(enabled: boolean) {
 		socket.emit("systemSettings:updateOllamaManagerEnabled", { enabled })
-	}
-	function saveOllamaBaseUrl(event: SubmitEvent) {
-		event.preventDefault()
-		socket.emit("systemSettings:updateOllamaManagerBaseUrl", {
-			baseUrl: ollamaBaseUrl.trim()
-		})
 	}
 
 	function toggleKoboldCppManager(enabled: boolean) {
@@ -103,15 +96,7 @@
 	// a one-time read in onMount would often run first and capture empty
 	// strings permanently. Each field only ever auto-fills once, so it
 	// doesn't overwrite whatever the admin is actively typing afterward.
-	let ollamaBaseUrlInitialized = $state(false)
 	let koboldCppBaseUrlInitialized = $state(false)
-	$effect(() => {
-		if (!ollamaBaseUrlInitialized && ollamaSettingsCtx.settings) {
-			ollamaBaseUrl =
-				ollamaSettingsCtx.settings.ollamaManagerBaseUrl || ""
-			ollamaBaseUrlInitialized = true
-		}
-	})
 	$effect(() => {
 		if (!koboldCppBaseUrlInitialized && koboldCppSettingsCtx.settings) {
 			koboldCppBaseUrl =
@@ -122,10 +107,6 @@
 
 	function handleUpdateOllamaManagerEnabled() {
 		status = "Ollama Manager setting saved."
-		announce(status)
-	}
-	function handleUpdateOllamaManagerBaseUrl() {
-		status = "Ollama base URL saved."
 		announce(status)
 	}
 	function handleUpdateKoboldCppManagerEnabled() {
@@ -203,10 +184,6 @@
 			handleUpdateOllamaManagerEnabled
 		)
 		socket.on(
-			"systemSettings:updateOllamaManagerBaseUrl",
-			handleUpdateOllamaManagerBaseUrl
-		)
-		socket.on(
 			"systemSettings:updateKoboldCppManagerEnabled",
 			handleUpdateKoboldCppManagerEnabled
 		)
@@ -246,10 +223,6 @@
 			socket.off(
 				"systemSettings:updateOllamaManagerEnabled",
 				handleUpdateOllamaManagerEnabled
-			)
-			socket.off(
-				"systemSettings:updateOllamaManagerBaseUrl",
-				handleUpdateOllamaManagerBaseUrl
 			)
 			socket.off(
 				"systemSettings:updateKoboldCppManagerEnabled",
@@ -328,17 +301,10 @@
 		/>
 		<label for="a11y-sys-ollama-enabled">Enable Ollama Manager</label>
 	</div>
-	<form onsubmit={saveOllamaBaseUrl}>
-		<div class="a11y-field">
-			<label for="a11y-sys-ollama-url">Ollama Server URL</label>
-			<input
-				id="a11y-sys-ollama-url"
-				type="text"
-				bind:value={ollamaBaseUrl}
-			/>
-		</div>
-		<button type="submit" class="a11y-btn a11y-btn-small">Save URL</button>
-	</form>
+	<p class="a11y-hint">
+		Base URL is only configured from the Ollama Manager panel
+		(Connections), not here.
+	</p>
 
 	<h2>KoboldCPP Manager</h2>
 	<p class="a11y-hint">

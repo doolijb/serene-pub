@@ -539,28 +539,25 @@
 					Only cards with a lorebook
 				</Switch.Label>
 			</Switch>
-		</div>
-	{/if}
-
-	{#if capabilities?.unsafeBrowsingEnabled}
-		<div class="mb-6">
-			<Switch
-				name="include-nsfw"
-				checked={userSettingsCtx.settings?.charaVaultIncludeNsfw ??
-					false}
-				onCheckedChange={onIncludeNsfwChange}
-				class="flex items-center gap-2"
-			>
-				<Switch.Control
-					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+			{#if capabilities?.unsafeBrowsingEnabled}
+				<Switch
+					name="include-nsfw"
+					checked={userSettingsCtx.settings?.charaVaultIncludeNsfw ??
+						false}
+					onCheckedChange={onIncludeNsfwChange}
+					class="flex items-center gap-2"
 				>
-					<Switch.Thumb />
-				</Switch.Control>
-				<Switch.HiddenInput />
-				<Switch.Label class="text-sm font-semibold">
-					Include NSFW results
-				</Switch.Label>
-			</Switch>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+					>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+					<Switch.Label class="text-sm font-semibold">
+						Include NSFW results
+					</Switch.Label>
+				</Switch>
+			{/if}
 		</div>
 	{/if}
 

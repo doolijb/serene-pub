@@ -156,11 +156,19 @@ export interface ParsedCharacterCard {
  * Extracts card instance, avatar, and lorebook if present
  *
  * @param buffer - Buffer containing the character card file (PNG or JSON)
+ * @param opts.includeAvatar - Default true. Set false to skip decoding the
+ *   avatar into a Buffer — most real-world cards fall back to a whole-file
+ *   re-encoded string for card.avatar (no explicit avatar field of their
+ *   own), so this decodes what's often the entire file's base64
+ *   representation. Worth skipping for callers (eg. CharaVault's
+ *   content-safety check and description/lorebook-presence lookup) that
+ *   never read avatarBuffer at all.
  * @returns ParsedCharacterCard with card instance, avatarBuffer, and lorebook (if present)
  * @throws Error if parsing fails
  */
 export async function parseCharacterCard(
-	buffer: Buffer
+	buffer: Buffer,
+	opts?: { includeAvatar?: boolean }
 ): Promise<ParsedCharacterCard> {
 	// CharacterCard.from_file() only understands image formats (PNG/JPEG/WebP)
 	// metadata — it throws "Unsupported image format" on a plain JSON buffer.
@@ -177,7 +185,7 @@ export async function parseCharacterCard(
 
 	// Extract avatar if present
 	let avatarBuffer: Buffer | undefined
-	if (card.avatar) {
+	if ((opts?.includeAvatar ?? true) && card.avatar) {
 		// Avatar is base64 data URL - extract the buffer
 		const base64Data = card.avatar.replace(/^data:image\/\w+;base64,/, "")
 		avatarBuffer = Buffer.from(base64Data, "base64")

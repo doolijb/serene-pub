@@ -26,6 +26,15 @@ const LOGIN_FAILURE_COOLDOWN_MS = 5 * 60_000
 // caller across the whole instance would be stuck awaiting the same dead
 // promise. Shared with charaVaultSource.ts's own fetch for the same reason.
 export const CHARAVAULT_FETCH_TIMEOUT_MS = 20_000
+// Card *file* fetches (fetchCharaVaultCardResponse in charaVaultSource.ts —
+// the image proxy, card detail view, and import all go through it) read the
+// FULL response body within this same kind of window, not just headers —
+// small JSON responses (search, login) finish well under
+// CHARAVAULT_FETCH_TIMEOUT_MS, but a multi-MB card file can legitimately
+// take longer to fully transfer, especially under any per-connection
+// throttling on CharaVault's end. fetchCharaVaultCardResponse defaults to
+// this value rather than the shorter one.
+export const CHARAVAULT_IMAGE_FETCH_TIMEOUT_MS = 45_000
 
 interface CachedSession {
 	cookie: string

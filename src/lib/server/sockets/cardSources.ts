@@ -13,6 +13,10 @@ import {
 	getSessionCookie,
 	invalidateSession
 } from "$lib/server/cardSources/charaVault/session"
+import {
+	withSupersession,
+	clearInFlightRequestsForSocket
+} from "$lib/server/cardSources/inFlightRequests"
 
 async function isCharaVaultConfigured(): Promise<boolean> {
 	const settings = await db.query.systemSettings.findFirst({
@@ -205,28 +209,44 @@ export const cardSourcesCharaVaultStatus: Handler<
 
 export const cardSourcesCardDetail: Handler<
 	Sockets.CardSources.CardDetail.Params,
-	Sockets.CardSources.CardDetail.Response
+	// | undefined: a superseded request (see withSupersession below)
+	// resolves with no response at all rather than throwing — honestly
+	// widened here rather than suppressed with `as any`, since register()
+	// (sockets/index.ts) never actually reads a handler's resolved value.
+	Sockets.CardSources.CardDetail.Response | undefined
 > = {
 	event: "cardSources:cardDetail",
 	handler: async (socket: AuthenticatedSocket, params, emitToUser) => {
-		try {
-			const detail = await cachedCardDetail(params.source, params.ref, {
-				userId: socket.user!.id
-			})
-			const res: Sockets.CardSources.CardDetail.Response = {
-				...detail,
-				requestId: params.requestId
+		return withSupersession(
+			socket.id,
+			"cardSources:cardDetail",
+			async (signal) => {
+				try {
+					const detail = await cachedCardDetail(params.source, params.ref, {
+						userId: socket.user!.id,
+						signal
+					})
+					const res: Sockets.CardSources.CardDetail.Response = {
+						...detail,
+						requestId: params.requestId
+					}
+					emitToUser("cardSources:cardDetail", res)
+					return res
+				} catch (error: any) {
+					if (signal.aborted) {
+						// Superseded by a newer card-detail request from this same
+						// socket — routine, not worth logging.
+						return undefined
+					}
+					console.error("Card detail fetch error:", error)
+					emitToUser("cardSources:cardDetail:error", {
+						error: error.message || "Failed to fetch card detail",
+						requestId: params.requestId
+					})
+					throw error
+				}
 			}
-			emitToUser("cardSources:cardDetail", res)
-			return res
-		} catch (error: any) {
-			console.error("Card detail fetch error:", error)
-			emitToUser("cardSources:cardDetail:error", {
-				error: error.message || "Failed to fetch card detail",
-				requestId: params.requestId
-			})
-			throw error
-		}
+		)
 	}
 }
 
@@ -244,4 +264,12 @@ export function registerCardSourceHandlers(
 	register(socket, cardSourcesCharaVaultDisconnect, emitToUser)
 	register(socket, cardSourcesCharaVaultStatus, emitToUser)
 	register(socket, cardSourcesCardDetail, emitToUser)
+
+	// Frees this socket's rate-limiter queue slot (if any) immediately on
+	// disconnect rather than leaving an in-flight/queued CharaVault request
+	// to run to completion for a client that's already gone. Also covers
+	// characters:searchLibrary, tracked in the same shared registry even
+	// though that handler lives in characters.ts — one hook here is enough
+	// since clearInFlightRequestsForSocket() is idempotent per kind.
+	socket.on("disconnect", () => clearInFlightRequestsForSocket(socket.id))
 }

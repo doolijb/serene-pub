@@ -756,7 +756,7 @@ declare global {
 						timestamp: string
 						truncationReason: string | null
 						// Matches CompiledPrompt.meta.currentTurnCharacterId
-						// (promptBuilder/types.ts) — null in narrator/assistant
+						// (promptBuilder/types.ts) — null in narrator/summarizer
 						// mode, where there's no single "current turn" character.
 						currentTurnCharacterId: number | null
 						tokenCounts: {
@@ -926,31 +926,6 @@ declare global {
 					success?: boolean
 					chat?: SelectChat
 					error?: string
-				}
-			}
-			// Assistant chat specific handlers
-			namespace CreateAssistant {
-				interface Params {}
-				interface Response {
-					chat?: SelectChat
-					error?: string
-				}
-			}
-			namespace SendAssistantMessage {
-				interface Params {
-					chatId: number
-					content: string
-				}
-				interface Response {
-					userMessage?: SelectChatMessage
-					assistantMessage?: SelectChatMessage
-					error?: string
-				}
-			}
-			namespace TitleGenerated {
-				interface Call {
-					chatId: number
-					title: string
 				}
 			}
 			namespace SetLorebook {
@@ -2639,15 +2614,6 @@ declare global {
 					enabled: boolean
 				}
 			}
-			namespace UpdateOllamaManagerBaseUrl {
-				interface Params {
-					baseUrl: string
-				}
-				interface Response {
-					success: boolean
-					baseUrl: string
-				}
-			}
 			namespace UpdateKoboldCppManagerEnabled {
 				interface Params {
 					enabled: boolean
@@ -2822,8 +2788,23 @@ declare global {
 
 		// Scenes namespace
 		namespace Scenes {
+			/**
+			 * Scene cast, as every socket payload and the client still speak
+			 * it. Storage moved to the `scene_characters` join table, but the
+			 * wire shape deliberately did not — server-side
+			 * `utils/sceneCast.ts` projects rows to these arrays and back, so
+			 * the ~140 consumers of this shape were left alone.
+			 *
+			 * Values are lorebookBindings ids (NOT character ids — the write
+			 * path scoped them as character ids for a while, which silently
+			 * erased every unbound/NPC binding on save).
+			 */
+			interface SceneCast {
+				participantCharacters: number[]
+				mentionedCharacters: number[]
+			}
 			/** Scene with resolved chat name for sidebar display */
-			interface SceneWithMeta extends SelectScene {
+			interface SceneWithMeta extends SelectScene, SceneCast {
 				chatName: string | null
 			}
 			namespace List {
@@ -2831,7 +2812,7 @@ declare global {
 					chatId: number
 				}
 				/** Scene enriched with its history entry data for chat display */
-				interface SceneWithEntry extends SelectScene {
+				interface SceneWithEntry extends SelectScene, SceneCast {
 					historyEntry: {
 						id: number
 						year: number
@@ -2861,18 +2842,18 @@ declare global {
 			}
 			namespace Create {
 				interface Params {
-					scene: InsertScene
+					scene: InsertScene & Partial<SceneCast>
 				}
 				interface Response {
-					scene: SelectScene
+					scene: SelectScene & SceneCast
 				}
 			}
 			namespace Update {
 				interface Params {
-					scene: UpdateScene
+					scene: UpdateScene & Partial<SceneCast>
 				}
 				interface Response {
-					scene: SelectScene
+					scene: SelectScene & SceneCast
 				}
 			}
 			namespace Delete {
@@ -3326,9 +3307,54 @@ declare global {
 				/** DB history entry id where this relationship originates (direct entry, no scene) */
 				historyEntryId?: number
 			}
+			/**
+			 * A proposed change to an EXISTING binding (state and/or summary),
+			 * kept in its own channel rather than in `nodes`. `nodes` is
+			 * INSERT-only; putting an existing node there would create a
+			 * duplicate binding for a character that already has one, on every
+			 * apply. Carries the previous values so the review UI can render a
+			 * diff rather than an unexplained new value.
+			 */
+			interface NodeUpdateProposal {
+				/** Always "existing_<lorebookBindings.id>" — never an INSERT key. */
+				tempId: string
+				/** Display only; identity fields stay owned by entity sync. */
+				name: string
+				nodeState?: string
+				previousNodeState?: string
+				/** The model's justification for the state change. */
+				nodeStateReason?: string
+				/**
+				 * Fill-blanks-only: proposed solely for nodes that had no
+				 * summary, so `previousSummary` is always empty/null. A
+				 * non-empty stored summary is either a prior build's output or
+				 * a hand edit (summary is user-writable via
+				 * lorebooks:updateBinding) and is never overwritten.
+				 */
+				summary?: string
+				previousSummary?: string | null
+				sceneIndex?: number
+			}
+			/**
+			 * A scene whose cast the build had to derive (legacy name strings,
+			 * or nothing stored). Written back to the scene row at apply, so a
+			 * one-time extraction becomes a permanent fast path — and only
+			 * then, because a discarded proposal must leave the DB untouched.
+			 * TempIds rather than ids: a discovered node has no id until apply
+			 * inserts it.
+			 */
+			interface ResolvedSceneCast {
+				sceneId: number | null
+				historyEntryId: number | null
+				participantTempIds: string[]
+				mentionedTempIds: string[]
+			}
 			interface GraphProposal {
 				nodes: NodeProposal[]
 				relationships: RelationshipProposal[]
+				/** Optional so existing `{ nodes, relationships }` literals stay valid. */
+				updatedNodes?: NodeUpdateProposal[]
+				resolvedSceneCast?: ResolvedSceneCast[]
 			}
 
 			namespace List {
@@ -3340,6 +3366,26 @@ declare global {
 					relationships: NarrativeRelationship[]
 					/** Scenes with a summary not yet processed into the graph (ready to extend) */
 					ungraphedSceneCount: number
+					/**
+					 * Summarized scenes whose cast has never been resolved
+					 * (castResolvedAt IS NULL). Each costs roughly one
+					 * extraction call on the next build — used for up-front
+					 * cost disclosure, never to refuse a build.
+					 *
+					 * An over-estimate on purpose: scenes still holding legacy
+					 * name strings resolve without an LLM call. Making it exact
+					 * would mean scanning the cast columns' shapes again, which
+					 * is precisely what castResolvedAt exists to stop. Do not
+					 * "refine" it.
+					 */
+					unresolvedCastSceneCount: number
+					/**
+					 * Parent bindings with an empty name. They can never match
+					 * an extracted name, so a build proposes a fresh node
+					 * beside each — surfaced so the user can name or delete
+					 * them. See migration 0075's missing backfill.
+					 */
+					namelessBindingCount: number
 					/** Scenes without a summary not yet processed (need summarising first) */
 					ungraphedUnsummarizedCount: number
 					/** All scenes with a summary (used for replace-mode preflight) */
@@ -3391,20 +3437,43 @@ declare global {
 				interface ErrorResponse {
 					error: string
 					raw?: string
+					/**
+					 * Which lorebook this failure belongs to. emitToUser is
+					 * user-scoped, so without this a build failing in one tab
+					 * would un-stick a GraphBuildModal open on a *different*
+					 * lorebook in another tab. Listeners must filter on it.
+					 */
+					lorebookId?: number
 				}
 			}
 			namespace ApplyProposal {
 				interface Params {
 					lorebookId: number
 					proposal: GraphProposal
-					/** replace: delete existing graph first; extend: keep existing, resolve seed tempIds */
+					/** replace: delete existing graph first; extend: keep existing */
 					mode: "replace" | "extend"
-					/** Required when mode is "extend" — maps seed tempIds → real DB node ids */
-					seedTempIdMap?: Record<string, number>
+					/**
+					 * No seedTempIdMap. A build's `existing_<id>` tempIds carry
+					 * the row id in the string, so the map the client used to
+					 * send was a pure identity map — and the server validated
+					 * only its values, never its pairing, so a wrong-but-owned
+					 * mapping silently attached relationships to the wrong
+					 * character. The server parses and validates the tempIds
+					 * itself now; the client cannot influence the mapping.
+					 */
 				}
 				interface Response {
 					nodes: NarrativeNode[]
 					relationships: NarrativeRelationship[]
+				}
+				interface ErrorResponse {
+					error: string
+					/**
+					 * emitToUser is user-scoped, so a failure for one lorebook
+					 * would otherwise un-stick a modal open on another in a
+					 * second tab. Listeners must filter on it.
+					 */
+					lorebookId?: number
 				}
 			}
 			namespace UpdateNode {
@@ -3598,6 +3667,12 @@ declare global {
 					candidates: DuplicateCandidates.Candidate[]
 				}
 			}
+			/**
+			 * Scenes whose participantCharacters/mentionedCharacters still hold
+			 * pre-lorebookBindings-merge name strings instead of binding ids — see
+			 * graphBuilder.ts's header comment. Scoped identically to List's
+			 * totalSummarizedCount (lorebookId + non-null summary).
+			 */
 		}
 
 		namespace BindingCheck {
@@ -3807,7 +3882,10 @@ declare global {
 			}
 			namespace Update {
 				interface Response {
-					activities: (GraphBuildActivity | SceneSummarizeActivity)[]
+					activities: (
+						| GraphBuildActivity
+						| SceneSummarizeActivity
+						)[]
 				}
 			}
 			namespace Dismiss {
@@ -3818,92 +3896,6 @@ declare global {
 			namespace Cancel {
 				interface Request {
 					id: string
-				}
-			}
-		}
-
-		// Assistant namespace
-		namespace Assistant {
-			// Draft progress event - emitted during character draft generation
-			namespace DraftProgress {
-				interface Params {}
-				interface Response {
-					chatId: number
-					timestamp: number
-					status:
-						| "started"
-						| "generating_field"
-						| "field_complete"
-						| "field_error"
-						| "validating"
-						| "correcting"
-						| "complete"
-						| "validation_failed"
-					message?: string
-					field?: string
-					fieldStatus?:
-						| "generating"
-						| "validating"
-						| "complete"
-						| "error"
-					value?: any
-					error?: string
-					currentField?: number
-					totalFields?: number
-					attempt?: number
-					fields?: string[]
-					draft?: any
-					errors?: any[]
-					generatedFields?: string[]
-					correctedFields?: string[]
-				}
-			}
-
-			namespace Setup {
-				namespace Get {
-					interface Params {}
-					interface Response {
-						setup: {
-							summarizationStepComplete: boolean
-							ragStepComplete: boolean
-						} | null
-					}
-				}
-				namespace MarkComplete {
-					interface Params {
-						step: "summarization" | "rag"
-					}
-					interface Response {
-						setup: {
-							summarizationStepComplete: boolean
-							ragStepComplete: boolean
-						}
-					}
-				}
-			}
-
-			namespace TaskQueue {
-				interface QueuedTask {
-					id: string
-					taskType: string
-					connectionName: string
-					samplingName: string
-					status:
-						| "queued"
-						| "loading"
-						| "generating"
-						| "done"
-						| "error"
-						| "cancelled"
-					startedAt: string
-					chatId?: number
-					lorebookId?: number
-					label?: string
-				}
-				namespace Update {
-					interface Response {
-						tasks: QueuedTask[]
-					}
 				}
 			}
 		}

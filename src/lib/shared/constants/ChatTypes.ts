@@ -1,13 +1,11 @@
 export class ChatTypes {
 	static readonly ROLEPLAY = "roleplay"
-	static readonly ASSISTANT = "assistant"
 	static readonly SUMMARIZE = "summarize"
 
-	static readonly ALL = [ChatTypes.ROLEPLAY, ChatTypes.ASSISTANT] as const
+	static readonly ALL = [ChatTypes.ROLEPLAY] as const
 
 	static readonly LABELS: Record<string, string> = {
-		[ChatTypes.ROLEPLAY]: "Roleplay Chat",
-		[ChatTypes.ASSISTANT]: "Assistant Chat"
+		[ChatTypes.ROLEPLAY]: "Roleplay Chat"
 	}
 
 	static getLabel(chatType: string): string {

@@ -171,8 +171,7 @@ function resetTtlTimer() {
 	ttlTimer = setTimeout(
 		() => {
 			ttlTimer = null
-			unloadEmbeddingModel()
-			console.log(`[embedding] Model unloaded after ${ttlMinutes}m idle`)
+			unloadEmbeddingModel(`after ${ttlMinutes}m idle`)
 		},
 		ttlMinutes * 60 * 1000
 	)
@@ -316,8 +315,168 @@ export async function activateApiEmbedding(
 	}
 }
 
-/** Unload the current model/API config and free memory */
-export function unloadEmbeddingModel(): void {
+type ConfiguredEmbeddingTarget = {
+	modelId: string
+	mode: "local" | "api"
+	ttlMinutes: number
+	localModelName?: string
+	apiBaseUrl?: string
+	apiKey?: string | null
+	apiModel?: string
+}
+
+/**
+ * Reads systemSettings/vectorizationConfigs and reports what backend/model
+ * WOULD be loaded, without loading anything — the single source of truth
+ * for "what's configured," consumed by loadConfiguredEmbeddingModel() below
+ * (the "bring it up for real" side) and by getConfiguredModelId() (the
+ * "just tell me the identity, cheaply" side used by the vectorization
+ * queue's peek-before-load check). Two cheap DB reads, no pipeline/API call.
+ *
+ * Returns null if vectorization is disabled or no model is chosen yet
+ * (today's silent no-op case). Still throws for "API mode selected but
+ * apiBaseUrl/apiModel missing" — that's a real misconfiguration, not
+ * "nothing to do," and both callers below should hear about it (the queue's
+ * peek catches this specific throw and treats it as null instead, so a
+ * broken config doesn't spam every idle tick — see getConfiguredModelId()).
+ */
+export async function getConfiguredEmbeddingTarget(): Promise<ConfiguredEmbeddingTarget | null> {
+	const { db } = await import("$lib/server/db")
+	const { schema } = await import("$lib/server/db")
+	const { eq } = await import("drizzle-orm")
+
+	const settings = await db.query.systemSettings.findFirst({
+		where: eq(schema.systemSettings.id, 1),
+		columns: { vectorizationEnabled: true, embeddingModelName: true }
+	})
+	if (!settings?.vectorizationEnabled || !settings.embeddingModelName)
+		return null
+
+	const vecConfig = await db.query.vectorizationConfigs.findFirst({
+		where: eq(schema.vectorizationConfigs.id, 1),
+		columns: {
+			embeddingModelTtlMinutes: true,
+			mode: true,
+			apiBaseUrl: true,
+			apiKey: true,
+			apiKeyIv: true,
+			apiKeyAuthTag: true,
+			apiModel: true
+		}
+	})
+	const ttlMinutes = vecConfig?.embeddingModelTtlMinutes ?? 5
+
+	if (vecConfig?.mode === "api") {
+		if (!vecConfig.apiBaseUrl || !vecConfig.apiModel) {
+			throw new Error(
+				"API vectorization is enabled but not fully configured"
+			)
+		}
+		return {
+			modelId: buildApiModelId(vecConfig.apiBaseUrl, vecConfig.apiModel),
+			mode: "api",
+			ttlMinutes,
+			apiBaseUrl: vecConfig.apiBaseUrl,
+			apiKey: resolveVectorizationApiKey(vecConfig),
+			apiModel: vecConfig.apiModel
+		}
+	}
+	return {
+		modelId: settings.embeddingModelName,
+		mode: "local",
+		ttlMinutes,
+		localModelName: settings.embeddingModelName
+	}
+}
+
+/**
+ * Cheap projection of getConfiguredEmbeddingTarget() for the vectorization
+ * queue's peek-before-load check (see runQueue() in vectorizationQueue.ts)
+ * — just the identity string pickNextItem() needs to check for pending
+ * work, without paying any load cost. Unlike the loader below, an
+ * incomplete API config is reported as "nothing to load" (null) rather than
+ * thrown — a queue peek shouldn't surface a config error on every idle
+ * tick; that error still surfaces normally once real work exists and a real
+ * load is attempted (or via a manual trigger).
+ */
+export async function getConfiguredModelId(): Promise<string | null> {
+	try {
+		const target = await getConfiguredEmbeddingTarget()
+		return target?.modelId ?? null
+	} catch {
+		return null
+	}
+}
+
+/**
+ * Loads/activates whatever embedding backend is currently configured —
+ * mode-aware (local vs. API), and sets the TTL from the persisted config
+ * before loading so the idle timer starts correctly. The single source of
+ * truth for "bring the configured backend up from cold," used by the
+ * vectorization queue's on-demand load and by
+ * loadConfiguredEmbeddingModelOpportunistically() below — previously
+ * duplicated (once correctly, in loadSockets.server.ts's boot-time
+ * autoLoadEmbeddingModel(), and once mode-unaware, in
+ * vectorizationQueue.ts's runQueue()), which silently broke API-backend
+ * setups the moment the boot-time copy was the only one still running.
+ * No-ops if vectorization is disabled or unconfigured; throws on an actual
+ * load/activation failure (matching loadEmbeddingModel()/
+ * activateApiEmbedding()'s own contract, and getConfiguredEmbeddingTarget()'s).
+ */
+export async function loadConfiguredEmbeddingModel(): Promise<void> {
+	const target = await getConfiguredEmbeddingTarget()
+	if (!target) return
+
+	// Load TTL config before loading the model so the timer starts correctly.
+	setEmbeddingTtlMinutes(target.ttlMinutes)
+
+	if (target.mode === "api") {
+		await activateApiEmbedding({
+			baseUrl: target.apiBaseUrl!,
+			apiKey: target.apiKey,
+			model: target.apiModel!
+		})
+	} else {
+		await loadEmbeddingModel(target.localModelName!)
+	}
+}
+
+let lastOpportunisticLoadAttemptAt = 0
+
+/**
+ * Fire-and-forget load for a caller that wants the model warm for a FUTURE
+ * call, not this one (e.g. promptBuilder's RAG gate falling back to
+ * keyword mode for the current turn because the model isn't ready) — never
+ * throws, and is a no-op if a load is already in flight, already ready, or
+ * was already attempted within the last ttlMinutes.
+ *
+ * The cooldown matters because the TTL idle-unload timer starts at load
+ * time, not on first embed() (see resetTtlTimer(), called at the end of
+ * both loadEmbeddingModel() and activateApiEmbedding()). An opportunistic
+ * load is by definition never followed by an embed() call of its own — if
+ * it were, the caller wouldn't have needed an opportunistic load in the
+ * first place. So without this cooldown, a sustained slow-paced session
+ * (every gap longer than ttlMinutes) would load-then-idle-unload on every
+ * single cold turn for no benefit — RAG still never actually engages, just
+ * with added load/unload churn. This bounds it to at most one attempt per
+ * ttlMinutes-sized window. It still can't help a session whose gaps are
+ * *always* longer than the TTL (nothing short of raising the TTL or
+ * blocking on load would), but it stops making that case actively worse.
+ */
+export async function loadConfiguredEmbeddingModelOpportunistically(): Promise<void> {
+	if (isModelReady() || isModelLoading()) return
+	const now = Date.now()
+	if (now - lastOpportunisticLoadAttemptAt < ttlMinutes * 60 * 1000) return
+	lastOpportunisticLoadAttemptAt = now
+	await loadConfiguredEmbeddingModel()
+}
+
+/**
+ * Unload the current model/API config and free memory. `reason`, if given,
+ * is appended to the log line (e.g. the TTL timer's "after Nm idle") — one
+ * line per unload, not two, regardless of caller.
+ */
+export function unloadEmbeddingModel(reason?: string): void {
 	if (ttlTimer) {
 		clearTimeout(ttlTimer)
 		ttlTimer = null
@@ -327,7 +486,7 @@ export function unloadEmbeddingModel(): void {
 	apiConfig = null
 	activeBackend = null
 	loadError = null
-	console.log("[embedding] Model unloaded")
+	console.log(`[embedding] Model unloaded${reason ? ` ${reason}` : ""}`)
 }
 
 /** Returns the currently active model/API identifier, or null if none is active */

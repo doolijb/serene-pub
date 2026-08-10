@@ -7,9 +7,6 @@ import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { getUserConfigurations } from "./getUserConfigurations"
 import { broadcastToChatUsers } from "../sockets/utils/broadcastHelpers"
-import { ChatTypes } from "$lib/shared/constants/ChatTypes"
-import { generateChatTitle } from "./generateChatTitle"
-import { parseReasoningFormat } from "./parseReasoningFormat"
 import { buildGraphContext } from "./graphContextFormatter"
 import { llmQueue, isQueueCancellation } from "./llmQueue"
 import {
@@ -18,7 +15,10 @@ import {
 } from "./generationStatus"
 import { resolveTaskConfig } from "./resolveTaskConfig"
 import { resolveNarratorPromptConfig } from "./resolveNarratorPromptConfig"
-import { autoEnqueueChat } from "$lib/server/embedding/vectorizationQueue"
+import {
+	autoEnqueueChat,
+	ensureChatMessageEmbedded
+} from "$lib/server/embedding/vectorizationQueue"
 
 /**
  * Build updated metadata that keeps swipes.history and swipes.thinkingHistory
@@ -112,118 +112,7 @@ function extractThinkFromContent(content: string): {
 	return { content: cleaned, thinking }
 }
 
-/**
- * Handles reasoning format detection and processing for assistant mode
- * @returns true if waiting for user function selection, false if continuing with generation
- */
-async function handleAssistantReasoning({
-	content,
-	socket,
-	chatId,
-	generatingMessage,
-	emitToUser,
-	userId
-}: {
-	content: string
-	socket: any
-	chatId: number
-	generatingMessage: SelectChatMessage
-	emitToUser: (event: string, data: any) => void
-	userId: number
-}): Promise<boolean | null> {
-	const reasoningParsed = parseReasoningFormat(content)
-
-	if (!reasoningParsed) {
-		return null // No reasoning detected, continue with normal flow
-	}
-
-	if (reasoningParsed.functionCalls.length > 0) {
-		// Functions needed - emit to client and wait for selection
-		socket.emit("assistant:reasoningDetected", {
-			chatId,
-			messageId: generatingMessage.id,
-			reasoning: reasoningParsed.reasoning,
-			functionCalls: reasoningParsed.functionCalls
-		})
-
-		// Update message: store reasoning in metadata, keep content empty, mark as waiting
-		const currentMetadata =
-			typeof generatingMessage.metadata === "object" &&
-			generatingMessage.metadata !== null
-				? generatingMessage.metadata
-				: {}
-
-		await db
-			.update(schema.chatMessages)
-			.set({
-				content: "",
-				isGenerating: false,
-				generationStage: null,
-				queueItemId: null,
-				metadata: {
-					...currentMetadata,
-					reasoning: reasoningParsed.reasoning,
-					waitingForFunctionSelection: true
-				}
-			})
-			.where(eq(schema.chatMessages.id, generatingMessage.id))
-
-		const updatedMessage = await db.query.chatMessages.findFirst({
-			where: (cm, { eq }) => eq(cm.id, generatingMessage.id)
-		})
-
-		if (updatedMessage) {
-			await broadcastToChatUsers(socket.io, chatId, "chatMessage", {
-				chatMessage: updatedMessage
-			})
-		}
-
-		return true // Wait for user selection
-	} else {
-		// No functions needed - store reasoning and regenerate for final response
-		const currentMetadata =
-			typeof generatingMessage.metadata === "object" &&
-			generatingMessage.metadata !== null
-				? generatingMessage.metadata
-				: {}
-
-		await db
-			.update(schema.chatMessages)
-			.set({
-				content: "",
-				isGenerating: true, // Keep generating for second pass
-				metadata: {
-					...currentMetadata,
-					reasoning: reasoningParsed.reasoning
-				}
-			})
-			.where(eq(schema.chatMessages.id, generatingMessage.id))
-
-		// Re-fetch message and call generateResponse again
-		const updatedGeneratingMessage = await db.query.chatMessages.findFirst({
-			where: (cm, { eq }) => eq(cm.id, generatingMessage.id)
-		})
-
-		if (!updatedGeneratingMessage) {
-			console.error(
-				"[handleAssistantReasoning] Failed to fetch updated message"
-			)
-			return false
-		}
-
-		// Recursive call for conversational response
-		return await generateResponse({
-			socket,
-			emitToUser,
-			chatId,
-			userId,
-			generatingMessage: updatedGeneratingMessage
-		})
-	}
-}
-
 type GenerateExecuteResult =
-	| { kind: "reasoningHandled"; value: boolean }
 	| { kind: "silentFail" }
 	| { kind: "normal"; isAborted: boolean }
 
@@ -426,17 +315,14 @@ export async function generateResponse({
 	// connection.tokenCounter` fallback for exactly this, but passing a
 	// truthy value here unconditionally short-circuited it, so a user who
 	// picked a precise tokenizer to size context correctly never actually
-	// got it for a real generation (only for the prompt-preview/assistant
-	// paths, which already resolve this correctly — see chats.ts's
+	// got it for a real generation (only for the prompt-preview path, which
+	// already resolves this correctly — see chats.ts's
 	// `chats:promptTokenCount` handler for the same pattern).
 	const tokenCounter = new TokenCounters(
 		(connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
 	)
 	const tokenLimit = 4096
 	const contextThresholdPercent = 0.8
-
-	// Detect assistant mode
-	const isAssistantMode = chat?.chatType === ChatTypes.ASSISTANT
 
 	// Fetch contextDebuggingEnabled from system settings
 	const sysSettings = await db.query.systemSettings.findFirst({
@@ -446,10 +332,10 @@ export async function generateResponse({
 	const contextDebuggingEnabled =
 		sysSettings?.contextDebuggingEnabled ?? false
 
-	// Get fresh metadata from the generating message (important for reasoning
-	// detection) — isNarratorResponse rides along here rather than as a separate
-	// adapter constructor param; see the comment on isNarratorResponseMode in
-	// BaseConnectionAdapter.ts for why.
+	// Get fresh metadata from the generating message — isNarratorResponse
+	// rides along here rather than as a separate adapter constructor param;
+	// see the comment on isNarratorResponseMode in BaseConnectionAdapter.ts
+	// for why.
 	const generatingMessageMetadata = {
 		...((generatingMessage.metadata as any) || {}),
 		isNarratorResponse: isNarratorResponseMode
@@ -480,14 +366,12 @@ export async function generateResponse({
 		promptConfig: isNarratorResponseMode
 			? narratorPromptConfig!
 			: promptConfig,
-		currentCharacterId:
-			isAssistantMode || isNarratorResponseMode
-				? null
-				: generatingMessage.characterId!,
+		currentCharacterId: isNarratorResponseMode
+			? null
+			: generatingMessage.characterId!,
 		tokenCounter,
 		tokenLimit,
 		contextThresholdPercent,
-		isAssistantMode,
 		generatingMessageMetadata
 	})
 	// Thread context debugging flag into prompt builder
@@ -507,7 +391,7 @@ export async function generateResponse({
 	// once instructions actually exists, the same mechanism
 	// narratorInstructions already uses for the equivalent per-trigger-note
 	// case.
-	if (!isAssistantMode && !isNarratorResponseMode && chat?.lorebookId) {
+	if (!isNarratorResponseMode && chat?.lorebookId) {
 		try {
 			const graphCtx = await buildGraphContext({
 				chatId,
@@ -526,20 +410,17 @@ export async function generateResponse({
 		}
 	}
 
-	// For assistant mode, no character name prefix
 	const currentCharacter = chat?.chatCharacters?.find(
 		(cc) => cc.character?.id === adapter.currentCharacterId
 	)
 
-	const charName = isAssistantMode
-		? ""
-		: isNarratorResponseMode
-			? (generatingMessage.metadata as any)?.narratorName ||
-				narratorPromptConfig?.narratorName ||
-				"Narrator"
-			: currentCharacter?.character?.nickname ||
-				currentCharacter?.character?.name ||
-				""
+	const charName = isNarratorResponseMode
+		? (generatingMessage.metadata as any)?.narratorName ||
+			narratorPromptConfig?.narratorName ||
+			"Narrator"
+		: currentCharacter?.character?.nickname ||
+			currentCharacter?.character?.name ||
+			""
 
 	// If message already has content, we're continuing it
 	// Include the existing content in the startString so LLM continues from there
@@ -582,9 +463,6 @@ export async function generateResponse({
 					startString,
 					isContinuing,
 					preservedContent,
-					isAssistantMode,
-					emitToUser,
-					userId,
 					contextDebuggingEnabled,
 					queueItemId
 				}),
@@ -603,9 +481,6 @@ export async function generateResponse({
 	try {
 		const result = await done
 
-		if (result.kind === "reasoningHandled") {
-			return result.value
-		}
 		if (result.kind === "silentFail") {
 			return false
 		}
@@ -628,22 +503,6 @@ export async function generateResponse({
 				chatMessage: updatedMsg!
 			}
 		)
-
-		// ASYNC: Generate chat title if this is the first assistant message in an assistant chat
-		if (isAssistantMode && chat && !isAborted) {
-			// Don't await - run this asynchronously to not block the response
-			generateChatTitleIfNeeded(
-				chatId,
-				userId,
-				socket.io,
-				connection,
-				sampling,
-				contextConfig,
-				promptConfig
-			).catch((error) => {
-				console.error("Background title generation failed:", error)
-			})
-		}
 
 		return !isAborted // Whether there were no interruptions
 	} catch (err) {
@@ -677,9 +536,6 @@ async function runGenerateAndPersist({
 	startString,
 	isContinuing,
 	preservedContent,
-	isAssistantMode,
-	emitToUser,
-	userId,
 	contextDebuggingEnabled,
 	queueItemId
 }: {
@@ -691,9 +547,6 @@ async function runGenerateAndPersist({
 	startString: string
 	isContinuing: boolean
 	preservedContent: string
-	isAssistantMode: boolean
-	emitToUser: (event: string, data: any) => void
-	userId: number
 	contextDebuggingEnabled: boolean
 	// Fences every write this run makes: a user-initiated stop nulls
 	// queueItemId on the row immediately and unconditionally (see
@@ -892,23 +745,6 @@ async function runGenerateAndPersist({
 			}
 		}
 
-		// Check for reasoning format in assistant mode - only after streaming is complete
-		if (isAssistantMode) {
-			const reasoningResult = await handleAssistantReasoning({
-				content,
-				socket,
-				chatId,
-				generatingMessage,
-				emitToUser,
-				userId
-			})
-
-			if (reasoningResult !== null) {
-				return { kind: "reasoningHandled", value: reasoningResult }
-			}
-		}
-
-		// Normal completion - no reasoning detected
 		// Build final metadata with thinking + swipe history in sync
 		const finalThinking = thinking.trim() || undefined
 		let finalMetadata: any = buildThinkingMetadata(
@@ -983,6 +819,15 @@ async function runGenerateAndPersist({
 				}
 			}
 		)
+		try {
+			await ensureChatMessageEmbedded(generatingMessage.id)
+		} catch (err) {
+			// Swallowing here is load-bearing, not decorative: autoEnqueueChat()
+			// below must still run even if the inline embed failed or timed out —
+			// it's the fallback that eventually catches this message up via the
+			// background queue either way.
+			console.error("[vectorization] Inline embed of new message failed:", err)
+		}
 		autoEnqueueChat(chatId).catch(console.error)
 		return { kind: "normal", isAborted }
 	} else {
@@ -1001,22 +846,6 @@ async function runGenerateAndPersist({
 			if (extracted.thinking) {
 				nonStreamAdapterThinking = extracted.thinking
 				nonStreamContent = extracted.content
-			}
-		}
-
-		// Check for reasoning format in assistant mode (NON-STREAMING)
-		if (isAssistantMode) {
-			const reasoningResult = await handleAssistantReasoning({
-				content: nonStreamContent,
-				socket,
-				chatId,
-				generatingMessage,
-				emitToUser,
-				userId
-			})
-
-			if (reasoningResult !== null) {
-				return { kind: "reasoningHandled", value: reasoningResult }
 			}
 		}
 
@@ -1091,77 +920,16 @@ async function runGenerateAndPersist({
 				}
 			}
 		)
+		try {
+			await ensureChatMessageEmbedded(generatingMessage.id)
+		} catch (err) {
+			// Swallowing here is load-bearing, not decorative: autoEnqueueChat()
+			// below must still run even if the inline embed failed or timed out —
+			// it's the fallback that eventually catches this message up via the
+			// background queue either way.
+			console.error("[vectorization] Inline embed of new message failed:", err)
+		}
 		autoEnqueueChat(chatId).catch(console.error)
 		return { kind: "normal", isAborted }
-	}
-}
-
-/**
- * Generate a title for a new assistant chat after the first exchange
- * This runs asynchronously and doesn't block the main response
- */
-async function generateChatTitleIfNeeded(
-	chatId: number,
-	userId: number,
-	io: any,
-	connection: any,
-	sampling: any,
-	contextConfig: any,
-	promptConfig: any
-) {
-	try {
-		// Check if this is the first assistant message
-		const assistantMessages = await db.query.chatMessages.findMany({
-			where: (cm, { eq, and }) =>
-				and(eq(cm.chatId, chatId), eq(cm.role, "assistant"))
-		})
-
-		// Only generate title if this is the first assistant response
-		if (assistantMessages.length !== 1) {
-			return
-		}
-
-		// Get the first user message
-		const userMessage = await db.query.chatMessages.findFirst({
-			where: (cm, { eq, and }) =>
-				and(eq(cm.chatId, chatId), eq(cm.role, "user")),
-			orderBy: (cm, { asc }) => asc(cm.id)
-		})
-
-		if (!userMessage || !userMessage.content) {
-			return
-		}
-
-		const assistantMessage = assistantMessages[0]
-		if (!assistantMessage.content) {
-			return
-		}
-
-		// Generate the title
-		const title = await generateChatTitle({
-			userMessage: userMessage.content,
-			assistantMessage: assistantMessage.content,
-			connection,
-			sampling,
-			contextConfig,
-			promptConfig
-		})
-
-		// Update the chat with the new title
-		await db
-			.update(schema.chats)
-			.set({ name: title })
-			.where(eq(schema.chats.id, chatId))
-
-		// Broadcast the updated chat name to the user
-		io.to("user_" + userId).emit("chats:titleGenerated", {
-			chatId,
-			title
-		})
-
-		console.log(`Generated title for chat ${chatId}: "${title}"`)
-	} catch (error) {
-		console.error("Error in generateChatTitleIfNeeded:", error)
-		// Don't throw - this is a background task
 	}
 }

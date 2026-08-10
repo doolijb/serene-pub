@@ -323,6 +323,20 @@ export class RagInfillEngine extends BaseInfillEngine {
 					-RAG_CURRENT_WINDOW
 				)
 
+				// Chat's characterLore entries, keyed by id for O(1) lookup below
+				// — the visibility pre-filter runs on every RAG generation turn
+				// (the hottest path in the app), so a Map beats a per-candidate
+				// .find() once the lorebook has more than a handful of entries.
+				const chatLorebookCharLoreEntries = (this.chat as any).lorebook
+					?.characterLoreEntries as
+					| SelectCharacterLoreEntry[]
+					| undefined
+				const charLoreEntryById = chatLorebookCharLoreEntries
+					? new Map(
+							chatLorebookCharLoreEntries.map((e) => [e.id, e])
+						)
+					: undefined
+
 				// Fetched once and reused for every query embedding below
 				// (both runQuery(currentMessages) and runQuery(recentMessages)
 				// score against the exact same candidate pool — only the
@@ -341,7 +355,28 @@ export class RagInfillEngine extends BaseInfillEngine {
 						],
 						excludeRecentMessages: guaranteedMessages.length
 					}
-				)
+				).then((candidates) => {
+					// Drop characterLore candidates invisible to the current
+					// speaker BEFORE per-source budgeting runs in runQuery
+					// below, so an invisible entry never occupies one of the
+					// RAG_SOURCE_BUDGET.characterLore slots only to be
+					// silently dropped later at population time — mirrors
+					// KeywordInfillEngine's candidateCharLore visibility
+					// filter, which runs before scoring.
+					if (!charLoreEntryById?.size) return candidates
+					return candidates.filter((c) => {
+						if (c.source !== "characterLore") return true
+						const fullEntry = charLoreEntryById.get(c.id)
+						return (
+							!!fullEntry &&
+							isCharacterLoreEntryVisible(
+								fullEntry,
+								this.chat,
+								this.currentCharacterId
+							)
+						)
+					})
+				})
 
 				const seenIds = new Set<string>()
 
@@ -1147,6 +1182,30 @@ export class RagInfillEngine extends BaseInfillEngine {
 			processMsg,
 			countTokens
 		)
+
+		// ── 6b. Final safety net against the true tokenLimit ──────────────────
+		// loreCeiling above is a derived soft ceiling that can collapse to
+		// baseTokens when guaranteed + RAG-promoted messages alone already
+		// exceed it (e.g. no lore matched at all) — in that case the
+		// enforceTokenBudget call above is a no-op (its own opening check sees
+		// total <= loreCeiling before ever trying Phase B) and fillFromPool
+		// bails immediately too. Re-validate against the real tokenLimit here
+		// and, if still over, fall back to Phase B message-trimming — mirrors
+		// KeywordInfillEngine's Phase 4 safety net. The four arrays passed may
+		// already be empty (drained by the loreCeiling pass above);
+		// enforceTokenBudget handles empty arrays and falls straight through
+		// to Phase B. Pinned arrays are deliberately excluded here too,
+		// matching the pass above and Keyword's reserved-entry invariant.
+		totalTokens = await countTokens()
+		if (totalTokens > tokenLimit) {
+			totalTokens = await this.enforceTokenBudget(
+				[graphSlot, ragHistoryArr, ragWorldLoreArr, ragCharLoreArr],
+				chatMessages,
+				tokenLimit,
+				countTokens
+			)
+			this.warnIfStillOverBudget(totalTokens, tokenLimit)
+		}
 
 		// ── 7. Re-sort chatMessages chronologically ───────────────────────────
 		// RAG prioritization and fill-in may have pushed messages in a non-chronological

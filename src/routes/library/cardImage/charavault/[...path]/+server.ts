@@ -21,8 +21,8 @@ import {
 	CardSourceUnavailableError
 } from "$lib/server/cardSources/types"
 import {
-	getCachedCardBytes,
-	setCachedCardBytes
+	getOrFetchCardBytes,
+	IMAGE_TTL_MS
 } from "$lib/server/cardSources/diskCache"
 
 export const GET: RequestHandler = async (event) => {
@@ -41,60 +41,104 @@ export const GET: RequestHandler = async (event) => {
 	if (!folder || !file) return new Response("Not found", { status: 404 })
 
 	const cacheKey = `charavault:${folder}/${file}`
+	// Round-5 (post-implementation live testing) diagnostic — see the plan.
+	// Not the fetcher's own start (getOrFetchCardBytes may dedupe into an
+	// already-in-flight fetch), just a fixed reference point both this
+	// handler's catch and the fetcher below can measure elapsed time
+	// against. Includes any rate-limiter queue wait (acquire() is deeper in
+	// the call chain, inside fetchCharaVaultCardResponse) — stated honestly
+	// in the log output rather than presented as clean.
+	const fetcherStartedAt = Date.now()
 
-	// On a cache hit, this is a local disk read — no network call, no
-	// rate-limit budget spent. Card thumbnails are viewed repeatedly (every
-	// time the library page or a chat's character list re-renders one), so
-	// this is the single biggest win for staying under CharaVault's limits.
-	const cached = await getCachedCardBytes(cacheKey)
-	if (cached) {
-		return new Response(new Uint8Array(cached), {
+	try {
+		// getOrFetchCardBytes handles the cache-hit fast path, the cache-miss
+		// fetch, the disk write, AND deduping concurrent requests for the same
+		// not-yet-cached key (the same card shown twice, a fast reload) into
+		// one shared upstream fetch — already-tested machinery from
+		// diskCache.ts (also used by the GitHub YAML and CharaVault
+		// card-detail/import paths), reused as-is rather than hand-rolled per
+		// route. This replaces an earlier tee()-based streaming approach that
+		// tried to dedupe concurrent callers by re-tee()ing an in-flight
+		// response — not actually possible, since a ReadableStream tee'd once
+		// is locked to its two original branches. IMAGE_TTL_MS (not the
+		// shorter default) reflects that a CharaVault image, once published
+		// under a given ref, doesn't change in place.
+		const bytes = await getOrFetchCardBytes(
+			cacheKey,
+			async (signal) => {
+				const upstream = await fetchCharaVaultCardResponse(
+					{ folder, file },
+					"background",
+					signal
+				)
+				const headersElapsedMs = Date.now() - fetcherStartedAt
+				try {
+					return Buffer.from(await upstream.arrayBuffer())
+				} catch (e) {
+					// Round-5 fix: a failure reading the body (eg. the same
+					// upstream timeout signal firing mid-transfer instead of
+					// while waiting for headers) used to propagate as a raw,
+					// unclassified error — matching none of this route's
+					// instanceof branches below and falling through to a
+					// misleading 404, which RetryableImage.svelte deliberately
+					// never retries (permanent-failure statuses only). Any
+					// body-read failure now takes the same retryable
+					// 502-with-no-store path a headers-phase failure already
+					// does. Shape-agnostic on purpose — a mid-body abort isn't
+					// guaranteed to surface as a TimeoutError DOMException
+					// specifically (some Node/undici versions produce a
+					// TypeError with the real reason in .cause instead), so
+					// this doesn't pattern-match the error, it just reclassifies
+					// whatever it is.
+					const bodyPhaseMs =
+						Date.now() - fetcherStartedAt - headersElapsedMs
+					console.warn(
+						`[image-proxy] ${cacheKey}: body read failed — ${(e as Error)?.constructor?.name ?? typeof e}` +
+							`${(e as any)?.cause?.name ? ` (cause: ${(e as any).cause.name})` : ""}, ` +
+							`headers ${headersElapsedMs}ms + body ${bodyPhaseMs}ms = ${headersElapsedMs + bodyPhaseMs}ms ` +
+							`(compare to CHARAVAULT_IMAGE_FETCH_TIMEOUT_MS=45000 + any queue wait — the deadline covers headers+body combined, not body alone)`
+					)
+					throw new CardSourceUnavailableError(
+						"Card image transfer failed or timed out",
+						{ cause: e }
+					)
+				}
+			},
+			event.request.signal,
+			IMAGE_TTL_MS
+		)
+
+		return new Response(new Uint8Array(bytes), {
 			headers: {
 				"Content-Type": "image/png",
 				"Cache-Control": "public, max-age=86400"
 			}
 		})
-	}
-
-	try {
-		// Cache miss: stream the upstream response body straight through
-		// (getCardBytes()'s Buffer conversion is for the import path, which
-		// genuinely needs the complete file up front) while also teeing the
-		// bytes to disk in the background so the next request for this same
-		// card is a cache hit instead of another upstream round trip.
-		// "background" priority: thumbnails are the bulk/opportunistic caller
-		// of the shared CharaVault rate limiter — they must never make an
-		// interactive search or Load More click wait behind them (see
-		// rateLimiter.ts). A slot may time out under sustained interactive
-		// traffic; that's handled below rather than left to hang.
-		const upstream = await fetchCharaVaultCardResponse(
-			{ folder, file },
-			"background"
-		)
-		const [toClient, toCache] = upstream.body!.tee()
-
-		// Deliberately not awaited — the whole point of tee() is to let the
-		// client response return immediately while this runs concurrently.
-		// Awaiting it here (even just to build the Buffer argument) would
-		// block the `return` below until the entire upstream body finished
-		// downloading, defeating the streaming intent entirely.
-		new Response(toCache)
-			.arrayBuffer()
-			.then((buf) => setCachedCardBytes(cacheKey, Buffer.from(buf)))
-			.catch(() => {})
-
-		return new Response(toClient, {
-			headers: {
-				"Content-Type":
-					upstream.headers.get("content-type") ?? "image/png",
-				"Cache-Control": "public, max-age=86400"
-			}
-		})
 	} catch (e) {
+		if (event.request.signal.aborted) {
+			// Client disconnected (navigated away, tab closed) while this was
+			// in flight — the signal aborting rejects getOrFetchCardBytes's
+			// per-caller promise with the signal's own reason, matching none
+			// of the branches below. Nothing to send back, and deliberately
+			// kept out of those branches so logs/tests aren't polluted with a
+			// misleading 404 for "nobody's listening anymore."
+			return new Response(null, { status: 499 })
+		}
+		// Round-5 diagnostic (temporary — remove once the dominant failure
+		// mode is confirmed via real traffic; see the plan's Fix 3). message
+		// distinguishes a headers-phase timeout ("Failed to reach
+		// CharaVault: ...") from a genuine non-OK status ("Failed to fetch
+		// CharaVault card: <status>") for errors that never reach the
+		// body-read wrap above at all.
+		console.warn(
+			`[image-proxy] ${cacheKey}: ${(e as Error)?.constructor?.name ?? typeof e}` +
+				`${(e as any)?.cause?.name ? ` (cause: ${(e as any).cause.name})` : ""} — ` +
+				`${(e as Error)?.message ?? ""} — ${Date.now() - fetcherStartedAt}ms total (includes any rate-limiter queue wait)`
+		)
 		if (e instanceof CardSourceRateLimitedError) {
 			return new Response("Rate limited", {
 				status: 429,
-				headers: { "Retry-After": "5" }
+				headers: { "Retry-After": "5", "Cache-Control": "no-store" }
 			})
 		}
 		if (e instanceof RateLimitTimeoutError) {
@@ -104,15 +148,24 @@ export const GET: RequestHandler = async (event) => {
 			// tolerates a missing/failed thumbnail with a fallback icon.
 			return new Response("Rate limited", {
 				status: 429,
-				headers: { "Retry-After": "5" }
+				headers: { "Retry-After": "5", "Cache-Control": "no-store" }
 			})
 		}
 		if (e instanceof CardSourceInvalidRefError) {
-			return new Response("Bad request", { status: 400 })
+			return new Response("Bad request", {
+				status: 400,
+				headers: { "Cache-Control": "no-store" }
+			})
 		}
 		if (e instanceof CardSourceUnavailableError) {
-			return new Response("Unavailable", { status: 502 })
+			return new Response("Unavailable", {
+				status: 502,
+				headers: { "Cache-Control": "no-store" }
+			})
 		}
-		return new Response("Not found", { status: 404 })
+		return new Response("Not found", {
+			status: 404,
+			headers: { "Cache-Control": "no-store" }
+		})
 	}
 }

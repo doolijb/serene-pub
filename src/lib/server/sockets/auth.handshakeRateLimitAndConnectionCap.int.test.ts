@@ -11,7 +11,7 @@
  * (MAX_CONCURRENT_SOCKETS_PER_USER = 50) checked right before joining the
  * user's room.
  */
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -146,6 +146,60 @@ describe("authMiddleware — handshake rate limiting (Round-12 audit fix, PGlite
 		const stillOkErr = await callMiddleware(stillOk)
 		expect(stillOkErr).toBeUndefined()
 	})
+})
+
+describe("authMiddleware — handshake rate limiting honors ADDRESS_HEADER behind a trusted proxy (Round-14 audit fix)", () => {
+	afterEach(() => {
+		delete process.env.ADDRESS_HEADER
+	})
+
+	test("two different real clients behind the same proxy peer get independent rate-limit buckets once ADDRESS_HEADER is set", async () => {
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		const proxyPeer = "127.0.0.1"
+
+		// Client A (real address 203.0.113.40, reaching us via the local
+		// proxy) burns through its own bucket.
+		for (let i = 0; i < 5; i++) {
+			const socket = makeFakeSocket({ address: proxyPeer })
+			socket.handshake.headers["x-forwarded-for"] = "203.0.113.40"
+			const err = await callMiddleware(socket)
+			expect(err?.message).toBe("Origin not allowed")
+		}
+		const clientASixth = makeFakeSocket({ address: proxyPeer })
+		clientASixth.handshake.headers["x-forwarded-for"] = "203.0.113.40"
+		const errA = await callMiddleware(clientASixth)
+		expect(errA?.message).toBe("Too many connection attempts")
+
+		// Client B — same proxy peer address, different real client behind
+		// it — must not be caught by client A's now-exhausted bucket. Before
+		// this fix, both would have keyed on the shared proxy peer address
+		// and collapsed into one bucket.
+		const clientB = makeFakeSocket({
+			address: proxyPeer,
+			origin: "http://myserver.local",
+			host: "myserver.local"
+		})
+		clientB.handshake.headers["x-forwarded-for"] = "203.0.113.41"
+		const errB = await callMiddleware(clientB)
+		expect(errB).toBeUndefined()
+		expect(clientB.isDisconnected).toBe(false)
+	}, 30_000)
+
+	test("without ADDRESS_HEADER set, the raw proxy peer address is used as before (no behavior change)", async () => {
+		const proxyPeer = "203.0.113.50" // non-local, so the header would be ignored either way
+		for (let i = 0; i < 5; i++) {
+			const socket = makeFakeSocket({ address: proxyPeer })
+			socket.handshake.headers["x-forwarded-for"] = "198.51.100.1"
+			const err = await callMiddleware(socket)
+			expect(err?.message).toBe("Origin not allowed")
+		}
+		// A "different" forwarded-for value doesn't help — ADDRESS_HEADER is
+		// unset, so the raw peer address is still what's keyed on.
+		const socket = makeFakeSocket({ address: proxyPeer })
+		socket.handshake.headers["x-forwarded-for"] = "198.51.100.2"
+		const err = await callMiddleware(socket)
+		expect(err?.message).toBe("Too many connection attempts")
+	}, 30_000)
 })
 
 describe("authMiddleware — per-user concurrent connection cap (Round-12 audit fix, PGlite integration)", () => {

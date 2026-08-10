@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { getContext, onDestroy } from "svelte"
+	import { getContext, onDestroy, onMount } from "svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
 
@@ -15,6 +15,8 @@
 		ungraphedHistoryEntryCount?: number
 		existingUnboundNodeCount?: number
 		existingRelationshipCount?: number
+		/** Scenes needing character extraction — cost disclosure, not a gate. */
+		unresolvedCastSceneCount?: number
 		onApplied?: () => void
 	}
 
@@ -28,6 +30,7 @@
 		ungraphedHistoryEntryCount,
 		existingUnboundNodeCount = 0,
 		existingRelationshipCount = 0,
+		unresolvedCastSceneCount = 0,
 		onApplied
 	}: Props = $props()
 
@@ -66,9 +69,13 @@
 	type EditableRel = Sockets.NarrativeGraph.RelationshipProposal & {
 		_deleted?: boolean
 	}
+	type EditableNodeUpdate = Sockets.NarrativeGraph.NodeUpdateProposal & {
+		_deleted?: boolean
+	}
 
 	let proposalNodes = $state<EditableNode[]>([])
 	let proposalRels = $state<EditableRel[]>([])
+	let proposalNodeUpdates = $state<EditableNodeUpdate[]>([])
 	let sceneLabels = $state<string[]>([])
 	let seedTempIdMap = $state<Record<string, number>>({})
 	let seedNodeNames = $state<Record<string, string>>({})
@@ -81,6 +88,9 @@
 
 	let activeNodes = $derived(proposalNodes.filter((n) => !n._deleted))
 	let activeRels = $derived(proposalRels.filter((r) => !r._deleted))
+	let activeNodeUpdates = $derived(
+		proposalNodeUpdates.filter((u) => !u._deleted)
+	)
 
 	let build = $derived(
 		graphBuildsCtx?.activeBuild?.lorebookId === lorebookId
@@ -136,6 +146,9 @@
 				proposalRels = (b.proposal?.relationships ?? []).map((r) => ({
 					...r
 				}))
+				proposalNodeUpdates = (b.proposal?.updatedNodes ?? []).map(
+					(u) => ({ ...u })
+				)
 				sceneLabels = b.sceneLabels ?? []
 				seedTempIdMap = b.seedTempIdMap ?? {}
 				seedNodeNames = b.seedNodeNames ?? {}
@@ -151,6 +164,7 @@
 			showRaw = false
 			proposalNodes = []
 			proposalRels = []
+			proposalNodeUpdates = []
 			sceneLabels = []
 			seedTempIdMap = {}
 			seedNodeNames = {}
@@ -169,6 +183,9 @@
 			proposalRels = (build.proposal?.relationships ?? []).map((r) => ({
 				...r
 			}))
+			proposalNodeUpdates = (build.proposal?.updatedNodes ?? []).map(
+				(u) => ({ ...u })
+			)
 			sceneLabels = build.sceneLabels ?? []
 			seedTempIdMap = build.seedTempIdMap ?? {}
 			seedNodeNames = build.seedNodeNames ?? {}
@@ -190,6 +207,32 @@
 		} satisfies Sockets.NarrativeGraph.Build.Params)
 	}
 
+	// `step = "building"` above is optimistic — it flips before the server has
+	// accepted anything, and startBuild() fabricates a client-side activeBuild
+	// to match. If the build is refused before its activity exists (the
+	// pre-activity window in narrativeGraphBuildHandler), no activity:update
+	// will ever arrive to move us off "building", so without this listener the
+	// modal spins forever. Failures *after* the activity exists arrive as a
+	// status: "error" update and are handled by the $effect above instead.
+	function handleBuildError(msg: Sockets.NarrativeGraph.Build.ErrorResponse) {
+		// emitToUser is user-scoped: a build failing for another lorebook in a
+		// second tab must not un-stick this modal.
+		if (msg.lorebookId !== undefined && msg.lorebookId !== lorebookId) return
+		if (step !== "building") return
+		graphBuildsCtx?.clearBuild()
+		step = "preflight"
+		errorMessage = ""
+		errorRaw = undefined
+		showRaw = false
+		// No toast here on purpose: "narrativeGraph:build:error" is absent from
+		// Layout's HANDLED_ERROR_EVENTS, so its catch-all already surfaces the
+		// server's real message. Toasting again would double it.
+	}
+
+	onMount(() => {
+		socket.on("narrativeGraph:build:error", handleBuildError)
+	})
+
 	// Shared by the error step's "Start Over" and the review step's
 	// "Rebuild" — both mean the same thing: discard whatever build is
 	// parked (error or stale/unapplied review) and return to a clean
@@ -205,34 +248,57 @@
 	function apply() {
 		isApplying = true
 
+		// No seedTempIdMap: the server derives `existing_<id>` → id itself now.
+		// Sending it was both redundant (it was a pure identity map) and
+		// dangerous — the server validated only its values, so a wrong pairing
+		// silently attached relationships to the wrong character.
 		const filteredProposal: Sockets.NarrativeGraph.GraphProposal = {
 			nodes: activeNodes.map(({ _deleted, ...n }) => n),
-			relationships: activeRels.map(({ _deleted, ...r }) => r)
+			relationships: activeRels.map(({ _deleted, ...r }) => r),
+			updatedNodes: activeNodeUpdates.map(({ _deleted, ...u }) => u)
 		}
 
 		socket.emit("narrativeGraph:applyProposal", {
 			lorebookId,
 			proposal: filteredProposal,
-			mode,
-			seedTempIdMap: mode === "extend" ? seedTempIdMap : undefined
+			mode
 		} satisfies Sockets.NarrativeGraph.ApplyProposal.Params)
 
-		const handleApplied = () => {
+		const cleanup = () => {
 			socket.off("narrativeGraph:applyProposal", handleApplied)
+			socket.off("narrativeGraph:applyProposal:error", handleApplyError)
+		}
+		const handleApplied = () => {
+			cleanup()
 			toaster.success({
 				title: "Graph applied",
-				description: `${activeNodes.length} nodes and ${activeRels.length} relationships saved.`
+				description: `${activeNodes.length} nodes, ${activeNodeUpdates.length} updates and ${activeRels.length} relationships saved.`
 			})
 			graphBuildsCtx?.clearBuild()
 			isApplying = false
 			onApplied?.()
 			onOpenChange({ open: false })
 		}
+		// Without this the Apply button spins forever on any rejection —
+		// isApplying was only ever cleared on success. Stay on the review step
+		// so the proposal isn't lost; Layout's catch-all toasts the message.
+		const handleApplyError = (
+			msg: Sockets.NarrativeGraph.ApplyProposal.ErrorResponse
+		) => {
+			// emitToUser is user-scoped — don't un-stick another tab's modal.
+			if (msg.lorebookId !== undefined && msg.lorebookId !== lorebookId)
+				return
+			cleanup()
+			isApplying = false
+		}
 		socket.on("narrativeGraph:applyProposal", handleApplied)
+		socket.on("narrativeGraph:applyProposal:error", handleApplyError)
 	}
 
 	onDestroy(() => {
 		socket.off("narrativeGraph:applyProposal")
+		socket.off("narrativeGraph:applyProposal:error")
+		socket.off("narrativeGraph:build:error", handleBuildError)
 	})
 
 	function nodeLabel(tempId: string): string {
@@ -313,6 +379,29 @@
 							: "entries"}
 					{/if}
 					{" "}ready to process
+				</span>
+			</div>
+		{/if}
+		{#if unresolvedCastSceneCount > 0}
+			<!--
+				Disclosure, not a warning: these scenes have no recorded cast,
+				so the build derives it from their summaries. That costs about
+				one LLM call each, once — afterwards the cast is saved and
+				rebuilds take the fast path. "up to" is deliberate: scenes
+				holding legacy name strings resolve without any call.
+			-->
+			<div
+				class="border-primary-500/30 bg-primary-500/10 flex items-center gap-3 rounded-lg border p-3 text-sm"
+			>
+				<Icons.Sparkles size={16} class="text-primary-500 shrink-0" />
+				<span>
+					<strong>{unresolvedCastSceneCount}</strong>
+					scene{unresolvedCastSceneCount === 1 ? "" : "s"} need character
+					extraction (up to {unresolvedCastSceneCount} extra LLM call{unresolvedCastSceneCount ===
+					1
+						? ""
+						: "s"}). This is saved afterwards, so later rebuilds skip
+					it.
 				</span>
 			</div>
 		{:else}
@@ -409,8 +498,79 @@
 
 {#snippet reviewBlock()}
 	<p class="text-surface-700-300 -mt-1 mb-4 text-sm">
-		{activeNodes.length} nodes · {activeRels.length} relationships
+		{activeNodes.length} new · {activeNodeUpdates.length} updated · {activeRels.length}
+		relationships
 	</p>
+
+	<!-- Node updates to existing characters -->
+	{#if proposalNodeUpdates.length > 0}
+		<section class="mb-4 space-y-2">
+			<h3
+				class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+			>
+				Updates to existing characters
+			</h3>
+			{#each proposalNodeUpdates as update, i}
+				<div
+					class="bg-surface-200-800 rounded-lg border transition-opacity {update._deleted
+						? 'opacity-40'
+						: 'border-surface-300-700'}"
+				>
+					<div class="flex items-center gap-2 px-3 py-2">
+						<span class="flex-1 truncate text-sm font-medium">
+							{update.name}
+						</span>
+						{#if update.nodeState}
+							<span
+								class="badge preset-tonal-warning shrink-0 text-xs"
+							>
+								{update.previousNodeState} → {update.nodeState}
+							</span>
+						{/if}
+						{#if update.summary !== undefined}
+							<span
+								class="badge preset-tonal-primary shrink-0 text-xs"
+							>
+								summary
+							</span>
+						{/if}
+						<button
+							type="button"
+							class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+							aria-label={update._deleted
+								? `Restore update for ${update.name}`
+								: `Discard update for ${update.name}`}
+							onclick={() =>
+								(proposalNodeUpdates[i]._deleted =
+									!update._deleted)}
+						>
+							{#if update._deleted}
+								<Icons.Undo2 size={14} />
+							{:else}
+								<Icons.Trash2 size={14} />
+							{/if}
+						</button>
+					</div>
+					{#if update.summary !== undefined || update.nodeStateReason}
+						<div
+							class="border-surface-300-700 space-y-1 border-t px-3 py-2"
+						>
+							{#if update.summary !== undefined}
+								<p class="text-sm">{update.summary}</p>
+							{/if}
+							{#if update.nodeStateReason}
+								<p
+									class="text-surface-700-300 text-xs italic"
+								>
+									Reason: {update.nodeStateReason}
+								</p>
+							{/if}
+						</div>
+					{/if}
+				</div>
+			{/each}
+		</section>
+	{/if}
 
 	<!-- Nodes -->
 	<section class="mb-4 space-y-2">
@@ -824,7 +984,9 @@
 	{progressLabel}
 	canStart={totalReadyCount > 0}
 	{startLabel}
-	canSave={activeNodes.length > 0}
+	canSave={activeNodes.length > 0 ||
+		activeNodeUpdates.length > 0 ||
+		activeRels.length > 0}
 	saveLabel="Apply Graph"
 	isSaving={isApplying}
 	{errorMessage}

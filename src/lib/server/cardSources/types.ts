@@ -10,6 +10,10 @@ export type { CardKind, CardSourceId, CardSourceSort }
 /** Context passed through to a CardSource for a given request. */
 export interface CardSourceContext {
 	userId: number
+	/** Set when this request should stop (and free any rate-limit queue slot
+	 * it's holding) if a newer request from the same socket supersedes it.
+	 * Optional — sources with nothing to cancel (eg. GitHub) can ignore it. */
+	signal?: AbortSignal
 }
 
 export interface CardSourceSearchParams {
@@ -68,8 +72,8 @@ export interface CardSource {
 }
 
 export class CardSourceUnavailableError extends Error {
-	constructor(message = "Card source is unreachable") {
-		super(message)
+	constructor(message = "Card source is unreachable", options?: ErrorOptions) {
+		super(message, options)
 		this.name = "CardSourceUnavailableError"
 	}
 }

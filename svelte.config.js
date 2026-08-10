@@ -51,11 +51,22 @@ const config = {
 					...socketConnectSrc,
 					...cspList("CSP_EXTRA_CONNECT_SRC")
 				],
-				// raw.githubusercontent.com serves character/persona portrait
-				// images for the community library (src/routes/library/*) —
-				// fetched directly by the browser, not proxied through this app.
-				// CharaVault's images are NOT listed here: charavault.net sends a
-				// Cross-Origin-Resource-Policy header that blocks direct
+				// "https:" (any host) is needed for inline chat images —
+				// `![alt](url)` in a message can point at any image host a user
+				// pastes (Imgur, Discord CDN, etc.), so a fixed allowlist isn't
+				// workable here the way it is for the other directives. Images
+				// can't execute script, so this doesn't open a code-execution
+				// surface; the real tradeoff is the same one already noted for
+				// inline chat images generally — loading a third-party image
+				// leaks the viewer's IP/referrer to that host. No generic
+				// image-proxying mechanism exists yet to avoid that (see the
+				// chat-image feature's own notes).
+				// raw.githubusercontent.com is kept explicit alongside "https:"
+				// only for documentation/history — it's redundant now, but
+				// records why community-library portraits (src/routes/library/*)
+				// were the first thing to need an img-src exception at all.
+				// CharaVault's images are NOT covered by this: charavault.net
+				// sends a Cross-Origin-Resource-Policy header that blocks direct
 				// cross-site <img> loads regardless of what CSP allows, so those
 				// go through /library/cardImage/charavault/[...path] (a
 				// same-origin server-side proxy) instead. All other CharaVault
@@ -65,6 +76,7 @@ const config = {
 					"self",
 					"data:",
 					"blob:",
+					"https:",
 					"https://raw.githubusercontent.com"
 				],
 				"style-src": [

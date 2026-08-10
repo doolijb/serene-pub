@@ -3,7 +3,9 @@ import { tokens } from "$lib/server/auth"
 import { authenticate } from "$lib/server/providers/users/authenticate"
 import {
 	isOriginAllowed,
-	isMissingOriginAllowed
+	isLocalThroughProxy,
+	getSocketClientAddress,
+	warnIfSocketAddressHeaderUnset
 } from "$lib/server/sockets/originAllowlist"
 import { loginRateLimit } from "$lib/server/services/loginRateLimit"
 import type { Socket } from "socket.io"
@@ -65,10 +67,20 @@ export async function authMiddleware(
 	// successful connections — including a legitimate burst of multi-tab/
 	// reconnect traffic — are unaffected; only a sustained run of actual
 	// failures from one address trips this.
-	const handshakeRateLimitKey = `socketHandshake:${socket.handshake.address}`
+	//
+	// Round-14 audit fix: previously keyed on socket.handshake.address
+	// directly, which behind a reverse proxy is always the proxy's own
+	// address — every real client shared one bucket. getSocketClientAddress()
+	// only honors a forwarded-for header when ADDRESS_HEADER is explicitly
+	// set and the direct peer is itself local; see originAllowlist.ts for
+	// why this deliberately doesn't delegate to isMissingOriginAllowed the
+	// way the gate below does.
+	warnIfSocketAddressHeaderUnset(socket.handshake.headers)
+	const clientAddress = getSocketClientAddress(socket)
+	const handshakeRateLimitKey = `socketHandshake:${clientAddress}`
 	if (loginRateLimit.isRateLimited(handshakeRateLimitKey)) {
 		console.log(
-			`Socket handshake rate limited for "${socket.handshake.address}" — rejecting`
+			`Socket handshake rate limited for "${clientAddress}" — rejecting`
 		)
 		socket.disconnect()
 		return next(new Error("Too many connection attempts"))
@@ -92,10 +104,13 @@ export async function authMiddleware(
 			// scoped to the local network by default: an internet-reachable
 			// instance with accounts disabled (both defaults) would otherwise
 			// auto-attach ANY such connection to the first admin user with no
-			// token at all. See originAllowlist.ts's isMissingOriginAllowed().
-			if (!isMissingOriginAllowed(socket.handshake.address)) {
+			// token at all. See originAllowlist.ts's isLocalThroughProxy() —
+			// depth-independent chain check (not just the raw peer address),
+			// so a reverse proxy in front of this server can't make every
+			// connection look local.
+			if (!isLocalThroughProxy(socket)) {
 				console.log(
-					`Socket connection with no Origin header from "${socket.handshake.address}" — rejecting (not a local-network address; set SOCKETS_ALLOWED_ORIGINS=* to allow non-browser clients from anywhere)`
+					`Socket connection with no Origin header from "${clientAddress}" — rejecting (not a local-network address; set SOCKETS_ALLOWED_ORIGINS=* to allow non-browser clients from anywhere)`
 				)
 				socket.disconnect()
 				return next(new Error("Origin not allowed"))

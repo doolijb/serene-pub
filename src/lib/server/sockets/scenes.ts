@@ -8,6 +8,12 @@ import {
 	generateSummary
 } from "$lib/server/utils/summarizer"
 import {
+	readSceneCast,
+	readSceneCasts,
+	castFor,
+	writeSceneCast
+} from "$lib/server/utils/sceneCast"
+import {
 	buildSceneCastList,
 	reconcileParticipantsAndMentioned,
 	reconcileSuggestedNames,
@@ -26,22 +32,31 @@ import { resolveOrCreateBinding } from "$lib/server/utils/characterBindingSync"
  * anything foreign — this validates at write time too, matching that same
  * "drop, don't error" tolerance, so a future consumer that trusts these
  * arrays directly without re-scoping doesn't reopen a cross-lorebook leak.
+ *
+ * These arrays hold **lorebookBindings ids**, not character ids. This scoped
+ * by `b.characterId` until now, which is pre-merge semantics the column
+ * outgrew — every producer feeding it emits binding ids
+ * (scenes:process/chats:summarize via resolveCharacterRefs' castEntries[].id
+ * and resolveOrCreateBinding; the graph build via its seed map). Filtering
+ * binding ids through a characterId lookup silently dropped any id that
+ * didn't coincidentally equal some bound character's id — and an unbound
+ * background/NPC binding, whose characterId is NULL, could never match at
+ * all, so every discovered character was erased on save. That is a live cast
+ * data-loss path, not a hypothetical: it re-emptied scenes on every
+ * re-process, including ones a graph build had just filled in.
  */
 async function filterCharacterIdsToLorebook(
 	lorebookId: number,
-	characterIds: number[]
+	bindingIds: number[]
 ): Promise<number[]> {
-	if (characterIds.length === 0) return []
+	if (bindingIds.length === 0) return []
 	const bindings = await db.query.lorebookBindings.findMany({
 		where: (b, { and, eq, inArray }) =>
-			and(
-				eq(b.lorebookId, lorebookId),
-				inArray(b.characterId, characterIds)
-			),
-		columns: { characterId: true }
+			and(eq(b.lorebookId, lorebookId), inArray(b.id, bindingIds)),
+		columns: { id: true }
 	})
-	const validIds = new Set(bindings.map((b) => b.characterId))
-	return characterIds.filter((id) => validIds.has(id))
+	const validIds = new Set(bindings.map((b) => b.id))
+	return bindingIds.filter((id) => validIds.has(id))
 }
 
 export const sceneListHandler: Handler<
@@ -129,7 +144,11 @@ export const sceneCreateHandler: Handler<
 	event: "scenes:create",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
-		const data: InsertScene = { ...params.scene }
+		// Cast rides alongside the row fields on the wire but is stored in
+		// scene_characters, so the type is the row type plus that pair.
+		const data: InsertScene & Partial<Sockets.Scenes.SceneCast> = {
+			...params.scene
+		}
 
 		// Verify lorebook ownership
 		const lorebook = await db.query.lorebooks.findFirst({
@@ -167,23 +186,44 @@ export const sceneCreateHandler: Handler<
 			)
 		}
 
-		if (data.participantCharacters?.length) {
-			data.participantCharacters = await filterCharacterIdsToLorebook(
-				data.lorebookId,
-				data.participantCharacters
-			)
-		}
-		if (data.mentionedCharacters?.length) {
-			data.mentionedCharacters = await filterCharacterIdsToLorebook(
-				data.lorebookId,
-				data.mentionedCharacters
-			)
+		// Cast lives in scene_characters now, so split it off the row payload.
+		const {
+			participantCharacters: rawParticipants,
+			mentionedCharacters: rawMentioned,
+			...sceneRow
+		} = data
+		const carriesCast =
+			rawParticipants !== undefined || rawMentioned !== undefined
+		const participantCharacters = await filterCharacterIdsToLorebook(
+			sceneRow.lorebookId,
+			rawParticipants ?? []
+		)
+		const mentionedCharacters = await filterCharacterIdsToLorebook(
+			sceneRow.lorebookId,
+			rawMentioned ?? []
+		)
+
+		// Mark the cast resolved ONLY when this insert actually carries cast —
+		// deliberately not unconditional. scenes:create can carry a summary
+		// without cast (SummarizeLoreModal emits both together, but nothing
+		// requires it), and marking such a row resolved would let a
+		// summarized-but-never-resolved scene claim it needs no extraction —
+		// silently re-enacting the bug that column exists to end.
+		if (sceneRow.castResolvedAt == null && carriesCast) {
+			sceneRow.castResolvedAt = new Date()
 		}
 
 		const [newScene] = await db
 			.insert(schema.scenes)
-			.values(data)
+			.values(sceneRow)
 			.returning()
+
+		if (carriesCast) {
+			await writeSceneCast(newScene.id, {
+				participantCharacters,
+				mentionedCharacters
+			})
+		}
 
 		// Refresh scene list for the chat
 		if (emitToUser && newScene.chatId) {
@@ -202,7 +242,13 @@ export const sceneCreateHandler: Handler<
 			emitToUser("scenes:scenedMessageIds", scenedRes)
 		}
 
-		const res = { scene: newScene }
+		const res = {
+			scene: {
+				...newScene,
+				participantCharacters,
+				mentionedCharacters
+			}
+		}
 		emitToUser("scenes:create", res)
 		return res
 	}
@@ -246,16 +292,19 @@ export const sceneUpdateHandler: Handler<
 			graphed
 		} = params.scene
 
-		if (participantCharacters?.length) {
+		// Cast is only rewritten when the payload actually carries it; a rename
+		// or summary edit leaves the existing scene_characters rows alone.
+		const carriesCast =
+			participantCharacters !== undefined ||
+			mentionedCharacters !== undefined
+		if (carriesCast) {
 			participantCharacters = await filterCharacterIdsToLorebook(
 				existing.lorebookId,
-				participantCharacters
+				participantCharacters ?? []
 			)
-		}
-		if (mentionedCharacters?.length) {
 			mentionedCharacters = await filterCharacterIdsToLorebook(
 				existing.lorebookId,
-				mentionedCharacters
+				mentionedCharacters ?? []
 			)
 		}
 
@@ -267,15 +316,20 @@ export const sceneUpdateHandler: Handler<
 				...(selectedMessageIds !== undefined
 					? { selectedMessageIds }
 					: {}),
-				...(participantCharacters !== undefined
-					? { participantCharacters }
-					: {}),
-				...(mentionedCharacters !== undefined
-					? { mentionedCharacters }
-					: {}),
+				// Only an update that actually carries cast marks it resolved.
+				// A rename or a summary edit must not — otherwise every scene
+				// touched for any reason would claim it needs no extraction.
+				...(carriesCast ? { castResolvedAt: new Date() } : {}),
 				...(graphed !== undefined ? { graphed } : {})
 			})
 			.where(eq(schema.scenes.id, params.scene.id))
+
+		if (carriesCast) {
+			await writeSceneCast(params.scene.id, {
+				participantCharacters,
+				mentionedCharacters
+			})
+		}
 
 		const [updated] = await db
 			.select()
@@ -291,7 +345,9 @@ export const sceneUpdateHandler: Handler<
 			)
 		}
 
-		const res = { scene: updated }
+		const res = {
+			scene: { ...updated, ...(await readSceneCast(params.scene.id)) }
+		}
 		emitToUser("scenes:update", res)
 		return res
 	}
@@ -406,8 +462,12 @@ export const sceneListByLorebookHandler: Handler<
 				: []
 		const chatMap = new Map(chats.map((c) => [c.id, c.name]))
 
+		// One indexed query for the whole page's cast, not one per scene.
+		const casts = await readSceneCasts(scenes.map((s) => s.id))
+
 		const sceneList: Sockets.Scenes.SceneWithMeta[] = scenes.map((s) => ({
 			...s,
+			...castFor(casts, s.id),
 			chatName: s.chatId ? (chatMap.get(s.chatId) ?? null) : null
 		}))
 
@@ -466,13 +526,17 @@ export const sceneCompileHandler: Handler<
 		const lorebook = (historyEntry as any).lorebook
 		const historyEntryDate = `Year ${historyEntry.year}${historyEntry.month ? `, Mo. ${historyEntry.month}` : ""}${historyEntry.day ? `, Day ${historyEntry.day}` : ""}`
 
-		const activityId = activityStore.startCompile({
-			userId,
-			historyEntryId: params.historyEntryId,
-			historyEntryDate,
-			lorebookId: (historyEntry as any).lorebookId,
-			lorebookLabel: lorebook.name
-		})
+		const abortController = new AbortController()
+		const activityId = activityStore.startCompile(
+			{
+				userId,
+				historyEntryId: params.historyEntryId,
+				historyEntryDate,
+				lorebookId: (historyEntry as any).lorebookId,
+				lorebookLabel: lorebook.name
+			},
+			abortController
+		)
 
 		let result
 		try {
@@ -482,6 +546,7 @@ export const sceneCompileHandler: Handler<
 				sampling,
 				contextConfig,
 				promptConfig,
+				signal: abortController.signal,
 				onProgress: (data) => {
 					activityStore.updateCompile(activityId, {
 						phase: data.phase,
@@ -495,12 +560,30 @@ export const sceneCompileHandler: Handler<
 				}
 			})
 		} catch (err) {
+			// Deliberately narrower than narrativeGraph.ts's equivalent guard
+			// — do NOT add `|| isQueueCancellation(err) || err.name ===
+			// "AbortError"`. activityStore.cancel() aborts our controller
+			// synchronously, so signal.aborted is already true for every
+			// exception that's actually our own cancel; the extra disjuncts
+			// only add a way to misfire on a cancellation from somewhere else
+			// and strand this activity at "running" forever (permanently,
+			// here — startCompile refuses to supersede a "running" entry).
+			if (abortController.signal.aborted) {
+				return null as any // already removed by activityStore.cancel() — nothing to update
+			}
 			activityStore.updateCompile(activityId, {
 				status: "error",
 				errorMessage:
 					err instanceof Error ? err.message : "Unknown error"
 			})
 			throw err
+		}
+
+		// Cooperating abort can make the call above resolve normally (with
+		// a truncated/partial result) rather than throw — see
+		// runQueuedLLMCall/runGeneration. Guard here too, not just in catch.
+		if (abortController.signal.aborted) {
+			return null as any
 		}
 
 		activityStore.updateCompile(activityId, {
@@ -666,14 +749,18 @@ export const sceneProcessHandler: Handler<
 			scene.chatId ?? null
 		)
 
-		const activityId = activityStore.startScene({
-			userId,
-			sceneId: params.sceneId,
-			sceneName: scene.name ?? undefined,
-			lorebookId: scene.lorebookId,
-			lorebookLabel: lorebook.name,
-			historyEntryId: scene.historyEntryId ?? undefined
-		})
+		const abortController = new AbortController()
+		const activityId = activityStore.startScene(
+			{
+				userId,
+				sceneId: params.sceneId,
+				sceneName: scene.name ?? undefined,
+				lorebookId: scene.lorebookId,
+				lorebookLabel: lorebook.name,
+				historyEntryId: scene.historyEntryId ?? undefined
+			},
+			abortController
+		)
 
 		let result
 		try {
@@ -694,6 +781,7 @@ export const sceneProcessHandler: Handler<
 				nameSampling: nameResolved.sampling,
 				characterExtractionConnection: characterExtractionResolved.connection,
 				characterExtractionSampling: characterExtractionResolved.sampling,
+				signal: abortController.signal,
 				onProgress: (data) => {
 					activityStore.updateScene(activityId, {
 						phase: data.phase,
@@ -713,12 +801,31 @@ export const sceneProcessHandler: Handler<
 				}
 			})
 		} catch (err) {
+			// Deliberately narrower than narrativeGraph.ts's equivalent guard
+			// — do NOT add `|| isQueueCancellation(err) || err.name ===
+			// "AbortError"`. activityStore.cancel() aborts our controller
+			// synchronously, so signal.aborted is already true for every
+			// exception that's actually our own cancel; the extra disjuncts
+			// only add a way to misfire on a cancellation from somewhere else
+			// and strand this activity at "running" forever.
+			if (abortController.signal.aborted) {
+				return null as any // already removed by activityStore.cancel() — nothing to update
+			}
 			activityStore.updateScene(activityId, {
 				status: "error",
 				errorMessage:
 					err instanceof Error ? err.message : "Unknown error"
 			})
 			throw err
+		}
+
+		// Cooperating abort can make the call above resolve normally (with a
+		// truncated/partial result) rather than throw — see
+		// runQueuedLLMCall/runGeneration. Bail out here, before any of the
+		// binding-creation/DB-write work below runs against a cancelled
+		// generation's partial result.
+		if (abortController.signal.aborted) {
+			return null as any
 		}
 
 		// Resolve the LLM's raw name output against the same knownCast built

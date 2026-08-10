@@ -259,6 +259,18 @@ class LLMQueue {
 		this.notify()
 	}
 
+	/** Removing a run from the queue always changes what clients should see
+	 * (the "ghost" entry class of bug: a terminal-status notify() fires,
+	 * then the run is deleted with no follow-up notify(), leaving clients
+	 * showing a stale entry until some unrelated later event happens to
+	 * re-notify) — routing every deletion through here makes
+	 * deletion-implies-notify structural instead of something each call
+	 * site has to remember. */
+	private removeRun(id: string) {
+		this.runsById.delete(id)
+		this.notify()
+	}
+
 	private pump(laneKey: string) {
 		const lane = this.getLane(laneKey)
 		if (lane.running) return
@@ -300,7 +312,7 @@ class LLMQueue {
 				this.settle(run, "error", () => run.reject(err))
 			}
 		} finally {
-			this.runsById.delete(run.id)
+			this.removeRun(run.id)
 		}
 	}
 
@@ -329,7 +341,7 @@ class LLMQueue {
 			this.settle(run, "cancelled", () =>
 				run.reject(new CancelledError())
 			)
-			this.runsById.delete(run.id)
+			this.removeRun(run.id)
 			return
 		}
 
@@ -351,7 +363,7 @@ class LLMQueue {
 				this.settle(run, "cancelled", () =>
 					run.reject(new ForceDetachedError())
 				)
-				this.runsById.delete(run.id)
+				this.removeRun(run.id)
 				if (lane.running === run) {
 					lane.running = null
 					this.pump(laneKey)

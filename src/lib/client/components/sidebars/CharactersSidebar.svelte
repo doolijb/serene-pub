@@ -81,17 +81,20 @@
 
 	$effect(() => {
 		if (panelsCtx.digest.characterId) {
-			// Check if we have unsaved changes
-			if (
-				characterId !== panelsCtx.digest.characterId &&
-				characterFormHasChanges
-			) {
-				onEditFormCancel?.()
-			} else {
-				// If no unsaved changes, just set the characterId
-				characterId = panelsCtx.digest.characterId
-			}
+			const targetId = panelsCtx.digest.characterId
 			delete panelsCtx.digest.characterId
+			if (characterId !== targetId && characterFormHasChanges) {
+				// Promise-based, unlike onEditFormCancel (CharacterForm's own
+				// discard flow) — lets the switch actually complete once
+				// discard is confirmed instead of silently landing back on
+				// the list, since panelsCtx.digest.characterId is already
+				// gone by the time an async confirm resolves.
+				handleOnClose().then((confirmed) => {
+					if (confirmed) characterId = targetId
+				})
+			} else {
+				characterId = targetId
+			}
 		}
 	})
 
@@ -176,6 +179,7 @@
 	function closeCharacterForm() {
 		isCreating = false
 		characterId = undefined
+		characterFormHasChanges = false
 		const returnId = returnToViewId
 		returnToViewId = undefined
 		if (returnId) viewingId = returnId

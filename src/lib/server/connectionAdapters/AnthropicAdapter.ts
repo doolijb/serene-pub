@@ -40,7 +40,6 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 		tokenCounter,
 		tokenLimit,
 		contextThresholdPercent,
-		isAssistantMode,
 		generatingMessageMetadata
 	}: {
 		connection: SelectConnection
@@ -52,7 +51,6 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 		tokenCounter?: TokenCounters
 		tokenLimit?: number
 		contextThresholdPercent?: number
-		isAssistantMode?: boolean
 		generatingMessageMetadata?: any
 	}) {
 		super({
@@ -74,7 +72,6 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 					? sampling.contextTokens
 					: 8192),
 			contextThresholdPercent: contextThresholdPercent || 0.9,
-			isAssistantMode,
 			generatingMessageMetadata
 		})
 	}

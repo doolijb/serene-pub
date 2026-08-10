@@ -37,12 +37,12 @@ function stripDataThemeWrapper(css: string): string {
 // `@import` and an external `url(...)` are classic CSS-based
 // data-exfiltration vectors (leaking page state/cookies via a background
 // image request to an attacker-controlled host, or pulling in arbitrary
-// remote stylesheet content). Currently neutralized by this app's CSP
-// (style-src/img-src locked down in svelte.config.js), but that CSP has a
-// documented CSP_EXTRA_STYLE_SRC env-var escape hatch (img-src has no such
-// hatch — it's a fixed list) — a real gap that only stays inert as long as
-// that isn't loosened. Rejects (doesn't silently strip) so the upload fails
-// loudly rather than having content silently vanish.
+// remote stylesheet content). style-src stays a tight fixed list, but
+// img-src deliberately allows any "https:" host (inline chat images need
+// that — see svelte.config.js), so this rejection is this app's *actual*
+// defense for theme CSS, not just a backstop behind CSP. Rejects (doesn't
+// silently strip) so the upload fails loudly rather than having content
+// silently vanish.
 const CSS_IMPORT_RE = /@import\b/i
 const CSS_URL_RE = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi
 export function assertSafeThemeCss(css: string) {

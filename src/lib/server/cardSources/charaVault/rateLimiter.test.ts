@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
-import { acquire, RateLimitTimeoutError, _resetForTests } from "./rateLimiter"
+import {
+	acquire,
+	RateLimitTimeoutError,
+	RateLimitAbortedError,
+	_resetForTests
+} from "./rateLimiter"
 
 beforeEach(() => {
 	vi.useFakeTimers()
@@ -163,5 +168,87 @@ describe("acquire — interactive budget reserve (Round-12 audit fix)", () => {
 		})
 		await vi.advanceTimersByTimeAsync(0)
 		expect(resolved).toBe(true)
+	})
+})
+
+// Round-15 audit fix: nothing previously cancelled a queued/in-flight
+// CharaVault request when the client that triggered it moved on (eg. a
+// newer search superseding an older one) — abandoned work still consumed
+// real rate-limit slots and queue depth. acquire() now accepts an optional
+// AbortSignal so a caller that's given up can be removed immediately.
+describe("acquire — caller cancellation (Round-15 audit fix)", () => {
+	test("a queued waiter rejects with RateLimitAbortedError, not RateLimitTimeoutError, when its signal aborts", async () => {
+		// Exhaust the ceiling so the next call actually queues instead of
+		// resolving immediately.
+		for (let i = 0; i < 15; i++) {
+			await acquire(false)
+		}
+
+		const controller = new AbortController()
+		const promise = acquire(false, "interactive", controller.signal)
+		controller.abort()
+
+		await expect(promise).rejects.toThrow(RateLimitAbortedError)
+	})
+
+	test("aborting a queued waiter frees its queue slot immediately, for a later caller to use", async () => {
+		for (let i = 0; i < 15; i++) {
+			await acquire(false)
+		}
+
+		// Fill the interactive queue to its cap (20).
+		const controllers: AbortController[] = []
+		for (let i = 0; i < 20; i++) {
+			const controller = new AbortController()
+			controllers.push(controller)
+			acquire(false, "interactive", controller.signal).catch(() => {})
+		}
+
+		// Confirm the queue is genuinely full first (baseline).
+		await expect(acquire(false, "interactive")).rejects.toThrow(
+			RateLimitTimeoutError
+		)
+
+		// Abort one of the already-queued waiters.
+		controllers[0].abort()
+
+		// A new call should now be admitted to the queue instead of
+		// synchronously rejected for "queue full" — it lands 20th in FIFO
+		// order behind the 19 still-queued waiters, so it won't actually be
+		// GRANTED within just one window rollover; what this test checks is
+		// admission (no immediate RateLimitTimeoutError), not grant timing.
+		let settled = false
+		acquire(false, "interactive")
+			.catch(() => {})
+			.finally(() => {
+				settled = true
+			})
+		await vi.advanceTimersByTimeAsync(0)
+		expect(settled).toBe(false)
+	})
+
+	test("a pre-aborted signal rejects immediately without ever entering the queue", async () => {
+		for (let i = 0; i < 15; i++) {
+			await acquire(false)
+		}
+
+		// Fill the queue to its cap so a later probe can tell whether the
+		// pre-aborted call below consumed a slot.
+		for (let i = 0; i < 20; i++) {
+			acquire(false, "interactive").catch(() => {})
+		}
+
+		const controller = new AbortController()
+		controller.abort()
+		await expect(
+			acquire(false, "interactive", controller.signal)
+		).rejects.toThrow(RateLimitAbortedError)
+
+		// If the pre-aborted call had briefly occupied a slot, the queue
+		// would now be under its cap — but it's still exactly full, so a
+		// genuinely new call is still rejected for "queue full," not queued.
+		await expect(acquire(false, "interactive")).rejects.toThrow(
+			RateLimitTimeoutError
+		)
 	})
 })

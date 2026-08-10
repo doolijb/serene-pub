@@ -67,6 +67,7 @@ export type CompileHistoryEntryActivity = {
 	startedAt: string
 }
 
+
 export type Activity =
 	| GraphBuildActivity
 	| SceneSummarizeActivity
@@ -115,6 +116,11 @@ class ActivityStore {
 		lorebookLabel: string
 		mode: "replace" | "extend"
 	}): string {
+		// The cross-kind refusal that stood here (a running scene_backfill
+		// rewriting the same scene cast a build reads) is gone with the
+		// backfill itself: cast is FK rows now, so there is no half-migrated
+		// scene set for a build to read.
+		//
 		// Safety net: a fresh build for this lorebook always fully supersedes
 		// any prior graph_build activity left parked for it (stale review the
 		// user never applied/discarded, or — rarer — one still mid-flight,
@@ -149,14 +155,17 @@ class ActivityStore {
 		return id
 	}
 
-	startScene(params: {
-		userId: number
-		sceneId: number
-		sceneName?: string
-		lorebookId: number
-		lorebookLabel?: string
-		historyEntryId?: number
-	}): string {
+	startScene(
+		params: {
+			userId: number
+			sceneId: number
+			sceneName?: string
+			lorebookId: number
+			lorebookLabel?: string
+			historyEntryId?: number
+		},
+		abortController?: AbortController
+	): string {
 		// Remove any existing activity for this scene + user before starting a new one
 		for (const [existingId, activity] of this.activities) {
 			if (
@@ -178,6 +187,7 @@ class ActivityStore {
 			startedAt: new Date().toISOString()
 		}
 		this.activities.set(id, activity)
+		if (abortController) this.abortControllers.set(id, abortController)
 		this.broadcast(activity)
 		return id
 	}
@@ -201,16 +211,27 @@ class ActivityStore {
 		if (!existing) return
 		const updated = { ...existing, ...patch } as SceneSummarizeActivity
 		this.activities.set(id, updated)
+		if (updated.status !== "running") {
+			// Generation has finished (successfully or with an error) —
+			// nothing left to ever abort. Without this, a controller
+			// registered by startScene() would otherwise sit in the map for
+			// the rest of the process lifetime if the activity itself
+			// lingers un-dismissed in "review"/"error".
+			this.abortControllers.delete(id)
+		}
 		this.broadcast(updated)
 	}
 
-	startCompile(params: {
-		userId: number
-		historyEntryId: number
-		historyEntryDate: string
-		lorebookId: number
-		lorebookLabel: string
-	}): string {
+	startCompile(
+		params: {
+			userId: number
+			historyEntryId: number
+			historyEntryDate: string
+			lorebookId: number
+			lorebookLabel: string
+		},
+		abortController?: AbortController
+	): string {
 		for (const [existingId, activity] of this.activities) {
 			if (
 				activity.kind === "compile_history_entry" &&
@@ -218,17 +239,16 @@ class ActivityStore {
 				activity.userId === params.userId
 			) {
 				if (activity.status === "running") {
-					// Unlike graph_build/scene_summarize, nothing wires an
-					// AbortController for compile_history_entry (scenes.ts's
-					// scenes:compile handler never calls
-					// setAbortController()) — remove()'s abort() would be a
-					// no-op here, so silently deleting a RUNNING compile
-					// would just orphan its in-flight LLM call: it keeps
-					// running to completion invisibly, and its eventual
-					// updateCompile() call becomes a silent no-op against a
-					// since-deleted id. Reject instead of superseding so the
-					// caller gets an honest error rather than a zombie
-					// generation finishing unseen.
+					// Rejected outright rather than silently superseded, even
+					// though a running compile now has a real abortController
+					// (unlike when this comment was first written) that
+					// remove() could correctly abort-then-delete. Starting a
+					// new compile is a rarer, more deliberate action than
+					// starting a new scene-summarize (which the UI can
+					// re-trigger repeatedly for the same scene) — silently
+					// killing an in-flight compile someone may have started
+					// from another tab is worse than a clear "already in
+					// progress" error.
 					throw new Error(
 						"A compile is already in progress for this entry."
 					)
@@ -247,6 +267,7 @@ class ActivityStore {
 			startedAt: new Date().toISOString()
 		}
 		this.activities.set(id, activity)
+		if (abortController) this.abortControllers.set(id, abortController)
 		this.broadcast(activity)
 		return id
 	}
@@ -261,6 +282,10 @@ class ActivityStore {
 		if (!existing) return
 		const updated = { ...existing, ...patch } as CompileHistoryEntryActivity
 		this.activities.set(id, updated)
+		if (updated.status !== "running") {
+			// See the identical note in updateScene() above.
+			this.abortControllers.delete(id)
+		}
 		this.broadcast(updated)
 	}
 

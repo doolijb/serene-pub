@@ -635,7 +635,7 @@
 	<div
 		class="preset-filled-warning-100-900 mx-auto w-full rounded-lg p-2 text-center text-sm"
 	>
-		<strong>Serene Pub is in alpha!</strong>
+		<strong>Serene Pub is in beta!</strong>
 		Expect bugs and rapid changes. This project is under heavy development.
 	</div>
 

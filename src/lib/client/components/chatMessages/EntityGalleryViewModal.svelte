@@ -26,10 +26,18 @@
 	interface Props {
 		open: boolean
 		onOpenChange: (e: { open: boolean }) => void
-		entity: Entity | null
+		entity?: Entity | null
+		// Single-image mode — e.g. a chat message's inline image. Bypasses
+		// the gallery fetch entirely and hides the thumbnail strip.
+		image?: string | null
 	}
 
-	let { open = $bindable(), onOpenChange, entity }: Props = $props()
+	let {
+		open = $bindable(),
+		onOpenChange,
+		entity = null,
+		image = null
+	}: Props = $props()
 
 	const socket = useTypedSocket()
 	let images = $state<string[]>([])
@@ -41,7 +49,20 @@
 
 	// Fetch gallery whenever modal opens or entity changes
 	$effect(() => {
-		if (open && entity) {
+		if (!open) {
+			// Reset on close so neither mode's state leaks into this
+			// instance's next open, regardless of which mode was active.
+			selectedSrc = null
+			images = []
+			loading = false
+			brokenPaths = new Set()
+			pendingId = null
+			return
+		}
+		// entity takes precedence if a caller somehow sets both — the two
+		// current call sites never do, but this makes the precedence
+		// explicit rather than accidental.
+		if (entity) {
 			images = []
 			brokenPaths = new Set()
 			selectedSrc = entity.avatar ?? null
@@ -54,6 +75,10 @@
 			} else {
 				socket.emit("personas:listGallery", { personaId: entity.id })
 			}
+		} else if (image) {
+			selectedSrc = image
+			images = []
+			loading = false
 		}
 	})
 
@@ -115,7 +140,7 @@
 				class="card bg-surface-100-900 border-surface-300-700 flex max-h-[92vh] w-[min(95vw,1000px)] flex-col space-y-4 border p-4 shadow-xl"
 			>
 				<header class="flex shrink-0 items-center justify-between">
-					<h2 class="h2">{entity?.name ?? "Avatar"}</h2>
+					<h2 class="h2">{entity?.name ?? (image ? "Image" : "Avatar")}</h2>
 					<button
 						class="btn btn-sm"
 						onclick={() => onOpenChange({ open: false })}
@@ -131,7 +156,7 @@
 					{#if selectedSrc}
 						<img
 							src={selectedSrc}
-							alt={entity?.name ?? "Avatar"}
+							alt={entity?.name ?? (image ? "Image" : "Avatar")}
 							class="border-surface-300-700 max-h-[72vh] max-w-full shrink-0 rounded-lg border object-contain"
 						/>
 					{:else}
@@ -140,15 +165,15 @@
 						</div>
 					{/if}
 
-					<!-- Gallery strip -->
-					{#if loading}
+					<!-- Gallery strip — never rendered in single-image mode -->
+					{#if entity && loading}
 						<div
 							class="text-surface-700-300 flex shrink-0 items-center gap-2 text-sm"
 						>
 							<Icons.Loader size={16} class="animate-spin" />
 							Loading gallery…
 						</div>
-					{:else if images.length > 0}
+					{:else if entity && images.length > 0}
 						<div class="flex w-full shrink-0 flex-wrap gap-2">
 							{#each images as imgPath}
 								{#if !brokenPaths.has(imgPath)}

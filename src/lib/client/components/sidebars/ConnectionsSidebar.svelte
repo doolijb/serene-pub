@@ -219,8 +219,25 @@
 		if (!(await handleOnClose())) return
 		view = "index"
 	}
-	function handleModalDiscard() {
+	async function handleModalDiscard() {
 		showConfirmModal = false
+		// Resolving confirmResolve is what lets Layout.svelte's closePanel()
+		// proceed to unmount this whole component (the caller awaits
+		// onLeftPanelClose(), then swaps the panel). Traced the actual
+		// "derived_inert" warning this used to log (via a console.warn hook
+		// capturing a stack trace, not guessed) to Skeleton UI's Dialog
+		// FocusTrap — closing the dialog schedules its own async
+		// return-focus bookkeeping (setReturnFocus, inside its Svelte
+		// adapter), which runs on the *library's* timing, not a Svelte
+		// effect flush — a plain tick() here doesn't wait for it. If this
+		// component (including the dialog) gets unmounted first, that
+		// bookkeeping reads a derived value whose owning effect is already
+		// gone. A double rAF reliably lands after that pending frame of
+		// work has run, same as the well-known "wait two frames for
+		// third-party layout/focus code to settle" pattern elsewhere.
+		await new Promise<void>((resolve) =>
+			requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+		)
 		if (confirmResolve) confirmResolve(true)
 	}
 	function handleModalCancel() {

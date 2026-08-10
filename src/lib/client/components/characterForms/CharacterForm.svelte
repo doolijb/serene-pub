@@ -7,6 +7,7 @@
 	import CharacterUnsavedChangesModal from "../modals/CharacterUnsavedChangesModal.svelte"
 	import Avatar from "../Avatar.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { stableStringify } from "$lib/shared/utils/connectionDefaults"
 
 	interface EditCharacterData {
 		id?: number
@@ -71,8 +72,6 @@
 		hideFavorite?: boolean
 		hideTitle?: boolean
 		hideTags?: boolean
-		onDataChange?: (data: EditCharacterData) => void
-		disableDataChangeCallback?: boolean
 	}
 
 	let {
@@ -86,9 +85,7 @@
 		hideActionButtons = false,
 		hideFavorite = false,
 		hideTitle = false,
-		hideTags = false,
-		onDataChange,
-		disableDataChangeCallback = false
+		hideTags = false
 	}: Props = $props()
 
 	const socket = useTypedSocket()
@@ -420,24 +417,8 @@
 
 	$effect(() => {
 		hasChanges =
-			JSON.stringify(editCharacterData) !==
-			JSON.stringify(originalCharacterData)
-	})
-
-	// Notify parent when data changes (for auto-save in assistant)
-	let lastNotifiedData = $state("")
-	$effect(() => {
-		// Skip initial run and only trigger on actual changes after initialization
-		if (onDataChange && !disableDataChangeCallback && isInitialized) {
-			const currentData = JSON.stringify(editCharacterData)
-
-			// Skip if data hasn't actually changed
-			if (currentData !== lastNotifiedData) {
-				lastNotifiedData = currentData
-				// Trigger callback with current data
-				onDataChange(editCharacterData)
-			}
-		}
+			stableStringify(editCharacterData) !==
+			stableStringify(originalCharacterData)
 	})
 
 	function handleCharactersCreate(res: any) {
@@ -449,7 +430,7 @@
 				description: `Character "${res.character.name}" created successfully.`
 			})
 			// Reset original data to match current state before closing
-			originalCharacterData = { ...editCharacterData }
+			originalCharacterData = $state.snapshot(editCharacterData)
 			// Directly set hasChanges to false to prevent race condition
 			hasChanges = false
 			closeForm()
@@ -470,7 +451,7 @@
 				description: `Character "${res.character.name}" updated successfully.`
 			})
 			// Reset original data to match current state before closing
-			originalCharacterData = { ...editCharacterData }
+			originalCharacterData = $state.snapshot(editCharacterData)
 			// Directly set hasChanges to false to prevent race condition
 			hasChanges = false
 			closeForm()
@@ -544,7 +525,7 @@
 			_avatar: "",
 			_avatarFile: undefined
 		}
-		originalCharacterData = { ...editCharacterData }
+		originalCharacterData = $state.snapshot(editCharacterData)
 	}
 
 	function handleLorebooksList(message: Sockets.Lorebooks.List.Response) {
@@ -585,13 +566,13 @@
 			handleUpdateShowAllCharacterFields
 		)
 
-		// Initialize with initialData if provided (for draft mode)
+		// Initialize with initialData if provided
 		if (initialData) {
 			editCharacterData = {
 				...editCharacterData,
 				...initialData
 			}
-			originalCharacterData = { ...editCharacterData }
+			originalCharacterData = $state.snapshot(editCharacterData)
 		} else if (characterId) {
 			socket.once("characters:get", handleCharactersGet)
 			socket.emit("characters:get", { id: characterId })
@@ -601,10 +582,6 @@
 
 		// Mark as initialized after a short delay to allow initial data to settle
 		setTimeout(() => {
-			// Set the last notified data to current state before enabling
-			if (onDataChange) {
-				lastNotifiedData = JSON.stringify(editCharacterData)
-			}
 			isInitialized = true
 		}, 100)
 	})
@@ -630,9 +607,9 @@
 	// Track the last initialData we processed to prevent infinite loops
 	let lastProcessedInitialData = $state<string>("")
 
-	// Watch for changes to initialData (for draft mode updates from server)
+	// Watch for changes to initialData
 	$effect(() => {
-		if (initialData && isInitialized && !disableDataChangeCallback) {
+		if (initialData && isInitialized) {
 			const newDataStr = JSON.stringify(initialData)
 
 			// Only update if initialData itself changed (not editCharacterData)
@@ -642,11 +619,6 @@
 				editCharacterData = {
 					...editCharacterData,
 					...initialData
-				}
-
-				// Update lastNotifiedData to prevent triggering onDataChange callback
-				if (onDataChange) {
-					lastNotifiedData = JSON.stringify(editCharacterData)
 				}
 			}
 		}

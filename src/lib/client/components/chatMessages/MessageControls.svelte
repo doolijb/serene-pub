@@ -11,7 +11,7 @@
 		// Whether the current user owns the character/persona behind this
 		// message (or is the chat owner, for character messages) — gates
 		// edit/regenerate/continue/hide/delete. Defaults true for callers that
-		// don't pass it (eg. assistant chats, which have no guest concept).
+		// don't pass it (eg. chats with no guest concept).
 		canControl?: boolean
 		// Event handlers
 		onEditMessage: (e: Event, msg: SelectChatMessage) => void

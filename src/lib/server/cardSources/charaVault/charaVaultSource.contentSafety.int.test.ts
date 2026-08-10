@@ -30,6 +30,16 @@ vi.mock("../diskCache", () => ({
 	getOrFetchCardBytes: async () => fetchedBuffer
 }))
 
+// Wraps (not replaces) the real parseCharacterCard so the double-parse
+// regression test below can count invocations while every other test in
+// this file still exercises the genuine parse/content-safety behavior.
+vi.mock("$lib/server/utils/characterCardParser", async (importOriginal) => {
+	const actual = await importOriginal<
+		typeof import("$lib/server/utils/characterCardParser")
+	>()
+	return { ...actual, parseCharacterCard: vi.fn(actual.parseCharacterCard) }
+})
+
 function cardJson(name: string, tags: string[]) {
 	return Buffer.from(
 		JSON.stringify({
@@ -162,5 +172,49 @@ describe("charaVaultSource.getCardDetail — inherits the content-safety gate vi
 				{ userId: user.id }
 			)
 		).rejects.toThrow(/not available/i)
+	})
+})
+
+// Previously getCardDetail called getCardBytes (which parses via
+// assertContentAllowed for the content-safety check), then immediately
+// re-parsed the same buffer a second time to read description/lorebook
+// presence — a confirmed duplicate parse on every card-detail view. Fixed
+// by sharing one parse (getCardBytesAndParsed) between both getCardBytes
+// and getCardDetail.
+describe("charaVaultSource.getCardDetail — parses exactly once (double-parse fix)", () => {
+	test("getCardDetail triggers exactly one parseCharacterCard call, not two", async () => {
+		delete process.env.ENABLE_UNSAFE_CHARACTER_BROWSING
+		const { charaVaultSource } = await import("./charaVaultSource")
+		const { parseCharacterCard } = (await import(
+			"$lib/server/utils/characterCardParser"
+		)) as unknown as { parseCharacterCard: ReturnType<typeof vi.fn> }
+		const user = (globalThis as any).__testUser
+		fetchedBuffer = cardJson("Friendly Adventurer", ["fantasy"])
+		parseCharacterCard.mockClear()
+
+		await charaVaultSource.getCardDetail!(
+			{ folder: "f", file: "m.png" },
+			{ userId: user.id }
+		)
+
+		expect(parseCharacterCard).toHaveBeenCalledTimes(1)
+	})
+
+	test("getCardBytes on its own also parses exactly once (the content-safety check)", async () => {
+		delete process.env.ENABLE_UNSAFE_CHARACTER_BROWSING
+		const { charaVaultSource } = await import("./charaVaultSource")
+		const { parseCharacterCard } = (await import(
+			"$lib/server/utils/characterCardParser"
+		)) as unknown as { parseCharacterCard: ReturnType<typeof vi.fn> }
+		const user = (globalThis as any).__testUser
+		fetchedBuffer = cardJson("Friendly Adventurer", ["fantasy"])
+		parseCharacterCard.mockClear()
+
+		await charaVaultSource.getCardBytes(
+			{ folder: "f", file: "n.png" },
+			{ userId: user.id }
+		)
+
+		expect(parseCharacterCard).toHaveBeenCalledTimes(1)
 	})
 })

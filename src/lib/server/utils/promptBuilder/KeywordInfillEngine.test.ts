@@ -118,6 +118,44 @@ describe("KeywordInfillEngine — reserve phase (pinned/constant entries)", () =
 		expect(otherResult.renderedPrompt).not.toContain("Alice's Pinned Secret")
 		expect((otherResult.rag as any).lore.characterLore.pinned).toBe(0)
 	})
+
+	// A pinned-but-invisible entry is skipped by the reserved-entry loop's
+	// `continue` (never pushed to reservedCharacterLore, so its id never
+	// enters reservedCharLoreIds), then falls through into the general
+	// (non-reserved) candidate filtering, fails visibility there, and lands
+	// in visibilityFilteredCharLore — which does get a diagnostic row. This
+	// is coincidental (that fallthrough path was written for non-reserved
+	// candidates, not pinned ones) rather than deliberately designed, so
+	// lock it in: a future refactor that guards candidateCharLore /
+	// visibilityFilteredCharLore with `!e.constant` (a very plausible-looking
+	// "these are the non-reserved ones" cleanup) would silently reintroduce
+	// a silent gap for this case.
+	test("a pinned-but-invisible character lore entry still gets an excluded_visibility diagnostic row, not silence", async () => {
+		const binding = lorebookBinding({ id: 20, characterId: 1 })
+		const privateLore = characterLoreEntry({
+			name: "Alice's Pinned Secret 2",
+			constant: true,
+			lorebookBindingId: 20,
+			lorebookId: 1
+		})
+		const chat = buildChat({
+			lorebookId: 1,
+			lorebook: buildLorebook({
+				id: 1,
+				lorebookBindings: [binding],
+				characterLoreEntries: [privateLore]
+			})
+		})
+
+		// Generating as a different character — private, excluded even though pinned.
+		const asOther = makeEngine(chat, 2)
+		const otherResult = await asOther.infillContent(makeInfillOptions())
+
+		expect((otherResult.rag as any).lore.characterLore.pinned).toBe(0)
+		const scored = entryScore(otherResult.rag, "Alice's Pinned Secret 2")
+		expect(scored).toBeDefined()
+		expect(scored?.includedReason).toBe("excluded_visibility")
+	})
 })
 
 describe("KeywordInfillEngine — character-lore privacy", () => {

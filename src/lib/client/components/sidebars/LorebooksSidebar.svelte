@@ -380,28 +380,56 @@
 
 	$effect(() => {
 		if (panelsCtx.digest.lorebookId && !!lorebookList.length) {
-			selectedLorebook =
-				lorebookList.find(
-					(l) => l.id === panelsCtx.digest.lorebookId
-				) || null
-			isEditingLorebook = true
-			if (panelsCtx.digest.lorebookTab) {
-				editGroup = panelsCtx.digest.lorebookTab as EditGroup
-				delete panelsCtx.digest.lorebookTab
-			}
+			const targetLorebookId = panelsCtx.digest.lorebookId
+			const targetTab = panelsCtx.digest.lorebookTab as
+				| EditGroup
+				| undefined
 			delete panelsCtx.digest.lorebookId
+			delete panelsCtx.digest.lorebookTab
+			const applyNavigation = () => {
+				selectedLorebook =
+					lorebookList.find((l) => l.id === targetLorebookId) ||
+					null
+				isEditingLorebook = true
+				if (targetTab) {
+					editGroup = targetTab
+				}
+			}
+			if (tabHasUnsavedChanges) {
+				// Same reasoning as the round-1 CharactersSidebar/
+				// PersonasSidebar fix: capture the target before deleting it
+				// from the digest, and only apply it once discard is
+				// actually confirmed via the panel's own close gate.
+				handleOnClose().then((confirmed) => {
+					if (confirmed) applyNavigation()
+				})
+			} else {
+				applyNavigation()
+			}
 		}
 	})
 
 	$effect(() => {
 		if (panelsCtx.digest.historyEntryId) {
-			editGroup = "history"
-			focusHistoryEntryId = panelsCtx.digest.historyEntryId
-			focusHistoryEntryTab = panelsCtx.digest.historyEntryTab ?? "content"
-			focusSceneId = panelsCtx.digest.sceneId
+			const targetHistoryEntryId = panelsCtx.digest.historyEntryId
+			const targetTab = panelsCtx.digest.historyEntryTab ?? "content"
+			const targetSceneId = panelsCtx.digest.sceneId
 			delete panelsCtx.digest.historyEntryId
 			delete panelsCtx.digest.historyEntryTab
 			delete panelsCtx.digest.sceneId
+			const applyNavigation = () => {
+				editGroup = "history"
+				focusHistoryEntryId = targetHistoryEntryId
+				focusHistoryEntryTab = targetTab
+				focusSceneId = targetSceneId
+			}
+			if (tabHasUnsavedChanges) {
+				handleOnClose().then((confirmed) => {
+					if (confirmed) applyNavigation()
+				})
+			} else {
+				applyNavigation()
+			}
 		}
 	})
 
@@ -678,6 +706,7 @@
 						lorebookId={selectedLorebook.id}
 						{focusBindingId}
 						onFocusHandled={() => (focusBindingId = null)}
+						bind:hasUnsavedChanges={tabHasUnsavedChanges}
 						onNavigateToGraph={(bindingId) => {
 							focusNodeId = bindingId
 							editGroup = "graph"
@@ -724,6 +753,7 @@
 							lorebookId={selectedLorebook.id}
 							{focusNodeId}
 							onFocusHandled={() => (focusNodeId = null)}
+							bind:hasUnsavedChanges={tabHasUnsavedChanges}
 							onNavigateToBindings={(bindingId) => {
 								focusBindingId = bindingId ?? null
 								editGroup = "bindings"

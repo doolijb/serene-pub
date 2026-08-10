@@ -14,7 +14,8 @@ import {
 	insertLorebookBindingRow,
 	insertWorldLoreEntryRow,
 	makeInfillOptions,
-	makeTemplateContext
+	makeTemplateContext,
+	worldLoreEntry
 } from "./infillTestUtils"
 
 let testDb: TestDb
@@ -386,6 +387,79 @@ describe("RagInfillEngine — RAG retrieval (embeddings)", () => {
 		)
 	})
 
+	test("an invisible characterLore candidate never occupies a budget slot that a visible one could use", async () => {
+		const user = await makeUser()
+		const lorebook = await insertLorebook(testDb, user.id)
+		const charA = await insertCharacterRow(testDb, user.id, { name: "Alice" })
+		const charB = await insertCharacterRow(testDb, user.id, { name: "Bob" })
+		const bindingA = await insertLorebookBindingRow(testDb, lorebook.id, {
+			characterId: charA.id,
+			binding: `{{char:${charA.id}}}`
+		})
+		const bindingB = await insertLorebookBindingRow(testDb, lorebook.id, {
+			characterId: charB.id,
+			binding: `{{char:${charB.id}}}`
+		})
+
+		// 6 entries visible to Alice — exactly RAG_SOURCE_BUDGET.characterLore (6).
+		const visibleEntries = []
+		for (let i = 0; i < 6; i++) {
+			visibleEntries.push(
+				await insertCharacterLoreEntryRow(testDb, lorebook.id, {
+					name: `Visible Secret ${i}`,
+					content: `Visible content number ${i}.`,
+					lorebookBindingId: bindingA.id,
+					constant: false,
+					embedding: QUERY_VECTOR,
+					embeddingModel: MODEL_ID
+				})
+			)
+		}
+		// Invisible to Alice (bound to Bob, who isn't even in the chat).
+		// Inserted LAST so it has the highest id — fetchScopedCandidates
+		// orders by desc(id), so with identical embeddings/scores this entry
+		// ranks first and would occupy budget slot #1 ahead of all 6 visible
+		// entries if the visibility filter didn't run before budgeting.
+		const invisibleEntry = await insertCharacterLoreEntryRow(
+			testDb,
+			lorebook.id,
+			{
+				name: "Invisible Secret",
+				content: "Should never occupy a budget slot.",
+				lorebookBindingId: bindingB.id,
+				constant: false,
+				embedding: QUERY_VECTOR,
+				embeddingModel: MODEL_ID
+			}
+		)
+
+		const chatRow = await insertChatRow(testDb, user.id, {
+			lorebookId: lorebook.id
+		})
+		const chat = buildChat({
+			id: chatRow.id,
+			lorebookId: lorebook.id,
+			chatMessages: [chatMessage({ id: 1, content: "what secrets do you keep" })],
+			chatCharacters: [chatCharacter(charA as any)],
+			lorebook: buildLorebook({
+				id: lorebook.id,
+				lorebookBindings: [bindingA, bindingB],
+				characterLoreEntries: [...visibleEntries, invisibleEntry]
+			})
+		})
+
+		const engine = makeEngine(chat, charA.id)
+		const result = await engine.infillContent(makeInfillOptions())
+
+		expect((result.rag as any).lore.characterLore.rag).toBe(6)
+		for (let i = 0; i < 6; i++) {
+			expect(result.renderedPrompt).toContain(`Visible content number ${i}.`)
+		}
+		expect(result.renderedPrompt).not.toContain(
+			"Should never occupy a budget slot."
+		)
+	})
+
 	test("lore priority (Normal/VeryHigh) measurably boosts a RAG-retrieved entry's score", async () => {
 		const user = await makeUser()
 		const lorebook = await insertLorebook(testDb, user.id)
@@ -519,5 +593,145 @@ describe("RagInfillEngine — RAG retrieval (embeddings)", () => {
 
 		expect(fetchSpy).toHaveBeenCalledTimes(1)
 		fetchSpy.mockRestore()
+	})
+})
+
+describe("RagInfillEngine — hard token-limit safety net", () => {
+	describe("reachable case: guaranteed + RAG-promoted messages alone exceed tokenLimit", () => {
+		beforeEach(() => {
+			vi.mocked(embeddingModule.getLoadedModelId).mockReturnValue(MODEL_ID)
+			vi.mocked(embeddingModule.batchEmbed).mockImplementation(
+				async (texts: string[]) => texts.map(() => QUERY_VECTOR)
+			)
+			vi.mocked(embeddingModule.embed).mockResolvedValue(QUERY_VECTOR)
+		})
+
+		test("tokenLimit is enforced even when baseTokens (no lore matched, RAG promotes many older messages) alone already exceeds it", async () => {
+			const user = await makeUser()
+			const chatRow = await insertChatRow(testDb, user.id)
+
+			// Inserted first (lower ids) — RAG-matched "older" messages, each
+			// with an embedding identical to the mocked query vector so every
+			// one of them gets promoted into the pre-budget-check message set.
+			const olderRows = []
+			for (let i = 0; i < 6; i++) {
+				olderRows.push(
+					await insertChatMessageRow(testDb, chatRow.id, {
+						content: "x".repeat(80),
+						embedding: QUERY_VECTOR,
+						embeddingModel: MODEL_ID
+					})
+				)
+			}
+			// Inserted after (higher ids) — the guaranteed window. No
+			// embedding needed: fetchScopedCandidates excludes the most
+			// recent `excludeRecentMessages` rows by id order regardless.
+			const guaranteedRows = []
+			for (let i = 0; i < 10; i++) {
+				guaranteedRows.push(
+					await insertChatMessageRow(testDb, chatRow.id, {
+						content: "x".repeat(80)
+					})
+				)
+			}
+
+			const fullChat = buildChat({
+				id: chatRow.id,
+				chatMessages: [...olderRows, ...guaranteedRows].map((r) =>
+					chatMessage({ id: r.id, content: r.content })
+				)
+			})
+
+			// Sanity check: RAG actually promoted all 6 older messages — the
+			// precondition for the bug to be reachable at all.
+			const full = await makeEngine(fullChat).infillContent(
+				makeInfillOptions({ tokenLimit: 100_000 })
+			)
+			expect((full.rag as any).messages.ragOlder).toBe(6)
+
+			// Floor baseline: same chat id (so RAG still sees the DB rows),
+			// but only the 10 guaranteed messages in the in-memory chat — the
+			// filter that turns RAG matches into `initialOlderMessages` reads
+			// `this.chat.chatMessages`, not the DB, so this chat's `olderMessages`
+			// is empty regardless of what RAG finds server-side.
+			const floorChat = buildChat({
+				id: chatRow.id,
+				chatMessages: guaranteedRows.map((r) =>
+					chatMessage({ id: r.id, content: r.content })
+				)
+			})
+			const floorResult = await makeEngine(floorChat).infillContent(
+				makeInfillOptions({ tokenLimit: 100_000 })
+			)
+
+			// tokenLimit set to exactly the floor cost — below what the full
+			// (16-message) render needs, but exactly enough for the
+			// trimmed-to-floor render to fit. Before the fix, this returned
+			// totalTokens ~= baseTokens (all 16 messages), silently over budget.
+			const constrained = await makeEngine(fullChat).infillContent(
+				makeInfillOptions({ tokenLimit: floorResult.totalTokens })
+			)
+
+			expect(constrained.totalTokens).toBeLessThanOrEqual(
+				floorResult.totalTokens
+			)
+			expect(constrained.chatMessages.includedIds.length).toBeLessThan(16)
+			const guaranteedIds = new Set(guaranteedRows.map((r) => r.id))
+			for (const id of constrained.chatMessages.includedIds) {
+				expect(guaranteedIds.has(id)).toBe(true)
+			}
+		})
+	})
+
+	describe("terminal case: guaranteed messages + pinned lore alone exceed tokenLimit", () => {
+		beforeEach(() => {
+			// Deliberately the "model active" mocks, not the "no model"
+			// rejecting ones — those trip RagInfillEngine's own unrelated
+			// catch-block warning ("RAG retrieval failed, continuing without
+			// RAG results") once embed/batchEmbed reject, which would pollute
+			// the warnSpy call count this test asserts on. With the model
+			// "active" but no matching DB rows for this chat, the RAG
+			// candidate fetch just resolves to an empty set — no throw, no
+			// unrelated warning — leaving only the pinned lore under test.
+			vi.mocked(embeddingModule.getLoadedModelId).mockReturnValue(MODEL_ID)
+			vi.mocked(embeddingModule.batchEmbed).mockImplementation(
+				async (texts: string[]) => texts.map(() => QUERY_VECTOR)
+			)
+			vi.mocked(embeddingModule.embed).mockResolvedValue(QUERY_VECTOR)
+		})
+
+		test("returns best-effort totalTokens and warns once when even the guaranteed floor plus pinned lore can't fit", async () => {
+			const bigContent = "y".repeat(2000)
+			const pinnedEntries = Array.from({ length: 3 }, (_, i) =>
+				worldLoreEntry({
+					id: i + 1,
+					name: `Pinned ${i}`,
+					content: bigContent,
+					constant: true,
+					enabled: true
+				})
+			)
+			const messages = Array.from({ length: 10 }, (_, i) =>
+				chatMessage({ id: i + 1, content: `message ${i + 1}` })
+			)
+			const chat = buildChat({
+				chatMessages: messages,
+				lorebook: buildLorebook({ worldLoreEntries: pinnedEntries })
+			})
+
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+			const result = await makeEngine(chat).infillContent(
+				makeInfillOptions({ tokenLimit: 50 })
+			)
+
+			// Documents the known, shared (Keyword has it too) floor
+			// limitation rather than asserting it away — pinned lore is
+			// never trimmed, so there's nothing left to cut once messages
+			// hit MIN_GUARANTEED_MESSAGES + 1.
+			expect(result.totalTokens).toBeGreaterThan(50)
+			expect(warnSpy).toHaveBeenCalledTimes(1)
+			expect(warnSpy.mock.calls[0][0]).toContain("tokenLimit (50)")
+			warnSpy.mockRestore()
+		})
 	})
 })

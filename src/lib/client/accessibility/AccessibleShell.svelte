@@ -322,7 +322,7 @@
 
 	<footer class="a11y-footer">
 		<p>
-			Serene Pub is in alpha. Document View is a simplified,
+			Serene Pub is in beta. Document View is a simplified,
 			high-contrast, keyboard- and screen-reader-friendly alternative to
 			the standard interface.
 		</p>

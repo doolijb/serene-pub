@@ -40,6 +40,9 @@
 		onAvatarClick: (
 			char: SelectCharacter | SelectPersona | undefined
 		) => void
+		// Fired when an inline `![alt](url)` image rendered inside the
+		// message content is clicked — opens it in a lightbox.
+		onImageClick?: (src: string) => void
 		// Method-shorthand (not arrow-type) syntax deliberately: these are wired
 		// directly as `onclick={onCancelEditMessage}` below (invoked with the
 		// click MouseEvent) but also invoked with zero args internally via
@@ -100,6 +103,7 @@
 		onBranchMessage,
 		onCharacterNameClick,
 		onAvatarClick,
+		onImageClick,
 		onCancelEditMessage,
 		onSaveEditMessage,
 		openMsgControlsMenu = $bindable(),
@@ -140,10 +144,6 @@
 	const thinkingContent = $derived((msg.metadata as any)?.thinking || "")
 	const hasThinking = $derived(thinkingContent.trim().length > 0)
 
-	// Assistant-mode XML-tag reasoning (function-calling flow)
-	const reasoningContent = $derived(msg.metadata?.reasoning || "")
-	const hasReasoning = $derived(reasoningContent.trim().length > 0)
-
 	// Optional per-trigger focus note for a Narrator response (e.g. "Focus on
 	// the weather turning stormy") — set once at trigger time, see chats.ts's
 	// narratorMessage.metadata.narratorInstructions.
@@ -155,7 +155,6 @@
 	)
 
 	let isThinkingExpanded = $state(false)
-	let isReasoningExpanded = $state(false)
 	let isNarratorInstructionsExpanded = $state(false)
 
 	// Local edit buffer: bound to MessageComposer instead of binding directly
@@ -177,12 +176,18 @@
 		isThinkingExpanded = !isThinkingExpanded
 	}
 
-	function toggleReasoning() {
-		isReasoningExpanded = !isReasoningExpanded
-	}
-
 	function toggleNarratorInstructions() {
 		isNarratorInstructionsExpanded = !isNarratorInstructionsExpanded
+	}
+
+	// The rendered content below is raw injected HTML ({@html}), so inline
+	// `![alt](url)` images can't get their own Svelte click handler —
+	// delegate from the container instead.
+	function handleContentClick(e: MouseEvent) {
+		const target = e.target as HTMLElement
+		if (target.tagName === "IMG") {
+			onImageClick?.((target as HTMLImageElement).src)
+		}
 	}
 </script>
 
@@ -406,33 +411,6 @@
 		</div>
 	{/if}
 
-	<!-- Reasoning block (assistant-mode function-calling reasoning) -->
-	{#if hasReasoning}
-		<div class="mx-2 mt-2">
-			<button
-				class="flex w-full items-center gap-2 py-2 text-sm opacity-70 transition-opacity hover:opacity-100"
-				onclick={toggleReasoning}
-				title={isReasoningExpanded
-					? "Collapse reasoning"
-					: "Expand reasoning"}
-			>
-				<Icons.Brain size={16} />
-				<span>Reasoning</span>
-				<Icons.ChevronDown
-					size={16}
-					class={`transition-transform ${isReasoningExpanded ? "rotate-180" : ""}`}
-				/>
-			</button>
-			{#if isReasoningExpanded}
-				<div
-					class="rendered-chat-message-content pb-2 text-sm opacity-80"
-				>
-					{@html renderMarkdownWithQuotedText(reasoningContent)}
-				</div>
-			{/if}
-		</div>
-	{/if}
-
 	<div class="flex h-fit rounded p-2 text-left">
 		{#if msg.error}
 			{#if msg.content}
@@ -501,11 +479,19 @@
 				/>
 			</div>
 		{:else}
+			<!-- Click delegation only matters for the inline `<img>` tags
+			     inside the rendered markdown, which are individually
+			     cursor-pointer and already reachable/described via normal
+			     image semantics (alt text) — the div itself is a passive
+			     text container, not a single interactive control. -->
+			<!-- svelte-ignore a11y_click_events_have_key_events -->
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div
 				class="rendered-chat-message-content {msg.isGenerating &&
 				msg.content
 					? 'animate-pulse'
 					: ''}"
+				onclick={handleContentClick}
 			>
 				{@html renderMarkdownWithQuotedText(msg.content)}
 			</div>

@@ -25,7 +25,7 @@ Serene Pub is an open source chat app for AI roleplay and creative writing — b
 **Never run an LLM before? You don't need to know how.** Serene Pub's Setup Wizard can download, install, and run a local model for you in a few clicks — no terminal, no server admin experience, nothing to configure by hand. Prefer a hosted provider instead? Just plug in an API key. Either way you're chatting within minutes.
 
 <p align="center">
-  <img src="docs-assets/screenshots/desktop-chat-edit.png" alt="Serene Pub chat screen, showing an active roleplay conversation" width="900"/>
+  <img src="docs-assets/screenshots/desktop-chat.png" alt="Serene Pub chat screen, showing a group roleplay conversation between three characters" width="900"/>
 </p>
 
 Most AI roleplay tools either drop you into a wall of raw settings and leave memory and worldbuilding entirely up to you, or lock the whole experience behind a hosted service you don't control. Long stories drift — characters forget what happened chapters ago, secrets slip to people who were never in the room, and playing with friends usually means passing one browser tab back and forth. Serene Pub was built to fix those specific problems: structured memory that actually grows with your story, characters who only act on what they've really seen, and a server you can share with the people you're playing with.
@@ -65,47 +65,141 @@ This is the thing that sets Serene Pub apart from almost everything else in the 
 
 ## 🖼️ Screenshots
 
-### Desktop Experience
+<sub>Click any image to view it full size. Shots below use the community-library cast aboard *Seraphis Station*, generated locally through the built-in KoboldCPP Manager.</sub>
 
-| Chat & Editing                                | Connections & Characters                                   | Contexts & Lorebooks                                   |
-| --------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------- |
-| ![](docs-assets/screenshots/desktop-chat-edit.png) | ![](docs-assets/screenshots/desktop-connections-characters.png) | ![](docs-assets/screenshots/desktop-contexts-lorebooks.png) |
+### 💬 Chatting
 
-| Prompt Details                                     | Prompts & Chats                                   | Sampling & Personas                                   |
-| -------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------- |
-| ![](docs-assets/screenshots/desktop-prompt-details.png) | ![](docs-assets/screenshots/desktop-prompts-chats.png) | ![](docs-assets/screenshots/desktop-sampling-personas.png) |
+<table>
+<tr>
+<td width="50%" align="center" valign="top">
+  <a href="docs-assets/screenshots/desktop-chat.png"><img src="docs-assets/screenshots/desktop-chat.png" width="100%" alt="A group roleplay conversation between Maren, Kiran and Corb"/></a>
+  <br/><sub><b>Group Chat</b><br/>As many characters as you like, replying in drag-to-reorder turn order.</sub>
+</td>
+<td width="50%" align="center" valign="top">
+  <a href="docs-assets/screenshots/desktop-group-chat-participants.png"><img src="docs-assets/screenshots/desktop-group-chat-participants.png" width="100%" alt="The participants editor, showing characters, personas and per-character visibility"/></a>
+  <br/><sub><b>Participants & Visibility</b><br/>Add cast mid-scene, reorder turns, set Full / Minimal / Hidden per character.</sub>
+</td>
+</tr>
+</table>
 
-| Theme Example 1                                     | Theme Example 2                                     | Theme Example 3                                     |
-| --------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------- |
-| ![](docs-assets/screenshots/desktop-theme-example-1.png) | ![](docs-assets/screenshots/desktop-theme-example-2.png) | ![](docs-assets/screenshots/desktop-theme-example-3.png) |
+### 🧠 Memory & Worldbuilding — Lorebooks+
 
-| Theme Example 4                                     | Theme Example 5                                     |
-| --------------------------------------------------- | --------------------------------------------------- |
-| ![](docs-assets/screenshots/desktop-theme-example-4.png) | ![](docs-assets/screenshots/desktop-theme-example-5.png) |
+<table>
+<tr>
+<td width="33%" align="center" valign="top">
+  <a href="docs-assets/screenshots/lorebooks-world-lore.png"><img src="docs-assets/screenshots/lorebooks-world-lore.png" width="100%" alt="World lore entries for Seraphis Station"/></a>
+  <br/><sub><b>World Lore</b><br/>Facts about your setting, retrieved when they matter.</sub>
+</td>
+<td width="33%" align="center" valign="top">
+  <a href="docs-assets/screenshots/lorebooks-character-lore.png"><img src="docs-assets/screenshots/lorebooks-character-lore.png" width="100%" alt="Character lore entries marked private to a single character"/></a>
+  <br/><sub><b>Character Lore</b><br/>Secrets scoped to one character — <i>“Private to Kiran”</i> stays private.</sub>
+</td>
+<td width="33%" align="center" valign="top">
+  <a href="docs-assets/screenshots/lorebooks-history.png"><img src="docs-assets/screenshots/lorebooks-history.png" width="100%" alt="A dated history timeline of in-world events"/></a>
+  <br/><sub><b>History Timeline</b><br/>Dated in-world events, with a marker for “now”.</sub>
+</td>
+</tr>
+<tr>
+<td width="33%" align="center" valign="top">
+  <a href="docs-assets/screenshots/lorebooks-bindings.png"><img src="docs-assets/screenshots/lorebooks-bindings.png" width="100%" alt="Character bindings mapping cast members to char tokens"/></a>
+  <br/><sub><b>Bindings</b><br/>Bind your cast to <code>{{char:N}}</code> tokens usable across every entry.</sub>
+</td>
+<td width="33%" align="center" valign="top">
+  <a href="docs-assets/screenshots/lorebooks-narrative-graph.png"><img src="docs-assets/screenshots/lorebooks-narrative-graph.png" width="100%" alt="The narrative graph showing character nodes"/></a>
+  <br/><sub><b>Narrative Graph</b><br/>Who knows whom, and how — replies generated from each character’s vantage point.</sub>
+</td>
+<td width="33%" align="center" valign="top">
+  <a href="docs-assets/screenshots/setup-wizard-embeddings.png"><img src="docs-assets/screenshots/setup-wizard-embeddings.png" width="100%" alt="Choosing a local embedding model for retrieval"/></a>
+  <br/><sub><b>Long-Term Memory (RAG)</b><br/>Pick a local embedding model, or any OpenAI-compatible endpoint.</sub>
+</td>
+</tr>
+</table>
 
-### Lorebooks+ & Worldbuilding
+### 🖥️ Local Models, No Terminal
 
-| Character Bindings                                       | Character Lore                                       | Lorebook History                              | World Lore                                       |
-| ---------------------------------------------------------- | ------------------------------------------------------ | ---------------------------------------------- | --------------------------------------------------- |
-| ![](docs-assets/screenshots/lorebooks-character-bindings.png) | ![](docs-assets/screenshots/lorebooks-character-lore.png) | ![](docs-assets/screenshots/lorebooks-history.png) | ![](docs-assets/screenshots/lorebooks-world-lore.png) |
+<table>
+<tr>
+<td width="25%" align="center" valign="top">
+  <a href="docs-assets/screenshots/koboldcpp-manager-download.png"><img src="docs-assets/screenshots/koboldcpp-manager-download.png" width="100%" alt="Picking a KoboldCPP build to download inside the app"/></a>
+  <br/><sub><b>KoboldCPP — Get the Binary</b><br/>Pick a build; Serene Pub downloads and runs it.</sub>
+</td>
+<td width="25%" align="center" valign="top">
+  <a href="docs-assets/screenshots/koboldcpp-manager-models.png"><img src="docs-assets/screenshots/koboldcpp-manager-models.png" width="100%" alt="The KoboldCPP model list with a default model selected"/></a>
+  <br/><sub><b>KoboldCPP — Models</b><br/>Browse, download and switch GGUF models.</sub>
+</td>
+<td width="25%" align="center" valign="top">
+  <a href="docs-assets/screenshots/koboldcpp-manager-settings.png"><img src="docs-assets/screenshots/koboldcpp-manager-settings.png" width="100%" alt="KoboldCPP managed mode showing the running version and settings"/></a>
+  <br/><sub><b>KoboldCPP — Managed Mode</b><br/>Version, port, unload timers and capabilities at a glance.</sub>
+</td>
+<td width="25%" align="center" valign="top">
+  <a href="docs-assets/screenshots/ollama-manager.png"><img src="docs-assets/screenshots/ollama-manager.png" width="100%" alt="The Ollama Manager listing installed models"/></a>
+  <br/><sub><b>Ollama Manager</b><br/>Search, download and activate Ollama models in-app.</sub>
+</td>
+</tr>
+</table>
 
-> Scenes, the Narrative Graph, the KoboldCPP Manager, and the Character/Persona library browsers are new in 0.5.0 — screenshots coming soon.
+### 📚 Community Libraries
 
-### Ollama Manager
+<table>
+<tr>
+<td width="33%" align="center" valign="top">
+  <a href="docs-assets/screenshots/library-characters.png"><img src="docs-assets/screenshots/library-characters.png" width="100%" alt="The character library browser with community cards"/></a>
+  <br/><sub><b>Character Library</b><br/>Browse and import community cards — including CharaVault.</sub>
+</td>
+<td width="33%" align="center" valign="top">
+  <a href="docs-assets/screenshots/library-personas.png"><img src="docs-assets/screenshots/library-personas.png" width="100%" alt="The persona library browser"/></a>
+  <br/><sub><b>Persona Library</b><br/>Ready-made personas for however you want to show up.</sub>
+</td>
+<td width="33%" align="center" valign="top">
+  <a href="docs-assets/screenshots/desktop-connections.png"><img src="docs-assets/screenshots/desktop-connections.png" width="100%" alt="The connections panel configured for a local KoboldCPP model"/></a>
+  <br/><sub><b>Connections</b><br/>Any provider, per-task overrides, sampling and context configs.</sub>
+</td>
+</tr>
+</table>
 
-| Available Models                                             | Downloads                                                    | Installed Models                                             | Settings                                                    |
-| ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| ![](docs-assets/screenshots/sidebar-ollama-manager-available.png) | ![](docs-assets/screenshots/sidebar-ollama-manager-downloads.png) | ![](docs-assets/screenshots/sidebar-ollama-manager-installed.png) | ![](docs-assets/screenshots/sidebar-ollama-manager-settings.png) |
+### 🚀 First Run
 
-### Mobile Experience
+<table>
+<tr>
+<td width="33%" align="center" valign="top">
+  <a href="docs-assets/screenshots/setup-wizard-welcome.png"><img src="docs-assets/screenshots/setup-wizard-welcome.png" width="100%" alt="The setup wizard welcome step"/></a>
+  <br/><sub><b>Setup Wizard</b><br/>Seven guided steps from empty install to first chat.</sub>
+</td>
+<td width="33%" align="center" valign="top">
+  <a href="docs-assets/screenshots/setup-wizard-connect.png"><img src="docs-assets/screenshots/setup-wizard-connect.png" width="100%" alt="Choosing between KoboldCPP, Ollama, or manual setup"/></a>
+  <br/><sub><b>Connect an AI</b><br/>Never run a model before? Pick “Easy” and it’s handled.</sub>
+</td>
+<td width="33%" align="center" valign="top">
+  <a href="docs-assets/screenshots/document-view.png"><img src="docs-assets/screenshots/document-view.png" width="100%" alt="Document View, the high-contrast accessible interface"/></a>
+  <br/><sub><b>Document View</b><br/>High-contrast, keyboard/screen-reader-first UI — <code>Ctrl+Shift+Y</code>.</sub>
+</td>
+</tr>
+</table>
 
-| Chat                                    | Connections                                    | Edit Character                                    |
-| ---------------------------------------- | ------------------------------------------------ | ---------------------------------------------------- |
-| ![](docs-assets/screenshots/mobile-chat.png) | ![](docs-assets/screenshots/mobile-connections.png) | ![](docs-assets/screenshots/mobile-edit-character.png) |
+### 🎨 Themes & Mobile
 
-| Home                                    | Navigation                                    |
-| ---------------------------------------- | ------------------------------------------------ |
-| ![](docs-assets/screenshots/mobile-home.png) | ![](docs-assets/screenshots/mobile-navigation.png) |
+<table>
+<tr>
+<td width="25%" align="center" valign="top">
+  <a href="docs-assets/screenshots/theme-catppuccin.png"><img src="docs-assets/screenshots/theme-catppuccin.png" width="100%" alt="The Catppuccin theme"/></a>
+  <br/><sub><b>Catppuccin</b></sub>
+</td>
+<td width="25%" align="center" valign="top">
+  <a href="docs-assets/screenshots/theme-vintage.png"><img src="docs-assets/screenshots/theme-vintage.png" width="100%" alt="The Vintage theme"/></a>
+  <br/><sub><b>Vintage</b></sub>
+</td>
+<td width="25%" align="center" valign="top">
+  <a href="docs-assets/screenshots/theme-wintry-light.png"><img src="docs-assets/screenshots/theme-wintry-light.png" width="100%" alt="The Wintry theme in light mode"/></a>
+  <br/><sub><b>Wintry (Light)</b></sub>
+</td>
+<td width="25%" align="center" valign="top">
+  <a href="docs-assets/screenshots/mobile-chat.png"><img src="docs-assets/screenshots/mobile-chat.png" width="100%" alt="Serene Pub running on a phone-sized screen"/></a>
+  <br/><sub><b>Mobile</b><br/>Same app, fully responsive.</sub>
+</td>
+</tr>
+</table>
+
+<sub>20+ built-in themes ship with the app, plus a custom theme editor — these are three of them.</sub>
 
 ---
 

@@ -6,6 +6,7 @@
 	import PersonaUnsavedChangesModal from "../modals/PersonaUnsavedChangesModal.svelte"
 	import Avatar from "../Avatar.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { stableStringify } from "$lib/shared/utils/connectionDefaults"
 
 	interface EditPersonaData {
 		id?: number
@@ -296,8 +297,11 @@
 
 	$effect(() => {
 		hasChanges =
-			JSON.stringify(editPersonaData) !==
-			JSON.stringify(originalPersonaData)
+			stableStringify(editPersonaData) !==
+			stableStringify(originalPersonaData)
+		// Despite the name "isSafeToClose", this prop actually tracks when
+		// there ARE changes (same misnaming as CharacterForm's identical
+		// prop) — it should be called "hasChanges".
 		isSafeToClose = hasChanges
 	})
 
@@ -374,7 +378,7 @@
 				_avatar: "",
 				_avatarFile: undefined
 			}
-			originalPersonaData = { ...editPersonaData }
+			originalPersonaData = $state.snapshot(editPersonaData)
 		}
 	}
 
@@ -401,6 +405,7 @@
 	})
 
 	onDestroy(() => {
+		isSafeToClose = false
 		// Properly remove event handlers by passing the function references
 		socket.off("personas:create", handlePersonasCreate)
 		socket.off("personas:update", handlePersonasUpdate)

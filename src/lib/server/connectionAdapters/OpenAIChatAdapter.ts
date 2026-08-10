@@ -32,7 +32,6 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		tokenCounter,
 		tokenLimit,
 		contextThresholdPercent,
-		isAssistantMode,
 		generatingMessageMetadata
 	}: {
 		connection: SelectConnection
@@ -44,7 +43,6 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		tokenCounter?: TokenCounters
 		tokenLimit?: number
 		contextThresholdPercent?: number
-		isAssistantMode?: boolean
 		generatingMessageMetadata?: any
 	}) {
 		super({
@@ -65,17 +63,11 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 					? sampling.contextTokens
 					: 4096),
 			contextThresholdPercent: contextThresholdPercent || 0.9,
-			isAssistantMode,
 			generatingMessageMetadata
 		})
 	}
 
 	compilePrompt(args: {}) {
-		// Use assistant mode compilation if enabled
-		if (this.isAssistantMode) {
-			return this.compileAssistantPrompt(args)
-		}
-
 		let useChatFormat = true
 		if (this.connection.extraJson?.prerenderPrompt) {
 			useChatFormat = false

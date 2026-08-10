@@ -256,7 +256,6 @@ async function buildChatsListFor(
 	userId: number
 ): Promise<Sockets.Chats.List.Response> {
 	// chats:list only returns ROLEPLAY chats
-	// Use chats:listAssistant for assistant chats
 	const chatType = ChatTypes.ROLEPLAY
 	console.log("Fetching chats for user:", userId, "chatType:", chatType)
 
@@ -342,7 +341,7 @@ async function buildChatsListFor(
 				// chatCharacters/chatPersonas rows can have a null character/
 				// persona when the linked row was deleted (the FK is nullable,
 				// onDelete: "set null") — filter those out, matching the same
-				// fix in generateResponse.ts/assistantV2.ts.
+				// fix in generateResponse.ts.
 				chatCharacters: chat.chatCharacters.filter(
 					(
 						cc
@@ -2403,17 +2402,10 @@ export const chatMessagesRegenerateHandler: Handler<
 						return res
 					}
 
-					// Get current metadata and clear function-calling related flags
-					// BUT preserve the reasoning so it can be displayed with the final response
 					const currentMetadata =
 						(messageToRegenerate.metadata as any) || {}
-					const cleanedMetadata = {
-						...currentMetadata,
-						waitingForFunctionSelection: undefined
-						// Keep reasoning: it will be displayed in the pre-content section
-					}
 
-					// Clear the content, metadata flags, and set as generating
+					// Clear the content and set as generating
 					const [updated] = await db
 						.update(schema.chatMessages)
 						.set({
@@ -2421,7 +2413,7 @@ export const chatMessagesRegenerateHandler: Handler<
 							isGenerating: true,
 							generationStage: "queued",
 							error: null,
-							metadata: cleanedMetadata
+							metadata: currentMetadata
 						})
 						.where(eq(schema.chatMessages.id, params.id))
 						.returning()
@@ -3342,7 +3334,7 @@ export const promptTokenCountHandler: Handler<
 			// chatCharacters/chatPersonas rows can have a null character/persona
 			// when the linked row was deleted (the FK is nullable, onDelete:
 			// "set null") — filter those out, matching the same fix in
-			// generateResponse.ts/assistantV2.ts/chatsListHandler.
+			// generateResponse.ts/chatsListHandler.
 			const activeChatCharacters = chat.chatCharacters.filter(
 				(
 					cc
@@ -3951,142 +3943,6 @@ export const updateChatCharacterVisibilityHandler: Handler<
 	}
 }
 
-/**
- * Handler for saving a character draft to the database
- */
-export const assistantSaveDraftHandler: Handler<
-	{ chatId: number },
-	{ success: boolean; characterId?: number; error?: string }
-> = {
-	event: "assistant:saveDraft",
-	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-		const { chatId } = params
-		try {
-			// Serialized per-chat against AssistantService.saveDraftToMetadata
-			// (the other writer of this same chat metadata, from the
-			// background field-regeneration flow) — without this, a save
-			// click could race an in-flight background write.
-			return await withChatTriggerLock(chatId, async () => {
-			// Get the chat
-			const chat = await db.query.chats.findFirst({
-				where: and(
-					eq(schema.chats.id, chatId),
-					eq(schema.chats.userId, userId)
-				)
-			})
-
-			if (!chat) {
-				throw new Error("Chat not found or access denied")
-			}
-
-			// Get the draft from metadata (now a JSON column)
-			const metadata = chat.metadata || {}
-
-			const draft = metadata?.dataEditor?.create?.characters?.[0]
-
-			if (!draft) {
-				throw new Error("No character draft found in chat metadata")
-			}
-
-			// Validate the draft one final time
-			const { assistantCreateCharacterSchema } = await import(
-				"$lib/server/db/zodSchemas"
-			)
-			const validationResult =
-				assistantCreateCharacterSchema.safeParse(draft)
-
-			if (!validationResult.success) {
-				console.error(
-					"Draft validation failed:",
-					validationResult.error
-				)
-				return {
-					success: false,
-					error: "Draft validation failed. Please review the errors."
-				}
-			}
-
-			// Create the character
-			const [newCharacter] = await db
-				.insert(schema.characters)
-				.values({
-					name: draft.name,
-					description: draft.description,
-					nickname: draft.nickname || null,
-					personality: draft.personality || null,
-					scenario: draft.scenario || null,
-					firstMessage: draft.firstMessage || null,
-					alternateGreetings: draft.alternateGreetings || null,
-					exampleDialogues: draft.exampleDialogues || null,
-					creatorNotes: draft.creatorNotes || null,
-					groupOnlyGreetings: draft.groupOnlyGreetings || null,
-					postHistoryInstructions:
-						draft.postHistoryInstructions || null,
-					source: draft.source || null,
-					characterVersion: draft.characterVersion || null,
-					userId,
-					isFavorite: false
-				})
-				.returning()
-
-			console.log("Character created from draft:", newCharacter.id)
-
-			// Link the character to the chat
-			await db.insert(schema.chatCharacters).values({
-				chatId,
-				characterId: newCharacter.id,
-				isActive: true,
-				visibility: ChatCharacterVisibility.VISIBLE
-			})
-
-			// Clear the draft from metadata
-			const updatedMetadata = {
-				...metadata,
-				dataEditor: {
-					...metadata.dataEditor,
-					create: {
-						...metadata.dataEditor?.create,
-						characters: []
-					}
-				}
-			}
-
-			await db
-				.update(schema.chats)
-				.set({ metadata: updatedMetadata })
-				.where(eq(schema.chats.id, chatId))
-
-			console.log("Draft cleared from chat metadata")
-
-			// Emit success event
-			emitToUser("assistant:draftSaved", {
-				chatId,
-				characterId: newCharacter.id,
-				character: newCharacter
-			})
-
-			// Reload the chat to show the new character
-			socket.emit("chats:get", { id: chatId })
-
-			return {
-				success: true,
-				characterId: newCharacter.id
-			}
-			})
-		} catch (error) {
-			console.error("Error saving draft:", error)
-			return {
-				success: false,
-				error:
-					error instanceof Error
-						? error.message
-						: "Failed to save character draft"
-			}
-		}
-	}
-}
-
 // Registration function for all chat handlers
 export function registerChatHandlers(
 	socket: any,
@@ -4125,5 +3981,4 @@ export function registerChatHandlers(
 	register(socket, chatsGetNarratorNameHandler, emitToUser)
 	register(socket, toggleChatCharacterActiveHandler, emitToUser)
 	register(socket, updateChatCharacterVisibilityHandler, emitToUser)
-	register(socket, assistantSaveDraftHandler, emitToUser)
 }

@@ -117,6 +117,7 @@
 	function closeEditForm() {
 		showEditChatForm = false
 		editChatId = null
+		chatFormHasChanges = false
 		const returnId = returnToViewId
 		returnToViewId = null
 		if (returnId) viewingId = returnId

@@ -1221,6 +1221,9 @@
 		avatar: string | null | undefined
 	} | null>(null)
 
+	let showImageModal = $state(false)
+	let imageModalSrc = $state<string | null>(null)
+
 	// Scene image overlays — synced into the shared store so Layout can render them
 	let leftSceneImage = $state<string | null>(null)
 	let rightSceneImage = $state<string | null>(null)
@@ -1291,6 +1294,11 @@
 			avatar: char.avatar ?? null
 		}
 		showAvatarModal = true
+	}
+
+	function handleImageClick(src: string) {
+		imageModalSrc = src
+		showImageModal = true
 	}
 </script>
 
@@ -1364,6 +1372,7 @@
 					{...props}
 					onCharacterNameClick={handleCharacterNameClick}
 					onAvatarClick={handleAvatarClick}
+					onImageClick={handleImageClick}
 					onCancelEditMessage={handleCancelEditMessage}
 					onSaveEditMessage={handleSaveEditMessage}
 					bind:openMsgControlsMenu
@@ -2736,6 +2745,12 @@
 		bind:open={showAvatarModal}
 		onOpenChange={(e) => (showAvatarModal = e.open)}
 		entity={avatarModalEntity}
+	/>
+
+	<EntityGalleryViewModal
+		bind:open={showImageModal}
+		onOpenChange={(e) => (showImageModal = e.open)}
+		image={imageModalSrc}
 	/>
 
 	<PersonaSelectModal

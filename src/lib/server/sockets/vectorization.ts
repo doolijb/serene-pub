@@ -35,7 +35,8 @@ import {
 	enqueueCharacterGroup,
 	moveQueueGroup,
 	removeQueueGroup,
-	clearVectorizationFailureTracking
+	clearVectorizationFailureTracking,
+	clearInlineEmbedCooldown
 } from "$lib/server/embedding/vectorizationQueue"
 
 // ---------------------------------------------------------------------------
@@ -259,6 +260,9 @@ export const vectorizationSetApiConfig: Handler<
 		// previously failing — don't leave it excluded from picking until
 		// the next full queue restart.
 		clearVectorizationFailureTracking()
+		// Same reasoning for inline embedding's own wedged-backend cooldown
+		// (vectorizationQueue.ts's ensureChatMessageEmbedded).
+		clearInlineEmbedCooldown()
 
 		if (params.startNow) {
 			startVectorizationQueue({ startFromBeginning: true })
@@ -346,6 +350,9 @@ export const vectorizationSetModel: Handler<
 		// previously failing (e.g. dimension mismatch) — don't leave it
 		// excluded from picking until the next full queue restart.
 		clearVectorizationFailureTracking()
+		// Same reasoning for inline embedding's own wedged-backend cooldown
+		// (vectorizationQueue.ts's ensureChatMessageEmbedded).
+		clearInlineEmbedCooldown()
 
 		const res: Sockets.Vectorization.SetModel.Response = {
 			success: true,

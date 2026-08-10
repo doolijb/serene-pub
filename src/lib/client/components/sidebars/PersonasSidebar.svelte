@@ -270,17 +270,20 @@
 
 	$effect(() => {
 		if (panelsCtx.digest.personaId) {
-			// Check if we have unsaved changes
-			if (
-				personaId !== panelsCtx.digest.personaId &&
-				personaFormHasChanges
-			) {
-				onEditFormCancel?.()
-			} else {
-				// If no unsaved changes, just set the personaId
-				personaId = panelsCtx.digest.personaId
-			}
+			const targetId = panelsCtx.digest.personaId
 			delete panelsCtx.digest.personaId
+			if (personaId !== targetId && personaFormHasChanges) {
+				// Promise-based, unlike onEditFormCancel (PersonaForm's own
+				// discard flow) — lets the switch actually complete once
+				// discard is confirmed instead of silently landing back on
+				// the list, since panelsCtx.digest.personaId is already
+				// gone by the time an async confirm resolves.
+				handleOnClose().then((confirmed) => {
+					if (confirmed) personaId = targetId
+				})
+			} else {
+				personaId = targetId
+			}
 		}
 	})
 
@@ -406,12 +409,14 @@
 			bind:onCancel={onEditFormCancel}
 		/>
 	{:else if personaId}
-		<PersonaForm
-			bind:isSafeToClose={personaFormHasChanges}
-			{personaId}
-			closeForm={closePersonasForm}
-			bind:onCancel={onEditFormCancel}
-		/>
+		{#key personaId}
+			<PersonaForm
+				bind:isSafeToClose={personaFormHasChanges}
+				{personaId}
+				closeForm={closePersonasForm}
+				bind:onCancel={onEditFormCancel}
+			/>
+		{/key}
 	{:else if viewingId}
 		{#key viewingId}
 			<PersonaViewPanel

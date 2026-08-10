@@ -18,6 +18,12 @@
 			"Passphrase must contain at least one special character"
 		)
 
+	interface Props {
+		hasUnsavedChanges?: boolean
+	}
+
+	let { hasUnsavedChanges = $bindable(false) }: Props = $props()
+
 	const socket = useTypedSocket()
 
 	let systemSettingsCtx: SystemSettingsCtx = $state(
@@ -46,11 +52,6 @@
 			}
 		}, "URL must include a port (e.g., http://localhost:11434)")
 
-	// State for ollama manager base URL
-	let ollamaBaseUrlField = $state("")
-	let ollamaBaseUrlError = $state("")
-	let isSavingBaseUrl = $state(false)
-
 	// State for koboldcpp manager
 	let koboldCppBaseUrlField = $state("")
 	let koboldCppBaseUrlError = $state("")
@@ -74,15 +75,28 @@
 	let isConnectingCharaVault = $state(false)
 	let isDisconnectingCharaVault = $state(false)
 
-	// Initialize base URL fields when settings are available
+	// Initialize base URL field when settings are available
 	$effect(() => {
-		if (ollamaSettingsCtx.settings?.ollamaManagerBaseUrl) {
-			ollamaBaseUrlField = ollamaSettingsCtx.settings.ollamaManagerBaseUrl
-		}
 		if (koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl) {
 			koboldCppBaseUrlField =
 				koboldCppSettingsCtx.settings.koboldCppManagerBaseUrl
 		}
+	})
+
+	// ── Unsaved changes ────────────────────────────────────────────
+	// koboldCppBaseUrlField re-syncs from context above whenever a save
+	// succeeds, so it self-resolves back to false without an explicit
+	// post-save reset. The CharaVault fields are write-only credentials
+	// (no "original" value to diff against) that already reset to "" on a
+	// successful connect (see the charaVault:connect success handler
+	// below) — so "non-empty" is what "dirty" means for those two.
+	$effect(() => {
+		hasUnsavedChanges =
+			koboldCppBaseUrlField.trim() !==
+				(koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl ??
+					"") ||
+			charaVaultEmailField.trim() !== "" ||
+			charaVaultTokenField.trim() !== ""
 	})
 
 	// See the matching check in KoboldCppSettingsTab.svelte — this URL and the
@@ -178,38 +192,6 @@
 		socket?.emit("systemSettings:updateOllamaManagerEnabled", {
 			enabled: event.checked
 		})
-	}
-
-	async function handleSaveOllamaBaseUrl() {
-		if (!userCtx.user?.isAdmin) {
-			toaster.error({
-				title: "Access denied",
-				description: "Admin privileges required"
-			})
-			return
-		}
-
-		const trimmedUrl = ollamaBaseUrlField.trim()
-
-		// Validate URL
-		const result = urlSchema.safeParse(trimmedUrl)
-		if (!result.success) {
-			ollamaBaseUrlError =
-				result.error.errors[0]?.message || "Invalid URL format"
-			return
-		}
-
-		ollamaBaseUrlError = ""
-		isSavingBaseUrl = true
-
-		try {
-			socket?.emit("systemSettings:updateOllamaManagerBaseUrl", {
-				baseUrl: trimmedUrl
-			})
-		} catch (error) {
-			ollamaBaseUrlError = "Failed to save URL"
-			isSavingBaseUrl = false
-		}
 	}
 
 	// ── Summarization functions ──────────────────────────────────────────────
@@ -404,18 +386,6 @@
 			}
 		}
 
-		const handleOllamaManagerBaseUrl = (message: any) => {
-			isSavingBaseUrl = false
-			if (message.success) {
-				toaster.success({
-					title: "Ollama URL updated successfully"
-				})
-			} else {
-				ollamaBaseUrlError = "Failed to update URL"
-				toaster.error({ title: "Failed to update Ollama URL" })
-			}
-		}
-
 		const handleEmbeddingsDisabled = (message: any) => {
 			disablingEmbeddings = false
 			if (message.success) {
@@ -545,10 +515,6 @@
 			"systemSettings:updateOllamaManagerEnabled",
 			handleOllamaManagerEnabled
 		)
-		socket.on(
-			"systemSettings:updateOllamaManagerBaseUrl",
-			handleOllamaManagerBaseUrl
-		)
 		socket.on("vectorization:disable", handleEmbeddingsDisabled)
 		socket.on("systemSettings:updateAccountsEnabled", handleAccountsEnabled)
 		;(socket as any).on(
@@ -578,6 +544,7 @@
 
 		// Cleanup function to remove listeners
 		return () => {
+			hasUnsavedChanges = false
 			socket.off(
 				"systemSettings:updateKoboldCppManagerEnabled",
 				handleKoboldCppManagerEnabled
@@ -586,10 +553,6 @@
 			socket.off(
 				"systemSettings:updateOllamaManagerEnabled",
 				handleOllamaManagerEnabled
-			)
-			socket.off(
-				"systemSettings:updateOllamaManagerBaseUrl",
-				handleOllamaManagerBaseUrl
 			)
 			socket.off("vectorization:disable", handleEmbeddingsDisabled)
 			socket.off(
@@ -660,48 +623,11 @@
 							Enable Ollama Manager
 						</Switch.Label>
 					</Switch>
+					<!-- Base URL is only configured from the Ollama Manager
+					     panel (Connections), not here — this settings tab
+					     used to duplicate that field with a save action that
+					     had no server handler wired up. -->
 				</div>
-
-				{#if ollamaSettingsCtx.settings?.ollamaManagerEnabled}
-					<div class="ml-6 space-y-3">
-						<div>
-							<label
-								class="text-foreground mb-1 block text-sm font-medium"
-								for="ollamaBaseUrl"
-							>
-								Ollama Server URL
-							</label>
-							<input
-								id="ollamaBaseUrl"
-								type="text"
-								bind:value={ollamaBaseUrlField}
-								placeholder="http://localhost:11434"
-								class="input w-full {ollamaBaseUrlError
-									? 'border-error-500'
-									: ''}"
-							/>
-							{#if ollamaBaseUrlError}
-								<p class="text-error-500 mt-1 text-sm">
-									{ollamaBaseUrlError}
-								</p>
-							{/if}
-						</div>
-
-						<button
-							class="btn preset-filled-primary-500"
-							onclick={handleSaveOllamaBaseUrl}
-							disabled={isSavingBaseUrl}
-						>
-							{#if isSavingBaseUrl}
-								<Icons.Loader2 class="h-4 w-4 animate-spin" />
-								Saving...
-							{:else}
-								<Icons.Save class="h-4 w-4" />
-								Save URL
-							{/if}
-						</button>
-					</div>
-				{/if}
 			</div>
 
 			<!-- KoboldCPP Manager Settings -->

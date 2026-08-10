@@ -91,6 +91,112 @@ export function isMissingOriginAllowed(
 	return isLocalNetworkAddress(remoteAddress)
 }
 
+/**
+ * Whether this connection is local, transitively — the direct peer AND
+ * every hop the configured ADDRESS_HEADER reports must be local. Depth-
+ * independent by construction (checks "all local," not "the Nth one"), so
+ * it's correct whether there's one reverse-proxy hop or several (e.g.
+ * Cloudflare Tunnel -> nginx -> app) without needing to know or configure
+ * how many hops there are. A rightmost-only/fixed-depth read would fail
+ * open under a hop-count mismatch: nginx's own recipe
+ * (`$proxy_add_x_forwarded_for`) appends its observed peer to whatever the
+ * client sent, so under a two-hop chain like Cloudflare Tunnel -> nginx,
+ * the header becomes `<real-client>, 127.0.0.1` — a rightmost-only read
+ * would resolve to the intermediate hop, which is itself local, and pass
+ * every tunneled connection.
+ *
+ * Delegates to isMissingOriginAllowed() per hop rather than re-deriving its
+ * wildcard-opt-out/local-address logic by hand — that keeps this function
+ * correct if isMissingOriginAllowed's own conditions ever change, and keeps
+ * isMissingOriginAllowed itself a live, exercised function rather than a
+ * dead export sitting next to a passing test file. With ADDRESS_HEADER
+ * unset, this is exactly isMissingOriginAllowed(socket.handshake.address) —
+ * byte-identical to today's behavior. If SOCKETS_ALLOWED_ORIGINS=* is set,
+ * isMissingOriginAllowed returns true unconditionally for every address, so
+ * every hop (including a completely absent header) passes and this
+ * correctly goes vacuously true — the right behavior for an explicit
+ * opt-out.
+ */
+export function isLocalThroughProxy(socket: {
+	handshake: { address: string; headers: Record<string, any> }
+}): boolean {
+	if (!isMissingOriginAllowed(socket.handshake.address)) return false
+	const headerName = process.env.ADDRESS_HEADER?.trim().toLowerCase()
+	if (!headerName) return true
+	const raw = socket.handshake.headers[headerName]
+	if (!raw) return true
+	// Join multi-instance headers rather than taking only the last instance
+	// — dropping any instance would drop the hops inside it, and a chain
+	// check that silently ignores some claimed hops can return true even
+	// when the full chain contains a non-local one. Node normally coalesces
+	// repeated X-Forwarded-For instances into one string before this ever
+	// sees an array, so this mostly matters for defensiveness, not the
+	// common case.
+	const parts = String(Array.isArray(raw) ? raw.join(",") : raw)
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean)
+	return parts.every(isMissingOriginAllowed)
+}
+
+/**
+ * A single effective address for the rate-limit key — rightmost
+ * X-Forwarded-For entry (the trusted proxy's own observation, un-spoofable
+ * by the client, unlike the leftmost/client-claimed entry — nginx's
+ * `$proxy_add_x_forwarded_for` appends rather than replaces, so a client
+ * that sends a spoofed value puts it at the LEFT), only honored when the
+ * direct peer is itself local. Depth-dependent: correct for the single-hop
+ * nginx recipe; under a multi-hop setup (e.g. Cloudflare Tunnel + nginx)
+ * this resolves to an intermediate hop, not the true client, collapsing
+ * rate-limit buckets the same way as before this function existed. Accepted
+ * residual — a wrong value here costs bucket collapse, not a security
+ * bypass, unlike the gate above, which is why the gate uses the
+ * depth-independent chain check (isLocalThroughProxy) instead of this.
+ *
+ * Deliberately gates on isLocalNetworkAddress here, NOT isMissingOriginAllowed
+ * (unlike isLocalThroughProxy above) — this is not an oversight. Do not
+ * "harmonize" the two: isMissingOriginAllowed returns true unconditionally
+ * for every address once SOCKETS_ALLOWED_ORIGINS=* is set. If this function
+ * delegated to it too, a wildcard deployment would trust ANY remote peer's
+ * claimed X-Forwarded-For value, letting rotating spoofed headers evade the
+ * handshake rate limiter entirely for free. The wildcard is an *origin*
+ * check opt-out; it must not also imply "trust arbitrary clients' address
+ * claims."
+ */
+export function getSocketClientAddress(socket: {
+	handshake: { address: string; headers: Record<string, any> }
+}): string {
+	const headerName = process.env.ADDRESS_HEADER?.trim().toLowerCase()
+	if (!headerName) return socket.handshake.address
+	if (!isLocalNetworkAddress(socket.handshake.address)) {
+		return socket.handshake.address
+	}
+	const raw = socket.handshake.headers[headerName]
+	const value = Array.isArray(raw) ? raw[raw.length - 1] : raw
+	if (!value) return socket.handshake.address
+	const parts = String(value).split(",").map((s) => s.trim())
+	const last = parts[parts.length - 1]
+	return last || socket.handshake.address
+}
+
+let hasWarnedAboutSocketAddressHeader = false
+
+/** One-time warning (mirrors hooks.server.ts's HTTP-side equivalent) if a
+ * forwarded-for-shaped header arrives on a socket handshake while
+ * ADDRESS_HEADER is unset — the local-network gate and rate-limit key are
+ * then keying on the proxy's own address instead of the real client's. */
+export function warnIfSocketAddressHeaderUnset(headers: Record<string, any>) {
+	if (hasWarnedAboutSocketAddressHeader) return
+	if (process.env.ADDRESS_HEADER) return
+	if (!headers["x-forwarded-for"]) return
+	hasWarnedAboutSocketAddressHeader = true
+	console.warn(
+		"[Security] A socket handshake arrived with an X-Forwarded-For header, but ADDRESS_HEADER is not set — " +
+			"the local-network-only gate and handshake rate limiting are keying on the wrong address (likely your reverse proxy's). " +
+			"See HOSTING.md's reverse-proxy section: set ADDRESS_HEADER=x-forwarded-for, but only if you're actually behind a trusted proxy."
+	)
+}
+
 /** Human-readable summary of the active configuration, logged once at
  * startup so an admin can see what's actually in effect without reading
  * docs. */

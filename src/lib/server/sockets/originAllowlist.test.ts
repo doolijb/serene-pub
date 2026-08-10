@@ -18,7 +18,12 @@ const ORIGINAL_ENV = { ...process.env }
 
 beforeEach(() => {
 	delete process.env.SOCKETS_ALLOWED_ORIGINS
+	delete process.env.ADDRESS_HEADER
 })
+
+function socketWith(address: string, headers: Record<string, any> = {}) {
+	return { handshake: { address, headers } }
+}
 
 afterEach(() => {
 	process.env = { ...ORIGINAL_ENV }
@@ -82,6 +87,121 @@ describe("isMissingOriginAllowed", () => {
 		const { isMissingOriginAllowed } = await import("./originAllowlist")
 		expect(isMissingOriginAllowed("203.0.113.7")).toBe(true)
 		expect(isMissingOriginAllowed(undefined)).toBe(true)
+	})
+})
+
+describe("isLocalThroughProxy", () => {
+	test("ADDRESS_HEADER unset, local peer — true (baseline unaffected)", async () => {
+		const { isLocalThroughProxy } = await import("./originAllowlist")
+		expect(
+			isLocalThroughProxy(
+				socketWith("192.168.1.50", { "x-forwarded-for": "203.0.113.7" })
+			)
+		).toBe(true)
+	})
+
+	test("peer non-local, no ADDRESS_HEADER/wildcard — false regardless of header", async () => {
+		const { isLocalThroughProxy } = await import("./originAllowlist")
+		expect(
+			isLocalThroughProxy(
+				socketWith("203.0.113.7", { "x-forwarded-for": "192.168.1.50" })
+			)
+		).toBe(false)
+	})
+
+	test("spoofed leftmost entry claiming local, real remote peer appended by a genuine proxy — rejected", async () => {
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		const { isLocalThroughProxy } = await import("./originAllowlist")
+		expect(
+			isLocalThroughProxy(
+				socketWith("127.0.0.1", {
+					"x-forwarded-for": "127.0.0.1, 203.0.113.5"
+				})
+			)
+		).toBe(false)
+	})
+
+	test("Cloudflare-Tunnel-shaped two-hop chain (real client, then a local intermediate hop) — rejected", async () => {
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		const { isLocalThroughProxy } = await import("./originAllowlist")
+		expect(
+			isLocalThroughProxy(
+				socketWith("127.0.0.1", {
+					"x-forwarded-for": "203.0.113.5, 127.0.0.1"
+				})
+			)
+		).toBe(false)
+	})
+
+	test("genuine LAN client through one local hop — accepted", async () => {
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		const { isLocalThroughProxy } = await import("./originAllowlist")
+		expect(
+			isLocalThroughProxy(
+				socketWith("127.0.0.1", { "x-forwarded-for": "192.168.1.50" })
+			)
+		).toBe(true)
+	})
+
+	test("wildcard opt-out set, peer non-local, no forwarded-for header — still accepted", async () => {
+		// The case a hand-decomposed (isWildcardAllowed() || isLocalNetworkAddress())
+		// predicate could silently break: rejecting a connection an admin
+		// deliberately opted in to allowing.
+		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
+		const { isLocalThroughProxy } = await import("./originAllowlist")
+		expect(isLocalThroughProxy(socketWith("203.0.113.7"))).toBe(true)
+	})
+
+	test("multi-instance header (array) — joins all instances rather than dropping earlier ones", async () => {
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		const { isLocalThroughProxy } = await import("./originAllowlist")
+		// A non-local entry hiding in the first array instance must still be
+		// caught even though the array branch only inspects raw[raw.length-1]
+		// naively — joining first is what makes this correctly false.
+		expect(
+			isLocalThroughProxy(
+				socketWith("127.0.0.1", {
+					"x-forwarded-for": ["203.0.113.5", "127.0.0.1"]
+				})
+			)
+		).toBe(false)
+	})
+})
+
+describe("getSocketClientAddress", () => {
+	test("ADDRESS_HEADER unset — returns the raw peer address unchanged", async () => {
+		const { getSocketClientAddress } = await import("./originAllowlist")
+		expect(
+			getSocketClientAddress(
+				socketWith("203.0.113.7", { "x-forwarded-for": "192.168.1.50" })
+			)
+		).toBe("203.0.113.7")
+	})
+
+	test("ADDRESS_HEADER set, local peer, single-hop header — returns the header value", async () => {
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		const { getSocketClientAddress } = await import("./originAllowlist")
+		expect(
+			getSocketClientAddress(
+				socketWith("127.0.0.1", { "x-forwarded-for": "203.0.113.5" })
+			)
+		).toBe("203.0.113.5")
+	})
+
+	test("ADDRESS_HEADER set, non-local peer, spoofed header — ignores the header (deliberately NOT isMissingOriginAllowed-gated)", async () => {
+		// If this delegated to isMissingOriginAllowed the way isLocalThroughProxy
+		// does, a wildcard deployment would trust any remote peer's claimed
+		// forwarded-for value, letting spoofed headers evade the rate limiter.
+		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		const { getSocketClientAddress } = await import("./originAllowlist")
+		expect(
+			getSocketClientAddress(
+				socketWith("203.0.113.7", {
+					"x-forwarded-for": "192.168.1.50"
+				})
+			)
+		).toBe("203.0.113.7")
 	})
 })
 

@@ -182,6 +182,7 @@
 	})
 
 	onDestroy(() => {
+		hasUnsavedChanges = false
 		socket.off("lorebooks:get")
 		socket.off("lorebooks:update")
 		socket.off("tags:list")

@@ -36,6 +36,7 @@ import {
 	createPersonaFromParsedData,
 	overwritePersonaFromParsedData
 } from "./personas"
+import { writeSceneCast } from "$lib/server/utils/sceneCast"
 import type { Handler } from "$lib/shared/events"
 // SelectTag/SelectLorebookTag/InsertHistoryEntry are declared globally in
 // $lib/server/db/types.d.ts (ambient `export global {}` block, same pattern
@@ -1325,6 +1326,12 @@ async function insertLorebookEntries(
 									.filter((id): id is number => id !== undefined)
 							: []
 					for (const scene of scenes) {
+						const participantCharacters = resolveBindingIds(
+							scene?.participantCharacters
+						)
+						const mentionedCharacters = resolveBindingIds(
+							scene?.mentionedCharacters
+						)
 						const [sceneRow] = await dbOrTx
 							.insert(schema.scenes)
 							.values({
@@ -1334,14 +1341,19 @@ async function insertLorebookEntries(
 								name: scene?.name ?? null,
 								selectedMessageIds: [],
 								summary: scene?.summary ?? null,
-								participantCharacters: resolveBindingIds(
-									scene?.participantCharacters
-								),
-								mentionedCharacters: resolveBindingIds(
-									scene?.mentionedCharacters
-								)
+								// The import file recorded a cast, so this
+								// scene counts as resolved even if every entry
+								// was dropped as unresolvable above.
+								castResolvedAt: new Date()
 							})
 							.returning()
+						// Cast lives in scene_characters, so it is written
+						// after the row exists (the FK requires a scene id).
+						await writeSceneCast(
+							sceneRow.id,
+							{ participantCharacters, mentionedCharacters },
+							dbOrTx as any
+						)
 						if (typeof scene?.localId === "number") {
 							sceneLocalIdToRealId.set(scene.localId, sceneRow.id)
 						}

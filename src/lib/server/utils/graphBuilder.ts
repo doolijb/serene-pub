@@ -1,14 +1,22 @@
 /**
- * Graph Builder — Two-Pass + Pre-Filter
+ * Graph Builder — derive in memory, persist only at commit
  *
  * Per scene/entry:
- *   Pass 1   — Character extraction: reads pre-extracted participants/mentionedCharacters from
- *              the scene record (populated at summarization time). Falls back to LLM extraction
- *              for scenes that predate this feature.
+ *   Pass 1   — Character resolution. ONE uniform rule over every input shape, because a
+ *              lorebook's scenes were written by different versions of this app:
+ *                 binding ids present  → direct lookup against the seed map (free)
+ *                 name strings present → fuzzy-resolve against the seeded cast (free)
+ *                 nothing stored       → extract from the summary (one LLM call), then resolve
+ *              A name that matches nothing real becomes a *proposed* node with a fresh
+ *              `new_N` tempId — never a DB row. Seeded bindings are a pre-seed of the cast,
+ *              not its closed universe.
  *   Pass 2   — Per-character perspective: one LLM call per present character to extract
  *              relationships that changed or were newly established in this scene.
  *
- * Output is a GraphProposal that the user reviews and approves before committing to DB.
+ * NOTHING IN HERE TOUCHES THE DATABASE. Discovered characters live in an in-memory ledger
+ * (`proposedByName`) so the same name resolves to the same proposed node across scenes; they
+ * become real rows only if the user keeps them through review and applies. Cancel or discard
+ * and the database is byte-for-byte unchanged. Output is a GraphProposal for review.
  */
 
 import { getConnectionAdapter } from "./getConnectionAdapter"
@@ -16,6 +24,12 @@ import { TokenCounters } from "./TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { runQueuedLLMCall } from "./runQueuedLLMCall"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
+import { extractCharactersFromContent } from "./summarizer"
+import {
+	resolveCharacterRefs,
+	namesMatch
+} from "./summarizer/availableSceneCast"
+import type { CastEntry, ExtractedCastRef } from "./summarizer/templates"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -32,10 +46,17 @@ export interface GraphBuilderScene {
 	} | null
 	/** Present when this item is a direct history entry (no associated scene) */
 	sourceHistoryEntryId?: number
-	/** lorebookBindings ids physically present — resolved by character extraction at summarization time */
-	participantCharacters?: number[] | null
-	/** lorebookBindings ids referenced but not present — resolved by character extraction at summarization time */
-	mentionedCharacters?: number[] | null
+	/**
+	 * Cast physically present. Normally lorebookBindings ids (written at
+	 * summarization/scene-save time), but scenes predating the
+	 * lorebookBindings/narrativeNodes merge still hold name strings here, and
+	 * scenes predating cast extraction hold nothing at all. Pass 1 handles all
+	 * three shapes — see the header. Typed to admit what the column can
+	 * actually contain rather than what it ideally would.
+	 */
+	participantCharacters?: (number | string)[] | null
+	/** Cast referenced but not present. Same three shapes as above. */
+	mentionedCharacters?: (number | string)[] | null
 	/** Chat this scene was derived from — used for raw message fetching during node description generation */
 	chatId?: number | null
 	/** Message IDs selected for this scene — used for raw message fetching during node description generation */
@@ -80,6 +101,12 @@ export interface GraphBuilderResumeState {
 	newNodeTempIds: string[]
 	newRelKeys: string[]
 	nodeAliasMap: [string, string[]][]
+	/**
+	 * The in-memory cast ledger (normalized name → proposed tempId). Must be
+	 * carried across a resume or the resumed half re-proposes characters the
+	 * first half already discovered, duplicating them in the same proposal.
+	 */
+	proposedByName: [string, string][]
 }
 
 export interface GraphBuilderInput {
@@ -106,9 +133,28 @@ export interface GraphBuilderInput {
 	) => Promise<Array<{ senderName: string; content: string }>>
 }
 
+/**
+ * A scene whose cast this build had to derive (legacy name strings, or nothing
+ * stored at all). Reported so apply can write the resolved ids back onto the
+ * row — turning a one-time extraction into a permanent fast path — but only
+ * once the user has actually committed the proposal.
+ *
+ * Carries tempIds, not ids, because a discovered node has no id until apply
+ * INSERTs it; apply maps them through the same tempIdMap it uses for
+ * relationships.
+ */
+export interface ResolvedSceneCast {
+	sceneId: number | null
+	historyEntryId: number | null
+	participantTempIds: string[]
+	mentionedTempIds: string[]
+}
+
 export interface GraphBuilderResult {
 	proposal: Sockets.NarrativeGraph.GraphProposal
 	sceneLabels: string[]
+	/** Scenes whose cast was derived rather than read — see ResolvedSceneCast. */
+	resolvedSceneCast: ResolvedSceneCast[]
 	/** Maps seed tempIds (e.g. "existing_5") → real DB node id. Empty in replace mode. */
 	seedTempIdMap: Record<string, number>
 	/** Maps seed tempIds → display name so the review UI can label relationships involving existing nodes. */
@@ -187,8 +233,7 @@ async function runLLM(
 		currentCharacterId: null,
 		tokenCounter,
 		tokenLimit,
-		contextThresholdPercent: 0.9,
-		isAssistantMode: false
+		contextThresholdPercent: 0.9
 	})
 
 	const { text } = await runQueuedLLMCall({
@@ -777,6 +822,56 @@ export async function buildGraphFromScenes(
 	const newRelKeys = new Set<string>()
 	// Maps tempId → alias names for display in node resolution prompt
 	const nodeAliasMap = new Map<string, string[]>()
+	/**
+	 * The cast ledger: normalized name → proposed tempId, holding ONLY
+	 * discovered (non-seed) nodes. This is what makes "Bram" in scene 3 and
+	 * "bram" in scene 9 the same proposed node without creating a DB row to
+	 * dedup against — the job the old code did by committing a binding
+	 * mid-build.
+	 *
+	 * Deliberately NOT done by pushing id-less entries into `seedCastEntries`:
+	 * CastEntry.id is nullable, so that typechecks and runs, but
+	 * resolveCharacterRefs resolves via `if (existing?.id != null)` — a
+	 * matching entry with a null id falls through to `suggestedNames`, so the
+	 * same name would be re-suggested in every later scene and dedup would
+	 * silently never happen.
+	 */
+	const proposedByName = new Map<string, string>()
+	/** Stored binding ids that no longer resolve to a seed (deleted binding). */
+	let droppedDanglingIds = 0
+	/**
+	 * Seeds whose summary or state changed during this build — proposed as
+	 * UPDATEs. Kept strictly separate from `newNodeTempIds`, which drives
+	 * INSERT: merging them would insert a duplicate binding per existing
+	 * character on every apply.
+	 */
+	const updatedNodeTempIds = new Set<string>()
+	const stateChangeInfo = new Map<
+		string,
+		{ reason: string; sceneIndex: number }
+	>()
+	/** Pre-build values, for rendering the review diff. */
+	const seedOriginals = new Map<
+		string,
+		{ nodeState: string; summary: string | null }
+	>()
+	/** Scenes whose cast this build derived — written back at apply. */
+	const resolvedSceneCast: ResolvedSceneCast[] = []
+	/** Scenes that resolved at least one character — drives the tripwire below. */
+	let scenesWithAnyCast = 0
+
+	/**
+	 * Seeds as a cast list for fuzzy name matching. Built once — matching is
+	 * global across the lorebook, which is the build's existing semantics (the
+	 * seed set is every parent binding, never timeline-scoped). Per-scene
+	 * scoping would make a character unmatchable in scenes earlier than their
+	 * introduction, which is wrong for a whole-history rebuild.
+	 */
+	const seedCastEntries: CastEntry[] = (seedNodes ?? []).map((s) => ({
+		name: s.name,
+		aliases: s.aliases ?? [],
+		id: s.id
+	}))
 
 	// Seed with existing rows — every seed is already a real lorebookBindings
 	// row (bound or background/NPC), so every tempId maps into
@@ -793,6 +888,10 @@ export async function buildGraphFromScenes(
 				summary: seed.summary ?? ""
 			})
 			if (seed.aliases?.length) nodeAliasMap.set(tempId, seed.aliases)
+			seedOriginals.set(tempId, {
+				nodeState: seed.nodeState,
+				summary: seed.summary
+			})
 		}
 	}
 
@@ -830,6 +929,10 @@ export async function buildGraphFromScenes(
 		for (const k of resumeState.newNodeTempIds) newNodeTempIds.add(k)
 		for (const k of resumeState.newRelKeys) newRelKeys.add(k)
 		for (const [k, v] of resumeState.nodeAliasMap) nodeAliasMap.set(k, v)
+		// `?? []` is defensive only — buildResumeStates is an in-process Map,
+		// so a snapshot can't outlive a restart into a newer build.
+		for (const [k, v] of resumeState.proposedByName ?? [])
+			proposedByName.set(k, v)
 	}
 
 	for (let i = startSceneIndex; i < scenesWithSummaries.length; i++) {
@@ -850,7 +953,8 @@ export async function buildGraphFromScenes(
 			updatedSeedRelKeys: [...updatedSeedRelKeys],
 			newNodeTempIds: [...newNodeTempIds],
 			newRelKeys: [...newRelKeys],
-			nodeAliasMap: [...nodeAliasMap.entries()]
+			nodeAliasMap: [...nodeAliasMap.entries()],
+			proposedByName: [...proposedByName.entries()]
 		})
 		const isDirectEntry = scene.sourceHistoryEntryId != null
 
@@ -865,16 +969,6 @@ export async function buildGraphFromScenes(
 			currentSceneLabel: sceneLabel
 		})
 
-		// Post-merge (see the lorebookBindings/narrativeNodes merge plan):
-		// scene.participantCharacters/mentionedCharacters are already real
-		// lorebookBindings ids, resolved once at summarization time
-		// (summarizer/index.ts's extractCharacters()) — not name strings
-		// needing to be matched here. Every id should already be present in
-		// seedTempIdMap (built from the full current binding set before this
-		// runs), so this is a direct lookup, not a fuzzy-matching pass. No
-		// "genuinely new" branch is needed here anymore — a scene can only
-		// ever reference a character that already has a binding row by the
-		// time extraction created that reference.
 		const idToTempId = new Map<number, string>()
 		for (const [tempId, id] of Object.entries(seedTempIdMap)) {
 			idToTempId.set(id, tempId)
@@ -882,37 +976,148 @@ export async function buildGraphFromScenes(
 
 		const presentTempIdsThisScene = new Set<string>()
 		const mentionedTempIdsThisScene = new Set<string>()
-		// Tracks nodes first introduced in this specific scene (for description generation)
+		// Tracks nodes offered to the description pass for this scene.
 		const newNodesThisScene = new Set<string>()
 
-		function resolveSeededNode(id: number, isPresent: boolean) {
-			const effectiveTempId = idToTempId.get(id)
-			if (!effectiveTempId) {
-				console.warn(
-					`[graphBuilder] Scene references binding id ${id} with no ` +
-						`matching seed — it may have been deleted after this ` +
-						`scene was summarized. Skipping.`
-				)
-				return
-			}
-			if (isPresent) presentTempIdsThisScene.add(effectiveTempId)
-			else mentionedTempIdsThisScene.add(effectiveTempId)
-			// Redefined post-merge: every character is already seeded before
-			// any scene runs, so "newly introduced" no longer means "didn't
-			// exist in nodeMap yet" — it means "still has no summary." The
-			// description-generation loop below already skips any node
-			// whose summary is non-empty, so it's safe (and simplest) to
-			// just offer every resolved node here each time it's seen.
-			newNodesThisScene.add(effectiveTempId)
+		function admit(tempId: string, isPresent: boolean) {
+			if (isPresent) presentTempIdsThisScene.add(tempId)
+			else if (!presentTempIdsThisScene.has(tempId))
+				mentionedTempIdsThisScene.add(tempId)
+			// "Newly introduced" means "still has no summary" — the
+			// description loop below re-checks that, so it's safe (and
+			// simplest) to offer every resolved node here each time it's seen.
+			newNodesThisScene.add(tempId)
 		}
 
-		// Present first (matches the old priority — present wins if a
-		// character somehow appears in both lists)
-		for (const id of scene.participantCharacters ?? [])
-			resolveSeededNode(id, true)
-		for (const id of scene.mentionedCharacters ?? [])
-			if (!presentTempIdsThisScene.has(idToTempId.get(id) ?? ""))
-				resolveSeededNode(id, false)
+		/**
+		 * A stored binding id. Direct lookup against the seed map; a miss means
+		 * the binding was deleted after this scene was summarized. Drop the
+		 * *id*, never the scene — a scene with one dead reference and two live
+		 * participants still has a relationship to contribute. (Dangling ids
+		 * are possible at all because participantCharacters is untyped JSON
+		 * with no FK; see the join-table item in the plan.)
+		 */
+		function resolveStoredId(id: number, isPresent: boolean) {
+			const tempId = idToTempId.get(id)
+			if (!tempId) {
+				droppedDanglingIds++
+				return
+			}
+			admit(tempId, isPresent)
+		}
+
+		/**
+		 * Names — from legacy string entries or from extraction. Resolves
+		 * against the seeded cast (which matches on aliases too, via
+		 * entryMatches); anything left over becomes a proposed node, deduped
+		 * through the ledger so a name recurring across scenes is one node.
+		 */
+		function resolveNameRefs(refs: ExtractedCastRef[], isPresent: boolean) {
+			if (refs.length === 0) return
+			const { ids, suggestedNames } = resolveCharacterRefs(
+				refs,
+				seedCastEntries
+			)
+			for (const id of ids) resolveStoredId(id, isPresent)
+			for (const rawName of suggestedNames) {
+				const name = rawName.trim()
+				if (!name) continue
+				// Ledger lookup uses the same normalizer the cast matcher does,
+				// so "Bram" and "bram " collapse. Exact-normalized-name only:
+				// proposed nodes carry no aliases, and inferring them from
+				// near-variants would silently merge distinct characters with
+				// no review. Genuine variants are handled post-apply by the
+				// existing merge/absorb flow.
+				let tempId: string | undefined
+				for (const [known, existingTempId] of proposedByName) {
+					if (namesMatch(known, name)) {
+						tempId = existingTempId
+						break
+					}
+				}
+				if (!tempId) {
+					tempId = `new_${nextNodeIndex++}`
+					proposedByName.set(name, tempId)
+					newNodeTempIds.add(tempId)
+					nodeMap.set(tempId, {
+						tempId,
+						name,
+						nodeState: "active",
+						summary: ""
+					})
+				}
+				admit(tempId, isPresent)
+			}
+		}
+
+		// ── The uniform rule ──────────────────────────────────────────────
+		// ids → lookup, names → resolve, nothing → extract. One path, chosen
+		// by what the row actually holds, not by a legacy-data branch.
+		const storedParticipants = scene.participantCharacters ?? []
+		const storedMentioned = scene.mentionedCharacters ?? []
+		const nothingStored =
+			storedParticipants.length === 0 && storedMentioned.length === 0
+
+		if (nothingStored) {
+			// No cast was ever recorded for this scene. Derive it from the
+			// summary. This is the only LLM call Pass 1 ever makes, and only
+			// for scenes that need it — a scene with ids costs nothing.
+			signal?.throwIfAborted()
+			const extracted = await extractCharactersFromContent({
+				content: sceneSummary,
+				connection,
+				sampling,
+				contextConfig,
+				promptConfig,
+				knownCast: seedCastEntries,
+				signal
+			})
+			// Re-check after the call: an aborted extraction now throws
+			// (summarizer/index.ts), but a *cooperating* abort can still let it
+			// resolve normally with a degraded result, which must not be
+			// mistaken for "this scene has no cast".
+			signal?.throwIfAborted()
+			resolveNameRefs(extracted.participantCharacters, true)
+			resolveNameRefs(extracted.mentionedCharacters, false)
+		} else {
+			// Present first — present wins if a character is in both lists.
+			const numeric = (xs: (number | string)[]) =>
+				xs.filter((x): x is number => typeof x === "number")
+			const named = (xs: (number | string)[]) =>
+				xs
+					.filter((x): x is string => typeof x === "string")
+					.map((name) => ({ name }) as ExtractedCastRef)
+
+			for (const id of numeric(storedParticipants))
+				resolveStoredId(id, true)
+			resolveNameRefs(named(storedParticipants), true)
+			for (const id of numeric(storedMentioned)) resolveStoredId(id, false)
+			resolveNameRefs(named(storedMentioned), false)
+		}
+
+		if (
+			presentTempIdsThisScene.size > 0 ||
+			mentionedTempIdsThisScene.size > 0
+		) {
+			scenesWithAnyCast++
+		}
+
+		// Report scenes whose cast we had to derive, so apply can persist it.
+		// Scenes that already held usable ids are skipped — nothing to write.
+		const derivedCast =
+			nothingStored ||
+			storedParticipants.some((x) => typeof x === "string") ||
+			storedMentioned.some((x) => typeof x === "string")
+		if (derivedCast) {
+			resolvedSceneCast.push({
+				sceneId: isDirectEntry ? null : scene.id,
+				historyEntryId: isDirectEntry
+					? (scene.sourceHistoryEntryId ?? null)
+					: null,
+				participantTempIds: [...presentTempIdsThisScene],
+				mentionedTempIds: [...mentionedTempIdsThisScene]
+			})
+		}
 
 		// ── Description pass: one LLM call per newly introduced node ─────────
 		if (newNodesThisScene.size > 0) {
@@ -961,6 +1166,13 @@ export async function buildGraphFromScenes(
 					nodeDescriptionUserPrompt(node.name, relevant, sceneSummary)
 				)
 				nodeMap.set(tempId, { ...node, summary: desc.trim() })
+				// Fill-blanks-only: the `node.summary` guard above means we
+				// only ever get here for a node that had none, so a seed
+				// reaching this point is a genuine blank being filled, never an
+				// existing summary being overwritten. (Seeds normally arrive
+				// with a summary from the character/persona sheet fallback, so
+				// in practice this is mostly newly-discovered NPCs.)
+				if (seedTempIdMap[tempId] != null) updatedNodeTempIds.add(tempId)
 			}
 		}
 
@@ -1010,13 +1222,24 @@ export async function buildGraphFromScenes(
 				stateRaw,
 				presentNameToTempId
 			)
-			for (const { tempId, newState, reason: _reason } of stateChanges) {
+			for (const { tempId, newState, reason } of stateChanges) {
 				const node = nodeMap.get(tempId)
 				if (!node || node.nodeState === newState) continue
 				nodeMap.set(tempId, { ...node, nodeState: newState })
+				// A seed's state change is a proposed UPDATE. A discovered
+				// node's isn't — it's still unsaved, so the change just lands
+				// in its INSERT.
+				if (seedTempIdMap[tempId] != null) {
+					updatedNodeTempIds.add(tempId)
+					stateChangeInfo.set(tempId, { reason, sceneIndex: i })
+				}
 			}
 		}
 
+		// Relationships need a pair, so a solo scene has no perspective work.
+		// Deliberately placed AFTER the description and state passes above so
+		// it skips Pass 2 only — a one-character scene still contributes that
+		// character's description and any state change. Do not hoist it.
 		if (presentTempIdsThisScene.size < 2) continue
 
 		// ── Pass 2: Per-character perspective ─────────────────────────────────
@@ -1173,6 +1396,37 @@ export async function buildGraphFromScenes(
 	const proposalNodes = [...nodeMap.values()].filter((n) =>
 		newNodeTempIds.has(n.tempId)
 	)
+	// Proposed UPDATEs to existing bindings. Carries previous values so review
+	// can render a diff. An entry whose values ended up unchanged is dropped —
+	// no point asking the user to approve a no-op.
+	const proposalUpdatedNodes: Sockets.NarrativeGraph.NodeUpdateProposal[] = []
+	for (const tempId of updatedNodeTempIds) {
+		const node = nodeMap.get(tempId)
+		const original = seedOriginals.get(tempId)
+		if (!node || !original) continue
+		const info = stateChangeInfo.get(tempId)
+		const stateChanged = node.nodeState !== original.nodeState
+		const summaryChanged = (node.summary ?? "") !== (original.summary ?? "")
+		if (!stateChanged && !summaryChanged) continue
+		proposalUpdatedNodes.push({
+			tempId,
+			name: node.name,
+			...(stateChanged
+				? {
+						nodeState: node.nodeState,
+						previousNodeState: original.nodeState,
+						nodeStateReason: info?.reason
+					}
+				: {}),
+			...(summaryChanged
+				? {
+						summary: node.summary ?? "",
+						previousSummary: original.summary
+					}
+				: {}),
+			sceneIndex: info?.sceneIndex
+		})
+	}
 	const proposalRelationships = [...relMap.values()].filter((r) => {
 		const key = `${r.fromTempId}|${r.toTempId}|${r.relationshipType}`
 		if (seedRelKeys.has(key)) return updatedSeedRelKeys.has(key)
@@ -1184,12 +1438,30 @@ export async function buildGraphFromScenes(
 		if (!newNodeTempIds.has(tempId)) seedNodeNames[tempId] = node.name
 	}
 
+	// Tripwire, not a user-facing path. Keyed on RESOLUTION failing everywhere,
+	// deliberately not on the proposal being empty: a story where every scene
+	// features one character resolves fine and legitimately yields no
+	// relationships, and a re-run over an unchanged lorebook legitimately
+	// yields no *new* ones. Both must reach review. What must never happen
+	// again is returning an empty proposal as a successful build when in fact
+	// nobody could be resolved at all — that is how this subsystem hid a total
+	// failure for an entire release.
+	if (scenesWithSummaries.length > 0 && scenesWithAnyCast === 0) {
+		throw new Error(
+			droppedDanglingIds > 0
+				? `Nothing could be extracted from ${scenesWithSummaries.length} scene(s): ${droppedDanglingIds} character reference(s) point at bindings that no longer exist. Re-process the affected scenes to refresh their cast.`
+				: `Nothing could be extracted from ${scenesWithSummaries.length} scene(s) — no characters were found in any summary.`
+		)
+	}
+
 	return {
 		proposal: {
 			nodes: proposalNodes,
-			relationships: proposalRelationships
+			relationships: proposalRelationships,
+			updatedNodes: proposalUpdatedNodes
 		},
 		sceneLabels,
+		resolvedSceneCast,
 		seedTempIdMap,
 		seedNodeNames
 	}

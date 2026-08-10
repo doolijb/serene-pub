@@ -8,6 +8,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { dndzone } from "svelte-dnd-action"
 	import RemoveFromChatModal from "../modals/RemoveFromChatModal.svelte"
+	import ChatsUnsavedChangesModal from "../modals/ChatsUnsavedChangesModal.svelte"
 	import { onDestroy, onMount, getContext, untrack } from "svelte"
 	import { Switch, Tabs } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
@@ -576,10 +577,31 @@
 		}
 	}
 
+	let showCancelModal = $state(false)
+
+	function handleCloseFormOnOpenChange(e: OpenChangeDetails) {
+		if (!e.open) {
+			showCancelModal = false
+		}
+	}
+
 	function handleCloseForm() {
-		// TODO handle unsaved changes if any
+		if (hasChanges) {
+			showCancelModal = true
+		} else {
+			showEditChatForm = false
+			onClose?.()
+		}
+	}
+
+	function handleCloseModalDiscard() {
+		showCancelModal = false
 		showEditChatForm = false
 		onClose?.()
+	}
+
+	function handleCloseModalCancel() {
+		showCancelModal = false
 	}
 
 	// Socket event handlers - defined as named functions for proper cleanup
@@ -1594,4 +1616,10 @@
 	onMultiSelect={handleAddGuests}
 	title="Add Guests to Chat"
 	description="Select users to add as guests. Guests can view and participate in the chat."
+/>
+<ChatsUnsavedChangesModal
+	open={showCancelModal}
+	onOpenChange={handleCloseFormOnOpenChange}
+	onConfirm={handleCloseModalDiscard}
+	onCancel={handleCloseModalCancel}
 />

@@ -18,6 +18,10 @@ import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
+import {
+	readSceneCast,
+	writeSceneCast
+} from "$lib/server/utils/sceneCast"
 
 let testDb: TestDb
 let dataDir: string
@@ -91,11 +95,13 @@ describe("narrativeGraph:deleteNode — scene array cleanup (PGlite integration)
 			.values({
 				lorebookId: lorebook.id,
 				historyEntryId: historyEntry.id,
-				name: "Scene",
-				participantCharacters: [node.id, other.id],
-				mentionedCharacters: [node.id]
+				name: "Scene"
 			})
 			.returning()
+		await writeSceneCast(scene.id, {
+			participantCharacters: [node.id, other.id],
+			mentionedCharacters: [node.id]
+		})
 
 		await narrativeGraphDeleteNodeHandler.handler(
 			fakeSocket(user.id),
@@ -103,11 +109,12 @@ describe("narrativeGraph:deleteNode — scene array cleanup (PGlite integration)
 			noopEmit
 		)
 
-		const updatedScene = await testDb.query.scenes.findFirst({
-			where: eq(schema.scenes.id, scene.id)
-		})
-		expect(updatedScene!.participantCharacters).toEqual([other.id])
-		expect(updatedScene!.mentionedCharacters).toEqual([])
+		// The handler no longer rewrites scene cast by hand — scene_characters
+		// .binding_id is a real FK with ON DELETE cascade, so the deleted
+		// node's rows go with it while the other participant is untouched.
+		const updatedScene = await readSceneCast(scene.id)
+		expect(updatedScene.participantCharacters).toEqual([other.id])
+		expect(updatedScene.mentionedCharacters).toEqual([])
 
 		const deletedNode = await testDb.query.lorebookBindings.findFirst({
 			where: eq(schema.lorebookBindings.id, node.id)

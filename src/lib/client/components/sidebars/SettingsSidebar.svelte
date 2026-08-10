@@ -11,6 +11,7 @@
 	import UserSettingsTab from "../settingsTabs/UserSettingsTab.svelte"
 	import SystemSettingsTab from "../settingsTabs/SystemSettingsTab.svelte"
 	import CustomThemeManager from "../CustomThemeManager.svelte"
+	import SettingsUnsavedChangesModal from "../modals/SettingsUnsavedChangesModal.svelte"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -20,16 +21,68 @@
 	// State
 	let activeTab = $state<"user" | "system" | "themes" | "about">("user")
 	let userCtx: UserCtx = $state(getContext("userCtx"))
+	// Shared across the User and System tabs (the only two with buffered,
+	// explicitly-saved fields) — same pattern as LorebooksSidebar's
+	// tabHasUnsavedChanges.
+	let tabHasUnsavedChanges = $state(false)
+	let nextTab: "user" | "system" | "themes" | "about" | undefined =
+		$state()
+	let showUnsavedChangesModal = $state(false)
+	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
 
 	// Handle tab switching
 	function handleTabChange(e: ValueChangeDetails): void {
-		activeTab = e.value as "user" | "system" | "themes" | "about"
+		const target = e.value as "user" | "system" | "themes" | "about"
+		if (!tabHasUnsavedChanges) {
+			activeTab = target
+		} else {
+			nextTab = target
+			showUnsavedChangesModal = true
+		}
+	}
+
+	function handleUnsavedChangesModalOnOpenChange(e: OpenChangeDetails) {
+		if (!e.open) {
+			showUnsavedChangesModal = false
+			nextTab = undefined
+			if (confirmCloseSidebarResolve) {
+				confirmCloseSidebarResolve(false)
+				confirmCloseSidebarResolve = null
+			}
+		}
+	}
+
+	function handleUnsavedChangesModalConfirm() {
+		showUnsavedChangesModal = false
+		if (nextTab) {
+			activeTab = nextTab
+			nextTab = undefined
+		}
+		if (confirmCloseSidebarResolve) {
+			confirmCloseSidebarResolve(true)
+			confirmCloseSidebarResolve = null
+		}
+	}
+
+	function handleUnsavedChangesModalCancel() {
+		showUnsavedChangesModal = false
+		nextTab = undefined
+		if (confirmCloseSidebarResolve) {
+			confirmCloseSidebarResolve(false)
+			confirmCloseSidebarResolve = null
+		}
+	}
+
+	async function handleOnClose(): Promise<boolean> {
+		if (!tabHasUnsavedChanges) return true
+		showUnsavedChangesModal = true
+		return new Promise<boolean>((resolve) => {
+			confirmCloseSidebarResolve = resolve
+		})
 	}
 
 	onMount(() => {
-		onclose = async () => {
-			return true
-		}
+		onclose = handleOnClose
 	})
 </script>
 
@@ -111,13 +164,15 @@
 			</Tabs.List>
 			<Tabs.Content value="user">
 				{#if activeTab === "user"}
-					<UserSettingsTab />
+					<UserSettingsTab bind:hasUnsavedChanges={tabHasUnsavedChanges} />
 				{/if}
 			</Tabs.Content>
 			{#if userCtx.user?.isAdmin}
 				<Tabs.Content value="system">
 					{#if activeTab === "system"}
-						<SystemSettingsTab />
+						<SystemSettingsTab
+						bind:hasUnsavedChanges={tabHasUnsavedChanges}
+					/>
 					{/if}
 				</Tabs.Content>
 			{/if}
@@ -227,3 +282,10 @@
 		</Tabs>
 	</div>
 </div>
+
+<SettingsUnsavedChangesModal
+	open={showUnsavedChangesModal}
+	onOpenChange={handleUnsavedChangesModalOnOpenChange}
+	onConfirm={handleUnsavedChangesModalConfirm}
+	onCancel={handleUnsavedChangesModalCancel}
+/>

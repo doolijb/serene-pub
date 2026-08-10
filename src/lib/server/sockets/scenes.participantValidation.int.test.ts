@@ -10,6 +10,16 @@
  * now filter to only ids present in lorebookBindings for the scene's own
  * lorebookId, silently dropping anything else (matching the same
  * "drop, don't error" tolerance the downstream consumers already use).
+ *
+ * Updated: these arrays hold **lorebookBindings ids**, not character ids.
+ * The filter used to scope by `b.characterId` and these cases were written
+ * to match, passing character ids — which happened to pass only when a
+ * binding id and a character id coincided numerically. Under the real
+ * semantics that silently erased every unbound background/NPC binding
+ * (characterId NULL can never match), wiping scene casts on each re-process.
+ * The cases below now use binding ids, which is what scenes:process,
+ * chats:summarize and the graph build all actually emit; the guarantee under
+ * test — "an id not belonging to this lorebook is dropped" — is unchanged.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -75,13 +85,27 @@ describe("scenes:create/update — participantCharacters/mentionedCharacters sco
 			.returning()
 
 		const boundChar = await makeCharacter(owner.id, "Bound Character")
-		await testDb.insert(schema.lorebookBindings).values({
-			lorebookId: lorebook.id,
-			characterId: boundChar.id,
-			binding: "{{char:1}}"
-		})
-		// A character that exists, but has no binding in THIS lorebook.
-		const unboundChar = await makeCharacter(owner.id, "Unbound Character")
+		const [localBinding] = await testDb
+			.insert(schema.lorebookBindings)
+			.values({
+				lorebookId: lorebook.id,
+				characterId: boundChar.id,
+				binding: "{{char:1}}"
+			})
+			.returning()
+		// A binding that exists, but in a DIFFERENT lorebook.
+		const [otherLorebook] = await testDb
+			.insert(schema.lorebooks)
+			.values({ name: "Other Lorebook", userId: owner.id })
+			.returning()
+		const [foreignBinding] = await testDb
+			.insert(schema.lorebookBindings)
+			.values({
+				lorebookId: otherLorebook.id,
+				binding: "{{char:1}}",
+				name: "Foreign"
+			})
+			.returning()
 
 		const res = await sceneCreateHandler.handler(
 			fakeSocket(owner.id),
@@ -91,15 +115,55 @@ describe("scenes:create/update — participantCharacters/mentionedCharacters sco
 					historyEntryId: historyEntry.id,
 					name: "Scene",
 					summary: "Summary",
-					participantCharacters: [boundChar.id, unboundChar.id],
-					mentionedCharacters: [unboundChar.id]
+					participantCharacters: [localBinding.id, foreignBinding.id],
+					mentionedCharacters: [foreignBinding.id]
 				} as any
 			},
 			noopEmit
 		)
 
-		expect(res.scene.participantCharacters).toEqual([boundChar.id])
+		expect(res.scene.participantCharacters).toEqual([localBinding.id])
 		expect(res.scene.mentionedCharacters).toEqual([])
+	})
+
+	test("create: keeps an UNBOUND background/NPC binding id", async () => {
+		const { sceneCreateHandler } = await import("./scenes")
+		const owner = await makeUser("scene-participant-npc-owner")
+
+		const [lorebook] = await testDb
+			.insert(schema.lorebooks)
+			.values({ name: "NPC Lorebook", userId: owner.id })
+			.returning()
+		const [historyEntry] = await testDb
+			.insert(schema.historyEntries)
+			.values({ lorebookId: lorebook.id })
+			.returning()
+		// characterId NULL — a discovered character, the shape the old
+		// characterId-based filter could never match and always erased.
+		const [npc] = await testDb
+			.insert(schema.lorebookBindings)
+			.values({
+				lorebookId: lorebook.id,
+				binding: "{{char:7}}",
+				name: "Cassia"
+			})
+			.returning()
+
+		const res = await sceneCreateHandler.handler(
+			fakeSocket(owner.id),
+			{
+				scene: {
+					lorebookId: lorebook.id,
+					historyEntryId: historyEntry.id,
+					name: "Scene",
+					summary: "Cassia appeared.",
+					participantCharacters: [npc.id]
+				} as any
+			},
+			noopEmit
+		)
+
+		expect(res.scene.participantCharacters).toEqual([npc.id])
 	})
 
 	test("update: drops a character id not bound into the scene's own lorebook", async () => {
@@ -117,12 +181,26 @@ describe("scenes:create/update — participantCharacters/mentionedCharacters sco
 			.values({ lorebookId: lorebook.id })
 			.returning()
 		const boundChar = await makeCharacter(owner.id, "Bound Character 2")
-		await testDb.insert(schema.lorebookBindings).values({
-			lorebookId: lorebook.id,
-			characterId: boundChar.id,
-			binding: "{{char:1}}"
-		})
-		const foreignChar = await makeCharacter(owner.id, "Foreign Character")
+		const [localBinding] = await testDb
+			.insert(schema.lorebookBindings)
+			.values({
+				lorebookId: lorebook.id,
+				characterId: boundChar.id,
+				binding: "{{char:1}}"
+			})
+			.returning()
+		const [otherLorebook] = await testDb
+			.insert(schema.lorebooks)
+			.values({ name: "Other Lorebook 2", userId: owner.id })
+			.returning()
+		const [foreignBinding] = await testDb
+			.insert(schema.lorebookBindings)
+			.values({
+				lorebookId: otherLorebook.id,
+				binding: "{{char:1}}",
+				name: "Foreign 2"
+			})
+			.returning()
 
 		const created = await sceneCreateHandler.handler(
 			fakeSocket(owner.id),
@@ -142,14 +220,14 @@ describe("scenes:create/update — participantCharacters/mentionedCharacters sco
 			{
 				scene: {
 					id: created.scene.id,
-					participantCharacters: [boundChar.id, foreignChar.id],
-					mentionedCharacters: [foreignChar.id]
+					participantCharacters: [localBinding.id, foreignBinding.id],
+					mentionedCharacters: [foreignBinding.id]
 				} as any
 			},
 			noopEmit
 		)
 
-		expect(res.scene.participantCharacters).toEqual([boundChar.id])
+		expect(res.scene.participantCharacters).toEqual([localBinding.id])
 		expect(res.scene.mentionedCharacters).toEqual([])
 	})
 })

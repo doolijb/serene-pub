@@ -36,7 +36,6 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		tokenCounter,
 		tokenLimit,
 		contextThresholdPercent,
-		isAssistantMode,
 		generatingMessageMetadata
 	}: {
 		connection: SelectConnection
@@ -48,7 +47,6 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		tokenCounter?: TokenCounters
 		tokenLimit?: number
 		contextThresholdPercent?: number
-		isAssistantMode?: boolean
 		generatingMessageMetadata?: any
 	}) {
 		super({
@@ -69,7 +67,6 @@ class OllamaAdapter extends BaseConnectionAdapter {
 					? sampling.contextTokens
 					: 2048),
 			contextThresholdPercent: contextThresholdPercent || 0.9,
-			isAssistantMode,
 			generatingMessageMetadata
 		})
 	}

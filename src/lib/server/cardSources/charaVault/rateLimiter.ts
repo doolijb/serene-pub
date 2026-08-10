@@ -72,10 +72,22 @@ export class RateLimitTimeoutError extends Error {
 	}
 }
 
+/** Distinct from RateLimitTimeoutError ("waited too long") — this means
+ * the caller gave up before a slot was granted (eg. a newer search
+ * superseded it). Callers treat this as routine/quiet, not a user-facing
+ * error. */
+export class RateLimitAbortedError extends Error {
+	constructor() {
+		super("CharaVault request was cancelled before a rate-limit slot was granted")
+		this.name = "RateLimitAbortedError"
+	}
+}
+
 interface Waiter {
 	resolve: () => void
 	reject: (err: Error) => void
 	timeoutId?: ReturnType<typeof setTimeout>
+	abortCleanup?: () => void
 }
 
 let timestamps: number[] = []
@@ -109,6 +121,7 @@ function scheduleDrain(waitMs: number) {
 
 function grant(waiter: Waiter) {
 	if (waiter.timeoutId) clearTimeout(waiter.timeoutId)
+	waiter.abortCleanup?.()
 	timestamps.push(Date.now())
 	waiter.resolve()
 }
@@ -157,12 +170,25 @@ function drain() {
  * @param priority - "interactive" (default) for calls a user is directly
  *   waiting on (search, card detail, login); "background" for bulk/opportunistic
  *   calls (card thumbnails) that should never make an interactive call wait.
+ * @param signal - Optional. If the caller no longer wants this request (eg.
+ *   a newer search superseded it) and this call is still queued, it's
+ *   removed immediately — freeing the slot without spending a timestamp —
+ *   and rejects with RateLimitAbortedError instead of RateLimitTimeoutError.
  */
 export async function acquire(
 	hasActiveSession: boolean,
-	priority: AcquirePriority = "interactive"
+	priority: AcquirePriority = "interactive",
+	signal?: AbortSignal
 ): Promise<void> {
 	latestHasActiveSession = hasActiveSession
+
+	// Checked first, ahead of the queue-cap checks below — a caller that's
+	// already given up shouldn't get a "queue is full" error when the real
+	// reason is "I don't want this anymore," and shouldn't consume a queue
+	// slot at all.
+	if (signal?.aborted) {
+		throw new RateLimitAbortedError()
+	}
 
 	if (
 		priority === "background" &&
@@ -182,6 +208,7 @@ export async function acquire(
 		if (priority === "background") {
 			waiter.timeoutId = setTimeout(() => {
 				removeWaiter(queues.background, waiter)
+				waiter.abortCleanup?.()
 				reject(new RateLimitTimeoutError())
 			}, BACKGROUND_TIMEOUT_MS)
 		}
@@ -194,6 +221,16 @@ export async function acquire(
 		// already bounds the unbounded-growth/memory concern this fixes;
 		// letting interactive calls wait it out (as they always have) keeps
 		// that fix from also breaking normal, non-abusive usage.
+		if (signal) {
+			const onAbort = () => {
+				removeWaiter(queues[priority], waiter)
+				if (waiter.timeoutId) clearTimeout(waiter.timeoutId)
+				reject(new RateLimitAbortedError())
+			}
+			signal.addEventListener("abort", onAbort, { once: true })
+			waiter.abortCleanup = () =>
+				signal.removeEventListener("abort", onAbort)
+		}
 		queues[priority].push(waiter)
 		drain()
 	})

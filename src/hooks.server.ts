@@ -1,7 +1,16 @@
 import { dev } from "$app/environment"
 import { appVersion } from "$lib/shared/constants/version"
 import type { Handle, RequestEvent } from "@sveltejs/kit"
+import { installPrettyConsole } from "$lib/server/utils/prettyConsole"
 // import { userAuthentication, routeGuard } from "$server/middleware"
+
+// Installed here, at module scope, so it runs once during server startup —
+// before any request is handled and (critically) before the first
+// request-triggered import of $lib/server/db or the socket server, both of
+// which log at their own module-load time (see loadSockets.server.ts /
+// db/index.ts). Everything server-side logs through console.*, so patching
+// it here covers all of it in one place.
+installPrettyConsole()
 
 type Middleware = (event: RequestEvent) => Promise<void> | void
 

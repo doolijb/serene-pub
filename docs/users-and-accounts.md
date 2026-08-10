@@ -91,7 +91,7 @@ The **User** tab itself contains, top to bottom:
 - **Show All Character Fields** — a switch that expands advanced/optional fields on the character editor by default instead of hiding them behind a "Show All Fields" toggle.
 - **Easy Character Creation** — a switch controlling whether the simplified character-creation flow is offered.
 - **Easy Persona Creation** — the same, for persona creation.
-- **Show Home Page Banner** — a switch controlling whether the dismissible logo banner appears at the top of the home page (the "Serene Pub is in alpha!" notice underneath it always shows regardless of this setting).
+- **Show Home Page Banner** — a switch controlling whether the dismissible logo banner appears at the top of the home page (the "Serene Pub is in beta!" notice underneath it always shows regardless of this setting).
 - **Document View** — a **Switch to Document View** button that jumps to Serene Pub's simplified, high-contrast, keyboard- and screen-reader-friendly interface, also reachable any time with Ctrl+Shift+Y. See [Document View](./document-view.md).
 
 ### Data Import (admin only)

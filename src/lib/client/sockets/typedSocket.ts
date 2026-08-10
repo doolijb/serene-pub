@@ -399,10 +399,6 @@ export type SocketEventMap = {
 		params: Sockets.Chats.List.Params
 		response: Sockets.Chats.List.Response
 	}
-	"chats:listAssistant": {
-		params: Sockets.Chats.List.Params
-		response: Sockets.Chats.List.Response
-	}
 	"chats:typing": {
 		params: Sockets.Chats.Typing.Params
 		response: Sockets.Chats.Typing.Response
@@ -422,10 +418,6 @@ export type SocketEventMap = {
 	"chats:create": {
 		params: Sockets.Chats.Create.Params
 		response: Sockets.Chats.Create.Response
-	}
-	"chats:createAssistant": {
-		params: Sockets.Chats.CreateAssistant.Params
-		response: Sockets.Chats.CreateAssistant.Response
 	}
 	"chats:update": {
 		params: Sockets.Chats.Update.Params
@@ -454,10 +446,6 @@ export type SocketEventMap = {
 	"chats:getNarratorName": {
 		params: Sockets.Chats.GetNarratorName.Params
 		response: Sockets.Chats.GetNarratorName.Response
-	}
-	"chats:titleGenerated": {
-		params: Sockets.Chats.TitleGenerated.Call
-		response: Sockets.Chats.TitleGenerated.Call
 	}
 	"chats:list:error": {
 		params: never
@@ -540,10 +528,6 @@ export type SocketEventMap = {
 	"chatMessages:sendCharacterMessage": {
 		params: Sockets.ChatMessages.SendCharacterMessage.Params
 		response: Sockets.ChatMessages.SendCharacterMessage.Response
-	}
-	"chatMessages:sendAssistantMessage": {
-		params: Sockets.Chats.SendAssistantMessage.Params
-		response: Sockets.Chats.SendAssistantMessage.Response
 	}
 	"chatMessages:update": {
 		params: Sockets.ChatMessages.Update.Params
@@ -1104,10 +1088,6 @@ export type SocketEventMap = {
 		params: Sockets.SystemSettings.UpdateKoboldCppManagerEnabled.Params
 		response: Sockets.SystemSettings.UpdateKoboldCppManagerEnabled.Response
 	}
-	"systemSettings:updateOllamaManagerBaseUrl": {
-		params: Sockets.SystemSettings.UpdateOllamaManagerBaseUrl.Params
-		response: Sockets.SystemSettings.UpdateOllamaManagerBaseUrl.Response
-	}
 	"systemSettings:updateAccountsEnabled": {
 		params: Sockets.SystemSettings.UpdateAccountsEnabled.Params
 		response: Sockets.SystemSettings.UpdateAccountsEnabled.Response
@@ -1479,83 +1459,6 @@ export type SocketEventMap = {
 		response: Sockets.Scenes.Compile.ErrorResponse
 	}
 
-	// Assistant events
-	"assistant:completeV2": {
-		params: never
-		response: { chatId: number; messageId: number; toolsUsed: string[] }
-	}
-	"assistant:errorV2": {
-		params: never
-		response: { chatId: number; error: string }
-	}
-	"assistant:progress": {
-		params: never
-		response: {
-			chatId: number
-			type: "tool_execution" | "draft_generation"
-			tool?: string
-			status?: string
-			field?: string
-			currentField?: number
-			totalFields?: number
-			attempt?: number
-		}
-	}
-	"assistant:unlinkSuccess": {
-		params: never
-		response: { chatId: number; taggedEntities: Record<string, any> }
-	}
-	"assistant:editDraftSuccess": {
-		params: never
-		response: {
-			chatId: number
-			operation: "create" | "edit"
-			entityType: "characters" | "personas"
-			entityIndex: number
-			field: string
-			value: any
-			draft: any
-			chat?: any
-		}
-	}
-	"assistant:editDraftError": {
-		params: never
-		response: { error: string; field?: string; value?: any }
-	}
-	"assistant:metadataUpdated": {
-		params: never
-		// `chats.metadata` is a Drizzle json() column — always an already-
-		// parsed object by the time assistantV2.ts reads and re-emits it.
-		response: { chatId: number; metadata: Record<string, any> }
-	}
-	"assistant:saveDraft": {
-		params: { chatId: number }
-		response: any
-	}
-	"assistant:editDraft": {
-		params: {
-			chatId: number
-			operation: string
-			entityType: string
-			entityIndex: number
-			field: string
-			value: any
-		}
-		response: any
-	}
-	"assistant:sendMessageV2": {
-		params: { chatId: number; content: string }
-		response: any
-	}
-	"assistant:selectFunctionResults": {
-		params: { chatId: number; selectedIds: number[]; type: string }
-		response: any
-	}
-	"assistant:unlinkEntity": {
-		params: { chatId: number; entityId: number; type: string }
-		response: any
-	}
-
 	// Tag events
 	"tags:list": {
 		params: Sockets.Tags.List.Params
@@ -1610,6 +1513,13 @@ export type SocketEventMap = {
 	"narrativeGraph:applyProposal": {
 		params: Sockets.NarrativeGraph.ApplyProposal.Params
 		response: Sockets.NarrativeGraph.ApplyProposal.Response
+	}
+	// Deliberately absent from Layout's HANDLED_ERROR_EVENTS: the modal's
+	// listener only un-sticks the Apply button, and the catch-all supplies the
+	// toast with the server's real message.
+	"narrativeGraph:applyProposal:error": {
+		params: Sockets.NarrativeGraph.ApplyProposal.ErrorResponse
+		response: Sockets.NarrativeGraph.ApplyProposal.ErrorResponse
 	}
 	"narrativeGraph:updateNode": {
 		params: {

@@ -31,7 +31,8 @@ import {
 	embed,
 	isModelReady,
 	getLoadedModelId,
-	loadEmbeddingModel
+	loadConfiguredEmbeddingModel,
+	getConfiguredModelId
 } from "./index"
 import { randomUUID } from "crypto"
 
@@ -206,6 +207,45 @@ export async function startVectorizationQueue(opts?: {
 	shouldStop = false
 	clearVectorizationFailureTracking()
 	runQueue()
+}
+
+const PERIODIC_SCAN_INTERVAL_MS = 15 * 60 * 1000
+
+let scanTimer: ReturnType<typeof setInterval> | null = null
+
+/**
+ * Periodically (re-)triggers the queue so missing/stale embeddings get
+ * picked up even without a reactive create/update trigger or a manual
+ * "Start Queue" click — e.g. after a server restart with a backlog already
+ * present, or content that went stale for a reason unrelated to its own
+ * create/update (a model switch, say). Deliberately does NOT load the
+ * embedding model itself — startVectorizationQueue() -> runQueue() only
+ * loads it (via loadConfiguredEmbeddingModel(), mode-aware) once
+ * pickNextItem() actually finds something to embed, so an instance with
+ * nothing to do never pays any model-load cost, on this timer or at boot.
+ *
+ * Call once at boot; the first tick runs immediately (that *is* the
+ * boot-time trigger, not a separate code path) and every
+ * PERIODIC_SCAN_INTERVAL_MS after. Idempotent — a second call is a no-op,
+ * mirroring startVectorizationQueue()'s own isRunning guard, so this is
+ * safe to call again if it's ever wired up somewhere other than boot.
+ */
+export function startPeriodicVectorizationScan() {
+	if (scanTimer) return
+	const tick = async () => {
+		try {
+			const settings = await db.query.systemSettings.findFirst({
+				columns: { vectorizationEnabled: true }
+			})
+			if (settings?.vectorizationEnabled) {
+				await startVectorizationQueue()
+			}
+		} catch (err) {
+			console.error("[vectorization] Periodic scan tick failed:", err)
+		}
+	}
+	void tick()
+	scanTimer = setInterval(tick, PERIODIC_SCAN_INTERVAL_MS).unref()
 }
 
 // ---------------------------------------------------------------------------
@@ -468,25 +508,36 @@ async function runQueue() {
 				continue
 			}
 
+			let item: QueueItem | null
 			if (!isModelReady()) {
-				// Try to auto-load the model from system settings
-				const settings = await db.query.systemSettings.findFirst({
-					columns: {
-						vectorizationEnabled: true,
-						embeddingModelName: true
-					}
-				})
-				if (
-					!settings?.vectorizationEnabled ||
-					!settings.embeddingModelName
-				) {
-					console.warn(
-						"[vectorization] Queue stopped: vectorization disabled or no model configured"
-					)
-					break
-				}
+				// Peek before paying the load cost: pickNextItem() is
+				// normally keyed on the *loaded* model's identity, which is
+				// always null here — so it'd always report "nothing to do"
+				// pre-load regardless of whether a real backlog exists.
+				// getConfiguredModelId() gives the identity the model WOULD
+				// load under without loading it (verified byte-identical to
+				// the post-load id, both modes — see index.ts), so the
+				// check can run first. An instance with nothing to do never
+				// pays the model-load cost, matching this function's own
+				// long-standing intent (see startPeriodicVectorizationScan's
+				// doc comment) that the unconditional load below used to
+				// silently defeat.
+				const candidateModel = await getConfiguredModelId()
+				if (!candidateModel) break // disabled or unconfigured
+
+				const peeked = await pickNextItem(candidateModel)
+				if (!peeked) break // genuinely nothing to do — never load
+
+				// Mode-aware: branches on vectorizationConfigs.mode to load
+				// the local pipeline or activate the API backend correctly
+				// (previously always called loadEmbeddingModel() here
+				// regardless of mode, which rejected an API-mode composite
+				// model id as "Unknown embedding model" — silently masked
+				// as long as something else loaded the correct backend
+				// first, which stops being guaranteed once this is the only
+				// on-demand load path).
 				try {
-					await loadEmbeddingModel(settings.embeddingModelName)
+					await loadConfiguredEmbeddingModel()
 				} catch (err) {
 					console.error(
 						"[vectorization] Failed to auto-load model:",
@@ -494,10 +545,23 @@ async function runQueue() {
 					)
 					break
 				}
-				if (!isModelReady()) break
+				if (!isModelReady()) {
+					console.warn(
+						"[vectorization] Queue stopped: vectorization disabled or embedding backend not ready"
+					)
+					break
+				}
+				// Reuse the peeked item rather than re-picking now that the
+				// model is loaded: a successful pickNextItem() call rotates
+				// the front priority group to the back (round-robin
+				// fairness) as a side effect of finding an item, not only
+				// when a group is exhausted — picking twice for what's
+				// conceptually the same "next item" would double-rotate
+				// that bookkeeping with only one item actually processed.
+				item = peeked
+			} else {
+				item = await pickNextItem()
 			}
-
-			const item = await pickNextItem()
 			if (!item) break
 
 			broadcastStatus("running", item.label)
@@ -563,8 +627,15 @@ function needsEmbedding(
 
 // Exported only so tests can exercise the round-robin fairness logic
 // directly — every real caller is runQueue() below.
-export async function pickNextItem(): Promise<QueueItem | null> {
-	const currentModel = getLoadedModelId()
+//
+// modelIdOverride lets a caller check for pending work against a model
+// that isn't loaded yet (runQueue()'s peek-before-load, using
+// getConfiguredModelId()'s pre-load candidate) — defaults to the loaded
+// model's id, the original (and still normal, once-loaded) behavior.
+export async function pickNextItem(
+	modelIdOverride?: string
+): Promise<QueueItem | null> {
+	const currentModel = modelIdOverride ?? getLoadedModelId()
 	if (!currentModel) return null
 
 	// Round-robin across priority groups — one item from the front group,
@@ -748,6 +819,143 @@ async function pickChatMessage(
 			)
 		}
 	}
+}
+
+// ensureChatMessageEmbedded() is awaited from inside runGenerateAndPersist()
+// (generateResponse.ts) — itself llmQueue's execute() callback, and llmQueue
+// has a single global lane (llmQueue.ts:85), so only one generation runs at
+// a time, server-wide. That makes a hung embed() call here worse than any
+// existing caller (e.g. RagInfillEngine's query-time batchEmbed(), which
+// only blocks the one generation that triggered it): it would stall every
+// other user's queued chat generation too. The two constants below guard
+// two different things:
+//   - INLINE_EMBED_TIMEOUT_MS bounds how long ONE call waits on embed()
+//     before giving up (embed()/batchEmbed() in embedding/index.ts have no
+//     timeout of their own — a general fix belongs there, for every caller,
+//     and is out of scope here).
+//   - INLINE_EMBED_COOLDOWN_MS bounds how often a genuinely wedged backend
+//     gets retried at all. Without it, every subsequent round-robin turn
+//     would independently pay the full timeout again — a 4-character round
+//     becomes 4x INLINE_EMBED_TIMEOUT_MS of added stall, repeated every
+//     round, indefinitely. A timeout (not a normal embed() rejection, e.g.
+//     an auth error, which shouldn't silence this) instead suppresses
+//     further attempts until the cooldown elapses, degrading to "inline
+//     embedding is off, the background queue catches up later."
+const INLINE_EMBED_TIMEOUT_MS = 10_000
+const INLINE_EMBED_COOLDOWN_MS = 60_000
+let inlineEmbedDisabledUntil = 0
+
+/** Exported so a corrected embedding config (see vectorization.ts's
+ * setApiConfig/setModel handlers, which already do the same for
+ * clearVectorizationFailureTracking()) doesn't leave inline embedding
+ * suppressed until the cooldown happens to elapse on its own — and so
+ * tests can isolate cases without leaking cooldown state between them. */
+export function clearInlineEmbedCooldown() {
+	inlineEmbedDisabledUntil = 0
+}
+
+class InlineEmbedTimeoutError extends Error {}
+
+/**
+ * Doesn't cancel the underlying call — embed()/batchEmbed() accept no
+ * AbortSignal, so there's nothing to cancel — it only stops waiting for it.
+ * `promise.catch(() => {})` attaches a handler directly to the original,
+ * abandoned promise so a rejection that arrives after the timeout has
+ * already won the race (e.g. the API client's own eventual socket error)
+ * can't surface as an unhandled rejection. Deliberately NOT
+ * `Promise.race([promise.catch(() => {}), timeout])` — racing a *derived*
+ * catch-copy would resolve that branch to `undefined` on a genuine
+ * pre-timeout rejection instead of propagating it, silently writing a
+ * garbage embedding. The no-op catch must sit on a copy that is never
+ * itself raced; `promise` (the original) is still what's raced below.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+	promise.catch(() => {})
+	let timer!: ReturnType<typeof setTimeout>
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(
+			() => reject(new InlineEmbedTimeoutError("Inline embed timed out")),
+			ms
+		)
+	})
+	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
+/**
+ * Ensures one specific chat message has a current embedding — embedding and
+ * saving it inline if missing/stale, or no-op'ing immediately if it's
+ * already up to date (or the model isn't currently loaded). Called from
+ * generateResponse.ts, awaited right after a generated message's final
+ * content is persisted, so the very next round-robin turn's RAG retrieval
+ * can find it as a candidate instead of only the background queue
+ * eventually getting to it.
+ *
+ * Reuses the exact staleness predicate (needsEmbedding) and safe write
+ * (writeEmbeddingIfFresh) the background queue itself uses for this row, so
+ * this is safe to call even while the queue is concurrently running: if the
+ * queue's pickChatMessage() happens to grab the same row at nearly the same
+ * time, both compute the same vector for the same content and both writes
+ * land harmlessly; if the queue gets there first, this query simply finds
+ * nothing stale left to do. writeEmbeddingIfFresh's optimistic-concurrency
+ * guard is what prevents either from clobbering a genuine concurrent edit.
+ */
+export async function ensureChatMessageEmbedded(
+	messageId: number
+): Promise<void> {
+	if (!isModelReady()) return
+	if (Date.now() < inlineEmbedDisabledUntil) return
+	// Non-null assertion is safe: isModelReady() (embedding/index.ts) already
+	// requires loadedModelId !== null for both the "local" and "api" backend
+	// branches, and nothing async happens between that check and this read —
+	// JS run-to-completion means nothing (incl. a TTL unload timer) can run
+	// in between. Do NOT insert an await between the checks above and this
+	// line — that would reopen the window this relies on. writeEmbeddingIfFresh's
+	// own model-freshness guard is a second, independent backstop regardless.
+	const currentModel = getLoadedModelId()!
+
+	const staleness = needsEmbedding(
+		schema.chatMessages.embedding,
+		schema.chatMessages.embeddingModel,
+		currentModel,
+		schema.chatMessages.updatedAt,
+		schema.chatMessages.vectorizedAt
+	)
+
+	const rows = await db
+		.select({
+			id: schema.chatMessages.id,
+			content: schema.chatMessages.content,
+			updatedAtRaw: sql<string>`${schema.chatMessages.updatedAt}::text`
+		})
+		.from(schema.chatMessages)
+		.where(and(eq(schema.chatMessages.id, messageId), staleness))
+		.limit(1)
+
+	if (!rows.length) return // already fresh (or row gone) — nothing to do
+	const { id, content, updatedAtRaw } = rows[0]
+
+	let vector: number[]
+	try {
+		vector = await withTimeout(
+			embed(truncateForEmbedding(content)),
+			INLINE_EMBED_TIMEOUT_MS
+		)
+	} catch (err) {
+		if (err instanceof InlineEmbedTimeoutError) {
+			inlineEmbedDisabledUntil = Date.now() + INLINE_EMBED_COOLDOWN_MS
+		}
+		throw err
+	}
+
+	await writeEmbeddingIfFresh(
+		schema.chatMessages,
+		schema.chatMessages.id,
+		schema.chatMessages.updatedAt,
+		id,
+		updatedAtRaw,
+		currentModel,
+		vector
+	)
 }
 
 async function pickWorldLoreEntry(

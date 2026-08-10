@@ -340,7 +340,7 @@
 	}
 
 	function handlePersonaEditClick(persona: Partial<SelectPersona>) {
-		panelsCtx.digest.characterId = persona.id
+		panelsCtx.digest.personaId = persona.id
 		panelsCtx.openPanel({ key: "personas", toggle: false })
 	}
 
