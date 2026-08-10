@@ -7,6 +7,8 @@
 		appVersionDisplay
 	} from "$lib/shared/constants/version"
 	import * as Icons from "@lucide/svelte"
+	import PanelTabList from "$lib/client/components/panels/PanelTabList.svelte"
+	import PanelTab from "$lib/client/components/panels/PanelTab.svelte"
 	import { page } from "$app/state"
 	import UserSettingsTab from "../settingsTabs/UserSettingsTab.svelte"
 	import SystemSettingsTab from "../settingsTabs/SystemSettingsTab.svelte"
@@ -25,8 +27,7 @@
 	// explicitly-saved fields) — same pattern as LorebooksSidebar's
 	// tabHasUnsavedChanges.
 	let tabHasUnsavedChanges = $state(false)
-	let nextTab: "user" | "system" | "themes" | "about" | undefined =
-		$state()
+	let nextTab: "user" | "system" | "themes" | "about" | undefined = $state()
 	let showUnsavedChangesModal = $state(false)
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
 
@@ -110,69 +111,52 @@
 	<!-- Settings Tabs -->
 	<div class="flex-1 overflow-y-auto">
 		<Tabs value={activeTab} onValueChange={handleTabChange}>
-			<Tabs.List class="flex flex-wrap gap-1">
-				<Tabs.Trigger value="user">
-					<span
-						title="User"
-						aria-label="User tab"
-						class="flex items-center gap-1"
-					>
-						<Icons.UserCog size={20} class="inline" />
-						{#if activeTab === "user"}
-							User
-						{/if}
-					</span>
-				</Tabs.Trigger>
+			<!-- reserveRows={2}: measured at 1024x768 this strip renders one row for
+			     the short labels ("User", "About") and two for the longer ones
+			     ("System", "Themes"), so the content below jumped 32px depending
+			     on selection. Capping the label width does not help -- a SHORT
+			     label makes a narrower trigger, and that is what flips the wrap. -->
+			<PanelTabList reserveRows={2}>
+				<PanelTab
+					value="user"
+					label="User"
+					icon={Icons.UserCog}
+					active={activeTab === "user"}
+				/>
 				{#if userCtx.user?.isAdmin}
-					<Tabs.Trigger value="system">
-						<span
-							title="System"
-							aria-label="System tab"
-							class="flex items-center gap-1"
-						>
-							<Icons.Server size={20} class="inline" />
-							{#if activeTab === "system"}
-								System
-							{/if}
-						</span>
-					</Tabs.Trigger>
+					<PanelTab
+						value="system"
+						label="System"
+						icon={Icons.Server}
+						active={activeTab === "system"}
+					/>
 				{/if}
-				<Tabs.Trigger value="themes">
-					<span
-						title="Themes"
-						aria-label="Themes tab"
-						class="flex items-center gap-1"
-					>
-						<Icons.Palette size={20} class="inline" />
-						{#if activeTab === "themes"}
-							Themes
-						{/if}
-					</span>
-				</Tabs.Trigger>
-				<Tabs.Trigger value="about">
-					<span
-						title="About"
-						aria-label="About tab"
-						class="flex items-center gap-1"
-					>
-						<Icons.Info size={20} class="inline" />
-						{#if activeTab === "about"}
-							About
-						{/if}
-					</span>
-				</Tabs.Trigger>
-			</Tabs.List>
+				<PanelTab
+					value="themes"
+					label="Themes"
+					icon={Icons.Palette}
+					active={activeTab === "themes"}
+				/>
+				<PanelTab
+					value="about"
+					label="About"
+					icon={Icons.Info}
+					active={activeTab === "about"}
+				/>
+			</PanelTabList>
 			<Tabs.Content value="user">
 				{#if activeTab === "user"}
-					<UserSettingsTab bind:hasUnsavedChanges={tabHasUnsavedChanges} />
+					<UserSettingsTab
+						bind:hasUnsavedChanges={tabHasUnsavedChanges}
+					/>
 				{/if}
 			</Tabs.Content>
 			{#if userCtx.user?.isAdmin}
 				<Tabs.Content value="system">
 					{#if activeTab === "system"}
 						<SystemSettingsTab
-						bind:hasUnsavedChanges={tabHasUnsavedChanges}
-					/>
+							bind:hasUnsavedChanges={tabHasUnsavedChanges}
+						/>
 					{/if}
 				</Tabs.Content>
 			{/if}

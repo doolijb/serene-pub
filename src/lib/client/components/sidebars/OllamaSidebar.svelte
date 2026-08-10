@@ -1,5 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
+	import PanelTabList from "$lib/client/components/panels/PanelTabList.svelte"
+	import PanelTab from "$lib/client/components/panels/PanelTab.svelte"
 	import { getContext, onMount, onDestroy } from "svelte"
 	import { Tabs } from "@skeletonlabs/skeleton-svelte"
 	import type { ValueChangeDetails } from "@zag-js/tabs"
@@ -273,56 +275,32 @@
 		<!-- Main Ollama Manager Content -->
 		<div class="flex-1 overflow-y-auto">
 			<Tabs value={activeTab} onValueChange={handleTabChange}>
-				<Tabs.List class="flex flex-wrap gap-1">
-					<Tabs.Trigger value="installed">
-						<span
-							title="Installed"
-							aria-label="Installed tab"
-							class="flex items-center gap-1"
-						>
-							<Icons.Package size={20} class="inline" />
-							{#if activeTab === "installed"}
-								Installed
-							{/if}
-						</span>
-					</Tabs.Trigger>
-					<Tabs.Trigger value="available">
-						<span
-							title="Available"
-							aria-label="Available tab"
-							class="flex items-center gap-1"
-						>
-							<Icons.Search size={20} class="inline" />
-							{#if activeTab === "available"}
-								Available
-							{/if}
-						</span>
-					</Tabs.Trigger>
-					<Tabs.Trigger value="downloads">
-						<span
-							title="Downloads"
-							aria-label="Downloads tab"
-							class="flex items-center gap-1"
-						>
-							<Icons.Download size={20} class="inline" />
-							{#if activeTab === "downloads"}
-								Downloads
-							{/if}
-						</span>
-					</Tabs.Trigger>
-					<Tabs.Trigger value="settings">
-						<span
-							title="Settings"
-							aria-label="Settings tab"
-							class="flex items-center gap-1"
-						>
-							<Icons.Settings size={20} class="inline" />
-							{#if activeTab === "settings"}
-								Settings
-							{/if}
-						</span>
-					</Tabs.Trigger>
-				</Tabs.List>
+				<PanelTabList>
+					<PanelTab
+						value="installed"
+						label="Installed"
+						icon={Icons.Package}
+						active={activeTab === "installed"}
+					/>
+					<PanelTab
+						value="available"
+						label="Available"
+						icon={Icons.Search}
+						active={activeTab === "available"}
+					/>
+					<PanelTab
+						value="downloads"
+						label="Downloads"
+						icon={Icons.Download}
+						active={activeTab === "downloads"}
+					/>
+					<PanelTab
+						value="settings"
+						label="Settings"
+						icon={Icons.Settings}
+						active={activeTab === "settings"}
+					/>
+				</PanelTabList>
 				<Tabs.Content value="installed">
 					{#if activeTab === "installed"}
 						<OllamaInstalledTab />

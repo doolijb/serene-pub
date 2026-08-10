@@ -1,5 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
+	import PanelTabList from "$lib/client/components/panels/PanelTabList.svelte"
+	import PanelTab from "$lib/client/components/panels/PanelTab.svelte"
 	import { getContext, onMount } from "svelte"
 	import { Dialog, Portal, Tabs } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
@@ -629,28 +631,20 @@
 		</div>
 	{:else}
 		<Tabs value={activeTab} onValueChange={handleTabChange}>
-			<Tabs.List class="flex flex-wrap gap-1">
-				<Tabs.Trigger value="queue">
-					<span
-						title="Queue"
-						aria-label="Queue tab"
-						class="flex items-center gap-1"
-					>
-						<Icons.List size={20} class="inline" />
-						{#if activeTab === "queue"}Queue{/if}
-					</span>
-				</Tabs.Trigger>
-				<Tabs.Trigger value="settings">
-					<span
-						title="Settings"
-						aria-label="Settings tab"
-						class="flex items-center gap-1"
-					>
-						<Icons.Settings size={20} class="inline" />
-						{#if activeTab === "settings"}Settings{/if}
-					</span>
-				</Tabs.Trigger>
-			</Tabs.List>
+			<PanelTabList>
+				<PanelTab
+					value="queue"
+					label="Queue"
+					icon={Icons.List}
+					active={activeTab === "queue"}
+				/>
+				<PanelTab
+					value="settings"
+					label="Settings"
+					icon={Icons.Settings}
+					active={activeTab === "settings"}
+				/>
+			</PanelTabList>
 
 			<!-- Queue Tab -->
 			<Tabs.Content value="queue">

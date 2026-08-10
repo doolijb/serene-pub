@@ -73,7 +73,7 @@
 		     to three, which defeats PanelTabList's reserved height; truncate
 		     alone doesn't help, because in a wrapping row the trigger simply
 		     takes a line of its own at full width rather than shrinking. -->
-		<span class="max-w-[5.5rem] min-w-0 truncate">{label}</span>
+		<span class="max-w-[4rem] min-w-0 truncate">{label}</span>
 	{/if}
 	{@render badge?.()}
 </Tabs.Trigger>
