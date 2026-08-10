@@ -5,6 +5,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import Avatar from "../Avatar.svelte"
 	import * as Icons from "@lucide/svelte"
+	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { onMount, onDestroy, tick } from "svelte"
 
@@ -103,8 +104,7 @@
 			editingNodeVisibility !== original.nodeVisibility ||
 			(!isBound &&
 				(editingName.trim() !== (original.name ?? "") ||
-					editingAliases !==
-						(original.aliases ?? []).join(", ")))
+					editingAliases !== (original.aliases ?? []).join(", ")))
 	})
 
 	// Arriving from the Graph tab — pin the target binding to the top of
@@ -358,7 +358,9 @@
 		// graph presence now, so this is the same delete either way (see
 		// the merge plan's UI consolidation). Deleting a bound row detaches
 		// its character/persona from this lorebook.
-		socket?.emit("narrativeGraph:deleteNode", { id: deleteBindingTarget.id })
+		socket?.emit("narrativeGraph:deleteNode", {
+			id: deleteBindingTarget.id
+		})
 		showDeleteBindingModal = false
 		deleteBindingTarget = null
 	}
@@ -556,10 +558,7 @@
 		socket.off("lorebooks:bindingList", handleLorebooksBindingList)
 		socket.off("lorebooks:createBinding", handleLorebooksCreateBinding)
 		socket.off("lorebooks:updateBinding", handleLorebooksUpdateBinding)
-		socket.off(
-			"narrativeGraph:deleteNode",
-			handleNarrativeGraphDeleteNode
-		)
+		socket.off("narrativeGraph:deleteNode", handleNarrativeGraphDeleteNode)
 		socket.off("narrativeGraph:mergeNode", handleNarrativeGraphMergeNode)
 		socket.off(
 			"narrativeGraph:listMergeLogs",
@@ -575,27 +574,31 @@
 
 <div>
 	<div class="bindings-tab">
-		<div class="mb-4 flex gap-2">
+		<!-- `w-full` deliberately dropped: three of them in one row each demand
+		     100% of it, and Skeleton's .btn cannot shrink below min-content, so
+		     "Add Background Character" was clipped by the panel edge. Intrinsic
+		     width + wrapping is what actually fits them. -->
+		<PanelToolbar label="Binding actions" class="mb-4">
 			<button
-				class="btn btn-sm preset-filled-primary-500 w-full"
+				class="btn btn-sm preset-filled-primary-500"
 				onclick={() => onClickAddCharacterBinding()}
 			>
 				<Icons.Plus size={16} /> Add Character
 			</button>
 			<button
-				class="btn btn-sm preset-filled-primary-500 w-full"
+				class="btn btn-sm preset-filled-primary-500"
 				onclick={() => onClickAddPersonaBinding()}
 			>
 				<Icons.Plus size={16} /> Add Persona
 			</button>
 			<button
-				class="btn btn-sm preset-filled-surface-400-600 w-full"
+				class="btn btn-sm preset-filled-surface-400-600"
 				onclick={() => onClickAddBackgroundCharacter()}
 				title="A named character with no linked character/persona sheet — useful for background or NPC figures the graph should track."
 			>
 				<Icons.Plus size={16} /> Add Background Character
 			</button>
-		</div>
+		</PanelToolbar>
 		{#if showAddBackgroundModal}
 			<div
 				class="preset-outlined-surface-300-700 mb-2 flex w-full flex-col gap-2 rounded-lg p-3"
@@ -640,7 +643,15 @@
 			effectively stuck at 2 columns forever. auto-fill/minmax scales off
 			the grid's own width instead, same fix as Characters/Personas
 			sidebars' card grids. -->
-		<div class="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
+		<!-- min() clamps the track floor to the container: a bare
+		     minmax(280px,1fr) forces every track to at least 280px, which is
+		     wider than this panel's ~220px content box at a 1024px viewport,
+		     so every card overflowed the panel by ~45px (measured). The
+		     Characters/Personas grids don't hit this only because their 200px
+		     floor happens to fit. -->
+		<div
+			class="grid grid-cols-[repeat(auto-fill,minmax(min(280px,100%),1fr))] gap-3"
+		>
 			{#if sortedBindingList.length === 0}
 				<div
 					class="text-muted-foreground col-span-full w-full py-8 text-center text-sm"
@@ -666,7 +677,7 @@
 					Possible duplicates ({duplicateCandidates.length})
 				</p>
 				<div class="flex flex-col gap-1.5">
-					{#each duplicateCandidates as candidate (candidate.bindingIdA + '-' + candidate.bindingIdB)}
+					{#each duplicateCandidates as candidate (candidate.bindingIdA + "-" + candidate.bindingIdB)}
 						<div
 							class="bg-surface-50-950 flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-xs"
 						>
@@ -717,7 +728,7 @@
 							>
 								<span class="text-surface-600-400">
 									"{log.absorbedName}" absorbed into "{log.survivorName ??
-										'(deleted)'}"
+										"(deleted)"}"
 								</span>
 								<button
 									class="text-primary-500 shrink-0 hover:underline disabled:opacity-40"
@@ -797,9 +808,8 @@
 					{/if}
 					{#if binding.nodeState !== "active"}
 						<span
-							class="badge {NODE_STATE_COLOR[
-								binding.nodeState
-							] ?? 'preset-tonal-surface'} text-[10px]"
+							class="badge {NODE_STATE_COLOR[binding.nodeState] ??
+								'preset-tonal-surface'} text-[10px]"
 						>
 							{binding.nodeState}
 						</span>
@@ -835,7 +845,9 @@
 					<button
 						onclick={() => startEditBinding(binding)}
 						class="btn btn-sm preset-filled-surface-400-600 p-1.5"
-						title="Edit {isBound ? 'status' : 'name, summary & status'}"
+						title="Edit {isBound
+							? 'status'
+							: 'name, summary & status'}"
 						aria-label="Edit binding"
 					>
 						<Icons.Pencil size={14} />
@@ -888,10 +900,9 @@
 							bind:value={editingAliases}
 						/>
 						<p class="text-surface-500 text-xs">
-							Other names this character is known by — helps
-							scene summarization recognize them under a
-							nickname or title instead of creating a
-							duplicate.
+							Other names this character is known by — helps scene
+							summarization recognize them under a nickname or
+							title instead of creating a duplicate.
 						</p>
 					</div>
 				{:else if allAliases(binding).length > 0}
@@ -929,10 +940,10 @@
 						bind:value={editingSummary}
 					></textarea>
 					<p class="text-surface-500 text-xs">
-						Shown to the AI as this character's current situation
-						in the narrative graph context — even in scenes they
-						don't appear in directly. Keeping it accurate helps
-						the AI stay consistent about who they are right now.
+						Shown to the AI as this character's current situation in
+						the narrative graph context — even in scenes they don't
+						appear in directly. Keeping it accurate helps the AI
+						stay consistent about who they are right now.
 					</p>
 					<p class="text-surface-400 text-right text-xs">
 						{editingSummary.length} / 200
@@ -1020,13 +1031,16 @@
 				</div>
 			</div>
 		{:else}
+			<!-- flex-wrap + min-w-0: "Background · Link character · Link
+			     persona" is the widest state this footer reaches, and it
+			     overflowed the card at narrow panel widths. -->
 			<div
-				class="border-surface-300-700 flex items-center justify-between border-t pt-2 text-[11px]"
+				class="border-surface-300-700 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 border-t pt-2 text-[11px]"
 			>
-				<span class="text-tertiary-600-400 font-mono">
+				<span class="text-tertiary-600-400 min-w-0 truncate font-mono">
 					{binding.binding}
 				</span>
-				<div class="flex items-center gap-2">
+				<div class="flex min-w-0 flex-wrap items-center gap-2">
 					<span class="text-surface-400">{kindLabel}</span>
 					{#if isBound}
 						<button
@@ -1067,8 +1081,7 @@
 	onConfirm={confirmDeleteBinding}
 	onCancel={cancelDeleteBinding}
 	title="Delete binding?"
-	message={deleteBindingTarget?.characterId ||
-	deleteBindingTarget?.personaId
+	message={deleteBindingTarget?.characterId || deleteBindingTarget?.personaId
 		? "This will detach the linked character/persona from this lorebook and delete this binding, including any private character lore and graph relationships tied to it. This action cannot be undone."
 		: "This will permanently delete this background character binding, including any private character lore and graph relationships tied to it. This action cannot be undone."}
 />

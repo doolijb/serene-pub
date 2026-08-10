@@ -2,6 +2,7 @@
 	import { onDestroy, onMount, getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import * as Icons from "@lucide/svelte"
+	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import GraphBuildModal from "../modals/GraphBuildModal.svelte"
 	import AbsorbBindingModal from "../modals/AbsorbBindingModal.svelte"
 	import GraphVisualization from "../graph/GraphVisualization.svelte"
@@ -180,7 +181,9 @@
 		} satisfies Sockets.NarrativeGraph.List.Params)
 	}
 
-	function handleNarrativeGraphList(msg: Sockets.NarrativeGraph.List.Response) {
+	function handleNarrativeGraphList(
+		msg: Sockets.NarrativeGraph.List.Response
+	) {
 		nodes = msg.nodes
 		relationships = msg.relationships
 		ungraphedSceneCount = msg.ungraphedSceneCount ?? 0
@@ -244,7 +247,9 @@
 		isConnecting = false
 	}
 
-	function handleHistoryEntriesList(msg: Sockets.HistoryEntries.List.Response) {
+	function handleHistoryEntriesList(
+		msg: Sockets.HistoryEntries.List.Response
+	) {
 		if (msg.lorebookId === lorebookId) {
 			historyEntries = msg.historyEntryList
 		}
@@ -430,7 +435,9 @@
 	 * Fall back to the {{char:N}} token, which characterBindingSync's comment
 	 * already claims happens "everywhere a binding's name is displayed".
 	 */
-	function displayName(node: { name?: string; binding?: string } | undefined) {
+	function displayName(
+		node: { name?: string; binding?: string } | undefined
+	) {
 		return node?.name?.trim() || node?.binding || ""
 	}
 
@@ -481,7 +488,7 @@
 
 <div class="flex h-full flex-col gap-3 pt-2">
 	<!-- ── Toolbar ──────────────────────────────────────────────────────────── -->
-	<div class="flex items-center gap-2">
+	<PanelToolbar label="Graph actions">
 		{#if activeBuild}
 			<!-- Compact status indicator while build is active -->
 			{#if activeBuild.status === "building"}
@@ -538,22 +545,29 @@
 				{/if}
 			</button>
 		{/if}
-		<div class="ml-auto flex gap-1">
-			{#if onNavigateToBindings}
-				<button
-					class="btn btn-sm preset-filled-surface-400-600"
-					onclick={() => onNavigateToBindings?.()}
-					title="Add or edit a character's identity in the Bindings tab"
-				>
-					<Icons.Plus size={14} /> Add Character
-				</button>
-			{/if}
+		{#if onNavigateToBindings}
+			<button
+				class="btn btn-sm preset-filled-surface-400-600"
+				onclick={() => onNavigateToBindings?.()}
+				title="Add or edit a character's identity in the Bindings tab"
+			>
+				<Icons.Plus size={14} /> Add Character
+			</button>
+		{/if}
+		<!-- View mode + refresh stay grouped so they wrap as a unit. The
+		     previous `ml-auto` pushed this group to the far edge, which is
+		     unpredictable once the container wraps (ml-auto applies per flex
+		     line, so it jumps depending on where the break lands) — hence a
+		     plain nested group instead. -->
+		<div class="flex shrink-0 items-center gap-1">
 			<button
 				class="btn btn-sm {viewMode === 'graph'
 					? 'preset-filled-surface-500'
 					: 'preset-filled-surface-400-600'}"
 				onclick={() => (viewMode = "graph")}
 				title="Graph view"
+				aria-label="Graph view"
+				aria-pressed={viewMode === "graph"}
 			>
 				<Icons.Network size={14} />
 			</button>
@@ -563,18 +577,21 @@
 					: 'preset-filled-surface-400-600'}"
 				onclick={() => (viewMode = "list")}
 				title="List view"
+				aria-label="List view"
+				aria-pressed={viewMode === "list"}
 			>
 				<Icons.List size={14} />
 			</button>
+			<button
+				class="btn btn-sm preset-filled-surface-400-600"
+				onclick={load}
+				title="Refresh"
+				aria-label="Refresh graph"
+			>
+				<Icons.RefreshCw size={14} />
+			</button>
 		</div>
-		<button
-			class="btn btn-sm preset-filled-surface-400-600"
-			onclick={load}
-			title="Refresh"
-		>
-			<Icons.RefreshCw size={14} />
-		</button>
-	</div>
+	</PanelToolbar>
 
 	<!-- ── Build progress card (shown when a build is active) ──────────────── -->
 	{#if activeBuild}
@@ -684,7 +701,6 @@
 		</div>
 	{/if}
 
-
 	{#if namelessBindingCount > 0}
 		<!--
 			These rows have an empty `name`, so no extracted character name can
@@ -698,10 +714,7 @@
 		<div
 			class="bg-surface-200-800 border-surface-400-600 mt-2 flex items-center gap-2 rounded-lg border p-3 text-sm"
 		>
-			<Icons.HelpCircle
-				size={14}
-				class="text-surface-600-400 shrink-0"
-			/>
+			<Icons.HelpCircle size={14} class="text-surface-600-400 shrink-0" />
 			<span class="text-surface-700-300">
 				{namelessBindingCount} graph {namelessBindingCount === 1
 					? "entry has"
@@ -794,7 +807,8 @@
 						</button>
 						<button
 							class="btn btn-sm preset-filled-surface-400-600"
-							onclick={() => onNavigateToBindings?.(selectedNode!.id)}
+							onclick={() =>
+								onNavigateToBindings?.(selectedNode!.id)}
 							title="Edit in the Bindings tab"
 						>
 							<Icons.Pencil size={13} />
@@ -857,7 +871,7 @@
 							Also known as:
 						</span>
 						<div class="flex flex-wrap gap-1">
-							{#each [...new Set([...(selectedNode.aliases ?? []), ...(selectedNode.absorbedAliases ?? [])])] as alias}
+							{#each [...new Set( [...(selectedNode.aliases ?? []), ...(selectedNode.absorbedAliases ?? [])] )] as alias}
 								<span
 									class="badge preset-tonal-surface text-xs"
 								>
@@ -881,173 +895,168 @@
 						</p>
 					{/if}
 					{#each nodeRels as rel (rel.id)}
-							{#if editingRel?.id === rel.id}
-								<!-- Inline edit card -->
+						{#if editingRel?.id === rel.id}
+							<!-- Inline edit card -->
+							<div
+								class="bg-surface-100-900 border-surface-300-700 space-y-2 rounded-lg border p-3"
+							>
 								<div
-									class="bg-surface-100-900 border-surface-300-700 space-y-2 rounded-lg border p-3"
+									class="text-surface-700-300 flex items-center gap-1 text-xs"
 								>
-									<div
-										class="text-surface-700-300 flex items-center gap-1 text-xs"
+									<Icons.ArrowRight
+										size={11}
+										class="text-primary-400 shrink-0"
+									/>
+									<span class="font-medium">
+										→ {nodeName(rel.toNodeId)}
+									</span>
+								</div>
+								<input
+									class="input w-full text-sm"
+									type="text"
+									placeholder="Relationship type…"
+									bind:value={editingRel.relationshipType}
+								/>
+								<div class="grid grid-cols-2 gap-2">
+									<select
+										class="select text-xs"
+										bind:value={editingRel.status}
 									>
-										<Icons.ArrowRight
-											size={11}
-											class="text-primary-400 shrink-0"
-										/>
-										<span class="font-medium">
-											→ {nodeName(rel.toNodeId)}
-										</span>
-									</div>
-									<input
-										class="input w-full text-sm"
-										type="text"
-										placeholder="Relationship type…"
-										bind:value={editingRel.relationshipType}
-									/>
-									<div class="grid grid-cols-2 gap-2">
-										<select
-											class="select text-xs"
-											bind:value={editingRel.status}
-										>
-											{#each RELATIONSHIP_STATUSES as s}
-												<option value={s}>{s}</option>
-											{/each}
-										</select>
-										<select
-											class="select text-xs"
-											bind:value={editingRel.visibility}
-										>
-											{#each RELATIONSHIP_VISIBILITIES as v}
-												<option value={v}>{v}</option>
-											{/each}
-										</select>
-									</div>
-									<textarea
-										class="textarea min-h-10 text-xs"
-										placeholder="Description…"
-										bind:value={editingRel.description}
-									></textarea>
-									<input
-										class="input text-xs"
-										type="text"
-										placeholder="Reason for this state…"
-										bind:value={editingRel.reason}
-									/>
-									{#if historyEntries.length > 0}
-										<select
-											class="select text-xs"
-											bind:value={
-												editingRel.historyEntryId
-											}
-										>
-											<option value={null}>
-												— no date —
+										{#each RELATIONSHIP_STATUSES as s}
+											<option value={s}>{s}</option>
+										{/each}
+									</select>
+									<select
+										class="select text-xs"
+										bind:value={editingRel.visibility}
+									>
+										{#each RELATIONSHIP_VISIBILITIES as v}
+											<option value={v}>{v}</option>
+										{/each}
+									</select>
+								</div>
+								<textarea
+									class="textarea min-h-10 text-xs"
+									placeholder="Description…"
+									bind:value={editingRel.description}
+								></textarea>
+								<input
+									class="input text-xs"
+									type="text"
+									placeholder="Reason for this state…"
+									bind:value={editingRel.reason}
+								/>
+								{#if historyEntries.length > 0}
+									<select
+										class="select text-xs"
+										bind:value={editingRel.historyEntryId}
+									>
+										<option value={null}>
+											— no date —
+										</option>
+										{#each historyEntries as he}
+											<option value={he.id}>
+												Year {he.year}{he.month
+													? `, Mo. ${he.month}`
+													: ""}{he.day
+													? `, Day ${he.day}`
+													: ""}
 											</option>
-											{#each historyEntries as he}
-												<option value={he.id}>
-													Year {he.year}{he.month
-														? `, Mo. ${he.month}`
-														: ""}{he.day
-														? `, Day ${he.day}`
-														: ""}
-												</option>
-											{/each}
-										</select>
-									{/if}
-									<div class="flex justify-end gap-2">
-										<button
-											class="btn btn-sm preset-filled-surface-400-600"
-											onclick={() => {
-												editingRel = null
-											}}
-										>
-											Cancel
-										</button>
-										<button
-											class="btn btn-sm preset-filled-primary-500"
-											disabled={isSaving}
-											onclick={saveRel}
-										>
-											<Icons.Save size={13} /> Update
-										</button>
-									</div>
+										{/each}
+									</select>
+								{/if}
+								<div class="flex justify-end gap-2">
+									<button
+										class="btn btn-sm preset-filled-surface-400-600"
+										onclick={() => {
+											editingRel = null
+										}}
+									>
+										Cancel
+									</button>
+									<button
+										class="btn btn-sm preset-filled-primary-500"
+										disabled={isSaving}
+										onclick={saveRel}
+									>
+										<Icons.Save size={13} /> Update
+									</button>
 								</div>
-							{:else}
-								<!-- View card -->
-								<div
-									class="bg-surface-100-900 border-surface-300-700 space-y-1.5 rounded-lg border p-2.5"
-								>
-									<div class="flex items-center gap-1.5">
-										<Icons.ArrowRight
-											size={12}
-											class="text-primary-400 shrink-0"
-										/>
-										<span
-											class="flex-1 truncate text-xs font-semibold"
-										>
-											{rel.relationshipType.replace(
-												/_/g,
-												" "
-											)}
-										</span>
-										<span
-											class="text-surface-400 shrink-0 text-xs"
-										>
-											→ {nodeName(rel.toNodeId)}
-										</span>
-									</div>
-									<div class="flex items-center gap-1.5">
-										<span
-											class="badge {REL_STATUS_BADGE[
-												rel.status
-											] ??
-												'preset-tonal-surface'} text-xs"
-										>
-											{rel.status}
-										</span>
-										{#if rel.historyEntryId}
-											{@const he = historyEntries.find(
-												(h) =>
-													h.id === rel.historyEntryId
-											)}
-											{#if he}
-												<span
-													class="text-surface-700-300 text-xs"
-												>
-													Yr {he.year}{he.month
-														? `, Mo. ${he.month}`
-														: ""}
-												</span>
-											{/if}
+							</div>
+						{:else}
+							<!-- View card -->
+							<div
+								class="bg-surface-100-900 border-surface-300-700 space-y-1.5 rounded-lg border p-2.5"
+							>
+								<div class="flex items-center gap-1.5">
+									<Icons.ArrowRight
+										size={12}
+										class="text-primary-400 shrink-0"
+									/>
+									<span
+										class="flex-1 truncate text-xs font-semibold"
+									>
+										{rel.relationshipType.replace(
+											/_/g,
+											" "
+										)}
+									</span>
+									<span
+										class="text-surface-400 shrink-0 text-xs"
+									>
+										→ {nodeName(rel.toNodeId)}
+									</span>
+								</div>
+								<div class="flex items-center gap-1.5">
+									<span
+										class="badge {REL_STATUS_BADGE[
+											rel.status
+										] ?? 'preset-tonal-surface'} text-xs"
+									>
+										{rel.status}
+									</span>
+									{#if rel.historyEntryId}
+										{@const he = historyEntries.find(
+											(h) => h.id === rel.historyEntryId
+										)}
+										{#if he}
+											<span
+												class="text-surface-700-300 text-xs"
+											>
+												Yr {he.year}{he.month
+													? `, Mo. ${he.month}`
+													: ""}
+											</span>
 										{/if}
-										<div class="ml-auto flex gap-1">
-											<button
-												class="btn btn-sm preset-filled-surface-400-600 p-1"
-												onclick={() => startEditRel(rel)}
-												title="Edit relationship"
-											>
-												<Icons.Pencil size={11} />
-											</button>
-											<button
-												class="btn btn-sm preset-tonal-error p-1"
-												onclick={() =>
-													deleteRel(rel.id)}
-												title="Delete relationship"
-											>
-												<Icons.Trash2 size={11} />
-											</button>
-										</div>
-									</div>
-									{#if rel.description}
-										<p
-											class="text-surface-700-300 text-xs leading-snug"
-										>
-											{rel.description}
-										</p>
 									{/if}
+									<div class="ml-auto flex gap-1">
+										<button
+											class="btn btn-sm preset-filled-surface-400-600 p-1"
+											onclick={() => startEditRel(rel)}
+											title="Edit relationship"
+										>
+											<Icons.Pencil size={11} />
+										</button>
+										<button
+											class="btn btn-sm preset-tonal-error p-1"
+											onclick={() => deleteRel(rel.id)}
+											title="Delete relationship"
+										>
+											<Icons.Trash2 size={11} />
+										</button>
+									</div>
 								</div>
-							{/if}
-						{/each}
-					</div>
+								{#if rel.description}
+									<p
+										class="text-surface-700-300 text-xs leading-snug"
+									>
+										{rel.description}
+									</p>
+								{/if}
+							</div>
+						{/if}
+					{/each}
+				</div>
 			</div>
 		{/if}
 
@@ -1632,4 +1641,3 @@
 		{lorebookId}
 	/>
 {/if}
-
