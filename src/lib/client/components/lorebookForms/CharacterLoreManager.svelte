@@ -543,10 +543,18 @@
 						onclick={() => viewEntry(entry)}
 					>
 						<div class="min-w-0 flex-1">
+							<!-- flex-wrap + a min width on the name: the visibility
+							     badge beside it is shrink-0, so without these the
+							     name absorbed the whole deficit and rendered at
+							     54px against a 221px scrollWidth — about three
+							     characters. Wrapping drops the badge to its own
+							     line instead, keeping the entry name readable. -->
 							<div
-								class="mb-1 flex items-center gap-2 text-sm font-semibold"
+								class="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm font-semibold"
 							>
-								<span class="truncate">{entry.name}</span>
+								<span class="min-w-[10ch] flex-1 truncate">
+									{entry.name}
+								</span>
 								{#if isOrphaned}
 									<span
 										class="text-warning-500 shrink-0 text-xs font-normal"
