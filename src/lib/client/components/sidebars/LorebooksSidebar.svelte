@@ -2,6 +2,7 @@
 	import { getContext, onDestroy, onMount, tick } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import * as Icons from "@lucide/svelte"
+	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import NewNameModal from "../modals/NewNameModal.svelte"
 	import EditLorebookForm from "../lorebookForms/EditLorebookForm.svelte"
 	import {
@@ -388,8 +389,7 @@
 			delete panelsCtx.digest.lorebookTab
 			const applyNavigation = () => {
 				selectedLorebook =
-					lorebookList.find((l) => l.id === targetLorebookId) ||
-					null
+					lorebookList.find((l) => l.id === targetLorebookId) || null
 				isEditingLorebook = true
 				if (targetTab) {
 					editGroup = targetTab
@@ -562,54 +562,55 @@
 
 <div class="min-h-full p-4">
 	{#if isEditingLorebook}
-		<div class="mb-4 flex items-center gap-2">
-			<button
-				class="btn btn-sm preset-filled-surface-400-600"
-				onclick={() => {
+		<div class="mb-4">
+			<PanelNavHeader
+				title={selectedLorebook?.name || "Lorebook"}
+				onBack={() => {
 					isEditingLorebook = false
 				}}
-				title="Back to lorebooks"
+				backLabel="Back to lorebooks"
+				backText="Back"
+				actionsLabel="Lorebook actions"
 			>
-				<Icons.ChevronLeft size={16} />
-				Back
-			</button>
-			<h2 class="flex-1 truncate font-semibold">
-				{selectedLorebook?.name || "Lorebook"}
-			</h2>
-			{#if selectedLorebook}
-				<button
-					class="btn btn-sm preset-filled-surface-400-600"
-					onclick={() => handleExportLorebook(selectedLorebook.id)}
-					title="Export lorebook"
-				>
-					<Icons.Download size={16} />
-					Export
-				</button>
-			{/if}
-			{#if hasOpenChat && selectedLorebook}
-				{#if openChatCtx.lorebookId === selectedLorebook.id}
-					<button
-						class="btn btn-sm preset-filled-warning-500"
-						onclick={handleDetachFromChat}
-						title="Detach from current chat"
-					>
-						<Icons.Unlink size={16} />
-						Detach from Chat
-					</button>
-				{:else}
-					<button
-						class="btn btn-sm preset-filled-primary-500"
-						onclick={() => handleAttachToChat(selectedLorebook.id)}
-						disabled={openChatHasLorebook}
-						title={openChatHasLorebook
-							? "The current chat already has a lorebook attached"
-							: "Attach to current chat"}
-					>
-						<Icons.Link size={16} />
-						Attach to Chat
-					</button>
-				{/if}
-			{/if}
+				{#snippet actions()}
+					{#if selectedLorebook}
+						<button
+							class="btn btn-sm preset-filled-surface-400-600"
+							onclick={() =>
+								handleExportLorebook(selectedLorebook.id)}
+							title="Export lorebook"
+						>
+							<Icons.Download size={16} />
+							Export
+						</button>
+					{/if}
+					{#if hasOpenChat && selectedLorebook}
+						{#if openChatCtx.lorebookId === selectedLorebook.id}
+							<button
+								class="btn btn-sm preset-filled-warning-500"
+								onclick={handleDetachFromChat}
+								title="Detach from current chat"
+							>
+								<Icons.Unlink size={16} />
+								Detach from Chat
+							</button>
+						{:else}
+							<button
+								class="btn btn-sm preset-filled-primary-500"
+								onclick={() =>
+									handleAttachToChat(selectedLorebook.id)}
+								disabled={openChatHasLorebook}
+								title={openChatHasLorebook
+									? "The current chat already has a lorebook attached"
+									: "Attach to current chat"}
+							>
+								<Icons.Link size={16} />
+								Attach to Chat
+							</button>
+						{/if}
+					{/if}
+				{/snippet}
+			</PanelNavHeader>
 		</div>
 		<Tabs value={editGroup} onValueChange={(e) => handleSwitchTabGroup(e)}>
 			<Tabs.List class="flex flex-wrap gap-1">

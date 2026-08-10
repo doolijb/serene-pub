@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Avatar } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
+	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { onDestroy, onMount } from "svelte"
 
@@ -50,31 +51,32 @@
 
 <div class="flex h-full flex-col gap-0 overflow-hidden">
 	<!-- Header -->
-	<div class="flex shrink-0 items-center gap-2 pb-3">
-		<button
-			class="btn btn-sm preset-filled-surface-400-600 p-2"
-			onclick={onBack}
-			title="Back to chats"
+	<div class="shrink-0 pb-3">
+		<PanelNavHeader
+			title={chat?.name || "Chat"}
+			{onBack}
+			backLabel="Back to chats"
+			actionsLabel="Chat actions"
 		>
-			<Icons.ChevronLeft size={16} />
-		</button>
-		<h2 class="flex-1 truncate font-semibold">{chat?.name || "Chat"}</h2>
-		<button
-			class="btn btn-sm preset-filled-surface-400-600"
-			onclick={onOpen}
-			title="Go to chat"
-		>
-			<Icons.MessageSquare size={14} /> Go To Chat
-		</button>
-		{#if canEdit}
-			<button
-				class="btn btn-sm preset-filled-primary-500"
-				onclick={onEdit}
-				title="Edit chat"
-			>
-				<Icons.Pencil size={14} /> Edit
-			</button>
-		{/if}
+			{#snippet actions()}
+				<button
+					class="btn btn-sm preset-filled-surface-400-600"
+					onclick={onOpen}
+					title="Go to chat"
+				>
+					<Icons.MessageSquare size={14} /> Go To Chat
+				</button>
+				{#if canEdit}
+					<button
+						class="btn btn-sm preset-filled-primary-500"
+						onclick={onEdit}
+						title="Edit chat"
+					>
+						<Icons.Pencil size={14} /> Edit
+					</button>
+				{/if}
+			{/snippet}
+		</PanelNavHeader>
 	</div>
 
 	{#if isLoading}

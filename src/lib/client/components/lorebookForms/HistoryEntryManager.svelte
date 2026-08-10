@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
+	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
@@ -628,7 +629,9 @@
 		}
 	}
 
-	function handleHistoryEntryDelete(msg: Sockets.HistoryEntries.Delete.Response) {
+	function handleHistoryEntryDelete(
+		msg: Sockets.HistoryEntries.Delete.Response
+	) {
 		if (
 			(msg as any).id &&
 			historyEntryList.some((e) => e.id === (msg as any).id)
@@ -676,7 +679,9 @@
 		fetchScenes()
 	}
 
-	function handleScenesProcessError(msg: Sockets.Scenes.Process.ErrorResponse) {
+	function handleScenesProcessError(
+		msg: Sockets.Scenes.Process.ErrorResponse
+	) {
 		toaster.error({
 			title: "Scene processing failed",
 			description: msg.error
@@ -939,7 +944,8 @@
 											</button>
 											<button
 												class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-												disabled={entryScenes.length === 0}
+												disabled={entryScenes.length ===
+													0}
 												title={entryScenes.length === 0
 													? "Add scenes first"
 													: undefined}
@@ -988,22 +994,15 @@
 		{@const viewScenes = scenesByEntryId.get(focusedEntry.id) ?? []}
 		<div class="flex flex-col gap-4">
 			<!-- Header -->
-			<div class="flex items-center gap-2">
-				<button
-					class="btn btn-sm preset-filled-surface-400-600 p-2"
-					onclick={goBack}
-					aria-label="Back"
-				>
-					<Icons.ChevronLeft size={16} />
-				</button>
-				<h3 class="flex-1 text-sm font-semibold">
-					Year {focusedEntry.year}{focusedEntry.month
-						? `, Mo. ${focusedEntry.month}`
-						: ""}{focusedEntry.day
-						? `, Day ${focusedEntry.day}`
-						: ""}
-				</h3>
-			</div>
+			<PanelNavHeader
+				title="Year {focusedEntry.year}{focusedEntry.month
+					? `, Mo. ${focusedEntry.month}`
+					: ''}{focusedEntry.day ? `, Day ${focusedEntry.day}` : ''}"
+				onBack={goBack}
+				backLabel="Back"
+				headingLevel={3}
+				titleClass="text-sm"
+			/>
 
 			<!-- Tabs -->
 			<div class="border-surface-300-700 flex gap-1 border-b pb-1">
@@ -1169,9 +1168,9 @@
 								>
 									<option value="">Add character…</option>
 									{#each lorebookBindingList.filter((b) => !editingSceneParticipants.includes(b.id)) as b}
-										<option value={b.id}
-											>{b.name || b.binding}</option
-										>
+										<option value={b.id}>
+											{b.name || b.binding}
+										</option>
 									{/each}
 								</select>
 								<button
@@ -1218,9 +1217,9 @@
 								>
 									<option value="">Add character…</option>
 									{#each lorebookBindingList.filter((b) => !editingSceneMentioned.includes(b.id)) as b}
-										<option value={b.id}
-											>{b.name || b.binding}</option
-										>
+										<option value={b.id}>
+											{b.name || b.binding}
+										</option>
 									{/each}
 								</select>
 								<button
@@ -1586,26 +1585,19 @@
 			: []}
 		<div class="flex flex-col gap-4">
 			<!-- Header -->
-			<div class="flex items-center gap-2">
-				<button
-					class="btn btn-sm preset-filled-surface-400-600 p-2"
-					onclick={goBack}
-					aria-label="Back"
-				>
-					<Icons.ChevronLeft size={16} />
-				</button>
-				<h3 class="flex-1 text-sm font-semibold">
-					{#if isNewEntry}
-						New History Entry
-					{:else}
-						Year {focusedEntry?.year ?? "?"}{focusedEntry?.month
-							? `, Mo. ${focusedEntry.month}`
-							: ""}{focusedEntry?.day
-							? `, Day ${focusedEntry.day}`
-							: ""}
-					{/if}
-				</h3>
-			</div>
+			<PanelNavHeader
+				title={isNewEntry
+					? "New History Entry"
+					: `Year ${focusedEntry?.year ?? "?"}${
+							focusedEntry?.month
+								? `, Mo. ${focusedEntry.month}`
+								: ""
+						}${focusedEntry?.day ? `, Day ${focusedEntry.day}` : ""}`}
+				onBack={goBack}
+				backLabel="Back"
+				headingLevel={3}
+				titleClass="text-sm"
+			/>
 
 			<!-- Content | Scenes tabs (scenes only available when editing existing entry —
 		     for a brand-new entry there's nothing to switch between, so the bar is
@@ -1947,9 +1939,9 @@
 							>
 								<option value="">Add character…</option>
 								{#each lorebookBindingList.filter((b) => !editingSceneParticipants.includes(b.id)) as b}
-									<option value={b.id}
-										>{b.name || b.binding}</option
-									>
+									<option value={b.id}>
+										{b.name || b.binding}
+									</option>
 								{/each}
 							</select>
 							<button
@@ -1996,9 +1988,9 @@
 							>
 								<option value="">Add character…</option>
 								{#each lorebookBindingList.filter((b) => !editingSceneMentioned.includes(b.id)) as b}
-									<option value={b.id}
-										>{b.name || b.binding}</option
-									>
+									<option value={b.id}>
+										{b.name || b.binding}
+									</option>
 								{/each}
 							</select>
 							<button

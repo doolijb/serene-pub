@@ -4,12 +4,15 @@
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { onDestroy, onMount, getContext } from "svelte"
 	import EntityGalleryTab from "$lib/client/components/gallery/EntityGalleryTab.svelte"
+	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 
 	// embedding/embeddingModel/vectorizedAt are deliberately excluded from
 	// the "characters:get" response (see charactersGet's `columns`
 	// restriction) — this type mirrors that rather than hand-declaring the
 	// full SelectCharacter shape, so the two can't drift out of sync.
-	type ViewedCharacter = NonNullable<Sockets.Characters.Get.Response["character"]>
+	type ViewedCharacter = NonNullable<
+		Sockets.Characters.Get.Response["character"]
+	>
 
 	interface Props {
 		characterId: number
@@ -53,43 +56,42 @@
 
 <div class="flex h-full flex-col gap-0 overflow-hidden">
 	<!-- Header -->
-	<div class="flex shrink-0 items-center gap-2 pb-3">
-		<button
-			class="btn btn-sm preset-filled-surface-400-600 p-2"
-			onclick={onBack}
-			title="Back to list"
+	<div class="shrink-0 pb-3">
+		<PanelNavHeader
+			title={character?.nickname || character?.name || ""}
+			{onBack}
+			backLabel="Back to list"
+			actionsLabel="Character actions"
 		>
-			<Icons.ChevronLeft size={16} />
-		</button>
-		<h2 class="flex-1 truncate font-semibold">
-			{character?.nickname || character?.name || ""}
-		</h2>
-		<button
-			class="btn btn-sm preset-filled-surface-400-600"
-			onclick={onChat}
-			title="View chats"
-		>
-			<Icons.MessageSquare size={14} /> View Chats
-		</button>
-		{#if character?.isOwner}
-			{#if onExport}
+			{#snippet actions()}
 				<button
 					class="btn btn-sm preset-filled-surface-400-600"
-					onclick={() => onExport?.(character!)}
-					title="Export character"
-					aria-label="Export character"
+					onclick={onChat}
+					title="View chats"
 				>
-					<Icons.Download size={14} />
+					<Icons.MessageSquare size={14} /> View Chats
 				</button>
-			{/if}
-			<button
-				class="btn btn-sm preset-filled-primary-500"
-				onclick={onEdit}
-				title="Edit character"
-			>
-				<Icons.Pencil size={14} /> Edit
-			</button>
-		{/if}
+				{#if character?.isOwner}
+					{#if onExport}
+						<button
+							class="btn btn-sm preset-filled-surface-400-600"
+							onclick={() => onExport?.(character!)}
+							title="Export character"
+							aria-label="Export character"
+						>
+							<Icons.Download size={14} />
+						</button>
+					{/if}
+					<button
+						class="btn btn-sm preset-filled-primary-500"
+						onclick={onEdit}
+						title="Edit character"
+					>
+						<Icons.Pencil size={14} /> Edit
+					</button>
+				{/if}
+			{/snippet}
+		</PanelNavHeader>
 	</div>
 
 	{#if isLoading}

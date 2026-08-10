@@ -2,6 +2,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getContext, onDestroy, onMount, tick } from "svelte"
 	import * as Icons from "@lucide/svelte"
+	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import SamplingConfigUnsavedChangesModal from "../modals/PromptConfigUnsavedChangesModal.svelte"
 	import NewNameModal from "../modals/NewNameModal.svelte"
@@ -348,19 +349,13 @@
 		<div
 			class="animate-fade-in border-surface-500/25 min-h-full rounded-lg border p-2 shadow-lg"
 		>
-			<div class="mb-4 flex items-start gap-2">
-				<button
-					type="button"
-					class="btn btn-sm preset-filled-surface-400-600 shrink-0"
-					onclick={handleBackToSidebar}
-					title="Back"
-				>
-					<Icons.ChevronLeft size={16} />
-					Back
-				</button>
-				<h2 class="min-w-0 flex-1 font-semibold">
-					Enable/Disable Weight Options
-				</h2>
+			<div class="mb-4">
+				<PanelNavHeader
+					title="Enable/Disable Weight Options"
+					onBack={handleBackToSidebar}
+					backLabel="Back"
+					backText="Back"
+				/>
 			</div>
 			<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 				{#each Object.entries(fieldMeta) as [key, meta]}

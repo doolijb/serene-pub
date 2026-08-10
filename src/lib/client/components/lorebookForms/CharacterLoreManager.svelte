@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
+	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
@@ -353,19 +354,14 @@
 	) {
 		if (msg.type !== "characterLore" || msg.lorebookId !== lorebookId)
 			return
-		const target = characterLoreEntryList.find(
-			(e: any) => e.id === msg.id
-		)
+		const target = characterLoreEntryList.find((e: any) => e.id === msg.id)
 		if (target) (target as any).embeddingModel = msg.embeddingModel
 		if (focusedEntry?.id === msg.id)
 			(focusedEntry as any).embeddingModel = msg.embeddingModel
 	}
 
 	onMount(() => {
-		socket.on(
-			"characterLoreEntries:list",
-			handleCharacterLoreEntriesList
-		)
+		socket.on("characterLoreEntries:list", handleCharacterLoreEntriesList)
 		socket.on(
 			"characterLoreEntries:create",
 			handleCharacterLoreEntriesCreate
@@ -396,10 +392,7 @@
 
 	onDestroy(() => {
 		hasUnsavedChanges = false
-		socket.off(
-			"characterLoreEntries:list",
-			handleCharacterLoreEntriesList
-		)
+		socket.off("characterLoreEntries:list", handleCharacterLoreEntriesList)
 		socket.off(
 			"characterLoreEntries:create",
 			handleCharacterLoreEntriesCreate
@@ -417,10 +410,7 @@
 			"characterLoreEntries:updatePositions",
 			handleCharacterLoreEntriesUpdatePositions
 		)
-		socket.off(
-			"vectorization:itemUpdated",
-			handleVectorizationItemUpdated
-		)
+		socket.off("vectorization:itemUpdated", handleVectorizationItemUpdated)
 	})
 </script>
 
@@ -573,7 +563,10 @@
 										class="text-warning-500 shrink-0 text-xs font-normal"
 										title={visibility.description}
 									>
-										<Icons.LockOpen size={11} class="inline" />
+										<Icons.LockOpen
+											size={11}
+											class="inline"
+										/>
 										{visibility.label}
 									</span>
 								{:else if visibility.kind === "narrator"}
@@ -750,24 +743,22 @@
 		{@const visibility = getVisibility(focusedEntry.lorebookBindingId)}
 		<div class="flex flex-col gap-4">
 			<!-- Header -->
-			<div class="flex items-center gap-2">
-				<button
-					class="btn btn-sm preset-filled-surface-400-600"
-					onclick={goBack}
-					aria-label="Back"
-				>
-					<Icons.ChevronLeft size={16} />
-				</button>
-				<h3 class="flex-1 truncate font-semibold">
-					{focusedEntry.name}
-				</h3>
-				<button
-					class="btn btn-sm preset-filled-primary-500"
-					onclick={() => editEntry(focusedEntry!)}
-				>
-					<Icons.Pencil size={14} /> Edit
-				</button>
-			</div>
+			<PanelNavHeader
+				title={focusedEntry.name}
+				onBack={goBack}
+				backLabel="Back"
+				headingLevel={3}
+				actionsLabel="Character lore entry actions"
+			>
+				{#snippet actions()}
+					<button
+						class="btn btn-sm preset-filled-primary-500"
+						onclick={() => editEntry(focusedEntry!)}
+					>
+						<Icons.Pencil size={14} /> Edit
+					</button>
+				{/snippet}
+			</PanelNavHeader>
 
 			<div class="flex flex-col gap-3 text-sm">
 				<!-- Visibility -->
@@ -884,35 +875,34 @@
 ════════════════════════════════════════════════════════════════ -->
 	{:else if panelMode === "edit" && editingEntry}
 		<div class="flex flex-col gap-4">
-			<!-- Header with inline Cancel/Save -->
-			<div class="flex items-center gap-2">
-				<button
-					class="btn btn-sm preset-filled-surface-400-600"
-					onclick={goBack}
-					aria-label="Back"
-				>
-					<Icons.ChevronLeft size={16} />
-				</button>
-				<h3 class="flex-1 text-sm font-semibold">
-					{isNewEntry
-						? "New Character Lore Entry"
-						: `Edit — ${focusedEntry?.name ?? "?"}`}
-				</h3>
-				<button
-					class="btn btn-sm preset-filled-surface-400-600"
-					onclick={goBack}
-				>
-					Cancel
-				</button>
-				<button
-					class="btn btn-sm preset-filled-success-500"
-					onclick={handleSave}
-					disabled={!entryIsValid(editingEntry)}
-				>
-					<Icons.Save size={14} />
-					{isNewEntry ? "Create" : "Update"}
-				</button>
-			</div>
+			<!-- Header with Cancel/Save on their own wrapping row -->
+			<PanelNavHeader
+				title={isNewEntry
+					? "New Character Lore Entry"
+					: `Edit — ${focusedEntry?.name ?? "?"}`}
+				onBack={goBack}
+				backLabel="Back"
+				headingLevel={3}
+				titleClass="text-sm"
+				actionsLabel="Edit character lore entry actions"
+			>
+				{#snippet actions()}
+					<button
+						class="btn btn-sm preset-filled-surface-400-600"
+						onclick={goBack}
+					>
+						Cancel
+					</button>
+					<button
+						class="btn btn-sm preset-filled-success-500"
+						onclick={handleSave}
+						disabled={!entryIsValid(editingEntry!)}
+					>
+						<Icons.Save size={14} />
+						{isNewEntry ? "Create" : "Update"}
+					</button>
+				{/snippet}
+			</PanelNavHeader>
 
 			<!-- Form fields -->
 			<div class="flex flex-col gap-4">
