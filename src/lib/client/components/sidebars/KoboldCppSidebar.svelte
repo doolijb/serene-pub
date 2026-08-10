@@ -2,6 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import PanelTabList from "$lib/client/components/panels/PanelTabList.svelte"
 	import PanelTab from "$lib/client/components/panels/PanelTab.svelte"
+	import PanelSectionTitle from "$lib/client/components/panels/PanelSectionTitle.svelte"
 	import { getContext, onMount, onDestroy } from "svelte"
 	import { Tabs } from "@skeletonlabs/skeleton-svelte"
 	import type { ValueChangeDetails } from "@zag-js/tabs"
@@ -28,6 +29,17 @@
 	)
 
 	let activeTab = $state("models")
+
+	// Section names. The tab triggers are icon-only (see PanelTab), so
+	// PanelSectionTitle is where the active section's full name is shown.
+	const SECTION_LABELS: Record<string, string> = {
+		models: "Models",
+		available: "Available",
+		downloads: "Downloads",
+		performance: "Performance",
+		settings: "Settings"
+	}
+	let sectionLabel = $derived(SECTION_LABELS[activeTab] ?? "")
 	let isConnected = $state(false)
 	let isLocal = $state(true)
 	let isTesting = $state(false)
@@ -393,33 +405,29 @@
 						value="models"
 						label="Models"
 						icon={Icons.Package}
-						active={activeTab === "models"}
 					/>
 					<PanelTab
 						value="available"
 						label="Available"
 						icon={Icons.Search}
-						active={activeTab === "available"}
 					/>
 					<PanelTab
 						value="downloads"
 						label="Downloads"
 						icon={Icons.Download}
-						active={activeTab === "downloads"}
 					/>
 					<PanelTab
 						value="perf"
 						label="Performance"
 						icon={Icons.Gauge}
-						active={activeTab === "perf"}
 					/>
 					<PanelTab
 						value="settings"
 						label="Settings"
 						icon={Icons.Settings}
-						active={activeTab === "settings"}
 					/>
 				</PanelTabList>
+				<PanelSectionTitle title={sectionLabel} class="mt-3 mb-2" />
 				<Tabs.Content value="models">
 					{#if activeTab === "models"}
 						<KoboldCppModelsTab />

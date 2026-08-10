@@ -56,23 +56,30 @@
 			title={chat?.name || "Chat"}
 			{onBack}
 			backLabel="Back to chats"
-			actionsLabel="Chat actions"
+			actionsLabel="Chat"
 		>
-			{#snippet actions()}
+			{#snippet primaryAction()}
 				<button
-					class="btn btn-sm preset-filled-surface-400-600"
+					class="btn btn-sm preset-filled-primary-500 shrink-0 p-2"
 					onclick={onOpen}
 					title="Go to chat"
+					aria-label="Go to chat"
+					type="button"
 				>
-					<Icons.MessageSquare size={14} /> Go To Chat
+					<Icons.MessageSquare size={16} aria-hidden="true" />
 				</button>
+			{/snippet}
+			<!-- The {#if} lives INSIDE the snippet: a snippet passed as a prop
+			     must be a direct child of the component tag. -->
+			{#snippet actions()}
 				{#if canEdit}
 					<button
-						class="btn btn-sm preset-filled-primary-500"
+						class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
 						onclick={onEdit}
-						title="Edit chat"
+						type="button"
 					>
-						<Icons.Pencil size={14} /> Edit
+						<Icons.Pencil size={16} aria-hidden="true" />
+						<span>Edit chat</span>
 					</button>
 				{/if}
 			{/snippet}

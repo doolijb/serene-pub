@@ -3,6 +3,9 @@
 	import { getContext, onDestroy, onMount } from "svelte"
 	import { SvelteSet } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
+	import PanelTabList from "$lib/client/components/panels/PanelTabList.svelte"
+	import PanelTab from "$lib/client/components/panels/PanelTab.svelte"
+	import PanelSectionTitle from "$lib/client/components/panels/PanelSectionTitle.svelte"
 	import ContextConfigUnsavedChangesModal from "../modals/ContextConfigUnsavedChangesModal.svelte"
 	import NewNameModal from "../modals/NewNameModal.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
@@ -44,6 +47,15 @@
 	let showUnsavedChangesModal = $state(false)
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
 	let activeView: "cards" | "raw" | "preview" = $state("cards")
+
+	// Section names. The tab triggers are icon-only (see PanelTab), so
+	// PanelSectionTitle is where the active section's full name is shown.
+	const SECTION_LABELS: Record<string, string> = {
+		cards: "Cards",
+		raw: "Raw",
+		preview: "Preview"
+	}
+	let sectionLabel = $derived(SECTION_LABELS[activeView] ?? "")
 
 	// The Cards tab's tree editor isn't usable at mobile widths yet — hidden
 	// there for now (same lg breakpoint Layout.svelte/MessageComposer use for
@@ -109,10 +121,9 @@
 			? []
 			: lintContextTemplate(parsedTemplate.cards).map((issue) => ({
 					...issue,
-					line:
-						(contextConfig.template || "")
-							.slice(0, issue.start)
-							.split("\n").length
+					line: (contextConfig.template || "")
+						.slice(0, issue.start)
+						.split("\n").length
 				}))
 	)
 
@@ -463,17 +474,23 @@
 				onValueChange={(e) =>
 					(activeView = e.value as typeof activeView)}
 			>
-				<Tabs.List class="flex flex-wrap gap-1">
-					<Tabs.Trigger value="cards" class="max-lg:hidden">
-						<Icons.LayoutList size={16} class="inline" /> Cards
-					</Tabs.Trigger>
-					<Tabs.Trigger value="raw">
-						<Icons.Code size={16} class="inline" /> Raw
-					</Tabs.Trigger>
-					<Tabs.Trigger value="preview">
-						<Icons.Eye size={16} class="inline" /> Preview
-					</Tabs.Trigger>
-				</Tabs.List>
+				<PanelTabList>
+					<!-- Still hidden below lg: the Cards tree editor isn't usable
+					     at mobile widths yet (see the isMobile guard above). -->
+					<PanelTab
+						value="cards"
+						label="Cards"
+						icon={Icons.LayoutList}
+						class="max-lg:hidden"
+					/>
+					<PanelTab value="raw" label="Raw" icon={Icons.Code} />
+					<PanelTab
+						value="preview"
+						label="Preview"
+						icon={Icons.Eye}
+					/>
+				</PanelTabList>
+				<PanelSectionTitle title={sectionLabel} class="mt-3 mb-2" />
 				<Tabs.Content value="cards">
 					<div class="flex flex-col gap-3">
 						{#if parsedTemplate.parseError}
@@ -499,14 +516,19 @@
 										onTemplateChange={updateTemplate}
 										onRemove={() => rootActions.remove(i)}
 										onMoveUp={() => rootActions.moveUp(i)}
-										onMoveDown={() => rootActions.moveDown(i)}
+										onMoveDown={() =>
+											rootActions.moveDown(i)}
 										canMoveUp={i > 0}
-										canMoveDown={i < parsedTemplate.cards.length - 1}
+										canMoveDown={i <
+											parsedTemplate.cards.length - 1}
 										onInsertAbove={(spec) => {
-											const { insertedId } = rootActions.insertAt(i, spec)
-											if (insertedId) pendingExpandIds.add(insertedId)
+											const { insertedId } =
+												rootActions.insertAt(i, spec)
+											if (insertedId)
+												pendingExpandIds.add(insertedId)
 										}}
-										showDragHandle={parsedTemplate.cards.length > 1}
+										showDragHandle={parsedTemplate.cards
+											.length > 1}
 										{collapsedIds}
 										onToggleCollapsed={toggleCollapsed}
 									/>
@@ -530,11 +552,17 @@
 													type="button"
 													class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
 													onclick={() => {
-														const { insertedId } = rootActions.insertAt(
-															parsedTemplate.cards.length,
-															option.spec
-														)
-														if (insertedId) pendingExpandIds.add(insertedId)
+														const { insertedId } =
+															rootActions.insertAt(
+																parsedTemplate
+																	.cards
+																	.length,
+																option.spec
+															)
+														if (insertedId)
+															pendingExpandIds.add(
+																insertedId
+															)
 													}}
 													title={option.description}
 												>
@@ -573,9 +601,9 @@
 								<ul class="flex flex-col gap-0.5">
 									{#each templateLintIssues as issue}
 										<li>
-											<span class="font-mono"
-												>Line {issue.line}:</span
-											>
+											<span class="font-mono">
+												Line {issue.line}:
+											</span>
 											{issue.message}
 										</li>
 									{/each}

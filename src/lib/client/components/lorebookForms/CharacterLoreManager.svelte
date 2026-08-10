@@ -748,14 +748,17 @@
 				onBack={goBack}
 				backLabel="Back"
 				headingLevel={3}
-				actionsLabel="Character lore entry actions"
+				actionsLabel="Character lore entry"
 			>
-				{#snippet actions()}
+				{#snippet primaryAction()}
 					<button
-						class="btn btn-sm preset-filled-primary-500"
+						class="btn btn-sm preset-filled-primary-500 shrink-0 p-2"
 						onclick={() => editEntry(focusedEntry!)}
+						title="Edit entry"
+						aria-label="Edit entry"
+						type="button"
 					>
-						<Icons.Pencil size={14} /> Edit
+						<Icons.Pencil size={16} aria-hidden="true" />
 					</button>
 				{/snippet}
 			</PanelNavHeader>
@@ -884,22 +887,30 @@
 				backLabel="Back"
 				headingLevel={3}
 				titleClass="text-sm"
-				actionsLabel="Edit character lore entry actions"
+				actionsLabel="Edit character lore entry"
 			>
-				{#snippet actions()}
+				{#snippet primaryAction()}
 					<button
-						class="btn btn-sm preset-filled-surface-400-600"
-						onclick={goBack}
-					>
-						Cancel
-					</button>
-					<button
-						class="btn btn-sm preset-filled-success-500"
+						class="btn btn-sm preset-filled-success-500 shrink-0 p-2"
 						onclick={handleSave}
 						disabled={!entryIsValid(editingEntry!)}
+						title={isNewEntry ? "Create entry" : "Update entry"}
+						aria-label={isNewEntry
+							? "Create entry"
+							: "Update entry"}
+						type="button"
 					>
-						<Icons.Save size={14} />
-						{isNewEntry ? "Create" : "Update"}
+						<Icons.Save size={16} aria-hidden="true" />
+					</button>
+				{/snippet}
+				{#snippet actions()}
+					<button
+						class="btn btn-sm popover-menu-btn hover:preset-filled-surface-500"
+						onclick={goBack}
+						type="button"
+					>
+						<Icons.X size={16} aria-hidden="true" />
+						<span>Cancel</span>
 					</button>
 				{/snippet}
 			</PanelNavHeader>

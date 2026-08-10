@@ -432,25 +432,27 @@
 						selectedTag = null
 					}}
 					backLabel="Back to tags"
-					backText="Back"
-					actionsLabel="Tag actions"
+					actionsLabel="Tag"
 				>
-					{#snippet actions()}
+					{#snippet primaryAction()}
 						<button
-							class="btn btn-sm preset-filled-surface-400-600"
+							class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
 							onclick={handleEditClick}
 							title="Edit Tag"
+							aria-label="Edit Tag"
+							type="button"
 						>
-							<Icons.Pencil size={16} />
-							Edit
+							<Icons.Pencil size={16} aria-hidden="true" />
 						</button>
+					{/snippet}
+					{#snippet actions()}
 						<button
-							class="btn btn-sm preset-tonal-error"
+							class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
 							onclick={handleDeleteClick}
-							title="Delete Tag"
+							type="button"
 						>
-							<Icons.Trash2 size={16} />
-							Delete
+							<Icons.Trash2 size={16} aria-hidden="true" />
+							<span>Delete</span>
 						</button>
 					{/snippet}
 				</PanelNavHeader>

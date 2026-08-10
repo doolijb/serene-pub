@@ -5,6 +5,7 @@
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import PanelTabList from "$lib/client/components/panels/PanelTabList.svelte"
 	import PanelTab from "$lib/client/components/panels/PanelTab.svelte"
+	import PanelSectionTitle from "$lib/client/components/panels/PanelSectionTitle.svelte"
 	import NewNameModal from "../modals/NewNameModal.svelte"
 	import EditLorebookForm from "../lorebookForms/EditLorebookForm.svelte"
 	import {
@@ -97,6 +98,19 @@
 		openChatCtx.chatId !== null && openChatCtx.isOwner
 	)
 	let openChatHasLorebook = $derived(openChatCtx.lorebookId !== null)
+
+	// Section names. The tab triggers are icon-only (see PanelTab), so this is
+	// the only place the names are rendered — PanelSectionTitle shows the
+	// active one in full, directly above that section's content.
+	const SECTION_LABELS: Record<EditGroup, string> = {
+		lorebook: "Lorebook",
+		bindings: "Bindings",
+		world: "World Lore",
+		characters: "Character Lore",
+		history: "History",
+		graph: "Graph"
+	}
+	let sectionLabel = $derived(SECTION_LABELS[editGroup])
 
 	function handleAttachToChat(lorebookId: number) {
 		if (openChatCtx.chatId === null) return
@@ -571,43 +585,43 @@
 					isEditingLorebook = false
 				}}
 				backLabel="Back to lorebooks"
-				backText="Back"
-				actionsLabel="Lorebook actions"
+				actionsLabel="Lorebook"
 			>
 				{#snippet actions()}
 					{#if selectedLorebook}
 						<button
-							class="btn btn-sm preset-filled-surface-400-600"
+							class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
 							onclick={() =>
 								handleExportLorebook(selectedLorebook.id)}
-							title="Export lorebook"
+							type="button"
 						>
-							<Icons.Download size={16} />
-							Export
+							<Icons.Download size={16} aria-hidden="true" />
+							<span>Export</span>
 						</button>
 					{/if}
 					{#if hasOpenChat && selectedLorebook}
 						{#if openChatCtx.lorebookId === selectedLorebook.id}
 							<button
-								class="btn btn-sm preset-filled-warning-500"
+								class="btn btn-sm popover-menu-btn hover:preset-filled-warning-500"
 								onclick={handleDetachFromChat}
-								title="Detach from current chat"
+								type="button"
 							>
-								<Icons.Unlink size={16} />
-								Detach from Chat
+								<Icons.Unlink size={16} aria-hidden="true" />
+								<span>Detach from Chat</span>
 							</button>
 						{:else}
 							<button
-								class="btn btn-sm preset-filled-primary-500"
+								class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
 								onclick={() =>
 									handleAttachToChat(selectedLorebook.id)}
 								disabled={openChatHasLorebook}
 								title={openChatHasLorebook
 									? "The current chat already has a lorebook attached"
-									: "Attach to current chat"}
+									: undefined}
+								type="button"
 							>
-								<Icons.Link size={16} />
-								Attach to Chat
+								<Icons.Link size={16} aria-hidden="true" />
+								<span>Attach to Chat</span>
 							</button>
 						{/if}
 					{/if}
@@ -615,45 +629,35 @@
 			</PanelNavHeader>
 		</div>
 		<Tabs value={editGroup} onValueChange={(e) => handleSwitchTabGroup(e)}>
-			<!-- reserveRows={2}: six icon-only triggers measure ~224px against
-			     this panel's ~220px tab-list content box at a 1024px viewport, so
-			     this strip cannot fit on one row and must be allowed to wrap.
-			     Reserving the height keeps the content below from jumping as the
-			     active tab's label changes width. See PanelTabList. -->
-			<PanelTabList reserveRows={2}>
+			<PanelTabList>
 				<PanelTab
 					value="lorebook"
 					label="Lorebook"
 					icon={Icons.Book}
-					active={editGroup === "lorebook"}
 					disabled={tabsDisabled && editGroup !== "lorebook"}
 				/>
 				<PanelTab
 					value="bindings"
 					label="Bindings"
 					icon={Icons.Link}
-					active={editGroup === "bindings"}
 					disabled={tabsDisabled}
 				/>
 				<PanelTab
 					value="world"
 					label="World Lore"
 					icon={Icons.Globe}
-					active={editGroup === "world"}
 					disabled={tabsDisabled}
 				/>
 				<PanelTab
 					value="characters"
 					label="Character Lore"
 					icon={Icons.User}
-					active={editGroup === "characters"}
 					disabled={tabsDisabled}
 				/>
 				<PanelTab
 					value="history"
 					label="History"
 					icon={Icons.Calendar}
-					active={editGroup === "history"}
 					disabled={tabsDisabled}
 				/>
 				{#if graphEnabled}
@@ -661,11 +665,11 @@
 						value="graph"
 						label="Graph"
 						icon={Icons.Network}
-						active={editGroup === "graph"}
 						disabled={tabsDisabled}
 					/>
 				{/if}
 			</PanelTabList>
+			<PanelSectionTitle title={sectionLabel} class="mt-3 mb-2" />
 			<Tabs.Content value="lorebook">
 				{#if editGroup == "lorebook" && selectedLorebook}
 					<EditLorebookForm

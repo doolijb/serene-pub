@@ -61,33 +61,38 @@
 			title={character?.nickname || character?.name || ""}
 			{onBack}
 			backLabel="Back to list"
-			actionsLabel="Character actions"
+			actionsLabel="Character"
 		>
-			{#snippet actions()}
-				<button
-					class="btn btn-sm preset-filled-surface-400-600"
-					onclick={onChat}
-					title="View chats"
-				>
-					<Icons.MessageSquare size={14} /> View Chats
-				</button>
+			{#snippet primaryAction()}
 				{#if character?.isOwner}
-					{#if onExport}
-						<button
-							class="btn btn-sm preset-filled-surface-400-600"
-							onclick={() => onExport?.(character!)}
-							title="Export character"
-							aria-label="Export character"
-						>
-							<Icons.Download size={14} />
-						</button>
-					{/if}
 					<button
-						class="btn btn-sm preset-filled-primary-500"
+						class="btn btn-sm preset-filled-primary-500 shrink-0 p-2"
 						onclick={onEdit}
 						title="Edit character"
+						aria-label="Edit character"
+						type="button"
 					>
-						<Icons.Pencil size={14} /> Edit
+						<Icons.Pencil size={16} aria-hidden="true" />
+					</button>
+				{/if}
+			{/snippet}
+			{#snippet actions()}
+				<button
+					class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
+					onclick={onChat}
+					type="button"
+				>
+					<Icons.MessageSquare size={16} aria-hidden="true" />
+					<span>View Chats</span>
+				</button>
+				{#if character?.isOwner && onExport}
+					<button
+						class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
+						onclick={() => onExport?.(character!)}
+						type="button"
+					>
+						<Icons.Download size={16} aria-hidden="true" />
+						<span>Export character</span>
 					</button>
 				{/if}
 			{/snippet}

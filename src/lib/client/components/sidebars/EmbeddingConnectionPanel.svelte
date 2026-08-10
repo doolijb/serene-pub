@@ -2,6 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import PanelTabList from "$lib/client/components/panels/PanelTabList.svelte"
 	import PanelTab from "$lib/client/components/panels/PanelTab.svelte"
+	import PanelSectionTitle from "$lib/client/components/panels/PanelSectionTitle.svelte"
 	import { getContext, onMount } from "svelte"
 	import { Dialog, Portal, Tabs } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
@@ -20,6 +21,14 @@
 	)
 
 	let activeTab = $state<"queue" | "settings">("queue")
+
+	// Section names. The tab triggers are icon-only (see PanelTab), so
+	// PanelSectionTitle is where the active section's full name is shown.
+	const SECTION_LABELS: Record<string, string> = {
+		queue: "Queue",
+		settings: "Settings"
+	}
+	let sectionLabel = $derived(SECTION_LABELS[activeTab] ?? "")
 
 	function handleTabChange(e: ValueChangeDetails) {
 		activeTab = e.value as "queue" | "settings"
@@ -632,19 +641,14 @@
 	{:else}
 		<Tabs value={activeTab} onValueChange={handleTabChange}>
 			<PanelTabList>
-				<PanelTab
-					value="queue"
-					label="Queue"
-					icon={Icons.List}
-					active={activeTab === "queue"}
-				/>
+				<PanelTab value="queue" label="Queue" icon={Icons.List} />
 				<PanelTab
 					value="settings"
 					label="Settings"
 					icon={Icons.Settings}
-					active={activeTab === "settings"}
 				/>
 			</PanelTabList>
+			<PanelSectionTitle title={sectionLabel} class="mt-3 mb-2" />
 
 			<!-- Queue Tab -->
 			<Tabs.Content value="queue">

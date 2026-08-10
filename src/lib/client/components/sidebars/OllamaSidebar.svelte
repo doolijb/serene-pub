@@ -2,6 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import PanelTabList from "$lib/client/components/panels/PanelTabList.svelte"
 	import PanelTab from "$lib/client/components/panels/PanelTab.svelte"
+	import PanelSectionTitle from "$lib/client/components/panels/PanelSectionTitle.svelte"
 	import { getContext, onMount, onDestroy } from "svelte"
 	import { Tabs } from "@skeletonlabs/skeleton-svelte"
 	import type { ValueChangeDetails } from "@zag-js/tabs"
@@ -26,6 +27,16 @@
 	let activeTab = $state<
 		"installed" | "available" | "downloads" | "settings"
 	>("installed")
+
+	// Section names. The tab triggers are icon-only (see PanelTab), so
+	// PanelSectionTitle is where the active section's full name is shown.
+	const SECTION_LABELS: Record<string, string> = {
+		installed: "Installed",
+		available: "Available",
+		downloads: "Downloads",
+		settings: "Settings"
+	}
+	let sectionLabel = $derived(SECTION_LABELS[activeTab] ?? "")
 	let isConnected = $state(false)
 	let ollamaSettingsCtx: OllamaSettingsCtx = $state(
 		getContext("ollamaSettingsCtx")
@@ -280,27 +291,24 @@
 						value="installed"
 						label="Installed"
 						icon={Icons.Package}
-						active={activeTab === "installed"}
 					/>
 					<PanelTab
 						value="available"
 						label="Available"
 						icon={Icons.Search}
-						active={activeTab === "available"}
 					/>
 					<PanelTab
 						value="downloads"
 						label="Downloads"
 						icon={Icons.Download}
-						active={activeTab === "downloads"}
 					/>
 					<PanelTab
 						value="settings"
 						label="Settings"
 						icon={Icons.Settings}
-						active={activeTab === "settings"}
 					/>
 				</PanelTabList>
+				<PanelSectionTitle title={sectionLabel} class="mt-3 mb-2" />
 				<Tabs.Content value="installed">
 					{#if activeTab === "installed"}
 						<OllamaInstalledTab />

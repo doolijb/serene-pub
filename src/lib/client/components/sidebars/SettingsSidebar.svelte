@@ -9,6 +9,7 @@
 	import * as Icons from "@lucide/svelte"
 	import PanelTabList from "$lib/client/components/panels/PanelTabList.svelte"
 	import PanelTab from "$lib/client/components/panels/PanelTab.svelte"
+	import PanelSectionTitle from "$lib/client/components/panels/PanelSectionTitle.svelte"
 	import { page } from "$app/state"
 	import UserSettingsTab from "../settingsTabs/UserSettingsTab.svelte"
 	import SystemSettingsTab from "../settingsTabs/SystemSettingsTab.svelte"
@@ -22,6 +23,16 @@
 
 	// State
 	let activeTab = $state<"user" | "system" | "themes" | "about">("user")
+
+	// Section names. The tab triggers are icon-only (see PanelTab), so
+	// PanelSectionTitle is where the active section's full name is shown.
+	const SECTION_LABELS: Record<string, string> = {
+		user: "User",
+		system: "System",
+		themes: "Themes",
+		about: "About"
+	}
+	let sectionLabel = $derived(SECTION_LABELS[activeTab] ?? "")
 	let userCtx: UserCtx = $state(getContext("userCtx"))
 	// Shared across the User and System tabs (the only two with buffered,
 	// explicitly-saved fields) — same pattern as LorebooksSidebar's
@@ -111,39 +122,19 @@
 	<!-- Settings Tabs -->
 	<div class="flex-1 overflow-y-auto">
 		<Tabs value={activeTab} onValueChange={handleTabChange}>
-			<!-- reserveRows={2}: measured at 1024x768 this strip renders one row for
-			     the short labels ("User", "About") and two for the longer ones
-			     ("System", "Themes"), so the content below jumped 32px depending
-			     on selection. Capping the label width does not help -- a SHORT
-			     label makes a narrower trigger, and that is what flips the wrap. -->
-			<PanelTabList reserveRows={2}>
-				<PanelTab
-					value="user"
-					label="User"
-					icon={Icons.UserCog}
-					active={activeTab === "user"}
-				/>
+			<PanelTabList>
+				<PanelTab value="user" label="User" icon={Icons.UserCog} />
 				{#if userCtx.user?.isAdmin}
 					<PanelTab
 						value="system"
 						label="System"
 						icon={Icons.Server}
-						active={activeTab === "system"}
 					/>
 				{/if}
-				<PanelTab
-					value="themes"
-					label="Themes"
-					icon={Icons.Palette}
-					active={activeTab === "themes"}
-				/>
-				<PanelTab
-					value="about"
-					label="About"
-					icon={Icons.Info}
-					active={activeTab === "about"}
-				/>
+				<PanelTab value="themes" label="Themes" icon={Icons.Palette} />
+				<PanelTab value="about" label="About" icon={Icons.Info} />
 			</PanelTabList>
+			<PanelSectionTitle title={sectionLabel} class="mt-3 mb-2" />
 			<Tabs.Content value="user">
 				{#if activeTab === "user"}
 					<UserSettingsTab

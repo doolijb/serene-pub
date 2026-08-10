@@ -1,41 +1,49 @@
 <script lang="ts">
 	import type { Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import PanelToolbar from "./PanelToolbar.svelte"
+	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 
 	/**
-	 * The in-panel back/title header, plus an optional action row.
+	 * The in-panel back/title header. ALWAYS ONE ROW.
 	 *
-	 * THE RULE THIS COMPONENT EXISTS TO ENFORCE: actions never share the
-	 * title's row. Skeleton's `.btn` has `white-space: nowrap` and no
-	 * flex-shrink, so its min-width:auto resolves to full min-content width
-	 * and it cannot give ground; a sibling `<h2 class="flex-1 truncate">` has
-	 * overflow:hidden, so ITS min-width:auto resolves to 0. Put them on one
-	 * row and the title absorbs 100% of the deficit — measured at 1024x768 the
-	 * Lorebooks+ header rendered its title at clientWidth 0 (scrollWidth 123)
-	 * while "Detach from Chat" still overflowed the panel.
+	 * The problem this shape solves: Skeleton's `.btn` sets white-space:nowrap
+	 * with no flex-shrink, so a labelled button cannot give ground, while a
+	 * sibling `<h2 class="truncate">` can shrink to zero — put them on one row
+	 * and the title absorbs the entire deficit (measured: clientWidth 0 against
+	 * scrollWidth 123).
 	 *
-	 * Hence: row 1 is back + title only, row 2 wraps.
+	 * The first attempt fixed that by moving actions to a second row
+	 * unconditionally, which wastes a row at every width. The real cause is
+	 * that labelled actions are simply too wide for this panel: back(70) +
+	 * title(120) + Export(90) + Detach(150) needs ~454px, but the panel's
+	 * content box is only ~212px at a 1024px viewport and ~436px even at 1920.
+	 *
+	 * So secondary actions move into a `⋯` menu, which drops the requirement to
+	 * ~88px + title and fits one row everywhere. Their full text labels survive
+	 * inside the menu, so nothing is truncated or left to an icon alone.
 	 */
 	interface Props {
 		title: string
 		onBack?: () => void
 		/** Accessible name + tooltip for the back button. */
 		backLabel?: string
-		/** Visible text on the back button. Omit for the icon-only style. */
-		backText?: string
 		/** 2 for a top-level sidebar view, 3 when this renders inside a
 		    Tabs.Content that already sits under an <h2> (the lorebookForms
 		    managers) — keeps the heading outline honest. */
 		headingLevel?: 2 | 3
 		/** eg. "text-sm" — several callers size the title down. */
 		titleClass?: string
-		/** Rendered as its own wrapping row below the title. */
+		/** Stays INLINE next to the title, so it should be icon-only with a
+		    title/aria-label. For the one action that must not cost a second
+		    click — the lore edit screens put Save here. */
+		primaryAction?: Snippet
+		/** Rendered inside the `⋯` menu, with full text labels. Use
+		    `.popover-menu-btn` for each entry, matching PersonaListItem and the
+		    message-options menu. */
 		actions?: Snippet
-		/** Accessible name for the action row. Required whenever `actions` is
-		    passed; falls back to "<title> actions". */
+		/** Menu heading + the trigger's accessible name, eg. "Lorebook". */
 		actionsLabel?: string
-		/** Anything that belongs between the title and the actions. */
+		/** Anything that belongs directly beneath the title row. */
 		subtitle?: Snippet
 	}
 
@@ -43,15 +51,16 @@
 		title,
 		onBack,
 		backLabel = "Back",
-		backText,
 		headingLevel = 2,
 		titleClass = "",
+		primaryAction,
 		actions,
 		actionsLabel,
 		subtitle
 	}: Props = $props()
 
 	const tag = $derived(`h${headingLevel}` as "h2" | "h3")
+	let menuOpen = $state(false)
 </script>
 
 <div class="flex min-w-0 flex-col gap-2">
@@ -59,24 +68,20 @@
 		{#if onBack}
 			<button
 				type="button"
-				class="btn btn-sm preset-filled-surface-400-600 shrink-0 {backText
-					? ''
-					: 'p-2'}"
+				class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
 				onclick={onBack}
 				title={backLabel}
 				aria-label={backLabel}
 			>
 				<Icons.ChevronLeft size={16} aria-hidden="true" />
-				{#if backText}{backText}{/if}
 			</button>
 		{/if}
-		<!-- data-panel-title is the hook the Mode-A width assertion selects on;
-		     see the plan's verification section. Selecting on it rather than
-		     `aside h2` avoids flagging legitimately-narrow headings inside
-		     cards and list items, and covers the mobile dialog branch (which
-		     is a role="dialog", not an <aside>).
+		<!-- data-panel-title is the hook the title-width assertion selects on.
+		     Selecting on it rather than `aside h2` avoids flagging
+		     legitimately-narrow headings inside cards and list items, and
+		     covers the mobile dialog branch (a role="dialog", not an <aside>).
 
-		     Deliberately NO `capitalize` here: this slot renders user data
+		     Deliberately NO `capitalize`: this renders user data
 		     (lorebook/character/tag names) and text-transform:capitalize
 		     mangles "iPhone" -> "IPhone". -->
 		<svelte:element
@@ -86,11 +91,41 @@
 		>
 			{title}
 		</svelte:element>
+		{@render primaryAction?.()}
+		{#if actions}
+			<Popover
+				open={menuOpen}
+				onOpenChange={(e) => (menuOpen = e.open)}
+				positioning={{ placement: "bottom-end" }}
+			>
+				<Popover.Trigger
+					class="btn btn-sm hover:bg-primary-600-400 shrink-0 p-2 {menuOpen
+						? 'bg-primary-600-400'
+						: ''}"
+					aria-label="{actionsLabel ?? title} options"
+				>
+					<Icons.EllipsisVertical size={16} aria-hidden="true" />
+				</Popover.Trigger>
+				<Portal>
+					<Popover.Positioner class="z-[1000]!">
+						<Popover.Content
+							class="card bg-primary-200-800 w-[min(90vw,240px)] space-y-4 p-4 shadow-xl"
+						>
+							<header class="popover-menu-title">
+								<p>{actionsLabel ?? title}</p>
+							</header>
+							<article
+								class="flex flex-col gap-2"
+								role="none"
+								onclick={() => (menuOpen = false)}
+							>
+								{@render actions()}
+							</article>
+						</Popover.Content>
+					</Popover.Positioner>
+				</Portal>
+			</Popover>
+		{/if}
 	</div>
 	{@render subtitle?.()}
-	{#if actions}
-		<PanelToolbar label={actionsLabel ?? `${title} actions`}>
-			{@render actions()}
-		</PanelToolbar>
-	{/if}
 </div>

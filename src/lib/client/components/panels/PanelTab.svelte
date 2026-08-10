@@ -3,25 +3,21 @@
 	import type { Component, Snippet } from "svelte"
 
 	/**
-	 * One tab trigger: icon always, text label only while active.
+	 * One tab trigger: ICON ONLY, at every width.
 	 *
-	 * TWO THINGS THIS COMPONENT GUARANTEES SO CALL SITES CANNOT FORGET:
+	 * There is deliberately no visible text. The previous attempt rendered the
+	 * active tab's label and capped its width, so "Character Lore" displayed as
+	 * "Chara…" — and a label that can be trimmed is worse than no label,
+	 * because it reads as a bug rather than as a deliberate affordance. With no
+	 * text at all there is nothing to trim, and the strip holds one row.
 	 *
-	 * 1. An accessible name. Inactive tabs are icon-only by convention, and
-	 *    the active tab's label truncates — to nothing at the narrowest panel
-	 *    widths. So visible text is never a reliable accessible name for any
-	 *    tab in any state, and aria-label is set unconditionally from `label`.
-	 *    (Note it is bare `label`, not the "<label> tab" the old hand-written
-	 *    markup used — zag already emits role="tab", so that spelling
-	 *    announced "X tab tab".)
+	 * The section's full name is shown by PanelSectionTitle, directly above the
+	 * content — so the name is always available in full, it just isn't repeated
+	 * inside a 36px trigger.
 	 *
-	 * 2. A visible selected state. Skeleton's tabs.css styles
-	 *    [data-part='trigger'] with `@apply btn` and defines NOTHING for the
-	 *    selected state, so today the conditional label is doing double duty
-	 *    as the only selection cue. Once that label can truncate away, a strip
-	 *    without data-[selected] styling has no active indicator at all —
-	 *    which is why the fill below ships in the same change as the
-	 *    truncation, not as a follow-up.
+	 * The accessible name is unaffected: `aria-label` and `title` both come
+	 * from `label`, so screen readers and tooltips still get the real name. The
+	 * component sets it unconditionally so no call site can forget.
 	 */
 	interface Props {
 		value: string
@@ -29,12 +25,12 @@
 		/** A @lucide/svelte icon component. */
 		icon?: Component<any>
 		disabled?: boolean
-		/** Whether this tab is the active one. Drives the visible label; the
-		    fill is handled by data-[selected] so it stays correct even if a
-		    caller gets this wrong. */
-		active?: boolean
-		/** eg. an unread/ready count, rendered after the label. */
+		/** eg. an unread/ready count, rendered after the icon. */
 		badge?: Snippet
+		/** Escape hatch for per-tab visibility, eg. ContextSidebar hides its
+		    Cards tab below `lg` because that editor isn't usable at mobile
+		    widths yet. */
+		class?: string
 	}
 
 	let {
@@ -42,8 +38,8 @@
 		label,
 		icon: Icon,
 		disabled = false,
-		active = false,
-		badge
+		badge,
+		class: className = ""
 	}: Props = $props()
 </script>
 
@@ -52,28 +48,30 @@
 	keyboard navigation would survive a wrapper (getElements is descendant-
 	scoped) but the flex list layout would not.
 
-	btn-sm matters for more than looks — it is what brings the 5-tab strips
-	under the 220px budget at a 1024px viewport. Icon size is deliberately not
-	a prop: .btn sets `& > svg { width: var(--btn-size) }`, so the CSS wins
-	over any size attribute and a prop would silently do nothing.
+	Skeleton's tabs.css applies `@apply btn` to [data-part='trigger'] inside
+	layer(base) — that is where the button/pill look came from. Utilities
+	outrank the base layer, so the classes below restyle it as a real underlined
+	tab: no fill, no rounding, and a transparent bottom border that colours in
+	on selection. Matches the hand-rolled strip in ActivitySidebar:117-121 so
+	the two agree.
+
+	`flex-1 min-w-0` makes the strip fit BY CONSTRUCTION rather than by
+	arithmetic: the triggers divide whatever width the list has, so the row
+	can never wrap or clip no matter the tab count or the panel size. Fixed
+	padding was tried first and is too fragile — six 33px triggers plus gaps
+	need 218px, which fits the 220px content box until a tall tab (Bindings)
+	raises a 15px scrollbar and drops it to 205px, at which point the strip
+	silently became two rows. Same idiom as ActivitySidebar's hand-rolled strip.
 -->
 <Tabs.Trigger
 	{value}
 	{disabled}
 	title={label}
 	aria-label={label}
-	class="btn-sm data-[selected]:preset-filled-primary-500"
+	class="text-surface-700-300 hover:text-primary-500 data-[selected]:border-primary-500 data-[selected]:text-primary-500 min-w-0 flex-1 rounded-none border-b-2 border-transparent bg-transparent px-1 py-1.5 {className}"
 >
 	{#if Icon}
-		<Icon size={16} aria-hidden="true" />
-	{/if}
-	{#if active}
-		<!-- max-w bounds the widest a trigger can get. Without it the longest
-		     label ("Character Lore") pushed the Lorebooks+ strip from two rows
-		     to three, which defeats PanelTabList's reserved height; truncate
-		     alone doesn't help, because in a wrapping row the trigger simply
-		     takes a line of its own at full width rather than shrinking. -->
-		<span class="max-w-[4rem] min-w-0 truncate">{label}</span>
+		<Icon size={18} aria-hidden="true" />
 	{/if}
 	{@render badge?.()}
 </Tabs.Trigger>
