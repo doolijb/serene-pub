@@ -290,7 +290,7 @@
 
 <!-- Search for available models -->
 <div class="flex flex-col gap-2 px-4 py-2">
-	<div class="flex gap-2">
+	<div class="panel-actions">
 		<button
 			class="btn preset-filled-primary-500 flex-1"
 			onclick={() => {
@@ -356,8 +356,12 @@
 			<div class="card preset-tonal p-4">
 				<div class="flex flex-col gap-3">
 					<!-- Header with name and VRAM tier -->
-					<div class="flex items-start justify-between">
-						<div class="flex-1">
+					<!-- Hugging Face repo ids ("mradermacher/Roleplay-Mistral-…")
+					     are long and contain no spaces, so they need min-w-0 to
+					     be allowed to wrap at all, and break-all to actually
+					     break — break-words does nothing without a space. -->
+					<div class="flex items-start justify-between gap-2">
+						<div class="min-w-0 flex-1 break-all">
 							<h4
 								class="text-foreground mb-1 text-lg font-semibold"
 							>
@@ -422,7 +426,7 @@
 					</div>
 
 					<!-- Actions -->
-					<div class="flex gap-2">
+					<div class="panel-actions">
 						<button
 							class="btn btn-sm {active
 								? 'preset-filled-primary-500'

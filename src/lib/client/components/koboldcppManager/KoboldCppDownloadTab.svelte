@@ -254,8 +254,8 @@
 				{#each recommendedModels as model}
 					<div class="card preset-tonal p-4">
 						<div class="flex flex-col gap-3">
-							<div class="flex items-start justify-between">
-								<div class="flex-1">
+							<div class="flex items-start justify-between gap-2">
+								<div class="min-w-0 flex-1 break-all">
 									<h4
 										class="text-foreground mb-1 text-lg font-semibold"
 									>
@@ -467,7 +467,7 @@
 		<div
 			class="card bg-surface-100-900 border-surface-300-700 w-[36rem] max-w-[95vw] space-y-4 border p-6 shadow-xl"
 		>
-			<div class="flex items-start justify-between">
+			<div class="flex items-start justify-between gap-2">
 				<div>
 					<h2 class="text-lg font-bold">Select Quantization</h2>
 					<p class="text-muted-foreground mt-0.5 text-sm">

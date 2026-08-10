@@ -193,7 +193,7 @@
 			<label class="block text-sm font-medium" for="baseUrl">
 				Ollama Base URL
 			</label>
-			<div class="flex gap-2">
+			<div class="panel-actions">
 				<input
 					id="baseUrl"
 					name="baseUrl"
@@ -274,7 +274,7 @@
 					</div>
 				</div>
 			{/if}
-			<div class="flex gap-2">
+			<div class="panel-actions">
 				<button
 					class="btn btn-sm preset-filled-surface-500"
 					onclick={checkOllamaVersion}

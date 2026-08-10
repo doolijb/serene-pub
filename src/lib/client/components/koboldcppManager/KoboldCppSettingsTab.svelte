@@ -181,20 +181,17 @@
 				capabilities = message.capabilities
 			}
 		)
-		socket.on(
-			"koboldcpp:version:error",
-			() => {
-				// Not reachable is a common, often-transient state in both modes
-				// (subprocess/instance not started yet, briefly restarting, etc.)
-				// — this fires eagerly on every mount, so a toast here would pop
-				// up immediately just from opening the tab. Surfaced instead as a
-				// quiet inline indicator next to the version fields below.
-				isCheckingVersion = false
-				versionCheckFailed = true
-				currentVersion = ""
-				capabilities = null
-			}
-		)
+		socket.on("koboldcpp:version:error", () => {
+			// Not reachable is a common, often-transient state in both modes
+			// (subprocess/instance not started yet, briefly restarting, etc.)
+			// — this fires eagerly on every mount, so a toast here would pop
+			// up immediately just from opening the tab. Surfaced instead as a
+			// quiet inline indicator next to the version fields below.
+			isCheckingVersion = false
+			versionCheckFailed = true
+			currentVersion = ""
+			capabilities = null
+		})
 		socket.on(
 			"koboldcpp:isUpdateAvailable",
 			(message: Sockets.KoboldCPP.IsUpdateAvailable.Response) => {
@@ -207,15 +204,12 @@
 					currentVersion = message.currentVersion
 			}
 		)
-		socket.on(
-			"koboldcpp:isUpdateAvailable:error",
-			() => {
-				// Same reasoning as koboldcpp:version:error above — eager check,
-				// quiet inline indicator instead of a toast.
-				isCheckingUpdates = false
-				updateCheckFailed = true
-			}
-		)
+		socket.on("koboldcpp:isUpdateAvailable:error", () => {
+			// Same reasoning as koboldcpp:version:error above — eager check,
+			// quiet inline indicator instead of a toast.
+			isCheckingUpdates = false
+			updateCheckFailed = true
+		})
 		socket.on(
 			"koboldcpp:setBaseUrl",
 			(message: Sockets.KoboldCPP.SetBaseUrl.Response) => {
@@ -471,7 +465,7 @@
 				</div>
 			{/if}
 
-			<div class="flex gap-2">
+			<div class="panel-actions">
 				<button
 					class="btn btn-sm preset-filled-surface-400-600 text-xs"
 					onclick={checkManagedBinaryUpdate}
@@ -633,7 +627,7 @@
 				<label class="block text-sm font-medium" for="koboldBaseUrl">
 					KoboldCPP Base URL
 				</label>
-				<div class="flex gap-2">
+				<div class="panel-actions">
 					<input
 						id="koboldBaseUrl"
 						name="koboldBaseUrl"
@@ -677,7 +671,9 @@
 								Not reachable
 							</span>
 						{:else}
-							<span class="font-mono">{currentVersion || "—"}</span>
+							<span class="font-mono">
+								{currentVersion || "—"}
+							</span>
 						{/if}
 					</div>
 					<div class="flex items-center justify-between">
@@ -740,7 +736,7 @@
 					</div>
 				{/if}
 
-				<div class="flex gap-2">
+				<div class="panel-actions">
 					<button
 						class="btn btn-sm preset-filled-surface-500"
 						onclick={checkVersion}
@@ -796,7 +792,7 @@
 				>
 					Admin Password
 				</label>
-				<div class="flex gap-2">
+				<div class="panel-actions">
 					<input
 						id="koboldAdminPassword"
 						name="koboldAdminPassword"
@@ -834,7 +830,7 @@
 				<label class="block text-sm font-medium" for="koboldAdminDir">
 					Admin Directory
 				</label>
-				<div class="flex gap-2">
+				<div class="panel-actions">
 					<input
 						id="koboldAdminDir"
 						name="koboldAdminDir"
