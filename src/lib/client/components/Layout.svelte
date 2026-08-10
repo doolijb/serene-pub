@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Header from "./Header.svelte"
+	import PanelHeader from "./panels/PanelHeader.svelte"
 	import "../../../app.css"
 	import * as Icons from "@lucide/svelte"
 	import { fly, fade } from "svelte/transition"
@@ -910,7 +911,7 @@
 						panelsCtx.leftPanel}
 					<div
 						bind:this={leftSidebarRef}
-						class="bg-surface-50-950 flex h-full w-full flex-col overflow-y-auto {panelsCtx.fullscreenPanel ===
+						class="bg-surface-50-950 flex h-full w-full flex-col overflow-x-hidden overflow-y-auto {panelsCtx.fullscreenPanel ===
 						'left'
 							? 'fixed inset-0 z-[500] rounded-none'
 							: 'me-2 rounded-r-lg'}"
@@ -925,54 +926,18 @@
 						).length}"
 						tabindex="-1"
 					>
-						<div class="flex items-center justify-between p-4">
-							<h2
-								id="left-panel-title"
-								class="text-foreground text-lg font-semibold capitalize"
-							>
-								{title}
-							</h2>
-							<div class="flex items-center gap-2">
-								<button
-									class="btn-ghost"
-									onclick={() =>
-										(panelsCtx.fullscreenPanel =
-											panelsCtx.fullscreenPanel === "left"
-												? null
-												: "left")}
-									aria-label={panelsCtx.fullscreenPanel === "left"
-										? "Exit fullscreen"
-										: "Fullscreen"}
-									title={panelsCtx.fullscreenPanel === "left"
-										? "Exit fullscreen"
-										: "Fullscreen"}
-									type="button"
-								>
-									{#if panelsCtx.fullscreenPanel === "left"}
-										<Icons.Minimize2
-											class="text-foreground h-4 w-4"
-											aria-hidden="true"
-										/>
-									{:else}
-										<Icons.Maximize2
-											class="text-foreground h-4 w-4"
-											aria-hidden="true"
-										/>
-									{/if}
-								</button>
-								<button
-									class="btn-ghost"
-									onclick={() => closePanel({ panel: "left" })}
-									aria-label="Close {title} panel"
-									type="button"
-								>
-									<Icons.X
-										class="text-foreground h-5 w-5"
-										aria-hidden="true"
-									/>
-								</button>
-							</div>
-						</div>
+						<PanelHeader
+							{title}
+							titleId="left-panel-title"
+							closeLabel="Close {title} panel"
+							isFullscreen={panelsCtx.fullscreenPanel === "left"}
+							onClose={() => closePanel({ panel: "left" })}
+							onToggleFullscreen={() =>
+								(panelsCtx.fullscreenPanel =
+									panelsCtx.fullscreenPanel === "left"
+										? null
+										: "left")}
+						/>
 						<div class="flex-1 overflow-y-auto">
 							{#if panelsCtx.leftPanel === "sampling"}
 								<SamplingSidebar
@@ -1033,7 +998,7 @@
 						panelsCtx.rightPanel}
 					<div
 						bind:this={rightSidebarRef}
-						class="bg-surface-50-950 flex h-full w-full flex-col overflow-y-auto {panelsCtx.fullscreenPanel ===
+						class="bg-surface-50-950 flex h-full w-full flex-col overflow-x-hidden overflow-y-auto {panelsCtx.fullscreenPanel ===
 						'right'
 							? 'fixed inset-0 z-[500] rounded-none'
 							: 'rounded-l-lg'}"
@@ -1048,54 +1013,18 @@
 						).length}"
 						tabindex="-1"
 					>
-						<div class="flex items-center justify-between p-4">
-							<h2
-								id="right-panel-title"
-								class="text-foreground text-lg font-semibold capitalize"
-							>
-								{title}
-							</h2>
-							<div class="flex items-center gap-2">
-								<button
-									class="btn-ghost"
-									onclick={() =>
-										(panelsCtx.fullscreenPanel =
-											panelsCtx.fullscreenPanel === "right"
-												? null
-												: "right")}
-									aria-label={panelsCtx.fullscreenPanel === "right"
-										? "Exit fullscreen"
-										: "Fullscreen"}
-									title={panelsCtx.fullscreenPanel === "right"
-										? "Exit fullscreen"
-										: "Fullscreen"}
-									type="button"
-								>
-									{#if panelsCtx.fullscreenPanel === "right"}
-										<Icons.Minimize2
-											class="text-foreground h-4 w-4"
-											aria-hidden="true"
-										/>
-									{:else}
-										<Icons.Maximize2
-											class="text-foreground h-4 w-4"
-											aria-hidden="true"
-										/>
-									{/if}
-								</button>
-								<button
-									class="btn-ghost"
-									onclick={() => closePanel({ panel: "right" })}
-									aria-label="Close {title} panel"
-									type="button"
-								>
-									<Icons.X
-										class="text-foreground h-5 w-5"
-										aria-hidden="true"
-									/>
-								</button>
-							</div>
-						</div>
+						<PanelHeader
+							{title}
+							titleId="right-panel-title"
+							closeLabel="Close {title} panel"
+							isFullscreen={panelsCtx.fullscreenPanel === "right"}
+							onClose={() => closePanel({ panel: "right" })}
+							onToggleFullscreen={() =>
+								(panelsCtx.fullscreenPanel =
+									panelsCtx.fullscreenPanel === "right"
+										? null
+										: "right")}
+						/>
 						<nav class="flex-1 overflow-y-auto">
 							{#if panelsCtx.rightPanel === "activity"}
 								<ActivitySidebar
@@ -1139,21 +1068,15 @@
 				aria-modal="true"
 				transition:fly={{ x: 40, duration: 200 }}
 			>
-				<div
-					class="border-border flex items-center justify-between border-b p-4"
-				>
-					<span
-						class="text-foreground text-lg font-semibold capitalize"
-					>
+				<!-- No onToggleFullscreen: the mobile branch is already a
+				     full-screen dialog, so there is nothing to expand into. -->
+				<div class="border-border border-b">
+					<PanelHeader
 						{title}
-					</span>
-					<button
-						class="btn-ghost"
-						onclick={() => closePanel({ panel: "mobile" })}
-						aria-label="Close {title} panel"
-					>
-						<Icons.X class="text-foreground h-5 w-5" />
-					</button>
+						titleId="mobile-panel-title"
+						closeLabel="Close {title} panel"
+						onClose={() => closePanel({ panel: "mobile" })}
+					/>
 				</div>
 				<div class="flex-1 overflow-y-auto">
 					{#if panelsCtx.mobilePanel === "activity"}
