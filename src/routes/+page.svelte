@@ -721,22 +721,21 @@
 							classes="!preset-filled-surface-200-800 transition-colors hover:!preset-filled-surface-300-700"
 						>
 							{#snippet content()}
-								<div class="flex gap-2">
-									<div
-										class="h-[4em] min-h-[4em] w-[4em] min-w-[4em]"
-									>
-										<Avatar char={character} />
-									</div>
-									<div class="gap2 flex flex-col">
+								<!-- min-w-0 threads down so a long name/description
+								     truncates instead of widening the row; `gap2`
+								     here was a typo and never applied any gap. -->
+								<div class="flex min-w-0 gap-2">
+									<Avatar char={character} />
+									<div class="flex min-w-0 flex-col gap-2">
 										<div
-											class="text-foreground text-left font-semibold"
+											class="text-foreground truncate text-left font-semibold"
 										>
 											{character.nickname ||
 												character.name ||
 												"Unknown"}
 										</div>
 										<div
-											class="text-muted-foreground line-clamp-2 text-sm"
+											class="text-muted-foreground line-clamp-2 text-left text-sm"
 										>
 											{character.description ||
 												"No description"}
@@ -749,7 +748,7 @@
 				</div>
 			{:else}
 				<div
-					class="grid grid-cols-[repeat(auto-fill,minmax(16.625rem,1fr))] gap-3"
+					class="grid grid-cols-[repeat(auto-fill,minmax(16.625rem,1fr))] gap-3 p-[0.25em]"
 				>
 					{#each sortedCharacters as character (character.id)}
 						<CharacterCardItem
@@ -1739,16 +1738,23 @@
 								<div class="grid gap-2 sm:grid-cols-2">
 									{#each characters.slice(0, 6) as character (character.id)}
 										<button
-											class="card preset-filled-surface-400-600 hover:preset-filled-surface-300-700 flex items-center gap-3 p-4 text-left transition-all"
+											class="card preset-filled-surface-400-600 hover:preset-filled-surface-300-700 flex items-center gap-3 overflow-hidden p-4 text-left transition-all"
 											onclick={() =>
 												startChatWithCharacter(
 													character
 												)}
 										>
-											<div
-												class="h-12 w-12 flex-shrink-0"
-											>
-												<Avatar char={character} />
+											<div>
+												<!-- Size passed to Avatar, not to a
+												     wrapper: Skeleton hard-sizes the
+												     avatar root, so a smaller wrapper
+												     didn't constrain it — the 64px
+												     default spilled 16px out of this
+												     48px box and over the description. -->
+												<Avatar
+													char={character}
+													size="w-12 h-12"
+												/>
 											</div>
 											<div class="min-w-0 flex-1">
 												<div

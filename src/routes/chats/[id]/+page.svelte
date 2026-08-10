@@ -969,7 +969,10 @@
 				chat = { ...currentChat, chatMessages: updatedMessages }
 			} else {
 				// Add new message and maintain chronological order
-				const updatedMessages = [...currentChat.chatMessages, chatMessage]
+				const updatedMessages = [
+					...currentChat.chatMessages,
+					chatMessage
+				]
 				chat = {
 					...currentChat,
 					chatMessages: updatedMessages.sort((a, b) => a.id - b.id)
@@ -1190,10 +1193,7 @@
 			socket.off("chats:getResponseOrder", handleChatsGetResponseOrder)
 			socket.off("chats:addPersona", handleChatsAddPersona)
 			socket.off("chats:branch", handleChatsBranch)
-			socket.off(
-				"scenes:scenedMessageIds",
-				handleScenesScenedMessageIds
-			)
+			socket.off("scenes:scenedMessageIds", handleScenesScenedMessageIds)
 			socket.off(
 				"scenes:scenedMessageIds:error",
 				handleScenesScenedMessageIdsError
@@ -2701,7 +2701,7 @@
 												filtered.character.id
 											)}
 									>
-										<div class="w-fit">
+										<div class="w-fit shrink-0">
 											<Avatar char={filtered.character} />
 										</div>
 										<div

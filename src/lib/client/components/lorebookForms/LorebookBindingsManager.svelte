@@ -784,12 +784,15 @@
 						<Avatar {char} />
 					</div>
 				{:else}
+					<!-- 4em to match the Avatar branch above; this was h-10 w-10
+					     (40px) against a 64px avatar, so a bound and an unbound
+					     binding card rendered at visibly different sizes. -->
 					<div
-						class="ring-offset-surface-50-950 bg-surface-200-800 text-surface-500 flex h-10 w-10 items-center justify-center rounded-full ring-2 ring-offset-2 {NODE_STATE_RING[
+						class="ring-offset-surface-50-950 bg-surface-200-800 text-surface-500 flex h-[4em] w-[4em] items-center justify-center rounded-full ring-2 ring-offset-2 {NODE_STATE_RING[
 							binding.nodeState
 						] ?? 'ring-surface-400'}"
 					>
-						<Icons.UserRound size={18} />
+						<Icons.UserRound size={28} />
 					</div>
 				{/if}
 			</div>

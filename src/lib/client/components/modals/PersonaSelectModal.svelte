@@ -131,7 +131,7 @@
 											}
 										}}
 									>
-										<div class="w-fit">
+										<div class="w-fit shrink-0">
 											<Avatar char={p} />
 										</div>
 										<div
