@@ -10,6 +10,7 @@
 	import ChatListItem from "../listItems/ChatListItem.svelte"
 	import LorebookListItem from "../listItems/LorebookListItem.svelte"
 	import EmptyState from "../EmptyState.svelte"
+	import PanelNavHeader from "../panels/PanelNavHeader.svelte"
 	import { goto } from "$app/navigation"
 
 	interface Props {
@@ -424,36 +425,35 @@
 	{#if selectedTag && !isEditing}
 		<!-- Selected tag view -->
 		<div class="mb-4">
-			<div class="mb-4 flex items-center gap-2">
-				<button
-					class="btn btn-sm preset-filled-surface-400-600"
-					onclick={() => {
+			<div class="mb-4">
+				<PanelNavHeader
+					title={selectedTag.name}
+					onBack={() => {
 						selectedTag = null
 					}}
-					title="Back to tags"
+					backLabel="Back to tags"
+					backText="Back"
+					actionsLabel="Tag actions"
 				>
-					<Icons.ChevronLeft size={16} />
-					Back
-				</button>
-				<h2 class="min-w-0 flex-1 truncate font-semibold">
-					{selectedTag.name}
-				</h2>
-				<button
-					class="btn btn-sm preset-filled-surface-400-600"
-					onclick={handleEditClick}
-					title="Edit Tag"
-				>
-					<Icons.Pencil size={16} />
-					Edit
-				</button>
-				<button
-					class="btn btn-sm preset-tonal-error"
-					onclick={handleDeleteClick}
-					title="Delete Tag"
-				>
-					<Icons.Trash2 size={16} />
-					Delete
-				</button>
+					{#snippet actions()}
+						<button
+							class="btn btn-sm preset-filled-surface-400-600"
+							onclick={handleEditClick}
+							title="Edit Tag"
+						>
+							<Icons.Pencil size={16} />
+							Edit
+						</button>
+						<button
+							class="btn btn-sm preset-tonal-error"
+							onclick={handleDeleteClick}
+							title="Delete Tag"
+						>
+							<Icons.Trash2 size={16} />
+							Delete
+						</button>
+					{/snippet}
+				</PanelNavHeader>
 			</div>
 
 			{#if selectedTag.description}

@@ -79,6 +79,51 @@
 	@apply card hover:preset-filled-surface-200-800 flex cursor-pointer items-center gap-2 rounded-lg p-2 transition;
 }
 
+/* The action row that sits under a panel's back/title row — see
+   components/panels/PanelToolbar.svelte, which is the normal way to get this.
+   Exposed as a bare utility as well so the handful of places that build a
+   nested action group by hand (eg. GraphManager's view-mode pair) can share
+   the recipe instead of re-inventing it.
+
+   Declared with @utility rather than as a plain `.panel-actions { @apply … }`
+   like .sidebar-list-item above: a plain rule here is UNLAYERED, so it would
+   beat every Tailwind utility a call site tries to add (`gap-4`,
+   `justify-end`, …) regardless of specificity. Those older rules already
+   carry that footgun; new ones shouldn't. @utility lands in the utilities
+   layer and stays overridable.
+
+   Why flex-wrap is the fix: Skeleton's own `@utility btn` sets
+   `white-space: nowrap` with no flex-shrink and no overflow, so in a
+   non-wrapping row a button resolves min-width:auto to its full min-content
+   width and simply pushes its siblings out of the panel. Wrapping is what
+   actually relieves that. Do NOT "fix" it with a global
+   `.btn { flex-shrink: 0 }` — ~18 call sites use `btn flex-1` and ~60 use
+   `btn w-full`, and three `w-full` buttons in one row would then demand 300%
+   of it instead of shrinking to thirds.
+
+   The `& > *` rules are only a floor for the pathological case of a single
+   label wider than the whole row (a 252px panel at a 1024px viewport):
+   min-width:0 lets it shrink, max-width:100% stops it escaping the panel,
+   and white-space:normal lets the label wrap onto a second line INSIDE the
+   button rather than being clipped — keeping the full text, which is the
+   only degradation consistent with "wrap, don't collapse to icons". */
+@utility panel-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: --spacing(2);
+	min-width: 0;
+
+	& > * {
+		min-width: 0;
+		max-width: 100%;
+	}
+
+	& > :where(.btn, .btn-icon) {
+		white-space: normal;
+	}
+}
+
 /* Shared button style for items inside a Popover.Content "kebab menu" style
    dropdown (message options, character/persona/lorebook/chat item options,
    composer "more tabs" menu, etc.) — plain text row with an icon that fills
