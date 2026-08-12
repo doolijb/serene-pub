@@ -11,12 +11,36 @@
  * (MAX_CONCURRENT_SOCKETS_PER_USER = 50) checked right before joining the
  * user's room.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest"
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	describe,
+	expect,
+	test,
+	vi
+} from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
 
 let dataDir: string
+
+// This file is genuinely expensive, unlike its siblings: the mock below calls
+// importOriginal(), which loads the REAL $lib/server/db — and that module opens
+// PGlite and runs migrate() at module scope. importOriginal() is required (the
+// spread keeps the module's other exports, which the auth path needs), so the
+// cost is inherent rather than accidental.
+//
+// Locally that is ~6s for the file because the work is warm. On CI it is a cold
+// PGlite init plus the entire migration chain against an empty data directory,
+// which overran the 5s default and timed out — and a run torn down mid-init
+// then leaves the directory locked, which is why the failures came with
+// checkDatabaseLock's process.exit rather than a plain timeout.
+//
+// Raising the ceiling for this one file, rather than globally: every other
+// suite should stay honest about being fast.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 vi.mock("$lib/server/db", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("$lib/server/db")>()
