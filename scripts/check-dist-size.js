@@ -35,7 +35,14 @@ function printLargest(dir, limit, label) {
 		.readdirSync(dir, { withFileTypes: true })
 		.map((e) => {
 			const p = path.join(dir, e.name)
-			return { name: e.name, mb: dirSizeBytes(p) / (1024 * 1024) }
+			// Files as well as directories live here — node_modules contains
+			// .package-lock.json — and dirSizeBytes readdir()s unconditionally,
+			// so handing it a file throws ENOTDIR. Mirrors dirSizeBytes's own
+			// internal branch.
+			const bytes = e.isDirectory()
+				? dirSizeBytes(p)
+				: fs.statSync(p).size
+			return { name: e.name, mb: bytes / (1024 * 1024) }
 		})
 		.sort((a, b) => b.mb - a.mb)
 		.slice(0, limit)
