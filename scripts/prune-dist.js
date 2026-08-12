@@ -167,9 +167,29 @@ export function dirSizeBytes(dir) {
 // tripwire; the point is catching a dependency bump silently reintroducing
 // hundreds of MB, not policing byte-level drift. Re-measure and adjust
 // after any deliberate, expected size change (e.g. a new bundled feature).
+//
+// Raised for the desktop targets in 0.5.0-rc-3 after a MEASURED breakdown, not
+// a wave-through. macos-arm64 came in at 308.8 MB against the old 220 ceiling,
+// and the guard's diagnostic output showed where it went:
+//
+//     174.4 MB  node_modules   <- clean; no reintroduced platform binaries
+//     115.4 MB  node           <- the bundled Node runtime
+//      18.8 MB  build
+//
+// The driver is the bundled runtime, not dependency bloat: release.yml pins and
+// ships Node v24.18.0, whose binary is substantially larger than the Node 20
+// one these ceilings were originally measured against. node_modules itself was
+// verified healthy — onnxruntime-node at 34.6 MB is a single platform, and a
+// local simulation of pruneDist reduced a real tree 1317 MB -> 533 MB, so every
+// rule here is still matching.
+//
+// macos-x64 and windows-x64 are raised to match: they bundle the same runtime,
+// so their old 220 ceilings would fail for the identical reason. Their exact
+// post-prune sizes have NOT been measured — if one of them lands far below
+// this, tighten it rather than leaving slack that hides a real regression.
 export const SIZE_THRESHOLD_MB = {
 	"linux-x64": 350,
-	"macos-x64": 220,
-	"macos-arm64": 220,
-	"windows-x64": 220
+	"macos-x64": 360,
+	"macos-arm64": 360,
+	"windows-x64": 360
 }
