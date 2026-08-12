@@ -28,10 +28,29 @@ const distDir = path.resolve(
 	"../dist",
 	`serene-pub-${pkg.version}-${targetName}`
 )
+/** Largest immediate children of `dir`, biggest first — diagnostic only. */
+function printLargest(dir, limit, label) {
+	if (!fs.existsSync(dir)) return
+	const rows = fs
+		.readdirSync(dir, { withFileTypes: true })
+		.map((e) => {
+			const p = path.join(dir, e.name)
+			return { name: e.name, mb: dirSizeBytes(p) / (1024 * 1024) }
+		})
+		.sort((a, b) => b.mb - a.mb)
+		.slice(0, limit)
+	console.error(`\nLargest entries in ${label}:`)
+	for (const r of rows) {
+		console.error(`  ${r.mb.toFixed(1).padStart(8)} MB  ${r.name}`)
+	}
+}
+
 const sizeMb = dirSizeBytes(distDir) / (1024 * 1024)
 const thresholdMb = SIZE_THRESHOLD_MB[targetName]
 
-console.log(`${targetName}: ${sizeMb.toFixed(1)} MB (dist/${path.basename(distDir)})`)
+console.log(
+	`${targetName}: ${sizeMb.toFixed(1)} MB (dist/${path.basename(distDir)})`
+)
 
 if (!thresholdMb) {
 	console.warn(
@@ -47,5 +66,11 @@ if (sizeMb > thresholdMb) {
 			`artifacts that scripts/prune-dist.js used to strip. If this growth is expected, update ` +
 			`SIZE_THRESHOLD_MB in scripts/prune-dist.js deliberately rather than ignoring this failure.`
 	)
+	// Name the culprit rather than leaving the next person to bisect it by
+	// hand. This failure is only actionable if you can see WHAT grew, and the
+	// dist exists solely on the CI runner — so print the breakdown here, at
+	// the one moment it is available.
+	printLargest(path.join(distDir, "node_modules"), 15, "node_modules")
+	printLargest(distDir, 10, "dist root")
 	process.exit(1)
 }

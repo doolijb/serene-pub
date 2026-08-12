@@ -82,15 +82,24 @@ export function pruneDist(outDir, target) {
 	// 4. @lenml/tokenizer-gemma is loaded via a dynamic ESM import
 	// (TokenCounterManager.ts), which only ever resolves dist/main.mjs —
 	// the CJS/IIFE builds and every .map file are unread duplicates.
+	// Expressed as KEEP-what-is-needed rather than DELETE-a-list-of-names.
+	//
+	// The list form was the single most fragile rule here: ~106 MB of this
+	// package's 116 MB dist rides on it, and it matched five exact filenames,
+	// so any upstream rename or added build artifact silently no-ops it and
+	// ships the weight. Directory-shaped rules elsewhere in this file fail
+	// loudly by comparison; this one failed silently.
+	//
+	// Safe because the app reaches this package only through a dynamic
+	// import() (TokenCounterManager.ts), which resolves the package's
+	// "import" export condition — ./dist/main.mjs — and nothing else. The
+	// .d.ts is kept as a cheap courtesy for anyone inspecting the bundle.
 	const gemmaDist = path.join(nm, "@lenml/tokenizer-gemma/dist")
-	for (const f of [
-		"main.js",
-		"main.global.js",
-		"main.js.map",
-		"main.mjs.map",
-		"main.global.js.map"
-	]) {
-		rm(path.join(gemmaDist, f))
+	if (fs.existsSync(gemmaDist)) {
+		for (const f of fs.readdirSync(gemmaDist)) {
+			if (f === "main.mjs" || f.endsWith(".d.ts")) continue
+			rm(path.join(gemmaDist, f))
+		}
 	}
 
 	// 5. gpt-tokenizer's package.json exports map resolves the dynamic
