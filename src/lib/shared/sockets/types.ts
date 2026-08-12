@@ -1628,6 +1628,65 @@ declare global {
 			}
 		}
 
+		// Graph Build Configs namespace
+		//
+		// One config row holds a prompt + connection + sampling triple per LLM
+		// step of a narrative-graph build. Unlike the narrator/summarize configs
+		// the active selection is SYSTEM-wide, not per-user — it lives on
+		// systemSettings.defaultGraphBuildConfigId — so this namespace has
+		// SetDefault rather than SetUserActive.
+		namespace GraphBuildConfigs {
+			namespace List {
+				interface Params {}
+				interface Response {
+					graphBuildConfigsList: Partial<SelectGraphBuildConfig>[]
+					/** Currently selected system-wide, so the UI can mark it. */
+					defaultGraphBuildConfigId?: number | null
+				}
+			}
+			namespace Get {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					graphBuildConfig: SelectGraphBuildConfig
+				}
+			}
+			namespace Create {
+				interface Params {
+					graphBuildConfig: InsertGraphBuildConfig
+				}
+				interface Response {
+					graphBuildConfig: SelectGraphBuildConfig
+				}
+			}
+			namespace Update {
+				interface Params {
+					graphBuildConfig: UpdateGraphBuildConfig
+				}
+				interface Response {
+					graphBuildConfig: SelectGraphBuildConfig
+				}
+			}
+			namespace Delete {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					success?: string
+					error?: string
+				}
+			}
+			namespace SetDefault {
+				interface Params {
+					id: number
+				}
+				interface Response {
+					defaultGraphBuildConfigId: number | null
+				}
+			}
+		}
+
 		// World Summarize Configs namespace
 		namespace WorldSummarizeConfigs {
 			namespace List {
@@ -3357,6 +3416,42 @@ declare global {
 				resolvedSceneCast?: ResolvedSceneCast[]
 			}
 
+			/**
+			 * Why a build produced the relationship count it did.
+			 *
+			 * Deliberately NOT inside GraphProposal: the proposal is what apply
+			 * commits, and this describes the run instead. It travels on the
+			 * activity, alongside sceneLabels/seedNodeNames.
+			 */
+			interface RelationshipDiagnostics {
+				/** Perspective calls issued — the denominator for the rest. */
+				perspectiveCalls: number
+				/** Scenes with no second character to relate anyone to. */
+				scenesSkippedNoPair: number
+				/** Response held no balanced JSON object. */
+				noJson: number
+				/** A balanced object was found but did not parse. */
+				badJson: number
+				/** Parsed, but `relationships` was not an array. */
+				notArray: number
+				/** Entries lacking a relationship type. */
+				missingType: number
+				/** Entries lacking a target name. */
+				missingTarget: number
+				/**
+				 * Entries whose `from` was not the perspective character —
+				 * a third party, or the pair the wrong way round. Both are
+				 * discarded rather than repaired.
+				 */
+				wrongSource: number
+				/** Perspective calls re-issued after a non-JSON response. */
+				retried: number
+				/** Retries that then produced usable JSON. */
+				retriedRecovered: number
+				/** Target names matching no character in their scene, deduped. */
+				unresolvedTargets: string[]
+			}
+
 			namespace List {
 				interface Params {
 					lorebookId: number
@@ -3882,10 +3977,7 @@ declare global {
 			}
 			namespace Update {
 				interface Response {
-					activities: (
-						| GraphBuildActivity
-						| SceneSummarizeActivity
-						)[]
+					activities: (GraphBuildActivity | SceneSummarizeActivity)[]
 				}
 			}
 			namespace Dismiss {

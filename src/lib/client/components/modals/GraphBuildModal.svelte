@@ -98,6 +98,86 @@
 			: null
 	)
 
+	/**
+	 * Human-readable attribution for relationships the build did NOT keep.
+	 *
+	 * Deliberately not gated on the result being empty. "4 relationships, 6
+	 * discarded" and "4 relationships, 0 discarded" are very different states
+	 * and looked identical while this only rendered at zero — which is exactly
+	 * how a parser that was throwing away every extracted edge stayed invisible
+	 * for a release. A thin result deserves the same attribution an empty one
+	 * gets.
+	 *
+	 * Stays silent in the one case with nothing to report: relationships were
+	 * produced, none were discarded, and no scene was skipped.
+	 */
+	let relationshipDropSummary = $derived.by(() => {
+		const d = build?.relationshipDiagnostics
+		if (!d) return []
+		const lines: string[] = []
+		const discarded =
+			d.noJson +
+			d.badJson +
+			d.notArray +
+			d.missingType +
+			d.missingTarget +
+			d.wrongSource +
+			d.unresolvedTargets.length
+
+		if (
+			proposalRels.length > 0 &&
+			discarded === 0 &&
+			d.scenesSkippedNoPair === 0 &&
+			d.retried === 0
+		) {
+			return []
+		}
+
+		if (discarded > 0) {
+			lines.push(
+				`${discarded} extracted relationship${discarded === 1 ? "" : "s"} could not be used:`
+			)
+		} else if (d.perspectiveCalls === 0) {
+			lines.push("No character perspectives were requested.")
+		} else if (proposalRels.length === 0) {
+			lines.push(
+				`${d.perspectiveCalls} character perspective${d.perspectiveCalls === 1 ? "" : "s"} requested; the model returned no relationships.`
+			)
+		}
+
+		if (d.unresolvedTargets.length > 0) {
+			lines.push(
+				`Named a character not in the scene: ${d.unresolvedTargets.join(", ")}`
+			)
+		}
+		if (d.noJson > 0)
+			lines.push(`${d.noJson} response(s) contained no JSON.`)
+		if (d.badJson > 0)
+			lines.push(`${d.badJson} response(s) contained unparseable JSON.`)
+		if (d.notArray > 0)
+			lines.push(
+				`${d.notArray} response(s) omitted the relationships list.`
+			)
+		if (d.missingType > 0)
+			lines.push(`${d.missingType} entr(ies) had no relationship type.`)
+		if (d.missingTarget > 0)
+			lines.push(`${d.missingTarget} entr(ies) named no target.`)
+		if (d.wrongSource > 0)
+			lines.push(
+				`${d.wrongSource} entr(ies) pointed the wrong way round, or described two other characters rather than this one.`
+			)
+		if (d.retried > 0)
+			lines.push(
+				`${d.retried} response(s) returned no JSON and were retried; ${d.retriedRecovered} then succeeded.`
+			)
+		if (d.scenesSkippedNoPair > 0) {
+			lines.push(
+				`${d.scenesSkippedNoPair} scene(s) had only one character, so no relationship was possible.`
+			)
+		}
+		return lines
+	})
+
 	let progressPhase = $derived(build?.phase ?? "loading")
 	let progressSceneIndex = $derived(build?.sceneIndex ?? 0)
 	let progressTotalScenes = $derived(build?.totalScenes ?? 0)
@@ -217,7 +297,8 @@
 	function handleBuildError(msg: Sockets.NarrativeGraph.Build.ErrorResponse) {
 		// emitToUser is user-scoped: a build failing for another lorebook in a
 		// second tab must not un-stick this modal.
-		if (msg.lorebookId !== undefined && msg.lorebookId !== lorebookId) return
+		if (msg.lorebookId !== undefined && msg.lorebookId !== lorebookId)
+			return
 		if (step !== "building") return
 		graphBuildsCtx?.clearBuild()
 		step = "preflight"
@@ -381,6 +462,30 @@
 					{" "}ready to process
 				</span>
 			</div>
+		{:else}
+			<!--
+				The inverse of the readiness count above, and nothing else.
+
+				This was previously the {:else} of the cast-extraction
+				disclosure below, so its effective condition was
+				`unresolvedCastSceneCount === 0` — which says nothing about
+				readiness. The healthy steady state (content ready, every cast
+				already resolved) therefore rendered "N ready to process" and
+				"No content is ready" simultaneously, while Start stayed
+				correctly enabled off `totalReadyCount`.
+			-->
+			<div
+				class="border-warning-500/30 bg-warning-500/10 flex items-center gap-3 rounded-lg border p-3 text-sm"
+			>
+				<Icons.AlertTriangle
+					size={16}
+					class="text-warning-500 shrink-0"
+				/>
+				<span>
+					No content is ready to process. Generate scene summaries or
+					add history entry content first.
+				</span>
+			</div>
 		{/if}
 		{#if unresolvedCastSceneCount > 0}
 			<!--
@@ -400,21 +505,8 @@
 					extraction (up to {unresolvedCastSceneCount} extra LLM call{unresolvedCastSceneCount ===
 					1
 						? ""
-						: "s"}). This is saved afterwards, so later rebuilds skip
-					it.
-				</span>
-			</div>
-		{:else}
-			<div
-				class="border-warning-500/30 bg-warning-500/10 flex items-center gap-3 rounded-lg border p-3 text-sm"
-			>
-				<Icons.AlertTriangle
-					size={16}
-					class="text-warning-500 shrink-0"
-				/>
-				<span>
-					No content is ready to process. Generate scene summaries or
-					add history entry content first.
+						: "s"}). This is saved afterwards, so later rebuilds
+					skip it.
 				</span>
 			</div>
 		{/if}
@@ -441,20 +533,32 @@
 					size={16}
 					class="text-warning-500 mt-0.5 shrink-0"
 				/>
+				<!--
+					States only what a rebuild actually does. It used to warn
+					that "N unbound nodes and M relationships will be
+					permanently deleted", but narrativeGraph.ts is explicit
+					that a rebuild "NEVER deletes a lorebookBindings row, full
+					stop" — only relationships are cleared. Overstating the
+					damage is its own bug: it talks users out of a safe action,
+					and a warning known to exaggerate stops being read at all.
+				-->
 				<span>
-					This will replace the existing graph.{" "}
-					{#if existingUnboundNodeCount > 0}
-						<strong>{existingUnboundNodeCount}</strong>
-						unbound node{existingUnboundNodeCount === 1 ? "" : "s"}
-					{/if}
-					{#if existingUnboundNodeCount > 0 && existingRelationshipCount > 0}
-						{" and "}
-					{/if}
 					{#if existingRelationshipCount > 0}
+						This will replace the existing graph.{" "}
 						<strong>{existingRelationshipCount}</strong>
 						relationship{existingRelationshipCount === 1 ? "" : "s"}
+						{existingRelationshipCount === 1 ? " is" : " are"} cleared
+						and re-derived.
+					{:else}
+						This will replace the existing graph.
 					{/if}
-					{" "}will be permanently deleted.
+					{#if existingUnboundNodeCount > 0}
+						{" "}Your characters are kept — including the{" "}
+						<strong>{existingUnboundNodeCount}</strong>
+						unbound node{existingUnboundNodeCount === 1 ? "" : "s"}.
+					{:else}
+						{" "}Your characters are kept.
+					{/if}
 				</span>
 			</div>
 		{/if}
@@ -559,9 +663,7 @@
 								<p class="text-sm">{update.summary}</p>
 							{/if}
 							{#if update.nodeStateReason}
-								<p
-									class="text-surface-700-300 text-xs italic"
-								>
+								<p class="text-surface-700-300 text-xs italic">
 									Reason: {update.nodeStateReason}
 								</p>
 							{/if}
@@ -582,6 +684,23 @@
 		{#if proposalNodes.length === 0}
 			<p class="text-surface-700-300 text-sm italic">
 				No new nodes extracted.
+			</p>
+		{/if}
+		<!--
+			Screened-out names are reported, never dropped in silence. The
+			filter treats a name matching a World Lore entry as a subject of
+			the setting rather than a member of the cast — right for a station
+			or an artefact, wrong for a character who happens to have a lore
+			page. Naming them is what makes that second case recoverable.
+		-->
+		{#if (build?.filteredWorldLoreNames?.length ?? 0) > 0}
+			<p class="text-surface-700-300 text-xs">
+				Not created — these match World Lore entries, so they were read
+				as places or things rather than characters:
+				<span class="font-semibold">
+					{build?.filteredWorldLoreNames?.join(", ")}
+				</span>
+				. Add one as a character manually if that was wrong.
 			</p>
 		{/if}
 		{#each proposalNodes as node, i}
@@ -698,6 +817,21 @@
 			<p class="text-surface-700-300 text-sm italic">
 				No relationships extracted.
 			</p>
+		{/if}
+		<!--
+			Sibling of the list, not nested inside the empty case: a build that
+			kept four relationships and dropped six needs this just as much as
+			one that kept none. See relationshipDropSummary, which stays silent
+			when there is genuinely nothing to report.
+		-->
+		{#if relationshipDropSummary.length > 0}
+			<ul
+				class="text-surface-700-300 list-inside list-disc space-y-0.5 text-xs"
+			>
+				{#each relationshipDropSummary as line}
+					<li>{line}</li>
+				{/each}
+			</ul>
 		{/if}
 		{#each proposalRels as rel, i}
 			<div

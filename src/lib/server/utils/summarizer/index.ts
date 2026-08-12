@@ -13,6 +13,7 @@
  */
 
 import { getConnectionAdapter } from "../getConnectionAdapter"
+import { extractJson } from "../extractJson"
 import { TokenCounters } from "../TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { runQueuedLLMCall } from "../runQueuedLLMCall"
@@ -30,7 +31,11 @@ import {
 } from "./templates"
 import { parseSummaryOutput } from "./parser"
 
-export type SummarizePhase = "drafting" | "synthesizing" | "naming" | "extracting"
+export type SummarizePhase =
+	| "drafting"
+	| "synthesizing"
+	| "naming"
+	| "extracting"
 
 export interface SummarizeProgressData {
 	phase: SummarizePhase
@@ -260,7 +265,9 @@ export async function extractCharactersFromContent(params: {
 		(connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
 	)
 	const tokenLimit: number =
-		(connection as any).tokenLimit ?? (connection as any).contextSize ?? 4096
+		(connection as any).tokenLimit ??
+		(connection as any).contextSize ??
+		4096
 
 	try {
 		const extractionPrompt = buildCharacterExtractionPrompt(
@@ -286,17 +293,13 @@ export async function extractCharactersFromContent(params: {
 			user: extractionPrompt.userPrompt,
 			response: raw
 		})
-		// Strip markdown code fences if present, then extract the first {...} block
-		const stripped = raw
-			.replace(/```(?:json)?\s*/gi, "")
-			.replace(/```/g, "")
-			.trim()
-		const jsonMatch = stripped.match(/\{[\s\S]*\}/)
-		if (!jsonMatch)
-			throw new Error(
-				"No JSON object found in character extraction response"
-			)
-		const parsed = JSON.parse(jsonMatch[0])
+		// Shared extractor rather than a local regex. This used to be
+		// `stripped.match(/\{[\s\S]*\}/)`, which is greedy: it runs to the LAST
+		// `}` anywhere in the response, so a trailing remark after the object —
+		// or a second object — got swallowed into the slice and JSON.parse threw
+		// on input a brace-depth walk handles fine. Failures here degrade
+		// silently to an empty cast (see the catch below), so this was invisible.
+		const parsed = JSON.parse(extractJson(raw))
 		return {
 			participantCharacters: normalizeCastRefs(parsed.participants),
 			mentionedCharacters: normalizeCastRefs(parsed.mentioned)

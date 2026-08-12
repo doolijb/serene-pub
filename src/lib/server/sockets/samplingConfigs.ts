@@ -77,8 +77,7 @@ export const samplingConfigsGet: Handler<
 		}
 
 		const sampling = await db.query.samplingConfigs.findFirst({
-			where: (w, { eq }) => eq(w.id, params.id),
-			orderBy: (w, { asc }) => [asc(w.isImmutable), asc(w.name)]
+			where: (w, { eq }) => eq(w.id, params.id)
 		})
 		if (!sampling) {
 			emitToUser("samplingConfigs:get:error", {
@@ -108,12 +107,22 @@ export const samplingConfigsListHandler: Handler<
 			)
 		}
 
+		// Built-in presets first, then the user's own, each alphabetical.
+		//
+		// `desc` on a boolean puts true first. Ordered here rather than in each
+		// consumer because this one response feeds several: SamplingSidebar
+		// (which groups with its own immutable/mutable filters — those preserve
+		// input order, so this is what sorts within each group), EditChatForm,
+		// and every per-task override selector in PromptsSidebar. Without it the
+		// list came back in whatever order Postgres happened to return, so the
+		// flat consumers interleaved presets with user configs.
 		const samplingConfigsList = await db.query.samplingConfigs.findMany({
 			columns: {
 				id: true,
 				name: true,
 				isImmutable: true
-			}
+			},
+			orderBy: (w, { asc, desc }) => [desc(w.isImmutable), asc(w.name)]
 		})
 		const res: Sockets.SamplingConfigs.List.Response = {
 			samplingConfigsList
@@ -200,7 +209,11 @@ export const samplingConfigsCreate: Handler<
 		// (SamplingSidebar.svelte's handleSetDefault); create doing it too
 		// was a bug, not a UX dependency. samplingConfigsGet still pushes the
 		// new row so the client can show it for editing.
-		await samplingConfigsGet.handler(socket, { id: sampling.id }, emitToUser)
+		await samplingConfigsGet.handler(
+			socket,
+			{ id: sampling.id },
+			emitToUser
+		)
 		await samplingConfigsListHandler.handler(socket, {}, emitToUser)
 
 		const res: Sockets.SamplingConfigs.Create.Response = { sampling }
@@ -295,7 +308,9 @@ export const samplingConfigsUpdate: Handler<
 		// (no other fields present at all) — updateData then has no defined
 		// values, and an empty .set() throws rather than being a legitimate
 		// no-op (same round-8 fix already applied to promptConfigsUpdate).
-		const hasUpdates = Object.values(updateData).some((v) => v !== undefined)
+		const hasUpdates = Object.values(updateData).some(
+			(v) => v !== undefined
+		)
 		const updatedSamplingConfig = hasUpdates
 			? (
 					await db

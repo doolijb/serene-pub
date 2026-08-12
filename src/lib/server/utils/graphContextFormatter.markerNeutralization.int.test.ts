@@ -97,19 +97,24 @@ describe("buildGraphContext — structural marker neutralization (Round-12 audit
 		})
 
 		expect(context).not.toBeNull()
-		// The real content is still recognizably present (visually identical
-		// to a human/LLM reader, just structurally broken).
+		// The graph context is now emitted as JSON, which changes what
+		// "contained" means — and strengthens it. Structural injection is
+		// closed by construction: JSON.stringify escapes quotes, brackets and
+		// newlines, so hostile content cannot terminate a string, open a key,
+		// or forge a section no matter what it contains. The property to pin is
+		// therefore that the PARSED SHAPE is unaffected and the payload appears
+		// only ever as a value.
+		const parsed = JSON.parse(context!)
+		expect(Object.keys(parsed).sort()).toEqual(["yourRelationships"])
+		// The content survives verbatim enough to still be readable...
 		expect(context).toContain("Attacker")
 		expect(context).toContain("Injected content")
-		// The formatter's own genuine footer is always emitted once, at the
-		// very end — the exact-match string must not appear anywhere else
-		// (ie. embedded inside the untrusted content above it), which is
-		// what neutralization prevents.
-		const footerCount = (
-			context!.match(new RegExp(FAKE_FOOTER, "g")) ?? []
-		).length
-		expect(footerCount).toBe(1)
-		expect(context!.endsWith(FAKE_FOOTER)).toBe(true)
+		// ...but the forged footer never becomes structure: it sits inside a
+		// string value, and there is no longer any header/footer around the
+		// JSON for it to impersonate.
+		const asText = JSON.stringify(parsed)
+		expect(asText).toContain("Injected content")
+		expect(() => JSON.parse(context!)).not.toThrow()
 	})
 
 	test("neutralizes a malicious legendary node name/summary", async () => {
@@ -146,12 +151,14 @@ describe("buildGraphContext — structural marker neutralization (Round-12 audit
 		})
 
 		expect(context).not.toBeNull()
+		// Same property as above, on the legendary section: hostile name and
+		// summary land as values under a key, never as structure.
+		const parsed = JSON.parse(context!)
+		expect(Object.keys(parsed)).toContain("legendaryFigures")
 		expect(context).toContain("Ancient One")
 		expect(context).toContain("A summary.")
-		const footerCount = (
-			context!.match(new RegExp(FAKE_FOOTER, "g")) ?? []
-		).length
-		expect(footerCount).toBe(1)
-		expect(context!.endsWith(FAKE_FOOTER)).toBe(true)
+		expect(() => JSON.parse(context!)).not.toThrow()
+		// The forged footer is inert text inside a value, not a boundary.
+		expect(JSON.stringify(parsed)).toContain("Ancient One")
 	})
 })

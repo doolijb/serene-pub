@@ -144,7 +144,12 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 		const totalAttempts = PREFLIGHT_RETRY_DELAYS_MS.length + 1
 		for (let attemptNum = 1; ; attemptNum++) {
 			try {
-				await this.attemptPreflight(settings, adminDir, signal, attemptNum)
+				await this.attemptPreflight(
+					settings,
+					adminDir,
+					signal,
+					attemptNum
+				)
 				return
 			} catch (err: any) {
 				if (signal?.aborted) throw err

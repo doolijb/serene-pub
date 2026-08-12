@@ -125,17 +125,19 @@ describe("KoboldCppAdapter streaming — idle timeout (real HTTP server)", () =>
 			res.writeHead(200, { "Content-Type": "text/event-stream" })
 			// Each gap is well inside IDLE_MS, but the total run exceeds it —
 			// proving this is genuinely idle-based, not a disguised wall clock.
-			const chunk =
-				'data: {"choices":[{"delta":{"content":"x"}}]}\n\n'
+			const chunk = 'data: {"choices":[{"delta":{"content":"x"}}]}\n\n'
 			let sent = 0
-			const timer = setInterval(() => {
-				res.write(chunk)
-				sent++
-				if (sent >= 6) {
-					clearInterval(timer)
-					res.end("data: [DONE]\n\n")
-				}
-			}, Math.floor(IDLE_MS / 2))
+			const timer = setInterval(
+				() => {
+					res.write(chunk)
+					sent++
+					if (sent >= 6) {
+						clearInterval(timer)
+						res.end("data: [DONE]\n\n")
+					}
+				},
+				Math.floor(IDLE_MS / 2)
+			)
 		})
 		const port = await listen(server)
 		const adapter = makeAdapter(`http://127.0.0.1:${port}`)

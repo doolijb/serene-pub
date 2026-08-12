@@ -713,6 +713,9 @@
 					sceneLabels: latestGraph.sceneLabels,
 					seedTempIdMap: latestGraph.seedTempIdMap,
 					seedNodeNames: latestGraph.seedNodeNames,
+					relationshipDiagnostics:
+						latestGraph.relationshipDiagnostics,
+					filteredWorldLoreNames: latestGraph.filteredWorldLoreNames,
 					errorMessage: latestGraph.errorMessage,
 					errorRaw: latestGraph.errorRaw,
 					startedAt: latestGraph.startedAt,

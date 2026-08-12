@@ -30,10 +30,16 @@ vi.mock("$lib/server/koboldcpp/subprocessManager", () => ({
 	isRunning: () => isRunningMock()
 }))
 const resetTtlMock = vi.fn()
-const getLoadedSignatureMock = vi.fn(() => ({ model: "some-model.gguf" }) as any)
+const getLoadedSignatureMock = vi.fn(
+	() => ({ model: "some-model.gguf" }) as any
+)
 vi.mock("$lib/server/koboldcpp/modelManager", () => ({
 	ensureModelLoaded: vi.fn(),
-	DEFAULT_MANAGED_CONFIG: { gpuLayers: -1, flashAttention: false, batchSize: 512 },
+	DEFAULT_MANAGED_CONFIG: {
+		gpuLayers: -1,
+		flashAttention: false,
+		batchSize: 512
+	},
 	resetTtl: (...args: any[]) => resetTtlMock(...args),
 	getLoadedSignature: () => getLoadedSignatureMock()
 }))
@@ -41,14 +47,13 @@ vi.mock("$lib/server/koboldcpp/modelManager", () => ({
 const fetchCurrentModelNameMock = vi.fn()
 const pingKoboldCPPMock = vi.fn()
 vi.mock("$lib/server/koboldcpp/kcppHttp", () => ({
-	fetchCurrentModelName: (...args: any[]) => fetchCurrentModelNameMock(...args),
+	fetchCurrentModelName: (...args: any[]) =>
+		fetchCurrentModelNameMock(...args),
 	pingKoboldCPP: (...args: any[]) => pingKoboldCPPMock(...args)
 }))
 
 const exportsDefault = (await import("./KoboldCppManagedAdapter")).default
-const { ensureModelLoaded } = await import(
-	"$lib/server/koboldcpp/modelManager"
-)
+const { ensureModelLoaded } = await import("$lib/server/koboldcpp/modelManager")
 const subprocessManager = await import(
 	"$lib/server/koboldcpp/subprocessManager"
 )
@@ -190,7 +195,9 @@ describe("KoboldCppManagedAdapter.preflight() — retry loop", () => {
 		findFirstMock.mockReset()
 		pingKoboldCPPMock.mockReset()
 		vi.mocked(ensureModelLoaded).mockReset()
-		vi.mocked(subprocessManager.start).mockReset().mockResolvedValue(undefined)
+		vi.mocked(subprocessManager.start)
+			.mockReset()
+			.mockResolvedValue(undefined)
 		findFirstMock.mockResolvedValue({ ...MANAGED_SETTINGS })
 		// Already responding by default — most of these tests are about
 		// ensureModelLoaded()'s own outcome, not the spawn path (that's
@@ -291,9 +298,7 @@ describe("KoboldCppManagedAdapter.preflight() — retry loop", () => {
 			connection: makeConnection({ model: "" })
 		})
 
-		await expect(adapter.preflight()).rejects.toThrow(
-			/No model selected/
-		)
+		await expect(adapter.preflight()).rejects.toThrow(/No model selected/)
 		expect(ensureModelLoaded).not.toHaveBeenCalled()
 	})
 })
@@ -304,7 +309,9 @@ describe("KoboldCppManagedAdapter.generate() — TTL reset after completion", ()
 	beforeEach(() => {
 		findFirstMock.mockResolvedValue(MANAGED_SETTINGS)
 		resetTtlMock.mockClear()
-		getLoadedSignatureMock.mockReturnValue({ model: "some-model.gguf" } as any)
+		getLoadedSignatureMock.mockReturnValue({
+			model: "some-model.gguf"
+		} as any)
 		isRunningMock.mockReturnValue(true)
 	})
 

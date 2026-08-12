@@ -17,9 +17,9 @@ vi.mock("$lib/server/embedding", () => ({
 	getLoadedModelId: () => null
 }))
 
-const { KoboldCppAdapter, testConnection } = await import(
-	"./KoboldCppAdapter"
-)
+const { KoboldCppAdapter, testConnection } = await import("./KoboldCppAdapter")
+const { buildPerspectiveSchema } = await import("$lib/server/utils/graphSchema")
+const { JSON_OBJECT_GBNF } = await import("./jsonGrammar")
 const exportsDefault = (await import("./KoboldCppAdapter")).default
 
 function makeConnection(overrides: Record<string, any> = {}): any {
@@ -101,13 +101,17 @@ describe("KoboldCppAdapter — base URL trailing-slash normalization", () => {
 	})
 
 	test("testConnection() hits the same URL whether baseUrl has a trailing slash or not", async () => {
-		await testConnection(makeConnection({ baseUrl: "http://localhost:5001" }))
+		await testConnection(
+			makeConnection({ baseUrl: "http://localhost:5001" })
+		)
 		expect(fetchMock).toHaveBeenLastCalledWith(
 			"http://localhost:5001/api/extra/version",
 			expect.anything()
 		)
 
-		await testConnection(makeConnection({ baseUrl: "http://localhost:5001/" }))
+		await testConnection(
+			makeConnection({ baseUrl: "http://localhost:5001/" })
+		)
 		expect(fetchMock).toHaveBeenLastCalledWith(
 			"http://localhost:5001/api/extra/version",
 			expect.anything()
@@ -115,7 +119,9 @@ describe("KoboldCppAdapter — base URL trailing-slash normalization", () => {
 	})
 
 	test("testConnection() collapses multiple trailing slashes too", async () => {
-		await testConnection(makeConnection({ baseUrl: "http://localhost:5001///" }))
+		await testConnection(
+			makeConnection({ baseUrl: "http://localhost:5001///" })
+		)
 		expect(fetchMock).toHaveBeenLastCalledWith(
 			"http://localhost:5001/api/extra/version",
 			expect.anything()
@@ -223,6 +229,70 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 		return JSON.parse(call![1].body)
 	}
 
+	// ── responseFormat ────────────────────────────────────────────────────
+	//
+	// The NEGATIVE case is the important one. This constraint rides on the same
+	// adapters chat uses; a grammar leaking into an ordinary roleplay reply
+	// would be a far worse regression than the extraction failures it exists to
+	// fix. Default is "text", so forgetting to opt in can only ever under-apply.
+
+	test("sends no grammar by default \u2014 chat must never be constrained", async () => {
+		const adapter = makeAdapter({ extraJson: { stream: false } })
+		mockCompilePrompt(adapter)
+		expect(adapter.responseFormat).toBe("text")
+		await adapter.generate()
+		expect(findGenerateCallBody()).not.toHaveProperty("grammar")
+	})
+
+	test('responseFormat "json" sends a GBNF grammar in chat mode', async () => {
+		const adapter = makeAdapter({ extraJson: { stream: false } })
+		mockCompilePrompt(adapter)
+		adapter.responseFormat = "json"
+		await adapter.generate()
+		const body = findGenerateCallBody()
+		expect(typeof body.grammar).toBe("string")
+		expect(body.grammar).toContain("root")
+	})
+
+	test('responseFormat "json" sends a GBNF grammar in text-completion mode too', async () => {
+		// KoboldCPP accepts `grammar` on both endpoints; a caller should not
+		// have to know which one their connection happens to use.
+		const adapter = makeAdapter({
+			extraJson: { useChat: false, stream: false }
+		})
+		mockCompilePrompt(adapter)
+		adapter.responseFormat = "json"
+		await adapter.generate()
+		expect(typeof findGenerateCallBody().grammar).toBe("string")
+	})
+
+	test("a responseSchema narrows the grammar to that exact shape", async () => {
+		const adapter = makeAdapter({ extraJson: { stream: false } })
+		mockCompilePrompt(adapter)
+		adapter.responseFormat = "json"
+		adapter.responseSchema = buildPerspectiveSchema("Corb")
+		await adapter.generate()
+		const grammar = findGenerateCallBody().grammar
+		// The pin itself — the value `from` is allowed to take.
+		expect(grammar).toContain('("\\"Corb\\"")')
+		expect(grammar).toContain('\\"relationships\\"')
+		// …and it is the schema grammar, not the generic any-object one.
+		expect(grammar).not.toBe(JSON_OBJECT_GBNF)
+	})
+
+	test("a responseSchema is ignored while responseFormat is text", async () => {
+		// The negative case again, and the one that matters most: responseSchema
+		// is consulted ONLY under "json". A schema set without opting into JSON
+		// mode must not constrain generation, or the chat path could be
+		// constrained by a stray assignment rather than a deliberate one.
+		const adapter = makeAdapter({ extraJson: { stream: false } })
+		mockCompilePrompt(adapter)
+		adapter.responseSchema = buildPerspectiveSchema("Corb")
+		expect(adapter.responseFormat).toBe("text")
+		await adapter.generate()
+		expect(findGenerateCallBody()).not.toHaveProperty("grammar")
+	})
+
 	test("omits chat_template_kwargs entirely in text-completion mode (useChat: false), even with a value set", async () => {
 		const adapter = makeAdapter({
 			extraJson: { useChat: false, stream: false, enableThinking: true }
@@ -259,7 +329,9 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 		mockCompilePrompt(adapter)
 		await adapter.generate()
 
-		expect(findGenerateCallBody()).not.toHaveProperty("chat_template_kwargs")
+		expect(findGenerateCallBody()).not.toHaveProperty(
+			"chat_template_kwargs"
+		)
 	})
 })
 

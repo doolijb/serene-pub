@@ -679,6 +679,30 @@ export type SocketEventMap = {
 	}
 
 	// Narrator Prompt Config events ("Chat Prompts: Narrator")
+	"graphBuildConfigs:list": {
+		params: Sockets.GraphBuildConfigs.List.Params
+		response: Sockets.GraphBuildConfigs.List.Response
+	}
+	"graphBuildConfigs:get": {
+		params: Sockets.GraphBuildConfigs.Get.Params
+		response: Sockets.GraphBuildConfigs.Get.Response
+	}
+	"graphBuildConfigs:create": {
+		params: Sockets.GraphBuildConfigs.Create.Params
+		response: Sockets.GraphBuildConfigs.Create.Response
+	}
+	"graphBuildConfigs:update": {
+		params: Sockets.GraphBuildConfigs.Update.Params
+		response: Sockets.GraphBuildConfigs.Update.Response
+	}
+	"graphBuildConfigs:delete": {
+		params: Sockets.GraphBuildConfigs.Delete.Params
+		response: Sockets.GraphBuildConfigs.Delete.Response
+	}
+	"graphBuildConfigs:setDefault": {
+		params: Sockets.GraphBuildConfigs.SetDefault.Params
+		response: Sockets.GraphBuildConfigs.SetDefault.Response
+	}
 	"narratorPromptConfigs:list": {
 		params: Sockets.NarratorPromptConfigs.List.Params
 		response: Sockets.NarratorPromptConfigs.List.Response

@@ -206,7 +206,16 @@ class OllamaAdapter extends BaseConnectionAdapter {
 				options: {
 					...this.mapSamplingConfig(),
 					stop
-				}
+				},
+				// Ollama's structured-output switch is a TOP-LEVEL field, not a
+				// sampler inside `options` — putting it there silently does
+				// nothing.
+				// A responseSchema narrows this to an exact shape — Ollama's
+				// `format` takes a JSON Schema object as well as the "json"
+				// literal (structured outputs, Ollama >= 0.5).
+				...(this.responseFormat === "json"
+					? { format: this.responseSchema ?? "json" }
+					: {})
 			} as ChatRequest
 		} else {
 			// For generate mode, append the prompt format stop strings
@@ -230,7 +239,11 @@ class OllamaAdapter extends BaseConnectionAdapter {
 				options: {
 					...this.mapSamplingConfig(),
 					stop: allStopStrings
-				}
+				},
+				// Top-level, and schema-aware, same as the chat branch above.
+				...(this.responseFormat === "json"
+					? { format: this.responseSchema ?? "json" }
+					: {})
 			} as GenerateRequest
 		}
 

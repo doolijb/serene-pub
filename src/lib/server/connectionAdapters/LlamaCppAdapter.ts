@@ -16,6 +16,8 @@ import { Readable } from "stream"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { llamaCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+import { JSON_OBJECT_GBNF } from "./jsonGrammar"
+import { jsonSchemaToGbnf } from "./jsonSchemaToGbnf"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 import { LLM_IDLE_TIMEOUT_MS } from "./idleTimeout"
 
@@ -348,12 +350,25 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 			prompt,
 			stream,
 			stop,
-			...this.mapSamplingConfig()
+			...this.mapSamplingConfig(),
+			// `grammar` has been declared on CompletionRequest since this
+			// adapter was written and was never populated. llama.cpp applies it
+			// at the decoder, so non-JSON becomes unrepresentable rather than
+			// merely discouraged. Omitted entirely for plain-text generation.
+			// llama.cpp also accepts a `json_schema` field it converts itself;
+			// this goes through our converter instead so both GBNF providers
+			// share one tested path rather than two that can diverge.
+			...(this.responseFormat === "json"
+				? {
+						grammar: this.responseSchema
+							? jsonSchemaToGbnf(this.responseSchema)
+							: JSON_OBJECT_GBNF
+					}
+				: {})
 		}
 
 		const baseUrl =
-			normalizeBaseUrl(this.connection.baseUrl) ||
-			"http://localhost:8080"
+			normalizeBaseUrl(this.connection.baseUrl) || "http://localhost:8080"
 
 		if (stream) {
 			return {

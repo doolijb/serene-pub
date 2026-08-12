@@ -28,7 +28,7 @@ export const contextConfigsListHandler: Handler<
 				name: true,
 				isImmutable: true
 			},
-			orderBy: (c, { asc }) => [asc(c.isImmutable), asc(c.name)]
+			orderBy: (c, { asc, desc }) => [desc(c.isImmutable), asc(c.name)]
 		})
 		const res: Sockets.ContextConfigs.List.Response = { contextConfigsList }
 		emitToUser("contextConfigs:list", res)
@@ -127,7 +127,9 @@ export const contextConfigsUpdate: Handler<
 		// (no other fields present at all) — updateData then has no defined
 		// values, and an empty .set() throws rather than being a legitimate
 		// no-op (same round-8 fix already applied to promptConfigsUpdate).
-		const hasUpdates = Object.values(updateData).some((v) => v !== undefined)
+		const hasUpdates = Object.values(updateData).some(
+			(v) => v !== undefined
+		)
 		const contextConfig = hasUpdates
 			? (
 					await db

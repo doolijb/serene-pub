@@ -19,7 +19,9 @@ const createMock = vi.fn()
 const modelsListMock = vi.fn()
 vi.mock("openai", () => ({
 	OpenAI: class {
-		chat = { completions: { create: (...args: any[]) => createMock(...args) } }
+		chat = {
+			completions: { create: (...args: any[]) => createMock(...args) }
+		}
 		models = { list: (...args: any[]) => modelsListMock(...args) }
 		constructor(...args: any[]) {
 			openAIConstructorMock(...args)

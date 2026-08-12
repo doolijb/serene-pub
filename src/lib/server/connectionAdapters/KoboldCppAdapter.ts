@@ -8,6 +8,8 @@ import {
 	type AdapterExports,
 	type BasePromptChat
 } from "./BaseConnectionAdapter"
+import { JSON_OBJECT_GBNF } from "./jsonGrammar"
+import { jsonSchemaToGbnf } from "./jsonSchemaToGbnf"
 import { type CompiledPrompt } from "../utils/promptBuilder"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { koboldCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
@@ -108,7 +110,8 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 
 	async getContextTokenLimit(): Promise<number> {
 		const samplingLimit = await super.getContextTokenLimit()
-		const baseUrl = normalizeBaseUrl(this.connection.baseUrl) || "http://localhost:5001"
+		const baseUrl =
+			normalizeBaseUrl(this.connection.baseUrl) || "http://localhost:5001"
 		try {
 			const res = await fetch(
 				`${baseUrl}/api/extra/true_max_context_length`,
@@ -150,7 +153,8 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		isAborted: boolean
 		thinkingContent?: string
 	}> {
-		const baseUrl = normalizeBaseUrl(this.connection.baseUrl) || "http://localhost:5001"
+		const baseUrl =
+			normalizeBaseUrl(this.connection.baseUrl) || "http://localhost:5001"
 		// Default true — matches CONNECTION_DEFAULTS[KOBOLDCPP].extraJson.stream
 		// (connectionDefaults.ts), same reasoning as useChat below.
 		const stream = this.connection.extraJson?.stream ?? true
@@ -190,6 +194,22 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		// Map sampling config
 		const samplingParams = this.mapSamplingConfig()
 
+		// Response-shape contract, translated to KoboldCPP's native mechanism.
+		// KoboldCPP accepts a GBNF `grammar` on BOTH the OpenAI-compat chat
+		// endpoint and the raw completion endpoints, so this applies either way.
+		// Empty object when the caller wants plain text, so unconstrained
+		// generation — every chat message — sends no grammar key at all.
+		// A responseSchema narrows this from "any JSON object" to the exact
+		// shape the caller needs; without one it stays object-level.
+		const formatParams =
+			this.responseFormat === "json"
+				? {
+						grammar: this.responseSchema
+							? jsonSchemaToGbnf(this.responseSchema)
+							: JSON_OBJECT_GBNF
+					}
+				: {}
+
 		// Prepare the request body according to KoboldCPP API
 		let requestBody: Record<string, any>
 
@@ -220,8 +240,13 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				// value ever reached the model's chat template no matter
 				// what this app sent.
 				...(enableThinking !== null
-					? { chat_template_kwargs: { enable_thinking: enableThinking } }
-					: {})
+					? {
+							chat_template_kwargs: {
+								enable_thinking: enableThinking
+							}
+						}
+					: {}),
+				...formatParams
 			}
 		} else {
 			// Use text completion format. enable_thinking is deliberately
@@ -239,7 +264,8 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				max_context_length: await this.getContextTokenLimit(),
 				stop_sequence,
 				genkey: this.genKey,
-				...samplingParams
+				...samplingParams,
+				...formatParams
 			}
 
 			// Add memory if enabled (only for text completion)
@@ -509,7 +535,9 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		// mode (a single generation slot) blocks every subsequent request until
 		// the zombie generation finishes on its own.
 		if (this.genKey) {
-			const baseUrl = normalizeBaseUrl(this.connection.baseUrl) || "http://localhost:5001"
+			const baseUrl =
+				normalizeBaseUrl(this.connection.baseUrl) ||
+				"http://localhost:5001"
 			fetch(`${baseUrl}/api/extra/abort`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -530,7 +558,8 @@ export async function testConnection(
 	connection: SelectConnection
 ): Promise<{ ok: boolean; error?: string }> {
 	try {
-		const baseUrl = normalizeBaseUrl(connection.baseUrl) || "http://localhost:5001"
+		const baseUrl =
+			normalizeBaseUrl(connection.baseUrl) || "http://localhost:5001"
 		const response = await fetch(`${baseUrl}/api/extra/version`, {
 			method: "GET",
 			headers: {
@@ -570,7 +599,8 @@ async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
 	try {
-		const baseUrl = normalizeBaseUrl(connection.baseUrl) || "http://localhost:5001"
+		const baseUrl =
+			normalizeBaseUrl(connection.baseUrl) || "http://localhost:5001"
 
 		const currentModel =
 			(await fetchCurrentModelName(baseUrl)) || "No model loaded"

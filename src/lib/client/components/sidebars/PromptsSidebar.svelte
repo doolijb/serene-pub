@@ -15,7 +15,14 @@
 	let { onclose = $bindable() }: Props = $props()
 
 	// ── View state ───────────────────────────────────────────────────────────
-	type View = "index" | "chat" | "narrator" | "world" | "character" | "scene"
+	type View =
+		| "index"
+		| "chat"
+		| "narrator"
+		| "world"
+		| "character"
+		| "scene"
+		| "graph"
 	let view = $state<View>("index")
 
 	const socket = useTypedSocket()
@@ -137,6 +144,28 @@
 		return sceneList.find((p) => p.id === id)?.name ?? null
 	})
 
+	// ── Graph Build state ─────────────────────────────────────────────────────
+	//
+	// Unlike every other config here the active selection is SYSTEM-wide
+	// (systemSettings.defaultGraphBuildConfigId), not per-user, so the "default"
+	// marker reads from a local value the list response carries rather than from
+	// userSettingsCtx.
+	let graphList: Sockets.GraphBuildConfigs.List.Response["graphBuildConfigsList"] =
+		$state([])
+	let defaultGraphBuildConfigId: number | null = $state(null)
+	let selectedGraphId: number | undefined = $state(undefined)
+	let graphConfig: Sockets.GraphBuildConfigs.Get.Response["graphBuildConfig"] =
+		$state({} as Sockets.GraphBuildConfigs.Get.Response["graphBuildConfig"])
+	let graphOriginal: Sockets.GraphBuildConfigs.Get.Response["graphBuildConfig"] =
+		$state({} as Sockets.GraphBuildConfigs.Get.Response["graphBuildConfig"])
+	let graphUnsaved = $derived(
+		JSON.stringify(graphConfig) !== JSON.stringify(graphOriginal)
+	)
+	let activeGraphName = $derived.by(() => {
+		const id = defaultGraphBuildConfigId ?? graphList[0]?.id
+		return graphList.find((p) => p.id === id)?.name ?? null
+	})
+
 	// ── Shared modal state ────────────────────────────────────────────────────
 	let showNewNameModal = $state(false)
 	let showUnsavedChangesModal = $state(false)
@@ -161,6 +190,7 @@
 		if (view === "world") return worldConfig.name
 		if (view === "character") return characterConfig.name
 		if (view === "scene") return sceneConfig.name
+		if (view === "graph") return graphConfig.name
 		return ""
 	}
 
@@ -185,6 +215,7 @@
 		if (view === "world") return worldUnsaved
 		if (view === "character") return characterUnsaved
 		if (view === "scene") return sceneUnsaved
+		if (view === "graph") return graphUnsaved
 		return false
 	}
 
@@ -272,6 +303,16 @@
 			return
 		}
 		selectedSceneId = newId
+	}
+
+	async function handleGraphSelectChange(e: Event) {
+		const newId = Number((e.target as HTMLSelectElement).value)
+		if (newId === selectedGraphId) return
+		if (graphUnsaved && !(await checkUnsaved())) {
+			;(e.target as HTMLSelectElement).value = String(selectedGraphId)
+			return
+		}
+		selectedGraphId = newId
 	}
 
 	// ── Chat actions ──────────────────────────────────────────────────────────
@@ -381,6 +422,30 @@
 		showNewNameModal = true
 	}
 
+	// ── Graph Build actions ───────────────────────────────────────────────────
+	function handleGraphSave() {
+		if (!validateForm()) return
+		socket.emit("graphBuildConfigs:update", {
+			graphBuildConfig: { ...graphConfig, id: graphConfig.id }
+		})
+	}
+	function handleGraphDelete() {
+		if (!graphConfig.isImmutable) {
+			socket.emit("graphBuildConfigs:delete", { id: graphConfig.id })
+			selectedGraphId = undefined
+		}
+	}
+	function handleGraphReset() {
+		graphConfig = { ...graphOriginal }
+	}
+	function handleGraphNew() {
+		showNewNameModal = true
+	}
+	function handleGraphSetDefault() {
+		if (!selectedGraphId) return
+		socket.emit("graphBuildConfigs:setDefault", { id: selectedGraphId })
+	}
+
 	// ── New-name modal dispatch ───────────────────────────────────────────────
 	function handleNewNameConfirm(name: string) {
 		if (!name.trim()) return
@@ -425,6 +490,15 @@
 					isImmutable: false
 				}
 			})
+		} else if (view === "graph") {
+			const { id: _id, ...rest } = graphConfig
+			socket.emit("graphBuildConfigs:create", {
+				graphBuildConfig: {
+					...rest,
+					name: name.trim(),
+					isImmutable: false
+				}
+			})
 		}
 		showNewNameModal = false
 	}
@@ -454,6 +528,10 @@
 	$effect(() => {
 		if (selectedSceneId)
 			socket.emit("sceneSummarizeConfigs:get", { id: selectedSceneId })
+	})
+	$effect(() => {
+		if (selectedGraphId)
+			socket.emit("graphBuildConfigs:get", { id: selectedGraphId })
 	})
 
 	// ── Set default actions ────────────────────────────────────────────────────
@@ -495,8 +573,7 @@
 		chatList = msg.promptConfigsList
 		if (!selectedChatId && chatList.length > 0) {
 			selectedChatId =
-				userSettingsCtx.settings?.activePromptConfigId ??
-				chatList[0].id
+				userSettingsCtx.settings?.activePromptConfigId ?? chatList[0].id
 		}
 	}
 	function handlePromptConfigsGet(msg: Sockets.PromptConfigs.Get.Response) {
@@ -678,6 +755,43 @@
 		toaster.success({ title: "Default scene summarization updated" })
 	}
 
+	function handleGraphBuildConfigsList(
+		msg: Sockets.GraphBuildConfigs.List.Response
+	) {
+		graphList = msg.graphBuildConfigsList
+		defaultGraphBuildConfigId = msg.defaultGraphBuildConfigId ?? null
+		if (!selectedGraphId && graphList.length > 0) {
+			selectedGraphId = defaultGraphBuildConfigId ?? graphList[0].id
+		}
+	}
+	function handleGraphBuildConfigsGet(
+		msg: Sockets.GraphBuildConfigs.Get.Response
+	) {
+		if (msg.graphBuildConfig.id !== selectedGraphId) return
+		graphConfig = { ...msg.graphBuildConfig }
+		graphOriginal = { ...msg.graphBuildConfig }
+	}
+	function handleGraphBuildConfigsCreate(
+		msg: Sockets.GraphBuildConfigs.Create.Response
+	) {
+		selectedGraphId = msg.graphBuildConfig.id
+	}
+	function handleGraphBuildConfigsUpdate(
+		msg: Sockets.GraphBuildConfigs.Update.Response
+	) {
+		if (msg.graphBuildConfig.id === graphConfig.id) {
+			graphConfig = { ...msg.graphBuildConfig }
+			graphOriginal = { ...msg.graphBuildConfig }
+			toaster.success({ title: "Graph Build Config Updated" })
+		}
+	}
+	function handleGraphBuildConfigsSetDefault(
+		msg: Sockets.GraphBuildConfigs.SetDefault.Response
+	) {
+		defaultGraphBuildConfigId = msg.defaultGraphBuildConfigId
+		toaster.success({ title: "Default Graph Build Config Set" })
+	}
+
 	// Connection / sampling lists for override pickers
 	function handleConnectionsList(msg: Sockets.Connections.List.Response) {
 		connectionsList = msg.connectionsList
@@ -696,10 +810,7 @@
 		socket.on("promptConfigs:update", handlePromptConfigsUpdate)
 
 		// Narrator listeners
-		socket.on(
-			"narratorPromptConfigs:list",
-			handleNarratorPromptConfigsList
-		)
+		socket.on("narratorPromptConfigs:list", handleNarratorPromptConfigsList)
 		socket.on("narratorPromptConfigs:get", handleNarratorPromptConfigsGet)
 		socket.on(
 			"narratorPromptConfigs:create",
@@ -711,10 +822,7 @@
 		)
 
 		// World listeners
-		socket.on(
-			"worldSummarizeConfigs:list",
-			handleWorldSummarizeConfigsList
-		)
+		socket.on("worldSummarizeConfigs:list", handleWorldSummarizeConfigsList)
 		socket.on("worldSummarizeConfigs:get", handleWorldSummarizeConfigsGet)
 		socket.on(
 			"worldSummarizeConfigs:create",
@@ -743,11 +851,18 @@
 			handleCharacterSummarizeConfigsUpdate
 		)
 
-		// Scene listeners
+		// Graph Build listeners
+		socket.on("graphBuildConfigs:list", handleGraphBuildConfigsList)
+		socket.on("graphBuildConfigs:get", handleGraphBuildConfigsGet)
+		socket.on("graphBuildConfigs:create", handleGraphBuildConfigsCreate)
+		socket.on("graphBuildConfigs:update", handleGraphBuildConfigsUpdate)
 		socket.on(
-			"sceneSummarizeConfigs:list",
-			handleSceneSummarizeConfigsList
+			"graphBuildConfigs:setDefault",
+			handleGraphBuildConfigsSetDefault
 		)
+
+		// Scene listeners
+		socket.on("sceneSummarizeConfigs:list", handleSceneSummarizeConfigsList)
 		socket.on("sceneSummarizeConfigs:get", handleSceneSummarizeConfigsGet)
 		socket.on(
 			"sceneSummarizeConfigs:create",
@@ -788,10 +903,7 @@
 		)
 
 		socket.on("connections:list", handleConnectionsList)
-		socket.on(
-			"samplingConfigs:list",
-			handleSamplingConfigsListForPickers
-		)
+		socket.on("samplingConfigs:list", handleSamplingConfigsListForPickers)
 
 		// Initial fetches
 		socket.emit("promptConfigs:list", {})
@@ -799,6 +911,7 @@
 		socket.emit("worldSummarizeConfigs:list", {})
 		socket.emit("characterSummarizeConfigs:list", {})
 		socket.emit("sceneSummarizeConfigs:list", {})
+		socket.emit("graphBuildConfigs:list", {})
 		socket.emit("connections:list", {})
 		socket.emit("samplingConfigs:list", {})
 
@@ -807,10 +920,7 @@
 
 	onDestroy(() => {
 		socket.off("connections:list", handleConnectionsList)
-		socket.off(
-			"samplingConfigs:list",
-			handleSamplingConfigsListForPickers
-		)
+		socket.off("samplingConfigs:list", handleSamplingConfigsListForPickers)
 		socket.off("promptConfigs:list", handlePromptConfigsList)
 		socket.off("promptConfigs:get", handlePromptConfigsGet)
 		socket.off("promptConfigs:create", handlePromptConfigsCreate)
@@ -827,10 +937,7 @@
 			"narratorPromptConfigs:list",
 			handleNarratorPromptConfigsList
 		)
-		socket.off(
-			"narratorPromptConfigs:get",
-			handleNarratorPromptConfigsGet
-		)
+		socket.off("narratorPromptConfigs:get", handleNarratorPromptConfigsGet)
 		socket.off(
 			"narratorPromptConfigs:create",
 			handleNarratorPromptConfigsCreate
@@ -851,10 +958,7 @@
 			"worldSummarizeConfigs:list",
 			handleWorldSummarizeConfigsList
 		)
-		socket.off(
-			"worldSummarizeConfigs:get",
-			handleWorldSummarizeConfigsGet
-		)
+		socket.off("worldSummarizeConfigs:get", handleWorldSummarizeConfigsGet)
 		socket.off(
 			"worldSummarizeConfigs:create",
 			handleWorldSummarizeConfigsCreate
@@ -892,6 +996,14 @@
 			handleSceneSummarizeConfigsList
 		)
 		socket.off("sceneSummarizeConfigs:get", handleSceneSummarizeConfigsGet)
+		socket.off("graphBuildConfigs:list", handleGraphBuildConfigsList)
+		socket.off("graphBuildConfigs:get", handleGraphBuildConfigsGet)
+		socket.off("graphBuildConfigs:create", handleGraphBuildConfigsCreate)
+		socket.off("graphBuildConfigs:update", handleGraphBuildConfigsUpdate)
+		socket.off(
+			"graphBuildConfigs:setDefault",
+			handleGraphBuildConfigsSetDefault
+		)
 		socket.off(
 			"sceneSummarizeConfigs:create",
 			handleSceneSummarizeConfigsCreate
@@ -999,7 +1111,7 @@
 
 		<!-- Summarize type cards — only shown when summarization is enabled -->
 		{#if systemSettingsCtx.settings?.summarizationEnabled}
-			{#each [{ v: "world" as const, label: "World Lore Summarization", desc: "System instructions for world lore summarization.", icon: Icons.Globe, activeName: activeWorldName }, { v: "character" as const, label: "Character Lore Summarization", desc: "System instructions for character lore summarization.", icon: Icons.User, activeName: activeCharacterName }, { v: "scene" as const, label: "Scene Summarization", desc: "System instructions for scene summarization.", icon: Icons.Film, activeName: activeSceneName }] as card}
+			{#each [{ v: "world" as const, label: "World Lore Summarization", desc: "System instructions for world lore summarization.", icon: Icons.Globe, activeName: activeWorldName }, { v: "character" as const, label: "Character Lore Summarization", desc: "System instructions for character lore summarization.", icon: Icons.User, activeName: activeCharacterName }, { v: "scene" as const, label: "Scene Summarization", desc: "System instructions for scene summarization.", icon: Icons.Film, activeName: activeSceneName }, { v: "graph" as const, label: "Narrative Graph Build", desc: "Per-step instructions and model overrides for building the relationship graph.", icon: Icons.Share2, activeName: activeGraphName }] as card}
 				<button
 					class="card preset-tonal hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
 					onclick={() => (view = card.v)}
@@ -1217,10 +1329,11 @@
 							Post-History Instructions
 						</label>
 						<p class="text-muted-foreground text-xs">
-							Reinforces the System Instructions above, placed right
-							before the character generates instead of at the top of
-							the prompt — much harder for the model to drift away
-							from after a long conversation history. Optional.
+							Reinforces the System Instructions above, placed
+							right before the character generates instead of at
+							the top of the prompt — much harder for the model to
+							drift away from after a long conversation history.
+							Optional.
 						</p>
 						<textarea
 							id="chatPostHistoryInstructions"
@@ -1260,8 +1373,8 @@
 								Post-History Token Trigger
 							</label>
 							<p class="text-muted-foreground text-xs">
-								Minimum chat history tokens before the reminder is
-								included. 0 = always included.
+								Minimum chat history tokens before the reminder
+								is included. 0 = always included.
 							</p>
 							<input
 								id="chatPostHistoryTokenTrigger"
@@ -1499,9 +1612,9 @@
 						</label>
 						<p class="text-muted-foreground text-xs">
 							Reinforces the instructions above, placed right
-							before the Narrator generates instead of at the
-							top of the prompt — much harder for the model to
-							drift away from after a long conversation history.
+							before the Narrator generates instead of at the top
+							of the prompt — much harder for the model to drift
+							away from after a long conversation history.
 							Optional, but recommended if the Narrator keeps
 							slipping into writing dialogue/actions for chat
 							characters despite the System Instructions above.
@@ -1544,15 +1657,17 @@
 								Post-History Token Trigger
 							</label>
 							<p class="text-muted-foreground text-xs">
-								Minimum chat history tokens before the reminder is
-								included. 0 = always included.
+								Minimum chat history tokens before the reminder
+								is included. 0 = always included.
 							</p>
 							<input
 								id="narratorPostHistoryTokenTrigger"
 								class="input w-full"
 								type="number"
 								min="0"
-								bind:value={narratorConfig.postHistoryTokenTrigger}
+								bind:value={
+									narratorConfig.postHistoryTokenTrigger
+								}
 								disabled={narratorConfig.isImmutable}
 							/>
 						</div>
@@ -2365,6 +2480,309 @@
 			{/if}
 		</div>
 	</div>
+{:else if view === "graph"}
+	<div class="text-foreground flex h-full flex-col">
+		<div class="border-surface-200-800 border-b px-4 py-3">
+			<div class="flex items-center gap-2">
+				<button
+					class="btn btn-sm preset-filled-surface-400-600 p-2"
+					onclick={navigateBack}
+					title="Back"
+					aria-label="Back to prompt types"
+				>
+					<Icons.ChevronLeft size={16} />
+				</button>
+				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">
+					Narrative Graph Build
+				</h2>
+			</div>
+			<div
+				class="mt-2 flex gap-2"
+				role="toolbar"
+				aria-label="Graph build config actions"
+			>
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-surface-400-600"
+					onclick={handleGraphNew}
+					title="Clone to new config"
+					aria-label="Clone to new config"
+				>
+					<Icons.Plus size={14} /> Clone
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-surface-400-600"
+					onclick={handleGraphReset}
+					disabled={!graphUnsaved}
+					title="Discard changes"
+					aria-label="Discard changes"
+				>
+					<Icons.RefreshCcw size={14} /> Discard
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-error"
+					onclick={handleGraphDelete}
+					disabled={!graphConfig || graphConfig.isImmutable}
+					title="Delete config"
+					aria-label="Delete config"
+				>
+					<Icons.Trash2 size={14} /> Delete
+				</button>
+			</div>
+		</div>
+		<div class="flex-1 overflow-y-auto p-4">
+			<div class="mb-4">
+				<select
+					class="select w-full"
+					value={selectedGraphId}
+					onchange={handleGraphSelectChange}
+				>
+					{#each graphList.filter((c) => c.isImmutable) as c}
+						{@const isDefault = c.id === defaultGraphBuildConfigId}
+						<option value={c.id}>
+							{isDefault ? "\u2605 " : ""}{c.name} *
+						</option>
+					{/each}
+					{#each graphList.filter((c) => !c.isImmutable) as c}
+						{@const isDefault = c.id === defaultGraphBuildConfigId}
+						<option value={c.id}>
+							{isDefault ? "\u2605 " : ""}{c.name}
+						</option>
+					{/each}
+				</select>
+			</div>
+			{#if graphConfig?.id}
+				<div class="flex flex-col gap-4">
+					<div class="flex gap-2">
+						<button
+							class="btn btn-sm preset-filled-success-500 flex-1"
+							onclick={handleGraphSave}
+							disabled={!graphUnsaved}
+						>
+							<Icons.Save size={14} /> Update
+						</button>
+						<button
+							class="btn btn-sm preset-filled-warning-500 shrink-0"
+							onclick={handleGraphSetDefault}
+							disabled={!selectedGraphId ||
+								selectedGraphId === defaultGraphBuildConfigId}
+							title={selectedGraphId === defaultGraphBuildConfigId
+								? "Already the default"
+								: "Set as default"}
+							aria-label={selectedGraphId ===
+							defaultGraphBuildConfigId
+								? "Already the default"
+								: "Set as default"}
+						>
+							<Icons.Star
+								size={14}
+								fill={selectedGraphId ===
+								defaultGraphBuildConfigId
+									? "currentColor"
+									: "none"}
+							/>
+							{selectedGraphId === defaultGraphBuildConfigId
+								? "Default"
+								: "Set Default"}
+						</button>
+					</div>
+					{#if graphConfig.isImmutable}
+						<p
+							class="preset-tonal-warning rounded-xl p-2 text-xs"
+							role="note"
+						>
+							This is a built-in config. Its instructions are
+							re-applied on every restart, so they cannot be
+							edited here — clone it to change them. The model and
+							sampling overrides below stay editable.
+						</p>
+					{/if}
+					<div class="flex flex-col gap-1">
+						<label
+							class="text-sm font-semibold"
+							for="promptConfigGraphName"
+						>
+							Name *
+						</label>
+						<input
+							id="promptConfigGraphName"
+							type="text"
+							bind:value={graphConfig.name}
+							class="input w-full {validationErrors.name
+								? 'border-error-500'
+								: ''}"
+							disabled={graphConfig.isImmutable}
+							oninput={() => {
+								if (validationErrors.name) {
+									const { name, ...rest } = validationErrors
+									validationErrors = rest
+								}
+							}}
+						/>
+						{#if validationErrors.name}<p
+								class="text-error-500 text-sm"
+								role="alert"
+							>
+								{validationErrors.name}
+							</p>{/if}
+					</div>
+					<p
+						class="text-muted-foreground border-surface-200-800 border-t pt-3 text-xs"
+					>
+						A build runs these steps in order. Each may use its own
+						model and sampling profile — extraction steps benefit
+						from a low-temperature profile, while the description
+						step writes prose.
+					</p>
+					<div class="flex flex-col gap-2">
+						<label
+							class="text-sm font-semibold"
+							for="graphnodeResolution"
+						>
+							Node Resolution
+						</label>
+						<p class="text-muted-foreground text-xs">
+							Decides whether a name refers to a character already
+							in the graph or to a new one. Errs toward creating a
+							new node — a duplicate is visible in review, a wrong
+							merge silently fuses two identities.
+						</p>
+						<textarea
+							id="graphnodeResolution"
+							rows="8"
+							bind:value={graphConfig.nodeResolutionSystemPrompt}
+							class="textarea w-full"
+							disabled={graphConfig.isImmutable}
+						></textarea>
+						<p
+							class="text-muted-foreground mt-1 text-xs font-medium"
+						>
+							AI Override
+						</p>
+						<ConnectionSamplingPicker
+							{connectionsList}
+							{samplingList}
+							bind:connectionId={
+								graphConfig.nodeResolutionConnectionId
+							}
+							bind:samplingConfigId={
+								graphConfig.nodeResolutionSamplingConfigId
+							}
+						/>
+					</div>
+					<div class="flex flex-col gap-2">
+						<label
+							class="text-sm font-semibold"
+							for="graphperspective"
+						>
+							Character Perspective
+						</label>
+						<p class="text-muted-foreground text-xs">
+							The main pass: reads a scene and extracts the
+							relationships one character holds toward the others.
+							Runs once per present character, so it dominates a
+							build's cost.
+						</p>
+						<textarea
+							id="graphperspective"
+							rows="12"
+							bind:value={graphConfig.perspectiveSystemPrompt}
+							class="textarea w-full"
+							disabled={graphConfig.isImmutable}
+						></textarea>
+						<p
+							class="text-muted-foreground mt-1 text-xs font-medium"
+						>
+							AI Override
+						</p>
+						<ConnectionSamplingPicker
+							{connectionsList}
+							{samplingList}
+							bind:connectionId={
+								graphConfig.perspectiveConnectionId
+							}
+							bind:samplingConfigId={
+								graphConfig.perspectiveSamplingConfigId
+							}
+						/>
+					</div>
+					<div class="flex flex-col gap-2">
+						<label
+							class="text-sm font-semibold"
+							for="graphnodeDescription"
+						>
+							Node Description
+						</label>
+						<p class="text-muted-foreground text-xs">
+							Writes the two-sentence introduction for a newly
+							discovered character. This one returns prose rather
+							than JSON, so it is the only step not sent under a
+							JSON constraint.
+						</p>
+						<textarea
+							id="graphnodeDescription"
+							rows="6"
+							bind:value={graphConfig.nodeDescriptionSystemPrompt}
+							class="textarea w-full"
+							disabled={graphConfig.isImmutable}
+						></textarea>
+						<p
+							class="text-muted-foreground mt-1 text-xs font-medium"
+						>
+							AI Override
+						</p>
+						<ConnectionSamplingPicker
+							{connectionsList}
+							{samplingList}
+							bind:connectionId={
+								graphConfig.nodeDescriptionConnectionId
+							}
+							bind:samplingConfigId={
+								graphConfig.nodeDescriptionSamplingConfigId
+							}
+						/>
+					</div>
+					<div class="flex flex-col gap-2">
+						<label
+							class="text-sm font-semibold"
+							for="graphstateDetection"
+						>
+							State Detection
+						</label>
+						<p class="text-muted-foreground text-xs">
+							Detects when a character reaches a new lifecycle
+							state (deceased, missing, departed) during a scene.
+							Biased toward omission.
+						</p>
+						<textarea
+							id="graphstateDetection"
+							rows="10"
+							bind:value={graphConfig.stateDetectionSystemPrompt}
+							class="textarea w-full"
+							disabled={graphConfig.isImmutable}
+						></textarea>
+						<p
+							class="text-muted-foreground mt-1 text-xs font-medium"
+						>
+							AI Override
+						</p>
+						<ConnectionSamplingPicker
+							{connectionsList}
+							{samplingList}
+							bind:connectionId={
+								graphConfig.stateDetectionConnectionId
+							}
+							bind:samplingConfigId={
+								graphConfig.stateDetectionSamplingConfigId
+							}
+						/>
+					</div>
+				</div>
+			{/if}
+		</div>
+	</div>
 {/if}
 
 <PromptConfigUnsavedChangesModal
@@ -2386,6 +2804,8 @@
 				? "New World Lore Summarization Config"
 				: view === "character"
 					? "New Character Lore Summarization Config"
-					: "New Scene Summarization Config"}
+					: view === "scene"
+						? "New Scene Summarization Config"
+						: "New Narrative Graph Build Config"}
 	description="Your current settings will be copied."
 />

@@ -16,7 +16,7 @@
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import type { PgliteDatabase } from "drizzle-orm/pglite"
-import { namesMatch } from "./summarizer/availableSceneCast"
+import { collectAliases, namesMatch } from "./summarizer/availableSceneCast"
 
 type DbLike = PgliteDatabase<typeof schema>
 
@@ -94,16 +94,10 @@ export async function findDuplicateCandidates(
 			if (dismissedKeys.has(key)) continue
 			if (relatedKeys.has(key)) continue
 
-			const aNames = [
-				a.name,
-				...(a.aliases ?? []),
-				...(a.absorbedAliases ?? [])
-			]
-			const bNames = [
-				b.name,
-				...(b.aliases ?? []),
-				...(b.absorbedAliases ?? [])
-			]
+			// Canonical name prepended on top of the mandated alias union —
+			// the name is this caller's own addition, not part of it.
+			const aNames = [a.name, ...collectAliases(a)]
+			const bNames = [b.name, ...collectAliases(b)]
 			const isMatch = aNames.some((an) =>
 				bNames.some((bn) => namesMatch(an, bn))
 			)

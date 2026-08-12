@@ -10,8 +10,31 @@ export type TaskType =
 	| "summarize_synth"
 	| "summarize_name"
 	| "character_extraction"
+	// One per LLM step the graph builder makes. Each maps to its own
+	// prompt/connection/sampling triple on graphBuildConfigs — see
+	// GRAPH_TASK_SUBTASK below.
+	| "graph_node_resolution"
 	| "graph_pre_filter"
 	| "graph_perspective"
+	| "graph_node_description"
+	| "graph_state_detection"
+
+/**
+ * graph task type → the `graphBuildConfigs` column prefix that configures it.
+ *
+ * The prefix drives three columns each: `<prefix>SystemPrompt`,
+ * `<prefix>ConnectionId` and `<prefix>SamplingConfigId`. Adding a graph step
+ * means adding its task type, its entry here, and its three columns — leaving
+ * any of them out now throws rather than silently borrowing another step's
+ * settings.
+ */
+export const GRAPH_TASK_SUBTASK: Record<string, string> = {
+	graph_node_resolution: "nodeResolution",
+	graph_pre_filter: "preFilter",
+	graph_perspective: "perspective",
+	graph_node_description: "nodeDescription",
+	graph_state_detection: "stateDetection"
+}
 
 export interface ResolvedTaskConfig {
 	connection: SelectConnection | null
@@ -155,8 +178,18 @@ export async function resolveTaskConfig(params: {
 			overrideConnectionId = cfg?.[`${subTask}ConnectionId`] ?? null
 			overrideSamplingId = cfg?.[`${subTask}SamplingConfigId`] ?? null
 		} else if (taskType.startsWith("graph_") && graphBuildConfigId) {
-			const subTask =
-				taskType === "graph_pre_filter" ? "preFilter" : "perspective"
+			// Explicit map, not a ternary. This was
+			// `taskType === "graph_pre_filter" ? "preFilter" : "perspective"`,
+			// which silently resolved every graph step that was not the
+			// pre-filter to the perspective columns — so a new task type would
+			// have inherited perspective's model and sampling without any
+			// indication it had not been wired up.
+			const subTask = GRAPH_TASK_SUBTASK[taskType]
+			if (!subTask) {
+				throw new Error(
+					`resolveTaskConfig: no graphBuildConfigs sub-task mapped for "${taskType}"`
+				)
+			}
 			const cfg = await db.query.graphBuildConfigs.findFirst({
 				where: (c, { eq }) => eq(c.id, graphBuildConfigId),
 				columns: {

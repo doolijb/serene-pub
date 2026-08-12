@@ -103,6 +103,33 @@ export function buildMockTemplateContext(): TemplateContext {
 		worldLore: JSON.stringify(worldLore, null, 2),
 		history: JSON.stringify(history, null, 2),
 		currentDate: "Year 3 of the Long Descent, early Autumn",
-		narrativeGraph: JSON.stringify(narrativeGraph, null, 2)
+		// The speaker-centric block, keyed by the OTHER character — the
+		// speaker's own name never appears, which is the point of the shape.
+		narrativeGraph: JSON.stringify(narrativeGraph, null, 2),
+		speakerRelationships: JSON.stringify(
+			{
+				yourRelationships: {
+					"Old Marrow": [
+						{
+							type: "wary respect",
+							secrecy: "Only I know",
+							note: "Kestrel has never forgotten who opened the lower gate."
+						}
+					]
+				},
+				howOthersRegardYou: {
+					Ana: [
+						{
+							type: "debt",
+							secrecy: "We both know",
+							status: "evolved",
+							note: "Ana owes Kestrel for the crossing."
+						}
+					]
+				}
+			},
+			null,
+			1
+		)
 	}
 }

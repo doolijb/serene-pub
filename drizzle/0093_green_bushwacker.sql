@@ -1,0 +1,10 @@
+ALTER TABLE "graph_build_configs" ADD COLUMN "node_description_system_prompt" text DEFAULT '' NOT NULL;--> statement-breakpoint
+ALTER TABLE "graph_build_configs" ADD COLUMN "node_description_connection_id" integer;--> statement-breakpoint
+ALTER TABLE "graph_build_configs" ADD COLUMN "node_description_sampling_config_id" integer;--> statement-breakpoint
+ALTER TABLE "graph_build_configs" ADD COLUMN "state_detection_system_prompt" text DEFAULT '' NOT NULL;--> statement-breakpoint
+ALTER TABLE "graph_build_configs" ADD COLUMN "state_detection_connection_id" integer;--> statement-breakpoint
+ALTER TABLE "graph_build_configs" ADD COLUMN "state_detection_sampling_config_id" integer;--> statement-breakpoint
+ALTER TABLE "graph_build_configs" ADD CONSTRAINT "graph_build_configs_node_description_connection_id_connections_id_fk" FOREIGN KEY ("node_description_connection_id") REFERENCES "public"."connections"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "graph_build_configs" ADD CONSTRAINT "graph_build_configs_node_description_sampling_config_id_sampling_configs_id_fk" FOREIGN KEY ("node_description_sampling_config_id") REFERENCES "public"."sampling_configs"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "graph_build_configs" ADD CONSTRAINT "graph_build_configs_state_detection_connection_id_connections_id_fk" FOREIGN KEY ("state_detection_connection_id") REFERENCES "public"."connections"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "graph_build_configs" ADD CONSTRAINT "graph_build_configs_state_detection_sampling_config_id_sampling_configs_id_fk" FOREIGN KEY ("state_detection_sampling_config_id") REFERENCES "public"."sampling_configs"("id") ON DELETE set null ON UPDATE no action;

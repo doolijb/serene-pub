@@ -65,7 +65,11 @@ export interface ParsedContextTemplate {
 	parseError: string | null
 }
 
-const ROLE_WRAPPER_HELPERS = new Set(["systemBlock", "userBlock", "assistantBlock"])
+const ROLE_WRAPPER_HELPERS = new Set([
+	"systemBlock",
+	"userBlock",
+	"assistantBlock"
+])
 
 /**
  * Deterministic (FNV-1a) string hash — not cryptographic, just needs to be
@@ -116,7 +120,11 @@ function splitTextRun(
 	}
 	const tail = raw.slice(segStart)
 	if (tail.trim().length > 0) {
-		parts.push({ text: tail, start: base + segStart, end: base + raw.length })
+		parts.push({
+			text: tail,
+			start: base + segStart,
+			end: base + raw.length
+		})
 	}
 	return parts
 }
@@ -227,7 +235,9 @@ export function parseContextTemplate(template: string): ParsedContextTemplate {
 					const escaped = stmt.escaped
 					const expressionSource = escaped
 						? raw.replace(/^\{\{\s*/, "").replace(/\s*\}\}$/, "")
-						: raw.replace(/^\{\{\{\s*/, "").replace(/\s*\}\}\}$/, "")
+						: raw
+								.replace(/^\{\{\{\s*/, "")
+								.replace(/\s*\}\}\}$/, "")
 					cards.push({
 						id: makeId(raw),
 						kind: "variable",
@@ -300,7 +310,12 @@ export function parseContextTemplate(template: string): ParsedContextTemplate {
 // functions below, same as every other card.
 
 export type InsertableKind =
-	| { kind: "block"; helperName: string; tagSource: string; bodyPlaceholder?: string }
+	| {
+			kind: "block"
+			helperName: string
+			tagSource: string
+			bodyPlaceholder?: string
+	  }
 	| { kind: "variable"; expressionSource: string; escaped: boolean }
 	| { kind: "text"; content: string }
 
@@ -515,7 +530,8 @@ export function updateVariableCard(
 		return { template, error: err?.message || "Invalid expression syntax" }
 	}
 	return {
-		template: template.slice(0, card.start) + snippet + template.slice(card.end)
+		template:
+			template.slice(0, card.start) + snippet + template.slice(card.end)
 	}
 }
 
@@ -612,7 +628,11 @@ export function addElseBranch(
 	card: Pick<BlockCard, "end">
 ): string {
 	const closeStart = template.lastIndexOf("{{/", card.end)
-	return template.slice(0, closeStart) + "{{else}}\n\n" + template.slice(closeStart)
+	return (
+		template.slice(0, closeStart) +
+		"{{else}}\n\n" +
+		template.slice(closeStart)
+	)
 }
 
 /** Removes a block's {{else}} branch entirely, leaving the main body and close tag intact. */
@@ -623,9 +643,7 @@ export function removeElseBranch(
 	if (card.elseBodyStart === undefined || card.elseBodyEnd === undefined)
 		return template
 	const elseTagStart = template.lastIndexOf("{{else", card.elseBodyStart)
-	return (
-		template.slice(0, elseTagStart) + template.slice(card.elseBodyEnd)
-	)
+	return template.slice(0, elseTagStart) + template.slice(card.elseBodyEnd)
 }
 
 /**
@@ -655,7 +673,10 @@ export function reorderCards(
 	// they end up adjacent.
 	const gapAfterId = new Map<string, string>()
 	for (let i = 0; i < sorted.length - 1; i++) {
-		gapAfterId.set(sorted[i].id, template.slice(sorted[i].end, sorted[i + 1].start))
+		gapAfterId.set(
+			sorted[i].id,
+			template.slice(sorted[i].end, sorted[i + 1].start)
+		)
 	}
 
 	let rebuilt = textById.get(orderedIds[0])!
@@ -720,7 +741,8 @@ const KNOWN_TOP_LEVEL_FIELDS = new Set([
 	"characterLore",
 	"history",
 	"currentDate",
-	"narrativeGraph"
+	"narrativeGraph",
+	"speakerRelationships"
 ])
 
 export interface TemplateLintIssue {

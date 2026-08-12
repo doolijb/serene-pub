@@ -68,6 +68,20 @@ export type TemplateContext = {
 	history?: string
 	currentDate?: string
 	narrativeGraph?: string
+	/**
+	 * The speaker-centric relationship summary from
+	 * graphContextFormatter.buildGraphContext — JSON, rendered in its own
+	 * template block.
+	 *
+	 * Distinct from `narrativeGraph` above, which NarrativeGraphContext.ts
+	 * populates from the infill engines. This one used to be spliced into
+	 * `instructions` and both post-history fields as prose
+	 * ("Additional focus for this response: {...}"), which put a fenced JSON
+	 * blob at the most recency-weighted point of the prompt and had models
+	 * closing their replies with a stray ``` — and duplicated the payload
+	 * three times per message.
+	 */
+	speakerRelationships?: string
 	__promptBuilderInstance?: any
 }
 

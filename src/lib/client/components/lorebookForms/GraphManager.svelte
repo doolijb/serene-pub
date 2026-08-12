@@ -6,6 +6,13 @@
 	import GraphBuildModal from "../modals/GraphBuildModal.svelte"
 	import AbsorbBindingModal from "../modals/AbsorbBindingModal.svelte"
 	import GraphVisualization from "../graph/GraphVisualization.svelte"
+	import {
+		buildTimelineAxis,
+		countUndated,
+		formatEntryLabel,
+		nodesAsOf,
+		relationshipsAsOf
+	} from "./graphTimeline"
 	import EmbeddingStatusIcon from "../EmbeddingStatusIcon.svelte"
 
 	interface Props {
@@ -158,6 +165,27 @@
 
 	// Derived: only parent (non-alias) nodes shown in graph/list
 	let parentNodes = $derived(nodes.filter((n) => !n.parentNodeId))
+
+	// ── Timeline ("as of") ────────────────────────────────────────────────────
+	//
+	// null = show the graph as it stands now, which stays the default: the
+	// timeline is a way to look back, not a mode you have to dismiss.
+	let timelineIndex = $state<number | null>(null)
+	let timelineAxis = $derived(buildTimelineAxis(historyEntries))
+	let timelineEntriesById = $derived(
+		new Map(timelineAxis.map((e) => [e.id, e]))
+	)
+	let timelineCutoff = $derived(
+		timelineIndex === null ? null : (timelineAxis[timelineIndex] ?? null)
+	)
+	let visibleRelationships = $derived(
+		relationshipsAsOf(relationships, timelineCutoff, timelineEntriesById)
+	)
+	let visibleParentNodes = $derived(
+		nodesAsOf(parentNodes, visibleRelationships, timelineCutoff)
+	)
+	// Surfaced rather than silently dropped — see relationshipsAsOf.
+	let undatedCount = $derived(countUndated(relationships))
 
 	// Relationship lookup helpers
 	let nodeMap = $derived(new Map(nodes.map((n) => [n.id, n])))
@@ -766,248 +794,927 @@
 				</button>
 			{/if}
 		</div>
-	{:else if viewMode === "graph"}
-		<!-- ── Graph visualization ──────────────────────────────────────────── -->
-		<div
-			class="bg-surface-200-800 min-h-72 flex-1 overflow-hidden rounded-lg"
-		>
-			<GraphVisualization
-				nodes={parentNodes}
-				{relationships}
-				onNodeClick={(n) => {
-					selectedNode = n
-					selectedRel = null
-					editingRel = null
-				}}
-				onRelClick={(r) => {
-					selectedRel = r
-					selectedNode = null
-					editingRel = null
-				}}
-			/>
-		</div>
-
-		<!-- Selected node detail (purely informational — editing happens in
-		     the Bindings tab, see the "Edit" button below) -->
-		{#if selectedNode}
-			{@const nodeRels = relationships.filter(
-				(r) => r.fromNodeId === selectedNode!.id
-			)}
-			<div class="bg-surface-200-800 space-y-2 rounded-lg p-3 text-sm">
-				<!-- Header -->
-				<div class="flex items-center justify-between">
-					<span class="font-semibold">{selectedNode.name}</span>
-					<div class="flex gap-1">
-						<button
-							class="btn btn-sm preset-filled-surface-400-600"
-							onclick={() => startConnect(selectedNode!)}
-							title="Add relationship from this node"
-						>
-							<Icons.GitBranch size={13} />
-						</button>
-						<button
-							class="btn btn-sm preset-filled-surface-400-600"
-							onclick={() =>
-								onNavigateToBindings?.(selectedNode!.id)}
-							title="Edit in the Bindings tab"
-						>
-							<Icons.Pencil size={13} />
-						</button>
-						<button
-							class="btn btn-sm preset-tonal-warning"
-							onclick={() => {
-								mergeTargetNode = selectedNode
-								showMergeModal = true
-							}}
-							title="Absorb into another character (they're the same person)"
-						>
-							<Icons.GitMerge size={13} />
-						</button>
-						<button
-							class="btn btn-sm preset-tonal-error"
-							onclick={() => requestDeleteNode(selectedNode!.id)}
-							title="Delete node"
-						>
-							<Icons.Trash2 size={13} />
-						</button>
-						<button
-							class="btn btn-sm preset-filled-surface-400-600"
-							onclick={() => {
-								selectedNode = null
-								editingRel = null
-							}}
-						>
-							<Icons.X size={13} />
-						</button>
-					</div>
-				</div>
-				<!-- Badges -->
-				<div class="flex flex-wrap gap-1">
-					<span
-						class="badge {NODE_STATE_COLOR[
-							selectedNode.nodeState
-						] ?? 'preset-tonal-surface'} text-xs"
+	{:else}
+		<!-- ── Timeline ("as of") ───────────────────────────────────────────── -->
+		<!-- Shared by both views, so scrubbing keeps its position when the
+		     graph/list toggle is used. -->
+		{#if timelineAxis.length > 1}
+			<div
+				class="bg-surface-200-800 mb-2 rounded-lg px-3 py-2"
+				role="group"
+				aria-label="Graph timeline"
+			>
+				<div class="flex items-center gap-2">
+					<Icons.History
+						size={14}
+						class="text-surface-600-400 shrink-0"
+					/>
+					<input
+						type="range"
+						class="w-full min-w-0 flex-1"
+						min="0"
+						max={timelineAxis.length - 1}
+						step="1"
+						value={timelineIndex ?? timelineAxis.length - 1}
+						aria-label="Show the graph as of a point in time"
+						oninput={(e) => {
+							const v = Number(e.currentTarget.value)
+							timelineIndex =
+								v === timelineAxis.length - 1 ? null : v
+						}}
+					/>
+					<button
+						type="button"
+						class="btn btn-sm preset-filled-surface-400-600 shrink-0"
+						disabled={timelineIndex === null}
+						onclick={() => (timelineIndex = null)}
+						title="Show the graph as it stands now"
 					>
-						{selectedNode.nodeState}
-					</span>
-					{#if selectedNode.nodeVisibility !== "normal"}
-						<span
-							class="badge {NODE_VISIBILITY_COLOR[
-								selectedNode.nodeVisibility
-							] ?? 'preset-tonal-surface'} text-xs"
-						>
-							{selectedNode.nodeVisibility}
-						</span>
-					{/if}
+						Now
+					</button>
 				</div>
-				{#if selectedNode.summary}
-					<p class="text-surface-700-300 text-xs">
-						{selectedNode.summary}
+				<div class="mt-2 flex items-center gap-2">
+					<select
+						class="select select-sm min-w-0 flex-1"
+						value={timelineIndex === null ? "" : timelineIndex}
+						aria-label="Jump to a history entry"
+						onchange={(e) => {
+							const v = e.currentTarget.value
+							timelineIndex = v === "" ? null : Number(v)
+						}}
+					>
+						<option value="">Now — everything</option>
+						{#each timelineAxis as entry, i}
+							<option value={i}>
+								As of {formatEntryLabel(entry)}
+							</option>
+						{/each}
+					</select>
+				</div>
+				{#if timelineCutoff}
+					<p class="text-surface-600-400 mt-1 text-xs">
+						Showing the graph as of {formatEntryLabel(
+							timelineCutoff
+						)} — {visibleRelationships.length} of {relationships.length}
+						relationship{relationships.length === 1 ? "" : "s"}.
+						{#if undatedCount > 0}
+							{undatedCount} undated relationship{undatedCount ===
+							1
+								? ""
+								: "s"} cannot be placed on the timeline and {undatedCount ===
+							1
+								? "is"
+								: "are"} hidden here.
+						{/if}
 					</p>
 				{/if}
-				{#if [...(selectedNode.aliases ?? []), ...(selectedNode.absorbedAliases ?? [])].length > 0}
-					<div class="space-y-1">
-						<span class="text-surface-400 text-xs">
-							Also known as:
-						</span>
-						<div class="flex flex-wrap gap-1">
-							{#each [...new Set( [...(selectedNode.aliases ?? []), ...(selectedNode.absorbedAliases ?? [])] )] as alias}
-								<span
-									class="badge preset-tonal-surface text-xs"
-								>
-									{alias}
-								</span>
-							{/each}
+			</div>
+		{/if}
+		{#if viewMode === "graph"}
+			<!-- ── Graph visualization ──────────────────────────────────────────── -->
+			<div
+				class="bg-surface-200-800 min-h-72 flex-1 overflow-hidden rounded-lg"
+			>
+				<GraphVisualization
+					nodes={visibleParentNodes}
+					relationships={visibleRelationships}
+					onNodeClick={(n) => {
+						selectedNode = n
+						selectedRel = null
+						editingRel = null
+					}}
+					onRelClick={(r) => {
+						selectedRel = r
+						selectedNode = null
+						editingRel = null
+					}}
+				/>
+			</div>
+
+			<!-- Selected node detail (purely informational — editing happens in
+		     the Bindings tab, see the "Edit" button below) -->
+			{#if selectedNode}
+				{@const nodeRels = relationships.filter(
+					(r) => r.fromNodeId === selectedNode!.id
+				)}
+				<div
+					class="bg-surface-200-800 space-y-2 rounded-lg p-3 text-sm"
+				>
+					<!-- Header -->
+					<div class="flex items-center justify-between">
+						<span class="font-semibold">{selectedNode.name}</span>
+						<div class="flex gap-1">
+							<button
+								class="btn btn-sm preset-filled-surface-400-600"
+								onclick={() => startConnect(selectedNode!)}
+								title="Add relationship from this node"
+							>
+								<Icons.GitBranch size={13} />
+							</button>
+							<button
+								class="btn btn-sm preset-filled-surface-400-600"
+								onclick={() =>
+									onNavigateToBindings?.(selectedNode!.id)}
+								title="Edit in the Bindings tab"
+							>
+								<Icons.Pencil size={13} />
+							</button>
+							<button
+								class="btn btn-sm preset-tonal-warning"
+								onclick={() => {
+									mergeTargetNode = selectedNode
+									showMergeModal = true
+								}}
+								title="Absorb into another character (they're the same person)"
+							>
+								<Icons.GitMerge size={13} />
+							</button>
+							<button
+								class="btn btn-sm preset-tonal-error"
+								onclick={() =>
+									requestDeleteNode(selectedNode!.id)}
+								title="Delete node"
+							>
+								<Icons.Trash2 size={13} />
+							</button>
+							<button
+								class="btn btn-sm preset-filled-surface-400-600"
+								onclick={() => {
+									selectedNode = null
+									editingRel = null
+								}}
+							>
+								<Icons.X size={13} />
+							</button>
 						</div>
 					</div>
-				{/if}
-
-				<!-- Relationships -->
-				<div class="border-surface-300-700 space-y-2 border-t pt-2">
-					<p
-						class="text-surface-700-300 text-xs font-semibold uppercase"
-					>
-						Relationships
-					</p>
-					{#if nodeRels.length === 0 && connectingFromNode?.id !== selectedNode.id}
-						<p class="text-surface-400 text-xs italic">
-							No relationships yet.
+					<!-- Badges -->
+					<div class="flex flex-wrap gap-1">
+						<span
+							class="badge {NODE_STATE_COLOR[
+								selectedNode.nodeState
+							] ?? 'preset-tonal-surface'} text-xs"
+						>
+							{selectedNode.nodeState}
+						</span>
+						{#if selectedNode.nodeVisibility !== "normal"}
+							<span
+								class="badge {NODE_VISIBILITY_COLOR[
+									selectedNode.nodeVisibility
+								] ?? 'preset-tonal-surface'} text-xs"
+							>
+								{selectedNode.nodeVisibility}
+							</span>
+						{/if}
+					</div>
+					{#if selectedNode.summary}
+						<p class="text-surface-700-300 text-xs">
+							{selectedNode.summary}
 						</p>
 					{/if}
-					{#each nodeRels as rel (rel.id)}
-						{#if editingRel?.id === rel.id}
-							<!-- Inline edit card -->
-							<div
-								class="bg-surface-100-900 border-surface-300-700 space-y-2 rounded-lg border p-3"
-							>
-								<div
-									class="text-surface-700-300 flex items-center gap-1 text-xs"
-								>
-									<Icons.ArrowRight
-										size={11}
-										class="text-primary-400 shrink-0"
-									/>
-									<span class="font-medium">
-										→ {nodeName(rel.toNodeId)}
+					{#if [...(selectedNode.aliases ?? []), ...(selectedNode.absorbedAliases ?? [])].length > 0}
+						<div class="space-y-1">
+							<span class="text-surface-400 text-xs">
+								Also known as:
+							</span>
+							<div class="flex flex-wrap gap-1">
+								{#each [...new Set( [...(selectedNode.aliases ?? []), ...(selectedNode.absorbedAliases ?? [])] )] as alias}
+									<span
+										class="badge preset-tonal-surface text-xs"
+									>
+										{alias}
 									</span>
-								</div>
-								<input
-									class="input w-full text-sm"
-									type="text"
-									placeholder="Relationship type…"
-									bind:value={editingRel.relationshipType}
-								/>
-								<div class="grid grid-cols-2 gap-2">
-									<select
-										class="select text-xs"
-										bind:value={editingRel.status}
-									>
-										{#each RELATIONSHIP_STATUSES as s}
-											<option value={s}>{s}</option>
-										{/each}
-									</select>
-									<select
-										class="select text-xs"
-										bind:value={editingRel.visibility}
-									>
-										{#each RELATIONSHIP_VISIBILITIES as v}
-											<option value={v}>{v}</option>
-										{/each}
-									</select>
-								</div>
-								<textarea
-									class="textarea min-h-10 text-xs"
-									placeholder="Description…"
-									bind:value={editingRel.description}
-								></textarea>
-								<input
-									class="input text-xs"
-									type="text"
-									placeholder="Reason for this state…"
-									bind:value={editingRel.reason}
-								/>
-								{#if historyEntries.length > 0}
-									<select
-										class="select text-xs"
-										bind:value={editingRel.historyEntryId}
-									>
-										<option value={null}>
-											— no date —
-										</option>
-										{#each historyEntries as he}
-											<option value={he.id}>
-												Year {he.year}{he.month
-													? `, Mo. ${he.month}`
-													: ""}{he.day
-													? `, Day ${he.day}`
-													: ""}
-											</option>
-										{/each}
-									</select>
-								{/if}
-								<div class="flex justify-end gap-2">
-									<button
-										class="btn btn-sm preset-filled-surface-400-600"
-										onclick={() => {
-											editingRel = null
-										}}
-									>
-										Cancel
-									</button>
-									<button
-										class="btn btn-sm preset-filled-primary-500"
-										disabled={isSaving}
-										onclick={saveRel}
-									>
-										<Icons.Save size={13} /> Update
-									</button>
-								</div>
+								{/each}
 							</div>
-						{:else}
-							<!-- View card -->
-							<div
-								class="bg-surface-100-900 border-surface-300-700 space-y-1.5 rounded-lg border p-2.5"
-							>
-								<div class="flex items-center gap-1.5">
-									<Icons.ArrowRight
-										size={12}
-										class="text-primary-400 shrink-0"
+						</div>
+					{/if}
+
+					<!-- Relationships -->
+					<div class="border-surface-300-700 space-y-2 border-t pt-2">
+						<p
+							class="text-surface-700-300 text-xs font-semibold uppercase"
+						>
+							Relationships
+						</p>
+						{#if nodeRels.length === 0 && connectingFromNode?.id !== selectedNode.id}
+							<p class="text-surface-400 text-xs italic">
+								No relationships yet.
+							</p>
+						{/if}
+						{#each nodeRels as rel (rel.id)}
+							{#if editingRel?.id === rel.id}
+								<!-- Inline edit card -->
+								<div
+									class="bg-surface-100-900 border-surface-300-700 space-y-2 rounded-lg border p-3"
+								>
+									<div
+										class="text-surface-700-300 flex items-center gap-1 text-xs"
+									>
+										<Icons.ArrowRight
+											size={11}
+											class="text-primary-400 shrink-0"
+										/>
+										<span class="font-medium">
+											→ {nodeName(rel.toNodeId)}
+										</span>
+									</div>
+									<input
+										class="input w-full text-sm"
+										type="text"
+										placeholder="Relationship type…"
+										bind:value={editingRel.relationshipType}
 									/>
-									<span
-										class="flex-1 truncate text-xs font-semibold"
-									>
-										{rel.relationshipType.replace(
-											/_/g,
-											" "
-										)}
-									</span>
-									<span
-										class="text-surface-400 shrink-0 text-xs"
-									>
-										→ {nodeName(rel.toNodeId)}
-									</span>
+									<div class="grid grid-cols-2 gap-2">
+										<select
+											class="select text-xs"
+											bind:value={editingRel.status}
+										>
+											{#each RELATIONSHIP_STATUSES as s}
+												<option value={s}>{s}</option>
+											{/each}
+										</select>
+										<select
+											class="select text-xs"
+											bind:value={editingRel.visibility}
+										>
+											{#each RELATIONSHIP_VISIBILITIES as v}
+												<option value={v}>{v}</option>
+											{/each}
+										</select>
+									</div>
+									<textarea
+										class="textarea min-h-10 text-xs"
+										placeholder="Description…"
+										bind:value={editingRel.description}
+									></textarea>
+									<input
+										class="input text-xs"
+										type="text"
+										placeholder="Reason for this state…"
+										bind:value={editingRel.reason}
+									/>
+									{#if historyEntries.length > 0}
+										<select
+											class="select text-xs"
+											bind:value={
+												editingRel.historyEntryId
+											}
+										>
+											<option value={null}>
+												— no date —
+											</option>
+											{#each historyEntries as he}
+												<option value={he.id}>
+													Year {he.year}{he.month
+														? `, Mo. ${he.month}`
+														: ""}{he.day
+														? `, Day ${he.day}`
+														: ""}
+												</option>
+											{/each}
+										</select>
+									{/if}
+									<div class="flex justify-end gap-2">
+										<button
+											class="btn btn-sm preset-filled-surface-400-600"
+											onclick={() => {
+												editingRel = null
+											}}
+										>
+											Cancel
+										</button>
+										<button
+											class="btn btn-sm preset-filled-primary-500"
+											disabled={isSaving}
+											onclick={saveRel}
+										>
+											<Icons.Save size={13} /> Update
+										</button>
+									</div>
 								</div>
-								<div class="flex items-center gap-1.5">
+							{:else}
+								<!-- View card -->
+								<div
+									class="bg-surface-100-900 border-surface-300-700 space-y-1.5 rounded-lg border p-2.5"
+								>
+									<div class="flex items-center gap-1.5">
+										<Icons.ArrowRight
+											size={12}
+											class="text-primary-400 shrink-0"
+										/>
+										<span
+											class="flex-1 truncate text-xs font-semibold"
+										>
+											{rel.relationshipType.replace(
+												/_/g,
+												" "
+											)}
+										</span>
+										<span
+											class="text-surface-400 shrink-0 text-xs"
+										>
+											→ {nodeName(rel.toNodeId)}
+										</span>
+									</div>
+									<div class="flex items-center gap-1.5">
+										<span
+											class="badge {REL_STATUS_BADGE[
+												rel.status
+											] ??
+												'preset-tonal-surface'} text-xs"
+										>
+											{rel.status}
+										</span>
+										{#if rel.historyEntryId}
+											{@const he = historyEntries.find(
+												(h) =>
+													h.id === rel.historyEntryId
+											)}
+											{#if he}
+												<span
+													class="text-surface-700-300 text-xs"
+												>
+													Yr {he.year}{he.month
+														? `, Mo. ${he.month}`
+														: ""}
+												</span>
+											{/if}
+										{/if}
+										<div class="ml-auto flex gap-1">
+											<button
+												class="btn btn-sm preset-filled-surface-400-600 p-1"
+												onclick={() =>
+													startEditRel(rel)}
+												title="Edit relationship"
+											>
+												<Icons.Pencil size={11} />
+											</button>
+											<button
+												class="btn btn-sm preset-tonal-error p-1"
+												onclick={() =>
+													deleteRel(rel.id)}
+												title="Delete relationship"
+											>
+												<Icons.Trash2 size={11} />
+											</button>
+										</div>
+									</div>
+									{#if rel.description}
+										<p
+											class="text-surface-700-300 text-xs leading-snug"
+										>
+											{rel.description}
+										</p>
+									{/if}
+								</div>
+							{/if}
+						{/each}
+					</div>
+				</div>
+			{/if}
+
+			{#if pendingDeleteNodeId !== null}
+				{@const relCount = relationships.filter(
+					(r) =>
+						r.fromNodeId === pendingDeleteNodeId ||
+						r.toNodeId === pendingDeleteNodeId
+				).length}
+				{@const nodeName =
+					nodeMap.get(pendingDeleteNodeId)?.name ?? "this node"}
+				<div
+					class="bg-surface-200-800 border-error-500/40 space-y-2 rounded-lg border p-3 text-sm"
+				>
+					<p class="text-error-500 font-semibold">
+						Delete "{nodeName}"?
+					</p>
+					{#if relCount > 0}
+						<p class="text-surface-700-300 text-xs">
+							This will also permanently delete <strong>
+								{relCount} relationship{relCount === 1
+									? ""
+									: "s"}
+							</strong>
+							.
+						</p>
+					{/if}
+					{#if pendingDeleteNodeReferencedByMergeLog}
+						<p class="text-warning-500 text-xs">
+							This node is referenced by a past merge record —
+							deleting it will permanently disable that merge's
+							undo.
+						</p>
+					{/if}
+					<div class="flex justify-end gap-2">
+						<button
+							class="btn btn-sm preset-filled-surface-400-600"
+							onclick={() => {
+								pendingDeleteNodeId = null
+								pendingDeleteNodeReferencedByMergeLog = false
+							}}
+						>
+							Cancel
+						</button>
+						<button
+							class="btn btn-sm preset-filled-error-500"
+							onclick={() => {
+								confirmDeleteNode()
+								selectedNode = null
+							}}
+						>
+							<Icons.Trash2 size={13} /> Delete
+						</button>
+					</div>
+				</div>
+			{/if}
+
+			{#if connectingFromNode && connectingFromNode.id === selectedNode?.id}
+				<div
+					class="bg-surface-200-800 space-y-2 rounded-lg p-3 text-sm"
+				>
+					<p class="font-semibold">
+						Connect: {connectingFromNode.name} →
+					</p>
+					<div class="space-y-1">
+						<p
+							class="text-surface-700-300 text-xs font-semibold uppercase"
+						>
+							Target Node
+						</p>
+						<select
+							class="select text-sm"
+							bind:value={connectToNodeId}
+						>
+							<option value={null} disabled>
+								Select a node…
+							</option>
+							{#each nodes.filter((n) => n.id !== connectingFromNode!.id) as n}
+								<option value={n.id}>{displayName(n)}</option>
+							{/each}
+						</select>
+					</div>
+					<div class="grid grid-cols-2 gap-2">
+						<div class="space-y-1">
+							<p
+								class="text-surface-700-300 text-xs font-semibold uppercase"
+							>
+								Type
+							</p>
+							<input
+								class="input text-sm"
+								type="text"
+								bind:value={connectRelType}
+								placeholder="e.g. ally, romantic, rival"
+							/>
+						</div>
+						<div class="space-y-1">
+							<p
+								class="text-surface-700-300 text-xs font-semibold uppercase"
+							>
+								Status
+							</p>
+							<select
+								class="select text-sm"
+								bind:value={connectRelStatus}
+							>
+								{#each RELATIONSHIP_STATUSES as s}
+									<option value={s}>{s}</option>
+								{/each}
+							</select>
+						</div>
+					</div>
+					<div class="space-y-1">
+						<p
+							class="text-surface-700-300 text-xs font-semibold uppercase"
+						>
+							Visibility
+						</p>
+						<select
+							class="select text-sm"
+							bind:value={connectVisibility}
+						>
+							{#each RELATIONSHIP_VISIBILITIES as v}
+								<option value={v}>{v}</option>
+							{/each}
+						</select>
+					</div>
+					<div class="space-y-1">
+						<p
+							class="text-surface-700-300 text-xs font-semibold uppercase"
+						>
+							Description (optional)
+						</p>
+						<textarea
+							class="textarea min-h-10 text-sm"
+							placeholder="Describe the relationship…"
+							bind:value={connectDescription}
+						></textarea>
+					</div>
+					{#if historyEntries.length > 0}
+						<div class="space-y-1">
+							<p
+								class="text-surface-700-300 text-xs font-semibold uppercase"
+							>
+								When (optional)
+							</p>
+							<select
+								class="select text-sm"
+								bind:value={connectHistoryEntryId}
+							>
+								<option value={null}>— none —</option>
+								{#each historyEntries as he}
+									<option value={he.id}>
+										Year {he.year}{he.month
+											? `, Mo. ${he.month}`
+											: ""}{he.day
+											? `, Day ${he.day}`
+											: ""}
+									</option>
+								{/each}
+							</select>
+						</div>
+					{/if}
+					<div class="flex justify-end gap-2">
+						<button
+							class="btn btn-sm preset-filled-surface-400-600"
+							onclick={cancelConnect}
+						>
+							Cancel
+						</button>
+						<button
+							class="btn btn-sm preset-filled-primary-500"
+							disabled={!connectToNodeId || isConnecting}
+							onclick={submitConnect}
+						>
+							<Icons.GitBranch size={13} /> Connect
+						</button>
+					</div>
+				</div>
+			{/if}
+
+			{#if selectedRel && !editingRel}
+				<div
+					class="bg-surface-200-800 space-y-1 rounded-lg p-3 text-sm"
+				>
+					<div class="flex items-center justify-between">
+						<span class="font-semibold">
+							{nodeName(selectedRel.fromNodeId)} → {selectedRel.relationshipType}
+							→ {nodeName(selectedRel.toNodeId)}
+						</span>
+						<div class="flex gap-1">
+							<button
+								class="btn btn-sm preset-filled-surface-400-600"
+								onclick={() => startEditRel(selectedRel!)}
+							>
+								<Icons.Pencil size={13} />
+							</button>
+							<button
+								class="btn btn-sm preset-tonal-error"
+								onclick={() => {
+									deleteRel(selectedRel!.id)
+									selectedRel = null
+								}}
+							>
+								<Icons.Trash2 size={13} />
+							</button>
+							<button
+								class="btn btn-sm preset-filled-surface-400-600"
+								onclick={() => (selectedRel = null)}
+							>
+								<Icons.X size={13} />
+							</button>
+						</div>
+					</div>
+					<span
+						class="badge {REL_STATUS_BADGE[selectedRel.status] ??
+							'preset-tonal-surface'} text-xs"
+					>
+						{selectedRel.status}
+					</span>
+					{#if selectedRel.description}
+						<p class="text-xs">{selectedRel.description}</p>
+					{/if}
+					{#if selectedRel.reason}
+						<p class="text-surface-700-300 text-xs italic">
+							Reason: {selectedRel.reason}
+						</p>
+					{/if}
+				</div>
+			{/if}
+
+			{#if selectedRel && editingRel}
+				<div
+					class="bg-surface-200-800 space-y-2 rounded-lg p-3 text-sm"
+				>
+					<p class="font-semibold">Edit Relationship</p>
+					<div class="space-y-1">
+						<label
+							for="relType"
+							class="text-surface-700-300 text-xs font-semibold uppercase"
+						>
+							Type
+						</label>
+						<input
+							id="relType"
+							class="input text-sm"
+							type="text"
+							bind:value={editingRel.relationshipType}
+						/>
+					</div>
+					<div class="space-y-1">
+						<label
+							for="relStatus"
+							class="text-surface-700-300 text-xs font-semibold uppercase"
+						>
+							Status
+						</label>
+						<select
+							id="relStatus"
+							class="select text-sm"
+							bind:value={editingRel.status}
+						>
+							{#each RELATIONSHIP_STATUSES as s}
+								<option value={s}>{s}</option>
+							{/each}
+						</select>
+					</div>
+					<div class="space-y-1">
+						<label
+							for="relDescription"
+							class="text-surface-700-300 text-xs font-semibold uppercase"
+						>
+							Description
+						</label>
+						<textarea
+							id="relDescription"
+							class="textarea min-h-12 text-sm"
+							bind:value={editingRel.description}
+						></textarea>
+					</div>
+					<div class="space-y-1">
+						<label
+							for="relReason"
+							class="text-surface-700-300 text-xs font-semibold uppercase"
+						>
+							Reason for this state
+						</label>
+						<input
+							id="relReason"
+							class="input text-sm"
+							type="text"
+							bind:value={editingRel.reason}
+						/>
+					</div>
+					{#if historyEntries.length > 0}
+						<div class="space-y-1">
+							<label
+								for="relHistoryEntry"
+								class="text-surface-700-300 text-xs font-semibold uppercase"
+							>
+								When (optional)
+							</label>
+							<select
+								id="relHistoryEntry"
+								class="select text-sm"
+								bind:value={editingRel.historyEntryId}
+							>
+								<option value={null}>— none —</option>
+								{#each historyEntries as he}
+									<option value={he.id}>
+										Year {he.year}{he.month
+											? `, Mo. ${he.month}`
+											: ""}{he.day
+											? `, Day ${he.day}`
+											: ""}
+									</option>
+								{/each}
+							</select>
+						</div>
+					{/if}
+					<div class="flex justify-end gap-2">
+						<button
+							class="btn btn-sm preset-filled-surface-400-600"
+							onclick={cancelEdit}
+						>
+							Cancel
+						</button>
+						<button
+							class="btn btn-sm preset-filled-primary-500"
+							disabled={isSaving}
+							onclick={saveRel}
+						>
+							<Icons.Save size={13} /> Update
+						</button>
+					</div>
+				</div>
+			{/if}
+		{:else}
+			<!-- ── List view ────────────────────────────────────────────────────── -->
+			<div class="space-y-4 overflow-y-auto">
+				<!-- Nodes list -->
+				<section class="space-y-1">
+					<h3
+						class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+					>
+						Nodes ({parentNodes.length})
+					</h3>
+					{#each parentNodes as node}
+						<div
+							class="bg-surface-200-800 border-surface-300-700 hover:preset-filled-surface-300-700 cursor-pointer rounded-lg border px-3 py-2 transition-colors"
+							role="button"
+							tabindex="0"
+							onclick={() => {
+								selectedNode = node
+								viewMode = "graph"
+							}}
+							onkeydown={(e) => {
+								if (e.key === "Enter" || e.key === " ") {
+									selectedNode = node
+									viewMode = "graph"
+								}
+							}}
+						>
+							<div class="flex items-center gap-2">
+								<span
+									class="flex-1 truncate text-sm font-medium"
+								>
+									{displayName(node)}
+								</span>
+								<EmbeddingStatusIcon
+									embeddingModel={node.embeddingModel}
+								/>
+								<span
+									class="badge {NODE_STATE_COLOR[
+										node.nodeState
+									] ?? 'preset-tonal-surface'} text-xs"
+								>
+									{node.nodeState}
+								</span>
+								{#if node.nodeVisibility !== "normal"}
+									<span
+										class="badge {NODE_VISIBILITY_COLOR[
+											node.nodeVisibility
+										] ?? 'preset-tonal-surface'} text-xs"
+									>
+										{node.nodeVisibility}
+									</span>
+								{/if}
+								<button
+									class="btn btn-sm preset-filled-surface-400-600"
+									onclick={(e) => {
+										e.stopPropagation()
+										onNavigateToBindings?.(node.id)
+									}}
+									title="Edit in the Bindings tab"
+								>
+									<Icons.Pencil size={13} />
+								</button>
+								<button
+									class="btn btn-sm preset-tonal-error"
+									onclick={(e) => {
+										e.stopPropagation()
+										requestDeleteNode(node.id)
+									}}
+								>
+									<Icons.Trash2 size={13} />
+								</button>
+							</div>
+							{#if node.summary}
+								<p class="text-surface-700-300 mt-1 text-xs">
+									{node.summary}
+								</p>
+							{/if}
+						</div>
+					{/each}
+				</section>
+
+				<!-- Relationships list -->
+				<section class="space-y-1">
+					<h3
+						class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+					>
+						Relationships ({visibleRelationships.length}{timelineCutoff
+							? ` of ${relationships.length}`
+							: ""})
+					</h3>
+					{#each visibleRelationships as rel}
+						<div
+							class="bg-surface-200-800 border-surface-300-700 rounded-lg border px-3 py-2"
+						>
+							{#if editingRel?.id === rel.id}
+								<div class="space-y-2">
+									<div class="flex items-center gap-2">
+										<input
+											class="input flex-1 text-sm"
+											type="text"
+											bind:value={
+												editingRel.relationshipType
+											}
+										/>
+										<button
+											class="btn btn-sm preset-filled-surface-400-600"
+											aria-label="Cancel"
+											onclick={cancelEdit}
+										>
+											<Icons.X size={13} />
+										</button>
+										<button
+											class="btn btn-sm preset-filled-primary-500"
+											aria-label="Save"
+											disabled={isSaving}
+											onclick={saveRel}
+										>
+											<Icons.Save size={13} />
+										</button>
+									</div>
+									<div class="flex items-center gap-2">
+										<span
+											class="text-surface-700-300 shrink-0 text-xs"
+										>
+											{nodeName(rel.fromNodeId)} → {nodeName(
+												rel.toNodeId
+											)}
+										</span>
+										<select
+											class="select ml-auto text-xs"
+											bind:value={editingRel.status}
+										>
+											{#each RELATIONSHIP_STATUSES as s}
+												<option value={s}>{s}</option>
+											{/each}
+										</select>
+										<select
+											class="select text-xs"
+											bind:value={editingRel.visibility}
+										>
+											{#each RELATIONSHIP_VISIBILITIES as v}
+												<option value={v}>{v}</option>
+											{/each}
+										</select>
+									</div>
+									<textarea
+										class="textarea min-h-10 text-xs"
+										placeholder="Description…"
+										bind:value={editingRel.description}
+									></textarea>
+									<input
+										class="input text-xs"
+										type="text"
+										placeholder="Reason for this state…"
+										bind:value={editingRel.reason}
+									/>
+									{#if historyEntries.length > 0}
+										<select
+											class="select text-xs"
+											bind:value={
+												editingRel.historyEntryId
+											}
+										>
+											<option value={null}>
+												— none —
+											</option>
+											{#each historyEntries as he}
+												<option value={he.id}>
+													Year {he.year}{he.month
+														? `, Mo. ${he.month}`
+														: ""}{he.day
+														? `, Day ${he.day}`
+														: ""}
+												</option>
+											{/each}
+										</select>
+									{/if}
+								</div>
+							{:else}
+								<div class="flex items-center gap-2">
+									<span class="flex-1 truncate text-sm">
+										<span class="font-medium">
+											{nodeName(rel.fromNodeId)}
+										</span>
+										<span
+											class="text-surface-400 mx-1 text-xs"
+										>
+											→ {rel.relationshipType.replace(
+												/_/g,
+												" "
+											)} →
+										</span>
+										<span class="font-medium">
+											{nodeName(rel.toNodeId)}
+										</span>
+									</span>
+									<EmbeddingStatusIcon
+										embeddingModel={rel.embeddingModel}
+									/>
+									{#if rel.visibility && rel.visibility !== "acknowledged"}
+										<span
+											class="badge {REL_VISIBILITY_BADGE[
+												rel.visibility
+											] ??
+												'preset-tonal-surface'} text-xs"
+										>
+											{rel.visibility}
+										</span>
+									{/if}
 									<span
 										class="badge {REL_STATUS_BADGE[
 											rel.status
@@ -1015,597 +1722,39 @@
 									>
 										{rel.status}
 									</span>
-									{#if rel.historyEntryId}
-										{@const he = historyEntries.find(
-											(h) => h.id === rel.historyEntryId
-										)}
-										{#if he}
-											<span
-												class="text-surface-700-300 text-xs"
-											>
-												Yr {he.year}{he.month
-													? `, Mo. ${he.month}`
-													: ""}
-											</span>
-										{/if}
-									{/if}
-									<div class="ml-auto flex gap-1">
-										<button
-											class="btn btn-sm preset-filled-surface-400-600 p-1"
-											onclick={() => startEditRel(rel)}
-											title="Edit relationship"
-										>
-											<Icons.Pencil size={11} />
-										</button>
-										<button
-											class="btn btn-sm preset-tonal-error p-1"
-											onclick={() => deleteRel(rel.id)}
-											title="Delete relationship"
-										>
-											<Icons.Trash2 size={11} />
-										</button>
-									</div>
+									<button
+										class="btn btn-sm preset-filled-surface-400-600"
+										onclick={() => startEditRel(rel)}
+									>
+										<Icons.Pencil size={13} />
+									</button>
+									<button
+										class="btn btn-sm preset-tonal-error"
+										onclick={() => deleteRel(rel.id)}
+									>
+										<Icons.Trash2 size={13} />
+									</button>
 								</div>
 								{#if rel.description}
 									<p
-										class="text-surface-700-300 text-xs leading-snug"
+										class="text-surface-700-300 mt-1 text-xs"
 									>
 										{rel.description}
 									</p>
 								{/if}
-							</div>
-						{/if}
-					{/each}
-				</div>
-			</div>
-		{/if}
-
-		{#if pendingDeleteNodeId !== null}
-			{@const relCount = relationships.filter(
-				(r) =>
-					r.fromNodeId === pendingDeleteNodeId ||
-					r.toNodeId === pendingDeleteNodeId
-			).length}
-			{@const nodeName =
-				nodeMap.get(pendingDeleteNodeId)?.name ?? "this node"}
-			<div
-				class="bg-surface-200-800 border-error-500/40 space-y-2 rounded-lg border p-3 text-sm"
-			>
-				<p class="text-error-500 font-semibold">Delete "{nodeName}"?</p>
-				{#if relCount > 0}
-					<p class="text-surface-700-300 text-xs">
-						This will also permanently delete <strong>
-							{relCount} relationship{relCount === 1 ? "" : "s"}
-						</strong>
-						.
-					</p>
-				{/if}
-				{#if pendingDeleteNodeReferencedByMergeLog}
-					<p class="text-warning-500 text-xs">
-						This node is referenced by a past merge record —
-						deleting it will permanently disable that merge's undo.
-					</p>
-				{/if}
-				<div class="flex justify-end gap-2">
-					<button
-						class="btn btn-sm preset-filled-surface-400-600"
-						onclick={() => {
-							pendingDeleteNodeId = null
-							pendingDeleteNodeReferencedByMergeLog = false
-						}}
-					>
-						Cancel
-					</button>
-					<button
-						class="btn btn-sm preset-filled-error-500"
-						onclick={() => {
-							confirmDeleteNode()
-							selectedNode = null
-						}}
-					>
-						<Icons.Trash2 size={13} /> Delete
-					</button>
-				</div>
-			</div>
-		{/if}
-
-		{#if connectingFromNode && connectingFromNode.id === selectedNode?.id}
-			<div class="bg-surface-200-800 space-y-2 rounded-lg p-3 text-sm">
-				<p class="font-semibold">
-					Connect: {connectingFromNode.name} →
-				</p>
-				<div class="space-y-1">
-					<p
-						class="text-surface-700-300 text-xs font-semibold uppercase"
-					>
-						Target Node
-					</p>
-					<select class="select text-sm" bind:value={connectToNodeId}>
-						<option value={null} disabled>Select a node…</option>
-						{#each nodes.filter((n) => n.id !== connectingFromNode!.id) as n}
-							<option value={n.id}>{displayName(n)}</option>
-						{/each}
-					</select>
-				</div>
-				<div class="grid grid-cols-2 gap-2">
-					<div class="space-y-1">
-						<p
-							class="text-surface-700-300 text-xs font-semibold uppercase"
-						>
-							Type
-						</p>
-						<input
-							class="input text-sm"
-							type="text"
-							bind:value={connectRelType}
-							placeholder="e.g. ally, romantic, rival"
-						/>
-					</div>
-					<div class="space-y-1">
-						<p
-							class="text-surface-700-300 text-xs font-semibold uppercase"
-						>
-							Status
-						</p>
-						<select
-							class="select text-sm"
-							bind:value={connectRelStatus}
-						>
-							{#each RELATIONSHIP_STATUSES as s}
-								<option value={s}>{s}</option>
-							{/each}
-						</select>
-					</div>
-				</div>
-				<div class="space-y-1">
-					<p
-						class="text-surface-700-300 text-xs font-semibold uppercase"
-					>
-						Visibility
-					</p>
-					<select
-						class="select text-sm"
-						bind:value={connectVisibility}
-					>
-						{#each RELATIONSHIP_VISIBILITIES as v}
-							<option value={v}>{v}</option>
-						{/each}
-					</select>
-				</div>
-				<div class="space-y-1">
-					<p
-						class="text-surface-700-300 text-xs font-semibold uppercase"
-					>
-						Description (optional)
-					</p>
-					<textarea
-						class="textarea min-h-10 text-sm"
-						placeholder="Describe the relationship…"
-						bind:value={connectDescription}
-					></textarea>
-				</div>
-				{#if historyEntries.length > 0}
-					<div class="space-y-1">
-						<p
-							class="text-surface-700-300 text-xs font-semibold uppercase"
-						>
-							When (optional)
-						</p>
-						<select
-							class="select text-sm"
-							bind:value={connectHistoryEntryId}
-						>
-							<option value={null}>— none —</option>
-							{#each historyEntries as he}
-								<option value={he.id}>
-									Year {he.year}{he.month
-										? `, Mo. ${he.month}`
-										: ""}{he.day ? `, Day ${he.day}` : ""}
-								</option>
-							{/each}
-						</select>
-					</div>
-				{/if}
-				<div class="flex justify-end gap-2">
-					<button
-						class="btn btn-sm preset-filled-surface-400-600"
-						onclick={cancelConnect}
-					>
-						Cancel
-					</button>
-					<button
-						class="btn btn-sm preset-filled-primary-500"
-						disabled={!connectToNodeId || isConnecting}
-						onclick={submitConnect}
-					>
-						<Icons.GitBranch size={13} /> Connect
-					</button>
-				</div>
-			</div>
-		{/if}
-
-		{#if selectedRel && !editingRel}
-			<div class="bg-surface-200-800 space-y-1 rounded-lg p-3 text-sm">
-				<div class="flex items-center justify-between">
-					<span class="font-semibold">
-						{nodeName(selectedRel.fromNodeId)} → {selectedRel.relationshipType}
-						→ {nodeName(selectedRel.toNodeId)}
-					</span>
-					<div class="flex gap-1">
-						<button
-							class="btn btn-sm preset-filled-surface-400-600"
-							onclick={() => startEditRel(selectedRel!)}
-						>
-							<Icons.Pencil size={13} />
-						</button>
-						<button
-							class="btn btn-sm preset-tonal-error"
-							onclick={() => {
-								deleteRel(selectedRel!.id)
-								selectedRel = null
-							}}
-						>
-							<Icons.Trash2 size={13} />
-						</button>
-						<button
-							class="btn btn-sm preset-filled-surface-400-600"
-							onclick={() => (selectedRel = null)}
-						>
-							<Icons.X size={13} />
-						</button>
-					</div>
-				</div>
-				<span
-					class="badge {REL_STATUS_BADGE[selectedRel.status] ??
-						'preset-tonal-surface'} text-xs"
-				>
-					{selectedRel.status}
-				</span>
-				{#if selectedRel.description}
-					<p class="text-xs">{selectedRel.description}</p>
-				{/if}
-				{#if selectedRel.reason}
-					<p class="text-surface-700-300 text-xs italic">
-						Reason: {selectedRel.reason}
-					</p>
-				{/if}
-			</div>
-		{/if}
-
-		{#if selectedRel && editingRel}
-			<div class="bg-surface-200-800 space-y-2 rounded-lg p-3 text-sm">
-				<p class="font-semibold">Edit Relationship</p>
-				<div class="space-y-1">
-					<label
-						for="relType"
-						class="text-surface-700-300 text-xs font-semibold uppercase"
-					>
-						Type
-					</label>
-					<input
-						id="relType"
-						class="input text-sm"
-						type="text"
-						bind:value={editingRel.relationshipType}
-					/>
-				</div>
-				<div class="space-y-1">
-					<label
-						for="relStatus"
-						class="text-surface-700-300 text-xs font-semibold uppercase"
-					>
-						Status
-					</label>
-					<select
-						id="relStatus"
-						class="select text-sm"
-						bind:value={editingRel.status}
-					>
-						{#each RELATIONSHIP_STATUSES as s}
-							<option value={s}>{s}</option>
-						{/each}
-					</select>
-				</div>
-				<div class="space-y-1">
-					<label
-						for="relDescription"
-						class="text-surface-700-300 text-xs font-semibold uppercase"
-					>
-						Description
-					</label>
-					<textarea
-						id="relDescription"
-						class="textarea min-h-12 text-sm"
-						bind:value={editingRel.description}
-					></textarea>
-				</div>
-				<div class="space-y-1">
-					<label
-						for="relReason"
-						class="text-surface-700-300 text-xs font-semibold uppercase"
-					>
-						Reason for this state
-					</label>
-					<input
-						id="relReason"
-						class="input text-sm"
-						type="text"
-						bind:value={editingRel.reason}
-					/>
-				</div>
-				{#if historyEntries.length > 0}
-					<div class="space-y-1">
-						<label
-							for="relHistoryEntry"
-							class="text-surface-700-300 text-xs font-semibold uppercase"
-						>
-							When (optional)
-						</label>
-						<select
-							id="relHistoryEntry"
-							class="select text-sm"
-							bind:value={editingRel.historyEntryId}
-						>
-							<option value={null}>— none —</option>
-							{#each historyEntries as he}
-								<option value={he.id}>
-									Year {he.year}{he.month
-										? `, Mo. ${he.month}`
-										: ""}{he.day ? `, Day ${he.day}` : ""}
-								</option>
-							{/each}
-						</select>
-					</div>
-				{/if}
-				<div class="flex justify-end gap-2">
-					<button
-						class="btn btn-sm preset-filled-surface-400-600"
-						onclick={cancelEdit}
-					>
-						Cancel
-					</button>
-					<button
-						class="btn btn-sm preset-filled-primary-500"
-						disabled={isSaving}
-						onclick={saveRel}
-					>
-						<Icons.Save size={13} /> Update
-					</button>
-				</div>
-			</div>
-		{/if}
-	{:else if viewMode === "list"}
-		<!-- ── List view ────────────────────────────────────────────────────── -->
-		<div class="space-y-4 overflow-y-auto">
-			<!-- Nodes list -->
-			<section class="space-y-1">
-				<h3
-					class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
-				>
-					Nodes ({parentNodes.length})
-				</h3>
-				{#each parentNodes as node}
-					<div
-						class="bg-surface-200-800 border-surface-300-700 hover:preset-filled-surface-300-700 cursor-pointer rounded-lg border px-3 py-2 transition-colors"
-						role="button"
-						tabindex="0"
-						onclick={() => {
-							selectedNode = node
-							viewMode = "graph"
-						}}
-						onkeydown={(e) => {
-							if (e.key === "Enter" || e.key === " ") {
-								selectedNode = node
-								viewMode = "graph"
-							}
-						}}
-					>
-						<div class="flex items-center gap-2">
-							<span class="flex-1 truncate text-sm font-medium">
-								{displayName(node)}
-							</span>
-							<EmbeddingStatusIcon
-								embeddingModel={node.embeddingModel}
-							/>
-							<span
-								class="badge {NODE_STATE_COLOR[
-									node.nodeState
-								] ?? 'preset-tonal-surface'} text-xs"
-							>
-								{node.nodeState}
-							</span>
-							{#if node.nodeVisibility !== "normal"}
-								<span
-									class="badge {NODE_VISIBILITY_COLOR[
-										node.nodeVisibility
-									] ?? 'preset-tonal-surface'} text-xs"
-								>
-									{node.nodeVisibility}
-								</span>
+								{#if rel.reason}
+									<p
+										class="text-surface-400 mt-0.5 text-xs italic"
+									>
+										Reason: {rel.reason}
+									</p>
+								{/if}
 							{/if}
-							<button
-								class="btn btn-sm preset-filled-surface-400-600"
-								onclick={(e) => {
-									e.stopPropagation()
-									onNavigateToBindings?.(node.id)
-								}}
-								title="Edit in the Bindings tab"
-							>
-								<Icons.Pencil size={13} />
-							</button>
-							<button
-								class="btn btn-sm preset-tonal-error"
-								onclick={(e) => {
-									e.stopPropagation()
-									requestDeleteNode(node.id)
-								}}
-							>
-								<Icons.Trash2 size={13} />
-							</button>
 						</div>
-						{#if node.summary}
-							<p class="text-surface-700-300 mt-1 text-xs">
-								{node.summary}
-							</p>
-						{/if}
-					</div>
-				{/each}
-			</section>
-
-			<!-- Relationships list -->
-			<section class="space-y-1">
-				<h3
-					class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
-				>
-					Relationships ({relationships.length})
-				</h3>
-				{#each relationships as rel}
-					<div
-						class="bg-surface-200-800 border-surface-300-700 rounded-lg border px-3 py-2"
-					>
-						{#if editingRel?.id === rel.id}
-							<div class="space-y-2">
-								<div class="flex items-center gap-2">
-									<input
-										class="input flex-1 text-sm"
-										type="text"
-										bind:value={editingRel.relationshipType}
-									/>
-									<button
-										class="btn btn-sm preset-filled-surface-400-600"
-										aria-label="Cancel"
-										onclick={cancelEdit}
-									>
-										<Icons.X size={13} />
-									</button>
-									<button
-										class="btn btn-sm preset-filled-primary-500"
-										aria-label="Save"
-										disabled={isSaving}
-										onclick={saveRel}
-									>
-										<Icons.Save size={13} />
-									</button>
-								</div>
-								<div class="flex items-center gap-2">
-									<span
-										class="text-surface-700-300 shrink-0 text-xs"
-									>
-										{nodeName(rel.fromNodeId)} → {nodeName(
-											rel.toNodeId
-										)}
-									</span>
-									<select
-										class="select ml-auto text-xs"
-										bind:value={editingRel.status}
-									>
-										{#each RELATIONSHIP_STATUSES as s}
-											<option value={s}>{s}</option>
-										{/each}
-									</select>
-									<select
-										class="select text-xs"
-										bind:value={editingRel.visibility}
-									>
-										{#each RELATIONSHIP_VISIBILITIES as v}
-											<option value={v}>{v}</option>
-										{/each}
-									</select>
-								</div>
-								<textarea
-									class="textarea min-h-10 text-xs"
-									placeholder="Description…"
-									bind:value={editingRel.description}
-								></textarea>
-								<input
-									class="input text-xs"
-									type="text"
-									placeholder="Reason for this state…"
-									bind:value={editingRel.reason}
-								/>
-								{#if historyEntries.length > 0}
-									<select
-										class="select text-xs"
-										bind:value={editingRel.historyEntryId}
-									>
-										<option value={null}>— none —</option>
-										{#each historyEntries as he}
-											<option value={he.id}>
-												Year {he.year}{he.month
-													? `, Mo. ${he.month}`
-													: ""}{he.day
-													? `, Day ${he.day}`
-													: ""}
-											</option>
-										{/each}
-									</select>
-								{/if}
-							</div>
-						{:else}
-							<div class="flex items-center gap-2">
-								<span class="flex-1 truncate text-sm">
-									<span class="font-medium">
-										{nodeName(rel.fromNodeId)}
-									</span>
-									<span class="text-surface-400 mx-1 text-xs">
-										→ {rel.relationshipType.replace(
-											/_/g,
-											" "
-										)} →
-									</span>
-									<span class="font-medium">
-										{nodeName(rel.toNodeId)}
-									</span>
-								</span>
-								<EmbeddingStatusIcon
-									embeddingModel={rel.embeddingModel}
-								/>
-								{#if rel.visibility && rel.visibility !== "acknowledged"}
-									<span
-										class="badge {REL_VISIBILITY_BADGE[
-											rel.visibility
-										] ?? 'preset-tonal-surface'} text-xs"
-									>
-										{rel.visibility}
-									</span>
-								{/if}
-								<span
-									class="badge {REL_STATUS_BADGE[
-										rel.status
-									] ?? 'preset-tonal-surface'} text-xs"
-								>
-									{rel.status}
-								</span>
-								<button
-									class="btn btn-sm preset-filled-surface-400-600"
-									onclick={() => startEditRel(rel)}
-								>
-									<Icons.Pencil size={13} />
-								</button>
-								<button
-									class="btn btn-sm preset-tonal-error"
-									onclick={() => deleteRel(rel.id)}
-								>
-									<Icons.Trash2 size={13} />
-								</button>
-							</div>
-							{#if rel.description}
-								<p class="text-surface-700-300 mt-1 text-xs">
-									{rel.description}
-								</p>
-							{/if}
-							{#if rel.reason}
-								<p
-									class="text-surface-400 mt-0.5 text-xs italic"
-								>
-									Reason: {rel.reason}
-								</p>
-							{/if}
-						{/if}
-					</div>
-				{/each}
-			</section>
-		</div>
+					{/each}
+				</section>
+			</div>
+		{/if}
 	{/if}
 </div>
 

@@ -89,7 +89,8 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 	// --- LM Studio client instance ---
 	getClient() {
 		if (!this._client) {
-			const baseUrl = normalizeBaseUrl(this.connection.baseUrl) || undefined
+			const baseUrl =
+				normalizeBaseUrl(this.connection.baseUrl) || undefined
 			this._client = new LMStudioClient({ baseUrl })
 		}
 		return this._client
@@ -221,7 +222,21 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 				? this.sampling.responseTokens || 250
 				: 250,
 			contextOverflowPolicy: "truncateMiddle",
-			...this.mapSamplingConfig()
+			...this.mapSamplingConfig(),
+			// LM Studio's SDK takes the constraint as a `structured` option
+			// rather than a request field. `{ type: "json" }` is its
+			// any-valid-JSON mode — the SDK also accepts a jsonSchema here if a
+			// schema-level contract is ever added.
+			...(this.responseFormat === "json"
+				? {
+						structured: this.responseSchema
+							? {
+									type: "json" as const,
+									jsonSchema: this.responseSchema
+								}
+							: { type: "json" as const }
+					}
+				: {})
 		}
 
 		// --- LM Studio SDK integration ---
@@ -377,7 +392,9 @@ async function testConnection(
 	connection: SelectConnection
 ): Promise<{ ok: boolean; error?: string }> {
 	try {
-		const client = new LMStudioClient({ baseUrl: normalizeBaseUrl(connection.baseUrl) })
+		const client = new LMStudioClient({
+			baseUrl: normalizeBaseUrl(connection.baseUrl)
+		})
 		const res = await client.system.getLMStudioVersion()
 		if (res && typeof res === "object" && "version" in res) {
 			// Also check if any models are available
@@ -416,7 +433,9 @@ async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
 	try {
-		const client = new LMStudioClient({ baseUrl: normalizeBaseUrl(connection.baseUrl) })
+		const client = new LMStudioClient({
+			baseUrl: normalizeBaseUrl(connection.baseUrl)
+		})
 		const res = await client.system.listDownloadedModels()
 		if (res && Array.isArray(res)) {
 			const models = res.map((model) => {

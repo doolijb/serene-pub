@@ -4,7 +4,15 @@ import * as schema from "./schema"
 import { getAppDataDir } from "./drizzle.config"
 import * as path from "path"
 import { DEFAULT_CHARACTER_EXTRACTION_SYSTEM_PROMPT } from "$lib/server/utils/summarizer/templates"
+import {
+	DEFAULT_GRAPH_NODE_RESOLUTION_SYSTEM_PROMPT,
+	DEFAULT_GRAPH_PERSPECTIVE_SYSTEM_PROMPT,
+	DEFAULT_GRAPH_PRE_FILTER_SYSTEM_PROMPT,
+	DEFAULT_GRAPH_NODE_DESCRIPTION_SYSTEM_PROMPT,
+	DEFAULT_GRAPH_STATE_DETECTION_SYSTEM_PROMPT
+} from "$lib/server/utils/graphPrompts"
 import { backfillMissingBindingNames } from "$lib/server/utils/characterBindingSync"
+import { backfillRelationshipHistoryEntries } from "$lib/server/utils/graphBackfill"
 
 export async function sync() {
 	console.log("Syncing database defaults...")
@@ -24,26 +32,107 @@ export async function sync() {
 		const existingSamplingConfigs =
 			await db.query.samplingConfigs.findMany()
 
+		// ── How seeded rows are identified ────────────────────────────────────
+		//
+		// Every list in this file is matched on `seedKey`, never on `id`.
+		//
+		// It used to upsert on a hardcoded `id`, which collides with user rows:
+		// seeded ids run 1..N and `resyncIdSequences()` at the bottom of this
+		// file sets each sequence to MAX(id), so the first row a user creates
+		// takes the very next id a newly added seeded row would claim — and the
+		// UPDATE branch silently overwrites it. That is not hypothetical: a
+		// "Precise (Extraction)" preset added at sampling_configs id 3
+		// overwrote a user's own config on their next boot, and `isImmutable`
+		// left the wreckage un-editable in the UI.
+		//
+		// `seedKey` is NULL for anything a user made, so a user row can never be
+		// mistaken for a seed.
+		//
+		// ADDING A NEW DEFAULT: give it a `seedKey` and **no `id`** — let the
+		// sequence assign one. The `id` fields below are retained only because
+		// those rows already exist in the wild at those ids; migration 0092
+		// backfills their seedKey by (id, name) so they keep matching.
 		const defaultSamplingConfigs: Partial<SelectSamplingConfig>[] = [
 			{
-				id: 1,
+				id: 1, // Only include ID because this is a pre-seeded row before seedKey existed.
+				seedKey: "sampling-default",
 				name: "Default",
-				isImmutable: true
+				isImmutable: true,
+				// 8192, not the column default of 4096. This app front-loads the
+				// system block — character cards as JSON, world lore, history,
+				// the narrative graph, RAG hits — which is routinely 1.5–3k
+				// tokens before a single message, so 4096 spends over half the
+				// window before the roleplay starts and truncates within a few
+				// exchanges.
+				//
+				// Not higher, because this value does not mean the same thing on
+				// every backend (samplerMappings.ts). KoboldCPP treats it as a
+				// per-request cap and clamps it further to the server's
+				// true_max_context_length, but Ollama maps it to `num_ctx`, which
+				// ALLOCATES KV cache with no clamp. The ceiling is therefore set
+				// by the weakest machine that can run local RP at all: an 8GB
+				// card holding an 8B at Q4 has ~2.5GB spare, and 8k of KV cache
+				// on that model is ~1GB. 16k is the better experience and the
+				// wrong default.
+				contextTokens: 8192
 			},
 			{
-				id: 2,
+				id: 2, // Only include ID because this is a pre-seeded row before seedKey existed.
+				seedKey: "sampling-disabled",
 				name: "Disabled",
 				isImmutable: true,
 				temperatureEnabled: false,
 				contextTokensEnabled: false,
 				responseTokensEnabled: false
+			},
+			{
+				// NO `id` — the sequence assigns one. This is the first default
+				// added since seedKey landed, and it is precisely the shape that
+				// caused the incident described above: an extraction preset
+				// appended at a hardcoded id 3, which was a real user's own
+				// config.
+				seedKey: "sampling-precise-extraction",
+				name: "Precise (Extraction)",
+				isImmutable: true,
+				// For structured extraction — graph relationship passes, scene
+				// cast, summarisation — not for roleplay. Measured against a
+				// roleplay-finetuned 26B on the narrative graph build: with the
+				// creative defaults the model answered in prose roughly 45% of
+				// the time and 22 of 28 relationships were discarded; with these
+				// values plus constrained decoding it was 28-30 kept and 0-1
+				// discarded.
+				//
+				// Every sampler below is set AND enabled explicitly, because
+				// almost every `*Enabled` column defaults to false (schema.ts) —
+				// a value without its flag is inert.
+				temperature: 0.2,
+				temperatureEnabled: true,
+				topP: 0.9,
+				topPEnabled: true,
+				topK: 20,
+				topKEnabled: true,
+				// The creative-writing samplers stay off. XTC deliberately drops
+				// high-probability tokens and DRY penalises repeated strings —
+				// both are actively harmful when the wanted output is a rigid,
+				// repetitive JSON shape with a fixed key order.
+				xtcProbabilityEnabled: false,
+				dryMultiplierEnabled: false,
+				mirostatEnabled: false,
+				// Extraction reads a scene and emits a small object; it needs
+				// room to read, not to write.
+				contextTokens: 8192,
+				contextTokensEnabled: true,
+				responseTokens: 1024,
+				responseTokensEnabled: true
 			}
 		]
 
 		const samplingConfigQueries: Promise<any>[] = []
 
 		defaultSamplingConfigs.forEach((data) => {
-			const found = existingSamplingConfigs.find((c) => c.id === data.id)
+			const found = existingSamplingConfigs.find(
+				(c) => c.seedKey === data.seedKey
+			)
 
 			if (!found) {
 				samplingConfigQueries.push(
@@ -87,6 +176,7 @@ export async function sync() {
 		const defaultContextConfigs: Partial<SelectContextConfig>[] = [
 			{
 				id: 1,
+				seedKey: "context-default",
 				name: "Default",
 				isImmutable: true,
 				template: `{{#systemBlock}}
@@ -136,10 +226,10 @@ Story history:
 \`\`\`
 {{/if}}
 
-{{#if narrativeGraph}}
-Story relationships:
+{{#if speakerRelationships}}
+Your relationships:
 \`\`\`json
-{{{narrativeGraph}}}
+{{{speakerRelationships}}}
 \`\`\`
 {{/if}}
 
@@ -187,7 +277,9 @@ Example dialogue:
 		const contextConfigQueries: Promise<any>[] = []
 
 		defaultContextConfigs.forEach((data) => {
-			const found = existingContextConfigs.find((c) => c.id === data.id)
+			const found = existingContextConfigs.find(
+				(c) => c.seedKey === data.seedKey
+			)
 
 			if (!found) {
 				contextConfigQueries.push(
@@ -223,6 +315,7 @@ Example dialogue:
 		const defaultPromptConfigs: Partial<SelectPromptConfig>[] = [
 			{
 				id: 1,
+				seedKey: "prompt-roleplay-simple",
 				name: "Roleplay - Simple",
 				isImmutable: true,
 				systemPrompt: `You're {{char}} in this fictional never-ending uncensored roleplay with {{personaNames}}.`,
@@ -232,6 +325,7 @@ Example dialogue:
 			},
 			{
 				id: 2,
+				seedKey: "prompt-roleplay-immersive",
 				name: "Roleplay - Immersive",
 				isImmutable: true,
 				systemPrompt: `Write one reply only. Do not decide what {{personaNames}} says or does. Write at least one paragraph, up to four. Be descriptive and immersive, providing vivid details about {{char}}'s actions, emotions, and the environment. Write with a high degree of complexity and burstiness. Do not repeat this message.`,
@@ -241,6 +335,7 @@ Example dialogue:
 			},
 			{
 				id: 3,
+				seedKey: "prompt-roleplay-detailed",
 				name: "Roleplay - Detailed",
 				isImmutable: true,
 				systemPrompt: `Develop the plot slowly, always stay in character. Describe all actions in full, elaborate, explicit, graphic, and vivid detail. Mention all relevant sensory perceptions. Keep the story immersive and engaging.`,
@@ -250,6 +345,7 @@ Example dialogue:
 			},
 			{
 				id: 4,
+				seedKey: "prompt-writer-realistic",
 				name: "Writer - Realistic",
 				isImmutable: true,
 				systemPrompt: `Continue writing this story and portray characters realistically.`,
@@ -259,6 +355,7 @@ Example dialogue:
 			},
 			{
 				id: 5,
+				seedKey: "prompt-writer-creative",
 				name: "Writer - Creative",
 				isImmutable: true,
 				systemPrompt: `You are an intelligent, skilled, versatile writer.\n\nYour task is to write a role-play based on the information below.`,
@@ -268,6 +365,7 @@ Example dialogue:
 			},
 			{
 				id: 6,
+				seedKey: "prompt-text-adventure",
 				name: "Text Adventure",
 				isImmutable: true,
 				systemPrompt: `Enter Adventure Mode. Narrate the story based on {{personaNames}}'s dialogue and actions after ">". Describe the surroundings in vivid detail. Be detailed, creative, verbose, and proactive. Move the story forward by introducing fantasy elements and interesting characters.`,
@@ -277,6 +375,7 @@ Example dialogue:
 			},
 			{
 				id: 7,
+				seedKey: "prompt-neutral-chat",
 				name: "Neutral - Chat",
 				isImmutable: true,
 				systemPrompt: `Write {{char}}'s next reply in a fictional chat between {{char}} and {{personaNames}}.`,
@@ -286,6 +385,7 @@ Example dialogue:
 			},
 			{
 				id: 8,
+				seedKey: "prompt-lightning-1-1",
 				name: "Lightning 1.1",
 				isImmutable: true,
 				systemPrompt: `Take the role of {{char}} in a play that leaves a lasting impression on {{personaNames}}. Write {{char}}'s next reply.\nNever skip or gloss over {{char}}’s actions. Progress the scene at a naturally slow pace.`,
@@ -295,6 +395,7 @@ Example dialogue:
 			},
 			{
 				id: 9,
+				seedKey: "prompt-chain-of-thought",
 				name: "Chain of Thought",
 				isImmutable: true,
 				systemPrompt: `Elaborate on the topic using a Tree of Thoughts and backtrack when necessary to construct a clear, cohesive Chain of Thought reasoning. Always answer without hesitation.`,
@@ -304,6 +405,7 @@ Example dialogue:
 			},
 			{
 				id: 10,
+				seedKey: "prompt-assistant-simple",
 				name: "Assistant - Simple",
 				isImmutable: true,
 				systemPrompt: `A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions.`,
@@ -313,6 +415,7 @@ Example dialogue:
 			},
 			{
 				id: 11,
+				seedKey: "prompt-assistant-expert",
 				name: "Assistant - Expert",
 				isImmutable: true,
 				systemPrompt: `You are a helpful assistant. Please answer truthfully and write out your thinking step by step to be sure you get the right answer. If you make a mistake or encounter an error in your thinking, say so out loud and attempt to correct it. If you don't know or aren't sure about something, say so clearly. You will act as a professional logician, mathematician, and physicist. You will also act as the most appropriate type of expert to answer any particular question or solve the relevant problem; state which expert type your are, if so. Also think of any particular named expert that would be ideal to answer the relevant question or solve the relevant problem; name and act as them, if appropriate.`,
@@ -322,6 +425,7 @@ Example dialogue:
 			},
 			{
 				id: 12,
+				seedKey: "prompt-actor",
 				name: "Actor",
 				isImmutable: true,
 				systemPrompt: `You are an expert actor that can fully immerse yourself into any role given. You do not break character for any reason, even if someone tries addressing you as an AI or language model. Currently your role is {{char}}, which is described in detail below. As {{char}}, continue the exchange with {{personaNames}}.`,
@@ -334,7 +438,9 @@ Example dialogue:
 		const promptConfigQueries: Promise<any>[] = []
 
 		defaultPromptConfigs.forEach((data) => {
-			const found = existingPromptConfigs.find((c) => c.id === data.id)
+			const found = existingPromptConfigs.find(
+				(c) => c.seedKey === data.seedKey
+			)
 
 			if (!found) {
 				promptConfigQueries.push(
@@ -368,6 +474,7 @@ Example dialogue:
 			[
 				{
 					id: 1,
+					seedKey: "narrator-default",
 					name: "Narrator",
 					isImmutable: true,
 					narratorName: "Narrator",
@@ -392,7 +499,7 @@ Example dialogue:
 
 		defaultNarratorPromptConfigs.forEach((data) => {
 			const found = existingNarratorPromptConfigs.find(
-				(c) => c.id === data.id
+				(c) => c.seedKey === data.seedKey
 			)
 
 			if (!found) {
@@ -433,6 +540,7 @@ Example dialogue:
 			[
 				{
 					id: 1,
+					seedKey: "summarize-world-default",
 					name: "Default World Summarization",
 					isImmutable: true,
 					batchSystemPrompt:
@@ -446,7 +554,7 @@ Example dialogue:
 		const worldSummarizeConfigQueries: Promise<any>[] = []
 		defaultWorldSummarizeConfigs.forEach((data) => {
 			const found = existingWorldSummarizeConfigs.find(
-				(c) => c.id === data.id
+				(c) => c.seedKey === data.seedKey
 			)
 			if (!found) {
 				worldSummarizeConfigQueries.push(
@@ -476,6 +584,7 @@ Example dialogue:
 			[
 				{
 					id: 1,
+					seedKey: "summarize-character-default",
 					name: "Default Character Summarization",
 					isImmutable: true,
 					batchSystemPrompt:
@@ -489,7 +598,7 @@ Example dialogue:
 		const characterSummarizeConfigQueries: Promise<any>[] = []
 		defaultCharacterSummarizeConfigs.forEach((data) => {
 			const found = existingCharacterSummarizeConfigs.find(
-				(c) => c.id === data.id
+				(c) => c.seedKey === data.seedKey
 			)
 			if (!found) {
 				characterSummarizeConfigQueries.push(
@@ -521,6 +630,7 @@ Example dialogue:
 			[
 				{
 					id: 1,
+					seedKey: "summarize-scene-default",
 					name: "Default Scene Summarization",
 					isImmutable: true,
 					batchSystemPrompt:
@@ -536,7 +646,7 @@ Example dialogue:
 		const sceneSummarizeConfigQueries: Promise<any>[] = []
 		defaultSceneSummarizeConfigs.forEach((data) => {
 			const found = existingSceneSummarizeConfigs.find(
-				(c) => c.id === data.id
+				(c) => c.seedKey === data.seedKey
 			)
 			if (!found) {
 				sceneSummarizeConfigQueries.push(
@@ -558,32 +668,44 @@ Example dialogue:
 		})
 		await Promise.all(sceneSummarizeConfigQueries)
 
-		// Graph Build Configs — unlike the summarize/prompt configs above, this
-		// table isn't wired into any feature yet (narrativeGraphBuildHandler
-		// currently takes connection/sampling directly rather than resolving
-		// them from a graphBuildConfigs row) — seeded for schema completeness
-		// and so systemSettings.defaultGraphBuildConfigId isn't left dangling
-		// at null, matching every sibling immutable-config table's convention.
+		// Graph Build Configs. The prompts come from utils/graphPrompts.ts, the
+		// same module graphBuilder falls back to, so the seeded default and the
+		// code default cannot drift — they previously had, this row holding
+		// one-line stubs bearing no resemblance to what was actually sent.
+		//
+		// This row is immutable and re-synced on every boot by the update
+		// branch below, so editing graphPrompts.ts is all it takes to ship a
+		// new default prompt to existing installs.
 
 		const existingGraphBuildConfigs =
 			await db.query.graphBuildConfigs.findMany()
 		const defaultGraphBuildConfigs: Partial<SelectGraphBuildConfig>[] = [
 			{
 				id: 1,
+				seedKey: "graph-build-default",
 				name: "Default Graph Build",
 				isImmutable: true,
 				nodeResolutionSystemPrompt:
-					"You resolve whether a character mentioned in a scene is a new entity or an existing one already tracked in the narrative graph. Compare names, aliases, and context carefully before deciding.",
-				preFilterSystemPrompt:
-					"You screen a scene summary for characters worth tracking in the narrative graph, filtering out incidental mentions with no lasting relationship significance.",
+					DEFAULT_GRAPH_NODE_RESOLUTION_SYSTEM_PROMPT,
+				preFilterSystemPrompt: DEFAULT_GRAPH_PRE_FILTER_SYSTEM_PROMPT,
 				perspectiveSystemPrompt:
-					"You extract relationship changes from a scene, written from one character's perspective — what they learned, felt, or how their relationship to others present changed."
+					DEFAULT_GRAPH_PERSPECTIVE_SYSTEM_PROMPT,
+				nodeDescriptionSystemPrompt:
+					DEFAULT_GRAPH_NODE_DESCRIPTION_SYSTEM_PROMPT,
+				stateDetectionSystemPrompt:
+					DEFAULT_GRAPH_STATE_DETECTION_SYSTEM_PROMPT
+				// Deliberately NO per-sub-task connection/sampling pointers here.
+				//
+				// The upsert below re-forces every field in this literal on every
+				// boot, so a pointer set here would silently revert a user's own
+				// choice each restart once this table gets a UI. Pointers are
+				// theirs to set; the seed owns the prompts only.
 			}
 		]
 		const graphBuildConfigQueries: Promise<any>[] = []
 		defaultGraphBuildConfigs.forEach((data) => {
 			const found = existingGraphBuildConfigs.find(
-				(c) => c.id === data.id
+				(c) => c.seedKey === data.seedKey
 			)
 			if (!found) {
 				graphBuildConfigQueries.push(
@@ -612,6 +734,7 @@ Example dialogue:
 		const defaultUsers: Partial<SelectUser>[] = [
 			{
 				id: 1,
+				seedKey: "user-admin",
 				username: "admin",
 				isAdmin: true
 			}
@@ -620,7 +743,7 @@ Example dialogue:
 		const userQueries: Promise<any>[] = []
 
 		defaultUsers.forEach((data) => {
-			const found = existingUsers.find((c) => c.id === data.id)
+			const found = existingUsers.find((c) => c.seedKey === data.seedKey)
 
 			if (!found) {
 				userQueries.push(
@@ -677,10 +800,30 @@ Example dialogue:
 	// name is displayed. Naturally idempotent and cheap after the first
 	// run: once the import path syncs on insert, this matches nothing on
 	// every subsequent boot.
+	//
+	// `db` is passed explicitly and MUST stay that way — it is not a
+	// redundant argument. sync() runs at module scope of db/index.ts (its
+	// `await sync()`), so this executes while that module is still
+	// evaluating. Omitting the instance makes characterBindingSync fall back
+	// to its `defaultDb()`, which does `await import("$lib/server/db")` —
+	// re-entering the very module we are suspended inside. Unbundled ESM
+	// tolerates that (it hands back the partial namespace, and `db` is
+	// already assigned by then), but Rollup emits the chunk's namespace
+	// object as a `const` AFTER the module body, so the same call throws
+	// `ReferenceError: Cannot access 'index' before initialization` in a
+	// packaged build — silently skipping this repair on every startup.
+	// `db` is demonstrably live here: sync() has already queried through it
+	// dozens of times above, and does so again immediately below.
 	try {
-		await backfillMissingBindingNames()
+		await backfillMissingBindingNames(db)
 	} catch (error) {
 		console.error("Error backfilling lorebook binding names:", error)
+	}
+
+	try {
+		await backfillRelationshipHistoryEntries(db)
+	} catch (error) {
+		console.error("Error backfilling relationship history entries:", error)
 	}
 
 	try {
@@ -697,6 +840,18 @@ Example dialogue:
 	}
 
 	try {
+		// Looked up by seedKey rather than assumed to be id 1. The graph build
+		// config is the one every graph LLM step resolves its prompt, model and
+		// sampling through, so a system default pointing at the wrong row (or at
+		// no row) silently sends every step back to the chat defaults — which is
+		// the failure this whole config type exists to prevent. Nothing
+		// guarantees the seeded row is at id 1 once defaults are added without
+		// hardcoded ids, which is now the rule.
+		const seededGraphBuildConfig =
+			await db.query.graphBuildConfigs.findFirst({
+				where: (c, { eq }) => eq(c.seedKey, "graph-build-default")
+			})
+
 		const res = await db.query.systemSettings.findFirst({
 			where: (s, { eq }) => eq(s.id, 1)
 		})
@@ -708,7 +863,7 @@ Example dialogue:
 				defaultContextConfigId: 1,
 				defaultPromptConfigId: firstPromptConfig?.id,
 				defaultNarratorPromptConfigId: firstNarratorPromptConfig?.id,
-				defaultGraphBuildConfigId: 1
+				defaultGraphBuildConfigId: seededGraphBuildConfig?.id
 			})
 		} else {
 			if (!res.defaultNarratorPromptConfigId) {
@@ -716,14 +871,21 @@ Example dialogue:
 				await db
 					.update(schema.systemSettings)
 					.set({
-						defaultNarratorPromptConfigId: firstNarratorPromptConfig?.id
+						defaultNarratorPromptConfigId:
+							firstNarratorPromptConfig?.id
 					})
 					.where(eq(schema.systemSettings.id, 1))
 			}
-			if (!res.defaultGraphBuildConfigId) {
+			// Backfilled on every boot while unset, so an install that predates
+			// the graph config — or one whose selection was cleared by the
+			// referencing row being deleted (onDelete: "set null") — picks the
+			// seeded default back up rather than staying unconfigured.
+			if (!res.defaultGraphBuildConfigId && seededGraphBuildConfig) {
 				await db
 					.update(schema.systemSettings)
-					.set({ defaultGraphBuildConfigId: 1 })
+					.set({
+						defaultGraphBuildConfigId: seededGraphBuildConfig.id
+					})
 					.where(eq(schema.systemSettings.id, 1))
 			}
 		}

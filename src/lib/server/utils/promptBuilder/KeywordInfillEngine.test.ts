@@ -80,9 +80,14 @@ describe("KeywordInfillEngine — reserve phase (pinned/constant entries)", () =
 	})
 
 	test("constant history entry is always included", async () => {
-		const he = historyEntry({ content: "The founding of the city.", year: 500 })
+		const he = historyEntry({
+			content: "The founding of the city.",
+			year: 500
+		})
 		const chat = buildChat({
-			lorebook: buildLorebook({ historyEntries: [{ ...he, constant: true }] })
+			lorebook: buildLorebook({
+				historyEntries: [{ ...he, constant: true }]
+			})
 		})
 		const engine = makeEngine(chat)
 		const result = await engine.infillContent(makeInfillOptions())
@@ -115,7 +120,9 @@ describe("KeywordInfillEngine — reserve phase (pinned/constant entries)", () =
 		// Generating as a different character — private, excluded even though pinned.
 		const asOther = makeEngine(chat, 2)
 		const otherResult = await asOther.infillContent(makeInfillOptions())
-		expect(otherResult.renderedPrompt).not.toContain("Alice's Pinned Secret")
+		expect(otherResult.renderedPrompt).not.toContain(
+			"Alice's Pinned Secret"
+		)
 		expect((otherResult.rag as any).lore.characterLore.pinned).toBe(0)
 	})
 
@@ -191,7 +198,9 @@ describe("KeywordInfillEngine — character-lore privacy", () => {
 				lorebookBindings: [binding],
 				characterLoreEntries: [{ ...lore, constant: true }]
 			}),
-			chatPersonas: chatPersonaIds.map((id) => chatPersona(persona({ id })))
+			chatPersonas: chatPersonaIds.map((id) =>
+				chatPersona(persona({ id }))
+			)
 		})
 	}
 
@@ -227,7 +236,10 @@ describe("KeywordInfillEngine — character-lore privacy", () => {
 	})
 
 	test("persona-bound entry is invisible when that persona is not in the chat", async () => {
-		const chat = chatWithBoundLore({ bindingPersonaId: 99, chatPersonaIds: [] })
+		const chat = chatWithBoundLore({
+			bindingPersonaId: 99,
+			chatPersonaIds: []
+		})
 		const engine = makeEngine(chat, 1)
 		const result = await engine.infillContent(makeInfillOptions())
 		expect(result.renderedPrompt).not.toContain("Bound Lore")
@@ -262,7 +274,9 @@ describe("KeywordInfillEngine — character-lore privacy", () => {
 
 	test("world lore is never gated by character-lore privacy", async () => {
 		const wle = worldLoreEntry({ name: "Public Fact", constant: true })
-		const chat = buildChat({ lorebook: buildLorebook({ worldLoreEntries: [wle] }) })
+		const chat = buildChat({
+			lorebook: buildLorebook({ worldLoreEntries: [wle] })
+		})
 		// Even with no current character (Narrator) and no chat roster at all,
 		// world lore is unconditionally public.
 		const engine = makeEngine(chat, null)
@@ -273,7 +287,10 @@ describe("KeywordInfillEngine — character-lore privacy", () => {
 
 describe("KeywordInfillEngine — scoring", () => {
 	test("priority bonus is additive and exact: VeryHigh − Normal = 0.30", async () => {
-		const guaranteedMsg = chatMessage({ id: 1, content: "tell me about zzzmatch now" })
+		const guaranteedMsg = chatMessage({
+			id: 1,
+			content: "tell me about zzzmatch now"
+		})
 		const normal = worldLoreEntry({
 			name: "Normal Priority Entry",
 			keys: "zzzmatch",
@@ -300,12 +317,20 @@ describe("KeywordInfillEngine — scoring", () => {
 	})
 
 	test("keyword match increases score over a non-matching entry", async () => {
-		const guaranteedMsg = chatMessage({ id: 1, content: "the ancient relic glows" })
+		const guaranteedMsg = chatMessage({
+			id: 1,
+			content: "the ancient relic glows"
+		})
 		const matching = worldLoreEntry({ name: "Relic Lore", keys: "relic" })
-		const nonMatching = worldLoreEntry({ name: "Unrelated Lore", keys: "spaceship" })
+		const nonMatching = worldLoreEntry({
+			name: "Unrelated Lore",
+			keys: "spaceship"
+		})
 		const chat = buildChat({
 			chatMessages: [guaranteedMsg],
-			lorebook: buildLorebook({ worldLoreEntries: [matching, nonMatching] })
+			lorebook: buildLorebook({
+				worldLoreEntries: [matching, nonMatching]
+			})
 		})
 		const engine = makeEngine(chat)
 		const result = await engine.infillContent(makeInfillOptions())
@@ -333,8 +358,13 @@ describe("KeywordInfillEngine — scoring", () => {
 	})
 
 	test("disabled entries are excluded and reported with excluded_disabled", async () => {
-		const disabled = worldLoreEntry({ name: "Disabled Fact", enabled: false })
-		const chat = buildChat({ lorebook: buildLorebook({ worldLoreEntries: [disabled] }) })
+		const disabled = worldLoreEntry({
+			name: "Disabled Fact",
+			enabled: false
+		})
+		const chat = buildChat({
+			lorebook: buildLorebook({ worldLoreEntries: [disabled] })
+		})
 		const engine = makeEngine(chat)
 		const result = await engine.infillContent(makeInfillOptions())
 		expect(result.renderedPrompt).not.toContain("Disabled Fact")
@@ -345,8 +375,16 @@ describe("KeywordInfillEngine — scoring", () => {
 
 	test("position breaks ties between equally-scored entries in fill order", async () => {
 		// Both entries have identical, non-matching keys → tied score.total === 0.
-		const first = worldLoreEntry({ name: "Entry Low Position", keys: "", position: 0 })
-		const second = worldLoreEntry({ name: "Entry High Position", keys: "", position: 5 })
+		const first = worldLoreEntry({
+			name: "Entry Low Position",
+			keys: "",
+			position: 0
+		})
+		const second = worldLoreEntry({
+			name: "Entry High Position",
+			keys: "",
+			position: 5
+		})
 		const chat = buildChat({
 			// Insert in reverse so a naive "array order" pass would get it backwards.
 			lorebook: buildLorebook({ worldLoreEntries: [second, first] })
@@ -367,7 +405,9 @@ describe("KeywordInfillEngine — budget and messages", () => {
 		const entries = Array.from({ length: 25 }, (_, i) =>
 			worldLoreEntry({ name: `Entry ${i}`, keys: "" })
 		)
-		const chat = buildChat({ lorebook: buildLorebook({ worldLoreEntries: entries }) })
+		const chat = buildChat({
+			lorebook: buildLorebook({ worldLoreEntries: entries })
+		})
 		const engine = makeEngine(chat)
 		const result = await engine.infillContent(makeInfillOptions())
 		expect((result.rag as any).lore.worldLore.included).toBe(20)
@@ -376,7 +416,11 @@ describe("KeywordInfillEngine — budget and messages", () => {
 
 	test("the last MIN_GUARANTEED_MESSAGES(10) messages are always included", async () => {
 		const messages = Array.from({ length: 15 }, (_, i) =>
-			chatMessage({ id: i + 1, content: `message ${i + 1}`, role: "user" })
+			chatMessage({
+				id: i + 1,
+				content: `message ${i + 1}`,
+				role: "user"
+			})
 		)
 		const chat = buildChat({ chatMessages: messages })
 		const engine = makeEngine(chat)
@@ -423,7 +467,10 @@ describe("KeywordInfillEngine — budget and messages", () => {
 
 		// Generous tokenLimit either way — only contextThresholdPercent differs.
 		const full = await makeEngine(chat).infillContent(
-			makeInfillOptions({ tokenLimit: 100_000, contextThresholdPercent: 1 })
+			makeInfillOptions({
+				tokenLimit: 100_000,
+				contextThresholdPercent: 1
+			})
 		)
 		const constrained = await makeEngine(chat).infillContent(
 			makeInfillOptions({
@@ -442,7 +489,11 @@ describe("KeywordInfillEngine — budget and messages", () => {
 describe("KeywordInfillEngine — post-history block", () => {
 	function makeFiveMessageChat() {
 		const messages = Array.from({ length: 5 }, (_, i) =>
-			chatMessage({ id: i + 1, content: `message ${i + 1}`, role: "user" })
+			chatMessage({
+				id: i + 1,
+				content: `message ${i + 1}`,
+				role: "user"
+			})
 		)
 		return buildChat({ chatMessages: messages })
 	}
@@ -539,7 +590,11 @@ describe("KeywordInfillEngine — post-history block", () => {
 })
 
 describe("KeywordInfillEngine — narrative graph tiering", () => {
-	test("chat-roster relationships fill first, then bridging, then the rest are capped at MAX_GRAPH_PAIRS", async () => {
+	// Skipped while NARRATIVE_GRAPH_CONTEXT_ENABLED is false — the
+	// {{narrativeGraph}} block is switched off, so there is nothing to tier
+	// or trim. Kept rather than deleted: this is the coverage whoever flips
+	// that flag back on will need, and it should be re-enabled with it.
+	test.skip("chat-roster relationships fill first, then bridging, then the rest are capped at MAX_GRAPH_PAIRS", async () => {
 		const user = await makeUser()
 		const lorebook = await insertLorebook(testDb, user.id)
 
@@ -557,10 +612,14 @@ describe("KeywordInfillEngine — narrative graph tiering", () => {
 		const allChars = [charA, charB, charC, ...outsiders]
 		const bindings: Record<number, any> = {}
 		for (const c of allChars) {
-			bindings[c.id] = await insertLorebookBindingRow(testDb, lorebook.id, {
-				characterId: c.id,
-				binding: `{{char:${c.id}}}`
-			})
+			bindings[c.id] = await insertLorebookBindingRow(
+				testDb,
+				lorebook.id,
+				{
+					characterId: c.id,
+					binding: `{{char:${c.id}}}`
+				}
+			)
 		}
 		const nodes: Record<number, any> = {}
 		for (const c of allChars) {
@@ -614,7 +673,9 @@ describe("KeywordInfillEngine — narrative graph tiering", () => {
 		})
 		const engine = makeEngine(chat, charA.id)
 		const result = await engine.infillContent(makeInfillOptions())
-		const graphMatch = result.renderedPrompt!.match(/GRAPH:([\s\S]*?)\nMESSAGES:/)
+		const graphMatch = result.renderedPrompt!.match(
+			/GRAPH:([\s\S]*?)\nMESSAGES:/
+		)
 		expect(graphMatch).toBeTruthy()
 		const graph = JSON.parse(graphMatch![1].trim())
 
@@ -634,7 +695,11 @@ describe("KeywordInfillEngine — narrative graph tiering", () => {
 })
 
 describe("KeywordInfillEngine — narrative graph token budget", () => {
-	test("narrative graph is trimmed under a tight budget instead of being appended after enforcement", async () => {
+	// Skipped while NARRATIVE_GRAPH_CONTEXT_ENABLED is false — the
+	// {{narrativeGraph}} block is switched off, so there is nothing to tier
+	// or trim. Kept rather than deleted: this is the coverage whoever flips
+	// that flag back on will need, and it should be re-enabled with it.
+	test.skip("narrative graph is trimmed under a tight budget instead of being appended after enforcement", async () => {
 		const user = await makeUser()
 		const lorebook = await insertLorebook(testDb, user.id)
 
@@ -694,7 +759,9 @@ describe("KeywordInfillEngine — narrative graph token budget", () => {
 			makeInfillOptions({ tokenLimit: full.totalTokens - 1 })
 		)
 		expect(constrained.renderedPrompt).not.toMatch(/GRAPH:\{/)
-		expect(constrained.totalTokens).toBeLessThanOrEqual(full.totalTokens - 1)
+		expect(constrained.totalTokens).toBeLessThanOrEqual(
+			full.totalTokens - 1
+		)
 		expect(constrained.renderedPrompt).toContain("Hello there.")
 	})
 })

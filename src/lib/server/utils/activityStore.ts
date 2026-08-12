@@ -19,6 +19,14 @@ export type GraphBuildActivity = {
 	sceneLabels?: string[]
 	seedTempIdMap?: Record<string, number>
 	seedNodeNames?: Record<string, string>
+	/**
+	 * Why the relationship count came out as it did. Rides here rather than
+	 * inside `proposal` because it describes the run, not the data being
+	 * applied — apply must never see it.
+	 */
+	relationshipDiagnostics?: Sockets.NarrativeGraph.RelationshipDiagnostics
+	/** Proposed names screened out as World Lore subjects — reported, not dropped. */
+	filteredWorldLoreNames?: string[]
 	errorMessage?: string
 	errorRaw?: string
 	startedAt: string
@@ -66,7 +74,6 @@ export type CompileHistoryEntryActivity = {
 	pendingResult?: { content: string }
 	startedAt: string
 }
-
 
 export type Activity =
 	| GraphBuildActivity

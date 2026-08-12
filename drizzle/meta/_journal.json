@@ -645,6 +645,20 @@
       "when": 1786339222729,
       "tag": "0091_nifty_whirlwind",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1786499992356,
+      "tag": "0092_worthless_sabretooth",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1786511598724,
+      "tag": "0093_green_bushwacker",
+      "breakpoints": true
     }
   ]
 }

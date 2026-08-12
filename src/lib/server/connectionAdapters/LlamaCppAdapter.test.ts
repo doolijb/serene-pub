@@ -65,7 +65,9 @@ describe("LlamaCppAdapter — base URL trailing-slash normalization", () => {
 	})
 
 	test("testConnection() reports a network error", async () => {
-		vi.mocked(axios.get).mockRejectedValue(new Error("connect ECONNREFUSED"))
+		vi.mocked(axios.get).mockRejectedValue(
+			new Error("connect ECONNREFUSED")
+		)
 		const result = await exportsDefault.testConnection(makeConnection())
 		expect(result.ok).toBe(false)
 		expect(result.error).toContain("ECONNREFUSED")
@@ -78,9 +80,7 @@ describe("LlamaCppAdapter — base URL trailing-slash normalization", () => {
 		const result = await exportsDefault.listModels(
 			makeConnection({ baseUrl: "http://localhost:8080///" })
 		)
-		expect(axios.get).toHaveBeenLastCalledWith(
-			"http://localhost:8080/show"
-		)
+		expect(axios.get).toHaveBeenLastCalledWith("http://localhost:8080/show")
 		expect(result.models[0].model).toBe("some-model.gguf")
 	})
 })

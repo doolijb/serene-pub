@@ -105,8 +105,18 @@ This is the thing that sets Serene Pub apart from almost everything else in the 
   <br/><sub><b>Bindings</b><br/>Bind your cast to <code>{{char:N}}</code> tokens usable across every entry.</sub>
 </td>
 <td width="33%" align="center" valign="top">
-  <a href="docs-assets/screenshots/lorebooks-narrative-graph.png"><img src="docs-assets/screenshots/lorebooks-narrative-graph.png" width="100%" alt="The narrative graph showing character nodes"/></a>
+  <a href="docs-assets/screenshots/lorebooks-narrative-graph.png"><img src="docs-assets/screenshots/lorebooks-narrative-graph.png" width="100%" alt="The narrative graph, showing characters linked by typed, directional relationships such as distrust, rivalry and grudge"/></a>
   <br/><sub><b>Narrative Graph</b><br/>Who knows whom, and how — replies generated from each character’s vantage point.</sub>
+</td>
+</tr>
+<tr>
+<td width="33%" align="center" valign="top">
+  <a href="docs-assets/screenshots/lorebooks-graph-traversal.png"><img src="docs-assets/screenshots/lorebooks-graph-traversal.png" width="100%" alt="One character selected in the narrative graph, dimming everyone they have no relationship with"/></a>
+  <br/><sub><b>Graph Traversal</b><br/>Select anyone to isolate just the ties they actually hold.</sub>
+</td>
+<td width="33%" align="center" valign="top">
+  <a href="docs-assets/screenshots/lorebooks-graph-relationships.png"><img src="docs-assets/screenshots/lorebooks-graph-relationships.png" width="100%" alt="The relationship list, each entry showing a description and the source text it was drawn from"/></a>
+  <br/><sub><b>Relationships</b><br/>Every edge cites the moment it came from — review before anything is saved.</sub>
 </td>
 <td width="33%" align="center" valign="top">
   <a href="docs-assets/screenshots/setup-wizard-embeddings.png"><img src="docs-assets/screenshots/setup-wizard-embeddings.png" width="100%" alt="Choosing a local embedding model for retrieval"/></a>

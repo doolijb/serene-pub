@@ -295,6 +295,12 @@ export class PromptBuilder {
 		}
 	}
 
+	/**
+	 * Speaker-centric relationship JSON, rendered as its own template block.
+	 * Set from compilePrompt; see TemplateContext.speakerRelationships.
+	 */
+	speakerRelationships?: string
+
 	buildContextData(currentCharacter: SelectCharacter | null) {
 		const chatCharacters = this.chat.chatCharacters as
 			| (SelectChatCharacter & { character: SelectCharacter })[]
@@ -334,7 +340,8 @@ export class PromptBuilder {
 		this.charExampleDialogue = this.exampleDialogue
 		this.promptPostHistoryInstructions =
 			this.contextBuildPromptPostHistoryInstructions()
-		this.charPostHistory = this.contextBuildCharPostHistory(currentCharacter)
+		this.charPostHistory =
+			this.contextBuildCharPostHistory(currentCharacter)
 		this.postHistoryDepth =
 			(this.promptConfig as { postHistoryDepth?: number })
 				.postHistoryDepth ?? 0
@@ -413,6 +420,8 @@ export class PromptBuilder {
 	}: any): TemplateContext {
 		return {
 			instructions,
+			// Flows to both infill engines, which spread this object.
+			speakerRelationships: this.speakerRelationships,
 			characters: charactersInterpolated,
 			personas: personasInterpolated,
 			// Plain, human-readable "A, B, and C" joined lists — distinct from
@@ -553,13 +562,16 @@ export class PromptBuilder {
 	// --- Main compilePrompt ---
 	async compilePrompt({
 		useChatFormat = false,
-		extraInstructions
+		extraInstructions,
+		speakerRelationships
 	}: {
 		useChatFormat?: boolean
 		/** Ad hoc text appended to the system prompt for this compile only —
 		 * e.g. the Narrator's optional per-trigger focus note. Not persisted
 		 * on the prompt config itself. */
 		extraInstructions?: string
+		/** Rendered in its own block — NOT merged into instructions. */
+		speakerRelationships?: string
 	}): Promise<CompiledPrompt> {
 		this.registerHandlebarsHelpers({ useChatFormat })
 		const chatCharacters = this.chat.chatCharacters as
@@ -580,6 +592,7 @@ export class PromptBuilder {
 			)
 		}
 
+		this.speakerRelationships = speakerRelationships
 		this.buildContextData(currentCharacter)
 		if (extraInstructions) {
 			this.instructions = this.instructions
@@ -597,7 +610,8 @@ export class PromptBuilder {
 			this.postHistoryInstructions = this.postHistoryInstructions
 				? `${this.postHistoryInstructions}\n\nAdditional focus for this response: ${extraInstructions}`
 				: `Additional focus for this response: ${extraInstructions}`
-			this.promptPostHistoryInstructions = this.promptPostHistoryInstructions
+			this.promptPostHistoryInstructions = this
+				.promptPostHistoryInstructions
 				? `${this.promptPostHistoryInstructions}\n\nAdditional focus for this response: ${extraInstructions}`
 				: `Additional focus for this response: ${extraInstructions}`
 		}

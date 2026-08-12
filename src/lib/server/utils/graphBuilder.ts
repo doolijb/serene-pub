@@ -25,11 +25,24 @@ import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { runQueuedLLMCall } from "./runQueuedLLMCall"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
 import { extractCharactersFromContent } from "./summarizer"
+import { extractJson, hasJsonObject } from "./extractJson"
 import {
 	resolveCharacterRefs,
-	namesMatch
+	namesMatch,
+	distinctiveWords
 } from "./summarizer/availableSceneCast"
 import type { CastEntry, ExtractedCastRef } from "./summarizer/templates"
+import {
+	DEFAULT_GRAPH_PERSPECTIVE_SYSTEM_PROMPT,
+	GRAPH_PERSPECTIVE_RETRY_SYSTEM_PROMPT,
+	DEFAULT_GRAPH_NODE_RESOLUTION_SYSTEM_PROMPT,
+	DEFAULT_GRAPH_PRE_FILTER_SYSTEM_PROMPT,
+	DEFAULT_GRAPH_NODE_DESCRIPTION_SYSTEM_PROMPT,
+	DEFAULT_GRAPH_STATE_DETECTION_SYSTEM_PROMPT
+} from "./graphPrompts"
+import { buildPerspectiveSchema } from "./graphSchema"
+import type { JsonSchemaNode } from "$lib/server/connectionAdapters/jsonSchemaToGbnf"
+import type { ResponseFormat } from "$lib/server/connectionAdapters/BaseConnectionAdapter"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -79,6 +92,19 @@ export interface GraphBuilderSeedNode {
 	aliases?: string[]
 }
 
+/**
+ * A World Lore entry, used only to screen newly-proposed character nodes.
+ *
+ * `category` is a free-text, nullable "grouping/filter tag" (schema.ts) with no
+ * enforced taxonomy — in practice usually unset — so it cannot carry the
+ * filter. It is honoured as a one-way OPT-OUT: an entry a user has tagged as
+ * being about a person is not used to screen anything.
+ */
+export interface GraphBuilderWorldLoreEntry {
+	name: string
+	category?: string | null
+}
+
 export interface GraphBuilderSeedRelationship {
 	fromNodeId: number
 	toNodeId: number
@@ -109,16 +135,54 @@ export interface GraphBuilderResumeState {
 	proposedByName: [string, string][]
 }
 
+/** One LLM step the builder makes. Each is configurable independently. */
+export type GraphStepName =
+	| "nodeResolution"
+	| "preFilter"
+	| "perspective"
+	| "nodeDescription"
+	| "stateDetection"
+
+/** Resolved prompt + model + sampling for a single step. */
+export interface GraphStepConfig {
+	/** Empty/blank falls back to the code default in graphPrompts.ts. */
+	systemPrompt?: string | null
+	connection?: SelectConnection | null
+	sampling?: SelectSamplingConfig | null
+}
+
+/**
+ * Code fallback per step, used when no graphBuildConfigs row resolves or when
+ * its prompt column is blank — the columns default to "", so an unconfigured
+ * step must fall back rather than send an empty system prompt.
+ */
+const GRAPH_STEP_FALLBACK_PROMPT: Record<GraphStepName, string> = {
+	nodeResolution: DEFAULT_GRAPH_NODE_RESOLUTION_SYSTEM_PROMPT,
+	preFilter: DEFAULT_GRAPH_PRE_FILTER_SYSTEM_PROMPT,
+	perspective: DEFAULT_GRAPH_PERSPECTIVE_SYSTEM_PROMPT,
+	nodeDescription: DEFAULT_GRAPH_NODE_DESCRIPTION_SYSTEM_PROMPT,
+	stateDetection: DEFAULT_GRAPH_STATE_DETECTION_SYSTEM_PROMPT
+}
+
 export interface GraphBuilderInput {
 	scenes: GraphBuilderScene[]
+	/** Fallback connection/sampling for any step `steps` leaves unset. */
 	connection: SelectConnection
 	sampling: SelectSamplingConfig
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
+	/**
+	 * Per-step overrides resolved from the active graphBuildConfigs row. Absent
+	 * or partial is fine — each step independently falls back to the code
+	 * prompt and to `connection`/`sampling` above.
+	 */
+	steps?: Partial<Record<GraphStepName, GraphStepConfig>>
 	/** Existing graph nodes to seed the LLM context with (extend mode only) */
 	seedNodes?: GraphBuilderSeedNode[]
 	/** Existing relationships to seed the LLM context with (extend mode only) */
 	seedRelationships?: GraphBuilderSeedRelationship[]
+	/** World Lore entries used to screen newly-proposed character nodes. */
+	worldLore?: GraphBuilderWorldLoreEntry[]
 	onProgress?: (data: Sockets.NarrativeGraph.Build.Progress) => void
 	onLlmCall?: (entry: Sockets.NarrativeGraph.TraceEntry) => void
 	signal?: AbortSignal
@@ -150,6 +214,34 @@ export interface ResolvedSceneCast {
 	mentionedTempIds: string[]
 }
 
+/**
+ * Why a build produced the number of relationships it did.
+ *
+ * Purely diagnostic — deliberately NOT part of GraphProposal, which is the
+ * thing apply commits; this describes the run, not the data. It rides on the
+ * activity alongside sceneLabels/seedNodeNames instead.
+ */
+export interface RelationshipDiagnostics {
+	/** Perspective calls actually issued — the denominator for everything else. */
+	perspectiveCalls: number
+	/** Scenes skipped for having no second character to relate anyone to. */
+	scenesSkippedNoPair: number
+	noJson: number
+	badJson: number
+	notArray: number
+	missingType: number
+	missingTarget: number
+	/** Entries whose source was a third party, not the perspective character. */
+	wrongSource: number
+	/** Reversed pairs repaired by swapping rather than dropped. */
+	/** Perspective calls re-issued after a non-JSON response. */
+	retried: number
+	/** Retries that then produced usable JSON. */
+	retriedRecovered: number
+	/** Named targets that matched no character in their scene, deduped. */
+	unresolvedTargets: string[]
+}
+
 export interface GraphBuilderResult {
 	proposal: Sockets.NarrativeGraph.GraphProposal
 	sceneLabels: string[]
@@ -159,6 +251,14 @@ export interface GraphBuilderResult {
 	seedTempIdMap: Record<string, number>
 	/** Maps seed tempIds → display name so the review UI can label relationships involving existing nodes. */
 	seedNodeNames: Record<string, string>
+	/** Attribution for an empty or thin relationship set — see RelationshipDiagnostics. */
+	relationshipDiagnostics: RelationshipDiagnostics
+	/**
+	 * Proposed names that matched a World Lore entry and were NOT created.
+	 * Reported so a false positive is visible and recoverable — never dropped
+	 * in silence.
+	 */
+	filteredWorldLoreNames: string[]
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -209,7 +309,9 @@ async function runLLM(
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
 	},
-	label?: string
+	label?: string,
+	responseSchema?: JsonSchemaNode,
+	responseFormat: ResponseFormat = "json"
 ): Promise<string> {
 	const AdapterClass = await getConnectionAdapter(opts.connection.type)
 	// Honor the connection's own configured tokenizer — see the identical
@@ -235,6 +337,28 @@ async function runLLM(
 		tokenLimit,
 		contextThresholdPercent: 0.9
 	})
+
+	// Every call this builder makes must come back as a JSON object. Each
+	// adapter translates this into whatever its provider supports; ones that
+	// support nothing ignore it and the prompt + retry path still applies.
+	//
+	// Assigned rather than passed to the constructor on purpose — see
+	// BaseConnectionAdapter.responseFormat. The default is "text", so chat and
+	// every other caller are unaffected by this line existing.
+	// Defaults to "json" because most calls here parse one. NOT every call does:
+	// node descriptions are prose ("exactly two sentences in present tense"), and
+	// constraining those to a JSON object made the model wrap its prose to
+	// satisfy the decoder — `{"introduction": "The Glimmer-Scuttler is …"}` was
+	// stored verbatim as a node summary and rendered to the user that way. A
+	// grammar wins against the prompt, so any call whose result is not parsed as
+	// JSON must opt out here.
+	adapter.responseFormat = responseFormat
+	// When the caller supplies a shape, the constraint tightens from "any JSON
+	// object" to exactly that shape. Adapters whose providers cannot take a
+	// schema ignore it and stay at object level — see
+	// BaseConnectionAdapter.responseSchema.
+	if (responseSchema && responseFormat === "json")
+		adapter.responseSchema = responseSchema
 
 	const { text } = await runQueuedLLMCall({
 		adapter,
@@ -269,267 +393,7 @@ function formatEntryDate(entry: {
 	return label
 }
 
-// Words stripped before comparing names — honorifics, titles, filler prepositions
-const TITLE_WORDS = new Set([
-	"lord",
-	"lady",
-	"sir",
-	"dame",
-	"king",
-	"queen",
-	"prince",
-	"princess",
-	"duke",
-	"duchess",
-	"count",
-	"countess",
-	"baron",
-	"baroness",
-	"emperor",
-	"empress",
-	"captain",
-	"general",
-	"admiral",
-	"commander",
-	"the",
-	"of",
-	"von",
-	"de",
-	"van",
-	"der",
-	"el",
-	"al"
-])
-
-function distinctiveWords(name: string): string[] {
-	return name
-		.toLowerCase()
-		.trim()
-		.split(/\s+/)
-		.filter((w) => w.length > 1 && !TITLE_WORDS.has(w))
-}
-
-/**
- * Finds a single unambiguous existing entity whose distinctive name words are a
- * superset of the incoming name's distinctive words. Returns the matched tempId,
- * or undefined if zero or multiple candidates match (ambiguity → create new).
- */
-function fuzzyMatchName(
-	incomingName: string,
-	nameToTempId: Map<string, string>
-): string | undefined {
-	const incomingWords = distinctiveWords(incomingName)
-	if (incomingWords.length === 0) return undefined
-	const candidates: string[] = []
-	for (const [existingName, tempId] of nameToTempId) {
-		const existingWords = distinctiveWords(existingName)
-		if (incomingWords.every((w) => existingWords.includes(w))) {
-			candidates.push(tempId)
-		}
-	}
-	return candidates.length === 1 ? candidates[0] : undefined
-}
-
-function messageContainsName(text: string, name: string): boolean {
-	const lower = text.toLowerCase()
-	return distinctiveWords(name).some((w) => lower.includes(w))
-}
-
-function extractJson(raw: string): string {
-	const stripped = raw
-		.replace(/^```(?:json)?\s*/i, "")
-		.replace(/\s*```\s*$/, "")
-		.trim()
-	const start = stripped.indexOf("{")
-	if (start === -1)
-		throw new GraphParseError("No JSON object found in LLM response", raw)
-	// Walk forward tracking depth to find the balanced closing brace,
-	// correctly handling strings and escape sequences so embedded {} don't confuse the match.
-	let depth = 0
-	let inString = false
-	let escape = false
-	for (let i = start; i < stripped.length; i++) {
-		const ch = stripped[i]
-		if (escape) {
-			escape = false
-			continue
-		}
-		if (ch === "\\" && inString) {
-			escape = true
-			continue
-		}
-		if (ch === '"') {
-			inString = !inString
-			continue
-		}
-		if (inString) continue
-		if (ch === "{") depth++
-		else if (ch === "}") {
-			if (--depth === 0) return stripped.slice(start, i + 1)
-		}
-	}
-	throw new GraphParseError(
-		"No complete JSON object found in LLM response",
-		raw
-	)
-}
-
 // ─── System prompts ───────────────────────────────────────────────────────────
-
-function nodeDescriptionSystemPrompt(): string {
-	return `You write brief character introductions from roleplay excerpts. Given a character name and messages from the scene where they first appear, write exactly two sentences in present tense describing who this character is — their role, nature, or defining traits — based only on what the provided text shows. No invention, no embellishment.`
-}
-
-function nodeStateDetectionSystemPrompt(): string {
-	return `You detect when characters reach a new lifecycle state during a story scene.
-
-The four states and when to apply them:
-
-ACTIVE — the character is alive and present in the ongoing story. Only output this if their current state is deceased, missing, or departed and the scene shows them returning or being confirmed alive.
-
-DECEASED — the character died during this scene. Apply when the scene directly depicts or confirms their death:
-  • Killed in combat or by another character's action
-  • Died from wounds, poison, illness, or other explicitly shown causes
-  • Executed, sacrificed, or destroyed
-  • Death confirmed by witnesses in the scene
-  Do NOT apply for: deaths mentioned in passing that happened before this scene (those would already be reflected in their current state), near-death experiences that end in survival, or ambiguous fates.
-
-MISSING — the character's whereabouts became unknown during this scene. Apply when:
-  • They disappeared without explanation
-  • They were kidnapped, taken, or seized and their fate is unclear
-  • They vanished and no one in the scene can account for them
-  Do NOT apply if their death is clearly confirmed, or if they voluntarily left.
-
-DEPARTED — the character voluntarily left the story during this scene. Apply when:
-  • They chose to leave the group or location, implying permanence
-  • They were exiled or banished (even involuntarily — the key is they are now gone)
-  • They retired, withdrew, or set off on a separate path apart from the main narrative
-  Do NOT apply for temporary absences where the character is expected to return.
-
-Rules:
-- Only output an entry when the state change is clear and definitive — not implied, not ambiguous.
-- Only flag a change if the new state differs from the character's current state listed in the prompt.
-- When in doubt, omit. A missed change can be caught later; a wrong change corrupts the record.
-- Output ONLY a raw JSON object. No prose, no markdown fences.`
-}
-
-function characterPerspectiveSystemPrompt(characterName: string): string {
-	return `# Purpose
-You are an expert cataloger mapping \`${characterName}\`'s perspective on their complex relationships with other characters.
- 
-# Context provided to you
-You will receive a JSON object with:
-- \`scene\` — label, optional name, summary
-- \`perspective\` — the POV character
-- \`otherCharacters\` — each with name, nodeState, summary, and optional \`existingRelationships\` (an array of all currently tracked dynamics between this character and the perspective character)
- 
-# Relationship Fields
-
-## from
-Write \`${characterName}\`'s name exactly as it appears in \`perspective.name\`. This anchors the entry to the correct subject before you write anything else.
-
-## to
-The name of the other character, exactly as it appears in \`otherCharacters\`.
-
-## type
-A short noun phrase describing the nature of this specific dynamic. Be specific rather than generic — prefer a precise term over forcing an imprecise one from the examples. You may invent appropriate terms as needed.
-
-### Examples:
-- \`acquaintance\` — someone ${characterName} briefly met or knows casually with no strong opinion
-- \`ally\` — a friend, supporter, or collaborator
-- \`enemy\` — a foe or antagonist
-- \`rival\` — someone who competes with or challenges ${characterName} meaningfully
-- \`mentor\` — someone who guides or instructs ${characterName}
-- \`student\` — someone who learns from or is taught by ${characterName}
-- \`family\` — a relative or close member of ${characterName}'s household
-- \`romantic\` — someone with whom ${characterName} has a romantic interest or involvement
-- \`infatuation\` — someone ${characterName} is strongly attracted to but not necessarily romantically involved with
-- \`friendship\` — someone with whom ${characterName} shares a friendly bond
-- \`grudge\` — someone ${characterName} holds a grievance against
-- \`worship\` — someone ${characterName} admires or reveres deeply
-- \`fear\` — someone who instills fear in ${characterName}
-- \`warded_by\` — someone who defends ${characterName} from harm
-- \`ward\` — someone under ${characterName}'s care or protection
-- \`contract\` — someone with whom ${characterName} has a formal agreement
-- \`life_debt\` — someone ${characterName} owes their life to
-- \`obsession\` — someone who consumes ${characterName}'s thoughts and attention
-- \`owned_by\` — someone who has ownership or control over ${characterName}
-- \`owns\` — someone whom ${characterName} has ownership or control over
-
-## reason
-**Identify this before writing any other field.** Quote or closely paraphrase the specific action, words, or narrated interior state from the scene summary that grounds this entry. If you cannot locate a concrete moment in the scene text, stop — do not write the entry. Inferred motives, assumed feelings, and narrative context alone do not qualify.
-
-## description
-One sentence in third person describing \`${characterName}\`'s feeling or stance toward this person as evidenced by this scene. Ground it in what the scene actually shows — do not invent feelings or interior states not supported by the scene text.
- 
-## status
-\`active | resolved | broken | evolved\`
- 
-## visibility
-- \`secret\` — ${characterName} has not disclosed this to anyone (e.g. a secret grudge, a secret crush)
-- \`acknowledged\` — both ${characterName} and the other character are aware of this dynamic (e.g. a feud, a romance)
-- \`public\` — common knowledge among the party or world (e.g. a royal marriage, a king's alliance)
- 
-# Instructions
- 
-Write strictly from \`${characterName}\`'s point of view. Each entry captures one distinct relational dynamic with one other character.
- 
-**How to extract:**
-Scan the scene summary for explicit moments — actions, exchanges, or directly narrated interior states — that establish or change a relationship involving \`${characterName}\`. A single moment can reveal multiple distinct dynamics between the same pair (e.g., an alliance formed in the same exchange where a hidden resentment is also shown). For each distinct dynamic you can independently ground in an explicit moment, write one entry. If no qualifying moment exists for a given character, omit them entirely. Do not consider what \`${characterName}\` would plausibly feel; only what the scene text explicitly shows.
-
-A moment qualifies if the scene summary directly describes one of:
-- A direct interaction between \`${characterName}\` and another character that establishes or changes a dynamic
-- A directly narrated thought, recollection, or explicit emotional state \`${characterName}\` has toward another character
-- A change to an existing dynamic — betrayal, reconciliation, power shift, revelation, estrangement, death, new alliance, broken contract, discovered secret, shift in feeling
-
-**Do NOT output an entry if:**
-- The basis is what \`${characterName}\` would "plausibly feel" or "logically think" given the circumstances — inference is not evidence
-- \`${characterName}\` and the other character share the scene but the summary records no interaction, reaction, or thought between them — proximity is not a relationship
-- The dynamic already exists in \`existingRelationships\` and is unchanged by this scene
-- \`${characterName}\` was not present for and has not yet been informed of the event — e.g. the death of a family member in a different location
-
-# Rules
-- Output one entry per distinct dynamic — marriage, friendship, grudge, debt, worship, ownership are all separate dynamics that can exist between the same pair; each gets its own entry
-- Do not collapse multiple dynamics into one entry — each entry captures one clear emotional or relational stance
-- Do not invent dynamics not evidenced in the scene or recalled by \`${characterName}\` — every entry must be independently grounded
-- Check \`existingRelationships\` before writing an entry — do not duplicate a dynamic that is already tracked and unchanged
-- When in doubt, omit — a missed relationship can be captured in a later scene; an invented one corrupts the graph
-- Output ONLY valid JSON. No prose, no markdown fences.
- 
-# Example output
- 
-The following example shows how to handle a scene where an existing dynamic changed and a new one was created. Mira and Caen had an existing \`romantic\` dynamic tracked in \`existingRelationships\`. This scene ended it and created a new \`grudge\`. Both entries are grounded in the same explicit scene event — Caen's public denial at the council. The grudge is \`secret\` because the scene does not show Mira disclosing her resentment to anyone, not because its existence is inferred. Note that \`reason\` is written first, before \`description\`, reflecting the extraction order: locate the scene evidence first, then characterize the feeling it reveals. Only the changed and new dynamics are output — unchanged dynamics are omitted entirely.
-
-\`\`\`json
-{
-  "relationships": [
-    {
-      "from": "Mira",
-      "to": "Caen",
-      "type": "romantic",
-      "reason": "Caen ended the relationship publicly at the council table, denying any involvement with Mira in front of her peers.",
-      "description": "Mira believed in something real, but Caen made clear tonight that it meant nothing to him.",
-      "status": "broken",
-      "visibility": "acknowledged"
-    },
-    {
-      "from": "Mira",
-      "to": "Caen",
-      "type": "grudge",
-      "reason": "Caen publicly dismissed and denied Mira at the council, making her look naive in front of everyone whose trust she needs.",
-      "description": "Mira will not forgive being humiliated in front of the people whose trust she needs most.",
-      "status": "active",
-      "visibility": "secret"
-    }
-  ]
-}
-\`\`\`
- 
-# Example output — nothing changed
-\`\`\`json
-{ "relationships": [] }
-\`\`\``
-}
 
 // ─── User prompts ─────────────────────────────────────────────────────────────
 
@@ -643,6 +507,32 @@ function characterPerspectiveUserPrompt(
 	return JSON.stringify(payload, null, 2)
 }
 
+/**
+ * Finds a single unambiguous existing entity whose distinctive name words are a
+ * superset of the incoming name's distinctive words. Returns the matched tempId,
+ * or undefined if zero or multiple candidates match (ambiguity → create new).
+ */
+function fuzzyMatchName(
+	incomingName: string,
+	nameToTempId: Map<string, string>
+): string | undefined {
+	const incomingWords = distinctiveWords(incomingName)
+	if (incomingWords.length === 0) return undefined
+	const candidates: string[] = []
+	for (const [existingName, tempId] of nameToTempId) {
+		const existingWords = distinctiveWords(existingName)
+		if (incomingWords.every((w) => existingWords.includes(w))) {
+			candidates.push(tempId)
+		}
+	}
+	return candidates.length === 1 ? candidates[0] : undefined
+}
+
+function messageContainsName(text: string, name: string): boolean {
+	const lower = text.toLowerCase()
+	return distinctiveWords(name).some((w) => lower.includes(w))
+}
+
 // ─── Parsers ──────────────────────────────────────────────────────────────────
 
 export class GraphParseError extends Error {
@@ -693,36 +583,168 @@ function parseNodeStateChanges(
 	return results
 }
 
+/**
+ * Mutable accumulator for every reason a perspective response yielded nothing.
+ *
+ * Passed in rather than returned so the parser keeps its single return type,
+ * and because the interesting number is the total across a whole build, not
+ * per call. buildGraphFromScenes owns the only instance.
+ *
+ * This exists because "No relationships extracted" was previously
+ * indistinguishable from "the parser threw all of them away": six separate
+ * bail-outs below, none of them logged, plus the model legitimately abstaining.
+ * Attributing that needed a re-run and a guess. Now it needs neither.
+ */
+export interface PerspectiveDrops {
+	/** Response text held no balanced `{...}`. */
+	noJson: number
+	/** A balanced object was found but did not parse. */
+	badJson: number
+	/** Parsed, but `relationships` was not an array. */
+	notArray: number
+	/** Entry carried no recognisable relationship type. */
+	missingType: number
+	/** Entry named no target. */
+	missingTarget: number
+	/**
+	 * Entry named a SOURCE that is not the perspective character — a
+	 * relationship between two third parties, outside this call's contract.
+	 */
+	wrongSource: number
+	/**
+	 * Entries whose source/target labels were reversed and were SWAPPED rather
+	 * than dropped — recovered content, not a loss. Tracked separately so the
+	 * repair stays visible instead of silently inflating the success count.
+	 */
+	/** Perspective calls re-issued after a non-JSON response. */
+	retried: number
+	/** Retries that then produced usable JSON. */
+	retriedRecovered: number
+	/** Named targets that matched no character in the scene, deduped. */
+	unresolvedTargets: Set<string>
+}
+
+export function emptyPerspectiveDrops(): PerspectiveDrops {
+	return {
+		noJson: 0,
+		badJson: 0,
+		notArray: 0,
+		missingType: 0,
+		missingTarget: 0,
+		wrongSource: 0,
+		retried: 0,
+		retriedRecovered: 0,
+		unresolvedTargets: new Set()
+	}
+}
+
+/**
+ * Do two written names refer to the same character?
+ *
+ * Reuses distinctiveWords, so titles are stripped and either name may be the
+ * fuller form: "Commander Thorne" refers to "Maren Thorne", "Maren" to "Maren".
+ */
+function namesRefer(a: string, b: string): boolean {
+	const wa = distinctiveWords(a)
+	const wb = distinctiveWords(b)
+	if (wa.length === 0 || wb.length === 0) return false
+	return wa.every((w) => wb.includes(w)) || wb.every((w) => wa.includes(w))
+}
+
 function parseCharacterPerspectives(
 	raw: string,
 	fromTempId: string,
-	otherNameToTempId: Map<string, string>
+	fromName: string,
+	otherNameToTempId: Map<string, string>,
+	drops: PerspectiveDrops = emptyPerspectiveDrops()
 ): Sockets.NarrativeGraph.RelationshipProposal[] {
 	let jsonStr: string
 	try {
 		jsonStr = extractJson(raw)
 	} catch {
+		drops.noJson++
 		return []
 	}
 	let parsed: any
 	try {
 		parsed = JSON.parse(jsonStr)
 	} catch {
+		drops.badJson++
 		return []
 	}
-	if (!Array.isArray(parsed.relationships)) return []
+	if (!Array.isArray(parsed.relationships)) {
+		drops.notArray++
+		return []
+	}
 	const results: Sockets.NarrativeGraph.RelationshipProposal[] = []
 	for (const r of parsed.relationships) {
-		// Accept both new field names (type/to) and legacy names (relationshipType/toName)
-		const relType = r.type ?? r.relationshipType
-		if (!relType) continue
-		const rawName = String(r.to ?? r.toName ?? "").trim()
-		if (!rawName) continue
+		/*
+		 * Field-name tolerance, widened from observation rather than guesswork.
+		 *
+		 * A live build against Dark-Scarlett-v1.0-26B returned nine perfectly
+		 * good relationships and the parser discarded all nine: the model
+		 * writes the pair as `person_1`/`person_2` and the type as any of
+		 * `type`, `relationship_type` or `relation`. The content was correct
+		 * every time — only the keys differed from the prompt's schema. The
+		 * prompt now states the key names as a hard rule (see
+		 * characterPerspectiveSystemPrompt), but a local model will drift
+		 * again, and silently dropping good extractions over a synonym is far
+		 * worse than accepting one.
+		 */
+		const rawSource = String(
+			r.from ?? r.fromName ?? r.person_1 ?? r.person1 ?? ""
+		).trim()
+		const relType =
+			r.type ?? r.relationshipType ?? r.relationship_type ?? r.relation
+		if (!relType) {
+			drops.missingType++
+			continue
+		}
+		const rawName = String(
+			r.to ?? r.toName ?? r.person_2 ?? r.person2 ?? ""
+		).trim()
+		if (!rawName) {
+			drops.missingTarget++
+			continue
+		}
+
+		/*
+		 * The source must be the subject of this call. Anything else is
+		 * discarded — including the reversed case, `{from: "Maren", to: "Corb"}`
+		 * on Corb's call.
+		 *
+		 * This used to swap the endpoints instead, on the reasoning that the
+		 * content was Corb's stance and only the labels were the wrong way
+		 * round. That was a guess about whose stance the entry described, and a
+		 * wrong guess records a relationship the subject never held — with a
+		 * plausible reason and description attached, which makes it very hard
+		 * to spot afterwards. A relationship the model got backwards is
+		 * evidence the extraction is unreliable, not raw material to repair.
+		 *
+		 * The cost of the stricter rule is carried by the decoder rather than
+		 * by recall: `from` is pinned to the subject's literal name in
+		 * buildPerspectiveSchema, so on any provider that honours the schema a
+		 * reversed pair is unemittable and this branch never fires. It stays as
+		 * the backstop for providers that cannot take one.
+		 *
+		 * A MISSING `from` is not a wrong direction and is not discarded — the
+		 * source then comes from the caller, as it always did. Only a positive
+		 * claim that contradicts the call's contract drops the entry.
+		 */
+		if (rawSource && !namesRefer(rawSource, fromName)) {
+			drops.wrongSource++
+			continue
+		}
 		const nameLower = rawName.toLowerCase()
 		const toTempId =
 			otherNameToTempId.get(nameLower) ??
 			fuzzyMatchName(rawName, otherNameToTempId)
-		if (!toTempId) continue
+		if (!toTempId) {
+			// The name itself is the diagnostic: it distinguishes an LLM
+			// hallucinating a character from a real one the matcher missed.
+			drops.unresolvedTargets.add(rawName)
+			continue
+		}
 		results.push({
 			fromTempId,
 			toTempId,
@@ -769,8 +791,10 @@ export async function buildGraphFromScenes(
 		sampling,
 		contextConfig,
 		promptConfig,
+		steps,
 		seedNodes,
 		seedRelationships,
+		worldLore,
 		onProgress,
 		onLlmCall,
 		signal,
@@ -796,12 +820,45 @@ export async function buildGraphFromScenes(
 
 	const llmOpts = { connection, sampling, contextConfig, promptConfig }
 
+	// Every call in this builder runs on the resolved connection and sampling
+	// config it was handed. Sampling belongs to configuration — samplingConfigs,
+	// and graphBuildConfigs' per-sub-task override resolved by resolveTaskConfig
+	// — never to hardcoded values in here. An override buried at the call site
+	// bypasses the config the user chose, contradicts what the UI reports as
+	// being in effect, and is invisible when the output is wrong.
+	//
+	// Keyed by STEP rather than handed a prompt: the prompt, the model and the
+	// sampling profile for a step are one decision, and passing them separately
+	// is how they drifted apart before (every step shared the perspective
+	// config, and the configured prompts were never read at all).
 	async function llm(
+		step: GraphStepName,
 		label: string,
-		system: string,
-		user: string
+		user: string,
+		opts: {
+			/** Only for the perspective retry, which deliberately re-asks with
+			 *  a stripped prompt rather than the configured one. */
+			systemPromptOverride?: string
+			responseSchema?: JsonSchemaNode
+			responseFormat?: ResponseFormat
+		} = {}
 	): Promise<string> {
-		const response = await runLLM(system, user, llmOpts, label)
+		const cfg = steps?.[step]
+		const system =
+			opts.systemPromptOverride ??
+			(cfg?.systemPrompt?.trim() || GRAPH_STEP_FALLBACK_PROMPT[step])
+		const response = await runLLM(
+			system,
+			user,
+			{
+				...llmOpts,
+				connection: cfg?.connection ?? llmOpts.connection,
+				sampling: cfg?.sampling ?? llmOpts.sampling
+			},
+			label,
+			opts.responseSchema,
+			opts.responseFormat ?? "json"
+		)
 		onLlmCall?.({ label, system, user, response })
 		return response
 	}
@@ -859,6 +916,29 @@ export async function buildGraphFromScenes(
 	const resolvedSceneCast: ResolvedSceneCast[] = []
 	/** Scenes that resolved at least one character — drives the tripwire below. */
 	let scenesWithAnyCast = 0
+	/**
+	 * Names screened out as World Lore subjects (places, objects, factions)
+	 * rather than minted as characters. Reported, never silently dropped.
+	 */
+	const filteredWorldLoreNames = new Set<string>()
+
+	/**
+	 * Non-character World Lore titles. `category` is free-text and usually
+	 * unset, so it works only as an opt-out: an entry the user tagged as being
+	 * about a person screens nothing.
+	 */
+	const screenableLoreTitles = (worldLore ?? []).filter(
+		(e) => !/char|person|people|cast|npc|folk/i.test(e.category ?? "")
+	)
+
+	function isScreenedByWorldLore(name: string): boolean {
+		return screenableLoreTitles.some((e) => namesMatch(e.name, name))
+	}
+
+	/** Why the relationship set came out the size it did — see RelationshipDiagnostics. */
+	const perspectiveDrops = emptyPerspectiveDrops()
+	let perspectiveCalls = 0
+	let scenesSkippedNoPair = 0
 
 	/**
 	 * Seeds as a cast list for fuzzy name matching. Built once — matching is
@@ -1036,6 +1116,25 @@ export async function buildGraphFromScenes(
 					}
 				}
 				if (!tempId) {
+					// Places and objects are not characters. The extraction
+					// prompt says so and is routinely ignored — a station, the
+					// literal setting of every scene in its lorebook, was
+					// proposed as a person with an `active` node state.
+					//
+					// Scoped deliberately to names about to be MINTED. A name
+					// that matched the seeded cast already resolved above, so a
+					// real character who also happens to have a World Lore page
+					// is never at risk here.
+					//
+					// And it reports rather than drops: a silent filter would
+					// just recreate the failure this pass spent its time
+					// removing. The build result names what it screened out, so
+					// a false positive is visible and the user can add the
+					// character by hand.
+					if (isScreenedByWorldLore(name)) {
+						filteredWorldLoreNames.add(name)
+						continue
+					}
 					tempId = `new_${nextNodeIndex++}`
 					proposedByName.set(name, tempId)
 					newNodeTempIds.add(tempId)
@@ -1091,7 +1190,8 @@ export async function buildGraphFromScenes(
 			for (const id of numeric(storedParticipants))
 				resolveStoredId(id, true)
 			resolveNameRefs(named(storedParticipants), true)
-			for (const id of numeric(storedMentioned)) resolveStoredId(id, false)
+			for (const id of numeric(storedMentioned))
+				resolveStoredId(id, false)
 			resolveNameRefs(named(storedMentioned), false)
 		}
 
@@ -1160,10 +1260,18 @@ export async function buildGraphFromScenes(
 							messageContainsName(m.content, node.name)
 					) ?? []
 
+				// Prose, not JSON — this text is stored as the node summary and
+				// shown to the user as-is. Under the default JSON constraint the
+				// model wrapped it in an object to satisfy the grammar.
 				const desc = await llm(
+					"nodeDescription",
 					`Node Description · ${node.name}`,
-					nodeDescriptionSystemPrompt(),
-					nodeDescriptionUserPrompt(node.name, relevant, sceneSummary)
+					nodeDescriptionUserPrompt(
+						node.name,
+						relevant,
+						sceneSummary
+					),
+					{ responseFormat: "text" }
 				)
 				nodeMap.set(tempId, { ...node, summary: desc.trim() })
 				// Fill-blanks-only: the `node.summary` guard above means we
@@ -1172,7 +1280,8 @@ export async function buildGraphFromScenes(
 				// existing summary being overwritten. (Seeds normally arrive
 				// with a summary from the character/persona sheet fallback, so
 				// in practice this is mostly newly-discovered NPCs.)
-				if (seedTempIdMap[tempId] != null) updatedNodeTempIds.add(tempId)
+				if (seedTempIdMap[tempId] != null)
+					updatedNodeTempIds.add(tempId)
 			}
 		}
 
@@ -1202,8 +1311,8 @@ export async function buildGraphFromScenes(
 			)
 
 			const stateRaw = await llm(
+				"stateDetection",
 				`State Detection · ${sceneLabel}`,
-				nodeStateDetectionSystemPrompt(),
 				nodeStateDetectionUserPrompt(sceneSummary, stateDetectionNodes)
 			)
 
@@ -1240,7 +1349,21 @@ export async function buildGraphFromScenes(
 		// Deliberately placed AFTER the description and state passes above so
 		// it skips Pass 2 only — a one-character scene still contributes that
 		// character's description and any state change. Do not hoist it.
-		if (presentTempIdsThisScene.size < 2) continue
+		//
+		// A pair is one SOURCE and one TARGET, which are not the same role.
+		// Only a present character has a point of view to write from, so the
+		// source must be present — but a target may be merely mentioned, and
+		// already is: mentionedNodeList is passed as relationship targets a few
+		// lines below. Counting present characters alone therefore skipped any
+		// scene where extraction marked one participant present and the rest
+		// mentioned, discarding a perfectly relatable pair.
+		if (
+			presentTempIdsThisScene.size < 1 ||
+			presentTempIdsThisScene.size + mentionedTempIdsThisScene.size < 2
+		) {
+			scenesSkippedNoPair++
+			continue
+		}
 
 		// ── Pass 2: Per-character perspective ─────────────────────────────────
 		//
@@ -1340,20 +1463,64 @@ export async function buildGraphFromScenes(
 				currentSceneLabel: sceneLabel
 			})
 
-			const perspRaw = await llm(
-				`Character Perspective · ${sceneLabel} · ${fromNode.name}`,
-				characterPerspectiveSystemPrompt(fromNode.name),
-				characterPerspectiveUserPrompt(
-					sceneLabel,
-					scene.name,
-					sceneSummary,
-					fromNode.name,
-					fromNode.nodeState,
-					fromNode.summary ?? "",
-					others,
-					speakerEstablishedRels
-				)
+			const userPrompt = characterPerspectiveUserPrompt(
+				sceneLabel,
+				scene.name,
+				sceneSummary,
+				fromNode.name,
+				fromNode.nodeState,
+				fromNode.summary ?? "",
+				others,
+				speakerEstablishedRels
 			)
+
+			perspectiveCalls++
+			// The schema is per-subject: it pins `from` to this character's
+			// literal name, so the decoder cannot emit a relationship pointing
+			// the other way. See buildPerspectiveSchema.
+			const perspectiveSchema = buildPerspectiveSchema(fromNode.name)
+
+			let perspRaw = await llm(
+				"perspective",
+				`Character Perspective · ${sceneLabel} · ${fromNode.name}`,
+				userPrompt,
+				{ responseSchema: perspectiveSchema }
+			)
+
+			/*
+			 * One retry when the response contains no JSON at all.
+			 *
+			 * Measured: 45% of responses from a roleplay-finetuned model came
+			 * back as narrative prose rather than an object — a single
+			 * non-compliant reply was a permanent loss of that character's
+			 * whole perspective. The retry re-asks with a prompt stripped of
+			 * every scrap of character framing.
+			 *
+			 * It runs on the SAME resolved connection and sampling as the first
+			 * attempt. Sampling is configuration; if extraction needs different
+			 * decoding that belongs in a sampling config the user can see and
+			 * change, resolved through graphBuildConfigs — not forced from in
+			 * here. Re-prompting alone recovered 1 in 13 on the model measured,
+			 * so do not expect much of this on its own.
+			 *
+			 * Strictly once: a model that ignores the bare contract twice will
+			 * not be talked round by a third attempt, and perspective calls are
+			 * the most expensive part of a build.
+			 */
+			if (!hasJsonObject(perspRaw)) {
+				perspectiveDrops.retried++
+				perspRaw = await llm(
+					"perspective",
+					`Character Perspective (retry) · ${sceneLabel} · ${fromNode.name}`,
+					userPrompt,
+					{
+						systemPromptOverride:
+							GRAPH_PERSPECTIVE_RETRY_SYSTEM_PROMPT,
+						responseSchema: perspectiveSchema
+					}
+				)
+				if (hasJsonObject(perspRaw)) perspectiveDrops.retriedRecovered++
+			}
 
 			const otherNameToTempId = new Map(
 				others.map((o) => [o.name.toLowerCase().trim(), o.tempId])
@@ -1361,7 +1528,9 @@ export async function buildGraphFromScenes(
 			const rels = parseCharacterPerspectives(
 				perspRaw,
 				fromNode.tempId,
-				otherNameToTempId
+				fromNode.name,
+				otherNameToTempId,
+				perspectiveDrops
 			)
 
 			for (const rel of rels) {
@@ -1370,9 +1539,21 @@ export async function buildGraphFromScenes(
 					...rel,
 					sceneIndex: i,
 					sceneId: isDirectEntry ? undefined : scene.id,
+					// A relationship carries WHEN it was established, whatever
+					// it was derived from. This used to be set only for direct
+					// history entries, so every scene-derived relationship —
+					// the large majority — persisted with a null historyEntryId
+					// and no date of its own. A scene already knows its entry
+					// (`scene.historyEntryId`), so the association was available
+					// and simply not written.
+					//
+					// sceneId and historyEntryId are not alternatives here, as
+					// they are in resolvedSceneCast above where they identify
+					// WHICH ROW to write back to: a scene-derived relationship
+					// legitimately has both.
 					historyEntryId: isDirectEntry
 						? scene.sourceHistoryEntryId
-						: undefined
+						: (scene.historyEntryId ?? undefined)
 				})
 				if (seedRelKeys.has(key)) updatedSeedRelKeys.add(key)
 				newRelKeys.add(key)
@@ -1447,6 +1628,16 @@ export async function buildGraphFromScenes(
 	// nobody could be resolved at all — that is how this subsystem hid a total
 	// failure for an entire release.
 	if (scenesWithSummaries.length > 0 && scenesWithAnyCast === 0) {
+		// The World Lore screen can be the whole reason nothing resolved — a
+		// scene naming only its own setting extracts a name, and then that name
+		// is filtered. Saying "no characters were found" there would be false
+		// and unactionable, so name what was screened, exactly as the dangling
+		// -id case names its cause.
+		if (filteredWorldLoreNames.size > 0) {
+			throw new Error(
+				`Nothing could be extracted from ${scenesWithSummaries.length} scene(s): the only name(s) found — ${[...filteredWorldLoreNames].join(", ")} — match World Lore entries, so they were treated as places or things rather than characters. Add them as characters if that is wrong.`
+			)
+		}
 		throw new Error(
 			droppedDanglingIds > 0
 				? `Nothing could be extracted from ${scenesWithSummaries.length} scene(s): ${droppedDanglingIds} character reference(s) point at bindings that no longer exist. Re-process the affected scenes to refresh their cast.`
@@ -1463,6 +1654,20 @@ export async function buildGraphFromScenes(
 		sceneLabels,
 		resolvedSceneCast,
 		seedTempIdMap,
-		seedNodeNames
+		seedNodeNames,
+		relationshipDiagnostics: {
+			perspectiveCalls,
+			scenesSkippedNoPair,
+			noJson: perspectiveDrops.noJson,
+			badJson: perspectiveDrops.badJson,
+			notArray: perspectiveDrops.notArray,
+			missingType: perspectiveDrops.missingType,
+			missingTarget: perspectiveDrops.missingTarget,
+			wrongSource: perspectiveDrops.wrongSource,
+			retried: perspectiveDrops.retried,
+			retriedRecovered: perspectiveDrops.retriedRecovered,
+			unresolvedTargets: [...perspectiveDrops.unresolvedTargets]
+		},
+		filteredWorldLoreNames: [...filteredWorldLoreNames]
 	}
 }

@@ -742,6 +742,64 @@
 	})
 </script>
 
+<!--
+	A scene's cast, as chips.
+
+	Extracted rather than copied a third time. This markup already existed twice
+	— in the scene detail drill-down and in edit mode — but NOT in the scene
+	list, which is the surface users actually look at; reaching it took two
+	clicks with nothing suggesting cast lived there. That matters more than
+	tidiness: the cast is what the graph build's relationship extraction runs
+	on, so a mis-extracted participant (a place read as a person, a duplicate
+	identity) was invisible until after a build had already consumed it.
+
+	Renders nothing when the scene has no cast, so a caller can drop it in
+	unconditionally.
+-->
+{#snippet sceneCastChips(scene: {
+	participantCharacters?: number[] | null
+	mentionedCharacters?: number[] | null
+})}
+	{@const present = scene.participantCharacters ?? []}
+	{@const mentioned = scene.mentionedCharacters ?? []}
+	{#if present.length > 0 || mentioned.length > 0}
+		<div class="space-y-1">
+			{#if present.length > 0}
+				<div class="flex flex-wrap items-center gap-1">
+					<span
+						class="text-surface-700-300 shrink-0 text-[10px] font-semibold tracking-wide uppercase"
+					>
+						Present:
+					</span>
+					{#each present as id}
+						<span
+							class="chip preset-tonal-primary py-0 text-[10px]"
+						>
+							{bindingNameById.get(id) ?? `#${id}`}
+						</span>
+					{/each}
+				</div>
+			{/if}
+			{#if mentioned.length > 0}
+				<div class="flex flex-wrap items-center gap-1">
+					<span
+						class="text-surface-700-300 shrink-0 text-[10px] font-semibold tracking-wide uppercase"
+					>
+						Mentioned:
+					</span>
+					{#each mentioned as id}
+						<span
+							class="chip preset-tonal-surface py-0 text-[10px]"
+						>
+							{bindingNameById.get(id) ?? `#${id}`}
+						</span>
+					{/each}
+				</div>
+			{/if}
+		</div>
+	{/if}
+{/snippet}
+
 {#if isReady}
 	<!-- ═══════════════════════════════════════════════════════════════
      LIST MODE
@@ -1320,48 +1378,7 @@
 									No summary yet.
 								</p>
 							{/if}
-							{#if (scene.participantCharacters?.length ?? 0) > 0 || (scene.mentionedCharacters?.length ?? 0) > 0}
-								<div class="space-y-1.5">
-									{#if (scene.participantCharacters?.length ?? 0) > 0}
-										<div
-											class="flex flex-wrap items-center gap-1"
-										>
-											<span
-												class="text-surface-700-300 shrink-0 text-[10px] font-semibold tracking-wide uppercase"
-											>
-												Present:
-											</span>
-											{#each scene.participantCharacters ?? [] as id}
-												<span
-													class="chip preset-tonal-primary py-0 text-[10px]"
-												>
-													{bindingNameById.get(id) ??
-														`#${id}`}
-												</span>
-											{/each}
-										</div>
-									{/if}
-									{#if (scene.mentionedCharacters?.length ?? 0) > 0}
-										<div
-											class="flex flex-wrap items-center gap-1"
-										>
-											<span
-												class="text-surface-700-300 shrink-0 text-[10px] font-semibold tracking-wide uppercase"
-											>
-												Mentioned:
-											</span>
-											{#each scene.mentionedCharacters ?? [] as id}
-												<span
-													class="chip preset-tonal-surface py-0 text-[10px]"
-												>
-													{bindingNameById.get(id) ??
-														`#${id}`}
-												</span>
-											{/each}
-										</div>
-									{/if}
-								</div>
-							{/if}
+							{@render sceneCastChips(scene)}
 							{#if scene.chatName}
 								<p class="text-surface-700-300 text-xs">
 									<Icons.MessageSquare
@@ -1562,6 +1579,16 @@
 											{scene.summary}
 										</p>
 									{/if}
+									<!--
+										The fix. The cast was previously visible
+										only after clicking into a scene, with
+										no affordance saying it was there — yet
+										it is the input the graph build's
+										relationship extraction runs on, so a
+										bad cast could not be spotted before a
+										build consumed it.
+									-->
+									{@render sceneCastChips(scene)}
 								</div>
 							{/each}
 							<button
@@ -2195,50 +2222,7 @@
 										No summary.
 									</p>
 								{/if}
-								{#if (scene.participantCharacters?.length ?? 0) > 0 || (scene.mentionedCharacters?.length ?? 0) > 0}
-									<div class="space-y-1">
-										{#if (scene.participantCharacters?.length ?? 0) > 0}
-											<div
-												class="flex flex-wrap items-center gap-1"
-											>
-												<span
-													class="text-surface-700-300 shrink-0 text-[10px] font-semibold tracking-wide uppercase"
-												>
-													Present:
-												</span>
-												{#each scene.participantCharacters ?? [] as id}
-													<span
-														class="chip preset-tonal-primary py-0 text-[10px]"
-													>
-														{bindingNameById.get(
-															id
-														) ?? `#${id}`}
-													</span>
-												{/each}
-											</div>
-										{/if}
-										{#if (scene.mentionedCharacters?.length ?? 0) > 0}
-											<div
-												class="flex flex-wrap items-center gap-1"
-											>
-												<span
-													class="text-surface-700-300 shrink-0 text-[10px] font-semibold tracking-wide uppercase"
-												>
-													Mentioned:
-												</span>
-												{#each scene.mentionedCharacters ?? [] as id}
-													<span
-														class="chip preset-tonal-surface py-0 text-[10px]"
-													>
-														{bindingNameById.get(
-															id
-														) ?? `#${id}`}
-													</span>
-												{/each}
-											</div>
-										{/if}
-									</div>
-								{/if}
+								{@render sceneCastChips(scene)}
 							</div>
 						{/each}
 					{/if}

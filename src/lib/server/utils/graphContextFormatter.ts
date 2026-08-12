@@ -59,6 +59,76 @@ interface RelRow {
 	relationshipType: string
 	description: string
 	visibility: string
+	status: string
+}
+
+/**
+ * Secrecy, phrased from the reading character's own vantage.
+ *
+ * The stored vocabulary (secret/acknowledged/public) is schema jargon, and
+ * "acknowledged" in particular tells a model nothing about who may act on the
+ * information. These say it outright, so the fact needs no legend and no
+ * inference — the model is generating AS this character, so first person is
+ * the frame it is already in.
+ *
+ * A single field rather than the "does B know? / is it public?" pair: three
+ * states in two booleans admits one impossible combination (not known, yet
+ * public) and costs roughly three times the tokens on every entry.
+ */
+function secrecyLabel(visibility: string): string {
+	switch (visibility) {
+		case "secret":
+			return "Only I know"
+		case "public":
+			return "Everyone knows"
+		case "acknowledged":
+			return "We both know"
+		default:
+			// An unrecognised visibility must not silently read as a secret —
+			// over-sharing a dynamic is a lesser failure than a character
+			// acting on something they were never told.
+			return "We both know"
+	}
+}
+
+/**
+ * One relationship as the model sees it.
+ *
+ * `status` and `state` are omitted when they are the unremarkable default.
+ * Emitting `"status":"active"` on all thirty entries is the same repetition
+ * this rewrite exists to remove, and a field that is always present carries no
+ * information — their presence is what makes them worth reading.
+ */
+function relEntry(
+	r: RelRow,
+	other: NodeInfo | undefined
+): Record<string, string> {
+	const entry: Record<string, string> = {
+		type: neutralizeGraphMarkers(r.relationshipType),
+		secrecy: secrecyLabel(r.visibility)
+	}
+	if (r.status && r.status !== "active") entry.status = r.status
+	if (other?.nodeState && other.nodeState !== "active") {
+		entry.theirState = other.nodeState
+	}
+	if (r.description) entry.note = neutralizeGraphMarkers(r.description)
+	return entry
+}
+
+/** Group relationships under the OTHER character's name. */
+function groupByOther(
+	rels: RelRow[],
+	nodeMap: Map<number, NodeInfo>,
+	otherSide: "to" | "from"
+): Record<string, Record<string, string>[]> {
+	const grouped: Record<string, Record<string, string>[]> = {}
+	for (const r of rels) {
+		const otherId = otherSide === "to" ? r.toNodeId : r.fromNodeId
+		const other = nodeMap.get(otherId)
+		const name = nodeName(other, `node#${otherId}`)
+		;(grouped[name] ??= []).push(relEntry(r, other))
+	}
+	return grouped
 }
 
 interface NodeInfo {
@@ -357,7 +427,8 @@ export async function buildGraphContext(params: {
 		limit: 5
 	})
 
-	const legendaryEntries: string[] = []
+	// Keyed by name, same rule as the other two sections.
+	const legendaryFigures: Record<string, Record<string, unknown>> = {}
 	for (const node of legendaryNodes) {
 		const pubRels = await db.query.narrativeRelationships.findMany({
 			where: and(
@@ -380,50 +451,46 @@ export async function buildGraphContext(params: {
 			parentNodeId: null,
 			aliases: node.aliases ?? []
 		})
-		const relLines = pubRels
-			.map((r) => `  - ${formatRel(r, l3NodeMap)}`)
-			.join("\n")
 		const header = nodeName(l3NodeMap.get(node.id), node.name)
-		const summary = node.summary
-			? neutralizeGraphMarkers(node.summary)
-			: node.summary
-		const entry = summary
-			? `${SECTION_OPEN}${header}${SECTION_CLOSE} ${summary}${relLines ? "\n" + relLines : ""}`
-			: `${SECTION_OPEN}${header}${SECTION_CLOSE}${relLines ? "\n" + relLines : ""}`
-		legendaryEntries.push(entry)
+		const figure: Record<string, unknown> = {}
+		if (node.summary) figure.summary = neutralizeGraphMarkers(node.summary)
+		if (node.nodeState && node.nodeState !== "active") {
+			figure.state = node.nodeState
+		}
+		if (pubRels.length > 0) {
+			figure.relationships = groupByOther(pubRels, l3NodeMap, "to")
+		}
+		legendaryFigures[header] = figure
 	}
 
 	// ── Format output ──
-	const sections: string[] = []
+	//
+	// Emitted as JSON, keyed by the OTHER character's name.
+	//
+	// Three things drove the shape. The context template already wraps this
+	// block in a ```json fence, so prose here was a format lie the model had to
+	// see past. In `yourRelationships` the source is ALWAYS the speaker, so the
+	// old "Speaker → Other [type]: text" line repeated the speaker's own name
+	// on every entry; keying by the other party removes it entirely, and
+	// collapses a pair holding several dynamics to one key. And a heading of
+	// "How others in this scene see X" asserted co-presence: layer 2 is scoped
+	// to chat participants, not to whoever is in the room this moment, and a
+	// relationship is accumulated history rather than a present-tense fact.
+	const graph: Record<string, unknown> = {}
 
 	if (l1Rels.length > 0) {
-		const speaker = l1NodeMap.get(speakerNodeId)
-		const speakerHeader = nodeName(speaker, "Speaker")
-		sections.push(
-			`${SECTION_OPEN}${speakerHeader}'s relationships${SECTION_CLOSE}\n` +
-				l1Rels.map((r) => `- ${formatRel(r, l1NodeMap)}`).join("\n")
-		)
+		graph.yourRelationships = groupByOther(l1Rels, l1NodeMap, "to")
 	}
 
 	if (l2Rels.length > 0) {
-		const speaker = l1NodeMap.get(speakerNodeId)
-		const speakerLabel = speaker
-			? neutralizeGraphMarkers(speaker.name)
-			: "the speaker"
-		sections.push(
-			`${SECTION_OPEN}How others in this scene see ${speakerLabel}${SECTION_CLOSE}\n` +
-				l2Rels.map((r) => `- ${formatRel(r, l2NodeMap)}`).join("\n")
-		)
+		graph.howOthersRegardYou = groupByOther(l2Rels, l2NodeMap, "from")
 	}
 
-	if (legendaryEntries.length > 0) {
-		sections.push(
-			`${SECTION_OPEN}Legendary / historical figures${SECTION_CLOSE}\n` +
-				legendaryEntries.join("\n")
-		)
+	if (Object.keys(legendaryFigures).length > 0) {
+		graph.legendaryFigures = legendaryFigures
 	}
 
-	if (sections.length === 0) return null
+	if (Object.keys(graph).length === 0) return null
 
-	return `\n\n${GRAPH_CONTEXT_HEADER}\n${sections.join("\n\n")}\n${GRAPH_CONTEXT_FOOTER}`
+	return JSON.stringify(graph, null, 1)
 }

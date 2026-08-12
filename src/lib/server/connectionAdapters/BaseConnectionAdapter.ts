@@ -3,6 +3,7 @@ import {
 	type CompiledPrompt as PromptBuilderCompiledPrompt
 } from "../utils/promptBuilder"
 import type { TokenCounters } from "../utils/TokenCounterManager"
+import type { JsonSchemaNode } from "./jsonSchemaToGbnf"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
 import { PromptBlockFormatter } from "$lib/shared/utils/PromptBlockFormatter"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
@@ -47,6 +48,17 @@ export interface BasePromptChat extends SelectChat {
 		| null
 }
 
+/**
+ * What shape the caller needs the response in.
+ *
+ * A contract for the RESPONSE, not a decoding preference — it must never be
+ * implemented by reaching into the user's sampling config. Each adapter
+ * translates it into whatever its provider supports (a GBNF grammar, Ollama's
+ * `format`, OpenAI's `response_format`, …) and ignores it when the provider
+ * supports nothing of the kind.
+ */
+export type ResponseFormat = "text" | "json"
+
 // Generic interface for constructor parameters
 export interface BaseConnectionAdapterParams {
 	connection: SelectConnection
@@ -88,6 +100,40 @@ export abstract class BaseConnectionAdapter {
 	// per-trigger note already flows through compileNarratorResponsePrompt's
 	// own extraInstructions.
 	graphContextInstructions?: string
+	/**
+	 * Response-shape contract for this generation. Assigned after construction
+	 * (`adapter.responseFormat = "json"`), like graphContextInstructions above.
+	 *
+	 * Deliberately NOT a constructor param. Every subclass declares its own
+	 * inline destructured param type rather than using
+	 * BaseConnectionAdapterParams, so a field added to that interface never
+	 * reaches them and TypeScript does not complain — `tokenCounter`,
+	 * `tokenLimit` and `contextThresholdPercent` are dropped by KoboldCppAdapter
+	 * and LlamaCppAdapter today for exactly this reason. See the note on
+	 * isNarratorResponseMode below; this is the same hazard, avoided the same
+	 * way.
+	 *
+	 * The default is what keeps chat safe: anything that does not explicitly opt
+	 * in generates unconstrained. A constraint leaking into roleplay would be a
+	 * far worse regression than the extraction failures it exists to fix.
+	 */
+	responseFormat: ResponseFormat = "text"
+	/**
+	 * Optional shape contract, consulted ONLY when responseFormat is "json".
+	 *
+	 * Kept as a separate property rather than widening ResponseFormat into a
+	 * union carrying a payload: "is this constrained at all" and "what shape"
+	 * are answered by different providers at different fidelities, and every
+	 * adapter already branches on the first. An adapter whose provider cannot
+	 * take a schema ignores this and falls back to plain JSON mode — the same
+	 * graceful-degradation rule responseFormat already follows, so adding a
+	 * schema can never make a working provider worse.
+	 *
+	 * Providers split three ways: the llama.cpp family compiles it to GBNF via
+	 * jsonSchemaToGbnf, Ollama/OpenAI/LM Studio take JSON Schema natively, and
+	 * anything else ignores it.
+	 */
+	responseSchema?: JsonSchemaNode
 	promptBuilder: PromptBuilder
 
 	constructor({
@@ -148,9 +194,17 @@ export abstract class BaseConnectionAdapter {
 		// (see graphContextFormatter.ts's buildGraphContext, called from
 		// generateResponse.ts) — mirrors how narratorInstructions flows into
 		// compileNarratorResponsePrompt's own extraInstructions just above.
+		// Its own template block, NOT extraInstructions.
+		//
+		// extraInstructions is prose the model is asked to act on, and the
+		// prompt builder splices it into `instructions` AND both post-history
+		// fields — so routing relationship data through it duplicated the
+		// payload three times per message and left a fenced JSON blob sitting
+		// at the generation point, which models answered by closing with a
+		// stray ```. Relationships are data; they belong in a data block.
 		return await this.promptBuilder.compilePrompt({
 			...args,
-			extraInstructions: this.graphContextInstructions
+			speakerRelationships: this.graphContextInstructions
 		})
 	}
 
@@ -307,7 +361,6 @@ export abstract class BaseConnectionAdapter {
 			extraInstructions: narratorInstructions
 		})
 	}
-
 }
 
 export interface AdapterExports {

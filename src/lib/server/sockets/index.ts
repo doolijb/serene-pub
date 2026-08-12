@@ -25,6 +25,7 @@ import { registerContextConfigHandlers } from "./contextConfigs"
 import { registerChatHandlers } from "./chats"
 import { registerPromptConfigHandlers } from "./promptConfigs"
 import { registerNarratorPromptConfigHandlers } from "./narratorPromptConfigs"
+import { registerGraphBuildConfigHandlers } from "./graphBuildConfigs"
 import { registerUserHandlers } from "./users"
 import { registerUserSettingsHandlers } from "./userSettings"
 import { registerLorebookHandlers } from "./lorebooks"
@@ -89,6 +90,7 @@ export function connectSockets(io: {
 		registerContextConfigHandlers(socket, emitToUser, register)
 		registerPromptConfigHandlers(socket, emitToUser, register)
 		registerNarratorPromptConfigHandlers(socket, emitToUser, register)
+		registerGraphBuildConfigHandlers(socket, emitToUser, register)
 		registerSummarizePromptConfigHandlers(socket, emitToUser, register)
 		registerChatHandlers(socket, emitToUser, register)
 		registerLorebookHandlers(socket, emitToUser, register)

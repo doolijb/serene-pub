@@ -213,10 +213,10 @@ describe("BaseConnectionAdapter.compilePrompt() — graphContextInstructions (ro
 	// later, from within promptBuilder.compilePrompt() itself — so it was
 	// always undefined at the point generateResponse.ts ran, and the
 	// injection silently never reached the model. It's now set on the
-	// adapter as graphContextInstructions and merged into extraInstructions
-	// here, the same mechanism narratorInstructions already uses.
+	// adapter as graphContextInstructions and passed as `speakerRelationships`,
+	// which the context template renders as its own block.
 
-	test("merges graphContextInstructions into extraInstructions on the default (non-narrator) path", async () => {
+	test("passes graphContextInstructions as its own block, NOT as instructions", async () => {
 		const adapter = makeAdapter()
 		adapter.graphContextInstructions = "Alice trusts Bob."
 		const spy = vi
@@ -228,14 +228,17 @@ describe("BaseConnectionAdapter.compilePrompt() — graphContextInstructions (ro
 			})
 
 		await adapter.compilePrompt({ useChatFormat: true } as any)
-		expect(spy).toHaveBeenCalledWith(
-			expect.objectContaining({
-				extraInstructions: "Alice trusts Bob."
-			})
-		)
+		const args = spy.mock.calls[0][0] as any
+		expect(args.speakerRelationships).toBe("Alice trusts Bob.")
+		// The regression this replaces: routing it through extraInstructions
+		// spliced the payload into the system instructions AND both
+		// post-history fields — three copies per message, one of them sitting
+		// at the generation point, which had models closing replies with a
+		// stray ```.
+		expect(args.extraInstructions).toBeUndefined()
 	})
 
-	test("extraInstructions is undefined when no graphContextInstructions were set", async () => {
+	test("speakerRelationships is undefined when no graphContextInstructions were set", async () => {
 		const adapter = makeAdapter()
 		const spy = vi
 			.spyOn(adapter.promptBuilder, "compilePrompt")
@@ -247,7 +250,7 @@ describe("BaseConnectionAdapter.compilePrompt() — graphContextInstructions (ro
 
 		await adapter.compilePrompt({} as any)
 		expect(spy).toHaveBeenCalledWith(
-			expect.objectContaining({ extraInstructions: undefined })
+			expect.objectContaining({ speakerRelationships: undefined })
 		)
 	})
 
@@ -260,7 +263,11 @@ describe("BaseConnectionAdapter.compilePrompt() — graphContextInstructions (ro
 		const defaultSpy = vi.spyOn(adapter.promptBuilder, "compilePrompt")
 		const narratorSpy = vi
 			.spyOn(adapter as any, "compileNarratorResponsePrompt")
-			.mockResolvedValue({ prompt: "x", messages: undefined, meta: {} as any })
+			.mockResolvedValue({
+				prompt: "x",
+				messages: undefined,
+				meta: {} as any
+			})
 
 		await adapter.compilePrompt({} as any)
 		expect(narratorSpy).toHaveBeenCalledTimes(1)

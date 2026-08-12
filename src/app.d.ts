@@ -175,6 +175,10 @@ declare global {
 		sceneLabels?: string[]
 		seedTempIdMap?: Record<string, number>
 		seedNodeNames?: Record<string, string>
+		/** Attribution for an empty/thin relationship set — see the modal. */
+		relationshipDiagnostics?: Sockets.NarrativeGraph.RelationshipDiagnostics
+		/** Proposed names screened out as World Lore subjects. */
+		filteredWorldLoreNames?: string[]
 		errorMessage?: string
 		errorRaw?: string
 		startedAt: string

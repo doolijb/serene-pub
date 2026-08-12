@@ -15,10 +15,29 @@
  */
 import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { db as defaultDb } from "$lib/server/db"
+import type { PgliteDatabase } from "drizzle-orm/pglite"
+
+// The shared `db` is reached through a lazy dynamic import rather than a
+// top-level one, matching the other db-helper modules in this directory
+// (characterBindingSync.ts, summarizer/availableSceneCast.ts,
+// duplicateBindingDetection.ts).
+//
+// This is load-bearing, not stylistic. A static `import { db } from
+// "$lib/server/db"` pulls that module's *boot side effects* — the data-dir
+// lock check, migrations, and `await sync()` — into the module graph of
+// everything that imports this file. That made unit tests which build their
+// own PGlite via createTestDb() open the real application database instead,
+// failing outright whenever the app was running and holding the lock.
+// It also adds a static edge into the db module graph, which is the kind of
+// thing that reshuffles Rollup's chunking and surfaces boot-time TDZ errors
+// in packaged builds.
 
 /** Anything with `.select`/`.insert`/`.delete` — the db handle or a transaction. */
-type DbLike = typeof defaultDb
+type DbLike = PgliteDatabase<typeof schema>
+
+async function defaultDb(): Promise<DbLike> {
+	return (await import("$lib/server/db")).db
+}
 
 export interface SceneCast {
 	participantCharacters: number[]
@@ -63,7 +82,7 @@ export async function readSceneCasts(
 	dbInstance?: DbLike
 ): Promise<Map<number, SceneCast>> {
 	if (sceneIds.length === 0) return new Map()
-	const database = dbInstance ?? defaultDb
+	const database = dbInstance ?? (await defaultDb())
 	const rows = await database
 		.select({
 			sceneId: schema.sceneCharacters.sceneId,
@@ -131,7 +150,7 @@ export async function writeSceneCast(
 	cast: Partial<SceneCast>,
 	dbInstance?: DbLike
 ): Promise<void> {
-	const database = dbInstance ?? defaultDb
+	const database = dbInstance ?? (await defaultDb())
 	const participants = [...new Set(cast.participantCharacters ?? [])]
 	const mentioned = [...new Set(cast.mentionedCharacters ?? [])]
 
@@ -174,7 +193,7 @@ export async function repointSceneCast(
 	toBindingId: number,
 	dbInstance?: DbLike
 ): Promise<void> {
-	const database = dbInstance ?? defaultDb
+	const database = dbInstance ?? (await defaultDb())
 	const scenesInLorebook = await database
 		.select({ id: schema.scenes.id })
 		.from(schema.scenes)

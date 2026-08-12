@@ -28,7 +28,10 @@ export const narratorPromptConfigsListHandler: Handler<
 					name: true,
 					isImmutable: true
 				},
-				orderBy: (c, { asc }) => [asc(c.isImmutable), asc(c.name)]
+				orderBy: (c, { asc, desc }) => [
+					desc(c.isImmutable),
+					asc(c.name)
+				]
 			})
 		const res: Sockets.NarratorPromptConfigs.List.Response = {
 			narratorPromptConfigsList
@@ -137,7 +140,9 @@ export const narratorPromptConfigsUpdate: Handler<
 		// A raw client could target an immutable row with neither override
 		// field present at all — updateData then has no defined values, and
 		// an empty .set() throws rather than being a legitimate no-op.
-		const hasUpdates = Object.values(updateData).some((v) => v !== undefined)
+		const hasUpdates = Object.values(updateData).some(
+			(v) => v !== undefined
+		)
 		const narratorPromptConfig = hasUpdates
 			? (
 					await db

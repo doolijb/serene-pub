@@ -515,7 +515,13 @@ export async function createCharacterFromParsedData(
 			isFavorite: false
 		})
 		.returning()
-	return applyAvatarAndTags(character, avatarBuffer, data.tags, userId, dbOrTx)
+	return applyAvatarAndTags(
+		character,
+		avatarBuffer,
+		data.tags,
+		userId,
+		dbOrTx
+	)
 }
 
 /**
@@ -537,7 +543,13 @@ export async function overwriteCharacterFromParsedData(
 		where: eq(schema.characters.id, existingId)
 	})
 	if (!character) throw new Error("Character not found.")
-	return applyAvatarAndTags(character, avatarBuffer, data.tags, userId, dbOrTx)
+	return applyAvatarAndTags(
+		character,
+		avatarBuffer,
+		data.tags,
+		userId,
+		dbOrTx
+	)
 }
 
 /**
@@ -781,9 +793,11 @@ export const charactersSearchLibrary: Handler<
 								? error.message
 								: "Failed to search character library",
 						unreachable:
-							error instanceof CardSourceUnavailableError || undefined,
+							error instanceof CardSourceUnavailableError ||
+							undefined,
 						rateLimited:
-							error instanceof CardSourceRateLimitedError || undefined,
+							error instanceof CardSourceRateLimitedError ||
+							undefined,
 						retryAfterMs:
 							error instanceof CardSourceRateLimitedError
 								? error.retryAfterMs

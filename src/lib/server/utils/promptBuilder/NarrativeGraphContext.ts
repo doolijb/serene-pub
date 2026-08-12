@@ -16,6 +16,25 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, asc, eq, inArray } from "drizzle-orm"
 
+/**
+ * Master switch for the {{narrativeGraph}} block. Currently OFF.
+ *
+ * The default context template no longer renders `narrativeGraph` — the
+ * speaker-centric `speakerRelationships` block replaced it — so everything this
+ * module computes was being discarded after a round of database queries on
+ * every single generation.
+ *
+ * Disabled here rather than at the two call sites so BOTH engines are covered
+ * by one flag, and so the queries themselves are skipped rather than merely
+ * their output thrown away. The code is left in place, not deleted: the block
+ * is the only thing that ever supplied third-party dynamics (relationships
+ * where neither party is the speaker) and `side_characters` descriptions for
+ * unbound nodes, so this is a pause, not a decision that they were unwanted.
+ *
+ * Flip to true and the template variable to re-enable; nothing else changed.
+ */
+export const NARRATIVE_GRAPH_CONTEXT_ENABLED = false
+
 /** Maximum narrative graph relationship pairs included in context. */
 export const MAX_GRAPH_PAIRS = 10
 
@@ -50,6 +69,7 @@ export type GraphPairOutput = {
 export function serializeGraphPairs(
 	graphPairs: GraphPairOutput[]
 ): string | undefined {
+	if (!NARRATIVE_GRAPH_CONTEXT_ENABLED) return undefined
 	if (graphPairs.length === 0) return undefined
 
 	const nodeDescriptions = new Map<string, string>()
@@ -122,6 +142,8 @@ export async function fetchActiveRelationshipsAmongNodes(
 	maxPairs: number,
 	includedHistoryIds: Set<number>
 ): Promise<GraphPairOutput[]> {
+	// Skips the queries entirely, not just their result — see the flag.
+	if (!NARRATIVE_GRAPH_CONTEXT_ENABLED) return []
 	if (allNodeIds.length < 2) return []
 	const chatNodeIdSet = new Set(chatNodeIds)
 

@@ -78,8 +78,10 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 
 	getClient(): Anthropic {
 		if (!this._client) {
-			const apiKey = decryptApiKeyField(this.connection.extraJson?.apiKey) || ""
-			const baseURL = normalizeBaseUrl(this.connection.baseUrl) || undefined
+			const apiKey =
+				decryptApiKeyField(this.connection.extraJson?.apiKey) || ""
+			const baseURL =
+				normalizeBaseUrl(this.connection.baseUrl) || undefined
 			this._client = new Anthropic({
 				apiKey,
 				...(baseURL ? { baseURL } : {})

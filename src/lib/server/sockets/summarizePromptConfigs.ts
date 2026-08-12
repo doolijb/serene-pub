@@ -56,7 +56,10 @@ export const worldSummarizeConfigsListHandler: Handler<
 		const worldSummarizeConfigsList =
 			await db.query.worldSummarizeConfigs.findMany({
 				columns: { id: true, name: true, isImmutable: true },
-				orderBy: (c, { asc }) => [asc(c.isImmutable), asc(c.name)]
+				orderBy: (c, { asc, desc }) => [
+					desc(c.isImmutable),
+					asc(c.name)
+				]
 			})
 		const res: Sockets.WorldSummarizeConfigs.List.Response = {
 			worldSummarizeConfigsList
@@ -230,7 +233,10 @@ export const characterSummarizeConfigsListHandler: Handler<
 		const characterSummarizeConfigsList =
 			await db.query.characterSummarizeConfigs.findMany({
 				columns: { id: true, name: true, isImmutable: true },
-				orderBy: (c, { asc }) => [asc(c.isImmutable), asc(c.name)]
+				orderBy: (c, { asc, desc }) => [
+					desc(c.isImmutable),
+					asc(c.name)
+				]
 			})
 		const res: Sockets.CharacterSummarizeConfigs.List.Response = {
 			characterSummarizeConfigsList
@@ -418,7 +424,10 @@ export const sceneSummarizeConfigsListHandler: Handler<
 		const sceneSummarizeConfigsList =
 			await db.query.sceneSummarizeConfigs.findMany({
 				columns: { id: true, name: true, isImmutable: true },
-				orderBy: (c, { asc }) => [asc(c.isImmutable), asc(c.name)]
+				orderBy: (c, { asc, desc }) => [
+					desc(c.isImmutable),
+					asc(c.name)
+				]
 			})
 		const res: Sockets.SceneSummarizeConfigs.List.Response = {
 			sceneSummarizeConfigsList

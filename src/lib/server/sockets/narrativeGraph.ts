@@ -29,6 +29,7 @@ import {
 	type GraphBuilderResumeState
 } from "$lib/server/utils/graphBuilder"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
+import { resolveTaskConfig } from "$lib/server/utils/resolveTaskConfig"
 import { activityStore } from "$lib/server/utils/activityStore"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
 import {
@@ -37,6 +38,7 @@ import {
 } from "$lib/server/utils/characterBindingSync"
 import {
 	buildSceneCastList,
+	collectAliases,
 	resolveCharacterNamesToBindingIds,
 	entryMatches,
 	type ExtractedCastRef
@@ -80,7 +82,10 @@ export const narrativeGraphListHandler: Handler<
 			allDirectEntries
 		] = await Promise.all([
 			db.query.lorebookBindings.findMany({
-				where: eq(schema.lorebookBindings.lorebookId, params.lorebookId),
+				where: eq(
+					schema.lorebookBindings.lorebookId,
+					params.lorebookId
+				),
 				orderBy: asc(schema.lorebookBindings.id)
 			}),
 			db.query.narrativeRelationships.findMany({
@@ -246,9 +251,7 @@ export const narrativeGraphBuildHandler: Handler<
 		// below) gives the client the real message AND gives the modal an
 		// event to un-stick on. Failures *after* this window already reach the
 		// modal via the activity's status: "error" update.
-		let lorebook: Awaited<
-			ReturnType<typeof db.query.lorebooks.findFirst>
-		>
+		let lorebook: Awaited<ReturnType<typeof db.query.lorebooks.findFirst>>
 		let mode: "replace" | "extend"
 		let resumeKey: string
 		let resumeState: GraphBuilderResumeState | undefined
@@ -375,9 +378,7 @@ export const narrativeGraphBuildHandler: Handler<
 
 		// In extend mode, only process scenes not yet graphed
 		const filteredRawScenes =
-			mode === "extend"
-				? (rawScenes as any[]).filter((s) => !s.graphed)
-				: rawScenes
+			mode === "extend" ? rawScenes.filter((s) => !s.graphed) : rawScenes
 
 		// In extend mode, only process direct entries not yet graphed
 		const filteredDirectEntries =
@@ -405,7 +406,81 @@ export const narrativeGraphBuildHandler: Handler<
 		const { connection, sampling, contextConfig, promptConfig } =
 			await getUserConfigurations(userId)
 
-		if (!connection) {
+		/*
+		 * Graph extraction is a structured-output task and should not inherit
+		 * chat's decoding parameters.
+		 *
+		 * resolveTaskConfig has had `graph_pre_filter` / `graph_perspective`
+		 * task types and graphBuildConfigs has had per-sub-task connection and
+		 * sampling columns for some time; the build simply never called any of
+		 * it and took the user's chat defaults instead. That is measurably
+		 * costly: at chat temperature a roleplay-finetuned model answered 45%
+		 * of perspective calls with narrative prose rather than JSON, and
+		 * re-prompting recovered 1 of 13.
+		 *
+		 * Falls back to the chat connection/sampling whenever the graph config
+		 * leaves them unset, so nothing changes for a user who has not
+		 * configured one.
+		 *
+		 * The seeded "Default Graph Build" row leaves every connection and
+		 * sampling pointer NULL on purpose: the seed's UPDATE branch re-forces
+		 * each field it names on every boot, so a pointer written here would
+		 * revert the user's own choice on their next restart. The seed owns the
+		 * prompts; the pointers are the user's. (An earlier version of this
+		 * comment claimed the seed pointed sampling at "Precise (Extraction)" —
+		 * it does not, and did not.) Pointing the graph steps at that preset is
+		 * therefore something a user does, not something shipped.
+		 */
+		const systemSettingsRow = await db.query.systemSettings.findFirst()
+		const graphBuildConfigId =
+			systemSettingsRow?.defaultGraphBuildConfigId ?? null
+
+		// Every step is resolved, not just the perspective pass. The build used
+		// to resolve `graph_perspective` once and run all five steps on it, so
+		// node descriptions and state detection silently inherited the
+		// extraction profile, and the three configured prompts were never read
+		// at all. Each step now gets its own prompt, model and sampling.
+		const graphBuildConfig = graphBuildConfigId
+			? await db.query.graphBuildConfigs.findFirst({
+					where: (c, { eq }) => eq(c.id, graphBuildConfigId)
+				})
+			: undefined
+
+		const stepResolutions = await Promise.all(
+			(
+				[
+					["nodeResolution", "graph_node_resolution"],
+					["preFilter", "graph_pre_filter"],
+					["perspective", "graph_perspective"],
+					["nodeDescription", "graph_node_description"],
+					["stateDetection", "graph_state_detection"]
+				] as const
+			).map(async ([step, taskType]) => {
+				const resolved = await resolveTaskConfig({
+					taskType,
+					graphBuildConfigId
+				})
+				return [
+					step,
+					{
+						systemPrompt: (graphBuildConfig as any)?.[
+							`${step}SystemPrompt`
+						],
+						connection: resolved.connection,
+						sampling: resolved.sampling
+					}
+				] as const
+			})
+		)
+		const graphSteps = Object.fromEntries(stepResolutions)
+
+		// The perspective step still supplies the build-wide fallback, since it
+		// is the pass that dominates a build and the one whose failure modes the
+		// extraction profile was measured against.
+		const graphConnection = graphSteps.perspective.connection ?? connection
+		const graphSampling = graphSteps.perspective.sampling ?? sampling
+
+		if (!graphConnection) {
 			throw new Error(
 				"No AI connection configured. Please set up a connection first."
 			)
@@ -427,21 +502,35 @@ export const narrativeGraphBuildHandler: Handler<
 		// with no review step downstream"; a graph build has one, so this was
 		// misuse by its own contract. The build now proposes; apply commits.
 
+		// Cast has to be read explicitly: migration 0091 moved it off the scenes
+		// row into the `scene_characters` join table, so a scene row carries no
+		// cast fields at all. Reading it as `s.participantCharacters` — which is
+		// what this did, behind an `(s: any)` that hid it from the compiler —
+		// silently yielded undefined for every scene, so the build ignored every
+		// saved cast, re-derived it by LLM, and overwrote the user's on apply.
+		// The annotation is gone so the next column change is a type error.
+		const sceneCasts = await readSceneCasts(
+			filteredRawScenes.map((s) => s.id)
+		)
+
 		// Map scenes to GraphBuilderScene format with binding substitution applied
 		const scenes: GraphBuilderScene[] = [
-			...filteredRawScenes.map((s: any) => ({
-				id: s.id,
-				name: s.name,
-				summary: s.summary ? resolveBindings(s.summary) : s.summary,
-				historyEntryId: s.historyEntryId ?? null,
-				historyEntry: s.historyEntry ?? null,
-				participantCharacters: s.participantCharacters ?? null,
-				mentionedCharacters: s.mentionedCharacters ?? null,
-				chatId: s.chatId ?? null,
-				selectedMessageIds: s.selectedMessageIds?.length
-					? s.selectedMessageIds
-					: null
-			})),
+			...filteredRawScenes.map((s) => {
+				const cast = castFor(sceneCasts, s.id)
+				return {
+					id: s.id,
+					name: s.name,
+					summary: s.summary ? resolveBindings(s.summary) : s.summary,
+					historyEntryId: s.historyEntryId ?? null,
+					historyEntry: s.historyEntry ?? null,
+					participantCharacters: cast.participantCharacters,
+					mentionedCharacters: cast.mentionedCharacters,
+					chatId: s.chatId ?? null,
+					selectedMessageIds: s.selectedMessageIds?.length
+						? s.selectedMessageIds
+						: null
+				}
+			}),
 			// Map direct history entries to GraphBuilderScene format
 			...filteredDirectEntries.map((he) => ({
 				id: he.id,
@@ -474,7 +563,10 @@ export const narrativeGraphBuildHandler: Handler<
 		let seedRelationships: GraphBuilderSeedRelationship[] | undefined
 		{
 			const allBindings = await db.query.lorebookBindings.findMany({
-				where: eq(schema.lorebookBindings.lorebookId, params.lorebookId),
+				where: eq(
+					schema.lorebookBindings.lorebookId,
+					params.lorebookId
+				),
 				orderBy: asc(schema.lorebookBindings.id)
 			})
 
@@ -518,7 +610,9 @@ export const narrativeGraphBuildHandler: Handler<
 			function fallbackSummary(b: (typeof allBindings)[number]): string {
 				if (b.characterId) {
 					const char = charMap.get(b.characterId)
-					return char?.summary?.trim() || char?.description.trim() || ""
+					return (
+						char?.summary?.trim() || char?.description.trim() || ""
+					)
 				}
 				if (b.personaId) {
 					const persona = personaMap.get(b.personaId)
@@ -556,8 +650,14 @@ export const narrativeGraphBuildHandler: Handler<
 				}
 			}
 
-			// Only parent (non-alias) bindings as seeds; combine binding's
-			// own aliases + child names.
+			// Only parent (non-alias) bindings as seeds; the schema-mandated
+			// alias union plus this caller's own extra, child names.
+			//
+			// `absorbedAliases` used to be missing here — the one violator of
+			// the invariant lorebookBindings.absorbedAliases documents. That is
+			// precisely the wrong place to omit it: an identity absorbed by a
+			// merge was invisible to the build, so the build re-proposed the
+			// duplicate the merge had just resolved, after every merge, forever.
 			const seeds: GraphBuilderSeedNode[] = []
 			for (const b of allBindings) {
 				if (b.parentNodeId !== null) continue
@@ -570,7 +670,7 @@ export const narrativeGraphBuildHandler: Handler<
 					summary: b.summary?.trim() || fallbackSummary(b) || null,
 					aliases: [
 						...new Set([
-							...(b.aliases ?? []),
+							...collectAliases(b),
 							...(childrenByParent.get(b.id) ?? [])
 						])
 					]
@@ -589,17 +689,32 @@ export const narrativeGraphBuildHandler: Handler<
 			}))
 		}
 
+		// Screens newly-proposed character nodes: a station or an artefact with
+		// its own World Lore page is a subject of the setting, not a member of
+		// the cast, and the extraction prompt's one line saying so is routinely
+		// ignored. Names that already match a bound character never reach the
+		// filter — see resolveNameRefs.
+		const worldLore = await db
+			.select({
+				name: schema.worldLoreEntries.name,
+				category: schema.worldLoreEntries.category
+			})
+			.from(schema.worldLoreEntries)
+			.where(eq(schema.worldLoreEntries.lorebookId, params.lorebookId))
+
 		let latestSceneSnapshot: GraphBuilderResumeState | undefined
 
 		try {
 			const result = await buildGraphFromScenes({
 				scenes,
-				connection,
-				sampling,
+				connection: graphConnection,
+				sampling: graphSampling,
 				contextConfig,
 				promptConfig,
+				steps: graphSteps,
 				seedNodes,
 				seedRelationships,
+				worldLore,
 				signal: abortController.signal,
 				resumeState,
 				onSceneStart: (state) => {
@@ -722,7 +837,9 @@ export const narrativeGraphBuildHandler: Handler<
 				proposal,
 				sceneLabels: result.sceneLabels,
 				seedTempIdMap: result.seedTempIdMap,
-				seedNodeNames: result.seedNodeNames
+				seedNodeNames: result.seedNodeNames,
+				relationshipDiagnostics: result.relationshipDiagnostics,
+				filteredWorldLoreNames: result.filteredWorldLoreNames
 			})
 			return {
 				proposal,
@@ -940,7 +1057,9 @@ export const narrativeGraphApplyProposalHandler: Handler<
 		if (malformed.length > 0) {
 			fail(
 				`Cannot apply: ${malformed.length} proposal ${
-					malformed.length === 1 ? "entry references" : "entries reference"
+					malformed.length === 1
+						? "entry references"
+						: "entries reference"
 				} an unknown node (${malformed.slice(0, 3).join(", ")}). Nothing was changed.`
 			)
 		}
@@ -1944,7 +2063,8 @@ export const narrativeGraphCreateNodeHandler: Handler<
 					binding: token,
 					name,
 					nodeState: (nodeState ?? "active") as NodeState,
-					nodeVisibility: (nodeVisibility ?? "normal") as NodeVisibility,
+					nodeVisibility: (nodeVisibility ??
+						"normal") as NodeVisibility,
 					summary: summary ?? null,
 					historyEntryId: historyEntryId ?? null
 				})
@@ -2361,7 +2481,8 @@ export const narrativeGraphMergeNodeHandler: Handler<
 		// would mean reassigning one character's identity onto a different
 		// row — that's data corruption, not a merge. Unconditional,
 		// non-negotiable guard, no exception.
-		const childIsBound = child.characterId != null || child.personaId != null
+		const childIsBound =
+			child.characterId != null || child.personaId != null
 		const parentIsBound =
 			parent.characterId != null || parent.personaId != null
 		if (childIsBound && parentIsBound) {
@@ -2473,7 +2594,8 @@ export const narrativeGraphMergeNodeHandler: Handler<
 					// Keep whichever is more complete/recent; delete the other.
 					const relIsBetter =
 						rel.description.length > duplicate.description.length ||
-						(rel.description.length === duplicate.description.length &&
+						(rel.description.length ===
+							duplicate.description.length &&
 							(rel.historyEntryId ?? 0) >
 								(duplicate.historyEntryId ?? 0))
 					const toDelete = relIsBetter ? duplicate : rel
@@ -2496,9 +2618,7 @@ export const narrativeGraphMergeNodeHandler: Handler<
 								fromNodeId: newFromNodeId,
 								toNodeId: newToNodeId
 							})
-							.where(
-								eq(schema.narrativeRelationships.id, rel.id)
-							)
+							.where(eq(schema.narrativeRelationships.id, rel.id))
 					}
 					continue
 				}
@@ -2582,12 +2702,11 @@ export const narrativeGraphMergeNodeHandler: Handler<
 			// without this, any alias-children of the absorbed row would be
 			// silently orphaned the moment it's deleted, and undo would have
 			// no record to restore the link from).
-			const reassignedChildNodes = await tx.query.lorebookBindings.findMany(
-				{
+			const reassignedChildNodes =
+				await tx.query.lorebookBindings.findMany({
 					where: eq(schema.lorebookBindings.parentNodeId, absorbedId),
 					columns: { id: true }
-				}
-			)
+				})
 			const reassignedChildNodeIds = reassignedChildNodes.map((n) => n.id)
 			if (reassignedChildNodeIds.length > 0) {
 				await tx
@@ -2636,7 +2755,9 @@ export const narrativeGraphMergeNodeHandler: Handler<
 					vectorizedAt: null,
 					sceneId: survivor.sceneId ?? absorbed.sceneId ?? null,
 					historyEntryId:
-						survivor.historyEntryId ?? absorbed.historyEntryId ?? null
+						survivor.historyEntryId ??
+						absorbed.historyEntryId ??
+						null
 				})
 				.where(eq(schema.lorebookBindings.id, survivorId))
 
@@ -2727,6 +2848,23 @@ export const narrativeGraphUndoMergeHandler: Handler<
 				id: _oldId,
 				createdAt: snapshotCreatedAt,
 				updatedAt: _oldUpdatedAt,
+				// Dropped, not restored, for two separate reasons.
+				//
+				// Crash: snapshots live in a JSONB column, so every Date came
+				// back out as an ISO *string*. Spreading one into a `timestamp`
+				// column makes drizzle call `.toISOString()` on a string —
+				// `TypeError: value.toISOString is not a function`, which is
+				// what undoMerge died with. createdAt/updatedAt were already
+				// pulled out for that reason; vectorizedAt was missed.
+				//
+				// Correctness: the row returns under a NEW primary key, and
+				// embeddings are keyed by row id, so the old vector does not
+				// apply to it. Carrying vectorizedAt over would mark the
+				// restored row as already-embedded so it would never be
+				// re-queued — silently absent from RAG. Clearing both re-queues
+				// it.
+				vectorizedAt: _oldVectorizedAt,
+				embeddingModel: _oldEmbeddingModel,
 				...rest
 			} = snapshot
 
@@ -2747,9 +2885,9 @@ export const narrativeGraphUndoMergeHandler: Handler<
 			// Restore relationships still standing (rewritten, not deleted)
 			// back to their original endpoints.
 			const deletedIds = new Set(
-				(
-					log.deletedRelationships as Record<string, unknown>[]
-				).map((r) => r.id as number)
+				(log.deletedRelationships as Record<string, unknown>[]).map(
+					(r) => r.id as number
+				)
 			)
 			for (const rw of log.relationshipRewrites) {
 				if (deletedIds.has(rw.id)) continue // handled via re-insert below
@@ -2772,13 +2910,17 @@ export const narrativeGraphUndoMergeHandler: Handler<
 					id: _oldRelId,
 					createdAt: relCreatedAt,
 					updatedAt: _relUpdatedAt,
+					// Same two reasons as the binding snapshot above: an ISO
+					// string in a timestamp column crashes the insert, and a
+					// stale vectorizedAt on a new primary key hides the row
+					// from re-embedding.
+					vectorizedAt: _relVectorizedAt,
+					embeddingModel: _relEmbeddingModel,
 					...relRest
 				} = deletedRel
 				await tx.insert(schema.narrativeRelationships).values({
 					...(relRest as typeof schema.narrativeRelationships.$inferInsert),
-					fromNodeId: remapId(
-						relRest.fromNodeId as number
-					),
+					fromNodeId: remapId(relRest.fromNodeId as number),
 					toNodeId: remapId(relRest.toNodeId as number),
 					createdAt: relCreatedAt
 						? new Date(relCreatedAt as string)
@@ -2904,9 +3046,8 @@ export const narrativeGraphListMergeLogsHandler: Handler<
 				id: log.id,
 				survivorId: log.survivorId,
 				survivorName: log.survivor?.name ?? null,
-				absorbedName:
-					(log.absorbedSnapshot as Record<string, unknown>)
-						.name as string,
+				absorbedName: (log.absorbedSnapshot as Record<string, unknown>)
+					.name as string,
 				createdAt: log.createdAt
 			}))
 		}
@@ -3008,11 +3149,7 @@ export function registerNarrativeGraphHandlers(
 	register(socket, narrativeGraphApplyProposalHandler, emitToUser)
 	register(socket, narrativeGraphUpdateNodeHandler, emitToUser)
 	register(socket, narrativeGraphDeleteNodeHandler, emitToUser)
-	register(
-		socket,
-		narrativeGraphCheckNodeMergeReferencesHandler,
-		emitToUser
-	)
+	register(socket, narrativeGraphCheckNodeMergeReferencesHandler, emitToUser)
 	register(socket, narrativeGraphUpdateRelationshipHandler, emitToUser)
 	register(socket, narrativeGraphDeleteRelationshipHandler, emitToUser)
 	register(socket, narrativeGraphCreateRelationshipHandler, emitToUser)

@@ -30,6 +30,9 @@ export const users = pgTable(
 	"users",
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/** Stable seed identity, e.g. "sampling-default". NULL for user-created
+		 *  rows — see db/defaults.ts for why matching on id was unsafe. */
+		seedKey: text("seed_key").unique(),
 		username: text("username").notNull(),
 		displayName: text("display_name"),
 		theme: text("theme").notNull().default("hamlindigo"), // Remove next
@@ -64,65 +67,69 @@ export const userRelations = relations(users, ({ many, one }) => ({
 	passphrases: many(passphrases)
 }))
 
-export const userSettings = pgTable("user_settings", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	userId: integer("user_id")
-		.notNull()
-		.references(() => users.id, { onDelete: "cascade" }),
-	activeContextConfigId: integer("active_context_config_id").references(
-		() => contextConfigs.id,
-		{
+export const userSettings = pgTable(
+	"user_settings",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		userId: integer("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		activeContextConfigId: integer("active_context_config_id").references(
+			() => contextConfigs.id,
+			{
+				onDelete: "set null"
+			}
+		),
+		activePromptConfigId: integer("active_prompt_config_id").references(
+			() => promptConfigs.id,
+			{
+				onDelete: "set null"
+			}
+		),
+		activeNarratorPromptConfigId: integer(
+			"active_narrator_prompt_config_id"
+		).references(() => narratorPromptConfigs.id, {
 			onDelete: "set null"
-		}
-	),
-	activePromptConfigId: integer("active_prompt_config_id").references(
-		() => promptConfigs.id,
-		{
+		}),
+		activeSummarizeWorldConfigId: integer(
+			"active_summarize_world_config_id"
+		).references(() => worldSummarizeConfigs.id, { onDelete: "set null" }),
+		activeSummarizeCharacterConfigId: integer(
+			"active_summarize_character_config_id"
+		).references(() => characterSummarizeConfigs.id, {
 			onDelete: "set null"
-		}
-	),
-	activeNarratorPromptConfigId: integer(
-		"active_narrator_prompt_config_id"
-	).references(() => narratorPromptConfigs.id, {
-		onDelete: "set null"
-	}),
-	activeSummarizeWorldConfigId: integer(
-		"active_summarize_world_config_id"
-	).references(() => worldSummarizeConfigs.id, { onDelete: "set null" }),
-	activeSummarizeCharacterConfigId: integer(
-		"active_summarize_character_config_id"
-	).references(() => characterSummarizeConfigs.id, { onDelete: "set null" }),
-	activeSummarizeSceneConfigId: integer(
-		"active_summarize_scene_config_id"
-	).references(() => sceneSummarizeConfigs.id, { onDelete: "set null" }),
-	theme: text("theme").notNull().default("hamlindigo"),
-	darkMode: boolean("dark_mode").notNull().default(true),
-	showHomePageBanner: boolean("show_home_page_banner").default(true),
-	enableEasyPersonaCreation: boolean("enable_easy_persona_creation")
-		.notNull()
-		.default(true),
-	enableEasyCharacterCreation: boolean("enable_easy_character_creation")
-		.notNull()
-		.default(true),
-	showAllCharacterFields: boolean("show_all_character_fields")
-		.notNull()
-		.default(false),
-	backgroundImagePath: text("background_image_path"),
-	backgroundOpacity: integer("background_opacity").notNull().default(75),
-	// Personal viewing preference — independent of who owns the underlying
-	// CharaVault account (a single admin-configured, instance-wide
-	// credential; see systemSettings.charaVaultEmail). Only has any effect
-	// when ENABLE_UNSAFE_CHARACTER_BROWSING is set.
-	charaVaultIncludeNsfw: boolean("chara_vault_include_nsfw")
-		.notNull()
-		.default(false),
-	createdAt: date("created_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`),
-	updatedAt: date("updated_at")
-		.notNull()
-		.default(sql`(CURRENT_TIMESTAMP)`)
-		.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`)
+		}),
+		activeSummarizeSceneConfigId: integer(
+			"active_summarize_scene_config_id"
+		).references(() => sceneSummarizeConfigs.id, { onDelete: "set null" }),
+		theme: text("theme").notNull().default("hamlindigo"),
+		darkMode: boolean("dark_mode").notNull().default(true),
+		showHomePageBanner: boolean("show_home_page_banner").default(true),
+		enableEasyPersonaCreation: boolean("enable_easy_persona_creation")
+			.notNull()
+			.default(true),
+		enableEasyCharacterCreation: boolean("enable_easy_character_creation")
+			.notNull()
+			.default(true),
+		showAllCharacterFields: boolean("show_all_character_fields")
+			.notNull()
+			.default(false),
+		backgroundImagePath: text("background_image_path"),
+		backgroundOpacity: integer("background_opacity").notNull().default(75),
+		// Personal viewing preference — independent of who owns the underlying
+		// CharaVault account (a single admin-configured, instance-wide
+		// credential; see systemSettings.charaVaultEmail). Only has any effect
+		// when ENABLE_UNSAFE_CHARACTER_BROWSING is set.
+		charaVaultIncludeNsfw: boolean("chara_vault_include_nsfw")
+			.notNull()
+			.default(false),
+		createdAt: date("created_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`),
+		updatedAt: date("updated_at")
+			.notNull()
+			.default(sql`(CURRENT_TIMESTAMP)`)
+			.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`)
 	},
 	(table) => [uniqueIndex("user_settings_user_id_unique").on(table.userId)]
 )
@@ -209,6 +216,9 @@ export const usersTokenRelations = relations(userTokens, ({ many, one }) => ({
 
 export const samplingConfigs = pgTable("sampling_configs", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	/** Stable seed identity, e.g. "sampling-default". NULL for user-created
+	 *  rows — see db/defaults.ts for why matching on id was unsafe. */
+	seedKey: text("seed_key").unique(),
 	name: text("name").notNull(), // Name for this sampling config (for selection)
 	isImmutable: boolean("is_immutable").notNull().default(false), // Is this the built-in config? Then we don't want to allow mutation/deletion
 
@@ -355,6 +365,9 @@ export const connectionsRelations = relations(connections, () => ({}))
 
 export const contextConfigs = pgTable("context_configs", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	/** Stable seed identity, e.g. "sampling-default". NULL for user-created
+	 *  rows — see db/defaults.ts for why matching on id was unsafe. */
+	seedKey: text("seed_key").unique(),
 	isImmutable: boolean("is_immutable").notNull().default(false),
 	name: text("name").notNull(),
 	template: text("template") // Sillytavern storyString
@@ -364,6 +377,9 @@ export const contextConfigsRelations = relations(contextConfigs, () => ({}))
 
 export const promptConfigs = pgTable("prompt_configs", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	/** Stable seed identity, e.g. "sampling-default". NULL for user-created
+	 *  rows — see db/defaults.ts for why matching on id was unsafe. */
+	seedKey: text("seed_key").unique(),
 	isImmutable: boolean("is_immutable").notNull().default(false),
 	name: text("name").notNull(),
 	systemPrompt: text("system_prompt").notNull(),
@@ -407,6 +423,9 @@ export const promptConfigsRelations = relations(promptConfigs, ({ one }) => ({
 // config for a different chat type can't collide with it.
 export const narratorPromptConfigs = pgTable("narrator_prompt_configs", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	/** Stable seed identity, e.g. "sampling-default". NULL for user-created
+	 *  rows — see db/defaults.ts for why matching on id was unsafe. */
+	seedKey: text("seed_key").unique(),
 	isImmutable: boolean("is_immutable").notNull().default(false),
 	name: text("name").notNull(),
 	// Chat-facing display name/label shown on messages generated with this
@@ -455,6 +474,9 @@ export const narratorPromptConfigsRelations = relations(
 
 export const worldSummarizeConfigs = pgTable("world_summarize_configs", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	/** Stable seed identity, e.g. "sampling-default". NULL for user-created
+	 *  rows — see db/defaults.ts for why matching on id was unsafe. */
+	seedKey: text("seed_key").unique(),
 	isImmutable: boolean("is_immutable").notNull().default(false),
 	name: text("name").notNull(),
 	batchSystemPrompt: text("batch_system_prompt").notNull(),
@@ -520,6 +542,9 @@ export const characterSummarizeConfigs = pgTable(
 	"character_summarize_configs",
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/** Stable seed identity, e.g. "sampling-default". NULL for user-created
+		 *  rows — see db/defaults.ts for why matching on id was unsafe. */
+		seedKey: text("seed_key").unique(),
 		isImmutable: boolean("is_immutable").notNull().default(false),
 		name: text("name").notNull(),
 		batchSystemPrompt: text("batch_system_prompt").notNull(),
@@ -584,6 +609,9 @@ export const characterSummarizeConfigsRelations = relations(
 
 export const sceneSummarizeConfigs = pgTable("scene_summarize_configs", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	/** Stable seed identity, e.g. "sampling-default". NULL for user-created
+	 *  rows — see db/defaults.ts for why matching on id was unsafe. */
+	seedKey: text("seed_key").unique(),
 	isImmutable: boolean("is_immutable").notNull().default(false),
 	name: text("name").notNull(),
 	batchSystemPrompt: text("batch_system_prompt").notNull(),
@@ -664,6 +692,9 @@ export const sceneSummarizeConfigsRelations = relations(
 
 export const graphBuildConfigs = pgTable("graph_build_configs", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	/** Stable seed identity, e.g. "sampling-default". NULL for user-created
+	 *  rows — see db/defaults.ts for why matching on id was unsafe. */
+	seedKey: text("seed_key").unique(),
 	isImmutable: boolean("is_immutable").notNull().default(false),
 	name: text("name").notNull(),
 	nodeResolutionSystemPrompt: text("node_resolution_system_prompt")
@@ -694,6 +725,26 @@ export const graphBuildConfigs = pgTable("graph_build_configs", {
 	),
 	perspectiveSamplingConfigId: integer(
 		"perspective_sampling_config_id"
+	).references(() => samplingConfigs.id, { onDelete: "set null" }),
+	/** Prose, not JSON — the two-sentence intro written for a new character. */
+	nodeDescriptionSystemPrompt: text("node_description_system_prompt")
+		.notNull()
+		.default(""),
+	nodeDescriptionConnectionId: integer(
+		"node_description_connection_id"
+	).references(() => connections.id, { onDelete: "set null" }),
+	nodeDescriptionSamplingConfigId: integer(
+		"node_description_sampling_config_id"
+	).references(() => samplingConfigs.id, { onDelete: "set null" }),
+	/** Did any present character reach a new lifecycle state this scene? */
+	stateDetectionSystemPrompt: text("state_detection_system_prompt")
+		.notNull()
+		.default(""),
+	stateDetectionConnectionId: integer(
+		"state_detection_connection_id"
+	).references(() => connections.id, { onDelete: "set null" }),
+	stateDetectionSamplingConfigId: integer(
+		"state_detection_sampling_config_id"
 	).references(() => samplingConfigs.id, { onDelete: "set null" })
 })
 
@@ -722,6 +773,22 @@ export const graphBuildConfigsRelations = relations(
 		}),
 		perspectiveSamplingConfig: one(samplingConfigs, {
 			fields: [graphBuildConfigs.perspectiveSamplingConfigId],
+			references: [samplingConfigs.id]
+		}),
+		nodeDescriptionConnection: one(connections, {
+			fields: [graphBuildConfigs.nodeDescriptionConnectionId],
+			references: [connections.id]
+		}),
+		nodeDescriptionSamplingConfig: one(samplingConfigs, {
+			fields: [graphBuildConfigs.nodeDescriptionSamplingConfigId],
+			references: [samplingConfigs.id]
+		}),
+		stateDetectionConnection: one(connections, {
+			fields: [graphBuildConfigs.stateDetectionConnectionId],
+			references: [connections.id]
+		}),
+		stateDetectionSamplingConfig: one(samplingConfigs, {
+			fields: [graphBuildConfigs.stateDetectionSamplingConfigId],
 			references: [samplingConfigs.id]
 		})
 	})
@@ -922,75 +989,79 @@ export const lorebookBindingsRelations = relations(
 // references onto the survivor). This is what makes that safe: enough of
 // the absorbed row's state and every rewrite/deletion performed is
 // recorded here to reverse a mistaken absorb via narrativeGraph:undoMerge.
-export const bindingMergeLogs = pgTable("binding_merge_logs", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	lorebookId: integer("lorebook_id")
-		.notNull()
-		.references(() => lorebooks.id, { onDelete: "cascade" }),
-	userId: integer("user_id")
-		.notNull()
-		.references(() => users.id, { onDelete: "cascade" }),
-	// Nullable: if the survivor is later itself deleted/absorbed elsewhere,
-	// the log entry is kept for history but can no longer be undone.
-	survivorId: integer("survivor_id").references(() => lorebookBindings.id, {
-		onDelete: "set null"
-	}),
-	// Full field snapshot of the absorbed row (including its own binding
-	// token) — enough to re-INSERT it verbatim on undo.
-	absorbedSnapshot: json("absorbed_snapshot")
-		.notNull()
-		.$type<Record<string, unknown>>(),
-	// Relationship rows whose fromNodeId/toNodeId were rewritten from the
-	// absorbed id to the survivor's — {id, oldFromNodeId, oldToNodeId} so
-	// undo can point them back.
-	relationshipRewrites: json("relationship_rewrites")
-		.notNull()
-		.default([])
-		.$type<{ id: number; oldFromNodeId: number; oldToNodeId: number }[]>(),
-	// Full row snapshots of relationships deleted outright (self-loops
-	// created by the rewrite, or third-party duplicates) — undo re-inserts
-	// these rather than trying to re-derive them.
-	deletedRelationships: json("deleted_relationships")
-		.notNull()
-		.default([])
-		.$type<Record<string, unknown>[]>(),
-	// Pre-merge participantCharacters/mentionedCharacters for every scene
-	// whose arrays referenced the absorbed id — undo restores these
-	// recorded values directly rather than reverse-computing the rewrite.
-	sceneSnapshots: json("scene_snapshots")
-		.notNull()
-		.default([])
-		.$type<
+export const bindingMergeLogs = pgTable(
+	"binding_merge_logs",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		lorebookId: integer("lorebook_id")
+			.notNull()
+			.references(() => lorebooks.id, { onDelete: "cascade" }),
+		userId: integer("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		// Nullable: if the survivor is later itself deleted/absorbed elsewhere,
+		// the log entry is kept for history but can no longer be undone.
+		survivorId: integer("survivor_id").references(
+			() => lorebookBindings.id,
+			{
+				onDelete: "set null"
+			}
+		),
+		// Full field snapshot of the absorbed row (including its own binding
+		// token) — enough to re-INSERT it verbatim on undo.
+		absorbedSnapshot: json("absorbed_snapshot")
+			.notNull()
+			.$type<Record<string, unknown>>(),
+		// Relationship rows whose fromNodeId/toNodeId were rewritten from the
+		// absorbed id to the survivor's — {id, oldFromNodeId, oldToNodeId} so
+		// undo can point them back.
+		relationshipRewrites: json("relationship_rewrites")
+			.notNull()
+			.default([])
+			.$type<
+				{ id: number; oldFromNodeId: number; oldToNodeId: number }[]
+			>(),
+		// Full row snapshots of relationships deleted outright (self-loops
+		// created by the rewrite, or third-party duplicates) — undo re-inserts
+		// these rather than trying to re-derive them.
+		deletedRelationships: json("deleted_relationships")
+			.notNull()
+			.default([])
+			.$type<Record<string, unknown>[]>(),
+		// Pre-merge participantCharacters/mentionedCharacters for every scene
+		// whose arrays referenced the absorbed id — undo restores these
+		// recorded values directly rather than reverse-computing the rewrite.
+		sceneSnapshots: json("scene_snapshots").notNull().default([]).$type<
 			{
 				sceneId: number
 				participantCharacters: number[]
 				mentionedCharacters: number[]
 			}[]
 		>(),
-	// Exact strings appended to the survivor's absorbedAliases by this
-	// merge — undo removes precisely these, not a guess.
-	absorbedAliasesAdded: json("absorbed_aliases_added")
-		.notNull()
-		.default([])
-		.$type<string[]>(),
-	// characterLoreEntries reassigned from the absorbed row to the
-	// survivor — undo moves these back to the recreated absorbed row.
-	reassignedCharacterLoreEntryIds: json(
-		"reassigned_character_lore_entry_ids"
-	)
-		.notNull()
-		.default([])
-		.$type<number[]>(),
-	// lorebookBindings rows whose parentNodeId pointed at the absorbed row,
-	// reassigned to the survivor — without this, those alias-children would
-	// otherwise be silently orphaned (parentNodeId SET NULL by the FK) when
-	// the absorbed row is deleted, and undo would have no way to restore the
-	// link. Undo moves these back to point at the recreated absorbed row.
-	reassignedChildNodeIds: json("reassigned_child_node_ids")
-		.notNull()
-		.default([])
-		.$type<number[]>(),
-	createdAt: timestamp("created_at").notNull().defaultNow()
+		// Exact strings appended to the survivor's absorbedAliases by this
+		// merge — undo removes precisely these, not a guess.
+		absorbedAliasesAdded: json("absorbed_aliases_added")
+			.notNull()
+			.default([])
+			.$type<string[]>(),
+		// characterLoreEntries reassigned from the absorbed row to the
+		// survivor — undo moves these back to the recreated absorbed row.
+		reassignedCharacterLoreEntryIds: json(
+			"reassigned_character_lore_entry_ids"
+		)
+			.notNull()
+			.default([])
+			.$type<number[]>(),
+		// lorebookBindings rows whose parentNodeId pointed at the absorbed row,
+		// reassigned to the survivor — without this, those alias-children would
+		// otherwise be silently orphaned (parentNodeId SET NULL by the FK) when
+		// the absorbed row is deleted, and undo would have no way to restore the
+		// link. Undo moves these back to point at the recreated absorbed row.
+		reassignedChildNodeIds: json("reassigned_child_node_ids")
+			.notNull()
+			.default([])
+			.$type<number[]>(),
+		createdAt: timestamp("created_at").notNull().defaultNow()
 	},
 	(table) => [
 		index("binding_merge_logs_lorebook_id_idx").on(table.lorebookId)

@@ -126,11 +126,35 @@
 		}
 	}
 
+	// Skips the FIRST write-back, which is the defaults normalization done in
+	// onMount, not a user edit.
+	//
+	// onMount builds the field state from `{...defaults, ...connection.extraJson}`,
+	// so it legitimately gains every default key the stored row lacked. Writing
+	// that straight back into `connection` made the form differ from the
+	// parent's `originalConnection` the instant it opened — the panel reported
+	// unsaved changes with nothing touched, and then blocked closing behind a
+	// destructive-sounding confirm. Real edits still write through, and a save
+	// still persists the full normalized set.
+	let extraJsonInitialized = false
 	$effect(() => {
 		const _koboldCppFields = koboldCppFields
-		if (_koboldCppFields) {
-			connection.extraJson = extraFieldsToExtraJson(_koboldCppFields)
+		if (!_koboldCppFields) return
+		// Computed on EVERY run, before the skip check, and deliberately so:
+		// an effect only subscribes to the state it actually reads, and the
+		// individual field values are read inside this call. Returning before
+		// it — as a first attempt did — meant the effect never subscribed to
+		// them, so later toggles re-triggered nothing and the form never went
+		// dirty. Skip the WRITE, never the read.
+		const nextExtraJson = extraFieldsToExtraJson(_koboldCppFields)
+		// The first populated run is onMount's defaults normalization, not a
+		// user edit — writing it back made the panel report unsaved changes the
+		// instant it opened, then block closing behind a destructive confirm.
+		if (!extraJsonInitialized) {
+			extraJsonInitialized = true
+			return
 		}
+		connection.extraJson = nextExtraJson
 	})
 
 	onMount(() => {

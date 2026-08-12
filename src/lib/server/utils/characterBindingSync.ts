@@ -6,14 +6,24 @@
 // rejected elsewhere (narrativeGraphUpdateNodeHandler); this is the only
 // path that's allowed to write those two columns on a bound row.
 //
-// Takes an optional `dbInstance` (defaulting to the app's shared `db`) so
-// the standalone data-migration script (scripts/migrate-lorebook-bindings-
-// data.ts) can reuse this exact logic against its own PGlite connection
-// without pulling in `$lib/server/db`'s `$app/environment` dependency,
-// which only resolves inside a SvelteKit/Vite context. The default is
-// loaded via a dynamic import (only reached when no explicit instance is
-// passed in) rather than a top-level import, so this module itself stays
-// safe to import from a plain standalone script.
+// THIS MODULE MUST NOT STATICALLY IMPORT `$lib/server/db`. It is imported by
+// db/defaults.ts, whose sync() runs at module scope of db/index.ts — a static
+// import would make db/index.ts depend on a module that depends on it, through
+// its own boot path.
+//
+// The `defaultDb()` dynamic import below is the fallback for callers with no
+// db of their own. It is NOT safe to reach during boot for the same reason:
+// re-entering a mid-evaluation module works unbundled, but Rollup emits the
+// chunk namespace object as a `const` after the module body, so it throws
+// `Cannot access 'index' before initialization` in a packaged build. Callers
+// on the boot path (db/defaults.ts) therefore pass `db` explicitly — see the
+// comment at its backfillMissingBindingNames() call.
+//
+// A previous version of this note justified the optional `dbInstance` by
+// pointing at `scripts/migrate-lorebook-bindings-data.ts`. That script does
+// not exist in the repo and never did, so the stated rationale was unfalsifiable
+// either way; the real constraint is the import cycle above. Tests also pass an
+// instance explicitly (characterBindingSync.test.ts).
 
 import * as schema from "$lib/server/db/schema"
 import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm"
@@ -67,11 +77,35 @@ export async function syncLorebookBindingsForCharacter(
 		})
 		if (!character) return
 
+		// The real name is part of the PROJECTION, not user data.
+		//
+		// resolveCharacterName prefers the nickname, so once one is set the
+		// binding is named by it and the real name disappears from everything
+		// downstream — every cast list, every name matcher. A scene referring
+		// to "Commander Thorne" then has nothing to match against a binding
+		// named "Maren", and the graph proposes a duplicate character.
+		//
+		// Deriving it HERE, rather than seeding characters.aliases at save
+		// time, is deliberate. A first attempt did the latter and it was a
+		// side-effect: it silently edited a user-owned field during a save the
+		// user made for another reason, and then needed change-detection
+		// bookkeeping so a deletion would stick. None of that arises for a
+		// projection — this column is a full REPLACE target recomputed on
+		// every sync, exactly like `name` above, so there is nothing to
+		// remember and nothing to fight. Identities that must SURVIVE a sync
+		// go in absorbedAliases; that is what that column is for.
+		const derived = character.aliases ?? []
+		const realName = character.name?.trim()
+		const aliases =
+			realName && realName !== resolveCharacterName(character)
+				? [...derived, realName]
+				: derived
+
 		await tx
 			.update(schema.lorebookBindings)
 			.set({
 				name: resolveCharacterName(character),
-				aliases: character.aliases ?? []
+				aliases
 			})
 			.where(eq(schema.lorebookBindings.characterId, characterId))
 	})

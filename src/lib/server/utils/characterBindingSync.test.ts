@@ -1,7 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { createTestDb, createTestUser, type TestDb } from "$lib/server/utils/testDb"
+import {
+	createTestDb,
+	createTestUser,
+	type TestDb
+} from "$lib/server/utils/testDb"
 import {
 	backfillMissingBindingNames,
 	resolveOrCreateBinding,
@@ -86,11 +90,15 @@ describe("syncLorebookBindingsForCharacter", () => {
 		const afterB = await getBinding(bindingB.id)
 		const afterUnrelated = await getBinding(unrelated.id)
 
-		// resolveCharacterName prefers nickname over name.
+		// resolveCharacterName prefers nickname over name — and because that
+		// makes the binding's name "Newt", the real name is projected into
+		// aliases so it stays matchable. See characterBindingSync.ts and
+		// characterBindingSync.nicknameAlias.int.test.ts: without it a scene
+		// referring to the character by their real name matches nothing.
 		expect(afterA?.name).toBe("Newt")
-		expect(afterA?.aliases).toEqual(["New Alias"])
+		expect(afterA?.aliases).toEqual(["New Alias", "New Name"])
 		expect(afterB?.name).toBe("Newt")
-		expect(afterB?.aliases).toEqual(["New Alias"])
+		expect(afterB?.aliases).toEqual(["New Alias", "New Name"])
 
 		expect(afterUnrelated?.name).toBe("Unrelated NPC")
 		expect(afterUnrelated?.aliases).toEqual(["NPC Alias"])
@@ -128,7 +136,11 @@ describe("syncLorebookBindingsForPersona", () => {
 			.returning()
 		const [character] = await testDb
 			.insert(schema.characters)
-			.values({ userId: user.id, name: "Untouched Character", description: "" })
+			.values({
+				userId: user.id,
+				name: "Untouched Character",
+				description: ""
+			})
 			.returning()
 		const [personaBinding] = await testDb
 			.insert(schema.lorebookBindings)
@@ -306,7 +318,11 @@ describe("backfillMissingBindingNames", () => {
 			.returning()
 		const [character] = await testDb
 			.insert(schema.characters)
-			.values({ userId: user.id, name: "Stale Name Char", description: "" })
+			.values({
+				userId: user.id,
+				name: "Stale Name Char",
+				description: ""
+			})
 			.returning()
 		const [binding] = await testDb
 			.insert(schema.lorebookBindings)
@@ -365,7 +381,11 @@ describe("backfillMissingBindingNames", () => {
 			.returning()
 		const [character] = await testDb
 			.insert(schema.characters)
-			.values({ userId: user.id, name: "Already Synced", description: "" })
+			.values({
+				userId: user.id,
+				name: "Already Synced",
+				description: ""
+			})
 			.returning()
 		const [namedBinding] = await testDb
 			.insert(schema.lorebookBindings)
@@ -393,9 +413,7 @@ describe("backfillMissingBindingNames", () => {
 			backfillMissingBindingNames(testDb)
 		).resolves.toBeUndefined()
 
-		expect((await getBinding(namedBinding.id))?.name).toBe(
-			"Already Synced"
-		)
+		expect((await getBinding(namedBinding.id))?.name).toBe("Already Synced")
 		expect((await getBinding(npcBinding.id))?.name).toBe("")
 	})
 
@@ -407,7 +425,11 @@ describe("backfillMissingBindingNames", () => {
 			.returning()
 		const [character] = await testDb
 			.insert(schema.characters)
-			.values({ userId: user.id, name: "Idempotent Char", description: "" })
+			.values({
+				userId: user.id,
+				name: "Idempotent Char",
+				description: ""
+			})
 			.returning()
 		await testDb.insert(schema.lorebookBindings).values({
 			lorebookId: lorebook.id,

@@ -108,7 +108,35 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		const params: ChatCompletionCreateParamsBase = {
 			model,
 			messages,
-			...this.mapSamplingConfig()
+			...this.mapSamplingConfig(),
+			// Several OpenAI-compatible backends reject json_object mode unless
+			// the word "JSON" appears somewhere in the prompt. Every caller that
+			// sets responseFormat here sends a prompt whose first line states
+			// the JSON contract, so this holds — but it is a real constraint on
+			// those prompts, not an incidental detail.
+			// With a schema this upgrades to json_schema mode. `strict: true` is
+			// safe here because jsonSchemaToGbnf's contract already requires
+			// what strict mode requires — additionalProperties:false and every
+			// property listed in `required` — so a schema that reaches this
+			// line has necessarily satisfied both.
+			//
+			// Backends vary: the OpenAI-compatible zoo supports json_object far
+			// more widely than json_schema, so this is the one adapter where a
+			// schema may be rejected by a server that accepts plain JSON mode.
+			...(this.responseFormat === "json"
+				? this.responseSchema
+					? {
+							response_format: {
+								type: "json_schema" as const,
+								json_schema: {
+									name: "response",
+									strict: true,
+									schema: this.responseSchema
+								}
+							}
+						}
+					: { response_format: { type: "json_object" as const } }
+				: {})
 		}
 
 		const promptFormat = this.connection?.extraJson?.prerenderPrompt

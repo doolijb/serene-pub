@@ -1,4 +1,14 @@
 <script lang="ts">
+	import {
+		edgePath,
+		edgeBundleKey,
+		aggregateEdgesByDirection,
+		edgeCountColor,
+		edgeCountWidth,
+		EDGE_BASE_WIDTH,
+		NODE_RADIUS,
+		CURVE_SPACING
+	} from "./edgeGeometry"
 	/**
 	 * Force-directed graph visualization using plain SVG.
 	 * No external physics library — uses a simple Verlet integration loop.
@@ -64,7 +74,6 @@
 	const SPRING_K = 0.04
 	const DAMPING = 0.82
 	const CENTER_PULL = 0.008
-	const NODE_RADIUS = 22
 	const MAX_ITER = 500
 
 	let iter = 0
@@ -140,6 +149,57 @@
 	function clearPerspective() {
 		perspectiveNodeId = null
 	}
+
+	/**
+	 * Edge labels are shown when the view is actually readable, not always.
+	 *
+	 * Fanning parallel edges apart stopped a pair's own labels from landing on
+	 * top of each other, but it cannot help with the other half of the problem:
+	 * in a dense cluster, labels belonging to *different* pairs still crowd,
+	 * because they compete for the same middle of the graph. Drawing every one
+	 * of them at every zoom level is what made the default view unreadable.
+	 *
+	 * So the structure is shown by default and the vocabulary on demand —
+	 * either by focusing a node (which already dims everything unrelated, so
+	 * only a handful of edges remain) or by zooming in far enough that the
+	 * labels have room. Both are things a user already does to inspect a graph.
+	 */
+	const LABEL_ZOOM_THRESHOLD = 1.4
+	let showEdgeLabels = $derived(
+		perspectiveNodeId !== null || zoom >= LABEL_ZOOM_THRESHOLD
+	)
+
+	/**
+	 * Zoomed out and unfocused, every relationship between a pair collapses to
+	 * one arrow per direction carrying a count. Focusing a node or zooming in
+	 * expands them back to individual typed edges — the same gesture that
+	 * reveals labels, so there is one rule to learn rather than two.
+	 */
+	let aggregated = $derived(!showEdgeLabels)
+
+	let aggregatedEdges = $derived.by(() => {
+		const aggs = aggregateEdgesByDirection(
+			simEdges.map((e) => ({
+				source: e.source,
+				target: e.target,
+				status: e.rel.status
+			}))
+		)
+		// Fan the two directions of a pair apart using the same bundling rule
+		// as individual edges, so an aggregated pair reads the same way.
+		const totals = new Map<string, number>()
+		for (const a of aggs) {
+			const k = edgeBundleKey(a.source, a.target)
+			totals.set(k, (totals.get(k) ?? 0) + 1)
+		}
+		const counters = new Map<string, number>()
+		return aggs.map((a) => {
+			const k = edgeBundleKey(a.source, a.target)
+			const idx = counters.get(k) ?? 0
+			counters.set(k, idx + 1)
+			return { agg: a, idx, total: totals.get(k) ?? 1 }
+		})
+	})
 
 	// ── Simulation ────────────────────────────────────────────────────────────
 	function initSim() {
@@ -379,24 +439,17 @@
 	}
 
 	// ── Parallel edge bundling ────────────────────────────────────────────────
-	const CURVE_SPACING = 38
 
 	let indexedEdges = $derived.by(() => {
 		const relLookup = new Map(relationships.map((r) => [r.id, r]))
 		const totals = new Map<string, number>()
 		for (const edge of simEdges) {
-			const key =
-				Math.min(edge.source, edge.target) +
-				"-" +
-				Math.max(edge.source, edge.target)
+			const key = edgeBundleKey(edge.source, edge.target)
 			totals.set(key, (totals.get(key) ?? 0) + 1)
 		}
 		const counters = new Map<string, number>()
 		return simEdges.map((edge) => {
-			const key =
-				Math.min(edge.source, edge.target) +
-				"-" +
-				Math.max(edge.source, edge.target)
+			const key = edgeBundleKey(edge.source, edge.target)
 			const idx = counters.get(key) ?? 0
 			counters.set(key, idx + 1)
 			const liveRel = relLookup.get(edge.rel.id) ?? edge.rel
@@ -407,37 +460,6 @@
 			}
 		})
 	})
-
-	function edgePath(
-		src: SimNode,
-		tgt: SimNode,
-		idx: number,
-		total: number
-	): { d: string; labelX: number; labelY: number } {
-		const offset = (idx - (total - 1) / 2) * CURVE_SPACING
-		const midX = (src.x + tgt.x) / 2
-		const midY = (src.y + tgt.y) / 2
-		const dx = tgt.x - src.x
-		const dy = tgt.y - src.y
-		const len = Math.sqrt(dx * dx + dy * dy) || 1
-		const px = -dy / len
-		const py = dx / len
-		const cx = midX + px * offset
-		const cy = midY + py * offset
-		const stDx = cx - src.x
-		const stDy = cy - src.y
-		const stLen = Math.sqrt(stDx * stDx + stDy * stDy) || 1
-		const x1 = src.x + (stDx / stLen) * NODE_RADIUS
-		const y1 = src.y + (stDy / stLen) * NODE_RADIUS
-		const etDx = tgt.x - cx
-		const etDy = tgt.y - cy
-		const etLen = Math.sqrt(etDx * etDx + etDy * etDy) || 1
-		const x2 = tgt.x - (etDx / etLen) * NODE_RADIUS
-		const y2 = tgt.y - (etDy / etLen) * NODE_RADIUS
-		const labelX = 0.25 * x1 + 0.5 * cx + 0.25 * x2
-		const labelY = 0.25 * y1 + 0.5 * cy + 0.25 * y2
-		return { d: `M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`, labelX, labelY }
-	}
 
 	// Focal node name for toolbar display
 	let perspectiveNodeName = $derived(
@@ -521,39 +543,83 @@
 		</defs>
 
 		<g transform="translate({panX}, {panY}) scale({zoom})">
-			<!-- Edges -->
-			{#each indexedEdges as { edge, idx, total }}
-				{@const srcNode = getSimNode(edge.source)}
-				{@const tgtNode = getSimNode(edge.target)}
-				{#if srcNode && tgtNode}
-					{@const ep = edgePath(srcNode, tgtNode, idx, total)}
-					{@const scoped = edgeInScope(edge.source, edge.target)}
-					<!-- svelte-ignore a11y_click_events_have_key_events -->
-					<path
-						d={ep.d}
-						stroke="#6b7280"
-						stroke-width="1.5"
-						stroke-opacity={scoped ? 0.55 : 0.1}
-						stroke-dasharray={edgeDash(edge.rel.status)}
-						fill="none"
-						marker-end="url(#arrowhead)"
-						class="cursor-pointer transition-opacity"
-						onclick={() => onRelClick?.(edge.rel)}
-					/>
-					{#if scoped}
-						<text
-							x={ep.labelX}
-							y={ep.labelY - 4}
-							text-anchor="middle"
-							font-size="9"
-							fill="#9ca3af"
-							class="pointer-events-none select-none"
+			<!-- Edges — aggregated when zoomed out, individual when not -->
+			{#if aggregated}
+				{#each aggregatedEdges as { agg, idx, total }}
+					{@const srcNode = getSimNode(agg.source)}
+					{@const tgtNode = getSimNode(agg.target)}
+					{#if srcNode && tgtNode}
+						{@const ep = edgePath(srcNode, tgtNode, idx, total)}
+						{@const scoped = edgeInScope(agg.source, agg.target)}
+						{@const stroke = edgeCountColor(agg.liveCount)}
+						<path
+							d={ep.d}
+							{stroke}
+							stroke-width={edgeCountWidth(agg.liveCount)}
+							stroke-opacity={scoped ? 0.75 : 0.1}
+							stroke-dasharray={agg.liveCount === 0
+								? "4 3"
+								: "none"}
+							fill="none"
+							marker-end="url(#arrowhead)"
+							class="transition-opacity"
 						>
-							{edge.rel.relationshipType}
-						</text>
+							<title>
+								{agg.liveCount} active of {agg.totalCount} relationship{agg.totalCount ===
+								1
+									? ""
+									: "s"}
+							</title>
+						</path>
+						{#if scoped && agg.liveCount > 0}
+							<text
+								x={ep.labelX}
+								y={ep.labelY + 3}
+								text-anchor="middle"
+								font-size="10"
+								font-weight="600"
+								fill={stroke}
+								class="pointer-events-none select-none"
+							>
+								{agg.liveCount}
+							</text>
+						{/if}
 					{/if}
-				{/if}
-			{/each}
+				{/each}
+			{:else}
+				{#each indexedEdges as { edge, idx, total }}
+					{@const srcNode = getSimNode(edge.source)}
+					{@const tgtNode = getSimNode(edge.target)}
+					{#if srcNode && tgtNode}
+						{@const ep = edgePath(srcNode, tgtNode, idx, total)}
+						{@const scoped = edgeInScope(edge.source, edge.target)}
+						<!-- svelte-ignore a11y_click_events_have_key_events -->
+						<path
+							d={ep.d}
+							stroke="#6b7280"
+							stroke-width={EDGE_BASE_WIDTH}
+							stroke-opacity={scoped ? 0.55 : 0.1}
+							stroke-dasharray={edgeDash(edge.rel.status)}
+							fill="none"
+							marker-end="url(#arrowhead)"
+							class="cursor-pointer transition-opacity"
+							onclick={() => onRelClick?.(edge.rel)}
+						/>
+						{#if scoped && showEdgeLabels}
+							<text
+								x={ep.labelX}
+								y={ep.labelY - 4}
+								text-anchor="middle"
+								font-size="9"
+								fill="#9ca3af"
+								class="pointer-events-none select-none"
+							>
+								{edge.rel.relationshipType}
+							</text>
+						{/if}
+					{/if}
+				{/each}
+			{/if}
 
 			<!-- Nodes -->
 			{#each simNodes as node}
