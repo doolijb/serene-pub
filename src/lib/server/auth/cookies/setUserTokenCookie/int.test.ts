@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, test, vi } from "vitest"
 import type { RequestEvent } from "@sveltejs/kit"
 
-// maxAge/secure/sameSite are computed from process.env at module load time,
-// so each test stubs env vars and re-imports the module fresh.
+// maxAge is still computed from process.env at module load, so those tests
+// re-import fresh. secure/sameSite no longer are: they follow the REQUEST
+// SCHEME now, because deriving them from NODE_ENV meant every packaged build
+// set Secure — and a Secure cookie is silently discarded over plain HTTP,
+// which is how the desktop app serves itself. Login stored no cookie and
+// appeared to do nothing at all.
 describe("setUserTokenCookie", () => {
 	const originalEnv = { ...process.env }
 
@@ -11,16 +15,22 @@ describe("setUserTokenCookie", () => {
 		vi.resetModules()
 	})
 
-	test("sets a strict/secure cookie with maxAge derived from USER_TOKEN_EXPIRATION_HOURS in production", async () => {
-		process.env.NODE_ENV = "production"
+	const eventFor = (url: string, setMock: any) =>
+		({
+			url: new URL(url),
+			cookies: { set: setMock }
+		}) as unknown as RequestEvent
+
+	test("maxAge is derived from USER_TOKEN_EXPIRATION_HOURS", async () => {
 		process.env.USER_TOKEN_EXPIRATION_HOURS = "12"
 		vi.resetModules()
 		const { setUserTokenCookie } = await import("./index")
 
 		const setMock = vi.fn()
-		const event = { cookies: { set: setMock } } as unknown as RequestEvent
-
-		setUserTokenCookie({ event, token: "testToken" })
+		setUserTokenCookie({
+			event: eventFor("https://example.com/api/login", setMock),
+			token: "testToken"
+		})
 
 		expect(setMock).toHaveBeenCalledWith("userToken", "testToken", {
 			path: "/",
@@ -31,23 +41,42 @@ describe("setUserTokenCookie", () => {
 		})
 	})
 
-	test("relaxes to a lax/non-secure cookie in development", async () => {
-		process.env.NODE_ENV = "development"
+	test("HTTPS gets a strict/secure cookie", async () => {
 		process.env.USER_TOKEN_EXPIRATION_HOURS = "24"
 		vi.resetModules()
 		const { setUserTokenCookie } = await import("./index")
 
 		const setMock = vi.fn()
-		const event = { cookies: { set: setMock } } as unknown as RequestEvent
+		setUserTokenCookie({
+			event: eventFor("https://example.com/api/login", setMock),
+			token: "testToken"
+		})
 
-		setUserTokenCookie({ event, token: "testToken" })
+		expect(setMock.mock.calls[0][2]).toMatchObject({
+			secure: true,
+			sameSite: "strict",
+			maxAge: 60 * 60 * 24
+		})
+	})
 
-		expect(setMock).toHaveBeenCalledWith("userToken", "testToken", {
-			path: "/",
-			httpOnly: true,
+	test("plain HTTP gets a storable, non-secure cookie regardless of NODE_ENV", async () => {
+		// The regression: NODE_ENV=production over http:// used to produce a
+		// Secure cookie the browser threw away.
+		process.env.NODE_ENV = "production"
+		process.env.USER_TOKEN_EXPIRATION_HOURS = "24"
+		vi.resetModules()
+		const { setUserTokenCookie } = await import("./index")
+
+		const setMock = vi.fn()
+		setUserTokenCookie({
+			event: eventFor("http://localhost:3000/api/login", setMock),
+			token: "testToken"
+		})
+
+		expect(setMock.mock.calls[0][2]).toMatchObject({
 			secure: false,
 			sameSite: "lax",
-			maxAge: 60 * 60 * 24
+			httpOnly: true
 		})
 	})
 })

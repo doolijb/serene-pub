@@ -157,7 +157,18 @@ export async function refreshAuthAfterLogin(): Promise<void> {
 				window.location.reload()
 			}, 1000) // Small delay to show the success toast
 		} else {
-			console.warn("No auth token found after login")
+			// Reload regardless. A null token here does NOT mean login failed —
+			// /api/socket-token legitimately returns {token: null} when accounts
+			// are disabled — and previously this branch only warned to the
+			// console, so the UI simply froze with no error and no navigation.
+			// That silence is what made a Secure-cookie bug in the packaged
+			// build present as "clicking login does nothing".
+			console.warn(
+				"No auth token returned after login; reloading to let the server re-resolve the session"
+			)
+			setTimeout(() => {
+				window.location.reload()
+			}, 1000)
 		}
 	} catch (error) {
 		console.error("Failed to refresh auth:", error)
