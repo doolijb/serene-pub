@@ -22,24 +22,28 @@ const maxAge = 60 * 60 * Number(maxHours)
 // plain-HTTP case the desktop build actually runs in. sameSite stays "strict"
 // on HTTPS and relaxes to "lax" on HTTP for the same reason.
 function cookieSecurity(event: RequestEvent) {
-	// Trust x-forwarded-proto as well as the direct scheme.
+	// Does NOT consult event.url.protocol. Measured, not assumed: in a
+	// production adapter-node build that property reports "https:" even for a
+	// request that arrived over plain HTTP on localhost — SvelteKit derives the
+	// URL from ORIGIN/PROTOCOL_HEADER rather than the socket, and with neither
+	// configured it does not reflect reality. A previous fix keyed on it and
+	// was a silent no-op for exactly that reason.
 	//
-	// This is adapter-node, so behind a TLS-terminating reverse proxy (the
-	// Docker/hosted path) the app itself only ever sees the plain-HTTP hop from
-	// the proxy — event.url.protocol is "http:" even though the BROWSER is on
-	// HTTPS. Without this the cookie would quietly lose Secure on exactly the
-	// deployments that need it most.
+	// So the default is OFF and HTTPS must announce itself:
+	//   - behind a TLS-terminating proxy, via x-forwarded-proto
+	//   - serving TLS directly, via SERENE_PUB_SECURE_COOKIES=true
 	//
-	// Trusting a client-controllable header is safe in this direction and only
-	// this direction: the header can only ever cause the cookie to be MORE
-	// restrictive. A spoofed "https" adds Secure/strict, which at worst stops
-	// the attacker's own cookie being stored. It can never strip protection.
+	// The desktop app sets neither and therefore always gets a storable cookie,
+	// which is the case that has now broken twice. Trusting the header is safe
+	// in this direction only: it can only ADD Secure, never remove it.
 	const forwarded = event.request?.headers
 		?.get("x-forwarded-proto")
 		?.split(",")[0]
 		?.trim()
 		.toLowerCase()
-	const isHttps = event.url.protocol === "https:" || forwarded === "https"
+	const isHttps =
+		forwarded === "https" ||
+		process.env.SERENE_PUB_SECURE_COOKIES === "true"
 	return { secure: isHttps, sameSite: isHttps ? "strict" : "lax" } as const
 }
 

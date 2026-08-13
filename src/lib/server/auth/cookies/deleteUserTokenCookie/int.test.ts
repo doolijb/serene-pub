@@ -2,6 +2,13 @@ import { expect, test, vi } from "vitest"
 import { deleteUserTokenCookie } from "."
 import type { RequestEvent } from "@sveltejs/kit"
 
+const eventForHttps = (deleteMock: any) =>
+	({
+		url: new URL("https://example.com/logout"),
+		request: { headers: new Headers({ "x-forwarded-proto": "https" }) },
+		cookies: { delete: deleteMock }
+	}) as unknown as RequestEvent
+
 const eventFor = (url: string, deleteMock: any) =>
 	({
 		url: new URL(url),
@@ -11,7 +18,7 @@ const eventFor = (url: string, deleteMock: any) =>
 test("deleteUserTokenCookie: mirrors set's attributes on HTTPS", () => {
 	const deleteMock = vi.fn()
 	deleteUserTokenCookie({
-		event: eventFor("https://example.com/logout", deleteMock)
+		event: eventForHttps(deleteMock)
 	})
 	expect(deleteMock).toHaveBeenCalledWith("userToken", {
 		path: "/",

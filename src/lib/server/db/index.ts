@@ -5,7 +5,7 @@ import * as dbConfig from "./drizzle.config"
 import type { MigrationConfig } from "drizzle-orm/migrator"
 import fs from "fs"
 import crypto from "crypto"
-import { dev } from "$app/environment"
+import { building, dev } from "$app/environment"
 import { drizzle } from "drizzle-orm/pglite"
 import { sync } from "./defaults"
 
@@ -188,13 +188,32 @@ process.on("SIGTERM", () => {
 	process.exit(0)
 })
 
-// Check database lock before proceeding
-await checkDatabaseLock()
+// Everything below is skipped while BUILDING.
+//
+// This module opens PGlite, takes a lock, migrates and seeds at module scope —
+// and SSR compilation imports it, so `npm run build` was doing all of that
+// against the developer's REAL data directory. If their dev server happened to
+// be running, the build died outright:
+//
+//     Using PGlite database at: ~/.local/share/SerenePub/data/serene-pub.db
+//     Database remains locked after waiting. Exiting application.
+//
+// A build must never touch user data. It only needs this module to TYPE-CHECK
+// and bundle; nothing evaluates a query at build time. `building` is
+// SvelteKit's own signal for exactly this, and is false at runtime, so the
+// server still initialises normally when it actually starts.
+if (!building) {
+	// Check database lock before proceeding
+	await checkDatabaseLock()
 
-// Start lock updates
-startLockUpdates()
+	// Start lock updates
+	startLockUpdates()
+}
 
-export let db = drizzle(dbConfig.dbPath, { schema })
+// During a build this points at a throwaway in-memory database rather than the
+// user's data directory. Keeps the exact same type (so nothing downstream
+// changes) while guaranteeing the build cannot open, lock or migrate real data.
+export let db = drizzle(building ? "memory://" : dbConfig.dbPath, { schema })
 export { schema }
 
 // Compare two version strings in '0.0.0' format, handling pre-release identifiers
@@ -298,7 +317,9 @@ async function runMigrations() {
 // "sometimes skip a migration that actually needs to run." drizzle's own
 // migrate() is idempotent — safe to call every startup regardless of the
 // stored meta.json version, it only applies what isn't already applied.
-if (dev) {
+if (building) {
+	// no-op: see the `building` guard above
+} else if (dev) {
 	await runMigrations()
 } else {
 	// @ts-ignore
@@ -345,7 +366,7 @@ if (dev) {
 // *text* in defaults.ts without a version bump would otherwise never take
 // effect on restart. sync() is fully idempotent (upsert-by-id, isImmutable
 // rows only), so running it unconditionally here is safe.
-await sync()
+if (!building) await sync()
 
 // Mark any downloads that were in-flight when the server last stopped as errored
 db.update(schema.koboldCppModels)

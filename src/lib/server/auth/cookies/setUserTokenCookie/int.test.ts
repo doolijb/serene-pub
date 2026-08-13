@@ -15,6 +15,16 @@ describe("setUserTokenCookie", () => {
 		vi.resetModules()
 	})
 
+	// HTTPS is signalled by the proxy header, never by the URL — see
+	// cookieSecurity(). A production adapter-node build reports "https:" for
+	// plain-HTTP requests, so the URL cannot be trusted.
+	const eventForHttps = (setMock: any) =>
+		({
+			url: new URL("https://example.com/api/login"),
+			request: { headers: new Headers({ "x-forwarded-proto": "https" }) },
+			cookies: { set: setMock }
+		}) as unknown as RequestEvent
+
 	const eventFor = (url: string, setMock: any) =>
 		({
 			url: new URL(url),
@@ -28,7 +38,7 @@ describe("setUserTokenCookie", () => {
 
 		const setMock = vi.fn()
 		setUserTokenCookie({
-			event: eventFor("https://example.com/api/login", setMock),
+			event: eventForHttps(setMock),
 			token: "testToken"
 		})
 
@@ -48,7 +58,7 @@ describe("setUserTokenCookie", () => {
 
 		const setMock = vi.fn()
 		setUserTokenCookie({
-			event: eventFor("https://example.com/api/login", setMock),
+			event: eventForHttps(setMock),
 			token: "testToken"
 		})
 

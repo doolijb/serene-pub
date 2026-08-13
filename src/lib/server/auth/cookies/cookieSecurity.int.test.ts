@@ -49,11 +49,25 @@ describe("auth cookie security follows the request scheme", () => {
 		expect(calls[0].opts.secure).toBe(false)
 	})
 
-	test("HTTPS still gets Secure + strict", () => {
+	test("an https:// URL alone does NOT enable Secure", () => {
+		// Measured: production adapter-node reports protocol "https:" even for
+		// a plain-HTTP request, so the URL is not evidence of anything. HTTPS
+		// must announce itself via the proxy header or the env opt-in.
 		const { event, calls } = fakeEvent("https://example.com/api/login")
 		setUserTokenCookie({ event, token: "t" })
-		expect(calls[0].opts.secure).toBe(true)
-		expect(calls[0].opts.sameSite).toBe("strict")
+		expect(calls[0].opts.secure).toBe(false)
+	})
+
+	test("SERENE_PUB_SECURE_COOKIES=true opts a direct-TLS deployment in", () => {
+		process.env.SERENE_PUB_SECURE_COOKIES = "true"
+		try {
+			const { event, calls } = fakeEvent("http://example.com/api/login")
+			setUserTokenCookie({ event, token: "t" })
+			expect(calls[0].opts.secure).toBe(true)
+			expect(calls[0].opts.sameSite).toBe("strict")
+		} finally {
+			delete process.env.SERENE_PUB_SECURE_COOKIES
+		}
 	})
 
 	test("delete mirrors set exactly, or logout silently fails", () => {
