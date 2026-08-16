@@ -1,9 +1,11 @@
 import * as schema from "./schema"
+import { eq } from "drizzle-orm"
 import { migrate } from "drizzle-orm/pglite/migrator"
 import * as dbConfig from "./drizzle.config"
 import type { MigrationConfig } from "drizzle-orm/migrator"
 import fs from "fs"
-import { dev } from "$app/environment"
+import crypto from "crypto"
+import { building, dev } from "$app/environment"
 import { drizzle } from "drizzle-orm/pglite"
 import { sync } from "./defaults"
 
@@ -16,6 +18,7 @@ interface DbLock {
 interface MetaFile {
 	version: string
 	lock?: DbLock
+	cryptoSecretKey?: string
 }
 
 // Move meta.json handling to the beginning
@@ -23,17 +26,37 @@ const metaPath = dbConfig.dataDir + "/meta.json"
 
 // Ensure meta.json exists
 if (!fs.existsSync(metaPath)) {
-	fs.writeFileSync(metaPath, JSON.stringify({ version: "0.0.0" }, null, 2))
+	fs.writeFileSync(
+		metaPath,
+		JSON.stringify(
+			{
+				version: "0.0.0",
+				cryptoSecretKey: crypto.randomUUID()
+			},
+			null,
+			2
+		)
+	)
 }
 
 // Read meta.json with error handling
 let meta: MetaFile
 try {
 	meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
+	// Ensure cryptoSecretKey exists in existing meta.json
+	if (!meta.cryptoSecretKey) {
+		meta.cryptoSecretKey = crypto.randomUUID()
+		fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
+	}
 } catch (error) {
-	console.warn(`Warning: Invalid meta.json detected, recreating. Error: ${error}`)
+	console.warn(
+		`Warning: Invalid meta.json detected, recreating. Error: ${error}`
+	)
 	// Recreate meta.json if it's corrupted
-	meta = { version: "0.0.0" }
+	meta = {
+		version: "0.0.0",
+		cryptoSecretKey: crypto.randomUUID()
+	}
 	fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
 }
 
@@ -45,8 +68,10 @@ async function checkDatabaseLock(): Promise<void> {
 	try {
 		meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
 	} catch (error) {
-		console.warn(`Warning: Error reading meta.json during lock check. Error: ${error}`)
-		meta = { version: "0.0.0" }
+		console.warn(
+			`Warning: Error reading meta.json during lock check. Error: ${error}`
+		)
+		meta = { version: "0.0.0", cryptoSecretKey: crypto.randomUUID() }
 		fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
 	}
 
@@ -71,8 +96,10 @@ async function checkDatabaseLock(): Promise<void> {
 		try {
 			meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
 		} catch (error) {
-			console.warn(`Warning: Error reading meta.json during lock recheck. Error: ${error}`)
-			meta = { version: "0.0.0" }
+			console.warn(
+				`Warning: Error reading meta.json during lock recheck. Error: ${error}`
+			)
+			meta = { version: "0.0.0", cryptoSecretKey: crypto.randomUUID() }
 			fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
 		}
 
@@ -97,8 +124,10 @@ function updateDatabaseLock(): void {
 		try {
 			meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
 		} catch (error) {
-			console.warn(`Warning: Error reading meta.json during lock update. Error: ${error}`)
-			meta = { version: "0.0.0" }
+			console.warn(
+				`Warning: Error reading meta.json during lock update. Error: ${error}`
+			)
+			meta = { version: "0.0.0", cryptoSecretKey: crypto.randomUUID() }
 		}
 
 		meta.lock = {
@@ -136,8 +165,10 @@ function stopLockUpdates(): void {
 		try {
 			meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
 		} catch (error) {
-			console.warn(`Warning: Error reading meta.json during lock clear. Error: ${error}`)
-			meta = { version: "0.0.0" }
+			console.warn(
+				`Warning: Error reading meta.json during lock clear. Error: ${error}`
+			)
+			meta = { version: "0.0.0", cryptoSecretKey: crypto.randomUUID() }
 		}
 		delete meta.lock
 		fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
@@ -157,26 +188,116 @@ process.on("SIGTERM", () => {
 	process.exit(0)
 })
 
-// Check database lock before proceeding
-await checkDatabaseLock()
+// Everything below is skipped while BUILDING.
+//
+// This module opens PGlite, takes a lock, migrates and seeds at module scope —
+// and SSR compilation imports it, so `npm run build` was doing all of that
+// against the developer's REAL data directory. If their dev server happened to
+// be running, the build died outright:
+//
+//     Using PGlite database at: ~/.local/share/SerenePub/data/serene-pub.db
+//     Database remains locked after waiting. Exiting application.
+//
+// A build must never touch user data. It only needs this module to TYPE-CHECK
+// and bundle; nothing evaluates a query at build time. `building` is
+// SvelteKit's own signal for exactly this, and is false at runtime, so the
+// server still initialises normally when it actually starts.
+if (!building) {
+	// Check database lock before proceeding
+	await checkDatabaseLock()
 
-// Start lock updates
-startLockUpdates()
+	// Start lock updates
+	startLockUpdates()
+}
 
-export let db = drizzle(dbConfig.dbPath, { schema })
+// During a build this points at a throwaway in-memory database rather than the
+// user's data directory. Keeps the exact same type (so nothing downstream
+// changes) while guaranteeing the build cannot open, lock or migrate real data.
+export let db = drizzle(building ? "memory://" : dbConfig.dbPath, { schema })
 export { schema }
 
-// Compare two version strings in '0.0.0' format
+// Compare two version strings in '0.0.0' format, handling pre-release identifiers
 export function compareVersions(a: string, b: string): -1 | 0 | 1 {
-	const pa = a.split(".").map(Number)
-	const pb = b.split(".").map(Number)
-	for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-		const na = pa[i] || 0
-		const nb = pb[i] || 0
-		if (na < nb) return -1
-		if (na > nb) return 1
+	// Parse version string into components
+	// Format: X.Y.Z or X.Y.Z-type or X.Y.Z-type-N
+	const parseVersion = (version: string) => {
+		const match = version.match(
+			/^(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)(?:-(\d+))?)?$/
+		)
+		if (!match) {
+			return { major: 0, minor: 0, patch: 0, type: null, num: 0 }
+		}
+
+		const [, major, minor, patch, type, num] = match
+		return {
+			major: parseInt(major, 10),
+			minor: parseInt(minor, 10),
+			patch: parseInt(patch, 10),
+			type: type || null,
+			num: num ? parseInt(num, 10) : 0
+		}
 	}
+
+	const vA = parseVersion(a)
+	const vB = parseVersion(b)
+
+	// 1. Compare base version numbers (major.minor.patch)
+	// Base version is king - e.g., 0.4.2-pr-1 > 0.4.1-alpha
+	if (vA.major !== vB.major) return vA.major < vB.major ? -1 : 1
+	if (vA.minor !== vB.minor) return vA.minor < vB.minor ? -1 : 1
+	if (vA.patch !== vB.patch) return vA.patch < vB.patch ? -1 : 1
+
+	// 2. If base versions match, compare release types
+	// Release type hierarchy: pr < rc < alpha < (no suffix/release)
+	// e.g., 0.4.1-pr-2 < 0.4.1-rc-1 < 0.4.1-alpha < 0.4.1
+	const getReleaseTypePriority = (type: string | null): number => {
+		if (!type) return 4 // Formal release (highest priority)
+		if (type === "alpha") return 3
+		if (type === "rc") return 2
+		if (type === "pr") return 1
+		return 0 // Unknown types get lowest priority
+	}
+
+	const priorityA = getReleaseTypePriority(vA.type)
+	const priorityB = getReleaseTypePriority(vB.type)
+
+	if (priorityA !== priorityB) {
+		return priorityA < priorityB ? -1 : 1
+	}
+
+	// 3. If release types match, compare release numbers
+	// e.g., 0.4.1-pr-1 < 0.4.1-pr-2
+	if (vA.num !== vB.num) {
+		return vA.num < vB.num ? -1 : 1
+	}
+
+	// Versions are identical
 	return 0
+}
+
+/**
+ * Get the crypto secret key from meta.json, creating one if it doesn't exist
+ */
+export function getCryptoSecretKey(): string {
+	try {
+		const currentMeta = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
+		if (!currentMeta.cryptoSecretKey) {
+			currentMeta.cryptoSecretKey = crypto.randomUUID()
+			fs.writeFileSync(metaPath, JSON.stringify(currentMeta, null, 2))
+		}
+		return currentMeta.cryptoSecretKey
+	} catch (error) {
+		console.warn(
+			`Warning: Error reading meta.json for crypto key. Error: ${error}`
+		)
+		// Recreate meta.json if it's corrupted
+		const newMeta = {
+			version: "0.0.0",
+			cryptoSecretKey: crypto.randomUUID()
+		}
+		fs.writeFileSync(metaPath, JSON.stringify(newMeta, null, 2))
+		return newMeta.cryptoSecretKey
+	}
 }
 
 async function runMigrations() {
@@ -186,22 +307,21 @@ async function runMigrations() {
 		migrationsFolder: dbConfig.migrationsDir
 	} as MigrationConfig)
 	console.log("Migrations applied.")
-	await sync()
 }
 
-// Check if database has been initialized by looking for a specific table
-let hasTables = false
-try {
-	// Try to query a table that should exist after migrations
-	await db.execute("SELECT 1 FROM users LIMIT 1")
-	hasTables = true
-} catch (error) {
-	// Table doesn't exist, database needs initialization
-	hasTables = false
-}
-
-// Run migrations if in production environment
-if (!dev || !hasTables) {
+// In dev, always run migrations unconditionally — never gated by the
+// meta.json/app version comparison below. Dev iteration adds new migration
+// files constantly without bumping the app version for each one (that
+// mismatch is exactly what silently skipped a real migration for an entire
+// debugging session once already), so version-gating in dev just means
+// "sometimes skip a migration that actually needs to run." drizzle's own
+// migrate() is idempotent — safe to call every startup regardless of the
+// stored meta.json version, it only applies what isn't already applied.
+if (building) {
+	// no-op: see the `building` guard above
+} else if (dev) {
+	await runMigrations()
+} else {
 	// @ts-ignore
 	const appVersion = __APP_VERSION__
 	if (!appVersion) {
@@ -238,7 +358,18 @@ if (!dev || !hasTables) {
 			)
 			throw new Error("Unexpected version comparison result")
 	}
-} else {
-	await runMigrations()
-	await sync()
 }
+
+// Keep immutable seed rows (default prompt configs, etc.) in sync with the
+// current code on every startup — deliberately NOT gated by the version
+// comparison above, since that only tracks schema migrations. Editing seed
+// *text* in defaults.ts without a version bump would otherwise never take
+// effect on restart. sync() is fully idempotent (upsert-by-id, isImmutable
+// rows only), so running it unconditionally here is safe.
+if (!building) await sync()
+
+// Mark any downloads that were in-flight when the server last stopped as errored
+db.update(schema.koboldCppModels)
+	.set({ status: "error", errorMessage: "Server restarted during download" })
+	.where(eq(schema.koboldCppModels.status, "downloading"))
+	.catch(() => {})

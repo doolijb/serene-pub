@@ -1,0 +1,27 @@
+# Dependencies and build output (rebuilt inside container)
+node_modules
+build
+dist
+.svelte-kit
+
+# Git and CI
+.git
+.github
+.claude
+
+# Dev/project-local data
+*.db
+*.db-shm
+*.db-wal
+AI-TEMP
+char-cards-repo-exploration
+android
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# OS artifacts
+.DS_Store
+Thumbs.db

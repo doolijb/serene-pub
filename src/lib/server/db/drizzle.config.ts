@@ -1,6 +1,7 @@
 import { defineConfig } from "drizzle-kit"
 import { mkdirSync } from "fs"
 import { existsSync } from "fs"
+import os from "os"
 import path from "path"
 import envPaths from "env-paths"
 
@@ -8,7 +9,7 @@ import envPaths from "env-paths"
  * Gets the application data directory with optional override from environment
  * Checks SERENE_PUB_DATA_DIR environment variable first, falls back to envPaths
  */
-function getAppDataDir() {
+export function getAppDataDir() {
 	const envDataDir = process.env.SERENE_PUB_DATA_DIR
 	if (envDataDir) {
 		return envDataDir
@@ -25,7 +26,7 @@ function getAppDataDir() {
 function getDbDataDir() {
 	const isCI = process.env.CI === "true"
 	if (isCI) {
-		return "~/SerenePubData"
+		return path.join(os.homedir(), "SerenePubData")
 	}
 
 	const appDataDir = getAppDataDir()

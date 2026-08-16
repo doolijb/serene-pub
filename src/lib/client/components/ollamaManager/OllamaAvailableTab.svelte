@@ -1,12 +1,13 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
-	import { onMount, onDestroy } from "svelte"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { onMount, onDestroy, getContext } from "svelte"
+	import { SvelteSet } from "svelte/reactivity"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { OllamaModelSearchSource } from "$lib/shared/constants/OllamaModelSource"
+	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import HuggingFaceQuantizationModal from "$lib/client/components/modals/HuggingFaceQuantizationModal.svelte"
 	import OllamaManualPullModal from "$lib/client/components/modals/OllamaManualPullModal.svelte"
-	import OllamaInstructionModal from "$lib/client/components/modals/OllamaInstructionModal.svelte"
 
 	interface OllamaModel {
 		name: string
@@ -26,57 +27,150 @@
 
 	let { onDownloadStart }: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	let searchString = $state("")
-	let installedModels: Sockets.OllamaModelsList.Response["models"] = $state(
+	let installedModels: Sockets.Ollama.ModelsList.Response["models"] = $state(
 		[]
 	)
 	let selectedSource = $state(OllamaModelSearchSource.RECOMMENDED)
-	let availableModels: Sockets.OllamaSearchAvailableModels.Response["models"] =
+	let availableModels: Sockets.Ollama.SearchAvailableModels.Response["models"] =
 		$state([])
-	let recommendedModels: Sockets.OllamaRecommendedModels.Response["models"] =
+	let recommendedModels: Sockets.Ollama.RecommendedModels.Response["recommendedModels"] =
 		$state([])
 	let isSearching = $state(false)
 	let showHuggingFaceModal = $state(false)
-	let showOllamaInstructionModal = $state(false)
 	let showOllamaManualPullModal = $state(false)
 	let selectedModelForDownload: string | null = $state(null)
 	let selectedModel:
-		| Sockets.OllamaSearchAvailableModels.Response["models"][0]
+		| Sockets.Ollama.SearchAvailableModels.Response["models"][0]
 		| null = $state(null)
 
-	// Track which models are being downloaded locally (for UI state only)
-	let currentlyDownloading = $state(new Set<string>())
+	// Track the system-wide default connection (admin-only screen, so a
+	// straight connections:list fetch is safe here — see ConnectionsSidebar).
+	let systemSettingsCtx: SystemSettingsCtx = $state(
+		getContext("systemSettingsCtx")
+	)
+	const panelsCtx: PanelsCtx = getContext("panelsCtx")
+	let connectionsList: Sockets.Connections.List.Response["connectionsList"] =
+		$state([])
+
+	// Track which models are being downloaded locally (for UI state only).
+	// Uses SvelteSet (not a plain Set in $state) so .add()/.delete() mutations
+	// are actually reactive - a plain Set wrapped in $state only reacts to
+	// reassignment, not in-place mutation.
+	let currentlyDownloading = new SvelteSet<string>()
+
+	// Derive the current active connection model name for reactivity
+	let currentConnectionModelName: string | null = $derived.by(() => {
+		const activeConnection = connectionsList.find(
+			(c) => c.id === systemSettingsCtx.settings?.defaultConnectionId
+		)
+		if (activeConnection?.type === CONNECTION_TYPE.OLLAMA) {
+			return activeConnection.model ?? null
+		}
+		return null
+	})
+
+	// Create a derived set of installed model names for efficient lookups and reactivity
+	let installedModelNames = $derived(
+		new Set(installedModels.map((model) => model.name))
+	)
 
 	function isModelInstalled(modelName: string): boolean {
 		if (selectedSource === OllamaModelSearchSource.RECOMMENDED) {
 			// For recommended models, check against the pull string
 			const modelNameFromPull =
 				modelName.split("/").pop()?.split(":")[0] || modelName
-			return installedModels.some(
-				(model) =>
-					model.name.includes(modelNameFromPull) ||
-					model.name.startsWith(modelName.replace("hf.co/", ""))
-			)
+			// Check using the derived set
+			for (const name of installedModelNames) {
+				if (
+					name.includes(modelNameFromPull) ||
+					name.startsWith(modelName.replace("hf.co/", ""))
+				) {
+					return true
+				}
+			}
+			return false
 		}
-		return installedModels.some((model) => model.name.startsWith(modelName))
+		// Check if any installed model name starts with the given model name
+		for (const name of installedModelNames) {
+			if (name.startsWith(modelName)) {
+				return true
+			}
+		}
+		return false
 	}
 
+	function isModelActive(modelName: string): boolean {
+		// Access currentConnectionModelName to create reactive dependency
+		if (!currentConnectionModelName) return false
+
+		if (selectedSource === OllamaModelSearchSource.RECOMMENDED) {
+			// For recommended models, check against the pull string
+			const modelNameFromPull =
+				modelName.split("/").pop()?.split(":")[0] || modelName
+			return (
+				currentConnectionModelName.includes(modelNameFromPull) ||
+				currentConnectionModelName.startsWith(
+					modelName.replace("hf.co/", "")
+				)
+			)
+		}
+		return currentConnectionModelName.startsWith(modelName)
+	}
+
+	// Neither response event carries a request-echo, so a per-dispatch
+	// self-unsubscribing listener (matching ChatsSidebar's search pattern) is
+	// the only way to tell a stale response apart from the latest one: the
+	// token check below discards a response if a newer search has since been
+	// dispatched, instead of letting an out-of-order response overwrite
+	// fresher results.
+	let searchToken = 0
+
 	function searchAvailableModels() {
+		const token = ++searchToken
 		isSearching = true
 		if (selectedSource === OllamaModelSearchSource.RECOMMENDED) {
-			socket.emit("ollamaRecommendedModels", {})
+			const handler = (
+				message: Sockets.Ollama.RecommendedModels.Response
+			) => {
+				socket.off("ollama:recommendedModels", handler)
+				if (token !== searchToken) return
+				isSearching = false
+				if (message.error) {
+					toaster.error({ title: message.error })
+					recommendedModels = []
+				} else {
+					recommendedModels = message.recommendedModels || []
+				}
+			}
+			socket.on("ollama:recommendedModels", handler)
+			socket.emit("ollama:recommendedModels", {})
 		} else {
-			socket.emit("ollamaSearchAvailableModels", {
-				search: searchString.trim(),
+			const handler = (
+				message: Sockets.Ollama.SearchAvailableModels.Response
+			) => {
+				socket.off("ollama:searchAvailableModels", handler)
+				if (token !== searchToken) return
+				isSearching = false
+				if (message.error) {
+					toaster.error({ title: message.error })
+					availableModels = []
+				} else {
+					availableModels = message.models || []
+				}
+			}
+			socket.on("ollama:searchAvailableModels", handler)
+			socket.emit("ollama:searchAvailableModels", {
+				searchTerm: searchString.trim(),
 				source: selectedSource
-			} as Sockets.OllamaSearchAvailableModels.Call)
+			})
 		}
 	}
 
 	function openHuggingFaceModal(
-		model: Sockets.OllamaSearchAvailableModels.Response["models"][0]
+		model: Sockets.Ollama.SearchAvailableModels.Response["models"][0]
 	) {
 		selectedModelForDownload = model.name
 		selectedModel = model
@@ -93,17 +187,18 @@
 		modelId: string,
 		pullOption: { label: string; pull: string }
 	) {
-		console.log("Downloading Hugging Face quantization:", pullOption.pull)
-
 		// Track this model as currently downloading
 		currentlyDownloading.add(modelId)
 
-		// Emit the pull request to Ollama
-		socket.emit("ollamaPullModel", {
-			modelName: pullOption.pull
-		} as Sockets.OllamaPullModel.Call)
+		// End of the wizard's hand-off path (panel → Available → model →
+		// quantization). Cleared here rather than on the first click, because
+		// the cue has to survive every step in between.
+		if (panelsCtx?.digest?.tutorial) panelsCtx.digest.tutorial = false
 
-		// Close modal and switch to downloads tab
+		// Emit the pull request to Ollama
+		socket.emit("ollama:pullModel", {
+			modelName: pullOption.pull
+		}) // Close modal and switch to downloads tab
 		closeHuggingFaceModal()
 		onDownloadStart?.(pullOption.pull)
 	}
@@ -113,38 +208,19 @@
 		showOllamaManualPullModal = true
 	}
 
-	function openOllamaInstructionModal(modelName: string) {
-		selectedModelForDownload = modelName
-		showOllamaInstructionModal = true
-	}
-
-	function closeOllamaInstructionModal() {
-		showOllamaInstructionModal = false
-		selectedModelForDownload = null
-	}
-
-	function handleInstructionContinue() {
-		showOllamaInstructionModal = false
-		showOllamaManualPullModal = true
-	}
-
 	function closeOllamaManualPullModal() {
 		showOllamaManualPullModal = false
 		selectedModelForDownload = null
 	}
 
 	function handleOllamaInstallConfirm(cleanedModelName: string) {
-		console.log("Installing Ollama model:", cleanedModelName)
-
 		// Track this model as currently downloading
 		currentlyDownloading.add(cleanedModelName)
 
 		// Emit the pull request to Ollama
-		socket.emit("ollamaPullModel", {
+		socket.emit("ollama:pullModel", {
 			modelName: cleanedModelName
-		} as Sockets.OllamaPullModel.Call)
-
-		// Close modal and switch to downloads tab
+		}) // Close modal and switch to downloads tab
 		closeOllamaManualPullModal()
 		onDownloadStart?.(cleanedModelName)
 	}
@@ -160,78 +236,71 @@
 	})
 
 	async function refreshInstalled() {
-		socket.emit("ollamaModelsList", {})
+		socket.emit("ollama:modelsList", {})
+	}
+
+	// Named handlers for the persistent (non-search) listeners — cleanup
+	// must pass the exact same reference to .off(); a no-arg .off() call
+	// removes *every* listener for that event, not just this component's.
+	function handleOllamaModelsList(
+		message: Sockets.Ollama.ModelsList.Response
+	) {
+		installedModels = message.models
+	}
+
+	function handleOllamaPullModel(message: Sockets.Ollama.PullModel.Response) {
+		// Handle model pull completion only - errors arrive on the separate
+		// "ollama:pullModel:error" event (registered below), not as an
+		// `error` field on this event.
+		currentlyDownloading.clear()
+		if (message.success) {
+			socket.emit("ollama:modelsList", {})
+			toaster.success({ title: "Model downloaded successfully" })
+			closeHuggingFaceModal()
+		}
+	}
+
+	// The server response doesn't carry which model failed, so this just
+	// clears the whole in-flight set - the per-model progress/error state
+	// lives in the Downloads tab (driven by "ollamaPullProgress").
+	function handleOllamaPullModelError(message: { error?: string }) {
+		currentlyDownloading.clear()
+		toaster.error({
+			title: "Model download failed",
+			description: message?.error
+		})
+	}
+
+	function handleConnectionsList(message: Sockets.Connections.List.Response) {
+		connectionsList = message.connectionsList
 	}
 
 	onMount(() => {
-		// Socket event listeners
-		socket.on(
-			"ollamaModelsList",
-			(message: Sockets.OllamaModelsList.Response) => {
-				installedModels = message.models
-			}
-		)
-
-		socket.on(
-			"ollamaSearchAvailableModels",
-			(message: Sockets.OllamaSearchAvailableModels.Response) => {
-				isSearching = false
-				if (message.error) {
-					toaster.error({ title: message.error })
-					availableModels = []
-				} else {
-					availableModels = message.models || []
-				}
-			}
-		)
-
-		socket.on(
-			"ollamaRecommendedModels",
-			(message: Sockets.OllamaRecommendedModels.Response) => {
-				isSearching = false
-				if (message.error) {
-					toaster.error({ title: message.error })
-					recommendedModels = []
-				} else {
-					recommendedModels = message.models || []
-				}
-			}
-		)
-
-		socket.on(
-			"ollamaPullModel",
-			(message: Sockets.OllamaPullModel.Response) => {
-				// Handle model pull completion/error only - no progress handling
-				console.log("Pull model response:", message)
-				if (message.success) {
-					socket.emit("ollamaModelsList", {})
-					toaster.success({ title: "Model downloaded successfully" })
-					closeHuggingFaceModal()
-				} else if (message.error) {
-					toaster.error({ title: message.error })
-				}
-			}
-		)
+		socket.on("ollama:modelsList", handleOllamaModelsList)
+		socket.on("ollama:pullModel", handleOllamaPullModel)
+		socket.on("ollama:pullModel:error", handleOllamaPullModelError)
+		socket.on("connections:list", handleConnectionsList)
+		socket.emit("connections:list", {})
 
 		// Load initial installed models
 		refreshInstalled()
 	})
 
 	onDestroy(() => {
-		socket.off("ollamaModelsList")
-		socket.off("ollamaSearchAvailableModels")
-		socket.off("ollamaRecommendedModels")
-		socket.off("ollamaPullModel")
-		socket.off("ollamaCancelPull")
+		socket.off("ollama:modelsList", handleOllamaModelsList)
+		socket.off("connections:list", handleConnectionsList)
+		socket.off("ollama:pullModel", handleOllamaPullModel)
+		socket.off("ollama:pullModel:error", handleOllamaPullModelError)
 	})
 </script>
 
 <!-- Search for available models -->
-<div class="flex flex-col gap-2 px-4 py-2">
-	<div class="flex gap-2">
+<div class="flex flex-col gap-2 py-2">
+	<div class="panel-actions">
 		<button
 			class="btn preset-filled-primary-500 flex-1"
 			onclick={() => {
+				selectedModelForDownload = ""
 				showOllamaManualPullModal = true
 			}}
 			aria-label="Open manual download modal"
@@ -253,7 +322,7 @@
 	</div>
 	<div class="relative flex-1">
 		<Icons.Search
-			class="text-surface-500 absolute top-1/2 left-3 -translate-y-1/2 transform"
+			class="text-surface-700-300 absolute top-1/2 left-3 -translate-y-1/2 transform"
 			size={16}
 		/>
 		<input
@@ -269,7 +338,7 @@
 	</div>
 </div>
 
-<div class="space-y-3 p-4">
+<div class="space-y-3 py-4">
 	{#if isSearching}
 		<div class="p-6 text-center">
 			<Icons.Loader2 class="mx-auto mb-4 animate-spin" size={32} />
@@ -277,7 +346,7 @@
 		</div>
 	{:else if selectedSource === OllamaModelSearchSource.RECOMMENDED ? recommendedModels.length === 0 : availableModels.length === 0}
 		<div class="p-6 text-center">
-			<Icons.Search class="text-surface-500 mx-auto mb-4" size={48} />
+			<Icons.Search class="text-surface-700-300 mx-auto mb-4" size={48} />
 			<h3 class="h4 mb-2">No models found</h3>
 			<p class="mb-4 text-sm opacity-75">
 				{selectedSource === OllamaModelSearchSource.RECOMMENDED
@@ -287,11 +356,18 @@
 		</div>
 	{:else if selectedSource === OllamaModelSearchSource.RECOMMENDED}
 		{#each recommendedModels as model}
+			{@const installed = isModelInstalled(model.pull)}
+			{@const active = isModelActive(model.pull)}
+			{@const downloading = currentlyDownloading.has(model.pull)}
 			<div class="card preset-tonal p-4">
 				<div class="flex flex-col gap-3">
 					<!-- Header with name and VRAM tier -->
-					<div class="flex items-start justify-between">
-						<div class="flex-1">
+					<!-- Hugging Face repo ids ("mradermacher/Roleplay-Mistral-…")
+					     are long and contain no spaces, so they need min-w-0 to
+					     be allowed to wrap at all, and break-all to actually
+					     break — break-words does nothing without a space. -->
+					<div class="flex items-start justify-between gap-2">
+						<div class="min-w-0 flex-1 break-all">
 							<h4
 								class="text-foreground mb-1 text-lg font-semibold"
 							>
@@ -310,14 +386,14 @@
 								</span>
 								<span
 									class="badge {model.recommended_vram <= 3
-										? 'text-green-500'
+										? 'text-success-500'
 										: model.recommended_vram <= 6
-											? 'text-blue-500'
+											? 'text-primary-500'
 											: model.recommended_vram <= 10
-												? 'text-yellow-500'
+												? 'text-warning-500'
 												: model.recommended_vram <= 16
-													? 'text-orange-500'
-													: 'text-red-500'} bg-surface-200 dark:bg-surface-800 rounded-full px-2 py-1 text-xs"
+													? 'text-warning-500'
+													: 'text-error-500'} bg-surface-200 dark:bg-surface-800 rounded-full px-2 py-1 text-xs"
 								>
 									{model.recommended_vram}GB VRAM • {model.recommended_vram <=
 									3
@@ -341,7 +417,7 @@
 
 					<!-- Metadata row -->
 					<div
-						class="text-surface-500 flex flex-wrap items-center gap-4 text-xs"
+						class="text-surface-700-300 flex flex-wrap items-center gap-4 text-xs"
 					>
 						<div class="flex items-center gap-1">
 							<Icons.HardDrive size={12} />
@@ -356,30 +432,42 @@
 					</div>
 
 					<!-- Actions -->
-					<div class="flex gap-2">
+					<div class="panel-actions">
 						<button
-							class="btn btn-sm {isModelInstalled(model.pull)
-								? 'preset-filled-success-500'
-								: 'preset-filled-primary-500'}"
+							class="btn btn-sm {active
+								? 'preset-filled-primary-500'
+								: installed
+									? 'preset-filled-success-500'
+									: 'preset-filled-primary-500'}"
 							onclick={() => {
-								console.log(
-									"Downloading recommended model:",
-									model.pull
-								)
 								currentlyDownloading.add(model.pull)
-								socket.emit("ollamaPullModel", {
+								socket.emit("ollama:pullModel", {
 									modelName: model.pull
-								} as Sockets.OllamaPullModel.Call)
+								})
 								onDownloadStart?.(model.pull)
 							}}
-							disabled={isModelInstalled(model.pull)}
-							aria-label={isModelInstalled(model.pull)
-								? `Model ${model.name} is already installed`
-								: `Install model ${model.name}`}
+							disabled={installed || downloading}
+							aria-label={active
+								? `Model ${model.name} is currently active`
+								: installed
+									? `Model ${model.name} is already installed`
+									: downloading
+										? `Installing model ${model.name}`
+										: `Install model ${model.name}`}
 						>
-							{#if isModelInstalled(model.pull)}
+							{#if active}
+								<Icons.Zap size={14} aria-hidden="true" />
+								Active
+							{:else if installed}
 								<Icons.Check size={14} aria-hidden="true" />
 								Installed
+							{:else if downloading}
+								<Icons.Loader2
+									size={14}
+									class="animate-spin"
+									aria-hidden="true"
+								/>
+								Installing
 							{:else}
 								<Icons.Download size={14} aria-hidden="true" />
 								Install
@@ -401,6 +489,8 @@
 		{/each}
 	{:else}
 		{#each availableModels as model}
+			{@const installed = isModelInstalled(model.name)}
+			{@const active = isModelActive(model.name)}
 			<div class="card preset-tonal p-4">
 				<div class="flex flex-col gap-2">
 					<!-- Header with name and badges -->
@@ -444,7 +534,7 @@
 					</div>
 
 					<!-- Description -->
-					<p class="text-surface-500 mb-3 line-clamp-2 text-sm">
+					<p class="text-surface-700-300 mb-3 line-clamp-2 text-sm">
 						{model.description || "No description available"}
 					</p>
 
@@ -459,7 +549,7 @@
 								</span>
 							{/each}
 							{#if model.tags.length > 4}
-								<span class="text-surface-500 text-xs">
+								<span class="text-surface-700-300 text-xs">
 									+{model.tags.length - 4} more
 								</span>
 							{/if}
@@ -468,7 +558,7 @@
 
 					<!-- Metadata row -->
 					<div
-						class="text-surface-500 flex flex-wrap items-center gap-4 text-xs"
+						class="text-surface-700-300 flex flex-wrap items-center gap-4 text-xs"
 					>
 						{#if model.size}
 							<div class="flex items-center gap-1">
@@ -501,29 +591,31 @@
 					</div>
 					<div class="flex min-w-[100px] gap-2">
 						<button
-							class="btn btn-sm {isModelInstalled(model.name)
-								? 'preset-filled-success-500'
-								: 'preset-filled-primary-500'}"
+							class="btn btn-sm {active
+								? 'preset-filled-primary-500'
+								: installed
+									? 'preset-filled-success-500'
+									: 'preset-filled-primary-500'}"
 							onclick={() => {
 								if (
 									selectedSource ===
 									OllamaModelSearchSource.HUGGING_FACE
 								) {
 									openHuggingFaceModal(model)
-								} else if (
-									selectedSource ===
-									OllamaModelSearchSource.OLLAMA_DB
-								) {
-									openOllamaInstructionModal(model.name)
 								} else {
 									openOllamaManualPullModal(model.name)
 								}
 							}}
-							aria-label={isModelInstalled(model.name)
-								? `Model ${model.name} is already installed`
-								: `Install model ${model.name}`}
+							aria-label={active
+								? `Model ${model.name} is currently active`
+								: installed
+									? `Model ${model.name} is already installed`
+									: `Install model ${model.name}`}
 						>
-							{#if isModelInstalled(model.name)}
+							{#if active}
+								<Icons.Zap size={14} aria-hidden="true" />
+								Active
+							{:else if installed}
 								<Icons.Check size={14} aria-hidden="true" />
 								Installed
 							{:else}
@@ -568,12 +660,4 @@
 	modelName={selectedModelForDownload || ""}
 	onclose={closeOllamaManualPullModal}
 	onconfirm={handleOllamaInstallConfirm}
-/>
-
-<!-- Ollama Instruction Modal -->
-<OllamaInstructionModal
-	bind:open={showOllamaInstructionModal}
-	modelName={selectedModelForDownload || ""}
-	onClose={closeOllamaInstructionModal}
-	onContinue={handleInstructionContinue}
 />

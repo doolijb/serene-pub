@@ -1,0 +1,16 @@
+// Top-level build file
+//
+// Repositories live in settings.gradle's dependencyResolutionManagement block
+// only (repositoriesMode = FAIL_ON_PROJECT_REPOS) — declaring them here too
+// (the old buildscript{}/allprojects{} pattern) conflicts with that and fails
+// the build. Plugin versions are declared here with apply false and applied
+// without a version in app/build.gradle, the modern equivalent of the old
+// buildscript{ dependencies { classpath ... } } mechanism.
+plugins {
+    id 'com.android.application' version '8.2.0' apply false
+    id 'org.jetbrains.kotlin.android' version '1.9.21' apply false
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}

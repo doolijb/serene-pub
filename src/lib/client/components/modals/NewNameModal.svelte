@@ -1,14 +1,26 @@
 <script lang="ts">
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal, Switch } from "@skeletonlabs/skeleton-svelte"
 	import { z } from "zod"
 
 	interface Props {
 		open: boolean
 		onOpenChange: (e: OpenChangeDetails) => void
-		onConfirm: (name: string) => void
+		/** `checked` is only meaningful when `checkboxLabel` is supplied. */
+		onConfirm: (name: string, checked: boolean) => void
 		onCancel: () => void
 		title?: string
 		description?: string
+		/**
+		 * Opt-in extra toggle. This modal is shared by the Lorebooks, Sampling,
+		 * Prompts and Context sidebars — omitting `checkboxLabel` leaves those
+		 * three rendering exactly as they did before, which is why this is a
+		 * prop rather than a fixed field.
+		 *
+		 * There is deliberately no disabled state: a caller that only wants the
+		 * toggle when it is actionable simply omits the label.
+		 */
+		checkboxLabel?: string
+		checkboxChecked?: boolean
 	}
 
 	let {
@@ -17,8 +29,18 @@
 		onConfirm,
 		onCancel,
 		title,
-		description
+		description,
+		checkboxLabel,
+		checkboxChecked = false
 	}: Props = $props()
+
+	let checked = $state(checkboxChecked)
+
+	// Re-seed on each open — the modal stays mounted, so without this a second
+	// open would inherit whatever the user left the toggle on last time.
+	$effect(() => {
+		if (open) checked = checkboxChecked
+	})
 
 	// Zod validation schema
 	const nameSchema = z.object({
@@ -56,82 +78,117 @@
 	}
 </script>
 
-<Modal
-	{open}
-	{onOpenChange}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-md"
-	backdropClasses="backdrop-blur-sm"
-	role="dialog"
-	aria-labelledby="modal-title"
-	aria-describedby="modal-description"
->
-	{#snippet content()}
-		<header class="flex justify-between">
-			<h2 id="modal-title" class="h2">{title ? title : "Create new"}</h2>
-		</header>
-		<article class="space-y-4">
-			{#if description}
-				<p id="modal-description" class="text-muted-foreground">{description}</p>
-			{/if}
-			<div class="form-field">
-				<label for="name-input" class="sr-only">
-					Name
-				</label>
-				<input
-					id="name-input"
-					bind:this={inputRef}
-					bind:value={name}
-					class="input w-full {validationErrors.name
-						? 'border-red-500'
-						: ''}"
-					type="text"
-					placeholder="Enter a name..."
-					aria-required="true"
-					aria-invalid={!!validationErrors.name}
-					aria-describedby={validationErrors.name ? "name-error" : undefined}
-					onkeydown={(e) => {
-						if (e.key === "Enter" && isValid) {
+<Dialog {open} {onOpenChange}>
+	<Portal>
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 max-w-md space-y-6 p-6 shadow-xl"
+				role="dialog"
+				aria-labelledby="new-name-modal-title"
+				aria-describedby="new-name-modal-description"
+			>
+				<header class="flex justify-between">
+					<h2 id="new-name-modal-title" class="h2">
+						{title ? title : "Create new"}
+					</h2>
+				</header>
+				<article class="space-y-4">
+					{#if description}
+						<p
+							id="new-name-modal-description"
+							class="text-muted-foreground"
+						>
+							{description}
+						</p>
+					{/if}
+					<div class="form-field">
+						<label for="name-input" class="sr-only">Name</label>
+						<input
+							id="name-input"
+							bind:this={inputRef}
+							bind:value={name}
+							class="input w-full {validationErrors.name
+								? 'border-error-500'
+								: ''}"
+							type="text"
+							placeholder="Enter a name..."
+							aria-required="true"
+							aria-invalid={!!validationErrors.name}
+							aria-describedby={validationErrors.name
+								? "name-error"
+								: undefined}
+							onkeydown={(e) => {
+								if (e.key === "Enter" && isValid) {
+									if (validateForm()) {
+										onConfirm(name, checked)
+									}
+								}
+							}}
+							oninput={() => {
+								if (validationErrors.name) {
+									const { name, ...rest } = validationErrors
+									validationErrors = rest
+								}
+							}}
+						/>
+						{#if validationErrors.name}
+							<p
+								id="name-error"
+								class="text-error-500 mt-1 text-sm"
+								role="alert"
+							>
+								{validationErrors.name}
+							</p>
+						{/if}
+					</div>
+					{#if checkboxLabel}
+						<Switch
+							name="new-name-modal-option"
+							{checked}
+							onCheckedChange={(e) => (checked = e.checked)}
+							class="flex items-center gap-2"
+						>
+							<Switch.Control
+								class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+							>
+								<Switch.Thumb />
+							</Switch.Control>
+							<Switch.HiddenInput />
+							<Switch.Label class="text-sm">
+								{checkboxLabel}
+							</Switch.Label>
+						</Switch>
+					{/if}
+				</article>
+				<footer class="flex justify-end gap-4">
+					<button
+						class="btn preset-filled-surface-500"
+						onclick={onCancel}
+						type="button"
+						aria-label="Cancel and close modal"
+					>
+						Cancel
+					</button>
+					<button
+						class="btn preset-filled-primary-500"
+						onclick={() => {
 							if (validateForm()) {
-								onConfirm(name)
+								onConfirm(name, checked)
 							}
-						}
-					}}
-					oninput={() => {
-						if (validationErrors.name) {
-							const { name, ...rest } = validationErrors
-							validationErrors = rest
-						}
-					}}
-				/>
-				{#if validationErrors.name}
-					<p id="name-error" class="mt-1 text-sm text-red-500" role="alert">
-						{validationErrors.name}
-					</p>
-				{/if}
-			</div>
-		</article>
-		<footer class="flex justify-end gap-4">
-			<button 
-				class="btn preset-filled-surface-500" 
-				onclick={onCancel}
-				type="button"
-				aria-label="Cancel and close modal"
-			>
-				Cancel
-			</button>
-			<button
-				class="btn preset-filled-primary-500"
-				onclick={() => {
-					if (validateForm()) {
-						onConfirm(name)
-					}
-				}}
-				disabled={!isValid}
-				type="button"
-				aria-label="Confirm and create new item"
-			>
-				Confirm
-			</button>
-		</footer>
-	{/snippet}
-</Modal>
+						}}
+						disabled={!isValid}
+						type="button"
+						aria-label="Confirm and create new item"
+					>
+						Confirm
+					</button>
+				</footer>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

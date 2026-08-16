@@ -1,17 +1,20 @@
 <script lang="ts">
-	import { Switch } from "@skeletonlabs/skeleton-svelte"
+	import { Switch, Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { onMount, onDestroy, getContext } from "svelte"
 	import { z } from "zod"
 	import CharacterUnsavedChangesModal from "../modals/CharacterUnsavedChangesModal.svelte"
 	import Avatar from "../Avatar.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { stableStringify } from "$lib/shared/utils/connectionDefaults"
 
 	interface EditCharacterData {
 		id?: number
 		name: string
 		nickname: string
+		aliases: string[]
+		summary: string
 		avatar: string
 		description: string
 		personality: string
@@ -28,6 +31,8 @@
 		_avatar: string
 		lorebookId: number | null
 		characterVersion?: string
+		creator: string
+		category: string
 		tags: string[]
 	}
 
@@ -46,6 +51,8 @@
 		groupOnlyGreetings: z.array(z.string()).optional(),
 		postHistoryInstructions: z.string().optional(),
 		characterVersion: z.string().optional(),
+		creator: z.string().optional(),
+		category: z.string().optional(),
 		isFavorite: z.boolean().optional(),
 		lorebookId: z.number().nullable().optional(),
 		tags: z.array(z.string()).optional()
@@ -58,24 +65,43 @@
 		isSafeToClose: boolean
 		closeForm: () => void
 		onCancel?: () => void
+		hideAvatar?: boolean
+		initialData?: Partial<EditCharacterData>
+		customTitle?: string
+		hideActionButtons?: boolean
+		hideFavorite?: boolean
+		hideTitle?: boolean
+		hideTags?: boolean
 	}
 
 	let {
 		characterId,
 		isSafeToClose: hasChanges = $bindable(),
 		closeForm = $bindable(),
-		onCancel = $bindable()
+		onCancel = $bindable(),
+		hideAvatar = false,
+		initialData,
+		customTitle,
+		hideActionButtons = false,
+		hideFavorite = false,
+		hideTitle = false,
+		hideTags = false
 	}: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
 	)
+	let userSettingsCtx: UserSettingsCtx = $state(getContext("userSettingsCtx"))
+
+	let isInitialized = $state(false)
 
 	let editCharacterData: EditCharacterData = $state({
 		id: undefined,
 		name: "",
 		nickname: "",
+		aliases: [],
+		summary: "",
 		avatar: "",
 		description: "",
 		personality: "",
@@ -89,6 +115,8 @@
 		postHistoryInstructions: "",
 		isFavorite: false,
 		characterVersion: "",
+		creator: "",
+		category: "",
 		_avatarFile: undefined,
 		_avatar: "",
 		lorebookId: null,
@@ -98,6 +126,8 @@
 		id: undefined,
 		name: "",
 		nickname: "",
+		aliases: [],
+		summary: "",
 		avatar: "",
 		description: "",
 		personality: "",
@@ -111,6 +141,8 @@
 		postHistoryInstructions: "",
 		isFavorite: false,
 		characterVersion: "",
+		creator: "",
+		category: "",
 		_avatarFile: undefined,
 		_avatar: "",
 		lorebookId: null,
@@ -126,18 +158,23 @@
 		creatorNotesMultilingual: false,
 		alternateGreetings: false,
 		groupOnlyGreetings: false,
-		postHistoryInstructions: false
+		postHistoryInstructions: false,
+		aliases: false,
+		summary: false
 	})
-	let character: Sockets.Character.Response["character"] | undefined =
+	let character: Sockets.Characters.Get.Response["character"] | undefined =
 		$state(undefined)
 	let mode: "create" | "edit" = $derived.by(() =>
 		!!character ? "edit" : "create"
 	)
 	let showCancelModal = $state(false)
+	let isSaving = $state(false)
 	let validationErrors: ValidationErrors = $state({})
 	let newLangKey = $state("")
 	let newLangNote = $state("")
-	let lorebookList: Sockets.LorebookList.Response["lorebookList"] = $state([])
+	let lorebookList: Sockets.Lorebooks.List.Response["lorebookList"] = $state(
+		[]
+	)
 	let formContainer: HTMLDivElement
 	let validationTimeout: NodeJS.Timeout
 
@@ -149,7 +186,7 @@
 	}> = $state([])
 	let tagSearchQuery = $state("")
 	let showTagDropdown = $state(false)
-	let tagInputRef: HTMLInputElement
+	let tagInputRef = $state<HTMLInputElement | null>(null)
 
 	// Filtered tags based on search query
 	let filteredTags = $derived.by(() => {
@@ -257,6 +294,10 @@
 	}
 
 	function onSave() {
+		// Guard against double-submit (eg. an impatient re-click while the
+		// previous save is still in flight)
+		if (isSaving) return
+
 		// Validate the form first
 		if (!validateForm()) {
 			// Validation failed, errors are already set in validationErrors
@@ -276,19 +317,26 @@
 		const newCharacter = { ...editCharacterData }
 		const avatarFile = newCharacter._avatarFile
 		delete newCharacter._avatarFile
-		socket.emit("createCharacter", {
+		isSaving = true
+		socket.emit("characters:create", {
 			character: newCharacter,
-			avatarFile
+			// Socket.IO transparently marshals a browser File (a Blob
+			// subclass) to a Node Buffer on the server; the wire shape
+			// differs from the client-side value's compile-time type.
+			avatarFile: avatarFile as unknown as Buffer | undefined
 		})
 	}
 
 	function handleUpdate() {
 		const updatedCharacter = { ...editCharacterData }
+		if (!updatedCharacter.id) return
 		const avatarFile = updatedCharacter._avatarFile
 		delete updatedCharacter._avatarFile
-		socket.emit("updateCharacter", {
-			character: updatedCharacter,
-			avatarFile
+		isSaving = true
+		socket.emit("characters:update", {
+			character: { ...updatedCharacter, id: updatedCharacter.id },
+			// See handleCreate() above re: File → Buffer wire conversion.
+			avatarFile: avatarFile as unknown as Buffer | undefined
 		})
 	}
 
@@ -316,10 +364,9 @@
 	}
 
 	async function onShowAllCharacterFieldsClick(event: { checked: boolean }) {
-		const res: Sockets.UpdateShowAllCharacterFields.Call = {
+		socket?.emit("userSettings:updateShowAllCharacterFields", {
 			enabled: event.checked
-		}
-		socket.emit("updateShowAllCharacterFields", res)
+		})
 	}
 
 	// Helper for editing arrays
@@ -370,9 +417,137 @@
 
 	$effect(() => {
 		hasChanges =
-			JSON.stringify(editCharacterData) !==
-			JSON.stringify(originalCharacterData)
+			stableStringify(editCharacterData) !==
+			stableStringify(originalCharacterData)
 	})
+
+	function handleCharactersCreate(res: any) {
+		isSaving = false
+		if (res.character) {
+			validationErrors = {} // Clear any validation errors on success
+			toaster.success({
+				title: "Character Created",
+				description: `Character "${res.character.name}" created successfully.`
+			})
+			// Reset original data to match current state before closing
+			originalCharacterData = $state.snapshot(editCharacterData)
+			// Directly set hasChanges to false to prevent race condition
+			hasChanges = false
+			closeForm()
+		}
+	}
+
+	function handleCharactersUpdate(res: any) {
+		// characters:update is emitToUser — broadcast to every open tab for
+		// this user, not just the requester. Without this check, a save in
+		// another tab (for a different character) silently closes this
+		// form and discards whatever is being edited here.
+		if (res.character?.id !== characterId) return
+		isSaving = false
+		if (res.character) {
+			validationErrors = {} // Clear any validation errors on success
+			toaster.success({
+				title: "Character Updated",
+				description: `Character "${res.character.name}" updated successfully.`
+			})
+			// Reset original data to match current state before closing
+			originalCharacterData = $state.snapshot(editCharacterData)
+			// Directly set hasChanges to false to prevent race condition
+			hasChanges = false
+			closeForm()
+		}
+	}
+
+	function handleCharactersCreateError(msg: Sockets.ErrorResponse) {
+		isSaving = false
+		toaster.error({
+			title: "Failed to create character",
+			description: msg.error
+		})
+	}
+
+	function handleCharactersUpdateError(msg: Sockets.ErrorResponse) {
+		isSaving = false
+		toaster.error({
+			title: "Failed to update character",
+			description: msg.error
+		})
+	}
+
+	function handleCharactersGet(message: Sockets.Characters.Get.Response) {
+		character = message.character
+		if (!message.character) return
+		const characterData = { ...message.character }
+
+		// Handle migration from old string format to new array format
+		if (typeof characterData.exampleDialogues === "string") {
+			characterData.exampleDialogues = (
+				characterData.exampleDialogues as string
+			)
+				.split("<START>")
+				.map((d: string) => d.trim())
+				.filter((d: string) => d !== "")
+		} else if (!Array.isArray(characterData.exampleDialogues)) {
+			characterData.exampleDialogues = []
+		}
+
+		editCharacterData = {
+			...editCharacterData,
+			id: characterData.id,
+			name: characterData.name,
+			nickname: characterData.nickname ?? "",
+			aliases: Array.isArray(characterData.aliases)
+				? characterData.aliases
+				: [],
+			summary: characterData.summary ?? "",
+			avatar: characterData.avatar ?? "",
+			description: characterData.description ?? "",
+			personality: characterData.personality ?? "",
+			scenario: characterData.scenario ?? "",
+			firstMessage: characterData.firstMessage ?? "",
+			alternateGreetings: Array.isArray(characterData.alternateGreetings)
+				? characterData.alternateGreetings
+				: [],
+			exampleDialogues: characterData.exampleDialogues,
+			creatorNotes: characterData.creatorNotes ?? "",
+			creatorNotesMultilingual:
+				characterData.creatorNotesMultilingual ?? {},
+			groupOnlyGreetings: Array.isArray(characterData.groupOnlyGreetings)
+				? characterData.groupOnlyGreetings
+				: [],
+			postHistoryInstructions: characterData.postHistoryInstructions ?? "",
+			isFavorite: characterData.isFavorite ?? false,
+			lorebookId: characterData.lorebookId ?? null,
+			characterVersion: characterData.characterVersion ?? undefined,
+			creator: characterData.creator ?? "",
+			category: characterData.category ?? "",
+			tags: characterData.tags ?? [],
+			_avatar: "",
+			_avatarFile: undefined
+		}
+		originalCharacterData = $state.snapshot(editCharacterData)
+	}
+
+	function handleLorebooksList(message: Sockets.Lorebooks.List.Response) {
+		lorebookList =
+			message.lorebookList.sort((a, b) => (a.id ?? 0) - (b.id ?? 0)) || []
+	}
+
+	function handleTagsList(message: any) {
+		availableTags = message.tagsList || []
+	}
+
+	function handleUpdateShowAllCharacterFields(message: any) {
+		if (message.success) {
+			toaster.success({
+				title: `Character fields display ${message.enabled ? "expanded" : "simplified"}`
+			})
+		} else {
+			toaster.error({
+				title: "Failed to update character fields setting"
+			})
+		}
+	}
 
 	onMount(() => {
 		onCancel = handleCancel
@@ -380,93 +555,73 @@
 		// Add keyboard event listener
 		document.addEventListener("keydown", handleKeydown)
 
-		socket.on("createCharacter", (res: any) => {
-			if (res.character) {
-				validationErrors = {} // Clear any validation errors on success
-				toaster.success({
-					title: "Character Created",
-					description: `Character "${res.character.name}" created successfully.`
-				})
-				closeForm()
+		socket.on("characters:create", handleCharactersCreate)
+		socket.on("characters:update", handleCharactersUpdate)
+		socket.on("characters:create:error", handleCharactersCreateError)
+		socket.on("characters:update:error", handleCharactersUpdateError)
+		socket.on("lorebooks:list", handleLorebooksList)
+		socket.on("tags:list", handleTagsList)
+		socket.on(
+			"userSettings:updateShowAllCharacterFields",
+			handleUpdateShowAllCharacterFields
+		)
+
+		// Initialize with initialData if provided
+		if (initialData) {
+			editCharacterData = {
+				...editCharacterData,
+				...initialData
 			}
-		})
-
-		socket.on("updateCharacter", (res: any) => {
-			if (res.character) {
-				validationErrors = {} // Clear any validation errors on success
-				toaster.success({
-					title: "Character Updated",
-					description: `Character "${res.character.name}" updated successfully.`
-				})
-				closeForm()
-			}
-		})
-		socket.on("lorebookList", (message: Sockets.LorebookList.Response) => {
-			lorebookList =
-				message.lorebookList.sort((a, b) =>
-					a.id < b.id ? -1 : a.id > b.id ? 1 : 0
-				) || []
-		})
-
-		socket.on("tagsList", (message: any) => {
-			availableTags = message.tagsList || []
-		})
-		if (characterId) {
-			socket.once("character", (message: Sockets.Character.Response) => {
-				character = message.character
-				const characterData = { ...message.character }
-
-				// Handle migration from old string format to new array format
-				if (typeof characterData.exampleDialogues === "string") {
-					characterData.exampleDialogues = (
-						characterData.exampleDialogues as string
-					)
-						.split("<START>")
-						.map((d: string) => d.trim())
-						.filter((d: string) => d !== "")
-				} else if (!Array.isArray(characterData.exampleDialogues)) {
-					characterData.exampleDialogues = []
-				}
-
-				editCharacterData = {
-					...editCharacterData,
-					...characterData,
-					avatar: characterData.avatar ?? "",
-					nickname: characterData.nickname ?? "",
-					personality: characterData.personality ?? "",
-					scenario: characterData.scenario ?? "",
-					firstMessage: characterData.firstMessage ?? "",
-					creatorNotes: characterData.creatorNotes ?? "",
-					creatorNotesMultilingual:
-						characterData.creatorNotesMultilingual ?? {},
-					groupOnlyGreetings: Array.isArray(
-						characterData.groupOnlyGreetings
-					)
-						? characterData.groupOnlyGreetings
-						: [],
-					postHistoryInstructions:
-						characterData.postHistoryInstructions ?? "",
-					characterVersion:
-						characterData.characterVersion ?? undefined,
-					tags: characterData.tags ?? []
-				}
-				originalCharacterData = { ...editCharacterData }
-			})
-			socket.emit("character", { id: characterId })
+			originalCharacterData = $state.snapshot(editCharacterData)
+		} else if (characterId) {
+			socket.once("characters:get", handleCharactersGet)
+			socket.emit("characters:get", { id: characterId })
 		}
-		socket.emit("lorebookList", {})
-		socket.emit("tagsList", {})
+		socket.emit("lorebooks:list", {})
+		socket.emit("tags:list", {})
+
+		// Mark as initialized after a short delay to allow initial data to settle
+		setTimeout(() => {
+			isInitialized = true
+		}, 100)
 	})
 
 	onDestroy(() => {
-		socket.off("createCharacter")
-		socket.off("updateCharacter")
-		socket.off("character")
-		socket.off("tagsList")
+		socket.off("characters:create", handleCharactersCreate)
+		socket.off("characters:update", handleCharactersUpdate)
+		socket.off("characters:create:error", handleCharactersCreateError)
+		socket.off("characters:update:error", handleCharactersUpdateError)
+		socket.off("characters:get", handleCharactersGet)
+		socket.off("lorebooks:list", handleLorebooksList)
+		socket.off("tags:list", handleTagsList)
+		socket.off(
+			"userSettings:updateShowAllCharacterFields",
+			handleUpdateShowAllCharacterFields
+		)
 
 		// Remove keyboard event listener and clear timeout
 		document.removeEventListener("keydown", handleKeydown)
 		clearTimeout(validationTimeout)
+	})
+
+	// Track the last initialData we processed to prevent infinite loops
+	let lastProcessedInitialData = $state<string>("")
+
+	// Watch for changes to initialData
+	$effect(() => {
+		if (initialData && isInitialized) {
+			const newDataStr = JSON.stringify(initialData)
+
+			// Only update if initialData itself changed (not editCharacterData)
+			if (newDataStr !== lastProcessedInitialData) {
+				lastProcessedInitialData = newDataStr
+
+				editCharacterData = {
+					...editCharacterData,
+					...initialData
+				}
+			}
+		}
 	})
 </script>
 
@@ -477,99 +632,129 @@
 	aria-labelledby="form-title"
 	aria-modal="false"
 >
-	<h1 class="mb-4 text-lg font-bold" id="form-title">
-		{mode === "edit"
-			? `Edit: ${character?.nickname || character?.name || "Character"}`
-			: "Create Character"}
-	</h1>
-	<div class="mt-4 mb-4 flex gap-2" role="group" aria-label="Form actions">
-		<button
-			type="button"
-			class="btn btn-sm preset-filled-surface-500 w-full"
-			onclick={handleCancel}
-			aria-describedby="form-title"
+	{#if !hideTitle || !hideActionButtons}
+		<div
+			class="mb-4 flex items-center gap-2"
+			role="group"
+			aria-label="Form actions"
 		>
-			Cancel
-		</button>
-		<button
-			type="button"
-			class="btn btn-sm preset-filled-success-500 w-full"
-			class:preset-filled-success-500={hasChanges}
-			class:preset-tonal-success={!hasChanges}
-			onclick={onSave}
-			aria-describedby="form-title"
-			aria-label={`${mode === "edit" ? "Update" : "Create"} character${hasChanges ? " (has unsaved changes)" : ""}`}
-		>
-			<Icons.Save size={16} aria-hidden="true" />
-			{mode === "edit" ? "Update" : "Create"}
-		</button>
-	</div>
-	<div class="flex flex-col gap-4" role="form" aria-labelledby="form-title">
-		<fieldset
-			class="flex items-center gap-4"
-			aria-labelledby="avatar-section"
-		>
-			<legend id="avatar-section" class="sr-only">Avatar Settings</legend>
-			<div aria-label="Current avatar preview">
-				<Avatar
-					src={editCharacterData._avatar || editCharacterData.avatar}
-					char={editCharacterData}
-				/>
-			</div>
-			<div class="flex w-full flex-col gap-2">
-				<div class="flex w-full items-center justify-center">
-					<label
-						for="dropzone-file"
-						class="flex w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-700 dark:hover:border-gray-500 dark:hover:bg-gray-800"
-						aria-describedby="avatar-help"
-					>
-						<div
-							class="flex w-full flex-col items-center justify-center"
-						>
-							<svg
-								class="my-4 h-8 w-8 text-gray-500 dark:text-gray-400"
-								aria-hidden="true"
-								xmlns="http://www.w3.org/2000/svg"
-								fill="none"
-								viewBox="0 0 20 16"
-							>
-								<path
-									stroke="currentColor"
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									stroke-width="2"
-									d="M13 13h3a3 3 0 0 0 0-6h-.025A5.56 5.56 0 0 0 16 6.5 5.5 5.5 0 0 0 5.207 5.021C5.137 5.017 5.071 5 5 5a4 4 0 0 0 0 8h2.167M10 15V6m0 0L8 8m2-2 2 2"
-								/>
-							</svg>
-						</div>
-						<input
-							id="dropzone-file"
-							type="file"
-							class="hidden"
-							accept="image/*"
-							onchange={handleAvatarChange}
-							aria-describedby="avatar-help"
-						/>
-						<div id="avatar-help" class="sr-only">
-							Upload an image file for the character avatar.
-							Supported formats: JPG, PNG, GIF
-						</div>
-					</label>
-				</div>
+			{#if !hideActionButtons}
 				<button
 					type="button"
-					class="btn btn-sm preset-tonal-error mt-1"
-					onclick={() => {
-						editCharacterData._avatarFile = undefined
-						editCharacterData._avatar = ""
-					}}
-					disabled={!editCharacterData._avatarFile}
-					aria-label="Clear selected avatar image"
+					class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
+					onclick={handleCancel}
+					title="Cancel"
+					aria-label="Cancel and go back"
 				>
-					Clear Selection
+					<Icons.ChevronLeft size={16} aria-hidden="true" />
 				</button>
-			</div>
-		</fieldset>
+			{/if}
+			{#if !hideTitle}
+				<h1 class="flex-1 text-lg font-bold" id="form-title">
+					{customTitle ||
+						(mode === "edit"
+							? `Edit: ${character?.nickname || character?.name || "Character"}`
+							: "Create Character")}
+				</h1>
+			{:else}
+				<span class="flex-1"></span>
+			{/if}
+			{#if !hideActionButtons}
+				<button
+					type="button"
+					class="btn btn-sm shrink-0"
+					class:preset-filled-success-500={hasChanges}
+					class:preset-tonal-success={!hasChanges}
+					onclick={onSave}
+					disabled={isSaving}
+					aria-describedby="form-title"
+					aria-label={`${mode === "edit" ? "Update" : "Create"} character${hasChanges ? " (has unsaved changes)" : ""}`}
+				>
+					{#if isSaving}
+						<Icons.Loader2
+							size={16}
+							class="animate-spin"
+							aria-hidden="true"
+						/>
+					{:else}
+						<Icons.Save size={16} aria-hidden="true" />
+					{/if}
+					{mode === "edit" ? "Update" : "Create"}
+				</button>
+			{/if}
+		</div>
+	{/if}
+	<div class="flex flex-col gap-4" role="form" aria-labelledby="form-title">
+		{#if !hideAvatar}
+			<fieldset
+				class="flex items-center gap-4"
+				aria-labelledby="avatar-section"
+			>
+				<legend id="avatar-section" class="sr-only">
+					Avatar Settings
+				</legend>
+				<div aria-label="Current avatar preview">
+					<Avatar
+						src={editCharacterData._avatar ||
+							editCharacterData.avatar}
+						char={editCharacterData}
+					/>
+				</div>
+				<div class="flex w-full flex-col gap-2">
+					<div class="flex w-full items-center justify-center">
+						<label
+							for="dropzone-file"
+							class="border-surface-300-700 bg-surface-50-950 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed"
+							aria-describedby="avatar-help"
+						>
+							<div
+								class="flex w-full flex-col items-center justify-center"
+							>
+								<svg
+									class="text-surface-700-300 dark:text-surface-400 my-4 h-8 w-8"
+									aria-hidden="true"
+									xmlns="http://www.w3.org/2000/svg"
+									fill="none"
+									viewBox="0 0 20 16"
+								>
+									<path
+										stroke="currentColor"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M13 13h3a3 3 0 0 0 0-6h-.025A5.56 5.56 0 0 0 16 6.5 5.5 5.5 0 0 0 5.207 5.021C5.137 5.017 5.071 5 5 5a4 4 0 0 0 0 8h2.167M10 15V6m0 0L8 8m2-2 2 2"
+									/>
+								</svg>
+							</div>
+							<input
+								id="dropzone-file"
+								type="file"
+								class="hidden"
+								accept="image/*"
+								onchange={handleAvatarChange}
+								aria-describedby="avatar-help"
+							/>
+							<div id="avatar-help" class="sr-only">
+								Upload an image file for the character avatar.
+								Supported formats: JPG, PNG, GIF
+							</div>
+						</label>
+					</div>
+					<button
+						type="button"
+						class="btn btn-sm preset-tonal-error mt-1"
+						onclick={() => {
+							editCharacterData._avatarFile = undefined
+							editCharacterData._avatar = ""
+						}}
+						disabled={!editCharacterData._avatarFile}
+						aria-label="Clear selected avatar image"
+					>
+						Clear Selection
+					</button>
+				</div>
+			</fieldset>
+		{/if}
 		<fieldset class="flex flex-col gap-1">
 			<label class="flex gap-1 font-semibold" for="charName">
 				Name* <span
@@ -589,7 +774,7 @@
 				type="text"
 				bind:value={editCharacterData.name}
 				class="input {validationErrors.name
-					? 'border-red-500 focus:border-red-500'
+					? 'border-error-500 focus:border-error-500'
 					: ''}"
 				oninput={() => {
 					// Clear validation error when user starts typing
@@ -606,7 +791,7 @@
 			/>
 			{#if validationErrors.name}
 				<p
-					class="mt-1 text-sm text-red-500"
+					class="text-error-500 mt-1 text-sm"
 					id="name-error"
 					role="alert"
 				>
@@ -635,6 +820,88 @@
 				class="input"
 			/>
 		</fieldset>
+		<div class="flex flex-col gap-2">
+			<button
+				type="button"
+				class="flex items-center gap-2 text-sm font-semibold"
+				onclick={() => (expanded.aliases = !expanded.aliases)}
+			>
+				<span class="flex gap-1">
+					Aliases <span
+						class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
+						title="This field will be visible in prompts"
+						aria-label="This field will be visible in prompts"
+					>
+						<Icons.ScanEye
+							size={16}
+							class="relative top-[1px] inline"
+							aria-hidden="true"
+						/>
+					</span>
+				</span>
+				<span class="ml-1">{expanded.aliases ? "▼" : "►"}</span>
+			</button>
+			{#if expanded.aliases}
+				<div class="flex flex-col gap-1">
+					{#each editCharacterData.aliases as _alias, idx (idx)}
+						<div class="flex gap-2">
+							<input
+								type="text"
+								bind:value={editCharacterData.aliases[idx]}
+								class="input flex-1"
+								placeholder="Alias..."
+							/>
+							<button
+								class="btn btn-sm preset-tonal-error"
+								type="button"
+								onclick={() =>
+									removeFromArray(
+										editCharacterData.aliases,
+										idx
+									)}
+							>
+								<Icons.Minus class="h-4 w-4" />
+							</button>
+						</div>
+					{/each}
+					<button
+						class="btn btn-sm preset-filled-primary-500 mt-1"
+						type="button"
+						onclick={() => addToArray(editCharacterData.aliases)}
+					>
+						<Icons.Plus class="h-4 w-4" />
+						Add Alias
+					</button>
+				</div>
+			{/if}
+		</div>
+		<div class="flex flex-col gap-2">
+			<button
+				type="button"
+				class="flex items-center gap-2 text-sm font-semibold"
+				onclick={() => (expanded.summary = !expanded.summary)}
+			>
+				Summary
+				<span class="ml-1">{expanded.summary ? "▼" : "►"}</span>
+			</button>
+			{#if expanded.summary}
+				<div class="flex flex-col gap-1">
+					<textarea
+						bind:value={editCharacterData.summary}
+						class="textarea min-h-16 text-sm"
+						placeholder="One or two sentences describing who this character is…"
+						maxlength="200"
+					></textarea>
+					<p class="text-surface-700-300 text-right text-xs">
+						{editCharacterData.summary.length} / 200
+					</p>
+					<p class="text-surface-400 text-xs">
+						Used as a concise graph node description. Not injected
+						into chat context.
+					</p>
+				</div>
+			{/if}
+		</div>
 		<fieldset class="flex flex-col gap-2">
 			<button
 				type="button"
@@ -671,7 +938,7 @@
 						rows="8"
 						bind:value={editCharacterData.description}
 						class="input {validationErrors.description
-							? 'border-red-500 focus:border-red-500'
+							? 'border-error-500 focus:border-error-500'
 							: ''}"
 						placeholder="Description..."
 						aria-label="Character description"
@@ -693,7 +960,7 @@
 					></textarea>
 					{#if validationErrors.description}
 						<p
-							class="mt-1 text-sm text-red-500"
+							class="text-error-500 mt-1 text-sm"
 							id="description-error"
 							role="alert"
 						>
@@ -745,7 +1012,7 @@
 				</div>
 			{/if}
 		</fieldset>
-		{#if systemSettingsCtx.settings.showAllCharacterFields}
+		{#if userSettingsCtx.settings?.showAllCharacterFields}
 			<div class="flex flex-col gap-2">
 				<button
 					type="button"
@@ -793,7 +1060,7 @@
 				></textarea>
 			{/if}
 		</div>
-		{#if systemSettingsCtx.settings.showAllCharacterFields}
+		{#if userSettingsCtx.settings?.showAllCharacterFields}
 			<div class="flex flex-col gap-2">
 				<button
 					type="button"
@@ -942,7 +1209,7 @@
 				{/if}
 			</fieldset>
 		{/if}
-		{#if systemSettingsCtx.settings.showAllCharacterFields}
+		{#if userSettingsCtx.settings?.showAllCharacterFields}
 			<div class="flex flex-col gap-2">
 				<button
 					type="button"
@@ -965,7 +1232,7 @@
 				{/if}
 			</div>
 		{/if}
-		{#if systemSettingsCtx.settings.showAllCharacterFields}
+		{#if userSettingsCtx.settings?.showAllCharacterFields}
 			<div class="flex flex-col gap-2">
 				<button
 					type="button"
@@ -1046,7 +1313,7 @@
 				{/if}
 			</div>
 		{/if}
-		{#if systemSettingsCtx.settings.showAllCharacterFields}
+		{#if userSettingsCtx.settings?.showAllCharacterFields}
 			<div class="flex flex-col gap-2">
 				<button
 					type="button"
@@ -1103,7 +1370,7 @@
 				{/if}
 			</div>
 		{/if}
-		{#if systemSettingsCtx.settings.showAllCharacterFields}
+		{#if userSettingsCtx.settings?.showAllCharacterFields}
 			<div class="flex flex-col gap-2">
 				<button
 					type="button"
@@ -1137,7 +1404,7 @@
 				{/if}
 			</div>
 		{/if}
-		{#if systemSettingsCtx.settings.showAllCharacterFields}
+		{#if userSettingsCtx.settings?.showAllCharacterFields}
 			<div class="flex flex-col gap-1">
 				<label class="font-semibold" for="charVersion">
 					Character Version
@@ -1148,6 +1415,26 @@
 					bind:value={editCharacterData.characterVersion}
 					class="input"
 					placeholder="1.0"
+				/>
+			</div>
+			<div class="flex flex-col gap-1">
+				<label class="font-semibold" for="charCreator">Creator</label>
+				<input
+					id="charCreator"
+					type="text"
+					bind:value={editCharacterData.creator}
+					class="input"
+					placeholder="Who made this character?"
+				/>
+			</div>
+			<div class="flex flex-col gap-1">
+				<label class="font-semibold" for="charCategory">Category</label>
+				<input
+					id="charCategory"
+					type="text"
+					bind:value={editCharacterData.category}
+					class="input"
+					placeholder="e.g. Fantasy, Sci-Fi, Slice of Life"
 				/>
 			</div>
 		{/if}
@@ -1164,103 +1451,127 @@
 				{/each}
 			</select>
 		</div> -->
-		<fieldset class="mb-4 flex flex-col gap-1">
-			<label class="font-semibold" for="charTags">Tags</label>
-			<div class="relative">
-				<input
-					id="charTags"
-					type="text"
-					bind:value={tagSearchQuery}
-					bind:this={tagInputRef}
-					class="input"
-					placeholder="Search or add tags..."
-					onfocus={() => (showTagDropdown = true)}
-					onblur={(e) => {
-						// Delay hiding dropdown to allow clicking on dropdown items
-						setTimeout(() => {
-							if (!e.relatedTarget?.closest(".tag-dropdown")) {
-								showTagDropdown = false
-							}
-						}, 150)
-					}}
-					onkeydown={handleTagInputKeydown}
-				/>
+		{#if !hideTags}
+			<fieldset class="mb-4 flex flex-col gap-1">
+				<label class="font-semibold" for="charTags">Tags</label>
+				<div class="relative">
+					<input
+						id="charTags"
+						type="text"
+						bind:value={tagSearchQuery}
+						bind:this={tagInputRef}
+						class="input"
+						placeholder="Search or add tags..."
+						onfocus={() => (showTagDropdown = true)}
+						onblur={(e) => {
+							// Delay hiding dropdown to allow clicking on dropdown items
+							setTimeout(() => {
+								if (
+									!(
+										e.relatedTarget instanceof Element &&
+										e.relatedTarget.closest(".tag-dropdown")
+									)
+								) {
+									showTagDropdown = false
+								}
+							}, 150)
+						}}
+						onkeydown={handleTagInputKeydown}
+					/>
 
-				{#if showTagDropdown && (filteredTags.length > 0 || tagSearchQuery.trim())}
-					<div
-						class="tag-dropdown bg-surface-100-900 border-surface-300-700 absolute top-full right-0 left-0 z-10 max-h-48 overflow-y-auto rounded-lg border shadow-lg"
-					>
-						{#if tagSearchQuery.trim() && !filteredTags.some((tag) => tag.name.toLowerCase() === tagSearchQuery.toLowerCase())}
-							<button
-								type="button"
-								class="hover:bg-surface-200-800 border-surface-300-700 w-full border-b px-3 py-2 text-left"
-								onclick={() => addTag(tagSearchQuery)}
-							>
-								<Icons.Plus size={16} class="mr-2 inline" />
-								Create "{tagSearchQuery}"
-							</button>
-						{/if}
-						{#each filteredTags as tag}
-							{#if !editCharacterData.tags.includes(tag.name)}
+					{#if showTagDropdown && (filteredTags.length > 0 || tagSearchQuery.trim())}
+						<div
+							class="tag-dropdown bg-surface-100-900 border-surface-300-700 absolute top-full right-0 left-0 z-10 max-h-48 overflow-y-auto rounded-lg border shadow-lg"
+						>
+							{#if tagSearchQuery.trim() && !filteredTags.some((tag) => tag.name.toLowerCase() === tagSearchQuery.toLowerCase())}
 								<button
 									type="button"
-									class="hover:bg-surface-200-800 w-full px-3 py-2 text-left"
-									onclick={() => addTag(tag.name)}
+									class="hover:bg-surface-200-800 border-surface-300-700 w-full border-b px-3 py-2 text-left"
+									onclick={() => addTag(tagSearchQuery)}
 								>
-									{tag.name}
+									<Icons.Plus size={16} class="mr-2 inline" />
+									Create "{tagSearchQuery}"
 								</button>
 							{/if}
+							{#each filteredTags as tag}
+								{#if !editCharacterData.tags.includes(tag.name)}
+									<button
+										type="button"
+										class="hover:bg-surface-200-800 w-full px-3 py-2 text-left"
+										onclick={() => addTag(tag.name)}
+									>
+										{tag.name}
+									</button>
+								{/if}
+							{/each}
+						</div>
+					{/if}
+				</div>
+
+				<!-- Selected tags display -->
+				{#if editCharacterData.tags.length > 0}
+					<div class="mt-2 flex flex-wrap gap-1">
+						{#each editCharacterData.tags as tag}
+							<span
+								class="inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs {getTagColorPreset(
+									tag
+								)}"
+							>
+								{tag}
+								<button
+									type="button"
+									class="rounded-full p-0.5 hover:opacity-70"
+									onclick={() => removeTag(tag)}
+									aria-label="Remove tag {tag}"
+								>
+									<Icons.X size={12} />
+								</button>
+							</span>
 						{/each}
 					</div>
 				{/if}
-			</div>
-
-			<!-- Selected tags display -->
-			{#if editCharacterData.tags.length > 0}
-				<div class="mt-2 flex flex-wrap gap-1">
-					{#each editCharacterData.tags as tag}
-						<span
-							class="inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs {getTagColorPreset(
-								tag
-							)}"
-						>
-							{tag}
-							<button
-								type="button"
-								class="rounded-full p-0.5 hover:opacity-70"
-								onclick={() => removeTag(tag)}
-								aria-label="Remove tag {tag}"
-							>
-								<Icons.X size={12} />
-							</button>
-						</span>
-					{/each}
-				</div>
-			{/if}
-		</fieldset>
-		<fieldset class="mt-2 flex items-center gap-2">
-			<Switch
-				name="favorite"
-				checked={editCharacterData.isFavorite}
-				onCheckedChange={(e) =>
-					(editCharacterData.isFavorite = e.checked)}
-				aria-describedby="favorite-description"
-			/>
-			<label for="favorite" class="font-semibold">Favorite</label>
-			<span id="favorite-description" class="sr-only">
-				Mark this character as a favorite for easier access
-			</span>
-		</fieldset>
+			</fieldset>
+		{/if}
+		{#if !hideFavorite}
+			<fieldset class="mt-2 flex items-center gap-2">
+				<Switch
+					name="favorite"
+					checked={editCharacterData.isFavorite}
+					onCheckedChange={(e) =>
+						(editCharacterData.isFavorite = e.checked)}
+					aria-describedby="favorite-description"
+				>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+					>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+					<Switch.Label class="font-semibold">Favorite</Switch.Label>
+				</Switch>
+				<span id="favorite-description" class="sr-only">
+					Mark this character as a favorite for easier access
+				</span>
+			</fieldset>
+		{/if}
 		<fieldset class="mt-2 flex items-center gap-2">
 			<Switch
 				name="show-all-character-fields"
-				checked={systemSettingsCtx.settings.showAllCharacterFields}
+				checked={userSettingsCtx.settings?.showAllCharacterFields ??
+					false}
 				onCheckedChange={onShowAllCharacterFieldsClick}
 				aria-describedby="show-all-fields-description"
-			/>
-			<label for="show-all-character-fields" class="font-semibold">
-				Show All Fields
-			</label>
+			>
+				<Switch.Control
+					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+				>
+					<Switch.Thumb />
+				</Switch.Control>
+				<Switch.HiddenInput />
+				<Switch.Label class="font-semibold">
+					Show All Fields
+				</Switch.Label>
+			</Switch>
 			<span id="show-all-fields-description" class="sr-only">
 				Show all character fields including advanced options
 			</span>

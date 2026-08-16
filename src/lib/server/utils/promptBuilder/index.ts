@@ -1,4 +1,4 @@
-import { PromptBlockFormatter } from "../PromptBlockFormatter"
+import { registerContextHandlebarsHelpers } from "$lib/shared/utils/contextHandlebarsHelpers"
 import Handlebars from "handlebars"
 import type { TokenCounters } from "../TokenCounterManager"
 import type { BasePromptChat } from "../../connectionAdapters/BaseConnectionAdapter"
@@ -6,31 +6,26 @@ import {
 	attachCharacterLoreToCharacters,
 	populateLorebookEntryBindings
 } from "./LorebookBindingUtils"
-import {
-	characterLoreEntryIterator,
-	historyEntryIterator
-} from "./PromptIterators"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 import { ChatCharacterVisibility } from "$lib/shared/constants/ChatCharacterVisibility"
+import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
+import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 
 // Import modular components
 import { InterpolationEngine } from "./InterpolationEngine"
-import { ContentInfillEngine } from "./ContentInfillEngine"
+import { KeywordInfillEngine } from "./KeywordInfillEngine"
+import { RagInfillEngine } from "./RagInfillEngine"
 import type {
-	LoreMatchingStrategy,
-	MatchingStrategyConfig
-} from "./LoreMatchingStrategies"
+	CompiledPrompt,
+	CompileOptions,
+	InfillResult,
+	TemplateContext
+} from "./types"
+import "./utils"
 import {
-	MatchingStrategyFactory,
-	KeywordMatchingStrategy
-} from "./LoreMatchingStrategies"
-import type {
-	ContentInclusionConfig,
-	ContentInclusionStrategy
-} from "./ContentInclusionStrategy"
-import { defaultContentInclusionConfig } from "./ContentInclusionStrategy"
-import type { CompiledPrompt, CompileOptions, TemplateContext } from "./types"
-import { parseSplitChatPrompt, isHistoryEntry } from "./utils"
+	isModelReady,
+	loadConfiguredEmbeddingModelOpportunistically
+} from "$lib/server/embedding"
 
 export class PromptBuilder {
 	connection: SelectConnection
@@ -38,10 +33,11 @@ export class PromptBuilder {
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
 	chat: BasePromptChat
-	currentCharacterId: number
+	currentCharacterId: number | null
 	tokenCounter: TokenCounters
 	tokenLimit: number
 	contextThresholdPercent: number
+	diagnosticsEnabled: boolean = true
 
 	// Legacy properties (gradually being moved to modules)
 	assistantCharacters: any[] = []
@@ -49,6 +45,11 @@ export class PromptBuilder {
 	instructions?: string
 	exampleDialogue?: string
 	postHistoryInstructions?: string
+	charExampleDialogue?: string
+	promptPostHistoryInstructions?: string
+	charPostHistory?: string
+	postHistoryDepth: number = 0
+	postHistoryTokenTrigger: number = 0
 
 	handlebars: typeof Handlebars
 
@@ -71,7 +72,7 @@ export class PromptBuilder {
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
 		chat: BasePromptChat
-		currentCharacterId: number
+		currentCharacterId: number | null
 		tokenCounter: TokenCounters
 		tokenLimit: number
 		contextThresholdPercent: number
@@ -100,71 +101,11 @@ export class PromptBuilder {
 	}: {
 		useChatFormat?: boolean
 	}) {
-		const handlebars = this.handlebars
-
-		// Common helpers
-		if (!handlebars.helpers.eq)
-			handlebars.registerHelper("eq", (a, b) => a === b)
-		if (!handlebars.helpers.ne)
-			handlebars.registerHelper("ne", (a, b) => a !== b)
-		if (!handlebars.helpers.and)
-			handlebars.registerHelper("and", (a, b) => a && b)
-		if (!handlebars.helpers.or)
-			handlebars.registerHelper("or", (a, b) => a || b)
-
-		// Precompute prompt format ONCE for this registration
-		const precomputedPromptFormat = useChatFormat
+		const promptFormat = useChatFormat
 			? PromptFormats.SPLIT_CHAT
 			: this.connection?.promptFormat || PromptFormats.VICUNA
 
-		const getPromptFormat = () => precomputedPromptFormat
-
-		if (!handlebars.helpers.systemBlock) {
-			handlebars.registerHelper(
-				"systemBlock",
-				function (this: any, options: any) {
-					const promptFormat = getPromptFormat()
-					return PromptBlockFormatter.makeBlock({
-						format: promptFormat,
-						role: "system",
-						content: options.fn(this)
-					})
-				}
-			)
-		}
-		if (!handlebars.helpers.assistantBlock) {
-			handlebars.registerHelper(
-				"assistantBlock",
-				function (this: any, options: any) {
-					const promptFormat = getPromptFormat()
-					// If available, check for id property in the context
-					// Handlebars context for each message should have id
-					const messageId =
-						this.id !== undefined
-							? this.id
-							: options.data && options.data.id
-					return PromptBlockFormatter.makeBlock({
-						format: promptFormat,
-						role: "assistant",
-						content: options.fn(this),
-						includeClose: messageId !== -2
-					})
-				}
-			)
-		}
-		if (!handlebars.helpers.userBlock) {
-			handlebars.registerHelper(
-				"userBlock",
-				function (this: any, options: any) {
-					const promptFormat = getPromptFormat()
-					return PromptBlockFormatter.makeBlock({
-						format: promptFormat,
-						role: "user",
-						content: options.fn(this)
-					})
-				}
-			)
-		}
+		registerContextHandlebarsHelpers(this.handlebars, { promptFormat })
 	}
 
 	// --- Context builders ---
@@ -178,7 +119,7 @@ export class PromptBuilder {
 		return character.personality
 	}
 	contextBuildCharacterScenario(
-		character: SelectCharacter
+		character: SelectCharacter | null
 	): string | undefined {
 		if (!character?.scenario) return undefined
 		return character.scenario
@@ -190,9 +131,13 @@ export class PromptBuilder {
 		return this.promptConfig.systemPrompt
 	}
 	contextBuildCharacterExampleDialogues(
-		character: SelectCharacter
+		character: SelectCharacter | null
 	): string | undefined {
-		if (!character?.exampleDialogues || !Array.isArray(character.exampleDialogues)) return undefined
+		if (
+			!character?.exampleDialogues ||
+			!Array.isArray(character.exampleDialogues)
+		)
+			return undefined
 		const validDialogues = character.exampleDialogues.filter(Boolean)
 		if (validDialogues.length === 0) return undefined
 		// Select 1 random example dialogue
@@ -200,10 +145,37 @@ export class PromptBuilder {
 		return validDialogues[randomIndex]
 	}
 	contextBuildPostHistoryInstructions(
-		character: SelectCharacter
+		character: SelectCharacter | null
 	): string | undefined {
-		if (!character?.postHistoryInstructions) return undefined
-		return character.postHistoryInstructions
+		if (character?.postHistoryInstructions)
+			return character.postHistoryInstructions
+		// No current character means no-perspective (Narrator) mode — fall
+		// back to the narrator config's own postHistoryInstructions field.
+		// this.promptConfig is actually the narratorPromptConfigs row at
+		// runtime here (see the narratorName cast above for why), which
+		// carries this field even though the declared type doesn't.
+		if (!character) {
+			return (
+				(this.promptConfig as { postHistoryInstructions?: string })
+					.postHistoryInstructions || undefined
+			)
+		}
+		return undefined
+	}
+	/** The prompt config's own reinforcement text — works uniformly for
+	 * character AND narrator prompt configs, both of which carry this
+	 * column. Distinct from contextBuildCharPostHistory below, which reads
+	 * only the character's own authored field with no config fallback. */
+	contextBuildPromptPostHistoryInstructions(): string | undefined {
+		return (
+			(this.promptConfig as { postHistoryInstructions?: string })
+				.postHistoryInstructions || undefined
+		)
+	}
+	contextBuildCharPostHistory(
+		character: SelectCharacter | null
+	): string | undefined {
+		return character?.postHistoryInstructions || undefined
 	}
 	contextBuildCharacterName(character: SelectCharacter): string {
 		return character.name
@@ -217,7 +189,10 @@ export class PromptBuilder {
 		return persona.name
 	}
 
-	compileCharacterData(character: SelectCharacter, visibility?: string): {
+	compileCharacterData(
+		character: SelectCharacter,
+		visibility?: string
+	): {
 		name: string
 		nickname?: string
 		description: string
@@ -236,7 +211,7 @@ export class PromptBuilder {
 		// For minimal visibility, only include name/nickname and description
 		if (visibility === ChatCharacterVisibility.MINIMAL) {
 			char.description = this.contextBuildCharacterDescription(character)
-		} 
+		}
 		// For visible (default) or undefined, include all character data
 		else {
 			char.description = this.contextBuildCharacterDescription(character)
@@ -277,7 +252,30 @@ export class PromptBuilder {
 	}
 
 	getCharacterDisplayName(character: SelectCharacter): string {
-		return character.nickname || character.name || "assistant"
+		return resolveCharacterName(character)
+	}
+
+	/** Display names of every active, non-hidden character in the chat —
+	 * source list for the {{characterNames}}/{{char}} joined-list value. */
+	getVisibleCharacterNames(): string[] {
+		const chatCharacters = this.chat.chatCharacters as
+			| (SelectChatCharacter & { character: SelectCharacter })[]
+			| undefined
+		return (chatCharacters || [])
+			.filter(
+				(cc) =>
+					cc.isActive &&
+					cc.visibility !== ChatCharacterVisibility.HIDDEN
+			)
+			.map((cc) => this.getCharacterDisplayName(cc.character))
+	}
+
+	/** Display names of every persona in the chat — source list for the
+	 * {{personaNames}}/{{user}} joined-list value. */
+	getPersonaNames(): string[] {
+		return (this.chat.chatPersonas || []).map((cp) =>
+			this.contextBuildPersonaName(cp.persona)
+		)
 	}
 
 	async compileHandlebarsData(character: SelectCharacter): Promise<{
@@ -297,106 +295,64 @@ export class PromptBuilder {
 		}
 	}
 
-	// Modified character lore iterator that respects visibility settings
-	private characterLoreEntryIteratorWithVisibility = function* ({
-		chat,
-		priority,
-		currentCharacterId
-	}: {
-		chat: BasePromptChat
-		priority: number
-		currentCharacterId: number
-	}): IterableIterator<SelectCharacterLoreEntry> {
-		const chatWithLorebook = chat as typeof chat & {
-			lorebook?: { characterLoreEntries: SelectCharacterLoreEntry[] }
-		}
-		const entries: SelectCharacterLoreEntry[] =
-			chatWithLorebook.lorebook?.characterLoreEntries || []
-		let filtered: SelectCharacterLoreEntry[] = []
-		
-		if (priority === 4) {
-			filtered = entries.filter((e) => e.constant === true)
-		} else if ([3, 2, 1].includes(priority)) {
-			filtered = entries.filter((e) => e.priority === priority)
-		}
-		
-		filtered = filtered.filter((e) => {
-			if (!e.lorebookBindingId) return false
-			const lorebook =
-				chat.lorebookId === e.lorebookId ? chat.lorebook : undefined
-			if (!lorebook) return false
-			const binding = lorebook.lorebookBindings.find(
-				(b: SelectLorebookBinding) => b.id === e.lorebookBindingId
-			)
-			if (!binding) return false
-			
-			if (binding.characterId) {
-				const chatCharacter = chat.chatCharacters?.find(
-					(cc) => cc.character.id === binding.characterId
-				)
-				
-				if (!chatCharacter) return false
-				
-				// Always include lore for the current character
-				if (binding.characterId === currentCharacterId) {
-					return true
-				}
-				
-				// For other characters, check their visibility setting
-				// Hidden or minimal characters don't get lore included
-				if (chatCharacter.visibility === ChatCharacterVisibility.HIDDEN ||
-					chatCharacter.visibility === ChatCharacterVisibility.MINIMAL) {
-					return false
-				}
-				
-				return true
-			} else if (binding.personaId) {
-				return chat.chatPersonas?.some(
-					(cp) => cp.persona.id === binding.personaId
-				)
-			}
-			return false
-		})
-		
-		filtered.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
-		for (const entry of filtered) {
-			yield entry
-		}
-	}
+	/**
+	 * Speaker-centric relationship JSON, rendered as its own template block.
+	 * Set from compilePrompt; see TemplateContext.speakerRelationships.
+	 */
+	speakerRelationships?: string
 
-	buildContextData(currentCharacter: SelectCharacter) {
+	buildContextData(currentCharacter: SelectCharacter | null) {
 		const chatCharacters = this.chat.chatCharacters as
 			| (SelectChatCharacter & { character: SelectCharacter })[]
 			| undefined
-		
+
 		// Build assistant characters with visibility filtering
 		this.assistantCharacters = (chatCharacters || [])
 			.filter((cc) => {
 				// Always include the current character
-				const isCurrentCharacter = cc.character.id === this.currentCharacterId
+				const isCurrentCharacter =
+					cc.character.id === this.currentCharacterId
 				// Filter out hidden characters unless they're the current character
-				return isCurrentCharacter || cc.visibility !== ChatCharacterVisibility.HIDDEN
+				return (
+					isCurrentCharacter ||
+					cc.visibility !== ChatCharacterVisibility.HIDDEN
+				)
 			})
 			.map((cc) => {
 				// Always show the current character with full visibility
-				const isCurrentCharacter = cc.character.id === this.currentCharacterId
-				const visibility = isCurrentCharacter ? ChatCharacterVisibility.VISIBLE : cc.visibility
-				
+				const isCurrentCharacter =
+					cc.character.id === this.currentCharacterId
+				const visibility = isCurrentCharacter
+					? ChatCharacterVisibility.VISIBLE
+					: cc.visibility
+
 				return this.compileCharacterData(cc.character, visibility)
 			})
-		
+
 		this.userCharacters = (this.chat.chatPersonas || []).map((cp) =>
 			this.compilePersonaData(cp.persona)
 		)
 		this.instructions = this.contextBuildSystemPrompt()
-		this.exampleDialogue = this.contextBuildCharacterExampleDialogues(currentCharacter)
+		this.exampleDialogue =
+			this.contextBuildCharacterExampleDialogues(currentCharacter)
 		this.postHistoryInstructions =
 			this.contextBuildPostHistoryInstructions(currentCharacter)
+		this.charExampleDialogue = this.exampleDialogue
+		this.promptPostHistoryInstructions =
+			this.contextBuildPromptPostHistoryInstructions()
+		this.charPostHistory =
+			this.contextBuildCharPostHistory(currentCharacter)
+		this.postHistoryDepth =
+			(this.promptConfig as { postHistoryDepth?: number })
+				.postHistoryDepth ?? 0
+		this.postHistoryTokenTrigger =
+			(this.promptConfig as { postHistoryTokenTrigger?: number })
+				.postHistoryTokenTrigger ?? 0
 	}
 
 	// --- Modularized section: scenario interpolation and source ---
 	private getScenarioInterpolated(
-		currentCharacter: SelectCharacter,
+		currentCharacter: SelectCharacter | null,
 		interpolationContext: any
 	): {
 		scenarioInterpolated: string
@@ -456,16 +412,44 @@ export class PromptBuilder {
 		scenarioInterpolated,
 		exampleDialogue,
 		postHistoryInstructions,
+		charExampleDialogue,
+		promptPostHistoryInstructions,
+		charPostHistory,
 		charName,
 		personaName
 	}: any): TemplateContext {
 		return {
 			instructions,
+			// Flows to both infill engines, which spread this object.
+			speakerRelationships: this.speakerRelationships,
 			characters: charactersInterpolated,
 			personas: personasInterpolated,
+			// Plain, human-readable "A, B, and C" joined lists — distinct from
+			// the `characters`/`personas` JSON blobs above (those are consumed
+			// as raw JSON in default context templates, see defaults.ts). The
+			// long-term migration path away from singular {{char}}/{{user}} is
+			// meant to go through these, plus {{character}}/{{persona}}, which
+			// already alias the current single character/persona.
+			characterNames: joinWithAnd(this.getVisibleCharacterNames()),
+			personaNames: joinWithAnd(this.getPersonaNames()),
 			scenario: scenarioInterpolated,
 			exampleDialogue,
 			postHistoryInstructions,
+			// targetIndex/hasContent are placeholders — the final message array
+			// isn't known yet at this point, so each infill engine overwrites
+			// this whole object with the real values from
+			// resolvePostHistoryContext() right before render.
+			postHistory: {
+				targetIndex: 0,
+				instructions: promptPostHistoryInstructions,
+				charInstructions: charPostHistory,
+				exampleDialogue: charExampleDialogue,
+				hasContent: Boolean(
+					promptPostHistoryInstructions ||
+						charPostHistory ||
+						charExampleDialogue
+				)
+			},
 			chatMessages: [],
 			char: charName,
 			character: charName,
@@ -475,71 +459,28 @@ export class PromptBuilder {
 		}
 	}
 
-	/**
-	 * Enhanced modular version of infillContent using ContentInfillEngine
-	 * This demonstrates how the content inclusion logic can be simplified and made configurable
-	 * Now supports pluggable matching strategies for future vectorization
-	 */
 	async infillContent({
 		templateContext,
 		charName,
+		seedName,
 		personaName,
-		useChatFormat,
-		config = defaultContentInclusionConfig,
-		strategy,
-		matchingStrategy,
-		matchingStrategyConfig
+		useChatFormat
 	}: {
 		templateContext: TemplateContext
 		charName: string
+		seedName: string
 		personaName: string
 		useChatFormat: boolean
-		config?: ContentInclusionConfig
-		strategy?: ContentInclusionStrategy
-		matchingStrategy?: LoreMatchingStrategy
-		matchingStrategyConfig?: MatchingStrategyConfig
 	}) {
-		// Create the content infill engine with optional matching strategy
-		let infillEngine: ContentInfillEngine
-
-		// Create a bound version of the character lore iterator with current character ID
-		const boundCharacterLoreIterator = (params: { chat: BasePromptChat; priority: number }) =>
-			this.characterLoreEntryIteratorWithVisibility({
-				...params,
-				currentCharacterId: this.currentCharacterId
-			})
-
-		if (matchingStrategyConfig) {
-			// Create engine with strategy from config
-			infillEngine = await ContentInfillEngine.createWithStrategy(
-				this.chat,
-				this.interpolationEngine,
-				populateLorebookEntryBindings,
-				isHistoryEntry,
-				this.chatMessageIterator.bind(this),
-				this.worldLoreEntryIterator.bind(this),
-				boundCharacterLoreIterator,
-				historyEntryIterator,
-				matchingStrategyConfig
-			)
-		} else {
-			// Create engine with explicit strategy or default
-			infillEngine = new ContentInfillEngine(
-				this.chat,
-				this.interpolationEngine,
-				populateLorebookEntryBindings,
-				isHistoryEntry,
-				this.chatMessageIterator.bind(this),
-				this.worldLoreEntryIterator.bind(this),
-				boundCharacterLoreIterator,
-				historyEntryIterator,
-				matchingStrategy // Will default to keyword if undefined
-			)
-		}
-
-		// Use the engine to process content
-		return await infillEngine.infillContent({
+		const engine = new KeywordInfillEngine(
+			this.chat,
+			this.interpolationEngine,
+			populateLorebookEntryBindings,
+			this.currentCharacterId
+		)
+		return await engine.infillContent({
 			charName,
+			seedName,
 			personaName,
 			templateContext,
 			useChatFormat,
@@ -548,48 +489,28 @@ export class PromptBuilder {
 			tokenCounter: this.tokenCounter,
 			handlebars: this.handlebars,
 			contextConfig: this.contextConfig,
-			strategy,
-			config
+			postHistoryDepth: this.postHistoryDepth,
+			postHistoryTokenTrigger: this.postHistoryTokenTrigger
 		})
 	}
 
-	/**
-	 * Set the matching strategy for lore matching
-	 * Allows runtime switching between keyword, vector, and hybrid matching
-	 */
-	private _infillEngine: ContentInfillEngine | null = null
-
-	async setMatchingStrategy(strategy: LoreMatchingStrategy): Promise<void> {
-		if (this._infillEngine) {
-			await this._infillEngine.setMatchingStrategy(strategy)
-		}
-	}
-
-	async setMatchingStrategyFromConfig(
-		config: MatchingStrategyConfig
-	): Promise<void> {
-		const strategy = await MatchingStrategyFactory.createStrategy(config)
-		await this.setMatchingStrategy(strategy)
-	}
-
-	getMatchingStrategyName(): string | null {
-		return this._infillEngine?.getMatchingStrategyName() || null
-	}
-
-	// --- Original infillContent method remains for backward compatibility ---
 	// --- Modularized section: sources reporting ---
 	private buildSources(scenarioSource: null | "character" | "chat") {
 		const chatCharactersArr = this.chat.chatCharacters || []
 		const chatPersonasArr = this.chat.chatPersonas || []
-		
+
 		// Filter characters based on visibility settings (same logic as buildContextData)
 		const visibleChatCharacters = chatCharactersArr.filter((cc: any) => {
 			// Always include the current character
-			const isCurrentCharacter = cc.character.id === this.currentCharacterId
+			const isCurrentCharacter =
+				cc.character.id === this.currentCharacterId
 			// Filter out hidden characters unless they're the current character
-			return isCurrentCharacter || cc.visibility !== ChatCharacterVisibility.HIDDEN
+			return (
+				isCurrentCharacter ||
+				cc.visibility !== ChatCharacterVisibility.HIDDEN
+			)
 		})
-		
+
 		return {
 			characters: visibleChatCharacters.map((cc: any) => {
 				const c = cc.character
@@ -600,7 +521,9 @@ export class PromptBuilder {
 					description: Boolean(c.description),
 					personality: Boolean(c.personality),
 					exampleDialogue: Boolean(
-						c.exampleDialogues && Array.isArray(c.exampleDialogues) && c.exampleDialogues.length > 0
+						c.exampleDialogues &&
+							Array.isArray(c.exampleDialogues) &&
+							c.exampleDialogues.length > 0
 					),
 					postHistoryInstructions: Boolean(c.postHistoryInstructions)
 				}
@@ -638,34 +561,119 @@ export class PromptBuilder {
 
 	// --- Main compilePrompt ---
 	async compilePrompt({
-		useChatFormat = false
+		useChatFormat = false,
+		extraInstructions,
+		speakerRelationships
 	}: {
 		useChatFormat?: boolean
+		/** Ad hoc text appended to the system prompt for this compile only —
+		 * e.g. the Narrator's optional per-trigger focus note. Not persisted
+		 * on the prompt config itself. */
+		extraInstructions?: string
+		/** Rendered in its own block — NOT merged into instructions. */
+		speakerRelationships?: string
 	}): Promise<CompiledPrompt> {
 		this.registerHandlebarsHelpers({ useChatFormat })
 		const chatCharacters = this.chat.chatCharacters as
 			| (SelectChatCharacter & { character: SelectCharacter })[]
 			| undefined
-		const currentCharacter = chatCharacters?.find(
-			(cc) => cc.character.id === this.currentCharacterId
-		)?.character
-		if (!currentCharacter) {
+		// A null currentCharacterId is a deliberate "no single perspective" mode
+		// (Narrator response) rather than a missing-character error — only a
+		// non-null id that fails to resolve is a real data-integrity problem.
+		const currentCharacter: SelectCharacter | null =
+			this.currentCharacterId != null
+				? (chatCharacters?.find(
+						(cc) => cc.character.id === this.currentCharacterId
+					)?.character ?? null)
+				: null
+		if (this.currentCharacterId != null && !currentCharacter) {
 			throw new Error(
 				`compilePrompt: No character found with ID ${this.currentCharacterId}`
 			)
 		}
 
+		this.speakerRelationships = speakerRelationships
 		this.buildContextData(currentCharacter)
+		if (extraInstructions) {
+			this.instructions = this.instructions
+				? `${this.instructions}\n\nAdditional focus for this response: ${extraInstructions}`
+				: extraInstructions
+			// Also reinforce it right before the generation point, not just at
+			// the top of the prompt — the same reasoning as
+			// postHistoryInstructions generally: a per-trigger note (e.g. the
+			// Narrator's optional "focus on X" field) is exactly the kind of
+			// instruction that needs to be near the seed to actually be
+			// followed after a long conversation history, not buried in the
+			// system prompt alongside everything else. Combines with the
+			// config's own postHistoryInstructions when both are present
+			// rather than one replacing the other.
+			this.postHistoryInstructions = this.postHistoryInstructions
+				? `${this.postHistoryInstructions}\n\nAdditional focus for this response: ${extraInstructions}`
+				: `Additional focus for this response: ${extraInstructions}`
+			this.promptPostHistoryInstructions = this
+				.promptPostHistoryInstructions
+				? `${this.promptPostHistoryInstructions}\n\nAdditional focus for this response: ${extraInstructions}`
+				: `Additional focus for this response: ${extraInstructions}`
+		}
 
-		const charName = currentCharacter.nickname || currentCharacter.name
-		const personaName =
-			(this.chat.chatPersonas &&
-				this.chat.chatPersonas[0]?.persona?.name) ||
-			"user"
+		// No single current character/persona to name in no-perspective mode —
+		// {{char}}/{{user}} (and {{character}}/{{persona}}) resolve to the full
+		// joined cast lists instead, same convention as {{characterNames}}/
+		// {{personaNames}} below.
+		const charName = currentCharacter
+			? resolveCharacterName(currentCharacter)
+			: joinWithAnd(this.getVisibleCharacterNames())
+		// this.promptConfig is actually the narratorPromptConfigs row at
+		// runtime in no-perspective mode (see BaseConnectionAdapter's
+		// constructor), which — unlike the base prompt config type it's
+		// declared as — carries a user-configurable narratorName (e.g. "The
+		// GM", default "Narrator"). Cast rather than widen the field's type
+		// project-wide for one narrator-only property.
+		const narratorName =
+			(this.promptConfig as { narratorName?: string }).narratorName ||
+			"Narrator"
+		// Unlike charName, seedName must NOT fall back to the joined cast list —
+		// it primes the trailing assistant placeholder turn ("Name:"), and a
+		// multi-name seed teaches the model to write joint dialogue as those
+		// characters instead of narrating as the Narrator. Uses the actual
+		// configured narratorName (not a hardcoded "Narrator" literal) so a
+		// renamed narrator (e.g. "The GM") seeds and reads consistently with
+		// ContentProcessors.ts's handling of already-saved Narrator response
+		// messages in history (narratorName metadata || "Narrator") and with
+		// every other place narratorName is surfaced (UI, message metadata).
+		const seedName = currentCharacter
+			? resolveCharacterName(currentCharacter)
+			: narratorName
+		const personaName = currentCharacter
+			? (this.chat.chatPersonas &&
+					this.chat.chatPersonas[0]?.persona?.name) ||
+				"user"
+			: joinWithAnd(this.getPersonaNames())
+		// characterNames/personaNames must be available here, not just in
+		// buildTemplateContext() below — this.instructions (the prompt config's
+		// raw systemPrompt, e.g. the built-in Narrator config's "Do not speak or
+		// act as {{characterNames}} or {{personaNames}}") is interpolated with
+		// this exact context a few lines down. Omitting them here left those
+		// placeholders resolving to "" (Handlebars' default for an unknown key)
+		// by the time buildTemplateContext's copy became available — too late,
+		// since the instructions string was already finalized.
 		const interpolationContext =
 			this.interpolationEngine.createInterpolationContext({
 				currentCharacterName: charName,
-				currentPersonaName: personaName
+				currentPersonaName: personaName,
+				additionalContext: {
+					characterNames: joinWithAnd(
+						this.getVisibleCharacterNames()
+					),
+					personaNames: joinWithAnd(this.getPersonaNames()),
+					// Lets a Narrator prompt config's own text reference its
+					// configured display name directly, e.g. "You are
+					// {{narratorName}}, narrating this scene..." — meaningful
+					// in narrator/no-perspective mode only; a plain character
+					// response just gets the "Narrator" default back, same as
+					// every unused placeholder resolves to its passed value.
+					narratorName
+				}
 			})
 
 		const instructions = this.interpolationEngine.interpolateString(
@@ -681,6 +689,19 @@ export class PromptBuilder {
 				this.postHistoryInstructions,
 				interpolationContext
 			)
+		const charExampleDialogue = this.interpolationEngine.interpolateString(
+			this.charExampleDialogue,
+			interpolationContext
+		)
+		const promptPostHistoryInstructions =
+			this.interpolationEngine.interpolateString(
+				this.promptPostHistoryInstructions,
+				interpolationContext
+			)
+		const charPostHistory = this.interpolationEngine.interpolateString(
+			this.charPostHistory,
+			interpolationContext
+		)
 
 		const { scenarioInterpolated, scenarioSource } =
 			this.getScenarioInterpolated(currentCharacter, interpolationContext)
@@ -688,7 +709,7 @@ export class PromptBuilder {
 			this.getInterpolatedCharacters(interpolationContext)
 		const assistantCharactersWithLore = attachCharacterLoreToCharacters(
 			assistantCharacters,
-			[], // Character lore is now handled by ContentInfillEngine
+			[], // Character lore is now handled by KeywordInfillEngine/RagInfillEngine
 			this.chat
 		)
 		const charactersInterpolated = JSON.stringify(
@@ -698,7 +719,7 @@ export class PromptBuilder {
 		)
 		const userCharactersWithLore = attachCharacterLoreToCharacters(
 			this.getInterpolatedPersonas(interpolationContext),
-			[], // Character lore is now handled by ContentInfillEngine
+			[], // Character lore is now handled by KeywordInfillEngine/RagInfillEngine
 			this.chat
 		)
 		const personasInterpolated = JSON.stringify(
@@ -713,9 +734,98 @@ export class PromptBuilder {
 			scenarioInterpolated,
 			exampleDialogue,
 			postHistoryInstructions,
+			charExampleDialogue,
+			promptPostHistoryInstructions,
+			charPostHistory,
 			charName,
 			personaName
 		})
+
+		// Dispatch to RagInfillEngine when vectorization is active and model is ready
+		const ragIgnored = !!(this.chat.metadata as any)?.ragIgnored
+		let infillResult: InfillResult | null = null
+
+		if (!ragIgnored && isModelReady()) {
+			try {
+				const { db } = await import("../../db")
+				const settings = await db.query.systemSettings.findFirst({
+					columns: { vectorizationEnabled: true }
+				})
+				if (settings?.vectorizationEnabled) {
+					const ragEngine = new RagInfillEngine(
+						this.chat,
+						this.interpolationEngine,
+						populateLorebookEntryBindings,
+						this.currentCharacterId,
+						this.diagnosticsEnabled
+					)
+					infillResult = await ragEngine.infillContent({
+						charName,
+						seedName,
+						personaName,
+						templateContext,
+						useChatFormat,
+						tokenLimit: this.tokenLimit,
+						contextThresholdPercent: this.contextThresholdPercent,
+						tokenCounter: this.tokenCounter,
+						handlebars: this.handlebars,
+						contextConfig: this.contextConfig,
+						postHistoryDepth: this.postHistoryDepth,
+						postHistoryTokenTrigger: this.postHistoryTokenTrigger
+					})
+				}
+			} catch (err) {
+				console.warn(
+					"[PromptBuilder] RagInfillEngine failed, falling back to keyword infill:",
+					err
+				)
+				infillResult = null
+			}
+		} else if (!ragIgnored && !isModelReady()) {
+			// Model isn't warm for THIS turn — don't block the response
+			// waiting for it (a local model load can take real seconds).
+			// Fall through to keyword-mode below same as always, but kick
+			// off a background load so a *following* turn has a warm model
+			// instead of staying cold until the vectorization queue happens
+			// to load it as a side effect of an unrelated embedding write
+			// (which, post-generation auto-enqueue aside, could be the next
+			// periodic scan — up to 15 minutes away). Bounded/cooldown-
+			// limited internally (see loadConfiguredEmbeddingModelOpportunistically's
+			// own doc comment) so a sustained slow-paced session doesn't
+			// load-then-idle-unload on every single turn for no benefit.
+			try {
+				const { db } = await import("../../db")
+				const settings = await db.query.systemSettings.findFirst({
+					columns: { vectorizationEnabled: true }
+				})
+				if (settings?.vectorizationEnabled) {
+					void loadConfiguredEmbeddingModelOpportunistically().catch(
+						(err) => {
+							console.warn(
+								"[PromptBuilder] Background embedding model load failed:",
+								err
+							)
+						}
+					)
+				}
+			} catch (err) {
+				console.warn(
+					"[PromptBuilder] Failed to check vectorization settings for background model load:",
+					err
+				)
+			}
+		}
+
+		// Fall back to keyword-based infill
+		if (!infillResult) {
+			infillResult = await this.infillContent({
+				templateContext,
+				charName,
+				seedName,
+				personaName,
+				useChatFormat
+			})
+		}
 
 		const {
 			renderedPrompt,
@@ -725,17 +835,9 @@ export class PromptBuilder {
 				included: includedChatMessages,
 				includedIds,
 				excludedIds
-			}
-		} = await this.infillContent({
-			templateContext,
-			charName,
-			personaName,
-			useChatFormat,
-			config: defaultContentInclusionConfig,
-			strategy: undefined,
-			matchingStrategy: undefined,
-			matchingStrategyConfig: undefined
-		})
+			},
+			rag
+		} = infillResult
 
 		const sources = this.buildSources(scenarioSource)
 		const meta = this.buildMeta({
@@ -770,7 +872,8 @@ export class PromptBuilder {
 					includedIds,
 					excludedIds
 				},
-				sources
+				sources,
+				...(rag ? { rag } : {})
 			}
 		}
 	}

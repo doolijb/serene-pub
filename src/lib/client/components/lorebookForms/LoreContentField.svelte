@@ -4,14 +4,16 @@
 	import { onMount } from "svelte"
 	import LorebookBindingTag from "../../utils/tiptapLorebookBindingTag"
 	import * as Icons from "@lucide/svelte"
-	import { Popover } from "@skeletonlabs/skeleton-svelte"
+	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import Placeholder from "@tiptap/extension-placeholder"
 	import LegacyTag from "$lib/client/utils/tiptapLegacyTag"
+	import HandlebarsLint from "$lib/client/utils/tiptapHandlebarsLint"
+	import { INSERTABLE_MACRO_OPTIONS } from "$lib/shared/utils/handlebarsLint"
 	import type { EditorView } from "prosemirror-view"
 
 	interface Props {
 		content: string
-		lorebookBindingList: Sockets.LorebookBindingList.Response["lorebookBindingList"]
+		lorebookBindingList: Sockets.Lorebooks.BindingList.Response["lorebookBindingList"]
 	}
 
 	let { content = $bindable(), lorebookBindingList = $bindable() }: Props =
@@ -23,6 +25,7 @@
 	let canUndo = $state(false)
 	let canRedo = $state(false)
 	let addBindingOpenState = $state(false)
+	let addMacroOpenState = $state(false)
 
 	function getLabel(tag: string) {
 		const binding = lorebookBindingList.find((b) => b.binding == tag)
@@ -70,12 +73,13 @@
 		return result
 	}
 
-	// Helper: parse {{char:N}} and double-brace legacy tags in plain text to Tiptap doc JSON  
+	// Helper: parse {{char:N}} and double-brace legacy tags in plain text to Tiptap doc JSON
 	function parseCharTagsToTiptapDoc(text: string) {
 		const parts = []
 		let lastIndex = 0
 		// Regex for {{char:N}} and double-brace legacy tags only ({{user}}, {{char}}, {{persona}}, {{character}})
-		const regex = /\{\{char:(\d+)\}\}|\{\{(user|char|persona|character)\}\}/g
+		const regex =
+			/\{\{char:(\d+)\}\}|\{\{(user|char|persona|character)\}\}/g
 		let match
 		while ((match = regex.exec(text)) !== null) {
 			if (match.index > lastIndex) {
@@ -94,7 +98,10 @@
 				// {{user}}, {{char}}, etc. - double-brace legacy tag syntax
 				parts.push({
 					type: "legacyTag",
-					attrs: { tag: `{{${match[2]}}}`, original: `{{${match[2]}}}` }
+					attrs: {
+						tag: `{{${match[2]}}}`,
+						original: `{{${match[2]}}}`
+					}
 				})
 			}
 			lastIndex = match.index + match[0].length
@@ -114,15 +121,16 @@
 	}
 
 	function forceRawContentCopy(view: EditorView, arg1: () => string) {
-		const originalCopy = view.dom.addEventListener("copy", (event) => {
+		const listener = (event: ClipboardEvent) => {
 			const text = arg1()
-			event.clipboardData.setData("text/plain", text)
+			event.clipboardData?.setData("text/plain", text)
 			event.preventDefault()
-		})
+		}
+		view.dom.addEventListener("copy", listener)
 
 		// Clean up the event listener when the component is destroyed
 		return () => {
-			view.dom.removeEventListener("copy", originalCopy)
+			view.dom.removeEventListener("copy", listener)
 		}
 	}
 
@@ -133,7 +141,8 @@
 			extensions: [
 				StarterKit,
 				LorebookBindingTag.configure({ getLabel, getCharType }),
-				LegacyTag.configure({})
+				LegacyTag.configure({}),
+				HandlebarsLint
 				// Placeholder.configure({
 				//     placeholder: ({ node }) => "A subterranean metropolis carved into the bones of a long-dead titan..."
 				// }),
@@ -157,47 +166,92 @@
 			open={addBindingOpenState}
 			onOpenChange={(e) => (addBindingOpenState = e.open)}
 			positioning={{ placement: "bottom" }}
-			triggerBase="underline"
-			contentBase="card preset-filled-surface-100-900 shadow-xl p-4"
-			zIndex="1000"
 		>
-			{#snippet trigger()}
-				<button
-					class="btn btn-sm preset-filled-surface-500"
-					title="Insert Character Tag"
-				>
-					<Icons.UserPlus size={16} />
-				</button>
-			{/snippet}
-			{#snippet content()}
-				<div class="flex flex-col gap-2">
-					<div class="mb-2 text-sm font-semibold">
-						Insert Character Tag
-					</div>
-					{#each lorebookBindingList as binding}
-						{@const char = binding.character || binding.persona}
-						<button
-							class="btn"
-							class:preset-filled-primary-500={!!binding.characterId}
-							class:preset-filled-surface-500={!!binding.personaId}
-							class:preset-filled-warning-500={!char}
-							onclick={() => {
-								editor.commands.insertLorebookBindingTag(
-									binding.binding
-								)
-								addBindingOpenState = false
-							}}
-							title={char
-								? `${char.nickname || char.name}`
-								: binding.binding}
-						>
-							{char
-								? char.nickname || char.name
-								: binding.binding}
-						</button>
-					{/each}
-				</div>
-			{/snippet}
+			<Popover.Trigger
+				class="btn btn-sm preset-filled-surface-500"
+				title="Insert Character Tag"
+				aria-label="Insert Character Tag"
+			>
+				<Icons.UserPlus size={16} />
+			</Popover.Trigger>
+			<Portal>
+				<Popover.Positioner class="z-[1000]!">
+					<Popover.Content
+						class="card preset-filled-surface-100-900 p-4 shadow-xl"
+					>
+						<div class="flex flex-col gap-2">
+							<div class="mb-2 text-sm font-semibold">
+								Insert Character Tag
+							</div>
+							{#each lorebookBindingList as binding}
+								{@const char =
+									binding.character || binding.persona}
+								<button
+									class="btn"
+									class:preset-filled-primary-500={!!binding.characterId}
+									class:preset-filled-surface-500={!!binding.personaId}
+									class:preset-filled-warning-500={!char}
+									onclick={() => {
+										editor.commands.insertLorebookBindingTag(
+											binding.binding
+										)
+										addBindingOpenState = false
+									}}
+									title={char
+										? `${("nickname" in char && char.nickname) || char.name}`
+										: binding.binding}
+								>
+									{char
+										? ("nickname" in char &&
+												char.nickname) ||
+											char.name
+										: binding.binding}
+								</button>
+							{/each}
+						</div>
+					</Popover.Content>
+				</Popover.Positioner>
+			</Portal>
+		</Popover>
+		<Popover
+			open={addMacroOpenState}
+			onOpenChange={(e) => (addMacroOpenState = e.open)}
+			positioning={{ placement: "bottom" }}
+		>
+			<Popover.Trigger
+				class="btn btn-sm preset-filled-surface-500"
+				title="Insert Macro"
+				aria-label="Insert Macro"
+			>
+				<Icons.Braces size={16} />
+			</Popover.Trigger>
+			<Portal>
+				<Popover.Positioner class="z-[1000]!">
+					<Popover.Content
+						class="card preset-filled-surface-100-900 p-4 shadow-xl"
+					>
+						<div class="flex flex-col gap-2">
+							<div class="mb-2 text-sm font-semibold">
+								Insert Macro
+							</div>
+							{#each INSERTABLE_MACRO_OPTIONS as macro}
+								<button
+									class="btn preset-filled-surface-500"
+									onclick={() => {
+										editor.commands.insertContent(
+											macro.snippet
+										)
+										addMacroOpenState = false
+									}}
+									title={macro.description}
+								>
+									{macro.label}
+								</button>
+							{/each}
+						</div>
+					</Popover.Content>
+				</Popover.Positioner>
+			</Portal>
 		</Popover>
 		<button
 			class="btn btn-sm preset-filled-surface-500"
@@ -234,5 +288,10 @@
 	@reference "tailwindcss";
 
 	:global {
+		.handlebars-lint-issue {
+			text-decoration: underline wavy #dc2626;
+			text-underline-offset: 3px;
+			cursor: help;
+		}
 	}
 </style>

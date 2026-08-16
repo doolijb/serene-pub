@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Sampled from the app's actual "hamlindigo" Skeleton theme
+         (node_modules/@skeletonlabs/skeleton/dist/themes/hamlindigo.css),
+         not the stock Android Studio template colors. -->
+    <color name="colorPrimary">#a7bef3</color>
+    <color name="colorPrimaryDark">#4a546b</color>
+    <color name="colorAccent">#8394ba</color>
+</resources>

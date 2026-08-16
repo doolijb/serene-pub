@@ -1,0 +1,1 @@
+ALTER TABLE "chats" ADD COLUMN "chat_type" text DEFAULT 'roleplay' NOT NULL;

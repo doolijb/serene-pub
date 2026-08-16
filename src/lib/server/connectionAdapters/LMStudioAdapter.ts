@@ -1,4 +1,5 @@
 import Handlebars from "handlebars"
+import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import _ from "lodash"
 import { StopStrings } from "../utils/StopStrings"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
@@ -6,8 +7,10 @@ import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { TokenCounters } from "../utils/TokenCounterManager"
 import {
 	BaseConnectionAdapter,
-	type AdapterExports
+	type AdapterExports,
+	type BasePromptChat
 } from "./BaseConnectionAdapter"
+import { type CompiledPrompt } from "../utils/promptBuilder"
 import {
 	type BaseLoadModelOpts,
 	type LLM,
@@ -17,6 +20,14 @@ import {
 	type OngoingPrediction
 } from "@lmstudio/sdk"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import { lmStudioSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
+import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
+import {
+	createIdleWatchdog,
+	LLM_IDLE_TIMEOUT_MS,
+	LLM_NONSTREAMING_TIMEOUT_MS
+} from "./idleTimeout"
 
 class LMStudioAdapter extends BaseConnectionAdapter {
 	private _client?: LMStudioClient
@@ -30,20 +41,16 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		contextConfig,
 		promptConfig,
 		chat,
-		currentCharacterId
+		currentCharacterId,
+		generatingMessageMetadata
 	}: {
 		connection: SelectConnection
 		sampling: SelectSamplingConfig
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
-		chat: SelectChat & {
-			chatCharacters?: (SelectChatCharacter & {
-				character: SelectCharacter
-			})[]
-			chatPersonas?: (SelectChatPersona & { persona: SelectPersona })[]
-			chatMessages: SelectChatMessage[]
-		}
-		currentCharacterId: number
+		chat: BasePromptChat
+		currentCharacterId: number | null
+		generatingMessageMetadata?: any
 	}) {
 		super({
 			connection,
@@ -56,7 +63,8 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 				connection.tokenCounter || TokenCounterOptions.ESTIMATE
 			),
 			tokenLimit: 0, // This is set dynamically based on the LM Studio API
-			contextThresholdPercent: 0.9
+			contextThresholdPercent: 0.9,
+			generatingMessageMetadata
 		})
 	}
 
@@ -66,13 +74,13 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			if (key.endsWith("Enabled")) continue
 			const enabledKey = key + "Enabled"
 			if ((this.sampling as any)[enabledKey] === false) continue
-			if (samplingKeyMap[key]) {
+			if (lmStudioSamplingKeyMap[key]) {
 				if (key === "streaming") continue
 				// Defensive: skip if value is undefined or not a primitive (unless you expect an object)
 				if (value === undefined) continue
 				// If you expect only primitives, skip objects:
 				if (typeof value === "object" && value !== null) continue
-				result[samplingKeyMap[key]] = value
+				result[lmStudioSamplingKeyMap[key]] = value
 			}
 		}
 		return result
@@ -81,7 +89,8 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 	// --- LM Studio client instance ---
 	getClient() {
 		if (!this._client) {
-			const baseUrl = this.connection.baseUrl ?? undefined
+			const baseUrl =
+				normalizeBaseUrl(this.connection.baseUrl) || undefined
 			this._client = new LMStudioClient({ baseUrl })
 		}
 		return this._client
@@ -144,9 +153,13 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 	async generate(): Promise<{
 		completionResult:
 			| string
-			| ((cb: (chunk: string) => void) => Promise<void>)
+			| ((
+					contentCb: (chunk: string) => void,
+					thinkingCb?: (chunk: string) => void
+			  ) => Promise<void>)
 		compiledPrompt: CompiledPrompt
 		isAborted: boolean
+		thinkingContent?: string
 	}> {
 		if (!this.sampling || typeof this.sampling !== "object") {
 			throw new Error(
@@ -162,7 +175,9 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			)
 		}
 
-		const modelName = this.connection.model ?? connectionDefaults.baseUrl
+		const modelName =
+			this.connection.model ??
+			CONNECTION_DEFAULTS[CONNECTION_TYPE.LM_STUDIO].baseUrl
 		const stream = this.connection!.extraJson?.stream || false
 		if (typeof modelName !== "string")
 			throw new Error("LMStudioAdapter: model must be a string")
@@ -171,16 +186,14 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		const promptFormat = this.connection.promptFormat || "chatml"
 		const stopStrings = StopStrings.get({
 			format: promptFormat,
-			characters: this.chat.chatCharacters?.map(
-				(cc: any) => cc.character
-			),
-			personas: this.chat.chatPersonas?.map((cp: any) => cp.persona),
-			currentCharacterId: this.currentCharacterId
+			characters:
+				this.chat.chatCharacters?.map((cc) => cc.character) || [],
+			personas: this.chat.chatPersonas?.map((cp) => cp.persona) || [],
+			currentCharacterId: this.currentCharacterId ?? undefined
 		})
-		const characterName =
-			this.chat.chatCharacters?.[0]?.character?.nickname ||
-			this.chat.chatCharacters?.[0]?.character?.name ||
-			"assistant"
+		const characterName = resolveCharacterName(
+			this.chat.chatCharacters?.[0]?.character
+		)
 		const personaName = this.chat.chatPersonas?.[0]?.persona?.name || "user"
 		const stopContext: Record<string, string> = {
 			char: characterName,
@@ -209,7 +222,21 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 				? this.sampling.responseTokens || 250
 				: 250,
 			contextOverflowPolicy: "truncateMiddle",
-			...this.mapSamplingConfig()
+			...this.mapSamplingConfig(),
+			// LM Studio's SDK takes the constraint as a `structured` option
+			// rather than a request field. `{ type: "json" }` is its
+			// any-valid-JSON mode — the SDK also accepts a jsonSchema here if a
+			// schema-level contract is ever added.
+			...(this.responseFormat === "json"
+				? {
+						structured: this.responseSchema
+							? {
+									type: "json" as const,
+									jsonSchema: this.responseSchema
+								}
+							: { type: "json" as const }
+					}
+				: {})
 		}
 
 		// --- LM Studio SDK integration ---
@@ -217,10 +244,15 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 
 		if (stream) {
 			return {
-				completionResult: async (cb: (chunk: string) => void) => {
-					let fullContent = ""
-					let lastChunk = ""
-					let abortedEarly = false
+				completionResult: async (
+					contentCb: (chunk: string) => void,
+					_thinkingCb?: (chunk: string) => void
+				) => {
+					let idleTimedOut = false
+					const idle = createIdleWatchdog(LLM_IDLE_TIMEOUT_MS, () => {
+						idleTimedOut = true
+						this.prediction?.cancel()
+					})
 					try {
 						if (useChat && messages) {
 							this.prediction = modelClient.respond(
@@ -228,11 +260,15 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 								options
 							)
 							for await (const part of this.prediction) {
+								idle.poke()
+								// A second line of defense alongside abort()'s
+								// prediction.cancel() call — every other
+								// streaming adapter also polls isAborting
+								// per-chunk, in case cancel() doesn't reliably
+								// unblock this loop on its own.
+								if (this.isAborting) break
 								if (part?.content) {
-									const newChunk = part.content
-									fullContent += newChunk
-									lastChunk = newChunk
-									cb(newChunk)
+									contentCb(part.content)
 								}
 							}
 						} else {
@@ -241,24 +277,25 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 								options
 							)
 							for await (const part of this.prediction) {
+								idle.poke()
+								if (this.isAborting) break
 								if (part?.content) {
-									const newChunk = part.content
-									fullContent += newChunk
-									lastChunk = newChunk
-									cb(newChunk)
+									contentCb(part.content)
 								}
 							}
 						}
-						// Only emit final content if it's different from the last streamed piece
-						if (
-							!fullContent.endsWith(lastChunk) ||
-							fullContent !== lastChunk
-						) {
-							return
-						}
 					} catch (e: any) {
-						if (!abortedEarly)
-							cb("FAILURE: " + (e.message || String(e)))
+						if (idleTimedOut) {
+							throw new Error(
+								`LM Studio did not respond for ${LLM_IDLE_TIMEOUT_MS / 60_000} minutes — connection may be hung.`
+							)
+						}
+						// An intentional cancel() rejects the iterator too —
+						// don't surface that as an error.
+						if (this.isAborting) return
+						throw e
+					} finally {
+						idle.clear()
 					}
 				},
 				compiledPrompt,
@@ -266,6 +303,16 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			}
 		} else {
 			const content = await (async () => {
+				// No intermediate chunks to reset an idle timer against for a
+				// non-streaming response — a genuine, documented exception to
+				// the idle-based design used in the streaming branch above: a
+				// flat bound, sized generously to cover a full slow
+				// generation end-to-end.
+				let idleTimedOut = false
+				const idleTimer = setTimeout(() => {
+					idleTimedOut = true
+					this.prediction?.cancel()
+				}, LLM_NONSTREAMING_TIMEOUT_MS)
 				try {
 					if (useChat && messages) {
 						this.prediction = modelClient.respond(messages, options)
@@ -277,7 +324,9 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 						) {
 							return result.content || ""
 						} else {
-							return "FAILURE: Unexpected LM Studio chat result type"
+							throw new Error(
+								"Unexpected LM Studio chat result type"
+							)
 						}
 					} else {
 						this.prediction = modelClient.complete(prompt, options)
@@ -289,11 +338,19 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 						) {
 							return result.content || ""
 						} else {
-							return "FAILURE: Unexpected LM Studio result type"
+							throw new Error("Unexpected LM Studio result type")
 						}
 					}
 				} catch (e: any) {
-					return "FAILURE: " + (e.message || String(e))
+					if (idleTimedOut) {
+						throw new Error(
+							`LM Studio did not respond within ${LLM_NONSTREAMING_TIMEOUT_MS / 60_000} minutes.`
+						)
+					}
+					if (this.isAborting) return ""
+					throw e
+				} finally {
+					clearTimeout(idleTimer)
 				}
 			})()
 			return {
@@ -331,36 +388,13 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 	}
 }
 
-const connectionDefaults = {
-	type: CONNECTION_TYPE.LM_STUDIO,
-	baseUrl: "ws://localhost:1234",
-	promptFormat: PromptFormats.VICUNA,
-	tokenCounter: TokenCounterOptions.ESTIMATE, // Use Gemma tokenizer for better accuracy with Gemma models
-	extraJson: {
-		useChat: true, // Use chat (response api)
-		stream: true,
-		ttl: 60
-	}
-}
-
-// --- SamplingConfig mapping ---
-const samplingKeyMap: Record<string, string> = {
-	temperature: "temperature",
-	topP: "topPSampling",
-	topK: "topKSampling",
-	repetitionPenalty: "repeatPenalty",
-	minP: "minPSampling",
-	xtcProbability: "xtcProbability",
-	xtcThreshold: "xtcThreshold",
-	responseTokens: "maxTokens",
-	stopStrings: "stopStrings"
-}
-
 async function testConnection(
 	connection: SelectConnection
 ): Promise<{ ok: boolean; error?: string }> {
 	try {
-		const client = new LMStudioClient({ baseUrl: connection.baseUrl || "" })
+		const client = new LMStudioClient({
+			baseUrl: normalizeBaseUrl(connection.baseUrl)
+		})
 		const res = await client.system.getLMStudioVersion()
 		if (res && typeof res === "object" && "version" in res) {
 			// Also check if any models are available
@@ -399,7 +433,9 @@ async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
 	try {
-		const client = new LMStudioClient({ baseUrl: connection.baseUrl || "" })
+		const client = new LMStudioClient({
+			baseUrl: normalizeBaseUrl(connection.baseUrl)
+		})
 		const res = await client.system.listDownloadedModels()
 		if (res && Array.isArray(res)) {
 			const models = res.map((model) => {
@@ -435,8 +471,8 @@ const exports: AdapterExports = {
 	Adapter: LMStudioAdapter,
 	testConnection,
 	listModels,
-	connectionDefaults,
-	samplingKeyMap
+	connectionDefaults: CONNECTION_DEFAULTS[CONNECTION_TYPE.LM_STUDIO],
+	samplingKeyMap: lmStudioSamplingKeyMap
 }
 
 export default exports

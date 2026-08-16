@@ -1,0 +1,1 @@
+ALTER TABLE "system_settings" ADD COLUMN "is_accounts_enabled" boolean DEFAULT false NOT NULL;

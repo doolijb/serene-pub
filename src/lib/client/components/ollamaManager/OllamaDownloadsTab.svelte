@@ -2,17 +2,18 @@
 	import * as Icons from "@lucide/svelte"
 	import { Progress } from "@skeletonlabs/skeleton-svelte"
 	import { onDestroy, onMount } from "svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 
 	interface DownloadProgress {
 		modelName: string
 		status: string
+		isDone: boolean
 		files: {
 			[key: string]: { total: number; completed: number }
 		}
 	}
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	// Download progress state managed by this component
 	let downloadingQuants: {
@@ -59,30 +60,35 @@
 	}
 
 	function cancelDownload(modelName: string) {
-		socket.emit("ollamaCancelPull", {
+		socket.emit("ollama:cancelPull", {
 			modelName
-		} as Sockets.OllamaCancelPull.Call)
+		})
 	}
 
 	function clearDownloadHistory() {
-		socket.emit(
-			"ollamaClearDownloadHistory",
-			{} as Sockets.OllamaClearDownloadHistory.Call
-		)
+		socket.emit("ollama:clearDownloadHistory", {})
 	}
 
 	onMount(() => {
 		socket.on(
 			"ollamaPullProgress",
-			(message: Sockets.OllamaPullProgress.Response) => {
+			(message: Sockets.Ollama.PullProgress.Response) => {
 				// Server sends the entire downloadingQuants object
 				downloadingQuants = message.downloadingQuants || {}
 			}
 		)
 
 		socket.on(
-			"ollamaClearDownloadHistory",
-			(message: Sockets.OllamaClearDownloadHistory.Response) => {
+			"ollama:getDownloadProgress",
+			(message: Sockets.Ollama.GetDownloadProgress.Response) => {
+				// Load initial download progress state
+				downloadingQuants = message.downloadingQuants || {}
+			}
+		)
+
+		socket.on(
+			"ollama:clearDownloadHistory",
+			(message: Sockets.Ollama.ClearDownloadHistory.Response) => {
 				if (message.success) {
 					downloadingQuants = {}
 				}
@@ -90,17 +96,18 @@
 		)
 
 		// Request current download progress from server after setting up listeners
-		socket.emit("ollamaGetDownloadProgress", {})
+		socket.emit("ollama:getDownloadProgress", {})
 	})
 
 	onDestroy(() => {
 		socket.off("ollamaPullProgress")
-		socket.off("ollamaClearDownloadHistory")
+		socket.off("ollama:getDownloadProgress")
+		socket.off("ollama:clearDownloadHistory")
 	})
 </script>
 
 <div class="flex h-full flex-col">
-	<div class="p-4">
+	<div class="py-4">
 		{#if !downloadingCount && !doneCount}
 			<!-- No downloads state -->
 			<div class="flex flex-1 items-center justify-center p-8">
@@ -191,7 +198,7 @@
 	</div>
 </div>
 
-{#snippet downloadItem(key, progress)}
+{#snippet downloadItem(key: string, progress: DownloadProgress)}
 	{#if key !== "undefined"}
 		{@const fileStats = getFileStats(progress)}
 		<div
@@ -201,14 +208,14 @@
 				<div class="bg-primary-500/10 mt-1 rounded-full p-2">
 					{#if progress.isDone}
 						{#if progress.status.toLowerCase() === "cancelled"}
-							<Icons.X size={16} class="text-orange-500" />
+							<Icons.X size={16} class="text-warning-500" />
 						{:else if progress.status.toLowerCase() === "error"}
 							<Icons.AlertTriangle
 								size={16}
-								class="text-red-500"
+								class="text-error-500"
 							/>
 						{:else}
-							<Icons.Check size={16} class="text-green-500" />
+							<Icons.Check size={16} class="text-success-500" />
 						{/if}
 					{:else}
 						<Icons.Download
@@ -266,7 +273,15 @@
 											value={fileProgress.completed}
 											max={fileProgress.total}
 											aria-label={`Download progress for ${fileName}: ${fileProgress.total > 0 ? `${((fileProgress.completed / fileProgress.total) * 100).toFixed(1)}%` : "0%"} complete`}
-										/>
+										>
+											<Progress.Track
+												class="bg-surface-200-800"
+											>
+												<Progress.Range
+													class="bg-primary-500"
+												/>
+											</Progress.Track>
+										</Progress>
 									</div>
 									{#if fileProgress.total > 0}
 										<div
@@ -295,16 +310,16 @@
 										? ''
 										: 'animate-pulse'} {progress.status.toLowerCase() ===
 									'canceled'
-										? 'bg-orange-500'
+										? 'bg-warning-500'
 										: ['error', 'cancelled'].includes(
 													progress.status.toLowerCase()
 											  )
-											? 'bg-red-500'
+											? 'bg-error-500'
 											: progress.status.toLowerCase() ===
 														'success' ||
 												  isComplete(progress)
-												? 'bg-green-500'
-												: 'bg-blue-500'}"
+												? 'bg-success-500'
+												: 'bg-primary-500'}"
 								></div>
 								<span class="text-muted-foreground font-medium">
 									{progress.status}

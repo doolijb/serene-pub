@@ -37,41 +37,101 @@ const openaiChatDesc = `
 
 const openaiChatDiff = "Beginner - Nothing to install"
 
+const koboldCppDesc = `
+<p>Serene Pub supports KoboldCPP through its <a class="text-primary-500 hover:underline" href="https://github.com/LostRuins/koboldcpp/wiki" target="_blank">native API</a>.</p>
+<p>KoboldCPP is a simple one-file way to run various GGML and GGUF models with a KoboldAI-like interface.</p>
+<p>KoboldCPP has a built-in GUI and is relatively easy to set up and use.</p>
+<p>It offers great performance and additional configuration options outside of Serene Pub.</p>
+<p>You can download KoboldCPP from the <a class="text-primary-500 hover:underline" href="https://github.com/LostRuins/koboldcpp/releases" target="_blank">GitHub releases page</a>.</p>
+`
+
+const koboldCppDiff = "Beginner (GUI) - Simple setup"
+
+const koboldCppManagedDesc = `
+<p>A KoboldCPP connection managed by Serene Pub's built-in <b>KoboldCPP Manager</b>.</p>
+<p>The manager handles model loading and swapping for you — pick a model here and it's loaded via KoboldCPP's admin API (spawning a managed subprocess, or using your own already-running KoboldCPP instance with the admin API enabled).</p>
+<p>Requires the KoboldCPP Manager to be enabled in Settings.</p>
+`
+
+const koboldCppManagedDiff = "Beginner (GUI) - Managed by Serene Pub"
+
+const anthropicDesc = `
+<p>Serene Pub supports Anthropic's Claude API directly.</p>
+<p>Claude models support native extended thinking, streaming, and long context windows.</p>
+<p>To use Anthropic's API, obtain an API key from <a class="text-primary-500 hover:underline" href="https://console.anthropic.com/" target="_blank">Anthropic's console</a>.</p>
+<p>Extended thinking is supported on Claude 3.7+ models and requires setting a thinking budget in the connection settings.</p>
+`
+
+const anthropicDiff = "Beginner - Nothing to install"
+
 export class CONNECTION_TYPE {
 	static LLAMACPP_COMPLETION = "llamacpp_completion"
 	static LM_STUDIO = "lmstudio"
 	static OLLAMA = "ollama"
 	static OPENAI_CHAT = "openai"
+	static KOBOLDCPP = "koboldcpp"
+	static KOBOLDCPP_MANAGED = "koboldcpp_managed"
+	static ANTHROPIC = "anthropic"
 
 	static options: {
 		value: string
 		label: string
 		description: string
 		difficulty: string
+		/** Used to group this type alongside OPENAI_CHAT_PRESETS entries in the
+		 * unified "New Connection" service picker — "local" for anything that
+		 * talks to a process running on the user's own machine/network,
+		 * "cloud" for a hosted third-party API. */
+		category: "cloud" | "local"
 	}[] = [
 		{
 			value: CONNECTION_TYPE.LM_STUDIO,
 			label: "LM Studio",
 			description: lmStudioDesc,
-			difficulty: lmStudioDiff
+			difficulty: lmStudioDiff,
+			category: "local"
 		},
 		{
 			value: CONNECTION_TYPE.OLLAMA,
 			label: "Ollama",
 			description: ollamaDesc,
-			difficulty: ollamaDiff
+			difficulty: ollamaDiff,
+			category: "local"
 		},
 		{
 			value: CONNECTION_TYPE.OPENAI_CHAT,
 			label: "OpenAI Chat",
 			description: openaiChatDesc,
-			difficulty: openaiChatDiff
+			difficulty: openaiChatDiff,
+			category: "cloud"
 		},
 		{
 			value: CONNECTION_TYPE.LLAMACPP_COMPLETION,
 			label: "Llama.cpp",
 			description: llamaCppCompletionDesc,
-			difficulty: llamaCppCompletionDiff
+			difficulty: llamaCppCompletionDiff,
+			category: "local"
+		},
+		{
+			value: CONNECTION_TYPE.KOBOLDCPP,
+			label: "KoboldCPP",
+			description: koboldCppDesc,
+			difficulty: koboldCppDiff,
+			category: "local"
+		},
+		{
+			value: CONNECTION_TYPE.KOBOLDCPP_MANAGED,
+			label: "KoboldCPP Manager",
+			description: koboldCppManagedDesc,
+			difficulty: koboldCppManagedDiff,
+			category: "local"
+		},
+		{
+			value: CONNECTION_TYPE.ANTHROPIC,
+			label: "Anthropic (Claude)",
+			description: anthropicDesc,
+			difficulty: anthropicDiff,
+			category: "cloud"
 		}
 	]
 }

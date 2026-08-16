@@ -2,113 +2,338 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import { user as loadUser } from "./users"
+import { userSettingsGet } from "./userSettings"
+import type { Handler } from "$lib/shared/events"
 
-// List all prompt configs for the current user
+export const promptConfigsListHandler: Handler<
+	Sockets.PromptConfigs.List.Params,
+	Sockets.PromptConfigs.List.Response
+> = {
+	event: "promptConfigs:list",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const res = {
+				error: "Access denied. Only admin users can manage prompt configurations."
+			}
+			emitToUser("error", res)
+			throw new Error(
+				"Access denied. Only admin users can manage prompt configurations."
+			)
+		}
+
+		const promptConfigsList = await db.query.promptConfigs.findMany({
+			columns: {
+				id: true,
+				name: true,
+				isImmutable: true
+			},
+			orderBy: (c, { asc, desc }) => [desc(c.isImmutable), asc(c.name)]
+		})
+		const res: Sockets.PromptConfigs.List.Response = { promptConfigsList }
+		emitToUser("promptConfigs:list", res)
+		return res
+	}
+}
+
+export const promptConfigsGet: Handler<
+	Sockets.PromptConfigs.Get.Params,
+	Sockets.PromptConfigs.Get.Response
+> = {
+	event: "promptConfigs:get",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const res = {
+				error: "Access denied. Only admin users can manage prompt configurations."
+			}
+			emitToUser("error", res)
+			throw new Error(
+				"Access denied. Only admin users can manage prompt configurations."
+			)
+		}
+
+		const promptConfig = await db.query.promptConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, params.id)
+		})
+		if (!promptConfig) {
+			emitToUser("promptConfigs:get:error", {
+				error: "Prompt config not found"
+			})
+			throw new Error("Prompt config not found")
+		}
+		const res: Sockets.PromptConfigs.Get.Response = { promptConfig }
+		emitToUser("promptConfigs:get", res)
+		return res
+	}
+}
+
+export const promptConfigsCreate: Handler<
+	Sockets.PromptConfigs.Create.Params,
+	Sockets.PromptConfigs.Create.Response
+> = {
+	event: "promptConfigs:create",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const res = {
+				error: "Access denied. Only admin users can create prompt configurations."
+			}
+			emitToUser("error", res)
+			throw new Error(
+				"Access denied. Only admin users can create prompt configurations."
+			)
+		}
+
+		const [promptConfig] = await db
+			.insert(schema.promptConfigs)
+			.values(params.promptConfig)
+			.returning()
+		await promptConfigsListHandler.handler(socket, {}, emitToUser)
+		const res: Sockets.PromptConfigs.Create.Response = { promptConfig }
+		emitToUser("promptConfigs:create", res)
+		return res
+	}
+}
+
+export const promptConfigsUpdate: Handler<
+	Sockets.PromptConfigs.Update.Params,
+	Sockets.PromptConfigs.Update.Response
+> = {
+	event: "promptConfigs:update",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const res = {
+				error: "Access denied. Only admin users can update prompt configurations."
+			}
+			emitToUser("error", res)
+			throw new Error(
+				"Access denied. Only admin users can update prompt configurations."
+			)
+		}
+
+		const id = params.promptConfig.id!
+		const { id: _, ...rawUpdateData } = params.promptConfig
+
+		const currentConfig = await db.query.promptConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, id)
+		})
+		// Immutable (built-in) configs may still have their AI Override
+		// (connection/sampling) changed — that's the one thing the UI
+		// leaves editable for them — but nothing else. Every other field
+		// must come only from seeding.
+		const updateData = currentConfig?.isImmutable
+			? {
+					connectionId: rawUpdateData.connectionId,
+					samplingConfigId: rawUpdateData.samplingConfigId
+				}
+			: rawUpdateData
+
+		// A raw client could target an immutable row with neither override
+		// field present at all — updateData then has no defined values, and
+		// an empty .set() throws rather than being a legitimate no-op.
+		const hasUpdates = Object.values(updateData).some(
+			(v) => v !== undefined
+		)
+		const promptConfig = hasUpdates
+			? (
+					await db
+						.update(schema.promptConfigs)
+						.set(updateData)
+						.where(eq(schema.promptConfigs.id, id))
+						.returning()
+				)[0]
+			: currentConfig!
+		await promptConfigsListHandler.handler(socket, {}, emitToUser)
+		const res: Sockets.PromptConfigs.Update.Response = { promptConfig }
+		emitToUser("promptConfigs:update", res)
+		return res
+	}
+}
+
+export const promptConfigsDelete: Handler<
+	Sockets.PromptConfigs.Delete.Params,
+	Sockets.PromptConfigs.Delete.Response
+> = {
+	event: "promptConfigs:delete",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const res = {
+				error: "Access denied. Only admin users can delete prompt configurations."
+			}
+			emitToUser("error", res)
+			throw new Error(
+				"Access denied. Only admin users can delete prompt configurations."
+			)
+		}
+
+		const currentConfig = await db.query.promptConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, params.id)
+		})
+		if (currentConfig?.isImmutable) {
+			emitToUser("promptConfigs:delete:error", {
+				error: "Cannot delete a built-in prompt config."
+			})
+			throw new Error("Cannot delete a built-in prompt config.")
+		}
+
+		await db
+			.delete(schema.promptConfigs)
+			.where(eq(schema.promptConfigs.id, params.id))
+		await promptConfigsListHandler.handler(socket, {}, emitToUser)
+		const res: Sockets.PromptConfigs.Delete.Response = {
+			success: "Prompt config deleted successfully"
+		}
+		emitToUser("promptConfigs:delete", res)
+		return res
+	}
+}
+
+export const promptConfigsSetUserActive: Handler<
+	Sockets.PromptConfigs.SetUserActive.Params,
+	Sockets.PromptConfigs.SetUserActive.Response
+> = {
+	event: "promptConfigs:setUserActive",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const res = {
+				error: "Access denied. Only admin users can set active prompt configurations."
+			}
+			emitToUser("error", res)
+			throw new Error(
+				"Access denied. Only admin users can set active prompt configurations."
+			)
+		}
+
+		const userId = socket.user!.id
+		const currentUser = await db.query.users.findFirst({
+			where: (u, { eq }) => eq(u.id, userId)
+		})
+		if (!currentUser) {
+			emitToUser("promptConfigs:setUserActive:error", {
+				error: "User not found."
+			})
+			throw new Error("User not found")
+		}
+
+		// Find or create user settings
+		let userSettings = await db.query.userSettings.findFirst({
+			where: (us, { eq }) => eq(us.userId, currentUser.id)
+		})
+
+		if (!userSettings) {
+			await db
+				.insert(schema.userSettings)
+				.values({
+					userId: currentUser.id
+				})
+				.onConflictDoNothing()
+		}
+
+		await db
+			.update(schema.userSettings)
+			.set({
+				activePromptConfigId: params.id
+			})
+			.where(eq(schema.userSettings.userId, currentUser.id))
+
+		await loadUser(socket, {}, emitToUser) // Emit updated user info
+		await userSettingsGet.handler(socket, {}, emitToUser)
+		if (params.id) {
+			await promptConfigsGet.handler(
+				socket,
+				{ id: params.id },
+				emitToUser
+			)
+		}
+
+		// Get the updated user to return in response
+		const updatedUser = await db.query.users.findFirst({
+			where: (u, { eq }) => eq(u.id, currentUser.id),
+			with: {
+				userSettings: true
+			}
+		})
+		const res: Sockets.PromptConfigs.SetUserActive.Response = {
+			user: updatedUser!
+		}
+		emitToUser("promptConfigs:setUserActive", res)
+		return res
+	}
+}
+
+// Legacy functions for compatibility
 export async function promptConfigsList(
 	socket: any,
-	message: Sockets.PromptConfigsList.Call,
+	message: {},
 	emitToUser: (event: string, data: any) => void
 ) {
-	const promptConfigsList = await db.query.promptConfigs.findMany({
-		columns: {
-			id: true,
-			name: true,
-			isImmutable: true
-		},
-		orderBy: (c, { asc }) => [asc(c.isImmutable), asc(c.name)]
-	})
-	const res: Sockets.PromptConfigsList.Response = { promptConfigsList }
-	emitToUser("promptConfigsList", res)
+	await promptConfigsListHandler.handler(socket, {}, emitToUser)
 }
 
-// Get a single prompt config by id
 export async function promptConfig(
 	socket: any,
-	message: Sockets.PromptConfig.Call,
+	message: { id: number },
 	emitToUser: (event: string, data: any) => void
 ) {
-	const promptConfig = await db.query.promptConfigs.findFirst({
-		where: (c, { eq }) => eq(c.id, message.id)
-	})
-	if (promptConfig) {
-		const res: Sockets.PromptConfig.Response = { promptConfig }
-		emitToUser("promptConfig", res)
-	}
+	await promptConfigsGet.handler(socket, { id: message.id }, emitToUser)
 }
 
-// Create a new prompt config
 export async function createPromptConfig(
 	socket: any,
-	message: Sockets.CreatePromptConfig.Call,
+	message: { promptConfig: any },
 	emitToUser: (event: string, data: any) => void
 ) {
-	const [promptConfig] = await db
-		.insert(schema.promptConfigs)
-		.values(message.promptConfig)
-		.returning()
-	await promptConfigsList(socket, {}, emitToUser)
-	const res: Sockets.CreatePromptConfig.Response = { promptConfig }
-	emitToUser("createPromptConfig", res)
+	await promptConfigsCreate.handler(
+		socket,
+		{ promptConfig: message.promptConfig },
+		emitToUser
+	)
 }
 
-// Update an existing prompt config
 export async function updatePromptConfig(
 	socket: any,
-	message: Sockets.UpdatePromptConfig.Call,
+	message: { promptConfig: any },
 	emitToUser: (event: string, data: any) => void
 ) {
-	const id = message.promptConfig.id
-	const updateData = { ...message.promptConfig }
-	// Only delete if id is present and not required by type
-	if (Object.prototype.hasOwnProperty.call(updateData, "id"))
-		(updateData as any).id = undefined
-	const [promptConfig] = await db
-		.update(schema.promptConfigs)
-		.set(updateData)
-		.where(eq(schema.promptConfigs.id, id))
-		.returning()
-	await promptConfigsList(socket, {}, emitToUser)
-	const res: Sockets.UpdatePromptConfig.Response = { promptConfig }
-	emitToUser("updatePromptConfig", res)
+	await promptConfigsUpdate.handler(
+		socket,
+		{ promptConfig: message.promptConfig },
+		emitToUser
+	)
 }
 
-// Delete a prompt config
 export async function deletePromptConfig(
 	socket: any,
-	message: Sockets.DeletePromptConfig.Call,
+	message: { id: number },
 	emitToUser: (event: string, data: any) => void
 ) {
-	await db
-		.delete(schema.promptConfigs)
-		.where(eq(schema.promptConfigs.id, message.id))
-	await promptConfigsList(socket, {}, emitToUser)
-	const res: Sockets.DeletePromptConfig.Response = { id: message.id }
-	emitToUser("deletePromptConfig", res)
+	await promptConfigsDelete.handler(socket, { id: message.id }, emitToUser)
 }
 
-// Set user active prompt config
 export async function setUserActivePromptConfig(
 	socket: any,
-	message: Sockets.SetUserActivePromptConfig.Call,
+	message: { id: number | null },
 	emitToUser: (event: string, data: any) => void
 ) {
-	const userId = 1 // Replace with actual userId
-	await db
-		.update(schema.users)
-		.set({
-			activePromptConfigId: message.id
-		})
-		.where(eq(schema.users.id, userId))
-	// Fetch the updated user
-	const user = await db.query.users.findFirst({
-		where: (u, { eq }) => eq(u.id, userId)
-	})
-	await loadUser(socket, {}, emitToUser) // Emit updated user info
-	await promptConfig(socket, { id: message.id! }, emitToUser)
-	if (!user) {
-		emitToUser("error", { error: "User not found." })
-		return
-	}
-	const res: Sockets.SetUserActivePromptConfig.Response = { user }
-	emitToUser("setUserActivePromptConfig", res)
+	await promptConfigsSetUserActive.handler(
+		socket,
+		{ id: message.id },
+		emitToUser
+	)
+}
+
+// Registration function for all prompt config handlers
+export function registerPromptConfigHandlers(
+	socket: any,
+	emitToUser: (event: string, data: any) => void,
+	register: (
+		socket: any,
+		handler: Handler<any, any>,
+		emitToUser: (event: string, data: any) => void
+	) => void
+) {
+	register(socket, promptConfigsListHandler, emitToUser)
+	register(socket, promptConfigsGet, emitToUser)
+	register(socket, promptConfigsCreate, emitToUser)
+	register(socket, promptConfigsUpdate, emitToUser)
+	register(socket, promptConfigsDelete, emitToUser)
+	register(socket, promptConfigsSetUserActive, emitToUser)
 }

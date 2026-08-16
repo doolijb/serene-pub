@@ -1,10 +1,11 @@
 <script lang="ts">
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { onDestroy, onMount } from "svelte"
 	import { z } from "zod"
 	import Avatar from "../Avatar.svelte"
+	import Dropzone from "../Dropzone.svelte"
 
 	interface Props {
 		open: boolean
@@ -13,7 +14,7 @@
 
 	let { open = $bindable(), onOpenChange }: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	// Persona data interface
 	interface PersonaData {
@@ -156,9 +157,12 @@
 		delete newPersona._avatarFile
 		delete newPersona._avatar
 
-		socket.emit("createPersona", {
+		socket.emit("personas:create", {
 			persona: newPersona,
-			avatarFile
+			// Client holds a browser File; the server receives it deserialized
+			// via socket.io as a Buffer — see the same pattern in
+			// PersonaForm.svelte/CharacterForm.svelte.
+			avatarFile: avatarFile as unknown as Buffer | undefined
 		})
 	}
 
@@ -220,7 +224,7 @@
 	)
 
 	onMount(() => {
-		socket.on("createPersona", (res: any) => {
+		socket.on("personas:create", (res: any) => {
 			if (res.persona) {
 				resetForm() // This will close the modal and reset data
 			}
@@ -228,11 +232,11 @@
 	})
 
 	onDestroy(() => {
-		socket.off("createPersona")
+		socket.off("personas:create")
 	})
 </script>
 
-<Modal
+<Dialog
 	{open}
 	onOpenChange={(e) => {
 		if (!e.open && hasUnsavedData && !showCancelConfirmation) {
@@ -243,413 +247,408 @@
 		// Otherwise allow normal close behavior
 		onOpenChange?.(e)
 	}}
-	contentBase="card bg-surface-100-900 p-6 space-y-6 shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
-	backdropClasses="backdrop-blur-sm"
 >
-	{#snippet content()}
-		{#if showCancelConfirmation}
-			<!-- Cancel Confirmation View -->
-			<header class="flex items-center justify-between">
-				<h2 class="h2">Confirm Action</h2>
-				<button
-					class="btn btn-sm preset-tonal-surface"
-					onclick={handleCancelCancel}
-					aria-label="Go back to editing"
-				>
-					<Icons.X size={16} />
-				</button>
-			</header>
+	<Portal>
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 max-h-[90vh] w-full max-w-2xl space-y-6 overflow-y-auto p-6 shadow-xl"
+			>
+				{#if showCancelConfirmation}
+					<!-- Cancel Confirmation View -->
+					<header class="flex items-center justify-between">
+						<h2 class="h2">Confirm Action</h2>
+						<button
+							class="btn btn-sm preset-filled-surface-400-600"
+							onclick={handleCancelCancel}
+							aria-label="Go back to editing"
+						>
+							<Icons.X size={16} />
+						</button>
+					</header>
 
-			<article class="flex min-h-[200px] items-center justify-center">
-				<div class="space-y-4 text-center">
-					<div class="text-warning-500 mb-4">
-						<Icons.AlertTriangle size={48} class="mx-auto" />
-					</div>
-					<h3 class="h3">Discard Persona?</h3>
-					<p class="max-w-md text-sm opacity-75">
-						You have unsaved changes to your persona. Are you sure
-						you want to discard them and close the creator?
-					</p>
-				</div>
-			</article>
-
-			<footer class="flex justify-end gap-4">
-				<button
-					class="btn preset-filled-surface-500"
-					onclick={handleCancelCancel}
-				>
-					<Icons.ArrowLeft size={16} />
-					Keep Editing
-				</button>
-				<button
-					class="btn preset-filled-error-500"
-					onclick={handleCancelConfirm}
-				>
-					<Icons.Trash2 size={16} />
-					Discard Changes
-				</button>
-			</footer>
-		{:else}
-			<!-- Normal Form View -->
-			<header class="flex items-center justify-between">
-				<div>
-					<h2 class="h2">Create Persona</h2>
-					<p class="text-sm opacity-60">
-						Step {currentStep + 1} of {steps.length}: {steps[
-							currentStep
-						].title}
-					</p>
-				</div>
-				<button
-					class="btn btn-sm preset-tonal-surface"
-					onclick={handleCancel}
-					aria-label="Close persona creator"
-				>
-					<Icons.X size={16} />
-				</button>
-			</header>
-
-			<!-- Progress indicator -->
-			<div class="flex gap-2">
-				{#each steps as _, index}
-					<div
-						class="h-2 flex-1 rounded-full {index <= currentStep
-							? 'bg-primary-500'
-							: 'bg-surface-400'}"
-					></div>
-				{/each}
-			</div>
-
-			<!-- Step content -->
-			<article class="min-h-[400px]">
-				{#if currentStep === 0}
-					<!-- Step 1: Name -->
-					<div class="space-y-6">
-						<div class="space-y-2 text-center">
-							<h3 class="h3">What's your persona's name?</h3>
-							<p class="text-sm opacity-75">
-								This represents you in conversations. You can
-								create multiple personas for different contexts.
+					<article
+						class="flex min-h-[200px] items-center justify-center"
+					>
+						<div class="space-y-4 text-center">
+							<div class="text-warning-500 mb-4">
+								<Icons.AlertTriangle
+									size={48}
+									class="mx-auto"
+								/>
+							</div>
+							<h3 class="h3">Discard Persona?</h3>
+							<p class="max-w-md text-sm opacity-75">
+								You have unsaved changes to your persona. Are
+								you sure you want to discard them and close the
+								creator?
 							</p>
 						</div>
+					</article>
 
-						<div class="space-y-4">
-							<!-- Name Field -->
-							<div class="space-y-2">
-								<label
-									class="flex gap-1 font-semibold"
-									for="stepName"
-								>
-									Name*
-									<span
-										class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
-										title="This field will be visible in prompts"
-										aria-label="This field will be visible in prompts"
-									>
-										<Icons.ScanEye
-											size={16}
-											class="relative top-[1px] inline"
-											aria-hidden="true"
-										/>
-									</span>
-								</label>
-								<input
-									id="stepName"
-									type="text"
-									bind:value={personaData.name}
-									class="input {validationErrors.name
-										? 'border-red-500 focus:border-red-500'
-										: ''}"
-									placeholder="Enter your persona name..."
-									aria-required="true"
-									aria-invalid={validationErrors.name
-										? "true"
-										: "false"}
-									aria-describedby={validationErrors.name
-										? "name-error"
-										: undefined}
-									oninput={() => clearValidationError("name")}
-								/>
-								{#if validationErrors.name}
-									<p
-										class="mt-1 text-sm text-red-500"
-										id="name-error"
-										role="alert"
-									>
-										{validationErrors.name}
-									</p>
-								{/if}
-							</div>
-						</div>
-
-						<!-- Example -->
-						<div class="bg-primary-500/10 rounded-lg p-4">
-							<h4
-								class="mb-3 flex items-center gap-2 text-sm font-semibold"
-							>
-								<Icons.Sparkles
-									size={16}
-									class="text-primary-500"
-								/>
-								Example & Guidelines
-							</h4>
-							<div class="space-y-3">
-								<div class="space-y-1 text-sm opacity-75">
-									<p>
-										<strong>Examples:</strong>
-										"Alex", "Dr. Smith", "The Investigator"
-									</p>
-								</div>
-								<div
-									class="border-primary-500/20 space-y-2 border-t pt-3 text-xs opacity-60"
-								>
-									<p>
-										<strong>Name:</strong>
-										Choose something that represents how you
-										want to be addressed in conversations. This
-										can be your real name, a nickname, or a role-based
-										identity.
-									</p>
-								</div>
-							</div>
-						</div>
-					</div>
-				{:else if currentStep === 1}
-					<!-- Step 2: Avatar -->
-					<div class="space-y-6">
-						<div class="space-y-2 text-center">
-							<h3 class="h3">Add an avatar</h3>
-							<p class="text-sm opacity-75">
-								Upload an image to represent yourself. This step
-								is optional but helps personalize your persona.
+					<footer class="flex justify-end gap-4">
+						<button
+							class="btn preset-filled-surface-500"
+							onclick={handleCancelCancel}
+						>
+							<Icons.ArrowLeft size={16} />
+							Keep Editing
+						</button>
+						<button
+							class="btn preset-filled-error-500"
+							onclick={handleCancelConfirm}
+						>
+							<Icons.Trash2 size={16} />
+							Discard Changes
+						</button>
+					</footer>
+				{:else}
+					<!-- Normal Form View -->
+					<header class="flex items-center justify-between">
+						<div>
+							<h2 class="h2">Create Persona</h2>
+							<p class="text-sm opacity-60">
+								Step {currentStep + 1} of {steps.length}: {steps[
+									currentStep
+								].title}
 							</p>
 						</div>
+						<button
+							class="btn btn-sm preset-filled-surface-400-600"
+							onclick={handleCancel}
+							aria-label="Close persona creator"
+						>
+							<Icons.X size={16} />
+						</button>
+					</header>
 
-						<div class="flex items-center gap-6">
-							<!-- Avatar Preview -->
-							<div class="flex-shrink-0">
-								<Avatar
-									src={personaData._avatar ||
-										personaData.avatar}
-									char={personaData}
-								/>
-							</div>
+					<!-- Progress indicator -->
+					<div class="flex gap-2">
+						{#each steps as _, index}
+							<div
+								class="h-2 flex-1 rounded-full {index <=
+								currentStep
+									? 'bg-primary-500'
+									: 'bg-surface-400'}"
+							></div>
+						{/each}
+					</div>
 
-							<!-- Upload Area -->
-							<div class="flex-1 space-y-3">
-								<div
-									class="flex w-full items-center justify-center"
-								>
-									<label
-										for="avatar-upload"
-										class="flex w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 p-6 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-700 dark:hover:border-gray-500 dark:hover:bg-gray-800"
-									>
-										<div
-											class="flex flex-col items-center justify-center"
+					<!-- Step content -->
+					<article class="min-h-[400px]">
+						{#if currentStep === 0}
+							<!-- Step 1: Name -->
+							<div class="space-y-6">
+								<div class="space-y-2 text-center">
+									<h3 class="h3">
+										What's your persona's name?
+									</h3>
+									<p class="text-sm opacity-75">
+										This represents you in conversations.
+										You can create multiple personas for
+										different contexts.
+									</p>
+								</div>
+
+								<div class="space-y-4">
+									<!-- Name Field -->
+									<div class="space-y-2">
+										<label
+											class="flex gap-1 font-semibold"
+											for="personaCreatorStepName"
 										>
-											<Icons.Upload
-												class="mb-3 h-8 w-8 text-gray-500 dark:text-gray-400"
-											/>
-											<p
-												class="mb-2 text-sm text-gray-500 dark:text-gray-400"
+											Name*
+											<span
+												class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
+												title="This field will be visible in prompts"
+												aria-label="This field will be visible in prompts"
 											>
-												<span class="font-semibold">
-													Click to upload
-												</span>
-												or drag and drop
+												<Icons.ScanEye
+													size={16}
+													class="relative top-[1px] inline"
+													aria-hidden="true"
+												/>
+											</span>
+										</label>
+										<input
+											id="personaCreatorStepName"
+											type="text"
+											bind:value={personaData.name}
+											class="input {validationErrors.name
+												? 'border-error-500 focus:border-error-500'
+												: ''}"
+											placeholder="Enter your persona name..."
+											aria-required="true"
+											aria-invalid={validationErrors.name
+												? "true"
+												: "false"}
+											aria-describedby={validationErrors.name
+												? "name-error"
+												: undefined}
+											oninput={() =>
+												clearValidationError("name")}
+										/>
+										{#if validationErrors.name}
+											<p
+												class="text-error-500 mt-1 text-sm"
+												id="name-error"
+												role="alert"
+											>
+												{validationErrors.name}
 											</p>
-											<p
-												class="text-xs text-gray-500 dark:text-gray-400"
-											>
-												PNG, JPG or GIF
+										{/if}
+									</div>
+								</div>
+
+								<!-- Example -->
+								<div class="bg-primary-500/10 rounded-lg p-4">
+									<h4
+										class="mb-3 flex items-center gap-2 text-sm font-semibold"
+									>
+										<Icons.Sparkles
+											size={16}
+											class="text-primary-500"
+										/>
+										Example & Guidelines
+									</h4>
+									<div class="space-y-3">
+										<div
+											class="space-y-1 text-sm opacity-75"
+										>
+											<p>
+												<strong>Examples:</strong>
+												"Alex", "Dr. Smith", "The Investigator"
 											</p>
 										</div>
-										<input
-											id="avatar-upload"
-											type="file"
-											class="hidden"
-											accept="image/*"
-											onchange={handleAvatarChange}
-										/>
-									</label>
+										<div
+											class="border-primary-500/20 space-y-2 border-t pt-3 text-xs opacity-60"
+										>
+											<p>
+												<strong>Name:</strong>
+												Choose something that represents
+												how you want to be addressed in conversations.
+												This can be your real name, a nickname,
+												or a role-based identity.
+											</p>
+										</div>
+									</div>
+								</div>
+							</div>
+						{:else if currentStep === 1}
+							<!-- Step 2: Avatar -->
+							<div class="space-y-6">
+								<div class="space-y-2 text-center">
+									<h3 class="h3">Add an avatar</h3>
+									<p class="text-sm opacity-75">
+										Upload an image to represent yourself.
+										This step is optional but helps
+										personalize your persona.
+									</p>
 								</div>
 
-								{#if personaData._avatarFile}
-									<button
-										type="button"
-										class="btn btn-sm preset-tonal-error w-full"
-										onclick={() => {
-											personaData._avatarFile = undefined
-											personaData._avatar = ""
-										}}
+								<div class="flex items-center gap-6">
+									<!-- Avatar Preview -->
+									<div class="flex-shrink-0">
+										<Avatar
+											src={personaData._avatar ||
+												personaData.avatar}
+											char={personaData}
+										/>
+									</div>
+
+									<!-- Upload Area -->
+									<div class="flex-1 space-y-3">
+										<Dropzone
+											id="avatar-upload"
+											onchange={handleAvatarChange}
+										/>
+
+										{#if personaData._avatarFile}
+											<button
+												type="button"
+												class="btn btn-sm preset-tonal-error w-full"
+												onclick={() => {
+													personaData._avatarFile =
+														undefined
+													personaData._avatar = ""
+												}}
+											>
+												<Icons.Trash2 size={16} />
+												Remove Image
+											</button>
+										{/if}
+										<p class="text-xs opacity-60">
+											Supported formats: JPG, PNG, GIF.
+											The image will be resized
+											automatically to fit the interface.
+										</p>
+									</div>
+								</div>
+
+								<!-- Example -->
+								<div class="bg-primary-500/10 rounded-lg p-4">
+									<h4
+										class="mb-2 flex items-center gap-2 text-sm font-semibold"
 									>
-										<Icons.Trash2 size={16} />
-										Remove Image
-									</button>
-								{/if}
-								<p class="text-xs opacity-60">
-									Supported formats: JPG, PNG, GIF. The image
-									will be resized automatically to fit the
-									interface.
-								</p>
+										<Icons.Sparkles
+											size={16}
+											class="text-primary-500"
+										/>
+										Tip
+									</h4>
+									<p class="text-sm opacity-75">
+										A good avatar helps distinguish your
+										different personas and makes
+										conversations more engaging. You can
+										always change it later.
+									</p>
+								</div>
 							</div>
-						</div>
+						{:else if currentStep === 2}
+							<!-- Step 3: Description -->
+							<div class="space-y-6">
+								<div class="space-y-2 text-center">
+									<h3 class="h3">Describe yourself</h3>
+									<p class="text-sm opacity-75">
+										Write a description that captures your
+										background, personality, and how you
+										want to be perceived in conversations.
+									</p>
+								</div>
 
-						<!-- Example -->
-						<div class="bg-primary-500/10 rounded-lg p-4">
-							<h4
-								class="mb-2 flex items-center gap-2 text-sm font-semibold"
-							>
-								<Icons.Sparkles
-									size={16}
-									class="text-primary-500"
-								/>
-								Tip
-							</h4>
-							<p class="text-sm opacity-75">
-								A good avatar helps distinguish your different
-								personas and makes conversations more engaging.
-								You can always change it later.
-							</p>
-						</div>
-					</div>
-				{:else if currentStep === 2}
-					<!-- Step 3: Description -->
-					<div class="space-y-6">
-						<div class="space-y-2 text-center">
-							<h3 class="h3">Describe yourself</h3>
-							<p class="text-sm opacity-75">
-								Write a description that captures your
-								background, personality, and how you want to be
-								perceived in conversations.
-							</p>
-						</div>
+								<div class="space-y-2">
+									<label
+										class="flex gap-1 font-semibold"
+										for="personaCreatorStepDescription"
+									>
+										Description*
+										<span
+											class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
+											title="This field will be visible in prompts"
+											aria-label="This field will be visible in prompts"
+										>
+											<Icons.ScanEye
+												size={16}
+												class="relative top-[1px] inline"
+												aria-hidden="true"
+											/>
+										</span>
+									</label>
+									<textarea
+										id="personaCreatorStepDescription"
+										rows="8"
+										bind:value={personaData.description}
+										class="input {validationErrors.description
+											? 'border-error-500 focus:border-error-500'
+											: ''}"
+										placeholder="Describe yourself and how you want to interact..."
+										aria-required="true"
+										aria-invalid={validationErrors.description
+											? "true"
+											: "false"}
+										aria-describedby={validationErrors.description
+											? "description-error"
+											: undefined}
+										oninput={() =>
+											clearValidationError("description")}
+									></textarea>
+									{#if validationErrors.description}
+										<p
+											class="text-error-500 mt-1 text-sm"
+											id="description-error"
+											role="alert"
+										>
+											{validationErrors.description}
+										</p>
+									{/if}
+									<div class="space-y-2 text-xs opacity-60">
+										<p>
+											<strong>Include:</strong>
+											Your background, interests, communication
+											style, or the role you want to play
+										</p>
+										<p>
+											<strong>Examples:</strong>
+											"A curious student", "An experienced
+											professional", "Someone who loves asking
+											questions"
+										</p>
+									</div>
+								</div>
 
-						<div class="space-y-2">
-							<label
-								class="flex gap-1 font-semibold"
-								for="stepDescription"
-							>
-								Description*
-								<span
-									class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
-									title="This field will be visible in prompts"
-									aria-label="This field will be visible in prompts"
+								<!-- Example -->
+								<div class="bg-primary-500/10 rounded-lg p-4">
+									<h4
+										class="mb-2 flex items-center gap-2 text-sm font-semibold"
+									>
+										<Icons.Sparkles
+											size={16}
+											class="text-primary-500"
+										/>
+										Example
+									</h4>
+									<p class="text-sm opacity-75">
+										"An inquisitive person who enjoys deep
+										conversations about philosophy and
+										science. He asks thoughtful questions
+										and share insights from your background
+										in education. He is an empathetic, and
+										genuinely interested in learning from
+										others."
+									</p>
+								</div>
+							</div>
+						{/if}
+					</article>
+
+					<!-- Navigation -->
+					<footer class="flex justify-between gap-4">
+						<button
+							class="btn preset-filled-surface-500"
+							onclick={handlePrevious}
+							disabled={isFirstStep}
+						>
+							<Icons.ChevronLeft size={16} />
+							Previous
+						</button>
+
+						<div class="flex gap-2">
+							{#if steps[currentStep].canSkip && !isLastStep}
+								<button
+									class="btn preset-filled-surface-400-600"
+									onclick={handleNext}
 								>
-									<Icons.ScanEye
-										size={16}
-										class="relative top-[1px] inline"
-										aria-hidden="true"
-									/>
-								</span>
-							</label>
-							<textarea
-								id="stepDescription"
-								rows="8"
-								bind:value={personaData.description}
-								class="input {validationErrors.description
-									? 'border-red-500 focus:border-red-500'
-									: ''}"
-								placeholder="Describe yourself and how you want to interact..."
-								aria-required="true"
-								aria-invalid={validationErrors.description
-									? "true"
-									: "false"}
-								aria-describedby={validationErrors.description
-									? "description-error"
-									: undefined}
-								oninput={() =>
-									clearValidationError("description")}
-							></textarea>
-							{#if validationErrors.description}
-								<p
-									class="mt-1 text-sm text-red-500"
-									id="description-error"
-									role="alert"
-								>
-									{validationErrors.description}
-								</p>
+									Skip
+									<Icons.ChevronRight size={16} />
+								</button>
 							{/if}
-							<div class="space-y-2 text-xs opacity-60">
-								<p>
-									<strong>Include:</strong>
-									Your background, interests, communication style,
-									or the role you want to play
-								</p>
-								<p>
-									<strong>Examples:</strong>
-									"A curious student", "An experienced professional",
-									"Someone who loves asking questions"
-								</p>
-							</div>
-						</div>
 
-						<!-- Example -->
-						<div class="bg-primary-500/10 rounded-lg p-4">
-							<h4
-								class="mb-2 flex items-center gap-2 text-sm font-semibold"
-							>
-								<Icons.Sparkles
-									size={16}
-									class="text-primary-500"
-								/>
-								Example
-							</h4>
-							<p class="text-sm opacity-75">
-								"An inquisitive person who enjoys deep
-								conversations about philosophy and science. He
-								asks thoughtful questions and share insights
-								from your background in education. He is an
-								empathetic, and genuinely interested in learning
-								from others."
-							</p>
+							{#if isLastStep}
+								<button
+									class="btn preset-filled-success-500"
+									onclick={handleSave}
+								>
+									<Icons.Save size={16} />
+									Create Persona
+								</button>
+							{:else}
+								<button
+									class="btn preset-filled-primary-500"
+									onclick={handleNext}
+									disabled={!canProceedToNext}
+								>
+									Next
+									<Icons.ChevronRight size={16} />
+								</button>
+							{/if}
 						</div>
-					</div>
+					</footer>
 				{/if}
-			</article>
-
-			<!-- Navigation -->
-			<footer class="flex justify-between gap-4">
-				<button
-					class="btn preset-filled-surface-500"
-					onclick={handlePrevious}
-					disabled={isFirstStep}
-				>
-					<Icons.ChevronLeft size={16} />
-					Previous
-				</button>
-
-				<div class="flex gap-2">
-					{#if steps[currentStep].canSkip && !isLastStep}
-						<button
-							class="btn preset-tonal-surface"
-							onclick={handleNext}
-						>
-							Skip
-							<Icons.ChevronRight size={16} />
-						</button>
-					{/if}
-
-					{#if isLastStep}
-						<button
-							class="btn preset-filled-success-500"
-							onclick={handleSave}
-						>
-							<Icons.Save size={16} />
-							Create Persona
-						</button>
-					{:else}
-						<button
-							class="btn preset-filled-primary-500"
-							onclick={handleNext}
-							disabled={!canProceedToNext}
-						>
-							Next
-							<Icons.ChevronRight size={16} />
-						</button>
-					{/if}
-				</div>
-			</footer>
-		{/if}
-	{/snippet}
-</Modal>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

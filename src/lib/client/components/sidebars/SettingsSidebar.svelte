@@ -1,282 +1,276 @@
 <script lang="ts">
-	import { Switch } from "@skeletonlabs/skeleton-svelte"
+	import { Tabs } from "@skeletonlabs/skeleton-svelte"
+	import type { ValueChangeDetails } from "@zag-js/tabs"
 	import { getContext, onMount } from "svelte"
-	import { Theme } from "$lib/client/consts/Theme"
 	import {
 		appVersion,
 		appVersionDisplay
 	} from "$lib/shared/constants/version"
 	import * as Icons from "@lucide/svelte"
+	import PanelTabList from "$lib/client/components/panels/PanelTabList.svelte"
+	import PanelTab from "$lib/client/components/panels/PanelTab.svelte"
+	import PanelSectionTitle from "$lib/client/components/panels/PanelSectionTitle.svelte"
 	import { page } from "$app/state"
-	import * as skio from "sveltekit-io"
+	import UserSettingsTab from "../settingsTabs/UserSettingsTab.svelte"
+	import SystemSettingsTab from "../settingsTabs/SystemSettingsTab.svelte"
+	import CustomThemeManager from "../CustomThemeManager.svelte"
+	import SettingsUnsavedChangesModal from "../modals/SettingsUnsavedChangesModal.svelte"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
 	}
 	let { onclose = $bindable() }: Props = $props()
 
-	const socket = skio.get()
+	// State
+	let activeTab = $state<"user" | "system" | "themes" | "about">("user")
 
-	let isDarkMode = $state(false)
-	let selectedTheme: string = $state("")
-	let themeCtx: ThemeCtx = $state(getContext("themeCtx"))
-	let systemSettingsCtx: SystemSettingsCtx = $state(
-		getContext("systemSettingsCtx")
-	)
-
-	$effect(() => {
-		const _s = { ...$state.snapshot(systemSettingsCtx) }
-		console.log(
-			"SettingsSidebar systemSettingsCtx",
-			$state.snapshot(systemSettingsCtx)
-		)
-	})
-
-	$effect(() => {
-		isDarkMode = themeCtx.mode === "dark"
-	})
-
-	$effect(() => {
-		selectedTheme = themeCtx.theme
-	})
-
-	const onDarkModeChanged = (event: { checked: boolean }) => {
-		themeCtx.mode = event.checked ? "dark" : "light"
-		// TODO use setTheme socket call
+	// Section names. The tab triggers are icon-only (see PanelTab), so
+	// PanelSectionTitle is where the active section's full name is shown.
+	const SECTION_LABELS: Record<string, string> = {
+		user: "User",
+		system: "System",
+		themes: "Themes",
+		about: "About"
 	}
+	let sectionLabel = $derived(SECTION_LABELS[activeTab] ?? "")
+	let userCtx: UserCtx = $state(getContext("userCtx"))
+	// Shared across the User and System tabs (the only two with buffered,
+	// explicitly-saved fields) — same pattern as LorebooksSidebar's
+	// tabHasUnsavedChanges.
+	let tabHasUnsavedChanges = $state(false)
+	let nextTab: "user" | "system" | "themes" | "about" | undefined = $state()
+	let showUnsavedChangesModal = $state(false)
+	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
 
-	const onThemeChanged = (event: Event) => {
-		const target = event.target as HTMLSelectElement
-		themeCtx.theme = target.value
-		// TODO use setTheme socket call
-	}
-
-	async function onOllamaManagerEnabledClick(event: { checked: boolean }) {
-		const res: Sockets.UpdateOllamaManagerEnabled.Call = {
-			enabled: event.checked
+	// Handle tab switching
+	function handleTabChange(e: ValueChangeDetails): void {
+		const target = e.value as "user" | "system" | "themes" | "about"
+		if (!tabHasUnsavedChanges) {
+			activeTab = target
+		} else {
+			nextTab = target
+			showUnsavedChangesModal = true
 		}
-		socket.emit("updateOllamaManagerEnabled", res)
 	}
 
-	async function onShowAllCharacterFieldsClick(event: { checked: boolean }) {
-		const res: Sockets.UpdateShowAllCharacterFields.Call = {
-			enabled: event.checked
+	function handleUnsavedChangesModalOnOpenChange(e: OpenChangeDetails) {
+		if (!e.open) {
+			showUnsavedChangesModal = false
+			nextTab = undefined
+			if (confirmCloseSidebarResolve) {
+				confirmCloseSidebarResolve(false)
+				confirmCloseSidebarResolve = null
+			}
 		}
-		socket.emit("updateShowAllCharacterFields", res)
 	}
 
-	async function onEasyCharacterCreationClick(event: { checked: boolean }) {
-		const res: Sockets.UpdateEasyCharacterCreation.Call = {
-			enabled: event.checked
+	function handleUnsavedChangesModalConfirm() {
+		showUnsavedChangesModal = false
+		if (nextTab) {
+			activeTab = nextTab
+			nextTab = undefined
 		}
-		socket.emit("updateEasyCharacterCreation", res)
+		if (confirmCloseSidebarResolve) {
+			confirmCloseSidebarResolve(true)
+			confirmCloseSidebarResolve = null
+		}
 	}
 
-	async function onEasyPersonaCreationClick(event: { checked: boolean }) {
-		const res: Sockets.UpdateEasyPersonaCreation.Call = {
-			enabled: event.checked
+	function handleUnsavedChangesModalCancel() {
+		showUnsavedChangesModal = false
+		nextTab = undefined
+		if (confirmCloseSidebarResolve) {
+			confirmCloseSidebarResolve(false)
+			confirmCloseSidebarResolve = null
 		}
-		socket.emit("updateEasyPersonaCreation", res)
 	}
 
-	async function onShowHomePageBannerClick(event: { checked: boolean }) {
-		const res: Sockets.UpdateShowHomePageBanner.Call = {
-			enabled: event.checked
-		}
-		socket.emit("updateShowHomePageBanner", res)
+	async function handleOnClose(): Promise<boolean> {
+		if (!tabHasUnsavedChanges) return true
+		showUnsavedChangesModal = true
+		return new Promise<boolean>((resolve) => {
+			confirmCloseSidebarResolve = resolve
+		})
 	}
 
 	onMount(() => {
-		onclose = async () => {
-			return true
-		}
+		onclose = handleOnClose
 	})
 </script>
 
-<div class="p-4">
-	<div class="flex flex-col gap-4">
-		{#if page.data?.isNewerReleaseAvailable}
-			<div
-				class="bg-surface-200-800 mb-2 flex w-full flex-col items-center justify-between gap-4 rounded p-3 text-center"
-			>
-				<p>A newer version of Serene Pub is available!</p>
-				<div class="mt-2">
-					<a
-						href="https://github.com/doolijb/serene-pub/releases"
-						target="_blank"
-						rel="noopener"
-						class="btn preset-filled-success-500"
-						aria-label="Download newer version of Serene Pub"
-					>
-						<Icons.Download size={16} aria-hidden="true" />
-						Download here
-					</a>
-				</div>
+<div class="flex h-full flex-col p-4">
+	{#if page.data?.isNewerReleaseAvailable}
+		<div
+			class="bg-surface-200-800 mb-4 flex w-full flex-col items-center justify-between gap-4 rounded p-3 text-center"
+		>
+			<p>A newer version of Serene Pub is available!</p>
+			<div class="mt-2">
+				<a
+					href="https://github.com/doolijb/serene-pub/releases"
+					target="_blank"
+					rel="noopener"
+					class="btn preset-filled-success-500"
+					aria-label="Download newer version of Serene Pub"
+				>
+					<Icons.Download size={16} aria-hidden="true" />
+					Download here
+				</a>
 			</div>
-		{/if}
+		</div>
+	{/if}
 
-		<div>
-			<label for="theme" class="font-semibold">Theme</label>
-			<select
-				id="theme"
-				class="select"
-				name="theme"
-				value={selectedTheme}
-				onchange={onThemeChanged}
-				aria-label="Select application theme"
-			>
-				{#each Theme.options as [key, label]}
-					<option value={key}>{label}</option>
-				{/each}
-			</select>
-		</div>
-
-		<div class="flex gap-2">
-			<Switch
-				name="dark-mode"
-				checked={isDarkMode}
-				onCheckedChange={onDarkModeChanged}
-				aria-label="Toggle dark mode"
-			></Switch>
-			<label for="dark-mode" class="font-semibold">Dark Mode</label>
-		</div>
-		<div class="flex gap-2">
-			<Switch
-				name="ollama-manager"
-				checked={systemSettingsCtx.settings.ollamaManagerEnabled}
-				onCheckedChange={onOllamaManagerEnabledClick}
-				aria-label="Toggle Ollama Manager"
-			></Switch>
-			<label for="ollama-manager" class="font-semibold">
-				Enable Ollama Manager
-			</label>
-		</div>
-		<div class="flex gap-2">
-			<Switch
-				name="show-all-character-fields"
-				checked={systemSettingsCtx.settings.showAllCharacterFields}
-				onCheckedChange={onShowAllCharacterFieldsClick}
-				aria-label="Toggle Show All Character Fields"
-			></Switch>
-			<label for="show-all-character-fields" class="font-semibold">
-				Show All Character Fields
-			</label>
-		</div>
-		<div class="flex gap-2">
-			<Switch
-				name="easy-character-creation"
-				checked={systemSettingsCtx.settings.enableEasyCharacterCreation}
-				onCheckedChange={onEasyCharacterCreationClick}
-				aria-label="Toggle Easy Character Creation"
-			></Switch>
-			<label for="easy-character-creation" class="font-semibold">
-				Easy Character Creation
-			</label>
-		</div>
-		<div class="flex gap-2">
-			<Switch
-				name="easy-persona-creation"
-				checked={systemSettingsCtx.settings.enableEasyPersonaCreation}
-				onCheckedChange={onEasyPersonaCreationClick}
-				aria-label="Toggle Easy Persona Creation"
-			></Switch>
-			<label for="easy-persona-creation" class="font-semibold">
-				Easy Persona Creation
-			</label>
-		</div>
-		<div class="flex gap-2">
-			<Switch
-				name="show-home-page-banner"
-				checked={systemSettingsCtx.settings.showHomePageBanner}
-				onCheckedChange={onShowHomePageBannerClick}
-			></Switch>
-			<label for="show-home-page-banner" class="font-semibold">
-				Show Home Page Banner
-			</label>
-		</div>
-	</div>
-
-	<div
-		class="about-section bg-surface-500/25 mt-6 flex flex-col items-start gap-2 rounded-lg p-4 shadow-md"
-	>
-		<div class="mb-1 flex items-center gap-2">
-			<Icons.Info size={20} class="text-primary-500" />
-			<span class="text-lg font-bold tracking-wide">Serene Pub</span>
-			<span
-				class="bg-primary-200-800 text-primary-700 dark:text-primary-200 ml-2 rounded px-2 py-0.5 font-mono text-xs"
-			>
-				{appVersionDisplay}
-			</span>
-		</div>
-		<div class="text-surface-500 mb-2 text-xs">
-			Build: <span class="font-mono">{appVersion}</span>
-		</div>
-		<div class="flex flex-wrap items-center gap-3">
-			<a
-				href="https://github.com/doolijb/serene-pub"
-				target="_blank"
-				rel="noopener noreferrer"
-				class="btn preset-filled-primary-500 gap-1"
-				aria-label="Visit Serene Pub GitHub repository"
-			>
-				<Icons.GitBranch size={16} aria-hidden="true" />
-				<span>Repository</span>
-			</a>
-			<a
-				href="https://github.com/doolijb/serene-pub/wiki"
-				target="_blank"
-				rel="noopener noreferrer"
-				class="btn preset-filled-surface-500"
-				aria-label="Visit Serene Pub wiki documentation"
-			>
-				<Icons.BookOpen size={16} aria-hidden="true" />
-				<span>Wiki</span>
-			</a>
-			<a
-				href="https://discord.gg/3kUx3MDcSa"
-				target="_blank"
-				rel="noopener noreferrer"
-				class="btn preset-filled-tertiary-500"
-				aria-label="Join Serene Pub Discord community"
-			>
-				<Icons.MessageSquare size={16} aria-hidden="true" />
-				<span>Discord</span>
-			</a>
-			<a
-				href="https://github.com/doolijb/serene-pub/issues"
-				target="_blank"
-				rel="noopener noreferrer"
-				class="btn preset-filled-error-500"
-				aria-label="Report issues on GitHub"
-			>
-				<Icons.AlertCircle size={16} aria-hidden="true" />
-				<span>Issues</span>
-			</a>
-			<a
-				href="https://github.com/doolijb/serene-pub/discussions"
-				target="_blank"
-				rel="noopener noreferrer"
-				class="btn preset-filled-secondary-500"
-				aria-label="Join discussions on GitHub"
-			>
-				<Icons.MessageCircle size={16} aria-hidden="true" />
-				<span>Discussions</span>
-			</a>
-		</div>
-		<div class="text-muted-foreground mt-2 text-xs">
-			&copy; {new Date().getFullYear()} Serene Pub (
-			<a
-				href="https://github.com/doolijb"
-				target="_blank"
-				rel="noopener noreferrer"
-				class="text-primary-500 hover:underline"
-			>
-				Jody Doolittle
-			</a>
-			).
-		</div>
-		<div class="text-muted-foreground mt-2 text-xs">
-			Distributed under the AGPL-3.0 License.
-		</div>
+	<!-- Settings Tabs -->
+	<div class="flex-1 overflow-y-auto">
+		<Tabs value={activeTab} onValueChange={handleTabChange}>
+			<PanelTabList>
+				<PanelTab value="user" label="User" icon={Icons.UserCog} />
+				{#if userCtx.user?.isAdmin}
+					<PanelTab
+						value="system"
+						label="System"
+						icon={Icons.Server}
+					/>
+				{/if}
+				<PanelTab value="themes" label="Themes" icon={Icons.Palette} />
+				<PanelTab value="about" label="About" icon={Icons.Info} />
+			</PanelTabList>
+			<PanelSectionTitle title={sectionLabel} />
+			<Tabs.Content value="user">
+				{#if activeTab === "user"}
+					<UserSettingsTab
+						bind:hasUnsavedChanges={tabHasUnsavedChanges}
+					/>
+				{/if}
+			</Tabs.Content>
+			{#if userCtx.user?.isAdmin}
+				<Tabs.Content value="system">
+					{#if activeTab === "system"}
+						<SystemSettingsTab
+							bind:hasUnsavedChanges={tabHasUnsavedChanges}
+						/>
+					{/if}
+				</Tabs.Content>
+			{/if}
+			<Tabs.Content value="themes">
+				{#if activeTab === "themes"}
+					<CustomThemeManager />
+				{/if}
+			</Tabs.Content>
+			<Tabs.Content value="about">
+				{#if activeTab === "about"}
+					<div class="flex flex-col gap-4">
+						<div class="mb-1 flex items-center gap-2">
+							<Icons.Info size={20} class="text-primary-500" />
+							<span class="text-lg font-bold tracking-wide">
+								Serene Pub
+							</span>
+							<span
+								class="bg-primary-200-800 text-primary-700 dark:text-primary-200 ml-2 rounded px-2 py-0.5 font-mono text-xs"
+							>
+								{appVersionDisplay}
+							</span>
+						</div>
+						<div class="text-surface-700-300 mb-2 text-xs">
+							Build: <span class="font-mono">
+								{appVersion}
+							</span>
+						</div>
+						<div class="flex flex-wrap items-center gap-3">
+							<a
+								href="https://serenepub.com"
+								target="_blank"
+								rel="noopener noreferrer"
+								class="btn preset-filled-primary-500 gap-1"
+								aria-label="Visit the Serene Pub website"
+							>
+								<Icons.Globe size={16} aria-hidden="true" />
+								<span>Website</span>
+							</a>
+							<a
+								href="https://github.com/doolijb/serene-pub"
+								target="_blank"
+								rel="noopener noreferrer"
+								class="btn preset-filled-surface-500 gap-1"
+								aria-label="Visit Serene Pub GitHub repository"
+							>
+								<Icons.GitBranch size={16} aria-hidden="true" />
+								<span>Repository</span>
+							</a>
+							<a
+								href="https://github.com/doolijb/serene-pub/milestones"
+								target="_blank"
+								rel="noopener noreferrer"
+								class="btn preset-filled-surface-500"
+								aria-label="View Serene Pub release milestones"
+							>
+								<Icons.Milestone size={16} aria-hidden="true" />
+								<span>Milestones</span>
+							</a>
+							<a
+								href="https://discord.gg/3kUx3MDcSa"
+								target="_blank"
+								rel="noopener noreferrer"
+								class="btn preset-filled-tertiary-500"
+								aria-label="Join Serene Pub Discord community"
+							>
+								<Icons.MessageSquare
+									size={16}
+									aria-hidden="true"
+								/>
+								<span>Discord</span>
+							</a>
+							<a
+								href="https://github.com/doolijb/serene-pub/issues"
+								target="_blank"
+								rel="noopener noreferrer"
+								class="btn preset-filled-error-500"
+								aria-label="Report issues on GitHub"
+							>
+								<Icons.AlertCircle
+									size={16}
+									aria-hidden="true"
+								/>
+								<span>Issues</span>
+							</a>
+							<a
+								href="https://github.com/doolijb/serene-pub/discussions"
+								target="_blank"
+								rel="noopener noreferrer"
+								class="btn preset-filled-secondary-500"
+								aria-label="Join discussions on GitHub"
+							>
+								<Icons.MessageCircle
+									size={16}
+									aria-hidden="true"
+								/>
+								<span>Discussions</span>
+							</a>
+						</div>
+						<div class="text-muted-foreground mt-2 text-xs">
+							&copy; {new Date().getFullYear()} Serene Pub (
+							<a
+								href="https://github.com/doolijb"
+								target="_blank"
+								rel="noopener noreferrer"
+								class="text-primary-500 hover:underline"
+							>
+								Jody Doolittle
+							</a>
+							).
+						</div>
+						<div class="text-muted-foreground mt-2 text-xs">
+							Distributed under the AGPL-3.0 License.
+						</div>
+					</div>
+				{/if}
+			</Tabs.Content>
+		</Tabs>
 	</div>
 </div>
+
+<SettingsUnsavedChangesModal
+	open={showUnsavedChangesModal}
+	onOpenChange={handleUnsavedChangesModalOnOpenChange}
+	onConfirm={handleUnsavedChangesModalConfirm}
+	onCancel={handleUnsavedChangesModalCancel}
+/>

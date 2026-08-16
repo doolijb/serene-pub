@@ -1,14 +1,15 @@
 <script lang="ts">
 	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
+	import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { onMount, onDestroy } from "svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { z } from "zod"
 
 	interface ExtraFieldData {
 		stream: boolean
-		raw: boolean
 		think: boolean
 		keepAliveNumber: number
 		keepAliveUnit: string
@@ -17,7 +18,6 @@
 
 	interface ExtraJson {
 		stream?: boolean
-		raw?: boolean
 		think?: boolean
 		keepAlive?: string
 		useChat?: boolean
@@ -40,32 +40,30 @@
 
 	let { connection = $bindable() } = $props()
 
-	const socket = skio.get()
-	const defaultExtraJson = {
-		stream: false,
-		raw: false,
-		think: false,
-		keepAlive: "300ms",
-		useChat: true
-	}
+	const socket = useTypedSocket()
+	const defaultExtraJson =
+		CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA].extraJson
 
-	let availableOllamaModels: Sockets.RefreshModels.Response["models"] =
-		$state([])
+	let availableOllamaModels: any[] = $state([])
 	let ollamaFields: ExtraFieldData | undefined = $state()
 	let validationErrors: ValidationErrors = $state({})
 
-	socket.on("refreshModels", (msg: Sockets.RefreshModels.Response) => {
+	socket.on("connections:refreshModels", (msg) => {
 		if (msg.models) availableOllamaModels = msg.models
 	})
 
-	socket.on("testConnection", (msg: Sockets.TestConnection.Response) => {
-		testResult = msg
+	socket.on("connections:test", (msg) => {
+		testResult = {
+			ok: msg.ok,
+			error: msg.error ?? undefined,
+			models: msg.models
+		}
 	})
 
 	function handleRefreshModels() {
-		socket.emit("refreshModels", {
+		socket.emit("connections:refreshModels", {
 			connection
-		} as Sockets.RefreshModels.Call)
+		})
 	}
 
 	let testResult: { ok: boolean; error?: string; models?: any[] } | null =
@@ -74,9 +72,9 @@
 	function handleTestConnection() {
 		if (!validateConnection()) return
 		testResult = null
-		socket.emit("testConnection", {
+		socket.emit("connections:test", {
 			connection
-		} as Sockets.TestConnection.Call)
+		})
 	}
 
 	function validateConnection(): boolean {
@@ -114,9 +112,8 @@
 	function extraJsonToExtraFields(extraJson: ExtraJson): ExtraFieldData {
 		return {
 			stream: extraJson.stream || false,
-			raw: extraJson.raw || false,
 			think: extraJson.think || false,
-			useChat: extraJson.useChat || true,
+			useChat: extraJson.useChat ?? true,
 			keepAliveNumber: extraJson.keepAlive
 				? parseInt(extraJson.keepAlive) || 300
 				: 300,
@@ -129,18 +126,41 @@
 	function extraFieldsToExtraJson(fields: ExtraFieldData): ExtraJson {
 		return {
 			stream: fields.stream,
-			raw: fields.raw,
 			think: fields.think,
 			keepAlive: `${fields.keepAliveNumber}${fields.keepAliveUnit}`,
-			useChat: fields.useChat || true
+			useChat: fields.useChat ?? true
 		}
 	}
 
+	// Skips the FIRST write-back, which is the defaults normalization done in
+	// onMount, not a user edit.
+	//
+	// onMount builds the field state from `{...defaults, ...connection.extraJson}`,
+	// so it legitimately gains every default key the stored row lacked. Writing
+	// that straight back into `connection` made the form differ from the
+	// parent's `originalConnection` the instant it opened — the panel reported
+	// unsaved changes with nothing touched, and then blocked closing behind a
+	// destructive-sounding confirm. Real edits still write through, and a save
+	// still persists the full normalized set.
+	let extraJsonInitialized = false
 	$effect(() => {
 		const _ollamaFields = ollamaFields
-		if (_ollamaFields) {
-			connection.extraJson = extraFieldsToExtraJson(_ollamaFields)
+		if (!_ollamaFields) return
+		// Computed on EVERY run, before the skip check, and deliberately so:
+		// an effect only subscribes to the state it actually reads, and the
+		// individual field values are read inside this call. Returning before
+		// it — as a first attempt did — meant the effect never subscribed to
+		// them, so later toggles re-triggered nothing and the form never went
+		// dirty. Skip the WRITE, never the read.
+		const nextExtraJson = extraFieldsToExtraJson(_ollamaFields)
+		// The first populated run is onMount's defaults normalization, not a
+		// user edit — writing it back made the panel report unsaved changes the
+		// instant it opened, then block closing behind a destructive confirm.
+		if (!extraJsonInitialized) {
+			extraJsonInitialized = true
+			return
 		}
+		connection.extraJson = nextExtraJson
 	})
 
 	onMount(() => {
@@ -154,8 +174,8 @@
 	})
 
 	onDestroy(() => {
-		socket.off("refreshModels")
-		socket.off("testConnection")
+		socket.off("connections:refreshModels")
+		socket.off("connections:test")
 	})
 </script>
 
@@ -262,38 +282,50 @@
 				</div>
 			</div>
 			<section class="w-full space-y-4 pt-4">
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="useChat">
+				<Switch
+					name="useChat"
+					checked={ollamaFields.useChat}
+					onCheckedChange={(e) => (ollamaFields!.useChat = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">
 						Use Chat Mode
-					</label>
-					<Switch
-						name="useChat"
-						checked={ollamaFields.useChat}
-						onCheckedChange={(e) =>
-							(ollamaFields!.useChat = e.checked)}
-						aria-labelledby="useChat"
-					/>
-				</div>
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="stream">Stream</label>
-					<Switch
-						name="stream"
-						checked={ollamaFields.stream}
-						onCheckedChange={(e) =>
-							(ollamaFields!.stream = e.checked)}
-						aria-labelledby="stream"
-					/>
-				</div>
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="think">Think</label>
-					<Switch
-						name="think"
-						checked={ollamaFields.think}
-						onCheckedChange={(e) =>
-							(ollamaFields!.think = e.checked)}
-						aria-labelledby="think"
-					/>
-				</div>
+					</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+					>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
+				<Switch
+					name="stream"
+					checked={ollamaFields.stream}
+					onCheckedChange={(e) => (ollamaFields!.stream = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">Stream</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+					>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
+				<Switch
+					name="think"
+					checked={ollamaFields.think}
+					onCheckedChange={(e) => (ollamaFields!.think = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">Think</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+					>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
 			</section>
 		{/if}
 	</details>

@@ -1,7 +1,9 @@
 import {
 	BaseConnectionAdapter,
-	type AdapterExports
+	type AdapterExports,
+	type BasePromptChat
 } from "./BaseConnectionAdapter"
+import { type CompiledPrompt } from "../utils/promptBuilder"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { TokenCounters } from "../utils/TokenCounterManager"
 import { OpenAI } from "openai"
@@ -10,30 +12,38 @@ import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 import type {
 	ChatCompletionCreateParamsBase,
 	ChatCompletionMessageParam
-} from "../../../../node_modules/openai/src/resources/chat/completions/completions"
+} from "openai/resources/chat/completions/completions"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import { openAISamplingKeyMap } from "$lib/shared/utils/samplerMappings"
+import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
+import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
 
 export class OpenAIChatAdapter extends BaseConnectionAdapter {
+	private abortController?: AbortController
+
 	constructor({
 		connection,
 		sampling,
 		contextConfig,
 		promptConfig,
 		chat,
-		currentCharacterId
+		currentCharacterId,
+		tokenCounter,
+		tokenLimit,
+		contextThresholdPercent,
+		generatingMessageMetadata
 	}: {
 		connection: SelectConnection
 		sampling: SelectSamplingConfig
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
-		chat: SelectChat & {
-			chatCharacters?: (SelectChatCharacter & {
-				character: SelectCharacter
-			})[]
-			chatPersonas?: (SelectChatPersona & { persona: SelectPersona })[]
-			chatMessages: SelectChatMessage[]
-		}
-		currentCharacterId: number
+		chat: BasePromptChat
+		currentCharacterId?: number | null
+		tokenCounter?: TokenCounters
+		tokenLimit?: number
+		contextThresholdPercent?: number
+		generatingMessageMetadata?: any
 	}) {
 		super({
 			connection,
@@ -41,15 +51,19 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 			contextConfig,
 			promptConfig,
 			chat,
-			currentCharacterId,
-			tokenCounter: new TokenCounters(
-				connection.tokenCounter || TokenCounterOptions.ESTIMATE
-			),
+			currentCharacterId: currentCharacterId ?? null,
+			tokenCounter:
+				tokenCounter ||
+				new TokenCounters(
+					connection.tokenCounter || TokenCounterOptions.ESTIMATE
+				),
 			tokenLimit:
-				typeof sampling.contextTokens === "number"
+				tokenLimit ||
+				(typeof sampling.contextTokens === "number"
 					? sampling.contextTokens
-					: 4096,
-			contextThresholdPercent: 0.9
+					: 4096),
+			contextThresholdPercent: contextThresholdPercent || 0.9,
+			generatingMessageMetadata
 		})
 	}
 
@@ -64,12 +78,20 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 	async generate(): Promise<{
 		completionResult:
 			| string
-			| ((cb: (chunk: string) => void) => Promise<void>)
+			| ((
+					contentCb: (chunk: string) => void,
+					thinkingCb?: (chunk: string) => void
+			  ) => Promise<void>)
 		compiledPrompt: CompiledPrompt
 		isAborted: boolean
+		thinkingContent?: string
 	}> {
-		const apiKey = this.connection.extraJson?.apiKey
-		const baseURL = this.connection.baseUrl || connectionDefaults.baseUrl
+		const apiKey = decryptApiKeyField(this.connection.extraJson?.apiKey)
+		const baseURL =
+			normalizeBaseUrl(this.connection.baseUrl) ||
+			normalizeBaseUrl(
+				CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT].baseUrl
+			)
 		const model = this.connection.model || "gpt-3.5-turbo"
 		const stream = this.connection.extraJson?.stream || false
 		const compiledPrompt: CompiledPrompt = await this.compilePrompt({})
@@ -86,38 +108,79 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		const params: ChatCompletionCreateParamsBase = {
 			model,
 			messages,
-			max_tokens: this.sampling.responseTokensEnabled
-				? this.sampling.responseTokens || 2048
-				: 2048
+			...this.mapSamplingConfig(),
+			// Several OpenAI-compatible backends reject json_object mode unless
+			// the word "JSON" appears somewhere in the prompt. Every caller that
+			// sets responseFormat here sends a prompt whose first line states
+			// the JSON contract, so this holds — but it is a real constraint on
+			// those prompts, not an incidental detail.
+			// With a schema this upgrades to json_schema mode. `strict: true` is
+			// safe here because jsonSchemaToGbnf's contract already requires
+			// what strict mode requires — additionalProperties:false and every
+			// property listed in `required` — so a schema that reaches this
+			// line has necessarily satisfied both.
+			//
+			// Backends vary: the OpenAI-compatible zoo supports json_object far
+			// more widely than json_schema, so this is the one adapter where a
+			// schema may be rejected by a server that accepts plain JSON mode.
+			...(this.responseFormat === "json"
+				? this.responseSchema
+					? {
+							response_format: {
+								type: "json_schema" as const,
+								json_schema: {
+									name: "response",
+									strict: true,
+									schema: this.responseSchema
+								}
+							}
+						}
+					: { response_format: { type: "json_object" as const } }
+				: {})
 		}
 
 		const promptFormat = this.connection?.extraJson?.prerenderPrompt
 			? this.connection.promptFormat || "chatml"
 			: PromptFormats.OPENAI
 
-		// Add stop string if present in connection or sampling
-		params["stop"] =
-			StopStrings.get({
-				format: promptFormat,
-				characters: this.chat.chatCharacters?.map((cc) => cc.character),
-				personas: this.chat.chatPersonas?.map((cp) => cp.persona),
-				currentCharacterId: this.currentCharacterId
-			}) || []
+		// In native chat completion mode (no pre-rendered template), don't send role-label
+		// stop strings — they override the model's native stop tokens (e.g. <|im_end|> for
+		// ChatML models like Qwen) in servers such as Ollama's OpenAI compatibility layer.
+		// Only apply stop strings when pre-rendering, where role labels are plain text.
+		params["stop"] = this.connection?.extraJson?.prerenderPrompt
+			? StopStrings.get({
+					format: promptFormat,
+					characters:
+						this.chat.chatCharacters?.map((cc) => cc.character) ||
+						[],
+					personas:
+						this.chat.chatPersonas?.map((cp) => cp.persona) || [],
+					currentCharacterId: this.currentCharacterId ?? undefined
+				}) || []
+			: []
 
 		const openaiClient = new OpenAI({
 			apiKey,
-			baseURL: baseURL || undefined
+			baseURL: baseURL || undefined,
+			defaultHeaders: {
+				"User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)"
+			}
 		})
+
+		this.abortController = new AbortController()
 
 		try {
 			if (stream) {
 				return {
-					completionResult: async (cb: (chunk: string) => void) => {
+					completionResult: async (
+						contentCb: (chunk: string) => void,
+						_thinkingCb?: (chunk: string) => void
+					) => {
 						const streamResp =
-							await openaiClient.chat.completions.create({
-								...params,
-								stream: true
-							})
+							await openaiClient.chat.completions.create(
+								{ ...params, stream: true },
+								{ signal: this.abortController?.signal }
+							)
 						for await (const part of streamResp as any) {
 							if (this.isAborting) break
 							if (
@@ -126,7 +189,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 								part.choices[0].delta &&
 								part.choices[0].delta.content
 							) {
-								cb(part.choices[0].delta.content)
+								contentCb(part.choices[0].delta.content)
 							}
 						}
 					},
@@ -134,8 +197,10 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 					isAborted: this.isAborting
 				}
 			} else {
-				const response =
-					await openaiClient.chat.completions.create(params)
+				const response = await openaiClient.chat.completions.create(
+					{ ...params, stream: false },
+					{ signal: this.abortController?.signal }
+				)
 				let content = ""
 				if (
 					response.choices &&
@@ -176,51 +241,35 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 			if (key.endsWith("Enabled")) continue
 			const enabledKey = key + "Enabled"
 			if ((this.sampling as any)[enabledKey] === false) continue
-			// Map to OpenAI parameter names if needed
-			result[key] = value
+			if (openAISamplingKeyMap[key]) {
+				result[openAISamplingKeyMap[key]] = value
+			}
 		}
 		return result
 	}
 
 	abort() {
 		this.isAborting = true
-		// TODO: OpenAI does not support aborting requests directly.
+		this.abortController?.abort()
 	}
-}
-
-const connectionDefaults = {
-	type: CONNECTION_TYPE.OPENAI_CHAT,
-	baseUrl: "",
-	promptFormat: PromptFormats.VICUNA,
-	tokenCounter: TokenCounterOptions.ESTIMATE,
-	extraJson: {
-		stream: true,
-		prerenderPrompt: false,
-		apiKey: ""
-	}
-}
-
-const samplingKeyMap: Record<string, string> = {
-	temperature: "temperature",
-	topP: "top_p",
-	topK: "top_k",
-	frequencyPenalty: "frequency_penalty",
-	presencePenalty: "presence_penalty",
-	responseTokens: "max_tokens",
-	stop: "stop",
-	logitBias: "logit_bias",
-	seed: "seed"
 }
 
 async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
 	try {
-		const apiKey = connection.extraJson?.apiKey
-		const baseURL = connection.baseUrl || connectionDefaults.baseUrl
+		const apiKey = decryptApiKeyField(connection.extraJson?.apiKey)
+		const baseURL =
+			normalizeBaseUrl(connection.baseUrl) ||
+			normalizeBaseUrl(
+				CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT].baseUrl
+			)
 		const openai = new OpenAI({
 			apiKey,
-			baseURL: baseURL || undefined
+			baseURL: baseURL || undefined,
+			defaultHeaders: {
+				"User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)"
+			}
 		})
 		const res = await openai.models.list()
 		if (res && Array.isArray(res.data)) {
@@ -241,11 +290,18 @@ async function testConnection(
 	connection: SelectConnection
 ): Promise<{ ok: boolean; error?: string }> {
 	try {
-		const apiKey = connection.extraJson?.apiKey
-		const baseURL = connection.baseUrl || connectionDefaults.baseUrl
+		const apiKey = decryptApiKeyField(connection.extraJson?.apiKey)
+		const baseURL =
+			normalizeBaseUrl(connection.baseUrl) ||
+			normalizeBaseUrl(
+				CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT].baseUrl
+			)
 		const openai = new OpenAI({
 			apiKey,
-			baseURL: baseURL || undefined
+			baseURL: baseURL || undefined,
+			defaultHeaders: {
+				"User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)"
+			}
 		})
 		// Try to list models as a test
 		try {
@@ -272,8 +328,8 @@ const exports: AdapterExports = {
 	Adapter: OpenAIChatAdapter,
 	listModels,
 	testConnection,
-	connectionDefaults,
-	samplingKeyMap
+	connectionDefaults: CONNECTION_DEFAULTS[CONNECTION_TYPE.OPENAI_CHAT],
+	samplingKeyMap: openAISamplingKeyMap
 }
 
 export default exports

@@ -1,7 +1,7 @@
 <script lang="ts">
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { getContext, onDestroy, onMount } from "svelte"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { z } from "zod"
@@ -9,6 +9,8 @@
 	import PersonaListItem from "../listItems/PersonaListItem.svelte"
 	import ChatListItem from "../listItems/ChatListItem.svelte"
 	import LorebookListItem from "../listItems/LorebookListItem.svelte"
+	import EmptyState from "../EmptyState.svelte"
+	import PanelNavHeader from "../panels/PanelNavHeader.svelte"
 	import { goto } from "$app/navigation"
 
 	interface Props {
@@ -17,10 +19,11 @@
 
 	let { onclose = $bindable() }: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	const panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
 
 	let tagsList: SelectTag[] = $state([])
+	let isLoading = $state(true)
 	let selectedTag: SelectTag | null = $state(null)
 	let search = $state("")
 	let isCreating = $state(false)
@@ -34,11 +37,16 @@
 	let showDeleteModal = $state(false)
 	let tagToDelete: SelectTag | null = $state(null)
 
-	// Related data for selected tag
-	let relatedCharacters: SelectCharacter[] = $state([])
-	let relatedPersonas: SelectPersona[] = $state([])
+	// Related data for selected tag — these come back from "tags:getRelatedData"
+	// with only a display-column subset (see registerTagHandlers), so they're
+	// Partial, matching what the *ListItem components expect.
+	let relatedCharacters: Partial<SelectCharacter>[] = $state([])
+	let relatedPersonas: Partial<SelectPersona>[] = $state([])
 	let relatedLorebooks: SelectLorebook[] = $state([])
-	let relatedChats: SelectChat[] = $state([])
+	// tags:getRelatedData never actually populates chats server-side today
+	// (see registerTagHandlers), so this stays empty at runtime — typed to
+	// match ChatListItem's expected shape regardless.
+	let relatedChats: Sockets.Chats.List.Response["chatList"] = $state([])
 
 	// Zod validation schema
 	const tagSchema = z.object({
@@ -217,7 +225,7 @@
 	function handleTagClick(tag: SelectTag) {
 		selectedTag = tag
 		// Load related data for the selected tag
-		socket.emit("tagRelatedData", { tagId: tag.id })
+		socket.emit("tags:getRelatedData", { tagId: tag.id })
 	}
 
 	function validateNewTag(): boolean {
@@ -263,13 +271,13 @@
 	function createTag() {
 		if (!validateNewTag()) return
 
-		const tag: InsertTag = {
+		const tag: Omit<InsertTag, "userId"> = {
 			name: newTagName.trim(),
 			description: newTagDescription.trim() || null,
 			colorPreset: newTagColorPreset
 		}
 
-		socket.emit("createTag", { tag })
+		socket.emit("tags:create", { tag })
 		isCreating = false
 	}
 
@@ -283,16 +291,17 @@
 			colorPreset: editTagColorPreset
 		}
 
-		socket.emit("updateTag", { tag })
+		socket.emit("tags:update", { tag })
 		isEditing = false
 	}
 
 	function confirmDelete() {
 		if (!tagToDelete) return
-		socket.emit("deleteTag", { id: tagToDelete.id })
+		const deletedId = tagToDelete.id
+		socket.emit("tags:delete", { id: deletedId })
 		showDeleteModal = false
 		tagToDelete = null
-		if (selectedTag?.id === tagToDelete.id) {
+		if (selectedTag?.id === deletedId) {
 			selectedTag = null
 		}
 	}
@@ -316,24 +325,24 @@
 		editTagColorPreset = "preset-filled-primary-500"
 	}
 
-	function handleCharacterClick(character: SelectCharacter) {
+	function handleCharacterClick(character: Partial<SelectCharacter>) {
 		panelsCtx.digest.chatCharacterId = character.id
 		panelsCtx.openPanel({ key: "chats", toggle: false })
 	}
 
-	function handleCharacterEditClick(character: SelectCharacter) {
+	function handleCharacterEditClick(character: Partial<SelectCharacter>) {
 		panelsCtx.digest.characterId = character.id
-		panelsCtx.openPanel({ key: "characters", toggle: false})
+		panelsCtx.openPanel({ key: "characters", toggle: false })
 	}
 
-	function handlePersonaClick(persona: SelectPersona) {
+	function handlePersonaClick(persona: Partial<SelectPersona>) {
 		panelsCtx.digest.chatPersonaId = persona.id
 		panelsCtx.openPanel({ key: "chats", toggle: false })
 	}
 
-	function handlePersonaEditClick(persona: SelectPersona) {
-		panelsCtx.digest.characterId = persona.id
-		panelsCtx.openPanel({ key: "personas", toggle: false})
+	function handlePersonaEditClick(persona: Partial<SelectPersona>) {
+		panelsCtx.digest.personaId = persona.id
+		panelsCtx.openPanel({ key: "personas", toggle: false })
 	}
 
 	function handleLorebookClick(lorebook: SelectLorebook) {
@@ -341,28 +350,38 @@
 		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
 	}
 
-	function handleChatClick(chat: SelectChat) {
+	function handleChatClick(chat: Sockets.Chats.List.Response["chatList"][0]) {
 		goto(`/chats/${chat.id}`)
+		panelsCtx.fullscreenPanel = null
 	}
 
-	function handleChatEditClick(chat: SelectChat) {
+	function handleChatEditClick(
+		chat: Sockets.Chats.List.Response["chatList"][0]
+	) {
 		panelsCtx.digest.chatId = chat.id
-		panelsCtx.openPanel({ key: "chats", toggle: false})
+		panelsCtx.openPanel({ key: "chats", toggle: false })
 	}
 
 	onMount(() => {
-		socket.on("tagsList", (msg: any) => {
+		socket.on("tags:list", (msg: any) => {
 			tagsList = msg.tagsList || []
+			isLoading = false
+		})
+		// The generic **:error listener in Layout.svelte already toasts this —
+		// this just stops the spinner from spinning forever if the initial
+		// fetch fails, so it settles into the (accurate enough) empty state.
+		socket.on("tags:list:error", () => {
+			isLoading = false
 		})
 
-		socket.on("createTag", (msg: any) => {
+		socket.on("tags:create", (msg: any) => {
 			toaster.success({
 				title: "Tag Created",
 				description: `Tag "${msg.tag.name}" created successfully.`
 			})
 		})
 
-		socket.on("updateTag", (msg: any) => {
+		socket.on("tags:update", (msg: any) => {
 			selectedTag = msg.tag
 			toaster.success({
 				title: "Tag Updated",
@@ -370,21 +389,21 @@
 			})
 		})
 
-		socket.on("deleteTag", (msg: any) => {
+		socket.on("tags:delete", (msg: any) => {
 			toaster.success({
 				title: "Tag Deleted",
 				description: "Tag deleted successfully."
 			})
 		})
 
-		socket.on("tagRelatedData", (msg: any) => {
-			relatedCharacters = msg.characters || []
-			relatedPersonas = msg.personas || []
-			relatedLorebooks = msg.lorebooks || []
-			relatedChats = msg.chats || []
+		socket.on("tags:getRelatedData", (msg: any) => {
+			relatedCharacters = msg.tagData.characters || []
+			relatedPersonas = msg.tagData.personas || []
+			relatedLorebooks = msg.tagData.lorebooks || []
+			relatedChats = msg.tagData.chats || []
 		})
 
-		socket.emit("tagsList", {})
+		socket.emit("tags:list", {})
 
 		onclose = async () => {
 			return true
@@ -392,11 +411,12 @@
 	})
 
 	onDestroy(() => {
-		socket.off("tagsList")
-		socket.off("createTag")
-		socket.off("updateTag")
-		socket.off("deleteTag")
-		socket.off("tagRelatedData")
+		socket.off("tags:list")
+		socket.off("tags:list:error")
+		socket.off("tags:create")
+		socket.off("tags:update")
+		socket.off("tags:delete")
+		socket.off("tags:getRelatedData")
 		onclose = undefined
 	})
 </script>
@@ -405,46 +425,48 @@
 	{#if selectedTag && !isEditing}
 		<!-- Selected tag view -->
 		<div class="mb-4">
-			<button
-				class="btn btn-sm preset-filled-surface-500 mb-3"
-				onclick={() => {
-					selectedTag = null
-				}}
-			>
-				<Icons.ArrowLeft size={16} />
-				Back to Tags
-			</button>
-
-			<div
-				class="border-primary-500 bg-surface-50-950 mb-4 rounded-lg border p-4"
-			>
-				<div class="mb-2 flex items-center justify-between">
-					<h2 class="text-primary-500 text-xl font-bold">
-						{selectedTag.name}
-					</h2>
-					<div class="flex gap-2">
+			<div class="mb-4">
+				<PanelNavHeader
+					title={selectedTag.name}
+					onBack={() => {
+						selectedTag = null
+					}}
+					backLabel="Back to tags"
+					actionsLabel="Tag"
+				>
+					{#snippet primaryAction()}
 						<button
-							class="btn btn-sm text-primary-500 p-2"
+							class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
 							onclick={handleEditClick}
-							title="Rename Tag"
+							title="Edit Tag"
+							aria-label="Edit Tag"
+							type="button"
 						>
-							<Icons.Edit size={16} />
+							<Icons.Pencil size={16} aria-hidden="true" />
 						</button>
+					{/snippet}
+					{#snippet actions()}
 						<button
-							class="btn btn-sm text-error-500 p-2"
+							class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
 							onclick={handleDeleteClick}
-							title="Delete Tag"
+							type="button"
 						>
-							<Icons.Trash2 size={16} />
+							<Icons.Trash2 size={16} aria-hidden="true" />
+							<span>Delete</span>
 						</button>
-					</div>
-				</div>
-				{#if selectedTag.description}
+					{/snippet}
+				</PanelNavHeader>
+			</div>
+
+			{#if selectedTag.description}
+				<div
+					class="border-primary-500 bg-surface-50-950 mb-4 rounded-lg border p-4"
+				>
 					<p class="text-muted-foreground text-sm">
 						{selectedTag.description}
 					</p>
-				{/if}
-			</div>
+				</div>
+			{/if}
 
 			<!-- Related sections -->
 			{#if relatedCharacters.length > 0}
@@ -460,7 +482,8 @@
 							<CharacterListItem
 								{character}
 								onclick={handleCharacterClick}
-								onEdit={() => handleCharacterEditClick(character)}
+								onEdit={() =>
+									handleCharacterEditClick(character)}
 								showControls={true}
 								contentTitle="Go to character chats"
 							/>
@@ -525,7 +548,9 @@
 							<ChatListItem
 								{chat}
 								onclick={handleChatClick}
-								onEdit={() => {handleChatEditClick(chat)}}
+								onEdit={() => {
+									handleChatEditClick(chat)
+								}}
 								showControls={true}
 								contentTitle="Go to chat"
 							/>
@@ -568,7 +593,7 @@
 						name="tagName"
 						type="text"
 						class="input w-full {validationErrors.name
-							? 'border-red-500'
+							? 'border-error-500'
 							: ''}"
 						bind:value={newTagName}
 						placeholder="Enter tag name"
@@ -586,7 +611,7 @@
 					{#if validationErrors.name}
 						<p
 							id="name-error"
-							class="mt-1 text-sm text-red-500"
+							class="text-error-500 mt-1 text-sm"
 							role="alert"
 						>
 							{validationErrors.name}
@@ -669,7 +694,7 @@
 						name="editTagName"
 						type="text"
 						class="input w-full {editValidationErrors.name
-							? 'border-red-500'
+							? 'border-error-500'
 							: ''}"
 						bind:value={editTagName}
 						placeholder="Enter tag name"
@@ -689,7 +714,7 @@
 					{#if editValidationErrors.name}
 						<p
 							id="edit-name-error"
-							class="mt-1 text-sm text-red-500"
+							class="text-error-500 mt-1 text-sm"
 							role="alert"
 						>
 							{editValidationErrors.name}
@@ -750,6 +775,7 @@
 				title="Create New Tag"
 			>
 				<Icons.Plus size={16} />
+				New
 			</button>
 		</div>
 
@@ -757,15 +783,28 @@
 			<input
 				type="text"
 				placeholder="Search tags..."
+				aria-label="Search tags"
 				class="input"
 				bind:value={search}
 			/>
 		</div>
 
-		{#if filteredTags.length === 0}
-			<div class="text-muted-foreground relative w-100 py-8 text-center">
-				No tags found.
+		{#if isLoading}
+			<div class="flex items-center justify-center py-8">
+				<Icons.Loader2
+					size={20}
+					class="text-surface-400 animate-spin"
+				/>
 			</div>
+		{:else if filteredTags.length === 0}
+			<EmptyState
+				icon={Icons.Tag}
+				message={search
+					? `No tags found matching "${search}".`
+					: "No tags yet — create one to get started."}
+				ctaLabel={search ? undefined : "New Tag"}
+				onCta={search ? undefined : () => (isCreating = true)}
+			/>
 		{:else}
 			<!-- Beautiful multi-row flex layout using Skeleton chips -->
 			<div class="flex flex-wrap gap-2">
@@ -787,35 +826,44 @@
 
 <!-- Delete confirmation modal -->
 {#if showDeleteModal}
-	<Modal
+	<Dialog
 		open={showDeleteModal}
 		onOpenChange={(e) => (showDeleteModal = e.open)}
-		contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm"
-		backdropClasses="backdrop-blur-sm"
 	>
-		{#snippet content()}
-			<div class="p-6">
-				<h2 class="mb-2 text-lg font-bold">Delete Tag?</h2>
-				<p class="mb-4">
-					Are you sure you want to delete the tag "{tagToDelete?.name}"?
-					This action cannot be undone and will remove the tag from
-					all associated items.
-				</p>
-				<div class="flex justify-end gap-2">
-					<button
-						class="btn preset-filled-surface-500"
-						onclick={cancelDelete}
-					>
-						Cancel
-					</button>
-					<button
-						class="btn preset-filled-error-500"
-						onclick={confirmDelete}
-					>
-						Delete
-					</button>
-				</div>
-			</div>
-		{/snippet}
-	</Modal>
+		<Portal>
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
+			>
+				<Dialog.Content
+					class="card bg-surface-100-900 max-w-[95vw] space-y-4 p-4 shadow-xl"
+				>
+					<div class="p-6">
+						<h2 class="mb-2 text-lg font-bold">Delete Tag?</h2>
+						<p class="mb-4">
+							Are you sure you want to delete the tag "{tagToDelete?.name}"?
+							This action cannot be undone and will remove the tag
+							from all associated items.
+						</p>
+						<div class="flex justify-end gap-2">
+							<button
+								class="btn preset-filled-surface-500"
+								onclick={cancelDelete}
+							>
+								Cancel
+							</button>
+							<button
+								class="btn preset-filled-error-500"
+								onclick={confirmDelete}
+							>
+								Delete
+							</button>
+						</div>
+					</div>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
 {/if}

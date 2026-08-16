@@ -1,0 +1,1 @@
+ALTER TABLE "narrative_nodes" DROP COLUMN "content";

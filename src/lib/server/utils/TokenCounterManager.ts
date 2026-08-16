@@ -1,12 +1,17 @@
-import { countTokens as countGpt2Tokens } from "gpt-tokenizer/encoding/r50k_base"
-import { countTokens as countGpt35Tokens } from "gpt-tokenizer/encoding/cl100k_base"
-import { countTokens as countGpt4Tokens } from "gpt-tokenizer/encoding/cl100k_base"
-import { countTokens as countGpt4oTokens } from "gpt-tokenizer/encoding/o200k_base"
 import llamaTokenizer from "llama-tokenizer-js"
-import llama3Tokenizer from "llama3-tokenizer-js"
 import mistralTokenizer from "mistral-tokenizer-js"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
-import { fromPreTrained as getGemmaTokenizer } from "@lenml/tokenizer-gemma"
+
+// gpt-tokenizer, llama3-tokenizer-js, and @lenml/tokenizer-gemma all use
+// Unicode regex property escapes (\p{L}, \p{N}, etc.) in their BPE
+// pretokenization patterns — the standard tiktoken-style split regex. That
+// throws a SyntaxError while PARSING (not running) under nodejs-mobile's
+// Android build of V8, which lacks full ICU support. Dynamic imports defer
+// that parse until a counter that actually needs one of these is used,
+// instead of crashing the whole app the moment this module loads (this file
+// is core, always-loaded infrastructure — every connection adapter uses
+// TokenCounters). llama-tokenizer-js and mistral-tokenizer-js don't use
+// \p{...} and stay as ordinary static imports above.
 
 export interface TokenCounter {
 	countTokens(text: string): Promise<number> | number
@@ -23,26 +28,36 @@ export class EstimateTokenCounter implements TokenCounter {
 }
 
 export class OpenAIGPT2TokenCounter implements TokenCounter {
-	countTokens(text: string): number {
-		return countGpt2Tokens(text)
+	async countTokens(text: string): Promise<number> {
+		const { countTokens } = await import("gpt-tokenizer/encoding/r50k_base")
+		return countTokens(text)
 	}
 }
 
 export class OpenAIGPT35TokenCounter implements TokenCounter {
-	countTokens(text: string): number {
-		return countGpt35Tokens(text)
+	async countTokens(text: string): Promise<number> {
+		const { countTokens } = await import(
+			"gpt-tokenizer/encoding/cl100k_base"
+		)
+		return countTokens(text)
 	}
 }
 
 export class OpenAIGPT4TokenCounter implements TokenCounter {
-	countTokens(text: string): number {
-		return countGpt4Tokens(text)
+	async countTokens(text: string): Promise<number> {
+		const { countTokens } = await import(
+			"gpt-tokenizer/encoding/cl100k_base"
+		)
+		return countTokens(text)
 	}
 }
 
 export class OpenAIGPT4oTokenCounter implements TokenCounter {
-	countTokens(text: string): number {
-		return countGpt4oTokens(text)
+	async countTokens(text: string): Promise<number> {
+		const { countTokens } = await import(
+			"gpt-tokenizer/encoding/o200k_base"
+		)
+		return countTokens(text)
 	}
 }
 
@@ -53,7 +68,8 @@ export class LlamaTokenCounter implements TokenCounter {
 }
 
 export class Llama3TokenCounter implements TokenCounter {
-	countTokens(text: string): number {
+	async countTokens(text: string): Promise<number> {
+		const { default: llama3Tokenizer } = await import("llama3-tokenizer-js")
 		return llama3Tokenizer.encode(text).length
 	}
 }
@@ -71,10 +87,30 @@ export class AnthropicClaudeTokenCounter implements TokenCounter {
 }
 
 export class CohereTokenCounter implements TokenCounter {
-	countTokens(text: string): number {
-		const tokenizer = getGemmaTokenizer()
+	// fromPreTrained() rebuilds the tokenizer's vocab/merges from scratch —
+	// expensive, and unlike the other counters here it was being called on
+	// every single countTokens() invocation rather than once. This class is
+	// instantiated once as a static singleton (see TokenCounters.counters
+	// below), so caching the built tokenizer on the instance persists it for
+	// the process's lifetime. The promise itself (not just the eventual
+	// value) is cached so concurrent calls before the first load finishes
+	// share one in-flight load instead of racing to build it twice.
+	private tokenizerPromise?: Promise<
+		ReturnType<typeof import("@lenml/tokenizer-gemma").fromPreTrained>
+	>
+
+	private getTokenizer() {
+		if (!this.tokenizerPromise) {
+			this.tokenizerPromise = import("@lenml/tokenizer-gemma").then(
+				({ fromPreTrained }) => fromPreTrained()
+			)
+		}
+		return this.tokenizerPromise
+	}
+
+	async countTokens(text: string): Promise<number> {
+		const tokenizer = await this.getTokenizer()
 		return tokenizer.encode(text, { add_special_tokens: false }).length
-		//return Math.ceil(text.length / 5)
 	}
 }
 
@@ -197,15 +233,6 @@ export class TokenCounters {
 						(o) => o.value === TokenCounterOptions.GEMINI
 					)!.label,
 					counter: new GeminiTokenCounter()
-				}
-			],
-			[
-				TokenCounterOptions.GEMMA,
-				{
-					label: TokenCounterOptions.options.find(
-						(o) => o.value === TokenCounterOptions.GEMMA
-					)!.label,
-					counter: new GemmaTokenCounter()
 				}
 			],
 			[

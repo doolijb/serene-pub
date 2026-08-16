@@ -1,232 +1,481 @@
 import { db } from "$lib/server/db"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { user as loadUser, user } from "./users"
+import { user as loadUser, user, usersCurrent } from "./users"
+import { userSettingsGet } from "./userSettings"
+import { systemSettingsGet } from "./systemSettings"
 import { getConnectionAdapter } from "../utils/getConnectionAdapter"
+import {
+	withConnectionDefaults,
+	stableStringify
+} from "$lib/shared/utils/connectionDefaults"
+import type { Handler } from "$lib/shared/events"
+import { loginRateLimit } from "$lib/server/services/loginRateLimit"
+import {
+	encryptApiKeyField,
+	decryptApiKeyField
+} from "$lib/server/utils/tokenCrypto"
+
+// extraJson.apiKey is encrypted at rest (tokenCrypto.ts) — stored plaintext
+// before this fix. A plain-string value is a fresh/edited key from the
+// client (or a legacy row); already-encrypted-envelope values (already
+// re-saved once through this same path) are left untouched rather than
+// re-encrypted on every unrelated field edit.
+function withEncryptedApiKey<T extends { extraJson?: Record<string, any> }>(
+	data: T
+): T {
+	if (!data.extraJson || typeof data.extraJson.apiKey !== "string") {
+		return data
+	}
+	if (!data.extraJson.apiKey) return data
+	return {
+		...data,
+		extraJson: {
+			...data.extraJson,
+			apiKey: encryptApiKeyField(data.extraJson.apiKey)
+		}
+	}
+}
 
 // --- CONNECTIONS SOCKET HANDLERS ---
 
-export async function connectionsList(
-	socket: any,
-	message: Sockets.ConnectionsList.Call,
-	emitToUser: (event: string, data: any) => void
-) {
-	const connectionsList = await db.query.connections.findMany({
-		columns: {
-			id: true,
-			name: true,
-			type: true
-		},
-		orderBy: (c, { asc }) => [asc(c.type), asc(c.name)]
-	})
-	const res: Sockets.ConnectionsList.Response = { connectionsList }
-	emitToUser("connectionsList", res)
-}
-
-export async function connection(
-	socket: any,
-	message: Sockets.Connection.Call,
-	emitToUser: (event: string, data: any) => void
-) {
-	const connection = await db.query.connections.findFirst({
-		where: (c, { eq }) => eq(c.id, message.id)
-	})
-	if (!connection) {
-		const res = { error: "Connection not found." }
-		emitToUser("error", res)
-		return
-	}
-	const res: Sockets.Connection.Response = { connection }
-	emitToUser("connection", res)
-}
-
-export async function createConnection(
-	socket: any,
-	message: Sockets.CreateConnection.Call,
-	emitToUser: (event: string, data: any) => void
-) {
-	let data = { ...message.connection }
-	const Adapter = getConnectionAdapter(data.type)
-	data = { ...Adapter.connectionDefaults, ...data }
-	if ("id" in data) delete data.id
-	// try {
-	// 	const modelsRes = await Adapter.listModels(data as any)
-	// 	if (modelsRes.error) {
-	// 		const res = { error: modelsRes.error }
-	// 		emitToUser("error", res)
-	// 		return
-	// 	}
-	// 	if (!modelsRes.models || modelsRes.models.length === 0) {
-	// 		const res = { error: "No models found for this connection." }
-	// 		emitToUser("error", res)
-	// 	} else {
-	// 		data.model = modelsRes.models[0].id
-	// 	}
-	// } catch (error: any) {
-	// 	console.error("Error fetching models:", error)
-	// 	const res = { error: "Failed to fetch models for this connection." }
-	// 	emitToUser("error", res)
-	// 	return
-	// }
-	// Always remove id before insert to let DB auto-increment
-	if ("id" in data) delete data.id
-	const [conn] = await db.insert(schema.connections).values(data).returning()
-	await setUserActiveConnection(socket, { id: conn.id }, emitToUser)
-	await connectionsList(socket, {}, emitToUser)
-	const res: Sockets.CreateConnection.Response = { connection: conn }
-	emitToUser("createConnection", res)
-}
-
-export async function updateConnection(
-	socket: any,
-	message: Sockets.UpdateConnection.Call,
-	emitToUser: (event: string, data: any) => void
-) {
-	const id = message.connection.id
-	if ("id" in message.connection) delete (message.connection as any).id
-	const [updated] = await db
-		.update(schema.connections)
-		.set(message.connection)
-		.where(eq(schema.connections.id, id))
-		.returning()
-	await connection(socket, { id }, emitToUser)
-	const res: Sockets.UpdateConnection.Response = { connection: updated }
-	emitToUser("updateConnection", res)
-	await user(socket, {}, emitToUser)
-	await connectionsList(socket, {}, emitToUser)
-}
-
-export async function deleteConnection(
-	socket: any,
-	message: Sockets.DeleteConnection.Call,
-	emitToUser: (event: string, data: any) => void
-) {
-	const currentUser = await db.query.users.findFirst({
-		where: (u, { eq }) => eq(u.id, 1)
-	})
-	if (currentUser && currentUser.activeConnectionId === message.id) {
-		await setUserActiveConnection(socket, { id: null }, emitToUser)
-	}
-	await db
-		.delete(schema.connections)
-		.where(eq(schema.connections.id, message.id))
-	await connectionsList(socket, {}, emitToUser)
-	const res: Sockets.DeleteConnection.Response = { id: message.id }
-	emitToUser("deleteConnection", res)
-}
-
-export async function setUserActiveConnection(
-	socket: any,
-	message: Sockets.SetUserActiveConnection.Call,
-	emitToUser: (event: string, data: any) => void
-) {
-	const currentUser = await db.query.users.findFirst({
-		where: (u, { eq }) => eq(u.id, 1)
-	})
-	if (!currentUser) {
-		const res = { error: "User not found." }
-		emitToUser("error", res)
-		return
-	}
-	await db
-		.update(schema.users)
-		.set({
-			activeConnectionId: message.id
-		})
-		.where(eq(schema.users.id, currentUser.id))
-	// The user handler is not modularized yet, so call as in original
-	// @ts-ignore
-	await loadUser(socket, {}, emitToUser)
-	if (message.id) await connection(socket, { id: message.id }, emitToUser)
-	const res: Sockets.SetUserActiveConnection.Response = { ok: true }
-	emitToUser("setUserActiveConnection", res)
-}
-
-export async function testConnection(
-	socket: any,
-	message: Sockets.TestConnection.Call,
-	emitToUser: (event: string, data: any) => void
-) {
-	const { Adapter, testConnection, listModels } = getConnectionAdapter(
-		message.connection.type
-	)
-	if (!Adapter) {
-		const res: Sockets.TestConnection.Response = {
-			ok: false,
-			error: "Unsupported connection type.",
-			models: []
-		}
-		emitToUser("testConnection", res)
-		return
-	}
-
-	try {
-		const result = await testConnection(message.connection)
-		let models: any[] = []
-		let error: string | null = null
-		if (result.ok) {
-			const modelsRes = await listModels(message.connection)
-			if (modelsRes.error) {
-				emitToUser("error", {
-					error: modelsRes.error
-				})
-				return
-			}
-			models = modelsRes.models || []
-			error = modelsRes.error || null
-		} else {
-			error = result.error || "Connection failed."
-		}
-		const res: Sockets.TestConnection.Response = {
-			ok: result.ok,
-			error: error || null,
-			models
-		}
-		emitToUser("testConnection", res)
-	} catch (error: any) {
-		console.error("Connection test error:", error)
-		const res: Sockets.TestConnection.Response = {
-			ok: false,
-			error: error?.message || String(error) || "Connection failed.",
-			models: []
-		}
-		emitToUser("testConnection", res)
-	}
-}
-
-export async function refreshModels(
-	socket: any,
-	message: Sockets.RefreshModels.Call,
-	emitToUser: (event: string, data: any) => void
-) {
-	const { listModels } = getConnectionAdapter(message.connection.type)
-
-	try {
-		const result = await listModels(message.connection)
-		if (result.error) {
+export const connectionsList: Handler<
+	Sockets.Connections.List.Params,
+	Sockets.Connections.List.Response
+> = {
+	event: "connections:list",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
 			const res = {
-				error: result.error
+				error: "Access denied. Only admin users can manage connections."
 			}
 			emitToUser("error", res)
-		} else if (!result.models) {
-			const res: Sockets.RefreshModels.Response = {
-				error: "Failed to refresh models.",
+			throw new Error(
+				"Access denied. Only admin users can manage connections."
+			)
+		}
+
+		const connectionsList = await db.query.connections.findMany({
+			columns: {
+				id: true,
+				name: true,
+				type: true,
+				model: true,
+				baseUrl: true
+			},
+			orderBy: (c, { asc }) => [asc(c.type), asc(c.name)]
+		})
+		const res: Sockets.Connections.List.Response = { connectionsList }
+		emitToUser("connections:list", res)
+		return res
+	}
+}
+
+export const connectionsGet: Handler<
+	Sockets.Connections.Get.Params,
+	Sockets.Connections.Get.Response
+> = {
+	event: "connections:get",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const res = {
+				error: "Access denied. Only admin users can manage connections."
+			}
+			emitToUser("error", res)
+			throw new Error(
+				"Access denied. Only admin users can manage connections."
+			)
+		}
+
+		const raw = await db.query.connections.findFirst({
+			where: (c, { eq }) => eq(c.id, params.id)
+		})
+		if (!raw) {
+			const res = { error: "Connection not found." }
+			emitToUser("error", res)
+			throw new Error("Connection not found.")
+		}
+
+		// Backfill any fields missing their type's defaults (e.g. extraJson
+		// keys added to CONNECTION_DEFAULTS after this connection was
+		// created) and persist them *before* handing the record to the edit
+		// form. Without this, the form's own defaulting logic fills the gaps
+		// only in its local copy, which immediately diverges from the raw
+		// DB record still held as the "original" — a false "unsaved changes"
+		// state the moment the connection is opened.
+		let connection = raw
+		const merged = withConnectionDefaults(raw)
+		if (stableStringify(merged) !== stableStringify(raw)) {
+			const [updated] = await db
+				.update(schema.connections)
+				.set({
+					baseUrl: merged.baseUrl,
+					model: merged.model,
+					promptFormat: merged.promptFormat,
+					tokenCounter: merged.tokenCounter,
+					extraJson: merged.extraJson
+				})
+				.where(eq(schema.connections.id, params.id))
+				.returning()
+			connection = updated
+		}
+
+		// The edit form loads the real key back into its input on edit (same
+		// pattern as vectorization:listModels) — decrypt here, at the point
+		// it's about to leave the server, not earlier (the backfill-defaults
+		// comparison above deliberately operates on the still-encrypted
+		// envelope so it round-trips byte-for-byte when nothing actually
+		// changed).
+		if (connection.extraJson) {
+			connection = {
+				...connection,
+				extraJson: {
+					...connection.extraJson,
+					apiKey:
+						decryptApiKeyField(connection.extraJson.apiKey) ?? ""
+				}
+			}
+		}
+
+		const res: Sockets.Connections.Get.Response = { connection }
+		emitToUser("connections:get", res)
+		return res
+	}
+}
+
+export const connectionsCreate: Handler<
+	Sockets.Connections.Create.Params,
+	Sockets.Connections.Create.Response
+> = {
+	event: "connections:create",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const res = {
+				error: "Access denied. Only admin users can manage connections."
+			}
+			emitToUser("error", res)
+			throw new Error(
+				"Access denied. Only admin users can manage connections."
+			)
+		}
+
+		let data = { ...params.connection }
+		data = withConnectionDefaults(data as any)
+		data = withEncryptedApiKey(data)
+		if ("id" in data) delete data.id
+		// Always remove id before insert to let DB auto-increment
+		if ("id" in data) delete data.id
+		const [conn] = await db
+			.insert(schema.connections)
+			.values(data)
+			.returning()
+		// Auto-set as default only when no default exists yet (first connection)
+		const sysSettings = await db.query.systemSettings.findFirst({
+			columns: { defaultConnectionId: true }
+		})
+		if (!sysSettings?.defaultConnectionId) {
+			await connectionsSetUserActive.handler(
+				socket,
+				{ id: conn.id },
+				emitToUser
+			)
+		}
+		await connectionsList.handler(socket, {}, emitToUser)
+		const res: Sockets.Connections.Create.Response = { connection: conn }
+		emitToUser("connections:create", res)
+		return res
+	}
+}
+
+export const connectionsUpdate: Handler<
+	Sockets.Connections.Update.Params,
+	Sockets.Connections.Update.Response
+> = {
+	event: "connections:update",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const res = {
+				error: "Access denied. Only admin users can manage connections."
+			}
+			emitToUser("error", res)
+			throw new Error(
+				"Access denied. Only admin users can manage connections."
+			)
+		}
+
+		const id = params.connection.id
+		if ("id" in params.connection) delete (params.connection as any).id
+		const updateData = withEncryptedApiKey(params.connection)
+		const [updated] = await db
+			.update(schema.connections)
+			.set(updateData)
+			.where(eq(schema.connections.id, id))
+			.returning()
+		// connectionsGet.handler already builds the fully-processed record
+		// (CONNECTION_DEFAULTS backfill + decrypted apiKey) and broadcasts its
+		// own "connections:get" — reuse its return value here instead of the
+		// raw (still-encrypted, non-backfilled) `updated` row, so the
+		// "connections:update" ack itself carries a client-safe, fully
+		// processed connection the UI can use to reset its unsaved-changes
+		// baseline immediately, without waiting on/racing that second,
+		// incidental broadcast. `getResult.connection` is only null when the
+		// id isn't found, which can't be the case here (the update above just
+		// succeeded against it) — the `?? updated` fallback exists purely to
+		// satisfy Update.Response's non-null `connection` type.
+		const getResult = await connectionsGet.handler(socket, { id }, emitToUser)
+		const res: Sockets.Connections.Update.Response = {
+			connection: getResult.connection ?? updated
+		}
+		emitToUser("connections:update", res)
+		await user(socket, {}, emitToUser)
+		await connectionsList.handler(socket, {}, emitToUser)
+		return res
+	}
+}
+
+export const connectionsDelete: Handler<
+	Sockets.Connections.Delete.Params,
+	Sockets.Connections.Delete.Response
+> = {
+	event: "connections:delete",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const res = {
+				error: "Access denied. Only admin users can manage connections."
+			}
+			emitToUser("error", res)
+			throw new Error(
+				"Access denied. Only admin users can manage connections."
+			)
+		}
+
+		// Clear default connection in system settings if it's the one being deleted
+		const systemSettings = await db.query.systemSettings.findFirst({
+			columns: { id: true, defaultConnectionId: true }
+		})
+		if (systemSettings?.defaultConnectionId === params.id) {
+			await connectionsSetUserActive.handler(
+				socket,
+				{ id: null },
+				emitToUser
+			)
+		}
+
+		await db
+			.delete(schema.connections)
+			.where(eq(schema.connections.id, params.id))
+		await connectionsList.handler(socket, {}, emitToUser)
+		const res: Sockets.Connections.Delete.Response = { id: params.id }
+		emitToUser("connections:delete", res)
+		return res
+	}
+}
+
+export const connectionsSetUserActive: Handler<
+	Sockets.Connections.SetUserActive.Params,
+	Sockets.Connections.SetUserActive.Response
+> = {
+	event: "connections:setUserActive",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const res = {
+				error: "Access denied. Only admin users can set the default connection."
+			}
+			emitToUser("error", res)
+			throw new Error("Access denied.")
+		}
+
+		// Update system-wide default connection (replaces the old per-user active connection)
+		await db
+			.update(schema.systemSettings)
+			.set({ defaultConnectionId: params.id })
+			.where(eq(schema.systemSettings.id, 1))
+
+		if (params.id)
+			await connectionsGet.handler(socket, { id: params.id }, emitToUser)
+
+		const res: Sockets.Connections.SetUserActive.Response = {
+			ok: true,
+			id: params.id
+		}
+		emitToUser("connections:setUserActive", res)
+
+		// Push updated system settings and user so clients reflect the new default immediately
+		await systemSettingsGet.handler(socket, {}, emitToUser)
+		await usersCurrent.handler(socket, {}, emitToUser)
+
+		return res
+	}
+}
+
+export const connectionsTest: Handler<
+	Sockets.Connections.Test.Params,
+	Sockets.Connections.Test.Response
+> = {
+	event: "connections:test",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const res: Sockets.Connections.Test.Response = {
+				ok: false,
+				error: "Access denied. Only admin users can test connections.",
 				models: []
 			}
-			emitToUser("refreshModels", res)
-			return
+			emitToUser("error", res)
+			throw new Error(
+				"Access denied. Only admin users can test connections."
+			)
 		}
-		const res: Sockets.RefreshModels.Response = {
-			models: result.models,
-			error: null
+
+		// Instance-wide budget (not per-user) — every call here can reach an
+		// external host via the connection's own configured base URL, with
+		// no throttling otherwise, unlike the GitHub card source's own
+		// rate limiter for the same class of concern.
+		const rateLimitKey = "connections:test"
+		if (loginRateLimit.isRateLimited(rateLimitKey)) {
+			const res: Sockets.Connections.Test.Response = {
+				ok: false,
+				error: "Rate limited. Please wait a moment and try again.",
+				models: []
+			}
+			emitToUser("connections:test", res)
+			return res
 		}
-		emitToUser("refreshModels", res)
-	} catch (error: any) {
-		console.error("Refresh models error:", error)
-		const res: Sockets.RefreshModels.Response = {
-			error: "Failed to refresh models.",
-			models: []
+		loginRateLimit.recordFailedAttempt(rateLimitKey)
+
+		try {
+			// getConnectionAdapter always throws for an unsupported type
+			// rather than returning a falsy Adapter — moved inside this try
+			// (was previously outside it) so that throw produces this
+			// handler's own clean {ok:false, error, connectionId} response
+			// instead of an uncaught error.
+			const { testConnection, listModels } = await getConnectionAdapter(
+				params.connection.type
+			)
+			const result = await testConnection(params.connection)
+			let models: any[] = []
+			let error: string | null = null
+			if (result.ok) {
+				const modelsRes = await listModels(params.connection)
+				if (modelsRes.error) {
+					emitToUser("error", {
+						error: modelsRes.error
+					})
+					throw new Error(modelsRes.error)
+				}
+				models = modelsRes.models || []
+				error = modelsRes.error || null
+			} else {
+				error = result.error || "Connection failed."
+			}
+			const res: Sockets.Connections.Test.Response = {
+				ok: result.ok,
+				error: error || null,
+				models,
+				connectionId: params.connection?.id
+			}
+			emitToUser("connections:test", res)
+			return res
+		} catch (error: any) {
+			console.error("Connection test error:", error)
+			const res: Sockets.Connections.Test.Response = {
+				ok: false,
+				error: error?.message || String(error) || "Connection failed.",
+				models: [],
+				connectionId: params.connection?.id
+			}
+			emitToUser("connections:test", res)
+			return res
 		}
-		emitToUser("refreshModels", res)
 	}
+}
+
+export const connectionsRefreshModels: Handler<
+	Sockets.Connections.RefreshModels.Params,
+	Sockets.Connections.RefreshModels.Response
+> = {
+	event: "connections:refreshModels",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const res: Sockets.Connections.RefreshModels.Response = {
+				error: "Access denied. Only admin users can refresh models.",
+				models: []
+			}
+			emitToUser("error", res)
+			throw new Error(
+				"Access denied. Only admin users can refresh models."
+			)
+		}
+
+		const rateLimitKey = "connections:refreshModels"
+		if (loginRateLimit.isRateLimited(rateLimitKey)) {
+			const res: Sockets.Connections.RefreshModels.Response = {
+				error: "Rate limited. Please wait a moment and try again.",
+				models: []
+			}
+			emitToUser("connections:refreshModels", res)
+			return res
+		}
+		loginRateLimit.recordFailedAttempt(rateLimitKey)
+
+		try {
+			// getConnectionAdapter can throw for an unsupported type — moved
+			// inside this try so that surfaces as this handler's own clean
+			// error response instead of an uncaught error.
+			const { listModels } = await getConnectionAdapter(
+				params.connection.type
+			)
+			const result = await listModels(params.connection)
+			if (result.error) {
+				const res = {
+					error: result.error
+				}
+				emitToUser("error", res)
+				throw new Error(result.error)
+			} else if (!result.models) {
+				const res: Sockets.Connections.RefreshModels.Response = {
+					error: "Failed to refresh models.",
+					models: [],
+					connectionId: params.connection?.id
+				}
+				emitToUser("connections:refreshModels", res)
+				return res
+			}
+			const res: Sockets.Connections.RefreshModels.Response = {
+				models: result.models,
+				error: null,
+				connectionId: params.connection?.id
+			}
+			emitToUser("connections:refreshModels", res)
+			return res
+		} catch (error: any) {
+			console.error("Refresh models error:", error)
+			const res: Sockets.Connections.RefreshModels.Response = {
+				error: "Failed to refresh models.",
+				models: [],
+				connectionId: params.connection?.id
+			}
+			emitToUser("connections:refreshModels", res)
+			return res
+		}
+	}
+}
+
+// Registration function for all connection handlers
+export function registerConnectionHandlers(
+	socket: any,
+	emitToUser: (event: string, data: any) => void,
+	register: (
+		socket: any,
+		handler: Handler<any, any>,
+		emitToUser: (event: string, data: any) => void
+	) => void
+) {
+	register(socket, connectionsList, emitToUser)
+	register(socket, connectionsGet, emitToUser)
+	register(socket, connectionsCreate, emitToUser)
+	register(socket, connectionsUpdate, emitToUser)
+	register(socket, connectionsDelete, emitToUser)
+	register(socket, connectionsSetUserActive, emitToUser)
+	register(socket, connectionsTest, emitToUser)
+	register(socket, connectionsRefreshModels, emitToUser)
 }

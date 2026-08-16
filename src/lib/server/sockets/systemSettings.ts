@@ -1,173 +1,242 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
+import type { Handler } from "$lib/shared/events"
+import { isAndroidWrapper } from "$lib/server/utils"
+import { isLocalEmbeddingSupported } from "$lib/server/embedding"
 
-export async function systemSettings(
-	socket: any,
-	message: Sockets.SystemSettings.Call,
-	emitToUser: (event: string, data: any) => void
-) {
-	try {
-		const settings = await db.query.systemSettings.findFirst({
-			where: eq(schema.systemSettings.id, 1),
-			columns: {
-				id: false // We don't need the ID in the response
+export const systemSettingsGet: Handler<
+	Sockets.SystemSettings.Get.Params,
+	Sockets.SystemSettings.Get.Response
+> = {
+	event: "systemSettings:get",
+	handler: async (socket, params, emitToUser) => {
+		try {
+			// koboldCppManagedAdminPassword and the CharaVault credential fields
+			// are never read client-side (only used server-side) — exclude them
+			// here regardless of caller so they're never handed to any
+			// authenticated user's browser, not just hidden by client UI. The
+			// CharaVault connection status is surfaced separately via the
+			// admin-only cardSources:charaVault:status event instead.
+			const [
+				settings,
+				ollamaSettings,
+				koboldCppSettings,
+				koboldCppAdminPasswordRow
+			] = await Promise.all([
+				db.query.systemSettings.findFirst({
+					where: eq(schema.systemSettings.id, 1),
+					columns: {
+						id: false,
+						charaVaultEmail: false,
+						charaVaultEncryptedToken: false,
+						charaVaultTokenIv: false,
+						charaVaultTokenAuthTag: false
+					}
+				}),
+				db.query.ollamaSettings.findFirst({
+					where: eq(schema.ollamaSettings.id, 1),
+					columns: { id: false }
+				}),
+				db.query.koboldCppSettings.findFirst({
+					where: eq(schema.koboldCppSettings.id, 1),
+					columns: { id: false, koboldCppManagedAdminPassword: false }
+				}),
+				// Separate, minimal query just for presence -- the password value
+				// itself must never enter a variable that could end up in a
+				// response object, even transiently.
+				db.query.koboldCppSettings.findFirst({
+					where: eq(schema.koboldCppSettings.id, 1),
+					columns: { koboldCppManagedAdminPassword: true }
+				})
+			])
+
+			if (!settings) throw new Error("System settings not found")
+
+			const res: Sockets.SystemSettings.Get.Response = {
+				systemSettings: settings as any,
+				ollamaSettings: (ollamaSettings ?? {}) as any,
+				koboldCppSettings: {
+					...(koboldCppSettings ?? {}),
+					koboldCppManagedAdminPasswordSet:
+						!!koboldCppAdminPasswordRow?.koboldCppManagedAdminPassword
+				} as any,
+				isAndroidWrapper: isAndroidWrapper(),
+				localEmbeddingsSupported: await isLocalEmbeddingSupported()
 			}
-		})
 
-		if (!settings) {
-			throw new Error("System settings not found")
+			emitToUser("systemSettings:get", res)
+			return res
+		} catch (error: any) {
+			console.error("Error fetching system settings:", error)
+			emitToUser("systemSettings:get:error", {
+				error: "Failed to fetch system settings"
+			})
+			throw error
 		}
-
-		const res: Sockets.SystemSettings.Response = {
-			systemSettings: settings
-		}
-
-		emitToUser("systemSettings", res)
-	} catch (error: any) {
-		console.error("Error fetching system settings:", error)
-		emitToUser("error", {
-			error: "Failed to fetch system settings"
-		})
 	}
 }
 
-export async function updateOllamaManagerEnabled(
-	socket: any,
-	message: Sockets.UpdateOllamaManagerEnabled.Call,
-	emitToUser: (event: string, data: any) => void
-) {
-	try {
-		await db
-			.update(schema.systemSettings)
-			.set({
-				ollamaManagerEnabled: message.enabled
-			})
-			.where(eq(schema.systemSettings.id, 1))
+export const systemSettingsUpdateSummarizationEnabled: Handler<
+	Sockets.SystemSettings.UpdateSummarizationEnabled.Params,
+	Sockets.SystemSettings.UpdateSummarizationEnabled.Response
+> = {
+	event: "systemSettings:updateSummarizationEnabled",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		try {
+			await db
+				.update(schema.systemSettings)
+				.set({ summarizationEnabled: params.enabled })
+				.where(eq(schema.systemSettings.id, 1))
 
-		const res: Sockets.UpdateOllamaManagerEnabled.Response = {
-			success: true,
-			enabled: message.enabled
+			const res: Sockets.SystemSettings.UpdateSummarizationEnabled.Response =
+				{
+					success: true,
+					enabled: params.enabled
+				}
+			emitToUser("systemSettings:updateSummarizationEnabled", res)
+			await systemSettingsGet.handler(socket, {}, emitToUser)
+			return res
+		} catch (error: any) {
+			console.error("Update summarization enabled error:", error)
+			emitToUser("systemSettings:updateSummarizationEnabled:error", {
+				error: "Failed to update summarization setting"
+			})
+			throw error
 		}
-		emitToUser("updateOllamaManagerEnabled", res)
-		await systemSettings(socket, {}, emitToUser) // Refresh system settings after update
-	} catch (error: any) {
-		console.error("Update Ollama Manager enabled error:", error)
-		const res = {
-			error: "Failed to update Ollama Manager setting"
-		}
-		emitToUser("error", res)
 	}
 }
 
-export async function updateShowAllCharacterFields(
-	socket: any,
-	message: Sockets.UpdateShowAllCharacterFields.Call,
-	emitToUser: (event: string, data: any) => void
-) {
-	try {
-		await db
-			.update(schema.systemSettings)
-			.set({
-				showAllCharacterFields: message.enabled
+export const systemSettingsUpdateContextDebuggingEnabled: Handler<
+	Sockets.SystemSettings.UpdateContextDebuggingEnabled.Params,
+	Sockets.SystemSettings.UpdateContextDebuggingEnabled.Response
+> = {
+	event: "systemSettings:updateContextDebuggingEnabled",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		try {
+			await db
+				.update(schema.systemSettings)
+				.set({ contextDebuggingEnabled: params.enabled })
+				.where(eq(schema.systemSettings.id, 1))
+			const res: Sockets.SystemSettings.UpdateContextDebuggingEnabled.Response =
+				{
+					success: true,
+					enabled: params.enabled
+				}
+			emitToUser("systemSettings:updateContextDebuggingEnabled", res)
+			await systemSettingsGet.handler(socket, {}, emitToUser)
+			return res
+		} catch (error: any) {
+			console.error("Update context debugging enabled error:", error)
+			emitToUser("systemSettings:updateContextDebuggingEnabled:error", {
+				error: "Failed to update context debugging setting"
 			})
-			.where(eq(schema.systemSettings.id, 1))
-
-		const res: Sockets.UpdateShowAllCharacterFields.Response = {
-			success: true,
-			enabled: message.enabled
+			throw error
 		}
-		emitToUser("updateShowAllCharacterFields", res)
-		await systemSettings(socket, {}, emitToUser) // Refresh system settings after update
-	} catch (error: any) {
-		console.error("Update show all character fields error:", error)
-		const res = {
-			error: "Failed to update show all character fields setting"
-		}
-		emitToUser("error", res)
 	}
 }
 
-export async function updateEasyCharacterCreation(
-	socket: any,
-	message: Sockets.UpdateEasyCharacterCreation.Call,
-	emitToUser: (event: string, data: any) => void
-) {
-	try {
-		await db
-			.update(schema.systemSettings)
-			.set({
-				enableEasyCharacterCreation: message.enabled
+export const systemSettingsUpdateAccountsEnabled: Handler<
+	Sockets.SystemSettings.UpdateAccountsEnabled.Params,
+	Sockets.SystemSettings.UpdateAccountsEnabled.Response
+> = {
+	event: "systemSettings:updateAccountsEnabled",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		try {
+			const currentSettings = await db.query.systemSettings.findFirst({
+				where: eq(schema.systemSettings.id, 1),
+				columns: { isAccountsEnabled: true }
 			})
-			.where(eq(schema.systemSettings.id, 1))
 
-		const res: Sockets.UpdateEasyCharacterCreation.Response = {
-			success: true,
-			enabled: message.enabled
+			// The client's own UI states "This setting cannot be reversed"
+			// but only enforces it cosmetically (a disabled Switch) — a
+			// direct socket.emit bypassing that UI could otherwise silently
+			// re-disable accounts, re-exposing the no-auth auto-attach-to-
+			// admin fallback (auth.ts) on an instance an admin had
+			// deliberately locked down. Enforce the one-way transition
+			// server-side.
+			if (params.enabled === false && currentSettings?.isAccountsEnabled) {
+				throw new Error("User accounts cannot be disabled once enabled.")
+			}
+
+			// Once enabled, unauthenticated access is blocked app-wide (see
+			// auth.ts), so the admin flipping this on must already have a
+			// passphrase to log back in with — re-check server-side rather
+			// than trusting the client's own pre-flight modal, since nothing
+			// stops a caller from emitting this event directly.
+			if (params.enabled) {
+				const currentPassphrase = await db.query.passphrases.findFirst({
+					where: (p, { eq, and, isNull }) =>
+						and(
+							eq(p.userId, socket.user!.id),
+							isNull(p.invalidatedAt)
+						),
+					orderBy: (p, { desc }) => [desc(p.createdAt)]
+				})
+				if (!currentPassphrase) {
+					throw new Error(
+						"Set a passphrase before enabling user accounts"
+					)
+				}
+			}
+
+			await db
+				.update(schema.systemSettings)
+				.set({ isAccountsEnabled: params.enabled })
+				.where(eq(schema.systemSettings.id, 1))
+			const res: Sockets.SystemSettings.UpdateAccountsEnabled.Response = {
+				success: true,
+				enabled: params.enabled
+			}
+			emitToUser("systemSettings:updateAccountsEnabled", res)
+			await systemSettingsGet.handler(socket, {}, emitToUser)
+
+			// Every socket that connected while accounts were disabled was
+			// auto-attached to the fallback admin with no token (auth.ts) —
+			// authMiddleware only runs at handshake, so those sessions never
+			// re-check once this flips. Evict that whole room now (this
+			// necessarily includes the calling admin's own socket, since
+			// reaching this handler at all required being that fallback
+			// admin) so every such session is forced through the
+			// now-enabled real login flow. Must come after emitToUser above
+			// so the caller sees their own success response first — same
+			// ordering as users.ts's setPassphrase/changePassphrase.
+			if (params.enabled) {
+				const fallbackAdmin = await db.query.users.findFirst({
+					where: (u, { eq }) => eq(u.isAdmin, true),
+					orderBy: (u, { asc }) => [asc(u.id)]
+				})
+				if (fallbackAdmin) {
+					socket.io.to(`user_${fallbackAdmin.id}`).disconnectSockets(true)
+				}
+			}
+
+			return res
+		} catch (error: any) {
+			console.error("Update accounts enabled error:", error)
+			emitToUser("systemSettings:updateAccountsEnabled:error", {
+				error: error.message || "Failed to update accounts setting"
+			})
+			throw error
 		}
-		emitToUser("updateEasyCharacterCreation", res)
-		await systemSettings(socket, {}, emitToUser) // Refresh system settings after update
-	} catch (error: any) {
-		console.error("Update easy character creation error:", error)
-		const res = {
-			error: "Failed to update easy character creation setting"
-		}
-		emitToUser("error", res)
 	}
 }
 
-export async function updateEasyPersonaCreation(
+// Registration function for all system settings handlers
+export function registerSystemSettingsHandlers(
 	socket: any,
-	message: Sockets.UpdateEasyPersonaCreation.Call,
-	emitToUser: (event: string, data: any) => void
+	emitToUser: (event: string, data: any) => void,
+	register: (
+		socket: any,
+		handler: Handler<any, any>,
+		emitToUser: (event: string, data: any) => void
+	) => void
 ) {
-	try {
-		await db
-			.update(schema.systemSettings)
-			.set({
-				enableEasyPersonaCreation: message.enabled
-			})
-			.where(eq(schema.systemSettings.id, 1))
-
-		const res: Sockets.UpdateEasyPersonaCreation.Response = {
-			success: true,
-			enabled: message.enabled
-		}
-		emitToUser("updateEasyPersonaCreation", res)
-		await systemSettings(socket, {}, emitToUser) // Refresh system settings after update
-	} catch (error: any) {
-		console.error("Update easy persona creation error:", error)
-		const res = {
-			error: "Failed to update easy persona creation setting"
-		}
-		emitToUser("error", res)
-	}
-}
-
-export async function updateShowHomePageBanner(
-	socket: any,
-	message: Sockets.UpdateShowHomePageBanner.Call,
-	emitToUser: (event: string, data: any) => void
-) {
-	try {
-		await db
-			.update(schema.systemSettings)
-			.set({
-				showHomePageBanner: message.enabled
-			})
-			.where(eq(schema.systemSettings.id, 1))
-
-		const res: Sockets.UpdateShowHomePageBanner.Response = {
-			success: true,
-			enabled: message.enabled
-		}
-		emitToUser("updateShowHomePageBanner", res)
-		await systemSettings(socket, {}, emitToUser) // Refresh system settings after update
-	} catch (error: any) {
-		console.error("Update show home page banner error:", error)
-		const res = {
-			error: "Failed to update show home page banner setting"
-		}
-		emitToUser("error", res)
-	}
+	register(socket, systemSettingsGet, emitToUser)
+	register(socket, systemSettingsUpdateSummarizationEnabled, emitToUser)
+	register(socket, systemSettingsUpdateContextDebuggingEnabled, emitToUser)
+	register(socket, systemSettingsUpdateAccountsEnabled, emitToUser)
 }

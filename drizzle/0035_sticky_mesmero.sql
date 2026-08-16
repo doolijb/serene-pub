@@ -1,0 +1,1 @@
+ALTER TABLE "system_settings" ADD COLUMN "summarization_enabled" boolean DEFAULT false NOT NULL;

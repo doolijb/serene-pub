@@ -1,41 +1,145 @@
 <script lang="ts">
 	import { page } from "$app/state"
-	import { Modal, Popover } from "@skeletonlabs/skeleton-svelte"
-	import * as skio from "sveltekit-io"
+	import { goto } from "$app/navigation"
+	import { Dialog, Portal, Popover } from "@skeletonlabs/skeleton-svelte"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 	import * as Icons from "@lucide/svelte"
 	import MessageComposer from "$lib/client/components/chatMessages/MessageComposer.svelte"
+	import MessageControls from "$lib/client/components/chatMessages/MessageControls.svelte"
+	import ChatContainer from "$lib/client/components/chatMessages/ChatContainer.svelte"
+	import ChatMessage from "$lib/client/components/chatMessages/ChatMessage.svelte"
+	import NextCharacterBlock from "$lib/client/components/chatMessages/NextCharacterBlock.svelte"
+	import ProcessSceneModal from "$lib/client/components/modals/ProcessSceneModal.svelte"
+	import ChatComposer from "$lib/client/components/chatMessages/ChatComposer.svelte"
+	import GeneratingAnimation from "$lib/client/components/chatMessages/GeneratingAnimation.svelte"
 	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
-	import { getContext, onMount } from "svelte"
+	import { getContext, onDestroy, onMount } from "svelte"
 	import Avatar from "$lib/client/components/Avatar.svelte"
+	import PersonaSelectModal from "$lib/client/components/modals/PersonaSelectModal.svelte"
+	import BranchChatModal from "$lib/client/components/modals/BranchChatModal.svelte"
+	import SummarizeLoreModal from "$lib/client/components/modals/SummarizeLoreModal.svelte"
+	import TriggerNarratorResponseModal from "$lib/client/components/modals/TriggerNarratorResponseModal.svelte"
+	import EntityGalleryViewModal from "$lib/client/components/chatMessages/EntityGalleryViewModal.svelte"
+	import ChatSceneImagesTab from "$lib/client/components/chatMessages/ChatSceneImagesTab.svelte"
+	import ChatWorkflowTab from "$lib/client/components/chatMessages/ChatWorkflowTab.svelte"
+	import { sceneImages } from "$lib/client/stores/sceneImages"
+	import { toaster } from "$lib/client/utils/toaster"
+	import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 
-	let chat: Sockets.Chat.Response["chat"] | undefined = $state()
-	let pagination: Sockets.Chat.Response["pagination"] | undefined = $state()
+	let chat: Sockets.Chats.Get.Response["chat"] | undefined = $state()
+	let pagination: Sockets.Chats.Get.Response["pagination"] | undefined =
+		$state()
 	let newMessage = $state("")
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	let showDeleteMessageModal = $state(false)
 	let deleteChatMessage: SelectChatMessage | undefined = $state()
 	let editChatMessage: SelectChatMessage | undefined = $state()
-	let draftCompiledPrompt: CompiledPrompt | undefined = $state()
+	let draftCompiledPrompt:
+		| Sockets.Chats.PromptTokenCount.Response
+		| undefined = $state()
 	let userCtx: UserCtx = getContext("userCtx")
 	let panelsCtx: PanelsCtx = getContext("panelsCtx")
+	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
+	let userSettingsCtx: UserSettingsCtx = getContext("userSettingsCtx")
+	let openChatCtx: OpenChatCtx = getContext("openChatCtx")
+	let sceneSummarizesCtx: SceneSummarizesCtx = $state(
+		getContext("sceneSummarizesCtx")
+	)
+	let chatSummarizesCtx: ChatSummarizesCtx = $state(
+		getContext("chatSummarizesCtx")
+	)
+
+	// Lets globally-rendered sidebars (e.g. LorebooksSidebar) know which chat
+	// is open and whether it already has a lorebook, without a fetch of their own.
+	$effect(() => {
+		openChatCtx.chatId = chat?.id ?? null
+		openChatCtx.lorebookId = chat?.lorebookId ?? null
+		openChatCtx.isOwner = !!chat && chat.userId === userCtx.user?.id
+	})
+
+	let summarizationEnabled = $derived(
+		!!systemSettingsCtx.settings?.summarizationEnabled
+	)
+	let vectorizationEnabled = $derived(
+		!!systemSettingsCtx.settings?.vectorizationEnabled
+	)
+
+	// ── Typing indicator ──────────────────────────────────────────────────────
+	// Other participants' personas currently typing, keyed by personaId. Purely
+	// client-expired — there's no "stopped typing" event, entries just drop
+	// off 10s after the last ping (matches how the composer's own throttled
+	// ping below only re-fires every ~2.5s while text keeps changing).
+	let typingPersonas: Map<number, { name: string; lastTypingAt: number }> =
+		$state(new Map())
+	let lastTypingEmitAt = 0
+	let typingPruneInterval: ReturnType<typeof setInterval> | null = null
+
+	$effect(() => {
+		const content = newMessage
+		if (!chatId || !chat || !content.trim()) return
+		const now = Date.now()
+		if (now - lastTypingEmitAt < 2500) return
+		lastTypingEmitAt = now
+		const personaId =
+			currentUserPersona?.personaId || chat?.chatPersonas?.[0]?.personaId
+		if (personaId) socket.emit("chats:typing", { chatId, personaId })
+	})
+
+	// ── Draft autosave ────────────────────────────────────────────────────────
+	// Debounce-save newMessage to the server as the user types.
+	// Only runs when the chat is loaded (chat !== undefined) to avoid
+	// clobbering another user's draft during a chat transition.
+	$effect(() => {
+		const content = newMessage
+		const currentChatId = chatId
+		if (!currentChatId || !chat) return
+		const timer = setTimeout(() => {
+			socket.emit("chats:saveDraft", { chatId: currentChatId, content })
+		}, 500)
+		return () => clearTimeout(timer)
+	})
+
 	let promptTokenCountTimeout: ReturnType<typeof setTimeout> | null = null
+	let autoTriggerTimeout: ReturnType<typeof setTimeout> | null = null
 	let loadingOlderMessages = $state(false)
 	let messagesContainer: HTMLElement | undefined = $state()
 	let contextExceeded = $derived(
-		!!draftCompiledPrompt
-			? draftCompiledPrompt!.meta.tokenCounts.total >
-					draftCompiledPrompt!.meta.tokenCounts.limit
+		draftCompiledPrompt?.meta
+			? draftCompiledPrompt.meta.tokenCounts.total >
+					draftCompiledPrompt.meta.tokenCounts.limit
 			: false
 	)
-	let openMobileMsgControls: number | undefined = $state(undefined)
+	let openMsgControlsMenu: number | undefined = $state(undefined)
 	let showDraftCompiledPromptModal = $state(false)
 	let showTriggerCharacterMessageModal = $state(false)
 	let triggerCharacterSearch = $state("")
-	let chatResponseOrder: Sockets.GetChatResponseOrder.Response | undefined =
+	let showTriggerNarratorResponseModal = $state(false)
+	let showAddPersonaModal = $state(false)
+	let showBranchChatModal = $state(false)
+	let branchFromMessage: SelectChatMessage | undefined = $state()
+
+	// Summarization mode
+	let isSummarizationMode = $state(false)
+	let selectedMessageIds = $state(new Set<number>())
+	let showSummarizeModal = $state(false)
+	let summarizeLoreType = $state<"world" | "character" | "scene">("world")
+	/** Message IDs already captured in a scene — hard-blocked from selection */
+	let scenedMessageIds = $state(new Set<number>())
+	/** Full scene list for this chat — used for in-chat scene/history-entry indicators */
+	let sceneList = $state<Sockets.Scenes.List.SceneWithEntry[]>([])
+	// Resolved display name for Narrator responses (chat override -> user active
+	// -> system default -> "Narrator"), used to label the trigger button/
+	// modal/character-picker option before any message exists.
+	let narratorName = $state("Narrator")
+	let chatResponseOrder: Sockets.Chats.GetResponseOrder.Response | undefined =
 		$state()
+	let availablePersonas: Sockets.Personas.List.Response["personaList"] =
+		$state([])
 
 	// Get chat id from route params
 	let chatId: number = $derived.by(() => Number(page.params.id))
+	let chatNotFound = $state(false)
 
 	let lastMessage: SelectChatMessage | undefined = $derived.by(() => {
 		if (chat && chat.chatMessages.length > 0) {
@@ -66,18 +170,55 @@
 		)
 	})
 
+	// Check if any message is currently generating
+	let hasGeneratingMessage: boolean = $derived.by(() => {
+		return chat?.chatMessages?.some((msg) => msg.isGenerating) || false
+	})
+
+	/**
+	 * True between dispatching a generation and the server's `isGenerating`
+	 * placeholder arriving.
+	 *
+	 * Without it the next-character block flashes on every send: `handleSend`
+	 * clears `newMessage` synchronously, while `isGenerating` is only set after
+	 * a socket round trip that additionally queues on the chat trigger lock. For
+	 * that whole window every other condition below is already satisfied.
+	 *
+	 * This race is not 1:1-specific — group chats on the ORDERED strategy have
+	 * it too; it was simply invisible while the block was gated to groups.
+	 */
+	let triggerInFlight: boolean = $state(false)
+	let triggerInFlightTimer: ReturnType<typeof setTimeout> | undefined
+
+	function markTriggerInFlight() {
+		triggerInFlight = true
+		clearTimeout(triggerInFlightTimer)
+		// Backstop only: a generation that never starts must not wedge the
+		// block off permanently. The real clears are the two below.
+		triggerInFlightTimer = setTimeout(
+			() => (triggerInFlight = false),
+			15000
+		)
+	}
+
+	function clearTriggerInFlight() {
+		triggerInFlight = false
+		clearTimeout(triggerInFlightTimer)
+	}
+
+	// Clear as soon as the placeholder lands — the normal path.
+	$effect(() => {
+		if (hasGeneratingMessage) clearTriggerInFlight()
+	})
+
 	// Determine if we should show the next character block
 	let shouldShowNextCharacterBlock: boolean = $derived.by(() => {
-		const hasGeneratingMessage =
-			chat?.chatMessages?.some((msg) => msg.isGenerating) || false
 		const hasMessageDraft = newMessage.trim().length > 0
 		const isEditingMessage = !!editChatMessage
 		const hasNextCharacter = !!chatResponseOrder?.nextCharacterId
-		const isGroupChat =
-			!!chat?.isGroup && (chat?.chatCharacters?.length || 0) > 1
 
 		const shouldShow =
-			isGroupChat &&
+			!triggerInFlight &&
 			!hasGeneratingMessage &&
 			!hasMessageDraft &&
 			!isEditingMessage &&
@@ -87,58 +228,274 @@
 		return shouldShow
 	})
 
+	// A single-character chat has nobody else to hand the turn to, so the
+	// "choose a different character" control is meaningless there. Keyed on cast
+	// size rather than `isGroup`, because an isGroup chat with one character
+	// exists by the server's own definition (chats.ts: isGroup = count > 1).
+	let canChooseDifferentCharacter: boolean = $derived(
+		(chat?.chatCharacters?.length || 0) > 1
+	)
+
+	// ── Scene review (activity-backed) ───────────────────────────────
+	// A chat-started scene summarize hands off to ProcessSceneModal, which is
+	// the piece that already knows how to resume a minimized run and saves via
+	// scenes:update. It takes plain props and no context, so it mounts here as
+	// happily as it does in the lorebook panel — the only thing it needs that
+	// this page lacks is the binding list, fetched below.
+	let showProcessSceneModal = $state(false)
+	let processSceneId: number | null = $state(null)
+	let processActivityId: string | null = $state(null)
+	let processPendingResult: any = $state(null)
+	let lorebookBindingList: {
+		id: number
+		name: string
+		binding: string
+	}[] = $state([])
+
+	$effect(() => {
+		if (chat?.lorebookId) {
+			socket?.emit("lorebooks:bindingList", {
+				lorebookId: chat.lorebookId
+			})
+		}
+	})
+
+	/**
+	 * Reopen a backgrounded world/character summarize when the Activity panel
+	 * asks. The sidebar navigates here first (unlike the scene/compile cards,
+	 * which open a panel), so this only has to pick the id back up.
+	 */
+	let resumeSummarizeActivity = $state<ChatSummarizeState | null>(null)
+	$effect(() => {
+		const id = chatSummarizesCtx?.reviewActivityId
+		if (!id) return
+		const activity = chatSummarizesCtx.activities.find(
+			(a) => a.activityId === id && a.chatId === chatId
+		)
+		if (!activity) return
+		chatSummarizesCtx.setReviewActivityId(null)
+		resumeSummarizeActivity = activity
+		summarizeLoreType = activity.loreType
+		showSummarizeModal = true
+	})
+
+	// Reopen a minimized/backgrounded run when the Activity panel asks for it.
+	$effect(() => {
+		const id = sceneSummarizesCtx?.reviewSceneId
+		if (id == null) return
+		const activity = sceneSummarizesCtx.activities.find(
+			(a: any) =>
+				a.sceneId === id &&
+				(a.status === "review" || a.status === "running")
+		)
+		if (!activity) return
+		sceneSummarizesCtx.setReviewSceneId(null)
+		processSceneId = activity.sceneId
+		processActivityId = activity.activityId
+		processPendingResult = activity.pendingResult ?? null
+		showProcessSceneModal = true
+	})
+
 	// Get the next character info from chat data
 	let nextCharacter: SelectCharacter | undefined = $derived.by(() => {
-		if (!chatResponseOrder?.nextCharacterId) {
+		const nextCharacterId = chatResponseOrder?.nextCharacterId
+		if (!nextCharacterId) {
 			return undefined
 		}
 
 		const foundCharacter = chat?.chatCharacters?.find(
-			(cc) => cc.characterId === chatResponseOrder.nextCharacterId
+			(cc) => cc.characterId === nextCharacterId
 		)?.character
 
 		return foundCharacter
 	})
 
+	// Check if current user is a guest (not the chat owner)
+	let isGuest: boolean = $derived.by(() => {
+		if (!chat || !userCtx.user?.id) return false
+		const isGuest = chat.userId !== userCtx.user.id
+		console.log("Guest check:", {
+			chatUserId: chat.userId,
+			currentUserId: userCtx.user.id,
+			isGuest
+		})
+		return isGuest
+	})
+
+	// Check if current user has a persona in this chat
+	let userHasPersonaInChat: boolean = $derived.by(() => {
+		if (!chat?.chatPersonas || !userCtx.user?.id) return false
+		return chat.chatPersonas.some(
+			(cp) => cp.persona?.userId === userCtx.user?.id
+		)
+	})
+
+	// Determine if we should show the add persona CTA
+	let showAddPersonaCTA: boolean = $derived.by(() => {
+		return isGuest && !userHasPersonaInChat
+	})
+
+	// All of the current user's personas in this chat
+	let userPersonasInChat = $derived.by(() => {
+		if (!chat?.chatPersonas || !userCtx.user?.id) return []
+		return chat.chatPersonas.filter(
+			(cp) => cp.persona?.userId === userCtx.user?.id
+		)
+	})
+
+	// Manually selected persona ID — null means auto-select (first in list)
+	let selectedPersonaId = $state<number | null>(null)
+
+	// Reset selection when navigating to a different chat
+	$effect(() => {
+		const _watchChatId = chat?.id
+		selectedPersonaId = null
+	})
+
+	// Get the current user's active persona in this chat
+	let currentUserPersona = $derived.by(() => {
+		if (!userPersonasInChat.length) return undefined
+		if (selectedPersonaId) {
+			const found = userPersonasInChat.find(
+				(cp) => cp.personaId === selectedPersonaId
+			)
+			if (found) return found
+		}
+		return userPersonasInChat[0]
+	})
+
+	function switchPersona(personaId: number) {
+		selectedPersonaId = personaId
+	}
+
 	// Get ordered characters from chat data using the response order
 	let orderedCharacters: SelectCharacter[] = $derived.by(() => {
-		if (!chatResponseOrder?.characterIds || !chat?.chatCharacters) return []
+		const chatCharacters = chat?.chatCharacters
+		if (!chatResponseOrder?.characterIds || !chatCharacters) return []
 		return chatResponseOrder.characterIds
 			.map(
 				(id) =>
-					chat.chatCharacters.find((cc) => cc.characterId === id)
+					chatCharacters.find((cc) => cc.characterId === id)
 						?.character
 			)
 			.filter((char) => char !== undefined) as SelectCharacter[]
 	})
 
-	function handleSend() {
-		if (!newMessage.trim()) return
-		// TODO: Implement send message socket call
-		const msg: Sockets.SendPersonaMessage.Call = {
-			chatId,
-			personaId: chat?.chatPersonas?.[0]?.personaId,
-			content: newMessage
+	// Check if current user can edit/control a specific message — mirrors
+	// checkMessageEditPermission server-side exactly:
+	// - Persona messages: only that persona's own owner, never the chat
+	//   owner (a persona is another participant's own self-representation).
+	// - Character messages: the chat owner, or whoever owns that character
+	//   (so a guest who brought their own character in can control it).
+	let canControlMessage = (msg: SelectChatMessage): boolean => {
+		if (!userCtx.user?.id) return false
+
+		if (msg.personaId) {
+			return (
+				chat?.chatPersonas?.some(
+					(cp) =>
+						cp.personaId === msg.personaId &&
+						cp.persona?.userId === userCtx.user?.id
+				) ?? false
+			)
 		}
-		socket.emit("sendPersonaMessage", msg)
-		newMessage = ""
-		// Refresh response order after sending message
-		socket.emit("getChatResponseOrder", { chatId })
+
+		if (msg.characterId) {
+			if (!isGuest) return true
+			return (
+				chat?.chatCharacters?.some(
+					(cc) =>
+						cc.characterId === msg.characterId &&
+						cc.character?.userId === userCtx.user?.id
+				) ?? false
+			)
+		}
+
+		// Narrator response messages aren't owned by any persona/character —
+		// only the chat owner controls them, mirroring
+		// checkMessageEditPermission server-side.
+		if (msg.isNarratorResponse) return !isGuest
+
+		return false
 	}
 
+	function handleSend() {
+		if (!newMessage.trim()) return
+
+		// Use the current user's persona if they have one, otherwise use the first persona (for chat owner)
+		const personaId =
+			currentUserPersona?.personaId || chat?.chatPersonas?.[0]?.personaId
+
+		if (!personaId) {
+			toaster.error({ title: "No persona selected for this chat" })
+			return
+		}
+
+		const msg: Sockets.ChatMessages.SendPersonaMessage.Params = {
+			chatId,
+			personaId,
+			content: newMessage
+		}
+		socket.emit("chatMessages:sendPersonaMessage", msg)
+		newMessage = ""
+		socket.emit("chats:saveDraft", { chatId, content: "" })
+
+		// Character response triggering (once every persona has taken their turn)
+		// is handled entirely server-side, in chatMessagesSendPersonaMessageHandler —
+		// see that handler for why: deciding this client-side, from a single
+		// client's local chat state, doesn't hold up with multiple real
+		// participants sending messages around the same time.
+
+		// ...but we do need to know whether a generation is *coming*, purely to
+		// suppress the next-character block until it lands. Under MANUAL the
+		// server's trigger call is a guaranteed no-op (it resolves no next
+		// character and breaks), so flagging on every send would hide the block
+		// for the whole settle timeout on exactly the chats that need it most.
+		//
+		// Do NOT substitute chats:getResponseOrder for this check — that handler
+		// calls getNextCharacterTurn without the MANUAL guard and returns a
+		// non-null nextCharacterId for MANUAL chats.
+		if (chat?.groupReplyStrategy !== GroupReplyStrategies.MANUAL) {
+			markTriggerInFlight()
+		}
+
+		// Refresh response order after sending message
+		socket.emit("chats:getResponseOrder", { chatId })
+	}
+
+	// Display-name precedence for a message's speaker: prefer the LIVE
+	// character/persona if it still exists (so a rename propagates to past
+	// messages too, same as everywhere else in the app), falling back to the
+	// `removedName` snapshot taken at removal time only once the entity is
+	// itself globally deleted (its FK on the chatCharacters/chatPersonas row
+	// nulls out via onDelete: "set null"). A removed-but-still-existing
+	// participant's row is found here too (chat.chatCharacters/chatPersonas
+	// is deliberately unfiltered client-side, see getChatFromDB), so this
+	// already resolves the common case for free — the removedName fallback
+	// only ever matters once .character/.persona is null.
 	function getMessageCharacter(
 		msg: SelectChatMessage
 	): SelectCharacter | SelectPersona | undefined {
 		if (msg.personaId) {
-			const persona = chat?.chatPersonas?.find(
+			const cp = chat?.chatPersonas?.find(
 				(p: SelectChatPersona) => p.personaId === msg.personaId
-			)?.persona
-			return persona
+			)
+			return (
+				cp?.persona ??
+				(cp?.removedName
+					? ({ name: cp.removedName } as SelectPersona)
+					: undefined)
+			)
 		} else if (msg.characterId) {
-			const character = chat?.chatCharacters?.find(
+			const cc = chat?.chatCharacters?.find(
 				(c: SelectChatCharacter) => c.characterId === msg.characterId
-			)?.character
-			return character
+			)
+			return (
+				cc?.character ??
+				(cc?.removedName
+					? ({ name: cc.removedName } as SelectCharacter)
+					: undefined)
+			)
 		}
 	}
 
@@ -155,8 +512,9 @@
 	}
 
 	function onDeleteMessageConfirm() {
-		socket.emit("deleteChatMessage", {
-			id: deleteChatMessage?.id
+		if (!deleteChatMessage) return
+		socket.emit("chatMessages:delete", {
+			id: deleteChatMessage.id
 		})
 		deleteChatMessage = undefined
 		showDeleteMessageModal = false
@@ -167,8 +525,25 @@
 		showDeleteMessageModal = false
 	}
 
+	function onBranchChatConfirm(title: string) {
+		if (branchFromMessage && chat) {
+			socket.emit("chats:branch", {
+				chatId,
+				messageId: branchFromMessage.id,
+				title
+			})
+		}
+		branchFromMessage = undefined
+		showBranchChatModal = false
+	}
+
+	function onBranchChatCancel() {
+		branchFromMessage = undefined
+		showBranchChatModal = false
+	}
+
 	function handleEditMessageClick(message: SelectChatMessage) {
-		openMobileMsgControls = undefined
+		openMsgControlsMenu = undefined
 		editChatMessage = { ...message }
 	}
 
@@ -176,11 +551,37 @@
 		if (event) event.preventDefault()
 		if (!editChatMessage || !editChatMessage.content.trim()) return
 
-		const updatedMessage: Sockets.UpdateChatMessage.Call = {
-			chatMessage: editChatMessage
+		const updatedMessage: Sockets.ChatMessages.Update.Params = {
+			...editChatMessage
 		}
-		socket.emit("updateChatMessage", updatedMessage)
+		socket.emit("chatMessages:update", updatedMessage)
 		editChatMessage = undefined
+	}
+
+	function handleRegenerateMessage(e: Event, msg: SelectChatMessage) {
+		e.stopPropagation()
+		socket.emit("chatMessages:regenerate", { id: msg.id })
+	}
+
+	function handleContinueMessage(e: Event, msg: SelectChatMessage) {
+		e.stopPropagation()
+		// The continue functionality should regenerate but preserve the existing content
+		// This is handled server-side by passing continueFrom flag
+		socket.emit("chatMessages:continue", { id: msg.id })
+	}
+
+	function handleHideMessage(e: Event, msg: SelectChatMessage) {
+		e.stopPropagation()
+		// Toggle isHidden status by updating the message
+		socket.emit("chatMessages:update", {
+			id: msg.id,
+			isHidden: !msg.isHidden
+		})
+	}
+
+	function handleDeleteMessage(e: Event, msg: SelectChatMessage) {
+		e.stopPropagation()
+		openDeleteMessageModal(msg)
 	}
 
 	$effect(() => {
@@ -188,6 +589,7 @@
 		if (chatId) {
 			// Reset state when switching chats
 			chat = undefined // Clear current chat data
+			chatNotFound = false
 			pagination = undefined
 			chatResponseOrder = undefined
 			draftCompiledPrompt = undefined
@@ -197,16 +599,18 @@
 			lastSeenMessageId = null
 			lastSeenMessageContent = ""
 			loadingOlderMessages = false
-			socket.emit("chat", { id: chatId, limit: 25, offset: 0 })
-			socket.emit("getChatResponseOrder", { chatId })
+			socket.emit("chats:get", { id: chatId, limit: 25 })
+			// console.log('Debug - Emitting getChatResponseOrder for chatId:', chatId)
+			socket.emit("chats:getResponseOrder", { chatId })
 		}
 	})
 
 	$effect(() => {
-		const _connection = userCtx?.user?.activeConnection // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
-		const _samplingConfig = userCtx?.user?.activeSamplingConfig // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
-		const _contextConfig = userCtx?.user?.activeContextConfig // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
-		const _promptConfig = userCtx?.user?.activePromptConfig // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
+		const _connection = systemSettingsCtx.settings?.defaultConnectionId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
+		const _samplingConfig =
+			systemSettingsCtx.settings?.defaultSamplingConfigId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
+		const _contextConfig = userSettingsCtx.settings?.activeContextConfigId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
+		const _promptConfig = userSettingsCtx.settings?.activePromptConfigId // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
 		const _newMessage = newMessage // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
 		if (
 			!chatId ||
@@ -216,9 +620,10 @@
 		) {
 			return
 		}
+		if (!systemSettingsCtx.settings?.contextDebuggingEnabled) return
 		if (promptTokenCountTimeout) clearTimeout(promptTokenCountTimeout)
 		promptTokenCountTimeout = setTimeout(() => {
-			socket.emit("promptTokenCount", {
+			socket.emit("chats:promptTokenCount", {
 				chatId,
 				content: newMessage,
 				personaId: chat?.chatPersonas?.[0]?.personaId || undefined,
@@ -297,35 +702,122 @@
 		e.stopPropagation()
 		handleEditMessageClick(msg)
 	}
-	function handleCancelEditMessage(e: Event) {
-		e.stopPropagation()
+	function handleCancelEditMessage(e?: Event) {
+		e?.stopPropagation()
 		editChatMessage = undefined
 	}
-	function handleSaveEditMessage(e: Event) {
-		e.stopPropagation()
+	function handleSaveEditMessage(content: string, e?: Event) {
+		e?.stopPropagation()
+		if (editChatMessage) editChatMessage.content = content
 		handleMessageUpdate(e)
-	}
-	function handleHideMessage(e: Event, msg: SelectChatMessage) {
-		e.stopPropagation()
-		openMobileMsgControls = undefined
-		socket.emit("updateChatMessage", {
-			chatMessage: { ...msg, isHidden: !msg.isHidden }
-		})
-	}
-	function handleDeleteMessage(e: Event, msg: SelectChatMessage) {
-		e.stopPropagation()
-		openMobileMsgControls = undefined
-		openDeleteMessageModal(msg)
-	}
-	function handleRegenerateMessage(e: Event, msg: SelectChatMessage) {
-		e.stopPropagation()
-		openMobileMsgControls = undefined
-		socket.emit("regenerateChatMessage", { id: msg.id })
 	}
 	function handleAbortMessage(e: Event, msg: SelectChatMessage) {
 		e.stopPropagation()
-		openMobileMsgControls = undefined
-		socket.emit("abortChatMessage", { id: msg.id })
+		openMsgControlsMenu = undefined
+		// Clear any pending auto-trigger timeout
+		if (autoTriggerTimeout) {
+			clearTimeout(autoTriggerTimeout)
+			autoTriggerTimeout = null
+		}
+		socket.emit("chatMessages:cancel", { id: msg.id, chatId })
+	}
+	// ── Summarization mode ────────────────────────────────────────
+	function enterSummarizationMode(msg: SelectChatMessage) {
+		openMsgControlsMenu = undefined
+		isSummarizationMode = true
+		selectedMessageIds = new Set([msg.id])
+	}
+
+	function exitSummarizationMode() {
+		isSummarizationMode = false
+		selectedMessageIds = new Set()
+	}
+
+	function enterSummarizationModeEmpty() {
+		openMsgControlsMenu = undefined
+		isSummarizationMode = true
+		selectedMessageIds = new Set()
+	}
+
+	function toggleSummarizationMessage(id: number) {
+		if (scenedMessageIds.has(id)) return // hard block
+		const next = new Set(selectedMessageIds)
+		next.has(id) ? next.delete(id) : next.add(id)
+		selectedMessageIds = next
+	}
+
+	function selectAllAbove(msgIndex: number) {
+		const msgs = chat!.chatMessages
+		const next = new Set(selectedMessageIds)
+		for (let i = msgIndex; i >= 0; i--) {
+			if (scenedMessageIds.has(msgs[i].id)) break // stop at scened message
+			if (next.has(msgs[i].id) && i < msgIndex) break
+			next.add(msgs[i].id)
+		}
+		selectedMessageIds = next
+	}
+
+	function selectAllBelow(msgIndex: number) {
+		const msgs = chat!.chatMessages
+		const next = new Set(selectedMessageIds)
+		for (let i = msgIndex; i < msgs.length; i++) {
+			if (scenedMessageIds.has(msgs[i].id)) break // stop at scened message
+			if (next.has(msgs[i].id) && i > msgIndex) break
+			next.add(msgs[i].id)
+		}
+		selectedMessageIds = next
+	}
+
+	/** True when selected messages (for a scene) have a visible gap between them */
+	let hasSceneGap = $derived.by(() => {
+		if (!chat?.chatMessages.length || selectedMessageIds.size === 0)
+			return false
+		const msgs = chat.chatMessages
+		const selectedIndices = msgs
+			.map((m, i) => (selectedMessageIds.has(m.id) ? i : -1))
+			.filter((i) => i !== -1)
+		if (selectedIndices.length < 2) return false
+		const minIdx = selectedIndices[0]
+		const maxIdx = selectedIndices[selectedIndices.length - 1]
+		for (let i = minIdx + 1; i < maxIdx; i++) {
+			const m = msgs[i]
+			if (!selectedMessageIds.has(m.id) && !m.isHidden) return true
+		}
+		return false
+	})
+
+	function openSummarizeModal(loreType: "world" | "character" | "scene") {
+		if (loreType === "scene" && hasSceneGap) {
+			toaster.error({
+				title: "Non-consecutive messages selected",
+				description:
+					"Scenes require a consecutive sequence of messages with no visible gaps. Deselect the skipped messages or hide them first."
+			})
+			return
+		}
+		summarizeLoreType = loreType
+		showSummarizeModal = true
+	}
+
+	function handleOpenEntry(lorebookId: number, historyEntryId: number) {
+		panelsCtx.digest.lorebookId = lorebookId
+		panelsCtx.digest.historyEntryId = historyEntryId
+		panelsCtx.digest.historyEntryTab = "content"
+		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+	}
+
+	function handleLorebookSet(newLorebookId: number) {
+		if (chat) {
+			chat = { ...chat, lorebookId: newLorebookId } as typeof chat
+		}
+	}
+	// ─────────────────────────────────────────────────────────────
+
+	function handleBranchMessage(e: Event, msg: SelectChatMessage) {
+		e.stopPropagation()
+		openMsgControlsMenu = undefined
+		branchFromMessage = msg
+		showBranchChatModal = true
 	}
 	function handleSendButton(e: Event) {
 		e.stopPropagation()
@@ -333,40 +825,68 @@
 	}
 	function handleAbortLastMessage(e: Event) {
 		e.stopPropagation()
-		openMobileMsgControls = undefined
-		if (lastMessage) socket.emit("abortChatMessage", { id: lastMessage.id })
+		openMsgControlsMenu = undefined
+		// Clear any pending auto-trigger timeout
+		if (autoTriggerTimeout) {
+			clearTimeout(autoTriggerTimeout)
+			autoTriggerTimeout = null
+		}
+		if (lastMessage)
+			socket.emit("chatMessages:cancel", { id: lastMessage.id, chatId })
 	}
 	function handleTriggerContinueConversation(e: Event) {
 		e.stopPropagation()
-		openMobileMsgControls = undefined
-		socket.emit("triggerGenerateMessage", { chatId })
+		openMsgControlsMenu = undefined
+		markTriggerInFlight()
+		socket.emit("chats:triggerGenerateMessage", { chatId, triggered: true })
 	}
 	function handleTriggerCharacterMessage(e: Event) {
 		e.stopPropagation()
-		openMobileMsgControls = undefined
+		openMsgControlsMenu = undefined
 		showTriggerCharacterMessageModal = true
 	}
 	function handleRegenerateLastMessage(e: Event) {
 		e.stopPropagation()
-		openMobileMsgControls = undefined
+		openMsgControlsMenu = undefined
 		if (lastMessage && !lastMessage.isGenerating) {
-			socket.emit("regenerateChatMessage", { id: lastMessage.id })
+			socket.emit("chatMessages:regenerate", { id: lastMessage.id })
 		}
 	}
 
 	function onSelectTriggerCharacterMessage(characterId: number) {
 		showTriggerCharacterMessageModal = false
-		openMobileMsgControls = undefined
-		socket.emit("triggerGenerateMessage", {
+		openMsgControlsMenu = undefined
+		markTriggerInFlight()
+		socket.emit("chats:triggerGenerateMessage", {
 			chatId,
 			characterId,
 			once: true
 		})
 	}
 
+	function handleTriggerNarratorResponse(e: Event) {
+		e.stopPropagation()
+		openMsgControlsMenu = undefined
+		showTriggerCharacterMessageModal = false
+		showTriggerNarratorResponseModal = true
+	}
+
+	function handleConfirmTriggerNarratorResponse(instructions: string) {
+		showTriggerNarratorResponseModal = false
+		socket.emit("chats:triggerNarratorResponse", {
+			chatId,
+			instructions: instructions || undefined
+		})
+	}
+
+	function handleCancelTriggerNarratorResponse() {
+		showTriggerNarratorResponseModal = false
+	}
+
 	function handleContinueWithNextCharacter() {
 		if (!nextCharacter) return
-		socket.emit("triggerGenerateMessage", {
+		markTriggerInFlight()
+		socket.emit("chats:triggerGenerateMessage", {
 			chatId,
 			characterId: nextCharacter.id,
 			once: true
@@ -377,52 +897,60 @@
 		showTriggerCharacterMessageModal = true
 	}
 
+	function handleAddPersona(personaId: number) {
+		const req: Sockets.Chats.AddPersona.Params = {
+			chatId,
+			personaId
+		}
+		socket.emit("chats:addPersona", req)
+		showAddPersonaModal = false
+	}
+
 	function handleCharacterNameClick(msg: SelectChatMessage): void {
 		if (msg.characterId) {
 			panelsCtx.openPanel({ key: "characters", toggle: false })
-			panelsCtx.digest.characterId = msg.characterId
+			panelsCtx.digest.viewCharacterId = msg.characterId
 		} else if (msg.personaId) {
 			panelsCtx.openPanel({ key: "personas", toggle: false })
-			panelsCtx.digest.personaId = msg.personaId
+			panelsCtx.digest.viewPersonaId = msg.personaId
 		}
 	}
 
 	function swipeRight(msg: SelectChatMessage): void {
-		const req: Sockets.ChatMessageSwipeRight.Call = {
-			chatId: chatId,
-			chatMessageId: msg.id
+		const req: Sockets.ChatMessages.SwipeRight.Params = {
+			id: msg.id
 		}
-		socket.emit("chatMessageSwipeRight", req)
+		socket.emit("chatMessages:swipeRight", req)
 	}
 
 	function swipeLeft(msg: SelectChatMessage): void {
-		const req: Sockets.ChatMessageSwipeLeft.Call = {
-			chatId: chatId,
-			chatMessageId: msg.id
+		const req: Sockets.ChatMessages.SwipeLeft.Params = {
+			id: msg.id
 		}
-		socket.emit("chatMessageSwipeLeft", req)
+		socket.emit("chatMessages:swipeLeft", req)
 	}
 
 	async function loadOlderMessages() {
-		if (loadingOlderMessages || !pagination?.hasMore || !chat) return
+		if (
+			loadingOlderMessages ||
+			!pagination?.hasMore ||
+			!chat ||
+			chat.chatMessages.length === 0
+		)
+			return
 
 		loadingOlderMessages = true
 
-		// Store current scroll position to restore it after loading
-		const scrollHeight = chatMessagesContainer?.scrollHeight || 0
-		const currentOffset = chat.chatMessages.length
-
-		socket.emit("chat", {
-			id: chatId,
-			limit: 25,
-			offset: currentOffset
-		})
-
-		// Store scroll height for position restoration
+		// Save scroll anchor before the DOM changes so we can restore position after prepend
 		if (chatMessagesContainer) {
 			chatMessagesContainer.dataset.previousScrollHeight =
-				scrollHeight.toString()
+				chatMessagesContainer.scrollHeight.toString()
+			chatMessagesContainer.dataset.previousScrollTop =
+				chatMessagesContainer.scrollTop.toString()
 		}
+
+		const beforeId = Math.min(...chat.chatMessages.map((m) => m.id))
+		socket.emit("chats:get", { id: chatId, limit: 25, beforeId })
 
 		// loadingOlderMessages will be set to false in the socket response handler
 	}
@@ -454,6 +982,13 @@
 		return true
 	}
 
+	// NOTE: this deliberately no longer returns true for
+	// `openMsgControlsMenu === msg.id`. That branch made opening a message's
+	// "..." popover add the swipe row to that message, growing it by a whole
+	// row while the popover was anchored to it — the message jumped and the
+	// popover had to reposition. The trade is that swipe arrows on mid-history
+	// assistant messages are no longer reachable; if that needs restoring, add
+	// a labelled swipe entry to the popover rather than re-coupling the two.
 	function showSwipeControls(
 		msg: SelectChatMessage,
 		isGreeting: boolean
@@ -466,1058 +1001,2149 @@
 			res = false
 		} else if (msg.role === "user") {
 			return false
-		} else if (openMobileMsgControls === msg.id) {
-			res = true
 		} else if (isGreeting) {
 			res = (lastPersonaMessage?.id ?? 0) < msg.id
 		}
 		return res
 	}
 
-	onMount(() => {
-		socket.on("chat", (msg: Sockets.Chat.Response) => {
-			if (msg.chat.id === chatId) {
-				if (chat && loadingOlderMessages) {
-					// Merge older messages (avoiding duplicates)
-					const existingIds = new Set(
-						chat.chatMessages.map((m) => m.id)
-					)
-					const newMessages = msg.chat.chatMessages.filter(
-						(m) => !existingIds.has(m.id)
-					)
-					// Add older messages at the beginning, then sort all messages by ID (chronological order)
-					const allMessages = [...newMessages, ...chat.chatMessages]
-					chat.chatMessages = allMessages.sort((a, b) => a.id - b.id)
+	// Named handlers (not inline in onMount) so cleanup can pass the exact
+	// same reference to .off() — a no-arg .off() call (or one with a
+	// different function reference than what was registered) removes
+	// *every* listener for that event, not just this component's.
+	function handlePersonasList(msg: Sockets.Personas.List.Response) {
+		availablePersonas = msg.personaList
+	}
 
-					// Restore scroll position after loading older messages
-					setTimeout(() => {
-						if (chatMessagesContainer) {
-							const previousScrollHeight = parseInt(
-								chatMessagesContainer.dataset
-									.previousScrollHeight || "0"
-							)
-							const newScrollHeight =
-								chatMessagesContainer.scrollHeight
-							const scrollDiff =
-								newScrollHeight - previousScrollHeight
+	function handleChatsUserTyping(msg: Sockets.Chats.UserTyping.Response) {
+		if (msg.chatId !== chatId) return
+		const myPersonaId =
+			currentUserPersona?.personaId || chat?.chatPersonas?.[0]?.personaId
+		if (msg.personaId === myPersonaId) return
+		typingPersonas.set(msg.personaId, {
+			name: msg.personaName,
+			lastTypingAt: Date.now()
+		})
+		typingPersonas = new Map(typingPersonas)
+	}
 
-							// Maintain the user's relative position by scrolling down by the difference
-							chatMessagesContainer.scrollTop = scrollDiff
-							delete chatMessagesContainer.dataset
-								.previousScrollHeight
-						}
-						loadingOlderMessages = false
-					}, 10)
-				} else {
-					// Initial load or refresh - ensure messages are sorted chronologically
-					chat = {
-						...msg.chat,
-						chatMessages: msg.chat.chatMessages.sort(
-							(a, b) => a.id - b.id
+	function handleChatsGet(msg: Sockets.Chats.Get.Response) {
+		if (msg.chat === null && !loadingOlderMessages) {
+			chatNotFound = true
+			return
+		}
+		if (msg.chat?.id === chatId) {
+			if (chat && loadingOlderMessages && msg.beforeId != null) {
+				// Load-more: prepend older messages (server already deduped via cursor)
+				const existingIds = new Set(chat.chatMessages.map((m) => m.id))
+				const olderMessages = msg.chat.chatMessages.filter(
+					(m) => !existingIds.has(m.id)
+				)
+				const allMessages = [...olderMessages, ...chat.chatMessages]
+				chat.chatMessages = allMessages.sort((a, b) => a.id - b.id)
+
+				// Restore scroll position: account for the height added above the old content
+				setTimeout(() => {
+					if (chatMessagesContainer) {
+						const prevScrollHeight = parseInt(
+							chatMessagesContainer.dataset
+								.previousScrollHeight || "0"
 						)
+						const prevScrollTop = parseInt(
+							chatMessagesContainer.dataset.previousScrollTop ||
+								"0"
+						)
+						const addedHeight =
+							chatMessagesContainer.scrollHeight -
+							prevScrollHeight
+						chatMessagesContainer.scrollTop =
+							addedHeight + prevScrollTop
+						delete chatMessagesContainer.dataset
+							.previousScrollHeight
+						delete chatMessagesContainer.dataset.previousScrollTop
 					}
 					loadingOlderMessages = false
-				}
-				pagination = msg.pagination
-				// Auto-scroll is handled by the $effect
-			}
-		})
-
-		socket.on("chatMessage", (msg: Sockets.ChatMessage.Response) => {
-			if (chat !== undefined && msg.chatMessage.chatId === chatId) {
-				const existingIndex = chat!.chatMessages.findIndex(
-					(m: SelectChatMessage) => m.id === msg.chatMessage.id
-				)
-				if (existingIndex !== -1) {
-					const updatedMessages = [...chat!.chatMessages]
-					updatedMessages[existingIndex] = msg.chatMessage
-					chat = { ...chat, chatMessages: updatedMessages }
-				} else {
-					// Add new message and maintain chronological order
-					const updatedMessages = [
-						...chat.chatMessages,
-						msg.chatMessage
-					]
-					chat = {
-						...chat,
-						chatMessages: updatedMessages.sort(
-							(a, b) => a.id - b.id
-						)
-					}
-				}
-				// Refresh response order when messages change
-				socket.emit("getChatResponseOrder", { chatId })
-				// Auto-scroll is handled by the $effect
-			}
-		})
-
-		socket.on(
-			"updateCharacter",
-			(msg: Sockets.UpdateCharacter.Response) => {
-				const charId = msg.character?.id
-				if (!charId || !chat) return
-
-				// Update chat characters if the character is in the chat
-				const chatCharacterIndex = chat.chatCharacters.findIndex(
-					(c: SelectChatCharacter) => c.characterId === charId
-				)
-				if (chatCharacterIndex !== -1) {
-					const updatedChatCharacters = [...chat.chatCharacters]
-					updatedChatCharacters[chatCharacterIndex] = {
-						...updatedChatCharacters[chatCharacterIndex],
-						character: msg.character
-					}
-					chat = { ...chat, chatCharacters: updatedChatCharacters }
-				}
-			}
-		)
-
-		socket.on("updatePersona", (msg: Sockets.UpdatePersona.Response) => {
-			const personaId = msg.persona?.id
-			if (!personaId || !chat) return
-
-			// Update chat personas if the persona is in the chat
-			const chatPersonaIndex = chat.chatPersonas.findIndex(
-				(p: SelectChatPersona) => p.personaId === personaId
-			)
-			if (chatPersonaIndex !== -1) {
-				const updatedChatPersonas = [...chat.chatPersonas]
-				updatedChatPersonas[chatPersonaIndex] = {
-					...updatedChatPersonas[chatPersonaIndex],
-					persona: msg.persona
-				}
-				chat = { ...chat, chatPersonas: updatedChatPersonas }
-			}
-		})
-
-		socket.on(
-			"promptTokenCount",
-			(msg: Sockets.PromptTokenCount.Response) => {
-				draftCompiledPrompt = msg
-			}
-		)
-
-		socket.on(
-			"deleteChatMessage",
-			(msg: Sockets.DeleteChatMessage.Response) => {
-				if (chat) {
-					// Check if we're deleting the last message
-					const wasLastMessage = lastSeenMessageId === msg.id
-
-					// Remove the deleted message from the chat messages array
-					const filteredMessages = chat.chatMessages.filter(
-						(m: SelectChatMessage) => m.id !== msg.id
+				}, 10)
+			} else {
+				// Initial load or chat switch — restore draft only on first load
+				const isFirstLoad = !chat
+				chat = {
+					...msg.chat,
+					chatMessages: msg.chat.chatMessages.sort(
+						(a, b) => a.id - b.id
 					)
+				}
+				if (isFirstLoad && msg.userDraft) {
+					newMessage = msg.userDraft
+				}
+				loadingOlderMessages = false
+			}
+			pagination = msg.pagination
+			// Auto-scroll is handled by the $effect
+		}
+	}
 
-					// Ensure messages remain sorted chronologically
-					chat = {
-						...chat,
-						chatMessages: filteredMessages.sort(
-							(a, b) => a.id - b.id
-						)
-					}
-
-					// Update tracking state if we deleted the last message
-					if (wasLastMessage && chat.chatMessages.length > 0) {
-						const newLastMessage =
-							chat.chatMessages[chat.chatMessages.length - 1]
-						lastSeenMessageId = newLastMessage.id
-						lastSeenMessageContent = newLastMessage.content || ""
-					} else if (chat.chatMessages.length === 0) {
-						lastSeenMessageId = null
-						lastSeenMessageContent = ""
-					}
-
-					// Refresh response order after deletion
-					socket.emit("getChatResponseOrder", { chatId })
+	function handleChatMessage(msg: Sockets.ChatMessage.Response) {
+		const currentChat = chat
+		if (
+			currentChat != null &&
+			msg.chatMessage &&
+			msg.chatMessage.chatId === chatId
+		) {
+			const chatMessage = msg.chatMessage
+			const existingIndex = currentChat.chatMessages.findIndex(
+				(m: SelectChatMessage) => m.id === chatMessage.id
+			)
+			if (existingIndex !== -1) {
+				const updatedMessages = [...currentChat.chatMessages]
+				updatedMessages[existingIndex] = chatMessage
+				chat = { ...currentChat, chatMessages: updatedMessages }
+			} else {
+				// Add new message and maintain chronological order
+				const updatedMessages = [
+					...currentChat.chatMessages,
+					chatMessage
+				]
+				chat = {
+					...currentChat,
+					chatMessages: updatedMessages.sort((a, b) => a.id - b.id)
 				}
 			}
-		)
+			// Refresh response order when messages change
+			socket.emit("chats:getResponseOrder", { chatId })
+			// Auto-scroll is handled by the $effect
+		}
+	}
 
+	// "chatMessage" (singular) is the server's event for a single message
+	// fetch/echo (distinct from the "chatMessages:*" bulk/action events used
+	// elsewhere) - this surfaces a toast if that ever fails.
+	function handleLorebookBindingList(msg: {
+		lorebookBindingList?: { id: number; name: string; binding: string }[]
+	}) {
+		lorebookBindingList = msg.lorebookBindingList ?? []
+	}
+
+	function handleChatSummarizeError(msg: { error?: string }) {
+		// Page-level for the same reason as scenes:process:error — the modal
+		// tears its listeners down on close, and this event is suppressed in
+		// Layout's generic toaster, so a failure while minimized was silent.
+		toaster.error({
+			title: "Summarization failed",
+			description: msg?.error
+		})
+	}
+
+	function handleSceneProcessError(msg: { error?: string }) {
+		toaster.error({
+			title: "Scene processing failed",
+			description: msg?.error
+		})
+	}
+
+	function handleChatMessageError(msg: { error?: string }) {
+		// A generation that failed before any isGenerating row would otherwise
+		// leave the next-character block suppressed for the full settle timeout.
+		clearTriggerInFlight()
+		toaster.error({
+			title: "Failed to load message",
+			description: msg?.error
+		})
+	}
+
+	function handleCharactersUpdate(msg: Sockets.Characters.Update.Response) {
+		const charId = msg.character?.id
+		if (!charId || !chat) return
+
+		// Update chat characters if the character is in the chat
+		const chatCharacterIndex = chat.chatCharacters.findIndex(
+			(c: SelectChatCharacter) => c.characterId === charId
+		)
+		if (chatCharacterIndex !== -1) {
+			const updatedChatCharacters = [...chat.chatCharacters]
+			updatedChatCharacters[chatCharacterIndex] = {
+				...updatedChatCharacters[chatCharacterIndex],
+				character: msg.character
+			}
+			chat = { ...chat, chatCharacters: updatedChatCharacters }
+		}
+	}
+
+	function handlePersonasUpdate(msg: Sockets.Personas.Update.Response) {
+		const personaId = msg.persona?.id
+		if (!personaId || !chat) return
+
+		// Update chat personas if the persona is in the chat
+		const chatPersonaIndex = chat.chatPersonas.findIndex(
+			(p: SelectChatPersona) => p.personaId === personaId
+		)
+		if (chatPersonaIndex !== -1) {
+			const updatedChatPersonas = [...chat.chatPersonas]
+			updatedChatPersonas[chatPersonaIndex] = {
+				...updatedChatPersonas[chatPersonaIndex],
+				persona: msg.persona
+			}
+			chat = { ...chat, chatPersonas: updatedChatPersonas }
+		}
+	}
+
+	function handleChatsPromptTokenCount(
+		msg: Sockets.Chats.PromptTokenCount.Response
+	) {
+		draftCompiledPrompt = msg
+	}
+
+	function handleChatMessagesDelete(
+		msg: Sockets.ChatMessages.Delete.Response
+	) {
+		if (chat) {
+			// Check if we're deleting the last message
+			const wasLastMessage = lastSeenMessageId === msg.id
+
+			// Remove the deleted message from the chat messages array
+			const filteredMessages = chat.chatMessages.filter(
+				(m: SelectChatMessage) => m.id !== msg.id
+			)
+
+			// Ensure messages remain sorted chronologically
+			chat = {
+				...chat,
+				chatMessages: filteredMessages.sort((a, b) => a.id - b.id)
+			}
+
+			// Update tracking state if we deleted the last message
+			if (wasLastMessage && chat.chatMessages.length > 0) {
+				const newLastMessage =
+					chat.chatMessages[chat.chatMessages.length - 1]
+				lastSeenMessageId = newLastMessage.id
+				lastSeenMessageContent = newLastMessage.content || ""
+			} else if (chat.chatMessages.length === 0) {
+				lastSeenMessageId = null
+				lastSeenMessageContent = ""
+			}
+
+			// Refresh response order after deletion
+			socket.emit("chats:getResponseOrder", { chatId })
+		}
+	}
+
+	function handleChatsGetResponseOrder(
+		msg: Sockets.Chats.GetResponseOrder.Response
+	) {
+		if (msg.chatId === chatId) {
+			chatResponseOrder = msg
+		}
+	}
+
+	function handleChatsAddPersona(msg: Sockets.Chats.AddPersona.Response) {
+		if (msg.success) {
+			toaster.success({
+				title: "Persona added to chat successfully"
+			})
+		} else if (msg.error) {
+			toaster.error({ title: msg.error })
+		}
+	}
+
+	function handleChatsBranch(msg: Sockets.Chats.Branch.Response) {
+		if (msg.chat) {
+			toaster.success({
+				title: "Chat branched successfully"
+			})
+			// Navigate to the new branched chat
+			goto(`/chats/${msg.chat.id}`)
+		} else if (msg.error) {
+			toaster.error({ title: msg.error })
+		}
+	}
+
+	function handleScenesScenedMessageIds(
+		msg: Sockets.Scenes.SenedMessageIds.Response
+	) {
+		scenedMessageIds = new Set(msg.scenedMessageIds)
+	}
+
+	function handleScenesScenedMessageIdsError() {
+		chatNotFound = true
+	}
+
+	function handleScenesList(msg: Sockets.Scenes.List.Response) {
+		if (!msg.sceneList.length || msg.sceneList[0].chatId === chatId) {
+			sceneList = msg.sceneList
+		}
+	}
+
+	function handleScenesListError() {
+		chatNotFound = true
+	}
+
+	function handleChatsGetNarratorName(
+		msg: Sockets.Chats.GetNarratorName.Response
+	) {
+		if (msg.chatId !== chatId) return
+		narratorName = msg.narratorName
+	}
+
+	onMount(() => {
+		// Fetch available personas for guest users
+		socket.emit("personas:list", {})
+
+		socket.on("personas:list", handlePersonasList)
+		socket.on("chats:userTyping", handleChatsUserTyping)
+		typingPruneInterval = setInterval(() => {
+			const cutoff = Date.now() - 10_000
+			let changed = false
+			for (const [id, info] of typingPersonas) {
+				if (info.lastTypingAt < cutoff) {
+					typingPersonas.delete(id)
+					changed = true
+				}
+			}
+			if (changed) typingPersonas = new Map(typingPersonas)
+		}, 1000)
+
+		socket.on("chats:get", handleChatsGet)
+		socket.on("chatMessage", handleChatMessage)
+		socket.on("chatMessage:error", handleChatMessageError)
+		socket.on("lorebooks:bindingList", handleLorebookBindingList)
+		// Page-level, so it still fires when the review modal is closed. The
+		// generic onAny toaster already suppresses this event, and the only
+		// other listener lives in the lorebook History pane — so without this a
+		// chat-started run that failed while minimized reported nothing at all.
+		socket.on("scenes:process:error", handleSceneProcessError)
+		socket.on("chats:summarize:error", handleChatSummarizeError)
+		socket.on("characters:update", handleCharactersUpdate)
+		socket.on("personas:update", handlePersonasUpdate)
+		socket.on("chats:promptTokenCount", handleChatsPromptTokenCount)
+		socket.on("chatMessages:delete", handleChatMessagesDelete)
+		socket.on("chats:getResponseOrder", handleChatsGetResponseOrder)
+		socket.on("chats:addPersona", handleChatsAddPersona)
+		socket.on("chats:branch", handleChatsBranch)
+		socket.on("scenes:scenedMessageIds", handleScenesScenedMessageIds)
 		socket.on(
-			"getChatResponseOrder",
-			(msg: Sockets.GetChatResponseOrder.Response) => {
-				if (msg.chatId === chatId) {
-					chatResponseOrder = msg
-				}
-			}
+			"scenes:scenedMessageIds:error",
+			handleScenesScenedMessageIdsError
 		)
+		socket.on("scenes:list", handleScenesList)
+		socket.on("scenes:list:error", handleScenesListError)
+		socket.on("chats:getNarratorName", handleChatsGetNarratorName)
+
+		socket.emit("scenes:scenedMessageIds", { chatId })
+		socket.emit("scenes:list", {
+			chatId
+		} satisfies Sockets.Scenes.List.Params)
+
+		// Cleanup function
+		return () => {
+			// Clear any pending timeouts
+			if (promptTokenCountTimeout) {
+				clearTimeout(promptTokenCountTimeout)
+			}
+			if (autoTriggerTimeout) {
+				clearTimeout(autoTriggerTimeout)
+			}
+			if (typingPruneInterval) {
+				clearInterval(typingPruneInterval)
+			}
+			socket.off("personas:list", handlePersonasList)
+			socket.off("chats:userTyping", handleChatsUserTyping)
+			socket.off("chats:get", handleChatsGet)
+			socket.off("chatMessage", handleChatMessage)
+			socket.off("chatMessage:error", handleChatMessageError)
+			socket.off("lorebooks:bindingList", handleLorebookBindingList)
+			socket.off("scenes:process:error", handleSceneProcessError)
+			socket.off("chats:summarize:error", handleChatSummarizeError)
+			socket.off("characters:update", handleCharactersUpdate)
+			socket.off("personas:update", handlePersonasUpdate)
+			socket.off("chats:promptTokenCount", handleChatsPromptTokenCount)
+			socket.off("chatMessages:delete", handleChatMessagesDelete)
+			socket.off("chats:getResponseOrder", handleChatsGetResponseOrder)
+			socket.off("chats:addPersona", handleChatsAddPersona)
+			socket.off("chats:branch", handleChatsBranch)
+			socket.off("scenes:scenedMessageIds", handleScenesScenedMessageIds)
+			socket.off(
+				"scenes:scenedMessageIds:error",
+				handleScenesScenedMessageIdsError
+			)
+			socket.off("scenes:list", handleScenesList)
+			socket.off("scenes:list:error", handleScenesListError)
+			socket.off("chats:getNarratorName", handleChatsGetNarratorName)
+		}
+	})
+
+	// Re-resolve if the chat's narrator-config override changes (e.g. saved via
+	// Edit Chat) while this page stays open.
+	$effect(() => {
+		const overrideId = chat?.narratorPromptConfigId
+		if (chatId) {
+			socket.emit("chats:getNarratorName", { chatId })
+		}
 	})
 
 	let showAvatarModal = $state(false)
-	let avatarModalSrc: string | undefined = $state(undefined)
+	let avatarModalEntity = $state<{
+		type: "character" | "persona"
+		id: number
+		name: string
+		avatar: string | null | undefined
+	} | null>(null)
+
+	let showImageModal = $state(false)
+	let imageModalSrc = $state<string | null>(null)
+
+	// Scene image overlays — synced into the shared store so Layout can render them
+	let leftSceneImage = $state<string | null>(null)
+	let rightSceneImage = $state<string | null>(null)
+	let sceneImagesInitialized = $state(false)
+
+	// Load persisted images from localStorage when navigating to a chat
+	$effect(() => {
+		const id = chatId
+		sceneImagesInitialized = false
+		leftSceneImage = null
+		rightSceneImage = null
+		if (id) {
+			try {
+				const saved = localStorage.getItem(`sceneImages:${id}`)
+				if (saved) {
+					const { left, right } = JSON.parse(saved)
+					leftSceneImage = left ?? null
+					rightSceneImage = right ?? null
+				}
+			} catch {}
+		}
+		sceneImagesInitialized = true
+	})
+
+	// Persist images to localStorage when they change (but not during initial load)
+	$effect(() => {
+		if (!sceneImagesInitialized) return
+		const id = chatId
+		if (!id) return
+		const left = leftSceneImage
+		const right = rightSceneImage
+		if (left || right) {
+			localStorage.setItem(
+				`sceneImages:${id}`,
+				JSON.stringify({ left, right })
+			)
+		} else {
+			localStorage.removeItem(`sceneImages:${id}`)
+		}
+	})
+
+	// Sync into the shared store so Layout can render them
+	$effect(() => {
+		sceneImages.set({ left: leftSceneImage, right: rightSceneImage })
+	})
+	onDestroy(() => {
+		sceneImages.set({ left: null, right: null })
+		openChatCtx.chatId = null
+		openChatCtx.lorebookId = null
+		openChatCtx.isOwner = false
+	})
 
 	function handleAvatarClick(
 		char: SelectCharacter | SelectPersona | undefined
 	) {
 		if (!char) return
-		if (char.avatar) {
-			avatarModalSrc = char.avatar
-			showAvatarModal = true
+		const isPersona = chat?.chatPersonas?.some(
+			(cp) => cp.persona?.id === char.id
+		)
+		avatarModalEntity = {
+			type: isPersona ? "persona" : "character",
+			id: char.id,
+			// resolveCharacterName uses `||` (not `??`) deliberately — a blank
+			// nickname is commonly stored as "" rather than null, and ""
+			// isn't nullish, so `??` wouldn't fall through to the character's
+			// real name, leaving the modal title empty.
+			name: resolveCharacterName(char, ""),
+			avatar: char.avatar ?? null
 		}
+		showAvatarModal = true
+	}
+
+	function handleImageClick(src: string) {
+		imageModalSrc = src
+		showImageModal = true
 	}
 </script>
 
 <svelte:head>
-	<title>Serene Pub - {chat?.name}</title>
+	<title>
+		Serene Pub - {chatNotFound ? "Not Found" : (chat?.name ?? "Loading...")}
+	</title>
 	<meta name="description" content="Serene Pub" />
 </svelte:head>
 
-<div class="relative flex h-full flex-col">
+{#if chatNotFound}
 	<div
-		id="chat-history"
-		class="flex flex-1 flex-col gap-3 overflow-auto"
-		bind:this={chatMessagesContainer}
-		onscroll={handleScroll}
-		role="log"
-		aria-label="Chat messages"
-		aria-live="polite"
-		aria-atomic="false"
+		class="flex h-full flex-col items-center justify-center gap-4 opacity-60"
 	>
-		<div class="p-2">
-			{#if !chat || chat.chatMessages.length === 0}
-				<div class="text-muted mt-8 text-center">No messages yet.</div>
-			{:else}
-				<!-- Loading indicator for older messages -->
-				{#if loadingOlderMessages}
-					<div class="text-muted py-2 text-center">
-						<div class="inline-flex items-center gap-2">
+		<Icons.MessageSquareOff size={48} />
+		<p class="text-lg font-semibold">Chat not found</p>
+		<p class="text-sm">
+			This chat may have been deleted or you don't have access to it.
+		</p>
+	</div>
+{:else}
+	<div class="relative flex h-full flex-col">
+		<ChatContainer
+			{chat}
+			{pagination}
+			{loadingOlderMessages}
+			bind:chatMessagesContainer
+			onScroll={handleScroll}
+			{getMessageCharacter}
+			{canControlMessage}
+			{showSwipeControls}
+			{canSwipeRight}
+			{canRegenerateLastMessage}
+			onSwipeLeft={swipeLeft}
+			onSwipeRight={swipeRight}
+			onEditMessage={handleEditMessage}
+			onDeleteMessage={handleDeleteMessage}
+			onHideMessage={handleHideMessage}
+			onRegenerateMessage={handleRegenerateMessage}
+			onContinueMessage={handleContinueMessage}
+			onAbortMessage={handleAbortMessage}
+			onBranchMessage={handleBranchMessage}
+			{editChatMessage}
+			{hasGeneratingMessage}
+			{isGuest}
+			{sceneList}
+			onHistoryEntryClick={({ historyEntryId, lorebookId }) => {
+				panelsCtx.digest.lorebookId = lorebookId
+				panelsCtx.digest.historyEntryId = historyEntryId
+				panelsCtx.digest.historyEntryTab = "content"
+				panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+			}}
+			onSceneClick={({ sceneId, historyEntryId, lorebookId }) => {
+				panelsCtx.digest.lorebookId = lorebookId
+				panelsCtx.digest.historyEntryId = historyEntryId
+				panelsCtx.digest.historyEntryTab = "scenes"
+				panelsCtx.digest.sceneId = sceneId
+				panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+			}}
+			onNewHistoryEntry={({ lorebookId }) => {
+				panelsCtx.digest.lorebookId = lorebookId
+				panelsCtx.digest.historyEntryTab = "content"
+				panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+			}}
+			onAttachLorebook={() => {
+				panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+			}}
+		>
+			{#snippet MessageComponent(props)}
+				<ChatMessage
+					{...props}
+					onCharacterNameClick={handleCharacterNameClick}
+					onAvatarClick={handleAvatarClick}
+					onImageClick={handleImageClick}
+					onCancelEditMessage={handleCancelEditMessage}
+					onSaveEditMessage={handleSaveEditMessage}
+					bind:openMsgControlsMenu
+					{lastPersonaMessage}
+					{isSummarizationMode}
+					isSelected={selectedMessageIds.has(props.msg.id)}
+					onStartSummarization={summarizationEnabled &&
+					!isSummarizationMode
+						? enterSummarizationMode
+						: undefined}
+				>
+					{#snippet GeneratingAnimationComponent()}
+						{@const character = props.getMessageCharacter(
+							props.msg
+						)}
+						{@const speakerName = props.msg.isNarratorResponse
+							? props.msg.metadata?.narratorName || "Narrator"
+							: resolveCharacterName(character, "User")}
+						<GeneratingAnimation
+							text={`${speakerName} is typing`}
+						/>
+					{/snippet}
+					{#snippet messageControls(msg)}
+						{#if isSummarizationMode}
+							{@const isScened = scenedMessageIds.has(msg.id)}
 							<div
-								class="h-4 w-4 animate-spin rounded-full border-b-2 border-current"
-							></div>
-							Loading older messages...
+								class="flex gap-2"
+								role="group"
+								aria-label="Selection controls"
+							>
+								{#if isScened}
+									<span
+										class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600 cursor-not-allowed opacity-60"
+										title="Already captured in a scene"
+										aria-label="Already captured in a scene"
+									>
+										<Icons.Film aria-hidden="true" />
+										<span class="hidden lg:inline">
+											In Scene
+										</span>
+									</span>
+								{:else}
+									<button
+										class="btn msg-ctrl-btn-labeled {selectedMessageIds.has(
+											msg.id
+										)
+											? 'preset-filled-secondary-500'
+											: 'preset-filled-surface-400-600'}"
+										title={selectedMessageIds.has(msg.id)
+											? "Deselect message"
+											: "Select message"}
+										aria-label={selectedMessageIds.has(
+											msg.id
+										)
+											? "Deselect message"
+											: "Select message"}
+										aria-pressed={selectedMessageIds.has(
+											msg.id
+										)}
+										onclick={() =>
+											toggleSummarizationMessage(msg.id)}
+									>
+										{#if selectedMessageIds.has(msg.id)}
+											<Icons.CheckSquare
+												aria-hidden="true"
+											/>
+										{:else}
+											<Icons.Square aria-hidden="true" />
+										{/if}
+										<span class="hidden lg:inline">
+											{selectedMessageIds.has(msg.id)
+												? "Deselect"
+												: "Select"}
+										</span>
+									</button>
+									<button
+										class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600"
+										title="Select all above up to nearest selected"
+										aria-label="Select all above up to nearest selected"
+										onclick={() =>
+											selectAllAbove(props.index)}
+									>
+										<Icons.ChevronsUp aria-hidden="true" />
+										<span class="hidden lg:inline">
+											Select All Above
+										</span>
+									</button>
+									<button
+										class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600"
+										title="Select all below up to nearest selected"
+										aria-label="Select all below up to nearest selected"
+										onclick={() =>
+											selectAllBelow(props.index)}
+									>
+										<Icons.ChevronsDown
+											aria-hidden="true"
+										/>
+										<span class="hidden lg:inline">
+											Select All Below
+										</span>
+									</button>
+								{/if}
+							</div>
+						{:else}
+							<MessageControls
+								{msg}
+								isLastMessage={props.isLastMessage}
+								canRegenerateLastMessage={props.canRegenerateLastMessage}
+								editChatMessage={props.editChatMessage}
+								hasGeneratingMessage={props.hasGeneratingMessage}
+								onEditMessage={props.onEditMessage}
+								onHideMessage={props.onHideMessage}
+								onDeleteMessage={props.onDeleteMessage}
+								onRegenerateMessage={props.onRegenerateMessage}
+								onContinueMessage={props.onContinueMessage}
+								onAbortMessage={props.onAbortMessage}
+								onBranchMessage={props.onBranchMessage}
+								onStartSummarization={summarizationEnabled
+									? enterSummarizationMode
+									: undefined}
+								debugMeta={systemSettingsCtx.settings
+									?.contextDebuggingEnabled
+									? (msg.debugMeta ?? null)
+									: null}
+								onShowDebugMeta={systemSettingsCtx.settings
+									?.contextDebuggingEnabled
+									? (meta: any) => {
+											draftCompiledPrompt = {
+												prompt: meta?.prompt,
+												messages: meta?.messages,
+												meta
+											}
+											showDraftCompiledPromptModal = true
+										}
+									: undefined}
+								open={openMsgControlsMenu === msg.id}
+								onOpenChange={(isOpen) =>
+									(openMsgControlsMenu = isOpen
+										? msg.id
+										: undefined)}
+							/>
+						{/if}
+					{/snippet}
+				</ChatMessage>
+			{/snippet}
+			{#snippet ComposerComponent()}
+				{#if isSummarizationMode && summarizationEnabled}
+					<div
+						class="preset-tonal-secondary flex flex-wrap items-center gap-2 p-3 lg:rounded-t-lg"
+					>
+						<span class="text-sm font-semibold">
+							{selectedMessageIds.size}
+							{selectedMessageIds.size === 1
+								? "message"
+								: "messages"} selected
+						</span>
+						<div class="flex gap-2">
+							<button
+								class="btn btn-sm preset-filled-surface-400-600"
+								title="Select All"
+								onclick={() => {
+									selectedMessageIds = new Set(
+										chat!.chatMessages
+											.filter(
+												(m) =>
+													!scenedMessageIds.has(m.id)
+											)
+											.map((m) => m.id)
+									)
+								}}
+							>
+								<Icons.CheckSquare size={16} />
+								<span class="hidden sm:inline">Select All</span>
+							</button>
+							<button
+								class="btn btn-sm preset-filled-surface-400-600"
+								title="Select None"
+								onclick={() => (selectedMessageIds = new Set())}
+							>
+								<Icons.Square size={16} />
+								<span class="hidden sm:inline">
+									Select None
+								</span>
+							</button>
+						</div>
+						<div class="ml-auto flex flex-wrap gap-2">
+							<button
+								class="btn btn-sm preset-filled-surface-500"
+								title="Cancel"
+								onclick={exitSummarizationMode}
+							>
+								<Icons.X size={16} />
+								<span class="hidden sm:inline">Cancel</span>
+							</button>
+							<button
+								class="btn btn-sm preset-filled-secondary-500"
+								title="Scene"
+								disabled={selectedMessageIds.size === 0}
+								onclick={() => openSummarizeModal("scene")}
+							>
+								<Icons.Film size={16} />
+								<span class="hidden sm:inline">Scene</span>
+							</button>
+							<button
+								class="btn btn-sm preset-filled-primary-500"
+								title="World Lore"
+								disabled={selectedMessageIds.size === 0}
+								onclick={() => openSummarizeModal("world")}
+							>
+								<Icons.Globe size={16} />
+								<span class="hidden sm:inline">World Lore</span>
+							</button>
+							<button
+								class="btn btn-sm preset-filled-tertiary-500"
+								title="Character Lore"
+								disabled={selectedMessageIds.size === 0}
+								onclick={() => openSummarizeModal("character")}
+							>
+								<Icons.User size={16} />
+								<span class="hidden sm:inline">
+									Character Lore
+								</span>
+							</button>
 						</div>
 					</div>
+				{:else}
+					{#each [...typingPersonas.values()] as typingPersona (typingPersona.name)}
+						<div class="flex items-center gap-2 px-2 pb-1">
+							<p
+								class="text-surface-600-400 animate-pulse text-sm"
+							>
+								{typingPersona.name} is typing...
+							</p>
+							<div
+								class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"
+							></div>
+						</div>
+					{/each}
+					<ChatComposer
+						bind:newMessage
+						onSend={handleSend}
+						{draftCompiledPrompt}
+						{currentUserPersona}
+						{userPersonasInChat}
+						onSwitchPersona={switchPersona}
+						chat={chat ?? undefined}
+						{lastMessage}
+						{editChatMessage}
+						{isGuest}
+						{showAddPersonaCTA}
+						onAddPersonaClick={() => {
+							showAddPersonaModal = true
+						}}
+						onAbortLastMessage={handleAbortLastMessage}
+						extraTabs={isGuest
+							? []
+							: [
+									{
+										value: "extraControls",
+										title: "Extra Controls",
+										control: extraControlsButton,
+										content: extraControlsContent
+									},
+									...(chat?.lorebookId
+										? [
+												{
+													value: "workflow",
+													title: "Lore",
+													control: workflowButton,
+													content: workflowContent
+												}
+											]
+										: []),
+									{
+										value: "sceneImages",
+										title: "Pinned Images",
+										control: sceneImagesButton,
+										content: sceneImagesContent
+									},
+									...(systemSettingsCtx.settings
+										?.contextDebuggingEnabled
+										? [
+												{
+													value: "statistics",
+													title: "Statistics",
+													control: statisticsButton,
+													content: statisticsContent
+												}
+											]
+										: [])
+								]}
+					/>
 				{/if}
+			{/snippet}
+			{#snippet NextCharacterComponent()}
+				{#if shouldShowNextCharacterBlock}
+					<NextCharacterBlock
+						{nextCharacter}
+						shouldShow={shouldShowNextCharacterBlock}
+						{canChooseDifferentCharacter}
+						onContinueWithNextCharacter={handleContinueWithNextCharacter}
+						onChooseDifferentCharacter={handleChooseDifferentCharacter}
+					/>
+				{/if}
+			{/snippet}
+		</ChatContainer>
+	</div>
 
-				<ul
-					class="flex flex-1 flex-col gap-3"
-					bind:this={messagesContainer}
-					role="group"
-					aria-label="Chat conversation with {chat.chatMessages
-						.length} messages"
+	{#if showProcessSceneModal && processSceneId !== null && chat?.lorebookId}
+		<ProcessSceneModal
+			open={showProcessSceneModal}
+			onOpenChange={(e) => (showProcessSceneModal = e.open)}
+			sceneId={processSceneId}
+			activityId={processActivityId}
+			pendingResult={processPendingResult}
+			lorebookId={chat.lorebookId}
+			{lorebookBindingList}
+			onApplied={() => {
+				socket?.emit("scenes:scenedMessageIds", { chatId })
+				socket?.emit("scenes:list", {
+					chatId
+				} satisfies Sockets.Scenes.List.Params)
+			}}
+			onDiscarded={() => {
+				// The server deletes the scene on dismiss when it was created
+				// for this run, so refresh what the chat shows as "scened".
+				socket?.emit("scenes:scenedMessageIds", { chatId })
+				socket?.emit("scenes:list", {
+					chatId
+				} satisfies Sockets.Scenes.List.Params)
+			}}
+		/>
+	{/if}
+
+	<SummarizeLoreModal
+		bind:open={showSummarizeModal}
+		onOpenChange={(e) => {
+			showSummarizeModal = e.open
+			// Drop the resume payload on close so the next manual open starts
+			// from configure rather than rehydrating a stale review.
+			if (!e.open) resumeSummarizeActivity = null
+		}}
+		resumeActivity={resumeSummarizeActivity}
+		{chatId}
+		lorebookId={chat?.lorebookId ?? null}
+		selectedMessageIds={[...selectedMessageIds]}
+		initialLoreType={summarizeLoreType}
+		onSaved={() => {
+			socket?.emit("scenes:scenedMessageIds", { chatId })
+			socket?.emit("scenes:list", {
+				chatId
+			} satisfies Sockets.Scenes.List.Params)
+			exitSummarizationMode()
+		}}
+		onSceneProcessStarted={(sceneId) => {
+			// Fires only after scenes:create succeeded, so the selection is
+			// safe to drop — the scene row now holds those message ids, and
+			// they immediately render as "scened". Clearing on click instead
+			// would lose a hand-picked selection whenever the create failed.
+			socket?.emit("scenes:scenedMessageIds", { chatId })
+			socket?.emit("scenes:list", {
+				chatId
+			} satisfies Sockets.Scenes.List.Params)
+			exitSummarizationMode()
+			// Review happens in the activity-backed modal, which is what knows
+			// how to resume a minimized run and saves via scenes:update.
+			processSceneId = sceneId
+			processActivityId = null
+			processPendingResult = null
+			showProcessSceneModal = true
+		}}
+		onLorebookSet={handleLorebookSet}
+		chatCharacters={(chat?.chatCharacters ?? []).map((cc) => ({
+			type: "character" as const,
+			id: cc.character.id,
+			name: resolveCharacterName(cc.character, cc.character.name)
+		}))}
+		chatPersonas={(chat?.chatPersonas ?? []).map((cp) => ({
+			type: "persona" as const,
+			id: cp.persona.id,
+			name: cp.persona.name
+		}))}
+		hasSceneMessageGap={hasSceneGap}
+	/>
+
+	<Dialog
+		open={showDeleteMessageModal}
+		onOpenChange={onOpenMessageDeleteChange}
+	>
+		<Portal>
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
+			>
+				<Dialog.Content
+					class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
 				>
-					{#each chat.chatMessages as msg, index (msg.id)}
-						{@const character = getMessageCharacter(msg)}
-						{@const isGreeting = !!msg.metadata?.isGreeting}
-						{@const isLastMessage =
-							index === chat.chatMessages.length - 1}
-						<li
-							id="message-{msg.id}"
-							class="preset-filled-primary-50-950 flex flex-col rounded-lg p-2"
-							class:opacity-50={msg.isHidden &&
-								editChatMessage?.id !== msg.id}
-							tabindex="-1"
-							role="article"
-							aria-label="Message {index + 1} of {chat
-								.chatMessages
-								.length} from {character?.nickname ||
-								character?.name ||
-								'Unknown'}: {msg.content.slice(0, 100)}{msg
-								.content.length > 100
-								? '...'
-								: ''}"
-							onkeydown={(e) => {
-								if (e.key === "Enter") {
-									e.preventDefault()
-									// Focus first available action button
-									const messageEl = e.currentTarget
-									const firstButton = messageEl.querySelector(
-										"button:not([disabled])"
-									)
-									if (firstButton) firstButton.focus()
-								} else if (e.key === "ArrowUp" && index > 0) {
-									e.preventDefault()
-									const prevMessage = document.getElementById(
-										`message-${chat.chatMessages[index - 1].id}`
-									)
-									if (prevMessage) prevMessage.focus()
-								} else if (
-									e.key === "ArrowDown" &&
-									index < chat.chatMessages.length - 1
-								) {
-									e.preventDefault()
-									const nextMessage = document.getElementById(
-										`message-${chat.chatMessages[index + 1].id}`
-									)
-									if (nextMessage) nextMessage.focus()
-								}
-							}}
+					<header class="flex justify-between">
+						<h2 class="h2">Confirm</h2>
+					</header>
+					<article>
+						<p class="opacity-60">
+							Are you sure you want to delete this message?
+						</p>
+					</article>
+					<footer class="flex justify-end gap-4">
+						<button
+							class="btn preset-filled-surface-500"
+							onclick={onDeleteMessageCancel}
 						>
-							<div class="flex justify-between gap-2">
-								<div class="group flex gap-2">
-									<span>
-										<!-- Make avatar clickable -->
-										<button
-											class="m-0 w-fit p-0"
-											onclick={() =>
-												handleAvatarClick(character)}
-											title="View Avatar"
-										>
-											<Avatar char={character} />
-										</button>
+							Cancel
+						</button>
+						<button
+							class="btn preset-filled-error-500"
+							onclick={onDeleteMessageConfirm}
+						>
+							Delete
+						</button>
+					</footer>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
+
+	<Dialog
+		open={showDraftCompiledPromptModal}
+		onOpenChange={(details) =>
+			(showDraftCompiledPromptModal = details.open)}
+	>
+		<Portal>
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
+			>
+				<Dialog.Content
+					class="card bg-surface-100-900 border-surface-300-700 flex max-h-[90dvh] w-[70em] max-w-full flex-col space-y-4 border p-4 shadow-xl"
+				>
+					<header class="flex shrink-0 items-center justify-between">
+						<h2 class="h2">Prompt Details</h2>
+						<button
+							class="btn btn-sm"
+							onclick={() =>
+								(showDraftCompiledPromptModal = false)}
+						>
+							<Icons.X size={20} />
+						</button>
+					</header>
+
+					{#if draftCompiledPrompt?.meta}
+						{@const rag = draftCompiledPrompt.meta.rag}
+						{@const tokens = draftCompiledPrompt.meta.tokenCounts}
+						{@const msgs = draftCompiledPrompt.meta.chatMessages}
+						{@const src = draftCompiledPrompt.meta.sources}
+						{@const tokenPct = Math.min(
+							100,
+							Math.round((tokens.total / tokens.limit) * 100)
+						)}
+						{@const truncReason =
+							draftCompiledPrompt.meta.truncationReason}
+						{@const ragScores = rag?.used ? rag.scores : undefined}
+						{@const msgScoreMin = ragScores?.messageScores?.length
+							? Math.min(...ragScores.messageScores)
+							: null}
+						{@const msgScoreMax = ragScores?.messageScores?.length
+							? Math.max(...ragScores.messageScores)
+							: null}
+						{@const msgScoreAvg = ragScores?.messageScores?.length
+							? ragScores.messageScores.reduce(
+									(a, b) => a + b,
+									0
+								) / ragScores.messageScores.length
+							: null}
+						{@const loreScoreMin = ragScores?.loreScores?.length
+							? Math.min(...ragScores.loreScores)
+							: null}
+						{@const loreScoreMax = ragScores?.loreScores?.length
+							? Math.max(...ragScores.loreScores)
+							: null}
+						{@const loreScoreAvg = ragScores?.loreScores?.length
+							? ragScores.loreScores.reduce((a, b) => a + b, 0) /
+								ragScores.loreScores.length
+							: null}
+
+						<div
+							class="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1"
+						>
+							<!-- ── Token Budget ──────────────────────────────────────────────── -->
+							<section
+								class="bg-surface-200-800 space-y-2 rounded-lg p-3"
+							>
+								<h3
+									class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+								>
+									Token Budget
+								</h3>
+								<div
+									class="flex items-center justify-between text-sm"
+								>
+									<span
+										class:text-error-500={contextExceeded}
+										class:text-success-500={!contextExceeded}
+									>
+										{tokens.total.toLocaleString()} / {tokens.limit.toLocaleString()}
+										tokens
 									</span>
-									<div class="flex flex-col">
-										<span class="flex gap-1">
-											<button
-												class="funnel-display mx-0 inline-block w-fit px-0 text-[1.1em] font-bold hover:underline"
-												onclick={(e) =>
-													handleCharacterNameClick(
-														msg
-													)}
-												title="Edit"
+									<span class="text-surface-700-300 text-xs">
+										{tokenPct}%
+									</span>
+								</div>
+								<div
+									class="bg-surface-300-700 h-2 w-full overflow-hidden rounded-full"
+								>
+									<div
+										class="h-full rounded-full transition-all {contextExceeded
+											? 'bg-error-500'
+											: tokenPct > 85
+												? 'bg-warning-500'
+												: 'bg-success-500'}"
+										style="width: {tokenPct}%"
+									></div>
+								</div>
+								<div
+									class="text-surface-700-300 flex flex-wrap gap-4 text-xs"
+								>
+									<span>
+										Format: <span
+											class="text-surface-300-700"
+										>
+											{draftCompiledPrompt.meta
+												.promptFormat || "—"}
+										</span>
+									</span>
+									{#if draftCompiledPrompt.meta.templateName}
+										<span>
+											Template: <span
+												class="text-surface-300-700"
 											>
-												<span class="text-nowrap">
-													{character?.nickname ||
-														character?.name ||
-														"Unknown"}
-												</span>
-											</button>
-											{#if isGreeting}
-												<span
-													class="text-muted mt-1 text-xs opacity-50"
-													title="Greeting message"
-												>
-													<Icons.Handshake
-														size={16}
-													/>
-												</span>
-											{/if}
+												{draftCompiledPrompt.meta
+													.templateName}
+											</span>
+										</span>
+									{/if}
+									{#if rag?.used === true}
+										<span
+											class="text-primary-400 font-medium"
+										>
+											RAG Context Infill Engine
+										</span>
+									{:else if rag?.used === false}
+										<span class="text-surface-400">
+											Keyword Context Infill Engine
+										</span>
+									{:else}
+										<span class="text-surface-400">
+											Context Infill Engine
+										</span>
+									{/if}
+								</div>
+								{#if truncReason}
+									<div
+										class="bg-warning-500/10 border-warning-500/30 text-warning-400 flex items-center gap-1.5 rounded border px-2 py-1.5 text-xs"
+									>
+										<Icons.TriangleAlert
+											size={12}
+											class="shrink-0"
+										/>
+										<span>
+											Truncated: <span
+												class="font-medium"
+											>
+												{truncReason.replace(/_/g, " ")}
+											</span>
 										</span>
 									</div>
-								</div>
+								{/if}
+							</section>
 
-								{#if editChatMessage && editChatMessage.id === msg.id}
-									<div class="flex gap-2">
-										<button
-											class="btn btn-sm msg-cntrl-icon preset-filled-surface-500"
-											title="Cancel Edit"
-											onclick={handleCancelEditMessage}
-										>
-											<Icons.X size={16} />
-										</button>
-										<button
-											class="btn btn-sm msg-cntrl-icon preset-filled-success-500"
-											title="Save"
-											onclick={handleSaveEditMessage}
-										>
-											<Icons.Save
-												size={16}
-												class="mx-4"
-											/>
-										</button>
-									</div>
-								{:else}
-									<div class="flex w-full flex-col gap-2">
+							<!-- ── Messages ─────────────────────────────────────────────────── -->
+							<section
+								class="bg-surface-200-800 space-y-2 rounded-lg p-3"
+							>
+								<h3
+									class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+								>
+									Messages
+								</h3>
+								<div class="flex items-baseline gap-2 text-sm">
+									<span>
+										<span class="font-medium">
+											{msgs.included}
+										</span>
+										<span class="text-surface-700-300">
+											/ {msgs.total} included
+										</span>
+									</span>
+									{#if msgs.total > msgs.included}
+										<span class="text-warning-400 text-xs">
+											{msgs.total - msgs.included} excluded
+										</span>
+									{/if}
+								</div>
+								{#if rag?.used === true}
+									<div class="grid grid-cols-3 gap-2 text-xs">
 										<div
-											class="ml-auto hidden gap-2 lg:flex"
+											class="bg-surface-300-700 rounded p-2 text-center"
 										>
-											{@render messageControls(msg)}
+											<div class="font-semibold">
+												{rag.messages.guaranteed}
+											</div>
+											<div class="text-surface-700-300">
+												Guaranteed
+											</div>
 										</div>
-										<div class="ml-auto lg:hidden">
-											<Popover
-												open={openMobileMsgControls ===
-													msg.id}
-												onOpenChange={(e) =>
-													(openMobileMsgControls =
-														e.open
-															? msg.id
-															: undefined)}
-												positioning={{
-													placement: "bottom"
-												}}
-												triggerBase="btn btn-sm hover:bg-primary-600-400 {openMobileMsgControls ===
-												msg.id
-													? 'bg-primary-600-400'
-													: ''}"
-												contentBase="card bg-primary-200-800 p-4 space-y-4 max-w-[320px]"
-												arrow
-												arrowBackground="!bg-primary-200 dark:!bg-primary-800"
-												zIndex="1000"
+										<div
+											class="bg-surface-300-700 rounded p-2 text-center"
+										>
+											<div
+												class="text-primary-400 font-semibold"
 											>
-												{#snippet trigger()}
-													<Icons.EllipsisVertical
-														size={20}
-													/>
-												{/snippet}
-												{#snippet content()}
-													<header
-														class="flex justify-between"
-													>
-														<p
-															class="text-xl font-bold"
-														>
-															Popover Example
-														</p>
-													</header>
-													<article
-														class="flex flex-col gap-4"
-													>
-														{@render messageControls(
-															msg
-														)}
-													</article>
-												{/snippet}
-											</Popover>
+												{rag.messages.ragOlder}
+											</div>
+											<div class="text-surface-700-300">
+												RAG recalled
+											</div>
 										</div>
-										{#if showSwipeControls(msg, isGreeting)}
-											<div class="ml-auto flex gap-6">
-												{#if ![null, undefined].includes(msg.metadata?.swipes?.currentIdx) && msg.metadata?.swipes?.history && msg.metadata?.swipes.history.length > 1}
-													<button
-														class="btn btn-sm msg-cntrl-icon hover:preset-filled-success-500"
-														title="Swipe Left"
-														onclick={() =>
-															swipeLeft(msg)}
-														disabled={!msg.metadata
-															.swipes
-															.currentIdx ||
-															msg.metadata.swipes
-																.history
-																.length <= 1 ||
-															msg.isGenerating}
-													>
-														<Icons.ChevronLeft
-															size={24}
-														/>
-													</button>
+										<div
+											class="bg-surface-300-700 rounded p-2 text-center"
+										>
+											<div class="font-semibold">
+												{rag.messages.filledIn}
+											</div>
+											<div class="text-surface-700-300">
+												Fill-in
+											</div>
+										</div>
+									</div>
+								{:else if rag?.used === false}
+									<div class="grid grid-cols-3 gap-2 text-xs">
+										<div
+											class="bg-surface-300-700 rounded p-2 text-center"
+										>
+											<div class="font-semibold">
+												{rag.messages.guaranteed}
+											</div>
+											<div class="text-surface-700-300">
+												Guaranteed
+											</div>
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2 text-center"
+										>
+											<div class="font-semibold">
+												{rag.messages.filledIn}
+											</div>
+											<div class="text-surface-700-300">
+												Scored fill
+											</div>
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2 text-center"
+										>
+											<div
+												class="text-surface-400 font-semibold"
+											>
+												{rag.messages.budget}
+											</div>
+											<div class="text-surface-700-300">
+												Budget
+											</div>
+										</div>
+									</div>
+								{/if}
+								{#if msgs.excludedIds?.length > 0}
+									<p class="text-surface-700-300 text-xs">
+										Excluded message IDs: {msgs.excludedIds.join(
+											", "
+										)}
+									</p>
+								{/if}
+							</section>
+
+							<!-- ── Lore & Graph ──────────────────────────────────────────────── -->
+							{#if rag?.used === true}
+								{@const wl = rag.lore.worldLore}
+								{@const cl = rag.lore.characterLore}
+								{@const hi = rag.lore.history}
+								<section
+									class="bg-surface-200-800 space-y-2 rounded-lg p-3"
+								>
+									<h3
+										class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+									>
+										Lore & Graph
+									</h3>
+									<div
+										class="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4"
+									>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												World Lore
+											</div>
+											{#if wl.pinned + wl.rag > 0}
+												<div class="font-medium">
+													{wl.pinned + wl.rag} included
+												</div>
+												<div
+													class="text-surface-700-300"
+												>
+													{wl.pinned} pinned · {wl.rag}
+													RAG
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None
+												</div>
+											{/if}
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												Char Lore
+											</div>
+											{#if cl.pinned + cl.rag > 0}
+												<div class="font-medium">
+													{cl.pinned + cl.rag} included
+												</div>
+												<div
+													class="text-surface-700-300"
+												>
+													{cl.pinned} pinned · {cl.rag}
+													RAG
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None
+												</div>
+											{/if}
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												History
+											</div>
+											{#if hi.pinned + hi.rag > 0}
+												<div class="font-medium">
+													{hi.pinned + hi.rag} included
+												</div>
+												<div
+													class="text-surface-700-300"
+												>
+													{hi.pinned} pinned · {hi.rag}
+													RAG
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None
+												</div>
+											{/if}
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												Graph Pairs
+											</div>
+											{#if rag.graphPairs > 0}
+												<div
+													class="text-primary-400 font-medium"
+												>
+													{rag.graphPairs} pairs
+												</div>
+												<div
+													class="text-surface-700-300"
+												>
+													relationship context
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None matched
+												</div>
+											{/if}
+										</div>
+									</div>
+								</section>
+							{:else if rag?.used === false}
+								{@const wl = rag.lore.worldLore}
+								{@const cl = rag.lore.characterLore}
+								{@const hi = rag.lore.history}
+								<section
+									class="bg-surface-200-800 space-y-2 rounded-lg p-3"
+								>
+									<h3
+										class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+									>
+										Lore
+									</h3>
+									<div class="grid grid-cols-3 gap-2 text-xs">
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												World Lore
+											</div>
+											{#if wl.included > 0}
+												<div class="font-medium">
+													{wl.included} / {wl.budget}
+												</div>
+												<div
+													class="text-surface-700-300"
+												>
+													{wl.pinned} pinned · top {wl.topScore.toFixed(
+														2
+													)}
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None
+												</div>
+											{/if}
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												Char Lore
+											</div>
+											{#if cl.included > 0}
+												<div class="font-medium">
+													{cl.included} / {cl.budget}
+												</div>
+												<div
+													class="text-surface-700-300"
+												>
+													{cl.pinned} pinned · top {cl.topScore.toFixed(
+														2
+													)}
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None
+												</div>
+											{/if}
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												History
+											</div>
+											{#if hi.included > 0}
+												<div class="font-medium">
+													{hi.included} / {hi.budget}
+												</div>
+												<div
+													class="text-surface-700-300"
+												>
+													{hi.pinned} pinned · top {hi.topScore.toFixed(
+														2
+													)}
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None
+												</div>
+											{/if}
+										</div>
+									</div>
+									{#if rag.entries.length > 0}
+										<div class="space-y-1 pt-1">
+											<div
+												class="text-surface-700-300 text-xs font-medium"
+											>
+												Top scored entries
+											</div>
+											{#each rag.entries.slice(0, 8) as entry}
+												<div
+													class="flex items-center justify-between gap-2 text-xs"
+												>
 													<span
-														class="text-surface-700-300 mt-[0.2rem] h-fit select-none"
+														class="text-surface-300-700 truncate"
 													>
-														{msg.metadata.swipes
-															.currentIdx +
-															1}/{msg.metadata
-															.swipes.history
+														{entry.name ||
+															entry.type}
+													</span>
+													<span
+														class="text-surface-700-300 shrink-0 font-mono"
+													>
+														{entry.score.total.toFixed(
+															3
+														)}
+													</span>
+													<span
+														class="shrink-0 rounded px-1 text-[10px] {entry.score.includedReason.startsWith(
+															'filled'
+														) ||
+														entry.score.includedReason.startsWith(
+															'reserved'
+														)
+															? 'bg-success-500/20 text-success-400'
+															: 'bg-surface-400/20 text-surface-700-300'}"
+													>
+														{entry.score.includedReason.replace(
+															/_/g,
+															" "
+														)}
+													</span>
+												</div>
+											{/each}
+										</div>
+									{/if}
+								</section>
+							{/if}
+
+							<!-- ── RAG Retrieval Scores ──────────────────────────────────────── -->
+							{#if ragScores}
+								<section
+									class="bg-surface-200-800 space-y-2 rounded-lg p-3"
+								>
+									<h3
+										class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+									>
+										RAG Retrieval Scores
+									</h3>
+									<div
+										class="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4"
+									>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												Threshold
+											</div>
+											<div class="font-mono font-medium">
+												{ragScores.thresholdUsed.toFixed(
+													3
+												)}
+											</div>
+											<div class="text-surface-700-300">
+												adaptive cutoff
+											</div>
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												Query Window
+											</div>
+											<div class="font-medium">
+												{ragScores.queryMessageCount}
+											</div>
+											<div class="text-surface-700-300">
+												messages embedded
+											</div>
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												Msg Scores
+											</div>
+											{#if msgScoreMin !== null}
+												<div
+													class="font-mono font-medium"
+												>
+													{msgScoreMin.toFixed(3)} – {msgScoreMax?.toFixed(
+														3
+													)}
+												</div>
+												<div
+													class="text-surface-700-300"
+												>
+													avg {msgScoreAvg?.toFixed(
+														3
+													)} · {ragScores
+														.messageScores.length} retrieved
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None retrieved
+												</div>
+											{/if}
+										</div>
+										<div
+											class="bg-surface-300-700 rounded p-2"
+										>
+											<div class="text-surface-400 mb-1">
+												Lore Scores
+											</div>
+											{#if loreScoreMin !== null}
+												<div
+													class="font-mono font-medium"
+												>
+													{loreScoreMin.toFixed(3)} – {loreScoreMax?.toFixed(
+														3
+													)}
+												</div>
+												<div
+													class="text-surface-700-300"
+												>
+													avg {loreScoreAvg?.toFixed(
+														3
+													)} · {ragScores.loreScores
+														.length} retrieved
+												</div>
+											{:else}
+												<div
+													class="text-surface-700-300"
+												>
+													None retrieved
+												</div>
+											{/if}
+										</div>
+									</div>
+									<!-- Score distribution bars -->
+									{#if ragScores.messageScores.length > 0 || ragScores.loreScores.length > 0}
+										<div class="space-y-1.5 pt-1">
+											{#if ragScores.messageScores.length > 0}
+												<div
+													class="flex items-center gap-2 text-xs"
+												>
+													<span
+														class="text-surface-700-300 w-16 shrink-0"
+													>
+														Messages
+													</span>
+													<div
+														class="flex h-3 flex-1 gap-px overflow-hidden rounded"
+													>
+														{#each [...ragScores.messageScores].sort((a, b) => b - a) as score}
+															<div
+																class="bg-primary-500/70 h-full shrink-0"
+																style="width: {Math.max(
+																	2,
+																	((score /
+																		(ragScores.thresholdUsed >
+																		0
+																			? 1
+																			: 1)) *
+																		100) /
+																		ragScores
+																			.messageScores
+																			.length
+																)}%; opacity: {0.4 +
+																	score *
+																		0.6}"
+																title="Score: {score.toFixed(
+																	3
+																)}"
+															></div>
+														{/each}
+													</div>
+													<span
+														class="text-surface-700-300 w-10 shrink-0 text-right"
+													>
+														{ragScores.messageScores
 															.length}
 													</span>
-												{/if}
-												<button
-													class="btn btn-sm msg-cntrl-icon hover:preset-filled-success-500"
-													title="Swipe Right"
-													onclick={() =>
-														swipeRight(msg)}
-													disabled={!canSwipeRight(
-														msg,
-														isGreeting
-													)}
+												</div>
+											{/if}
+											{#if ragScores.loreScores.length > 0}
+												<div
+													class="flex items-center gap-2 text-xs"
 												>
-													<Icons.ChevronRight
-														size={24}
-													/>
-												</button>
-											</div>
+													<span
+														class="text-surface-700-300 w-16 shrink-0"
+													>
+														Lore
+													</span>
+													<div
+														class="flex h-3 flex-1 gap-px overflow-hidden rounded"
+													>
+														{#each [...ragScores.loreScores].sort((a, b) => b - a) as score}
+															<div
+																class="bg-secondary-500/70 h-full shrink-0"
+																style="width: {Math.max(
+																	2,
+																	((score /
+																		(ragScores.thresholdUsed >
+																		0
+																			? 1
+																			: 1)) *
+																		100) /
+																		ragScores
+																			.loreScores
+																			.length
+																)}%; opacity: {0.4 +
+																	score *
+																		0.6}"
+																title="Score: {score.toFixed(
+																	3
+																)}"
+															></div>
+														{/each}
+													</div>
+													<span
+														class="text-surface-700-300 w-10 shrink-0 text-right"
+													>
+														{ragScores.loreScores
+															.length}
+													</span>
+												</div>
+											{/if}
+										</div>
+									{/if}
+								</section>
+							{/if}
+
+							<!-- ── Sources ───────────────────────────────────────────────────── -->
+							<section
+								class="bg-surface-200-800 space-y-2 rounded-lg p-3"
+							>
+								<h3
+									class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+								>
+									Sources
+								</h3>
+								<div
+									class="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3"
+								>
+									<div>
+										<p
+											class="text-surface-400 mb-1 text-xs"
+										>
+											Characters
+										</p>
+										{#if src.characters.length > 0}
+											<ul class="space-y-0.5">
+												{#each src.characters as char}
+													<li
+														class="flex items-center gap-1"
+													>
+														<Icons.User
+															size={12}
+															class="text-surface-700-300 shrink-0"
+														/>
+														<span
+															class="truncate text-xs"
+														>
+															{char.name}{char.nickname
+																? ` (${char.nickname})`
+																: ""}
+														</span>
+													</li>
+												{/each}
+											</ul>
+										{:else}
+											<p
+												class="text-surface-700-300 text-xs"
+											>
+												None
+											</p>
 										{/if}
 									</div>
-								{/if}
-							</div>
-
-							<div class="flex h-fit rounded p-2 text-left">
-								{#if msg.content === "" && msg.isGenerating}
-									{@render generatingAnimation()}
-								{:else if editChatMessage && editChatMessage.id === msg.id}
-									<div
-										class="chat-input-bar bg-surface-100-900 w-full rounded-xl p-2 pb-2 align-middle lg:pb-4"
-									>
-										<MessageComposer
-											bind:markdown={
-												editChatMessage.content
-											}
-											onSend={handleMessageUpdate}
-										/>
-									</div>
-								{:else}
-									<div class="rendered-chat-message-content">
-										{@html renderMarkdownWithQuotedText(
-											msg.content
-										)}
-									</div>
-								{/if}
-							</div>
-						</li>
-
-						<!-- Show next character block after the last message -->
-						{#if isLastMessage && shouldShowNextCharacterBlock && nextCharacter}
-							<li
-								class="preset-tonal-surface-100-900 border-surface-300-700 my-2 flex items-center justify-between rounded-full px-4"
-							>
-								<div class="flex items-center gap-3">
-									<Avatar char={nextCharacter} />
-									<div class="flex flex-col">
-										<span
-											class="text-surface-700-300 text-sm font-medium"
+									<div>
+										<p
+											class="text-surface-400 mb-1 text-xs"
 										>
-											{nextCharacter.nickname ||
-												nextCharacter.name}
-										</span>
-										<span class="text-surface-500 text-xs">
-											ready to continue
-										</span>
+											Personas
+										</p>
+										{#if src.personas.length > 0}
+											<ul class="space-y-0.5">
+												{#each src.personas as persona}
+													<li
+														class="flex items-center gap-1"
+													>
+														<Icons.User2
+															size={12}
+															class="text-surface-700-300 shrink-0"
+														/>
+														<span
+															class="truncate text-xs"
+														>
+															{persona.name}
+														</span>
+													</li>
+												{/each}
+											</ul>
+										{:else}
+											<p
+												class="text-surface-700-300 text-xs"
+											>
+												None
+											</p>
+										{/if}
+									</div>
+									<div>
+										<p
+											class="text-surface-400 mb-1 text-xs"
+										>
+											Scenario
+										</p>
+										<p class="text-xs capitalize">
+											{src.scenario ?? "None"}
+										</p>
 									</div>
 								</div>
-								<div class="flex gap-2">
-									<button
-										class="btn btn-sm preset-filled-primary-500"
-										onclick={handleContinueWithNextCharacter}
-										title="Continue with {nextCharacter.nickname ||
-											nextCharacter.name}"
+							</section>
+
+							<!-- ── Prompt Preview ────────────────────────────────────────────── -->
+							<section
+								class="bg-surface-200-800 space-y-2 rounded-lg p-3"
+							>
+								<h3
+									class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+								>
+									Prompt Preview
+								</h3>
+								{#if draftCompiledPrompt.messages && draftCompiledPrompt.messages.length > 0}
+									<!-- Chat format: render each message block -->
+									<div
+										class="max-h-96 space-y-2 overflow-y-auto"
 									>
-										<Icons.Play size={16} />
-										Continue
-									</button>
+										{#each draftCompiledPrompt.messages as msg, i}
+											<div
+												class="rounded border {msg.role ===
+												'system'
+													? 'border-warning-500/30 bg-warning-500/5'
+													: msg.role === 'assistant'
+														? 'border-primary-500/30 bg-primary-500/5'
+														: 'border-surface-400/30 bg-surface-300-700'} overflow-hidden"
+											>
+												<div
+													class="flex items-center gap-2 border-b border-inherit px-2 py-1"
+												>
+													<span
+														class="text-xs font-semibold tracking-wide uppercase {msg.role ===
+														'system'
+															? 'text-warning-400'
+															: msg.role ===
+																  'assistant'
+																? 'text-primary-400'
+																: 'text-surface-400'}"
+													>
+														{msg.role}
+													</span>
+													{#if msg.name}
+														<span
+															class="text-surface-700-300 text-xs"
+														>
+															({msg.name})
+														</span>
+													{/if}
+													<span
+														class="text-surface-600 ml-auto text-xs"
+													>
+														#{i + 1}
+													</span>
+												</div>
+												<pre
+													class="px-2 py-1.5 text-xs leading-relaxed whitespace-pre-wrap">{typeof msg.content ===
+													"string"
+														? msg.content
+														: JSON.stringify(
+																msg.content,
+																null,
+																2
+															)}</pre>
+											</div>
+										{/each}
+									</div>
+								{:else if draftCompiledPrompt.prompt}
+									<!-- Raw text format -->
+									<pre
+										class="bg-surface-300-700 max-h-96 overflow-y-auto rounded p-2 text-xs leading-relaxed whitespace-pre-wrap">{draftCompiledPrompt.prompt}</pre>
+								{:else}
+									<p class="text-surface-700-300 text-xs">
+										No prompt content available.
+									</p>
+								{/if}
+							</section>
+						</div>
+					{:else}
+						<div
+							class="text-surface-700-300 py-8 text-center text-sm"
+						>
+							No compiled prompt data available.
+						</div>
+					{/if}
+
+					<footer class="flex shrink-0 justify-end gap-4 pt-2">
+						<button
+							class="btn preset-filled-surface-500"
+							onclick={() =>
+								(showDraftCompiledPromptModal = false)}
+						>
+							Close
+						</button>
+					</footer>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
+
+	<Dialog
+		open={showTriggerCharacterMessageModal}
+		onOpenChange={(e) => (showTriggerCharacterMessageModal = e.open)}
+	>
+		<Portal>
+			<Dialog.Backdrop
+				class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+			/>
+			<Dialog.Positioner
+				class="fixed inset-0 z-50 flex items-center justify-center p-4"
+			>
+				<Dialog.Content
+					class="card bg-surface-100-900 relative max-h-[95dvh] w-[min(95vw,800px)] space-y-4 overflow-hidden p-4 shadow-xl"
+				>
+					<header class="mb-2 flex items-center justify-between">
+						<h2 class="h2">Trigger Character</h2>
+						<button
+							class="btn btn-sm"
+							onclick={() =>
+								(showTriggerCharacterMessageModal = false)}
+						>
+							<Icons.X size={20} />
+						</button>
+					</header>
+					<button
+						class="group preset-outlined-primary-400-600 hover:preset-filled-primary-500 mb-4 flex w-full items-center gap-3 rounded p-2"
+						onclick={(e) => handleTriggerNarratorResponse(e)}
+					>
+						<div
+							class="bg-primary-500/10 text-primary-500 group-hover:text-primary-950 shrink-0 rounded-lg p-2"
+						>
+							<Icons.CloudSun size={20} />
+						</div>
+						<div class="flex-1 text-left">
+							<div class="font-semibold">{narratorName}</div>
+							<div
+								class="text-surface-700-300 group-hover:text-surface-800-200 text-xs"
+							>
+								Narrate the environment, atmosphere, or side
+								characters instead
+							</div>
+						</div>
+					</button>
+					<input
+						class="input mb-4 w-full"
+						type="text"
+						placeholder="Search characters..."
+						bind:value={triggerCharacterSearch}
+					/>
+					<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
+						<div
+							class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap"
+						>
+							{#each (chat?.chatCharacters || []).filter((cc) => {
+								const c = cc.character
+								if (!c) return false
+								const s = triggerCharacterSearch
+									.trim()
+									.toLowerCase()
+								if (!s) return true
+								return c.name
+										?.toLowerCase()
+										.includes(s) || c.nickname
+										?.toLowerCase()
+										.includes(s) || c.description
+										?.toLowerCase()
+										.includes(s) || c.creatorNotes
+										?.toLowerCase()
+										.includes(s)
+							}) as filtered}
+								<div class="flex p-1 lg:basis-1/2">
 									<button
-										class="btn btn-sm preset-tonal-surface-500"
-										onclick={handleChooseDifferentCharacter}
-										title="Choose a different character"
+										class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
+										onclick={() =>
+											onSelectTriggerCharacterMessage(
+												filtered.character.id
+											)}
 									>
-										<Icons.Users size={16} />
+										<div class="w-fit shrink-0">
+											<Avatar char={filtered.character} />
+										</div>
+										<div
+											class="relative flex w-0 min-w-0 flex-1 flex-col"
+										>
+											<div
+												class="w-full truncate text-left font-semibold"
+											>
+												{filtered.character.nickname ||
+													filtered.character.name}
+											</div>
+											<div
+												class="text-surface-700-300 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
+											>
+												{filtered.character
+													.creatorNotes ||
+													filtered.character
+														.description ||
+													"No description"}
+											</div>
+										</div>
 									</button>
 								</div>
-							</li>
-						{/if}
-					{/each}
-				</ul>
-			{/if}
-		</div>
-	</div>
+							{/each}
+						</div>
+					</div>
+				</Dialog.Content>
+			</Dialog.Positioner>
+		</Portal>
+	</Dialog>
 
-	<div
-		class="chat-input-bar preset-tonal-surface gap-4 pb-2 align-middle lg:rounded-t-lg lg:pb-4"
-		class:hidden={!!editChatMessage}
-	>
-		<MessageComposer
-			bind:markdown={newMessage}
-			onSend={handleSend}
-			compiledPrompt={draftCompiledPrompt}
-			classes=""
-			extraTabs={[
-				{
-					value: "extraControls",
-					title: "Extra Controls",
-					control: extraControlsButton,
-					content: extraControlsContent
-				},
-				{
-					value: "statistics",
-					title: "Statistics",
-					control: statisticsButton,
-					content: statisticsContent
-				}
-			]}
-		>
-			{#snippet leftControls()}
-				{#if chat?.chatPersonas?.[0]?.persona}
-					{@const persona = chat?.chatPersonas?.[0]?.persona}
-					<div class="hidden flex-col lg:ml-2 lg:flex lg:gap-2">
-						<span class="ml-1">
-							<Avatar char={persona} />
+	<TriggerNarratorResponseModal
+		open={showTriggerNarratorResponseModal}
+		onOpenChange={(e) => (showTriggerNarratorResponseModal = e.open)}
+		onTrigger={handleConfirmTriggerNarratorResponse}
+		onCancel={handleCancelTriggerNarratorResponse}
+		{narratorName}
+	/>
+
+	<EntityGalleryViewModal
+		bind:open={showAvatarModal}
+		onOpenChange={(e) => (showAvatarModal = e.open)}
+		entity={avatarModalEntity}
+	/>
+
+	<EntityGalleryViewModal
+		bind:open={showImageModal}
+		onOpenChange={(e) => (showImageModal = e.open)}
+		image={imageModalSrc}
+	/>
+
+	<PersonaSelectModal
+		open={showAddPersonaModal}
+		onclose={() => (showAddPersonaModal = false)}
+		onSelect={handleAddPersona}
+		personas={availablePersonas}
+		title="Add Persona to Chat"
+		description="Select a persona to add to this chat. You'll be able to send messages as this persona."
+	/>
+
+	<BranchChatModal
+		open={showBranchChatModal}
+		onOpenChange={(e) => (showBranchChatModal = e.open)}
+		onConfirm={onBranchChatConfirm}
+		onCancel={onBranchChatCancel}
+		initialTitle={chat?.name ?? undefined}
+	/>
+
+	{#snippet workflowButton()}
+		<Icons.BookOpen size="0.75em" class="block" />
+	{/snippet}
+
+	{#snippet workflowContent()}
+		{#if chat?.lorebookId}
+			<ChatWorkflowTab
+				lorebookId={chat.lorebookId}
+				{sceneList}
+				onOpenEntry={handleOpenEntry}
+				onEnterSummarizationMode={summarizationEnabled
+					? enterSummarizationModeEmpty
+					: undefined}
+			/>
+		{/if}
+	{/snippet}
+
+	{#snippet sceneImagesButton()}
+		<Icons.Images size="0.75em" />
+	{/snippet}
+
+	{#snippet sceneImagesContent()}
+		<ChatSceneImagesTab
+			chatCharacters={chat?.chatCharacters ?? []}
+			chatPersonas={chat?.chatPersonas ?? []}
+			bind:leftImage={leftSceneImage}
+			bind:rightImage={rightSceneImage}
+		/>
+	{/snippet}
+
+	{#snippet extraControlsButton()}
+		<Icons.MessageSquare size="0.75em" />
+	{/snippet}
+
+	{#snippet extraControlsContent()}
+		<div class="mb-[0.5em] flex flex-wrap gap-2">
+			<button
+				class="btn btn-sm preset-tonal-primary"
+				title="Continue Conversation"
+				onclick={handleTriggerContinueConversation}
+				disabled={!chat ||
+					!chat.chatPersonas?.[0]?.personaId ||
+					lastMessage?.isGenerating}
+			>
+				<Icons.MessageSquareMore size={14} />
+				Continue
+			</button>
+			<button
+				class="btn btn-sm preset-tonal-secondary"
+				title="Trigger Character"
+				onclick={handleTriggerCharacterMessage}
+				disabled={!chat ||
+					!chat.chatPersonas?.[0]?.personaId ||
+					lastMessage?.isGenerating}
+			>
+				<Icons.MessageSquarePlus size={14} />
+				Trigger Character
+			</button>
+			<button
+				class="btn btn-sm preset-tonal-warning"
+				title="Regenerate Last Message"
+				onclick={handleRegenerateLastMessage}
+				disabled={!canRegenerateLastMessage}
+			>
+				<Icons.RefreshCw size={14} />
+				Regenerate
+			</button>
+			<button
+				class="btn btn-sm preset-tonal-success"
+				title="Trigger Narrator Response"
+				onclick={handleTriggerNarratorResponse}
+				disabled={!chat || lastMessage?.isGenerating}
+			>
+				<Icons.CloudSun size={14} />
+				{narratorName}
+			</button>
+		</div>
+	{/snippet}
+
+	{#snippet statisticsButton()}
+		<Icons.BarChart2 size="0.75em" />
+	{/snippet}
+
+	{#snippet statisticsContent()}
+		<div class="mb-[0.5em] flex flex-wrap items-center gap-3">
+			<button
+				class="btn btn-sm preset-tonal-primary"
+				title="View full prompt details"
+				onclick={() => (showDraftCompiledPromptModal = true)}
+				disabled={!draftCompiledPrompt?.meta}
+			>
+				<Icons.Info size={14} />
+				Details
+			</button>
+			{#if draftCompiledPrompt?.meta}
+				<div class="flex gap-4 text-xs">
+					<div class="flex flex-col gap-0.5">
+						<span
+							class="text-surface-700-300 tracking-wide uppercase"
+							style="font-size:0.65rem"
+						>
+							Tokens
+						</span>
+						<span
+							class:text-error-500={contextExceeded}
+							class="font-medium tabular-nums"
+						>
+							{draftCompiledPrompt.meta.tokenCounts.total} / {draftCompiledPrompt
+								.meta.tokenCounts.limit}
 						</span>
 					</div>
-					<div class="lg:hidden"></div>
-				{/if}
-			{/snippet}
-			{#snippet rightControls()}
-				{#if !lastMessage?.isGenerating && !editChatMessage}
-					<button
-						class="hover:preset-tonal-success mr-3 rounded-lg text-center lg:block lg:h-auto lg:p-3"
-						type="button"
-						disabled={!newMessage.trim() ||
-							lastMessage?.isGenerating}
-						title="Send"
-						onclick={handleSendButton}
-					>
-						<Icons.Send size={24} class="mx-auto" />
-					</button>
-				{:else if lastMessage?.isGenerating}
-					<button
-						title="Stop Generation"
-						class="text-error-500 hover:preset-tonal-error mr-3 rounded-lg text-center lg:h-auto lg:p-3"
-						type="button"
-						onclick={handleAbortLastMessage}
-					>
-						<Icons.Square size={24} class="mx-auto" />
-					</button>
-				{/if}
-			{/snippet}
-		</MessageComposer>
-	</div>
-</div>
-
-<Modal
-	open={showDeleteMessageModal}
-	onOpenChange={onOpenMessageDeleteChange}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm border border-surface-300-700"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<header class="flex justify-between">
-			<h2 class="h2">Confirm</h2>
-		</header>
-		<article>
-			<p class="opacity-60">
-				Are you sure you want to delete this message?
-			</p>
-		</article>
-		<footer class="flex justify-end gap-4">
-			<button
-				class="btn preset-filled-surface-500"
-				onclick={onDeleteMessageCancel}
-			>
-				Cancel
-			</button>
-			<button
-				class="btn preset-filled-error-500"
-				onclick={onDeleteMessageConfirm}
-			>
-				Delete
-			</button>
-		</footer>
-	{/snippet}
-</Modal>
-
-<Modal
-	open={showDraftCompiledPromptModal}
-	onOpenChange={(details) => (showDraftCompiledPromptModal = details.open)}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-full w-[60em] border border-surface-300-700"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<header class="flex items-center justify-between">
-			<h2 class="h2">Prompt Details</h2>
-			<button
-				class="btn btn-sm"
-				onclick={() => (showDraftCompiledPromptModal = false)}
-			>
-				<Icons.X size={20} />
-			</button>
-		</header>
-		<article class="space-y-2">
-			{#if draftCompiledPrompt}
-				<div class="mb-2">
-					<b>Prompt Tokens:</b>
-					<span class:text-error-500={contextExceeded}>
-						{draftCompiledPrompt.meta.tokenCounts.total} / {draftCompiledPrompt
-							.meta.tokenCounts.limit}
-					</span>
-				</div>
-				<div class="mb-2">
-					<b>Messages Inserted:</b>
-					{draftCompiledPrompt.meta.chatMessages.included} / {draftCompiledPrompt
-						.meta.chatMessages.total}
-				</div>
-				<div class="mb-2">
-					<b>Prompt Format:</b>
-					{draftCompiledPrompt.meta.promptFormat}
-				</div>
-				<!-- <div class="mb-2">
-					<b>Truncation Reason:</b>
-					{draftCompiledPrompt.meta.sources.lorebooks?.truncationReason || "None"}
-				</div> -->
-				<!-- <div class="mb-2">
-					<b>Timestamp:</b>
-					{draftCompiledPrompt.meta.timestamp}
-				</div> -->
-				<!-- <div class="mb-2">
-					<b>World Lore:</b>
-					{draftCompiledPrompt.meta.lorebooks?.worldLore
-						.included || 0}
-					/
-					{draftCompiledPrompt.meta.sources.lorebooks?.worldLore
-						.total || 0}
-				</div> -->
-				<!-- <div class="mb-2">
-					<b>Character Lore:</b>
-					{draftCompiledPrompt.meta.sources.lorebooks?.characterLore
-						.included || 0}/{draftCompiledPrompt.meta.sources.lorebooks?.characterLore.total || 0}
-				</div> -->
-				<!-- <div class="mb-2">
-					<b>History:</b>
-					{draftCompiledPrompt.meta.sources.lorebooks?.history
-						.included || 0}/{draftCompiledPrompt.meta.sources.lorebooks?.history.total || 0}
-				</div> -->
-				<div class="mb-2">
-					<b>Characters Used:</b>
-					<ul class="ml-4 list-disc">
-						{#each draftCompiledPrompt.meta.sources.characters as char}
-							<li>
-								{char.name}
-								{char.nickname ? `(${char.nickname})` : ""}
-							</li>
-						{/each}
-					</ul>
-				</div>
-				<div class="mb-2">
-					<b>Personas Used:</b>
-					<ul class="ml-4 list-disc">
-						{#each draftCompiledPrompt.meta.sources.personas as persona}
-							<li>{persona.name}</li>
-						{/each}
-					</ul>
-				</div>
-				<div class="mb-2">
-					<b>Scenario Source:</b>
-					{draftCompiledPrompt.meta.sources.scenario || "None"}
-				</div>
-				<div class="mb-2">
-					<b>Prompt Preview:</b>
-					<pre
-						class="bg-surface-200-800 max-h-64 overflow-x-auto rounded p-2 text-xs whitespace-pre-wrap">{draftCompiledPrompt.prompt ||
-							JSON.stringify(draftCompiledPrompt.messages)}</pre>
-				</div>
-			{:else}
-				<div class="text-muted">No compiled prompt data available.</div>
-			{/if}
-		</article>
-		<footer class="flex justify-end gap-4">
-			<button
-				class="btn preset-filled-surface-500"
-				onclick={() => (showDraftCompiledPromptModal = false)}
-			>
-				Close
-			</button>
-		</footer>
-	{/snippet}
-</Modal>
-
-<Modal
-	open={showTriggerCharacterMessageModal}
-	onOpenChange={(e) => (showTriggerCharacterMessageModal = e.open)}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-h-[95dvh] relative overflow-hidden w-[50em] max-w-95dvw"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<header class="mb-2 flex items-center justify-between">
-			<h2 class="h2">Trigger Character</h2>
-			<button
-				class="btn btn-sm"
-				onclick={() => (showTriggerCharacterMessageModal = false)}
-			>
-				<Icons.X size={20} />
-			</button>
-		</header>
-		<input
-			class="input mb-4 w-full"
-			type="text"
-			placeholder="Search characters..."
-			bind:value={triggerCharacterSearch}
-		/>
-		<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
-			<div class="relative flex flex-col pr-2 lg:flex-row lg:flex-wrap">
-				{#each (chat?.chatCharacters || []).filter((cc) => {
-					const c = cc.character
-					if (!c) return false
-					const s = triggerCharacterSearch.trim().toLowerCase()
-					if (!s) return true
-					return c.name?.toLowerCase().includes(s) || c.nickname
-							?.toLowerCase()
-							.includes(s) || c.description
-							?.toLowerCase()
-							.includes(s) || c.creatorNotes
-							?.toLowerCase()
-							.includes(s)
-				}) as any[] as typeof chat.chatCharacters as filtered}
-					<div class="flex p-1 lg:basis-1/2">
-						<button
-							class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
-							onclick={() =>
-								onSelectTriggerCharacterMessage(
-									filtered.character.id
-								)}
+					<div class="flex flex-col gap-0.5">
+						<span
+							class="text-surface-700-300 tracking-wide uppercase"
+							style="font-size:0.65rem"
 						>
-							<div class="w-fit">
-								<Avatar char={filtered.character} />
-							</div>
-							<div
-								class="relative flex w-0 min-w-0 flex-1 flex-col"
-							>
-								<div
-									class="w-full truncate text-left font-semibold"
-								>
-									{filtered.character.nickname ||
-										filtered.character.name}
-								</div>
-								<div
-									class="text-surface-500 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"
-								>
-									{filtered.character.creatorNotes ||
-										filtered.character.description ||
-										"No description"}
-								</div>
-							</div>
-						</button>
+							Messages
+						</span>
+						<span class="font-medium tabular-nums">
+							{draftCompiledPrompt.meta.chatMessages.included} / {draftCompiledPrompt
+								.meta.chatMessages.total}
+						</span>
 					</div>
-				{/each}
-			</div>
-		</div>
-	{/snippet}
-</Modal>
-
-<Modal
-	open={showAvatarModal}
-	onOpenChange={(e) => (showAvatarModal = e.open)}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-md flex flex-col items-center border border-surface-300-700"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<header class="flex w-full justify-between">
-			<h2 class="h2">Avatar</h2>
-			<button
-				class="btn btn-sm"
-				onclick={() => (showAvatarModal = false)}
-			>
-				<Icons.X size={20} />
-			</button>
-		</header>
-		<article class="flex w-full flex-col items-center">
-			{#if avatarModalSrc}
-				<img
-					src={avatarModalSrc}
-					alt="Avatar"
-					class="border-surface-300 max-h-[60vh] max-w-full rounded-lg border"
-				/>
-			{:else}
-				<div class="text-muted">No avatar image available.</div>
-			{/if}
-		</article>
-	{/snippet}
-</Modal>
-
-{#snippet generatingAnimation()}
-	<div class="wrapper">
-		<div class="circle"></div>
-		<div class="circle"></div>
-		<div class="circle"></div>
-		<div class="shadow"></div>
-		<div class="shadow"></div>
-		<div class="shadow"></div>
-	</div>
-{/snippet}
-
-{#snippet messageControls(msg: SelectChatMessage)}
-	<div role="group" aria-label="Message actions">
-		<button
-			class="btn btn-sm msg-cntrl-icon hover:preset-filled-secondary-500"
-			class:preset-filled-secondary-500={msg.isHidden}
-			title={msg.isHidden ? "Unhide Message" : "Hide Message"}
-			aria-label={msg.isHidden
-				? "Unhide this message"
-				: "Hide this message"}
-			disabled={lastMessage?.isGenerating || !!editChatMessage}
-			onclick={(e) => handleHideMessage(e, msg)}
-		>
-			<Icons.Ghost size={16} aria-hidden="true" />
-			<span class="lg:hidden">
-				{msg.isHidden ? "Unhide Message" : "Hide Message"}
-			</span>
-		</button>
-		<button
-			class="btn btn-sm msg-cntrl-icon hover:preset-filled-success-500"
-			title="Edit Message"
-			aria-label="Edit this message"
-			disabled={lastMessage?.isGenerating ||
-				!!editChatMessage ||
-				msg.isGenerating ||
-				msg.isHidden}
-			onclick={(e) => handleEditMessage(e, msg)}
-		>
-			<Icons.Edit size={16} aria-hidden="true" />
-			<span class="lg:hidden">Edit Message</span>
-		</button>
-		<button
-			class="btn btn-sm msg-cntrl-icon hover:preset-filled-error-500"
-			title="Delete Message"
-			aria-label="Delete this message"
-			disabled={lastMessage?.isGenerating || !!editChatMessage}
-			onclick={(e) => handleDeleteMessage(e, msg)}
-		>
-			<Icons.Trash2 size={16} aria-hidden="true" />
-			<span class="lg:hidden">Delete Message</span>
-		</button>
-		{#if !!msg.characterId && msg.id === lastMessage?.id && !msg.isGenerating}
-			<button
-				class="btn btn-sm msg-cntrl-icon hover:preset-filled-warning-500"
-				title="Regenerate Response"
-				disabled={!canRegenerateLastMessage}
-				onclick={(e) => handleRegenerateMessage(e, msg)}
-			>
-				<Icons.RefreshCw size={16} />
-				<span class="lg:hidden">Regenerate Response</span>
-			</button>
-		{/if}
-		{#if msg.isGenerating}
-			<button
-				class="btn btn-sm msg-cntrl-icon preset-filled-error-500"
-				title="Stop Generation"
-				onclick={(e) => handleAbortMessage(e, msg)}
-			>
-				<Icons.Square size={16} />
-				<span class="lg:hidden">Stop Generation</span>
-			</button>
-		{/if}
-	</div>
-{/snippet}
-
-{#snippet extraControlsButton()}
-	<Icons.MessageSquare size="0.75em" />
-{/snippet}
-
-{#snippet extraControlsContent()}
-	<div class="flex gap-2">
-		<button
-			class="btn preset-filled-primary-500"
-			title="Continue Conversation"
-			onclick={handleTriggerContinueConversation}
-			disabled={!chat ||
-				!chat.chatPersonas?.[0]?.personaId ||
-				lastMessage?.isGenerating}
-		>
-			<Icons.MessageSquareMore size={24} />
-		</button>
-		<button
-			class="btn preset-filled-secondary-500"
-			title="Trigger Character"
-			onclick={handleTriggerCharacterMessage}
-			disabled={!chat ||
-				!chat.chatPersonas?.[0]?.personaId ||
-				lastMessage?.isGenerating}
-		>
-			<Icons.MessageSquarePlus size={24} />
-		</button>
-		<button
-			class="btn preset-filled-warning-500"
-			title="Regenerate Last Message"
-			onclick={handleRegenerateLastMessage}
-			disabled={!canRegenerateLastMessage}
-		>
-			<Icons.RefreshCw size={24} />
-		</button>
-	</div>
-{/snippet}
-
-{#snippet statisticsButton()}
-	<Icons.BarChart2 size="0.75em" />
-{/snippet}
-
-{#snippet statisticsContent()}
-	<div class="flex gap-2">
-		<button
-			class="btn preset-filled-primary-500"
-			title="View Prompt Statistics"
-			onclick={() => (showDraftCompiledPromptModal = true)}
-			disabled={!draftCompiledPrompt}
-		>
-			<Icons.Info size={24} />
-		</button>
-		<div class="flex flex-col text-sm">
-			{#if draftCompiledPrompt}
-				<div>
-					<b>Prompt Tokens:</b>
-					<span class:text-error-500={contextExceeded}>
-						{draftCompiledPrompt.meta.tokenCounts.total} / {draftCompiledPrompt
-							.meta.tokenCounts.limit}
-					</span>
 				</div>
-				<div>
-					<b>Messages Inserted:</b>
-					{draftCompiledPrompt.meta.chatMessages.included} / {draftCompiledPrompt
-						.meta.chatMessages.total}
-					<span class="text-surface-500">
-						(Includes current draft)
-					</span>
-				</div>
+			{:else if draftCompiledPrompt?.error}
+				<span class="text-error-500 text-xs">
+					{draftCompiledPrompt.error}
+				</span>
 			{:else}
-				<div class="text-muted">No prompt statistics available.</div>
+				<span class="text-surface-700-300 text-xs">
+					No statistics yet — send a message first.
+				</span>
 			{/if}
 		</div>
-	</div>
-{/snippet}
+	{/snippet}
+{/if}
 
 <style lang="postcss">
 	@reference "tailwindcss";
 
-	/* .chat-messages {
-		overflow-y: auto;
-		flex: 1 1 0%;
-		padding-bottom: 0.5rem;
-	} */
-	.chat-input-bar {
-	}
-	/* Loader styles from Uiverse.io by mobinkakei */
-	.wrapper {
-		width: 66px;
-		height: 20px;
-		position: relative;
-		z-index: 1;
-		margin-left: 0;
-	}
-	.circle {
-		width: 6.6px;
-		height: 6.6px;
-		position: absolute;
-		border-radius: 50%;
-		background-color: #fff;
-		left: 15%;
-		transform-origin: 50%;
-		animation: circle7124 0.5s alternate infinite ease;
-	}
-	@keyframes circle7124 {
-		0% {
-			top: 20px;
-			height: 1.66px;
-			border-radius: 50px 50px 25px 25px;
-			transform: scaleX(1.7);
-		}
-		40% {
-			height: 6.6px;
-			border-radius: 50%;
-			transform: scaleX(1);
-		}
-		100% {
-			top: 0%;
-		}
-	}
-	.circle:nth-child(2) {
-		left: 45%;
-		animation-delay: 0.2s;
-	}
-	.circle:nth-child(3) {
-		left: auto;
-		right: 15%;
-		animation-delay: 0.3s;
-	}
-	.shadow {
-		width: 6.6px;
-		height: 1.33px;
-		border-radius: 50%;
-		background-color: rgba(0, 0, 0, 0.9);
-		position: absolute;
-		top: 20.66px;
-		transform-origin: 50%;
-		z-index: -1;
-		left: 15%;
-		filter: blur(0.33px);
-		animation: shadow046 0.5s alternate infinite ease;
-	}
-	@keyframes shadow046 {
-		0% {
-			transform: scaleX(1.5);
-		}
-		40% {
-			transform: scaleX(1);
-			opacity: 0.7;
-		}
-		100% {
-			transform: scaleX(0.2);
-			opacity: 0.4;
-		}
-	}
-	.shadow:nth-child(4) {
-		left: 45%;
-		animation-delay: 0.2s;
-	}
-	.shadow:nth-child(5) {
-		left: auto;
-		right: 15%;
-		animation-delay: 0.3s;
-	}
 	/* --- Markdown custom styles --- */
 	:global(.markdown-body) {
 		white-space: pre-line;
@@ -1542,9 +3168,5 @@
 		margin-top: 1em;
 		margin-bottom: 1em;
 		min-height: 1.5em;
-	}
-
-	.msg-cntrl-icon {
-		@apply h-min w-min px-2 text-[1em] disabled:opacity-25;
 	}
 </style>

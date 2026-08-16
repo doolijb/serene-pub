@@ -10,21 +10,13 @@ export class StopStrings {
 		format: (typeof PromptFormats.keys)[0]
 		characters: SelectCharacter[]
 		personas: SelectPersona[]
-		currentCharacterId: number
+		currentCharacterId?: number
 	}): string[] {
 		let stopStrings: string[] = []
 
 		switch (format) {
 			case PromptFormats.CHATML:
-				stopStrings = [
-					"<|im_end|>",
-					"system:",
-					"System:",
-					"user:",
-					"User:",
-					"assistant:",
-					"Assistant:"
-				]
+				stopStrings = ["<|im_start|>", "<|im_end|>"]
 				break
 			case PromptFormats.BASIC:
 				stopStrings = [

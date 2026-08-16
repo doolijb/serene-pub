@@ -1,8 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount, tick } from "svelte"
 	import * as Icons from "@lucide/svelte"
-
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { z } from "zod"
 
@@ -15,23 +14,34 @@
 	type ValidationErrors = Record<string, string>
 
 	interface Props {
-		lorebookId: number // ID of the lorebook to edit
-		hasUnsavedChanges?: boolean // Optional prop to track unsaved changes
+		lorebookId: number
+		hasUnsavedChanges?: boolean
+		mode?: "view" | "edit"
 	}
 
-	let { lorebookId, hasUnsavedChanges = $bindable(false) }: Props = $props()
+	let {
+		lorebookId,
+		hasUnsavedChanges = $bindable(false),
+		mode = $bindable("view")
+	}: Props = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	// Tag-related state
 	let tagsList: SelectTag[] = $state([])
 	let tagSearchInput = $state("")
 	let showTagSuggestions = $state(false)
 
-	let editLorebook: Sockets.Lorebook.Response["lorebook"] | undefined =
-		$state()
-	let originalLorebook: Sockets.Lorebook.Response["lorebook"] | undefined =
-		$state()
+	// "lorebooks:get" always includes `tags`, but "lorebooks:update" returns
+	// the raw updated row without it (see lorebooksUpdateHandler in
+	// lorebooks.ts) — so locally `tags` is only guaranteed after a fresh Get.
+	type EditableLorebook = Omit<
+		NonNullable<Sockets.Lorebooks.Get.Response["lorebook"]>,
+		"tags"
+	> & { tags?: string[] }
+
+	let editLorebook: EditableLorebook | undefined = $state()
+	let originalLorebook: EditableLorebook | undefined = $state()
 	let validationErrors: ValidationErrors = $state({})
 	let isLoading = $state(true)
 	let loadError = $state("")
@@ -97,10 +107,10 @@
 
 	function handleSave() {
 		if (!validateForm()) return
-		const updateReq: Sockets.UpdateLorebook.Call = {
+		const updateReq: Sockets.Lorebooks.Update.Params = {
 			lorebook: editLorebook!
 		}
-		socket.emit("updateLorebook", updateReq)
+		socket.emit("lorebooks:update", updateReq)
 	}
 
 	function validateForm(): boolean {
@@ -127,186 +137,248 @@
 	}
 	function handleCancel() {
 		editLorebook = { ...originalLorebook! }
+		mode = "view"
 	}
 
 	onMount(() => {
-		socket.on("lorebook", async (msg: Sockets.Lorebook.Response) => {
-			if (msg.lorebook && msg.lorebook.id === lorebookId) {
-				editLorebook = { ...msg.lorebook }
-				originalLorebook = { ...msg.lorebook }
-				isLoading = false
-				loadError = ""
-			} else {
-				loadError = "Lorebook not found"
-				isLoading = false
+		socket.on(
+			"lorebooks:get",
+			async (msg: Sockets.Lorebooks.Get.Response) => {
+				if (msg.lorebook && msg.lorebook.id === lorebookId) {
+					editLorebook = { ...msg.lorebook }
+					originalLorebook = { ...msg.lorebook }
+					isLoading = false
+					loadError = ""
+				} else {
+					loadError = "Lorebook not found"
+					isLoading = false
+				}
+				await tick() // Force state to update
 			}
-			await tick() // Force state to update
-		})
-		socket.on("updateLorebook", async (msg: Sockets.Lorebook.Response) => {
-			if (msg.lorebook && msg.lorebook.id === lorebookId) {
-				// Update both editLorebook and originalLorebook to reflect the save
-				editLorebook = { ...msg.lorebook }
-				originalLorebook = { ...msg.lorebook }
-
-				toaster.success({
-					title: "Lorebook Updated",
-					description: `Lorebook "${msg.lorebook.name}" updated successfully.`
-				})
+		)
+		socket.on(
+			"lorebooks:update",
+			async (msg: Sockets.Lorebooks.Update.Response) => {
+				if (msg.lorebook && msg.lorebook.id === lorebookId) {
+					editLorebook = { ...msg.lorebook }
+					originalLorebook = { ...msg.lorebook }
+					mode = "view"
+					toaster.success({
+						title: "Lorebook Updated",
+						description: `Lorebook "${msg.lorebook.name}" updated successfully.`
+					})
+				}
 			}
-		})
-		socket.on("tagsList", (msg: any) => {
+		)
+		socket.on("tags:list", (msg) => {
 			tagsList = msg.tagsList || []
 		})
 
 		// Load tags list
-		socket.emit("tagsList", {})
+		socket.emit("tags:list", {})
 
-		const lorebookReq: Sockets.Lorebook.Call = { id: lorebookId }
-		socket.emit("lorebook", lorebookReq)
+		const lorebookReq: Sockets.Lorebooks.Get.Params = { id: lorebookId }
+		socket.emit("lorebooks:get", lorebookReq)
 	})
 
 	onDestroy(() => {
-		socket.off("lorebook")
-		socket.off("updateLorebook")
-		socket.off("tagsList")
+		hasUnsavedChanges = false
+		socket.off("lorebooks:get")
+		socket.off("lorebooks:update")
+		socket.off("tags:list")
 	})
 </script>
 
 {#if isLoading}
 	<div class="flex items-center justify-center p-4">
 		<div class="text-center">
-			<Icons.Loader size={24} class="animate-spin mx-auto mb-2" />
+			<Icons.Loader size={24} class="mx-auto mb-2 animate-spin" />
 			<p>Loading lorebook...</p>
 		</div>
 	</div>
 {:else if loadError}
 	<div class="flex items-center justify-center p-4">
 		<div class="text-center">
-			<Icons.AlertTriangle size={24} class="mx-auto mb-2 text-error-500" />
+			<Icons.AlertTriangle
+				size={24}
+				class="text-error-500 mx-auto mb-2"
+			/>
 			<p class="text-error-500">{loadError}</p>
 		</div>
 	</div>
 {:else if editLorebook}
-	<div class="flex flex-col gap-6">
-		<div class="flex gap-2">
-			<button
-				class="btn btn-sm preset-filled-surface-500 w-full"
-				onclick={handleCancel}
-				disabled={!hasUnsavedChanges}
-			>
-				Reset
-			</button>
-			<button
-				class="btn btn-sm preset-filled-success-500 w-full"
-				onclick={handleSave}
-				disabled={!hasUnsavedChanges}
-			>
-				<Icons.Save size={16} />
-				Save
-			</button>
-		</div>
-		<div>
-			<label class="font-semibold" for="lorebookName">Name*</label>
-			<input
-				id="lorebookName"
-				class="input input-lg w-full {validationErrors.name
-					? 'border-red-500'
-					: ''}"
-				type="text"
-				placeholder="Enter lorebook name"
-				bind:value={editLorebook.name}
-				required
-				oninput={() => {
-					if (validationErrors.name) {
-						const { name, ...rest } = validationErrors
-						validationErrors = rest
-					}
-				}}
-			/>
-			{#if validationErrors.name}
-				<p class="mt-1 text-sm text-red-500" role="alert">
-					{validationErrors.name}
+	{#if mode === "view"}
+		<div class="flex flex-col gap-3">
+			<div class="flex gap-2">
+				<button
+					class="btn btn-sm preset-filled-primary-500"
+					onclick={() => (mode = "edit")}
+				>
+					<Icons.Pencil size={14} /> Edit
+				</button>
+			</div>
+			<!-- Name is already shown in the sidebar's header above these
+			     tabs — repeating it here would just be noise. -->
+			<section class="card preset-tonal space-y-1 p-3">
+				<p
+					class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
+				>
+					<Icons.FileText size={13} />
+					Description
+				</p>
+				{#if editLorebook.description}
+					<p class="text-sm leading-relaxed whitespace-pre-wrap">
+						{editLorebook.description}
+					</p>
+				{:else}
+					<p class="text-surface-700-300 text-sm italic">
+						No description yet. Click Edit to add one.
+					</p>
+				{/if}
+			</section>
+			{#if editLorebook.tags && editLorebook.tags.length > 0}
+				<div class="flex flex-wrap gap-2">
+					{#each editLorebook.tags as tagName}
+						{@const tag = tagsList.find((t) => t.name === tagName)}
+						<span
+							class="chip {tag?.colorPreset ||
+								'preset-filled-primary-500'}"
+						>
+							{tagName}
+						</span>
+					{/each}
+				</div>
+			{:else}
+				<p class="text-surface-700-300 text-sm italic">
+					No tags yet.
 				</p>
 			{/if}
 		</div>
-		<div>
-			<label class="font-semibold" for="lorebookDescription">
-				Description
-			</label>
-			<textarea
-				id="lorebookDescription"
-				class="textarea input-lg w-full"
-				placeholder="Describe this lorebook (optional)"
-				bind:value={editLorebook.description}
-				rows={2}
-			></textarea>
-		</div>
-
-		<!-- Tags Section -->
-		<div>
-			<label class="font-semibold" for="tagInput">Tags</label>
-			<div class="relative">
+	{:else}
+		<div class="flex flex-col gap-6">
+			<div class="flex gap-2">
+				<button
+					class="btn btn-sm preset-filled-surface-400-600 w-full"
+					onclick={handleCancel}
+				>
+					Cancel
+				</button>
+				<button
+					class="btn btn-sm preset-filled-success-500 w-full"
+					onclick={handleSave}
+					disabled={!hasUnsavedChanges}
+				>
+					<Icons.Save size={16} />
+					Update
+				</button>
+			</div>
+			<div>
+				<label class="font-semibold" for="lorebookName">Name*</label>
 				<input
-					id="tagInput"
+					id="lorebookName"
+					class="input input-lg w-full {validationErrors.name
+						? 'border-error-500'
+						: ''}"
 					type="text"
-					bind:value={tagSearchInput}
-					class="input w-full"
-					placeholder="Add a tag..."
-					onfocus={() => (showTagSuggestions = true)}
-					onblur={() =>
-						setTimeout(() => (showTagSuggestions = false), 200)}
-					onkeydown={handleTagInputKeydown}
+					placeholder="Enter lorebook name"
+					bind:value={editLorebook.name}
+					required
+					oninput={() => {
+						if (validationErrors.name) {
+							const { name, ...rest } = validationErrors
+							validationErrors = rest
+						}
+					}}
 				/>
+				{#if validationErrors.name}
+					<p class="text-error-500 mt-1 text-sm" role="alert">
+						{validationErrors.name}
+					</p>
+				{/if}
+			</div>
+			<div>
+				<label class="font-semibold" for="lorebookDescription">
+					Description
+				</label>
+				<textarea
+					id="lorebookDescription"
+					class="textarea input-lg w-full"
+					placeholder="Describe this lorebook (optional)"
+					bind:value={editLorebook.description}
+					rows={2}
+				></textarea>
+			</div>
 
-				<!-- Tag suggestions dropdown -->
-				{#if showTagSuggestions && filteredTags.length > 0}
-					<div
-						class="bg-surface-100-900 absolute z-10 mt-1 max-h-40 w-full overflow-y-auto rounded-lg border shadow-lg"
-					>
-						{#each filteredTags as tag}
+			<!-- Tags Section -->
+			<div>
+				<label class="font-semibold" for="tagInput">Tags</label>
+				<div class="relative">
+					<input
+						id="tagInput"
+						type="text"
+						bind:value={tagSearchInput}
+						class="input w-full"
+						placeholder="Add a tag..."
+						onfocus={() => (showTagSuggestions = true)}
+						onblur={() =>
+							setTimeout(() => (showTagSuggestions = false), 200)}
+						onkeydown={handleTagInputKeydown}
+					/>
+
+					<!-- Tag suggestions dropdown -->
+					{#if showTagSuggestions && filteredTags.length > 0}
+						<div
+							class="bg-surface-100-900 absolute z-10 mt-1 max-h-40 w-full overflow-y-auto rounded-lg border shadow-lg"
+						>
+							{#each filteredTags as tag}
+								<button
+									type="button"
+									class="hover:bg-surface-200-800 w-full px-3 py-2 text-left transition-colors"
+									onclick={() => addTag(tag.name)}
+								>
+									<span
+										class="chip mr-2 {tag.colorPreset ||
+											'preset-filled-primary-500'}"
+									>
+										{tag.name}
+									</span>
+									{#if tag.description}
+										<span
+											class="text-muted-foreground text-sm"
+										>
+											- {tag.description}
+										</span>
+									{/if}
+								</button>
+							{/each}
+						</div>
+					{/if}
+				</div>
+
+				<!-- Selected tags display -->
+				{#if editLorebook.tags && editLorebook.tags.length > 0}
+					<div class="mt-2 flex flex-wrap gap-2">
+						{#each editLorebook.tags as tagName}
+							{@const tag = tagsList.find(
+								(t) => t.name === tagName
+							)}
 							<button
 								type="button"
-								class="hover:bg-surface-200-800 w-full px-3 py-2 text-left transition-colors"
-								onclick={() => addTag(tag.name)}
+								class="chip {tag?.colorPreset ||
+									'preset-filled-primary-500'} group relative"
+								onclick={() => removeTag(tagName)}
+								title="Click to remove tag"
 							>
-								<span
-									class="chip mr-2 {tag.colorPreset ||
-										'preset-filled-primary-500'}"
-								>
-									{tag.name}
-								</span>
-								{#if tag.description}
-									<span class="text-muted-foreground text-sm">
-										- {tag.description}
-									</span>
-								{/if}
+								{tagName}
+								<Icons.X
+									size={14}
+									class="ml-1 opacity-60 group-hover:opacity-100"
+								/>
 							</button>
 						{/each}
 					</div>
 				{/if}
 			</div>
-
-			<!-- Selected tags display -->
-			{#if editLorebook.tags && editLorebook.tags.length > 0}
-				<div class="mt-2 flex flex-wrap gap-2">
-					{#each editLorebook.tags as tagName}
-						{@const tag = tagsList.find((t) => t.name === tagName)}
-						<button
-							type="button"
-							class="chip {tag?.colorPreset ||
-								'preset-filled-primary-500'} group relative"
-							onclick={() => removeTag(tagName)}
-							title="Click to remove tag"
-						>
-							{tagName}
-							<Icons.X
-								size={14}
-								class="ml-1 opacity-60 group-hover:opacity-100"
-							/>
-						</button>
-					{/each}
-				</div>
-			{/if}
 		</div>
-	</div>
+	{/if}
 {/if}

@@ -2,7 +2,7 @@
 	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import { onMount, onDestroy } from "svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { z } from "zod"
 
 	// Zod validation schema
@@ -22,7 +22,7 @@
 
 	let { connection = $bindable() } = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	let availableLMStudioModels: { model: string; name: string }[] = $state([])
 	let testResult: {
 		ok: boolean
@@ -41,17 +41,17 @@
 	})
 
 	function handleRefreshModels() {
-		socket.emit("refreshModels", {
+		socket.emit("connections:refreshModels", {
 			connection
-		} as Sockets.RefreshModels.Call)
+		})
 	}
 
 	function handleTestConnection() {
 		if (!validateConnection()) return
 		testResult = null
-		socket.emit("testConnection", {
+		socket.emit("connections:test", {
 			connection
-		} as Sockets.TestConnection.Call)
+		})
 	}
 
 	function validateConnection(): boolean {
@@ -77,14 +77,14 @@
 		}
 	}
 
-	socket.on("refreshModels", (msg: Sockets.RefreshModels.Response) => {
+	socket.on("connections:refreshModels", (msg) => {
 		if (msg.models) availableLMStudioModels = msg.models
 		if (!connection.model && msg.models.length > 0) {
 			connection.model = msg.models[0].model
 		}
 	})
 
-	socket.on("testConnection", (msg: Sockets.TestConnection.Response) => {
+	socket.on("connections:test", (msg) => {
 		testResult = msg
 	})
 
@@ -95,8 +95,8 @@
 	})
 
 	onDestroy(() => {
-		socket.off("refreshModels")
-		socket.off("testConnection")
+		socket.off("connections:refreshModels")
+		socket.off("connections:test")
 	})
 </script>
 
@@ -107,7 +107,7 @@
 			id="model"
 			bind:value={connection.model}
 			class="select bg-background border-muted w-full rounded border {validationErrors.model
-				? 'border-red-500'
+				? 'border-error-500'
 				: ''}"
 			aria-invalid={validationErrors.model ? "true" : "false"}
 			aria-describedby={validationErrors.model
@@ -126,7 +126,11 @@
 			{/each}
 		</select>
 		{#if validationErrors.model}
-			<p id="model-error" class="mt-1 text-sm text-red-500" role="alert">
+			<p
+				id="model-error"
+				class="text-error-500 mt-1 text-sm"
+				role="alert"
+			>
 				{validationErrors.model}
 			</p>
 		{/if}
@@ -228,7 +232,7 @@
 					placeholder="ws://localhost:1234"
 					required
 					class="input {validationErrors.baseUrl
-						? 'border-red-500'
+						? 'border-error-500'
 						: ''}"
 					aria-invalid={validationErrors.baseUrl ? "true" : "false"}
 					aria-describedby={validationErrors.baseUrl
@@ -244,7 +248,7 @@
 				{#if validationErrors.baseUrl}
 					<p
 						id="baseUrl-error"
-						class="mt-1 text-sm text-red-500"
+						class="text-error-500 mt-1 text-sm"
 						role="alert"
 					>
 						{validationErrors.baseUrl}

@@ -1,0 +1,1 @@
+CREATE INDEX "narrative_relationships_lorebook_id_idx" ON "narrative_relationships" USING btree ("lorebook_id");

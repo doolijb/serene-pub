@@ -26,65 +26,65 @@ export class KeyboardNavigationManager {
 		if (!event.altKey) return
 
 		switch (event.key) {
-			case '[':
+			case "[":
 				event.preventDefault()
 				this.focusLeftSidebar()
 				break
-			case ']':
+			case "]":
 				event.preventDefault()
 				this.focusRightSidebar()
 				break
-			case '/':
+			case "/":
 				event.preventDefault()
 				this.focusMainContent()
 				break
-			case ',':
+			case ",":
 				event.preventDefault()
 				this.focusSiteNavigation()
 				break
 		}
 
 		// Chat-specific navigation (when in chat)
-		if (window.location.pathname.includes('/chats/')) {
+		if (window.location.pathname.includes("/chats/")) {
 			switch (event.key) {
-				case 'j':
+				case "j":
 					event.preventDefault()
 					this.navigateToNextMessage()
 					break
-				case 'k':
+				case "k":
 					event.preventDefault()
 					this.navigateToPreviousMessage()
 					break
-				case 'Home':
+				case "Home":
 					event.preventDefault()
 					this.navigateToFirstMessage()
 					break
-				case 'End':
+				case "End":
 					event.preventDefault()
 					this.navigateToLastMessage()
 					break
-				case 'g':
+				case "g":
 					if (event.shiftKey) {
 						// Shift + G = Go to latest (last) message
 						event.preventDefault()
 						this.navigateToLatestMessage()
 					}
 					break
-				case 'r':
+				case "r":
 					if (event.ctrlKey || event.metaKey) {
 						// Ctrl/Cmd + R = Refresh last response
 						event.preventDefault()
 						this.refreshLastResponse()
 					}
 					break
-				case 'ArrowLeft':
+				case "ArrowLeft":
 					if (event.ctrlKey || event.metaKey) {
 						// Ctrl/Cmd + Left = Swipe left
 						event.preventDefault()
 						this.swipeCurrentMessageLeft()
 					}
 					break
-				case 'ArrowRight':
+				case "ArrowRight":
 					if (event.ctrlKey || event.metaKey) {
 						// Ctrl/Cmd + Right = Swipe right
 						event.preventDefault()
@@ -99,13 +99,15 @@ export class KeyboardNavigationManager {
 		// Check if left panel is already open
 		if (!this.panelsCtx.leftPanel) {
 			// Inform screen reader that no sidebar is open
-			KeyboardNavigationManager.announceToScreenReader('No left sidebar is currently open')
+			KeyboardNavigationManager.announceToScreenReader(
+				"No left sidebar is currently open"
+			)
 			return
 		}
-		
+
 		// Focus the left sidebar
 		this.onFocusLeftSidebar?.()
-		
+
 		// For mobile, handle differently if mobile menu is available
 		if (!this.panelsCtx.leftPanel) {
 			this.panelsCtx.isMobileMenuOpen = true
@@ -116,17 +118,19 @@ export class KeyboardNavigationManager {
 		// Check if right panel is already open
 		if (!this.panelsCtx.rightPanel) {
 			// Inform screen reader that no sidebar is open
-			KeyboardNavigationManager.announceToScreenReader('No right sidebar is currently open')
+			KeyboardNavigationManager.announceToScreenReader(
+				"No right sidebar is currently open"
+			)
 			return
 		}
-		
+
 		// Focus the right sidebar
 		this.onFocusRightSidebar?.()
 	}
 
 	private focusMainContent() {
 		this.onFocusMain?.()
-		
+
 		// Close any open mobile menus to focus main content
 		this.panelsCtx.isMobileMenuOpen = false
 		this.panelsCtx.mobilePanel = null
@@ -134,12 +138,17 @@ export class KeyboardNavigationManager {
 
 	private focusSiteNavigation() {
 		// Focus the main site navigation/header area
-		const siteNav = document.querySelector('nav[role="navigation"]') as HTMLElement ||
-			document.querySelector('header nav') as HTMLElement ||
-			document.querySelector('[aria-label*="navigation"]') as HTMLElement ||
-			document.querySelector('[aria-label*="Navigation"]') as HTMLElement ||
-			document.querySelector('.site-nav') as HTMLElement ||
-			document.querySelector('header') as HTMLElement
+		const siteNav =
+			(document.querySelector('nav[role="navigation"]') as HTMLElement) ||
+			(document.querySelector("header nav") as HTMLElement) ||
+			(document.querySelector(
+				'[aria-label*="navigation"]'
+			) as HTMLElement) ||
+			(document.querySelector(
+				'[aria-label*="Navigation"]'
+			) as HTMLElement) ||
+			(document.querySelector(".site-nav") as HTMLElement) ||
+			(document.querySelector("header") as HTMLElement)
 
 		if (siteNav) {
 			// Try to focus the first interactive element in the navigation
@@ -149,85 +158,96 @@ export class KeyboardNavigationManager {
 
 			if (firstInteractive) {
 				firstInteractive.focus()
-				KeyboardNavigationManager.announceToScreenReader('Site navigation focused')
+				KeyboardNavigationManager.announceToScreenReader(
+					"Site navigation focused"
+				)
 			} else {
 				// If no interactive elements, focus the nav itself
 				siteNav.focus()
-				KeyboardNavigationManager.announceToScreenReader('Site navigation area focused')
+				KeyboardNavigationManager.announceToScreenReader(
+					"Site navigation area focused"
+				)
 			}
 		} else {
 			// Fallback: focus the document body or first main element
-			const main = document.querySelector('main') as HTMLElement ||
-				document.querySelector('[role="main"]') as HTMLElement ||
+			const main =
+				(document.querySelector("main") as HTMLElement) ||
+				(document.querySelector('[role="main"]') as HTMLElement) ||
 				document.body
 
 			if (main) {
 				KeyboardNavigationManager.focusFirstInteractive(main)
-				KeyboardNavigationManager.announceToScreenReader('Main navigation area focused')
+				KeyboardNavigationManager.announceToScreenReader(
+					"Main navigation area focused"
+				)
 			}
 		}
 	}
 
 	// Add listener for global keyboard events
 	addGlobalListener() {
-		document.addEventListener('keydown', this.handleGlobalKeyDown)
+		document.addEventListener("keydown", this.handleGlobalKeyDown)
 	}
 
 	// Remove listener when component is destroyed
 	removeGlobalListener() {
-		document.removeEventListener('keydown', this.handleGlobalKeyDown)
+		document.removeEventListener("keydown", this.handleGlobalKeyDown)
 	}
 
 	// Chat message navigation methods
 	private navigateToNextMessage() {
 		const messages = document.querySelectorAll('[id^="message-"]')
 		const focused = document.activeElement
-		
+
 		if (!messages.length) return
-		
-		if (!focused || !focused.id?.startsWith('message-')) {
+
+		if (!focused || !focused.id?.startsWith("message-")) {
 			// Focus first message if none focused
-			(messages[0] as HTMLElement)?.focus()
+			;(messages[0] as HTMLElement)?.focus()
 			return
 		}
-		
+
 		const currentIndex = Array.from(messages).indexOf(focused as Element)
 		if (currentIndex !== -1 && currentIndex < messages.length - 1) {
-			(messages[currentIndex + 1] as HTMLElement)?.focus()
+			;(messages[currentIndex + 1] as HTMLElement)?.focus()
 		}
 	}
 
 	private navigateToPreviousMessage() {
 		const messages = document.querySelectorAll('[id^="message-"]')
 		const focused = document.activeElement
-		
+
 		if (!messages.length) return
-		
-		if (!focused || !focused.id?.startsWith('message-')) {
+
+		if (!focused || !focused.id?.startsWith("message-")) {
 			// Focus last message if none focused
-			(messages[messages.length - 1] as HTMLElement)?.focus()
+			;(messages[messages.length - 1] as HTMLElement)?.focus()
 			return
 		}
-		
+
 		const currentIndex = Array.from(messages).indexOf(focused as Element)
 		if (currentIndex > 0) {
-			(messages[currentIndex - 1] as HTMLElement)?.focus()
+			;(messages[currentIndex - 1] as HTMLElement)?.focus()
 		}
 	}
 
 	private navigateToFirstMessage() {
 		const messages = document.querySelectorAll('[id^="message-"]')
 		if (messages.length > 0) {
-			(messages[0] as HTMLElement)?.focus()
-			KeyboardNavigationManager.announceToScreenReader('Navigated to first message')
+			;(messages[0] as HTMLElement)?.focus()
+			KeyboardNavigationManager.announceToScreenReader(
+				"Navigated to first message"
+			)
 		}
 	}
 
 	private navigateToLastMessage() {
 		const messages = document.querySelectorAll('[id^="message-"]')
 		if (messages.length > 0) {
-			(messages[messages.length - 1] as HTMLElement)?.focus()
-			KeyboardNavigationManager.announceToScreenReader('Navigated to last message')
+			;(messages[messages.length - 1] as HTMLElement)?.focus()
+			KeyboardNavigationManager.announceToScreenReader(
+				"Navigated to last message"
+			)
 		}
 	}
 
@@ -238,8 +258,13 @@ export class KeyboardNavigationManager {
 			const lastMessage = messages[messages.length - 1] as HTMLElement
 			lastMessage?.focus()
 			// Scroll to ensure the message is visible
-			lastMessage?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-			KeyboardNavigationManager.announceToScreenReader('Navigated to latest message')
+			lastMessage?.scrollIntoView({
+				behavior: "smooth",
+				block: "nearest"
+			})
+			KeyboardNavigationManager.announceToScreenReader(
+				"Navigated to latest message"
+			)
 		}
 	}
 
@@ -248,53 +273,77 @@ export class KeyboardNavigationManager {
 		const messages = document.querySelectorAll('[id^="message-"]')
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const message = messages[i] as HTMLElement
-			const regenerateBtn = message.querySelector('button[title*="Regenerate"]') as HTMLButtonElement
+			const regenerateBtn = message.querySelector(
+				'button[title*="Regenerate"]'
+			) as HTMLButtonElement
 			if (regenerateBtn && !regenerateBtn.disabled) {
 				regenerateBtn.click()
-				KeyboardNavigationManager.announceToScreenReader('Regenerating last response')
+				KeyboardNavigationManager.announceToScreenReader(
+					"Regenerating last response"
+				)
 				return
 			}
 		}
-		KeyboardNavigationManager.announceToScreenReader('No response available to regenerate')
+		KeyboardNavigationManager.announceToScreenReader(
+			"No response available to regenerate"
+		)
 	}
 
 	private swipeCurrentMessageLeft() {
 		const focused = document.activeElement
-		if (!focused || !focused.id?.startsWith('message-')) {
-			KeyboardNavigationManager.announceToScreenReader('No message focused for swiping')
+		if (!focused || !focused.id?.startsWith("message-")) {
+			KeyboardNavigationManager.announceToScreenReader(
+				"No message focused for swiping"
+			)
 			return
 		}
 
 		// Look for swipe left button in the focused message
-		const swipeLeftBtn = focused.querySelector('button[title*="Swipe Left"], button[title*="ChevronLeft"]') as HTMLButtonElement
+		const swipeLeftBtn = focused.querySelector(
+			'button[title*="Swipe Left"], button[title*="ChevronLeft"]'
+		) as HTMLButtonElement
 		if (swipeLeftBtn && !swipeLeftBtn.disabled) {
 			swipeLeftBtn.click()
-			KeyboardNavigationManager.announceToScreenReader('Swiped message left')
+			KeyboardNavigationManager.announceToScreenReader(
+				"Swiped message left"
+			)
 		} else {
-			KeyboardNavigationManager.announceToScreenReader('Cannot swipe left - no previous variations available')
+			KeyboardNavigationManager.announceToScreenReader(
+				"Cannot swipe left - no previous variations available"
+			)
 		}
 	}
 
 	private swipeCurrentMessageRight() {
 		const focused = document.activeElement
-		if (!focused || !focused.id?.startsWith('message-')) {
-			KeyboardNavigationManager.announceToScreenReader('No message focused for swiping')
+		if (!focused || !focused.id?.startsWith("message-")) {
+			KeyboardNavigationManager.announceToScreenReader(
+				"No message focused for swiping"
+			)
 			return
 		}
 
 		// Look for swipe right button in the focused message
-		const swipeRightBtn = focused.querySelector('button[title*="Swipe Right"], button[title*="ChevronRight"]') as HTMLButtonElement
+		const swipeRightBtn = focused.querySelector(
+			'button[title*="Swipe Right"], button[title*="ChevronRight"]'
+		) as HTMLButtonElement
 		if (swipeRightBtn && !swipeRightBtn.disabled) {
 			swipeRightBtn.click()
-			KeyboardNavigationManager.announceToScreenReader('Swiped message right')
+			KeyboardNavigationManager.announceToScreenReader(
+				"Swiped message right"
+			)
 		} else {
-			KeyboardNavigationManager.announceToScreenReader('Cannot swipe right - generating new variation or none available')
+			KeyboardNavigationManager.announceToScreenReader(
+				"Cannot swipe right - generating new variation or none available"
+			)
 		}
 	}
 
 	// Focus management utilities
 	static focusElement(selector: string, context?: HTMLElement): boolean {
-		const element = (context || document).querySelector(selector) as HTMLElement
+		const element = (context || document).querySelector(
+			selector
+		) as HTMLElement
 		if (element) {
 			element.focus()
 			return true
@@ -316,18 +365,18 @@ export class KeyboardNavigationManager {
 
 	static announceToScreenReader(message: string) {
 		// Create a temporary element for screen reader announcements
-		const announcement = document.createElement('div')
-		announcement.setAttribute('aria-live', 'polite')
-		announcement.setAttribute('aria-atomic', 'true')
-		announcement.style.position = 'absolute'
-		announcement.style.left = '-10000px'
-		announcement.style.width = '1px'
-		announcement.style.height = '1px'
-		announcement.style.overflow = 'hidden'
-		
+		const announcement = document.createElement("div")
+		announcement.setAttribute("aria-live", "polite")
+		announcement.setAttribute("aria-atomic", "true")
+		announcement.style.position = "absolute"
+		announcement.style.left = "-10000px"
+		announcement.style.width = "1px"
+		announcement.style.height = "1px"
+		announcement.style.overflow = "hidden"
+
 		document.body.appendChild(announcement)
 		announcement.textContent = message
-		
+
 		// Clean up after announcement
 		setTimeout(() => {
 			document.body.removeChild(announcement)
@@ -338,15 +387,19 @@ export class KeyboardNavigationManager {
 // Context navigation helpers for specific use cases
 export const NavigationHelpers = {
 	// Navigate between chat messages
-	navigateMessage: (direction: 'next' | 'previous', currentIndex?: number) => {
-		const messages = document.querySelectorAll('[data-message-index]')
+	navigateMessage: (
+		direction: "next" | "previous",
+		currentIndex?: number
+	) => {
+		const messages = document.querySelectorAll("[data-message-index]")
 		if (!messages.length) return
 
 		let targetIndex = 0
 		if (currentIndex !== undefined) {
-			targetIndex = direction === 'next' 
-				? Math.min(currentIndex + 1, messages.length - 1)
-				: Math.max(currentIndex - 1, 0)
+			targetIndex =
+				direction === "next"
+					? Math.min(currentIndex + 1, messages.length - 1)
+					: Math.max(currentIndex - 1, 0)
 		}
 
 		const targetMessage = messages[targetIndex] as HTMLElement
@@ -360,29 +413,34 @@ export const NavigationHelpers = {
 
 	// Navigate list items with proper announcements
 	navigateListItem: (
-		direction: 'next' | 'previous', 
+		direction: "next" | "previous",
 		listSelector: string,
 		currentIndex?: number,
 		itemType?: string
 	) => {
-		const items = document.querySelectorAll(`${listSelector} [role="listitem"]`)
+		const items = document.querySelectorAll(
+			`${listSelector} [role="listitem"]`
+		)
 		if (!items.length) return
 
 		let targetIndex = 0
 		if (currentIndex !== undefined) {
-			targetIndex = direction === 'next' 
-				? Math.min(currentIndex + 1, items.length - 1)
-				: Math.max(currentIndex - 1, 0)
+			targetIndex =
+				direction === "next"
+					? Math.min(currentIndex + 1, items.length - 1)
+					: Math.max(currentIndex - 1, 0)
 		}
 
 		const targetItem = items[targetIndex] as HTMLElement
 		if (targetItem) {
 			targetItem.focus()
-			const itemName = targetItem.getAttribute('aria-label') || 
-				targetItem.textContent?.trim() || 'Unknown item'
-			
+			const itemName =
+				targetItem.getAttribute("aria-label") ||
+				targetItem.textContent?.trim() ||
+				"Unknown item"
+
 			KeyboardNavigationManager.announceToScreenReader(
-				`${itemType || 'Item'} ${targetIndex + 1} of ${items.length}: ${itemName}`
+				`${itemType || "Item"} ${targetIndex + 1} of ${items.length}: ${itemName}`
 			)
 		}
 	}

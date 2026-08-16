@@ -28,17 +28,19 @@
 	}: Props = $props()
 
 	// Create comprehensive aria-label
-	const ariaLabel = $derived((() => {
-		let label = `${itemType}: ${contentTitle}`
-		
-		if (currentIndex !== undefined && totalItems !== undefined) {
-			label += ` - ${currentIndex + 1} of ${totalItems}`
-		} else if (id !== undefined) {
-			label += ` - ID ${id}`
-		}
-		
-		return label
-	})())
+	const ariaLabel = $derived(
+		(() => {
+			let label = `${itemType}: ${contentTitle}`
+
+			if (currentIndex !== undefined && totalItems !== undefined) {
+				label += ` - ${currentIndex + 1} of ${totalItems}`
+			} else if (id !== undefined) {
+				label += ` - ID ${id}`
+			}
+
+			return label
+		})()
+	)
 </script>
 
 <div
@@ -47,9 +49,9 @@
 >
 	<div class="relative flex min-w-0 flex-1 gap-2">
 		{#if id !== undefined}
-			<button 
-				{onclick} 
-				class="flex min-w-0 gap-2" 
+			<button
+				{onclick}
+				class="flex min-w-0 gap-2"
 				title={contentTitle}
 				aria-label={ariaLabel}
 				type="button"
@@ -77,11 +79,7 @@
 			{@render extraContent?.()}
 		</div>
 	</div>
-	<div 
-		class="controls"
-		role="group"
-		aria-label="Actions for {contentTitle}"
-	>
+	<div class="controls" role="group" aria-label="Actions for {contentTitle}">
 		{@render controls?.()}
 	</div>
 </div>

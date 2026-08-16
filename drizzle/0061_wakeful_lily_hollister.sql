@@ -1,0 +1,1 @@
+ALTER TABLE "ollama_settings" ALTER COLUMN "ollama_manager_enabled" SET DEFAULT false;

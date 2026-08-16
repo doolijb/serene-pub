@@ -1,6 +1,5 @@
 <script lang="ts">
-	import * as skio from "sveltekit-io"
-	import { onDestroy } from "svelte"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { z } from "zod"
 
 	// Zod validation schema
@@ -23,11 +22,11 @@
 
 	let testResult: { ok: boolean; error?: string } | null = $state(null)
 	let validationErrors: ValidationErrors = $state({})
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	function handleTestConnection() {
 		if (!validateConnection()) return
 		testResult = null
-		socket.emit("testConnection", { connection })
+		socket.emit("connections:test", { connection })
 	}
 
 	function validateConnection(): boolean {
@@ -54,17 +53,13 @@
 		}
 	}
 	$effect(() => {
-		function handleTest(msg) {
-			testResult = msg
+		function handleTest(msg: Sockets.Connections.Test.Response) {
+			testResult = { ok: msg.ok, error: msg.error ?? undefined }
 		}
-		socket.on("testConnection", handleTest)
+		socket.on("connections:test", handleTest)
 		return () => {
-			socket.off && socket.off("testConnection", handleTest)
+			socket.off("connections:test", handleTest)
 		}
-	})
-
-	onDestroy(() => {
-		socket.off && socket.off("testConnection", handleTest)
 	})
 </script>
 
@@ -75,7 +70,7 @@
 			id="baseUrl"
 			type="text"
 			bind:value={connection.baseUrl}
-			class="input {validationErrors.baseUrl ? 'border-red-500' : ''}"
+			class="input {validationErrors.baseUrl ? 'border-error-500' : ''}"
 			aria-invalid={validationErrors.baseUrl ? "true" : "false"}
 			aria-describedby={validationErrors.baseUrl
 				? "baseUrl-error"
@@ -90,7 +85,7 @@
 		{#if validationErrors.baseUrl}
 			<p
 				id="baseUrl-error"
-				class="mt-1 text-sm text-red-500"
+				class="text-error-500 mt-1 text-sm"
 				role="alert"
 			>
 				{validationErrors.baseUrl}
@@ -103,7 +98,7 @@
 			id="model"
 			type="text"
 			bind:value={connection.model}
-			class="input {validationErrors.model ? 'border-red-500' : ''}"
+			class="input {validationErrors.model ? 'border-error-500' : ''}"
 			aria-invalid={validationErrors.model ? "true" : "false"}
 			aria-describedby={validationErrors.model
 				? "model-error"
@@ -116,7 +111,11 @@
 			}}
 		/>
 		{#if validationErrors.model}
-			<p id="model-error" class="mt-1 text-sm text-red-500" role="alert">
+			<p
+				id="model-error"
+				class="text-error-500 mt-1 text-sm"
+				role="alert"
+			>
 				{validationErrors.model}
 			</p>
 		{/if}
@@ -136,7 +135,7 @@
 			id="chatgptApiKey"
 			type="password"
 			bind:value={connection.apiKey}
-			class="input {validationErrors.apiKey ? 'border-red-500' : ''}"
+			class="input {validationErrors.apiKey ? 'border-error-500' : ''}"
 			aria-invalid={validationErrors.apiKey ? "true" : "false"}
 			aria-describedby={validationErrors.apiKey
 				? "apiKey-error"
@@ -149,7 +148,11 @@
 			}}
 		/>
 		{#if validationErrors.apiKey}
-			<p id="apiKey-error" class="mt-1 text-sm text-red-500" role="alert">
+			<p
+				id="apiKey-error"
+				class="text-error-500 mt-1 text-sm"
+				role="alert"
+			>
 				{validationErrors.apiKey}
 			</p>
 		{/if}

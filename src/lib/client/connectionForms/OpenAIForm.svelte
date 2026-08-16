@@ -3,7 +3,7 @@
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { onMount, onDestroy } from "svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { z } from "zod"
 
 	interface ExtraFieldData {
@@ -36,30 +36,33 @@
 
 	let { connection = $bindable() } = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	const defaultExtraJson = {
 		stream: false,
 		apiKey: "",
 		prerenderPrompt: false
 	}
 
-	let availableOpenAIModels: Sockets.RefreshModels.Response["models"] =
-		$state([])
+	let availableOpenAIModels: any[] = $state([])
 	let openAIFields: ExtraFieldData | undefined = $state()
 	let validationErrors: ValidationErrors = $state({})
 
-	socket.on("refreshModels", (msg: Sockets.RefreshModels.Response) => {
+	socket.on("connections:refreshModels", (msg) => {
 		if (msg.models) availableOpenAIModels = msg.models
 	})
 
-	socket.on("testConnection", (msg: Sockets.TestConnection.Response) => {
-		testResult = msg
+	socket.on("connections:test", (msg) => {
+		testResult = {
+			ok: msg.ok,
+			error: msg.error ?? undefined,
+			models: msg.models
+		}
 	})
 
 	function handleRefreshModels() {
-		socket.emit("refreshModels", {
+		socket.emit("connections:refreshModels", {
 			connection
-		} as Sockets.RefreshModels.Call)
+		})
 	}
 
 	let testResult: { ok: boolean; error?: string; models?: any[] } | null =
@@ -68,9 +71,9 @@
 	function handleTestConnection() {
 		if (!validateConnection()) return
 		testResult = null
-		socket.emit("testConnection", {
+		socket.emit("connections:test", {
 			connection
-		} as Sockets.TestConnection.Call)
+		})
 	}
 
 	function validateConnection(): boolean {
@@ -117,11 +120,35 @@
 		}
 	}
 
+	// Skips the FIRST write-back, which is the defaults normalization done in
+	// onMount, not a user edit.
+	//
+	// onMount builds the field state from `{...defaults, ...connection.extraJson}`,
+	// so it legitimately gains every default key the stored row lacked. Writing
+	// that straight back into `connection` made the form differ from the
+	// parent's `originalConnection` the instant it opened — the panel reported
+	// unsaved changes with nothing touched, and then blocked closing behind a
+	// destructive-sounding confirm. Real edits still write through, and a save
+	// still persists the full normalized set.
+	let extraJsonInitialized = false
 	$effect(() => {
 		const _openAIFields = openAIFields
-		if (_openAIFields) {
-			connection.extraJson = extraFieldsToExtraJson(_openAIFields)
+		if (!_openAIFields) return
+		// Computed on EVERY run, before the skip check, and deliberately so:
+		// an effect only subscribes to the state it actually reads, and the
+		// individual field values are read inside this call. Returning before
+		// it — as a first attempt did — meant the effect never subscribed to
+		// them, so later toggles re-triggered nothing and the form never went
+		// dirty. Skip the WRITE, never the read.
+		const nextExtraJson = extraFieldsToExtraJson(_openAIFields)
+		// The first populated run is onMount's defaults normalization, not a
+		// user edit — writing it back made the panel report unsaved changes the
+		// instant it opened, then block closing behind a destructive confirm.
+		if (!extraJsonInitialized) {
+			extraJsonInitialized = true
+			return
 		}
+		connection.extraJson = nextExtraJson
 	})
 
 	onMount(() => {
@@ -135,8 +162,8 @@
 	})
 
 	onDestroy(() => {
-		socket.off("refreshModels")
-		socket.off("testConnection")
+		socket.off("connections:refreshModels")
+		socket.off("connections:test")
 	})
 </script>
 
@@ -147,7 +174,7 @@
 			id="model"
 			bind:value={connection.model}
 			class="select bg-background border-muted w-full rounded border {validationErrors.model
-				? 'border-red-500'
+				? 'border-error-500'
 				: ''}"
 			aria-invalid={validationErrors.model ? "true" : "false"}
 			aria-describedby={validationErrors.model
@@ -166,7 +193,11 @@
 			{/each}
 		</select>
 		{#if validationErrors.model}
-			<p id="model-error" class="mt-1 text-sm text-red-500" role="alert">
+			<p
+				id="model-error"
+				class="text-error-500 mt-1 text-sm"
+				role="alert"
+			>
 				{validationErrors.model}
 			</p>
 		{/if}
@@ -230,7 +261,7 @@
 			bind:value={connection.baseUrl}
 			placeholder="https://api.openai.com/v1/"
 			required
-			class="input {validationErrors.baseUrl ? 'border-red-500' : ''}"
+			class="input {validationErrors.baseUrl ? 'border-error-500' : ''}"
 			aria-invalid={validationErrors.baseUrl ? "true" : "false"}
 			aria-describedby={validationErrors.baseUrl
 				? "baseUrl-error"
@@ -245,7 +276,7 @@
 		{#if validationErrors.baseUrl}
 			<p
 				id="baseUrl-error"
-				class="mt-1 text-sm text-red-500"
+				class="text-error-500 mt-1 text-sm"
 				role="alert"
 			>
 				{validationErrors.baseUrl}
@@ -260,7 +291,9 @@
 				type="password"
 				bind:value={openAIFields.apiKey}
 				placeholder="sk-..."
-				class="input {validationErrors.apiKey ? 'border-red-500' : ''}"
+				class="input {validationErrors.apiKey
+					? 'border-error-500'
+					: ''}"
 				aria-invalid={validationErrors.apiKey ? "true" : "false"}
 				aria-describedby={validationErrors.apiKey
 					? "apiKey-error"
@@ -275,7 +308,7 @@
 			{#if validationErrors.apiKey}
 				<p
 					id="apiKey-error"
-					class="mt-1 text-sm text-red-500"
+					class="text-error-500 mt-1 text-sm"
 					role="alert"
 				>
 					{validationErrors.apiKey}
@@ -287,28 +320,37 @@
 				Advanced Settings
 			</summary>
 			<section class="w-full space-y-4 pt-2">
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="stream">Stream</label>
-					<Switch
-						name="stream"
-						checked={openAIFields.stream}
-						onCheckedChange={(e) =>
-							(openAIFields!.stream = e.checked)}
-						aria-labelledby="stream"
-					/>
-				</div>
-				<div class="flex items-center justify-between gap-4">
-					<label class="font-semibold" for="prerenderPrompt">
+				<Switch
+					name="stream"
+					checked={openAIFields.stream}
+					onCheckedChange={(e) => (openAIFields!.stream = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">Stream</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+					>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
+				<Switch
+					name="prerenderPrompt"
+					checked={openAIFields.prerenderPrompt}
+					onCheckedChange={(e) =>
+						(openAIFields!.prerenderPrompt = e.checked)}
+					class="flex items-center justify-between gap-4"
+				>
+					<Switch.Label class="font-semibold">
 						Prerender Prompt
-					</label>
-					<Switch
-						name="prerenderPrompt"
-						checked={openAIFields.prerenderPrompt}
-						onCheckedChange={(e) =>
-							(openAIFields!.prerenderPrompt = e.checked)}
-						aria-labelledby="prerenderPrompt"
-					/>
-				</div>
+					</Switch.Label>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+					>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+				</Switch>
 			</section>
 		</details>
 	{/if}

@@ -1,4 +1,5 @@
 import Handlebars from "handlebars"
+import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import _ from "lodash"
 import { StopStrings } from "../utils/StopStrings"
 import { Ollama, type ChatRequest, type GenerateRequest } from "ollama"
@@ -8,9 +9,18 @@ import { TokenCounters } from "../utils/TokenCounterManager"
 import {
 	BaseConnectionAdapter,
 	type AdapterExports,
-	type BaseChat
+	type BasePromptChat
 } from "./BaseConnectionAdapter"
+import { type CompiledPrompt } from "../utils/promptBuilder"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import { ollamaSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
+import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
+import {
+	createIdleWatchdog,
+	LLM_IDLE_TIMEOUT_MS,
+	LLM_NONSTREAMING_TIMEOUT_MS
+} from "./idleTimeout"
 
 class OllamaAdapter extends BaseConnectionAdapter {
 	private _client?: Ollama
@@ -22,14 +32,22 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		contextConfig,
 		promptConfig,
 		chat,
-		currentCharacterId
+		currentCharacterId,
+		tokenCounter,
+		tokenLimit,
+		contextThresholdPercent,
+		generatingMessageMetadata
 	}: {
 		connection: SelectConnection
 		sampling: SelectSamplingConfig
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
-		chat: BaseChat
-		currentCharacterId: number
+		chat: BasePromptChat
+		currentCharacterId: number | null
+		tokenCounter?: TokenCounters
+		tokenLimit?: number
+		contextThresholdPercent?: number
+		generatingMessageMetadata?: any
 	}) {
 		super({
 			connection,
@@ -38,14 +56,18 @@ class OllamaAdapter extends BaseConnectionAdapter {
 			promptConfig,
 			chat,
 			currentCharacterId,
-			tokenCounter: new TokenCounters(
-				connection.tokenCounter || TokenCounterOptions.ESTIMATE
-			),
+			tokenCounter:
+				tokenCounter ||
+				new TokenCounters(
+					connection.tokenCounter || TokenCounterOptions.ESTIMATE
+				),
 			tokenLimit:
-				typeof sampling.contextTokens === "number"
+				tokenLimit ||
+				(typeof sampling.contextTokens === "number"
 					? sampling.contextTokens
-					: 2048,
-			contextThresholdPercent: 0.9
+					: 2048),
+			contextThresholdPercent: contextThresholdPercent || 0.9,
+			generatingMessageMetadata
 		})
 	}
 
@@ -55,9 +77,9 @@ class OllamaAdapter extends BaseConnectionAdapter {
 			if (key.endsWith("Enabled")) continue
 			const enabledKey = key + "Enabled"
 			if ((this.sampling as any)[enabledKey] === false) continue
-			if (samplingKeyMap[key]) {
+			if (ollamaSamplingKeyMap[key]) {
 				if (key === "streaming") continue
-				result[samplingKeyMap[key]] = value
+				result[ollamaSamplingKeyMap[key]] = value
 			}
 		}
 		return result
@@ -65,8 +87,8 @@ class OllamaAdapter extends BaseConnectionAdapter {
 
 	getClient() {
 		if (!this._client) {
-			const host = this.connection.baseUrl ?? undefined
-			this._client = new Ollama({ host: host ?? undefined })
+			const host = normalizeBaseUrl(this.connection.baseUrl) || undefined
+			this._client = new Ollama({ host })
 		}
 		return this._client
 	}
@@ -87,8 +109,21 @@ class OllamaAdapter extends BaseConnectionAdapter {
 	}
 
 	compilePrompt(args: {}) {
+		const useChatFormat = !!this.connection.extraJson?.useChat
+		console.log(
+			"[OllamaAdapter.compilePrompt] connection.extraJson:",
+			this.connection.extraJson
+		)
+		console.log(
+			"[OllamaAdapter.compilePrompt] useChat value:",
+			this.connection.extraJson?.useChat
+		)
+		console.log(
+			"[OllamaAdapter.compilePrompt] useChatFormat:",
+			useChatFormat
+		)
 		return super.compilePrompt({
-			useChatFormat: !!this.connection.extraJson?.useChat,
+			useChatFormat,
 			...args
 		})
 	}
@@ -96,15 +131,21 @@ class OllamaAdapter extends BaseConnectionAdapter {
 	async generate(): Promise<{
 		completionResult:
 			| string
-			| ((cb: (chunk: string) => void) => Promise<void>)
+			| ((
+					contentCb: (chunk: string) => void,
+					thinkingCb?: (chunk: string) => void
+			  ) => Promise<void>)
 		compiledPrompt: CompiledPrompt
 		isAborted: boolean
+		thinkingContent?: string
 	}> {
-		const model = this.connection.model ?? connectionDefaults.baseUrl
+		const model =
+			this.connection.model ??
+			CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA].baseUrl
 		const stream = this.connection!.extraJson?.stream || false
 		const think = this.connection!.extraJson?.think || false
+		console.log("[OllamaAdapter] think flag:", think, "stream:", stream)
 		const keep_alive = this.connection!.extraJson?.keepAlive || "300ms"
-		// const raw = this.connection!.extraJson?.raw || false
 		if (typeof model !== "string")
 			throw new Error("OllamaAdapter: model must be a string")
 
@@ -114,12 +155,11 @@ class OllamaAdapter extends BaseConnectionAdapter {
 			characters:
 				this.chat.chatCharacters?.map((cc) => cc.character) || [],
 			personas: this.chat.chatPersonas?.map((cp) => cp.persona) || [],
-			currentCharacterId: this.currentCharacterId
+			currentCharacterId: this.currentCharacterId ?? undefined
 		})
-		const characterName =
-			this.chat.chatCharacters?.[0]?.character?.nickname ||
-			this.chat.chatCharacters?.[0]?.character?.name ||
-			"assistant"
+		const characterName = resolveCharacterName(
+			this.chat.chatCharacters?.[0]?.character
+		)
 		const personaName = this.chat.chatPersonas?.[0]?.persona?.name || "user"
 		const stopContext: Record<string, string> = {
 			char: characterName,
@@ -133,46 +173,96 @@ class OllamaAdapter extends BaseConnectionAdapter {
 
 		const compiledPrompt: CompiledPrompt = await this.compilePrompt({})
 
-		const useChat = this.connection.extraJson?.useChat || true
+		console.log(
+			"[OllamaAdapter] useChat:",
+			this.connection.extraJson?.useChat
+		)
+		console.log(
+			"[OllamaAdapter] compiledPrompt has messages:",
+			!!compiledPrompt.messages
+		)
+		console.log(
+			"[OllamaAdapter] compiledPrompt has prompt:",
+			!!compiledPrompt.prompt
+		)
+
+		const useChat = this.connection.extraJson?.useChat ?? true
+		console.log("[OllamaAdapter] useChat after coalescing:", useChat)
 		let req: GenerateRequest | ChatRequest
 
 		if (useChat) {
+			if (!compiledPrompt.messages) {
+				console.error(
+					"[OllamaAdapter] ERROR: useChat is true but compiledPrompt.messages is undefined!"
+				)
+				console.error("[OllamaAdapter] compiledPrompt:", compiledPrompt)
+			}
 			req = {
 				model,
 				messages: compiledPrompt.messages!,
 				stream,
 				think,
-				raw: false,
 				keep_alive,
 				options: {
 					...this.mapSamplingConfig(),
-					stop,
-					useChat: this.connection.extraJson?.useChat || true
-				}
+					stop
+				},
+				// Ollama's structured-output switch is a TOP-LEVEL field, not a
+				// sampler inside `options` — putting it there silently does
+				// nothing.
+				// A responseSchema narrows this to an exact shape — Ollama's
+				// `format` takes a JSON Schema object as well as the "json"
+				// literal (structured outputs, Ollama >= 0.5).
+				...(this.responseFormat === "json"
+					? { format: this.responseSchema ?? "json" }
+					: {})
 			} as ChatRequest
 		} else {
+			// For generate mode, append the prompt format stop strings
+			// Get the format-specific stop strings based on connection's promptFormat
+			const formatStopStrings = StopStrings.get({
+				format: this.connection.promptFormat || "vicuna",
+				characters: [],
+				personas: [],
+				currentCharacterId: this.currentCharacterId ?? undefined
+			})
+
+			// Combine with the existing stop strings (which include character/persona names)
+			const allStopStrings = [...stop, ...formatStopStrings]
+
 			req = {
 				model,
 				prompt: compiledPrompt.prompt!,
 				stream,
 				think,
-				raw: true,
 				keep_alive,
 				options: {
 					...this.mapSamplingConfig(),
-					stop
-				}
+					stop: allStopStrings
+				},
+				// Top-level, and schema-aware, same as the chat branch above.
+				...(this.responseFormat === "json"
+					? { format: this.responseSchema ?? "json" }
+					: {})
 			} as GenerateRequest
 		}
 
+		console.log("OllamaAdapter generate mode request:", req)
+
 		if (stream) {
 			return {
-				completionResult: async (cb: (chunk: string) => void) => {
+				completionResult: async (
+					contentCb: (chunk: string) => void,
+					thinkingCb?: (chunk: string) => void
+				) => {
 					let content = ""
-					let abortedEarly = false
+					let idleTimedOut = false
+					const ollama = this.getClient()
+					const idle = createIdleWatchdog(LLM_IDLE_TIMEOUT_MS, () => {
+						idleTimedOut = true
+						ollama.abort()
+					})
 					try {
-						const ollama = this.getClient()
-
 						if (useChat) {
 							// Use Ollama's chat api
 							const result = await ollama.chat({
@@ -184,14 +274,42 @@ class OllamaAdapter extends BaseConnectionAdapter {
 								ollama.abort()
 								return
 							}
+							let firstPart = true
 							for await (const part of result) {
+								idle.poke()
 								if (this.isAborting) {
 									ollama.abort()
 									return
 								}
+								if (firstPart) {
+									console.log(
+										"[OllamaAdapter] first stream part keys:",
+										Object.keys(part),
+										"message keys:",
+										part.message
+											? Object.keys(part.message)
+											: "no message",
+										"message.thinking:",
+										(
+											part.message as any
+										)?.thinking?.substring(0, 50)
+									)
+									firstPart = false
+								}
 								if (part.message) {
-									content += part.message.content
-									cb(part.message.content)
+									// Forward thinking chunks before content starts
+									if (part.message.thinking) {
+										console.log(
+											"[OllamaAdapter] thinking chunk:",
+											part.message.thinking.length,
+											"chars"
+										)
+										thinkingCb?.(part.message.thinking)
+									}
+									if (part.message.content) {
+										content += part.message.content
+										contentCb(part.message.content)
+									}
 								}
 							}
 						} else {
@@ -205,80 +323,153 @@ class OllamaAdapter extends BaseConnectionAdapter {
 								ollama.abort()
 								return
 							}
+							let genFirstPart = true
 							for await (const part of result) {
+								idle.poke()
 								if (this.isAborting) {
 									ollama.abort()
 									return
 								}
+								if (genFirstPart || part.done) {
+									console.log(
+										"[OllamaAdapter] generate part keys:",
+										Object.keys(part),
+										"thinking:",
+										(part as any).thinking?.length ?? 0,
+										"response:",
+										part.response?.length ?? 0,
+										"done:",
+										part.done
+									)
+									genFirstPart = false
+								}
+								if (part.thinking) {
+									console.log(
+										"[OllamaAdapter] generate thinking chunk:",
+										part.thinking.length,
+										"chars"
+									)
+									thinkingCb?.(part.thinking)
+								}
 								if (part.response) {
 									content += part.response
-									cb(part.response)
+									contentCb(part.response)
 								}
 							}
 						}
 						// No need to apply stop strings here, Ollama will handle it
 					} catch (e: any) {
-						if (!abortedEarly)
-							cb("FAILURE: " + (e.message || String(e)))
+						if (idleTimedOut) {
+							throw new Error(
+								`Ollama did not respond for ${LLM_IDLE_TIMEOUT_MS / 60_000} minutes — connection may be hung.`
+							)
+						}
+						// A genuine cancellation isn't an error to surface —
+						// everything else must propagate so it lands in the
+						// message's error column (generateResponse.ts) instead
+						// of being silently swallowed into a stream that just
+						// stops with no signal at all.
+						if (this.isAborting) return
+						console.error(
+							"[OllamaAdapter] stream error:",
+							e.message || String(e)
+						)
+						throw e
+					} finally {
+						idle.clear()
 					}
 				},
 				compiledPrompt,
 				isAborted: this.isAborting
 			}
 		} else {
-			const content = await (async () => {
-				let content = ""
+			const result = await (async () => {
+				// No intermediate chunks to reset an idle timer against for a
+				// non-streaming response — a genuine, documented exception to
+				// the idle-based design used in the streaming branch above: a
+				// flat bound, sized generously to cover a full slow
+				// generation end-to-end.
+				let idleTimedOut = false
+				const ollama = this.getClient()
+				const idleTimer = setTimeout(() => {
+					idleTimedOut = true
+					ollama.abort()
+				}, LLM_NONSTREAMING_TIMEOUT_MS)
 				try {
-					const ollama = this.getClient()
 					if (useChat) {
 						console.log("Using non-steaming chat API")
 						// Use Ollama's chat api
-						const result = await ollama.chat({
+						const res = await ollama.chat({
 							...(req as ChatRequest),
 							stream: false
 						})
 						if (this.isAborting) {
-							return undefined
+							return { content: undefined, thinking: undefined }
 						}
 						if (
-							result &&
-							typeof result === "object" &&
-							"message" in result
+							res &&
+							typeof res === "object" &&
+							"message" in res
 						) {
-							content = result.message.content || ""
-							// No need to apply stop strings here, Ollama will handle it
-							return content
+							console.log(
+								"[OllamaAdapter] non-stream chat thinking:",
+								res.message.thinking
+									? res.message.thinking.length + " chars"
+									: "none"
+							)
+							return {
+								content: res.message.content || "",
+								thinking: res.message.thinking
+							}
 						} else {
-							return "FAILURE: Unexpected Ollama result type"
+							throw new Error("Unexpected Ollama result type")
 						}
 					} else {
-						const result = await ollama.generate({
+						const res = await ollama.generate({
 							...(req as GenerateRequest),
 							stream: false
 						})
 						if (this.isAborting) {
-							return undefined
+							return { content: undefined, thinking: undefined }
 						}
 						if (
-							result &&
-							typeof result === "object" &&
-							"response" in result
+							res &&
+							typeof res === "object" &&
+							"response" in res
 						) {
-							content = result.response || ""
-							// No need to apply stop strings here, Ollama will handle it
-							return content
+							console.log(
+								"[OllamaAdapter] non-stream generate thinking:",
+								res.thinking
+									? res.thinking.length + " chars"
+									: "none"
+							)
+							return {
+								content: res.response || "",
+								thinking: res.thinking
+							}
 						} else {
-							return "FAILURE: Unexpected Ollama result type"
+							throw new Error("Unexpected Ollama result type")
 						}
 					}
 				} catch (e: any) {
-					return "FAILURE: " + (e.message || String(e))
+					if (idleTimedOut) {
+						throw new Error(
+							`Ollama did not respond within ${LLM_NONSTREAMING_TIMEOUT_MS / 60_000} minutes.`
+						)
+					}
+					if (this.isAborting) {
+						return { content: undefined, thinking: undefined }
+					}
+					throw e
+				} finally {
+					clearTimeout(idleTimer)
 				}
 			})()
 			return {
-				completionResult: content ?? "",
+				completionResult: result.content ?? "",
 				compiledPrompt,
-				isAborted: this.isAborting
+				isAborted: this.isAborting,
+				thinkingContent: result.thinking || undefined
 			}
 		}
 	}
@@ -292,86 +483,13 @@ class OllamaAdapter extends BaseConnectionAdapter {
 	}
 }
 
-const connectionDefaults = {
-	type: CONNECTION_TYPE.OLLAMA,
-	baseUrl: "http://localhost:11434/",
-	promptFormat: PromptFormats.VICUNA,
-	tokenCounter: TokenCounterOptions.ESTIMATE,
-	extraJson: {
-		stream: true,
-		think: false,
-		keepAlive: "300ms",
-		raw: true,
-		useChat: true
-	}
-}
-
-// --- SamplingConfig mapping ---
-const samplingKeyMap: Record<string, string> = {
-	temperature: "temperature",
-	topP: "top_p",
-	topK: "top_k",
-	repetitionPenalty: "repetition_penalty",
-	minP: "min_p",
-	tfs: "tfs",
-	typicalP: "typical_p",
-	mirostat: "mirostat",
-	mirostatTau: "mirostat_tau",
-	mirostatEta: "mirostat_eta",
-	penaltyAlpha: "penalty_alpha",
-	frequencyPenalty: "frequency_penalty",
-	presencePenalty: "presence_penalty",
-	responseTokens: "num_predict",
-	contextTokens: "num_ctx",
-	noRepeatNgramSize: "no_repeat_ngram_size",
-	numBeams: "num_beams",
-	lengthPenalty: "length_penalty",
-	minLength: "min_length",
-	encoderRepetitionPenalty: "encoder_repetition_penalty",
-	freqPen: "freq_pen",
-	presencePen: "presence_pen",
-	skew: "skew",
-	doSample: "do_sample",
-	earlyStopping: "early_stopping",
-	dynatemp: "dynatemp",
-	minTemp: "min_temp",
-	maxTemp: "max_temp",
-	dynatempExponent: "dynatemp_exponent",
-	smoothingFactor: "smoothing_factor",
-	smoothingCurve: "smoothing_curve",
-	dryAllowedLength: "dry_allowed_length",
-	dryMultiplier: "dry_multiplier",
-	dryBase: "dry_base",
-	dryPenaltyLastN: "dry_penalty_last_n",
-	maxTokensSecond: "max_tokens_second",
-	seed: "seed",
-	addBosToken: "add_bos_token",
-	banEosToken: "ban_eos_token",
-	skipSpecialTokens: "skip_special_tokens",
-	includeReasoning: "include_reasoning",
-	streaming: "streaming", // Not sent to Ollama, handled separately
-	mirostatMode: "mirostat_mode",
-	xtcThreshold: "xtc_threshold",
-	xtcProbability: "xtc_probability",
-	nsigma: "nsigma",
-	speculativeNgram: "speculative_ngram",
-	guidanceScale: "guidance_scale",
-	etaCutoff: "eta_cutoff",
-	epsilonCutoff: "epsilon_cutoff",
-	repPenRange: "rep_pen_range",
-	repPenDecay: "rep_pen_decay",
-	repPenSlope: "rep_pen_slope",
-	logitBias: "logit_bias",
-	bannedTokens: "banned_tokens"
-}
-
 async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
 	try {
 		const ollama = new Ollama({
 			// Patch: ensure host is never null
-			host: connection.baseUrl ?? undefined
+			host: normalizeBaseUrl(connection.baseUrl) || undefined
 		})
 		const res = await ollama.list()
 		if (res && Array.isArray(res.models)) {
@@ -394,7 +512,7 @@ async function testConnection(
 	try {
 		const ollama = new Ollama({
 			// Patch: ensure host is never null
-			host: connection.baseUrl ?? undefined
+			host: normalizeBaseUrl(connection.baseUrl) || undefined
 		})
 		const res = await ollama.list()
 		if (res && Array.isArray(res.models)) {
@@ -415,8 +533,8 @@ const exports: AdapterExports = {
 	Adapter: OllamaAdapter,
 	listModels,
 	testConnection,
-	connectionDefaults,
-	samplingKeyMap
+	connectionDefaults: CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA],
+	samplingKeyMap: ollamaSamplingKeyMap
 }
 
 export default exports

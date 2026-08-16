@@ -33,6 +33,10 @@ declare global {
 		rightPanel: string | null
 		mobilePanel: string | null
 		isMobileMenuOpen: boolean
+		/** Which side's sidebar (if any) is expanded to cover the whole
+		 * viewport — set null to exit fullscreen from anywhere with context
+		 * access, e.g. a sidebar button that navigates to a different page. */
+		fullscreenPanel: "left" | "right" | null
 		openPanel: (args: { key: string; toggle?: boolean }) => void
 		closePanel: (args: {
 			panel: "left" | "right" | "mobile"
@@ -42,1161 +46,247 @@ declare global {
 		onMobilePanelClose?: () => Promise<boolean>
 		leftNav: Record<
 			string,
-			{ icon: Component<Icons.IconProps, {}, "">; title: string }
+			| {
+					icon: Component<Icons.IconProps, {}, "">
+					title: string
+					imgSrc?: undefined
+			  }
+			// KoboldCPP's nav entry uses an image mask instead of a lucide icon
+			// component — see the `item.imgSrc` branch in Layout.svelte's mobile nav.
+			| { icon?: undefined; imgSrc: string; title: string }
 		>
 		rightNav: Record<
 			string,
-			{ icon: Component<Icons.IconProps, {}, "">; title: string }
+			| {
+					icon: Component<Icons.IconProps, {}, "">
+					title: string
+					imgSrc?: undefined
+			  }
+			| { icon?: undefined; imgSrc: string; title: string }
 		>
 		digest: {
 			characterId?: number
 			personaId?: number
+			/** Open the character sidebar straight to its detail/view screen, not the edit form */
+			viewCharacterId?: number
+			/** Open the persona sidebar straight to its detail/view screen, not the edit form */
+			viewPersonaId?: number
 			chatId?: number
 			chatPersonaId?: number
 			chatCharacterId?: number
 			lorebookId?: number
 			tutorial?: boolean
+			/** Focus a specific history entry in the lorebook sidebar */
+			historyEntryId?: number
+			/** Which tab to open when focusing a history entry */
+			historyEntryTab?: "content" | "scenes"
+			/** Expand a specific scene within the scenes tab */
+			sceneId?: number
+			/** Navigate to a specific lorebook tab when digest.lorebookId is set */
+			lorebookTab?: string
+			/** Open the connections sidebar and select a specific connection */
+			connectionId?: number
+			/** Open the connections sidebar straight to a category, skipping the index screen */
+			connectionsView?: "connections" | "embedding"
 		}
+		leftNavOrder: string[]
+		rightNavOrder: string[]
+		getOrderedEntries: (
+			nav: Record<string, any>,
+			order: string[]
+		) => ReadonlyArray<readonly [string, any]>
 	}
 
 	interface UserCtx {
-		user:
-			| (SelectUser & {
-					activeConnection: SelectConnection | null
-					activeSamplingConfig: SelectSamplingConfig | null
-					activeContextConfig: SelectContextConfig | null
-					activePromptConfig: SelectPromptConfig | null
-			  })
-			| undefined
-	}
-
-	interface ThemeCtx {
-		mode: "light" | "dark"
-		theme: string
+		user: SelectUser | undefined
 	}
 
 	interface SystemSettingsCtx {
-		settings: {
-			ollamaManagerEnabled: boolean
-			ollamaManagerBaseUrl: string
-			showAllCharacterFields: boolean
-			enableEasyCharacterCreation: boolean
-			enableEasyPersonaCreation: boolean
-			showHomePageBanner: boolean
-		}
+		settings?: Omit<
+			SelectSystemSettings,
+			| "id"
+			| "charaVaultEmail"
+			| "charaVaultEncryptedToken"
+			| "charaVaultTokenIv"
+			| "charaVaultTokenAuthTag"
+		> & { isAndroidWrapper?: boolean; localEmbeddingsSupported?: boolean }
 	}
 
-	// Model select and insert
-	type SelectUser = typeof schema.users.$inferSelect
-	type InsertUser = typeof schema.users.$inferInsert
-	type SelectSamplingConfig = typeof schema.samplingConfigs.$inferSelect
-	type InsertSamplingConfig = typeof schema.samplingConfigs.$inferInsert
-	type SelectConnection = typeof schema.connections.$inferSelect
-	type InsertConnection = typeof schema.connections.$inferInsert
-	type SelectContextConfig = typeof schema.contextConfigs.$inferSelect
-	type InsertContextConfig = typeof schema.contextConfigs.$inferInsert
-	type SelectPromptConfig = typeof schema.promptConfigs.$inferSelect
-	type InsertPromptConfig = typeof schema.promptConfigs.$inferInsert
-	type SelectLorebook = typeof schema.lorebooks.$inferSelect
-	type InsertLorebook = typeof schema.lorebooks.$inferInsert
-	type SelectWorldLoreEntry = typeof schema.worldLoreEntries.$inferSelect
-	type InsertWorldLoreEntry = typeof schema.worldLoreEntries.$inferInsert
-	type SelectCharacterLoreEntry =
-		typeof schema.characterLoreEntries.$inferSelect
-	type InsertCharacterLoreEntry =
-		typeof schema.characterLoreEntries.$inferInsert
-	type SelectHistoryEntry = typeof schema.historyEntries.$inferSelect
-	type InsertHistoryEntry = typeof schema.historyEntries.$inferInsert
-	type SelectTag = typeof schema.tags.$inferSelect
-	type InsertTag = typeof schema.tags.$inferInsert
-	type SelectCharacterTag = typeof schema.characterTags.$inferSelect
-	type InsertCharacterTag = typeof schema.characterTags.$inferInsert
-	type SelectCharacter = typeof schema.characters.$inferSelect
-	type InsertCharacter = typeof schema.characters.$inferInsert
-	type SelectPersona = typeof schema.personas.$inferSelect
-	type InsertPersona = typeof schema.personas.$inferInsert
-	type SelectChat = typeof schema.chats.$inferSelect
-	type InsertChat = typeof schema.chats.$inferInsert
-	type SelectChatMessage = typeof schema.chatMessages.$inferSelect
-	type InsertChatMessage = typeof schema.chatMessages.$inferInsert
-	type SelectChatPersona = typeof schema.chatPersonas.$inferSelect
-	type InsertChatPersona = typeof schema.chatPersonas.$inferInsert
-	type SelectChatCharacter = typeof schema.chatCharacters.$inferSelect
-	type InsertChatCharacter = typeof schema.chatCharacters.$inferInsert
-	type SelectChatLorebook = typeof schema.chatLorebooks.$inferSelect
-	type InsertChatLorebook = typeof schema.chatLorebooks.$inferInsert
-	type SelectLorebookBinding = typeof schema.lorebookBindings.$inferSelect
-	type InsertLorebookBinding = typeof schema.lorebookBindings.$inferInsert
+	interface OllamaSettingsCtx {
+		settings?: Omit<SelectOllamaSettings, "id">
+	}
 
-	namespace Sockets {
-		namespace SystemSettings {
-			interface Call {}
-			interface Response {
-				systemSettings: {
-					ollamaManagerEnabled: boolean
-					ollamaManagerBaseUrl: string
-					showAllCharacterFields: boolean
-					enableEasyCharacterCreation: boolean
-					enableEasyPersonaCreation: boolean
-					showHomePageBanner: boolean
-				}
-			}
-		}
-		namespace Error {
-			interface Response {
-				error: string
-				description?: string
-			}
-		}
-		namespace Success {
-			interface Response {
-				title: string
-				description?: string
-			}
-		}
-		namespace SamplingConfig {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				sampling: SelectSamplingConfig
-			}
-		}
-		namespace SamplingConfigList {
-			interface Call {}
-			interface Response {
-				samplingConfigsList: Partial<SelectSamplingConfig>[]
-			}
-		}
-		namespace ContextConfigsList {
-			interface Call {}
-			interface Response {
-				contextConfigsList: Partial<SelectContextConfig>[]
-			}
-		}
-		namespace ContextConfig {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				contextConfig: SelectContextConfig
-			}
-		}
-		namespace CreateContextConfig {
-			interface Call {
-				contextConfig: InsertContextConfig
-			}
-			interface Response {
-				contextConfig: SelectContextConfig
-			}
-		}
-		namespace UpdateContextConfig {
-			interface Call {
-				contextConfig: InsertContextConfig & { id: number }
-			}
-			interface Response {
-				contextConfig: SelectContextConfig
-			}
-		}
-		namespace SetUserActiveContextConfig {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				user: SelectUser
-			}
-		}
-		namespace DeleteContextConfig {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				id: number
-			}
-		}
-		// PERSONAS
-		namespace PersonaList {
-			interface Call {}
-			interface Response {
-				personaList: Partial<SelectPersona>[]
-			}
-		}
-		namespace Persona {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				persona: SelectPersona | null
-			}
-		}
-		namespace CreatePersona {
-			interface Call {
-				persona: InsertPersona
-				avatarFile?: Buffer
-			}
-			interface Response {
-				persona: SelectPersona
-			}
-		}
-		namespace UpdatePersona {
-			interface Call {
-				persona: InsertPersona & { id: number }
-				avatarFile?: Buffer
-			}
-			interface Response {
-				persona: SelectPersona
-			}
-		}
-		namespace DeletePersona {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				id: number
-			}
-		}
-		// CHARACTERS
-		namespace CharacterList {
-			interface Call {}
-			interface Response {
-				characterList: Partial<SelectCharacter>[]
-			}
-		}
-		namespace Character {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				character: SelectCharacter | null
-			}
-		}
-		namespace CreateCharacter {
-			interface Call {
-				character: InsertCharacter
-				avatarFile?: Buffer
-			}
-			interface Response {
-				character: SelectCharacter
-			}
-		}
-		namespace UpdateCharacter {
-			interface Call {
-				character: InsertCharacter & { id: number }
-				avatarFile?: Buffer
-			}
-			interface Response {
-				character: SelectCharacter
-			}
-		}
-		namespace DeleteCharacter {
-			interface Call {
-				characterId: number
-			}
-			interface Response {
-				id: number
-			}
-		}
-		// CONNECTIONS
-		namespace ConnectionsList {
-			interface Call {}
-			interface Response {
-				connectionsList: Partial<SelectConnection>[]
-			}
-		}
-		namespace Connection {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				connection: SelectConnection | null
-			}
-		}
-		namespace CreateConnection {
-			interface Call {
-				connection: InsertConnection
-			}
-			interface Response {
-				connection: SelectConnection
-			}
-		}
-		namespace UpdateConnection {
-			interface Call {
-				connection: InsertConnection & { id: number }
-			}
-			interface Response {
-				connection: SelectConnection
-			}
-		}
-		namespace DeleteConnection {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				id: number
-			}
-		}
-		namespace SetUserActiveConnection {
-			interface Call {
-				id: number | null
-			}
-			interface Response {
-				ok: boolean
-			}
-		}
-		namespace TestConnection {
-			interface Call {
-				connection: any
-			}
-			interface Response {
-				ok: boolean
-				error: string | null
-				models: any[]
-			}
-		}
-		namespace RefreshModels {
-			interface Call {
-				connection: SelectConnection
-			}
-			interface Response {
-				models: any[]
-				error: string | null
-			}
-		}
-		// --- OLLAMA ---
-		namespace OllamaSetBaseUrl {
-			interface Call {
-				baseUrl: string
-			}
-			interface Response {
-				success: boolean
-			}
-		}
-		namespace OllamaModelsList {
-			interface Call {}
-			interface Response {
-				models: any[]
-			}
-		}
-		namespace OllamaDeleteModel {
-			interface Call {
-				modelName: string
-			}
-			interface Response {
-				success: boolean
-			}
-		}
-		namespace OllamaConnectModel {
-			interface Call {
-				modelName: string
-			}
-			interface Response {
-				success: boolean
-			}
-		}
-		namespace OllamaListRunningModels {
-			interface Call {}
-			interface Response {
-				models: ListResponse["models"]
-			}
-		}
-		namespace OllamaPullModel {
-			interface Call {
-				modelName: string
-			}
-			interface Response {
-				success: boolean
-				error?: string
-				progress?: any
-			}
-		}
-		namespace OllamaPullProgress {
-			interface Response {
-				downloadingQuants: {
-					[key: string]: {
-						modelName: string
-						status: string
-						isDone: boolean
-						files: {
-							[key: string]: { total: number; completed: number }
-						}
-					}
-				}
-			}
-		}
-		namespace OllamaStopModel {
-			interface Call {
-				modelName: string
-			}
-			interface Response {
-				success: boolean
-			}
-		}
-		namespace OllamaCancelPull {
-			interface Call {
-				modelName: string
-			}
-			interface Response {
-				success: boolean
-				modelName?: string
-				error?: string
-			}
-		}
-		namespace OllamaVersion {
-			interface Call {}
-			interface Response {
-				version?: string
-			}
-		}
-		namespace OllamaIsUpdateAvailable {
-			interface Call {}
-			interface Response {
-				updateAvailable: boolean
-				currentVersion?: string
-				latestVersion?: string
-				error?: string
-			}
-		}
-		namespace OllamaSearchAvailableModels {
-			interface Call {
-				search: string
-				source: string
-			}
-			interface Response {
-				models: Array<{
-					name: string
-					description?: string
-					size?: string
-					tags?: string[]
-					popular?: boolean
-					url?: string
-					downloads?: number
-					updatedAtStr?: string
-					createdAt?: Date
-					likes?: number
-					trendingScore?: number
-					pullOptions?: { label: string; pull: string }[]
-				}>
-				error?: string
-			}
-		}
+	interface KoboldCppSettingsCtx {
+		// koboldCppManagedAdminPassword is never sent to the client (server-only
+		// secret) — see the `columns` filter in systemSettingsGet.
+		// koboldCppManagedAdminPasswordSet indicates whether one is already
+		// stored, without revealing it, for showing a bullet placeholder.
+		settings?: Omit<
+			SelectKoboldCppSettings,
+			"id" | "koboldCppManagedAdminPassword"
+		> & { koboldCppManagedAdminPasswordSet: boolean }
+	}
 
-		namespace OllamaRecommendedModels {
-			interface Call {}
-			interface Response {
-				models: Array<{
-					name: string
-					pull: string
-					size: number
-					recommended_vram: number
-					details: {
-						parameter_size: string
-						quantization_level: string
-						modified_at: string
-						description: string
-					}
-				}>
-				error?: string
-			}
-		}
+	interface UserSettingsCtx {
+		// "userSettings:get" only returns a hand-picked subset of columns (see
+		// userSettingsGet in userSettings.ts), not the full row minus id/userId.
+		settings?: Sockets.UserSettings.Get.Response["userSettings"]
+	}
 
-		namespace OllamaGetDownloadProgress {
-			interface Call {}
-			interface Response {
-				// This endpoint doesn't return a direct response,
-				// it triggers ollamaPullProgress events for each active download
-			}
-		}
-		namespace OllamaClearDownloadHistory {
-			interface Call {}
-			interface Response {
-				success: boolean
-			}
-		}
-		// --- APP SETTINGS ---
-		namespace UpdateOllamaManagerEnabled {
-			interface Call {
-				enabled: boolean
-			}
-			interface Response {
-				success: boolean
-				enabled?: boolean
-			}
-		}
-		namespace UpdateShowAllCharacterFields {
-			interface Call {
-				enabled: boolean
-			}
-			interface Response {
-				success: boolean
-				enabled?: boolean
-			}
-		}
-		namespace UpdateEasyCharacterCreation {
-			interface Call {
-				enabled: boolean
-			}
-			interface Response {
-				success: boolean
-				enabled?: boolean
-			}
-		}
-		namespace UpdateEasyPersonaCreation {
-			interface Call {
-				enabled: boolean
-			}
-			interface Response {
-				success: boolean
-				enabled?: boolean
-			}
-		}
-		namespace UpdateShowHomePageBanner {
-			interface Call {
-				enabled: boolean
-			}
-			interface Response {
-				success: boolean
-				enabled?: boolean
-			}
-		}
-		// --- WEIGHTS ---
-		namespace DeleteSamplingConfig {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				id: number
-			}
-		}
-		namespace UpdateSamplingConfig {
-			interface Call {
-				samplingConfig: Partial<InsertSamplingConfig> & { id: number }
-			}
-			interface Response {
-				samplingConfig: SelectSamplingConfig
-			}
-		}
-		namespace SetUserActiveSamplingConfig {
-			interface Call {
-				id: number | null
-			}
-			interface Response {
-				user: any
-			}
-		}
-		// --- CHATS ---
-		namespace ChatsList {
-			interface Call {}
-			interface Response {
-				chatsList: Partial<
-					SelectChat & {
-						chatPersonas: SelectChatPersona &
-							{ persona: SelectPersona }[]
-						chatCharacters: SelectChatCharacter &
-							{ character: SelectCharacter }[]
-					}
-				>[]
-			}
-		}
-		namespace CreateChat {
-			interface Call {
-				chat: InsertChat
-				personaIds: number[]
-				characterIds: number[]
-				characterPositions: Record<number, number>
-			}
-			interface Response {
-				chat: SelectChat & {
-					chatPersonas: SelectChatPersona &
-						{ persona: SelectPersona }[]
-					chatCharacters: SelectChatCharacter &
-						{ character: SelectCharacter }[]
-					chatMessages: SelectChatMessage[]
-				}
-			}
-		}
-		namespace UpdateChat {
-			interface Call {
-				chat: InsertChat & { id: number; userId?: undefined | number }
-				personaIds: number[]
-				characterIds: number[]
-				characterPositions: Record<number, number>
-			}
-			interface Response {
-				chat: SelectChat & {
-					chatPersonas: SelectChatPersona &
-						{ persona: SelectPersona }[]
-					chatCharacters: SelectChatCharacter &
-						{ character: SelectCharacter }[]
-					chatMessages: SelectChatMessage[]
-				}
-			}
-		}
-		namespace Chat {
-			interface Call {
-				id: number
-				limit?: number
-				offset?: number
-			}
-			interface Response {
-				chat: SelectChat & {
-					chatPersonas: SelectChatPersona &
-						{ persona: SelectPersona }[]
-					chatCharacters: SelectChatCharacter &
-						{ character: SelectCharacter }[]
-					chatMessages: SelectChatMessage[]
-				}
-				pagination?: {
-					total: number
-					hasMore: boolean
-				}
-			}
-		}
-		namespace ChatMessage {
-			interface Call {
-				id?: number
-				chatMessage?: SelectChatMessage
-			}
-			interface Response {
-				chatMessage: SelectChatMessage
-			}
-		}
-		// PROMPT CONFIGS
-		namespace PromptConfigsList {
-			interface Call {}
-			interface Response {
-				promptConfigsList: Partial<SelectPromptConfig>[]
-			}
-		}
-		namespace PromptConfig {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				promptConfig: SelectPromptConfig
-			}
-		}
-		namespace CreatePromptConfig {
-			interface Call {
-				promptConfig: InsertPromptConfig
-			}
-			interface Response {
-				promptConfig: SelectPromptConfig
-			}
-		}
-		namespace UpdatePromptConfig {
-			interface Call {
-				promptConfig: InsertPromptConfig & { id: number }
-			}
-			interface Response {
-				promptConfig: SelectPromptConfig
-			}
-		}
-		namespace DeletePromptConfig {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				id: number
-			}
-		}
-		namespace SetUserActivePromptConfig {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				user: SelectUser
-			}
-		}
-		namespace SendPersonaMessage {
-			interface Call {
-				chatId: number
-				personaId: number
-				content: string
-			}
-			interface Response {
-				chatMessage: SelectChatMessage
-			}
-		}
-		namespace DeleteChat {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				id: number
-			}
-		}
-		namespace DeleteChatMessage {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				id: number
-			}
-		}
-		namespace UpdateChatMessage {
-			interface Call {
-				chatMessage: SelectChatMessage
-			}
-			interface Response {
-				chatMessage: SelectChatMessage
-			}
-		}
-		namespace RegenerateChatMessage {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				chatMessage?: SelectChatMessage
-				error?: string
-			}
-		}
-		namespace PromptTokenCount {
-			interface Call {
-				chatId: number
-				content?: string
-				role?: string
-				personaId?: number
-			}
-			interface Response extends CompiledPrompt {}
-		}
-		namespace AbortChatMessage {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				id: number
-				success: boolean
-				info?: string
-				error?: string
-			}
-		}
-		namespace TriggerGenerateMessage {
-			interface Call {
-				chatId: number
-				characterId?: number
-				once?: boolean
-			}
-			interface Response {
-				chatMessage?: SelectChatMessage
-				error?: string
-			}
-		}
-		namespace ChatMessageSwipeRight {
-			interface Call {
-				chatId: number
-				chatMessageId: number
-				count?: number
-			}
-			interface Response {
-				chatId: number
-				chatMessageId: number
-				done: boolean
-			}
-		}
-		namespace ChatMessageSwipeLeft {
-			interface Call {
-				chatId: number
-				chatMessageId: number
-			}
-			interface Response {
-				chatId: number
-				chatMessageId: number
-				done: boolean
-			}
-		}
-		// Lorebook List
-		namespace LorebookList {
-			interface Call {
-				userId?: number
-			}
-			interface Response {
-				lorebookList: (SelectLorebook & {
-					tags: string[]
-				})[]
-			}
-		}
+	interface VectorizationCtx {
+		status: "idle" | "running" | "paused"
+		currentItem?: { type: string; label: string }
+		queued: number
+		completed: number
+		priorityQueue: Sockets.Vectorization.PriorityGroup[]
+		history: Sockets.Vectorization.CompletedGroup[]
+	}
 
-		// Single Lorebook
-		namespace Lorebook {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				lorebook: SelectLorebook & {
-					worldLoreEntries: SelectWorldLoreEntry[]
-					characterLoreEntries: SelectCharacterLoreEntry[]
-					historyEntries: SelectHistoryEntry[]
-					lorebookBindings: SelectLorebookBinding[]
-					tags: string[]
-				}
-			}
-		}
+	interface TaskQueueCtx {
+		tasks: Sockets.TaskQueue.QueuedTask[]
+	}
 
-		// Create Lorebook
-		namespace CreateLorebook {
-			interface Call {
-				name: string
-				tags?: string[]
-			}
-			interface Response {
-				lorebook: SelectLorebook
-			}
-		}
+	// Written by the open chat route (src/routes/chats/[id]/+page.svelte) so
+	// globally-rendered sidebars (e.g. LorebooksSidebar) can tell whether a
+	// chat is currently open, whether it already has a lorebook attached, and
+	// whether the current user owns it (guests can't change it), without a
+	// dedicated fetch of their own.
+	interface OpenChatCtx {
+		chatId: number | null
+		lorebookId: number | null
+		isOwner: boolean
+	}
 
-		// Create Lorebook Binding
-		namespace CreateLorebookBinding {
-			interface Call {
-				lorebookBinding: {
-					lorebookId: number
-					characterId?: number | null
-					personaId?: number | null
-				}
-			}
-			interface Response {
-				lorebookBinding: SelectLorebookBinding
-			}
-		}
+	interface GraphBuildState {
+		activityId?: string
+		userId?: number
+		lorebookId: number
+		lorebookLabel?: string
+		mode: "replace" | "extend"
+		status: "building" | "review" | "error"
+		phase: string
+		sceneIndex: number
+		totalScenes: number
+		nodesFound: number
+		relsFound: number
+		currentPair?: string
+		currentSceneLabel?: string
+		proposal?: Sockets.NarrativeGraph.GraphProposal
+		sceneLabels?: string[]
+		seedTempIdMap?: Record<string, number>
+		seedNodeNames?: Record<string, string>
+		/** Attribution for an empty/thin relationship set — see the modal. */
+		relationshipDiagnostics?: Sockets.NarrativeGraph.RelationshipDiagnostics
+		/** Proposed names screened out as World Lore subjects. */
+		filteredWorldLoreNames?: string[]
+		errorMessage?: string
+		errorRaw?: string
+		startedAt: string
+		trace?: Sockets.NarrativeGraph.TraceEntry[]
+	}
 
-		// Lorebook Binding List
-		namespace LorebookBindingList {
-			interface Call {
-				lorebookId: number
-				with?: {
-					character?: boolean
-					persona?: boolean
-				}
-			}
-			interface Response {
-				lorebookId: number
-				lorebookBindingList: SelectLorebookBinding[]
-			}
-		}
+	interface GraphBuildsCtx {
+		activeBuild: GraphBuildState | null
+		/** Set by notification dropdown to trigger a GraphManager to reopen its build modal */
+		reopenLorebookId: number | null
+		startBuild: (params: {
+			lorebookId: number
+			mode: "replace" | "extend"
+			lorebookLabel?: string
+		}) => void
+		clearBuild: () => void
+	}
 
-		// Update Lorebook Binding
-		namespace UpdateLorebookBinding {
-			interface Call {
-				lorebookBinding: {
-					id: number
-					characterId?: number | null
-					personaId?: number | null
-				}
-			}
-			interface Response {
-				lorebookBinding: SelectLorebookBinding
-			}
+	interface SceneSummarizeState {
+		activityId: string
+		userId: number
+		sceneId: number
+		sceneName?: string
+		lorebookId: number
+		lorebookLabel?: string
+		historyEntryId?: number
+		status: "running" | "review" | "error"
+		phase?: "drafting" | "synthesizing" | "naming" | "extracting"
+		batch?: number
+		totalBatches?: number
+		errorMessage?: string
+		pendingResult?: {
+			content: string
+			name?: string
+			participantCharacters: number[]
+			mentionedCharacters: number[]
+			suggestedParticipantCharacters?: string[]
+			suggestedMentionedCharacters?: string[]
+			raw: string
 		}
+		startedAt: string
+	}
 
-		// World Lore Entry List
-		namespace WorldLoreEntryList {
-			interface Call {
-				lorebookId: number
-			}
-			interface Response {
-				worldLoreEntryList: SelectWorldLoreEntry[]
-			}
-		}
+	interface SceneSummarizesCtx {
+		activities: SceneSummarizeState[]
+		/** Set by the activity sidebar to trigger HistoryEntryManager to open the review modal */
+		reviewSceneId: number | null
+		dismiss: (activityId: string) => void
+		setReviewSceneId: (id: number | null) => void
+	}
 
-		// Create World Lore Entry
-		namespace CreateWorldLoreEntry {
-			interface Call {
-				worldLoreEntry: InsertWorldLoreEntry
-			}
-			interface Response {
-				worldLoreEntry: SelectWorldLoreEntry
-			}
+	interface ChatSummarizeState {
+		activityId: string
+		userId: number
+		chatId: number
+		chatLabel?: string
+		loreType: "world" | "character"
+		lorebookId: number
+		topic?: string
+		status: "running" | "review" | "error"
+		phase?: "drafting" | "synthesizing" | "naming" | "extracting"
+		batch?: number
+		totalBatches?: number
+		errorMessage?: string
+		pendingResult?: {
+			content: string
+			name?: string
+			raw: string
+			lorebookBindingId?: number | null
 		}
+		startedAt: string
+	}
 
-		// Update World Lore Entry
-		namespace UpdateWorldLoreEntry {
-			interface Call {
-				worldLoreEntry: {
-					id: number
-					name: string
-					content: string
-				}
-			}
-			interface Response {
-				worldLoreEntry: SelectWorldLoreEntry
-			}
-		}
+	interface ChatSummarizesCtx {
+		activities: ChatSummarizeState[]
+		/**
+		 * Set by the activity sidebar so the chat page reopens the summarize
+		 * modal for that run. Carries the chat too, because unlike the scene and
+		 * compile flows this one lives on a route rather than a panel — the
+		 * sidebar has to navigate before anything can reopen.
+		 */
+		reviewActivityId: string | null
+		dismiss: (activityId: string) => void
+		setReviewActivityId: (id: string | null) => void
+	}
 
-		// Delete World Lore Entry
-		namespace DeleteWorldLoreEntry {
-			interface Call {
-				id: number
-				lorebookId: number
-			}
-			interface Response {
-				// id: number,
-				// lorebookId: number
-			}
-		}
+	interface CompileEntryState {
+		activityId: string
+		userId: number
+		historyEntryId: number
+		historyEntryDate: string
+		lorebookId: number
+		lorebookLabel: string
+		status: "running" | "review" | "error"
+		phase?: "drafting" | "synthesizing"
+		batch?: number
+		totalBatches?: number
+		errorMessage?: string
+		pendingResult?: { content: string }
+		startedAt: string
+	}
 
-		// Update Lorebook
-		namespace UpdateLorebook {
-			interface Call {
-				lorebook: SelectLorebook & {
-					tags?: string[]
-				}
-			}
-			interface Response {
-				lorebook: SelectLorebook
-			}
-		}
-
-		// Delete Lorebook
-		namespace DeleteLorebook {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				id: number
-			}
-		}
-
-		// Update World Lore Entry Positions
-		namespace UpdateWorldLoreEntryPositions {
-			interface Call {
-				lorebookId: number
-				positions: Array<{ id: number; position: number }>
-			}
-			interface Response {
-				lorebookId: number
-			}
-		}
-
-		// Character Lore Entry List
-		namespace CharacterLoreEntryList {
-			interface Call {
-				lorebookId: number
-			}
-			interface Response {
-				characterLoreEntryList: SelectCharacterLoreEntry[]
-			}
-		}
-
-		// Create Character Lore Entry
-		namespace CreateCharacterLoreEntry {
-			interface Call {
-				characterLoreEntry: InsertCharacterLoreEntry
-			}
-			interface Response {
-				characterLoreEntry: SelectCharacterLoreEntry
-			}
-		}
-
-		// Update Character Lore Entry
-		namespace UpdateCharacterLoreEntry {
-			interface Call {
-				characterLoreEntry: SelectCharacterLoreEntry
-			}
-			interface Response {
-				characterLoreEntry: SelectCharacterLoreEntry
-			}
-		}
-
-		// Delete Character Lore Entry
-		namespace DeleteCharacterLoreEntry {
-			interface Call {
-				id: number
-				lorebookId: number
-			}
-			interface Response {
-				id: number
-				lorebookId: number
-			}
-		}
-
-		// Update Character Lore Entry Positions
-		namespace UpdateCharacterLoreEntryPositions {
-			interface Call {
-				lorebookId: number
-				positions: Array<{ id: number; position: number }>
-			}
-			interface Response {
-				lorebookId: number
-			}
-		}
-
-		namespace HistoryEntryList {
-			interface Call {
-				lorebookId: number
-			}
-			interface Response {
-				historyEntryList: SelectHistoryEntry[]
-			}
-		}
-
-		namespace CreateHistoryEntry {
-			interface Call {
-				historyEntry: InsertHistoryEntry
-			}
-			interface Response {
-				historyEntry: SelectHistoryEntry
-			}
-		}
-
-		namespace UpdateHistoryEntry {
-			interface Call {
-				historyEntry: SelectHistoryEntry
-			}
-			interface Response {
-				historyEntry: SelectHistoryEntry
-			}
-		}
-
-		namespace DeleteHistoryEntry {
-			interface Call {
-				id: number
-				lorebookId: number
-			}
-			interface Response {
-				id: number
-				lorebookId: number
-			}
-		}
-
-		namespace IterateNextHistoryEntry {
-			interface Call {
-				lorebookId: number
-			}
-			interface Response {
-				historyEntry: SelectHistoryEntry
-			}
-		}
-		// Character Card Import
-		namespace CharacterCardImport {
-			interface Call {
-				file: string // base64 or data URL
-			}
-			interface Response {
-				character: SelectCharacter
-				book: any | null // adjust type if you have a type for character_book
-			}
-		}
-
-		// Import Lorebook
-		namespace LorebookImport {
-			interface Call {
-				lorebookData: SpecV3.Lorebook
-				characterId?: number
-			}
-			interface Response {
-				lorebook: SelectLorebook & {
-					lorebookBindings: SelectLorebookBinding[]
-					worldLoreEntries: SelectWorldLoreEntry[]
-					characterLoreEntries: SelectCharacterLoreEntry[]
-					historyEntries: SelectHistoryEntry[]
-				}
-			}
-		}
-		// Toggle Chat Character Active
-		namespace ToggleChatCharacterActive {
-			interface Call {
-				chatId: number
-				characterId: number
-			}
-			interface Response {
-				chatId: number
-				characterId: number
-				isActive: boolean
-			}
-		}
-		// Update Chat Character Visibility
-		namespace UpdateChatCharacterVisibility {
-			interface Call {
-				chatId: number
-				characterId: number
-				visibility: string
-			}
-			interface Response {
-				chatId: number
-				characterId: number
-				visibility: string
-			}
-		}
-		namespace SetTheme {
-			interface Call {
-				theme: string
-				darkMode: boolean
-			}
-			interface Response {}
-		}
-		// TAGS
-		namespace TagsList {
-			interface Call {}
-			interface Response {
-				tagsList: SelectTag[]
-			}
-		}
-		namespace CreateTag {
-			interface Call {
-				tag: InsertTag
-			}
-			interface Response {
-				tag: SelectTag
-			}
-		}
-		namespace UpdateTag {
-			interface Call {
-				tag: SelectTag
-			}
-			interface Response {
-				tag: SelectTag
-			}
-		}
-		namespace DeleteTag {
-			interface Call {
-				id: number
-			}
-			interface Response {
-				id: number
-			}
-		}
-		namespace TagRelatedData {
-			interface Call {
-				tagId: number
-			}
-			interface Response {
-				characters: SelectCharacter[]
-				personas: SelectPersona[]
-				chats: SelectChat[]
-			}
-		}
-		namespace AddTagToCharacter {
-			interface Call {
-				characterId: number
-				tagId: number
-			}
-			interface Response {
-				characterId: number
-				tagId: number
-			}
-		}
-		namespace RemoveTagFromCharacter {
-			interface Call {
-				characterId: number
-				tagId: number
-			}
-			interface Response {
-				characterId: number
-				tagId: number
-			}
-		}
-		// --- USER ---
-		namespace User {
-			interface Call {}
-			interface Response {
-				user:
-					| (SelectUser & {
-							activeConnection: SelectConnection | null
-							activeSamplingConfig: SelectSamplingConfig | null
-							activeContextConfig: SelectContextConfig | null
-							activePromptConfig: SelectPromptConfig | null
-					  })
-					| undefined
-			}
-		}
+	interface CompileEntriesCtx {
+		activities: CompileEntryState[]
+		/** Set by the activity sidebar to trigger HistoryEntryManager to open the compile modal */
+		reviewHistoryEntryId: number | null
+		dismiss: (activityId: string) => void
+		setReviewHistoryEntryId: (id: number | null) => void
 	}
 
 	export interface CharaImportMetadata {
@@ -1207,21 +297,13 @@ declare global {
 			creator?: string
 			creator_notes?: string
 			description: string
-			extensions?: {
-				[key: string]: {
-					alt_expressions: Record<string, unknown>
-					expressions: unknown
-					full_path: string
-					id: number
-					related_lorebooks: unknown[]
-				}
-			}
-			first_mes?: string
-			mes_example?: string
+			extensions: Record<string, any>
+			first_mes: string
+			mes_example: string
 			name: string
-			personality?: string
+			personality: string
 			post_history_instructions?: string
-			scenario?: string
+			scenario: string
 			system_prompt?: string
 			tags?: string[]
 		}
@@ -1229,39 +311,94 @@ declare global {
 		spec_version: string
 	}
 
-	export type CompiledPrompt = {
-		prompt?: string
-		messages?: ChatCompletionMessageParam[]
+	export interface CompiledPrompt {
+		content: string
+		name: string
+		model?: string
+		temperature?: number
+		top_p?: number
+		max_tokens?: number
+		frequency_penalty?: number
+		presence_penalty?: number
+		seed?: number
+		stop?: string[]
+		prompt_type?: string
+		context_config?: string
+		sampling_config?: string
+		// Add other properties as needed
+	}
+	export interface CharaImportMetadata {
+		data: {
+			alternate_greetings?: string[]
+			avatar?: string
+			character_version?: string
+			creator?: string
+			creator_notes?: string
+			description: string
+			extensions: Record<string, any>
+			first_mes: string
+			mes_example: string
+			name: string
+			personality: string
+			post_history_instructions?: string
+			scenario: string
+			system_prompt?: string
+			tags?: string[]
+		}
+		spec: string
+		spec_version: string
+	}
+
+	export interface CompiledPrompt {
 		meta: {
-			tokenCounts: {
+			description?: string
+			promptFormat: string
+			templateName?: string | null
+			timestamp?: string
+			truncationReason?: string | null
+			currentTurnCharacterId?: number | null
+			tokenCounts?: {
 				total: number
 				limit: number
 			}
-			chatMessages: {
+			chatMessages?: {
 				included: number
 				total: number
 				includedIds: number[]
 				excludedIds: number[]
 			}
-			sources: {
-				characters: Array<{
-					id: number
-					name: string
-					nickname?: string
-					description: boolean
-					personality: boolean
-					exampleDialogue: boolean
-					postHistoryInstructions: boolean
-					postHistoryInstructions: boolean
-				}>
-				personas: Array<{
-					id: number
-					name: string
-					description: boolean
-				}>
-				scenario: null | "character" | "chat"
-			}
+			sources?: any
 		}
+		prompt?: string | ChatCompletionMessageParam[]
+		messages?: any[]
+	}
+
+	export interface ConnectionSummary {
+		connections: SelectConnection[]
+		models: {
+			[baseUrl: string]: ListResponse["models"]
+		}
+	}
+
+	export interface FileCharacter {
+		character: SelectCharacter
+		avatar?: Buffer
+	}
+
+	export interface ConnectionHealthDetails {
+		status: "ok" | "unreachable" | "error"
+		url: string
+		pingTime?: number
+		details?: string
+	}
+
+	export interface ServerInfoDetails {
+		info: any
+	}
+
+	export interface SyncDetails {
+		syncSource: Partial<SelectUser> | null
+		scenario: null | "character" | "chat"
 	}
 
 	interface FileAcceptDetails {

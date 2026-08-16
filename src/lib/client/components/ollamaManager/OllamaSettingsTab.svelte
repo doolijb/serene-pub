@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { onMount, onDestroy, getContext } from "svelte"
 	import OllamaIcon from "../icons/OllamaIcon.svelte"
 
@@ -16,7 +16,7 @@
 		}
 	}
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	// State
 	let currentVersion = $state("")
@@ -29,23 +29,23 @@
 	let baseUrlField = $state("")
 
 	// Context
-	let systemSettingsCtx: SystemSettingsCtx = $state(
-		getContext("systemSettingsCtx")
+	let ollamaSettingsCtx: OllamaSettingsCtx = $state(
+		getContext("ollamaSettingsCtx")
 	)
 
 	$effect(() => {
 		// Update baseUrl when system settings change
-		baseUrlField = systemSettingsCtx.settings.ollamaManagerBaseUrl
+		baseUrlField = ollamaSettingsCtx.settings?.ollamaManagerBaseUrl ?? ""
 	})
 
 	// Settings functions
 	function checkOllamaVersion() {
-		socket.emit("ollamaVersion", {})
+		socket.emit("ollama:version", {})
 	}
 
 	function checkForUpdates() {
 		isCheckingUpdates = true
-		socket.emit("ollamaIsUpdateAvailable", {})
+		socket.emit("ollama:isUpdateAvailable", {})
 	}
 
 	function saveBaseUrl() {
@@ -55,7 +55,7 @@
 		}
 
 		isSavingBaseUrl = true
-		socket.emit("ollamaSetBaseUrl", { baseUrl: baseUrlField.trim() })
+		socket.emit("ollama:setBaseUrl", { baseUrl: baseUrlField.trim() })
 	}
 
 	function handleSaveBaseUrl() {
@@ -74,7 +74,7 @@
 
 	function handleDeleteModalConfirm() {
 		if (modelToDelete) {
-			socket.emit("ollamaDeleteModel", { modelName: modelToDelete.name })
+			socket.emit("ollama:deleteModel", { modelName: modelToDelete.name })
 		}
 		showDeleteModal = false
 		modelToDelete = null
@@ -107,8 +107,8 @@
 	onMount(() => {
 		// Socket event listeners
 		socket.on(
-			"ollamaSetBaseUrl",
-			(message: Sockets.OllamaSetBaseUrl.Response) => {
+			"ollama:setBaseUrl",
+			(message: Sockets.Ollama.SetBaseUrl.Response) => {
 				isSavingBaseUrl = false
 				if (message.success) {
 					toaster.success({
@@ -121,25 +121,29 @@
 		)
 
 		socket.on(
-			"ollamaVersion",
-			(message: Sockets.OllamaVersion.Response) => {
+			"ollama:version",
+			(message: Sockets.Ollama.Version.Response) => {
 				currentVersion = message.version || "Unknown"
 			}
 		)
 
 		socket.on(
-			"ollamaIsUpdateAvailable",
-			(message: Sockets.OllamaIsUpdateAvailable.Response) => {
+			"ollama:isUpdateAvailable",
+			(message: Sockets.Ollama.IsUpdateAvailable.Response) => {
 				isCheckingUpdates = false
-				updateAvailable = message.updateAvailable
+				updateAvailable = message.isUpdateAvailable
 				latestVersion = message.latestVersion || ""
+			}
+		)
 
-				if (message.error) {
-					toaster.error({
-						title: "Failed to check for updates",
-						description: message.error
-					})
-				}
+		socket.on(
+			"ollama:isUpdateAvailable:error",
+			(message: Sockets.ErrorResponse) => {
+				isCheckingUpdates = false
+				toaster.error({
+					title: "Failed to check for updates",
+					description: message.error
+				})
 			}
 		)
 
@@ -149,13 +153,14 @@
 	})
 
 	onDestroy(() => {
-		socket.off("ollamaSetBaseUrl")
-		socket.off("ollamaVersion")
-		socket.off("ollamaIsUpdateAvailable")
+		socket.off("ollama:setBaseUrl")
+		socket.off("ollama:version")
+		socket.off("ollama:isUpdateAvailable")
+		socket.off("ollama:isUpdateAvailable:error")
 	})
 </script>
 
-<div class="space-y-6 p-4">
+<div class="space-y-6 py-4">
 	<!-- Version Information -->
 	<div class="mt-8 text-center">
 		<OllamaIcon class="text-muted-foreground mx-auto mb-4 h-16 w-16" />
@@ -188,7 +193,7 @@
 			<label class="block text-sm font-medium" for="baseUrl">
 				Ollama Base URL
 			</label>
-			<div class="flex gap-2">
+			<div class="panel-actions">
 				<input
 					id="baseUrl"
 					name="baseUrl"
@@ -207,7 +212,7 @@
 					Save
 				</button>
 			</div>
-			<p class="text-surface-500 mt-1 text-xs">
+			<p class="text-surface-700-300 mt-1 text-xs">
 				The URL where Ollama is running. Usually http://localhost:11434
 			</p>
 		</div>
@@ -246,7 +251,7 @@
 						the latest features and bug fixes.
 					</p>
 					<a
-						href="https://github.com/ollama/ollama/releases/latest"
+						href="https://ollama.com/download"
 						target="_blank"
 						rel="noopener noreferrer"
 						class="btn btn-sm preset-filled-warning-500"
@@ -269,7 +274,7 @@
 					</div>
 				</div>
 			{/if}
-			<div class="flex gap-2">
+			<div class="panel-actions">
 				<button
 					class="btn btn-sm preset-filled-surface-500"
 					onclick={checkOllamaVersion}
@@ -299,4 +304,18 @@
 			</div>
 		</div>
 	</div>
+
+	<!-- Attribution -->
+	<p class="text-muted-foreground text-center text-xs">
+		Ollama is developed and owned by <a
+			href="https://ollama.com"
+			target="_blank"
+			rel="noopener noreferrer"
+			class="hover:text-primary-500 underline"
+		>
+			Ollama, Inc.
+		</a>
+		Serene Pub's Ollama Manager is an independent integration and is not affiliated
+		with or endorsed by Ollama, Inc.
+	</p>
 </div>

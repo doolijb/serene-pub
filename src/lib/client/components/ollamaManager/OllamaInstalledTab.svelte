@@ -1,8 +1,8 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { onMount, onDestroy, getContext } from "svelte"
-	import { Modal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import type { ListResponse, ModelDetails, ModelResponse } from "ollama"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -18,7 +18,7 @@
 		}
 	}
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	// State
 	let installedModels: OllamaModel[] = $state([])
@@ -26,14 +26,33 @@
 	let isLoading = $state(false)
 	let searchQuery = $state("")
 	let runningModels: ListResponse["models"] = $state([])
-	let userCtx: UserCtx = $state(getContext("userCtx"))
 	let showDeleteModal = $state(false)
 	let modelToDelete: OllamaModel | null = $state(null)
+	let connectionsList: Sockets.Connections.List.Response["connectionsList"] =
+		$state([])
 
 	// Context
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
 	)
+	const panelsCtx: PanelsCtx = getContext("panelsCtx")
+
+	function findConnectionForModel(
+		modelName: string
+	):
+		| Sockets.Connections.List.Response["connectionsList"][number]
+		| undefined {
+		return connectionsList.find(
+			(c) => c.type === "ollama" && c.model === modelName
+		)
+	}
+
+	function openConnectionSidebar(modelName: string) {
+		const conn = findConnectionForModel(modelName)
+		if (!conn) return
+		panelsCtx.digest.connectionId = conn.id
+		panelsCtx.openPanel({ key: "connections" })
+	}
 
 	// Filtered models based on search
 	let filteredModels = $derived(
@@ -53,19 +72,16 @@
 	)
 
 	let currentConnectionModelName: string | null = $derived.by(() => {
-		if (userCtx?.user?.activeConnection?.type === CONNECTION_TYPE.OLLAMA) {
-			const currentName = userCtx.user.activeConnection.model
-			return currentName
+		const activeConnection = connectionsList.find(
+			(c) => c.id === systemSettingsCtx.settings?.defaultConnectionId
+		)
+		if (activeConnection?.type === CONNECTION_TYPE.OLLAMA) {
+			return activeConnection.model ?? null
 		}
 		return null
 	})
 
-	$effect(() => {
-		console.log(
-			"Current connection model name:",
-			currentConnectionModelName
-		)
-	})
+	$effect(() => {})
 
 	// Format file size
 	function formatSize(bytes: number): string {
@@ -87,18 +103,18 @@
 	}
 
 	function isModelRunning(model: OllamaModel): boolean {
-		const res = runningModels.some((runningModel) => {
+		const res = runningModels?.some((runningModel) => {
 			return runningModel.name === model.name
 		})
-		return res
+		return res ?? false
 	}
 
 	// Check Ollama connection and refresh models
 	async function refreshModels() {
 		isLoading = true
-		socket.emit("ollamaModelsList", {})
-		socket.emit("ollamaListRunningModels", {})
-		socket.emit("connectionsList", {})
+		socket.emit("ollama:modelsList", {})
+		socket.emit("ollama:listRunningModels", {})
+		socket.emit("connections:list", {})
 	}
 
 	// Delete a model
@@ -117,7 +133,7 @@
 			return
 		}
 
-		socket.emit("ollamaDeleteModel", { modelName: model.name })
+		socket.emit("ollama:deleteModel", { modelName: model.name })
 	}
 
 	// Delete modal handlers
@@ -153,7 +169,7 @@
 			return
 		}
 
-		socket.emit("ollamaConnectModel", { modelName: model.name })
+		socket.emit("ollama:connectModel", { modelName: model.name })
 	}
 
 	// View model website
@@ -168,20 +184,24 @@
 		}
 	}
 
+	// Named so the teardown below can remove just this listener. A bare
+	// socket.off("ollama:modelsList") drops *every* handler for the event,
+	// including OllamaSidebar's, which uses the same list to decide whether to
+	// open on Available during the setup wizard — switching away from this tab
+	// would silently deafen the parent. OllamaAvailableTab already scopes its
+	// own teardown this way.
+	function handleModelsList(message: Sockets.Ollama.ModelsList.Response) {
+		installedModels = message.models
+		isLoading = false
+	}
+
 	onMount(() => {
 		// Socket event listeners
-		socket.on(
-			"ollamaModelsList",
-			(message: Sockets.OllamaModelsList.Response) => {
-				installedModels = message.models
-				isLoading = false
-				console.log("ollamaModelsList", message.models)
-			}
-		)
+		socket.on("ollama:modelsList", handleModelsList)
 
 		socket.on(
-			"ollamaDeleteModel",
-			(message: Sockets.OllamaDeleteModel.Response) => {
+			"ollama:deleteModel",
+			(message: Sockets.Ollama.DeleteModel.Response) => {
 				if (message.success) {
 					refreshModels()
 					toaster.success({ title: "Model deleted successfully" })
@@ -192,29 +212,30 @@
 		)
 
 		socket.on(
-			"ollamaListRunningModels",
-			(message: Sockets.OllamaListRunningModels.Response) => {
-				runningModels = message.models
+			"ollama:listRunningModels",
+			(message: Sockets.Ollama.ListRunningModels.Response) => {
+				runningModels = message.runningModels ?? []
 			}
 		)
 
-		socket.on(
-			"ollamaStopModel",
-			(message: Sockets.OllamaStopModel.Response) => {
-				if (message.success) {
-					toaster.success({ title: "Model stopped successfully" })
-					refreshModels()
-				}
-			}
-		)
+		// Note: there is no "ollama:stopModel" server handler (see
+		// src/lib/server/sockets/ollama.ts) - it was never implemented, so a
+		// listener for it here was unreachable dead code and has been removed.
 
 		socket.on(
-			"ollamaConnectModel",
-			(message: Sockets.OllamaConnectModel.Response) => {
+			"ollama:connectModel",
+			(message: Sockets.Ollama.ConnectModel.Response) => {
 				if (message.success) {
 					toaster.success({ title: "Model connected successfully" })
 					refreshModels()
 				}
+			}
+		)
+
+		socket.on(
+			"connections:list",
+			(msg: Sockets.Connections.List.Response) => {
+				connectionsList = msg.connectionsList ?? []
 			}
 		)
 
@@ -223,20 +244,20 @@
 	})
 
 	onDestroy(() => {
-		socket.off("ollamaModelsList")
-		socket.off("ollamaDeleteModel")
-		socket.off("ollamaListRunningModels")
-		socket.off("ollamaStopModel")
-		socket.off("ollamaConnectModel")
+		socket.off("ollama:modelsList", handleModelsList)
+		socket.off("ollama:deleteModel")
+		socket.off("ollama:listRunningModels")
+		socket.off("ollama:connectModel")
+		socket.off("connections:list")
 	})
 </script>
 
 <!-- Search for installed models -->
-<div class="px-4 py-2">
+<div class="py-2">
 	<div class="flex gap-2">
 		<div class="relative flex-1">
 			<Icons.Search
-				class="text-surface-500 absolute top-1/2 left-3 -translate-y-1/2 transform"
+				class="text-surface-700-300 absolute top-1/2 left-3 -translate-y-1/2 transform"
 				size={16}
 			/>
 			<input
@@ -281,20 +302,21 @@
 	</div>
 {:else if filteredModels.length === 0}
 	<div class="p-6 text-center">
-		<Icons.Package class="text-surface-500 mx-auto mb-4" size={48} />
+		<Icons.Package class="text-surface-700-300 mx-auto mb-4" size={48} />
 		<h3 class="h4 mb-2">No models installed</h3>
 		<p class="mb-4 text-sm opacity-75">
 			Install models from the Available tab to get started.
 		</p>
 	</div>
 {:else}
-	<div class="space-y-3 p-4">
+	<div class="space-y-3 py-4">
 		{#each filteredModels as model}
 			{@const isRunning = isModelRunning(model)}
 			{@const isConnected = currentConnectionModelName === model.name}
+			{@const existingConn = findConnectionForModel(model.name)}
 			<div class="card preset-tonal flex flex-col gap-2 p-4">
-				<div class="flex items-center justify-between">
-					<h4 class="font-semibold">
+				<div class="flex items-center justify-between gap-2">
+					<h4 class="min-w-0 font-semibold break-all">
 						{#if isConnected}
 							<Icons.Check
 								size={14}
@@ -332,28 +354,42 @@
 						</div>
 					{/if}
 				</div>
-				<div class="flex justify-between gap-2">
-					<div class="flex gap-2">
+				<!-- One wrapping group for all of this card's actions. A nested
+				     group inside a non-wrapping justify-between row can only
+				     resolve by shrinking, which clipped "Set Default". -->
+				<div class="panel-actions justify-between">
+					<div class="panel-actions">
 						<button
 							class="btn btn-sm preset-filled-success-500"
-							title="Connect to this model"
-							aria-label="Connect to model"
+							title="Set as default connection"
+							aria-label="Set as default connection"
 							disabled={isConnected}
 							onclick={() => connectToModel(model)}
 						>
 							{#if isConnected}
-								<Icons.Check size={14} /> Connected
+								<Icons.Star size={14} fill="currentColor" /> Default
 							{:else}
-								<Icons.Cable size={14} /> Connect
+								<Icons.Star size={14} /> Set Default
 							{/if}
 						</button>
+						{#if existingConn}
+							<button
+								class="btn btn-sm preset-filled-surface-500"
+								onclick={() =>
+									openConnectionSidebar(model.name)}
+								title="Open connection settings"
+								aria-label={`Open connection settings for ${model.name}`}
+							>
+								<Icons.Settings size={14} aria-hidden="true" />
+							</button>
+						{/if}
 						<button
 							class="btn btn-sm preset-filled-surface-500"
 							onclick={() => viewModelWebsite(model)}
 							title="View model website"
 							aria-label={`View ${model.name} model website in new tab`}
 						>
-							<Icons.ExternalLink size={14} aria-hidden="true" /> View
+							<Icons.ExternalLink size={14} aria-hidden="true" /> Edit
 						</button>
 					</div>
 					<button
@@ -370,38 +406,45 @@
 	</div>
 {/if}
 
-<Modal
-	open={showDeleteModal}
-	onOpenChange={(e) => (showDeleteModal = e.open)}
-	contentBase="card bg-surface-100-900 p-4 space-y-4 shadow-xl max-w-dvw-sm border border-surface-300-700"
-	backdropClasses="backdrop-blur-sm"
->
-	{#snippet content()}
-		<header class="flex justify-between">
-			<h2 class="h2">Delete Model</h2>
-		</header>
-		<article>
-			<p class="opacity-60">
-				Are you sure you want to delete "{modelToDelete}" from Ollama?
-				This action cannot be undone.
-			</p>
-			<p class="opacity-60">
-				Any associated connections to this model will be removed.
-			</p>
-		</article>
-		<footer class="flex justify-end gap-4">
-			<button
-				class="btn preset-filled-surface-500"
-				onclick={handleDeleteModalCancel}
+<Dialog open={showDeleteModal} onOpenChange={(e) => (showDeleteModal = e.open)}>
+	<Portal>
+		<Dialog.Backdrop
+			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
+		/>
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
 			>
-				Cancel
-			</button>
-			<button
-				class="btn preset-filled-error-500"
-				onclick={handleDeleteModalConfirm}
-			>
-				Delete
-			</button>
-		</footer>
-	{/snippet}
-</Modal>
+				<header class="flex justify-between">
+					<h2 class="h2">Delete Model</h2>
+				</header>
+				<article>
+					<p class="opacity-60">
+						Are you sure you want to delete "{modelToDelete}" from
+						Ollama? This action cannot be undone.
+					</p>
+					<p class="opacity-60">
+						Any associated connections to this model will be
+						removed.
+					</p>
+				</article>
+				<footer class="flex justify-end gap-4">
+					<button
+						class="btn preset-filled-surface-500"
+						onclick={handleDeleteModalCancel}
+					>
+						Cancel
+					</button>
+					<button
+						class="btn preset-filled-error-500"
+						onclick={handleDeleteModalConfirm}
+					>
+						Delete
+					</button>
+				</footer>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>

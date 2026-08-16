@@ -6,14 +6,14 @@ import path from "path"
 import { fileURLToPath } from "url"
 import child_process from "child_process"
 
-import pkg from "../package.json" assert { type: "json" }
+import pkg from "../package.json" with { type: "json" }
+import { pruneDist } from "./prune-dist.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const version = pkg.version
 const distDir = path.resolve(__dirname, "../dist")
 const buildDir = path.resolve(__dirname, "../build")
-const staticDir = path.resolve(__dirname, "../static")
 const filesToCopy = ["LICENSE", "README.md", "NOTICE.md", "KEYBINDINGS.md"]
 
 function copyRecursive(src, dest) {
@@ -31,7 +31,19 @@ function copyRecursive(src, dest) {
 // Whitelist for packages with UNKNOWN license but known to be MIT
 const LICENSE_WHITELIST = [
 	{ name: "json-bignum", version: "0.0.3" },
-	{ name: "xmlhttprequest-ssl", version: "2.1.2" }
+	{ name: "xmlhttprequest-ssl", version: "2.1.2" },
+	{ name: "@img/sharp-libvips-linux-x64", version: "1.2.4" },
+	{ name: "@img/sharp-libvips-linuxmusl-x64", version: "1.2.4" },
+	{ name: "@img/sharp-libvips-darwin-arm64", version: "1.2.4" },
+	{ name: "@img/sharp-libvips-darwin-x64", version: "1.2.4" },
+	{ name: "@img/sharp-darwin-arm64", version: "0.34.5" },
+	{ name: "@img/sharp-darwin-x64", version: "0.34.5" },
+	{ name: "@img/sharp-linux-x64", version: "0.34.5" },
+	{ name: "@img/sharp-linux-arm64", version: "0.34.5" },
+	{ name: "@img/sharp-win32-x64", version: "0.34.5" },
+	{ name: "@img/sharp-win32-arm64", version: "0.34.5" },
+	{ name: "json-schema", version: "0.4.0" },
+	{ name: "type-fest", version: "0.13.1" }
 ]
 
 function isWhitelisted(name, version) {
@@ -49,9 +61,15 @@ const ACCEPTABLE_LICENSES = [
 	"0bsd",
 	"wtfpl",
 	"apache-2.0",
+	"afl-2.1",
+	"afl-2.1 or bsd-3-clause",
 	"agpl-3.0",
 	"agpl-3.0-only",
 	"agpl-3.0-or-later",
+	"lgpl-3.0",
+	"lgpl-3.0-only",
+	"lgpl-3.0-or-later",
+	"blueoak-1.0.0",
 	"bsd",
 	"bsd-2-clause or mit or apache-2.0",
 	"bsd-2-clause or mit",
@@ -122,15 +140,47 @@ const ACCEPTABLE_LICENSES = [
 	"bsd-3-clause",
 	"bsd-2-clause",
 	"bsd",
-	"python-2.0"
+	"python-2.0",
+	"lgpl-3.0",
+	"lgpl-3.0-only",
+	"lgpl-3.0-or-later",
+	"lgpl-3.0 or later",
+	"apache-2.0 and lgpl-3.0-or-later",
+	"apache-2.0 and lgpl-3.0",
+	"apache-2.0 or lgpl-3.0-or-later",
+	"mpl-2.0"
 ]
 
 function isAcceptableLicense(license, name, version) {
 	if (!license) return false
+	// Handle license objects and arrays from package.json
+	if (typeof license === "object") {
+		if (Array.isArray(license)) {
+			license = license
+				.map((l) => (typeof l === "string" ? l : l.type || ""))
+				.join(" or ")
+		} else {
+			license = license.type || license.license || ""
+		}
+	}
 	// Special case: whitelist
 	if (isWhitelisted(name, version)) return true
+	// npm SPDX dual/multi-license expressions are sometimes wrapped in a
+	// single pair of outer parens, e.g. "(MPL-2.0 OR Apache-2.0)" — unwrap
+	// that first so the blanket parenthetical-notes removal below (meant for
+	// trailing annotations like "MIT (see LICENSE)") doesn't delete the
+	// entire license expression and leave nothing to check.
+	let cleaned = String(license).trim()
+	if (/^\(.*\)$/.test(cleaned)) {
+		cleaned = cleaned.slice(1, -1)
+	}
 	// Remove parentheses and whitespace, split on OR/AND/||/&&
-	const cleaned = license.replace(/[()]/g, "").toLowerCase()
+	// Normalize some common noise and lowercase
+	cleaned = cleaned
+		.replace(/\s*\(.*?\)\s*/g, "") // remove remaining parenthesized notes
+		.replace(/\s*license:\s*/i, "")
+		.replace(/\s*the\s*/i, "")
+		.toLowerCase()
 	const parts = cleaned
 		.split(/\s*(or|and|\|\||&&|,|\/)\s*/i)
 		.filter((s) => s && !["or", "and", "||", "&&", "/"].includes(s))
@@ -252,9 +302,12 @@ if (!target) {
 			fs.rmSync(outDir, { recursive: true, force: true })
 		fs.mkdirSync(outDir, { recursive: true })
 
-		// Copy build and static
+		// Copy build. static/ is NOT copied separately — build/client already
+		// contains everything SvelteKit put there from static/ at build time,
+		// so a second copy was pure duplication (see userSettings.ts's
+		// manifest-path fallback for the one runtime reader that used to
+		// depend on the static/ copy specifically).
 		copyRecursive(buildDir, path.join(outDir, "build"))
-		copyRecursive(staticDir, path.join(outDir, "static"))
 
 		// Copy node_modules (assuming it's already prepared for this target)
 		copyRecursive(
@@ -286,7 +339,7 @@ if (!target) {
 		const nodeSrcName = isWindows ? "node.exe" : "node"
 		const nodeSrcPath = path.resolve(__dirname, "..", nodeSrcName)
 		const nodeDestPath = path.join(outDir, nodeSrcName)
-		
+
 		if (fs.existsSync(nodeSrcPath)) {
 			fs.copyFileSync(nodeSrcPath, nodeDestPath)
 			if (!isWindows) {
@@ -319,18 +372,21 @@ if (!target) {
 		}
 
 		// Copy platform-specific executables and icons
-		const platformDir = path.resolve(__dirname, `../dist-assets/${target.name.split("-")[0]}`)
+		const platformDir = path.resolve(
+			__dirname,
+			`../dist-assets/${target.name.split("-")[0]}`
+		)
 		const platformFiles = fs.readdirSync(platformDir)
-		
+
 		for (const file of platformFiles) {
 			const srcPath = path.join(platformDir, file)
 			const destPath = path.join(outDir, file)
-			
+
 			// Skip run files (already copied above) and INSTRUCTIONS.txt (copied separately)
 			if (file.startsWith("run.") || file === "INSTRUCTIONS.txt") {
 				continue
 			}
-			
+
 			if (fs.lstatSync(srcPath).isDirectory()) {
 				// Copy directories recursively (like .app bundles)
 				copyRecursive(srcPath, destPath)
@@ -338,10 +394,12 @@ if (!target) {
 			} else {
 				// Copy individual files
 				fs.copyFileSync(srcPath, destPath)
-				
+
 				// Make executables executable on Unix platforms
-				if (target.platform !== "win32" && 
-					(file === "Serene Pub" || file.endsWith(".desktop"))) {
+				if (
+					target.platform !== "win32" &&
+					(file === "Serene Pub" || file.endsWith(".desktop"))
+				) {
 					fs.chmodSync(destPath, 0o755)
 				}
 				console.log(`Copied file: ${file}`)
@@ -353,6 +411,11 @@ if (!target) {
 			path.resolve(__dirname, "../drizzle"),
 			path.join(outDir, "drizzle")
 		)
+
+		// Strip known-dead weight from the assembled copy — never touches the
+		// developer's real node_modules/build/drizzle, only outDir's copies.
+		console.log("Pruning dist...")
+		pruneDist(outDir, target)
 
 		// Write minimal package.json
 		fs.writeFileSync(

@@ -1,5 +1,8 @@
 import type { InterpolationContext } from "./InterpolationEngine"
-import type { LoreMatchingStrategy } from "./LoreMatchingStrategies"
+import {
+	resolveCharacterName,
+	resolvePersonaName
+} from "$lib/shared/utils/resolveCharacterName"
 
 // Define processed chat message format
 export interface ProcessedChatMessage {
@@ -59,14 +62,48 @@ export class ChatMessageProcessor
 		let assistantName = charName
 		let userName = personaName
 
+		// Narrator response messages have no characterId/personaId of their own
+		// to resolve a name from — without this, they fall through to
+		// whichever name this call's default happens to be (the *current*
+		// speaking character, or the joined cast list in no-perspective
+		// mode), mislabeling every past narration line in history with the
+		// wrong speaker. Use the name snapshotted on the message itself
+		// (set once at trigger time, matching how it's displayed) instead.
+		if ((message as any).isNarratorResponse) {
+			const narratorName =
+				(message.metadata as any)?.narratorName || "Narrator"
+			assistantName = narratorName
+			msgInterpolationContext = {
+				...msgInterpolationContext,
+				char: narratorName,
+				character: narratorName
+			}
+		}
 		// Handle character-specific context
-		if (message.characterId && this.chat.chatCharacters) {
-			const foundChar = this.chat.chatCharacters.find(
+		else if (message.characterId) {
+			// Active participants first; a removed participant's row won't
+			// be in this.chat.chatCharacters (getPromptChatFromDb filters it
+			// out for every "who's active" consumer), but their past
+			// messages still need to resolve a name — fall back to the
+			// separately-supplied removed list, then to the removedAt-time
+			// name snapshot if the entity itself has since been deleted
+			// globally too.
+			const foundChar = this.chat.chatCharacters?.find(
 				(cc: any) => cc.character.id === message.characterId
 			)?.character
 			let foundName: string | undefined
 			if (foundChar) {
-				foundName = foundChar.nickname || foundChar.name
+				foundName = resolveCharacterName(foundChar)
+			} else {
+				const removedCC = this.chat.removedChatCharacters?.find(
+					(cc: any) => cc.characterId === message.characterId
+				)
+				if (removedCC) {
+					foundName = resolveCharacterName(
+						removedCC.character,
+						removedCC.removedName ?? "Unknown"
+					)
+				}
 			}
 			if (message.role === "assistant") {
 				assistantName = foundName || charName
@@ -79,12 +116,26 @@ export class ChatMessageProcessor
 		}
 
 		// Handle persona-specific context
-		if (message.personaId && this.chat.chatPersonas) {
-			const foundPersona = this.chat.chatPersonas.find(
+		if (message.personaId) {
+			const foundPersona = this.chat.chatPersonas?.find(
 				(cp: any) => cp.persona.id === message.personaId
 			)?.persona
+			let foundName: string | undefined
 			if (foundPersona) {
-				userName = foundPersona.name
+				foundName = resolvePersonaName(foundPersona)
+			} else {
+				const removedCP = this.chat.removedChatPersonas?.find(
+					(cp: any) => cp.personaId === message.personaId
+				)
+				if (removedCP) {
+					foundName = resolvePersonaName(
+						removedCP.persona,
+						removedCP.removedName ?? "Unknown"
+					)
+				}
+			}
+			if (foundName) {
+				userName = foundName
 				msgInterpolationContext = {
 					...msgInterpolationContext,
 					user: userName,
@@ -110,217 +161,5 @@ export class ChatMessageProcessor
 	shouldInclude(message: SelectChatMessage, priority: number): boolean {
 		// Messages can be included at any priority
 		return true
-	}
-}
-
-/**
- * Processes world lore entries with lorebook binding population
- */
-export class WorldLoreProcessor
-	implements ContentProcessor<SelectWorldLoreEntry>
-{
-	constructor(
-		private chat: any, // BasePromptChat type
-		private populateLorebookEntryBindings: (
-			entry: SelectWorldLoreEntry,
-			chat: any
-		) => SelectWorldLoreEntry
-	) {}
-
-	processItem(
-		entry: SelectWorldLoreEntry,
-		context: {
-			interpolationContext: InterpolationContext
-			charName: string
-			personaName: string
-			priority: number
-		}
-	): SelectWorldLoreEntry | null {
-		return this.populateLorebookEntryBindings(entry, this.chat)
-	}
-
-	shouldInclude(entry: SelectWorldLoreEntry, priority: number): boolean {
-		// High priority entries are always included
-		if (priority === 4) return true
-
-		// Lower priority entries need to pass additional checks
-		return true // Can be extended with more sophisticated logic
-	}
-}
-
-/**
- * Processes character lore entries with lorebook binding population
- */
-export class CharacterLoreProcessor
-	implements ContentProcessor<SelectCharacterLoreEntry>
-{
-	constructor(
-		private chat: any, // BasePromptChat type
-		private populateLorebookEntryBindings: (
-			entry: SelectCharacterLoreEntry,
-			chat: any
-		) => SelectCharacterLoreEntry
-	) {}
-
-	processItem(
-		entry: SelectCharacterLoreEntry,
-		context: {
-			interpolationContext: InterpolationContext
-			charName: string
-			personaName: string
-			priority: number
-		}
-	): SelectCharacterLoreEntry | null {
-		return this.populateLorebookEntryBindings(entry, this.chat)
-	}
-
-	shouldInclude(entry: SelectCharacterLoreEntry, priority: number): boolean {
-		// High priority entries are always included
-		if (priority === 4) return true
-
-		// Lower priority entries need to pass additional checks
-		return true // Can be extended with more sophisticated logic
-	}
-}
-
-/**
- * Processes history entries with lorebook binding population and date validation
- */
-export class HistoryEntryProcessor
-	implements ContentProcessor<SelectHistoryEntry>
-{
-	constructor(
-		private chat: any, // BasePromptChat type
-		private populateLorebookEntryBindings: (
-			entry: SelectHistoryEntry,
-			chat: any
-		) => SelectHistoryEntry,
-		private isHistoryEntry: (entry: any) => entry is SelectHistoryEntry
-	) {}
-
-	processItem(
-		entry: SelectHistoryEntry,
-		context: {
-			interpolationContext: InterpolationContext
-			charName: string
-			personaName: string
-			priority: number
-		}
-	): SelectHistoryEntry | null {
-		if (!this.isHistoryEntry(entry)) {
-			return null
-		}
-
-		const populated = this.populateLorebookEntryBindings(entry, this.chat)
-
-		// Validate that it's still a history entry after population
-		if ("date" in populated) {
-			return populated as SelectHistoryEntry
-		}
-
-		return null
-	}
-
-	shouldInclude(entry: SelectHistoryEntry, priority: number): boolean {
-		// High priority entries are always included
-		if (priority === 4) return true
-
-		// Check if entry has valid date information
-		return entry.year !== undefined && entry.year !== null
-	}
-}
-
-/**
- * Handles matching logic for lore entries against chat messages
- * Now uses pluggable matching strategies
- */
-export class LoreMatchingEngine {
-	constructor(private strategy: LoreMatchingStrategy) {}
-
-	/**
-	 * Update the matching strategy at runtime
-	 */
-	setStrategy(strategy: LoreMatchingStrategy): void {
-		this.strategy = strategy
-	}
-
-	/**
-	 * Get the current strategy name for debugging
-	 */
-	getStrategyName(): string {
-		return this.strategy.getName()
-	}
-
-	/**
-	 * Check if a lore entry matches a chat message using the current strategy
-	 */
-	async matchesMessage(
-		entry:
-			| SelectWorldLoreEntry
-			| SelectCharacterLoreEntry
-			| SelectHistoryEntry,
-		message: { id: number; message: string | undefined },
-		context?: {
-			interpolationContext: InterpolationContext
-			chatMessages: Array<{ id: number; message: string | undefined }>
-			failedMatches: Record<number, number[]>
-		}
-	): Promise<boolean> {
-		return await this.strategy.matchesMessage(entry, message, context)
-	}
-
-	/**
-	 * Process all matching for a set of messages against considered entries
-	 */
-	async processMatching<TInput, TOutput = TInput>(
-		chatMessages: Array<{ id: number; message: string | undefined }>,
-		consideredEntries: TInput[],
-		failedMatches: Record<number, number[]>,
-		processor: ContentProcessor<TInput, TOutput>,
-		context: {
-			interpolationContext: InterpolationContext
-			charName: string
-			personaName: string
-			priority: number
-		}
-	): Promise<{
-		matched: TOutput[]
-		remaining: TInput[]
-	}> {
-		const matched: TOutput[] = []
-		const remaining: TInput[] = []
-
-		// Create enhanced context for strategy
-		const strategyContext = {
-			interpolationContext: context.interpolationContext,
-			chatMessages,
-			failedMatches
-		}
-
-		for (const entry of consideredEntries) {
-			let wasMatched = false
-
-			for (const message of chatMessages) {
-				const isMatch = await this.matchesMessage(
-					entry as any,
-					message,
-					strategyContext
-				)
-				if (isMatch) {
-					const processedEntry = processor.processItem(entry, context)
-					if (processedEntry) {
-						matched.push(processedEntry)
-						wasMatched = true
-						break
-					}
-				}
-			}
-
-			if (!wasMatched) {
-				remaining.push(entry)
-			}
-		}
-
-		return { matched, remaining }
 	}
 }

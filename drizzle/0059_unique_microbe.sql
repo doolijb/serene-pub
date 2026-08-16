@@ -1,0 +1,1 @@
+ALTER TABLE "custom_themes" ADD COLUMN "css_key" text DEFAULT '' NOT NULL;

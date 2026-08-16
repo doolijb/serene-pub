@@ -1,0 +1,100 @@
+import type {
+	CardKind,
+	CardSourceId,
+	CardSourceSort,
+	LibraryCatalogItem
+} from "$lib/shared/library/types"
+
+export type { CardKind, CardSourceId, CardSourceSort }
+
+/** Context passed through to a CardSource for a given request. */
+export interface CardSourceContext {
+	userId: number
+	/** Set when this request should stop (and free any rate-limit queue slot
+	 * it's holding) if a newer request from the same socket supersedes it.
+	 * Optional — sources with nothing to cancel (eg. GitHub) can ignore it. */
+	signal?: AbortSignal
+}
+
+export interface CardSourceSearchParams {
+	kind: CardKind
+	searchTerm?: string
+	category?: string
+	/** Whether to include NSFW results. Callers must apply the env-gate + user-preference policy before setting this — sources trust it as-is. */
+	nsfw?: boolean
+	sort?: CardSourceSort
+	/** Only sources that support it (currently just CharaVault's ?has_book=) honor this — others ignore it. */
+	hasBook?: boolean
+	/** Restrict results to one creator/author — only CharaVault honors this today. */
+	creatorFilter?: string
+	cursor?: { limit: number; offset: number }
+}
+
+export interface CardSourceSearchResult {
+	items: LibraryCatalogItem[]
+	hasMore: boolean
+	/**
+	 * The raw upstream offset to use for the next page's cursor, if this
+	 * source's pagination can drift from the returned items' count (eg.
+	 * CharaVault's server-side content filtering removes items after
+	 * upstream pagination already accounted for them). Sources without that
+	 * mismatch can omit it — callers fall back to `items.length`.
+	 */
+	nextOffset?: number
+}
+
+export interface CardSource {
+	id: CardSourceId
+	label: string
+	/** Short, one-line description shown in the library UI when this source is active. */
+	description: string
+	/** Link to the source's own site/repository, shown alongside its description. */
+	url: string
+	supports(kind: CardKind): boolean
+	requiresAuthForBestResults: boolean
+	search(
+		params: CardSourceSearchParams,
+		ctx: CardSourceContext
+	): Promise<CardSourceSearchResult>
+	/** Fetch the raw card bytes (PNG or JSON) for a given item's sourceRef, ready to hand to the existing *ImportCard handlers. */
+	getCardBytes(ref: unknown, ctx: CardSourceContext): Promise<Buffer>
+	/**
+	 * Optional: fetch richer per-card fields not present on search results
+	 * (eg. CharaVault's list endpoint doesn't document returning
+	 * `description` — only its single-card detail endpoint does). Sources
+	 * that already return everything from search() don't need to implement
+	 * this.
+	 */
+	getCardDetail?(
+		ref: unknown,
+		ctx: CardSourceContext
+	): Promise<Partial<LibraryCatalogItem>>
+}
+
+export class CardSourceUnavailableError extends Error {
+	constructor(message = "Card source is unreachable", options?: ErrorOptions) {
+		super(message, options)
+		this.name = "CardSourceUnavailableError"
+	}
+}
+
+/**
+ * A card reference failed client-supplied-input validation (eg. a path
+ * traversal attempt) rather than a genuine upstream failure — callers that
+ * want to distinguish "bad request" from "source is down" (eg. for HTTP
+ * status codes) can check for this subclass specifically before falling
+ * back to the base CardSourceUnavailableError handling.
+ */
+export class CardSourceInvalidRefError extends CardSourceUnavailableError {
+	constructor(message = "Invalid card reference") {
+		super(message)
+		this.name = "CardSourceInvalidRefError"
+	}
+}
+
+export class CardSourceRateLimitedError extends Error {
+	constructor(public retryAfterMs: number) {
+		super("Rate limited")
+		this.name = "CardSourceRateLimitedError"
+	}
+}

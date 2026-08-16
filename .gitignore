@@ -26,7 +26,33 @@ vite.config.ts.timestamp-*
 # SQLite
 *.db
 
+# One-off data-migration scratch artifact (see scripts/migrate-lorebook-bindings-data.ts)
+/drizzle/.node-binding-map.json
+
+.claude
+
 # TODO
 /launcher.sh
 
 package-lock.json
+
+/*.md
+!/DOCKER.md
+/AI-TEMP/*
+
+# Android
+/android/.gradle
+/android/.idea
+/android/local.properties
+/android/build
+/android/app/build
+/android/app/.cxx
+/android/app/src/main/assets/serene-pub
+/android/app/src/main/cpp/libnode
+/android/gradle/wrapper/dists
+*.apk
+*.aab
+*.keystore
+*.jks
+release.keystore.base64
+.playwright-mcp/*

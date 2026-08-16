@@ -1,0 +1,3 @@
+ALTER TABLE "chat_world_prompt_configs" ADD COLUMN "narrator_name" text DEFAULT 'The World' NOT NULL;--> statement-breakpoint
+ALTER TABLE "chats" ADD COLUMN "chat_world_prompt_config_id" integer;--> statement-breakpoint
+ALTER TABLE "chats" ADD CONSTRAINT "chats_chat_world_prompt_config_id_chat_world_prompt_configs_id_fk" FOREIGN KEY ("chat_world_prompt_config_id") REFERENCES "public"."chat_world_prompt_configs"("id") ON DELETE set null ON UPDATE no action;

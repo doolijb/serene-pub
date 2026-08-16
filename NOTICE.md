@@ -10,6 +10,8 @@ Serene Pub is an original project and is not a rewrite, port, clone, or fork of 
 ## Contributors
 
 - Jody Doolittle (doolijb)
+- djdembeck
+- Flippo24
 
 ## Third-Party Attributions
 
@@ -27,6 +29,10 @@ Trees used:
 ## Third-Party Distribution
 
 Serene Pub releases are distributed with third party packages included to provide a low-friction experience for users. This includes packages licensed under a variety of OSI-approved licenses, including MIT, BSD, Apache-2.0, and Python-2.0. License texts are included per package. We do not claim any additional rights over these third party works. Licenses can be found in `node_modules/<package>/LICENSE` of the respective release distributions.
+
+### KoboldCPP
+
+This project uses assets or branding that is property of [LostRuins](https://github.com/LostRuins) and contributors of the [KoboldCPP project](https://github.com/LostRuins/koboldcpp), including but not limited to the KoboldCPP logo and any variations of it. These assets are used in reference to this project's 3rd party support and integration of KoboldCPP.
 
 ### Node.js Runtime
 

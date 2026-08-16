@@ -2,7 +2,7 @@
 	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import { onMount, onDestroy } from "svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { z } from "zod"
 
 	interface ExtraFieldData {
@@ -29,7 +29,7 @@
 
 	let { connection = $bindable() } = $props()
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 	const defaultExtraJson = {
 		stream: false
 	}
@@ -37,8 +37,12 @@
 	let llamaCppFields: ExtraFieldData | undefined = $state()
 	let validationErrors: ValidationErrors = $state({})
 
-	socket.on("testConnection", (msg: Sockets.TestConnection.Response) => {
-		testResult = msg
+	socket.on("connections:test", (msg) => {
+		testResult = {
+			ok: msg.ok,
+			error: msg.error ?? undefined,
+			models: msg.models
+		}
 	})
 
 	let testResult: { ok: boolean; error?: string; models?: any[] } | null =
@@ -47,9 +51,9 @@
 	function handleTestConnection() {
 		if (!validateConnection()) return
 		testResult = null
-		socket.emit("testConnection", {
+		socket.emit("connections:test", {
 			connection
-		} as Sockets.TestConnection.Call)
+		})
 	}
 
 	function validateConnection(): boolean {
@@ -95,11 +99,35 @@
 		}
 	}
 
+	// Skips the FIRST write-back, which is the defaults normalization done in
+	// onMount, not a user edit.
+	//
+	// onMount builds the field state from `{...defaults, ...connection.extraJson}`,
+	// so it legitimately gains every default key the stored row lacked. Writing
+	// that straight back into `connection` made the form differ from the
+	// parent's `originalConnection` the instant it opened — the panel reported
+	// unsaved changes with nothing touched, and then blocked closing behind a
+	// destructive-sounding confirm. Real edits still write through, and a save
+	// still persists the full normalized set.
+	let extraJsonInitialized = false
 	$effect(() => {
 		const _llamaCppFields = llamaCppFields
-		if (_llamaCppFields) {
-			connection.extraJson = extraFieldsToExtraJson(_llamaCppFields)
+		if (!_llamaCppFields) return
+		// Computed on EVERY run, before the skip check, and deliberately so:
+		// an effect only subscribes to the state it actually reads, and the
+		// individual field values are read inside this call. Returning before
+		// it — as a first attempt did — meant the effect never subscribed to
+		// them, so later toggles re-triggered nothing and the form never went
+		// dirty. Skip the WRITE, never the read.
+		const nextExtraJson = extraFieldsToExtraJson(_llamaCppFields)
+		// The first populated run is onMount's defaults normalization, not a
+		// user edit — writing it back made the panel report unsaved changes the
+		// instant it opened, then block closing behind a destructive confirm.
+		if (!extraJsonInitialized) {
+			extraJsonInitialized = true
+			return
 		}
+		connection.extraJson = nextExtraJson
 	})
 
 	onMount(() => {
@@ -112,7 +140,7 @@
 	})
 
 	onDestroy(() => {
-		socket.off("testConnection")
+		socket.off("connections:test")
 	})
 </script>
 
@@ -169,7 +197,9 @@
 				bind:value={connection.baseUrl}
 				placeholder="http://localhost:8080/"
 				required
-				class="input {validationErrors.baseUrl ? 'border-red-500' : ''}"
+				class="input {validationErrors.baseUrl
+					? 'border-error-500'
+					: ''}"
 				aria-invalid={validationErrors.baseUrl ? "true" : "false"}
 				aria-describedby={validationErrors.baseUrl
 					? "baseUrl-error"
@@ -184,7 +214,7 @@
 			{#if validationErrors.baseUrl}
 				<p
 					id="baseUrl-error"
-					class="mt-1 text-sm text-red-500"
+					class="text-error-500 mt-1 text-sm"
 					role="alert"
 				>
 					{validationErrors.baseUrl}

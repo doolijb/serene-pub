@@ -1,0 +1,301 @@
+import type { LibraryCatalogItem } from "$lib/shared/library/types"
+import type {
+	CardKind,
+	CardSource,
+	CardSourceContext,
+	CardSourceSearchParams,
+	CardSourceSearchResult
+} from "./types"
+import {
+	CardSourceInvalidRefError,
+	CardSourceRateLimitedError,
+	CardSourceUnavailableError
+} from "./types"
+import { TtlCache } from "./cache"
+import { getOrFetchCardBytes } from "./diskCache"
+
+const REPO_BASE =
+	"https://raw.githubusercontent.com/doolijb/serene-pub-chara-list/main"
+const REPO_PATH_PREFIX = new URL(REPO_BASE).pathname + "/"
+
+// A segment-level string check is the primary guard and gives a clear
+// error for the common case, but URL normalization treats percent-encoded
+// dot-segments (%2e%2e) as equivalent to a literal ".." — a bare string
+// comparison won't catch those. fetchGithubCardBytes's post-construction
+// pathname-prefix check below is the authoritative guard against any
+// traversal primitive this misses.
+export function isSafeGithubFileRef(value: unknown): value is string {
+	if (typeof value !== "string") return false
+	if (value.length === 0 || value.length > 512) return false
+	// eslint-disable-next-line no-control-regex
+	if (/[\x00-\x1f]/.test(value)) return false
+	if (value.startsWith("/") || value.includes("://")) return false
+	return value
+		.split("/")
+		.every((seg) => seg !== "" && seg !== "." && seg !== "..")
+}
+
+const GITHUB_FETCH_WINDOW_MS = 60_000
+// Bounds this server's own worst-case outbound fetch volume if `file` refs
+// are abused — not avoiding an upstream ban the way CharaVault's rate
+// limiter does; raw.githubusercontent.com has no documented per-IP quota
+// this app needs to self-throttle against.
+const GITHUB_FETCH_CEILING = 60
+let githubFetchTimestamps: number[] = []
+export function checkGithubFetchRateLimit() {
+	const now = Date.now()
+	githubFetchTimestamps = githubFetchTimestamps.filter(
+		(t) => now - t < GITHUB_FETCH_WINDOW_MS
+	)
+	if (githubFetchTimestamps.length >= GITHUB_FETCH_CEILING) {
+		throw new CardSourceRateLimitedError(GITHUB_FETCH_WINDOW_MS)
+	}
+	githubFetchTimestamps.push(now)
+}
+
+/** Test-only: reset the shared rate-limit window between test cases. */
+export function _resetGithubFetchRateLimitForTests() {
+	githubFetchTimestamps = []
+}
+
+interface GithubYamlEntry {
+	name: string
+	description: string
+	tags: string[]
+	author: string
+	version: string
+	spec: string
+	file: string
+	category: string
+}
+
+/**
+ * Hand-rolled parser for the flat YAML shape used by
+ * serene-pub-chara-list's characters.yaml / personas.yaml. Not a general
+ * YAML parser — deliberately narrow to this repo's known layout.
+ */
+function parseGithubYaml(yamlText: string): GithubYamlEntry[] {
+	const entries: GithubYamlEntry[] = []
+
+	const lines = yamlText.split("\n")
+	let currentCard: GithubYamlEntry | null = null
+	let inDescriptionBlock = false
+	let descriptionBuffer = ""
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i]
+		const trimmed = line.trim()
+
+		// Card start (top level array item)
+		if (trimmed.startsWith("- name:") && line.match(/^  - name:/)) {
+			if (currentCard) {
+				if (inDescriptionBlock) {
+					currentCard.description = descriptionBuffer.trim()
+					inDescriptionBlock = false
+					descriptionBuffer = ""
+				}
+				entries.push(currentCard)
+			}
+			currentCard = {
+				name: trimmed.replace("- name:", "").trim(),
+				description: "",
+				tags: [],
+				author: "",
+				version: "",
+				spec: "V3",
+				file: "",
+				category: "Uncategorized"
+			}
+		} else if (currentCard) {
+			if (trimmed.startsWith("description:")) {
+				const afterColon = trimmed.replace("description:", "").trim()
+				if (afterColon === "|-" || afterColon === "|") {
+					inDescriptionBlock = true
+					descriptionBuffer = ""
+				} else {
+					currentCard.description = afterColon
+				}
+			} else if (inDescriptionBlock) {
+				if (line.match(/^    [^ ]/) && !line.match(/^      /)) {
+					currentCard.description = descriptionBuffer.trim()
+					inDescriptionBlock = false
+					descriptionBuffer = ""
+					i--
+					continue
+				} else if (line.match(/^      /)) {
+					descriptionBuffer += line.substring(6) + "\n"
+				}
+			} else if (
+				trimmed.startsWith("tags:") &&
+				line.match(/^    tags:/)
+			) {
+				let j = i + 1
+				while (j < lines.length && lines[j].match(/^      - /)) {
+					const tag = lines[j].trim().replace("- ", "")
+					if (tag) currentCard.tags.push(tag)
+					j++
+				}
+			} else if (
+				trimmed.startsWith("author:") &&
+				line.match(/^    author:/)
+			) {
+				currentCard.author = trimmed.replace("author:", "").trim()
+			} else if (
+				trimmed.startsWith("version:") &&
+				line.match(/^    version:/)
+			) {
+				currentCard.version = trimmed.replace("version:", "").trim()
+			} else if (
+				trimmed.startsWith("file:") &&
+				line.match(/^    file:/)
+			) {
+				currentCard.file = trimmed.replace("file:", "").trim()
+			} else if (
+				trimmed.startsWith("category:") &&
+				line.match(/^    category:/)
+			) {
+				const cat = trimmed.replace("category:", "").trim()
+				if (cat && cat !== "null") {
+					currentCard.category = cat
+				}
+			}
+		}
+	}
+
+	if (currentCard) {
+		if (inDescriptionBlock) {
+			;(currentCard as GithubYamlEntry).description =
+				descriptionBuffer.trim()
+		}
+		entries.push(currentCard)
+	}
+
+	return entries
+}
+
+// Caches the fetched+parsed catalog per kind (not per search query) — the
+// parser above is synchronous and walks the entire YAML file, which would
+// otherwise block Node's single event loop thread on every single
+// keystroke-triggered search (each partial search string is a different
+// query, so a cache keyed on the query never hits for incremental typing).
+// Caching the parsed catalog itself means the expensive fetch+parse only
+// happens once per TTL window; every search after that is a cheap in-memory
+// filter over the cached array.
+const catalogCache = new TtlCache<GithubYamlEntry[]>(60 * 60_000)
+
+async function fetchYamlEntries(kind: CardKind): Promise<GithubYamlEntry[]> {
+	return catalogCache.getOrFetch(kind, async () => {
+		const filename =
+			kind === "character" ? "characters.yaml" : "personas.yaml"
+		let response: Response
+		try {
+			response = await fetch(`${REPO_BASE}/${filename}`)
+		} catch (e) {
+			throw new CardSourceUnavailableError(
+				`Failed to reach GitHub: ${(e as Error).message}`
+			)
+		}
+		if (!response.ok) {
+			throw new CardSourceUnavailableError(
+				`GitHub API error: ${response.status}`
+			)
+		}
+		const yamlText = await response.text()
+		const entries = parseGithubYaml(yamlText)
+		// The parser above is a narrow, hand-rolled match on this repo's
+		// current YAML layout — if upstream formatting ever drifts, it fails
+		// silently (zero entries, no error) rather than throwing. A non-empty
+		// response that yields zero entries is a strong signal of exactly
+		// that drift, so warn loudly instead of quietly serving an empty
+		// catalog.
+		if (entries.length === 0 && yamlText.trim().length > 0) {
+			console.warn(
+				`[cardSources] Parsed 0 entries from ${filename} despite a non-empty response — the upstream YAML format may have changed.`
+			)
+		}
+		return entries
+	})
+}
+
+function toLibraryCatalogItem(entry: GithubYamlEntry): LibraryCatalogItem {
+	return {
+		...entry,
+		source: "github-serenepub",
+		sourceRef: { file: entry.file },
+		// The catalog YAML doesn't encode lorebook presence — a known,
+		// accepted gap unless that repo's format is extended later.
+		hasLorebook: undefined
+	}
+}
+
+export const githubYamlCardSource: CardSource = {
+	id: "github-serenepub",
+	label: "Serene Pub Community Library",
+	description:
+		"Curated cards contributed by the community and designed for Serene Pub, hosted as a free, open GitHub repository.",
+	url: "https://github.com/doolijb/serene-pub-chara-list",
+	requiresAuthForBestResults: false,
+	supports(_kind: CardKind) {
+		return true
+	},
+	async search(
+		params: CardSourceSearchParams,
+		_ctx: CardSourceContext
+	): Promise<CardSourceSearchResult> {
+		const entries = await fetchYamlEntries(params.kind)
+
+		let filtered = entries
+		if (params.searchTerm) {
+			const searchLower = params.searchTerm.toLowerCase()
+			filtered = filtered.filter(
+				(e) =>
+					e.name.toLowerCase().includes(searchLower) ||
+					e.description.toLowerCase().includes(searchLower) ||
+					e.category.toLowerCase().includes(searchLower) ||
+					e.tags.some((t) => t.toLowerCase().includes(searchLower))
+			)
+		}
+		if (params.category) {
+			filtered = filtered.filter((e) => e.category === params.category)
+		}
+
+		return {
+			items: filtered.map(toLibraryCatalogItem),
+			hasMore: false
+		}
+	},
+	async getCardBytes(ref: unknown, _ctx: CardSourceContext): Promise<Buffer> {
+		const { file } = (ref ?? {}) as { file?: unknown }
+		if (!isSafeGithubFileRef(file)) {
+			throw new CardSourceInvalidRefError("Invalid GitHub card reference")
+		}
+		return getOrFetchCardBytes(`github-serenepub:${file}`, () =>
+			fetchGithubCardBytes(file)
+		)
+	}
+}
+
+export async function fetchGithubCardBytes(file: string): Promise<Buffer> {
+	checkGithubFetchRateLimit()
+	const url = new URL(`${REPO_BASE}/${file}`)
+	// Authoritative guard: asserts the fully resolved pathname never left
+	// the fixed repo/branch, regardless of what encoding trick produced
+	// the input (see isSafeGithubFileRef's doc comment above).
+	if (!url.pathname.startsWith(REPO_PATH_PREFIX)) {
+		throw new CardSourceInvalidRefError("Invalid GitHub card reference")
+	}
+	let response: Response
+	try {
+		response = await fetch(url)
+	} catch (e) {
+		throw new CardSourceUnavailableError(
+			`Failed to reach GitHub: ${(e as Error).message}`
+		)
+	}
+	if (!response.ok) {
+		throw new CardSourceUnavailableError(
+			`Failed to fetch character file: ${response.status}`
+		)
+	}
+	return Buffer.from(await response.arrayBuffer())
+}

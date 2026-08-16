@@ -1,4 +1,5 @@
 import Handlebars from "handlebars"
+import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import _ from "lodash"
 import { StopStrings } from "../utils/StopStrings"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
@@ -6,11 +7,19 @@ import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { TokenCounters } from "../utils/TokenCounterManager"
 import {
 	BaseConnectionAdapter,
-	type AdapterExports
+	type AdapterExports,
+	type BasePromptChat
 } from "./BaseConnectionAdapter"
+import { type CompiledPrompt } from "../utils/promptBuilder"
 import axios from "axios"
 import { Readable } from "stream"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import { llamaCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
+import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+import { JSON_OBJECT_GBNF } from "./jsonGrammar"
+import { jsonSchemaToGbnf } from "./jsonSchemaToGbnf"
+import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
+import { LLM_IDLE_TIMEOUT_MS } from "./idleTimeout"
 
 // GET /health
 export type HealthResponse =
@@ -223,26 +232,32 @@ export interface LoraAdapter {
 export type LoraAdaptersResponse = LoraAdapter[]
 
 class LlamaCppAdapter extends BaseConnectionAdapter {
+	private abortController?: AbortController
+	// Stored on `this` (not a local const, as it was before) for the exact
+	// same reason as abortController above — abort() is called externally
+	// while a streaming request is in flight, and a local variable inside
+	// the streaming closure can never be reached from outside it. Without
+	// this, abort() during a streaming generation did nothing at all until
+	// the next per-chunk isAborting poll (or never, if the server never
+	// sent a first chunk).
+	private cancelTokenSource?: ReturnType<typeof axios.CancelToken.source>
+
 	constructor({
 		connection,
 		sampling,
 		contextConfig,
 		promptConfig,
 		chat,
-		currentCharacterId
+		currentCharacterId,
+		generatingMessageMetadata
 	}: {
 		connection: SelectConnection
 		sampling: SelectSamplingConfig
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
-		chat: SelectChat & {
-			chatCharacters?: (SelectChatCharacter & {
-				character: SelectCharacter
-			})[]
-			chatPersonas?: (SelectChatPersona & { persona: SelectPersona })[]
-			chatMessages: SelectChatMessage[]
-		}
-		currentCharacterId: number
+		chat: BasePromptChat
+		currentCharacterId: number | null
+		generatingMessageMetadata?: any
 	}) {
 		super({
 			connection,
@@ -263,7 +278,8 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 				typeof sampling.contextTokens === "number"
 					? sampling.contextTokens
 					: 2048,
-			contextThresholdPercent: 0.9
+			contextThresholdPercent: 0.9,
+			generatingMessageMetadata
 		})
 	}
 
@@ -273,8 +289,8 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 			if (key.endsWith("Enabled")) continue
 			const enabledKey = key + "Enabled"
 			if ((this.sampling as any)[enabledKey] === false) continue
-			if (samplingKeyMap[key]) {
-				result[samplingKeyMap[key]] = value
+			if (llamaCppSamplingKeyMap[key]) {
+				result[llamaCppSamplingKeyMap[key]] = value
 			}
 		}
 		return result
@@ -283,9 +299,13 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 	async generate(): Promise<{
 		completionResult:
 			| string
-			| ((cb: (chunk: string) => void) => Promise<void>)
+			| ((
+					contentCb: (chunk: string) => void,
+					thinkingCb?: (chunk: string) => void
+			  ) => Promise<void>)
 		compiledPrompt: CompiledPrompt
 		isAborted: boolean
+		thinkingContent?: string
 	}> {
 		const stream = this.connection.extraJson?.stream || false
 		// Prepare stop strings
@@ -294,12 +314,11 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 			characters:
 				this.chat.chatCharacters?.map((cc) => cc.character) || [],
 			personas: this.chat.chatPersonas?.map((cp) => cp.persona) || [],
-			currentCharacterId: this.currentCharacterId
+			currentCharacterId: this.currentCharacterId ?? undefined
 		})
-		const characterName =
-			this.chat.chatCharacters?.[0]?.character?.nickname ||
-			this.chat.chatCharacters?.[0]?.character?.name ||
-			"assistant"
+		const characterName = resolveCharacterName(
+			this.chat.chatCharacters?.[0]?.character
+		)
 		const personaName = this.chat.chatPersonas?.[0]?.persona?.name || "user"
 		const stopContext: Record<string, string> = {
 			char: characterName,
@@ -331,32 +350,53 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 			prompt,
 			stream,
 			stop,
-			...this.mapSamplingConfig()
+			...this.mapSamplingConfig(),
+			// `grammar` has been declared on CompletionRequest since this
+			// adapter was written and was never populated. llama.cpp applies it
+			// at the decoder, so non-JSON becomes unrepresentable rather than
+			// merely discouraged. Omitted entirely for plain-text generation.
+			// llama.cpp also accepts a `json_schema` field it converts itself;
+			// this goes through our converter instead so both GBNF providers
+			// share one tested path rather than two that can diverge.
+			...(this.responseFormat === "json"
+				? {
+						grammar: this.responseSchema
+							? jsonSchemaToGbnf(this.responseSchema)
+							: JSON_OBJECT_GBNF
+					}
+				: {})
 		}
 
 		const baseUrl =
-			this.connection.baseUrl?.replace(/\/$/, "") ||
-			"http://localhost:8080"
+			normalizeBaseUrl(this.connection.baseUrl) || "http://localhost:8080"
 
 		if (stream) {
 			return {
-				completionResult: async (cb: (chunk: string) => void) => {
+				completionResult: async (
+					contentCb: (chunk: string) => void,
+					_thinkingCb?: (chunk: string) => void
+				) => {
 					let content = ""
-					let cancelTokenSource = axios.CancelToken.source()
+					this.cancelTokenSource = axios.CancelToken.source()
 					try {
 						const response = await axios.post<CompletionResponse>(
 							baseUrl + "/completion",
 							req,
 							{
 								responseType: "stream",
-								cancelToken: cancelTokenSource.token
+								cancelToken: this.cancelTokenSource.token,
+								// Idle/inactivity timeout, not wall-clock — Node
+								// resets this on any socket activity, including
+								// each streamed chunk (verified against
+								// axios's http adapter source).
+								timeout: LLM_IDLE_TIMEOUT_MS
 							}
 						)
 						const stream = response.data as any
 						let buffer = ""
 						for await (const chunk of Readable.from(stream)) {
 							if (this.isAborting) {
-								cancelTokenSource.cancel(
+								this.cancelTokenSource.cancel(
 									"Request aborted by user."
 								)
 								break
@@ -377,7 +417,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 										data.content.length > 0
 									) {
 										content += data.content
-										cb(data.content)
+										contentCb(data.content)
 									}
 								} catch (err) {
 									// ignore JSON parse errors
@@ -385,18 +425,34 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 							}
 						}
 					} catch (e: any) {
-						cb("FAILURE: " + (e.message || String(e)))
+						// A cancel() call rejects the in-flight request too —
+						// don't surface that as an error, the caller already
+						// knows this was cancelled.
+						const wasCancelled =
+							this.isAborting || axios.isCancel?.(e)
+						if (!wasCancelled) throw e
+					} finally {
+						// Clear the reference once this request is done so a
+						// later, unrelated abort() call (e.g. from the next
+						// generation on this same adapter instance) can't
+						// cancel a stale token.
+						this.cancelTokenSource = undefined
 					}
 				},
 				compiledPrompt,
 				isAborted: this.isAborting
 			}
 		} else {
-			const abortController = new AbortController()
+			// Stored on `this` (not a local const) so abort() below — called
+			// externally, from the queue's cancel handler, while this single
+			// non-yielding axios.post() await is in flight — actually has
+			// something to reach. A local AbortController here can never be
+			// cancelled from outside this function.
+			this.abortController = new AbortController()
 			if (this.isAborting) {
-				abortController.abort()
+				this.abortController.abort()
 				return {
-					completionResult: "FAILURE: Request aborted by user.",
+					completionResult: "",
 					compiledPrompt,
 					isAborted: true
 				}
@@ -405,7 +461,10 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 				const response = await axios.post<CompletionResponse>(
 					baseUrl + "/completion",
 					req,
-					{ signal: abortController.signal }
+					{
+						signal: this.abortController.signal,
+						timeout: LLM_IDLE_TIMEOUT_MS
+					}
 				)
 				const result = response.data
 				const content = result?.content || result?.response || ""
@@ -415,45 +474,33 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 					isAborted: this.isAborting
 				}
 			} catch (e: any) {
-				if (
+				// Only a genuine cancellation should report isAborted: true —
+				// this used to be unconditional in the fallback branch below,
+				// so a real network error or 5xx during generation was
+				// silently rebranded as "the user cancelled this", hiding the
+				// actual failure from anyone looking at the result.
+				const wasCancelled =
+					this.isAborting ||
 					axios.isCancel?.(e) ||
 					e?.code === "ERR_CANCELED" ||
 					e?.message?.includes("aborted")
-				) {
+				if (wasCancelled) {
 					return {
-						completionResult: "FAILURE: Request aborted by user.",
+						completionResult: "",
 						compiledPrompt,
 						isAborted: true
 					}
 				}
-				return {
-					completionResult: "FAILURE: " + (e.message || String(e)),
-					compiledPrompt,
-					isAborted: true
-				}
+				throw e
 			}
 		}
 	}
-}
 
-const connectionDefaults = {
-	type: CONNECTION_TYPE.LLAMACPP_COMPLETION,
-	baseUrl: "http://localhost:8080/",
-	promptFormat: PromptFormats.VICUNA,
-	tokenCounter: TokenCounterOptions.ESTIMATE,
-	extraJson: {
-		stream: true
+	abort() {
+		this.isAborting = true
+		this.abortController?.abort()
+		this.cancelTokenSource?.cancel("Request aborted by user.")
 	}
-}
-
-const samplingKeyMap: Record<string, string> = {
-	temperature: "temperature",
-	topP: "top_p",
-	topK: "top_k",
-	repetitionPenalty: "repeat_penalty",
-	minP: "min_p",
-	responseTokens: "n_predict",
-	seed: "seed"
 }
 
 async function testConnection(
@@ -461,7 +508,7 @@ async function testConnection(
 ): Promise<{ ok: boolean; error?: string }> {
 	try {
 		const baseUrl =
-			connection.baseUrl?.replace(/\/$/, "") || "http://localhost:8080"
+			normalizeBaseUrl(connection.baseUrl) || "http://localhost:8080"
 		const res = await axios.get<HealthResponse>(baseUrl + "/health")
 
 		if (
@@ -487,7 +534,7 @@ async function listModels(
 ): Promise<{ models: any[]; error?: string }> {
 	try {
 		const baseUrl =
-			connection.baseUrl?.replace(/\/$/, "") || "http://localhost:8080"
+			normalizeBaseUrl(connection.baseUrl) || "http://localhost:8080"
 		const res = await axios.get<{ model?: string }>(baseUrl + "/show")
 		if (res && typeof res.data === "object" && res.data.model) {
 			return {
@@ -509,8 +556,9 @@ const exports: AdapterExports = {
 	Adapter: LlamaCppAdapter,
 	testConnection,
 	listModels,
-	connectionDefaults,
-	samplingKeyMap
+	connectionDefaults:
+		CONNECTION_DEFAULTS[CONNECTION_TYPE.LLAMACPP_COMPLETION],
+	samplingKeyMap: llamaCppSamplingKeyMap
 }
 
 export default exports

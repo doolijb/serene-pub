@@ -1,20 +1,25 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import * as skio from "sveltekit-io"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { onDestroy, onMount } from "svelte"
 	import { z } from "zod"
 	import PersonaUnsavedChangesModal from "../modals/PersonaUnsavedChangesModal.svelte"
 	import Avatar from "../Avatar.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { stableStringify } from "$lib/shared/utils/connectionDefaults"
 
 	interface EditPersonaData {
 		id?: number
 		name: string
+		aliases: string[]
+		summary: string
 		avatar: string
 		description: string
-		isDefault?: boolean
+		isDefault: boolean
 		position?: number
 		connections?: string
+		creator: string
+		category: string
 		tags: string[]
 		_avatarFile?: File | undefined
 		_avatar?: string
@@ -48,7 +53,7 @@
 
 	let hasChanges = $state(false)
 
-	const socket = skio.get()
+	const socket = useTypedSocket()
 
 	// Tag-related state
 	let tagsList: SelectTag[] = $state([])
@@ -58,11 +63,15 @@
 	let editPersonaData: EditPersonaData = $state({
 		id: undefined,
 		name: "",
+		aliases: [],
+		summary: "",
 		avatar: "",
 		description: "",
 		isDefault: false,
 		position: 0,
 		connections: "",
+		creator: "",
+		category: "",
 		tags: [],
 		_avatarFile: undefined,
 		_avatar: ""
@@ -70,16 +79,23 @@
 	let originalPersonaData: EditPersonaData = $state({
 		id: undefined,
 		name: "",
+		aliases: [],
+		summary: "",
 		avatar: "",
 		description: "",
 		isDefault: false,
 		position: 0,
 		connections: "",
+		creator: "",
+		category: "",
 		tags: [],
 		_avatarFile: undefined,
 		_avatar: ""
 	})
+	let expandedAliases = $state(false)
+	let expandedSummary = $state(false)
 	let showCancelModal = $state(false)
+	let isSaving = $state(false)
 	let validationErrors: ValidationErrors = $state({})
 	let formContainer: HTMLDivElement
 	let validationTimeout: NodeJS.Timeout
@@ -182,6 +198,10 @@
 	}
 
 	function onSave() {
+		// Guard against double-submit (eg. an impatient re-click while the
+		// previous save is still in flight)
+		if (isSaving) return
+
 		// Validate the form first
 		if (!validateForm()) {
 			// Validation failed, errors are already set in validationErrors
@@ -200,20 +220,27 @@
 		const avatarFile = newPersona._avatarFile
 		delete newPersona._avatarFile
 		delete newPersona._avatar
-		socket.emit("createPersona", {
+		isSaving = true
+		socket.emit("personas:create", {
 			persona: newPersona,
-			avatarFile
+			// Socket.IO transparently marshals a browser File (a Blob
+			// subclass) to a Node Buffer on the server; the wire shape
+			// differs from the client-side value's compile-time type.
+			avatarFile: avatarFile as unknown as Buffer | undefined
 		})
 	}
 
 	function handleUpdate() {
 		const updatedPersona = { ...editPersonaData }
+		if (!updatedPersona.id) return
 		const avatarFile = updatedPersona._avatarFile
 		delete updatedPersona._avatarFile
 		delete updatedPersona._avatar
-		socket.emit("updatePersona", {
-			persona: updatedPersona,
-			avatarFile
+		isSaving = true
+		socket.emit("personas:update", {
+			persona: { ...updatedPersona, id: updatedPersona.id },
+			// See handleCreate() above re: File → Buffer wire conversion.
+			avatarFile: avatarFile as unknown as Buffer | undefined
 		})
 	}
 
@@ -270,10 +297,90 @@
 
 	$effect(() => {
 		hasChanges =
-			JSON.stringify(editPersonaData) !==
-			JSON.stringify(originalPersonaData)
+			stableStringify(editPersonaData) !==
+			stableStringify(originalPersonaData)
+		// Despite the name "isSafeToClose", this prop actually tracks when
+		// there ARE changes (same misnaming as CharacterForm's identical
+		// prop) — it should be called "hasChanges".
 		isSafeToClose = hasChanges
 	})
+
+	// Define socket event handlers as named functions for proper cleanup
+	const handlePersonasCreate = (res: Sockets.Personas.Create.Response) => {
+		isSaving = false
+		if (res.persona) {
+			validationErrors = {} // Clear any validation errors on success
+			toaster.success({
+				title: "Persona Created",
+				description: `Persona "${res.persona.name}" created successfully.`
+			})
+			closeForm()
+		}
+	}
+
+	const handlePersonasUpdate = (res: Sockets.Personas.Update.Response) => {
+		// personas:update is emitToUser — broadcast to every open tab for
+		// this user, not just the requester. Without this check, a save in
+		// another tab (for a different persona) silently closes this form
+		// and discards whatever is being edited here.
+		if (res.persona?.id !== personaId) return
+		isSaving = false
+		if (res.persona) {
+			validationErrors = {} // Clear any validation errors on success
+			toaster.success({
+				title: "Persona Updated",
+				description: `Persona "${res.persona.name}" updated successfully.`
+			})
+			closeForm()
+		}
+	}
+
+	const handlePersonasCreateError = (msg: Sockets.ErrorResponse) => {
+		isSaving = false
+		toaster.error({
+			title: "Failed to create persona",
+			description: msg.error
+		})
+	}
+
+	const handlePersonasUpdateError = (msg: Sockets.ErrorResponse) => {
+		isSaving = false
+		toaster.error({
+			title: "Failed to update persona",
+			description: msg.error
+		})
+	}
+
+	const handleTagsList = (msg: Sockets.Tags.List.Response) => {
+		tagsList = msg.tagsList || []
+	}
+
+	const handlePersonasGet = (message: Sockets.Personas.Get.Response) => {
+		if (message.persona) {
+			const p = message.persona
+			editPersonaData = {
+				...editPersonaData,
+				id: p.id,
+				name: p.name,
+				aliases: Array.isArray(p.aliases) ? p.aliases : [],
+				summary: p.summary ?? "",
+				avatar: p.avatar ?? "",
+				description: p.description ?? "",
+				isDefault: p.isDefault,
+				position: p.position ?? 0,
+				// "connections" has no backing column on the personas table
+				// (see schema.ts) and is never sent by "personas:get" — this
+				// field only ever gets its value from local UI state.
+				connections: "",
+				creator: p.creator ?? "",
+				category: p.category ?? "",
+				tags: p.tags || [],
+				_avatar: "",
+				_avatarFile: undefined
+			}
+			originalPersonaData = $state.snapshot(editPersonaData)
+		}
+	}
 
 	onMount(() => {
 		onCancel = handleCancel
@@ -281,59 +388,31 @@
 		// Add keyboard event listener
 		document.addEventListener("keydown", handleKeydown)
 
-		socket.on("createPersona", (res: Sockets.CreatePersona.Response) => {
-			if (res.persona) {
-				validationErrors = {} // Clear any validation errors on success
-				toaster.success({
-					title: "Persona Created",
-					description: `Persona "${res.persona.name}" created successfully.`
-				})
-				closeForm()
-			}
-		})
-
-		socket.on("updatePersona", (res: Sockets.UpdatePersona.Response) => {
-			if (res.persona) {
-				validationErrors = {} // Clear any validation errors on success
-				toaster.success({
-					title: "Persona Updated",
-					description: `Persona "${res.persona.name}" updated successfully.`
-				})
-				closeForm()
-			}
-		})
-
-		socket.on("tagsList", (msg: any) => {
-			tagsList = msg.tagsList || []
-		})
+		// Register socket event handlers
+		socket.on("personas:create", handlePersonasCreate)
+		socket.on("personas:update", handlePersonasUpdate)
+		socket.on("personas:create:error", handlePersonasCreateError)
+		socket.on("personas:update:error", handlePersonasUpdateError)
+		socket.on("tags:list", handleTagsList)
 
 		// Load tags list
-		socket.emit("tagsList", {})
+		socket.emit("tags:list", {})
 
 		if (personaId) {
-			socket.once("persona", (message: Sockets.Persona.Response) => {
-				if (message.persona) {
-					const personaData = { ...message.persona }
-					editPersonaData = {
-						...editPersonaData,
-						...personaData,
-						avatar: personaData.avatar ?? "",
-						description: personaData.description ?? "",
-						tags: personaData.tags || [],
-						_avatar: ""
-					}
-					originalPersonaData = { ...editPersonaData }
-				}
-			})
-			socket.emit("persona", { id: personaId })
+			socket.once("personas:get", handlePersonasGet)
+			socket.emit("personas:get", { id: personaId })
 		}
 	})
 
 	onDestroy(() => {
-		socket.off("createPersona")
-		socket.off("updatePersona")
-		socket.off("persona")
-		socket.off("tagsList")
+		isSafeToClose = false
+		// Properly remove event handlers by passing the function references
+		socket.off("personas:create", handlePersonasCreate)
+		socket.off("personas:update", handlePersonasUpdate)
+		socket.off("personas:create:error", handlePersonasCreateError)
+		socket.off("personas:update:error", handlePersonasUpdateError)
+		socket.off("personas:get", handlePersonasGet)
+		socket.off("tags:list", handleTagsList)
 
 		// Remove keyboard event listener and clear timeout
 		document.removeEventListener("keydown", handleKeydown)
@@ -348,30 +427,44 @@
 	aria-labelledby="form-title"
 	aria-modal="false"
 >
-	<h1 class="mb-4 text-lg font-bold" id="form-title">
-		{mode === "edit"
-			? `Edit: ${editPersonaData.name || "Persona"}`
-			: "Create Persona"}
-	</h1>
-	<div class="mt-4 mb-4 flex gap-2" role="group" aria-label="Form actions">
+	<div
+		class="mb-4 flex items-center gap-2"
+		role="group"
+		aria-label="Form actions"
+	>
 		<button
 			type="button"
-			class="btn btn-sm preset-filled-surface-500 w-full"
+			class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
 			onclick={handleCancel}
-			aria-describedby="form-title"
+			title="Cancel"
+			aria-label="Cancel and go back"
 		>
-			Cancel
+			<Icons.ChevronLeft size={16} aria-hidden="true" />
 		</button>
+		<h1 class="flex-1 text-lg font-bold" id="form-title">
+			{mode === "edit"
+				? `Edit: ${editPersonaData.name || "Persona"}`
+				: "Create Persona"}
+		</h1>
 		<button
 			type="button"
-			class="btn btn-sm preset-filled-success-500 w-full"
+			class="btn btn-sm shrink-0"
 			class:preset-filled-success-500={hasChanges}
 			class:preset-tonal-success={!hasChanges}
 			onclick={onSave}
+			disabled={isSaving}
 			aria-describedby="form-title"
 			aria-label={`${mode === "edit" ? "Update" : "Create"} persona${hasChanges ? " (has unsaved changes)" : ""}`}
 		>
-			<Icons.Save size={16} aria-hidden="true" />
+			{#if isSaving}
+				<Icons.Loader2
+					size={16}
+					class="animate-spin"
+					aria-hidden="true"
+				/>
+			{:else}
+				<Icons.Save size={16} aria-hidden="true" />
+			{/if}
 			{mode === "edit" ? "Update" : "Create"}
 		</button>
 	</div>
@@ -391,14 +484,14 @@
 				<div class="flex w-full items-center justify-center">
 					<label
 						for="dropzone-file"
-						class="flex w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-700 dark:hover:border-gray-500 dark:hover:bg-gray-800"
+						class="border-surface-300-700 bg-surface-50-950 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed"
 						aria-describedby="avatar-help"
 					>
 						<div
 							class="flex w-full flex-col items-center justify-center"
 						>
 							<svg
-								class="my-4 h-8 w-8 text-gray-500 dark:text-gray-400"
+								class="text-surface-700-300 dark:text-surface-400 my-4 h-8 w-8"
 								aria-hidden="true"
 								xmlns="http://www.w3.org/2000/svg"
 								fill="none"
@@ -460,7 +553,7 @@
 				type="text"
 				bind:value={editPersonaData.name}
 				class="input {validationErrors.name
-					? 'border-red-500 focus:border-red-500'
+					? 'border-error-500 focus:border-error-500'
 					: ''}"
 				oninput={() => {
 					// Clear validation error when user starts typing
@@ -477,7 +570,7 @@
 			/>
 			{#if validationErrors.name}
 				<p
-					class="mt-1 text-sm text-red-500"
+					class="text-error-500 mt-1 text-sm"
 					id="name-error"
 					role="alert"
 				>
@@ -485,6 +578,94 @@
 				</p>
 			{/if}
 		</fieldset>
+		<div class="flex flex-col gap-2">
+			<button
+				type="button"
+				class="flex items-center gap-2 text-sm font-semibold"
+				onclick={() => (expandedAliases = !expandedAliases)}
+			>
+				<span class="flex gap-1">
+					Aliases <span
+						class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
+						title="This field will be visible in prompts"
+						aria-label="This field will be visible in prompts"
+					>
+						<Icons.ScanEye
+							size={16}
+							class="relative top-[1px] inline"
+							aria-hidden="true"
+						/>
+					</span>
+				</span>
+				<span class="ml-1">{expandedAliases ? "▼" : "►"}</span>
+			</button>
+			{#if expandedAliases}
+				<div class="flex flex-col gap-1">
+					{#each editPersonaData.aliases as _alias, idx (idx)}
+						<div class="flex gap-2">
+							<input
+								type="text"
+								bind:value={editPersonaData.aliases[idx]}
+								class="input flex-1"
+								placeholder="Alias..."
+							/>
+							<button
+								class="btn btn-sm preset-tonal-error"
+								type="button"
+								onclick={() => {
+									editPersonaData.aliases =
+										editPersonaData.aliases.filter(
+											(_, i) => i !== idx
+										)
+								}}
+							>
+								<Icons.Minus class="h-4 w-4" />
+							</button>
+						</div>
+					{/each}
+					<button
+						class="btn btn-sm preset-filled-primary-500 mt-1"
+						type="button"
+						onclick={() => {
+							editPersonaData.aliases = [
+								...editPersonaData.aliases,
+								""
+							]
+						}}
+					>
+						<Icons.Plus class="h-4 w-4" />
+						Add Alias
+					</button>
+				</div>
+			{/if}
+		</div>
+		<div class="flex flex-col gap-2">
+			<button
+				type="button"
+				class="flex items-center gap-2 text-sm font-semibold"
+				onclick={() => (expandedSummary = !expandedSummary)}
+			>
+				Summary
+				<span class="ml-1">{expandedSummary ? "▼" : "►"}</span>
+			</button>
+			{#if expandedSummary}
+				<div class="flex flex-col gap-1">
+					<textarea
+						bind:value={editPersonaData.summary}
+						class="textarea min-h-16 text-sm"
+						placeholder="One or two sentences describing who this persona is…"
+						maxlength="200"
+					></textarea>
+					<p class="text-surface-700-300 text-right text-xs">
+						{editPersonaData.summary.length} / 200
+					</p>
+					<p class="text-surface-400 text-xs">
+						Used as a concise graph node description. Not injected
+						into chat context.
+					</p>
+				</div>
+			{/if}
+		</div>
 		<fieldset class="flex flex-col gap-2">
 			<label class="flex gap-1 font-semibold" for="personaDescription">
 				Description* <span
@@ -504,7 +685,7 @@
 				rows="8"
 				bind:value={editPersonaData.description}
 				class="input {validationErrors.description
-					? 'border-red-500 focus:border-red-500'
+					? 'border-error-500 focus:border-error-500'
 					: ''}"
 				placeholder="Description..."
 				aria-label="Persona description"
@@ -523,7 +704,7 @@
 			></textarea>
 			{#if validationErrors.description}
 				<p
-					class="mt-1 text-sm text-red-500"
+					class="text-error-500 mt-1 text-sm"
 					id="description-error"
 					role="alert"
 				>
@@ -531,6 +712,27 @@
 				</p>
 			{/if}
 		</fieldset>
+
+		<div class="flex flex-col gap-1">
+			<label class="font-semibold" for="personaCreator">Creator</label>
+			<input
+				id="personaCreator"
+				type="text"
+				bind:value={editPersonaData.creator}
+				class="input"
+				placeholder="Who made this persona?"
+			/>
+		</div>
+		<div class="flex flex-col gap-1">
+			<label class="font-semibold" for="personaCategory">Category</label>
+			<input
+				id="personaCategory"
+				type="text"
+				bind:value={editPersonaData.category}
+				class="input"
+				placeholder="e.g. Fantasy, Sci-Fi, Slice of Life"
+			/>
+		</div>
 
 		<!-- Tags Section -->
 		<fieldset class="flex flex-col gap-2">
