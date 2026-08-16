@@ -6,13 +6,20 @@
 		shouldShow: boolean
 		onContinueWithNextCharacter: () => void
 		onChooseDifferentCharacter: () => void
+		/**
+		 * Whether there is anyone else to hand the turn to. Defaults true so the
+		 * control keeps its previous behaviour for any caller that doesn't pass
+		 * it; a one-character chat has no alternative to choose.
+		 */
+		canChooseDifferentCharacter?: boolean
 	}
 
 	let {
 		nextCharacter,
 		shouldShow,
 		onContinueWithNextCharacter,
-		onChooseDifferentCharacter
+		onChooseDifferentCharacter,
+		canChooseDifferentCharacter = true
 	}: Props = $props()
 </script>
 
@@ -34,13 +41,15 @@
 				<Icons.Play size={16} />
 				<span class="hidden sm:inline">Continue</span>
 			</button>
-			<button
-				class="btn btn-sm preset-tonal-primary"
-				onclick={onChooseDifferentCharacter}
-				title="Choose a different character"
-			>
-				<Icons.Users size={16} />
-			</button>
+			{#if canChooseDifferentCharacter}
+				<button
+					class="btn btn-sm preset-tonal-primary"
+					onclick={onChooseDifferentCharacter}
+					title="Choose a different character"
+				>
+					<Icons.Users size={16} />
+				</button>
+			{/if}
 		</div>
 	</li>
 {/if}

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
+	import { goto } from "$app/navigation"
 	import { getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 
@@ -18,6 +19,9 @@
 	let compileEntriesCtx: CompileEntriesCtx = $state(
 		getContext("compileEntriesCtx")
 	)
+	let chatSummarizesCtx: ChatSummarizesCtx = $state(
+		getContext("chatSummarizesCtx")
+	)
 	let taskQueueCtx: TaskQueueCtx = $state(getContext("taskQueueCtx"))
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
 	let userCtx: UserCtx = $state(getContext("userCtx"))
@@ -25,11 +29,20 @@
 	let build = $derived(graphBuildsCtx?.activeBuild)
 	let sceneActivities = $derived(sceneSummarizesCtx?.activities ?? [])
 	let compileActivities = $derived(compileEntriesCtx?.activities ?? [])
+	let chatSummarizeActivities = $derived(
+		chatSummarizesCtx?.activities ?? []
+	)
 	let hasActivity = $derived(
-		!!build || sceneActivities.length > 0 || compileActivities.length > 0
+		!!build ||
+			sceneActivities.length > 0 ||
+			compileActivities.length > 0 ||
+			chatSummarizeActivities.length > 0
 	)
 	let activityCount = $derived(
-		(build ? 1 : 0) + sceneActivities.length + compileActivities.length
+		(build ? 1 : 0) +
+			sceneActivities.length +
+			compileActivities.length +
+			chatSummarizeActivities.length
 	)
 	let queueCount = $derived(taskQueueCtx?.tasks?.length ?? 0)
 
@@ -90,6 +103,17 @@
 			panelsCtx.digest.lorebookTab = "history"
 		}
 		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+	}
+
+	/**
+	 * Unlike the graph/scene/compile cards, which open a panel via
+	 * panelsCtx.digest, a chat summarize belongs to a route — so reopening means
+	 * navigating to the chat first and letting that page pick the run back up
+	 * from `reviewActivityId`.
+	 */
+	function navigateToChatSummarize(activity: ChatSummarizeState) {
+		chatSummarizesCtx.setReviewActivityId(activity.activityId)
+		goto(`/chats/${activity.chatId}`)
 	}
 
 	function navigateToCompileEntry(activity: CompileEntryState) {
@@ -316,7 +340,26 @@
 								{/if}
 							</p>
 						</div>
-						{#if activity.status !== "running"}
+						{#if activity.status === "running"}
+							<!--
+								Without this there is no way to stop a scene
+								summarize from outside its modal — the card only
+								ever offered dismiss, and only once the run had
+								already finished. Cancel also matters now because
+								it is what deletes a scene created solely to
+								carry the run.
+							-->
+							<button
+								class="text-surface-400 hover:text-error-500 shrink-0 transition-colors"
+								onclick={() =>
+									socket.emit("activity:cancel", {
+										id: activity.activityId
+									})}
+								title="Stop processing"
+							>
+								<Icons.Square size={14} />
+							</button>
+						{:else}
 							<button
 								class="text-surface-400 hover:text-surface-600-400 shrink-0 transition-colors"
 								onclick={() =>
@@ -393,6 +436,98 @@
 								<Icons.ExternalLink size={14} /> Go to Scene
 							</button>
 						</div>
+					{/if}
+				</div>
+			</div>
+		{/each}
+		{#each chatSummarizeActivities as activity (activity.activityId)}
+			{@const isOwn = activity.userId === userCtx?.user?.id}
+			<div class="m-4 mb-0">
+				<div
+					class="bg-surface-200-800 border-surface-300-700 space-y-3 rounded-lg border p-3"
+				>
+					<div class="flex items-start justify-between gap-2">
+						<div class="min-w-0 flex-1">
+							{#if isOwn}
+								<button
+									class="hover:text-primary-500 block w-full truncate text-left text-sm font-medium transition-colors"
+									onclick={() =>
+										navigateToChatSummarize(activity)}
+									title={activity.status === "running"
+										? "View progress"
+										: "Go to chat"}
+								>
+									{activity.topic ||
+										activity.chatLabel ||
+										`Chat #${activity.chatId}`}
+								</button>
+							{:else}
+								<p class="truncate text-sm font-medium">
+									{activity.topic ||
+										activity.chatLabel ||
+										`Chat #${activity.chatId}`}
+								</p>
+							{/if}
+							<p class="text-surface-700-300 text-xs">
+								{activity.loreType === "world"
+									? "World lore"
+									: "Character lore"}
+								{#if activity.status === "running"}
+									· <span class="text-primary-500">
+										Summarizing…
+									</span>
+								{:else if activity.status === "review"}
+									· <span class="text-warning-500">
+										Ready to review
+									</span>
+								{:else if activity.status === "error"}
+									· <span class="text-error-500">Failed</span>
+								{/if}
+							</p>
+						</div>
+						{#if activity.status === "running"}
+							<!--
+								Present from the outset, deliberately: the scene
+								card shipped without a stop control and had to
+								have one retrofitted. A background run the user
+								cannot stop is worse than no background run.
+							-->
+							<button
+								class="text-surface-400 hover:text-error-500 shrink-0 transition-colors"
+								onclick={() =>
+									socket.emit("activity:cancel", {
+										id: activity.activityId
+									})}
+								title="Stop summarizing"
+							>
+								<Icons.Square size={14} />
+							</button>
+						{:else}
+							<button
+								class="text-surface-400 hover:text-surface-600-400 shrink-0 transition-colors"
+								onclick={() =>
+									chatSummarizesCtx.dismiss(
+										activity.activityId
+									)}
+								title="Dismiss"
+							>
+								<Icons.X size={14} />
+							</button>
+						{/if}
+					</div>
+					{#if activity.status === "running" && activity.phase}
+						<p class="text-surface-700-300 text-xs capitalize">
+							{activity.phase}
+							{#if activity.totalBatches && activity.totalBatches > 1}
+								· batch {activity.batch ??
+									0}/{activity.totalBatches}
+							{/if}
+						</p>
+					{/if}
+					{#if activity.status === "error" && activity.errorMessage}
+						<p class="text-error-500 text-xs">
+							{activity.errorMessage}
+						</p>
 					{/if}
 				</div>
 			</div>

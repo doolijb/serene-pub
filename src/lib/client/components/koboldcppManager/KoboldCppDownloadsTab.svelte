@@ -72,7 +72,7 @@
 	})
 </script>
 
-<div class="flex h-full flex-col p-4">
+<div class="flex h-full flex-col py-4">
 	{#if activeCount === 0 && doneCount === 0}
 		<div class="flex flex-1 items-center justify-center p-8">
 			<div class="text-center">

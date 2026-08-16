@@ -7,6 +7,7 @@
 	import PanelTab from "$lib/client/components/panels/PanelTab.svelte"
 	import PanelSectionTitle from "$lib/client/components/panels/PanelSectionTitle.svelte"
 	import NewNameModal from "../modals/NewNameModal.svelte"
+	import { attachLorebookToChat } from "$lib/client/utils/attachLorebookToChat"
 	import EditLorebookForm from "../lorebookForms/EditLorebookForm.svelte"
 	import {
 		FileUpload,
@@ -98,6 +99,12 @@
 		openChatCtx.chatId !== null && openChatCtx.isOwner
 	)
 	let openChatHasLorebook = $derived(openChatCtx.lorebookId !== null)
+
+	// The create modal offers "attach to this chat" only when it would actually
+	// do something: on a chat the user owns, that has no lorebook yet. Anywhere
+	// else the checkbox is hidden rather than shown disabled — a greyed control
+	// with no explanation is worse than no control.
+	let canOfferAttachToChat = $derived(hasOpenChat && !openChatHasLorebook)
 
 	// Section names. The tab triggers are icon-only (see PanelTab), so this is
 	// the only place the names are rendered — PanelSectionTitle shows the
@@ -207,12 +214,23 @@
 		nextEditGroup = undefined
 	}
 
-	async function handleOnCreateConfirm(name: string) {
+	/**
+	 * Set when the user ticked "attach to this chat" so the `lorebooks:create`
+	 * broadcast can be matched back to this request. Correlating on the
+	 * submitted name rather than a bare boolean — see the same reasoning in
+	 * SummarizeLoreModal.handleLorebookCreate.
+	 */
+	let pendingAttachName: string | null = $state(null)
+
+	async function handleOnCreateConfirm(name: string, attachToChat: boolean) {
 		if (!name.trim()) return
 		isCreating = false
-		const req: Sockets.Lorebooks.Create.Params = {
-			name: name.trim()
-		}
+		const trimmed = name.trim()
+		// Only claim the create when the checkbox was both shown and ticked;
+		// `attachToChat` is meaningless if the modal rendered no checkbox.
+		pendingAttachName =
+			attachToChat && canOfferAttachToChat ? trimmed : null
+		const req: Sockets.Lorebooks.Create.Params = { name: trimmed }
 		socket.emit("lorebooks:create", req)
 	}
 
@@ -456,6 +474,18 @@
 				description: `"${msg.lorebook.name}" created successfully.`
 			})
 			// Server automatically emits updated list
+			if (
+				pendingAttachName !== null &&
+				msg.lorebook.name === pendingAttachName &&
+				openChatCtx.chatId !== null
+			) {
+				pendingAttachName = null
+				attachLorebookToChat(
+					socket,
+					openChatCtx.chatId,
+					msg.lorebook.id
+				)
+			}
 		}
 	}
 
@@ -822,6 +852,10 @@
 	onCancel={() => (isCreating = false)}
 	title="Create New Lorebook"
 	description="What would you like to call it?"
+	checkboxLabel={canOfferAttachToChat
+		? "Attach to the current chat"
+		: undefined}
+	checkboxChecked={true}
 />
 
 <LorebookUnsavedChangesModal

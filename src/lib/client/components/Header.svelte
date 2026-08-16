@@ -53,8 +53,21 @@
 </script>
 
 <header class="w-full">
+	<!-- Height: the mobile bar is sized by the 44px hamburger, so `py-2` made it
+	     60px against desktop's 40px. `py-0.5` brings it to 48px — still a full
+	     44px tap target, just without the extra 12px of dead band above the
+	     chat. Desktop keeps `py-2` and is unchanged.
+	     Removed from here: `bg-opacity-25`, a Tailwind v3 class that v4 dropped,
+	     so the bar has been fully opaque since the upgrade; and `backdrop-blur`,
+	     which had nothing to do — the header is static and content does not
+	     scroll beneath it. Also `mx-auto`, inert on a `w-full` box. -->
+	<!-- `lg:rounded-b-lg` mirrors the composer's `lg:rounded-t-lg`: this bar and
+	     the composer share <main>'s exact horizontal extents, so the chat column
+	     now reads as one rounded slab capped top and bottom. Only at lg: — below
+	     that the composer isn't rounded either, since the column runs edge to
+	     edge. -->
 	<div
-		class="bg-surface-100-900 bg-opacity-25 relative mx-auto flex w-full justify-between px-4 py-2 backdrop-blur"
+		class="bg-surface-100-900 relative flex w-full justify-between px-4 py-0.5 lg:rounded-b-lg lg:py-2"
 	>
 		<!-- Desktop left nav -->
 		<nav
@@ -104,9 +117,13 @@
 			{/each}
 		</nav>
 
-		<!-- Title (centered absolutely for desktop) -->
+		<!-- Title (centered absolutely for desktop)
+		     `items-center` matters below md, where this is still an in-flow flex
+		     item: without it the <a> stretched to the full row height and the
+		     text rendered at the top of that box, so the title sat high against
+		     the hamburger. At md+ the absolute positioning centres it instead. -->
 		<div
-			class="pointer-events-none ml-2 flex w-auto flex-0 justify-center md:absolute md:top-1/2 md:left-1/2 md:ml-0 md:w-auto md:-translate-x-1/2 md:-translate-y-1/2"
+			class="pointer-events-none ml-2 flex w-auto flex-0 items-center justify-center md:absolute md:top-1/2 md:left-1/2 md:ml-0 md:w-auto md:-translate-x-1/2 md:-translate-y-1/2"
 		>
 			<a
 				class="text-foreground funnel-display pointer-events-auto text-xl font-bold tracking-tight whitespace-nowrap"
@@ -153,9 +170,24 @@
 			{/each}
 		</nav>
 
-		<div class="flex items-center gap-2 lg:hidden">
+		<!-- `ml-auto` rather than relying on the parent's justify-between: at md+
+		     the title becomes absolutely positioned and leaves the flex flow, so
+		     this is the only in-flow child left and justify-between parked it
+		     against the LEFT edge. The result was a hamburger that sat on the
+		     right on phones and jumped to the left on tablets. An auto margin
+		     pins it right regardless of how many siblings are in flow. -->
+		<div class="ml-auto flex items-center gap-2 lg:hidden">
+			<!-- Square 44px: this was 47x39, i.e. under the 44px/48dp minimum on
+			     the axis that matters most for a thumb. Icon sized via the
+			     arbitrary variant because `btn` drives child svg from
+			     --btn-size, which beats a plain `h-6 w-6` here. -->
+			<!-- No resting background — the icon alone reads as the control, and a
+			     permanent filled box next to a bare title looked heavier than it
+			     needed to. The tonal fill now only appears on hover/focus, so
+			     it still confirms it's a button when you reach for it. The 44px
+			     box is kept regardless: it's the tap target, not decoration. -->
 			<button
-				class="btn preset-tonal"
+				class="btn hover:preset-tonal focus-visible:preset-tonal text-foreground flex size-11 items-center justify-center p-0 [&>svg]:size-6"
 				aria-label="Open navigation menu"
 				onclick={() => {
 					panelsCtx.isMobileMenuOpen = true
@@ -163,10 +195,7 @@
 				type="button"
 				aria-expanded={panelsCtx.isMobileMenuOpen}
 			>
-				<Icons.Menu
-					class="text-foreground h-6 w-6"
-					aria-hidden="true"
-				/>
+				<Icons.Menu aria-hidden="true" />
 			</button>
 		</div>
 	</div>
@@ -176,7 +205,8 @@
 	@reference "tailwindcss";
 
 	header {
+		/* justify-content was here too, but this element has exactly one child
+		   (the bar below), so it had nothing to distribute. */
 		display: flex;
-		justify-content: space-between;
 	}
 </style>

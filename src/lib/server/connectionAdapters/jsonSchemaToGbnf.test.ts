@@ -42,7 +42,9 @@ describe("jsonSchemaToGbnf", () => {
 		expect(jsonSchemaToGbnf(schema)).toBe(
 			[
 				"root ::= root-1",
-				'root-1 ::= "{" ws "\\"name\\"" ws ":" ws string ws "," ws "\\"mood\\"" ws ":" ws ("\\"glad\\"" | "\\"sad\\"") ws "}"',
+				// `string ","` and `(…) ws "}"`, not `string ws ","` — every
+				// value owns its trailing ws and the container adds none.
+				'root-1 ::= "{" ws "\\"name\\"" ws ":" ws string "," ws "\\"mood\\"" ws ":" ws ("\\"glad\\"" | "\\"sad\\"") ws "}" ws',
 				'string ::= "\\"" char* "\\"" ws',
 				'char ::= [^"\\\\\\x7F\\x00-\\x1F] | "\\\\" (["\\\\bfnrt] | "u" [0-9a-fA-F]{4})',
 				'ws ::= | " " | "\\n" [ \\t]{0,20}',
@@ -58,9 +60,10 @@ describe("jsonSchemaToGbnf", () => {
 			type: "array",
 			items: { type: "string" }
 		})
-		expect(grammar).toContain(
-			'::= "[" ws ( string (ws "," ws string)* ws )? "]"'
-		)
+		// An array of strings is where the old doubling compounded worst:
+		// `string` owns a trailing ws, so the previous `ws "," ws` and `ws )?`
+		// produced two ambiguous whitespace sites per element.
+		expect(grammar).toContain('::= "[" ws ( string ("," ws string)* )? "]" ws')
 	})
 
 	describe("escaping — a broken literal hangs a generation rather than failing it", () => {
@@ -184,5 +187,116 @@ describe("buildPerspectiveSchema", () => {
 		expect(() =>
 			jsonSchemaToGbnf(buildPerspectiveSchema("Amara Lin"))
 		).not.toThrow()
+	})
+})
+
+/**
+ * Whitespace ownership — see the WHITESPACE OWNERSHIP block in
+ * jsonSchemaToGbnf.ts for why this is the thing most worth guarding.
+ *
+ * Deliberately NOT a search for the token pair `ws ws`. The bug that motivated
+ * these tests never emitted that pair: it emitted `string ws`, a reference to a
+ * ws-terminal rule followed by an explicit ws — textually innocent, semantically
+ * doubled, and ambiguous enough to peg a CPU core inside llama.cpp's grammar
+ * filter. A string search would have passed it.
+ */
+describe("jsonSchemaToGbnf — whitespace ownership", () => {
+	/** Tokenises a rule body, keeping quoted literals and char classes whole. */
+	function tokenize(body: string): string[] {
+		const out: string[] = []
+		for (let i = 0; i < body.length; i++) {
+			const c = body[i]
+			if (c === " " || c === "\t") continue
+			if (c === '"' || c === "[") {
+				const close = c === '"' ? '"' : "]"
+				let j = i + 1
+				while (j < body.length && body[j] !== close) {
+					if (body[j] === "\\") j++
+					j++
+				}
+				out.push(body.slice(i, j + 1))
+				i = j
+				continue
+			}
+			if ("()|*?+".includes(c)) {
+				out.push(c)
+				continue
+			}
+			if (c === "{") {
+				const j = body.indexOf("}", i)
+				out.push(body.slice(i, j + 1))
+				i = j
+				continue
+			}
+			let j = i
+			while (j < body.length && /[A-Za-z0-9_-]/.test(body[j])) j++
+			out.push(body.slice(i, j))
+			i = j - 1
+		}
+		return out.filter(Boolean)
+	}
+
+	function parseRules(grammar: string): Map<string, string[]> {
+		const rules = new Map<string, string[]>()
+		for (const line of grammar.split("\n")) {
+			const at = line.indexOf("::=")
+			if (at === -1) continue
+			rules.set(line.slice(0, at).trim(), tokenize(line.slice(at + 3)))
+		}
+		return rules
+	}
+
+	const GRAMMAR = jsonSchemaToGbnf(buildPerspectiveSchema("Amara Lin"))
+
+	test("no value is followed by an explicit ws it already owns", () => {
+		const rules = parseRules(GRAMMAR)
+		// A rule is ws-terminal when its body's last token is `ws`.
+		const wsTerminal = new Set(
+			[...rules].filter(([, t]) => t.at(-1) === "ws").map(([n]) => n)
+		)
+		// `)` is deliberately not treated as owning: an enum is emitted as
+		// `(lit | lit) ws`, where the group holds bare literals and the trailing
+		// ws is the one the value is supposed to own. A group whose alternatives
+		// were themselves ws-terminal would slip past this — the golden file
+		// below is what catches structural drift of that kind.
+		const violations: string[] = []
+		for (const [name, tokens] of rules) {
+			for (let i = 0; i < tokens.length - 1; i++) {
+				const owns = tokens[i] === "ws" || wsTerminal.has(tokens[i])
+				if (owns && tokens[i + 1] === "ws") {
+					violations.push(`${name}: "${tokens[i]} ws"`)
+				}
+			}
+		}
+		expect(violations).toEqual([])
+	})
+
+	test("every value form ends in exactly one ws, containers included", () => {
+		const rules = parseRules(GRAMMAR)
+		// Objects and arrays are values too when nested — that is the half of
+		// the invariant that is easy to drop, and dropping it forbids
+		// whitespace between a closing brace and its following comma.
+		for (const name of ["relationships-item-1", "relationships-2", "root-3"]) {
+			expect(rules.get(name)!.at(-1)).toBe("ws")
+		}
+		expect(rules.get("string")!.at(-1)).toBe("ws")
+	})
+
+	/**
+	 * Golden file. Hand-verified once, boundary by boundary, against llama.cpp's
+	 * `grammars/json.gbnf` discipline. If this diffs, re-verify by hand — do not
+	 * paste the new output in.
+	 */
+	test("matches the hand-verified golden grammar", () => {
+		expect(GRAMMAR).toBe(
+			String.raw`root ::= root-3
+relationships-item-1 ::= "{" ws "\"from\"" ws ":" ws ("\"Amara Lin\"") ws "," ws "\"to\"" ws ":" ws string "," ws "\"type\"" ws ":" ws string "," ws "\"reason\"" ws ":" ws string "," ws "\"description\"" ws ":" ws string "," ws "\"status\"" ws ":" ws ("\"active\"" | "\"resolved\"" | "\"broken\"" | "\"evolved\"") ws "," ws "\"visibility\"" ws ":" ws ("\"secret\"" | "\"acknowledged\"" | "\"public\"") ws "}" ws
+relationships-2 ::= "[" ws ( relationships-item-1 ("," ws relationships-item-1)* )? "]" ws
+root-3 ::= "{" ws "\"relationships\"" ws ":" ws relationships-2 "}" ws
+string ::= "\"" char* "\"" ws
+char ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+ws ::= | " " | "\n" [ \t]{0,20}
+`
+		)
 	})
 })

@@ -427,6 +427,26 @@ export type SocketEventMap = {
 		params: Sockets.Chats.SetLorebook.Params
 		response: Sockets.Chats.SetLorebook.Response
 	}
+	"chats:summarize": {
+		params: Sockets.Chats.Summarize.Params
+		response: Sockets.Chats.Summarize.Response
+	}
+	"chats:summarize:progress": {
+		params: never
+		response: Sockets.Chats.Summarize.Progress
+	}
+	"chats:summarize:complete": {
+		params: never
+		response: Sockets.Chats.Summarize.Response
+	}
+	"chats:summarize:error": {
+		params: never
+		response: Sockets.Chats.Summarize.ErrorResponse
+	}
+	"chats:summarize:trace": {
+		params: never
+		response: Sockets.Chats.Summarize.TraceEntry
+	}
 	"chats:delete": {
 		params: Sockets.Chats.Delete.Params
 		response: Sockets.Chats.Delete.Response

@@ -973,6 +973,8 @@ declare global {
 					suggestedParticipantCharacters?: string[]
 					/** Extracted names not yet backed by a binding — suggested, referenced but absent (scene type only) */
 					suggestedMentionedCharacters?: string[]
+					/** Activity this run was tracked under, so the client can dismiss it once saved. */
+					activityId?: string
 				}
 				interface ErrorResponse {
 					reason:
@@ -2955,6 +2957,13 @@ declare global {
 			namespace Process {
 				interface Params {
 					sceneId: number
+					/**
+					 * The scene was created solely to carry this run (the
+					 * chat-side summarize flow), so abandoning the run should
+					 * delete it. Omitted by the lorebook-side re-process, whose
+					 * scene already exists and must survive a cancel.
+					 */
+					ephemeralOnCancel?: boolean
 				}
 				interface Progress {
 					sceneId: number

@@ -210,7 +210,7 @@
 	})
 </script>
 
-<div class="space-y-4 p-4">
+<div class="space-y-4 py-4">
 	{#if isManaged}
 		<!-- Subprocess status -->
 		<div class="card bg-surface-100-800 flex flex-col gap-3 p-4">

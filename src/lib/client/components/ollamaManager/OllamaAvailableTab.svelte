@@ -51,6 +51,7 @@
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
 	)
+	const panelsCtx: PanelsCtx = getContext("panelsCtx")
 	let connectionsList: Sockets.Connections.List.Response["connectionsList"] =
 		$state([])
 
@@ -189,6 +190,11 @@
 		// Track this model as currently downloading
 		currentlyDownloading.add(modelId)
 
+		// End of the wizard's hand-off path (panel → Available → model →
+		// quantization). Cleared here rather than on the first click, because
+		// the cue has to survive every step in between.
+		if (panelsCtx?.digest?.tutorial) panelsCtx.digest.tutorial = false
+
 		// Emit the pull request to Ollama
 		socket.emit("ollama:pullModel", {
 			modelName: pullOption.pull
@@ -289,7 +295,7 @@
 </script>
 
 <!-- Search for available models -->
-<div class="flex flex-col gap-2 px-4 py-2">
+<div class="flex flex-col gap-2 py-2">
 	<div class="panel-actions">
 		<button
 			class="btn preset-filled-primary-500 flex-1"
@@ -332,7 +338,7 @@
 	</div>
 </div>
 
-<div class="space-y-3 p-4">
+<div class="space-y-3 py-4">
 	{#if isSearching}
 		<div class="p-6 text-center">
 			<Icons.Loader2 class="mx-auto mb-4 animate-spin" size={32} />

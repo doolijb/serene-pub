@@ -5,6 +5,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { resolveOrCreateBindingByName } from "$lib/client/utils/createLorebookBinding"
+	import { attachLorebookToChat as attachToChat } from "$lib/client/utils/attachLorebookToChat"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
 
 	/** A name not yet backed by a real lorebookBindings id — either
@@ -12,19 +13,28 @@
 	 * resolved to a real binding (matched or newly created) at Save. */
 	type PendingNewCharacter = { name: string; source: "suggested" | "manual" }
 
+	/**
+	 * Newest first. Missing month/day sort as 0, so a year-only entry lands
+	 * *after* dated entries in the same year — the same precision ordering the
+	 * History tab uses ascending (`NULLS FIRST`), just reversed.
+	 */
+	function compareHistoryEntriesDesc(
+		a: { year: number | null; month: number | null; day: number | null },
+		b: { year: number | null; month: number | null; day: number | null }
+	): number {
+		if ((a.year ?? 0) !== (b.year ?? 0)) return (b.year ?? 0) - (a.year ?? 0)
+		if ((a.month ?? 0) !== (b.month ?? 0))
+			return (b.month ?? 0) - (a.month ?? 0)
+		return (b.day ?? 0) - (a.day ?? 0)
+	}
+
 	function computeDefaultDate(
 		entries: Sockets.HistoryEntries.List.Response["historyEntryList"]
 	): { year: number; month: number; day: number } {
 		const dated = entries.filter((e) => e.year !== null)
 		if (dated.length === 0) return { year: 1, month: 1, day: 1 }
 
-		const latest = dated.sort((a, b) => {
-			if ((a.year ?? 0) !== (b.year ?? 0))
-				return (b.year ?? 0) - (a.year ?? 0)
-			if ((a.month ?? 0) !== (b.month ?? 0))
-				return (b.month ?? 0) - (a.month ?? 0)
-			return (b.day ?? 0) - (a.day ?? 0)
-		})[0]
+		const latest = [...dated].sort(compareHistoryEntriesDesc)[0]
 
 		return {
 			year: latest.year ?? 1,
@@ -51,6 +61,18 @@
 		chatCharacters?: BindableEntity[]
 		chatPersonas?: BindableEntity[]
 		hasSceneMessageGap?: boolean
+		/**
+		 * Scene runs hand off to the activity-backed `scenes:process` pipeline:
+		 * the scene row is created first, then this fires so the caller can
+		 * clear the message selection and open the review modal. Only after the
+		 * create succeeds — a failed create must leave the selection intact.
+		 */
+		onSceneProcessStarted?: (sceneId: number) => void
+		/**
+		 * Resume an existing chat_summarize activity instead of starting fresh.
+		 * Supplied by the chat page when the Activity panel reopens a run.
+		 */
+		resumeActivity?: ChatSummarizeState | null
 	}
 
 	let {
@@ -64,8 +86,16 @@
 		onLorebookSet,
 		chatCharacters = [],
 		chatPersonas = [],
-		hasSceneMessageGap = false
+		hasSceneMessageGap = false,
+		onSceneProcessStarted,
+		resumeActivity = null
 	}: Props = $props()
+
+	/**
+	 * Activity backing the current run, so Save can dismiss it and Minimize can
+	 * leave it standing. Null for a run started before this modal opened.
+	 */
+	let activeActivityId = $state<string | null>(null)
 
 	const socket = skio.get()!
 	// Only used for resolveOrCreateBindingByName, which needs the type-safe
@@ -100,6 +130,24 @@
 
 	let selectedHistoryEntryId = $state<number | "">("")
 	let isCreatingHistoryEntry = $state(false)
+
+	/** Newest first, so the most recent entry is the obvious default. */
+	let sortedHistoryEntryList = $derived(
+		[...historyEntryList].sort(compareHistoryEntriesDesc)
+	)
+
+	/**
+	 * Whether this opening has already had its history entry defaulted. Reset
+	 * in the reset-on-open effect and consumed in handleHistoryEntriesList, so
+	 * the default is applied when the list actually arrives rather than
+	 * depending on effect declaration order (the reset clears the selection, so
+	 * an effect racing it would be wiped on the same open).
+	 *
+	 * Once per opening, not "whenever empty", so deliberately choosing the blank
+	 * option isn't silently reverted.
+	 */
+	let didPreselectHistoryEntry = $state(false)
+
 
 	let lorebookBindings = $state<SelectLorebookBinding[]>([])
 	let bindableEntities = $derived.by<BindableEntity[]>(() => {
@@ -217,14 +265,45 @@
 	)
 
 	// ── Reset on open ────────────────────────────────────────────────
+	// Resuming is handled *inside* this effect on purpose. A second effect that
+	// rehydrated the review would race this one and be wiped on the same open —
+	// the identical hazard the history-entry preselect hit, where the answer was
+	// to stop depending on effect declaration order.
 	$effect(() => {
+		if (open && resumeActivity) {
+			activeActivityId = resumeActivity.activityId
+			loreType = resumeActivity.loreType
+			topic = resumeActivity.topic ?? ""
+			errorMessage = resumeActivity.errorMessage ?? ""
+			const pending = resumeActivity.pendingResult
+			if (pending) {
+				reviewName = pending.name ?? ""
+				reviewContent = pending.content ?? pending.raw ?? ""
+				rawOutput = pending.raw ?? ""
+				// Carried on the activity precisely so a reopened character-lore
+				// review still saves against the binding the server minted.
+				resolvedBindingId = pending.lorebookBindingId ?? null
+			}
+			step =
+				resumeActivity.status === "review"
+					? "review"
+					: resumeActivity.status === "error"
+						? "error"
+						: "generating"
+			summarizePhase = resumeActivity.phase ?? "drafting"
+			currentBatch = resumeActivity.batch ?? 0
+			totalBatches = resumeActivity.totalBatches ?? 1
+			return
+		}
 		if (open) {
+			activeActivityId = null
 			step = "configure"
 			loreType = initialLoreType
 			topic = ""
 			selectedBinding = ""
 			resolvedBindingId = null
 			selectedHistoryEntryId = ""
+			didPreselectHistoryEntry = false
 			isCreatingHistoryEntry = false
 			attachingLorebookId = ""
 			isCreatingLorebook = false
@@ -276,6 +355,7 @@
 	function handleComplete(data: Sockets.Chats.Summarize.Response) {
 		if (step !== "generating") return
 		rawOutput = data.raw
+		activeActivityId = data.activityId ?? activeActivityId
 		reviewName = data.name ?? ""
 		reviewContent = data.content ?? data.raw ?? ""
 		resolvedBindingId = data.lorebookBindingId ?? null
@@ -308,9 +388,30 @@
 		}
 	}
 
+	/**
+	 * `lorebooks:create` is a broadcast, not a reply — it fires for creates made
+	 * anywhere, including the Lorebooks+ sidebar. This modal is mounted on every
+	 * chat page, so attaching unconditionally here meant creating a lorebook from
+	 * the sidebar silently bound it to whatever chat happened to be open.
+	 *
+	 * Only attach when *this* modal asked for the create. Correlating on the
+	 * submitted name rather than a bare boolean, because a bare flag is consumed
+	 * by whichever broadcast lands first — which may be the sidebar's.
+	 *
+	 * Residual: two creates racing with the *same* name can still mis-attach.
+	 * Rare, and the failure mode is a wrong attach the user can undo, not data
+	 * loss — so it is not worth a correlation id on the wire.
+	 */
+	let pendingCreateName: string | null = $state(null)
+
 	function handleLorebookCreate(data: any) {
-		if (data.lorebook) {
-			availableLorebooks = [...availableLorebooks, data.lorebook]
+		if (!data.lorebook) return
+		availableLorebooks = [...availableLorebooks, data.lorebook]
+		if (
+			pendingCreateName !== null &&
+			data.lorebook.name === pendingCreateName
+		) {
+			pendingCreateName = null
 			attachLorebookToChat(data.lorebook.id)
 		}
 	}
@@ -328,6 +429,17 @@
 	) {
 		if (data.lorebookId === lorebookId) {
 			historyEntryList = data.historyEntryList
+			// Default to the most recent entry — the overwhelmingly common
+			// choice when summarising a scene that just happened.
+			if (
+				loreType === "scene" &&
+				!didPreselectHistoryEntry &&
+				selectedHistoryEntryId === "" &&
+				sortedHistoryEntryList.length > 0
+			) {
+				selectedHistoryEntryId = sortedHistoryEntryList[0].id
+				didPreselectHistoryEntry = true
+			}
 		}
 	}
 
@@ -418,7 +530,7 @@
 
 	// ── Actions ──────────────────────────────────────────────────────
 	function attachLorebookToChat(id: number) {
-		socket.emit("chats:setLorebook", { chatId, lorebookId: id })
+		attachToChat(typedSocket, chatId, id)
 		attachingLorebookId = ""
 	}
 
@@ -429,7 +541,10 @@
 
 	function createAndAttachLorebook() {
 		if (!newLorebookName.trim()) return
-		socket.emit("lorebooks:create", { name: newLorebookName.trim() })
+		// Claim the pending create so handleLorebookCreate knows this broadcast
+		// is ours to act on — see the comment there.
+		pendingCreateName = newLorebookName.trim()
+		socket.emit("lorebooks:create", { name: pendingCreateName })
 		newLorebookName = ""
 		isCreatingLorebook = false
 	}
@@ -457,7 +572,78 @@
 		isCreatingHistoryEntry = true
 	}
 
+	/**
+	 * Scene runs take a different route to the other two lore types.
+	 *
+	 * `chats:summarize` is foreground-only: it registers no activity and takes
+	 * no abort signal, so closing this modal orphans the run — the server keeps
+	 * burning LLM calls while the client discards the result. `scenes:process`
+	 * is already activity-backed and resumable, so the scene path creates its
+	 * scene up front and hands off to that pipeline instead.
+	 *
+	 * Creating first also means the scene is visible in the UI, with its
+	 * messages linked, from the moment the run starts.
+	 */
+	function generateScene() {
+		if (!lorebookId || !selectedHistoryEntryId) return
+
+		const cleanupCreate = () => {
+			const s = socket as any
+			s.off("scenes:create", onCreated)
+			s.off("scenes:create:error", onCreateError)
+		}
+
+		function onCreated(data: { scene?: { id: number; selectedMessageIds?: number[] } }) {
+			// `scenes:create` is a broadcast, so correlate before claiming it.
+			// Matching on the message id set rather than a bare flag: it is
+			// already unique to this dispatch, and a second tab creating a scene
+			// concurrently would otherwise hand us the wrong id.
+			const ids = data.scene?.selectedMessageIds ?? []
+			const mine =
+				ids.length === selectedMessageIds.length &&
+				ids.every((id) => selectedMessageIds.includes(id))
+			if (!data.scene || !mine) return
+			cleanupCreate()
+
+			// Only now is it safe to drop the selection — see onSceneProcessStarted.
+			onSceneProcessStarted?.(data.scene.id)
+
+			socket.emit("scenes:process", {
+				sceneId: data.scene.id,
+				ephemeralOnCancel: true
+			} satisfies Sockets.Scenes.Process.Params)
+
+			onOpenChange({ open: false })
+		}
+
+		function onCreateError(data: { error?: string }) {
+			cleanupCreate()
+			step = "error"
+			errorMessage = data?.error ?? "Could not create the scene."
+		}
+
+		socket.on("scenes:create", onCreated)
+		socket.on("scenes:create:error", onCreateError)
+
+		step = "generating"
+		errorMessage = ""
+		socket.emit("scenes:create", {
+			scene: {
+				lorebookId,
+				chatId,
+				historyEntryId: Number(selectedHistoryEntryId),
+				selectedMessageIds,
+				name: null
+			}
+		} as any)
+	}
+
 	function generate() {
+		if (loreType === "scene") {
+			generateScene()
+			return
+		}
+
 		// A truly-overlapping call (shouldn't normally happen — the UI
 		// disables re-clicking Generate while step === "generating" — but
 		// cheap to guard regardless) would otherwise leak the previous
@@ -518,7 +704,10 @@
 			chatId,
 			messageIds: selectedMessageIds,
 			loreType,
-			topic: loreType === "scene" ? undefined : topic.trim() || undefined,
+			// Scene runs returned early above, so only world/character reach
+			// here — the old `loreType === "scene" ? undefined : …` guard is
+			// now dead and TypeScript rejects it.
+			topic: topic.trim() || undefined,
 			lorebookBindingCharacterId:
 				bindingType === "character" ? Number(bindingIdStr) : undefined,
 			lorebookBindingPersonaId:
@@ -611,6 +800,14 @@
 		}
 		toaster.success({ title: titles[loreType] })
 		isSaving = false
+		// Only now is the generated text safe to let go of. The create emits
+		// above are fire-and-forget, so dismissing the activity before this
+		// point would make a failed save terminal — the summary lives nowhere
+		// else until the row exists.
+		if (activeActivityId) {
+			socket.emit("activity:dismiss", { id: activeActivityId })
+			activeActivityId = null
+		}
 		onSaved()
 		onOpenChange({ open: false })
 	}
@@ -822,7 +1019,7 @@
 							bind:value={selectedHistoryEntryId}
 						>
 							<option value="">— Select history entry —</option>
-							{#each historyEntryList as entry}
+							{#each sortedHistoryEntryList as entry}
 								<option value={entry.id}>
 									{#if entry.year}Year {entry.year}{entry.month
 											? `, Month ${entry.month}`
@@ -1384,6 +1581,19 @@
 		// generation must explicitly tear down its listeners here — without
 		// this, an in-flight generation's :complete/:error would sit
 		// registered indefinitely across repeated cancel/retry cycles.
+		activeCleanup?.()
+		// Cancel means stop, not hide: without this the server would keep
+		// generating and the activity would linger as a phantom "running" card.
+		if (activeActivityId) {
+			socket.emit("activity:cancel", { id: activeActivityId })
+			activeActivityId = null
+		}
+		onOpenChange({ open: false })
+	}}
+	onMinimize={() => {
+		// Deliberately the opposite of onCancel: drop the per-dispatch socket
+		// listeners but leave the run and its activity alive, so the Activity
+		// panel can carry it and reopen it later.
 		activeCleanup?.()
 		onOpenChange({ open: false })
 	}}

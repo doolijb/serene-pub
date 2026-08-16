@@ -69,8 +69,11 @@
 	}
 </script>
 
+<!-- Dropped from this element: `chat-input-bar` (no rule anywhere — its only
+     definition was an empty one scoped to ChatMessage, so it never applied
+     here), plus `gap-4` and `align-middle`, both inert on a block box. -->
 <div
-	class="chat-input-bar preset-tonal-surface gap-4 px-3 pb-2 align-middle lg:rounded-t-lg lg:pb-4"
+	class="preset-tonal-surface px-3 pb-2 lg:rounded-t-lg lg:pb-4"
 	class:hidden={!!editChatMessage}
 >
 	{#if showAddPersonaCTA}
@@ -215,9 +218,16 @@
 				{/if}
 			{/snippet}
 			{#snippet rightControls()}
+				<!-- `btn` is what supplies the focus-visible ring, the active
+				     press feedback and the disabled dimming (see app.css); these
+				     two were the only controls on the chat page without it, so a
+				     disabled Send looked identical to an enabled one and neither
+				     button showed a focus ring for keyboard users. Sizing comes
+				     from .composer-btn because `btn` would otherwise drive the
+				     icon down to --btn-size. -->
 				{#if !lastMessage?.isGenerating && !editChatMessage}
 					<button
-						class="hover:preset-tonal-success h-auto rounded-lg p-3 text-center"
+						class="btn composer-btn hover:preset-tonal-success"
 						type="button"
 						disabled={!newMessage.trim() ||
 							lastMessage?.isGenerating}
@@ -225,17 +235,17 @@
 						aria-label="Send message"
 						onclick={handleSendButton}
 					>
-						<Icons.Send size={24} class="mx-auto" />
+						<Icons.Send aria-hidden="true" />
 					</button>
 				{:else if lastMessage?.isGenerating}
 					<button
 						title="Stop Generation"
 						aria-label="Stop generating"
-						class="text-error-500 hover:preset-tonal-error h-auto rounded-lg p-3 text-center"
+						class="btn composer-btn text-error-500 hover:preset-tonal-error"
 						type="button"
 						onclick={handleAbortLastMessage}
 					>
-						<Icons.Square size={24} class="mx-auto" />
+						<Icons.Square aria-hidden="true" />
 					</button>
 				{/if}
 			{/snippet}

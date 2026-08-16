@@ -34,6 +34,35 @@
  * upstream has it; `max_tokens` is the backstop, and bounded repetition big
  * enough to hold a sentence expands to a grammar large enough to be its own
  * problem.
+ *
+ * ── WHITESPACE OWNERSHIP — the invariant this file exists to hold ───────────
+ *
+ * **Every value rule ends in exactly one `ws`. No container ever emits `ws`
+ * after a value.** "Value" includes objects and arrays, because a container is
+ * itself a value when nested — hence `"}" ws` and `"]" ws`, mirroring stock.
+ *
+ * This is not stylistic. Violating it is how this converter shipped a bug that
+ * hung KoboldCPP hard enough to look like a crashed subprocess:
+ *
+ *   string ::= "\"" char* "\"" ws          <- value owns a trailing ws
+ *   item   ::= ... ":" ws string ws "," ...  <- container added a second one
+ *
+ * `ws ws` is *ambiguous*, not merely redundant: any run of whitespace can be
+ * split between the two rules in many ways, so every whitespace character
+ * multiplies the live parse stacks and per-token grammar filtering cost grows
+ * with output length. The process pegs a core — busy, never finishing — so it
+ * stops answering health probes and reads as dead rather than as a bad grammar.
+ * Nothing errors, nothing completes.
+ *
+ * Note the shape of that mistake: the primitives above were canonical, and the
+ * defect still landed, because the *structure* around them was hand-authored.
+ * A schema→GBNF compiler is a hand-authored grammar with extra steps. Keeping
+ * the primitives verbatim buys nothing on its own.
+ *
+ * Guarded by a golden-file snapshot of the perspective grammar rather than a
+ * search for the token pair `ws ws` — the original defect never emitted that
+ * pair. It emitted `string ws`: a reference to a ws-terminal rule followed by
+ * an explicit ws, textually innocent and semantically doubled.
  */
 
 export type JsonSchemaNode =
@@ -100,7 +129,9 @@ export function jsonSchemaToGbnf(root: JsonSchemaNode): string {
 						`jsonSchemaToGbnf: empty enum at "${hint}" — nothing would be generatable`
 					)
 				}
-				return `(${node.enum.map(gbnfLiteral).join(" | ")})`
+				// Trailing `ws` so an enum is a value like any other — see
+				// WHITESPACE OWNERSHIP above. `string` already carries one.
+				return `(${node.enum.map(gbnfLiteral).join(" | ")}) ws`
 			}
 			return "string"
 		}
@@ -110,9 +141,11 @@ export function jsonSchemaToGbnf(root: JsonSchemaNode): string {
 			const name = ruleName(hint)
 			// The `( ... )?` arm is what keeps the empty array expressible —
 			// `{"relationships": []}` is a legitimate, and common, answer.
-			rules.push(
-				`${name} ::= "[" ws ( ${item} (ws "," ws ${item})* ws )? "]"`
-			)
+			//
+			// No `ws` before `,` or `]`: the item is a value and owns its own
+			// trailing `ws`. The `ws` after `]` is this rule paying that same
+			// debt for whoever contains it. See WHITESPACE OWNERSHIP above.
+			rules.push(`${name} ::= "[" ws ( ${item} ("," ws ${item})* )? "]" ws`)
 			return name
 		}
 
@@ -135,12 +168,16 @@ export function jsonSchemaToGbnf(root: JsonSchemaNode): string {
 					`jsonSchemaToGbnf: optional properties are unsupported at "${hint}" (${missing.join(", ")}) — the grammar would make them mandatory`
 				)
 			}
+			// `KEY ws ":"` — the key is a raw literal and owns no trailing `ws`,
+			// so this boundary needs one explicitly. (Stock json.gbnf gets it
+			// free by using its `string` rule as the key.) The value that
+			// follows owns its own, so nothing is added before `,` or `}`.
 			const parts = keys.map(
 				(k) =>
 					`${gbnfLiteral(k)} ws ":" ws ${build(node.properties[k], k)}`
 			)
 			const name = ruleName(hint)
-			rules.push(`${name} ::= "{" ws ${parts.join(' ws "," ws ')} ws "}"`)
+			rules.push(`${name} ::= "{" ws ${parts.join(' "," ws ')} "}" ws`)
 			return name
 		}
 

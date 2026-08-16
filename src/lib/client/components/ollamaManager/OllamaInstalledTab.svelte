@@ -184,15 +184,20 @@
 		}
 	}
 
+	// Named so the teardown below can remove just this listener. A bare
+	// socket.off("ollama:modelsList") drops *every* handler for the event,
+	// including OllamaSidebar's, which uses the same list to decide whether to
+	// open on Available during the setup wizard — switching away from this tab
+	// would silently deafen the parent. OllamaAvailableTab already scopes its
+	// own teardown this way.
+	function handleModelsList(message: Sockets.Ollama.ModelsList.Response) {
+		installedModels = message.models
+		isLoading = false
+	}
+
 	onMount(() => {
 		// Socket event listeners
-		socket.on(
-			"ollama:modelsList",
-			(message: Sockets.Ollama.ModelsList.Response) => {
-				installedModels = message.models
-				isLoading = false
-			}
-		)
+		socket.on("ollama:modelsList", handleModelsList)
 
 		socket.on(
 			"ollama:deleteModel",
@@ -239,7 +244,7 @@
 	})
 
 	onDestroy(() => {
-		socket.off("ollama:modelsList")
+		socket.off("ollama:modelsList", handleModelsList)
 		socket.off("ollama:deleteModel")
 		socket.off("ollama:listRunningModels")
 		socket.off("ollama:connectModel")
@@ -248,7 +253,7 @@
 </script>
 
 <!-- Search for installed models -->
-<div class="px-4 py-2">
+<div class="py-2">
 	<div class="flex gap-2">
 		<div class="relative flex-1">
 			<Icons.Search
@@ -304,7 +309,7 @@
 		</p>
 	</div>
 {:else}
-	<div class="space-y-3 p-4">
+	<div class="space-y-3 py-4">
 		{#each filteredModels as model}
 			{@const isRunning = isModelRunning(model)}
 			{@const isConnected = currentConnectionModelName === model.name}

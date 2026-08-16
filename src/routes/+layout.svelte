@@ -17,7 +17,8 @@
 		isAccessibilityEnabled,
 		isPaused,
 		enableAccessibility,
-		pause,
+		disableAccessibility,
+		announce,
 		mapToAccessibleRoute,
 		mapToStandardRoute
 	} from "$lib/client/accessibility/state.svelte"
@@ -52,6 +53,17 @@
 	let socketsInitialized = $state(false)
 	let showUpdateBar = $state(true)
 	let showLogin = $state(false)
+	// Startup failure of the realtime connection. Without this the template's
+	// `{#if socketsInitialized}{:else if showLogin}` chain had no third branch,
+	// so any failure here rendered a completely blank page — see the catch in
+	// initializeSocketsIfAllowed().
+	let startupError = $state<string | null>(null)
+	let retrying = $state(false)
+	// Nothing at all renders until the socket connects, and loadSocketsClient
+	// waits up to 10s before giving up — so a slow or cold-starting server
+	// showed a blank page for that whole time with no sign it was working.
+	// Delayed so a normal fast connect doesn't flash a spinner.
+	let showStartupSpinner = $state(false)
 
 	// Document View (accessible) mode — see src/lib/client/accessibility/.
 	// This is the ONLY branch point touching the shared root layout; the
@@ -61,13 +73,19 @@
 	// navigating straight to a /document-view/* URL without ever pressing
 	// the shortcut first.
 
-	// A true toggle — "switch" (per how this shortcut's been described)
-	// implies both directions, not just "turn Document View on". Pressing it
-	// while already in Document View pauses back to the standard site (the
-	// exact same action as its own "Browse Standard Site" button), so
-	// there's always one obvious, memorized way back — that's also what
-	// makes "Browse Standard Site Temporarily" actually temporary instead of
-	// a one-way trip that only Settings can undo.
+	// A true toggle in both directions: it turns the stored preference on from
+	// the standard site and clears it from inside Document View.
+	//
+	// It used to pause() on the way out, which only writes sessionStorage — so
+	// the shortcut appeared to work, then Document View came back on the next
+	// restart, and the only real off-switch lived inside Document View's own
+	// settings page. Someone who pressed the shortcut to escape landed on the
+	// standard site with no control anywhere that could undo it.
+	// "Browse Standard Site Temporarily" is still pause(), and is still the
+	// right thing when you want to come back.
+	//
+	// Both directions announce: this is a keystroke away from a preference
+	// screen-reader users depend on, so a mis-press must not be silent.
 	function handleGlobalKeydown(event: KeyboardEvent) {
 		if (
 			event.ctrlKey &&
@@ -76,11 +94,13 @@
 		) {
 			event.preventDefault()
 			if (showAccessibleShell || showAccessibleLogin) {
-				pause()
+				disableAccessibility()
+				announce("Document View turned off.")
 				if (socketsInitialized)
 					goto(mapToStandardRoute(page.url.pathname))
 			} else {
 				enableAccessibility()
+				announce("Document View turned on.")
 			}
 		}
 	}
@@ -137,10 +157,56 @@
 		socketsInitialized = true
 	}
 
+	/**
+	 * loadSocketsClient() rethrows on any failure — /api/sockets-endpoint being
+	 * unreachable, a connect_error (blocked port, CORS, TLS), or its own 10s
+	 * connection timeout. This call had no catch and the template had no third
+	 * branch, so every one of those produced a silently blank page plus an
+	 * unhandled rejection. ConnectionTimeoutModal can't cover it either: that
+	 * lives inside <Layout>, which only renders once socketsInitialized is
+	 * true.
+	 *
+	 * The most likely cause in a real deployment is a reverse proxy or tunnel
+	 * that forwards the web port but not the separate realtime port, so the
+	 * message below names that explicitly rather than saying "something went
+	 * wrong".
+	 */
+	async function startup() {
+		startupError = null
+		const spinnerTimer = setTimeout(() => (showStartupSpinner = true), 600)
+		try {
+			await initializeSocketsIfAllowed()
+		} catch (error) {
+			console.error("Startup failed:", error)
+			startupError =
+				error instanceof Error ? error.message : String(error)
+		} finally {
+			clearTimeout(spinnerTimer)
+			showStartupSpinner = false
+		}
+	}
+
+	async function retryStartup() {
+		if (retrying) return
+		retrying = true
+		try {
+			await startup()
+		} finally {
+			retrying = false
+		}
+	}
+
 	if (browser) {
-		accessibilityModeStore.enabled = isAccessibilityEnabled()
+		const persistedPreference = isAccessibilityEnabled()
+		accessibilityModeStore.enabled = persistedPreference
+		// Whether the preference is *stored*, as opposed to merely active for
+		// this load — the two settings pages show different controls based on
+		// it. Read here rather than in each consumer so there's one source of
+		// truth, and set before the /document-view child layout's own init
+		// runs (parent script bodies run first), which only flips `enabled`.
+		accessibilityModeStore.persisted = persistedPreference
 		pausedStore.paused = isPaused()
-		initializeSocketsIfAllowed()
+		startup()
 	}
 </script>
 
@@ -171,6 +237,57 @@
 	{:else}
 		<LoginForm />
 	{/if}
+{:else if showStartupSpinner}
+	<div
+		class="flex min-h-screen items-center justify-center p-6"
+		style="background:#1a1a22;color:#e8e8ef;"
+		aria-live="polite"
+	>
+		<p class="text-sm opacity-70">Connecting to Serene Pub…</p>
+	</div>
+{:else if startupError}
+	<!-- Deliberately plain markup with inline colors: this renders before the
+	     app shell exists, and on a theme-load failure it still has to be
+	     readable. -->
+	<div
+		class="flex min-h-screen items-center justify-center p-6"
+		style="background:#1a1a22;color:#e8e8ef;"
+		role="alert"
+	>
+		<div class="w-full max-w-lg space-y-4 text-center">
+			<h1 class="text-2xl font-bold">Can't reach Serene Pub</h1>
+			<p class="text-sm opacity-90">
+				The page loaded, but the realtime connection Serene Pub needs
+				for chats and live updates could not be established.
+			</p>
+			<p class="text-sm opacity-90">
+				Serene Pub runs a second server for realtime updates, separate
+				from the web server. If you're behind a reverse proxy, tunnel,
+				or Docker port mapping, check that it forwards that server too —
+				this is the most common cause.
+			</p>
+			<p class="font-mono text-xs opacity-70">{startupError}</p>
+			<div class="flex flex-wrap items-center justify-center gap-3 pt-2">
+				<button
+					type="button"
+					class="rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50"
+					style="background:#4f46e5;color:#fff;"
+					onclick={retryStartup}
+					disabled={retrying}
+				>
+					{retrying ? "Retrying…" : "Retry"}
+				</button>
+				<a
+					class="rounded-lg px-4 py-2 text-sm font-medium underline"
+					href="https://github.com/doolijb/serene-pub/blob/main/HOSTING.md"
+					target="_blank"
+					rel="noopener noreferrer"
+				>
+					Hosting &amp; proxy setup
+				</a>
+			</div>
+		</div>
+	</div>
 {/if}
 {#if page.data?.isNewerReleaseAvailable && showUpdateBar}
 	<div

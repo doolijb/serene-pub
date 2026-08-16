@@ -41,6 +41,25 @@
 	let ollamaSettingsCtx: OllamaSettingsCtx = $state(
 		getContext("ollamaSettingsCtx")
 	)
+	const panelsCtx: PanelsCtx = getContext("panelsCtx")
+
+	// Setup-wizard hand-off. The wizard sets digest.tutorial before opening this
+	// panel, so a truthy flag means "the user just clicked 'Ollama Manager' on
+	// the current wizard step" — nothing else sets it. On a fresh install the
+	// Installed tab is empty, so landing there shows a dead end; point at
+	// Available instead and glow the tab so the jump is explained rather than
+	// silent.
+	//
+	// The flag deliberately survives the tab switch. Unlike the other sidebars,
+	// where it marks a single button, here it has to stay lit across
+	// panel → Available tab → pick a model → recommended quantization. It is
+	// cleared where that path ends, when a download actually starts.
+	let isTutorial = $derived(!!panelsCtx?.digest?.tutorial)
+	let installedCount = $state<number | null>(null)
+	let hasNoModels = $derived(installedCount === 0)
+	// One-shot: re-running after the user has chosen a tab would drag them back.
+	let didAutoOpenAvailable = $state(false)
+
 	let isSavingBaseUrl = $state(false)
 	let baseUrlField = $state("")
 	let showUnsavedChangesModal = $state(false)
@@ -55,12 +74,21 @@
 
 	// Handle tab switching
 	function handleTabChange(e: ValueChangeDetails): void {
+		// A deliberate choice outranks the wizard's suggestion from here on.
+		didAutoOpenAvailable = true
 		activeTab = e.value as
 			| "installed"
 			| "available"
 			| "downloads"
 			| "settings"
 	}
+
+	$effect(() => {
+		if (!isTutorial || didAutoOpenAvailable) return
+		if (!hasNoModels) return
+		didAutoOpenAvailable = true
+		activeTab = "available"
+	})
 
 	// Handle download start - switch to downloads tab
 	function handleDownloadStart(modelName: string) {
@@ -92,6 +120,18 @@
 	})
 
 	onMount(() => {
+		// Only the tabs fetch the model list, and only once they're rendered —
+		// which is exactly backwards for deciding which tab to open. Ask here
+		// too, but only during the wizard hand-off, so the normal path keeps
+		// its current single request.
+		socket.on(
+			"ollama:modelsList",
+			(message: Sockets.Ollama.ModelsList.Response) => {
+				installedCount = message.models?.length ?? 0
+			}
+		)
+		if (panelsCtx?.digest?.tutorial) socket.emit("ollama:modelsList", {})
+
 		socket.on(
 			"ollama:version",
 			(message: Sockets.Ollama.Version.Response) => {
@@ -177,7 +217,9 @@
 <div class="flex h-full flex-col p-4">
 	<!-- Check if Ollama Manager is enabled -->
 	{#if !ollamaSettingsCtx.settings?.ollamaManagerEnabled}
-		<div class="flex flex-1 items-center justify-center p-4">
+		<!-- No p-4 here: the root above already applies it, so this was insetting
+		     the content by 32px against every other sidebar's 16px. -->
+		<div class="flex flex-1 items-center justify-center">
 			<div class="text-center">
 				<Icons.AlertCircle
 					class="text-warning-500 mx-auto mb-4 h-12 w-12"
@@ -192,7 +234,7 @@
 		</div>
 	{:else if !isConnected}
 		<!-- Connection setup -->
-		<div class="mt-10 flex items-center justify-center p-4">
+		<div class="mt-10 flex items-center justify-center">
 			<div class="w-full max-w-md space-y-6">
 				<div class="text-center">
 					<OllamaIcon
@@ -296,6 +338,9 @@
 						value="available"
 						label="Available"
 						icon={Icons.Search}
+						class={isTutorial && hasNoModels
+							? "tutorial-highlight"
+							: ""}
 					/>
 					<PanelTab
 						value="downloads"

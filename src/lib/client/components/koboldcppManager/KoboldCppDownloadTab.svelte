@@ -22,6 +22,13 @@
 	let koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(
 		getContext("koboldCppSettingsCtx")
 	)
+	const panelsCtx: PanelsCtx = getContext("panelsCtx")
+
+	/** Q4_K_M is the balance this modal already recommends in prose; during the
+	 * wizard hand-off it also gets the glow, so a first-time user isn't left
+	 * comparing quantization names they have no basis to choose between. */
+	const isRecommendedQuant = (label: string) => label.includes("Q4_K_M")
+	let isTutorial = $derived(!!panelsCtx?.digest?.tutorial)
 
 	let modelsDir = $state(
 		koboldCppSettingsCtx.settings?.koboldCppManagerModelsDir ?? ""
@@ -77,6 +84,11 @@
 	) {
 		showQuantModal = false
 		selectedModel = null
+		// End of the wizard's hand-off path (panel → Available → model →
+		// quantization). Cleared here rather than on the first click, because
+		// the cue has to survive every step in between — unlike the other
+		// sidebars, where it marks a single button.
+		if (panelsCtx?.digest?.tutorial) panelsCtx.digest.tutorial = false
 		socket.emit("koboldcpp:downloadModel", {
 			modelName: model.name,
 			filename: opt.filename,
@@ -153,7 +165,7 @@
 </script>
 
 {#if !isLocal}
-	<div class="p-4">
+	<div class="py-4">
 		<div
 			class="bg-warning-100 dark:bg-warning-900 border-warning-300 dark:border-warning-700 rounded-lg border p-4"
 		>
@@ -178,7 +190,7 @@
 		</div>
 	</div>
 {:else if !modelsDir}
-	<div class="p-4">
+	<div class="py-4">
 		<div class="bg-surface-100-800 rounded-lg border p-6 text-center">
 			<Icons.FolderOpen
 				class="text-muted-foreground mx-auto mb-3 h-10 w-10 opacity-50"
@@ -192,7 +204,7 @@
 	</div>
 {:else}
 	<!-- Toolbar -->
-	<div class="flex flex-col gap-2 px-4 py-2">
+	<div class="flex flex-col gap-2 py-2">
 		<select
 			aria-label="Model search source"
 			class="select bg-background border-muted w-full rounded border"
@@ -228,7 +240,7 @@
 	</div>
 
 	<!-- Results -->
-	<div class="space-y-3 p-4">
+	<div class="space-y-3 py-4">
 		{#if selectedSource === SOURCE_RECOMMENDED}
 			{#if isLoadingRecommended}
 				<div class="p-6 text-center">
@@ -493,13 +505,17 @@
 			<div class="max-h-80 space-y-2 overflow-y-auto">
 				{#each selectedModel.pullOptions as opt}
 					<div
-						class="card bg-surface-200-800 flex items-center justify-between p-3"
+						class="card bg-surface-200-800 flex items-center justify-between p-3 {isTutorial &&
+						isRecommendedQuant(opt.label)
+							? 'tutorial-highlight'
+							: ''}"
+						style="--tutorial-glow-radius: var(--radius-container)"
 					>
 						<div class="flex items-center gap-2">
 							<span class="font-mono text-sm font-medium">
 								{opt.label}
 							</span>
-							{#if opt.label.includes("Q4_K_M")}
+							{#if isRecommendedQuant(opt.label)}
 								<span
 									class="bg-warning-500 rounded px-1.5 py-0.5 text-xs text-white"
 								>

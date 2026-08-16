@@ -160,7 +160,7 @@
 	})
 </script>
 
-<div class="space-y-6 p-4">
+<div class="space-y-6 py-4">
 	<!-- Version Information -->
 	<div class="mt-8 text-center">
 		<OllamaIcon class="text-muted-foreground mx-auto mb-4 h-16 w-16" />

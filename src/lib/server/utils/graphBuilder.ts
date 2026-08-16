@@ -1169,6 +1169,17 @@ export async function buildGraphFromScenes(
 				contextConfig,
 				promptConfig,
 				knownCast: seedCastEntries,
+				// Without this the Debug pane silently omits every Pass 1 call,
+				// which is not a cosmetic gap: during an incident these were the
+				// only calls still succeeding, and their absence from the trace
+				// led to "no extraction calls were made at all" — the opposite of
+				// what had happened. Anything that talks to a model during a
+				// build has to show up here.
+				onLlmCall: (entry) =>
+					onLlmCall?.({
+						...entry,
+						label: `Character Extraction · ${sceneLabel}`
+					}),
 				signal
 			})
 			// Re-check after the call: an aborted extraction now throws

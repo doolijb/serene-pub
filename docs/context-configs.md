@@ -66,10 +66,10 @@ Story history:
 ```
 {{/if}}
 
-{{#if narrativeGraph}}
-Story relationships:
+{{#if speakerRelationships}}
+Your relationships:
 ```json
-{{{narrativeGraph}}}
+{{{speakerRelationships}}}
 ```
 {{/if}}
 
@@ -115,7 +115,9 @@ Example dialogue:
 
 Available variables:
 
-- **`currentDate`**, **`instructions`** (from the active Chat Prompt), **`characters`** and **`personas`** (each rendered as JSON), **`scenario`**, **`worldLore`**, **`history`**, and **`narrativeGraph`** — all optional (wrap them in `{{#if ...}}` since they may be empty).
+- **`currentDate`**, **`instructions`** (from the active Chat Prompt), **`characters`** and **`personas`** (each rendered as JSON), **`scenario`**, **`worldLore`**, **`history`**, and **`speakerRelationships`** — all optional (wrap them in `{{#if ...}}` since they may be empty).
+- **`speakerRelationships`** is built fresh for whoever is speaking: their own outgoing relationships, relationships other cast members in the chat have pointed at them, and any bindings marked **legendary** (the one layer that also carries a binding's Summary). It is assembled independently of the infill engines below and is included on every generation that has a lorebook with a bound speaker.
+- **`narrativeGraph`** is a legacy variable that still parses but is **currently switched off at the source** — it always renders empty, so a `{{#if narrativeGraph}}` block never outputs anything. `speakerRelationships` replaced it. If you cloned the default template before that change, your relationships block is silently empty and should be swapped for `speakerRelationships`.
 - **`chatMessages`** — an array iterated with `{{#each ... as |chatMessage msgIndex|}}` (the `msgIndex` block param is what lets the post-history block below find its target position), each entry exposing `role`, `name`, and `message`.
 - **`postHistory`** — see below.
 
@@ -137,7 +139,7 @@ The template checks `(and (eq msgIndex targetIndex) hasContent)` inside the loop
 
 ## Context Infill Engines
 
-Deciding *which* lorebook entries and *which* older chat messages actually make it into `worldLore`, `history`, `narrativeGraph`, and each character's lore (see below) — out of everything that could — is the job of one of two Context Infill Engines. Both fill the same template variables in the same shapes; they differ only in _how_ they pick what qualifies.
+Deciding *which* lorebook entries and *which* older chat messages actually make it into `worldLore`, `history`, and each character's lore (see below) — out of everything that could — is the job of one of two Context Infill Engines. Both fill the same template variables in the same shapes; they differ only in _how_ they pick what qualifies. (`speakerRelationships` is not one of their outputs — it's built separately from the speaker's own graph bindings and doesn't change with the engine in use.)
 
 ### Which engine runs
 
@@ -160,13 +162,13 @@ Used whenever vectorization is enabled and ready. Selects by embedding similarit
 
 - The most recent 10 messages in a chat are always included, never subject to either engine's selection.
 - A **Pinned** lorebook entry is always included, bypassing both keyword matching and semantic scoring entirely.
-- `{{narrativeGraph}}` is always the same JSON shape either way, and the `postHistory` object (above) is computed identically regardless of which engine selected the surrounding content.
+- `{{{speakerRelationships}}}` is identical either way — it's built outside both engines — and the `postHistory` object (above) is computed identically regardless of which engine selected the surrounding content.
 - Within `{{{worldLore}}}` and `{{{history}}}`, entries are ordered by relevance (highest first), not by an entry's position or date in the lorebook — which entry ends up first can change from one generation to the next as the conversation moves. **Character Lore has no top-level template variable of its own** — qualifying entries are attached directly onto their bound character's own object inside `{{{characters}}}`, under an `"extra lore"` key, rather than appearing as a separate `{{characterLore}}` variable.
 - Under Keyword mode specifically, each content type has a hard count cap in addition to the token budget (see above); RAG mode uses its own per-type token budgets instead of a fixed entry count. Either way, once the model's context window is the tighter constraint, content simply stops being added for that generation — see [Sampling Configs](./connections.md#sampling-configs) for how Context Tokens sets that limit.
 
 ## Why character, persona, and lore data is JSON, not prose
 
-Notice that `characters`, `personas`, `worldLore`, `history`, and `narrativeGraph` are all fenced as ` ```json ` blocks, while `instructions` and `scenario` stay wrapped in plain `"""` prose fences, and the post-history reminder fields (`instructions`, `charInstructions`, `exampleDialogue` inside `postHistory`) use ` ```text ` fences. That split is deliberate: the JSON-fenced fields are _facts_ (who someone is, what they know, what happened), and the prose/text-fenced fields are _directives_ (how to write, what tone to take, what's happening right now) — the template keeps those two kinds of content visibly distinct rather than blending everything into one undifferentiated paragraph.
+Notice that `characters`, `personas`, `worldLore`, `history`, and `speakerRelationships` are all fenced as ` ```json ` blocks, while `instructions` and `scenario` stay wrapped in plain `"""` prose fences, and the post-history reminder fields (`instructions`, `charInstructions`, `exampleDialogue` inside `postHistory`) use ` ```text ` fences. That split is deliberate: the JSON-fenced fields are _facts_ (who someone is, what they know, what happened), and the prose/text-fenced fields are _directives_ (how to write, what tone to take, what's happening right now) — the template keeps those two kinds of content visibly distinct rather than blending everything into one undifferentiated paragraph.
 
 The reasoning behind serializing the factual side as JSON specifically:
 

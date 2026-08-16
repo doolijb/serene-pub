@@ -15,6 +15,15 @@
  * `ws` rule below is bounded on purpose (at most one newline plus limited
  * indent) for that reason.
  *
+ * That rule covers generated grammars too, and `jsonSchemaToGbnf` next door is
+ * the proof: a schema→GBNF compiler is a hand-authored grammar with extra
+ * steps. It reused these primitives verbatim and still hung KoboldCPP, because
+ * the *structure* it wrapped them in emitted `ws` after values that already
+ * owned one — ambiguous whitespace, exploding parse state, a pegged core that
+ * reads as a dead subprocess. Copying the primitives is not the safeguard;
+ * matching this grammar's whitespace discipline is. See the WHITESPACE
+ * OWNERSHIP block there.
+ *
  * Used by the adapters whose providers accept GBNF — KoboldCPP and llama.cpp.
  * Providers with a native JSON mode (Ollama's `format`, OpenAI's
  * `response_format`) use that instead and never see this string.

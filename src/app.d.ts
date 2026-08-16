@@ -230,6 +230,41 @@ declare global {
 		setReviewSceneId: (id: number | null) => void
 	}
 
+	interface ChatSummarizeState {
+		activityId: string
+		userId: number
+		chatId: number
+		chatLabel?: string
+		loreType: "world" | "character"
+		lorebookId: number
+		topic?: string
+		status: "running" | "review" | "error"
+		phase?: "drafting" | "synthesizing" | "naming" | "extracting"
+		batch?: number
+		totalBatches?: number
+		errorMessage?: string
+		pendingResult?: {
+			content: string
+			name?: string
+			raw: string
+			lorebookBindingId?: number | null
+		}
+		startedAt: string
+	}
+
+	interface ChatSummarizesCtx {
+		activities: ChatSummarizeState[]
+		/**
+		 * Set by the activity sidebar so the chat page reopens the summarize
+		 * modal for that run. Carries the chat too, because unlike the scene and
+		 * compile flows this one lives on a route rather than a panel — the
+		 * sidebar has to navigate before anything can reopen.
+		 */
+		reviewActivityId: string | null
+		dismiss: (activityId: string) => void
+		setReviewActivityId: (id: string | null) => void
+	}
+
 	interface CompileEntryState {
 		activityId: string
 		userId: number

@@ -23,6 +23,23 @@ export interface ModelStatus {
 	 * signal, distinct from a timeout/non-200 (which just means "not
 	 * answering yet", the expected state throughout a slow model load). */
 	refused: boolean
+	/**
+	 * Whether this answer is trustworthy as a statement about what is loaded.
+	 *
+	 * `modelName: null` has three very different causes and callers must not
+	 * treat them alike:
+	 *   - koboldcpp answered "nothing loaded"  → determined, act on it
+	 *   - the OS refused the connection        → determined, the process is gone
+	 *   - the request timed out or 5xx'd       → NOT determined, we simply
+	 *     could not ask, which is the normal state while a large model is
+	 *     loading or a long generation is holding the single worker
+	 *
+	 * Collapsing the third case into "no model is loaded" is what produced a
+	 * reload loop: a busy instance looked unloaded, so the caller reloaded it,
+	 * which interrupted the very load it was waiting on, forever. See
+	 * modelManager.ensureModelLoaded.
+	 */
+	determined: boolean
 }
 
 /** Single-request combination of "what model is loaded" and "did the OS
@@ -36,13 +53,18 @@ async function fetchModelStatus(
 		const resp = await fetch(`${baseUrl}/api/v1/model`, {
 			signal: AbortSignal.timeout(timeoutMs)
 		})
-		if (!resp.ok) return { modelName: null, refused: false }
+		// A non-OK response is ambiguous — koboldcpp serves errors while it is
+		// mid-swap — so it is explicitly not a statement that nothing is loaded.
+		if (!resp.ok)
+			return { modelName: null, refused: false, determined: false }
 		const data = await resp.json()
 		const result: string = data.result ?? ""
-		return { modelName: result || null, refused: false }
+		return { modelName: result || null, refused: false, determined: true }
 	} catch (err) {
 		const cause = (err as { cause?: { code?: string } })?.cause
-		return { modelName: null, refused: cause?.code === "ECONNREFUSED" }
+		const refused = cause?.code === "ECONNREFUSED"
+		// Refusal is definitive; a timeout or abort tells us nothing.
+		return { modelName: null, refused, determined: refused }
 	}
 }
 
@@ -52,6 +74,18 @@ export async function fetchCurrentModelName(
 	timeoutMs = 5000
 ): Promise<string | null> {
 	return (await fetchModelStatus(baseUrl, timeoutMs)).modelName
+}
+
+/**
+ * Like {@link fetchCurrentModelName} but keeps the `determined` flag, so a
+ * caller deciding whether to *reload* can tell "nothing is loaded" apart from
+ * "I could not ask". Prefer this for any decision with a side effect.
+ */
+export async function fetchCurrentModelStatus(
+	baseUrl: string,
+	timeoutMs = 5000
+): Promise<ModelStatus> {
+	return fetchModelStatus(baseUrl, timeoutMs)
 }
 
 /** Model name plus whether the process is confirmed dead (connection

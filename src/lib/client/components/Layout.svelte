@@ -256,6 +256,19 @@
 			sceneSummarizesCtx.reviewSceneId = id
 		}
 	})
+	let chatSummarizesCtx: ChatSummarizesCtx = $state({
+		activities: [],
+		reviewActivityId: null,
+		dismiss: (activityId: string) => {
+			socket.emit("activity:dismiss", { id: activityId })
+			chatSummarizesCtx.activities = chatSummarizesCtx.activities.filter(
+				(a) => a.activityId !== activityId
+			)
+		},
+		setReviewActivityId: (id: string | null) => {
+			chatSummarizesCtx.reviewActivityId = id
+		}
+	})
 	let compileEntriesCtx: CompileEntriesCtx = $state({
 		activities: [],
 		reviewHistoryEntryId: null,
@@ -577,6 +590,7 @@
 		setContext("openChatCtx", openChatCtx)
 		setContext("graphBuildsCtx", graphBuildsCtx)
 		setContext("sceneSummarizesCtx", sceneSummarizesCtx)
+		setContext("chatSummarizesCtx", chatSummarizesCtx)
 		setContext("compileEntriesCtx", compileEntriesCtx)
 
 		// Check system settings first before connecting to sockets
@@ -740,6 +754,29 @@
 				pendingResult: a.pendingResult,
 				startedAt: a.startedAt
 			}))
+
+			// Chat-side world/character lore summarize activities
+			const chatSummarizeActivities = activities.filter(
+				(a: any) => a.kind === "chat_summarize"
+			)
+			chatSummarizesCtx.activities = chatSummarizeActivities.map(
+				(a: any) => ({
+					activityId: a.id,
+					userId: a.userId,
+					chatId: a.chatId,
+					chatLabel: a.chatLabel,
+					loreType: a.loreType,
+					lorebookId: a.lorebookId,
+					topic: a.topic,
+					status: a.status,
+					phase: a.phase,
+					batch: a.batch,
+					totalBatches: a.totalBatches,
+					errorMessage: a.errorMessage,
+					pendingResult: a.pendingResult,
+					startedAt: a.startedAt
+				})
+			)
 
 			// History entry compile activities
 			const compileActivities = activities.filter(
@@ -1163,31 +1200,47 @@
 					>
 						Serene Pub
 					</span>
+					<!-- Matches the hamburger that opened it: square 44px target,
+					     and it had no accessible name at all before. -->
 					<button
 						type="button"
+						class="btn hover:preset-tonal-surface text-foreground flex size-11 items-center justify-center p-0 [&>svg]:size-6"
+						aria-label="Close navigation menu"
 						onclick={(e) => {
 							e.stopPropagation()
 							panelsCtx.isMobileMenuOpen = false
 						}}
 					>
-						<Icons.X class="text-foreground h-6 w-6" />
+						<Icons.X aria-hidden="true" />
 					</button>
 				</div>
-				<div class="flex flex-col gap-4 overflow-y-auto p-4 text-2xl">
+				<!-- Density: rows carry their own padding instead of the list
+				     putting a gap between them. `gap-4 text-2xl` spent 16px
+				     between every pair and still left a 36px row with
+				     `padding: 0`, so the hit area was only the text line — under
+				     the 44px/48dp guideline while costing the most space.
+				     Folding that spacing into the rows buys a real 44px target
+				     AND takes the list from 697px to ~570px, which is what lets
+				     all 13 items fit a 667px phone without scrolling. Text drops
+				     25.6px -> 16px so it stops dwarfing the 20px icons.
+				     `[&>svg]:size-5` rather than `h-5 w-5` on the icon itself:
+				     `btn` sizes child svg from --btn-size, and that rule would
+				     otherwise win and shrink them. -->
+				<div class="flex flex-col overflow-y-auto p-2">
 					{#each panelsCtx.getOrderedEntries( { ...panelsCtx.rightNav, ...panelsCtx.leftNav }, [...panelsCtx.rightNavOrder, ...panelsCtx.leftNavOrder] ) as [key, item]}
 						<button
-							class="btn-ghost flex items-center gap-2"
+							class="btn hover:preset-filled-surface-200-800 text-foreground flex min-h-11 w-full items-center justify-start gap-3 rounded-lg px-3 text-base [&>svg]:size-5"
 							title={item.title}
 							onclick={() => handleMobilePanelClick(key)}
 						>
 							{#if item.imgSrc}
 								<span
-									class="text-foreground block h-5 w-5"
+									class="block size-5 shrink-0"
 									style="background-color: currentColor; mask: url({item.imgSrc}) no-repeat center / contain; -webkit-mask: url({item.imgSrc}) no-repeat center / contain;"
 									aria-hidden="true"
 								></span>
 							{:else}
-								<item.icon class="text-foreground h-5 w-5" />
+								<item.icon aria-hidden="true" />
 							{/if}
 							<span>{item.title}</span>
 						</button>

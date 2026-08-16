@@ -52,6 +52,10 @@
 	async function handleSubmit(event: SubmitEvent) {
 		event.preventDefault()
 
+		// The submit button is disabled while loading, but a browser can still
+		// fire implicit submission from a focused field, so guard here too.
+		if (isLoading) return
+
 		if (!validateForm()) {
 			return
 		}
@@ -77,6 +81,7 @@
 					title: "Login Failed",
 					description: data.error || "Invalid username or passphrase"
 				})
+				isLoading = false
 				return
 			}
 
@@ -85,7 +90,15 @@
 				description: "Welcome back!"
 			})
 
-			// Refresh authentication to load user context
+			// Refresh authentication to load user context.
+			//
+			// isLoading is deliberately NOT cleared on this path, and there is
+			// no `finally` for the same reason. refreshAuthAfterLogin() returns
+			// as soon as it has *scheduled* the reload, which it delays by a
+			// second so the success toast stays readable — clearing the flag
+			// here re-enabled every field and the submit button for that whole
+			// window, after the login had already succeeded. Staying disabled
+			// until the page actually swaps is the honest state.
 			refreshAuthAfterLogin()
 		} catch (error) {
 			console.error("Login error:", error)
@@ -93,7 +106,6 @@
 				title: "Login Error",
 				description: "An unexpected error occurred. Please try again."
 			})
-		} finally {
 			isLoading = false
 		}
 	}
@@ -130,7 +142,13 @@
 				</p>
 			</div>
 
-			<form class="space-y-6" onsubmit={handleSubmit}>
+			<!-- aria-busy so screen-reader users are told the form is working
+			     rather than just finding every control gone dead. -->
+			<form
+				class="space-y-6"
+				onsubmit={handleSubmit}
+				aria-busy={isLoading}
+			>
 				<div class="space-y-4">
 					<!-- Username Field -->
 					<div>
@@ -260,10 +278,14 @@
 				<p class="text-muted-foreground text-xs">
 					Need help? Contact your administrator.
 				</p>
+				<!-- Also disabled mid-submit: this navigates to a different shell,
+				     and a successful login is already on its way to reloading
+				     the page. -->
 				<button
 					type="button"
-					class="text-muted-foreground hover:text-foreground mt-3 inline-flex items-center gap-1 text-xs underline"
+					class="text-muted-foreground hover:text-foreground mt-3 inline-flex items-center gap-1 text-xs underline disabled:cursor-not-allowed disabled:opacity-50"
 					onclick={enableAccessibility}
+					disabled={isLoading}
 				>
 					<Icons.Accessibility
 						class="h-3.5 w-3.5"

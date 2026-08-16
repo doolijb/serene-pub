@@ -17,6 +17,13 @@ export interface DocMeta {
 	html: string
 }
 
+/**
+ * Reading order for the docs index. Every file under /docs must appear here —
+ * `order` below is `DOC_ORDER.indexOf(slug)`, so an unlisted doc gets -1 and
+ * sorts ahead of "getting-started" instead of falling to the end. That is how
+ * "android" and "troubleshooting" ended up as the first two cards a new user
+ * saw. The docsIndex test asserts both directions of this mapping.
+ */
 export const DOC_ORDER: string[] = [
 	"getting-started",
 	"characters",
@@ -34,6 +41,8 @@ export const DOC_ORDER: string[] = [
 	"document-view",
 	"system-settings",
 	"importing-from-sillytavern",
+	"troubleshooting",
+	"android",
 	"environment-variables"
 ]
 

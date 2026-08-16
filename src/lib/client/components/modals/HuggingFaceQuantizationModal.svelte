@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
+	import { getContext } from "svelte"
 
 	interface Props {
 		open: boolean
@@ -22,6 +23,14 @@
 		onClose,
 		onDownload
 	}: Props = $props()
+
+	const panelsCtx: PanelsCtx = getContext("panelsCtx")
+
+	/** Q4_K_M already carries a "Recommended" badge here; during the setup
+	 * wizard's hand-off it also gets the glow, so a first-time user isn't left
+	 * comparing quantization names they have no basis to choose between. */
+	const isRecommendedQuant = (label: string) => label.includes("Q4_K_M")
+	let isTutorial = $derived(!!panelsCtx?.digest?.tutorial)
 
 	// Helper function to extract numeric value from quantization for sorting
 	function getQuantizationSortValue(label: string | undefined): number {
@@ -101,7 +110,13 @@
 					{:else}
 						<div class="max-h-96 space-y-3 overflow-y-auto">
 							{#each sortedPullOptions as pullOption, index}
-								<div class="card bg-surface-200-800 p-4">
+								<div
+									class="card bg-surface-200-800 p-4 {isTutorial &&
+									isRecommendedQuant(pullOption.label ?? '')
+										? 'tutorial-highlight'
+										: ''}"
+									style="--tutorial-glow-radius: var(--radius-container)"
+								>
 									<div
 										class="flex items-center justify-between"
 									>
@@ -129,7 +144,7 @@
 											</span>
 										{/if} -->
 
-												{#if pullOption.label.includes("Q4_K_M")}
+												{#if isRecommendedQuant(pullOption.label ?? "")}
 													<span
 														class="badge bg-warning-500 rounded px-2 py-1 text-xs text-white"
 													>

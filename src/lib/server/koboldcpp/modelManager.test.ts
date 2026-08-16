@@ -7,10 +7,13 @@ import { writeFile } from "fs/promises"
 // from each other.
 
 const fetchCurrentModelNameMock = vi.fn()
+const fetchCurrentModelStatusMock = vi.fn()
 const fetchModelStatusForPollMock = vi.fn()
 vi.mock("./kcppHttp", () => ({
 	fetchCurrentModelName: (...args: any[]) =>
 		fetchCurrentModelNameMock(...args),
+	fetchCurrentModelStatus: (...args: any[]) =>
+		fetchCurrentModelStatusMock(...args),
 	fetchModelStatusForPoll: (...args: any[]) =>
 		fetchModelStatusForPollMock(...args)
 }))
@@ -48,7 +51,16 @@ describe("ensureModelLoaded", () => {
 	beforeEach(() => {
 		vi.useFakeTimers()
 		fetchCurrentModelNameMock.mockReset()
+		fetchCurrentModelStatusMock.mockReset()
 		fetchModelStatusForPollMock.mockReset()
+		// Default: report whatever the name mock says as a *definitive* answer.
+		// That reproduces the pre-`determined` semantics, so tests that only
+		// care about which model is loaded keep driving the name mock alone.
+		fetchCurrentModelStatusMock.mockImplementation(async (...args: any[]) => ({
+			modelName: await fetchCurrentModelNameMock(...args),
+			refused: false,
+			determined: true
+		}))
 		fetchMock = vi.fn()
 		vi.stubGlobal("fetch", fetchMock)
 	})
@@ -97,6 +109,109 @@ describe("ensureModelLoaded", () => {
 		// Second call, identical config — should skip the reload entirely.
 		await ensureModelLoaded(baseOpts({ contextSize: 4096 }))
 		expect(fetchMock).not.toHaveBeenCalled()
+	})
+
+	// Regression: a busy koboldcpp (mid-load, or holding its single worker for
+	// a long generation) cannot answer /api/v1/model. Reading that silence as
+	// "the wrong model is loaded" made us reload, which aborted the in-flight
+	// load and guaranteed the next probe was also unanswered — a livelock that
+	// burned a 15-minute graph build for 39 reloads and 2 generations.
+	describe("when koboldcpp cannot answer whether a model is loaded", () => {
+		const undetermined = {
+			modelName: null,
+			refused: false,
+			determined: false
+		}
+
+		test("trusts its own record instead of reloading", async () => {
+			const { ensureModelLoaded } = await freshImport()
+			fetchCurrentModelNameMock.mockResolvedValue("some-model")
+			fetchMock.mockResolvedValue({
+				ok: true,
+				json: async () => ({ success: true })
+			})
+			fetchModelStatusForPollMock.mockResolvedValue({
+				modelName: "some-model",
+				refused: false
+			})
+
+			// First call establishes loadedSignature while the box is responsive.
+			await ensureModelLoaded(baseOpts({ contextSize: 4096 }))
+			fetchMock.mockClear()
+
+			// Now it goes quiet — busy loading or generating.
+			fetchCurrentModelStatusMock.mockResolvedValue(undetermined)
+			await ensureModelLoaded(baseOpts({ contextSize: 4096 }))
+
+			expect(fetchMock).not.toHaveBeenCalled()
+		})
+
+		test("still reloads if it has no record of loading this model", async () => {
+			const { ensureModelLoaded } = await freshImport()
+			fetchCurrentModelStatusMock.mockResolvedValue(undetermined)
+			fetchMock.mockResolvedValue({
+				ok: true,
+				json: async () => ({ success: true })
+			})
+			fetchModelStatusForPollMock.mockResolvedValue({
+				modelName: "some-model",
+				refused: false
+			})
+
+			await ensureModelLoaded(baseOpts({ contextSize: 4096 }))
+
+			expect(fetchMock).toHaveBeenCalledWith(
+				"http://localhost:5001/api/admin/reload_config",
+				expect.objectContaining({ method: "POST" })
+			)
+		})
+
+		test("still reloads if the request now needs a bigger context than it loaded", async () => {
+			const { ensureModelLoaded } = await freshImport()
+			fetchCurrentModelNameMock.mockResolvedValue("some-model")
+			fetchMock.mockResolvedValue({
+				ok: true,
+				json: async () => ({ success: true })
+			})
+			fetchModelStatusForPollMock.mockResolvedValue({
+				modelName: "some-model",
+				refused: false
+			})
+
+			await ensureModelLoaded(baseOpts({ contextSize: 4096 }))
+			fetchMock.mockClear()
+
+			fetchCurrentModelStatusMock.mockResolvedValue(undetermined)
+			await ensureModelLoaded(baseOpts({ contextSize: 8192 }))
+
+			expect(fetchMock).toHaveBeenCalled()
+		})
+
+		test("a refused connection is definitive, so it still reloads", async () => {
+			const { ensureModelLoaded } = await freshImport()
+			fetchCurrentModelNameMock.mockResolvedValue("some-model")
+			fetchMock.mockResolvedValue({
+				ok: true,
+				json: async () => ({ success: true })
+			})
+			fetchModelStatusForPollMock.mockResolvedValue({
+				modelName: "some-model",
+				refused: false
+			})
+
+			await ensureModelLoaded(baseOpts({ contextSize: 4096 }))
+			fetchMock.mockClear()
+
+			// ECONNREFUSED means the process is genuinely gone — not ambiguous.
+			fetchCurrentModelStatusMock.mockResolvedValue({
+				modelName: null,
+				refused: true,
+				determined: true
+			})
+			await ensureModelLoaded(baseOpts({ contextSize: 4096 }))
+
+			expect(fetchMock).toHaveBeenCalled()
+		})
 	})
 
 	test("reloads when the previously loaded context size is smaller than what's now requested", async () => {

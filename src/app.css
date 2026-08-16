@@ -164,6 +164,127 @@
 	@apply flex items-center gap-2 text-lg font-bold;
 }
 
+/* --- Chat message header controls -----------------------------------------
+
+   One shared size for every control in a chat message header: the "..."
+   trigger, Stop Generation, Cancel/Save while editing, the swipe arrows and
+   the summarization select buttons. Before this there were five different
+   boxes (38x38, ~140x30, 38x30, 70x30 and 32x32 round), so the header changed
+   height and the buttons visibly jumped every time a message moved between
+   normal / generating / editing / summarization.
+
+   Icon sizing lives here rather than at the call site because Skeleton's `btn`
+   utility contains `& > :where(svg) { width: var(--btn-size); height: ... }`,
+   which beats the width/height *attributes* Lucide emits — so the `size={N}`
+   prop on an icon inside a `.btn` is inert (everything rendered at 14px under
+   `btn-sm` regardless of what the prop said).
+
+   Deliberately plain unlayered rules rather than `@utility`, matching
+   .popover-menu-btn above: an unlayered rule beats every Tailwind utility,
+   which is what a fixed-size alignment contract needs — a call site adding
+   `p-2` or `h-6` must not be able to silently break the row. */
+:root {
+	/* Touch-comfortable on mobile, tighter on desktop. The button boxes, the
+	   control rows and the character-name line all read this one variable, so
+	   they stay in lockstep by construction. */
+	--msg-ctrl-size: 2.25rem; /* 36px */
+	--msg-ctrl-icon: 1.125rem; /* 18px */
+}
+
+@media (width >= 64rem) {
+	:root {
+		--msg-ctrl-size: 2rem; /* 32px */
+		--msg-ctrl-icon: 1rem; /* 16px */
+	}
+}
+
+/* Always used together with `btn` — the .btn:disabled / :active /
+   :focus-visible rules below key off `.btn` alone, so dropping it (e.g. in
+   favour of Skeleton's `btn-icon`) would silently lose the press feedback,
+   focus ring and disabled dimming. */
+.msg-ctrl-btn {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	inline-size: var(--msg-ctrl-size);
+	block-size: var(--msg-ctrl-size);
+	padding: 0;
+
+	& > :where(svg) {
+		inline-size: var(--msg-ctrl-icon);
+		block-size: var(--msg-ctrl-icon);
+	}
+}
+
+/* Same box, but grows to fit a text label where one is shown. Labels in
+   message headers are `hidden lg:inline`, so this is square on mobile and
+   only widens on desktop. */
+.msg-ctrl-btn-labeled {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	gap: --spacing(2);
+	inline-size: var(--msg-ctrl-size);
+	block-size: var(--msg-ctrl-size);
+	padding: 0;
+
+	& > :where(svg) {
+		inline-size: var(--msg-ctrl-icon);
+		block-size: var(--msg-ctrl-icon);
+	}
+
+	@media (width >= 64rem) {
+		inline-size: auto;
+		padding-inline: --spacing(3);
+	}
+}
+
+/* A horizontal band guaranteed to be exactly one control tall whatever it
+   holds. Used for the button rows AND for the character-name line — pinning
+   both to the same min-height is what makes the name sit level with the
+   buttons in every state. Sets no gap on purpose; call sites pick one. */
+.msg-ctrl-row {
+	display: flex;
+	align-items: center;
+	min-block-size: var(--msg-ctrl-size);
+}
+
+/* The right-hand control stack in a message header. The min-width reserves
+   room for two buttons so the "..." trigger never slides sideways as the
+   message moves between idle (1 button), editing (Cancel + Save) and
+   generating (Stop + "..."). The character name next to it already truncates,
+   so the only cost is slightly earlier ellipsis on very long names. */
+.msg-ctrl-col {
+	display: flex;
+	flex: none;
+	flex-direction: column;
+	gap: --spacing(2);
+	min-inline-size: calc(var(--msg-ctrl-size) * 2 + --spacing(2));
+}
+
+/* The composer's primary action (Send, and Stop while generating). Larger
+   than a message-header control because it's the main affordance on the
+   screen, but built the same way and for the same reason: `btn` supplies the
+   press/focus/disabled treatment below, and the icon has to be sized here
+   because Skeleton's `btn` drives child svg size from --btn-size. Send and
+   Stop share the box so swapping between them doesn't shift the row. */
+.composer-btn {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	inline-size: 3rem;
+	block-size: 3rem;
+	padding: 0;
+
+	& > :where(svg) {
+		inline-size: 1.5rem;
+		block-size: 1.5rem;
+	}
+}
+
 /* Consistent press/focus/disabled feedback across every button in the app —
    Skeleton's own .btn utility (see node_modules/@skeletonlabs/skeleton) only
    implements a hover brightness effect; it has no built-in active/focus-visible
@@ -196,6 +317,51 @@
 	float: left;
 	height: 0;
 	pointer-events: none;
+}
+
+/* Setup-wizard attention cue.
+
+   The wizard hands the user off into a panel — the Ollama or KoboldCPP manager
+   — and then has to point at the one control they're meant to use next: the
+   Available tab while nothing is downloaded, and the recommended Q4_K_M
+   quantization once they've picked a model. Without it the manager opens on an
+   empty Installed list with no indication of where to go.
+
+   The resting state is already a visible ring and the animation only makes it
+   breathe. That ordering is deliberate: the prefers-reduced-motion rule below
+   collapses every animation to one 0.01ms iteration, so a highlight that
+   relied on the animation to *draw* itself would be invisible to exactly the
+   users most likely to need the guidance.
+
+   Unlayered, like .popover-menu-btn and .msg-ctrl-btn above, so a call site's
+   own utility classes can't silently cancel the cue. */
+@keyframes tutorial-glow {
+	0%,
+	100% {
+		box-shadow:
+			0 0 0 3px var(--tutorial-glow-tint),
+			0 0 8px 1px var(--tutorial-glow-tint);
+	}
+	50% {
+		box-shadow:
+			0 0 0 5px var(--tutorial-glow-tint),
+			0 0 16px 5px var(--tutorial-glow-tint);
+	}
+}
+
+.tutorial-highlight {
+	--tutorial-glow-tint: color-mix(
+		in srgb,
+		var(--color-primary-500) 55%,
+		transparent
+	);
+	position: relative;
+	z-index: 1;
+	border-radius: var(--tutorial-glow-radius, 0.375rem);
+	box-shadow:
+		0 0 0 3px var(--tutorial-glow-tint),
+		0 0 8px 1px var(--tutorial-glow-tint);
+	animation: tutorial-glow 2.2s ease-in-out infinite;
 }
 
 /* Global prefers-reduced-motion support. Dozens of components use Tailwind's

@@ -45,7 +45,7 @@
 	})
 </script>
 
-<div class="flex flex-col items-center gap-6 px-4 py-8">
+<div class="flex flex-col items-center gap-6 py-8">
 	<div class="text-center">
 		<p class="text-surface-600-400 text-sm">
 			Choose how you want to use KoboldCPP with Serene Pub.

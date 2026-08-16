@@ -72,7 +72,7 @@ Bindings can also exist **unlinked** — created automatically (see [Automatic b
 Clicking the pencil icon on a binding card opens an inline edit form:
 
 - **Name** and **Aliases** — editable only for background (unlinked) bindings; a linked binding's name and aliases are always kept in sync with its character's or persona's own name/nickname/aliases and can't be edited here. Aliases help scene summarization recognize a character under a nickname or title instead of minting a duplicate node for them.
-- **Summary** — up to 200 characters, shown to the AI as this character's current situation in the narrative-graph context, even in scenes they don't directly appear in.
+- **Summary** — up to 200 characters describing this character's current situation. Note that this field only reaches the model when the binding's **Visibility** is set to **legendary**: the relationship context sent with each generation is built around the speaker, and a summary is attached only to the "legendary figures" layer of it. A normal-visibility binding's Summary is stored and shown in the UI but is never sent to the AI, so treat it as a note to yourself unless you also mark the binding legendary.
 - **State** — active, deceased, missing, or departed, for your own tracking of who's still around in the story.
 - **Visibility** — normal (surfaces by relevance), legendary (always appears as a historical figure), or hidden (excluded from other characters' relationship context).
 

@@ -7,6 +7,7 @@
 	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
 	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
 	import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
+	import { animateHeight } from "$lib/client/utils/motion"
 
 	interface Props {
 		msg: SelectChatMessage
@@ -79,7 +80,6 @@
 		// Snippets
 		GeneratingAnimationComponent?: Snippet<[]>
 		messageControls?: Snippet<[SelectChatMessage]>
-		generatingAnimation?: Snippet<[]>
 	}
 
 	let {
@@ -116,8 +116,7 @@
 		isSelected = false,
 		onStartSummarization,
 		GeneratingAnimationComponent,
-		messageControls,
-		generatingAnimation
+		messageControls
 	}: Props = $props()
 
 	// Derived values
@@ -168,7 +167,17 @@
 		if (editChatMessage) editContent = editChatMessage.content
 	})
 
+	const isEditing = $derived(!!editChatMessage && editChatMessage.id === msg.id)
+	const isEditDirty = $derived(
+		isEditing && editContent !== (editChatMessage?.content ?? "")
+	)
+	// Empty is blocked as well as unchanged: clearing a message to nothing
+	// leaves an unreadable stub in the thread, and Delete is the control that
+	// actually expresses that intent.
+	const canSaveEdit = $derived(isEditDirty && editContent.trim().length > 0)
+
 	function handleMessageUpdate(e?: Event) {
+		if (!canSaveEdit) return
 		onSaveEditMessage(editContent, e)
 	}
 
@@ -191,16 +200,20 @@
 	}
 </script>
 
-<li
+<!-- A <div>, not an <li>: ChatContainer already wraps each message in its own
+     <li> (the scene-bar row), so an <li> here nested a list item inside a list
+     item — invalid HTML that confuses assistive-tech list semantics. The
+     role="article" below is what actually carries the semantics. -->
+<div
 	id="message-{msg.id}"
 	class="{isSummarizationMode
 		? isSelected
 			? 'preset-filled-secondary-100-900'
 			: 'preset-tonal-surface opacity-60'
-		: 'preset-filled-primary-50-950'} flex flex-col rounded-lg p-2 transition-colors duration-150"
-	class:opacity-50={!isSummarizationMode &&
-		msg.isHidden &&
-		editChatMessage?.id !== msg.id}
+		: 'preset-filled-primary-50-950'} {isEditing
+		? 'ring-warning-500/70 shadow-lg ring-2'
+		: ''} flex flex-col rounded-lg p-2 transition-colors duration-150"
+	class:opacity-50={!isSummarizationMode && msg.isHidden && !isEditing}
 	tabindex="-1"
 	role="article"
 	aria-label="Message {index + 1} of {chat.chatMessages
@@ -211,9 +224,14 @@
 		100
 	)}{msg.content.length > 100 ? '...' : ''}"
 >
-	<div class="flex justify-between gap-2">
+	<div class="flex items-start justify-between gap-2">
 		<div class="group flex min-w-0 flex-1 gap-2">
-			<span class="shrink-0">
+			<!-- `flex` rather than the default inline formatting context: the
+			     avatar button is inline-block, so in a block wrapper it sat on a
+			     text baseline and left ~6px of descender space underneath. That
+			     padded every character message's header to 70px against a
+			     narrator message's 64px, for no visible reason. -->
+			<span class="flex shrink-0">
 				{#if msg.isNarratorResponse}
 					<span
 						class="bg-primary-500/10 text-primary-500 flex h-12 w-12 items-center justify-center rounded-full lg:h-[4em] lg:w-[4em]"
@@ -236,7 +254,11 @@
 				{/if}
 			</span>
 			<div class="flex min-w-0 flex-1 flex-col">
-				<span class="flex min-w-0 gap-1">
+				<!-- msg-ctrl-row pins this line to exactly one control-height and
+				     centers its contents, so the name's optical center lands on
+				     the same y as the "..." button's. This replaces the two `mt-1`
+				     nudges that used to fake it for the adjacent icons only. -->
+				<span class="msg-ctrl-row min-w-0 gap-1">
 					{#if msg.isNarratorResponse}
 						<span
 							class="funnel-display mx-0 min-w-0 truncate px-0 text-[1.1em] font-bold"
@@ -255,41 +277,75 @@
 					{/if}
 					{#if isGreeting}
 						<span
-							class="text-muted mt-1 text-xs opacity-50"
+							class="text-muted inline-flex shrink-0 items-center text-xs opacity-50"
 							title="Greeting message"
 						>
-							<Icons.Handshake size={16} />
+							<Icons.Handshake size={16} aria-hidden="true" />
 						</span>
 					{/if}
-					<span class="mt-1">
-						<EmbeddingStatusIcon
-							embeddingModel={msg.embeddingModel}
-						/>
-					</span>
+					<!-- No wrapper element: EmbeddingStatusIcon renders nothing at
+					     all when status is hidden/none (the common case), and a
+					     wrapper would still consume a gap-1 for an empty span. Its
+					     own root already carries inline-flex/items-center/shrink-0. -->
+					<EmbeddingStatusIcon embeddingModel={msg.embeddingModel} />
+					{#if isEditing}
+						<!-- Carries the state in words, not just colour — the
+						     ring around the card is the fast visual cue, this
+						     is what makes it unambiguous (and announceable). -->
+						<span
+							class="preset-tonal-warning text-warning-800-200 inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[0.7rem] font-semibold tracking-wide uppercase"
+						>
+							<Icons.Pencil size={11} aria-hidden="true" />
+							Editing
+							{#if isEditDirty}
+								<span
+									class="bg-warning-500 h-1.5 w-1.5 rounded-full"
+									title="Unsaved changes"
+									aria-label="Unsaved changes"
+								></span>
+							{/if}
+						</span>
+					{/if}
 				</span>
 			</div>
 		</div>
 
-		{#if editChatMessage && editChatMessage.id === msg.id}
-			<div class="flex gap-2">
-				<button
-					class="btn btn-sm msg-cntrl-icon preset-filled-surface-500"
-					title="Cancel Edit"
-					onclick={onCancelEditMessage}
-				>
-					<Icons.X size={16} />
-				</button>
-				<button
-					class="btn btn-sm msg-cntrl-icon preset-filled-success-500"
-					title="Save"
-					onclick={handleMessageUpdate}
-				>
-					<Icons.Save size={16} class="mx-4" />
-				</button>
+		{#if isEditing}
+			<div class="msg-ctrl-col">
+				<!-- msg-ctrl-btn-labeled, not msg-ctrl-btn: it is the same
+				     fixed box on mobile (so the header height contract in
+				     app.css holds) and only widens to fit the word on lg.
+				     Icon-only Save/Cancel gave the two most consequential
+				     buttons in the app the least identity. -->
+				<div class="msg-ctrl-row justify-end gap-2">
+					<button
+						class="btn msg-ctrl-btn-labeled preset-tonal-surface"
+						title="Cancel edit (Esc)"
+						aria-label="Cancel edit"
+						onclick={onCancelEditMessage}
+					>
+						<Icons.X aria-hidden="true" />
+						<span class="hidden text-sm lg:inline">Cancel</span>
+					</button>
+					<button
+						class="btn msg-ctrl-btn-labeled preset-filled-success-500"
+						title={canSaveEdit
+							? "Save changes (Ctrl+Enter)"
+							: isEditDirty
+								? "A message can't be saved empty"
+								: "No changes to save"}
+						aria-label="Save edit"
+						disabled={!canSaveEdit}
+						onclick={handleMessageUpdate}
+					>
+						<Icons.Save aria-hidden="true" />
+						<span class="hidden text-sm lg:inline">Save</span>
+					</button>
+				</div>
 			</div>
 		{:else}
-			<div class="flex shrink-0 flex-col gap-2">
-				<div class="ml-auto flex flex-wrap justify-end gap-2">
+			<div class="msg-ctrl-col">
+				<div class="msg-ctrl-row flex-wrap justify-end gap-2">
 					{#if messageControls}
 						{@render messageControls(msg)}
 					{:else}
@@ -317,11 +373,12 @@
 					{/if}
 				</div>
 				{#if showSwipes}
-					<div class="ml-auto flex items-center gap-2">
+					<div class="msg-ctrl-row justify-end gap-2">
 						{#if msg.metadata?.swipes?.currentIdx !== null && msg.metadata?.swipes?.currentIdx !== undefined && msg.metadata?.swipes?.history && msg.metadata?.swipes.history.length > 1}
 							<button
-								class="btn btn-sm hover:preset-tonal-success h-8 w-8 rounded-full p-0"
+								class="btn msg-ctrl-btn hover:preset-tonal-success"
 								title="Swipe Left"
+								aria-label="Previous swipe"
 								onclick={() => onSwipeLeft(msg)}
 								disabled={!!editChatMessage ||
 									!msg.metadata.swipes.currentIdx ||
@@ -329,10 +386,12 @@
 									msg.isGenerating ||
 									!canControl}
 							>
-								<Icons.ChevronLeft size={20} />
+								<Icons.ChevronLeft aria-hidden="true" />
 							</button>
+							<!-- tabular-nums + a min width so stepping 9/12 -> 10/12
+							     doesn't shove the arrows sideways. -->
 							<span
-								class="text-surface-700-300 text-sm select-none"
+								class="text-surface-700-300 min-w-[3.5ch] text-center text-sm tabular-nums select-none"
 								aria-live="polite"
 							>
 								{(msg.metadata.swipes.currentIdx || 0) + 1}/{msg
@@ -340,16 +399,26 @@
 							</span>
 						{/if}
 						<button
-							class="btn btn-sm hover:preset-tonal-success h-8 w-8 rounded-full p-0"
+							class="btn msg-ctrl-btn hover:preset-tonal-success"
 							title="Swipe Right"
+							aria-label="Next swipe"
 							onclick={() => onSwipeRight(msg)}
 							disabled={!!editChatMessage ||
 								!canSwipeRightVal ||
 								!canControl}
 						>
-							<Icons.ChevronRight size={20} />
+							<Icons.ChevronRight aria-hidden="true" />
 						</button>
 					</div>
+				{:else if isLastMessage}
+					<!-- Hold the swipe row's space on the last message only. That
+					     is the one place showSwipes still toggles (it follows
+					     canRegenerateLastMessage, so it flips off during
+					     generation and back on after), and reserving it there
+					     stops the message resizing under the reader. Reserving on
+					     every message instead would add a dead row to the whole
+					     backlog to fix a pop that can no longer happen there. -->
+					<div class="msg-ctrl-row" aria-hidden="true"></div>
 				{/if}
 			</div>
 		{/if}
@@ -364,23 +433,42 @@
 				title={isNarratorInstructionsExpanded
 					? "Collapse extra instructions"
 					: "Expand extra instructions"}
+				aria-expanded={isNarratorInstructionsExpanded}
+				aria-controls="extra-instructions-{msg.id}"
 			>
-				<Icons.Target size={16} />
+				<Icons.Target size={16} aria-hidden="true" />
 				<span>Extra Instructions</span>
 				<Icons.ChevronDown
 					size={16}
+					aria-hidden="true"
 					class={`transition-transform ${isNarratorInstructionsExpanded ? "rotate-180" : ""}`}
 				/>
 			</button>
-			{#if isNarratorInstructionsExpanded}
-				<div
-					class="rendered-chat-message-content pb-2 text-sm opacity-80"
-				>
-					{@html renderMarkdownWithQuotedText(
-						narratorInstructionsContent
-					)}
+			<!-- grid 0fr -> 1fr is the only way to transition to/from an auto
+			     height in pure CSS. The inner overflow-hidden wrapper is
+			     required: the track collapses to 0 but the content keeps its
+			     intrinsic height, so without it the text spills out. Content
+			     stays mounted while collapsed (rather than the old {#if})
+			     because a transition needs both endpoints to exist — hence
+			     `inert`, since a 0fr track still contains focusable content. -->
+			<div
+				id="extra-instructions-{msg.id}"
+				class="grid transition-[grid-template-rows] duration-200 ease-out"
+				style:grid-template-rows={isNarratorInstructionsExpanded
+					? "1fr"
+					: "0fr"}
+				inert={!isNarratorInstructionsExpanded}
+			>
+				<div class="overflow-hidden">
+					<div
+						class="rendered-chat-message-content pb-2 text-sm opacity-80"
+					>
+						{@html renderMarkdownWithQuotedText(
+							narratorInstructionsContent
+						)}
+					</div>
 				</div>
-			{/if}
+			</div>
 		</div>
 	{/if}
 
@@ -393,196 +481,242 @@
 				title={isThinkingExpanded
 					? "Collapse thinking"
 					: "Expand thinking"}
+				aria-expanded={isThinkingExpanded}
+				aria-controls="thinking-{msg.id}"
 			>
-				<Icons.BrainCircuit size={16} />
+				<Icons.BrainCircuit size={16} aria-hidden="true" />
 				<span>Thinking</span>
 				<Icons.ChevronDown
 					size={16}
+					aria-hidden="true"
 					class={`transition-transform ${isThinkingExpanded ? "rotate-180" : ""}`}
 				/>
 			</button>
-			{#if isThinkingExpanded}
-				<div
-					class="rendered-chat-message-content pb-2 text-sm opacity-80"
-				>
-					{@html renderMarkdownWithQuotedText(thinkingContent)}
+			<!-- See the Extra Instructions block above for why this is a grid
+			     rather than an {#if}. -->
+			<div
+				id="thinking-{msg.id}"
+				class="grid transition-[grid-template-rows] duration-200 ease-out"
+				style:grid-template-rows={isThinkingExpanded ? "1fr" : "0fr"}
+				inert={!isThinkingExpanded}
+			>
+				<div class="overflow-hidden">
+					<div
+						class="rendered-chat-message-content pb-2 text-sm opacity-80"
+					>
+						{@html renderMarkdownWithQuotedText(thinkingContent)}
+					</div>
 				</div>
-			{/if}
+			</div>
 		</div>
 	{/if}
 
-	<div class="flex h-fit rounded p-2 text-left">
-		{#if msg.error}
-			{#if msg.content}
-				<div class="rendered-chat-message-content mb-2">
-					{@html renderMarkdownWithQuotedText(msg.content)}
-				</div>
-			{/if}
-			<div
-				class="border-error-500 bg-error-500/10 flex w-full flex-col gap-2 rounded-lg border p-3"
-			>
-				<div class="text-error-700-300 flex items-center gap-2">
-					<Icons.AlertTriangle size={16} />
-					<span class="text-sm font-medium">{msg.error.message}</span>
-					{#if msg.error.code}
-						<span class="text-xs opacity-60">
-							({msg.error.code})
-						</span>
-					{/if}
-				</div>
-				<button
-					class="btn preset-filled-primary-500 btn-sm w-fit"
-					onclick={(e) => onRegenerateMessage(e, msg)}
+	<!-- Padding-free wrapper whose only job is to carry the height animation —
+	     see animateHeight, which observes the child and drives this element.
+	     Disabled while generating: during streaming the height changes on every
+	     token, and an animation would trail the text permanently instead of
+	     settling. The discrete swaps are what this is for — swiping between
+	     alternatives, entering/leaving edit, an error card replacing content. -->
+	<div
+		use:animateHeight={{
+			enabled: !msg.isGenerating,
+			scrollContainer: "#chat-history"
+		}}
+	>
+		<div class="flex h-fit rounded p-2 text-left">
+			{#if msg.error}
+				{#if msg.content}
+					<div class="rendered-chat-message-content mb-2">
+						{@html renderMarkdownWithQuotedText(msg.content)}
+					</div>
+				{/if}
+				<div
+					class="border-error-500 bg-error-500/10 flex w-full flex-col gap-2 rounded-lg border p-3"
 				>
-					<Icons.RotateCcw size={14} />
-					Retry
-				</button>
-			</div>
-		{:else if msg.content === "" && msg.isGenerating}
-			{#if msg.generationStage === "queued"}
-				<div class="flex items-center gap-2">
-					<div class="text-surface-700-300 text-sm">Queued</div>
-					<div class="bg-surface-400-600 h-2 w-2 rounded-full"></div>
-				</div>
-			{:else if msg.generationStage === "loading"}
-				<div class="flex items-center gap-2">
-					<div class="text-surface-700-300 text-sm">
-						Loading model…
+					<div class="text-error-700-300 flex items-center gap-2">
+						<Icons.AlertTriangle size={16} />
+						<span class="text-sm font-medium">
+							{msg.error.message}
+						</span>
+						{#if msg.error.code}
+							<span class="text-xs opacity-60">
+								({msg.error.code})
+							</span>
+						{/if}
 					</div>
-					<div
-						class="bg-surface-400-600 h-2 w-2 animate-pulse rounded-full"
-					></div>
+					<button
+						class="btn preset-filled-primary-500 btn-sm w-fit"
+						onclick={(e) => onRegenerateMessage(e, msg)}
+					>
+						<Icons.RotateCcw size={14} />
+						Retry
+					</button>
 				</div>
-			{:else if GeneratingAnimationComponent}
-				{@render GeneratingAnimationComponent()}
-			{:else if generatingAnimation}
-				{@render generatingAnimation()}
+			{:else if msg.content === "" && msg.isGenerating}
+				{#if msg.generationStage === "queued"}
+					<div class="flex items-center gap-2">
+						<div class="text-surface-700-300 text-sm">Queued</div>
+						<div
+							class="bg-surface-400-600 h-2 w-2 rounded-full"
+						></div>
+					</div>
+				{:else if msg.generationStage === "loading"}
+					<div class="flex items-center gap-2">
+						<div class="text-surface-700-300 text-sm">
+							Loading model…
+						</div>
+						<div
+							class="bg-surface-400-600 h-2 w-2 animate-pulse rounded-full"
+						></div>
+					</div>
+				{:else if GeneratingAnimationComponent}
+					{@render GeneratingAnimationComponent()}
+				{:else}
+					<div class="flex items-center gap-2">
+						<div class="text-surface-600-400 animate-pulse text-sm">
+							{speakerDisplayName
+								? `${speakerDisplayName} is typing...`
+								: "Typing..."}
+						</div>
+						<div
+							class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"
+						></div>
+					</div>
+				{/if}
+			{:else if isEditing}
+				<!-- One surface, not three. This used to be a rounded-xl
+				     `bg-surface-100-900` panel nested in the rounded-lg message
+				     card, wrapping a bordered `input` textarea with a third
+				     background — three radii and three fills stacked inside
+				     each other. The panel now *is* the field: the textarea
+				     below drops its own border, radius and fill (see
+				     `edit-field`) and simply lays text on this one. -->
+				<div
+					class="edit-surface bg-surface-100-900 w-full rounded-lg px-2 pt-0.5 pb-1"
+				>
+					<MessageComposer
+						bind:markdown={editContent}
+						onSend={handleMessageUpdate}
+						onCancel={() => onCancelEditMessage()}
+						enterBehavior="newline"
+						placeholder="Edit this message…"
+						autofocus
+						textareaClasses="edit-field field-sizing-content w-full"
+					/>
+					<!-- Transient, unlike the chat bar's — it only exists while
+					     an edit is open, so it can't become the permanent noise
+					     that hint was deliberately removed from below. -->
+					<div
+						class="text-surface-600-400 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 pt-1 text-xs"
+					>
+						<span>
+							<kbd class="kbd-hint">Ctrl</kbd>
+							+
+							<kbd class="kbd-hint">Enter</kbd>
+							to save
+						</span>
+						<span aria-hidden="true" class="opacity-40">·</span>
+						<span>
+							<kbd class="kbd-hint">Esc</kbd>
+							to cancel
+						</span>
+						{#if isEditDirty}
+							<span class="text-warning-600-400 ml-auto font-medium">
+								Unsaved changes
+							</span>
+						{/if}
+					</div>
+				</div>
 			{:else}
-				<div class="flex items-center gap-2">
-					<div class="text-surface-600-400 animate-pulse text-sm">
-						{speakerDisplayName
-							? `${speakerDisplayName} is typing...`
-							: "Typing..."}
-					</div>
-					<div
-						class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"
-					></div>
-				</div>
-			{/if}
-		{:else if editChatMessage && editChatMessage.id === msg.id}
-			<div
-				class="chat-input-bar bg-surface-100-900 w-full rounded-xl p-2 pb-2 align-middle lg:pb-4"
-			>
-				<MessageComposer
-					bind:markdown={editContent}
-					onSend={handleMessageUpdate}
-				/>
-			</div>
-		{:else}
-			<!-- Click delegation only matters for the inline `<img>` tags
+				<!-- Click delegation only matters for the inline `<img>` tags
 			     inside the rendered markdown, which are individually
 			     cursor-pointer and already reachable/described via normal
 			     image semantics (alt text) — the div itself is a passive
 			     text container, not a single interactive control. -->
-			<!-- svelte-ignore a11y_click_events_have_key_events -->
-			<!-- svelte-ignore a11y_no_static_element_interactions -->
-			<div
-				class="rendered-chat-message-content {msg.isGenerating &&
-				msg.content
-					? 'animate-pulse'
-					: ''}"
-				onclick={handleContentClick}
-			>
-				{@html renderMarkdownWithQuotedText(msg.content)}
-			</div>
-		{/if}
+				<!-- svelte-ignore a11y_click_events_have_key_events -->
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<div
+					class="rendered-chat-message-content {msg.isGenerating &&
+					msg.content
+						? 'animate-pulse'
+						: ''}"
+					onclick={handleContentClick}
+				>
+					{@html renderMarkdownWithQuotedText(msg.content)}
+				</div>
+			{/if}
+		</div>
 	</div>
-</li>
+</div>
 
 <style lang="postcss">
 	@reference "tailwindcss";
 
-	.chat-input-bar {
+	/* --- Edit mode --- */
+
+	/* The textarea is a child of MessageComposer, so this has to cross the
+	   component boundary — but it stays anchored to `.edit-surface` so it can
+	   only ever reach the edit composer's field, never the chat bar's.
+
+	   Every declaration here is colourless on purpose: Skeleton registers its
+	   palette through `@theme` in app.css, which a component's
+	   `@reference "tailwindcss"` does not pull in, so `@apply bg-warning-500`
+	   and friends would fail to resolve at build time. Colour for edit mode is
+	   applied as ordinary utility classes in the markup above. */
+	.edit-surface :global(.edit-field) {
+		background: transparent;
+		border: none;
+		border-radius: 0;
+		padding: 0.5rem 0.25rem;
+		color: inherit;
+		font: inherit;
+		line-height: 1.6;
+
+		/* The native grabber is redundant under `field-sizing-content` (the
+		   field already grows to fit) and dragging it only desynchronised the
+		   box from its content. */
+		resize: none;
+
+		/* Without a cap, editing a long message grew the card unbounded and
+		   pushed Save/Cancel — which live in the header — off the top of the
+		   viewport. */
+		max-height: 45vh;
+		overflow-y: auto;
+
+		&:focus {
+			outline: none;
+			box-shadow: none;
+		}
+
+		/* Mouse focus needs no ring — the card's own ring already says which
+		   message is open. This is only for keyboard users tabbing back in
+		   from Cancel/Save, who would otherwise get no landing cue at all
+		   beyond the caret. color-mix keeps it palette-free. */
+		&:focus-visible {
+			outline: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+			outline-offset: -2px;
+			border-radius: 0.375rem;
+		}
+
+		&::placeholder {
+			color: inherit;
+			opacity: 0.45;
+		}
 	}
 
-	/* Loader styles from Uiverse.io by mobinkakei */
-	.wrapper {
-		width: 66px;
-		height: 20px;
-		position: relative;
-		z-index: 1;
-		margin-left: 0;
+	/* currentColor keeps these legible in both themes without naming a palette
+	   entry (see the note above about `@theme` not being in scope here). */
+	.kbd-hint {
+		display: inline-block;
+		padding: 0.05rem 0.3rem;
+		border: 1px solid currentColor;
+		border-radius: 0.25rem;
+		font-family: inherit;
+		font-size: 0.9em;
+		line-height: 1.4;
+		opacity: 0.75;
 	}
-	.circle {
-		width: 6.6px;
-		height: 6.6px;
-		position: absolute;
-		border-radius: 50%;
-		background-color: #fff;
-		left: 15%;
-		transform-origin: 50%;
-		animation: circle7124 0.5s alternate infinite ease;
-	}
-	@keyframes circle7124 {
-		0% {
-			top: 20px;
-			height: 1.66px;
-			border-radius: 50px 50px 25px 25px;
-			transform: scaleX(1.7);
-		}
-		40% {
-			height: 6.6px;
-			border-radius: 50%;
-			transform: scaleX(1);
-		}
-		100% {
-			top: 0%;
-		}
-	}
-	.circle:nth-child(2) {
-		left: 45%;
-		animation-delay: 0.2s;
-	}
-	.circle:nth-child(3) {
-		left: auto;
-		right: 15%;
-		animation-delay: 0.3s;
-	}
-	.shadow {
-		width: 6.6px;
-		height: 1.33px;
-		border-radius: 50%;
-		background-color: rgba(0, 0, 0, 0.9);
-		position: absolute;
-		top: 20.66px;
-		transform-origin: 50%;
-		z-index: -1;
-		left: 15%;
-		filter: blur(0.33px);
-		animation: shadow046 0.5s alternate infinite ease;
-	}
-	@keyframes shadow046 {
-		0% {
-			transform: scaleX(1.5);
-		}
-		40% {
-			transform: scaleX(1);
-			opacity: 0.7;
-		}
-		100% {
-			transform: scaleX(0.2);
-			opacity: 0.4;
-		}
-	}
-	.shadow:nth-child(4) {
-		left: 45%;
-		animation-delay: 0.2s;
-	}
-	.shadow:nth-child(5) {
-		left: auto;
-		right: 15%;
-		animation-delay: 0.3s;
-	}
+
 	/* --- Markdown custom styles --- */
 	:global(.markdown-body) {
 		white-space: pre-line;
@@ -607,13 +741,5 @@
 		margin-top: 1em;
 		margin-bottom: 1em;
 		min-height: 1.5em;
-	}
-
-	.msg-cntrl-icon {
-		/* Bigger tap area on mobile (swipe/edit-save-cancel buttons aren't
-		   moved into the lg:hidden popover like the rest of the message
-		   controls, so they need to be comfortably tappable on their own) —
-		   shrinks back down at lg: to match the compact desktop hover style. */
-		@apply h-min w-min px-3 py-2 text-[1em] disabled:opacity-25 lg:px-2 lg:py-0;
 	}
 </style>

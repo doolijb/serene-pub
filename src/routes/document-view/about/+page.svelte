@@ -33,6 +33,15 @@
 <ul class="a11y-list">
 	<li class="a11y-list-item">
 		<a
+			href="https://serenepub.com"
+			target="_blank"
+			rel="noopener noreferrer"
+		>
+			Website
+		</a>
+	</li>
+	<li class="a11y-list-item">
+		<a
 			href="https://github.com/doolijb/serene-pub"
 			target="_blank"
 			rel="noopener noreferrer"
@@ -42,11 +51,11 @@
 	</li>
 	<li class="a11y-list-item">
 		<a
-			href="https://github.com/doolijb/serene-pub/wiki"
+			href="https://github.com/doolijb/serene-pub/milestones"
 			target="_blank"
 			rel="noopener noreferrer"
 		>
-			Wiki / Documentation
+			Milestones
 		</a>
 	</li>
 	<li class="a11y-list-item">

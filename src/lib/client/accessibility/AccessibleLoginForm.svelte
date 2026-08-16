@@ -75,6 +75,9 @@
 	async function handleSubmit(event: SubmitEvent) {
 		event.preventDefault()
 		formError = ""
+		// The submit button is disabled while loading, but a browser can still
+		// fire implicit submission from a focused field, so guard here too.
+		if (isLoading) return
 		if (!validateForm()) return
 		isLoading = true
 		try {
@@ -86,13 +89,17 @@
 			const data = await response.json()
 			if (!response.ok) {
 				formError = data.error || "Invalid username or passphrase"
+				isLoading = false
 				return
 			}
+			// Left loading on purpose — see the note in LoginForm.svelte.
+			// Awaiting this resolves as soon as the reload is *scheduled* (it's
+			// delayed a second), so a `finally` here re-enabled the form for
+			// that entire window after a successful sign-in.
 			await refreshAuthAfterLogin()
 		} catch (error) {
 			console.error("Login error:", error)
 			formError = "An unexpected error occurred. Please try again."
-		} finally {
 			isLoading = false
 		}
 	}
@@ -113,7 +120,9 @@
 			</div>
 		{/if}
 
-		<form onsubmit={handleSubmit} novalidate>
+		<!-- aria-busy so screen-reader users are told the form is working rather
+		     than just finding every control gone dead. -->
+		<form onsubmit={handleSubmit} novalidate aria-busy={isLoading}>
 			<div class="a11y-field">
 				<label for="a11y-username">Username</label>
 				<input
@@ -161,6 +170,7 @@
 						class="a11y-btn a11y-btn-secondary a11y-btn-small"
 						onclick={() => (showPassphrase = !showPassphrase)}
 						aria-pressed={showPassphrase}
+						disabled={isLoading}
 					>
 						{showPassphrase ? "Hide passphrase" : "Show passphrase"}
 					</button>
@@ -183,10 +193,13 @@
 
 		<p class="a11y-hint">Need help? Contact your administrator.</p>
 		<p>
+			<!-- Also disabled mid-submit: this swaps shells, and a successful
+			     login is already on its way to reloading the page. -->
 			<button
 				type="button"
 				class="a11y-btn a11y-btn-secondary a11y-btn-small"
 				onclick={switchToStandardSite}
+				disabled={isLoading}
 			>
 				Switch to Standard Site
 			</button>

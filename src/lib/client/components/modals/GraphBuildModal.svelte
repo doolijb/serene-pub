@@ -178,6 +178,31 @@
 		return lines
 	})
 
+	/**
+	 * "This build broke" as distinct from "this story had nothing to add".
+	 *
+	 * Deliberately phase-shaped rather than "did every call error": a real
+	 * incident had two early calls succeed and every later one fail, so an
+	 * all-calls-errored test would have stayed silent and the run would still
+	 * have presented 0 · 0 · 0 as a reviewable result. What matters is that a
+	 * whole phase came back unusable.
+	 *
+	 * A legitimately empty build does not trip this — there the model answers
+	 * `{"relationships": []}`, which parses fine and leaves noJson/badJson at
+	 * zero. This fires only when the responses themselves were unusable.
+	 */
+	let systemicFailure = $derived.by(() => {
+		const d = build?.relationshipDiagnostics
+		if (!d) return null
+		const calls = d.perspectiveCalls ?? 0
+		if (calls === 0) return null
+		const unusable = (d.noJson ?? 0) + (d.badJson ?? 0)
+		if (activeRels.length === 0 && unusable >= calls) {
+			return `All ${calls} character-perspective call${calls === 1 ? "" : "s"} came back unusable, so this is a failed build rather than an empty one. Applying it would clear the existing graph and put nothing back. Check the connection, then the KoboldCPP log — repeated "Reloading new model/config" lines mean the model is being reloaded between calls.`
+		}
+		return null
+	})
+
 	let progressPhase = $derived(build?.phase ?? "loading")
 	let progressSceneIndex = $derived(build?.sceneIndex ?? 0)
 	let progressTotalScenes = $derived(build?.totalScenes ?? 0)
@@ -605,6 +630,21 @@
 		{activeNodes.length} new · {activeNodeUpdates.length} updated · {activeRels.length}
 		relationships
 	</p>
+
+	<!--
+		A failed build and an uneventful one both arrive here as small numbers.
+		Only this banner distinguishes them, and it matters most in replace mode,
+		where applying an empty proposal destroys the graph it replaces.
+	-->
+	{#if systemicFailure}
+		<div
+			class="preset-tonal-error border-error-500 mb-4 rounded-lg border p-3 text-sm"
+			role="alert"
+		>
+			<p class="font-semibold">This build did not run correctly.</p>
+			<p class="mt-1">{systemicFailure}</p>
+		</div>
+	{/if}
 
 	<!-- Node updates to existing characters -->
 	{#if proposalNodeUpdates.length > 0}

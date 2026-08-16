@@ -3473,6 +3473,37 @@ export const triggerGenerateMessageHandler: Handler<
 				let currentMsg = 1
 				let ok = true
 
+				// An explicit characterId means a client pressed "Trigger
+				// Character" — an out-of-turn generation aimed at a specific
+				// character. That is owner-only. getPromptChatFromDb below
+				// admits guests too (checkChatAccess is owner-OR-guest), and
+				// unlike regenerate/continue/swipe this path had no permission
+				// check of its own, so a guest in a shared chat could emit
+				// this event directly and drive generations in someone else's
+				// chat. It was gated only by the client hiding the tab.
+				//
+				// Scoped to the explicit-characterId case on purpose: the
+				// automatic round-robin call after a persona message (see
+				// chatMessagesSendPersonaMessageHandler) invokes this handler
+				// with no characterId, and guests are supposed to be able to
+				// speak and get replies in a chat shared with them.
+				if (params.characterId) {
+					const access = await checkChatAccess(params.chatId, userId)
+					if (!access.hasAccess) {
+						// Matches the "Chat not found" the lookup below would
+						// have produced — a missing chat and an inaccessible
+						// one stay indistinguishable.
+						return {
+							error: "Error Triggering Chat Message: Chat not found."
+						}
+					}
+					if (!access.isOwner) {
+						return {
+							error: "Access denied. Only the chat owner can trigger a specific character."
+						}
+					}
+				}
+
 				console.log(
 					`[triggerGenerateMessage] Starting generation for chat ${params.chatId}, once: ${params.once}, characterId: ${params.characterId}`
 				)
@@ -3629,6 +3660,26 @@ export const triggerNarratorResponseHandler: Handler<
 				) {
 					return {
 						error: `Narrator instructions too long (max ${MAX_NARRATOR_INSTRUCTIONS_LENGTH} characters).`
+					}
+				}
+
+				// Owner-only, same reasoning as the character trigger above:
+				// getPromptChatFromDb admits guests, and this handler is only
+				// ever reached from a client pressing the Narrator button (no
+				// internal callers), so requiring ownership breaks no
+				// auto-trigger path. The length cap above deliberately stays
+				// first — it's a pure payload check that shouldn't cost a
+				// query. A chat that doesn't exist keeps reporting "not found"
+				// rather than "access denied".
+				const access = await checkChatAccess(params.chatId, userId)
+				if (!access.hasAccess) {
+					return {
+						error: "Error triggering Narrator response: Chat not found."
+					}
+				}
+				if (!access.isOwner) {
+					return {
+						error: "Access denied. Only the chat owner can trigger a Narrator response."
 					}
 				}
 

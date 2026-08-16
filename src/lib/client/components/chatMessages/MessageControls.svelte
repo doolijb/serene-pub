@@ -57,19 +57,20 @@
 	}
 </script>
 
-<div
-	role="group"
-	aria-label="Message actions"
-	class="ml-auto flex items-center gap-2"
->
+<div role="group" aria-label="Message actions" class="flex items-center gap-2">
 	{#if msg.isGenerating}
+		<!-- Label is hidden below lg: so the button stays the same square box as
+		     every other message control on mobile, where the extra ~110px would
+		     wrap the header onto a second line mid-generation. aria-label covers
+		     the icon-only case. -->
 		<button
-			class="btn btn-sm preset-filled-error-500 h-min px-3 py-2 text-[1em] lg:px-2 lg:py-1"
+			class="btn msg-ctrl-btn-labeled preset-filled-error-500"
 			title="Stop Generation"
+			aria-label="Stop Generation"
 			onclick={(e) => onAbortMessage(e, msg)}
 		>
-			<Icons.Square size={16} />
-			<span>Stop Generation</span>
+			<Icons.Square aria-hidden="true" />
+			<span class="hidden lg:inline">Stop Generation</span>
 		</button>
 	{/if}
 	<Popover
@@ -78,12 +79,12 @@
 		positioning={{ placement: "bottom" }}
 	>
 		<Popover.Trigger
-			class="btn btn-sm hover:bg-primary-600-400 p-3 {open
+			class="btn msg-ctrl-btn hover:bg-primary-600-400 {open
 				? 'bg-primary-600-400'
 				: ''}"
 			aria-label="Message options"
 		>
-			<Icons.EllipsisVertical size={20} />
+			<Icons.EllipsisVertical aria-hidden="true" />
 		</Popover.Trigger>
 		<Portal>
 			<Popover.Positioner class="z-[1000]!">

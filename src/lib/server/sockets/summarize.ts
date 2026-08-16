@@ -16,13 +16,7 @@ import {
 import { lorebookBindingListHandler } from "./lorebooks"
 import { withChatTriggerLock } from "$lib/server/utils/chatTriggerLock"
 import { checkChatAccess } from "$lib/server/utils/chatAccess"
-
-// Reject-fast dedup for chatsSummarizeHandler — withChatTriggerLock alone
-// only serializes (queues) a second concurrent request for the same chat;
-// each run here is a full batch+synthesis LLM pipeline, so a double-click
-// or multiple tabs should be rejected outright, not silently re-run right
-// after the first finishes.
-const inFlightSummarizeChatIds = new Set<number>()
+import { activityStore } from "$lib/server/utils/activityStore"
 
 export const chatsSummarizeHandler: Handler<
 	Sockets.Chats.Summarize.Params,
@@ -74,20 +68,52 @@ export const chatsSummarizeHandler: Handler<
 			return null as any
 		}
 
-		// Serializes against Regenerate/Continue/SwipeRight etc. on this same
-		// chat (withChatTriggerLock, same lock chats.ts's generation handlers
-		// use), and rejects a second concurrent chats:summarize for this chat
-		// outright rather than queuing it to run again right after the first
-		// finishes — each run is a full batch+synthesis LLM pipeline, not
-		// something a double-click/multiple tabs should silently multiply.
-		if (inFlightSummarizeChatIds.has(chatId)) {
-			throw new Error("A summarization is already running for this chat.")
-		}
-		inFlightSummarizeChatIds.add(chatId)
-		return await withChatTriggerLock(chatId, async () => {
-			try {
+		// Register the activity BEFORE the lock. The lock is FIFO, so a
+		// summarize started during an in-flight generation waits that
+		// generation out — without a card first, the user sees nothing at all,
+		// and cancelling during the wait is unreachable. Same reasoning as
+		// scenes:process. The per-chat-per-type supersede/reject rule lives in
+		// startChatSummarize; it replaces the old inFlightSummarizeChatIds set,
+		// which was per-chat and so made a world-lore run block a character one.
+		const abortController = new AbortController()
+		const activityId = activityStore.startChatSummarize(
+			{
+				userId,
+				chatId,
+				chatLabel: chat.name ?? undefined,
+				loreType: loreType as "world" | "character",
+				lorebookId: chat.lorebookId!,
+				topic: topic || undefined
+			},
+			abortController
+		)
 
-				// Fetch the specified messages in order
+		/** Terminalise the activity alongside the error event. */
+		const failRun = (
+			error: string,
+			reason: Sockets.Chats.Summarize.ErrorResponse["reason"] = "generation_failed"
+		) => {
+			activityStore.updateChatSummarize(activityId, {
+				status: "error",
+				errorMessage: error
+			})
+			emitToUser("chats:summarize:error", {
+				reason,
+				error
+			} satisfies Sockets.Chats.Summarize.ErrorResponse)
+			return null as any
+		}
+
+		return await (async () => {
+			try {
+				// Snapshot inside the lock, LLM outside it.
+				//
+				// This read is the only chat-state-dependent step —
+				// generateSummary performs no DB access at all — so holding the
+				// lock across the whole pipeline (as this handler used to)
+				// would queue the user's next message behind minutes of LLM
+				// calls. That is exactly the trap a minimize-first flow must
+				// not set. Same scoping as scenes:process.
 				const whereClause =
 					messageIds === "all"
 						? and(
@@ -99,13 +125,17 @@ export const chatsSummarizeHandler: Handler<
 								inArray(schema.chatMessages.id, messageIds)
 							)
 
-				const rawMessages = await db.query.chatMessages.findMany({
-					where: whereClause,
-					orderBy: (cm, { asc }) => asc(cm.id)
-				})
+				const rawMessages = await withChatTriggerLock(chatId, async () =>
+					db.query.chatMessages.findMany({
+						where: whereClause,
+						orderBy: (cm, { asc }) => asc(cm.id)
+					})
+				)
+
+				if (abortController.signal.aborted) return null as any
 
 				if (rawMessages.length === 0) {
-					throw new Error("No messages found to summarize.")
+					return failRun("No messages found to summarize.")
 				}
 
 				// Collect unique character and persona IDs from messages
@@ -259,7 +289,19 @@ export const chatsSummarizeHandler: Handler<
 					synthSampling: synthResolved.sampling,
 					nameConnection: nameResolved.connection,
 					nameSampling: nameResolved.sampling,
+					// The summarizer already bridges this to every
+					// runGeneration call — it was simply never passed, which is
+					// why cancelling used to leave the run burning tokens.
+					signal: abortController.signal,
 					onProgress: (data) => {
+						// Mirror progress into the activity as well as the
+						// socket event, so a closed modal can catch up rather
+						// than losing everything between close and reopen.
+						activityStore.updateChatSummarize(activityId, {
+							phase: data.phase,
+							batch: data.batch,
+							totalBatches: data.totalBatches
+						})
 						emitToUser(
 							"chats:summarize:progress",
 							data satisfies Sockets.Chats.Summarize.Progress
@@ -368,12 +410,44 @@ export const chatsSummarizeHandler: Handler<
 					suggestedMentionedCharacters
 				}
 
-				emitToUser("chats:summarize:complete", response)
+				// A cooperating abort can let the call above resolve normally with
+				// a truncated result rather than throw — bail before parking a
+				// partial summary in the activity as if it were finished.
+				if (abortController.signal.aborted) return null as any
+
+				// Park the result on the activity, not just the socket event.
+				// This is the only copy until the user saves, so it has to
+				// survive the modal closing.
+				activityStore.updateChatSummarize(activityId, {
+					status: "review",
+					pendingResult: {
+						content: response.content,
+						name: response.name,
+						raw: response.raw,
+						lorebookBindingId
+					}
+				})
+
+				emitToUser("chats:summarize:complete", {
+					...response,
+					activityId
+				})
 				return response
-			} finally {
-				inFlightSummarizeChatIds.delete(chatId)
+			} catch (err) {
+				// Narrower than it looks, matching scenes.ts: activityStore
+				// .cancel() aborts our controller synchronously, so
+				// signal.aborted is already true for any exception that is
+				// genuinely our own cancellation — and that path has already
+				// removed the activity.
+				if (abortController.signal.aborted) return null as any
+				activityStore.updateChatSummarize(activityId, {
+					status: "error",
+					errorMessage:
+						err instanceof Error ? err.message : "Unknown error"
+				})
+				throw err
 			}
-		})
+		})()
 	}
 }
 

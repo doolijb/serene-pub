@@ -28,6 +28,21 @@
 		getContext("koboldCppSettingsCtx")
 	)
 
+	const panelsCtx: PanelsCtx = getContext("panelsCtx")
+
+	// Setup-wizard hand-off — see the matching block in OllamaSidebar. The
+	// wizard sets digest.tutorial immediately before opening this panel, so a
+	// truthy flag means the user just clicked "KoboldCPP Manager" on the
+	// current step. With no GGUF downloaded, the Models tab is an empty list
+	// and a dead end, so point at Available and glow the tab.
+	//
+	// The flag stays lit across panel → Available → pick a model → recommended
+	// quantization; it's cleared when a download actually starts.
+	let isTutorial = $derived(!!panelsCtx?.digest?.tutorial)
+	let installedCount = $state<number | null>(null)
+	let hasNoModels = $derived(installedCount === 0)
+	let didAutoOpenAvailable = $state(false)
+
 	let activeTab = $state("models")
 
 	// Section names. The tab triggers are icon-only (see PanelTab), so
@@ -67,8 +82,17 @@
 	let isUnconfigured = $derived(managedMode === null)
 
 	function handleTabChange(e: ValueChangeDetails): void {
+		// A deliberate choice outranks the wizard's suggestion from here on.
+		didAutoOpenAvailable = true
 		activeTab = e.value
 	}
+
+	$effect(() => {
+		if (!isTutorial || didAutoOpenAvailable) return
+		if (!hasNoModels) return
+		didAutoOpenAvailable = true
+		activeTab = "available"
+	})
 
 	function checkConnection() {
 		isTesting = true
@@ -120,6 +144,17 @@
 	})
 
 	onMount(() => {
+		// Only KoboldCppModelsTab fetches this, and only once it has rendered —
+		// backwards for deciding which tab to render. Ask here too, but only
+		// during the wizard hand-off so the normal path is unchanged.
+		socket.on(
+			"koboldcpp:listModels",
+			(message: Sockets.KoboldCPP.ListModels.Response) => {
+				installedCount = message.availableModels?.length ?? 0
+			}
+		)
+		if (panelsCtx?.digest?.tutorial) socket.emit("koboldcpp:listModels", {})
+
 		socket.on(
 			"koboldcpp:version",
 			(message: Sockets.KoboldCPP.Version.Response) => {
@@ -233,7 +268,9 @@
 <div class="flex h-full flex-col p-4">
 	{#if !koboldCppSettingsCtx.settings?.koboldCppManagerEnabled}
 		<!-- Feature disabled by admin -->
-		<div class="flex flex-1 items-center justify-center p-4">
+		<!-- No p-4 here: the root above already applies it, so this was insetting
+		     the content by 32px against every other sidebar's 16px. -->
+		<div class="flex flex-1 items-center justify-center">
 			<div class="text-center">
 				<Icons.AlertCircle
 					class="text-warning-500 mx-auto mb-4 h-12 w-12"
@@ -321,7 +358,10 @@
 				Back
 			</button>
 		</div>
-		<div class="mt-6 flex flex-col gap-4 px-4">
+		<!-- px-4 dropped: on top of the root's p-4 it indented this block 32px
+		     while its sibling sections sat at 16px, so the column visibly
+		     stepped in and out as you moved down the panel. -->
+		<div class="mt-6 flex flex-col gap-4">
 			<p class="text-surface-700-300 text-sm">
 				Enter the URL of your running KoboldCPP instance.
 			</p>
@@ -410,6 +450,9 @@
 						value="available"
 						label="Available"
 						icon={Icons.Search}
+						class={isTutorial && hasNoModels
+							? "tutorial-highlight"
+							: ""}
 					/>
 					<PanelTab
 						value="downloads"

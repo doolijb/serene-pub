@@ -52,6 +52,28 @@ describe("docsIndex", () => {
 		}
 	})
 
+	// The reverse of the check above, and the one that was missing: a doc file
+	// with no DOC_ORDER entry gets order -1 and sorts ahead of "getting-started"
+	// rather than falling to the end, so adding a doc without listing it
+	// silently pushes it to the front of the index.
+	it("has a DOC_ORDER entry for every doc file", () => {
+		for (const doc of docsIndex) {
+			expect(
+				DOC_ORDER.includes(doc.slug),
+				`doc "${doc.slug}" is missing from DOC_ORDER, so it sorts before "getting-started"`
+			).toBe(true)
+		}
+	})
+
+	it("gives every doc a non-negative order", () => {
+		for (const doc of docsIndex) {
+			expect(
+				doc.order,
+				`doc "${doc.slug}" resolved to order ${doc.order}`
+			).toBeGreaterThanOrEqual(0)
+		}
+	})
+
 	it("is sorted according to DOC_ORDER", () => {
 		const slugs = docsIndex.map((d) => d.slug)
 		const known = slugs.filter((s) => DOC_ORDER.includes(s))

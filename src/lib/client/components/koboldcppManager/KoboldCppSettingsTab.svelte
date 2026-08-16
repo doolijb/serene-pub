@@ -333,7 +333,7 @@
 	}
 </script>
 
-<div class="space-y-6 p-4">
+<div class="space-y-6 py-4">
 	<!-- Header -->
 	<div class="mt-4 text-center">
 		<img

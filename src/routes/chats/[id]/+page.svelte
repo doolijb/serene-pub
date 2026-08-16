@@ -3,12 +3,14 @@
 	import { goto } from "$app/navigation"
 	import { Dialog, Portal, Popover } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 	import * as Icons from "@lucide/svelte"
 	import MessageComposer from "$lib/client/components/chatMessages/MessageComposer.svelte"
 	import MessageControls from "$lib/client/components/chatMessages/MessageControls.svelte"
 	import ChatContainer from "$lib/client/components/chatMessages/ChatContainer.svelte"
 	import ChatMessage from "$lib/client/components/chatMessages/ChatMessage.svelte"
 	import NextCharacterBlock from "$lib/client/components/chatMessages/NextCharacterBlock.svelte"
+	import ProcessSceneModal from "$lib/client/components/modals/ProcessSceneModal.svelte"
 	import ChatComposer from "$lib/client/components/chatMessages/ChatComposer.svelte"
 	import GeneratingAnimation from "$lib/client/components/chatMessages/GeneratingAnimation.svelte"
 	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
@@ -41,6 +43,12 @@
 	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 	let userSettingsCtx: UserSettingsCtx = getContext("userSettingsCtx")
 	let openChatCtx: OpenChatCtx = getContext("openChatCtx")
+	let sceneSummarizesCtx: SceneSummarizesCtx = $state(
+		getContext("sceneSummarizesCtx")
+	)
+	let chatSummarizesCtx: ChatSummarizesCtx = $state(
+		getContext("chatSummarizesCtx")
+	)
 
 	// Lets globally-rendered sidebars (e.g. LorebooksSidebar) know which chat
 	// is open and whether it already has a lorebook, without a fetch of their own.
@@ -167,16 +175,50 @@
 		return chat?.chatMessages?.some((msg) => msg.isGenerating) || false
 	})
 
+	/**
+	 * True between dispatching a generation and the server's `isGenerating`
+	 * placeholder arriving.
+	 *
+	 * Without it the next-character block flashes on every send: `handleSend`
+	 * clears `newMessage` synchronously, while `isGenerating` is only set after
+	 * a socket round trip that additionally queues on the chat trigger lock. For
+	 * that whole window every other condition below is already satisfied.
+	 *
+	 * This race is not 1:1-specific — group chats on the ORDERED strategy have
+	 * it too; it was simply invisible while the block was gated to groups.
+	 */
+	let triggerInFlight: boolean = $state(false)
+	let triggerInFlightTimer: ReturnType<typeof setTimeout> | undefined
+
+	function markTriggerInFlight() {
+		triggerInFlight = true
+		clearTimeout(triggerInFlightTimer)
+		// Backstop only: a generation that never starts must not wedge the
+		// block off permanently. The real clears are the two below.
+		triggerInFlightTimer = setTimeout(
+			() => (triggerInFlight = false),
+			15000
+		)
+	}
+
+	function clearTriggerInFlight() {
+		triggerInFlight = false
+		clearTimeout(triggerInFlightTimer)
+	}
+
+	// Clear as soon as the placeholder lands — the normal path.
+	$effect(() => {
+		if (hasGeneratingMessage) clearTriggerInFlight()
+	})
+
 	// Determine if we should show the next character block
 	let shouldShowNextCharacterBlock: boolean = $derived.by(() => {
 		const hasMessageDraft = newMessage.trim().length > 0
 		const isEditingMessage = !!editChatMessage
 		const hasNextCharacter = !!chatResponseOrder?.nextCharacterId
-		const isGroupChat =
-			!!chat?.isGroup && (chat?.chatCharacters?.length || 0) > 1
 
 		const shouldShow =
-			isGroupChat &&
+			!triggerInFlight &&
 			!hasGeneratingMessage &&
 			!hasMessageDraft &&
 			!isEditingMessage &&
@@ -184,6 +226,74 @@
 			!!chat?.chatMessages?.length // Only show if there are messages
 
 		return shouldShow
+	})
+
+	// A single-character chat has nobody else to hand the turn to, so the
+	// "choose a different character" control is meaningless there. Keyed on cast
+	// size rather than `isGroup`, because an isGroup chat with one character
+	// exists by the server's own definition (chats.ts: isGroup = count > 1).
+	let canChooseDifferentCharacter: boolean = $derived(
+		(chat?.chatCharacters?.length || 0) > 1
+	)
+
+	// ── Scene review (activity-backed) ───────────────────────────────
+	// A chat-started scene summarize hands off to ProcessSceneModal, which is
+	// the piece that already knows how to resume a minimized run and saves via
+	// scenes:update. It takes plain props and no context, so it mounts here as
+	// happily as it does in the lorebook panel — the only thing it needs that
+	// this page lacks is the binding list, fetched below.
+	let showProcessSceneModal = $state(false)
+	let processSceneId: number | null = $state(null)
+	let processActivityId: string | null = $state(null)
+	let processPendingResult: any = $state(null)
+	let lorebookBindingList: {
+		id: number
+		name: string
+		binding: string
+	}[] = $state([])
+
+	$effect(() => {
+		if (chat?.lorebookId) {
+			socket?.emit("lorebooks:bindingList", {
+				lorebookId: chat.lorebookId
+			})
+		}
+	})
+
+	/**
+	 * Reopen a backgrounded world/character summarize when the Activity panel
+	 * asks. The sidebar navigates here first (unlike the scene/compile cards,
+	 * which open a panel), so this only has to pick the id back up.
+	 */
+	let resumeSummarizeActivity = $state<ChatSummarizeState | null>(null)
+	$effect(() => {
+		const id = chatSummarizesCtx?.reviewActivityId
+		if (!id) return
+		const activity = chatSummarizesCtx.activities.find(
+			(a) => a.activityId === id && a.chatId === chatId
+		)
+		if (!activity) return
+		chatSummarizesCtx.setReviewActivityId(null)
+		resumeSummarizeActivity = activity
+		summarizeLoreType = activity.loreType
+		showSummarizeModal = true
+	})
+
+	// Reopen a minimized/backgrounded run when the Activity panel asks for it.
+	$effect(() => {
+		const id = sceneSummarizesCtx?.reviewSceneId
+		if (id == null) return
+		const activity = sceneSummarizesCtx.activities.find(
+			(a: any) =>
+				a.sceneId === id &&
+				(a.status === "review" || a.status === "running")
+		)
+		if (!activity) return
+		sceneSummarizesCtx.setReviewSceneId(null)
+		processSceneId = activity.sceneId
+		processActivityId = activity.activityId
+		processPendingResult = activity.pendingResult ?? null
+		showProcessSceneModal = true
 	})
 
 	// Get the next character info from chat data
@@ -335,6 +445,19 @@
 		// see that handler for why: deciding this client-side, from a single
 		// client's local chat state, doesn't hold up with multiple real
 		// participants sending messages around the same time.
+
+		// ...but we do need to know whether a generation is *coming*, purely to
+		// suppress the next-character block until it lands. Under MANUAL the
+		// server's trigger call is a guaranteed no-op (it resolves no next
+		// character and breaks), so flagging on every send would hide the block
+		// for the whole settle timeout on exactly the chats that need it most.
+		//
+		// Do NOT substitute chats:getResponseOrder for this check — that handler
+		// calls getNextCharacterTurn without the MANUAL guard and returns a
+		// non-null nextCharacterId for MANUAL chats.
+		if (chat?.groupReplyStrategy !== GroupReplyStrategies.MANUAL) {
+			markTriggerInFlight()
+		}
 
 		// Refresh response order after sending message
 		socket.emit("chats:getResponseOrder", { chatId })
@@ -714,6 +837,7 @@
 	function handleTriggerContinueConversation(e: Event) {
 		e.stopPropagation()
 		openMsgControlsMenu = undefined
+		markTriggerInFlight()
 		socket.emit("chats:triggerGenerateMessage", { chatId, triggered: true })
 	}
 	function handleTriggerCharacterMessage(e: Event) {
@@ -732,6 +856,7 @@
 	function onSelectTriggerCharacterMessage(characterId: number) {
 		showTriggerCharacterMessageModal = false
 		openMsgControlsMenu = undefined
+		markTriggerInFlight()
 		socket.emit("chats:triggerGenerateMessage", {
 			chatId,
 			characterId,
@@ -760,6 +885,7 @@
 
 	function handleContinueWithNextCharacter() {
 		if (!nextCharacter) return
+		markTriggerInFlight()
 		socket.emit("chats:triggerGenerateMessage", {
 			chatId,
 			characterId: nextCharacter.id,
@@ -856,6 +982,13 @@
 		return true
 	}
 
+	// NOTE: this deliberately no longer returns true for
+	// `openMsgControlsMenu === msg.id`. That branch made opening a message's
+	// "..." popover add the swipe row to that message, growing it by a whole
+	// row while the popover was anchored to it — the message jumped and the
+	// popover had to reposition. The trade is that swipe arrows on mid-history
+	// assistant messages are no longer reachable; if that needs restoring, add
+	// a labelled swipe entry to the popover rather than re-coupling the two.
 	function showSwipeControls(
 		msg: SelectChatMessage,
 		isGreeting: boolean
@@ -868,8 +1001,6 @@
 			res = false
 		} else if (msg.role === "user") {
 			return false
-		} else if (openMsgControlsMenu === msg.id) {
-			res = true
 		} else if (isGreeting) {
 			res = (lastPersonaMessage?.id ?? 0) < msg.id
 		}
@@ -987,7 +1118,33 @@
 	// "chatMessage" (singular) is the server's event for a single message
 	// fetch/echo (distinct from the "chatMessages:*" bulk/action events used
 	// elsewhere) - this surfaces a toast if that ever fails.
+	function handleLorebookBindingList(msg: {
+		lorebookBindingList?: { id: number; name: string; binding: string }[]
+	}) {
+		lorebookBindingList = msg.lorebookBindingList ?? []
+	}
+
+	function handleChatSummarizeError(msg: { error?: string }) {
+		// Page-level for the same reason as scenes:process:error — the modal
+		// tears its listeners down on close, and this event is suppressed in
+		// Layout's generic toaster, so a failure while minimized was silent.
+		toaster.error({
+			title: "Summarization failed",
+			description: msg?.error
+		})
+	}
+
+	function handleSceneProcessError(msg: { error?: string }) {
+		toaster.error({
+			title: "Scene processing failed",
+			description: msg?.error
+		})
+	}
+
 	function handleChatMessageError(msg: { error?: string }) {
+		// A generation that failed before any isGenerating row would otherwise
+		// leave the next-character block suppressed for the full settle timeout.
+		clearTriggerInFlight()
 		toaster.error({
 			title: "Failed to load message",
 			description: msg?.error
@@ -1148,6 +1305,13 @@
 		socket.on("chats:get", handleChatsGet)
 		socket.on("chatMessage", handleChatMessage)
 		socket.on("chatMessage:error", handleChatMessageError)
+		socket.on("lorebooks:bindingList", handleLorebookBindingList)
+		// Page-level, so it still fires when the review modal is closed. The
+		// generic onAny toaster already suppresses this event, and the only
+		// other listener lives in the lorebook History pane — so without this a
+		// chat-started run that failed while minimized reported nothing at all.
+		socket.on("scenes:process:error", handleSceneProcessError)
+		socket.on("chats:summarize:error", handleChatSummarizeError)
 		socket.on("characters:update", handleCharactersUpdate)
 		socket.on("personas:update", handlePersonasUpdate)
 		socket.on("chats:promptTokenCount", handleChatsPromptTokenCount)
@@ -1186,6 +1350,9 @@
 			socket.off("chats:get", handleChatsGet)
 			socket.off("chatMessage", handleChatMessage)
 			socket.off("chatMessage:error", handleChatMessageError)
+			socket.off("lorebooks:bindingList", handleLorebookBindingList)
+			socket.off("scenes:process:error", handleSceneProcessError)
+			socket.off("chats:summarize:error", handleChatSummarizeError)
 			socket.off("characters:update", handleCharactersUpdate)
 			socket.off("personas:update", handlePersonasUpdate)
 			socket.off("chats:promptTokenCount", handleChatsPromptTokenCount)
@@ -1405,15 +1572,18 @@
 							>
 								{#if isScened}
 									<span
-										class="btn btn-sm preset-filled-surface-400-600 cursor-not-allowed opacity-60"
+										class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600 cursor-not-allowed opacity-60"
 										title="Already captured in a scene"
+										aria-label="Already captured in a scene"
 									>
-										<Icons.Film size={16} />
-										<span class="lg:hidden">In Scene</span>
+										<Icons.Film aria-hidden="true" />
+										<span class="hidden lg:inline">
+											In Scene
+										</span>
 									</span>
 								{:else}
 									<button
-										class="btn btn-sm {selectedMessageIds.has(
+										class="btn msg-ctrl-btn-labeled {selectedMessageIds.has(
 											msg.id
 										)
 											? 'preset-filled-secondary-500'
@@ -1421,39 +1591,53 @@
 										title={selectedMessageIds.has(msg.id)
 											? "Deselect message"
 											: "Select message"}
+										aria-label={selectedMessageIds.has(
+											msg.id
+										)
+											? "Deselect message"
+											: "Select message"}
+										aria-pressed={selectedMessageIds.has(
+											msg.id
+										)}
 										onclick={() =>
 											toggleSummarizationMessage(msg.id)}
 									>
 										{#if selectedMessageIds.has(msg.id)}
-											<Icons.CheckSquare size={16} />
+											<Icons.CheckSquare
+												aria-hidden="true"
+											/>
 										{:else}
-											<Icons.Square size={16} />
+											<Icons.Square aria-hidden="true" />
 										{/if}
-										<span class="lg:hidden">
+										<span class="hidden lg:inline">
 											{selectedMessageIds.has(msg.id)
 												? "Deselect"
 												: "Select"}
 										</span>
 									</button>
 									<button
-										class="btn btn-sm preset-filled-surface-400-600"
+										class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600"
 										title="Select all above up to nearest selected"
+										aria-label="Select all above up to nearest selected"
 										onclick={() =>
 											selectAllAbove(props.index)}
 									>
-										<Icons.ChevronsUp size={16} />
-										<span class="lg:hidden">
+										<Icons.ChevronsUp aria-hidden="true" />
+										<span class="hidden lg:inline">
 											Select All Above
 										</span>
 									</button>
 									<button
-										class="btn btn-sm preset-filled-surface-400-600"
+										class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600"
 										title="Select all below up to nearest selected"
+										aria-label="Select all below up to nearest selected"
 										onclick={() =>
 											selectAllBelow(props.index)}
 									>
-										<Icons.ChevronsDown size={16} />
-										<span class="lg:hidden">
+										<Icons.ChevronsDown
+											aria-hidden="true"
+										/>
+										<span class="hidden lg:inline">
 											Select All Below
 										</span>
 									</button>
@@ -1655,6 +1839,7 @@
 					<NextCharacterBlock
 						{nextCharacter}
 						shouldShow={shouldShowNextCharacterBlock}
+						{canChooseDifferentCharacter}
 						onContinueWithNextCharacter={handleContinueWithNextCharacter}
 						onChooseDifferentCharacter={handleChooseDifferentCharacter}
 					/>
@@ -1663,9 +1848,41 @@
 		</ChatContainer>
 	</div>
 
+	{#if showProcessSceneModal && processSceneId !== null && chat?.lorebookId}
+		<ProcessSceneModal
+			open={showProcessSceneModal}
+			onOpenChange={(e) => (showProcessSceneModal = e.open)}
+			sceneId={processSceneId}
+			activityId={processActivityId}
+			pendingResult={processPendingResult}
+			lorebookId={chat.lorebookId}
+			{lorebookBindingList}
+			onApplied={() => {
+				socket?.emit("scenes:scenedMessageIds", { chatId })
+				socket?.emit("scenes:list", {
+					chatId
+				} satisfies Sockets.Scenes.List.Params)
+			}}
+			onDiscarded={() => {
+				// The server deletes the scene on dismiss when it was created
+				// for this run, so refresh what the chat shows as "scened".
+				socket?.emit("scenes:scenedMessageIds", { chatId })
+				socket?.emit("scenes:list", {
+					chatId
+				} satisfies Sockets.Scenes.List.Params)
+			}}
+		/>
+	{/if}
+
 	<SummarizeLoreModal
 		bind:open={showSummarizeModal}
-		onOpenChange={(e) => (showSummarizeModal = e.open)}
+		onOpenChange={(e) => {
+			showSummarizeModal = e.open
+			// Drop the resume payload on close so the next manual open starts
+			// from configure rather than rehydrating a stale review.
+			if (!e.open) resumeSummarizeActivity = null
+		}}
+		resumeActivity={resumeSummarizeActivity}
 		{chatId}
 		lorebookId={chat?.lorebookId ?? null}
 		selectedMessageIds={[...selectedMessageIds]}
@@ -1676,6 +1893,23 @@
 				chatId
 			} satisfies Sockets.Scenes.List.Params)
 			exitSummarizationMode()
+		}}
+		onSceneProcessStarted={(sceneId) => {
+			// Fires only after scenes:create succeeded, so the selection is
+			// safe to drop — the scene row now holds those message ids, and
+			// they immediately render as "scened". Clearing on click instead
+			// would lose a hand-picked selection whenever the create failed.
+			socket?.emit("scenes:scenedMessageIds", { chatId })
+			socket?.emit("scenes:list", {
+				chatId
+			} satisfies Sockets.Scenes.List.Params)
+			exitSummarizationMode()
+			// Review happens in the activity-backed modal, which is what knows
+			// how to resume a minimized run and saves via scenes:update.
+			processSceneId = sceneId
+			processActivityId = null
+			processPendingResult = null
+			showProcessSceneModal = true
 		}}
 		onLorebookSet={handleLorebookSet}
 		chatCharacters={(chat?.chatCharacters ?? []).map((cc) => ({
@@ -2769,17 +3003,6 @@
 		onCancel={onBranchChatCancel}
 		initialTitle={chat?.name ?? undefined}
 	/>
-
-	{#snippet generatingAnimation()}
-		<div class="wrapper">
-			<div class="circle"></div>
-			<div class="circle"></div>
-			<div class="circle"></div>
-			<div class="shadow"></div>
-			<div class="shadow"></div>
-			<div class="shadow"></div>
-		</div>
-	{/snippet}
 
 	{#snippet workflowButton()}
 		<Icons.BookOpen size="0.75em" class="block" />

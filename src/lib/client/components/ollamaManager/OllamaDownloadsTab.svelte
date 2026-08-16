@@ -107,7 +107,7 @@
 </script>
 
 <div class="flex h-full flex-col">
-	<div class="p-4">
+	<div class="py-4">
 		{#if !downloadingCount && !doneCount}
 			<!-- No downloads state -->
 			<div class="flex flex-1 items-center justify-center p-8">

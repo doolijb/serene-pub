@@ -1,14 +1,26 @@
 <script lang="ts">
-	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal, Switch } from "@skeletonlabs/skeleton-svelte"
 	import { z } from "zod"
 
 	interface Props {
 		open: boolean
 		onOpenChange: (e: OpenChangeDetails) => void
-		onConfirm: (name: string) => void
+		/** `checked` is only meaningful when `checkboxLabel` is supplied. */
+		onConfirm: (name: string, checked: boolean) => void
 		onCancel: () => void
 		title?: string
 		description?: string
+		/**
+		 * Opt-in extra toggle. This modal is shared by the Lorebooks, Sampling,
+		 * Prompts and Context sidebars — omitting `checkboxLabel` leaves those
+		 * three rendering exactly as they did before, which is why this is a
+		 * prop rather than a fixed field.
+		 *
+		 * There is deliberately no disabled state: a caller that only wants the
+		 * toggle when it is actionable simply omits the label.
+		 */
+		checkboxLabel?: string
+		checkboxChecked?: boolean
 	}
 
 	let {
@@ -17,8 +29,18 @@
 		onConfirm,
 		onCancel,
 		title,
-		description
+		description,
+		checkboxLabel,
+		checkboxChecked = false
 	}: Props = $props()
+
+	let checked = $state(checkboxChecked)
+
+	// Re-seed on each open — the modal stays mounted, so without this a second
+	// open would inherit whatever the user left the toggle on last time.
+	$effect(() => {
+		if (open) checked = checkboxChecked
+	})
 
 	// Zod validation schema
 	const nameSchema = z.object({
@@ -103,7 +125,7 @@
 							onkeydown={(e) => {
 								if (e.key === "Enter" && isValid) {
 									if (validateForm()) {
-										onConfirm(name)
+										onConfirm(name, checked)
 									}
 								}
 							}}
@@ -124,6 +146,24 @@
 							</p>
 						{/if}
 					</div>
+					{#if checkboxLabel}
+						<Switch
+							name="new-name-modal-option"
+							{checked}
+							onCheckedChange={(e) => (checked = e.checked)}
+							class="flex items-center gap-2"
+						>
+							<Switch.Control
+								class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+							>
+								<Switch.Thumb />
+							</Switch.Control>
+							<Switch.HiddenInput />
+							<Switch.Label class="text-sm">
+								{checkboxLabel}
+							</Switch.Label>
+						</Switch>
+					{/if}
 				</article>
 				<footer class="flex justify-end gap-4">
 					<button
@@ -138,7 +178,7 @@
 						class="btn preset-filled-primary-500"
 						onclick={() => {
 							if (validateForm()) {
-								onConfirm(name)
+								onConfirm(name, checked)
 							}
 						}}
 						disabled={!isValid}

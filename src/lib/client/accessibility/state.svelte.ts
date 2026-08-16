@@ -22,16 +22,27 @@
 import { env } from "$env/dynamic/public"
 
 /**
- * Shared, live reactive flag — read/written by both the root layout (which
- * decides Layout vs AccessibleShell) and src/routes/document-view/+layout.ts
- * (which force-enables it if someone lands on a /document-view/* URL
- * directly, e.g. a bookmarked or shared link, without ever pressing the
- * shortcut). Must be a shared singleton, not a `$state` re-declared
- * separately in each component — otherwise the two layouts can't see each
- * other's writes and the root layout would keep rendering the wrong shell.
+ * Shared, live reactive flags — read/written by both the root layout (which
+ * decides Layout vs AccessibleShell) and src/routes/document-view/+layout.svelte
+ * (which activates it for the current load if someone lands on a
+ * /document-view/* URL directly, e.g. a bookmarked or shared link, without
+ * ever pressing the shortcut). Must be a shared singleton, not a `$state`
+ * re-declared separately in each component — otherwise the two layouts can't
+ * see each other's writes and the root layout would keep rendering the wrong
+ * shell.
+ *
+ * `enabled` and `persisted` are deliberately separate. Merely arriving at a
+ * /document-view/* URL sets `enabled` only: it renders Document View for this
+ * visit but records nothing, so the next load returns to the standard site.
+ * `persisted` tracks the localStorage preference and is set only by the
+ * explicit entry points (home-page button, settings button, Ctrl+Shift+Y).
+ * They were one flag before, which meant a shared link, a bookmark, or the
+ * `/document-view/help` link inside the in-app docs silently made Document
+ * View that browser's permanent default.
  */
 class AccessibilityModeStore {
 	enabled = $state(false)
+	persisted = $state(false)
 }
 export const accessibilityModeStore = new AccessibilityModeStore()
 
@@ -111,20 +122,45 @@ export function isAccessibilityEnabled(): boolean {
 	return fallback
 }
 
+/**
+ * Turn Document View on for this load *without* recording a preference. For
+ * arrivals that aren't a choice — a shared link, a bookmark, a typed URL, or
+ * the /document-view/help link inside the in-app docs. The next load goes back
+ * to the standard site unless the user opts in properly.
+ */
+export function activateForSession(): void {
+	accessibilityModeStore.enabled = true
+}
+
+/** The explicit opt-in: home-page button, settings button, Ctrl+Shift+Y. */
 export function enableAccessibility(): void {
 	accessibilityModeStore.enabled = true
+	accessibilityModeStore.persisted = true
 	if (!hasStorage()) return
 	localStorage.setItem(MODE_KEY, "true")
 	resume()
 }
 
-/** Only used by the "Exit Document View" settings action — an explicit,
- * deliberate opt-out, distinct from "Browse Standard Site" (pause()) which
- * is meant to be temporary. */
+/** The explicit opt-out — both "Exit Document View" actions and Ctrl+Shift+Y
+ * from inside Document View. Distinct from "Browse Standard Site" (pause()),
+ * which is meant to last only for the tab.
+ *
+ * resume() matters here: without it a paused session left `a11y-paused` behind
+ * in sessionStorage after the preference was gone, and the only reason that
+ * wasn't visible is that enableAccessibility() happens to clear it later. */
 export function disableAccessibility(): void {
 	accessibilityModeStore.enabled = false
+	accessibilityModeStore.persisted = false
 	if (!hasStorage()) return
-	localStorage.removeItem(MODE_KEY)
+	// Store "false" rather than removing the key. isAccessibilityEnabled()
+	// reads an *absent* key as "this browser has never chosen" and falls back
+	// to PUBLIC_DOCUMENT_VIEW_DEFAULT — so removing it meant that on any
+	// deployment setting that variable, turning Document View off lasted
+	// exactly until the next load, and the docs' promise that a user's own
+	// choice "always wins, even if the environment variable changes later"
+	// was not true in the off direction. An explicit "false" is that choice.
+	localStorage.setItem(MODE_KEY, "false")
+	resume()
 }
 
 export function isPaused(): boolean {

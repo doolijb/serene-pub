@@ -1,6 +1,6 @@
 import * as path from "path"
 import * as fsPromises from "fs/promises"
-import { fetchCurrentModelName, fetchModelStatusForPoll } from "./kcppHttp"
+import { fetchCurrentModelStatus, fetchModelStatusForPoll } from "./kcppHttp"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { pollUntilReady } from "./pollUntilReady"
@@ -75,13 +75,6 @@ export function getLoadedSignature(): LoadedSignature | null {
 // actually match instead of always reporting a mismatch.
 function normalizeModelName(name: string): string {
 	return path.basename(name).replace(/\.gguf$/i, "")
-}
-
-async function getCurrentModelBasename(
-	baseUrl: string
-): Promise<string | null> {
-	const result = await fetchCurrentModelName(baseUrl)
-	return result ? normalizeModelName(result) : null
 }
 
 async function waitForModelReady(
@@ -169,35 +162,47 @@ export async function ensureModelLoaded(opts: {
 		}
 	}
 
-	const current = await getCurrentModelBasename(baseUrl)
+	const status = await fetchCurrentModelStatus(baseUrl)
+	const current = status.modelName
+		? normalizeModelName(status.modelName)
+		: null
 	const expected = normalizeModelName(managedConfig.modelFile)
 
-	if (current === expected) {
-		// gpuLayers/flashAttention/batchSize aren't queryable from koboldcpp at
-		// all — they can only be trusted from what THIS process itself last
-		// loaded. With no in-process record (e.g. right after a server
-		// restart) we can't verify them, so always reload once to be safe;
-		// loadedSignature then tracks it going forward.
-		const known =
-			loadedSignature?.model === expected ? loadedSignature : null
-		const configMatches =
-			known !== null &&
-			known.gpuLayers === managedConfig.gpuLayers &&
-			known.flashAttention === managedConfig.flashAttention &&
-			known.batchSize === managedConfig.batchSize
+	// gpuLayers/flashAttention/batchSize aren't queryable from koboldcpp at
+	// all — they can only be trusted from what THIS process itself last
+	// loaded. With no in-process record (e.g. right after a server
+	// restart) we can't verify them, so always reload once to be safe;
+	// loadedSignature then tracks it going forward.
+	const known = loadedSignature?.model === expected ? loadedSignature : null
+	const configMatches =
+		known !== null &&
+		known.gpuLayers === managedConfig.gpuLayers &&
+		known.flashAttention === managedConfig.flashAttention &&
+		known.batchSize === managedConfig.batchSize
+	const contextSatisfied =
+		configMatches && (!contextSize || known!.contextSize >= contextSize)
 
-		if (configMatches) {
-			if (contextSize) {
-				if (known!.contextSize >= contextSize) {
-					resetTtl(baseUrl, adminPassword, ttlSecs)
-					return
-				}
-				// Loaded context too small — fall through to reload
-			} else {
-				resetTtl(baseUrl, adminPassword, ttlSecs)
-				return
-			}
+	// Two ways to skip the reload. The second one is load-bearing: while a big
+	// model is loading, or while a long generation holds koboldcpp's single
+	// worker, /api/v1/model simply does not answer in time. Treating that
+	// silence as "the wrong model is loaded" makes us reload — which aborts the
+	// in-flight load and guarantees the next probe is also unanswered. That is
+	// a livelock, and it cost a 15-minute graph build that produced nothing
+	// (39 reloads, 2 completed generations). If we cannot ask, but our own
+	// record says we already loaded exactly this model with a big enough
+	// context, believe the record; a genuinely wrong model surfaces as a failed
+	// generation, which is recoverable, whereas the reload loop is not.
+	const koboldSaysItsLoaded = status.determined && current === expected
+	const cannotAskButWeLoadedIt = !status.determined && configMatches
+
+	if (contextSatisfied && (koboldSaysItsLoaded || cannotAskButWeLoadedIt)) {
+		if (cannotAskButWeLoadedIt) {
+			console.log(
+				`[KoboldCPP] model status unavailable (busy loading or generating); trusting the in-process record for "${expected}" instead of forcing a reload`
+			)
 		}
+		resetTtl(baseUrl, adminPassword, ttlSecs)
+		return
 	}
 
 	const modelPath = modelsDir

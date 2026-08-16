@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from "svelte"
 	import { untrack } from "svelte"
+	import { softFade } from "$lib/client/utils/motion"
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	import * as Icons from "@lucide/svelte"
 
@@ -486,8 +487,28 @@
 							</li>
 						{/if}
 
-						<!-- Message row: optional scene bar on the left -->
-						<li class="flex w-full items-stretch gap-2">
+						<!-- Message row: optional scene bar on the left.
+						     Opacity-only fade, no height/transform — autoscroll
+						     reads scrollHeight synchronously on insert, so an
+						     entering message has to contribute its full height
+						     to layout immediately.
+						     Enter is suppressed for bulk inserts: while older
+						     messages are being prepended, and for anything that
+						     isn't the last message (so switching chats doesn't
+						     fade the whole backlog in). First render needs no
+						     guard — Svelte transitions are local by default, so
+						     they don't play when an ancestor block is created.
+						     Exit is fade-only: the <ul> is `gap-3`, and a
+						     collapsing <li> would leave that gap behind to snap
+						     shut at the end — a worse artifact than the fix. -->
+						<li
+							class="flex w-full items-stretch gap-2"
+							in:softFade={{
+								suppressed:
+									loadingOlderMessages || !isLastMessage
+							}}
+							out:softFade
+						>
 							<!-- Scene left bar (inline-style color for cycle support) -->
 							{#if si && color}
 								<div

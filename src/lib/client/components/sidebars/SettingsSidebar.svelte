@@ -177,24 +177,34 @@
 						</div>
 						<div class="flex flex-wrap items-center gap-3">
 							<a
-								href="https://github.com/doolijb/serene-pub"
+								href="https://serenepub.com"
 								target="_blank"
 								rel="noopener noreferrer"
 								class="btn preset-filled-primary-500 gap-1"
+								aria-label="Visit the Serene Pub website"
+							>
+								<Icons.Globe size={16} aria-hidden="true" />
+								<span>Website</span>
+							</a>
+							<a
+								href="https://github.com/doolijb/serene-pub"
+								target="_blank"
+								rel="noopener noreferrer"
+								class="btn preset-filled-surface-500 gap-1"
 								aria-label="Visit Serene Pub GitHub repository"
 							>
 								<Icons.GitBranch size={16} aria-hidden="true" />
 								<span>Repository</span>
 							</a>
 							<a
-								href="https://github.com/doolijb/serene-pub/wiki"
+								href="https://github.com/doolijb/serene-pub/milestones"
 								target="_blank"
 								rel="noopener noreferrer"
 								class="btn preset-filled-surface-500"
-								aria-label="Visit Serene Pub wiki documentation"
+								aria-label="View Serene Pub release milestones"
 							>
-								<Icons.BookOpen size={16} aria-hidden="true" />
-								<span>Wiki</span>
+								<Icons.Milestone size={16} aria-hidden="true" />
+								<span>Milestones</span>
 							</a>
 							<a
 								href="https://discord.gg/3kUx3MDcSa"

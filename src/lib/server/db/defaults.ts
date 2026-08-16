@@ -127,6 +127,39 @@ export async function sync() {
 			}
 		]
 
+		// This list mixes rows that carry an explicit legacy `id` with rows that
+		// let the sequence assign one, and Postgres does NOT advance a sequence
+		// when a row is inserted with an explicit id. On a brand-new database
+		// the sequence therefore still sits at 1 after "Default" (id 1) and
+		// "Disabled" (id 2) are inserted, so the first sequence-assigned row
+		// asks for id 1 and dies on the primary key.
+		//
+		// That failure aborted this entire function, which meant context
+		// configs were never seeded either, which meant the system_settings
+		// insert further down failed its foreign key — leaving an install with
+		// no settings row at all and a permanently blank page. Every fresh
+		// install hit this.
+		//
+		// GREATEST(...) so this only ever raises the sequence: on an existing
+		// install MAX(id) is already past the seeded ids and nothing moves.
+		// resyncIdSequences() at the bottom of this file does the same job, but
+		// it runs after seeding and so never got the chance.
+		const maxSeededSamplingId = defaultSamplingConfigs.reduce(
+			(max, c) => (typeof c.id === "number" && c.id > max ? c.id : max),
+			0
+		)
+		if (maxSeededSamplingId > 0) {
+			await db.execute(`
+				SELECT setval(
+					pg_get_serial_sequence('sampling_configs', 'id'),
+					GREATEST(
+						(SELECT COALESCE(MAX(id), 0) FROM sampling_configs),
+						${maxSeededSamplingId}
+					)
+				);
+			`)
+		}
+
 		const samplingConfigQueries: Promise<any>[] = []
 
 		defaultSamplingConfigs.forEach((data) => {

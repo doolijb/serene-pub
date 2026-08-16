@@ -14,7 +14,7 @@ Design commitments that hold across every page:
 - **Full keyboard operability** — every control is a plain link, button, or form field, so ordinary Tab/Shift+Tab, Enter/Space, and browser find-in-page all work with no special handling to learn. A skip-to-content link is the first Tab stop on every page, and every page change moves keyboard focus to the top of the new page's content.
 - **Screen-reader announcements for in-app events** — font-size changes, save confirmations, validation errors, and status changes (like a KoboldCPP subprocess starting or stopping) are all spoken through a single live region. Route/page-title changes are announced separately by the browser framework's own built-in mechanism, so you don't hear the page title read out twice on every navigation.
 
-See the in-app [Help page](/document-view/help) for the full keyboard shortcut reference and a complete list of every page currently available, gated to what your account can actually access.
+The in-app [Help page](/document-view/help) has the full keyboard shortcut reference and a list of every page currently available, gated to what your account can access. Opening it switches you into Document View for that visit; it doesn't change which interface this browser opens next time.
 
 ## Turning It On
 
@@ -23,9 +23,11 @@ Three entry points exist in the standard app, plus a keyboard shortcut:
 - The home page's **Document View** button (next to the **Documentation** button).
 - The **Switch to Document View** button in **Settings → User** (under a dedicated "Document View" section, alongside the Theme, Dark Mode, and Background controls — see [Custom Themes & User Settings](./themes-and-settings.md)).
 - The **Switch to Document View (Accessible)** link at the bottom of the login screen, so you can reach it before signing in at all.
-- **Ctrl+Shift+Y**, from anywhere in either interface, including the login screen. This is a true toggle: pressing it again from inside Document View switches you straight back to the standard site.
+- **Ctrl+Shift+Y**, from anywhere in either interface, including the login screen. This is a true toggle: pressing it from inside Document View turns the preference off and returns you to the standard site. Use **Browse Standard Site Temporarily** instead if you want to come back to Document View on your next visit.
 
-Your choice is remembered in your browser (not tied to your account), so it persists across sessions until you explicitly turn it off again.
+Your choice is remembered in your browser (not tied to your account), so it persists across sessions until you turn it off again — either with Ctrl+Shift+Y, **Turn Off Document View** in Document View's own settings, or **Exit Document View** in the standard site's **Settings → User**.
+
+Only those explicit choices are remembered. Following a link to a `/document-view/*` page — a bookmark, a shared URL, or a link from the documentation — shows Document View for that visit and leaves your default alone, so nobody gets switched over permanently by clicking a link. If you arrive that way and want it to stick, use **Always Use Document View** on the Document View settings page.
 
 An admin can also make Document View the default for anyone who hasn't visited yet, via the `PUBLIC_DOCUMENT_VIEW_DEFAULT` environment variable — useful for a deployment primarily used by vision-impaired users. It only ever applies before a given browser has its own stored preference; once someone has toggled Document View on or off themselves, that choice always wins, even if the environment variable changes later.
 

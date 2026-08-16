@@ -5,7 +5,11 @@
 	import { goto } from "$app/navigation"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { enableAccessibility } from "$lib/client/accessibility/state.svelte"
+	import {
+		accessibilityModeStore,
+		enableAccessibility,
+		disableAccessibility
+	} from "$lib/client/accessibility/state.svelte"
 	import { z } from "zod"
 	import * as Icons from "@lucide/svelte"
 
@@ -311,6 +315,20 @@
 		panelsCtx.fullscreenPanel = null
 	}
 
+	// The standard site had no way to undo the preference: the only
+	// disableAccessibility() call lived on Document View's own settings page,
+	// so anyone who left via Ctrl+Shift+Y was stranded on a site with no
+	// off-switch, watching Document View return on the next restart.
+	function exitDocumentView() {
+		if (
+			!confirm(
+				"Turn off Document View? You can turn it back on any time with Ctrl+Shift+Y."
+			)
+		)
+			return
+		disableAccessibility()
+	}
+
 	async function logout() {
 		isLoggingOut = true
 
@@ -448,14 +466,31 @@
 			alternative to this interface. You can also switch to it any time
 			with Ctrl+Shift+Y.
 		</p>
-		<button
-			type="button"
-			class="btn preset-filled-primary-500 w-fit max-w-full whitespace-normal"
-			onclick={switchToDocumentView}
-		>
-			<Icons.Accessibility size={16} />
-			Switch to Document View
-		</button>
+		<div class="flex flex-wrap gap-2">
+			<button
+				type="button"
+				class="btn preset-filled-primary-500 w-fit max-w-full whitespace-normal"
+				onclick={switchToDocumentView}
+			>
+				<Icons.Accessibility size={16} />
+				Switch to Document View
+			</button>
+			{#if accessibilityModeStore.persisted}
+				<button
+					type="button"
+					class="btn preset-tonal-error w-fit max-w-full whitespace-normal"
+					onclick={exitDocumentView}
+				>
+					<Icons.X size={16} />
+					Exit Document View
+				</button>
+			{/if}
+		</div>
+		{#if accessibilityModeStore.persisted}
+			<p class="text-surface-700-300 mt-3 text-sm">
+				This browser currently opens Document View by default.
+			</p>
+		{/if}
 	</div>
 
 	<!-- Import Section -->

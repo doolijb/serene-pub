@@ -131,15 +131,18 @@
 			.includes(filename.replace(/\.gguf$/i, "").toLowerCase())
 	}
 
+	// Named so the teardown below removes only this listener. A bare
+	// socket.off("koboldcpp:listModels") drops every handler for the event,
+	// including KoboldCppSidebar's, which reads the same list to decide whether
+	// to open on Available during the setup wizard.
+	function handleListModels(message: Sockets.KoboldCPP.ListModels.Response) {
+		isLoading = false
+		currentModel = message.currentModel
+		availableModels = message.availableModels ?? []
+	}
+
 	onMount(() => {
-		socket.on(
-			"koboldcpp:listModels",
-			(message: Sockets.KoboldCPP.ListModels.Response) => {
-				isLoading = false
-				currentModel = message.currentModel
-				availableModels = message.availableModels ?? []
-			}
-		)
+		socket.on("koboldcpp:listModels", handleListModels)
 
 		socket.on(
 			"connections:list",
@@ -193,7 +196,7 @@
 	})
 
 	onDestroy(() => {
-		socket.off("koboldcpp:listModels")
+		socket.off("koboldcpp:listModels", handleListModels)
 		socket.off("koboldcpp:connectModel")
 		socket.off("koboldcpp:connectModel:error")
 		socket.off("koboldcpp:deleteModel")
@@ -203,7 +206,7 @@
 </script>
 
 <!-- Search -->
-<div class="px-4 py-2">
+<div class="py-2">
 	<div class="flex gap-2">
 		<div class="relative flex-1">
 			<Icons.Search
@@ -254,7 +257,7 @@
 		</p>
 	</div>
 {:else}
-	<div class="space-y-3 p-4">
+	<div class="space-y-3 py-4">
 		{#each filteredModels as model}
 			{@const loaded = isCurrentlyLoaded(model.name)}
 			{@const isDefault =

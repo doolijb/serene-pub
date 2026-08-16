@@ -4,7 +4,9 @@
 	import { page } from "$app/state"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
+		accessibilityModeStore,
 		disableAccessibility,
+		enableAccessibility,
 		pause,
 		isDarkMode,
 		setDarkMode,
@@ -93,6 +95,15 @@
 	function browseStandardSite() {
 		pause()
 		goto(mapToStandardRoute(page.url.pathname))
+	}
+
+	// Only offered when the preference isn't stored yet — i.e. you arrived by
+	// a link, bookmark or typed URL, which shows Document View for this visit
+	// without changing what the browser opens next time. Without this control
+	// there'd be no way at all to make that arrival stick.
+	function alwaysUseDocumentView() {
+		enableAccessibility()
+		announce("Document View is now the default for this browser.")
 	}
 
 	function turnOffDocumentView() {
@@ -334,7 +345,23 @@
 </div>
 
 <h2>Document View</h2>
+{#if !accessibilityModeStore.persisted}
+	<p>
+		You're viewing this page in Document View for this visit only. This
+		browser will open the standard site next time unless you choose to
+		always use Document View.
+	</p>
+{/if}
 <div class="a11y-list-item-actions">
+	{#if !accessibilityModeStore.persisted}
+		<button
+			type="button"
+			class="a11y-btn"
+			onclick={alwaysUseDocumentView}
+		>
+			Always Use Document View
+		</button>
+	{/if}
 	<button
 		type="button"
 		class="a11y-btn a11y-btn-secondary"
@@ -342,13 +369,15 @@
 	>
 		Browse Standard Site Temporarily
 	</button>
-	<button
-		type="button"
-		class="a11y-btn a11y-btn-danger"
-		onclick={turnOffDocumentView}
-	>
-		Turn Off Document View
-	</button>
+	{#if accessibilityModeStore.persisted}
+		<button
+			type="button"
+			class="a11y-btn a11y-btn-danger"
+			onclick={turnOffDocumentView}
+		>
+			Turn Off Document View
+		</button>
+	{/if}
 </div>
 
 <h2>Account</h2>

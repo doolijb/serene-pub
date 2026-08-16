@@ -22,6 +22,7 @@ import {
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 import { resolveTaskConfig } from "$lib/server/utils/resolveTaskConfig"
 import { activityStore } from "$lib/server/utils/activityStore"
+import { withChatTriggerLock } from "$lib/server/utils/chatTriggerLock"
 import { checkChatAccess } from "$lib/server/utils/chatAccess"
 import { resolveOrCreateBinding } from "$lib/server/utils/characterBindingSync"
 
@@ -620,29 +621,84 @@ export const sceneProcessHandler: Handler<
 		})
 		if (!lorebook) throw new Error("Scene not found or access denied.")
 
-		if (!scene.chatId || !scene.selectedMessageIds?.length) {
+		// Register the activity BEFORE any queued work.
+		//
+		// The message read below takes the chat trigger lock, which is a FIFO
+		// queue — so a summarize started while a generation is in flight waits
+		// that generation out. Registering first means the card appears
+		// immediately as "running" instead of the user staring at nothing, makes
+		// cancel-during-the-wait reachable through the abort check further down,
+		// and gives the early-return failures below something to terminalize
+		// rather than failing card-less.
+		// Re-runs come from the review modal, which only knows the sceneId — so
+		// inherit the flag from the activity being superseded. Without this a
+		// regenerate would quietly downgrade a chat-created scene to permanent,
+		// and cancelling afterwards would leave an empty scene behind.
+		const inheritedEphemeral = activityStore
+			.getFor(userId, false)
+			.some(
+				(a) =>
+					a.kind === "scene_summarize" &&
+					a.sceneId === params.sceneId &&
+					a.ephemeralOnCancel === true
+			)
+
+		const abortController = new AbortController()
+		const activityId = activityStore.startScene(
+			{
+				userId,
+				sceneId: params.sceneId,
+				sceneName: scene.name ?? undefined,
+				lorebookId: scene.lorebookId,
+				lorebookLabel: lorebook.name,
+				historyEntryId: scene.historyEntryId ?? undefined,
+				ephemeralOnCancel:
+					params.ephemeralOnCancel === true || inheritedEphemeral
+			},
+			abortController
+		)
+
+		/** Terminalise the activity alongside the error event. */
+		const failRun = (error: string) => {
+			activityStore.updateScene(activityId, {
+				status: "error",
+				errorMessage: error
+			})
 			emitToUser("scenes:process:error", {
 				sceneId: params.sceneId,
-				error: "Scene has no linked messages to process."
+				error
 			} satisfies Sockets.Scenes.Process.ErrorResponse)
 			return null as any
 		}
 
-		const rawMessages = await db.query.chatMessages.findMany({
-			where: (cm, { and, eq, inArray }) =>
-				and(
-					eq(cm.chatId, scene.chatId!),
-					inArray(cm.id, scene.selectedMessageIds!)
-				),
-			orderBy: (cm, { asc }) => asc(cm.id)
-		})
+		if (!scene.chatId || !scene.selectedMessageIds?.length) {
+			return failRun("Scene has no linked messages to process.")
+		}
+
+		// Snapshot inside the lock, LLM outside it.
+		//
+		// This is the only chatMessages read in the whole path and it is pinned
+		// to selectedMessageIds — no surrounding window, no "all" fallback — and
+		// generateSummary touches no DB at all. So the lock only has to cover
+		// the read, closing the TOCTOU against a concurrent delete or
+		// generation. Holding it across the run would instead queue the user's
+		// next message behind minutes of LLM calls, which is precisely the trap
+		// a minimize-first flow must not set.
+		const rawMessages = await withChatTriggerLock(scene.chatId, async () =>
+			db.query.chatMessages.findMany({
+				where: (cm, { and, eq, inArray }) =>
+					and(
+						eq(cm.chatId, scene.chatId!),
+						inArray(cm.id, scene.selectedMessageIds!)
+					),
+				orderBy: (cm, { asc }) => asc(cm.id)
+			})
+		)
+
+		if (abortController.signal.aborted) return null as any
 
 		if (rawMessages.length === 0) {
-			emitToUser("scenes:process:error", {
-				sceneId: params.sceneId,
-				error: "No messages found for this scene."
-			} satisfies Sockets.Scenes.Process.ErrorResponse)
-			return null as any
+			return failRun("No messages found for this scene.")
 		}
 
 		const charIds = [
@@ -736,30 +792,15 @@ export const sceneProcessHandler: Handler<
 			])
 
 		if (!batchResolved.connection) {
-			emitToUser("scenes:process:error", {
-				sceneId: params.sceneId,
-				error: "No AI connection configured. Please set up a connection first."
-			} satisfies Sockets.Scenes.Process.ErrorResponse)
-			return null as any
+			return failRun(
+				"No AI connection configured. Please set up a connection first."
+			)
 		}
 
 		const knownCast = await buildSceneCastList(
 			params.sceneId,
 			scene.lorebookId,
 			scene.chatId ?? null
-		)
-
-		const abortController = new AbortController()
-		const activityId = activityStore.startScene(
-			{
-				userId,
-				sceneId: params.sceneId,
-				sceneName: scene.name ?? undefined,
-				lorebookId: scene.lorebookId,
-				lorebookLabel: lorebook.name,
-				historyEntryId: scene.historyEntryId ?? undefined
-			},
-			abortController
 		)
 
 		let result
@@ -913,6 +954,39 @@ export const sceneProcessHandler: Handler<
 		return response
 	}
 }
+
+/**
+ * Delete a scene that existed only to carry a summarize run, when that run is
+ * abandoned.
+ *
+ * Both conditions are load-bearing, and the second is the one that makes this
+ * safe. `scene_summarize` activities come from two origins — a chat-side
+ * summarize that created its scene up front, and a lorebook-side re-process of a
+ * scene the user already owns — so acting on the flag alone would delete real
+ * work if the flag were ever wrong. A re-processed scene always has a summary,
+ * so the emptiness predicate can never match one.
+ *
+ * It also protects the save path for free: once a result is applied, `summary`
+ * is set, so a later dismiss of the same activity cannot delete the scene.
+ */
+activityStore.setEphemeralSceneCleanup(async (sceneId, userId) => {
+	const scene = await db.query.scenes.findFirst({
+		where: eq(schema.scenes.id, sceneId)
+	})
+	if (!scene) return
+
+	// Ownership, via the owning lorebook — same check the delete handler makes.
+	const lorebook = await db.query.lorebooks.findFirst({
+		where: (l, { and, eq }) =>
+			and(eq(l.id, scene.lorebookId), eq(l.userId, userId))
+	})
+	if (!lorebook) return
+
+	// Provably untouched: never summarised, never had its cast resolved.
+	if (scene.summary !== null || scene.castResolvedAt !== null) return
+
+	await db.delete(schema.scenes).where(eq(schema.scenes.id, sceneId))
+})
 
 export function registerSceneHandlers(
 	socket: any,

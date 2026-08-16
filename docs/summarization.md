@@ -40,7 +40,7 @@ The Activity tab shows a card per in-progress or awaiting-review job relevant to
 - **Scene** summarization jobs — shows "Processing…", then "Ready to review" or "Failed," with a "Review Results" button that jumps straight to the scene.
 - **Compile** jobs — history-entry compilation, with the same running/review/error states and a "Review & Apply" button.
 
-Each card can be dismissed once finished (via the X button), and jobs that are still running for the current user can be cancelled with a **Stop** button (admins can also stop other users' jobs). A badge on the Activity tab shows the total count of active-or-awaiting-review items; the same count feeds a badge on the app header's Activity icon.
+Each card can be dismissed once finished (via the X button), and most jobs that are still running for the current user can be cancelled with a **Stop** button (admins can also stop other users' jobs). **Compile jobs are the exception** — a running compile has no Stop control, so its card offers no action until it finishes, fails, or lands in review; the X to dismiss it only appears once it's no longer running. Graph build/extend, Scene, and Summarize cards all do offer Stop while running. A badge on the Activity tab shows the total count of active-or-awaiting-review items; the same count feeds a badge on the app header's Activity icon.
 
 ### The LLM Queue tab (admin only)
 
