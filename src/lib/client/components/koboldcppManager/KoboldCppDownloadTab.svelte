@@ -30,6 +30,22 @@
 	const isRecommendedQuant = (label: string) => label.includes("Q4_K_M")
 	let isTutorial = $derived(!!panelsCtx?.digest?.tutorial)
 
+	/** A repo can publish 40+ quantizations, so Q4_K_M often sits below the
+	 * fold of this scroll box — a highlight the user has to hunt for guides
+	 * nobody. Bring it into view rather than reordering the list. */
+	function revealRecommended(node: HTMLElement, active: boolean) {
+		if (!active) return
+		const reduced = window.matchMedia?.(
+			"(prefers-reduced-motion: reduce)"
+		).matches
+		requestAnimationFrame(() =>
+			node.scrollIntoView({
+				block: "center",
+				behavior: reduced ? "auto" : "smooth"
+			})
+		)
+	}
+
 	let modelsDir = $state(
 		koboldCppSettingsCtx.settings?.koboldCppManagerModelsDir ?? ""
 	)
@@ -84,11 +100,6 @@
 	) {
 		showQuantModal = false
 		selectedModel = null
-		// End of the wizard's hand-off path (panel → Available → model →
-		// quantization). Cleared here rather than on the first click, because
-		// the cue has to survive every step in between — unlike the other
-		// sidebars, where it marks a single button.
-		if (panelsCtx?.digest?.tutorial) panelsCtx.digest.tutorial = false
 		socket.emit("koboldcpp:downloadModel", {
 			modelName: model.name,
 			filename: opt.filename,
@@ -510,6 +521,8 @@
 							? 'tutorial-highlight'
 							: ''}"
 						style="--tutorial-glow-radius: var(--radius-container)"
+						use:revealRecommended={isTutorial &&
+							isRecommendedQuant(opt.label)}
 					>
 						<div class="flex items-center gap-2">
 							<span class="font-mono text-sm font-medium">
