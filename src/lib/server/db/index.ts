@@ -248,10 +248,17 @@ export function compareVersions(a: string, b: string): -1 | 0 | 1 {
 	if (vA.patch !== vB.patch) return vA.patch < vB.patch ? -1 : 1
 
 	// 2. If base versions match, compare release types
-	// Release type hierarchy: pr < rc < alpha < (no suffix/release)
-	// e.g., 0.4.1-pr-2 < 0.4.1-rc-1 < 0.4.1-alpha < 0.4.1
+	// Release type hierarchy: pr < rc < alpha < beta < (no suffix/release)
+	// e.g., 0.5.0-pr-2 < 0.5.0-rc-1 < 0.5.0-alpha < 0.5.0-beta < 0.5.0
+	// This ladder is the order this project actually ships in, NOT semver's
+	// alphabetical prerelease ordering — 0.5.0 went rc-4 -> beta, so beta
+	// ranks above rc. Any suffix missing from this list falls to priority 0,
+	// which makes it look OLDER than every known prerelease and will hard-fail
+	// startup for anyone upgrading to it (that's exactly what an unmapped
+	// "beta" did). Add new suffixes here BEFORE tagging a release with one.
 	const getReleaseTypePriority = (type: string | null): number => {
-		if (!type) return 4 // Formal release (highest priority)
+		if (!type) return 5 // Formal release (highest priority)
+		if (type === "beta") return 4
 		if (type === "alpha") return 3
 		if (type === "rc") return 2
 		if (type === "pr") return 1
