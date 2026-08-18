@@ -149,6 +149,99 @@ export function pruneDist(outDir, target) {
 	)
 }
 
+/**
+ * The Android profile. Same intent as pruneDist above — remove only files
+ * nothing reads — but the Android target differs enough that sharing one rule
+ * set would be wrong in both directions: it must KEEP `intl` (which desktop
+ * strips, because the nodejs-mobile runtime is built with intl=none and the
+ * android-intl-polyfill needs the locale data), and it can drop the entire
+ * local-embedding stack, which desktop obviously cannot.
+ *
+ * This was previously not applied at all: scripts/build-android.js copied
+ * node_modules verbatim, so an APK shipped ~1GB of assets — over half of it
+ * onnxruntime native binaries for linux/x64, win32/x64, win32/arm64,
+ * darwin/arm64 and linux/arm64, none of which can execute on Android.
+ *
+ * @param {string} assetsDir - android/app/src/main/assets/serene-pub, already
+ *   populated with build/, node_modules/ and drizzle/.
+ */
+export function pruneAndroidAssets(assetsDir) {
+	const nm = path.join(assetsDir, "node_modules")
+
+	// 1. The entire local-embedding stack. Not merely wrong-architecture:
+	// src/lib/server/embedding/index.ts's getLocalEmbeddingUnsupportedReason()
+	// returns early for the Android wrapper because Bionic cannot dlopen the
+	// glibc-linked onnxruntime binary — "a genuine architectural
+	// impossibility", in its own words. So this code path is unreachable on
+	// Android by construction.
+	//
+	// Safe to remove outright because every runtime reference is a dynamic
+	// `await import("@huggingface/transformers")` (three call sites, all in
+	// embedding/index.ts); the only static references are `import type`, which
+	// erase at compile time. probeLocalEmbeddingSupport() already wraps its
+	// import in a try/catch that turns ANY failure into the same "not
+	// available on this system" verdict, so a missing module produces exactly
+	// the outcome a failed native load produced before.
+	//
+	// sharp and @img/* are transitive dependencies of @huggingface/transformers
+	// only — nothing in src/ imports sharp — so they go with it.
+	rm(path.join(nm, "@huggingface/transformers"))
+	rm(path.join(nm, "onnxruntime-node"))
+	rm(path.join(nm, "onnxruntime-web"))
+	rm(path.join(nm, "onnxruntime-common"))
+	rm(path.join(nm, "sharp"))
+	// The whole @img scope, not its contents one by one — every package under
+	// it is a sharp libvips native build, and removing only the children left
+	// an empty scope directory behind.
+	rm(path.join(nm, "@img"))
+
+	// 2. Tokenizers: identical reasoning to the desktop rules 4 and 5 above —
+	// both are reached only through dynamic import() resolving the package's
+	// "import" export condition, so the CJS/IIFE/CDN builds are unread.
+	const gemmaDist = path.join(nm, "@lenml/tokenizer-gemma/dist")
+	if (fs.existsSync(gemmaDist)) {
+		for (const f of fs.readdirSync(gemmaDist)) {
+			if (f === "main.mjs" || f.endsWith(".d.ts")) continue
+			rm(path.join(gemmaDist, f))
+		}
+	}
+	const gptTok = path.join(nm, "gpt-tokenizer")
+	for (const dir of ["dist", "cjs", "src"]) rm(path.join(gptTok, dir))
+
+	// 3. `intl` is deliberately NOT removed here — see this function's own
+	// doc comment. Removing it would break date/number formatting on-device.
+
+	// 4. Source maps anywhere under node_modules. Nothing on a phone reads
+	// them, and they are pure text — among the largest single categories in
+	// the unpruned APK.
+	rmMatching(nm, (name) => name.endsWith(".map"))
+
+	// 5. Same drizzle-kit snapshot and SSR sourcemap rules as desktop; the
+	// runtime migrator reads only meta/_journal.json and the .sql files.
+	rmMatching(path.join(assetsDir, "build/server"), (name) =>
+		name.endsWith(".map")
+	)
+	const drizzleMeta = path.join(assetsDir, "drizzle/meta")
+	if (fs.existsSync(drizzleMeta)) {
+		for (const f of fs.readdirSync(drizzleMeta)) {
+			if (f.endsWith("_snapshot.json")) rm(path.join(drizzleMeta, f))
+		}
+	}
+
+	// 6. TypeScript declarations and package docs. Never read at runtime by
+	// Node; they exist for editors and for people reading the source.
+	rmMatching(
+		nm,
+		(name) =>
+			name.endsWith(".d.ts") ||
+			name.endsWith(".d.mts") ||
+			name.endsWith(".d.cts") ||
+			/^(readme|changelog|license|licence|history|contributing|authors|notice)(\.[a-z]+)?$/i.test(
+				name
+			)
+	)
+}
+
 /** Recursively sums file sizes under `dir` — used for the CI size guard and
  * for measuring savings locally. Returns 0 for a directory that doesn't
  * exist rather than throwing (a target that was never built yet). */
@@ -193,3 +286,20 @@ export const SIZE_THRESHOLD_MB = {
 	"macos-arm64": 360,
 	"windows-x64": 360
 }
+
+// Uncompressed ceiling for the Android assets tree, checked by
+// scripts/build-android.js right after pruning. There was no guard here at
+// all, which is how a ~1GB assets bundle (671MB packed APK) shipped without
+// anything tripping.
+//
+// Measured, not guessed: simulating this prune over a production-only
+// dependency tree (npm ls --omit=dev) plus the app build gave 185.2 MB, from
+// 1517 MB unpruned. The remainder is mostly the app's own build/ (~50 MB) and
+// legitimately-needed packages — @lenml/tokenizer-gemma, intl (required on
+// Android specifically, see pruneAndroidAssets), date-fns, pglite, lucide.
+//
+// 260 leaves margin for ordinary dependency growth; the point is catching a
+// bump that silently reintroduces the embedding stack, not policing drift. If
+// a real CI build lands far under this, tighten it rather than leaving slack
+// that hides a regression.
+export const ANDROID_ASSETS_THRESHOLD_MB = 260

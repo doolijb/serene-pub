@@ -530,26 +530,61 @@ export function personaFieldsFromParsedData(
 	}
 }
 
+/** Non-fatal problem from an import step that didn't invalidate the import. */
+export type ImportWarning = string
+
+/**
+ * Applies the avatar to an already-inserted persona row.
+ *
+ * Non-fatal, mirroring applyAvatarAndTags in characters.ts and for the same
+ * reason: this runs *after* the persona row is committed, and the avatar write
+ * rejects anything over 10MB or not a recognized image — which persona cards
+ * exported from SillyTavern hit routinely, since the card IS a
+ * full-resolution PNG. Letting it throw reported "import failed" for a persona
+ * that was already in the database and then showed up on the next refresh,
+ * while the persona list was never told to update.
+ */
 async function applyPersonaAvatar(
 	persona: typeof schema.personas.$inferSelect,
 	avatarBuffer: Buffer | undefined,
 	dbOrTx: Executor = db
-) {
+): Promise<{
+	persona: typeof schema.personas.$inferSelect
+	warnings: ImportWarning[]
+}> {
+	const warnings: ImportWarning[] = []
 	if (avatarBuffer) {
-		await handlePersonaAvatarUpload({ persona, avatarFile: avatarBuffer })
-		const updatedPersona = await dbOrTx.query.personas.findFirst({
-			where: eq(schema.personas.id, persona.id)
-		})
-		if (updatedPersona) Object.assign(persona, updatedPersona)
+		try {
+			await handlePersonaAvatarUpload({
+				persona,
+				avatarFile: avatarBuffer
+			})
+			const updatedPersona = await dbOrTx.query.personas.findFirst({
+				where: eq(schema.personas.id, persona.id)
+			})
+			if (updatedPersona) Object.assign(persona, updatedPersona)
+		} catch (e: any) {
+			const reason = e?.message || String(e)
+			console.warn(
+				`Persona ${persona.id} imported without its avatar: ${reason}`
+			)
+			warnings.push(`The card's image could not be saved: ${reason}`)
+		}
 	}
-	return persona
+	return { persona, warnings }
 }
 
+/**
+ * @param warnings optional sink for non-fatal problems (an unusable avatar).
+ * Out-param rather than a widened return type, so existing callers that only
+ * want the persona are unaffected.
+ */
 export async function createPersonaFromParsedData(
 	data: any,
 	avatarBuffer: Buffer | undefined,
 	userId: number,
-	dbOrTx: Executor = db
+	dbOrTx: Executor = db,
+	warnings?: ImportWarning[]
 ) {
 	const uuidToStamp = await claimIncomingPersonaUuid(
 		extractPersonaUuid(data),
@@ -565,14 +600,17 @@ export async function createPersonaFromParsedData(
 			isDefault: false
 		})
 		.returning()
-	return applyPersonaAvatar(persona, avatarBuffer, dbOrTx)
+	const applied = await applyPersonaAvatar(persona, avatarBuffer, dbOrTx)
+	warnings?.push(...applied.warnings)
+	return applied.persona
 }
 
 export async function overwritePersonaFromParsedData(
 	existingId: number,
 	data: any,
 	avatarBuffer: Buffer | undefined,
-	dbOrTx: Executor = db
+	dbOrTx: Executor = db,
+	warnings?: ImportWarning[]
 ) {
 	await dbOrTx
 		.update(schema.personas)
@@ -582,7 +620,30 @@ export async function overwritePersonaFromParsedData(
 		where: eq(schema.personas.id, existingId)
 	})
 	if (!persona) throw new Error("Persona not found.")
-	return applyPersonaAvatar(persona, avatarBuffer, dbOrTx)
+	const applied = await applyPersonaAvatar(persona, avatarBuffer, dbOrTx)
+	warnings?.push(...applied.warnings)
+	return applied.persona
+}
+
+/**
+ * Rebuilds and emits the persona list after an import. Never throws — the
+ * persona is already committed by this point, so a list-refresh failure must
+ * not be reported as a failed import.
+ */
+async function refreshPersonaList(
+	socket: any,
+	emitToUser: any,
+	warnings: ImportWarning[]
+) {
+	try {
+		await personasList.handler(socket, {}, emitToUser)
+	} catch (e: any) {
+		const reason = e?.message || String(e)
+		console.warn(`Persona list refresh after import failed: ${reason}`)
+		warnings.push(
+			"The persona list could not be refreshed — reload to see it."
+		)
+	}
 }
 
 export const personasImportCard: Handler<
@@ -645,16 +706,20 @@ export const personasImportCard: Handler<
 				}
 			}
 
+			const warnings: ImportWarning[] = []
 			const persona = await createPersonaFromParsedData(
 				data,
 				avatarBuffer,
-				userId
+				userId,
+				db,
+				warnings
 			)
 
-			await personasList.handler(socket, {}, emitToUser)
+			await refreshPersonaList(socket, emitToUser, warnings)
 			const res: Sockets.Personas.ImportCard.Response = {
 				status: "created",
-				persona
+				persona,
+				...(warnings.length > 0 ? { warnings } : {})
 			}
 			emitToUser("personas:importCard", res)
 			return res
@@ -686,6 +751,7 @@ export const personasImportResolve: Handler<
 			)
 			const data = getRobustSpecV3Data(card)
 
+			const warnings: ImportWarning[] = []
 			let persona
 			if (params.action === "overwrite") {
 				const existing = await db.query.personas.findFirst({
@@ -699,19 +765,26 @@ export const personasImportResolve: Handler<
 				persona = await overwritePersonaFromParsedData(
 					existing.id,
 					data,
-					avatarBuffer
+					avatarBuffer,
+					db,
+					warnings
 				)
 			} else {
 				persona = await createPersonaFromParsedData(
 					data,
 					avatarBuffer,
-					userId
+					userId,
+					db,
+					warnings
 				)
 			}
 
-			await personasList.handler(socket, {}, emitToUser)
+			await refreshPersonaList(socket, emitToUser, warnings)
 
-			const res: Sockets.Personas.ImportResolve.Response = { persona }
+			const res: Sockets.Personas.ImportResolve.Response = {
+				persona,
+				...(warnings.length > 0 ? { warnings } : {})
+			}
 			emitToUser("personas:importResolve", res)
 			return res
 		} catch (error: any) {

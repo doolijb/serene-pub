@@ -60,7 +60,10 @@ Turn on multi-user accounts and one server becomes a shared instance. Invite a f
 - **Guests bring their own cast** — friends join with their own persona and characters
 - **Live, not turn-passing** — every message, edit and generation syncs to everyone over WebSockets
 
-> 🖼️ A screenshot of a live multiplayer session is coming soon.
+<p align="center">
+  <a href="docs-assets/screenshots/multiplayer-session.png"><img src="docs-assets/screenshots/multiplayer-session.png" width="900" alt="The same scene open in two accounts at once: the owner playing Elias on the left, an invited guest playing Rell Ito on the right"/></a>
+  <br/><sub>One scene, two accounts, live. The owner (left) and an invited guest (right) each bring their own persona; every message syncs to both.</sub>
+</p>
 
 ---
 
@@ -71,6 +74,16 @@ Turn on multi-user accounts and one server becomes a shared instance. Invite a f
 ### 💬 Chatting
 
 <table>
+<tr>
+<td width="50%" align="center" valign="top">
+  <a href="docs-assets/screenshots/home.png"><img src="docs-assets/screenshots/home.png" width="100%" alt="The home screen listing characters and recent chats"/></a>
+  <br/><sub><b>Home</b><br/>Your cast and recent chats, one click from picking up where you left off.</sub>
+</td>
+<td width="50%" align="center" valign="top">
+  <a href="docs-assets/screenshots/characters-sidebar-cards.png"><img src="docs-assets/screenshots/characters-sidebar-cards.png" width="100%" alt="The characters sidebar in card view, showing full character art"/></a>
+  <br/><sub><b>Character Library</b><br/>The characters sidebar in card view — full art, searchable, open alongside whatever you're doing.</sub>
+</td>
+</tr>
 <tr>
 <td width="50%" align="center" valign="top">
   <a href="docs-assets/screenshots/chat-group.png"><img src="docs-assets/screenshots/chat-group.png" width="100%" alt="Four characters trading turns during a hull breach"/></a>
@@ -387,7 +400,7 @@ docker run -p 3000:3000 -p 3001:3001 \
   ghcr.io/doolijb/serene-pub:latest
 ```
 
-See [DOCKER.md](DOCKER.md) for ports, volumes and reverse proxies, and [HOSTING.md](HOSTING.md) or [Environment Variables](docs/environment-variables.md) for env vars and tunnels.
+See [DOCKER.md](DOCKER.md) for ports, volumes and reverse proxies, and [Hosting Serene Pub](docs/hosting.md) or [Environment Variables](docs/environment-variables.md) for env vars and tunnels.
 
 **Need help?** Start with the **[Getting Started guide](docs/getting-started.md)**.
 

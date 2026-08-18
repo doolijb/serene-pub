@@ -149,6 +149,15 @@ declare global {
 						// back verbatim in ImportResolve.Params.
 						file: string
 					}
+					/**
+					 * Non-fatal problems during an otherwise successful
+					 * import — e.g. the card's image exceeded the size limit
+					 * and was skipped. The character IS imported; these are
+					 * shown as a warning rather than an error, because
+					 * reporting them as a failure for a character that
+					 * actually exists is what made this flow confusing.
+					 */
+					warnings?: string[]
 				}
 			}
 			namespace ImportResolve {
@@ -160,6 +169,8 @@ declare global {
 				interface Response {
 					character: SelectCharacter
 					book: SpecV3.Lorebook | null
+					/** See ImportCard.Response.warnings. */
+					warnings?: string[]
 				}
 			}
 			namespace ExportCard {
@@ -416,6 +427,8 @@ declare global {
 						existingPersona: SelectPersona
 						file: string
 					}
+					/** See Characters.ImportCard.Response.warnings. */
+					warnings?: string[]
 				}
 			}
 			namespace ImportResolve {
@@ -426,6 +439,8 @@ declare global {
 				}
 				interface Response {
 					persona: SelectPersona
+					/** See Characters.ImportCard.Response.warnings. */
+					warnings?: string[]
 				}
 			}
 			namespace ExportCard {

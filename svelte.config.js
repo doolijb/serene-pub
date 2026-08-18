@@ -7,7 +7,11 @@ import { vitePreprocess } from "@sveltejs/vite-plugin-svelte"
 // Cloudflare with that feature on. Comma-separated. Prefer disabling such
 // features at the CDN/proxy level over widening this, since it's an
 // injected script this app has no control over — but the escape hatch
-// exists for cases where that isn't an option. See HOSTING.md.
+// exists for cases where that isn't an option. See docs/hosting.md.
+// NOTE: these are ALSO merged in at runtime by src/hooks.server.ts, which is
+// now the primary path — nothing passes them at build time for published
+// artifacts, so the build-time values here are only a convenience for people
+// building their own image.
 function cspList(envVar) {
 	return (process.env[envVar] || "")
 		.split(",")
@@ -26,7 +30,7 @@ function cspList(envVar) {
 // app's own runtime code does, once the server actually starts) — so
 // process.env.SOCKETS_PORT is unreliable here regardless of what's
 // configured at runtime. More fundamentally, a reverse-proxied/tunneled
-// deployment (see HOSTING.md) has the browser connect on the public port
+// deployment (see docs/hosting.md) has the browser connect on the public port
 // (443/80) with the proxy routing internally to SOCKETS_PORT — the
 // browser-facing URL never contains that port at all, so a port-scoped
 // source can't cover that mode regardless of the build-time issue. Scheme-

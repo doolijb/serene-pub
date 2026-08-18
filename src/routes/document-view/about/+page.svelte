@@ -1,9 +1,14 @@
 <script lang="ts">
+	import { getContext } from "svelte"
 	import { page } from "$app/state"
 	import {
 		appVersion,
 		appVersionDisplay
 	} from "$lib/shared/constants/version"
+
+	// Admin-only, matching UpdateNoticeBar and the settings sidebar: only an
+	// admin can act on an update notice. AccessibleShell provides userCtx.
+	const userCtx: UserCtx | undefined = getContext("userCtx")
 </script>
 
 <svelte:head>
@@ -15,7 +20,7 @@
 <p>Version: {appVersionDisplay}</p>
 <p>Build: {appVersion}</p>
 
-{#if page.data?.isNewerReleaseAvailable}
+{#if page.data?.isNewerReleaseAvailable && userCtx?.user?.isAdmin}
 	<div class="a11y-status">
 		<p>A newer version of Serene Pub is available.</p>
 		<p>

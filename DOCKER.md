@@ -82,7 +82,7 @@ All variables are optional unless noted. This is the Docker-relevant subset —
 for the full reference, including reverse-proxy trust settings
 (`PROTOCOL_HEADER`/`HOST_HEADER`) and socket endpoint overrides
 (`SOCKETS_HTTPS_HOSTS`/`PUBLIC_SOCKETS_ENDPOINT`), see
-[HOSTING.md](./HOSTING.md).
+[docs/hosting.md](./docs/hosting.md).
 
 | Variable                                         | Default                                   | Description                                                                                                        |
 | ------------------------------------------------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -119,7 +119,7 @@ Serene Pub runs two servers — the web app (`PORT`, default `3000`) and a
 separate WebSocket server (`SOCKETS_PORT`, default `3001`). Your proxy needs
 to route **both**, and forward WebSocket upgrade requests. The simplest way
 is a path split on the same host — see
-[HOSTING.md](./HOSTING.md#reverse-proxy--tunnel-same-host) for a full nginx
+[docs/hosting.md](./docs/hosting.md#reverse-proxy-or-tunnel-on-the-same-host) for a full nginx
 example (including Nginx Proxy Manager) and the matching environment
 variables (`SOCKETS_HTTPS_HOSTS`, `HOST_HEADER`), plus a troubleshooting
 table for the "mixed content" / CORS / timeout errors this typically shows
