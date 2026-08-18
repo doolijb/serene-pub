@@ -1119,8 +1119,17 @@
 				{ ...panelsCtx.leftNav, ...panelsCtx.rightNav }[
 					panelsCtx.mobilePanel
 				]?.title || panelsCtx.mobilePanel}
+			<!--
+				z-45, deliberately BELOW the z-50 that Skeleton's modals portal
+				to. This was z-51 — one above the modal layer — so any modal
+				opened from inside a mobile panel (the "Create New AI
+				Connection" dialog, for instance) mounted correctly on <body>
+				and then rendered completely behind the panel it was launched
+				from. It has to stay above the mobile menu and its backdrop
+				(z-40), hence 45 rather than something lower.
+			-->
 			<div
-				class="bg-surface-100-900 fixed inset-0 z-[51] flex flex-col overflow-y-auto lg:hidden"
+				class="bg-surface-100-900 fixed inset-0 z-[45] flex flex-col overflow-y-auto lg:hidden"
 				role="dialog"
 				aria-labelledby="mobile-panel-title"
 				aria-modal="true"

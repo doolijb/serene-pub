@@ -933,8 +933,6 @@
 									</h2>
 									<p class="text-muted-foreground mb-6">
 										Choose how you'd like to run your AI.
-										All options are free and run locally on
-										your server.
 									</p>
 								</div>
 								<div class="grid gap-3">
@@ -964,7 +962,7 @@
 													KoboldCPP <span
 														class="text-xs font-normal opacity-60"
 													>
-														— Easy
+														— Easiest
 													</span>
 												</div>
 												<p class="text-sm opacity-90">

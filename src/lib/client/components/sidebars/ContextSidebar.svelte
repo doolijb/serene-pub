@@ -465,7 +465,7 @@
 					class="preset-tonal-warning flex items-center gap-2 rounded-xl p-2 text-sm"
 				>
 					<Icons.Info size={16} class="shrink-0" />
-					This is a built-in config — edit freely, then use "New" to save
+					This is a built-in config — edit freely, then use "+ Clone" to save
 					your changes as a copy.
 				</div>
 			{/if}

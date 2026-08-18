@@ -446,7 +446,7 @@
 			>
 				<Icons.Info size={16} class="shrink-0" />
 				This is a built-in config (marked with a trailing *) — edit freely,
-				then use "New" to save your changes as a copy.
+				then use "+ Clone" to save your changes as a copy.
 			</div>
 		{/if}
 		<PanelToolbar label="Sampling config actions" class="mb-4">
