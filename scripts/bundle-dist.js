@@ -54,6 +54,14 @@ function isWhitelisted(name, version) {
 
 // Acceptable licenses for redistribution with AGPL app
 const ACCEPTABLE_LICENSES = [
+	// SIL Open Font License — the standard permissive licence for fonts, and
+	// what @fontsource/* ships under. Not needed by CI, which runs
+	// `npm install --production` before bundling so dev dependencies are gone
+	// by the time the check below scans node_modules. It matters when running
+	// `npm run dist` locally with dev dependencies installed, where
+	// @fontsource/fira-mono (a devDependency) is otherwise reported as an
+	// unacceptable licence and aborts the bundle.
+	"ofl-1.1",
 	"mit",
 	"isc",
 	"bsd-2-clause",
@@ -332,6 +340,16 @@ if (!target) {
 		)
 		if (fs.existsSync(instrFile)) {
 			fs.copyFileSync(instrFile, path.join(outDir, "INSTRUCTIONS.txt"))
+		}
+
+		// Copy the shipped .env.example. This used to be generated inline by a
+		// heredoc in .github/workflows/release.yml, which meant desktop users
+		// got a four-variable file that had drifted far from the repo's own
+		// .env.example and never mentioned any hosting setting at all. Keeping
+		// it as a checked-in file is the only way the two stay in sync.
+		const envExample = path.resolve(__dirname, "../dist-assets/.env.example")
+		if (fs.existsSync(envExample)) {
+			fs.copyFileSync(envExample, path.join(outDir, ".env.example"))
 		}
 
 		// Copy Node.js binary for the target platform

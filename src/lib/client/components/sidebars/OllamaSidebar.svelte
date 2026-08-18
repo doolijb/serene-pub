@@ -92,6 +92,13 @@
 
 	// Handle download start - switch to downloads tab
 	function handleDownloadStart(modelName: string) {
+		// End of the wizard's hand-off path. Cleared here rather than at any
+		// individual download button because OllamaAvailableTab has three ways
+		// to start one — the quantization modal, the manual pull, and the
+		// direct "Install" on a recommended model — and this callback is the
+		// single point they all funnel through. Clearing it at the modal only
+		// left the Available tab still glowing after an "Install".
+		if (panelsCtx?.digest?.tutorial) panelsCtx.digest.tutorial = false
 		activeTab = "downloads"
 	}
 

@@ -23,6 +23,7 @@
 	import SettingsSidebar from "$lib/client/components/sidebars/SettingsSidebar.svelte"
 	import ActivitySidebar from "$lib/client/components/sidebars/ActivitySidebar.svelte"
 	import ConnectionTimeoutModal from "$lib/client/components/ConnectionTimeoutModal.svelte"
+	import UpdateNoticeBar from "$lib/client/components/UpdateNoticeBar.svelte"
 	import type { Snippet } from "svelte"
 	import { Theme } from "$lib/client/consts/Theme"
 	import OllamaIcon from "./icons/OllamaIcon.svelte"
@@ -940,8 +941,25 @@
 				/>
 			</div>
 		{/if}
+		<!--
+			overflow-CLIP, not overflow-hidden. Both clip identically, but
+			`hidden` still establishes a scroll container: the browser can
+			scroll it programmatically even though the user cannot. Focusing a
+			control low in a side panel (any switch under the lorebook entry's
+			Advanced Settings, for instance) therefore made the browser
+			scrollIntoView this shell, shifting the ENTIRE app up by however
+			much its content overflowed and leaving dead space at the bottom —
+			with no way to scroll back, because the overflow is hidden. That is
+			the "layout collapse" reported when toggling Pinned; it was never
+			specific to Pinned, or to lorebooks.
+
+			`clip` establishes no scroll container at all, so there is nothing
+			for focus to scroll. Fixing the underlying overflow would be the
+			other half, but this makes the shell structurally unable to move
+			regardless of what a panel's content does.
+		-->
 		<div
-			class="relative z-10 flex h-svh max-w-full min-w-full flex-1 flex-col overflow-hidden lg:flex-row lg:gap-2"
+			class="relative z-10 flex h-svh max-w-full min-w-full flex-1 flex-col overflow-clip lg:flex-row lg:gap-2"
 		>
 			<!-- Left Sidebar -->
 			<aside class="desktop-sidebar" aria-label="Left navigation panel">
@@ -1253,6 +1271,12 @@
 
 <!-- Connection Timeout Modal -->
 <ConnectionTimeoutModal />
+
+<!-- Update notice. Rendered here rather than in +layout.svelte because that
+     file is the parent of this one and so cannot read userCtx (context flows
+     down), and because a notice only an admin can act on has no business
+     appearing over the login screen. -->
+<UpdateNoticeBar isAdmin={!!userCtx.user?.isAdmin} />
 
 <style lang="postcss">
 	@reference "tailwindcss";

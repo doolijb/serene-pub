@@ -94,6 +94,14 @@
 		activeTab = "available"
 	})
 
+	// End of the wizard's hand-off path. Kept at this single funnel rather than
+	// on individual download buttons, so every route into a download clears the
+	// cue — otherwise the Available tab keeps glowing after the user has acted.
+	function handleDownloadStart() {
+		if (panelsCtx?.digest?.tutorial) panelsCtx.digest.tutorial = false
+		activeTab = "downloads"
+	}
+
 	function checkConnection() {
 		isTesting = true
 		socket.emit("koboldcpp:version", {
@@ -480,7 +488,7 @@
 					{#if activeTab === "available"}
 						<KoboldCppDownloadTab
 							{isLocal}
-							onDownloadStart={() => (activeTab = "downloads")}
+							onDownloadStart={handleDownloadStart}
 						/>
 					{/if}
 				</Tabs.Content>

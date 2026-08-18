@@ -99,7 +99,9 @@
 </script>
 
 <div class="flex h-full flex-col p-4">
-	{#if page.data?.isNewerReleaseAvailable}
+	<!-- Admin-only: a non-admin can't upgrade the install, so an update
+	     notice is noise for them. Same rule as UpdateNoticeBar. -->
+	{#if page.data?.isNewerReleaseAvailable && userCtx.user?.isAdmin}
 		<div
 			class="bg-surface-200-800 mb-4 flex w-full flex-col items-center justify-between gap-4 rounded p-3 text-center"
 		>
