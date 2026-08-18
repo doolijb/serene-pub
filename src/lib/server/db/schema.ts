@@ -14,7 +14,8 @@ import {
 	numeric,
 	timestamp,
 	varchar,
-	uuid
+	uuid,
+	check
 } from "drizzle-orm/pg-core"
 
 // ─── Enumerated value types ───────────────────────────────────────────────────
@@ -2387,5 +2388,374 @@ export const customThemesRelations = relations(customThemes, ({ one }) => ({
 	uploader: one(users, {
 		fields: [customThemes.uploadedBy],
 		references: [users.id]
+	})
+}))
+
+// ─── Pipelines (0.6) ──────────────────────────────────────────────────────────
+//
+// Storage for the pipeline system described in the extensibility docs (02 §2).
+// These tables run *beside* the existing prompt/context config tables through
+// 0.7–0.8; nothing here replaces or reads them yet. Retained means frozen: the
+// old path keeps working and stops changing (08 §5a).
+//
+// The governing idea is that **rows are the system of record** and a pipeline
+// document is a deterministic projection of them (F3). Import writes rows,
+// export reads rows, and `import(export(rows))` has to be the identity — which
+// is why the shape here mirrors the document's shape closely enough to be
+// checked rather than argued about.
+//
+// Anything the constitution names is a column; anything a node type defines
+// stays in jsonb. That line is what keeps a plugin's config out of the schema
+// while leaving every law queryable.
+
+/** A pipeline's stable identity. Versions hang off it; "replace" moves a pointer. */
+export const pipelineSpecs = pgTable("pipeline_specs", {
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	/** `ns:name` — the authored id, unique per instance and PK-agnostic across them. */
+	slug: text("slug").notNull().unique(),
+	name: text("name").notNull(),
+	/** NULL for core specs; the owning plugin otherwise (12 §3b). */
+	sourcePluginId: integer("source_plugin_id"),
+	/**
+	 * Publishing is a pointer move, never an overwrite (02 §3). A run in flight
+	 * keeps the version it started on, and a receipt's claim to describe a
+	 * specific version stays true.
+	 */
+	activeVersionId: integer("active_version_id"),
+	createdAt: timestamp("created_at").notNull().defaultNow()
+})
+
+export const pipelineSpecVersions = pgTable(
+	"pipeline_spec_versions",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		specId: integer("spec_id")
+			.notNull()
+			.references(() => pipelineSpecs.id, { onDelete: "cascade" }),
+		semver: text("semver").notNull(),
+		engineRange: text("engine_range"),
+		status: text("status").notNull().default("draft"), // draft | published | retired
+		/**
+		 * The document hash. Two instances that compiled the same authoring
+		 * source land on the same string, which is what makes an import
+		 * verifiable rather than trusted.
+		 */
+		canonicalHash: text("canonical_hash").notNull(),
+		schemaVersion: integer("schema_version").notNull().default(1),
+		/** Clones remember their origin, so an upstream diff is possible later. */
+		derivedFromSpecVersionId: integer("derived_from_spec_version_id"),
+		migratedFrom: text("migrated_from"),
+		mode: json("mode").$type<Record<string, any> | null>(),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		publishedAt: timestamp("published_at")
+	},
+	(t) => [uniqueIndex("pipeline_spec_versions_spec_semver_idx").on(t.specId, t.semver)]
+)
+
+/**
+ * Blocks — `async`, `map` and `loop`.
+ *
+ * ⚠ Not in 02 §2, which carries `block_*` columns on the node row only. That
+ * predates the loop ruling (13 §1): a loop has a `max` and a predicate port
+ * reference of its own, and neither belongs on any one of its member nodes.
+ * Blocks also nest, so a block needs a parent. Filed as a docs finding rather
+ * than left as a silent divergence.
+ */
+export const pipelineBlocks = pgTable(
+	"pipeline_blocks",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		specVersionId: integer("spec_version_id")
+			.notNull()
+			.references(() => pipelineSpecVersions.id, { onDelete: "cascade" }),
+		blockId: text("block_id").notNull(),
+		kind: text("kind").notNull(), // async | map | loop
+		/** Nesting: a block inside a block. NULL at the spine. */
+		parentBlockId: text("parent_block_id"),
+		mode: text("mode"), // parallel | sequential, for async
+		/** Mandatory for map and loop — repetition without a bound is not expressible (F9). */
+		max: integer("max"),
+		/** For map: where the items come from. For loop: the predicate port. */
+		overRef: json("over_ref").$type<Record<string, any> | null>(),
+		repeatWhile: json("repeat_while").$type<Record<string, any> | null>(),
+		position: integer("position").notNull().default(0)
+	},
+	(t) => [
+		uniqueIndex("pipeline_blocks_version_block_idx").on(t.specVersionId, t.blockId),
+		check(
+			"pipeline_blocks_kind_check",
+			sql`${t.kind} IN ('async', 'map', 'loop')`
+		),
+		// Repetition without a bound is not expressible (F9, 13 §1). Enforced
+		// here as well as at publish, because the row is the system of record
+		// and an unbounded loop reaching it through any other path is the one
+		// failure the whole design refuses to allow.
+		check(
+			"pipeline_blocks_bounded_check",
+			sql`${t.kind} = 'async' OR ${t.max} IS NOT NULL`
+		)
+	]
+)
+
+export const pipelineNodes = pgTable(
+	"pipeline_nodes",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		specVersionId: integer("spec_version_id")
+			.notNull()
+			.references(() => pipelineSpecVersions.id, { onDelete: "cascade" }),
+		/**
+		 * Explicit and unique per version. Overrides, receipts, lenses and
+		 * `ctx.state` all key on it — generating it from position would orphan
+		 * every user's tuning the first time a node is inserted above (F21).
+		 */
+		nodeKey: text("node_key").notNull(),
+		/** The closed taxonomy, enforced by the database rather than by review (F1). */
+		kind: text("kind").notNull(),
+		typeId: text("type_id").notNull(),
+		typeVersion: integer("type_version").notNull().default(1),
+		config: json("config").notNull().default({}).$type<Record<string, any>>(),
+		/** Resolved at publish and stored, so a reference is readable off the row (16 §5b-i). */
+		resolvedRefs: json("resolved_refs").$type<Record<string, string> | null>(),
+		blockId: text("block_id"),
+		blockKind: text("block_kind"),
+		blockChain: text("block_chain"),
+		toggleable: boolean("toggleable").notNull().default(false),
+		enabledDefault: boolean("enabled_default").notNull().default(true),
+		budgetTokens: integer("budget_tokens"),
+		budgetCalls: integer("budget_calls"),
+		position: integer("position").notNull()
+	},
+	(t) => [
+		uniqueIndex("pipeline_nodes_version_key_idx").on(t.specVersionId, t.nodeKey),
+		// F1 in the database. The five kinds are closed; a sixth is a schema
+		// change and a constitutional argument, not a row somebody inserts.
+		check(
+			"pipeline_nodes_kind_check",
+			sql`${t.kind} IN ('input', 'query', 'task', 'provider', 'consumer')`
+		)
+	]
+)
+
+/**
+ * Edges FK to nodes, so a dangling edge is structurally impossible rather than
+ * a lint finding somebody has to run.
+ */
+export const pipelineEdges = pgTable("pipeline_edges", {
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	specVersionId: integer("spec_version_id")
+		.notNull()
+		.references(() => pipelineSpecVersions.id, { onDelete: "cascade" }),
+	fromNodeId: integer("from_node_id")
+		.notNull()
+		.references(() => pipelineNodes.id, { onDelete: "cascade" }),
+	fromPort: text("from_port").notNull(),
+	toNodeId: integer("to_node_id")
+		.notNull()
+		.references(() => pipelineNodes.id, { onDelete: "cascade" }),
+	toPort: text("to_port").notNull(),
+	edgeShape: text("edge_shape"),
+	/**
+	 * Nullable rather than `NOT NULL DEFAULT false`, and that is not fussiness:
+	 * the document distinguishes "this edge does not stream" from "streaming was
+	 * never decided for this edge", and collapsing the two makes
+	 * `import(export(rows))` stop being the identity. Caught by C1 against real
+	 * rows, which is the only place it shows up.
+	 */
+	streaming: boolean("streaming"),
+	/** True when derived from chain order rather than an explicit reference. */
+	implicit: boolean("implicit")
+})
+
+/** Compile-time fragment includes, expanded at publish into namespaced rows (16 §3a). */
+export const pipelineIncludes = pgTable("pipeline_includes", {
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	specVersionId: integer("spec_version_id")
+		.notNull()
+		.references(() => pipelineSpecVersions.id, { onDelete: "cascade" }),
+	key: text("key").notNull(),
+	fragmentId: text("fragment_id").notNull()
+})
+
+/**
+ * Author-shipped presets. Execution-affecting, so they round-trip with the
+ * document (F4) — a preset that survives export but not import is a pipeline
+ * that behaves differently on the far side for reasons nobody can see.
+ */
+export const pipelinePresets = pgTable(
+	"pipeline_presets",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		specVersionId: integer("spec_version_id")
+			.notNull()
+			.references(() => pipelineSpecVersions.id, { onDelete: "cascade" }),
+		/** Referenced programmatically by extension sync and core defaults (12 §3b). */
+		slug: text("slug").notNull(),
+		label: text("label").notNull(),
+		description: text("description"),
+		/**
+		 * Who owns it, so an update replaces the right rows and uninstalling a
+		 * preset pack leaves the pipeline alone (12 §3b). The slug is the
+		 * authored identity; the FK is resolved locally where one exists.
+		 */
+		ownerSlug: text("owner_slug"),
+		ownerPluginId: integer("owner_plugin_id"),
+		isDefault: boolean("is_default").notNull().default(false)
+	},
+	(t) => [uniqueIndex("pipeline_presets_version_slug_idx").on(t.specVersionId, t.slug)]
+)
+
+export const pipelinePresetValues = pgTable("pipeline_preset_values", {
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	presetId: integer("preset_id")
+		.notNull()
+		.references(() => pipelinePresets.id, { onDelete: "cascade" }),
+	nodeKey: text("node_key").notNull(),
+	/** params | prompts | template | sampling | settings — never `connection` (12 §3a, F20). */
+	slot: text("slot").notNull(),
+	path: text("path"),
+	value: json("value").$type<any>()
+})
+
+/**
+ * Materialized host knowledge about node types (02 §2).
+ *
+ * As rows rather than a module, every pin in every spec becomes joinable — and
+ * more importantly, install-time validation can decide whether a plugin fits
+ * this release **without executing it** (F6, 13 §10c).
+ */
+export const pipelineTypeRegistry = pgTable(
+	"pipeline_type_registry",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		typeId: text("type_id").notNull(),
+		version: integer("version").notNull().default(1),
+		kind: text("kind").notNull(),
+		ownerPluginId: integer("owner_plugin_id"),
+		status: text("status").notNull().default("live"), // live | deprecated | removed
+		transport: text("transport").notNull().default("node"), // node | process
+		ports: json("ports").notNull().default({}).$type<Record<string, any>>(),
+		slots: json("slots").notNull().default({}).$type<Record<string, any>>(),
+		configSchema: json("config_schema").$type<Record<string, any> | null>(),
+		effects: text("effects"),
+		causesEvent: text("causes_event"),
+		isPublic: boolean("is_public").notNull().default(false),
+		declaresRandomness: boolean("declares_randomness").notNull().default(false),
+		earlyExit: boolean("early_exit").notNull().default(false),
+		timeoutMsDefault: integer("timeout_ms_default"),
+		timeoutKind: text("timeout_kind").default("wall"), // wall | idle
+		connectionKind: text("connection_kind"),
+		usageExtractor: text("usage_extractor"),
+		i18n: json("i18n").$type<Record<string, any> | null>(),
+		/** Which release seeded the row — what a drift diagnostic reports against. */
+		release: text("release"),
+		contentHash: text("content_hash")
+	},
+	(t) => [uniqueIndex("pipeline_type_registry_type_version_idx").on(t.typeId, t.version)]
+)
+
+/**
+ * Core-defined events. Plugins cannot define events in 0.6 (F8, 13 §7g), and
+ * the column is reserved rather than absent so reopening that is a permission
+ * rather than a migration.
+ */
+export const pipelineEventRegistry = pgTable("pipeline_event_registry", {
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	slug: text("slug").notNull().unique(),
+	version: integer("version").notNull().default(1),
+	/**
+	 * DATA events describe a change and carry write-target mappings, so they
+	 * participate in the cycle check. ACTION events (`ui-action`,
+	 * `schedule-tick`) have no write targets and drop out of it by
+	 * construction, rather than needing an exception (13 §7g).
+	 */
+	family: text("family").notNull().default("data"), // data | action
+	payloadShape: json("payload_shape").$type<Record<string, any> | null>(),
+	ownerPluginId: integer("owner_plugin_id"),
+	/** What makes consent enforceable without hand-classifying each event (11 §4). */
+	affectsUser: boolean("affects_user").notNull().default(false),
+	descriptionI18n: json("description_i18n").$type<Record<string, any> | null>()
+})
+
+export const pipelineEventSubscriptions = pgTable("pipeline_event_subscriptions", {
+	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	/**
+	 * The reference exactly as the document wrote it, `core:event/x@1`. Stored
+	 * verbatim because a subscription is a pin, and re-deriving the string from
+	 * its parts silently rewrites a document on the way back out — the version
+	 * suffix was the first thing C1 caught.
+	 */
+	eventRef: text("event_ref").notNull(),
+	/** Split out for joins and the cycle check; never used to rebuild `eventRef`. */
+	eventSlug: text("event_slug").notNull(),
+	eventVersion: integer("event_version").notNull().default(1),
+	specVersionId: integer("spec_version_id")
+		.notNull()
+		.references(() => pipelineSpecVersions.id, { onDelete: "cascade" }),
+	presetId: integer("preset_id").references(() => pipelinePresets.id, {
+		onDelete: "set null"
+	}),
+	depthBound: integer("depth_bound"),
+	enabled: boolean("enabled").notNull().default(true),
+	createdBy: integer("created_by").references(() => users.id, {
+		onDelete: "set null"
+	})
+})
+
+export const pipelineSpecsRelations = relations(pipelineSpecs, ({ many }) => ({
+	versions: many(pipelineSpecVersions)
+}))
+
+export const pipelineSpecVersionsRelations = relations(
+	pipelineSpecVersions,
+	({ one, many }) => ({
+		spec: one(pipelineSpecs, {
+			fields: [pipelineSpecVersions.specId],
+			references: [pipelineSpecs.id]
+		}),
+		nodes: many(pipelineNodes),
+		edges: many(pipelineEdges),
+		blocks: many(pipelineBlocks),
+		includes: many(pipelineIncludes),
+		presets: many(pipelinePresets)
+	})
+)
+
+export const pipelineNodesRelations = relations(pipelineNodes, ({ one }) => ({
+	specVersion: one(pipelineSpecVersions, {
+		fields: [pipelineNodes.specVersionId],
+		references: [pipelineSpecVersions.id]
+	})
+}))
+
+export const pipelineEdgesRelations = relations(pipelineEdges, ({ one }) => ({
+	specVersion: one(pipelineSpecVersions, {
+		fields: [pipelineEdges.specVersionId],
+		references: [pipelineSpecVersions.id]
+	}),
+	fromNode: one(pipelineNodes, {
+		fields: [pipelineEdges.fromNodeId],
+		references: [pipelineNodes.id],
+		relationName: "edgeFrom"
+	}),
+	toNode: one(pipelineNodes, {
+		fields: [pipelineEdges.toNodeId],
+		references: [pipelineNodes.id],
+		relationName: "edgeTo"
+	})
+}))
+
+export const pipelinePresetsRelations = relations(pipelinePresets, ({ one, many }) => ({
+	specVersion: one(pipelineSpecVersions, {
+		fields: [pipelinePresets.specVersionId],
+		references: [pipelineSpecVersions.id]
+	}),
+	values: many(pipelinePresetValues)
+}))
+
+export const pipelinePresetValuesRelations = relations(pipelinePresetValues, ({ one }) => ({
+	preset: one(pipelinePresets, {
+		fields: [pipelinePresetValues.presetId],
+		references: [pipelinePresets.id]
 	})
 }))
