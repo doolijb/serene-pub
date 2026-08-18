@@ -1,0 +1,30 @@
+{
+  "name": "@serene-pub/conformance",
+  "version": "0.6.0-preview.0",
+  "type": "module",
+  "description": "The host conformance kit: fifteen executable requirements a Serene Pub executor must satisfy. Run by SP Core and by any alternate host \u2014 not by plugin authors.",
+  "license": "AGPL-3.0",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@serene-pub/sdk": ">=0.6.0-preview.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "devDependencies": {
+    "@serene-pub/sdk": "0.6.0-preview.0"
+  }
+}

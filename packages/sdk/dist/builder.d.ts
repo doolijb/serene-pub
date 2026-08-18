@@ -1,0 +1,331 @@
+/**
+ * The builder (04 §4). Kind-named methods, so reading a spec top to bottom shows
+ * the effect taxonomy — and so the type system can enforce laws that a generic
+ * .step() could only find at validation time (04 §4a).
+ *
+ * The chain is a *value*. It compiles to a document; SP imports the document and
+ * never this code (F6).
+ *
+ * Every node method takes either a pinned constructor or a **callback that receives the
+ * scope** — `$ => C.assemble({ candidates: $.history.messages })`. The callback form is
+ * preferred: it types the node key and the port, and it makes a forward reference
+ * impossible to write rather than a finding to read (src/scope.ts). Both forms compile
+ * to the same rows.
+ */
+import { type NodeSpec, type Kind, type PortDecl, type OutPortsOf, type Descriptor } from './descriptors.js';
+import { ITEM, type Scope } from './scope.js';
+import type { DataRef } from './refs.js';
+import type { TemplateValue } from './engines.js';
+export interface SpecMeta {
+    /**
+     * Semver. **The upgrade key, not part of the identity** — an import replaces the
+     * installed copy when newer and is ignored when it is not (src/identity.ts).
+     */
+    version: string;
+    /**
+     * Who ships this spec: a plugin slug, `core`, or absent for a hand-imported document.
+     * Defaults to the owner segment of the id, so it only needs stating when they differ.
+     *
+     * Ownership is what stops an update from silently taking over a spec an admin
+     * imported by hand, or one another plugin ships — "newer" is not a licence to
+     * overwrite somebody else's row.
+     */
+    owner?: string;
+    mode?: {
+        name: unknown;
+        family: string;
+    };
+    i18n?: {
+        name?: unknown;
+    };
+}
+export interface BuiltNode {
+    key: string;
+    kind: Kind;
+    typeId: string;
+    typeVersion: number;
+    config: Record<string, unknown>;
+    /** Set when the node sits inside an async block or a map. */
+    blockId?: string;
+    blockKind?: 'async' | 'map' | 'loop';
+    blockChain?: string;
+    position: number;
+}
+export interface BuiltBlock {
+    id: string;
+    kind: 'async' | 'map' | 'loop';
+    mode: 'sequential' | 'parallel';
+    /** map only — the list to iterate. */
+    over?: unknown;
+    /**
+     * **Mandatory for map and loop.** An unbounded repeat is the most likely source of a
+     * surprise bill in the system, and for a loop it is also the only thing standing
+     * between a bad predicate and a run that never ends.
+     */
+    max?: number;
+    /**
+     * loop only. A **port reference**, not an expression: the loop repeats while this
+     * value is truthy, re-evaluated at the end of each iteration (do-while — a tool
+     * loop always wants one generate before it can know whether to stop).
+     *
+     * A reference rather than an expression is what keeps the construct renderable
+     * ("repeats while generate.hasToolCalls, max 8") and keeps a second expression
+     * language out of the design.
+     */
+    repeatWhile?: unknown;
+    chains: string[];
+    /** Blocks nest: which block and chain this one sits inside. Undefined = the spine. */
+    blockId?: string;
+    blockChain?: string;
+    /** Ordering against sibling nodes at the same level. */
+    position: number;
+}
+/**
+ * A preset the **spec author** ships — "Balanced", "Lore-heavy", "Fast" (12 §3).
+ *
+ * The scope chain's layer 5 is a single author default per slot, which is enough for one
+ * opinion and no help at all for "here are three coherent ways to run this." Named author
+ * presets fill that, and they need no schema: they seed `config_presets` and
+ * `node_overrides` rows at `scope_kind='preset'` on install, which both already exist.
+ *
+ * Two rulings ride on this — see 12 §3a.
+ */
+export interface BuiltPreset {
+    /**
+     * **The identity.** Stable, PK-agnostic, and the reference an update or a defaults
+     * sync matches on — same convention as the events registry (13 §7g), now applied to
+     * every seeded row rather than to events alone.
+     *
+     * The consequence worth knowing: the slug is the identity and the label is the
+     * display, so renaming "Lore-heavy" to "World-focused" is free and keeps every
+     * user's selection intact. Changing the *slug* is a delete plus a create.
+     */
+    slug: string;
+    label: string;
+    description?: string;
+    /** At most one author preset may be the shipped default. */
+    default?: boolean;
+    /**
+     * Who owns this preset, for update and sync. Defaults to the spec's owner, and is
+     * stated explicitly only in the case that justifies the field existing: a **preset
+     * pack** — a plugin shipping presets for a pipeline someone else ships. Uninstalling
+     * the pack must remove its presets and leave the pipeline alone, which is only
+     * decidable if the preset says who it belongs to (12 §3b).
+     */
+    owner?: string;
+    /** Flat override rows, exactly the shape `node_overrides` stores. */
+    values: Array<{
+        nodeKey: string;
+        slot: string;
+        value: unknown;
+    }>;
+}
+export interface BuiltSpec {
+    id: string;
+    meta: SpecMeta;
+    subscribes: string[];
+    nodes: BuiltNode[];
+    blocks: BuiltBlock[];
+    /** Fragments included, recorded for provenance after expansion (16 §3a). */
+    includes: Array<{
+        key: string;
+        fragmentId: string;
+    }>;
+    /** Author-shipped named configurations (12 §3a). Round-trips with the document (F4). */
+    presets: BuiltPreset[];
+}
+/** What a node method accepts: the value, or a function of the scope that returns it. */
+export type NodeArg<N, Nodes extends Record<string, PortDecl>> = N | (($: Scope<Nodes>) => N);
+/**
+ * A pinned constructor of a given kind. Constraining each method to its own kind makes
+ * `.query('x', C.generateText())` a **compile** error rather than a throw — 04 §4a said
+ * the method names the kind, and this is that claim actually enforced by the type system
+ * instead of by a message at authoring time.
+ */
+export type NodeOf<K extends Kind> = NodeSpec<Descriptor<any, any> & {
+    kind: K;
+}>;
+/**
+ * What a map iterates. Kept as a closed union rather than `unknown | fn`, because a
+ * union with `unknown` collapses to `unknown` and the callback's parameter loses its
+ * type — the exact thing this whole change exists to prevent.
+ */
+export type MapOver<Nodes extends Record<string, PortDecl>> = (($: Scope<Nodes>) => DataRef) | DataRef | readonly unknown[];
+/**
+ * Node keys accumulate **fully qualified**, exactly as they land in the rows (F21) — so
+ * a node declared inside a block enters the scope as `gather.semantic.embed`, and the
+ * scope type expands the dots back into a path (src/scope.ts).
+ */
+type Qualify<Prefix extends string, K extends string> = Prefix extends '' ? K : `${Prefix}.${K}`;
+type Add<Nodes extends Record<string, PortDecl>, K extends string, N> = Nodes & {
+    [P in K]: OutPortsOf<N>;
+};
+/** Like `Add`, but for a construct whose ports are known directly rather than via a descriptor. */
+type AddPorts<Nodes extends Record<string, PortDecl>, K extends string, P extends PortDecl> = Nodes & {
+    [X in K]: P;
+};
+/** Pull the accumulated node map back out of a builder the author handed us. */
+export type NodesOf<B> = B extends ChainBuilder<infer M, any> ? M : B extends BlockBuilder<infer M, any> ? M : never;
+/**
+ * What a block publishes. Addressable like a node, because it is the only well-defined
+ * handle on a construct that ran more than once — "whichever iteration happened to run
+ * last" is not a value anyone means.
+ */
+export type BranchPorts = {
+    main: string;
+    values: string;
+    branches: string;
+    ok: string;
+};
+/** Namespace a fragment's nodes under the include key, at publish and in the type (16 §3a). */
+type Prefixed<K extends string, M> = {
+    [P in keyof M & string as `${K}.${P}`]: M[P];
+};
+declare class ChainBuilder<Nodes extends Record<string, PortDecl> = {}, Prefix extends string = ''> {
+    protected spec: BuiltSpec;
+    protected blockCtx?: {
+        blockId: string;
+        chain: string;
+    } | undefined;
+    constructor(spec: BuiltSpec, blockCtx?: {
+        blockId: string;
+        chain: string;
+    } | undefined);
+    /** Resolve the callback form against the nodes declared so far. */
+    protected resolve<N>(arg: NodeArg<N, Nodes>): N;
+    protected add(kind: Kind, key: string, arg: NodeArg<NodeSpec<any>, Nodes>): any;
+    protected qualify(key: string): string;
+    /** Where a block declared here sits, so blocks nest exactly as nodes do. */
+    protected declareBlock(b: Omit<BuiltBlock, 'blockId' | 'blockChain' | 'position'>): BuiltBlock;
+    /** Chains run concurrently and are awaited together (01 §4). */
+    async<Id extends string, R extends BlockBuilder<any, any>>(id: Id, opts: {
+        mode?: 'sequential' | 'parallel';
+    }, fn: (b: BlockBuilder<Nodes, Qualify<Prefix, Id>>) => R): ChainBuilder<AddPorts<NodesOf<R>, Qualify<Prefix, Id>, BranchPorts>, Prefix>;
+    /** One contained chain, once per item of a list (01 §4). */
+    map<Id extends string, R extends ChainBuilder<any, any>>(id: Id, opts: {
+        over: MapOver<Nodes>;
+        max: number;
+        mode?: 'sequential' | 'parallel';
+    }, fn: (c: ChainBuilder<Nodes & {
+        [ITEM]: PortDecl;
+    }, `${Qualify<Prefix, Id>}.item`>) => R): ChainBuilder<AddPorts<NodesOf<R>, Qualify<Prefix, Id>, BranchPorts>, Prefix>;
+    /**
+     * One contained chain, repeated while a declared port stays truthy — bounded by a
+     * mandatory `max` (01 §4a).
+     *
+     * This is the construct that makes tool-calling expressible on the spine. It is **not
+     * a back-edge**: like `map`, the repetition lives in the block's declaration rather
+     * than in an edge that points backwards, and the executor already knew how to run a
+     * chain more than once. A loop is a map whose iteration count comes from a predicate
+     * instead of a list length.
+     *
+     * Always sequential — each iteration depends on the last, so `mode` would be a lie.
+     */
+    loop<Id extends string, R extends ChainBuilder<any, any>>(id: Id, opts: {
+        repeatWhile: (($: Scope<any>) => DataRef) | DataRef;
+        max: number;
+    }, fn: (c: ChainBuilder<Nodes, `${Qualify<Prefix, Id>}.item`>) => R): ChainBuilder<AddPorts<NodesOf<R>, Qualify<Prefix, Id>, BranchPorts>, Prefix>;
+    /** Internal: the callback resolver, reachable from `loop` after the body is built. */
+    resolvePublic<N>(arg: NodeArg<N, any>): N;
+    query<K extends string, N extends NodeOf<'query'>>(key: K, node: NodeArg<N, Nodes>): ChainBuilder<Add<Nodes, Qualify<Prefix, K>, N>, Prefix>;
+    task<K extends string, N extends NodeOf<'task'>>(key: K, node: NodeArg<N, Nodes>): ChainBuilder<Add<Nodes, Qualify<Prefix, K>, N>, Prefix>;
+    provider<K extends string, N extends NodeOf<'provider'>>(key: K, node: NodeArg<N, Nodes>): ChainBuilder<Add<Nodes, Qualify<Prefix, K>, N>, Prefix>;
+    consume<K extends string, N extends NodeOf<'consumer'>>(key: K, node: NodeArg<N, Nodes>): ChainBuilder<Add<Nodes, Qualify<Prefix, K>, N>, Prefix>;
+}
+declare class BlockBuilder<Nodes extends Record<string, PortDecl> = {}, Id extends string = string> {
+    private spec;
+    private blockId;
+    constructor(spec: BuiltSpec, blockId: string);
+    /**
+     * Each chain's nodes accumulate into the block's type, so by the time `.async()`
+     * returns, the spine's scope contains every node the block declared — under the
+     * qualified key it actually has.
+     */
+    chain<Name extends string, R extends ChainBuilder<any, any>>(name: Name, fn: (c: ChainBuilder<Nodes, Qualify<Id, Name>>) => R): BlockBuilder<NodesOf<R>, Id>;
+}
+/**
+ * Slot-named methods, for the same reason the chain has kind-named ones (04 §4a): the
+ * method names the slot, so setting a slot a node never declared is caught by name rather
+ * than becoming an override row that silently matches nothing.
+ */
+export declare class PresetBuilder<Nodes extends Record<string, PortDecl> = {}> {
+    private preset;
+    constructor(preset: BuiltPreset);
+    private set;
+    /** Node behaviour knobs — retrieval `weight`, `minInclude`, `topK` (12 §2). */
+    params(nodeKey: keyof Nodes & string, value: Record<string, unknown>): this;
+    /** Authored text fields the node declares. */
+    prompts(nodeKey: keyof Nodes & string, value: Record<string, unknown>): this;
+    /** A template **and its engine** — the engine travels on the value (src/engines.ts). */
+    template(nodeKey: keyof Nodes & string, value: TemplateValue): this;
+    /** Generation parameters: a reference to a named config, or field overrides on top. */
+    sampling(nodeKey: keyof Nodes & string, value: Record<string, unknown>): this;
+    /** Node toggles and the review position. */
+    settings(nodeKey: keyof Nodes & string, value: Record<string, unknown>): this;
+}
+export declare class SpecBuilder<Nodes extends Record<string, PortDecl> = {}> extends ChainBuilder<Nodes> {
+    private inputDone;
+    constructor(id: string, meta: SpecMeta);
+    query<K extends string, N extends NodeOf<'query'>>(key: K, node: NodeArg<N, Nodes>): SpecBuilder<Add<Nodes, K, N>>;
+    task<K extends string, N extends NodeOf<'task'>>(key: K, node: NodeArg<N, Nodes>): SpecBuilder<Add<Nodes, K, N>>;
+    provider<K extends string, N extends NodeOf<'provider'>>(key: K, node: NodeArg<N, Nodes>): SpecBuilder<Add<Nodes, K, N>>;
+    consume<K extends string, N extends NodeOf<'consumer'>>(key: K, node: NodeArg<N, Nodes>): SpecBuilder<Add<Nodes, K, N>>;
+    /**
+     * A named configuration the spec ships with (12 §3a). Declared **after** the nodes,
+     * so the node keys it addresses are the ones that exist — same accumulation the
+     * scope uses, so a typo is a compile error rather than a dead override row.
+     *
+     * ```ts
+     * .preset('lore-heavy', { label: 'Lore-heavy' }, p => p
+     *   .params  ('lore',     { weight: 0.5, minInclude: 3 })
+     *   .prompts ('generate', { system: LORE_SYSTEM })
+     *   .template('prompt',   jinja(LORE_ASSEMBLY)))
+     * ```
+     */
+    preset(slug: string, meta: {
+        label: string;
+        description?: string;
+        default?: boolean;
+        owner?: string;
+    }, fn: (p: PresetBuilder<Nodes>) => unknown): this;
+    /** Seeds a default subscription. Admins manage the real ones (04 §4b). */
+    on(eventId: string): this;
+    /**
+     * Exactly one Input, positionally first (01 §2). Enforced here rather than by
+     * the validator, so it is a throw at authoring time.
+     */
+    input<K extends string, N extends NodeOf<'input'>>(key: K, node: N): SpecBuilder<Add<Nodes, K, N>>;
+    async<Id extends string, R extends BlockBuilder<any, any>>(id: Id, opts: {
+        mode?: 'sequential' | 'parallel';
+    }, fn: (b: BlockBuilder<Nodes, Id>) => R): SpecBuilder<AddPorts<NodesOf<R>, Id, BranchPorts>>;
+    map<Id extends string, R extends ChainBuilder<any, any>>(id: Id, opts: {
+        over: MapOver<Nodes>;
+        max: number;
+        mode?: 'sequential' | 'parallel';
+    }, fn: (c: ChainBuilder<Nodes & {
+        [ITEM]: PortDecl;
+    }, `${Id}.item`>) => R): SpecBuilder<AddPorts<NodesOf<R>, Id, BranchPorts>>;
+    loop<Id extends string, R extends ChainBuilder<any, any>>(id: Id, opts: {
+        repeatWhile: (($: Scope<any>) => DataRef) | DataRef;
+        max: number;
+    }, fn: (c: ChainBuilder<Nodes, `${Id}.item`>) => R): SpecBuilder<AddPorts<NodesOf<R>, Id, BranchPorts>>;
+    /** Compile-time include — expanded here, so rows hold the flat chain (16 §3a). */
+    include<K extends string, F extends Fragment<any>>(key: K, fragment: F): SpecBuilder<Nodes & Prefixed<K, F extends Fragment<infer M> ? M : {}>>;
+    build(): BuiltSpec;
+}
+export declare function spec(id: string, meta: SpecMeta): SpecBuilder<{}>;
+/**
+ * A fragment carries its node map in its type, so `.include('ctx', contextInfill)` puts
+ * `ctx.embed`, `ctx.search`, `ctx.merge` into the including spec's scope — namespaced by
+ * the include key in the type exactly as they are namespaced in the rows (16 §3a).
+ */
+export interface Fragment<Nodes extends Record<string, PortDecl> = {}> {
+    id: string;
+    nodes: BuiltNode[];
+    blocks: BuiltBlock[];
+    /** Phantom — carries the node map. Never populated at runtime. */
+    readonly __nodes?: Nodes;
+}
+export declare function fragment<R extends ChainBuilder<any, any>>(id: string, fn: (c: ChainBuilder<{}, ''>) => R): Fragment<NodesOf<R>>;
+export { ChainBuilder };
+//# sourceMappingURL=builder.d.ts.map

@@ -22,13 +22,16 @@
 	"engines": {
 		"node": ">=24"
 	},
+	"workspaces": [
+		"packages/*"
+	],
 	"scripts": {
 		"dev": "vite dev",
 		"dev:host": "vite dev --host",
 		"build": "vite build && vite build --ssr && node scripts/customize-build.js",
 		"start": "node build/index.js",
 		"preview": "vite preview",
-		"prepare": "svelte-kit sync || echo ''",
+		"prepare": "npm run sdk:build && svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"test": "svelte-kit sync && vitest run",
@@ -44,7 +47,9 @@
 		"android:prepare": "node scripts/build-android.js",
 		"android:build": "cd android && ./gradlew assembleRelease",
 		"android:build:debug": "cd android && ./gradlew assembleDebug",
-		"android:full": "npm run build && npm install --omit=dev && npm rebuild && npm run android:prepare && npm run android:build && npm install"
+		"android:full": "npm run build && npm install --omit=dev && npm rebuild && npm run android:prepare && npm run android:build && npm install",
+		"sdk:build": "npm run build -w @serene-pub/sdk && npm run build -w @serene-pub/contracts -w @serene-pub/conformance -w @serene-pub/cli",
+		"sdk:test": "npm run test -w @serene-pub/sdk-tests"
 	},
 	"devDependencies": {
 		"@fontsource/fira-mono": "^5.0.0",
@@ -80,7 +85,9 @@
 		"typescript": "^5.0.0",
 		"vite": "^6.2.6",
 		"vite-plugin-banner": "^0.8.1",
-		"vitest": "^4.1.10"
+		"vitest": "^4.1.10",
+		"@serene-pub/conformance": "0.6.0-preview.0",
+		"@serene-pub/cli": "0.6.0-preview.0"
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.105.0",
@@ -128,6 +135,8 @@
 		"sveltekit-io": "^1.0.13",
 		"uuid": "^11.1.0",
 		"zod": "^3.25.76",
-		"zod-to-json-schema": "^3.24.6"
+		"zod-to-json-schema": "^3.24.6",
+		"@serene-pub/sdk": "0.6.0-preview.0",
+		"@serene-pub/contracts": "0.6.0"
 	}
 }

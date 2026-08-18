@@ -1,0 +1,36 @@
+{
+  "name": "@serene-pub/cli",
+  "version": "0.6.0-preview.0",
+  "type": "module",
+  "description": "Build-time tooling: package a plugin into a manifest plus documents, and generate /contracts from a type registry.",
+  "license": "AGPL-3.0",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "serene-pub": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json",
+    "./bin": {
+      "types": "./dist/bin.d.ts",
+      "import": "./dist/bin.js"
+    }
+  },
+  "peerDependencies": {
+    "@serene-pub/sdk": ">=0.6.0-preview.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "devDependencies": {
+    "@serene-pub/sdk": "0.6.0-preview.0"
+  }
+}
