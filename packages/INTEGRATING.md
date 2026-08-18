@@ -88,6 +88,40 @@ old code keeps living.
 **C6** (budgets meter consumption, waiting is free), **C7** (timeouts bound execution, not
 waiting), **C8** (forced-sequential is identical to parallel).
 
+**Status:** `chat-history`, `create-message` and `update-message` are bound and running
+against real rows (`src/lib/server/pipelines/`). `assemble` and `generate-text` halt with a
+reason, for the structural reason below.
+
+### ⚠ The seam this step actually hit: assembly and dispatch are one thing today
+
+`BaseConnectionAdapter.generate()` **builds its own prompt**. It owns a `PromptBuilder`,
+calls `compilePrompt()` internally, and returns the compiled prompt alongside the
+completion. There is no way to hand an adapter a payload and ask it only to send.
+
+The pipeline model splits those: a Task allocates, a Provider dispatches. That split is not
+bookkeeping — it is what makes the preview possible at all, because a preview is the run
+halting _after_ the payload is formed and _before_ it is sent (C13). An adapter that forms
+the payload inside the send has nowhere to halt.
+
+Three ways out, and they are not equal:
+
+1. **Extract a dispatch-only entry point** — `generate()` keeps its current signature and
+   grows a sibling that takes an already-compiled prompt. The seven adapters change
+   mechanically; `generate()` becomes `compilePrompt()` followed by the new method, which
+   keeps today's callers byte-identical by construction. **Recommended.** It is the only
+   option that leaves one implementation of dispatch.
+2. **Wrap the whole adapter as the Provider** and let `assemble` pass through. Fast, and it
+   gives up the preview, the gate's view of the payload, and every token figure — which are
+   the features the pipeline work exists to deliver. A shortcut that removes the destination.
+3. **Reimplement dispatch behind the Provider** and leave the adapters for the old path.
+   Two implementations of every provider protocol, diverging from the first bug fix onward.
+
+Option 1 also decides the shape of `assemble`: PromptBuilder is already pure given its
+inputs — the caller hydrates the chat and passes it in — so `assemble` can wrap it directly
+**provided a Query loads those inputs first**. A Task is handed no services (F11), so the
+hydration cannot happen inside `assemble`; it belongs in a Query, and connection **metadata**
+reaches it while material never does (F18).
+
 ### Step 4 — Parity, before anything flips
 
 The acceptance criterion for replacing the prompt builder is **byte-identical output**,
