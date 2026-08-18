@@ -5,18 +5,24 @@
  * discriminated results including halt, per-run seed, timeouts that bound execution
  * but never waiting, consumption budgets, per-kind injection, and core-emitted events.
  */
-import { getType } from './descriptors.js';
-import { collectDataRefs, isSlotRef } from './refs.js';
-import { resolveConfig } from './config.js';
-import { hashPayload, isGated, resolvePosition } from './review.js';
-import { isSecret } from './settings.js';
-import { previewTarget, roughTokens } from './preview.js';
-import { ITEM as ITEM_KEY } from './scope.js';
-import { isAllocatedContext, measureWire } from './wire.js';
-export const ok = (value) => ({ kind: 'ok', value });
-export const err = (reason) => ({ kind: 'err', reason });
-export const halt = (reason) => ({ kind: 'halt', reason });
-export const cancelled = (reason) => ({ kind: 'cancelled', reason });
+import { getType } from "./descriptors.js";
+import { collectDataRefs, isSlotRef } from "./refs.js";
+import { resolveConfig } from "./config.js";
+import { hashPayload, isGated, resolvePosition } from "./review.js";
+import { isSecret } from "./settings.js";
+import { previewTarget, roughTokens } from "./preview.js";
+import { ITEM as ITEM_KEY } from "./scope.js";
+import { isAllocatedContext, measureWire } from "./wire.js";
+export const ok = (value) => ({ kind: "ok", value });
+export const err = (reason) => ({ kind: "err", reason });
+export const halt = (reason) => ({
+    kind: "halt",
+    reason
+});
+export const cancelled = (reason) => ({
+    kind: "cancelled",
+    reason
+});
 /**
  * Values are scoped, not global.
  *
@@ -44,7 +50,7 @@ class ValueScope {
         return new ValueScope(this);
     }
 }
-export const isCommitted = (w) => w.status === 'committed';
+export const isCommitted = (w) => w.status === "committed";
 // ── Deterministic RNG from the run seed (F11) ───────────────────────────────
 export function seededRandom(seed) {
     let h = 2166136261;
@@ -60,38 +66,40 @@ const EMPTY_WORLD = {
     overrides: [],
     samplingConfigs: [],
     connections: [],
-    activeConnection: {},
+    activeConnection: {}
 };
 class BudgetExceeded extends Error {
 }
 export async function run(doc, opts) {
     const world = opts.world ?? EMPTY_WORLD;
-    const seed = opts.seed ?? 'seed:0';
+    const seed = opts.seed ?? "seed:0";
     const rng = seededRandom(seed);
     const now = opts.now ?? (() => Date.now());
     const config = resolveConfig(world, doc.nodes.map((n) => n.key));
     const receipt = {
-        runId: opts.runId ?? 'run:test',
+        runId: opts.runId ?? "run:test",
         specId: doc.id,
         specVersion: doc.version,
         schemaVersion: 1,
         seed,
-        triggerSource: opts.triggerSource ?? 'input',
+        triggerSource: opts.triggerSource ?? "input",
         triggerRef: opts.triggerRef,
         actorUserId: opts.actorUserId,
         depth: 0,
         queuedMs: opts.queuedMs,
         startedAt: now(),
         endedAt: 0,
-        outcome: 'ok',
+        outcome: "ok",
         nodes: [],
         emitted: [],
-        consumption: { tokens: 0, nodeExecutions: 0 },
+        consumption: { tokens: 0, nodeExecutions: 0 }
     };
     /** Set the moment any node with declared effects is invoked — gates compaction. */
     let effectfulNodeRan = false;
     const previewAt = opts.preview
-        ? previewTarget(doc.nodes, typeof opts.preview === 'object' ? opts.preview.atNode : undefined)
+        ? previewTarget(doc.nodes, typeof opts.preview === "object"
+            ? opts.preview.atNode
+            : undefined)
         : undefined;
     const countTokens = opts.countTokens ?? roughTokens;
     /**
@@ -102,11 +110,12 @@ export async function run(doc, opts) {
     const buildPreview = (node, input, typeId, targetedBy, wire, wireCtx) => {
         const ctxValue = input.context ?? input.main ?? input;
         const conn = input.connection;
-        const budgetNode = doc.nodes.find((n) => n.typeId === 'core:task/context-budget');
+        const budgetNode = doc.nodes.find((n) => n.typeId === "core:task/context-budget");
         const budgetValue = budgetNode ? values.get(budgetNode.key) : undefined;
         // Prefer the allocated blocks, which carry the trail. Fall back to sniffing an
         // allocation array only for specs core has not migrated yet.
-        const allocatedSource = wireCtx ?? Object.values(input).find(isAllocatedContext);
+        const allocatedSource = wireCtx ??
+            Object.values(input).find(isAllocatedContext);
         const legacyAlloc = ctxValue?.alloc ?? ctxValue?.allocation;
         const allocation = allocatedSource?.allocation ?? legacyAlloc;
         const blocks = allocatedSource
@@ -119,21 +128,25 @@ export async function run(doc, opts) {
                 included: b.included,
                 tokens: b.tokens,
                 why: b.why,
-                reason: b.why?.[b.why.length - 1],
+                reason: b.why?.[b.why.length - 1]
             }))
             : (Array.isArray(legacyAlloc) ? legacyAlloc : []).map((a) => ({
                 sourceKey: a.sourceKey,
                 weight: a.weight,
                 priority: a.priority,
                 included: (a.included ?? 0) > 0,
-                tokens: countTokens(a.rendered ?? a.text ?? ''),
+                tokens: countTokens(a.rendered ?? a.text ?? ""),
                 reason: a.reason ??
-                    (a.available !== undefined && a.included !== undefined && a.available > a.included
+                    (a.available !== undefined &&
+                        a.included !== undefined &&
+                        a.available > a.included
                         ? `${a.available - a.included} of ${a.available} dropped — budget`
-                        : undefined),
+                        : undefined)
             }));
         const tokens = wire?.tokens ?? countTokens(ctxValue);
-        const available = budgetValue?.available ?? ctxValue?.budget ?? allocatedSource?.allocation.budget;
+        const available = budgetValue?.available ??
+            ctxValue?.budget ??
+            allocatedSource?.allocation.budget;
         return {
             atNode: node.key,
             typeId,
@@ -143,40 +156,57 @@ export async function run(doc, opts) {
                     id: conn.id,
                     kind: conn.kind,
                     contextLength: conn.metadata?.contextLength,
-                    tokenizer: conn.metadata?.tokenizer,
+                    tokenizer: conn.metadata?.tokenizer
                 }
                 : undefined,
             budget: {
-                maxContext: budgetValue?.maxContext ?? conn?.metadata?.contextLength,
+                maxContext: budgetValue?.maxContext ??
+                    conn?.metadata?.contextLength,
                 reserved: budgetValue?.reserved,
-                available,
+                available
             },
-            context: { rendered: redact(wire ? wire.payload : ctxValue), tokens },
+            context: {
+                rendered: redact(wire ? wire.payload : ctxValue),
+                tokens
+            },
             wire: wire
-                ? { format: wire.format, blockTokens: wire.blockTokens, overheadTokens: wire.overheadTokens }
+                ? {
+                    format: wire.format,
+                    blockTokens: wire.blockTokens,
+                    overheadTokens: wire.overheadTokens
+                }
                 : undefined,
             blocks,
             totals: {
                 blocks: blocks.length,
                 included: blocks.filter((b) => b.included).length,
                 dropped: blocks.filter((b) => !b.included).length,
-                tokensIncluded: blocks.filter((b) => b.included).reduce((n, b) => n + b.tokens, 0),
-                tokensDropped: blocks.filter((b) => !b.included).reduce((n, b) => n + b.tokens, 0),
+                tokensIncluded: blocks
+                    .filter((b) => b.included)
+                    .reduce((n, b) => n + b.tokens, 0),
+                tokensDropped: blocks
+                    .filter((b) => !b.included)
+                    .reduce((n, b) => n + b.tokens, 0),
                 overBudgetBy: wire?.overBudgetBy ??
-                    (typeof available === 'number' && tokens > available ? tokens - available : undefined),
+                    (typeof available === "number" && tokens > available
+                        ? tokens - available
+                        : undefined)
             },
-            allocation,
+            allocation
         };
     };
     const values = new ValueScope();
-    values.set(doc.nodes[0]?.key ?? 'input', opts.input);
+    values.set(doc.nodes[0]?.key ?? "input", opts.input);
     const reviews = [];
     let seq = 0;
-    const budget = { tokens: opts.budget?.tokens ?? Infinity, nodes: opts.budget?.nodeExecutions ?? Infinity };
+    const budget = {
+        tokens: opts.budget?.tokens ?? Infinity,
+        nodes: opts.budget?.nodeExecutions ?? Infinity
+    };
     const spendTokens = (n) => {
         receipt.consumption.tokens += n;
         if (receipt.consumption.tokens > budget.tokens)
-            throw new BudgetExceeded('token budget exceeded');
+            throw new BudgetExceeded("token budget exceeded");
     };
     // Blocks are executed as units when their first member is reached.
     const emittedBlocks = new Set();
@@ -193,24 +223,29 @@ export async function run(doc, opts) {
         return cfg;
     };
     const resolveSlot = (node, ref) => {
-        const targetKey = node.resolvedRefs?.[Object.keys(node.config).find((k) => node.config[k] === ref) ?? ''] ?? ref.ofNode ?? node.key;
+        const targetKey = node.resolvedRefs?.[Object.keys(node.config).find((k) => node.config[k] === ref) ??
+            ""] ??
+            ref.ofNode ??
+            node.key;
         const slotName = ref.slot;
-        if (slotName === 'connection') {
+        if (slotName === "connection") {
             const d = getType(`${node.typeId}@${node.typeVersion}`);
             const targetNode = doc.nodes.find((n) => n.key === targetKey) ?? node;
             const td = getType(`${targetNode.typeId}@${targetNode.typeVersion}`);
             const kind = td?.shape ?? d?.shape;
-            const chosenId = config[targetKey]?.['connection']?.['$ref'] ??
+            const chosenId = config[targetKey]?.["connection"]?.["$ref"] ??
                 (kind ? world.activeConnection[kind] : undefined);
             const conn = world.connections.find((c) => c.id === chosenId);
             // metadata only — material is injected by the executor at call time (01 §10)
-            return conn ? { id: conn.id, kind: conn.kind, metadata: conn.metadata } : null;
+            return conn
+                ? { id: conn.id, kind: conn.kind, metadata: conn.metadata }
+                : null;
         }
-        if (slotName === 'sampling') {
-            const refId = config[targetKey]?.['sampling']?.['$ref'];
+        if (slotName === "sampling") {
+            const refId = config[targetKey]?.["sampling"]?.["$ref"];
             const base = world.samplingConfigs.find((s) => s.id === refId);
-            const overrides = { ...(config[node.key]?.['sampling'] ?? {}) };
-            delete overrides['$ref'];
+            const overrides = { ...(config[node.key]?.["sampling"] ?? {}) };
+            delete overrides["$ref"];
             return { ...(base?.values ?? {}), ...overrides };
         }
         return config[node.key]?.[slotName] ?? {};
@@ -226,19 +261,19 @@ export async function run(doc, opts) {
             seq: seq++,
             kind: node.kind,
             typeId: `${node.typeId}@${node.typeVersion}`,
-            result: 'ok',
+            result: "ok",
             startedAt: started,
             endedAt: started,
             elapsedMs: 0,
             blockMode,
             iteration,
             resolvedRefs: node.resolvedRefs,
-            notes: [],
+            notes: []
         };
         receipt.consumption.nodeExecutions++;
         if (receipt.consumption.nodeExecutions > budget.nodes)
-            throw new BudgetExceeded('node execution budget exceeded');
-        if (node.kind === 'input') {
+            throw new BudgetExceeded("node execution budget exceeded");
+        if (node.kind === "input") {
             scope.set(node.key, opts.input);
             nr.output = opts.input;
             nr.endedAt = now();
@@ -252,12 +287,12 @@ export async function run(doc, opts) {
         // Substrate placement: after the input resolves, before the binding is invoked.
         // Keys on declared effects, not on kind, so an effectful Provider gates too.
         if (isGated(d.effects)) {
-            const position = resolvePosition(d.reviewDefault, config[node.key]?.['settings']?.['review']);
-            if (position !== 'off') {
+            const position = resolvePosition(d.reviewDefault, config[node.key]?.["settings"]?.["review"]);
+            if (position !== "off") {
                 const originalHash = hashPayload(input);
                 if (!opts.reviewer) {
                     nr.endedAt = now();
-                    nr.result = 'err';
+                    nr.result = "err";
                     nr.reason = `review is '${position}' but no reviewer is available`;
                     receipt.nodes.push(nr);
                     return err(nr.reason);
@@ -266,25 +301,25 @@ export async function run(doc, opts) {
                     nodeKey: node.key,
                     typeId: nr.typeId,
                     payload: input,
-                    position,
+                    position
                 });
                 const rec = {
                     nodeKey: node.key,
                     position,
-                    action: position === 'async' ? 'proposed' : decision.action,
+                    action: position === "async" ? "proposed" : decision.action,
                     originalHash,
                     by: decision.by,
-                    at: decision.at,
+                    at: decision.at
                 };
-                if (decision.action === 'reject') {
+                if (decision.action === "reject") {
                     reviews.push(rec);
                     nr.endedAt = now();
-                    nr.result = 'halt';
-                    nr.reason = 'rejected at review';
+                    nr.result = "halt";
+                    nr.reason = "rejected at review";
                     receipt.nodes.push(nr);
-                    return halt('rejected at review');
+                    return halt("rejected at review");
                 }
-                if (decision.action === 'edit') {
+                if (decision.action === "edit") {
                     // The binding receives the edited payload and cannot tell (F14).
                     input = decision.payload;
                     rec.editedHash = hashPayload(input);
@@ -294,21 +329,29 @@ export async function run(doc, opts) {
                 // Published as the discriminated form (13 §7j-b) — a proposal id must not
                 // be mistakable for a committed row id, because a reviewer may still
                 // reject it and the foreign key would dangle only later.
-                if (position === 'async') {
-                    const pending = { status: 'pending', proposalId: `proposal:${node.key}` };
+                if (position === "async") {
+                    const pending = {
+                        status: "pending",
+                        proposalId: `proposal:${node.key}`
+                    };
                     const published = publishWriteResult(pending, d.ports.out);
                     scope.set(node.key, published);
                     nr.endedAt = now();
                     nr.elapsedMs = nr.endedAt - nr.startedAt;
-                    nr.result = 'ok';
+                    nr.result = "ok";
                     nr.output = pending;
-                    nr.notes.push('review: async — proposed, binding not invoked');
+                    nr.notes.push("review: async — proposed, binding not invoked");
                     receipt.nodes.push(nr);
                     return ok(published);
                 }
             }
             else {
-                reviews.push({ nodeKey: node.key, position, action: 'approve', originalHash: hashPayload(input) });
+                reviews.push({
+                    nodeKey: node.key,
+                    position,
+                    action: "approve",
+                    originalHash: hashPayload(input)
+                });
             }
         }
         // ── Wire formatting, at the pre-call substrate (16 §7) ────────────────
@@ -319,10 +362,10 @@ export async function run(doc, opts) {
         // Kept because formatting replaces the port value — the panel still needs the blocks.
         let wireCtx;
         if (d.slots) {
-            const wireSlot = Object.entries(d.slots).find(([, sd]) => sd.kind === 'wire');
+            const wireSlot = Object.entries(d.slots).find(([, sd]) => sd.kind === "wire");
             if (wireSlot) {
                 const [slotName, decl] = wireSlot;
-                const chosen = config[node.key]?.['wire'] ??
+                const chosen = config[node.key]?.["wire"] ??
                     input[slotName] ??
                     decl.format;
                 const port = Object.entries(input).find(([, v]) => isAllocatedContext(v));
@@ -330,16 +373,19 @@ export async function run(doc, opts) {
                     const portName = port[0];
                     const ctx = port[1];
                     wireCtx = ctx;
-                    const available = input.budget?.available ?? ctx.allocation.budget;
+                    const available = input.budget?.available ??
+                        ctx.allocation.budget;
                     try {
                         wire = measureWire(chosen, ctx, (t) => countTokens(t), available);
                         input = { ...input, [portName]: wire.payload };
                         nr.notes.push(`wire ${wire.format}: ${wire.blockTokens} block + ${wire.overheadTokens} scaffold = ${wire.tokens} tokens` +
-                            (wire.overBudgetBy ? `  ⚠ OVER by ${wire.overBudgetBy}` : ''));
+                            (wire.overBudgetBy
+                                ? `  ⚠ OVER by ${wire.overBudgetBy}`
+                                : ""));
                     }
                     catch (e) {
                         nr.endedAt = now();
-                        nr.result = 'err';
+                        nr.result = "err";
                         nr.reason = e.message;
                         receipt.nodes.push(nr);
                         return err(nr.reason);
@@ -350,7 +396,7 @@ export async function run(doc, opts) {
                     // that should be loud (16 §7).
                     if (wire.overBudgetBy) {
                         nr.endedAt = now();
-                        nr.result = 'err';
+                        nr.result = "err";
                         nr.reason =
                             `formatted payload is ${wire.tokens} tokens against ${available} available — ` +
                                 `over by ${wire.overBudgetBy}. The estimate came from wire format '${wire.format}'`;
@@ -370,7 +416,7 @@ export async function run(doc, opts) {
             nr.input = redact(input);
             nr.endedAt = now();
             nr.elapsedMs = nr.endedAt - nr.startedAt;
-            nr.result = 'halt';
+            nr.result = "halt";
             nr.reason = `preview: stopped before ${node.key}, nothing sent`;
             receipt.nodes.push(nr);
             return halt(nr.reason);
@@ -378,7 +424,7 @@ export async function run(doc, opts) {
         nr.input = redact(input);
         // Gates receipt compaction (13 §2): once anything effectful has been invoked,
         // the run is worth recording in full whatever happens next.
-        if (d.effects && d.effects !== 'none')
+        if (d.effects && d.effects !== "none")
             effectfulNodeRan = true;
         const timeoutMs = Math.min(d.timeoutMs ?? Infinity, opts.timeoutCeilingMs ?? Infinity);
         nr.timeoutMsApplied = Number.isFinite(timeoutMs) ? timeoutMs : undefined;
@@ -386,21 +432,34 @@ export async function run(doc, opts) {
         const base = {
             signal: controller.signal,
             progress: () => { }, // ephemeral, never recorded (F34)
-            log: (lvl, m) => nr.notes.push(`${lvl}: ${m}`),
+            log: (lvl, m) => nr.notes.push(`${lvl}: ${m}`)
         };
         if (d.declaresRandomness)
             base.random = rng;
+        const nodeRef = {
+            key: node.key,
+            typeId: node.typeId,
+            typeVersion: node.typeVersion,
+            kind: node.kind
+        };
+        const host = opts.host;
         let ctx = base;
-        if (node.kind === 'query')
-            ctx = { ...base, read: () => [] };
-        if (node.kind === 'provider') {
+        if (node.kind === "query")
             ctx = {
                 ...base,
-                connectionMetadata: input.connection?.metadata ?? {},
-                sampling: input.sampling ?? {},
+                read: (table, q) => host?.read ? host.read(table, q, nodeRef) : []
+            };
+        if (node.kind === "provider") {
+            const conn = host?.connection?.(nodeRef);
+            ctx = {
+                ...base,
+                connectionMetadata: conn?.metadata ?? input.connection?.metadata ?? {},
+                sampling: conn?.sampling ?? input.sampling ?? {},
                 call: async (p) => {
+                    // Recorded before dispatch, so a Provider that throws still leaves the
+                    // request in the receipt — the failing call is the one worth reading.
                     nr.request = p;
-                    return p;
+                    return host?.call ? await host.call(p, nodeRef) : p;
                 },
                 reportUsage: (t) => {
                     nr.tokens = (nr.tokens ?? 0) + t;
@@ -409,14 +468,19 @@ export async function run(doc, opts) {
                 reportSampling: (applied, ignored) => {
                     nr.samplingApplied = applied;
                     nr.samplingIgnored = ignored;
-                },
+                }
             };
         }
-        if (node.kind === 'consumer') {
+        if (node.kind === "consumer") {
             ctx = {
                 ...base,
-                commit: async (p) => ({ id: `row:${node.key}`, ...p }),
-                emit: (handle) => nr.notes.push(`emit → ${handle}`),
+                commit: async (p) => host?.commit
+                    ? await host.commit(p, nodeRef)
+                    : { id: `row:${node.key}`, ...p },
+                emit: (handle, payload) => {
+                    nr.notes.push(`emit → ${handle}`);
+                    host?.emit?.(handle, payload, nodeRef);
+                }
             };
         }
         let res;
@@ -426,7 +490,7 @@ export async function run(doc, opts) {
         catch (e) {
             if (e instanceof BudgetExceeded)
                 throw e;
-            if (e.message === '__timeout__') {
+            if (e.message === "__timeout__") {
                 nr.timedOut = true;
                 res = err(`timeout after ${timeoutMs}ms`);
             }
@@ -437,16 +501,18 @@ export async function run(doc, opts) {
         nr.endedAt = now();
         nr.elapsedMs = nr.endedAt - nr.startedAt;
         nr.result = res.kind;
-        if (res.kind === 'ok') {
+        if (res.kind === "ok") {
             // A gate-eligible Consumer publishes the discriminated write result, so the
             // committed and pending cases are the same shape and a downstream type has
             // to handle both (13 §7j-b). There is no branch node to check `status` with
             // (F25), so the obligation belongs to the port shape, not to the spec.
             let published = res.value;
-            if (node.kind === 'consumer' && isGated(d.effects) && !isWriteResult(published)) {
+            if (node.kind === "consumer" &&
+                isGated(d.effects) &&
+                !isWriteResult(published)) {
                 const committed = {
-                    status: 'committed',
-                    ids: (published ?? {}),
+                    status: "committed",
+                    ids: (published ?? {})
                 };
                 published = publishWriteResult(committed, d.ports.out);
             }
@@ -454,15 +520,20 @@ export async function run(doc, opts) {
             res = ok(published);
             nr.output = redact(published);
         }
-        else if (res.kind === 'halt' || res.kind === 'err' || res.kind === 'cancelled') {
+        else if (res.kind === "halt" ||
+            res.kind === "err" ||
+            res.kind === "cancelled") {
             nr.reason = res.reason;
         }
         // Core emits, not the node (01 §8 / F8).
-        if (res.kind === 'ok' && node.kind === 'consumer' && d.effects === 'write' && d.causesEvent) {
+        if (res.kind === "ok" &&
+            node.kind === "consumer" &&
+            d.effects === "write" &&
+            d.causesEvent) {
             receipt.emitted.push({
                 event: d.causesEvent,
                 cause: node.key,
-                subscribers: opts.subscribers?.[d.causesEvent] ?? 0,
+                subscribers: opts.subscribers?.[d.causesEvent] ?? 0
             });
         }
         receipt.nodes.push(nr);
@@ -473,7 +544,7 @@ export async function run(doc, opts) {
         const c = opts.cancelSignal?.();
         if (!c)
             return false;
-        receipt.outcome = 'cancelled';
+        receipt.outcome = "cancelled";
         receipt.cancelledBy = c.by;
         receipt.haltReason = c.reason;
         return true;
@@ -481,28 +552,36 @@ export async function run(doc, opts) {
     const itemsAt = (level) => {
         const nodes = ordered
             .filter((n) => n.blockId === level.blockId && n.blockChain === level.chain)
-            .map((node) => ({ sort: node.position, run: node, isBlock: false }));
+            .map((node) => ({
+            sort: node.position,
+            run: node,
+            isBlock: false
+        }));
         const blocks = doc.blocks
             .filter((b) => b.blockId === level.blockId && b.blockChain === level.chain)
-            .map((block) => ({ sort: block.position, run: block, isBlock: true }));
+            .map((block) => ({
+            sort: block.position,
+            run: block,
+            isBlock: true
+        }));
         return [...nodes, ...blocks].sort((a, b) => a.sort - b.sort);
     };
     const runLevel = async (level, scope, blockMode, iteration) => {
         let last = ok(null);
         for (const item of itemsAt(level)) {
             if (checkCancel())
-                return cancelled('cancelled');
+                return cancelled("cancelled");
             last = item.isBlock
                 ? await runBlock(item.run, scope)
                 : await invoke(item.run, scope, blockMode, iteration);
-            if (last.kind !== 'ok')
+            if (last.kind !== "ok")
                 return last;
         }
         return last;
     };
     const truthy = (v) => !!v && !(Array.isArray(v) && v.length === 0);
     const runBlock = async (block, scope) => {
-        const mode = opts.forceSequential ? 'sequential' : block.mode;
+        const mode = opts.forceSequential ? "sequential" : block.mode;
         const collected = [];
         const publish = () => {
             const union = {
@@ -512,25 +591,31 @@ export async function run(doc, opts) {
                 },
                 get values() {
                     return this.branches
-                        .filter((b) => b.result.kind === 'ok')
-                        .map((b) => b.result.value);
+                        .filter((b) => b.result.kind === "ok")
+                        .map((b) => b.result
+                        .value);
                 },
-                ok: collected.every((b) => b.result.kind === 'ok'),
+                ok: collected.every((b) => b.result.kind === "ok")
             };
             scope.set(block.id, union);
         };
-        if (block.kind === 'async') {
+        if (block.kind === "async") {
             // Chains share the scope: a sibling is addressable by its qualified key, and
             // keys are unique, so there is nothing to collide.
             const run = (chain) => runLevel({ blockId: block.id, chain }, scope, mode);
-            const results = mode === 'parallel'
+            const results = mode === "parallel"
                 ? await Promise.all(block.chains.map(run))
                 : await sequential(block.chains, run);
-            block.chains.forEach((chain, i) => collected.push({ branchKey: chain, index: i, result: results[i] }));
+            block.chains.forEach((chain, i) => collected.push({
+                branchKey: chain,
+                index: i,
+                result: results[i]
+            }));
             publish();
-            return collected.find((b) => b.result.kind !== 'ok')?.result ?? ok(null);
+            return (collected.find((b) => b.result.kind !== "ok")?.result ??
+                ok(null));
         }
-        if (block.kind === 'map') {
+        if (block.kind === "map") {
             const items = resolveMapItems(block.over, scope);
             if (block.max !== undefined && items.length > block.max) {
                 return err(`map '${block.id}' received ${items.length} items but declares max ${block.max}`);
@@ -540,14 +625,19 @@ export async function run(doc, opts) {
             const run = async (item, i) => {
                 const child = scope.child();
                 child.set(`${block.id}.${ITEM_KEY}`, item);
-                return runLevel({ blockId: block.id, chain: 'item' }, child, mode, i);
+                return runLevel({ blockId: block.id, chain: "item" }, child, mode, i);
             };
-            const results = mode === 'parallel'
+            const results = mode === "parallel"
                 ? await Promise.all(items.map(run))
                 : await sequential(items.map((item, i) => ({ item, i })), ({ item, i }) => run(item, i));
-            items.forEach((_, i) => collected.push({ branchKey: `${block.id}[${i}]`, index: i, result: results[i] }));
+            items.forEach((_, i) => collected.push({
+                branchKey: `${block.id}[${i}]`,
+                index: i,
+                result: results[i]
+            }));
             publish();
-            return collected.find((b) => b.result.kind !== 'ok')?.result ?? ok(null);
+            return (collected.find((b) => b.result.kind !== "ok")?.result ??
+                ok(null));
         }
         // ── loop (01 §4a) ────────────────────────────────────────────────────
         // Do-while: run the body, then re-read the declared predicate. A tool loop
@@ -555,15 +645,21 @@ export async function run(doc, opts) {
         const max = block.max ?? 0;
         for (let i = 0; i < max; i++) {
             if (checkCancel())
-                return cancelled('cancelled');
+                return cancelled("cancelled");
             const child = scope.child();
-            const r = await runLevel({ blockId: block.id, chain: 'item' }, child, 'sequential', i);
-            collected.push({ branchKey: `${block.id}[${i}]`, index: i, result: r });
-            if (r.kind !== 'ok') {
+            const r = await runLevel({ blockId: block.id, chain: "item" }, child, "sequential", i);
+            collected.push({
+                branchKey: `${block.id}[${i}]`,
+                index: i,
+                result: r
+            });
+            if (r.kind !== "ok") {
                 publish();
                 return r;
             }
-            const again = block.repeatWhile ? resolvePredicate(block.repeatWhile, child) : false;
+            const again = block.repeatWhile
+                ? resolvePredicate(block.repeatWhile, child)
+                : false;
             if (!truthy(again)) {
                 publish();
                 return ok(null);
@@ -572,27 +668,30 @@ export async function run(doc, opts) {
         publish();
         // Reaching `max` is not an error — it is the bound doing its job, and the
         // receipt says so rather than leaving a truncated loop looking successful.
-        receipt.notes = [...(receipt.notes ?? []), `loop '${block.id}' reached its declared max of ${max}`];
+        receipt.notes = [
+            ...(receipt.notes ?? []),
+            `loop '${block.id}' reached its declared max of ${max}`
+        ];
         return ok(null);
     };
     try {
         const outcome = await runLevel({ blockId: undefined, chain: undefined }, values);
-        if (outcome.kind === 'halt') {
-            receipt.outcome = 'halt';
+        if (outcome.kind === "halt") {
+            receipt.outcome = "halt";
             receipt.haltReason = outcome.reason;
-            receipt.haltNodeKey ??= receipt.nodes.find((n) => n.result === 'halt')?.nodeKey;
+            receipt.haltNodeKey ??= receipt.nodes.find((n) => n.result === "halt")?.nodeKey;
         }
-        else if (outcome.kind !== 'ok') {
+        else if (outcome.kind !== "ok") {
             receipt.outcome = outcome.kind;
-            if (outcome.kind === 'err') {
+            if (outcome.kind === "err") {
                 receipt.haltReason ??= outcome.reason;
-                receipt.haltNodeKey ??= receipt.nodes.find((n) => n.result === 'err')?.nodeKey;
+                receipt.haltNodeKey ??= receipt.nodes.find((n) => n.result === "err")?.nodeKey;
             }
         }
     }
     catch (e) {
         if (e instanceof BudgetExceeded) {
-            receipt.outcome = 'err';
+            receipt.outcome = "err";
             receipt.haltReason = e.message;
         }
         else
@@ -609,8 +708,10 @@ export async function run(doc, opts) {
     // A preview is never compacted — the preview *is* the payload. Worth noting that the
     // trigger-source rule already gets this right on its own (a preview is `ui`), but
     // relying on that would be an accident rather than a decision.
-    const compactDefault = receipt.triggerSource === 'event' && !receipt.preview;
-    if ((opts.compactHaltReceipts ?? compactDefault) && receipt.outcome === 'halt' && !effectfulNodeRan) {
+    const compactDefault = receipt.triggerSource === "event" && !receipt.preview;
+    if ((opts.compactHaltReceipts ?? compactDefault) &&
+        receipt.outcome === "halt" &&
+        !effectfulNodeRan) {
         receipt.compact = true;
         receipt.compactedNodeCount = receipt.nodes.length;
         receipt.nodes = [];
@@ -626,20 +727,23 @@ export async function run(doc, opts) {
 function publishWriteResult(w, out) {
     const published = { ...w, main: w };
     for (const [port, shape] of Object.entries(out ?? {})) {
-        if (shape === 'core:shape/write-result@1')
+        if (shape === "core:shape/write-result@1")
             published[port] = w;
     }
     return published;
 }
-const isWriteResult = (v) => !!v && typeof v === 'object' && 'status' in v &&
-    (v.status === 'committed' || v.status === 'pending');
+const isWriteResult = (v) => !!v &&
+    typeof v === "object" &&
+    "status" in v &&
+    (v.status === "committed" ||
+        v.status === "pending");
 /**
  * A loop's `repeatWhile` is a **port reference**, resolved in the iteration's own scope.
  * Not an expression: a reference keeps the construct renderable ("repeats while
  * generate.hasToolCalls, max 8") and keeps a second expression language out of the design.
  */
 function resolvePredicate(ref, scope) {
-    if (!ref || typeof ref !== 'object' || ref.__ref !== 'data')
+    if (!ref || typeof ref !== "object" || ref.__ref !== "data")
         return ref;
     const r = ref;
     return readPort(scope.get(r.node), r.port);
@@ -653,9 +757,9 @@ function resolvePredicate(ref, scope) {
  * resolves to undefined, which is the least debuggable failure available.
  */
 function readPort(upstream, port) {
-    if (!upstream || typeof upstream !== 'object')
+    if (!upstream || typeof upstream !== "object")
         return upstream;
-    if (port === 'main' && !(port in upstream))
+    if (port === "main" && !(port in upstream))
         return upstream;
     return upstream[port];
 }
@@ -663,7 +767,7 @@ function readPort(upstream, port) {
 function resolveMapItems(over, values) {
     if (Array.isArray(over))
         return over;
-    if (over && typeof over === 'object' && over.__ref === 'data') {
+    if (over && typeof over === "object" && over.__ref === "data") {
         const r = over;
         const v = readPort(values.get(r.node), r.port);
         return Array.isArray(v) ? v : v === undefined || v === null ? [] : [v];
@@ -682,7 +786,7 @@ function withTimeout(p, ms, controller, now) {
     return new Promise((resolve, reject) => {
         const t = setTimeout(() => {
             controller.abort();
-            reject(new Error('__timeout__'));
+            reject(new Error("__timeout__"));
         }, ms);
         p.then((v) => {
             clearTimeout(t);
@@ -704,7 +808,9 @@ function setPath(obj, path, value) {
 }
 /** Vectors, material and secrets never enter a receipt (16 §1a, 01 §10, 13 §6). */
 function redact(v) {
-    if (Array.isArray(v) && v.length > 8 && v.every((x) => typeof x === 'number')) {
+    if (Array.isArray(v) &&
+        v.length > 8 &&
+        v.every((x) => typeof x === "number")) {
         return { $vector: true, dims: v.length };
     }
     if (Array.isArray(v))
@@ -713,12 +819,12 @@ function redact(v) {
     // the field is typed rather than free-form: core can identify it without knowing
     // what the plugin called it (13 §6).
     if (isSecret(v))
-        return '[secret]';
-    if (v && typeof v === 'object') {
+        return "[secret]";
+    if (v && typeof v === "object") {
         const out = {};
         for (const [k, val] of Object.entries(v)) {
-            if (k === 'material' || k === 'credentials') {
-                out[k] = '[redacted]';
+            if (k === "material" || k === "credentials") {
+                out[k] = "[redacted]";
                 continue;
             }
             out[k] = redact(val);
@@ -732,7 +838,7 @@ export async function replay(doc, receipt, bindings) {
     const recorded = new Map(receipt.nodes.map((n) => [n.nodeKey, n.output]));
     const replayBindings = { ...bindings };
     for (const n of receipt.nodes) {
-        if (n.kind !== 'provider')
+        if (n.kind !== "provider")
             continue;
         replayBindings[n.typeId] = async () => ok(recorded.get(n.nodeKey));
     }
@@ -740,7 +846,7 @@ export async function replay(doc, receipt, bindings) {
         input: receipt.nodes[0]?.output,
         bindings: replayBindings,
         seed: receipt.seed,
-        runId: receipt.runId + ':replay',
+        runId: receipt.runId + ":replay"
     });
 }
 //# sourceMappingURL=executor.js.map

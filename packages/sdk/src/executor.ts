@@ -6,29 +6,55 @@
  * but never waiting, consumption budgets, per-kind injection, and core-emitted events.
  */
 
-import type { SpecDocument, DocNode } from './document.js'
-import { getType, type Kind } from './descriptors.js'
-import { collectDataRefs, isSlotRef, type SlotRef } from './refs.js'
-import type { Receipt, NodeReceipt, Outcome } from './receipt.js'
-import { resolveConfig, type ConfigWorld, type ResolvedConfig } from './config.js'
-import { hashPayload, isGated, resolvePosition, type Reviewer, type ReviewRecord } from './review.js'
-import { isSecret } from './settings.js'
-import { previewTarget, roughTokens, type PreviewReport, type PreviewBlock } from './preview.js'
-import { ITEM as ITEM_KEY } from './scope.js'
-import { isAllocatedContext, measureWire, type AllocatedContext, type WireMeasure } from './wire.js'
+import type { SpecDocument, DocNode } from "./document.js"
+import { getType, type Kind } from "./descriptors.js"
+import { collectDataRefs, isSlotRef, type SlotRef } from "./refs.js"
+import type { Receipt, NodeReceipt, Outcome } from "./receipt.js"
+import {
+	resolveConfig,
+	type ConfigWorld,
+	type ResolvedConfig
+} from "./config.js"
+import {
+	hashPayload,
+	isGated,
+	resolvePosition,
+	type Reviewer,
+	type ReviewRecord
+} from "./review.js"
+import { isSecret } from "./settings.js"
+import {
+	previewTarget,
+	roughTokens,
+	type PreviewReport,
+	type PreviewBlock
+} from "./preview.js"
+import { ITEM as ITEM_KEY } from "./scope.js"
+import {
+	isAllocatedContext,
+	measureWire,
+	type AllocatedContext,
+	type WireMeasure
+} from "./wire.js"
 
 // ── Results ─────────────────────────────────────────────────────────────────
 
 export type Result<T = unknown> =
-	| { kind: 'ok'; value: T }
-	| { kind: 'err'; reason: string }
-	| { kind: 'cancelled'; reason?: string }
-	| { kind: 'halt'; reason: string }
+	| { kind: "ok"; value: T }
+	| { kind: "err"; reason: string }
+	| { kind: "cancelled"; reason?: string }
+	| { kind: "halt"; reason: string }
 
-export const ok = <T>(value: T): Result<T> => ({ kind: 'ok', value })
-export const err = (reason: string): Result<never> => ({ kind: 'err', reason })
-export const halt = (reason: string): Result<never> => ({ kind: 'halt', reason })
-export const cancelled = (reason: string): Result<never> => ({ kind: 'cancelled', reason })
+export const ok = <T>(value: T): Result<T> => ({ kind: "ok", value })
+export const err = (reason: string): Result<never> => ({ kind: "err", reason })
+export const halt = (reason: string): Result<never> => ({
+	kind: "halt",
+	reason
+})
+export const cancelled = (reason: string): Result<never> => ({
+	kind: "cancelled",
+	reason
+})
 
 // ── The union shape for async blocks and maps (13 §1) ───────────────────────
 
@@ -80,11 +106,13 @@ class ValueScope {
 // ── The discriminated write result (13 §7j-b) ───────────────────────────────
 
 export type WriteResult =
-	| { status: 'committed'; ids: Record<string, unknown> }
-	| { status: 'pending'; proposalId: string }
+	| { status: "committed"; ids: Record<string, unknown> }
+	| { status: "pending"; proposalId: string }
 
-export const isCommitted = (w: WriteResult): w is Extract<WriteResult, { status: 'committed' }> =>
-	w.status === 'committed'
+export const isCommitted = (
+	w: WriteResult
+): w is Extract<WriteResult, { status: "committed" }> =>
+	w.status === "committed"
 
 // ── Injection surfaces, per kind (F11) ──────────────────────────────────────
 
@@ -93,7 +121,7 @@ export interface TaskCtx {
 	random?: () => number
 	signal: AbortSignal
 	progress(message: string): void
-	log(level: 'info' | 'warn', message: string): void
+	log(level: "info" | "warn", message: string): void
 }
 export interface QueryCtx extends TaskCtx {
 	read(table: string, q?: unknown): unknown
@@ -122,7 +150,8 @@ export interface Bindings {
 
 export function seededRandom(seed: string): () => number {
 	let h = 2166136261
-	for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619)
+	for (let i = 0; i < seed.length; i++)
+		h = Math.imul(h ^ seed.charCodeAt(i), 16777619)
 	return () => {
 		h = Math.imul(h ^ (h >>> 15), 2246822507)
 		h = Math.imul(h ^ (h >>> 13), 3266489909)
@@ -138,7 +167,7 @@ export interface RunOptions {
 	world?: ConfigWorld
 	seed?: string
 	runId?: string
-	triggerSource?: Receipt['triggerSource']
+	triggerSource?: Receipt["triggerSource"]
 	triggerRef?: string
 	actorUserId?: string
 	/** Instance ceiling — config may not exceed it (F36). */
@@ -187,51 +216,113 @@ export interface RunOptions {
 	preview?: boolean | { atNode?: string }
 	/** From connection metadata in core; injectable so the count is the real one. */
 	countTokens?: (v: unknown) => number
+	/**
+	 * The host's I/O, injected into the per-kind contexts (see `HostServices`).
+	 *
+	 * Absent, every service is the in-memory stand-in this draft has always used —
+	 * which is what keeps the SDK's own suite hermetic. Present, a Query's `read`
+	 * reaches a real database and a Consumer's `commit` writes a real row.
+	 */
+	host?: HostServices
+}
+
+/**
+ * What only the host can do.
+ *
+ * The executor owns *sequencing*; it has never owned *I/O*, and the split is why the
+ * same executor can run in an author's test with no database and in core against a
+ * live one. Until this existed, core's only way to reach a database from a binding was
+ * to close over a connection — which works, and quietly moves the effect outside the
+ * substrate that the review gate, the budget and the receipt all sit in.
+ *
+ * So the shape here is deliberate: **a binding describes the effect and the host
+ * performs it.** A Consumer returns what it wants written, and `commit` writes it. That
+ * is already how a sidecar Consumer has to work (F19 — no DB channel across a process
+ * boundary), and having in-process and out-of-process Consumers obey the same rule
+ * means the review gate sees the same thing in both cases: a payload, before anything
+ * happened.
+ */
+export interface HostServices {
+	/** Scoped read for a Query. The node is passed so the host can enforce scope (F30). */
+	read?(
+		table: string,
+		query: unknown,
+		node: NodeRef
+	): unknown | Promise<unknown>
+	/** Perform a Consumer's described write and return the row identity. */
+	commit?(payload: unknown, node: NodeRef): Promise<Record<string, unknown>>
+	/** Dispatch a Provider call. Credentials are injected here and never readable (F18). */
+	call?(payload: unknown, node: NodeRef): Promise<unknown>
+	/** Core emits; a node only names the handle (F8). */
+	emit?(handle: string, payload: unknown, node: NodeRef): void
+	/**
+	 * Connection **metadata** for a Provider — readable. Material is never returned
+	 * here; it is applied inside `call` and never crosses into a binding (F18).
+	 */
+	connection?(node: NodeRef): {
+		metadata?: Record<string, unknown>
+		sampling?: Record<string, unknown>
+	}
+}
+
+export interface NodeRef {
+	key: string
+	typeId: string
+	typeVersion: number
+	kind: string
 }
 
 const EMPTY_WORLD: ConfigWorld = {
 	overrides: [],
 	samplingConfigs: [],
 	connections: [],
-	activeConnection: {},
+	activeConnection: {}
 }
 
 class BudgetExceeded extends Error {}
 
-export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt> {
+export async function run(
+	doc: SpecDocument,
+	opts: RunOptions
+): Promise<Receipt> {
 	const world = opts.world ?? EMPTY_WORLD
-	const seed = opts.seed ?? 'seed:0'
+	const seed = opts.seed ?? "seed:0"
 	const rng = seededRandom(seed)
 	const now = opts.now ?? (() => Date.now())
 	const config: ResolvedConfig = resolveConfig(
 		world,
-		doc.nodes.map((n) => n.key),
+		doc.nodes.map((n) => n.key)
 	)
 
 	const receipt: Receipt = {
-		runId: opts.runId ?? 'run:test',
+		runId: opts.runId ?? "run:test",
 		specId: doc.id,
 		specVersion: doc.version,
 		schemaVersion: 1,
 		seed,
-		triggerSource: opts.triggerSource ?? 'input',
+		triggerSource: opts.triggerSource ?? "input",
 		triggerRef: opts.triggerRef,
 		actorUserId: opts.actorUserId,
 		depth: 0,
 		queuedMs: opts.queuedMs,
 		startedAt: now(),
 		endedAt: 0,
-		outcome: 'ok',
+		outcome: "ok",
 		nodes: [],
 		emitted: [],
-		consumption: { tokens: 0, nodeExecutions: 0 },
+		consumption: { tokens: 0, nodeExecutions: 0 }
 	}
 
 	/** Set the moment any node with declared effects is invoked — gates compaction. */
 	let effectfulNodeRan = false
 
 	const previewAt = opts.preview
-		? previewTarget(doc.nodes, typeof opts.preview === 'object' ? opts.preview.atNode : undefined)
+		? previewTarget(
+				doc.nodes,
+				typeof opts.preview === "object"
+					? opts.preview.atNode
+					: undefined
+			)
 		: undefined
 	const countTokens = opts.countTokens ?? roughTokens
 
@@ -244,19 +335,26 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 		node: DocNode,
 		input: Record<string, unknown>,
 		typeId: string,
-		targetedBy: PreviewReport['targetedBy'],
+		targetedBy: PreviewReport["targetedBy"],
 		wire?: WireMeasure,
-		wireCtx?: AllocatedContext,
+		wireCtx?: AllocatedContext
 	): PreviewReport => {
 		const ctxValue = (input as any).context ?? (input as any).main ?? input
 		const conn = (input as any).connection
-		const budgetNode = doc.nodes.find((n) => n.typeId === 'core:task/context-budget')
+		const budgetNode = doc.nodes.find(
+			(n) => n.typeId === "core:task/context-budget"
+		)
 		const budgetValue = budgetNode ? values.get(budgetNode.key) : undefined
 
 		// Prefer the allocated blocks, which carry the trail. Fall back to sniffing an
 		// allocation array only for specs core has not migrated yet.
-		const allocatedSource = wireCtx ?? (Object.values(input).find(isAllocatedContext) as AllocatedContext | undefined)
-		const legacyAlloc = (ctxValue as any)?.alloc ?? (ctxValue as any)?.allocation
+		const allocatedSource =
+			wireCtx ??
+			(Object.values(input).find(isAllocatedContext) as
+				| AllocatedContext
+				| undefined)
+		const legacyAlloc =
+			(ctxValue as any)?.alloc ?? (ctxValue as any)?.allocation
 		const allocation = allocatedSource?.allocation ?? legacyAlloc
 
 		const blocks: PreviewBlock[] = allocatedSource
@@ -269,24 +367,28 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 					included: b.included,
 					tokens: b.tokens,
 					why: b.why,
-					reason: b.why?.[b.why.length - 1],
+					reason: b.why?.[b.why.length - 1]
 				}))
 			: (Array.isArray(legacyAlloc) ? legacyAlloc : []).map((a: any) => ({
 					sourceKey: a.sourceKey,
 					weight: a.weight,
 					priority: a.priority,
 					included: (a.included ?? 0) > 0,
-					tokens: countTokens(a.rendered ?? a.text ?? ''),
+					tokens: countTokens(a.rendered ?? a.text ?? ""),
 					reason:
 						a.reason ??
-						(a.available !== undefined && a.included !== undefined && a.available > a.included
+						(a.available !== undefined &&
+						a.included !== undefined &&
+						a.available > a.included
 							? `${a.available - a.included} of ${a.available} dropped — budget`
-							: undefined),
+							: undefined)
 				}))
 
 		const tokens = wire?.tokens ?? countTokens(ctxValue)
 		const available =
-			(budgetValue as any)?.available ?? (ctxValue as any)?.budget ?? allocatedSource?.allocation.budget
+			(budgetValue as any)?.available ??
+			(ctxValue as any)?.budget ??
+			allocatedSource?.allocation.budget
 		return {
 			atNode: node.key,
 			typeId,
@@ -296,43 +398,62 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 						id: conn.id,
 						kind: conn.kind,
 						contextLength: conn.metadata?.contextLength,
-						tokenizer: conn.metadata?.tokenizer,
+						tokenizer: conn.metadata?.tokenizer
 					}
 				: undefined,
 			budget: {
-				maxContext: (budgetValue as any)?.maxContext ?? conn?.metadata?.contextLength,
+				maxContext:
+					(budgetValue as any)?.maxContext ??
+					conn?.metadata?.contextLength,
 				reserved: (budgetValue as any)?.reserved,
-				available,
+				available
 			},
-			context: { rendered: redact(wire ? wire.payload : ctxValue), tokens },
+			context: {
+				rendered: redact(wire ? wire.payload : ctxValue),
+				tokens
+			},
 			wire: wire
-				? { format: wire.format, blockTokens: wire.blockTokens, overheadTokens: wire.overheadTokens }
+				? {
+						format: wire.format,
+						blockTokens: wire.blockTokens,
+						overheadTokens: wire.overheadTokens
+					}
 				: undefined,
 			blocks,
 			totals: {
 				blocks: blocks.length,
 				included: blocks.filter((b) => b.included).length,
 				dropped: blocks.filter((b) => !b.included).length,
-				tokensIncluded: blocks.filter((b) => b.included).reduce((n, b) => n + b.tokens, 0),
-				tokensDropped: blocks.filter((b) => !b.included).reduce((n, b) => n + b.tokens, 0),
+				tokensIncluded: blocks
+					.filter((b) => b.included)
+					.reduce((n, b) => n + b.tokens, 0),
+				tokensDropped: blocks
+					.filter((b) => !b.included)
+					.reduce((n, b) => n + b.tokens, 0),
 				overBudgetBy:
 					wire?.overBudgetBy ??
-					(typeof available === 'number' && tokens > available ? tokens - available : undefined),
+					(typeof available === "number" && tokens > available
+						? tokens - available
+						: undefined)
 			},
-			allocation,
+			allocation
 		}
 	}
 
 	const values = new ValueScope()
-	values.set(doc.nodes[0]?.key ?? 'input', opts.input)
+	values.set(doc.nodes[0]?.key ?? "input", opts.input)
 	const reviews: ReviewRecord[] = []
 
 	let seq = 0
-	const budget = { tokens: opts.budget?.tokens ?? Infinity, nodes: opts.budget?.nodeExecutions ?? Infinity }
+	const budget = {
+		tokens: opts.budget?.tokens ?? Infinity,
+		nodes: opts.budget?.nodeExecutions ?? Infinity
+	}
 
 	const spendTokens = (n: number) => {
 		receipt.consumption.tokens += n
-		if (receipt.consumption.tokens > budget.tokens) throw new BudgetExceeded('token budget exceeded')
+		if (receipt.consumption.tokens > budget.tokens)
+			throw new BudgetExceeded("token budget exceeded")
 	}
 
 	// Blocks are executed as units when their first member is reached.
@@ -351,25 +472,38 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 	}
 
 	const resolveSlot = (node: DocNode, ref: SlotRef) => {
-		const targetKey = node.resolvedRefs?.[Object.keys(node.config).find((k) => node.config[k] === ref) ?? ''] ?? ref.ofNode ?? node.key
+		const targetKey =
+			node.resolvedRefs?.[
+				Object.keys(node.config).find((k) => node.config[k] === ref) ??
+					""
+			] ??
+			ref.ofNode ??
+			node.key
 		const slotName = ref.slot
-		if (slotName === 'connection') {
+		if (slotName === "connection") {
 			const d = getType(`${node.typeId}@${node.typeVersion}`)
-			const targetNode = doc.nodes.find((n) => n.key === targetKey) ?? node
+			const targetNode =
+				doc.nodes.find((n) => n.key === targetKey) ?? node
 			const td = getType(`${targetNode.typeId}@${targetNode.typeVersion}`)
 			const kind = td?.shape ?? d?.shape
 			const chosenId =
-				(config[targetKey]?.['connection']?.['$ref'] as string | undefined) ??
+				(config[targetKey]?.["connection"]?.["$ref"] as
+					| string
+					| undefined) ??
 				(kind ? world.activeConnection[kind] : undefined)
 			const conn = world.connections.find((c) => c.id === chosenId)
 			// metadata only — material is injected by the executor at call time (01 §10)
-			return conn ? { id: conn.id, kind: conn.kind, metadata: conn.metadata } : null
+			return conn
+				? { id: conn.id, kind: conn.kind, metadata: conn.metadata }
+				: null
 		}
-		if (slotName === 'sampling') {
-			const refId = config[targetKey]?.['sampling']?.['$ref'] as string | undefined
+		if (slotName === "sampling") {
+			const refId = config[targetKey]?.["sampling"]?.["$ref"] as
+				| string
+				| undefined
 			const base = world.samplingConfigs.find((s) => s.id === refId)
-			const overrides = { ...(config[node.key]?.['sampling'] ?? {}) }
-			delete (overrides as any)['$ref']
+			const overrides = { ...(config[node.key]?.["sampling"] ?? {}) }
+			delete (overrides as any)["$ref"]
 			return { ...(base?.values ?? {}), ...overrides }
 		}
 		return config[node.key]?.[slotName] ?? {}
@@ -378,8 +512,8 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 	const invoke = async (
 		node: DocNode,
 		scope: ValueScope,
-		blockMode?: 'sequential' | 'parallel',
-		iteration?: number,
+		blockMode?: "sequential" | "parallel",
+		iteration?: number
 	): Promise<Result> => {
 		const d = getType(`${node.typeId}@${node.typeVersion}`)
 		if (!d) return err(`unknown type ${node.typeId}@${node.typeVersion}`)
@@ -390,27 +524,31 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 			seq: seq++,
 			kind: node.kind,
 			typeId: `${node.typeId}@${node.typeVersion}`,
-			result: 'ok',
+			result: "ok",
 			startedAt: started,
 			endedAt: started,
 			elapsedMs: 0,
 			blockMode,
 			iteration,
 			resolvedRefs: node.resolvedRefs,
-			notes: [],
+			notes: []
 		}
 
 		receipt.consumption.nodeExecutions++
-		if (receipt.consumption.nodeExecutions > budget.nodes) throw new BudgetExceeded('node execution budget exceeded')
+		if (receipt.consumption.nodeExecutions > budget.nodes)
+			throw new BudgetExceeded("node execution budget exceeded")
 
-		if (node.kind === 'input') {
+		if (node.kind === "input") {
 			scope.set(node.key, opts.input)
 			nr.output = opts.input
 			nr.endedAt = now()
 			receipt.nodes.push(nr)
 			return ok(opts.input)
 		}
-		if (!hook) return err(`no binding registered for ${node.typeId}@${node.typeVersion}`)
+		if (!hook)
+			return err(
+				`no binding registered for ${node.typeId}@${node.typeVersion}`
+			)
 
 		let input = resolveInput(node, scope)
 
@@ -420,13 +558,13 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 		if (isGated(d.effects)) {
 			const position = resolvePosition(
 				d.reviewDefault,
-				config[node.key]?.['settings']?.['review'],
+				config[node.key]?.["settings"]?.["review"]
 			)
-			if (position !== 'off') {
+			if (position !== "off") {
 				const originalHash = hashPayload(input)
 				if (!opts.reviewer) {
 					nr.endedAt = now()
-					nr.result = 'err'
+					nr.result = "err"
 					nr.reason = `review is '${position}' but no reviewer is available`
 					receipt.nodes.push(nr)
 					return err(nr.reason)
@@ -435,25 +573,25 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 					nodeKey: node.key,
 					typeId: nr.typeId,
 					payload: input,
-					position,
+					position
 				})
 				const rec: ReviewRecord = {
 					nodeKey: node.key,
 					position,
-					action: position === 'async' ? 'proposed' : decision.action,
+					action: position === "async" ? "proposed" : decision.action,
 					originalHash,
 					by: decision.by,
-					at: decision.at,
+					at: decision.at
 				}
-				if (decision.action === 'reject') {
+				if (decision.action === "reject") {
 					reviews.push(rec)
 					nr.endedAt = now()
-					nr.result = 'halt'
-					nr.reason = 'rejected at review'
+					nr.result = "halt"
+					nr.reason = "rejected at review"
 					receipt.nodes.push(nr)
-					return halt('rejected at review')
+					return halt("rejected at review")
 				}
-				if (decision.action === 'edit') {
+				if (decision.action === "edit") {
 					// The binding receives the edited payload and cannot tell (F14).
 					input = decision.payload as Record<string, unknown>
 					rec.editedHash = hashPayload(input)
@@ -463,20 +601,30 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 				// Published as the discriminated form (13 §7j-b) — a proposal id must not
 				// be mistakable for a committed row id, because a reviewer may still
 				// reject it and the foreign key would dangle only later.
-				if (position === 'async') {
-					const pending: WriteResult = { status: 'pending', proposalId: `proposal:${node.key}` }
+				if (position === "async") {
+					const pending: WriteResult = {
+						status: "pending",
+						proposalId: `proposal:${node.key}`
+					}
 					const published = publishWriteResult(pending, d.ports.out)
 					scope.set(node.key, published)
 					nr.endedAt = now()
 					nr.elapsedMs = nr.endedAt - nr.startedAt
-					nr.result = 'ok'
+					nr.result = "ok"
 					nr.output = pending
-					nr.notes!.push('review: async — proposed, binding not invoked')
+					nr.notes!.push(
+						"review: async — proposed, binding not invoked"
+					)
 					receipt.nodes.push(nr)
 					return ok(published)
 				}
 			} else {
-				reviews.push({ nodeKey: node.key, position, action: 'approve', originalHash: hashPayload(input) })
+				reviews.push({
+					nodeKey: node.key,
+					position,
+					action: "approve",
+					originalHash: hashPayload(input)
+				})
 			}
 		}
 
@@ -488,29 +636,44 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 		// Kept because formatting replaces the port value — the panel still needs the blocks.
 		let wireCtx: AllocatedContext | undefined
 		if (d.slots) {
-			const wireSlot = Object.entries(d.slots).find(([, sd]) => sd.kind === 'wire')
+			const wireSlot = Object.entries(d.slots).find(
+				([, sd]) => sd.kind === "wire"
+			)
 			if (wireSlot) {
 				const [slotName, decl] = wireSlot
 				const chosen =
-					(config[node.key]?.['wire'] as unknown as string | undefined) ??
+					(config[node.key]?.["wire"] as unknown as
+						| string
+						| undefined) ??
 					((input as any)[slotName] as string | undefined) ??
 					decl.format
-				const port = Object.entries(input).find(([, v]) => isAllocatedContext(v))
+				const port = Object.entries(input).find(([, v]) =>
+					isAllocatedContext(v)
+				)
 				if (chosen && port) {
 					const portName = port[0]
 					const ctx = port[1] as AllocatedContext
 					wireCtx = ctx
-					const available = (input as any).budget?.available ?? ctx.allocation.budget
+					const available =
+						(input as any).budget?.available ??
+						ctx.allocation.budget
 					try {
-						wire = measureWire(chosen, ctx, (t) => countTokens(t), available)
+						wire = measureWire(
+							chosen,
+							ctx,
+							(t) => countTokens(t),
+							available
+						)
 						input = { ...input, [portName]: wire.payload }
 						nr.notes!.push(
 							`wire ${wire.format}: ${wire.blockTokens} block + ${wire.overheadTokens} scaffold = ${wire.tokens} tokens` +
-								(wire.overBudgetBy ? `  ⚠ OVER by ${wire.overBudgetBy}` : ''),
+								(wire.overBudgetBy
+									? `  ⚠ OVER by ${wire.overBudgetBy}`
+									: "")
 						)
 					} catch (e) {
 						nr.endedAt = now()
-						nr.result = 'err'
+						nr.result = "err"
 						nr.reason = (e as Error).message
 						receipt.nodes.push(nr)
 						return err(nr.reason)
@@ -521,7 +684,7 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 					// that should be loud (16 §7).
 					if (wire.overBudgetBy) {
 						nr.endedAt = now()
-						nr.result = 'err'
+						nr.result = "err"
 						nr.reason =
 							`formatted payload is ${wire.tokens} tokens against ${available} available — ` +
 							`over by ${wire.overBudgetBy}. The estimate came from wire format '${wire.format}'`
@@ -538,11 +701,18 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 		// counted here, so the panel shows the real figure rather than a parallel
 		// estimate that drifts from what actually goes out.
 		if (previewAt && node.key === previewAt.key) {
-			receipt.preview = buildPreview(node, input, nr.typeId, previewAt.targetedBy, wire, wireCtx)
+			receipt.preview = buildPreview(
+				node,
+				input,
+				nr.typeId,
+				previewAt.targetedBy,
+				wire,
+				wireCtx
+			)
 			nr.input = redact(input)
 			nr.endedAt = now()
 			nr.elapsedMs = nr.endedAt - nr.startedAt
-			nr.result = 'halt'
+			nr.result = "halt"
 			nr.reason = `preview: stopped before ${node.key}, nothing sent`
 			receipt.nodes.push(nr)
 			return halt(nr.reason)
@@ -552,29 +722,49 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 
 		// Gates receipt compaction (13 §2): once anything effectful has been invoked,
 		// the run is worth recording in full whatever happens next.
-		if (d.effects && d.effects !== 'none') effectfulNodeRan = true
+		if (d.effects && d.effects !== "none") effectfulNodeRan = true
 
-		const timeoutMs = Math.min(d.timeoutMs ?? Infinity, opts.timeoutCeilingMs ?? Infinity)
+		const timeoutMs = Math.min(
+			d.timeoutMs ?? Infinity,
+			opts.timeoutCeilingMs ?? Infinity
+		)
 		nr.timeoutMsApplied = Number.isFinite(timeoutMs) ? timeoutMs : undefined
 
 		const controller = new AbortController()
 		const base: TaskCtx = {
 			signal: controller.signal,
 			progress: () => {}, // ephemeral, never recorded (F34)
-			log: (lvl, m) => nr.notes!.push(`${lvl}: ${m}`),
+			log: (lvl, m) => nr.notes!.push(`${lvl}: ${m}`)
 		}
 		if (d.declaresRandomness) base.random = rng
 
+		const nodeRef: NodeRef = {
+			key: node.key,
+			typeId: node.typeId,
+			typeVersion: node.typeVersion,
+			kind: node.kind
+		}
+		const host = opts.host
+
 		let ctx: any = base
-		if (node.kind === 'query') ctx = { ...base, read: () => [] } satisfies QueryCtx
-		if (node.kind === 'provider') {
+		if (node.kind === "query")
 			ctx = {
 				...base,
-				connectionMetadata: (input as any).connection?.metadata ?? {},
-				sampling: (input as any).sampling ?? {},
+				read: (table: string, q?: unknown) =>
+					host?.read ? host.read(table, q, nodeRef) : []
+			} satisfies QueryCtx
+		if (node.kind === "provider") {
+			const conn = host?.connection?.(nodeRef)
+			ctx = {
+				...base,
+				connectionMetadata:
+					conn?.metadata ?? (input as any).connection?.metadata ?? {},
+				sampling: conn?.sampling ?? (input as any).sampling ?? {},
 				call: async (p: unknown) => {
+					// Recorded before dispatch, so a Provider that throws still leaves the
+					// request in the receipt — the failing call is the one worth reading.
 					nr.request = p
-					return p
+					return host?.call ? await host.call(p, nodeRef) : p
 				},
 				reportUsage: (t: number) => {
 					nr.tokens = (nr.tokens ?? 0) + t
@@ -583,23 +773,34 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 				reportSampling: (applied, ignored) => {
 					nr.samplingApplied = applied
 					nr.samplingIgnored = ignored
-				},
+				}
 			} satisfies ProviderCtx
 		}
-		if (node.kind === 'consumer') {
+		if (node.kind === "consumer") {
 			ctx = {
 				...base,
-				commit: async (p: unknown) => ({ id: `row:${node.key}`, ...(p as object) }),
-				emit: (handle: string) => nr.notes!.push(`emit → ${handle}`),
+				commit: async (p: unknown) =>
+					host?.commit
+						? await host.commit(p, nodeRef)
+						: { id: `row:${node.key}`, ...(p as object) },
+				emit: (handle: string, payload?: unknown) => {
+					nr.notes!.push(`emit → ${handle}`)
+					host?.emit?.(handle, payload, nodeRef)
+				}
 			} satisfies ConsumerCtx
 		}
 
 		let res: Result
 		try {
-			res = await withTimeout(Promise.resolve(hook(input, ctx)), timeoutMs, controller, now)
+			res = await withTimeout(
+				Promise.resolve(hook(input, ctx)),
+				timeoutMs,
+				controller,
+				now
+			)
 		} catch (e) {
 			if (e instanceof BudgetExceeded) throw e
-			if ((e as Error).message === '__timeout__') {
+			if ((e as Error).message === "__timeout__") {
 				nr.timedOut = true
 				res = err(`timeout after ${timeoutMs}ms`)
 			} else {
@@ -610,32 +811,45 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 		nr.endedAt = now()
 		nr.elapsedMs = nr.endedAt - nr.startedAt
 		nr.result = res.kind
-		if (res.kind === 'ok') {
+		if (res.kind === "ok") {
 			// A gate-eligible Consumer publishes the discriminated write result, so the
 			// committed and pending cases are the same shape and a downstream type has
 			// to handle both (13 §7j-b). There is no branch node to check `status` with
 			// (F25), so the obligation belongs to the port shape, not to the spec.
 			let published = res.value
-			if (node.kind === 'consumer' && isGated(d.effects) && !isWriteResult(published)) {
+			if (
+				node.kind === "consumer" &&
+				isGated(d.effects) &&
+				!isWriteResult(published)
+			) {
 				const committed: WriteResult = {
-					status: 'committed',
-					ids: (published ?? {}) as Record<string, unknown>,
+					status: "committed",
+					ids: (published ?? {}) as Record<string, unknown>
 				}
 				published = publishWriteResult(committed, d.ports.out)
 			}
 			scope.set(node.key, published)
 			res = ok(published)
 			nr.output = redact(published)
-		} else if (res.kind === 'halt' || res.kind === 'err' || res.kind === 'cancelled') {
+		} else if (
+			res.kind === "halt" ||
+			res.kind === "err" ||
+			res.kind === "cancelled"
+		) {
 			nr.reason = (res as any).reason
 		}
 
 		// Core emits, not the node (01 §8 / F8).
-		if (res.kind === 'ok' && node.kind === 'consumer' && d.effects === 'write' && d.causesEvent) {
+		if (
+			res.kind === "ok" &&
+			node.kind === "consumer" &&
+			d.effects === "write" &&
+			d.causesEvent
+		) {
 			receipt.emitted.push({
 				event: d.causesEvent,
 				cause: node.key,
-				subscribers: opts.subscribers?.[d.causesEvent] ?? 0,
+				subscribers: opts.subscribers?.[d.causesEvent] ?? 0
 			})
 		}
 
@@ -647,7 +861,7 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 	const checkCancel = (): boolean => {
 		const c = opts.cancelSignal?.()
 		if (!c) return false
-		receipt.outcome = 'cancelled'
+		receipt.outcome = "cancelled"
 		receipt.cancelledBy = c.by
 		receipt.haltReason = c.reason
 		return true
@@ -662,35 +876,55 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 
 	const itemsAt = (level: Level) => {
 		const nodes = ordered
-			.filter((n) => n.blockId === level.blockId && n.blockChain === level.chain)
-			.map((node) => ({ sort: node.position, run: node, isBlock: false as const }))
+			.filter(
+				(n) =>
+					n.blockId === level.blockId && n.blockChain === level.chain
+			)
+			.map((node) => ({
+				sort: node.position,
+				run: node,
+				isBlock: false as const
+			}))
 		const blocks = doc.blocks
-			.filter((b) => b.blockId === level.blockId && b.blockChain === level.chain)
-			.map((block) => ({ sort: block.position, run: block, isBlock: true as const }))
+			.filter(
+				(b) =>
+					b.blockId === level.blockId && b.blockChain === level.chain
+			)
+			.map((block) => ({
+				sort: block.position,
+				run: block,
+				isBlock: true as const
+			}))
 		return [...nodes, ...blocks].sort((a, b) => a.sort - b.sort)
 	}
 
 	const runLevel = async (
 		level: Level,
 		scope: ValueScope,
-		blockMode?: 'sequential' | 'parallel',
-		iteration?: number,
+		blockMode?: "sequential" | "parallel",
+		iteration?: number
 	): Promise<Result> => {
 		let last: Result = ok(null)
 		for (const item of itemsAt(level)) {
-			if (checkCancel()) return cancelled('cancelled')
+			if (checkCancel()) return cancelled("cancelled")
 			last = item.isBlock
-				? await runBlock(item.run as SpecDocument['blocks'][number], scope)
+				? await runBlock(
+						item.run as SpecDocument["blocks"][number],
+						scope
+					)
 				: await invoke(item.run as DocNode, scope, blockMode, iteration)
-			if (last.kind !== 'ok') return last
+			if (last.kind !== "ok") return last
 		}
 		return last
 	}
 
 	const truthy = (v: unknown) => !!v && !(Array.isArray(v) && v.length === 0)
 
-	const runBlock = async (block: SpecDocument['blocks'][number], scope: ValueScope): Promise<Result> => {
-		const mode = opts.forceSequential ? 'sequential' : block.mode
+	const runBlock = async (
+		block: SpecDocument["blocks"][number],
+		scope: ValueScope
+	): Promise<Result> => {
+		const mode = opts.forceSequential ? "sequential" : block.mode
 		const collected: BranchResult[] = []
 
 		const publish = () => {
@@ -701,49 +935,79 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 				},
 				get values() {
 					return this.branches
-						.filter((b) => b.result.kind === 'ok')
-						.map((b) => (b.result as Extract<Result, { kind: 'ok' }>).value)
+						.filter((b) => b.result.kind === "ok")
+						.map(
+							(b) =>
+								(b.result as Extract<Result, { kind: "ok" }>)
+									.value
+						)
 				},
-				ok: collected.every((b) => b.result.kind === 'ok'),
+				ok: collected.every((b) => b.result.kind === "ok")
 			}
 			scope.set(block.id, union)
 		}
 
-		if (block.kind === 'async') {
+		if (block.kind === "async") {
 			// Chains share the scope: a sibling is addressable by its qualified key, and
 			// keys are unique, so there is nothing to collide.
-			const run = (chain: string) => runLevel({ blockId: block.id, chain }, scope, mode)
+			const run = (chain: string) =>
+				runLevel({ blockId: block.id, chain }, scope, mode)
 			const results =
-				mode === 'parallel'
+				mode === "parallel"
 					? await Promise.all(block.chains.map(run))
 					: await sequential(block.chains, run)
-			block.chains.forEach((chain, i) => collected.push({ branchKey: chain, index: i, result: results[i]! }))
+			block.chains.forEach((chain, i) =>
+				collected.push({
+					branchKey: chain,
+					index: i,
+					result: results[i]!
+				})
+			)
 			publish()
-			return collected.find((b) => b.result.kind !== 'ok')?.result ?? ok(null)
+			return (
+				collected.find((b) => b.result.kind !== "ok")?.result ??
+				ok(null)
+			)
 		}
 
-		if (block.kind === 'map') {
+		if (block.kind === "map") {
 			const items = resolveMapItems(block.over, scope)
 			if (block.max !== undefined && items.length > block.max) {
-				return err(`map '${block.id}' received ${items.length} items but declares max ${block.max}`)
+				return err(
+					`map '${block.id}' received ${items.length} items but declares max ${block.max}`
+				)
 			}
 			// Each iteration gets its own scope, so genuinely parallel maps are correct
 			// rather than merely equivalent-if-you-squint.
 			const run = async (item: unknown, i: number): Promise<Result> => {
 				const child = scope.child()
 				child.set(`${block.id}.${ITEM_KEY}`, item)
-				return runLevel({ blockId: block.id, chain: 'item' }, child, mode, i)
+				return runLevel(
+					{ blockId: block.id, chain: "item" },
+					child,
+					mode,
+					i
+				)
 			}
 			const results =
-				mode === 'parallel'
+				mode === "parallel"
 					? await Promise.all(items.map(run))
 					: await sequential(
 							items.map((item, i) => ({ item, i })),
-							({ item, i }) => run(item, i),
+							({ item, i }) => run(item, i)
 						)
-			items.forEach((_, i) => collected.push({ branchKey: `${block.id}[${i}]`, index: i, result: results[i]! }))
+			items.forEach((_, i) =>
+				collected.push({
+					branchKey: `${block.id}[${i}]`,
+					index: i,
+					result: results[i]!
+				})
+			)
 			publish()
-			return collected.find((b) => b.result.kind !== 'ok')?.result ?? ok(null)
+			return (
+				collected.find((b) => b.result.kind !== "ok")?.result ??
+				ok(null)
+			)
 		}
 
 		// ── loop (01 §4a) ────────────────────────────────────────────────────
@@ -751,15 +1015,26 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 		// always wants one generate before it can know whether to stop.
 		const max = block.max ?? 0
 		for (let i = 0; i < max; i++) {
-            if (checkCancel()) return cancelled('cancelled')
+			if (checkCancel()) return cancelled("cancelled")
 			const child = scope.child()
-			const r = await runLevel({ blockId: block.id, chain: 'item' }, child, 'sequential', i)
-			collected.push({ branchKey: `${block.id}[${i}]`, index: i, result: r })
-			if (r.kind !== 'ok') {
+			const r = await runLevel(
+				{ blockId: block.id, chain: "item" },
+				child,
+				"sequential",
+				i
+			)
+			collected.push({
+				branchKey: `${block.id}[${i}]`,
+				index: i,
+				result: r
+			})
+			if (r.kind !== "ok") {
 				publish()
 				return r
 			}
-			const again = block.repeatWhile ? resolvePredicate(block.repeatWhile, child) : false
+			const again = block.repeatWhile
+				? resolvePredicate(block.repeatWhile, child)
+				: false
 			if (!truthy(again)) {
 				publish()
 				return ok(null)
@@ -768,26 +1043,36 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 		publish()
 		// Reaching `max` is not an error — it is the bound doing its job, and the
 		// receipt says so rather than leaving a truncated loop looking successful.
-		receipt.notes = [...(receipt.notes ?? []), `loop '${block.id}' reached its declared max of ${max}`]
+		receipt.notes = [
+			...(receipt.notes ?? []),
+			`loop '${block.id}' reached its declared max of ${max}`
+		]
 		return ok(null)
 	}
 
 	try {
-		const outcome = await runLevel({ blockId: undefined, chain: undefined }, values)
-		if (outcome.kind === 'halt') {
-			receipt.outcome = 'halt'
+		const outcome = await runLevel(
+			{ blockId: undefined, chain: undefined },
+			values
+		)
+		if (outcome.kind === "halt") {
+			receipt.outcome = "halt"
 			receipt.haltReason = outcome.reason
-			receipt.haltNodeKey ??= receipt.nodes.find((n) => n.result === 'halt')?.nodeKey
-		} else if (outcome.kind !== 'ok') {
+			receipt.haltNodeKey ??= receipt.nodes.find(
+				(n) => n.result === "halt"
+			)?.nodeKey
+		} else if (outcome.kind !== "ok") {
 			receipt.outcome = outcome.kind
-			if (outcome.kind === 'err') {
+			if (outcome.kind === "err") {
 				receipt.haltReason ??= outcome.reason
-				receipt.haltNodeKey ??= receipt.nodes.find((n) => n.result === 'err')?.nodeKey
+				receipt.haltNodeKey ??= receipt.nodes.find(
+					(n) => n.result === "err"
+				)?.nodeKey
 			}
 		}
 	} catch (e) {
 		if (e instanceof BudgetExceeded) {
-			receipt.outcome = 'err'
+			receipt.outcome = "err"
 			receipt.haltReason = e.message
 		} else throw e
 	}
@@ -804,8 +1089,12 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
 	// A preview is never compacted — the preview *is* the payload. Worth noting that the
 	// trigger-source rule already gets this right on its own (a preview is `ui`), but
 	// relying on that would be an accident rather than a decision.
-	const compactDefault = receipt.triggerSource === 'event' && !receipt.preview
-	if ((opts.compactHaltReceipts ?? compactDefault) && receipt.outcome === 'halt' && !effectfulNodeRan) {
+	const compactDefault = receipt.triggerSource === "event" && !receipt.preview
+	if (
+		(opts.compactHaltReceipts ?? compactDefault) &&
+		receipt.outcome === "halt" &&
+		!effectfulNodeRan
+	) {
 		receipt.compact = true
 		receipt.compactedNodeCount = receipt.nodes.length
 		receipt.nodes = []
@@ -820,25 +1109,35 @@ export async function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>
  * *same* discriminated value. A port named `messageId` therefore hands downstream the
  * result, not an id — which is the point: there may not be an id yet (13 §7j-b).
  */
-function publishWriteResult(w: WriteResult, out?: Record<string, string>): Record<string, unknown> {
+function publishWriteResult(
+	w: WriteResult,
+	out?: Record<string, string>
+): Record<string, unknown> {
 	const published: Record<string, unknown> = { ...w, main: w }
 	for (const [port, shape] of Object.entries(out ?? {})) {
-		if (shape === 'core:shape/write-result@1') published[port] = w
+		if (shape === "core:shape/write-result@1") published[port] = w
 	}
 	return published
 }
 
 const isWriteResult = (v: unknown): v is WriteResult =>
-	!!v && typeof v === 'object' && 'status' in (v as object) &&
-	((v as WriteResult).status === 'committed' || (v as WriteResult).status === 'pending')
+	!!v &&
+	typeof v === "object" &&
+	"status" in (v as object) &&
+	((v as WriteResult).status === "committed" ||
+		(v as WriteResult).status === "pending")
 
 /**
  * A loop's `repeatWhile` is a **port reference**, resolved in the iteration's own scope.
  * Not an expression: a reference keeps the construct renderable ("repeats while
  * generate.hasToolCalls, max 8") and keeps a second expression language out of the design.
  */
-function resolvePredicate(ref: unknown, scope: { get(k: string): any }): unknown {
-	if (!ref || typeof ref !== 'object' || (ref as any).__ref !== 'data') return ref
+function resolvePredicate(
+	ref: unknown,
+	scope: { get(k: string): any }
+): unknown {
+	if (!ref || typeof ref !== "object" || (ref as any).__ref !== "data")
+		return ref
 	const r = ref as { node: string; port: string }
 	return readPort(scope.get(r.node), r.port)
 }
@@ -852,15 +1151,18 @@ function resolvePredicate(ref: unknown, scope: { get(k: string): any }): unknown
  * resolves to undefined, which is the least debuggable failure available.
  */
 function readPort(upstream: unknown, port: string): unknown {
-	if (!upstream || typeof upstream !== 'object') return upstream
-	if (port === 'main' && !(port in (upstream as object))) return upstream
+	if (!upstream || typeof upstream !== "object") return upstream
+	if (port === "main" && !(port in (upstream as object))) return upstream
 	return (upstream as any)[port]
 }
 
 /** `over` is either a literal list or a data ref into an upstream value. */
-function resolveMapItems(over: unknown, values: { get(k: string): any }): unknown[] {
+function resolveMapItems(
+	over: unknown,
+	values: { get(k: string): any }
+): unknown[] {
 	if (Array.isArray(over)) return over
-	if (over && typeof over === 'object' && (over as any).__ref === 'data') {
+	if (over && typeof over === "object" && (over as any).__ref === "data") {
 		const r = over as { node: string; port: string }
 		const v = readPort(values.get(r.node), r.port)
 		return Array.isArray(v) ? v : v === undefined || v === null ? [] : [v]
@@ -868,18 +1170,26 @@ function resolveMapItems(over: unknown, values: { get(k: string): any }): unknow
 	return []
 }
 
-async function sequential<T, R>(items: T[], fn: (t: T) => Promise<R>): Promise<R[]> {
+async function sequential<T, R>(
+	items: T[],
+	fn: (t: T) => Promise<R>
+): Promise<R[]> {
 	const out: R[] = []
 	for (const i of items) out.push(await fn(i))
 	return out
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number, controller: AbortController, now: () => number): Promise<T> {
+function withTimeout<T>(
+	p: Promise<T>,
+	ms: number,
+	controller: AbortController,
+	now: () => number
+): Promise<T> {
 	if (!Number.isFinite(ms)) return p
 	return new Promise<T>((resolve, reject) => {
 		const t = setTimeout(() => {
 			controller.abort()
-			reject(new Error('__timeout__'))
+			reject(new Error("__timeout__"))
 		}, ms)
 		p.then(
 			(v) => {
@@ -889,7 +1199,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, controller: AbortController, 
 			(e) => {
 				clearTimeout(t)
 				reject(e)
-			},
+			}
 		)
 	})
 }
@@ -906,19 +1216,23 @@ function setPath(obj: any, path: string[], value: unknown) {
 
 /** Vectors, material and secrets never enter a receipt (16 §1a, 01 §10, 13 §6). */
 function redact(v: unknown): unknown {
-	if (Array.isArray(v) && v.length > 8 && v.every((x) => typeof x === 'number')) {
+	if (
+		Array.isArray(v) &&
+		v.length > 8 &&
+		v.every((x) => typeof x === "number")
+	) {
 		return { $vector: true, dims: v.length }
 	}
 	if (Array.isArray(v)) return v.map(redact)
 	// A secret-typed setting is redacted **by its type**, which is the entire reason
 	// the field is typed rather than free-form: core can identify it without knowing
 	// what the plugin called it (13 §6).
-	if (isSecret(v)) return '[secret]'
-	if (v && typeof v === 'object') {
+	if (isSecret(v)) return "[secret]"
+	if (v && typeof v === "object") {
 		const out: Record<string, unknown> = {}
 		for (const [k, val] of Object.entries(v)) {
-			if (k === 'material' || k === 'credentials') {
-				out[k] = '[redacted]'
+			if (k === "material" || k === "credentials") {
+				out[k] = "[redacted]"
 				continue
 			}
 			out[k] = redact(val)
@@ -929,17 +1243,21 @@ function redact(v: unknown): unknown {
 }
 
 /** replay(receipt) — deterministic, never re-infers (F16). */
-export async function replay(doc: SpecDocument, receipt: Receipt, bindings: Bindings): Promise<Receipt> {
+export async function replay(
+	doc: SpecDocument,
+	receipt: Receipt,
+	bindings: Bindings
+): Promise<Receipt> {
 	const recorded = new Map(receipt.nodes.map((n) => [n.nodeKey, n.output]))
 	const replayBindings: Bindings = { ...bindings }
 	for (const n of receipt.nodes) {
-		if (n.kind !== 'provider') continue
+		if (n.kind !== "provider") continue
 		replayBindings[n.typeId] = async () => ok(recorded.get(n.nodeKey))
 	}
 	return run(doc, {
 		input: receipt.nodes[0]?.output,
 		bindings: replayBindings,
 		seed: receipt.seed,
-		runId: receipt.runId + ':replay',
+		runId: receipt.runId + ":replay"
 	})
 }

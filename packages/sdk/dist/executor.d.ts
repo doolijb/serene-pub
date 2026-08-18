@@ -5,21 +5,21 @@
  * discriminated results including halt, per-run seed, timeouts that bound execution
  * but never waiting, consumption budgets, per-kind injection, and core-emitted events.
  */
-import type { SpecDocument } from './document.js';
-import type { Receipt } from './receipt.js';
-import { type ConfigWorld } from './config.js';
-import { type Reviewer } from './review.js';
+import type { SpecDocument } from "./document.js";
+import type { Receipt } from "./receipt.js";
+import { type ConfigWorld } from "./config.js";
+import { type Reviewer } from "./review.js";
 export type Result<T = unknown> = {
-    kind: 'ok';
+    kind: "ok";
     value: T;
 } | {
-    kind: 'err';
+    kind: "err";
     reason: string;
 } | {
-    kind: 'cancelled';
+    kind: "cancelled";
     reason?: string;
 } | {
-    kind: 'halt';
+    kind: "halt";
     reason: string;
 };
 export declare const ok: <T>(value: T) => Result<T>;
@@ -45,10 +45,10 @@ export interface BranchResults {
     ok: boolean;
 }
 export type WriteResult = {
-    status: 'committed';
+    status: "committed";
     ids: Record<string, unknown>;
 } | {
-    status: 'pending';
+    status: "pending";
     proposalId: string;
 };
 export declare const isCommitted: (w: WriteResult) => w is Extract<WriteResult, {
@@ -59,7 +59,7 @@ export interface TaskCtx {
     random?: () => number;
     signal: AbortSignal;
     progress(message: string): void;
-    log(level: 'info' | 'warn', message: string): void;
+    log(level: "info" | "warn", message: string): void;
 }
 export interface QueryCtx extends TaskCtx {
     read(table: string, q?: unknown): unknown;
@@ -87,7 +87,7 @@ export interface RunOptions {
     world?: ConfigWorld;
     seed?: string;
     runId?: string;
-    triggerSource?: Receipt['triggerSource'];
+    triggerSource?: Receipt["triggerSource"];
     triggerRef?: string;
     actorUserId?: string;
     /** Instance ceiling — config may not exceed it (F36). */
@@ -144,6 +144,54 @@ export interface RunOptions {
     };
     /** From connection metadata in core; injectable so the count is the real one. */
     countTokens?: (v: unknown) => number;
+    /**
+     * The host's I/O, injected into the per-kind contexts (see `HostServices`).
+     *
+     * Absent, every service is the in-memory stand-in this draft has always used —
+     * which is what keeps the SDK's own suite hermetic. Present, a Query's `read`
+     * reaches a real database and a Consumer's `commit` writes a real row.
+     */
+    host?: HostServices;
+}
+/**
+ * What only the host can do.
+ *
+ * The executor owns *sequencing*; it has never owned *I/O*, and the split is why the
+ * same executor can run in an author's test with no database and in core against a
+ * live one. Until this existed, core's only way to reach a database from a binding was
+ * to close over a connection — which works, and quietly moves the effect outside the
+ * substrate that the review gate, the budget and the receipt all sit in.
+ *
+ * So the shape here is deliberate: **a binding describes the effect and the host
+ * performs it.** A Consumer returns what it wants written, and `commit` writes it. That
+ * is already how a sidecar Consumer has to work (F19 — no DB channel across a process
+ * boundary), and having in-process and out-of-process Consumers obey the same rule
+ * means the review gate sees the same thing in both cases: a payload, before anything
+ * happened.
+ */
+export interface HostServices {
+    /** Scoped read for a Query. The node is passed so the host can enforce scope (F30). */
+    read?(table: string, query: unknown, node: NodeRef): unknown | Promise<unknown>;
+    /** Perform a Consumer's described write and return the row identity. */
+    commit?(payload: unknown, node: NodeRef): Promise<Record<string, unknown>>;
+    /** Dispatch a Provider call. Credentials are injected here and never readable (F18). */
+    call?(payload: unknown, node: NodeRef): Promise<unknown>;
+    /** Core emits; a node only names the handle (F8). */
+    emit?(handle: string, payload: unknown, node: NodeRef): void;
+    /**
+     * Connection **metadata** for a Provider — readable. Material is never returned
+     * here; it is applied inside `call` and never crosses into a binding (F18).
+     */
+    connection?(node: NodeRef): {
+        metadata?: Record<string, unknown>;
+        sampling?: Record<string, unknown>;
+    };
+}
+export interface NodeRef {
+    key: string;
+    typeId: string;
+    typeVersion: number;
+    kind: string;
 }
 export declare function run(doc: SpecDocument, opts: RunOptions): Promise<Receipt>;
 /** replay(receipt) — deterministic, never re-infers (F16). */
