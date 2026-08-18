@@ -51,7 +51,6 @@
 	let { children }: Props = $props()
 
 	let socketsInitialized = $state(false)
-	let showUpdateBar = $state(true)
 	let showLogin = $state(false)
 	// Startup failure of the realtime connection. Without this the template's
 	// `{#if socketsInitialized}{:else if showLogin}` chain had no third branch,
@@ -178,8 +177,23 @@
 			await initializeSocketsIfAllowed()
 		} catch (error) {
 			console.error("Startup failed:", error)
-			startupError =
+			// NEVER let this land on a falsy value. Socket.IO's connect_error
+			// routinely carries an empty `message` (transport-level failures,
+			// and middleware rejections that pass no reason), which made
+			// startupError "" — falsy, so the template's `{:else if
+			// startupError}` branch did not match either. With
+			// socketsInitialized, showLogin and showStartupSpinner all false
+			// as well, every branch failed and the page rendered completely
+			// blank with nothing to act on: the exact silent-blank-page
+			// failure the block comment above describes fixing, reintroduced
+			// through the message rather than the missing branch.
+			const reason =
 				error instanceof Error ? error.message : String(error)
+			startupError =
+				reason?.trim() ||
+				"The realtime connection failed to start and reported no reason. " +
+					"This is usually the socket server (SOCKETS_PORT) not being reachable " +
+					"through your reverse proxy or tunnel."
 		} finally {
 			clearTimeout(spinnerTimer)
 			showStartupSpinner = false
@@ -279,7 +293,7 @@
 				</button>
 				<a
 					class="rounded-lg px-4 py-2 text-sm font-medium underline"
-					href="https://github.com/doolijb/serene-pub/blob/main/HOSTING.md"
+					href="https://github.com/doolijb/serene-pub/blob/main/docs/hosting.md"
 					target="_blank"
 					rel="noopener noreferrer"
 				>
@@ -287,30 +301,6 @@
 				</a>
 			</div>
 		</div>
-	</div>
-{/if}
-{#if page.data?.isNewerReleaseAvailable && showUpdateBar}
-	<div
-		class="bg-surface-200-800 sticky right-0 bottom-0 left-0 z-100 p-4 text-center"
-	>
-		<span>
-			A newer version of Serene Pub is available!&nbsp;
-			<a
-				href="https://github.com/doolijb/serene-pub/releases"
-				target="_blank"
-				rel="noopener"
-				class="btn preset-filled-success-500"
-			>
-				<Icons.Download size={16} />
-				Download here
-			</a>
-		</span>
-		<button
-			onclick={() => (showUpdateBar = false)}
-			style="margin-left: 2rem; background: none; border: none; color: #fff; font-size: 1.5rem; cursor: pointer;"
-		>
-			<Icons.X size={16} />
-		</button>
 	</div>
 {/if}
 

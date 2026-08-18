@@ -1131,27 +1131,46 @@
 										>
 											Choose a model:
 										</label>
+										<!-- Lists what Ollama has actually pulled, which is
+										     the only thing this control can connect
+										     to. It used to hard-code four official
+										     Ollama library names (llama3.2, qwen2.5,
+										     mistral…) — a curated list of models the
+										     user very likely did not have, offered by
+										     a dropdown whose whole job is picking one
+										     they do. `installedModels` was already
+										     being fetched on connect and then never
+										     read. Serene Pub curates HF sources only;
+										     what's installed here is whatever the user
+										     pulled. -->
 										<select
 											id="ollama-model"
 											class="select w-full"
 											bind:value={selectedOllamaModel}
+											disabled={installedModels.length ===
+												0}
 										>
 											<option value="">
-												Select a model…
+												{installedModels.length === 0
+													? "No models pulled yet…"
+													: "Select a model…"}
 											</option>
-											<option value="llama3.2">
-												Llama 3.2 (Recommended)
-											</option>
-											<option value="llama3.2:1b">
-												Llama 3.2 1B (Faster, lighter)
-											</option>
-											<option value="qwen2.5">
-												Qwen 2.5
-											</option>
-											<option value="mistral">
-												Mistral 7B
-											</option>
+											{#each installedModels as model}
+												<option value={model.name}>
+													{model.name}
+												</option>
+											{/each}
 										</select>
+										{#if installedModels.length === 0}
+											<p
+												class="text-surface-700-300 mt-2 text-xs"
+											>
+												Pull a model with the command
+												above, then reopen this step —
+												the list refreshes when Serene
+												Pub reconnects to Ollama.
+											</p>
+										{/if}
 									</div>
 								{/if}
 							{:else if connectionChoice === "koboldcpp"}

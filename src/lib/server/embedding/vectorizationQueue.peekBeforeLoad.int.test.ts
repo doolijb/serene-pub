@@ -212,7 +212,14 @@ describe("runQueue() — peek before load", () => {
 		unloadEmbeddingModel()
 		testEmbedCreate.mockClear()
 		await runOneCycle()
-		expect(testEmbedCreate).toHaveBeenCalledTimes(2)
+		// Not an exact count, for the same reason spelled out for cycle B
+		// below and for the earlier test in this file: how many rows this
+		// cycle embeds depends on what previous tests left stale in the shared
+		// test DB, since pickWorldLoreEntry sweeps globally. Pinning it to 2
+		// made the file order-dependent and it flaked under full-suite runs
+		// with "expected 2, got 3". The row-level assertions immediately below
+		// are the real claim.
+		expect(testEmbedCreate.mock.calls.length).toBeGreaterThanOrEqual(2)
 
 		const afterA = await testDb.query.worldLoreEntries.findFirst({
 			where: eq(schema.worldLoreEntries.id, entry.id)

@@ -179,19 +179,37 @@
 					})
 					return
 				}
-				toaster.success({
-					title: `Persona Imported`,
-					description: `Persona ${msg.persona!.name} imported successfully.`
-				})
+				// A warning means the persona DID import, but part of the card
+				// (usually an over-sized image) had to be skipped. Not an
+				// error toast — this flow used to report a failure for a
+				// persona that was in fact imported.
+				if (msg.warnings?.length) {
+					toaster.warning({
+						title: `Persona Imported With Warnings`,
+						description: `${msg.persona!.name} was imported. ${msg.warnings.join(" ")}`
+					})
+				} else {
+					toaster.success({
+						title: `Persona Imported`,
+						description: `Persona ${msg.persona!.name} imported successfully.`
+					})
+				}
 			}
 		)
 		socket.on(
 			"personas:importResolve",
 			(msg: Sockets.Personas.ImportResolve.Response) => {
-				toaster.success({
-					title: `Persona Imported`,
-					description: `Persona ${msg.persona.name} imported successfully.`
-				})
+				if (msg.warnings?.length) {
+					toaster.warning({
+						title: `Persona Imported With Warnings`,
+						description: `${msg.persona.name} was imported. ${msg.warnings.join(" ")}`
+					})
+				} else {
+					toaster.success({
+						title: `Persona Imported`,
+						description: `Persona ${msg.persona.name} imported successfully.`
+					})
+				}
 			}
 		)
 		socket.on(

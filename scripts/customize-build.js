@@ -117,5 +117,32 @@ content = content.replace(
 	"function graceful_shutdown(reason) {\n\tconsole.log(`👋 Serene Pub shutting down (${reason})`);"
 )
 
+// Load .env before @sveltejs/adapter-node reads its own configuration.
+//
+// The adapter reads ORIGIN, PROTOCOL_HEADER, HOST_HEADER, ADDRESS_HEADER,
+// XFF_DEPTH and PORT at the module scope of ./handler.js, which index.js
+// imports — so anything that must influence them has to run first. ESM
+// evaluates imports depth-first in source order, so a side-effect import on
+// line 1 runs to completion before handler.js's body does.
+//
+// Without this, .env reached the app only via a dotenv.config() buried in a
+// module that one API route imported, i.e. after the first request — far too
+// late for any of the above. Desktop launchers worked around it by exporting
+// every key before spawning node; Docker and bare `node build/index.js` had no
+// workaround at all and silently ignored those variables.
+const preloadSource = "src/lib/server/config/preloadEnv.js"
+const preloadTarget = "build/preloadEnv.js"
+if (fs.existsSync(preloadSource)) {
+	fs.copyFileSync(preloadSource, preloadTarget)
+	if (!content.startsWith("import './preloadEnv.js';")) {
+		content = `import './preloadEnv.js';\n${content}`
+	}
+	console.log("🔐 Env preload wired into build/index.js")
+} else {
+	console.warn(
+		`⚠️  ${preloadSource} not found — .env will not be applied before the server framework reads its configuration.`
+	)
+}
+
 fs.writeFileSync(buildFile, content)
 console.log("✅ Server build output customized successfully!")

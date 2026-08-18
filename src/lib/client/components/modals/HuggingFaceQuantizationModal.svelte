@@ -32,6 +32,26 @@
 	const isRecommendedQuant = (label: string) => label.includes("Q4_K_M")
 	let isTutorial = $derived(!!panelsCtx?.digest?.tutorial)
 
+	/** Popular repos publish 40+ quantizations and the list keeps its upstream
+	 * order, so Q4_K_M usually sits well below the fold of this scroll box —
+	 * a highlight the user has to go hunting for guides nobody. Bring it into
+	 * view instead of reordering the list, which would move every option out
+	 * from under anyone who already knows what they're looking for. */
+	function revealRecommended(node: HTMLElement, active: boolean) {
+		if (!active) return
+		const reduced = window.matchMedia?.(
+			"(prefers-reduced-motion: reduce)"
+		).matches
+		// Deferred a frame: the dialog is still being laid out on mount, so
+		// scrolling immediately lands on the wrong offset.
+		requestAnimationFrame(() =>
+			node.scrollIntoView({
+				block: "center",
+				behavior: reduced ? "auto" : "smooth"
+			})
+		)
+	}
+
 	// Helper function to extract numeric value from quantization for sorting
 	function getQuantizationSortValue(label: string | undefined): number {
 		if (!label) return 0
@@ -116,6 +136,10 @@
 										? 'tutorial-highlight'
 										: ''}"
 									style="--tutorial-glow-radius: var(--radius-container)"
+									use:revealRecommended={isTutorial &&
+										isRecommendedQuant(
+											pullOption.label ?? ""
+										)}
 								>
 									<div
 										class="flex items-center justify-between"

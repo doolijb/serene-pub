@@ -6,13 +6,18 @@ import type { RequestHandler } from "@sveltejs/kit"
 
 let socketsLoaded = false
 
-export const GET: RequestHandler = async ({ url }) => {
+// Takes the whole event, not just `url`: resolving the endpoint needs the
+// request headers (Host / x-forwarded-host / x-forwarded-proto) and the raw
+// TCP peer from `platform.req`, because the answer is per-request — a tunneled
+// request and a direct localhost request to this same process get genuinely
+// different, both-correct answers.
+export const GET: RequestHandler = async (event) => {
 	if (!socketsLoaded) {
 		socketsLoaded = true
 		await loadSocketsServer()
 	}
 
-	const endpoint = getPublicSocketsEndpoint(url)
+	const endpoint = getPublicSocketsEndpoint(event)
 	return new Response(JSON.stringify({ endpoint }), {
 		headers: {
 			"Content-Type": "application/json",

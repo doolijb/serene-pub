@@ -51,7 +51,7 @@ Several features (local embedding models, the KoboldCPP/Ollama Managers, SillyTa
 
 ## Docker & Self-Hosting
 
-Networking, volumes, reverse proxies, and environment variables are covered in [DOCKER.md](../DOCKER.md) and [HOSTING.md](../HOSTING.md) — most "can't reach the server" or "my data disappeared after a restart" issues trace back to the `SERENE_PUB_DATA_DIR` volume not being mounted where you think it is. A few socket-specific symptoms behind a reverse proxy, from HOSTING.md's own troubleshooting table:
+Networking, volumes, reverse proxies, and environment variables are covered in [DOCKER.md](https://github.com/doolijb/serene-pub/blob/main/DOCKER.md) and [Hosting Serene Pub](./hosting.md) — most "can't reach the server" or "my data disappeared after a restart" issues trace back to the `SERENE_PUB_DATA_DIR` volume not being mounted where you think it is. A few socket-specific symptoms behind a reverse proxy, from the hosting page's own troubleshooting table:
 
 - **Browser console shows "Mixed Content... has been blocked."** The socket endpoint resolved to `http://` on an `https://` page — set `PROTOCOL_HEADER` (if your proxy sets `X-Forwarded-Proto`) or `SOCKETS_HTTPS_HOSTS` for that hostname.
 - **"blocked by CORS policy" pointing at your own domain.** `PUBLIC_SOCKETS_ENDPOINT` (or the auto-detected endpoint) doesn't match the origin the page was actually loaded from — often from testing both a public URL and `localhost` with a hardcoded `PUBLIC_SOCKETS_ENDPOINT` left set.

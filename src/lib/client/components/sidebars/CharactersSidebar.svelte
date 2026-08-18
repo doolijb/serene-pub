@@ -408,10 +408,21 @@
 					return
 				}
 				importingLorebook = msg.book || null
-				toaster.success({
-					title: `Character Imported`,
-					description: `Character ${msg.character!.nickname || msg.character!.name} imported successfully.`
-				})
+				// A warning means the character DID import, but part of the
+				// card (usually an over-sized image) had to be skipped. It is
+				// deliberately not an error toast — this flow used to report a
+				// failure for a character that was in fact imported.
+				if (msg.warnings?.length) {
+					toaster.warning({
+						title: `Character Imported With Warnings`,
+						description: `${msg.character!.nickname || msg.character!.name} was imported. ${msg.warnings.join(" ")}`
+					})
+				} else {
+					toaster.success({
+						title: `Character Imported`,
+						description: `Character ${msg.character!.nickname || msg.character!.name} imported successfully.`
+					})
+				}
 				if (!!importingLorebook) {
 					importingLorebookCharacter = msg.character || null
 					showLorebookImportConfirmationModal = true
@@ -422,10 +433,17 @@
 			"characters:importResolve",
 			(msg: Sockets.Characters.ImportResolve.Response) => {
 				importingLorebook = msg.book || null
-				toaster.success({
-					title: `Character Imported`,
-					description: `Character ${msg.character.nickname || msg.character.name} imported successfully.`
-				})
+				if (msg.warnings?.length) {
+					toaster.warning({
+						title: `Character Imported With Warnings`,
+						description: `${msg.character.nickname || msg.character.name} was imported. ${msg.warnings.join(" ")}`
+					})
+				} else {
+					toaster.success({
+						title: `Character Imported`,
+						description: `Character ${msg.character.nickname || msg.character.name} imported successfully.`
+					})
+				}
 				if (!!importingLorebook) {
 					importingLorebookCharacter = msg.character || null
 					showLorebookImportConfirmationModal = true

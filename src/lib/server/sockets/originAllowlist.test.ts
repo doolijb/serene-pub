@@ -19,6 +19,8 @@ const ORIGINAL_ENV = { ...process.env }
 beforeEach(() => {
 	delete process.env.SOCKETS_ALLOWED_ORIGINS
 	delete process.env.ADDRESS_HEADER
+	delete process.env.TRUSTED_PROXIES
+	delete process.env.PUBLIC_URL
 })
 
 function socketWith(address: string, headers: Record<string, any> = {}) {
@@ -198,6 +200,251 @@ describe("getSocketClientAddress", () => {
 		expect(
 			getSocketClientAddress(
 				socketWith("203.0.113.7", {
+					"x-forwarded-for": "192.168.1.50"
+				})
+			)
+		).toBe("203.0.113.7")
+	})
+})
+
+/**
+ * The HTTP twin. The throwing-adapter cases are the point of this whole
+ * function: adapter-node's getClientAddress() throws outright when
+ * ADDRESS_HEADER names a header the request doesn't carry, so every direct
+ * (unproxied) request on a mixed-access install used to blow up inside the
+ * login route and surface as a 500. `getClientAddress` is stubbed to throw
+ * exactly the way adapter-node does, so these lock in that a missing header
+ * is a non-event rather than a crash.
+ */
+function httpEventWith(
+	peer: string | null,
+	headers: Record<string, string> = {},
+	opts: { adapterThrows?: boolean; adapterAddress?: string } = {}
+) {
+	return {
+		request: new Request("http://localhost/api/login", { headers }),
+		platform:
+			peer === null ? undefined : { req: { socket: { remoteAddress: peer } } },
+		getClientAddress: () => {
+			if (opts.adapterThrows) {
+				throw new Error(
+					"Address header was specified with ADDRESS_HEADER=x-forwarded-for but is absent from request"
+				)
+			}
+			return opts.adapterAddress ?? peer ?? ""
+		}
+	}
+}
+
+describe("getHttpClientAddress", () => {
+	test("ADDRESS_HEADER unset — returns the peer address, header ignored", async () => {
+		const { getHttpClientAddress } = await import("./originAllowlist")
+		expect(
+			getHttpClientAddress(
+				httpEventWith("203.0.113.7", {
+					"x-forwarded-for": "192.168.1.50"
+				})
+			)
+		).toBe("203.0.113.7")
+	})
+
+	test("ADDRESS_HEADER set, local peer, single-hop header — returns the header value", async () => {
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		const { getHttpClientAddress } = await import("./originAllowlist")
+		expect(
+			getHttpClientAddress(
+				httpEventWith("127.0.0.1", { "x-forwarded-for": "203.0.113.5" })
+			)
+		).toBe("203.0.113.5")
+	})
+
+	test("ADDRESS_HEADER set, local peer, multi-hop header — takes the rightmost (un-spoofable) entry", async () => {
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		const { getHttpClientAddress } = await import("./originAllowlist")
+		expect(
+			getHttpClientAddress(
+				httpEventWith("127.0.0.1", {
+					"x-forwarded-for": "1.2.3.4, 203.0.113.5"
+				})
+			)
+		).toBe("203.0.113.5")
+	})
+
+	test("ADDRESS_HEADER set, non-local peer — ignores the claimed header", async () => {
+		process.env.SOCKETS_ALLOWED_ORIGINS = "*"
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		const { getHttpClientAddress } = await import("./originAllowlist")
+		expect(
+			getHttpClientAddress(
+				httpEventWith("203.0.113.7", {
+					"x-forwarded-for": "192.168.1.50"
+				})
+			)
+		).toBe("203.0.113.7")
+	})
+
+	test("ADDRESS_HEADER set but header absent — returns the peer instead of throwing (the 500-on-local-login regression)", async () => {
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		const { getHttpClientAddress } = await import("./originAllowlist")
+		expect(() =>
+			getHttpClientAddress(
+				httpEventWith("127.0.0.1", {}, { adapterThrows: true })
+			)
+		).not.toThrow()
+		expect(
+			getHttpClientAddress(
+				httpEventWith("127.0.0.1", {}, { adapterThrows: true })
+			)
+		).toBe("127.0.0.1")
+	})
+
+	test("ADDRESS_HEADER set, header absent, no reachable peer — degrades to a shared bucket rather than throwing", async () => {
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		const { getHttpClientAddress } = await import("./originAllowlist")
+		expect(
+			getHttpClientAddress(httpEventWith(null, {}, { adapterThrows: true }))
+		).toBe("unresolved")
+	})
+
+	test("no reachable peer, ADDRESS_HEADER set — does NOT trust the claimed header (locality unverifiable)", async () => {
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		const { getHttpClientAddress } = await import("./originAllowlist")
+		expect(
+			getHttpClientAddress(
+				httpEventWith(
+					null,
+					{ "x-forwarded-for": "192.168.1.50" },
+					{ adapterThrows: true }
+				)
+			)
+		).toBe("unresolved")
+	})
+
+	test("no platform (dev server), ADDRESS_HEADER unset — falls back to the adapter's own answer", async () => {
+		const { getHttpClientAddress } = await import("./originAllowlist")
+		expect(
+			getHttpClientAddress(
+				httpEventWith(null, {}, { adapterAddress: "198.51.100.9" })
+			)
+		).toBe("198.51.100.9")
+	})
+})
+
+/**
+ * TRUSTED_PROXIES exists because "is the peer trusted" was previously
+ * hardcoded to "is the peer in a private range" — which cannot express a cloud
+ * load balancer on a public address, and cannot NARROW trust below "the entire
+ * local network" (a broad grant, given the app binds 0.0.0.0 by default).
+ *
+ * The first test here is the backward-compatibility contract: unset must be
+ * indistinguishable from the old hardcoded rule.
+ */
+describe("TRUSTED_PROXIES", () => {
+	test("unset — identical to the previous hardcoded private-range rule", async () => {
+		const { isTrustedProxyAddress, isLocalNetworkAddress } = await import(
+			"./originAllowlist"
+		)
+		for (const ip of [
+			"127.0.0.1",
+			"10.0.0.5",
+			"172.16.0.1",
+			"192.168.1.50",
+			"169.254.1.1",
+			"::1",
+			"fe80::1",
+			"::ffff:192.168.1.50",
+			"203.0.113.7",
+			"8.8.8.8",
+			"172.32.0.1"
+		]) {
+			expect(isTrustedProxyAddress(ip), ip).toBe(
+				isLocalNetworkAddress(ip)
+			)
+		}
+	})
+
+	test("an explicit CIDR trusts a public-address proxy that `private` rejects", async () => {
+		process.env.TRUSTED_PROXIES = "203.0.113.0/24"
+		const { isTrustedProxyAddress } = await import("./originAllowlist")
+		expect(isTrustedProxyAddress("203.0.113.7")).toBe(true)
+		// ...and narrows: the LAN is no longer blanket-trusted.
+		expect(isTrustedProxyAddress("192.168.1.50")).toBe(false)
+	})
+
+	test("`none` trusts nothing, including loopback", async () => {
+		process.env.TRUSTED_PROXIES = "none"
+		const { isTrustedProxyAddress } = await import("./originAllowlist")
+		expect(isTrustedProxyAddress("127.0.0.1")).toBe(false)
+		expect(isTrustedProxyAddress("203.0.113.7")).toBe(false)
+	})
+
+	test("`*` trusts any peer", async () => {
+		process.env.TRUSTED_PROXIES = "*"
+		const { isTrustedProxyAddress } = await import("./originAllowlist")
+		expect(isTrustedProxyAddress("203.0.113.7")).toBe(true)
+	})
+
+	test("an all-invalid list falls back to private, not to trusting nothing", async () => {
+		// Failing closed here would silently collapse login rate limiting into
+		// one bucket and lock out non-browser clients; the startup warning is
+		// the signal, and falling back to the previous behavior is the least
+		// surprising direction.
+		process.env.TRUSTED_PROXIES = "not-an-ip, also-garbage"
+		const { isTrustedProxyAddress } = await import("./originAllowlist")
+		expect(isTrustedProxyAddress("127.0.0.1")).toBe(true)
+		expect(isTrustedProxyAddress("203.0.113.7")).toBe(false)
+	})
+
+	test("multi-hop chain resolves the real client, where a rightmost-only read stopped at the intermediate hop", async () => {
+		// Cloudflare Tunnel -> nginx -> app. nginx appends its own observed
+		// peer, so the header is "<real client>, <tunnel>" and the direct peer
+		// is nginx. The old rightmost-only read returned the tunnel's address
+		// and collapsed every tunneled user into one rate-limit bucket.
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		process.env.TRUSTED_PROXIES = "127.0.0.1, 10.0.0.0/8"
+		const { getSocketClientAddress } = await import("./originAllowlist")
+		expect(
+			getSocketClientAddress(
+				socketWith("127.0.0.1", {
+					"x-forwarded-for": "203.0.113.5, 10.1.2.3"
+				})
+			)
+		).toBe("203.0.113.5")
+	})
+
+	test("peeling stops at the first untrusted hop — a spoofed left-hand entry is never reached", async () => {
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		process.env.TRUSTED_PROXIES = "127.0.0.1"
+		const { getSocketClientAddress } = await import("./originAllowlist")
+		expect(
+			getSocketClientAddress(
+				socketWith("127.0.0.1", {
+					"x-forwarded-for": "1.1.1.1, 203.0.113.5"
+				})
+			)
+		).toBe("203.0.113.5")
+	})
+
+	test("the HTTP twin peels identically", async () => {
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		process.env.TRUSTED_PROXIES = "127.0.0.1, 10.0.0.0/8"
+		const { getHttpClientAddress } = await import("./originAllowlist")
+		expect(
+			getHttpClientAddress(
+				httpEventWith("127.0.0.1", {
+					"x-forwarded-for": "203.0.113.5, 10.1.2.3"
+				})
+			)
+		).toBe("203.0.113.5")
+	})
+
+	test("an untrusted direct peer's claimed chain is still ignored", async () => {
+		process.env.ADDRESS_HEADER = "x-forwarded-for"
+		process.env.TRUSTED_PROXIES = "10.0.0.0/8"
+		const { getHttpClientAddress } = await import("./originAllowlist")
+		expect(
+			getHttpClientAddress(
+				httpEventWith("203.0.113.7", {
 					"x-forwarded-for": "192.168.1.50"
 				})
 			)

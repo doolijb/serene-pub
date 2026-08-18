@@ -20,13 +20,16 @@ services:
             # Disable automatic browser launch (always disabled in containers)
             SERENE_AUTO_OPEN: 1
 
-            # A Docker deployment has already made its own network-exposure
-            # decision via the port mapping above (and/or a reverse proxy in
-            # front of it), so the app's own origin allowlist is redundant
-            # friction here — this opts out of it entirely. Remove this line
-            # (or set specific hostnames) if you want the app-level allowlist
-            # enforced on top of your container's own network boundary.
-            SOCKETS_ALLOWED_ORIGINS: "*"
+            # Socket origins are allowed automatically when they match the
+            # hostname a request actually arrived on, which covers every normal
+            # Docker setup — localhost, a LAN IP, or a custom domain — with no
+            # configuration at all. This used to be set to "*", which switches
+            # the allowlist off entirely and also stops non-browser clients from
+            # being limited to the local network; combined with the default
+            # accounts-disabled mode, anything that could reach the port got an
+            # unauthenticated admin session. Uncomment ONLY if your page and
+            # your socket connection genuinely use different hostnames.
+            # SOCKETS_ALLOWED_ORIGINS: "*"
 
             # --- Optional overrides ---
 
@@ -42,10 +45,14 @@ services:
             # See DOCKER.md for details.
             # KOBOLDCPP_BINARY_DIR: /koboldcpp
 
-            # Running behind a reverse proxy or tunnel? See HOSTING.md — you'll likely need
-            # SOCKETS_HTTPS_HOSTS and HOST_HEADER, and to route /socket.io/ to SOCKETS_PORT.
-            # SOCKETS_HTTPS_HOSTS: serene.example.com
-            # HOST_HEADER: x-forwarded-host
+            # Running behind a reverse proxy or tunnel? Declare the public URL
+            # and which addresses your proxy connects from; everything else
+            # (forwarded host/proto/client-IP handling, HTTPS detection, cookie
+            # flags, the socket URL) is derived from these two. Route
+            # /socket.io/ to SOCKETS_PORT and the socket endpoint needs no port
+            # of its own. See docs/hosting.md.
+            # PUBLIC_URL: https://serene.example.com
+            # TRUSTED_PROXIES: 172.16.0.0/12
 
 volumes:
     serene-pub-dev-data:

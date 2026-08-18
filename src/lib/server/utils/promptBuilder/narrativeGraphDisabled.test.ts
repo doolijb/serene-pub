@@ -8,10 +8,30 @@
  */
 import { describe, expect, test, vi } from "vitest"
 
-vi.mock("$lib/server/db", async () => {
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	return { db: await createTestDb() }
-})
+// A real PGlite instance used to be created here, purely to satisfy this
+// module's `import { db }` — a multi-second spin-up for a test whose entire
+// point is that the database is never queried. Under the full suite's parallel
+// load that init intermittently blew past vitest's default 5s timeout, making
+// this the one flaky test in the repo.
+//
+// A stub that throws on any access is both faster and a STRONGER assertion: if
+// the short-circuit ever regresses and a query is actually attempted, this
+// fails loudly, where a live database would have quietly answered it. `schema`
+// is imported from a different path and is deliberately left unmocked.
+vi.mock("$lib/server/db", () => ({
+	db: new Proxy(
+		{},
+		{
+			get(_target, prop) {
+				throw new Error(
+					`Database was accessed (db.${String(prop)}) — fetchActiveRelationshipsAmongNodes ` +
+						"is supposed to short-circuit before touching it while " +
+						"NARRATIVE_GRAPH_CONTEXT_ENABLED is false."
+				)
+			}
+		}
+	)
+}))
 
 describe("narrative graph context is disabled", () => {
 	test("the fetch short-circuits without touching the database", async () => {
