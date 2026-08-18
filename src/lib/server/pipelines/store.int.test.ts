@@ -24,15 +24,21 @@ const chatTurn = () =>
 		spec("core:spec/chat-turn", { version: "1.0.0" })
 			.on("core:event/message-created@1")
 			.input("input", C.userMessage.v1())
-			.query("history", ($) => C.chatHistory.v1({ scope: $.input.chatScope }))
-			.task("prompt", ($) => C.assemble.v2({ candidates: $.history.messages }))
+			.query("history", ($) =>
+				C.chatHistory.v1({ scope: $.input.chatScope })
+			)
+			.task("prompt", ($) =>
+				C.assemble.v2({ candidates: $.history.messages })
+			)
 			.provider("generate", ($) =>
 				C.generateText.v1({
 					context: $.prompt.context,
 					connection: slot.connection()
 				})
 			)
-			.consume("save", ($) => C.createMessage.v1({ text: $.generate.text }))
+			.consume("save", ($) =>
+				C.createMessage.v1({ text: $.generate.text })
+			)
 			.preset("balanced", { label: "Balanced", default: true }, (p) =>
 				p.params("history", { limit: 40 })
 			)
@@ -55,11 +61,15 @@ const agentic = () =>
 								})
 							)
 							.query("vsearch", ($) =>
-								C.vectorSearch.v1({ vector: $.gather.semantic.embed.vector })
+								C.vectorSearch.v1({
+									vector: $.gather.semantic.embed.vector
+								})
 							)
 					)
 					.chain("keyword", (c) =>
-						c.query("lore", ($) => C.lorebookTriggers.v1({ text: $.input.text }))
+						c.query("lore", ($) =>
+							C.lorebookTriggers.v1({ text: $.input.text })
+						)
 					)
 			)
 			.build()
@@ -89,9 +99,10 @@ describe("pipeline store", () => {
 		expect(canonicalHash(back)).toBe(canonicalHash(doc))
 		// Named explicitly because losing either is silent: the block's members
 		// still run, they just stop being attributable to their chain.
-		expect(back.nodes.find((n) => n.key === "gather.semantic.embed")?.blockChain).toBe(
-			"semantic"
-		)
+		expect(
+			back.nodes.find((n) => n.key === "gather.semantic.embed")
+				?.blockChain
+		).toBe("semantic")
 		expect(back.blocks[0]?.chains).toEqual(["semantic", "keyword"])
 	})
 

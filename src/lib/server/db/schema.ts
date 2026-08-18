@@ -2449,7 +2449,12 @@ export const pipelineSpecVersions = pgTable(
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		publishedAt: timestamp("published_at")
 	},
-	(t) => [uniqueIndex("pipeline_spec_versions_spec_semver_idx").on(t.specId, t.semver)]
+	(t) => [
+		uniqueIndex("pipeline_spec_versions_spec_semver_idx").on(
+			t.specId,
+			t.semver
+		)
+	]
 )
 
 /**
@@ -2481,7 +2486,10 @@ export const pipelineBlocks = pgTable(
 		position: integer("position").notNull().default(0)
 	},
 	(t) => [
-		uniqueIndex("pipeline_blocks_version_block_idx").on(t.specVersionId, t.blockId),
+		uniqueIndex("pipeline_blocks_version_block_idx").on(
+			t.specVersionId,
+			t.blockId
+		),
 		check(
 			"pipeline_blocks_kind_check",
 			sql`${t.kind} IN ('async', 'map', 'loop')`
@@ -2514,9 +2522,15 @@ export const pipelineNodes = pgTable(
 		kind: text("kind").notNull(),
 		typeId: text("type_id").notNull(),
 		typeVersion: integer("type_version").notNull().default(1),
-		config: json("config").notNull().default({}).$type<Record<string, any>>(),
+		config: json("config")
+			.notNull()
+			.default({})
+			.$type<Record<string, any>>(),
 		/** Resolved at publish and stored, so a reference is readable off the row (16 §5b-i). */
-		resolvedRefs: json("resolved_refs").$type<Record<string, string> | null>(),
+		resolvedRefs: json("resolved_refs").$type<Record<
+			string,
+			string
+		> | null>(),
 		blockId: text("block_id"),
 		blockKind: text("block_kind"),
 		blockChain: text("block_chain"),
@@ -2527,7 +2541,10 @@ export const pipelineNodes = pgTable(
 		position: integer("position").notNull()
 	},
 	(t) => [
-		uniqueIndex("pipeline_nodes_version_key_idx").on(t.specVersionId, t.nodeKey),
+		uniqueIndex("pipeline_nodes_version_key_idx").on(
+			t.specVersionId,
+			t.nodeKey
+		),
 		// F1 in the database. The five kinds are closed; a sixth is a schema
 		// change and a constitutional argument, not a row somebody inserts.
 		check(
@@ -2602,7 +2619,12 @@ export const pipelinePresets = pgTable(
 		ownerPluginId: integer("owner_plugin_id"),
 		isDefault: boolean("is_default").notNull().default(false)
 	},
-	(t) => [uniqueIndex("pipeline_presets_version_slug_idx").on(t.specVersionId, t.slug)]
+	(t) => [
+		uniqueIndex("pipeline_presets_version_slug_idx").on(
+			t.specVersionId,
+			t.slug
+		)
+	]
 )
 
 export const pipelinePresetValues = pgTable("pipeline_preset_values", {
@@ -2640,7 +2662,9 @@ export const pipelineTypeRegistry = pgTable(
 		effects: text("effects"),
 		causesEvent: text("causes_event"),
 		isPublic: boolean("is_public").notNull().default(false),
-		declaresRandomness: boolean("declares_randomness").notNull().default(false),
+		declaresRandomness: boolean("declares_randomness")
+			.notNull()
+			.default(false),
 		earlyExit: boolean("early_exit").notNull().default(false),
 		timeoutMsDefault: integer("timeout_ms_default"),
 		timeoutKind: text("timeout_kind").default("wall"), // wall | idle
@@ -2651,7 +2675,12 @@ export const pipelineTypeRegistry = pgTable(
 		release: text("release"),
 		contentHash: text("content_hash")
 	},
-	(t) => [uniqueIndex("pipeline_type_registry_type_version_idx").on(t.typeId, t.version)]
+	(t) => [
+		uniqueIndex("pipeline_type_registry_type_version_idx").on(
+			t.typeId,
+			t.version
+		)
+	]
 )
 
 /**
@@ -2674,33 +2703,39 @@ export const pipelineEventRegistry = pgTable("pipeline_event_registry", {
 	ownerPluginId: integer("owner_plugin_id"),
 	/** What makes consent enforceable without hand-classifying each event (11 §4). */
 	affectsUser: boolean("affects_user").notNull().default(false),
-	descriptionI18n: json("description_i18n").$type<Record<string, any> | null>()
+	descriptionI18n: json("description_i18n").$type<Record<
+		string,
+		any
+	> | null>()
 })
 
-export const pipelineEventSubscriptions = pgTable("pipeline_event_subscriptions", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	/**
-	 * The reference exactly as the document wrote it, `core:event/x@1`. Stored
-	 * verbatim because a subscription is a pin, and re-deriving the string from
-	 * its parts silently rewrites a document on the way back out — the version
-	 * suffix was the first thing C1 caught.
-	 */
-	eventRef: text("event_ref").notNull(),
-	/** Split out for joins and the cycle check; never used to rebuild `eventRef`. */
-	eventSlug: text("event_slug").notNull(),
-	eventVersion: integer("event_version").notNull().default(1),
-	specVersionId: integer("spec_version_id")
-		.notNull()
-		.references(() => pipelineSpecVersions.id, { onDelete: "cascade" }),
-	presetId: integer("preset_id").references(() => pipelinePresets.id, {
-		onDelete: "set null"
-	}),
-	depthBound: integer("depth_bound"),
-	enabled: boolean("enabled").notNull().default(true),
-	createdBy: integer("created_by").references(() => users.id, {
-		onDelete: "set null"
-	})
-})
+export const pipelineEventSubscriptions = pgTable(
+	"pipeline_event_subscriptions",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/**
+		 * The reference exactly as the document wrote it, `core:event/x@1`. Stored
+		 * verbatim because a subscription is a pin, and re-deriving the string from
+		 * its parts silently rewrites a document on the way back out — the version
+		 * suffix was the first thing C1 caught.
+		 */
+		eventRef: text("event_ref").notNull(),
+		/** Split out for joins and the cycle check; never used to rebuild `eventRef`. */
+		eventSlug: text("event_slug").notNull(),
+		eventVersion: integer("event_version").notNull().default(1),
+		specVersionId: integer("spec_version_id")
+			.notNull()
+			.references(() => pipelineSpecVersions.id, { onDelete: "cascade" }),
+		presetId: integer("preset_id").references(() => pipelinePresets.id, {
+			onDelete: "set null"
+		}),
+		depthBound: integer("depth_bound"),
+		enabled: boolean("enabled").notNull().default(true),
+		createdBy: integer("created_by").references(() => users.id, {
+			onDelete: "set null"
+		})
+	}
+)
 
 export const pipelineSpecsRelations = relations(pipelineSpecs, ({ many }) => ({
 	versions: many(pipelineSpecVersions)
@@ -2745,17 +2780,23 @@ export const pipelineEdgesRelations = relations(pipelineEdges, ({ one }) => ({
 	})
 }))
 
-export const pipelinePresetsRelations = relations(pipelinePresets, ({ one, many }) => ({
-	specVersion: one(pipelineSpecVersions, {
-		fields: [pipelinePresets.specVersionId],
-		references: [pipelineSpecVersions.id]
-	}),
-	values: many(pipelinePresetValues)
-}))
-
-export const pipelinePresetValuesRelations = relations(pipelinePresetValues, ({ one }) => ({
-	preset: one(pipelinePresets, {
-		fields: [pipelinePresetValues.presetId],
-		references: [pipelinePresets.id]
+export const pipelinePresetsRelations = relations(
+	pipelinePresets,
+	({ one, many }) => ({
+		specVersion: one(pipelineSpecVersions, {
+			fields: [pipelinePresets.specVersionId],
+			references: [pipelineSpecVersions.id]
+		}),
+		values: many(pipelinePresetValues)
 	})
-}))
+)
+
+export const pipelinePresetValuesRelations = relations(
+	pipelinePresetValues,
+	({ one }) => ({
+		preset: one(pipelinePresets, {
+			fields: [pipelinePresetValues.presetId],
+			references: [pipelinePresets.id]
+		})
+	})
+)

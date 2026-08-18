@@ -9,7 +9,7 @@ sequence and the seams, not a second copy of the plan.
 
 ---
 
-## 0. The decision that shapes everything else: core *uses* the executor
+## 0. The decision that shapes everything else: core _uses_ the executor
 
 Two ways to integrate, and they are not equally good.
 
@@ -22,20 +22,20 @@ two implementations of F9, F25, F26, halt semantics, block scheduling and budget
 which will drift, and the drift will be discovered by a user whose run behaves differently
 from the same run in the harness.
 
-**Take the dependency.** The conformance kit exists so that a second implementation *can*
+**Take the dependency.** The conformance kit exists so that a second implementation _can_
 be proven equivalent later, if transport or performance ever forces one. That is a door
 worth keeping open and a door not worth walking through in 0.6.
 
 What core still owns, because none of it is pure:
 
-| core owns | why it cannot live in the SDK |
-|---|---|
-| bindings for every core type | they touch the database, the network, the file system |
+| core owns                                    | why it cannot live in the SDK                         |
+| -------------------------------------------- | ----------------------------------------------------- |
+| bindings for every core type                 | they touch the database, the network, the file system |
 | connection resolution and credential custody | F18 — material never leaves core, not even to the SDK |
-| receipt persistence and retention | rows, and a retention policy that is a system setting |
-| the gate's parking store | a parked run outlives the process |
-| streaming transport and sockets | wire protocol, not pipeline semantics |
-| real budget accounting | metered against actual provider usage |
+| receipt persistence and retention            | rows, and a retention policy that is a system setting |
+| the gate's parking store                     | a parked run outlives the process                     |
+| streaming transport and sockets              | wire protocol, not pipeline semantics                 |
+| real budget accounting                       | metered against actual provider usage                 |
 
 And what core must **never** do, whatever the temptation: evaluate a plugin's authoring
 JavaScript. F6 means core imports documents. `serene-pub build` runs on the author's
@@ -73,13 +73,13 @@ is the failure a version number alone does not catch.
 
 Bind the core types to the code that already does the work:
 
-| type | binds to |
-|---|---|
-| `core:query/chat-history@1` | today's history loader |
-| `core:query/lorebook-triggers@1` | today's World Info scan |
-| `core:task/assemble@2` | today's prompt builder, behind the allocation shape |
-| `core:provider/generate-text@1` | today's connection adapters |
-| `core:consumer/create-message@1` | today's message insert |
+| type                             | binds to                                            |
+| -------------------------------- | --------------------------------------------------- |
+| `core:query/chat-history@1`      | today's history loader                              |
+| `core:query/lorebook-triggers@1` | today's World Info scan                             |
+| `core:task/assemble@2`           | today's prompt builder, behind the allocation shape |
+| `core:provider/generate-text@1`  | today's connection adapters                         |
+| `core:consumer/create-message@1` | today's message insert                              |
 
 Nothing is rewritten in this step. Each binding is a wrapper, and the wrapper is where the
 old code keeps living.
@@ -132,7 +132,7 @@ Chat debug mode already estimates the next request. Point it at `previewTarget` 
 `renderPreview`: the run executes and halts at the first Provider **on the spine**, and
 reports what would have been sent.
 
-The property that makes this worth doing is that the preview *is* the payload — same
+The property that makes this worth doing is that the preview _is_ the payload — same
 allocation, same wire formatting, same measurement — so the estimate cannot drift from the
 send.
 
@@ -158,14 +158,14 @@ slower one is the user's.
 These are places where the draft is deliberately minimal. Each one is a substitution, not a
 redesign, and the tests around them pin the contract rather than the implementation.
 
-| seam | what the draft has | what core needs |
-|---|---|---|
-| **Template engine** | ~200 lines: `{{ a.b }}` and `{% for %}` | a real Jinja2. The registry (`src/engines.ts`) already treats the engine as a datapoint, so this is registering one, not rewriting callers |
-| **Tokenizer** | `roughTokens`, chars ÷ 4 | the real tokenizer per connection. `CostProfile.exact: false` already marks estimates so they degrade visibly rather than silently |
-| **The packager's scanner** | a dependency-free lexical scan | a real TypeScript parser. The scan is correct for the shapes it recognises and is explicitly commented as a placeholder — swap `scanSource` and keep `compilePlugin` |
-| **Map concurrency** | forced sequential | real per-iteration scoping. The observable result is identical, which is exactly what C8 asserts, so this is a performance change and not a semantic one |
-| **Secrets** | tagged plaintext | encryption against the app secret in `meta.json`. `forOwningHook(decrypt)` is already the seam |
-| **Sidecars** | no transport | `jsonrpc-stdio@1` (U13) |
+| seam                       | what the draft has                      | what core needs                                                                                                                                                      |
+| -------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Template engine**        | ~200 lines: `{{ a.b }}` and `{% for %}` | a real Jinja2. The registry (`src/engines.ts`) already treats the engine as a datapoint, so this is registering one, not rewriting callers                           |
+| **Tokenizer**              | `roughTokens`, chars ÷ 4                | the real tokenizer per connection. `CostProfile.exact: false` already marks estimates so they degrade visibly rather than silently                                   |
+| **The packager's scanner** | a dependency-free lexical scan          | a real TypeScript parser. The scan is correct for the shapes it recognises and is explicitly commented as a placeholder — swap `scanSource` and keep `compilePlugin` |
+| **Map concurrency**        | forced sequential                       | real per-iteration scoping. The observable result is identical, which is exactly what C8 asserts, so this is a performance change and not a semantic one             |
+| **Secrets**                | tagged plaintext                        | encryption against the app secret in `meta.json`. `forOwningHook(decrypt)` is already the seam                                                                       |
+| **Sidecars**               | no transport                            | `jsonrpc-stdio@1` (U13)                                                                                                                                              |
 
 ---
 

@@ -21,7 +21,11 @@
 
 import { and, asc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { canonicalHash, importDocument, type SpecDocument } from "@serene-pub/sdk"
+import {
+	canonicalHash,
+	importDocument,
+	type SpecDocument
+} from "@serene-pub/sdk"
 
 type Db = {
 	insert: any
@@ -142,7 +146,10 @@ export async function saveDocument(
 		// Edges FK to node rows, so the id lookup happens here rather than being
 		// deferred to a validator that runs later and finds a dangling reference.
 		const idOf = new Map<string, number>(
-			nodeRows.map((r: { nodeKey: string; id: number }) => [r.nodeKey, r.id])
+			nodeRows.map((r: { nodeKey: string; id: number }) => [
+				r.nodeKey,
+				r.id
+			])
 		)
 		if (doc.edges.length)
 			await tx.insert(schema.pipelineEdges).values(
@@ -219,7 +226,11 @@ export async function saveDocument(
 			)
 			.where(eq(schema.pipelineSpecs.id, spec.id))
 
-		return { specId: spec.id, specVersionId: version.id, canonicalHash: hash }
+		return {
+			specId: spec.id,
+			specVersionId: version.id,
+			canonicalHash: hash
+		}
 	})
 }
 
@@ -231,7 +242,10 @@ export async function saveDocument(
  * Postgres felt like returning rows in, and C1 would fail intermittently, which
  * is worse than failing.
  */
-export async function loadDocument(db: Db, specVersionId: number): Promise<SpecDocument> {
+export async function loadDocument(
+	db: Db,
+	specVersionId: number
+): Promise<SpecDocument> {
 	const [version] = await db
 		.select()
 		.from(schema.pipelineSpecVersions)
@@ -249,7 +263,10 @@ export async function loadDocument(db: Db, specVersionId: number): Promise<SpecD
 		.select()
 		.from(schema.pipelineNodes)
 		.where(eq(schema.pipelineNodes.specVersionId, specVersionId))
-		.orderBy(asc(schema.pipelineNodes.position), asc(schema.pipelineNodes.id))
+		.orderBy(
+			asc(schema.pipelineNodes.position),
+			asc(schema.pipelineNodes.id)
+		)
 
 	const keyOf = new Map<number, string>(
 		nodeRows.map((r: { id: number; nodeKey: string }) => [r.id, r.nodeKey])
@@ -265,7 +282,10 @@ export async function loadDocument(db: Db, specVersionId: number): Promise<SpecD
 		.select()
 		.from(schema.pipelineBlocks)
 		.where(eq(schema.pipelineBlocks.specVersionId, specVersionId))
-		.orderBy(asc(schema.pipelineBlocks.position), asc(schema.pipelineBlocks.id))
+		.orderBy(
+			asc(schema.pipelineBlocks.position),
+			asc(schema.pipelineBlocks.id)
+		)
 
 	const includeRows = await db
 		.select()
@@ -282,7 +302,9 @@ export async function loadDocument(db: Db, specVersionId: number): Promise<SpecD
 	const subscriptionRows = await db
 		.select()
 		.from(schema.pipelineEventSubscriptions)
-		.where(eq(schema.pipelineEventSubscriptions.specVersionId, specVersionId))
+		.where(
+			eq(schema.pipelineEventSubscriptions.specVersionId, specVersionId)
+		)
 		.orderBy(asc(schema.pipelineEventSubscriptions.id))
 
 	const presets = []
@@ -312,7 +334,10 @@ export async function loadDocument(db: Db, specVersionId: number): Promise<SpecD
 		version: version.semver,
 		...(version.mode ? { mode: version.mode } : {}),
 		subscribes: subscriptionRows.map((s: any) => s.eventRef),
-		includes: includeRows.map((i: any) => ({ key: i.key, fragmentId: i.fragmentId })),
+		includes: includeRows.map((i: any) => ({
+			key: i.key,
+			fragmentId: i.fragmentId
+		})),
 		presets: presets as SpecDocument["presets"],
 		nodes: nodeRows.map((n: any) => ({
 			key: n.nodeKey,
@@ -361,7 +386,11 @@ export async function loadDocument(db: Db, specVersionId: number): Promise<SpecD
 function chainsOf(nodeRows: any[], blockId: string): string[] {
 	const seen: string[] = []
 	for (const n of nodeRows)
-		if (n.blockId === blockId && n.blockChain && !seen.includes(n.blockChain))
+		if (
+			n.blockId === blockId &&
+			n.blockChain &&
+			!seen.includes(n.blockChain)
+		)
 			seen.push(n.blockChain)
 	return seen
 }
