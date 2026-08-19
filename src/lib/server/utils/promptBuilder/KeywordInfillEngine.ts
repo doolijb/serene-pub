@@ -15,6 +15,7 @@ import {
 	attachCharacterLoreToCharacters,
 	isCharacterLoreEntryVisible
 } from "./LorebookBindingUtils"
+import { formatDate, formatHistoryDateKey } from "./utils"
 import { parseSplitChatPrompt } from "./utils"
 import type {
 	NonRagDiagnostics,
@@ -601,7 +602,8 @@ export class KeywordInfillEngine extends BaseInfillEngine {
 		// order (worldLore/characterLore/history entries all have it; chat
 		// messages don't, so they fall back to 0 and keep their relative order).
 		fillPool.sort((a, b) => {
-			if (b.score.total !== a.score.total) return b.score.total - a.score.total
+			if (b.score.total !== a.score.total)
+				return b.score.total - a.score.total
 			const posA = (a.payload as any).position ?? 0
 			const posB = (b.payload as any).position ?? 0
 			return posA - posB
@@ -1641,25 +1643,6 @@ function computeLastRefRecency(entryId: number, ctx: ScoringContext): number {
 	if (lastIdx == null) return 0
 	const totalMessages = ctx.allMessages.length
 	return Math.exp(-0.01 * (totalMessages - lastIdx))
-}
-
-function formatHistoryDateKey(entry: {
-	year?: number
-	month?: number | null
-	day?: number | null
-}): string {
-	return formatDate(entry.year ?? 0, entry.month ?? null, entry.day ?? null)
-}
-
-function formatDate(
-	year: number,
-	month: number | null | undefined,
-	day: number | null | undefined
-): string {
-	let key = String(year)
-	if (month != null) key += `-${String(month).padStart(2, "0")}`
-	if (day != null) key += `-${String(day).padStart(2, "0")}`
-	return key
 }
 
 function zeroScoreWith(

@@ -75,6 +75,7 @@ import { db } from "$lib/server/db"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { BaseInfillEngine } from "./BaseInfillEngine"
+import { formatMessageForQuery } from "./ragQuery"
 import { PRIORITY_SCORE_BONUS } from "./KeywordInfillEngine"
 import {
 	MAX_GRAPH_PAIRS,
@@ -186,51 +187,6 @@ function mmrRerank(items: ScoredRagItem[]): ScoredRagItem[] {
 	return selected
 }
 
-/**
- * Format a chat message for query embedding, including speaker attribution.
- */
-function formatMessageForQuery(
-	msg: SelectChatMessage,
-	chat: BasePromptChat
-): string {
-	// Active participants first, same active/removed split as
-	// ChatMessageProcessor.processItem — a removed participant's past
-	// messages still need a speaker name for RAG query embedding, so fall
-	// back to the separately-supplied removed list, then the removedAt-time
-	// name snapshot, before giving up to msg.role/"Unknown".
-	let char = (chat.chatCharacters as any[])?.find(
-		(cc: any) => cc.character?.id === msg.characterId
-	)?.character
-	let persona = (chat.chatPersonas as any[])?.find(
-		(cp: any) => cp.persona?.id === msg.personaId
-	)?.persona
-	let removedName: string | undefined
-	if (!char && msg.characterId) {
-		const removedCC = (chat.removedChatCharacters as any[])?.find(
-			(cc: any) => cc.characterId === msg.characterId
-		)
-		char = removedCC?.character
-		removedName ??= removedCC?.removedName ?? undefined
-	}
-	if (!persona && msg.personaId) {
-		const removedCP = (chat.removedChatPersonas as any[])?.find(
-			(cp: any) => cp.personaId === msg.personaId
-		)
-		persona = removedCP?.persona
-		removedName ??= removedCP?.removedName ?? undefined
-	}
-	const nickname = (char as any)?.nickname
-	const speakerName =
-		nickname ||
-		char?.name ||
-		persona?.name ||
-		removedName ||
-		msg.role ||
-		"Unknown"
-	const cleanContent = (msg.content ?? "").replace(/^\*+|\*+$/gm, "").trim()
-	return `[${speakerName}]: ${cleanContent}`
-}
-
 // ─── Engine ───────────────────────────────────────────────────────────────────
 
 export class RagInfillEngine extends BaseInfillEngine {
@@ -332,9 +288,7 @@ export class RagInfillEngine extends BaseInfillEngine {
 					| SelectCharacterLoreEntry[]
 					| undefined
 				const charLoreEntryById = chatLorebookCharLoreEntries
-					? new Map(
-							chatLorebookCharLoreEntries.map((e) => [e.id, e])
-						)
+					? new Map(chatLorebookCharLoreEntries.map((e) => [e.id, e]))
 					: undefined
 
 				// Fetched once and reused for every query embedding below
@@ -461,7 +415,10 @@ export class RagInfillEngine extends BaseInfillEngine {
 					// RAG's pure similarity ranking. worldLore/characterLore only
 					// (historyEntries has no priority column, same as Keyword mode).
 					const chatLorebook = (this.chat as any).lorebook as
-						| { worldLoreEntries?: any[]; characterLoreEntries?: any[] }
+						| {
+								worldLoreEntries?: any[]
+								characterLoreEntries?: any[]
+						  }
 						| undefined
 					for (const item of scored) {
 						if (
@@ -476,7 +433,8 @@ export class RagInfillEngine extends BaseInfillEngine {
 						const entry = pool?.find((e: any) => e.id === item.id)
 						const tier = (entry?.priority ?? 1) - 1
 						if (tier > 0) {
-							item.score = item.score + tier * PRIORITY_SCORE_BONUS
+							item.score =
+								item.score + tier * PRIORITY_SCORE_BONUS
 						}
 					}
 
@@ -635,7 +593,11 @@ export class RagInfillEngine extends BaseInfillEngine {
 			(e: any) =>
 				e.constant === true &&
 				e.enabled !== false &&
-				isCharacterLoreEntryVisible(e, this.chat, this.currentCharacterId)
+				isCharacterLoreEntryVisible(
+					e,
+					this.chat,
+					this.currentCharacterId
+				)
 		)) {
 			pinnedCharLoreArr.push(entry)
 			includedCharLoreIds.add(entry.id)
@@ -789,7 +751,9 @@ export class RagInfillEngine extends BaseInfillEngine {
 					personaId: schema.lorebookBindings.personaId
 				})
 				.from(schema.lorebookBindings)
-				.where(inArray(schema.lorebookBindings.id, Array.from(nodeIdSet)))
+				.where(
+					inArray(schema.lorebookBindings.id, Array.from(nodeIdSet))
+				)
 			const nodeInfoMap = new Map(
 				nodeRows.map((n) => [
 					n.id,

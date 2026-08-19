@@ -106,3 +106,34 @@ export function hasLorebookEntries(
 		Array.isArray(lorebook.historyEntries)
 	)
 }
+
+/**
+ * A history entry's date, as the key a template sees.
+ *
+ * `2024`, `2024-03`, `2024-03-07` — the parts that exist, and no placeholders
+ * for the ones that do not, because a lorebook that only records a year should
+ * not render as though it recorded a day.
+ *
+ * Lifted out of `KeywordInfillEngine`, where it was private, so the pipeline's
+ * assembler produces the same keys rather than a second formatting of the same
+ * data. Two implementations of a date key is two sets of `{{#if}}` branches in
+ * a user's story string that quietly stop matching.
+ */
+export function formatDate(
+	year: number,
+	month: number | null | undefined,
+	day: number | null | undefined
+): string {
+	let key = String(year)
+	if (month != null) key += `-${String(month).padStart(2, "0")}`
+	if (day != null) key += `-${String(day).padStart(2, "0")}`
+	return key
+}
+
+export function formatHistoryDateKey(entry: {
+	year?: number
+	month?: number | null
+	day?: number | null
+}): string {
+	return formatDate(entry.year ?? 0, entry.month ?? null, entry.day ?? null)
+}

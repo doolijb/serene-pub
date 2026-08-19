@@ -14,6 +14,111 @@ import {
 import { backfillMissingBindingNames } from "$lib/server/utils/characterBindingSync"
 import { backfillRelationshipHistoryEntries } from "$lib/server/utils/graphBackfill"
 
+/**
+ * The context template every install starts with.
+ *
+ * Extracted from the seed array below so it can be *referenced*. A template that
+ * exists only as a string literal inside an array cannot be tested against — and
+ * the parity corpus was comparing prompts rendered by a template written for the
+ * corpus, which missed a whole class of difference: this one renders the
+ * post-history reminder *inside* the message loop, and a flat template cannot
+ * express a position at all.
+ *
+ * The seed below uses this constant, so the two cannot drift.
+ */
+export const DEFAULT_CONTEXT_TEMPLATE = `{{#systemBlock}}
+{{#if currentDate}}
+The current date in the story is {{{currentDate}}}.
+{{/if}}
+
+{{#if instructions}}
+Instructions:
+"""
+{{{instructions}}}
+"""
+{{/if}}
+
+{{#if characters}}
+Assistant Characters (AI-controlled):
+\`\`\`json
+{{{characters}}}
+\`\`\`
+{{/if}}
+
+{{#if personas}}
+User Characters (player-controlled):
+\`\`\`json
+{{{personas}}}
+\`\`\`
+{{/if}}
+
+{{#if scenario}}
+Scenario:
+"""
+{{{scenario}}}
+"""
+{{/if}}
+
+{{#if worldLore}}
+World lore: 
+\`\`\`json
+{{{worldLore}}}
+\`\`\`
+{{/if}}
+
+{{#if history}}
+Story history:
+\`\`\`json
+{{{history}}}
+\`\`\`
+{{/if}}
+
+{{#if speakerRelationships}}
+Your relationships:
+\`\`\`json
+{{{speakerRelationships}}}
+\`\`\`
+{{/if}}
+
+{{/systemBlock}}
+
+{{#each chatMessages as |chatMessage msgIndex|}}
+{{#with ../postHistory}}
+{{#if (and (eq msgIndex targetIndex) hasContent)}}
+{{#systemBlock}}
+{{#if instructions}}
+Response reminder:
+\`\`\`text
+{{{instructions}}}
+\`\`\`
+{{/if}}
+{{#if charInstructions}}
+Character reminder:
+\`\`\`text
+{{{charInstructions}}}
+\`\`\`
+{{/if}}
+{{#if exampleDialogue}}
+Example dialogue:
+\`\`\`text
+{{{exampleDialogue}}}
+\`\`\`
+{{/if}}
+{{/systemBlock}}
+{{/if}}
+{{/with}}
+{{#if (eq role "assistant")}}
+{{#assistantBlock}}
+{{{name}}}: {{{message}}}
+{{/assistantBlock}}
+{{/if}}
+{{#if (eq role "user")}}
+{{#userBlock}}
+{{{name}}}: {{{message}}}
+{{/userBlock}}
+{{/if}}
+{{/each}}`
+
 export async function sync() {
 	console.log("Syncing database defaults...")
 
@@ -212,98 +317,7 @@ export async function sync() {
 				seedKey: "context-default",
 				name: "Default",
 				isImmutable: true,
-				template: `{{#systemBlock}}
-{{#if currentDate}}
-The current date in the story is {{{currentDate}}}.
-{{/if}}
-
-{{#if instructions}}
-Instructions:
-"""
-{{{instructions}}}
-"""
-{{/if}}
-
-{{#if characters}}
-Assistant Characters (AI-controlled):
-\`\`\`json
-{{{characters}}}
-\`\`\`
-{{/if}}
-
-{{#if personas}}
-User Characters (player-controlled):
-\`\`\`json
-{{{personas}}}
-\`\`\`
-{{/if}}
-
-{{#if scenario}}
-Scenario:
-"""
-{{{scenario}}}
-"""
-{{/if}}
-
-{{#if worldLore}}
-World lore: 
-\`\`\`json
-{{{worldLore}}}
-\`\`\`
-{{/if}}
-
-{{#if history}}
-Story history:
-\`\`\`json
-{{{history}}}
-\`\`\`
-{{/if}}
-
-{{#if speakerRelationships}}
-Your relationships:
-\`\`\`json
-{{{speakerRelationships}}}
-\`\`\`
-{{/if}}
-
-{{/systemBlock}}
-
-{{#each chatMessages as |chatMessage msgIndex|}}
-{{#with ../postHistory}}
-{{#if (and (eq msgIndex targetIndex) hasContent)}}
-{{#systemBlock}}
-{{#if instructions}}
-Response reminder:
-\`\`\`text
-{{{instructions}}}
-\`\`\`
-{{/if}}
-{{#if charInstructions}}
-Character reminder:
-\`\`\`text
-{{{charInstructions}}}
-\`\`\`
-{{/if}}
-{{#if exampleDialogue}}
-Example dialogue:
-\`\`\`text
-{{{exampleDialogue}}}
-\`\`\`
-{{/if}}
-{{/systemBlock}}
-{{/if}}
-{{/with}}
-{{#if (eq role "assistant")}}
-{{#assistantBlock}}
-{{{name}}}: {{{message}}}
-{{/assistantBlock}}
-{{/if}}
-{{#if (eq role "user")}}
-{{#userBlock}}
-{{{name}}}: {{{message}}}
-{{/userBlock}}
-{{/if}}
-{{/each}}`
+				template: DEFAULT_CONTEXT_TEMPLATE
 			}
 		]
 

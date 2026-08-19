@@ -13,6 +13,7 @@ import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 
 // Import modular components
 import { InterpolationEngine } from "./InterpolationEngine"
+import * as F from "./contextFields"
 import { KeywordInfillEngine } from "./KeywordInfillEngine"
 import { RagInfillEngine } from "./RagInfillEngine"
 import type {
@@ -109,84 +110,66 @@ export class PromptBuilder {
 	}
 
 	// --- Context builders ---
+	// The rules themselves live in `contextFields.ts` so the pipeline path can
+	// call them without constructing a builder. These stay as the methods the
+	// rest of this class and its callers already use — same names, same
+	// signatures, one implementation underneath.
 	contextBuildCharacterDescription(character: SelectCharacter): string {
-		return character.description
+		return F.characterDescription(character)
 	}
 	contextBuildCharacterPersonality(
 		character: SelectCharacter
 	): string | undefined {
-		if (!character?.personality) return undefined
-		return character.personality
+		return F.characterPersonality(character)
 	}
 	contextBuildCharacterScenario(
 		character: SelectCharacter | null
 	): string | undefined {
-		if (!character?.scenario) return undefined
-		return character.scenario
+		return F.characterScenario(character)
 	}
 	contextBuildPersonaDescription(persona: any): string {
-		return persona.description
+		return F.personaDescription(persona)
 	}
 	contextBuildSystemPrompt(): string {
-		return this.promptConfig.systemPrompt
+		return F.systemPrompt(this.promptConfig as F.PromptConfigFields)
 	}
 	contextBuildCharacterExampleDialogues(
 		character: SelectCharacter | null
 	): string | undefined {
-		if (
-			!character?.exampleDialogues ||
-			!Array.isArray(character.exampleDialogues)
-		)
-			return undefined
-		const validDialogues = character.exampleDialogues.filter(Boolean)
-		if (validDialogues.length === 0) return undefined
-		// Select 1 random example dialogue
-		const randomIndex = Math.floor(Math.random() * validDialogues.length)
-		return validDialogues[randomIndex]
+		return F.characterExampleDialogue(character)
 	}
 	contextBuildPostHistoryInstructions(
 		character: SelectCharacter | null
 	): string | undefined {
-		if (character?.postHistoryInstructions)
-			return character.postHistoryInstructions
-		// No current character means no-perspective (Narrator) mode — fall
-		// back to the narrator config's own postHistoryInstructions field.
-		// this.promptConfig is actually the narratorPromptConfigs row at
-		// runtime here (see the narratorName cast above for why), which
-		// carries this field even though the declared type doesn't.
-		if (!character) {
-			return (
-				(this.promptConfig as { postHistoryInstructions?: string })
-					.postHistoryInstructions || undefined
-			)
-		}
-		return undefined
+		return F.postHistoryInstructions(
+			this.promptConfig as F.PromptConfigFields,
+			character
+		)
 	}
 	/** The prompt config's own reinforcement text — works uniformly for
 	 * character AND narrator prompt configs, both of which carry this
 	 * column. Distinct from contextBuildCharPostHistory below, which reads
 	 * only the character's own authored field with no config fallback. */
 	contextBuildPromptPostHistoryInstructions(): string | undefined {
-		return (
-			(this.promptConfig as { postHistoryInstructions?: string })
-				.postHistoryInstructions || undefined
+		return F.promptPostHistoryInstructions(
+			this.promptConfig as F.PromptConfigFields
 		)
 	}
 	contextBuildCharPostHistory(
 		character: SelectCharacter | null
 	): string | undefined {
-		return character?.postHistoryInstructions || undefined
+		return F.charPostHistory(character)
 	}
 	contextBuildCharacterName(character: SelectCharacter): string {
-		return character.name
+		return F.characterName(character)
 	}
 	contextBuildCharacterNickname(
 		character: SelectCharacter
 	): string | undefined {
-		return character.nickname || undefined
+		return F.characterNickname(character)
 	}
 	contextBuildPersonaName(persona: SelectPersona): string {
-		return persona.name
+		return F.personaName(persona)
 	}
 
 	compileCharacterData(
