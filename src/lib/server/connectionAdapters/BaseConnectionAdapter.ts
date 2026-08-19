@@ -179,7 +179,46 @@ export abstract class BaseConnectionAdapter {
 		})
 	}
 
+	/**
+	 * A prompt built elsewhere, to be sent as-is.
+	 *
+	 * Today an adapter builds its own prompt and sends it in one call, which
+	 * means there is no moment between "the payload exists" and "the payload was
+	 * sent" — and that moment is the entire debug preview (16 §7). The pipeline
+	 * separates the two: a Task allocates, a Provider dispatches.
+	 *
+	 * This is the seam between those worlds, deliberately placed at the one
+	 * point all seven adapters funnel through rather than edited into each of
+	 * them. When it is set, `compilePrompt()` returns it instead of building —
+	 * so the legacy path is unchanged by construction, and the pipeline path
+	 * reaches exactly the same `generate()`.
+	 */
+	private injectedPrompt?: PromptBuilderCompiledPrompt
+
+	/**
+	 * Dispatch-only mode: send this payload, build nothing.
+	 *
+	 * Returns the adapter so a Provider binding reads as one expression. The
+	 * payload is the *same shape* the adapter would have produced itself, which
+	 * is what makes parity checkable rather than asserted — a pipeline run and a
+	 * legacy run differ only in who built the prompt.
+	 */
+	withCompiledPrompt(prompt: PromptBuilderCompiledPrompt): this {
+		this.injectedPrompt = prompt
+		return this
+	}
+
+	/** Whether this adapter is being used as a Provider rather than end to end. */
+	get isDispatchOnly(): boolean {
+		return this.injectedPrompt !== undefined
+	}
+
 	async compilePrompt(args: {}): Promise<PromptBuilderCompiledPrompt> {
+		// Before any mode branching: a caller that supplied a payload is asking
+		// for dispatch, and summarizer/narrator mode are decisions that were
+		// already made upstream when that payload was built.
+		if (this.injectedPrompt) return this.injectedPrompt
+
 		this.promptBuilder.tokenLimit = await this.getContextTokenLimit()
 
 		if (this.isSummarizerMode) {

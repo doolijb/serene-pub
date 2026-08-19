@@ -366,6 +366,18 @@ export const connectionsRelations = relations(connections, () => ({}))
 
 export const contextConfigs = pgTable("context_configs", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+	/**
+	 * Which template language `template` is written in — a registry id, not a
+	 * hardcoded assumption (12 §2a).
+	 *
+	 * NULL means core's default, which is Handlebars. Stored rather than assumed
+	 * so an extension can register its own engine and supply the renderer for
+	 * it: the schema describes what the template *is*, and core resolves who can
+	 * render it at run time. Without this column, "core renders Handlebars" is a
+	 * fact buried in code, and a plugin shipping a different assembler would
+	 * have nowhere to say so.
+	 */
+	engine: text("engine"),
 	/** Stable seed identity, e.g. "sampling-default". NULL for user-created
 	 *  rows — see db/defaults.ts for why matching on id was unsafe. */
 	seedKey: text("seed_key").unique(),
@@ -1126,6 +1138,31 @@ export const worldLoreEntries = pgTable(
 		name: text("name").notNull(),
 		category: text("category"),
 		keys: text("keys").notNull().default(""),
+		/**
+		 * How this entry may be retrieved (13 §10a / DECOMPOSITION §4).
+		 *
+		 * `keyword` — only the keyword scan surfaces it.
+		 * `rag` — vector search surfaces it, **falling back to keyword when no
+		 *   embeddings are available**, because the alternative is retrieving
+		 *   nothing and reading as "the bot forgot my lore".
+		 * `both` — both arms may surface it and the combined ranker decides.
+		 *
+		 * NULL means `rag`, the default. Nullable rather than defaulted so an
+		 * entry that has never been touched is distinguishable from one a user
+		 * deliberately set to the default — which is what makes a future change
+		 * of default safe to apply to the first group and not the second.
+		 */
+		retrievalStrategy: text("retrieval_strategy"),
+		/**
+		 * How this entry's keys are matched: `substring` (today's behaviour),
+		 * `word`, or `regex`.
+		 *
+		 * NULL falls back to `useRegex`, which is why that column stays. Keys
+		 * match by substring today — `art` fires on "hearth" — so the default
+		 * cannot change before parity without changing what every existing
+		 * lorebook retrieves.
+		 */
+		matchMode: text("match_mode"),
 		useRegex: boolean("use_regex").default(false),
 		caseSensitive: boolean("case_sensitive").notNull().default(false),
 		content: text("content").notNull().default(""),
@@ -1176,6 +1213,31 @@ export const characterLoreEntries = pgTable(
 		),
 		name: text("name").notNull(),
 		keys: text("keys").notNull().default(""),
+		/**
+		 * How this entry may be retrieved (13 §10a / DECOMPOSITION §4).
+		 *
+		 * `keyword` — only the keyword scan surfaces it.
+		 * `rag` — vector search surfaces it, **falling back to keyword when no
+		 *   embeddings are available**, because the alternative is retrieving
+		 *   nothing and reading as "the bot forgot my lore".
+		 * `both` — both arms may surface it and the combined ranker decides.
+		 *
+		 * NULL means `rag`, the default. Nullable rather than defaulted so an
+		 * entry that has never been touched is distinguishable from one a user
+		 * deliberately set to the default — which is what makes a future change
+		 * of default safe to apply to the first group and not the second.
+		 */
+		retrievalStrategy: text("retrieval_strategy"),
+		/**
+		 * How this entry's keys are matched: `substring` (today's behaviour),
+		 * `word`, or `regex`.
+		 *
+		 * NULL falls back to `useRegex`, which is why that column stays. Keys
+		 * match by substring today — `art` fires on "hearth" — so the default
+		 * cannot change before parity without changing what every existing
+		 * lorebook retrieves.
+		 */
+		matchMode: text("match_mode"),
 		useRegex: boolean("use_regex").default(false),
 		caseSensitive: boolean("case_sensitive").notNull().default(false),
 		content: text("content").notNull().default(""),
@@ -1228,6 +1290,31 @@ export const historyEntries = pgTable(
 		month: integer("month"), // Default to January
 		day: integer("day"), // Default to 1
 		keys: text("keys").notNull().default(""),
+		/**
+		 * How this entry may be retrieved (13 §10a / DECOMPOSITION §4).
+		 *
+		 * `keyword` — only the keyword scan surfaces it.
+		 * `rag` — vector search surfaces it, **falling back to keyword when no
+		 *   embeddings are available**, because the alternative is retrieving
+		 *   nothing and reading as "the bot forgot my lore".
+		 * `both` — both arms may surface it and the combined ranker decides.
+		 *
+		 * NULL means `rag`, the default. Nullable rather than defaulted so an
+		 * entry that has never been touched is distinguishable from one a user
+		 * deliberately set to the default — which is what makes a future change
+		 * of default safe to apply to the first group and not the second.
+		 */
+		retrievalStrategy: text("retrieval_strategy"),
+		/**
+		 * How this entry's keys are matched: `substring` (today's behaviour),
+		 * `word`, or `regex`.
+		 *
+		 * NULL falls back to `useRegex`, which is why that column stays. Keys
+		 * match by substring today — `art` fires on "hearth" — so the default
+		 * cannot change before parity without changing what every existing
+		 * lorebook retrieves.
+		 */
+		matchMode: text("match_mode"),
 		useRegex: boolean("use_regex").default(false),
 		caseSensitive: boolean("case_sensitive").notNull().default(false),
 		content: text("content").notNull().default(""),

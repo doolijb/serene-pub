@@ -30,6 +30,7 @@ import {
 type Db = {
 	insert: any
 	select: any
+	update: any
 	delete: any
 	transaction: any
 }

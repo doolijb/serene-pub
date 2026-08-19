@@ -182,11 +182,41 @@ describe("running a pipeline in core", () => {
 		})
 
 		expect(receipt.outcome).toBe("halt")
+		// Assemble is bound now, so the run gets one node further and stops at the
+		// Provider. The message says what is missing and what it is waiting on,
+		// because for the next two releases this is a state the app is
+		// legitimately in.
 		expect(receipt.haltNodeKey).toBe("prompt")
-		// The message says what is missing and what it is waiting on, because for
-		// the next two releases this is a state the app is legitimately in.
-		expect(receipt.haltReason).toMatch(/assemble is not bound yet/)
-		expect(receipt.haltReason).toMatch(/parity corpus/)
+		expect(receipt.haltReason).toMatch(/assemble has no template/)
+	})
+
+	it("assemble halts legibly when the context config did not resolve", async () => {
+		// A missing template is a configuration problem, not a crash, and the
+		// difference decides whether a user opens settings or files a bug.
+		const { coreBindings: bindings } = await import("./bindings")
+		const result: any = await bindings()["core:task/assemble@2"]!(
+			{ decisions: [], budget: { total: 100 } },
+			{} as any
+		)
+		expect(result.kind).toBe("halt")
+		expect(result.reason).toMatch(/nothing to render into/)
+	})
+
+	it("assemble renders once a template resolves", async () => {
+		const { coreBindings: bindings } = await import("./bindings")
+		const result: any = await bindings()["core:task/assemble@2"]!(
+			{
+				template: {
+					source: "{{#each chatMessages}}{{this.content}}{{/each}}"
+				},
+				decisions: [],
+				messages: [{ id: 1, role: "user", content: "hello" }],
+				budget: { total: 100 }
+			},
+			{} as any
+		)
+		expect(result.kind).toBe("ok")
+		expect(result.value.context.rendered).toBe("hello")
 	})
 
 	it("replay reproduces the run without touching the database again", async () => {

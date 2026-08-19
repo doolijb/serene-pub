@@ -368,6 +368,40 @@ if (building) {
 // rows only), so running it unconditionally here is safe.
 if (!building) await sync()
 
+/**
+ * Pipeline tables: the type registry, and core's own published specs.
+ *
+ * Separate from `sync()` above because the two are different kinds of thing. The
+ * seeded rows there are user-editable content, upserted so a user's edits
+ * survive; a published spec version is immutable by construction — it is what a
+ * run resolved against — so it is published once per version and never rewritten.
+ *
+ * **A failure here does not stop the app.** A type-registry conflict means
+ * pipelines cannot run safely on this build; it does not mean the chat cannot
+ * start, and taking an instance down over a subsystem nobody has opted into yet
+ * would be the wrong trade. It is logged, and the report carries the reason for
+ * a diagnostics screen to show.
+ */
+if (!building) {
+	try {
+		const { bootstrapPipelines } = await import(
+			"$lib/server/pipelines/bootstrap"
+		)
+		const report = await bootstrapPipelines(db)
+		if (report.conflict)
+			console.warn(
+				"[pipelines] type registry conflict — pipelines are disabled on " +
+					"this build until it is resolved:\n" +
+					report.conflict
+			)
+	} catch (err) {
+		console.warn(
+			"[pipelines] bootstrap failed, pipelines unavailable:",
+			err
+		)
+	}
+}
+
 // Mark any downloads that were in-flight when the server last stopped as errored
 db.update(schema.koboldCppModels)
 	.set({ status: "error", errorMessage: "Server restarted during download" })

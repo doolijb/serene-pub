@@ -666,6 +666,20 @@
       "when": 1787043942014,
       "tag": "0094_sparkling_blink",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1787054820295,
+      "tag": "0095_curved_chat",
+      "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1787093378558,
+      "tag": "0096_daffy_lady_bullseye",
+      "breakpoints": true
     }
   ]
 }
