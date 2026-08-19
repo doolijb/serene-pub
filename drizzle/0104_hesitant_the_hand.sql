@@ -1,0 +1,1 @@
+ALTER TABLE "system_settings" ADD COLUMN "legacy_prompt_configs_visible" boolean DEFAULT true NOT NULL;

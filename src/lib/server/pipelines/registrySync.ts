@@ -44,7 +44,36 @@ export interface SyncResult {
  * Deliberately excludes i18n: renaming a node's display label is not a change
  * to its contract, and treating it as one would make every translation update
  * a version bump.
+ *
+ * ## Slot declarations count, their labels do not
+ *
+ * The row now stores the whole `SlotDecl` rather than a list of slot names, so
+ * that a form can be generated from rows (see `RegistryEntry.slots`). That makes
+ * a question the name list never raised: is changing a parameter's default, or
+ * its range, or its enum options, a change to the type's contract?
+ *
+ * It is. A spec that did not override `topK` gets the declared default, so moving
+ * that default changes what an untouched spec does — which is precisely the
+ * silent behaviour change pinning exists to prevent. Ranges and enums are the
+ * same argument one step removed: they decide which stored values are still
+ * legal.
+ *
+ * The `i18n` inside a declaration is excluded for the same reason it is excluded
+ * at the type level, and it has to be stripped *recursively* — a param label sits
+ * two levels down, and hashing it would make translating "Top K" into German a
+ * type version bump.
  */
+const stripI18n = (v: unknown): unknown => {
+	if (Array.isArray(v)) return v.map(stripI18n)
+	if (v && typeof v === "object")
+		return Object.fromEntries(
+			Object.entries(v as Record<string, unknown>)
+				.filter(([k]) => k !== "i18n")
+				.map(([k, val]) => [k, stripI18n(val)])
+		)
+	return v
+}
+
 const sortDeep = (v: unknown): unknown => {
 	if (Array.isArray(v)) return v.map(sortDeep)
 	if (v && typeof v === "object")
@@ -60,7 +89,7 @@ export function typeContentHash(entry: RegistryEntry): string {
 	const material = {
 		kind: entry.kind,
 		ports: entry.ports,
-		slots: entry.slots,
+		slots: stripI18n(entry.slots),
 		effects: entry.effects,
 		causesEvent: entry.causesEvent,
 		public: entry.public
@@ -123,10 +152,16 @@ export async function syncTypeRegistry(
 				version: entry.version,
 				kind: entry.kind,
 				ownerPluginId: opts.ownerPluginId ?? null,
+				// Core's own types run in-process; anything a plugin owns does
+				// not, ever. An extension hook inside Serene Pub's process cannot
+				// be stopped, so a runaway loop takes the application down rather
+				// than one node (13 §7h). Written from ownership rather than from
+				// the plugin's own claim, so a manifest cannot ask for otherwise.
+				transport: opts.ownerPluginId != null ? "process" : "node",
 				ports: entry.ports,
-				slots: Object.fromEntries(
-					(entry.slots ?? []).map((s) => [s, true])
-				),
+				// The declarations verbatim. A UI that has to render a form for a
+				// plugin's parameters reads this row; it never loads the plugin.
+				slots: entry.slots ?? {},
 				effects: entry.effects ?? null,
 				causesEvent: entry.causesEvent ?? null,
 				isPublic: entry.public ?? false,
@@ -176,7 +211,7 @@ export async function readTypeRegistry(db: Db): Promise<RegistryEntry[]> {
 		version: r.version,
 		kind: r.kind,
 		ports: r.ports,
-		slots: Object.keys(r.slots ?? {}),
+		slots: r.slots ?? {},
 		effects: r.effects ?? undefined,
 		causesEvent: r.causesEvent ?? undefined,
 		public: r.isPublic,

@@ -1,0 +1,1 @@
+ALTER TABLE "system_settings" ADD COLUMN "pipelines_enabled" boolean DEFAULT false NOT NULL;

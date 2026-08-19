@@ -1,0 +1,3 @@
+ALTER TABLE "pipeline_config_selections" ALTER COLUMN "preset_slug" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "pipeline_config_selections" ADD COLUMN "config_id" integer;--> statement-breakpoint
+ALTER TABLE "pipeline_config_selections" ADD CONSTRAINT "pipeline_config_selections_config_id_pipeline_configs_id_fk" FOREIGN KEY ("config_id") REFERENCES "public"."pipeline_configs"("id") ON DELETE set null ON UPDATE no action;

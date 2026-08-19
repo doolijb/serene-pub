@@ -2024,6 +2024,18 @@ export const systemSettings = pgTable("system_settings", {
 	lockSamplingConfig: boolean("lock_sampling_config")
 		.notNull()
 		.default(false),
+	/**
+	 * ⚠ Superseded by `pipeline_config_selections` at instance scope.
+	 *
+	 * One column per namespace is the shape that cannot survive an extension
+	 * shipping its own pipeline — there is no column for a namespace core did not
+	 * know about, and adding one is a core migration. A selection row keys on the
+	 * spec, so every namespace works including a plugin's, and the same table
+	 * covers user and chat scope instead of only this one.
+	 *
+	 * Kept, not dropped: the legacy run path still reads these, and they are what
+	 * the config migration reads *from*. Remove them once nothing does.
+	 */
 	defaultContextConfigId: integer("default_context_config_id").references(
 		() => contextConfigs.id,
 		{
@@ -2031,6 +2043,18 @@ export const systemSettings = pgTable("system_settings", {
 		}
 	),
 	lockContextConfig: boolean("lock_context_config").notNull().default(false),
+	/**
+	 * ⚠ Superseded by `pipeline_config_selections` at instance scope.
+	 *
+	 * One column per namespace is the shape that cannot survive an extension
+	 * shipping its own pipeline — there is no column for a namespace core did not
+	 * know about, and adding one is a core migration. A selection row keys on the
+	 * spec, so every namespace works including a plugin's, and the same table
+	 * covers user and chat scope instead of only this one.
+	 *
+	 * Kept, not dropped: the legacy run path still reads these, and they are what
+	 * the config migration reads *from*. Remove them once nothing does.
+	 */
 	defaultPromptConfigId: integer("default_prompt_config_id").references(
 		() => promptConfigs.id,
 		{
@@ -2038,6 +2062,18 @@ export const systemSettings = pgTable("system_settings", {
 		}
 	),
 	lockPromptConfig: boolean("lock_prompt_config").notNull().default(false),
+	/**
+	 * ⚠ Superseded by `pipeline_config_selections` at instance scope.
+	 *
+	 * One column per namespace is the shape that cannot survive an extension
+	 * shipping its own pipeline — there is no column for a namespace core did not
+	 * know about, and adding one is a core migration. A selection row keys on the
+	 * spec, so every namespace works including a plugin's, and the same table
+	 * covers user and chat scope instead of only this one.
+	 *
+	 * Kept, not dropped: the legacy run path still reads these, and they are what
+	 * the config migration reads *from*. Remove them once nothing does.
+	 */
 	defaultNarratorPromptConfigId: integer(
 		"default_narrator_prompt_config_id"
 	).references(() => narratorPromptConfigs.id, { onDelete: "set null" }),
@@ -2053,15 +2089,101 @@ export const systemSettings = pgTable("system_settings", {
 	contextDebuggingEnabled: boolean("context_debugging_enabled")
 		.notNull()
 		.default(false),
+	/**
+	 * Compile prompts through the pipeline instead of `PromptBuilder`.
+	 *
+	 * Off by default and deliberately so: the two paths are byte-identical
+	 * across the parity corpus, which is a strong claim about the cases someone
+	 * wrote fixtures for and says nothing about a lorebook nobody imagined.
+	 * `npm run pipeline:compare` answers that for a given instance, and this
+	 * flag is what an admin flips once it has.
+	 *
+	 * Only the *prompt* changes hands. Queueing, streaming, persistence, swipes
+	 * and thinking extraction stay with the code that already handles them —
+	 * the pipeline hands over a compiled payload at the one seam every adapter
+	 * funnels through, so everything downstream is untouched legacy code.
+	 */
+	/**
+	 * ⚠ Transitional, and **not a long-term choice an admin makes**.
+	 *
+	 * There is no legacy-versus-pipeline switch in the destination: pipelines
+	 * become the only path that compiles a reply. This gates the changeover
+	 * while the remaining specs are built, and comes out with the last of them.
+	 * Nothing new should branch on it.
+	 */
+	pipelinesEnabled: boolean("pipelines_enabled").notNull().default(false),
+	/**
+	 * Show the legacy Prompt Configs sidebar, read-only.
+	 *
+	 * The one toggle that survives the changeover. Configuration moves to the
+	 * pipeline view, but a user who spent a year tuning prompt configs needs to
+	 * be able to *read* what they had — during the migration to check it landed,
+	 * and afterwards to consult a wording they have not re-created yet.
+	 *
+	 * Defaults on, because the alternative is that upgrading hides a year of
+	 * someone's work behind a setting they do not know exists. The legacy tables
+	 * themselves go in 0.8.0; this is what keeps them legible until then.
+	 */
+	legacyPromptConfigsVisible: boolean("legacy_prompt_configs_visible")
+		.notNull()
+		.default(true),
+	/**
+	 * ⚠ Superseded by `pipeline_config_selections` at instance scope.
+	 *
+	 * One column per namespace is the shape that cannot survive an extension
+	 * shipping its own pipeline — there is no column for a namespace core did not
+	 * know about, and adding one is a core migration. A selection row keys on the
+	 * spec, so every namespace works including a plugin's, and the same table
+	 * covers user and chat scope instead of only this one.
+	 *
+	 * Kept, not dropped: the legacy run path still reads these, and they are what
+	 * the config migration reads *from*. Remove them once nothing does.
+	 */
 	defaultSummarizeWorldConfigId: integer(
 		"default_summarize_world_config_id"
 	).references(() => worldSummarizeConfigs.id, { onDelete: "set null" }),
+	/**
+	 * ⚠ Superseded by `pipeline_config_selections` at instance scope.
+	 *
+	 * One column per namespace is the shape that cannot survive an extension
+	 * shipping its own pipeline — there is no column for a namespace core did not
+	 * know about, and adding one is a core migration. A selection row keys on the
+	 * spec, so every namespace works including a plugin's, and the same table
+	 * covers user and chat scope instead of only this one.
+	 *
+	 * Kept, not dropped: the legacy run path still reads these, and they are what
+	 * the config migration reads *from*. Remove them once nothing does.
+	 */
 	defaultSummarizeCharacterConfigId: integer(
 		"default_summarize_character_config_id"
 	).references(() => characterSummarizeConfigs.id, { onDelete: "set null" }),
+	/**
+	 * ⚠ Superseded by `pipeline_config_selections` at instance scope.
+	 *
+	 * One column per namespace is the shape that cannot survive an extension
+	 * shipping its own pipeline — there is no column for a namespace core did not
+	 * know about, and adding one is a core migration. A selection row keys on the
+	 * spec, so every namespace works including a plugin's, and the same table
+	 * covers user and chat scope instead of only this one.
+	 *
+	 * Kept, not dropped: the legacy run path still reads these, and they are what
+	 * the config migration reads *from*. Remove them once nothing does.
+	 */
 	defaultSummarizeSceneConfigId: integer(
 		"default_summarize_scene_config_id"
 	).references(() => sceneSummarizeConfigs.id, { onDelete: "set null" }),
+	/**
+	 * ⚠ Superseded by `pipeline_config_selections` at instance scope.
+	 *
+	 * One column per namespace is the shape that cannot survive an extension
+	 * shipping its own pipeline — there is no column for a namespace core did not
+	 * know about, and adding one is a core migration. A selection row keys on the
+	 * spec, so every namespace works including a plugin's, and the same table
+	 * covers user and chat scope instead of only this one.
+	 *
+	 * Kept, not dropped: the legacy run path still reads these, and they are what
+	 * the config migration reads *from*. Remove them once nothing does.
+	 */
 	defaultGraphBuildConfigId: integer(
 		"default_graph_build_config_id"
 	).references(() => graphBuildConfigs.id, { onDelete: "set null" }),
@@ -2645,31 +2767,63 @@ export const pipelineNodes = pgTable(
  * Edges FK to nodes, so a dangling edge is structurally impossible rather than
  * a lint finding somebody has to run.
  */
-export const pipelineEdges = pgTable("pipeline_edges", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	specVersionId: integer("spec_version_id")
-		.notNull()
-		.references(() => pipelineSpecVersions.id, { onDelete: "cascade" }),
-	fromNodeId: integer("from_node_id")
-		.notNull()
-		.references(() => pipelineNodes.id, { onDelete: "cascade" }),
-	fromPort: text("from_port").notNull(),
-	toNodeId: integer("to_node_id")
-		.notNull()
-		.references(() => pipelineNodes.id, { onDelete: "cascade" }),
-	toPort: text("to_port").notNull(),
-	edgeShape: text("edge_shape"),
-	/**
-	 * Nullable rather than `NOT NULL DEFAULT false`, and that is not fussiness:
-	 * the document distinguishes "this edge does not stream" from "streaming was
-	 * never decided for this edge", and collapsing the two makes
-	 * `import(export(rows))` stop being the identity. Caught by C1 against real
-	 * rows, which is the only place it shows up.
-	 */
-	streaming: boolean("streaming"),
-	/** True when derived from chain order rather than an explicit reference. */
-	implicit: boolean("implicit")
-})
+export const pipelineEdges = pgTable(
+	"pipeline_edges",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		specVersionId: integer("spec_version_id")
+			.notNull()
+			.references(() => pipelineSpecVersions.id, { onDelete: "cascade" }),
+		/**
+		 * The node an edge leaves, where it leaves a node.
+		 *
+		 * Nullable since blocks became referenceable. A `map` or `async` block
+		 * publishes an aggregate result (`branch-results@1`), and a spec that
+		 * consumes it — a summarize pipeline merging its drafts, for instance —
+		 * writes an edge whose source is the **block**, not any node inside it. The
+		 * document model always allowed that; this table could not store it, so the
+		 * first spec to consume a map output failed at publish with a message about
+		 * a node that does not exist. See `from_block_id`.
+		 */
+		fromNodeId: integer("from_node_id").references(() => pipelineNodes.id, {
+			onDelete: "cascade"
+		}),
+		/**
+		 * The block an edge leaves, for a block's aggregate output.
+		 *
+		 * The block *id* rather than a row id, matching how `pipeline_nodes` and
+		 * every other block reference key on the authored id (F21): blocks belong to
+		 * a spec version, and an edge is re-resolved from the document on publish.
+		 */
+		fromBlockId: text("from_block_id"),
+		fromPort: text("from_port").notNull(),
+		toNodeId: integer("to_node_id")
+			.notNull()
+			.references(() => pipelineNodes.id, { onDelete: "cascade" }),
+		toPort: text("to_port").notNull(),
+		edgeShape: text("edge_shape"),
+		/**
+		 * Nullable rather than `NOT NULL DEFAULT false`, and that is not fussiness:
+		 * the document distinguishes "this edge does not stream" from "streaming was
+		 * never decided for this edge", and collapsing the two makes
+		 * `import(export(rows))` stop being the identity. Caught by C1 against real
+		 * rows, which is the only place it shows up.
+		 */
+		streaming: boolean("streaming"),
+		/** True when derived from chain order rather than an explicit reference. */
+		implicit: boolean("implicit")
+	},
+	(t) => [
+		// Exactly one source. Both set would give the resolver two answers for
+		// one edge; neither set is an edge from nothing, which is the state the
+		// old `NOT NULL` was there to prevent and which must stay prevented now
+		// that the column is nullable.
+		check(
+			"pipeline_edges_one_source_check",
+			sql`(${t.fromNodeId} IS NULL) <> (${t.fromBlockId} IS NULL)`
+		)
+	]
+)
 
 /** Compile-time fragment includes, expanded at publish into namespaced rows (16 §3a). */
 export const pipelineIncludes = pgTable("pipeline_includes", {
@@ -2727,12 +2881,526 @@ export const pipelinePresetValues = pgTable("pipeline_preset_values", {
 })
 
 /**
+ * What this instance's people have changed, per pipeline (12 §2, layers 1, 2 and 4).
+ *
+ * The preset table above holds layer 3 and travels **with the document**; this one
+ * holds the layers that belong to *this install* and must never leave it. 12 §3
+ * writes both as `node_overrides` rows discriminated by `scope_kind`, and that is
+ * the one place this schema deliberately disagrees.
+ *
+ * **The reason is export.** A preset is execution-affecting and round-trips (F4);
+ * a user's overrides are their configuration and, at chat scope, arguably their
+ * content. One table means every export is a `WHERE scope_kind <> …` away from
+ * shipping somebody's tuning — or, on the day someone forgets the predicate, their
+ * chat-scoped prompt edits — to whoever they sent a pipeline to. Two tables make
+ * *"does this travel with the document"* a structural fact rather than a clause
+ * somebody has to remember. Resolution reads both and projects preset rows in at
+ * `scopeKind: 'preset'`, so the five-layer chain is still one ordered walk (see
+ * `pipelines/config.ts`).
+ *
+ * **Keyed on the spec, not the spec version.** F21 makes node keys explicit and
+ * stable precisely so a user's tuning survives the pipeline being edited above it;
+ * hanging overrides off a version would throw all of it away on every publish,
+ * which is the failure F21 exists to prevent.
+ */
+export const pipelineNodeOverrides = pgTable(
+	"pipeline_node_overrides",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		specId: integer("spec_id")
+			.notNull()
+			.references(() => pipelineSpecs.id, { onDelete: "cascade" }),
+		/**
+		 * instance | user | chat. `preset` and `author` are absent on purpose —
+		 * they live in `pipeline_preset_values` and in the spec document, and a
+		 * row here claiming to be one of them would be a second, disagreeing copy.
+		 */
+		scopeKind: text("scope_kind").notNull(),
+		/**
+		 * The user or chat. Zero at instance scope rather than NULL: this column is
+		 * half of the uniqueness rule, and under Postgres' default NULL handling two
+		 * instance-scope rows for the same path would both be accepted — so "there is
+		 * one instance value for this path" would stop being true exactly where it
+		 * matters most.
+		 */
+		scopeId: integer("scope_id").notNull().default(0),
+		nodeKey: text("node_key").notNull(),
+		/** connection | sampling | template | prompts | params | settings (12 §2). */
+		slot: text("slot").notNull(),
+		/** The field within the slot. Empty string for whole-slot values. */
+		path: text("path").notNull().default(""),
+		value: json("value").$type<any>(),
+		/** Who wrote it — for the audit trail, never for resolution. */
+		updatedBy: integer("updated_by").references(() => users.id, {
+			onDelete: "set null"
+		}),
+		updatedAt: timestamp("updated_at").notNull().defaultNow()
+	},
+	(t) => [
+		uniqueIndex("pipeline_node_overrides_addr_idx").on(
+			t.specId,
+			t.scopeKind,
+			t.scopeId,
+			t.nodeKey,
+			t.slot,
+			t.path
+		),
+		index("pipeline_node_overrides_scope_idx").on(
+			t.specId,
+			t.scopeKind,
+			t.scopeId
+		),
+		// The closed set, in the database. `preset` and `author` reaching this
+		// table through any path would give the resolver two answers for one layer.
+		check(
+			"pipeline_node_overrides_scope_check",
+			sql`${t.scopeKind} IN ('instance', 'user', 'chat')`
+		)
+	]
+)
+
+/**
+ * Which preset a scope has selected (12 §3).
+ *
+ * **The selection stores a slug, not a preset id**, and that is the whole point of
+ * 12 §3b. Presets hang off a *spec version*; a selection that pointed at a row id
+ * would dangle the moment the pipeline published 1.1.0, and every user who had
+ * chosen "Lore-heavy" would silently land back on the default — on an upgrade,
+ * which is when they are least able to tell what changed. A slug is the identity
+ * that survives, so the same name resolves against whichever version is live.
+ *
+ * A slug that no longer exists resolves to nothing rather than to an error: 12 §3b
+ * retires presets instead of deleting them, and a selection pointing at a retired
+ * one keeps working. Falling back is what happens when it is genuinely gone.
+ */
+export const pipelineConfigSelections = pgTable(
+	"pipeline_config_selections",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		specId: integer("spec_id")
+			.notNull()
+			.references(() => pipelineSpecs.id, { onDelete: "cascade" }),
+		scopeKind: text("scope_kind").notNull(), // instance | user | chat
+		scopeId: integer("scope_id").notNull().default(0),
+		/**
+		 * The author preset a scope selected, where it selected one.
+		 *
+		 * Nullable since configs landed: a scope now selects a *config*, and
+		 * the two are different choices that can both be absent. Kept rather
+		 * than dropped because author presets still ship with documents and a
+		 * scope that had chosen one has not stopped choosing it.
+		 */
+		presetSlug: text("preset_slug"),
+		/**
+		 * The selected **config**, which is what a scope actually picks now.
+		 *
+		 * A row id here where `presetSlug` deliberately avoids one, and the
+		 * difference is not an inconsistency — it is the reason the slug rule
+		 * existed. Presets hang off a spec *version*, so an id would dangle the
+		 * moment a pipeline republished. Configs hang off the **spec**, survive
+		 * republishing by construction, and are renameable by their owner — which
+		 * makes a name the unstable identifier here and the id the stable one.
+		 *
+		 * `ON DELETE SET NULL` is load-bearing rather than tidy. NULL is defined
+		 * to mean *"fall back to the shipped default"*, so deleting a config a
+		 * scope had selected returns that scope to core's default automatically.
+		 * The alternative — a code path that checks whether the referenced row
+		 * still exists — is a check every read has to remember, and the first
+		 * read that forgets resolves a chat against nothing.
+		 */
+		configId: integer("config_id").references(() => pipelineConfigs.id, {
+			onDelete: "set null"
+		}),
+		updatedBy: integer("updated_by").references(() => users.id, {
+			onDelete: "set null"
+		}),
+		updatedAt: timestamp("updated_at").notNull().defaultNow()
+	},
+	(t) => [
+		uniqueIndex("pipeline_config_selections_addr_idx").on(
+			t.specId,
+			t.scopeKind,
+			t.scopeId
+		),
+		check(
+			"pipeline_config_selections_scope_check",
+			sql`${t.scopeKind} IN ('instance', 'user', 'chat')`
+		)
+	]
+)
+
+/**
+ * A **named, swappable configuration for one pipeline** (12 §3).
+ *
+ * Many per pipeline, one selected per scope. This is what the Prompt Configs
+ * sidebar becomes: "Chat Prompts", "Chat Prompts: Narrator", "Summarize: World"
+ * stop being six hand-written tables and become six *namespaces*, each holding
+ * as many configs as a user cares to keep.
+ *
+ * ## Why this is one generic pair and not seven concrete tables
+ *
+ * The tables it replaces store their steps as **flat columns** —
+ * `batch_system_prompt`, `synth_connection_id`,
+ * `perspective_sampling_config_id`. That shape enumerates a pipeline's nodes by
+ * hand, so adding a graph step is a migration, and an extension shipping its own
+ * pipeline cannot add columns to core's tables at all. A plugin namespace is
+ * therefore unreachable by construction, not merely unimplemented.
+ *
+ * Keyed per node instead, the same rows describe core's five graph steps and a
+ * plugin's three, with no schema change for either.
+ *
+ * ## Keyed on the spec, never on the spec version
+ *
+ * The natural instinct is a foreign key to `pipeline_nodes`, since that is where
+ * a node "is". It would be wrong, and expensively: node rows belong to a spec
+ * *version*, publishing is a pointer move to a new version (02 §3), and every
+ * config would therefore be orphaned by the next release. F21 makes node keys
+ * explicit and stable for exactly this reason — so a user's tuning survives the
+ * pipeline being edited above it. `pipeline_node_overrides` already keys this
+ * way, and the two must agree or the resolver reads one of them wrongly.
+ */
+export const pipelineConfigs = pgTable(
+	"pipeline_configs",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		specId: integer("spec_id")
+			.notNull()
+			.references(() => pipelineSpecs.id, { onDelete: "cascade" }),
+		/**
+		 * Stable seed identity for the rows core ships, NULL for anything a user
+		 * made — the same rule `db/defaults.ts` runs under, and for the same
+		 * reason: matching a seeded row on `id` overwrote a user's config once
+		 * already.
+		 */
+		seedKey: text("seed_key").unique(),
+		name: text("name").notNull(),
+		/** Core's shipped config: selectable and copyable, never edited in place. */
+		isImmutable: boolean("is_immutable").notNull().default(false),
+		/** The one a scope falls back to when it has selected nothing. */
+		isDefault: boolean("is_default").notNull().default(false),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at").notNull().defaultNow()
+	},
+	(t) => [
+		index("pipeline_configs_spec_idx").on(t.specId),
+		uniqueIndex("pipeline_configs_spec_name_idx").on(t.specId, t.name)
+	]
+)
+
+/**
+ * One tuned value inside a config, addressed exactly like every other layer.
+ *
+ * `(node_key, slot, path)` is the same address `pipeline_node_overrides` uses,
+ * which is what lets a config be projected into the five-layer chain as the
+ * `preset` layer rather than resolved by a second, parallel walk (12 §2).
+ *
+ * ## What does *not* live here
+ *
+ * Connections and sampling configs are separate entities with their own rules,
+ * referenced per provider node — never copied in. A row at `slot='connection'`
+ * or `slot='sampling'` holds the *id of* a `connections` / `sampling_configs`
+ * row, so choosing "my precise preset" once changes every pipeline that points
+ * at it, and an admin moving the instance connection still reaches everyone
+ * (12 §4, 17 §1a). Inlining either would fork it silently on the day it is
+ * edited somewhere else, and inlining a connection would additionally copy
+ * credentials into a table that is not the credentials table.
+ */
+export const pipelineConfigValues = pgTable(
+	"pipeline_config_values",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		configId: integer("config_id")
+			.notNull()
+			.references(() => pipelineConfigs.id, { onDelete: "cascade" }),
+		/** The stable node key, not a row id — see the note above on F21. */
+		nodeKey: text("node_key").notNull(),
+		/** connection | sampling | template | prompts | params | settings (12 §2). */
+		slot: text("slot").notNull(),
+		/** The field within the slot. Empty string for a whole-slot value. */
+		path: text("path").notNull().default(""),
+		value: json("value").$type<any>(),
+		/**
+		 * For `template` values: which language the source is written in, as a
+		 * registered engine id (`core:template/handlebars@1`).
+		 *
+		 * Text rather than an enum, deliberately. Template engines are an open
+		 * registry (F2, SDK `engines.ts`) so an extension can ship its own
+		 * language and its own renderer; a CHECK constraint here would make that
+		 * a core migration, which is the thing the registry exists to avoid. The
+		 * validation is the lookup — an unregistered id fails at render with a
+		 * message naming the plugin that should have supplied it.
+		 *
+		 * NULL for every slot that is not a template.
+		 */
+		engine: text("engine")
+	},
+	(t) => [
+		uniqueIndex("pipeline_config_values_addr_idx").on(
+			t.configId,
+			t.nodeKey,
+			t.slot,
+			t.path
+		),
+		index("pipeline_config_values_config_idx").on(t.configId)
+	]
+)
+
+/**
+ * An authored prompt — text, and nothing else.
+ *
+ * A swappable entity like a connection or a sampling config, selected **per
+ * provider node, per config**. A config row at `slot='prompts'` holds this
+ * row's id, never a copy of its text, so renaming or rewriting a prompt reaches
+ * every node pointing at it and an admin's edit is not silently forked.
+ *
+ * ## What it deliberately no longer carries
+ *
+ * `prompt_configs` — the table this succeeds — is a bundle: system text,
+ * post-history text, `post_history_depth`, `post_history_token_trigger`, a
+ * connection and a sampling config. Six unrelated decisions travelling as one,
+ * so choosing a different wording also changed which model ran and how the
+ * reminder was positioned. Here a prompt is text. The numbers are params
+ * (per node, per config), and the connection and sampling config are their own
+ * swappable entities selected the same way this one is.
+ *
+ * ## Namespaced to a pipeline
+ *
+ * A prompt written for chat replies is not a prompt for scene summarization,
+ * and offering it in that picker invites exactly the mistake the split exists
+ * to prevent. The namespace is the spec, and selection refuses across it.
+ *
+ * ## Why `fields` is JSON
+ *
+ * A prompts slot declares its own named text fields — core's are `system` and
+ * `postHistory` on one node, `systemPrompt` / `postHistoryInstructions` /
+ * `narratorName` on another, and a plugin's are whatever it declares. Columns
+ * would enumerate a set that is open by construction. The declaration is the
+ * schema; this is the value.
+ */
+export const pipelinePrompts = pgTable(
+	"pipeline_prompts",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		specId: integer("spec_id")
+			.notNull()
+			.references(() => pipelineSpecs.id, { onDelete: "cascade" }),
+		/** Stable identity for the prompts core ships; NULL for a user's own. */
+		seedKey: text("seed_key").unique(),
+		name: text("name").notNull(),
+		/** Core's shipped prompt: selectable and copyable, never edited in place. */
+		isImmutable: boolean("is_immutable").notNull().default(false),
+		/** field name → authored text, matching the slot's declared `fields`. */
+		fields: json("fields")
+			.notNull()
+			.default({})
+			.$type<Record<string, string>>(),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at").notNull().defaultNow()
+	},
+	(t) => [
+		index("pipeline_prompts_spec_idx").on(t.specId),
+		uniqueIndex("pipeline_prompts_spec_name_idx").on(t.specId, t.name)
+	]
+)
+
+export const pipelinePromptsRelations = relations(
+	pipelinePrompts,
+	({ one }) => ({
+		spec: one(pipelineSpecs, {
+			fields: [pipelinePrompts.specId],
+			references: [pipelineSpecs.id]
+		})
+	})
+)
+
+/**
+ * What a version change did to somebody's config, kept until they have seen it.
+ *
+ * A pipeline's tuneable surface is declared by its nodes, so publishing a new
+ * version can *remove* an option a user had set. Silently dropping the value
+ * would be the worst of the three available behaviours: the setting stops
+ * applying, the panel stops showing it, and nothing anywhere says why the
+ * pipeline started behaving differently. Silently keeping it is no better — it
+ * is a row addressing a field that no longer exists, which resolves to nothing
+ * and reads as corruption the first time anyone looks.
+ *
+ * So the value is culled and the cull is recorded. The notice is the part that
+ * makes the cull honest.
+ *
+ * Back-fills are recorded too, under their own kind. They need no warning — a
+ * new parameter arriving at its author default is the correct outcome — but
+ * they answer the same question a cull does ("why is this different today"),
+ * and a reader who has to consult two places to reconstruct one upgrade will
+ * consult neither.
+ */
+export const pipelineConfigNotices = pgTable(
+	"pipeline_config_notices",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		configId: integer("config_id")
+			.notNull()
+			.references(() => pipelineConfigs.id, { onDelete: "cascade" }),
+		/** culled | backfilled. */
+		kind: text("kind").notNull(),
+		nodeKey: text("node_key").notNull(),
+		slot: text("slot").notNull(),
+		path: text("path").notNull().default(""),
+		/** The label the option carried when it was culled — the panel has none now. */
+		label: text("label"),
+		/**
+		 * What the user had set, for a cull.
+		 *
+		 * Kept rather than discarded: a notice that says "your value was removed"
+		 * without saying what it was asks the user to remember something they
+		 * configured months ago. Also makes an undo possible later without
+		 * another migration.
+		 */
+		previousValue: json("previous_value").$type<any>(),
+		/** Which version made the change, so a notice can name it. */
+		specVersionId: integer("spec_version_id"),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		/** NULL until the person has actually been shown it. */
+		acknowledgedAt: timestamp("acknowledged_at")
+	},
+	(t) => [
+		index("pipeline_config_notices_config_idx").on(t.configId),
+		check(
+			"pipeline_config_notices_kind_check",
+			sql`${t.kind} IN ('culled', 'backfilled')`
+		)
+	]
+)
+
+export const pipelineConfigsRelations = relations(
+	pipelineConfigs,
+	({ one, many }) => ({
+		spec: one(pipelineSpecs, {
+			fields: [pipelineConfigs.specId],
+			references: [pipelineSpecs.id]
+		}),
+		values: many(pipelineConfigValues),
+		notices: many(pipelineConfigNotices)
+	})
+)
+
+export const pipelineConfigNoticesRelations = relations(
+	pipelineConfigNotices,
+	({ one }) => ({
+		config: one(pipelineConfigs, {
+			fields: [pipelineConfigNotices.configId],
+			references: [pipelineConfigs.id]
+		})
+	})
+)
+
+export const pipelineConfigValuesRelations = relations(
+	pipelineConfigValues,
+	({ one }) => ({
+		config: one(pipelineConfigs, {
+			fields: [pipelineConfigValues.configId],
+			references: [pipelineConfigs.id]
+		})
+	})
+)
+
+/**
  * Materialized host knowledge about node types (02 §2).
  *
  * As rows rather than a module, every pin in every spec becomes joinable — and
  * more importantly, install-time validation can decide whether a plugin fits
  * this release **without executing it** (F6, 13 §10c).
  */
+/**
+ * What a run did, kept.
+ *
+ * Until this existed, a receipt was returned in memory and discarded — so the
+ * first question anyone asks after a turn ("did that use the pipeline, and what
+ * did it decide?") had no answer once the request was over. F3 says rows are the
+ * system of record; that was true for specs and types and false for runs, which
+ * is the one place a user actually looks.
+ *
+ * Deliberately **not** cascade-deleted with the spec version. A run happened; a
+ * spec being retired later does not unhappen it, and a receipt whose spec was
+ * deleted is still evidence about a message that is still in someone's chat.
+ * The reference is recorded as plain columns rather than a foreign key for the
+ * same reason.
+ */
+export const pipelineRuns = pgTable(
+	"pipeline_runs",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/** The SDK's own run id — stable across the receipt and its node rows. */
+		runId: text("run_id").notNull().unique(),
+		specSlug: text("spec_slug").notNull(),
+		specVersion: text("spec_version").notNull(),
+		/** Nullable on purpose: see the note above about retired specs. */
+		specVersionId: integer("spec_version_id"),
+		chatId: integer("chat_id").references(() => chats.id, {
+			onDelete: "set null"
+		}),
+		userId: integer("user_id").references(() => users.id, {
+			onDelete: "set null"
+		}),
+		/** The message this run produced, when it produced one. */
+		messageId: integer("message_id").references(() => chatMessages.id, {
+			onDelete: "set null"
+		}),
+		outcome: text("outcome").notNull(), // ok | halt | err | cancelled
+		haltNodeKey: text("halt_node_key"),
+		haltReason: text("halt_reason"),
+		triggerSource: text("trigger_source").notNull(),
+		/**
+		 * What made this run reproducible.
+		 *
+		 * Stored because a receipt that cannot be replayed is a story about a
+		 * run rather than a record of one — the seed is what lets the same
+		 * inputs produce the same prompt again.
+		 */
+		seed: text("seed").notNull(),
+		/** A preview stopped before the provider call and sent nothing. */
+		isPreview: boolean("is_preview").notNull().default(false),
+		startedAt: timestamp("started_at").notNull(),
+		endedAt: timestamp("ended_at").notNull(),
+		elapsedMs: integer("elapsed_ms").notNull().default(0),
+		tokensSpent: integer("tokens_spent").notNull().default(0),
+		/** The receipt verbatim, for anything the columns above do not answer. */
+		receipt: json("receipt").notNull().$type<Record<string, any>>(),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [
+		index("pipeline_runs_chat_idx").on(t.chatId, t.id),
+		index("pipeline_runs_message_idx").on(t.messageId)
+	]
+)
+
+/**
+ * One row per node, so "why did this turn include that lore" is a query.
+ *
+ * Split out of the receipt JSON rather than left inside it because the trail is
+ * the thing a user reads, and reading it should not mean loading and walking a
+ * blob for every run in a chat. The blob stays on the run row as the source of
+ * truth; these are the parts worth indexing.
+ */
+export const pipelineRunNodes = pgTable(
+	"pipeline_run_nodes",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		runId: integer("run_id")
+			.notNull()
+			.references(() => pipelineRuns.id, { onDelete: "cascade" }),
+		seq: integer("seq").notNull(),
+		nodeKey: text("node_key").notNull(),
+		kind: text("kind").notNull(),
+		typeId: text("type_id").notNull(),
+		result: text("result").notNull(), // ok | halt | err
+		reason: text("reason"),
+		elapsedMs: integer("elapsed_ms").notNull().default(0),
+		tokens: integer("tokens"),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [index("pipeline_run_nodes_run_idx").on(t.runId, t.seq)]
+)
+
 export const pipelineTypeRegistry = pgTable(
 	"pipeline_type_registry",
 	{
