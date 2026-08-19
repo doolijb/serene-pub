@@ -27,21 +27,32 @@
  * and the category spelled identically in different namespaces.
  */
 
-import type { Descriptor } from '@serene-pub/sdk'
+import type { Descriptor } from "@serene-pub/sdk"
 
 /** `'core:query/chat-history@2'` → `{ ns: 'core', kind: 'query', name: 'chat-history', version: 2 }` */
-export function parseTypeId(id: string): { ns: string; kind?: string; name: string; version: number } {
+export function parseTypeId(id: string): {
+	ns: string
+	kind?: string
+	name: string
+	version: number
+} {
 	const at = /@(\d+)$/.exec(id)
 	const version = at ? Number(at[1]) : 1
-	const body = id.replace(/@\d+$/, '')
-	const [ns, rest = ''] = body.split(':')
-	const slash = rest.indexOf('/')
+	const body = id.replace(/@\d+$/, "")
+	const [ns, rest = ""] = body.split(":")
+	const slash = rest.indexOf("/")
 	return slash === -1
 		? { ns: ns!, name: rest, version }
-		: { ns: ns!, kind: rest.slice(0, slash), name: rest.slice(slash + 1), version }
+		: {
+				ns: ns!,
+				kind: rest.slice(0, slash),
+				name: rest.slice(slash + 1),
+				version
+			}
 }
 
-export const camel = (s: string) => s.replace(/-(\w)/g, (_, c: string) => c.toUpperCase())
+export const camel = (s: string) =>
+	s.replace(/-(\w)/g, (_, c: string) => c.toUpperCase())
 
 /** The one and only rule. */
 export const bindingNameFor = (id: string) => camel(parseTypeId(id).name)
@@ -56,10 +67,46 @@ export interface DerivationProblem {
  * Check a hand-written contracts module against the rule. Run in CI: the moment a name
  * stops being derivable, generation would need an alias table, and that is the failure.
  */
-export function checkDerivable(entries: Array<{ name: string; id: string }>): DerivationProblem[] {
+export function checkDerivable(
+	entries: Array<{ name: string; id: string }>
+): DerivationProblem[] {
 	return entries
-		.map((e) => ({ id: e.id, given: e.name, expected: bindingNameFor(e.id) }))
+		.map((e) => ({
+			id: e.id,
+			given: e.name,
+			expected: bindingNameFor(e.id)
+		}))
 		.filter((p) => p.given !== p.expected)
+}
+
+export interface NameCollision {
+	name: string
+	ids: string[]
+}
+
+/**
+ * Two ids that derive to one name.
+ *
+ * The derivation is namespace-blind on purpose — `core:task/assemble@2` reads as
+ * `assemble`, not `coreAssemble` — and the cost is that
+ * `core:task/rank-semantic@1` and `chariot.recall:rank-semantic@1` both want to
+ * be `rankSemantic`. Generation would emit the same export twice and the second
+ * would win silently.
+ *
+ * Found the way these things are found: adding a core ranker whose name segment a
+ * plugin example already used. Reported as its own problem rather than folded
+ * into `checkDerivable`, because the fix is different — a collision is resolved
+ * by renaming a *type*, not by renaming a binding.
+ */
+export function checkUnique(entries: Array<{ id: string }>): NameCollision[] {
+	const byName = new Map<string, string[]>()
+	for (const e of entries) {
+		const name = bindingNameFor(e.id)
+		byName.set(name, [...(byName.get(name) ?? []), e.id])
+	}
+	return [...byName.entries()]
+		.filter(([, ids]) => ids.length > 1)
+		.map(([name, ids]) => ({ name, ids }))
 }
 
 // ── Emission ────────────────────────────────────────────────────────────────
@@ -75,7 +122,7 @@ const banner = (o: GenerateOptions, count: number) =>
 	`/**
  * GENERATED — do not edit.
  *
- * ${count} type declarations${o.release ? `, Serene Pub ${o.release}` : ''}.
+ * ${count} type declarations${o.release ? `, Serene Pub ${o.release}` : ""}.
  * Frozen at release: a pin resolved against this file resolves the same way forever,
  * which is what makes a spec's pins statically checkable (01 §3, 04 §2).
  *
@@ -89,44 +136,62 @@ const lit = (v: unknown): string => JSON.stringify(v)
  * generated file is readable and diffable rather than a blob — a plugin author reading
  * `/contracts` to find out what ports a node has should be able to.
  */
-export function generateContracts(types: Descriptor[], opts: GenerateOptions = {}): string {
-	const sdk = opts.sdk ?? '@serene-pub/sdk'
+export function generateContracts(
+	types: Descriptor[],
+	opts: GenerateOptions = {}
+): string {
+	const sdk = opts.sdk ?? "@serene-pub/sdk"
 	const byKind: Record<string, Descriptor[]> = {}
 	for (const d of types) (byKind[d.kind] ??= []).push(d)
 
 	const describeFor: Record<string, string> = {
-		input: 'describeInput',
-		query: 'describeQueryType',
-		task: 'describeTaskType',
-		provider: 'describeProvider',
-		consumer: 'describeConsumerTarget',
+		input: "describeInput",
+		query: "describeQueryType",
+		task: "describeTaskType",
+		provider: "describeProvider",
+		consumer: "describeConsumerTarget"
 	}
 
 	const out: string[] = [
 		banner(opts, types.length),
-		'',
-		`import { pin, ${[...new Set(Object.values(describeFor))].sort().join(', ')} } from '${sdk}'`,
-		'',
+		"",
+		`import { pin, ${[...new Set(Object.values(describeFor))].sort().join(", ")} } from '${sdk}'`,
+		""
 	]
 
-	for (const kind of ['input', 'query', 'task', 'provider', 'consumer']) {
+	for (const kind of ["input", "query", "task", "provider", "consumer"]) {
 		const group = byKind[kind]
 		if (!group?.length) continue
-		out.push(`// ── ${kind}s ${'─'.repeat(Math.max(1, 60 - kind.length))}`, '')
-		for (const d of group.slice().sort((a, b) => a.id.localeCompare(b.id))) {
+		out.push(
+			`// ── ${kind}s ${"─".repeat(Math.max(1, 60 - kind.length))}`,
+			""
+		)
+		for (const d of group
+			.slice()
+			.sort((a, b) => a.id.localeCompare(b.id))) {
 			const name = bindingNameFor(d.id)
 			const { version } = parseTypeId(d.id)
 			const body = Object.entries(d)
-				.filter(([k]) => k !== 'kind')
+				.filter(([k]) => k !== "kind")
 				.map(([k, v]) => `\t\t${k}: ${lit(v)},`)
-				.join('\n')
-			if (d.i18n?.description) out.push(`/** ${typeof d.i18n.description === 'string' ? d.i18n.description : d.i18n.description.en} */`)
-			out.push(`export const ${name} = pin(`, `\t${describeFor[kind]}({`, body, `\t}),`, `)`, '')
-			out.push(`// pinned as ${name}.v${version}(…)`, '')
+				.join("\n")
+			if (d.i18n?.description)
+				out.push(
+					`/** ${typeof d.i18n.description === "string" ? d.i18n.description : d.i18n.description.en} */`
+				)
+			out.push(
+				`export const ${name} = pin(`,
+				`\t${describeFor[kind]}({`,
+				body,
+				`\t}),`,
+				`)`,
+				""
+			)
+			out.push(`// pinned as ${name}.v${version}(…)`, "")
 		}
 	}
 
-	return out.join('\n')
+	return out.join("\n")
 }
 
 /**
@@ -152,11 +217,14 @@ export const summarizeType = (d: Descriptor): TypeSummary => ({
 	binding: bindingNameFor(d.id),
 	kind: d.kind,
 	version: parseTypeId(d.id).version,
-	ports: { in: Object.keys(d.ports.in ?? {}), out: Object.keys(d.ports.out ?? {}) },
+	ports: {
+		in: Object.keys(d.ports.in ?? {}),
+		out: Object.keys(d.ports.out ?? {})
+	},
 	slots: Object.keys(d.slots ?? {}),
 	effects: d.effects,
 	causesEvent: d.causesEvent,
 	public: d.public,
 	declaresRandomness: d.declaresRandomness,
-	timeoutMs: d.timeoutMs,
+	timeoutMs: d.timeoutMs
 })

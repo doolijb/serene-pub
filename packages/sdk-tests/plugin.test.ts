@@ -27,7 +27,7 @@ import {
 	ExtensionError,
 } from '@serene-pub/sdk'
 import { compilePlugin, scanSource, renderFindings, cannotDo } from '@serene-pub/cli'
-import { bindingNameFor, checkDerivable, generateContracts, parseTypeId } from '@serene-pub/cli'
+import { bindingNameFor, checkDerivable, checkUnique, generateContracts, parseTypeId } from '@serene-pub/cli'
 import type { Golden } from '@serene-pub/sdk/testing'
 import {
 	toGolden,
@@ -244,6 +244,33 @@ describe('99 · contracts generation', () => {
 			.filter(([, v]) => !!v && typeof v === 'object' && 'id' in (v as object))
 			.map(([name, v]) => ({ name, id: (v as any).id as string }))
 		assert.deepEqual(checkDerivable(entries), [])
+	})
+
+	test('no two ids derive to the same binding name', () => {
+		// The derivation is namespace-blind on purpose — `core:task/assemble@2`
+		// reads as `assemble` — so two namespaces can want one export name.
+		// Generation would emit it twice and the second would silently win.
+		// Found by adding a core ranker whose name segment a plugin example
+		// already used.
+		const entries = Object.entries(C)
+			.filter(([, v]) => !!v && typeof v === 'object' && 'id' in (v as object))
+			.map(([, v]) => ({ id: (v as any).id as string }))
+		assert.deepEqual(checkUnique(entries), [])
+	})
+
+	test('a collision is reported with both ids, not just the name', () => {
+		// Naming only the clash would leave the author grepping for which two
+		// types own it.
+		const clash = checkUnique([
+			{ id: 'core:task/rank-semantic@1' },
+			{ id: 'other.plugin:rank-semantic@1' },
+		])
+		assert.deepEqual(clash, [
+			{
+				name: 'rankSemantic',
+				ids: ['core:task/rank-semantic@1', 'other.plugin:rank-semantic@1'],
+			},
+		])
 	})
 
 	test('the derivation is the camelCase of the id’s name segment, nothing else', () => {

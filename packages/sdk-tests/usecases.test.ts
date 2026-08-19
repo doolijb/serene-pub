@@ -562,7 +562,7 @@ test('19 · a plugin ranker substitutes for core with no other change', async ()
 				.query('lore', $ => C.lorebookTriggers.v1({ text: $.input.text }))
 				.task('rank', $ => ranker.v1({ candidates: $.lore.hits })),
 		)
-	for (const ranker of [C.rankHybrid, C.rankByRecency, C.rankSemantic]) {
+	for (const ranker of [C.rankHybrid, C.rankByRecency, C.rankRecall]) {
 		const r = await run(build(ranker), { input: { text: 'x' }, bindings: bindings(), world })
 		assert.equal(r.outcome, 'ok')
 	}

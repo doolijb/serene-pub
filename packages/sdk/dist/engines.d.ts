@@ -25,7 +25,7 @@
  * a sloppy engine costs its users context headroom rather than correctness — a pressure
  * gradient rather than a ban.
  */
-import { type TemplateFinding, type TemplateScope } from './template.js';
+import { type TemplateFinding, type TemplateScope } from "./template.js";
 export type EngineId = string;
 /** What a template slot actually stores: the source **and** what it is written in. */
 export interface TemplateValue {
@@ -72,6 +72,21 @@ export declare const jinja2: TemplateEngine;
  * no variables — and useful as the reference implementation of an exact cost profile.
  */
 export declare const plain: TemplateEngine;
+/**
+ * Handlebars — **the engine Serene Pub's context templates are actually written in.**
+ *
+ * Registered as a declaration rather than an implementation: a template's engine is a
+ * datapoint on the slot (12 §2a), and the host supplies the renderer. The SDK ships no
+ * Handlebars dependency, so `render` here refuses rather than silently producing
+ * something that is not what core would produce — a near-miss renderer is worse than an
+ * absent one, because parity would fail in a way that looks like a template bug.
+ *
+ * The correction this represents is worth stating: the draft assumed Jinja throughout,
+ * and every core template in SP is Handlebars with a registered helper set. The
+ * template-engine registry is exactly the mechanism that makes that a one-line change
+ * rather than a redesign, which is the argument for having built it.
+ */
+export declare const handlebars: TemplateEngine;
 /** Sugar so a spec reads `template: jinja(SOURCE)` rather than repeating the id. */
 export declare const templateOf: (engine: TemplateEngine) => (source: string) => TemplateValue;
 export declare const jinja: (source: string) => TemplateValue;

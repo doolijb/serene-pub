@@ -16,8 +16,8 @@
  * be sent, from the same formatter and the same tokenizer as a real run (src/preview.ts).
  * The parity test is the preview, not a second renderer written for the occasion.
  */
-import type { Receipt } from './receipt.js';
-import type { SpecDocument } from './document.js';
+import type { Receipt } from "./receipt.js";
+import type { SpecDocument } from "./document.js";
 /**
  * A migrated row's slug is derived from where it came from, not generated.
  *
@@ -26,7 +26,7 @@ import type { SpecDocument } from './document.js';
  * (12 §3b). A migration that cannot be safely re-run is a migration nobody dares fix.
  */
 export declare function migratedSlug(sourceTable: string, sourceId: string | number): string;
-export type MigrationOutcome = 'migrated' | 'unmapped' | 'skipped';
+export type MigrationOutcome = "migrated" | "unmapped" | "skipped";
 export interface MigrationEntry {
     source: {
         table: string;
@@ -37,7 +37,7 @@ export interface MigrationEntry {
     /** Where the value landed: the scope it was written at, and what it became. */
     target?: {
         slug: string;
-        scopeKind: 'instance' | 'preset' | 'user' | 'chat';
+        scopeKind: "instance" | "preset" | "user" | "chat";
         nodeKey?: string;
         slot?: string;
     };
@@ -77,11 +77,6 @@ export interface ParityResult {
     tokensLegacy?: number;
     tokensPipeline?: number;
 }
-/**
- * Compare what the legacy engine produced against what the migrated pipeline *would*
- * send. The second argument is a **preview receipt** — the run stopped at the pre-call
- * substrate, so this compares the real payload rather than a reimplementation of it.
- */
 export declare function checkParity(fixture: string, legacyPrompt: string, preview: Receipt, count?: (v: unknown) => number): ParityResult;
 /**
  * The gate on dropping an old code path (08 §5). Deliberately strict: an empty corpus

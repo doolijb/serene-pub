@@ -168,12 +168,20 @@ export declare const vectorSearch: import("@serene-pub/sdk").Pinned<{
     slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
     ports: {
         in?: {
-            vector: string;
+            /** Several query vectors, one ranked list each. */
+            vectors: string;
             scope: string;
         } | undefined;
         out?: {
             main: string;
             hits: string;
+            /** One ranked list per query vector, in the order they were given. */
+            lists: string;
+            /**
+             * `cos(i, j)` over `hits`, by index. What MMR needs, without any
+             * embedding leaving the host.
+             */
+            similarity: string;
         } | undefined;
     };
     effects?: "none" | "external" | "write" | "emit" | undefined;
@@ -340,10 +348,21 @@ export declare const rankHybrid: import("@serene-pub/sdk").Pinned<{
     ports: {
         in?: {
             candidates: string;
+            budget: string;
         } | undefined;
         out?: {
             main: string;
             candidates: string;
+            /**
+             * The per-candidate trail: score, included, reason, and the signal
+             * breakdown behind it.
+             *
+             * A declared out-port rather than an implementation detail, because it is
+             * what Assemble allocates from — and because a ranker swapped in by a
+             * plugin has to produce it too, or the budget panel goes blank the moment
+             * anyone changes rankers (16 §5c).
+             */
+            decisions: string;
         } | undefined;
     };
     effects?: "none" | "external" | "write" | "emit" | undefined;
@@ -369,10 +388,21 @@ export declare const rankByRecency: import("@serene-pub/sdk").Pinned<{
     ports: {
         in?: {
             candidates: string;
+            budget: string;
         } | undefined;
         out?: {
             main: string;
             candidates: string;
+            /**
+             * The per-candidate trail: score, included, reason, and the signal
+             * breakdown behind it.
+             *
+             * A declared out-port rather than an implementation detail, because it is
+             * what Assemble allocates from — and because a ranker swapped in by a
+             * plugin has to produce it too, or the budget panel goes blank the moment
+             * anyone changes rankers (16 §5c).
+             */
+            decisions: string;
         } | undefined;
     };
     effects?: "none" | "external" | "write" | "emit" | undefined;
@@ -387,10 +417,111 @@ export declare const rankByRecency: import("@serene-pub/sdk").Pinned<{
     causesEvent?: string | undefined;
     usage?: string | undefined;
 }>;
-/** A plugin's ranker — same kind, same shape, so the swap list offers it (16 §5c). */
+/**
+ * The two retrieval query windows, as text.
+ *
+ * A Task because *how a message is written when it is a query* is a decision —
+ * speaker attribution in brackets, emphasis stripped — and a different
+ * embedding model might want a different shape. It is also where the two
+ * windows are cut, which is the parameter a user with long posts will reach for
+ * first.
+ */
+export declare const queryWindows: import("@serene-pub/sdk").Pinned<{
+    kind: "task";
+    id: "core:task/query-windows@1";
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            messages: string;
+            cast: string;
+        } | undefined;
+        out?: {
+            main: string;
+            current: string;
+            recent: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+/**
+ * The semantic arm's ranking, as a Task.
+ *
+ * Nine stages the legacy engine runs inline: fuse the per-query lists, normalise
+ * to the top, boost recency and author priority, cut on an adaptive threshold,
+ * diversify with MMR, and cap each source. Every constant behind them is a
+ * parameter here — one of them carries a `TODO: make configurable` in the
+ * original.
+ *
+ * A Task rather than part of the vector Query because **it is policy**: which of
+ * these stages run, and how hard, is exactly what an installation should be able
+ * to replace. The Query retrieves and computes similarity; this decides.
+ *
+ * `similarity` is a port because MMR needs to compare candidates to each other
+ * and a Task cannot ask the host for anything (F11). It is a matrix of cosines,
+ * not the embeddings — derived, bounded, and not reversible into the vectors.
+ */
 export declare const rankSemantic: import("@serene-pub/sdk").Pinned<{
     kind: "task";
-    id: "chariot.recall:rank-semantic@1";
+    id: "core:task/rank-semantic@1";
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            /**
+             * One entry per query window, each carrying its own per-message
+             * ranked lists and its own similarity matrix. The whole stack
+             * runs per window; the results are concatenated, not fused.
+             */
+            windows: string;
+            messages: string;
+        } | undefined;
+        out?: {
+            main: string;
+            candidates: string;
+            diagnostics: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+/**
+ * A plugin's ranker — same kind, same shape, so the swap list offers it (16 §5c).
+ *
+ * Named `rankRecall`, not `rankSemantic`: binding names derive from the id's
+ * name segment and ignore the namespace, so this and `core:task/rank-semantic@1`
+ * would both want to be `rankSemantic` and generation would emit one export
+ * twice. `checkUnique` now catches that; the id changed here because a plugin
+ * naming its ranker after its own product is the better name anyway.
+ */
+export declare const rankRecall: import("@serene-pub/sdk").Pinned<{
+    kind: "task";
+    id: "chariot.recall:rank-recall@1";
     i18n?: {
         name?: import("@serene-pub/sdk").I18n;
         description?: import("@serene-pub/sdk").I18n;
@@ -399,10 +530,21 @@ export declare const rankSemantic: import("@serene-pub/sdk").Pinned<{
     ports: {
         in?: {
             candidates: string;
+            budget: string;
         } | undefined;
         out?: {
             main: string;
             candidates: string;
+            /**
+             * The per-candidate trail: score, included, reason, and the signal
+             * breakdown behind it.
+             *
+             * A declared out-port rather than an implementation detail, because it is
+             * what Assemble allocates from — and because a ranker swapped in by a
+             * plugin has to produce it too, or the budget panel goes blank the moment
+             * anyone changes rankers (16 §5c).
+             */
+            decisions: string;
         } | undefined;
     };
     effects?: "none" | "external" | "write" | "emit" | undefined;
@@ -457,10 +599,132 @@ export declare const assemble: import("@serene-pub/sdk").Pinned<{
         in?: {
             candidates: string;
             budget: string;
+            templateContext: string;
         } | undefined;
         out?: {
             main: string;
             context: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+/**
+ * Builds the object a context template renders against.
+ *
+ * A Task, not a Query, even though it reads the cast: what it *is* is the
+ * resolution — which characters appear, which get named, which scenario wins —
+ * and that is a decision anyone should be able to replace. The read reaches the
+ * host like any other (F11 keeps the services out of the Task itself).
+ *
+ * Separate from Assemble on purpose. Assemble allocates a budget and renders;
+ * this decides what there is to render. A plugin that wants different character
+ * cards should not have to reimplement token allocation to get them.
+ */
+export declare const chatCast: import("@serene-pub/sdk").Pinned<{
+    kind: "query";
+    id: "core:query/chat-cast@1";
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            scope: string;
+        } | undefined;
+        out?: {
+            main: string;
+            cast: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+export declare const buildTemplateContext: import("@serene-pub/sdk").Pinned<{
+    kind: "task";
+    id: "core:task/build-template-context@1";
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            cast: string;
+        } | undefined;
+        out?: {
+            main: string;
+            templateContext: string;
+            /**
+             * The name on the trailing assistant line.
+             *
+             * Its own port rather than a field inside the context, because
+             * nothing renders `{{seedName}}` — it is not a template variable.
+             * It is what the message processor writes on the line the model
+             * continues from, and in narrator mode it is the one name that
+             * must *not* be the joined cast list: seeding "Alice and Cara:"
+             * teaches the model to write joint dialogue instead of narrating.
+             */
+            seedName: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+/**
+ * Chat rows into the objects a template renders.
+ *
+ * A Task rather than part of the history Query, because naming a message —
+ * which participant said it, under what name at the time — is a *decision*, and
+ * decisions are the things a plugin should be able to replace. The Query returns
+ * rows; this says who spoke.
+ */
+export declare const processMessages: import("@serene-pub/sdk").Pinned<{
+    kind: "task";
+    id: "core:task/process-messages@1";
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            messages: string;
+            cast: string;
+            templateContext: string;
+            seedName: string;
+        } | undefined;
+        out?: {
+            main: string;
+            messages: string;
         } | undefined;
     };
     effects?: "none" | "external" | "write" | "emit" | undefined;
@@ -715,10 +979,13 @@ export declare const embedText: import("@serene-pub/sdk").Pinned<{
     ports: {
         in?: {
             text: string;
+            /** Batched: one call, one vector each, in order. */
+            texts: string;
         } | undefined;
         out?: {
             main: string;
             vector: string;
+            vectors: string;
         } | undefined;
     };
     effects?: "none" | "external" | "write" | "emit" | undefined;

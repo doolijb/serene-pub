@@ -41,6 +41,23 @@ export declare const S: {
      * thrown away everything the panel and the budget need.
      */
     readonly allocated: string;
+    /**
+     * The object a context template renders against: characters, personas,
+     * scenario, the prompt texts, the resolved names.
+     *
+     * Its own shape rather than `json@1` so that a plugin supplying an alternative
+     * context builder has something to publish, and so a spec that wires the wrong
+     * node into Assemble's context port fails at publish rather than rendering a
+     * template full of blanks — which reads as a broken template, and sends the
+     * user to the wrong screen.
+     */
+    /**
+     * The chat's cast and prompt config, as rows — before any decision about who
+     * is shown or named. The input to the context builder, kept distinct from the
+     * built context so the two can be replaced independently.
+     */
+    readonly chatCast: string;
+    readonly templateContext: string;
     readonly vector: string;
     readonly budget: string;
     readonly rowIds: string;

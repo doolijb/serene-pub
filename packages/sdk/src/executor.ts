@@ -506,6 +506,21 @@ export async function run(
 			delete (overrides as any)["$ref"]
 			return { ...(base?.values ?? {}), ...overrides }
 		}
+		if (slotName === "params") {
+			// A declared default is a promise the type makes; without this it was
+			// decoration. Nothing applied `default:` from a parameters schema, so
+			// a spec that did not override `budget` got `undefined` — which reads
+			// downstream as a budget of zero, excludes every block, and renders a
+			// context with its lore silently missing.
+			const d = getType(`${node.typeId}@${node.typeVersion}`)
+			const schema = (d?.slots as any)?.[slotName]?.schema as
+				| Record<string, { default?: unknown }>
+				| undefined
+			const defaults: Record<string, unknown> = {}
+			for (const [k, v] of Object.entries(schema ?? {}))
+				if (v?.default !== undefined) defaults[k] = v.default
+			return { ...defaults, ...(config[node.key]?.[slotName] ?? {}) }
+		}
 		return config[node.key]?.[slotName] ?? {}
 	}
 

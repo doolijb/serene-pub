@@ -139,7 +139,7 @@ export function bindings(over: Bindings = {}): Bindings {
 
 		'core:task/rank-hybrid@1': async (i: any) => ok({ main: i.candidates, candidates: i.candidates }),
 		'core:task/rank-by-recency@1': async (i: any) => ok({ main: i.candidates, candidates: i.candidates }),
-		'chariot.recall:rank-semantic@1': async (i: any) => ok({ main: i.candidates, candidates: i.candidates }),
+		'chariot.recall:rank-recall@1': async (i: any) => ok({ main: i.candidates, candidates: i.candidates }),
 		'core:task/render-entries@1': async (i: any) => ok({ main: `rendered(${i.entries?.items?.length ?? 0})` }),
 		'core:task/to-candidates@1': async (i: any) => {
 			const items = Array.isArray(i.items) ? i.items : [i.items].filter(Boolean)

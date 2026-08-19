@@ -26,7 +26,7 @@
  * collision worth naming: it was the same string as `core:shape/text-gen@1`, the operation
  * and the category spelled identically in different namespaces.
  */
-import type { Descriptor } from '@serene-pub/sdk';
+import type { Descriptor } from "@serene-pub/sdk";
 /** `'core:query/chat-history@2'` → `{ ns: 'core', kind: 'query', name: 'chat-history', version: 2 }` */
 export declare function parseTypeId(id: string): {
     ns: string;
@@ -50,6 +50,27 @@ export declare function checkDerivable(entries: Array<{
     name: string;
     id: string;
 }>): DerivationProblem[];
+export interface NameCollision {
+    name: string;
+    ids: string[];
+}
+/**
+ * Two ids that derive to one name.
+ *
+ * The derivation is namespace-blind on purpose — `core:task/assemble@2` reads as
+ * `assemble`, not `coreAssemble` — and the cost is that
+ * `core:task/rank-semantic@1` and `chariot.recall:rank-semantic@1` both want to
+ * be `rankSemantic`. Generation would emit the same export twice and the second
+ * would win silently.
+ *
+ * Found the way these things are found: adding a core ranker whose name segment a
+ * plugin example already used. Reported as its own problem rather than folded
+ * into `checkDerivable`, because the fix is different — a collision is resolved
+ * by renaming a *type*, not by renaming a binding.
+ */
+export declare function checkUnique(entries: Array<{
+    id: string;
+}>): NameCollision[];
 export interface GenerateOptions {
     /** Written into the banner so a stale file is obvious in a diff. */
     release?: string;
