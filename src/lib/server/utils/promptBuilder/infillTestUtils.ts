@@ -57,7 +57,9 @@ export function makeContextConfig(template: string = TEST_TEMPLATE): any {
 }
 
 /** 1 char = 1 token — deterministic and easy to reason about in budget tests. */
-export function makeTokenCounter(): { countTokens: (text: string) => Promise<number> } {
+export function makeTokenCounter(): {
+	countTokens: (text: string) => Promise<number>
+} {
 	return {
 		countTokens: async (text: string) => text.length
 	}
@@ -112,6 +114,10 @@ export function worldLoreEntry(
 		keys: "",
 		useRegex: false,
 		caseSensitive: false,
+		// Added with the retrieval-strategy migration. NULL means "the default",
+		// which keeps every existing fixture on today's behaviour.
+		retrievalStrategy: null,
+		matchMode: null,
 		content: "Some world lore content.",
 		priority: 1,
 		constant: false,
@@ -139,6 +145,10 @@ export function characterLoreEntry(
 		keys: "",
 		useRegex: false,
 		caseSensitive: false,
+		// Added with the retrieval-strategy migration. NULL means "the default",
+		// which keeps every existing fixture on today's behaviour.
+		retrievalStrategy: null,
+		matchMode: null,
 		content: "Some character lore content.",
 		priority: 1,
 		constant: false,
@@ -167,6 +177,10 @@ export function historyEntry(
 		keys: "",
 		useRegex: false,
 		caseSensitive: false,
+		// Added with the retrieval-strategy migration. NULL means "the default",
+		// which keeps every existing fixture on today's behaviour.
+		retrievalStrategy: null,
+		matchMode: null,
 		content: "Some history content.",
 		constant: false,
 		enabled: true,
@@ -197,7 +211,9 @@ export function lorebookBinding(
 	} as SelectLorebookBinding
 }
 
-export function character(overrides: Partial<SelectCharacter> = {}): SelectCharacter {
+export function character(
+	overrides: Partial<SelectCharacter> = {}
+): SelectCharacter {
 	const id = overrides.id ?? nextId()
 	return {
 		id,
@@ -443,7 +459,9 @@ export async function insertLorebookBindingRow(
 export async function insertNarrativeNodeRow(
 	db: TestDb,
 	lorebookId: number,
-	overrides: Partial<InsertNarrativeNode> & { lorebookBindingId?: number } = {}
+	overrides: Partial<InsertNarrativeNode> & {
+		lorebookBindingId?: number
+	} = {}
 ) {
 	const { lorebookBindingId, ...rest } = overrides
 	if (lorebookBindingId != null) {
