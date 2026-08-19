@@ -49,7 +49,8 @@
 		"android:build:debug": "cd android && ./gradlew assembleDebug",
 		"android:full": "npm run build && npm install --omit=dev && npm rebuild && npm run android:prepare && npm run android:build && npm install",
 		"sdk:build": "npm run build -w @serene-pub/sdk && npm run build -w @serene-pub/contracts -w @serene-pub/conformance -w @serene-pub/cli",
-		"sdk:test": "npm run sdk:build && npm run test -w @serene-pub/sdk-tests"
+		"sdk:test": "npm run sdk:build && npm run test -w @serene-pub/sdk-tests",
+		"pipeline:compare": "node scripts/check-db-lock.js node scripts/compare-prompts.js"
 	},
 	"devDependencies": {
 		"@fontsource/fira-mono": "^5.0.0",
