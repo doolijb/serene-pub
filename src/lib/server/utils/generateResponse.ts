@@ -374,8 +374,74 @@ export async function generateResponse({
 		contextThresholdPercent,
 		generatingMessageMetadata
 	})
-	// Thread context debugging flag into prompt builder
-	adapter.promptBuilder.diagnosticsEnabled = contextDebuggingEnabled
+	// The context-debugging flag used to switch on the legacy builder's own
+	// diagnostics. The pipeline records a decision per block unconditionally —
+	// it is in the receipt whether anyone is looking or not — so there is
+	// nothing to toggle here any more. The setting still gates the *panel*,
+	// client-side, which is where it was always visible from.
+	void contextDebuggingEnabled
+
+	/**
+	 * The pipeline compiles every reply. There is no toggle and no fallback
+	 * (ruling 2026-08-19): a failure here fails the turn the same way any other
+	 * generation error does, with the receipt saying where it stopped. Falling
+	 * back to the legacy builder would mean a user with a configured pipeline
+	 * silently getting a reply built by something else — the one bug in this
+	 * area nobody can see. The legacy builder below survives only as dispatch
+	 * scaffolding and as `pipeline:compare`'s second arm.
+	 *
+	 * Only the *prompt* changes hands. The run compiles a payload and injects it
+	 * at `withCompiledPrompt` — the one seam every adapter funnels through — so
+	 * queueing, streaming, persistence, swipes and thinking extraction below are
+	 * untouched legacy code. That is the whole reason the switch is one call
+	 * rather than a rewrite of this file.
+	 */
+	{
+		const { runTurn } = await import("$lib/server/pipelines/runTurn")
+		const { NARRATE_SPEC_ID } = await import(
+			"$lib/server/pipelines/specs/narrate"
+		)
+		const receipt = await runTurn({
+			db,
+			chatId,
+			userId,
+			currentCharacterId: adapter.currentCharacterId,
+			text: preservedContent || "",
+			// The narrator is its own pipeline and namespace, with its own
+			// configs — not the respond spec wearing a different prompt.
+			...(isNarratorResponseMode ? { specId: NARRATE_SPEC_ID } : {}),
+			// Stops at the pre-call substrate with the real payload: the
+			// adapter below is what actually sends it.
+			preview: true
+		})
+
+		// `PreviewReport.context.rendered` is Assemble's allocation record; the
+		// unwrap accepts either the record or its rendered string, and
+		// `toCompiledPrompt` bridges both to the adapter's shape.
+		const rendered = receipt.preview?.context.rendered as
+			| { rendered?: unknown }
+			| undefined
+		const compiled = rendered?.rendered ?? rendered
+		// A preview *halts* at the pre-call substrate by design, so a non-ok
+		// outcome only means failure when it arrived without a payload.
+		if (!compiled)
+			throw new Error(
+				`the pipeline could not compile this turn: ${receipt.outcome}` +
+					(receipt.haltNodeKey
+						? ` at '${receipt.haltNodeKey}'`
+						: "") +
+					(receipt.haltReason ? ` — ${receipt.haltReason}` : "")
+			)
+
+		const { toCompiledPrompt } = await import(
+			"$lib/server/pipelines/dispatch"
+		)
+		adapter.withCompiledPrompt(
+			toCompiledPrompt(rendered, connection, {
+				currentCharacterId: adapter.currentCharacterId
+			})
+		)
+	}
 
 	// Inject narrative graph context into system instructions (if lorebook + node
 	// present) — skipped for Narrator response, which has no character perspective
@@ -826,7 +892,10 @@ async function runGenerateAndPersist({
 			// below must still run even if the inline embed failed or timed out —
 			// it's the fallback that eventually catches this message up via the
 			// background queue either way.
-			console.error("[vectorization] Inline embed of new message failed:", err)
+			console.error(
+				"[vectorization] Inline embed of new message failed:",
+				err
+			)
 		}
 		autoEnqueueChat(chatId).catch(console.error)
 		return { kind: "normal", isAborted }
@@ -927,7 +996,10 @@ async function runGenerateAndPersist({
 			// below must still run even if the inline embed failed or timed out —
 			// it's the fallback that eventually catches this message up via the
 			// background queue either way.
-			console.error("[vectorization] Inline embed of new message failed:", err)
+			console.error(
+				"[vectorization] Inline embed of new message failed:",
+				err
+			)
 		}
 		autoEnqueueChat(chatId).catch(console.error)
 		return { kind: "normal", isAborted }

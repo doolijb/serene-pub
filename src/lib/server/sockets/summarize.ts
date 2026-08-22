@@ -2,10 +2,6 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
-import { generateSummary } from "$lib/server/utils/summarizer"
-import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
-import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
-import { resolveTaskConfig } from "$lib/server/utils/resolveTaskConfig"
 import { resolveOrCreateBinding } from "$lib/server/utils/characterBindingSync"
 import {
 	buildSceneCastList,
@@ -125,11 +121,13 @@ export const chatsSummarizeHandler: Handler<
 								inArray(schema.chatMessages.id, messageIds)
 							)
 
-				const rawMessages = await withChatTriggerLock(chatId, async () =>
-					db.query.chatMessages.findMany({
-						where: whereClause,
-						orderBy: (cm, { asc }) => asc(cm.id)
-					})
+				const rawMessages = await withChatTriggerLock(
+					chatId,
+					async () =>
+						db.query.chatMessages.findMany({
+							where: whereClause,
+							orderBy: (cm, { asc }) => asc(cm.id)
+						})
 				)
 
 				if (abortController.signal.aborted) return null as any
@@ -138,7 +136,9 @@ export const chatsSummarizeHandler: Handler<
 					return failRun("No messages found to summarize.")
 				}
 
-				// Collect unique character and persona IDs from messages
+				// Distinct senders, for the scene participant guarantee below.
+				// Sender-name resolution itself moved into the pipeline's
+				// `summarize_source` read — one place, same mapping.
 				const charIds = [
 					...new Set(
 						rawMessages
@@ -148,172 +148,163 @@ export const chatsSummarizeHandler: Handler<
 				]
 				const personaIds = [
 					...new Set(
-						rawMessages.filter((m) => m.personaId).map((m) => m.personaId!)
+						rawMessages
+							.filter((m) => m.personaId)
+							.map((m) => m.personaId!)
 					)
 				]
-
-				// Fetch names directly from the entity tables
-				const characters =
-					charIds.length > 0
-						? await db.query.characters.findMany({
-								where: inArray(schema.characters.id, charIds)
-							})
-						: []
-				const personas =
-					personaIds.length > 0
-						? await db.query.personas.findMany({
-								where: inArray(schema.personas.id, personaIds)
-							})
-						: []
-
-				const characterMap = new Map(characters.map((c) => [c.id, c.name]))
-				const personaMap = new Map(
-					personas.map((p) => [p.id, resolvePersonaName(p)])
-				)
-
-				const messages = rawMessages.map((msg) => {
-					let senderName = "Unknown"
-					if (msg.characterId && characterMap.has(msg.characterId)) {
-						senderName = characterMap.get(msg.characterId)!
-					} else if (msg.personaId && personaMap.has(msg.personaId)) {
-						senderName = personaMap.get(msg.personaId)!
-					} else if (msg.role === "user") {
-						senderName = "User"
-					}
-					return { senderName, content: msg.content }
-				})
-
-				// Get context/prompt configs (connection+sampling resolved per sub-task below)
-				const { contextConfig, promptConfig } =
-					await getUserConfigurations(userId)
-
-				const systemSettings = await db.query.systemSettings.findFirst()
-				const userSettings = await db.query.userSettings.findFirst({
-					where: (us, { eq }) => eq(us.userId, userId)
-				})
-
-				// Determine which summarize config to use
-				const summarizeConfigType =
-					loreType === "world"
-						? "world"
-						: loreType === "character"
-							? "character"
-							: "scene"
-				const summarizeConfigId =
-					loreType === "world"
-						? (userSettings?.activeSummarizeWorldConfigId ??
-							systemSettings?.defaultSummarizeWorldConfigId)
-						: loreType === "character"
-							? (userSettings?.activeSummarizeCharacterConfigId ??
-								systemSettings?.defaultSummarizeCharacterConfigId)
-							: (userSettings?.activeSummarizeSceneConfigId ??
-								systemSettings?.defaultSummarizeSceneConfigId)
-
-				let summarizePromptConfig: {
-					batchSystemPrompt: string
-					synthSystemPrompt: string
-					nameSystemPrompt: string
-					characterExtractionSystemPrompt?: string | null
-				} | null = null
-				if (summarizeConfigId) {
-					if (loreType === "world")
-						summarizePromptConfig =
-							(await db.query.worldSummarizeConfigs.findFirst({
-								where: (c, { eq }) => eq(c.id, summarizeConfigId)
-							})) ?? null
-					else if (loreType === "character")
-						summarizePromptConfig =
-							(await db.query.characterSummarizeConfigs.findFirst({
-								where: (c, { eq }) => eq(c.id, summarizeConfigId)
-							})) ?? null
-					else
-						summarizePromptConfig =
-							(await db.query.sceneSummarizeConfigs.findFirst({
-								where: (c, { eq }) => eq(c.id, summarizeConfigId)
-							})) ?? null
-				}
-
-				// Resolve per-sub-task connection + sampling
-				const [batchResolved, synthResolved, nameResolved] = await Promise.all([
-					resolveTaskConfig({
-						taskType: "summarize_batch",
-						summarizeConfigId,
-						summarizeConfigType
-					}),
-					resolveTaskConfig({
-						taskType: "summarize_synth",
-						summarizeConfigId,
-						summarizeConfigType
-					}),
-					resolveTaskConfig({
-						taskType: "summarize_name",
-						summarizeConfigId,
-						summarizeConfigType
-					})
-				])
-
-				if (!batchResolved.connection) {
-					throw new Error(
-						"No AI connection configured. Please set up a connection first."
-					)
-				}
 
 				// For a fresh scene draft, build the lorebook's known cast *before*
 				// generation — no sceneId exists yet (scenes:create hasn't run), so
 				// the cast list is built untimelined (see buildSceneCastList's
 				// null-sceneId handling). This must reach the extraction prompt
-				// itself (via generateSummary's knownCast option below), not just
-				// the post-hoc resolve step — otherwise the model has no [id: N]
-				// list to reference and the resolve step silently drops every
-				// castId it hallucinates in response to the output contract's
-				// example (see the plan for this fix).
+				// itself (via the request the pipeline carries to its cast step),
+				// not just the post-hoc resolve step — otherwise the model has no
+				// [id: N] list to reference and the resolve step silently drops
+				// every castId it hallucinates in response to the output
+				// contract's example.
 				const knownCast =
 					loreType === "scene"
-						? await buildSceneCastList(null, chat.lorebookId!, chatId)
+						? await buildSceneCastList(
+								null,
+								chat.lorebookId!,
+								chatId
+							)
 						: undefined
 
-				// Run iterative summarization, streaming progress back to client
-				const result = await generateSummary({
-					messages,
-					loreType,
-					topic,
-					connection: batchResolved.connection,
-					sampling: batchResolved.sampling!,
-					contextConfig,
-					promptConfig,
-					summarizePromptConfig,
-					knownCast,
-					batchConnection: batchResolved.connection,
-					batchSampling: batchResolved.sampling,
-					synthConnection: synthResolved.connection,
-					synthSampling: synthResolved.sampling,
-					nameConnection: nameResolved.connection,
-					nameSampling: nameResolved.sampling,
-					// The summarizer already bridges this to every
-					// runGeneration call — it was simply never passed, which is
-					// why cancelling used to leave the run burning tokens.
-					signal: abortController.signal,
-					onProgress: (data) => {
-						// Mirror progress into the activity as well as the
-						// socket event, so a closed modal can catch up rather
-						// than losing everything between close and reopen.
-						activityStore.updateChatSummarize(activityId, {
-							phase: data.phase,
-							batch: data.batch,
-							totalBatches: data.totalBatches
-						})
-						emitToUser(
-							"chats:summarize:progress",
-							data satisfies Sockets.Chats.Summarize.Progress
-						)
+				/**
+				 * The summarize pipeline for this lore type — its own namespace,
+				 * with its own prompts, connections and sampling per step, all
+				 * resolved through the pipeline config layer rather than the
+				 * legacy `*_summarize_configs` tables.
+				 *
+				 * The run stops **before** its `save` consumer, deliberately:
+				 * this handler has never written the entry. What it produces is
+				 * a pending result a person reviews in the modal and saves — the
+				 * same stop-at-review rule the graph build's proposal encodes
+				 * structurally.
+				 */
+				const { runSpec } = await import(
+					"$lib/server/pipelines/runTurn"
+				)
+				const specsModule = await import(
+					"$lib/server/pipelines/specs/summarize"
+				)
+				const specId =
+					loreType === "world"
+						? specsModule.SUMMARIZE_WORLD_SPEC_ID
+						: loreType === "character"
+							? specsModule.SUMMARIZE_CHARACTER_SPEC_ID
+							: loreType === "scene"
+								? specsModule.SUMMARIZE_SCENE_SPEC_ID
+								: specsModule.SUMMARIZE_HISTORY_SPEC_ID
+
+				// Coarse progress from step labels. The pipeline owns batching,
+				// so the total is not known up front; the count ticking upward
+				// is still an honest "it is working, this far along".
+				let batchesSeen = 0
+				const progress = (data: Sockets.Chats.Summarize.Progress) => {
+					activityStore.updateChatSummarize(activityId, {
+						phase: data.phase,
+						batch: data.batch,
+						totalBatches: data.totalBatches
+					})
+					emitToUser("chats:summarize:progress", data)
+				}
+
+				const receipt = await runSpec({
+					db,
+					chatId,
+					userId,
+					specId,
+					input: {
+						scope: { chatId },
+						request: {
+							topic: topic || undefined,
+							messageIds:
+								messageIds === "all" ? undefined : messageIds,
+							knownCast
+						}
 					},
-					onLlmCall: (entry) => {
-						emitToUser(
-							"chats:summarize:trace",
-							entry satisfies Sockets.Chats.Summarize.TraceEntry
+					signal: abortController.signal,
+					preview: { atNode: "save" },
+					// The executor's inherent node events (F34): identity in,
+					// progress card out — no per-trigger wiring, no dispatch
+					// labels, and a plugin's summarize pipeline gets the same
+					// card for free.
+					onNode: (e) => {
+						if (e.phase !== "start") return
+						if (
+							e.typeId.startsWith("core:provider/summarize-batch")
 						)
+							progress({
+								phase: "drafting",
+								partial: {},
+								batch: ++batchesSeen,
+								totalBatches: batchesSeen
+							})
+						else if (
+							e.typeId.startsWith("core:provider/summarize-synth")
+						)
+							progress({
+								phase: "synthesizing",
+								partial: {},
+								batch: 1,
+								totalBatches: 1
+							})
+						else if (
+							e.typeId.startsWith("core:provider/name-entry")
+						)
+							progress({
+								phase: "naming",
+								partial: {},
+								batch: 1,
+								totalBatches: 1
+							})
+						else if (
+							e.typeId.startsWith("core:provider/extract-cast")
+						)
+							progress({
+								phase: "extracting",
+								partial: {},
+								batch: 1,
+								totalBatches: 1
+							})
 					}
 				})
+
+				const nodeOut = (key: string) =>
+					(receipt.nodes.find((n: any) => n.nodeKey === key) as any)
+						?.output
+				const content: string | undefined = nodeOut("synth")?.content
+				const entryName: string | undefined = nodeOut("naming")?.name
+				const castOut = nodeOut("cast")?.cast
+
+				if (!content) {
+					const why =
+						receipt.haltReason ??
+						"the pipeline stopped without producing a summary"
+					return failRun(
+						receipt.haltNodeKey
+							? `${why} (at '${receipt.haltNodeKey}')`
+							: why
+					)
+				}
+
+				const result = {
+					content,
+					name: entryName,
+					raw: content,
+					batchCount: receipt.nodes.filter((n: any) =>
+						String(n.typeId ?? "").startsWith(
+							"core:provider/summarize-batch"
+						)
+					).length,
+					participantCharacters: castOut?.participants as
+						| any[]
+						| undefined,
+					mentionedCharacters: castOut?.mentioned as any[] | undefined
+				}
 
 				// For character lore, resolve or create the lorebook binding
 				let lorebookBindingId: number | null = null

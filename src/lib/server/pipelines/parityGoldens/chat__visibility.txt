@@ -1,0 +1,38 @@
+Instructions:
+"""
+You are Alice, speaking with Bob.
+"""
+CHARACTERS:Assistant Characters (AI-controlled):
+```json
+[
+  {
+    "name": "Alice",
+    "description": "A knight."
+  },
+  {
+    "name": "Cara",
+    "description": "A scout."
+  }
+]
+```
+PERSONAS:User Characters (player-controlled):
+```json
+[
+  {
+    "name": "Bob",
+    "description": "A traveller."
+  }
+]
+```
+NAMES:Alice|Bob
+MACROS:Alice|Alice|Bob|Bob
+SCENARIO:
+EXAMPLES:
+POSTHISTORY:
+WORLDLORE:
+HISTORY:
+DATE:
+RELATIONSHIPS:
+
+Bob: Who is here?
+Alice: 

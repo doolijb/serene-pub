@@ -4,11 +4,13 @@ Connections tell Serene Pub how to reach a language model — which backend, whi
 
 ## Overview
 
-The **Connections** sidebar (opened from the main navigation, admin-only) is where you create, edit, test, and delete connections. Alongside it in the nav are three related admin-only sidebars — **Sampling**, **Contexts**, and **Prompts** — plus, when enabled, **KoboldCPP Manager** and **Ollama Manager**. All of these live behind the admin gate: non-admin users benefit from whatever connection/sampling/context/prompt an admin has set as the system default, but can't open these sidebars themselves. [Prompt Configs](./prompt-configs.md) (the "Prompts" sidebar) and [Context Configs](./context-configs.md) (the "Contexts" sidebar) are each covered on their own page since they're large topics in their own right; this page focuses on Connections and Sampling Configs.
+The **Connections** sidebar (opened from the main navigation, admin-only) is where you create, edit, test, and delete connections. Alongside it in the nav are **Sampling**, **Pipelines**, and **Legacy configs** — plus, when enabled, **KoboldCPP Manager** and **Ollama Manager**. Most of these live behind the admin gate: non-admin users benefit from whatever connection and sampling config an admin has set as the system default, but can't open those sidebars themselves.
+
+Since 0.6, prompts and context templates are configured in the **Pipelines** panel rather than in sidebars of their own — see [Context Templates](./context-templates.md). The 0.5 **Context Configs** and **Prompt Configs** sidebars are now two tabs inside **Legacy configs**, kept so nothing you wrote is lost; nothing in 0.6 builds a prompt from them. [Prompt Configs](./prompt-configs.md) still documents what those rows mean. This page focuses on Connections and Sampling Configs.
 
 Each connection is a named record holding a **type** (which backend adapter to use), a **Base URL** and/or **API Key** where applicable, a selected **Model**, a **Prompt Format**, a **Token Counter**, and a bag of type-specific **Advanced Settings** (stream mode, chat-vs-completion mode, and so on). Exactly one connection can be marked as the system's default (a star icon in the sidebar), and individual Chat Prompts or chats can override it — see [Prompt Configs](./prompt-configs.md) and [Chats](./chats.md) for how that override chain resolves.
 
-Creating a connection is done via the **+** button (or Ctrl/Cmd+N) in the Connections sidebar, which opens a **Create New AI Connection** modal: enter a name, then pick an **AI Service** from a single searchable combobox (placeholder text: "Search for a service (Groq, Ollama, Mistral, ...)"). This picker flattens every native connection type *and* every OpenAI-compatible preset (Groq, OpenRouter, Mistral, and so on — see [OpenAI Chat & Compatible Endpoint Presets](#openai-chat--compatible-endpoint-presets) below) into one list, grouped under **Cloud APIs**, **Local / Self-hosted**, and **Custom** — a preset isn't nested two levels deep behind a separate "OpenAI Chat" type selection; you can search and pick it directly. Whichever service you pick, its difficulty rating and description appear below the picker before you confirm. The editor tracks unsaved changes and will prompt before you switch connections, close the sidebar, or discard edits; a refresh icon reverts to the last-saved values, and a trash icon deletes the connection (with a confirmation modal).
+Creating a connection is done via the **+** button (or Ctrl/Cmd+N) in the Connections sidebar, which opens a **Create New AI Connection** modal: enter a name, then pick an **AI Service** from a single searchable combobox (placeholder text: "Search for a service (Groq, Ollama, Mistral, ...)"). This picker flattens every native connection type _and_ every OpenAI-compatible preset (Groq, OpenRouter, Mistral, and so on — see [OpenAI Chat & Compatible Endpoint Presets](#openai-chat--compatible-endpoint-presets) below) into one list, grouped under **Cloud APIs**, **Local / Self-hosted**, and **Custom** — a preset isn't nested two levels deep behind a separate "OpenAI Chat" type selection; you can search and pick it directly. Whichever service you pick, its difficulty rating and description appear below the picker before you confirm. The editor tracks unsaved changes and will prompt before you switch connections, close the sidebar, or discard edits; a refresh icon reverts to the last-saved values, and a trash icon deletes the connection (with a confirmation modal).
 
 ## Connection Types At A Glance
 
@@ -40,33 +42,33 @@ OpenAI Chat is Serene Pub's generic OpenAI-compatible connection type, meant for
 
 Because so many providers speak this same protocol, the **AI Service** picker in the New Connection modal (see [Overview](#overview)) lists every OpenAI-compatible preset directly alongside the native connection types, pre-filling the Base URL and a sensible Token Counter/Prompt Format for each. Selecting any preset here still creates an `openai` (OpenAI Chat) connection underneath — the preset only decides the starting values:
 
-| Preset                                 | Base URL                                                    |
-| --------------------------------------- | ------------------------------------------------------------ |
-| Custom (OpenAI-Compatible) / Empty      | _(blank — fill in your own)_                                  |
-| Ollama (via OpenAI-Compatible API)      | `http://localhost:11434/v1/`                                  |
-| OpenRouter                              | `https://openrouter.ai/api/v1/`                                |
-| OpenAI (Official)                       | `https://api.openai.com/v1/`                                   |
-| LocalAI                                 | `http://localhost:8080/v1/`                                    |
-| AnyScale                                | `https://api.endpoints.anyscale.com/v1/`                       |
-| Groq                                    | `https://api.groq.com/openai/v1/`                              |
-| Together AI                             | `https://api.together.xyz/v1/`                                 |
-| DeepInfra                               | `https://api.deepinfra.com/v1/openai/`                         |
-| Fireworks AI                            | `https://api.fireworks.ai/inference/v1/`                       |
-| Perplexity AI                           | `https://api.perplexity.ai/v1/`                                |
-| KoboldCPP (via OpenAI-Compatible API)   | `http://localhost:5001/v1/`                                    |
-| Mistral AI *(Experimental)*             | `https://api.mistral.ai/v1/`                                   |
-| xAI Grok *(Experimental)*               | `https://api.x.ai/v1/`                                          |
-| DeepSeek *(Experimental)*               | `https://api.deepseek.com/v1/`                                  |
-| Google Gemini *(Experimental)*          | `https://generativelanguage.googleapis.com/v1beta/openai/`      |
-| Cohere *(Experimental)*                 | `https://api.cohere.ai/compatibility/v1/`                       |
-| Novita AI *(Experimental)*              | `https://api.novita.ai/openai/`                                 |
-| Featherless AI *(Experimental)*         | `https://api.featherless.ai/v1/`                                |
-| text-generation-webui *(Experimental)*  | `http://127.0.0.1:5000/v1/`                                     |
-| vLLM *(Experimental)*                   | `http://localhost:8000/v1/`                                     |
-| SGLang *(Experimental)*                 | `http://localhost:30000/v1/`                                    |
-| Aphrodite Engine *(Experimental)*       | `http://localhost:2242/v1/`                                     |
+| Preset                                 | Base URL                                                   |
+| -------------------------------------- | ---------------------------------------------------------- |
+| Custom (OpenAI-Compatible) / Empty     | _(blank — fill in your own)_                               |
+| Ollama (via OpenAI-Compatible API)     | `http://localhost:11434/v1/`                               |
+| OpenRouter                             | `https://openrouter.ai/api/v1/`                            |
+| OpenAI (Official)                      | `https://api.openai.com/v1/`                               |
+| LocalAI                                | `http://localhost:8080/v1/`                                |
+| AnyScale                               | `https://api.endpoints.anyscale.com/v1/`                   |
+| Groq                                   | `https://api.groq.com/openai/v1/`                          |
+| Together AI                            | `https://api.together.xyz/v1/`                             |
+| DeepInfra                              | `https://api.deepinfra.com/v1/openai/`                     |
+| Fireworks AI                           | `https://api.fireworks.ai/inference/v1/`                   |
+| Perplexity AI                          | `https://api.perplexity.ai/v1/`                            |
+| KoboldCPP (via OpenAI-Compatible API)  | `http://localhost:5001/v1/`                                |
+| Mistral AI _(Experimental)_            | `https://api.mistral.ai/v1/`                               |
+| xAI Grok _(Experimental)_              | `https://api.x.ai/v1/`                                     |
+| DeepSeek _(Experimental)_              | `https://api.deepseek.com/v1/`                             |
+| Google Gemini _(Experimental)_         | `https://generativelanguage.googleapis.com/v1beta/openai/` |
+| Cohere _(Experimental)_                | `https://api.cohere.ai/compatibility/v1/`                  |
+| Novita AI _(Experimental)_             | `https://api.novita.ai/openai/`                            |
+| Featherless AI _(Experimental)_        | `https://api.featherless.ai/v1/`                           |
+| text-generation-webui _(Experimental)_ | `http://127.0.0.1:5000/v1/`                                |
+| vLLM _(Experimental)_                  | `http://localhost:8000/v1/`                                |
+| SGLang _(Experimental)_                | `http://localhost:30000/v1/`                               |
+| Aphrodite Engine _(Experimental)_      | `http://localhost:2242/v1/`                                |
 
-Presets tagged **Experimental** are newer additions provided as a starting point but not yet as thoroughly exercised against Serene Pub as the original list above — double-check the Base URL and any provider-specific quirks yourself. Every preset only sets the initial Base URL, Prompt Format, and Token Counter — you can change any of them afterward, and you'll still need to supply an API key for services that require one. The Ollama and KoboldCPP presets here talk to those backends' OpenAI-*compatible* endpoints, a different wire protocol from the dedicated [Ollama](#ollama) and [KoboldCPP (Remote)](#koboldcpp-remote) connection types described below — the picker labels them "(via OpenAI-Compatible API)" to keep the two apart.
+Presets tagged **Experimental** are newer additions provided as a starting point but not yet as thoroughly exercised against Serene Pub as the original list above — double-check the Base URL and any provider-specific quirks yourself. Every preset only sets the initial Base URL, Prompt Format, and Token Counter — you can change any of them afterward, and you'll still need to supply an API key for services that require one. The Ollama and KoboldCPP presets here talk to those backends' OpenAI-_compatible_ endpoints, a different wire protocol from the dedicated [Ollama](#ollama) and [KoboldCPP (Remote)](#koboldcpp-remote) connection types described below — the picker labels them "(via OpenAI-Compatible API)" to keep the two apart.
 
 ## Llama.cpp
 
@@ -232,7 +234,7 @@ Serene Pub ships two built-in, non-deletable Sampling Configs: **Default** (all 
 
 Internally, each Sampling Config's fields are translated to the parameter names the target API actually expects — for example `repetitionPenalty` becomes `rep_pen` for KoboldCPP but `repeat_penalty` for Ollama and `repetition_penalty` for LM Studio, and `contextTokens` becomes `num_ctx` (Ollama), `max_context_length` (LM Studio/KoboldCPP), or `n_ctx` (Llama.cpp) — OpenAI Chat and Anthropic don't accept a context-size parameter at all, so it's used only for local token-budget accounting on those types. Not every connection type supports every possible sampler in Serene Pub's data model; for example Anthropic maps only Temperature, Top P, Top K, and Response Tokens and has no equivalent for Frequency/Presence Penalty or Seed — unsupported fields are silently omitted from the outgoing request rather than causing an error.
 
-Context Configs — the Handlebars-style templates that assemble the full request sent to a model — are covered on their own page: see [Context Configs](./context-configs.md).
+Context templates — the Handlebars-style templates that assemble the full request sent to a model — are covered on their own page: see [Context Templates](./context-templates.md).
 
 ## Prompt Formats and Token Counters
 
@@ -258,4 +260,4 @@ A few behaviors apply across every connection type:
 - **Set Default** (the star button) marks a connection as the system-wide default used by any chat or Chat Prompt that doesn't specify its own override — see [Prompt Configs](./prompt-configs.md) for the full per-chat/per-prompt override resolution order, and [Chats](./chats.md) for where that plays out during a conversation.
 - A **KoboldCPP Manager** connection can't be set as the system default while the KoboldCPP Manager itself is disabled — the **Set Default** button is disabled with an explanatory tooltip in that case.
 - Deleting a connection, Sampling Config, or Context Config that's currently in use elsewhere doesn't cascade silently — model deletion from the KoboldCPP/Ollama Manager tabs, for instance, explicitly blocks removing a model that backs the current default connection, and the Connections sidebar's delete action always asks for confirmation first.
-- All four sidebars (Connections, Sampling, Contexts, Prompts) track unsaved changes in-memory and will pop a confirmation modal before letting you switch selections, close the sidebar, or navigate away and lose edits.
+- These sidebars (Connections, Sampling, and both tabs of Legacy configs) track unsaved changes in-memory and will pop a confirmation modal before letting you switch selections, close the sidebar, or navigate away and lose edits.

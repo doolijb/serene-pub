@@ -16,6 +16,7 @@ import {
 	respondSpec,
 	RESPOND_SPEC_ID
 } from "./bootstrap"
+import { CORE_SPECS } from "./specs"
 import * as schema from "$lib/server/db/schema"
 
 let db: TestDb
@@ -29,9 +30,15 @@ describe("bootstrapping the pipeline tables", () => {
 		const report = await bootstrapPipelines(db as any)
 		expect(report.conflict).toBeUndefined()
 		expect(report.types.inserted).toBeGreaterThan(0)
-		expect(report.specs).toEqual([
-			{ id: RESPOND_SPEC_ID, version: "1.0.0", action: "published" }
-		])
+		// Every pipeline core ships, published once, each with nothing to
+		// reconcile: the shipped default is created here and there are no tuned
+		// configs yet to cull or back-fill.
+		expect(report.specs.length).toBe(CORE_SPECS.length)
+		for (const s of report.specs) {
+			expect(s.action).toBe("published")
+			expect(s.reconciled).toEqual([])
+		}
+		expect(report.specs.map((s) => s.id)).toContain(RESPOND_SPEC_ID)
 	})
 
 	it("changes nothing on the next boot", async () => {

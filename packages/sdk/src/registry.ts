@@ -29,7 +29,7 @@
  * catches exactly that, and catches it at install rather than mid-run.
  */
 
-import type { Descriptor } from './descriptors.js'
+import type { Descriptor, SlotDecl } from './descriptors.js'
 import type { SpecDocument } from './document.js'
 
 /** A `type_registry` row (02 §3), as data. */
@@ -38,7 +38,24 @@ export interface RegistryEntry {
 	version: number
 	kind: string
 	ports: { in: Record<string, string | undefined>; out: Record<string, string | undefined> }
-	slots: string[]
+	/**
+	 * The **declarations**, not their names.
+	 *
+	 * This carried `string[]` until 0.6.0, and that quietly broke the promise the
+	 * column exists to keep. 12 §2 says slot declarations live in the type descriptor
+	 * *"so a plugin Provider's prompt fields render next to core's automatically, with
+	 * no UI work"*, and the table above says the registry row is what core reads
+	 * **without executing the plugin**. A name list satisfies neither: a form
+	 * generator given `['prompts', 'params']` knows a form exists and nothing about
+	 * what is in it, so it has to fall back to the in-process descriptor map — which
+	 * exists for core types, does not exist for a `transport: 'process'` plugin type,
+	 * and is the exact thing F6 forbids reaching for.
+	 *
+	 * Storing the declaration makes the pipeline view (05 §0a) and the lens view
+	 * (05 §3) generated from rows, which is what lets a plugin's sliders appear beside
+	 * core's with nothing authored twice.
+	 */
+	slots: Record<string, SlotDecl>
 	effects?: string
 	causesEvent?: string
 	public?: boolean
@@ -64,7 +81,7 @@ export function snapshotRegistry(types: Descriptor[], meta: { owner?: string; re
 			in: Object.fromEntries(Object.entries(d.ports?.in ?? {}).map(([k, v]) => [k, shapeId(v)])),
 			out: Object.fromEntries(Object.entries(d.ports?.out ?? {}).map(([k, v]) => [k, shapeId(v)])),
 		},
-		slots: Object.keys(d.slots ?? {}),
+		slots: { ...(d.slots ?? {}) },
 		effects: d.effects,
 		causesEvent: d.causesEvent,
 		public: d.public,
@@ -79,6 +96,7 @@ export type InstallCode =
 	| 'E_REDECLARES_CORE'
 	| 'E_PRIVATE_TYPE'
 	| 'E_MISSING_BINDING'
+	| 'E_IN_PROCESS_HOOK'
 	| 'W_NEWER_VERSION'
 
 export interface InstallFinding {
@@ -92,7 +110,7 @@ export interface InstallFinding {
 
 export interface InstallInput {
 	/** The plugin's own declared types, as summarized in its manifest. */
-	declares: Array<{ id: string; binding?: string; ports?: RegistryEntry['ports'] }>
+	declares: Array<{ id: string; binding?: string; ports?: RegistryEntry['ports']; runtime?: string }>
 	/** The pipeline documents shipped beside the manifest. */
 	documents: SpecDocument[]
 	/** The installing instance's registry. */
@@ -196,6 +214,27 @@ export function checkInstall(input: InstallInput): InstallFinding[] {
 				})
 		}
 	}
+
+	// 5a. A hook that wants to run inside Serene Pub's process.
+	//
+	// Refused from the manifest, before anything is loaded — which is the only
+	// moment it *can* be refused, since by the time the code is running it is
+	// already in the host's process. An in-process hook cannot be stopped: a
+	// runaway loop or a blocking call takes the whole application down with it,
+	// and F36's promise that every invocation is bounded stops being enforceable
+	// (13 §7h).
+	for (const d of input.declares)
+		if (d.runtime && d.runtime !== 'process')
+			findings.push({
+				severity: 'error',
+				code: 'E_IN_PROCESS_HOOK',
+				where: d.id,
+				message: `declares runtime '${d.runtime}'; extension hooks run in their own process`,
+				fix:
+					`rebuild with the current SDK, which no longer offers an in-process runtime. ` +
+					`A hook inside the host's process cannot be timed out or killed, so one bad ` +
+					`loop stops Serene Pub rather than one node.`,
+			})
 
 	// 6. A declared type nobody bound is a node the executor cannot invoke.
 	if (input.bound) {

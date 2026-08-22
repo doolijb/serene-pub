@@ -1993,39 +1993,16 @@
 					</header>
 
 					{#if draftCompiledPrompt?.meta}
-						{@const rag = draftCompiledPrompt.meta.rag}
 						{@const tokens = draftCompiledPrompt.meta.tokenCounts}
 						{@const msgs = draftCompiledPrompt.meta.chatMessages}
 						{@const src = draftCompiledPrompt.meta.sources}
+						{@const retrieval = draftCompiledPrompt.meta.retrieval}
 						{@const tokenPct = Math.min(
 							100,
 							Math.round((tokens.total / tokens.limit) * 100)
 						)}
 						{@const truncReason =
 							draftCompiledPrompt.meta.truncationReason}
-						{@const ragScores = rag?.used ? rag.scores : undefined}
-						{@const msgScoreMin = ragScores?.messageScores?.length
-							? Math.min(...ragScores.messageScores)
-							: null}
-						{@const msgScoreMax = ragScores?.messageScores?.length
-							? Math.max(...ragScores.messageScores)
-							: null}
-						{@const msgScoreAvg = ragScores?.messageScores?.length
-							? ragScores.messageScores.reduce(
-									(a, b) => a + b,
-									0
-								) / ragScores.messageScores.length
-							: null}
-						{@const loreScoreMin = ragScores?.loreScores?.length
-							? Math.min(...ragScores.loreScores)
-							: null}
-						{@const loreScoreMax = ragScores?.loreScores?.length
-							? Math.max(...ragScores.loreScores)
-							: null}
-						{@const loreScoreAvg = ragScores?.loreScores?.length
-							? ragScores.loreScores.reduce((a, b) => a + b, 0) /
-								ragScores.loreScores.length
-							: null}
 
 						<div
 							class="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1"
@@ -2086,21 +2063,16 @@
 											</span>
 										</span>
 									{/if}
-									{#if rag?.used === true}
-										<span
-											class="text-primary-400 font-medium"
-										>
-											RAG Context Infill Engine
-										</span>
-									{:else if rag?.used === false}
-										<span class="text-surface-400">
-											Keyword Context Infill Engine
-										</span>
-									{:else}
-										<span class="text-surface-400">
-											Context Infill Engine
-										</span>
-									{/if}
+									<!--
+										One engine now. Which retrieval *arm*
+										ran — keyword, vector, or both — is a
+										per-candidate fact and shows up in the
+										Retrieval section's reasoning, not as a
+										single label over the whole prompt.
+									-->
+									<span class="text-surface-400">
+										Pipeline
+									</span>
 								</div>
 								{#if truncReason}
 									<div
@@ -2145,77 +2117,6 @@
 										</span>
 									{/if}
 								</div>
-								{#if rag?.used === true}
-									<div class="grid grid-cols-3 gap-2 text-xs">
-										<div
-											class="bg-surface-300-700 rounded p-2 text-center"
-										>
-											<div class="font-semibold">
-												{rag.messages.guaranteed}
-											</div>
-											<div class="text-surface-700-300">
-												Guaranteed
-											</div>
-										</div>
-										<div
-											class="bg-surface-300-700 rounded p-2 text-center"
-										>
-											<div
-												class="text-primary-400 font-semibold"
-											>
-												{rag.messages.ragOlder}
-											</div>
-											<div class="text-surface-700-300">
-												RAG recalled
-											</div>
-										</div>
-										<div
-											class="bg-surface-300-700 rounded p-2 text-center"
-										>
-											<div class="font-semibold">
-												{rag.messages.filledIn}
-											</div>
-											<div class="text-surface-700-300">
-												Fill-in
-											</div>
-										</div>
-									</div>
-								{:else if rag?.used === false}
-									<div class="grid grid-cols-3 gap-2 text-xs">
-										<div
-											class="bg-surface-300-700 rounded p-2 text-center"
-										>
-											<div class="font-semibold">
-												{rag.messages.guaranteed}
-											</div>
-											<div class="text-surface-700-300">
-												Guaranteed
-											</div>
-										</div>
-										<div
-											class="bg-surface-300-700 rounded p-2 text-center"
-										>
-											<div class="font-semibold">
-												{rag.messages.filledIn}
-											</div>
-											<div class="text-surface-700-300">
-												Scored fill
-											</div>
-										</div>
-										<div
-											class="bg-surface-300-700 rounded p-2 text-center"
-										>
-											<div
-												class="text-surface-400 font-semibold"
-											>
-												{rag.messages.budget}
-											</div>
-											<div class="text-surface-700-300">
-												Budget
-											</div>
-										</div>
-									</div>
-								{/if}
 								{#if msgs.excludedIds?.length > 0}
 									<p class="text-surface-700-300 text-xs">
 										Excluded message IDs: {msgs.excludedIds.join(
@@ -2225,449 +2126,79 @@
 								{/if}
 							</section>
 
-							<!-- ── Lore & Graph ──────────────────────────────────────────────── -->
-							{#if rag?.used === true}
-								{@const wl = rag.lore.worldLore}
-								{@const cl = rag.lore.characterLore}
-								{@const hi = rag.lore.history}
-								<section
-									class="bg-surface-200-800 space-y-2 rounded-lg p-3"
-								>
-									<h3
-										class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
-									>
-										Lore & Graph
-									</h3>
-									<div
-										class="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4"
-									>
-										<div
-											class="bg-surface-300-700 rounded p-2"
-										>
-											<div class="text-surface-400 mb-1">
-												World Lore
-											</div>
-											{#if wl.pinned + wl.rag > 0}
-												<div class="font-medium">
-													{wl.pinned + wl.rag} included
-												</div>
-												<div
-													class="text-surface-700-300"
-												>
-													{wl.pinned} pinned · {wl.rag}
-													RAG
-												</div>
-											{:else}
-												<div
-													class="text-surface-700-300"
-												>
-													None
-												</div>
-											{/if}
-										</div>
-										<div
-											class="bg-surface-300-700 rounded p-2"
-										>
-											<div class="text-surface-400 mb-1">
-												Char Lore
-											</div>
-											{#if cl.pinned + cl.rag > 0}
-												<div class="font-medium">
-													{cl.pinned + cl.rag} included
-												</div>
-												<div
-													class="text-surface-700-300"
-												>
-													{cl.pinned} pinned · {cl.rag}
-													RAG
-												</div>
-											{:else}
-												<div
-													class="text-surface-700-300"
-												>
-													None
-												</div>
-											{/if}
-										</div>
-										<div
-											class="bg-surface-300-700 rounded p-2"
-										>
-											<div class="text-surface-400 mb-1">
-												History
-											</div>
-											{#if hi.pinned + hi.rag > 0}
-												<div class="font-medium">
-													{hi.pinned + hi.rag} included
-												</div>
-												<div
-													class="text-surface-700-300"
-												>
-													{hi.pinned} pinned · {hi.rag}
-													RAG
-												</div>
-											{:else}
-												<div
-													class="text-surface-700-300"
-												>
-													None
-												</div>
-											{/if}
-										</div>
-										<div
-											class="bg-surface-300-700 rounded p-2"
-										>
-											<div class="text-surface-400 mb-1">
-												Graph Pairs
-											</div>
-											{#if rag.graphPairs > 0}
-												<div
-													class="text-primary-400 font-medium"
-												>
-													{rag.graphPairs} pairs
-												</div>
-												<div
-													class="text-surface-700-300"
-												>
-													relationship context
-												</div>
-											{:else}
-												<div
-													class="text-surface-700-300"
-												>
-													None matched
-												</div>
-											{/if}
-										</div>
-									</div>
-								</section>
-							{:else if rag?.used === false}
-								{@const wl = rag.lore.worldLore}
-								{@const cl = rag.lore.characterLore}
-								{@const hi = rag.lore.history}
-								<section
-									class="bg-surface-200-800 space-y-2 rounded-lg p-3"
-								>
-									<h3
-										class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
-									>
-										Lore
-									</h3>
-									<div class="grid grid-cols-3 gap-2 text-xs">
-										<div
-											class="bg-surface-300-700 rounded p-2"
-										>
-											<div class="text-surface-400 mb-1">
-												World Lore
-											</div>
-											{#if wl.included > 0}
-												<div class="font-medium">
-													{wl.included} / {wl.budget}
-												</div>
-												<div
-													class="text-surface-700-300"
-												>
-													{wl.pinned} pinned · top {wl.topScore.toFixed(
-														2
-													)}
-												</div>
-											{:else}
-												<div
-													class="text-surface-700-300"
-												>
-													None
-												</div>
-											{/if}
-										</div>
-										<div
-											class="bg-surface-300-700 rounded p-2"
-										>
-											<div class="text-surface-400 mb-1">
-												Char Lore
-											</div>
-											{#if cl.included > 0}
-												<div class="font-medium">
-													{cl.included} / {cl.budget}
-												</div>
-												<div
-													class="text-surface-700-300"
-												>
-													{cl.pinned} pinned · top {cl.topScore.toFixed(
-														2
-													)}
-												</div>
-											{:else}
-												<div
-													class="text-surface-700-300"
-												>
-													None
-												</div>
-											{/if}
-										</div>
-										<div
-											class="bg-surface-300-700 rounded p-2"
-										>
-											<div class="text-surface-400 mb-1">
-												History
-											</div>
-											{#if hi.included > 0}
-												<div class="font-medium">
-													{hi.included} / {hi.budget}
-												</div>
-												<div
-													class="text-surface-700-300"
-												>
-													{hi.pinned} pinned · top {hi.topScore.toFixed(
-														2
-													)}
-												</div>
-											{:else}
-												<div
-													class="text-surface-700-300"
-												>
-													None
-												</div>
-											{/if}
-										</div>
-									</div>
-									{#if rag.entries.length > 0}
-										<div class="space-y-1 pt-1">
-											<div
-												class="text-surface-700-300 text-xs font-medium"
-											>
-												Top scored entries
-											</div>
-											{#each rag.entries.slice(0, 8) as entry}
-												<div
-													class="flex items-center justify-between gap-2 text-xs"
-												>
-													<span
-														class="text-surface-300-700 truncate"
-													>
-														{entry.name ||
-															entry.type}
-													</span>
-													<span
-														class="text-surface-700-300 shrink-0 font-mono"
-													>
-														{entry.score.total.toFixed(
-															3
-														)}
-													</span>
-													<span
-														class="shrink-0 rounded px-1 text-[10px] {entry.score.includedReason.startsWith(
-															'filled'
-														) ||
-														entry.score.includedReason.startsWith(
-															'reserved'
-														)
-															? 'bg-success-500/20 text-success-400'
-															: 'bg-surface-400/20 text-surface-700-300'}"
-													>
-														{entry.score.includedReason.replace(
-															/_/g,
-															" "
-														)}
-													</span>
-												</div>
-											{/each}
-										</div>
-									{/if}
-								</section>
-							{/if}
+							<!-- ── Retrieval ─────────────────────────────────────────────────── -->
+							<!--
+								Rebuilt on what the pipeline actually records, rather
+								than on the shape the legacy engines reported.
 
-							<!-- ── RAG Retrieval Scores ──────────────────────────────────────── -->
-							{#if ragScores}
+								The old panel showed `guaranteed / RAG recalled /
+								fill-in` counts and a score histogram. Those were
+								counters for the infill engine's internal phases, and
+								the pipeline has no phases: it scores candidates,
+								allocates a budget, and records per block why that
+								block is in or out. Reproducing the old numbers would
+								have meant inventing values for stages that no longer
+								run.
+
+								This answers the question the panel existed for —
+								"why isn't my lore showing up" — directly, per entry,
+								instead of via an aggregate it was inferred from.
+							-->
+							{#if retrieval?.blocks?.length}
+								{@const shown = retrieval.blocks}
+								{@const kept = shown.filter(
+									(b: { included: boolean }) => b.included
+								)}
 								<section
 									class="bg-surface-200-800 space-y-2 rounded-lg p-3"
 								>
 									<h3
 										class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
 									>
-										RAG Retrieval Scores
+										Retrieval
 									</h3>
-									<div
-										class="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4"
-									>
-										<div
-											class="bg-surface-300-700 rounded p-2"
-										>
-											<div class="text-surface-400 mb-1">
-												Threshold
-											</div>
-											<div class="font-mono font-medium">
-												{ragScores.thresholdUsed.toFixed(
-													3
-												)}
-											</div>
-											<div class="text-surface-700-300">
-												adaptive cutoff
-											</div>
-										</div>
-										<div
-											class="bg-surface-300-700 rounded p-2"
-										>
-											<div class="text-surface-400 mb-1">
-												Query Window
-											</div>
-											<div class="font-medium">
-												{ragScores.queryMessageCount}
-											</div>
-											<div class="text-surface-700-300">
-												messages embedded
-											</div>
-										</div>
-										<div
-											class="bg-surface-300-700 rounded p-2"
-										>
-											<div class="text-surface-400 mb-1">
-												Msg Scores
-											</div>
-											{#if msgScoreMin !== null}
+									<p class="text-surface-700-300 text-xs">
+										{kept.length} of {shown.length} candidates
+										included
+									</p>
+									<div class="space-y-1">
+										{#each shown as b (`${b.source}:${b.id}`)}
+											<div
+												class="bg-surface-300-700 rounded p-2 text-xs"
+											>
 												<div
-													class="font-mono font-medium"
+													class="flex items-baseline gap-2"
 												>
-													{msgScoreMin.toFixed(3)} – {msgScoreMax?.toFixed(
-														3
-													)}
+													<span
+														class="font-medium {b.included
+															? 'text-primary-400'
+															: 'text-surface-400'}"
+													>
+														{b.included
+															? "in"
+															: "out"}
+													</span>
+													<span
+														class="min-w-0 flex-1 truncate"
+													>
+														{b.name ?? b.source}
+													</span>
+													<span
+														class="text-surface-700-300 shrink-0"
+													>
+														{b.source} · {b.tokens} tok
+													</span>
 												</div>
-												<div
-													class="text-surface-700-300"
-												>
-													avg {msgScoreAvg?.toFixed(
-														3
-													)} · {ragScores
-														.messageScores.length} retrieved
-												</div>
-											{:else}
-												<div
-													class="text-surface-700-300"
-												>
-													None retrieved
-												</div>
-											{/if}
-										</div>
-										<div
-											class="bg-surface-300-700 rounded p-2"
-										>
-											<div class="text-surface-400 mb-1">
-												Lore Scores
+												{#if b.why?.length}
+													<p
+														class="text-surface-700-300 mt-1"
+													>
+														{b.why.join(" · ")}
+													</p>
+												{/if}
 											</div>
-											{#if loreScoreMin !== null}
-												<div
-													class="font-mono font-medium"
-												>
-													{loreScoreMin.toFixed(3)} – {loreScoreMax?.toFixed(
-														3
-													)}
-												</div>
-												<div
-													class="text-surface-700-300"
-												>
-													avg {loreScoreAvg?.toFixed(
-														3
-													)} · {ragScores.loreScores
-														.length} retrieved
-												</div>
-											{:else}
-												<div
-													class="text-surface-700-300"
-												>
-													None retrieved
-												</div>
-											{/if}
-										</div>
+										{/each}
 									</div>
-									<!-- Score distribution bars -->
-									{#if ragScores.messageScores.length > 0 || ragScores.loreScores.length > 0}
-										<div class="space-y-1.5 pt-1">
-											{#if ragScores.messageScores.length > 0}
-												<div
-													class="flex items-center gap-2 text-xs"
-												>
-													<span
-														class="text-surface-700-300 w-16 shrink-0"
-													>
-														Messages
-													</span>
-													<div
-														class="flex h-3 flex-1 gap-px overflow-hidden rounded"
-													>
-														{#each [...ragScores.messageScores].sort((a, b) => b - a) as score}
-															<div
-																class="bg-primary-500/70 h-full shrink-0"
-																style="width: {Math.max(
-																	2,
-																	((score /
-																		(ragScores.thresholdUsed >
-																		0
-																			? 1
-																			: 1)) *
-																		100) /
-																		ragScores
-																			.messageScores
-																			.length
-																)}%; opacity: {0.4 +
-																	score *
-																		0.6}"
-																title="Score: {score.toFixed(
-																	3
-																)}"
-															></div>
-														{/each}
-													</div>
-													<span
-														class="text-surface-700-300 w-10 shrink-0 text-right"
-													>
-														{ragScores.messageScores
-															.length}
-													</span>
-												</div>
-											{/if}
-											{#if ragScores.loreScores.length > 0}
-												<div
-													class="flex items-center gap-2 text-xs"
-												>
-													<span
-														class="text-surface-700-300 w-16 shrink-0"
-													>
-														Lore
-													</span>
-													<div
-														class="flex h-3 flex-1 gap-px overflow-hidden rounded"
-													>
-														{#each [...ragScores.loreScores].sort((a, b) => b - a) as score}
-															<div
-																class="bg-secondary-500/70 h-full shrink-0"
-																style="width: {Math.max(
-																	2,
-																	((score /
-																		(ragScores.thresholdUsed >
-																		0
-																			? 1
-																			: 1)) *
-																		100) /
-																		ragScores
-																			.loreScores
-																			.length
-																)}%; opacity: {0.4 +
-																	score *
-																		0.6}"
-																title="Score: {score.toFixed(
-																	3
-																)}"
-															></div>
-														{/each}
-													</div>
-													<span
-														class="text-surface-700-300 w-10 shrink-0 text-right"
-													>
-														{ragScores.loreScores
-															.length}
-													</span>
-												</div>
-											{/if}
-										</div>
-									{/if}
 								</section>
 							{/if}
 

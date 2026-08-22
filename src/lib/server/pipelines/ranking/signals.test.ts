@@ -32,7 +32,7 @@ import {
 	allocateBudgets,
 	withDefaults
 } from "./weights"
-import { PRIORITY_SCORE_BONUS } from "$lib/server/utils/promptBuilder/KeywordInfillEngine"
+import { PRIORITY_SCORE_BONUS } from "./weights"
 
 const msgs = (...contents: string[]) => contents.map((content) => ({ content }))
 

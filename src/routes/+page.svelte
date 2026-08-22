@@ -223,16 +223,13 @@
 			// Set default user configs on first wizard show
 			if (!systemSettingsCtx.settings?.defaultSamplingConfigId)
 				socket.emit("samplingConfigs:setUserActive", { id: 1 })
-			if (
-				!userSettingsCtx.settings?.activeContextConfigId &&
-				!systemSettingsCtx.settings?.defaultContextConfigId
-			)
-				socket.emit("contextConfigs:setUserActive", { id: 1 })
-			if (
-				!userSettingsCtx.settings?.activePromptConfigId &&
-				!systemSettingsCtx.settings?.defaultPromptConfigId
-			)
-				socket.emit("promptConfigs:setUserActive", { id: 1 })
+			// The context and prompt config pointers are deliberately not set
+			// here any more. They address the 0.5 tables, which are an archive
+			// — nothing in 0.6 reads them, so pointing a new user's at row 1
+			// was a write that changed nothing, and the socket now refuses it.
+			// What a new install actually needs is seeded by
+			// `bootstrapPipelines`, which points every pipeline's shipped
+			// config at a prompt and a context template before anyone logs in.
 			// Skip welcome if any step is already complete
 			const anyDone = wizardSteps.slice(1).some((s) => s.isComplete())
 			if (anyDone) {
@@ -888,16 +885,17 @@
 									class="text-muted-foreground mx-auto max-w-sm text-base"
 								>
 									{#if wizardPath === "admin-first-time"}
-										Let's get your server set up and ready
-										to chat. This only takes a few minutes.
+										Let's get your application set up and
+										ready to chat. This only takes a few
+										minutes.
 									{:else if wizardPath === "admin-existing"}
-										The server is already configured. Let's
-										get your personal account set up so you
-										can start chatting.
+										The application is already configured.
+										Let's get your personal account set up
+										so you can start chatting.
 									{:else}
 										An administrator has already set up the
-										server. Let's get your account ready so
-										you can start chatting.
+										application. Let's get your account
+										ready so you can start chatting.
 									{/if}
 								</p>
 							</div>

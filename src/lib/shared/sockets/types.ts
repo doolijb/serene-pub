@@ -774,6 +774,32 @@ declare global {
 							personas: any[]
 							scenario: string | null
 						}
+						/**
+						 * What retrieval did, in the pipeline's own terms.
+						 *
+						 * Replaces `rag` below rather than extending it. Those
+						 * counters described the legacy infill engine's internal
+						 * phases — a guaranteed window, a RAG pass, a fill pass —
+						 * and the pipeline has none of them: it scores
+						 * candidates, allocates a budget, and records per block
+						 * why that block is in or out. `rag` stays declared only
+						 * until the legacy path is deleted.
+						 */
+						retrieval?: {
+							budget: {
+								total: number
+								used: number
+								remaining: number
+							} | null
+							blocks: Array<{
+								id: number | string
+								source: string
+								name: string | null
+								tokens: number
+								included: boolean
+								why: string[]
+							}>
+						}
 						rag?:
 							| {
 									used: true
@@ -1575,6 +1601,575 @@ declare global {
 				}
 				interface Response {
 					user: SelectUser
+				}
+			}
+		}
+
+		/**
+		 * Pipelines — the configuration/preset layer, one namespace at a time.
+		 *
+		 * The payload deliberately carries no topology (05 §0a): an option is an
+		 * opaque id, a label and a value, never a node key. Structural editing
+		 * lives behind a system setting, and a default-view payload that shipped
+		 * node keys would make that setting cosmetic.
+		 */
+		namespace Pipelines {
+			interface Option {
+				id: string
+				label: string
+				description?: string
+				control: string
+				min?: number
+				max?: number
+				of?: readonly string[]
+				/**
+				 * For a `*-ref` control: what it may be pointed at, already
+				 * scoped by the declaration (this namespace's prompts, this
+				 * shape's connections). The panel renders the list; it never
+				 * decides what belongs in it.
+				 */
+				choices?: Array<{
+					id: number
+					label: string
+					description?: string
+				}>
+				/**
+				 * For a `prompts-ref` option: the selected prompt row in
+				 * full, so the panel can show and edit its text inline.
+				 * `readOnly` = a shipped prompt — clone it, never edit it.
+				 */
+				prompt?: {
+					id: number
+					name: string
+					fields: Record<string, string>
+					readOnly: boolean
+				}
+				/**
+				 * For a `variable-template-ref` option: the selected layout
+				 * row in full, for the same reason — a name in a dropdown
+				 * cannot answer "what does this produce".
+				 *
+				 * The variable id is deliberately absent: it is shaped like
+				 * a node key (`core:var/history@1`) and the payload carries
+				 * no topology. Every mutation is addressed by the option
+				 * handle instead.
+				 */
+				variableTemplate?: {
+					id: number
+					name: string
+					source: string
+					readOnly: boolean
+				}
+				/**
+				 * For a `context-template-ref` option: the selected story
+				 * string, in full. The same ride-along as `prompt` and
+				 * `variableTemplate`, and here it matters most — a context
+				 * template is the largest authored thing in the product, and a
+				 * picker showing "Default" says nothing about what the prompt
+				 * will look like.
+				 */
+				contextTemplate?: {
+					id: number
+					name: string
+					source: string
+					readOnly: boolean
+					/** usedHere | shipped | alsoFits — which group it sorted into. */
+					group?: string
+					/** The pipeline it was written in, when that is not this one. */
+					origin?: string
+				}
+				authorDefault?: unknown
+				value: unknown
+				/** chat | user | preset | instance | author — where the value won. */
+				source: string
+				writable: boolean
+				/**
+				 * Where this option's edits land when it is not the viewer's
+				 * default scope — an admin's non-prompt options write at
+				 * "instance". Send it back as `scope` on set/clear.
+				 */
+				writeAt?: string
+				overriddenHere: boolean
+			}
+			/**
+			 * One step of the pipeline, in run order. The `key` is an ordinal,
+			 * not a node key — grouping by step reveals the count and order
+			 * (a deliberate 0.6 trade), never an address. `advanced` is the
+			 * tuning parameters, collapsed by default in the panel.
+			 */
+			interface Step {
+				key: string
+				label: string
+				options: Option[]
+				advanced: Option[]
+			}
+			/**
+			 * A named configuration for this pipeline — the shipped immutable
+			 * default plus any copies a person has made. Selecting one is what
+			 * the old preset picker did, over the table the runtime actually
+			 * resolves against.
+			 */
+			interface NamedConfig {
+				id: number
+				name: string
+				isDefault: boolean
+				readOnly: boolean
+			}
+			interface Namespace {
+				slug: string
+				name: string
+				version: string
+				event: string | null
+				enabled: boolean
+			}
+			interface NamespaceDetail extends Namespace {
+				configs: NamedConfig[]
+				/** `source` is where the selection came from: chat | user | instance | shipped. */
+				selectedConfig: {
+					id: number
+					name: string
+					source: string
+				} | null
+				steps: Step[]
+				writeScope: string
+			}
+
+			namespace List {
+				interface Params {}
+				interface Response {
+					pipelinesList: Namespace[]
+					/**
+					 * Whether the legacy Prompt Configs sidebar is offered,
+					 * read-only. The one toggle that outlives the changeover.
+					 */
+					legacyPromptConfigsVisible: boolean
+				}
+			}
+			namespace Get {
+				interface Params {
+					slug: string
+					/** Set when opened from inside a chat — writes land at chat scope. */
+					chatId?: number
+				}
+				interface Response {
+					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			namespace SetOption {
+				interface Params {
+					slug: string
+					optionId: string
+					value: unknown
+					chatId?: number
+					/** Admins only, and only to say "for everyone on this instance". */
+					scope?: "instance"
+				}
+				interface Response {
+					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			namespace ClearOption {
+				interface Params {
+					slug: string
+					optionId: string
+					chatId?: number
+					scope?: "instance"
+				}
+				interface Response {
+					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			/**
+			 * The review gate (01 §7). A run parked at a gated node pushes
+			 * `pipelines:reviewRequested` with a form inferred from the
+			 * payload the node received — the same schema strategy plugin
+			 * settings and extension forms use. The person's decision resumes
+			 * the run; `reject` halts it.
+			 */
+			interface PendingReview {
+				id: string
+				specId: string
+				nodeKey: string
+				typeId: string
+				/** An SDK `SettingsSchema` — field declarations, one per payload key. */
+				schema: Record<string, unknown>
+				values: Record<string, unknown>
+				requestedAt: number
+			}
+			namespace Reviews {
+				interface Params {}
+				interface Response {
+					reviews: PendingReview[]
+				}
+			}
+			namespace ResolveReview {
+				interface Params {
+					id: string
+					action: "approve" | "edit" | "reject"
+					/** For `edit`: the form values, folded back through the schema. */
+					values?: Record<string, unknown>
+				}
+				interface Response {
+					ok?: boolean
+					error?: string
+				}
+			}
+			namespace SelectConfig {
+				interface Params {
+					slug: string
+					configId: number
+					chatId?: number
+					scope?: "instance"
+				}
+				interface Response {
+					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			/**
+			 * Prompt CRUD from the panel. A prompt is namespaced to its
+			 * pipeline, and every mutation checks that before touching the
+			 * row. Clone answers with the new id so the panel can select the
+			 * copy in the same gesture.
+			 */
+			namespace ClonePrompt {
+				interface Params {
+					slug: string
+					promptId: number
+					name?: string
+					chatId?: number
+				}
+				interface Response {
+					promptId?: number
+					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			namespace UpdatePrompt {
+				interface Params {
+					slug: string
+					promptId: number
+					name?: string
+					fields?: Record<string, string>
+					chatId?: number
+				}
+				interface Response {
+					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			namespace DeletePrompt {
+				interface Params {
+					slug: string
+					promptId: number
+					chatId?: number
+				}
+				interface Response {
+					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			/**
+			 * Layout mutations address the *setting*, not the pipeline.
+			 *
+			 * `optionId` rather than a slug-plus-node pair because a layout row
+			 * is shared across pipelines by design — "does this belong to this
+			 * spec" has no true answer for one. The handle proves the caller is
+			 * operating a control this pipeline offers them, and the setting's
+			 * variable is what the target row has to match.
+			 */
+			/**
+			 * What a draft would render, without saving it.
+			 *
+			 * A read despite living beside the writes: it renders against the
+			 * registry's declared samples and touches no row. Admin-gated all
+			 * the same, because it is reached from the library and the sample
+			 * data describes the instance's own nodes.
+			 */
+			namespace PreviewTemplate {
+				interface Params {
+					/** "context" renders a whole template; "variable" one layout. */
+					kind: "context" | "variable"
+					source: string
+					engine?: string | null
+					/** The pool the draft belongs to — a node type or a variable id. */
+					poolId: string
+				}
+				interface Response {
+					/** Set for a context template: role-tagged blocks. */
+					messages?: Array<{ role: string; content: string }>
+					/** Set for a variable layout: the string it produces. */
+					rendered?: string
+					/** Lint findings, if any — a template can render and still be wrong. */
+					issues?: string[]
+					error?: string
+				}
+			}
+			namespace CloneVariableTemplate {
+				interface Params {
+					slug: string
+					optionId: string
+					templateId: number
+					name?: string
+					chatId?: number
+				}
+				interface Response {
+					templateId?: number
+					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			namespace UpdateVariableTemplate {
+				interface Params {
+					slug: string
+					optionId: string
+					templateId: number
+					name?: string
+					source?: string
+					chatId?: number
+				}
+				interface Response {
+					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			namespace DeleteVariableTemplate {
+				interface Params {
+					slug: string
+					optionId: string
+					templateId: number
+					chatId?: number
+				}
+				interface Response {
+					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			/**
+			 * Context templates — the story string, mutated through the setting
+			 * that renders it.
+			 *
+			 * `Create` exists where layouts have only `Clone` because a
+			 * template pool can be legitimately empty: core ships one for the
+			 * assemble step and nothing for any other node with a template
+			 * slot, and a picker with no rows and no way to add one is a dead
+			 * end rather than a default.
+			 */
+			namespace CreateContextTemplate {
+				interface Params {
+					slug: string
+					optionId: string
+					name?: string
+					source?: string
+					chatId?: number
+				}
+				interface Response {
+					templateId?: number
+					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			namespace CloneContextTemplate {
+				interface Params {
+					slug: string
+					optionId: string
+					templateId: number
+					name?: string
+					chatId?: number
+				}
+				interface Response {
+					templateId?: number
+					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			namespace UpdateContextTemplate {
+				interface Params {
+					slug: string
+					optionId: string
+					templateId: number
+					name?: string
+					source?: string
+					chatId?: number
+				}
+				interface Response {
+					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			namespace DeleteContextTemplate {
+				interface Params {
+					slug: string
+					optionId: string
+					templateId: number
+					chatId?: number
+				}
+				interface Response {
+					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			/**
+			 * The admin workspace's read: every authored thing, and what uses it.
+			 *
+			 * One round trip rather than four, because the page's value is
+			 * cross-entity — "this layout is held by the narrator" is the answer
+			 * a per-entity fetch cannot give without a second one.
+			 */
+			namespace Library {
+				interface Params {}
+				interface LibraryPipeline {
+					slug: string
+					name: string
+					version: string | null
+					status: string | null
+					nodeCount: number
+				}
+				interface LibraryPrompt {
+					id: number
+					specSlug: string
+					specName: string
+					name: string
+					isImmutable: boolean
+					fields: Record<string, string>
+					/** Pipelines currently pointing at it, by display name. */
+					usedBy: string[]
+				}
+				interface LibraryTemplate {
+					id: number
+					name: string
+					source: string
+					engine: string | null
+					isImmutable: boolean
+					/** The pool: a node type id, or a variable id. */
+					poolId: string
+					poolLabel: string
+					/** The pipeline it was authored in, when it records one. */
+					origin?: string
+					usedBy: string[]
+				}
+				interface LibraryPool {
+					id: string
+					label: string
+				}
+				interface Response {
+					pipelines?: LibraryPipeline[]
+					prompts?: LibraryPrompt[]
+					contextTemplates?: LibraryTemplate[]
+					variableTemplates?: LibraryTemplate[]
+					/** Every declared pool, including the empty ones. */
+					contextPools?: LibraryPool[]
+					variablePools?: LibraryPool[]
+					error?: string
+				}
+			}
+			/**
+			 * The workspace's writes.
+			 *
+			 * Gated on **admin**, not on an option handle. The panel's gate asks
+			 * "does this pipeline offer you this control", which is the right
+			 * question there and has no meaning here — the library is reached
+			 * behind the admin check and edits rows directly, including ones no
+			 * pipeline has selected. The entity modules still hold every rule
+			 * about what may be edited or deleted; only the way in differs.
+			 *
+			 * Each answers with the whole refreshed view, because a mutation on
+			 * this page routinely changes another tab: deleting a template
+			 * changes what a pipeline is using.
+			 */
+			namespace LibraryTemplateWrite {
+				/** Which pool a row belongs to. */
+				type Kind = "context" | "variable"
+				interface CreateParams {
+					kind: Kind
+					/** Node type id for a context template; variable id for a layout. */
+					poolId: string
+					name?: string
+					source?: string
+				}
+				interface CloneParams {
+					kind: Kind
+					id: number
+					name?: string
+				}
+				interface UpdateParams {
+					kind: Kind
+					id: number
+					name?: string
+					source?: string
+				}
+				interface DeleteParams {
+					kind: Kind
+					id: number
+				}
+				interface Response {
+					library?: Library.Response
+					error?: string
+				}
+			}
+			namespace LibraryPromptWrite {
+				interface CloneParams {
+					id: number
+					name?: string
+				}
+				interface UpdateParams {
+					id: number
+					name?: string
+					fields?: Record<string, string>
+				}
+				interface DeleteParams {
+					id: number
+				}
+				interface Response {
+					library?: Library.Response
+					error?: string
+				}
+			}
+			/** The management page: versions, publish state, and the boot diagnostic. */
+			namespace Detail {
+				interface Params {
+					slug: string
+				}
+				interface Response {
+					spec?: {
+						slug: string
+						name: string
+						versions: {
+							id: number
+							semver: string
+							status: string
+							canonicalHash: string
+							isActive: boolean
+							publishedAt: string | null
+							nodeCount: number
+						}[]
+					}
+					error?: string
+				}
+			}
+			/** Recent runs, for the simplified inspector (05 §0a, §6). */
+			namespace Runs {
+				interface Params {
+					chatId?: number
+					limit?: number
+				}
+				interface Response {
+					runs: {
+						id: number
+						runId: string
+						specSlug: string
+						outcome: string
+						haltNodeKey: string | null
+						haltReason: string | null
+						elapsedMs: number
+						tokensSpent: number
+						isPreview: boolean
+						messageId: number | null
+						startedAt: string
+					}[]
 				}
 			}
 		}

@@ -19,9 +19,10 @@
  * allowed to see rather than against the query it happened to send (F30).
  */
 
-import { and, desc, eq } from "drizzle-orm"
+import { and, asc, desc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { HostServices, NodeRef } from "@serene-pub/sdk"
+import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
 
 type Db = { select: any; insert: any; update: any }
 
@@ -44,6 +45,79 @@ export interface HostScope {
 	}
 	/** Aborts an in-flight provider call when the run is cancelled. */
 	signal?: AbortSignal
+}
+
+/**
+ * The Providers that are "one prompt, one call, one string".
+ *
+ * A set rather than a switch: they take the same path, so enumerating them as
+ * cases would be eleven copies of one line and eleven chances to omit the
+ * twelfth.
+ */
+const STEP_TYPE_LIST = [
+	"core:provider/summarize-batch",
+	"core:provider/summarize-synth",
+	"core:provider/name-entry",
+	"core:provider/extract-cast",
+	"core:provider/graph-pre-filter",
+	"core:provider/graph-node-resolution",
+	"core:provider/graph-perspective",
+	"core:provider/graph-node-description",
+	"core:provider/graph-state-detection"
+]
+
+const STEP_TYPES = new Set(STEP_TYPE_LIST)
+
+/** Exported under a test-only name so a suite can check the set is complete. */
+export const STEP_TYPES_FOR_TEST = STEP_TYPE_LIST
+
+/**
+ * A slot reference's row id.
+ *
+ * A resolved `connection` or `sampling` slot is the id of a row in its own
+ * table — never the row. Accepts the object form too, because a preset written
+ * before configs existed may carry `{ ref: 3 }`.
+ */
+const refId = (v: unknown): number | null => {
+	if (typeof v === "number") return v
+	if (typeof v === "string" && /^\d+$/.test(v)) return Number(v)
+	if (v && typeof v === "object") {
+		const inner = (v as any).ref ?? (v as any).id
+		return typeof inner === "number" ? inner : null
+	}
+	return null
+}
+
+/**
+ * The user half of a step's prompt.
+ *
+ * Built by the binding, not here. The summarize steps call
+ * `summarizer/templates.ts` — the same builders the legacy path uses — so the
+ * rules, the `<content>` contract and the per-lore-type wording live in exactly
+ * one place and cannot drift from the path they are migrating off. This is the
+ * fallback for the graph steps, which hand their scenes over as JSON.
+ */
+function stepUserPrompt(p: Record<string, any>): string {
+	if (typeof p.userPrompt === "string") return p.userPrompt
+	if (Array.isArray(p.scenes)) return JSON.stringify(p.scenes, null, 1)
+	if (typeof p.content === "string") return p.content
+	return ""
+}
+
+/** Salvage JSON a model wrapped in prose. Null when there is none to find. */
+function tryJson(text: string): unknown {
+	if (!text) return null
+	try {
+		return JSON.parse(text)
+	} catch {
+		const match = /[[{][\s\S]*[\]}]/.exec(text)
+		if (!match) return null
+		try {
+			return JSON.parse(match[0])
+		} catch {
+			return null
+		}
+	}
 }
 
 export class HostScopeError extends Error {}
@@ -128,6 +202,94 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						.limit(1)
 				}
 
+				case "summarize_source": {
+					/**
+					 * The messages a summary is drawn from, with sender *names*.
+					 *
+					 * A separate read from `chat_messages` because the two want
+					 * different things: retrieval wants the recent window in
+					 * reading order; a summary wants a chosen range — possibly
+					 * the whole chat — and it wants `senderName` resolved, since
+					 * the drafting prompt renders speakers and a batch of
+					 * "Unknown: ..." lines summarizes a conversation nobody had.
+					 *
+					 * The selection rule mirrors the legacy handler exactly: an
+					 * explicit id list is taken as given (a person picked those
+					 * messages, hidden or not); "everything" filters hidden.
+					 */
+					const chatId = q.chatId ?? scope.chatId
+					assertScoped(node, q.chatId, scope.chatId)
+					if (chatId === undefined) return []
+
+					const messageIds: number[] | undefined = Array.isArray(
+						q.messageIds
+					)
+						? q.messageIds.map(Number).filter(Number.isFinite)
+						: undefined
+
+					const rows = await db
+						.select()
+						.from(schema.chatMessages)
+						.where(
+							messageIds
+								? and(
+										eq(schema.chatMessages.chatId, chatId),
+										inArray(
+											schema.chatMessages.id,
+											messageIds
+										)
+									)
+								: and(
+										eq(schema.chatMessages.chatId, chatId),
+										eq(schema.chatMessages.isHidden, false)
+									)
+						)
+						.orderBy(asc(schema.chatMessages.id))
+						.limit(Math.min(q.limit ?? 5000, 5000))
+
+					const charIds: number[] = [
+						...new Set<number>(
+							rows
+								.filter((m: any) => m.characterId)
+								.map((m: any) => Number(m.characterId))
+						)
+					]
+					const personaIds: number[] = [
+						...new Set<number>(
+							rows
+								.filter((m: any) => m.personaId)
+								.map((m: any) => Number(m.personaId))
+						)
+					]
+					const characters = charIds.length
+						? await db
+								.select()
+								.from(schema.characters)
+								.where(inArray(schema.characters.id, charIds))
+						: []
+					const personas = personaIds.length
+						? await db
+								.select()
+								.from(schema.personas)
+								.where(inArray(schema.personas.id, personaIds))
+						: []
+					const characterName = new Map(
+						characters.map((c: any) => [c.id, c.name])
+					)
+					const personaName = new Map(
+						personas.map((p: any) => [p.id, resolvePersonaName(p)])
+					)
+
+					return rows.map((m: any) => ({
+						...toMessage(m),
+						senderName:
+							(m.characterId &&
+								characterName.get(m.characterId)) ||
+							(m.personaId && personaName.get(m.personaId)) ||
+							(m.role === "user" ? "User" : "Unknown")
+					}))
+				}
+
 				case "lorebook_entries": {
 					// The chat's lorebook, or nothing. A pipeline cannot name a
 					// lorebook it was not triggered against — lore is chat-scoped
@@ -174,16 +336,99 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							)
 					])
 
+					/**
+					 * Normalized here, at the read, for the same reason
+					 * `chat_messages` honours `isHidden` here rather than in
+					 * each binding: a new Query type cannot forget it.
+					 *
+					 * Two transforms, and **both were missing on the pipeline
+					 * path entirely** — found by mapping what only the legacy
+					 * engines called. `@@` decorator lines were reaching models
+					 * as literal text while `handlebarsLint.ts` promises users
+					 * they are stripped, and `{{char:1}}` binding placeholders
+					 * were arriving unsubstituted. The still-legacy token-count
+					 * preview *did* strip them, so the number on screen and the
+					 * prompt actually sent disagreed on any chat using either.
+					 *
+					 * The legacy function is reused rather than reimplemented.
+					 * A second copy of "what a lore entry looks like once it is
+					 * ready" is exactly the drift this branch keeps finding —
+					 * and this one would show up as a prompt difference nobody
+					 * could localise. It relocates with the module when the
+					 * legacy split happens; it does not get rewritten.
+					 */
+					const bindings = await db
+						.select()
+						.from(schema.lorebookBindings)
+						.where(
+							eq(
+								schema.lorebookBindings.lorebookId,
+								chat.lorebookId
+							)
+						)
+					const hydrated = await hydrateBindings(db, bindings)
+					// The visibility rule below reads the chat's personas, so
+					// they are part of the shape it is handed.
+					const chatPersonas = await db
+						.select()
+						.from(schema.chatPersonas)
+						.where(eq(schema.chatPersonas.chatId, chatId))
+					const asChat = {
+						lorebookId: chat.lorebookId,
+						lorebook: {
+							id: chat.lorebookId,
+							lorebookBindings: hydrated
+						},
+						chatPersonas: (chatPersonas as any[]).map((cp) => ({
+							persona: { id: cp.personaId }
+						}))
+					} as any
+
+					const {
+						populateLorebookEntryBindings,
+						isCharacterLoreEntryVisible
+					} = await import("./characterLore")
+					const ready = (e: any) =>
+						populateLorebookEntryBindings(e, asChat)
+
+					/**
+					 * Character lore is private self-knowledge.
+					 *
+					 * An entry bound to a character is visible only while
+					 * generating *as* that character; one bound to nothing is
+					 * the Narrator's alone. The legacy engines have always
+					 * enforced this and the pipeline path never did — so every
+					 * character's private lore has been competing for the same
+					 * ranking budget as world lore on every turn, and would
+					 * have leaked outright the moment character lore was wired
+					 * into the cast cards.
+					 *
+					 * `currentCharacterId` is `null` in narrator mode, which the
+					 * rule treats as omniscient. A read that does not supply it
+					 * is therefore narrator-shaped by default — the callers all
+					 * pass it, and the coalesce keeps `undefined` from silently
+					 * meaning "some character".
+					 */
+					const speaker = q.currentCharacterId ?? null
+					const visible = (e: any) =>
+						isCharacterLoreEntryVisible(e, asChat, speaker)
+
 					// Tagged with their source rather than returned as three lists,
 					// because every consumer downstream — scoring, budgeting, the
 					// receipt — keys on source, and splitting them again at each
 					// step is three chances to forget one.
 					return [
-						...world.map((e: any) => toLoreEntry(e, "worldLore")),
-						...character.map((e: any) =>
-							toLoreEntry(e, "characterLore")
+						...world.map((e: any) =>
+							toLoreEntry(ready(e), "worldLore")
 						),
-						...history.map((e: any) => toLoreEntry(e, "history"))
+						...character
+							.filter(visible)
+							.map((e: any) =>
+								toLoreEntry(ready(e), "characterLore")
+							),
+						...history.map((e: any) =>
+							toLoreEntry(ready(e), "history")
+						)
 					]
 				}
 
@@ -248,6 +493,65 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						chatScenario: (chat as any).scenario ?? null,
 						isGroup: Boolean((chat as any).isGroup)
 					}
+				}
+
+				case "graph_scenes": {
+					// Scenes with their messages, in order. The graph builder
+					// walks them one at a time and each step reads the same
+					// list, which is why this is one read rather than one per
+					// step — five identical queries would be five chances for
+					// them to disagree about what "this chat" contains.
+					const chatId = q.chatId ?? scope.chatId
+					assertScoped(node, q.chatId, scope.chatId)
+					if (chatId === undefined) return []
+					return await db
+						.select()
+						.from(schema.scenes)
+						.where(eq(schema.scenes.chatId, chatId))
+						.orderBy(asc(schema.scenes.id))
+				}
+
+				case "graph_context": {
+					/**
+					 * The speaker's relationship summary, already rendered.
+					 *
+					 * Returns the string `buildGraphContext` produces rather
+					 * than the rows behind it, deliberately. The legacy path
+					 * and the pipeline both put this exact text in a prompt,
+					 * and a second derivation here would be two renderings of
+					 * one shape that agree until somebody edits one — the
+					 * failure the whole parity effort exists to prevent.
+					 *
+					 * Null whenever the chat has no lorebook, or the speaker
+					 * has no bound node, or there are no relationships. That is
+					 * the common case on an install that never opened the
+					 * graph, and it is not an error.
+					 */
+					const chatId = q.chatId ?? scope.chatId
+					assertScoped(node, q.chatId, scope.chatId)
+					if (chatId === undefined) return null
+
+					const [chat] = await db
+						.select({ lorebookId: schema.chats.lorebookId })
+						.from(schema.chats)
+						.where(eq(schema.chats.id, chatId))
+						.limit(1)
+					if (!chat?.lorebookId) return null
+
+					const { buildGraphContext } = await import(
+						"$lib/server/utils/graphContextFormatter"
+					)
+					return (
+						(await buildGraphContext({
+							chatId,
+							lorebookId: chat.lorebookId,
+							speakerCharacterId: q.currentCharacterId ?? null,
+							speakerPersonaId: null,
+							// The host's own connection, not the module-scope
+							// one — see the note on the parameter.
+							db: db as any
+						})) ?? null
+					)
 				}
 
 				case "embedding_status": {
@@ -450,11 +754,36 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					return result
 				}
 
-				default:
+				default: {
+					/**
+					 * Every summarize and graph step, through one dispatcher.
+					 *
+					 * They differ in how the *user* prompt is built and in
+					 * nothing else — same adapter, same queue, same resolution of
+					 * connection and sampling from the node's slots. Listing them
+					 * case by case would be eleven copies of one call.
+					 */
+					if (STEP_TYPES.has(node.typeId)) {
+						const { dispatchStep } = await import("./dispatchStep")
+						const { text, via } = await dispatchStep(db, {
+							systemPrompt: String(p.systemPrompt ?? ""),
+							userPrompt: stepUserPrompt(p),
+							connectionId: refId(p.connection),
+							samplingId: refId(p.sampling),
+							label: p.label,
+							signal: scope.signal
+						})
+						// Steps that ask for JSON get it parsed here rather than
+						// in each binding: the models wrap it in prose often
+						// enough that every caller would need the same salvage.
+						return { text, via, json: tryJson(text) }
+					}
+
 					throw new Error(
 						`${node.key} (${node.typeId}) has no dispatch path in core. A Provider core ` +
 							`cannot call is one a user could add to a pipeline and watch fail at run time.`
 					)
+				}
 			}
 		},
 
@@ -507,6 +836,66 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						)
 					assertScoped(node, row.chatId, scope.chatId)
 					return { id: row.id, chatId: row.chatId }
+				}
+
+				case "core:consumer/create-lore-entry": {
+					/**
+					 * The finished summary, written as a lore entry.
+					 *
+					 * Which *kind* of entry comes from the pipeline that ran —
+					 * the four summarize namespaces exist precisely so this is
+					 * decided by which one the user pressed, not by a flag
+					 * threaded through the run.
+					 */
+					const chatId = scope.chatId
+					if (chatId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no chat to write a lore entry for — the run was started without a chat scope`
+						)
+
+					const [chat] = await db
+						.select()
+						.from(schema.chats)
+						.where(eq(schema.chats.id, chatId))
+						.limit(1)
+					if (!chat?.lorebookId)
+						throw new HostScopeError(
+							`${node.key}: this chat has no lorebook, so there is nowhere to save the summary. Attach one first.`
+						)
+
+					const name = String(p.name ?? "").trim() || "Untitled"
+					const content = String(p.content ?? "")
+
+					const [row] = await db
+						.insert(schema.worldLoreEntries)
+						.values({
+							lorebookId: chat.lorebookId,
+							name,
+							content
+						})
+						.returning()
+					return { id: row.id, lorebookId: chat.lorebookId }
+				}
+
+				case "core:consumer/graph-proposal": {
+					/**
+					 * A proposal, and deliberately nothing more.
+					 *
+					 * The build stops here. Applying it is a person's decision on
+					 * the Review Proposal screen, and this returning a proposal id
+					 * rather than node ids is what makes that structural: nothing
+					 * downstream can mistake it for rows that exist.
+					 */
+					const chatId = scope.chatId
+					if (chatId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no chat to propose graph changes for`
+						)
+					return {
+						status: "proposed",
+						chatId,
+						proposal: p.proposal ?? null
+					}
 				}
 
 				case "embedding_status": {
@@ -618,6 +1007,50 @@ function toMessage(r: any) {
  * downstream of the vector search has any use for it. Vector similarity is
  * computed during retrieval and arrives as a score.
  */
+/**
+ * Bindings with the character or persona each one names.
+ *
+ * `populateLorebookEntryBindings` reads `binding.character` / `binding.persona`
+ * to resolve `{{char:1}}` into a name, and the binding rows carry only ids —
+ * so without this the substitution silently does nothing, which is the failure
+ * it is being wired in to fix. Two queries rather than a join per binding: a
+ * lorebook has a handful of bindings and this runs once per read.
+ */
+async function hydrateBindings(db: Db, bindings: any[]): Promise<any[]> {
+	const characterIds = [
+		...new Set(bindings.map((b) => b.characterId).filter(Boolean))
+	]
+	const personaIds = [
+		...new Set(bindings.map((b) => b.personaId).filter(Boolean))
+	]
+
+	const [characters, personas] = await Promise.all([
+		characterIds.length
+			? db
+					.select()
+					.from(schema.characters)
+					.where(inArray(schema.characters.id, characterIds))
+			: Promise.resolve([]),
+		personaIds.length
+			? db
+					.select()
+					.from(schema.personas)
+					.where(inArray(schema.personas.id, personaIds))
+			: Promise.resolve([])
+	])
+
+	const byCharacter = new Map((characters as any[]).map((c) => [c.id, c]))
+	const byPersona = new Map((personas as any[]).map((p) => [p.id, p]))
+
+	return bindings.map((b) => ({
+		...b,
+		character: b.characterId
+			? (byCharacter.get(b.characterId) ?? null)
+			: null,
+		persona: b.personaId ? (byPersona.get(b.personaId) ?? null) : null
+	}))
+}
+
 function toLoreEntry(
 	row: any,
 	source: "worldLore" | "characterLore" | "history"

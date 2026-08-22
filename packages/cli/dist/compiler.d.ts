@@ -43,7 +43,7 @@ export interface Manifest {
         pipeline: Array<{
             typeId: string;
             visibility: 'private' | 'public';
-            runtime: 'node' | 'process';
+            runtime: 'process';
         }>;
         lifecycle: Array<{
             moment: string;

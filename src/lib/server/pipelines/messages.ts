@@ -26,9 +26,9 @@
  * case and mislabels every message from a participant who has since left.
  */
 
-import { ChatMessageProcessor } from "$lib/server/utils/promptBuilder/ContentProcessors"
-import { InterpolationEngine } from "$lib/server/utils/promptBuilder/InterpolationEngine"
-import type { ProcessedChatMessage } from "$lib/server/utils/promptBuilder/ContentProcessors"
+import { ChatMessageProcessor } from "./contentProcessors"
+import { InterpolationEngine } from "$lib/server/utils/interpolation/InterpolationEngine"
+import type { ProcessedChatMessage } from "./contentProcessors"
 
 export interface ProcessMessagesInput {
 	/** Rows in reading order, oldest first. */

@@ -19,11 +19,14 @@
  * the run is complete and replayable while the user watched it arrive.
  */
 
-import { run, type Receipt } from "@serene-pub/sdk"
+import { run, type NodeEvent, type Receipt } from "@serene-pub/sdk"
+import { createReviewer } from "./reviewGate"
 import { createHost, type HostScope } from "./host"
 import { buildWorld } from "./world"
 import { coreBindings } from "./bindings"
 import { loadPublished, RESPOND_SPEC_ID } from "./bootstrap"
+import { saveReceipt } from "./receipts"
+import { v4 as uuidv4 } from "uuid"
 
 export class PipelineUnavailableError extends Error {}
 
@@ -38,30 +41,79 @@ export interface TurnRequest {
 	/** Which spec to run. Defaults to core's. */
 	specId?: string
 	/**
-	 * The run's identity, and the seed for anything that varies.
+	 * The seed for anything that varies.
 	 *
-	 * Passed in rather than generated here so a caller retrying a turn can
-	 * reproduce it exactly — the example-dialogue pick and anything else a type
-	 * declares randomness for come from this.
+	 * **Defaults to a fresh value per turn, not to something derived from the
+	 * chat.** It first defaulted to `turn:${chatId}`, which is constant for the
+	 * life of a chat — so every turn would have picked the same example dialogue
+	 * and the variety the seeding exists to preserve would have been quietly
+	 * gone. The seed is recorded on the run row, so a caller reproducing a turn
+	 * passes the recorded one back rather than reconstructing it.
 	 */
 	seed?: string
+	/**
+	 * This run's identity.
+	 *
+	 * Generated per run unless supplied. The SDK defaults it to the literal
+	 * `"run:test"` when a host does not pass one, which is a reasonable default
+	 * for a test and a trap for a host: every run would share an id, and the
+	 * unique index on the receipt table is what caught it.
+	 */
+	runId?: string
 	/** Where streamed tokens go while the model is still generating. */
 	sink?: HostScope["sink"]
 	signal?: AbortSignal
 	/** Stop before the provider call and report what *would* be sent. */
 	preview?: boolean
+	/**
+	 * Skip recording the receipt.
+	 *
+	 * For the comparison tool, which runs a preview against every chat on the
+	 * instance and would otherwise fill the run history with rows nobody asked
+	 * for. A real turn always records.
+	 */
+	skipReceipt?: boolean
 }
 
 /**
- * Run a turn and return its receipt.
+ * Any published spec, run against this chat — the entry every trigger shares.
  *
- * The receipt is the return value rather than the generated text, and that is
- * deliberate: a caller needs to know *whether* it ran, what it decided, and what
- * it wrote, and a turn that halted legibly is a normal outcome rather than an
- * exception. Text is on the receipt for callers that only want that.
+ * `runTurn` shapes the input for a chat reply; the summarize and graph-build
+ * sockets shape theirs. What none of them get to vary is the substrate: the
+ * same world, the same host, the same bindings, the same receipt rule —
+ * because two entry points that assembled those differently would be two
+ * pipelines wearing one name.
  */
-export async function runTurn(request: TurnRequest): Promise<Receipt> {
-	const specId = request.specId ?? RESPOND_SPEC_ID
+export interface SpecRunRequest {
+	db: any
+	chatId: number
+	userId: number
+	/** Which spec to run. */
+	specId: string
+	/** The input node's value, shaped by the caller for the spec it names. */
+	input: unknown
+	seed?: string
+	runId?: string
+	sink?: HostScope["sink"]
+	/**
+	 * Node lifecycle observation — the executor's inherent progress (F34).
+	 * Fires for every invocation with identity and never a payload, so any
+	 * surface can drive a progress card without knowing the pipeline.
+	 */
+	onNode?: (event: NodeEvent) => void
+	signal?: AbortSignal
+	/**
+	 * Stop before a node and report what *would* happen there. `true` stops at
+	 * the first Provider on the spine (debug preview); `{atNode}` stops at a
+	 * named node — which is how a generate-and-review flow runs everything
+	 * *except* its write, and hands the result to a person instead.
+	 */
+	preview?: boolean | { atNode: string }
+	skipReceipt?: boolean
+}
+
+export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
+	const { specId } = request
 	const doc = await loadPublished(request.db, specId)
 	if (!doc)
 		throw new PipelineUnavailableError(
@@ -77,11 +129,62 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 		signal: request.signal
 	}
 
-	return await run(doc, {
+	const receipt = await run(doc, {
 		world: await buildWorld(request.db, {
 			chatId: request.chatId,
-			userId: request.userId
+			userId: request.userId,
+			// Which pipeline is running, so its own configs and overrides are
+			// read. Without it the run resolves against the legacy projection
+			// only, and everything a person set in the pipeline panel is
+			// invisible to the thing it was supposed to configure.
+			specId
 		}),
+		input: request.input,
+		runId: request.runId ?? uuidv4(),
+		seed: request.seed ?? uuidv4(),
+		triggerSource: request.preview ? "ui" : "event",
+		preview: request.preview,
+		bindings: coreBindings(),
+		host: createHost(request.db, scope),
+		onNode: request.onNode,
+		// Every run can park at a gated node — the review position is a
+		// config option (`settings.review`), so whether it *does* is the
+		// person's to decide in the panel, never the trigger's to wire.
+		reviewer: createReviewer({
+			userId: request.userId,
+			chatId: request.chatId,
+			specId,
+			signal: request.signal
+		})
+	})
+
+	// Recorded before returning, and never allowed to fail the turn. A run that
+	// produced a good reply and then could not write its own receipt has still
+	// produced a good reply.
+	if (!request.skipReceipt)
+		await saveReceipt(request.db, receipt, {
+			chatId: request.chatId,
+			userId: request.userId,
+			messageId: writtenMessageId(receipt) ?? undefined
+		})
+
+	return receipt
+}
+
+/**
+ * Run a turn and return its receipt.
+ *
+ * The receipt is the return value rather than the generated text, and that is
+ * deliberate: a caller needs to know *whether* it ran, what it decided, and what
+ * it wrote, and a turn that halted legibly is a normal outcome rather than an
+ * exception. Text is on the receipt for callers that only want that.
+ */
+export async function runTurn(request: TurnRequest): Promise<Receipt> {
+	return await runSpec({
+		db: request.db,
+		chatId: request.chatId,
+		userId: request.userId,
+		specId: request.specId ?? RESPOND_SPEC_ID,
 		input: {
 			text: request.text,
 			// The speaker rides on the chat scope: a scope for a turn is this
@@ -91,12 +194,39 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 				currentCharacterId: request.currentCharacterId
 			}
 		},
-		seed: request.seed ?? `turn:${request.chatId}`,
-		triggerSource: request.preview ? "ui" : "event",
+		seed: request.seed,
+		runId: request.runId,
+		sink: request.sink,
+		signal: request.signal,
 		preview: request.preview,
-		bindings: coreBindings(),
-		host: createHost(request.db, scope)
+		skipReceipt: request.skipReceipt
 	})
+}
+
+/**
+ * The row a Consumer wrote, read back off the receipt.
+ *
+ * Linking the run to its message is what turns "why does this reply say that"
+ * into a lookup. The id is not known when the run starts — the Consumer creates
+ * the row mid-run — so it is read from the write result afterwards.
+ *
+ * **The discriminant is checked, not assumed.** A Consumer publishes
+ * `write-result@1`: `{status: "committed", ids}` or `{status: "pending",
+ * proposalId}`, because under async review a write is a *proposal* a reviewer
+ * may still reject. The first version of this reached straight for an id and
+ * would have linked a run to a row that does not exist yet — which is precisely
+ * the failure the shape is discriminated to prevent, and the reason it is
+ * deliberately not assignable to `row-ids@1`.
+ */
+export function writtenMessageId(receipt: Receipt): number | null {
+	for (const node of receipt.nodes) {
+		if (node.kind !== "consumer") continue
+		const out = node.output as any
+		if (out?.status !== "committed") continue
+		const id = out?.ids?.id
+		if (typeof id === "number") return id
+	}
+	return null
 }
 
 /** The text a completed turn produced, or null if it did not produce one. */

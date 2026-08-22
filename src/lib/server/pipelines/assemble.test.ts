@@ -9,6 +9,7 @@
 
 import { describe, it, expect, beforeEach } from "vitest"
 import { allocate, render, referencedVariables } from "./assemble"
+import { wrapFor } from "./variableLayouts"
 import type { Decision } from "./ranking/select"
 import {
 	registerRenderer,
@@ -97,9 +98,11 @@ describe("rendering", () => {
 		// right name and the wrong shape still renders, and the prompt is
 		// quietly missing its lore.
 		const r = render({ ...base, template: "{{{worldLore}}}" })
-		expect(r.rendered).toBe(
-			JSON.stringify({ "The Ashguard": "An order of oathbound riders." })
-		)
+		// Through its shipped layout, which since 0.6 carries the heading and
+		// fence the context template used to write. The shape under them is
+		// what this test is about and is unchanged: a name-keyed object.
+		const lore = { "The Ashguard": "An order of oathbound riders." }
+		expect(r.rendered).toBe(wrapFor("worldLore")!(JSON.stringify(lore)))
 	})
 
 	it("omits world lore entirely when nothing was included", () => {

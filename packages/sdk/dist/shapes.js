@@ -104,6 +104,33 @@ export const S = {
      * the type, not to the spec.
      */
     writeResult: defineShape({ id: "core:shape/write-result@1" }),
+    /**
+     * A request to summarize something into a lore entry.
+     *
+     * Its own shape rather than `json@1` because it is what the summarize
+     * pipelines take as *input*, and 11 §2 matches an event's payload against a
+     * pipeline's Input contract by shape. A request typed as bare json would make
+     * every pipeline compatible with every event.
+     */
+    summarizeRequest: defineShape({ id: 'core:shape/summarize-request@1' }),
+    /**
+     * The ordered batch drafts phase 1 produces, before synthesis merges them.
+     *
+     * Ordered, and the order is load-bearing: the drafts are chronological
+     * slices of a conversation and synthesis reads them as a sequence. A shape
+     * that permitted reordering would turn a narrative into a pile of events.
+     */
+    drafts: defineShape({ id: 'core:shape/drafts@1' }),
+    /** Scenes with their messages, as the graph builder walks them. */
+    graphScenes: defineShape({ id: 'core:shape/graph-scenes@1' }),
+    /**
+     * A proposed set of graph nodes and relationships, before a person approves it.
+     *
+     * Distinct from anything holding row ids, for the reason `write-result@1`
+     * exists: a proposal is not yet a row, and a downstream node that treated it
+     * as one would wire a foreign key to something a reviewer may still reject.
+     */
+    graphProposal: defineShape({ id: 'core:shape/graph-proposal@1' }),
     audio: defineShape({ id: "core:shape/audio@1" }),
     image: defineShape({ id: "core:shape/image@1" }),
     json: defineShape({ id: "core:shape/json@1" }),

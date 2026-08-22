@@ -331,7 +331,7 @@ the chosen index reported as an output. Same uniform spread across turns, same a
 within a turn.
 
 The first implementation hand-rolled an FNV hash of the run id in the binding, which was
-reinventing `seededRandom`. The mechanism already existed and is the *declared* one, which
+reinventing `seededRandom`. The mechanism already existed and is the _declared_ one, which
 matters beyond tidiness: a type that takes randomness says so in its descriptor, so
 "which nodes in this spec are non-deterministic" is answerable from the document.
 
@@ -391,20 +391,19 @@ when what you are trying to prove is that nothing changed. The parity gate would
 loosened to accommodate it, and a loosened gate is not a gate. After parity, NER is a feature
 with a receipt line rather than a confound.
 
-
 ---
 
 ## 10. Built so far, and what each stage answers
 
-| module | stage | answers |
-|---|---|---|
-| `ranking/signals.ts` | pure signals | what does this entry score on each axis? |
-| `ranking/weights.ts` | parameters | what are the knobs, and what were they before? |
-| `ranking/strategy.ts` | arm eligibility | which arm may surface this entry, and did it? |
-| `ranking/keywordQuery.ts` | the keyword arm | **what matched** — and what did not, with a reason each |
-| `ranking/select.ts` | rank + budget | **what won**, and **what fit**, with the arithmetic |
-| `host.ts` → `vector_search` | the vector arm's retrieval | which entries are semantically near? |
-| `bindings.ts` → `merge-candidates` | fusion | what did both arms agree on? |
+| module                             | stage                      | answers                                                 |
+| ---------------------------------- | -------------------------- | ------------------------------------------------------- |
+| `ranking/signals.ts`               | pure signals               | what does this entry score on each axis?                |
+| `ranking/weights.ts`               | parameters                 | what are the knobs, and what were they before?          |
+| `ranking/strategy.ts`              | arm eligibility            | which arm may surface this entry, and did it?           |
+| `ranking/keywordQuery.ts`          | the keyword arm            | **what matched** — and what did not, with a reason each |
+| `ranking/select.ts`                | rank + budget              | **what won**, and **what fit**, with the arithmetic     |
+| `host.ts` → `vector_search`        | the vector arm's retrieval | which entries are semantically near?                    |
+| `bindings.ts` → `merge-candidates` | fusion                     | what did both arms agree on?                            |
 
 Two things landed while wiring these that were not in the plan.
 
@@ -425,7 +424,6 @@ all three present identically as absent lore. The Query returns `skipped` with a
 reason per entry; the ranker returns a decision per candidate with the numbers
 that produced it.
 
-
 ---
 
 ## 11. Where the vector arm's work actually happens
@@ -438,12 +436,12 @@ is only ever used once, immediately.
 
 So the split inside "RAG" is finer than retrieval-versus-ranking:
 
-| step | where | why |
-|---|---|---|
-| embed the query | **Provider** | reaches a model, so a Query may not (16 §1) — and being on the spine puts it in the budget and the receipt |
-| fetch candidates + cosine | **host**, via `vector_search` | data-heavy, and the vectors must not travel |
-| strategy eligibility | **Query binding** | policy, not retrieval — the host does not know what `retrievalStrategy` means |
-| MMR, caps, thresholds | **Task** | ranking policy, and the thing a plugin should be able to replace |
+| step                      | where                         | why                                                                                                        |
+| ------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| embed the query           | **Provider**                  | reaches a model, so a Query may not (16 §1) — and being on the spine puts it in the budget and the receipt |
+| fetch candidates + cosine | **host**, via `vector_search` | data-heavy, and the vectors must not travel                                                                |
+| strategy eligibility      | **Query binding**             | policy, not retrieval — the host does not know what `retrievalStrategy` means                              |
+| MMR, caps, thresholds     | **Task**                      | ranking policy, and the thing a plugin should be able to replace                                           |
 
 The embedding call being a Provider is worth stating as a rule rather than a
 placement: **retrieval that quietly embeds is a model call nobody was billed for
@@ -455,14 +453,13 @@ signal weights on top would reintroduce exactly the scale problem rank fusion
 was chosen to avoid. A fused score overrides the weighted sum rather than
 feeding it.
 
-
 ---
 
 ## 12. Assemble, and a correction to the SDK
 
 **Handlebars is what core renders — and that is a default, not an assumption.**
 The draft declared the assemble slot as `jinja2`, which would have failed parity
-in the worst available way: as a *template* bug rather than a configuration one,
+in the worst available way: as a _template_ bug rather than a configuration one,
 with a user editing their story string to chase it.
 
 The deeper correction is that **the schema is engine-agnostic**.
@@ -478,7 +475,7 @@ change instead of a redesign, which is the argument for having built it.
 **The renderer is a registry, and nobody can take over an engine they do not
 own** — including core's. A plugin able to redefine how everyone else's
 templates render could change every prompt on the instance without appearing in
-any spec. An *unknown* engine throws rather than falling back to Handlebars: a
+any spec. An _unknown_ engine throws rather than falling back to Handlebars: a
 fallback mostly "works", emitting the foreign syntax intact, and sends a model a
 prompt full of markup nobody meant to include.
 
@@ -498,11 +495,11 @@ care.
 
 ### What Assemble does, and what it does not yet do
 
-| | |
-|---|---|
-| **allocate** | decisions → blocks with tokens, `why`, and included/excluded. Excluded blocks are **kept** — a user asking "why isn't my lore showing up" is asking about something absent |
-| **render** | one pass, core's Handlebars, blocks exposed under the names existing templates already use |
-| ⚠ **not yet** | the template *context* — characters, personas, scenario, example dialogue — is still built by `PromptBuilder` from a hydrated chat |
+|                |                                                                                                                                                                            |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **allocate**   | decisions → blocks with tokens, `why`, and included/excluded. Excluded blocks are **kept** — a user asking "why isn't my lore showing up" is asking about something absent |
+| **render**     | one pass, core's Handlebars, blocks exposed under the names existing templates already use                                                                                 |
+| ⚠ **not yet** | the template _context_ — characters, personas, scenario, example dialogue — is still built by `PromptBuilder` from a hydrated chat                                         |
 
 That last row is the remaining parity gap and the next unit. Until it closes,
 Assemble renders what it is given: enough for the debug preview, not enough to
@@ -544,7 +541,7 @@ differed or the interpolation differed, and now those are separately testable.
 ### What reading the legacy code actually turned up
 
 The first version of this replacement passed a differential test that was worthless: the
-test's "legacy" fixture reproduced the legacy steps *from my reading of them* rather than
+test's "legacy" fixture reproduced the legacy steps _from my reading of them_ rather than
 calling the real helpers, so it agreed with the replacement about things both had got wrong.
 The test now calls `createInterpolationContext`, `interpolateObject` and
 `attachCharacterLoreToCharacters` directly. **A differential test that reconstructs the thing
@@ -556,17 +553,17 @@ Rewriting it that way surfaced five defects that would all have shipped:
    own text; without it the literal handlebars reaches the model.
 2. **Six prompt texts had been collapsed into three.** `postHistoryInstructions` (the
    top-level variable) and `promptPostHistoryInstructions` (the copy placed next to the
-   seed) come from *different* config fields and render in *different* places. Feeding one
+   seed) come from _different_ config fields and render in _different_ places. Feeding one
    to both is invisible in the common case where they carry the same string.
 3. **The speaker's own post-history text was looked up by display name** from the cast
    array. It is resolved from the current character upstream. The lookup picks the wrong
    card as soon as two characters share a nickname.
-4. **The two visibility filters are not the same filter.** The cards include an *inactive*
-   character and include a *hidden* one if they are the speaker; the joined names exclude
+4. **The two visibility filters are not the same filter.** The cards include an _inactive_
+   character and include a _hidden_ one if they are the speaker; the joined names exclude
    both, speaker or not. Deriving the names from the cards — the obvious cleanup — leaks a
    hidden character's name into every prompt that renders `{{characterNames}}`.
 5. **The group-chat scenario rule is not a fallthrough.** A group chat with no scenario of
-   its own renders *no* scenario, rather than falling back to one member's — because one
+   its own renders _no_ scenario, rather than falling back to one member's — because one
    member's scenario describes a situation the rest of the cast is not in.
 
 Four of the five are in `promptFields.ts` and each has a test named after the rule rather
@@ -600,7 +597,7 @@ parity checkable rather than asserted.
 
 `dispatch.ts` resolves the connection and **never returns it** — no URL, no key, no headers,
 no model id. What comes back is the completion, whether it was aborted, and the connection
-*type* as a label. This is stated as a test rather than a convention because it is a property
+_type_ as a label. This is stated as a test rather than a convention because it is a property
 that can only fail silently: a leak looks exactly like a working generation. A Provider that
 could read connection material is a plugin that exfiltrates an API key while its spec reads
 as an innocent node, and the review gate would show nothing wrong.
@@ -659,7 +656,7 @@ and every node reported success throughout:
    because the conversion needs the connection's prompt format.
 
 2. **`{{instructions}}` rendered blank.** The `prompts` slot was layered onto the Assemble
-   node only, and the *context* node is what resolves which post-history text wins between
+   node only, and the _context_ node is what resolves which post-history text wins between
    the config's and the speaking character's. Both need the authored text and neither derives
    it from the other; `buildWorld` now layers it onto both.
 
@@ -671,7 +668,7 @@ and every node reported success throughout:
 4. **Assemble rendered candidates it had no decisions for.** The spec had no ranker, so
    Assemble received candidates, allocated nothing, and rendered a prompt with the whole
    retrieval result dropped — no error anywhere. It now halts and names the missing node. The
-   ranker's `decisions` output also had to be published *whole* rather than flattened to
+   ranker's `decisions` output also had to be published _whole_ rather than flattened to
    id/score/reason: Assemble allocates from them, and a decision without its candidate has no
    content to put in a block.
 
@@ -686,7 +683,7 @@ and every node reported success throughout:
    `{{{name}}}: {{{message}}}` and the pipeline produced `{id, role, content}` — so the whole
    conversation came out as empty lines. Naming a message is real work: who said it, resolved
    through removed participants to a name snapshotted at removal, plus per-message
-   interpolation where `{{char}}` is *that* message's speaker, plus the seed line the model
+   interpolation where `{{char}}` is _that_ message's speaker, plus the seed line the model
    continues from. `core:task/process-messages@1` does it by reusing `ChatMessageProcessor`
    rather than reimplementing the resolution chain — a second version agrees on every chat
    until someone leaves one.
@@ -713,7 +710,7 @@ Each fixture after the first was added expecting it to find something. Each did.
 
 ### Three more defects
 
-**The `prompts` slot was overwriting the resolved context.** Assemble spread the slot *after*
+**The `prompts` slot was overwriting the resolved context.** Assemble spread the slot _after_
 the template context, so the config's raw authored text clobbered the same fields after the
 context builder had resolved them — a prompt rendered the config's post-history text with
 `{{char}}` still literal in it, where the speaking character's own reinforcement belonged.
@@ -721,8 +718,8 @@ Both sides looked correct in isolation. The fix is the spread order: slot first,
 context second.
 
 **`seedName` did not exist in the pipeline.** The trailing assistant line the model continues
-from is named `charName` in character mode — but in narrator mode `charName` is the *joined
-cast list*, and the legacy code has a comment explaining exactly why the seed must not be:
+from is named `charName` in character mode — but in narrator mode `charName` is the _joined
+cast list_, and the legacy code has a comment explaining exactly why the seed must not be:
 seeding "Alice and Cara:" teaches the model to write joint dialogue as those characters
 instead of narrating. It is now its own out-port, deliberately not a field inside the template
 context, because nothing renders `{{seedName}}` — it is not a template variable.
@@ -745,7 +742,7 @@ mutable state across fixtures, presenting as a difference in the subject.
 
 ### Two things the corpus cannot measure, by construction
 
-Both are arguments *for* rulings already made, not gaps in them.
+Both are arguments _for_ rulings already made, not gaps in them.
 
 **A character with two or more example dialogues.** Legacy rolls `Math.random()` mid-compile;
 the pipeline uses the run-seeded RNG. The two disagree at random, so the field has no
@@ -753,8 +750,8 @@ comparable value — a corpus fixture would report a defect that is not one. The
 determinism is pinned separately.
 
 **Lore entries with equal `position`.** Neither path issues an `ORDER BY`, so the tie-break
-falls through to whatever the database returns. The resulting lore order is arbitrary *today,
-on the legacy path*, which is worth knowing on its own.
+falls through to whatever the database returns. The resulting lore order is arbitrary _today,
+on the legacy path_, which is worth knowing on its own.
 
 ### The one that was in the scoring: tf-idf measured the wrong thing
 
@@ -829,7 +826,7 @@ future pass` in the original.
 
 ### The design question MMR forced
 
-MMR is the one stage that compares candidates to *each other*, so it needs pairwise
+MMR is the one stage that compares candidates to _each other_, so it needs pairwise
 similarity — and the host refuses to put embeddings on a data edge, because a vector is a few
 hundred floats that would land in every downstream input and in the receipt.
 
@@ -861,8 +858,8 @@ The first version of the arm fused the current and recent windows into one ranki
 not: **each window runs the whole stack and the results are concatenated**, first occurrence
 winning. The difference is not cosmetic — the windows are ranked against each other by
 construction (what is being said now beats what was being said a moment ago), and each has
-already been thresholded against *its own* top result, so their scores are no longer on a
-shared scale. Fusing them would be the exact mistake the fusion *inside* each window exists
+already been thresholded against _its own_ top result, so their scores are no longer on a
+shared scale. Fusing them would be the exact mistake the fusion _inside_ each window exists
 to avoid. `mergeWindows` is the correction, with the reasoning on it.
 
 ---
@@ -896,7 +893,7 @@ timing. The import is memoized now: one promise, no second import to race with, 
 loaded on an instance that never embeds.
 
 **Retrieval has to live inside a block, and that is not a style question.** The debug preview
-stops at the first Provider *on the spine*, and the embed calls are Providers. With them on
+stops at the first Provider _on the spine_, and the embed calls are Providers. With them on
 the spine the preview halted at `embedCurrent` and showed a payload that was a list of query
 strings — a correct application of the rule and a useless preview. Inside a gather block they
 are where the rule expects retrieval to be. Worth stating because the failure looks like a
@@ -906,8 +903,8 @@ broken preview rather than a misplaced node.
 
 `embed-text` declared an out-port of `vector` while its binding published `vectors`;
 `vector-search` declared `hits` while its binding published `lists` and `similarity`. Neither
-had been noticed because nothing wired those ports until this spec did — and then the *type
-system* refused to compile the spec, which is the port declarations doing exactly their job.
+had been noticed because nothing wired those ports until this spec did — and then the _type
+system_ refused to compile the spec, which is the port declarations doing exactly their job.
 
 ### The divergence that was not one, and the two things hiding behind it
 
@@ -917,7 +914,7 @@ to the query. It looked like the legacy engine admitting lore outside its retrie
 It was not. **The legacy RAG engine had not run at all.** `PromptBuilder`'s gate reads
 `systemSettings.vectorizationEnabled` from the **global** `db` rather than from the chat it
 was handed — the same defect class as `dispatch.ts` reaching for the global connection, but
-where that one errored, this one *silently closes the gate* and runs the keyword engine
+where that one errored, this one _silently closes the gate_ and runs the keyword engine
 instead. So the fixture was comparing the pipeline's semantic arm against legacy's keyword
 arm, and the extra entry was the keyword fill phase doing its job.
 
@@ -931,7 +928,7 @@ with two or more candidates, and an engine that degrades silently.
 Both are worth stating as findings in their own right:
 
 - a gate that reads global state cannot be exercised against anything else, and one that fails
-  *closed* and silently is worse than one that fails loudly — the behaviour it disables is the
+  _closed_ and silently is worse than one that fails loudly — the behaviour it disables is the
   behaviour under test;
 - silent degradation on a retrieval error is defensible in production and expensive in a
   harness, because it converts "this crashed" into "this found nothing", which is a legitimate
@@ -940,7 +937,7 @@ Both are worth stating as findings in their own right:
 ### Four fixtures, all green
 
 `rag/world-lore` (a single semantic hit), `rag/crowded` (five candidates, where the threshold
-and MMR decide), `rag/no-match` (a query nothing answers — the threshold's *floor* clause is
+and MMR decide), `rag/no-match` (a query nothing answers — the threshold's _floor_ clause is
 what fires) and `rag/priority` (an author's tier competing against a better semantic match).
 The nine-stage arm renders byte-identical to `RagInfillEngine` on all four.
 
@@ -950,7 +947,7 @@ Both arms are now at parity: eight keyword fixtures and four semantic ones.
 
 ## 19. Startup, and the entry point that makes it callable
 
-Both arms at parity means the pipeline can be *run*, not just compared. Two pieces were
+Both arms at parity means the pipeline can be _run_, not just compared. Two pieces were
 missing between "it matches" and "the app could call it".
 
 ### Bootstrap
@@ -970,7 +967,7 @@ It is not in `db/defaults.ts` for exactly that reason: everything there is upser
 `seedKey` so a user's edits survive, and a published version is the one kind of row where that
 rule is wrong.
 
-**A failure here does not stop the app.** A registry conflict means *pipelines* cannot run
+**A failure here does not stop the app.** A registry conflict means _pipelines_ cannot run
 safely on this build; it does not mean the chat cannot start, and taking an instance down over
 a subsystem nobody has opted into would be the wrong trade. The conflict is logged and travels
 in the report for a diagnostics screen. The test that matters most is the second-boot one —
@@ -996,25 +993,25 @@ name.
 
 ### Where the migration stands
 
-| piece | state |
-|---|---|
-| storage, registry, host, bindings | built, tested |
-| keyword arm | 8 parity fixtures, byte-identical |
-| semantic arm | 4 parity fixtures, byte-identical |
-| assembly, dispatch, message write | built, tested |
-| startup seeding | built, tested |
-| `runTurn` entry point | built, tested |
-| **the switch in `generateResponse.ts`** | **not made** |
+| piece                                   | state                                    |
+| --------------------------------------- | ---------------------------------------- |
+| storage, registry, host, bindings       | built, tested                            |
+| keyword arm                             | 8 parity fixtures, byte-identical        |
+| semantic arm                            | 4 parity fixtures, byte-identical        |
+| assembly, dispatch, message write       | built, tested                            |
+| startup seeding                         | built, tested                            |
+| `runTurn` entry point                   | built, tested                            |
+| **the switch in `generateResponse.ts`** | **made — unconditional** (§21, then §23) |
 
-The last row is deliberately not mine to take unilaterally: it is the change that makes every
-user's next message go through the new path, and it wants a decision about rollout — a
-setting, a per-chat opt-in, or a release — rather than a commit.
+The last row was deliberately not taken unilaterally: it went in behind a setting first (§21),
+and the setting itself was retired by the changeover ruling of 2026-08-19 — no toggle, pipelines
+are the only path that compiles a reply (§23).
 
 ---
 
 ## 20. Comparing against a real chat, which found what the corpus could not
 
-`npm run pipeline:compare` compiles one of *your* chats both ways and diffs. It sends nothing
+`npm run pipeline:compare` compiles one of _your_ chats both ways and diffs. It sends nothing
 and writes nothing — the pipeline side runs as a preview, the legacy side compiles a prompt
 and drops it — so a chat can be compared while someone is in the middle of it. The app holds
 the PGlite lock, so the server has to be stopped; that is a property of the database, and it
@@ -1024,7 +1021,7 @@ The first run against a real chat diverged, and the cause is the best argument y
 tool existing:
 
 **The post-history reminder was landing at the top of the conversation.** The shipped default
-template renders it *inside* the message loop, gated on `msgIndex === postHistory.targetIndex`.
+template renders it _inside_ the message loop, gated on `msgIndex === postHistory.targetIndex`.
 The context builder ships a placeholder index of 0 — it must, since the final message array
 does not exist when it runs — and the legacy path overwrites it via
 `resolvePostHistoryContext` right before render. The pipeline never did. So the reminder
@@ -1032,7 +1029,7 @@ rendered against message zero: at the top of the history, rather than next to th
 point, which is the one place it was moved to in order to be followed at all.
 
 **Nine corpus fixtures missed it**, because the corpus template renders `postHistory.*`
-outside the message loop — and a flat template *cannot express a position*. The fixtures were
+outside the message loop — and a flat template _cannot express a position_. The fixtures were
 all green and all blind to it.
 
 Two more things fell out of the same run:
@@ -1063,3 +1060,862 @@ always presents as a defect in the subject.
 The tell, across all three: **the divergence was larger or stranger than a real defect would
 produce**. Eight fixtures failing at character 0 is not eight regressions. Worth treating an
 implausibly large divergence as a harness suspicion before a subject one.
+
+## 21. Keeping the run, and switching the app onto the pipeline
+
+Two things the migration had been missing, and they are the two that make "did that use the new
+path" answerable at all.
+
+**The executor returned a receipt and nothing kept it.** So the first question anyone asks after a
+turn — _did that use the pipeline, and what did it decide?_ — became unanswerable the moment the
+request ended. F3 says rows are the system of record; that was true of specs and types and false of
+runs, which is the one a user actually looks at. `pipeline_runs` and `pipeline_run_nodes` (0097) fix
+it: the receipt blob is kept verbatim so a future panel is not limited by a column list written
+today, and the parts people _query_ — which node halted, how long it took, which message it produced
+— are columns, so "why did this reply include that lore" is not a JSON walk over every run in a chat.
+
+**Writing a receipt never fails a turn.** A run that generated a good reply and then failed to record
+itself has still generated a good reply. Persistence errors are logged and swallowed; the alternative
+gets the priority exactly backwards.
+
+Two things went wrong writing it, both caught by the schema rather than by review:
+
+- **`runId` collided.** The SDK defaults it to the literal `"run:test"` when a host does not pass
+  one — a reasonable default for a test and a trap for a host, since every run would share an id. The
+  unique index is what found it. My own `seed` default was the same mistake one level down:
+  `turn:${chatId}` is constant for the life of a chat, so every turn would have picked the same
+  example dialogue and the variety the seeding exists to preserve would have been quietly gone.
+  Both are `uuidv4()` now, and the seed is recorded so a caller reproducing a turn passes it back.
+- **The write result is discriminated, and my first read of it was not.** A Consumer publishes
+  `{status: 'committed', ids}` or `{status: 'pending', proposalId}`, because under async review a
+  write is a _proposal_ a reviewer may still reject. Reaching straight for an id would have linked a
+  run to a row that does not exist yet — precisely the failure the shape is discriminated to prevent,
+  and the reason it is deliberately not assignable to `row-ids@1`.
+
+**The switch itself is one call site.** `generateResponse.ts`, behind `system_settings.pipelines_enabled`
+(0098), runs the pipeline in preview mode and injects the compiled payload at
+`adapter.withCompiledPrompt(...)` — the seam all seven adapters already funnel through. **It falls
+back to the legacy builder on any failure**, which is what makes it safe to switch on before it is
+safe to delete anything.
+
+## 22. The configuration surface, and what building it found
+
+The pipeline view (05 §0a) is the panel that eventually replaces Prompt Configs: _"a flat list of the
+things SP does for you, each with a handful of options."_ Building it turned up more about the
+existing code than about the UI.
+
+**Nothing could render a form from rows.** `snapshotRegistry` projected `slots` as a list of names,
+so `pipeline_type_registry.slots` held `{"params": true}`. 12 §2 has the UI generate slot forms from
+declarations, and 13 §10c has core read the registry row _without executing the plugin_ — a name list
+satisfies neither, and forces a fall back to the in-process descriptor map that a `transport:
+'process'` plugin type does not have. The row now carries the whole declaration, which also makes a
+declaration part of the type's content hash (a moved default changes what an untouched spec does) but
+not its `i18n` (translating a label is not a version bump). See 13 §12a–b.
+
+**There was nowhere to write.** Presets existed; the layers 12 §2 resolves _around_ them did not.
+`pipeline_node_overrides` and `pipeline_config_selections` (0099) add them, deliberately as two tables
+rather than the one discriminated table 12 §3 describes — so that "does this travel with the
+document" is structural rather than a `WHERE` clause somebody has to remember on export day
+(13 §12c).
+
+**`resolveConfig` was throwing away the answer to the most common support question.** It knew which
+of five layers a value won at and returned only the value. `resolveConfigSources` returns both and
+`resolveConfig` is now derived from it, so the two cannot disagree about which layer wins. Writing it
+surfaced a latent defect underneath: rows were grouped by joining slot and path with a space and
+splitting them back, so a declared field named `opening line` resolved against the path `opening` and
+matched nothing. No core path has a space; nothing stops a plugin's from having one.
+
+**The topology rule needed teeth.** 05 §0a says no node keys and _"no structure inferable from the
+DOM"_, and structural editing is opt-in per instance — so a default-view payload carrying node keys
+makes that setting cosmetic. The obvious encoding of an option address is that address in a costume,
+and core's node keys are ordinary words (`prompt`, `generate`, `rank`) that fall to a dictionary. An
+option id is an HMAC under the instance secret; the server resolves one by rebuilding the map from
+the spec it is already loading. The claim is pinned by a test that walks the serialized payload and
+fails on a node key anywhere outside human prose — including in property names, which is where the
+next leak will be.
+
+**And the view told the truth about something nobody wanted to hear.** Generated honestly, the
+respond spec shows a user _three_ "System" boxes, because `buildTemplateContext`, `assemble` and
+`generateText` each declare their own `prompts` slot and `world.ts` papers over it by writing the same
+authored text to two of them. The view is right; the spec is wrong. Fixing it means slot references,
+a new canonical hash, a new published version and a parity re-run — so it is filed (13 §12 finding i)
+rather than done quietly at the end of a UI change.
+
+## 23. Every trigger onto the pipeline, and what the wiring found
+
+The changeover ruling of 2026-08-19 — no legacy/pipeline toggle, pipelines are the only path — turned
+§21's cautious switch into the unconditional one. `generateResponse.ts` now runs the pipeline for
+every reply and **fails the turn loudly when it cannot compile one**; the silent fall-through to the
+prompt builder is gone, because a user with a configured pipeline silently getting a reply built by
+something else is the one bug in this area nobody can see. The legacy builder survives only as
+dispatch scaffolding and as `pipeline:compare`'s second arm. The narrator rides the same call site
+into its own namespace: `isNarratorResponseMode` selects `core:spec/narrate` rather than dressing the
+respond spec in a different prompt.
+
+**The summarize sockets run their specs and stop at the write.** `chats:summarize` and
+`scenes:process` shape a `summarize-request` and run the right namespace with
+`preview: {atNode: 'save'}` — every model step executes and the run halts before the
+`create-lore-entry` consumer, because those handlers have never written the entry: a person reviews
+the result in the modal and saves. That is the same stop-at-review rule the graph proposal encodes
+structurally, reached through the preview mechanism instead of a gate. What the handlers read back is
+the receipt: `synth` for the content, `naming` for the name, `cast` for the participants, and the
+count of batch steps for the progress card. A new `summarize_source` host read resolves sender names
+and honours the legacy selection rule (an explicit id list is taken as given, hidden or not; "all"
+filters hidden) — one place, so no binding can get the convention wrong. Coarse progress comes from a
+new `HostScope.onStep` observer that receives each step's label and nothing else; progress never
+reaches a receipt (F34).
+
+**The request now travels.** 1.0.0 dropped the topic at the door: the drafting and synthesis nodes
+had no port for it, so a focused summary drifted general the moment it ran. The three step types grew
+a `request` in-port (`summarize-request@1`, whole object rather than plucked fields), the specs wire
+`$.input.request` into every drafting iteration, synthesis and cast extraction, and the bindings read
+`topic` and `knownCast` off it. Published versions are immutable, so this is `1.1.0`; and because the
+port set is part of a type's content hash, migration 0106 re-projects the three registry rows — on
+the 0099 precedent, just as deliberately narrow, and just as much not a pattern.
+
+**Two defects the "behaviourally unproven" caveat was pointing at, found by the first full run:**
+
+- **`$.drafting.item` never resolved.** The scope's walk rule steps toward inner nodes, and while
+  _declaring_ the first inner node the chain has no members yet — so the reference fell through to
+  the port branch and compiled to an edge from the block's nonexistent `item` port. Every draft ran
+  against no batch, every graph step against no scene, and the output was plausible text about
+  nothing — the least debuggable failure available, which is why the SDK fix makes `block.item`
+  always walkable inside its own block and the terminal value the iteration item
+  (`$ref('block.$item')`). The store learned the matching lesson: an item is a legal edge source,
+  block-shaped, persisted in `from_block_id` verbatim. `graph-build` republishes as `1.0.1` for the
+  corrected document — same authored source, different compiled edges.
+- **A map aggregates as `branch-results@1`, and the synthesis binding read it as bare drafts.** One
+  entry per iteration, `{branchKey, index, result}` in declaration order (13 §1) — so every draft
+  unwrapped to `""` and synthesis would have merged silence. The binding unwraps the envelope, keeps
+  the bare forms for direct callers, and drops a halted iteration's entry rather than handing the
+  model an empty part to dutifully summarize.
+
+**One mechanism for selection, not two.** The panel's preset picker wrote `presetSlug` against the
+author-preset tables while the runtime resolved `configId` against the named-config tables — the
+panel could not select what the run would use. `layers()` now resolves through the same
+`resolveSelectedConfig` the runtime calls, the picker lists `pipeline_configs` rows, and
+`selectNamedConfig` delegates to `configs.selectConfig` — one read path, one write path, so what the
+picker shows is what the run uses. Ids are safe where preset slugs needed to be slugs: a config hangs
+off the spec, not the version, and the FK nulls a deleted selection back to the shipped default. The
+prompts-ref override got the same treatment one layer down: `writeOption` stores a row id in
+`pipeline_node_overrides`, and `applyPipelineLayer` now dereferences it through `resolvePromptFields`
+at the override's own scope — previously only the config-value path dereferenced, so a prompt picked
+in the panel reached its node as the number 7.
+
+**Still open, deliberately:**
+
+- **The graph builder still runs the legacy path.** The spec is published and its per-scene map now
+  actually receives scenes, but `graphBuilder.ts` carries a cast ledger, dedup, fuzzy matching and
+  resume checkpoints that the five step bindings do not — wiring `narrativeGraph.ts` over before
+  those live somewhere is a redesign question, not a call site change.
+- **`compileScenesForEntry` is synthesis-only over scene summaries**, which is what a history entry
+  actually is — the messages-to-batches shape `summarize-history` shares with its siblings serves
+  `chats:summarize(loreType: 'history')`, not this flow. Whether the history namespace's true form is
+  the compile flow deserves a ruling before the spec moves.
+- **`create-lore-entry` writes `worldLoreEntries` regardless of namespace.** Unreachable today —
+  every summarize run halts before it — but the event-triggered path would write character lore into
+  the world table. It needs the entry kind on its input, which is a type change to make deliberately.
+
+## 24. The last two flows, and the graph builder page
+
+Section 23 left the graph build and the history compile on legacy resolution. They now run on
+pipeline configuration, by a deliberate half-measure with a name: **the pipeline owns the config
+surface; the builder keeps the loop.**
+
+**Why not the executor, yet.** `graphBuilder.ts` is a sequential state machine — a cast ledger that
+makes "Bram" in scene 3 and "bram" in scene 9 one proposed node, pair-wise perspective calls with
+retries and drop diagnostics, fuzzy matching against seeds, resume checkpoints. Map iterations are
+isolated by design (13 §1), so none of that state has a home inside the current five-step spec; and
+the spec's one-call-per-step shape is _behaviourally_ far from the builder's many-calls-per-scene
+reality. Running the spec live today would produce worse graphs and call it progress. The redesign
+that moves the ledger into a merge stage is real future work; what could not wait was the config.
+
+**`stepConfig.ts` is the seam.** It resolves any node's connection, sampling and prompt fields
+through `buildWorld` + `resolveConfigSources` — the same world, the same five-layer chain, the same
+rows the pipeline panel edits. `graphSteps.ts` maps the builder's five step names onto the spec's
+node keys (`building.item.prefilter` …); `narrativeGraph:build` hands the builder what resolves,
+falling back to the instance default connection exactly as `dispatchStep` does. The legacy
+`graph_build_configs` path is retired from the handler. The history compile
+(`scenes:compile`) does the same one node down: the history namespace's `synth` node decides the
+model, sampling and prompt for `compileScenesForEntry`, whose messages-to-batches sibling shape
+serves `chats:summarize` — the compile itself is synthesis-only over scene summaries and stays
+outside the executor until that shape gets its ruling. Both flows record a run row (`halt` at the
+write, truthfully — a person decides on the review screen), so the runs list sees every build.
+
+**The shipped default is now an invariant, not a habit.** Every pipeline in `CORE_SPECS` must have
+an immutable default config whose prompts-slot declarations all carry values pointing at a real
+shipped prompt — pinned by a seed test that runs `defaults.sync()` first, because that is the boot
+order `db/index.ts` guarantees and pipeline prompt seeding copies its prose from the legacy rows
+sync seeds. The test caught its own environment being wrong before it caught anything else, which
+is the correct order of operations.
+
+**The graph builder page.** The declaration-driven option renderer moved out of PipelinesSidebar
+into `PipelineConfigOptions.svelte` — slug in, form out, no field list, listeners filtered by slug
+because two panels can be mounted at once. The sidebar kept its list and navigation and lost 250
+lines; the Graph tab gained a pipeline panel — overview (name, version, manage link for admins) over
+the granular per-step controls, next to the Build button it configures. An edit there reaches the
+next build through `stepConfig.ts`, which is the whole point: one mechanism, so what the page shows
+is what the build runs.
+
+## 25. The gate, the form language, and progress as properties of the run
+
+The ruling of 2026-08-19 (second): summarization and graph-building UI workflows are definable by
+the pipeline and its nodes as an inherent user-facing feature — progress bars inherent, review-pause
+forms 100% defined by the data the node receives, one form-building schema strategy shared with
+extension settings and arbitrary extension forms.
+
+**Progress is now a property of running a pipeline.** The executor grew `onNode` — one event as
+each invocation starts and one as it settles, carrying identity (`nodeKey`, `typeId`, `kind`,
+`seq`, the declared floor) and never a payload, because progress is not a second receipt (F34). An
+observer that throws is the observer's problem. The summarize and scene handlers dropped the
+dispatch-label hack (`HostScope.onStep`, deleted) and derive their activity cards from node events
+— which means a plugin's summarize pipeline gets the same card with no wiring, which is the word
+"inherent" doing its work.
+
+**The review gate went live** (01 §7). It was always in the executor — parking on a host-supplied
+reviewer, keyed on the `settings.review` config option, edit indistinguishable from approval (F14),
+rejection a halt and not an error. What landed is core's half: `reviewGate.ts` parks the promise,
+pushes the person a card, and folds their decision back. And the panel now offers **Review**
+(off / async / sync) on every gated node — synthesized from the registry row's declared _effects_
+rather than authored per type, because a node the gate applies to that the panel cannot configure
+would make "an author cannot forbid review" true in the executor and false on screen. Flip the
+respond pipeline's save step to `sync` and every reply waits for approval; that sentence required
+no code specific to replying.
+
+**One field language, one renderer.** The SDK's `SettingsSchema` — the declaration extensions
+write plugin settings in — is the language everything renders from. `inferSchema(payload)` derives
+a schema from whatever a paused node received: a string is a text field, a number is a number
+field, structure a form cannot decompose arrives as JSON rather than being silently dropped —
+an edit surface that hides part of the payload is a gate a write can sneak past.
+`valuesForForm`/`applyFormValues` round-trip the payload through the form; untouched fields keep
+their originals, unparseable JSON refuses with the field named. Client-side, `SchemaForm.svelte`
+renders any such schema (groups, `showIf`, every field type, secrets write-only) and
+`PipelineReviewModal` — mounted globally, because a review can park from any trigger — queues the
+cards, oldest first. When the plugin sidebar lands, its per-extension settings render through the
+same component; that is the "one renderer, three uses" promise of 12 §6, now with two of the three
+uses live.
+
+**v1's honest edges:** parking is in-memory (a parked run does not survive a restart — the durable
+parking store lands with plugin lifecycle work); `async` review approves immediately with the
+request recorded (true async proposals need proposal storage on every consumer target); and the
+graph proposal screen remains deliberately bespoke — a node-and-relationship editor is richer than
+any generated form should pretend to be.
+
+## 26. Steps in the sidebar, and prompts you can finally touch
+
+The panel's grouping changed from facets to **steps**, and the change is a ratified
+exception to a rule this document defended in §22. 05 §0a said the option payload
+carries no topology — not the node key, not the count, not the order — and the facet
+grouping was that rule's UI: settings arrived sorted by *kind* (prompts, weights,
+sampling), with node identity dissolved into disambiguated labels. In practice the
+user asked for the opposite ("configuration should automatically group settings by
+step or node"), and they are right about the reader: a person tuning the summarize
+pipeline thinks "the drafting step's prompt", not "the prompts facet's third box".
+The trade was put to the user and taken deliberately: `namespaceView` now returns
+`steps: [{key, label, options, advanced}]` in run order, which **reveals the step
+count and order** — and still no addresses. The `key` is an ordinal (`s0`, `s1`),
+the label is the *type's* name off the registry row (disambiguated by occurrence:
+"Generate text 2"), and writes still go through the per-option HMAC ids. What 05
+§0a was actually protecting — a payload nobody can lift node keys from — survives;
+what it withheld beyond that is now on screen because hiding it made the panel
+harder to read, not safer. The node-key scan in `config.int.test.ts` still passes
+verbatim.
+
+Within a step, `advanced` carries everything whose matrix slot is `params` —
+weights, budgets, thresholds — rendered inside a collapsed `<details>`. The person
+who came to change a prompt no longer scrolls past nine numbers to find it, and the
+numbers are one click away rather than gone. Label disambiguation shrank to match:
+with the type name in the heading, prefixing colliding labels with it again would
+say everything twice, so collisions (possible only *within* a node now) qualify by
+slot name instead.
+
+**Prompts became touchable where they are selected.** The dropdown was honest but
+inert: choosing a prompt is half the gesture, and the other half — "what does it
+say, and can I change it" — lived nowhere. A `prompts-ref` option now carries the
+selected row (`prompt: {id, name, fields, readOnly}`), and the panel grows Clone /
+Edit / Delete beside the dropdown, exactly the affordances the legacy prompt-configs
+sidebar had. Clone answers with the copy's id so the client selects it and opens the
+editor in one gesture; shipped prompts are `readOnly` and offer Clone only.
+`deletePrompt` refuses twice — an immutable prompt (the floor every default config
+points at), and a *referenced* prompt, checked against both `pipeline_config_values`
+and `pipeline_node_overrides` at slot `prompts` — because a selection pointing at a
+deleted row is the "stores cleanly and does nothing" failure `prompts.ts` exists to
+refuse. One reference is exempt, and the live smoke test is what found it: the
+caller's **own selection at their write scope**. Delete sits next to the selected
+prompt in the panel, and selecting is itself a reference — without the exemption the
+button is unreachable (select to see it, refused because selected; reset to release
+it, button gone). So the socket handler releases the caller's own override rows
+first — deleting what you selected resets your selection to what it inherits,
+exactly as Reset would — and every other reference still refuses. The same session
+of live testing caught a stale-editor hazard: an inline editor opened for one prompt
+surviving a selection change and offering to save against another row. Drafts now
+record the prompt id they were opened for, and the editor renders only while that id
+is what the option points at. The socket handlers (`pipelines:clonePrompt/updatePrompt/deletePrompt`)
+gate every mutation on the prompt belonging to the slug's spec: a prompt id is a
+small integer somebody can guess, and without that line one pipeline's panel could
+reword another's.
+
+**Descriptions ride the declarations.** `ParamDecl` and `SlotDecl` grew an optional
+`description` (I18n), carried through `Decl` into the option payload and rendered
+as help text under the control. It is display text exactly like `i18n`, so
+`typeContentHash` strips it recursively — copyediting an explanation must never bump
+a type version. The fallbacks hold as before: no description renders nothing, no
+i18n label falls back to the humanized key, no known type falls back to a text
+control — a pipeline author can annotate everything or nothing and the form renders
+either way.
+
+### §26a. The audience split, the chain revision, and descriptions that reach rows
+
+Three follow-ups from user testing of §26, each of which turned out to be load-bearing.
+
+**Who sees what.** The panel's audience rule changed: a **non-admin sees prompts and
+nothing else**, writable at their own scope as overrides on the admin's configuration.
+To them the pipeline is how the application works — weights, sampling, review gates
+and connections are the instance's configuration, and offering them at user scope
+invited edits that changed behaviour nobody else could see or debug. An **admin gets
+live controls for everything**, and the "(admin only)" dead text on the admin's own
+screen — the person who may change it reading a label saying they may not — is gone:
+every non-prompt option is writable and declares `writeAt: "instance"`, which the
+client echoes back as the write scope. The line is enforced twice, in `visibleTo`
+(what renders) and `resolveWriteScope` (what a minted id can reach), because hiding
+is not what protects an option — the ids are stable handles.
+
+**The chain revision (SDK `SCOPE_ORDER`).** Making admin edits land at instance
+scope exposed a live defect: the original chain put `preset` (the selected config)
+above `instance`, so an admin's edit was stored and then shadowed forever by the
+shipped default's value for the same path — the one write in the system that stored
+cleanly and did nothing, found on screen when a budget changed in the panel and the
+run kept the config's number. The revision: **overrides always beat the selected
+config**, most specific scope first — `chat > user > instance > preset`. That flip
+forced a conflation into the open: world.ts projects *system-settings defaults*
+(legacy layer) at what used to be `instance`, and those genuinely belong **below**
+the config. They are now the sixth scope, **`defaults`** — values a host projects
+rather than values anyone decided, present in no write matrix row. The migration's
+instance rows stay at `instance`: they carry only values the admin had deliberately
+changed from column defaults, which are decisions, not projections. Panel and
+runtime resolve in the same order by construction (the panel comments name the SDK
+constant), and `worldPipelineLayer.int.test.ts` is the proof the selected config
+still beats the projected defaults.
+
+**Descriptions, authored and delivered.** The core contracts now carry
+`description` text on the panel-visible parameters and slots (history limit and
+weights, lorebook scanning, retrieval windows and the semantic-ranking constants,
+assembly budget and post-history behaviour, generation stop sequences, connection/
+sampling slots, the synthesized Review option). Display text is stripped from the
+type content hash — and that promise is only kept if rows pick up rewording, so
+`syncTypeRegistry` now refreshes a row's stored `slots` in place when the hash is
+unchanged but the serialized declarations differ. A description authored after
+1.0.0 shipped reaches installs whose rows predate it, with no version bump.
+
+**The layout pass.** One card per step with an ordinal chip, numbered over the
+*rendered* cards so a non-admin's single prompts card says 1 and not 3; Advanced as
+a collapsed, left-ruled group inside the card; descriptions under their controls; a
+read-only "View text" expander on shipped prompts (the one question a dropdown
+cannot answer is what the prompt actually says); and typed inputs routed through
+the drafts map, cleared on every fresh view, so a value the chain resolves
+differently — or a write that lands under something above it — reconciles the box
+instead of leaving the typed number on screen.
+
+### §26b. The editor is the control, and what the empty boxes were
+
+The prompt selector became a dropdown *plus a permanent editor*: one labelled box
+per declared field, filled from the selected row, with Save/Cancel appearing only
+once something is typed. A prompt's wording **is** the setting, so a dropdown onto
+text nobody can see was half a control — and the pencil that revealed it was a
+click most people never made. A shipped prompt shows the same boxes, read-only,
+with Duplicate as the way in; drafts are keyed to the prompt row they were opened
+against, so text typed for one prompt can never be saved onto another.
+
+Template slots moved into **Advanced**. They were rendering as unlabelled empty
+textareas beside the prompt — the panel's most confusing square inch, and the
+question that prompted this pass ("not sure what the textareas are for"). A
+template is the *rendering* of a step rather than a decision about it, and an
+empty one is not an unset setting: it means the step renders with its built-in
+wording, which the placeholder now says outright. All five panel-visible template
+slots carry descriptions naming what they render — message, lorebook entry,
+retrieved entry, the story string, the wire wrapper.
+
+## §27. Context variables: presentation as a swappable entity
+
+A context template could say *whether* characters appear and *where*. It had no say
+in what they looked like, because `templateContext.ts` handed it a string that
+`JSON.stringify(x, null, 2)` had already produced. "Render my characters as prose"
+was a code change.
+
+**The inversion.** `build-template-context@1` gains a `variables` slot whose
+`renders` map names, per key, which registered context variable it produces —
+`{ characters: 'core:var/characters@1' }`. Each key becomes one addressable
+setting pointing at a row in `pipeline_variable_templates`, selected exactly the
+way a prompt is. The registry (`sdk/src/variables.ts`) carries each variable's
+label, description, declared `scope` and a `sample`, which is what finally gives
+the long-inert `SlotDecl.variables` field a sibling that does something: the
+"pass expected shapes down to the configuration" half of the ruling.
+
+**Keyed by the variable, not the spec — and this is the whole feature.** A prompt
+is namespaced to a pipeline because a chat reply's wording has no business in a
+summarizer's picker. A *rendering* is the opposite: it is a statement about
+characters, not about which pipeline asked for them. So the row names the variable
+and selection is checked against that and nothing else. Write one prose layout
+while configuring replies, select the same row from narration. A `promptInSpec`-shaped
+check copied here would compile, pass review, and silently delete the reason the
+table exists — which is why `variableTemplates.int.test.ts` asserts the reuse
+directly, and why the module header says so above the code.
+
+**Byte parity is the gate.** Every shipped layout reproduces the TypeScript it
+replaced, indentation included: `{{{json characters 2}}}` for the 2-space blobs,
+`{{{instructions}}}` for the passthroughs. The JSON shape is not a shortcut anyone
+drifted into — it was A/B tested against prose before 0.1.0 and measurably improved
+how reliably models hold a character — so prose is opt-in and the shipped rows are
+immutable. A new `json` helper (`{{{json v n}}}`, SafeString because escaping is on
+in the render path) is registered once in `contextHandlebarsHelpers.ts`, which every
+renderer already routes through.
+
+**The code default is the floor.** No layout, an empty source, a dangling id, a
+disabled plugin — all fall through to the in-code expression, so a customization is
+the most any of them can cost. A layout that *is* selected and throws refuses
+instead, naming the variable: falling back silently there would leave the panel
+showing one thing while the prompt contained another.
+
+**What the corpus does not cover, stated rather than assumed.** The nine-fixture
+byte-parity harness calls `buildWorld` with no `specId`, so `applyPipelineLayer`
+never runs and every fixture exercises the *floor*. Measured, not reasoned about:
+changing the shipped characters layout to indent 4 leaves the entire corpus green.
+So the corpus proves the floor; `variableTemplates.parity.test.ts` proves the
+shipped rows agree with it. The line is written into both files, because a gate
+that looks broader than it is is worse than a narrow one.
+
+**Two guards this pass added, both from failures rather than review.**
+`registryHashes.test.ts` pins every published type's content hash: a descriptor
+change without a re-projection migration made `bootstrapPipelines` catch
+`TypeRegistryConflictError` and return early, so pipelines stopped with nothing on
+screen but a diagnostics line — and nothing caught it. And `asWritten` now coerces
+the way Handlebars does (`v == null ? "" : String(v)`) rather than
+`typeof v === 'string'`; the narrow version passed every realistic input, and would
+have diverged from its own shipped layout the day an upstream node emitted an array.
+
+**Admin-only for 0.6**, on the same line §26 drew for everything but prompts: two
+users whose characters render differently are two users whose reports cannot be
+compared. Flipping it later is three lines.
+
+### §27a. Assemble's three, and what upgrading exposed
+
+`assemble@2` declares its own `variables` slot — `worldLore`, `history`,
+`currentDate` — rather than folding them in with the cast. They belong here
+because they come out the other side of the budget: what a layout receives is
+what actually *fit*, and no earlier node knows the answer. Two `variables` slots
+on one pipeline, one per producing node, which is the same shape the config layer
+already handles for `prompts`.
+
+`characterLore` is deliberately not among them. It is a top-level value on the
+assembly context that **no template renders**: lore bound to a character is folded
+into that character inside `characters` under an `"extra lore"` key, which
+`docs/context-configs.md` states outright. A layout for it would be a setting that
+changes nothing, which is worse than the vestigial array it would configure.
+
+Their shipped layouts are **minified** — `{{{json worldLore 0}}}`, not the 2-space
+form the cast blobs use — because that is what `JSON.stringify(obj)` produced.
+The one behaviour change is that an empty set now resolves to `""` rather than
+`undefined`, and it is byte-neutral for the reason the builders return `undefined`
+in the first place: `{{#if worldLore}}` skips on both, and `{{{worldLore}}}`
+renders nothing for both.
+
+**What only an upgrade could show.** Booting the new build against a database
+seeded by the old one put "— Pipeline Default —" above output that plainly had a
+layout. A reference slot has no author default — the value is a row, not a literal
+— so `reconcileConfigs` back-filled the newly declared addresses from
+`d.authorDefault`, found `undefined`, and skipped every one. On a fresh install
+nothing showed, because `ensureDefaultConfig` writes them. The fix is a shared
+`refDefaults` both callers read, so "what core ships for this reference" has one
+definition rather than two that drift; the same hole existed for `prompts-ref` and
+had simply never been reachable, since prompts shipped with the config layer.
+
+The general lesson is the one the parity corpus keeps teaching in different
+clothes: a test that only ever runs against a fresh database cannot see the class
+of bug that lives in the difference between two schemas.
+
+### §27b. Retiring the prompt aliases
+
+Spec 1.1.0 made assembly and the provider read the context node's prompts **by
+reference**, closing 13 §12 finding i. What it did not do is retire the two field
+names that defect had required: `seedPrompts.ts` and `migrateLegacy.ts` kept
+writing `system` and `postHistory` alongside `systemPrompt` and
+`postHistoryInstructions`, so every seeded row carried the same two texts twice.
+
+Nothing declared those names any more, so nothing resolved them — but the panel's
+prompt editor renders **one box per key in the row**, not per declared field. A
+user opening a shipped prompt saw five boxes where the pipeline reads three, with
+nothing to say which two were inert. That is the shape of defect this whole layer
+exists to prevent: an edit that stores cleanly and does nothing.
+
+Three parts, and the third is the one that is easy to forget. Removing the aliases
+from the two writers fixes only fresh installs, because **both are insert-only by
+seed key** — deliberately, so a row a user edited stays theirs. Migration `0110`
+is what reaches rows already written. It is scoped to the two namespaces that ever
+had the aliases: the summarize namespaces use their own field names, nothing stops
+a future node from declaring a field genuinely called `system`, and an unscoped
+`- 'system'` would delete authored text with no trace. Mutation-tested by widening
+it to `WHERE 1 = 1`, which turns that assertion red.
+
+The first part was aligning `parity.ts` with the document it mirrors. Its assemble
+nodes still used a bare `slot.prompts()`, addressing *their own* slot — which
+`world.ts` has not written since the double-write was retired, so it resolved to
+`{}` and the corpus stayed green because the shipped template takes its text from
+the template context. A harness that has drifted from the spec it exists to
+mirror keeps passing while proving less than it claims, and that is not something
+its own green suite can tell you.
+
+### §27c. Preview and lint, read from the declarations
+
+Moving the context template into its own table left the new editors less capable
+than the archived ones they replaced: a plain textarea, no preview, no lint. That
+matters more here than it did for `context_configs`, because a **layout** can be
+syntactically fine and render nothing — `{{#each character}}` over a scope keyed
+`characters` produces an empty string with no error anywhere, and the first sign
+of it is a reply with no cast in it.
+
+Three lists used to have to agree whenever a variable was added, with nothing
+connecting them: `TemplateContext`, the linter's `KNOWN_TOP_LEVEL_FIELDS`, and
+`mockTemplateContext`. They did not stay in agreement. `speakerRelationships` was
+added to the type and not the linter, so the editor reported "isn't a recognized
+field" **against the shipped default template**; the preview drifted more quietly,
+rendering `worldLore` as an array of objects at indent 2 where the real path emits
+a keyed object, minified — a shape no prompt has ever contained.
+
+All three now read the **variable registry**. `pipelines/preview.ts` renders each
+declared `sample` through the layouts in force, so the two previews compose; the
+linter's vocabulary is the declared scope keys plus a short list of genuinely
+structural names (the message loop, the macro scalars); and
+`lintVariableTemplate` lints one layout against *its own* variable's scope rather
+than the whole context vocabulary, which is what catches the singular/plural slip.
+`mockTemplateContext.ts` and `previewCompiler.ts` are deleted rather than synced.
+
+The archived editor previews against the **bare** layouts, because that is what
+its rows are pinned to — previewing it through the wrapped defaults would show
+every block twice-wrapped, a bug existing only in the preview.
+
+Writing the samples turned up the same defect one level down: `characterNames`
+was declared as `['Ash', 'Brannoc']` when `joinWithAnd` has already made it a
+string by the time a layout sees it. Same class of lie, in the file written to
+end it.
+
+### §27d. The relationships block, finally wired
+
+`speakerRelationships` was supplied by no spec. The legacy path always set it —
+`generateResponse.ts` puts `buildGraphContext`'s summary on the adapter — so a
+user with the narrative graph on **lost the block by moving to pipelines**. A
+missing feature rather than a changed one, which is why it lands as spec 1.4.0.
+
+It arrives as `core:query/graph-context@1`: a Query, because it is a read and a
+Task is handed no services (F11), and its own node so it appears on the receipt —
+a block in the prompt that no receipt could account for was the argument against
+folding it into the context builder. Empty is normal, not a halt: an install that
+never opened the graph has no relationships and the template's `{{#if}}` skips it.
+
+The value is **already a JSON string** — `buildGraphContext` stringifies at indent
+1 — so its layout is a passthrough plus the heading and fence, not a
+`{{{json …}}}`. The plan for this feature guessed the latter, which would have
+double-encoded the block. With the variable wired, the wrapper the 0.6 template
+was still carrying as the one deliberate exception moved into its layout, and that
+template is now structure throughout.
+
+### §27e. Two transforms the pipeline path never did
+
+Mapping `promptBuilder/` to plan the legacy deletion turned up something that
+was not about deletion at all. `populateLorebookEntryBindings` is called from
+**only** the two legacy infill engines, and nothing under `pipelines/` calls it —
+so since the pipeline began compiling every reply, lore entries have received
+neither of the two transforms it performs:
+
+- **`@@` decorator lines reached models as literal text**, while
+  `handlebarsLint.ts` tells users they are "stripped from the rendered prompt".
+  The still-legacy token-count preview *did* strip them, so the number on screen
+  and the prompt actually sent disagreed on any chat using one.
+- **`{{char:1}}` binding placeholders arrived unsubstituted.**
+
+Both are now applied at the host read (`lorebook_entries`), on the same argument
+the file already makes for honouring `isHidden` there rather than per binding: a
+new Query type cannot forget it. The legacy function is **reused, not
+reimplemented** — a second definition of "what a lore entry looks like once it is
+ready" is the drift this branch keeps finding, and this one would surface as a
+prompt difference nobody could localise.
+
+**Why nine fixtures missed it.** The corpus contained no `@@` decorator and no
+`{{char:#}}` binding anywhere, so it never exercised either path.
+`chat/decorated-lore` now carries both.
+
+**And why the fixture failed in the opposite direction first.** With the pipeline
+fixed, the *legacy* side left `{{char:1}}` in. `hydrateChat` loaded
+`lorebookBindings: true` where the real legacy path
+(`getPromptChatFromDb`) loads `lorebookBindings: { with: { character, persona } }`
+— so every binding's `character` was null, the substitution had no name to
+resolve, and both sides left the placeholder in and **agreed for the wrong
+reason**. A harness that under-hydrates cannot see any behaviour depending on
+what it failed to load. That is the third time on this branch the parity
+apparatus has been found proving less than it appeared to.
+
+**Still open, and downgraded on inspection.** `isCharacterLoreEntryVisible` — the
+only server-side enforcement of "character lore is private self-knowledge" — has
+no pipeline equivalent. It is *not* currently a content leak: no spec supplies
+`characterLore` to the context node, so the entries render nowhere. They do still
+consume ranking budget, which can push world lore out of a prompt. It becomes a
+privacy bug the moment character lore is wired into the cards, so it should be
+fixed before that happens rather than after.
+
+### §27f. Draining promptBuilder/, steps 1–6
+
+The analysis that mapped this directory found the real blocker is not the
+directory at all — it is `BaseConnectionAdapter` constructing a `PromptBuilder`
+unconditionally, plus one live socket handler. Everything short of that is
+mechanical, and this is that part: six steps, each shipping and reverting on its
+own, none needing a decision.
+
+**What moved, and why there rather than into `pipelines/`.**
+`InterpolationEngine` and `characterCardMacros` went to `utils/interpolation/`
+as a **pair** — the engine is its macros' only importer, and separating them
+would silently drop Card V3 macro support. Not into `pipelines/`, because
+`sockets/chats.ts` uses the engine for first-message interpolation, a chat-CRUD
+feature with no pipeline involvement; filing it under `pipelines/` would force a
+non-pipeline consumer to import from there. That consumer reached it through the
+**barrel**, which is why a grep for the module path missed it — worth
+remembering, since the barrel is what dies.
+
+`ragQuery`, `contextFields`, `PostHistoryContext` (→ `postHistory`),
+`ContentProcessors`, `LorebookBindingUtils` (→ `characterLore`) and
+`infillTestUtils` (→ `testFixtures`) went into `pipelines/`.
+`characterCardDecorators` and `parseSplitChatPrompt` went to `shared/utils/` —
+the latter beside `PromptBlockFormatter`, its encode counterpart, which its own
+round-trip test already pairs it with. `utils.ts` split; its date helpers became
+`pipelines/dateKeys.ts`.
+
+**The direction of borrowing is the point.** Where both halves need something,
+the *surviving* half owns the definition and the dying half imports it —
+`PRIORITY_SCORE_BONUS`, the context types, `characterLore`. That leaves nothing
+to move on the day the engines are deleted. `PRIORITY_SCORE_BONUS` was worth
+consolidating on its own terms: `ranking/weights.ts` also hardcoded the same
+`0.15` as a literal, so one number had two definitions and the keyword and
+semantic arms could drift apart while both looked deliberate.
+
+**Pipeline → promptBuilder production edges: 10 → 0.** The single remaining
+reference is `parity.ts`, the migration harness, which dies by construction with
+the thing it compares against.
+
+**Three things worth recording.**
+
+A re-export does **not** bind a name locally. It bit twice — once on
+`PRIORITY_SCORE_BONUS`, once on the context types — and `tsc` caught it both
+times, immediately.
+
+`svelte-check` passed a bare `import "./utils"` referring to a **deleted file**.
+Only vitest caught it, as a module-not-found across nine adapter suites. A
+side-effect import of a module with no side effects is invisible to the type
+checker and to every grep for a named symbol.
+
+`CompiledPrompt` deliberately did **not** move. It is the adapter payload
+contract, and `app.d.ts` declares two unrelated ambient globals of that name —
+`BaseConnectionAdapter` already aliases around the collision. Repointing it means
+touching seven adapters explicitly and never by dropping an import specifier,
+since the bare name would then resolve to a global with a *different shape that
+still typechecks*, which no test would catch. That belongs with the adapter work
+in step 7.
+
+Steps 7–9 remain: severing the adapter's `PromptBuilder` dependency (high churn,
+six adapter test files spy on `adapter.promptBuilder.compilePrompt`), wiring the
+character-lore visibility gate, and then the deletion itself — which still waits
+on what happens to `chats:promptTokenCount` and the RAG diagnostics panel.
+
+### §27g. Steps 7 and 8: the adapter's token config, and the privacy gate
+
+**Role A, severed.** `BaseConnectionAdapter` forwarded `tokenCounter`,
+`tokenLimit` and `contextThresholdPercent` straight into `PromptBuilder` and then
+read them back through it — so an adapter asking "what is my context limit" went
+through the legacy prompt compiler to find out. The adapter owns them now; the
+builder is handed a copy for as long as it exists, which is one line that dies
+with it.
+
+Assigned at the `super({...})` boundary, deliberately. KoboldCpp, LlamaCpp and
+LMStudio do **not** accept these from their callers — they construct their own
+and pass them up — so `super()` is the one place every subclass agrees on.
+Anywhere else and three adapters would silently hold different values than the
+builder does. LMStudio passes `tokenLimit: 0` and sets it later from the API,
+so the sequencing is preserved exactly rather than merely approximately.
+
+The analysis predicted this step would touch six adapter test files. It touched
+none: those spy on `adapter.promptBuilder.compilePrompt`, which is Role B and
+belongs to the deletion commit. Role A came out clean.
+
+**The privacy gate, wired.** `isCharacterLoreEntryVisible` has gated character
+lore on the legacy path since it was written, and nothing under `pipelines/`
+called it. Since the pipeline compiles every reply, every character's private
+self-knowledge has been competing for the same ranking budget as world lore on
+every turn — and would have leaked outright the moment character lore was wired
+into the cast cards. It now runs at the host read, beside the decorator
+stripping, on the argument the file already makes for `isHidden`: a new Query
+type cannot forget what the read applies for it.
+
+Worth being exact about the severity, because the first assessment overstated it:
+this was **not** a content leak. No spec supplies `characterLore` to the context
+node, so the entries rendered nowhere. It was a budget bug that was one wiring
+change away from being a privacy bug — which is the argument for fixing it before
+that change, not after.
+
+`retrieval.int.test.ts` covers the three branches of the rule (own lore, someone
+else's, the narrator's unbound entries) and is mutation-tested: neutralising the
+filter turns two of them red. Nothing covered it on the pipeline side before.
+
+### §27h. The debug panel, rebuilt on what the pipeline knows
+
+`chats:promptTokenCount` was the last live consumer of the legacy prompt path —
+the number on screen came from a code path that no longer generates any replies.
+It now compiles through `runTurn({ preview: true, skipReceipt: true })`, the same
+recipe `generateResponse` already uses, so the count reflects the compilation the
+next turn will actually perform. `skipReceipt` because it fires on a debounce
+while somebody types.
+
+That turned out to be nearly free: `toCompiledPrompt` already supplied every
+field the panel read **except `meta.rag`**, with `templateName` and
+`truncationReason` as deliberate nulls.
+
+**`meta.rag` was not ported, and that is the substantive decision here.** The
+panel read `rag.messages.guaranteed`, `.ragOlder`, `.filledIn`,
+`rag.lore.*.{pinned,rag}`, `rag.scores` and `rag.entries`. Every one of those is
+a counter for the infill engine's internal *phases* — a guaranteed window, a RAG
+pass over older messages, a fill pass. The pipeline has no phases. It scores
+candidates, allocates a budget, and records per block why that block is in or
+out. Reproducing the old display would have meant inventing values for stages
+that do not run.
+
+So `meta.retrieval` reports what exists: every candidate, whether it was kept,
+what it cost, and the reasoning trail behind the decision. That answers the
+question the panel was built for — *why isn't my lore showing up* — per entry,
+rather than by inference from an aggregate. Block `content` is deliberately
+excluded: it is already in the prompt the same object carries.
+
+Worth noting how the old section would have failed if left alone. The panel
+branches on `rag?.used === true` / `=== false`; an absent `meta.rag` matches
+neither, so the whole section would have rendered **blank** — no crash, no
+failing test, nothing to notice. It was replaced rather than left to disappear.
+
+`rag` stays declared on the response type until the legacy path is deleted, and
+nothing populates it any more.
+
+### §27i. Freezing the gate before deleting what it measured against
+
+The parity corpus is the gate on deleting the legacy path, and it produced its
+0.5 side by **running `PromptBuilder`**. So the gate depended on the thing it was
+guarding, and step 9 would have deleted the guard along with the guarded.
+
+The 0.5 renders are now **frozen goldens** — one file per fixture under
+`parityGoldens/`, captured while the builder still existed. That inverts the
+dependency: the corpus keeps gating every future change to the pipeline long
+after the legacy path is gone, because the bytes 0.5 produced are recorded rather
+than recomputed.
+
+It also closes the last way for the two sides to move together and agree for the
+wrong reason. That has happened twice on this branch — a template both sides
+read, and a hydration both sides lacked — and each time the corpus stayed green
+while proving less than it claimed. A frozen reference cannot drift toward the
+thing it is measuring.
+
+Verified three ways before trusting it: captured twice and diffed (byte-identical
+across runs, so the fixtures are deterministic), run read-only (all eleven pass),
+and mutation-tested against the *floor* — changing `asIndentedJson`'s indent
+diverges eleven fixtures at once.
+
+Worth recording the mutation that did **not** fail, because it is the same
+distinction §27 already draws and it is easy to re-learn the hard way: changing a
+shipped layout's `source` leaves the corpus green. The harness calls `buildWorld`
+with no `specId`, so no layout resolves and every fixture renders the in-code
+floor. The corpus gates the floor; `variableTemplates.parity.test.ts` gates the
+layouts agreeing with it.
+
+**Consequence to accept deliberately:** once the builder is deleted,
+`PARITY_CAPTURE=1` cannot run, and adding a new fixture means authoring its
+golden from a `v0.5.1-beta` checkout. That is the correct cost — a golden is a
+record of what 0.5 did, and rewriting one is rewriting history rather than
+updating a snapshot.
+
+### §27j. The deletion
+
+The legacy prompt path is gone: `promptBuilder/` in full — both infill engines,
+`BaseInfillEngine`, `NarrativeGraphContext`, `index.ts`, `types.ts` — plus
+`compare.ts`, `scripts/compare-prompts.*`, the `pipeline:compare` script, and
+`ranking/differential.int.test.ts`, whose entire reference was the engine it
+compared against.
+
+`CompiledPrompt` moved to `connectionAdapters/types.ts`, where it always
+belonged: it is the adapter payload contract. Repointed by name in all seven
+adapters and never by dropping a specifier — `app.d.ts` declares two unrelated
+ambient globals of that name, so a dropped specifier resolves to a *different
+shape that still typechecks*. `meta.rag` went with the engines; `meta.retrieval`
+replaced it.
+
+`BaseConnectionAdapter` no longer constructs anything. `compilePrompt` returns
+the injected payload, handles summarizer mode, and otherwise **throws** — an
+adapter reaching it without having been handed a prompt is a caller that skipped
+`withCompiledPrompt`, and generating from an empty string would read as a model
+fault.
+
+**Three things this turned up that the plan did not predict.**
+
+*The RAG corpus nearly lost its reference.* Goldens were frozen first
+(§27i) — but the RAG corpus calls `legacyRender` directly rather than going
+through `resolveGolden`, so the capture run never wrote its four goldens and the
+deletion took the only thing that could produce them. Recovered by restoring the
+engines from `HEAD`, re-adding `legacyRender` temporarily, capturing, and
+deleting again. The lesson is narrow and worth keeping: freezing a reference
+protects only the callers that actually go through the freeze.
+
+*A latent import cycle.* `defaults.ts` imports `db` from `db/index.ts`, which
+calls `sync()` back into it at module scope. That only ever worked because some
+third module pulled `db` in first — and the legacy builder was that module. With
+it gone, any entry reaching `defaults.ts` first hit `db` in its temporal dead
+zone. Fixed at the cause: 0.5's frozen template moved to
+`db/legacyContextTemplate.ts`, a module with no database import, so wanting the
+string no longer means loading the seeder. That also retires the read-the-file-
+off-disk trick two tests were using to dodge the same problem.
+
+*An optional enrichment that can fail a turn.* `core:query/graph-context@1` is a
+three-layer traversal, and its inherited 2000ms timeout tripped on every run —
+then 5000ms tripped under a loaded suite. The number is now 15000, but the real
+finding is in the comment: a node whose output the template would happily skip
+can currently **halt the run** by being slow. Until a Query can be marked
+non-fatal, its timeout is a hang-catcher rather than a latency budget. Worth
+fixing properly.
+
+Also corrected while wiring it: `buildGraphContext` read through the module-scope
+`db` rather than the one the host was handed, which is precisely the coupling the
+host exists to prevent (F19). It takes a connection now.
+
+### §27k. One real reply, and the two bugs it found
+
+Every other check stops at the preview boundary. `liveGeneration.int.test.ts`
+runs the whole chain against a real Ollama — bootstrap, config layer, retrieval,
+layouts, assembly, the provider call, the consumer that writes the message.
+Opt-in behind `LIVE_MODEL=1`, because a suite must not depend on somebody's GPU.
+
+It paid for itself immediately.
+
+**The Ollama adapter sent an empty request.** `compilePrompt` reads
+`!!extraJson?.useChat` (default **false**); `generate` read
+`extraJson?.useChat ?? true` (default **true**). One setting, two defaults. A
+connection whose `extraJson` lacks `useChat` — the column defaults to `{}` — had
+a *completion* prompt built and a *chat* request sent, with `messages:
+undefined`. Ollama answers that with an empty string, which surfaced as "the
+model returned nothing" and reads as a model fault rather than a request built
+wrong. `generate` now derives the shape from the payload it was handed, which
+cannot disagree with itself.
+
+**A seed line that collides with its own stop string.** Roleplay prompts end
+`<Name>: ` and also pass `<Name>:` as a stop string, so a model whose first
+emission repeats the speaker's name stops instantly and returns nothing.
+Confirmed directly against Ollama: the same prompt yields text with the stop list
+removed and `''` with it. Inherited, not introduced — the frozen goldens show 0.5
+built the identical seed line — so the test asserts what the pipeline is
+answerable for (the chain completed, the provider was reached with a real
+payload) and warns rather than fails on an empty completion. Worth fixing on its
+own terms; it is a live footgun for anyone whose model echoes the name.
+
+What the run does prove, and nothing before it did: the assembled prompt reaching
+a real model is 0.6's — headings and fences supplied by the layout rows, lore
+retrieved through the config layer, the whole thing built without a line of the
+legacy path, which no longer exists.

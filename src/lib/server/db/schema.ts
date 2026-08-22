@@ -2193,7 +2193,25 @@ export const systemSettings = pgTable("system_settings", {
 	charaVaultEmail: text("chara_vault_email"),
 	charaVaultEncryptedToken: text("chara_vault_encrypted_token"),
 	charaVaultTokenIv: text("chara_vault_token_iv"),
-	charaVaultTokenAuthTag: text("chara_vault_token_auth_tag")
+	charaVaultTokenAuthTag: text("chara_vault_token_auth_tag"),
+	/**
+	 * Whether `migrateContextTemplates` has run.
+	 *
+	 * A ledger flag rather than a re-derived condition, and that distinction is
+	 * the whole reason the column exists. That migration carries each scope's
+	 * context config into `pipeline_context_templates` and, where the template
+	 * is one somebody wrote, pins that scope's variable layouts to the bare
+	 * rows so the heading is not written twice.
+	 *
+	 * Both halves have to happen once. The obvious alternative — re-checking
+	 * each boot whether the selected template is core's — quietly re-pins
+	 * anyone who resets that setting on purpose, so the panel would keep
+	 * reverting with nothing on screen saying why. A migration that has run is
+	 * a fact about the database, and this is where that fact lives.
+	 */
+	contextTemplatesMigrated: boolean("context_templates_migrated")
+		.notNull()
+		.default(false)
 })
 
 export const systemSettingsRelations = relations(systemSettings, ({ one }) => ({
@@ -3211,6 +3229,153 @@ export const pipelinePromptsRelations = relations(
 			references: [pipelineSpecs.id]
 		})
 	})
+)
+
+/**
+ * How a context variable is *presented* — the swappable half of `{{{characters}}}`.
+ *
+ * Same entity pattern as `pipeline_prompts` above: the config stores a
+ * reference, this row holds the content, and rewording reaches every node
+ * pointing at it instead of forking at the first edit.
+ *
+ * ## Keyed by the variable, deliberately not by the spec
+ *
+ * This is the one place the prompt pattern is *not* copied, and the difference
+ * is the entire feature. A prompt is namespaced to a pipeline because a chat
+ * reply's wording has no business in a summarizer's picker. A *rendering* is the
+ * opposite: "characters as prose instead of JSON" is a statement about
+ * characters, not about which pipeline asked for them. So the row names the
+ * variable it renders, and any pipeline that renders `core:var/characters@1`
+ * may select it — write one prose template, use it in reply and narration both.
+ *
+ * Selection is checked against `variable_id`, never against a spec. A
+ * spec-ownership check copied from `prompts.ts` would compile, pass, and quietly
+ * remove the reason this table exists.
+ *
+ * ## Why `engine` is nullable
+ *
+ * The same reason `context_configs.engine` is (12 §2a): NULL means core's
+ * default, and a stored value keeps whatever it was authored in rather than
+ * inheriting whatever core happens to render with later.
+ */
+export const pipelineVariableTemplates = pgTable(
+	"pipeline_variable_templates",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/** The registered variable this renders, e.g. `core:var/characters@1`. */
+		variableId: text("variable_id").notNull(),
+		/** Registered template engine id; NULL is core's default. */
+		engine: text("engine"),
+		name: text("name").notNull(),
+		/** The template source, in whatever `engine` says it is written in. */
+		source: text("source").notNull().default(""),
+		/** Stable identity for the templates core ships; NULL for a user's own. */
+		seedKey: text("seed_key").unique(),
+		/** Core's shipped rendering: selectable and copyable, never edited in place. */
+		isImmutable: boolean("is_immutable").notNull().default(false),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at").notNull().defaultNow()
+	},
+	(t) => [
+		index("pipeline_variable_templates_variable_idx").on(t.variableId),
+		uniqueIndex("pipeline_variable_templates_variable_name_idx").on(
+			t.variableId,
+			t.name
+		)
+	]
+)
+
+/**
+ * The story string — the layout of a whole finished prompt.
+ *
+ * Supersedes `context_configs`, which stays as data only. This is the table the
+ * pipeline reads; the legacy one is kept so a template somebody spent a year on
+ * survives the upgrade, and is dropped once nothing needs to read it.
+ *
+ * ## What it owns, and what it no longer owns
+ *
+ * Structure: message blocks, placement, `{{#if}}`, `{{#each}}`. It has no
+ * opinion on how the data inside is *presented* — the headings, fences and JSON
+ * shape live in `pipeline_variable_templates`, one row per variable. The two
+ * tables are the two halves of that split, which is why they are named as a
+ * pair: this renders the whole context, that renders one value inside it.
+ *
+ * ## Keyed by the node whose context it renders, not by the pipeline
+ *
+ * `node_type_id` is the compatibility rule, and it is the same move
+ * `pipeline_variable_templates` makes with `variable_id`: a row is keyed by
+ * *what it renders against*, never by who happened to be rendering. Chat reply
+ * and the narrator both run `core:task/assemble`, so one template genuinely
+ * serves both — which is how `context_configs` has always behaved, and
+ * namespacing to a spec would turn that into two copies to keep in sync. A
+ * pipeline with no such node offers no picker at all, so a summarizer's
+ * settings cannot fill up with templates written for chat.
+ *
+ * **Unversioned on purpose.** `core:task/assemble`, not `@2`. Which variables
+ * exist is a property of the version and belongs to the lint; fragmenting the
+ * pool on every version bump would strand every template a user wrote.
+ *
+ * ## `created_for_spec_id` sorts, and never refuses
+ *
+ * Which pipeline's panel a row was written in. The picker groups on it — used
+ * here, then shipped, then everything else that fits — because "compatible" and
+ * "the one I want" stop being the same answer at about ten rows. It is
+ * deliberately not a permission: a template written while editing chat replies
+ * is still one scroll away in the narrator, because the whole reason this is not
+ * spec-scoped is that it genuinely works there.
+ */
+export const pipelineContextTemplates = pgTable(
+	"pipeline_context_templates",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/**
+		 * The node type whose context this renders, unversioned — e.g.
+		 * `core:task/assemble`. The hard compatibility rule.
+		 */
+		nodeTypeId: text("node_type_id").notNull(),
+		/**
+		 * Where it was authored, for grouping only. NULL for core's own and for
+		 * anything migrated across, neither of which belongs to one pipeline.
+		 * `set null` rather than cascade: deleting a pipeline must not delete
+		 * somebody's template, which would be data loss wearing a tidy-up's
+		 * costume.
+		 */
+		createdForSpecId: integer("created_for_spec_id").references(
+			() => pipelineSpecs.id,
+			{ onDelete: "set null" }
+		),
+		/** Registered template engine id; NULL is core's default. */
+		engine: text("engine"),
+		name: text("name").notNull(),
+		/** The template source, in whatever `engine` says it is written in. */
+		source: text("source").notNull().default(""),
+		/** Stable identity for the templates core ships; NULL for a user's own. */
+		seedKey: text("seed_key").unique(),
+		/** Core's shipped layout: selectable and copyable, never edited in place. */
+		isImmutable: boolean("is_immutable").notNull().default(false),
+		/**
+		 * The `context_configs` row this was copied from, if it was.
+		 *
+		 * Not a foreign key and not used for resolution — the copy is
+		 * independent the moment it exists. It is here so the migration can be
+		 * idempotent without a ledger, and so "where did this come from" has an
+		 * answer while both tables are still present.
+		 */
+		migratedFromContextConfigId: integer("migrated_from_context_config_id"),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at").notNull().defaultNow()
+	},
+	(t) => [
+		index("pipeline_context_templates_node_type_idx").on(t.nodeTypeId),
+		index("pipeline_context_templates_spec_idx").on(t.createdForSpecId),
+		uniqueIndex("pipeline_context_templates_node_type_name_idx").on(
+			t.nodeTypeId,
+			t.name
+		),
+		uniqueIndex("pipeline_context_templates_migrated_from_idx").on(
+			t.migratedFromContextConfigId
+		)
+	]
 )
 
 /**

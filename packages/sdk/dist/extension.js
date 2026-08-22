@@ -19,7 +19,8 @@ export function pipelineHook(type, handler, opts = {}) {
         type: descriptor,
         visibility: opts.visibility ?? (descriptor.public ? 'public' : 'private'),
         handler,
-        runtime: opts.runtime,
+        // Not configurable. See the note on the field.
+        runtime: 'process',
     };
 }
 export const lifecycleHook = (moment, handler, opts = {}) => ({ __decl: 'lifecycle-hook', moment, handler, ...opts });

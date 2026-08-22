@@ -23,13 +23,22 @@ import { keywordQuery, normaliseTfidf } from "./ranking/keywordQuery"
 import { eligibleFor, armNote, fuseRanks } from "./ranking/strategy"
 import { select } from "./ranking/select"
 import { rankSemantic, mergeWindows } from "./ranking/semantic"
-import { queryWindows } from "$lib/server/utils/promptBuilder/ragQuery"
-import { PRIORITY_SCORE_BONUS } from "$lib/server/utils/promptBuilder/KeywordInfillEngine"
-import { withDefaults } from "./ranking/weights"
+import { queryWindows } from "./ranking/ragQuery"
+import { PRIORITY_SCORE_BONUS, withDefaults } from "./ranking/weights"
 import { allocate, render } from "./assemble"
 import { resolveContextInput } from "./promptFields"
 import { processMessages } from "./messages"
+import { resolvePostHistoryContext } from "./postHistory"
 import { buildTemplateContext } from "./templateContext"
+import {
+	buildBatchPrompt,
+	buildCharacterExtractionPrompt,
+	buildNamePrompt,
+	buildSynthesisPrompt,
+	formatMessagesAsJson,
+	type JsonDraft
+} from "$lib/server/utils/summarizer/templates"
+import { parseSummaryOutput } from "$lib/server/utils/summarizer/parser"
 
 /** Not built yet, and saying so plainly beats failing like a bug. */
 const notYet = (what: string, where: string) => async () =>
@@ -70,7 +79,10 @@ export function coreBindings(): Bindings {
 		"core:query/lorebook-triggers@1": async (input: any, ctx: any) => {
 			const params = withDefaults(input?.params ?? {})
 			const [entries, messages, embedding] = await Promise.all([
-				ctx.read("lorebook_entries", { chatId: input?.scope?.chatId }),
+				ctx.read("lorebook_entries", {
+					chatId: input?.scope?.chatId,
+					currentCharacterId: input?.scope?.currentCharacterId ?? null
+				}),
 				ctx.read("chat_messages", {
 					chatId: input?.scope?.chatId,
 					limit: input?.limit ?? 100
@@ -134,7 +146,10 @@ export function coreBindings(): Bindings {
 				})
 
 			const [entries, result] = await Promise.all([
-				ctx.read("lorebook_entries", { chatId: input?.scope?.chatId }),
+				ctx.read("lorebook_entries", {
+					chatId: input?.scope?.chatId,
+					currentCharacterId: input?.scope?.currentCharacterId ?? null
+				}),
 				ctx.read("vector_search", {
 					chatId: input?.scope?.chatId,
 					// Several query vectors: the current window and the recent
@@ -246,6 +261,27 @@ export function coreBindings(): Bindings {
 		 * It decides nothing. Which of these rows are shown, named or minimal is
 		 * the context Task's business.
 		 */
+		/**
+		 * The speaker's relationships, from the narrative graph.
+		 *
+		 * Empty is normal, not a halt: an install that never opened the graph
+		 * has no relationships, and the shipped template's `{{#if}}` skips the
+		 * block. Halting here would stop every chat on every install without
+		 * one — which is what makes "produces nothing" the right shape for a
+		 * Query that is genuinely optional.
+		 */
+		"core:query/graph-context@1": async (input: any, ctx: any) => {
+			const summary = await ctx.read("graph_context", {
+				chatId: input?.scope?.chatId,
+				currentCharacterId:
+					input?.scope?.currentCharacterId ??
+					input?.currentCharacterId ??
+					null
+			})
+			const text = typeof summary === "string" ? summary : ""
+			return ok({ main: text, speakerRelationships: text })
+		},
+
 		"core:query/chat-cast@1": async (input: any, ctx: any) => {
 			const cast = await ctx.read("chat_cast", {
 				chatId: input?.scope?.chatId
@@ -455,7 +491,14 @@ export function coreBindings(): Bindings {
 				pickExample: (n: number) => Math.floor(random() * n)
 			})
 
-			const templateContext = buildTemplateContext(resolved)
+			// The `variables` slot, resolved through the scope chain and already
+			// dereferenced from row ids into template sources by `world.ts` —
+			// the same treatment `prompts` gets, and for the same reason: this
+			// node needs the template, not the number.
+			const templateContext = buildTemplateContext({
+				...resolved,
+				variables: input?.variables
+			})
 			return ok({
 				main: templateContext,
 				templateContext,
@@ -540,9 +583,6 @@ export function coreBindings(): Bindings {
 			const ctxPostHistory = (input?.templateContext as any)?.postHistory
 			let postHistory = ctxPostHistory
 			if (ctxPostHistory?.hasContent && messages.length) {
-				const { resolvePostHistoryContext } = await import(
-					"$lib/server/utils/promptBuilder/PostHistoryContext"
-				)
 				const resolved = await resolvePostHistoryContext({
 					renderMessages: messages,
 					instructions: ctxPostHistory.instructions,
@@ -566,6 +606,11 @@ export function coreBindings(): Bindings {
 				engine: input?.template?.engine ?? null,
 				prompts: input?.prompts,
 				templateContext: input?.templateContext,
+				// This node's own `variables` slot: how the lore and history
+				// *it* produced are laid out. Separate from the context
+				// builder's slot, because these are post-budget — what fits is
+				// only known here.
+				variables: input?.variables,
 				messages: input?.messages ?? [],
 				promptFormat: input?.promptFormat
 			})
@@ -645,14 +690,295 @@ export function coreBindings(): Bindings {
 			})
 		},
 
+		// ── Summarization ───────────────────────────────────────────────────
+		//
+		// The two-phase shape of `utils/summarizer`, as nodes. Every prompt below
+		// comes from the node's `prompts` slot, resolved through the scope chain
+		// — so a user who retuned "Default World Summarization" gets their
+		// wording here without this file knowing anything about it.
+
+		"core:input/summarize-request@1": async (input: any) => ok(input),
+
+		"core:query/summarize-source@1": async (input: any, ctx: any) => {
+			// `summarize_source`, not `chat_messages`: a summary wants a chosen
+			// range with sender names resolved, and the host owns both rules so
+			// no binding can get the hidden-message convention wrong.
+			const messages = await ctx.read("summarize_source", {
+				chatId: input?.scope?.chatId,
+				messageIds: input?.request?.messageIds,
+				limit: input?.request?.limit ?? 5000
+			})
+			return ok({ main: messages, messages })
+		},
+
+		/**
+		 * The cut into batches.
+		 *
+		 * A Task, so it is inspectable and its parameters are a user's to tune.
+		 * The 1500-token headroom is the legacy reserve for the prompt template
+		 * and the draft the model writes back — without it a batch sized exactly
+		 * to the window leaves no room for the answer.
+		 */
+		"core:task/batch-messages@1": async (input: any) => {
+			const messages: any[] = Array.isArray(input?.messages)
+				? input.messages
+				: []
+			const limit = Number(input?.params?.batchTokens ?? 2048)
+			const budget = Math.max(limit - 1500, 500)
+
+			const batches: any[][] = []
+			let current: any[] = []
+			let tokens = 0
+
+			for (const msg of messages) {
+				const cost =
+					roughTokens(
+						JSON.stringify({
+							speaker: msg?.senderName ?? msg?.role,
+							text: msg?.content ?? ""
+						})
+					) + 5
+				if (current.length > 0 && tokens + cost > budget) {
+					batches.push(current)
+					current = [msg]
+					tokens = cost
+				} else {
+					current.push(msg)
+					tokens += cost
+				}
+			}
+			if (current.length > 0) batches.push(current)
+
+			// One empty batch rather than none: a map over nothing produces
+			// nothing to synthesize, and "there is no summary" reads as a failure
+			// when the honest answer is "there was nothing to summarize".
+			const out = batches.length > 0 ? batches : [[]]
+			return ok({ main: out, batches: out })
+		},
+
+		/**
+		 * Phase 1, one batch.
+		 *
+		 * The user prompt comes from `summarizer/templates.ts` — the same
+		 * builder the legacy path uses, called with the same arguments. That is
+		 * the whole parity claim for this step: the rules, the `<content>`
+		 * contract and the per-lore-type wording are not restated here, so they
+		 * cannot drift from the path they are being migrated off.
+		 *
+		 * `loreType` is authored on the node rather than configured, because
+		 * *which kind of entry this pipeline writes* is what distinguishes the
+		 * four summarize namespaces from each other. It is not a user's to tune.
+		 */
+		"core:provider/summarize-batch@1": async (input: any, ctx: any) => {
+			const { systemPrompt, userPrompt } = buildBatchPrompt({
+				jsonMessages: formatMessagesAsJson(
+					Array.isArray(input?.batch) ? input.batch : []
+				),
+				loreType: input?.loreType ?? "world",
+				// From the wired `request` port when the spec passes one (1.1.0),
+				// or flat on the input for callers that construct it directly.
+				topic: input?.request?.topic ?? input?.topic,
+				// The prompts slot, resolved through the scope chain. Blank falls
+				// back to the template's own default, which is what the legacy
+				// columns do — they default to "" and an unconfigured step must
+				// fall back rather than send an empty system prompt.
+				systemPromptOverride: input?.prompts?.batch?.trim()
+					? input.prompts.batch
+					: null
+			})
+
+			const result: any = await ctx.call({
+				systemPrompt,
+				userPrompt,
+				label: "summarize:batch"
+			})
+			if (!result?.text)
+				return halt("the model returned nothing for this batch")
+
+			// `<content>` unwrapped here rather than at synthesis: a draft is
+			// what phase 2 merges, and handing it the tags as well would put the
+			// contract's own scaffolding into the finished entry.
+			const draft = parseSummaryOutput(result.text).content ?? result.text
+			return ok({ main: draft, draft })
+		},
+
+		/** Phase 2 — the ordered drafts, merged. */
+		"core:provider/summarize-synth@1": async (input: any, ctx: any) => {
+			const raw: any[] = Array.isArray(input?.drafts) ? input.drafts : []
+			// Order is load-bearing: the drafts are chronological slices and the
+			// synthesis prompt asks the model to preserve that order. `part` is
+			// the field the template names.
+			//
+			// A map block aggregates as `branch-results@1` — one entry per
+			// iteration carrying `{branchKey, index, result}` in declaration
+			// order (13 §1) — so each draft is unwrapped from its result
+			// envelope. The bare forms stay accepted for callers that hand the
+			// drafts over directly. A halted iteration contributes nothing
+			// rather than an empty part the model would dutifully summarize.
+			const drafts: JsonDraft[] = raw
+				.map((d) => {
+					if (typeof d === "string") return d
+					const v = d?.result?.value ?? d
+					return v?.draft ?? v?.main ?? ""
+				})
+				.filter((text: string) => text.length > 0)
+				.map((draft, i) => ({ part: i + 1, draft }))
+
+			const { systemPrompt, userPrompt } = buildSynthesisPrompt({
+				jsonDrafts: JSON.stringify(drafts, null, 2),
+				loreType: input?.loreType ?? "world",
+				topic: input?.request?.topic ?? input?.topic,
+				systemPromptOverride: input?.prompts?.synth?.trim()
+					? input.prompts.synth
+					: null
+			})
+
+			const result: any = await ctx.call({
+				systemPrompt,
+				userPrompt,
+				label: "summarize:synth"
+			})
+			if (!result?.text)
+				return halt("the model returned nothing to synthesize into")
+
+			const content =
+				parseSummaryOutput(result.text).content ?? result.text
+			return ok({ main: content, content })
+		},
+
+		"core:provider/name-entry@1": async (input: any, ctx: any) => {
+			const { systemPrompt, userPrompt } = buildNamePrompt({
+				content: String(input?.content ?? ""),
+				loreType: input?.loreType ?? "world",
+				systemPromptOverride: input?.prompts?.name?.trim()
+					? input.prompts.name
+					: null
+			})
+
+			const result: any = await ctx.call({
+				systemPrompt,
+				userPrompt,
+				label: "summarize:name"
+			})
+
+			// A nameless entry is still an entry. The content is the valuable
+			// part, and halting here would throw away a finished summary over
+			// its title.
+			const name = (result?.text ?? "").trim()
+			return ok({ main: name, name })
+		},
+
+		"core:provider/extract-cast@1": async (input: any, ctx: any) => {
+			const knownCast = Array.isArray(input?.request?.knownCast)
+				? input.request.knownCast
+				: Array.isArray(input?.knownCast)
+					? input.knownCast
+					: undefined
+			const { systemPrompt, userPrompt } = buildCharacterExtractionPrompt(
+				String(input?.content ?? ""),
+				input?.prompts?.characterExtraction?.trim()
+					? input.prompts.characterExtraction
+					: null,
+				knownCast
+			)
+
+			const result: any = await ctx.call({
+				systemPrompt,
+				userPrompt,
+				label: "summarize:cast"
+			})
+
+			// The extraction contract is a raw JSON object, so a model that
+			// wrapped it in prose is salvaged rather than lost — the host does
+			// the salvaging, and an unparseable answer yields no cast rather
+			// than a crash. An empty cast is a legitimate answer here.
+			const parsed: any = result?.json ?? {}
+			return ok({
+				main: parsed,
+				cast: {
+					participants: parsed?.participants ?? [],
+					mentioned: parsed?.mentioned ?? []
+				}
+			})
+		},
+
+		// ── Graph build ─────────────────────────────────────────────────────
+
+		"core:query/graph-scenes@1": async (input: any, ctx: any) => {
+			const scenes = await ctx.read("graph_scenes", {
+				chatId: input?.scope?.chatId
+			})
+			return ok({ main: scenes, scenes })
+		},
+
+		...graphSteps(),
+
 		// ── Consumers ───────────────────────────────────────────────────────
 		// The binding describes the write; the host performs it. Returning the
 		// payload unchanged is the correct implementation, not a stub.
 		"core:consumer/create-message@1": async (input: any, ctx: any) =>
 			ok(await ctx.commit(input)),
 		"core:consumer/update-message@1": async (input: any, ctx: any) =>
+			ok(await ctx.commit(input)),
+		"core:consumer/create-lore-entry@1": async (input: any, ctx: any) =>
+			ok(await ctx.commit(input)),
+		// Gate-eligible, and that is the mechanism behind "a graph build stops at
+		// the review screen": what comes back is a proposal, not rows.
+		"core:consumer/graph-proposal@1": async (input: any, ctx: any) =>
 			ok(await ctx.commit(input))
 	}
+}
+
+/**
+ * The five graph steps, which differ only in which prompt field they read.
+ *
+ * Written as a loop because the difference between them genuinely is one
+ * string: five near-identical bindings would be five places to fix the next
+ * time the call shape changes, and the fifth is the one that gets missed.
+ */
+function graphSteps(): Bindings {
+	const steps: Array<[string, string, string]> = [
+		["core:provider/graph-pre-filter@1", "preFilter", "graph:pre-filter"],
+		[
+			"core:provider/graph-node-resolution@1",
+			"nodeResolution",
+			"graph:node-resolution"
+		],
+		[
+			"core:provider/graph-perspective@1",
+			"perspective",
+			"graph:perspective"
+		],
+		[
+			"core:provider/graph-node-description@1",
+			"nodeDescription",
+			"graph:node-description"
+		],
+		[
+			"core:provider/graph-state-detection@1",
+			"stateDetection",
+			"graph:state-detection"
+		]
+	]
+
+	return Object.fromEntries(
+		steps.map(([typeId, field, label]) => [
+			typeId,
+			async (input: any, ctx: any) => {
+				const result: any = await ctx.call({
+					systemPrompt: input?.prompts?.[field] ?? "",
+					scenes: input?.scenes ?? [],
+					label
+				})
+				if (!result?.text)
+					return halt(`the model returned nothing for ${label}`)
+				return ok({
+					main: result.json ?? result.text,
+					result: result.json ?? result.text
+				})
+			}
+		])
+	) as Bindings
 }
 
 /** Which type ids core can actually run today, for the diagnostics screen. */

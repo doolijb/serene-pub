@@ -28,6 +28,25 @@
 
 	let { onclose = $bindable() }: Props = $props()
 
+	/**
+	 * These tables are an archive, so this panel reads and nothing else.
+	 *
+	 * Superseded by `pipeline_context_templates` and `pipeline_prompts`;
+	 * nothing in 0.6 builds a prompt from any of them. The rows are kept so a
+	 * year of somebody's tuning survives the upgrade, and they go with the
+	 * tables in a later release.
+	 *
+	 * A constant rather than a prop, because there is no caller who should be
+	 * able to pass `false` — the socket refuses every write to these
+	 * namespaces regardless (`server/sockets/legacyArchive.ts`), and a panel
+	 * that could re-enable its own Save button would only be offering an action
+	 * the server is going to refuse. This is the courtesy; that is the rule.
+	 *
+	 * Selection, navigation and scrolling stay live: the whole point of keeping
+	 * the panel is being able to *look* at what you had.
+	 */
+	const READ_ONLY = true
+
 	const socket = useTypedSocket()
 	let userCtx: { user: SelectUser } = getContext("userCtx")
 	let userSettingsCtx: UserSettingsCtx = getContext("userSettingsCtx")
@@ -358,6 +377,7 @@
 			type="button"
 			class="btn btn-sm preset-filled-primary-500"
 			onclick={handleNew}
+			disabled={READ_ONLY}
 			title="Clone to new config"
 		>
 			<Icons.Plus size={16} />
@@ -377,7 +397,7 @@
 			type="button"
 			class="btn btn-sm preset-filled-error-500"
 			onclick={handleDelete}
-			disabled={!contextConfig || contextConfig.isImmutable}
+			disabled={READ_ONLY || !contextConfig || contextConfig.isImmutable}
 			title="Delete context config"
 		>
 			<Icons.X size={16} />
@@ -407,7 +427,9 @@
 			<button
 				class="btn btn-sm preset-filled-success-500 flex-1"
 				onclick={handleSave}
-				disabled={contextConfig.isImmutable || !unsavedChanges}
+				disabled={READ_ONLY ||
+					contextConfig.isImmutable ||
+					!unsavedChanges}
 			>
 				<Icons.Save size={16} />
 				Update
@@ -415,7 +437,8 @@
 			<button
 				class="btn btn-sm preset-filled-warning-500 shrink-0"
 				onclick={handleSetDefault}
-				disabled={!selectedConfigId ||
+				disabled={READ_ONLY ||
+					!selectedConfigId ||
 					selectedConfigId ===
 						userSettingsCtx.settings?.activeContextConfigId}
 				title={selectedConfigId ===
@@ -440,6 +463,7 @@
 			<div class="flex flex-col gap-1">
 				<label class="font-semibold" for="contextName">Name*</label>
 				<input
+					readonly={READ_ONLY}
 					id="contextName"
 					type="text"
 					bind:value={contextConfig.name}
@@ -505,75 +529,99 @@
 									No cards yet — add one below.
 								</p>
 							{/if}
-							<CardListDnd
-								cards={parsedTemplate.cards}
-								onReorder={(ids) => rootActions.reorder(ids)}
-							>
-								{#snippet row(card, i)}
-									<ContextCardNode
-										{card}
-										template={contextConfig.template || ""}
-										onTemplateChange={updateTemplate}
-										onRemove={() => rootActions.remove(i)}
-										onMoveUp={() => rootActions.moveUp(i)}
-										onMoveDown={() =>
-											rootActions.moveDown(i)}
-										canMoveUp={i > 0}
-										canMoveDown={i <
-											parsedTemplate.cards.length - 1}
-										onInsertAbove={(spec) => {
-											const { insertedId } =
-												rootActions.insertAt(i, spec)
-											if (insertedId)
-												pendingExpandIds.add(insertedId)
-										}}
-										showDragHandle={parsedTemplate.cards
-											.length > 1}
-										{collapsedIds}
-										onToggleCollapsed={toggleCollapsed}
-									/>
-								{/snippet}
-							</CardListDnd>
-							<Popover positioning={{ placement: "bottom" }}>
-								<Popover.Trigger
-									class="btn btn-sm preset-outlined-primary-500 self-start"
-									aria-label="Add a card"
+							<!-- `inert`, not a `readOnly` prop threaded through
+							     ContextCardNode's thirteen controls and the
+							     Add-Card popover below it. The card editor is a
+							     *composition* surface — reorder, insert,
+							     remove, retitle — and there is no version of it
+							     that reads usefully while refusing to save. One
+							     attribute neutralises the whole subtree,
+							     including components this file does not own,
+							     and it cannot be forgotten when a control is
+							     added to one of them. The Raw tab is still
+							     there for reading the template itself. -->
+							<div inert={READ_ONLY} class="contents">
+								<CardListDnd
+									cards={parsedTemplate.cards}
+									onReorder={(ids) =>
+										rootActions.reorder(ids)}
 								>
-									<Icons.Plus size={14} />
-									Add Card
-								</Popover.Trigger>
-								<Portal>
-									<Popover.Positioner class="z-[1000]!">
-										<Popover.Content
-											class="card preset-tonal-surface flex max-w-[16rem] flex-col gap-1 p-2"
-										>
-											{#each INSERTABLE_CARD_OPTIONS as option}
-												<button
-													type="button"
-													class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-													onclick={() => {
-														const { insertedId } =
-															rootActions.insertAt(
-																parsedTemplate
-																	.cards
-																	.length,
-																option.spec
-															)
-														if (insertedId)
-															pendingExpandIds.add(
+									{#snippet row(card, i)}
+										<ContextCardNode
+											{card}
+											template={contextConfig.template ||
+												""}
+											onTemplateChange={updateTemplate}
+											onRemove={() =>
+												rootActions.remove(i)}
+											onMoveUp={() =>
+												rootActions.moveUp(i)}
+											onMoveDown={() =>
+												rootActions.moveDown(i)}
+											canMoveUp={i > 0}
+											canMoveDown={i <
+												parsedTemplate.cards.length - 1}
+											onInsertAbove={(spec) => {
+												const { insertedId } =
+													rootActions.insertAt(
+														i,
+														spec
+													)
+												if (insertedId)
+													pendingExpandIds.add(
+														insertedId
+													)
+											}}
+											showDragHandle={parsedTemplate.cards
+												.length > 1}
+											{collapsedIds}
+											onToggleCollapsed={toggleCollapsed}
+										/>
+									{/snippet}
+								</CardListDnd>
+								<Popover positioning={{ placement: "bottom" }}>
+									<Popover.Trigger
+										class="btn btn-sm preset-outlined-primary-500 self-start"
+										aria-label="Add a card"
+									>
+										<Icons.Plus size={14} />
+										Add Card
+									</Popover.Trigger>
+									<Portal>
+										<Popover.Positioner class="z-[1000]!">
+											<Popover.Content
+												class="card preset-tonal-surface flex max-w-[16rem] flex-col gap-1 p-2"
+											>
+												{#each INSERTABLE_CARD_OPTIONS as option}
+													<button
+														type="button"
+														class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+														onclick={() => {
+															const {
 																insertedId
-															)
-													}}
-													title={option.description}
-												>
-													<Icons.Plus size={14} />
-													{option.label}
-												</button>
-											{/each}
-										</Popover.Content>
-									</Popover.Positioner>
-								</Portal>
-							</Popover>
+															} =
+																rootActions.insertAt(
+																	parsedTemplate
+																		.cards
+																		.length,
+																	option.spec
+																)
+															if (insertedId)
+																pendingExpandIds.add(
+																	insertedId
+																)
+														}}
+														title={option.description}
+													>
+														<Icons.Plus size={14} />
+														{option.label}
+													</button>
+												{/each}
+											</Popover.Content>
+										</Popover.Positioner>
+									</Portal>
+								</Popover>
+							</div>
 						{/if}
 					</div>
 				</Tabs.Content>
@@ -583,6 +631,7 @@
 							Template
 						</label>
 						<textarea
+							readonly={READ_ONLY}
 							id="template"
 							rows="20"
 							bind:value={contextConfig.template}

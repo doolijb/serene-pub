@@ -9,12 +9,12 @@
 	import ConnectionsSidebar from "./sidebars/ConnectionsSidebar.svelte"
 	import OllamaSidebar from "./sidebars/OllamaSidebar.svelte"
 	import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
-	import ContextSidebar from "./sidebars/ContextSidebar.svelte"
+	import LegacySidebar from "./sidebars/LegacySidebar.svelte"
 	import LorebooksSidebar from "./sidebars/LorebooksSidebar.svelte"
 	import PersonasSidebar from "./sidebars/PersonasSidebar.svelte"
 	import CharactersSidebar from "./sidebars/CharactersSidebar.svelte"
 	import ChatsSidebar from "./sidebars/ChatsSidebar.svelte"
-	import PromptsSidebar from "./sidebars/PromptsSidebar.svelte"
+	import PipelinesSidebar from "./sidebars/PipelinesSidebar.svelte"
 	import TagsSidebar from "./sidebars/TagsSidebar.svelte"
 	import UsersSidebar from "./sidebars/UsersSidebar.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
@@ -23,6 +23,7 @@
 	import SettingsSidebar from "$lib/client/components/sidebars/SettingsSidebar.svelte"
 	import ActivitySidebar from "$lib/client/components/sidebars/ActivitySidebar.svelte"
 	import ConnectionTimeoutModal from "$lib/client/components/ConnectionTimeoutModal.svelte"
+	import PipelineReviewModal from "$lib/client/components/pipelines/PipelineReviewModal.svelte"
 	import type { Snippet } from "svelte"
 	import { Theme } from "$lib/client/consts/Theme"
 	import OllamaIcon from "./icons/OllamaIcon.svelte"
@@ -77,6 +78,26 @@
 		"personas:list:error",
 		"personas:update:error",
 		"personas:uploadGalleryImage:error",
+		// The pipeline panel shows every one of these itself, and the server
+		// writes them for a person — "'Prose' is still in use, point that
+		// setting somewhere else first". The catch-all was toasting them a
+		// second time under a generated title ("Pipelines Delete Variable
+		// Template failed"), so a refusal arrived twice: once explained, once
+		// as jargon naming the socket event. Found by deleting a layout that
+		// another pipeline was still using.
+		"pipelines:setOption:error",
+		"pipelines:clearOption:error",
+		"pipelines:selectConfig:error",
+		"pipelines:clonePrompt:error",
+		"pipelines:updatePrompt:error",
+		"pipelines:deletePrompt:error",
+		"pipelines:createContextTemplate:error",
+		"pipelines:cloneContextTemplate:error",
+		"pipelines:updateContextTemplate:error",
+		"pipelines:deleteContextTemplate:error",
+		"pipelines:cloneVariableTemplate:error",
+		"pipelines:updateVariableTemplate:error",
+		"pipelines:deleteVariableTemplate:error",
 		"promptConfigs:setUserActive:error",
 		"scenes:compile:error",
 		"scenes:process:error",
@@ -170,8 +191,7 @@
 			"connections",
 			"ollama",
 			"koboldcpp",
-			"contexts",
-			"prompts",
+			"legacy",
 			"users",
 			"settings"
 		],
@@ -299,6 +319,16 @@
 	// local ONNX models can't load under Bionic, but external-API embeddings
 	// work fine, so its nav entry stays visible and the sidebar itself gates
 	// the local-model option (VectorizationSetupScreen).
+	// The chat currently on screen, when there is one. 05 §0a: configuring a
+	// pipeline from the list writes at user scope, and configuring it from
+	// inside a chat you own writes at chat scope — so the panel has to know
+	// where it was opened from, and the route is the only place that fact lives.
+	let chatIdInView = $derived.by(() => {
+		if (!page.url.pathname.startsWith("/chats/")) return undefined
+		const id = Number(page.params?.id)
+		return Number.isFinite(id) ? id : undefined
+	})
+
 	let isAndroidWrapper = $derived(
 		!!systemSettingsCtx?.settings?.isAndroidWrapper
 	)
@@ -351,14 +381,41 @@
 				icon: Icons.Cable,
 				title: "Connections"
 			}
-			panelsCtx.leftNav.contexts = {
-				icon: Icons.BookOpenText,
-				title: "Contexts"
+			// One entry, not two. Context Configs and Prompt Configs are both
+			// superseded — by `pipeline_context_templates` and
+			// `pipeline_prompts` — and nothing in 0.6 builds a prompt from
+			// either. Two live-looking entries in the navigation said the
+			// opposite; one called Legacy says what they are, and holds both
+			// as tabs.
+			//
+			// The one toggle that survives the changeover still hides it, for
+			// when somebody is done referring back. It keeps its old column
+			// name because the setting is the same setting: show me the old
+			// configs.
+			if (
+				systemSettingsCtx.settings?.legacyPromptConfigsVisible !== false
+			) {
+				panelsCtx.leftNav.legacy = {
+					icon: Icons.Archive,
+					title: "Legacy configs"
+				}
+			} else {
+				delete panelsCtx.leftNav.legacy
 			}
-			panelsCtx.leftNav.prompts = {
-				icon: Icons.MessageCircle,
-				title: "Prompt Configs"
-			}
+			delete panelsCtx.leftNav.contexts
+			delete panelsCtx.leftNav.prompts
+		}
+
+		// Outside the admin block, unlike every panel above it. 05 §0 is explicit
+		// that the pipeline view is "what everyone gets out of the box" — it is
+		// the surface where a normal user edits their own prompts, and the panels
+		// above are admin screens it is meant to replace for them. Access is
+		// enforced server-side per slot and per scope (12 §4), so the panel shows
+		// each person exactly what they may write rather than being all-or-nothing
+		// on a role.
+		panelsCtx.leftNav.pipelines = {
+			icon: Icons.Workflow,
+			title: "Pipelines"
 		}
 	})
 
@@ -999,13 +1056,14 @@
 								<KoboldCppSidebar
 									bind:onclose={panelsCtx.onLeftPanelClose}
 								/>
-							{:else if panelsCtx.leftPanel === "contexts"}
-								<ContextSidebar
+							{:else if panelsCtx.leftPanel === "legacy"}
+								<LegacySidebar
 									bind:onclose={panelsCtx.onLeftPanelClose}
 								/>
-							{:else if panelsCtx.leftPanel === "prompts"}
-								<PromptsSidebar
+							{:else if panelsCtx.leftPanel === "pipelines"}
+								<PipelinesSidebar
 									bind:onclose={panelsCtx.onLeftPanelClose}
+									chatId={chatIdInView}
 								/>
 							{:else if panelsCtx.leftPanel === "settings"}
 								<SettingsSidebar
@@ -1143,8 +1201,8 @@
 						<KoboldCppSidebar
 							bind:onclose={panelsCtx.onMobilePanelClose}
 						/>
-					{:else if panelsCtx.mobilePanel === "contexts"}
-						<ContextSidebar
+					{:else if panelsCtx.mobilePanel === "legacy"}
+						<LegacySidebar
 							bind:onclose={panelsCtx.onMobilePanelClose}
 						/>
 					{:else if panelsCtx.mobilePanel === "lorebooks"}
@@ -1163,9 +1221,10 @@
 						<ChatsSidebar
 							bind:onclose={panelsCtx.onMobilePanelClose}
 						/>
-					{:else if panelsCtx.mobilePanel === "prompts"}
-						<PromptsSidebar
+					{:else if panelsCtx.mobilePanel === "pipelines"}
+						<PipelinesSidebar
 							bind:onclose={panelsCtx.onMobilePanelClose}
+							chatId={chatIdInView}
 						/>
 					{:else if panelsCtx.mobilePanel === "tags"}
 						<TagsSidebar
@@ -1253,6 +1312,12 @@
 
 <!-- Connection Timeout Modal -->
 <ConnectionTimeoutModal />
+
+<!-- The review gate (01 §7): a run parked at a gated node, waiting on you.
+     Mounted globally because a review can park from any trigger — a chat
+     reply, a summarize, an event — and the card has to reach the person
+     whichever screen they are on. -->
+<PipelineReviewModal />
 
 <style lang="postcss">
 	@reference "tailwindcss";

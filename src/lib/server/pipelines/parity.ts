@@ -31,7 +31,6 @@
  * before the fixture moves.
  */
 
-import { PromptBuilder } from "$lib/server/utils/promptBuilder"
 import { run, compile, spec, slot, checkParity } from "@serene-pub/sdk"
 import type { ParityResult } from "@serene-pub/sdk"
 import * as C from "@serene-pub/contracts"
@@ -57,6 +56,29 @@ export interface FixtureScope {
 	promptConfigId?: number
 	/** A context config this fixture seeded for itself. Same rule as above. */
 	contextConfigId?: number
+	/**
+	 * The story string the *pipeline* renders, when it differs from the legacy
+	 * one.
+	 *
+	 * The one place the two sides are deliberately not handed the same string,
+	 * and the exception proves the rule rather than breaking it. What this
+	 * corpus asserts is that 0.6's pipeline emits the bytes 0.5 emitted, and the
+	 * two releases keep their templates in different tables on purpose:
+	 * `context_configs` still holds 0.5's, headings and fences included, and
+	 * `pipeline_context_templates` holds 0.6's, which has neither because they
+	 * moved into the variable layouts. Handing the legacy builder 0.6's template
+	 * would compare the pipeline against a builder that never learned where the
+	 * headings went, and report the release's whole point as a defect.
+	 *
+	 * Supplied as a literal rather than as a seeded row because
+	 * `parityPipeline()` is compiled here and published nowhere — it has no spec
+	 * row, so no config layer, so nothing to resolve a reference against. What
+	 * the corpus is for is the bytes of the finished prompt; that the reference
+	 * resolves is `worldPipelineLayer`'s subject.
+	 *
+	 * Left unset by a fixture whose two templates are the same string.
+	 */
+	pipelineTemplate?: string
 }
 
 /**
@@ -72,68 +94,11 @@ export interface ParityFixture {
 	seed(db: any): Promise<FixtureScope>
 }
 
-/** The hydration the legacy path expects, built from the same rows. */
-async function hydrateChat(db: any, chatId: number) {
-	const chat = await db.query.chats.findFirst({
-		where: (c: any, { eq }: any) => eq(c.id, chatId),
-		with: {
-			chatCharacters: { with: { character: true } },
-			chatPersonas: { with: { persona: true } },
-			chatMessages: true,
-			lorebook: {
-				with: {
-					lorebookBindings: true,
-					worldLoreEntries: true,
-					characterLoreEntries: true,
-					historyEntries: true
-				}
-			}
-		}
-	})
-	if (!chat) throw new Error(`fixture chat ${chatId} was not seeded`)
-	return {
-		...chat,
-		chatCharacters: (chat.chatCharacters ?? []).filter(
-			(cc: any) => cc.character !== null
-		),
-		chatPersonas: (chat.chatPersonas ?? []).filter(
-			(cp: any) => cp.persona !== null
-		)
-	}
-}
-
 export interface RenderConfigs {
 	connection: any
 	sampling: any
 	contextConfig: any
 	promptConfig: any
-}
-
-/**
- * What the legacy path would send.
- *
- * `PromptBuilder` directly rather than through an adapter: the adapter adds
- * mode dispatch and graph context on top, and those are separate behaviours with
- * their own fixtures. This is the prompt construction itself.
- */
-export async function legacyRender(
-	db: any,
-	scope: FixtureScope,
-	configs: RenderConfigs
-): Promise<string> {
-	const builder = new PromptBuilder({
-		connection: configs.connection,
-		sampling: configs.sampling,
-		contextConfig: configs.contextConfig,
-		promptConfig: configs.promptConfig,
-		chat: (await hydrateChat(db, scope.chatId)) as any,
-		currentCharacterId: scope.currentCharacterId,
-		tokenCounter: { countTokens: async (t: string) => t.length / 4 } as any,
-		tokenLimit: 4096,
-		contextThresholdPercent: 0.8
-	})
-	const compiled = await builder.compilePrompt({})
-	return compiled.prompt ?? ""
 }
 
 /** The pipeline document the parity corpus renders through. */
@@ -156,7 +121,22 @@ export const parityPipeline = () =>
 					// assembly one. Both need it and neither derives it from the
 					// other; the first parity run rendered a blank system prompt
 					// because only Assemble had it.
-					prompts: slot.prompts()
+					prompts: slot.prompts(),
+					// Mirrors the shipped spec, and is currently **inert**: this
+					// harness calls `buildWorld` without a `specId`, so
+					// `applyPipelineLayer` never runs and the slot resolves to
+					// `{}`. Which means the corpus proves something narrower
+					// than it looks — that the *floor* is byte-identical to the
+					// legacy path, not that a selected layout renders
+					// identically. Measured, not assumed: changing a shipped
+					// layout's indent leaves every fixture green.
+					//
+					// The selected-layout half is gated by
+					// `variableTemplates.parity.test.ts` instead. This line stays
+					// so the document matches the real one, and so the day this
+					// harness starts resolving a spec, the corpus covers layouts
+					// without anyone having to remember to add it.
+					variables: slot.variables()
 				})
 			)
 			// The ranker is not optional decoration between retrieval and
@@ -186,7 +166,21 @@ export const parityPipeline = () =>
 					messages: $.lines.messages,
 					templateContext: $.context.templateContext,
 					template: slot.template(),
-					prompts: slot.prompts(),
+					// **By reference**, exactly as the shipped specs do since
+					// 1.1.0 — one authored prompt, owned by the context node,
+					// read here rather than declared again (13 §12 finding i).
+					// The bare `slot.prompts()` this replaced addressed *this*
+					// node's own slot, which `world.ts` has not written since
+					// the double-write was retired: it resolved to `{}` and the
+					// corpus stayed green because the shipped template takes
+					// its text from the template context. A harness that
+					// diverges from the document it is meant to mirror is a
+					// harness that stops proving what it claims.
+					prompts: slot.prompts({ node: "context" }),
+					// Assemble's own layouts — the lore and history it
+					// produced, laid out post-budget. Its own slot, not the
+					// context builder's: what fits is only known here.
+					variables: slot.variables(),
 					// Without this the budget resolves to zero and every block is
 					// excluded — the prompt renders with its lore silently gone.
 					params: slot.params()
@@ -205,11 +199,27 @@ export const parityPipeline = () =>
  * real thing, not a reconstruction of it.
  */
 export async function pipelinePreview(db: any, scope: FixtureScope) {
+	const world = await buildWorld(db, {
+		chatId: scope.chatId,
+		userId: scope.userId
+	})
+
+	// Layered here rather than projected by `buildWorld`, which no longer reads
+	// `context_configs` at all — the story string is a
+	// `pipeline_context_templates` reference resolved through the config layer,
+	// and this ad-hoc spec has no config layer to resolve it through. At
+	// `defaults`, so a fixture that writes its own override still wins.
+	if (scope.pipelineTemplate !== undefined)
+		world.overrides.push({
+			nodeKey: "prompt",
+			slot: "template",
+			path: "source",
+			value: scope.pipelineTemplate,
+			scopeKind: "defaults"
+		} as any)
+
 	return await run(parityPipeline(), {
-		world: await buildWorld(db, {
-			chatId: scope.chatId,
-			userId: scope.userId
-		}),
+		world,
 		input: {
 			text: scope.text,
 			// The turn's speaker rides on the chat scope: a scope for a turn is
@@ -232,6 +242,38 @@ export async function pipelinePreview(db: any, scope: FixtureScope) {
 }
 
 /** Seed a fixture, render it both ways, and compare. */
+
+/** One file per fixture; `chat/one-on-one` becomes `chat__one-on-one.txt`. */
+export const goldenPathFor = (name: string): string =>
+	`src/lib/server/pipelines/parityGoldens/${name.replace(/\//g, "__")}.txt`
+
+/**
+ * The frozen 0.5 render for a fixture.
+ *
+ * Read-only now: the builder that produced these is deleted, which is precisely
+ * why they were frozen first. A missing golden is an error rather than a silent
+ * fallback — a fixture without one would otherwise pass by comparing the
+ * pipeline against itself.
+ */
+async function resolveGolden(
+	db: any,
+	fixture: ParityFixture,
+	scope: FixtureScope,
+	effective: RenderConfigs
+): Promise<string> {
+	const { readFileSync, existsSync } = await import("node:fs")
+	const path = goldenPathFor(fixture.name)
+
+	if (!existsSync(path))
+		throw new Error(
+			`fixture '${fixture.name}' has no frozen 0.5 golden at ${path}. ` +
+				`The legacy builder that produced these is deleted, so a new one ` +
+				`has to be captured from a v0.5.1-beta checkout — a golden is a ` +
+				`record of what 0.5 did, not a snapshot to regenerate.`
+		)
+	return readFileSync(path, "utf8")
+}
+
 export async function runFixture(
 	db: any,
 	fixture: ParityFixture,
@@ -280,8 +322,24 @@ export async function runFixture(
 		contextConfig: contextRow
 	}
 
+	// The legacy side is a **frozen golden**, not a live render.
+	//
+	// The corpus compares the pipeline against 0.5. Until now it produced the
+	// 0.5 side by running `PromptBuilder` — which meant the gate on deleting
+	// the legacy path depended on the legacy path still existing, and would
+	// have been deleted along with the thing it was guarding.
+	//
+	// Freezing it inverts that: the goldens *are* 0.5's output, captured while
+	// the builder was still here, and they keep gating every future change to
+	// the pipeline long after it is gone. It also removes the last way for the
+	// two sides to move together and agree for the wrong reason, which this
+	// harness has done twice (a template both sides read, a hydration both
+	// sides lacked).
+	//
+	// Re-capture with `PARITY_CAPTURE=1`, and only ever with a deliberate
+	// ruling behind it: rewriting a golden is rewriting what 0.5 did.
 	const [legacy, preview] = await Promise.all([
-		legacyRender(db, scope, effective),
+		resolveGolden(db, fixture, scope, effective),
 		pipelinePreview(db, scope)
 	])
 	// A run that stopped early has no preview, and `checkParity`'s message for
@@ -411,7 +469,21 @@ export const ragParityPipeline = () =>
 					messages: $.lines.messages,
 					templateContext: $.context.templateContext,
 					template: slot.template(),
-					prompts: slot.prompts(),
+					// **By reference**, exactly as the shipped specs do since
+					// 1.1.0 — one authored prompt, owned by the context node,
+					// read here rather than declared again (13 §12 finding i).
+					// The bare `slot.prompts()` this replaced addressed *this*
+					// node's own slot, which `world.ts` has not written since
+					// the double-write was retired: it resolved to `{}` and the
+					// corpus stayed green because the shipped template takes
+					// its text from the template context. A harness that
+					// diverges from the document it is meant to mirror is a
+					// harness that stops proving what it claims.
+					prompts: slot.prompts({ node: "context" }),
+					// Assemble's own layouts — the lore and history it
+					// produced, laid out post-budget. Its own slot, not the
+					// context builder's: what fits is only known here.
+					variables: slot.variables(),
 					params: slot.params()
 				})
 			)

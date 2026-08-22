@@ -83,11 +83,11 @@ describe("OpenAIChatAdapter — base URL trailing-slash normalization", () => {
 			choices: [{ message: { content: "hi" } }]
 		})
 		const adapter = makeAdapter({ baseUrl: "https://api.example.com/v1/" })
-		vi.spyOn(adapter.promptBuilder, "compilePrompt").mockResolvedValue({
+		adapter.withCompiledPrompt({
 			prompt: undefined,
 			messages: [{ role: "user", content: "hello" }],
 			meta: {} as any
-		})
+		} as any)
 		await adapter.generate()
 		expect(openAIConstructorMock).toHaveBeenCalledWith(
 			expect.objectContaining({ baseURL: "https://api.example.com/v1" })

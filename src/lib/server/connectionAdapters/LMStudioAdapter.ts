@@ -10,7 +10,7 @@ import {
 	type AdapterExports,
 	type BasePromptChat
 } from "./BaseConnectionAdapter"
-import { type CompiledPrompt } from "../utils/promptBuilder"
+import { type CompiledPrompt } from "./types"
 import {
 	type BaseLoadModelOpts,
 	type LLM,
@@ -121,7 +121,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 
 			const opts: BaseLoadModelOpts<LLMLoadModelConfig> = {
 				config: {
-					contextLength: this.promptBuilder.tokenLimit,
+					contextLength: this.tokenLimit,
 					keepModelInMemory: false // TODO: make configurable?
 				},
 				ttl: this.connection.extraJson.ttl || 60 // Increased TTL to avoid frequent reloading
@@ -141,7 +141,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 					error instanceof Error ? error.message : String(error)
 				if (errorMsg.includes("Error loading model")) {
 					throw new Error(
-						`Failed to load model "${name}" in LM Studio. This may be due to insufficient VRAM/RAM or context length mismatch. Requested context: ${this.promptBuilder.tokenLimit} tokens. Try using a smaller model, reducing context length, or check LM Studio settings. Original error: ${errorMsg}`
+						`Failed to load model "${name}" in LM Studio. This may be due to insufficient VRAM/RAM or context length mismatch. Requested context: ${this.tokenLimit} tokens. Try using a smaller model, reducing context length, or check LM Studio settings. Original error: ${errorMsg}`
 					)
 				}
 				throw error

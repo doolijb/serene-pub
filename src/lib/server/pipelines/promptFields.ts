@@ -24,7 +24,7 @@
 import { ChatCharacterVisibility } from "$lib/shared/constants/ChatCharacterVisibility"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
-import * as F from "$lib/server/utils/promptBuilder/contextFields"
+import * as F from "./contextFields"
 import type { BuildContextInput } from "./templateContext"
 
 export interface ChatCharacterRow {

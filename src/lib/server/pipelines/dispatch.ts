@@ -171,7 +171,40 @@ export function toCompiledPrompt(
 				includedIds: idsOf(payload, true),
 				excludedIds: idsOf(payload, false)
 			},
-			sources: payload?.groups ?? {}
+			sources: payload?.groups ?? {},
+			/**
+			 * What retrieval actually did, in the pipeline's own terms.
+			 *
+			 * This replaces the legacy `meta.rag` rather than reproducing it.
+			 * Those fields — `messages.guaranteed`, `messages.ragOlder`,
+			 * `messages.filledIn`, `lore.*.pinned` vs `.rag` — are counters for
+			 * the *infill engine's internal phases*: a guaranteed window, then a
+			 * RAG pass over older messages, then a fill pass. The pipeline has no
+			 * such phases. It scores candidates, allocates a budget, and records
+			 * per block why that block is in or out. Reporting the old numbers
+			 * would mean inventing values for stages that do not run.
+			 *
+			 * What is here is strictly more than the counters were: every block
+			 * considered, whether it made it, what it cost, and the reasoning
+			 * trail that produced the decision — which is the question the panel
+			 * existed to answer ("why isn't my lore showing up") rather than the
+			 * aggregate it happened to display.
+			 *
+			 * `content` is deliberately omitted. It is already in the prompt this
+			 * object carries, and a debug panel does not need a second copy of
+			 * every lore entry travelling to the client.
+			 */
+			retrieval: {
+				budget: payload?.budget ?? null,
+				blocks: (payload?.blocks ?? []).map((b: any) => ({
+					id: b.id,
+					source: b.source,
+					name: b.name ?? null,
+					tokens: b.tokens,
+					included: b.included,
+					why: b.why ?? []
+				}))
+			}
 		}
 	}
 }

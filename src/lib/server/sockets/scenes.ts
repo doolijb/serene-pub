@@ -3,10 +3,7 @@ import * as schema from "$lib/server/db/schema"
 import { eq, inArray, asc, and } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
-import {
-	compileScenesForEntry,
-	generateSummary
-} from "$lib/server/utils/summarizer"
+import { compileScenesForEntry } from "$lib/server/utils/summarizer"
 import {
 	readSceneCast,
 	readSceneCasts,
@@ -20,7 +17,6 @@ import {
 	resolveCharacterRefs
 } from "$lib/server/utils/summarizer/availableSceneCast"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
-import { resolveTaskConfig } from "$lib/server/utils/resolveTaskConfig"
 import { activityStore } from "$lib/server/utils/activityStore"
 import { withChatTriggerLock } from "$lib/server/utils/chatTriggerLock"
 import { checkChatAccess } from "$lib/server/utils/chatAccess"
@@ -383,11 +379,7 @@ export const sceneDeleteHandler: Handler<
 
 		// Refresh scene list and scened message IDs
 		if (emitToUser && chatId) {
-			await sceneListHandler.handler(
-				socket,
-				{ chatId },
-				emitToUser
-			)
+			await sceneListHandler.handler(socket, { chatId }, emitToUser)
 
 			const scenedRes = await scenedMessageIdsHandler.handler(
 				socket,
@@ -518,7 +510,31 @@ export const sceneCompileHandler: Handler<
 		const { connection, sampling, contextConfig, promptConfig } =
 			await getUserConfigurations(userId)
 
-		if (!connection) {
+		/**
+		 * The synthesis step's config comes from the **history summarize
+		 * pipeline** — its `synth` node's connection, sampling and prompt,
+		 * resolved through the same chain the pipeline panel edits. The
+		 * compile itself stays outside the executor for now (it *updates* an
+		 * existing entry from pre-drafted scene summaries — a shape the
+		 * messages-to-batches spec does not carry), but what it runs on is the
+		 * pipeline's to decide.
+		 */
+		const { resolveStepConfigs } = await import(
+			"$lib/server/pipelines/stepConfig"
+		)
+		const { SUMMARIZE_HISTORY_SPEC_ID, SUMMARIZE_VERSION } = await import(
+			"$lib/server/pipelines/specs/summarize"
+		)
+		const synthCfg = (
+			await resolveStepConfigs(db, userId, SUMMARIZE_HISTORY_SPEC_ID, [
+				"synth"
+			])
+		)["synth"]
+
+		const compileConnection = synthCfg?.connection ?? connection
+		const compileSampling = synthCfg?.sampling ?? sampling
+
+		if (!compileConnection) {
 			throw new Error(
 				"No AI connection configured. Please set up a connection first."
 			)
@@ -543,10 +559,11 @@ export const sceneCompileHandler: Handler<
 		try {
 			result = await compileScenesForEntry({
 				scenes,
-				connection,
-				sampling,
+				connection: compileConnection,
+				sampling: compileSampling,
 				contextConfig,
 				promptConfig,
+				synthSystemPrompt: synthCfg?.prompts?.synth ?? null,
 				signal: abortController.signal,
 				onProgress: (data) => {
 					activityStore.updateCompile(activityId, {
@@ -585,6 +602,33 @@ export const sceneCompileHandler: Handler<
 		// runQueuedLLMCall/runGeneration. Guard here too, not just in catch.
 		if (abortController.signal.aborted) {
 			return null as any
+		}
+
+		// A run row for the compile — halted at the write, truthfully: the
+		// result is held for review and the save is the person's act.
+		{
+			const { saveReceipt } = await import(
+				"$lib/server/pipelines/receipts"
+			)
+			const { v4: uuidv4 } = await import("uuid")
+			const now = Date.now()
+			await saveReceipt(
+				db as any,
+				{
+					runId: uuidv4(),
+					specId: SUMMARIZE_HISTORY_SPEC_ID,
+					specVersion: SUMMARIZE_VERSION,
+					outcome: "halt",
+					haltNodeKey: "save",
+					haltReason: `compiled ${scenes.length} scene summaries into a history entry draft, held for review`,
+					triggerSource: "ui",
+					seed: `compile:${params.historyEntryId}`,
+					startedAt: now,
+					endedAt: now,
+					nodes: []
+				} as any,
+				{ userId }
+			)
 		}
 
 		activityStore.updateCompile(activityId, {
@@ -714,133 +758,122 @@ export const sceneProcessHandler: Handler<
 			)
 		]
 
-		const [characters, personas] = await Promise.all([
-			charIds.length > 0
-				? db.query.characters.findMany({
-						where: inArray(schema.characters.id, charIds)
-					})
-				: Promise.resolve([]),
-			personaIds.length > 0
-				? db.query.personas.findMany({
-						where: inArray(schema.personas.id, personaIds)
-					})
-				: Promise.resolve([])
-		])
-
-		const characterMap = new Map(characters.map((c) => [c.id, c.name]))
-		const personaMap = new Map(
-			personas.map((p) => [p.id, resolvePersonaName(p)])
-		)
-
-		const messages = rawMessages.map((msg) => {
-			let senderName = "Unknown"
-			if (msg.characterId && characterMap.has(msg.characterId))
-				senderName = characterMap.get(msg.characterId)!
-			else if (msg.personaId && personaMap.has(msg.personaId))
-				senderName = personaMap.get(msg.personaId)!
-			else if (msg.role === "user") senderName = "User"
-			return { senderName, content: msg.content }
-		})
-
-		const { contextConfig, promptConfig } =
-			await getUserConfigurations(userId)
-
-		const systemSettings = await db.query.systemSettings.findFirst()
-		const userSettings = await db.query.userSettings.findFirst({
-			where: (us, { eq }) => eq(us.userId, userId)
-		})
-
-		const summarizeConfigId =
-			userSettings?.activeSummarizeSceneConfigId ??
-			systemSettings?.defaultSummarizeSceneConfigId
-
-		let summarizePromptConfig: {
-			batchSystemPrompt: string
-			synthSystemPrompt: string
-			nameSystemPrompt: string
-			characterExtractionSystemPrompt?: string | null
-		} | null = null
-		if (summarizeConfigId) {
-			summarizePromptConfig =
-				(await db.query.sceneSummarizeConfigs.findFirst({
-					where: (c, { eq }) => eq(c.id, summarizeConfigId)
-				})) ?? null
-		}
-
-		const [batchResolved, synthResolved, nameResolved, characterExtractionResolved] =
-			await Promise.all([
-				resolveTaskConfig({
-					taskType: "summarize_batch",
-					summarizeConfigId,
-					summarizeConfigType: "scene"
-				}),
-				resolveTaskConfig({
-					taskType: "summarize_synth",
-					summarizeConfigId,
-					summarizeConfigType: "scene"
-				}),
-				resolveTaskConfig({
-					taskType: "summarize_name",
-					summarizeConfigId,
-					summarizeConfigType: "scene"
-				}),
-				resolveTaskConfig({
-					taskType: "character_extraction",
-					summarizeConfigId,
-					summarizeConfigType: "scene"
-				})
-			])
-
-		if (!batchResolved.connection) {
-			return failRun(
-				"No AI connection configured. Please set up a connection first."
-			)
-		}
-
 		const knownCast = await buildSceneCastList(
 			params.sceneId,
 			scene.lorebookId,
 			scene.chatId ?? null
 		)
 
-		let result
+		/**
+		 * The scene summarize pipeline — its own namespace, with the cast
+		 * extraction step the other three lore types do not carry. Stopped
+		 * before its `save` consumer: this handler's result goes to the
+		 * Review & Save screen, and the save there is the person's act.
+		 */
+		let result: {
+			content: string
+			name?: string
+			raw: string
+			batchCount: number
+			participantCharacters?: any[]
+			mentionedCharacters?: any[]
+		}
 		try {
-			result = await generateSummary({
-				messages,
-				loreType: "scene",
-				connection: batchResolved.connection,
-				sampling: batchResolved.sampling!,
-				contextConfig,
-				promptConfig,
-				summarizePromptConfig,
-				knownCast,
-				batchConnection: batchResolved.connection,
-				batchSampling: batchResolved.sampling,
-				synthConnection: synthResolved.connection,
-				synthSampling: synthResolved.sampling,
-				nameConnection: nameResolved.connection,
-				nameSampling: nameResolved.sampling,
-				characterExtractionConnection: characterExtractionResolved.connection,
-				characterExtractionSampling: characterExtractionResolved.sampling,
-				signal: abortController.signal,
-				onProgress: (data) => {
-					activityStore.updateScene(activityId, {
-						phase: data.phase,
-						batch: data.batch,
-						totalBatches: data.totalBatches
-					})
-					emitToUser("scenes:process:progress", {
-						sceneId: params.sceneId,
-						...data
-					} satisfies Sockets.Scenes.Process.Progress)
+			const { runSpec } = await import("$lib/server/pipelines/runTurn")
+			const { SUMMARIZE_SCENE_SPEC_ID } = await import(
+				"$lib/server/pipelines/specs/summarize"
+			)
+
+			let batchesSeen = 0
+			const progress = (data: {
+				phase: "drafting" | "synthesizing" | "naming" | "extracting"
+				batch: number
+				totalBatches: number
+			}) => {
+				activityStore.updateScene(activityId, {
+					phase: data.phase,
+					batch: data.batch,
+					totalBatches: data.totalBatches
+				})
+				emitToUser("scenes:process:progress", {
+					sceneId: params.sceneId,
+					partial: {},
+					...data
+				} satisfies Sockets.Scenes.Process.Progress)
+			}
+
+			const receipt = await runSpec({
+				db,
+				chatId: scene.chatId,
+				userId,
+				specId: SUMMARIZE_SCENE_SPEC_ID,
+				input: {
+					scope: { chatId: scene.chatId },
+					request: {
+						messageIds: scene.selectedMessageIds,
+						knownCast
+					}
 				},
-				onLlmCall: (entry) => {
-					emitToUser("scenes:process:trace", {
-						sceneId: params.sceneId,
-						...entry
-					} satisfies Sockets.Scenes.Process.TraceEntry)
+				signal: abortController.signal,
+				preview: { atNode: "save" },
+				// The executor's inherent node events (F34) — see the same
+				// mapping in chats:summarize.
+				onNode: (e) => {
+					if (e.phase !== "start") return
+					if (e.typeId.startsWith("core:provider/summarize-batch"))
+						progress({
+							phase: "drafting",
+							batch: ++batchesSeen,
+							totalBatches: batchesSeen
+						})
+					else if (
+						e.typeId.startsWith("core:provider/summarize-synth")
+					)
+						progress({
+							phase: "synthesizing",
+							batch: 1,
+							totalBatches: 1
+						})
+					else if (e.typeId.startsWith("core:provider/name-entry"))
+						progress({ phase: "naming", batch: 1, totalBatches: 1 })
+					else if (e.typeId.startsWith("core:provider/extract-cast"))
+						progress({
+							phase: "extracting",
+							batch: 1,
+							totalBatches: 1
+						})
 				}
 			})
+
+			const nodeOut = (key: string) =>
+				(receipt.nodes.find((n: any) => n.nodeKey === key) as any)
+					?.output
+			const content: string | undefined = nodeOut("synth")?.content
+			const castOut = nodeOut("cast")?.cast
+
+			if (!content) {
+				const why =
+					receipt.haltReason ??
+					"the pipeline stopped without producing a summary"
+				return failRun(
+					receipt.haltNodeKey
+						? `${why} (at '${receipt.haltNodeKey}')`
+						: why
+				)
+			}
+
+			result = {
+				content,
+				name: nodeOut("naming")?.name,
+				raw: content,
+				batchCount: receipt.nodes.filter((n: any) =>
+					String(n.typeId ?? "").startsWith(
+						"core:provider/summarize-batch"
+					)
+				).length,
+				participantCharacters: castOut?.participants,
+				mentionedCharacters: castOut?.mentioned
+			}
 		} catch (err) {
 			// Deliberately narrower than narrativeGraph.ts's equivalent guard
 			// — do NOT add `|| isQueueCancellation(err) || err.name ===
@@ -922,12 +955,14 @@ export const sceneProcessHandler: Handler<
 			)
 		}
 
-		const { participants: resolvedParticipants, mentioned: resolvedMentioned } =
-			reconcileParticipantsAndMentioned(
-				participantIds,
-				mentionedIds,
-				senderBindingIds
-			)
+		const {
+			participants: resolvedParticipants,
+			mentioned: resolvedMentioned
+		} = reconcileParticipantsAndMentioned(
+			participantIds,
+			mentionedIds,
+			senderBindingIds
+		)
 
 		const pendingResult = {
 			content: result.content ?? result.raw ?? "",

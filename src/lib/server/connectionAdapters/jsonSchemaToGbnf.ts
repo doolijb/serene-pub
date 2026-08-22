@@ -145,7 +145,9 @@ export function jsonSchemaToGbnf(root: JsonSchemaNode): string {
 			// No `ws` before `,` or `]`: the item is a value and owns its own
 			// trailing `ws`. The `ws` after `]` is this rule paying that same
 			// debt for whoever contains it. See WHITESPACE OWNERSHIP above.
-			rules.push(`${name} ::= "[" ws ( ${item} ("," ws ${item})* )? "]" ws`)
+			rules.push(
+				`${name} ::= "[" ws ( ${item} ("," ws ${item})* )? "]" ws`
+			)
 			return name
 		}
 

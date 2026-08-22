@@ -14,6 +14,25 @@
 
 	let { onclose = $bindable() }: Props = $props()
 
+	/**
+	 * These tables are an archive, so this panel reads and nothing else.
+	 *
+	 * Superseded by `pipeline_context_templates` and `pipeline_prompts`;
+	 * nothing in 0.6 builds a prompt from any of them. The rows are kept so a
+	 * year of somebody's tuning survives the upgrade, and they go with the
+	 * tables in a later release.
+	 *
+	 * A constant rather than a prop, because there is no caller who should be
+	 * able to pass `false` — the socket refuses every write to these
+	 * namespaces regardless (`server/sockets/legacyArchive.ts`), and a panel
+	 * that could re-enable its own Save button would only be offering an action
+	 * the server is going to refuse. This is the courtesy; that is the rule.
+	 *
+	 * Selection, navigation and scrolling stay live: the whole point of keeping
+	 * the panel is being able to *look* at what you had.
+	 */
+	const READ_ONLY = true
+
 	// ── View state ───────────────────────────────────────────────────────────
 	type View =
 		| "index"
@@ -1181,6 +1200,7 @@
 					type="button"
 					class="btn btn-sm preset-filled-surface-400-600"
 					onclick={handleChatNew}
+					disabled={READ_ONLY}
 					title="Clone to new config"
 					aria-label="Clone to new config"
 				>
@@ -1200,7 +1220,9 @@
 					type="button"
 					class="btn btn-sm preset-tonal-error"
 					onclick={handleChatDelete}
-					disabled={!chatConfig || chatConfig.isImmutable}
+					disabled={READ_ONLY ||
+						!chatConfig ||
+						chatConfig.isImmutable}
 					title="Delete config"
 					aria-label="Delete config"
 				>
@@ -1239,14 +1261,15 @@
 						<button
 							class="btn btn-sm preset-filled-success-500 flex-1"
 							onclick={handleChatSave}
-							disabled={!chatUnsaved}
+							disabled={READ_ONLY || !chatUnsaved}
 						>
 							<Icons.Save size={14} /> Update
 						</button>
 						<button
 							class="btn btn-sm preset-filled-warning-500 shrink-0"
 							onclick={handleChatSetDefault}
-							disabled={!selectedChatId ||
+							disabled={READ_ONLY ||
+								!selectedChatId ||
 								selectedChatId ===
 									userSettingsCtx.settings
 										?.activePromptConfigId}
@@ -1285,6 +1308,7 @@
 							Name *
 						</label>
 						<input
+							readonly={READ_ONLY}
 							id="promptConfigChatName"
 							type="text"
 							bind:value={chatConfig.name}
@@ -1314,6 +1338,7 @@
 							System Instructions
 						</label>
 						<textarea
+							readonly={READ_ONLY}
 							id="chatSystemPrompt"
 							rows="15"
 							bind:value={chatConfig.systemPrompt}
@@ -1336,6 +1361,7 @@
 							Optional.
 						</p>
 						<textarea
+							readonly={READ_ONLY}
 							id="chatPostHistoryInstructions"
 							rows="4"
 							bind:value={chatConfig.postHistoryInstructions}
@@ -1357,6 +1383,7 @@
 								reminder at. 0 = right after the last message.
 							</p>
 							<input
+								readonly={READ_ONLY}
 								id="chatPostHistoryDepth"
 								class="input w-full"
 								type="number"
@@ -1377,6 +1404,7 @@
 								is included. 0 = always included.
 							</p>
 							<input
+								readonly={READ_ONLY}
 								id="chatPostHistoryTokenTrigger"
 								class="input w-full"
 								type="number"
@@ -1432,6 +1460,7 @@
 					type="button"
 					class="btn btn-sm preset-filled-surface-400-600"
 					onclick={handleNarratorNew}
+					disabled={READ_ONLY}
 					title="Clone to new config"
 					aria-label="Clone to new config"
 				>
@@ -1451,7 +1480,9 @@
 					type="button"
 					class="btn btn-sm preset-tonal-error"
 					onclick={handleNarratorDelete}
-					disabled={!narratorConfig || narratorConfig.isImmutable}
+					disabled={READ_ONLY ||
+						!narratorConfig ||
+						narratorConfig.isImmutable}
 					title="Delete config"
 					aria-label="Delete config"
 				>
@@ -1492,14 +1523,15 @@
 						<button
 							class="btn btn-sm preset-filled-success-500 flex-1"
 							onclick={handleNarratorSave}
-							disabled={!narratorUnsaved}
+							disabled={READ_ONLY || !narratorUnsaved}
 						>
 							<Icons.Save size={14} /> Update
 						</button>
 						<button
 							class="btn btn-sm preset-filled-warning-500 shrink-0"
 							onclick={handleNarratorSetDefault}
-							disabled={!selectedNarratorId ||
+							disabled={READ_ONLY ||
+								!selectedNarratorId ||
 								selectedNarratorId ===
 									userSettingsCtx.settings
 										?.activeNarratorPromptConfigId}
@@ -1541,6 +1573,7 @@
 							Name *
 						</label>
 						<input
+							readonly={READ_ONLY}
 							id="promptConfigNarratorName"
 							type="text"
 							bind:value={narratorConfig.name}
@@ -1575,6 +1608,7 @@
 							this config.
 						</p>
 						<input
+							readonly={READ_ONLY}
 							id="promptConfigNarratorDisplayName"
 							type="text"
 							bind:value={narratorConfig.narratorName}
@@ -1596,6 +1630,7 @@
 							characters instead of a chat character.
 						</p>
 						<textarea
+							readonly={READ_ONLY}
 							id="narratorSystemPrompt"
 							rows="15"
 							bind:value={narratorConfig.systemPrompt}
@@ -1620,6 +1655,7 @@
 							characters despite the System Instructions above.
 						</p>
 						<textarea
+							readonly={READ_ONLY}
 							id="narratorPostHistoryInstructions"
 							rows="4"
 							bind:value={narratorConfig.postHistoryInstructions}
@@ -1641,6 +1677,7 @@
 								reminder at. 0 = right after the last message.
 							</p>
 							<input
+								readonly={READ_ONLY}
 								id="narratorPostHistoryDepth"
 								class="input w-full"
 								type="number"
@@ -1661,6 +1698,7 @@
 								is included. 0 = always included.
 							</p>
 							<input
+								readonly={READ_ONLY}
 								id="narratorPostHistoryTokenTrigger"
 								class="input w-full"
 								type="number"
@@ -1720,6 +1758,7 @@
 					type="button"
 					class="btn btn-sm preset-filled-surface-400-600"
 					onclick={handleWorldNew}
+					disabled={READ_ONLY}
 					title="Clone to new config"
 					aria-label="Clone to new config"
 				>
@@ -1739,7 +1778,9 @@
 					type="button"
 					class="btn btn-sm preset-tonal-error"
 					onclick={handleWorldDelete}
-					disabled={!worldConfig || worldConfig.isImmutable}
+					disabled={READ_ONLY ||
+						!worldConfig ||
+						worldConfig.isImmutable}
 					title="Delete config"
 					aria-label="Delete config"
 				>
@@ -1780,14 +1821,15 @@
 						<button
 							class="btn btn-sm preset-filled-success-500 flex-1"
 							onclick={handleWorldSave}
-							disabled={!worldUnsaved}
+							disabled={READ_ONLY || !worldUnsaved}
 						>
 							<Icons.Save size={14} /> Update
 						</button>
 						<button
 							class="btn btn-sm preset-filled-warning-500 shrink-0"
 							onclick={handleWorldSetDefault}
-							disabled={!selectedWorldId ||
+							disabled={READ_ONLY ||
+								!selectedWorldId ||
 								selectedWorldId ===
 									userSettingsCtx.settings
 										?.activeSummarizeWorldConfigId}
@@ -1829,6 +1871,7 @@
 							Name *
 						</label>
 						<input
+							readonly={READ_ONLY}
 							id="promptConfigWorldName"
 							type="text"
 							bind:value={worldConfig.name}
@@ -1861,6 +1904,7 @@
 							messages).
 						</p>
 						<textarea
+							readonly={READ_ONLY}
 							id="worldBatch"
 							rows="8"
 							bind:value={worldConfig.batchSystemPrompt}
@@ -1890,6 +1934,7 @@
 							drafts).
 						</p>
 						<textarea
+							readonly={READ_ONLY}
 							id="worldSynth"
 							rows="8"
 							bind:value={worldConfig.synthSystemPrompt}
@@ -1918,6 +1963,7 @@
 							Used when generating a title for the entry.
 						</p>
 						<textarea
+							readonly={READ_ONLY}
 							id="worldName2"
 							rows="4"
 							bind:value={worldConfig.nameSystemPrompt}
@@ -1969,6 +2015,7 @@
 					type="button"
 					class="btn btn-sm preset-filled-surface-400-600"
 					onclick={handleCharacterNew}
+					disabled={READ_ONLY}
 					title="Clone to new config"
 					aria-label="Clone to new config"
 				>
@@ -1988,7 +2035,9 @@
 					type="button"
 					class="btn btn-sm preset-tonal-error"
 					onclick={handleCharacterDelete}
-					disabled={!characterConfig || characterConfig.isImmutable}
+					disabled={READ_ONLY ||
+						!characterConfig ||
+						characterConfig.isImmutable}
 					title="Delete config"
 					aria-label="Delete config"
 				>
@@ -2029,14 +2078,15 @@
 						<button
 							class="btn btn-sm preset-filled-success-500 flex-1"
 							onclick={handleCharacterSave}
-							disabled={!characterUnsaved}
+							disabled={READ_ONLY || !characterUnsaved}
 						>
 							<Icons.Save size={14} /> Update
 						</button>
 						<button
 							class="btn btn-sm preset-filled-warning-500 shrink-0"
 							onclick={handleCharacterSetDefault}
-							disabled={!selectedCharacterId ||
+							disabled={READ_ONLY ||
+								!selectedCharacterId ||
 								selectedCharacterId ===
 									userSettingsCtx.settings
 										?.activeSummarizeCharacterConfigId}
@@ -2078,6 +2128,7 @@
 							Name *
 						</label>
 						<input
+							readonly={READ_ONLY}
 							id="promptConfigCharName"
 							type="text"
 							bind:value={characterConfig.name}
@@ -2110,6 +2161,7 @@
 							messages).
 						</p>
 						<textarea
+							readonly={READ_ONLY}
 							id="charBatch"
 							rows="8"
 							bind:value={characterConfig.batchSystemPrompt}
@@ -2141,6 +2193,7 @@
 							drafts).
 						</p>
 						<textarea
+							readonly={READ_ONLY}
 							id="charSynth"
 							rows="8"
 							bind:value={characterConfig.synthSystemPrompt}
@@ -2171,6 +2224,7 @@
 							Used when generating a title for the entry.
 						</p>
 						<textarea
+							readonly={READ_ONLY}
 							id="charName2"
 							rows="4"
 							bind:value={characterConfig.nameSystemPrompt}
@@ -2222,6 +2276,7 @@
 					type="button"
 					class="btn btn-sm preset-filled-surface-400-600"
 					onclick={handleSceneNew}
+					disabled={READ_ONLY}
 					title="Clone to new config"
 					aria-label="Clone to new config"
 				>
@@ -2241,7 +2296,9 @@
 					type="button"
 					class="btn btn-sm preset-tonal-error"
 					onclick={handleSceneDelete}
-					disabled={!sceneConfig || sceneConfig.isImmutable}
+					disabled={READ_ONLY ||
+						!sceneConfig ||
+						sceneConfig.isImmutable}
 					title="Delete config"
 					aria-label="Delete config"
 				>
@@ -2282,14 +2339,15 @@
 						<button
 							class="btn btn-sm preset-filled-success-500 flex-1"
 							onclick={handleSceneSave}
-							disabled={!sceneUnsaved}
+							disabled={READ_ONLY || !sceneUnsaved}
 						>
 							<Icons.Save size={14} /> Update
 						</button>
 						<button
 							class="btn btn-sm preset-filled-warning-500 shrink-0"
 							onclick={handleSceneSetDefault}
-							disabled={!selectedSceneId ||
+							disabled={READ_ONLY ||
+								!selectedSceneId ||
 								selectedSceneId ===
 									userSettingsCtx.settings
 										?.activeSummarizeSceneConfigId}
@@ -2331,6 +2389,7 @@
 							Name *
 						</label>
 						<input
+							readonly={READ_ONLY}
 							id="promptConfigSceneName"
 							type="text"
 							bind:value={sceneConfig.name}
@@ -2363,6 +2422,7 @@
 							messages).
 						</p>
 						<textarea
+							readonly={READ_ONLY}
 							id="sceneBatch"
 							rows="8"
 							bind:value={sceneConfig.batchSystemPrompt}
@@ -2392,6 +2452,7 @@
 							drafts).
 						</p>
 						<textarea
+							readonly={READ_ONLY}
 							id="sceneSynth"
 							rows="8"
 							bind:value={sceneConfig.synthSystemPrompt}
@@ -2420,6 +2481,7 @@
 							Used when generating a title for the entry.
 						</p>
 						<textarea
+							readonly={READ_ONLY}
 							id="sceneName2"
 							rows="4"
 							bind:value={sceneConfig.nameSystemPrompt}
@@ -2452,6 +2514,7 @@
 							characters from the scene summary.
 						</p>
 						<textarea
+							readonly={READ_ONLY}
 							id="sceneCharacterExtraction"
 							rows="6"
 							bind:value={
@@ -2505,6 +2568,7 @@
 					type="button"
 					class="btn btn-sm preset-filled-surface-400-600"
 					onclick={handleGraphNew}
+					disabled={READ_ONLY}
 					title="Clone to new config"
 					aria-label="Clone to new config"
 				>
@@ -2524,7 +2588,9 @@
 					type="button"
 					class="btn btn-sm preset-tonal-error"
 					onclick={handleGraphDelete}
-					disabled={!graphConfig || graphConfig.isImmutable}
+					disabled={READ_ONLY ||
+						!graphConfig ||
+						graphConfig.isImmutable}
 					title="Delete config"
 					aria-label="Delete config"
 				>
@@ -2559,14 +2625,15 @@
 						<button
 							class="btn btn-sm preset-filled-success-500 flex-1"
 							onclick={handleGraphSave}
-							disabled={!graphUnsaved}
+							disabled={READ_ONLY || !graphUnsaved}
 						>
 							<Icons.Save size={14} /> Update
 						</button>
 						<button
 							class="btn btn-sm preset-filled-warning-500 shrink-0"
 							onclick={handleGraphSetDefault}
-							disabled={!selectedGraphId ||
+							disabled={READ_ONLY ||
+								!selectedGraphId ||
 								selectedGraphId === defaultGraphBuildConfigId}
 							title={selectedGraphId === defaultGraphBuildConfigId
 								? "Already the default"
@@ -2607,6 +2674,7 @@
 							Name *
 						</label>
 						<input
+							readonly={READ_ONLY}
 							id="promptConfigGraphName"
 							type="text"
 							bind:value={graphConfig.name}
@@ -2650,6 +2718,7 @@
 							merge silently fuses two identities.
 						</p>
 						<textarea
+							readonly={READ_ONLY}
 							id="graphnodeResolution"
 							rows="8"
 							bind:value={graphConfig.nodeResolutionSystemPrompt}
@@ -2686,6 +2755,7 @@
 							build's cost.
 						</p>
 						<textarea
+							readonly={READ_ONLY}
 							id="graphperspective"
 							rows="12"
 							bind:value={graphConfig.perspectiveSystemPrompt}
@@ -2722,6 +2792,7 @@
 							JSON constraint.
 						</p>
 						<textarea
+							readonly={READ_ONLY}
 							id="graphnodeDescription"
 							rows="6"
 							bind:value={graphConfig.nodeDescriptionSystemPrompt}
@@ -2757,6 +2828,7 @@
 							Biased toward omission.
 						</p>
 						<textarea
+							readonly={READ_ONLY}
 							id="graphstateDetection"
 							rows="10"
 							bind:value={graphConfig.stateDetectionSystemPrompt}

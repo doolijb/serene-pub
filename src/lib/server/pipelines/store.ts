@@ -152,18 +152,35 @@ export async function saveDocument(
 				r.id
 			])
 		)
+		// A block's aggregate output is a legal edge source: `map` and `async`
+		// publish `branch-results@1`, and a spec consuming it names the block.
+		// Resolved here so the error below still fires for a genuine typo.
+		const blockIds = new Set((doc.blocks ?? []).map((b: any) => b.id))
+
+		// So is a map or loop iteration's item — `block.$item`, the per-iteration
+		// value the executor scopes in. Block-shaped rather than node-shaped: it
+		// has no node row to FK, and the load side hands the key back verbatim.
+		const itemSourceOf = (from: string): string | null => {
+			const m = /^(.+)\.\$item$/.exec(from)
+			return m && blockIds.has(m[1]!) ? from : null
+		}
+
 		if (doc.edges.length)
 			await tx.insert(schema.pipelineEdges).values(
 				doc.edges.map((e) => {
 					const from = idOf.get(e.from)
+					const fromBlock = blockIds.has(e.from)
+						? e.from
+						: itemSourceOf(e.from)
 					const to = idOf.get(e.to)
-					if (from === undefined || to === undefined)
+					if ((from === undefined && !fromBlock) || to === undefined)
 						throw new Error(
 							`edge ${e.from}.${e.fromPort} → ${e.to}.${e.toPort} references a node this version does not contain`
 						)
 					return {
 						specVersionId: version.id,
-						fromNodeId: from,
+						fromNodeId: fromBlock ? null : from,
+						fromBlockId: fromBlock,
 						fromPort: e.fromPort,
 						toNodeId: to,
 						toPort: e.toPort,
@@ -353,7 +370,7 @@ export async function loadDocument(
 			position: n.position
 		})),
 		edges: edgeRows.map((e: any) => ({
-			from: keyOf.get(e.fromNodeId)!,
+			from: e.fromBlockId ?? keyOf.get(e.fromNodeId)!,
 			fromPort: e.fromPort,
 			to: keyOf.get(e.toNodeId)!,
 			toPort: e.toPort,

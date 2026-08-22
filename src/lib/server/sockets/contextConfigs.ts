@@ -4,7 +4,10 @@ import * as schema from "$lib/server/db/schema"
 import { user as loadUser, user } from "./users"
 import { userSettingsGet } from "./userSettings"
 import type { Handler } from "$lib/shared/events"
-import { compileContextTemplatePreview } from "$lib/server/utils/promptBuilder/previewCompiler"
+import {
+	bareLayouts,
+	previewContextTemplate
+} from "$lib/server/pipelines/preview"
 
 export const contextConfigsListHandler: Handler<
 	Sockets.ContextConfigs.List.Params,
@@ -279,8 +282,16 @@ export const contextConfigsPreview: Handler<
 			)
 		}
 
+		// Previewed against the **bare** layouts, which is what an archived
+		// context config is pinned to: these templates carry their own headings
+		// and fences, so rendering them through the wrapped defaults would show
+		// every block twice-wrapped — a bug that exists only in the preview,
+		// which is the worst kind to go looking for.
 		const res: Sockets.ContextConfigs.Preview.Response =
-			compileContextTemplatePreview(params.template)
+			previewContextTemplate({
+				source: params.template,
+				layouts: bareLayouts()
+			})
 		emitToUser("contextConfigs:preview", res)
 		return res
 	}

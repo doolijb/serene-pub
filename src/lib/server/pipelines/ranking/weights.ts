@@ -52,6 +52,21 @@ export interface SignalWeights {
 	priorityBonus: number
 }
 
+/**
+ * How much one step of an entry's `priority` field is worth.
+ *
+ * Canonical **here**, in the surviving half, rather than in
+ * `KeywordInfillEngine` where it started. It was defined there and *also*
+ * hardcoded as a literal `0.15` in `LORE_SIGNALS` below — one number with two
+ * definitions, so the keyword arm and the semantic arm could drift apart while
+ * both looked deliberate. The legacy engines now import it from here, which is
+ * the direction that leaves nothing to move when they are deleted.
+ *
+ * Applied per tier rather than as a discrete override, so priority shifts a
+ * score without overruling the rest of the model.
+ */
+export const PRIORITY_SCORE_BONUS = 0.15
+
 const NO_SIGNALS: SignalWeights = {
 	keyword: 0,
 	nameMatch: 0,
@@ -72,7 +87,7 @@ const LORE_SIGNALS: SignalWeights = {
 	entityCooccurrence: 0.2,
 	tfidf: 0.1,
 	lastRefRecency: 0.1,
-	priorityBonus: 0.15
+	priorityBonus: PRIORITY_SCORE_BONUS
 }
 
 export const DEFAULT_SIGNAL_WEIGHTS: Record<SourceKind, SignalWeights> = {

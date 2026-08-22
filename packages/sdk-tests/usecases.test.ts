@@ -13,7 +13,7 @@ import { compile, canonical, canonicalHash, importDocument, resolveDownstreamPro
 import { validate } from '@serene-pub/sdk'
 import { run, replay, ok, halt, err, seededRandom } from '@serene-pub/sdk'
 import { renderReceipt } from '@serene-pub/sdk'
-import { resolveConfig, assertWritable, mayWrite } from '@serene-pub/sdk'
+import { resolveConfig, resolveConfigSources, assertWritable, mayWrite } from '@serene-pub/sdk'
 import { slot } from '@serene-pub/sdk'
 import * as C from '@serene-pub/contracts'
 import { publish, findings, errorsFor, bindings, world, withEmbeddings, fakeClock } from './helpers.js'
@@ -411,6 +411,49 @@ describe('13 · configuration resolves per slot through five layers', () => {
 		assert.equal(mayWrite('connection', 'user'), false)
 		assert.equal(mayWrite('prompts', 'chat'), true)
 		assert.throws(() => assertWritable('connection', 'chat'), /admin-only/)
+	})
+
+	test('resolution reports which layer won, and agrees with the plain resolver', () => {
+		// The UI needs the label, not only the value: "I changed this and nothing
+		// happened" is answerable only if the resolver says an admin pinned it.
+		// Asserting the two agree is what stops the labelled path becoming a second
+		// implementation that drifts from the one execution uses.
+		const w = {
+			...world,
+			authorDefaults: { generate: { params: { stopSequences: [] } } },
+			overrides: [
+				{ nodeKey: 'generate', slot: 'sampling', path: 'temperature', value: 0.2, scopeKind: 'instance' as const },
+				{ nodeKey: 'generate', slot: 'sampling', path: 'temperature', value: 0.7, scopeKind: 'user' as const, scopeId: 42 },
+				{ nodeKey: 'generate', slot: 'prompts', path: 'system', value: 'be terse', scopeKind: 'preset' as const },
+			],
+		}
+		const sourced = resolveConfigSources(w, ['generate'])
+		assert.equal(sourced['generate']!['sampling']!['temperature']!.scopeKind, 'user')
+		assert.equal(sourced['generate']!['sampling']!['temperature']!.scopeId, 42)
+		assert.equal(sourced['generate']!['prompts']!['system']!.scopeKind, 'preset')
+		assert.equal(sourced['generate']!['params']!['stopSequences']!.scopeKind, 'author')
+
+		const plain = resolveConfig(w, ['generate'])
+		for (const [slot, paths] of Object.entries(sourced['generate']!))
+			for (const [path, resolved] of Object.entries(paths))
+				assert.deepEqual(plain['generate']![slot]?.[path], resolved.value, `${slot}.${path}`)
+	})
+
+	test('a path containing a space resolves as itself (12 §2)', () => {
+		// Paths were grouped by joining slot and path with a space and splitting
+		// back, so a declared field named 'opening line' resolved against the path
+		// 'opening' — matching nothing, silently, for whoever declared it. No core
+		// field has a space; nothing stops a plugin's from having one.
+		const resolved = resolveConfig(
+			{
+				...world,
+				overrides: [
+					{ nodeKey: 'generate', slot: 'prompts', path: 'opening line', value: 'Once upon', scopeKind: 'user' as const },
+				],
+			},
+			['generate'],
+		)
+		assert.equal(resolved['generate']!['prompts']!['opening line'], 'Once upon')
 	})
 })
 

@@ -31,7 +31,17 @@ import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { ConfigWorld, OverrideRow } from "@serene-pub/sdk"
 import { CORE_TEMPLATE_ENGINE } from "./renderers"
+import { resolvePromptFields } from "./prompts"
+import { declarations } from "./config"
 
+/**
+ * Reads only.
+ *
+ * Building a world never writes — it is a projection of what is configured, and
+ * a write here would mean resolving somebody's config had a side effect on it.
+ * The helpers it calls out to want a wider type, which is what the casts at
+ * those call sites are for.
+ */
 type Db = { select: any }
 
 export interface WorldScope {
@@ -42,6 +52,8 @@ export interface WorldScope {
 	providerNodeKey?: string
 	/** The node that builds the template context, which needs the prompts too. */
 	contextNodeKey?: string
+	/** Which pipeline is running, so its own configuration can be read. */
+	specId?: string
 }
 
 /**
@@ -95,7 +107,6 @@ export async function buildWorld(
 
 	const connectionRows = await db.select().from(schema.connections)
 	const samplingRows = await db.select().from(schema.samplingConfigs)
-	const contextRows = await db.select().from(schema.contextConfigs)
 	const promptRows = await db.select().from(schema.promptConfigs)
 
 	const overrides: OverrideRow[] = []
@@ -113,18 +124,19 @@ export async function buildWorld(
 		overrides.push({ nodeKey, slot, path, value, scopeKind, scopeId })
 	}
 
-	// ── template: the context config's story string ──────────────────────
-	const templateAt = (
-		kind: OverrideRow["scopeKind"],
-		id: string | number | undefined,
-		configId?: number | null
-	) => {
-		const row = pick(contextRows, configId)
-		if (row)
-			layer(kind, id, assemble, "template", "source", row.template ?? "")
-	}
-	templateAt("instance", undefined, system?.defaultContextConfigId)
-	templateAt("user", scope.userId, userSettings?.activeContextConfigId)
+	// ── template: nothing to project ─────────────────────────────────────
+	//
+	// The story string used to be read out of `context_configs` here and
+	// layered in as a literal, selected by `system_settings.defaultContextConfigId`
+	// and `user_settings.activeContextConfigId`. It is a
+	// `pipeline_context_templates` reference now, resolved through the config
+	// layer like every other slot, so the projection is gone rather than
+	// disabled — two sources for one slot is how a panel ends up showing a
+	// choice the run does not make.
+	//
+	// Those legacy columns still exist and still point at legacy rows. Nothing
+	// in 0.6 renders from them; `migrateContextTemplates` reads them once, to
+	// carry each scope's selection across.
 
 	// ── prompts: the authored text fields ────────────────────────────────
 	const promptsAt = (
@@ -135,14 +147,12 @@ export async function buildWorld(
 		const row = pick(promptRows, configId)
 		if (!row) return
 		for (const [path, value] of Object.entries(promptFields(row))) {
-			layer(kind, id, assemble, "prompts", path, value)
-			// The same authored text, also on the node that builds the template
-			// context. Both need it and neither can derive it from the other:
-			// Assemble renders `{{systemPrompt}}` where a template asks for it,
-			// while the context builder is what resolves *which* post-history
-			// text wins between the config's and the speaking character's. A
-			// single slot on one node would leave the other rendering blanks —
-			// which is what the first parity run actually showed.
+			// Written once, at the node that owns the slot. Assemble and the
+			// provider read it **by reference** (`slot.prompts({node})`, spec
+			// 1.1.0) — the executor resolves the shared slot to this node's
+			// values, which is what retired the double-write that used to
+			// live here and the three "System" boxes it produced in the panel
+			// (13 §12 finding i).
 			layer(kind, id, context, "prompts", path, value)
 		}
 	}
@@ -163,10 +173,10 @@ export async function buildWorld(
 			layer(kind, id, assemble, "params", key, row[key])
 	}
 
-	promptsAt("instance", undefined, system?.defaultPromptConfigId)
+	promptsAt("defaults", undefined, system?.defaultPromptConfigId)
 	promptsAt("user", scope.userId, userSettings?.activePromptConfigId)
 	promptsAt("chat", scope.chatId, chat?.promptConfigId)
-	paramsAt("instance", undefined, system?.defaultPromptConfigId)
+	paramsAt("defaults", undefined, system?.defaultPromptConfigId)
 	paramsAt("user", scope.userId, userSettings?.activePromptConfigId)
 	paramsAt("chat", scope.chatId, chat?.promptConfigId)
 
@@ -175,7 +185,7 @@ export async function buildWorld(
 	// and chat only, and the chat's choice is an admin-permitted selection
 	// rather than a user override.
 	layer(
-		"instance",
+		"defaults",
 		undefined,
 		provider,
 		"connection",
@@ -191,7 +201,7 @@ export async function buildWorld(
 		idOrNull(chat?.connectionId)
 	)
 	layer(
-		"instance",
+		"defaults",
 		undefined,
 		provider,
 		"sampling",
@@ -206,6 +216,16 @@ export async function buildWorld(
 		"ref",
 		idOrNull(chat?.samplingConfigId)
 	)
+
+	// ── the pipeline layer, which wins over everything above ─────────────
+	//
+	// Written last so it is *appended* after the legacy projection, and
+	// `resolveConfigSources` walks candidates in SCOPE_ORDER and takes the first
+	// match at each scope — so a value a person set in the pipeline panel is the
+	// one that runs. Without this the panel would edit rows nothing reads, which
+	// is worse than not having it: every screen would agree with the user and
+	// the model would not.
+	if (scope.specId) await applyPipelineLayer(db, overrides, scope)
 
 	return {
 		overrides,
@@ -234,6 +254,286 @@ export async function buildWorld(
 			material: {}
 		})),
 		activeConnection: {}
+	}
+}
+
+/**
+ * The configuration a person actually edited, layered over the legacy
+ * projection.
+ *
+ * Three things arrive here, and they are different in kind:
+ *
+ *  - **`pipeline_node_overrides`** — a single value someone changed, at the
+ *    scope they changed it. Written straight through at its own scope.
+ *  - **the selected `pipeline_config`** — a whole named configuration, chosen
+ *    per scope. Projected in at `preset`, because that is what a config *is* in
+ *    12 §2's chain: a named bundle sitting under the individual overrides and
+ *    over the instance defaults.
+ *  - **prompt references** — a config stores the *id* of a `pipeline_prompts`
+ *    row, and a node needs the words. Dereferenced here, which is the same move
+ *    the dispatch path makes for a connection: the reference is what is stored,
+ *    the value is what runs.
+ */
+async function applyPipelineLayer(
+	db: Db,
+	overrides: OverrideRow[],
+	scope: WorldScope
+): Promise<void> {
+	const [spec] = await db
+		.select()
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.slug, scope.specId!))
+		.limit(1)
+	if (!spec) return
+
+	const push = (
+		scopeKind: OverrideRow["scopeKind"],
+		scopeId: string | number | undefined,
+		nodeKey: string,
+		slot: string,
+		path: string,
+		value: unknown
+	) => {
+		if (value === undefined) return
+		overrides.push({ nodeKey, slot, path, value, scopeKind, scopeId })
+	}
+
+	// Which of this spec's slots hold a *reference* rather than a value, read
+	// from the declarations rather than assumed. The row stores the slot's
+	// authored name and a plugin may call its variables slot anything, so a
+	// hard-coded `'variables'` would leave a plugin's reference undereferenced —
+	// and the node would receive a row id where it expected a template.
+	const allDecls = spec.activeVersionId
+		? await declarations(db as any, spec.activeVersionId)
+		: []
+	const varDecls = allDecls.filter(
+		(d) => d.control === "variable-template-ref"
+	)
+	const variableSlots = new Set(varDecls.map((d) => d.slot))
+	/**
+	 * Which slots hold a *context template* reference — read from the
+	 * declarations for the same reason the variable slots are: the row stores
+	 * the slot's authored name, and a plugin may call its template slot
+	 * anything. A hard-coded `'template'` would leave a plugin's reference
+	 * undereferenced, and the node would receive a row id where it expected a
+	 * story string.
+	 */
+	const templateSlots = new Set(
+		allDecls
+			.filter((d) => d.control === "context-template-ref")
+			.map((d) => d.slot)
+	)
+
+	/**
+	 * A layout reference becomes the template itself.
+	 *
+	 * Returns undefined for a dangling id, which `push` then drops — the render
+	 * path falls through to its in-code default and still emits today's bytes.
+	 * A customization is the right thing to lose here; a prompt is not.
+	 */
+	const derefLayout = async (value: unknown) => {
+		if (typeof value !== "number") return undefined
+		const { resolveVariableTemplate } = await import("./variableTemplates")
+		return (await resolveVariableTemplate(db as any, value)) ?? undefined
+	}
+
+	/**
+	 * A template reference becomes the source itself.
+	 *
+	 * Returns undefined for a dangling id, which `push` then drops — the node
+	 * falls through to its in-code default layout rather than rendering an id.
+	 * Losing a customization is the right cost here; losing the prompt is not.
+	 */
+	const derefTemplate = async (value: unknown) => {
+		if (typeof value !== "number") return undefined
+		const { resolveContextTemplate } = await import("./contextTemplates")
+		const row = await resolveContextTemplate(db as any, value)
+		return row ? row.source : undefined
+	}
+
+	// ── the selected config, as the preset layer ─────────────────────────
+	const { resolveSelectedConfig } = await import("./configs")
+	const selected = scope.userId
+		? await resolveSelectedConfig(db as any, spec.id, spec.slug, {
+				userId: scope.userId,
+				chatId: scope.chatId
+			})
+		: null
+
+	if (selected) {
+		const values = await db
+			.select()
+			.from(schema.pipelineConfigValues)
+			.where(eq(schema.pipelineConfigValues.configId, selected.configId))
+
+		for (const v of values as any[]) {
+			if (v.slot === "prompts") {
+				// A reference. The fields it names become individual paths, so
+				// per-path resolution still works above it — someone overriding
+				// one field does not pin the rest of the prompt.
+				const fields = await resolvePromptFields(
+					db as any,
+					Number(v.value)
+				)
+				for (const [field, text] of Object.entries(fields))
+					push("preset", undefined, v.nodeKey, "prompts", field, text)
+				continue
+			}
+			if (templateSlots.has(v.slot)) {
+				// Addressed at `source`, which is where the slot's value has
+				// always lived — the reference is an implementation detail of
+				// where the string came from, not a change to what the node
+				// reads.
+				push(
+					"preset",
+					undefined,
+					v.nodeKey,
+					v.slot,
+					"source",
+					await derefTemplate(v.value)
+				)
+				continue
+			}
+			if (variableSlots.has(v.slot)) {
+				push(
+					"preset",
+					undefined,
+					v.nodeKey,
+					v.slot,
+					v.path ?? "",
+					await derefLayout(v.value)
+				)
+				continue
+			}
+			push("preset", undefined, v.nodeKey, v.slot, v.path ?? "", v.value)
+		}
+	}
+
+	// ── individual overrides, at the scope each was written at ───────────
+	const rows = await db
+		.select()
+		.from(schema.pipelineNodeOverrides)
+		.where(eq(schema.pipelineNodeOverrides.specId, spec.id))
+
+	for (const o of rows as any[]) {
+		let scopeKind: OverrideRow["scopeKind"] | null = null
+		let scopeId: string | number | undefined
+		if (o.scopeKind === "instance") scopeKind = "instance"
+		else if (o.scopeKind === "user" && o.scopeId === scope.userId) {
+			scopeKind = "user"
+			scopeId = scope.userId
+		} else if (o.scopeKind === "chat" && o.scopeId === scope.chatId) {
+			scopeKind = "chat"
+			scopeId = scope.chatId
+		}
+		if (!scopeKind) continue
+
+		if (o.slot === "prompts" && !(o.path ?? "")) {
+			// A prompts-ref override stores the *id* of a `pipeline_prompts`
+			// row — the same shape a config value stores, dereferenced the
+			// same way, because a node needs the words and not the number.
+			// Pushed per field so per-path resolution above it still works.
+			const fields = await resolvePromptFields(db as any, Number(o.value))
+			for (const [field, text] of Object.entries(fields))
+				push(scopeKind, scopeId, o.nodeKey, "prompts", field, text)
+			continue
+		}
+
+		if (templateSlots.has(o.slot)) {
+			push(
+				scopeKind,
+				scopeId,
+				o.nodeKey,
+				o.slot,
+				"source",
+				await derefTemplate(o.value)
+			)
+			continue
+		}
+
+		if (variableSlots.has(o.slot)) {
+			// Addressed per key, so overriding the characters layout says
+			// nothing about the personas one (F20) — which is why the path is
+			// carried through rather than collapsed the way a prompts-ref is.
+			push(
+				scopeKind,
+				scopeId,
+				o.nodeKey,
+				o.slot,
+				o.path ?? "",
+				await derefLayout(o.value)
+			)
+			continue
+		}
+
+		push(scopeKind, scopeId, o.nodeKey, o.slot, o.path ?? "", o.value)
+	}
+
+	// ── the floor: a prompts slot always resolves to words ───────────────
+	//
+	// Every layer above this is optional — a config may not carry a prompts
+	// value, an instance may have no legacy config to project, and clearing
+	// an override deletes a row rather than writing one. With nothing
+	// underneath, the node ran with empty instructions, which does not read
+	// as "no prompt is selected"; it reads as the model ignoring its
+	// character sheet. So the namespace's own default is projected at
+	// `defaults`, below everything anyone chose: the pipeline's shipped
+	// prompt, or the first it ships with (`defaultPromptFor`).
+	//
+	// Pushed after the legacy projection, so on a migrated instance the
+	// user's own carried-over wording still wins at this scope — this fills
+	// the hole rather than papering over what somebody already had.
+	if (!spec.activeVersionId) return
+	const promptNodes = new Set<string>()
+	for (const d of await declarations(db as any, spec.activeVersionId))
+		if (d.control === "prompts-ref") promptNodes.add(d.nodeKey)
+
+	if (promptNodes.size) {
+		const { defaultPromptFor } = await import("./seedPrompts")
+		const fallbackId = await defaultPromptFor(db as any, spec.id)
+		if (fallbackId != null) {
+			const fields = await resolvePromptFields(db as any, fallbackId)
+			for (const nodeKey of promptNodes)
+				for (const [field, text] of Object.entries(fields))
+					push("defaults", undefined, nodeKey, "prompts", field, text)
+		}
+	}
+
+	// ── the same floor, for layouts ──────────────────────────────────────
+	//
+	// Weaker than the prompts floor by design. A variables slot that resolves
+	// to nothing is not a broken run: every render site keeps its in-code
+	// expression and uses it when no template arrives, so the prompt comes out
+	// byte-identical to what it was before this feature existed. This projects
+	// the shipped row anyway so the *panel* shows what is actually happening —
+	// an empty picker above output that plainly has a layout is the kind of
+	// discrepancy that costs an afternoon.
+	if (varDecls.length) {
+		const { defaultVariableTemplateFor } = await import(
+			"./seedVariableTemplates"
+		)
+		const shipped = new Map<string, unknown>()
+		for (const d of varDecls) {
+			if (!d.variableId) continue
+			if (!shipped.has(d.variableId))
+				shipped.set(
+					d.variableId,
+					await derefLayout(
+						await defaultVariableTemplateFor(
+							db as any,
+							d.variableId
+						)
+					)
+				)
+			push(
+				"defaults",
+				undefined,
+				d.nodeKey,
+				d.slot,
+				d.path,
+				shipped.get(d.variableId)
+			)
+		}
 	}
 }
 

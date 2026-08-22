@@ -1,10 +1,12 @@
 /**
  * chatsSummarizeHandler (chats:summarize) — end-to-end coverage for the
  * scene-type participant/mentioned pipeline: knownCast actually reaching
- * the extraction call, a hallucinated castId no longer silently vanishing
- * once it does, and the auto-add-message-senders guarantee. The LLM call
- * itself (generateSummary) is mocked — everything else (lorebook/binding
- * resolution, the reconcile step) runs for real against a PGlite test DB.
+ * the summarize pipeline's request, a hallucinated castId no longer
+ * silently vanishing once it does, and the auto-add-message-senders
+ * guarantee. The pipeline run itself (runSpec) is mocked — everything else
+ * (lorebook/binding resolution, the reconcile step) runs for real against
+ * a PGlite test DB. The full pipeline path has its own coverage in
+ * pipelines/summarizeRun.int.test.ts.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import { eq } from "drizzle-orm"
@@ -13,10 +15,55 @@ import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
 
-const generateSummaryMock = vi.fn()
-vi.mock("$lib/server/utils/summarizer", () => ({
-	generateSummary: (...args: any[]) => generateSummaryMock(...args)
+const runSpecMock = vi.fn()
+vi.mock("$lib/server/pipelines/runTurn", () => ({
+	runSpec: (...args: any[]) => runSpecMock(...args),
+	runTurn: vi.fn(),
+	PipelineUnavailableError: class extends Error {}
 }))
+
+/** A receipt the socket can read its result off — halted before `save`. */
+function receiptWith(
+	over: {
+		content?: string
+		name?: string
+		participants?: any[]
+		mentioned?: any[]
+	} = {}
+) {
+	return {
+		outcome: "halt",
+		haltNodeKey: "save",
+		haltReason: "preview: stopped before save, nothing sent",
+		nodes: [
+			{
+				nodeKey: "drafting.item.draft",
+				typeId: "core:provider/summarize-batch@1",
+				output: {}
+			},
+			{
+				nodeKey: "synth",
+				typeId: "core:provider/summarize-synth@1",
+				output: { content: over.content ?? "A scene happened." }
+			},
+			{
+				nodeKey: "naming",
+				typeId: "core:provider/name-entry@1",
+				output: { name: over.name ?? "A Scene" }
+			},
+			{
+				nodeKey: "cast",
+				typeId: "core:provider/extract-cast@1",
+				output: {
+					cast: {
+						participants: over.participants ?? [],
+						mentioned: over.mentioned ?? []
+					}
+				}
+			}
+		]
+	}
+}
 
 vi.mock("$lib/server/utils/resolveTaskConfig", () => ({
 	resolveTaskConfig: vi.fn().mockResolvedValue({
@@ -128,14 +175,7 @@ describe("chatsSummarizeHandler — scene participant pipeline (PGlite integrati
 		const { chatsSummarizeHandler } = await import("./summarize")
 		const user = await makeUser("summarize-knowncast-user")
 		const { chat, binding, msg1, msg2 } = await makeSceneChat(user.id)
-		generateSummaryMock.mockReset().mockResolvedValue({
-			content: "A scene happened.",
-			raw: "A scene happened.",
-			name: "A Scene",
-			participantCharacters: [],
-			mentionedCharacters: [],
-			batchCount: 1
-		})
+		runSpecMock.mockReset().mockResolvedValue(receiptWith())
 
 		await chatsSummarizeHandler.handler(
 			fakeSocket(user.id),
@@ -147,26 +187,30 @@ describe("chatsSummarizeHandler — scene participant pipeline (PGlite integrati
 			noopEmit
 		)
 
-		expect(generateSummaryMock).toHaveBeenCalledTimes(1)
-		const optsPassed = generateSummaryMock.mock.calls[0][0]
-		expect(optsPassed.knownCast).toBeDefined()
-		expect(optsPassed.knownCast.some((c: any) => c.id === binding.id)).toBe(
+		expect(runSpecMock).toHaveBeenCalledTimes(1)
+		const runPassed = runSpecMock.mock.calls[0][0]
+		expect(runPassed.specId).toBe("core:spec/summarize-scene")
+		// Stopped before the write — the modal's review is the save.
+		expect(runPassed.preview).toEqual({ atNode: "save" })
+		const request = runPassed.input?.request
+		expect(request?.knownCast).toBeDefined()
+		expect(request.knownCast.some((c: any) => c.id === binding.id)).toBe(
 			true
 		)
+		// The pinned selection travels too — the pipeline reads exactly the
+		// chosen messages, hidden or not.
+		expect(request.messageIds).toEqual([msg1.id, msg2.id])
 	})
 
 	test("a hallucinated castId with no matching cast entry is dropped, not fabricated — but real senders still end up as participants", async () => {
 		const { chatsSummarizeHandler } = await import("./summarize")
 		const user = await makeUser("summarize-hallucinated-user")
 		const { chat, msg1, msg2 } = await makeSceneChat(user.id)
-		generateSummaryMock.mockReset().mockResolvedValue({
-			content: "A scene happened.",
-			raw: "A scene happened.",
-			name: "A Scene",
-			participantCharacters: [{ castId: 999999 }], // hallucinated, no match
-			mentionedCharacters: [],
-			batchCount: 1
-		})
+		runSpecMock
+			.mockReset()
+			.mockResolvedValue(
+				receiptWith({ participants: [{ castId: 999999 }] })
+			)
 
 		const response = await chatsSummarizeHandler.handler(
 			fakeSocket(user.id),
@@ -187,16 +231,10 @@ describe("chatsSummarizeHandler — scene participant pipeline (PGlite integrati
 	test("message senders are always participants even when the LLM extracts nothing at all", async () => {
 		const { chatsSummarizeHandler } = await import("./summarize")
 		const user = await makeUser("summarize-empty-llm-user")
-		const { chat, binding, persona, msg1, msg2 } =
-			await makeSceneChat(user.id)
-		generateSummaryMock.mockReset().mockResolvedValue({
-			content: "A scene happened.",
-			raw: "A scene happened.",
-			name: "A Scene",
-			participantCharacters: [],
-			mentionedCharacters: [],
-			batchCount: 1
-		})
+		const { chat, binding, persona, msg1, msg2 } = await makeSceneChat(
+			user.id
+		)
+		runSpecMock.mockReset().mockResolvedValue(receiptWith())
 
 		const response = await chatsSummarizeHandler.handler(
 			fakeSocket(user.id),
@@ -219,14 +257,11 @@ describe("chatsSummarizeHandler — scene participant pipeline (PGlite integrati
 		const { chatsSummarizeHandler } = await import("./summarize")
 		const user = await makeUser("summarize-double-listed-user")
 		const { chat, binding, msg1, msg2 } = await makeSceneChat(user.id)
-		generateSummaryMock.mockReset().mockResolvedValue({
-			content: "A scene happened.",
-			raw: "A scene happened.",
-			name: "A Scene",
-			participantCharacters: [],
-			mentionedCharacters: [{ castId: binding.id }],
-			batchCount: 1
-		})
+		runSpecMock
+			.mockReset()
+			.mockResolvedValue(
+				receiptWith({ mentioned: [{ castId: binding.id }] })
+			)
 
 		const response = await chatsSummarizeHandler.handler(
 			fakeSocket(user.id),
@@ -269,14 +304,9 @@ describe("chats:summarize — topic length cap (round-6 audit fix)", () => {
 		const { chatsSummarizeHandler } = await import("./summarize")
 		const user = await makeUser("summarize-topic-ok-user")
 		const { chat, msg1, msg2 } = await makeSceneChat(user.id)
-		generateSummaryMock.mockReset().mockResolvedValue({
-			content: "Fine.",
-			raw: "Fine.",
-			name: "Fine",
-			participantCharacters: [],
-			mentionedCharacters: [],
-			batchCount: 1
-		})
+		runSpecMock
+			.mockReset()
+			.mockResolvedValue(receiptWith({ content: "Fine.", name: "Fine" }))
 
 		await expect(
 			chatsSummarizeHandler.handler(

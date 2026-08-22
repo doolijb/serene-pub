@@ -12,7 +12,7 @@ The **Prompts** sidebar (opened from the main navigation) is a management screen
 
 Opening the sidebar shows an index of cards, one per config type, each with an icon, a one-line description, and — once a config is active — the active config's name next to a green checkmark. Clicking a card drills into a dedicated editor for that type, with a back button to return to the index.
 
-**Prompt Configs are distinct from Context Configs.** A Prompt Config supplies the free-text _instructions_ (writing style, tone, rules) that get slotted into the prompt. A Context Config is the underlying Handlebars template that assembles the _entire_ request sent to the model — system block, character/persona JSON, scenario, lorebook entries, chat history, and so on. Context Configs are covered in depth in [Context Configs](./context-configs.md); this page only discusses how Prompt Configs relate to them.
+**Prompt Configs are distinct from Context Configs.** A Prompt Config supplies the free-text _instructions_ (writing style, tone, rules) that get slotted into the prompt. A Context Config is the underlying Handlebars template that assembles the _entire_ request sent to the model — system block, character/persona JSON, scenario, lorebook entries, chat history, and so on. Context Configs are covered in depth in [Context Configs](./context-templates.md); this page only discusses how Prompt Configs relate to them.
 
 ### Admin-only management
 

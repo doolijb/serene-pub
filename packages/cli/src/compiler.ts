@@ -48,7 +48,7 @@ export interface Manifest {
 	/** Node types this plugin registers, summarized for the audit screen (10 §10.2). */
 	types: TypeSummary[]
 	hooks: {
-		pipeline: Array<{ typeId: string; visibility: 'private' | 'public'; runtime: 'node' | 'process' }>
+		pipeline: Array<{ typeId: string; visibility: 'private' | 'public'; runtime: 'process' }>
 		lifecycle: Array<{ moment: string; cadence?: string }>
 		event: Array<{ event: string }>
 	}

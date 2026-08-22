@@ -11,8 +11,17 @@
 
 import { describe, it, expect, beforeAll, vi } from "vitest"
 import { eq } from "drizzle-orm"
+import { RESPOND_SPEC_ID } from "./bootstrap"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
+
+// Whichever test runs a turn first pays the cold dynamic import of the entire
+// dispatch chain — the SDK, the contracts, the host bindings, the legacy adapter
+// and Handlebars — which on a slow machine is comfortably past vitest's 5s
+// default. Raised per file rather than per test deliberately: the cost belongs
+// to the *first* turn, not to any particular assertion, so a per-test timeout
+// would make this file pass or fail depending on the order its tests ran in.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 })
 
 let streamed: string[] = []
 
@@ -131,8 +140,12 @@ beforeAll(async () => {
 		.insert(schema.contextConfigs)
 		.values({
 			name: "Turn Context",
+			// `{{{instructions}}}`, not `{{instructions}}`. Since 0.6 a value
+			// arrives carrying its own heading and fence, and a double stash
+			// HTML-escapes the fence — this fixture rendered
+			// `Instructions:\n&quot;&quot;&quot;` until it was a triple.
 			template:
-				"{{instructions}}\nLORE:{{{worldLore}}}\n{{#each chatMessages}}{{this.name}}: {{this.message}}\n{{/each}}"
+				"{{{instructions}}}\nLORE:{{{worldLore}}}\n{{#each chatMessages}}{{this.name}}: {{this.message}}\n{{/each}}"
 		})
 		.returning()
 	const [promptConfig] = await db
@@ -143,6 +156,46 @@ beforeAll(async () => {
 		id: 1,
 		defaultContextConfigId: contextConfig.id,
 		defaultPromptConfigId: promptConfig.id
+	})
+
+	// The story string reaches the pipeline from `pipeline_context_templates`
+	// now, selected through the config layer — `context_configs` above is the
+	// legacy row and nothing renders it. Written as an instance override rather
+	// than by editing the shipped config, because that is what choosing a
+	// template in the panel actually does.
+	const { createContextTemplate } = await import("./contextTemplates")
+	const { CONTEXT_TEMPLATE_NODE_TYPE } = await import(
+		"./contextTemplateDefaults"
+	)
+	const { declarations } = await import("./config")
+	const template = await createContextTemplate(db as any, {
+		nodeTypeId: CONTEXT_TEMPLATE_NODE_TYPE,
+		name: "Turn Template",
+		source: contextConfig.template!
+	})
+	const [respondSpec] = await db
+		.select()
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		.limit(1)
+	// By node type, not "the first template slot": every `template` slot is a
+	// reference now, so the history and lore queries have one too, and picking
+	// the first one silently configures the wrong node.
+	const decl = (
+		await declarations(db as any, respondSpec.activeVersionId!)
+	).find(
+		(d) =>
+			d.control === "context-template-ref" &&
+			d.nodeTypeId === CONTEXT_TEMPLATE_NODE_TYPE
+	)!
+	await db.insert(schema.pipelineNodeOverrides).values({
+		specId: respondSpec.id,
+		scopeKind: "instance",
+		scopeId: 0,
+		nodeKey: decl.nodeKey,
+		slot: decl.slot,
+		path: decl.path,
+		value: template.id
 	})
 }, 60_000)
 
@@ -209,7 +262,7 @@ describe("running a turn", () => {
 			.where(eq(schema.chatMessages.chatId, chatId))
 
 		expect(receipt.preview?.context?.rendered?.rendered).toContain(
-			'LORE:{"The Ashguard"'
+			'LORE:World lore: \n```json\n{"The Ashguard"'
 		)
 		// The whole point of a preview: it is the real payload, and nothing
 		// happened.

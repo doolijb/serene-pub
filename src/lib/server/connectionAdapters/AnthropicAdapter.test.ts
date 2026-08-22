@@ -82,11 +82,11 @@ describe("AnthropicAdapter — base URL trailing-slash normalization", () => {
 			content: [{ type: "text", text: "hi" }]
 		})
 		const adapter = makeAdapter({ baseUrl: "" })
-		vi.spyOn(adapter.promptBuilder, "compilePrompt").mockResolvedValue({
+		adapter.withCompiledPrompt({
 			prompt: undefined,
 			messages: [{ role: "user", content: "hello" }],
 			meta: {} as any
-		})
+		} as any)
 		await adapter.generate()
 		expect(anthropicConstructorMock).toHaveBeenCalledWith(
 			expect.not.objectContaining({ baseURL: expect.anything() })
@@ -101,11 +101,11 @@ describe("AnthropicAdapter — base URL trailing-slash normalization", () => {
 		const adapter = makeAdapter({
 			baseUrl: "https://my-anthropic-proxy.example.com/"
 		})
-		vi.spyOn(adapter.promptBuilder, "compilePrompt").mockResolvedValue({
+		adapter.withCompiledPrompt({
 			prompt: undefined,
 			messages: [{ role: "user", content: "hello" }],
 			meta: {} as any
-		})
+		} as any)
 		await adapter.generate()
 		expect(anthropicConstructorMock).toHaveBeenCalledWith(
 			expect.objectContaining({

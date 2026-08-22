@@ -668,6 +668,228 @@ export type SocketEventMap = {
 		response: Sockets.ContextConfigs.Preview.Response
 	}
 
+	// Pipeline events — the pipeline view (05 §0a) and the management page.
+	"pipelines:list": {
+		params: Sockets.Pipelines.List.Params
+		response: Sockets.Pipelines.List.Response
+	}
+	"pipelines:get": {
+		params: Sockets.Pipelines.Get.Params
+		response: Sockets.Pipelines.Get.Response
+	}
+	// Every mutation answers on "pipelines:get" with the whole resolved view.
+	// One write can move more than one thing on screen — clearing an option
+	// reveals whatever it was shadowing — so acknowledging just the field that
+	// changed would leave the panel disagreeing with the database.
+	"pipelines:setOption": {
+		params: Sockets.Pipelines.SetOption.Params
+		response: Sockets.Pipelines.SetOption.Response
+	}
+	"pipelines:setOption:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:clearOption": {
+		params: Sockets.Pipelines.ClearOption.Params
+		response: Sockets.Pipelines.ClearOption.Response
+	}
+	"pipelines:clearOption:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:selectConfig": {
+		params: Sockets.Pipelines.SelectConfig.Params
+		response: Sockets.Pipelines.SelectConfig.Response
+	}
+	"pipelines:selectConfig:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:clonePrompt": {
+		params: Sockets.Pipelines.ClonePrompt.Params
+		response: Sockets.Pipelines.ClonePrompt.Response
+	}
+	"pipelines:clonePrompt:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:updatePrompt": {
+		params: Sockets.Pipelines.UpdatePrompt.Params
+		response: Sockets.Pipelines.UpdatePrompt.Response
+	}
+	"pipelines:updatePrompt:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:deletePrompt": {
+		params: Sockets.Pipelines.DeletePrompt.Params
+		response: Sockets.Pipelines.DeletePrompt.Response
+	}
+	"pipelines:deletePrompt:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:library": {
+		params: Sockets.Pipelines.Library.Params
+		response: Sockets.Pipelines.Library.Response
+	}
+	"pipelines:library:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:libraryCreateTemplate": {
+		params: Sockets.Pipelines.LibraryTemplateWrite.CreateParams
+		response: Sockets.Pipelines.LibraryTemplateWrite.Response
+	}
+	"pipelines:libraryCreateTemplate:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:libraryCloneTemplate": {
+		params: Sockets.Pipelines.LibraryTemplateWrite.CloneParams
+		response: Sockets.Pipelines.LibraryTemplateWrite.Response
+	}
+	"pipelines:libraryCloneTemplate:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:libraryUpdateTemplate": {
+		params: Sockets.Pipelines.LibraryTemplateWrite.UpdateParams
+		response: Sockets.Pipelines.LibraryTemplateWrite.Response
+	}
+	"pipelines:libraryUpdateTemplate:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:libraryDeleteTemplate": {
+		params: Sockets.Pipelines.LibraryTemplateWrite.DeleteParams
+		response: Sockets.Pipelines.LibraryTemplateWrite.Response
+	}
+	"pipelines:libraryDeleteTemplate:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:libraryClonePrompt": {
+		params: Sockets.Pipelines.LibraryPromptWrite.CloneParams
+		response: Sockets.Pipelines.LibraryPromptWrite.Response
+	}
+	"pipelines:libraryClonePrompt:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:libraryUpdatePrompt": {
+		params: Sockets.Pipelines.LibraryPromptWrite.UpdateParams
+		response: Sockets.Pipelines.LibraryPromptWrite.Response
+	}
+	"pipelines:libraryUpdatePrompt:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:libraryDeletePrompt": {
+		params: Sockets.Pipelines.LibraryPromptWrite.DeleteParams
+		response: Sockets.Pipelines.LibraryPromptWrite.Response
+	}
+	"pipelines:libraryDeletePrompt:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:createContextTemplate": {
+		params: Sockets.Pipelines.CreateContextTemplate.Params
+		response: Sockets.Pipelines.CreateContextTemplate.Response
+	}
+	"pipelines:createContextTemplate:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:cloneContextTemplate": {
+		params: Sockets.Pipelines.CloneContextTemplate.Params
+		response: Sockets.Pipelines.CloneContextTemplate.Response
+	}
+	"pipelines:cloneContextTemplate:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:updateContextTemplate": {
+		params: Sockets.Pipelines.UpdateContextTemplate.Params
+		response: Sockets.Pipelines.UpdateContextTemplate.Response
+	}
+	"pipelines:updateContextTemplate:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:deleteContextTemplate": {
+		params: Sockets.Pipelines.DeleteContextTemplate.Params
+		response: Sockets.Pipelines.DeleteContextTemplate.Response
+	}
+	"pipelines:deleteContextTemplate:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:previewTemplate": {
+		params: Sockets.Pipelines.PreviewTemplate.Params
+		response: Sockets.Pipelines.PreviewTemplate.Response
+	}
+	"pipelines:previewTemplate:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:cloneVariableTemplate": {
+		params: Sockets.Pipelines.CloneVariableTemplate.Params
+		response: Sockets.Pipelines.CloneVariableTemplate.Response
+	}
+	"pipelines:cloneVariableTemplate:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:updateVariableTemplate": {
+		params: Sockets.Pipelines.UpdateVariableTemplate.Params
+		response: Sockets.Pipelines.UpdateVariableTemplate.Response
+	}
+	"pipelines:updateVariableTemplate:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:deleteVariableTemplate": {
+		params: Sockets.Pipelines.DeleteVariableTemplate.Params
+		response: Sockets.Pipelines.DeleteVariableTemplate.Response
+	}
+	"pipelines:deleteVariableTemplate:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:reviews": {
+		params: Sockets.Pipelines.Reviews.Params
+		response: Sockets.Pipelines.Reviews.Response
+	}
+	"pipelines:resolveReview": {
+		params: Sockets.Pipelines.ResolveReview.Params
+		response: Sockets.Pipelines.ResolveReview.Response
+	}
+	"pipelines:resolveReview:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:reviewRequested": {
+		params: never
+		response: Sockets.Pipelines.PendingReview
+	}
+	"pipelines:reviewClosed": {
+		params: never
+		response: { id: string }
+	}
+	"pipelines:detail": {
+		params: Sockets.Pipelines.Detail.Params
+		response: Sockets.Pipelines.Detail.Response
+	}
+	"pipelines:detail:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:runs": {
+		params: Sockets.Pipelines.Runs.Params
+		response: Sockets.Pipelines.Runs.Response
+	}
+
 	// Prompt Config events
 	"promptConfigs:list": {
 		params: Sockets.PromptConfigs.List.Params

@@ -360,6 +360,12 @@ export interface CompileInput {
 	sampling: SelectSamplingConfig
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
+	/**
+	 * The history pipeline's configured synth prompt, when a person chose one.
+	 * Blank falls back to the template's own default — the same rule the
+	 * summarize-synth binding applies.
+	 */
+	synthSystemPrompt?: string | null
 	onProgress?: (data: CompileProgressData) => void
 	signal?: AbortSignal
 }
@@ -430,7 +436,10 @@ export async function compileScenesForEntry(
 	const synthesisPrompt = buildSynthesisPrompt({
 		jsonDrafts,
 		loreType: "history",
-		topic: undefined
+		topic: undefined,
+		systemPromptOverride: input.synthSystemPrompt?.trim()
+			? input.synthSystemPrompt
+			: null
 	})
 	const synthesisRaw = await runGeneration(synthesisPrompt, {
 		...genOpts,

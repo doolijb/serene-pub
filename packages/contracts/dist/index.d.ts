@@ -1342,4 +1342,473 @@ export declare const emitSocket: import("@serene-pub/sdk").Pinned<{
     causesEvent?: string | undefined;
     usage?: string | undefined;
 }>;
+export declare const summarizeRequest: import("@serene-pub/sdk").Pinned<{
+    kind: "input";
+    id: "core:input/summarize-request@1";
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: import("@serene-pub/sdk").PortDecl | undefined;
+        out?: {
+            main: string;
+            scope: string;
+            request: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+/** The messages a summary is drawn from, already scoped and ordered. */
+export declare const summarizeSource: import("@serene-pub/sdk").Pinned<{
+    kind: "query";
+    id: "core:query/summarize-source@1";
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            scope: string;
+            request: string;
+        } | undefined;
+        out?: {
+            main: string;
+            messages: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+/**
+ * Cut the messages into batches a model can hold.
+ *
+ * A Task, not a Query: the cut is a *decision* — how many tokens per batch, and
+ * therefore how much context each draft is written against — and it is the
+ * first parameter a user with long posts reaches for.
+ */
+export declare const batchMessages: import("@serene-pub/sdk").Pinned<{
+    kind: "task";
+    id: "core:task/batch-messages@1";
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            messages: string;
+        } | undefined;
+        out?: {
+            main: string;
+            batches: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+/** Phase 1 — one batch, drafted without sight of any other. */
+export declare const summarizeBatch: import("@serene-pub/sdk").Pinned<{
+    kind: "provider";
+    id: "core:provider/summarize-batch@1";
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            batch: string;
+        } | undefined;
+        out?: {
+            main: string;
+            draft: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+/** Phase 2 — the ordered drafts merged into one past-tense narrative. */
+export declare const summarizeSynth: import("@serene-pub/sdk").Pinned<{
+    kind: "provider";
+    id: "core:provider/summarize-synth@1";
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            drafts: string;
+        } | undefined;
+        out?: {
+            main: string;
+            content: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+/** What the entry gets called. Its own step because it has its own prompt. */
+export declare const nameEntry: import("@serene-pub/sdk").Pinned<{
+    kind: "provider";
+    id: "core:provider/name-entry@1";
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            content: string;
+        } | undefined;
+        out?: {
+            main: string;
+            name: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+/**
+ * Who was in the scene — scene summaries only.
+ *
+ * Present on one summarize pipeline and not the other three, which is exactly
+ * why they are four specs rather than one spec with a flag. A flag would put the
+ * difference in a condition somebody has to find; four specs put it in the shape.
+ */
+export declare const extractCast: import("@serene-pub/sdk").Pinned<{
+    kind: "provider";
+    id: "core:provider/extract-cast@1";
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            content: string;
+            messages: string;
+        } | undefined;
+        out?: {
+            main: string;
+            cast: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+/** Write the finished entry. Gate-eligible, so it publishes a write result. */
+export declare const createLoreEntry: import("@serene-pub/sdk").Pinned<{
+    kind: "consumer";
+    id: "core:consumer/create-lore-entry@1";
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            name: string;
+            content: string;
+        } | undefined;
+        out?: {
+            main: string;
+            entryId: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+export declare const graphScenes: import("@serene-pub/sdk").Pinned<{
+    kind: "query";
+    id: "core:query/graph-scenes@1";
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            scope: string;
+        } | undefined;
+        out?: {
+            main: string;
+            scenes: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+/** Which existing node a mentioned name refers to, or whether it is new. */
+export declare const graphNodeResolution: import("@serene-pub/sdk").Pinned<{
+    kind: "provider";
+    id: string;
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            scenes: string;
+        } | undefined;
+        out?: {
+            main: string;
+            result: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+/** Drop what is not worth graphing before the expensive steps run. */
+export declare const graphPreFilter: import("@serene-pub/sdk").Pinned<{
+    kind: "provider";
+    id: string;
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            scenes: string;
+        } | undefined;
+        out?: {
+            main: string;
+            result: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+/** Whose account of the scene this is. */
+export declare const graphPerspective: import("@serene-pub/sdk").Pinned<{
+    kind: "provider";
+    id: string;
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            scenes: string;
+        } | undefined;
+        out?: {
+            main: string;
+            result: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+/** The two-sentence introduction written for a newly discovered character. */
+export declare const graphNodeDescription: import("@serene-pub/sdk").Pinned<{
+    kind: "provider";
+    id: string;
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            scenes: string;
+        } | undefined;
+        out?: {
+            main: string;
+            result: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+/** Did any present character reach a new lifecycle state this scene? */
+export declare const graphStateDetection: import("@serene-pub/sdk").Pinned<{
+    kind: "provider";
+    id: string;
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            scenes: string;
+        } | undefined;
+        out?: {
+            main: string;
+            result: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
+/**
+ * The proposal, held for review.
+ *
+ * `effects: 'write'` and therefore gate-eligible, which is the mechanism behind
+ * the rule that a graph build **stops at the review screen** and never applies
+ * itself. Under `async` review the proposal is exactly that — a proposal — and
+ * `write-result@1` is the shape that refuses to be mistaken for row ids.
+ */
+export declare const graphProposal: import("@serene-pub/sdk").Pinned<{
+    kind: "consumer";
+    id: "core:consumer/graph-proposal@1";
+    i18n?: {
+        name?: import("@serene-pub/sdk").I18n;
+        description?: import("@serene-pub/sdk").I18n;
+    } | undefined;
+    slots?: Record<string, import("@serene-pub/sdk").SlotDecl> | undefined;
+    ports: {
+        in?: {
+            proposal: string;
+        } | undefined;
+        out?: {
+            main: string;
+            proposalId: string;
+        } | undefined;
+    };
+    effects?: "none" | "external" | "write" | "emit" | undefined;
+    reviewDefault?: "off" | "async" | "sync" | undefined;
+    shape?: import("@serene-pub/sdk").ShapeId | undefined;
+    toggleable?: boolean | undefined;
+    declaresRandomness?: boolean | undefined;
+    earlyExit?: boolean | undefined;
+    public?: boolean | undefined;
+    timeoutMs?: number | undefined;
+    timeoutKind?: "wall" | "idle" | undefined;
+    causesEvent?: string | undefined;
+    usage?: string | undefined;
+}>;
 //# sourceMappingURL=index.d.ts.map

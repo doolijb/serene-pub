@@ -218,3 +218,113 @@ describe("lore retrieval in a pipeline", () => {
 		).rejects.toThrow(/may only read the chat it was triggered in/)
 	})
 })
+
+/**
+ * Character lore is private self-knowledge, and the pipeline never enforced it.
+ *
+ * `isCharacterLoreEntryVisible` has gated this on the legacy path since it was
+ * written; nothing under `pipelines/` called it, so every character's private
+ * lore competed for the same ranking budget as world lore on every turn — and
+ * would have leaked outright the moment character lore was wired into the cast
+ * cards. The gate now runs at the host read, next to the decorator stripping,
+ * for the reason the file already gives for `isHidden`: a new Query type cannot
+ * forget what the read applies for it.
+ */
+describe("character lore is only visible to whoever it belongs to", () => {
+	let ash: number
+	let bran: number
+	let loreChat: number
+
+	const node = {
+		key: "lore",
+		typeId: "core:query/lorebook-triggers",
+		typeVersion: 1,
+		kind: "query" as const
+	}
+
+	beforeAll(async () => {
+		const [a] = await db
+			.insert(schema.characters)
+			.values({ userId, name: "Ash", description: "A rider." })
+			.returning()
+		const [b] = await db
+			.insert(schema.characters)
+			.values({ userId, name: "Brannoc", description: "A smith." })
+			.returning()
+		ash = a.id
+		bran = b.id
+
+		const [chat] = await db
+			.insert(schema.chats)
+			.values({ userId, isGroup: true, lorebookId })
+			.returning()
+		loreChat = chat.id
+
+		const [binding] = await db
+			.insert(schema.lorebookBindings)
+			.values({ lorebookId, characterId: ash, binding: "{{char:1}}" })
+			.returning()
+		// Bound to nothing: a background/NPC row, which the rule reserves for
+		// the omniscient narrator.
+		const [npc] = await db
+			.insert(schema.lorebookBindings)
+			.values({ lorebookId, binding: "{{char:2}}" })
+			.returning()
+
+		await db.insert(schema.characterLoreEntries).values([
+			{
+				lorebookId,
+				lorebookBindingId: binding.id,
+				name: "Ash's secret",
+				keys: "secret",
+				content: "Ash opened the lower gate."
+			},
+			{
+				lorebookId,
+				lorebookBindingId: npc.id,
+				name: "The gatekeeper",
+				keys: "gate",
+				content: "Nobody remembers who hired them."
+			}
+		])
+	})
+
+	const readAs = async (currentCharacterId: number | null) => {
+		const host = createHost(db as any, { chatId: loreChat, userId })
+		const rows = (await host.read!(
+			"lorebook_entries",
+			{ chatId: loreChat, currentCharacterId },
+			node
+		)) as any[]
+		return rows
+			.filter((r) => r.source === "characterLore")
+			.map((r) => r.name)
+	}
+
+	it("shows a character their own lore", async () => {
+		expect(await readAs(ash)).toContain("Ash's secret")
+	})
+
+	it("hides it from everyone else", async () => {
+		// The failure this prevents: Brannoc's reply is budgeted against — and
+		// would eventually be written from — knowledge only Ash has.
+		expect(await readAs(bran)).not.toContain("Ash's secret")
+	})
+
+	it("reserves an unbound entry for the narrator", async () => {
+		expect(await readAs(null)).toContain("The gatekeeper")
+		expect(await readAs(ash)).not.toContain("The gatekeeper")
+	})
+
+	it("never gates world lore, which has no binding to gate on", async () => {
+		const host = createHost(db as any, { chatId: loreChat, userId })
+		const rows = (await host.read!(
+			"lorebook_entries",
+			{ chatId: loreChat, currentCharacterId: bran },
+			node
+		)) as any[]
+		expect(
+			rows.filter((r) => r.source === "worldLore").length
+		).toBeGreaterThan(0)
+	})
+})

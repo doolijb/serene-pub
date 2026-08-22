@@ -1,0 +1,200 @@
+/**
+ * The frozen-type guard, as a checked-in fact.
+ *
+ * `syncTypeRegistry` refuses to republish a type version whose content changed,
+ * which is the right rule — a spec that pinned `@1` would otherwise keep
+ * compiling and start behaving differently. But look at what the refusal *does*
+ * on a running instance: `bootstrapPipelines` catches `TypeRegistryConflictError`,
+ * puts the message in `report.conflict`, and **returns early**
+ * (`bootstrap.ts:90-96`). Specs are never seeded, the legacy migration never
+ * runs, and pipelines quietly stop working. Nothing in the test suite notices,
+ * because a fresh test database has no prior rows to conflict with — the
+ * conflict only exists on databases that booted the *previous* build.
+ *
+ * So the failure mode is: add a parameter to a descriptor, all tests pass, ship
+ * it, and every existing install loses pipelines on the next restart with a
+ * message only the diagnostics screen shows.
+ *
+ * This file is the thing that notices. It records what each published type
+ * hashes to today. Editing a descriptor changes its hash, this test fails on a
+ * clean database, and the failure message says which of the three legitimate
+ * answers applies. It is a snapshot on purpose: the whole point is that it can
+ * only be updated deliberately.
+ */
+
+import { describe, it, expect } from "vitest"
+import { allTypes, snapshotRegistry } from "@serene-pub/sdk"
+import { typeContentHash } from "./registrySync"
+// Importing the contracts is what registers them — the same fact-about-the-code
+// route `bootstrapPipelines` takes, rather than a list maintained beside it.
+//
+// Note that `@serene-pub/contracts` resolves to its **`dist`**, not its source
+// (its package `exports` say so). That is deliberate — this guards what actually
+// ships and what the running app loads — but it means editing a descriptor in
+// `serene-pub-sdk/contracts/src` changes nothing here until that package is
+// rebuilt. If you edited a descriptor and this test did not react, you have not
+// run `npm run build` in the contracts package yet, and neither has the app.
+import "@serene-pub/contracts"
+
+/**
+ * `pin -> contentHash`, for every type this build publishes.
+ *
+ * **Do not update a line here to make a test pass.** A changed hash means the
+ * contract of an already-published type version moved, and there are exactly
+ * three correct responses:
+ *
+ * 1. **Bump the version.** Publish `@2` and leave `@1` in place for the specs
+ *    pinning it. This is the default answer for a real contract change — a port,
+ *    a parameter's default, a range, an enum's options.
+ * 2. **You changed only display text.** Labels (`i18n`) and `description` are
+ *    stripped before hashing precisely so they can change freely. If the hash
+ *    moved, you changed something else too — find it.
+ * 3. **You wrote a re-projection migration.** Migrations 0099 and 0106 delete
+ *    the affected registry rows so the next boot re-projects them. That is
+ *    deliberately narrow, only safe pre-1.0 while the versions in question have
+ *    no third-party pins, and must not become the habit. If that is what you
+ *    did, update the hash here in the same commit as the migration.
+ *
+ * Adding a *new* type is safe and needs no migration — just add its line.
+ */
+const PUBLISHED_HASHES: Record<string, string> = {
+	"chariot.comfy:render-image@1": "40eaf237a3e28",
+	"chariot.dice-tray:roll@1": "b7457cf04e36d",
+	"chariot.recall:rank-recall@1": "17b9069e6e0b65",
+	"core:consumer/attach-audio@1": "2a3ce393ac3d8",
+	"core:consumer/attach-image@1": "dce5f172a6edb",
+	"core:consumer/create-lore-entry@1": "f8eff8031562c",
+	"core:consumer/create-message@1": "1076dd9c2f6528",
+	"core:consumer/emit-socket@1": "7658edce87c6",
+	"core:consumer/graph-proposal@1": "437560532d042",
+	"core:consumer/save-plugin-data@1": "1548f67cc814f",
+	"core:consumer/update-message@1": "1d32e4901e19ab",
+	"core:input/message-created@1": "f90c5108c7e82",
+	"core:input/summarize-request@1": "9561582884e0d",
+	"core:input/user-message@1": "1f7b82b8ef2c69",
+	"core:provider/embed-text@1": "12e3548cdb3dfd",
+	"core:provider/extract-cast@1": "1099202316ec2",
+	"core:provider/generate-text@1": "1e1e398db743a9",
+	"core:provider/graph-node-description@1": "8c3c9e8f94a08",
+	"core:provider/graph-node-resolution@1": "18ee95d1b30160",
+	"core:provider/graph-perspective@1": "ff5ac2499f01c",
+	"core:provider/graph-pre-filter@1": "d2372f3251472",
+	"core:provider/graph-state-detection@1": "9b7ed59964252",
+	"core:provider/mcp-tool@1": "35313c980bc25",
+	"core:provider/name-entry@1": "157e665b28a6f2",
+	"core:provider/speak@1": "1f896569ea4aa7",
+	"core:provider/summarize-batch@1": "1036d3a6c3c00b",
+	"core:provider/summarize-synth@1": "11ad7d0d3c55a7",
+	"core:query/chat-cast@1": "1c16601381af90",
+	"core:query/chat-history@1": "1ed84576a104e5",
+	// New in 0.6-preview. Adding a type inserts a row; it conflicts with
+	// nothing, so this needs no re-projection.
+	"core:query/graph-context@1": "8cdac14b54b60",
+	"core:query/graph-scenes@1": "a537a95812a15",
+	"core:query/lorebook-probabilistic@1": "6ac9faa6efbb8",
+	"core:query/lorebook-triggers@1": "4db0ae6e84513",
+	"core:query/message-text@1": "13028fee53a4e1",
+	"core:query/persona-card@1": "a0b05bce48983",
+	"core:query/summarize-source@1": "14a315ad021334",
+	"core:query/vector-search@1": "13d873a69d26e0",
+	// Gained a `variables` slot for its post-budget lore and history in
+	// 0.6-preview. Re-projected by migration 0108, on the same terms as 0107.
+	"core:task/assemble@2": "24754b533b6dd",
+	"core:task/batch-messages@1": "1666e1b5864572",
+	// Gained the `variables` slot in 0.6-preview (migration 0107), then a
+	// `speakerRelationships` layout when the graph query was wired in
+	// (migration 0111). Answer 3 above both times, and the only reason it is
+	// legitimate is that no third party has pinned this version yet.
+	"core:task/build-template-context@1": "7a6cf4f4b200f",
+	"core:task/chunk-text@1": "5cef916d3eef",
+	"core:task/context-budget@1": "1a47997856df6e",
+	"core:task/first-json@1": "13093e6bda129",
+	"core:task/merge-candidates@1": "8fb80a93f5f72",
+	"core:task/process-messages@1": "4e72fbc9c454",
+	"core:task/query-windows@1": "74d68f49e4992",
+	"core:task/rank-by-recency@1": "1185095151baf2",
+	"core:task/rank-hybrid@1": "1185095151baf2",
+	"core:task/rank-semantic@1": "d6d78af40280e",
+	"core:task/render-entries@1": "1867b2d73e2e1",
+	"core:task/to-candidates@1": "174b5c86bb414b",
+	// The `test:` fixtures are published by the same module as everything else,
+	// so a running instance has rows for them and they freeze on exactly the same
+	// terms. Editing one to suit an SDK test would stop pipelines on every
+	// upgraded install — which is worth knowing before it happens, not after.
+	"test:query/network@1": "c1601e776f664",
+	"test:task/bad-toggleable@1": "594a2f094b17a",
+	"test:task/gate@1": "cf73634860fe1",
+	"test:task/passthrough@1": "cf73634860fe1",
+	"test:task/sloppy-stream@1": "13093e6bda129",
+	"test:task/slow@1": "cf73634860fe1"
+}
+
+/** `release` is not hashed, so its value here is arbitrary. */
+const current = (): Record<string, string> => {
+	const out: Record<string, string> = {}
+	for (const entry of snapshotRegistry(allTypes(), { release: "test" }))
+		out[`${entry.id}@${entry.version}`] = typeContentHash(entry)
+	return out
+}
+
+const WHAT_TO_DO =
+	"\n\nA published type version is frozen. Bump the version, or ship a registry " +
+	"re-projection migration (see 0099/0106) and update the hash in the same commit. " +
+	"Read the comment above PUBLISHED_HASHES before editing it."
+
+describe("published type content hashes", () => {
+	const now = current()
+
+	it("has not changed under any already-published pin", () => {
+		const drifted = Object.entries(PUBLISHED_HASHES)
+			.filter(([pin, hash]) => pin in now && now[pin] !== hash)
+			.map(([pin, hash]) => `${pin}: recorded ${hash}, code ${now[pin]}`)
+
+		expect(drifted, drifted.length ? WHAT_TO_DO : undefined).toEqual([])
+	})
+
+	it("records every type this build publishes", () => {
+		// A new type is safe to add — this only keeps the file complete, so the
+		// drift check above stays meaningful as the registry grows.
+		const unrecorded = Object.keys(now).filter(
+			(pin) => !(pin in PUBLISHED_HASHES)
+		)
+		expect(
+			unrecorded,
+			unrecorded.length
+				? "\n\nNew type(s). Adding a type needs no migration — add the pin and " +
+						"its hash to PUBLISHED_HASHES."
+				: undefined
+		).toEqual([])
+	})
+
+	it("still publishes every type it has published before", () => {
+		// Deleting a published version orphans every spec that pinned it, which
+		// fails at load rather than at boot. Deliberate removals update this file.
+		const missing = Object.keys(PUBLISHED_HASHES).filter(
+			(pin) => !(pin in now)
+		)
+		expect(
+			missing,
+			missing.length
+				? "\n\nType(s) no longer published. Any stored spec pinning one of " +
+						"these can no longer be loaded."
+				: undefined
+		).toEqual([])
+	})
+
+	it("ignores display text, which is the promise that lets labels change", () => {
+		// The guard is only trustworthy if its exclusions actually hold: if
+		// `i18n`/`description` leaked into the hash, every copyedit would read as
+		// a contract change and the three tests above would cry wolf until someone
+		// stopped reading them.
+		const [entry] = snapshotRegistry(allTypes(), { release: "test" })
+		const before = typeContentHash(entry)
+		const after = typeContentHash({
+			...entry,
+			i18n: { name: { en: "Something else entirely" } },
+			description: "and a different explanation"
+		} as any)
+		expect(after).toBe(before)
+	})
+})

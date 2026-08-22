@@ -82,6 +82,33 @@ export declare const S: {
      * the type, not to the spec.
      */
     readonly writeResult: string;
+    /**
+     * A request to summarize something into a lore entry.
+     *
+     * Its own shape rather than `json@1` because it is what the summarize
+     * pipelines take as *input*, and 11 §2 matches an event's payload against a
+     * pipeline's Input contract by shape. A request typed as bare json would make
+     * every pipeline compatible with every event.
+     */
+    readonly summarizeRequest: string;
+    /**
+     * The ordered batch drafts phase 1 produces, before synthesis merges them.
+     *
+     * Ordered, and the order is load-bearing: the drafts are chronological
+     * slices of a conversation and synthesis reads them as a sequence. A shape
+     * that permitted reordering would turn a narrative into a pile of events.
+     */
+    readonly drafts: string;
+    /** Scenes with their messages, as the graph builder walks them. */
+    readonly graphScenes: string;
+    /**
+     * A proposed set of graph nodes and relationships, before a person approves it.
+     *
+     * Distinct from anything holding row ids, for the reason `write-result@1`
+     * exists: a proposal is not yet a row, and a downstream node that treated it
+     * as one would wire a foreign key to something a reviewer may still reject.
+     */
+    readonly graphProposal: string;
     readonly audio: string;
     readonly image: string;
     readonly json: string;

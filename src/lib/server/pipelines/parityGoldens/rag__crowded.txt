@@ -1,0 +1,10 @@
+Instructions:
+"""
+You are Alice.
+"""
+WORLDLORE:World lore: 
+```json
+{"Ashguard Riders":"ashguard riders patrol","Ashguard Oath":"ashguard oath of the wastes","Ashguard Banner":"ashguard banner of grey"}
+```
+Bob: Tell me about the ashguard.
+Alice: 

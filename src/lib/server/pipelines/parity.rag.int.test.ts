@@ -21,6 +21,7 @@ import { describe, it, expect, beforeAll, vi } from "vitest"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { type ParityFixture, type RenderConfigs } from "./parity"
 import { renderParity, parityGate, checkParity } from "@serene-pub/sdk"
+import { wrapFor } from "./variableLayouts"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 
@@ -104,12 +105,37 @@ vi.mock("$lib/server/embedding/ragContext", () => ({
 let db: TestDb
 let configs: RenderConfigs
 
-const TEMPLATE = [
-	"{{instructions}}",
-	"WORLDLORE:{{{worldLore}}}",
-	"{{#each chatMessages}}{{this.name}}: {{this.message}}",
-	"{{/each}}"
-].join("\n")
+/**
+ * The corpus template, in both releases' terms — same split as the keyword
+ * corpus, for the same reason.
+ *
+ * 0.6 moved the headings and fences out of the context template and into the
+ * variable layouts. The pipeline renders a template that writes none and gets
+ * values that carry them; 0.5's builder does the reverse. See
+ * `parity.int.test.ts` for the longer note; the `{{#if}}` guards are there
+ * because core's template guards and an unguarded one would compare a state no
+ * install can reach.
+ */
+const corpusTemplate = (wrappers: "template" | "layouts") => {
+	const v = (key: string) => {
+		const expr = `{{{${key}}}}`
+		const wrap = wrapFor(key)
+		if (!wrap) return expr
+		const body = wrappers === "template" ? wrap(expr) : expr
+		return `{{#if ${key}}}${body}{{/if}}`
+	}
+	return [
+		v("instructions"),
+		`WORLDLORE:${v("worldLore")}`,
+		"{{#each chatMessages}}{{this.name}}: {{this.message}}",
+		"{{/each}}"
+	].join("\n")
+}
+
+/** What the pipeline renders: structure only, wrappers supplied by layouts. */
+const TEMPLATE = corpusTemplate("layouts")
+/** What 0.5 rendered: the same prompt, with the wrappers typed in. */
+const LEGACY_TEMPLATE = corpusTemplate("template")
 
 beforeAll(async () => {
 	// The *same* instance the mock returns, so the legacy gate, the legacy
@@ -120,7 +146,7 @@ beforeAll(async () => {
 
 	const [contextConfig] = await db
 		.insert(schema.contextConfigs)
-		.values({ name: "RAG Parity Context", template: TEMPLATE })
+		.values({ name: "RAG Parity Context", template: LEGACY_TEMPLATE })
 		.returning()
 	const [promptConfig] = await db
 		.insert(schema.promptConfigs)
@@ -322,7 +348,8 @@ describe("the semantic parity corpus", () => {
 	})
 
 	it("reports where the paths diverge", async () => {
-		const { legacyRender, ragParityPipeline } = await import("./parity")
+		const { goldenPathFor, ragParityPipeline } = await import("./parity")
+		const { readFileSync } = await import("node:fs")
 		const { createHost } = await import("./host")
 		const { buildWorld } = await import("./world")
 		const { coreBindings } = await import("./bindings")
@@ -331,12 +358,28 @@ describe("the semantic parity corpus", () => {
 		const results = []
 		for (const fixture of CORPUS) {
 			const scope = await fixture.seed(db as any)
-			const legacy = await legacyRender(db as any, scope, configs)
+			// The legacy row holds 0.5's template; the pipeline is handed 0.6's.
+			// The deliberate asymmetry `FixtureScope.pipelineTemplate`
+			// documents — two tables, two releases. This corpus builds its own
+			// world rather than going through `pipelinePreview`, so it layers
+			// the pipeline's side itself.
+			// Frozen 0.5 output, not a live legacy render — see `resolveGolden`.
+			// The builder these came from is deleted; freezing them first is
+			// what lets this corpus outlive it.
+			const legacy = readFileSync(goldenPathFor(fixture.name), "utf8")
+			const world = await buildWorld(db as any, {
+				chatId: scope.chatId,
+				userId: scope.userId
+			})
+			world.overrides.push({
+				nodeKey: "prompt",
+				slot: "template",
+				path: "source",
+				value: TEMPLATE,
+				scopeKind: "defaults"
+			} as any)
 			const preview: any = await run(ragParityPipeline(), {
-				world: await buildWorld(db as any, {
-					chatId: scope.chatId,
-					userId: scope.userId
-				}),
+				world,
 				input: {
 					text: scope.text,
 					chatScope: {

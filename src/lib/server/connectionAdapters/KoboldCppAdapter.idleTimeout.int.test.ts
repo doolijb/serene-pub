@@ -72,11 +72,11 @@ function makeAdapter(baseUrl: string) {
 		} as any,
 		currentCharacterId: null
 	})
-	vi.spyOn(adapter.promptBuilder, "compilePrompt").mockResolvedValue({
+	adapter.withCompiledPrompt({
 		prompt: "hi",
 		messages: [{ role: "user", content: "hi" }],
 		meta: {} as any
-	})
+	} as any)
 	return adapter
 }
 

@@ -10,7 +10,7 @@ import { describe, it, expect } from "vitest"
 import {
 	formatMessageForQuery,
 	queryWindows
-} from "$lib/server/utils/promptBuilder/ragQuery"
+} from "./ragQuery"
 
 const cast = {
 	chatCharacters: [

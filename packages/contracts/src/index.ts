@@ -891,3 +891,303 @@ export const emitSocket = pin(
 		ports: { in: { from: S.json }, out: { main: S.json } }
 	})
 )
+
+// ── Summarization ───────────────────────────────────────────────────────────
+//
+// Two phases, and the split is the whole design (see `utils/summarizer`):
+// messages are cut into token-sized batches and each is drafted **on its own**,
+// then the ordered drafts are merged into one narrative. Drafting a batch in
+// isolation is what keeps a long chat summarizable at all — the model never
+// sees more than one batch — and it is why the batch step is a `map` rather
+// than a loop: the batches do not depend on each other, so nothing forces them
+// to be sequential except the connection's own queue.
+//
+// Each step is its own Provider because each has its own prompt, connection and
+// sampling config in the tables this replaces. That was already true; it was
+// just spelled as `batch_system_prompt` / `synth_connection_id` columns rather
+// than as nodes.
+
+export const summarizeRequest = pin(
+	describeInput({
+		id: "core:input/summarize-request@1",
+		ports: {
+			out: {
+				main: S.summarizeRequest,
+				scope: S.chatScope,
+				request: S.summarizeRequest
+			}
+		}
+	})
+)
+
+/** The messages a summary is drawn from, already scoped and ordered. */
+export const summarizeSource = pin(
+	describeQueryType({
+		id: "core:query/summarize-source@1",
+		i18n: { name: { en: "Messages to summarize" } },
+		timeoutMs: 5000,
+		ports: {
+			in: { scope: S.chatScope, request: S.summarizeRequest },
+			out: { main: S.messages, messages: S.messages }
+		}
+	})
+)
+
+/**
+ * Cut the messages into batches a model can hold.
+ *
+ * A Task, not a Query: the cut is a *decision* — how many tokens per batch, and
+ * therefore how much context each draft is written against — and it is the
+ * first parameter a user with long posts reaches for.
+ */
+export const batchMessages = pin(
+	describeTaskType({
+		id: "core:task/batch-messages@1",
+		i18n: { name: { en: "Batch messages" } },
+		timeoutMs: 2000,
+		slots: {
+			params: {
+				kind: "parameters",
+				facet: "weights",
+				schema: {
+					batchTokens: { type: "integer", default: 2048 },
+					minBatchMessages: { type: "integer", default: 1 }
+				}
+			}
+		},
+		ports: {
+			in: { messages: S.messages },
+			out: { main: S.drafts, batches: S.drafts }
+		}
+	})
+)
+
+/** Phase 1 — one batch, drafted without sight of any other. */
+export const summarizeBatch = pin(
+	describeProvider({
+		id: "core:provider/summarize-batch@1",
+		i18n: { name: { en: "Draft a batch" } },
+		shape: S.textGen,
+		effects: "external",
+		timeoutMs: 120000,
+		timeoutKind: "idle",
+		usage: "response.usage",
+		slots: {
+			connection: { kind: "connection", shape: S.textGen },
+			sampling: { kind: "sampling", shape: S.textGen },
+			prompts: {
+				kind: "prompts",
+				facet: "prompts",
+				fields: { batch: { type: "text" } }
+			}
+		},
+		ports: {
+			in: { batch: S.messages },
+			out: { main: S.textStream, draft: S.textStream }
+		}
+	})
+)
+
+/** Phase 2 — the ordered drafts merged into one past-tense narrative. */
+export const summarizeSynth = pin(
+	describeProvider({
+		id: "core:provider/summarize-synth@1",
+		i18n: { name: { en: "Synthesize the drafts" } },
+		shape: S.textGen,
+		effects: "external",
+		timeoutMs: 120000,
+		timeoutKind: "idle",
+		usage: "response.usage",
+		slots: {
+			connection: { kind: "connection", shape: S.textGen },
+			sampling: { kind: "sampling", shape: S.textGen },
+			prompts: {
+				kind: "prompts",
+				facet: "prompts",
+				fields: { synth: { type: "text" } }
+			}
+		},
+		ports: {
+			in: { drafts: S.drafts },
+			out: { main: S.textStream, content: S.textStream }
+		}
+	})
+)
+
+/** What the entry gets called. Its own step because it has its own prompt. */
+export const nameEntry = pin(
+	describeProvider({
+		id: "core:provider/name-entry@1",
+		i18n: { name: { en: "Name the entry" } },
+		shape: S.textGen,
+		effects: "external",
+		timeoutMs: 60000,
+		usage: "response.usage",
+		slots: {
+			connection: { kind: "connection", shape: S.textGen },
+			sampling: { kind: "sampling", shape: S.textGen },
+			prompts: {
+				kind: "prompts",
+				facet: "prompts",
+				fields: { name: { type: "text" } }
+			}
+		},
+		ports: {
+			in: { content: S.text },
+			out: { main: S.textStream, name: S.textStream }
+		}
+	})
+)
+
+/**
+ * Who was in the scene — scene summaries only.
+ *
+ * Present on one summarize pipeline and not the other three, which is exactly
+ * why they are four specs rather than one spec with a flag. A flag would put the
+ * difference in a condition somebody has to find; four specs put it in the shape.
+ */
+export const extractCast = pin(
+	describeProvider({
+		id: "core:provider/extract-cast@1",
+		i18n: { name: { en: "Extract the cast" } },
+		shape: S.textGen,
+		effects: "external",
+		timeoutMs: 60000,
+		usage: "response.usage",
+		slots: {
+			connection: { kind: "connection", shape: S.textGen },
+			sampling: { kind: "sampling", shape: S.textGen },
+			prompts: {
+				kind: "prompts",
+				facet: "prompts",
+				fields: { characterExtraction: { type: "text" } }
+			}
+		},
+		ports: {
+			in: { content: S.text, messages: S.messages },
+			out: { main: S.json, cast: S.json }
+		}
+	})
+)
+
+/** Write the finished entry. Gate-eligible, so it publishes a write result. */
+export const createLoreEntry = pin(
+	describeConsumerTarget({
+		id: "core:consumer/create-lore-entry@1",
+		i18n: { name: { en: "Save the lore entry" } },
+		effects: "write",
+		timeoutMs: 10000,
+		causesEvent: "core:event/lore-entry-created@1",
+		ports: {
+			in: { name: S.text, content: S.text },
+			out: { main: S.writeResult, entryId: S.writeResult }
+		}
+	})
+)
+
+// ── Graph build ─────────────────────────────────────────────────────────────
+//
+// Five LLM steps, each already independently configurable in
+// `graph_build_configs` as a `<step>_system_prompt` / `<step>_connection_id` /
+// `<step>_sampling_config_id` triple. Five Providers is the same statement with
+// the enumeration removed.
+
+export const graphScenes = pin(
+	describeQueryType({
+		id: "core:query/graph-scenes@1",
+		i18n: { name: { en: "Scenes to build from" } },
+		timeoutMs: 5000,
+		ports: {
+			in: { scope: S.chatScope },
+			out: { main: S.graphScenes, scenes: S.graphScenes }
+		}
+	})
+)
+
+const graphStep = (
+	id: string,
+	label: string,
+	field: string,
+	extra: { timeoutMs?: number } = {}
+) =>
+	pin(
+		describeProvider({
+			id,
+			i18n: { name: { en: label } },
+			shape: S.textGen,
+			effects: "external",
+			timeoutMs: extra.timeoutMs ?? 120000,
+			timeoutKind: "idle",
+			usage: "response.usage",
+			slots: {
+				connection: { kind: "connection", shape: S.textGen },
+				sampling: { kind: "sampling", shape: S.textGen },
+				prompts: {
+					kind: "prompts",
+					facet: "prompts",
+					fields: { [field]: { type: "text" } }
+				}
+			},
+			ports: {
+				in: { scenes: S.graphScenes },
+				out: { main: S.json, result: S.json }
+			}
+		})
+	)
+
+/** Which existing node a mentioned name refers to, or whether it is new. */
+export const graphNodeResolution = graphStep(
+	"core:provider/graph-node-resolution@1",
+	"Resolve nodes",
+	"nodeResolution"
+)
+
+/** Drop what is not worth graphing before the expensive steps run. */
+export const graphPreFilter = graphStep(
+	"core:provider/graph-pre-filter@1",
+	"Pre-filter",
+	"preFilter"
+)
+
+/** Whose account of the scene this is. */
+export const graphPerspective = graphStep(
+	"core:provider/graph-perspective@1",
+	"Perspective",
+	"perspective"
+)
+
+/** The two-sentence introduction written for a newly discovered character. */
+export const graphNodeDescription = graphStep(
+	"core:provider/graph-node-description@1",
+	"Describe new nodes",
+	"nodeDescription"
+)
+
+/** Did any present character reach a new lifecycle state this scene? */
+export const graphStateDetection = graphStep(
+	"core:provider/graph-state-detection@1",
+	"Detect state changes",
+	"stateDetection"
+)
+
+/**
+ * The proposal, held for review.
+ *
+ * `effects: 'write'` and therefore gate-eligible, which is the mechanism behind
+ * the rule that a graph build **stops at the review screen** and never applies
+ * itself. Under `async` review the proposal is exactly that — a proposal — and
+ * `write-result@1` is the shape that refuses to be mistaken for row ids.
+ */
+export const graphProposal = pin(
+	describeConsumerTarget({
+		id: "core:consumer/graph-proposal@1",
+		i18n: { name: { en: "Propose graph changes" } },
+		effects: "write",
+		timeoutMs: 10000,
+		causesEvent: "core:event/graph-proposal-created@1",
+		ports: {
+			in: { proposal: S.json },
+			out: { main: S.writeResult, proposalId: S.writeResult }
+		}
+	})
+)

@@ -15,9 +15,10 @@
  */
 
 import { describe, it, expect } from "vitest"
+import { wrapFor } from "./variableLayouts"
 import { buildTemplateContext } from "./templateContext"
-import { InterpolationEngine } from "$lib/server/utils/promptBuilder/InterpolationEngine"
-import { attachCharacterLoreToCharacters } from "$lib/server/utils/promptBuilder/LorebookBindingUtils"
+import { InterpolationEngine } from "$lib/server/utils/interpolation/InterpolationEngine"
+import { attachCharacterLoreToCharacters } from "./characterLore"
 import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 
 /**
@@ -107,8 +108,16 @@ describe("template context", () => {
 		const expected = legacyBlobs({ ...base(), chat: c })
 		const built = buildTemplateContext({ ...base(), chat: c })
 
-		expect(built.characters).toBe(expected.characters)
-		expect(built.personas).toBe(expected.personas)
+		// Wrapped, because 0.6 moved the heading and fence off the template and
+		// onto the value. The legacy builder still emits the bare blob, so the
+		// comparison has to say where the wrapper went — asserting the two are
+		// equal *without* it would be asserting that the release did nothing.
+		expect(built.characters).toBe(
+			wrapFor("characters")!(expected.characters as string)
+		)
+		expect(built.personas).toBe(
+			wrapFor("personas")!(expected.personas as string)
+		)
 	})
 
 	it("interpolates macros in descriptions, not just in the template", () => {
@@ -127,7 +136,9 @@ describe("template context", () => {
 			...base(),
 			scenario: "{{char}} meets {{user}} at the gate."
 		})
-		expect(built.scenario).toBe("Alice meets Bob at the gate.")
+		expect(built.scenario).toBe(
+			wrapFor("scenario")!("Alice meets Bob at the gate.")
+		)
 	})
 
 	it("names only the characters it was told to name", () => {
@@ -160,7 +171,9 @@ describe("template context", () => {
 			narratorName: "The GM",
 			texts: { instructions: "You are {{narratorName}}." }
 		})
-		expect(built.instructions).toBe("You are The GM.")
+		expect(built.instructions).toBe(
+			wrapFor("instructions")!("You are The GM.")
+		)
 	})
 
 	it("aliases char/character and user/persona, as the legacy shape does", () => {

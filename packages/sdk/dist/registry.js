@@ -41,7 +41,7 @@ export function snapshotRegistry(types, meta = {}) {
             in: Object.fromEntries(Object.entries(d.ports?.in ?? {}).map(([k, v]) => [k, shapeId(v)])),
             out: Object.fromEntries(Object.entries(d.ports?.out ?? {}).map(([k, v]) => [k, shapeId(v)])),
         },
-        slots: Object.keys(d.slots ?? {}),
+        slots: { ...(d.slots ?? {}) },
         effects: d.effects,
         causesEvent: d.causesEvent,
         public: d.public,
@@ -137,6 +137,25 @@ export function checkInstall(input) {
                 });
         }
     }
+    // 5a. A hook that wants to run inside Serene Pub's process.
+    //
+    // Refused from the manifest, before anything is loaded — which is the only
+    // moment it *can* be refused, since by the time the code is running it is
+    // already in the host's process. An in-process hook cannot be stopped: a
+    // runaway loop or a blocking call takes the whole application down with it,
+    // and F36's promise that every invocation is bounded stops being enforceable
+    // (13 §7h).
+    for (const d of input.declares)
+        if (d.runtime && d.runtime !== 'process')
+            findings.push({
+                severity: 'error',
+                code: 'E_IN_PROCESS_HOOK',
+                where: d.id,
+                message: `declares runtime '${d.runtime}'; extension hooks run in their own process`,
+                fix: `rebuild with the current SDK, which no longer offers an in-process runtime. ` +
+                    `A hook inside the host's process cannot be timed out or killed, so one bad ` +
+                    `loop stops Serene Pub rather than one node.`,
+            });
     // 6. A declared type nobody bound is a node the executor cannot invoke.
     if (input.bound) {
         const bound = new Set(input.bound);

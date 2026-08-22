@@ -1,0 +1,37 @@
+Instructions:
+"""
+You are Alice, speaking with Bob.
+"""
+CHARACTERS:Assistant Characters (AI-controlled):
+```json
+[
+  {
+    "name": "Alice",
+    "description": "A knight."
+  }
+]
+```
+PERSONAS:User Characters (player-controlled):
+```json
+[
+  {
+    "name": "Bob",
+    "description": "A traveller."
+  }
+]
+```
+NAMES:Alice|Bob
+MACROS:Alice|Alice|Bob|Bob
+SCENARIO:
+EXAMPLES:
+POSTHISTORY:
+WORLDLORE:World lore: 
+```json
+{"Entry 0":"Ashguard fact 0: detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail","Entry 1":"Ashguard fact 1: detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail","Entry 2":"Ashguard fact 2: detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail","Entry 3":"Ashguard fact 3: detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail","Entry 4":"Ashguard fact 4: detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail","Entry 5":"Ashguard fact 5: detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail","Entry 6":"Ashguard fact 6: detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail","Entry 7":"Ashguard fact 7: detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail","Entry 8":"Ashguard fact 8: detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail","Entry 9":"Ashguard fact 9: detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail","Entry 10":"Ashguard fact 10: detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail","Entry 11":"Ashguard fact 11: detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail detail"}
+```
+HISTORY:
+DATE:
+RELATIONSHIPS:
+
+Bob: Tell me of the ashguard.
+Alice: 

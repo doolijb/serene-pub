@@ -25,12 +25,10 @@
  * core's default changed.
  */
 
-import {
-	parseSplitChatPrompt,
-	formatHistoryDateKey,
-	formatDate
-} from "$lib/server/utils/promptBuilder/utils"
+import { parseSplitChatPrompt } from "$lib/shared/utils/parseSplitChatPrompt"
+import { formatHistoryDateKey, formatDate } from "./dateKeys"
 import { renderTemplate } from "./renderers"
+import { renderVariable, type ResolvedLayouts } from "./variableLayouts"
 import type { Decision } from "./ranking/select"
 
 export interface ContextBlock {
@@ -116,24 +114,35 @@ export function allocate(
 /**
  * `{"<name>": "<content>"}`, or nothing at all.
  *
- * `undefined` rather than `"{}"` when empty, matching the legacy engines: a
+ * `undefined` rather than `{}` when empty, matching the legacy engines: a
  * template writing `{{#if worldLore}}` has to see the same falsiness, and an
  * empty object is truthy.
+ *
+ * The object, not the JSON — stringification happens at the call site, so a
+ * variable template can eventually be handed the shape and decide how to
+ * present it. The emptiness rule stays here, per variable, because it is not
+ * uniform: `characters` renders `[]` for an empty cast (`JSON.stringify([])`
+ * is a truthy string), while world lore vanishes. Unifying the two would
+ * change one of them.
  */
-function keyedByName(blocks: readonly ContextBlock[]): string | undefined {
+export function objectByName(
+	blocks: readonly ContextBlock[]
+): Record<string, string> | undefined {
 	const obj: Record<string, string> = {}
 	for (const b of blocks) if (b.name && b.content) obj[b.name] = b.content
-	return Object.keys(obj).length ? JSON.stringify(obj) : undefined
+	return Object.keys(obj).length ? obj : undefined
 }
 
 /** History, newest first, keyed by its formatted date. Blank content is skipped. */
-function keyedByDate(blocks: readonly ContextBlock[]): string | undefined {
+export function objectByDate(
+	blocks: readonly ContextBlock[]
+): Record<string, string> | undefined {
 	const obj: Record<string, string> = {}
 	for (const b of [...blocks].sort((a, z) => dateValue(z) - dateValue(a))) {
 		if (!b.content?.trim()) continue
 		obj[formatHistoryDateKey(b.meta as any)] = b.content
 	}
-	return Object.keys(obj).length ? JSON.stringify(obj) : undefined
+	return Object.keys(obj).length ? obj : undefined
 }
 
 /** The most recent history entry's date, which templates render as `{{currentDate}}`. */
@@ -193,6 +202,16 @@ export interface RenderInput {
 	 * default — the column is nullable for exactly that reason (12 §2a).
 	 */
 	engine?: string | null
+	/**
+	 * The `variables` slot: how the values *this* node produces are laid out,
+	 * already dereferenced from row ids into template sources by `world.ts`.
+	 *
+	 * Declared here rather than upstream because these come out the other side
+	 * of the budget — a layout receives what actually fit, which no earlier
+	 * node knows. Absent means every render site uses its in-code expression,
+	 * which is byte-identical to what it produced before layouts existed.
+	 */
+	variables?: ResolvedLayouts
 }
 
 export interface RenderedContext {
@@ -222,6 +241,22 @@ export function render(input: RenderInput): RenderedContext {
 	const bySourceBlocks = (source: string) =>
 		included.filter((b) => b.source === source)
 
+	/**
+	 * Each of Assemble's own variables through its selected layout.
+	 *
+	 * The object goes in, a string comes out, and the shipped layouts produce
+	 * exactly the `JSON.stringify` these three used to be — `{{{json worldLore 0}}}`
+	 * is the minified form byte for byte.
+	 *
+	 * The emptiness rule stays in the *builders* rather than moving in here,
+	 * because it is not uniform: `objectByName` returns `undefined` for an empty
+	 * set so `{{#if worldLore}}` skips the section, while `characters` renders
+	 * `[]` for an empty cast because `JSON.stringify([])` is a truthy string.
+	 * Unifying the two would change one of them.
+	 */
+	const layout = (key: string, value: unknown) =>
+		renderVariable(input.variables, key, value)
+
 	// Named *and shaped* the way the existing templates already expect. The
 	// names alone were not enough: the first parity run rendered
 	// `WORLDLORE:` empty against a legacy
@@ -240,10 +275,20 @@ export function render(input: RenderInput): RenderedContext {
 		// isolation; only a byte comparison showed it.
 		...(input.prompts ?? {}),
 		...(input.templateContext ?? {}),
-		worldLore: keyedByName(bySourceBlocks("worldLore")),
+		worldLore: layout(
+			"worldLore",
+			objectByName(bySourceBlocks("worldLore"))
+		),
+		// Not laid out, and not an oversight: nothing renders this. Lore bound
+		// to a character is folded into that character inside `characters`,
+		// under an `"extra lore"` key (docs/context-templates.md is explicit).
+		// A layout for it would be a setting that changes nothing.
 		characterLore: bySource("characterLore"),
-		history: keyedByDate(bySourceBlocks("history")),
-		currentDate: currentDateOf(bySourceBlocks("history")),
+		history: layout("history", objectByDate(bySourceBlocks("history"))),
+		currentDate: layout(
+			"currentDate",
+			currentDateOf(bySourceBlocks("history"))
+		),
 		chatMessages: input.messages,
 		budget: input.allocation.budget,
 		// Last, so the resolved block wins over the placeholder the template

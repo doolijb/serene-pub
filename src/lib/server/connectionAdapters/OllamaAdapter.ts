@@ -11,7 +11,7 @@ import {
 	type AdapterExports,
 	type BasePromptChat
 } from "./BaseConnectionAdapter"
-import { type CompiledPrompt } from "../utils/promptBuilder"
+import { type CompiledPrompt } from "./types"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { ollamaSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
@@ -186,8 +186,24 @@ class OllamaAdapter extends BaseConnectionAdapter {
 			!!compiledPrompt.prompt
 		)
 
-		const useChat = this.connection.extraJson?.useChat ?? true
-		console.log("[OllamaAdapter] useChat after coalescing:", useChat)
+		/**
+		 * Which request shape to send, taken from **what was actually built**.
+		 *
+		 * This read `extraJson?.useChat ?? true` while `compilePrompt` above
+		 * reads `!!extraJson?.useChat` — the same setting with two different
+		 * defaults. A connection whose `extraJson` has no `useChat` (the column
+		 * defaults to `{}`) therefore had a completion prompt built and a *chat*
+		 * request sent, with `messages: undefined`. Ollama answers that with an
+		 * empty string, which surfaces as "the model returned nothing" and
+		 * looks like a model fault rather than a request we built wrong.
+		 *
+		 * Deriving it from the payload cannot disagree with itself: the
+		 * preference already decided which field `compilePrompt` populated, so
+		 * following the payload honours it transitively and stays correct even
+		 * if the two defaults drift again.
+		 */
+		const useChat = !!compiledPrompt.messages
+		console.log("[OllamaAdapter] useChat (from payload):", useChat)
 		let req: GenerateRequest | ChatRequest
 
 		if (useChat) {

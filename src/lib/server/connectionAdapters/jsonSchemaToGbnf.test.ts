@@ -63,7 +63,9 @@ describe("jsonSchemaToGbnf", () => {
 		// An array of strings is where the old doubling compounded worst:
 		// `string` owns a trailing ws, so the previous `ws "," ws` and `ws )?`
 		// produced two ambiguous whitespace sites per element.
-		expect(grammar).toContain('::= "[" ws ( string ("," ws string)* )? "]" ws')
+		expect(grammar).toContain(
+			'::= "[" ws ( string ("," ws string)* )? "]" ws'
+		)
 	})
 
 	describe("escaping — a broken literal hangs a generation rather than failing it", () => {
@@ -276,7 +278,11 @@ describe("jsonSchemaToGbnf — whitespace ownership", () => {
 		// Objects and arrays are values too when nested — that is the half of
 		// the invariant that is easy to drop, and dropping it forbids
 		// whitespace between a closing brace and its following comma.
-		for (const name of ["relationships-item-1", "relationships-2", "root-3"]) {
+		for (const name of [
+			"relationships-item-1",
+			"relationships-2",
+			"root-3"
+		]) {
 			expect(rules.get(name)!.at(-1)).toBe("ws")
 		}
 		expect(rules.get("string")!.at(-1)).toBe("ws")

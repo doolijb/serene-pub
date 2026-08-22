@@ -1,4 +1,4 @@
-import { db } from "$lib/server/db"
+import { db as defaultDb } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, desc, eq, inArray, isNull } from "drizzle-orm"
 import type {
@@ -139,7 +139,7 @@ interface NodeInfo {
 	aliases: string[]
 }
 
-async function fetchNodeMap(nodeIds: number[]) {
+async function fetchNodeMap(db: typeof defaultDb, nodeIds: number[]) {
 	if (nodeIds.length === 0) return new Map<number, NodeInfo>()
 	const nodes = await db.query.lorebookBindings.findMany({
 		where: inArray(schema.lorebookBindings.id, nodeIds),
@@ -192,8 +192,21 @@ export async function buildGraphContext(params: {
 	lorebookId: number
 	speakerCharacterId: number | null
 	speakerPersonaId?: number | null
+	/**
+	 * The database to read through.
+	 *
+	 * Optional so the legacy caller keeps working unchanged, but the pipeline
+	 * host **must** pass its own: a Query's effects belong to the substrate it
+	 * was handed (F19), and reaching for the module-scope connection instead
+	 * bypasses the host entirely. That is not theoretical — wiring this into
+	 * `core:query/graph-context@1` without it made the node reach the real
+	 * database from inside a test suite that had never opened one, and the
+	 * node timed out at 2s on every run.
+	 */
+	db?: typeof defaultDb
 }): Promise<string | null> {
 	const { chatId, lorebookId, speakerCharacterId, speakerPersonaId } = params
+	const db = params.db ?? defaultDb
 
 	// Find the speaker's binding and node
 	const speakerBindingWhere = speakerCharacterId
@@ -233,7 +246,7 @@ export async function buildGraphContext(params: {
 			...speakerRels.map((r) => r.toNodeId)
 		])
 	]
-	const l1NodeMap = await fetchNodeMap(l1NodeIds)
+	const l1NodeMap = await fetchNodeMap(db, l1NodeIds)
 
 	// For alias-aware filtering: collect parentNodeIds of alias targets
 	const aliasTargetParentIds = new Set<number>()
@@ -412,7 +425,7 @@ export async function buildGraphContext(params: {
 			...l2Rels.map((r) => r.toNodeId)
 		])
 	]
-	const l2NodeMap = await fetchNodeMap(l2NodeIds)
+	const l2NodeMap = await fetchNodeMap(db, l2NodeIds)
 
 	// ── Layer 3: legendary nodes (nodeVisibility = "legendary") + public relationships ──
 	const legendaryNodes = await db.query.lorebookBindings.findMany({
@@ -443,7 +456,7 @@ export async function buildGraphContext(params: {
 		const l3NodeIds = [
 			...new Set([node.id, ...pubRels.map((r) => r.toNodeId)])
 		]
-		const l3NodeMap = await fetchNodeMap(l3NodeIds)
+		const l3NodeMap = await fetchNodeMap(db, l3NodeIds)
 		l3NodeMap.set(node.id, {
 			name: node.name,
 			nodeState: node.nodeState,

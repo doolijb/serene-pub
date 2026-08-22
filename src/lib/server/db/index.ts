@@ -7,7 +7,6 @@ import fs from "fs"
 import crypto from "crypto"
 import { building, dev } from "$app/environment"
 import { drizzle } from "drizzle-orm/pglite"
-import { sync } from "./defaults"
 
 // Database lock interface
 interface DbLock {
@@ -366,7 +365,19 @@ if (building) {
 // *text* in defaults.ts without a version bump would otherwise never take
 // effect on restart. sync() is fully idempotent (upsert-by-id, isImmutable
 // rows only), so running it unconditionally here is safe.
-if (!building) await sync()
+if (!building) {
+	// Imported here rather than at module scope, and the difference is a real
+	// cycle rather than style: `defaults.ts` imports `db` from this module, so
+	// a static import makes the two initialise in a loop. It happened to work
+	// only because some *other* module in the graph pulled `db` in first;
+	// deleting the legacy prompt builder removed that module and the parity
+	// suite started failing with `Cannot access '__vite_ssr_import_1__' before
+	// initialization` — `db` still in its temporal dead zone while `sync()`
+	// ran. Deferring the import to here means this module's body has finished
+	// and `db` is a real value by the time `defaults.ts` reads it.
+	const { sync } = await import("./defaults")
+	await sync()
+}
 
 /**
  * Pipeline tables: the type registry, and core's own published specs.

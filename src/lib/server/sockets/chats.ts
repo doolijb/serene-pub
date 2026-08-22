@@ -14,7 +14,7 @@ import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
 import { ChatCharacterVisibility } from "$lib/shared/constants/ChatCharacterVisibility"
-import { InterpolationEngine } from "../utils/promptBuilder"
+import { InterpolationEngine } from "../utils/interpolation/InterpolationEngine"
 import { dev } from "$app/environment"
 import type { Handler } from "$lib/shared/events"
 import { getUserConfigurations } from "../utils/getUserConfigurations"
@@ -124,7 +124,8 @@ async function checkLorebookOwnership(
 	userId: number
 ): Promise<boolean> {
 	const lorebook = await db.query.lorebooks.findFirst({
-		where: (l, { and, eq }) => and(eq(l.id, lorebookId), eq(l.userId, userId)),
+		where: (l, { and, eq }) =>
+			and(eq(l.id, lorebookId), eq(l.userId, userId)),
 		columns: { id: true }
 	})
 	return !!lorebook
@@ -259,105 +260,102 @@ async function buildChatsListFor(
 	const chatType = ChatTypes.ROLEPLAY
 	console.log("Fetching chats for user:", userId, "chatType:", chatType)
 
-		// First, find all chats where the current user is a guest
-		const guestChats = await db.query.chatGuests.findMany({
-			where: eq(schema.chatGuests.userId, userId),
-			columns: {
-				chatId: true
-			}
-		})
+	// First, find all chats where the current user is a guest
+	const guestChats = await db.query.chatGuests.findMany({
+		where: eq(schema.chatGuests.userId, userId),
+		columns: {
+			chatId: true
+		}
+	})
 
-		const guestChatIds = guestChats.map((gc) => gc.chatId)
-		console.log("User is guest in chat IDs:", guestChatIds)
+	const guestChatIds = guestChats.map((gc) => gc.chatId)
+	console.log("User is guest in chat IDs:", guestChatIds)
 
-		const chatsList = await db.query.chats.findMany({
-			with: {
-				chatCharacters: {
-					with: {
-						// `character` columns are limited to id/name/avatar — no
-						// shortDescription/visibility column exists on the
-						// characters table (visibility lives on chatCharacters
-						// itself, included automatically alongside this relation).
-						character: {
-							columns: {
-								id: true,
-								name: true,
-								avatar: true
-							}
+	const chatsList = await db.query.chats.findMany({
+		with: {
+			chatCharacters: {
+				with: {
+					// `character` columns are limited to id/name/avatar — no
+					// shortDescription/visibility column exists on the
+					// characters table (visibility lives on chatCharacters
+					// itself, included automatically alongside this relation).
+					character: {
+						columns: {
+							id: true,
+							name: true,
+							avatar: true
 						}
-					},
-					orderBy: asc(schema.chatCharacters.position)
-				},
-				chatPersonas: {
-					with: {
-						// Same trimmed subset as `character` above — no
-						// shortDescription/visibility column exists on personas.
-						persona: {
-							columns: {
-								id: true,
-								name: true,
-								avatar: true
-							}
-						}
-					},
-					orderBy: asc(schema.chatPersonas.position)
-				},
-				chatTags: {
-					with: {
-						tag: true
 					}
-				}
+				},
+				orderBy: asc(schema.chatCharacters.position)
 			},
-			// Build the where clause: user owns the chat OR user is a guest in
-			// the chat, AND filter by chat type. Inlined (rather than a
-			// standalone const) so drizzle's contextual typing can infer the
-			// callback's parameter types.
-			where: (c, { or, eq, inArray, and }) =>
-				guestChatIds.length > 0
-					? and(
-							or(
-								eq(c.userId, userId),
-								inArray(c.id, guestChatIds)
-							),
-							eq(c.chatType, chatType)
-						)
-					: and(eq(c.userId, userId), eq(c.chatType, chatType)),
-			orderBy: desc(schema.chats.updatedAt)
-		})
-
-		// isOwner/isGuest let the client show the right menu affordances:
-		// owners get full edit + delete, guests get a scoped edit (characters/
-		// personas/guests only — enforced server-side in chatsUpdateHandler,
-		// not just hidden client-side). canEdit kept for back-compat meaning
-		// "can open the edit menu at all" (owner or guest), not "owns the chat".
-		const chatsWithEditPermission = chatsList.map((chat) => {
-			const isOwner = chat.userId === userId
-			const isGuest = !isOwner && guestChatIds.includes(chat.id)
-			return {
-				...chat,
-				isOwner,
-				isGuest,
-				canEdit: isOwner || isGuest,
-				// chatCharacters/chatPersonas rows can have a null character/
-				// persona when the linked row was deleted (the FK is nullable,
-				// onDelete: "set null") — filter those out, matching the same
-				// fix in generateResponse.ts.
-				chatCharacters: chat.chatCharacters.filter(
-					(
-						cc
-					): cc is typeof cc & {
-						character: NonNullable<typeof cc.character>
-					} => cc.character !== null
-				),
-				chatPersonas: chat.chatPersonas.filter(
-					(
-						cp
-					): cp is typeof cp & {
-						persona: NonNullable<typeof cp.persona>
-					} => cp.persona !== null
-				)
+			chatPersonas: {
+				with: {
+					// Same trimmed subset as `character` above — no
+					// shortDescription/visibility column exists on personas.
+					persona: {
+						columns: {
+							id: true,
+							name: true,
+							avatar: true
+						}
+					}
+				},
+				orderBy: asc(schema.chatPersonas.position)
+			},
+			chatTags: {
+				with: {
+					tag: true
+				}
 			}
-		})
+		},
+		// Build the where clause: user owns the chat OR user is a guest in
+		// the chat, AND filter by chat type. Inlined (rather than a
+		// standalone const) so drizzle's contextual typing can infer the
+		// callback's parameter types.
+		where: (c, { or, eq, inArray, and }) =>
+			guestChatIds.length > 0
+				? and(
+						or(eq(c.userId, userId), inArray(c.id, guestChatIds)),
+						eq(c.chatType, chatType)
+					)
+				: and(eq(c.userId, userId), eq(c.chatType, chatType)),
+		orderBy: desc(schema.chats.updatedAt)
+	})
+
+	// isOwner/isGuest let the client show the right menu affordances:
+	// owners get full edit + delete, guests get a scoped edit (characters/
+	// personas/guests only — enforced server-side in chatsUpdateHandler,
+	// not just hidden client-side). canEdit kept for back-compat meaning
+	// "can open the edit menu at all" (owner or guest), not "owns the chat".
+	const chatsWithEditPermission = chatsList.map((chat) => {
+		const isOwner = chat.userId === userId
+		const isGuest = !isOwner && guestChatIds.includes(chat.id)
+		return {
+			...chat,
+			isOwner,
+			isGuest,
+			canEdit: isOwner || isGuest,
+			// chatCharacters/chatPersonas rows can have a null character/
+			// persona when the linked row was deleted (the FK is nullable,
+			// onDelete: "set null") — filter those out, matching the same
+			// fix in generateResponse.ts.
+			chatCharacters: chat.chatCharacters.filter(
+				(
+					cc
+				): cc is typeof cc & {
+					character: NonNullable<typeof cc.character>
+				} => cc.character !== null
+			),
+			chatPersonas: chat.chatPersonas.filter(
+				(
+					cp
+				): cp is typeof cp & {
+					persona: NonNullable<typeof cp.persona>
+				} => cp.persona !== null
+			)
+		}
+	})
 
 	return { chatList: chatsWithEditPermission }
 }
@@ -710,20 +708,18 @@ async function getPromptChatFromDb(chatId: number, userId: number) {
 		// ChatMessageProcessor, RagInfillEngine.ts's formatMessageForQuery)
 		// can still find a removed participant's name — see
 		// BasePromptChat.removedChatCharacters/removedChatPersonas.
-		const [removedChatCharacters, removedChatPersonas] = await Promise.all(
-			[
-				db.query.chatCharacters.findMany({
-					where: (cc, { eq, and, isNotNull }) =>
-						and(eq(cc.chatId, chatId), isNotNull(cc.removedAt)),
-					with: { character: true }
-				}),
-				db.query.chatPersonas.findMany({
-					where: (cp, { eq, and, isNotNull }) =>
-						and(eq(cp.chatId, chatId), isNotNull(cp.removedAt)),
-					with: { persona: true }
-				})
-			]
-		)
+		const [removedChatCharacters, removedChatPersonas] = await Promise.all([
+			db.query.chatCharacters.findMany({
+				where: (cc, { eq, and, isNotNull }) =>
+					and(eq(cc.chatId, chatId), isNotNull(cc.removedAt)),
+				with: { character: true }
+			}),
+			db.query.chatPersonas.findMany({
+				where: (cp, { eq, and, isNotNull }) =>
+					and(eq(cp.chatId, chatId), isNotNull(cp.removedAt)),
+				with: { persona: true }
+			})
+		])
 		;(chat as any).removedChatCharacters = removedChatCharacters
 		;(chat as any).removedChatPersonas = removedChatPersonas
 	}
@@ -1078,7 +1074,9 @@ export const chatsUpdateHandler: Handler<
 						...(samplingConfigId !== undefined
 							? { samplingConfigId }
 							: {}),
-						...(promptConfigId !== undefined ? { promptConfigId } : {}),
+						...(promptConfigId !== undefined
+							? { promptConfigId }
+							: {}),
 						...(narratorPromptConfigId !== undefined
 							? { narratorPromptConfigId }
 							: {}),
@@ -1529,7 +1527,9 @@ export const chatsAddGuestHandler: Handler<
 			// without this their sidebar wouldn't show the new chat until a
 			// manual refresh/reconnect.
 			const guestChatsList = await buildChatsListFor(guestUserId)
-			socket.io.to(`user_${guestUserId}`).emit("chats:list", guestChatsList)
+			socket.io
+				.to(`user_${guestUserId}`)
+				.emit("chats:list", guestChatsList)
 
 			// Broadcast updated chat to all participants
 			const updatedChat = await getChatFromDB(chatId, userId)
@@ -1591,7 +1591,9 @@ export const chatsRemoveGuestHandler: Handler<
 			// Push a fresh chat list to the removed guest so the chat
 			// disappears from their sidebar without a manual refresh.
 			const guestChatsList = await buildChatsListFor(guestUserId)
-			socket.io.to(`user_${guestUserId}`).emit("chats:list", guestChatsList)
+			socket.io
+				.to(`user_${guestUserId}`)
+				.emit("chats:list", guestChatsList)
 
 			// Broadcast updated chat to all remaining participants
 			const updatedChat = await getChatFromDB(chatId, userId)
@@ -1871,8 +1873,7 @@ export const chatsReassignRemovedParticipantHandler: Handler<
 				}
 
 				const canReassign =
-					chatAccess.isOwner ||
-					removedCC.character?.userId === userId
+					chatAccess.isOwner || removedCC.character?.userId === userId
 				if (!canReassign) {
 					const res: Sockets.Chats.ReassignRemovedParticipant.Response =
 						{
@@ -1968,10 +1969,7 @@ export const chatsReassignRemovedParticipantHandler: Handler<
 					return res
 				}
 
-				const ownsNewTarget = await checkPersonaOwnership(
-					newId,
-					userId
-				)
+				const ownsNewTarget = await checkPersonaOwnership(newId, userId)
 				if (!ownsNewTarget) {
 					const res: Sockets.Chats.ReassignRemovedParticipant.Response =
 						{
@@ -2846,7 +2844,9 @@ export const chatMessagesSwipeRightHandler: Handler<
 						// Keep thinkingHistory in sync when initialising swipes for the first time
 						const th: (string | null)[] =
 							data.metadata!.swipes!.thinkingHistory || []
-						while (th.length < data.metadata!.swipes!.history.length)
+						while (
+							th.length < data.metadata!.swipes!.history.length
+						)
 							th.push(null)
 						data.metadata!.swipes!.thinkingHistory = th
 					}
@@ -2862,7 +2862,10 @@ export const chatMessagesSwipeRightHandler: Handler<
 					// Push a matching null into thinkingHistory to keep lengths equal
 					const th: (string | null)[] =
 						data.metadata!.swipes!.thinkingHistory || []
-					while (th.length < data.metadata!.swipes!.history.length - 1)
+					while (
+						th.length <
+						data.metadata!.swipes!.history.length - 1
+					)
 						th.push(null)
 					th.push(null)
 					data.metadata!.swipes!.thinkingHistory = th
@@ -3396,13 +3399,6 @@ export const promptTokenCountHandler: Handler<
 					]
 				: chat.chatMessages
 
-			let chatForPrompt = {
-				...chat,
-				chatMessages: messagesWithDraft,
-				chatCharacters: chatCharactersWithCharacter,
-				chatPersonas: chatPersonasWithPersona
-			}
-
 			const currentCharacterId = getNextCharacterTurn(
 				{
 					chatMessages: messagesWithDraft,
@@ -3422,26 +3418,59 @@ export const promptTokenCountHandler: Handler<
 				return res
 			}
 
-			const { Adapter } = await getConnectionAdapter(connection.type)
-
-			const tokenCounter = new TokenCounters(
-				(connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
+			/**
+			 * Compiled by the **pipeline**, stopped before it sends.
+			 *
+			 * This used to construct an adapter and call `compilePrompt`, which
+			 * ran the legacy infill engines — so the number on screen came from
+			 * a code path that no longer generates any replies. It was the last
+			 * live consumer of that path, and the reason it could not be
+			 * deleted.
+			 *
+			 * `preview: true` halts at the pre-call substrate with the real
+			 * payload, so this is the same compilation the next turn will
+			 * actually use rather than an approximation of it. `skipReceipt`
+			 * because this fires on a debounce while somebody types; recording
+			 * a run per keystroke would bury the run history.
+			 */
+			const { runTurn } = await import("$lib/server/pipelines/runTurn")
+			const { toCompiledPrompt } = await import(
+				"$lib/server/pipelines/dispatch"
 			)
-			const contextThresholdPercent = 0.8
 
-			const adapter = new Adapter({
-				chat: chatForPrompt,
-				connection: connection,
-				sampling: sampling,
-				contextConfig: contextConfig,
-				promptConfig: promptConfig,
+			const receipt: any = await runTurn({
+				db,
+				chatId: params.chatId,
+				userId,
 				currentCharacterId,
-				tokenCounter,
-				tokenLimit: 4096,
-				contextThresholdPercent
+				text: params.content ?? "",
+				preview: true,
+				skipReceipt: true
 			})
 
-			const promptResult = await adapter.compilePrompt({})
+			const rendered = receipt.preview?.context?.rendered as
+				| { rendered?: unknown }
+				| undefined
+			if (!(rendered?.rendered ?? rendered)) {
+				// A preview halts by design, so a non-ok outcome only means
+				// failure when it arrived with no payload. Say which node gave
+				// up rather than reporting a bare token-count failure.
+				const res: Sockets.Chats.PromptTokenCount.Response = {
+					error:
+						`The prompt could not be compiled: ${receipt.outcome}` +
+						(receipt.haltNodeKey
+							? ` at '${receipt.haltNodeKey}'`
+							: "") +
+						(receipt.haltReason ? ` — ${receipt.haltReason}` : "")
+				}
+				emitToUser("chats:promptTokenCount", res)
+				return res
+			}
+
+			const promptResult = toCompiledPrompt(rendered, connection, {
+				currentCharacterId,
+				messageCount: messagesWithDraft.length
+			})
 
 			// Return the compiled prompt in the correct format
 			emitToUser("chats:promptTokenCount", promptResult)
@@ -3847,8 +3876,7 @@ export const toggleChatCharacterActiveHandler: Handler<
 					chatId: params.chatId,
 					characterId: params.characterId,
 					isActive: false,
-					error:
-						"Access denied. Only the chat owner or this character's owner can change this."
+					error: "Access denied. Only the chat owner or this character's owner can change this."
 				}
 			}
 
@@ -3949,8 +3977,7 @@ export const updateChatCharacterVisibilityHandler: Handler<
 					chatId: params.chatId,
 					characterId: params.characterId,
 					visibility: params.visibility,
-					error:
-						"Access denied. Only the chat owner or this character's owner can change this."
+					error: "Access denied. Only the chat owner or this character's owner can change this."
 				}
 			}
 

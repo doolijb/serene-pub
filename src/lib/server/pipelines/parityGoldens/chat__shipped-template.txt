@@ -1,0 +1,54 @@
+### System:
+
+Instructions:
+"""
+You are Alice.
+"""
+
+Assistant Characters (AI-controlled):
+```json
+[
+  {
+    "name": "Alice",
+    "description": "A knight sworn to Bob."
+  }
+]
+```
+
+User Characters (player-controlled):
+```json
+[
+  {
+    "name": "Bob",
+    "description": "A traveller."
+  }
+]
+```
+
+
+World lore: 
+```json
+{"The Ashguard":"Riders who patrol the ash wastes."}
+```
+
+
+
+
+
+### User:
+Bob: Well met.
+
+### Assistant:
+Alice: And you.
+
+### User:
+Bob: Have you seen the ashguard?
+
+### System:
+Response reminder:
+```text
+Remember: you are Alice, speaking with Bob.
+```
+
+### Assistant:
+Alice: 

@@ -157,7 +157,7 @@ describe("the context task", () => {
 		const cast = (await readCast()).value.cast
 		const r = await buildFrom(cast)
 		expect(r.kind).toBe("ok")
-		expect(r.value.templateContext.instructions).toBe("Be brief.")
+		expect(r.value.templateContext.instructions).toContain("Be brief.")
 		expect(r.value.templateContext.char).toBe("Alice")
 		expect(r.value.templateContext.persona).toBe("Bob")
 	})
@@ -165,7 +165,14 @@ describe("the context task", () => {
 	it("names the active character and still shows the inactive one's card", async () => {
 		const cast = (await readCast()).value.cast
 		const r = await buildFrom(cast)
-		const cards = JSON.parse(r.value.templateContext.characters)
+		// The cast arrives through its layout, so the JSON sits inside the
+		// heading and fence 0.5 wrote in the template. Parsing what is between
+		// the fences keeps this test about the cards rather than about them.
+		const cards = JSON.parse(
+			r.value.templateContext.characters
+				.split("```json\n")[1]!
+				.split("\n```")[0]!
+		)
 		expect(cards.map((c: any) => c.name).sort()).toEqual(["Alice", "Cara"])
 		expect(r.value.templateContext.characterNames).toBe("Alice")
 	})
@@ -181,7 +188,7 @@ describe("the context task", () => {
 	it("takes the speaking character's scenario when the chat has none", async () => {
 		const cast = (await readCast()).value.cast
 		const r = await buildFrom(cast)
-		expect(r.value.templateContext.scenario).toBe("In the keep.")
+		expect(r.value.templateContext.scenario).toContain("In the keep.")
 	})
 
 	it("halts when handed no cast rather than rendering an empty prompt", async () => {

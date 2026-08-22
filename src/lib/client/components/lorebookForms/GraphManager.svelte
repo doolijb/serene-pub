@@ -4,6 +4,7 @@
 	import * as Icons from "@lucide/svelte"
 	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import GraphBuildModal from "../modals/GraphBuildModal.svelte"
+	import PipelineConfigOptions from "$lib/client/components/pipelines/PipelineConfigOptions.svelte"
 	import AbsorbBindingModal from "../modals/AbsorbBindingModal.svelte"
 	import GraphVisualization from "../graph/GraphVisualization.svelte"
 	import {
@@ -41,6 +42,14 @@
 
 	const socket = useTypedSocket()
 	const graphBuildsCtx: GraphBuildsCtx = getContext("graphBuildsCtx")
+	const userCtx: { user?: SelectUser } = getContext("userCtx")
+
+	// The build runs on this pipeline's per-step config — see graphSteps.ts.
+	const GRAPH_PIPELINE_SLUG = "core:spec/graph-build"
+	let showPipelinePanel = $state(false)
+	let pipelineOverview = $state<Sockets.Pipelines.NamespaceDetail | null>(
+		null
+	)
 
 	type NarrativeNode = Sockets.NarrativeGraph.NarrativeNode
 	type NarrativeRelationship = Sockets.NarrativeGraph.NarrativeRelationship
@@ -618,8 +627,54 @@
 			>
 				<Icons.RefreshCw size={14} />
 			</button>
+			<button
+				class="btn btn-sm {showPipelinePanel
+					? 'preset-filled-surface-500'
+					: 'preset-filled-surface-400-600'}"
+				onclick={() => (showPipelinePanel = !showPipelinePanel)}
+				title="The pipeline behind the build — which model, sampling profile and prompt each step runs on"
+				aria-label="Graph build pipeline settings"
+				aria-pressed={showPipelinePanel}
+			>
+				<Icons.Workflow size={14} />
+			</button>
 		</div>
 	</PanelToolbar>
+
+	<!-- ── The pipeline behind the build ───────────────────────────────────
+	     Overview plus the granular per-step controls, straight from the
+	     pipeline config layer: each step's connection, sampling profile and
+	     prompt, resolved through the same chain the build runs on. Rendered
+	     from declarations — no field list here to maintain. -->
+	{#if showPipelinePanel}
+		<div
+			class="bg-surface-200-800 border-surface-300-700 max-h-96 space-y-2 overflow-y-auto rounded-lg border p-3 text-sm"
+		>
+			<div class="flex items-center justify-between gap-2">
+				<p class="font-medium">
+					<Icons.Workflow size={14} class="mr-1 inline" />
+					{pipelineOverview
+						? `${pipelineOverview.name} · v${pipelineOverview.version}`
+						: "Graph build pipeline"}
+				</p>
+				{#if userCtx?.user?.isAdmin}
+					<a
+						class="btn btn-sm preset-tonal-surface shrink-0 text-xs"
+						href="/pipelines/{encodeURIComponent(
+							GRAPH_PIPELINE_SLUG
+						)}"
+						title="Versions, publish state and run history"
+					>
+						<Icons.Settings2 size={12} /> Manage
+					</a>
+				{/if}
+			</div>
+			<PipelineConfigOptions
+				slug={GRAPH_PIPELINE_SLUG}
+				onLoaded={(d) => (pipelineOverview = d)}
+			/>
+		</div>
+	{/if}
 
 	<!-- ── Build progress card (shown when a build is active) ──────────────── -->
 	{#if activeBuild}

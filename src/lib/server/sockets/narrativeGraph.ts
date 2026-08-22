@@ -29,7 +29,6 @@ import {
 	type GraphBuilderResumeState
 } from "$lib/server/utils/graphBuilder"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
-import { resolveTaskConfig } from "$lib/server/utils/resolveTaskConfig"
 import { activityStore } from "$lib/server/utils/activityStore"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
 import {
@@ -408,71 +407,53 @@ export const narrativeGraphBuildHandler: Handler<
 
 		/*
 		 * Graph extraction is a structured-output task and should not inherit
-		 * chat's decoding parameters.
-		 *
-		 * resolveTaskConfig has had `graph_pre_filter` / `graph_perspective`
-		 * task types and graphBuildConfigs has had per-sub-task connection and
-		 * sampling columns for some time; the build simply never called any of
-		 * it and took the user's chat defaults instead. That is measurably
-		 * costly: at chat temperature a roleplay-finetuned model answered 45%
-		 * of perspective calls with narrative prose rather than JSON, and
-		 * re-prompting recovered 1 of 13.
-		 *
-		 * Falls back to the chat connection/sampling whenever the graph config
-		 * leaves them unset, so nothing changes for a user who has not
-		 * configured one.
-		 *
-		 * The seeded "Default Graph Build" row leaves every connection and
-		 * sampling pointer NULL on purpose: the seed's UPDATE branch re-forces
-		 * each field it names on every boot, so a pointer written here would
-		 * revert the user's own choice on their next restart. The seed owns the
-		 * prompts; the pointers are the user's. (An earlier version of this
-		 * comment claimed the seed pointed sampling at "Precise (Extraction)" —
-		 * it does not, and did not.) Pointing the graph steps at that preset is
-		 * therefore something a user does, not something shipped.
+		 * chat's decoding parameters — at chat temperature a roleplay-finetuned
+		 * model answered 45% of perspective calls with narrative prose rather
+		 * than JSON, and re-prompting recovered 1 of 13. Each step therefore
+		 * carries its own connection, sampling and prompt.
 		 */
+		// Every step resolves through the **pipeline config layer** — the same
+		// world, the same five-layer chain, the same rows the pipeline panel
+		// edits — so a connection, sampling profile or prompt chosen for a graph
+		// step in the panel is what the next build runs on. The legacy
+		// `graph_build_configs` path is retired from this handler; those rows
+		// stay readable (legacy sidebar) until 0.8.0, and their prose seeded the
+		// pipeline's shipped prompts.
 		const systemSettingsRow = await db.query.systemSettings.findFirst()
-		const graphBuildConfigId =
-			systemSettingsRow?.defaultGraphBuildConfigId ?? null
+		const { resolveGraphStepConfigs } = await import(
+			"$lib/server/pipelines/graphSteps"
+		)
+		const pipelineSteps = await resolveGraphStepConfigs(db, userId)
 
-		// Every step is resolved, not just the perspective pass. The build used
-		// to resolve `graph_perspective` once and run all five steps on it, so
-		// node descriptions and state detection silently inherited the
-		// extraction profile, and the three configured prompts were never read
-		// at all. Each step now gets its own prompt, model and sampling.
-		const graphBuildConfig = graphBuildConfigId
-			? await db.query.graphBuildConfigs.findFirst({
-					where: (c, { eq }) => eq(c.id, graphBuildConfigId)
+		// A step whose connection or sampling was never chosen runs on the
+		// instance default — dispatchStep's rule, and what a person expects the
+		// first time they press Build.
+		const defaultConnection = systemSettingsRow?.defaultConnectionId
+			? await db.query.connections.findFirst({
+					where: (c, { eq }) =>
+						eq(c.id, systemSettingsRow.defaultConnectionId!)
+				})
+			: undefined
+		const defaultSampling = systemSettingsRow?.defaultSamplingConfigId
+			? await db.query.samplingConfigs.findFirst({
+					where: (s, { eq }) =>
+						eq(s.id, systemSettingsRow.defaultSamplingConfigId!)
 				})
 			: undefined
 
-		const stepResolutions = await Promise.all(
-			(
-				[
-					["nodeResolution", "graph_node_resolution"],
-					["preFilter", "graph_pre_filter"],
-					["perspective", "graph_perspective"],
-					["nodeDescription", "graph_node_description"],
-					["stateDetection", "graph_state_detection"]
-				] as const
-			).map(async ([step, taskType]) => {
-				const resolved = await resolveTaskConfig({
-					taskType,
-					graphBuildConfigId
-				})
-				return [
-					step,
-					{
-						systemPrompt: (graphBuildConfig as any)?.[
-							`${step}SystemPrompt`
-						],
-						connection: resolved.connection,
-						sampling: resolved.sampling
-					}
-				] as const
-			})
-		)
-		const graphSteps = Object.fromEntries(stepResolutions)
+		const graphSteps = Object.fromEntries(
+			Object.entries(pipelineSteps).map(([step, cfg]) => [
+				step,
+				{
+					systemPrompt: cfg.systemPrompt,
+					connection: cfg.connection ?? defaultConnection,
+					sampling: cfg.sampling ?? defaultSampling
+				}
+			])
+		) as Record<
+			string,
+			{ systemPrompt?: string; connection?: any; sampling?: any }
+		>
 
 		// The perspective step still supplies the build-wide fallback, since it
 		// is the pass that dominates a build and the one whose failure modes the
@@ -703,6 +684,11 @@ export const narrativeGraphBuildHandler: Handler<
 			.where(eq(schema.worldLoreEntries.lorebookId, params.lorebookId))
 
 		let latestSceneSnapshot: GraphBuilderResumeState | undefined
+		// For the run receipt: which calls ran, so the pipeline page's run list
+		// can say what a build cost without storing every payload twice (the
+		// build log already streams them).
+		let llmCallCount = 0
+		const startedAt = Date.now()
 
 		try {
 			const result = await buildGraphFromScenes({
@@ -732,6 +718,7 @@ export const narrativeGraphBuildHandler: Handler<
 					})
 				},
 				onLlmCall: (entry) => {
+					llmCallCount++
 					emitToUser("narrativeGraph:buildLog", entry)
 				},
 				fetchSceneMessages: async (chatId, messageIds) => {
@@ -831,6 +818,37 @@ export const narrativeGraphBuildHandler: Handler<
 			const proposal: Sockets.NarrativeGraph.GraphProposal = {
 				...result.proposal,
 				resolvedSceneCast: result.resolvedSceneCast
+			}
+
+			// The build is a pipeline run and gets a run row — halted at the
+			// proposal, which is the truthful outcome: nothing was applied, a
+			// person decides on the Review screen. Never allowed to fail the
+			// build (saveReceipt swallows its own errors).
+			{
+				const { saveReceipt } = await import(
+					"$lib/server/pipelines/receipts"
+				)
+				const { GRAPH_BUILD_SPEC_ID, GRAPH_BUILD_VERSION } =
+					await import("$lib/server/pipelines/specs/graphBuild")
+				const { v4: uuidv4 } = await import("uuid")
+				const endedAt = Date.now()
+				await saveReceipt(
+					db as any,
+					{
+						runId: uuidv4(),
+						specId: GRAPH_BUILD_SPEC_ID,
+						specVersion: GRAPH_BUILD_VERSION,
+						outcome: "halt",
+						haltNodeKey: "propose",
+						haltReason: `proposal held for review — ${result.proposal.nodes.length} nodes, ${result.proposal.relationships.length} relationships from ${result.sceneLabels.length} scenes (${llmCallCount} model calls)`,
+						triggerSource: "ui",
+						seed: `build:${params.lorebookId}`,
+						startedAt,
+						endedAt,
+						nodes: []
+					} as any,
+					{ userId }
+				)
 			}
 			activityStore.update(activityId, {
 				status: "review",

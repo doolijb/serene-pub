@@ -48,6 +48,8 @@ import { registerTaskQueueHandlers } from "./taskQueue"
 import { registerActivityHandlers } from "./activity"
 import { registerCustomThemeHandlers } from "./customThemes"
 import { registerCardSourceHandlers } from "./cardSources"
+import { registerPipelineHandlers } from "./pipelines"
+import { archivedWrite } from "./legacyArchive"
 
 export function connectSockets(io: {
 	on: (arg0: string, arg1: (socket: any) => void) => void
@@ -108,6 +110,7 @@ export function connectSockets(io: {
 		registerTaskQueueHandlers(socket, emitToUser, register)
 		registerActivityHandlers(socket)
 		registerCustomThemeHandlers(socket, emitToUser, register)
+		registerPipelineHandlers(socket, emitToUser, register)
 		console.log(`Socket connected: ${socket.id} for user ${userId}`)
 	})
 }
@@ -149,6 +152,15 @@ function register(
 	emitToUser: (event: string, data: any) => void
 ) {
 	socket.on(handler.event, async (message: any) => {
+		// The 0.5 config tables are readable and nothing else. Checked here
+		// rather than in each of their handlers so a handler added to one of
+		// those namespaces later cannot forget — see `legacyArchive.ts`.
+		const archived = archivedWrite(handler.event)
+		if (archived) {
+			emitToUser(archived.event, { error: archived.message })
+			return
+		}
+
 		// Many handlers catch their own errors, emit a specific
 		// `{event}:error` with a useful message via emitToUser, then
 		// re-throw so this wrapper's catch below also runs (eg. for

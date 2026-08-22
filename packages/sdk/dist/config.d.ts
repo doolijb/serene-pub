@@ -46,6 +46,31 @@ export interface ConfigWorld {
     authorDefaults?: Record<string, Record<string, Record<string, unknown>>>;
 }
 export type ResolvedConfig = Record<string, Record<string, Record<string, unknown>>>;
+/**
+ * A resolved value **and the layer it won at**.
+ *
+ * The layer is not decoration. *"I changed this and nothing happened"* is the
+ * most common support question this system can produce, and it is unanswerable
+ * from the value alone — the answer is always "something above you set it too",
+ * and only this says which something.
+ */
+export interface ResolvedSource {
+    value: unknown;
+    /** Which layer won. `author` means the declared default was never overridden. */
+    scopeKind: ScopeKind | 'author';
+    /** The user or chat the winning row belonged to, where one applies. */
+    scopeId?: string | number;
+}
+export type ResolvedConfigSources = Record<string, Record<string, Record<string, ResolvedSource>>>;
+/**
+ * Effective config **with provenance** = base ⊕ overrides, per (nodeKey, slot, path).
+ *
+ * This is the primitive; `resolveConfig` is derived from it rather than written
+ * beside it. Two implementations of a five-layer walk are two implementations
+ * that eventually disagree about which layer wins — and the one that disagrees
+ * silently is whichever one the UI is not using.
+ */
+export declare function resolveConfigSources(world: ConfigWorld, nodeKeys: string[]): ResolvedConfigSources;
 /** Effective config = base ⊕ overrides, per (nodeKey, slot, path). */
 export declare function resolveConfig(world: ConfigWorld, nodeKeys: string[]): ResolvedConfig;
 /**

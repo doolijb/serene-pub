@@ -10,7 +10,7 @@ import {
 	type AdapterExports,
 	type BasePromptChat
 } from "./BaseConnectionAdapter"
-import { type CompiledPrompt } from "../utils/promptBuilder"
+import { type CompiledPrompt } from "./types"
 import axios from "axios"
 import { Readable } from "stream"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"

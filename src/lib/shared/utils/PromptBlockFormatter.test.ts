@@ -282,7 +282,7 @@ describe("PromptBlockFormatter.makeBlock", () => {
 
 			test("round-tripping through parseSplitChatPrompt does not produce an extra role message", async () => {
 				const { parseSplitChatPrompt } = await import(
-					"$lib/server/utils/promptBuilder/utils"
+					"./parseSplitChatPrompt"
 				)
 				const block = PromptBlockFormatter.makeBlock({
 					format: PromptFormats.SPLIT_CHAT,

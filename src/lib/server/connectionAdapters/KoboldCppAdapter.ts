@@ -10,7 +10,7 @@ import {
 } from "./BaseConnectionAdapter"
 import { JSON_OBJECT_GBNF } from "./jsonGrammar"
 import { jsonSchemaToGbnf } from "./jsonSchemaToGbnf"
-import { type CompiledPrompt } from "../utils/promptBuilder"
+import { type CompiledPrompt } from "./types"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { koboldCppSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"

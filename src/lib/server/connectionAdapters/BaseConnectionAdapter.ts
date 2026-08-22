@@ -1,7 +1,4 @@
-import {
-	PromptBuilder,
-	type CompiledPrompt as PromptBuilderCompiledPrompt
-} from "../utils/promptBuilder"
+import type { CompiledPrompt as PromptBuilderCompiledPrompt } from "./types"
 import type { TokenCounters } from "../utils/TokenCounterManager"
 import type { JsonSchemaNode } from "./jsonSchemaToGbnf"
 import { ChatTypes } from "$lib/shared/constants/ChatTypes"
@@ -134,7 +131,27 @@ export abstract class BaseConnectionAdapter {
 	 * anything else ignores it.
 	 */
 	responseSchema?: JsonSchemaNode
-	promptBuilder: PromptBuilder
+	/**
+	 * Token configuration, owned by the adapter.
+	 *
+	 * These three arrived as constructor params and were forwarded straight
+	 * into `PromptBuilder`, which then became the only place to read them back
+	 * — so an adapter asking "what is my context limit" had to go through the
+	 * legacy prompt compiler to find out. Holding them here is what lets that
+	 * compiler be deleted: the adapter keeps its own configuration, and the
+	 * builder is handed a copy for as long as it still exists.
+	 *
+	 * Assigned in *this* constructor from the destructured params, deliberately.
+	 * KoboldCpp, LlamaCpp and LMStudio do not accept these from their callers —
+	 * they construct their own and pass them to `super({...})` — so the
+	 * `super()` boundary is the one place every subclass agrees on. Anywhere
+	 * else and three adapters would silently get different values than the
+	 * builder does. (LMStudio passes `tokenLimit: 0` and sets it later from the
+	 * API, which is why the sequencing below is preserved exactly.)
+	 */
+	tokenCounter: TokenCounters
+	tokenLimit: number
+	contextThresholdPercent: number
 
 	constructor({
 		connection,
@@ -166,17 +183,9 @@ export abstract class BaseConnectionAdapter {
 			!!generatingMessageMetadata?.isNarratorResponse
 		this.isSummarizerMode = chat.chatType === ChatTypes.SUMMARIZE
 		this.generatingMessageMetadata = generatingMessageMetadata
-		this.promptBuilder = new PromptBuilder({
-			connection: this.connection,
-			sampling: this.sampling,
-			contextConfig: this.contextConfig,
-			promptConfig: this.promptConfig,
-			chat: this.chat,
-			currentCharacterId: this.currentCharacterId,
-			tokenCounter,
-			tokenLimit,
-			contextThresholdPercent
-		})
+		this.tokenCounter = tokenCounter
+		this.tokenLimit = tokenLimit
+		this.contextThresholdPercent = contextThresholdPercent
 	}
 
 	/**
@@ -213,38 +222,33 @@ export abstract class BaseConnectionAdapter {
 		return this.injectedPrompt !== undefined
 	}
 
+	/**
+	 * The payload this adapter will send.
+	 *
+	 * There is no longer anything to compile here. The pipeline builds every
+	 * prompt and hands it over through `withCompiledPrompt`, so this returns
+	 * what it was given — and refuses when it was given nothing, rather than
+	 * silently generating from an empty string.
+	 *
+	 * The legacy fallthrough this replaced ran `PromptBuilder`, which is
+	 * deleted. Summarizer mode still assembles its own payload below because it
+	 * is a different shape, not a different prompt path.
+	 */
 	async compilePrompt(args: {}): Promise<PromptBuilderCompiledPrompt> {
-		// Before any mode branching: a caller that supplied a payload is asking
-		// for dispatch, and summarizer/narrator mode are decisions that were
-		// already made upstream when that payload was built.
 		if (this.injectedPrompt) return this.injectedPrompt
 
-		this.promptBuilder.tokenLimit = await this.getContextTokenLimit()
+		this.tokenLimit = await this.getContextTokenLimit()
 
 		if (this.isSummarizerMode) {
 			return await this.compileSummarizerPrompt(args)
 		}
 
-		if (this.isNarratorResponseMode) {
-			return await this.compileNarratorResponsePrompt(args)
-		}
-
-		// The always-on, speaker-centric narrative-graph relationship summary
-		// (see graphContextFormatter.ts's buildGraphContext, called from
-		// generateResponse.ts) — mirrors how narratorInstructions flows into
-		// compileNarratorResponsePrompt's own extraInstructions just above.
-		// Its own template block, NOT extraInstructions.
-		//
-		// extraInstructions is prose the model is asked to act on, and the
-		// prompt builder splices it into `instructions` AND both post-history
-		// fields — so routing relationship data through it duplicated the
-		// payload three times per message and left a fenced JSON blob sitting
-		// at the generation point, which models answered by closing with a
-		// stray ```. Relationships are data; they belong in a data block.
-		return await this.promptBuilder.compilePrompt({
-			...args,
-			speakerRelationships: this.graphContextInstructions
-		})
+		throw new Error(
+			"this adapter was asked to compile a prompt but was never handed one. " +
+				"Every prompt is built by the pipeline and passed in through " +
+				"withCompiledPrompt(); an adapter reaching this line means the " +
+				"caller skipped that step."
+		)
 	}
 
 	abstract generate(): Promise<{
@@ -336,7 +340,7 @@ export abstract class BaseConnectionAdapter {
 			? undefined
 			: this.buildTextPromptFromMessages(messages)
 
-		const totalTokens = await this.promptBuilder.tokenCounter.countTokens(
+		const totalTokens = await this.tokenCounter.countTokens(
 			useChatFormat ? JSON.stringify(messages) : promptString!
 		)
 
@@ -390,16 +394,6 @@ export abstract class BaseConnectionAdapter {
 	 * reinforcement block right before the generation point (see
 	 * PromptBuilder.compilePrompt's handling of extraInstructions).
 	 */
-	protected async compileNarratorResponsePrompt(
-		args: any = {}
-	): Promise<PromptBuilderCompiledPrompt> {
-		const narratorInstructions: string | undefined =
-			this.generatingMessageMetadata?.narratorInstructions
-		return await this.promptBuilder.compilePrompt({
-			...args,
-			extraInstructions: narratorInstructions
-		})
-	}
 }
 
 export interface AdapterExports {

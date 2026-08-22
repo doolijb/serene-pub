@@ -357,3 +357,90 @@ describe("the generate-text binding", () => {
 		expect(JSON.stringify(r.value)).not.toContain("onChunk")
 	})
 })
+
+/**
+ * The debug panel's retrieval trail.
+ *
+ * This replaced `meta.rag`, which reported the legacy infill engine's internal
+ * phase counters — a guaranteed window, a RAG pass, a fill pass. The pipeline
+ * runs none of those phases, so porting the numbers would have meant inventing
+ * them. What it does have is a decision per block, which answers the question
+ * the panel existed for ("why isn't my lore showing up") directly rather than
+ * by inference from an aggregate.
+ */
+describe("toCompiledPrompt's retrieval trail", () => {
+	const allocation = {
+		rendered: "PROMPT",
+		totalTokens: 30,
+		budget: { total: 100, used: 30, remaining: 70 },
+		groups: { worldLore: { allocated: 50, used: 20, entries: 2 } },
+		blocks: [
+			{
+				id: 7,
+				source: "worldLore",
+				name: "The Ashguard",
+				content: "Riders who patrol the ash wastes.",
+				tokens: 20,
+				included: true,
+				why: ["matched 'ashguard'", "score 0.812", "fits the budget"]
+			},
+			{
+				id: 8,
+				source: "worldLore",
+				name: "The Long Winter",
+				content: "Nine years without a thaw.",
+				tokens: 40,
+				included: false,
+				why: ["matched 'winter'", "score 0.401", "over budget"]
+			}
+		]
+	}
+
+	const meta = async () => {
+		const { toCompiledPrompt } = await import("./dispatch")
+		return toCompiledPrompt(allocation, { promptFormat: "vicuna" }).meta
+	}
+
+	it("reports every candidate, kept or not", async () => {
+		const blocks = (await meta()).retrieval.blocks
+		expect(blocks.map((b: any) => [b.name, b.included])).toEqual([
+			["The Ashguard", true],
+			["The Long Winter", false]
+		])
+	})
+
+	it("carries the reasoning, which is the whole point", async () => {
+		// An excluded entry with no stated reason is exactly the state the
+		// panel exists to prevent.
+		const dropped = (await meta()).retrieval.blocks.find(
+			(b: any) => !b.included
+		)
+		expect(dropped.why).toContain("over budget")
+	})
+
+	it("carries the budget the decisions were made against", async () => {
+		expect((await meta()).retrieval.budget).toEqual({
+			total: 100,
+			used: 30,
+			remaining: 70
+		})
+	})
+
+	it("does not ship block content to the client", async () => {
+		// It is already in the prompt this same object carries; a second copy
+		// of every lore entry has no reader and a real cost on a big lorebook.
+		for (const b of (await meta()).retrieval.blocks)
+			expect(b).not.toHaveProperty("content")
+	})
+
+	it("degrades to an empty trail rather than throwing", async () => {
+		// A plugin's assembler may produce a payload with no block record at
+		// all. The panel renders nothing; it must not break the send.
+		const { toCompiledPrompt } = await import("./dispatch")
+		const bare = toCompiledPrompt(
+			{ rendered: "x" },
+			{ promptFormat: "vicuna" }
+		)
+		expect(bare.meta.retrieval).toEqual({ budget: null, blocks: [] })
+	})
+})

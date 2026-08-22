@@ -6,10 +6,18 @@
  * "nothing was checked" and "nothing failed" look identical in a summary and
  * only one of them is safe.
  *
- * Eight fixtures, all green: one-to-one and group chats, macros inside character
- * cards, the six-way post-history split, dated history entries, the two
- * visibility filters, narrator mode, and twelve near-identical lore entries
+ * Ten fixtures, all green: the shipped template itself, one-to-one and group
+ * chats, macros inside character cards, the six-way post-history split, dated
+ * history entries, the two visibility filters, a chat with every assistant
+ * character hidden, narrator mode, and twelve near-identical lore entries
  * competing for one budget.
+ *
+ * Since 0.6 the two sides render *different templates on purpose* — the
+ * headings and fences moved out of the context template and into the variable
+ * layouts, so the legacy side is given 0.5's template and the pipeline today's.
+ * See `legacyTemplate` on `FixtureScope`. What is compared is still one prompt
+ * against another, byte for byte; what changed is that the comparison is now
+ * across releases rather than within one.
  *
  * RAG is compared in `parity.rag.int.test.ts` rather than here: the two arms need
  * opposite worlds — this file asserts no embedding model is loaded, that one
@@ -19,6 +27,8 @@
 import { describe, it, expect, beforeAll, vi } from "vitest"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { runFixture, type ParityFixture, type RenderConfigs } from "./parity"
+import { wrapFor } from "./variableLayouts"
+import { SHIPPED_CONTEXT_TEMPLATE } from "./contextTemplateDefaults"
 import { renderParity, parityGate } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
@@ -42,38 +52,80 @@ let configs: RenderConfigs
  * and `personas` are consumed as raw JSON by the real default templates, so a
  * whitespace difference is a prompt difference, and a corpus that renders only
  * `{{instructions}}` would never see it.
+ *
+ * ## Two variants, one source
+ *
+ * 0.6 moved the headings and fences out of the context template and into the
+ * variable layouts, so a single template can no longer stand for both sides:
+ * the pipeline renders one that writes no wrappers and supplies values that
+ * carry them, and 0.5's builder does the reverse. Handing both the same string
+ * would report the release's whole point as a divergence.
+ *
+ * Built from `wrapFor` rather than typed out twice, so the legacy variant is
+ * whatever the layouts actually ship — a wrapper edited in `variableLayouts.ts`
+ * moves this side of the comparison with it, and cannot quietly move only one.
+ *
+ * The wrapped variables are read through a **triple** stash here where 0.5's
+ * corpus used a double one for some of them. That is not a loosening: a wrapped
+ * value carries the fence's own `"""`, which a double stash HTML-escapes into
+ * `&quot;&quot;&quot;`. `characterNames` and `personaNames` keep their double
+ * stashes, so the escaping path is still covered by something.
  */
-const TEMPLATE = [
-	"{{instructions}}",
-	"CHARACTERS:{{{characters}}}",
-	"PERSONAS:{{{personas}}}",
-	"NAMES:{{characterNames}}|{{personaNames}}",
-	"MACROS:{{char}}|{{character}}|{{user}}|{{persona}}",
-	"SCENARIO:{{scenario}}",
-	"EXAMPLES:{{{exampleDialogue}}}",
-	"POSTHISTORY:{{{postHistoryInstructions}}}",
-	"WORLDLORE:{{{worldLore}}}",
-	"HISTORY:{{{history}}}",
-	"DATE:{{currentDate}}",
-	"RELATIONSHIPS:{{{speakerRelationships}}}",
-	// The reminder block the default template renders inside the message loop,
-	// gated the same way — this is where `postHistory.hasContent` and the
-	// three texts inside it actually reach a prompt.
-	"{{#if postHistory.hasContent}}REMINDER:{{{postHistory.instructions}}}|{{{postHistory.charInstructions}}}|{{{postHistory.exampleDialogue}}}{{/if}}",
-	// `message` and `name`, not `content` — the real default template renders
-	// `{{{name}}}: {{{message}}}` (defaults.ts:296). The first version of this
-	// fixture guessed `content`, which made *both* sides render blank message
-	// lines and agree for the wrong reason.
-	"{{#each chatMessages}}{{this.name}}: {{this.message}}",
-	"{{/each}}"
-].join("\n")
+const corpusTemplate = (wrappers: "template" | "layouts") => {
+	const v = (key: string) => {
+		const expr = `{{{${key}}}}`
+		const wrap = wrapFor(key)
+		if (!wrap) return expr
+		const body = wrappers === "template" ? wrap(expr) : expr
+		// Guarded the way the shipped template guards, and the guard is what
+		// makes the comparison mean anything. Unguarded, 0.5 wrote the heading
+		// and an empty fence for a chat with no history — `HISTORY:Story
+		// history:` above three blank backticks — because nothing stopped it.
+		// 0.6 renders nothing there, which is better and is still a difference.
+		// Pairing an unguarded template with wrapping layouts is a combination
+		// the product does not ship: core's template guards, and a template
+		// somebody wrote is pinned to the bare layouts by
+		// `migrateContextWrappers`. A corpus that tested it would be reporting
+		// a state no install can reach.
+		return `{{#if ${key}}}${body}{{/if}}`
+	}
+	return [
+		`${v("instructions")}`,
+		`CHARACTERS:${v("characters")}`,
+		`PERSONAS:${v("personas")}`,
+		"NAMES:{{characterNames}}|{{personaNames}}",
+		"MACROS:{{char}}|{{character}}|{{user}}|{{persona}}",
+		`SCENARIO:${v("scenario")}`,
+		"EXAMPLES:{{{exampleDialogue}}}",
+		"POSTHISTORY:{{{postHistoryInstructions}}}",
+		`WORLDLORE:${v("worldLore")}`,
+		`HISTORY:${v("history")}`,
+		`DATE:${v("currentDate")}`,
+		"RELATIONSHIPS:{{{speakerRelationships}}}",
+		// The reminder block the default template renders inside the message loop,
+		// gated the same way — this is where `postHistory.hasContent` and the
+		// three texts inside it actually reach a prompt.
+		"{{#if postHistory.hasContent}}REMINDER:{{{postHistory.instructions}}}|{{{postHistory.charInstructions}}}|{{{postHistory.exampleDialogue}}}{{/if}}",
+		// `message` and `name`, not `content` — the real default template renders
+		// `{{{name}}}: {{{message}}}` (defaults.ts:296). The first version of this
+		// fixture guessed `content`, which made *both* sides render blank message
+		// lines and agree for the wrong reason.
+		"{{#each chatMessages}}{{this.name}}: {{this.message}}",
+		"{{/each}}"
+	].join("\n")
+}
+
+/** What the pipeline renders: structure only, wrappers supplied by layouts. */
+const TEMPLATE = corpusTemplate("layouts")
+/** What 0.5 rendered: the same prompt, with the wrappers typed in. */
+const LEGACY_TEMPLATE = corpusTemplate("template")
 
 beforeAll(async () => {
 	db = await createTestDb()
 
 	const [contextConfig] = await db
 		.insert(schema.contextConfigs)
-		.values({ name: "Parity Context", template: TEMPLATE })
+		.values({ name: "Parity Context", template: LEGACY_TEMPLATE })
 		.returning()
 
 	const [promptConfig] = await db
@@ -306,6 +358,60 @@ const macroHeavy: ParityFixture = {
 			userId: w.user.id,
 			currentCharacterId: w.characters[0]!.id,
 			text: "Are you there?"
+		}
+	}
+}
+
+/**
+ * A lore entry carrying the two things only the legacy engines used to handle.
+ *
+ * The corpus had **no** `@@` decorator and **no** `{{char:#}}` binding anywhere
+ * in it, which is why it stayed green while the pipeline path did neither:
+ * `populateLorebookEntryBindings` was reachable only from the two infill
+ * engines, so decorator lines reached models as literal text and binding
+ * placeholders arrived unsubstituted. The legacy side of this very harness
+ * strips and substitutes both, so this fixture diverges the moment the pipeline
+ * stops — which is the whole job of a fixture here.
+ *
+ * `handlebarsLint.ts` tells users decorators are "stripped from the rendered
+ * prompt". This is the test that makes that sentence true.
+ */
+const decoratedLore: ParityFixture = {
+	name: "chat/decorated-lore",
+	async seed(db: any) {
+		const w = await seedWorld(db, {
+			characters: [
+				{ name: "Alice", description: "A knight of the gate." }
+			],
+			personas: [{ name: "Bob", description: "A traveller." }],
+			lore: [
+				{
+					name: "The Gate",
+					keys: "gate",
+					content:
+						"@@depth 4\n@@role system\n" +
+						"{{char:1}} has held the gate since the winter. " +
+						"Travellers say {{char:1}} never sleeps."
+				}
+			],
+			messages: [{ role: "user", content: "Tell me about the gate." }]
+		})
+
+		// The binding that gives `{{char:1}}` a name. Without a row here the
+		// substitution has nothing to resolve and the placeholder would survive
+		// on *both* paths, which would make the fixture agree for the wrong
+		// reason.
+		await db.insert(schema.lorebookBindings).values({
+			lorebookId: w.lorebook.id,
+			characterId: w.characters[0]!.id,
+			binding: "{{char:1}}"
+		})
+
+		return {
+			chatId: w.chat.id,
+			userId: w.user.id,
+			currentCharacterId: w.characters[0]!.id,
+			text: "Tell me about the gate."
 		}
 	}
 }
@@ -556,7 +662,7 @@ const shippedTemplate: ParityFixture = {
 	name: "chat/shipped-template",
 	async seed(db: any) {
 		const { DEFAULT_CONTEXT_TEMPLATE } = await import(
-			"$lib/server/db/defaults"
+			"$lib/server/db/legacyContextTemplate"
 		)
 		const [shipped] = await db
 			.insert(schema.contextConfigs)
@@ -599,19 +705,85 @@ const shippedTemplate: ParityFixture = {
 			// Declared rather than written directly to system settings: the
 			// harness sets every instance default on every fixture, so a
 			// fixture that wrote its own would leak into the next one.
-			contextConfigId: shipped.id
+			contextConfigId: shipped.id,
+			// The two real ones: `context_configs` still holds what 0.5
+			// shipped, and this is what 0.6 seeds into
+			// `pipeline_context_templates`. Every other fixture compares two
+			// corpus templates; this one compares the two the product actually
+			// has, which is where "0.6 reproduces 0.5" stops being a claim
+			// about a fixture.
+			pipelineTemplate: SHIPPED_CONTEXT_TEMPLATE
 		}
 	}
 }
+
+/**
+ * Every assistant character hidden, so the *names* list is empty.
+ *
+ * Added while looking for the empty-cast case and kept for what it actually
+ * found. `characterNames` and `characters` are filtered differently — hiding a
+ * character removes it from the names list and leaves its card in place — so
+ * this renders `NAMES:|Bob`, an empty passthrough variable, beside a cast that
+ * is not empty. `chat/visibility` hides one of three; this hides the only one,
+ * which is the case where the *whole* variable goes empty.
+ *
+ * It is deliberately **not** named for an empty cast, which is what was wanted
+ * and is not reachable here: the cards are not visibility-filtered, so a chat
+ * that can take a turn always has at least one. `JSON.stringify([])` being a
+ * truthy `"[]"` — the case where "empty" means something different for the cast
+ * than it does for world lore — is asserted directly in
+ * `variableTemplates.parity.test.ts` instead.
+ */
+const allHidden: ParityFixture = {
+	name: "chat/all-hidden",
+	async seed(db: any) {
+		const w = await seedWorld(db, {
+			characters: [{ name: "Alice", description: "A knight." }],
+			messages: [{ role: "user", content: "Anyone there?" }]
+		})
+		const { eq, and } = await import("drizzle-orm")
+		await db
+			.update(schema.chatCharacters)
+			.set({ visibility: "hidden" })
+			.where(
+				and(
+					eq(schema.chatCharacters.chatId, w.chat.id),
+					eq(schema.chatCharacters.characterId, w.characters[0]!.id)
+				)
+			)
+		return {
+			chatId: w.chat.id,
+			userId: w.user.id,
+			currentCharacterId: w.characters[0]!.id,
+			text: "Anyone there?"
+		}
+	}
+}
+
+/**
+ * The 0.6 counterpart of whatever template a fixture's legacy row holds.
+ *
+ * Applied here rather than repeated in ten `seed` functions, and spread so a
+ * fixture that names its own still wins — `shippedTemplate` does, because its
+ * pair is the shipped one rather than the corpus's.
+ */
+const withPipelineTemplate = (f: ParityFixture): ParityFixture => ({
+	name: f.name,
+	async seed(db: any) {
+		return { pipelineTemplate: TEMPLATE, ...(await f.seed(db)) }
+	}
+})
 
 const CORPUS = [
 	shippedTemplate,
 	oneOnOne,
 	groupChat,
 	macroHeavy,
+	decoratedLore,
 	postHistory,
 	datedHistory,
 	mixedVisibility,
+	allHidden,
 	narrator,
 	overBudget
 ]
@@ -657,10 +829,37 @@ describe("the parity corpus", () => {
 		}
 	})
 
+	it("empties the names list in the all-hidden fixture", async () => {
+		/**
+		 * The fixture asserting it is the shape it claims to be.
+		 *
+		 * A parity fixture only earns its runtime if it renders the case it was
+		 * added for — and this one does not announce itself, since two prompts
+		 * that both fail to be interesting still match. The first version of
+		 * this fixture was named for an empty cast and was quietly rendering a
+		 * full one; this assertion is what said so.
+		 */
+		// Read from the frozen golden rather than re-rendered: the builder that
+		// produced it is deleted, and the golden *is* what 0.5 emitted for this
+		// fixture, which is exactly what this assertion wants to inspect.
+		const { readFileSync } = await import("node:fs")
+		const { goldenPathFor } = await import("./parity")
+		const rendered = readFileSync(goldenPathFor(allHidden.name), "utf8")
+
+		// Empty on the left of the pipe: no visible assistant character to name.
+		expect(rendered).toContain("NAMES:|Bob")
+	})
+
 	it("reports where the paths diverge", async () => {
 		const results = []
 		for (const fixture of CORPUS)
-			results.push(await runFixture(db as any, fixture, configs))
+			results.push(
+				await runFixture(
+					db as any,
+					withPipelineTemplate(fixture),
+					configs
+				)
+			)
 
 		const gate = parityGate(results, CORPUS.length)
 		for (const r of results) console.log(renderParity(r))
@@ -669,12 +868,13 @@ describe("the parity corpus", () => {
 		// side by side are unreadable — but when the divergence is structural
 		// rather than local, seeing both whole is what actually finds it.
 		if (process.env.PARITY_FULL) {
-			const { legacyRender, pipelinePreview } = await import("./parity")
+			const { readFileSync } = await import("node:fs")
+			const { goldenPathFor, pipelinePreview } = await import("./parity")
 			const scope = await CORPUS[0]!.seed(db as any)
 			const pv: any = await pipelinePreview(db as any, scope)
 			console.log(
-				"--- LEGACY ---\n" +
-					(await legacyRender(db as any, scope, configs)) +
+				"--- 0.5 (frozen golden) ---\n" +
+					readFileSync(goldenPathFor(CORPUS[0]!.name), "utf8") +
 					"\n--- PIPELINE ---\n" +
 					pv.preview?.context?.rendered?.rendered
 			)

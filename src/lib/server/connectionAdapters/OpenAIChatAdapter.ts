@@ -3,7 +3,7 @@ import {
 	type AdapterExports,
 	type BasePromptChat
 } from "./BaseConnectionAdapter"
-import { type CompiledPrompt } from "../utils/promptBuilder"
+import { type CompiledPrompt } from "./types"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { TokenCounters } from "../utils/TokenCounterManager"
 import { OpenAI } from "openai"

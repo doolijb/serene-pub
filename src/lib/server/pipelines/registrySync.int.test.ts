@@ -53,6 +53,51 @@ describe("type registry sync", () => {
 		expect(again.unchanged.length).toBeGreaterThan(20)
 	})
 
+	it("refreshes display text in place — a reworded description is not a new version", async () => {
+		// Labels and descriptions are stripped from the content hash so they
+		// can change without a bump; the row must pick them up, because the
+		// row is what a form renders from (F6). Same pin, same contract, new
+		// wording → the stored slots move and nothing raises.
+		const base = allTypes().find(
+			(d: any) => d.id === "core:query/chat-history@1"
+		)! as any
+		const reworded = {
+			...base,
+			slots: {
+				...base.slots,
+				params: {
+					...base.slots.params,
+					schema: {
+						...base.slots.params.schema,
+						limit: {
+							...base.slots.params.schema.limit,
+							description: "Reworded after shipping."
+						}
+					}
+				}
+			}
+		}
+		const r = await syncTypeRegistry(db as any, [reworded], {
+			release: "0.6.0"
+		})
+		expect(r.updated).toContain("core:query/chat-history@1")
+
+		const rows = await readTypeRegistry(db as any)
+		// Registry entries carry the bare id; the version is its own column.
+		const row = rows.find(
+			(e) => `${e.id}@${e.version}` === "core:query/chat-history@1"
+		)! as any
+		expect(row.slots.params.schema.limit.description).toBe(
+			"Reworded after shipping."
+		)
+
+		// Put the original wording back so later assertions see the build's own.
+		const restore = await syncTypeRegistry(db as any, [base], {
+			release: "0.6.0"
+		})
+		expect(restore.updated).toContain("core:query/chat-history@1")
+	})
+
 	it("raises when a published version's content changed — never publishes, never ignores", async () => {
 		// Publishing silently would rewrite the meaning of every pin to @1.
 		// Ignoring would leave the rows describing a build that no longer exists,

@@ -1,0 +1,43 @@
+Instructions:
+"""
+Narrate the scene for Bob.
+"""
+CHARACTERS:Assistant Characters (AI-controlled):
+```json
+[
+  {
+    "name": "Alice",
+    "description": "A knight."
+  },
+  {
+    "name": "Cara",
+    "description": "A scout."
+  }
+]
+```
+PERSONAS:User Characters (player-controlled):
+```json
+[
+  {
+    "name": "Bob",
+    "description": "A traveller."
+  }
+]
+```
+NAMES:Alice and Cara|Bob
+MACROS:Alice and Cara|Alice and Cara|Bob|Bob
+SCENARIO:
+EXAMPLES:
+POSTHISTORY:Describe, do not speak as Alice and Cara.
+WORLDLORE:World lore: 
+```json
+{"The Ashguard":"Riders who patrol the ash wastes."}
+```
+HISTORY:
+DATE:
+RELATIONSHIPS:
+REMINDER:Describe, do not speak as Alice and Cara.||
+Bob: What do I see?
+Alice: Ash, and riders.
+Bob: Tell me of the ashguard.
+Narrator: 

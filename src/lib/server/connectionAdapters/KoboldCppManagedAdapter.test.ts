@@ -326,7 +326,7 @@ describe("KoboldCppManagedAdapter.generate() — TTL reset after completion", ()
 				extraJson: { stream: false, useChat: true }
 			})
 		})
-		vi.spyOn(adapter.promptBuilder, "compilePrompt").mockResolvedValue({
+		adapter.withCompiledPrompt({
 			messages: [{ role: "user", content: "hi" }]
 		} as any)
 		return adapter
@@ -335,11 +335,12 @@ describe("KoboldCppManagedAdapter.generate() — TTL reset after completion", ()
 	test("resets the TTL after a successful generation", async () => {
 		global.fetch = vi.fn(async () => ({
 			ok: true,
-			json: async () => ({
-				choices: [
-					{ message: { content: "hello" }, finish_reason: "stop" }
-				]
-			})
+			json: async () =>
+				({
+					choices: [
+						{ message: { content: "hello" }, finish_reason: "stop" }
+					]
+				}) as any
 		})) as any
 
 		const adapter = makeNonStreamingAdapter()

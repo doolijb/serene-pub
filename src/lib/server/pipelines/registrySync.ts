@@ -68,7 +68,10 @@ const stripI18n = (v: unknown): unknown => {
 	if (v && typeof v === "object")
 		return Object.fromEntries(
 			Object.entries(v as Record<string, unknown>)
-				.filter(([k]) => k !== "i18n")
+				// `description` is display text exactly like `i18n`: copyediting
+				// an explanation is not a contract change, so neither may bump a
+				// type's version.
+				.filter(([k]) => k !== "i18n" && k !== "description")
 				.map(([k, val]) => [k, stripI18n(val)])
 		)
 	return v
@@ -173,13 +176,28 @@ export async function syncTypeRegistry(
 		}
 
 		if (row.contentHash === hash) {
-			// Only the release stamp moves, so a drift diagnostic can say which
-			// build a row was last confirmed against.
-			if (row.release !== opts.release)
+			// Same contract — but the *display* text may still have moved:
+			// labels and descriptions are stripped from the hash precisely so
+			// they can change without a version bump, and that promise is only
+			// kept if the row picks them up here. The stored slots are what a
+			// form renders from (F6), so a description authored after 1.0.0
+			// shipped must reach installs whose rows predate it.
+			const slotsChanged =
+				JSON.stringify(sortDeep(row.slots ?? {})) !==
+				JSON.stringify(sortDeep(entry.slots ?? {}))
+			if (slotsChanged || row.release !== opts.release) {
 				await db
 					.update(schema.pipelineTypeRegistry)
-					.set({ release: opts.release })
+					.set({
+						release: opts.release,
+						...(slotsChanged ? { slots: entry.slots ?? {} } : {})
+					})
 					.where(eq(schema.pipelineTypeRegistry.id, row.id))
+				if (slotsChanged) {
+					result.updated.push(pin)
+					continue
+				}
+			}
 			result.unchanged.push(pin)
 			continue
 		}

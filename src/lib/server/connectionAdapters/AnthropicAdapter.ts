@@ -6,7 +6,7 @@ import {
 	type AdapterExports,
 	type BasePromptChat
 } from "./BaseConnectionAdapter"
-import type { CompiledPrompt } from "../utils/promptBuilder"
+import type { CompiledPrompt } from "./types"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { anthropicSamplingKeyMap } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"

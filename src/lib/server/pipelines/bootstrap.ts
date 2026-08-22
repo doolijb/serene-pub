@@ -1,15 +1,20 @@
 /**
  * What core puts in the pipeline tables at startup.
  *
- * Two things, and they are different in kind:
+ * Three things, and they are not the same kind of thing:
  *
  * 1. **The type registry** — every node type core knows about, hashed, so a
  *    stored document that names a type gets the same type back on the next boot
  *    or refuses to load (F3, U2). This is a *fact* about the running code.
- * 2. **Core's own spec documents** — the pipelines core ships, published so a
+ * 2. **The event registry** — core's closed event set, materialized so that
+ *    `affects_user` is a column rather than a classification somebody repeats
+ *    per subscription (11 §4). Also a fact about the code.
+ * 3. **Core's own spec documents** — the pipelines core ships, published so a
  *    chat can run one. This is *content*, and the difference matters at the next
  *    line of code: the registry sync raises on conflict, and spec publishing is
  *    idempotent by version.
+ *
+ * What each seeds under, and why the three rules differ, is in `seed.ts`.
  *
  * ## Why this is not in `db/defaults.ts`
  *
@@ -28,84 +33,40 @@
  * response is to stop and say so. See `registrySync.ts`.
  */
 
-import { compile, spec, slot, allTypes } from "@serene-pub/sdk"
-import * as C from "@serene-pub/contracts"
-import { saveDocument, loadDocument } from "./store"
+import { allTypes } from "@serene-pub/sdk"
+import { seedCoreSpecs, syncEventRegistry, type SpecSeedReport } from "./seed"
+import {
+	migrateLegacyToPipelines,
+	type FullMigrationReport
+} from "./migrateLegacy"
+// Re-exported rather than moved out from under its importers: the spec now
+// lives in `specs/respond.ts`, and half the pipeline tests name it from here.
+export { RESPOND_SPEC_ID, RESPOND_VERSION, respondSpec } from "./specs/respond"
+import { RESPOND_VERSION } from "./specs/respond"
+import { loadDocument } from "./store"
 import { syncTypeRegistry, TypeRegistryConflictError } from "./registrySync"
+import { seedVariableTemplates } from "./seedVariableTemplates"
+import { seedContextTemplates } from "./seedContextTemplates"
+import {
+	migrateContextTemplates,
+	type ContextTemplateMigrationReport
+} from "./migrateContextTemplates"
 import * as schema from "$lib/server/db/schema"
 import { eq, and } from "drizzle-orm"
 
-/** The spec a chat turn runs. */
-export const RESPOND_SPEC_ID = "core:spec/respond"
-export const RESPOND_VERSION = "1.0.0"
-
-/**
- * Core's answer-a-message pipeline.
- *
- * The keyword arm only, deliberately: it is the configuration every install has,
- * and the semantic arm needs a loaded embedding model that most do not have on
- * first boot. A spec that halts on a missing model would be the first thing a
- * new user saw.
- */
-export const respondSpec = () =>
-	compile(
-		spec(RESPOND_SPEC_ID, { version: RESPOND_VERSION })
-			.on("core:event/message-created@1")
-			.input("input", C.userMessage.v1())
-			.query("history", ($) =>
-				C.chatHistory.v1({ scope: $.input.chatScope })
-			)
-			.query("lore", ($) =>
-				C.lorebookTriggers.v1({ scope: $.input.chatScope })
-			)
-			.query("cast", ($) => C.chatCast.v1({ scope: $.input.chatScope }))
-			.task("context", ($) =>
-				C.buildTemplateContext.v1({
-					cast: $.cast.cast,
-					prompts: slot.prompts()
-				})
-			)
-			.task("rank", ($) =>
-				C.rankHybrid.v1({
-					candidates: $.lore.main,
-					params: slot.params()
-				})
-			)
-			.task("lines", ($) =>
-				C.processMessages.v1({
-					messages: $.history.messages,
-					cast: $.cast.cast,
-					templateContext: $.context.templateContext,
-					seedName: $.context.seedName
-				})
-			)
-			.task("prompt", ($) =>
-				C.assemble.v2({
-					candidates: $.rank.candidates,
-					decisions: $.rank.decisions,
-					messages: $.lines.messages,
-					templateContext: $.context.templateContext,
-					template: slot.template(),
-					prompts: slot.prompts(),
-					params: slot.params()
-				})
-			)
-			.provider("generate", ($) =>
-				C.generateText.v1({ context: $.prompt.context })
-			)
-			.consume("save", ($) =>
-				C.createMessage.v1({ text: $.generate.text })
-			)
-			.build()
-	)
-
 export interface BootstrapReport {
 	types: { inserted: number; unchanged: number }
-	specs: Array<{
-		id: string
-		version: string
-		action: "published" | "present"
-	}>
+	/** Core's event set, materialized so `affects_user` is queryable (11 §4). */
+	events: { inserted: number; updated: number; unchanged: number }
+	/** The shipped variable layouts every config's default points at. */
+	variableTemplates: { created: number; present: number }
+	/** The shipped story string every assemble node's default points at. */
+	contextTemplates: { created: number; present: number }
+	specs: SpecSeedReport[]
+	/** What a user's existing configuration became. Empty after the first boot. */
+	migration: FullMigrationReport
+	/** What each scope's legacy context config became, and what that pinned. */
+	contextTemplateMigration: ContextTemplateMigrationReport
 	/** Set when the registry refused; the app still boots, pipelines do not run. */
 	conflict?: string
 }
@@ -122,7 +83,19 @@ export interface BootstrapReport {
 export async function bootstrapPipelines(db: any): Promise<BootstrapReport> {
 	const report: BootstrapReport = {
 		types: { inserted: 0, unchanged: 0 },
-		specs: []
+		events: { inserted: 0, updated: 0, unchanged: 0 },
+		variableTemplates: { created: 0, present: 0 },
+		contextTemplates: { created: 0, present: 0 },
+		specs: [],
+		migration: { configs: [], params: 0, selections: 0 },
+		contextTemplateMigration: {
+			ran: false,
+			copied: 0,
+			selected: 0,
+			pinned: 0,
+			customScopes: [],
+			rePointed: 0
+		}
 	}
 
 	try {
@@ -144,44 +117,46 @@ export async function bootstrapPipelines(db: any): Promise<BootstrapReport> {
 		throw err
 	}
 
-	for (const build of [respondSpec]) {
-		const doc = build()
-
-		// Matched on the authored slug and semver, not on a row id: the id is
-		// per-instance, and this has to answer "has *this build's* version of
-		// this spec been published here" identically on a fresh install and on
-		// one that has been upgraded four times.
-		const existing = await db
-			.select({ id: schema.pipelineSpecVersions.id })
-			.from(schema.pipelineSpecVersions)
-			.innerJoin(
-				schema.pipelineSpecs,
-				eq(schema.pipelineSpecVersions.specId, schema.pipelineSpecs.id)
-			)
-			.where(
-				and(
-					eq(schema.pipelineSpecs.slug, doc.id),
-					eq(schema.pipelineSpecVersions.semver, doc.version)
-				)
-			)
-			.limit(1)
-
-		if (existing.length > 0) {
-			report.specs.push({
-				id: doc.id,
-				version: doc.version,
-				action: "present"
-			})
-			continue
-		}
-
-		await saveDocument(db, doc, { publish: true })
-		report.specs.push({
-			id: doc.id,
-			version: doc.version,
-			action: "published"
-		})
+	// After the type sync and inside its success path: the DATA half of the
+	// event set is read off the same descriptors, so an event registry written
+	// while the types are in conflict would describe a build core just refused.
+	const events = await syncEventRegistry(db)
+	report.events = {
+		inserted: events.inserted.length,
+		updated: events.updated.length,
+		unchanged: events.unchanged.length
 	}
+
+	// Before the specs, and the order is load-bearing: `ensureDefaultConfig`
+	// points every variables declaration at a layout row, so a spec seeded
+	// first would ship a config selecting nothing. The prompt is byte-identical
+	// either way (the code default is the floor), but the panel would open with
+	// an empty picker above output that plainly has a layout.
+	const layouts = await seedVariableTemplates(db)
+	report.variableTemplates = {
+		created: layouts.created.length,
+		present: layouts.present.length
+	}
+
+	// Beside the layouts and before the specs, for the same reason: the shipped
+	// config points its template slot at a row, and a spec seeded first would
+	// ship a config selecting nothing.
+	const templates = await seedContextTemplates(db)
+	report.contextTemplates = {
+		created: templates.created.length,
+		present: templates.present.length
+	}
+
+	report.specs = await seedCoreSpecs(db)
+
+	// Last, and only once. Everything it writes references a spec, a prompt or a
+	// config that the three steps above had to create first.
+	report.migration = await migrateLegacyToPipelines(db)
+
+	// After that migration rather than beside it, and the order matters: this
+	// declines to write over an override that is already there, so it has to
+	// run once every override anybody else was going to write exists.
+	report.contextTemplateMigration = await migrateContextTemplates(db)
 
 	return report
 }

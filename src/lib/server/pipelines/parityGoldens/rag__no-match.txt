@@ -1,0 +1,7 @@
+Instructions:
+"""
+You are Alice.
+"""
+WORLDLORE:
+Bob: Tell me about the weather.
+Alice: 

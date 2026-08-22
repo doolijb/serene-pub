@@ -7,7 +7,7 @@ This page collects the most common ways Serene Pub gets stuck, organized by area
 - **"Test: Failed!" on a connection.** The error shown directly under the Test Connection button is the real cause (bad Base URL, missing/incorrect API key, service not running, wrong port) — read it before assuming the connection type is broken. See [Connections](./connections.md).
 - **Model output is garbled, run-on, or ignores turn boundaries.** This is almost always the wrong **Prompt Format** for a text-completion connection — check it against the model's actual training format. See [Prompt Formats and Token Counters](./connections.md#prompt-formats-and-token-counters).
 - **Context budget seems off (too much or too little history/lore fits).** Check the connection's **Token Counter** — leaving it on the generic **Estimate** for a model with unusual tokenization can under- or over-estimate how much fits under the Sampling Config's Context Tokens limit.
-- **A custom Context Config broke every chat using it.** A malformed Handlebars template can break generation instance-wide. Test edits on a low-stakes chat before setting a custom Context Config as your default. See [Context Configs](./context-configs.md).
+- **A custom Context Config broke every chat using it.** A malformed Handlebars template can break generation instance-wide. Test edits on a low-stakes chat before setting a custom Context Config as your default. See [Context Configs](./context-templates.md).
 
 ## KoboldCPP Manager
 

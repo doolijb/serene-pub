@@ -24,10 +24,11 @@
  * formatting — so a difference in output is a difference in *inputs*.
  */
 
-import { InterpolationEngine } from "$lib/server/utils/promptBuilder/InterpolationEngine"
-import { attachCharacterLoreToCharacters } from "$lib/server/utils/promptBuilder/LorebookBindingUtils"
+import { InterpolationEngine } from "$lib/server/utils/interpolation/InterpolationEngine"
+import { attachCharacterLoreToCharacters } from "./characterLore"
 import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
-import type { TemplateContext } from "$lib/server/utils/promptBuilder/types"
+import type { TemplateContext } from "./promptTypes"
+import { renderVariable, type ResolvedLayouts } from "./variableLayouts"
 
 export interface CharacterRow {
 	id?: number
@@ -102,6 +103,15 @@ export interface BuildContextInput {
 	characterLore?: readonly SelectCharacterLoreEntry[]
 	/** Needed only to map lore bindings onto cast members. */
 	chat?: unknown
+	/**
+	 * The `variables` slot, resolved through the scope chain and dereferenced
+	 * into template sources by `world.ts`.
+	 *
+	 * Absent, empty, or missing a key all mean the same thing — use the in-code
+	 * expression — so this stays optional and every render site keeps its
+	 * default. See `variableLayouts.ts`.
+	 */
+	variables?: ResolvedLayouts
 }
 
 export class TemplateContextError extends Error {}
@@ -152,10 +162,11 @@ export function buildTemplateContext(
 		])
 	)
 
-	// Personas go through the *character* helper, matching index.ts:720. The
-	// sibling `attachCharacterLoreToPersonas` exists and is not called on this
-	// path; using it here would be a behaviour change wearing the costume of a
-	// bug fix.
+	// Personas go through the *character* helper, matching index.ts:720. A
+	// sibling `attachCharacterLoreToPersonas` used to exist and was called from
+	// nowhere at all; it was deleted in the dead-code sweep rather than wired in
+	// here, because using it would have been a behaviour change wearing the
+	// costume of a bug fix. Persona lore still never attaches on any live path.
 	const lore = input.characterLore ?? []
 	if (lore.length && !input.chat)
 		throw new TemplateContextError(
@@ -187,24 +198,50 @@ export function buildTemplateContext(
 	const charPostHistory = interpolate(texts.charPostHistory)
 	const charExampleDialogue = interpolate(texts.charExampleDialogue)
 
+	/**
+	 * Each top-level variable now goes through its selected layout, and the
+	 * expression that used to be here is that layout's floor.
+	 *
+	 * The shipped layouts reproduce the old code byte for byte — `characters`
+	 * was `JSON.stringify(x, null, 2)` and its shipped source is
+	 * `{{{json characters 2}}}`, which is the same bytes — so an install that
+	 * has changed nothing gets exactly the prompt it got before. The
+	 * indentation is not a formatting detail: the default context templates
+	 * consume these as raw JSON and the whitespace goes to the model.
+	 *
+	 * These stay **strings**. Not for a test's sake: every existing install has
+	 * `context_configs.template` rows containing `{{{characters}}}`, and handing
+	 * that an array would render `[object Object],[object Object]` in every
+	 * user's template. Presentation moves into the layout; the type on the way
+	 * out does not move at all.
+	 */
+	const layout = (key: string, value: unknown) =>
+		renderVariable(input.variables, key, value)
+
 	return {
-		instructions: interpolate(texts.instructions),
+		instructions: layout("instructions", interpolate(texts.instructions)),
 		speakerRelationships: input.speakerRelationships,
-		// Stringified with the same indentation the legacy path uses: the
-		// default context templates consume these as raw JSON, so the whitespace
-		// is part of the prompt rather than a formatting detail.
-		characters: JSON.stringify(charactersWithLore, null, 2),
-		personas: JSON.stringify(personasWithLore, null, 2),
-		characterNames: interpolationContext.characterNames,
-		personaNames: interpolationContext.personaNames,
-		scenario: interpolate(input.scenario),
+		characters: layout("characters", charactersWithLore),
+		personas: layout("personas", personasWithLore),
+		characterNames: layout(
+			"characterNames",
+			interpolationContext.characterNames
+		),
+		personaNames: layout("personaNames", interpolationContext.personaNames),
+		scenario: layout("scenario", interpolate(input.scenario)),
 		// Empty string rather than undefined. The legacy path leaves these
 		// `undefined` when the config has no text; both render as nothing and
 		// both are falsy under `{{#if}}`, so the prompt is unchanged — but a
 		// context that is inspected before it renders should not show a hole
 		// where "the config has no example dialogue" is the actual answer.
-		exampleDialogue: interpolate(texts.exampleDialogue),
-		postHistoryInstructions,
+		exampleDialogue: layout(
+			"exampleDialogue",
+			interpolate(texts.exampleDialogue)
+		),
+		postHistoryInstructions: layout(
+			"postHistoryInstructions",
+			postHistoryInstructions
+		),
 		// `targetIndex` is a placeholder here exactly as it is in the legacy
 		// builder: the final message array is not known until allocation has
 		// run, so Assemble overwrites it. Left in rather than omitted so the

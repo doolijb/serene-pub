@@ -31,7 +31,7 @@ export const DOC_ORDER: string[] = [
 	"chats",
 	"lorebooks",
 	"connections",
-	"context-configs",
+	"context-templates",
 	"prompt-configs",
 	"summarization",
 	"embeddings-and-rag",

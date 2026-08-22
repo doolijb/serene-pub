@@ -1,4 +1,9 @@
 import Handlebars from "handlebars"
+// The variable registry is the vocabulary. Importing the SDK registers core's
+// declarations as a side effect of module load, which is the same route every
+// other consumer takes — there is no separate "load the variables" step to
+// forget.
+import { allVariables } from "@serene-pub/sdk"
 
 // Parses a context config template's raw text (the source of truth) into a
 // generic tree of cards that mirrors the template's actual Handlebars AST
@@ -713,36 +718,57 @@ const KNOWN_HELPER_NAMES = new Set([
 	"ne",
 	"and",
 	"or",
+	"json",
 	"systemBlock",
 	"userBlock",
 	"assistantBlock"
 ])
 
-// Mirrors TemplateContext (promptBuilder/types.ts) — only the top-level
-// field names, since anything reached through {{#each}}/{{#with}} (which
-// shift scope) can't be validated without knowing that helper's own target
-// shape, which this lint deliberately doesn't attempt (see lintContextTemplate).
-const KNOWN_TOP_LEVEL_FIELDS = new Set([
-	"instructions",
-	"characters",
-	"personas",
-	"scenario",
-	"exampleDialogue",
-	"postHistoryInstructions",
+/**
+ * Only the *structural* names — the ones no variable declares.
+ *
+ * Everything a node presents comes from the variable registry below. This list
+ * used to hold those too, hand-copied from `TemplateContext`, and the header of
+ * `contextConfigCards.templateFields.test.ts` records what that cost: adding
+ * `speakerRelationships` to the type and not to this list made the editor
+ * report "isn't a recognized field at this scope" **against the shipped default
+ * template**. Two lists that must agree, with nothing connecting them, and the
+ * one that fell behind was the one a user reads.
+ *
+ * The remainder genuinely belong here. The message loop and the macro scalars
+ * are structure rather than presentation — a layout for them would have nothing
+ * to lay out — and `characterLore` and `narrativeGraph` are values no live path
+ * renders, kept recognised so a cloned template using one does not start
+ * reporting errors just because the default stopped.
+ */
+const STRUCTURAL_FIELDS = [
 	"postHistory",
 	"chatMessages",
+	"budget",
 	"char",
 	"character",
 	"user",
 	"persona",
-	"characterNames",
-	"personaNames",
-	"worldLore",
 	"characterLore",
-	"history",
-	"currentDate",
-	"narrativeGraph",
-	"speakerRelationships"
+	"narrativeGraph"
+]
+
+/**
+ * The vocabulary, read from the declarations rather than restated.
+ *
+ * Anything reached through `{{#each}}`/`{{#with}}` shifts scope and cannot be
+ * validated without knowing that helper's target shape, which this lint
+ * deliberately does not attempt (see `lintContextTemplate`) — so this is
+ * top-level names only.
+ *
+ * Computed once at module load: `allVariables()` is a fact about the running
+ * build, and a plugin registering one before this module is imported is the
+ * normal case rather than a race — extension load happens at boot, and this
+ * file is reached when an editor opens.
+ */
+const KNOWN_TOP_LEVEL_FIELDS = new Set([
+	...STRUCTURAL_FIELDS,
+	...allVariables().flatMap((v) => Object.keys(v.scope))
 ])
 
 export interface TemplateLintIssue {
@@ -781,7 +807,15 @@ function isCheckableField(field: string): boolean {
  * to resolve, and a false "unrecognized" flag on a legitimately-scoped name
  * is worse than missing a real typo deep in a custom nested block.
  */
-export function lintContextTemplate(cards: Card[]): TemplateLintIssue[] {
+export function lintContextTemplate(
+	cards: Card[],
+	/**
+	 * The names resolvable at the root. Defaults to a context template's
+	 * vocabulary; a *variable* template has a much smaller one, declared by the
+	 * variable it renders — see `lintVariableTemplate`.
+	 */
+	vocabulary: ReadonlySet<string> = KNOWN_TOP_LEVEL_FIELDS
+): TemplateLintIssue[] {
 	const issues: TemplateLintIssue[] = []
 
 	function visit(list: Card[], fieldsResolvable: boolean) {
@@ -800,7 +834,7 @@ export function lintContextTemplate(cards: Card[]): TemplateLintIssue[] {
 					if (
 						field &&
 						isCheckableField(field) &&
-						!KNOWN_TOP_LEVEL_FIELDS.has(field)
+						!vocabulary.has(field)
 					) {
 						issues.push({
 							cardId: card.id,
@@ -822,7 +856,7 @@ export function lintContextTemplate(cards: Card[]): TemplateLintIssue[] {
 					field &&
 					!/\s/.test(field) &&
 					isCheckableField(field) &&
-					!KNOWN_TOP_LEVEL_FIELDS.has(field)
+					!vocabulary.has(field)
 				) {
 					issues.push({
 						cardId: card.id,
@@ -837,4 +871,34 @@ export function lintContextTemplate(cards: Card[]): TemplateLintIssue[] {
 
 	visit(cards, true)
 	return issues
+}
+
+/**
+ * Lint one variable layout against the scope its variable declares.
+ *
+ * The failure this exists for is silent: a layout writing
+ * `{{#each character}}` over a scope keyed `characters` renders an empty
+ * string, with no error anywhere. You find out when a reply arrives with no
+ * cast in it, and the layout looks correct in the editor the whole time.
+ *
+ * The vocabulary is the declaration's own `scope`, not the context template's —
+ * a layout for `characters` has exactly one name in scope, and offering it the
+ * whole context vocabulary would accept `{{{scenario}}}` here and render
+ * nothing.
+ */
+export function lintVariableTemplate(
+	source: string,
+	scope: Record<string, unknown>
+): TemplateLintIssue[] {
+	const parsed = parseContextTemplate(source)
+	if (parsed.parseError)
+		return [
+			{
+				cardId: "parse",
+				start: 0,
+				end: source.length,
+				message: parsed.parseError
+			}
+		]
+	return lintContextTemplate(parsed.cards, new Set(Object.keys(scope)))
 }

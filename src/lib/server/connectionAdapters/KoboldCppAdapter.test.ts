@@ -195,11 +195,11 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 	let fetchMock: ReturnType<typeof vi.fn>
 
 	function mockCompilePrompt(adapter: InstanceType<typeof KoboldCppAdapter>) {
-		vi.spyOn(adapter.promptBuilder, "compilePrompt").mockResolvedValue({
+		adapter.withCompiledPrompt({
 			prompt: "hi",
 			messages: [{ role: "user", content: "hi" }],
 			meta: {} as any
-		})
+		} as any)
 	}
 
 	beforeEach(() => {
@@ -339,11 +339,11 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 	let fetchMock: ReturnType<typeof vi.fn>
 
 	function mockCompilePrompt(adapter: InstanceType<typeof KoboldCppAdapter>) {
-		vi.spyOn(adapter.promptBuilder, "compilePrompt").mockResolvedValue({
+		adapter.withCompiledPrompt({
 			prompt: "hi",
 			messages: [{ role: "user", content: "hi" }],
 			meta: {} as any
-		})
+		} as any)
 	}
 
 	function makeSSEResponse(dataPayloads: any[]) {

@@ -245,9 +245,14 @@ describe("end to end", () => {
 			chatScenario: "{{char}} meets {{user}}."
 		})
 		const ctx = buildTemplateContext(resolved)
-		expect(ctx.scenario).toBe("Alice meets Bob.")
+		// Each value arrives through its shipped layout, so these assert what
+		// the layout was *given* rather than what it wrapped it in — the
+		// wrapper is `variableTemplates.parity.test.ts`'s subject, not this
+		// file's, and pinning it here would break this test every time a
+		// heading is reworded.
+		expect(ctx.scenario).toContain("Alice meets Bob.")
 		expect(ctx.characterNames).toBe("Alice")
-		expect(ctx.instructions).toBe("Be brief.")
-		expect(JSON.parse(ctx.characters as string)[0].name).toBe("Alice")
+		expect(ctx.instructions).toContain("Be brief.")
+		expect(ctx.characters).toContain('"name": "Alice"')
 	})
 })
