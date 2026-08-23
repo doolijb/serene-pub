@@ -421,7 +421,7 @@ export const narrativeGraphBuildHandler: Handler<
 		// pipeline's shipped prompts.
 		const systemSettingsRow = await db.query.systemSettings.findFirst()
 		const { resolveGraphStepConfigs } = await import(
-			"$lib/server/pipelines/graphSteps"
+			"$lib/server/pipelines/config/graphSteps"
 		)
 		const pipelineSteps = await resolveGraphStepConfigs(db, userId)
 
@@ -826,7 +826,7 @@ export const narrativeGraphBuildHandler: Handler<
 			// build (saveReceipt swallows its own errors).
 			{
 				const { saveReceipt } = await import(
-					"$lib/server/pipelines/receipts"
+					"$lib/server/pipelines/runtime/receipts"
 				)
 				const { GRAPH_BUILD_SPEC_ID, GRAPH_BUILD_VERSION } =
 					await import("$lib/server/pipelines/specs/graphBuild")

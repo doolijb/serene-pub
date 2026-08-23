@@ -7,6 +7,14 @@
  * decision lives on the **entry** rather than on the pipeline, so a user can
  * read it off the thing they are editing.
  *
+ * The node supplies the *default*, not the answer. Somebody running without an
+ * embedding model wants every entry they have not thought about to be found by
+ * keyword, and setting that once on the query node beats opening several
+ * hundred lorebook entries. An entry that states its own strategy still wins:
+ * the node answers for the entries nobody has ruled on, which is what a
+ * default is. NULL in the column is therefore a real value — "not decided" —
+ * and must not be written away to `rag` on save.
+ *
  * The fallback deserves its own note because it is the one place this differs
  * from a naive reading of the rule. An entry set to `rag` on an instance with
  * no embedding model is **still findable by keyword**. The alternative is
@@ -18,10 +26,36 @@
 
 export type RetrievalStrategy = "keyword" | "rag" | "both"
 
-/** NULL in the column means the default, which is `rag`. */
-export const strategyOf = (entry: {
-	retrievalStrategy?: string | null
-}): RetrievalStrategy => (entry.retrievalStrategy as RetrievalStrategy) ?? "rag"
+/** What a node means when it says nothing. */
+export const DEFAULT_RETRIEVAL_STRATEGY: RetrievalStrategy = "rag"
+
+/** Every value the mode can take, in the order a picker should offer them. */
+export const RETRIEVAL_STRATEGIES: readonly RetrievalStrategy[] = [
+	"rag",
+	"keyword",
+	"both"
+]
+
+const isStrategy = (v: unknown): v is RetrievalStrategy =>
+	v === "keyword" || v === "rag" || v === "both"
+
+/**
+ * NULL in the column means "not decided", so the node's default answers.
+ *
+ * `fallback` is validated rather than trusted: it arrives from a config row a
+ * plugin or an older schema may have written, and a typo there should degrade
+ * to the shipped default instead of silently making every undecided entry
+ * ineligible for both arms.
+ */
+export const strategyOf = (
+	entry: { retrievalStrategy?: string | null },
+	fallback: RetrievalStrategy | string | null | undefined = DEFAULT_RETRIEVAL_STRATEGY
+): RetrievalStrategy =>
+	isStrategy(entry.retrievalStrategy)
+		? entry.retrievalStrategy
+		: isStrategy(fallback)
+			? fallback
+			: DEFAULT_RETRIEVAL_STRATEGY
 
 export interface ArmAvailability {
 	/** False when there is no embedding model, or vectors are stale. */
@@ -41,9 +75,10 @@ export type Arm = "keyword" | "vector"
 export function eligibleFor(
 	entry: { retrievalStrategy?: string | null },
 	arm: Arm,
-	availability: ArmAvailability
+	availability: ArmAvailability,
+	fallback?: RetrievalStrategy | string | null
 ): boolean {
-	const strategy = strategyOf(entry)
+	const strategy = strategyOf(entry, fallback)
 	if (strategy === "both") return true
 	if (strategy === "keyword") return arm === "keyword"
 
@@ -57,9 +92,10 @@ export function eligibleFor(
 export function armNote(
 	entry: { retrievalStrategy?: string | null },
 	arm: Arm,
-	availability: ArmAvailability
+	availability: ArmAvailability,
+	fallback?: RetrievalStrategy | string | null
 ): string {
-	const strategy = strategyOf(entry)
+	const strategy = strategyOf(entry, fallback)
 	if (
 		strategy === "rag" &&
 		arm === "keyword" &&

@@ -11,6 +11,7 @@ import { PGlite } from "@electric-sql/pglite"
 import { drizzle } from "drizzle-orm/pglite"
 import { migrate } from "drizzle-orm/pglite/migrator"
 import path from "path"
+import fsp from "fs/promises"
 import * as schema from "$lib/server/db/schema"
 
 export type TestDb = ReturnType<typeof drizzle<typeof schema, PGlite>>
@@ -67,4 +68,37 @@ export async function createTestUser(db: TestDb, username?: string) {
 		})
 		.returning()
 	return user
+}
+
+/**
+ * Tear down a temp data directory a test pointed `SERENE_PUB_DATA_DIR` at.
+ *
+ * ⚠ Only call this from a file that has already loaded `$lib/server/db` — every
+ * caller mocks it with `importOriginal`, so the dynamic import below resolves to
+ * that file's own mock. From a file that never touched the module it would
+ * *open* the real database in the directory being deleted, which is the
+ * opposite of the point.
+ *
+ * Why it exists: the real module runs a lock heartbeat that writes `meta.json`
+ * every four seconds. Deleting the directory under a live timer meant the file
+ * could be written back into it part-way through the walk, so the final `rmdir`
+ * hit `ENOTEMPTY` — a flake that moved between files and took out roughly one
+ * full run in three. Stopping the writer first is the fix; the retries are for
+ * anything else still holding a handle.
+ */
+export async function releaseDataDir(dir: string): Promise<void> {
+	try {
+		const mod = (await import("$lib/server/db")) as {
+			closeDatabase?: () => Promise<void>
+		}
+		await mod.closeDatabase?.()
+	} catch {
+		// A suite that replaced the module wholesale has nothing to close.
+	}
+	await fsp.rm(dir, {
+		recursive: true,
+		force: true,
+		maxRetries: 5,
+		retryDelay: 50
+	})
 }

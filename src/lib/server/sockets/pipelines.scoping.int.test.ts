@@ -22,7 +22,8 @@ import path from "path"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
-import { RESPOND_SPEC_ID } from "$lib/server/pipelines/bootstrap"
+import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { humanizeTypeId } from "$lib/server/pipelines/config/panel"
 
 let testDb: TestDb
 let dataDir: string
@@ -48,7 +49,7 @@ beforeAll(async () => {
 	testDb = dbModule.db as unknown as TestDb
 
 	const { bootstrapPipelines } = await import(
-		"$lib/server/pipelines/bootstrap"
+		"$lib/server/pipelines/boot/bootstrap"
 	)
 	await bootstrapPipelines(testDb as any)
 
@@ -92,7 +93,7 @@ function recordingEmit() {
 }
 
 async function firstWritableOptionId(userId: number) {
-	const { namespaceView } = await import("$lib/server/pipelines/config")
+	const { namespaceView } = await import("$lib/server/pipelines/config/panel")
 	const view = await namespaceView(
 		testDb as any,
 		"socket-scoping-test-secret",
@@ -360,7 +361,7 @@ describe("prompt CRUD stays inside its pipeline", () => {
 		expect(res.error).toBeUndefined()
 
 		const { resolvePromptFields } = await import(
-			"$lib/server/pipelines/prompts"
+			"$lib/server/pipelines/entities/prompts"
 		)
 		expect(
 			await resolvePromptFields(testDb as any, cloned.promptId)
@@ -495,5 +496,322 @@ describe("prompt CRUD stays inside its pipeline", () => {
 		expect(
 			(leftover as any[]).filter((r) => r.value === cloned.promptId)
 		).toHaveLength(0)
+	})
+})
+
+/**
+ * Named-config CRUD, and the two ways it could quietly do harm.
+ *
+ * A configuration is the thing someone keeps — the pipeline underneath it is
+ * just the backbone. So these verbs are the ones that lose work if they are
+ * wrong: a duplicate that starts empty silently hands back the *defaults*
+ * rather than what you were looking at, and an id check that trusts the client
+ * lets a guessable integer rename or delete another pipeline's configuration
+ * through this one's screen.
+ */
+describe("named-config CRUD", () => {
+	const call = async (name: string, params: any, user = admin) => {
+		const mod: any = await import("./pipelines")
+		const rec = recordingEmit()
+		const res = await mod[name].handler(
+			socketFor(user.id, user === admin),
+			params,
+			rec.emit
+		)
+		return { res, rec }
+	}
+
+	const configsIn = async () => {
+		const [spec] = await testDb
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		return await testDb
+			.select()
+			.from(schema.pipelineConfigs)
+			.where(eq(schema.pipelineConfigs.specId, spec.id))
+	}
+
+	test("creates one, and it shows up in the view", async () => {
+		const { res } = await call("pipelinesCreateConfig", {
+			slug: RESPOND_SPEC_ID,
+			name: "Nighttime"
+		})
+		expect(res.error).toBeUndefined()
+		expect(res.configId).toBeTruthy()
+		expect((await configsIn()).map((c: any) => c.name)).toContain(
+			"Nighttime"
+		)
+	})
+
+	test("refuses a name the pipeline already uses", async () => {
+		const { res } = await call("pipelinesCreateConfig", {
+			slug: RESPOND_SPEC_ID,
+			name: "Nighttime"
+		})
+		expect(res.error).toMatch(/already has a configuration/i)
+	})
+
+	test("a duplicate carries the values, not just the name", async () => {
+		// The whole workflow is "copy the one I like, change one thing". A copy
+		// that started empty would resolve the pipeline defaults instead, which
+		// looks identical until the one thing you changed is not the only
+		// difference.
+		const source = (await configsIn()).find(
+			(c: any) => c.name === "Nighttime"
+		)!
+		await testDb.insert(schema.pipelineConfigValues).values({
+			configId: source.id,
+			nodeKey: "prompt",
+			slot: "params",
+			path: "budget",
+			value: 1234 as any
+		})
+
+		const { res } = await call("pipelinesCreateConfig", {
+			slug: RESPOND_SPEC_ID,
+			name: "Nighttime (copy)",
+			fromConfigId: source.id
+		})
+		expect(res.error).toBeUndefined()
+
+		const copied = await testDb
+			.select()
+			.from(schema.pipelineConfigValues)
+			.where(eq(schema.pipelineConfigValues.configId, res.configId))
+		expect(copied).toHaveLength(1)
+		expect(copied[0].value).toBe(1234)
+		// And the source still has its own row — a move would pass a
+		// "the copy has it" assertion just as well.
+		const stillThere = await testDb
+			.select()
+			.from(schema.pipelineConfigValues)
+			.where(eq(schema.pipelineConfigValues.configId, source.id))
+		expect(stillThere).toHaveLength(1)
+	})
+
+	test("renames, then deletes", async () => {
+		const target = (await configsIn()).find(
+			(c: any) => c.name === "Nighttime (copy)"
+		)!
+		const renamed = await call("pipelinesRenameConfig", {
+			slug: RESPOND_SPEC_ID,
+			configId: target.id,
+			name: "Daytime"
+		})
+		expect(renamed.res.error).toBeUndefined()
+		expect((await configsIn()).map((c: any) => c.name)).toContain("Daytime")
+
+		const deleted = await call("pipelinesDeleteConfig", {
+			slug: RESPOND_SPEC_ID,
+			configId: target.id
+		})
+		expect(deleted.res.error).toBeUndefined()
+		expect((await configsIn()).map((c: any) => c.name)).not.toContain(
+			"Daytime"
+		)
+	})
+
+	test("will not delete the shipped configuration", async () => {
+		const shipped = (await configsIn()).find((c: any) => c.isImmutable)
+		expect(shipped, "no immutable config to test against").toBeTruthy()
+		const { res } = await call("pipelinesDeleteConfig", {
+			slug: RESPOND_SPEC_ID,
+			configId: shipped!.id
+		})
+		expect(res.error).toMatch(/ships|default/i)
+		expect((await configsIn()).some((c: any) => c.id === shipped!.id)).toBe(
+			true
+		)
+	})
+
+	test("will not touch another pipeline's configuration", async () => {
+		// The id is a small integer the client supplies. Without the spec check
+		// this renames the narrator's configuration through the reply
+		// pipeline's screen.
+		const [narrate] = await testDb
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/narrate"))
+		const [foreign] = await testDb
+			.select()
+			.from(schema.pipelineConfigs)
+			.where(eq(schema.pipelineConfigs.specId, narrate.id))
+		expect(foreign, "narrate has no config to borrow").toBeTruthy()
+
+		const { res } = await call("pipelinesRenameConfig", {
+			slug: RESPOND_SPEC_ID,
+			configId: foreign.id,
+			name: "Hijacked"
+		})
+		expect(res.error).toMatch(/different pipeline/i)
+
+		const [after] = await testDb
+			.select()
+			.from(schema.pipelineConfigs)
+			.where(eq(schema.pipelineConfigs.id, foreign.id))
+		expect(after.name).toBe(foreign.name)
+	})
+
+	test("a non-admin cannot create one", async () => {
+		const { res } = await call(
+			"pipelinesCreateConfig",
+			{ slug: RESPOND_SPEC_ID, name: "Sneaky" },
+			owner
+		)
+		expect(res.error).toMatch(/admin/i)
+		expect((await configsIn()).map((c: any) => c.name)).not.toContain(
+			"Sneaky"
+		)
+	})
+})
+
+/**
+ * The structural payload the builder's map draws from.
+ *
+ * Everything here is topology — node keys, wiring, blocks — and it rides on
+ * `pipelines:detail` rather than `pipelines:get` on purpose: the panel view is
+ * what the sidebar reads, and 05 §0a forbids it knowing any of this. The first
+ * assertion is that boundary; the rest are the three things the map cannot draw
+ * if they are wrong.
+ */
+describe("the builder's structural payload", () => {
+	const detailFor = async (slug: string) => {
+		const { pipelinesDetail } = await import("./pipelines")
+		const rec = recordingEmit()
+		await pipelinesDetail.handler(
+			socketFor(admin.id, true),
+			{ slug },
+			rec.emit
+		)
+		return rec.last("pipelines:detail")?.spec
+	}
+
+	test("a non-admin gets no graph, because they get no detail at all", async () => {
+		const { pipelinesDetail } = await import("./pipelines")
+		const rec = recordingEmit()
+		const res: any = await pipelinesDetail.handler(
+			socketFor(owner.id),
+			{ slug: RESPOND_SPEC_ID },
+			rec.emit
+		)
+		expect(res.error).toMatch(/admin/i)
+		expect(rec.last("pipelines:detail")).toBeUndefined()
+	})
+
+	test("every node appears, including the ones that configure nothing", async () => {
+		// The page used to render `steps`, which exist only for configurable
+		// nodes — so a twelve-node pipeline drew as eight and the reader had no
+		// way to know four were missing.
+		const spec = await detailFor(RESPOND_SPEC_ID)
+		const keys = spec.graph.nodes.map((n: any) => n.key)
+		expect(keys).toContain("input")
+		expect(keys).toContain("gather.cast.read")
+		expect(keys).toContain("lines")
+		const unconfigurable = spec.graph.nodes.filter(
+			(n: any) => n.stepKey === null
+		)
+		expect(unconfigurable.length).toBeGreaterThan(0)
+	})
+
+	test("a configurable node names the step that configures it", async () => {
+		// The map is keyed by node and the inspector by step; if this pairing
+		// is wrong, clicking a card opens somebody else's settings.
+		const spec = await detailFor(RESPOND_SPEC_ID)
+		const { namespaceView } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
+		const view: any = await namespaceView(
+			testDb as any,
+			"socket-scoping-test-secret",
+			RESPOND_SPEC_ID,
+			{ userId: admin.id, isAdmin: true }
+		)
+		const generate = spec.graph.nodes.find((n: any) => n.key === "generate")
+		const step = view.steps.find((s: any) => s.key === generate.stepKey)
+		expect(step, "generate's stepKey matches no step").toBeTruthy()
+		expect(step.label).toBe(generate.label)
+	})
+
+	test("the reads arrive as one block, one chain each", async () => {
+		// The map draws a frame with columns from exactly this: same blockId,
+		// different blockChain. Were they to arrive with no block, or all on
+		// one chain, the page would draw four sequential cards for something
+		// that runs at once — which is the drawing being wrong about the run.
+		const spec = await detailFor(RESPOND_SPEC_ID)
+		const reads = spec.graph.nodes.filter(
+			(n: any) => n.blockId === "gather"
+		)
+		// Five since 1.8.0: world and character lore split into their own
+		// lanes. Asserted as "one chain each" rather than a fixed count, so
+		// adding a source is a one-line change here instead of a puzzle.
+		expect(reads.length).toBeGreaterThanOrEqual(4)
+		expect(reads.every((n: any) => n.blockKind === "async")).toBe(true)
+		expect(new Set(reads.map((n: any) => n.blockChain)).size).toBe(
+			reads.length
+		)
+		expect(
+			reads.map((n: any) => n.blockChain).sort()
+		).toEqual([
+			"cast",
+			"characterLore",
+			"history",
+			"historyEntries",
+			"relationshipsKnown",
+			"relationshipsPerspectives",
+			"worldLore"
+		])
+
+		const block = spec.graph.blocks.find((b: any) => b.id === "gather")
+		expect(block?.kind).toBe("async")
+		expect(block?.mode).toBe("parallel")
+	})
+
+	test("a node is labelled with the name its type declares", async () => {
+		// ⚠ The label was `humanizeTypeId(typeId)`, which turns
+		// `core:query/relationships-perspectives@1` into "Relationships
+		// perspectives" — a reasonable fallback being used as the answer. The
+		// registry row carries `i18n`, written from the declaration precisely
+		// so a name can be a name, and the builder invented one beside it: the
+		// graph query rendered as "Graph context" while its declaration said
+		// "Graph relationships", and nothing showed the second.
+		//
+		// Asserted on a type whose declared name is *not* what humanizing its
+		// id produces, or the test passes either way.
+		const spec = await detailFor(RESPOND_SPEC_ID)
+		const node = spec.graph.nodes.find((n: any) =>
+			String(n.typeId).startsWith("core:query/relationships-perspectives")
+		)
+		expect(node, "the node is in the graph").toBeTruthy()
+		expect(node!.label).toBe("Relationships: their perspective")
+		expect(node!.label).not.toBe(humanizeTypeId(node!.typeId))
+	})
+
+	test("a map block arrives with what it iterates over", async () => {
+		// `over` is a data reference the edge table never carried, so deriving
+		// it from edges comes back empty every time — it has to be read from
+		// `pipeline_blocks`.
+		const spec = await detailFor("core:spec/summarize-scene")
+		const block = spec.graph.blocks.find((b: any) => b.kind === "map")
+		expect(block, "summarize-scene declares a map block").toBeTruthy()
+		expect(block.over).toBe("batches")
+		expect(block.max).toBeGreaterThan(0)
+		const inBlock = spec.graph.nodes.filter(
+			(n: any) => n.blockId === block.id
+		)
+		expect(inBlock.length).toBeGreaterThan(0)
+		expect(inBlock[0].blockKind).toBe("map")
+	})
+
+	test("an edge out of a block keeps the block it came from", async () => {
+		// A map's output feeds the next node with no `fromNodeId` at all.
+		// Reading only nodes drops it, and the frame loses its exit.
+		const spec = await detailFor("core:spec/summarize-scene")
+		const fromBlock = spec.graph.edges.filter((e: any) => e.fromBlock)
+		expect(
+			fromBlock.length,
+			"every edge resolved to a node — the block edges were dropped"
+		).toBeGreaterThan(0)
+		expect(fromBlock.every((e: any) => e.from === null)).toBe(true)
 	})
 })

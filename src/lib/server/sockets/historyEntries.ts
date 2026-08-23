@@ -287,6 +287,10 @@ export const iterateNextHistoryEntryHandler: Handler<
 			content: "", // Blank content for new entry
 			useRegex: existingEntry.useRegex,
 			caseSensitive: existingEntry.caseSensitive,
+			// Carried with its two neighbours: the new row is a sibling of
+			// this one, and inheriting two of the three match settings would
+			// be the odd one out rather than a decision.
+			recursionDepth: existingEntry.recursionDepth,
 			year,
 			month,
 			day,

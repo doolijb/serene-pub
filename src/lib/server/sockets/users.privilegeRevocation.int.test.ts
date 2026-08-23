@@ -14,6 +14,7 @@ import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { releaseDataDir } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
 let dataDir: string
@@ -36,7 +37,7 @@ beforeAll(async () => {
 }, 60_000)
 
 afterAll(async () => {
-	await fs.rm(dataDir, { recursive: true, force: true })
+	await releaseDataDir(dataDir)
 })
 
 async function makeUser(username: string, isAdmin = false) {

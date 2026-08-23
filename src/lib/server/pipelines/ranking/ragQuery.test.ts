@@ -10,7 +10,7 @@ import { describe, it, expect } from "vitest"
 import {
 	formatMessageForQuery,
 	queryWindows
-} from "./ragQuery"
+} from "$lib/server/pipelines/ranking/ragQuery"
 
 const cast = {
 	chatCharacters: [

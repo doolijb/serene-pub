@@ -397,7 +397,7 @@ export async function generateResponse({
 	 * rather than a rewrite of this file.
 	 */
 	{
-		const { runTurn } = await import("$lib/server/pipelines/runTurn")
+		const { runTurn } = await import("$lib/server/pipelines/runtime/runTurn")
 		const { NARRATE_SPEC_ID } = await import(
 			"$lib/server/pipelines/specs/narrate"
 		)
@@ -434,7 +434,7 @@ export async function generateResponse({
 			)
 
 		const { toCompiledPrompt } = await import(
-			"$lib/server/pipelines/dispatch"
+			"$lib/server/pipelines/runtime/dispatch"
 		)
 		adapter.withCompiledPrompt(
 			toCompiledPrompt(rendered, connection, {

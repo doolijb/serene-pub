@@ -64,8 +64,11 @@ The built-in **Default** Context Config's template (shown here verbatim) illustr
 {{{history}}}
 {{/if}}
 
-{{#if speakerRelationships}}
-{{{speakerRelationships}}}
+{{#if relationshipsPerspectives}}
+{{{relationshipsPerspectives}}}
+{{/if}}
+{{#if relationshipsKnown}}
+{{{relationshipsKnown}}}
 {{/if}}
 
 {{/systemBlock}}
@@ -111,7 +114,7 @@ Example dialogue:
 Available variables:
 
 - **`currentDate`**, **`instructions`** (from the active Chat Prompt), **`characters`** and **`personas`** (each rendered as JSON), **`scenario`**, **`worldLore`**, **`history`**, and **`speakerRelationships`** — all optional (wrap them in `{{#if ...}}` since they may be empty). Each of these arrives already formatted by its **variable layout** — see below.
-- **`speakerRelationships`** arrives already wrapped in its heading and fence by its variable layout, like every other block above. It is built fresh for whoever is speaking: their own outgoing relationships, relationships other cast members in the chat have pointed at them, and any bindings marked **legendary** (the one layer that also carries a binding's Summary). It is assembled independently of the infill engines below and is included on every generation that has a lorebook with a bound speaker.
+- **`relationshipsPerspectives`** (how the speaking character regards the others) and **`relationshipsKnown`** (how they are regarded in return, plus any figures the world knows of) each arrive already wrapped in their heading and fence by their variable layout, like every other block above. They were one `speakerRelationships` block before 0.6; a cloned template still using that name will parse, but nothing supplies it any more, so it renders empty. It is built fresh for whoever is speaking: their own outgoing relationships, relationships other cast members in the chat have pointed at them, and any bindings marked **legendary** (the one layer that also carries a binding's Summary). It is assembled independently of the infill engines below and is included on every generation that has a lorebook with a bound speaker.
 - **`narrativeGraph`** is a legacy variable that still parses but is **currently switched off at the source** — it always renders empty, so a `{{#if narrativeGraph}}` block never outputs anything. `speakerRelationships` replaced it. If you cloned the default template before that change, your relationships block is silently empty and should be swapped for `speakerRelationships`.
 - **`chatMessages`** — an array iterated with `{{#each ... as |chatMessage msgIndex|}}` (the `msgIndex` block param is what lets the post-history block below find its target position), each entry exposing `role`, `name`, and `message`.
 - **`postHistory`** — see below.
@@ -176,13 +179,13 @@ Used whenever vectorization is enabled and ready. Selects by embedding similarit
 
 - The most recent 10 messages in a chat are always included, never subject to either engine's selection.
 - A **Pinned** lorebook entry is always included, bypassing both keyword matching and semantic scoring entirely.
-- `{{{speakerRelationships}}}` is identical either way — it's built outside both engines — and the `postHistory` object (above) is computed identically regardless of which engine selected the surrounding content.
+- the two relationship blocks are identical either way — it's built outside both engines — and the `postHistory` object (above) is computed identically regardless of which engine selected the surrounding content.
 - Within `{{{worldLore}}}` and `{{{history}}}`, entries are ordered by relevance (highest first), not by an entry's position or date in the lorebook — which entry ends up first can change from one generation to the next as the conversation moves. **Character Lore has no top-level template variable of its own** — qualifying entries are attached directly onto their bound character's own object inside `{{{characters}}}`, under an `"extra lore"` key, rather than appearing as a separate `{{characterLore}}` variable.
 - Under Keyword mode specifically, each content type has a hard count cap in addition to the token budget (see above); RAG mode uses its own per-type token budgets instead of a fixed entry count. Either way, once the model's context window is the tighter constraint, content simply stops being added for that generation — see [Sampling Configs](./connections.md#sampling-configs) for how Context Tokens sets that limit.
 
 ## Why character, persona, and lore data is JSON, not prose
 
-`characters`, `personas`, `worldLore`, `history`, and `speakerRelationships` are all fenced as ` ```json ` blocks, while `instructions` and `scenario` stay wrapped in plain `"""` prose fences, and the post-history reminder fields (`instructions`, `charInstructions`, `exampleDialogue` inside `postHistory`) use ` ```text ` fences. (The first two groups get their fences from their variable layouts, as described above; the post-history fields are still fenced in the template, since they come off the `postHistory` object rather than from a variable of their own.) That split is deliberate: the JSON-fenced fields are _facts_ (who someone is, what they know, what happened), and the prose/text-fenced fields are _directives_ (how to write, what tone to take, what's happening right now) — the template keeps those two kinds of content visibly distinct rather than blending everything into one undifferentiated paragraph.
+`characters`, `personas`, `worldLore`, `history`, and the two relationship blocks are all fenced as ` ```json ` blocks, while `instructions` and `scenario` stay wrapped in plain `"""` prose fences, and the post-history reminder fields (`instructions`, `charInstructions`, `exampleDialogue` inside `postHistory`) use ` ```text ` fences. (The first two groups get their fences from their variable layouts, as described above; the post-history fields are still fenced in the template, since they come off the `postHistory` object rather than from a variable of their own.) That split is deliberate: the JSON-fenced fields are _facts_ (who someone is, what they know, what happened), and the prose/text-fenced fields are _directives_ (how to write, what tone to take, what's happening right now) — the template keeps those two kinds of content visibly distinct rather than blending everything into one undifferentiated paragraph.
 
 The reasoning behind serializing the factual side as JSON specifically:
 

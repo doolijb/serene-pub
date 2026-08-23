@@ -12,9 +12,9 @@
  * `core:spec/respond` is a list of identifiers, not of things.
  */
 
-import { RESPOND_SPEC_ID, respondSpec } from "./respond"
-import { NARRATE_SPEC_ID, narrateSpec } from "./narrate"
-import { GRAPH_BUILD_SPEC_ID, graphBuildSpec } from "./graphBuild"
+import { RESPOND_SPEC_ID, respondSpec } from "$lib/server/pipelines/specs/respond"
+import { NARRATE_SPEC_ID, narrateSpec } from "$lib/server/pipelines/specs/narrate"
+import { GRAPH_BUILD_SPEC_ID, graphBuildSpec } from "$lib/server/pipelines/specs/graphBuild"
 import {
 	SUMMARIZE_CHARACTER_SPEC_ID,
 	SUMMARIZE_HISTORY_SPEC_ID,
@@ -24,7 +24,7 @@ import {
 	summarizeHistorySpec,
 	summarizeSceneSpec,
 	summarizeWorldSpec
-} from "./summarize"
+} from "$lib/server/pipelines/specs/summarize"
 
 export interface CoreSpec {
 	slug: string
@@ -81,11 +81,11 @@ export const CORE_SPECS: CoreSpec[] = [
 export const coreSpec = (slug: string): CoreSpec | undefined =>
 	CORE_SPECS.find((s) => s.slug === slug)
 
-export { RESPOND_SPEC_ID, RESPOND_VERSION, respondSpec } from "./respond"
-export { NARRATE_SPEC_ID, NARRATE_VERSION, narrateSpec } from "./narrate"
+export { RESPOND_SPEC_ID, RESPOND_VERSION, respondSpec } from "$lib/server/pipelines/specs/respond"
+export { NARRATE_SPEC_ID, NARRATE_VERSION, narrateSpec } from "$lib/server/pipelines/specs/narrate"
 export {
 	GRAPH_BUILD_SPEC_ID,
 	GRAPH_BUILD_VERSION,
 	graphBuildSpec
-} from "./graphBuild"
-export * from "./summarize"
+} from "$lib/server/pipelines/specs/graphBuild"
+export * from "$lib/server/pipelines/specs/summarize"

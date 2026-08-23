@@ -1165,6 +1165,17 @@ export const worldLoreEntries = pgTable(
 		matchMode: text("match_mode"),
 		useRegex: boolean("use_regex").default(false),
 		caseSensitive: boolean("case_sensitive").notNull().default(false),
+		/**
+		 * The deepest recursion level this entry may still be reached at.
+		 *
+		 * `0` is the conversation only: never dragged in by another entry.
+		 * NULL is no opinion, and the query node's `maxRecursionDepth` decides
+		 * — which is what makes turning recursion on for a whole lorebook one
+		 * setting rather than several hundred. Nullable for the same reason
+		 * `retrievalStrategy` is: an entry nobody has ruled on has to stay
+		 * distinguishable from one somebody deliberately set to the default.
+		 */
+		recursionDepth: integer("recursion_depth"),
 		content: text("content").notNull().default(""),
 		priority: integer("priority").notNull().default(1),
 		constant: boolean("constant").notNull().default(false),
@@ -1240,6 +1251,17 @@ export const characterLoreEntries = pgTable(
 		matchMode: text("match_mode"),
 		useRegex: boolean("use_regex").default(false),
 		caseSensitive: boolean("case_sensitive").notNull().default(false),
+		/**
+		 * The deepest recursion level this entry may still be reached at.
+		 *
+		 * `0` is the conversation only: never dragged in by another entry.
+		 * NULL is no opinion, and the query node's `maxRecursionDepth` decides
+		 * — which is what makes turning recursion on for a whole lorebook one
+		 * setting rather than several hundred. Nullable for the same reason
+		 * `retrievalStrategy` is: an entry nobody has ruled on has to stay
+		 * distinguishable from one somebody deliberately set to the default.
+		 */
+		recursionDepth: integer("recursion_depth"),
 		content: text("content").notNull().default(""),
 		priority: integer("priority").notNull().default(1),
 		constant: boolean("constant").notNull().default(false),
@@ -1317,6 +1339,17 @@ export const historyEntries = pgTable(
 		matchMode: text("match_mode"),
 		useRegex: boolean("use_regex").default(false),
 		caseSensitive: boolean("case_sensitive").notNull().default(false),
+		/**
+		 * The deepest recursion level this entry may still be reached at.
+		 *
+		 * `0` is the conversation only: never dragged in by another entry.
+		 * NULL is no opinion, and the query node's `maxRecursionDepth` decides
+		 * — which is what makes turning recursion on for a whole lorebook one
+		 * setting rather than several hundred. Nullable for the same reason
+		 * `retrievalStrategy` is: an entry nobody has ruled on has to stay
+		 * distinguishable from one somebody deliberately set to the default.
+		 */
+		recursionDepth: integer("recursion_depth"),
 		content: text("content").notNull().default(""),
 		constant: boolean("constant").notNull().default(false),
 		enabled: boolean("enabled").notNull().default(true),
@@ -3580,6 +3613,18 @@ export const pipelineTypeRegistry = pgTable(
 		slots: json("slots").notNull().default({}).$type<Record<string, any>>(),
 		configSchema: json("config_schema").$type<Record<string, any> | null>(),
 		effects: text("effects"),
+		/**
+		 * Whether a failure here is absorbed as an empty result — and so
+		 * whether the node may be switched off at all.
+		 *
+		 * It was in the content hash from the start but stored nowhere, which
+		 * meant the panel could not read it: the only other source is the
+		 * in-process descriptor, which does not exist for a `transport:
+		 * 'process'` plugin type and is the exact thing F6 forbids reaching
+		 * for. A property the hash protects but no reader can see is a
+		 * declaration that only the executor honours.
+		 */
+		optional: boolean("optional").notNull().default(false),
 		causesEvent: text("causes_event"),
 		isPublic: boolean("is_public").notNull().default(false),
 		declaresRandomness: boolean("declares_randomness")

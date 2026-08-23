@@ -102,8 +102,8 @@ function secrecyLabel(visibility: string): string {
 function relEntry(
 	r: RelRow,
 	other: NodeInfo | undefined
-): Record<string, string> {
-	const entry: Record<string, string> = {
+): GraphRelationshipEntry {
+	const entry: GraphRelationshipEntry = {
 		type: neutralizeGraphMarkers(r.relationshipType),
 		secrecy: secrecyLabel(r.visibility)
 	}
@@ -120,8 +120,8 @@ function groupByOther(
 	rels: RelRow[],
 	nodeMap: Map<number, NodeInfo>,
 	otherSide: "to" | "from"
-): Record<string, Record<string, string>[]> {
-	const grouped: Record<string, Record<string, string>[]> = {}
+): Record<string, GraphRelationshipEntry[]> {
+	const grouped: Record<string, GraphRelationshipEntry[]> = {}
 	for (const r of rels) {
 		const otherId = otherSide === "to" ? r.toNodeId : r.fromNodeId
 		const other = nodeMap.get(otherId)
@@ -184,10 +184,50 @@ function formatRel(r: RelRow, nodeMap: Map<number, NodeInfo>): string {
 }
 
 /**
- * Build the three-layer graph context string for a speaker, or return null if
- * there is no lorebook or the speaker has no bound narrative node.
+ * One relationship, as the prompt sees it.
+ *
+ * Every field is a string, and every one but the first two is conditional —
+ * `relEntry` omits a status of "active" and a note that is empty rather than
+ * writing them out, because these objects are stringified straight into a
+ * prompt and a `"status": "active"` on every entry is tokens spent saying
+ * nothing.
  */
-export async function buildGraphContext(params: {
+export interface GraphRelationshipEntry {
+	type: string
+	secrecy: string
+	status?: string
+	theirState?: string
+	note?: string
+}
+
+/**
+ * The speaker's relationship summary, before it becomes text.
+ *
+ * All three sections are conditional — an install with no legendary figures has
+ * no `legendaryFigures` key at all, rather than an empty object — which is what
+ * the shipped layout's section guards are written against.
+ */
+export interface GraphContextData {
+	yourRelationships?: Record<string, GraphRelationshipEntry[]>
+	howOthersRegardYou?: Record<string, GraphRelationshipEntry[]>
+	legendaryFigures?: Record<
+		string,
+		{
+			summary?: string
+			state?: string
+			relationships?: Record<string, GraphRelationshipEntry[]>
+		}
+	>
+}
+
+/**
+ * Build the three-layer graph context for a speaker, or return null if there is
+ * no lorebook or the speaker has no bound narrative node.
+ *
+ * Returns the **structure**. `buildGraphContext` below is the same thing as
+ * text, for the caller that wants a finished string.
+ */
+export async function buildGraphContextData(params: {
 	chatId: number
 	lorebookId: number
 	speakerCharacterId: number | null
@@ -204,7 +244,7 @@ export async function buildGraphContext(params: {
 	 * node timed out at 2s on every run.
 	 */
 	db?: typeof defaultDb
-}): Promise<string | null> {
+}): Promise<GraphContextData | null> {
 	const { chatId, lorebookId, speakerCharacterId, speakerPersonaId } = params
 	const db = params.db ?? defaultDb
 
@@ -489,7 +529,7 @@ export async function buildGraphContext(params: {
 	// "How others in this scene see X" asserted co-presence: layer 2 is scoped
 	// to chat participants, not to whoever is in the room this moment, and a
 	// relationship is accumulated history rather than a present-tense fact.
-	const graph: Record<string, unknown> = {}
+	const graph: GraphContextData = {}
 
 	if (l1Rels.length > 0) {
 		graph.yourRelationships = groupByOther(l1Rels, l1NodeMap, "to")
@@ -505,5 +545,25 @@ export async function buildGraphContext(params: {
 
 	if (Object.keys(graph).length === 0) return null
 
-	return JSON.stringify(graph, null, 1)
+	return graph
+}
+
+/**
+ * The same summary as text, at the indent every prompt has carried.
+ *
+ * The split exists because two callers want different things and only one of
+ * them can be the source. The legacy path pushes a finished string onto the
+ * adapter, so it gets this. The pipeline hands the *structure* to a variable
+ * layout, because a pre-stringified blob is the one value a layout can do
+ * nothing with — you cannot render relationships as prose, or drop a section,
+ * or even change the indentation, if the shape was flattened upstream.
+ *
+ * `null` stays `null` rather than becoming `"null"`: an install that never
+ * opened the graph has no relationships, and that is the common case.
+ */
+export async function buildGraphContext(
+	args: Parameters<typeof buildGraphContextData>[0]
+): Promise<string | null> {
+	const graph = await buildGraphContextData(args)
+	return graph === null ? null : JSON.stringify(graph, null, 1)
 }

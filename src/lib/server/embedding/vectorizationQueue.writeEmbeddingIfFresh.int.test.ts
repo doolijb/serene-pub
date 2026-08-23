@@ -21,6 +21,7 @@ import path from "path"
 import { eq, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { releaseDataDir } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
 let dataDir: string
@@ -49,7 +50,7 @@ beforeAll(async () => {
 }, 60_000)
 
 afterAll(async () => {
-	await fs.rm(dataDir, { recursive: true, force: true })
+	await releaseDataDir(dataDir)
 })
 
 async function makeUser(username: string) {
@@ -63,6 +64,16 @@ async function makeLorebook(userId: number) {
 		.values({ name: "Write-Embedding Test Book", userId })
 		.returning()
 	return lorebook
+}
+
+async function rawUpdatedAt(id: number) {
+	const [row] = await testDb
+		.select({
+			raw: sql<string>`${schema.worldLoreEntries.updatedAt}::text`
+		})
+		.from(schema.worldLoreEntries)
+		.where(eq(schema.worldLoreEntries.id, id))
+	return row.raw
 }
 
 describe("writeEmbeddingIfFresh (PGlite integration)", () => {
@@ -105,6 +116,50 @@ describe("writeEmbeddingIfFresh (PGlite integration)", () => {
 		expect(updated?.embedding).toEqual([0.1, 0.2, 0.3])
 		expect(updated?.embeddingModel).toBe("test-model")
 		expect(updated?.vectorizedAt).not.toBeNull()
+	})
+
+	test("does not count vectorizing as an edit, so the row stops being stale", async () => {
+		const { writeEmbeddingIfFresh } = await import("./vectorizationQueue")
+
+		const user = await makeUser("write-embedding-notanedit-user")
+		const lorebook = await makeLorebook(user.id)
+		const [entry] = await testDb
+			.insert(schema.worldLoreEntries)
+			.values({ lorebookId: lorebook.id, name: "Not An Edit", content: "x" })
+			.returning()
+
+		const before = await rawUpdatedAt(entry.id)
+
+		await writeEmbeddingIfFresh(
+			schema.worldLoreEntries,
+			schema.worldLoreEntries.id,
+			schema.worldLoreEntries.updatedAt,
+			entry.id,
+			before,
+			"test-model",
+			[0.1, 0.2, 0.3]
+		)
+
+		// `updatedAt` carries `$onUpdate(() => new Date())`, which drizzle
+		// applies to any update on the row unless the statement sets the column
+		// itself. When it fired here it stamped a *different* instant than the
+		// `vectorizedAt` in the same statement, and about 1% of the time the two
+		// straddled a millisecond — leaving `updated_at > vectorized_at`, which
+		// is precisely `needsEmbedding`'s "edited since we vectorized" test. The
+		// queue picked the row straight back up and paid for a second embedding.
+		//
+		// Asserted as an exact equality rather than by re-running the queue: the
+		// bug only showed up in ~1 run in 100, so the observable it was found
+		// through is far too weak to be the one guarding it.
+		expect(await rawUpdatedAt(entry.id)).toBe(before)
+
+		const [{ stale }] = await testDb
+			.select({
+				stale: sql<boolean>`${schema.worldLoreEntries.updatedAt} > ${schema.worldLoreEntries.vectorizedAt}`
+			})
+			.from(schema.worldLoreEntries)
+			.where(eq(schema.worldLoreEntries.id, entry.id))
+		expect(stale, "the row was stale the instant it was written").toBe(false)
 	})
 
 	test("skips the write when the row was edited after the capture (edit-during-embed race)", async () => {

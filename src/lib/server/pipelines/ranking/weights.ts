@@ -9,7 +9,7 @@
  * than a refactor's accident.
  *
  * They divide into three mechanically different kinds, and keeping them apart
- * is what makes a tuning interface predictable (see packages/DECOMPOSITION.md
+ * is what makes a tuning interface predictable (see docs-dev/DECOMPOSITION.md
  * §4a):
  *
  *   (i)   **signal weights** — how one candidate's score is built. Comparable
@@ -148,13 +148,29 @@ export interface RetrievalParams {
 	 * there is one field rather than a boolean plus an implicit third mode.
 	 */
 	matchMode: MatchMode
+	/**
+	 * How many further passes an entry's own content may trigger.
+	 *
+	 * Zero is the shipped default and is what every release before this one
+	 * did: keys are matched against the conversation, once. A lorebook that
+	 * describes a place, and separately the person who runs it, has no way at
+	 * one pass to bring the second in when only the first was named — which is
+	 * the whole reason recursion exists.
+	 *
+	 * A ceiling, not an instruction. Entries carry their own `recursionDepth`
+	 * saying how deep *they* may still be reached, and this caps all of them,
+	 * because the cost of a pass belongs to whoever is paying for the turn and
+	 * not to whoever wrote the lorebook.
+	 */
+	maxRecursionDepth: number
 }
 
 export const DEFAULT_RETRIEVAL: RetrievalParams = {
 	scanDepth: 10,
 	guaranteedMessages: 10,
 	contextThresholdPercent: 0.8,
-	matchMode: "substring"
+	matchMode: "substring",
+	maxRecursionDepth: 0
 }
 
 // ── (ii-b) Semantic retrieval ───────────────────────────────────────────────
@@ -257,8 +273,25 @@ export interface GroupWeights {
 	share: Record<SourceKind, number>
 	/** Most entries a source may contribute. `KeywordInfillEngine:56`. */
 	maxEntries: Record<SourceKind, number>
-	/** Tokens guaranteed to messages regardless of share. `BaseInfillEngine.ts:14`. */
-	minMessageTokens: number
+	/**
+	 * Fewest entries a source keeps when space is tight, whatever its share.
+	 *
+	 * ⚠ This replaced `minMessageTokens: 512`, and the change is a change of
+	 * unit as much as of scope. A token floor answered "how much conversation"
+	 * in a currency nobody thinks in — 512 tokens is some number of messages
+	 * that depends on how long the last few were, so the same setting produced
+	 * a different amount of readable chat on every turn. Entries is what the
+	 * user means: *keep the last six messages*.
+	 *
+	 * Per source for the same reason `share` and `maxEntries` are: world lore
+	 * and character lore had one floor between them, so "always keep a couple
+	 * of character-lore entries" could not be said at all.
+	 *
+	 * These are floors, not reservations — `select` fills them in score order
+	 * and stops at `availableTokens`. Floors that sum past the window are the
+	 * one way this could produce a prompt too big to send, so they lose.
+	 */
+	minEntries: Record<SourceKind, number>
 }
 
 export const DEFAULT_GROUPS: GroupWeights = {
@@ -279,7 +312,19 @@ export const DEFAULT_GROUPS: GroupWeights = {
 		history: 10,
 		relationships: 0
 	},
-	minMessageTokens: 512
+	// Six messages is what `core:query/chat-history@1` used to guarantee under
+	// its own `minInclude`, moved here so every source's floor is one control.
+	// The others start at zero: a floor is a promise to spend budget on
+	// something whether or not it scored, and promising that for lore by
+	// default would push conversation out of a small window on installs that
+	// never asked for it.
+	minEntries: {
+		messages: 6,
+		worldLore: 0,
+		characterLore: 0,
+		history: 0,
+		relationships: 0
+	}
 }
 
 // ── The whole surface ───────────────────────────────────────────────────────
@@ -338,6 +383,13 @@ export function withDefaults(
 			maxEntries: {
 				...DEFAULT_GROUPS.maxEntries,
 				...(partial.groups?.maxEntries ?? {})
+			},
+			// Nested like its two neighbours, so naming one source's floor
+			// does not silently set every other source's to undefined —
+			// which `select` would read as zero and quietly stop honouring.
+			minEntries: {
+				...DEFAULT_GROUPS.minEntries,
+				...(partial.groups?.minEntries ?? {})
 			}
 		}
 	}
@@ -351,9 +403,13 @@ type DeepPartial<T> = {
  * Turn shares into token budgets.
  *
  * Zero-weight sources are excluded before normalising, so a disabled group does
- * not quietly consume budget it cannot use. The message floor is applied after
- * proportional split and taken from the remainder, matching
- * `max(512, floor(available * 0.5))` today.
+ * not quietly consume budget it cannot use.
+ *
+ * Purely proportional now. The message floor used to be applied here, raising
+ * `out.messages` *after* the split without taking the difference from anywhere
+ * — so the returned budgets could sum past `availableTokens`, and on a small
+ * window routinely did. Floors are `minEntries` and belong to `select`, which
+ * is the only place that knows what a candidate costs.
  */
 export function allocateBudgets(
 	groups: GroupWeights,
@@ -371,15 +427,6 @@ export function allocateBudgets(
 
 	for (const k of active)
 		out[k] = Math.floor(availableTokens * (groups.share[k] / total))
-
-	// The floor is a guarantee, not a share: a chat whose lore weights dwarf
-	// messages still keeps a readable amount of conversation, which is the
-	// failure mode the constant was protecting against.
-	if (out.messages > 0 || groups.share.messages > 0)
-		out.messages = Math.max(
-			Math.min(groups.minMessageTokens, availableTokens),
-			out.messages
-		)
 
 	return out
 }

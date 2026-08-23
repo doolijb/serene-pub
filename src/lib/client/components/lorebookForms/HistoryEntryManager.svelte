@@ -1839,6 +1839,36 @@
 									/>
 								</label>
 							{/if}
+							<!-- Recursion depth.
+
+							     Outside the `!vectorizationEnabled` gate that hides Use Regex and
+							     Case Sensitive, deliberately: recursion is a property of the
+							     keyword arm, and the keyword arm still runs with vectorization
+							     on — an entry set to `keyword` or `both`, and every `rag` entry
+							     on an instance whose model is not loaded, goes through it.
+							     Hiding this would repeat the mistake those two are making. -->
+							<div class="flex w-full items-center justify-between gap-2">
+								<label for="heeRecursion">Recursion depth</label>
+								<select
+									id="heeRecursion"
+									class="select preset-filled-surface-200-800 w-max max-w-xs rounded-lg text-sm"
+									value={String(editingEntry.recursionDepth ?? "")}
+									onchange={(e) => {
+										if (!editingEntry) return
+										// "" is not 0. Empty means the entry has no opinion and the
+										// pipeline's ceiling decides, which is a different answer
+										// from "conversation only" and has to survive as null.
+										const v = e.currentTarget.value
+										editingEntry.recursionDepth = v === "" ? null : Number(v)
+									}}
+								>
+									<option value="">Use pipeline default</option>
+									<option value="0">Conversation only</option>
+									<option value="1">1 level deep</option>
+									<option value="2">2 levels deep</option>
+									<option value="3">3 levels deep</option>
+								</select>
+							</div>
 							<label
 								class="flex w-full cursor-pointer items-center justify-between gap-2"
 							>

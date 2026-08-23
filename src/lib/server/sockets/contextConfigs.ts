@@ -7,7 +7,7 @@ import type { Handler } from "$lib/shared/events"
 import {
 	bareLayouts,
 	previewContextTemplate
-} from "$lib/server/pipelines/preview"
+} from "$lib/server/pipelines/prompt/preview"
 
 export const contextConfigsListHandler: Handler<
 	Sockets.ContextConfigs.List.Params,

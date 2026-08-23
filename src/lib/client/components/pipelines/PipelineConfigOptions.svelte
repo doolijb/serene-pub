@@ -25,6 +25,7 @@
 	import { onDestroy, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import ShareBar from "$lib/client/components/pipelines/ShareBar.svelte"
 
 	interface Props {
 		slug: string
@@ -34,9 +35,51 @@
 		showScopeNote?: boolean
 		/** Called whenever a fresh view arrives, e.g. to title a header. */
 		onLoaded?: (detail: Sockets.Pipelines.NamespaceDetail) => void
+		/**
+		 * Render one step only — the builder's inspector, where the flow beside
+		 * it is what does the choosing.
+		 *
+		 * Bound reactively rather than remounting per node: the component holds
+		 * the whole view, so switching nodes is a filter and not a refetch, and
+		 * an in-flight draft in another step survives being looked away from.
+		 */
+		stepKey?: string
+		/**
+		 * Fold the tuning options in with everything else instead of hiding
+		 * them behind a door.
+		 *
+		 * The sidebar's job is to be simple for someone who does not know what
+		 * a pipeline is, so it leads with the prompt and puts the rest away.
+		 * The builder is the opposite surface — granular on purpose — and a
+		 * collapsed drawer there is just an extra click before the work.
+		 */
+		granular?: boolean
+		/** The builder brings its own, with save/duplicate/rename/delete. */
+		showConfigPicker?: boolean
+		/**
+		 * Edit the configuration itself instead of overriding it.
+		 *
+		 * Set by the builder, which authors configurations; unset in the
+		 * sidebar, which overrides one for you or this chat. Without it every
+		 * edit landed at instance scope — which *outranks* `preset`, where a
+		 * configuration's own values live — so a change made with one
+		 * configuration selected followed you to every other one, and
+		 * duplicating a configuration to change a single setting changed it
+		 * everywhere instead.
+		 */
+		editsConfigId?: number
 	}
 
-	let { slug, chatId, showScopeNote = true, onLoaded }: Props = $props()
+	let {
+		slug,
+		chatId,
+		showScopeNote = true,
+		onLoaded,
+		stepKey,
+		granular = false,
+		showConfigPicker = true,
+		editsConfigId
+	}: Props = $props()
 
 	const socket = useTypedSocket()
 
@@ -106,8 +149,16 @@
 				: "you"
 	)
 
-	/** What the provenance badge says. Only shown when it is not this scope. */
-	const SOURCE_LABEL: Record<string, string> = {
+	/**
+	 * What the provenance badge says. Only shown when it is not this scope.
+	 *
+	 * Keyed by the union rather than by `string`, so a sixth scope fails to
+	 * compile here instead of reaching a user as the raw id. These are the
+	 * viewer's relationship to a value — "your value", "set by an admin" — not
+	 * domain vocabulary a plugin owns, so they belong in the panel; what did not
+	 * belong was the absence of any check that they were complete.
+	 */
+	const SOURCE_LABEL: Record<Sockets.Pipelines.Option["source"], string> = {
 		chat: "from this chat",
 		user: "your value",
 		preset: "from the selected config",
@@ -119,13 +170,23 @@
 	const scopeOf = (option: Sockets.Pipelines.Option) =>
 		option.writeAt === "instance" ? { scope: "instance" as const } : {}
 
+	/**
+	 * Where this edit belongs. Authoring a configuration and overriding one are
+	 * different acts against different tables, and the server refuses the first
+	 * against a shipped row — so the id travels rather than being inferred.
+	 */
+	const targetOf = (option: Sockets.Pipelines.Option) =>
+		editsConfigId != null
+			? { configId: editsConfigId }
+			: scopeOf(option)
+
 	function set(option: Sockets.Pipelines.Option, value: unknown) {
 		socket.emit("pipelines:setOption", {
 			slug,
 			optionId: option.id,
 			value,
 			chatId,
-			...scopeOf(option)
+			...targetOf(option)
 		})
 	}
 
@@ -134,7 +195,7 @@
 			slug,
 			optionId: option.id,
 			chatId,
-			...scopeOf(option)
+			...targetOf(option)
 		})
 	}
 
@@ -478,7 +539,7 @@
 				optionId,
 				value: res.promptId,
 				chatId,
-				...scopeOf(opt)
+				...targetOf(opt)
 			})
 		// No draft is seeded: the copy's text is the original's, the editor is
 		// always on screen, and the refreshed view carries the copy's row —
@@ -504,7 +565,7 @@
 				optionId,
 				value: res.templateId,
 				chatId,
-				...scopeOf(opt)
+				...targetOf(opt)
 			})
 		delete layoutDrafts[optionId]
 	}
@@ -529,7 +590,7 @@
 				optionId,
 				value: res.templateId,
 				chatId,
-				...scopeOf(opt)
+				...targetOf(opt)
 			})
 		delete templateDrafts[optionId]
 	}
@@ -583,16 +644,183 @@
 		socket.off("pipelines:updateVariableTemplate:error", showRefusal)
 		socket.off("pipelines:deleteVariableTemplate:error", showRefusal)
 	})
+
+	/**
+	 * What the sidebar shows, and in what order.
+	 *
+	 * Grouped by **facet** rather than by step. The panel used to render one
+	 * numbered card per node — "Build template context", "Rank hybrid",
+	 * "Assemble" — which is the order the machine works in and not a thing
+	 * anybody came here to think about. Worse, it split settings that belong
+	 * together: the twelve layout pickers live on two different nodes purely
+	 * because assembly lays out lore *after* budgeting decided what fit, so
+	 * they appeared under two separate headings for a reason no user has.
+	 *
+	 * A facet says what kind of setting something is, and it is already on the
+	 * declaration. Grouping on it also keeps 05 §0a's boundary intact — a facet
+	 * names a kind, never a node key, a count, or an order.
+	 */
+	/**
+	 * ⚠ This was a hardcoded list here, and it was not a fallback — it was the
+	 * *filter*. Options were matched into it, so a facet the client had never
+	 * heard of matched no group and rendered **nowhere**: a plugin's settings
+	 * could exist, be writable, and be invisible. The headings, their order and
+	 * which of them lead the panel are declared now, and an undeclared facet
+	 * still gets a group rather than disappearing.
+	 *
+	 * Two facets that resolve to the same heading are one group — that is how
+	 * `connection` and `sampling` become "Model" without the client pairing
+	 * them.
+	 */
+	const FACET_GROUPS = $derived.by<Array<{ facets: string[]; label: string }>>(
+		() => {
+			const byLabel = new Map<string, { facets: string[]; label: string }>()
+			for (const f of detail?.facets ?? []) {
+				const g = byLabel.get(f.label)
+				if (g) g.facets.push(f.id)
+				else byLabel.set(f.label, { facets: [f.id], label: f.label })
+			}
+			return [...byLabel.values()]
+		}
+	)
+
+	/** The sidebar leads with these and puts the rest behind one door. */
+	const SIMPLE_FACETS = $derived(
+		(detail?.facets ?? []).filter((f) => f.simple).map((f) => f.id)
+	)
+
+	/** One step in the builder's inspector; all of them in the sidebar. */
+	const visibleSteps = $derived(
+		!detail
+			? []
+			: stepKey != null
+				? detail.steps.filter((s) => s.key === stepKey)
+				: detail.steps
+	)
+
+	/**
+	 * Options paired with the step they came from.
+	 *
+	 * The step name rides alongside rather than on the option itself: it is only
+	 * needed to tell two same-named options apart, and adding it to the payload
+	 * would mean exempting a new field from the node-key scan in
+	 * `panel/index.int.test.ts` — a guard worth keeping narrow. The step is
+	 * already in hand here.
+	 */
+	type Row = { option: Sockets.Pipelines.Option; step: string }
+
+	const rowsOf = (pick: (s: Sockets.Pipelines.Step) => Sockets.Pipelines.Option[]) =>
+		visibleSteps.flatMap((s) =>
+			pick(s).map((option) => ({ option, step: s.label }))
+		)
+
+	/** Everything the step declares, once the door is gone. */
+	const allOf = (s: Sockets.Pipelines.Step) => [...s.options, ...s.advanced]
+
+	/**
+	 * Grouped by the step that consumes the setting, then by facet inside it.
+	 *
+	 * Facet alone was wrong the moment a pipeline had more than one LLM step.
+	 * The graph builder has five, each with its own prompt, connection and
+	 * sampling — so a pure facet grouping produced one "Prompt" heading with
+	 * five near-identical rows under it, every one needing its step name
+	 * prefixed back on to be told apart. That is the step heading, reinvented
+	 * as a prefix and worse.
+	 *
+	 * The step is the consumer, and the consumer is what someone is actually
+	 * choosing between ("which prompt does the *pre-filter* use"). Facets
+	 * subdivide it.
+	 */
+	/**
+	 * Show the rest of a step's settings.
+	 *
+	 * Per step, not global: opening the tuning on one node says nothing about
+	 * whether you want it on the next, and a single flag would keep re-opening
+	 * panels you had put away.
+	 */
+	let showAll = $state<Record<string, boolean>>({})
+
+	const stepGroups = $derived(
+		visibleSteps
+			.map((step) => {
+				const all = granular ? allOf(step) : step.options
+				// The author's answer to "which of these does anyone change",
+				// not a guess from control kind or position. A step whose
+				// settings are *all* quick, or none, gets no disclosure — a
+				// "show 0 more" is worse than no affordance at all.
+				const quick = all.filter((o) => o.quick)
+				const rest = all.filter((o) => !o.quick)
+				const open = showAll[step.key] ?? false
+				const pool = quick.length && rest.length && !open ? quick : all
+				const facets = FACET_GROUPS.filter(
+					(g) =>
+						granular ||
+						g.facets.some((f) => SIMPLE_FACETS.includes(f))
+				)
+					.map((g) => ({
+						label: g.label,
+						rows: pool
+							.filter((o) => g.facets.includes(o.facet))
+							.map((option) => ({ option, step: step.label }))
+					}))
+					.filter((g) => g.rows.length)
+				return {
+					key: step.key,
+					label: step.label,
+					facets,
+					hidden: quick.length && rest.length && !open ? rest.length : 0,
+					canCollapse: !!(quick.length && rest.length && open),
+					count: facets.reduce((n, f) => n + f.rows.length, 0)
+				}
+			})
+			.filter((g) => g.count > 0)
+	)
+
+	/**
+	 * A sub-heading earns its place only when the step has more than one kind
+	 * of setting. A lone "Prompt" caption under a step that declares nothing
+	 * else is a line of furniture between the reader and the one control.
+	 */
+	const showFacetHeadings = (g: { facets: unknown[] }) => g.facets.length > 1
+
+	/**
+	 * Everything else, behind one door instead of seven.
+	 *
+	 * These are per-step tuning — weights, budgets, thresholds, raw templates,
+	 * layouts. They belong in the pipeline builder, where settings are granular
+	 * and per-pipeline on purpose; this panel is for people who do not need to
+	 * know what a pipeline is. They stay reachable here until the builder can
+	 * host them, because moving them out first would take away settings with
+	 * nowhere to go.
+	 */
+	const tuning = $derived(granular ? [] : rowsOf((s) => s.advanced))
+
+	/**
+	 * Once the step headings are gone, two options can arrive under one heading
+	 * with the same name — the reply pipeline has two "Review" gates, and
+	 * `weights` alone carries two "Budget", two "Weight" and two "Min Include".
+	 * The step name is what tells them apart, so put it back, but only on the
+	 * ones that actually collide: prefixing every row would be noise for the
+	 * ones that read fine on their own.
+	 */
+	const qualify = (row: Row, pool: Row[]) =>
+		pool.filter((r) => r.option.label === row.option.label).length > 1
+			? `${row.step} — ${row.option.label}`
+			: row.option.label
 </script>
 
-{#snippet optionRow(option: Sockets.Pipelines.Option)}
+{#snippet optionRow(
+	option: Sockets.Pipelines.Option,
+	/** Overrides the label where two options in one group share a name. */
+	labelOverride?: string
+)}
 	<div class="flex flex-col gap-1">
 		<div class="flex items-center justify-between gap-2">
 			<label
 				class="min-w-0 flex-1 truncate text-sm font-medium"
 				for="opt-{option.id}"
 			>
-				{option.label}
+				{labelOverride ?? option.label}
 			</label>
 
 			<!-- Provenance, but only when it is worth a word.
@@ -609,17 +837,37 @@
 					<Icons.RotateCcw size={12} /> Reset
 				</button>
 			{:else if option.source !== "author"}
+				<!--
+					A dot, not a sentence.
+
+					"from the selected config" on every row is a hundred-odd
+					pixels of the same words repeated down the panel — at rail
+					width it crowds out the control it annotates, and because
+					almost every value comes from the shipped config it marks
+					nearly all of them, which is the same as marking none. The
+					wording moves to the tooltip, where it is available and not
+					in the way.
+				-->
 				<span
-					class="preset-tonal-surface shrink-0 rounded-full px-2 py-0.5 text-xs"
-					title="This value comes from a layer above yours, so changing it here will override it."
-				>
-					{SOURCE_LABEL[option.source] ?? option.source}
-				</span>
+					class="bg-secondary-500 mt-1.5 size-1.5 shrink-0 rounded-full"
+					title="{SOURCE_LABEL[option.source] ??
+						option.source} — changing it here overrides that."
+				></span>
 			{/if}
 		</div>
 
 		{#if option.description}
-			<p class="text-muted text-xs">
+			<!--
+				A hint, kept but not shouted.
+				
+				Four settings with two-line descriptions is most of a 400px
+				rail, and the descriptions are read once and then never again —
+				whereas the controls are read every time. Smaller and dimmer
+				keeps them available for the first read without spending the
+				panel on them forever. `title` carries the full text for anyone
+				who needs it at any size.
+			-->
+			<p class="text-muted/80 text-[11px] leading-snug" title={option.description}>
 				{option.description}
 			</p>
 		{/if}
@@ -667,6 +915,12 @@
 				</span>
 			</label>
 		{:else if option.control === "enum"}
+			<!-- Labels come from `members` when the declaration carried them.
+			     Without it the raw stored value is what shows, and `rag` is
+			     not a word anybody chose to read. -->
+			{@const labels = new Map(
+				(option.members ?? []).map((m) => [m.key, m])
+			)}
 			<select
 				id="opt-{option.id}"
 				class="select w-full"
@@ -674,9 +928,16 @@
 				onchange={(e) => set(option, e.currentTarget.value)}
 			>
 				{#each option.of ?? [] as choice}
-					<option value={choice}>{choice}</option>
+					<option value={choice}>
+						{labels.get(choice)?.label ?? choice}
+					</option>
 				{/each}
 			</select>
+			{#if labels.get(String(option.value))?.description}
+				<p class="text-muted mt-1 text-xs">
+					{labels.get(String(option.value))!.description}
+				</p>
+			{/if}
 		{:else if option.control === "number" || option.control === "integer"}
 			<!-- Typed text goes through `drafts` so the fresh view after a
 			     write reconciles the box to what actually resolved — a value
@@ -693,6 +954,57 @@
 				oninput={(e) => (drafts[option.id] = e.currentTarget.value)}
 				onchange={(e) => numeric(option, e.currentTarget.value)}
 			/>
+		{:else if option.control === "share"}
+			<!-- Normalised, so there is no invalid state to report: the total is
+			     always 100% and zero is a band's off switch. -->
+			<ShareBar
+				members={option.members ?? []}
+				value={(option.value ?? option.authorDefault) as Record<
+					string,
+					number
+				>}
+				readonly={false}
+				windowTokens={option.windowTokens}
+				onchange={(next) => set(option, next)}
+			/>
+		{:else if option.control === "per-member"}
+			<!-- Same declared bands as the bar above it, so a ceiling and a
+			     share read as the same five things in the same order and the
+			     same colours. -->
+			<ul class="flex flex-col gap-1">
+				{#each option.members ?? [] as m (m.key)}
+					<li class="flex items-center gap-2 text-xs">
+						<span class="min-w-0 flex-1 truncate" title={m.description}>
+							{m.label ?? m.key}
+						</span>
+						<input
+							type="number"
+							class="input w-24 text-right"
+							min="0"
+							step="1"
+							disabled={false}
+							aria-label={m.label ?? m.key}
+							value={String(
+								((option.value ?? option.authorDefault ?? {}) as Record<
+									string,
+									number
+								>)[m.key] ?? 0
+							)}
+							onchange={(e) => {
+								const base = {
+									...(((option.value ??
+										option.authorDefault ??
+										{}) as Record<string, number>) ?? {})
+								}
+								const n = parseInt(e.currentTarget.value, 10)
+								if (Number.isNaN(n)) return
+								base[m.key] = n
+								set(option, base)
+							}}
+						/>
+					</li>
+				{/each}
+			</ul>
 		{:else if option.control === "prompts-ref"}
 			<!-- A prompt is a swappable entity: the dropdown selects the row,
 			     the editor below edits that row. The editor is always on
@@ -768,7 +1080,17 @@
 					     the prompt row, which was written against the node's
 					     declaration — so a node that declares another field
 					     grows another box here with no change to this file. -->
-					{#each Object.keys(option.prompt.fields) as field (field)}
+					<!--
+						Only the fields this node declares. The graph builder's
+						five steps share one prompt row of five texts and each
+						declares one of them, so rendering the row put every
+						text on every step. Falls back to the row's own keys so
+						a plugin whose declaration cannot be read still shows
+						its wording rather than an empty editor.
+					-->
+					{#each option.prompt.declared?.length
+						? option.prompt.declared
+						: Object.keys(option.prompt.fields) as field (field)}
 						<label class="flex flex-col gap-1 text-xs font-medium">
 							{humanize(field)}
 							<textarea
@@ -1169,7 +1491,7 @@
 		</p>
 	{/if}
 
-	{#if detail.configs.length}
+	{#if showConfigPicker && detail.configs.length}
 		<div class="card preset-tonal mb-3 space-y-2 p-3">
 			<p class="text-sm font-semibold">Configuration</p>
 			<select
@@ -1188,43 +1510,61 @@
 		</div>
 	{/if}
 
-	<!-- One card per step, in run order. A step with nothing visible to
-	     this viewer is skipped entirely rather than shown empty — for a
-	     non-admin that leaves just the steps with a prompt to write. -->
+	<!-- Grouped by what a setting *is*, not by which step computes it. A group
+	     with nothing visible to this viewer is skipped rather than shown
+	     empty — for a non-admin that usually leaves just the prompt. -->
 	<div class="space-y-3">
-		{#each detail.steps.filter((s) => s.options.length || s.advanced.length) as step, i (step.key)}
+		{#each stepGroups as group (group.key)}
 			<section class="card preset-tonal space-y-3 p-3">
-				<header class="flex items-center gap-2">
-					<span
-						class="preset-tonal-surface flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold"
-						aria-hidden="true"
-					>
-						{i + 1}
-					</span>
-					<h3 class="text-sm font-semibold">{step.label}</h3>
-				</header>
-
-				{#each step.options as option (option.id)}
-					{@render optionRow(option)}
+				<h3 class="text-sm font-semibold">{group.label}</h3>
+				{#each group.facets as facet (facet.label)}
+					{#if showFacetHeadings(group)}
+						<p
+							class="text-muted text-xs font-semibold tracking-wide uppercase"
+						>
+							{facet.label}
+						</p>
+					{/if}
+					{#each facet.rows as row (row.option.id)}
+						{@render optionRow(row.option, row.option.label)}
+					{/each}
 				{/each}
 
-				{#if step.advanced.length}
-					<details>
-						<summary
-							class="text-muted flex cursor-pointer items-center gap-1 text-xs font-medium select-none"
-						>
-							<Icons.SlidersHorizontal size={12} /> Advanced
-						</summary>
-						<div
-							class="border-surface-300-700 mt-2 flex flex-col gap-3 border-l-2 pl-3"
-						>
-							{#each step.advanced as option (option.id)}
-								{@render optionRow(option)}
-							{/each}
-						</div>
-					</details>
+				{#if group.hidden || group.canCollapse}
+					<button
+						type="button"
+						class="btn btn-sm preset-tonal-surface w-full"
+						onclick={() =>
+							(showAll[group.key] = !(showAll[group.key] ?? false))}
+					>
+						{#if group.hidden}
+							<Icons.ChevronDown size={14} />
+							{group.hidden} more
+							{group.hidden === 1 ? "setting" : "settings"}
+						{:else}
+							<Icons.ChevronUp size={14} /> Fewer settings
+						{/if}
+					</button>
 				{/if}
 			</section>
 		{/each}
+
+		{#if tuning.length}
+			<details class="card preset-tonal p-3">
+				<summary
+					class="text-muted flex cursor-pointer items-center gap-1 text-xs font-medium select-none"
+				>
+					<Icons.SlidersHorizontal size={12} />
+					Advanced — per-step tuning ({tuning.length})
+				</summary>
+				<div
+					class="border-surface-300-700 mt-3 flex flex-col gap-3 border-l-2 pl-3"
+				>
+					{#each tuning as row (row.option.id)}
+						{@render optionRow(row.option, qualify(row, tuning))}
+					{/each}
+				</div>
+			</details>
+		{/if}
 	</div>
 {/if}

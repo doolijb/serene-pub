@@ -16,7 +16,7 @@ import type { TestDb } from "$lib/server/utils/testDb"
 let testDb: TestDb
 
 const runSpecMock = vi.fn()
-vi.mock("$lib/server/pipelines/runTurn", () => ({
+vi.mock("$lib/server/pipelines/runtime/runTurn", () => ({
 	runSpec: (...args: any[]) => runSpecMock(...args),
 	runTurn: vi.fn(),
 	PipelineUnavailableError: class extends Error {}

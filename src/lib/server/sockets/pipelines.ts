@@ -19,18 +19,21 @@
 
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { and, desc, eq } from "drizzle-orm"
+import { and, asc, desc, eq } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import {
 	clearOption,
 	listNamespaces,
+	declarations,
+	humanizeTypeId,
+	i18nText,
 	namespaceView,
 	selectNamedConfig,
 	writeOption,
 	OptionNotFoundError,
 	OptionNotWritableError,
 	type Viewer
-} from "$lib/server/pipelines/config"
+} from "$lib/server/pipelines/config/panel"
 
 /**
  * The instance secret that keys option handles.
@@ -162,7 +165,8 @@ export const pipelinesSetOption: Handler<
 				await viewerFor(socket, params.chatId),
 				params.optionId,
 				params.value,
-				params.scope
+				params.scope,
+				params.configId
 			)
 		} catch (err) {
 			const res = { error: refusal(err) }
@@ -192,7 +196,8 @@ export const pipelinesClearOption: Handler<
 				params.slug,
 				await viewerFor(socket, params.chatId),
 				params.optionId,
-				params.scope
+				params.scope,
+				params.configId
 			)
 		} catch (err) {
 			const res = { error: refusal(err) }
@@ -206,6 +211,192 @@ export const pipelinesClearOption: Handler<
 			params.slug,
 			params.chatId
 		)) as Sockets.Pipelines.ClearOption.Response
+	}
+}
+
+/* ------------------------------------------------------------------ *
+ * Named-config CRUD — the builder's save/duplicate/rename/delete
+ *
+ * Admin-only, on the same terms as every other structural verb: a
+ * configuration is the instance's, and 05 §0a puts anything that shapes what
+ * the instance runs behind the management screen rather than the sidebar.
+ * ------------------------------------------------------------------ */
+
+/** The spec a config verb names, refused by name rather than by id. */
+async function specForSlug(slug: string) {
+	const [spec] = await db
+		.select()
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.slug, slug))
+		.limit(1)
+	if (!spec) throw new Error(`There is no pipeline called '${slug}'.`)
+	return spec
+}
+
+/**
+ * A config id the caller supplied must belong to the pipeline they are looking
+ * at. Ids are small integers somebody can guess; without this, guessing one
+ * renames or deletes another pipeline's configuration through this one's
+ * screen — the same hole `promptInSpec` closes for prompts.
+ */
+async function configInSpec(slug: string, configId: number) {
+	const spec = await specForSlug(slug)
+	const [row] = await db
+		.select()
+		.from(schema.pipelineConfigs)
+		.where(eq(schema.pipelineConfigs.id, configId))
+		.limit(1)
+	if (!row) throw new Error("That configuration no longer exists.")
+	if (row.specId !== spec.id)
+		throw new Error(
+			`'${row.name}' belongs to a different pipeline. Configurations are ` +
+				`namespaced to the pipeline they were written for.`
+		)
+	return row
+}
+
+const adminOnly = (
+	socket: any,
+	emitToUser: any,
+	event: string
+): { error: string } | null => {
+	if (socket.user?.isAdmin) return null
+	const res = {
+		error: "Access denied. Only admin users can manage pipelines."
+	}
+	emitToUser(`${event}:error`, res)
+	return res
+}
+
+/**
+ * Config refusals reach the person, on the `promptRefusal` precedent.
+ *
+ * The generic `refusal` deliberately swallows anything it does not recognise,
+ * so an unexpected failure cannot leak internals into a toast. These messages
+ * are the opposite: written for the reader, and useless in a log — "this
+ * pipeline already has a configuration called 'Nighttime'" is the entire
+ * answer to why the button did nothing.
+ *
+ * The `/pipeline/` clause carries the scoping refusals thrown by
+ * `specForSlug` / `configInSpec`, which are plain Errors for the same reason
+ * `promptInSpec`'s are.
+ */
+const configRefusal = async (err: unknown): Promise<string> => {
+	const { ConfigNotFoundError, ConfigNotUsableError } = await import(
+		"$lib/server/pipelines/config/named"
+	)
+	if (
+		err instanceof ConfigNotFoundError ||
+		err instanceof ConfigNotUsableError
+	)
+		return err.message
+	if (err instanceof Error && /pipeline|configuration/.test(err.message))
+		return err.message
+	console.error("[pipelines] config mutation failed:", err)
+	return "That change could not be saved. The server log has the details."
+}
+
+export const pipelinesCreateConfig: Handler<
+	Sockets.Pipelines.CreateConfig.Params,
+	Sockets.Pipelines.CreateConfig.Response
+> = {
+	event: "pipelines:createConfig",
+	handler: async (socket, params, emitToUser) => {
+		const denied = adminOnly(socket, emitToUser, "pipelines:createConfig")
+		if (denied) return denied
+		let configId: number
+		try {
+			const { createConfig, duplicateConfig } = await import(
+				"$lib/server/pipelines/config/named"
+			)
+			const spec = await specForSlug(params.slug)
+			const made =
+				params.fromConfigId != null
+					? await duplicateConfig(
+							db as any,
+							(await configInSpec(params.slug, params.fromConfigId))
+								.id,
+							params.name
+						)
+					: await createConfig(db as any, spec.id, params.name)
+			configId = made.id
+		} catch (err) {
+			const res = { error: await configRefusal(err) }
+			emitToUser("pipelines:createConfig:error", res)
+			return res
+		}
+		const view = (await emitView(
+			socket,
+			emitToUser,
+			"pipelines:get",
+			params.slug,
+			params.chatId
+		)) as Sockets.Pipelines.CreateConfig.Response
+		// Emitted as well as returned: `register` discards a handler's return
+		// value, so the id only reaches the client through an event. The
+		// builder uses it to select what it just made — same shape as
+		// `pipelines:clonePrompt`.
+		const res = { ...view, configId }
+		emitToUser("pipelines:createConfig", res)
+		return res
+	}
+}
+
+export const pipelinesRenameConfig: Handler<
+	Sockets.Pipelines.RenameConfig.Params,
+	Sockets.Pipelines.RenameConfig.Response
+> = {
+	event: "pipelines:renameConfig",
+	handler: async (socket, params, emitToUser) => {
+		const denied = adminOnly(socket, emitToUser, "pipelines:renameConfig")
+		if (denied) return denied
+		try {
+			const { renameConfig } = await import(
+				"$lib/server/pipelines/config/named"
+			)
+			const row = await configInSpec(params.slug, params.configId)
+			await renameConfig(db as any, row.id, params.name)
+		} catch (err) {
+			const res = { error: await configRefusal(err) }
+			emitToUser("pipelines:renameConfig:error", res)
+			return res
+		}
+		return (await emitView(
+			socket,
+			emitToUser,
+			"pipelines:get",
+			params.slug,
+			params.chatId
+		)) as Sockets.Pipelines.RenameConfig.Response
+	}
+}
+
+export const pipelinesDeleteConfig: Handler<
+	Sockets.Pipelines.DeleteConfig.Params,
+	Sockets.Pipelines.DeleteConfig.Response
+> = {
+	event: "pipelines:deleteConfig",
+	handler: async (socket, params, emitToUser) => {
+		const denied = adminOnly(socket, emitToUser, "pipelines:deleteConfig")
+		if (denied) return denied
+		try {
+			const { deleteConfig } = await import(
+				"$lib/server/pipelines/config/named"
+			)
+			const row = await configInSpec(params.slug, params.configId)
+			await deleteConfig(db as any, row.id)
+		} catch (err) {
+			const res = { error: await configRefusal(err) }
+			emitToUser("pipelines:deleteConfig:error", res)
+			return res
+		}
+		return (await emitView(
+			socket,
+			emitToUser,
+			"pipelines:get",
+			params.slug,
+			params.chatId
+		)) as Sockets.Pipelines.DeleteConfig.Response
 	}
 }
 
@@ -279,7 +470,7 @@ async function copyName(specId: number, base: string): Promise<string> {
 
 const promptRefusal = async (err: unknown): Promise<string> => {
 	const { PromptNotFoundError, PromptNotUsableError } = await import(
-		"$lib/server/pipelines/prompts"
+		"$lib/server/pipelines/entities/prompts"
 	)
 	if (
 		err instanceof PromptNotFoundError ||
@@ -304,7 +495,7 @@ export const pipelinesClonePrompt: Handler<
 				params.promptId
 			)
 			const { duplicatePrompt } = await import(
-				"$lib/server/pipelines/prompts"
+				"$lib/server/pipelines/entities/prompts"
 			)
 			const copy = await duplicatePrompt(
 				db as any,
@@ -344,7 +535,7 @@ export const pipelinesUpdatePrompt: Handler<
 		try {
 			const { prompt } = await promptInSpec(params.slug, params.promptId)
 			const { updatePrompt } = await import(
-				"$lib/server/pipelines/prompts"
+				"$lib/server/pipelines/entities/prompts"
 			)
 			await updatePrompt(db as any, prompt.id, {
 				...(params.name !== undefined ? { name: params.name } : {}),
@@ -414,7 +605,7 @@ export const pipelinesDeletePrompt: Handler<
 				)
 			const mine = (own as any[]).filter((o) => o.value === prompt.id)
 			const { deletePrompt } = await import(
-				"$lib/server/pipelines/prompts"
+				"$lib/server/pipelines/entities/prompts"
 			)
 			await deletePrompt(db as any, prompt.id, {
 				ignoreOverrideIds: new Set(mine.map((o) => o.id))
@@ -466,9 +657,9 @@ async function layoutForOption(
 		chatId?: number
 	}
 ) {
-	const { variableOptionGate } = await import("$lib/server/pipelines/config")
+	const { variableOptionGate } = await import("$lib/server/pipelines/config/panel")
 	const { assertSelectable } = await import(
-		"$lib/server/pipelines/variableTemplates"
+		"$lib/server/pipelines/entities/variableTemplates"
 	)
 	const viewer = await viewerFor(socket, params.chatId)
 	const { variableId } = await variableOptionGate(
@@ -499,9 +690,9 @@ async function layoutCopyName(
 
 const layoutRefusal = async (err: unknown): Promise<string> => {
 	const { VariableTemplateNotFoundError, VariableTemplateNotUsableError } =
-		await import("$lib/server/pipelines/variableTemplates")
+		await import("$lib/server/pipelines/entities/variableTemplates")
 	const { OptionNotFoundError, OptionNotWritableError } = await import(
-		"$lib/server/pipelines/config"
+		"$lib/server/pipelines/config/panel"
 	)
 	if (
 		err instanceof VariableTemplateNotFoundError ||
@@ -524,7 +715,7 @@ export const pipelinesCloneVariableTemplate: Handler<
 		try {
 			const { variableId, row } = await layoutForOption(socket, params)
 			const { duplicateVariableTemplate } = await import(
-				"$lib/server/pipelines/variableTemplates"
+				"$lib/server/pipelines/entities/variableTemplates"
 			)
 			const copy = await duplicateVariableTemplate(
 				db as any,
@@ -565,7 +756,7 @@ export const pipelinesUpdateVariableTemplate: Handler<
 		try {
 			const { row } = await layoutForOption(socket, params)
 			const { updateVariableTemplate } = await import(
-				"$lib/server/pipelines/variableTemplates"
+				"$lib/server/pipelines/entities/variableTemplates"
 			)
 			await updateVariableTemplate(db as any, row.id, {
 				...(params.name !== undefined ? { name: params.name } : {}),
@@ -633,7 +824,7 @@ export const pipelinesDeleteVariableTemplate: Handler<
 				: []
 
 			const { deleteVariableTemplate } = await import(
-				"$lib/server/pipelines/variableTemplates"
+				"$lib/server/pipelines/entities/variableTemplates"
 			)
 			await deleteVariableTemplate(db as any, row.id, {
 				ignoreOverrideIds: new Set((own as any[]).map((o) => o.id))
@@ -675,10 +866,10 @@ async function contextTemplateForOption(
 	}
 ) {
 	const { contextTemplateOptionGate } = await import(
-		"$lib/server/pipelines/config"
+		"$lib/server/pipelines/config/panel"
 	)
 	const { assertSelectable } = await import(
-		"$lib/server/pipelines/contextTemplates"
+		"$lib/server/pipelines/entities/contextTemplates"
 	)
 	const viewer = await viewerFor(socket, params.chatId)
 	const { nodeTypeId, specId } = await contextTemplateOptionGate(
@@ -709,9 +900,9 @@ async function contextTemplateCopyName(
 
 const contextTemplateRefusal = async (err: unknown): Promise<string> => {
 	const { ContextTemplateNotFoundError, ContextTemplateNotUsableError } =
-		await import("$lib/server/pipelines/contextTemplates")
+		await import("$lib/server/pipelines/entities/contextTemplates")
 	const { OptionNotFoundError, OptionNotWritableError } = await import(
-		"$lib/server/pipelines/config"
+		"$lib/server/pipelines/config/panel"
 	)
 	if (
 		err instanceof ContextTemplateNotFoundError ||
@@ -742,7 +933,7 @@ export const pipelinesCreateContextTemplate: Handler<
 		let templateId: number
 		try {
 			const { contextTemplateOptionGate } = await import(
-				"$lib/server/pipelines/config"
+				"$lib/server/pipelines/config/panel"
 			)
 			const viewer = await viewerFor(socket, params.chatId)
 			const { nodeTypeId, specId } = await contextTemplateOptionGate(
@@ -753,7 +944,7 @@ export const pipelinesCreateContextTemplate: Handler<
 				params.optionId
 			)
 			const { createContextTemplate } = await import(
-				"$lib/server/pipelines/contextTemplates"
+				"$lib/server/pipelines/entities/contextTemplates"
 			)
 			const created = await createContextTemplate(db as any, {
 				nodeTypeId,
@@ -802,7 +993,7 @@ export const pipelinesCloneContextTemplate: Handler<
 				params
 			)
 			const { duplicateContextTemplate } = await import(
-				"$lib/server/pipelines/contextTemplates"
+				"$lib/server/pipelines/entities/contextTemplates"
 			)
 			const copy = await duplicateContextTemplate(
 				db as any,
@@ -844,7 +1035,7 @@ export const pipelinesUpdateContextTemplate: Handler<
 		try {
 			const { row } = await contextTemplateForOption(socket, params)
 			const { updateContextTemplate } = await import(
-				"$lib/server/pipelines/contextTemplates"
+				"$lib/server/pipelines/entities/contextTemplates"
 			)
 			await updateContextTemplate(db as any, row.id, {
 				...(params.name !== undefined ? { name: params.name } : {}),
@@ -905,7 +1096,7 @@ export const pipelinesDeleteContextTemplate: Handler<
 				: []
 
 			const { deleteContextTemplate } = await import(
-				"$lib/server/pipelines/contextTemplates"
+				"$lib/server/pipelines/entities/contextTemplates"
 			)
 			await deleteContextTemplate(db as any, row.id, {
 				ignoreOverrideIds: new Set((own as any[]).map((o) => o.id))
@@ -963,7 +1154,7 @@ export const pipelinesPreviewTemplate: Handler<
 		}
 
 		const { previewContextTemplate, previewVariableTemplate } =
-			await import("$lib/server/pipelines/preview")
+			await import("$lib/server/pipelines/prompt/preview")
 		const {
 			lintContextTemplate,
 			lintVariableTemplate,
@@ -1012,7 +1203,7 @@ export const pipelinesLibrary: Handler<
 			emitToUser("pipelines:library:error", res)
 			return res
 		}
-		const { libraryView } = await import("$lib/server/pipelines/library")
+		const { libraryView } = await import("$lib/server/pipelines/config/library")
 		const res = (await libraryView(
 			db as any
 		)) as Sockets.Pipelines.Library.Response
@@ -1036,9 +1227,9 @@ async function libraryGate(
 }
 
 const libraryRefusal = async (err: unknown): Promise<string> => {
-	const ctx = await import("$lib/server/pipelines/contextTemplates")
-	const vars = await import("$lib/server/pipelines/variableTemplates")
-	const prompts = await import("$lib/server/pipelines/prompts")
+	const ctx = await import("$lib/server/pipelines/entities/contextTemplates")
+	const vars = await import("$lib/server/pipelines/entities/variableTemplates")
+	const prompts = await import("$lib/server/pipelines/entities/prompts")
 	if (
 		err instanceof ctx.ContextTemplateNotFoundError ||
 		err instanceof ctx.ContextTemplateNotUsableError ||
@@ -1057,7 +1248,7 @@ async function libraryAnswer(
 	emitToUser: any,
 	event: string
 ): Promise<{ library: Sockets.Pipelines.Library.Response }> {
-	const { libraryView } = await import("$lib/server/pipelines/library")
+	const { libraryView } = await import("$lib/server/pipelines/config/library")
 	const library = (await libraryView(
 		db as any
 	)) as Sockets.Pipelines.Library.Response
@@ -1111,7 +1302,7 @@ export const pipelinesLibraryCreateTemplate: Handler<
 			)
 			if (params.kind === "context") {
 				const { createContextTemplate } = await import(
-					"$lib/server/pipelines/contextTemplates"
+					"$lib/server/pipelines/entities/contextTemplates"
 				)
 				await createContextTemplate(db as any, {
 					nodeTypeId: params.poolId,
@@ -1120,7 +1311,7 @@ export const pipelinesLibraryCreateTemplate: Handler<
 				})
 			} else {
 				const { createVariableTemplate } = await import(
-					"$lib/server/pipelines/variableTemplates"
+					"$lib/server/pipelines/entities/variableTemplates"
 				)
 				await createVariableTemplate(db as any, {
 					variableId: params.poolId,
@@ -1160,7 +1351,7 @@ export const pipelinesLibraryCloneTemplate: Handler<
 					.limit(1)
 				if (!row) throw new Error("gone")
 				const { duplicateContextTemplate } = await import(
-					"$lib/server/pipelines/contextTemplates"
+					"$lib/server/pipelines/entities/contextTemplates"
 				)
 				await duplicateContextTemplate(
 					db as any,
@@ -1183,7 +1374,7 @@ export const pipelinesLibraryCloneTemplate: Handler<
 					.limit(1)
 				if (!row) throw new Error("gone")
 				const { duplicateVariableTemplate } = await import(
-					"$lib/server/pipelines/variableTemplates"
+					"$lib/server/pipelines/entities/variableTemplates"
 				)
 				await duplicateVariableTemplate(
 					db as any,
@@ -1224,12 +1415,12 @@ export const pipelinesLibraryUpdateTemplate: Handler<
 			}
 			if (params.kind === "context") {
 				const { updateContextTemplate } = await import(
-					"$lib/server/pipelines/contextTemplates"
+					"$lib/server/pipelines/entities/contextTemplates"
 				)
 				await updateContextTemplate(db as any, params.id, patch)
 			} else {
 				const { updateVariableTemplate } = await import(
-					"$lib/server/pipelines/variableTemplates"
+					"$lib/server/pipelines/entities/variableTemplates"
 				)
 				await updateVariableTemplate(db as any, params.id, patch)
 			}
@@ -1264,12 +1455,12 @@ export const pipelinesLibraryDeleteTemplate: Handler<
 			// is somebody's choice without exception, and the refusal stands.
 			if (params.kind === "context") {
 				const { deleteContextTemplate } = await import(
-					"$lib/server/pipelines/contextTemplates"
+					"$lib/server/pipelines/entities/contextTemplates"
 				)
 				await deleteContextTemplate(db as any, params.id)
 			} else {
 				const { deleteVariableTemplate } = await import(
-					"$lib/server/pipelines/variableTemplates"
+					"$lib/server/pipelines/entities/variableTemplates"
 				)
 				await deleteVariableTemplate(db as any, params.id)
 			}
@@ -1304,7 +1495,7 @@ export const pipelinesLibraryClonePrompt: Handler<
 				.limit(1)
 			if (!row) throw new Error("gone")
 			const { duplicatePrompt } = await import(
-				"$lib/server/pipelines/prompts"
+				"$lib/server/pipelines/entities/prompts"
 			)
 			await duplicatePrompt(
 				db as any,
@@ -1333,7 +1524,7 @@ export const pipelinesLibraryUpdatePrompt: Handler<
 		}
 		try {
 			const { updatePrompt } = await import(
-				"$lib/server/pipelines/prompts"
+				"$lib/server/pipelines/entities/prompts"
 			)
 			await updatePrompt(db as any, params.id, {
 				...(params.name !== undefined ? { name: params.name } : {}),
@@ -1363,7 +1554,7 @@ export const pipelinesLibraryDeletePrompt: Handler<
 		}
 		try {
 			const { deletePrompt } = await import(
-				"$lib/server/pipelines/prompts"
+				"$lib/server/pipelines/entities/prompts"
 			)
 			await deletePrompt(db as any, params.id)
 		} catch (err) {
@@ -1442,6 +1633,146 @@ export const pipelinesDetail: Handler<
 				}))
 			}
 		}
+
+		/**
+		 * The active version's shape, for the map.
+		 *
+		 * Read here rather than derived on the client, because the wiring is
+		 * rows: `pipeline_edges` says what feeds what, and the block columns on
+		 * `pipeline_nodes` say which of them run together and how. A client
+		 * that inferred concurrency from `position` would draw a straight line
+		 * through four queries that actually fan out.
+		 */
+		if (spec.activeVersionId) {
+			const nodes = await db
+				.select()
+				.from(schema.pipelineNodes)
+				.where(
+					eq(schema.pipelineNodes.specVersionId, spec.activeVersionId)
+				)
+				.orderBy(asc(schema.pipelineNodes.position))
+
+			const byId = new Map(
+				(nodes as any[]).map((n) => [n.id, n.nodeKey as string])
+			)
+
+			/**
+			 * What each node type calls itself, from the registry row.
+			 *
+			 * ⚠ The label was `humanizeTypeId(n.typeId)` — `core:query/
+			 * relationships-perspectives@1` becomes "Relationships
+			 * perspectives" — which is a reasonable *fallback* and was being
+			 * used as the answer. The registry row carries `i18n`, written
+			 * from the declaration precisely so a name can be a name, and the
+			 * builder was inventing one beside it: `core:query/
+			 * graph-context@1` rendered as "Graph context" while its
+			 * declaration said "Graph relationships", and nothing anywhere
+			 * showed the second.
+			 *
+			 * Read from the row and not from the descriptor, because a
+			 * `transport: 'process'` plugin type has no descriptor in this
+			 * process — which is the whole reason the column exists (F6).
+			 */
+			const registryRows = await db
+				.select({
+					typeId: schema.pipelineTypeRegistry.typeId,
+					version: schema.pipelineTypeRegistry.version,
+					i18n: schema.pipelineTypeRegistry.i18n
+				})
+				.from(schema.pipelineTypeRegistry)
+			// Keyed both ways. The registry splits `type_id` and `version` into
+			// two columns while `pipeline_nodes.type_id` carries the pinned
+			// form with `@N` on it, and a lookup that guessed one of the two
+			// silently fell through to the humanized fallback — which looks
+			// exactly like a type that declared no name.
+			const typeNames = new Map<string, string>()
+			for (const r of registryRows as any[]) {
+				const name = i18nText(r.i18n?.name)
+				if (!name) continue
+				typeNames.set(`${r.typeId}@${r.version}`, name)
+				if (!typeNames.has(r.typeId)) typeNames.set(r.typeId, name)
+			}
+
+			// Which node each `ConfigStep` belongs to, from the panel's own
+			// declarations rather than a second copy of its indexing: steps are
+			// `s${i}` over configurable nodes in position order, so re-deriving
+			// that here would be a rule in two places waiting to disagree.
+			const decls = await declarations(db as any, spec.activeVersionId)
+			const configurable: string[] = []
+			for (const d of decls)
+				if (!configurable.includes(d.nodeKey)) configurable.push(d.nodeKey)
+			const stepKeyOf = new Map(
+				configurable.map((nodeKey, i) => [nodeKey, `s${i}`])
+			)
+
+			const edges = await db
+				.select()
+				.from(schema.pipelineEdges)
+				.where(
+					eq(schema.pipelineEdges.specVersionId, spec.activeVersionId)
+				)
+
+			const blockRows = await db
+				.select()
+				.from(schema.pipelineBlocks)
+				.where(
+					eq(schema.pipelineBlocks.specVersionId, spec.activeVersionId)
+				)
+
+			res.spec!.graph = {
+				blocks: (blockRows as any[]).map((b) => ({
+					id: b.blockId,
+					kind: b.kind,
+					mode: b.mode ?? null,
+					max: b.max ?? null,
+					// `overRef` is a stored data reference — `{ __ref, node, port }`.
+					// The port is the readable half and the only half a label
+					// needs; naming the node would leak topology into a string
+					// the sidebar could one day reuse.
+					over:
+						b.overRef && typeof b.overRef === "object"
+							? ((b.overRef as any).port ?? null)
+							: null,
+					// Blocks are addressed by their id in the same key space as
+					// nodes, so the panel's own indexing already gave this one a
+					// step — it just had nothing pointing at it.
+					stepKey: stepKeyOf.get(b.blockId) ?? null
+				})),
+				nodes: (nodes as any[]).map((n) => ({
+					key: n.nodeKey,
+					label:
+						typeNames.get(n.typeId) ?? humanizeTypeId(n.typeId),
+					kind: n.kind,
+					typeId: n.typeId,
+					blockId: n.blockId ?? null,
+					blockKind: n.blockKind ?? null,
+					blockChain: n.blockChain ?? null,
+					position: n.position,
+					toggleable: !!n.toggleable,
+					enabledDefault: !!n.enabledDefault,
+					stepKey: stepKeyOf.get(n.nodeKey) ?? null
+				})),
+				// A node id that is not in this version resolves to nothing
+				// rather than to some other version's key — the edge is simply
+				// not drawable, which is the honest outcome.
+				edges: (edges as any[])
+					.map((e) => ({
+						from: e.fromNodeId
+							? (byId.get(e.fromNodeId) ?? null)
+							: null,
+						fromBlock: e.fromNodeId ? null : (e.fromBlockId ?? null),
+						fromPort: e.fromPort,
+						to: byId.get(e.toNodeId) ?? null
+					}))
+					.filter((e) => e.to !== null) as Array<{
+					from: string | null
+					fromBlock: string | null
+					fromPort: string
+					to: string
+				}>
+			}
+		}
+
 		emitToUser("pipelines:detail", res)
 		return res
 	}
@@ -1520,7 +1851,7 @@ export const pipelinesReviews: Handler<
 	event: "pipelines:reviews",
 	handler: async (socket, _params, emitToUser) => {
 		const { pendingReviewsFor } = await import(
-			"$lib/server/pipelines/reviewGate"
+			"$lib/server/pipelines/runtime/reviewGate"
 		)
 		const res = { reviews: pendingReviewsFor(socket.user!.id) as any }
 		emitToUser("pipelines:reviews", res)
@@ -1535,7 +1866,7 @@ export const pipelinesResolveReview: Handler<
 	event: "pipelines:resolveReview",
 	handler: async (socket, params, emitToUser) => {
 		const { resolveReview, ReviewNotFoundError } = await import(
-			"$lib/server/pipelines/reviewGate"
+			"$lib/server/pipelines/runtime/reviewGate"
 		)
 		try {
 			resolveReview(
@@ -1572,7 +1903,7 @@ export function registerPipelineHandlers(
 	// The gate's push transport, bound once per process to socket.io's rooms.
 	// A review can park from any trigger, so it pushes by user rather than
 	// through whichever handler happened to start the run.
-	import("$lib/server/pipelines/reviewGate").then(({ setReviewTransport }) =>
+	import("$lib/server/pipelines/runtime/reviewGate").then(({ setReviewTransport }) =>
 		setReviewTransport((userId, event, data) =>
 			socket.io.to(`user_${userId}`).emit(event, data)
 		)
@@ -1583,6 +1914,9 @@ export function registerPipelineHandlers(
 	register(socket, pipelinesSetOption, emitToUser)
 	register(socket, pipelinesClearOption, emitToUser)
 	register(socket, pipelinesSelectConfig, emitToUser)
+	register(socket, pipelinesCreateConfig, emitToUser)
+	register(socket, pipelinesRenameConfig, emitToUser)
+	register(socket, pipelinesDeleteConfig, emitToUser)
 	register(socket, pipelinesClonePrompt, emitToUser)
 	register(socket, pipelinesUpdatePrompt, emitToUser)
 	register(socket, pipelinesDeletePrompt, emitToUser)

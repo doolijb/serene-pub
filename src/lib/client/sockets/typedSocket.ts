@@ -697,6 +697,30 @@ export type SocketEventMap = {
 		params: never
 		response: { error?: string }
 	}
+	"pipelines:createConfig": {
+		params: Sockets.Pipelines.CreateConfig.Params
+		response: Sockets.Pipelines.CreateConfig.Response
+	}
+	"pipelines:createConfig:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:renameConfig": {
+		params: Sockets.Pipelines.RenameConfig.Params
+		response: Sockets.Pipelines.RenameConfig.Response
+	}
+	"pipelines:renameConfig:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:deleteConfig": {
+		params: Sockets.Pipelines.DeleteConfig.Params
+		response: Sockets.Pipelines.DeleteConfig.Response
+	}
+	"pipelines:deleteConfig:error": {
+		params: never
+		response: { error?: string }
+	}
 	"pipelines:selectConfig": {
 		params: Sockets.Pipelines.SelectConfig.Params
 		response: Sockets.Pipelines.SelectConfig.Response

@@ -520,7 +520,7 @@ export const sceneCompileHandler: Handler<
 		 * pipeline's to decide.
 		 */
 		const { resolveStepConfigs } = await import(
-			"$lib/server/pipelines/stepConfig"
+			"$lib/server/pipelines/config/stepConfig"
 		)
 		const { SUMMARIZE_HISTORY_SPEC_ID, SUMMARIZE_VERSION } = await import(
 			"$lib/server/pipelines/specs/summarize"
@@ -608,7 +608,7 @@ export const sceneCompileHandler: Handler<
 		// result is held for review and the save is the person's act.
 		{
 			const { saveReceipt } = await import(
-				"$lib/server/pipelines/receipts"
+				"$lib/server/pipelines/runtime/receipts"
 			)
 			const { v4: uuidv4 } = await import("uuid")
 			const now = Date.now()
@@ -779,7 +779,7 @@ export const sceneProcessHandler: Handler<
 			mentionedCharacters?: any[]
 		}
 		try {
-			const { runSpec } = await import("$lib/server/pipelines/runTurn")
+			const { runSpec } = await import("$lib/server/pipelines/runtime/runTurn")
 			const { SUMMARIZE_SCENE_SPEC_ID } = await import(
 				"$lib/server/pipelines/specs/summarize"
 			)

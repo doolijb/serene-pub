@@ -169,6 +169,7 @@
 		// that navigates to a different page, where staying fullscreen
 		// would cover up the page it just navigated to.
 		fullscreenPanel: null,
+		wideContent: false,
 		openPanel,
 		closePanel,
 		onLeftPanelClose: undefined,
@@ -1001,7 +1002,20 @@
 			class="relative z-10 flex h-svh max-w-full min-w-full flex-1 flex-col overflow-hidden lg:flex-row lg:gap-2"
 		>
 			<!-- Left Sidebar -->
-			<aside class="desktop-sidebar" aria-label="Left navigation panel">
+			<!--
+				A closed sidebar still holds its quarter, which is what keeps
+				the centre column from moving every time a panel opens. Under
+				`wideContent` it yields that space instead — so both closed
+				gives the window, one open gives three quarters, and both open
+				is exactly the normal half.
+			-->
+			<aside
+				class="desktop-sidebar {panelsCtx.wideContent &&
+				!panelsCtx.leftPanel
+					? 'lg:hidden'
+					: 'basis-1/4'}"
+				aria-label="Left navigation panel"
+			>
 				{#if panelsCtx.leftPanel}
 					{@const title =
 						panelsCtx.leftNav[panelsCtx.leftPanel]?.title ||
@@ -1075,9 +1089,16 @@
 				{/if}
 			</aside>
 			<!-- Main Content -->
+			<!--
+				Sizing lives here rather than in the stylesheet because it is
+				now conditional, and two `@apply`d rules of equal specificity
+				would be decided by stylesheet order instead of by intent.
+			-->
 			<main
 				bind:this={mainContentRef}
-				class="flex h-full flex-col overflow-hidden"
+				class="flex h-full flex-col overflow-hidden {panelsCtx.wideContent
+					? 'lg:min-w-0 lg:flex-1'
+					: 'lg:max-w-[50%] lg:basis-1/2'}"
 				tabindex="-1"
 			>
 				<Header />
@@ -1087,7 +1108,10 @@
 			</main>
 			<!-- Right Sidebar -->
 			<aside
-				class="desktop-sidebar pt-1"
+				class="desktop-sidebar pt-1 {panelsCtx.wideContent &&
+				!panelsCtx.rightPanel
+					? 'lg:hidden'
+					: 'basis-1/4'}"
 				aria-label="Right navigation panel"
 			>
 				{#if panelsCtx.rightPanel}
@@ -1325,12 +1349,12 @@
 	/* w-[100%] lg:min-w-[50%] lg:w-[50%] */
 
 	main {
-		@apply relative m-0 lg:max-w-[50%] lg:basis-1/2;
+		@apply relative m-0;
 	}
 
 	/* w-[25%] max-w-[25%] */
 
 	.desktop-sidebar {
-		@apply hidden max-h-full min-h-full basis-1/4 overflow-x-hidden py-1 lg:block;
+		@apply hidden max-h-full min-h-full overflow-x-hidden py-1 lg:block;
 	}
 </style>

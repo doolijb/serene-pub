@@ -16,7 +16,7 @@
  *   · a key list is comma-split and trimmed, and empty keys are dropped
  */
 
-import type { MatchMode } from "./weights"
+import type { MatchMode } from "$lib/server/pipelines/ranking/weights"
 
 export interface KeyedEntry {
 	keys?: string | null

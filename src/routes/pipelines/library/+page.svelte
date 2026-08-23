@@ -32,6 +32,9 @@
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
+	import TemplateEditor from "$lib/client/components/templates/TemplateEditor.svelte"
+	import { getVariable } from "@serene-pub/sdk"
+	import { contextTemplateScope } from "$lib/shared/utils/contextConfigCards"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
@@ -151,6 +154,23 @@
 			kind: templateKind(t) as any,
 			poolId
 		})
+	}
+
+	/**
+	 * What a row's template may reference.
+	 *
+	 * A context template sees the whole vocabulary; a variable layout sees only
+	 * what its own variable declares — one name, usually. Offering the layout
+	 * editor the context vocabulary would autocomplete `scenario` into a
+	 * characters layout, where it renders nothing.
+	 *
+	 * A plugin's variable is registered on the server and not in this bundle,
+	 * so `getVariable` comes back empty and the editor simply offers no
+	 * assistance rather than the wrong assistance.
+	 */
+	function scopeFor(t: Tab, poolId: string) {
+		if (t === "templates") return contextTemplateScope()
+		return getVariable(poolId)?.scope
 	}
 
 	/* --- prompt writes ------------------------------------------------ */
@@ -354,7 +374,7 @@
 	const layouts = $derived(view.variableTemplates ?? [])
 </script>
 
-<div class="mx-auto flex max-w-5xl flex-col gap-6 p-4">
+<div class="flex flex-col gap-6 p-4">
 	<header class="flex items-center gap-3">
 		<Icons.Library size={24} />
 		<div class="min-w-0 flex-1">
@@ -682,22 +702,18 @@
 										{tab === "templates"
 											? "Template"
 											: "Layout"}
-										<textarea
-											class="textarea w-full font-mono text-xs"
+										<TemplateEditor
 											rows={row.isImmutable
 												? 6
 												: tab === "templates"
 													? 18
 													: 8}
 											readonly={row.isImmutable}
-											spellcheck="false"
 											value={d.source}
-											oninput={(e) =>
-												edit(kind, row.id, {
-													source: e.currentTarget
-														.value
-												})}
-										></textarea>
+											scope={scopeFor(tab, poolId)}
+											oninput={(source) =>
+												edit(kind, row.id, { source })}
+										/>
 									</label>
 									<div class="flex items-center gap-2">
 										<button

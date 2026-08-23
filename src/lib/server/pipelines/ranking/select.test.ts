@@ -9,12 +9,12 @@
  */
 
 import { describe, it, expect } from "vitest"
-import { score, select, renderSelection, type Candidate } from "./select"
+import { score, select, renderSelection, type Candidate } from "$lib/server/pipelines/ranking/select"
 import {
 	DEFAULT_RANKING,
 	DEFAULT_SIGNAL_WEIGHTS,
 	withDefaults
-} from "./weights"
+} from "$lib/server/pipelines/ranking/weights"
 
 const lore = (over: Partial<Candidate> = {}): Candidate => ({
 	id: over.id ?? Math.random(),
@@ -194,12 +194,62 @@ describe("group budgets", () => {
 				}
 			} as any)
 		})
-		expect(heavy.groups.worldLore.used).toBeGreaterThan(
-			base.groups.worldLore.used
+		// `allocated`, not `used`. The spill pass hands whatever no group could
+		// spend to whoever can, so on a window roomy enough for every candidate
+		// both runs end up having included everything — which says nothing
+		// about the shares. What the share *is* is the pot, and that is what
+		// turning one up has to take from the others.
+		expect(heavy.groups.worldLore.allocated).toBeGreaterThan(
+			base.groups.worldLore.allocated
 		)
-		expect(heavy.groups.messages.used).toBeLessThanOrEqual(
-			base.groups.messages.used
+		expect(heavy.groups.messages.allocated).toBeLessThan(
+			base.groups.messages.allocated
 		)
+	})
+
+	// The guarantee the floors exist to make, and the one they must not break.
+	it("never selects more than the window, however the floors are set", () => {
+		const sel = select(mixed(), {
+			availableTokens: 500,
+			params: withDefaults({
+				groups: {
+					// Every floor set past what 500 tokens can hold: five
+					// 200-token entries per source is 2000 tokens of promises
+					// against a 500-token window.
+					minEntries: {
+						messages: 5,
+						worldLore: 5,
+						characterLore: 5,
+						history: 5,
+						relationships: 5
+					}
+				}
+			} as any)
+		})
+		expect(sel.totalTokens).toBeLessThanOrEqual(500)
+		expect(sel.included.length).toBeGreaterThan(0)
+	})
+
+	it("fills a floor in score order and marks it as a floor", () => {
+		const sel = select(mixed(), {
+			availableTokens: 2000,
+			params: withDefaults({
+				groups: {
+					// worldLore weighted to nothing, so anything of it that
+					// survives got there by the floor rather than by a share.
+					share: { ...DEFAULT_RANKING.groups.share, worldLore: 0 },
+					minEntries: {
+						...DEFAULT_RANKING.groups.minEntries,
+						worldLore: 2
+					}
+				}
+			} as any)
+		})
+		const floored = sel.included.filter(
+			(d) => d.reason === "reserved_minimum" && d.candidate.source === "worldLore"
+		)
+		expect(floored).toHaveLength(2)
+		expect(floored[0]!.why).toMatch(/floor of 2 for worldLore/)
 	})
 
 	it("a zero-weighted group is excluded, and says so", () => {

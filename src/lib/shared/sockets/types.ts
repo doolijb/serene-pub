@@ -1617,11 +1617,53 @@ declare global {
 			interface Option {
 				id: string
 				label: string
+				/**
+				 * What *kind* of setting this is — `prompts`, `variables`,
+				 * `weights`, `review` — as the descriptor declared it. The
+				 * sidebar groups on this rather than on the step, because a
+				 * facet is what someone is looking for and a step is where the
+				 * machine happens to compute it. Names a kind, never a node.
+				 */
+				facet: string
+				/**
+				 * One of the few settings people actually reach for here.
+				 *
+				 * Declared on the type, so the panel leads with the author's
+				 * answer rather than guessing from position or control kind.
+				 */
+				quick?: boolean
 				description?: string
 				control: string
 				min?: number
 				max?: number
 				of?: readonly string[]
+				/**
+				 * For a `share` or `per-member` control: the bands, in render
+				 * order, with the label and colour index the declaration gave
+				 * them.
+				 *
+				 * Sent rather than known, for the same reason `choices` is. A
+				 * plugin that adds a sixth retrieval source gets a labelled,
+				 * coloured band without anyone editing the panel — the moment
+				 * this list lived in the client, that would stop being true.
+				 */
+				members?: readonly {
+					key: string
+					label?: string
+					description?: string
+					tone?: number
+				}[]
+				/**
+				 * For a `share` control: the tokens the split divides, when the
+				 * window is known.
+				 *
+				 * A percentage is the setting; the absolute count is the thing
+				 * it buys, and showing both is what lets somebody see what 30%
+				 * actually means before they commit to it. Read from the
+				 * sampling config — never typed, which is the whole reason the
+				 * absolute budget parameter is gone.
+				 */
+				windowTokens?: number
 				/**
 				 * For a `*-ref` control: what it may be pointed at, already
 				 * scoped by the declaration (this namespace's prompts, this
@@ -1643,6 +1685,8 @@ declare global {
 					name: string
 					fields: Record<string, string>
 					readOnly: boolean
+					/** The field names this node declares — not always all of them. */
+					declared: string[]
 				}
 				/**
 				 * For a `variable-template-ref` option: the selected layout
@@ -1680,8 +1724,18 @@ declare global {
 				}
 				authorDefault?: unknown
 				value: unknown
-				/** chat | user | preset | instance | author — where the value won. */
-				source: string
+				/**
+				 * Where the value won, as the closed set it is.
+				 *
+				 * Spelled out rather than `string`, because the panel renders a
+				 * label per source and a widened type let that stay a hardcoded
+				 * map with no way to notice a sixth scope: the badge would fall
+				 * back to printing the raw id. The scope chain is core's own and
+				 * nothing extends it, so exhaustiveness is checkable — and a new
+				 * scope should be a compile error in the panel, not a word
+				 * nobody chose appearing in the UI.
+				 */
+				source: "chat" | "user" | "preset" | "instance" | "author"
 				writable: boolean
 				/**
 				 * Where this option's edits land when it is not the viewer's
@@ -1700,6 +1754,14 @@ declare global {
 			interface Step {
 				key: string
 				label: string
+				/**
+				 * What the step is — `query`, `task`, `provider`, `consumer`.
+				 *
+				 * Shown as a badge in the builder, where it is the difference
+				 * between a step that reads rows and one that costs a model
+				 * request. Names a kind, never a node.
+				 */
+				kind: string
 				options: Option[]
 				advanced: Option[]
 			}
@@ -1731,6 +1793,22 @@ declare global {
 					source: string
 				} | null
 				steps: Step[]
+				/**
+				 * The kinds of setting this pipeline contains, in render order,
+				 * each with the heading it appears under.
+				 *
+				 * Sent rather than known. The panel used to hold this list and
+				 * match options *into* it, so a facet it had not heard of —
+				 * a plugin's own — matched no group and rendered nowhere at
+				 * all. Two facets sharing a label are one group, which is how
+				 * `connection` and `sampling` become "Model".
+				 */
+				facets: Array<{
+					id: string
+					label: string
+					order: number
+					simple: boolean
+				}>
 				writeScope: string
 			}
 
@@ -1764,6 +1842,15 @@ declare global {
 					chatId?: number
 					/** Admins only, and only to say "for everyone on this instance". */
 					scope?: "instance"
+					/**
+					 * Edit this configuration itself rather than override it.
+					 *
+					 * The builder sends it; the sidebar does not. An override
+					 * lands at instance/user/chat scope and *outranks* every
+					 * configuration, so without this an edit made while one
+					 * configuration was selected followed you to all of them.
+					 */
+					configId?: number
 				}
 				interface Response {
 					pipeline?: NamespaceDetail
@@ -1776,6 +1863,8 @@ declare global {
 					optionId: string
 					chatId?: number
 					scope?: "instance"
+					/** Reset this configuration's own value, not an override. */
+					configId?: number
 				}
 				interface Response {
 					pipeline?: NamespaceDetail
@@ -1814,6 +1903,50 @@ declare global {
 				}
 				interface Response {
 					ok?: boolean
+					error?: string
+				}
+			}
+			/**
+			 * Named-config CRUD from the builder.
+			 *
+			 * A pipeline is the backbone; a configuration is the thing someone
+			 * keeps and tunes. Every one of these answers with the refreshed
+			 * view, so the caller never has to reconcile its own copy.
+			 */
+			namespace CreateConfig {
+				interface Params {
+					slug: string
+					name: string
+					/** Copy this configuration's values instead of starting empty. */
+					fromConfigId?: number
+					chatId?: number
+				}
+				interface Response {
+					pipeline?: NamespaceDetail
+					configId?: number
+					error?: string
+				}
+			}
+			namespace RenameConfig {
+				interface Params {
+					slug: string
+					configId: number
+					name: string
+					chatId?: number
+				}
+				interface Response {
+					pipeline?: NamespaceDetail
+					error?: string
+				}
+			}
+			namespace DeleteConfig {
+				interface Params {
+					slug: string
+					configId: number
+					chatId?: number
+				}
+				interface Response {
+					pipeline?: NamespaceDetail
 					error?: string
 				}
 			}
@@ -2146,6 +2279,94 @@ declare global {
 							publishedAt: string | null
 							nodeCount: number
 						}[]
+						/**
+						 * The active version's shape, for the builder's map.
+						 *
+						 * This is topology — node keys, wiring, blocks — and it
+						 * is deliberately on `pipelines:detail` rather than
+						 * `pipelines:get`. The panel view is what the sidebar
+						 * reads and 05 §0a forbids it knowing any of this; the
+						 * management screen is the structural view and may.
+						 * Keeping the two on different events is what makes the
+						 * boundary a fact rather than a convention someone has
+						 * to remember.
+						 */
+						graph?: {
+							nodes: {
+								key: string
+								/** The type's display name, humanized. */
+								label: string
+								/** `input` | `query` | `task` | `provider` | `consumer`. */
+								kind: string
+								typeId: string
+								/** Which block it belongs to, if any. */
+								blockId: string | null
+								/** `async` | `map` | `loop`. */
+								blockKind: string | null
+								/** Which chain within the block — parallel arms. */
+								blockChain: string | null
+								position: number
+								toggleable: boolean
+								enabledDefault: boolean
+								/**
+								 * The `ConfigStep` this node is configured by, or
+								 * null when it declares nothing.
+								 *
+								 * The map is keyed by node and the inspector by
+								 * step, and steps exist only for nodes with
+								 * declarations — so without this the two cannot
+								 * be paired without the client re-deriving the
+								 * panel's indexing and drifting from it.
+								 */
+								stepKey: string | null
+							}[]
+							/**
+							 * The declared blocks, which say what a frame *means*.
+							 *
+							 * `map` needs what it iterates over and how many times
+							 * at most; `async` needs whether its chains actually run
+							 * concurrently or merely together; `loop` needs its
+							 * condition. None of that is derivable from the nodes or
+							 * the edges — `over` is a data reference the edge table
+							 * never carried — so it is read from `pipeline_blocks`
+							 * rather than inferred.
+							 */
+							blocks: {
+								id: string
+								kind: string
+								/** `parallel` | `sequential`, for async. */
+								mode: string | null
+								max: number | null
+								/** The port this iterates over, e.g. `batches`. */
+								over: string | null
+								/**
+								 * The `ConfigStep` that configures the block itself.
+								 *
+								 * A block carries a setting of its own — whether its
+								 * chains run together — so it is a step like any
+								 * node, and the frame has to be selectable or that
+								 * step is unreachable.
+								 */
+								stepKey: string | null
+							}[]
+							edges: {
+								/** The source node, when the source is a node. */
+								from: string | null
+								/**
+								 * The source *block*, when it is not.
+								 *
+								 * A map block's output feeds the next node as
+								 * `drafting --main--> synth`, and its iteration
+								 * variable appears as `drafting.$item`. Both have
+								 * no `fromNodeId`, so reading only nodes drops
+								 * the two edges that make a block legible — the
+								 * one going in and the one coming out.
+								 */
+								fromBlock: string | null
+								fromPort: string
+								to: string
+							}[]
+						}
 					}
 					error?: string
 				}

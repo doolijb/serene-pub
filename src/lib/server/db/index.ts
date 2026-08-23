@@ -60,7 +60,7 @@ try {
 }
 
 // Database lock functions
-const DEFAULT_LOCK_LENGTH = 5000 // 5 seconds in milliseconds
+const DEFAULT_LOCK_LENGTH = 10000 // 10 seconds in milliseconds
 
 async function checkDatabaseLock(): Promise<void> {
 	// Refresh meta from file with error handling
@@ -149,8 +149,27 @@ function startLockUpdates(): void {
 
 	// Set up interval to update lock every few seconds
 	lockUpdateInterval = setInterval(() => {
+		if (!dataDirPresent()) {
+			stopLockUpdates()
+			return
+		}
 		updateDatabaseLock()
 	}, DEFAULT_LOCK_LENGTH - 1000) // Update 1 second before lock expires
+}
+
+/**
+ * Whether the data directory is still there.
+ *
+ * The lock heartbeat writes `meta.json` on a timer, and `writeFileSync`
+ * recreates a file whose directory was just removed. That is wrong in
+ * production — a server whose data directory has been deleted out from under it
+ * should stop writing, not resurrect a lone lock file — and in the test suite
+ * it was an intermittent failure: a temp data directory being torn down would
+ * have `meta.json` written back into it mid-walk, so the final `rmdir` hit
+ * `ENOTEMPTY`. Different file each run, roughly one run in three.
+ */
+function dataDirPresent(): boolean {
+	return fs.existsSync(dbConfig.dataDir)
 }
 
 function stopLockUpdates(): void {
@@ -158,6 +177,9 @@ function stopLockUpdates(): void {
 		clearInterval(lockUpdateInterval)
 		lockUpdateInterval = null
 	}
+
+	// Nothing to clear, and nothing to write it into.
+	if (!dataDirPresent()) return
 
 	// Clear the lock when stopping
 	try {
@@ -173,6 +195,28 @@ function stopLockUpdates(): void {
 		fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
 	} catch (error) {
 		console.error("Failed to clear database lock:", error)
+	}
+}
+
+/**
+ * Let go of the data directory: stop the heartbeat, drop the lock, close PGlite.
+ *
+ * Exported for the integration suites, which point `SERENE_PUB_DATA_DIR` at a
+ * temp directory, load this module for real, and then delete that directory.
+ * Without this they were deleting it out from under a live database and a
+ * running timer — see `dataDirPresent`. Stopping the writer first is the
+ * deterministic fix; the guard above is what keeps a stray tick harmless.
+ *
+ * Safe to call twice, and safe to call on a database that never opened.
+ */
+export async function closeDatabase(): Promise<void> {
+	stopLockUpdates()
+	const client = (db as unknown as { $client?: { close?: () => Promise<void> } })
+		.$client
+	try {
+		await client?.close?.()
+	} catch {
+		// Already closed, or never opened. Either way there is nothing to hold.
 	}
 }
 
@@ -396,7 +440,7 @@ if (!building) {
 if (!building) {
 	try {
 		const { bootstrapPipelines } = await import(
-			"$lib/server/pipelines/bootstrap"
+			"$lib/server/pipelines/boot/bootstrap"
 		)
 		const report = await bootstrapPipelines(db)
 		if (report.conflict)

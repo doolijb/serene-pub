@@ -185,7 +185,7 @@ export const chatsSummarizeHandler: Handler<
 				 * structurally.
 				 */
 				const { runSpec } = await import(
-					"$lib/server/pipelines/runTurn"
+					"$lib/server/pipelines/runtime/runTurn"
 				)
 				const specsModule = await import(
 					"$lib/server/pipelines/specs/summarize"

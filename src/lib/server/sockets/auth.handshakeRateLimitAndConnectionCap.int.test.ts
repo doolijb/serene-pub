@@ -23,6 +23,7 @@ import {
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
+import { releaseDataDir } from "$lib/server/utils/testDb"
 
 let dataDir: string
 
@@ -57,7 +58,7 @@ beforeAll(async () => {
 }, 60_000)
 
 afterAll(async () => {
-	await fs.rm(dataDir, { recursive: true, force: true })
+	await releaseDataDir(dataDir)
 })
 
 function makeFakeSocket(

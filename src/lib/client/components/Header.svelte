@@ -168,6 +168,36 @@
 					</button>
 				{/if}
 			{/each}
+
+			<!--
+				Desktop only, and last in the row: it governs how much room the
+				page gets rather than opening anything, so it sits after the
+				panels it defers to rather than among them.
+			-->
+			<button
+				class="btn-ghost relative"
+				title={panelsCtx.wideContent
+					? "Standard page width"
+					: "Adaptive full page width"}
+				onclick={() => (panelsCtx.wideContent = !panelsCtx.wideContent)}
+				aria-pressed={panelsCtx.wideContent}
+				aria-label={panelsCtx.wideContent
+					? "Use the standard content width"
+					: "Widen content into unused sidebar space"}
+				type="button"
+			>
+				{#if panelsCtx.wideContent}
+					<Icons.Minimize2
+						class="text-primary-800-200 hover:text-primary-500 h-5 w-5 transition-colors"
+						aria-hidden="true"
+					/>
+				{:else}
+					<Icons.Maximize2
+						class="hover:text-primary-500 h-5 w-5 transition-colors"
+						aria-hidden="true"
+					/>
+				{/if}
+			</button>
 		</nav>
 
 		<!-- `ml-auto` rather than relying on the parent's justify-between: at md+

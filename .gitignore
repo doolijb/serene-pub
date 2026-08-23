@@ -6,6 +6,9 @@ node_modules
 .netlify
 .wrangler
 /.svelte-kit
+# vite/vitest also drop a .svelte-kit cache next to whatever it resolved from;
+# one of those was committed under src/lib/client/components/ before this rule.
+.svelte-kit/
 /build
 /dist
 

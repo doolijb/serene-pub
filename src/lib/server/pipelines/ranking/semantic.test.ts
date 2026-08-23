@@ -19,8 +19,8 @@ import {
 	rankSemantic,
 	mergeWindows,
 	type RagCandidate
-} from "./semantic"
-import { DEFAULT_SEMANTIC } from "./weights"
+} from "$lib/server/pipelines/ranking/semantic"
+import { DEFAULT_SEMANTIC } from "$lib/server/pipelines/ranking/weights"
 
 const c = (id: number, over: Partial<RagCandidate> = {}): RagCandidate => ({
 	id,

@@ -3433,9 +3433,9 @@ export const promptTokenCountHandler: Handler<
 			 * because this fires on a debounce while somebody types; recording
 			 * a run per keystroke would bury the run history.
 			 */
-			const { runTurn } = await import("$lib/server/pipelines/runTurn")
+			const { runTurn } = await import("$lib/server/pipelines/runtime/runTurn")
 			const { toCompiledPrompt } = await import(
-				"$lib/server/pipelines/dispatch"
+				"$lib/server/pipelines/runtime/dispatch"
 			)
 
 			const receipt: any = await runTurn({
@@ -3444,6 +3444,17 @@ export const promptTokenCountHandler: Handler<
 				userId,
 				currentCharacterId,
 				text: params.content ?? "",
+				// The point of the preview: the text being typed is not a row
+				// yet, so the run has to be told about it or the count reflects
+				// the conversation *without* the message it is counting.
+				...(params.content?.trim()
+					? {
+							draftMessage: {
+								content: params.content,
+								personaId: params.personaId ?? null
+							}
+						}
+					: {}),
 				preview: true,
 				skipReceipt: true
 			})

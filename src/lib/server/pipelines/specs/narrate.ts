@@ -34,7 +34,14 @@ export const NARRATE_SPEC_ID = "core:spec/narrate"
 // layouts it selects are the *same rows*, since a layout is keyed by the
 // variable it renders rather than by the pipeline that asked for it.
 // 1.3.0: assembly's own `variables` slot, for its post-budget lore and history.
-export const NARRATE_VERSION = "1.3.0"
+// 1.4.0: its own context-builder type. Sharing `build-template-context@1` with
+// the reply pipeline meant sharing its *configurable surface*, and the panel is
+// generated from the registry row — so the narrator offered layout pickers for
+// example dialogue (which comes from a speaking character it does not have) and
+// speaker relationships (which this spec deliberately never supplies), while
+// `narratorName` sat on every reply prompt doing nothing. A type is the unit
+// that declares a surface; two surfaces is two types.
+export const NARRATE_VERSION = "1.4.0"
 
 export const narrateSpec = () =>
 	compile(
@@ -51,7 +58,7 @@ export const narrateSpec = () =>
 			)
 			.query("cast", ($) => C.chatCast.v1({ scope: $.input.chatScope }))
 			.task("context", ($) =>
-				C.buildTemplateContext.v1({
+				C.buildNarratorContext.v1({
 					cast: $.cast.cast,
 					prompts: slot.prompts(),
 					variables: slot.variables()

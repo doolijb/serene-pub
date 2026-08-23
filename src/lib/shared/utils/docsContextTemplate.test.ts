@@ -51,11 +51,11 @@ describe("docs/context-templates.md default template", () => {
 			readFileSync(
 				resolve(
 					root,
-					"src/lib/server/pipelines/contextTemplateDefaults.ts"
+					"src/lib/server/pipelines/entities/contextTemplateDefaults.ts"
 				),
 				"utf8"
 			),
-			"src/lib/server/pipelines/contextTemplateDefaults.ts"
+			"src/lib/server/pipelines/entities/contextTemplateDefaults.ts"
 		)
 		const documented = extractTemplate(
 			readFileSync(resolve(root, "docs/context-templates.md"), "utf8"),

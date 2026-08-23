@@ -9,8 +9,8 @@
  */
 
 import { describe, it, expect } from "vitest"
-import { keywordQuery, normaliseTfidf, type LoreRow } from "./keywordQuery"
-import { DEFAULT_RETRIEVAL } from "./weights"
+import { keywordQuery, normaliseTfidf, type LoreRow } from "$lib/server/pipelines/ranking/keywordQuery"
+import { DEFAULT_RETRIEVAL } from "$lib/server/pipelines/ranking/weights"
 
 const entry = (over: Partial<LoreRow> = {}): LoreRow => ({
 	id: 1,
@@ -165,5 +165,177 @@ describe("tf-idf normalisation", () => {
 			{ id: 1, source: "worldLore", tokens: 1, signals: { tfidf: 0 } }
 		])
 		expect(normalised[0]!.signals.tfidf).toBe(0)
+	})
+})
+
+/**
+ * Recursion: an entry's content is the next pass's scan window.
+ *
+ * The case this exists for is a lorebook that describes a place, and separately
+ * the person who runs it. One pass can only bring in whichever of the two was
+ * named out loud; the other is exactly the context the model needed.
+ */
+describe("recursive triggering", () => {
+	const place = entry({
+		id: 1,
+		name: "The Ashguard",
+		keys: "ashguard",
+		content: "An order of oathbound riders, led by Commander Vell."
+	})
+	const person = entry({
+		id: 2,
+		name: "Vell",
+		keys: "vell",
+		content: "A commander who never removes her helm."
+	})
+
+	const deep = (n: number) => ({ ...DEFAULT_RETRIEVAL, maxRecursionDepth: n })
+
+	it("does not recurse at all by default, which is every release before this", () => {
+		const r = run([place, person], ["the ashguard rode north"])
+		expect(r.candidates.map((c) => c.id)).toEqual([1])
+		expect(r.diagnostics.recursionDepth).toBe(0)
+	})
+
+	it("pulls in an entry named only by another entry's content", () => {
+		const r = run([place, person], ["the ashguard rode north"], {
+			retrieval: deep(1)
+		})
+		expect(r.candidates.map((c) => c.id).sort()).toEqual([1, 2])
+		expect(r.diagnostics.recursionDepth).toBe(1)
+	})
+
+	it("stops at the ceiling", () => {
+		// A three-link chain against a ceiling of one reaches the second and
+		// not the third.
+		const third = entry({ id: 3, name: "The Helm", keys: "helm", content: "Iron." })
+		const r = run([place, person, third], ["the ashguard rode north"], {
+			retrieval: deep(1)
+		})
+		expect(r.candidates.map((c) => c.id).sort()).toEqual([1, 2])
+
+		const deeper = run([place, person, third], ["the ashguard rode north"], {
+			retrieval: deep(2)
+		})
+		expect(deeper.candidates.map((c) => c.id).sort()).toEqual([1, 2, 3])
+		expect(deeper.diagnostics.recursionDepth).toBe(2)
+	})
+
+	it("stops early when a pass finds nothing, rather than walking to the ceiling", () => {
+		const r = run([place, person], ["the ashguard rode north"], {
+			retrieval: deep(9)
+		})
+		expect(r.diagnostics.recursionDepth).toBe(1)
+	})
+
+	it("honours an entry that asked to be reachable from the conversation only", () => {
+		const r = run(
+			[place, { ...person, recursionDepth: 0 }],
+			["the ashguard rode north"],
+			{ retrieval: deep(3) }
+		)
+		expect(r.candidates.map((c) => c.id)).toEqual([1])
+		// And it is reported as unmatched rather than quietly absent.
+		expect(r.skipped.find((s) => s.id === 2)).toBeTruthy()
+	})
+
+	it("terminates on a cycle instead of scanning forever", () => {
+		// Two entries naming each other. Nothing may be matched twice, which is
+		// what makes this terminate — not a visited-pair check bolted on top.
+		const a = entry({ id: 1, name: "A", keys: "alpha", content: "See beta." })
+		const b = entry({ id: 2, name: "B", keys: "beta", content: "See alpha." })
+		const r = run([a, b], ["alpha"], { retrieval: deep(50) })
+		expect(r.candidates.map((c) => c.id).sort()).toEqual([1, 2])
+		expect(r.diagnostics.matched).toBe(2)
+	})
+
+	it("does not report an entry as unmatched that a later pass went on to find", () => {
+		// The receipt contradicting the prompt is the failure this orders
+		// against: `skipped` is written after the last pass, not during each.
+		const r = run([place, person], ["the ashguard rode north"], {
+			retrieval: deep(1)
+		})
+		expect(r.skipped.map((s) => s.id)).not.toContain(2)
+	})
+
+	it("still reports a disabled entry once, not once per pass", () => {
+		const off = entry({ id: 2, enabled: false, keys: "vell" })
+		const r = run([place, off], ["the ashguard rode north"], {
+			retrieval: deep(3)
+		})
+		expect(r.skipped.filter((s) => s.id === 2)).toHaveLength(1)
+	})
+
+	it("reads a negative ceiling as none, not as unlimited", () => {
+		const r = run([place, person], ["the ashguard rode north"], {
+			retrieval: deep(-1)
+		})
+		expect(r.candidates.map((c) => c.id)).toEqual([1])
+	})
+})
+
+/**
+ * The three lore tables have independent identity sequences.
+ *
+ * ⚠ A world-lore entry and a history entry both being row 1 is the *normal*
+ * case on a young lorebook, and for one commit the recursion pass keyed its
+ * "already handled" set on `entry.id` alone — so the first one settled the
+ * second, which then disappeared without turning up in `skipped` either.
+ * Silent, and indistinguishable from "no key matched".
+ */
+describe("entries from different tables can share an id", () => {
+	const rows: LoreRow[] = [
+		{
+			id: 1,
+			source: "worldLore",
+			name: "The Ashguard",
+			content: "An order of oathbound riders.",
+			keys: "ashguard"
+		},
+		{
+			id: 1,
+			source: "history",
+			name: "The Siege",
+			content: "The siege broke in the spring.",
+			keys: "ashguard"
+		},
+		{
+			id: 1,
+			source: "characterLore",
+			name: "Vell's oath",
+			content: "She swore it twice.",
+			keys: "ashguard"
+		}
+	]
+
+	it("matches all three rather than only the first", () => {
+		const r = run(rows, ["the ashguard rode north"])
+		expect(r.candidates.map((c) => c.source).sort()).toEqual([
+			"characterLore",
+			"history",
+			"worldLore"
+		])
+	})
+
+	it("accounts for all three when none of them match", () => {
+		// The other half: a settled-set collision would also hide an entry from
+		// `skipped`, so "nothing matched" and "we never looked" read alike.
+		const r = run(rows, ["nothing relevant here"])
+		expect(r.candidates).toHaveLength(0)
+		expect(r.skipped.map((s) => s.source).sort()).toEqual([
+			"characterLore",
+			"history",
+			"worldLore"
+		])
+	})
+
+	it("settles them separately across a recursion pass", () => {
+		const r = run(rows, ["the ashguard rode north"], {
+			retrieval: { ...DEFAULT_RETRIEVAL, maxRecursionDepth: 2 }
+		})
+		expect(r.candidates).toHaveLength(3)
+		// Each exactly once — a set keyed only by source would collide the
+		// other way and re-add an entry on every level.
+		expect(new Set(r.candidates.map((c) => `${c.source}:${c.id}`)).size).toBe(3)
 	})
 })

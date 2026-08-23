@@ -29,7 +29,7 @@
  * to replace, and a version of this that ran host-side would be frozen.
  */
 
-import type { SemanticParams } from "./weights"
+import type { SemanticParams } from "$lib/server/pipelines/ranking/weights"
 
 export interface RagCandidate {
 	id: number | string

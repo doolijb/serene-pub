@@ -24,15 +24,15 @@ import {
 	positionRecencySignal,
 	densitySignal,
 	buildLastRefMap
-} from "./signals"
+} from "$lib/server/pipelines/ranking/signals"
 import {
 	DEFAULT_RANKING,
 	DEFAULT_SIGNAL_WEIGHTS,
 	DEFAULT_GROUPS,
 	allocateBudgets,
 	withDefaults
-} from "./weights"
-import { PRIORITY_SCORE_BONUS } from "./weights"
+} from "$lib/server/pipelines/ranking/weights"
+import { PRIORITY_SCORE_BONUS } from "$lib/server/pipelines/ranking/weights"
 
 const msgs = (...contents: string[]) => contents.map((content) => ({ content }))
 
@@ -275,14 +275,27 @@ describe("parameters reproduce today's constants", () => {
 		})
 	})
 
-	it("entry caps and the message floor match FILL_BUDGET and MIN_MESSAGE_FILL_TOKENS", () => {
+	it("entry caps match FILL_BUDGET", () => {
 		expect(DEFAULT_GROUPS.maxEntries).toMatchObject({
 			worldLore: 20,
 			characterLore: 15,
 			history: 10,
 			messages: 50
 		})
-		expect(DEFAULT_GROUPS.minMessageTokens).toBe(512)
+	})
+
+	// `minMessageTokens: 512` used to be asserted here against
+	// MIN_MESSAGE_FILL_TOKENS. It is `minEntries` now — a count, per source —
+	// and the messages floor carries `core:query/chat-history@1`'s old
+	// `minInclude` rather than the token constant.
+	it("floors default to six messages and nothing else", () => {
+		expect(DEFAULT_GROUPS.minEntries).toEqual({
+			messages: 6,
+			worldLore: 0,
+			characterLore: 0,
+			history: 0,
+			relationships: 0
+		})
 	})
 
 	it("the default shares reproduce MESSAGE_FILL_FRACTION", () => {
@@ -339,19 +352,27 @@ describe("group importance is a budget share", () => {
 		)
 	})
 
-	it("messages keep their floor even when weighted almost to nothing", () => {
-		const b = allocateBudgets(
-			{
-				...DEFAULT_GROUPS,
-				share: {
-					...DEFAULT_GROUPS.share,
-					messages: 0.01,
-					worldLore: 10
-				}
-			},
-			4000
-		)
-		expect(b.messages).toBeGreaterThanOrEqual(512)
+	// Was "messages keep their floor even when weighted almost to nothing",
+	// asserting `b.messages >= 512`. The floor is `minEntries` now and lives in
+	// `select`, which is the only place that knows what a message costs — so
+	// what this function must promise is the opposite one: that it never hands
+	// out more than there is. It used to, precisely because of the floor it
+	// applied here after the split.
+	it("never allocates more than the window, however lopsided the shares", () => {
+		for (const share of [
+			{ ...DEFAULT_GROUPS.share, messages: 0.01, worldLore: 10 },
+			{ ...DEFAULT_GROUPS.share, messages: 1000 },
+			DEFAULT_GROUPS.share
+		]) {
+			for (const available of [64, 500, 4000]) {
+				const b = allocateBudgets(
+					{ ...DEFAULT_GROUPS, share },
+					available
+				)
+				const total = Object.values(b).reduce((a, n) => a + n, 0)
+				expect(total).toBeLessThanOrEqual(available)
+			}
+		}
 	})
 
 	it("no budget means no allocation rather than a negative one", () => {

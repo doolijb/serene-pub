@@ -47,7 +47,7 @@
 	const when = (iso: string) => new Date(iso).toLocaleString()
 </script>
 
-<div class="mx-auto flex max-w-4xl flex-col gap-6 p-4">
+<div class="flex flex-col gap-6 p-4">
 	<header class="flex items-center gap-3">
 		<Icons.Workflow size={24} />
 		<h1 class="flex-1 text-2xl font-semibold">Pipelines</h1>

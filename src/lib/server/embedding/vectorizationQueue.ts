@@ -764,7 +764,30 @@ export async function writeEmbeddingIfFresh(
 		.set({
 			embedding: vector,
 			embeddingModel: currentModel,
-			vectorizedAt: new Date()
+			vectorizedAt: new Date(),
+			/**
+			 * Pinned to itself so this write does not count as an edit.
+			 *
+			 * Every one of these tables declares
+			 * `updatedAt: ...$onUpdate(() => new Date())`, which drizzle applies
+			 * to *any* update on the row — including this one. That made
+			 * vectorizing bump `updatedAt`, and the bump is a second, separate
+			 * `new Date()` from the `vectorizedAt` above: whenever the two
+			 * straddle a millisecond boundary the row lands with
+			 * `updated_at > vectorized_at`, which is exactly `needsEmbedding`'s
+			 * "content changed since we vectorized" condition. The queue then
+			 * picks the row straight back up and embeds it again — measured at
+			 * roughly 1% of writes, and on a paid embedding API that is a silent
+			 * double charge on one row in a hundred.
+			 *
+			 * Self-assignment keeps the stored value exactly, and an explicit
+			 * value in `.set()` is what stops drizzle substituting `$onUpdate`'s.
+			 * Semantically it is also the correct answer on its own: computing an
+			 * embedding is not a modification of the content, and `updatedAt` is
+			 * read as a content timestamp elsewhere (the recency signals in
+			 * `pipelines/ranking/weights.ts` among them).
+			 */
+			updatedAt: sql`${updatedAtCol}`
 		})
 		.where(
 			and(

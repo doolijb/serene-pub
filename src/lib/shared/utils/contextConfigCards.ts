@@ -3,7 +3,9 @@ import Handlebars from "handlebars"
 // declarations as a side effect of module load, which is the same route every
 // other consumer takes — there is no separate "load the variables" step to
 // forget.
-import { allVariables } from "@serene-pub/sdk"
+import { allVariables, elementOf, resolvePath } from "@serene-pub/sdk"
+import type { TemplateScope, VarDecl, VarField } from "@serene-pub/sdk"
+import { suggest, templateTokens } from "$lib/shared/utils/templateAssist"
 
 // Parses a context config template's raw text (the source of truth) into a
 // generic tree of cards that mirrors the template's actual Handlebars AST
@@ -719,6 +721,9 @@ const KNOWN_HELPER_NAMES = new Set([
 	"and",
 	"or",
 	"json",
+	"jsonValue",
+	"pad",
+	"isSet",
 	"systemBlock",
 	"userBlock",
 	"assistantBlock"
@@ -737,9 +742,10 @@ const KNOWN_HELPER_NAMES = new Set([
  *
  * The remainder genuinely belong here. The message loop and the macro scalars
  * are structure rather than presentation — a layout for them would have nothing
- * to lay out — and `characterLore` and `narrativeGraph` are values no live path
- * renders, kept recognised so a cloned template using one does not start
- * reporting errors just because the default stopped.
+ * to lay out — and `characterLore`, `narrativeGraph` and
+ * `speakerRelationships` are values no live path renders, kept recognised so a
+ * cloned template using one does not start reporting errors just because the
+ * default stopped.
  */
 const STRUCTURAL_FIELDS = [
 	"postHistory",
@@ -750,7 +756,14 @@ const STRUCTURAL_FIELDS = [
 	"user",
 	"persona",
 	"characterLore",
-	"narrativeGraph"
+	"narrativeGraph",
+	// Retired in 0.6 when the graph split into `relationshipsPerspectives` and
+	// `relationshipsKnown`. Kept recognised on the same rule as the two above:
+	// somebody who cloned the shipped template before the split should not have
+	// their editor light up red. It renders empty now, which they will see —
+	// a lint error would tell them their template is malformed, which it is
+	// not, and send them looking for a typo.
+	"speakerRelationships"
 ]
 
 /**
@@ -791,21 +804,189 @@ function fieldNameFromTagSource(tagSource: string): string | null {
 	return trimmed
 }
 
+/** `characters as |c i|` → `["c", "i"]`. */
+function blockParamsFromTagSource(tagSource: string): string[] {
+	const m = /\bas\s*\|([^|]*)\|/.exec(tagSource)
+	if (!m) return []
+	return m[1]!.trim().split(/\s+/).filter(Boolean)
+}
+
 function isCheckableField(field: string): boolean {
-	return !field.startsWith("../") && !field.startsWith("@")
+	return !field.startsWith("@")
 }
 
 /**
- * Flags unrecognized helper names and unrecognized top-level field
- * references in a parsed context config template. Helper names are checked
- * at every nesting depth (a helper's identity never depends on scope), but
- * field references are only checked in scopes this lint can fully resolve:
- * top-level, and inside if/unless/systemBlock/userBlock/assistantBlock
- * (none of which shift Handlebars context) — checking stops once a
- * descendant enters an each/with block, since those introduce local names
- * (block params, or the with-target's own fields) this lint doesn't attempt
- * to resolve, and a false "unrecognized" flag on a legitimately-scoped name
- * is worse than missing a real typo deep in a custom nested block.
+ * The path-like arguments of an inline expression.
+ *
+ * `{{{json characters 2}}}` is what every shipped layout actually looks like,
+ * so a lint that skipped any expression containing a space — which is what
+ * skipping on `/\s/` amounted to — checked none of them. `2` is a literal and
+ * `json` is the helper; `characters` is the one thing here that can be wrong,
+ * and getting it wrong renders an empty block with no error anywhere.
+ *
+ * Anything with a subexpression is left alone entirely. Reading those needs
+ * the real parser, and guessing at them is how a lint starts flagging working
+ * templates.
+ */
+function pathArgs(expressionSource: string): string[] {
+	const src = expressionSource.trim()
+	if (!src || src.includes("(")) return []
+	// Bracket-aware: `jsonValue this.[extra lore] 4` is three tokens, not four.
+	const tokens = templateTokens(src).map((t) => t.text)
+	// A lone token is the reference itself, not a helper call.
+	const args = tokens.length === 1 ? tokens : tokens.slice(1)
+	return args.filter(
+		(t) =>
+			!/^-?[\d.]/.test(t) &&
+			!/^["']/.test(t) &&
+			!t.includes("=") &&
+			!["true", "false", "null", "undefined", "this", "."].includes(t)
+	)
+}
+
+export interface TemplateLintIssue {
+	cardId: string
+	start: number
+	end: number
+	message: string
+}
+
+/**
+ * One Handlebars context, and the names visible in it.
+ *
+ * `context: undefined` with no parent is the root, where a name resolves
+ * against the declared scope. Inside an `{{#each}}` or `{{#with}}` the context
+ * is whatever that helper narrowed to, which is the thing the old lint had no
+ * way to represent — so it gave up at the first one and checked nothing
+ * deeper.
+ */
+interface Frame {
+	context?: VarField
+	/** True when the context is real but unknowable — stop checking, quietly. */
+	unchecked: boolean
+	params: Map<string, VarField | undefined>
+	parent?: Frame
+}
+
+/**
+ * Resolve one reference within a frame, and say what is wrong with it.
+ *
+ * Returns `null` when there is nothing to report — which covers both "this is
+ * correct" and "this cannot be checked", deliberately. The two are different
+ * to the implementation and identical to the author.
+ */
+function checkRef(
+	expr: string,
+	frame: Frame,
+	scope: TemplateScope
+): string | null {
+	let rest = expr.trim()
+	if (!rest || !isCheckableField(rest)) return null
+
+	// `../` walks out one context per step, and off the top means we no longer
+	// know what we are looking at.
+	let f: Frame = frame
+	while (rest.startsWith("../")) {
+		rest = rest.slice(3)
+		if (!f.parent) return null
+		f = f.parent
+	}
+	if (!rest || rest === "." || rest === "this") return null
+	if (!isCheckableField(rest)) return null
+
+	let parts = splitPath(rest)
+	if (!parts.length) return null
+
+	// `{{this.name}}` and `{{name}}` mean the same thing inside a context.
+	if (parts[0] === "this") parts = parts.slice(1)
+	if (!parts.length) return null
+
+	const isRoot = !f.context && !f.parent
+
+	// A block param shadows everything, including the context.
+	if (f.params.has(parts[0]!)) {
+		const bound = f.params.get(parts[0]!)
+		if (!bound) return null
+		return report(resolvePath(bound, parts.slice(1), parts[0]!))
+	}
+
+	if (isRoot) {
+		const decl = scope[parts[0]!]
+		if (decl === undefined)
+			return (
+				`"${parts[0]}" isn't a recognized field at this scope.` +
+				didYouMean(parts[0]!, Object.keys(scope))
+			)
+		return report(resolvePath(decl, parts.slice(1), parts[0]!))
+	}
+
+	if (f.unchecked || !f.context) return null
+	return report(resolvePath(f.context, parts, "this"))
+}
+
+/**
+ * `this.[extra lore].note` → `["this", "extra lore", "note"]`.
+ *
+ * Splitting on `.` alone is right until a segment literal contains one, and
+ * unwrapping the brackets is what lets the resolved name match the schema's
+ * key — the schema knows `extra lore`, not `[extra lore]`.
+ */
+function splitPath(expr: string): string[] {
+	const out: string[] = []
+	let cur = ""
+	let inBracket = false
+	for (const c of expr) {
+		if (c === "[") { inBracket = true; continue }
+		if (c === "]") { inBracket = false; continue }
+		if (c === "." && !inBracket) {
+			if (cur) out.push(cur)
+			cur = ""
+			continue
+		}
+		cur += c
+	}
+	if (cur) out.push(cur)
+	return out
+}
+
+function report(r: ReturnType<typeof resolvePath>): string | null {
+	if (r.ok) return null
+	const base = r.message ?? "that path does not exist."
+	return base + didYouMean(r.at, r.available)
+}
+
+/**
+ * The half of a lint finding that turns "this is wrong" into "here is the fix".
+ *
+ * Only ever appended when the nearest name is near enough to be almost
+ * certainly right — see `suggest`. A confident wrong guess sends someone to
+ * change a line that was correct.
+ */
+function didYouMean(
+	typed: string | undefined,
+	available: readonly string[] | undefined
+): string {
+	if (!typed || !available?.length) return ""
+	const near = suggest(typed, available)
+	return near ? ` Did you mean "${near}"?` : ""
+}
+
+/**
+ * Flags unrecognized helper names and field references that the declared
+ * shapes contradict.
+ *
+ * Helper names are checked at every nesting depth — a helper's identity never
+ * depends on scope. Field references used to be checked only in scopes the
+ * lint could "fully resolve", which meant it stopped dead at the first
+ * `{{#each}}`: the names inside were unresolvable because nothing said what
+ * one element of a collection looked like. The schema says, so the walk now
+ * continues, carrying the narrowed context.
+ *
+ * The rule that replaces "stop at each/with" is **stop where the schema stops
+ * talking**. A declaration of `'any'`, a record's author-chosen key, an
+ * unparseable subexpression — each yields an unchecked frame rather than a
+ * guess. That keeps the property the old comment was defending: a false
+ * "unrecognized" on a legitimately-scoped name is worse than a missed typo.
  */
 export function lintContextTemplate(
 	cards: Card[],
@@ -816,61 +997,184 @@ export function lintContextTemplate(
 	 */
 	vocabulary: ReadonlySet<string> = KNOWN_TOP_LEVEL_FIELDS
 ): TemplateLintIssue[] {
-	const issues: TemplateLintIssue[] = []
+	// A context template's vocabulary is names without shapes: the structural
+	// fields have no declaration to check against. `'any'` is the honest
+	// spelling of that, and it makes one walker serve both callers rather than
+	// two that have to be kept in agreement.
+	return lintCards(
+		cards,
+		vocabulary === KNOWN_TOP_LEVEL_FIELDS
+			? contextTemplateScope()
+			: Object.fromEntries([...vocabulary].map((n) => [n, "any" as const]))
+	)
+}
 
-	function visit(list: Card[], fieldsResolvable: boolean) {
+/**
+ * A context template's vocabulary as a scope.
+ *
+ * Names without shapes: the structural fields have no declaration to check
+ * against, and `'any'` is the honest spelling of that. Exported so the editor
+ * can offer the same completions the lint checks — one vocabulary, read from
+ * one place, which is the property this file already had to fight for once.
+ */
+export function contextTemplateScope(): TemplateScope {
+	return Object.fromEntries(
+		[...KNOWN_TOP_LEVEL_FIELDS].map((n) => [n, "any" as const])
+	)
+}
+
+function lintCards(
+	cards: Card[],
+	scope: TemplateScope
+): TemplateLintIssue[] {
+	const issues: TemplateLintIssue[] = []
+	const at = (card: Card, message: string) =>
+		issues.push({ cardId: card.id, start: card.start, end: card.end, message })
+
+	function visit(list: Card[], frame: Frame) {
 		for (const card of list) {
 			if (card.kind === "block") {
-				if (!KNOWN_HELPER_NAMES.has(card.helperName)) {
-					issues.push({
-						cardId: card.id,
-						start: card.start,
-						end: card.end,
-						message: `"${card.helperName}" isn't a recognized helper.`
-					})
+				if (!KNOWN_HELPER_NAMES.has(card.helperName))
+					at(card, `"${card.helperName}" isn't a recognized helper.`)
+
+				const target = fieldNameFromTagSource(card.tagSource)
+				if (target) {
+					const problem = checkRef(target, frame, scope)
+					if (problem) at(card, problem)
 				}
-				if (fieldsResolvable) {
-					const field = fieldNameFromTagSource(card.tagSource)
-					if (
-						field &&
-						isCheckableField(field) &&
-						!vocabulary.has(field)
-					) {
-						issues.push({
-							cardId: card.id,
-							start: card.start,
-							end: card.end,
-							message: `"${field}" isn't a recognized field at this scope.`
-						})
+
+				const inner = childFrame(card, target, frame, scope)
+				visit(card.children, inner)
+				// An `{{#each}}`'s else branch runs when the collection is
+				// empty, so it is back in the *outer* context — not in the
+				// element context the body has.
+				if (card.elseChildren)
+					visit(
+						card.elseChildren,
+						card.helperName === "each" ? frame : inner
+					)
+			} else if (card.kind === "variable") {
+				for (const arg of pathArgs(card.expressionSource)) {
+					const problem = checkRef(arg, frame, scope)
+					if (problem) at(card, problem)
+				}
+			} else if (card.kind === "text") {
+				// A mustache only becomes its own card when it is alone on a
+				// line; an inline one — `{{{name}}}: {{{message}}}`, the
+				// parser's own example — is part of the surrounding text. That
+				// is a presentation decision, and letting it decide what gets
+				// *linted* meant nothing inside a single-line `{{#each}}` was
+				// ever checked. Which is most of them.
+				for (const m of inlineMustaches(card.content))
+					for (const arg of pathArgs(m.expression)) {
+						const problem = checkRef(arg, frame, scope)
+						if (problem)
+							issues.push({
+								cardId: card.id,
+								start: card.start + m.start,
+								end: card.start + m.end,
+								message: problem
+							})
 					}
-				}
-				const stillResolvable =
-					fieldsResolvable &&
-					card.helperName !== "each" &&
-					card.helperName !== "with"
-				visit(card.children, stillResolvable)
-				if (card.elseChildren) visit(card.elseChildren, stillResolvable)
-			} else if (card.kind === "variable" && fieldsResolvable) {
-				const field = card.expressionSource.trim()
-				if (
-					field &&
-					!/\s/.test(field) &&
-					isCheckableField(field) &&
-					!vocabulary.has(field)
-				) {
-					issues.push({
-						cardId: card.id,
-						start: card.start,
-						end: card.end,
-						message: `"${field}" isn't a recognized field at this scope.`
-					})
-				}
 			}
 		}
 	}
 
-	visit(cards, true)
+	visit(cards, { unchecked: false, params: new Map() })
 	return issues
+}
+
+/**
+ * Every `{{ … }}` inside a run of text, with its offset.
+ *
+ * Block tags and comments are skipped — they are already cards in their own
+ * right, or are not references at all.
+ */
+function inlineMustaches(
+	content: string
+): { expression: string; start: number; end: number }[] {
+	const out: { expression: string; start: number; end: number }[] = []
+	const RE = /\{\{\{([^{}]*)\}\}\}|\{\{([^{}]*)\}\}/g
+	for (const m of content.matchAll(RE)) {
+		const inner = (m[1] ?? m[2] ?? "").trim()
+		if (!inner || /^[#/!>^&]/.test(inner) || inner.startsWith("else")) continue
+		out.push({
+			expression: inner,
+			start: m.index!,
+			end: m.index! + m[0].length
+		})
+	}
+	return out
+}
+
+/** The context and bindings a block introduces for its own children. */
+function childFrame(
+	card: BlockCard,
+	target: string | null,
+	frame: Frame,
+	scope: TemplateScope
+): Frame {
+	const shifts = card.helperName === "each" || card.helperName === "with"
+	const names = blockParamsFromTagSource(card.tagSource)
+
+	if (!shifts) {
+		// if/unless/systemBlock/userBlock/assistantBlock keep the context they
+		// were opened in.
+		return frame
+	}
+
+	const resolved = target ? typeOf(target, frame, scope) : undefined
+	const context =
+		card.helperName === "each" ? elementOf(resolved) : asField(resolved)
+
+	const params = new Map(frame.params)
+	// `as |item index|` — the first names the value, the second the key or
+	// index, which is never a declared shape.
+	if (names[0]) params.set(names[0], context)
+	for (const extra of names.slice(1)) params.set(extra, undefined)
+
+	return {
+		context,
+		unchecked: !context,
+		params,
+		parent: frame
+	}
+}
+
+/** What a reference resolves to, as a declaration, or undefined if unknowable. */
+function typeOf(
+	expr: string,
+	frame: Frame,
+	scope: TemplateScope
+): VarDecl | undefined {
+	let rest = expr.trim()
+	let f: Frame = frame
+	while (rest.startsWith("../")) {
+		rest = rest.slice(3)
+		if (!f.parent) return undefined
+		f = f.parent
+	}
+	let parts = splitPath(rest)
+	if (parts[0] === "this") parts = parts.slice(1)
+
+	let base: VarDecl | undefined
+	if (parts.length && f.params.has(parts[0]!)) {
+		base = f.params.get(parts[0]!)
+		parts = parts.slice(1)
+	} else if (!f.context && !f.parent) {
+		if (!parts.length) return undefined
+		base = scope[parts[0]!]
+		parts = parts.slice(1)
+	} else {
+		base = f.context
+	}
+
+	const r = resolvePath(base, parts)
+	return r.ok ? (r.field ?? (parts.length ? undefined : base)) : undefined
+}
+
+function asField(decl: VarDecl | undefined): VarField | undefined {
+	return decl && decl !== "any" && !Array.isArray(decl) ? decl : undefined
 }
 
 /**
@@ -888,7 +1192,7 @@ export function lintContextTemplate(
  */
 export function lintVariableTemplate(
 	source: string,
-	scope: Record<string, unknown>
+	scope: TemplateScope
 ): TemplateLintIssue[] {
 	const parsed = parseContextTemplate(source)
 	if (parsed.parseError)
@@ -900,5 +1204,5 @@ export function lintVariableTemplate(
 				message: parsed.parseError
 			}
 		]
-	return lintContextTemplate(parsed.cards, new Set(Object.keys(scope)))
+	return lintCards(parsed.cards, scope)
 }

@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from "vitest"
-import { eligibleFor, strategyOf, armNote, fuseRanks } from "./strategy"
+import { eligibleFor, strategyOf, armNote, fuseRanks } from "$lib/server/pipelines/ranking/strategy"
 
 const withVectors = { vectorSearchAvailable: true }
 const withoutVectors = { vectorSearchAvailable: false }

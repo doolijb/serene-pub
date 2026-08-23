@@ -37,6 +37,18 @@ declare global {
 		 * viewport — set null to exit fullscreen from anywhere with context
 		 * access, e.g. a sidebar button that navigates to a different page. */
 		fullscreenPanel: "left" | "right" | null
+		/**
+		 * Let the centre column spend the space a closed sidebar is not using.
+		 *
+		 * Distinct from `fullscreenPanel`, which is a *sidebar* covering
+		 * everything. This is the page content taking whatever the sidebars
+		 * leave: both closed and it has the window; one open and it takes the
+		 * other side's quarter; both open and it is exactly its normal half, so
+		 * turning this on can never take space away from a panel you opened.
+		 *
+		 * Desktop only — the mobile layout is already one thing at a time.
+		 */
+		wideContent: boolean
 		openPanel: (args: { key: string; toggle?: boolean }) => void
 		closePanel: (args: {
 			panel: "left" | "right" | "mobile"

@@ -14,7 +14,7 @@
  * template's separator overhead in situ. Counting standalone is O(n) instead of
  * O(n²) async calls, and differs by a few tokens per entry — which is why
  * parity is measured on the rendered prompt and never on token counts
- * (packages/DECOMPOSITION.md §5).
+ * (docs-dev/DECOMPOSITION.md §5).
  *
  * **2. Each group fills from its own budget.** The engine fills messages
  * against `messageTarget`, then lore against `threshold`, so lore competes for
@@ -28,8 +28,8 @@
  * entries because one large one happened to sort above them.
  */
 
-import type { RankingParams, SignalWeights, SourceKind } from "./weights"
-import { allocateBudgets } from "./weights"
+import type { RankingParams, SignalWeights, SourceKind } from "$lib/server/pipelines/ranking/weights"
+import { allocateBudgets } from "$lib/server/pipelines/ranking/weights"
 
 /** The signal values for one candidate. Missing signals are zero, not absent. */
 export interface Signals {
@@ -76,6 +76,16 @@ export interface Candidate {
 /** Matches the engine's `includedReason` vocabulary, plus one new value. */
 export type SelectionReason =
 	| "reserved"
+	/**
+	 * Kept because its source's floor had not been met yet, ahead of the
+	 * proportional split.
+	 *
+	 * Distinct from `reserved`, which is the user pinning one entry. A floor is
+	 * a promise about a *source* — "always keep six messages" — and reading
+	 * `reserved` on six messages nobody pinned would send somebody looking for
+	 * a pin that does not exist.
+	 */
+	| "reserved_minimum"
 	| "filled_scored"
 	| "filled_zero_score"
 	| "excluded_budget"
@@ -173,8 +183,50 @@ export function select(
 	const groups = emptyUsage(params)
 	let reservedTokens = 0
 
+	/**
+	 * The floors, filled before the shares are worked out.
+	 *
+	 * Score order within a source, so "keep six messages" keeps the six the
+	 * ranker liked and not six arbitrary ones. Across sources the walk is also
+	 * score order, which is what decides who loses when the floors cannot all
+	 * be met: the weakest candidate of the weakest source, rather than whoever
+	 * happens to be last in the object.
+	 *
+	 * ⚠ The `availableTokens` check is not defensive coding. Floors are set per
+	 * source by somebody who cannot see the window they will be applied
+	 * against, and six messages plus twenty lore entries is a prompt no small
+	 * model will accept. A floor that cannot be afforded is dropped and said
+	 * so on the receipt; a floor that overflowed the window would be an
+	 * unsendable prompt, which is worse than a short one.
+	 */
+	const floors = params.groups.minEntries ?? {}
+	const guaranteed = new Set<Candidate>()
+	/**
+	 * Tokens taken off the top per source — pinned plus floor.
+	 *
+	 * The shares divide what is left over, so both kinds have to be subtracted
+	 * again when a group's spend is checked against its budget. Tracked rather
+	 * than recomputed because `pinnedTokens(pinned, s)` no longer describes
+	 * everything that was spent before the split, and a helper that answers a
+	 * question one caller ago is how the two drift apart.
+	 */
+	const reservedBySource = Object.fromEntries(
+		(Object.keys(groups) as SourceKind[]).map((s) => [s, 0])
+	) as Record<SourceKind, number>
+	const wanted = Object.fromEntries(
+		(Object.keys(groups) as SourceKind[]).map((s) => [
+			s,
+			// Clamped to the cap: a floor above the ceiling is a contradiction
+			// somebody typed, and honouring it would make `maxEntries` a lie
+			// on the one path where it matters.
+			Math.min(Math.max(0, floors[s] ?? 0), groups[s].cap) -
+				pinned.filter((c) => c.source === s).length
+		])
+	) as Record<SourceKind, number>
+
 	for (const c of pinned) {
 		reservedTokens += c.tokens
+		reservedBySource[c.source] += c.tokens
 		groups[c.source].used += c.tokens
 		included.push({
 			candidate: c,
@@ -182,6 +234,32 @@ export function select(
 			reason: "reserved",
 			included: true,
 			why: `pinned: always included, ${c.tokens} tokens`
+		})
+	}
+
+	for (const { candidate, value } of scored) {
+		if (wanted[candidate.source] <= 0) continue
+		if (reservedTokens + candidate.tokens > availableTokens) {
+			// Not `continue`-with-a-cheaper-one: a floor is about *these*
+			// entries in this order, and skipping to a worse one that happens
+			// to fit would quietly reinterpret "keep the best six" as "keep any
+			// six". The rest of this source's floor goes unmet, and the scored
+			// pass may still pick these up if a share can afford them.
+			wanted[candidate.source] = 0
+			continue
+		}
+		wanted[candidate.source]--
+		guaranteed.add(candidate)
+		reservedTokens += candidate.tokens
+		reservedBySource[candidate.source] += candidate.tokens
+		groups[candidate.source].used += candidate.tokens
+		groups[candidate.source].entries++
+		included.push({
+			candidate,
+			score: value,
+			reason: "reserved_minimum",
+			included: true,
+			why: `kept to meet the floor of ${floors[candidate.source]} for ${candidate.source}, ${candidate.tokens} tokens`
 		})
 	}
 
@@ -195,6 +273,7 @@ export function select(
 		groups[source].allocated = budgets[source]
 
 	for (const { candidate, value } of scored) {
+		if (guaranteed.has(candidate)) continue
 		const usage = groups[candidate.source]
 		const budget = budgets[candidate.source]
 
@@ -220,9 +299,10 @@ export function select(
 			continue
 		}
 
-		// The pinned tokens already spent in this group count against its share,
-		// so `used` starts non-zero and the comparison stays honest.
-		const spent = usage.used - pinnedTokens(pinned, candidate.source)
+		// Pinned and floor tokens came off the top, so they do not also come
+		// out of this group's share — `used` starts non-zero and subtracting
+		// them again is what keeps the comparison honest.
+		const spent = usage.used - reservedBySource[candidate.source]
 		if (spent + candidate.tokens > budget) {
 			// No break: a cheaper candidate further down may still fit.
 			excluded.push({
@@ -260,10 +340,20 @@ export function select(
 	// So whatever no group could use is pooled and offered to the remaining
 	// candidates in score order, across groups. The first claim still belongs to
 	// whoever was weighted up; only the leftovers move.
-	const leftover = (Object.keys(budgets) as SourceKind[]).reduce((sum, s) => {
-		const spentHere = groups[s].used - pinnedTokens(pinned, s)
-		return sum + Math.max(0, budgets[s] - spentHere)
-	}, 0)
+	// Measured against the window, not summed from the per-group remainders.
+	//
+	// ⚠ The summed version could exceed `availableTokens`, and did: the message
+	// floor used to raise `budgets.messages` after the proportional split
+	// without taking the difference from anywhere, so on a 100-token window the
+	// budgets summed to 148 and the spill pass would happily fit a 148-token
+	// prompt into it. Two tests passed *because* of that overflow.
+	//
+	// Subtracting what was actually included from what actually exists cannot
+	// overshoot however the shares are set, and it recovers the tokens `floor()`
+	// drops when a share does not divide evenly — which is why a candidate the
+	// exact size of the window used to be unfittable.
+	const spentTotal = included.reduce((sum, d) => sum + d.candidate.tokens, 0)
+	const leftover = Math.max(0, availableTokens - spentTotal)
 
 	let spillRemaining = leftover
 	if (spillRemaining > 0) {
@@ -295,11 +385,6 @@ export function select(
 		totalTokens: included.reduce((sum, d) => sum + d.candidate.tokens, 0)
 	}
 }
-
-const pinnedTokens = (pinned: readonly Candidate[], source: SourceKind) =>
-	pinned
-		.filter((c) => c.source === source)
-		.reduce((sum, c) => sum + c.tokens, 0)
 
 function emptyUsage(params: RankingParams): Record<SourceKind, GroupUsage> {
 	const sources = Object.keys(params.groups.share) as SourceKind[]
