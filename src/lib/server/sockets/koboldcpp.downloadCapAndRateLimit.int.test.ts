@@ -15,7 +15,15 @@
  * (simulating 3 genuinely still-in-progress downloads) without making any
  * real network call or leaving dangling connections after the test exits.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest"
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	describe,
+	expect,
+	test,
+	vi
+} from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"

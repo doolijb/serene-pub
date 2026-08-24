@@ -426,9 +426,66 @@
 		renaming = null
 	}
 
+	/* ── the preset's session surface (19 §3) ──────────────────────────────
+	 *
+	 * A preset decides two things about sessions that use it: whether a non-admin
+	 * may choose it at all, and which of the mode's actions those sessions
+	 * include. Both are admin writes and both live here rather than in session
+	 * settings, because they are statements about the preset — changing one
+	 * reaches every session on it, which is exactly the difference from the
+	 * per-session exception an admin can make in a single session.
+	 */
+	let actionsOpen = $state(false)
+
+	/** `null` means "states nothing" — the companion rule decides. Not `[]`. */
+	const includedActions = $derived(selected?.includedActions ?? null)
+
+	const actionIncluded = (key: string, origin: string) =>
+		includedActions === null
+			? origin === "companion"
+			: includedActions.includes(key)
+
+	function toggleIncludedAction(key: string, on: boolean) {
+		if (!selected || selected.readOnly) return
+		// Materialised from whatever is in force, so the first click writes an
+		// explicit list rather than silently adopting the default for
+		// everything else at the same time.
+		const current = (detail?.modeActions ?? [])
+			.filter((a) => actionIncluded(a.function, a.origin))
+			.map((a) => a.function)
+		const next = on
+			? [...new Set([...current, key])]
+			: current.filter((k) => k !== key)
+		socket.emit("pipelines:setPresetActions", {
+			slug,
+			configId: selected.id,
+			includedActions: next
+		})
+	}
+
+	function resetIncludedActions() {
+		if (!selected || selected.readOnly) return
+		// Back to stating nothing, which is not the same as stating none: a
+		// companion shipped in a later update reaches this preset again.
+		socket.emit("pipelines:setPresetActions", {
+			slug,
+			configId: selected.id,
+			includedActions: null
+		})
+	}
+
+	function togglePresetEnabled(on: boolean) {
+		if (!selected) return
+		socket.emit("pipelines:setPresetActions", {
+			slug,
+			configId: selected.id,
+			enabled: on
+		})
+	}
+
 	function removeConfig() {
 		if (!selected) return
-		// A configuration can be pointed at by chats and users. Deleting it
+		// A configuration can be pointed at by sessions and users. Deleting it
 		// does not break them — the selection falls back to the pipeline's
 		// default — but that is exactly the kind of thing worth saying before
 		// rather than after.
@@ -487,12 +544,14 @@
 		socket.on("pipelines:createConfig:error", onConfigError)
 		socket.on("pipelines:renameConfig:error", onConfigError)
 		socket.on("pipelines:deleteConfig:error", onConfigError)
+		socket.on("pipelines:setPresetActions:error", onConfigError)
 		socket.emit("pipelines:detail", { slug })
 	})
 
 	onDestroy(() => {
 		socket.off("pipelines:detail", onDetail)
 		socket.off("pipelines:detail:error", onDetailError)
+		socket.off("pipelines:setPresetActions:error", onConfigError)
 		socket.off("pipelines:createConfig", onConfigCreated)
 		socket.off("pipelines:createConfig:error", onConfigError)
 		socket.off("pipelines:renameConfig:error", onConfigError)
@@ -1207,6 +1266,133 @@
 			</div>
 		</section>
 
+		<!-- ── what this preset gives a session (19 §3) ──────────────────
+		     Two admin statements about the preset itself, as distinct from the
+		     per-session exception an admin can make in one session: whether a
+		     non-admin may choose it, and which of the mode's actions sessions on
+		     it include. Changing either reaches every session using the preset. -->
+		{#if detail?.modeActions?.length}
+			<section
+				class="card preset-tonal p-3"
+				aria-label="Session actions for this preset"
+			>
+				<button
+					type="button"
+					class="flex w-full items-center justify-between text-left"
+					aria-expanded={actionsOpen}
+					onclick={() => (actionsOpen = !actionsOpen)}
+				>
+					<span class="text-muted text-xs font-semibold uppercase">
+						Session actions
+					</span>
+					<Icons.ChevronDown
+						size={14}
+						class="transition-transform {actionsOpen
+							? ''
+							: '-rotate-90'}"
+					/>
+				</button>
+
+				{#if actionsOpen}
+					<div class="mt-3 flex flex-col gap-3">
+						<p class="text-muted text-xs">
+							What sessions using
+							<strong>{selected?.name ?? "this preset"}</strong>
+							can do besides reply. A session can switch any of these
+							off for itself; only an administrator can add one that
+							is not included here.
+						</p>
+
+						{#if selected?.readOnly}
+							<p class="text-muted text-xs italic">
+								This preset is shipped with Serene Pub and is
+								never edited in place. Duplicate it to change
+								what it includes.
+							</p>
+						{/if}
+
+						{#each detail.modeActions as a (a.function)}
+							<label
+								class="flex items-start gap-2 text-sm"
+								for="inc-{a.function}"
+							>
+								<input
+									id="inc-{a.function}"
+									type="checkbox"
+									class="checkbox mt-0.5"
+									disabled={!selected || selected.readOnly}
+									checked={actionIncluded(
+										a.function,
+										a.origin
+									)}
+									onchange={(e) =>
+										toggleIncludedAction(
+											a.function,
+											e.currentTarget.checked
+										)}
+								/>
+								<span class="flex flex-col">
+									<span>
+										{a.name}
+										{#if a.origin === "attachment"}
+											<span
+												class="text-muted text-[10px] uppercase"
+											>
+												· attachment
+											</span>
+										{/if}
+									</span>
+									<span class="text-muted text-xs">
+										{a.specSlug}
+									</span>
+								</span>
+							</label>
+						{/each}
+
+						<div class="flex flex-wrap items-center gap-2">
+							<button
+								type="button"
+								class="btn btn-sm preset-tonal-surface"
+								disabled={!selected ||
+									selected.readOnly ||
+									includedActions === null}
+								title={includedActions === null
+									? "Already following the default"
+									: "Stop stating a list — companions on, attachments off, including any added later"}
+								onclick={resetIncludedActions}
+							>
+								Follow the default
+							</button>
+							{#if selected}
+								<label
+									class="flex items-center gap-2 text-sm"
+									for="presetEnabled"
+								>
+									<input
+										id="presetEnabled"
+										type="checkbox"
+										class="checkbox"
+										checked={selected.enabled !== false}
+										onchange={(e) =>
+											togglePresetEnabled(
+												e.currentTarget.checked
+											)}
+									/>
+									<span>
+										Available to choose
+										<span class="text-muted text-xs">
+											· sessions already on it keep
+											running
+										</span>
+									</span>
+								</label>
+							{/if}
+						</div>
+					</div>
+				{/if}
+			</section>
+		{/if}
+
 		{#if creating}
 			<div class="card preset-tonal-primary flex flex-wrap gap-2 p-3">
 				<label class="min-w-[14rem] flex-1">
@@ -1362,7 +1548,7 @@
 							<Icons.Lock size={16} class="mt-0.5 shrink-0" />
 							<span class="min-w-0 flex-1">
 								<strong>{selected.name}</strong>
-								 is shipped with Serene Pub, so changes cannot be
+								is shipped with Serene Pub, so changes cannot be
 								saved into it. Anything you change here becomes an
 								instance-wide override that applies to every configuration.
 							</span>
@@ -1476,7 +1662,7 @@
 			<Icons.Construction size={14} class="mt-0.5 shrink-0" />
 			<span>
 				Changing what a pipeline <em>does</em>
-				 — swapping a node, reordering, publishing a new version — is the
+				— swapping a node, reordering, publishing a new version — is the
 				lens view and is not drafted yet. This page configures the published
 				backbone.
 			</span>

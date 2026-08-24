@@ -218,7 +218,11 @@ describe("contextConfigsUpdate — isImmutable full block (PGlite integration)",
 		await contextConfigsUpdate.handler(
 			fakeAdminSocket(),
 			{
-				contextConfig: { id: config.id, name: "Custom", template: "edited" }
+				contextConfig: {
+					id: config.id,
+					name: "Custom",
+					template: "edited"
+				}
 			} as any,
 			noopEmit
 		)
@@ -307,9 +311,11 @@ describe("summarizePromptConfigs update handlers — isImmutable override allowl
 			noopEmit
 		)
 
-		const reloaded = await testDb.query.characterSummarizeConfigs.findFirst({
-			where: eq(schema.characterSummarizeConfigs.id, config.id)
-		})
+		const reloaded = await testDb.query.characterSummarizeConfigs.findFirst(
+			{
+				where: eq(schema.characterSummarizeConfigs.id, config.id)
+			}
+		)
 		expect(reloaded!.name).toBe("Built-in")
 		expect(reloaded!.batchSystemPrompt).toBe("orig batch")
 		expect(reloaded!.batchConnectionId).toBe(batchConn.id)
@@ -319,7 +325,9 @@ describe("summarizePromptConfigs update handlers — isImmutable override allowl
 		const { sceneSummarizeConfigsUpdateHandler } = await import(
 			"./summarizePromptConfigs"
 		)
-		const extractionConn = await makeConnection("scene-character-extraction")
+		const extractionConn = await makeConnection(
+			"scene-character-extraction"
+		)
 		const [config] = await testDb
 			.insert(schema.sceneSummarizeConfigs)
 			.values({

@@ -18,7 +18,7 @@ import { TokenCounters } from "../TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { runQueuedLLMCall } from "../runQueuedLLMCall"
 import type { TaskType } from "../resolveTaskConfig"
-import { ChatTypes } from "$lib/shared/constants/ChatTypes"
+import { SessionTypes } from "$lib/shared/constants/SessionTypes"
 import {
 	buildBatchPrompt,
 	buildCharacterExtractionPrompt,
@@ -124,7 +124,7 @@ function batchMessages(
 	return batches.length > 0 ? batches : [[]]
 }
 
-function buildMinimalChat(userPrompt: string): any {
+function buildMinimalSession(userPrompt: string): any {
 	return {
 		id: 0,
 		userId: 0,
@@ -135,12 +135,12 @@ function buildMinimalChat(userPrompt: string): any {
 		metadata: null,
 		lorebookId: null,
 		isGroup: false,
-		chatType: ChatTypes.SUMMARIZE,
+		sessionType: SessionTypes.SUMMARIZE,
 		groupReplyStrategy: null,
-		chatMessages: [
+		sessionMessages: [
 			{
 				id: 1,
-				chatId: 0,
+				sessionId: 0,
 				role: "user",
 				content: userPrompt,
 				createdAt: new Date().toISOString(),
@@ -181,7 +181,7 @@ async function runGeneration(
 	opts.signal?.throwIfAborted()
 
 	const AdapterClass = await getConnectionAdapter(opts.connection.type)
-	const fakeChat = buildMinimalChat(promptData.userPrompt)
+	const fakeSession = buildMinimalSession(promptData.userPrompt)
 
 	const adapter = new AdapterClass.Adapter({
 		connection: opts.connection,
@@ -191,7 +191,7 @@ async function runGeneration(
 			...opts.promptConfig,
 			systemPrompt: promptData.systemPrompt
 		},
-		chat: fakeChat,
+		session: fakeSession,
 		currentCharacterId: null,
 		tokenCounter: opts.tokenCounter,
 		tokenLimit: opts.tokenLimit,

@@ -4,7 +4,7 @@
  * `promptFields.test.ts` pins the rules and `templateContext.test.ts` pins the
  * rendering; both run on literals. This one exists for the seam between them
  * and the database — the join that carries visibility, and the scope check that
- * decides whether a spec may read this chat's cast at all.
+ * decides whether a spec may read this session's cast at all.
  *
  * The split into two nodes was not a design preference; it was F11 enforced by
  * the executor. The first version of the Task read the cast itself and died on
@@ -19,10 +19,10 @@ import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { createHost, HostScopeError } from "$lib/server/pipelines/runtime/host"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import * as schema from "$lib/server/db/schema"
-import { ChatCharacterVisibility as V } from "$lib/shared/constants/ChatCharacterVisibility"
+import { SessionCharacterVisibility as V } from "$lib/shared/constants/SessionCharacterVisibility"
 
 let db: TestDb
-let chatId: number
+let sessionId: number
 let userId: number
 let aliceId: number
 let caraId: number
@@ -64,39 +64,55 @@ beforeAll(async () => {
 		})
 		.returning()
 
-	const [chat] = await db
-		.insert(schema.chats)
+	const [session] = await db
+		.insert(schema.sessions)
 		.values({ userId, isGroup: false })
 		.returning()
-	chatId = chat.id
+	sessionId = session.id
 
-	await db.insert(schema.chatCharacters).values([
-		{ chatId, characterId: aliceId, isActive: true, visibility: V.VISIBLE },
-		{ chatId, characterId: caraId, isActive: false, visibility: V.VISIBLE }
+	await db.insert(schema.sessionCharacters).values([
+		{
+			sessionId,
+			characterId: aliceId,
+			isActive: true,
+			visibility: V.VISIBLE
+		},
+		{
+			sessionId,
+			characterId: caraId,
+			isActive: false,
+			visibility: V.VISIBLE
+		}
 	])
-	await db.insert(schema.chatPersonas).values({ chatId, personaId: bob.id })
+	await db
+		.insert(schema.sessionPersonas)
+		.values({ sessionId, personaId: bob.id })
 }, 60_000)
 
 const bindings = coreBindings()
 
-const queryCtx = (scopeChatId = chatId) => ({
+const queryCtx = (scopeSessionId = sessionId) => ({
 	read: (table: string, q: unknown) =>
-		createHost(db as any, { chatId: scopeChatId, userId }).read!(table, q, {
-			key: "cast",
-			typeId: "core:query/chat-cast",
-			typeVersion: 1,
-			kind: "query"
-		}),
+		createHost(db as any, { sessionId: scopeSessionId, userId }).read!(
+			table,
+			q,
+			{
+				key: "cast",
+				typeId: "core:query/session-cast",
+				typeVersion: 1,
+				kind: "query"
+			}
+		),
 	signal: new AbortController().signal,
 	progress: () => {},
 	log: () => {}
 })
 
 /** Read the cast the way a run would. */
-const readCast = (scopeChatId = chatId, requested = chatId) =>
-	bindings["core:query/chat-cast@1"]!(
-		{ scope: { chatId: requested } },
-		queryCtx(scopeChatId) as any
+const readCast = (scopeSessionId = sessionId, requested = sessionId) =>
+	bindings["core:query/session-cast@1"]!(
+		{ scope: { sessionId: requested } },
+		queryCtx(scopeSessionId) as any
 	) as any
 
 /** A Task context: no `read`, matching what the executor actually supplies. */
@@ -119,34 +135,34 @@ const buildFrom = (cast: unknown, input: any = {}, random?: () => number) =>
 	) as any
 
 describe("the cast query", () => {
-	it("returns the chat's characters and personas", async () => {
+	it("returns the session's characters and personas", async () => {
 		const r = await readCast()
 		expect(r.kind).toBe("ok")
-		expect(r.value.cast.chatCharacters).toHaveLength(2)
-		expect(r.value.cast.chatPersonas[0].persona.name).toBe("Bob")
+		expect(r.value.cast.sessionCharacters).toHaveLength(2)
+		expect(r.value.cast.sessionPersonas[0].persona.name).toBe("Bob")
 	})
 
 	it("carries visibility and activity through the join", async () => {
 		// A plain character read would lose both, and they are what decide
 		// whether a character appears in the prompt and whether they are named.
 		const r = await readCast()
-		const cara = r.value.cast.chatCharacters.find(
+		const cara = r.value.cast.sessionCharacters.find(
 			(cc: any) => cc.character.id === caraId
 		)
 		expect(cara.isActive).toBe(false)
 		expect(cara.visibility).toBe(V.VISIBLE)
 	})
 
-	it("refuses another chat's cast rather than returning an empty one", async () => {
+	it("refuses another session's cast rather than returning an empty one", async () => {
 		// An empty cast renders a prompt with no characters in it, which reads
 		// as a broken character card rather than as a scope violation.
-		await expect(readCast(chatId, chatId + 999)).rejects.toThrow(
+		await expect(readCast(sessionId, sessionId + 999)).rejects.toThrow(
 			HostScopeError
 		)
 	})
 
-	it("halts, rather than erroring, when the chat is gone", async () => {
-		const r = await readCast(chatId + 999, chatId + 999)
+	it("halts, rather than erroring, when the session is gone", async () => {
+		const r = await readCast(sessionId + 999, sessionId + 999)
 		expect(r.kind).toBe("halt")
 		expect(r.reason).toMatch(/no longer exists/)
 	})
@@ -185,7 +201,7 @@ describe("the context task", () => {
 		)
 	})
 
-	it("takes the speaking character's scenario when the chat has none", async () => {
+	it("takes the speaking character's scenario when the session has none", async () => {
 		const cast = (await readCast()).value.cast
 		const r = await buildFrom(cast)
 		expect(r.value.templateContext.scenario).toContain("In the keep.")

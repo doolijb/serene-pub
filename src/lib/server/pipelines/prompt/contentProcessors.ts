@@ -1,5 +1,5 @@
 /**
- * Turning a stored chat row's text into the text a model sees.
+ * Turning a stored session row's text into the text a model sees.
  *
  * Two transforms, both applied on the way *out* of the database and never on
  * the way in: macro interpolation ({{char}}, {{user}}) against the speaking
@@ -7,7 +7,7 @@
  * the active one is rendered. The stored row is left alone so a swipe can be
  * re-picked and a macro re-resolved against a renamed character.
  *
- * Used by `messages.ts` for the chat transcript and by `postHistory.ts` for the
+ * Used by `messages.ts` for the session transcript and by `postHistory.ts` for the
  * block that follows it, which is why it lives apart from either.
  */
 import type { InterpolationContext } from "$lib/server/utils/interpolation/InterpolationEngine"
@@ -16,8 +16,8 @@ import {
 	resolvePersonaName
 } from "$lib/shared/utils/resolveCharacterName"
 
-// Define processed chat message format
-export interface ProcessedChatMessage {
+// Define processed session message format
+export interface ProcessedSessionMessage {
 	id: number
 	role: "assistant" | "user"
 	name: string
@@ -48,25 +48,25 @@ export interface ContentProcessor<TInput, TOutput = TInput> {
 }
 
 /**
- * Processes chat messages with interpolation and role/name assignment
+ * Processes session messages with interpolation and role/name assignment
  */
-export class ChatMessageProcessor
-	implements ContentProcessor<SelectChatMessage, ProcessedChatMessage>
+export class SessionMessageProcessor
+	implements ContentProcessor<SelectSessionMessage, ProcessedSessionMessage>
 {
 	constructor(
-		private chat: any, // BasePromptChat type
+		private session: any, // BasePromptSession type
 		private interpolationEngine: any // InterpolationEngine type
 	) {}
 
 	processItem(
-		message: SelectChatMessage,
+		message: SelectSessionMessage,
 		context: {
 			interpolationContext: InterpolationContext
 			charName: string
 			personaName: string
 			priority: number
 		}
-	): ProcessedChatMessage | null {
+	): ProcessedSessionMessage | null {
 		const { interpolationContext, charName, personaName } = context
 
 		// Create message-specific interpolation context
@@ -94,20 +94,20 @@ export class ChatMessageProcessor
 		// Handle character-specific context
 		else if (message.characterId) {
 			// Active participants first; a removed participant's row won't
-			// be in this.chat.chatCharacters (getPromptChatFromDb filters it
+			// be in this.session.sessionCharacters (getPromptSessionFromDb filters it
 			// out for every "who's active" consumer), but their past
 			// messages still need to resolve a name — fall back to the
 			// separately-supplied removed list, then to the removedAt-time
 			// name snapshot if the entity itself has since been deleted
 			// globally too.
-			const foundChar = this.chat.chatCharacters?.find(
+			const foundChar = this.session.sessionCharacters?.find(
 				(cc: any) => cc.character.id === message.characterId
 			)?.character
 			let foundName: string | undefined
 			if (foundChar) {
 				foundName = resolveCharacterName(foundChar)
 			} else {
-				const removedCC = this.chat.removedChatCharacters?.find(
+				const removedCC = this.session.removedSessionCharacters?.find(
 					(cc: any) => cc.characterId === message.characterId
 				)
 				if (removedCC) {
@@ -129,14 +129,14 @@ export class ChatMessageProcessor
 
 		// Handle persona-specific context
 		if (message.personaId) {
-			const foundPersona = this.chat.chatPersonas?.find(
+			const foundPersona = this.session.sessionPersonas?.find(
 				(cp: any) => cp.persona.id === message.personaId
 			)?.persona
 			let foundName: string | undefined
 			if (foundPersona) {
 				foundName = resolvePersonaName(foundPersona)
 			} else {
-				const removedCP = this.chat.removedChatPersonas?.find(
+				const removedCP = this.session.removedSessionPersonas?.find(
 					(cp: any) => cp.personaId === message.personaId
 				)
 				if (removedCP) {
@@ -170,7 +170,7 @@ export class ChatMessageProcessor
 		}
 	}
 
-	shouldInclude(message: SelectChatMessage, priority: number): boolean {
+	shouldInclude(message: SelectSessionMessage, priority: number): boolean {
 		// Messages can be included at any priority
 		return true
 	}

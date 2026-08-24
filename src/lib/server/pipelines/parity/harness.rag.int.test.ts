@@ -19,7 +19,10 @@
 
 import { describe, it, expect, beforeAll, vi } from "vitest"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
-import { type ParityFixture, type RenderConfigs } from "$lib/server/pipelines/parity/harness"
+import {
+	type ParityFixture,
+	type RenderConfigs
+} from "$lib/server/pipelines/parity/harness"
 import { renderParity, parityGate, checkParity } from "@serene-pub/sdk"
 import { wrapFor } from "$lib/server/pipelines/entities/variableLayouts"
 import * as schema from "$lib/server/db/schema"
@@ -44,7 +47,7 @@ function vectorFor(text: string): number[] {
  * The application database, pointed at the test one.
  *
  * Needed because `PromptBuilder`'s RAG gate reads `systemSettings.vectorizationEnabled`
- * from the **global** `db` rather than from the chat it was handed. Without this
+ * from the **global** `db` rather than from the session it was handed. Without this
  * mock that read finds nothing, the gate closes, and the legacy path quietly
  * runs the *keyword* engine instead — so a RAG fixture would compare the
  * pipeline's semantic arm against legacy's keyword arm and report a divergence
@@ -85,7 +88,7 @@ vi.mock("$lib/server/embedding", () => ({
 let poolRows: any[] = []
 
 vi.mock("$lib/server/embedding/ragContext", () => ({
-	getChatRagContext: async () => ({ lorebookId: 1, allLorebookIds: [1] }),
+	getSessionRagContext: async () => ({ lorebookId: 1, allLorebookIds: [1] }),
 	fetchScopedCandidates: async () => poolRows,
 	rankScopedCandidates: (
 		candidates: any[],
@@ -127,7 +130,7 @@ const corpusTemplate = (wrappers: "template" | "layouts") => {
 	return [
 		v("instructions"),
 		`WORLDLORE:${v("worldLore")}`,
-		"{{#each chatMessages}}{{this.name}}: {{this.message}}",
+		"{{#each sessionMessages}}{{this.name}}: {{this.message}}",
 		"{{/each}}"
 	].join("\n")
 }
@@ -230,26 +233,26 @@ async function seedRag(
 		embedding: vectorFor(r.content)
 	}))
 
-	const [chat] = await db
-		.insert(schema.chats)
+	const [session] = await db
+		.insert(schema.sessions)
 		.values({
 			userId: user.id,
 			isGroup: false,
 			lorebookId: lorebook.id
 		})
 		.returning()
-	await db.insert(schema.chatCharacters).values({
-		chatId: chat.id,
+	await db.insert(schema.sessionCharacters).values({
+		sessionId: session.id,
 		characterId: alice.id,
 		isActive: true,
 		visibility: "visible"
 	})
 	await db
-		.insert(schema.chatPersonas)
-		.values({ chatId: chat.id, personaId: bob.id })
-	await db.insert(schema.chatMessages).values([
+		.insert(schema.sessionPersonas)
+		.values({ sessionId: session.id, personaId: bob.id })
+	await db.insert(schema.sessionMessages).values([
 		{
-			chatId: chat.id,
+			sessionId: session.id,
 			role: "user",
 			content: text,
 			personaId: bob.id
@@ -257,7 +260,7 @@ async function seedRag(
 	])
 
 	return {
-		chatId: chat.id,
+		sessionId: session.id,
 		userId: user.id,
 		currentCharacterId: alice.id,
 		text
@@ -348,11 +351,19 @@ describe("the semantic parity corpus", () => {
 	})
 
 	it("reports where the paths diverge", async () => {
-		const { goldenPathFor, ragParityPipeline } = await import("$lib/server/pipelines/parity/harness")
+		const { goldenPathFor, ragParityPipeline } = await import(
+			"$lib/server/pipelines/parity/harness"
+		)
 		const { readFileSync } = await import("node:fs")
-		const { createHost } = await import("$lib/server/pipelines/runtime/host")
-		const { buildWorld } = await import("$lib/server/pipelines/config/world")
-		const { coreBindings } = await import("$lib/server/pipelines/runtime/bindings")
+		const { createHost } = await import(
+			"$lib/server/pipelines/runtime/host"
+		)
+		const { buildWorld } = await import(
+			"$lib/server/pipelines/config/world"
+		)
+		const { coreBindings } = await import(
+			"$lib/server/pipelines/runtime/bindings"
+		)
 		const { run } = await import("@serene-pub/sdk")
 
 		const results = []
@@ -368,8 +379,7 @@ describe("the semantic parity corpus", () => {
 			// what lets this corpus outlive it.
 			const legacy = readFileSync(goldenPathFor(fixture.name), "utf8")
 			const world = await buildWorld(db as any, {
-				chatId: scope.chatId,
-				userId: scope.userId
+				sessionId: scope.sessionId
 			})
 			world.overrides.push({
 				nodeKey: "prompt",
@@ -382,17 +392,17 @@ describe("the semantic parity corpus", () => {
 				world,
 				input: {
 					text: scope.text,
-					chatScope: {
-						chatId: scope.chatId,
+					sessionScope: {
+						sessionId: scope.sessionId,
 						currentCharacterId: scope.currentCharacterId
 					}
 				},
-				seed: `rag:${scope.chatId}`,
+				seed: `rag:${scope.sessionId}`,
 				triggerSource: "ui",
 				preview: true,
 				bindings: coreBindings(),
 				host: createHost(db as any, {
-					chatId: scope.chatId,
+					sessionId: scope.sessionId,
 					userId: scope.userId
 				})
 			})

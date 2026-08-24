@@ -22,10 +22,7 @@ import {
 	type ParamDecl,
 	type SlotDecl
 } from "@serene-pub/sdk"
-import {
-	type Db,
-	type Decl
-} from "$lib/server/pipelines/config/panel/types"
+import { type Db, type Decl } from "$lib/server/pipelines/config/panel/types"
 
 const KIND_TO_MATRIX_SLOT: Record<string, string> = {
 	connection: "connection",
@@ -36,7 +33,8 @@ const KIND_TO_MATRIX_SLOT: Record<string, string> = {
 	// A wire format comes from the connection's adapter metadata and is an
 	// admin's decision for the same reason the template is.
 	wire: "template",
-	variables: "variables"
+	variables: "variables",
+	scripts: "scripts"
 }
 
 const PARAM_CONTROL: Record<string, string> = {
@@ -66,7 +64,7 @@ function humanizeCamel(key: string): string {
 		.join(" ")
 }
 
-/** `core:query/chat-history@1` becomes `Chat history` — from the row, not from code. */
+/** `core:query/session-history@1` becomes `Session history` — from the row, not from code. */
 export function humanizeTypeId(typeId: string): string {
 	const tail = typeId.replace(/@\d+$/, "").split("/").pop() ?? typeId
 	const words = tail.split(/[-_]/).join(" ")
@@ -218,11 +216,29 @@ function declsForSlot(
 			}
 		})
 
+	// A scripts slot is one option: the chain, addressed whole. The links are
+	// an *ordered list* — splitting them into per-path settings would make the
+	// order a fact spread across rows, and reordering a chain a multi-write.
+	// The accepted types are the attachment rule (18 §4a): the picker offers
+	// rows of these types and the write refuses everything else.
+	if (decl.kind === "scripts")
+		return [
+			{
+				...base,
+				path: "",
+				label: humanizeCamel(slotName),
+				...(slotDescription ? { description: slotDescription } : {}),
+				control: "scripts-chain",
+				accepts: ((decl as { accepts?: string[] }).accepts ??
+					[]) as string[]
+			}
+		]
+
 	// A template slot holds a **reference**, the same way prompts and layouts
 	// do. It used to hold the literal source, projected out of
 	// `context_configs` by `world.ts`; that made the story string the one part
 	// of a pipeline's configuration that lived outside the config layer, with
-	// its own selection mechanism and no per-chat scope. The row is the value
+	// its own selection mechanism and no per-session scope. The row is the value
 	// now, and `pipeline_context_templates` is where it lives.
 	if (decl.kind === "template")
 		return [
@@ -314,7 +330,10 @@ export interface Published {
 	semver: string
 }
 
-export async function published(db: Db, slug: string): Promise<Published | null> {
+export async function published(
+	db: Db,
+	slug: string
+): Promise<Published | null> {
 	const [spec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
@@ -447,6 +466,32 @@ export async function declarations(
 				typeLabel,
 				nodeKind: String(row.kind ?? "")
 			})
+
+		// Interior script points (18 §4e): one chain option per declared point,
+		// addressed as slot `scripts` at the point's own path — which is where
+		// the executor's `ctx.scripts.applyText` reads it, so what the panel
+		// writes is what the broker runs. Read from the row like everything
+		// else (F6); v1 points are text-transform only, matching the broker.
+		for (const point of (row.scriptPoints ?? []) as Array<{
+			key: string
+			i18n?: unknown
+			description?: unknown
+		}>) {
+			const description = i18nText(point.description)
+			out.push({
+				nodeKey: node.nodeKey,
+				slot: "scripts",
+				matrixSlot: "scripts",
+				path: point.key,
+				facet: "scripts",
+				label: i18nText(point.i18n) ?? humanizeCamel(point.key),
+				...(description ? { description } : {}),
+				control: "scripts-chain",
+				accepts: ["core:script:text/transform@1"],
+				typeLabel,
+				nodeKind: String(row.kind ?? "")
+			})
+		}
 
 		if (row.effects === "write" || row.effects === "external")
 			out.push({

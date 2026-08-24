@@ -101,9 +101,7 @@ describe("users:current:setPassphrase — re-authentication gap (PGlite integrat
 	test("succeeds for first-time setup, then revokes tokens and disconnects sockets after emitting", async () => {
 		const { usersCurrentSetPassphrase } = await import("./users")
 		const user = await makeUser("setpass-firsttime-user")
-		const userTokens = await import(
-			"$lib/server/providers/users/tokens"
-		)
+		const userTokens = await import("$lib/server/providers/users/tokens")
 		await userTokens.create({ userId: user.id.toString() })
 
 		const { calls, emitToUser, io } = makeOrderedSpies()
@@ -138,9 +136,7 @@ describe("users:current:changePassphrase — session revocation (PGlite integrat
 			userId: user.id.toString(),
 			passphrase: VALID_PASSPHRASE
 		})
-		const userTokens = await import(
-			"$lib/server/providers/users/tokens"
-		)
+		const userTokens = await import("$lib/server/providers/users/tokens")
 		await userTokens.create({ userId: user.id.toString() })
 
 		const { calls, emitToUser, io } = makeOrderedSpies()

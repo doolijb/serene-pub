@@ -1,5 +1,5 @@
 /**
- * Character visibility options for optimizing context in group chats
+ * Character visibility options for optimizing context in group sessions
  */
 export const CharacterVisibility = {
 	VISIBLE: "visible", // Show full character information (default)

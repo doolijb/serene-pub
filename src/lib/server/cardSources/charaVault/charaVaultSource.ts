@@ -345,7 +345,9 @@ export const charaVaultSource: CardSource = {
 			)
 
 			if (response.status === 429) {
-				throw new CardSourceRateLimitedError(parseRetryAfterMs(response))
+				throw new CardSourceRateLimitedError(
+					parseRetryAfterMs(response)
+				)
 			}
 			if (!response.ok) {
 				throw new CardSourceUnavailableError(

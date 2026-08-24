@@ -35,7 +35,7 @@ vi.mock("$lib/server/embedding", () => ({
 }))
 
 let db: TestDb
-let chatId: number
+let sessionId: number
 let userId: number
 
 /**
@@ -62,11 +62,11 @@ beforeAll(async () => {
 		.values({ name: "Lanes", userId })
 		.returning()
 
-	const [chat] = await db
-		.insert(schema.chats)
+	const [session] = await db
+		.insert(schema.sessions)
 		.values({ userId, isGroup: false, lorebookId: lorebook.id })
 		.returning()
-	chatId = chat.id
+	sessionId = session.id
 
 	// One of each, all keyed on the same word, so a lane that runs at all finds
 	// its entry — and a lane that is missing is the only reason one is absent.
@@ -105,8 +105,8 @@ beforeAll(async () => {
 		month: 3
 	})
 
-	await db.insert(schema.chatMessages).values({
-		chatId,
+	await db.insert(schema.sessionMessages).values({
+		sessionId,
 		role: "user",
 		content: "tell me about the ashguard"
 	} as any)
@@ -116,13 +116,13 @@ const rankedSources = async (): Promise<string[]> => {
 	const receipt = await run(respondSpec(), {
 		input: {
 			text: "tell me about the ashguard",
-			chatId,
+			sessionId,
 			characterId: null,
-			chatScope: { chatId, currentCharacterId: null }
+			sessionScope: { sessionId, currentCharacterId: null }
 		},
 		seed: "seed:lanes",
 		bindings: coreBindings(),
-		host: createHost(db as any, { chatId, userId }),
+		host: createHost(db as any, { sessionId, userId }),
 		// Stops before `generate`, which needs a connection this test has no
 		// business supplying — everything under test happens upstream of it.
 		preview: true

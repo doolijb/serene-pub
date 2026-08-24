@@ -33,10 +33,7 @@ import type { ConfigWorld, OverrideRow } from "@serene-pub/sdk"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { resolvePromptFields } from "$lib/server/pipelines/entities/prompts"
 import { declarations } from "$lib/server/pipelines/config/panel"
-import {
-	NARRATE_SPEC_ID,
-	RESPOND_SPEC_ID
-} from "$lib/server/pipelines/specs"
+import { NARRATE_SPEC_ID, RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 
 /**
  * Reads only.
@@ -49,8 +46,7 @@ import {
 type Db = { select: any }
 
 export interface WorldScope {
-	chatId?: number
-	userId?: number
+	sessionId?: number
 	/** Which node keys carry the assemble/provider slots in the spec being run. */
 	assembleNodeKey?: string
 	providerNodeKey?: string
@@ -64,20 +60,19 @@ export interface WorldScope {
  * Build the config world for one run.
  *
  * **The scope chain is already there.** SP resolves configuration today as
- * system settings → user settings → the chat's own choice, per config type
- * (`getUserConfigurations`, and the `chats` row). That is the pipeline's scope
+ * system settings → user settings → the session's own choice, per config type
+ * (`getUserConfigurations`, and the `sessions` row). That is the pipeline's scope
  * chain wearing different names, so this projects each existing layer onto its
  * equivalent rather than flattening everything to one:
  *
  * | today | scope layer |
  * |---|---|
  * | `system_settings.default*` | `instance` |
- * | `user_settings.active*` | `user` |
- * | `chats.connectionId` / `samplingConfigId` / `promptConfigId` | `chat` |
+ * | `sessions.connectionId` / `samplingConfigId` / `promptConfigId` | `session` |
  *
- * Flattening would have "worked" and silently lost the thing that makes the
- * chain worth having: an admin changing the instance connection reaches every
- * user who has not chosen their own, and no further (12 §2).
+ * The legacy `user_settings.active*` columns are no longer projected (ruled
+ * 2026-08-24): the user layer is gone from the model, so a person's levers are
+ * the session's — its config selection and its overrides.
  */
 /**
  * Which legacy prompt table backs which pipeline.
@@ -87,11 +82,11 @@ export interface WorldScope {
  * pipeline; the narrator is a different configuration of it, which is the whole
  * reason it is its own namespace. That made this projection dangerous: it read
  * `prompt_configs` unconditionally and layered the reply's system prompt onto
- * `context` at **user** and **chat** scope, and those outrank the `preset` layer
+ * `context` at **user** and **session** scope, and those outrank the `preset` layer
  * where the narrator's own selection lives. A narrator run resolved the reply's
  * "Write one reply only…" instead of "You are {{narratorName}}…", so the one
  * thing narrating exists not to do — sound like the character reply sharing its
- * chat — is what it did. The only narrator field that survived was
+ * session — is what it did. The only narrator field that survived was
  * `narratorName`, because `prompt_configs` has no column to overwrite it with.
  *
  * A spec absent from this map gets no legacy prompt projection. That is right
@@ -104,21 +99,18 @@ const LEGACY_PROMPT_SOURCES: Record<
 	{
 		table: any
 		systemCol: string
-		userCol: string
-		chatCol: string
+		sessionCol: string
 	}
 > = {
 	[RESPOND_SPEC_ID]: {
 		table: schema.promptConfigs,
 		systemCol: "defaultPromptConfigId",
-		userCol: "activePromptConfigId",
-		chatCol: "promptConfigId"
+		sessionCol: "promptConfigId"
 	},
 	[NARRATE_SPEC_ID]: {
 		table: schema.narratorPromptConfigs,
 		systemCol: "defaultNarratorPromptConfigId",
-		userCol: "activeNarratorPromptConfigId",
-		chatCol: "narratorPromptConfigId"
+		sessionCol: "narratorPromptConfigId"
 	}
 }
 
@@ -132,22 +124,12 @@ export async function buildWorld(
 
 	const [system] = await db.select().from(schema.systemSettings).limit(1)
 
-	const userSettings = scope.userId
+	const session = scope.sessionId
 		? (
 				await db
 					.select()
-					.from(schema.userSettings)
-					.where(eq(schema.userSettings.userId, scope.userId))
-					.limit(1)
-			)[0]
-		: undefined
-
-	const chat = scope.chatId
-		? (
-				await db
-					.select()
-					.from(schema.chats)
-					.where(eq(schema.chats.id, scope.chatId))
+					.from(schema.sessions)
+					.where(eq(schema.sessions.id, scope.sessionId))
 					.limit(1)
 			)[0]
 		: undefined
@@ -156,12 +138,11 @@ export async function buildWorld(
 	const samplingRows = await db.select().from(schema.samplingConfigs)
 	/**
 	 * No `specId` means the caller is not running a published pipeline — the
-	 * parity harness builds an ad-hoc spec standing in for 0.5's chat path, and
+	 * parity harness builds an ad-hoc spec standing in for 0.5's session path, and
 	 * that path is the reply one. Defaulting to reply keeps it comparing what it
 	 * means to compare.
 	 */
-	const legacyPrompts =
-		LEGACY_PROMPT_SOURCES[scope.specId ?? RESPOND_SPEC_ID]
+	const legacyPrompts = LEGACY_PROMPT_SOURCES[scope.specId ?? RESPOND_SPEC_ID]
 	const promptRows = legacyPrompts
 		? await db.select().from(legacyPrompts.table)
 		: []
@@ -215,9 +196,9 @@ export async function buildWorld(
 	}
 	// ── params: the prompt config's numeric fields ───────────────────────
 	// Numbers rather than text, so they layer onto the `params` slot. The
-	// trigger is a *suppression*: below it a short chat gets no post-history
+	// trigger is a *suppression*: below it a short session gets no post-history
 	// reminder. Missing entirely, the pipeline reminded on every turn — visible
-	// only by comparing against a real chat, since a fixture with no trigger
+	// only by comparing against a real session, since a fixture with no trigger
 	// configured behaves identically either way.
 	const paramsAt = (
 		kind: OverrideRow["scopeKind"],
@@ -233,20 +214,17 @@ export async function buildWorld(
 	if (legacyPrompts) {
 		const selected = {
 			defaults: (system as any)?.[legacyPrompts.systemCol],
-			user: (userSettings as any)?.[legacyPrompts.userCol],
-			chat: (chat as any)?.[legacyPrompts.chatCol]
+			session: (session as any)?.[legacyPrompts.sessionCol]
 		}
 		promptsAt("defaults", undefined, selected.defaults)
-		promptsAt("user", scope.userId, selected.user)
-		promptsAt("chat", scope.chatId, selected.chat)
+		promptsAt("session", scope.sessionId, selected.session)
 		paramsAt("defaults", undefined, selected.defaults)
-		paramsAt("user", scope.userId, selected.user)
-		paramsAt("chat", scope.chatId, selected.chat)
+		paramsAt("session", scope.sessionId, selected.session)
 	}
 
 	// ── connection and sampling ──────────────────────────────────────────
 	// A user cannot write a connection slot (F20); these layers are instance
-	// and chat only, and the chat's choice is an admin-permitted selection
+	// and session only, and the session's choice is an admin-permitted selection
 	// rather than a user override.
 	layer(
 		"defaults",
@@ -257,12 +235,12 @@ export async function buildWorld(
 		idOrNull(system?.defaultConnectionId)
 	)
 	layer(
-		"chat",
-		scope.chatId,
+		"session",
+		scope.sessionId,
 		provider,
 		"connection",
 		"ref",
-		idOrNull(chat?.connectionId)
+		idOrNull(session?.connectionId)
 	)
 	layer(
 		"defaults",
@@ -273,12 +251,12 @@ export async function buildWorld(
 		idOrNull(system?.defaultSamplingConfigId)
 	)
 	layer(
-		"chat",
-		scope.chatId,
+		"session",
+		scope.sessionId,
 		provider,
 		"sampling",
 		"ref",
-		idOrNull(chat?.samplingConfigId)
+		idOrNull(session?.samplingConfigId)
 	)
 
 	// ── the pipeline layer, which wins over everything above ─────────────
@@ -397,7 +375,9 @@ async function applyPipelineLayer(
 	 */
 	const derefLayout = async (value: unknown) => {
 		if (typeof value !== "number") return undefined
-		const { resolveVariableTemplate } = await import("$lib/server/pipelines/entities/variableTemplates")
+		const { resolveVariableTemplate } = await import(
+			"$lib/server/pipelines/entities/variableTemplates"
+		)
 		return (await resolveVariableTemplate(db as any, value)) ?? undefined
 	}
 
@@ -410,19 +390,25 @@ async function applyPipelineLayer(
 	 */
 	const derefTemplate = async (value: unknown) => {
 		if (typeof value !== "number") return undefined
-		const { resolveContextTemplate } = await import("$lib/server/pipelines/entities/contextTemplates")
+		const { resolveContextTemplate } = await import(
+			"$lib/server/pipelines/entities/contextTemplates"
+		)
 		const row = await resolveContextTemplate(db as any, value)
 		return row ? row.source : undefined
 	}
 
 	// ── the selected config, as the preset layer ─────────────────────────
-	const { resolveSelectedConfig } = await import("$lib/server/pipelines/config/named")
-	const selected = scope.userId
-		? await resolveSelectedConfig(db as any, spec.id, spec.slug, {
-				userId: scope.userId,
-				chatId: scope.chatId
-			})
-		: null
+	const { resolveSelectedConfig } = await import(
+		"$lib/server/pipelines/config/named"
+	)
+	const selected = await resolveSelectedConfig(
+		db as any,
+		spec.id,
+		spec.slug,
+		{
+			sessionId: scope.sessionId
+		}
+	)
 
 	if (selected) {
 		const values = await db
@@ -479,18 +465,12 @@ async function applyPipelineLayer(
 		.from(schema.pipelineNodeOverrides)
 		.where(eq(schema.pipelineNodeOverrides.specId, spec.id))
 
+	// Session rows are the only override scope left (ruled 2026-08-24) — the
+	// instance's tuning lives in the selected config, projected above.
 	for (const o of rows as any[]) {
-		let scopeKind: OverrideRow["scopeKind"] | null = null
-		let scopeId: string | number | undefined
-		if (o.scopeKind === "instance") scopeKind = "instance"
-		else if (o.scopeKind === "user" && o.scopeId === scope.userId) {
-			scopeKind = "user"
-			scopeId = scope.userId
-		} else if (o.scopeKind === "chat" && o.scopeId === scope.chatId) {
-			scopeKind = "chat"
-			scopeId = scope.chatId
-		}
-		if (!scopeKind) continue
+		if (o.scopeKind !== "session" || o.scopeId !== scope.sessionId) continue
+		const scopeKind: OverrideRow["scopeKind"] = "session"
+		const scopeId = scope.sessionId
 
 		if (o.slot === "prompts" && !(o.path ?? "")) {
 			// A prompts-ref override stores the *id* of a `pipeline_prompts`
@@ -553,7 +533,9 @@ async function applyPipelineLayer(
 		if (d.control === "prompts-ref") promptNodes.add(d.nodeKey)
 
 	if (promptNodes.size) {
-		const { defaultPromptFor } = await import("$lib/server/pipelines/boot/seedPrompts")
+		const { defaultPromptFor } = await import(
+			"$lib/server/pipelines/boot/seedPrompts"
+		)
 		const fallbackId = await defaultPromptFor(db as any, spec.id)
 		if (fallbackId != null) {
 			const fields = await resolvePromptFields(db as any, fallbackId)

@@ -13,9 +13,10 @@
 	 * (prompts), so the same render serves both audiences without a role
 	 * check anywhere in this file.
 	 *
-	 * Writes echo the option's `writeAt` back as the scope: an admin's
-	 * non-prompt edits land at instance scope because those are the
-	 * application's configuration, and the server told us so per option.
+	 * Writes carry no scope (the layer simplification, 2026-08-24): inside a
+	 * session they land at the session's override, and globally they land in the
+	 * selected configuration itself — the server resolves which, and refuses
+	 * a shipped configuration with the duplicate suggestion.
 	 *
 	 * Socket events are shared channels, so every listener filters by slug:
 	 * two of these panels showing different pipelines must not clobber each
@@ -29,8 +30,8 @@
 
 	interface Props {
 		slug: string
-		/** Set when hosted inside a chat — writes land at chat scope. */
-		chatId?: number
+		/** Set when hosted inside a session — writes land at session scope. */
+		sessionId?: number
 		/** Announce where edits land ("Changes here apply to you"). */
 		showScopeNote?: boolean
 		/** Called whenever a fresh view arrives, e.g. to title a header. */
@@ -60,7 +61,7 @@
 		 * Edit the configuration itself instead of overriding it.
 		 *
 		 * Set by the builder, which authors configurations; unset in the
-		 * sidebar, which overrides one for you or this chat. Without it every
+		 * sidebar, which overrides one for you or this session. Without it every
 		 * edit landed at instance scope — which *outranks* `preset`, where a
 		 * configuration's own values live — so a change made with one
 		 * configuration selected followed you to every other one, and
@@ -72,7 +73,7 @@
 
 	let {
 		slug,
-		chatId,
+		sessionId,
 		showScopeNote = true,
 		onLoaded,
 		stepKey,
@@ -142,11 +143,7 @@
 	let cloningTemplateFor: string | null = null
 
 	const scopeLabel = $derived(
-		detail?.writeScope === "chat"
-			? "this chat"
-			: detail?.writeScope === "instance"
-				? "everyone"
-				: "you"
+		detail?.writeScope === "session" ? "this session" : "everyone"
 	)
 
 	/**
@@ -159,34 +156,26 @@
 	 * belong was the absence of any check that they were complete.
 	 */
 	const SOURCE_LABEL: Record<Sockets.Pipelines.Option["source"], string> = {
-		chat: "from this chat",
-		user: "your value",
-		preset: "from the selected config",
-		instance: "set by an admin",
+		session: "from this session",
+		preset: "from the selected configuration",
 		author: "default"
 	}
 
-	/** The option's declared landing scope rides back with every write. */
-	const scopeOf = (option: Sockets.Pipelines.Option) =>
-		option.writeAt === "instance" ? { scope: "instance" as const } : {}
-
 	/**
-	 * Where this edit belongs. Authoring a configuration and overriding one are
-	 * different acts against different tables, and the server refuses the first
-	 * against a shipped row — so the id travels rather than being inferred.
+	 * Where this edit belongs. Authoring a named configuration and letting the
+	 * server resolve the target are different acts — so the id travels when
+	 * the builder set one, and nothing else does.
 	 */
-	const targetOf = (option: Sockets.Pipelines.Option) =>
-		editsConfigId != null
-			? { configId: editsConfigId }
-			: scopeOf(option)
+	const targetOf = () =>
+		editsConfigId != null ? { configId: editsConfigId } : {}
 
 	function set(option: Sockets.Pipelines.Option, value: unknown) {
 		socket.emit("pipelines:setOption", {
 			slug,
 			optionId: option.id,
 			value,
-			chatId,
-			...targetOf(option)
+			sessionId,
+			...targetOf()
 		})
 	}
 
@@ -194,15 +183,15 @@
 		socket.emit("pipelines:clearOption", {
 			slug,
 			optionId: option.id,
-			chatId,
-			...targetOf(option)
+			sessionId,
+			...targetOf()
 		})
 	}
 
 	function chooseConfig(raw: string) {
 		const configId = parseInt(raw, 10)
 		if (Number.isNaN(configId)) return
-		socket.emit("pipelines:selectConfig", { slug, configId, chatId })
+		socket.emit("pipelines:selectConfig", { slug, configId, sessionId })
 	}
 
 	/** Numbers arrive from `<input>` as strings; an empty box means "unset". */
@@ -214,6 +203,42 @@
 		set(option, n)
 	}
 
+	/* --- script chains ----------------------------------------------- */
+
+	/**
+	 * The chain as ids, from the hydrated entries. Every write sends the whole
+	 * ordered list — the chain is one value, so reordering is one write, and
+	 * an explicit `[]` means "no scripts here" while Reset means "inherit".
+	 */
+	const chainIds = (option: Sockets.Pipelines.Option) =>
+		(option.scripts ?? []).map((s) => s.id)
+
+	function chainAdd(option: Sockets.Pipelines.Option, raw: string) {
+		const id = parseInt(raw, 10)
+		if (Number.isNaN(id)) return
+		const ids = chainIds(option)
+		if (!ids.includes(id)) set(option, [...ids, id])
+	}
+
+	function chainRemove(option: Sockets.Pipelines.Option, id: number) {
+		set(
+			option,
+			chainIds(option).filter((x) => x !== id)
+		)
+	}
+
+	function chainMove(
+		option: Sockets.Pipelines.Option,
+		index: number,
+		delta: number
+	) {
+		const ids = chainIds(option)
+		const j = index + delta
+		if (j < 0 || j >= ids.length) return
+		;[ids[index], ids[j]] = [ids[j]!, ids[index]!]
+		set(option, ids)
+	}
+
 	/* --- prompt clone / edit / delete ------------------------------- */
 
 	function clonePrompt(option: Sockets.Pipelines.Option) {
@@ -222,7 +247,7 @@
 		socket.emit("pipelines:clonePrompt", {
 			slug,
 			promptId: option.prompt.id,
-			chatId
+			sessionId
 		})
 	}
 
@@ -282,7 +307,7 @@
 			promptId: draft.id,
 			name: draft.name,
 			fields: draft.fields,
-			chatId
+			sessionId
 		})
 		delete promptDrafts[option.id]
 	}
@@ -301,7 +326,7 @@
 		socket.emit("pipelines:deletePrompt", {
 			slug,
 			promptId: option.prompt.id,
-			chatId
+			sessionId
 		})
 	}
 
@@ -314,7 +339,7 @@
 			slug,
 			optionId: option.id,
 			templateId: option.variableTemplate.id,
-			chatId
+			sessionId
 		})
 	}
 
@@ -372,7 +397,7 @@
 			templateId: draft.id,
 			name: draft.name,
 			source: draft.source,
-			chatId
+			sessionId
 		})
 		delete layoutDrafts[option.id]
 	}
@@ -393,7 +418,7 @@
 			slug,
 			optionId: option.id,
 			templateId: option.variableTemplate.id,
-			chatId
+			sessionId
 		})
 	}
 
@@ -404,7 +429,7 @@
 		socket.emit("pipelines:createContextTemplate", {
 			slug,
 			optionId: option.id,
-			chatId
+			sessionId
 		})
 	}
 
@@ -415,7 +440,7 @@
 			slug,
 			optionId: option.id,
 			templateId: option.contextTemplate.id,
-			chatId
+			sessionId
 		})
 	}
 
@@ -471,7 +496,7 @@
 			templateId: draft.id,
 			name: draft.name,
 			source: draft.source,
-			chatId
+			sessionId
 		})
 		delete templateDrafts[option.id]
 	}
@@ -492,7 +517,7 @@
 			slug,
 			optionId: option.id,
 			templateId: option.contextTemplate.id,
-			chatId
+			sessionId
 		})
 	}
 
@@ -538,8 +563,8 @@
 				slug,
 				optionId,
 				value: res.promptId,
-				chatId,
-				...targetOf(opt)
+				sessionId,
+				...targetOf()
 			})
 		// No draft is seeded: the copy's text is the original's, the editor is
 		// always on screen, and the refreshed view carries the copy's row —
@@ -564,8 +589,8 @@
 				slug,
 				optionId,
 				value: res.templateId,
-				chatId,
-				...targetOf(opt)
+				sessionId,
+				...targetOf()
 			})
 		delete layoutDrafts[optionId]
 	}
@@ -589,8 +614,8 @@
 				slug,
 				optionId,
 				value: res.templateId,
-				chatId,
-				...targetOf(opt)
+				sessionId,
+				...targetOf()
 			})
 		delete templateDrafts[optionId]
 	}
@@ -621,7 +646,7 @@
 		socket.on("pipelines:updateVariableTemplate:error", showRefusal)
 		socket.on("pipelines:deleteVariableTemplate:error", showRefusal)
 
-		socket.emit("pipelines:get", { slug, chatId })
+		socket.emit("pipelines:get", { slug, sessionId })
 	})
 
 	onDestroy(() => {
@@ -672,17 +697,17 @@
 	 * `connection` and `sampling` become "Model" without the client pairing
 	 * them.
 	 */
-	const FACET_GROUPS = $derived.by<Array<{ facets: string[]; label: string }>>(
-		() => {
-			const byLabel = new Map<string, { facets: string[]; label: string }>()
-			for (const f of detail?.facets ?? []) {
-				const g = byLabel.get(f.label)
-				if (g) g.facets.push(f.id)
-				else byLabel.set(f.label, { facets: [f.id], label: f.label })
-			}
-			return [...byLabel.values()]
+	const FACET_GROUPS = $derived.by<
+		Array<{ facets: string[]; label: string }>
+	>(() => {
+		const byLabel = new Map<string, { facets: string[]; label: string }>()
+		for (const f of detail?.facets ?? []) {
+			const g = byLabel.get(f.label)
+			if (g) g.facets.push(f.id)
+			else byLabel.set(f.label, { facets: [f.id], label: f.label })
 		}
-	)
+		return [...byLabel.values()]
+	})
 
 	/** The sidebar leads with these and puts the rest behind one door. */
 	const SIMPLE_FACETS = $derived(
@@ -709,7 +734,9 @@
 	 */
 	type Row = { option: Sockets.Pipelines.Option; step: string }
 
-	const rowsOf = (pick: (s: Sockets.Pipelines.Step) => Sockets.Pipelines.Option[]) =>
+	const rowsOf = (
+		pick: (s: Sockets.Pipelines.Step) => Sockets.Pipelines.Option[]
+	) =>
 		visibleSteps.flatMap((s) =>
 			pick(s).map((option) => ({ option, step: s.label }))
 		)
@@ -768,7 +795,8 @@
 					key: step.key,
 					label: step.label,
 					facets,
-					hidden: quick.length && rest.length && !open ? rest.length : 0,
+					hidden:
+						quick.length && rest.length && !open ? rest.length : 0,
 					canCollapse: !!(quick.length && rest.length && open),
 					count: facets.reduce((n, f) => n + f.rows.length, 0)
 				}
@@ -867,7 +895,10 @@
 				panel on them forever. `title` carries the full text for anyone
 				who needs it at any size.
 			-->
-			<p class="text-muted/80 text-[11px] leading-snug" title={option.description}>
+			<p
+				class="text-muted/80 text-[11px] leading-snug"
+				title={option.description}
+			>
 				{option.description}
 			</p>
 		{/if}
@@ -974,7 +1005,10 @@
 			<ul class="flex flex-col gap-1">
 				{#each option.members ?? [] as m (m.key)}
 					<li class="flex items-center gap-2 text-xs">
-						<span class="min-w-0 flex-1 truncate" title={m.description}>
+						<span
+							class="min-w-0 flex-1 truncate"
+							title={m.description}
+						>
 							{m.label ?? m.key}
 						</span>
 						<input
@@ -985,10 +1019,11 @@
 							disabled={false}
 							aria-label={m.label ?? m.key}
 							value={String(
-								((option.value ?? option.authorDefault ?? {}) as Record<
-									string,
-									number
-								>)[m.key] ?? 0
+								(
+									(option.value ??
+										option.authorDefault ??
+										{}) as Record<string, number>
+								)[m.key] ?? 0
 							)}
 							onchange={(e) => {
 								const base = {
@@ -1088,9 +1123,7 @@
 						a plugin whose declaration cannot be read still shows
 						its wording rather than an empty editor.
 					-->
-					{#each option.prompt.declared?.length
-						? option.prompt.declared
-						: Object.keys(option.prompt.fields) as field (field)}
+					{#each option.prompt.declared?.length ? option.prompt.declared : Object.keys(option.prompt.fields) as field (field)}
 						<label class="flex flex-col gap-1 text-xs font-medium">
 							{humanize(field)}
 							<textarea
@@ -1384,7 +1417,7 @@
 						<code>x</code>
 						as indented JSON; loop with
 						<code>&#123;&#123;#each&#125;&#125;</code>
-						 to write prose instead. Layouts are shared — changing this
+						to write prose instead. Layouts are shared — changing this
 						one changes it in every pipeline that uses it.
 					</p>
 
@@ -1411,6 +1444,169 @@
 					{/if}
 				</div>
 			{/if}
+		{:else if option.control === "scripts-chain"}
+			<!-- The chain, in run order. One value, whole-list writes: add,
+			     remove and reorder each send the full id list, so the order on
+			     screen is the order stored, and Reset (above) is the only way
+			     back to inheriting. Rows come hydrated on the option — names
+			     and badges without a second fetch — and a deleted script still
+			     shows, marked, so a dangle is something to remove rather than
+			     something the panel hid. -->
+			{@const chain = option.scripts ?? []}
+			{@const inChain = new Set(chain.map((s) => s.id))}
+			<div class="flex flex-col gap-1">
+				{#if !chain.length}
+					<p class="text-muted text-xs italic">
+						No scripts attached.
+					</p>
+				{/if}
+				{#each chain as entry, i (entry.id)}
+					<div
+						class="border-surface-200-700 flex items-center gap-1.5 rounded-lg border px-2 py-1"
+					>
+						<span
+							class="text-muted w-4 shrink-0 text-right font-mono text-[10px]"
+						>
+							{i + 1}
+						</span>
+						<span
+							class="min-w-0 flex-1 truncate text-sm {entry.enabled &&
+							!entry.missing
+								? ''
+								: 'opacity-50'}"
+							title={entry.typeLabel}
+						>
+							{entry.missing
+								? `Missing script (#${entry.id})`
+								: entry.name}
+						</span>
+						{#if entry.missing}
+							<span
+								class="preset-tonal-error shrink-0 rounded-full px-1.5 py-0.5 text-[10px]"
+							>
+								deleted
+							</span>
+						{:else}
+							{#if !entry.enabled}
+								<span
+									class="text-muted shrink-0 text-[10px]"
+									title="Disabled on the scripts page — keeps its place, does nothing."
+								>
+									off
+								</span>
+							{/if}
+							{#if entry.blastRadius}
+								<span
+									class="preset-tonal-warning shrink-0 rounded-full px-1.5 py-0.5 text-[10px]"
+									title="{entry.typeLabel} — what a script of this type is able to do"
+								>
+									{entry.blastRadius}
+								</span>
+							{/if}
+						{/if}
+						<button
+							type="button"
+							class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+							title="Move up"
+							disabled={i === 0}
+							onclick={() => chainMove(option, i, -1)}
+						>
+							<Icons.ChevronUp size={12} />
+						</button>
+						<button
+							type="button"
+							class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+							title="Move down"
+							disabled={i === chain.length - 1}
+							onclick={() => chainMove(option, i, 1)}
+						>
+							<Icons.ChevronDown size={12} />
+						</button>
+						<button
+							type="button"
+							class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+							title="Remove from this chain (the script itself is kept)"
+							onclick={() => chainRemove(option, entry.id)}
+						>
+							<Icons.X size={12} />
+						</button>
+					</div>
+				{/each}
+				{#if option.choices?.some((c) => !inChain.has(c.id))}
+					<select
+						id="opt-{option.id}"
+						class="select w-full"
+						value=""
+						onchange={(e) => {
+							chainAdd(option, e.currentTarget.value)
+							e.currentTarget.value = ""
+						}}
+					>
+						<option value="" disabled>Add a script…</option>
+						{#each option.choices.filter((c) => !inChain.has(c.id)) as choice (choice.id)}
+							<option value={String(choice.id)}>
+								{choice.label}{choice.description
+									? ` · ${choice.description}`
+									: ""}
+							</option>
+						{/each}
+					</select>
+				{:else if !option.choices?.length}
+					<p class="text-muted text-xs">
+						Nothing fits this step yet — write one on the
+						<a class="underline" href="/pipelines/scripts">
+							scripts page
+						</a>
+						.
+					</p>
+				{/if}
+				{#if option.connectionScripts?.entries.length}
+					<!-- The effective view's other half (18 §4c): guards the
+					     run's connection carries join the same stop union, so
+					     the card shows the merged truth with provenance. -->
+					<div class="mt-1 flex flex-col gap-1">
+						<p class="text-muted text-[11px]">
+							<Icons.Plug size={11} class="inline" />
+							From connection
+							<strong>
+								{option.connectionScripts.connectionName}
+							</strong>
+							— managed in the connection's settings:
+						</p>
+						{#each option.connectionScripts.entries as s (s.id)}
+							<div
+								class="border-surface-200-700 flex items-center gap-2 rounded-lg border border-dashed px-2 py-1"
+							>
+								<span
+									class="min-w-0 flex-1 truncate text-sm {s.enabled
+										? ''
+										: 'opacity-50'}"
+								>
+									{s.name}
+								</span>
+								{#if !s.enabled}
+									<span class="text-muted text-[10px]">
+										off
+									</span>
+								{/if}
+								<span
+									class="preset-tonal-surface shrink-0 rounded-full px-1.5 py-0.5 text-[10px]"
+								>
+									connection
+								</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
+				{#if option.choices?.length}
+					<a
+						class="text-muted text-xs underline"
+						href="/pipelines/scripts"
+					>
+						Manage scripts
+					</a>
+				{/if}
+			</div>
 		{:else if option.choices}
 			<!-- A reference: connections, sampling configs. The server sends
 			     what this option may point at, already narrowed to the
@@ -1535,7 +1731,9 @@
 						type="button"
 						class="btn btn-sm preset-tonal-surface w-full"
 						onclick={() =>
-							(showAll[group.key] = !(showAll[group.key] ?? false))}
+							(showAll[group.key] = !(
+								showAll[group.key] ?? false
+							))}
 					>
 						{#if group.hidden}
 							<Icons.ChevronDown size={14} />

@@ -6,7 +6,7 @@ Serene Pub can run as a single-user app with no login at all, or you can turn on
 
 By default, a fresh Serene Pub install has **accounts disabled**. There's no login screen — every request is automatically treated as the built-in `admin` account (the first user created when the server starts), and anyone with access to the server has full access to everything. This is the simplest way to run Serene Pub for yourself on your own machine.
 
-Turning on **User Accounts** switches the server into multi-user mode: a login screen appears, every person needs a username and passphrase, and each account gets its own characters, chats, lorebooks, and tags. [Personas](./personas.md) — the "you" side of a conversation — are likewise scoped per account, so each person builds their own set rather than sharing one pool. An administrator (or several) can create accounts for other people, promote or demote admin status, and manage the server as a whole, while standard users are limited to their own content and personal settings.
+Turning on **User Accounts** switches the server into multi-user mode: a login screen appears, every person needs a username and passphrase, and each account gets its own characters, sessions, lorebooks, and tags. [Personas](./personas.md) — the "you" side of a conversation — are likewise scoped per account, so each person builds their own set rather than sharing one pool. An administrator (or several) can create accounts for other people, promote or demote admin status, and manage the server as a whole, while standard users are limited to their own content and personal settings.
 
 This is a one-way switch — see [Enabling User Accounts](#enabling-user-accounts) below for exactly what that means. For the broader distinction between settings an admin controls for the whole server versus settings each person controls for themselves, see [System Settings](./system-settings.md).
 
@@ -49,7 +49,7 @@ Admins create a user from the Users panel's **+** button, which opens a form wit
 
 - **Username\*** — required, must be unique across the server.
 - **Display Name** — optional; shown instead of the username throughout the UI when set.
-- **Administrator** — a checkbox. Checking it (when it wasn't already checked) pops up a **Grant Administrator Privileges?** confirmation listing what admins can do (manage all users and permissions, access and modify all chats and characters, change system settings, delete content across the system) and warns this should only be done for trusted users.
+- **Administrator** — a checkbox. Checking it (when it wasn't already checked) pops up a **Grant Administrator Privileges?** confirmation listing what admins can do (manage all users and permissions, access and modify all sessions and characters, change system settings, delete content across the system) and warns this should only be done for trusted users.
 - **Passphrase\*** / **Confirm Passphrase** — required when creating a new user. A **Generate Random** button produces a passphrase in the pattern of three capitalized dictionary words, a 3-digit number, and a special character (e.g. `Ocean-Phoenix-Quartz482!`), and a **Copy** button copies it to the clipboard. An eye icon toggles the field between hidden and plain text.
 
 Saving emits a **Create** action and the new account appears in the Users list immediately.
@@ -75,7 +75,7 @@ Every account has a single `isAdmin` flag — there's no tiered permission syste
 
 **Standard (non-admin) users:**
 
-- Have their own private characters, personas, chats, lorebooks, and tags, scoped only to their account.
+- Have their own private characters, personas, sessions, lorebooks, and tags, scoped only to their account.
 - Can view the Users list (to see who else is on the server) but cannot create, edit, or delete accounts.
 - Only see the **User** and **Themes** tabs in Settings — no System tab.
 - Get a shorter setup wizard on first login that skips the connection/summarization/RAG steps entirely, since those are server-wide and already configured by an admin. See [Getting Started](./getting-started.md) for the full wizard walkthrough.
@@ -96,7 +96,7 @@ The **User** tab itself contains, top to bottom:
 
 ### Data Import (admin only)
 
-Admins additionally see a **Data Import** section with a short description and an **Import from SillyTavern** button, linking out to the app's import page for pulling in characters, personas, chats, and lorebooks. See [Importing from SillyTavern](./importing-from-sillytavern.md) for the full process. This section doesn't appear at all in the Android app build, regardless of admin status.
+Admins additionally see a **Data Import** section with a short description and an **Import from SillyTavern** button, linking out to the app's import page for pulling in characters, personas, sessions, and lorebooks. See [Importing from SillyTavern](./importing-from-sillytavern.md) for the full process. This section doesn't appear at all in the Android app build, regardless of admin status.
 
 ### User Profile (accounts enabled only)
 
@@ -108,9 +108,9 @@ Once accounts are enabled, a **User Profile** section appears at the bottom of t
 
 This section is hidden entirely when accounts are disabled, since there's no separate identity to manage in single-user mode.
 
-## Adding Other Users as Chat Guests
+## Adding Other Users as Session Guests
 
-When accounts are enabled, editing a chat exposes a **Guests** section (in addition to the chat's personas) with an **Add Guests** button. This lets you invite other accounts on the server into a chat as guests, distinct from the AI-played characters and your own persona. Guest management is part of chat setup rather than user administration — see [Chats](./chats.md) for how guests behave once added to a conversation.
+When accounts are enabled, editing a session exposes a **Guests** section (in addition to the session's personas) with an **Add Guests** button. This lets you invite other accounts on the server into a session as guests, distinct from the AI-played characters and your own persona. Guest management is part of session setup rather than user administration — see [Sessions](./sessions.md) for how guests behave once added to a conversation.
 
 ## Changing Your Own Passphrase
 
@@ -139,4 +139,4 @@ Because of this, it's worth treating admin lockout as a real risk to plan around
 ### Security considerations
 
 - Passphrase requirements are asymmetric and worth knowing precisely: **self-service** passphrases (the initial admin setup dialog and **Change Passphrase**) are strictly enforced server-side at a minimum of 10 characters (128 maximum), with at least one uppercase letter, one lowercase letter, and one special character. Passphrases an **admin sets for someone else** (the Create/Edit User form) are only required to be non-empty server-side — the form's "6 characters, uppercase, lowercase, numbers" helper text is a client-side suggestion, not an enforced rule. If you need a guaranteed-strong passphrase for another user's account, don't rely on the form alone.
-- Admin status is powerful and, once granted, has no separate approval step beyond the initial confirmation dialog — grant it only to people you'd trust with full server access, since admins can read and modify every other user's characters, personas, and chats in addition to managing accounts.
+- Admin status is powerful and, once granted, has no separate approval step beyond the initial confirmation dialog — grant it only to people you'd trust with full server access, since admins can read and modify every other user's characters, personas, and sessions in addition to managing accounts.

@@ -25,7 +25,8 @@ import * as schema from "$lib/server/db/schema"
 import {
 	snapshotRegistry,
 	type RegistryEntry,
-	type Descriptor
+	type Descriptor,
+	type ScriptTypeDecl
 } from "@serene-pub/sdk"
 
 type Db = { insert: any; select: any; update: any }
@@ -112,7 +113,36 @@ export function typeContentHash(entry: RegistryEntry): string {
 		 * widened in passing: each deserves its own ruling, and changing them
 		 * would re-hash types this branch has no reason to touch.
 		 */
-		optional: entry.optional
+		optional: entry.optional,
+		/**
+		 * Hashed for the same reason `optional` is. Flipping a script type from
+		 * `transform` to `verdict` moves no port and keeps every attachment
+		 * compiling, while turning "each link rewrites the text" into "the
+		 * earliest answer wins" — a behaviour change wearing a compatible
+		 * signature, which is exactly what the freeze rule exists to stop.
+		 *
+		 * `undefined` on node types, and `JSON.stringify` drops undefined keys,
+		 * so no node type's hash moves by this being here.
+		 */
+		semantics: entry.semantics,
+		/**
+		 * Hashed on the S3 argument, one construct over (18 §4e): a point
+		 * appearing or vanishing changes what an untouched spec's configuration
+		 * can reach — the panel offers a chain option per point, and the broker
+		 * refuses undeclared names. Keys are contract; the sort strips their
+		 * `i18n`/`description` like everywhere else. Undefined on types that
+		 * declare none, so nothing else re-hashes.
+		 */
+		scriptPoints: entry.scriptPoints,
+		/**
+		 * The session-shape contract (19 §1), hashed for the reason the doc
+		 * states in the `optional` register: widening `characters.max` changes
+		 * what existing sessions legally contain while every pin keeps
+		 * compiling. Display inside it is stripped by the sort like
+		 * everywhere; undefined on every non-mode type, so nothing else
+		 * re-hashes.
+		 */
+		sessionShape: entry.sessionShape
 	}
 	// Stable key order, recursively. An earlier version passed a sorted key
 	// array as JSON.stringify's replacer, which filters keys at *every* level —
@@ -145,7 +175,10 @@ export function typeContentHash(entry: RegistryEntry): string {
  */
 export async function syncTypeRegistry(
 	db: Db,
-	descriptors: Descriptor[],
+	// Script types ride the same sync (18 §2). `snapshotRegistry` branches on
+	// the id, so everything below this line is unaware there are two kinds of
+	// declaration — which is the property that keeps the freeze rule one rule.
+	descriptors: Array<Descriptor | ScriptTypeDecl>,
 	opts: { release: string; ownerPluginId?: number } = { release: "dev" }
 ): Promise<SyncResult> {
 	const entries = snapshotRegistry(descriptors, { release: opts.release })
@@ -185,6 +218,9 @@ export async function syncTypeRegistry(
 				i18n: (entry.i18n as any) ?? null,
 				effects: entry.effects ?? null,
 				optional: entry.optional ?? false,
+				semantics: entry.semantics ?? null,
+				scriptPoints: (entry.scriptPoints as any) ?? null,
+				sessionShape: (entry.sessionShape as any) ?? null,
 				causesEvent: entry.causesEvent ?? null,
 				isPublic: entry.public ?? false,
 				release: opts.release,
@@ -221,10 +257,16 @@ export async function syncTypeRegistry(
 			const i18nChanged =
 				JSON.stringify(row.i18n ?? null) !==
 				JSON.stringify((entry.i18n as any) ?? null)
+			// Point labels are display text on the same footing as slot
+			// descriptions: stripped from the hash, so kept fresh here.
+			const pointsChanged =
+				JSON.stringify(sortDeep(row.scriptPoints ?? null)) !==
+				JSON.stringify(sortDeep((entry.scriptPoints as any) ?? null))
 			if (
 				slotsChanged ||
 				optionalChanged ||
 				i18nChanged ||
+				pointsChanged ||
 				row.release !== opts.release
 			) {
 				await db
@@ -237,6 +279,12 @@ export async function syncTypeRegistry(
 						...(slotsChanged ? { slots: entry.slots ?? {} } : {}),
 						...(i18nChanged
 							? { i18n: (entry.i18n as any) ?? null }
+							: {}),
+						...(pointsChanged
+							? {
+									scriptPoints:
+										(entry.scriptPoints as any) ?? null
+								}
 							: {})
 					})
 					.where(eq(schema.pipelineTypeRegistry.id, row.id))
@@ -279,8 +327,23 @@ export async function readTypeRegistry(db: Db): Promise<RegistryEntry[]> {
 		slots: r.slots ?? {},
 		effects: r.effects ?? undefined,
 		optional: r.optional || undefined,
+		// Read back so a round trip through the table is lossless. It is
+		// hashed, so a reader that dropped it would compute a different hash
+		// from the same row and every script type would look conflicted.
+		semantics: r.semantics ?? undefined,
+		// Hashed too (18 §4e) — same lossless-round-trip obligation.
+		scriptPoints: r.scriptPoints ?? undefined,
+		// Hashed too (19 §1) — same obligation again.
+		sessionShape: r.sessionShape ?? undefined,
+		i18n: r.i18n ?? undefined,
 		causesEvent: r.causesEvent ?? undefined,
-		public: r.isPublic,
+		// ⚠ `|| undefined`, matching `optional` two lines up, and for a reason
+		// the round-trip test found rather than reasoned about: the column is
+		// `NOT NULL DEFAULT false`, so a type that never declared `public`
+		// comes back as `false` where the projection had `undefined`.
+		// `JSON.stringify` keeps `false` and drops `undefined`, so the same row
+		// hashed differently depending on which direction it was travelling.
+		public: r.isPublic || undefined,
 		owner: r.ownerPluginId ? String(r.ownerPluginId) : undefined,
 		release: r.release ?? undefined
 	}))

@@ -32,12 +32,15 @@ import { eq } from "drizzle-orm"
 import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
-import { SHIPPED_VARIABLE_TEMPLATES, seedKeyFor } from "$lib/server/pipelines/entities/variableLayouts"
+import {
+	SHIPPED_VARIABLE_TEMPLATES,
+	seedKeyFor
+} from "$lib/server/pipelines/entities/variableLayouts"
 
 let db: TestDb
 let dataDir: string
 let userId: number
-let chatId: number
+let sessionId: number
 let characterId: number
 
 vi.mock("$lib/server/db", async () => {
@@ -62,7 +65,9 @@ beforeAll(async () => {
 	const dbModule = await import("$lib/server/db")
 	db = dbModule.db as unknown as TestDb
 	await (await import("$lib/server/db/defaults")).sync()
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(db as any)
 
 	const [user] = await db
@@ -105,21 +110,26 @@ beforeAll(async () => {
 		content: "Riders who patrol the ash wastes."
 	})
 
-	const [chat] = await db
-		.insert(schema.chats)
+	const [session] = await db
+		.insert(schema.sessions)
 		.values({ userId, isGroup: false, lorebookId: lorebook.id })
 		.returning()
-	chatId = chat.id
+	sessionId = session.id
 
 	await db
-		.insert(schema.chatCharacters)
-		.values({ chatId, characterId, isActive: true, visibility: "visible" })
+		.insert(schema.sessionCharacters)
+		.values({
+			sessionId,
+			characterId,
+			isActive: true,
+			visibility: "visible"
+		})
 	await db
-		.insert(schema.chatPersonas)
-		.values({ chatId, personaId: persona.id })
-	await db.insert(schema.chatMessages).values([
+		.insert(schema.sessionPersonas)
+		.values({ sessionId, personaId: persona.id })
+	await db.insert(schema.sessionMessages).values([
 		{
-			chatId,
+			sessionId,
 			role: "user",
 			content: "Have you seen the ashguard?",
 			personaId: persona.id
@@ -153,10 +163,12 @@ describe("what boot writes matches what the code says", () => {
 describe("the shipped spec renders what the floor renders", () => {
 	/** The production path: config layer, context-template row, layout rows. */
 	const productionPrompt = async () => {
-		const { runTurn } = await import("$lib/server/pipelines/runtime/runTurn")
+		const { runTurn } = await import(
+			"$lib/server/pipelines/runtime/runTurn"
+		)
 		const receipt: any = await runTurn({
 			db: db as any,
-			chatId,
+			sessionId,
 			userId,
 			currentCharacterId: characterId,
 			text: "Have you seen the ashguard?",
@@ -179,11 +191,12 @@ describe("the shipped spec renders what the floor renders", () => {
 		// The precondition for the comparison below meaning anything. If the
 		// config layer resolved nothing, both sides would render the floor and
 		// agree for the reason this whole file exists to rule out.
-		const { buildWorld } = await import("$lib/server/pipelines/config/world")
+		const { buildWorld } = await import(
+			"$lib/server/pipelines/config/world"
+		)
 		const { resolveConfig } = await import("@serene-pub/sdk")
 		const world = await buildWorld(db as any, {
-			userId,
-			chatId,
+			sessionId,
 			specId: RESPOND_SPEC_ID
 		})
 		const layouts = (resolveConfig(world, ["context"]).context?.variables ??
@@ -273,7 +286,9 @@ describe("core's rows are brought back in line on boot", () => {
 		// The rule that makes the refresh safe: a user's row carries no seed
 		// key, so it can never be mistaken for core's. Overwriting somebody's
 		// prose layout on upgrade would be far worse than the drift.
-		const { createVariableTemplate } = await import("$lib/server/pipelines/entities/variableTemplates")
+		const { createVariableTemplate } = await import(
+			"$lib/server/pipelines/entities/variableTemplates"
+		)
 		const mine = await createVariableTemplate(db as any, {
 			variableId: "core:var/characters@1",
 			name: "Mine, untouched",
@@ -306,7 +321,9 @@ describe("core's rows are brought back in line on boot", () => {
 
 	it("refreshes core's context template too", async () => {
 		const { CONTEXT_TEMPLATE_SEED_KEY, SHIPPED_CONTEXT_TEMPLATE } =
-			await import("$lib/server/pipelines/entities/contextTemplateDefaults")
+			await import(
+				"$lib/server/pipelines/entities/contextTemplateDefaults"
+			)
 		await db
 			.update(schema.pipelineContextTemplates)
 			.set({ source: "STALE TEMPLATE" })
@@ -317,7 +334,9 @@ describe("core's rows are brought back in line on boot", () => {
 				)
 			)
 
-		const { seedContextTemplates } = await import("$lib/server/pipelines/boot/seedContextTemplates")
+		const { seedContextTemplates } = await import(
+			"$lib/server/pipelines/boot/seedContextTemplates"
+		)
 		const res = await seedContextTemplates(db as any)
 		expect(res.refreshed).toContain(CONTEXT_TEMPLATE_SEED_KEY)
 

@@ -18,7 +18,7 @@
  * semantics that silently erased every unbound background/NPC binding
  * (characterId NULL can never match), wiping scene casts on each re-process.
  * The cases below now use binding ids, which is what scenes:process,
- * chats:summarize and the graph build all actually emit; the guarantee under
+ * sessions:summarize and the graph build all actually emit; the guarantee under
  * test — "an id not belonging to this lorebook is dropped" — is unchanged.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
@@ -39,7 +39,10 @@ vi.mock("$lib/server/db", async () => {
 
 beforeAll(async () => {
 	dataDir = await fs.mkdtemp(
-		path.join(os.tmpdir(), "serene-pub-scenes-participant-validation-int-test-")
+		path.join(
+			os.tmpdir(),
+			"serene-pub-scenes-participant-validation-int-test-"
+		)
 	)
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 

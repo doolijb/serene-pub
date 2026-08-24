@@ -78,7 +78,7 @@ describe("what it leaves alone", () => {
 			"samplingConfigs:setUserActive",
 			"connections:create",
 			"characters:update",
-			"chats:delete"
+			"sessions:delete"
 		])
 			expect(archivedWrite(e), e).toBeNull()
 	})

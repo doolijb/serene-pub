@@ -247,10 +247,7 @@
 			)
 			socket.off("users:current:hasPassphrase", handleHasPassphrase)
 			socket.off("users:current:setPassphrase", handleSetPassphrase)
-			socket.off(
-				"cardSources:charaVault:status",
-				handleCharaVaultStatus
-			)
+			socket.off("cardSources:charaVault:status", handleCharaVaultStatus)
 			socket.off(
 				"cardSources:charaVault:connect",
 				handleCharaVaultConnect
@@ -302,8 +299,8 @@
 		<label for="a11y-sys-ollama-enabled">Enable Ollama Manager</label>
 	</div>
 	<p class="a11y-hint">
-		Base URL is only configured from the Ollama Manager panel
-		(Connections), not here.
+		Base URL is only configured from the Ollama Manager panel (Connections),
+		not here.
 	</p>
 
 	<h2>KoboldCPP Manager</h2>
@@ -334,8 +331,8 @@
 
 	<h2>Summarization</h2>
 	<p class="a11y-hint">
-		Lets you select a range of chat messages and generate a Scene Summary
-		from them — a manual, per-chat action.
+		Lets you select a range of session messages and generate a Scene Summary
+		from them — a manual, per-session action.
 	</p>
 	<div class="a11y-checkbox-field">
 		<input

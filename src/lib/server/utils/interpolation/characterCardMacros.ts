@@ -79,7 +79,7 @@ export function registerCardMacroHelpers(handlebars: typeof Handlebars) {
 	)
 
 	// {{// ...}} and {{comment: ...}} both render as empty — this app has no
-	// inline chat-comment display to distinguish them for.
+	// inline session-comment display to distinguish them for.
 	handlebars.registerHelper("cardHidden", () => "")
 	handlebars.registerHelper("cardComment", () => "")
 	// Spec: hidden_key content SHOULD remain usable for lorebook keyword

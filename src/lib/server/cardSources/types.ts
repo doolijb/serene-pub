@@ -72,7 +72,10 @@ export interface CardSource {
 }
 
 export class CardSourceUnavailableError extends Error {
-	constructor(message = "Card source is unreachable", options?: ErrorOptions) {
+	constructor(
+		message = "Card source is unreachable",
+		options?: ErrorOptions
+	) {
 		super(message, options)
 		this.name = "CardSourceUnavailableError"
 	}

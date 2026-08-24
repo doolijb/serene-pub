@@ -19,14 +19,14 @@ export interface FolderPickResult {
 	files: PickedFile[]
 	/** Files scan needs to read (characters, settings.json, groups, worlds). */
 	scanFiles: PickedFile[]
-	/** Chat/group-chat history — only uploaded for what the user selects to import. */
+	/** Session/group-session history — only uploaded for what the user selects to import. */
 	deferredFiles: PickedFile[]
 }
 
-function isChatHistoryPath(relativePath: string): boolean {
+function isSessionHistoryPath(relativePath: string): boolean {
 	return (
-		relativePath.startsWith("chats/") ||
-		relativePath.startsWith("group chats/")
+		relativePath.startsWith("sessions/") ||
+		relativePath.startsWith("group sessions/")
 	)
 }
 
@@ -57,8 +57,8 @@ export function resolvePickedFolder(
 
 	return {
 		files,
-		scanFiles: files.filter((f) => !isChatHistoryPath(f.relativePath)),
-		deferredFiles: files.filter((f) => isChatHistoryPath(f.relativePath))
+		scanFiles: files.filter((f) => !isSessionHistoryPath(f.relativePath)),
+		deferredFiles: files.filter((f) => isSessionHistoryPath(f.relativePath))
 	}
 }
 

@@ -7,7 +7,7 @@
 	import { z } from "zod"
 	import CharacterListItem from "../listItems/CharacterListItem.svelte"
 	import PersonaListItem from "../listItems/PersonaListItem.svelte"
-	import ChatListItem from "../listItems/ChatListItem.svelte"
+	import SessionListItem from "../listItems/SessionListItem.svelte"
 	import LorebookListItem from "../listItems/LorebookListItem.svelte"
 	import EmptyState from "../EmptyState.svelte"
 	import PanelNavHeader from "../panels/PanelNavHeader.svelte"
@@ -43,10 +43,12 @@
 	let relatedCharacters: Partial<SelectCharacter>[] = $state([])
 	let relatedPersonas: Partial<SelectPersona>[] = $state([])
 	let relatedLorebooks: SelectLorebook[] = $state([])
-	// tags:getRelatedData never actually populates chats server-side today
+	// tags:getRelatedData never actually populates sessions server-side today
 	// (see registerTagHandlers), so this stays empty at runtime — typed to
-	// match ChatListItem's expected shape regardless.
-	let relatedChats: Sockets.Chats.List.Response["chatList"] = $state([])
+	// match SessionListItem's expected shape regardless.
+	let relatedSessions: Sockets.Sessions.List.Response["sessionList"] = $state(
+		[]
+	)
 
 	// Zod validation schema
 	const tagSchema = z.object({
@@ -326,8 +328,8 @@
 	}
 
 	function handleCharacterClick(character: Partial<SelectCharacter>) {
-		panelsCtx.digest.chatCharacterId = character.id
-		panelsCtx.openPanel({ key: "chats", toggle: false })
+		panelsCtx.digest.sessionCharacterId = character.id
+		panelsCtx.openPanel({ key: "sessions", toggle: false })
 	}
 
 	function handleCharacterEditClick(character: Partial<SelectCharacter>) {
@@ -336,8 +338,8 @@
 	}
 
 	function handlePersonaClick(persona: Partial<SelectPersona>) {
-		panelsCtx.digest.chatPersonaId = persona.id
-		panelsCtx.openPanel({ key: "chats", toggle: false })
+		panelsCtx.digest.sessionPersonaId = persona.id
+		panelsCtx.openPanel({ key: "sessions", toggle: false })
 	}
 
 	function handlePersonaEditClick(persona: Partial<SelectPersona>) {
@@ -350,16 +352,18 @@
 		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
 	}
 
-	function handleChatClick(chat: Sockets.Chats.List.Response["chatList"][0]) {
-		goto(`/chats/${chat.id}`)
+	function handleSessionClick(
+		session: Sockets.Sessions.List.Response["sessionList"][0]
+	) {
+		goto(`/sessions/${session.id}`)
 		panelsCtx.fullscreenPanel = null
 	}
 
-	function handleChatEditClick(
-		chat: Sockets.Chats.List.Response["chatList"][0]
+	function handleSessionEditClick(
+		session: Sockets.Sessions.List.Response["sessionList"][0]
 	) {
-		panelsCtx.digest.chatId = chat.id
-		panelsCtx.openPanel({ key: "chats", toggle: false })
+		panelsCtx.digest.sessionId = session.id
+		panelsCtx.openPanel({ key: "sessions", toggle: false })
 	}
 
 	onMount(() => {
@@ -400,7 +404,7 @@
 			relatedCharacters = msg.tagData.characters || []
 			relatedPersonas = msg.tagData.personas || []
 			relatedLorebooks = msg.tagData.lorebooks || []
-			relatedChats = msg.tagData.chats || []
+			relatedSessions = msg.tagData.sessions || []
 		})
 
 		socket.emit("tags:list", {})
@@ -485,7 +489,7 @@
 								onEdit={() =>
 									handleCharacterEditClick(character)}
 								showControls={true}
-								contentTitle="Go to character chats"
+								contentTitle="Go to character sessions"
 							/>
 						{/each}
 					</div>
@@ -507,7 +511,7 @@
 								onclick={handlePersonaClick}
 								onEdit={() => handlePersonaEditClick(persona)}
 								showControls={true}
-								contentTitle="Go to persona chats"
+								contentTitle="Go to persona sessions"
 							/>
 						{/each}
 					</div>
@@ -535,24 +539,24 @@
 				</div>
 			{/if}
 
-			{#if relatedChats.length > 0}
+			{#if relatedSessions.length > 0}
 				<div class="mb-6">
 					<h3
 						class="mb-3 flex items-center gap-2 text-lg font-semibold"
 					>
 						<Icons.MessageSquare size={18} />
-						Chats ({relatedChats.length})
+						Sessions ({relatedSessions.length})
 					</h3>
 					<div class="flex flex-col gap-2">
-						{#each relatedChats as chat}
-							<ChatListItem
-								{chat}
-								onclick={handleChatClick}
+						{#each relatedSessions as session}
+							<SessionListItem
+								{session}
+								onclick={handleSessionClick}
 								onEdit={() => {
-									handleChatEditClick(chat)
+									handleSessionEditClick(session)
 								}}
 								showControls={true}
-								contentTitle="Go to chat"
+								contentTitle="Go to session"
 							/>
 						{/each}
 					</div>

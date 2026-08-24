@@ -4,7 +4,7 @@ Document View is a second, fully separate interface for Serene Pub — high cont
 
 ## Overview
 
-Document View lives at `/document-view` and mirrors the standard app's main areas — Home, Chats, Characters, Personas, Connections, and so on — as their own dedicated pages, each independently reachable and screen-reader-friendly on its own. It deliberately doesn't cover every feature of the standard site (see [What's Different From the Standard Site](#whats-different-from-the-standard-site) below); it covers the everyday path of chatting, managing characters and personas, and the admin configuration needed to get there.
+Document View lives at `/document-view` and mirrors the standard app's main areas — Home, Sessions, Characters, Personas, Connections, and so on — as their own dedicated pages, each independently reachable and screen-reader-friendly on its own. It deliberately doesn't cover every feature of the standard site (see [What's Different From the Standard Site](#whats-different-from-the-standard-site) below); it covers the everyday path of sessionting, managing characters and personas, and the admin configuration needed to get there.
 
 Design commitments that hold across every page:
 
@@ -36,25 +36,25 @@ An admin can also make Document View the default for anyone who hasn't visited y
 Every page shares the same header and navigation:
 
 - **Header** — the "Serene Pub — Document View (Accessible)" brand link (back to Home), a dark/light mode toggle, an **A−** / **A+** text-size stepper with a live percentage readout between them, and a **Browse Standard Site** button.
-- **Main navigation** — a plain list of links: Home, Chats, Characters, Personas, Documentation, Settings, Help, and About are always shown. Connections, System Settings, and (once the relevant manager is turned on) Ollama Manager and KoboldCPP Manager only appear for admins; Users only appears for admins once accounts are enabled. This mirrors the same gating the standard app's own sidebars use.
+- **Main navigation** — a plain list of links: Home, Sessions, Characters, Personas, Documentation, Settings, Help, and About are always shown. Connections, System Settings, and (once the relevant manager is turned on) Ollama Manager and KoboldCPP Manager only appear for admins; Users only appears for admins once accounts are enabled. This mirrors the same gating the standard app's own sidebars use.
 
 ## Pages
 
 ### Home
 
-Shows the same setup wizard as the standard site's home page while anything required is still missing (connection, character, persona, first chat — see [Getting Started](./getting-started.md)), then switches to a simple dashboard of your recent chats and quick links once setup is complete.
+Shows the same setup wizard as the standard site's home page while anything required is still missing (connection, character, persona, first session — see [Getting Started](./getting-started.md)), then switches to a simple dashboard of your recent sessions and quick links once setup is complete.
 
-### Chats
+### Sessions
 
-The chat list, a new-chat form, and a chat view/edit pair. A few things work a little differently here than in the standard chat window, to suit a page-based, screen-reader-first interaction model:
+The session list, a new-session form, and a session view/edit pair. A few things work a little differently here than in the standard session window, to suit a page-based, screen-reader-first interaction model:
 
 - Every message from a character or persona has a **View `<name>`** link to a read-only detail page (their description, personality, scenario, or first message); if it belongs to you, that page also has an **Edit** link.
-- The **last** message in a chat, if it's from a character, gets **Swipe Left (Previous Response)** / **Swipe Right (Next Response)** and **Regenerate** buttons, plus a "Response X of Y" indicator.
+- The **last** message in a session, if it's from a character, gets **Swipe Left (Previous Response)** / **Swipe Right (Next Response)** and **Regenerate** buttons, plus a "Response X of Y" indicator.
 - Hidden ("ghosted") messages — excluded from what the AI sees but still visible in the transcript — show a note explaining that, and any message you own has a **Hide from AI** / **Unhide** toggle.
-- Beyond the standard **Get Next Response** button (which asks the server to work out whose turn it is), a **Get a Response From a Specific Character** control lets you force a particular character to reply right now — useful in group chats where the automatic turn order doesn't pick who you meant, or after a full round has already completed.
-- "Skip to latest message" and "Skip to message box" links sit right below the chat title, so a screen-reader or keyboard user can jump straight past the message history instead of tabbing through it.
+- Beyond the standard **Get Next Response** button (which asks the server to work out whose turn it is), a **Get a Response From a Specific Character** control lets you force a particular character to reply right now — useful in group sessions where the automatic turn order doesn't pick who you meant, or after a full round has already completed.
+- "Skip to latest message" and "Skip to message box" links sit right below the session title, so a screen-reader or keyboard user can jump straight past the message history instead of tabbing through it.
 
-The edit page covers the chat's name, characters, personas, guests, group reply strategy, scenario, and tags. It does **not** cover attaching a lorebook, per-character visibility/disable toggles, or per-chat AI-override settings (sampling/context/prompt configs) — chats created or edited here use whatever the system defaults are. Use the standard site for those. See [Chats](./chats.md) for the full picture of what a chat can do.
+The edit page covers the session's name, characters, personas, guests, group reply strategy, scenario, and tags. It does **not** cover attaching a lorebook, per-character visibility/disable toggles, or per-session AI-override settings (sampling/context/prompt configs) — sessions created or edited here use whatever the system defaults are. Use the standard site for those. See [Sessions](./sessions.md) for the full picture of what a session can do.
 
 ### Characters and Personas
 
@@ -90,17 +90,17 @@ Help has the full keyboard shortcut reference and a complete sitemap of every pa
 
 Two different actions, both in the header or the Settings page:
 
-- **Browse Standard Site** — temporary, for this browser tab only. It takes you to the standard site's equivalent page (the same open chat, for example) without forgetting your Document View preference — reloading or clicking around the standard site keeps you there, since the whole point is to let you actually use it for a while, but a fresh tab (or explicitly switching back) returns you to Document View. Pressing Ctrl+Shift+Y does the exact same thing from anywhere.
+- **Browse Standard Site** — temporary, for this browser tab only. It takes you to the standard site's equivalent page (the same open session, for example) without forgetting your Document View preference — reloading or clicking around the standard site keeps you there, since the whole point is to let you actually use it for a while, but a fresh tab (or explicitly switching back) returns you to Document View. Pressing Ctrl+Shift+Y does the exact same thing from anywhere.
 - **Turn Off Document View** (Settings page only) — a deliberate, permanent opt-out that clears your stored preference. You can always turn it back on again with any of the entry points above.
 
-Switching between interfaces tries to land you on the equivalent page rather than always bouncing to home — an open chat maps to the same chat, for instance — falling back to each interface's home page when there's no direct equivalent (most sidebar-only standard-site panels, and most admin manager/settings pages, don't have a one-to-one Document View page to map to and vice versa).
+Switching between interfaces tries to land you on the equivalent page rather than always bouncing to home — an open session maps to the same session, for instance — falling back to each interface's home page when there's no direct equivalent (most sidebar-only standard-site panels, and most admin manager/settings pages, don't have a one-to-one Document View page to map to and vice versa).
 
 ## What's Different From the Standard Site
 
 Document View intentionally covers a smaller surface than the full app, favoring a simple, reliable, page-per-feature model over one-to-one parity. Not available yet, all reachable from the standard site instead:
 
 - Lorebooks (World/Character/History/Graph tabs), Tags, Prompt Configs, Sampling Configs, and Context Configs have no Document View pages at all.
-- Chat editing excludes lorebook attachment, per-character visibility/disable, and per-chat AI overrides.
+- Session editing excludes lorebook attachment, per-character visibility/disable, and per-session AI overrides.
 - Character and persona forms are simplified — no avatar/gallery management or advanced fields.
 - Embeddings/RAG setup (choosing and downloading a model).
 - Custom theme creation/editing, background images, and CharaVault's browsing UI (though connecting/disconnecting CharaVault itself works from System Settings).

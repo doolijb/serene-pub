@@ -10,7 +10,7 @@
 import { describe, it, expect } from "vitest"
 import { resolveContextInput } from "$lib/server/pipelines/prompt/promptFields"
 import { buildTemplateContext } from "$lib/server/pipelines/prompt/templateContext"
-import { ChatCharacterVisibility as V } from "$lib/shared/constants/ChatCharacterVisibility"
+import { SessionCharacterVisibility as V } from "$lib/shared/constants/SessionCharacterVisibility"
 
 const cc = ({ character, ...over }: any = {}) => ({
 	isActive: true,
@@ -30,8 +30,8 @@ const cp = (name = "Bob") => ({
 })
 
 const base = () => ({
-	chatCharacters: [cc()],
-	chatPersonas: [cp()],
+	sessionCharacters: [cc()],
+	sessionPersonas: [cp()],
 	promptConfig: { systemPrompt: "Be brief." },
 	currentCharacterId: 1
 })
@@ -43,7 +43,7 @@ describe("the two visibility filters", () => {
 		// either drop a card or add a name.
 		const r = resolveContextInput({
 			...base(),
-			chatCharacters: [
+			sessionCharacters: [
 				cc(),
 				cc({
 					isActive: false,
@@ -58,7 +58,7 @@ describe("the two visibility filters", () => {
 	it("shows the speaker's card even when they are hidden, without naming them", () => {
 		const r = resolveContextInput({
 			...base(),
-			chatCharacters: [cc({ visibility: V.HIDDEN })]
+			sessionCharacters: [cc({ visibility: V.HIDDEN })]
 		})
 		expect(r.characters.map((c) => c.name)).toEqual(["Alice"])
 		expect(r.characterNames).toEqual([])
@@ -67,7 +67,7 @@ describe("the two visibility filters", () => {
 	it("drops a hidden character who is not the speaker", () => {
 		const r = resolveContextInput({
 			...base(),
-			chatCharacters: [
+			sessionCharacters: [
 				cc(),
 				cc({
 					visibility: V.HIDDEN,
@@ -82,7 +82,7 @@ describe("the two visibility filters", () => {
 		const r = resolveContextInput({
 			...base(),
 			currentCharacterId: 9,
-			chatCharacters: [cc({ visibility: V.MINIMAL })]
+			sessionCharacters: [cc({ visibility: V.MINIMAL })]
 		})
 		expect(r.characters[0].description).toBe("A knight.")
 		expect("personality" in r.characters[0]).toBe(false)
@@ -91,7 +91,7 @@ describe("the two visibility filters", () => {
 	it("the speaker is always shown in full, whatever their configured visibility", () => {
 		const r = resolveContextInput({
 			...base(),
-			chatCharacters: [cc({ visibility: V.MINIMAL })]
+			sessionCharacters: [cc({ visibility: V.MINIMAL })]
 		})
 		expect(r.characters[0].personality).toBe("Steady.")
 	})
@@ -101,7 +101,7 @@ describe("the two visibility filters", () => {
 		// is a line the model reads.
 		const r = resolveContextInput({
 			...base(),
-			chatCharacters: [
+			sessionCharacters: [
 				cc({ character: { personality: null, nickname: null } })
 			]
 		})
@@ -110,30 +110,30 @@ describe("the two visibility filters", () => {
 })
 
 describe("the scenario", () => {
-	it("prefers the chat's own", () => {
+	it("prefers the session's own", () => {
 		const r = resolveContextInput({
 			...base(),
-			chatScenario: "At the gate.",
-			chatCharacters: [cc({ character: { scenario: "In the keep." } })]
+			sessionScenario: "At the gate.",
+			sessionCharacters: [cc({ character: { scenario: "In the keep." } })]
 		})
 		expect(r.scenario).toBe("At the gate.")
 	})
 
-	it("falls back to the speaking character's in a one-to-one chat", () => {
+	it("falls back to the speaking character's in a one-to-one session", () => {
 		const r = resolveContextInput({
 			...base(),
-			chatCharacters: [cc({ character: { scenario: "In the keep." } })]
+			sessionCharacters: [cc({ character: { scenario: "In the keep." } })]
 		})
 		expect(r.scenario).toBe("In the keep.")
 	})
 
-	it("renders none at all in a group chat with no scenario of its own", () => {
+	it("renders none at all in a group session with no scenario of its own", () => {
 		// Not a fallthrough: one member's scenario describes a situation the
 		// rest of the cast is not in.
 		const r = resolveContextInput({
 			...base(),
 			isGroup: true,
-			chatCharacters: [cc({ character: { scenario: "In the keep." } })]
+			sessionCharacters: [cc({ character: { scenario: "In the keep." } })]
 		})
 		expect(r.scenario).toBe("")
 	})
@@ -147,7 +147,7 @@ describe("the prompt texts", () => {
 				systemPrompt: "Be brief.",
 				postHistoryInstructions: "Config text."
 			},
-			chatCharacters: [
+			sessionCharacters: [
 				cc({ character: { postHistoryInstructions: "Alice's text." } })
 			]
 		})
@@ -175,7 +175,7 @@ describe("the prompt texts", () => {
 		const r = resolveContextInput({
 			...base(),
 			currentCharacterId: null,
-			chatCharacters: [
+			sessionCharacters: [
 				cc(),
 				cc({
 					character: { id: 2, name: "Cara", description: "A scout." }
@@ -188,7 +188,7 @@ describe("the prompt texts", () => {
 	it("prefers a nickname for the speaker's name", () => {
 		const r = resolveContextInput({
 			...base(),
-			chatCharacters: [cc({ character: { nickname: "The Knight" } })]
+			sessionCharacters: [cc({ character: { nickname: "The Knight" } })]
 		})
 		expect(r.charName).toBe("The Knight")
 	})
@@ -197,7 +197,7 @@ describe("the prompt texts", () => {
 describe("the example dialogue", () => {
 	const withDialogues = () => ({
 		...base(),
-		chatCharacters: [
+		sessionCharacters: [
 			cc({ character: { exampleDialogues: ["one", "two", "three"] } })
 		]
 	})
@@ -242,7 +242,7 @@ describe("end to end", () => {
 		// the check that they still meet.
 		const resolved = resolveContextInput({
 			...base(),
-			chatScenario: "{{char}} meets {{user}}."
+			sessionScenario: "{{char}} meets {{user}}."
 		})
 		const ctx = buildTemplateContext(resolved)
 		// Each value arrives through its shipped layout, so these assert what

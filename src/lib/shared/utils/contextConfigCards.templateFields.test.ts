@@ -74,7 +74,9 @@ describe("template field vocabulary", () => {
 		// passed with `sampleValues` returning `{}` for every declaration,
 		// which is the exact failure the comment above describes. Check the
 		// value that goes *into* the render as well as what comes out.
-		const { sampleContext } = await import("$lib/server/pipelines/prompt/preview")
+		const { sampleContext } = await import(
+			"$lib/server/pipelines/prompt/preview"
+		)
 		const { allVariables, sampleValues } = await import("@serene-pub/sdk")
 		const sample = sampleContext() as Record<string, unknown>
 
@@ -161,9 +163,9 @@ describe("path lint", () => {
 		lintVariableTemplate(src, scope).map((i) => i.message)
 
 	test("a correct path inside an each is not flagged", () => {
-		expect(
-			messages("{{#each characters}}{{this.name}}{{/each}}")
-		).toEqual([])
+		expect(messages("{{#each characters}}{{this.name}}{{/each}}")).toEqual(
+			[]
+		)
 	})
 
 	// The case the whole slice exists for. Before this it rendered empty and
@@ -176,9 +178,7 @@ describe("path lint", () => {
 
 	test("a bare name inside an each resolves against the element", () => {
 		expect(messages("{{#each characters}}{{name}}{{/each}}")).toEqual([])
-		expect(
-			messages("{{#each characters}}{{nmae}}{{/each}}").length
-		).toBe(1)
+		expect(messages("{{#each characters}}{{nmae}}{{/each}}").length).toBe(1)
 	})
 
 	test("block params are bound to the element type", () => {
@@ -205,9 +205,7 @@ describe("path lint", () => {
 	})
 
 	test("with narrows the context too", () => {
-		expect(
-			messages("{{#with characters}}{{length}}{{/with}}")
-		).toEqual([])
+		expect(messages("{{#with characters}}{{length}}{{/with}}")).toEqual([])
 	})
 
 	test("../ walks back out to the enclosing context", () => {
@@ -220,7 +218,9 @@ describe("path lint", () => {
 	// in the outer context rather than the element one.
 	test("an each's else branch is linted in the outer context", () => {
 		expect(
-			messages("{{#each characters}}{{name}}{{else}}{{characters.length}}{{/each}}")
+			messages(
+				"{{#each characters}}{{name}}{{else}}{{characters.length}}{{/each}}"
+			)
 		).toEqual([])
 	})
 
@@ -245,11 +245,15 @@ describe("path lint", () => {
 		expect(
 			messages("{{#each characters}}{{this.nickanme}}{{/each}}")[0]
 		).toMatch(/Did you mean "nickname"\?/)
-		expect(messages("{{characterz}}")[0]).toMatch(/Did you mean "characters"\?/)
+		expect(messages("{{characterz}}")[0]).toMatch(
+			/Did you mean "characters"\?/
+		)
 	})
 
 	test("nothing near enough adds no guess", () => {
-		expect(messages("{{completelyUnrelated}}")[0]).not.toMatch(/Did you mean/)
+		expect(messages("{{completelyUnrelated}}")[0]).not.toMatch(
+			/Did you mean/
+		)
 	})
 
 	test("a subexpression is left alone rather than guessed at", () => {
@@ -281,7 +285,9 @@ describe("the shipped templates lint clean", () => {
 			const decl = getVariable(t.variableId)
 			expect(decl, `${t.variableId} is not declared`).toBeDefined()
 			expect(
-				lintVariableTemplate(t.source, decl!.scope).map((i) => i.message),
+				lintVariableTemplate(t.source, decl!.scope).map(
+					(i) => i.message
+				),
 				`${t.variableId} (${t.name})`
 			).toEqual([])
 		}
@@ -303,6 +309,6 @@ describe("the shipped templates lint clean", () => {
 		// `{{postHistory.instructions}}` compared "postHistory.instructions"
 		// against a set containing "postHistory".
 		expect(unrecognized("{{postHistory.instructions}}")).toEqual([])
-		expect(unrecognized("{{chatMessages.0.message}}")).toEqual([])
+		expect(unrecognized("{{sessionMessages.0.message}}")).toEqual([])
 	})
 })

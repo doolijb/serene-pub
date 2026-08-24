@@ -314,6 +314,35 @@ declare global {
 					id?: number | null
 				}
 			}
+			/**
+			 * The connection's stop guards (18 §4b): stop scripts riding the
+			 * endpoint, inherited by every pipeline that runs against it.
+			 * `available` is every stop script on the instance — only
+			 * `text/stop` may attach; the server refuses the rest.
+			 */
+			namespace Scripts {
+				interface Params {
+					id: number
+				}
+				interface ScriptRow {
+					id: number
+					name: string
+					enabled: boolean
+				}
+				interface Response {
+					connectionId?: number
+					attached?: ScriptRow[]
+					available?: ScriptRow[]
+					error?: string
+				}
+			}
+			namespace ScriptWrite {
+				interface Params {
+					id: number
+					scriptId: number
+				}
+				type Response = Scripts.Response
+			}
 			namespace Test {
 				interface Params {
 					connection: any // Connection data to test
@@ -530,36 +559,36 @@ declare global {
 			}
 		}
 
-		// Chats namespace
-		namespace Chats {
+		// Sessions namespace
+		namespace Sessions {
 			namespace List {
 				interface Params {
-					chatType?: string
+					sessionType?: string
 				}
 				interface Response {
-					// Matches the `with: { chatCharacters, chatPersonas, chatTags }`
-					// query in registerChatsHandlers' "chats:list" handler — the
+					// Matches the `with: { sessionCharacters, sessionPersonas, sessionTags }`
+					// query in registerSessionsHandlers' "sessions:list" handler — the
 					// character/persona rows are trimmed to a display-only column
 					// subset there (id/name/shortDescription/avatar/visibility),
 					// hence Partial<...> rather than the full Select* type.
-					chatList: (Partial<SelectChat> & {
+					sessionList: (Partial<SelectSession> & {
 						canEdit: boolean
 						isOwner: boolean
 						isGuest: boolean
-						chatCharacters?: (SelectChatCharacter & {
+						sessionCharacters?: (SelectSessionCharacter & {
 							character: Partial<SelectCharacter>
 						})[]
-						chatPersonas?: (SelectChatPersona & {
+						sessionPersonas?: (SelectSessionPersona & {
 							persona: Partial<SelectPersona>
 						})[]
-						chatTags?: { tag: SelectTag }[]
+						sessionTags?: { tag: SelectTag }[]
 					})[]
 				}
 			}
-			/** Client → server: "my persona is actively typing in this chat" ping */
+			/** Client → server: "my persona is actively typing in this session" ping */
 			namespace Typing {
 				interface Params {
-					chatId: number
+					sessionId: number
 					personaId: number
 				}
 				interface Response {
@@ -570,7 +599,7 @@ declare global {
 			namespace UserTyping {
 				interface Params {}
 				interface Response {
-					chatId: number
+					sessionId: number
 					personaId: number
 					personaName: string
 				}
@@ -583,22 +612,22 @@ declare global {
 					beforeId?: number
 				}
 				interface Response {
-					chat:
-						| (SelectChat & {
-								chatMessages: SelectChatMessage[]
-								chatCharacters: (SelectChatCharacter & {
+					session:
+						| (SelectSession & {
+								sessionMessages: SelectSessionMessage[]
+								sessionCharacters: (SelectSessionCharacter & {
 									character: SelectCharacter
 								})[]
-								chatPersonas: (SelectChatPersona & {
+								sessionPersonas: (SelectSessionPersona & {
 									persona: SelectPersona
 								})[]
-								chatTags?: { tag: { name: string } }[]
-								// chatGuests table has no `id` column (composite PK of
-								// chatId+userId — see schema.ts chatGuests); the "chats:get"
+								sessionTags?: { tag: { name: string } }[]
+								// sessionGuests table has no `id` column (composite PK of
+								// sessionId+userId — see schema.ts sessionGuests); the "sessions:get"
 								// handler queries it `with: { user: true }`, so each row is
 								// the full join row plus the full joined user.
-								chatGuests?: {
-									chatId: number
+								sessionGuests?: {
+									sessionId: number
 									userId: number
 									isPlayer: boolean
 									user: SelectUser
@@ -606,7 +635,7 @@ declare global {
 								tags?: string[]
 						  })
 						| null
-					messages?: SelectChatMessage[] | null // Legacy field
+					messages?: SelectSessionMessage[] | null // Legacy field
 					pagination?: { total: number; hasMore: boolean } | null
 					/** Echoed from request — present only on load-more responses, not initial load */
 					beforeId?: number
@@ -616,7 +645,7 @@ declare global {
 			}
 			namespace SaveDraft {
 				interface Params {
-					chatId: number
+					sessionId: number
 					content: string
 				}
 				interface Response {
@@ -625,35 +654,277 @@ declare global {
 			}
 			namespace Create {
 				interface Params {
-					// "chats:create" always derives userId from the authenticated
+					// "sessions:create" always derives userId from the authenticated
 					// socket and computes isGroup from characterIds.length itself
-					// (see chatsCreateHandler in chats.ts) — the client must not,
+					// (see sessionsCreateHandler in sessions.ts) — the client must not,
 					// and structurally can't reliably, supply either.
-					chat: Omit<InsertChat, "userId" | "isGroup">
+					session: Omit<InsertSession, "userId" | "isGroup">
 					characterIds: number[]
 					personaIds: number[]
 					characterPositions: Record<number, number>
 					tags?: string[]
 				}
 				interface Response {
-					chat: SelectChat
+					session: SelectSession
+				}
+			}
+			/**
+			 * The mode picker's data (19 §2): every session mode this build
+			 * registers, shape included so the form can gate its capability
+			 * sections before anything is created.
+			 */
+			/**
+			 * Upgrade a session's mode along its own type (19 §6, ruled): there
+			 * is no mid-session mode swap — a session keeps its mode for life, and
+			 * the mode evolves as the same bare input type at a higher
+			 * version. The target's shape is still validated; refusals are
+			 * sentences.
+			 */
+			namespace UpgradeMode {
+				interface Params {
+					sessionId: number
+					/** The target pin — same bare type, higher version. */
+					modeId: string
+				}
+				interface Response {
+					sessionId: number
+					modeId: string
+					error?: string
+				}
+			}
+			/**
+			 * The rebinding seams (19 §3, §5). Bindings select among the
+			 * eligible — never contain; clearing is reset-is-delete.
+			 */
+			namespace Bindings {
+				/** Which specs serve a function for this session's mode, and the pick. */
+				namespace Candidates {
+					interface Params {
+						sessionId: number
+						function: string
+					}
+					interface Response {
+						sessionId: number
+						function: string
+						/** Every eligible spec slug. */
+						candidates: string[]
+						/** What resolution currently lands on, scope included. */
+						resolved: string | null
+					}
+				}
+				/** Bind a function at session scope (owner) or instance scope (admin). */
+				namespace BindFunction {
+					interface Params {
+						sessionId: number
+						function: string
+						/** null clears the binding — inherit again. */
+						specSlug: string | null
+						/** Default 'session'. 'instance' requires admin. */
+						scope?: "session" | "instance"
+					}
+					interface Response {
+						sessionId: number
+						function: string
+						error?: string
+					}
+				}
+				/** The strategy dropdown for a session's next-speaker node. */
+				namespace SpeakerStrategies {
+					interface Params {
+						sessionId: number
+					}
+					interface Response {
+						sessionId: number
+						strategies: { typeId: string; name: string }[]
+						/** The session's rebound choice, or null when inheriting the pin. */
+						selected: string | null
+					}
+				}
+				namespace SetSpeakerStrategy {
+					interface Params {
+						sessionId: number
+						/** A strategy type pin, or null to inherit the spec's. */
+						typeId: string | null
+					}
+					interface Response {
+						sessionId: number
+						error?: string
+					}
+				}
+			}
+			/**
+			 * Fire a contributed function on a session (19 §4): the generic half
+			 * of the trigger surface. `respond` and `narrate` keep their
+			 * dedicated events (message lifecycle, streaming, instructions);
+			 * everything an extension contributes routes here — the function
+			 * resolves to its serving spec (§3) and the spec runs.
+			 */
+			namespace TriggerFunction {
+				interface Params {
+					sessionId: number
+					function: string
+				}
+				interface Response {
+					sessionId: number
+					function: string
+					success?: boolean
+					error?: string
+				}
+			}
+			/**
+			 * The contributed trigger set for a session's mode (19 §4): what
+			 * the session view renders beside the intrinsic composer. Presence
+			 * is data — retiring the contributing spec removes the button.
+			 */
+			namespace Triggers {
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
+					triggers: {
+						function: string
+						kind: string
+						icon?: string
+						name: string
+						specSlug: string
+					}[]
+				}
+			}
+			/**
+			 * The presets a session may run on, and the one it is on (19 §7).
+			 *
+			 * A *preset* is a pipeline configuration a person is allowed to
+			 * see and use — the presets a non-admin is offered are the enabled
+			 * ones. Admins additionally see the disabled, marked, because a
+			 * preset an admin just switched off vanishing entirely would read
+			 * as deleted.
+			 */
+			namespace PresetOptions {
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
+					/** The pipeline whose presets these are. Null when none serves. */
+					specSlug: string | null
+					selectedId: number | null
+					options: {
+						configId: number
+						name: string
+						isDefault: boolean
+						enabled: boolean
+						readOnly: boolean
+					}[]
+				}
+			}
+			/** Put this session on a preset. */
+			namespace ChoosePreset {
+				interface Params {
+					sessionId: number
+					configId: number
+				}
+				interface Response {
+					sessionId: number
+					configId?: number
+					error?: string
+				}
+			}
+			/**
+			 * The mode's functions and each one's state on this session (19 §3).
+			 *
+			 * Everything the mode was offered, not only what is in force —
+			 * the control surface has to show what can be turned *on*, which
+			 * is exactly the set a plain trigger list leaves out.
+			 */
+			namespace Functions {
+				interface Params {
+					sessionId: number
+				}
+				interface Response {
+					sessionId: number
+					/** The mode the answers are stored against. */
+					modeId: string
+					/**
+					 * Whether this viewer may switch on an action the preset
+					 * leaves out. Sent rather than inferred client-side: the
+					 * server decides the permission, and a UI that decided it
+					 * separately would be a second answer to the same question.
+					 */
+					canAddOutsidePreset?: boolean
+					functions: {
+						function: string
+						kind: string
+						icon?: string
+						name: string
+						specSlug: string
+						/** Namespace-decided: the mode owner's, or someone else's. */
+						origin: "companion" | "attachment"
+						enabledByDefault: boolean
+						enabled: boolean
+						/** A session row states this, rather than a lower layer. */
+						explicit: boolean
+						/** The session's preset includes it — the permission line. */
+						included: boolean
+						/** Which layer decided. */
+						source: "session" | "preset" | "default"
+					}[]
+					error?: string
+				}
+			}
+			/** Turn one of the mode's functions on or off for this session. */
+			namespace SetFunction {
+				interface Params {
+					sessionId: number
+					function: string
+					enabled: boolean
+				}
+				interface Response {
+					sessionId: number
+					function: string
+					enabled?: boolean
+					error?: string
+				}
+			}
+			namespace Modes {
+				interface Params {}
+				interface Response {
+					modes: {
+						modeId: string
+						name: string
+						/** The picker card's subtitle; empty when undeclared. */
+						description: string
+						// Structurally mirrors SessionShape from @serene-pub/sdk,
+						// stated inline so the shared socket contract does not
+						// couple to the SDK package.
+						shape: {
+							characters?: { min: number; max?: number }
+							personas?: { min: number; max?: number }
+							lorebook?: "optional" | "required"
+							composer?: "text" | "none"
+							voice?: "character" | "narrator"
+							/** SettingsSchema — the one field language. */
+							fields?: Record<string, any>
+							nextSpeaker?: string
+						}
+					}[]
 				}
 			}
 			namespace Update {
 				interface Params {
-					chat: UpdateChat
+					session: UpdateSession
 					characterIds?: number[]
 					personaIds?: number[]
 					characterPositions?: Record<number, number>
 					tags?: string[]
 				}
 				interface Response {
-					chat: SelectChat
+					session: SelectSession
 				}
 			}
 			namespace AddPersona {
 				interface Params {
-					chatId: number
+					sessionId: number
 					personaId: number
 				}
 				interface Response {
@@ -663,7 +934,7 @@ declare global {
 			}
 			namespace AddGuest {
 				interface Params {
-					chatId: number
+					sessionId: number
 					guestUserId: number
 				}
 				interface Response {
@@ -673,7 +944,7 @@ declare global {
 			}
 			namespace RemoveGuest {
 				interface Params {
-					chatId: number
+					sessionId: number
 					guestUserId: number
 				}
 				interface Response {
@@ -702,35 +973,35 @@ declare global {
 			}
 			namespace GetResponseOrder {
 				interface Params {
-					chatId: number
+					sessionId: number
 				}
 				interface Response {
-					chatId: number
+					sessionId: number
 					characterId?: number | null // Legacy field for backward compatibility
 					nextCharacterId: number | null // Actually used field
 					characterIds: number[] // Array of character IDs in order
 				}
 			}
-			namespace ToggleChatCharacterActive {
+			namespace ToggleSessionCharacterActive {
 				interface Params {
-					chatId: number
+					sessionId: number
 					characterId: number
 				}
 				interface Response {
-					chatId: number
+					sessionId: number
 					characterId: number
 					isActive: boolean
 					error?: string
 				}
 			}
-			namespace UpdateChatCharacterVisibility {
+			namespace UpdateSessionCharacterVisibility {
 				interface Params {
-					chatId: number
+					sessionId: number
 					characterId: number
 					visibility: string
 				}
 				interface Response {
-					chatId: number
+					sessionId: number
 					characterId: number
 					visibility: string
 					error?: string
@@ -738,7 +1009,7 @@ declare global {
 			}
 			namespace PromptTokenCount {
 				interface Params {
-					chatId: number
+					sessionId: number
 					content?: string
 					role?: string
 					personaId?: number
@@ -747,7 +1018,7 @@ declare global {
 					prompt?: string
 					messages?: any[]
 					// promptTokenCountHandler returns just `{ error }` (no meta) on
-					// every early-exit path (access denied, chat not found, no
+					// every early-exit path (access denied, session not found, no
 					// connection/sampling configured, etc.) and on exception.
 					error?: string
 					meta?: {
@@ -763,7 +1034,7 @@ declare global {
 							total: number
 							limit: number
 						}
-						chatMessages: {
+						sessionMessages: {
 							included: number
 							total: number
 							includedIds: number[]
@@ -894,7 +1165,7 @@ declare global {
 			}
 			namespace TriggerGenerateMessage {
 				interface Params {
-					chatId: number
+					sessionId: number
 					characterId?: number
 					once?: boolean
 					triggered?: boolean
@@ -906,7 +1177,7 @@ declare global {
 			}
 			namespace TriggerNarratorResponse {
 				interface Params {
-					chatId: number
+					sessionId: number
 					/** Optional extra focus text for this specific generation. */
 					instructions?: string
 				}
@@ -917,55 +1188,55 @@ declare global {
 			}
 			namespace GetNarratorName {
 				interface Params {
-					chatId: number
+					sessionId: number
 				}
 				interface Response {
-					chatId: number
+					sessionId: number
 					narratorName: string
 				}
 			}
 			namespace Branch {
 				interface Params {
-					chatId: number
+					sessionId: number
 					messageId: number
 					title: string
 				}
 				interface Response {
-					chat?: SelectChat
+					session?: SelectSession
 					error?: string
 				}
 			}
 			/**
-			 * Re-points a removed (soft-deleted) chat participant's message
+			 * Re-points a removed (soft-deleted) session participant's message
 			 * history to a new character/persona, and makes the new one an
-			 * active participant. See chatsReassignRemovedParticipantHandler
-			 * in chats.ts.
+			 * active participant. See sessionsReassignRemovedParticipantHandler
+			 * in sessions.ts.
 			 */
 			namespace ReassignRemovedParticipant {
 				interface Params {
-					chatId: number
+					sessionId: number
 					type: "character" | "persona"
 					oldId: number
 					newId: number
 				}
 				interface Response {
 					success?: boolean
-					chat?: SelectChat
+					session?: SelectSession
 					error?: string
 				}
 			}
 			namespace SetLorebook {
 				interface Params {
-					chatId: number
+					sessionId: number
 					lorebookId: number | null
 				}
 				interface Response {
-					chat: SelectChat
+					session: SelectSession
 				}
 			}
 			namespace Summarize {
 				interface Params {
-					chatId: number
+					sessionId: number
 					messageIds: number[] | "all"
 					loreType: "world" | "history" | "character" | "scene"
 					topic?: string
@@ -1018,35 +1289,35 @@ declare global {
 			}
 		}
 
-		// Chat Messages namespace
-		namespace ChatMessages {
+		// Session Messages namespace
+		namespace SessionMessages {
 			namespace Get {
 				interface Params {
-					chatId: number
+					sessionId: number
 				}
 				interface Response {
-					chatMessages: SelectChatMessage[]
+					sessionMessages: SelectSessionMessage[]
 				}
 			}
 			namespace SendPersonaMessage {
 				interface Params {
-					chatId: number
+					sessionId: number
 					content: string
 					personaId?: number | null
 				}
 				interface Response {
-					chatMessage?: SelectChatMessage
+					sessionMessage?: SelectSessionMessage
 					error?: string
 				}
 			}
 			namespace SendCharacterMessage {
 				interface Params {
-					chatId: number
+					sessionId: number
 					characterId?: number
 					once?: boolean
 				}
 				interface Response {
-					chatMessage?: SelectChatMessage
+					sessionMessage?: SelectSessionMessage
 					error?: string
 				}
 			}
@@ -1057,7 +1328,7 @@ declare global {
 					isHidden?: boolean
 				}
 				interface Response {
-					chatMessage?: SelectChatMessage
+					sessionMessage?: SelectSessionMessage
 					error?: string
 				}
 			}
@@ -1085,7 +1356,7 @@ declare global {
 					id: number
 				}
 				interface Response {
-					chatMessage?: SelectChatMessage
+					sessionMessage?: SelectSessionMessage
 					error?: string
 				}
 			}
@@ -1094,7 +1365,7 @@ declare global {
 					id: number
 				}
 				interface Response {
-					chatMessage?: SelectChatMessage
+					sessionMessage?: SelectSessionMessage
 					error?: string
 				}
 			}
@@ -1103,7 +1374,7 @@ declare global {
 					id: number
 				}
 				interface Response {
-					chatMessage?: SelectChatMessage
+					sessionMessage?: SelectSessionMessage
 					error?: string
 				}
 			}
@@ -1112,7 +1383,7 @@ declare global {
 					id: number
 				}
 				interface Response {
-					chatMessage?: SelectChatMessage
+					sessionMessage?: SelectSessionMessage
 					error?: string
 				}
 			}
@@ -1121,16 +1392,16 @@ declare global {
 					id: number
 				}
 				interface Response {
-					chatMessage?: SelectChatMessage
+					sessionMessage?: SelectSessionMessage
 					error?: string
 				}
 			}
 			namespace Cancel {
 				interface Params {
-					chatId: number
+					sessionId: number
 					/** The specific message the Stop button was clicked on. Optional
 					 * for backwards compatibility — omitting it falls back to
-					 * cancelling every generating message in the chat. */
+					 * cancelling every generating message in the session. */
 					id?: number
 				}
 				interface Response {
@@ -1141,7 +1412,7 @@ declare global {
 			namespace Stream {
 				interface Params {
 					enabled: boolean
-					chatId: number
+					sessionId: number
 				}
 				interface Response {
 					success?: string
@@ -1722,6 +1993,35 @@ declare global {
 					/** The pipeline it was written in, when that is not this one. */
 					origin?: string
 				}
+				/**
+				 * For a `scripts-chain` option: the resolved chain, hydrated in
+				 * order — what the id list *is*, so the panel renders names and
+				 * badges without a second fetch. A deleted row still appears,
+				 * marked `missing`; a dangle the panel hides is a chain that
+				 * quietly shrank.
+				 */
+				scripts?: Array<{
+					id: number
+					name: string
+					enabled: boolean
+					typeLabel: string
+					blastRadius: string
+					operation: string
+					missing?: boolean
+				}>
+				/**
+				 * Stop guards the run's connection carries, shown beside the
+				 * chain with provenance (18 §4c). Read-only here — managed in
+				 * the connection's own settings.
+				 */
+				connectionScripts?: {
+					connectionName: string
+					entries: Array<{
+						id: number
+						name: string
+						enabled: boolean
+					}>
+				}
 				authorDefault?: unknown
 				value: unknown
 				/**
@@ -1735,14 +2035,8 @@ declare global {
 				 * scope should be a compile error in the panel, not a word
 				 * nobody chose appearing in the UI.
 				 */
-				source: "chat" | "user" | "preset" | "instance" | "author"
+				source: "session" | "preset" | "author"
 				writable: boolean
-				/**
-				 * Where this option's edits land when it is not the viewer's
-				 * default scope — an admin's non-prompt options write at
-				 * "instance". Send it back as `scope` on set/clear.
-				 */
-				writeAt?: string
 				overriddenHere: boolean
 			}
 			/**
@@ -1776,6 +2070,14 @@ declare global {
 				name: string
 				isDefault: boolean
 				readOnly: boolean
+				/** Whether a non-admin may choose this preset. */
+				enabled: boolean
+				/**
+				 * Which of the mode's actions sessions on this preset include.
+				 * `null` states nothing (the companion rule decides); `[]`
+				 * states none.
+				 */
+				includedActions: string[] | null
 			}
 			interface Namespace {
 				slug: string
@@ -1786,7 +2088,14 @@ declare global {
 			}
 			interface NamespaceDetail extends Namespace {
 				configs: NamedConfig[]
-				/** `source` is where the selection came from: chat | user | instance | shipped. */
+				/** Every action this pipeline's mode is offered (19 §3). */
+				modeActions: {
+					function: string
+					name: string
+					specSlug: string
+					origin: "companion" | "attachment"
+				}[]
+				/** `source` is where the selection came from: session | user | instance | shipped. */
 				selectedConfig: {
 					id: number
 					name: string
@@ -1826,8 +2135,8 @@ declare global {
 			namespace Get {
 				interface Params {
 					slug: string
-					/** Set when opened from inside a chat — writes land at chat scope. */
-					chatId?: number
+					/** Set when opened from inside a session — writes land at session scope. */
+					sessionId?: number
 				}
 				interface Response {
 					pipeline?: NamespaceDetail
@@ -1839,16 +2148,14 @@ declare global {
 					slug: string
 					optionId: string
 					value: unknown
-					chatId?: number
-					/** Admins only, and only to say "for everyone on this instance". */
-					scope?: "instance"
+					sessionId?: number
 					/**
-					 * Edit this configuration itself rather than override it.
-					 *
-					 * The builder sends it; the sidebar does not. An override
-					 * lands at instance/user/chat scope and *outranks* every
-					 * configuration, so without this an edit made while one
-					 * configuration was selected followed you to all of them.
+					 * Edit this configuration itself rather than the resolved
+					 * target. The builder sends it; without it the write lands
+					 * at the session's override (when `sessionId` is set) or in the
+					 * instance's selected config (admins, globally) — the only
+					 * two destinations since the layer simplification
+					 * (2026-08-24).
 					 */
 					configId?: number
 				}
@@ -1861,8 +2168,7 @@ declare global {
 				interface Params {
 					slug: string
 					optionId: string
-					chatId?: number
-					scope?: "instance"
+					sessionId?: number
 					/** Reset this configuration's own value, not an override. */
 					configId?: number
 				}
@@ -1919,11 +2225,31 @@ declare global {
 					name: string
 					/** Copy this configuration's values instead of starting empty. */
 					fromConfigId?: number
-					chatId?: number
+					sessionId?: number
 				}
 				interface Response {
 					pipeline?: NamespaceDetail
 					configId?: number
+					error?: string
+				}
+			}
+			/**
+			 * Which actions a preset includes, and whether it may be chosen
+			 * (19 §3). Admin-only: this decides what sessions using the preset
+			 * can do, and which presets a non-admin is offered.
+			 */
+			namespace SetPresetActions {
+				interface Params {
+					slug: string
+					configId: number
+					/** Omit to leave unchanged. `null` restores the default rule. */
+					includedActions?: string[] | null
+					/** Omit to leave unchanged. */
+					enabled?: boolean
+					sessionId?: number
+				}
+				interface Response {
+					pipeline?: NamespaceDetail
 					error?: string
 				}
 			}
@@ -1932,7 +2258,7 @@ declare global {
 					slug: string
 					configId: number
 					name: string
-					chatId?: number
+					sessionId?: number
 				}
 				interface Response {
 					pipeline?: NamespaceDetail
@@ -1943,7 +2269,7 @@ declare global {
 				interface Params {
 					slug: string
 					configId: number
-					chatId?: number
+					sessionId?: number
 				}
 				interface Response {
 					pipeline?: NamespaceDetail
@@ -1954,7 +2280,7 @@ declare global {
 				interface Params {
 					slug: string
 					configId: number
-					chatId?: number
+					sessionId?: number
 					scope?: "instance"
 				}
 				interface Response {
@@ -1973,7 +2299,7 @@ declare global {
 					slug: string
 					promptId: number
 					name?: string
-					chatId?: number
+					sessionId?: number
 				}
 				interface Response {
 					promptId?: number
@@ -1987,7 +2313,7 @@ declare global {
 					promptId: number
 					name?: string
 					fields?: Record<string, string>
-					chatId?: number
+					sessionId?: number
 				}
 				interface Response {
 					pipeline?: NamespaceDetail
@@ -1998,7 +2324,7 @@ declare global {
 				interface Params {
 					slug: string
 					promptId: number
-					chatId?: number
+					sessionId?: number
 				}
 				interface Response {
 					pipeline?: NamespaceDetail
@@ -2047,7 +2373,7 @@ declare global {
 					optionId: string
 					templateId: number
 					name?: string
-					chatId?: number
+					sessionId?: number
 				}
 				interface Response {
 					templateId?: number
@@ -2062,7 +2388,7 @@ declare global {
 					templateId: number
 					name?: string
 					source?: string
-					chatId?: number
+					sessionId?: number
 				}
 				interface Response {
 					pipeline?: NamespaceDetail
@@ -2074,7 +2400,7 @@ declare global {
 					slug: string
 					optionId: string
 					templateId: number
-					chatId?: number
+					sessionId?: number
 				}
 				interface Response {
 					pipeline?: NamespaceDetail
@@ -2097,7 +2423,7 @@ declare global {
 					optionId: string
 					name?: string
 					source?: string
-					chatId?: number
+					sessionId?: number
 				}
 				interface Response {
 					templateId?: number
@@ -2111,7 +2437,7 @@ declare global {
 					optionId: string
 					templateId: number
 					name?: string
-					chatId?: number
+					sessionId?: number
 				}
 				interface Response {
 					templateId?: number
@@ -2126,7 +2452,7 @@ declare global {
 					templateId: number
 					name?: string
 					source?: string
-					chatId?: number
+					sessionId?: number
 				}
 				interface Response {
 					pipeline?: NamespaceDetail
@@ -2138,7 +2464,7 @@ declare global {
 					slug: string
 					optionId: string
 					templateId: number
-					chatId?: number
+					sessionId?: number
 				}
 				interface Response {
 					pipeline?: NamespaceDetail
@@ -2261,6 +2587,108 @@ declare global {
 					error?: string
 				}
 			}
+			/**
+			 * The scripts page (18 §4d): every registered script type, every
+			 * authored row, and what is holding each one. Grouped by type on
+			 * the client — the content segment is in the id for exactly this.
+			 */
+			namespace Scripts {
+				interface Params {}
+				interface ScriptType {
+					/** Pinned id — `core:script:text/transform@1`. */
+					typeId: string
+					content: string
+					operation: string
+					semantics: "transform" | "verdict"
+					name: string
+					description: string
+					/** The badge — what a script of this type is able to do. */
+					blastRadius: string
+					/** The variable space, from the type's declared ports. */
+					varsIn: string[]
+					varsOut: string[]
+					/**
+					 * Read-only context some hook supplies beyond the ports —
+					 * the union across every hook accepting this type. Part of
+					 * the fixed choice set for declared reads; never writable.
+					 */
+					extras: string[]
+				}
+				interface Script {
+					id: number
+					typeId: string
+					name: string
+					isImmutable: boolean
+					enabled: boolean
+					source: string
+					/** Declared variable I/O (18 §6a). In-but-not-out is read-only. */
+					varsIn: string[]
+					varsOut: string[]
+					/** Pipelines whose chains currently include it. */
+					usedBy: string[]
+				}
+				interface Response {
+					types?: ScriptType[]
+					scripts?: Script[]
+					error?: string
+				}
+			}
+			/**
+			 * Sharing (18 §2, U-S7): the artifact carries the declared I/O so
+			 * an importer sees what each script reads and rewrites before
+			 * running it; import is per-script opt-in with a report — every
+			 * entry lands or is named with a reason.
+			 */
+			namespace ScriptShare {
+				interface ExportParams {
+					ids: number[]
+				}
+				interface ExportResponse {
+					blob?: unknown
+					filename?: string
+					error?: string
+				}
+				interface ImportParams {
+					/** Parsed JSON — a bare entry or a scripts@1 pack. */
+					artifact: unknown
+					/** Pack indexes to import; absent means all. */
+					accept?: number[]
+				}
+				interface ImportResponse {
+					report?: {
+						imported: Array<{ name: string; renamed?: string }>
+						skipped: Array<{ name: string; reason: string }>
+					}
+					scripts?: Scripts.Response
+					error?: string
+				}
+			}
+			/** Writes on the scripts page. Admin-gated, like the library's. */
+			namespace ScriptWrite {
+				interface CreateParams {
+					typeId: string
+					name?: string
+				}
+				interface CloneParams {
+					id: number
+					name?: string
+				}
+				interface UpdateParams {
+					id: number
+					name?: string
+					source?: string
+					enabled?: boolean
+					varsIn?: string[]
+					varsOut?: string[]
+				}
+				interface DeleteParams {
+					id: number
+				}
+				interface Response {
+					scripts?: Scripts.Response
+					error?: string
+				}
+			}
 			/** The management page: versions, publish state, and the boot diagnostic. */
 			namespace Detail {
 				interface Params {
@@ -2374,7 +2802,7 @@ declare global {
 			/** Recent runs, for the simplified inspector (05 §0a, §6). */
 			namespace Runs {
 				interface Params {
-					chatId?: number
+					sessionId?: number
 					limit?: number
 				}
 				interface Response {
@@ -2395,7 +2823,7 @@ declare global {
 			}
 		}
 
-		// Narrator Prompt Configs namespace ("Chat Prompts: Narrator")
+		// Narrator Prompt Configs namespace ("Session Prompts: Narrator")
 		namespace NarratorPromptConfigs {
 			namespace List {
 				interface Params {}
@@ -3258,22 +3686,22 @@ declare global {
 			}
 		}
 
-		// Chat Lorebooks namespace
-		namespace ChatLorebooks {
+		// Session Lorebooks namespace
+		namespace SessionLorebooks {
 			namespace Get {
 				interface Params {
-					chatId: number
+					sessionId: number
 				}
 				interface Response {
-					chatLorebooks: SelectChatLorebook[]
+					sessionLorebooks: SelectSessionLorebook[]
 				}
 			}
 			namespace Add {
 				interface Params {
-					chatLorebook: InsertChatLorebook
+					sessionLorebook: InsertSessionLorebook
 				}
 				interface Response {
-					chatLorebook: SelectChatLorebook
+					sessionLorebook: SelectSessionLorebook
 				}
 			}
 			namespace Delete {
@@ -3295,7 +3723,7 @@ declare global {
 				}
 				interface Response {
 					selectionMemory: {
-						chat: SelectChat | null
+						session: SelectSession | null
 						character: SelectCharacter | null
 						persona: SelectPersona | null
 						prompt: SelectPromptConfig | null
@@ -3310,7 +3738,7 @@ declare global {
 			namespace Update {
 				interface Params {
 					selectionMemory: {
-						chat: SelectChat | null
+						session: SelectSession | null
 						character: SelectCharacter | null
 						persona: SelectPersona | null
 						prompt: SelectPromptConfig | null
@@ -3324,7 +3752,7 @@ declare global {
 				interface Response {
 					selectionMemory:
 						| {
-								chat: SelectChat | null
+								session: SelectSession | null
 								character: SelectCharacter | null
 								persona: SelectPersona | null
 								prompt: SelectPromptConfig | null
@@ -3527,6 +3955,16 @@ declare global {
 					enabled: boolean
 				}
 			}
+			/** The scripts kill switch (18 §10) — a recovery lever, default on. */
+			namespace UpdateScriptsEnabled {
+				interface Params {
+					enabled: boolean
+				}
+				interface Response {
+					success: boolean
+					enabled: boolean
+				}
+			}
 			namespace UpdateContextDebuggingEnabled {
 				interface Params {
 					enabled: boolean
@@ -3680,15 +4118,15 @@ declare global {
 				participantCharacters: number[]
 				mentionedCharacters: number[]
 			}
-			/** Scene with resolved chat name for sidebar display */
+			/** Scene with resolved session name for sidebar display */
 			interface SceneWithMeta extends SelectScene, SceneCast {
-				chatName: string | null
+				sessionName: string | null
 			}
 			namespace List {
 				interface Params {
-					chatId: number
+					sessionId: number
 				}
-				/** Scene enriched with its history entry data for chat display */
+				/** Scene enriched with its history entry data for session display */
 				interface SceneWithEntry extends SelectScene, SceneCast {
 					historyEntry: {
 						id: number
@@ -3742,10 +4180,10 @@ declare global {
 					error?: string
 				}
 			}
-			/** Get all message IDs already captured in scenes for a chat */
+			/** Get all message IDs already captured in scenes for a session */
 			namespace SenedMessageIds {
 				interface Params {
-					chatId: number
+					sessionId: number
 				}
 				interface Response {
 					scenedMessageIds: number[]
@@ -3775,7 +4213,7 @@ declare global {
 					sceneId: number
 					/**
 					 * The scene was created solely to carry this run (the
-					 * chat-side summarize flow), so abandoning the run should
+					 * session-side summarize flow), so abandoning the run should
 					 * delete it. Omitted by the lorebook-side re-process, whose
 					 * scene already exists and must survive a cancel.
 					 */
@@ -3830,17 +4268,17 @@ declare global {
 			}
 		}
 
-		// Legacy namespace for backward compatibility with old chat message events
-		namespace ChatMessage {
+		// Legacy namespace for backward compatibility with old session message events
+		namespace SessionMessage {
 			interface Call {
-				chatMessage?: SelectChatMessage
+				sessionMessage?: SelectSessionMessage
 				id?: number
 			}
 			interface Response {
-				// chatMessageHandler ("chats.ts") omits `chatMessage` and sets
+				// sessionMessageHandler ("sessions.ts") omits `sessionMessage` and sets
 				// `error` instead on the not-found/invalid-params/exception paths
-				// (see the "chatMessage:error" emits), so both fields are optional.
-				chatMessage?: SelectChatMessage
+				// (see the "sessionMessage:error" emits), so both fields are optional.
+				sessionMessage?: SelectSessionMessage
 				error?: string
 			}
 		}
@@ -3883,7 +4321,7 @@ declare global {
 				groupId: string
 				label: string
 				ownerDisplayName: string
-				chatId?: number
+				sessionId?: number
 				lorebookIds: number[]
 				characterIds: number[]
 				personaIds: number[]
@@ -4017,8 +4455,8 @@ declare global {
 
 			namespace AddToQueue {
 				interface Params {
-					/** Add a chat and all its linked lorebooks/characters/personas */
-					chatId?: number
+					/** Add a session and all its linked lorebooks/characters/personas */
+					sessionId?: number
 					/** Add a lorebook by itself */
 					lorebookId?: number
 					/** Add a character by itself */
@@ -4075,38 +4513,38 @@ declare global {
 			}
 
 			/**
-			 * Check the RAG embedding status for all content linked to a chat:
+			 * Check the RAG embedding status for all content linked to a session:
 			 *  - Messages older than the last 10 (last 10 assumed in context window)
-			 *  - Characters linked to the chat
-			 *  - Personas linked to the chat
-			 *  - Lorebook entries (world lore, character lore, history) for the chat's
+			 *  - Characters linked to the session
+			 *  - Personas linked to the session
+			 *  - Lorebook entries (world lore, character lore, history) for the session's
 			 *    lorebook and each linked character's lorebook
 			 */
 			namespace CheckRagStatus {
 				interface Params {
-					chatId: number
+					sessionId: number
 				}
 				interface Response {
-					/** False when vectorization is disabled or chat has ≤ 10 messages */
+					/** False when vectorization is disabled or session has ≤ 10 messages */
 					applicable: boolean
 					messages: RagTypeCounts
 					characters: RagTypeCounts
 					personas: RagTypeCounts
-					/** null when the chat has no associated lorebook */
+					/** null when the session has no associated lorebook */
 					lorebook: RagTypeCounts | null
 					/** Whether the vectorization queue is currently running */
 					queueRunning: boolean
 					/** The active embedding model name, or null if none */
 					activeModelName: string | null
-					/** Whether the user has opted out of RAG for this chat */
+					/** Whether the user has opted out of RAG for this session */
 					ragIgnored: boolean
 				}
 			}
 
-			/** Set whether RAG is ignored for a specific chat */
-			namespace SetChatRagIgnored {
+			/** Set whether RAG is ignored for a specific session */
+			namespace SetSessionRagIgnored {
 				interface Params {
-					chatId: number
+					sessionId: number
 					ignored: boolean
 				}
 				interface Response {
@@ -4470,7 +4908,7 @@ declare global {
 			namespace QueryContext {
 				interface Params {
 					lorebookId: number
-					chatId: number
+					sessionId: number
 					speakerCharacterId?: number
 					speakerPersonaId?: number
 				}
@@ -4494,7 +4932,7 @@ declare global {
 				interface Response {
 					/** Layer 1: speaker's outbound relationships (all visibilities) */
 					speakerRelationships: RelationshipEntry[]
-					/** Layer 2: inverse rels from chat participants → speaker, acknowledged/public only */
+					/** Layer 2: inverse rels from session participants → speaker, acknowledged/public only */
 					inverseRelationships: RelationshipEntry[]
 					/** Layer 3: legendary/historical nodes + public relationships (RAG-scored) */
 					legendaryNodes: LegendaryNodeEntry[]
@@ -4596,7 +5034,7 @@ declare global {
 		}
 
 		namespace BindingCheck {
-			/** Emitted after a chat save when orphaned bindings are found in the lorebook */
+			/** Emitted after a session save when orphaned bindings are found in the lorebook */
 			namespace Result {
 				interface OrphanedBinding {
 					id: number
@@ -4609,8 +5047,8 @@ declare global {
 				}
 				interface Response {
 					lorebookId: number
-					chatId: number
-					/** Chars/personas in the chat that have no binding (shown if orphaned bindings exist) */
+					sessionId: number
+					/** Chars/personas in the session that have no binding (shown if orphaned bindings exist) */
 					unboundEntities: UnboundEntity[]
 					/** Existing bindings in the lorebook with no char/persona linked */
 					orphanedBindings: OrphanedBinding[]
@@ -4656,13 +5094,13 @@ declare global {
 				namespace Scan {
 					interface Params {
 						importSessionId: string
-						// Individual chat logs (chats/<CharacterName>/<file>.jsonl) are
+						// Individual session logs (sessions/<CharacterName>/<file>.jsonl) are
 						// deliberately never staged at scan time -- only their content
 						// (potentially large) gets uploaded later for whatever the user
 						// actually selects. Their relative paths are sent here instead,
 						// purely so the scan can list what's available without needing
 						// the files themselves on disk yet.
-						deferredChatPaths?: string[]
+						deferredSessionPaths?: string[]
 					}
 					interface Response {
 						success: boolean
@@ -4678,7 +5116,7 @@ declare global {
 								selected: boolean
 								disabled?: boolean
 							}>
-							chats: Array<{
+							sessions: Array<{
 								filename: string
 								name: string
 								characterNames: string[]
@@ -4687,7 +5125,7 @@ declare global {
 								disabled: boolean
 								disabledReason?: string
 							}>
-							groupChats: Array<{
+							groupSessions: Array<{
 								filename: string
 								name: string
 								memberNames: string[]
@@ -4719,7 +5157,7 @@ declare global {
 								selected: boolean
 								disabled?: boolean
 							}>
-							chats: Array<{
+							sessions: Array<{
 								filename: string
 								name: string
 								characterNames: string[]
@@ -4728,7 +5166,7 @@ declare global {
 								disabled: boolean
 								disabledReason?: string
 							}>
-							groupChats: Array<{
+							groupSessions: Array<{
 								filename: string
 								name: string
 								memberNames: string[]
@@ -4928,7 +5366,7 @@ declare global {
 
 		export interface SyncDetails {
 			syncSource: Partial<SelectUser> | null
-			scenario: null | "character" | "chat"
+			scenario: null | "character" | "session"
 		}
 
 		interface FileAcceptDetails {

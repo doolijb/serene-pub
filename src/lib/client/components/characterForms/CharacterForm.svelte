@@ -515,7 +515,8 @@
 			groupOnlyGreetings: Array.isArray(characterData.groupOnlyGreetings)
 				? characterData.groupOnlyGreetings
 				: [],
-			postHistoryInstructions: characterData.postHistoryInstructions ?? "",
+			postHistoryInstructions:
+				characterData.postHistoryInstructions ?? "",
 			isFavorite: characterData.isFavorite ?? false,
 			lorebookId: characterData.lorebookId ?? null,
 			characterVersion: characterData.characterVersion ?? undefined,
@@ -897,7 +898,7 @@
 					</p>
 					<p class="text-surface-400 text-xs">
 						Used as a concise graph node description. Not injected
-						into chat context.
+						into session context.
 					</p>
 				</div>
 			{/if}
@@ -1022,7 +1023,7 @@
 					<span class="flex gap-1">
 						Scenario <span
 							class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
-							title="This field will be visible in prompts (excluded from group chats)"
+							title="This field will be visible in prompts (excluded from group sessions)"
 						>
 							<Icons.ScanEye
 								size={16}

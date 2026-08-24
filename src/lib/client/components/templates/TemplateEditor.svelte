@@ -33,13 +33,7 @@
 		oninput: (value: string) => void
 	}
 
-	let {
-		value,
-		scope,
-		readonly = false,
-		rows = 8,
-		oninput
-	}: Props = $props()
+	let { value, scope, readonly = false, rows = 8, oninput }: Props = $props()
 
 	let el = $state<HTMLTextAreaElement | null>(null)
 	let mirror = $state<HTMLDivElement | null>(null)
@@ -54,7 +48,9 @@
 		return completionsAt(value, caret, scope).slice(0, 10)
 	})
 
-	const hover = $derived(scope && !readonly ? describeAt(value, caret, scope) : null)
+	const hover = $derived(
+		scope && !readonly ? describeAt(value, caret, scope) : null
+	)
 
 	/**
 	 * Lint, but not while the source is mid-word.
@@ -112,7 +108,10 @@
 		mirror.appendChild(marker)
 
 		pos = {
-			top: marker.offsetTop - el.scrollTop + parseFloat(cs.lineHeight || "16"),
+			top:
+				marker.offsetTop -
+				el.scrollTop +
+				parseFloat(cs.lineHeight || "16"),
 			left: marker.offsetLeft
 		}
 	}
@@ -197,7 +196,7 @@
 
 	{#if open}
 		<ul
-			class="absolute z-50 max-h-56 w-64 overflow-auto rounded border border-surface-500/40 bg-surface-100-900 shadow-lg"
+			class="border-surface-500/40 bg-surface-100-900 absolute z-50 max-h-56 w-64 overflow-auto rounded border shadow-lg"
 			style="top:{pos.top}px; left:{pos.left}px"
 		>
 			{#each items as c, i (c.kind + c.label)}
@@ -218,7 +217,9 @@
 							<span class="opacity-60">{c.type}</span>
 						{/if}
 						{#if c.optional}
-							<span class="opacity-60" title="may be absent">?</span>
+							<span class="opacity-60" title="may be absent">
+								?
+							</span>
 						{/if}
 					</button>
 				</li>
@@ -235,7 +236,10 @@
 			     is noise. What this line adds is the fix. -->
 			<span class="text-error-500">
 				{#if hover.suggestion}
-					— did you mean <span class="font-mono">{hover.suggestion}</span>?
+					— did you mean <span class="font-mono">
+						{hover.suggestion}
+					</span>
+					?
 				{:else}
 					— not available here
 				{/if}
@@ -249,7 +253,7 @@
 {/if}
 
 {#if issues.length}
-	<ul class="flex flex-col gap-0.5 text-xs text-error-500">
+	<ul class="text-error-500 flex flex-col gap-0.5 text-xs">
 		{#each issues as issue (issue.cardId + issue.start + issue.message)}
 			<li>
 				<button

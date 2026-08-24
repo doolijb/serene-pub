@@ -1,15 +1,15 @@
 /**
- * The template context, built from Query results instead of a hydrated chat.
+ * The template context, built from Query results instead of a hydrated session.
  *
  * This is the last coupling in the prompt path. `PromptBuilder.buildTemplateContext`
- * reads `this.assistantCharacters`, `this.userCharacters`, `this.chat` and
+ * reads `this.assistantCharacters`, `this.userCharacters`, `this.session` and
  * `this.interpolationEngine`, so it can only run where all four already exist —
  * which is the reason the whole prompt path has to be constructed before any of
  * it can be used.
  *
  * Here the same object is produced from explicit arguments. The rule applied
  * throughout is: **this builder resolves nothing.** Which characters are
- * visible, which scenario wins between the chat's and the character's, which
+ * visible, which scenario wins between the session's and the character's, which
  * post-history text belongs to the speaker — every one of those is a decision
  * with its own rules, and every one of them is made upstream and handed in. The
  * builder interpolates, joins, stringifies and assembles a shape. That is what
@@ -28,7 +28,10 @@ import { InterpolationEngine } from "$lib/server/utils/interpolation/Interpolati
 import { attachCharacterLoreToCharacters } from "$lib/server/pipelines/prompt/characterLore"
 import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 import type { TemplateContext } from "$lib/server/pipelines/prompt/promptTypes"
-import { renderVariable, type ResolvedLayouts } from "$lib/server/pipelines/entities/variableLayouts"
+import {
+	renderVariable,
+	type ResolvedLayouts
+} from "$lib/server/pipelines/entities/variableLayouts"
 
 export interface CharacterRow {
 	id?: number
@@ -95,7 +98,7 @@ export interface BuildContextInput {
 	/** Narrator mode's configured display name, for `{{narratorName}}`. */
 	narratorName?: string
 	texts?: PromptTexts
-	/** The winning scenario text, already chosen between chat and character. */
+	/** The winning scenario text, already chosen between session and character. */
 	scenario?: string | null
 	/**
 	 * The narrative graph, as structure, in two halves.
@@ -112,7 +115,7 @@ export interface BuildContextInput {
 	/** Character lore to fold into the cards. Empty on the current path. */
 	characterLore?: readonly SelectCharacterLoreEntry[]
 	/** Needed only to map lore bindings onto cast members. */
-	chat?: unknown
+	session?: unknown
 	/**
 	 * The `variables` slot, resolved through the scope chain and dereferenced
 	 * into template sources by `world.ts`.
@@ -126,8 +129,8 @@ export interface BuildContextInput {
 
 export class TemplateContextError extends Error {}
 
-/** A chat with no cast: the lore attachment finds nothing, and says nothing. */
-const EMPTY_CHAT = { chatCharacters: [], chatPersonas: [] }
+/** A session with no cast: the lore attachment finds nothing, and says nothing. */
+const EMPTY_CHAT = { sessionCharacters: [], sessionPersonas: [] }
 
 /**
  * Build the context a context template renders against.
@@ -178,24 +181,24 @@ export function buildTemplateContext(
 	// here, because using it would have been a behaviour change wearing the
 	// costume of a bug fix. Persona lore still never attaches on any live path.
 	const lore = input.characterLore ?? []
-	if (lore.length && !input.chat)
+	if (lore.length && !input.session)
 		throw new TemplateContextError(
-			`character lore was supplied without a chat. The bindings that say which ` +
-				`character a lore entry belongs to live on the chat's lorebook, so without ` +
+			`character lore was supplied without a session. The bindings that say which ` +
+				`character a lore entry belongs to live on the session's lorebook, so without ` +
 				`it every entry would be silently dropped and the prompt would come out ` +
 				`short with nothing to show for it.`
 		)
-	const chat = (input.chat ?? EMPTY_CHAT) as any
+	const session = (input.session ?? EMPTY_CHAT) as any
 
 	const charactersWithLore = attachCharacterLoreToCharacters(
 		characters,
 		lore as any,
-		chat
+		session
 	)
 	const personasWithLore = attachCharacterLoreToCharacters(
 		personas as any,
 		lore as any,
-		chat
+		session
 	)
 
 	const interpolate = (s: string | null | undefined): string =>
@@ -274,7 +277,7 @@ export function buildTemplateContext(
 					charExampleDialogue
 			)
 		},
-		chatMessages: [],
+		sessionMessages: [],
 		char: input.charName,
 		character: input.charName,
 		user: input.personaName,

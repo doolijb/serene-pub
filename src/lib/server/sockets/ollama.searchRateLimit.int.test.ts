@@ -50,9 +50,7 @@ const noopEmit = () => {}
 
 describe("ollama:searchAvailableModels — rate limiting", () => {
 	test("the 6th call within the window is rejected as rate limited", async () => {
-		const { ollamaSearchAvailableModelsHandler } = await import(
-			"./ollama"
-		)
+		const { ollamaSearchAvailableModelsHandler } = await import("./ollama")
 		const { loginRateLimit } = await import(
 			"$lib/server/services/loginRateLimit"
 		)

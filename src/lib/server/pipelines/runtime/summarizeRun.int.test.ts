@@ -33,7 +33,7 @@ class FakeStepAdapter {
 	private user: string
 	constructor(p: any) {
 		this.system = p?.promptConfig?.systemPrompt ?? ""
-		this.user = p?.chat?.chatMessages?.[0]?.content ?? ""
+		this.user = p?.session?.sessionMessages?.[0]?.content ?? ""
 	}
 	abort() {}
 	async preflight() {}
@@ -61,12 +61,14 @@ vi.mock("$lib/server/embedding", () => ({
 }))
 
 let db: TestDb
-let chatId: number
+let sessionId: number
 let userId: number
 
 beforeAll(async () => {
 	db = await createTestDb()
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(db as any)
 
 	const [user] = await db
@@ -85,21 +87,21 @@ beforeAll(async () => {
 		.values({ name: "Run Lore", userId })
 		.returning()
 
-	const [chat] = await db
-		.insert(schema.chats)
+	const [session] = await db
+		.insert(schema.sessions)
 		.values({ userId, isGroup: false, lorebookId: lorebook.id })
 		.returning()
-	chatId = chat.id
+	sessionId = session.id
 
-	await db.insert(schema.chatMessages).values([
+	await db.insert(schema.sessionMessages).values([
 		{
-			chatId,
+			sessionId,
 			role: "assistant",
 			characterId: character.id,
 			content: "The gate was sealed with old iron."
 		},
 		{
-			chatId,
+			sessionId,
 			role: "user",
 			content: "Then we go under it, not through it."
 		}
@@ -133,17 +135,21 @@ beforeAll(async () => {
 
 describe("a summarize run, stopped at the write", () => {
 	it("runs every step, halts at save, and the outputs are on the receipt", async () => {
-		const { runSpec } = await import("$lib/server/pipelines/runtime/runTurn")
-		const { SUMMARIZE_WORLD_SPEC_ID } = await import("$lib/server/pipelines/specs/summarize")
+		const { runSpec } = await import(
+			"$lib/server/pipelines/runtime/runTurn"
+		)
+		const { SUMMARIZE_WORLD_SPEC_ID } = await import(
+			"$lib/server/pipelines/specs/summarize"
+		)
 
 		const seen: string[] = []
 		const receipt = await runSpec({
 			db,
-			chatId,
+			sessionId,
 			userId,
 			specId: SUMMARIZE_WORLD_SPEC_ID,
 			input: {
-				scope: { chatId },
+				scope: { sessionId },
 				request: { topic: "the gate" }
 			},
 			preview: { atNode: "save" },
@@ -188,5 +194,102 @@ describe("a summarize run, stopped at the write", () => {
 		// The topic travelled the `request` port into phase 1 — per batch,
 		// not just at synthesis.
 		expect(draft.userPrompt).toContain('Focus specifically on: "the gate"')
+	})
+
+	it("the each-draft interior point runs the user's chain over every draft (18 §4e)", async () => {
+		// Core dogfooding the broker (07 §0b): the chain attaches at slot
+		// `scripts`, path `each-draft` — exactly what the panel's per-point
+		// option writes — and the binding invokes it through `ctx.scripts`,
+		// so the cleanup reaches the material summaries are built *from*.
+		const { eq } = await import("drizzle-orm")
+		const { createScript, updateScript } = await import(
+			"$lib/server/pipelines/entities/scripts"
+		)
+		const { SUMMARIZE_WORLD_SPEC_ID } = await import(
+			"$lib/server/pipelines/specs/summarize"
+		)
+		const shout = await createScript(db as any, {
+			typeId: "core:script:text/transform@1",
+			name: "Draft shouter"
+		})
+		await updateScript(db as any, shout.id, {
+			source: "return text.toUpperCase()"
+		})
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, SUMMARIZE_WORLD_SPEC_ID))
+			.limit(1)
+		const nodes = await db
+			.select()
+			.from(schema.pipelineNodes)
+			.where(
+				eq(schema.pipelineNodes.specVersionId, spec.activeVersionId!)
+			)
+		const batchNode = (nodes as any[]).find(
+			(n) => n.typeId === "core:provider/summarize-batch"
+		)!
+		// The chain attaches as the selected configuration's own value — the
+		// only global home since the layer simplification (2026-08-24).
+		{
+			const { resolveSelectedConfig, duplicateConfig, selectConfig } =
+				await import("$lib/server/pipelines/config/named")
+			const shipped = await resolveSelectedConfig(
+				db as any,
+				spec.id,
+				spec.slug,
+				{}
+			)
+			const copy = await duplicateConfig(
+				db as any,
+				shipped!.configId,
+				"Chain host"
+			)
+			await selectConfig(db as any, spec.id, "instance", 0, copy.id)
+			await db.insert(schema.pipelineConfigValues).values({
+				configId: copy.id,
+				nodeKey: batchNode.nodeKey,
+				slot: "scripts",
+				path: "each-draft",
+				value: [shout.id]
+			})
+		}
+
+		calls.length = 0
+		const { runSpec } = await import(
+			"$lib/server/pipelines/runtime/runTurn"
+		)
+		const receipt = await runSpec({
+			db,
+			sessionId,
+			userId,
+			specId: SUMMARIZE_WORLD_SPEC_ID,
+			input: { scope: { sessionId }, request: { topic: "the gate" } },
+			preview: { atNode: "save" },
+			skipReceipt: true
+		})
+
+		// Synthesis was handed the transformed draft — the point ran between
+		// the model's answer and the next phase.
+		const synthCall = calls[1]!
+		expect(synthCall.userPrompt).toContain(
+			"THE GATE WAS SEALED WITH OLD IRON."
+		)
+
+		// And the receipt says a *binding* asked (18 §4e): visible from
+		// outside, attributed to the drafting node.
+		const apps = (receipt.nodes as any[])
+			.filter((n: any) =>
+				n.typeId?.startsWith("core:provider/summarize-batch")
+			)
+			.flatMap((n: any) => n.scripts ?? [])
+		expect(apps).toMatchObject([
+			{
+				name: "Draft shouter",
+				result: "ok",
+				changed: true,
+				appliedBy: "binding"
+			}
+		])
 	})
 })

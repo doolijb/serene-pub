@@ -14,7 +14,7 @@ export interface LLMQueueItemInput<T> {
 	taskType: TaskType
 	connectionName: string
 	samplingName: string
-	chatId?: number
+	sessionId?: number
 	messageId?: number
 	lorebookId?: number
 	label?: string
@@ -35,7 +35,7 @@ export interface LLMQueueSnapshotItem {
 	samplingName: string
 	status: LLMQueueStatus
 	startedAt: string
-	chatId?: number
+	sessionId?: number
 	messageId?: number
 	lorebookId?: number
 	label?: string
@@ -92,7 +92,7 @@ const FORCE_DETACH_MS = 10_000
 // would need that added first. A flat global depth ceiling is the smaller
 // fix for the resource-exhaustion half of the problem: without it, any
 // authenticated user able to trigger repeated LLM calls could queue
-// unbounded items (each a Run<T> holding closures over full chat/adapter
+// unbounded items (each a Run<T> holding closures over full session/adapter
 // state) with no cap at all.
 export const MAX_QUEUE_DEPTH = 20
 
@@ -382,7 +382,7 @@ class LLMQueue {
 				samplingName: run.item.samplingName,
 				status: run.status,
 				startedAt: run.startedAt,
-				chatId: run.item.chatId,
+				sessionId: run.item.sessionId,
 				messageId: run.item.messageId,
 				lorebookId: run.item.lorebookId,
 				label: run.item.label,

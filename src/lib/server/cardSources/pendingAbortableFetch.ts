@@ -34,7 +34,11 @@ export function getOrStartAbortable<T>(
 
 	const controller = new AbortController()
 	const promise = start(controller.signal).finally(() => pending.delete(key))
-	const entry: PendingAbortableEntry<T> = { promise, controller, waiterCount: 0 }
+	const entry: PendingAbortableEntry<T> = {
+		promise,
+		controller,
+		waiterCount: 0
+	}
 	pending.set(key, entry)
 	return attachWaiter(entry, signal)
 }

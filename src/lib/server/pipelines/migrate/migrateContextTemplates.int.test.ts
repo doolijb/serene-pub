@@ -32,7 +32,7 @@ import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
 /** A template of somebody's own — what matters is that it is not core's. */
 const MINE =
 	"Assistant Characters (AI-controlled):\n```json\n{{{characters}}}\n```\n" +
-	"{{#each chatMessages}}{{this.message}}{{/each}}"
+	"{{#each sessionMessages}}{{this.message}}{{/each}}"
 
 interface Install {
 	db: TestDb
@@ -92,31 +92,97 @@ async function install(opts: {
 		activeContextConfigId: opts.user ? pick(opts.user) : null
 	})
 
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(db as any)
 
 	return { db, userId: user.id, coreId: core.id, mineId: mine.id }
 }
 
-/** Every override the migration could have written, as `scope → what it points at`. */
+/**
+ * Every pin the migration could have written, as `scope → what it points at`.
+ *
+ * Since the layer simplification (2026-08-24) the instance's pins live in the
+ * instance's selected *config*, not in override rows — so this reads each
+ * spec's selected mutable config and reports where its values differ from the
+ * shipped default's. The shape stays the old helper's, so the assertions read
+ * unchanged; the user layer no longer exists, so only `instance:0` can appear.
+ */
 async function overrides(db: TestDb) {
-	const rows = await db.select().from(schema.pipelineNodeOverrides)
 	const layouts = await db.select().from(schema.pipelineVariableTemplates)
 	const templates = await db.select().from(schema.pipelineContextTemplates)
 	const layoutById = new Map(layouts.map((t) => [t.id, t]))
 	const templateById = new Map(templates.map((t) => [t.id, t]))
 
-	return rows
-		.filter((r) => r.slot === "variables" || r.slot === "template")
-		.map((r) => ({
-			scope: `${r.scopeKind}:${r.scopeId}`,
-			slot: r.slot,
-			path: r.path,
-			name:
-				(r.slot === "template"
-					? templateById.get(r.value as number)?.name
-					: layoutById.get(r.value as number)?.name) ?? "(missing)"
-		}))
+	const { resolveSelectedConfig } = await import(
+		"$lib/server/pipelines/config/named"
+	)
+	const specs = await db.select().from(schema.pipelineSpecs)
+	const configs = await db.select().from(schema.pipelineConfigs)
+	const out: Array<{
+		scope: string
+		slot: string
+		path: string
+		name: string
+	}> = []
+	for (const spec of specs as any[]) {
+		const selected = await resolveSelectedConfig(
+			db as any,
+			spec.id,
+			spec.slug,
+			{}
+		)
+		if (!selected) continue
+		const cfg = (configs as any[]).find((c) => c.id === selected.configId)
+		// The shipped default is the untouched state; only a mutable
+		// selection is something the migration produced or adopted.
+		if (!cfg || cfg.isImmutable) continue
+		const shipped = (configs as any[]).find(
+			(c) => c.specId === spec.id && c.isImmutable
+		)
+		const values = await db
+			.select()
+			.from(schema.pipelineConfigValues)
+			.where(eq(schema.pipelineConfigValues.configId, selected.configId))
+		const shippedVals = new Map(
+			shipped
+				? (
+						(await db
+							.select()
+							.from(schema.pipelineConfigValues)
+							.where(
+								eq(
+									schema.pipelineConfigValues.configId,
+									shipped.id
+								)
+							)) as any[]
+					).map((v) => [
+						`${v.nodeKey}\0${v.slot}\0${v.path}`,
+						v.value
+					])
+				: []
+		)
+		for (const r of values as any[]) {
+			if (r.slot !== "variables" && r.slot !== "template") continue
+			if (
+				shippedVals.get(`${r.nodeKey}\0${r.slot}\0${r.path}`) ===
+				r.value
+			)
+				continue
+			out.push({
+				scope: "instance:0",
+				slot: r.slot,
+				path: r.path,
+				name:
+					(r.slot === "template"
+						? templateById.get(r.value as number)?.name
+						: layoutById.get(r.value as number)?.name) ??
+					"(missing)"
+			})
+		}
+	}
+	return out
 }
 
 const scopesIn = (p: Awaited<ReturnType<typeof overrides>>) =>
@@ -203,7 +269,6 @@ describe("an install on a context config of its own", () => {
 	it("renders the value bare, which is the whole point", async () => {
 		const { db, userId } = await install({ instance: "mine" })
 		const world = await buildWorld(db as any, {
-			userId,
 			specId: RESPOND_SPEC_ID
 		})
 		const layouts = (resolveConfig(world, ["prompt"]).prompt?.variables ??
@@ -235,51 +300,24 @@ describe("an install on a context config of its own", () => {
 	})
 })
 
-describe("scopes are decided one at a time", () => {
-	it("writes only the user when theirs is the custom one", async () => {
-		const { db, userId } = await install({
+describe("the user layer no longer migrates (ruled 2026-08-24)", () => {
+	it("a user's own legacy choice carries nowhere — their levers are the session's", async () => {
+		const { db } = await install({
 			instance: "core",
 			user: "mine"
 		})
-		const o = await overrides(db)
-
-		expect(scopesIn(o)).toEqual([`user:${userId}`])
-		for (const pin of o.filter((x) => x.slot === "variables"))
-			expect(["JSON", "As written", "Numeric"]).toContain(pin.name)
+		// The instance is on core's, so nothing migrates at all: the user's
+		// personal pick has no global home any more, and inventing a session
+		// decision from a preference is exactly what the ruling forbids.
+		expect(await overrides(db)).toEqual([])
 	})
 
-	it("writes a user back to core's when the instance is the custom one", async () => {
-		// The case a single instance-wide answer gets wrong. This user renders
-		// through core's template, which has no headings of its own —
-		// inheriting the instance's bare pin would strip every heading from
-		// their prompts, silently, on upgrade.
-		const { db, userId } = await install({
+	it("the instance's choice migrates alone, whatever users had chosen", async () => {
+		const { db } = await install({
 			instance: "mine",
 			user: "core"
 		})
-		const o = await overrides(db)
-
-		expect(scopesIn(o)).toEqual(["instance:0", `user:${userId}`])
-		expect(
-			o.find(
-				(x) => x.scope === `user:${userId}` && x.path === "characters"
-			)?.name
-		).toBe("Titled JSON block")
-		expect(
-			o.find((x) => x.scope === `user:${userId}` && x.slot === "template")
-				?.name
-		).toBe("Default")
-	})
-
-	it("leaves a user who chose nothing to inherit", async () => {
-		const { db, userId } = await install({ instance: "mine" })
-		// Their `activeContextConfigId` is null, so they render through the
-		// instance's template and the instance's answer is already theirs.
-		// Writing them one anyway would pin them forever to a choice they
-		// never made.
-		expect(
-			(await overrides(db)).some((x) => x.scope === `user:${userId}`)
-		).toBe(false)
+		expect(scopesIn(await overrides(db))).toEqual(["instance:0"])
 	})
 })
 
@@ -322,7 +360,8 @@ describe("it runs once", () => {
 			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
 			.limit(1)
 
-		// Somebody deliberately on the titled row, at instance scope.
+		// Somebody already runs the instance on a config of their own, with
+		// the characters layout deliberately on the titled row.
 		const titled = SHIPPED_VARIABLE_TEMPLATES.find(
 			(t) => t.key === "characters" && t.isDefault
 		)!
@@ -333,16 +372,19 @@ describe("it runs once", () => {
 				eq(schema.pipelineVariableTemplates.seedKey, seedKeyFor(titled))
 			)
 			.limit(1)
-
-		await db.insert(schema.pipelineNodeOverrides).values({
-			specId: spec.id,
-			scopeKind: "instance",
-			scopeId: 0,
+		const { createConfig, selectConfig } = await import(
+			"$lib/server/pipelines/config/named"
+		)
+		const own = await createConfig(db as any, spec.id, "Somebody's own")
+		await db.insert(schema.pipelineConfigValues).values({
+			configId: own.id,
 			nodeKey: "context",
 			slot: "variables",
 			path: "characters",
 			value: row.id
 		})
+		await selectConfig(db as any, spec.id, "instance", 0, own.id)
+
 		// Rewind the ledger and move the instance onto a custom config, which
 		// is the only way to reach the branch that declines.
 		await db
@@ -363,13 +405,12 @@ describe("it runs once", () => {
 
 		const [kept] = await db
 			.select()
-			.from(schema.pipelineNodeOverrides)
+			.from(schema.pipelineConfigValues)
 			.where(
 				and(
-					eq(schema.pipelineNodeOverrides.specId, spec.id),
-					eq(schema.pipelineNodeOverrides.scopeKind, "instance"),
-					eq(schema.pipelineNodeOverrides.nodeKey, "context"),
-					eq(schema.pipelineNodeOverrides.path, "characters")
+					eq(schema.pipelineConfigValues.configId, own.id),
+					eq(schema.pipelineConfigValues.nodeKey, "context"),
+					eq(schema.pipelineConfigValues.path, "characters")
 				)
 			)
 			.limit(1)

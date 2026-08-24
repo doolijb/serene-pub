@@ -6,7 +6,7 @@ import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import {
 	BaseConnectionAdapter,
 	type AdapterExports,
-	type BasePromptChat
+	type BasePromptSession
 } from "./BaseConnectionAdapter"
 import { JSON_OBJECT_GBNF } from "./jsonGrammar"
 import { jsonSchemaToGbnf } from "./jsonSchemaToGbnf"
@@ -44,7 +44,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		sampling,
 		contextConfig,
 		promptConfig,
-		chat,
+		session,
 		currentCharacterId,
 		generatingMessageMetadata
 	}: {
@@ -52,7 +52,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		sampling: SelectSamplingConfig
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
-		chat: BasePromptChat
+		session: BasePromptSession
 		currentCharacterId: number | null
 		generatingMessageMetadata?: any
 	}) {
@@ -61,7 +61,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 			sampling,
 			contextConfig,
 			promptConfig,
-			chat,
+			session,
 			currentCharacterId,
 			tokenCounter: new TokenCounters(
 				connection.tokenCounter || TokenCounterOptions.ESTIMATE
@@ -137,7 +137,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 			// default (connectionDefaults.ts) and Ollama/LMStudio's adapter
 			// fallback. Only an old/malformed connection missing this field
 			// entirely would ever hit the fallback.
-			useChatFormat: this.connection.extraJson?.useChat ?? true,
+			useSessionFormat: this.connection.extraJson?.useSession ?? true,
 			...args
 		})
 	}
@@ -156,11 +156,11 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		const baseUrl =
 			normalizeBaseUrl(this.connection.baseUrl) || "http://localhost:5001"
 		// Default true — matches CONNECTION_DEFAULTS[KOBOLDCPP].extraJson.stream
-		// (connectionDefaults.ts), same reasoning as useChat below.
+		// (connectionDefaults.ts), same reasoning as useSession below.
 		const stream = this.connection.extraJson?.stream ?? true
 		const useMemory = this.connection.extraJson?.useMemory ?? false
 		// Default true — see compilePrompt() above for why.
-		const useChat = this.connection.extraJson?.useChat ?? true
+		const useSession = this.connection.extraJson?.useSession ?? true
 		// A fresh key per generation — lets abort() tell KoboldCPP exactly which
 		// in-flight generation to actually stop computing.
 		this.genKey = crypto.randomUUID()
@@ -172,14 +172,16 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		const stopStrings = StopStrings.get({
 			format: this.connection.promptFormat || "chatml",
 			characters:
-				this.chat.chatCharacters?.map((cc) => cc.character) || [],
-			personas: this.chat.chatPersonas?.map((cp) => cp.persona) || [],
+				this.session.sessionCharacters?.map((cc) => cc.character) || [],
+			personas:
+				this.session.sessionPersonas?.map((cp) => cp.persona) || [],
 			currentCharacterId: this.currentCharacterId ?? undefined
 		})
 		const characterName = resolveCharacterName(
-			this.chat.chatCharacters?.[0]?.character
+			this.session.sessionCharacters?.[0]?.character
 		)
-		const personaName = this.chat.chatPersonas?.[0]?.persona?.name || "user"
+		const personaName =
+			this.session.sessionPersonas?.[0]?.persona?.name || "user"
 		const stopContext: Record<string, string> = {
 			char: characterName,
 			user: personaName
@@ -195,10 +197,10 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		const samplingParams = this.mapSamplingConfig()
 
 		// Response-shape contract, translated to KoboldCPP's native mechanism.
-		// KoboldCPP accepts a GBNF `grammar` on BOTH the OpenAI-compat chat
+		// KoboldCPP accepts a GBNF `grammar` on BOTH the OpenAI-compat session
 		// endpoint and the raw completion endpoints, so this applies either way.
 		// Empty object when the caller wants plain text, so unconstrained
-		// generation — every chat message — sends no grammar key at all.
+		// generation — every session message — sends no grammar key at all.
 		// A responseSchema narrows this from "any JSON object" to the exact
 		// shape the caller needs; without one it stays object-level.
 		const formatParams =
@@ -213,8 +215,8 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		// Prepare the request body according to KoboldCPP API
 		let requestBody: Record<string, any>
 
-		if (useChat) {
-			// Use OpenAI-style chat completion format. genkey is a KoboldCPP
+		if (useSession) {
+			// Use OpenAI-style session completion format. genkey is a KoboldCPP
 			// extension the OpenAI-compat endpoint may or may not honor — harmless
 			// to include either way, and abort() below still works via the plain
 			// fetch abort for this mode regardless.
@@ -233,7 +235,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				// that key is in the Tkinter GUI's own launch-config code,
 				// building the --jinja_kwargs CLI argument for someone
 				// running the GUI directly. The actual per-request path
-				// (chatcompletions handler, ~L4348-4354) only reads a nested
+				// (sessioncompletions handler, ~L4348-4354) only reads a nested
 				// chat_template_kwargs object and merges it over the
 				// server's cached/launch-time jinja kwargs — a top-level
 				// field here was silently ignored, so no enable_thinking
@@ -250,10 +252,10 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 			}
 		} else {
 			// Use text completion format. enable_thinking is deliberately
-			// omitted here — it's a chat-template (Jinja) variable, only
-			// meaningful to the OpenAI-chat-completions code path a model's
+			// omitted here — it's a session-template (Jinja) variable, only
+			// meaningful to the OpenAI-session-completions code path a model's
 			// template can reference; the raw completion endpoints don't run
-			// the chat-template pipeline at all, so including it here was a
+			// the session-template pipeline at all, so including it here was a
 			// silent no-op regardless of the Thinking/Reasoning setting.
 			requestBody = {
 				prompt: compiledPrompt.prompt,
@@ -277,8 +279,8 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		// TEMPORARY DEBUG — remove after diagnosing the Gemma 4
 		// thinking-not-appearing report.
 		console.log(
-			"[KCPP DEBUG] useChat:",
-			useChat,
+			"[KCPP DEBUG] useSession:",
+			useSession,
 			"stream:",
 			stream,
 			"enableThinking:",
@@ -304,7 +306,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 					})
 
 					try {
-						const endpoint = useChat
+						const endpoint = useSession
 							? `${baseUrl}/v1/chat/completions`
 							: `${baseUrl}/api/extra/generate/stream`
 
@@ -359,14 +361,14 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 									} catch (e) {
 										continue
 									}
-									if (useChat) {
+									if (useSession) {
 										// TEMPORARY DEBUG — remove after diagnosing
 										// the Gemma 4 thinking-not-appearing report.
 										console.log(
 											"[KCPP DEBUG] raw delta:",
 											JSON.stringify(data.choices?.[0])
 										)
-										// OpenAI chat format
+										// OpenAI session format
 										// A 200 stream doesn't guarantee a real
 										// completion — eg. no model loaded comes
 										// back as a single chunk with an empty
@@ -436,7 +438,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 			this.abortController = new AbortController()
 
 			try {
-				const endpoint = useChat
+				const endpoint = useSession
 					? `${baseUrl}/v1/chat/completions`
 					: `${baseUrl}/api/v1/generate`
 
@@ -479,7 +481,10 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				// HTTP 200 with an empty message and finish_reason "error".
 				// Silently accepting that as a successful-but-empty reply leaves
 				// the user staring at a blank message with no explanation.
-				if (useChat && data.choices?.[0]?.finish_reason === "error") {
+				if (
+					useSession &&
+					data.choices?.[0]?.finish_reason === "error"
+				) {
 					throw new Error(
 						"KoboldCPP rejected the request (finish_reason: error) — is a model loaded?"
 					)
@@ -487,17 +492,17 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 
 				let content: string
 				let thinkingContent: string | undefined
-				if (useChat) {
+				if (useSession) {
 					// TEMPORARY DEBUG — remove after diagnosing the Gemma 4
 					// thinking-not-appearing report.
 					console.log(
 						"[KCPP DEBUG] non-stream raw message:",
 						JSON.stringify(data.choices?.[0]?.message)
 					)
-					// OpenAI chat format response
+					// OpenAI session format response
 					content = data.choices?.[0]?.message?.content || ""
 					// See the streaming branch's identical read above for why
-					// this is only ever populated in chat mode.
+					// this is only ever populated in session mode.
 					thinkingContent =
 						data.choices?.[0]?.message?.reasoning_content ||
 						undefined

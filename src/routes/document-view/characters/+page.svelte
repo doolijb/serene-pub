@@ -68,10 +68,10 @@
 						Edit
 					</a>
 					<a
-						href="/document-view/chats/new?characterId={character.id}"
+						href="/document-view/sessions/new?characterId={character.id}"
 						class="a11y-btn a11y-btn-small"
 					>
-						Start Chat
+						Start Session
 					</a>
 					<button
 						type="button"

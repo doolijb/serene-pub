@@ -1,7 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { createTestDb, createTestUser, type TestDb } from "$lib/server/utils/testDb"
+import {
+	createTestDb,
+	createTestUser,
+	type TestDb
+} from "$lib/server/utils/testDb"
 import { writeSceneCast } from "$lib/server/utils/sceneCast"
 import {
 	buildSceneCastList,
@@ -300,13 +304,19 @@ describe("resolveCharacterRefs", () => {
 
 describe("reconcileSuggestedNames", () => {
 	test("a name suggested in both lists is kept only as a participant suggestion", () => {
-		const result = reconcileSuggestedNames(["Guard Captain"], ["Guard Captain"])
+		const result = reconcileSuggestedNames(
+			["Guard Captain"],
+			["Guard Captain"]
+		)
 		expect(result.participants).toEqual(["Guard Captain"])
 		expect(result.mentioned).toEqual([])
 	})
 
 	test("dedup is case-insensitive", () => {
-		const result = reconcileSuggestedNames(["Guard Captain"], ["guard captain"])
+		const result = reconcileSuggestedNames(
+			["Guard Captain"],
+			["guard captain"]
+		)
 		expect(result.mentioned).toEqual([])
 	})
 
@@ -319,7 +329,10 @@ describe("reconcileSuggestedNames", () => {
 
 describe("resolveOrCreateBindingByName", () => {
 	test("a name matching an existing binding resolves to its id — created:false, no new row", async () => {
-		const user = await createTestUser(testDb, "resolve-or-create-known-user")
+		const user = await createTestUser(
+			testDb,
+			"resolve-or-create-known-user"
+		)
 		const lorebook = await makeLorebook(user.id)
 		const binding = await makeBinding(lorebook.id, {
 			name: "Aria Vance",
@@ -341,7 +354,10 @@ describe("resolveOrCreateBindingByName", () => {
 	})
 
 	test("a name matching an existing alias resolves to its id, not a duplicate", async () => {
-		const user = await createTestUser(testDb, "resolve-or-create-alias-user")
+		const user = await createTestUser(
+			testDb,
+			"resolve-or-create-alias-user"
+		)
 		const lorebook = await makeLorebook(user.id)
 		const binding = await makeBinding(lorebook.id, {
 			name: "Bram",
@@ -403,8 +419,8 @@ describe("resolveOrCreateBindingByName", () => {
 })
 
 describe("buildSceneCastList", () => {
-	test("chat characters/personas are merged in as priority entries, taking their binding's name when one exists", async () => {
-		const user = await createTestUser(testDb, "cast-chat-user")
+	test("session characters/personas are merged in as priority entries, taking their binding's name when one exists", async () => {
+		const user = await createTestUser(testDb, "cast-session-user")
 		const lorebook = await makeLorebook(user.id)
 		const [character] = await testDb
 			.insert(schema.characters)
@@ -415,23 +431,28 @@ describe("buildSceneCastList", () => {
 			name: "Kestrel",
 			binding: "{{char:1}}"
 		})
-		const [chat] = await testDb
-			.insert(schema.chats)
+		const [session] = await testDb
+			.insert(schema.sessions)
 			.values({
 				userId: user.id,
-				name: "Test Chat",
+				name: "Test Session",
 				lorebookId: lorebook.id,
 				isGroup: false
 			})
 			.returning()
 		await testDb
-			.insert(schema.chatCharacters)
-			.values({ chatId: chat.id, characterId: character.id })
+			.insert(schema.sessionCharacters)
+			.values({ sessionId: session.id, characterId: character.id })
 
 		const historyEntry = await makeHistoryEntry(lorebook.id)
 		const scene = await makeScene(lorebook.id, historyEntry.id)
 
-		const cast = await buildSceneCastList(scene.id, lorebook.id, chat.id, testDb)
+		const cast = await buildSceneCastList(
+			scene.id,
+			lorebook.id,
+			session.id,
+			testDb
+		)
 
 		expect(cast).toHaveLength(1)
 		expect(cast[0].name).toBe("Kestrel")
@@ -491,7 +512,12 @@ describe("buildSceneCastList", () => {
 			testDb as any
 		)
 
-		const cast = await buildSceneCastList(nextScene.id, lorebook.id, null, testDb)
+		const cast = await buildSceneCastList(
+			nextScene.id,
+			lorebook.id,
+			null,
+			testDb
+		)
 		expect(cast.map((c) => c.id)).toContain(npcBinding.id)
 	})
 
@@ -559,10 +585,7 @@ describe("reconcileParticipantsAndMentioned", () => {
 // (not the whole function) above MAX_BINDINGS_FOR_SCENE_CAST bindings.
 describe("buildSceneCastList — fuzzy-dedup cap (Round-12 audit fix)", () => {
 	test("above the cap, returns every binding without throwing/hanging and logs a warning", async () => {
-		const user = await createTestUser(
-			testDb,
-			"scenecast-cap-over-user"
-		)
+		const user = await createTestUser(testDb, "scenecast-cap-over-user")
 		const lorebook = await makeLorebook(user.id, "Cap Over Book")
 
 		const total = MAX_BINDINGS_FOR_SCENE_CAST + 1
@@ -575,12 +598,7 @@ describe("buildSceneCastList — fuzzy-dedup cap (Round-12 audit fix)", () => {
 		)
 
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
-		const cast = await buildSceneCastList(
-			null,
-			lorebook.id,
-			null,
-			testDb
-		)
+		const cast = await buildSceneCastList(null, lorebook.id, null, testDb)
 
 		expect(cast).toHaveLength(total)
 		expect(warnSpy).toHaveBeenCalledWith(
@@ -590,10 +608,7 @@ describe("buildSceneCastList — fuzzy-dedup cap (Round-12 audit fix)", () => {
 	})
 
 	test("under the cap, fuzzy dedup still collapses near-duplicate names as before", async () => {
-		const user = await createTestUser(
-			testDb,
-			"scenecast-cap-under-user"
-		)
+		const user = await createTestUser(testDb, "scenecast-cap-under-user")
 		const lorebook = await makeLorebook(user.id, "Cap Under Book")
 
 		await testDb.insert(schema.lorebookBindings).values([
@@ -612,12 +627,7 @@ describe("buildSceneCastList — fuzzy-dedup cap (Round-12 audit fix)", () => {
 		])
 
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
-		const cast = await buildSceneCastList(
-			null,
-			lorebook.id,
-			null,
-			testDb
-		)
+		const cast = await buildSceneCastList(null, lorebook.id, null, testDb)
 
 		expect(warnSpy).not.toHaveBeenCalled()
 		expect(cast).toHaveLength(1)

@@ -374,10 +374,9 @@ describe("characters import/export (PGlite integration)", () => {
 	})
 
 	test("importing a character card with an embedded lorebook links the primary character to the imported lorebook with no duplicate character row", async () => {
-		const {
-			charactersImportCard,
-			charactersExportCard
-		} = await import("./characters")
+		const { charactersImportCard, charactersExportCard } = await import(
+			"./characters"
+		)
 		const { lorebookImportHandler } = await import("./lorebooks")
 		const user = await makeUser("embedded-book-relink-user")
 

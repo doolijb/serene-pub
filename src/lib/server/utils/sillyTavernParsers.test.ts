@@ -10,7 +10,7 @@ import { PNG } from "pngjs"
 import {
 	extractCharacterFromPNG,
 	readCharacterFile,
-	parseChatFile,
+	parseSessionFile,
 	normalizeTimestamp,
 	mapGroupReplyStrategy
 } from "./sillyTavernParsers"
@@ -112,7 +112,7 @@ describe("readCharacterFile", () => {
 	})
 })
 
-describe("parseChatFile", () => {
+describe("parseSessionFile", () => {
 	let dir: string
 
 	beforeEach(() => {
@@ -124,7 +124,7 @@ describe("parseChatFile", () => {
 	})
 
 	test("parses a header line followed by message lines (SillyTavern JSONL format)", async () => {
-		const filePath = path.join(dir, "chat.jsonl")
+		const filePath = path.join(dir, "session.jsonl")
 		const header = {
 			user_name: "User",
 			character_name: "Aria",
@@ -137,7 +137,7 @@ describe("parseChatFile", () => {
 		const lines = [header, ...messages].map((l) => JSON.stringify(l))
 		await fsPromises.writeFile(filePath, lines.join("\n"))
 
-		const result = await parseChatFile(filePath)
+		const result = await parseSessionFile(filePath)
 
 		expect(result?.header.character_name).toBe("Aria")
 		expect(result?.messages).toHaveLength(2)
@@ -146,7 +146,7 @@ describe("parseChatFile", () => {
 
 	test("returns null for a missing file instead of throwing", async () => {
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
-		const result = await parseChatFile(path.join(dir, "missing.jsonl"))
+		const result = await parseSessionFile(path.join(dir, "missing.jsonl"))
 		expect(result).toBeNull()
 		errorSpy.mockRestore()
 	})
@@ -156,7 +156,7 @@ describe("parseChatFile", () => {
 		await fsPromises.writeFile(filePath, "{not json")
 
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
-		const result = await parseChatFile(filePath)
+		const result = await parseSessionFile(filePath)
 		expect(result).toBeNull()
 		errorSpy.mockRestore()
 	})

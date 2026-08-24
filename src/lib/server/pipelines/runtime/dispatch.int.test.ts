@@ -103,7 +103,7 @@ vi.mock("$lib/server/utils/getUserConfigurations", () => ({
 		promptConfig: { id: 1, systemPrompt: "Be brief." }
 	})
 }))
-let chatRow = true
+let sessionRow = true
 
 /**
  * The database, handed in rather than imported.
@@ -114,24 +114,28 @@ let chatRow = true
  */
 const fakeDb = {
 	query: {
-		chats: {
+		sessions: {
 			findFirst: async () =>
-				chatRow && {
+				sessionRow && {
 					id: 7,
-					chatType: "chat",
-					chatCharacters: [
+					sessionType: "session",
+					sessionCharacters: [
 						{ character: { id: 1, name: "Alice" } },
 						{ character: null }
 					],
-					chatPersonas: [{ persona: { id: 1, name: "Bob" } }],
+					sessionPersonas: [{ persona: { id: 1, name: "Bob" } }],
 					lorebook: null
 				}
 		}
 	}
 } as any
 
-const { dispatchGeneration, DispatchError } = await import("$lib/server/pipelines/runtime/dispatch")
-const { createHost, HostScopeError } = await import("$lib/server/pipelines/runtime/host")
+const { dispatchGeneration, DispatchError } = await import(
+	"$lib/server/pipelines/runtime/dispatch"
+)
+const { createHost, HostScopeError } = await import(
+	"$lib/server/pipelines/runtime/host"
+)
 const { coreBindings } = await import("$lib/server/pipelines/runtime/bindings")
 
 const compiled = { prompt: "You are Alice.", meta: { built: "by a Task" } }
@@ -139,7 +143,7 @@ const compiled = { prompt: "You are Alice.", meta: { built: "by a Task" } }
 beforeEach(() => {
 	seen = {}
 	mode = "text"
-	chatRow = true
+	sessionRow = true
 	connectionForRun = connection
 })
 
@@ -151,7 +155,7 @@ describe("dispatching a prompt built elsewhere", () => {
 		const r = await dispatchGeneration({
 			db: fakeDb,
 			compiledPrompt: compiled,
-			chatId: 7,
+			sessionId: 7,
 			userId: 1
 		})
 		expect(seen.compiledPrompt).toBe(compiled)
@@ -161,13 +165,13 @@ describe("dispatching a prompt built elsewhere", () => {
 
 	it("drops cast rows whose character was deleted, as the legacy path does", async () => {
 		// The FK is nullable with `onDelete: set null`, so a row can survive its
-		// character. `BasePromptChat` requires the relation on the rows it lists.
+		// character. `BasePromptSession` requires the relation on the rows it lists.
 		await dispatchGeneration({
 			db: fakeDb,
 			compiledPrompt: compiled,
-			chatId: 7
+			sessionId: 7
 		})
-		expect(seen.constructedWith.chat.chatCharacters).toHaveLength(1)
+		expect(seen.constructedWith.session.sessionCharacters).toHaveLength(1)
 	})
 
 	it("streams to the sink and still returns the whole text", async () => {
@@ -177,7 +181,7 @@ describe("dispatching a prompt built elsewhere", () => {
 		const r = await dispatchGeneration({
 			db: fakeDb,
 			compiledPrompt: compiled,
-			chatId: 7,
+			sessionId: 7,
 			onChunk: (c) => chunks.push(c),
 			onThinking: (c) => thoughts.push(c)
 		})
@@ -194,7 +198,7 @@ describe("dispatching a prompt built elsewhere", () => {
 		await dispatchGeneration({
 			db: fakeDb,
 			compiledPrompt: compiled,
-			chatId: 7,
+			sessionId: 7,
 			onChunk: (c) => chunks.push(c)
 		})
 		expect(chunks).toEqual(["Hello there"])
@@ -210,7 +214,7 @@ describe("dispatching a prompt built elsewhere", () => {
 		const done = dispatchGeneration({
 			db: fakeDb,
 			compiledPrompt: compiled,
-			chatId: 7,
+			sessionId: 7,
 			signal: controller.signal,
 			onChunk: (c) => {
 				chunks.push(c)
@@ -224,21 +228,25 @@ describe("dispatching a prompt built elsewhere", () => {
 
 	it("refuses an empty payload rather than generating from nothing", async () => {
 		await expect(
-			dispatchGeneration({ db: fakeDb, compiledPrompt: null, chatId: 7 })
+			dispatchGeneration({
+				db: fakeDb,
+				compiledPrompt: null,
+				sessionId: 7
+			})
 		).rejects.toThrow(DispatchError)
 	})
 
-	it("says the chat is gone rather than generating into nothing", async () => {
-		// A run can outlive the chat it was triggered in — the prompt was built
-		// minutes ago and the user deleted the chat while the model was queued.
-		chatRow = false
+	it("says the session is gone rather than generating into nothing", async () => {
+		// A run can outlive the session it was triggered in — the prompt was built
+		// minutes ago and the user deleted the session while the model was queued.
+		sessionRow = false
 		await expect(
 			dispatchGeneration({
 				db: fakeDb,
 				compiledPrompt: compiled,
-				chatId: 7
+				sessionId: 7
 			})
-		).rejects.toThrow(/no chat 7/)
+		).rejects.toThrow(/no session 7/)
 	})
 
 	it("says so plainly when no connection is configured", async () => {
@@ -247,7 +255,7 @@ describe("dispatching a prompt built elsewhere", () => {
 			dispatchGeneration({
 				db: fakeDb,
 				compiledPrompt: compiled,
-				chatId: 7
+				sessionId: 7
 			})
 		).rejects.toThrow(/no AI connection is configured/)
 	})
@@ -262,7 +270,7 @@ describe("what dispatch refuses to hand back", () => {
 		const r = await dispatchGeneration({
 			db: fakeDb,
 			compiledPrompt: compiled,
-			chatId: 7
+			sessionId: 7
 		})
 		const serialised = JSON.stringify(r)
 		expect(serialised).not.toContain(SECRET_KEY)
@@ -275,7 +283,7 @@ describe("what dispatch refuses to hand back", () => {
 
 	it("keeps the connection out of the binding's result too", async () => {
 		const bindings = coreBindings()
-		const host = createHost(fakeDb, { chatId: 7, userId: 1 })
+		const host = createHost(fakeDb, { sessionId: 7, userId: 1 })
 		const r: any = await bindings["core:provider/generate-text@1"]!(
 			{ compiledPrompt: compiled },
 			{
@@ -318,7 +326,7 @@ describe("the generate-text binding", () => {
 
 	it("takes the assemble node's output without a shim in between", async () => {
 		const r = await runWith(
-			{ chatId: 7 },
+			{ sessionId: 7 },
 			{ main: compiled, blocks: [], budget: {} }
 		)
 		expect(r.kind).toBe("ok")
@@ -329,19 +337,19 @@ describe("the generate-text binding", () => {
 		// A stop sequence at position zero is a thing that happens. Calling it
 		// an error sends whoever reads the receipt hunting for a bug.
 		mode = "empty"
-		const r = await runWith({ chatId: 7 })
+		const r = await runWith({ sessionId: 7 })
 		expect(r.kind).toBe("halt")
 		expect(r.reason).toMatch(/returned nothing/)
 	})
 
 	it("halts on an abort, and names it as one", async () => {
 		mode = "abort"
-		const r = await runWith({ chatId: 7 })
+		const r = await runWith({ sessionId: 7 })
 		expect(r.kind).toBe("halt")
 		expect(r.reason).toMatch(/aborted/)
 	})
 
-	it("refuses to generate in a run with no chat scope", async () => {
+	it("refuses to generate in a run with no session scope", async () => {
 		await expect(runWith({ userId: 1 })).rejects.toThrow(HostScopeError)
 	})
 
@@ -350,7 +358,7 @@ describe("the generate-text binding", () => {
 		mode = "stream"
 		const chunks: string[] = []
 		const r = await runWith({
-			chatId: 7,
+			sessionId: 7,
 			sink: { onChunk: (c: string) => chunks.push(c) }
 		})
 		expect(chunks).toEqual(["Hel", "lo ", "there"])
@@ -397,7 +405,9 @@ describe("toCompiledPrompt's retrieval trail", () => {
 	}
 
 	const meta = async () => {
-		const { toCompiledPrompt } = await import("$lib/server/pipelines/runtime/dispatch")
+		const { toCompiledPrompt } = await import(
+			"$lib/server/pipelines/runtime/dispatch"
+		)
 		return toCompiledPrompt(allocation, { promptFormat: "vicuna" }).meta
 	}
 
@@ -436,7 +446,9 @@ describe("toCompiledPrompt's retrieval trail", () => {
 	it("degrades to an empty trail rather than throwing", async () => {
 		// A plugin's assembler may produce a payload with no block record at
 		// all. The panel renders nothing; it must not break the send.
-		const { toCompiledPrompt } = await import("$lib/server/pipelines/runtime/dispatch")
+		const { toCompiledPrompt } = await import(
+			"$lib/server/pipelines/runtime/dispatch"
+		)
 		const bare = toCompiledPrompt(
 			{ rendered: "x" },
 			{ promptFormat: "vicuna" }

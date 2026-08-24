@@ -127,10 +127,7 @@
 			)
 			socket.off("connections:test", handleConnectionsTest)
 			socket.off("connections:create", handleConnectionsCreate)
-			socket.off(
-				"connections:create:error",
-				handleConnectionsCreateError
-			)
+			socket.off("connections:create:error", handleConnectionsCreateError)
 		}
 	})
 </script>

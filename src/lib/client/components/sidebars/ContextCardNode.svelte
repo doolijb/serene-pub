@@ -49,7 +49,9 @@
 		onToggleCollapsed
 	}: Props = $props()
 
-	let isCollapsed = $derived(card.kind === "block" && collapsedIds.has(card.id))
+	let isCollapsed = $derived(
+		card.kind === "block" && collapsedIds.has(card.id)
+	)
 
 	const ROLE_ICONS: Record<string, any> = {
 		systemBlock: Icons.ScrollText,
@@ -84,7 +86,10 @@
 
 	function commitBlockTag(newHelperName: string, newTagSource: string) {
 		if (card.kind !== "block") return
-		if (newHelperName === card.helperName && newTagSource === card.tagSource)
+		if (
+			newHelperName === card.helperName &&
+			newTagSource === card.tagSource
+		)
 			return
 		const orphaned = findOrphanedBlockParamNames(
 			card.tagSource,
@@ -261,7 +266,10 @@
 						title={card.helperName}
 						aria-label="Helper name"
 						onblur={(e) =>
-							commitBlockTag(e.currentTarget.value.trim() || card.helperName, card.tagSource)}
+							commitBlockTag(
+								e.currentTarget.value.trim() || card.helperName,
+								card.tagSource
+							)}
 					/>
 					<input
 						type="text"
@@ -271,7 +279,10 @@
 						title={card.tagSource}
 						aria-label="Tag condition or parameters"
 						onblur={(e) =>
-							commitBlockTag(card.helperName, e.currentTarget.value.trim())}
+							commitBlockTag(
+								card.helperName,
+								e.currentTarget.value.trim()
+							)}
 					/>
 				</div>
 				{#if tagError}
@@ -294,8 +305,8 @@
 									class="card preset-tonal-surface max-w-xs p-2 text-sm"
 								>
 									Outputs a single value. Unescaped ({"{{{"}...{"}}}"})
-									renders raw text/HTML; escaped ({"{{"}...{"}}"}) HTML-encodes
-									it first.
+									renders raw text/HTML; escaped ({"{{"}...{"}}"})
+									HTML-encodes it first.
 								</Popover.Content>
 							</Popover.Positioner>
 						</Portal>
@@ -309,9 +320,14 @@
 						title={card.expressionSource}
 						aria-label="Variable expression"
 						onblur={(e) =>
-							commitVariable(e.currentTarget.value.trim(), card.escaped)}
+							commitVariable(
+								e.currentTarget.value.trim(),
+								card.escaped
+							)}
 					/>
-					<label class="flex items-center gap-1 text-xs whitespace-nowrap">
+					<label
+						class="flex items-center gap-1 text-xs whitespace-nowrap"
+					>
 						<input
 							type="checkbox"
 							checked={card.escaped}
@@ -405,7 +421,9 @@
 	{/if}
 
 	{#if card.kind === "block" && !isCollapsed}
-		<div class="border-surface-300-700 ml-2 flex flex-col gap-2 border-l-2 pl-3">
+		<div
+			class="border-surface-300-700 ml-2 flex flex-col gap-2 border-l-2 pl-3"
+		>
 			{#if card.children.length === 0}
 				<p class="text-surface-700-300 text-xs">No cards yet.</p>
 			{/if}
@@ -423,7 +441,8 @@
 						onMoveDown={() => childActions?.moveDown(i)}
 						canMoveUp={i > 0}
 						canMoveDown={i < card.children.length - 1}
-						onInsertAbove={(spec) => childActions?.insertAt(i, spec)}
+						onInsertAbove={(spec) =>
+							childActions?.insertAt(i, spec)}
 						showDragHandle={card.children.length > 1}
 						{collapsedIds}
 						{onToggleCollapsed}
@@ -437,9 +456,13 @@
 			)}
 
 			{#if card.hasElse}
-				<div class="border-surface-300-700 mt-2 flex flex-col gap-2 border-t pt-2">
+				<div
+					class="border-surface-300-700 mt-2 flex flex-col gap-2 border-t pt-2"
+				>
 					<div class="flex items-center gap-2">
-						<span class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase">
+						<span
+							class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+						>
 							Else
 						</span>
 						<button
@@ -452,7 +475,9 @@
 						</button>
 					</div>
 					{#if (card.elseChildren ?? []).length === 0}
-						<p class="text-surface-700-300 text-xs">No cards yet.</p>
+						<p class="text-surface-700-300 text-xs">
+							No cards yet.
+						</p>
 					{/if}
 					<CardListDnd
 						cards={card.elseChildren ?? []}
@@ -467,9 +492,12 @@
 								onMoveUp={() => elseActions?.moveUp(i)}
 								onMoveDown={() => elseActions?.moveDown(i)}
 								canMoveUp={i > 0}
-								canMoveDown={i < (card.elseChildren?.length ?? 0) - 1}
-								onInsertAbove={(spec) => elseActions?.insertAt(i, spec)}
-								showDragHandle={(card.elseChildren?.length ?? 0) > 1}
+								canMoveDown={i <
+									(card.elseChildren?.length ?? 0) - 1}
+								onInsertAbove={(spec) =>
+									elseActions?.insertAt(i, spec)}
+								showDragHandle={(card.elseChildren?.length ??
+									0) > 1}
 								{collapsedIds}
 								{onToggleCollapsed}
 							/>
@@ -477,7 +505,10 @@
 					</CardListDnd>
 					{@render addCardMenu(
 						(spec) =>
-							elseActions?.insertAt(card.elseChildren?.length ?? 0, spec),
+							elseActions?.insertAt(
+								card.elseChildren?.length ?? 0,
+								spec
+							),
 						"Add Card",
 						"Add Card"
 					)}

@@ -3,9 +3,9 @@ import { getNextCharacterTurn } from "./getNextCharacterTurn"
 import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 
 // getNextCharacterTurn only reads:
-//   chatMessages: { role, personaId, characterId, isHidden, isNarratorResponse }[]
-//   chatCharacters: { position, isActive, character: { id } }[]
-//   chatPersonas: { persona: { id } }[]
+//   sessionMessages: { role, personaId, characterId, isHidden, isNarratorResponse }[]
+//   sessionCharacters: { position, isActive, character: { id } }[]
+//   sessionPersonas: { persona: { id } }[]
 // so fixtures below are plain objects with exactly those fields, cast via
 // `as any` since the real Select* types carry many more required columns.
 
@@ -45,7 +45,7 @@ function narratorResponseMsg(overrides: Record<string, any> = {}) {
 	}
 }
 
-function chatCharacter(
+function sessionCharacter(
 	id: number,
 	position: number,
 	isActive = true,
@@ -54,11 +54,11 @@ function chatCharacter(
 	return { position, isActive, removedAt, character: { id } }
 }
 
-function chatPersona(id: number) {
+function sessionPersona(id: number) {
 	return { persona: { id } }
 }
 
-function buildChat({
+function buildSession({
 	messages,
 	characterIds,
 	personaIds
@@ -68,57 +68,57 @@ function buildChat({
 	personaIds: number[]
 }) {
 	return {
-		chatMessages: messages,
-		chatCharacters: characterIds.map((id, i) => chatCharacter(id, i)),
-		chatPersonas: personaIds.map((id) => chatPersona(id))
+		sessionMessages: messages,
+		sessionCharacters: characterIds.map((id, i) => sessionCharacter(id, i)),
+		sessionPersonas: personaIds.map((id) => sessionPersona(id))
 	} as any
 }
 
 describe("getNextCharacterTurn", () => {
 	test("returns null when there are no active characters", () => {
-		const chat = buildChat({
+		const session = buildSession({
 			messages: [userMsg(1)],
 			characterIds: [],
 			personaIds: [1]
 		})
-		expect(getNextCharacterTurn(chat)).toBeNull()
+		expect(getNextCharacterTurn(session)).toBeNull()
 	})
 
 	test("returns null when there are no personas", () => {
-		const chat = buildChat({
+		const session = buildSession({
 			messages: [assistantMsg(1)],
 			characterIds: [1],
 			personaIds: []
 		})
-		expect(getNextCharacterTurn(chat)).toBeNull()
+		expect(getNextCharacterTurn(session)).toBeNull()
 	})
 
-	// Round-9 audit fix: a soft-removed chatCharacters row (removedAt set)
+	// Round-9 audit fix: a soft-removed sessionCharacters row (removedAt set)
 	// must never participate in round-robin, even if isActive was somehow
-	// still true — belt-and-suspenders alongside getPromptChatFromDb's own
+	// still true — belt-and-suspenders alongside getPromptSessionFromDb's own
 	// choke-point filter, since this function's input isn't guaranteed to
 	// always come from that one query.
 	test("never selects a character with removedAt set, even if isActive is true", () => {
-		const chat = {
-			chatMessages: [],
-			chatCharacters: [
-				chatCharacter(1, 0, true, new Date()),
-				chatCharacter(2, 1, true, null)
+		const session = {
+			sessionMessages: [],
+			sessionCharacters: [
+				sessionCharacter(1, 0, true, new Date()),
+				sessionCharacter(2, 1, true, null)
 			],
-			chatPersonas: [chatPersona(1)]
+			sessionPersonas: [sessionPersona(1)]
 		} as any
 		// Both have never replied, so ordinarily character 1 (position 0)
 		// would be picked first — but it's removed, so character 2 must win.
-		expect(getNextCharacterTurn(chat)).toBe(2)
+		expect(getNextCharacterTurn(session)).toBe(2)
 	})
 
 	test("returns null when the only character is removed", () => {
-		const chat = {
-			chatMessages: [],
-			chatCharacters: [chatCharacter(1, 0, true, new Date())],
-			chatPersonas: [chatPersona(1)]
+		const session = {
+			sessionMessages: [],
+			sessionCharacters: [sessionCharacter(1, 0, true, new Date())],
+			sessionPersonas: [sessionPersona(1)]
 		} as any
-		expect(getNextCharacterTurn(chat)).toBeNull()
+		expect(getNextCharacterTurn(session)).toBeNull()
 	})
 
 	test("a character who has never replied is immediately due, even mid-conversation (not stuck behind the healthy-window check)", () => {
@@ -126,7 +126,7 @@ describe("getNextCharacterTurn", () => {
 		// Character 20 never speaks anywhere in history. The old behavior
 		// required every cast member to already appear in the window before
 		// anyone could be picked, which made this permanently null — a
-		// character added to an in-progress chat could never get a first
+		// character added to an in-progress session could never get a first
 		// turn. Character 20 must win regardless of character 10's recency.
 		const messages = [
 			assistantMsg(10),
@@ -134,12 +134,12 @@ describe("getNextCharacterTurn", () => {
 			userMsg(2),
 			assistantMsg(10)
 		]
-		const chat = buildChat({
+		const session = buildSession({
 			messages,
 			characterIds: [10, 20],
 			personaIds: [1, 2]
 		})
-		expect(getNextCharacterTurn(chat)).toBe(20)
+		expect(getNextCharacterTurn(session)).toBe(20)
 	})
 
 	test("healthy window precondition: a due character is only selected once every persona and character has appeared within the last castSize messages", () => {
@@ -151,34 +151,34 @@ describe("getNextCharacterTurn", () => {
 			userMsg(1),
 			userMsg(2)
 		]
-		const chat = buildChat({
+		const session = buildSession({
 			messages,
 			characterIds: [10, 20],
 			personaIds: [1, 2]
 		})
 		// lookback = last 3: [assistant(20), user(1), user(2)]. Character 10 is
 		// absent from lookback -> due. Character 20 is present -> not due.
-		expect(getNextCharacterTurn(chat)).toBe(10)
+		expect(getNextCharacterTurn(session)).toBe(10)
 	})
 
-	test("minimal chat (1 persona + 1 character): character is due once it has no message in the last castSize - 1 (= 1) messages", () => {
+	test("minimal session (1 persona + 1 character): character is due once it has no message in the last castSize - 1 (= 1) messages", () => {
 		const messages = [assistantMsg(1), userMsg(1)]
-		const chat = buildChat({
+		const session = buildSession({
 			messages,
 			characterIds: [1],
 			personaIds: [1]
 		})
-		expect(getNextCharacterTurn(chat)).toBe(1)
+		expect(getNextCharacterTurn(session)).toBe(1)
 	})
 
-	test("minimal chat (1 persona + 1 character): character is not due immediately after its own most recent reply", () => {
+	test("minimal session (1 persona + 1 character): character is not due immediately after its own most recent reply", () => {
 		const messages = [userMsg(1), assistantMsg(1)]
-		const chat = buildChat({
+		const session = buildSession({
 			messages,
 			characterIds: [1],
 			personaIds: [1]
 		})
-		expect(getNextCharacterTurn(chat)).toBeNull()
+		expect(getNextCharacterTurn(session)).toBeNull()
 	})
 
 	test("due rule: a character due if it has no message in the last castSize - 1 messages, verified against a non-due sibling", () => {
@@ -189,12 +189,12 @@ describe("getNextCharacterTurn", () => {
 			userMsg(1),
 			userMsg(2)
 		]
-		const chat = buildChat({
+		const session = buildSession({
 			messages,
 			characterIds: [10, 20],
 			personaIds: [1, 2]
 		})
-		expect(getNextCharacterTurn(chat)).toBe(10)
+		expect(getNextCharacterTurn(session)).toBe(10)
 	})
 
 	test("the due scan is not simply 'first active character' - a later-position character is correctly identified as due while earlier-position ones are not", () => {
@@ -206,7 +206,7 @@ describe("getNextCharacterTurn", () => {
 			assistantMsg(20),
 			userMsg(1)
 		]
-		const chat = buildChat({
+		const session = buildSession({
 			messages,
 			characterIds: [10, 20, 30],
 			personaIds: [1]
@@ -218,7 +218,7 @@ describe("getNextCharacterTurn", () => {
 		// *first* in the array, checked *first* in the loop - is absent from
 		// lookback and is the one actually due. This confirms the loop scans all
 		// active characters and picks by recency, not by iteration/position order.
-		expect(getNextCharacterTurn(chat)).toBe(30)
+		expect(getNextCharacterTurn(session)).toBe(30)
 	})
 
 	// Note on the "most overdue wins" tie-break described in getNextCharacterTurn's
@@ -243,14 +243,14 @@ describe("getNextCharacterTurn", () => {
 		// characterId: null) sits between the character's reply and now - it
 		// must not occupy a slot in the healthy-window/lookback checks.
 		const messages = [assistantMsg(1), narratorResponseMsg(), userMsg(1)]
-		const chat = buildChat({
+		const session = buildSession({
 			messages,
 			characterIds: [1],
 			personaIds: [1]
 		})
 		// After filtering, effective history is [assistant(1), user(1)] - same
 		// as the minimal due case.
-		expect(getNextCharacterTurn(chat)).toBe(1)
+		expect(getNextCharacterTurn(session)).toBe(1)
 	})
 
 	test("hidden messages are excluded from the rotation window entirely", () => {
@@ -259,33 +259,33 @@ describe("getNextCharacterTurn", () => {
 			userMsg(1, { isHidden: true }),
 			userMsg(1)
 		]
-		const chat = buildChat({
+		const session = buildSession({
 			messages,
 			characterIds: [1],
 			personaIds: [1]
 		})
 		// After filtering, effective history is [assistant(1), user(1)].
-		expect(getNextCharacterTurn(chat)).toBe(1)
+		expect(getNextCharacterTurn(session)).toBe(1)
 	})
 
 	test("inactive characters are never selected, even if otherwise due", () => {
 		const messages = [assistantMsg(1), userMsg(1)]
-		const chat = {
-			chatMessages: messages,
-			chatCharacters: [
+		const session = {
+			sessionMessages: messages,
+			sessionCharacters: [
 				{ position: 0, isActive: false, character: { id: 1 } }
 			],
-			chatPersonas: [chatPersona(1)]
+			sessionPersonas: [sessionPersona(1)]
 		} as any
-		expect(getNextCharacterTurn(chat)).toBeNull()
+		expect(getNextCharacterTurn(session)).toBeNull()
 	})
 })
 
-// Fixtures below mirror userMsg/assistantMsg/chatCharacter/chatPersona/buildChat
+// Fixtures below mirror userMsg/assistantMsg/sessionCharacter/sessionPersona/buildSession
 // above, but additionally carry a userId on each character/persona so the
 // "User-Split" strategy has ownership info to group by.
 
-function chatCharacterWithUser(
+function sessionCharacterWithUser(
 	id: number,
 	position: number,
 	userId: number,
@@ -294,11 +294,11 @@ function chatCharacterWithUser(
 	return { position, isActive, character: { id, userId } }
 }
 
-function chatPersonaWithUser(id: number, userId: number) {
+function sessionPersonaWithUser(id: number, userId: number) {
 	return { persona: { id, userId } }
 }
 
-function buildUserSplitChat({
+function buildUserSplitSession({
 	messages,
 	characters,
 	personas
@@ -313,16 +313,18 @@ function buildUserSplitChat({
 	personas: { id: number; userId: number }[]
 }) {
 	return {
-		chatMessages: messages,
-		chatCharacters: characters.map((c) =>
-			chatCharacterWithUser(
+		sessionMessages: messages,
+		sessionCharacters: characters.map((c) =>
+			sessionCharacterWithUser(
 				c.id,
 				c.position,
 				c.userId,
 				c.isActive ?? true
 			)
 		),
-		chatPersonas: personas.map((p) => chatPersonaWithUser(p.id, p.userId))
+		sessionPersonas: personas.map((p) =>
+			sessionPersonaWithUser(p.id, p.userId)
+		)
 	} as any
 }
 
@@ -348,13 +350,13 @@ describe("getNextCharacterTurn - User-Split strategy", () => {
 	]
 
 	test("bootstraps with the lowest userId's group, then the first character by position within it", () => {
-		const chat = buildUserSplitChat({
+		const session = buildUserSplitSession({
 			messages: [],
 			characters: allCharacters,
 			personas: allPersonas
 		})
 		expect(
-			getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)
+			getNextCharacterTurn(session, GroupReplyStrategies.USER_SPLIT)
 		).toBe(10)
 	})
 
@@ -365,13 +367,13 @@ describe("getNextCharacterTurn - User-Split strategy", () => {
 		// it, its never-replied characters win immediately, same as the
 		// never-replied bootstrap rule for the flat "Ordered" strategy.
 		const messages = [assistantMsg(10), assistantMsg(20)]
-		const chat = buildUserSplitChat({
+		const session = buildUserSplitSession({
 			messages,
 			characters: allCharacters,
 			personas: allPersonas
 		})
 		expect(
-			getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)
+			getNextCharacterTurn(session, GroupReplyStrategies.USER_SPLIT)
 		).toBe(30)
 	})
 
@@ -403,9 +405,13 @@ describe("getNextCharacterTurn - User-Split strategy", () => {
 		// character 20's (scoped index 2) - so 10 is due, not 20. If user2's
 		// interleaved messages weren't filtered out of the scoped history, this
 		// would compute a different (wrong) answer.
-		const chat = buildUserSplitChat({ messages, characters, personas })
+		const session = buildUserSplitSession({
+			messages,
+			characters,
+			personas
+		})
 		expect(
-			getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)
+			getNextCharacterTurn(session, GroupReplyStrategies.USER_SPLIT)
 		).toBe(10)
 	})
 
@@ -415,11 +421,15 @@ describe("getNextCharacterTurn - User-Split strategy", () => {
 			{ id: 20, position: 1, userId: 2 }
 		]
 		const personas = [{ id: 2, userId: 2 }]
-		const chat = buildUserSplitChat({ messages: [], characters, personas })
+		const session = buildUserSplitSession({
+			messages: [],
+			characters,
+			personas
+		})
 		// Both groups tie at "never active" -> ascending userId picks user 1,
 		// whose only character (never replied) is immediately due.
 		expect(
-			getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)
+			getNextCharacterTurn(session, GroupReplyStrategies.USER_SPLIT)
 		).toBe(10)
 	})
 
@@ -432,9 +442,13 @@ describe("getNextCharacterTurn - User-Split strategy", () => {
 			{ id: 1, userId: 5 },
 			{ id: 2, userId: 2 }
 		]
-		const chat = buildUserSplitChat({ messages: [], characters, personas })
+		const session = buildUserSplitSession({
+			messages: [],
+			characters,
+			personas
+		})
 		expect(
-			getNextCharacterTurn(chat, GroupReplyStrategies.USER_SPLIT)
+			getNextCharacterTurn(session, GroupReplyStrategies.USER_SPLIT)
 		).toBe(11)
 	})
 })

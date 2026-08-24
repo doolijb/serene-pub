@@ -121,7 +121,7 @@
 	}
 
 	// Neither response event carries a request-echo, so a per-dispatch
-	// self-unsubscribing listener (matching ChatsSidebar's search pattern) is
+	// self-unsubscribing listener (matching SessionsSidebar's search pattern) is
 	// the only way to tell a stale response apart from the latest one: the
 	// token check below discards a response if a newer search has since been
 	// dispatched, instead of letting an out-of-order response overwrite

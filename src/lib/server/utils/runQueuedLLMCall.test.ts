@@ -12,13 +12,15 @@ function macrotask() {
 	return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
-function makeMockAdapter(overrides: {
-	onGenerate?: () => Promise<{
-		completionResult: string
-		isAborted: boolean
-	}>
-	onAbort?: () => void
-} = {}) {
+function makeMockAdapter(
+	overrides: {
+		onGenerate?: () => Promise<{
+			completionResult: string
+			isAborted: boolean
+		}>
+		onAbort?: () => void
+	} = {}
+) {
 	return {
 		preflight: async () => {},
 		generate:
@@ -39,7 +41,7 @@ describe("runQueuedLLMCall — signal bridge", () => {
 
 		const result = await runQueuedLLMCall({
 			adapter,
-			taskType: "chat",
+			taskType: "session",
 			connectionName: "test",
 			samplingName: "test",
 			signal: controller.signal
@@ -71,7 +73,7 @@ describe("runQueuedLLMCall — signal bridge", () => {
 
 		const callPromise = runQueuedLLMCall({
 			adapter,
-			taskType: "chat",
+			taskType: "session",
 			connectionName: "test",
 			samplingName: "test",
 			signal: controller.signal
@@ -103,7 +105,7 @@ describe("runQueuedLLMCall — signal bridge", () => {
 		})
 		const blockerPromise = runQueuedLLMCall({
 			adapter: blockerAdapter,
-			taskType: "chat",
+			taskType: "session",
 			connectionName: "test",
 			samplingName: "test"
 		})
@@ -113,7 +115,7 @@ describe("runQueuedLLMCall — signal bridge", () => {
 		const controller = new AbortController()
 		const queuedPromise = runQueuedLLMCall({
 			adapter: queuedAdapter,
-			taskType: "chat",
+			taskType: "session",
 			connectionName: "test",
 			samplingName: "test",
 			signal: controller.signal

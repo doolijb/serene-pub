@@ -35,7 +35,7 @@ export class DispatchError extends Error {}
 
 /** Just the query surface this module needs, so any caller's db will do. */
 export interface DbLike {
-	query: { chats: { findFirst: (args: unknown) => Promise<any> } }
+	query: { sessions: { findFirst: (args: unknown) => Promise<any> } }
 }
 
 export interface DispatchRequest {
@@ -46,13 +46,13 @@ export interface DispatchRequest {
 	 *
 	 * This started as an `import("$lib/server/db")` and the end-to-end test
 	 * caught it: the pipeline ran against a test database and the dispatch
-	 * quietly read from the application's, reporting the chat as deleted. A
+	 * quietly read from the application's, reporting the session as deleted. A
 	 * module that reaches for the global connection is one that cannot be run
 	 * against anything else, which includes every future case where "anything
 	 * else" matters — a dry run, a replay, a second instance.
 	 */
 	db: DbLike
-	chatId: number
+	sessionId: number
 	userId?: number
 	/** Null in narrator mode, matching the legacy adapter's own convention. */
 	currentCharacterId?: number | null
@@ -73,37 +73,37 @@ export interface DispatchResult {
 }
 
 /**
- * The hydrated chat an adapter's constructor needs.
+ * The hydrated session an adapter's constructor needs.
  *
  * Read here rather than passed along a data edge. It is a large object with a
  * user's whole cast in it, and a pipeline value is a thing that lands in the
  * receipt and in every downstream node's input — the prompt text is what the
  * pipeline is carrying, not the rows it came from.
  */
-async function loadAdapterChat(db: DbLike, chatId: number) {
-	const chat = await db.query.chats.findFirst({
-		where: (c: any, { eq }: any) => eq(c.id, chatId),
+async function loadAdapterSession(db: DbLike, sessionId: number) {
+	const session = await db.query.sessions.findFirst({
+		where: (c: any, { eq }: any) => eq(c.id, sessionId),
 		with: {
-			chatCharacters: { with: { character: true } },
-			chatPersonas: { with: { persona: true } },
+			sessionCharacters: { with: { character: true } },
+			sessionPersonas: { with: { persona: true } },
 			lorebook: { with: { lorebookBindings: true } }
 		}
 	})
-	if (!chat)
+	if (!session)
 		throw new DispatchError(
-			`there is no chat ${chatId} to generate in — it was deleted while the run was in flight`
+			`there is no session ${sessionId} to generate in — it was deleted while the run was in flight`
 		)
 
 	// Same filter the legacy path applies: these FKs are nullable with
 	// `onDelete: "set null"`, so a deleted character leaves a row with nothing
-	// to prompt from, and `BasePromptChat` requires the relation to be present
+	// to prompt from, and `BasePromptSession` requires the relation to be present
 	// on the rows it does list.
 	return {
-		...chat,
-		chatCharacters: (chat.chatCharacters ?? []).filter(
+		...session,
+		sessionCharacters: (session.sessionCharacters ?? []).filter(
 			(cc: any) => cc.character !== null
 		),
-		chatPersonas: (chat.chatPersonas ?? []).filter(
+		sessionPersonas: (session.sessionPersonas ?? []).filter(
 			(cp: any) => cp.persona !== null
 		)
 	}
@@ -165,7 +165,7 @@ export function toCompiledPrompt(
 				total: payload?.totalTokens ?? 0,
 				limit: payload?.budget?.total ?? 0
 			},
-			chatMessages: {
+			sessionMessages: {
 				included: countIncluded(payload, "history"),
 				total: meta.messageCount ?? countIncluded(payload, "history"),
 				includedIds: idsOf(payload, true),
@@ -236,21 +236,21 @@ export async function dispatchGeneration(
 		request.generatingMessageMetadata?.isNarratorResponse
 	)
 
-	const chat = await loadAdapterChat(request.db, request.chatId)
+	const session = await loadAdapterSession(request.db, request.sessionId)
 	const {
 		sampling: defaultSampling,
 		contextConfig,
 		promptConfig
 	} = await getUserConfigurations(request.userId as number)
 
-	// The same resolver the legacy path uses, so a chat-level connection
+	// The same resolver the legacy path uses, so a session-level connection
 	// override or a per-config one applies identically on both paths. Resolving
 	// it again here rather than threading it through the pipeline is deliberate:
 	// see the header.
 	const resolved = await resolveTaskConfig({
-		taskType: isNarrator ? "narratorPrompt" : "chat",
+		taskType: isNarrator ? "narratorPrompt" : "session",
 		promptConfigId: promptConfig?.id,
-		chatId: request.chatId
+		sessionId: request.sessionId
 	})
 
 	const connection = resolved.connection
@@ -262,7 +262,7 @@ export async function dispatchGeneration(
 
 	const { Adapter } = await getConnectionAdapter(connection.type)
 	const adapter = new Adapter({
-		chat: chat as any,
+		session: session as any,
 		connection,
 		sampling: resolved.sampling ?? defaultSampling,
 		contextConfig,

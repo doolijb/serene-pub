@@ -34,7 +34,8 @@ function makeFakeHttpsModule() {
 			// "range unsupported", so the resolve step hands this exact
 			// response straight to the fallback path with no second
 			// request — the single-`get`-call flow this test relies on.
-			const cb = typeof optionsOrCb === "function" ? optionsOrCb : maybeCb!
+			const cb =
+				typeof optionsOrCb === "function" ? optionsOrCb : maybeCb!
 			const dataListeners: Array<(chunk: Buffer) => void> = []
 			const res: any = {
 				statusCode: 200,
@@ -124,13 +125,18 @@ describe("koboldcpp:downloadModel — progress broadcast throttling", () => {
 		const admin = await makeAdmin("kcpp-throttle-user")
 
 		const emitToUser = vi.fn()
-		registerKoboldCppHandlers(fakeSocket(admin.id), emitToUser, noopRegister)
+		registerKoboldCppHandlers(
+			fakeSocket(admin.id),
+			emitToUser,
+			noopRegister
+		)
 
 		await koboldCppDownloadModelHandler.handler(
 			fakeSocket(admin.id),
 			{
 				filename: "throttle-test-model.gguf",
-				downloadUrl: "https://huggingface.co/test/throttle-test-model.gguf",
+				downloadUrl:
+					"https://huggingface.co/test/throttle-test-model.gguf",
 				modelName: "Throttle Test Model"
 			} as any,
 			() => {}
@@ -153,9 +159,9 @@ describe("koboldcpp:downloadModel — progress broadcast throttling", () => {
 		expect(progressCalls.length).toBeLessThan(10)
 
 		const finalCall = progressCalls[progressCalls.length - 1]?.[1]
-		expect(
-			finalCall?.downloads?.["throttle-test-model.gguf"]?.status
-		).toBe("success")
+		expect(finalCall?.downloads?.["throttle-test-model.gguf"]?.status).toBe(
+			"success"
+		)
 		expect(
 			finalCall?.downloads?.["throttle-test-model.gguf"]?.downloaded
 		).toBe(CHUNK_COUNT * 1024)

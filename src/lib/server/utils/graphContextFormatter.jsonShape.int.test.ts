@@ -5,7 +5,7 @@
  * wrapped this block in a ```json fence, so prose was a format lie; in
  * `yourRelationships` the source is always the speaker, so every line repeated
  * the speaker's own name; and the heading "How others in this scene see X"
- * asserted co-presence that layer 2 (scoped to chat participants) does not
+ * asserted co-presence that layer 2 (scoped to session participants) does not
  * establish.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
@@ -90,7 +90,7 @@ async function scenario(
 
 	const { buildGraphContext } = await import("./graphContextFormatter")
 	const ctx = await buildGraphContext({
-		chatId: -1,
+		sessionId: -1,
 		lorebookId: lorebook.id,
 		speakerCharacterId: speakerChar.id
 	})

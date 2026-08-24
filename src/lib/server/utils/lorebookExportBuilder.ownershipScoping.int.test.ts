@@ -4,7 +4,7 @@
  * includePersonas was on, with no check that the bound entity was owned by
  * the exporting user — only that binding it in the first place had been
  * allowed, which requires nothing more than being able to *view* it (e.g.
- * shared into a chat you're a guest of), not owning it. That's a
+ * shared into a session you're a guest of), not owning it. That's a
  * data-extraction capability the app's own direct card-export path
  * (characters:exportCard/personas:exportCard) is deliberately owner-only
  * about. Now the export embeds a card only when the binding's
@@ -66,12 +66,13 @@ describe("buildLorebookExportData — character/persona ownership scoping (PGlit
 			.values({
 				userId: victim.id,
 				name: "Victim's Character",
-				description: "A private, sensitive system prompt-like description."
+				description:
+					"A private, sensitive system prompt-like description."
 			})
 			.returning()
 
 		// Simulates the binding having been created via a legitimate
-		// canViewCharacter path (shared into a chat the owner is a guest of)
+		// canViewCharacter path (shared into a session the owner is a guest of)
 		// — this test only needs the end state: a binding in the owner's own
 		// lorebook pointing at a character owned by someone else.
 		await testDb.insert(schema.lorebookBindings).values({
@@ -148,7 +149,8 @@ describe("buildLorebookExportData — narrativeGraph ownership scoping (Round-13
 			.values({
 				userId: victim.id,
 				name: "Victim's Real Name",
-				description: "A private, sensitive system prompt-like description."
+				description:
+					"A private, sensitive system prompt-like description."
 			})
 			.returning()
 

@@ -421,7 +421,7 @@
 					<ul class="ml-4 list-inside list-disc space-y-1">
 						<li>Managing all users and their permissions</li>
 						<li>
-							Accessing and modifying all chats and characters
+							Accessing and modifying all sessions and characters
 						</li>
 						<li>Changing system settings</li>
 						<li>Deleting content across the system</li>

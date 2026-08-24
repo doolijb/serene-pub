@@ -5,7 +5,7 @@
 	import { dragHandleZone, dragHandle } from "svelte-dnd-action"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
-	import EntityGalleryViewModal from "$lib/client/components/chatMessages/EntityGalleryViewModal.svelte"
+	import EntityGalleryViewModal from "$lib/client/components/sessionMessages/EntityGalleryViewModal.svelte"
 
 	interface Props {
 		entityType: "character" | "persona"
@@ -177,10 +177,7 @@
 		isUploading = false
 		toaster.error({ title: "Upload failed" })
 	}
-	function handleDeleteOk(msg: {
-		characterId?: number
-		personaId?: number
-	}) {
+	function handleDeleteOk(msg: { characterId?: number; personaId?: number }) {
 		if (!matchesEntity(msg)) return
 		toaster.success({ title: "Image deleted" })
 	}
@@ -229,10 +226,7 @@
 		socket.off("characters:setAvatar", handleSetAvatarOk)
 		socket.off("personas:listGallery", handleList)
 		socket.off("personas:uploadGalleryImage", handleUploadOk)
-		socket.off(
-			"personas:uploadGalleryImage:error" as any,
-			handleUploadErr
-		)
+		socket.off("personas:uploadGalleryImage:error" as any, handleUploadErr)
 		socket.off("personas:deleteGalleryImage", handleDeleteOk)
 		socket.off("personas:setAvatar", handleSetAvatarOk)
 	})

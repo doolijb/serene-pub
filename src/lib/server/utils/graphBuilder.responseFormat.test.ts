@@ -31,7 +31,7 @@ vi.mock("./getConnectionAdapter", () => ({
 	})
 }))
 
-const conn = { id: 1, name: "c", type: "openai_chat" } as any
+const conn = { id: 1, name: "c", type: "openai_session" } as any
 const base = {
 	connection: conn,
 	sampling: { id: 1, name: "s" } as any,
@@ -78,7 +78,7 @@ async function runBuild() {
 				historyEntry: { id: 1, year: 1, month: null, day: null },
 				participantCharacters: null,
 				mentionedCharacters: null,
-				chatId: 1,
+				sessionId: 1,
 				selectedMessageIds: [1]
 			}
 		] as any,

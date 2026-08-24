@@ -4,7 +4,7 @@
  * samplingConfigsList had no `orderBy` at all, so rows came back in whatever
  * order Postgres returned them. SamplingSidebar hides that — it renders two
  * `{#each}` blocks filtered on isImmutable — but the same response also feeds
- * EditChatForm and every per-task override selector in PromptsSidebar, which
+ * EditSessionForm and every per-task override selector in PromptsSidebar, which
  * render it flat and so interleaved presets with the user's own configs.
  * Ordering once at the source fixes all of them, and sorts within the
  * sidebar's two groups as well (its filters preserve input order).

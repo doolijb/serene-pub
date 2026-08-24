@@ -64,8 +64,11 @@ describe("userSettings:updateBackground — path validation", () => {
 	})
 
 	test("accepts a real default background path", async () => {
-		const { userSettingsUpdateBackground, userSettingsGet, getDefaultBackgrounds } =
-			await import("./userSettings")
+		const {
+			userSettingsUpdateBackground,
+			userSettingsGet,
+			getDefaultBackgrounds
+		} = await import("./userSettings")
 		const user = await makeUser("usersettings-bg-default-user")
 		await userSettingsGet.handler(fakeSocket(user.id), {}, noopEmit)
 

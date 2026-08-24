@@ -13,7 +13,7 @@ describe("buildConnectionServiceItems", () => {
 
 	test("has one item per native type (except OPENAI_CHAT and KOBOLDCPP_MANAGED) plus one per preset", () => {
 		const expectedCount =
-			(CONNECTION_TYPES.length - 2) + OPENAI_CHAT_PRESETS.length
+			CONNECTION_TYPES.length - 2 + OPENAI_CHAT_PRESETS.length
 		expect(items.length).toBe(expectedCount)
 	})
 
@@ -41,7 +41,9 @@ describe("buildConnectionServiceItems", () => {
 	test("the bare OPENAI_CHAT type is not present on its own — represented via the Empty preset", () => {
 		expect(
 			items.find(
-				(i) => i.type === CONNECTION_TYPE.OPENAI_CHAT && i.presetValue === undefined
+				(i) =>
+					i.type === CONNECTION_TYPE.OPENAI_CHAT &&
+					i.presetValue === undefined
 			)
 		).toBeUndefined()
 	})
@@ -80,26 +82,41 @@ describe("buildConnectionServiceItems", () => {
 	})
 
 	test("the two name-colliding presets (Ollama, KoboldCPP) get a disambiguated label distinct from their native counterpart", () => {
-		const nativeOllama = items.find((i) => i.key === `type:${CONNECTION_TYPE.OLLAMA}`)!
-		const presetOllama = items.find((i) => i.label.startsWith("Ollama") && i.presetValue !== undefined)!
+		const nativeOllama = items.find(
+			(i) => i.key === `type:${CONNECTION_TYPE.OLLAMA}`
+		)!
+		const presetOllama = items.find(
+			(i) => i.label.startsWith("Ollama") && i.presetValue !== undefined
+		)!
 		expect(presetOllama.label).not.toBe(nativeOllama.label)
 
-		const nativeKobold = items.find((i) => i.key === `type:${CONNECTION_TYPE.KOBOLDCPP}`)!
-		const presetKobold = items.find((i) => i.label.startsWith("KoboldCPP") && i.presetValue !== undefined)!
+		const nativeKobold = items.find(
+			(i) => i.key === `type:${CONNECTION_TYPE.KOBOLDCPP}`
+		)!
+		const presetKobold = items.find(
+			(i) =>
+				i.label.startsWith("KoboldCPP") && i.presetValue !== undefined
+		)!
 		expect(presetKobold.label).not.toBe(nativeKobold.label)
 	})
 })
 
 describe("groupConnectionServiceItems", () => {
 	test("groups follow CATEGORY_ORDER and omit empty categories", () => {
-		const groups = groupConnectionServiceItems(buildConnectionServiceItems())
-		const orderIndexes = groups.map((g) => CATEGORY_ORDER.indexOf(g.category))
+		const groups = groupConnectionServiceItems(
+			buildConnectionServiceItems()
+		)
+		const orderIndexes = groups.map((g) =>
+			CATEGORY_ORDER.indexOf(g.category)
+		)
 		expect(orderIndexes).toEqual([...orderIndexes].sort((a, b) => a - b))
 		for (const g of groups) expect(g.items.length).toBeGreaterThan(0)
 	})
 
 	test("items within a group are sorted alphabetically by label", () => {
-		const groups = groupConnectionServiceItems(buildConnectionServiceItems())
+		const groups = groupConnectionServiceItems(
+			buildConnectionServiceItems()
+		)
 		for (const g of groups) {
 			const labels = g.items.map((i) => i.label)
 			expect(labels).toEqual(
@@ -131,7 +148,9 @@ describe("filterConnectionServiceItems", () => {
 	})
 
 	test("a query matching nothing returns an empty array", () => {
-		expect(filterConnectionServiceItems(items, "totally-not-a-provider")).toEqual([])
+		expect(
+			filterConnectionServiceItems(items, "totally-not-a-provider")
+		).toEqual([])
 	})
 
 	test("a substring match finds providers regardless of position in the label", () => {

@@ -62,7 +62,8 @@ export async function cachedSearch(
 	// still waiting on an identical in-flight search.
 	return searchCache.getOrFetch(
 		key,
-		(signal) => resolveCardSource(sourceId).search(params, { ...ctx, signal }),
+		(signal) =>
+			resolveCardSource(sourceId).search(params, { ...ctx, signal }),
 		ctx.signal
 	) as Promise<CardSourceSearchResult>
 }

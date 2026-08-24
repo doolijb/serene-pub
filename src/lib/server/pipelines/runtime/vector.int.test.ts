@@ -34,7 +34,7 @@ function vectorFor(text: string): number[] {
 }
 
 vi.mock("$lib/server/embedding/ragContext", () => ({
-	getChatRagContext: async () => ({ lorebookId: 1 }),
+	getSessionRagContext: async () => ({ lorebookId: 1 }),
 	fetchScopedCandidates: async () => [
 		{
 			source: "worldLore",
@@ -68,7 +68,7 @@ vi.mock("$lib/server/embedding/ragContext", () => ({
 }))
 
 let db: TestDb
-let chatId: number
+let sessionId: number
 let userId: number
 
 beforeAll(async () => {
@@ -84,11 +84,11 @@ beforeAll(async () => {
 		.values({ name: "Vector Lore", userId })
 		.returning()
 
-	const [chat] = await db
-		.insert(schema.chats)
+	const [session] = await db
+		.insert(schema.sessions)
 		.values({ userId, isGroup: false, lorebookId: lorebook.id })
 		.returning()
-	chatId = chat.id
+	sessionId = session.id
 
 	await db.insert(schema.worldLoreEntries).values([
 		{
@@ -111,7 +111,7 @@ beforeAll(async () => {
 }, 60_000)
 
 const bindings = coreBindings()
-const host = () => createHost(db as any, { chatId, userId })
+const host = () => createHost(db as any, { sessionId, userId })
 
 const ctxFor = (key: string, typeId: string) => ({
 	read: (table: string, q: unknown) =>
@@ -161,7 +161,7 @@ describe("the embed provider", () => {
 describe("the vector query", () => {
 	const runQuery = (vector: number[]) =>
 		bindings["core:query/vector-search@1"]!(
-			{ vector, scope: { chatId } },
+			{ vector, scope: { sessionId } },
 			ctxFor("vsearch", "core:query/vector-search")
 		) as any
 
@@ -198,7 +198,7 @@ describe("the vector query", () => {
 describe("several queries, one arm", () => {
 	const runQuery = (vectors: number[][]) =>
 		bindings["core:query/vector-search@1"]!(
-			{ vectors, scope: { chatId } },
+			{ vectors, scope: { sessionId } },
 			ctxFor("vsearch", "core:query/vector-search")
 		) as any
 

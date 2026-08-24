@@ -15,11 +15,11 @@
 		personaId: number
 		onBack: () => void
 		onEdit: () => void
-		onChat: () => void
+		onSession: () => void
 		onExport?: (persona: ViewedPersona) => void
 	}
 
-	let { personaId, onBack, onEdit, onChat, onExport }: Props = $props()
+	let { personaId, onBack, onEdit, onSession, onExport }: Props = $props()
 
 	const socket = useTypedSocket()
 
@@ -64,8 +64,8 @@
 		<h2 class="flex-1 truncate font-semibold">{persona?.name || ""}</h2>
 		<button
 			class="btn btn-sm preset-filled-surface-400-600 p-2"
-			onclick={onChat}
-			title="Open chats"
+			onclick={onSession}
+			title="Open sessions"
 		>
 			<Icons.MessageSquare size={14} />
 		</button>

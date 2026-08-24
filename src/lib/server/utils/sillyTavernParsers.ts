@@ -66,7 +66,7 @@ export interface SillyTavernPersona {
 	position?: number
 }
 
-export interface ChatMessage {
+export interface SessionMessage {
 	name: string
 	is_user: boolean
 	is_name?: boolean
@@ -78,14 +78,14 @@ export interface ChatMessage {
 	is_system?: boolean
 }
 
-export interface ChatHeader {
+export interface SessionHeader {
 	user_name: string
 	character_name: string
 	create_date: string
 	chat_metadata?: Record<string, any>
 }
 
-export interface GroupChat {
+export interface GroupSession {
 	id: string
 	name: string
 	members: string[]
@@ -185,11 +185,11 @@ export async function readCharacterFile(
 }
 
 /**
- * Parse JSONL chat file
+ * Parse JSONL session file
  */
-export async function parseChatFile(
+export async function parseSessionFile(
 	filePath: string
-): Promise<{ header: ChatHeader; messages: ChatMessage[] } | null> {
+): Promise<{ header: SessionHeader; messages: SessionMessage[] } | null> {
 	try {
 		const content = await fsPromises.readFile(filePath, "utf8")
 		const lines = content.trim().split("\n")
@@ -198,14 +198,14 @@ export async function parseChatFile(
 			return null
 		}
 
-		const header = JSON.parse(lines[0]) as ChatHeader
+		const header = JSON.parse(lines[0]) as SessionHeader
 		const messages = lines
 			.slice(1)
-			.map((line) => JSON.parse(line) as ChatMessage)
+			.map((line) => JSON.parse(line) as SessionMessage)
 
 		return { header, messages }
 	} catch (error) {
-		console.error(`Error parsing chat file ${filePath}:`, error)
+		console.error(`Error parsing session file ${filePath}:`, error)
 		return null
 	}
 }

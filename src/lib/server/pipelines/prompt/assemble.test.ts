@@ -8,7 +8,11 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest"
-import { allocate, render, referencedVariables } from "$lib/server/pipelines/prompt/assemble"
+import {
+	allocate,
+	render,
+	referencedVariables
+} from "$lib/server/pipelines/prompt/assemble"
 import { wrapFor } from "$lib/server/pipelines/entities/variableLayouts"
 import type { Decision } from "$lib/server/pipelines/ranking/select"
 import {
@@ -122,7 +126,7 @@ describe("rendering", () => {
 		// the user's template is the migration's input.
 		const r = render({
 			...base,
-			template: "{{#each chatMessages}}{{this.content}}{{/each}}"
+			template: "{{#each sessionMessages}}{{this.content}}{{/each}}"
 		})
 		expect(r.rendered).toBe("hello")
 	})
@@ -143,12 +147,12 @@ describe("rendering", () => {
 		expect(r.rendered).toBe("90")
 	})
 
-	it("a split-chat format yields role-tagged messages rather than one string", () => {
+	it("a split-session format yields role-tagged messages rather than one string", () => {
 		// Decided here rather than by the caller, so the preview and the send
 		// cannot disagree about which shape they are comparing.
 		const r = render({
 			...base,
-			promptFormat: "split_chat",
+			promptFormat: "split_session",
 			template: "<|im_start|>system\nhi<|im_end|>"
 		})
 		expect(r.rendered).toBeUndefined()

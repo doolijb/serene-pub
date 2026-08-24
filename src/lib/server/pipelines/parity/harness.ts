@@ -39,7 +39,7 @@ import { buildWorld } from "$lib/server/pipelines/config/world"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 
 export interface FixtureScope {
-	chatId: number
+	sessionId: number
 	userId: number
 	/** Null in narrator mode. */
 	currentCharacterId: number | null
@@ -85,7 +85,7 @@ export interface FixtureScope {
  * One case worth holding: rows to write, and the scope to render them at.
  *
  * A fixture seeds a database rather than building an object graph, because both
- * paths have to read the *same* rows — the legacy builder from a hydrated chat,
+ * paths have to read the *same* rows — the legacy builder from a hydrated session,
  * the pipeline through the host. A fixture made of literals would let the two
  * sides disagree about what was in the database and still both be right.
  */
@@ -108,7 +108,7 @@ export const parityPipeline = () =>
 			.on("core:event/message-created@1")
 			.input("input", C.userMessage.v1())
 			.query("history", ($) =>
-				C.chatHistory.v1({ scope: $.input.chatScope })
+				C.sessionHistory.v1({ scope: $.input.sessionScope })
 			)
 			/**
 			 * The three retrieval lanes, mirroring the shipped document.
@@ -125,13 +125,13 @@ export const parityPipeline = () =>
 			 * right, and it was about the wrong line.
 			 */
 			.query("worldLore", ($) =>
-				C.worldLore.v1({ scope: $.input.chatScope })
+				C.worldLore.v1({ scope: $.input.sessionScope })
 			)
 			.query("characterLore", ($) =>
-				C.characterLore.v1({ scope: $.input.chatScope })
+				C.characterLore.v1({ scope: $.input.sessionScope })
 			)
 			.query("historyEntries", ($) =>
-				C.historyEntries.v1({ scope: $.input.chatScope })
+				C.historyEntries.v1({ scope: $.input.sessionScope })
 			)
 			.task("lore", ($) =>
 				C.mergeCandidates.v1({
@@ -142,7 +142,9 @@ export const parityPipeline = () =>
 					] as any
 				})
 			)
-			.query("cast", ($) => C.chatCast.v1({ scope: $.input.chatScope }))
+			.query("cast", ($) =>
+				C.sessionCast.v1({ scope: $.input.sessionScope })
+			)
 			.task("context", ($) =>
 				C.buildTemplateContext.v1({
 					cast: $.cast.cast,
@@ -245,8 +247,7 @@ export const parityPipeline = () =>
  */
 export async function pipelinePreview(db: any, scope: FixtureScope) {
 	const world = await buildWorld(db, {
-		chatId: scope.chatId,
-		userId: scope.userId
+		sessionId: scope.sessionId
 	})
 
 	// Layered here rather than projected by `buildWorld`, which no longer reads
@@ -267,20 +268,20 @@ export async function pipelinePreview(db: any, scope: FixtureScope) {
 		world,
 		input: {
 			text: scope.text,
-			// The turn's speaker rides on the chat scope: a scope for a turn is
-			// this chat *and* whose turn it is, and the cast query is what turns
+			// The turn's speaker rides on the session scope: a scope for a turn is
+			// this session *and* whose turn it is, and the cast query is what turns
 			// that into a resolved character.
-			chatScope: {
-				chatId: scope.chatId,
+			sessionScope: {
+				sessionId: scope.sessionId,
 				currentCharacterId: scope.currentCharacterId
 			}
 		},
-		seed: `parity:${scope.chatId}`,
+		seed: `parity:${scope.sessionId}`,
 		triggerSource: "ui",
 		preview: true,
 		bindings: coreBindings(),
 		host: createHost(db, {
-			chatId: scope.chatId,
+			sessionId: scope.sessionId,
 			userId: scope.userId
 		})
 	})
@@ -288,7 +289,7 @@ export async function pipelinePreview(db: any, scope: FixtureScope) {
 
 /** Seed a fixture, render it both ways, and compare. */
 
-/** One file per fixture; `chat/one-on-one` becomes `chat__one-on-one.txt`. */
+/** One file per fixture; `session/one-on-one` becomes `session__one-on-one.txt`. */
 export const goldenPathFor = (name: string): string =>
 	`src/lib/server/pipelines/parity/goldens/${name.replace(/\//g, "__")}.txt`
 
@@ -421,9 +422,11 @@ export const ragParityPipeline = () =>
 			.on("core:event/message-created@1")
 			.input("input", C.userMessage.v1())
 			.query("history", ($) =>
-				C.chatHistory.v1({ scope: $.input.chatScope })
+				C.sessionHistory.v1({ scope: $.input.sessionScope })
 			)
-			.query("cast", ($) => C.chatCast.v1({ scope: $.input.chatScope }))
+			.query("cast", ($) =>
+				C.sessionCast.v1({ scope: $.input.sessionScope })
+			)
 			.task("context", ($) =>
 				C.buildTemplateContext.v1({
 					cast: $.cast.cast,
@@ -453,7 +456,7 @@ export const ragParityPipeline = () =>
 							)
 							.query("search", ($) =>
 								C.vectorSearch.v1({
-									scope: $.input.chatScope,
+									scope: $.input.sessionScope,
 									vectors: $.gather.current.embed.vectors
 								})
 							)
@@ -465,7 +468,7 @@ export const ragParityPipeline = () =>
 							)
 							.query("search", ($) =>
 								C.vectorSearch.v1({
-									scope: $.input.chatScope,
+									scope: $.input.sessionScope,
 									vectors: $.gather.recent.embed.vectors
 								})
 							)

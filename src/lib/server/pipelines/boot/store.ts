@@ -105,7 +105,9 @@ export async function saveDocument(
 					canonicalHash: hash,
 					status: opts.publish ? "published" : "draft",
 					publishedAt: opts.publish ? new Date() : null,
-					mode: (doc.mode as Record<string, any>) ?? null
+					mode: (doc.mode as Record<string, any>) ?? null,
+					contributes:
+						(doc.contributes as Record<string, any>) ?? null
 				})
 				.returning()
 		)[0]
@@ -351,6 +353,7 @@ export async function loadDocument(
 		id: spec.slug,
 		version: version.semver,
 		...(version.mode ? { mode: version.mode } : {}),
+		...(version.contributes ? { contributes: version.contributes } : {}),
 		subscribes: subscriptionRows.map((s: any) => s.eventRef),
 		includes: includeRows.map((i: any) => ({
 			key: i.key,

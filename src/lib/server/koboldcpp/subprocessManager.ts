@@ -466,7 +466,7 @@ function failStart(message: string): never {
 }
 
 // Guards the whole body of start() below against concurrent invocation —
-// e.g. a group chat where several characters each trigger their own
+// e.g. a group session where several characters each trigger their own
 // preflight() at nearly the same moment right as the process is discovered
 // dead. Without this, two calls can both slip past the state checks (there
 // are several `await`s — a DB query, a port ping, a binary-existence check —
@@ -593,10 +593,10 @@ async function doStart(): Promise<void> {
 		// chat template — which it already auto-extracts from the GGUF on
 		// every model load (handle.get_chat_template(), unconditional, no
 		// extra config needed) but silently never uses without this flag.
-		// Scoped to the chat-completions endpoint only (koboldcpp's own
+		// Scoped to the session-completions endpoint only (koboldcpp's own
 		// docs: "Other endpoints are unaffected. Tool calls are done
 		// without jinja."), so this only matters for connections with "Use
-		// Chat Mode" on — which is this app's own default. Model-specific
+		// Session Mode" on — which is this app's own default. Model-specific
 		// template behavior (eg. Gemma 4's <|think|> enable_thinking
 		// token) is otherwise completely inert regardless of what this app
 		// sends in the request body.

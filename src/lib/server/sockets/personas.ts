@@ -18,7 +18,7 @@ import {
 	getRobustSpecV3Data
 } from "../utils/characterCardParser"
 import { autoEnqueuePersona } from "$lib/server/embedding/vectorizationQueue"
-import { canViewPersona } from "$lib/server/utils/chatAccess"
+import { canViewPersona } from "$lib/server/utils/sessionAccess"
 import {
 	resolveCardSource,
 	cachedSearch,
@@ -286,7 +286,7 @@ export const personasUpdate: Handler<
 			delete (data as any).vectorizedAt
 			delete (data as any).embedding
 			delete (data as any).embeddingModel
-			// lorebookId: no ownership check exists for it here (unlike chats,
+			// lorebookId: no ownership check exists for it here (unlike sessions,
 			// nothing currently reads a persona's own lorebookId for prompt
 			// content), so blocking it outright is the correct minimal fix —
 			// a future feature needing this should validate ownership first.

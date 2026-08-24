@@ -228,7 +228,7 @@ export interface GraphContextData {
  * text, for the caller that wants a finished string.
  */
 export async function buildGraphContextData(params: {
-	chatId: number
+	sessionId: number
 	lorebookId: number
 	speakerCharacterId: number | null
 	speakerPersonaId?: number | null
@@ -245,7 +245,8 @@ export async function buildGraphContextData(params: {
 	 */
 	db?: typeof defaultDb
 }): Promise<GraphContextData | null> {
-	const { chatId, lorebookId, speakerCharacterId, speakerPersonaId } = params
+	const { sessionId, lorebookId, speakerCharacterId, speakerPersonaId } =
+		params
 	const db = params.db ?? defaultDb
 
 	// Find the speaker's binding and node
@@ -331,54 +332,54 @@ export async function buildGraphContextData(params: {
 		return true
 	})
 
-	// ── Layer 2: inverse rels from chat participants → speaker (acknowledged/public) ──
-	const [chatChars, chatPersonas] = await Promise.all([
-		db.query.chatCharacters.findMany({
+	// ── Layer 2: inverse rels from session participants → speaker (acknowledged/public) ──
+	const [sessionChars, sessionPersonas] = await Promise.all([
+		db.query.sessionCharacters.findMany({
 			where: and(
-				eq(schema.chatCharacters.chatId, chatId),
-				isNull(schema.chatCharacters.removedAt)
+				eq(schema.sessionCharacters.sessionId, sessionId),
+				isNull(schema.sessionCharacters.removedAt)
 			),
 			columns: { characterId: true }
 		}),
-		db.query.chatPersonas.findMany({
+		db.query.sessionPersonas.findMany({
 			where: and(
-				eq(schema.chatPersonas.chatId, chatId),
-				isNull(schema.chatPersonas.removedAt)
+				eq(schema.sessionPersonas.sessionId, sessionId),
+				isNull(schema.sessionPersonas.removedAt)
 			),
 			columns: { personaId: true }
 		})
 	])
 
-	const chatCharIds = chatChars
+	const sessionCharIds = sessionChars
 		.map((c) => c.characterId)
 		.filter((id): id is number => id !== null && id !== speakerCharacterId)
-	const chatPersonaIds = chatPersonas
+	const sessionPersonaIds = sessionPersonas
 		.map((p) => p.personaId)
 		.filter(
 			(id): id is number => id !== null && id !== (speakerPersonaId ?? -1)
 		)
 
 	let l2Rels: RelRow[] = []
-	if (chatCharIds.length > 0 || chatPersonaIds.length > 0) {
+	if (sessionCharIds.length > 0 || sessionPersonaIds.length > 0) {
 		const charConditions = [
 			eq(schema.lorebookBindings.lorebookId, lorebookId)
 		]
-		if (chatCharIds.length > 0)
+		if (sessionCharIds.length > 0)
 			charConditions.push(
-				inArray(schema.lorebookBindings.characterId, chatCharIds)
+				inArray(schema.lorebookBindings.characterId, sessionCharIds)
 			)
 		const charBindings = await db.query.lorebookBindings.findMany({
 			where: and(...charConditions),
 			columns: { id: true }
 		})
 		const personaBindings =
-			chatPersonaIds.length > 0
+			sessionPersonaIds.length > 0
 				? await db.query.lorebookBindings.findMany({
 						where: and(
 							eq(schema.lorebookBindings.lorebookId, lorebookId),
 							inArray(
 								schema.lorebookBindings.personaId,
-								chatPersonaIds
+								sessionPersonaIds
 							)
 						),
 						columns: { id: true }
@@ -527,7 +528,7 @@ export async function buildGraphContextData(params: {
 	// on every entry; keying by the other party removes it entirely, and
 	// collapses a pair holding several dynamics to one key. And a heading of
 	// "How others in this scene see X" asserted co-presence: layer 2 is scoped
-	// to chat participants, not to whoever is in the room this moment, and a
+	// to session participants, not to whoever is in the room this moment, and a
 	// relationship is accumulated history rather than a present-tense fact.
 	const graph: GraphContextData = {}
 

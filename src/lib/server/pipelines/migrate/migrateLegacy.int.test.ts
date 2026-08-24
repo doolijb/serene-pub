@@ -24,7 +24,7 @@ import * as schema from "$lib/server/db/schema"
 let db: TestDb
 let dataDir: string
 let userId: number
-let chatId: number
+let sessionId: number
 let mineId: number
 let narratorMineId: number
 
@@ -54,7 +54,7 @@ beforeAll(async () => {
 	userId = user.id
 
 	// The situation this exists for: a person with their own prompt config,
-	// their own numeric tuning, and it selected on a chat.
+	// their own numeric tuning, and it selected on a session.
 	const [mine] = await db
 		.insert(schema.promptConfigs)
 		.values({
@@ -77,11 +77,11 @@ beforeAll(async () => {
 		.returning()
 	narratorMineId = narratorMine.id
 
-	const [chat] = await db
-		.insert(schema.chats)
+	const [session] = await db
+		.insert(schema.sessions)
 		.values({ userId, isGroup: false, promptConfigId: mine.id })
 		.returning()
-	chatId = chat.id
+	sessionId = session.id
 
 	await db
 		.insert(schema.userSettings)
@@ -91,7 +91,9 @@ beforeAll(async () => {
 			set: { activePromptConfigId: mine.id }
 		})
 
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(db as any)
 }, 180_000)
 
@@ -186,8 +188,10 @@ describe("selections follow", () => {
 			selections.find(
 				(s: any) => s.scopeKind === kind && s.scopeId === id
 			)
-		expect(at("user", userId)?.configId).toBe(config.id)
-		expect(at("chat", chatId)?.configId).toBe(config.id)
+		// The user layer no longer migrates (ruled 2026-08-24) — a person's
+		// legacy pick has no global home, so only the session's selection lands.
+		expect(at("user", userId)).toBeUndefined()
+		expect(at("session", sessionId)?.configId).toBe(config.id)
 	})
 })
 
@@ -231,12 +235,14 @@ describe("the numbers stop travelling with the prompt", () => {
 			})
 			.returning()
 
-		const [chat] = await db
-			.insert(schema.chats)
+		const [session] = await db
+			.insert(schema.sessions)
 			.values({ userId, isGroup: false, promptConfigId: untouched.id })
 			.returning()
 
-		const { migrateLegacyParams } = await import("$lib/server/pipelines/migrate/migrateLegacy")
+		const { migrateLegacyParams } = await import(
+			"$lib/server/pipelines/migrate/migrateLegacy"
+		)
 		await migrateLegacyParams(db as any)
 
 		const rows = await db
@@ -245,8 +251,8 @@ describe("the numbers stop travelling with the prompt", () => {
 			.where(
 				and(
 					eq(schema.pipelineNodeOverrides.specId, specId),
-					eq(schema.pipelineNodeOverrides.scopeKind, "chat"),
-					eq(schema.pipelineNodeOverrides.scopeId, chat.id)
+					eq(schema.pipelineNodeOverrides.scopeKind, "session"),
+					eq(schema.pipelineNodeOverrides.scopeId, session.id)
 				)
 			)
 		expect(rows).toHaveLength(0)
@@ -255,7 +261,9 @@ describe("the numbers stop travelling with the prompt", () => {
 
 describe("running it again", () => {
 	it("copies nothing a second time", async () => {
-		const { migrateLegacyConfigs } = await import("$lib/server/pipelines/migrate/migrateLegacy")
+		const { migrateLegacyConfigs } = await import(
+			"$lib/server/pipelines/migrate/migrateLegacy"
+		)
 		const before = await db.select().from(schema.pipelineConfigs)
 
 		const report = await migrateLegacyConfigs(db as any)

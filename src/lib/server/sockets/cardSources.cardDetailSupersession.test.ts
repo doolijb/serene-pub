@@ -65,7 +65,11 @@ describe("cardSources:cardDetail — supersession", () => {
 
 		const firstCallPromise = cardSourcesCardDetail.handler(
 			socket,
-			{ source: "charavault", ref: { folder: "a", file: "b.png" }, requestId: "req-1" } as any,
+			{
+				source: "charavault",
+				ref: { folder: "a", file: "b.png" },
+				requestId: "req-1"
+			} as any,
 			emitToUser
 		)
 		await vi.waitFor(() => expect(firstSignal).toBeDefined())
@@ -80,7 +84,11 @@ describe("cardSources:cardDetail — supersession", () => {
 		)
 		const secondCallPromise = cardSourcesCardDetail.handler(
 			socket,
-			{ source: "charavault", ref: { folder: "c", file: "d.png" }, requestId: "req-2" } as any,
+			{
+				source: "charavault",
+				ref: { folder: "c", file: "d.png" },
+				requestId: "req-2"
+			} as any,
 			emitToUser
 		)
 		await vi.waitFor(() => expect(secondSignal).toBeDefined())
@@ -121,7 +129,11 @@ describe("cardSources:cardDetail — supersession", () => {
 		await expect(
 			cardSourcesCardDetail.handler(
 				socket,
-				{ source: "charavault", ref: { folder: "a", file: "b.png" }, requestId: "req-3" } as any,
+				{
+					source: "charavault",
+					ref: { folder: "a", file: "b.png" },
+					requestId: "req-3"
+				} as any,
 				emitToUser
 			)
 		).rejects.toThrow("upstream is down")

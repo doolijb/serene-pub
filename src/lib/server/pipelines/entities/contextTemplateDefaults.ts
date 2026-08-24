@@ -100,7 +100,22 @@ export const SHIPPED_CONTEXT_TEMPLATE = `{{#systemBlock}}
 
 {{/systemBlock}}
 
-{{#each chatMessages as |chatMessage msgIndex|}}
+{{#each sessionMessages as |sessionMessage msgIndex|}}
+{{#each (lookup ../injectionsByIndex msgIndex)}}
+{{#if (eq this.role "assistant")}}
+{{#assistantBlock}}
+{{{this.content}}}
+{{/assistantBlock}}
+{{else if (eq this.role "user")}}
+{{#userBlock}}
+{{{this.content}}}
+{{/userBlock}}
+{{else}}
+{{#systemBlock}}
+{{{this.content}}}
+{{/systemBlock}}
+{{/if}}
+{{/each}}
 {{#with ../postHistory}}
 {{#if (and (eq msgIndex targetIndex) hasContent)}}
 {{#systemBlock}}

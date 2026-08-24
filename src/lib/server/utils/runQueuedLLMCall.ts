@@ -7,7 +7,7 @@ export interface RunQueuedLLMCallParams {
 	taskType: TaskType
 	connectionName: string
 	samplingName: string
-	chatId?: number
+	sessionId?: number
 	lorebookId?: number
 	label?: string
 	/** External cancellation signal — bridged to llmQueue.cancel() so
@@ -27,8 +27,8 @@ export interface RunQueuedLLMCallResult {
 /**
  * Shared wrapper for the common "construct adapter, generate, buffer the
  * response (streaming or not) into a string" pattern used by summarization,
- * narrative graph building, chat-title generation, and field generation.
- * Chat message generation has its own live-streaming needs and builds its
+ * narrative graph building, session-title generation, and field generation.
+ * Session message generation has its own live-streaming needs and builds its
  * LLMQueueItem directly instead of using this helper.
  */
 export async function runQueuedLLMCall({
@@ -36,7 +36,7 @@ export async function runQueuedLLMCall({
 	taskType,
 	connectionName,
 	samplingName,
-	chatId,
+	sessionId,
 	lorebookId,
 	label,
 	signal
@@ -47,7 +47,7 @@ export async function runQueuedLLMCall({
 		taskType,
 		connectionName,
 		samplingName,
-		chatId,
+		sessionId,
 		lorebookId,
 		label,
 		preflight: (signal) => adapter.preflight(signal),

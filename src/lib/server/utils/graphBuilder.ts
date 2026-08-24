@@ -23,7 +23,7 @@ import { getConnectionAdapter } from "./getConnectionAdapter"
 import { TokenCounters } from "./TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { runQueuedLLMCall } from "./runQueuedLLMCall"
-import { ChatTypes } from "$lib/shared/constants/ChatTypes"
+import { SessionTypes } from "$lib/shared/constants/SessionTypes"
 import { extractCharactersFromContent } from "./summarizer"
 import { extractJson, hasJsonObject } from "./extractJson"
 import {
@@ -70,8 +70,8 @@ export interface GraphBuilderScene {
 	participantCharacters?: (number | string)[] | null
 	/** Cast referenced but not present. Same three shapes as above. */
 	mentionedCharacters?: (number | string)[] | null
-	/** Chat this scene was derived from — used for raw message fetching during node description generation */
-	chatId?: number | null
+	/** Session this scene was derived from — used for raw message fetching during node description generation */
+	sessionId?: number | null
 	/** Message IDs selected for this scene — used for raw message fetching during node description generation */
 	selectedMessageIds?: number[] | null
 }
@@ -192,7 +192,7 @@ export interface GraphBuilderInput {
 	resumeState?: GraphBuilderResumeState
 	/** Fetch raw messages for a scene — called during node description generation for newly introduced nodes */
 	fetchSceneMessages?: (
-		chatId: number,
+		sessionId: number,
 		messageIds: number[]
 	) => Promise<Array<{ senderName: string; content: string }>>
 }
@@ -263,7 +263,7 @@ export interface GraphBuilderResult {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function buildMinimalChat(userPrompt: string): any {
+function buildMinimalSession(userPrompt: string): any {
 	return {
 		id: 0,
 		userId: 0,
@@ -274,12 +274,12 @@ function buildMinimalChat(userPrompt: string): any {
 		metadata: null,
 		lorebookId: null,
 		isGroup: false,
-		chatType: ChatTypes.SUMMARIZE,
+		sessionType: SessionTypes.SUMMARIZE,
 		groupReplyStrategy: null,
-		chatMessages: [
+		sessionMessages: [
 			{
 				id: 1,
-				chatId: 0,
+				sessionId: 0,
 				role: "user",
 				content: userPrompt,
 				createdAt: new Date().toISOString(),
@@ -324,14 +324,14 @@ async function runLLM(
 		(opts.connection as any).contextSize ??
 		4096
 
-	const fakeChat = buildMinimalChat(userPrompt)
+	const fakeSession = buildMinimalSession(userPrompt)
 
 	const adapter = new AdapterClass.Adapter({
 		connection: opts.connection,
 		sampling: opts.sampling,
 		contextConfig: opts.contextConfig,
 		promptConfig: { ...opts.promptConfig, systemPrompt },
-		chat: fakeChat,
+		session: fakeSession,
 		currentCharacterId: null,
 		tokenCounter,
 		tokenLimit,
@@ -343,7 +343,7 @@ async function runLLM(
 	// support nothing ignore it and the prompt + retry path still applies.
 	//
 	// Assigned rather than passed to the constructor on purpose — see
-	// BaseConnectionAdapter.responseFormat. The default is "text", so chat and
+	// BaseConnectionAdapter.responseFormat. The default is "text", so session and
 	// every other caller are unaffected by this line existing.
 	// Defaults to "json" because most calls here parse one. NOT every call does:
 	// node descriptions are prose ("exactly two sentences in present tense"), and
@@ -1246,12 +1246,12 @@ export async function buildGraphFromScenes(
 				| undefined
 			if (
 				fetchSceneMessages &&
-				scene.chatId &&
+				scene.sessionId &&
 				scene.selectedMessageIds?.length
 			) {
 				try {
 					rawMessages = await fetchSceneMessages(
-						scene.chatId,
+						scene.sessionId,
 						scene.selectedMessageIds
 					)
 				} catch {

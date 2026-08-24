@@ -121,10 +121,7 @@
 			handlePersonasSearchLibraryError
 		)
 		socket.on("cardSources:cardDetail", handleCardSourcesCardDetail)
-		socket.on(
-			"personas:importFromLibrary",
-			handlePersonasImportFromLibrary
-		)
+		socket.on("personas:importFromLibrary", handlePersonasImportFromLibrary)
 		socket.on(
 			"personas:importFromLibrary:error",
 			handlePersonasImportFromLibraryError

@@ -1,0 +1,23 @@
+-- Presets gain a switch and an action set (19 §3).
+--
+-- A *preset* is what this table has always held — the user-facing name for a
+-- pipeline configuration, now that the separate chat-preset entity is being
+-- folded into it. Two columns follow from what a preset is for:
+--
+-- `enabled` is the admin's site-wide switch over what non-admins may choose.
+-- A pipeline has no enabled state — it is installed or it is not — but a
+-- preset does, because presets are the list a user picks from. Disabling one
+-- leaves every chat already on it running: it stops being *offered*, which is
+-- deliberately not the same as being withdrawn.
+--
+-- `included_actions` is which of the mode's contributed actions chats on this
+-- preset include. NULL is not the empty array: NULL means the preset states
+-- nothing and the companion rule decides (a contribution from the mode
+-- owner's own namespace is on, a foreign one is off), so a companion shipped
+-- in a later update reaches every chat whose preset never had a view. `[]`
+-- means somebody said none.
+--
+-- Both default to today's behaviour: every existing preset stays selectable,
+-- and every existing chat keeps exactly the actions it had.
+ALTER TABLE "pipeline_configs" ADD COLUMN "enabled" boolean DEFAULT true NOT NULL;--> statement-breakpoint
+ALTER TABLE "pipeline_configs" ADD COLUMN "included_actions" json;

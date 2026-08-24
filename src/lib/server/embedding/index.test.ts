@@ -41,7 +41,9 @@ describe("getLocalEmbeddingUnsupportedReason / isLocalEmbeddingSupported", () =>
 	test("supported when the dynamic import succeeds", async () => {
 		vi.doMock("@huggingface/transformers", () => ({}))
 		const mod = await freshImport()
-		await expect(mod.getLocalEmbeddingUnsupportedReason()).resolves.toBeNull()
+		await expect(
+			mod.getLocalEmbeddingUnsupportedReason()
+		).resolves.toBeNull()
 		await expect(mod.isLocalEmbeddingSupported()).resolves.toBe(true)
 	})
 

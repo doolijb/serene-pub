@@ -216,10 +216,7 @@
 		socket.on("ollama:getDownloadProgress", handleGetDownloadProgress)
 		socket.on("ollamaPullProgress", handleOllamaPullProgress)
 		socket.on("ollama:recommendedModels", handleRecommendedModels)
-		socket.on(
-			"ollama:searchAvailableModels",
-			handleSearchAvailableModels
-		)
+		socket.on("ollama:searchAvailableModels", handleSearchAvailableModels)
 		socket.on(
 			"ollama:searchAvailableModels:error",
 			handleSearchAvailableModelsError
@@ -237,10 +234,7 @@
 			socket.off("ollama:deleteModel:error", handleDeleteModelError)
 			socket.off("ollama:pullModel", handlePullModel)
 			socket.off("ollama:pullModel:error", handlePullModelError)
-			socket.off(
-				"ollama:getDownloadProgress",
-				handleGetDownloadProgress
-			)
+			socket.off("ollama:getDownloadProgress", handleGetDownloadProgress)
 			socket.off("ollamaPullProgress", handleOllamaPullProgress)
 			socket.off("ollama:recommendedModels", handleRecommendedModels)
 			socket.off(

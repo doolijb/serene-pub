@@ -71,7 +71,7 @@ describe("fetchScopedCandidates — per-source cap", () => {
 
 		const candidates = await fetchScopedCandidates(
 			{
-				chatId: -1,
+				sessionId: -1,
 				characterIds: [],
 				personaIds: [],
 				lorebookId: lorebook.id,
@@ -161,8 +161,11 @@ describe("rankScopedCandidates — pure scoring over a shared candidate set", ()
 
 describe("scopedRankBySimilarity — thin wrapper stays behaviorally identical", () => {
 	test("fetch+rank in one call matches fetchScopedCandidates+rankScopedCandidates done separately", async () => {
-		const { scopedRankBySimilarity, fetchScopedCandidates, rankScopedCandidates } =
-			await import("./ragContext")
+		const {
+			scopedRankBySimilarity,
+			fetchScopedCandidates,
+			rankScopedCandidates
+		} = await import("./ragContext")
 		const user = await makeUser("ragcontext-wrapper-user")
 		const [lorebook] = await testDb
 			.insert(schema.lorebooks)
@@ -178,7 +181,7 @@ describe("scopedRankBySimilarity — thin wrapper stays behaviorally identical",
 		})
 
 		const context = {
-			chatId: -1,
+			sessionId: -1,
 			characterIds: [],
 			personaIds: [],
 			lorebookId: lorebook.id,
@@ -190,7 +193,11 @@ describe("scopedRankBySimilarity — thin wrapper stays behaviorally identical",
 			topK: 5
 		}
 
-		const viaWrapper = await scopedRankBySimilarity([1, 0, 0], context, opts)
+		const viaWrapper = await scopedRankBySimilarity(
+			[1, 0, 0],
+			context,
+			opts
+		)
 		const viaSplit = rankScopedCandidates(
 			await fetchScopedCandidates(context, opts),
 			[1, 0, 0],

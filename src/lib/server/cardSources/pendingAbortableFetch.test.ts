@@ -26,7 +26,11 @@ function deferred<T>() {
 describe("getOrStartAbortable", () => {
 	test("single caller, no signal, resolves normally and cleans up the pending entry", async () => {
 		const pending = new Map<string, PendingAbortableEntry<string>>()
-		const result = await getOrStartAbortable(pending, "key", async () => "value")
+		const result = await getOrStartAbortable(
+			pending,
+			"key",
+			async () => "value"
+		)
 		expect(result).toBe("value")
 		expect(pending.size).toBe(0)
 	})
@@ -54,8 +58,18 @@ describe("getOrStartAbortable", () => {
 
 		const controllerA = new AbortController()
 		const controllerB = new AbortController()
-		const promiseA = getOrStartAbortable(pending, "key", start, controllerA.signal)
-		const promiseB = getOrStartAbortable(pending, "key", start, controllerB.signal)
+		const promiseA = getOrStartAbortable(
+			pending,
+			"key",
+			start,
+			controllerA.signal
+		)
+		const promiseB = getOrStartAbortable(
+			pending,
+			"key",
+			start,
+			controllerB.signal
+		)
 		await Promise.resolve()
 
 		controllerA.abort()
@@ -78,8 +92,18 @@ describe("getOrStartAbortable", () => {
 
 		const controllerA = new AbortController()
 		const controllerB = new AbortController()
-		const promiseA = getOrStartAbortable(pending, "key", start, controllerA.signal)
-		const promiseB = getOrStartAbortable(pending, "key", start, controllerB.signal)
+		const promiseA = getOrStartAbortable(
+			pending,
+			"key",
+			start,
+			controllerA.signal
+		)
+		const promiseB = getOrStartAbortable(
+			pending,
+			"key",
+			start,
+			controllerB.signal
+		)
 		await Promise.resolve()
 
 		controllerA.abort()
@@ -124,7 +148,12 @@ describe("getOrStartAbortable", () => {
 		const preAbortedController = new AbortController()
 		preAbortedController.abort()
 		await expect(
-			getOrStartAbortable(pending, "key", start, preAbortedController.signal)
+			getOrStartAbortable(
+				pending,
+				"key",
+				start,
+				preAbortedController.signal
+			)
 		).rejects.toMatchObject({ name: "AbortError" })
 
 		expect(entry.waiterCount).toBe(1) // the pre-aborted joiner never attached
@@ -142,7 +171,12 @@ describe("getOrStartAbortable", () => {
 		})
 		const controller = new AbortController()
 
-		const result = await getOrStartAbortable(pending, "key", start, controller.signal)
+		const result = await getOrStartAbortable(
+			pending,
+			"key",
+			start,
+			controller.signal
+		)
 
 		expect(result).toBe("value")
 		expect(groupSignal!.aborted).toBe(false)
@@ -168,8 +202,18 @@ describe("getOrStartAbortable", () => {
 		const controllerA = new AbortController()
 		const controllerB = new AbortController()
 
-		const promiseA = getOrStartAbortable(pending, "key", start, controllerA.signal)
-		const promiseB = getOrStartAbortable(pending, "key", start, controllerB.signal)
+		const promiseA = getOrStartAbortable(
+			pending,
+			"key",
+			start,
+			controllerA.signal
+		)
+		const promiseB = getOrStartAbortable(
+			pending,
+			"key",
+			start,
+			controllerB.signal
+		)
 		await Promise.resolve()
 
 		work.reject(new Error("upstream failed"))

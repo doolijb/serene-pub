@@ -15,7 +15,10 @@
  * to supersede.
  */
 
-const REQUEST_KINDS = ["characters:searchLibrary", "cardSources:cardDetail"] as const
+const REQUEST_KINDS = [
+	"characters:searchLibrary",
+	"cardSources:cardDetail"
+] as const
 type RequestKind = (typeof REQUEST_KINDS)[number]
 
 const inFlight = new Map<string, AbortController>()

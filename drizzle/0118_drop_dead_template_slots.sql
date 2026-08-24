@@ -2,7 +2,7 @@
 --
 -- Three node types declared a `template` slot that nothing could use:
 --
---   · `core:query/chat-history@1`      — "how each chat message is written"
+--   · `core:query/session-history@1`      — "how each chat message is written"
 --   · `core:query/lorebook-triggers@1` — "how one triggered entry is written"
 --   · `core:provider/generate-text@1`  — "how the context is wrapped for this model"
 --
@@ -30,7 +30,7 @@
 -- Safe for the same reason as its predecessors and no other: none of these
 -- versions has shipped.
 DELETE FROM "pipeline_type_registry"
-WHERE ("type_id" = 'core:query/chat-history' AND "version" = 1)
+WHERE ("type_id" = 'core:query/session-history' AND "version" = 1)
    OR ("type_id" = 'core:query/lorebook-triggers' AND "version" = 1)
    OR ("type_id" = 'core:provider/generate-text' AND "version" = 1)
    OR ("type_id" = 'core:task/render-entries' AND "version" = 1);

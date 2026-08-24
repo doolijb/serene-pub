@@ -1,5 +1,5 @@
 /**
- * Chat rows into the message objects a template renders.
+ * Session rows into the message objects a template renders.
  *
  * Not a formatting detail. The default context template renders
  * `{{{name}}}: {{{message}}}` (defaults.ts), so a message that arrives as
@@ -21,24 +21,24 @@
  *    a real element of the prompt — the last line is what tells the model whose
  *    turn it is — not scaffolding.
  *
- * `ChatMessageProcessor` does 1 and 2 and is used directly. Reimplementing the
+ * `SessionMessageProcessor` does 1 and 2 and is used directly. Reimplementing the
  * name-resolution chain would have produced a version that agrees on the common
  * case and mislabels every message from a participant who has since left.
  */
 
-import { ChatMessageProcessor } from "$lib/server/pipelines/prompt/contentProcessors"
+import { SessionMessageProcessor } from "$lib/server/pipelines/prompt/contentProcessors"
 import { InterpolationEngine } from "$lib/server/utils/interpolation/InterpolationEngine"
-import type { ProcessedChatMessage } from "$lib/server/pipelines/prompt/contentProcessors"
+import type { ProcessedSessionMessage } from "$lib/server/pipelines/prompt/contentProcessors"
 
 export interface ProcessMessagesInput {
 	/** Rows in reading order, oldest first. */
 	messages: readonly any[]
 	/** The cast, for resolving who said what. */
 	cast: {
-		chatCharacters?: readonly any[]
-		chatPersonas?: readonly any[]
-		removedChatCharacters?: readonly any[]
-		removedChatPersonas?: readonly any[]
+		sessionCharacters?: readonly any[]
+		sessionPersonas?: readonly any[]
+		removedSessionCharacters?: readonly any[]
+		removedSessionPersonas?: readonly any[]
 	}
 	/** This turn's speaker and listener, as the template context resolved them. */
 	charName: string
@@ -57,7 +57,7 @@ export interface ProcessMessagesInput {
 }
 
 export interface ProcessedMessages {
-	messages: ProcessedChatMessage[]
+	messages: ProcessedSessionMessage[]
 	/** Which ids made it in, for the receipt and the token accounting. */
 	includedIds: number[]
 }
@@ -69,7 +69,10 @@ export function processMessages(
 	input: ProcessMessagesInput
 ): ProcessedMessages {
 	const interpolation = new InterpolationEngine()
-	const processor = new ChatMessageProcessor(input.cast as any, interpolation)
+	const processor = new SessionMessageProcessor(
+		input.cast as any,
+		interpolation
+	)
 
 	const context = {
 		char: input.charName,
@@ -79,7 +82,7 @@ export function processMessages(
 		...(input.interpolationContext ?? {})
 	} as any
 
-	const processed: ProcessedChatMessage[] = []
+	const processed: ProcessedSessionMessage[] = []
 	for (const row of input.messages) {
 		const one = processor.processItem(row, {
 			interpolationContext: context,

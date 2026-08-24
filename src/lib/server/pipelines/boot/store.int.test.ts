@@ -19,13 +19,13 @@ import * as schema from "$lib/server/db/schema"
 
 let db: TestDb
 
-const chatTurn = () =>
+const sessionTurn = () =>
 	compile(
-		spec("core:spec/chat-turn", { version: "1.0.0" })
+		spec("core:spec/session-turn", { version: "1.0.0" })
 			.on("core:event/message-created@1")
 			.input("input", C.userMessage.v1())
 			.query("history", ($) =>
-				C.chatHistory.v1({ scope: $.input.chatScope })
+				C.sessionHistory.v1({ scope: $.input.sessionScope })
 			)
 			.task("prompt", ($) =>
 				C.assemble.v2({ candidates: $.history.messages })
@@ -80,8 +80,8 @@ beforeAll(async () => {
 }, 60_000)
 
 describe("pipeline store", () => {
-	it("round-trips a chat turn without changing its hash (C1)", async () => {
-		const doc = chatTurn()
+	it("round-trips a session turn without changing its hash (C1)", async () => {
+		const doc = sessionTurn()
 		const before = canonicalHash(doc)
 
 		const saved = await saveDocument(db as any, doc, { publish: true })
@@ -107,7 +107,7 @@ describe("pipeline store", () => {
 	})
 
 	it("stores presets as rows and returns them intact (F4)", async () => {
-		const doc = chatTurn()
+		const doc = sessionTurn()
 		const saved = await saveDocument(db as any, doc)
 		const back = await loadDocument(db as any, saved.specVersionId)
 
@@ -119,7 +119,7 @@ describe("pipeline store", () => {
 	})
 
 	it("re-saving a semver replaces that version rather than duplicating it", async () => {
-		const doc = chatTurn()
+		const doc = sessionTurn()
 		const first = await saveDocument(db as any, doc)
 		const second = await saveDocument(db as any, doc)
 
@@ -132,7 +132,7 @@ describe("pipeline store", () => {
 	})
 
 	it("the database refuses a sixth kind (F1)", async () => {
-		const doc = chatTurn()
+		const doc = sessionTurn()
 		const saved = await saveDocument(db as any, doc)
 		await expect(
 			db.insert(schema.pipelineNodes).values({
@@ -148,7 +148,7 @@ describe("pipeline store", () => {
 	})
 
 	it("the database refuses an unbounded repeat (F9)", async () => {
-		const doc = chatTurn()
+		const doc = sessionTurn()
 		const saved = await saveDocument(db as any, doc)
 		await expect(
 			db.insert(schema.pipelineBlocks).values({
@@ -162,7 +162,7 @@ describe("pipeline store", () => {
 	})
 
 	it("an edge to a node the version does not contain is refused before it is written", async () => {
-		const doc = chatTurn()
+		const doc = sessionTurn()
 		doc.edges.push({
 			from: "generate",
 			fromPort: "text",
@@ -190,7 +190,9 @@ describe("an async block offers its mode", () => {
 	// suite's side effect passes or fails on ordering.
 	let versionId: number
 	beforeAll(async () => {
-		const saved = await saveDocument(db as any, agentic(), { publish: true })
+		const saved = await saveDocument(db as any, agentic(), {
+			publish: true
+		})
 		versionId = saved.specVersionId
 	})
 
@@ -228,7 +230,7 @@ describe("an async block offers its mode", () => {
 			spec("core:spec/mapped", { version: "0.1.0" })
 				.input("input", C.userMessage.v1())
 				.query("history", ($) =>
-					C.chatHistory.v1({ scope: $.input.chatScope })
+					C.sessionHistory.v1({ scope: $.input.sessionScope })
 				)
 				.map(
 					"each",
@@ -263,9 +265,7 @@ describe("an async block offers its mode", () => {
 		).toBeGreaterThan(0)
 		for (const b of nonAsync)
 			expect(
-				decls.some(
-					(d) => d.nodeKey === b.blockId && d.path === "mode"
-				),
+				decls.some((d) => d.nodeKey === b.blockId && d.path === "mode"),
 				`${b.kind} block '${b.blockId}' offered a mode`
 			).toBe(false)
 	})

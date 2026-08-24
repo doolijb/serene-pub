@@ -38,7 +38,7 @@ function legacyBlobs({
 	charName,
 	personaName,
 	narratorName,
-	chat
+	session
 }: any) {
 	const engine = new InterpolationEngine()
 	const ctx = engine.createInterpolationContext({
@@ -63,12 +63,12 @@ function legacyBlobs({
 	)
 	return {
 		characters: JSON.stringify(
-			attachCharacterLoreToCharacters(interpolatedChars, [], chat),
+			attachCharacterLoreToCharacters(interpolatedChars, [], session),
 			null,
 			2
 		),
 		personas: JSON.stringify(
-			attachCharacterLoreToCharacters(interpolatedPersonas, [], chat),
+			attachCharacterLoreToCharacters(interpolatedPersonas, [], session),
 			null,
 			2
 		)
@@ -85,9 +85,9 @@ const cara = { id: 2, name: "Cara", description: "A scout." }
 const bob = { id: 1, name: "Bob", description: "A traveller." }
 
 /** The shape `attachCharacterLoreToCharacters` reads: cast plus lorebook. */
-const chat = () => ({
-	chatCharacters: [{ character: { ...alice } }],
-	chatPersonas: [{ persona: { ...bob } }],
+const session = () => ({
+	sessionCharacters: [{ character: { ...alice } }],
+	sessionPersonas: [{ persona: { ...bob } }],
 	lorebook: undefined
 })
 
@@ -104,9 +104,9 @@ describe("template context", () => {
 	it("produces the same character and persona blobs as the legacy path", () => {
 		// Byte-identical, because the default templates render these as raw
 		// JSON: a difference in indentation is a difference in the prompt.
-		const c = chat()
-		const expected = legacyBlobs({ ...base(), chat: c })
-		const built = buildTemplateContext({ ...base(), chat: c })
+		const c = session()
+		const expected = legacyBlobs({ ...base(), session: c })
+		const built = buildTemplateContext({ ...base(), session: c })
 
 		// Wrapped, because 0.6 moved the heading and fence off the template and
 		// onto the value. The legacy builder still emits the bare blob, so the
@@ -129,8 +129,8 @@ describe("template context", () => {
 	})
 
 	it("interpolates the scenario it is given, and chooses no scenario itself", () => {
-		// Which scenario wins — the chat's or the character's — is a rule with
-		// a group-chat special case (index.ts:364-383). It stays upstream; this
+		// Which scenario wins — the session's or the character's — is a rule with
+		// a group-session special case (index.ts:364-383). It stays upstream; this
 		// builder renders the winner.
 		const built = buildTemplateContext({
 			...base(),
@@ -266,7 +266,7 @@ describe("template context", () => {
 	})
 
 	it("refuses lore it cannot bind rather than dropping it", () => {
-		// The bindings live on the chat's lorebook. Without a chat the entries
+		// The bindings live on the session's lorebook. Without a session the entries
 		// would attach to nobody and the prompt would come out short with
 		// nothing to show for it.
 		expect(() =>
@@ -274,13 +274,13 @@ describe("template context", () => {
 				...base(),
 				characterLore: [{ id: 1, name: "x", content: "y" } as any]
 			})
-		).toThrow(/without a chat/)
+		).toThrow(/without a session/)
 	})
 
 	it("attaches bound character lore to the card that owns it", () => {
 		const c = {
-			chatCharacters: [{ character: { ...alice } }],
-			chatPersonas: [{ persona: { ...bob } }],
+			sessionCharacters: [{ character: { ...alice } }],
+			sessionPersonas: [{ persona: { ...bob } }],
 			lorebook: {
 				id: 7,
 				lorebookBindings: [{ id: 3, characterId: 1 }]
@@ -288,7 +288,7 @@ describe("template context", () => {
 		}
 		const built = buildTemplateContext({
 			...base(),
-			chat: c,
+			session: c,
 			characterLore: [
 				{
 					id: 1,

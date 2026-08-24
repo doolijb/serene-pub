@@ -52,12 +52,16 @@ describe("binaryManager progress emitter fan-out", () => {
 
 		expect(emitterA).toHaveBeenCalledWith(
 			expect.objectContaining({
-				download: expect.objectContaining({ assetName: "fanout-test.bin" })
+				download: expect.objectContaining({
+					assetName: "fanout-test.bin"
+				})
 			})
 		)
 		expect(emitterB).toHaveBeenCalledWith(
 			expect.objectContaining({
-				download: expect.objectContaining({ assetName: "fanout-test.bin" })
+				download: expect.objectContaining({
+					assetName: "fanout-test.bin"
+				})
 			})
 		)
 

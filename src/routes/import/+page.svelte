@@ -41,7 +41,7 @@
 			disabled?: boolean
 		}>
 		personas: Array<{ name: string; selected: boolean; disabled?: boolean }>
-		chats: Array<{
+		sessions: Array<{
 			filename: string
 			name: string
 			characterNames: string[]
@@ -50,7 +50,7 @@
 			disabled: boolean
 			disabledReason?: string
 		}>
-		groupChats: Array<{
+		groupSessions: Array<{
 			filename: string
 			name: string
 			memberNames: string[]
@@ -83,7 +83,7 @@
 			toaster.error({
 				title: "No SillyTavern data found",
 				description:
-					"Couldn't find characters, chats, groups, worlds, or settings.json in the selected folder. Please select your SillyTavern (or SillyTavern-Launcher) folder."
+					"Couldn't find characters, sessions, groups, worlds, or settings.json in the selected folder. Please select your SillyTavern (or SillyTavern-Launcher) folder."
 			})
 			pickedFolder = null
 			;(e.target as HTMLInputElement).value = ""
@@ -141,7 +141,7 @@
 
 		socket.emit("import:sillytavern:scan", {
 			importSessionId,
-			deferredChatPaths: pickedFolder.deferredFiles.map(
+			deferredSessionPaths: pickedFolder.deferredFiles.map(
 				(f) => f.relativePath
 			)
 		})
@@ -152,8 +152,8 @@
 		category:
 			| "characters"
 			| "personas"
-			| "chats"
-			| "groupChats"
+			| "sessions"
+			| "groupSessions"
 			| "lorebooks",
 		index: number
 	) {
@@ -164,8 +164,8 @@
 			item.selected = !item.selected
 			scanResults = { ...scanResults }
 
-			// Re-validate chat dependencies
-			validateChatDependencies()
+			// Re-validate session dependencies
+			validateSessionDependencies()
 		}
 	}
 
@@ -174,8 +174,8 @@
 		category:
 			| "characters"
 			| "personas"
-			| "chats"
-			| "groupChats"
+			| "sessions"
+			| "groupSessions"
 			| "lorebooks"
 	) {
 		if (!scanResults) return
@@ -193,53 +193,53 @@
 
 		scanResults = { ...scanResults }
 
-		// Re-validate chat dependencies
+		// Re-validate session dependencies
 		if (
 			category === "characters" ||
-			category === "chats" ||
-			category === "groupChats"
+			category === "sessions" ||
+			category === "groupSessions"
 		) {
-			validateChatDependencies()
+			validateSessionDependencies()
 		}
 	}
 
-	// Validate chat dependencies
-	function validateChatDependencies() {
+	// Validate session dependencies
+	function validateSessionDependencies() {
 		if (!scanResults) return
 
 		const selectedCharacters = new Set(
 			scanResults.characters.filter((c) => c.selected).map((c) => c.name)
 		)
 
-		// Validate individual chats
-		scanResults.chats.forEach((chat) => {
-			const missingCharacters = chat.characterNames.filter(
+		// Validate individual sessions
+		scanResults.sessions.forEach((session) => {
+			const missingCharacters = session.characterNames.filter(
 				(name) => !selectedCharacters.has(name)
 			)
 
 			if (missingCharacters.length > 0) {
-				chat.disabled = true
-				chat.selected = false
-				chat.disabledReason = `Missing character(s): ${missingCharacters.join(", ")}`
+				session.disabled = true
+				session.selected = false
+				session.disabledReason = `Missing character(s): ${missingCharacters.join(", ")}`
 			} else {
-				chat.disabled = false
-				chat.disabledReason = undefined
+				session.disabled = false
+				session.disabledReason = undefined
 			}
 		})
 
-		// Validate group chats
-		scanResults.groupChats.forEach((chat) => {
-			const missingCharacters = chat.memberNames.filter(
+		// Validate group sessions
+		scanResults.groupSessions.forEach((session) => {
+			const missingCharacters = session.memberNames.filter(
 				(name) => !selectedCharacters.has(name)
 			)
 
 			if (missingCharacters.length > 0) {
-				chat.disabled = true
-				chat.selected = false
-				chat.disabledReason = `Missing character(s): ${missingCharacters.join(", ")}`
+				session.disabled = true
+				session.selected = false
+				session.disabledReason = `Missing character(s): ${missingCharacters.join(", ")}`
 			} else {
-				chat.disabled = false
-				chat.disabledReason = undefined
+				session.disabled = false
+				session.disabledReason = undefined
 			}
 		})
 
@@ -264,24 +264,24 @@
 		const selectedData = {
 			characters: scanResults.characters.filter((c) => c.selected),
 			personas: scanResults.personas.filter((p) => p.selected),
-			chats: scanResults.chats.filter((c) => c.selected),
-			groupChats: scanResults.groupChats.filter((g) => g.selected),
+			sessions: scanResults.sessions.filter((c) => c.selected),
+			groupSessions: scanResults.groupSessions.filter((g) => g.selected),
 			lorebooks: scanResults.lorebooks.filter((l) => l.selected)
 		}
 
-		// Only now upload chat history — individual chats the user selected,
-		// plus all group chat history if any group chat is selected (mapping
+		// Only now upload session history — individual sessions the user selected,
+		// plus all group session history if any group session is selected (mapping
 		// a selected group to its exact history filename requires re-parsing
-		// its JSON, so we just upload the whole small "group chats/" set).
-		const selectedChatPaths = new Set(
-			selectedData.chats.map((c) => `chats/${c.filename}`)
+		// its JSON, so we just upload the whole small "group sessions/" set).
+		const selectedSessionPaths = new Set(
+			selectedData.sessions.map((c) => `sessions/${c.filename}`)
 		)
-		const wantsGroupChatHistory = selectedData.groupChats.length > 0
+		const wantsGroupSessionHistory = selectedData.groupSessions.length > 0
 		const filesToUpload = pickedFolder.deferredFiles.filter(
 			(f) =>
-				selectedChatPaths.has(f.relativePath) ||
-				(wantsGroupChatHistory &&
-					f.relativePath.startsWith("group chats/"))
+				selectedSessionPaths.has(f.relativePath) ||
+				(wantsGroupSessionHistory &&
+					f.relativePath.startsWith("group sessions/"))
 		)
 
 		try {
@@ -335,8 +335,8 @@
 			const total =
 				message.data.characters.length +
 				message.data.personas.length +
-				message.data.chats.length +
-				message.data.groupChats.length +
+				message.data.sessions.length +
+				message.data.groupSessions.length +
 				message.data.lorebooks.length
 			if (total === 0) {
 				toaster.warning({
@@ -347,7 +347,7 @@
 			} else {
 				toaster.success({
 					title: "Scan completed",
-					description: `Found ${message.data.characters.length} characters, ${message.data.personas.length} personas, ${message.data.chats.length + message.data.groupChats.length} chats, ${message.data.lorebooks.length} lorebooks`
+					description: `Found ${message.data.characters.length} characters, ${message.data.personas.length} personas, ${message.data.sessions.length + message.data.groupSessions.length} sessions, ${message.data.lorebooks.length} lorebooks`
 				})
 			}
 		} else {
@@ -405,8 +405,8 @@
 			<div class="flex-1">
 				<h1 class="text-2xl font-bold">Import from SillyTavern</h1>
 				<p class="text-surface-700-300 mt-1 text-sm">
-					Import your characters, personas, chats, and lorebooks from
-					SillyTavern.
+					Import your characters, personas, sessions, and lorebooks
+					from SillyTavern.
 				</p>
 			</div>
 		</div>
@@ -478,18 +478,18 @@
 					>
 						<li>
 							<strong>What's imported:</strong>
-							Characters, personas, chats (including group chats),
+							Characters, personas, sessions (including group sessions),
 							and lorebooks
 						</li>
 						<li>
 							<strong>What's NOT imported:</strong>
-							Branching narratives/chat trees, chat backgrounds, user
-							avatars, extensions data
+							Branching narratives/session trees, session backgrounds,
+							user avatars, extensions data
 						</li>
 						<li>
-							<strong>Chat format:</strong>
-							Both individual and group chats are imported into Serene
-							Pub's unified chat system
+							<strong>Session format:</strong>
+							Both individual and group sessions are imported into
+							Serene Pub's unified session system
 						</li>
 						<li>
 							<strong>Swipes:</strong>
@@ -527,7 +527,7 @@
 								.files.length !== 1
 								? "s"
 								: ""} ({pickedFolder.scanFiles.length} to scan now,
-							{pickedFolder.deferredFiles.length} chat log file{pickedFolder
+							{pickedFolder.deferredFiles.length} session log file{pickedFolder
 								.deferredFiles.length !== 1
 								? "s"
 								: ""} uploaded only for what you select to import)
@@ -670,53 +670,57 @@
 							</div>
 						</div>
 
-						<!-- Individual Chats -->
+						<!-- Individual Sessions -->
 						<div class="mb-6">
 							<div class="mb-2 flex items-center justify-between">
 								<h4 class="font-semibold">
-									Individual Chats ({scanResults.chats.filter(
+									Individual Sessions ({scanResults.sessions.filter(
 										(c) => c.selected
-									).length}/{scanResults.chats.length})
+									).length}/{scanResults.sessions.length})
 								</h4>
 								<button
 									type="button"
 									class="btn btn-sm preset-tonal-primary-500"
-									onclick={() => toggleAllInCategory("chats")}
+									onclick={() =>
+										toggleAllInCategory("sessions")}
 								>
 									Toggle All
 								</button>
 							</div>
 							<div class="max-h-48 space-y-1 overflow-y-auto">
-								{#each scanResults.chats as chat, index}
+								{#each scanResults.sessions as session, index}
 									<label
 										class="flex cursor-pointer items-center gap-2 rounded p-1"
-										class:hover:bg-surface-300-700={!chat.disabled}
-										class:opacity-50={chat.disabled}
+										class:hover:bg-surface-300-700={!session.disabled}
+										class:opacity-50={session.disabled}
 									>
 										<input
 											type="checkbox"
 											class="checkbox"
-											checked={chat.selected}
-											disabled={chat.disabled}
+											checked={session.selected}
+											disabled={session.disabled}
 											onchange={() =>
-												toggleSelection("chats", index)}
+												toggleSelection(
+													"sessions",
+													index
+												)}
 										/>
 										<div class="flex flex-1 flex-col">
 											<span class="text-sm">
-												{chat.name}
+												{session.name}
 											</span>
 											<span
 												class="text-surface-700-300 text-xs"
 											>
-												Character: {chat.characterNames.join(
+												Character: {session.characterNames.join(
 													", "
 												)}
 											</span>
-											{#if chat.disabledReason}
+											{#if session.disabledReason}
 												<span
 													class="text-error-500 text-xs"
 												>
-													{chat.disabledReason}
+													{session.disabledReason}
 												</span>
 											{/if}
 										</div>
@@ -725,57 +729,58 @@
 							</div>
 						</div>
 
-						<!-- Group Chats -->
+						<!-- Group Sessions -->
 						<div class="mb-6">
 							<div class="mb-2 flex items-center justify-between">
 								<h4 class="font-semibold">
-									Group Chats ({scanResults.groupChats.filter(
+									Group Sessions ({scanResults.groupSessions.filter(
 										(g) => g.selected
-									).length}/{scanResults.groupChats.length})
+									).length}/{scanResults.groupSessions
+										.length})
 								</h4>
 								<button
 									type="button"
 									class="btn btn-sm preset-tonal-primary-500"
 									onclick={() =>
-										toggleAllInCategory("groupChats")}
+										toggleAllInCategory("groupSessions")}
 								>
 									Toggle All
 								</button>
 							</div>
 							<div class="max-h-48 space-y-1 overflow-y-auto">
-								{#each scanResults.groupChats as chat, index}
+								{#each scanResults.groupSessions as session, index}
 									<label
 										class="flex cursor-pointer items-center gap-2 rounded p-1"
-										class:hover:bg-surface-300-700={!chat.disabled}
-										class:opacity-50={chat.disabled}
+										class:hover:bg-surface-300-700={!session.disabled}
+										class:opacity-50={session.disabled}
 									>
 										<input
 											type="checkbox"
 											class="checkbox"
-											checked={chat.selected}
-											disabled={chat.disabled}
+											checked={session.selected}
+											disabled={session.disabled}
 											onchange={() =>
 												toggleSelection(
-													"groupChats",
+													"groupSessions",
 													index
 												)}
 										/>
 										<div class="flex flex-1 flex-col">
 											<span class="text-sm">
-												{chat.name}
+												{session.name}
 											</span>
 											<span
 												class="text-surface-700-300 text-xs"
 											>
-												Members: {chat.memberNames.join(
+												Members: {session.memberNames.join(
 													", "
 												)}
 											</span>
-											{#if chat.disabledReason}
+											{#if session.disabledReason}
 												<span
 													class="text-error-500 text-xs"
 												>
-													{chat.disabledReason}
+													{session.disabledReason}
 												</span>
 											{/if}
 										</div>

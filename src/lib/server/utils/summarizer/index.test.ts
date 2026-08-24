@@ -28,7 +28,7 @@ vi.mock("../getConnectionAdapter", () => ({
 const fakeConnection = {
 	id: 1,
 	name: "test-connection",
-	type: "openai_chat"
+	type: "openai_session"
 } as any
 const fakeSampling = { id: 1, name: "test-sampling" } as any
 const fakeContextConfig = { id: 1 } as any
@@ -46,7 +46,8 @@ describe("extractCharactersFromContent", () => {
 		const { extractCharactersFromContent } = await import("./index")
 
 		const result = await extractCharactersFromContent({
-			content: "Aria walked into the tavern. Bram was mentioned in passing.",
+			content:
+				"Aria walked into the tavern. Bram was mentioned in passing.",
 			connection: fakeConnection,
 			sampling: fakeSampling,
 			contextConfig: fakeContextConfig,

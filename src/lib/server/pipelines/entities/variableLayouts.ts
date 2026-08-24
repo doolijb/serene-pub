@@ -143,7 +143,6 @@ const asMinifiedJson = (v: unknown): string => {
 	return out === undefined ? "" : out
 }
 
-
 /**
  * A list of objects, rendered key by key instead of handed to `JSON.stringify`.
  *
@@ -201,7 +200,6 @@ const path = (field: string): string =>
 /** The key as it appears in the JSON, quoted and escaped the same way. */
 const json = (field: string): string => JSON.stringify(field)
 
-
 /**
  * A record, rendered entry by entry instead of handed to `JSON.stringify`.
  *
@@ -225,7 +223,6 @@ const recordEntries = (key: string): string =>
 	`{{#if ${key}}}{ {{~#each ${key}}}{{{jsonValue @key indent=0}}}:` +
 	`{{{jsonValue this indent=0}}}{{#unless @last}},{{/unless}}{{/each~}} }` +
 	`{{else}}{}{{/if}}`
-
 
 /**
  * `JSON.stringify(x, null, 1)`, which is what the narrative graph produced.
@@ -260,10 +257,12 @@ const optionalSections = (key: string, sections: readonly string[]): string => {
 		.map((name, i) => {
 			const after = sections.slice(i + 1)
 			const follows = after.length
-				? after.slice(0, -1).reduceRight(
-						(acc, n) => `(or ${n} ${acc})`,
-						after.at(-1)!
-					)
+				? after
+						.slice(0, -1)
+						.reduceRight(
+							(acc, n) => `(or ${n} ${acc})`,
+							after.at(-1)!
+						)
 				: null
 			const comma = follows ? `{{#if ${follows}}},{{/if}}` : ""
 			// The first section's `{{~#if` eats the space that separates the

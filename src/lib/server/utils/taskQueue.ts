@@ -9,7 +9,7 @@ export interface QueuedTask {
 	status: LLMQueueStatus
 	startedAt: string
 	/** Optional context references for display */
-	chatId?: number
+	sessionId?: number
 	lorebookId?: number
 	label?: string
 }
@@ -52,7 +52,7 @@ class TaskQueue {
 			samplingName: item.samplingName,
 			status: item.status,
 			startedAt: item.startedAt,
-			chatId: item.chatId,
+			sessionId: item.sessionId,
 			lorebookId: item.lorebookId,
 			label: item.label
 		}))

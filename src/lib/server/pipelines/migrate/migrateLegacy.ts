@@ -3,7 +3,7 @@
  *
  * Everything a person tuned before the pipeline layer existed lives in the
  * legacy tables: their own prompt configs, their own summarize and graph-build
- * configs, and the system/user/chat choices that selected between them. This
+ * configs, and the system/user/session choices that selected between them. This
  * copies it into the pipeline layer so the new panel shows what they actually
  * have, rather than showing them defaults and quietly running something else.
  *
@@ -25,7 +25,7 @@
  * |---|---|
  * | `system_settings.default*` | `instance` |
  * | `user_settings.active*` | `user` |
- * | `chats.promptConfigId` etc. | `chat` |
+ * | `sessions.promptConfigId` etc. | `session` |
  *
  * Flattening to a single layer would "work" and lose the property that makes the
  * chain worth having (12 §2).
@@ -75,7 +75,7 @@ interface LegacySource {
  * prompt saw five boxes where the pipeline reads three — two of them silently
  * inert. Removed here; `0110` strips them from rows already written.
  */
-const chatFields = (row: any, narratorName = "") => ({
+const sessionFields = (row: any, narratorName = "") => ({
 	systemPrompt: str(row.systemPrompt),
 	postHistoryInstructions: str(row.postHistoryInstructions),
 	narratorName: narratorName || str(row.narratorName)
@@ -91,12 +91,12 @@ const SOURCES: LegacySource[] = [
 	{
 		specSlug: RESPOND_SPEC_ID,
 		table: schema.promptConfigs,
-		fields: (r) => chatFields(r)
+		fields: (r) => sessionFields(r)
 	},
 	{
 		specSlug: NARRATE_SPEC_ID,
 		table: schema.narratorPromptConfigs,
-		fields: (r) => chatFields(r, str(r.narratorName) || "Narrator")
+		fields: (r) => sessionFields(r, str(r.narratorName) || "Narrator")
 	},
 	{
 		specSlug: SUMMARIZE_WORLD_SPEC_ID,
@@ -139,7 +139,7 @@ export interface MigrationReport {
 	/** User-created configs copied across as pipeline configs. */
 	configs: string[]
 	/** Values written as overrides, by scope. */
-	overrides: { instance: number; user: number; chat: number }
+	overrides: { instance: number; user: number; session: number }
 	/** Skipped because a marker said this had already run. */
 	skipped: number
 }
@@ -177,7 +177,7 @@ export async function migrateLegacyConfigs(db: Db): Promise<MigrationReport[]> {
 		const report: MigrationReport = {
 			specSlug: source.specSlug,
 			configs: [],
-			overrides: { instance: 0, user: 0, chat: 0 },
+			overrides: { instance: 0, user: 0, session: 0 },
 			skipped: 0
 		}
 
@@ -270,8 +270,7 @@ export async function migrateLegacyParams(db: Db): Promise<number> {
 		decls.find((d) => d.slot === "params" && d.path === path)
 
 	const [system] = await db.select().from(schema.systemSettings).limit(1)
-	const userRows = await db.select().from(schema.userSettings)
-	const chatRows = await db.select().from(schema.chats)
+	const sessionRows = await db.select().from(schema.sessions)
 	const prompts = await db.select().from(schema.promptConfigs)
 	const byId = new Map((prompts as any[]).map((p) => [p.id, p]))
 
@@ -282,29 +281,38 @@ export async function migrateLegacyParams(db: Db): Promise<number> {
 	}
 
 	let written = 0
+	/** The tuned fields a legacy config carries, or none. */
+	const tuned = (configId: number | null | undefined) => {
+		const row = configId != null ? byId.get(configId) : undefined
+		if (!row) return []
+		return Object.entries(DEFAULTS)
+			.filter(([path, fallback]) => {
+				const value = row[path]
+				return value != null && value !== fallback
+			})
+			.map(([path]) => ({
+				path,
+				value: row[path],
+				decl: paramNode(path)
+			}))
+			.filter((e) => e.decl)
+	}
+
 	const write = async (
-		scopeKind: "instance" | "user" | "chat",
 		scopeId: number,
 		configId: number | null | undefined
 	) => {
-		const row = configId != null ? byId.get(configId) : undefined
-		if (!row) return
-		for (const [path, fallback] of Object.entries(DEFAULTS)) {
-			const value = row[path]
-			if (value == null || value === fallback) continue
-			const decl = paramNode(path)
-			if (!decl) continue
-
+		for (const e of tuned(configId)) {
 			await db
 				.insert(schema.pipelineNodeOverrides)
 				.values({
 					specId: spec.id,
-					scopeKind,
+					scopeKind: "session",
 					scopeId,
-					nodeKey: decl.nodeKey,
+					nodeKey: e.decl!.nodeKey,
 					slot: "params",
-					path,
-					value,
+					path: e.path,
+					value: e.value,
 					updatedAt: new Date()
 				})
 				.onConflictDoNothing()
@@ -312,11 +320,67 @@ export async function migrateLegacyParams(db: Db): Promise<number> {
 		}
 	}
 
-	await write("instance", 0, system?.defaultPromptConfigId)
-	for (const u of userRows as any[])
-		await write("user", u.userId, u.activePromptConfigId)
-	for (const c of chatRows as any[])
-		await write("chat", c.id, c.promptConfigId)
+	// The instance's tuning lands in the instance's config (the layers as
+	// simplified 2026-08-24) — there is no instance override row to write.
+	// The shipped default is immutable, so a tuned legacy install gets a
+	// mutable copy, exactly as migration 0140 does for pre-existing rows.
+	{
+		const entries = tuned(system?.defaultPromptConfigId)
+		if (entries.length) {
+			const { resolveSelectedConfig, duplicateConfig, selectConfig } =
+				await import("$lib/server/pipelines/config/named")
+			let selected = await resolveSelectedConfig(
+				db as any,
+				spec.id,
+				RESPOND_SPEC_ID,
+				{}
+			)
+			if (selected) {
+				const [cfg] = await db
+					.select()
+					.from(schema.pipelineConfigs)
+					.where(eq(schema.pipelineConfigs.id, selected.configId))
+					.limit(1)
+				let targetId = selected.configId
+				if ((cfg as any)?.isImmutable) {
+					const copy = await duplicateConfig(
+						db as any,
+						selected.configId,
+						`${(cfg as any).name} (customized)`
+					).catch(() => null)
+					if (copy) {
+						targetId = copy.id
+						await selectConfig(
+							db as any,
+							spec.id,
+							"instance",
+							0,
+							targetId
+						)
+					} else {
+						targetId = -1
+					}
+				}
+				if (targetId !== -1) {
+					for (const e of entries) {
+						await db
+							.insert(schema.pipelineConfigValues)
+							.values({
+								configId: targetId,
+								nodeKey: e.decl!.nodeKey,
+								slot: "params",
+								path: e.path,
+								value: e.value
+							})
+							.onConflictDoNothing()
+						written++
+					}
+				}
+			}
+		}
+	}
+	// User-scope rows no longer migrate (ruled 2026-08-24) — the layer is gone.
+	for (const c of sessionRows as any[]) await write(c.id, c.promptConfigId)
 
 	return written
 }
@@ -332,21 +396,20 @@ export async function migrateLegacySelections(db: Db): Promise<number> {
 	const { selectConfig } = await import("$lib/server/pipelines/config/named")
 
 	const [system] = await db.select().from(schema.systemSettings).limit(1)
-	const userRows = await db.select().from(schema.userSettings)
-	const chatRows = await db.select().from(schema.chats)
+	const sessionRows = await db.select().from(schema.sessions)
 
 	/** Which legacy pointer selects which namespace. */
 	const POINTERS: Array<{
 		specSlug: string
 		system?: string
 		user?: string
-		chat?: string
+		session?: string
 	}> = [
 		{
 			specSlug: RESPOND_SPEC_ID,
 			system: "defaultPromptConfigId",
 			user: "activePromptConfigId",
-			chat: "promptConfigId"
+			session: "promptConfigId"
 		},
 		{
 			specSlug: NARRATE_SPEC_ID,
@@ -401,7 +464,7 @@ export async function migrateLegacySelections(db: Db): Promise<number> {
 		}
 
 		const apply = async (
-			scope: "instance" | "user" | "chat",
+			scope: "instance" | "session",
 			scopeId: number,
 			legacyId: number | null | undefined,
 			updatedBy?: number
@@ -431,13 +494,13 @@ export async function migrateLegacySelections(db: Db): Promise<number> {
 		if (pointer.system)
 			await apply("instance", 0, (system as any)?.[pointer.system])
 
-		if (pointer.user)
-			for (const u of userRows as any[])
-				await apply("user", u.userId, u[pointer.user], u.userId)
+		// User-scope selections no longer migrate (ruled 2026-08-24): the
+		// layer is gone, and carrying them to session scope would promote a
+		// preference into a per-session decision nobody made.
 
-		if (pointer.chat)
-			for (const c of chatRows as any[])
-				await apply("chat", c.id, c[pointer.chat], c.userId)
+		if (pointer.session)
+			for (const c of sessionRows as any[])
+				await apply("session", c.id, c[pointer.session], c.userId)
 	}
 
 	return selected

@@ -9,7 +9,7 @@ import { TokenCounters } from "../utils/TokenCounterManager"
 import {
 	BaseConnectionAdapter,
 	type AdapterExports,
-	type BasePromptChat
+	type BasePromptSession
 } from "./BaseConnectionAdapter"
 import { type CompiledPrompt } from "./types"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -31,7 +31,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		sampling,
 		contextConfig,
 		promptConfig,
-		chat,
+		session,
 		currentCharacterId,
 		tokenCounter,
 		tokenLimit,
@@ -42,7 +42,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		sampling: SelectSamplingConfig
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
-		chat: BasePromptChat
+		session: BasePromptSession
 		currentCharacterId: number | null
 		tokenCounter?: TokenCounters
 		tokenLimit?: number
@@ -54,7 +54,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 			sampling,
 			contextConfig,
 			promptConfig,
-			chat,
+			session,
 			currentCharacterId,
 			tokenCounter:
 				tokenCounter ||
@@ -109,21 +109,21 @@ class OllamaAdapter extends BaseConnectionAdapter {
 	}
 
 	compilePrompt(args: {}) {
-		const useChatFormat = !!this.connection.extraJson?.useChat
+		const useSessionFormat = !!this.connection.extraJson?.useSession
 		console.log(
 			"[OllamaAdapter.compilePrompt] connection.extraJson:",
 			this.connection.extraJson
 		)
 		console.log(
-			"[OllamaAdapter.compilePrompt] useChat value:",
-			this.connection.extraJson?.useChat
+			"[OllamaAdapter.compilePrompt] useSession value:",
+			this.connection.extraJson?.useSession
 		)
 		console.log(
-			"[OllamaAdapter.compilePrompt] useChatFormat:",
-			useChatFormat
+			"[OllamaAdapter.compilePrompt] useSessionFormat:",
+			useSessionFormat
 		)
 		return super.compilePrompt({
-			useChatFormat,
+			useSessionFormat,
 			...args
 		})
 	}
@@ -153,14 +153,16 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		const stopStrings = StopStrings.get({
 			format: this.connection.promptFormat || "chatml",
 			characters:
-				this.chat.chatCharacters?.map((cc) => cc.character) || [],
-			personas: this.chat.chatPersonas?.map((cp) => cp.persona) || [],
+				this.session.sessionCharacters?.map((cc) => cc.character) || [],
+			personas:
+				this.session.sessionPersonas?.map((cp) => cp.persona) || [],
 			currentCharacterId: this.currentCharacterId ?? undefined
 		})
 		const characterName = resolveCharacterName(
-			this.chat.chatCharacters?.[0]?.character
+			this.session.sessionCharacters?.[0]?.character
 		)
-		const personaName = this.chat.chatPersonas?.[0]?.persona?.name || "user"
+		const personaName =
+			this.session.sessionPersonas?.[0]?.persona?.name || "user"
 		const stopContext: Record<string, string> = {
 			char: characterName,
 			user: personaName
@@ -174,8 +176,8 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		const compiledPrompt: CompiledPrompt = await this.compilePrompt({})
 
 		console.log(
-			"[OllamaAdapter] useChat:",
-			this.connection.extraJson?.useChat
+			"[OllamaAdapter] useSession:",
+			this.connection.extraJson?.useSession
 		)
 		console.log(
 			"[OllamaAdapter] compiledPrompt has messages:",
@@ -189,10 +191,10 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		/**
 		 * Which request shape to send, taken from **what was actually built**.
 		 *
-		 * This read `extraJson?.useChat ?? true` while `compilePrompt` above
-		 * reads `!!extraJson?.useChat` — the same setting with two different
-		 * defaults. A connection whose `extraJson` has no `useChat` (the column
-		 * defaults to `{}`) therefore had a completion prompt built and a *chat*
+		 * This read `extraJson?.useSession ?? true` while `compilePrompt` above
+		 * reads `!!extraJson?.useSession` — the same setting with two different
+		 * defaults. A connection whose `extraJson` has no `useSession` (the column
+		 * defaults to `{}`) therefore had a completion prompt built and a *session*
 		 * request sent, with `messages: undefined`. Ollama answers that with an
 		 * empty string, which surfaces as "the model returned nothing" and
 		 * looks like a model fault rather than a request we built wrong.
@@ -202,14 +204,14 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		 * following the payload honours it transitively and stays correct even
 		 * if the two defaults drift again.
 		 */
-		const useChat = !!compiledPrompt.messages
-		console.log("[OllamaAdapter] useChat (from payload):", useChat)
+		const useSession = !!compiledPrompt.messages
+		console.log("[OllamaAdapter] useSession (from payload):", useSession)
 		let req: GenerateRequest | ChatRequest
 
-		if (useChat) {
+		if (useSession) {
 			if (!compiledPrompt.messages) {
 				console.error(
-					"[OllamaAdapter] ERROR: useChat is true but compiledPrompt.messages is undefined!"
+					"[OllamaAdapter] ERROR: useSession is true but compiledPrompt.messages is undefined!"
 				)
 				console.error("[OllamaAdapter] compiledPrompt:", compiledPrompt)
 			}
@@ -256,7 +258,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 					...this.mapSamplingConfig(),
 					stop: allStopStrings
 				},
-				// Top-level, and schema-aware, same as the chat branch above.
+				// Top-level, and schema-aware, same as the session branch above.
 				...(this.responseFormat === "json"
 					? { format: this.responseSchema ?? "json" }
 					: {})
@@ -279,8 +281,8 @@ class OllamaAdapter extends BaseConnectionAdapter {
 						ollama.abort()
 					})
 					try {
-						if (useChat) {
-							// Use Ollama's chat api
+						if (useSession) {
+							// Use Ollama's session api
 							const result = await ollama.chat({
 								...(req as ChatRequest),
 								stream: true
@@ -412,9 +414,9 @@ class OllamaAdapter extends BaseConnectionAdapter {
 					ollama.abort()
 				}, LLM_NONSTREAMING_TIMEOUT_MS)
 				try {
-					if (useChat) {
-						console.log("Using non-steaming chat API")
-						// Use Ollama's chat api
+					if (useSession) {
+						console.log("Using non-steaming session API")
+						// Use Ollama's session api
 						const res = await ollama.chat({
 							...(req as ChatRequest),
 							stream: false
@@ -428,7 +430,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 							"message" in res
 						) {
 							console.log(
-								"[OllamaAdapter] non-stream chat thinking:",
+								"[OllamaAdapter] non-stream session thinking:",
 								res.message.thinking
 									? res.message.thinking.length + " chars"
 									: "none"

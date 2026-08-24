@@ -26,7 +26,10 @@ vi.mock("$lib/server/db", async () => {
 
 beforeAll(async () => {
 	dataDir = await fs.mkdtemp(
-		path.join(os.tmpdir(), "serene-pub-narrativegraph-crosstenant-int-test-")
+		path.join(
+			os.tmpdir(),
+			"serene-pub-narrativegraph-crosstenant-int-test-"
+		)
 	)
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 

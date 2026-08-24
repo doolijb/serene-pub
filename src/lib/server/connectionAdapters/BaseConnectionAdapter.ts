@@ -1,36 +1,36 @@
 import type { CompiledPrompt as PromptBuilderCompiledPrompt } from "./types"
 import type { TokenCounters } from "../utils/TokenCounterManager"
 import type { JsonSchemaNode } from "./jsonSchemaToGbnf"
-import { ChatTypes } from "$lib/shared/constants/ChatTypes"
+import { SessionTypes } from "$lib/shared/constants/SessionTypes"
 import { PromptBlockFormatter } from "$lib/shared/utils/PromptBlockFormatter"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 
-export interface BasePromptChat extends SelectChat {
-	chatCharacters?: (SelectChatCharacter & {
+export interface BasePromptSession extends SelectSession {
+	sessionCharacters?: (SelectSessionCharacter & {
 		character: SelectCharacter & { lorebook?: SelectLorebook }
 	})[]
-	chatPersonas?: (SelectChatPersona & {
+	sessionPersonas?: (SelectSessionPersona & {
 		persona: SelectPersona & { lorebook?: SelectLorebook }
 	})[]
 	// Removed (soft-deleted) participants, deliberately kept OUT of
-	// chatCharacters/chatPersonas above so every "who's active in this chat"
+	// sessionCharacters/sessionPersonas above so every "who's active in this session"
 	// consumer (visible-character-name lists, turn order, lorebook binding
-	// checks, etc.) doesn't have to re-filter — see getPromptChatFromDb.
+	// checks, etc.) doesn't have to re-filter — see getPromptSessionFromDb.
 	// Historical-message-speaker resolution is the one legitimate exception
 	// that needs removed rows too (a past message from a since-removed
 	// participant must still show who said it), so that lookup is supplied
 	// here instead, kept separate rather than merged back into the main
 	// lists so no other consumer can accidentally pick a removed row up.
-	removedChatCharacters?: (SelectChatCharacter & {
+	removedSessionCharacters?: (SelectSessionCharacter & {
 		character: SelectCharacter | null
 	})[]
-	removedChatPersonas?: (SelectChatPersona & {
+	removedSessionPersonas?: (SelectSessionPersona & {
 		persona: SelectPersona | null
 	})[]
-	chatMessages: SelectChatMessage[]
-	// A chat's lorebookId is nullable, and the relational query result mirrors
+	sessionMessages: SelectSessionMessage[]
+	// A session's lorebookId is nullable, and the relational query result mirrors
 	// that (null when unset) — every consumer already guards for this (see
-	// hasLorebookEntries() and the `chat.lorebook && ...` checks in
+	// hasLorebookEntries() and the `session.lorebook && ...` checks in
 	// LorebookBindingUtils.ts), so this stays optional rather than falsely
 	// promising it's always populated.
 	lorebook?:
@@ -62,7 +62,7 @@ export interface BaseConnectionAdapterParams {
 	sampling: SelectSamplingConfig
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
-	chat: BasePromptChat
+	session: BasePromptSession
 	currentCharacterId: number | null
 	tokenCounter: TokenCounters
 	tokenLimit: number
@@ -83,7 +83,7 @@ export abstract class BaseConnectionAdapter {
 	sampling: SelectSamplingConfig
 	contextConfig: SelectContextConfig
 	promptConfig: SelectPromptConfig
-	chat: BasePromptChat
+	session: BasePromptSession
 	currentCharacterId: number | null
 	isAborting = false
 	isSummarizerMode = false
@@ -110,7 +110,7 @@ export abstract class BaseConnectionAdapter {
 	 * isNarratorResponseMode below; this is the same hazard, avoided the same
 	 * way.
 	 *
-	 * The default is what keeps chat safe: anything that does not explicitly opt
+	 * The default is what keeps session safe: anything that does not explicitly opt
 	 * in generates unconstrained. A constraint leaking into roleplay would be a
 	 * far worse regression than the extraction failures it exists to fix.
 	 */
@@ -158,7 +158,7 @@ export abstract class BaseConnectionAdapter {
 		sampling,
 		contextConfig,
 		promptConfig,
-		chat,
+		session,
 		currentCharacterId,
 		tokenCounter,
 		tokenLimit,
@@ -169,7 +169,7 @@ export abstract class BaseConnectionAdapter {
 		this.sampling = sampling
 		this.contextConfig = contextConfig
 		this.promptConfig = promptConfig
-		this.chat = chat
+		this.session = session
 		this.currentCharacterId = currentCharacterId
 		// Deliberately derived from generatingMessageMetadata rather than its
 		// own constructor param: every adapter subclass (KoboldCPP, Ollama,
@@ -181,7 +181,7 @@ export abstract class BaseConnectionAdapter {
 		// already reliably threaded through avoids that whole class of bug.
 		this.isNarratorResponseMode =
 			!!generatingMessageMetadata?.isNarratorResponse
-		this.isSummarizerMode = chat.chatType === ChatTypes.SUMMARIZE
+		this.isSummarizerMode = session.sessionType === SessionTypes.SUMMARIZE
 		this.generatingMessageMetadata = generatingMessageMetadata
 		this.tokenCounter = tokenCounter
 		this.tokenLimit = tokenLimit
@@ -281,12 +281,12 @@ export abstract class BaseConnectionAdapter {
 	}
 
 	/**
-	 * Build a text-completion prompt string from a chat-format messages
+	 * Build a text-completion prompt string from a session-format messages
 	 * array, for compileSummarizerPrompt() whose primary representation is
 	 * `messages` but which — like the default character-perspective path —
 	 * still needs to produce a real `prompt` on any text-completion
 	 * connection. Without this, `prompt` was always left undefined here, so
-	 * any connection not in chat-completion mode (e.g. KoboldCPP's default)
+	 * any connection not in session-completion mode (e.g. KoboldCPP's default)
 	 * silently generated from an empty prompt — the exact bug Narrator
 	 * response had until it was fixed by delegating into the shared
 	 * context-block pipeline instead; summarizer mode intentionally stays
@@ -327,7 +327,7 @@ export abstract class BaseConnectionAdapter {
 			}
 		]
 
-		for (const msg of this.chat.chatMessages) {
+		for (const msg of this.session.sessionMessages) {
 			if (msg.isHidden) continue
 			messages.push({
 				role: msg.role === "assistant" ? "assistant" : "user",
@@ -335,20 +335,20 @@ export abstract class BaseConnectionAdapter {
 			})
 		}
 
-		const useChatFormat = !!args?.useChatFormat
-		const promptString = useChatFormat
+		const useSessionFormat = !!args?.useSessionFormat
+		const promptString = useSessionFormat
 			? undefined
 			: this.buildTextPromptFromMessages(messages)
 
 		const totalTokens = await this.tokenCounter.countTokens(
-			useChatFormat ? JSON.stringify(messages) : promptString!
+			useSessionFormat ? JSON.stringify(messages) : promptString!
 		)
 
 		return {
 			prompt: promptString,
 			messages,
 			meta: {
-				promptFormat: useChatFormat ? "chat" : "text",
+				promptFormat: useSessionFormat ? "session" : "text",
 				templateName: "summarizer",
 				timestamp: new Date().toISOString(),
 				truncationReason: null,
@@ -357,17 +357,17 @@ export abstract class BaseConnectionAdapter {
 					total: totalTokens,
 					limit: await this.getContextTokenLimit()
 				},
-				chatMessages: {
-					included: this.chat.chatMessages.filter(
-						(m: SelectChatMessage) => !m.isHidden
+				sessionMessages: {
+					included: this.session.sessionMessages.filter(
+						(m: SelectSessionMessage) => !m.isHidden
 					).length,
-					total: this.chat.chatMessages.length,
-					includedIds: this.chat.chatMessages
-						.filter((m: SelectChatMessage) => !m.isHidden)
-						.map((m: SelectChatMessage) => m.id),
-					excludedIds: this.chat.chatMessages
-						.filter((m: SelectChatMessage) => m.isHidden)
-						.map((m: SelectChatMessage) => m.id)
+					total: this.session.sessionMessages.length,
+					includedIds: this.session.sessionMessages
+						.filter((m: SelectSessionMessage) => !m.isHidden)
+						.map((m: SelectSessionMessage) => m.id),
+					excludedIds: this.session.sessionMessages
+						.filter((m: SelectSessionMessage) => m.isHidden)
+						.map((m: SelectSessionMessage) => m.id)
 				},
 				sources: {
 					characters: [],

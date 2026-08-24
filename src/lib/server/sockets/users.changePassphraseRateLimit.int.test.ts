@@ -34,9 +34,10 @@ vi.mock("$lib/server/db", async (importOriginal) => {
 })
 
 vi.mock("$lib/server/providers/users/passphrase", async (importOriginal) => {
-	const actual = await importOriginal<
-		typeof import("$lib/server/providers/users/passphrase")
-	>()
+	const actual =
+		await importOriginal<
+			typeof import("$lib/server/providers/users/passphrase")
+		>()
 	return { ...actual, validate: vi.fn() }
 })
 

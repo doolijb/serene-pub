@@ -6,7 +6,7 @@
  * the keyword and RAG infill engines): unbound entries are excluded
  * unconditionally, a character binding makes the entry that character's own
  * private self-knowledge (invisible to every other character, even ones in
- * the same chat), and a persona binding gates on which persona is currently
+ * the same session), and a persona binding gates on which persona is currently
  * playing. This mirrors that rule in plain language for display purposes —
  * CharacterLoreManager.svelte's list/view/edit modes — so it's not a
  * surprise the first time an entry silently never shows up.
@@ -73,13 +73,13 @@ export function getCharacterLoreVisibility(
 		return {
 			kind: "character",
 			label: `Private to ${name}`,
-			description: `Only included in prompts generated from ${name}'s perspective — hidden from every other character, even ones in the same chat.`
+			description: `Only included in prompts generated from ${name}'s perspective — hidden from every other character, even ones in the same session.`
 		}
 	}
 	const name = binding.persona?.name || "this persona"
 	return {
 		kind: "persona",
 		label: `Private to ${name}`,
-		description: `Only included while ${name} is the active persona in the chat.`
+		description: `Only included while ${name} is the active persona in the session.`
 	}
 }

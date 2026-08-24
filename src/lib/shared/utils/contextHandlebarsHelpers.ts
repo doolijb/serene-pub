@@ -30,10 +30,7 @@ export function registerContextHandlebarsHelpers(
 		handlebars.registerHelper("pad", (n: unknown, width: unknown) =>
 			n == null
 				? ""
-				: String(n).padStart(
-						typeof width === "number" ? width : 2,
-						"0"
-					)
+				: String(n).padStart(typeof width === "number" ? width : 2, "0")
 		)
 
 	/**

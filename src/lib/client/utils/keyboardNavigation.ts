@@ -44,8 +44,8 @@ export class KeyboardNavigationManager {
 				break
 		}
 
-		// Chat-specific navigation (when in chat)
-		if (window.location.pathname.includes("/chats/")) {
+		// Session-specific navigation (when in session)
+		if (window.location.pathname.includes("/sessions/")) {
 			switch (event.key) {
 				case "j":
 					event.preventDefault()
@@ -194,7 +194,7 @@ export class KeyboardNavigationManager {
 		document.removeEventListener("keydown", this.handleGlobalKeyDown)
 	}
 
-	// Chat message navigation methods
+	// Session message navigation methods
 	private navigateToNextMessage() {
 		const messages = document.querySelectorAll('[id^="message-"]')
 		const focused = document.activeElement
@@ -386,7 +386,7 @@ export class KeyboardNavigationManager {
 
 // Context navigation helpers for specific use cases
 export const NavigationHelpers = {
-	// Navigate between chat messages
+	// Navigate between session messages
 	navigateMessage: (
 		direction: "next" | "previous",
 		currentIndex?: number
@@ -406,7 +406,7 @@ export const NavigationHelpers = {
 		if (targetMessage) {
 			targetMessage.focus()
 			KeyboardNavigationManager.announceToScreenReader(
-				`Chat message ${targetIndex + 1} of ${messages.length}`
+				`Session message ${targetIndex + 1} of ${messages.length}`
 			)
 		}
 	},

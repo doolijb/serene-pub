@@ -27,8 +27,8 @@
 		returnFullPersona = false
 	}: Props = $props()
 
-	// Every caller passes `personas` explicitly (see EditChatForm.svelte,
-	// chats/[id]/+page.svelte, LorebookBindingsManager.svelte) — there is no
+	// Every caller passes `personas` explicitly (see EditSessionForm.svelte,
+	// sessions/[id]/+page.svelte, LorebookBindingsManager.svelte) — there is no
 	// personas-list context to fall back to.
 	let availablePersonas = $derived(personas || [])
 	let search = $state("")
@@ -104,7 +104,7 @@
 										class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
 										onclick={() => {
 											if (returnFullPersona) {
-												// For EditChatForm - return full persona object
+												// For EditSessionForm - return full persona object
 												;(
 													onSelect as (
 														persona: Partial<SelectPersona> & {
@@ -117,7 +117,7 @@
 													}
 												)
 											} else {
-												// For chat page - return just ID
+												// For session page - return just ID
 												;(
 													onSelect as (
 														personaId: number

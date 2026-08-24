@@ -4,8 +4,8 @@
  * it up as its own suite.
  *
  * Two kinds of fixtures:
- *  - In-memory builders (worldLoreEntry, characterLoreEntry, chatCharacter,
- *    buildChat, ...) — plain objects matching the shapes the lore path
+ *  - In-memory builders (worldLoreEntry, characterLoreEntry, sessionCharacter,
+ *    buildSession, ...) — plain objects matching the shapes the lore path
  *    reads. Nothing on that path touches the DB for lore
  *    content itself, so most tests never need a real row for these.
  *  - DB insert helpers (insertLorebook, insertNarrativeNode, ...) — for the
@@ -42,7 +42,7 @@ HISTORY:{{{history}}}
 CURRENTDATE:{{{currentDate}}}
 GRAPH:{{{narrativeGraph}}}
 MESSAGES:
-{{#each chatMessages as |chatMessage msgIndex|}}{{#with ../postHistory}}{{#if (and (eq msgIndex targetIndex) hasContent)}}POSTHISTORY:[{{{instructions}}}][{{{charInstructions}}}][{{{exampleDialogue}}}]
+{{#each sessionMessages as |sessionMessage msgIndex|}}{{#with ../postHistory}}{{#if (and (eq msgIndex targetIndex) hasContent)}}POSTHISTORY:[{{{instructions}}}][{{{charInstructions}}}][{{{exampleDialogue}}}]
 {{/if}}{{/with}}{{{name}}}|{{{message}}}
 {{/each}}`
 
@@ -71,7 +71,7 @@ export function makeTemplateContext(overrides: Partial<any> = {}): any {
 		characters: [],
 		personas: [],
 		scenario: "",
-		chatMessages: [],
+		sessionMessages: [],
 		char: "",
 		character: "",
 		user: "",
@@ -88,7 +88,7 @@ export function makeInfillOptions(overrides: Partial<any> = {}): any {
 		seedName: "Alice",
 		personaName: "Test User",
 		templateContext: makeTemplateContext(),
-		useChatFormat: false,
+		useSessionFormat: false,
 		tokenLimit: 100_000,
 		contextThresholdPercent: 1,
 		tokenCounter: makeTokenCounter(),
@@ -276,12 +276,12 @@ export function persona(overrides: Partial<SelectPersona> = {}): SelectPersona {
 	} as unknown as SelectPersona
 }
 
-export function chatCharacter(
+export function sessionCharacter(
 	char: SelectCharacter,
-	overrides: Partial<SelectChatCharacter> = {}
-): SelectChatCharacter & { character: SelectCharacter } {
+	overrides: Partial<SelectSessionCharacter> = {}
+): SelectSessionCharacter & { character: SelectCharacter } {
 	return {
-		chatId: 1,
+		sessionId: 1,
 		characterId: char.id,
 		position: 0,
 		isActive: true,
@@ -291,12 +291,12 @@ export function chatCharacter(
 	} as any
 }
 
-export function chatPersona(
+export function sessionPersona(
 	p: SelectPersona,
-	overrides: Partial<SelectChatPersona> = {}
-): SelectChatPersona & { persona: SelectPersona } {
+	overrides: Partial<SelectSessionPersona> = {}
+): SelectSessionPersona & { persona: SelectPersona } {
 	return {
-		chatId: 1,
+		sessionId: 1,
 		personaId: p.id,
 		position: 0,
 		...overrides,
@@ -304,13 +304,13 @@ export function chatPersona(
 	} as any
 }
 
-export function chatMessage(
-	overrides: Partial<SelectChatMessage> = {}
-): SelectChatMessage {
+export function sessionMessage(
+	overrides: Partial<SelectSessionMessage> = {}
+): SelectSessionMessage {
 	const id = overrides.id ?? nextId()
 	return {
 		id,
-		chatId: 1,
+		sessionId: 1,
 		userId: null,
 		characterId: null,
 		personaId: null,
@@ -331,7 +331,7 @@ export function chatMessage(
 		embeddingModel: null,
 		vectorizedAt: null,
 		...overrides
-	} as unknown as SelectChatMessage
+	} as unknown as SelectSessionMessage
 }
 
 export type TestLorebook = {
@@ -356,22 +356,22 @@ export function buildLorebook(overrides: Partial<TestLorebook> = {}): any {
 	}
 }
 
-/** Builds a plain object matching the runtime shape the lore path reads off `this.chat`. */
-export function buildChat(overrides: Record<string, any> = {}): any {
+/** Builds a plain object matching the runtime shape the lore path reads off `this.session`. */
+export function buildSession(overrides: Record<string, any> = {}): any {
 	return {
 		id: 1,
-		name: "Test Chat",
+		name: "Test Session",
 		isGroup: true,
-		chatType: "roleplay",
+		sessionType: "roleplay",
 		userId: 1,
 		scenario: null,
 		metadata: {},
 		groupReplyStrategy: "ordered",
 		lorebookId: null,
 		lorebook: null,
-		chatCharacters: [],
-		chatPersonas: [],
-		chatMessages: [],
+		sessionCharacters: [],
+		sessionPersonas: [],
+		sessionMessages: [],
 		...overrides
 	}
 }
@@ -425,13 +425,13 @@ export async function insertPersonaRow(
 	return row
 }
 
-export async function insertChatRow(
+export async function insertSessionRow(
 	db: TestDb,
 	userId: number,
-	overrides: Partial<InsertChat> = {}
+	overrides: Partial<InsertSession> = {}
 ) {
 	const [row] = await db
-		.insert(schema.chats)
+		.insert(schema.sessions)
 		.values({ userId, isGroup: true, ...overrides })
 		.returning()
 	return row
@@ -512,40 +512,40 @@ export async function insertNarrativeRelationshipRow(
 	return row
 }
 
-export async function insertChatCharacterRow(
+export async function insertSessionCharacterRow(
 	db: TestDb,
-	chatId: number,
+	sessionId: number,
 	characterId: number,
-	overrides: Partial<InsertChatCharacter> = {}
+	overrides: Partial<InsertSessionCharacter> = {}
 ) {
 	const [row] = await db
-		.insert(schema.chatCharacters)
-		.values({ chatId, characterId, ...overrides })
+		.insert(schema.sessionCharacters)
+		.values({ sessionId, characterId, ...overrides })
 		.returning()
 	return row
 }
 
-export async function insertChatPersonaRow(
+export async function insertSessionPersonaRow(
 	db: TestDb,
-	chatId: number,
+	sessionId: number,
 	personaId: number,
-	overrides: Partial<InsertChatPersona> = {}
+	overrides: Partial<InsertSessionPersona> = {}
 ) {
 	const [row] = await db
-		.insert(schema.chatPersonas)
-		.values({ chatId, personaId, ...overrides })
+		.insert(schema.sessionPersonas)
+		.values({ sessionId, personaId, ...overrides })
 		.returning()
 	return row
 }
 
-export async function insertChatMessageRow(
+export async function insertSessionMessageRow(
 	db: TestDb,
-	chatId: number,
-	overrides: Partial<InsertChatMessage> = {}
+	sessionId: number,
+	overrides: Partial<InsertSessionMessage> = {}
 ) {
 	const [row] = await db
-		.insert(schema.chatMessages)
-		.values({ chatId, role: "user", content: "Hello", ...overrides })
+		.insert(schema.sessionMessages)
+		.values({ sessionId, role: "user", content: "Hello", ...overrides })
 		.returning()
 	return row
 }

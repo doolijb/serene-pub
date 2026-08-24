@@ -28,7 +28,7 @@ import { NARRATE_SPEC_ID, RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 let db: TestDb
 let dataDir: string
 let userId: number
-let chatId: number
+let sessionId: number
 let specId: number
 
 vi.mock("$lib/server/db", async () => {
@@ -52,13 +52,15 @@ beforeAll(async () => {
 		.values({ username: "world-layer-user", isAdmin: false })
 		.returning()
 	userId = user.id
-	const [chat] = await db
-		.insert(schema.chats)
+	const [session] = await db
+		.insert(schema.sessions)
 		.values({ userId, isGroup: false })
 		.returning()
-	chatId = chat.id
+	sessionId = session.id
 
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(db as any)
 
 	const [spec] = await db
@@ -75,8 +77,7 @@ afterAll(async () => {
 const worldFor = async () => {
 	const { buildWorld } = await import("$lib/server/pipelines/config/world")
 	return await buildWorld(db as any, {
-		chatId,
-		userId,
+		sessionId,
 		specId: RESPOND_SPEC_ID
 	})
 }
@@ -121,7 +122,7 @@ describe("the shipped configuration reaches a run", () => {
 			.update(schema.systemSettings)
 			.set({ defaultPromptConfigId: null })
 		await db.update(schema.userSettings).set({ activePromptConfigId: null })
-		await db.update(schema.chats).set({ promptConfigId: null })
+		await db.update(schema.sessions).set({ promptConfigId: null })
 
 		const resolved = await resolvedAt("context", "prompts", "systemPrompt")
 		expect(resolved).toBeTruthy()
@@ -129,9 +130,13 @@ describe("the shipped configuration reaches a run", () => {
 
 		// It is the pipeline's own shipped prompt — the first it ships with —
 		// and it sits at `defaults`, under anything anyone actually chose.
-		const { defaultPromptFor } = await import("$lib/server/pipelines/boot/seedPrompts")
+		const { defaultPromptFor } = await import(
+			"$lib/server/pipelines/boot/seedPrompts"
+		)
 		const id = await defaultPromptFor(db as any, specId)
-		const { resolvePromptFields } = await import("$lib/server/pipelines/entities/prompts")
+		const { resolvePromptFields } = await import(
+			"$lib/server/pipelines/entities/prompts"
+		)
 		const fields = await resolvePromptFields(db as any, id!)
 		expect(resolved!.value).toBe(fields.systemPrompt)
 		expect(resolved!.scopeKind).toBe("defaults")
@@ -139,7 +144,9 @@ describe("the shipped configuration reaches a run", () => {
 })
 
 describe("a value someone set wins", () => {
-	it("lets a user override beat the selected config", async () => {
+	it("lets a session override beat the selected config — the whole chain now", async () => {
+		// The chain since the simplification (2026-08-24): a session's override
+		// is the only scoped row left, and it wins over the selected config.
 		const [node] = await db
 			.select()
 			.from(schema.pipelineNodes)
@@ -149,26 +156,8 @@ describe("a value someone set wins", () => {
 
 		await db.insert(schema.pipelineNodeOverrides).values({
 			specId,
-			scopeKind: "user",
-			scopeId: userId,
-			nodeKey: "rank",
-			slot: "params",
-			path: "budget",
-			value: 1234
-		})
-
-		const resolved = await resolvedAt("rank", "params", "budget")
-		expect(resolved!.value).toBe(1234)
-		expect(resolved!.scopeKind).toBe("user")
-	})
-
-	it("lets a chat-scoped value beat the user's own", async () => {
-		// The chain is the point. A per-chat tweak has to win in that chat and
-		// nowhere else, or "this chat only" means nothing.
-		await db.insert(schema.pipelineNodeOverrides).values({
-			specId,
-			scopeKind: "chat",
-			scopeId: chatId,
+			scopeKind: "session",
+			scopeId: sessionId,
 			nodeKey: "rank",
 			slot: "params",
 			path: "budget",
@@ -177,18 +166,18 @@ describe("a value someone set wins", () => {
 
 		const resolved = await resolvedAt("rank", "params", "budget")
 		expect(resolved!.value).toBe(4321)
-		expect(resolved!.scopeKind).toBe("chat")
+		expect(resolved!.scopeKind).toBe("session")
 	})
 
-	it("keeps another user's override out of this world", async () => {
+	it("keeps another session's override out of this world", async () => {
 		const [other] = await db
-			.insert(schema.users)
-			.values({ username: "world-layer-other", isAdmin: false })
+			.insert(schema.sessions)
+			.values({ userId, isGroup: false })
 			.returning()
 
 		await db.insert(schema.pipelineNodeOverrides).values({
 			specId,
-			scopeKind: "user",
+			scopeKind: "session",
 			scopeId: other.id,
 			nodeKey: "rank",
 			slot: "params",
@@ -197,7 +186,7 @@ describe("a value someone set wins", () => {
 		})
 
 		const resolved = await resolvedAt("rank", "params", "minInclude")
-		// Either unset, or set by something that is not that user.
+		// Either unset, or set by something that is not that session.
 		expect(resolved?.value).not.toBe(999)
 	})
 })
@@ -238,8 +227,17 @@ describe("a prompt edited in the panel", () => {
 			value: prompt.id
 		})
 
-		const { selectConfig } = await import("$lib/server/pipelines/config/named")
-		await selectConfig(db as any, specId, "user", userId, config.id, userId)
+		const { selectConfig } = await import(
+			"$lib/server/pipelines/config/named"
+		)
+		await selectConfig(
+			db as any,
+			specId,
+			"session",
+			sessionId,
+			config.id,
+			userId
+		)
 
 		const resolved = await resolvedAt("context", "prompts", "systemPrompt")
 		expect(resolved!.value).toBe("SPEAK ONLY IN RIDDLES")
@@ -268,8 +266,8 @@ describe("a prompt edited in the panel", () => {
 
 		await db.insert(schema.pipelineNodeOverrides).values({
 			specId,
-			scopeKind: "chat",
-			scopeId: chatId,
+			scopeKind: "session",
+			scopeId: sessionId,
 			nodeKey: "context",
 			slot: "prompts",
 			path: "",
@@ -279,8 +277,8 @@ describe("a prompt edited in the panel", () => {
 		const resolved = await resolvedAt("context", "prompts", "systemPrompt")
 		expect(resolved!.value).toBe("ANSWER ONLY IN HAIKU")
 		// At the scope it was written at — over the selected config's preset
-		// layer, so a per-chat pick beats the named config in that chat.
-		expect(resolved!.scopeKind).toBe("chat")
+		// layer, so a per-session pick beats the named config in that session.
+		expect(resolved!.scopeKind).toBe("session")
 	})
 })
 
@@ -290,7 +288,7 @@ describe("a prompt edited in the panel", () => {
  * `respond` and `narrate` share every node key — `context`, `prompt`,
  * `generate` — because structurally they are the same pipeline. The legacy
  * projection read `prompt_configs` regardless of which one was running and
- * layered the reply's text onto `context` at **user** and **chat** scope; those
+ * layered the reply's text onto `context` at **user** and **session** scope; those
  * outrank `preset`, where the narrator's own selection lives. So a narrator run
  * resolved "Write one reply only…" and the narrator's own text lost.
  *
@@ -299,18 +297,17 @@ describe("a prompt edited in the panel", () => {
  * config below is the entire test.
  */
 describe("each pipeline reads its own legacy prompt table", () => {
-	// Its own user and chat: the tests above write chat-scope overrides on the
-	// shared fixture, and a chat layer would mask the user layer this is about.
+	// Its own user and session: the tests above write session-scope overrides on the
+	// shared fixture, and a session layer would mask the user layer this is about.
 	let nUserId: number
-	let nChatId: number
+	let nSessionId: number
 
 	const worldFor = async (slug: string, nodeKey: string) => {
 		const { buildWorld } = await import(
 			"$lib/server/pipelines/config/world"
 		)
 		const world = await buildWorld(db as any, {
-			chatId: nChatId,
-			userId: nUserId,
+			sessionId: nSessionId,
 			specId: slug
 		})
 		return resolveConfigSources(world as any, [nodeKey])
@@ -326,28 +323,27 @@ describe("each pipeline reads its own legacy prompt table", () => {
 			.returning()
 		nUserId = u.id
 		const [c] = await db
-			.insert(schema.chats)
+			.insert(schema.sessions)
 			.values({ userId: nUserId, isGroup: false })
 			.returning()
-		nChatId = c.id
+		nSessionId = c.id
 
-		// The ordinary case: a user who picked a reply prompt they like.
+		// The ordinary case: a session set to a reply prompt somebody likes —
+		// the user layer no longer projects (ruled 2026-08-24), so the session's
+		// own pick is the personal layer now.
 		const [reply] = await db
 			.select()
 			.from(schema.promptConfigs)
 			.where(eq(schema.promptConfigs.name, "Roleplay - Immersive"))
 		await db
-			.insert(schema.userSettings)
-			.values({ userId: nUserId, activePromptConfigId: reply.id })
-			.onConflictDoUpdate({
-				target: schema.userSettings.userId,
-				set: { activePromptConfigId: reply.id }
-			})
+			.update(schema.sessions)
+			.set({ promptConfigId: reply.id })
+			.where(eq(schema.sessions.id, nSessionId))
 	})
 
-	it("gives the reply pipeline the reply config the user picked", async () => {
+	it("gives the reply pipeline the reply config the session picked", async () => {
 		const sp = await resolvedFor(RESPOND_SPEC_ID, "systemPrompt")
-		expect(sp?.scopeKind).toBe("user")
+		expect(sp?.scopeKind).toBe("session")
 		expect(String(sp?.value)).toContain("Write one reply only")
 	})
 
@@ -363,7 +359,7 @@ describe("each pipeline reads its own legacy prompt table", () => {
 	it("keeps the narrator's post-history reminder unsuppressed", async () => {
 		// `narrator_prompt_configs.post_history_token_trigger` defaults to 0 —
 		// "always reinforce" — while the reply side ships 3000. Inheriting the
-		// reply's number silently switched the reminder off for short chats,
+		// reply's number silently switched the reminder off for short sessions,
 		// which is the case a narrator is most often used in.
 		const sourced = await worldFor(NARRATE_SPEC_ID, "prompt")
 		const trigger = sourced.prompt?.params?.postHistoryTokenTrigger
@@ -382,15 +378,14 @@ describe("each pipeline reads its own legacy prompt table", () => {
 			"$lib/server/pipelines/specs"
 		)
 		const world: any = await buildWorld(db as any, {
-			chatId: nChatId,
-			userId: nUserId,
+			sessionId: nSessionId,
 			specId: SUMMARIZE_WORLD_SPEC_ID
 		})
 		const leaked = world.overrides.filter(
 			(o: any) =>
 				o.nodeKey === "context" &&
 				o.slot === "prompts" &&
-				["user", "chat", "defaults"].includes(o.scopeKind)
+				["user", "session", "defaults"].includes(o.scopeKind)
 		)
 		expect(leaked).toEqual([])
 	})

@@ -2,13 +2,13 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, eq } from "drizzle-orm"
 import {
-	broadcastToChatUsers,
-	broadcastToChatUsersVaryingByRole
+	broadcastToSessionUsers,
+	broadcastToSessionUsersVaryingByRole
 } from "../sockets/utils/broadcastHelpers"
 import type { LLMQueueStatus } from "./llmQueue"
 
 const GUEST_FACING_GENERATION_ERROR_MESSAGE =
-	"Generation failed. Ask the chat owner to check their connection settings."
+	"Generation failed. Ask the session owner to check their connection settings."
 
 export function friendlyErrorFromUnknown(err: unknown): {
 	message: string
@@ -30,7 +30,7 @@ export function friendlyErrorFromUnknown(err: unknown): {
 
 export async function persistGenerationStage(
 	generatingMessageId: number,
-	chatId: number,
+	sessionId: number,
 	socketIo: any,
 	status: LLMQueueStatus
 ) {
@@ -39,18 +39,18 @@ export async function persistGenerationStage(
 			? status
 			: null
 	const [updated] = await db
-		.update(schema.chatMessages)
+		.update(schema.sessionMessages)
 		.set({ generationStage: stage })
 		.where(
 			and(
-				eq(schema.chatMessages.id, generatingMessageId),
-				eq(schema.chatMessages.isGenerating, true)
+				eq(schema.sessionMessages.id, generatingMessageId),
+				eq(schema.sessionMessages.isGenerating, true)
 			)
 		)
 		.returning()
 	if (updated) {
-		await broadcastToChatUsers(socketIo, chatId, "chatMessage", {
-			chatMessage: updated
+		await broadcastToSessionUsers(socketIo, sessionId, "sessionMessage", {
+			sessionMessage: updated
 		})
 	}
 }
@@ -58,7 +58,7 @@ export async function persistGenerationStage(
 /**
  * Round-12 audit fix (MEDIUM): the raw upstream provider error (eg. "HTTP
  * 401: Unauthorized", a KoboldCPP model-load failure with an embedded
- * response body) used to be broadcast verbatim to the whole chat room,
+ * response body) used to be broadcast verbatim to the whole session room,
  * including guests who have no relationship to the owner's LLM connection
  * or credentials. The stored DB row still keeps the real error — the owner
  * needs it to troubleshoot their own connection — only the guest-facing
@@ -66,14 +66,14 @@ export async function persistGenerationStage(
  */
 export async function persistGenerationErrorRow(
 	socketIo: any,
-	chatId: number,
+	sessionId: number,
 	generatingMessageId: number,
 	err: unknown
 ) {
 	const error = friendlyErrorFromUnknown(err)
 	console.error("[generationStatus] generation failed:", err)
 	const [updated] = await db
-		.update(schema.chatMessages)
+		.update(schema.sessionMessages)
 		.set({
 			isGenerating: false,
 			generationStage: null,
@@ -82,8 +82,8 @@ export async function persistGenerationErrorRow(
 		})
 		.where(
 			and(
-				eq(schema.chatMessages.id, generatingMessageId),
-				eq(schema.chatMessages.isGenerating, true)
+				eq(schema.sessionMessages.id, generatingMessageId),
+				eq(schema.sessionMessages.isGenerating, true)
 			)
 		)
 		.returning()
@@ -92,12 +92,12 @@ export async function persistGenerationErrorRow(
 			...updated,
 			error: { message: GUEST_FACING_GENERATION_ERROR_MESSAGE }
 		}
-		await broadcastToChatUsersVaryingByRole(
+		await broadcastToSessionUsersVaryingByRole(
 			socketIo,
-			chatId,
-			"chatMessage",
-			{ chatMessage: updated },
-			{ chatMessage: guestFacing }
+			sessionId,
+			"sessionMessage",
+			{ sessionMessage: updated },
+			{ sessionMessage: guestFacing }
 		)
 	}
 }

@@ -1444,10 +1444,10 @@
 				</header>
 
 				<p class="text-sm">
-					RAG will fall back to keyword search for all chats. You can
-					re-enable embeddings and reconfigure at any time — existing
-					embeddings aren't deleted, just unused until you turn this
-					back on.
+					RAG will fall back to keyword search for all sessions. You
+					can re-enable embeddings and reconfigure at any time —
+					existing embeddings aren't deleted, just unused until you
+					turn this back on.
 				</p>
 
 				<footer class="flex justify-end gap-2">

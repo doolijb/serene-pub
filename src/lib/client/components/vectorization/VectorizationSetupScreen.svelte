@@ -44,8 +44,7 @@
 				<p class="text-sm font-semibold">Local Model</p>
 				<p class="text-surface-700-300 mt-1 text-xs leading-relaxed">
 					Runs a small embedding model on this device — one-time
-					download, then works fully offline with no per-request
-					cost.
+					download, then works fully offline with no per-request cost.
 				</p>
 			</div>
 			{#if localEmbeddingsSupported}

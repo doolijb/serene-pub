@@ -37,7 +37,7 @@ export interface BlockCard extends BaseCard {
 	/**
 	 * Raw source text of the tag's params/hash/block-params, sliced verbatim
 	 * from the original open-tag source (e.g. "(and (eq msgIndex targetIndex) hasContent)"
-	 * or "chatMessages as |chatMessage msgIndex|") — never reconstructed from
+	 * or "sessionMessages as |sessionMessage msgIndex|") — never reconstructed from
 	 * AST param nodes, so nothing about it needs re-printing.
 	 */
 	tagSource: string
@@ -561,7 +561,7 @@ function collectDescendantExpressions(cards: Card[]): string[] {
 			out.push(c.expressionSource)
 		} else {
 			// Text cards can contain inline {{mustaches}} that reference a
-			// block param too (e.g. "{{{chatMessage.name}}}: {{{msgIndex}}}").
+			// block param too (e.g. "{{{sessionMessage.name}}}: {{{msgIndex}}}").
 			out.push(c.content)
 		}
 	}
@@ -724,6 +724,7 @@ const KNOWN_HELPER_NAMES = new Set([
 	"jsonValue",
 	"pad",
 	"isSet",
+	"lookup",
 	"systemBlock",
 	"userBlock",
 	"assistantBlock"
@@ -749,7 +750,10 @@ const KNOWN_HELPER_NAMES = new Set([
  */
 const STRUCTURAL_FIELDS = [
 	"postHistory",
-	"chatMessages",
+	// Depth-resolved injections (18 §4a, ruling 2026-08-23): data the
+	// template loop renders, computed beside postHistory.targetIndex.
+	"injectionsByIndex",
+	"sessionMessages",
 	"budget",
 	"char",
 	"character",
@@ -936,8 +940,14 @@ function splitPath(expr: string): string[] {
 	let cur = ""
 	let inBracket = false
 	for (const c of expr) {
-		if (c === "[") { inBracket = true; continue }
-		if (c === "]") { inBracket = false; continue }
+		if (c === "[") {
+			inBracket = true
+			continue
+		}
+		if (c === "]") {
+			inBracket = false
+			continue
+		}
 		if (c === "." && !inBracket) {
 			if (cur) out.push(cur)
 			cur = ""
@@ -1005,7 +1015,9 @@ export function lintContextTemplate(
 		cards,
 		vocabulary === KNOWN_TOP_LEVEL_FIELDS
 			? contextTemplateScope()
-			: Object.fromEntries([...vocabulary].map((n) => [n, "any" as const]))
+			: Object.fromEntries(
+					[...vocabulary].map((n) => [n, "any" as const])
+				)
 	)
 }
 
@@ -1023,13 +1035,15 @@ export function contextTemplateScope(): TemplateScope {
 	)
 }
 
-function lintCards(
-	cards: Card[],
-	scope: TemplateScope
-): TemplateLintIssue[] {
+function lintCards(cards: Card[], scope: TemplateScope): TemplateLintIssue[] {
 	const issues: TemplateLintIssue[] = []
 	const at = (card: Card, message: string) =>
-		issues.push({ cardId: card.id, start: card.start, end: card.end, message })
+		issues.push({
+			cardId: card.id,
+			start: card.start,
+			end: card.end,
+			message
+		})
 
 	function visit(list: Card[], frame: Frame) {
 		for (const card of list) {
@@ -1097,7 +1111,8 @@ function inlineMustaches(
 	const RE = /\{\{\{([^{}]*)\}\}\}|\{\{([^{}]*)\}\}/g
 	for (const m of content.matchAll(RE)) {
 		const inner = (m[1] ?? m[2] ?? "").trim()
-		if (!inner || /^[#/!>^&]/.test(inner) || inner.startsWith("else")) continue
+		if (!inner || /^[#/!>^&]/.test(inner) || inner.startsWith("else"))
+			continue
 		out.push({
 			expression: inner,
 			start: m.index!,

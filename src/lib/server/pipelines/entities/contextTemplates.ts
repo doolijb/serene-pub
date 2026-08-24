@@ -9,7 +9,7 @@
  *
  * ## Keyed by node type, grouped by origin
  *
- * A template is compatible with a node, not with a pipeline. Chat reply and the
+ * A template is compatible with a node, not with a pipeline. Session reply and the
  * narrator both run `core:task/assemble`, so one row genuinely serves both —
  * which is how `context_configs` has always behaved. Keying on the spec would
  * mean two copies of the same template, kept in sync by hand, and one more copy
@@ -18,7 +18,7 @@
  * That leaves a real problem this file also solves: at ten rows, "compatible"
  * and "the one I want" stop being the same answer. So a row also remembers
  * which pipeline it was written in, and `listContextTemplates` groups on it.
- * **The grouping never refuses.** A template written while editing chat replies
+ * **The grouping never refuses.** A template written while editing session replies
  * is still offered in the narrator, one group down, because the entire reason
  * this is not spec-scoped is that it works there.
  *
@@ -284,7 +284,7 @@ export async function updateContextTemplate(
 }
 
 /** Which slot names, across every published spec, hold a context-template reference. */
-async function contextTemplateSlotNames(db: Db): Promise<string[]> {
+export async function contextTemplateSlotNames(db: Db): Promise<string[]> {
 	const specs = await db.select().from(schema.pipelineSpecs)
 	const names = new Set<string>()
 	for (const spec of specs as any[]) {
@@ -317,6 +317,12 @@ export async function deleteContextTemplate(
 		 * layouts picker, where refusal is likewise the common case.
 		 */
 		ignoreOverrideIds?: Set<number>
+		/**
+		 * Config-value rows that do not count either — since the layer
+		 * simplification (2026-08-24) an admin's selection outside a session is
+		 * the instance config's own value row, not an override.
+		 */
+		ignoreConfigValueIds?: Set<number>
 	} = {}
 ): Promise<void> {
 	const [row] = await db
@@ -348,8 +354,11 @@ export async function deleteContextTemplate(
 			.from(schema.pipelineNodeOverrides)
 			.where(inArray(schema.pipelineNodeOverrides.slot, slots))
 		const ignored = opts.ignoreOverrideIds ?? new Set<number>()
+		const ignoredValues = opts.ignoreConfigValueIds ?? new Set<number>()
 		referenced =
-			(values as any[]).some((v) => v.value === templateId) ||
+			(values as any[]).some(
+				(v) => v.value === templateId && !ignoredValues.has(v.id)
+			) ||
 			(overrides as any[]).some(
 				(o) => o.value === templateId && !ignored.has(o.id)
 			)
@@ -357,7 +366,7 @@ export async function deleteContextTemplate(
 
 	if (referenced)
 		throw new ContextTemplateNotUsableError(
-			`'${row.name}' is still selected somewhere — a pipeline or a chat is ` +
+			`'${row.name}' is still selected somewhere — a pipeline or a session is ` +
 				`building its prompt with it. Templates are shared across ` +
 				`pipelines, so this may be one you set up elsewhere. Point that ` +
 				`setting at a different template first, then delete this one.`

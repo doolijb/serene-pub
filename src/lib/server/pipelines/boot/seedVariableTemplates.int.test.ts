@@ -134,7 +134,10 @@ describe("0113 re-keys the shipped layouts", () => {
 		}
 		// Nothing is reachable by the new scheme while the database is regressed.
 		for (const key of ids.keys()) {
-			expect(await rowBySeedKey(key), `${key} resolved too early`).toBeFalsy()
+			expect(
+				await rowBySeedKey(key),
+				`${key} resolved too early`
+			).toBeFalsy()
 		}
 
 		await db.execute(await migration())
@@ -176,7 +179,9 @@ describe("0113 re-keys the shipped layouts", () => {
 
 describe("a renamed shipped layout is an update, not a second row", () => {
 	it("refreshes the name in place and keeps the row's id", async () => {
-		const t = SHIPPED_VARIABLE_TEMPLATES.find((x) => x.variant === "wrapped")!
+		const t = SHIPPED_VARIABLE_TEMPLATES.find(
+			(x) => x.variant === "wrapped"
+		)!
 		const before = await rowBySeedKey(seedKeyFor(t))
 
 		// What a future release renaming this layout looks like from the

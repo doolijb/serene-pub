@@ -8,7 +8,7 @@
  *    item at a time instead of one group hogging the queue.
  *  - Every non-message embed() call site (lore entries, narrative nodes/
  *    relationships, character/persona descriptions) fed an unbounded text
- *    column straight into the embedding model with no length cap — chat
+ *    column straight into the embedding model with no length cap — session
  *    messages already had one (MAX_CHAT_MESSAGE_LENGTH, enforced before
  *    insert). truncateForEmbedding() is the shared safety net now wrapping
  *    every one of those call sites.

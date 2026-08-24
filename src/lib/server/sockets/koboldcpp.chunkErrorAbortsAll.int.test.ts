@@ -29,7 +29,8 @@ function makeFakeHttpsModule() {
 		Agent: FakeAgent,
 		get(url: string, optionsOrCb: any, maybeCb?: (res: any) => void) {
 			const options = typeof optionsOrCb === "function" ? {} : optionsOrCb
-			const cb = typeof optionsOrCb === "function" ? optionsOrCb : maybeCb!
+			const cb =
+				typeof optionsOrCb === "function" ? optionsOrCb : maybeCb!
 			const range: string = options?.headers?.Range ?? "(none)"
 			const req: any = { on: () => req, destroy: vi.fn() }
 

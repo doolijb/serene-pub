@@ -36,7 +36,7 @@ export type TemplateContextPersona = {
 }
 
 export type PostHistoryTemplateContext = {
-	/** Index into the (already-reversed, oldest-first) chatMessages array
+	/** Index into the (already-reversed, oldest-first) sessionMessages array
 	 * where the block should render. */
 	targetIndex: number
 	/** Prompt config's own reinforcement text — gated by postHistoryTokenTrigger. */
@@ -62,7 +62,7 @@ export type TemplateContext = {
 	exampleDialogue?: string
 	postHistoryInstructions?: string
 	postHistory?: PostHistoryTemplateContext
-	chatMessages: any[]
+	sessionMessages: any[]
 	char: string
 	character: string
 	user: string

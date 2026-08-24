@@ -6,7 +6,15 @@
  * are true — every connection reaching this port auto-attaches as an
  * unauthenticated admin.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest"
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	describe,
+	expect,
+	test,
+	vi
+} from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -57,9 +65,7 @@ describe("warnIfOpenAdminExposure (Round-12 audit fix, PGlite integration)", () 
 			.values({ id: 1, isAccountsEnabled: false })
 			.onConflictDoNothing()
 
-		const { warnIfOpenAdminExposure } = await import(
-			"./loadSockets.server"
-		)
+		const { warnIfOpenAdminExposure } = await import("./loadSockets.server")
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
 		await warnIfOpenAdminExposure()
 
@@ -76,9 +82,7 @@ describe("warnIfOpenAdminExposure (Round-12 audit fix, PGlite integration)", () 
 			.set({ isAccountsEnabled: true })
 			.where(eq(schema.systemSettings.id, 1))
 
-		const { warnIfOpenAdminExposure } = await import(
-			"./loadSockets.server"
-		)
+		const { warnIfOpenAdminExposure } = await import("./loadSockets.server")
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
 		await warnIfOpenAdminExposure()
 
@@ -95,9 +99,7 @@ describe("warnIfOpenAdminExposure (Round-12 audit fix, PGlite integration)", () 
 	test("does not warn when SOCKETS_ALLOWED_ORIGINS is not the wildcard, even with accounts disabled", async () => {
 		delete process.env.SOCKETS_ALLOWED_ORIGINS
 
-		const { warnIfOpenAdminExposure } = await import(
-			"./loadSockets.server"
-		)
+		const { warnIfOpenAdminExposure } = await import("./loadSockets.server")
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
 		await warnIfOpenAdminExposure()
 

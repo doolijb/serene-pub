@@ -108,7 +108,7 @@ async function refDefaults(
 	// Per *variable*, not per spec: a layout row is keyed by what it renders,
 	// so the shipped characters layout is the same row in every pipeline.
 	const layouts = new Map<string, number | null>()
-	// Per *node type*, for the same reason: chat reply and the narrator run the
+	// Per *node type*, for the same reason: session reply and the narrator run the
 	// same assemble node, so core's story string is one row serving both.
 	const templates = new Map<string, number | null>()
 
@@ -413,8 +413,11 @@ export async function pendingNotices(db: Db, configId: number) {
  * Which config a scope has selected
  * ------------------------------------------------------------------ */
 
-/** The scopes that may select a config. Same chain as every other layer (12 §2). */
-export type SelectionScope = "chat" | "user" | "instance"
+/**
+ * The scopes that may select a config (12 §2 as simplified 2026-08-24): the
+ * session's own choice, else the instance default. There is no user layer.
+ */
+export type SelectionScope = "session" | "instance"
 
 export interface SelectedConfig {
 	configId: number
@@ -459,10 +462,12 @@ async function shippedDefault(db: Db, specId: number, specSlug: string) {
 /**
  * Which config applies, for this asker, on this pipeline.
  *
- * chat → user → instance → whatever core shipped. The last step is the one that
+ * session → instance → whatever core shipped. The last step is the one that
  * makes the rest safe to be optional: a scope that has never chosen, a scope
  * whose choice was deleted (the FK nulls it), and a brand-new namespace all
- * resolve to the shipped default rather than to nothing.
+ * resolve to the shipped default rather than to nothing. No user step (ruled
+ * 2026-08-24): a person's choice of config is made per session, or it is the
+ * instance's.
  *
  * The seven `system_settings.default_*_config_id` columns this replaces could
  * express only the instance layer, and only for the namespaces core happened to
@@ -472,7 +477,7 @@ export async function resolveSelectedConfig(
 	db: Db,
 	specId: number,
 	specSlug: string,
-	viewer: { userId: number; chatId?: number }
+	viewer: { sessionId?: number } = {}
 ): Promise<SelectedConfig | null> {
 	const rows = await db
 		.select()
@@ -486,8 +491,7 @@ export async function resolveSelectedConfig(
 		)?.configId as number | undefined
 
 	const chain: Array<[SelectionScope, number | undefined]> = [
-		["chat", viewer.chatId],
-		["user", viewer.userId],
+		["session", viewer.sessionId],
 		["instance", 0]
 	]
 
@@ -698,11 +702,11 @@ export async function renameConfig(
  * Values go with it, and any selection pointing at it falls back.
  *
  * `pipeline_config_values.config_id` cascades and
- * `pipeline_config_selections.config_id` is `set null`, so a chat or user that
+ * `pipeline_config_selections.config_id` is `set null`, so a session or user that
  * had this one chosen resolves the pipeline's default afterwards rather than
  * breaking. That is the behaviour we want and it is the schema's, not
  * something re-implemented here — but it is worth saying out loud, because
- * "delete the thing three chats are using" reads alarming until you know.
+ * "delete the thing three sessions are using" reads alarming until you know.
  */
 export async function deleteConfig(db: Db, configId: number): Promise<void> {
 	const row = await configRow(db, configId)

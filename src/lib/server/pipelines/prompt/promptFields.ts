@@ -21,30 +21,30 @@
  * obvious cleanup — changes prompts.
  */
 
-import { ChatCharacterVisibility } from "$lib/shared/constants/ChatCharacterVisibility"
+import { SessionCharacterVisibility } from "$lib/shared/constants/SessionCharacterVisibility"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 import * as F from "$lib/server/pipelines/prompt/contextFields"
 import type { BuildContextInput } from "$lib/server/pipelines/prompt/templateContext"
 
-export interface ChatCharacterRow {
+export interface SessionCharacterRow {
 	isActive?: boolean | null
 	visibility?: string | null
 	character: F.CharacterFields & { id?: number }
 }
 
-export interface ChatPersonaRow {
+export interface SessionPersonaRow {
 	persona: { id?: number; name: string; description: string }
 }
 
 export interface ResolveInput {
-	chatCharacters?: readonly ChatCharacterRow[]
-	chatPersonas?: readonly ChatPersonaRow[]
+	sessionCharacters?: readonly SessionCharacterRow[]
+	sessionPersonas?: readonly SessionPersonaRow[]
 	promptConfig: F.PromptConfigFields
 	/** Null in no-perspective (narrator) mode. */
 	currentCharacterId?: number | null
-	/** The chat's own scenario, which wins over the character's when set. */
-	chatScenario?: string | null
+	/** The session's own scenario, which wins over the character's when set. */
+	sessionScenario?: string | null
 	isGroup?: boolean
 	narratorName?: string
 	/** The narrative graph's two halves, as structure. */
@@ -63,9 +63,9 @@ export interface ResolveInput {
 	 * which restores the variety without giving up the replay.
 	 */
 	pickExample?: (count: number) => number
-	/** Lore already selected by retrieval, and the chat its bindings live on. */
+	/** Lore already selected by retrieval, and the session its bindings live on. */
 	characterLore?: readonly unknown[]
-	chat?: unknown
+	session?: unknown
 }
 
 /** Card data for one character, at the visibility they are shown at. */
@@ -73,7 +73,7 @@ function compileCharacter(
 	character: F.CharacterFields,
 	visibility?: string | null
 ): Record<string, unknown> | null {
-	if (visibility === ChatCharacterVisibility.HIDDEN) return null
+	if (visibility === SessionCharacterVisibility.HIDDEN) return null
 
 	const card: Record<string, unknown> = {
 		name: F.characterName(character),
@@ -81,7 +81,7 @@ function compileCharacter(
 	}
 	// MINIMAL shows who they are and nothing about how they behave.
 	card.description = F.characterDescription(character)
-	if (visibility !== ChatCharacterVisibility.MINIMAL)
+	if (visibility !== SessionCharacterVisibility.MINIMAL)
 		card.personality = F.characterPersonality(character)
 
 	// Dropped rather than left null, because these cards are stringified into
@@ -107,39 +107,40 @@ export interface ResolvedContextInput extends BuildContextInput {
 }
 
 export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
-	const chatCharacters = input.chatCharacters ?? []
-	const chatPersonas = input.chatPersonas ?? []
+	const sessionCharacters = input.sessionCharacters ?? []
+	const sessionPersonas = input.sessionPersonas ?? []
 	const currentId = input.currentCharacterId ?? null
 	const current =
-		chatCharacters.find((cc) => cc.character.id === currentId)?.character ??
-		null
+		sessionCharacters.find((cc) => cc.character.id === currentId)
+			?.character ?? null
 
 	// Cards: the speaker is always present and always at full visibility.
-	const characters = chatCharacters
+	const characters = sessionCharacters
 		.filter(
 			(cc) =>
 				cc.character.id === currentId ||
-				cc.visibility !== ChatCharacterVisibility.HIDDEN
+				cc.visibility !== SessionCharacterVisibility.HIDDEN
 		)
 		.map((cc) =>
 			compileCharacter(
 				cc.character,
 				cc.character.id === currentId
-					? ChatCharacterVisibility.VISIBLE
+					? SessionCharacterVisibility.VISIBLE
 					: cc.visibility
 			)
 		)
 		.filter(Boolean) as Record<string, unknown>[]
 
 	// Names: active and not hidden, no exception for the speaker.
-	const characterNames = chatCharacters
+	const characterNames = sessionCharacters
 		.filter(
 			(cc) =>
-				cc.isActive && cc.visibility !== ChatCharacterVisibility.HIDDEN
+				cc.isActive &&
+				cc.visibility !== SessionCharacterVisibility.HIDDEN
 		)
 		.map((cc) => resolveCharacterName(cc.character as any))
 
-	const personaNames = chatPersonas.map((cp) => F.personaName(cp.persona))
+	const personaNames = sessionPersonas.map((cp) => F.personaName(cp.persona))
 
 	// The example dialogue is picked once and reported, so the same run
 	// replayed produces the same prompt.
@@ -156,7 +157,7 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 
 	return {
 		characters: characters as any,
-		personas: chatPersonas.map((cp) => ({
+		personas: sessionPersonas.map((cp) => ({
 			name: F.personaName(cp.persona),
 			description: F.personaDescription(cp.persona)
 		})),
@@ -194,7 +195,7 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 			charPostHistory: F.charPostHistory(current)
 		},
 		characterLore: input.characterLore as any,
-		chat: input.chat,
+		session: input.session,
 		exampleDialogueIndex,
 		seedName: current
 			? resolveCharacterName(current as any)
@@ -203,9 +204,9 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 }
 
 /**
- * Chat scenario, then group-means-none, then the character's.
+ * Session scenario, then group-means-none, then the character's.
  *
- * The middle case is not a fallthrough: a group chat with no scenario of its
+ * The middle case is not a fallthrough: a group session with no scenario of its
  * own renders **no** scenario rather than one member's, because one member's
  * scenario describes a situation the rest of the cast is not in
  * (index.ts:364-383).
@@ -214,7 +215,7 @@ function resolveScenario(
 	input: ResolveInput,
 	current: F.CharacterFields | null
 ): string {
-	if (input.chatScenario) return input.chatScenario
+	if (input.sessionScenario) return input.sessionScenario
 	if (input.isGroup) return ""
 	return F.characterScenario(current) ?? ""
 }

@@ -64,7 +64,8 @@ function group(rows: CastRow[]): Map<number, SceneCast> {
 			cast = { participantCharacters: [], mentionedCharacters: [] }
 			out.set(row.sceneId, cast)
 		}
-		if (row.role === "participant") cast.participantCharacters.push(row.bindingId)
+		if (row.role === "participant")
+			cast.participantCharacters.push(row.bindingId)
 		else cast.mentionedCharacters.push(row.bindingId)
 	}
 	return out
@@ -135,7 +136,7 @@ export { EMPTY_CAST }
  * holds both roles (absorb remaps each independently, and its tests assert the
  * survivor ends up in both), which is precisely why the unique index is on
  * (scene, binding, ROLE). Callers that do want "present beats mentioned" —
- * scenes:process and chats:summarize via reconcileParticipantsAndMentioned,
+ * scenes:process and sessions:summarize via reconcileParticipantsAndMentioned,
  * graphBuilder via its admit() precedence — already apply it upstream. Folding
  * that rule in here instead would silently discard a caller's real data.
  *

@@ -117,8 +117,18 @@ describe("narrativeGraphApplyProposalHandler — proposal length caps + enum val
 				lorebookId: lorebook.id,
 				proposal: {
 					nodes: [
-						{ tempId: "new_a", name: "A", nodeState: "active", summary: "" },
-						{ tempId: "new_b", name: "B", nodeState: "active", summary: "" }
+						{
+							tempId: "new_a",
+							name: "A",
+							nodeState: "active",
+							summary: ""
+						},
+						{
+							tempId: "new_b",
+							name: "B",
+							nodeState: "active",
+							summary: ""
+						}
 					],
 					relationships: [
 						{
@@ -142,9 +152,7 @@ describe("narrativeGraphApplyProposalHandler — proposal length caps + enum val
 		})
 		expect(rels).toHaveLength(1)
 		expect(rels[0].description.length).toBeLessThanOrEqual(2000)
-		expect(rels[0].description.length).toBeLessThan(
-			hugeDescription.length
-		)
+		expect(rels[0].description.length).toBeLessThan(hugeDescription.length)
 		expect(rels[0].reason!.length).toBeLessThanOrEqual(2000)
 		expect(rels[0].reason!.length).toBeLessThan(hugeReason.length)
 		// Invalid visibility falls back to the existing default, and — since

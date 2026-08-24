@@ -3,13 +3,13 @@
  *
  * The read model is tested against its own claims in
  * `pipelines/config.int.test.ts`. This file tests the layer above it, where the
- * inputs come from a browser: a `chatId` is a small integer somebody can guess,
+ * inputs come from a browser: a `sessionId` is a small integer somebody can guess,
  * `scope: "instance"` is a word anyone can put in a payload, and the management
  * handlers are the ones allowed to talk about topology.
  *
  * Three properties, each of which is a hole if it is missing:
  *
- *  1. Passing someone else's chat id does not make an edit land in their chat.
+ *  1. Passing someone else's session id does not make an edit land in their session.
  *  2. A non-admin cannot write at instance scope by asking to.
  *  3. Run receipts are scoped to their owner — a receipt records what a pipeline
  *     decided about somebody's conversation, not instance trivia.
@@ -37,7 +37,7 @@ vi.mock("$lib/server/db", async () => {
 let owner: { id: number }
 let stranger: { id: number }
 let admin: { id: number }
-let ownersChatId: number
+let ownersSessionId: number
 
 beforeAll(async () => {
 	dataDir = await fs.mkdtemp(
@@ -62,11 +62,11 @@ beforeAll(async () => {
 		.set({ isAdmin: true })
 		.where(eq(schema.users.id, admin.id))
 
-	const [chat] = await testDb
-		.insert(schema.chats)
+	const [session] = await testDb
+		.insert(schema.sessions)
 		.values({ userId: owner.id, isGroup: false })
 		.returning()
-	ownersChatId = chat.id
+	ownersSessionId = session.id
 }, 120_000)
 
 afterAll(async () => {
@@ -98,65 +98,63 @@ async function firstWritableOptionId(userId: number) {
 		testDb as any,
 		"socket-scoping-test-secret",
 		RESPOND_SPEC_ID,
-		{ userId, isAdmin: false }
+		{ userId, isAdmin: true }
 	)
-	// The first writable option. For a non-admin that is a prompts-ref now —
-	// the only thing the 0.6 line leaves them — and that is fine: what this
-	// test is actually about is *where a row lands*, which does not depend on
-	// the control.
+	// A prompts option, minted from an admin view — option ids are HMAC
+	// handles independent of the viewer, and since the layer simplification
+	// (2026-08-24) a non-admin's *global* view is read-only, so the non-admin
+	// cases below exercise refusals against an id that certainly exists.
 	const option = view!.steps
 		.flatMap((s) => [...s.options, ...s.advanced])
-		.find((o) => o.writable)
-	if (!option)
-		throw new Error("the respond spec exposes no writable value option")
+		.find((o) => o.control === "prompts-ref")
+	if (!option) throw new Error("the respond spec exposes no prompts option")
 	return option.id
 }
 
-describe("a chat id from the client is not a capability", () => {
-	test("a stranger's edit does not land in someone else's chat", async () => {
+describe("a session id from the client is not a capability", () => {
+	test("a stranger's edit with someone else's session id writes nowhere", async () => {
 		const { pipelinesSetOption } = await import("./pipelines")
 		const optionId = await firstWritableOptionId(stranger.id)
+		const rec = recordingEmit()
 
 		await pipelinesSetOption.handler(
 			socketFor(stranger.id),
 			{
 				slug: RESPOND_SPEC_ID,
 				optionId,
-				value: "I should not reach that chat",
-				chatId: ownersChatId
+				value: "I should not reach that session",
+				sessionId: ownersSessionId
 			},
-			noopEmit
+			rec.emit
 		)
 
-		// The write is not refused — it is *relocated*. A stranger editing their
-		// own settings while passing a chat id they do not own has still made a
-		// legitimate edit to their own settings, and rejecting it would turn a
-		// guessed id into a denial of service. What must not happen is the row
-		// landing at chat scope.
-		const chatRows = await testDb
-			.select()
-			.from(schema.pipelineNodeOverrides)
-			.where(
-				and(
-					eq(schema.pipelineNodeOverrides.scopeKind, "chat"),
-					eq(schema.pipelineNodeOverrides.scopeId, ownersChatId)
-				)
-			)
-		expect(chatRows).toHaveLength(0)
+		// `viewerFor` drops a session the caller is no part of, and with the user
+		// layer gone (2026-08-24) there is nowhere legitimate left for the
+		// write to fall back to: a global edit is a config edit, and configs
+		// are the administrator's. So the guessed id buys a refusal, not a row.
+		const err = rec.last("pipelines:setOption:error")
+		expect(err?.error).toMatch(/administrator/i)
 
-		const ownRows = await testDb
+		const sessionRows = await testDb
 			.select()
 			.from(schema.pipelineNodeOverrides)
 			.where(
 				and(
-					eq(schema.pipelineNodeOverrides.scopeKind, "user"),
-					eq(schema.pipelineNodeOverrides.scopeId, stranger.id)
+					eq(schema.pipelineNodeOverrides.scopeKind, "session"),
+					eq(schema.pipelineNodeOverrides.scopeId, ownersSessionId)
 				)
 			)
-		expect(ownRows).toHaveLength(1)
+		expect(sessionRows).toHaveLength(0)
+
+		const all = await testDb.select().from(schema.pipelineNodeOverrides)
+		expect(
+			(all as any[]).some(
+				(o) => o.value === "I should not reach that session"
+			)
+		).toBe(false)
 	})
 
-	test("the owner's own edit does land at chat scope", async () => {
+	test("the owner's own edit does land at session scope", async () => {
 		const { pipelinesSetOption } = await import("./pipelines")
 		const optionId = await firstWritableOptionId(owner.id)
 
@@ -165,8 +163,8 @@ describe("a chat id from the client is not a capability", () => {
 			{
 				slug: RESPOND_SPEC_ID,
 				optionId,
-				value: "only in my chat",
-				chatId: ownersChatId
+				value: "only in my session",
+				sessionId: ownersSessionId
 			},
 			noopEmit
 		)
@@ -176,12 +174,12 @@ describe("a chat id from the client is not a capability", () => {
 			.from(schema.pipelineNodeOverrides)
 			.where(
 				and(
-					eq(schema.pipelineNodeOverrides.scopeKind, "chat"),
-					eq(schema.pipelineNodeOverrides.scopeId, ownersChatId)
+					eq(schema.pipelineNodeOverrides.scopeKind, "session"),
+					eq(schema.pipelineNodeOverrides.scopeId, ownersSessionId)
 				)
 			)
 		expect(rows).toHaveLength(1)
-		expect(rows[0].value).toBe("only in my chat")
+		expect(rows[0].value).toBe("only in my session")
 	})
 })
 
@@ -196,8 +194,7 @@ describe("instance scope is the administrator's", () => {
 			{
 				slug: RESPOND_SPEC_ID,
 				optionId,
-				value: "for everyone",
-				scope: "instance"
+				value: "for everyone"
 			},
 			rec.emit
 		)
@@ -212,27 +209,71 @@ describe("instance scope is the administrator's", () => {
 		expect(rows).toHaveLength(0)
 	})
 
-	test("an admin asking for it gets it", async () => {
+	test("an admin's global edit lands in the selected configuration", async () => {
 		const { pipelinesSetOption } = await import("./pipelines")
 		const optionId = await firstWritableOptionId(admin.id)
+
+		// Against the shipped immutable default the write refuses with the
+		// duplicate suggestion — the layers as simplified 2026-08-24: there
+		// is no instance override row to fall back to writing.
+		const rec = recordingEmit()
+		await pipelinesSetOption.handler(
+			socketFor(admin.id, true),
+			{
+				slug: RESPOND_SPEC_ID,
+				optionId,
+				value: "for everyone"
+			},
+			rec.emit
+		)
+		expect(rec.last("pipelines:setOption:error")?.error).toMatch(
+			/Duplicate it and edit the copy/
+		)
+
+		// With a mutable configuration selected, the same write becomes that
+		// configuration's own value.
+		const { resolveSelectedConfig, duplicateConfig, selectConfig } =
+			await import("$lib/server/pipelines/config/named")
+		const [spec] = await testDb
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		const shipped = await resolveSelectedConfig(
+			testDb as any,
+			spec.id,
+			RESPOND_SPEC_ID,
+			{}
+		)
+		const copy = await duplicateConfig(
+			testDb as any,
+			shipped!.configId,
+			"Everyone's"
+		)
+		await selectConfig(testDb as any, spec.id, "instance", 0, copy.id)
 
 		await pipelinesSetOption.handler(
 			socketFor(admin.id, true),
 			{
 				slug: RESPOND_SPEC_ID,
 				optionId,
-				value: "for everyone",
-				scope: "instance"
+				value: "for everyone"
 			},
 			noopEmit
 		)
 
-		const rows = await testDb
+		const values = await testDb
+			.select()
+			.from(schema.pipelineConfigValues)
+			.where(eq(schema.pipelineConfigValues.configId, copy.id))
+		expect((values as any[]).some((v) => v.value === "for everyone")).toBe(
+			true
+		)
+		// And no override row anywhere — the layer is gone.
+		const overrides = await testDb
 			.select()
 			.from(schema.pipelineNodeOverrides)
 			.where(eq(schema.pipelineNodeOverrides.scopeKind, "instance"))
-		expect(rows).toHaveLength(1)
-		expect(rows[0].scopeId).toBe(0)
+		expect(overrides).toHaveLength(0)
 	})
 })
 
@@ -264,13 +305,13 @@ describe("the management view is admin-only", () => {
 	})
 })
 
-describe("run receipts belong to the person whose chat they describe", () => {
-	test("a stranger asking about someone else's chat gets nothing", async () => {
+describe("run receipts belong to the person whose session they describe", () => {
+	test("a stranger asking about someone else's session gets nothing", async () => {
 		await testDb.insert(schema.pipelineRuns).values({
 			runId: "run-scoping-1",
 			specSlug: RESPOND_SPEC_ID,
 			specVersion: "1.0.0",
-			chatId: ownersChatId,
+			sessionId: ownersSessionId,
 			userId: owner.id,
 			outcome: "ok",
 			triggerSource: "event",
@@ -284,14 +325,14 @@ describe("run receipts belong to the person whose chat they describe", () => {
 		const { pipelinesRuns } = await import("./pipelines")
 		const mine: any = await pipelinesRuns.handler(
 			socketFor(owner.id),
-			{ chatId: ownersChatId },
+			{ sessionId: ownersSessionId },
 			noopEmit
 		)
 		expect(mine.runs).toHaveLength(1)
 
 		const theirs: any = await pipelinesRuns.handler(
 			socketFor(stranger.id),
-			{ chatId: ownersChatId },
+			{ sessionId: ownersSessionId },
 			noopEmit
 		)
 		expect(theirs.runs).toHaveLength(0)
@@ -438,37 +479,45 @@ describe("prompt CRUD stays inside its pipeline", () => {
 			{ slug: RESPOND_SPEC_ID, promptId, name: "Selected copy" },
 			noopEmit
 		)
-		const select = async (userId: number) => {
-			// An upsert, because earlier tests may have already written this
-			// user's override at the same address.
+		// Selections are session overrides now (the layers as simplified
+		// 2026-08-24) — the owner's in their session, somebody else's in theirs.
+		const [strangersSession] = await testDb
+			.insert(schema.sessions)
+			.values({ userId: stranger.id, isGroup: false })
+			.returning()
+		const select = async (sessionId: number, byUserId: number) => {
 			await testDb
 				.delete(schema.pipelineNodeOverrides)
 				.where(
 					and(
 						eq(schema.pipelineNodeOverrides.specId, specId),
-						eq(schema.pipelineNodeOverrides.scopeKind, "user"),
-						eq(schema.pipelineNodeOverrides.scopeId, userId),
+						eq(schema.pipelineNodeOverrides.scopeKind, "session"),
+						eq(schema.pipelineNodeOverrides.scopeId, sessionId),
 						eq(schema.pipelineNodeOverrides.slot, "prompts")
 					)
 				)
 			await testDb.insert(schema.pipelineNodeOverrides).values({
 				specId,
-				scopeKind: "user",
-				scopeId: userId,
+				scopeKind: "session",
+				scopeId: sessionId,
 				nodeKey: "context",
 				slot: "prompts",
 				path: "",
 				value: cloned.promptId,
-				updatedBy: userId
+				updatedBy: byUserId
 			})
 		}
 
-		// Someone else selected it too: refuse, and leave both selections.
-		await select(owner.id)
-		await select(stranger.id)
+		// Someone else's session selected it too: refuse, and leave both rows.
+		await select(ownersSessionId, owner.id)
+		await select(strangersSession.id, stranger.id)
 		const refused: any = await pipelinesDeletePrompt.handler(
 			socketFor(owner.id),
-			{ slug: RESPOND_SPEC_ID, promptId: cloned.promptId },
+			{
+				slug: RESPOND_SPEC_ID,
+				promptId: cloned.promptId,
+				sessionId: ownersSessionId
+			},
 			noopEmit
 		)
 		expect(refused.error).toMatch(/still selected/)
@@ -479,20 +528,27 @@ describe("prompt CRUD stays inside its pipeline", () => {
 			.delete(schema.pipelineNodeOverrides)
 			.where(
 				and(
-					eq(schema.pipelineNodeOverrides.scopeId, stranger.id),
-					eq(schema.pipelineNodeOverrides.scopeKind, "user")
+					eq(
+						schema.pipelineNodeOverrides.scopeId,
+						strangersSession.id
+					),
+					eq(schema.pipelineNodeOverrides.scopeKind, "session")
 				)
 			)
 		const res: any = await pipelinesDeletePrompt.handler(
 			socketFor(owner.id),
-			{ slug: RESPOND_SPEC_ID, promptId: cloned.promptId },
+			{
+				slug: RESPOND_SPEC_ID,
+				promptId: cloned.promptId,
+				sessionId: ownersSessionId
+			},
 			noopEmit
 		)
 		expect(res.error).toBeUndefined()
 		const leftover = await testDb
 			.select()
 			.from(schema.pipelineNodeOverrides)
-			.where(eq(schema.pipelineNodeOverrides.scopeId, owner.id))
+			.where(eq(schema.pipelineNodeOverrides.scopeId, ownersSessionId))
 		expect(
 			(leftover as any[]).filter((r) => r.value === cloned.promptId)
 		).toHaveLength(0)
@@ -750,9 +806,7 @@ describe("the builder's structural payload", () => {
 		expect(new Set(reads.map((n: any) => n.blockChain)).size).toBe(
 			reads.length
 		)
-		expect(
-			reads.map((n: any) => n.blockChain).sort()
-		).toEqual([
+		expect(reads.map((n: any) => n.blockChain).sort()).toEqual([
 			"cast",
 			"characterLore",
 			"history",

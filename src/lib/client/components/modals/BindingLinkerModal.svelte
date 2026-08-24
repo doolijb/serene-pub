@@ -12,7 +12,7 @@
 	interface Props {
 		open: boolean
 		lorebookId: number
-		chatId: number
+		sessionId: number
 		orphanedBindings: OrphanedBinding[]
 		unboundEntities: UnboundEntity[]
 		onOpenChange: (e: { open: boolean }) => void
@@ -22,7 +22,7 @@
 	let {
 		open = $bindable(),
 		lorebookId,
-		chatId,
+		sessionId,
 		orphanedBindings = [],
 		unboundEntities = [],
 		onOpenChange,
@@ -120,7 +120,7 @@
 									<Icons.Link2 size={18} />
 									<span>
 										Link to a character or persona from this
-										chat
+										session
 									</span>
 								</button>
 							{/if}

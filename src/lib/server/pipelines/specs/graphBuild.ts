@@ -1,7 +1,7 @@
 /**
  * Core's narrative-graph build pipeline.
  *
- * Five LLM steps over the scenes of a chat, each with its own prompt, connection
+ * Five LLM steps over the scenes of a session, each with its own prompt, connection
  * and sampling config. That structure is not new — `graph_build_configs` already
  * carries it as fifteen columns, three per step. Five Providers is the same
  * statement with the enumeration removed, which is what makes a sixth step a
@@ -41,7 +41,7 @@ export const GRAPH_BUILD_SPEC_ID = "core:spec/graph-build"
 // scope fix) — 1.0.0's published rows carried a dud reference, so each step ran
 // against no scene. Same authored source; corrected document; new version,
 // because a published version is immutable.
-export const GRAPH_BUILD_VERSION = "1.0.1"
+export const GRAPH_BUILD_VERSION = "1.1.0"
 
 /** Every step takes the scene it is working on and its own three slots. */
 const step = ($: any) => ({
@@ -55,7 +55,7 @@ const step = ($: any) => ({
  * The ceiling on scenes in one build.
  *
  * Mandatory (F9), and enforced by the database as well. High enough not to be
- * reached by a real chat: the cost that matters is per scene, and a user who
+ * reached by a real session: the cost that matters is per scene, and a user who
  * genuinely has 400 scenes should get all of them rather than a silent
  * truncation they have no way to notice.
  */
@@ -67,7 +67,7 @@ export const graphBuildSpec = () =>
 			.on("core:event/ui-action@1")
 			.input("input", C.userMessage.v1())
 			.query("scenes", ($) =>
-				C.graphScenes.v1({ scope: $.input.chatScope })
+				C.graphScenes.v1({ scope: $.input.sessionScope })
 			)
 			// Scene by scene, and **sequential**.
 			//

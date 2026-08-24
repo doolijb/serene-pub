@@ -110,15 +110,9 @@
 		return () => {
 			socket.off("characters:get", handleCharactersGet)
 			socket.off("characters:update", handleCharactersUpdate)
-			socket.off(
-				"characters:update:error",
-				handleCharactersUpdateError
-			)
+			socket.off("characters:update:error", handleCharactersUpdateError)
 			socket.off("characters:delete", handleCharactersDelete)
-			socket.off(
-				"characters:delete:error",
-				handleCharactersDeleteError
-			)
+			socket.off("characters:delete:error", handleCharactersDeleteError)
 		}
 	})
 </script>

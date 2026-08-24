@@ -2,7 +2,7 @@
  * Round-9 audit fix (LOW): custom theme CSS had no server-side content
  * validation — @import and an external url(...) are classic CSS-based
  * data-exfiltration vectors. style-src stays a tight fixed list, but
- * img-src deliberately allows any "https:" host (inline chat images need
+ * img-src deliberately allows any "https:" host (inline session images need
  * that — see svelte.config.js), so CSP alone no longer neutralizes this for
  * images — assertSafeThemeCss's rejection is the actual defense here.
  * Rejects (not silently strips) either, called right after
@@ -40,9 +40,7 @@ describe("assertSafeThemeCss", () => {
 
 	test("accepts a data: url()", () => {
 		expect(() =>
-			assertSafeThemeCss(
-				"background: url(data:image/png;base64,AAAA);"
-			)
+			assertSafeThemeCss("background: url(data:image/png;base64,AAAA);")
 		).not.toThrow()
 	})
 

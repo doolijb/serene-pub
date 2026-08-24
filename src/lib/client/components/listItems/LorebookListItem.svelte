@@ -15,11 +15,11 @@
 		worldEntriesCount?: number
 		characterEntriesCount?: number
 		historyEntriesCount?: number
-		hasOpenChat?: boolean
-		openChatHasLorebook?: boolean
-		isOpenChatLorebook?: boolean
-		onAttachToChat?: (id: number) => void
-		onDetachFromChat?: (id: number) => void
+		hasOpenSession?: boolean
+		openSessionHasLorebook?: boolean
+		isOpenSessionLorebook?: boolean
+		onAttachToSession?: (id: number) => void
+		onDetachFromSession?: (id: number) => void
 	}
 
 	let {
@@ -34,11 +34,11 @@
 		worldEntriesCount = 0,
 		characterEntriesCount = 0,
 		historyEntriesCount = 0,
-		hasOpenChat = false,
-		openChatHasLorebook = false,
-		isOpenChatLorebook = false,
-		onAttachToChat,
-		onDetachFromChat
+		hasOpenSession = false,
+		openSessionHasLorebook = false,
+		isOpenSessionLorebook = false,
+		onAttachToSession,
+		onDetachFromSession
 	}: Props = $props()
 
 	let menuOpen = $state(false)
@@ -146,13 +146,13 @@
 											<span>View</span>
 										</button>
 									{/if}
-									{#if hasOpenChat && (onAttachToChat || onDetachFromChat)}
-										{#if isOpenChatLorebook}
+									{#if hasOpenSession && (onAttachToSession || onDetachFromSession)}
+										{#if isOpenSessionLorebook}
 											<button
 												class="btn btn-sm popover-menu-btn hover:preset-filled-warning-500"
 												onclick={() => {
 													menuOpen = false
-													onDetachFromChat?.(
+													onDetachFromSession?.(
 														lorebook.id!
 													)
 												}}
@@ -163,19 +163,19 @@
 													aria-hidden="true"
 												/>
 												<span>
-													Detach from current chat
+													Detach from current session
 												</span>
 											</button>
 										{:else}
 											<button
 												class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
-												disabled={openChatHasLorebook}
-												title={openChatHasLorebook
-													? "The current chat already has a lorebook attached"
-													: "Attach to current chat"}
+												disabled={openSessionHasLorebook}
+												title={openSessionHasLorebook
+													? "The current session already has a lorebook attached"
+													: "Attach to current session"}
 												onclick={() => {
 													menuOpen = false
-													onAttachToChat?.(
+													onAttachToSession?.(
 														lorebook.id!
 													)
 												}}
@@ -186,7 +186,7 @@
 													aria-hidden="true"
 												/>
 												<span>
-													Attach to current chat
+													Attach to current session
 												</span>
 											</button>
 										{/if}

@@ -4,7 +4,7 @@ import { TokenCounters } from "../utils/TokenCounterManager"
 import {
 	BaseConnectionAdapter,
 	type AdapterExports,
-	type BasePromptChat
+	type BasePromptSession
 } from "./BaseConnectionAdapter"
 import type { CompiledPrompt } from "./types"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -35,7 +35,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 		sampling,
 		contextConfig,
 		promptConfig,
-		chat,
+		session,
 		currentCharacterId,
 		tokenCounter,
 		tokenLimit,
@@ -46,7 +46,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 		sampling: SelectSamplingConfig
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
-		chat: BasePromptChat
+		session: BasePromptSession
 		currentCharacterId: number | null
 		tokenCounter?: TokenCounters
 		tokenLimit?: number
@@ -58,7 +58,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 			sampling,
 			contextConfig,
 			promptConfig,
-			chat,
+			session,
 			currentCharacterId,
 			tokenCounter:
 				tokenCounter ||
@@ -175,7 +175,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 		const thinkingBudget = this.connection.extraJson?.thinkingBudget ?? 8000
 
 		const compiledPrompt: CompiledPrompt = await this.compilePrompt({
-			useChatFormat: true
+			useSessionFormat: true
 		})
 
 		const { system, messages } = this.buildAnthropicMessages(compiledPrompt)

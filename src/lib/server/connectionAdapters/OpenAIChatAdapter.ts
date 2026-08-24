@@ -1,7 +1,7 @@
 import {
 	BaseConnectionAdapter,
 	type AdapterExports,
-	type BasePromptChat
+	type BasePromptSession
 } from "./BaseConnectionAdapter"
 import { type CompiledPrompt } from "./types"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
@@ -27,7 +27,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		sampling,
 		contextConfig,
 		promptConfig,
-		chat,
+		session,
 		currentCharacterId,
 		tokenCounter,
 		tokenLimit,
@@ -38,7 +38,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		sampling: SelectSamplingConfig
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
-		chat: BasePromptChat
+		session: BasePromptSession
 		currentCharacterId?: number | null
 		tokenCounter?: TokenCounters
 		tokenLimit?: number
@@ -50,7 +50,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 			sampling,
 			contextConfig,
 			promptConfig,
-			chat,
+			session,
 			currentCharacterId: currentCharacterId ?? null,
 			tokenCounter:
 				tokenCounter ||
@@ -68,11 +68,11 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 	}
 
 	compilePrompt(args: {}) {
-		let useChatFormat = true
+		let useSessionFormat = true
 		if (this.connection.extraJson?.prerenderPrompt) {
-			useChatFormat = false
+			useSessionFormat = false
 		}
-		return super.compilePrompt({ useChatFormat, ...args })
+		return super.compilePrompt({ useSessionFormat, ...args })
 	}
 
 	async generate(): Promise<{
@@ -143,7 +143,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 			? this.connection.promptFormat || "chatml"
 			: PromptFormats.OPENAI
 
-		// In native chat completion mode (no pre-rendered template), don't send role-label
+		// In native session completion mode (no pre-rendered template), don't send role-label
 		// stop strings — they override the model's native stop tokens (e.g. <|im_end|> for
 		// ChatML models like Qwen) in servers such as Ollama's OpenAI compatibility layer.
 		// Only apply stop strings when pre-rendering, where role labels are plain text.
@@ -151,10 +151,12 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 			? StopStrings.get({
 					format: promptFormat,
 					characters:
-						this.chat.chatCharacters?.map((cc) => cc.character) ||
-						[],
+						this.session.sessionCharacters?.map(
+							(cc) => cc.character
+						) || [],
 					personas:
-						this.chat.chatPersonas?.map((cp) => cp.persona) || [],
+						this.session.sessionPersonas?.map((cp) => cp.persona) ||
+						[],
 					currentCharacterId: this.currentCharacterId ?? undefined
 				}) || []
 			: []
@@ -217,7 +219,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 			}
 		} catch (err: any) {
 			console.error(
-				"[OpenAIAdapter] Error from openai.chat.completions.create:",
+				"[OpenAIAdapter] Error from openai.session.completions.create:",
 				err
 			)
 			// Enhanced error reporting for upstream/proxy errors

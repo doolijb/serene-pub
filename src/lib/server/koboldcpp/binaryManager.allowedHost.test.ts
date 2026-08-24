@@ -16,9 +16,9 @@ import { isAllowedGithubReleaseHost } from "./binaryManager"
 describe("isAllowedGithubReleaseHost", () => {
 	test("accepts github.com and both known release-asset redirect hosts", () => {
 		expect(isAllowedGithubReleaseHost("github.com")).toBe(true)
-		expect(isAllowedGithubReleaseHost("objects.githubusercontent.com")).toBe(
-			true
-		)
+		expect(
+			isAllowedGithubReleaseHost("objects.githubusercontent.com")
+		).toBe(true)
 		expect(
 			isAllowedGithubReleaseHost("release-assets.githubusercontent.com")
 		).toBe(true)
@@ -30,9 +30,9 @@ describe("isAllowedGithubReleaseHost", () => {
 
 	test("rejects lookalike and unrelated hosts", () => {
 		expect(isAllowedGithubReleaseHost("github.com.evil.com")).toBe(false)
-		expect(
-			isAllowedGithubReleaseHost("notgithubusercontent.com")
-		).toBe(false)
+		expect(isAllowedGithubReleaseHost("notgithubusercontent.com")).toBe(
+			false
+		)
 		expect(
 			isAllowedGithubReleaseHost("evil.objects.githubusercontent.com")
 		).toBe(false)

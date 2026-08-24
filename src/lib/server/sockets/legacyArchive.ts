@@ -9,7 +9,7 @@
  *
  * Until then they are **readable and nothing else**. A row that can still be
  * edited invites exactly one mistake: someone carefully re-tunes a prompt
- * config, sees it save, and wonders for a week why their chats did not change.
+ * config, sees it save, and wonders for a week why their sessions did not change.
  * An archive that accepts writes is worse than one that refuses them, because
  * the write looks like it worked.
  *

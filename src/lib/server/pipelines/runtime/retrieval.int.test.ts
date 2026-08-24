@@ -30,7 +30,7 @@ vi.mock("$lib/server/embedding", () => ({
 }))
 
 let db: TestDb
-let chatId: number
+let sessionId: number
 let userId: number
 let lorebookId: number
 
@@ -57,11 +57,11 @@ beforeAll(async () => {
 		.returning()
 	lorebookId = lorebook.id
 
-	const [chat] = await db
-		.insert(schema.chats)
+	const [session] = await db
+		.insert(schema.sessions)
 		.values({ userId, isGroup: false, lorebookId })
 		.returning()
-	chatId = chat.id
+	sessionId = session.id
 
 	await db.insert(schema.worldLoreEntries).values([
 		{
@@ -99,9 +99,9 @@ beforeAll(async () => {
 		}
 	])
 
-	await db.insert(schema.chatMessages).values([
+	await db.insert(schema.sessionMessages).values([
 		{
-			chatId,
+			sessionId,
 			role: "user",
 			content: "The ashguard rode under a torn banner."
 		}
@@ -112,12 +112,12 @@ const execute = (input: Record<string, unknown> = {}) =>
 	run(retrieval(), {
 		input: {
 			text: "tell me about the ashguard",
-			chatScope: { chatId },
+			sessionScope: { sessionId },
 			...input
 		},
 		seed: "seed:lore",
 		bindings: coreBindings(),
-		host: createHost(db as any, { chatId, userId })
+		host: createHost(db as any, { sessionId, userId })
 	})
 
 describe("lore retrieval in a pipeline", () => {
@@ -185,29 +185,29 @@ describe("lore retrieval in a pipeline", () => {
 		expect(d.windowChars).toBeGreaterThan(0)
 	})
 
-	it("a chat with no lorebook retrieves nothing rather than failing", async () => {
+	it("a session with no lorebook retrieves nothing rather than failing", async () => {
 		const [bare] = await db
-			.insert(schema.chats)
+			.insert(schema.sessions)
 			.values({ userId, isGroup: false })
 			.returning()
 
 		const receipt = await run(retrieval(), {
-			input: { text: "anything", chatScope: { chatId: bare.id } },
+			input: { text: "anything", sessionScope: { sessionId: bare.id } },
 			seed: "seed:lore",
 			bindings: coreBindings(),
-			host: createHost(db as any, { chatId: bare.id, userId })
+			host: createHost(db as any, { sessionId: bare.id, userId })
 		})
 		expect(receipt.outcome).toBe("ok")
 		const lore = receipt.nodes.find((n) => n.nodeKey === "lore")!
 		expect((lore.output as any).hits).toEqual([])
 	})
 
-	it("lore from another chat's lorebook is refused, not filtered", async () => {
-		const host = createHost(db as any, { chatId, userId })
+	it("lore from another session's lorebook is refused, not filtered", async () => {
+		const host = createHost(db as any, { sessionId, userId })
 		await expect(
 			host.read!(
 				"lorebook_entries",
-				{ chatId: chatId + 999 },
+				{ sessionId: sessionId + 999 },
 				{
 					key: "lore",
 					typeId: "core:query/lorebook-triggers",
@@ -215,7 +215,7 @@ describe("lore retrieval in a pipeline", () => {
 					kind: "query"
 				}
 			)
-		).rejects.toThrow(/may only read the chat it was triggered in/)
+		).rejects.toThrow(/may only read the session it was triggered in/)
 	})
 })
 
@@ -233,7 +233,7 @@ describe("lore retrieval in a pipeline", () => {
 describe("character lore is only visible to whoever it belongs to", () => {
 	let ash: number
 	let bran: number
-	let loreChat: number
+	let loreSession: number
 
 	const node = {
 		key: "lore",
@@ -254,11 +254,11 @@ describe("character lore is only visible to whoever it belongs to", () => {
 		ash = a.id
 		bran = b.id
 
-		const [chat] = await db
-			.insert(schema.chats)
+		const [session] = await db
+			.insert(schema.sessions)
 			.values({ userId, isGroup: true, lorebookId })
 			.returning()
-		loreChat = chat.id
+		loreSession = session.id
 
 		const [binding] = await db
 			.insert(schema.lorebookBindings)
@@ -290,10 +290,10 @@ describe("character lore is only visible to whoever it belongs to", () => {
 	})
 
 	const readAs = async (currentCharacterId: number | null) => {
-		const host = createHost(db as any, { chatId: loreChat, userId })
+		const host = createHost(db as any, { sessionId: loreSession, userId })
 		const rows = (await host.read!(
 			"lorebook_entries",
-			{ chatId: loreChat, currentCharacterId },
+			{ sessionId: loreSession, currentCharacterId },
 			node
 		)) as any[]
 		return rows
@@ -317,10 +317,10 @@ describe("character lore is only visible to whoever it belongs to", () => {
 	})
 
 	it("never gates world lore, which has no binding to gate on", async () => {
-		const host = createHost(db as any, { chatId: loreChat, userId })
+		const host = createHost(db as any, { sessionId: loreSession, userId })
 		const rows = (await host.read!(
 			"lorebook_entries",
-			{ chatId: loreChat, currentCharacterId: bran },
+			{ sessionId: loreSession, currentCharacterId: bran },
 			node
 		)) as any[]
 		expect(

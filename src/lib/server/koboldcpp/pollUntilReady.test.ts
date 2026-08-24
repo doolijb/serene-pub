@@ -47,7 +47,9 @@ describe("pollUntilReady", () => {
 
 		test("throws immediately once isAlive() reports the process is gone, regardless of refusedStrikeThreshold", async () => {
 			let alive = true
-			const check = vi.fn<() => Promise<PollResult>>(async () => "refused")
+			const check = vi.fn<() => Promise<PollResult>>(
+				async () => "refused"
+			)
 			const promise = pollUntilReady(check, {
 				intervalMs: 10,
 				isAlive: () => alive,
@@ -62,7 +64,9 @@ describe("pollUntilReady", () => {
 		})
 
 		test("also throws if isAlive() reports dead on a not-ready (non-refused) result", async () => {
-			const check = vi.fn<() => Promise<PollResult>>(async () => "not-ready")
+			const check = vi.fn<() => Promise<PollResult>>(
+				async () => "not-ready"
+			)
 			const promise = pollUntilReady(check, {
 				intervalMs: 10,
 				isAlive: () => false
@@ -90,7 +94,9 @@ describe("pollUntilReady", () => {
 		})
 
 		test("throws once refusedStrikeThreshold consecutive refusals are hit", async () => {
-			const check = vi.fn<() => Promise<PollResult>>(async () => "refused")
+			const check = vi.fn<() => Promise<PollResult>>(
+				async () => "refused"
+			)
 			const promise = pollUntilReady(check, {
 				intervalMs: 10,
 				refusedStrikeThreshold: 3

@@ -83,7 +83,7 @@ Your relationships:
 
 {{/systemBlock}}
 
-{{#each chatMessages as |chatMessage msgIndex|}}
+{{#each sessionMessages as |sessionMessage msgIndex|}}
 {{#with ../postHistory}}
 {{#if (and (eq msgIndex targetIndex) hasContent)}}
 {{#systemBlock}}

@@ -65,7 +65,7 @@ describe("setup:markComplete — step validation", () => {
 		expect(row?.ragStepComplete ?? false).toBe(false)
 	})
 
-	test("accepts \"summarization\" and sets only that flag", async () => {
+	test('accepts "summarization" and sets only that flag', async () => {
 		const { setupMarkComplete } = await import("./setup")
 		const user = await makeUser("setup-step-summarization-user")
 
@@ -78,7 +78,7 @@ describe("setup:markComplete — step validation", () => {
 		expect(res.setup.ragStepComplete).toBe(false)
 	})
 
-	test("accepts \"rag\" and sets only that flag", async () => {
+	test('accepts "rag" and sets only that flag', async () => {
 		const { setupMarkComplete } = await import("./setup")
 		const user = await makeUser("setup-step-rag-user")
 

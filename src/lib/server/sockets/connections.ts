@@ -222,7 +222,11 @@ export const connectionsUpdate: Handler<
 		// id isn't found, which can't be the case here (the update above just
 		// succeeded against it) — the `?? updated` fallback exists purely to
 		// satisfy Update.Response's non-null `connection` type.
-		const getResult = await connectionsGet.handler(socket, { id }, emitToUser)
+		const getResult = await connectionsGet.handler(
+			socket,
+			{ id },
+			emitToUser
+		)
 		const res: Sockets.Connections.Update.Response = {
 			connection: getResult.connection ?? updated
 		}
@@ -461,6 +465,105 @@ export const connectionsRefreshModels: Handler<
 }
 
 // Registration function for all connection handlers
+/* --- stop guards on a connection (18 §4b) ---------------------------- */
+
+/**
+ * The three answer with the same refreshed view, library-style: attach and
+ * detach change both lists at once, and two fetches that could disagree are
+ * one fetch that cannot.
+ */
+async function connectionScriptsView(
+	connectionId: number
+): Promise<Sockets.Connections.Scripts.Response> {
+	const { listConnectionScripts, scriptsView, STOP_TYPE_ID } = await import(
+		"$lib/server/pipelines/entities/scripts"
+	)
+	const attached = await listConnectionScripts(db as any, connectionId)
+	const all = await scriptsView(db as any)
+	const attachedIds = new Set(attached.map((s) => s.id))
+	return {
+		connectionId,
+		attached: attached.map((s) => ({
+			id: s.id,
+			name: s.name,
+			enabled: s.enabled
+		})),
+		available: all.scripts
+			.filter((s) => s.typeId === STOP_TYPE_ID && !attachedIds.has(s.id))
+			.map((s) => ({ id: s.id, name: s.name, enabled: s.enabled }))
+	}
+}
+
+const connectionScriptsGate = (socket: any): string | null =>
+	socket.user!.isAdmin
+		? null
+		: "Access denied. Only admin users can manage connections."
+
+export const connectionsScripts: Handler<
+	Sockets.Connections.Scripts.Params,
+	Sockets.Connections.Scripts.Response
+> = {
+	event: "connections:scripts",
+	handler: async (socket, params, emitToUser) => {
+		const denied = connectionScriptsGate(socket)
+		if (denied) {
+			emitToUser("connections:scripts:error", { error: denied })
+			return { error: denied }
+		}
+		const res = await connectionScriptsView(params.id)
+		emitToUser("connections:scripts", res)
+		return res
+	}
+}
+
+export const connectionsAttachScript: Handler<
+	Sockets.Connections.ScriptWrite.Params,
+	Sockets.Connections.ScriptWrite.Response
+> = {
+	event: "connections:attachScript",
+	handler: async (socket, params, emitToUser) => {
+		const denied = connectionScriptsGate(socket)
+		if (denied) {
+			emitToUser("connections:attachScript:error", { error: denied })
+			return { error: denied }
+		}
+		try {
+			const { attachConnectionScript } = await import(
+				"$lib/server/pipelines/entities/scripts"
+			)
+			await attachConnectionScript(db as any, params.id, params.scriptId)
+		} catch (err) {
+			const res = { error: (err as Error).message }
+			emitToUser("connections:attachScript:error", res)
+			return res
+		}
+		const res = await connectionScriptsView(params.id)
+		emitToUser("connections:attachScript", res)
+		return res
+	}
+}
+
+export const connectionsDetachScript: Handler<
+	Sockets.Connections.ScriptWrite.Params,
+	Sockets.Connections.ScriptWrite.Response
+> = {
+	event: "connections:detachScript",
+	handler: async (socket, params, emitToUser) => {
+		const denied = connectionScriptsGate(socket)
+		if (denied) {
+			emitToUser("connections:detachScript:error", { error: denied })
+			return { error: denied }
+		}
+		const { detachConnectionScript } = await import(
+			"$lib/server/pipelines/entities/scripts"
+		)
+		await detachConnectionScript(db as any, params.id, params.scriptId)
+		const res = await connectionScriptsView(params.id)
+		emitToUser("connections:detachScript", res)
+		return res
+	}
+}
+
 export function registerConnectionHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
@@ -478,4 +581,7 @@ export function registerConnectionHandlers(
 	register(socket, connectionsSetUserActive, emitToUser)
 	register(socket, connectionsTest, emitToUser)
 	register(socket, connectionsRefreshModels, emitToUser)
+	register(socket, connectionsScripts, emitToUser)
+	register(socket, connectionsAttachScript, emitToUser)
+	register(socket, connectionsDetachScript, emitToUser)
 }

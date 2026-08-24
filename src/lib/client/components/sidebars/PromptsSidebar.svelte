@@ -36,7 +36,7 @@
 	// ── View state ───────────────────────────────────────────────────────────
 	type View =
 		| "index"
-		| "chat"
+		| "session"
 		| "narrator"
 		| "world"
 		| "character"
@@ -48,28 +48,27 @@
 	let userSettingsCtx: UserSettingsCtx = getContext("userSettingsCtx")
 	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 
-	// ── Chat Prompts state ───────────────────────────────────────────────────
-	let chatList: Sockets.PromptConfigs.List.Response["promptConfigsList"] =
+	// ── Session Prompts state ───────────────────────────────────────────────────
+	let sessionList: Sockets.PromptConfigs.List.Response["promptConfigsList"] =
 		$state([])
-	let selectedChatId: number | undefined = $state(
+	let selectedSessionId: number | undefined = $state(
 		userSettingsCtx.settings?.activePromptConfigId || undefined
 	)
-	let chatConfig: Sockets.PromptConfigs.Get.Response["promptConfig"] = $state(
-		{} as Sockets.PromptConfigs.Get.Response["promptConfig"]
-	)
-	let chatOriginal: Sockets.PromptConfigs.Get.Response["promptConfig"] =
+	let sessionConfig: Sockets.PromptConfigs.Get.Response["promptConfig"] =
 		$state({} as Sockets.PromptConfigs.Get.Response["promptConfig"])
-	let chatUnsaved = $derived(
-		JSON.stringify(chatConfig) !== JSON.stringify(chatOriginal)
+	let sessionOriginal: Sockets.PromptConfigs.Get.Response["promptConfig"] =
+		$state({} as Sockets.PromptConfigs.Get.Response["promptConfig"])
+	let sessionUnsaved = $derived(
+		JSON.stringify(sessionConfig) !== JSON.stringify(sessionOriginal)
 	)
 
-	let activeChatName = $derived.by(() => {
+	let activeSessionName = $derived.by(() => {
 		const id =
-			userSettingsCtx.settings?.activePromptConfigId ?? chatList[0]?.id
-		return chatList.find((p) => p.id === id)?.name ?? null
+			userSettingsCtx.settings?.activePromptConfigId ?? sessionList[0]?.id
+		return sessionList.find((p) => p.id === id)?.name ?? null
 	})
 
-	// ── Chat Prompts: Narrator state ─────────────────────────────────────────
+	// ── Session Prompts: Narrator state ─────────────────────────────────────────
 	let narratorPromptList: Sockets.NarratorPromptConfigs.List.Response["narratorPromptConfigsList"] =
 		$state([])
 	let selectedNarratorId: number | undefined = $state(
@@ -204,7 +203,7 @@
 	let validationErrors: ValidationErrors = $state({})
 
 	function currentName(): string {
-		if (view === "chat") return chatConfig.name
+		if (view === "session") return sessionConfig.name
 		if (view === "narrator") return narratorConfig.name
 		if (view === "world") return worldConfig.name
 		if (view === "character") return characterConfig.name
@@ -229,7 +228,7 @@
 
 	// ── Unsaved guard ─────────────────────────────────────────────────────────
 	function hasUnsaved(): boolean {
-		if (view === "chat") return chatUnsaved
+		if (view === "session") return sessionUnsaved
 		if (view === "narrator") return narratorUnsaved
 		if (view === "world") return worldUnsaved
 		if (view === "character") return characterUnsaved
@@ -273,15 +272,15 @@
 	}
 
 	// ── Guard selection changes against unsaved edits ─────────────────────────
-	async function handleChatSelectChange(e: Event) {
+	async function handleSessionSelectChange(e: Event) {
 		const newId = Number((e.target as HTMLSelectElement).value)
-		if (newId === selectedChatId) return
-		if (chatUnsaved && !(await checkUnsaved())) {
+		if (newId === selectedSessionId) return
+		if (sessionUnsaved && !(await checkUnsaved())) {
 			// Revert the DOM select back to the current selection
-			;(e.target as HTMLSelectElement).value = String(selectedChatId)
+			;(e.target as HTMLSelectElement).value = String(selectedSessionId)
 			return
 		}
-		selectedChatId = newId
+		selectedSessionId = newId
 	}
 
 	async function handleNarratorSelectChange(e: Event) {
@@ -334,23 +333,23 @@
 		selectedGraphId = newId
 	}
 
-	// ── Chat actions ──────────────────────────────────────────────────────────
-	function handleChatSave() {
+	// ── Session actions ──────────────────────────────────────────────────────────
+	function handleSessionSave() {
 		if (!validateForm()) return
 		socket.emit("promptConfigs:update", {
-			promptConfig: { ...chatConfig, id: chatConfig.id }
+			promptConfig: { ...sessionConfig, id: sessionConfig.id }
 		})
 	}
-	function handleChatDelete() {
-		if (!chatConfig.isImmutable) {
-			socket.emit("promptConfigs:delete", { id: chatConfig.id })
-			selectedChatId = undefined
+	function handleSessionDelete() {
+		if (!sessionConfig.isImmutable) {
+			socket.emit("promptConfigs:delete", { id: sessionConfig.id })
+			selectedSessionId = undefined
 		}
 	}
-	function handleChatReset() {
-		chatConfig = { ...chatOriginal }
+	function handleSessionReset() {
+		sessionConfig = { ...sessionOriginal }
 	}
-	function handleChatNew() {
+	function handleSessionNew() {
 		showNewNameModal = true
 	}
 
@@ -468,8 +467,8 @@
 	// ── New-name modal dispatch ───────────────────────────────────────────────
 	function handleNewNameConfirm(name: string) {
 		if (!name.trim()) return
-		if (view === "chat") {
-			const { id: _id, ...rest } = chatConfig
+		if (view === "session") {
+			const { id: _id, ...rest } = sessionConfig
 			socket.emit("promptConfigs:create", {
 				promptConfig: { ...rest, name: name.trim(), isImmutable: false }
 			})
@@ -527,8 +526,8 @@
 
 	// ── Reactive: load config when selection changes ──────────────────────────
 	$effect(() => {
-		if (selectedChatId)
-			socket.emit("promptConfigs:get", { id: selectedChatId })
+		if (selectedSessionId)
+			socket.emit("promptConfigs:get", { id: selectedSessionId })
 	})
 	$effect(() => {
 		if (selectedNarratorId)
@@ -554,9 +553,9 @@
 	})
 
 	// ── Set default actions ────────────────────────────────────────────────────
-	function handleChatSetDefault() {
-		if (!selectedChatId) return
-		socket.emit("promptConfigs:setUserActive", { id: selectedChatId })
+	function handleSessionSetDefault() {
+		if (!selectedSessionId) return
+		socket.emit("promptConfigs:setUserActive", { id: selectedSessionId })
 	}
 	function handleNarratorSetDefault() {
 		if (!selectedNarratorId) return
@@ -589,28 +588,29 @@
 	// (the ":setUserActive:error" pair) previously had no cleanup call at
 	// all, leaking unconditionally on every unmount.
 	function handlePromptConfigsList(msg: Sockets.PromptConfigs.List.Response) {
-		chatList = msg.promptConfigsList
-		if (!selectedChatId && chatList.length > 0) {
-			selectedChatId =
-				userSettingsCtx.settings?.activePromptConfigId ?? chatList[0].id
+		sessionList = msg.promptConfigsList
+		if (!selectedSessionId && sessionList.length > 0) {
+			selectedSessionId =
+				userSettingsCtx.settings?.activePromptConfigId ??
+				sessionList[0].id
 		}
 	}
 	function handlePromptConfigsGet(msg: Sockets.PromptConfigs.Get.Response) {
-		if (msg.promptConfig.id !== selectedChatId) return
-		chatConfig = { ...msg.promptConfig }
-		chatOriginal = { ...msg.promptConfig }
+		if (msg.promptConfig.id !== selectedSessionId) return
+		sessionConfig = { ...msg.promptConfig }
+		sessionOriginal = { ...msg.promptConfig }
 	}
 	function handlePromptConfigsCreate(
 		msg: Sockets.PromptConfigs.Create.Response
 	) {
-		selectedChatId = msg.promptConfig.id
+		selectedSessionId = msg.promptConfig.id
 	}
 	function handlePromptConfigsUpdate(
 		msg: Sockets.PromptConfigs.Update.Response
 	) {
-		if (msg.promptConfig.id === chatConfig.id) {
-			chatConfig = { ...msg.promptConfig }
-			chatOriginal = { ...msg.promptConfig }
+		if (msg.promptConfig.id === sessionConfig.id) {
+			sessionConfig = { ...msg.promptConfig }
+			sessionOriginal = { ...msg.promptConfig }
 			toaster.success({ title: "Prompt Config Updated" })
 		}
 	}
@@ -747,11 +747,11 @@
 
 	// Set-default response listeners (just toast — userSettings:get updates context)
 	function handlePromptConfigsSetUserActive() {
-		toaster.success({ title: "Default chat prompt updated" })
+		toaster.success({ title: "Default session prompt updated" })
 	}
 	function handlePromptConfigsSetUserActiveError(msg: any) {
 		toaster.error({
-			title: msg?.error || "Failed to set default chat prompt"
+			title: msg?.error || "Failed to set default session prompt"
 		})
 	}
 	function handleNarratorPromptConfigsSetUserActive() {
@@ -822,7 +822,7 @@
 	}
 
 	onMount(() => {
-		// Chat listeners
+		// Session listeners
 		socket.on("promptConfigs:list", handlePromptConfigsList)
 		socket.on("promptConfigs:get", handlePromptConfigsGet)
 		socket.on("promptConfigs:create", handlePromptConfigsCreate)
@@ -1045,10 +1045,10 @@
 			Select a prompt type to view and edit its configurations.
 		</p>
 
-		<!-- Chat Prompts card -->
+		<!-- Session Prompts card -->
 		<button
 			class="card preset-tonal hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
-			onclick={() => (view = "chat")}
+			onclick={() => (view = "session")}
 		>
 			<div class="flex items-start gap-3">
 				<div
@@ -1059,7 +1059,7 @@
 				<div class="min-w-0 flex-1">
 					<div class="flex items-center justify-between gap-2">
 						<span class="font-semibold">
-							Chat Prompts: Character
+							Session Prompts: Character
 						</span>
 						<Icons.ChevronRight
 							size={16}
@@ -1067,9 +1067,9 @@
 						/>
 					</div>
 					<p class="text-muted-foreground mt-0.5 text-sm">
-						System instructions injected into every chat.
+						System instructions injected into every session.
 					</p>
-					{#if activeChatName}
+					{#if activeSessionName}
 						<div class="mt-2 flex items-center gap-1.5">
 							<Icons.CheckCircle
 								size={12}
@@ -1078,7 +1078,7 @@
 							<span
 								class="text-success-600 dark:text-success-400 truncate text-xs font-medium"
 							>
-								{activeChatName}
+								{activeSessionName}
 							</span>
 						</div>
 					{/if}
@@ -1086,7 +1086,7 @@
 			</div>
 		</button>
 
-		<!-- Chat Prompts: Narrator card -->
+		<!-- Session Prompts: Narrator card -->
 		<button
 			class="card preset-tonal hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
 			onclick={() => (view = "narrator")}
@@ -1100,7 +1100,7 @@
 				<div class="min-w-0 flex-1">
 					<div class="flex items-center justify-between gap-2">
 						<span class="font-semibold">
-							Chat Prompts: Narrator
+							Session Prompts: Narrator
 						</span>
 						<Icons.ChevronRight
 							size={16}
@@ -1175,7 +1175,7 @@
 	</div>
 
 	<!-- ── CHAT PROMPTS EDITOR ────────────────────────────────────────────────── -->
-{:else if view === "chat"}
+{:else if view === "session"}
 	<div class="text-foreground flex h-full flex-col">
 		<div class="border-surface-200-800 border-b px-4 py-3">
 			<div class="flex items-center gap-2">
@@ -1188,18 +1188,18 @@
 					<Icons.ChevronLeft size={16} />
 				</button>
 				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">
-					Chat Prompts: Character
+					Session Prompts: Character
 				</h2>
 			</div>
 			<div
 				class="mt-2 flex gap-2"
 				role="toolbar"
-				aria-label="Chat prompt config actions"
+				aria-label="Session prompt config actions"
 			>
 				<button
 					type="button"
 					class="btn btn-sm preset-filled-surface-400-600"
-					onclick={handleChatNew}
+					onclick={handleSessionNew}
 					disabled={READ_ONLY}
 					title="Clone to new config"
 					aria-label="Clone to new config"
@@ -1209,8 +1209,8 @@
 				<button
 					type="button"
 					class="btn btn-sm preset-filled-surface-400-600"
-					onclick={handleChatReset}
-					disabled={!chatUnsaved}
+					onclick={handleSessionReset}
+					disabled={!sessionUnsaved}
 					title="Discard changes"
 					aria-label="Discard changes"
 				>
@@ -1219,10 +1219,10 @@
 				<button
 					type="button"
 					class="btn btn-sm preset-tonal-error"
-					onclick={handleChatDelete}
+					onclick={handleSessionDelete}
 					disabled={READ_ONLY ||
-						!chatConfig ||
-						chatConfig.isImmutable}
+						!sessionConfig ||
+						sessionConfig.isImmutable}
 					title="Delete config"
 					aria-label="Delete config"
 				>
@@ -1234,10 +1234,10 @@
 			<div class="mb-4">
 				<select
 					class="select w-full"
-					value={selectedChatId}
-					onchange={handleChatSelectChange}
+					value={selectedSessionId}
+					onchange={handleSessionSelectChange}
 				>
-					{#each chatList.filter((c) => c.isImmutable) as c}
+					{#each sessionList.filter((c) => c.isImmutable) as c}
 						{@const isDefault =
 							c.id ===
 							userSettingsCtx.settings?.activePromptConfigId}
@@ -1245,7 +1245,7 @@
 							{isDefault ? "★ " : ""}{c.name} *
 						</option>
 					{/each}
-					{#each chatList.filter((c) => !c.isImmutable) as c}
+					{#each sessionList.filter((c) => !c.isImmutable) as c}
 						{@const isDefault =
 							c.id ===
 							userSettingsCtx.settings?.activePromptConfigId}
@@ -1255,46 +1255,46 @@
 					{/each}
 				</select>
 			</div>
-			{#if chatConfig?.id}
+			{#if sessionConfig?.id}
 				<div class="flex flex-col gap-4">
 					<div class="flex gap-2">
 						<button
 							class="btn btn-sm preset-filled-success-500 flex-1"
-							onclick={handleChatSave}
-							disabled={READ_ONLY || !chatUnsaved}
+							onclick={handleSessionSave}
+							disabled={READ_ONLY || !sessionUnsaved}
 						>
 							<Icons.Save size={14} /> Update
 						</button>
 						<button
 							class="btn btn-sm preset-filled-warning-500 shrink-0"
-							onclick={handleChatSetDefault}
+							onclick={handleSessionSetDefault}
 							disabled={READ_ONLY ||
-								!selectedChatId ||
-								selectedChatId ===
+								!selectedSessionId ||
+								selectedSessionId ===
 									userSettingsCtx.settings
 										?.activePromptConfigId}
-							title={selectedChatId &&
-							selectedChatId ===
+							title={selectedSessionId &&
+							selectedSessionId ===
 								userSettingsCtx.settings?.activePromptConfigId
 								? "Already the default"
 								: "Set as default"}
-							aria-label={selectedChatId &&
-							selectedChatId ===
+							aria-label={selectedSessionId &&
+							selectedSessionId ===
 								userSettingsCtx.settings?.activePromptConfigId
 								? "Already the default"
 								: "Set as default"}
 						>
 							<Icons.Star
 								size={14}
-								fill={selectedChatId &&
-								selectedChatId ===
+								fill={selectedSessionId &&
+								selectedSessionId ===
 									userSettingsCtx.settings
 										?.activePromptConfigId
 									? "currentColor"
 									: "none"}
 							/>
-							{selectedChatId &&
-							selectedChatId ===
+							{selectedSessionId &&
+							selectedSessionId ===
 								userSettingsCtx.settings?.activePromptConfigId
 								? "Default"
 								: "Set Default"}
@@ -1303,19 +1303,19 @@
 					<div class="flex flex-col gap-1">
 						<label
 							class="text-sm font-semibold"
-							for="promptConfigChatName"
+							for="promptConfigSessionName"
 						>
 							Name *
 						</label>
 						<input
 							readonly={READ_ONLY}
-							id="promptConfigChatName"
+							id="promptConfigSessionName"
 							type="text"
-							bind:value={chatConfig.name}
+							bind:value={sessionConfig.name}
 							class="input w-full {validationErrors.name
 								? 'border-error-500'
 								: ''}"
-							disabled={chatConfig.isImmutable}
+							disabled={sessionConfig.isImmutable}
 							oninput={() => {
 								if (validationErrors.name) {
 									const { name, ...rest } = validationErrors
@@ -1333,23 +1333,23 @@
 					<div class="flex flex-col gap-1">
 						<label
 							class="text-sm font-semibold"
-							for="chatSystemPrompt"
+							for="sessionSystemPrompt"
 						>
 							System Instructions
 						</label>
 						<textarea
 							readonly={READ_ONLY}
-							id="chatSystemPrompt"
+							id="sessionSystemPrompt"
 							rows="15"
-							bind:value={chatConfig.systemPrompt}
+							bind:value={sessionConfig.systemPrompt}
 							class="textarea w-full"
-							disabled={chatConfig.isImmutable}
+							disabled={sessionConfig.isImmutable}
 						></textarea>
 					</div>
 					<div class="flex flex-col gap-1">
 						<label
 							class="text-sm font-semibold"
-							for="chatPostHistoryInstructions"
+							for="sessionPostHistoryInstructions"
 						>
 							Post-History Instructions
 						</label>
@@ -1362,11 +1362,11 @@
 						</p>
 						<textarea
 							readonly={READ_ONLY}
-							id="chatPostHistoryInstructions"
+							id="sessionPostHistoryInstructions"
 							rows="4"
-							bind:value={chatConfig.postHistoryInstructions}
+							bind:value={sessionConfig.postHistoryInstructions}
 							class="textarea w-full"
-							disabled={chatConfig.isImmutable}
+							disabled={sessionConfig.isImmutable}
 							placeholder="e.g. Remember: stay in character and keep responding to {'{{'}personaNames{'}}'}."
 						></textarea>
 					</div>
@@ -1374,7 +1374,7 @@
 						<div class="flex flex-1 flex-col gap-1">
 							<label
 								class="text-sm font-semibold"
-								for="chatPostHistoryDepth"
+								for="sessionPostHistoryDepth"
 							>
 								Post-History Depth
 							</label>
@@ -1384,33 +1384,35 @@
 							</p>
 							<input
 								readonly={READ_ONLY}
-								id="chatPostHistoryDepth"
+								id="sessionPostHistoryDepth"
 								class="input w-full"
 								type="number"
 								min="0"
-								bind:value={chatConfig.postHistoryDepth}
-								disabled={chatConfig.isImmutable}
+								bind:value={sessionConfig.postHistoryDepth}
+								disabled={sessionConfig.isImmutable}
 							/>
 						</div>
 						<div class="flex flex-1 flex-col gap-1">
 							<label
 								class="text-sm font-semibold"
-								for="chatPostHistoryTokenTrigger"
+								for="sessionPostHistoryTokenTrigger"
 							>
 								Post-History Token Trigger
 							</label>
 							<p class="text-muted-foreground text-xs">
-								Minimum chat history tokens before the reminder
-								is included. 0 = always included.
+								Minimum session history tokens before the
+								reminder is included. 0 = always included.
 							</p>
 							<input
 								readonly={READ_ONLY}
-								id="chatPostHistoryTokenTrigger"
+								id="sessionPostHistoryTokenTrigger"
 								class="input w-full"
 								type="number"
 								min="0"
-								bind:value={chatConfig.postHistoryTokenTrigger}
-								disabled={chatConfig.isImmutable}
+								bind:value={
+									sessionConfig.postHistoryTokenTrigger
+								}
+								disabled={sessionConfig.isImmutable}
 							/>
 						</div>
 					</div>
@@ -1425,8 +1427,10 @@
 						<ConnectionSamplingPicker
 							{connectionsList}
 							{samplingList}
-							bind:connectionId={chatConfig.connectionId}
-							bind:samplingConfigId={chatConfig.samplingConfigId}
+							bind:connectionId={sessionConfig.connectionId}
+							bind:samplingConfigId={
+								sessionConfig.samplingConfigId
+							}
 						/>
 					</div>
 				</div>
@@ -1448,7 +1452,7 @@
 					<Icons.ChevronLeft size={16} />
 				</button>
 				<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">
-					Chat Prompts: Narrator
+					Session Prompts: Narrator
 				</h2>
 			</div>
 			<div
@@ -1603,9 +1607,9 @@
 							Display Name
 						</label>
 						<p class="text-muted-foreground text-xs">
-							Shown in the chat instead of "Narrator" (e.g. "The
-							World", "Fate") when a message is generated with
-							this config.
+							Shown in the session instead of "Narrator" (e.g.
+							"The World", "Fate") when a message is generated
+							with this config.
 						</p>
 						<input
 							readonly={READ_ONLY}
@@ -1627,7 +1631,7 @@
 						<p class="text-muted-foreground text-xs">
 							Used when the Narrator is manually triggered to
 							narrate the environment, atmosphere, or side
-							characters instead of a chat character.
+							characters instead of a session character.
 						</p>
 						<textarea
 							readonly={READ_ONLY}
@@ -1651,7 +1655,7 @@
 							of the prompt — much harder for the model to drift
 							away from after a long conversation history.
 							Optional, but recommended if the Narrator keeps
-							slipping into writing dialogue/actions for chat
+							slipping into writing dialogue/actions for session
 							characters despite the System Instructions above.
 						</p>
 						<textarea
@@ -1694,8 +1698,8 @@
 								Post-History Token Trigger
 							</label>
 							<p class="text-muted-foreground text-xs">
-								Minimum chat history tokens before the reminder
-								is included. 0 = always included.
+								Minimum session history tokens before the
+								reminder is included. 0 = always included.
 							</p>
 							<input
 								readonly={READ_ONLY}
@@ -2868,7 +2872,7 @@
 	onOpenChange={(e) => (showNewNameModal = e.open)}
 	onConfirm={handleNewNameConfirm}
 	onCancel={handleNewNameCancel}
-	title={view === "chat"
+	title={view === "session"
 		? "New Prompt Config"
 		: view === "narrator"
 			? "New Narrator Prompt Config"

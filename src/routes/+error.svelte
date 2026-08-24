@@ -2,7 +2,7 @@
 	import { page } from "$app/state"
 
 	// There was no +error.svelte at all before this, so every SvelteKit error —
-	// a mistyped URL, a deleted chat id, a load() throwing — rendered the
+	// a mistyped URL, a deleted session id, a load() throwing — rendered the
 	// framework's built-in fallback: an unstyled white page with a bare status
 	// code, on an app that is otherwise dark-themed, with no way back.
 	//

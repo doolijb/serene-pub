@@ -28,7 +28,11 @@
  * entries because one large one happened to sort above them.
  */
 
-import type { RankingParams, SignalWeights, SourceKind } from "$lib/server/pipelines/ranking/weights"
+import type {
+	RankingParams,
+	SignalWeights,
+	SourceKind
+} from "$lib/server/pipelines/ranking/weights"
 import { allocateBudgets } from "$lib/server/pipelines/ranking/weights"
 
 /** The signal values for one candidate. Missing signals are zero, not absent. */
@@ -332,7 +336,7 @@ export function select(
 	// ── Spillover ────────────────────────────────────────────────────────
 	//
 	// A share is a *priority*, not a cap. Without this pass, setting world lore
-	// to 20% on a chat with no character lore would throw the other group's
+	// to 20% on a session with no character lore would throw the other group's
 	// budget away — and on a small context every group's share can be smaller
 	// than any single candidate, so nothing is selected at all while the old
 	// single-pool engine would have included the best one.

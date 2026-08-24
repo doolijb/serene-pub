@@ -64,7 +64,7 @@ Both the Ollama and KoboldCPP base URL fields use the same validation rule: the 
 
 ## Summarization
 
-**Enable Summarization** turns on the ability to select a range of chat messages and generate a Scene Summary from them via an LLM, which feeds the Narrative Graph and can become a lorebook history entry. This is a manual, per-chat action, not a background process — nothing runs automatically, and the original messages are never removed or replaced during prompt construction. Off by default. Full behavior is documented in [Summarization](./summarization.md).
+**Enable Summarization** turns on the ability to select a range of session messages and generate a Scene Summary from them via an LLM, which feeds the Narrative Graph and can become a lorebook history entry. This is a manual, per-session action, not a background process — nothing runs automatically, and the original messages are never removed or replaced during prompt construction. Off by default. Full behavior is documented in [Summarization](./summarization.md).
 
 An **Embeddings** card sits below Summarization, with its own **Enable Embeddings** switch — but unlike every other switch on this tab, it doesn't turn the feature on in place. Because enabling embeddings first requires choosing a backend (local model vs. external API, and which model), flipping it on routes you straight to the **Embedding** card in the Connections sidebar to complete that setup instead of doing anything itself. Flipping it back off (once already enabled) does act immediately, though — it disables embeddings right away via the same action as the **Disable Embeddings** button described below, with a "Embeddings disabled" confirmation toast. See [Embeddings & RAG](./embeddings-and-rag.md) for the full setup flow and how RAG uses whatever's configured there.
 
@@ -78,7 +78,7 @@ To connect, create an App Password at charavault.net named "Serene Pub," then en
 
 ### Context Debugging
 
-**Enable Context Debugging** adds a prompt-inspector tab to the chat UI and makes Serene Pub compute full retrieval-augmented generation (RAG) and infill diagnostics, saving the compiled prompt metadata alongside each generated message for later inspection. This is intended for troubleshooting prompt construction and retrieval behavior, not everyday use, since it adds overhead to every generation.
+**Enable Context Debugging** adds a prompt-inspector tab to the session UI and makes Serene Pub compute full retrieval-augmented generation (RAG) and infill diagnostics, saving the compiled prompt metadata alongside each generated message for later inspection. This is intended for troubleshooting prompt construction and retrieval behavior, not everyday use, since it adds overhead to every generation.
 
 ## System-Wide Defaults
 

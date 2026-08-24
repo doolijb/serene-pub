@@ -27,7 +27,10 @@ export function resolveOrCreateBindingByName(
 		function cleanup() {
 			clearTimeout(timeout)
 			socket.off("lorebooks:resolveOrCreateBindingByName", handler)
-			socket.off("lorebooks:resolveOrCreateBindingByName:error", errorHandler)
+			socket.off(
+				"lorebooks:resolveOrCreateBindingByName:error",
+				errorHandler
+			)
 		}
 
 		const timeout = setTimeout(() => {
@@ -51,7 +54,11 @@ export function resolveOrCreateBindingByName(
 		// (sequential awaits, see ProcessSceneModal/SummarizeLoreModal).
 		function errorHandler(data: { error: string }) {
 			cleanup()
-			reject(new Error(data.error || `Failed to resolve character "${name}".`))
+			reject(
+				new Error(
+					data.error || `Failed to resolve character "${name}".`
+				)
+			)
 		}
 
 		socket.on("lorebooks:resolveOrCreateBindingByName", handler)

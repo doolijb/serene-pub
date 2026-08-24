@@ -130,7 +130,7 @@ export interface RetrievalParams {
 	 * Hardcoded at 10 today and **sharing one constant with
 	 * `guaranteedMessages`** (`BaseInfillEngine.ts:10`), which is two different
 	 * questions answered by one number: how far back do we look for triggers,
-	 * versus how much recent conversation survives budgeting. A chat of long
+	 * versus how much recent conversation survives budgeting. A session of long
 	 * posts wants a deep scan and a short guarantee; a terse one wants the
 	 * reverse. Splitting them is behaviour-preserving while both default to 10.
 	 */
@@ -180,8 +180,8 @@ export const DEFAULT_RETRIEVAL: RetrievalParams = {
  *
  * `RagInfillEngine` carries these as module-level `const`s, and one of them
  * already has a `TODO: make configurable in a future pass` next to it. They are
- * exposed here for the same reason every other constant was: a user whose chat
- * has long posts and a user whose chat is terse want different windows, and
+ * exposed here for the same reason every other constant was: a user whose session
+ * has long posts and a user whose session is terse want different windows, and
  * neither can express that today.
  *
  * Provenance is on each field. The defaults are the current values exactly, so
@@ -210,8 +210,8 @@ export interface SemanticParams {
 	 * it must also clear. `RagInfillEngine:117-119`.
 	 *
 	 * Two numbers rather than one because they answer different questions: the
-	 * floor rejects a chat where *nothing* is relevant, the relative one rejects
-	 * the long tail of a chat where something is.
+	 * floor rejects a session where *nothing* is relevant, the relative one rejects
+	 * the long tail of a session where something is.
 	 */
 	thresholdMin: number
 	relativeThreshold: number
@@ -280,7 +280,7 @@ export interface GroupWeights {
 	 * unit as much as of scope. A token floor answered "how much conversation"
 	 * in a currency nobody thinks in — 512 tokens is some number of messages
 	 * that depends on how long the last few were, so the same setting produced
-	 * a different amount of readable chat on every turn. Entries is what the
+	 * a different amount of readable session on every turn. Entries is what the
 	 * user means: *keep the last six messages*.
 	 *
 	 * Per source for the same reason `share` and `maxEntries` are: world lore
@@ -312,7 +312,7 @@ export const DEFAULT_GROUPS: GroupWeights = {
 		history: 10,
 		relationships: 0
 	},
-	// Six messages is what `core:query/chat-history@1` used to guarantee under
+	// Six messages is what `core:query/session-history@1` used to guarantee under
 	// its own `minInclude`, moved here so every source's floor is one control.
 	// The others start at zero: a floor is a promise to spend budget on
 	// something whether or not it scored, and promising that for lore by

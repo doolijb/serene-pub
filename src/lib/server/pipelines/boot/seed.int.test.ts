@@ -25,7 +25,11 @@ import path from "path"
 import { eq } from "drizzle-orm"
 import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
-import { coreEvents, syncEventRegistry, seedCoreSpecs } from "$lib/server/pipelines/boot/seed"
+import {
+	coreEvents,
+	syncEventRegistry,
+	seedCoreSpecs
+} from "$lib/server/pipelines/boot/seed"
 import { CORE_SPECS } from "$lib/server/pipelines/specs"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 
@@ -146,7 +150,7 @@ describe("the core event set", () => {
 				)
 			)
 		expect((row.descriptionI18n as any).en).toBe(
-			"A message was written into a chat."
+			"A message was written into a session."
 		)
 	})
 })
@@ -189,7 +193,9 @@ describe("core's specs", () => {
 		// and sampling are deliberately unset here: they fall back to the
 		// instance default (sampling is owned by sampling configs, system
 		// default with per-config override).
-		const { declarations } = await import("$lib/server/pipelines/config/panel")
+		const { declarations } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
 		for (const entry of CORE_SPECS) {
 			const [spec] = await db
 				.select()

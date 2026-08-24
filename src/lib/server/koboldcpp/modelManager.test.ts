@@ -56,11 +56,13 @@ describe("ensureModelLoaded", () => {
 		// Default: report whatever the name mock says as a *definitive* answer.
 		// That reproduces the pre-`determined` semantics, so tests that only
 		// care about which model is loaded keep driving the name mock alone.
-		fetchCurrentModelStatusMock.mockImplementation(async (...args: any[]) => ({
-			modelName: await fetchCurrentModelNameMock(...args),
-			refused: false,
-			determined: true
-		}))
+		fetchCurrentModelStatusMock.mockImplementation(
+			async (...args: any[]) => ({
+				modelName: await fetchCurrentModelNameMock(...args),
+				refused: false,
+				determined: true
+			})
+		)
 		fetchMock = vi.fn()
 		vi.stubGlobal("fetch", fetchMock)
 	})
@@ -306,9 +308,7 @@ describe("ensureModelLoaded", () => {
 			refused: false
 		})
 
-		const promise = ensureModelLoaded(
-			baseOpts({ isAlive: () => true })
-		)
+		const promise = ensureModelLoaded(baseOpts({ isAlive: () => true }))
 		await vi.advanceTimersByTimeAsync(2000)
 		await vi.advanceTimersByTimeAsync(2000)
 		await promise
@@ -394,9 +394,7 @@ describe("ensureModelLoaded", () => {
 			refused: true
 		})
 
-		const promise = ensureModelLoaded(
-			baseOpts({ isAlive: () => alive })
-		)
+		const promise = ensureModelLoaded(baseOpts({ isAlive: () => alive }))
 		promise.catch(() => {})
 		await vi.advanceTimersByTimeAsync(0)
 		alive = false

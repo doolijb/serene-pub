@@ -9,7 +9,7 @@ describe("resolveSillyTavernDataRoot", () => {
 	test("resolves when the picked folder is the data root itself", () => {
 		const root = resolveSillyTavernDataRoot([
 			"characters/Aria.png",
-			"chats/Aria/2024-01-01.jsonl",
+			"sessions/Aria/2024-01-01.jsonl",
 			"settings.json"
 		])
 		expect(root).toBe("")
@@ -96,9 +96,9 @@ describe("isRelevantImportPath", () => {
 	test.each([
 		"settings.json",
 		"characters/Aria.png",
-		"chats/Aria/2024-01-01.jsonl",
+		"sessions/Aria/2024-01-01.jsonl",
 		"groups/group1.json",
-		"group chats/abc123.jsonl",
+		"group sessions/abc123.jsonl",
 		"worlds/MyWorld.json",
 		"User Avatars/MyPersona.png"
 	])("accepts %s", (p) => {

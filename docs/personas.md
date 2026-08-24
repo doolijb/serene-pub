@@ -1,16 +1,16 @@
 # Personas
 
-A persona is how _you_ show up inside a chat — your name, your avatar, your written description — separate from the [Characters](./characters.md) the AI plays. This page covers persona fields, the two ways to create one, the community persona library, and how to manage several personas at once.
+A persona is how _you_ show up inside a session — your name, your avatar, your written description — separate from the [Characters](./characters.md) the AI plays. This page covers persona fields, the two ways to create one, the community persona library, and how to manage several personas at once.
 
 ## Overview
 
-In Serene Pub, every chat has two kinds of participants: Characters, which are driven by the AI, and Personas, which represent human participants — typically you. When the setup wizard runs for the first time, it creates a starter persona named "You" and marks it as your default, but you are free to create as many personas as you like and switch between them per chat. A persona you create in one chat is reusable in any other chat — it lives in your personal persona library alongside your characters and lorebooks.
+In Serene Pub, every session has two kinds of participants: Characters, which are driven by the AI, and Personas, which represent human participants — typically you. When the setup wizard runs for the first time, it creates a starter persona named "You" and marks it as your default, but you are free to create as many personas as you like and switch between them per session. A persona you create in one session is reusable in any other session — it lives in your personal persona library alongside your characters and lorebooks.
 
 Personas are managed from the Personas sidebar panel, opened from the app's main navigation. From there you can create, search, view, edit, and delete personas, or pull ready-made ones from the built-in persona library.
 
 ## Persona Fields
 
-The full persona editor exposes the following fields. Fields marked with an eye icon in the UI are explicitly flagged as visible to the model — they get sent into the chat prompt.
+The full persona editor exposes the following fields. Fields marked with an eye icon in the UI are explicitly flagged as visible to the model — they get sent into the session prompt.
 
 ### Name
 
@@ -22,7 +22,7 @@ An optional, collapsible list of alternate names for the persona. Click "Aliases
 
 ### Summary
 
-An optional short text field (capped at 200 characters) hidden behind a collapsible "Summary" section. The form describes it as "used as a concise graph node description" and explicitly states it is **not** injected into chat context — it exists to give the persona a short label for graph/retrieval bookkeeping rather than for the prompt itself.
+An optional short text field (capped at 200 characters) hidden behind a collapsible "Summary" section. The form describes it as "used as a concise graph node description" and explicitly states it is **not** injected into session context — it exists to give the persona a short label for graph/retrieval bookkeeping rather than for the prompt itself.
 
 ### Description
 
@@ -50,7 +50,7 @@ Only **Name** and **Description** are required — the form will not let you sav
 
 ## Personas vs. Characters
 
-It's worth being explicit about the distinction, since the two editors look similar: a [Character](./characters.md) is an AI-driven participant with its own personality that the model plays, while a persona is your (or another human participant's) identity in the same conversation. A chat typically pairs one or more personas with one or more characters — a persona's Name, Aliases, and Description are written from a first-person, "this is who I am" perspective, in contrast to the third-person character-sheet style used for characters.
+It's worth being explicit about the distinction, since the two editors look similar: a [Character](./characters.md) is an AI-driven participant with its own personality that the model plays, while a persona is your (or another human participant's) identity in the same conversation. A session typically pairs one or more personas with one or more characters — a persona's Name, Aliases, and Description are written from a first-person, "this is who I am" perspective, in contrast to the third-person character-sheet style used for characters.
 
 ## Creating a Persona
 
@@ -81,7 +81,7 @@ Turning Easy Creation Mode off in User Settings switches "Create New Persona" ov
 
 ## Viewing, Editing, and Deleting a Persona
 
-Clicking a persona in the sidebar list opens a compact view panel showing its avatar, name, "Default" badge (if applicable), tags, and description, along with buttons to open its chats, export it, or jump into editing. From the view panel's message-square button you're taken to the Chats panel with that persona pre-selected, the download-icon button opens the export dialog (see Exporting a Persona, below), and "Edit" opens the full Persona Form.
+Clicking a persona in the sidebar list opens a compact view panel showing its avatar, name, "Default" badge (if applicable), tags, and description, along with buttons to open its sessions, export it, or jump into editing. From the view panel's message-square button you're taken to the Sessions panel with that persona pre-selected, the download-icon button opens the export dialog (see Exporting a Persona, below), and "Edit" opens the full Persona Form.
 
 Each persona in the sidebar list also has an overflow (⋯) menu with **View**, **Edit**, **Export**, **Set as default** (disabled, and labeled "Default," if it already holds the flag — see Default Persona Flag, above), and **Delete** actions. Deleting asks for confirmation ("Delete Persona? This action cannot be undone") and performs a soft delete — the persona is hidden from your library rather than immediately purged.
 
@@ -106,17 +106,17 @@ Unlike the Character Library, the Persona Library currently only draws from that
 
 Both the library import and the file upload path parse persona data using the same character-card parser used for [Characters](./characters.md) (spec V2/V3 PNG or JSON cards), including extracting an embedded avatar image if present. This means persona cards exported from Serene Pub or compatible tools can be shared and re-imported the same way character cards can — see [Importing from SillyTavern](./importing-from-sillytavern.md) for more on card-based imports.
 
-## Assigning Personas to Chats
+## Assigning Personas to Sessions
 
-A chat can have more than one persona attached at once, just as it can have more than one character. When creating or editing a chat, use the persona picker to add personas via a searchable "Select Persona" modal (filtered to personas not already in the chat), and remove one via a confirmation dialog. This supports both a single person switching identity between chats and multiple human participants in the same group chat, each represented by their own persona. See [Chats](./chats.md) for the full chat participant model.
+A session can have more than one persona attached at once, just as it can have more than one character. When creating or editing a session, use the persona picker to add personas via a searchable "Select Persona" modal (filtered to personas not already in the session), and remove one via a confirmation dialog. This supports both a single person switching identity between sessions and multiple human participants in the same group session, each represented by their own persona. See [Sessions](./sessions.md) for the full session participant model.
 
 ### Persona Lorebook Bindings
 
-If a chat's [lorebook](./lorebooks.md) uses name-binding placeholders, personas participating in that chat are automatically given a binding the same way characters are, so lorebook entries can reference a persona by its bound token. You don't need to configure this manually — bindings are created automatically the first time a persona joins a bound chat.
+If a session's [lorebook](./lorebooks.md) uses name-binding placeholders, personas participating in that session are automatically given a binding the same way characters are, so lorebook entries can reference a persona by its bound token. You don't need to configure this manually — bindings are created automatically the first time a persona joins a bound session.
 
 ## Managing Multiple Personas
 
-The Personas sidebar list is meant to support keeping a whole roster of personas — one for a fantasy campaign, one for a more grounded chat, one just called "You" for everyday use, and so on. Each list entry shows the persona's avatar, name, a two-line description excerpt, and an embedding status icon indicating whether the persona has been processed for retrieval.
+The Personas sidebar list is meant to support keeping a whole roster of personas — one for a fantasy campaign, one for a more grounded session, one just called "You" for everyday use, and so on. Each list entry shows the persona's avatar, name, a two-line description excerpt, and an embedding status icon indicating whether the persona has been processed for retrieval.
 
 ### Searching Your Personas
 
@@ -132,4 +132,4 @@ The first-run setup wizard offers a one-click option that creates a starter pers
 
 ### Personas and Retrieval
 
-Whenever a persona is created or updated, it is automatically queued for vectorization in the background, making its description and summary available to the app's retrieval-augmented context system. See [Embeddings & RAG](./embeddings-and-rag.md) for how that indexing is used during chat.
+Whenever a persona is created or updated, it is automatically queued for vectorization in the background, making its description and summary available to the app's retrieval-augmented context system. See [Embeddings & RAG](./embeddings-and-rag.md) for how that indexing is used during session.

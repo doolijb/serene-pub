@@ -26,7 +26,8 @@ function makeFakeHttpsModule() {
 		Agent: FakeAgent,
 		get(url: string, optionsOrCb: any, maybeCb?: (res: any) => void) {
 			getCallCount++
-			const cb = typeof optionsOrCb === "function" ? optionsOrCb : maybeCb!
+			const cb =
+				typeof optionsOrCb === "function" ? optionsOrCb : maybeCb!
 			const req: any = { on: () => req, destroy: () => {} }
 
 			// No Range support at all — always answer 200 with the full body,

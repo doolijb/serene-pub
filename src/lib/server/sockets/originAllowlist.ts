@@ -174,7 +174,9 @@ export function getSocketClientAddress(socket: {
 	const raw = socket.handshake.headers[headerName]
 	const value = Array.isArray(raw) ? raw[raw.length - 1] : raw
 	if (!value) return socket.handshake.address
-	const parts = String(value).split(",").map((s) => s.trim())
+	const parts = String(value)
+		.split(",")
+		.map((s) => s.trim())
 	const last = parts[parts.length - 1]
 	return last || socket.handshake.address
 }

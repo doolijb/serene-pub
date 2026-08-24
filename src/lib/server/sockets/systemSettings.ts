@@ -108,6 +108,37 @@ export const systemSettingsUpdateSummarizationEnabled: Handler<
 	}
 }
 
+/** The scripts kill switch (18 §10): off = the host supplies no engine at all. */
+export const systemSettingsUpdateScriptsEnabled: Handler<
+	Sockets.SystemSettings.UpdateScriptsEnabled.Params,
+	Sockets.SystemSettings.UpdateScriptsEnabled.Response
+> = {
+	event: "systemSettings:updateScriptsEnabled",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		try {
+			await db
+				.update(schema.systemSettings)
+				.set({ scriptsEnabled: params.enabled })
+				.where(eq(schema.systemSettings.id, 1))
+
+			const res: Sockets.SystemSettings.UpdateScriptsEnabled.Response = {
+				success: true,
+				enabled: params.enabled
+			}
+			emitToUser("systemSettings:updateScriptsEnabled", res)
+			await systemSettingsGet.handler(socket, {}, emitToUser)
+			return res
+		} catch (error: any) {
+			console.error("Update scripts enabled error:", error)
+			emitToUser("systemSettings:updateScriptsEnabled:error", {
+				error: "Failed to update the scripts setting"
+			})
+			throw error
+		}
+	}
+}
+
 export const systemSettingsUpdateContextDebuggingEnabled: Handler<
 	Sockets.SystemSettings.UpdateContextDebuggingEnabled.Params,
 	Sockets.SystemSettings.UpdateContextDebuggingEnabled.Response
@@ -158,8 +189,13 @@ export const systemSettingsUpdateAccountsEnabled: Handler<
 			// admin fallback (auth.ts) on an instance an admin had
 			// deliberately locked down. Enforce the one-way transition
 			// server-side.
-			if (params.enabled === false && currentSettings?.isAccountsEnabled) {
-				throw new Error("User accounts cannot be disabled once enabled.")
+			if (
+				params.enabled === false &&
+				currentSettings?.isAccountsEnabled
+			) {
+				throw new Error(
+					"User accounts cannot be disabled once enabled."
+				)
 			}
 
 			// Once enabled, unauthenticated access is blocked app-wide (see
@@ -210,7 +246,9 @@ export const systemSettingsUpdateAccountsEnabled: Handler<
 					orderBy: (u, { asc }) => [asc(u.id)]
 				})
 				if (fallbackAdmin) {
-					socket.io.to(`user_${fallbackAdmin.id}`).disconnectSockets(true)
+					socket.io
+						.to(`user_${fallbackAdmin.id}`)
+						.disconnectSockets(true)
 				}
 			}
 
@@ -237,6 +275,7 @@ export function registerSystemSettingsHandlers(
 ) {
 	register(socket, systemSettingsGet, emitToUser)
 	register(socket, systemSettingsUpdateSummarizationEnabled, emitToUser)
+	register(socket, systemSettingsUpdateScriptsEnabled, emitToUser)
 	register(socket, systemSettingsUpdateContextDebuggingEnabled, emitToUser)
 	register(socket, systemSettingsUpdateAccountsEnabled, emitToUser)
 }

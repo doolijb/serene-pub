@@ -62,7 +62,10 @@ import {
 	bareVariableTemplateFor,
 	defaultVariableTemplateFor
 } from "$lib/server/pipelines/boot/seedVariableTemplates"
-import { SHIPPED_VARIABLE_TEMPLATES, seedKeyFor } from "$lib/server/pipelines/entities/variableLayouts"
+import {
+	SHIPPED_VARIABLE_TEMPLATES,
+	seedKeyFor
+} from "$lib/server/pipelines/entities/variableLayouts"
 import { createContextTemplate } from "$lib/server/pipelines/entities/contextTemplates"
 import {
 	CONTEXT_TEMPLATE_NODE_TYPE,
@@ -193,48 +196,16 @@ export async function migrateContextTemplates(
 	const instancePin = pinFor(instanceLegacyId)
 	if (instancePin === "bare") report.customScopes.push("instance")
 
-	const userRows = await db.select().from(schema.userSettings)
-	interface Target {
-		scopeKind: "instance" | "user"
-		scopeId: number
-		templateId: number | null
-		pin: Pin
-	}
-	const targets: Target[] = []
-
-	// The instance writes a selection only when it is not already core's — the
-	// shipped config points at the shipped template, so restating it would pin
-	// the instance to today's answer forever. Same rule for the pin.
-	if (instancePin === "bare")
-		targets.push({
-			scopeKind: "instance",
-			scopeId: 0,
-			templateId: instanceTemplateId,
-			pin: instancePin
-		})
-
-	for (const u of userRows as any[]) {
-		const legacyId = u.activeContextConfigId ?? null
-		// Chose nothing for themselves, so they inherit — correctly, since they
-		// were inheriting before too.
-		if (legacyId == null) continue
-		const pin = pinFor(legacyId)
-		const templateId = await carryAcross(legacyId)
-		// Identical to what the instance resolves to, so writing it would only
-		// stop this person tracking an admin's later change.
-		if (pin === instancePin && templateId === instanceTemplateId) continue
-		if (pin === "bare") report.customScopes.push(`user:${u.userId}`)
-		targets.push({
-			scopeKind: "user",
-			scopeId: u.userId,
-			templateId,
-			pin
-		})
-	}
-
-	if (targets.length) {
+	// The user layer is gone (ruled 2026-08-24): a person's legacy
+	// `active_context_config_id` no longer migrates anywhere — their levers
+	// are the session's now, and a personal global pin has no home. Only the
+	// instance's choice carries across, and it lands where instance tuning
+	// lives since the simplification: in the instance's selected config,
+	// duplicated from the shipped one first ("customizing is duplicating").
+	if (instancePin === "bare") {
 		const specs = await db.select().from(schema.pipelineSpecs)
-		const now = new Date()
+		const { resolveSelectedConfig, duplicateConfig, selectConfig } =
+			await import("$lib/server/pipelines/config/named")
 
 		for (const spec of specs as any[]) {
 			if (spec.activeVersionId == null) continue
@@ -247,91 +218,91 @@ export async function migrateContextTemplates(
 			)
 			if (!templateDecls.length && !layoutDecls.length) continue
 
-			// Resolved once per variable per pin rather than once per
-			// declaration: the same variable is declared by more than one node
-			// in a spec, and a layout row is keyed by what it renders rather
-			// than by who renders it.
+			// Resolved once per variable rather than once per declaration: the
+			// same variable is declared by more than one node in a spec, and a
+			// layout row is keyed by what it renders, not by who renders it.
 			const rowIds = new Map<string, number | null>()
-			const layoutFor = async (variableId: string, pin: Pin) => {
-				const cacheKey = `${pin}:${variableId}`
-				if (!rowIds.has(cacheKey))
+			const layoutFor = async (variableId: string) => {
+				if (!rowIds.has(variableId))
 					rowIds.set(
-						cacheKey,
-						pin === "bare"
-							? await bareVariableTemplateFor(db, variableId)
-							: await defaultVariableTemplateFor(db, variableId)
+						variableId,
+						await bareVariableTemplateFor(db, variableId)
 					)
-				return rowIds.get(cacheKey) ?? null
+				return rowIds.get(variableId) ?? null
 			}
 
-			for (const target of targets) {
-				const write = async (d: Decl, value: number | null) => {
-					// A value there is nothing to point at cannot be written,
-					// and writing NULL would read as "explicitly set to
-					// nothing" rather than "left inheriting".
-					if (value == null) return false
+			// The mutable config these values become part of.
+			const selected = await resolveSelectedConfig(
+				db as any,
+				spec.id,
+				spec.slug,
+				{}
+			)
+			if (!selected) continue
+			let targetConfig = selected.configId
+			let createdCopy = false
+			const [cfg] = await db
+				.select()
+				.from(schema.pipelineConfigs)
+				.where(eq(schema.pipelineConfigs.id, targetConfig))
+				.limit(1)
+			if ((cfg as any)?.isImmutable) {
+				const copy = await duplicateConfig(
+					db as any,
+					targetConfig,
+					`${(cfg as any).name} (customized)`
+				).catch(() => null)
+				if (!copy) continue
+				targetConfig = copy.id
+				createdCopy = true
+				await selectConfig(
+					db as any,
+					spec.id,
+					"instance",
+					0,
+					targetConfig
+				)
+			}
 
-					// Never over a choice that is already there. This runs
-					// after `migrateLegacyToPipelines`, so an override at this
-					// address is one somebody made.
-					const [existing] = await db
-						.select()
-						.from(schema.pipelineNodeOverrides)
-						.where(
-							and(
-								eq(
-									schema.pipelineNodeOverrides.specId,
-									spec.id
-								),
-								eq(
-									schema.pipelineNodeOverrides.scopeKind,
-									target.scopeKind
-								),
-								eq(
-									schema.pipelineNodeOverrides.scopeId,
-									target.scopeId
-								),
-								eq(
-									schema.pipelineNodeOverrides.nodeKey,
-									d.nodeKey
-								),
-								eq(schema.pipelineNodeOverrides.slot, d.slot),
-								eq(schema.pipelineNodeOverrides.path, d.path)
-							)
-						)
-						.limit(1)
-					if (existing) return false
-
-					await db.insert(schema.pipelineNodeOverrides).values({
-						specId: spec.id,
-						scopeKind: target.scopeKind,
-						scopeId: target.scopeId,
-						nodeKey: d.nodeKey,
-						slot: d.slot,
-						path: d.path,
-						value,
-						updatedAt: now
+			// Into a copy this migration just made, values upsert: what sits
+			// at these addresses are the seeds the copy arrived with, and
+			// pointing them at the carried-over template is the job. Into a
+			// config somebody already owned, they only fill gaps — an
+			// existing value there is a choice somebody made, and this never
+			// writes over one.
+			const write = async (d: Decl, value: number | null) => {
+				if (value == null) return false
+				const insert = db.insert(schema.pipelineConfigValues).values({
+					configId: targetConfig,
+					nodeKey: d.nodeKey,
+					slot: d.slot,
+					path: d.path,
+					value
+				})
+				if (createdCopy)
+					await insert.onConflictDoUpdate({
+						target: [
+							schema.pipelineConfigValues.configId,
+							schema.pipelineConfigValues.nodeKey,
+							schema.pipelineConfigValues.slot,
+							schema.pipelineConfigValues.path
+						],
+						set: { value }
 					})
-					return true
-				}
-
-				for (const d of templateDecls)
-					if (
-						d.nodeTypeId ===
-							poolKeyFor(CONTEXT_TEMPLATE_NODE_TYPE) &&
-						(await write(d, target.templateId))
-					)
-						report.selected++
-
-				for (const d of layoutDecls)
-					if (
-						await write(
-							d,
-							await layoutFor(d.variableId!, target.pin)
-						)
-					)
-						report.pinned++
+				else await insert.onConflictDoNothing()
+				return true
 			}
+
+			for (const d of templateDecls)
+				if (
+					d.nodeTypeId === poolKeyFor(CONTEXT_TEMPLATE_NODE_TYPE) &&
+					(await write(d, instanceTemplateId))
+				)
+					report.selected++
+
+			for (const d of layoutDecls)
+				if (await write(d, await layoutFor(d.variableId!)))
+					report.pinned++
 		}
 	}
 

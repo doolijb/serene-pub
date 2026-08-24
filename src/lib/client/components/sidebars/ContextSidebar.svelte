@@ -665,7 +665,7 @@
 					<div class="flex flex-col gap-2">
 						<p class="text-surface-700-300 text-sm">
 							Renders this template against static mock story
-							data, using the same engine as real chats.
+							data, using the same engine as real sessions.
 						</p>
 						<button
 							type="button"

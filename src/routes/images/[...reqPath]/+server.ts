@@ -4,7 +4,10 @@ import path from "path"
 import fs from "fs/promises"
 import { getAppDataDir } from "$lib/server/utils"
 import { authenticateRequest } from "$lib/server/auth/authenticateRequest"
-import { canViewCharacter, canViewPersona } from "$lib/server/utils/chatAccess"
+import {
+	canViewCharacter,
+	canViewPersona
+} from "$lib/server/utils/sessionAccess"
 
 export const GET: RequestHandler = async (event) => {
 	const { params } = event
@@ -42,7 +45,7 @@ export const GET: RequestHandler = async (event) => {
 	// data/users/{ownerId}/personas/{personaId}/{file}, and
 	// data/users/{ownerId}/backgrounds/{file} (personal, never shared).
 	// A non-owner may view a character/persona's images if they share a
-	// chat that includes it (mirrors the existing view-sharing model used
+	// session that includes it (mirrors the existing view-sharing model used
 	// elsewhere — canViewCharacter/canViewPersona); backgrounds (and
 	// anything else under a user's dir) stay owner-only. 404, not 403, on
 	// denial — no signal distinguishing "wrong owner" from "doesn't exist",
@@ -57,10 +60,7 @@ export const GET: RequestHandler = async (event) => {
 			const resourceType = segments[3]
 			const resourceId = Number(segments[4])
 			let allowed = false
-			if (
-				resourceType === "characters" &&
-				Number.isInteger(resourceId)
-			) {
+			if (resourceType === "characters" && Number.isInteger(resourceId)) {
 				allowed = await canViewCharacter(resourceId, user.id)
 			} else if (
 				resourceType === "personas" &&

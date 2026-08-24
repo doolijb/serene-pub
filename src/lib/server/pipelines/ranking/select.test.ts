@@ -9,7 +9,12 @@
  */
 
 import { describe, it, expect } from "vitest"
-import { score, select, renderSelection, type Candidate } from "$lib/server/pipelines/ranking/select"
+import {
+	score,
+	select,
+	renderSelection,
+	type Candidate
+} from "$lib/server/pipelines/ranking/select"
 import {
 	DEFAULT_RANKING,
 	DEFAULT_SIGNAL_WEIGHTS,
@@ -246,7 +251,9 @@ describe("group budgets", () => {
 			} as any)
 		})
 		const floored = sel.included.filter(
-			(d) => d.reason === "reserved_minimum" && d.candidate.source === "worldLore"
+			(d) =>
+				d.reason === "reserved_minimum" &&
+				d.candidate.source === "worldLore"
 		)
 		expect(floored).toHaveLength(2)
 		expect(floored[0]!.why).toMatch(/floor of 2 for worldLore/)
@@ -304,7 +311,7 @@ describe("group budgets", () => {
 describe("spillover", () => {
 	it("budget no group could use is offered to whoever can", () => {
 		// A share is a priority, not a cap. Without this, weighting world lore at
-		// 20% in a chat with no character lore would throw the rest away.
+		// 20% in a session with no character lore would throw the rest away.
 		const sel = select(
 			[
 				lore({ id: "w", source: "worldLore", tokens: 900 }),

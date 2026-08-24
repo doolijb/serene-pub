@@ -7,7 +7,7 @@
  * `populateLorebookEntryBindings`, and `templateContext.ts` folds bound lore
  * into the cast), and the legacy engines borrow it until they are deleted.
  */
-import type { BasePromptChat } from "$lib/server/connectionAdapters/BaseConnectionAdapter"
+import type { BasePromptSession } from "$lib/server/connectionAdapters/BaseConnectionAdapter"
 import type {
 	TemplateContextCharacter,
 	TemplateContextPersona
@@ -17,7 +17,7 @@ import { stripCardDecorators } from "$lib/shared/utils/characterCardDecorators"
 
 export function populateLorebookEntryBindings(
 	entry: SelectWorldLoreEntry | SelectCharacterLoreEntry | SelectHistoryEntry,
-	chat: BasePromptChat
+	session: BasePromptSession
 ): SelectWorldLoreEntry | SelectCharacterLoreEntry | SelectHistoryEntry {
 	// Applies regardless of whether {{char:#}} binding substitution below
 	// also applies (the early return right after this doesn't cover every
@@ -26,8 +26,8 @@ export function populateLorebookEntryBindings(
 	entry.content = stripCardDecorators(entry.content).content
 
 	const lorebook =
-		chat.lorebook && chat.lorebook.id === entry.lorebookId
-			? chat.lorebook
+		session.lorebook && session.lorebook.id === entry.lorebookId
+			? session.lorebook
 			: undefined
 	if (!lorebook) return entry
 
@@ -77,9 +77,9 @@ export function populateLorebookEntryBindings(
  * Character-lore privacy rule, shared by KeywordInfillEngine and
  * RagInfillEngine: a characterLoreEntry bound to a specific character is
  * that character's own private self-knowledge — visible only when
- * generating as that exact character, regardless of chatCharacters.visibility
+ * generating as that exact character, regardless of sessionCharacters.visibility
  * (HIDDEN/MINIMAL only governs description-block display, not lore) or
- * whether that character is even attached to this chat. World lore has no
+ * whether that character is even attached to this session. World lore has no
  * such binding and is never gated by this function.
  *
  * A binding with neither characterId nor personaId is a background/NPC
@@ -92,13 +92,13 @@ export function populateLorebookEntryBindings(
  */
 export function isCharacterLoreEntryVisible(
 	entry: SelectCharacterLoreEntry,
-	chat: BasePromptChat,
+	session: BasePromptSession,
 	currentCharacterId: number | null
 ): boolean {
 	if (!entry.lorebookBindingId) return false
-	const lorebook = chat.lorebook
+	const lorebook = session.lorebook
 	if (!lorebook) return false
-	if (chat.lorebookId !== entry.lorebookId) return false
+	if (session.lorebookId !== entry.lorebookId) return false
 
 	const binding = lorebook.lorebookBindings?.find(
 		(b: SelectLorebookBinding) => b.id === entry.lorebookBindingId
@@ -108,7 +108,7 @@ export function isCharacterLoreEntryVisible(
 	if (binding.characterId) {
 		return binding.characterId === currentCharacterId
 	} else if (binding.personaId) {
-		return (chat.chatPersonas || []).some(
+		return (session.sessionPersonas || []).some(
 			(cp) => cp.persona.id === binding.personaId
 		)
 	}
@@ -120,13 +120,13 @@ export function isCharacterLoreEntryVisible(
 export function attachCharacterLoreToCharacters(
 	characters: TemplateContextCharacter[],
 	includedCharacterLoreEntries: SelectCharacterLoreEntry[],
-	chat: BasePromptChat
+	session: BasePromptSession
 ): TemplateContextCharacter[] {
 	const loreMap: Record<number, Record<string, string>> = {}
 	includedCharacterLoreEntries.forEach((entry) => {
 		const lorebook =
-			chat.lorebook && chat.lorebook.id === entry.lorebookId
-				? chat.lorebook
+			session.lorebook && session.lorebook.id === entry.lorebookId
+				? session.lorebook
 				: undefined
 		if (!lorebook) return
 		const binding = lorebook.lorebookBindings.find(
@@ -138,12 +138,12 @@ export function attachCharacterLoreToCharacters(
 		}
 	})
 	return characters.map((char) => {
-		const chatChar = (chat.chatCharacters || []).find(
+		const sessionChar = (session.sessionCharacters || []).find(
 			(cc) =>
 				cc.character.nickname === char.nickname ||
 				cc.character.name === char.name
 		)
-		const charId = chatChar?.character?.id
+		const charId = sessionChar?.character?.id
 		return {
 			...char,
 			"extra lore":

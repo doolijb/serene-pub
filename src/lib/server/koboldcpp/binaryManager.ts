@@ -300,7 +300,10 @@ export async function downloadVariant(opts: {
 					res.on("data", (chunk: Buffer) => {
 						currentDownload!.downloaded += chunk.length
 						const now = Date.now()
-						if (now - lastProgressEmitAt >= PROGRESS_EMIT_THROTTLE_MS) {
+						if (
+							now - lastProgressEmitAt >=
+							PROGRESS_EMIT_THROTTLE_MS
+						) {
 							lastProgressEmitAt = now
 							emitProgress()
 						}
@@ -331,7 +334,10 @@ export async function downloadVariant(opts: {
 				const checksumText = await checksumResp.text()
 				// Typical sha256sum format is "<hex>  <filename>" — take just
 				// the leading hex token.
-				const expectedHex = checksumText.trim().split(/\s+/)[0]?.toLowerCase()
+				const expectedHex = checksumText
+					.trim()
+					.split(/\s+/)[0]
+					?.toLowerCase()
 				const fileBuffer = await fsPromises.readFile(destPath)
 				const actualHex = crypto
 					.createHash("sha256")

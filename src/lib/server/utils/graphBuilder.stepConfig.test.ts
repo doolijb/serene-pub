@@ -34,7 +34,7 @@ vi.mock("./getConnectionAdapter", () => ({
 	})
 }))
 
-const baseConn = { id: 1, name: "base-conn", type: "openai_chat" } as any
+const baseConn = { id: 1, name: "base-conn", type: "openai_session" } as any
 const baseSampling = { id: 1, name: "base-sampling" } as any
 
 /** label -> what the call actually ran with */
@@ -83,7 +83,7 @@ async function runBuild(steps?: any) {
 				historyEntry: { id: 1, year: 1, month: null, day: null },
 				participantCharacters: null,
 				mentionedCharacters: null,
-				chatId: 1,
+				sessionId: 1,
 				selectedMessageIds: [1]
 			}
 		] as any,
@@ -140,11 +140,19 @@ describe("per-step graph config", () => {
 	test("steps run on their own connection and sampling", async () => {
 		await runBuild({
 			perspective: {
-				connection: { id: 2, name: "fast-model", type: "openai_chat" },
+				connection: {
+					id: 2,
+					name: "fast-model",
+					type: "openai_session"
+				},
 				sampling: { id: 2, name: "precise" }
 			},
 			nodeDescription: {
-				connection: { id: 3, name: "prose-model", type: "openai_chat" },
+				connection: {
+					id: 3,
+					name: "prose-model",
+					type: "openai_session"
+				},
 				sampling: { id: 3, name: "creative" }
 			}
 		})
@@ -157,7 +165,11 @@ describe("per-step graph config", () => {
 	test("an unconfigured step falls back to the build-wide connection", async () => {
 		await runBuild({
 			perspective: {
-				connection: { id: 2, name: "fast-model", type: "openai_chat" },
+				connection: {
+					id: 2,
+					name: "fast-model",
+					type: "openai_session"
+				},
 				sampling: { id: 2, name: "precise" }
 			}
 		})

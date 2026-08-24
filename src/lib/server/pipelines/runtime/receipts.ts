@@ -12,7 +12,7 @@
  * future panel can show. But the parts people *query* — which node halted, how
  * long it took, which message it produced — are columns, so answering "why did
  * this reply include that lore" does not mean loading and walking JSON for every
- * run in a chat.
+ * run in a session.
  *
  * ## Writing a receipt never fails a turn
  *
@@ -27,7 +27,7 @@ import * as schema from "$lib/server/db/schema"
 import { eq, and, desc } from "drizzle-orm"
 
 export interface SaveReceiptScope {
-	chatId?: number
+	sessionId?: number
 	userId?: number
 	/** The message this run wrote, when the caller knows it. */
 	messageId?: number
@@ -54,7 +54,7 @@ export async function saveReceipt(
 				specSlug: receipt.specId,
 				specVersion: receipt.specVersion,
 				specVersionId: scope.specVersionId ?? null,
-				chatId: scope.chatId ?? null,
+				sessionId: scope.sessionId ?? null,
 				userId: scope.userId ?? null,
 				messageId: scope.messageId ?? null,
 				outcome: receipt.outcome,
@@ -88,7 +88,7 @@ export async function saveReceipt(
 
 		return row.id
 	} catch (err) {
-		// Logged loudly enough to notice, quiet enough not to break a chat.
+		// Logged loudly enough to notice, quiet enough not to break a session.
 		console.warn(
 			"[pipelines] could not record the run receipt — the turn itself was " +
 				"unaffected:",
@@ -124,12 +124,12 @@ export async function linkReceiptToMessage(
 	}
 }
 
-/** The runs for a chat, newest first — what a history panel lists. */
-export async function runsForChat(db: any, chatId: number, limit = 50) {
+/** The runs for a session, newest first — what a history panel lists. */
+export async function runsForSession(db: any, sessionId: number, limit = 50) {
 	return await db
 		.select()
 		.from(schema.pipelineRuns)
-		.where(eq(schema.pipelineRuns.chatId, chatId))
+		.where(eq(schema.pipelineRuns.sessionId, sessionId))
 		.orderBy(desc(schema.pipelineRuns.id))
 		.limit(limit)
 }
@@ -159,19 +159,19 @@ export async function runForMessage(db: any, messageId: number) {
 }
 
 /**
- * Whether a chat's last reply came from the pipeline.
+ * Whether a session's last reply came from the pipeline.
  *
  * Exists because the honest answer to "how do I know it is using the new path"
- * should be a query rather than a claim. A chat with no rows here was answered
+ * should be a query rather than a claim. A session with no rows here was answered
  * by the legacy builder — there is no third possibility.
  */
-export async function lastRunFor(db: any, chatId: number) {
+export async function lastRunFor(db: any, sessionId: number) {
 	const [run] = await db
 		.select()
 		.from(schema.pipelineRuns)
 		.where(
 			and(
-				eq(schema.pipelineRuns.chatId, chatId),
+				eq(schema.pipelineRuns.sessionId, sessionId),
 				eq(schema.pipelineRuns.isPreview, false)
 			)
 		)

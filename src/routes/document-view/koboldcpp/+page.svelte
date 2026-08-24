@@ -273,10 +273,7 @@
 		socket.on("koboldcpp:searchModels", handleSearchModels)
 		socket.on("koboldcpp:downloadModel", handleDownloadModel)
 		socket.on("koboldcpp:downloadModel:error", handleDownloadModelError)
-		socket.on(
-			"koboldcpp:getDownloadProgress",
-			handleGetDownloadProgress
-		)
+		socket.on("koboldcpp:getDownloadProgress", handleGetDownloadProgress)
 		socket.on("koboldcpp:downloadProgress", handleDownloadProgress)
 		socket.on("koboldcpp:recommendedModels", handleRecommendedModels)
 		socket.on(

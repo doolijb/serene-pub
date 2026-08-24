@@ -77,7 +77,10 @@ describe("users:update — privilege revocation (PGlite integration)", () => {
 			emitToUser
 		)
 
-		expect(calls).toEqual(["emit:users:update", `disconnect:user_${target.id}`])
+		expect(calls).toEqual([
+			"emit:users:update",
+			`disconnect:user_${target.id}`
+		])
 
 		const reloaded = await testDb.query.users.findFirst({
 			where: eq(schema.users.id, target.id)
@@ -96,7 +99,10 @@ describe("users:update — privilege revocation (PGlite integration)", () => {
 			emitToUser
 		)
 
-		expect(calls).toEqual(["emit:users:update", `disconnect:user_${admin.id}`])
+		expect(calls).toEqual([
+			"emit:users:update",
+			`disconnect:user_${admin.id}`
+		])
 	})
 
 	test("an update that doesn't touch isAdmin doesn't force a disconnect", async () => {
@@ -185,6 +191,9 @@ describe("users:delete — privilege revocation (PGlite integration)", () => {
 			emitToUser
 		)
 
-		expect(calls).toEqual(["emit:users:delete", `disconnect:user_${target.id}`])
+		expect(calls).toEqual([
+			"emit:users:delete",
+			`disconnect:user_${target.id}`
+		])
 	})
 })

@@ -163,7 +163,7 @@
 	let navItems = $derived.by((): NavItem[] => {
 		const items: NavItem[] = [
 			{ href: "/document-view", label: "Home", show: true },
-			{ href: "/document-view/chats", label: "Chats", show: true },
+			{ href: "/document-view/sessions", label: "Sessions", show: true },
 			{
 				href: "/document-view/characters",
 				label: "Characters",
@@ -322,9 +322,9 @@
 
 	<footer class="a11y-footer">
 		<p>
-			Serene Pub is in beta. Document View is a simplified,
-			high-contrast, keyboard- and screen-reader-friendly alternative to
-			the standard interface.
+			Serene Pub is in beta. Document View is a simplified, high-contrast,
+			keyboard- and screen-reader-friendly alternative to the standard
+			interface.
 		</p>
 	</footer>
 </div>

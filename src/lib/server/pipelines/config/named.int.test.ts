@@ -20,7 +20,10 @@ import { describe, it, expect, beforeAll } from "vitest"
 import { and, eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
-import { bootstrapPipelines, RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import {
+	bootstrapPipelines,
+	RESPOND_SPEC_ID
+} from "$lib/server/pipelines/boot/bootstrap"
 import {
 	ensureDefaultConfig,
 	reconcileConfigs,
@@ -243,7 +246,7 @@ describe("which config a scope has selected", () => {
 	 * that is a foreign key rather than a check every read has to remember.
 	 */
 	let userId: number
-	let chatId: number
+	let sessionId: number
 	let mine: number
 
 	beforeAll(async () => {
@@ -252,11 +255,11 @@ describe("which config a scope has selected", () => {
 			.values({ username: "selection-test", isAdmin: false })
 			.returning()
 		userId = user.id
-		const [chat] = await db
-			.insert(schema.chats)
+		const [session] = await db
+			.insert(schema.sessions)
 			.values({ userId, isGroup: false })
 			.returning()
-		chatId = chat.id
+		sessionId = session.id
 
 		const [config] = await db
 			.insert(schema.pipelineConfigs)
@@ -270,7 +273,7 @@ describe("which config a scope has selected", () => {
 			db as any,
 			specId,
 			RESPOND_SPEC_ID,
-			{ userId }
+			{}
 		)
 		expect(res!.source).toBe("shipped")
 
@@ -286,28 +289,32 @@ describe("which config a scope has selected", () => {
 		expect(res!.configId).toBe(shipped.id)
 	})
 
-	it("prefers the nearer scope, chat over user over instance", async () => {
+	it("prefers the nearer scope, session over instance — the whole chain now", async () => {
+		// The user step is gone (ruled 2026-08-24): a person's choice of
+		// config is made per session, or it is the instance's.
 		await selectConfig(db as any, specId, "instance", 0, mine, userId)
 		expect(
-			(await resolveSelectedConfig(db as any, specId, RESPOND_SPEC_ID, {
-				userId
-			}))!.source
+			(await resolveSelectedConfig(
+				db as any,
+				specId,
+				RESPOND_SPEC_ID,
+				{}
+			))!.source
 		).toBe("instance")
 
-		await selectConfig(db as any, specId, "user", userId, mine, userId)
+		await selectConfig(
+			db as any,
+			specId,
+			"session",
+			sessionId,
+			mine,
+			userId
+		)
 		expect(
 			(await resolveSelectedConfig(db as any, specId, RESPOND_SPEC_ID, {
-				userId
+				sessionId
 			}))!.source
-		).toBe("user")
-
-		await selectConfig(db as any, specId, "chat", chatId, mine, userId)
-		expect(
-			(await resolveSelectedConfig(db as any, specId, RESPOND_SPEC_ID, {
-				userId,
-				chatId
-			}))!.source
-		).toBe("chat")
+		).toBe("session")
 	})
 
 	it("returns a scope to the shipped default when its config is deleted", async () => {
@@ -329,7 +336,7 @@ describe("which config a scope has selected", () => {
 			db as any,
 			specId,
 			RESPOND_SPEC_ID,
-			{ userId, chatId }
+			{ sessionId }
 		)
 		expect(res!.source).toBe("shipped")
 	})
@@ -348,7 +355,14 @@ describe("which config a scope has selected", () => {
 			.returning()
 
 		await expect(
-			selectConfig(db as any, specId, "user", userId, foreign.id, userId)
+			selectConfig(
+				db as any,
+				specId,
+				"session",
+				sessionId,
+				foreign.id,
+				userId
+			)
 		).rejects.toThrow(/different pipeline/i)
 	})
 })
@@ -426,9 +440,10 @@ describe("the narrator split, from an older configuration", () => {
 			.map((v: any) => v.path)
 		expect(paths).not.toContain("exampleDialogue")
 		expect(paths).not.toContain("speakerRelationships")
-		expect(paths, "a layout the narrator does render was culled too").toContain(
-			"characters"
-		)
+		expect(
+			paths,
+			"a layout the narrator does render was culled too"
+		).toContain("characters")
 	})
 
 	it("keeps the dropped values on the record rather than discarding them", async () => {

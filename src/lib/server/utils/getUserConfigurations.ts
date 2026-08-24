@@ -45,7 +45,7 @@ export async function getUserConfigurations(
 			: undefined
 
 		// Resolve narrator prompt config (userSettings -> systemSettings fallback).
-		// Optional — a chat can generate normally without one configured; only
+		// Optional — a session can generate normally without one configured; only
 		// triggering a Narrator response actually requires it.
 		const narratorPromptConfigId =
 			userSettings?.activeNarratorPromptConfigId ??

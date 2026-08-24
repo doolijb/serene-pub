@@ -36,8 +36,7 @@ export function resolveBackgroundImagePath(
 ): string | null {
 	if (!storedPath) return storedPath ?? null
 	const match = storedPath.match(/^\/backgrounds\/defaults\/(.+)\.jpg$/)
-	if (!match || !LEGACY_DEFAULT_JPG_BASENAMES.has(match[1]))
-		return storedPath
+	if (!match || !LEGACY_DEFAULT_JPG_BASENAMES.has(match[1])) return storedPath
 	return `/backgrounds/defaults/${match[1]}.webp`
 }
 

@@ -196,6 +196,19 @@
 
 	// ── Summarization functions ──────────────────────────────────────────────
 
+	function handleScriptsEnabledClick(event: { checked: boolean }) {
+		if (!userCtx.user?.isAdmin) {
+			toaster.error({
+				title: "Access denied",
+				description: "Admin privileges required"
+			})
+			return
+		}
+		socket?.emit("systemSettings:updateScriptsEnabled", {
+			enabled: event.checked
+		})
+	}
+
 	function handleSummarizationEnabledClick(event: { checked: boolean }) {
 		if (!userCtx.user?.isAdmin) {
 			toaster.error({
@@ -747,17 +760,47 @@
 			</div>
 		{/if}
 
+		<!-- Scripts (the fourth paradigm's kill switch, 18 §10) -->
+		<div class="card preset-tonal space-y-4 p-4">
+			<h3 class="text-lg font-semibold">Scripts</h3>
+
+			<p class="text-muted-foreground text-sm">
+				User-authored scripts that transform pipeline runs — slop
+				filters, stop guards, reminders at a depth. Off is a recovery
+				lever, not a purge: every chain and attachment stays in place
+				and simply does nothing until this is switched back on.
+			</p>
+
+			<div class="flex items-center gap-2">
+				<Switch
+					name="scripts-enabled"
+					checked={systemSettingsCtx.settings?.scriptsEnabled ?? true}
+					onCheckedChange={handleScriptsEnabledClick}
+				>
+					<Switch.Control
+						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+					>
+						<Switch.Thumb />
+					</Switch.Control>
+					<Switch.HiddenInput />
+					<Switch.Label class="font-semibold">
+						Enable Scripts
+					</Switch.Label>
+				</Switch>
+			</div>
+		</div>
+
 		<!-- Summarization Settings -->
 		<div class="card preset-tonal space-y-4 p-4">
 			<h3 class="text-lg font-semibold">Summarization</h3>
 
 			<p class="text-muted-foreground text-sm">
-				When enabled, you can select a range of chat messages and
+				When enabled, you can select a range of session messages and
 				generate a Scene Summary from them (via an LLM), which feeds the
 				Narrative Graph and can become a lorebook history entry. This is
-				a manual, per-chat action — nothing runs automatically, and the
-				original messages are never removed or replaced during prompt
-				construction.
+				a manual, per-session action — nothing runs automatically, and
+				the original messages are never removed or replaced during
+				prompt construction.
 			</p>
 
 			<div class="flex items-center gap-2">
@@ -785,7 +828,7 @@
 		<div class="card preset-tonal space-y-4 p-4">
 			<h3 class="text-lg font-semibold">Context Debugging</h3>
 			<p class="text-muted-foreground text-sm">
-				When enabled, shows the prompt inspector tab in the chat UI,
+				When enabled, shows the prompt inspector tab in the session UI,
 				computes full RAG and infill diagnostics, and saves compiled
 				prompt metadata alongside each generated message for later
 				inspection.

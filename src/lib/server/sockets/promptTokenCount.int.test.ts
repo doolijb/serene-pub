@@ -1,5 +1,5 @@
 /**
- * `chats:promptTokenCount`, the live draft preview.
+ * `sessions:promptTokenCount`, the live draft preview.
  *
  * It used to construct an adapter and call `compilePrompt`, which ran the legacy
  * infill engines — so the number on screen came from a code path that no longer
@@ -25,7 +25,7 @@ import * as schema from "$lib/server/db/schema"
 let db: TestDb
 let dataDir: string
 let userId: number
-let chatId: number
+let sessionId: number
 
 vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
@@ -118,23 +118,23 @@ beforeAll(async () => {
 		content: "Riders who patrol the ash wastes."
 	})
 
-	const [chat] = await db
-		.insert(schema.chats)
+	const [session] = await db
+		.insert(schema.sessions)
 		.values({ userId, isGroup: false, lorebookId: lorebook.id })
 		.returning()
-	chatId = chat.id
+	sessionId = session.id
 
-	await db.insert(schema.chatCharacters).values({
-		chatId,
+	await db.insert(schema.sessionCharacters).values({
+		sessionId,
 		characterId: character.id,
 		isActive: true,
 		visibility: "visible"
 	})
 	await db
-		.insert(schema.chatPersonas)
-		.values({ chatId, personaId: persona.id })
-	await db.insert(schema.chatMessages).values({
-		chatId,
+		.insert(schema.sessionPersonas)
+		.values({ sessionId, personaId: persona.id })
+	await db.insert(schema.sessionMessages).values({
+		sessionId,
 		role: "user",
 		content: "Have you seen the ashguard?",
 		personaId: persona.id
@@ -146,15 +146,15 @@ afterAll(async () => {
 })
 
 const count = async (content = "Have you seen the ashguard?") => {
-	const { promptTokenCountHandler } = await import("./chats")
+	const { promptTokenCountHandler } = await import("./sessions")
 	return (await promptTokenCountHandler.handler(
 		fakeSocket(userId),
-		{ chatId, content } as any,
+		{ sessionId, content } as any,
 		noopEmit
 	)) as any
 }
 
-describe("chats:promptTokenCount compiles through the pipeline", () => {
+describe("sessions:promptTokenCount compiles through the pipeline", () => {
 	test("returns a prompt rather than an error", async () => {
 		const res = await count()
 		expect(res.error).toBeUndefined()
@@ -196,13 +196,13 @@ describe("chats:promptTokenCount compiles through the pipeline", () => {
 	test("writes nothing — it is a preview", async () => {
 		const before = await db
 			.select()
-			.from(schema.chatMessages)
-			.where(eq(schema.chatMessages.chatId, chatId))
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.sessionId, sessionId))
 		await count()
 		const after = await db
 			.select()
-			.from(schema.chatMessages)
-			.where(eq(schema.chatMessages.chatId, chatId))
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.sessionId, sessionId))
 		expect(after.length).toBe(before.length)
 	})
 })

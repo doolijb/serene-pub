@@ -4,7 +4,7 @@
  * Post-merge (see the lorebookBindings/narrativeNodes merge plan), every
  * character — real or background/NPC — is exactly one lorebookBindings row,
  * so this now runs a single query instead of the three separate ones
- * (chat characters/personas, lorebook bindings, narrative nodes) it used to.
+ * (session characters/personas, lorebook bindings, narrative nodes) it used to.
  * A fourth former source — names mined from prior scenes'
  * participantCharacters/mentionedCharacters — is gone entirely: those
  * columns now store binding ids directly (resolved via this file's
@@ -233,7 +233,7 @@ function mergeIntoExisting(
 			}
 		}
 		// A real binding id always wins over a placeholder null — this can
-		// happen if an earlier merge (e.g. a chat character resolved before
+		// happen if an earlier merge (e.g. a session character resolved before
 		// its binding was confirmed) recorded null first.
 		if (entry.id === null && id !== null) entry.id = id
 		return entry
@@ -242,7 +242,7 @@ function mergeIntoExisting(
 }
 
 // Round-12 audit fix (MEDIUM): mergeIntoExisting is O(entries) per call, and
-// buildSceneCastList calls it once per chat char/persona and once per
+// buildSceneCastList calls it once per session char/persona and once per
 // binding — net O(n^2) Levenshtein-based fuzzy matching, synchronous JS on
 // Node's single event loop. Same cap/rationale as the sibling
 // duplicateBindingDetection.ts's MAX_BINDINGS_FOR_DUPLICATE_DETECTION, but
@@ -300,7 +300,7 @@ function isStrictlyBefore(
 export async function buildSceneCastList(
 	sceneId: number | null,
 	lorebookId: number,
-	chatId: number | null,
+	sessionId: number | null,
 	dbInstance?: DbLike
 ): Promise<CastEntry[]> {
 	const db = dbInstance ?? (await defaultDb())
@@ -308,7 +308,7 @@ export async function buildSceneCastList(
 
 	// ── Current scene's timeline position ─────────────────────────────────
 	// `sceneId` is null when drafting a brand-new scene that doesn't exist
-	// yet (chats:summarize, before scenes:create) — there's no timeline
+	// yet (sessions:summarize, before scenes:create) — there's no timeline
 	// position to filter against, so every background/NPC binding is left
 	// in scope (see the `currentPos` guard below, which then never fires).
 	const currentScene =
@@ -364,12 +364,12 @@ export async function buildSceneCastList(
 		)
 	}
 
-	// ── Chat characters/personas — priority merge slot (their binding, if
+	// ── Session characters/personas — priority merge slot (their binding, if
 	// one exists yet, always wins the canonical name/id) ────────────────────
-	if (chatId) {
-		const [chatChars, chatPersonas] = await Promise.all([
-			db.query.chatCharacters.findMany({
-				where: eq(schema.chatCharacters.chatId, chatId),
+	if (sessionId) {
+		const [sessionChars, sessionPersonas] = await Promise.all([
+			db.query.sessionCharacters.findMany({
+				where: eq(schema.sessionCharacters.sessionId, sessionId),
 				with: {
 					character: {
 						columns: {
@@ -381,8 +381,8 @@ export async function buildSceneCastList(
 					}
 				}
 			}),
-			db.query.chatPersonas.findMany({
-				where: eq(schema.chatPersonas.chatId, chatId),
+			db.query.sessionPersonas.findMany({
+				where: eq(schema.sessionPersonas.sessionId, sessionId),
 				with: {
 					persona: {
 						columns: { id: true, name: true, aliases: true }
@@ -391,7 +391,7 @@ export async function buildSceneCastList(
 			})
 		])
 
-		for (const cc of chatChars) {
+		for (const cc of sessionChars) {
 			const char = (cc as any).character
 			if (!char?.name) continue
 			const binding = bindingByCharacterId.get(char.id)
@@ -403,7 +403,7 @@ export async function buildSceneCastList(
 			mergeOrPush(entries, name, aliases, binding?.id ?? null, skipDedup)
 		}
 
-		for (const cp of chatPersonas) {
+		for (const cp of sessionPersonas) {
 			const persona = (cp as any).persona
 			if (!persona?.name) continue
 			const binding = bindingByPersonaId.get(persona.id)
@@ -501,7 +501,7 @@ export async function buildSceneCastList(
  * plain suggested name (deduped case-insensitively) instead of being minted
  * into a row — creation is deferred to the caller's own review/Save step
  * (see resolveOrCreateBindingByName below, used at Save time by the
- * scenes:process and chats:summarize review screens).
+ * scenes:process and sessions:summarize review screens).
  */
 /**
  * The single cast entry `name` refers to, or undefined if that is ambiguous.
@@ -577,7 +577,7 @@ export function resolveCharacterRefs(
  *
  * Only used by callers with no review step downstream (narrativeGraph.ts's
  * direct-history-entry path and the scene-character-ids backfill script) —
- * scenes:process and chats:summarize, which do have a Review & Save screen,
+ * scenes:process and sessions:summarize, which do have a Review & Save screen,
  * use resolveCharacterRefs()'s non-creating suggestions instead and only
  * create bindings via resolveOrCreateBindingByName() once the user accepts
  * them at Save.
@@ -632,7 +632,7 @@ export async function resolveCharacterNamesToBindingIds(
  * Resolves a single free-form name to a real lorebookBindings id, creating
  * a new unbound (background/NPC) binding only if nothing in the lorebook's
  * current cast already matches — used at Save time by scenes:process and
- * chats:summarize's review screens to turn an accepted "suggested new
+ * sessions:summarize's review screens to turn an accepted "suggested new
  * character" (from extraction or manually typed) into a real binding,
  * without risking a duplicate.
  *
@@ -697,7 +697,7 @@ export async function resolveOrCreateBindingByName(
  * sender) — not narrowly scoped to just the sender-derived ids — so a
  * character the LLM itself double-listed in both arrays never survives in
  * mentioned just because it wasn't a message sender. Pure/no I/O: used by
- * both chats:summarize and scenes:process after each resolves its own
+ * both sessions:summarize and scenes:process after each resolves its own
  * sender binding ids.
  */
 export function reconcileParticipantsAndMentioned(

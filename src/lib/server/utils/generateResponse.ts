@@ -6,7 +6,7 @@ import { getConnectionAdapter } from "./getConnectionAdapter"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { getUserConfigurations } from "./getUserConfigurations"
-import { broadcastToChatUsers } from "../sockets/utils/broadcastHelpers"
+import { broadcastToSessionUsers } from "../sockets/utils/broadcastHelpers"
 import { buildGraphContext } from "./graphContextFormatter"
 import { llmQueue, isQueueCancellation } from "./llmQueue"
 import {
@@ -16,8 +16,8 @@ import {
 import { resolveTaskConfig } from "./resolveTaskConfig"
 import { resolveNarratorPromptConfig } from "./resolveNarratorPromptConfig"
 import {
-	autoEnqueueChat,
-	ensureChatMessageEmbedded
+	autoEnqueueSession,
+	ensureSessionMessageEmbedded
 } from "$lib/server/embedding/vectorizationQueue"
 
 /**
@@ -119,18 +119,39 @@ type GenerateExecuteResult =
 export async function generateResponse({
 	socket,
 	emitToUser,
-	chatId,
+	sessionId,
 	userId,
 	generatingMessage
 }: {
 	socket: any
 	emitToUser: (event: string, data: any) => void
-	chatId: number
+	sessionId: number
 	userId: number
-	generatingMessage: SelectChatMessage
+	generatingMessage: SelectSessionMessage
 }): Promise<boolean> {
+	// A session whose mode disappeared is read-only (19 §6): every generation
+	// path — trigger, continue, regenerate, swipe, narrator — funnels through
+	// here, so this one guard is the whole rule. The standard mode is the F29
+	// floor, so ordinary sessions can never trip it. Checked before the "queued"
+	// write so the message row never flips to generating.
+	{
+		const { sessionModeAvailable } = await import(
+			"$lib/server/pipelines/entities/sessionModes"
+		)
+		const modeCheck = await sessionModeAvailable(db as any, sessionId)
+		if (!modeCheck.available) {
+			await persistGenerationErrorRow(
+				socket.io,
+				generatingMessage.sessionId,
+				generatingMessage.id,
+				new Error(modeCheck.reason)
+			)
+			return false
+		}
+	}
+
 	// Get the current message content before updating
-	const currentMessage = await db.query.chatMessages.findFirst({
+	const currentMessage = await db.query.sessionMessages.findFirst({
 		where: (cm, { eq }) => eq(cm.id, generatingMessage.id)
 	})
 	const preservedContent = currentMessage?.content || ""
@@ -156,7 +177,7 @@ export async function generateResponse({
 
 	// Initial write: enter the pipeline as "queued" — no queue item exists yet.
 	await db
-		.update(schema.chatMessages)
+		.update(schema.sessionMessages)
 		.set({
 			isGenerating: true,
 			generationStage: "queued",
@@ -165,10 +186,10 @@ export async function generateResponse({
 			queueItemId: null,
 			metadata: clearedMeta
 		})
-		.where(eq(schema.chatMessages.id, generatingMessage.id))
+		.where(eq(schema.sessionMessages.id, generatingMessage.id))
 
-	const req: Sockets.ChatMessage.Call = {
-		chatMessage: {
+	const req: Sockets.SessionMessage.Call = {
+		sessionMessage: {
 			...generatingMessage,
 			isGenerating: true,
 			generationStage: "queued",
@@ -179,10 +200,10 @@ export async function generateResponse({
 		}
 	}
 
-	await broadcastToChatUsers(
+	await broadcastToSessionUsers(
 		socket.io,
-		generatingMessage.chatId,
-		"chatMessage",
+		generatingMessage.sessionId,
+		"sessionMessage",
 		req
 	)
 
@@ -192,20 +213,20 @@ export async function generateResponse({
 	// Determine if we're continuing an existing message
 	const isContinuing = preservedContent.length > 0
 
-	const chat = await db.query.chats.findFirst({
-		where: (c, { eq }) => eq(c.id, chatId),
+	const session = await db.query.sessions.findFirst({
+		where: (c, { eq }) => eq(c.id, sessionId),
 		with: {
-			chatCharacters: {
+			sessionCharacters: {
 				with: {
 					character: true
 				}
 			},
-			chatPersonas: {
+			sessionPersonas: {
 				with: {
 					persona: true
 				}
 			},
-			chatMessages: {
+			sessionMessages: {
 				// Always exclude the generating message from history
 				where: (cm, { ne }) => ne(cm.id, generatingMessage.id),
 				orderBy: (cm, { asc }) => asc(cm.id)
@@ -232,12 +253,12 @@ export async function generateResponse({
 		}
 	})
 
-	if (!chat) {
+	if (!session) {
 		await persistGenerationErrorRow(
 			socket.io,
-			generatingMessage.chatId,
+			generatingMessage.sessionId,
 			generatingMessage.id,
-			new Error("Chat not found.")
+			new Error("Session not found.")
 		)
 		return false
 	}
@@ -245,14 +266,14 @@ export async function generateResponse({
 	// If continuing, signal the PromptBuilder to use preservedContent as the
 	// prefill (-2 placeholder) rather than inserting a duplicate message.
 	// Adding a separate synthetic message causes two consecutive assistant
-	// entries in chat-completion APIs and a wrongly-closed block for text-
+	// entries in session-completion APIs and a wrongly-closed block for text-
 	// completion formats.
 	if (isContinuing) {
-		;(chat as any)._continuationPrefill = preservedContent
+		;(session as any)._continuationPrefill = preservedContent
 	}
 
 	// Get context/prompt config from user settings; resolve connection+sampling via
-	// resolveTaskConfig (chat override → prompt config override → system default)
+	// resolveTaskConfig (session override → prompt config override → system default)
 	const {
 		sampling: defaultSampling,
 		contextConfig,
@@ -260,22 +281,22 @@ export async function generateResponse({
 	} = await getUserConfigurations(userId)
 
 	// Narrator response: a manually-triggered, non-character narration/environment
-	// message — uses its own "Chat Prompts: Narrator" config instead of the
-	// chat's normal prompt config. The chat's own override (set via Edit Chat)
+	// message — uses its own "Session Prompts: Narrator" config instead of the
+	// session's normal prompt config. The session's own override (set via Edit Session)
 	// wins over the user's active/system-default pick — see
 	// resolveNarratorPromptConfig.ts.
 	const isNarratorResponseMode = !!generatingMessage.isNarratorResponse
 	const narratorPromptConfig = isNarratorResponseMode
-		? await resolveNarratorPromptConfig(chat, userId)
+		? await resolveNarratorPromptConfig(session, userId)
 		: null
 
 	if (isNarratorResponseMode && !narratorPromptConfig) {
 		await persistGenerationErrorRow(
 			socket.io,
-			generatingMessage.chatId,
+			generatingMessage.sessionId,
 			generatingMessage.id,
 			new Error(
-				"No Narrator prompt config configured. Set one up under Chat Prompts: Narrator in Settings."
+				"No Narrator prompt config configured. Set one up under Session Prompts: Narrator in Settings."
 			)
 		)
 		return false
@@ -285,12 +306,12 @@ export async function generateResponse({
 		? await resolveTaskConfig({
 				taskType: "narratorPrompt",
 				narratorPromptConfigId: narratorPromptConfig!.id,
-				chatId
+				sessionId
 			})
 		: await resolveTaskConfig({
-				taskType: "chat",
+				taskType: "session",
 				promptConfigId: promptConfig?.id,
-				chatId
+				sessionId
 			})
 	const connection = resolved.connection
 	const sampling = resolved.sampling ?? defaultSampling
@@ -298,7 +319,7 @@ export async function generateResponse({
 	if (!connection) {
 		await persistGenerationErrorRow(
 			socket.io,
-			generatingMessage.chatId,
+			generatingMessage.sessionId,
 			generatingMessage.id,
 			new Error(
 				"No AI connection configured. Please set up a connection first."
@@ -316,8 +337,8 @@ export async function generateResponse({
 	// truthy value here unconditionally short-circuited it, so a user who
 	// picked a precise tokenizer to size context correctly never actually
 	// got it for a real generation (only for the prompt-preview path, which
-	// already resolves this correctly — see chats.ts's
-	// `chats:promptTokenCount` handler for the same pattern).
+	// already resolves this correctly — see sessions.ts's
+	// `sessions:promptTokenCount` handler for the same pattern).
 	const tokenCounter = new TokenCounters(
 		(connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
 	)
@@ -341,25 +362,25 @@ export async function generateResponse({
 		isNarratorResponse: isNarratorResponseMode
 	}
 
-	// chatCharacters/chatPersonas rows can have a null character/persona when
+	// sessionCharacters/sessionPersonas rows can have a null character/persona when
 	// the linked row was deleted (the FK is nullable, onDelete: "set null") —
 	// filter those out since there's nothing left to prompt-build from, and
-	// BasePromptChat (shared by every adapter) requires the relation to be
+	// BasePromptSession (shared by every adapter) requires the relation to be
 	// populated for the rows it does list.
-	const adapterChat = {
-		...chat,
-		chatCharacters: (chat.chatCharacters ?? []).filter(
+	const adapterSession = {
+		...session,
+		sessionCharacters: (session.sessionCharacters ?? []).filter(
 			(cc): cc is typeof cc & { character: SelectCharacter } =>
 				cc.character !== null
 		),
-		chatPersonas: (chat.chatPersonas ?? []).filter(
+		sessionPersonas: (session.sessionPersonas ?? []).filter(
 			(cp): cp is typeof cp & { persona: SelectPersona } =>
 				cp.persona !== null
 		)
 	}
 
 	const adapter = new Adapter({
-		chat: adapterChat,
+		session: adapterSession,
 		connection: connection,
 		sampling: sampling,
 		contextConfig: contextConfig,
@@ -397,19 +418,43 @@ export async function generateResponse({
 	 * rather than a rewrite of this file.
 	 */
 	{
-		const { runTurn } = await import("$lib/server/pipelines/runtime/runTurn")
+		const { runTurn } = await import(
+			"$lib/server/pipelines/runtime/runTurn"
+		)
 		const { NARRATE_SPEC_ID } = await import(
 			"$lib/server/pipelines/specs/narrate"
 		)
+		const { RESPOND_SPEC_ID } = await import(
+			"$lib/server/pipelines/boot/bootstrap"
+		)
+		// Function routing (19 §3, U-C3): the trigger names a function, the
+		// mode's contributors answer it — respond from the bucket, narrate
+		// from the narrate spec's own contributed trigger. The hardcoded
+		// spec choice is gone; what remains hardcoded is the *flag* naming
+		// the function, which dies with the trigger-driven UI (U-C5). A null
+		// resolution (registry never synced) falls to the F29 floor — routing
+		// failing degrades to built-in behaviour, never blocks the turn.
+		const { resolveFunctionSpec, STANDARD_MODE_ID } = await import(
+			"$lib/server/pipelines/entities/sessionModes"
+		)
+		const functionKey = isNarratorResponseMode ? "narrate" : "respond"
+		const specId =
+			(await resolveFunctionSpec(
+				db,
+				(session as any).modeId ?? STANDARD_MODE_ID,
+				functionKey,
+				// The binding selects (19 §3, simplified 2026-08-24): this
+				// session's choice among the eligible, else the instance's,
+				// before the companion default.
+				{ sessionId }
+			)) ?? (isNarratorResponseMode ? NARRATE_SPEC_ID : RESPOND_SPEC_ID)
 		const receipt = await runTurn({
 			db,
-			chatId,
+			sessionId,
 			userId,
 			currentCharacterId: adapter.currentCharacterId,
 			text: preservedContent || "",
-			// The narrator is its own pipeline and namespace, with its own
-			// configs — not the respond spec wearing a different prompt.
-			...(isNarratorResponseMode ? { specId: NARRATE_SPEC_ID } : {}),
+			specId,
 			// Stops at the pre-call substrate with the real payload: the
 			// adapter below is what actually sends it.
 			preview: true
@@ -457,11 +502,11 @@ export async function generateResponse({
 	// once instructions actually exists, the same mechanism
 	// narratorInstructions already uses for the equivalent per-trigger-note
 	// case.
-	if (!isNarratorResponseMode && chat?.lorebookId) {
+	if (!isNarratorResponseMode && session?.lorebookId) {
 		try {
 			const graphCtx = await buildGraphContext({
-				chatId,
-				lorebookId: chat.lorebookId,
+				sessionId,
+				lorebookId: session.lorebookId,
 				speakerCharacterId: generatingMessage.characterId ?? null,
 				speakerPersonaId: null
 			})
@@ -476,7 +521,7 @@ export async function generateResponse({
 		}
 	}
 
-	const currentCharacter = chat?.chatCharacters?.find(
+	const currentCharacter = session?.sessionCharacters?.find(
 		(cc) => cc.character?.id === adapter.currentCharacterId
 	)
 
@@ -505,16 +550,16 @@ export async function generateResponse({
 	// closes the race where a very-fast Stop click finds nothing to cancel.
 	const queueItemId = uuidv4()
 	await db
-		.update(schema.chatMessages)
+		.update(schema.sessionMessages)
 		.set({ queueItemId })
-		.where(eq(schema.chatMessages.id, generatingMessage.id))
+		.where(eq(schema.sessionMessages.id, generatingMessage.id))
 
 	const { done } = llmQueue.enqueue<GenerateExecuteResult>(
 		{
-			taskType: isNarratorResponseMode ? "narratorPrompt" : "chat",
+			taskType: isNarratorResponseMode ? "narratorPrompt" : "session",
 			connectionName: resolved.connectionName,
 			samplingName: resolved.samplingName,
-			chatId,
+			sessionId,
 			messageId: generatingMessage.id,
 			label: isNarratorResponseMode ? "Narrator" : charName || undefined,
 			userId,
@@ -524,7 +569,7 @@ export async function generateResponse({
 					signal,
 					adapter,
 					socket,
-					chatId,
+					sessionId,
 					generatingMessage,
 					startString,
 					isContinuing,
@@ -536,7 +581,7 @@ export async function generateResponse({
 			onStatusChange: (status) =>
 				persistGenerationStage(
 					generatingMessage.id,
-					generatingMessage.chatId,
+					generatingMessage.sessionId,
 					socket.io,
 					status
 				)
@@ -554,19 +599,19 @@ export async function generateResponse({
 		const { isAborted } = result
 
 		// Fetch the updated message for the response
-		const updatedMsg = await db.query.chatMessages.findFirst({
+		const updatedMsg = await db.query.sessionMessages.findFirst({
 			where: (cm, { eq }) => eq(cm.id, generatingMessage.id)
 		})
-		const response: Sockets.ChatMessages.SendPersonaMessage.Response = {
-			chatMessage: updatedMsg!
+		const response: Sockets.SessionMessages.SendPersonaMessage.Response = {
+			sessionMessage: updatedMsg!
 		}
 		socket.io.to("user_" + userId).emit("personaMessageReceived", response)
-		await broadcastToChatUsers(
+		await broadcastToSessionUsers(
 			socket.io,
-			updatedMsg!.chatId,
-			"chatMessage",
+			updatedMsg!.sessionId,
+			"sessionMessage",
 			{
-				chatMessage: updatedMsg!
+				sessionMessage: updatedMsg!
 			}
 		)
 
@@ -579,7 +624,7 @@ export async function generateResponse({
 		}
 		await persistGenerationErrorRow(
 			socket.io,
-			generatingMessage.chatId,
+			generatingMessage.sessionId,
 			generatingMessage.id,
 			err
 		)
@@ -597,7 +642,7 @@ async function runGenerateAndPersist({
 	signal,
 	adapter,
 	socket,
-	chatId,
+	sessionId,
 	generatingMessage,
 	startString,
 	isContinuing,
@@ -608,15 +653,15 @@ async function runGenerateAndPersist({
 	signal: AbortSignal
 	adapter: any
 	socket: any
-	chatId: number
-	generatingMessage: SelectChatMessage
+	sessionId: number
+	generatingMessage: SelectSessionMessage
 	startString: string
 	isContinuing: boolean
 	preservedContent: string
 	contextDebuggingEnabled: boolean
 	// Fences every write this run makes: a user-initiated stop nulls
 	// queueItemId on the row immediately and unconditionally (see
-	// chatMessagesCancelHandler). Streaming adapters invoke their per-chunk
+	// sessionMessagesCancelHandler). Streaming adapters invoke their per-chunk
 	// callback fire-and-forget, so several writes from this run can still be
 	// in flight after cancellation — gating every write on this exact id
 	// guarantees none of them can resurrect isGenerating:true after the row
@@ -630,7 +675,7 @@ async function runGenerateAndPersist({
 		compiledPrompt,
 		isAborted,
 		thinkingContent: adapterThinking
-	} = await adapter.generate() // TODO: save compiledPrompt to chatMessages
+	} = await adapter.generate() // TODO: save compiledPrompt to sessionMessages
 	let content = ""
 	let thinking = "" // accumulated thinking from streaming thinkingCb
 
@@ -638,7 +683,7 @@ async function runGenerateAndPersist({
 		let ok = true
 		// Without this, every single streamed chunk (often several per
 		// second, sometimes per token) did its own DB UPDATE...RETURNING plus
-		// a socket broadcast to every user in the chat — for a 200-500 token
+		// a socket broadcast to every user in the session — for a 200-500 token
 		// response that's 200-500 round trips of both. A ~120ms cadence is
 		// well below what's perceptible as "smooth streaming" to a reader,
 		// so this only cuts wasted work, not visible responsiveness. The
@@ -746,41 +791,41 @@ async function runGenerateAndPersist({
 					}
 				}
 
-				const [updatedChatMsg] = await db
-					.update(schema.chatMessages)
+				const [updatedSessionMsg] = await db
+					.update(schema.sessionMessages)
 					.set(updateData)
 					.where(
 						and(
-							eq(schema.chatMessages.id, generatingMessage.id),
-							eq(schema.chatMessages.isGenerating, true),
-							eq(schema.chatMessages.queueItemId, queueItemId)
+							eq(schema.sessionMessages.id, generatingMessage.id),
+							eq(schema.sessionMessages.isGenerating, true),
+							eq(schema.sessionMessages.queueItemId, queueItemId)
 						)
 					)
 					.returning()
-				if (!!updatedChatMsg) {
+				if (!!updatedSessionMsg) {
 					// Removed verbose streaming log
-					const chatMsgReq: Sockets.ChatMessage.Call = {
-						chatMessage: updatedChatMsg
+					const sessionMsgReq: Sockets.SessionMessage.Call = {
+						sessionMessage: updatedSessionMsg
 					}
-					await broadcastToChatUsers(
+					await broadcastToSessionUsers(
 						socket.io,
-						generatingMessage.chatId,
-						"chatMessage",
-						chatMsgReq
+						generatingMessage.sessionId,
+						"sessionMessage",
+						sessionMsgReq
 					)
 				} else if (signal.aborted) {
 					// Fenced out by a user-initiated stop — the cancel handler already
 					// reset and owns this row's state. Not an error; stay quiet.
 					ok = false
 				} else {
-					const chatMsgReq: Sockets.ChatMessage.Call = {
+					const sessionMsgReq: Sockets.SessionMessage.Call = {
 						id: generatingMessage.id
 					}
-					await broadcastToChatUsers(
+					await broadcastToSessionUsers(
 						socket.io,
-						generatingMessage.chatId,
-						"chatMessage",
-						chatMsgReq
+						generatingMessage.sessionId,
+						"sessionMessage",
+						sessionMsgReq
 					)
 					console.warn(
 						"[generateResponse] Generating terminated early",
@@ -835,7 +880,7 @@ async function runGenerateAndPersist({
 			? { debugMeta: streamingDebugMetaValue }
 			: {}
 		const ret = await db
-			.update(schema.chatMessages)
+			.update(schema.sessionMessages)
 			.set({
 				content,
 				isGenerating: false,
@@ -847,9 +892,9 @@ async function runGenerateAndPersist({
 			})
 			.where(
 				and(
-					eq(schema.chatMessages.id, generatingMessage.id),
-					eq(schema.chatMessages.isGenerating, true),
-					eq(schema.chatMessages.queueItemId, queueItemId)
+					eq(schema.sessionMessages.id, generatingMessage.id),
+					eq(schema.sessionMessages.isGenerating, true),
+					eq(schema.sessionMessages.queueItemId, queueItemId)
 				)
 			)
 			.returning()
@@ -865,13 +910,13 @@ async function runGenerateAndPersist({
 			)
 			return { kind: "silentFail" }
 		}
-		// Broadcast the chatMessage to all chat participants
-		await broadcastToChatUsers(
+		// Broadcast the sessionMessage to all session participants
+		await broadcastToSessionUsers(
 			socket.io,
-			generatingMessage.chatId,
-			"chatMessage",
+			generatingMessage.sessionId,
+			"sessionMessage",
 			{
-				chatMessage: {
+				sessionMessage: {
 					...generatingMessage,
 					content,
 					isGenerating: false,
@@ -886,9 +931,9 @@ async function runGenerateAndPersist({
 			}
 		)
 		try {
-			await ensureChatMessageEmbedded(generatingMessage.id)
+			await ensureSessionMessageEmbedded(generatingMessage.id)
 		} catch (err) {
-			// Swallowing here is load-bearing, not decorative: autoEnqueueChat()
+			// Swallowing here is load-bearing, not decorative: autoEnqueueSession()
 			// below must still run even if the inline embed failed or timed out —
 			// it's the fallback that eventually catches this message up via the
 			// background queue either way.
@@ -897,7 +942,7 @@ async function runGenerateAndPersist({
 				err
 			)
 		}
-		autoEnqueueChat(chatId).catch(console.error)
+		autoEnqueueSession(sessionId).catch(console.error)
 		return { kind: "normal", isAborted }
 	} else {
 		content = completionResult.replace(startString, "").trim()
@@ -948,13 +993,13 @@ async function runGenerateAndPersist({
 		}
 
 		const ret = await db
-			.update(schema.chatMessages)
+			.update(schema.sessionMessages)
 			.set(updateData)
 			.where(
 				and(
-					eq(schema.chatMessages.id, generatingMessage.id),
-					eq(schema.chatMessages.isGenerating, true),
-					eq(schema.chatMessages.queueItemId, queueItemId)
+					eq(schema.sessionMessages.id, generatingMessage.id),
+					eq(schema.sessionMessages.isGenerating, true),
+					eq(schema.sessionMessages.queueItemId, queueItemId)
 				)
 			)
 			.returning()
@@ -970,12 +1015,12 @@ async function runGenerateAndPersist({
 			)
 			return { kind: "silentFail" }
 		}
-		await broadcastToChatUsers(
+		await broadcastToSessionUsers(
 			socket.io,
-			generatingMessage.chatId,
-			"chatMessage",
+			generatingMessage.sessionId,
+			"sessionMessage",
 			{
-				chatMessage: {
+				sessionMessage: {
 					...generatingMessage,
 					content: nonStreamContent,
 					isGenerating: false,
@@ -990,9 +1035,9 @@ async function runGenerateAndPersist({
 			}
 		)
 		try {
-			await ensureChatMessageEmbedded(generatingMessage.id)
+			await ensureSessionMessageEmbedded(generatingMessage.id)
 		} catch (err) {
-			// Swallowing here is load-bearing, not decorative: autoEnqueueChat()
+			// Swallowing here is load-bearing, not decorative: autoEnqueueSession()
 			// below must still run even if the inline embed failed or timed out —
 			// it's the fallback that eventually catches this message up via the
 			// background queue either way.
@@ -1001,7 +1046,7 @@ async function runGenerateAndPersist({
 				err
 			)
 		}
-		autoEnqueueChat(chatId).catch(console.error)
+		autoEnqueueSession(sessionId).catch(console.error)
 		return { kind: "normal", isAborted }
 	}
 }

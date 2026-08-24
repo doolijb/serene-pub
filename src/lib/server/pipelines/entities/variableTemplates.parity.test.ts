@@ -101,7 +101,10 @@ const recordCases = (): Array<[string, unknown]> => [
 	["quotes in the key", { 'She said "no"': "x" }],
 	["newlines and tabs", { "A\tkey": "one\ntwo\tthree\r\nfour" }],
 	["a non-BMP emoji", { "🜁 ash 👩‍🚒": "🜁" }],
-	["braces that look like macros", { A: "You are {{char}} talking to {{user}}." }],
+	[
+		"braces that look like macros",
+		{ A: "You are {{char}} talking to {{user}}." }
+	],
 	["an empty-string value", { A: "" }],
 	["undefined", undefined]
 ]
@@ -132,9 +135,7 @@ const sectionCases = (
 		const value: Record<string, unknown> = {}
 		for (const name of present) value[name] = bodies[name]
 		out.push([
-			present.length === 0
-				? "no sections at all"
-				: present.join(" + "),
+			present.length === 0 ? "no sections at all" : present.join(" + "),
 			value
 		])
 	}
@@ -147,7 +148,11 @@ const sectionCases = (
 			{
 				[first]: {
 					'She said "no" & <left>': [
-						{ type: "debt", secrecy: "We both know", note: "line\nbreak\ttab 🜁" }
+						{
+							type: "debt",
+							secrecy: "We both know",
+							note: "line\nbreak\ttab 🜁"
+						}
 					]
 				}
 			}
@@ -184,7 +189,10 @@ const OBJECT_CASES: Record<string, () => Array<[string, unknown]>> = {
 		sectionCases(["howOthersRegardYou", "legendaryFigures"], {
 			howOthersRegardYou: { Rell: REL },
 			legendaryFigures: {
-				"The Ashguard": { summary: "Riders.", relationships: { Rell: REL } }
+				"The Ashguard": {
+					summary: "Riders.",
+					relationships: { Rell: REL }
+				}
 			}
 		}),
 	/**
@@ -198,7 +206,10 @@ const OBJECT_CASES: Record<string, () => Array<[string, unknown]>> = {
 		["a month that does not", { year: 412, month: 11, day: 30 }],
 		["a day that needs padding", { year: 412, month: 11, day: 4 }],
 		["year only", { year: 412 }],
-		["a zeroth month, which `{{#if}}` alone would drop", { year: 412, month: 0 }],
+		[
+			"a zeroth month, which `{{#if}}` alone would drop",
+			{ year: 412, month: 0 }
+		],
 		["a zeroth day", { year: 412, month: 3, day: 0 }],
 		["a year of zero", { year: 0 }],
 		["a negative year", { year: -50, month: 1 }],
@@ -213,21 +224,40 @@ const shapedCases = (key: string): Array<[string, unknown]> => {
 		["one entry", [{ name: "Ash", description: "A rider." }]],
 		[
 			"quotes and angle brackets",
-			[{ name: `She said "no" & <left>`, description: "'quickly' & </br>" }]
+			[
+				{
+					name: `She said "no" & <left>`,
+					description: "'quickly' & </br>"
+				}
+			]
 		],
-		["newlines and tabs", [{ name: "Ash", description: "one\ntwo\tthree\r\nfour" }]],
+		[
+			"newlines and tabs",
+			[{ name: "Ash", description: "one\ntwo\tthree\r\nfour" }]
+		],
 		["a non-BMP emoji", [{ name: "🜁 ash 👩‍🚒", description: "🜁" }]],
 		[
 			"braces that look like macros",
-			[{ name: "Ash", description: "You are {{char}} talking to {{user}}." }]
+			[
+				{
+					name: "Ash",
+					description: "You are {{char}} talking to {{user}}."
+				}
+			]
 		],
 		// The distinction the guards are written for: absent is not empty, and
 		// neither is null.
 		["an empty-string value", [{ name: "Ash", description: "" }]],
 		["a null value", [{ name: "Ash", description: null }]],
 		["an absent optional", [{ name: "Ash" }]],
-		["an explicitly-undefined optional", [{ name: "Ash", description: undefined }]],
-		["several entries", [{ name: "Ash" }, { name: "Bran", description: "x" }]],
+		[
+			"an explicitly-undefined optional",
+			[{ name: "Ash", description: undefined }]
+		],
+		[
+			"several entries",
+			[{ name: "Ash" }, { name: "Bran", description: "x" }]
+		],
 		["undefined", undefined]
 	]
 	if (key !== "characters") return shared
@@ -264,13 +294,14 @@ const shapedCases = (key: string): Array<[string, unknown]> => {
 describe("shipped variable layouts reproduce the code they replaced", () => {
 	for (const t of SHIPPED_VARIABLE_TEMPLATES) {
 		const cases = t.explicit
-			? {
+			? ({
 					record: recordCases(),
 					object:
 						OBJECT_CASES[t.key]?.() ??
 						sectionCases(["a", "b"], { a: {}, b: {} }),
 					list: shapedCases(t.key)
-				}[declaredType(t.variableId, t.key) ?? "list"] ?? shapedCases(t.key)
+				}[declaredType(t.variableId, t.key) ?? "list"] ??
+				shapedCases(t.key))
 			: t.source.includes("json")
 				? JSON_CASES
 				: STRING_CASES
@@ -504,7 +535,7 @@ describe("a heading never appears above nothing", () => {
 
 	it("still renders an empty cast, which is not the same as no cast", () => {
 		// `JSON.stringify([])` is `"[]"`, a truthy string, so 0.5 rendered the
-		// heading and an empty array for a chat with no assistant characters.
+		// heading and an empty array for a session with no assistant characters.
 		// Handlebars' own `{{#if}}` calls an empty array empty — which is
 		// exactly why the absence rule is in code and not in the source.
 		expect(
@@ -587,9 +618,13 @@ describe("an explicit layout renders the declared shape and nothing else", () =>
 	it("drops a key the variable does not declare", () => {
 		const bare = explicit.find((t) => t.key === "characters")!
 		const value = [{ name: "Ash", favouriteColour: "ash grey" }]
-		expect(renderVariable(layoutFor(bare.source, "characters"), "characters", value)).toBe(
-			'[\n  {\n    "name": "Ash"\n  }\n]'
-		)
+		expect(
+			renderVariable(
+				layoutFor(bare.source, "characters"),
+				"characters",
+				value
+			)
+		).toBe('[\n  {\n    "name": "Ash"\n  }\n]')
 		// And this is the divergence from the floor, stated rather than implied.
 		expect(bare.codeDefault(value)).toContain("favouriteColour")
 	})
@@ -598,7 +633,13 @@ describe("an explicit layout renders the declared shape and nothing else", () =>
 		const bare = explicit.find((t) => t.key === "characters")!
 		// `null` is not a list. The floor stringifies it as `null`; the layout
 		// has no shape to render and produces the empty list.
-		expect(renderVariable(layoutFor(bare.source, "characters"), "characters", null)).toBe("[]")
+		expect(
+			renderVariable(
+				layoutFor(bare.source, "characters"),
+				"characters",
+				null
+			)
+		).toBe("[]")
 		expect(bare.codeDefault(null)).toBe("null")
 	})
 

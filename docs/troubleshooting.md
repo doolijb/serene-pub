@@ -7,7 +7,7 @@ This page collects the most common ways Serene Pub gets stuck, organized by area
 - **"Test: Failed!" on a connection.** The error shown directly under the Test Connection button is the real cause (bad Base URL, missing/incorrect API key, service not running, wrong port) — read it before assuming the connection type is broken. See [Connections](./connections.md).
 - **Model output is garbled, run-on, or ignores turn boundaries.** This is almost always the wrong **Prompt Format** for a text-completion connection — check it against the model's actual training format. See [Prompt Formats and Token Counters](./connections.md#prompt-formats-and-token-counters).
 - **Context budget seems off (too much or too little history/lore fits).** Check the connection's **Token Counter** — leaving it on the generic **Estimate** for a model with unusual tokenization can under- or over-estimate how much fits under the Sampling Config's Context Tokens limit.
-- **A custom Context Config broke every chat using it.** A malformed Handlebars template can break generation instance-wide. Test edits on a low-stakes chat before setting a custom Context Config as your default. See [Context Configs](./context-templates.md).
+- **A custom Context Config broke every session using it.** A malformed Handlebars template can break generation instance-wide. Test edits on a low-stakes session before setting a custom Context Config as your default. See [Context Configs](./context-templates.md).
 
 ## KoboldCPP Manager
 
@@ -22,8 +22,8 @@ This page collects the most common ways Serene Pub gets stuck, organized by area
 ## Embeddings & RAG
 
 - **The embeddings queue is stuck at "Idle" with items still waiting.** Check the **Settings** tab first: the queue silently stops if embeddings are disabled, if a local model failed to auto-load (not cached, or the server restarted and needs a reload), or if an External API config stopped validating. Reload/re-download the model, then press **Start** on the Queue tab. See [Troubleshooting a stuck or empty queue](./embeddings-and-rag.md#troubleshooting-a-stuck-or-empty-queue).
-- **A specific chat's RAG notice never clears.** Use that notice's **Prioritize in queue** button to jump its content to the front of the embeddings queue.
-- **RAG doesn't seem to retrieve anything in a short chat.** Chats with 10 or fewer messages are expected to show no RAG activity — everything already fits in the guaranteed context window. See [Why some short chats never show RAG activity](./embeddings-and-rag.md#why-some-short-chats-never-show-rag-activity).
+- **A specific session's RAG notice never clears.** Use that notice's **Prioritize in queue** button to jump its content to the front of the embeddings queue.
+- **RAG doesn't seem to retrieve anything in a short session.** Sessions with 10 or fewer messages are expected to show no RAG activity — everything already fits in the guaranteed context window. See [Why some short sessions never show RAG activity](./embeddings-and-rag.md#why-some-short-sessions-never-show-rag-activity).
 
 ## Summarization, Scenes & the Narrative Graph
 

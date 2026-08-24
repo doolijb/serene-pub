@@ -143,10 +143,7 @@
 			)
 			socket.off("connections:test", handleConnectionsTest)
 			socket.off("connections:update", handleConnectionsUpdate)
-			socket.off(
-				"connections:update:error",
-				handleConnectionsUpdateError
-			)
+			socket.off("connections:update:error", handleConnectionsUpdateError)
 			socket.off("connections:delete", handleConnectionsDelete)
 		}
 	})

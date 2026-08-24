@@ -211,8 +211,9 @@ function stopLockUpdates(): void {
  */
 export async function closeDatabase(): Promise<void> {
 	stopLockUpdates()
-	const client = (db as unknown as { $client?: { close?: () => Promise<void> } })
-		.$client
+	const client = (
+		db as unknown as { $client?: { close?: () => Promise<void> } }
+	).$client
 	try {
 		await client?.close?.()
 	} catch {
@@ -432,7 +433,7 @@ if (!building) {
  * run resolved against — so it is published once per version and never rewritten.
  *
  * **A failure here does not stop the app.** A type-registry conflict means
- * pipelines cannot run safely on this build; it does not mean the chat cannot
+ * pipelines cannot run safely on this build; it does not mean the session cannot
  * start, and taking an instance down over a subsystem nobody has opted into yet
  * would be the wrong trade. It is logged, and the report carries the reason for
  * a diagnostics screen to show.

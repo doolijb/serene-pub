@@ -6,12 +6,7 @@
  * "what *is* `nickname`", and the one-letter-off suggestion.
  */
 import { describe, expect, test } from "vitest"
-import {
-	completionsAt,
-	contextAt,
-	describeAt,
-	suggest
-} from "./templateAssist"
+import { completionsAt, contextAt, describeAt, suggest } from "./templateAssist"
 import type { TemplateScope } from "@serene-pub/sdk"
 
 const SCOPE: TemplateScope = {
@@ -20,7 +15,10 @@ const SCOPE: TemplateScope = {
 		of: {
 			type: "object",
 			fields: {
-				name: { type: "string", description: { en: "What they're called." } },
+				name: {
+					type: "string",
+					description: { en: "What they're called." }
+				},
 				nickname: { type: "string", optional: true },
 				"extra lore": { type: "record", of: { type: "string" } }
 			}
@@ -36,7 +34,10 @@ const CURSOR = "‸"
 function at(marked: string) {
 	const offset = marked.indexOf(CURSOR)
 	if (offset === -1) throw new Error("no cursor marker")
-	return { source: marked.slice(0, offset) + marked.slice(offset + 1), offset }
+	return {
+		source: marked.slice(0, offset) + marked.slice(offset + 1),
+		offset
+	}
 }
 const labels = (marked: string, scope: TemplateScope = SCOPE) => {
 	const { source, offset } = at(marked)
@@ -125,9 +126,11 @@ describe("completions", () => {
 	})
 
 	test("an each's else branch is back outside", () => {
-		expect(
-			labels("{{#each characters}}{{name}}{{else}}{{‸")
-		).toEqual(["characters", "scenario", "worldLore"])
+		expect(labels("{{#each characters}}{{name}}{{else}}{{‸")).toEqual([
+			"characters",
+			"scenario",
+			"worldLore"
+		])
 	})
 
 	test("if/unless keep the context they were opened in", () => {
@@ -237,7 +240,9 @@ describe("did you mean", () => {
 
 	// A wrong guess sends someone to change a line that was correct.
 	test("nothing near enough means nothing said", () => {
-		expect(suggest("completelyDifferent", ["name", "nickname"])).toBeUndefined()
+		expect(
+			suggest("completelyDifferent", ["name", "nickname"])
+		).toBeUndefined()
 		expect(suggest("name", [])).toBeUndefined()
 	})
 
@@ -308,6 +313,8 @@ describe("bracketed segments", () => {
 		const { source, offset } = at(
 			"{{#each characters}}{{this.[extra lore].[The Ashguard br‸and]}}"
 		)
-		expect(describeAt(source, offset, SCOPE)).toMatchObject({ type: "string" })
+		expect(describeAt(source, offset, SCOPE)).toMatchObject({
+			type: "string"
+		})
 	})
 })

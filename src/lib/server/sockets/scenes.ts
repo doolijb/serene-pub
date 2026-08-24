@@ -18,8 +18,8 @@ import {
 } from "$lib/server/utils/summarizer/availableSceneCast"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 import { activityStore } from "$lib/server/utils/activityStore"
-import { withChatTriggerLock } from "$lib/server/utils/chatTriggerLock"
-import { checkChatAccess } from "$lib/server/utils/chatAccess"
+import { withSessionTriggerLock } from "$lib/server/utils/sessionTriggerLock"
+import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { resolveOrCreateBinding } from "$lib/server/utils/characterBindingSync"
 
 /**
@@ -33,7 +33,7 @@ import { resolveOrCreateBinding } from "$lib/server/utils/characterBindingSync"
  * These arrays hold **lorebookBindings ids**, not character ids. This scoped
  * by `b.characterId` until now, which is pre-merge semantics the column
  * outgrew — every producer feeding it emits binding ids
- * (scenes:process/chats:summarize via resolveCharacterRefs' castEntries[].id
+ * (scenes:process/sessions:summarize via resolveCharacterRefs' castEntries[].id
  * and resolveOrCreateBinding; the graph build via its seed map). Filtering
  * binding ids through a characterId lookup silently dropped any id that
  * didn't coincidentally equal some bound character's id — and an unbound
@@ -64,16 +64,16 @@ export const sceneListHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 
-		// Read access: any chat participant (owner or guest) can view scenes —
-		// this fires on every chat page load, so an owner-only check here
-		// locks guests out of the chat entirely, not just scene management.
-		const chatAccess = await checkChatAccess(params.chatId, userId)
-		if (!chatAccess.hasAccess) {
-			throw new Error("Chat not found or access denied.")
+		// Read access: any session participant (owner or guest) can view scenes —
+		// this fires on every session page load, so an owner-only check here
+		// locks guests out of the session entirely, not just scene management.
+		const sessionAccess = await checkSessionAccess(params.sessionId, userId)
+		if (!sessionAccess.hasAccess) {
+			throw new Error("Session not found or access denied.")
 		}
 
 		const scenes = await db.query.scenes.findMany({
-			where: eq(schema.scenes.chatId, params.chatId),
+			where: eq(schema.scenes.sessionId, params.sessionId),
 			orderBy: (s, { asc }) => asc(s.id),
 			with: {
 				historyEntry: {
@@ -157,19 +157,19 @@ export const sceneCreateHandler: Handler<
 			throw new Error("Lorebook not found or access denied.")
 		}
 
-		// If chatId provided, verify chat ownership
-		if (data.chatId) {
-			const chat = await db.query.chats.findFirst({
+		// If sessionId provided, verify session ownership
+		if (data.sessionId) {
+			const session = await db.query.sessions.findFirst({
 				where: (c, { and, eq }) =>
-					and(eq(c.id, data.chatId!), eq(c.userId, userId))
+					and(eq(c.id, data.sessionId!), eq(c.userId, userId))
 			})
-			if (!chat) {
-				throw new Error("Chat not found or access denied.")
+			if (!session) {
+				throw new Error("Session not found or access denied.")
 			}
 		}
 
 		// Without this, a scene could be created with an attacker's own
-		// lorebookId/chatId but a guessed historyEntryId from a victim's
+		// lorebookId/sessionId but a guessed historyEntryId from a victim's
 		// private lorebook — sceneCompileHandler queries scenes by
 		// historyEntryId alone, so the injected scene's content would feed
 		// directly into the victim's own LLM-driven compile call the next
@@ -222,18 +222,18 @@ export const sceneCreateHandler: Handler<
 			})
 		}
 
-		// Refresh scene list for the chat
-		if (emitToUser && newScene.chatId) {
+		// Refresh scene list for the session
+		if (emitToUser && newScene.sessionId) {
 			await sceneListHandler.handler(
 				socket,
-				{ chatId: newScene.chatId },
+				{ sessionId: newScene.sessionId },
 				emitToUser
 			)
 
 			// Also refresh scened message IDs
 			const scenedRes = await scenedMessageIdsHandler.handler(
 				socket,
-				{ chatId: newScene.chatId },
+				{ sessionId: newScene.sessionId },
 				emitToUser
 			)
 			emitToUser("scenes:scenedMessageIds", scenedRes)
@@ -276,7 +276,7 @@ export const sceneUpdateHandler: Handler<
 
 		// Explicit allowlist, not a spread — ownership above is only checked
 		// against the scene's *current* lorebookId; without this, a client
-		// could redirect their own scene into another user's lorebook/chat/
+		// could redirect their own scene into another user's lorebook/session/
 		// history entry by including a foreign id in the payload, with no
 		// re-validation (sceneCreateHandler validates its target ids on
 		// insert — this was the one outlier that didn't).
@@ -334,10 +334,10 @@ export const sceneUpdateHandler: Handler<
 			.where(eq(schema.scenes.id, params.scene.id))
 
 		// Refresh scene list
-		if (emitToUser && updated.chatId) {
+		if (emitToUser && updated.sessionId) {
 			await sceneListHandler.handler(
 				socket,
-				{ chatId: updated.chatId },
+				{ sessionId: updated.sessionId },
 				emitToUser
 			)
 		}
@@ -373,17 +373,17 @@ export const sceneDeleteHandler: Handler<
 			throw new Error("Scene not found or access denied.")
 		}
 
-		const chatId = existing.chatId
+		const sessionId = existing.sessionId
 
 		await db.delete(schema.scenes).where(eq(schema.scenes.id, params.id))
 
 		// Refresh scene list and scened message IDs
-		if (emitToUser && chatId) {
-			await sceneListHandler.handler(socket, { chatId }, emitToUser)
+		if (emitToUser && sessionId) {
+			await sceneListHandler.handler(socket, { sessionId }, emitToUser)
 
 			const scenedRes = await scenedMessageIdsHandler.handler(
 				socket,
-				{ chatId },
+				{ sessionId },
 				emitToUser
 			)
 			emitToUser("scenes:scenedMessageIds", scenedRes)
@@ -401,14 +401,14 @@ export const scenedMessageIdsHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 
-		// Read access: any chat participant (owner or guest) — see sceneListHandler.
-		const chatAccess = await checkChatAccess(params.chatId, userId)
-		if (!chatAccess.hasAccess) {
-			throw new Error("Chat not found or access denied.")
+		// Read access: any session participant (owner or guest) — see sceneListHandler.
+		const sessionAccess = await checkSessionAccess(params.sessionId, userId)
+		if (!sessionAccess.hasAccess) {
+			throw new Error("Session not found or access denied.")
 		}
 
 		const scenes = await db.query.scenes.findMany({
-			where: eq(schema.scenes.chatId, params.chatId),
+			where: eq(schema.scenes.sessionId, params.sessionId),
 			columns: { selectedMessageIds: true }
 		})
 
@@ -442,18 +442,20 @@ export const sceneListByLorebookHandler: Handler<
 			orderBy: [asc(schema.scenes.historyEntryId), asc(schema.scenes.id)]
 		})
 
-		// Resolve chat names in a single query
-		const chatIds = [
-			...new Set(scenes.filter((s) => s.chatId).map((s) => s.chatId!))
+		// Resolve session names in a single query
+		const sessionIds = [
+			...new Set(
+				scenes.filter((s) => s.sessionId).map((s) => s.sessionId!)
+			)
 		]
-		const chats =
-			chatIds.length > 0
-				? await db.query.chats.findMany({
-						where: inArray(schema.chats.id, chatIds),
+		const sessions =
+			sessionIds.length > 0
+				? await db.query.sessions.findMany({
+						where: inArray(schema.sessions.id, sessionIds),
 						columns: { id: true, name: true }
 					})
 				: []
-		const chatMap = new Map(chats.map((c) => [c.id, c.name]))
+		const sessionMap = new Map(sessions.map((c) => [c.id, c.name]))
 
 		// One indexed query for the whole page's cast, not one per scene.
 		const casts = await readSceneCasts(scenes.map((s) => s.id))
@@ -461,7 +463,9 @@ export const sceneListByLorebookHandler: Handler<
 		const sceneList: Sockets.Scenes.SceneWithMeta[] = scenes.map((s) => ({
 			...s,
 			...castFor(casts, s.id),
-			chatName: s.chatId ? (chatMap.get(s.chatId) ?? null) : null
+			sessionName: s.sessionId
+				? (sessionMap.get(s.sessionId) ?? null)
+				: null
 		}))
 
 		const res = { sceneList }
@@ -526,9 +530,7 @@ export const sceneCompileHandler: Handler<
 			"$lib/server/pipelines/specs/summarize"
 		)
 		const synthCfg = (
-			await resolveStepConfigs(db, userId, SUMMARIZE_HISTORY_SPEC_ID, [
-				"synth"
-			])
+			await resolveStepConfigs(db, SUMMARIZE_HISTORY_SPEC_ID, ["synth"])
 		)["synth"]
 
 		const compileConnection = synthCfg?.connection ?? connection
@@ -667,7 +669,7 @@ export const sceneProcessHandler: Handler<
 
 		// Register the activity BEFORE any queued work.
 		//
-		// The message read below takes the chat trigger lock, which is a FIFO
+		// The message read below takes the session trigger lock, which is a FIFO
 		// queue — so a summarize started while a generation is in flight waits
 		// that generation out. Registering first means the card appears
 		// immediately as "running" instead of the user staring at nothing, makes
@@ -676,7 +678,7 @@ export const sceneProcessHandler: Handler<
 		// rather than failing card-less.
 		// Re-runs come from the review modal, which only knows the sceneId — so
 		// inherit the flag from the activity being superseded. Without this a
-		// regenerate would quietly downgrade a chat-created scene to permanent,
+		// regenerate would quietly downgrade a session-created scene to permanent,
 		// and cancelling afterwards would leave an empty scene behind.
 		const inheritedEphemeral = activityStore
 			.getFor(userId, false)
@@ -715,28 +717,30 @@ export const sceneProcessHandler: Handler<
 			return null as any
 		}
 
-		if (!scene.chatId || !scene.selectedMessageIds?.length) {
+		if (!scene.sessionId || !scene.selectedMessageIds?.length) {
 			return failRun("Scene has no linked messages to process.")
 		}
 
 		// Snapshot inside the lock, LLM outside it.
 		//
-		// This is the only chatMessages read in the whole path and it is pinned
+		// This is the only sessionMessages read in the whole path and it is pinned
 		// to selectedMessageIds — no surrounding window, no "all" fallback — and
 		// generateSummary touches no DB at all. So the lock only has to cover
 		// the read, closing the TOCTOU against a concurrent delete or
 		// generation. Holding it across the run would instead queue the user's
 		// next message behind minutes of LLM calls, which is precisely the trap
 		// a minimize-first flow must not set.
-		const rawMessages = await withChatTriggerLock(scene.chatId, async () =>
-			db.query.chatMessages.findMany({
-				where: (cm, { and, eq, inArray }) =>
-					and(
-						eq(cm.chatId, scene.chatId!),
-						inArray(cm.id, scene.selectedMessageIds!)
-					),
-				orderBy: (cm, { asc }) => asc(cm.id)
-			})
+		const rawMessages = await withSessionTriggerLock(
+			scene.sessionId,
+			async () =>
+				db.query.sessionMessages.findMany({
+					where: (cm, { and, eq, inArray }) =>
+						and(
+							eq(cm.sessionId, scene.sessionId!),
+							inArray(cm.id, scene.selectedMessageIds!)
+						),
+					orderBy: (cm, { asc }) => asc(cm.id)
+				})
 		)
 
 		if (abortController.signal.aborted) return null as any
@@ -761,7 +765,7 @@ export const sceneProcessHandler: Handler<
 		const knownCast = await buildSceneCastList(
 			params.sceneId,
 			scene.lorebookId,
-			scene.chatId ?? null
+			scene.sessionId ?? null
 		)
 
 		/**
@@ -779,7 +783,9 @@ export const sceneProcessHandler: Handler<
 			mentionedCharacters?: any[]
 		}
 		try {
-			const { runSpec } = await import("$lib/server/pipelines/runtime/runTurn")
+			const { runSpec } = await import(
+				"$lib/server/pipelines/runtime/runTurn"
+			)
 			const { SUMMARIZE_SCENE_SPEC_ID } = await import(
 				"$lib/server/pipelines/specs/summarize"
 			)
@@ -804,11 +810,11 @@ export const sceneProcessHandler: Handler<
 
 			const receipt = await runSpec({
 				db,
-				chatId: scene.chatId,
+				sessionId: scene.sessionId,
 				userId,
 				specId: SUMMARIZE_SCENE_SPEC_ID,
 				input: {
-					scope: { chatId: scene.chatId },
+					scope: { sessionId: scene.sessionId },
 					request: {
 						messageIds: scene.selectedMessageIds,
 						knownCast
@@ -817,7 +823,7 @@ export const sceneProcessHandler: Handler<
 				signal: abortController.signal,
 				preview: { atNode: "save" },
 				// The executor's inherent node events (F34) — see the same
-				// mapping in chats:summarize.
+				// mapping in sessions:summarize.
 				onNode: (e) => {
 					if (e.phase !== "start") return
 					if (e.typeId.startsWith("core:provider/summarize-batch"))
@@ -995,7 +1001,7 @@ export const sceneProcessHandler: Handler<
  * abandoned.
  *
  * Both conditions are load-bearing, and the second is the one that makes this
- * safe. `scene_summarize` activities come from two origins — a chat-side
+ * safe. `scene_summarize` activities come from two origins — a session-side
  * summarize that created its scene up front, and a lorebook-side re-process of a
  * scene the user already owns — so acting on the flag alone would delete real
  * work if the flag were ever wrong. A re-processed scene always has a summary,

@@ -62,7 +62,7 @@ vi.mock("$lib/server/db", async () => {
 // orthogonal to the mapping, so they are canned rather than seeded.
 vi.mock("$lib/server/utils/getUserConfigurations", () => ({
 	getUserConfigurations: async () => ({
-		connection: { id: 1, name: "test", type: "openai_chat" },
+		connection: { id: 1, name: "test", type: "openai_session" },
 		sampling: { id: 1 },
 		contextConfig: { id: 1 },
 		promptConfig: { id: 1 },

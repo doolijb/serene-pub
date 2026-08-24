@@ -123,6 +123,8 @@ describe("characterLoreEntries:create — mass-assignment denylist", () => {
 		expect(res.characterLoreEntry.vectorizedAt).toBeNull()
 		expect(res.characterLoreEntry.embedding).toBeNull()
 		expect(res.characterLoreEntry.embeddingModel).toBeNull()
-		expect(res.characterLoreEntry.createdAt).not.toBe(FORGED_DATE.toISOString())
+		expect(res.characterLoreEntry.createdAt).not.toBe(
+			FORGED_DATE.toISOString()
+		)
 	})
 })

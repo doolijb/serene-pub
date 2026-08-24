@@ -80,10 +80,12 @@
 	let newMentionedId = $state<number | "">("")
 	let pendingNewParticipants = $state<PendingNewCharacter[]>(
 		untrack(() =>
-			(pendingResult?.suggestedParticipantCharacters ?? []).map((name) => ({
-				name,
-				source: "suggested" as const
-			}))
+			(pendingResult?.suggestedParticipantCharacters ?? []).map(
+				(name) => ({
+					name,
+					source: "suggested" as const
+				})
+			)
 		)
 	)
 	let pendingNewMentioned = $state<PendingNewCharacter[]>(
@@ -99,9 +101,9 @@
 	let isSaving = $state(false)
 
 	// Running state
-	let genPhase = $state<"drafting" | "synthesizing" | "naming" | "extracting">(
-		"drafting"
-	)
+	let genPhase = $state<
+		"drafting" | "synthesizing" | "naming" | "extracting"
+	>("drafting")
 	let genBatch = $state(0)
 	let genTotalBatches = $state(1)
 	let genPartial = $state<{ content?: string; raw?: string }>({})
@@ -125,7 +127,10 @@
 				: genPhase === "synthesizing"
 					? 80
 					: genTotalBatches > 1
-						? Math.max(5, Math.round((genBatch / genTotalBatches) * 75))
+						? Math.max(
+								5,
+								Math.round((genBatch / genTotalBatches) * 75)
+							)
 						: 40
 	)
 
@@ -192,7 +197,10 @@
 	function addManualMentioned() {
 		const name = newMentionedName.trim()
 		if (!name || pendingNameTaken(name, pendingNewMentioned)) return
-		pendingNewMentioned = [...pendingNewMentioned, { name, source: "manual" }]
+		pendingNewMentioned = [
+			...pendingNewMentioned,
+			{ name, source: "manual" }
+		]
 		newMentionedName = ""
 	}
 
@@ -447,9 +455,9 @@
 						>
 							<option value="">Add character…</option>
 							{#each lorebookBindingList.filter((b) => !reviewParticipants.includes(b.id)) as b}
-								<option value={b.id}
-									>{b.name || b.binding}</option
-								>
+								<option value={b.id}>
+									{b.name || b.binding}
+								</option>
 							{/each}
 						</select>
 						<button
@@ -471,7 +479,9 @@
 								class="chip preset-tonal-warning flex items-center gap-1 border border-dashed text-xs"
 							>
 								{p.name}
-								<span class="text-[10px] opacity-70">(new)</span>
+								<span class="text-[10px] opacity-70">
+									(new)
+								</span>
 								<button
 									class="hover:text-error-500 p-1.5"
 									aria-label="Remove suggested character {p.name}"
@@ -545,9 +555,9 @@
 						>
 							<option value="">Add character…</option>
 							{#each lorebookBindingList.filter((b) => !reviewMentioned.includes(b.id)) as b}
-								<option value={b.id}
-									>{b.name || b.binding}</option
-								>
+								<option value={b.id}>
+									{b.name || b.binding}
+								</option>
 							{/each}
 						</select>
 						<button
@@ -569,7 +579,9 @@
 								class="chip preset-tonal-warning flex items-center gap-1 border border-dashed text-xs"
 							>
 								{p.name}
-								<span class="text-[10px] opacity-70">(new)</span>
+								<span class="text-[10px] opacity-70">
+									(new)
+								</span>
 								<button
 									class="hover:text-error-500 p-1.5"
 									aria-label="Remove suggested character {p.name}"

@@ -32,8 +32,8 @@
 				</header>
 				<article>
 					<p class="opacity-60">
-						Your KoboldCpp connection settings have unsaved
-						changes. Are you sure you want to discard them?
+						Your KoboldCpp connection settings have unsaved changes.
+						Are you sure you want to discard them?
 					</p>
 				</article>
 				<footer class="flex justify-end gap-4">

@@ -37,7 +37,7 @@
 		think: connection.extraJson?.think ?? false,
 		ttl: connection.extraJson?.ttl ?? 60,
 		raw: connection.extraJson?.raw ?? true,
-		useChat: connection.extraJson?.useChat ?? true
+		useSession: connection.extraJson?.useSession ?? true
 	})
 
 	function handleRefreshModels() {
@@ -157,7 +157,7 @@
 				{/if}
 			</button>
 		</div>
-		{#if !extraFields.useChat}
+		{#if !extraFields.useSession}
 			<div class="mt-2 flex flex-col gap-1">
 				<label class="font-semibold" for="promptFormat">
 					Prompt Format
@@ -255,17 +255,19 @@
 					</p>
 				{/if}
 			</div>
-			<!-- Use Chat toggle -->
+			<!-- Use Session toggle -->
 			<div class="mt-2 flex items-center gap-2">
-				<label class="font-semibold" for="useChat">Use Chat Mode</label>
+				<label class="font-semibold" for="useSession">
+					Use Session Mode
+				</label>
 				<input
 					type="checkbox"
-					id="useChat"
-					bind:checked={extraFields.useChat}
+					id="useSession"
+					bind:checked={extraFields.useSession}
 					onchange={() => {
 						connection.extraJson = {
 							...connection.extraJson,
-							useChat: extraFields.useChat
+							useSession: extraFields.useSession
 						}
 					}}
 				/>

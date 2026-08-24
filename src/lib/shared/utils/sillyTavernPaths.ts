@@ -5,13 +5,13 @@
  * defense-in-depth re-check of a staged upload).
  *
  * A SillyTavern data root is identified by the presence of one of its
- * landmark subdirectories (characters/chats/groups/worlds) or settings.json,
+ * landmark subdirectories (characters/sessions/groups/worlds) or settings.json,
  * rather than by a specific parent folder name — this way it doesn't matter
  * whether the user picked the SillyTavern root, a SillyTavern-Launcher root,
  * a "data" or "data/default-user" folder, or renamed any of those.
  */
 
-const LANDMARK_DIRS = ["characters", "chats", "groups", "worlds"]
+const LANDMARK_DIRS = ["characters", "sessions", "groups", "worlds"]
 
 function normalizePath(p: string): string {
 	return p.replace(/\\/g, "/").replace(/^\/+/, "")
@@ -73,9 +73,9 @@ export function isRelevantImportPath(relativePath: string): boolean {
 	return (
 		p === "settings.json" ||
 		p.startsWith("characters/") ||
-		p.startsWith("chats/") ||
+		p.startsWith("sessions/") ||
 		p.startsWith("groups/") ||
-		p.startsWith("group chats/") ||
+		p.startsWith("group sessions/") ||
 		p.startsWith("worlds/") ||
 		p.startsWith("User Avatars/")
 	)

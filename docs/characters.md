@@ -1,16 +1,16 @@
 # Characters
 
-Characters are the personas the AI plays in a chat — everything from their name and backstory to how they greet you and speak. This page covers every field on a character, how avatars and image galleries work, the two ways to create a character, importing from the built-in library or a file, exporting a character card, and controlling how much of a character's info is exposed inside a given chat.
+Characters are the personas the AI plays in a session — everything from their name and backstory to how they greet you and speak. This page covers every field on a character, how avatars and image galleries work, the two ways to create a character, importing from the built-in library or a file, exporting a character card, and controlling how much of a character's info is exposed inside a given session.
 
 ## Overview
 
-Every character lives in your personal character list, accessible from the Characters sidebar. From there you can create a character from scratch, import an existing character card (PNG, APNG, JPEG, JPG, WEBP, or JSON), or browse the community character library. Each character has a required **Name** and **Description**; every other field is optional. Characters can be attached to a [lorebook](./lorebooks.md) for world/setting info, tagged for organization (see [Tags](./tags.md)), marked as a favorite, and added to any number of [chats](./chats.md), including group chats with multiple characters.
+Every character lives in your personal character list, accessible from the Characters sidebar. From there you can create a character from scratch, import an existing character card (PNG, APNG, JPEG, JPG, WEBP, or JSON), or browse the community character library. Each character has a required **Name** and **Description**; every other field is optional. Characters can be attached to a [lorebook](./lorebooks.md) for world/setting info, tagged for organization (see [Tags](./tags.md)), marked as a favorite, and added to any number of [sessions](./sessions.md), including group sessions with multiple characters.
 
 Characters are private to your account — the character list is scoped to the logged-in user, so different accounts on the same Serene Pub instance don't see each other's characters. See [Users & Accounts](./users-and-accounts.md) for more on account scoping.
 
 ### Characters vs. Personas
 
-A **character** is the persona the AI plays; a [persona](./personas.md) is the persona _you_ play as when chatting. Both are configured separately but follow a similar create/edit/avatar pattern — this page covers characters specifically.
+A **character** is the persona the AI plays; a [persona](./personas.md) is the persona _you_ play as when sessionting. Both are configured separately but follow a similar create/edit/avatar pattern — this page covers characters specifically.
 
 ### Searching the Character List
 
@@ -27,17 +27,17 @@ The character edit form (opened via **Edit** on any character) exposes the follo
 - **Name\*** — required. The character's full or primary name.
 - **Nickname** — optional. If set, the nickname is used in conversations and prompts instead of the full name.
 - **Aliases** — a list of alternate names/spellings for the character (collapsible, advanced field).
-- **Summary** — a short (up to 200 characters) one- or two-sentence description. The form notes this is "used as a concise graph node description" and is **not** injected into chat context — it exists for [RAG/graph](./embeddings-and-rag.md) lookups, not for prompting.
+- **Summary** — a short (up to 200 characters) one- or two-sentence description. The form notes this is "used as a concise graph node description" and is **not** injected into session context — it exists for [RAG/graph](./embeddings-and-rag.md) lookups, not for prompting.
 - **Description\*** — required. The character's core description (appearance, background, role).
 - **Personality** — the character's personality traits and behavior. Marked visible in prompts.
-- **Scenario** — the setting/situation the character is placed in. The UI notes this field is excluded from group chats. Hidden behind "Show All Fields" unless that setting is enabled.
-- **Greeting (First Message)** — the character's opening message when a chat starts.
+- **Scenario** — the setting/situation the character is placed in. The UI notes this field is excluded from group sessions. Hidden behind "Show All Fields" unless that setting is enabled.
+- **Greeting (First Message)** — the character's opening message when a session starts.
 - **Alternate Greetings** — a list of additional possible opening messages (advanced field).
 - **Example Dialogues** — a list of sample exchanges that teach the model the character's voice (advanced field).
 - **Creator Notes** — free-text notes from whoever authored the character card (advanced field).
 - **Creator Notes (Multilingual)** — per-language creator notes, keyed by language code (advanced field).
-- **Group-Only Greetings** — greetings that are only used when the character is part of a group chat (advanced field).
-- **Post-History Instructions** — instructions injected after the chat history, useful for steering behavior late in the prompt (advanced field).
+- **Group-Only Greetings** — greetings that are only used when the character is part of a group session (advanced field).
+- **Post-History Instructions** — instructions injected after the session history, useful for steering behavior late in the prompt (advanced field).
 - **Character Version** — a free-text version string (e.g. "1.0") for the character card (advanced field).
 - **Creator** — a free-text field naming whoever authored the character card (advanced field).
 - **Category** — a free-text field used to group the character within the Character Library (advanced field).
@@ -105,7 +105,7 @@ From the character list, each entry has a menu (the "..." button) with **View**,
 
 ### Viewing a Character
 
-Clicking a character in the list (rather than its menu) opens a read-only **View** panel showing avatar, name/nickname, version, tags, description, personality, scenario, and first message, with **View Chats** and **Edit** buttons in the header.
+Clicking a character in the list (rather than its menu) opens a read-only **View** panel showing avatar, name/nickname, version, tags, description, personality, scenario, and first message, with **View Sessions** and **Edit** buttons in the header.
 
 ## Browsing the Character Library
 
@@ -145,24 +145,24 @@ Exported files are named automatically from the character's name (lowercased, wi
 
 ## Visibility Settings
 
-Beyond the character's own fields, each character has a **per-chat visibility** setting that controls how much of that character's information is exposed to the model when the character is present in a chat but not the one currently responding. This is configured per character, per chat, from the chat's edit screen (see [Chats](./chats.md)) rather than from the character form itself — the same character can be fully visible in one chat and hidden in another.
+Beyond the character's own fields, each character has a **per-session visibility** setting that controls how much of that character's information is exposed to the model when the character is present in a session but not the one currently responding. This is configured per character, per session, from the session's edit screen (see [Sessions](./sessions.md)) rather than from the character form itself — the same character can be fully visible in one session and hidden in another.
 
-Each character row in the chat's participant list has a visibility button (an eye icon) that cycles through three levels on click:
+Each character row in the session's participant list has a visibility button (an eye icon) that cycles through three levels on click:
 
 - **Full Info** — the character's complete information is shown even when they aren't the one responding.
 - **Name Only** — only the character's name/nickname is shown when they aren't responding.
 - **Hidden** — the character's info is fully hidden from the prompt when they aren't responding.
 
-The button's tooltip states what happens on the character's _other_ turns — e.g. "When not speaking: Only name/nickname is included" — since a character's own information is always fully included on their own turn regardless of this setting. Its purpose is trimming prompt size in multi-character group chats by hiding detail for characters who aren't currently active in the conversation.
+The button's tooltip states what happens on the character's _other_ turns — e.g. "When not speaking: Only name/nickname is included" — since a character's own information is always fully included on their own turn regardless of this setting. Its purpose is trimming prompt size in multi-character group sessions by hiding detail for characters who aren't currently active in the conversation.
 
 ### Active vs. Visible
 
-Separately from visibility, each character in a chat also has an **active/inactive** toggle (a smile/meh icon switch). An inactive character stays listed in the chat but is excluded from participating — this is distinct from the visibility level, which only affects how much of an active-or-inactive character's data is shown in context.
+Separately from visibility, each character in a session also has an **active/inactive** toggle (a smile/meh icon switch). An inactive character stays listed in the session but is excluded from participating — this is distinct from the visibility level, which only affects how much of an active-or-inactive character's data is shown in context.
 
-### Why Visibility Matters in Group Chats
+### Why Visibility Matters in Group Sessions
 
-Visibility levels matter most in chats with several characters at once: with every character set to Full Visibility, the prompt sent to the model grows with each additional participant, since all of their descriptions, personalities, and other prompt-visible fields are included every turn. Setting less-central characters to Minimal Visibility or Hidden keeps the prompt smaller and cheaper while the model is generating a different character's response, without removing them from the chat.
+Visibility levels matter most in sessions with several characters at once: with every character set to Full Visibility, the prompt sent to the model grows with each additional participant, since all of their descriptions, personalities, and other prompt-visible fields are included every turn. Setting less-central characters to Minimal Visibility or Hidden keeps the prompt smaller and cheaper while the model is generating a different character's response, without removing them from the session.
 
-## Characters in Chats
+## Characters in Sessions
 
-A character isn't tied to a single conversation — the same character can be added to any number of [chats](./chats.md), including one-on-one chats and group chats with multiple characters and personas together. Characters are added to a chat, reordered by drag handle, and have their active state and visibility level managed from the chat's edit screen, as described above.
+A character isn't tied to a single conversation — the same character can be added to any number of [sessions](./sessions.md), including one-on-one sessions and group sessions with multiple characters and personas together. Characters are added to a session, reordered by drag handle, and have their active state and visibility level managed from the session's edit screen, as described above.

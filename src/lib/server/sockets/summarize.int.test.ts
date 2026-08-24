@@ -1,5 +1,5 @@
 /**
- * chatsSummarizeHandler (chats:summarize) — end-to-end coverage for the
+ * sessionsSummarizeHandler (sessions:summarize) — end-to-end coverage for the
  * scene-type participant/mentioned pipeline: knownCast actually reaching
  * the summarize pipeline's request, a hallucinated castId no longer
  * silently vanishing once it does, and the auto-add-message-senders
@@ -109,10 +109,10 @@ function fakeSocket(userId: number) {
 
 const noopEmit = () => {}
 
-/** Sets up a chat with an attached lorebook, an existing bound character,
+/** Sets up a session with an attached lorebook, an existing bound character,
  * and two messages: one from that bound character, one from the user's
  * persona — the minimal shape needed to exercise sender auto-detection. */
-async function makeSceneChat(userId: number) {
+async function makeSceneSession(userId: number) {
 	const [lorebook] = await testDb
 		.insert(schema.lorebooks)
 		.values({ name: "Test Book", userId })
@@ -140,47 +140,47 @@ async function makeSceneChat(userId: number) {
 			isDefault: true
 		})
 		.returning()
-	const [chat] = await testDb
-		.insert(schema.chats)
+	const [session] = await testDb
+		.insert(schema.sessions)
 		.values({
 			userId,
-			name: "Test Chat",
+			name: "Test Session",
 			lorebookId: lorebook.id,
 			isGroup: false
 		})
 		.returning()
 	const [msg1] = await testDb
-		.insert(schema.chatMessages)
+		.insert(schema.sessionMessages)
 		.values({
-			chatId: chat.id,
+			sessionId: session.id,
 			role: "assistant",
 			characterId: character.id,
 			content: "Bram raises his hammer."
 		})
 		.returning()
 	const [msg2] = await testDb
-		.insert(schema.chatMessages)
+		.insert(schema.sessionMessages)
 		.values({
-			chatId: chat.id,
+			sessionId: session.id,
 			role: "user",
 			personaId: persona.id,
 			content: "You nod in agreement."
 		})
 		.returning()
-	return { lorebook, character, binding, persona, chat, msg1, msg2 }
+	return { lorebook, character, binding, persona, session, msg1, msg2 }
 }
 
-describe("chatsSummarizeHandler — scene participant pipeline (PGlite integration)", () => {
+describe("sessionsSummarizeHandler — scene participant pipeline (PGlite integration)", () => {
 	test("knownCast reaches generateSummary for a scene-type request", async () => {
-		const { chatsSummarizeHandler } = await import("./summarize")
+		const { sessionsSummarizeHandler } = await import("./summarize")
 		const user = await makeUser("summarize-knowncast-user")
-		const { chat, binding, msg1, msg2 } = await makeSceneChat(user.id)
+		const { session, binding, msg1, msg2 } = await makeSceneSession(user.id)
 		runSpecMock.mockReset().mockResolvedValue(receiptWith())
 
-		await chatsSummarizeHandler.handler(
+		await sessionsSummarizeHandler.handler(
 			fakeSocket(user.id),
 			{
-				chatId: chat.id,
+				sessionId: session.id,
 				messageIds: [msg1.id, msg2.id],
 				loreType: "scene"
 			} as any,
@@ -203,19 +203,19 @@ describe("chatsSummarizeHandler — scene participant pipeline (PGlite integrati
 	})
 
 	test("a hallucinated castId with no matching cast entry is dropped, not fabricated — but real senders still end up as participants", async () => {
-		const { chatsSummarizeHandler } = await import("./summarize")
+		const { sessionsSummarizeHandler } = await import("./summarize")
 		const user = await makeUser("summarize-hallucinated-user")
-		const { chat, msg1, msg2 } = await makeSceneChat(user.id)
+		const { session, msg1, msg2 } = await makeSceneSession(user.id)
 		runSpecMock
 			.mockReset()
 			.mockResolvedValue(
 				receiptWith({ participants: [{ castId: 999999 }] })
 			)
 
-		const response = await chatsSummarizeHandler.handler(
+		const response = await sessionsSummarizeHandler.handler(
 			fakeSocket(user.id),
 			{
-				chatId: chat.id,
+				sessionId: session.id,
 				messageIds: [msg1.id, msg2.id],
 				loreType: "scene"
 			} as any,
@@ -229,17 +229,16 @@ describe("chatsSummarizeHandler — scene participant pipeline (PGlite integrati
 	})
 
 	test("message senders are always participants even when the LLM extracts nothing at all", async () => {
-		const { chatsSummarizeHandler } = await import("./summarize")
+		const { sessionsSummarizeHandler } = await import("./summarize")
 		const user = await makeUser("summarize-empty-llm-user")
-		const { chat, binding, persona, msg1, msg2 } = await makeSceneChat(
-			user.id
-		)
+		const { session, binding, persona, msg1, msg2 } =
+			await makeSceneSession(user.id)
 		runSpecMock.mockReset().mockResolvedValue(receiptWith())
 
-		const response = await chatsSummarizeHandler.handler(
+		const response = await sessionsSummarizeHandler.handler(
 			fakeSocket(user.id),
 			{
-				chatId: chat.id,
+				sessionId: session.id,
 				messageIds: [msg1.id, msg2.id],
 				loreType: "scene"
 			} as any,
@@ -254,19 +253,19 @@ describe("chatsSummarizeHandler — scene participant pipeline (PGlite integrati
 	})
 
 	test("a sender the LLM also placed in mentioned ends up participant-only, not both", async () => {
-		const { chatsSummarizeHandler } = await import("./summarize")
+		const { sessionsSummarizeHandler } = await import("./summarize")
 		const user = await makeUser("summarize-double-listed-user")
-		const { chat, binding, msg1, msg2 } = await makeSceneChat(user.id)
+		const { session, binding, msg1, msg2 } = await makeSceneSession(user.id)
 		runSpecMock
 			.mockReset()
 			.mockResolvedValue(
 				receiptWith({ mentioned: [{ castId: binding.id }] })
 			)
 
-		const response = await chatsSummarizeHandler.handler(
+		const response = await sessionsSummarizeHandler.handler(
 			fakeSocket(user.id),
 			{
-				chatId: chat.id,
+				sessionId: session.id,
 				messageIds: [msg1.id, msg2.id],
 				loreType: "scene"
 			} as any,
@@ -278,19 +277,19 @@ describe("chatsSummarizeHandler — scene participant pipeline (PGlite integrati
 	})
 })
 
-describe("chats:summarize — topic length cap (round-6 audit fix)", () => {
+describe("sessions:summarize — topic length cap (round-6 audit fix)", () => {
 	test("rejects an oversized topic before doing anything else", async () => {
-		const { chatsSummarizeHandler } = await import("./summarize")
+		const { sessionsSummarizeHandler } = await import("./summarize")
 		const user = await makeUser("summarize-topic-cap-user")
 
 		await expect(
-			chatsSummarizeHandler.handler(
+			sessionsSummarizeHandler.handler(
 				fakeSocket(user.id),
 				{
-					// No real chat needed — the length check runs before the
-					// chat lookup, so an oversized topic must be rejected
-					// even against a chatId that doesn't exist.
-					chatId: 999_999_999,
+					// No real session needed — the length check runs before the
+					// session lookup, so an oversized topic must be rejected
+					// even against a sessionId that doesn't exist.
+					sessionId: 999_999_999,
 					messageIds: [],
 					loreType: "world",
 					topic: "x".repeat(301)
@@ -301,18 +300,18 @@ describe("chats:summarize — topic length cap (round-6 audit fix)", () => {
 	})
 
 	test("accepts a topic at exactly the limit", async () => {
-		const { chatsSummarizeHandler } = await import("./summarize")
+		const { sessionsSummarizeHandler } = await import("./summarize")
 		const user = await makeUser("summarize-topic-ok-user")
-		const { chat, msg1, msg2 } = await makeSceneChat(user.id)
+		const { session, msg1, msg2 } = await makeSceneSession(user.id)
 		runSpecMock
 			.mockReset()
 			.mockResolvedValue(receiptWith({ content: "Fine.", name: "Fine" }))
 
 		await expect(
-			chatsSummarizeHandler.handler(
+			sessionsSummarizeHandler.handler(
 				fakeSocket(user.id),
 				{
-					chatId: chat.id,
+					sessionId: session.id,
 					messageIds: [msg1.id, msg2.id],
 					loreType: "world",
 					topic: "x".repeat(300)

@@ -1,20 +1,20 @@
 /**
- * Round-10 audit fix (MEDIUM): chatsSummarizeHandler ran unguarded, unlike
- * every other LLM-triggering handler in chats.ts (regenerate/continue/
- * swipeRight, all wrapped in withChatTriggerLock) — concurrent
- * chats:summarize requests for the same chat (double-click, multiple tabs)
+ * Round-10 audit fix (MEDIUM): sessionsSummarizeHandler ran unguarded, unlike
+ * every other LLM-triggering handler in sessions.ts (regenerate/continue/
+ * swipeRight, all wrapped in withSessionTriggerLock) — concurrent
+ * sessions:summarize requests for the same session (double-click, multiple tabs)
  * each independently ran the full batch+synthesis LLM pipeline, multiplying
  * cost/latency. Fixed by rejecting a second concurrent request outright rather
  * than queuing it to run right after the first.
  *
- * The guard has since moved from a per-chat `inFlightSummarizeChatIds` set into
- * activityStore.startChatSummarize, keyed per chat AND lore type — a world-lore
+ * The guard has since moved from a per-session `inFlightSummarizeSessionIds` set into
+ * activityStore.startSessionSummarize, keyed per session AND lore type — a world-lore
  * run should no longer block a character-lore one. The rejection itself is
  * deliberately kept: superseding would silently kill a run another tab is
  * watching, and once a run reaches `review` its result is unsaved work.
  *
  * Two contract changes came with that move:
- *  - pipeline failures now emit `chats:summarize:error` and resolve null
+ *  - pipeline failures now emit `sessions:summarize:error` and resolve null
  *    (matching scenes:process) instead of rejecting, so the client's socket
  *    listener sees them rather than the generic handler;
  *  - the guard is cleared by the activity reaching a terminal state, not by a
@@ -48,7 +48,7 @@ afterAll(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true })
 })
 
-async function makeUserWithLorebookChat(username: string) {
+async function makeUserWithLorebookSession(username: string) {
 	const [user] = await testDb
 		.insert(schema.users)
 		.values({ username })
@@ -57,11 +57,11 @@ async function makeUserWithLorebookChat(username: string) {
 		.insert(schema.lorebooks)
 		.values({ name: "Test Lorebook", userId: user.id })
 		.returning()
-	const [chat] = await testDb
-		.insert(schema.chats)
+	const [session] = await testDb
+		.insert(schema.sessions)
 		.values({ isGroup: false, userId: user.id, lorebookId: lorebook.id })
 		.returning()
-	return { user, chat }
+	return { user, session }
 }
 
 function fakeSocket(userId: number) {
@@ -70,9 +70,9 @@ function fakeSocket(userId: number) {
 
 const noopEmit = () => {}
 
-function summarizeParams(chatId: number, loreType = "world"): any {
+function summarizeParams(sessionId: number, loreType = "world"): any {
 	return {
-		chatId,
+		sessionId,
 		messageIds: "all",
 		loreType
 	}
@@ -87,23 +87,23 @@ function capturingEmit() {
 	return { emit, events }
 }
 
-describe("chats:summarize — concurrent-request guard", () => {
-	test("a second concurrent call for the same chat and lore type is rejected outright, not queued", async () => {
-		const { chatsSummarizeHandler } = await import("./summarize")
-		const { user, chat } = await makeUserWithLorebookChat(
+describe("sessions:summarize — concurrent-request guard", () => {
+	test("a second concurrent call for the same session and lore type is rejected outright, not queued", async () => {
+		const { sessionsSummarizeHandler } = await import("./summarize")
+		const { user, session } = await makeUserWithLorebookSession(
 			"summarize-lock-concurrent-user"
 		)
 		const { emit } = capturingEmit()
 
 		const results = await Promise.allSettled([
-			chatsSummarizeHandler.handler(
+			sessionsSummarizeHandler.handler(
 				fakeSocket(user.id),
-				summarizeParams(chat.id),
+				summarizeParams(session.id),
 				emit
 			),
-			chatsSummarizeHandler.handler(
+			sessionsSummarizeHandler.handler(
 				fakeSocket(user.id),
-				summarizeParams(chat.id),
+				summarizeParams(session.id),
 				emit
 			)
 		])
@@ -123,24 +123,24 @@ describe("chats:summarize — concurrent-request guard", () => {
 		expect(reachedPipeline.length).toBe(1)
 	})
 
-	test("a different lore type on the same chat is NOT blocked", async () => {
-		// The whole point of moving the guard off a bare chatId: summarizing
+	test("a different lore type on the same session is NOT blocked", async () => {
+		// The whole point of moving the guard off a bare sessionId: summarizing
 		// world lore should not lock the user out of character lore.
-		const { chatsSummarizeHandler } = await import("./summarize")
-		const { user, chat } = await makeUserWithLorebookChat(
+		const { sessionsSummarizeHandler } = await import("./summarize")
+		const { user, session } = await makeUserWithLorebookSession(
 			"summarize-lock-per-type-user"
 		)
 		const { emit } = capturingEmit()
 
 		const results = await Promise.allSettled([
-			chatsSummarizeHandler.handler(
+			sessionsSummarizeHandler.handler(
 				fakeSocket(user.id),
-				summarizeParams(chat.id, "world"),
+				summarizeParams(session.id, "world"),
 				emit
 			),
-			chatsSummarizeHandler.handler(
+			sessionsSummarizeHandler.handler(
 				fakeSocket(user.id),
-				summarizeParams(chat.id, "character"),
+				summarizeParams(session.id, "character"),
 				emit
 			)
 		])
@@ -156,43 +156,43 @@ describe("chats:summarize — concurrent-request guard", () => {
 	})
 
 	test("a sequential call after the first fails is not blocked by a stale guard entry", async () => {
-		const { chatsSummarizeHandler } = await import("./summarize")
-		const { user, chat } = await makeUserWithLorebookChat(
+		const { sessionsSummarizeHandler } = await import("./summarize")
+		const { user, session } = await makeUserWithLorebookSession(
 			"summarize-lock-sequential-user"
 		)
 		const first = capturingEmit()
 
 		// Resolves null after emitting the error — the pipeline path.
 		await expect(
-			chatsSummarizeHandler.handler(
+			sessionsSummarizeHandler.handler(
 				fakeSocket(user.id),
-				summarizeParams(chat.id),
+				summarizeParams(session.id),
 				first.emit
 			)
 		).resolves.toBeNull()
 		expect(
 			first.events.some(
 				(e) =>
-					e.event === "chats:summarize:error" &&
+					e.event === "sessions:summarize:error" &&
 					/no messages found/i.test(e.data?.error ?? "")
 			)
 		).toBe(true)
 
 		// The failed run left its activity in `error`, which the next call must
 		// supersede. If the guard leaked, this would reject with "already
-		// running" and lock the chat out of summarization permanently.
+		// running" and lock the session out of summarization permanently.
 		const second = capturingEmit()
 		await expect(
-			chatsSummarizeHandler.handler(
+			sessionsSummarizeHandler.handler(
 				fakeSocket(user.id),
-				summarizeParams(chat.id),
+				summarizeParams(session.id),
 				second.emit
 			)
 		).resolves.toBeNull()
 		expect(
 			second.events.some(
 				(e) =>
-					e.event === "chats:summarize:error" &&
+					e.event === "sessions:summarize:error" &&
 					/no messages found/i.test(e.data?.error ?? "")
 			)
 		).toBe(true)

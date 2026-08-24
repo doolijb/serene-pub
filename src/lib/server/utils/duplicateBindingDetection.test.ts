@@ -8,7 +8,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { createTestDb, createTestUser, type TestDb } from "$lib/server/utils/testDb"
+import {
+	createTestDb,
+	createTestUser,
+	type TestDb
+} from "$lib/server/utils/testDb"
 import {
 	findDuplicateCandidates,
 	MAX_BINDINGS_FOR_DUPLICATE_DETECTION
@@ -61,9 +65,9 @@ describe("findDuplicateCandidates", () => {
 		const candidates = await findDuplicateCandidates(lorebook.id, testDb)
 
 		expect(candidates).toHaveLength(1)
-		expect([candidates[0].bindingIdA, candidates[0].bindingIdB].sort()).toEqual(
-			[bound.id, unbound.id].sort()
-		)
+		expect(
+			[candidates[0].bindingIdA, candidates[0].bindingIdB].sort()
+		).toEqual([bound.id, unbound.id].sort())
 	})
 
 	test("never flags two bound rows, even with identical names", async () => {

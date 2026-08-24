@@ -19,7 +19,7 @@ const createMock = vi.fn()
 const modelsListMock = vi.fn()
 vi.mock("openai", () => ({
 	OpenAI: class {
-		chat = {
+		session = {
 			completions: { create: (...args: any[]) => createMock(...args) }
 		}
 		models = { list: (...args: any[]) => modelsListMock(...args) }
@@ -43,15 +43,15 @@ function makeConnection(overrides: Record<string, any> = {}): any {
 	}
 }
 
-function makeChat(): any {
+function makeSession(): any {
 	return {
 		id: 1,
 		userId: 1,
-		chatType: "chat",
+		sessionType: "session",
 		metadata: { ragIgnored: true },
-		chatMessages: [],
-		chatCharacters: [],
-		chatPersonas: [],
+		sessionMessages: [],
+		sessionCharacters: [],
+		sessionPersonas: [],
 		lorebook: {
 			id: 1,
 			lorebookBindings: [],
@@ -68,7 +68,7 @@ function makeAdapter(connectionOverrides: Record<string, any> = {}) {
 		sampling: { contextTokensEnabled: false } as any,
 		contextConfig: {} as any,
 		promptConfig: { systemPrompt: "Test system prompt." } as any,
-		chat: makeChat(),
+		session: makeSession(),
 		currentCharacterId: null,
 		tokenCounter: { countTokens: async () => 1 } as any,
 		tokenLimit: 4096,
@@ -116,7 +116,7 @@ describe("OpenAIChatAdapter — base URL trailing-slash normalization", () => {
 		openAIConstructorMock.mockClear()
 		modelsListMock.mockResolvedValue({ data: [] })
 		await exportsDefault.listModels(makeConnection({ baseUrl: "" }))
-		// The OpenAI Chat connection type's own default baseUrl is "" (empty —
+		// The OpenAI Session connection type's own default baseUrl is "" (empty —
 		// meaning "use the real OpenAI API," which the SDK does when baseURL
 		// is undefined), so the resolved value should be undefined, not "".
 		expect(openAIConstructorMock).toHaveBeenLastCalledWith(

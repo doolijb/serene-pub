@@ -12,7 +12,7 @@ An in-app notice on the import page lays out the scope up front:
 
 - **Imported:** characters, personas, chats (including group chats), and lorebooks.
 - **Not imported:** branching narratives/chat trees, chat backgrounds, and extensions data.
-- Both individual and group chats land in Serene Pub's unified [chat](./chats.md) system.
+- Both individual and group chats land in Serene Pub's unified [session](./sessions.md) system.
 - Alternative message variations ("swipes") are preserved in each message's metadata.
 
 ## Picking a Folder

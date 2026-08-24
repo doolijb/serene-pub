@@ -55,13 +55,15 @@ vi.mock("$lib/server/embedding", () => ({
 }))
 
 let db: TestDb
-let chatId: number
+let sessionId: number
 let userId: number
 let characterId: number
 
 beforeAll(async () => {
 	db = await createTestDb()
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(db as any)
 
 	const [user] = await db
@@ -83,19 +85,24 @@ beforeAll(async () => {
 			isDefault: false
 		})
 		.returning()
-	const [chat] = await db
-		.insert(schema.chats)
+	const [session] = await db
+		.insert(schema.sessions)
 		.values({ userId, isGroup: false })
 		.returning()
-	chatId = chat.id
+	sessionId = session.id
 	await db
-		.insert(schema.chatCharacters)
-		.values({ chatId, characterId, isActive: true, visibility: "visible" })
+		.insert(schema.sessionCharacters)
+		.values({
+			sessionId,
+			characterId,
+			isActive: true,
+			visibility: "visible"
+		})
 	await db
-		.insert(schema.chatPersonas)
-		.values({ chatId, personaId: persona.id })
-	await db.insert(schema.chatMessages).values({
-		chatId,
+		.insert(schema.sessionPersonas)
+		.values({ sessionId, personaId: persona.id })
+	await db.insert(schema.sessionMessages).values({
+		sessionId,
 		role: "user",
 		content: "Have you seen the ashguard?",
 		personaId: persona.id
@@ -120,7 +127,7 @@ const turn = async (over: any = {}) => {
 	const { runTurn } = await import("$lib/server/pipelines/runtime/runTurn")
 	return await runTurn({
 		db: db as any,
-		chatId,
+		sessionId,
 		userId,
 		currentCharacterId: characterId,
 		text: "Have you seen the ashguard?",
@@ -129,12 +136,14 @@ const turn = async (over: any = {}) => {
 }
 
 describe("recording what a run did", () => {
-	it("leaves a row saying the pipeline answered this chat", async () => {
+	it("leaves a row saying the pipeline answered this session", async () => {
 		// The whole point: "is it using the new path" is a query, not a claim.
-		const { lastRunFor } = await import("$lib/server/pipelines/runtime/receipts")
+		const { lastRunFor } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
 		await turn({ seed: "receipt:1" })
 
-		const run = await lastRunFor(db as any, chatId)
+		const run = await lastRunFor(db as any, sessionId)
 		expect(run).toBeTruthy()
 		expect(run.outcome).toBe("ok")
 		expect(run.specSlug).toBe("core:spec/respond")
@@ -144,7 +153,9 @@ describe("recording what a run did", () => {
 	it("records the node trail, in order, as rows rather than only as a blob", async () => {
 		// "Why did this reply include that lore" is a question about a node.
 		// Answering it should not mean loading and walking JSON for every run.
-		const { runForMessage } = await import("$lib/server/pipelines/runtime/receipts")
+		const { runForMessage } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
 		const receipt = await turn({ seed: "receipt:2" })
 		const messageId = writtenMessageId(receipt)!
 
@@ -173,6 +184,9 @@ describe("recording what a run did", () => {
 			// than a read inside the context Task.
 			"gather.relationshipsPerspectives.read",
 			"gather.relationshipsKnown.read",
+			// Spec 1.11.0: who speaks is decided (or an explicit pick recorded)
+			// inside the run — the receipt line 19 §5 exists for.
+			"speaker",
 			"context",
 			// Spec 1.6.0: how much room the context has, derived from the
 			// sampling config's window instead of typed on the ranker. Its own
@@ -187,11 +201,28 @@ describe("recording what a run did", () => {
 			"save"
 		])
 		expect(found!.nodes.every((n: any) => n.result === "ok")).toBe(true)
+
+		// "Why did Bram speak" is now a receipt line (19 §5): the trigger's
+		// pick was recorded, with what decided and how. The socket still
+		// pre-picks every turn, so the pick wins under `turn-manual` — the
+		// strategies deciding for themselves is behind U-C5's retirement of
+		// the pre-pick. The row carries identity; the decision itself lives
+		// in the receipt blob, so it is read off the returned receipt.
+		const speakerRow = found!.nodes.find(
+			(n: any) => n.nodeKey === "speaker"
+		)
+		expect(speakerRow.typeId).toBe("core:task/turn-manual@1")
+		const speaker = receipt.nodes.find((n: any) => n.nodeKey === "speaker")
+		expect(speaker!.output).toMatchObject({
+			characterId,
+			strategy: "manual",
+			main: { characterId, via: "pick" }
+		})
 	}, 30_000)
 
 	it("links the run to the message it produced", async () => {
 		// What makes "show me why *this* reply looks like that" a lookup rather
-		// than a search through a chat's history.
+		// than a search through a session's history.
 		const receipt = await turn({ seed: "receipt:3" })
 		const messageId = writtenMessageId(receipt)!
 		const [row] = await db
@@ -216,7 +247,9 @@ describe("recording what a run did", () => {
 		// A run that produced a good reply and then could not record itself has
 		// still produced a good reply. Getting this backwards loses a user's
 		// message to a bad day in the audit trail.
-		const { saveReceipt } = await import("$lib/server/pipelines/runtime/receipts")
+		const { saveReceipt } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
 		const broken = {
 			insert: () => {
 				throw new Error("disk is having a moment")
@@ -224,12 +257,12 @@ describe("recording what a run did", () => {
 		}
 		const receipt = await turn({ seed: "receipt:5" })
 		await expect(
-			saveReceipt(broken as any, receipt, { chatId })
+			saveReceipt(broken as any, receipt, { sessionId })
 		).resolves.toBe(null)
 	}, 30_000)
 
 	it("does not record a comparison sweep", async () => {
-		// The compare tool previews every chat on the instance; recording each
+		// The compare tool previews every session on the instance; recording each
 		// would bury the real runs in rows nobody asked for.
 		const before = await db.select().from(schema.pipelineRuns)
 		await turn({ seed: "receipt:6", preview: true, skipReceipt: true })
@@ -238,13 +271,17 @@ describe("recording what a run did", () => {
 	}, 30_000)
 
 	it("records a preview as a preview, when it does record one", async () => {
-		const { runsForChat } = await import("$lib/server/pipelines/runtime/receipts")
+		const { runsForSession } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
 		await turn({ seed: "receipt:7", preview: true })
-		const runs = await runsForChat(db as any, chatId)
+		const runs = await runsForSession(db as any, sessionId)
 		expect(runs.some((r: any) => r.isPreview)).toBe(true)
 		// And a preview is never what `lastRunFor` reports, because it sent
 		// nothing — it is not evidence that a reply came from the pipeline.
-		const { lastRunFor } = await import("$lib/server/pipelines/runtime/receipts")
-		expect((await lastRunFor(db as any, chatId)).isPreview).toBe(false)
+		const { lastRunFor } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
+		expect((await lastRunFor(db as any, sessionId)).isPreview).toBe(false)
 	}, 30_000)
 })

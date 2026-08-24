@@ -42,7 +42,8 @@ function makeFakeHttpsModule() {
 		Agent: FakeAgent,
 		get(url: string, optionsOrCb: any, maybeCb?: (res: any) => void) {
 			const options = typeof optionsOrCb === "function" ? {} : optionsOrCb
-			const cb = typeof optionsOrCb === "function" ? optionsOrCb : maybeCb!
+			const cb =
+				typeof optionsOrCb === "function" ? optionsOrCb : maybeCb!
 			const range: string | undefined = options?.headers?.Range
 			requestedRanges.push(range ?? "(none)")
 
@@ -53,7 +54,8 @@ function makeFakeHttpsModule() {
 					return req
 				},
 				destroy() {
-					for (const h of this._errorHandlers) h(new Error("destroyed"))
+					for (const h of this._errorHandlers)
+						h(new Error("destroyed"))
 				}
 			}
 

@@ -99,9 +99,7 @@ function unbracket(seg: string): string {
  * inserts, and the shipped characters layout is written with it — so the naive
  * split flagged the layout Serene Pub ships.
  */
-export function templateTokens(
-	src: string
-): { text: string; start: number }[] {
+export function templateTokens(src: string): { text: string; start: number }[] {
 	const out: { text: string; start: number }[] = []
 	let cur = ""
 	let start = 0
@@ -148,7 +146,10 @@ export function contextAt(
 		// A tag the cursor sits *inside* is being typed and has no meaning yet.
 		if (end > offset) break
 
-		const inner = m[0].replace(/^\{\{\{?/, "").replace(/\}?\}\}$/, "").trim()
+		const inner = m[0]
+			.replace(/^\{\{\{?/, "")
+			.replace(/\}?\}\}$/, "")
+			.trim()
 		if (!inner) continue
 
 		if (inner.startsWith("/")) {
@@ -372,18 +373,21 @@ export function completionsAt(
 	const isFirstToken = inner.slice(0, tokenStart).trim() === ""
 	const helpers: Completion[] =
 		isFirstToken && !inner.trimStart().startsWith("#")
-			? INLINE_HELPERS.filter((h) => h.startsWith(token) && token !== "").map(
-					(h) => ({
-						label: h,
-						insert: h,
-						kind: "helper" as const,
-						start: absoluteTokenStart,
-						end: offset
-					})
-				)
+			? INLINE_HELPERS.filter(
+					(h) => h.startsWith(token) && token !== ""
+				).map((h) => ({
+					label: h,
+					insert: h,
+					kind: "helper" as const,
+					start: absoluteTokenStart,
+					end: offset
+				}))
 			: []
 
-	return [...pathCompletions(token, absoluteTokenStart, offset, frame, scope), ...helpers]
+	return [
+		...pathCompletions(token, absoluteTokenStart, offset, frame, scope),
+		...helpers
+	]
 }
 
 function pathCompletions(
@@ -408,7 +412,8 @@ function pathCompletions(
 	const lastDot = rest.lastIndexOf(".")
 	const partial = lastDot === -1 ? rest : rest.slice(lastDot + 1)
 	const prefix = lastDot === -1 ? "" : rest.slice(0, lastDot)
-	const partialStart = tokenStart + consumed + (lastDot === -1 ? 0 : lastDot + 1)
+	const partialStart =
+		tokenStart + consumed + (lastDot === -1 ? 0 : lastDot + 1)
 
 	const available = fieldsFor(prefix, f, scope)
 	if (!available) return []

@@ -2,7 +2,7 @@
  * The query windows, and how a message is written when it is a query.
  *
  * Small surface, and two of its three rules are only visible in edge cases that
- * a chat exercises constantly: a participant who left, and a chat shorter than
+ * a session exercises constantly: a participant who left, and a session shorter than
  * the window.
  */
 
@@ -13,11 +13,11 @@ import {
 } from "$lib/server/pipelines/ranking/ragQuery"
 
 const cast = {
-	chatCharacters: [
+	sessionCharacters: [
 		{ character: { id: 1, name: "Alice", nickname: "The Knight" } }
 	],
-	chatPersonas: [{ persona: { id: 1, name: "Bob" } }],
-	removedChatCharacters: [
+	sessionPersonas: [{ persona: { id: 1, name: "Bob" } }],
+	removedSessionCharacters: [
 		{
 			characterId: 9,
 			character: { id: 9, name: "Gone" },
@@ -40,7 +40,7 @@ describe("formatting a message as a query", () => {
 		).toBe("[The Knight]: The wall fell.")
 	})
 
-	it("prefers a nickname, matching how the chat displays them", () => {
+	it("prefers a nickname, matching how the session displays them", () => {
 		const out = formatMessageForQuery(
 			{ characterId: 1, content: "x" },
 			cast
@@ -50,7 +50,7 @@ describe("formatting a message as a query", () => {
 
 	it("names a participant who has since left", () => {
 		// Otherwise every line they ever said embeds as though nobody said it,
-		// and a chat with turnover slowly loses its own history to retrieval.
+		// and a session with turnover slowly loses its own history to retrieval.
 		expect(
 			formatMessageForQuery(
 				{ characterId: 9, content: "I was here." },
@@ -89,13 +89,13 @@ describe("the two windows", () => {
 		expect(recent).toEqual(["[user]: m5", "[user]: m6", "[user]: m7"])
 	})
 
-	it("gives back what exists when the chat is shorter than the windows", () => {
+	it("gives back what exists when the session is shorter than the windows", () => {
 		const { current, recent } = queryWindows(msgs(3), cast, params)
 		expect(current).toEqual(["[user]: m1", "[user]: m2"])
 		expect(recent).toEqual(["[user]: m0"])
 	})
 
-	it("has an empty recent window on a brand-new chat", () => {
+	it("has an empty recent window on a brand-new session", () => {
 		const { current, recent } = queryWindows(msgs(1), cast, params)
 		expect(current).toEqual(["[user]: m0"])
 		expect(recent).toEqual([])

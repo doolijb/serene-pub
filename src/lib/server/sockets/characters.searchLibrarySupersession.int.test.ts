@@ -6,7 +6,15 @@
  * via withSupersession(), which aborts a socket's own previous
  * still-in-flight search when a new one from the same socket arrives.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest"
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	describe,
+	expect,
+	test,
+	vi
+} from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -88,22 +96,24 @@ describe("characters:searchLibrary — supersession", () => {
 
 		const firstWork = deferred<any>()
 		let firstSignal: AbortSignal | undefined
-		cachedSearchMock.mockImplementationOnce((_sourceId: any, _params: any, ctx: any) => {
-			firstSignal = ctx.signal
-			// Mirrors what the real cachedSearch()/getOrStartAbortable() does
-			// for a caller whose OWN signal aborts: that caller's promise
-			// rejects, regardless of what the underlying work later does —
-			// a bare stub that ignores ctx.signal wouldn't exercise the
-			// handler's `if (signal.aborted)` branch at all.
-			return new Promise((resolve, reject) => {
-				ctx.signal.addEventListener(
-					"abort",
-					() => reject(ctx.signal.reason),
-					{ once: true }
-				)
-				firstWork.promise.then(resolve, reject)
-			})
-		})
+		cachedSearchMock.mockImplementationOnce(
+			(_sourceId: any, _params: any, ctx: any) => {
+				firstSignal = ctx.signal
+				// Mirrors what the real cachedSearch()/getOrStartAbortable() does
+				// for a caller whose OWN signal aborts: that caller's promise
+				// rejects, regardless of what the underlying work later does —
+				// a bare stub that ignores ctx.signal wouldn't exercise the
+				// handler's `if (signal.aborted)` branch at all.
+				return new Promise((resolve, reject) => {
+					ctx.signal.addEventListener(
+						"abort",
+						() => reject(ctx.signal.reason),
+						{ once: true }
+					)
+					firstWork.promise.then(resolve, reject)
+				})
+			}
+		)
 
 		const firstCallPromise = charactersSearchLibrary.handler(
 			socket,
@@ -115,10 +125,16 @@ describe("characters:searchLibrary — supersession", () => {
 
 		// A second search from the SAME socket supersedes the first.
 		let secondSignal: AbortSignal | undefined
-		cachedSearchMock.mockImplementationOnce((_sourceId: any, _params: any, ctx: any) => {
-			secondSignal = ctx.signal
-			return Promise.resolve({ items: [], hasMore: false, nextOffset: 0 })
-		})
+		cachedSearchMock.mockImplementationOnce(
+			(_sourceId: any, _params: any, ctx: any) => {
+				secondSignal = ctx.signal
+				return Promise.resolve({
+					items: [],
+					hasMore: false,
+					nextOffset: 0
+				})
+			}
+		)
 		const secondCallPromise = charactersSearchLibrary.handler(
 			socket,
 			{ searchTerm: "second", requestId: "req-2" } as any,

@@ -203,7 +203,7 @@ export const graphBuildConfigsDelete: Handler<
 
 		// systemSettings.defaultGraphBuildConfigId is ON DELETE SET NULL, so
 		// deleting the selected config would leave the instance with no graph
-		// config at all and send every build back to the chat defaults. Hand
+		// config at all and send every build back to the session defaults. Hand
 		// the selection back to the built-in rather than leaving it empty;
 		// db/defaults.ts performs the same backfill on the next boot.
 		const settings = await db.query.systemSettings.findFirst({

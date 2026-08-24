@@ -129,7 +129,7 @@ describe("disableAccessibility", () => {
 		expect(m.isAccessibilityEnabled()).toBe(false)
 	})
 
-	it("writes \"false\" rather than deleting the key", async () => {
+	it('writes "false" rather than deleting the key', async () => {
 		// An absent key means "never chose", which falls back to
 		// PUBLIC_DOCUMENT_VIEW_DEFAULT. Deleting it made turning Document View
 		// off last only until the next load on deployments that set the env var.

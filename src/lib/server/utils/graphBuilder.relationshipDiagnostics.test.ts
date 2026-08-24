@@ -29,7 +29,7 @@ vi.mock("./getConnectionAdapter", () => ({
 	})
 }))
 
-const conn = { id: 1, name: "c", type: "openai_chat" } as any
+const conn = { id: 1, name: "c", type: "openai_session" } as any
 const sampling = { id: 1, name: "s" } as any
 const contextConfig = { id: 1 } as any
 const promptConfig = { id: 1 } as any

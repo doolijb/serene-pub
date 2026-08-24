@@ -25,7 +25,8 @@ describe("resolveBackgroundImagePath", () => {
 	})
 
 	test("leaves an already-.webp default path untouched", () => {
-		const p = "/backgrounds/defaults/rustic-pub_nikola-jovanovic-QGPmWrclELg-unsplash.webp"
+		const p =
+			"/backgrounds/defaults/rustic-pub_nikola-jovanovic-QGPmWrclELg-unsplash.webp"
 		expect(resolveBackgroundImagePath(p)).toBe(p)
 	})
 

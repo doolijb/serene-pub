@@ -175,10 +175,19 @@ describe("migration 0085 cleanup — merges pre-existing case-variant duplicates
 		// Run the real migration file's cleanup + CREATE UNIQUE INDEX SQL,
 		// verbatim, so this test tracks the actual migration content.
 		const migrationSql = await fs.readFile(
-			path.resolve(process.cwd(), "drizzle/0085_remarkable_quasimodo.sql"),
+			path.resolve(
+				process.cwd(),
+				"drizzle/0085_remarkable_quasimodo.sql"
+			),
 			"utf-8"
 		)
 		const statements = migrationSql
+			// 0085 predates the session rename (0141) and must keep its
+			// historical table names for fresh migration runs — so the replay
+			// maps them onto today's schema, which is the state it would meet
+			// on any instance that reaches this point now.
+			.replaceAll("chat_tags", "session_tags")
+			.replaceAll("chat_id", "session_id")
 			.split("--> statement-breakpoint")
 			.map((s) => s.trim())
 			.filter(Boolean)

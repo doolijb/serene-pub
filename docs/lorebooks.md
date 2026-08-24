@@ -1,6 +1,6 @@
 # Lorebooks
 
-Lorebooks are the shared knowledge base behind your stories — world facts, character secrets, a chronological history, and (optionally) a graph of who's connected to whom. A lorebook is created once and can be attached to any [chat](./chats.md), where its entries are injected into the model's context as the conversation calls for them.
+Lorebooks are the shared knowledge base behind your stories — world facts, character secrets, a chronological history, and (optionally) a graph of who's connected to whom. A lorebook is created once and can be attached to any [session](./sessions.md), where its entries are injected into the model's context as the conversation calls for them.
 
 ## Overview
 
@@ -17,7 +17,7 @@ Opening a lorebook switches the panel into an editor with up to six tabs across 
 2. **Bindings** — the `{{char:N}}` tokens that connect lore content to actual characters/personas.
 3. **World Lore** — setting/faction/location knowledge not tied to one character.
 4. **Character Lore** — per-character facts, secrets, and backstory.
-5. **History** — a dated timeline, with scenes captured from chats underneath each entry.
+5. **History** — a dated timeline, with scenes captured from sessions underneath each entry.
 6. **Graph** — a visual map of entities and relationships extracted from your history.
 
 The Graph tab only appears when **Summarization** is turned on in [System Settings](./system-settings.md) — narrative-graph extraction is pure LLM extraction from summarized scenes, so it depends on that pipeline but not on vectorization/embeddings at all. If you're on the Graph tab and those settings get turned off, the panel automatically falls back to the World Lore tab so you're never stuck on a tab that no longer applies.
@@ -41,15 +41,15 @@ The `+` button in the list view creates a new lorebook from just a name.
 
 **Exporting** a lorebook is a real, working feature (not disabled) — available from a lorebook's toolbar or its row menu in the list view. It opens an **Export Options** dialog letting you choose whether to include bound characters, bound personas, and the narrative graph (all on by default) before downloading the file.
 
-### Attaching a lorebook to the currently open chat
+### Attaching a lorebook to the currently open session
 
-If you have a chat open, each lorebook's row menu (and the detail view's header, once opened) offers an **Attach to current chat** / **Detach from current chat** action — a shortcut for the same [Lorebook Binding](./chats.md#lorebook-binding) done from chat settings. If the open chat already has a lorebook attached, every other lorebook's attach action is disabled until it's detached, and the currently-attached one shows the detach action instead. Guests viewing someone else's shared chat don't see these actions — only the chat's owner can change its lorebook.
+If you have a session open, each lorebook's row menu (and the detail view's header, once opened) offers an **Attach to current session** / **Detach from current session** action — a shortcut for the same [Lorebook Binding](./sessions.md#lorebook-binding) done from session settings. If the open session already has a lorebook attached, every other lorebook's attach action is disabled until it's detached, and the currently-attached one shows the detach action instead. Guests viewing someone else's shared session don't see these actions — only the session's owner can change its lorebook.
 
 ## Lorebook Tab
 
 This is the lorebook's identity, and the simplest tab in the editor:
 
-- **Name** (required) — shown everywhere the lorebook is referenced, including in chat settings and the sidebar list.
+- **Name** (required) — shown everywhere the lorebook is referenced, including in session settings and the sidebar list.
 - **Description** (optional) — free text, useful as a one-line reminder of what the lorebook covers.
 - **Tags** — the same tagging system used for [characters](./characters.md); type a tag name and press Enter or pick from the autocomplete suggestions, and click a tag chip to remove it.
 
@@ -57,7 +57,7 @@ The tab opens in a read-only view; click **Edit** to change fields, then **Updat
 
 ## Bindings Tab
 
-Bindings are the layer that connects a lorebook's abstract placeholders to concrete characters, personas, or standalone background characters. Each binding is a token of the form `{{char:1}}`, `{{char:2}}`, `{{char:3}}`, and so on — you insert these tokens into lore content instead of hard-coding a name, and at prompt time (and in the editor's live preview) they're swapped for whichever character, persona, or background-character name is currently linked to that binding number. This indirection means you can reuse the same lorebook across chats with different casts, or swap out who plays "the mentor" without rewriting every entry that mentions them.
+Bindings are the layer that connects a lorebook's abstract placeholders to concrete characters, personas, or standalone background characters. Each binding is a token of the form `{{char:1}}`, `{{char:2}}`, `{{char:3}}`, and so on — you insert these tokens into lore content instead of hard-coding a name, and at prompt time (and in the editor's live preview) they're swapped for whichever character, persona, or background-character name is currently linked to that binding number. This indirection means you can reuse the same lorebook across sessions with different casts, or swap out who plays "the mentor" without rewriting every entry that mentions them.
 
 Three buttons drive binding creation:
 
@@ -101,7 +101,7 @@ Below the binding list, two sections help keep the cast clean — each only appe
 
 A binding is also a lorebook's narrative-graph node — the two used to be separate records, linked together, but they're now the same underlying row. Editing a binding's status fields (in [Editing a binding's identity and status](#editing-a-bindings-identity-and-status) above) is the same thing as editing its node in the [Graph tab](#graph-tab), and creating a binding is the only way to add a node to the graph by hand.
 
-Because a binding *is* a lorebook's graph node, there's no separate linking or reconciliation step to keep the two in sync — attaching a character to a binding, or renaming it, is immediately reflected everywhere the binding's identity is used, including the Graph tab. Attaching an existing chat's characters and personas to a lorebook works the same way: opening a chat that has a lorebook attached automatically creates any missing bindings for that chat's cast. If any binding still has no character or persona attached (for example, one you added manually, or one whose link was removed), an **Unlinked Lorebook Binding** prompt appears, letting you link it to one of the chat's characters or personas on the spot, or skip it and leave it unlinked for now.
+Because a binding *is* a lorebook's graph node, there's no separate linking or reconciliation step to keep the two in sync — attaching a character to a binding, or renaming it, is immediately reflected everywhere the binding's identity is used, including the Graph tab. Attaching an existing session's characters and personas to a lorebook works the same way: opening a session that has a lorebook attached automatically creates any missing bindings for that session's cast. If any binding still has no character or persona attached (for example, one you added manually, or one whose link was removed), an **Unlinked Lorebook Binding** prompt appears, letting you link it to one of the session's characters or personas on the spot, or skip it and leave it unlinked for now.
 
 ## World Lore Tab
 
@@ -155,15 +155,15 @@ Entries are locked into chronological order by the editor itself: when you edit 
 
 The **Next Date** button (calendar-plus icon in the toolbar) is a shortcut that clones the latest entry's date forward by exactly one day, correctly rolling over month and year boundaries — including leap years — and opens a new blank entry at that date, ready for you to fill in. The entry list also flags whichever entry currently holds the very latest date as **(Current)**, so you always know where "now" is in your timeline without checking dates by hand.
 
-### Scenes: capturing chat moments into history
+### Scenes: capturing session moments into history
 
-Each history entry has a **Scenes** sub-tab, separate from its Content field. A Scene is a saved reference to a specific, consecutive run of messages in a chat — created via the Summarize-to-Lorebook flow described in the [pipeline section](#the-scene--history--graph-pipeline) below — along with:
+Each history entry has a **Scenes** sub-tab, separate from its Content field. A Scene is a saved reference to a specific, consecutive run of messages in a session — created via the Summarize-to-Lorebook flow described in the [pipeline section](#the-scene--history--graph-pipeline) below — along with:
 
 - A **Name**.
 - A generated **Summary**.
 - **Participants** — characters physically present in the scene.
 - **Mentioned** — characters referenced in the scene but not present.
-- A link back to the source chat and how many of its messages the scene covers.
+- A link back to the source session and how many of its messages the scene covers.
 
 Scenes can be edited by hand (name, summary, and both character lists), processed or re-processed to have the LLM regenerate their summary from the underlying messages, or deleted outright. A film-strip badge on the history entry's list card shows how many scenes it has captured, and a graph icon marks scenes that have already been folded into the narrative graph.
 
@@ -222,17 +222,17 @@ This is a safe, reversible cleanup step, not a permanent one: every absorb is lo
 
 ## The Scene → History → Graph Pipeline
 
-Turning a conversation into structured, graph-connected lore is a four-step pipeline that spans the chat page and three of the tabs above. Each generation step runs through the same kind of modal shell: a confirm/configure screen, a running screen with live streaming progress (and, for longer jobs, a debug trace of the actual prompts sent to the model), and a review screen where you edit the LLM's output before committing it.
+Turning a conversation into structured, graph-connected lore is a four-step pipeline that spans the session page and three of the tabs above. Each generation step runs through the same kind of modal shell: a confirm/configure screen, a running screen with live streaming progress (and, for longer jobs, a debug trace of the actual prompts sent to the model), and a review screen where you edit the LLM's output before committing it.
 
-### Step 1 — Summarize to Lorebook (from the chat)
+### Step 1 — Summarize to Lorebook (from the session)
 
-From within a chat, selecting one or more messages and choosing to summarize opens the **Summarize to Lorebook** modal. You pick an entry type:
+From within a session, selecting one or more messages and choosing to summarize opens the **Summarize to Lorebook** modal. You pick an entry type:
 
 - **Scene** — requires selecting (or creating on the spot) the History Entry this scene belongs to. The selected messages must form a consecutive, gap-free run — the modal warns you if there's a visible message in between that wasn't selected.
 - **World Lore** — an optional focus topic narrows what the summary concentrates on.
 - **Character Lore** — a focus topic is required here (e.g. "abilities" or "relationship with Kira"), and you can optionally bind the resulting entry to a character or persona.
 
-If the chat doesn't have a lorebook attached yet, the modal walks you through attaching an existing one or creating a new one before you can continue. Clicking **Generate Summary** streams a draft from the LLM — in batches for longer message selections, followed by a synthesis pass that merges the batches into one coherent result — and lands you on a review screen where you can edit the generated name and content by hand. Saving a **Scene** creates the Scene record (with its Participants/Mentioned character lists, auto-extracted by the model) attached to the chosen history entry; saving **World Lore** or **Character Lore** creates the corresponding lore entry directly, ready to appear in its respective tab.
+If the session doesn't have a lorebook attached yet, the modal walks you through attaching an existing one or creating a new one before you can continue. Clicking **Generate Summary** streams a draft from the LLM — in batches for longer message selections, followed by a synthesis pass that merges the batches into one coherent result — and lands you on a review screen where you can edit the generated name and content by hand. Saving a **Scene** creates the Scene record (with its Participants/Mentioned character lists, auto-extracted by the model) attached to the chosen history entry; saving **World Lore** or **Character Lore** creates the corresponding lore entry directly, ready to appear in its respective tab.
 
 ### Step 2 — Process Scene (in the History tab)
 

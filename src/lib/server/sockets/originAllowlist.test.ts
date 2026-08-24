@@ -242,8 +242,6 @@ describe("describeOriginAllowlistConfig", () => {
 		const { describeOriginAllowlistConfig } = await import(
 			"./originAllowlist"
 		)
-		expect(describeOriginAllowlistConfig()).toContain(
-			"serene.example.com"
-		)
+		expect(describeOriginAllowlistConfig()).toContain("serene.example.com")
 	})
 })

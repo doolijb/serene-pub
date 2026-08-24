@@ -737,7 +737,7 @@
 										{/if}
 										<p class="text-muted text-xs">
 											Rendered against sample data, not
-											your chats.
+											your sessions.
 										</p>
 									</div>
 

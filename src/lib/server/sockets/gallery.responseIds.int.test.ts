@@ -71,7 +71,9 @@ describe("characters gallery handlers thread characterId (PGlite integration)", 
 		)
 
 		expect(res.characterId).toBe(character.id)
-		const success = emitted.find((e) => e.event === "characters:listGallery")
+		const success = emitted.find(
+			(e) => e.event === "characters:listGallery"
+		)
 		expect(success?.data.characterId).toBe(character.id)
 	})
 

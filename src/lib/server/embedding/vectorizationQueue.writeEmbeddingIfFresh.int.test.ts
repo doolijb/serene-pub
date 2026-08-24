@@ -125,7 +125,11 @@ describe("writeEmbeddingIfFresh (PGlite integration)", () => {
 		const lorebook = await makeLorebook(user.id)
 		const [entry] = await testDb
 			.insert(schema.worldLoreEntries)
-			.values({ lorebookId: lorebook.id, name: "Not An Edit", content: "x" })
+			.values({
+				lorebookId: lorebook.id,
+				name: "Not An Edit",
+				content: "x"
+			})
 			.returning()
 
 		const before = await rawUpdatedAt(entry.id)
@@ -159,7 +163,9 @@ describe("writeEmbeddingIfFresh (PGlite integration)", () => {
 			})
 			.from(schema.worldLoreEntries)
 			.where(eq(schema.worldLoreEntries.id, entry.id))
-		expect(stale, "the row was stale the instant it was written").toBe(false)
+		expect(stale, "the row was stale the instant it was written").toBe(
+			false
+		)
 	})
 
 	test("skips the write when the row was edited after the capture (edit-during-embed race)", async () => {

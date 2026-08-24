@@ -1,7 +1,7 @@
 /**
  * Round-9 audit fix (MEDIUM): the SillyTavern bulk-folder import had no
  * entry-count cap on any of its 4 unbounded loops (embedded character_book
- * entries, world-info entries, individual-chat messages, group-chat
+ * entries, world-info entries, individual-session messages, group-session
  * messages) — unlike lorebooks:import, which already enforces
  * LOREBOOK_IMPORT_LIMITS for the exact same reason. A crafted "backup" with
  * an oversized file could drive hundreds of thousands of sequential
@@ -12,10 +12,7 @@
  * than aborting the whole batch.
  */
 import { describe, expect, test, vi } from "vitest"
-import {
-	assertWithinBulkImportLimit,
-	MAX_BULK_IMPORT_ITEMS
-} from "./import"
+import { assertWithinBulkImportLimit, MAX_BULK_IMPORT_ITEMS } from "./import"
 
 // Pure-function test — doesn't touch the DB at all — but import.ts imports
 // the real `db` at module scope, which otherwise triggers a real

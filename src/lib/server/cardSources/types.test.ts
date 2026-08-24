@@ -9,10 +9,7 @@
  * call site until someone went looking for `.cause` and found nothing.
  */
 import { describe, expect, test } from "vitest"
-import {
-	CardSourceInvalidRefError,
-	CardSourceUnavailableError
-} from "./types"
+import { CardSourceInvalidRefError, CardSourceUnavailableError } from "./types"
 
 describe("CardSourceUnavailableError", () => {
 	test("an explicit cause is preserved and retrievable via .cause", () => {

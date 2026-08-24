@@ -34,7 +34,7 @@ vi.mock("./getConnectionAdapter", () => ({
 	})
 }))
 
-const conn = { id: 1, name: "c", type: "openai_chat" } as any
+const conn = { id: 1, name: "c", type: "openai_session" } as any
 const sampling = { id: 1, name: "s" } as any
 const contextConfig = { id: 1 } as any
 const promptConfig = { id: 1 } as any
@@ -106,9 +106,9 @@ describe("buildGraphFromScenes — in-memory character discovery", () => {
 		// Aria matched a seed and must NOT be in the INSERT set — that would
 		// duplicate a binding that already exists, on every apply.
 		expect(proposed.some((n) => n.name === "Aria")).toBe(false)
-		expect(
-			proposed.some((n) => n.tempId.startsWith("existing_"))
-		).toBe(false)
+		expect(proposed.some((n) => n.tempId.startsWith("existing_"))).toBe(
+			false
+		)
 
 		// Before the fix this build produced nothing at all.
 		expect(result.proposal.relationships.length).toBeGreaterThan(0)
@@ -134,9 +134,7 @@ describe("buildGraphFromScenes — in-memory character discovery", () => {
 			seedNodes: [seedAria]
 		})
 
-		const cassias = result.proposal.nodes.filter(
-			(n) => n.name === "Cassia"
-		)
+		const cassias = result.proposal.nodes.filter((n) => n.name === "Cassia")
 		// This is the guarantee the old code got by COMMITTING a binding
 		// mid-build and re-reading it. The ledger replaces that with a map, so
 		// the same dedup happens with zero writes.
@@ -192,7 +190,8 @@ describe("buildGraphFromScenes — in-memory character discovery", () => {
 		})
 
 		const extractionCalls = runQueuedLLMCallMock.mock.calls.filter(
-			([opts]: any) => (opts?.label ?? "").includes("character extraction")
+			([opts]: any) =>
+				(opts?.label ?? "").includes("character extraction")
 		)
 		expect(extractionCalls).toHaveLength(0)
 	})
@@ -213,7 +212,8 @@ describe("buildGraphFromScenes — in-memory character discovery", () => {
 		})
 
 		const extractionCalls = runQueuedLLMCallMock.mock.calls.filter(
-			([opts]: any) => (opts?.label ?? "").includes("character extraction")
+			([opts]: any) =>
+				(opts?.label ?? "").includes("character extraction")
 		)
 		// The stored names ARE the recorded cast — re-extracting from the
 		// summary would be a lossy replacement for them.

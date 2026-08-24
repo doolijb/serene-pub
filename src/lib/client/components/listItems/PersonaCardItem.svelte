@@ -179,11 +179,11 @@
 											size={16}
 											aria-hidden="true"
 										/>
-										<span
-											>{persona.isDefault
+										<span>
+											{persona.isDefault
 												? "Default"
-												: "Set as default"}</span
-										>
+												: "Set as default"}
+										</span>
 									</button>
 								{/if}
 								{#if onDelete}

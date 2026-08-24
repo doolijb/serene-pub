@@ -47,7 +47,9 @@ describe("startPeriodicVectorizationScan", () => {
 
 		startPeriodicVectorizationScan()
 		await vi.waitFor(() =>
-			expect(mockModule.db.query.systemSettings.findFirst).toHaveBeenCalled()
+			expect(
+				mockModule.db.query.systemSettings.findFirst
+			).toHaveBeenCalled()
 		)
 	})
 
@@ -58,14 +60,20 @@ describe("startPeriodicVectorizationScan", () => {
 
 		startPeriodicVectorizationScan()
 		await vi.waitFor(() =>
-			expect(mockModule.db.query.systemSettings.findFirst).toHaveBeenCalledTimes(1)
+			expect(
+				mockModule.db.query.systemSettings.findFirst
+			).toHaveBeenCalledTimes(1)
 		)
 
 		await vi.advanceTimersByTimeAsync(15 * 60 * 1000)
-		expect(mockModule.db.query.systemSettings.findFirst).toHaveBeenCalledTimes(2)
+		expect(
+			mockModule.db.query.systemSettings.findFirst
+		).toHaveBeenCalledTimes(2)
 
 		await vi.advanceTimersByTimeAsync(15 * 60 * 1000)
-		expect(mockModule.db.query.systemSettings.findFirst).toHaveBeenCalledTimes(3)
+		expect(
+			mockModule.db.query.systemSettings.findFirst
+		).toHaveBeenCalledTimes(3)
 	})
 
 	test("a second call is idempotent — does not create a second timer (no doubled tick rate)", async () => {
@@ -76,13 +84,17 @@ describe("startPeriodicVectorizationScan", () => {
 		startPeriodicVectorizationScan()
 		startPeriodicVectorizationScan()
 		await vi.waitFor(() =>
-			expect(mockModule.db.query.systemSettings.findFirst).toHaveBeenCalledTimes(1)
+			expect(
+				mockModule.db.query.systemSettings.findFirst
+			).toHaveBeenCalledTimes(1)
 		)
 
 		await vi.advanceTimersByTimeAsync(15 * 60 * 1000)
 		// A second (duplicate) timer would have produced 3 calls here (1
 		// immediate + 2 overlapping ticks), not 2.
-		expect(mockModule.db.query.systemSettings.findFirst).toHaveBeenCalledTimes(2)
+		expect(
+			mockModule.db.query.systemSettings.findFirst
+		).toHaveBeenCalledTimes(2)
 	})
 
 	test("a tick that throws doesn't prevent future ticks from running", async () => {

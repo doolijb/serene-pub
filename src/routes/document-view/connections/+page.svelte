@@ -62,7 +62,7 @@
 {:else}
 	<p>
 		Connections tell Serene Pub how to reach an AI provider. One connection
-		is used system-wide as the default for all chats.
+		is used system-wide as the default for all sessions.
 	</p>
 	<p>
 		<a href="/document-view/connections/new" class="a11y-btn">

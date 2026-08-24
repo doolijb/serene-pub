@@ -75,7 +75,7 @@ vi.mock("$lib/server/embedding", () => ({
 }))
 
 let db: TestDb
-let chatId: number
+let sessionId: number
 let userId: number
 let characterId: number
 
@@ -86,12 +86,14 @@ const promptPipeline = () =>
 			.on("core:event/message-created@1")
 			.input("input", C.userMessage.v1())
 			.query("history", ($) =>
-				C.chatHistory.v1({ scope: $.input.chatScope })
+				C.sessionHistory.v1({ scope: $.input.sessionScope })
 			)
 			.query("lore", ($) =>
-				C.lorebookTriggers.v1({ scope: $.input.chatScope })
+				C.lorebookTriggers.v1({ scope: $.input.sessionScope })
 			)
-			.query("cast", ($) => C.chatCast.v1({ scope: $.input.chatScope }))
+			.query("cast", ($) =>
+				C.sessionCast.v1({ scope: $.input.sessionScope })
+			)
 			.task("context", ($) =>
 				C.buildTemplateContext.v1({
 					cast: $.cast.cast,
@@ -130,7 +132,7 @@ const promptPipeline = () =>
 					templateContext: $.context.templateContext,
 					// The story string arrives through the slot, resolved from the
 					// context config by `buildWorld` — not hardcoded in the spec.
-					// That is the layer that decides which template *this* chat
+					// That is the layer that decides which template *this* session
 					// gets, and a test that skipped it would pass on an install
 					// where no user could reproduce it.
 					template: slot.template(),
@@ -184,18 +186,23 @@ beforeAll(async () => {
 		.values({ name: "Spine Lore", userId })
 		.returning()
 
-	const [chat] = await db
-		.insert(schema.chats)
+	const [session] = await db
+		.insert(schema.sessions)
 		.values({ userId, isGroup: false, lorebookId: lorebook.id })
 		.returning()
-	chatId = chat.id
+	sessionId = session.id
 
 	await db
-		.insert(schema.chatCharacters)
-		.values({ chatId, characterId, isActive: true, visibility: "visible" })
+		.insert(schema.sessionCharacters)
+		.values({
+			sessionId,
+			characterId,
+			isActive: true,
+			visibility: "visible"
+		})
 	await db
-		.insert(schema.chatPersonas)
-		.values({ chatId, personaId: persona.id })
+		.insert(schema.sessionPersonas)
+		.values({ sessionId, personaId: persona.id })
 
 	await db.insert(schema.worldLoreEntries).values({
 		lorebookId: lorebook.id,
@@ -206,21 +213,21 @@ beforeAll(async () => {
 	})
 
 	await db
-		.insert(schema.chatMessages)
+		.insert(schema.sessionMessages)
 		.values([
-			{ chatId, role: "user", content: "Have you seen the ashguard?" }
+			{ sessionId, role: "user", content: "Have you seen the ashguard?" }
 		])
 
 	// The story string a user would have authored, reached the way the app
 	// reaches it: a context config row, pointed at by system settings, resolved
 	// through `buildWorld`. Passing the template inline would skip the layer
-	// that decides which template a given chat actually gets.
+	// that decides which template a given session actually gets.
 	const [contextConfig] = await db
 		.insert(schema.contextConfigs)
 		.values({
 			name: "Spine Context",
 			template:
-				"{{instructions}}\n{{characters}}\n{{#each chatMessages}}{{this.content}}\n{{/each}}"
+				"{{instructions}}\n{{characters}}\n{{#each sessionMessages}}{{this.content}}\n{{/each}}"
 		})
 		.returning()
 
@@ -238,16 +245,16 @@ const execute = async (input: any = {}) => {
 	})
 	const doc = await loadDocument(db as any, saved.specVersionId)
 	return await run(doc, {
-		world: await buildWorld(db as any, { chatId, userId }),
+		world: await buildWorld(db as any, { sessionId }),
 		input: {
 			text: "Have you seen the ashguard?",
-			chatScope: { chatId },
+			sessionScope: { sessionId },
 			...input
 		},
 		seed: "seed:spine",
 		triggerSource: "event",
 		bindings: coreBindings(),
-		host: createHost(db as any, { chatId, userId })
+		host: createHost(db as any, { sessionId, userId })
 	})
 }
 
@@ -269,8 +276,8 @@ describe("the prompt path, end to end", () => {
 
 		const rows = await db
 			.select()
-			.from(schema.chatMessages)
-			.where(eq(schema.chatMessages.chatId, chatId))
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.sessionId, sessionId))
 		expect(rows.map((r) => r.content)).toContain(
 			"The Ashguard ride at dawn."
 		)

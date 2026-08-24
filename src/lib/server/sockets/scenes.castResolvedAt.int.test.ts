@@ -158,7 +158,8 @@ describe("scenes:update — castResolvedAt", () => {
 		const { sceneCreateHandler, sceneUpdateHandler } = await import(
 			"./scenes"
 		)
-		const { user, lorebook, historyEntry } = await setup("cast-update-rename")
+		const { user, lorebook, historyEntry } =
+			await setup("cast-update-rename")
 
 		const created = await sceneCreateHandler.handler(
 			fakeSocket(user.id),

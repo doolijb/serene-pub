@@ -78,7 +78,9 @@ export class RateLimitTimeoutError extends Error {
  * error. */
 export class RateLimitAbortedError extends Error {
 	constructor() {
-		super("CharaVault request was cancelled before a rate-limit slot was granted")
+		super(
+			"CharaVault request was cancelled before a rate-limit slot was granted"
+		)
 		this.name = "RateLimitAbortedError"
 	}
 }
@@ -153,7 +155,8 @@ function drain() {
 	if (queues.interactive.length > 0 || queues.background.length > 0) {
 		const now2 = Date.now()
 		pruneStale(now2)
-		const waitMs = Math.max(0, (timestamps[0] ?? now2) + WINDOW_MS - now2) + 1
+		const waitMs =
+			Math.max(0, (timestamps[0] ?? now2) + WINDOW_MS - now2) + 1
 		scheduleDrain(waitMs)
 	}
 }

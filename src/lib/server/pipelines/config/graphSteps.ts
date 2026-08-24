@@ -34,12 +34,10 @@ export interface ResolvedGraphStep {
 }
 
 export async function resolveGraphStepConfigs(
-	db: Db,
-	userId: number
+	db: Db
 ): Promise<Record<GraphStepKey, ResolvedGraphStep>> {
 	const resolved = await resolveStepConfigs(
 		db,
-		userId,
 		GRAPH_BUILD_SPEC_ID,
 		Object.values(STEP_NODES)
 	)

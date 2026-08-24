@@ -9,7 +9,11 @@
  */
 
 import { describe, it, expect } from "vitest"
-import { keywordQuery, normaliseTfidf, type LoreRow } from "$lib/server/pipelines/ranking/keywordQuery"
+import {
+	keywordQuery,
+	normaliseTfidf,
+	type LoreRow
+} from "$lib/server/pipelines/ranking/keywordQuery"
 import { DEFAULT_RETRIEVAL } from "$lib/server/pipelines/ranking/weights"
 
 const entry = (over: Partial<LoreRow> = {}): LoreRow => ({
@@ -208,15 +212,24 @@ describe("recursive triggering", () => {
 	it("stops at the ceiling", () => {
 		// A three-link chain against a ceiling of one reaches the second and
 		// not the third.
-		const third = entry({ id: 3, name: "The Helm", keys: "helm", content: "Iron." })
+		const third = entry({
+			id: 3,
+			name: "The Helm",
+			keys: "helm",
+			content: "Iron."
+		})
 		const r = run([place, person, third], ["the ashguard rode north"], {
 			retrieval: deep(1)
 		})
 		expect(r.candidates.map((c) => c.id).sort()).toEqual([1, 2])
 
-		const deeper = run([place, person, third], ["the ashguard rode north"], {
-			retrieval: deep(2)
-		})
+		const deeper = run(
+			[place, person, third],
+			["the ashguard rode north"],
+			{
+				retrieval: deep(2)
+			}
+		)
 		expect(deeper.candidates.map((c) => c.id).sort()).toEqual([1, 2, 3])
 		expect(deeper.diagnostics.recursionDepth).toBe(2)
 	})
@@ -242,8 +255,18 @@ describe("recursive triggering", () => {
 	it("terminates on a cycle instead of scanning forever", () => {
 		// Two entries naming each other. Nothing may be matched twice, which is
 		// what makes this terminate — not a visited-pair check bolted on top.
-		const a = entry({ id: 1, name: "A", keys: "alpha", content: "See beta." })
-		const b = entry({ id: 2, name: "B", keys: "beta", content: "See alpha." })
+		const a = entry({
+			id: 1,
+			name: "A",
+			keys: "alpha",
+			content: "See beta."
+		})
+		const b = entry({
+			id: 2,
+			name: "B",
+			keys: "beta",
+			content: "See alpha."
+		})
 		const r = run([a, b], ["alpha"], { retrieval: deep(50) })
 		expect(r.candidates.map((c) => c.id).sort()).toEqual([1, 2])
 		expect(r.diagnostics.matched).toBe(2)
@@ -336,6 +359,8 @@ describe("entries from different tables can share an id", () => {
 		expect(r.candidates).toHaveLength(3)
 		// Each exactly once — a set keyed only by source would collide the
 		// other way and re-add an entry on every level.
-		expect(new Set(r.candidates.map((c) => `${c.source}:${c.id}`)).size).toBe(3)
+		expect(
+			new Set(r.candidates.map((c) => `${c.source}:${c.id}`)).size
+		).toBe(3)
 	})
 })

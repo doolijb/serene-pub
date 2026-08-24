@@ -8,7 +8,7 @@ import { TokenCounters } from "../utils/TokenCounterManager"
 import {
 	BaseConnectionAdapter,
 	type AdapterExports,
-	type BasePromptChat
+	type BasePromptSession
 } from "./BaseConnectionAdapter"
 import { type CompiledPrompt } from "./types"
 import {
@@ -40,7 +40,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		sampling,
 		contextConfig,
 		promptConfig,
-		chat,
+		session,
 		currentCharacterId,
 		generatingMessageMetadata
 	}: {
@@ -48,7 +48,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		sampling: SelectSamplingConfig
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
-		chat: BasePromptChat
+		session: BasePromptSession
 		currentCharacterId: number | null
 		generatingMessageMetadata?: any
 	}) {
@@ -57,7 +57,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			sampling,
 			contextConfig,
 			promptConfig,
-			chat,
+			session,
 			currentCharacterId,
 			tokenCounter: new TokenCounters(
 				connection.tokenCounter || TokenCounterOptions.ESTIMATE
@@ -187,14 +187,16 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		const stopStrings = StopStrings.get({
 			format: promptFormat,
 			characters:
-				this.chat.chatCharacters?.map((cc) => cc.character) || [],
-			personas: this.chat.chatPersonas?.map((cp) => cp.persona) || [],
+				this.session.sessionCharacters?.map((cc) => cc.character) || [],
+			personas:
+				this.session.sessionPersonas?.map((cp) => cp.persona) || [],
 			currentCharacterId: this.currentCharacterId ?? undefined
 		})
 		const characterName = resolveCharacterName(
-			this.chat.chatCharacters?.[0]?.character
+			this.session.sessionCharacters?.[0]?.character
 		)
-		const personaName = this.chat.chatPersonas?.[0]?.persona?.name || "user"
+		const personaName =
+			this.session.sessionPersonas?.[0]?.persona?.name || "user"
 		const stopContext: Record<string, string> = {
 			char: characterName,
 			user: personaName
@@ -206,11 +208,11 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		// Use PromptBuilder for prompt construction
 		const compiledPrompt: CompiledPrompt = await this.compilePrompt({})
 
-		const useChat = this.connection.extraJson?.useChat ?? true
+		const useSession = this.connection.extraJson?.useSession ?? true
 		let prompt: string = ""
 		let messages: any[] | undefined = undefined
 
-		if (useChat && compiledPrompt.messages) {
+		if (useSession && compiledPrompt.messages) {
 			messages = compiledPrompt.messages
 		} else {
 			prompt = compiledPrompt.prompt!
@@ -254,7 +256,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 						this.prediction?.cancel()
 					})
 					try {
-						if (useChat && messages) {
+						if (useSession && messages) {
 							this.prediction = modelClient.respond(
 								messages,
 								options
@@ -314,7 +316,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 					this.prediction?.cancel()
 				}, LLM_NONSTREAMING_TIMEOUT_MS)
 				try {
-					if (useChat && messages) {
+					if (useSession && messages) {
 						this.prediction = modelClient.respond(messages, options)
 						const result = await this.prediction
 						if (
@@ -325,7 +327,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 							return result.content || ""
 						} else {
 							throw new Error(
-								"Unexpected LM Studio chat result type"
+								"Unexpected LM Studio session result type"
 							)
 						}
 					} else {

@@ -14,7 +14,10 @@
 import { asc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
-import { SHIPPED_VARIABLE_TEMPLATES, seedKeyFor } from "$lib/server/pipelines/entities/variableLayouts"
+import {
+	SHIPPED_VARIABLE_TEMPLATES,
+	seedKeyFor
+} from "$lib/server/pipelines/entities/variableLayouts"
 
 type Db = { select: any; insert: any; update: any; delete: any }
 

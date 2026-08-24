@@ -18,11 +18,11 @@
 		characterId: number
 		onBack: () => void
 		onEdit: () => void
-		onChat: () => void
+		onSession: () => void
 		onExport?: (character: ViewedCharacter) => void
 	}
 
-	let { characterId, onBack, onEdit, onChat, onExport }: Props = $props()
+	let { characterId, onBack, onEdit, onSession, onExport }: Props = $props()
 
 	const socket = useTypedSocket()
 
@@ -79,11 +79,11 @@
 			{#snippet actions()}
 				<button
 					class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-					onclick={onChat}
+					onclick={onSession}
 					type="button"
 				>
 					<Icons.MessageSquare size={16} aria-hidden="true" />
-					<span>View Chats</span>
+					<span>View Sessions</span>
 				</button>
 				{#if character?.isOwner && onExport}
 					<button

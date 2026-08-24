@@ -56,13 +56,13 @@
 	<!-- Height: the mobile bar is sized by the 44px hamburger, so `py-2` made it
 	     60px against desktop's 40px. `py-0.5` brings it to 48px — still a full
 	     44px tap target, just without the extra 12px of dead band above the
-	     chat. Desktop keeps `py-2` and is unchanged.
+	     session. Desktop keeps `py-2` and is unchanged.
 	     Removed from here: `bg-opacity-25`, a Tailwind v3 class that v4 dropped,
 	     so the bar has been fully opaque since the upgrade; and `backdrop-blur`,
 	     which had nothing to do — the header is static and content does not
 	     scroll beneath it. Also `mx-auto`, inert on a `w-full` box. -->
 	<!-- `lg:rounded-b-lg` mirrors the composer's `lg:rounded-t-lg`: this bar and
-	     the composer share <main>'s exact horizontal extents, so the chat column
+	     the composer share <main>'s exact horizontal extents, so the session column
 	     now reads as one rounded slab capped top and bottom. Only at lg: — below
 	     that the composer isn't rounded either, since the column runs edge to
 	     edge. -->

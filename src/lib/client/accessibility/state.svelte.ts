@@ -234,8 +234,8 @@ export function mapToAccessibleRoute(pathname: string): string {
 	}
 	if (pathname === "/") return "/document-view"
 
-	const chatMatch = pathname.match(/^\/chats\/(\d+)\/?$/)
-	if (chatMatch) return `/document-view/chats/${chatMatch[1]}`
+	const sessionMatch = pathname.match(/^\/sessions\/(\d+)\/?$/)
+	if (sessionMatch) return `/document-view/sessions/${sessionMatch[1]}`
 
 	if (pathname === "/library/characters") return "/document-view/characters"
 	if (pathname === "/library/personas") return "/document-view/personas"
@@ -250,19 +250,19 @@ export function mapToAccessibleRoute(pathname: string): string {
 /**
  * The reverse of mapToAccessibleRoute — used by "Browse Standard Site" and
  * "Turn Off Document View" so leaving Document View lands on the equivalent
- * standard page when one exists (eg. the same open chat), falling back to
+ * standard page when one exists (eg. the same open session), falling back to
  * the standard home ("/") for anything that only exists as a sidebar panel
  * in the standard UI (characters/personas' own lists, connections, manager
- * pages, settings, chat creation/editing) rather than a dedicated route.
+ * pages, settings, session creation/editing) rather than a dedicated route.
  */
 export function mapToStandardRoute(pathname: string): string {
 	if (!pathname.startsWith("/document-view")) return pathname
 	if (pathname === "/document-view") return "/"
 
-	const chatMatch = pathname.match(
-		/^\/document-view\/chats\/(\d+)(?:\/edit)?\/?$/
+	const sessionMatch = pathname.match(
+		/^\/document-view\/sessions\/(\d+)(?:\/edit)?\/?$/
 	)
-	if (chatMatch) return `/chats/${chatMatch[1]}`
+	if (sessionMatch) return `/sessions/${sessionMatch[1]}`
 
 	if (pathname === "/document-view/characters/browse")
 		return "/library/characters"

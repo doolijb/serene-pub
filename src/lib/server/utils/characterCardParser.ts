@@ -38,7 +38,9 @@ export function validatePngChunkLengths(buffer: Buffer | Uint8Array): void {
 	let idx = 8
 	while (idx < buffer.length) {
 		if (idx + 8 > buffer.length) {
-			throw new Error(".png file ended prematurely: truncated chunk header")
+			throw new Error(
+				".png file ended prematurely: truncated chunk header"
+			)
 		}
 		const length =
 			(buffer[idx] << 24) |
@@ -91,7 +93,11 @@ export function getRobustSpecV3Data(
 	const rawNested = raw?.data ?? {}
 
 	const rawTags = rawNested.tags ?? rawTop.tags
-	const tags = v3.tags?.length ? v3.tags : Array.isArray(rawTags) ? rawTags : []
+	const tags = v3.tags?.length
+		? v3.tags
+		: Array.isArray(rawTags)
+			? rawTags
+			: []
 	const rawAlternateGreetings =
 		rawNested.alternate_greetings ?? rawTop.alternate_greetings
 	const alternateGreetings = v3.alternate_greetings?.length

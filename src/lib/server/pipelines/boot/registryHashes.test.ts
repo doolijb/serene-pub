@@ -23,7 +23,7 @@
  */
 
 import { describe, it, expect } from "vitest"
-import { allTypes, snapshotRegistry } from "@serene-pub/sdk"
+import { allTypes, allScriptTypes, snapshotRegistry } from "@serene-pub/sdk"
 import { typeContentHash } from "$lib/server/pipelines/boot/registrySync"
 // Importing the contracts is what registers them — the same fact-about-the-code
 // route `bootstrapPipelines` takes, rather than a list maintained beside it.
@@ -64,17 +64,20 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:consumer/attach-audio@1": "2a3ce393ac3d8",
 	"core:consumer/attach-image@1": "dce5f172a6edb",
 	"core:consumer/create-lore-entry@1": "f8eff8031562c",
-	"core:consumer/create-message@1": "1076dd9c2f6528",
+	"core:consumer/create-message@1": "1338e0ae6946f",
 	"core:consumer/emit-socket@1": "7658edce87c6",
 	"core:consumer/graph-proposal@1": "437560532d042",
 	"core:consumer/save-plugin-data@1": "1548f67cc814f",
-	"core:consumer/update-message@1": "1d32e4901e19ab",
+	"core:consumer/update-message@1": "f912a25836fda",
 	"core:input/message-created@1": "f90c5108c7e82",
-	"core:input/summarize-request@1": "9561582884e0d",
-	"core:input/user-message@1": "588fb2d5e8eaf",
+	"core:input/summarize-request@1": "118295257093fb",
+	"core:input/user-message@1": "8efb208dbb7a8",
 	"core:provider/embed-text@1": "1a2be2fe9ae5a9",
 	"core:provider/extract-cast@1": "1893b46d500ce4",
-	"core:provider/generate-text@1": "6b154360301cc",
+	// Gained `currentCharacterId` in 0.6-preview (migration 0134): the §27l
+	// stop-string exclusion follows the next-speaker node's output through
+	// the host's payload-wins seam (19 §5).
+	"core:provider/generate-text@1": "190742a9f644c5",
 	"core:provider/graph-node-description@1": "6f9762a123b0c",
 	"core:provider/graph-node-resolution@1": "e769698f56c34",
 	"core:provider/graph-perspective@1": "10d6e4b8419763",
@@ -83,12 +86,12 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:provider/mcp-tool@1": "18bd4abfda050e",
 	"core:provider/name-entry@1": "1b49a34a5cac88",
 	"core:provider/speak@1": "8e5f957ad71f9",
-	"core:provider/summarize-batch@1": "8f11cf5a1a6d7",
+	"core:provider/summarize-batch@1": "1030d47b263042",
 	"core:provider/summarize-synth@1": "71b9b65aee561",
-	"core:query/chat-cast@1": "1c16601381af90",
-	"core:query/world-lore@1": "15002806f2af8e",
-	"core:query/character-lore@1": "15002806f2af8e",
-	"core:query/chat-history@1": "c042d00a18e1f",
+	"core:query/session-cast@1": "142e94006413af",
+	"core:query/world-lore@1": "110c27164fe03f",
+	"core:query/character-lore@1": "110c27164fe03f",
+	"core:query/session-history@1": "1cd3ef785272df",
 	// ⚠ `core:query/graph-context@1` was here, and is gone rather than frozen.
 	// It split into the two below, because one node emitting both directions of
 	// the graph gave them one heading, one layout and one switch. Removing a
@@ -96,20 +99,20 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// is allowed here only because 0.6 has not shipped: every stored spec
 	// pinning it is a preview document, and `0124` deletes its registry rows
 	// along with the specs that named it.
-	"core:query/relationships-perspectives@1": "1f99e443f84639",
-	"core:query/relationships-known@1": "e72ede64b8e5a",
-	"core:query/graph-scenes@1": "a537a95812a15",
+	"core:query/relationships-perspectives@1": "133fb1aab4e288",
+	"core:query/relationships-known@1": "1a709dd0599745",
+	"core:query/graph-scenes@1": "93cf67e05eb1",
 	// The third retrieval lane, added in 0.6 after its absence was found: the
 	// split into world and character lore left `history` with no node, so those
 	// candidates were read, scored and dropped for two spec versions. A *new*
 	// type needs no re-projection — nothing has published it before.
-	"core:query/history-entries@1": "15002806f2af8e",
+	"core:query/history-entries@1": "110c27164fe03f",
 	"core:query/lorebook-probabilistic@1": "6ac9faa6efbb8",
-	"core:query/lorebook-triggers@1": "aa3165ce1fb73",
+	"core:query/lorebook-triggers@1": "22187c6565f6a",
 	"core:query/message-text@1": "13028fee53a4e1",
 	"core:query/persona-card@1": "a0b05bce48983",
-	"core:query/summarize-source@1": "14a315ad021334",
-	"core:query/vector-search@1": "fa3d3ac617f99",
+	"core:query/summarize-source@1": "172011b74d3c72",
+	"core:query/vector-search@1": "7da453ddb532",
 	// Gained a `variables` slot for its post-budget lore and history in
 	// 0.6-preview. Re-projected by migration 0108, on the same terms as 0107.
 	"core:task/assemble@2": "ec708761ef260",
@@ -119,24 +122,35 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// declares a different configurable surface — `narratorName`, and no
 	// example-dialogue or relationship layouts. Adding a type needs no
 	// re-projection: it inserts a row and conflicts with nothing.
-	"core:task/build-narrator-context@1": "1a0889662d1402",
+	"core:task/build-narrator-context@1": "131936fee7832b",
 	// Gained the `variables` slot in 0.6-preview (migration 0107), a
 	// `speakerRelationships` layout when the graph query was wired in
 	// (migration 0111), and lost `narratorName` from its `prompts` slot when
 	// the narrator got its own type (migration 0114). Answer 3 above each
 	// time, and the only reason it is legitimate is that no third party has
 	// pinned this version yet.
-	"core:task/build-template-context@1": "5f8d80efe42b6",
+	// Both context builders gained `currentCharacterId` with the provider
+	// above (migration 0134, shared `contextPorts`): the prompt's voice
+	// follows the same recorded speaker decision.
+	"core:task/build-template-context@1": "2ea90523e3006",
 	"core:task/chunk-text@1": "5cef916d3eef",
 	"core:task/context-budget@1": "efdd9a915c681",
 	"core:task/first-json@1": "13093e6bda129",
 	"core:task/merge-candidates@1": "8fb80a93f5f72",
-	"core:task/process-messages@1": "4e72fbc9c454",
-	"core:task/query-windows@1": "74d68f49e4992",
+	"core:task/process-messages@1": "8d63ae74798bb",
+	"core:task/query-windows@1": "184fdf6f3a0762",
 	"core:task/rank-by-recency@1": "dffb14d273fdf",
-	"core:task/rank-hybrid@1": "dffb14d273fdf",
+	"core:task/rank-hybrid@1": "1b57a9620c46d4",
 	"core:task/rank-semantic@1": "d6d78af40280e",
 	"core:task/render-entries@1": "7541eb6256ba5",
+	// The four next-speaker strategies (19 §5, U-C4) — one implementation,
+	// four ids, and one hash: the content hash strips display text, and what
+	// remains (ports, timeout) is identical across the family, exactly like
+	// the three lore lanes above.
+	"core:task/turn-round-robin@1": "cadef103232f2",
+	"core:task/turn-random@1": "cadef103232f2",
+	"core:task/turn-manual@1": "cadef103232f2",
+	"core:task/turn-none@1": "cadef103232f2",
 	"core:task/to-candidates@1": "174b5c86bb414b",
 	// The `test:` fixtures are published by the same module as everything else,
 	// so a running instance has rows for them and they freeze on exactly the same
@@ -145,15 +159,35 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"test:query/network@1": "c1601e776f664",
 	"test:task/bad-toggleable@1": "594a2f094b17a",
 	"test:task/gate@1": "cf73634860fe1",
+	// ── Scripts (18) ────────────────────────────────────────────────────
+	//
+	// Published into the same registry under the same freeze rule. The seven
+	// core contracts of 18 §3, one content scope per group.
+	"core:script:text/transform@1": "14b3b24125511d",
+	"core:script:text/stop@1": "1657b41ed5a2be",
+	"core:script:messages/inject@1": "10feba4829eab3",
+	"core:script:messages/transform@1": "48e7776bf623f",
+	"core:script:candidates/filter@1": "5921c6940b28f",
+	"core:script:candidates/rescore@1": "5921c6940b28f",
+	"core:script:context/transform@1": "1a74f953c2e773",
 	"test:task/passthrough@1": "cf73634860fe1",
 	"test:task/sloppy-stream@1": "13093e6bda129",
 	"test:task/slow@1": "cf73634860fe1"
 }
 
-/** `release` is not hashed, so its value here is arbitrary. */
+/**
+ * `release` is not hashed, so its value here is arbitrary.
+ *
+ * Script types are included, and have to be: they are published into the same
+ * registry under the same freeze rule (18 §2), so a guard that only walked
+ * `allTypes()` would let a script contract move without anyone noticing —
+ * which is the one thing this file exists to prevent.
+ */
 const current = (): Record<string, string> => {
 	const out: Record<string, string> = {}
-	for (const entry of snapshotRegistry(allTypes(), { release: "test" }))
+	for (const entry of snapshotRegistry([...allTypes(), ...allScriptTypes()], {
+		release: "test"
+	}))
 		out[`${entry.id}@${entry.version}`] = typeContentHash(entry)
 	return out
 }

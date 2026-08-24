@@ -290,7 +290,7 @@
 
 	// Same as above, but opens the read-only detail view instead of the edit
 	// form — used when arriving from a context that just wants to look up a
-	// persona (eg. clicking a name in a chat), not edit it.
+	// persona (eg. clicking a name in a session), not edit it.
 	$effect(() => {
 		if (panelsCtx.digest.viewPersonaId) {
 			viewingId = panelsCtx.digest.viewPersonaId
@@ -338,10 +338,10 @@
 		if (returnId) viewingId = returnId
 	}
 
-	function handleChatFromView() {
+	function handleSessionFromView() {
 		if (!viewingId) return
-		panelsCtx.digest.chatPersonaId = viewingId
-		panelsCtx.openPanel({ key: "chats", toggle: false })
+		panelsCtx.digest.sessionPersonaId = viewingId
+		panelsCtx.openPanel({ key: "sessions", toggle: false })
 	}
 
 	function handleDeleteClick(id: number) {
@@ -424,7 +424,7 @@
 				personaId={viewingId}
 				onBack={() => (viewingId = undefined)}
 				onEdit={handleEditFromView}
-				onChat={handleChatFromView}
+				onSession={handleSessionFromView}
 				onExport={handleExportPersona}
 			/>
 		{/key}
@@ -537,7 +537,7 @@
 							onDelete={handleDeleteClick}
 							onExport={handleExportPersona}
 							onSetDefault={handleSetDefaultClick}
-							contentTitle="Go to persona chats"
+							contentTitle="Go to persona sessions"
 						/>
 					</div>
 				{/each}
@@ -567,7 +567,7 @@
 								onDelete={handleDeleteClick}
 								onExport={handleExportPersona}
 								onSetDefault={handleSetDefaultClick}
-								contentTitle="Go to persona chats"
+								contentTitle="Go to persona sessions"
 							/>
 						</div>
 					{/each}

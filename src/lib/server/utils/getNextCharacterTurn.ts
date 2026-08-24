@@ -1,6 +1,6 @@
 import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 
-type ActiveCharacter = SelectChatCharacter & {
+type ActiveCharacter = SelectSessionCharacter & {
 	character: SelectCharacter
 	normalizedPosition: number
 }
@@ -9,11 +9,11 @@ type ActiveCharacter = SelectChatCharacter & {
  * Core due-character computation, shared by the flat "Ordered" strategy and
  * each per-user scope of the "User-Split" strategy (see getNextCharacterTurn
  * below) — the only difference between the two is *which* characters,
- * personas, and message history get passed in here: the whole chat's cast
+ * personas, and message history get passed in here: the whole session's cast
  * for Ordered, or a single user's own slice of it for User-Split.
  *
  * Rule: a character who has never replied at all (within the given
- * `messages`) is always immediately due — this covers both a brand-new chat
+ * `messages`) is always immediately due — this covers both a brand-new session
  * and a character newly added to one that's already in progress. Otherwise,
  * let N = personaIds.length + characterIds.length. Look at the last N
  * messages — if every cast member appears at least once in that window, the
@@ -31,7 +31,7 @@ function computeDueCharacter({
 	activeCharacters: ActiveCharacter[]
 	personaIds: number[]
 	characterIds: number[]
-	messages: SelectChatMessage[]
+	messages: SelectSessionMessage[]
 }): number | null {
 	const castSize = personaIds.length + characterIds.length
 
@@ -49,11 +49,11 @@ function computeDueCharacter({
 	// regardless of the healthy-window check below — that check requires
 	// every active character to already have a message in the recent window,
 	// which a character who has never spoken can never satisfy on their own.
-	// This covers both a brand-new chat (nobody in the cast has replied yet,
+	// This covers both a brand-new session (nobody in the cast has replied yet,
 	// so no configured first/greeting message exists) and a character added
-	// to an already-established chat (everyone else may be "healthy," but the
+	// to an already-established session (everyone else may be "healthy," but the
 	// newcomer would otherwise be permanently skipped). Among characters
-	// who've never replied, pick by position, so a brand-new chat still
+	// who've never replied, pick by position, so a brand-new session still
 	// starts with its first-listed character.
 	const neverReplied = activeCharacters.filter(
 		(cc) => lastReplyIndex(cc.character.id) === -1
@@ -108,7 +108,7 @@ function computeDueCharacter({
 
 /**
  * "User-Split" strategy: instead of one flat rotation across the whole
- * chat's cast, group personas and characters by the user who owns them
+ * session's cast, group personas and characters by the user who owns them
  * (persona.userId / character.userId), and let one user's own sub-cast
  * (their persona(s), then their characters) complete a full turn before the
  * next user's sub-cast gets one — rather than interleaving everyone's
@@ -122,21 +122,21 @@ function computeDueCharacter({
  * due character: whoever's whole sub-cast (any of their personas or
  * characters) was least recently active in the full message history —
  * never-active counts as most overdue, ties broken by ascending userId so a
- * brand-new chat deterministically starts with its lowest-id user. Once a
+ * brand-new session deterministically starts with its lowest-id user. Once a
  * user is selected, the character decision itself reuses
  * computeDueCharacter unchanged, but scoped to only that user's own
  * characters/personas and only their own slice of the message history — so
- * a quiet user elsewhere in the chat can never block or skew whether this
+ * a quiet user elsewhere in the session can never block or skew whether this
  * user's own characters are due.
  */
 function getNextCharacterTurnUserSplit({
 	activeCharacters,
-	validChatPersonas,
+	validSessionPersonas,
 	messages
 }: {
 	activeCharacters: ActiveCharacter[]
-	validChatPersonas: (SelectChatPersona & { persona: SelectPersona })[]
-	messages: SelectChatMessage[]
+	validSessionPersonas: (SelectSessionPersona & { persona: SelectPersona })[]
+	messages: SelectSessionMessage[]
 }): number | null {
 	type UserGroup = {
 		userId: number
@@ -157,7 +157,7 @@ function getNextCharacterTurnUserSplit({
 	for (const cc of activeCharacters) {
 		groupFor(cc.character.userId).characters.push(cc)
 	}
-	for (const cp of validChatPersonas) {
+	for (const cp of validSessionPersonas) {
 		groupFor(cp.persona.userId).personaIds.push(cp.persona.id)
 	}
 	if (groups.size === 0) return null
@@ -229,45 +229,50 @@ function getNextCharacterTurnUserSplit({
  * still owed a turn from an earlier interrupted cycle, was silently skipped.
  */
 export function getNextCharacterTurn(
-	chat: {
-		chatMessages: SelectChatMessage[]
-		chatCharacters: (SelectChatCharacter & {
+	session: {
+		sessionMessages: SelectSessionMessage[]
+		sessionCharacters: (SelectSessionCharacter & {
 			character: SelectCharacter | null
 		})[]
-		chatPersonas: (SelectChatPersona & { persona: SelectPersona | null })[]
+		sessionPersonas: (SelectSessionPersona & {
+			persona: SelectPersona | null
+		})[]
 	},
 	groupReplyStrategy?: string | null
 ): number | null {
-	if (!chat.chatCharacters?.length || !chat.chatPersonas?.length) {
+	if (
+		!session.sessionCharacters?.length ||
+		!session.sessionPersonas?.length
+	) {
 		return null
 	}
 
-	// character/persona can be null — chatCharacters.characterId and
-	// chatPersonas.personaId are both nullable (onDelete: "set null"), so a
+	// character/persona can be null — sessionCharacters.characterId and
+	// sessionPersonas.personaId are both nullable (onDelete: "set null"), so a
 	// deleted-but-still-bound character/persona leaves a row with no linked
 	// entity. Every current caller already filters these out first, but that
 	// discipline isn't enforced by the type — guard here too so a future
 	// caller that skips the filter can't crash on `.id` of null.
 	// A removed-but-still-soft-present row (removedAt set) must never
 	// participate in round-robin, even if isActive was somehow still true —
-	// belt-and-suspenders alongside getPromptChatFromDb's own filter, since
-	// this function's chat.chatCharacters/chatPersonas input isn't guaranteed
+	// belt-and-suspenders alongside getPromptSessionFromDb's own filter, since
+	// this function's session.sessionCharacters/sessionPersonas input isn't guaranteed
 	// to always come from that one choke point.
-	const validChatCharacters = chat.chatCharacters.filter(
+	const validSessionCharacters = session.sessionCharacters.filter(
 		(cc): cc is typeof cc & { character: SelectCharacter } =>
 			cc.character !== null && !cc.removedAt
 	)
-	const validChatPersonas = chat.chatPersonas.filter(
+	const validSessionPersonas = session.sessionPersonas.filter(
 		(cp): cp is typeof cp & { persona: SelectPersona } =>
 			cp.persona !== null && !cp.removedAt
 	)
-	if (!validChatCharacters.length || !validChatPersonas.length) {
+	if (!validSessionCharacters.length || !validSessionPersonas.length) {
 		return null
 	}
 
 	// Sort by position (normalizing missing positions to array index), then
 	// keep only active characters.
-	const activeCharacters = validChatCharacters
+	const activeCharacters = validSessionCharacters
 		.slice()
 		.map((cc, index) => ({
 			...cc,
@@ -283,19 +288,19 @@ export function getNextCharacterTurn(
 	// failing to match a character id, so they can't occupy a slot in the
 	// recency windows below and skew the healthy-window/due checks for the
 	// real cast.
-	const messages = chat.chatMessages.filter(
+	const messages = session.sessionMessages.filter(
 		(m) => !m.isHidden && !m.isNarratorResponse
 	)
 
 	if (groupReplyStrategy === GroupReplyStrategies.USER_SPLIT) {
 		return getNextCharacterTurnUserSplit({
 			activeCharacters,
-			validChatPersonas,
+			validSessionPersonas,
 			messages
 		})
 	}
 
-	const personaIds = validChatPersonas.map((cp) => cp.persona.id)
+	const personaIds = validSessionPersonas.map((cp) => cp.persona.id)
 	const characterIds = activeCharacters.map((cc) => cc.character.id)
 
 	return computeDueCharacter({

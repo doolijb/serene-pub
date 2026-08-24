@@ -101,16 +101,15 @@ export const createCharacterLoreEntryHandler: Handler<
 				sql`select pg_advisory_xact_lock(${data.lorebookId})`
 			)
 
-			const existingEntries = await tx.query.characterLoreEntries.findMany(
-				{
+			const existingEntries =
+				await tx.query.characterLoreEntries.findMany({
 					where: eq(
 						schema.characterLoreEntries.lorebookId,
 						data.lorebookId
 					),
 					columns: { id: true, position: true },
 					orderBy: asc(schema.characterLoreEntries.position)
-				}
-			)
+				})
 
 			let nextPosition = 1
 			const positions = existingEntries.map((e) => e.position)

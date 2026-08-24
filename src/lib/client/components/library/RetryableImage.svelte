@@ -82,7 +82,10 @@
 				const retryAfterSeconds = retryAfterHeader
 					? Number(retryAfterHeader)
 					: NaN
-				if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+				if (
+					Number.isFinite(retryAfterSeconds) &&
+					retryAfterSeconds > 0
+				) {
 					// Server-hinted delay — jitter must never undercut it:
 					// retrying before the window the server actually asked
 					// for just re-attempts into the same congestion it told
@@ -97,7 +100,10 @@
 					// cold grid's simultaneous failures into a trickle
 					// instead of retrying them all in lockstep waves.
 					const baseDelay = DEFAULT_RETRY_DELAY_MS * (attemptNum + 1)
-					scheduleRetry(attemptNum + 1, baseDelay * (0.5 + Math.random()))
+					scheduleRetry(
+						attemptNum + 1,
+						baseDelay * (0.5 + Math.random())
+					)
 				}
 			} catch {
 				// Covers both a genuine network failure AND this attempt's
@@ -107,7 +113,10 @@
 				if (cancelled) return
 				if (attemptNum < MAX_RETRIES) {
 					const baseDelay = DEFAULT_RETRY_DELAY_MS * (attemptNum + 1)
-					scheduleRetry(attemptNum + 1, baseDelay * (0.5 + Math.random()))
+					scheduleRetry(
+						attemptNum + 1,
+						baseDelay * (0.5 + Math.random())
+					)
 				}
 			}
 		}

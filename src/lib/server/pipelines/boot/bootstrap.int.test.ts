@@ -72,7 +72,7 @@ describe("bootstrapping the pipeline tables", () => {
 
 	it("reports a registry conflict instead of taking the instance down", async () => {
 		// A type-hash conflict means *pipelines* cannot run safely. It does not
-		// mean the chat app cannot start, and refusing to boot over a subsystem
+		// mean the session app cannot start, and refusing to boot over a subsystem
 		// nobody has opted into would be the wrong trade — so it travels in the
 		// report where a diagnostics screen can show it.
 		// Every row: a hash that no longer matches the running code is exactly

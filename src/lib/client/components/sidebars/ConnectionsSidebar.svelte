@@ -167,7 +167,7 @@
 				(p) => p.value === presetValue
 			)
 			if (!preset) {
-				toaster.error({ title: "Invalid OpenAI Chat preset" })
+				toaster.error({ title: "Invalid OpenAI Session preset" })
 				return
 			}
 		}
@@ -348,9 +348,32 @@
 		if (msg.id) toaster.success({ title: "Default connection updated" })
 	}
 
+	// ── Stop guards on this connection (18 §4b) ─────────────────────────────
+	// Loaded per selected connection; attach/detach answer with the refreshed
+	// pair of lists, so the two can never disagree.
+	let connScripts = $state<Sockets.Connections.Scripts.Response | null>(null)
+	const handleConnScripts = (res: Sockets.Connections.Scripts.Response) => {
+		connScripts = res
+	}
+	const handleConnScriptsError = (res: { error?: string }) => {
+		if (res.error) toaster.error({ title: res.error })
+	}
+	$effect(() => {
+		if (selectedConnectionId != null) {
+			connScripts = null
+			socket.emit("connections:scripts", { id: selectedConnectionId })
+		}
+	})
+
 	onMount(() => {
 		socket.on("connections:list", handleConnectionsList)
 		socket.on("connections:list:error", handleConnectionsListError)
+		socket.on("connections:scripts", handleConnScripts)
+		socket.on("connections:attachScript", handleConnScripts)
+		socket.on("connections:detachScript", handleConnScripts)
+		socket.on("connections:scripts:error", handleConnScriptsError)
+		socket.on("connections:attachScript:error", handleConnScriptsError)
+		socket.on("connections:detachScript:error", handleConnScriptsError)
 		socket.on(
 			"connections:refreshModels:error",
 			handleConnectionsRefreshModelsError
@@ -393,23 +416,23 @@
 	onDestroy(() => {
 		socket.off("connections:list", handleConnectionsList)
 		socket.off("connections:list:error", handleConnectionsListError)
+		socket.off("connections:scripts", handleConnScripts)
+		socket.off("connections:attachScript", handleConnScripts)
+		socket.off("connections:detachScript", handleConnScripts)
+		socket.off("connections:scripts:error", handleConnScriptsError)
+		socket.off("connections:attachScript:error", handleConnScriptsError)
+		socket.off("connections:detachScript:error", handleConnScriptsError)
 		socket.off(
 			"connections:refreshModels:error",
 			handleConnectionsRefreshModelsError
 		)
 		socket.off("connections:get", handleConnectionsGet)
 		socket.off("connections:test", handleConnectionsTest)
-		socket.off(
-			"connections:refreshModels",
-			handleConnectionsRefreshModels
-		)
+		socket.off("connections:refreshModels", handleConnectionsRefreshModels)
 		socket.off("connections:update", handleConnectionsUpdate)
 		socket.off("connections:delete", handleConnectionsDelete)
 		socket.off("connections:create", handleConnectionsCreate)
-		socket.off(
-			"connections:setUserActive",
-			handleConnectionsSetUserActive
-		)
+		socket.off("connections:setUserActive", handleConnectionsSetUserActive)
 		onclose = undefined
 	})
 </script>
@@ -440,7 +463,8 @@
 						/>
 					</div>
 					<p class="text-muted-foreground mt-0.5 text-sm">
-						Connections used for chat, summarization, and narration.
+						Connections used for session, summarization, and
+						narration.
 					</p>
 					{#if defaultConnectionName}
 						<div class="mt-2 flex items-center gap-1.5">
@@ -705,6 +729,119 @@
 							<KoboldCppManagedForm bind:connection />
 						{:else if connection.type === CONNECTION_TYPE.ANTHROPIC}
 							<AnthropicForm bind:connection />
+						{/if}
+
+						{#if connection.id}
+							<!-- Stop guards ride the connection (18 §4b): model
+							     knowledge — "this endpoint leaks template
+							     tokens" — attaches once and reaches every
+							     pipeline that runs against it. Order does not
+							     matter: stop verdicts reduce to the earliest
+							     index whatever their source. -->
+							<div class="mt-4 flex flex-col gap-1">
+								<span
+									class="flex items-center gap-2 font-semibold"
+								>
+									<Icons.OctagonX
+										size={14}
+										aria-hidden="true"
+									/>
+									Stop scripts
+								</span>
+								<p class="text-muted text-xs">
+									Guards that end a streamed reply early — a
+									leaked template token, an echoed name. Every
+									pipeline using this connection inherits
+									them, and the run's receipt names which one
+									fired.
+								</p>
+								{#if !connScripts}
+									<p class="text-muted text-xs">Loading…</p>
+								{:else}
+									{#each connScripts.attached ?? [] as s (s.id)}
+										<div
+											class="border-surface-200-700 flex items-center gap-2 rounded-lg border px-2 py-1"
+										>
+											<span
+												class="min-w-0 flex-1 truncate text-sm {s.enabled
+													? ''
+													: 'opacity-50'}"
+											>
+												{s.name}
+											</span>
+											{#if !s.enabled}
+												<span
+													class="text-muted text-[10px]"
+													title="Disabled on the scripts page — attached, does nothing."
+												>
+													off
+												</span>
+											{/if}
+											<button
+												type="button"
+												class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+												title="Detach from this connection (the script itself is kept)"
+												onclick={() =>
+													socket.emit(
+														"connections:detachScript",
+														{
+															id: connection.id,
+															scriptId: s.id
+														}
+													)}
+											>
+												<Icons.X size={12} />
+											</button>
+										</div>
+									{/each}
+									{#if !(connScripts.attached ?? []).length}
+										<p class="text-muted text-xs italic">
+											None attached.
+										</p>
+									{/if}
+									{#if (connScripts.available ?? []).length}
+										<select
+											class="select"
+											value=""
+											onchange={(e) => {
+												const v = parseInt(
+													e.currentTarget.value,
+													10
+												)
+												if (!Number.isNaN(v))
+													socket.emit(
+														"connections:attachScript",
+														{
+															id: connection.id,
+															scriptId: v
+														}
+													)
+												e.currentTarget.value = ""
+											}}
+										>
+											<option value="" disabled>
+												Attach a stop script…
+											</option>
+											{#each connScripts.available ?? [] as s (s.id)}
+												<option value={String(s.id)}>
+													{s.name}
+												</option>
+											{/each}
+										</select>
+									{:else}
+										<p class="text-muted text-xs">
+											Write stop scripts on the
+											<a
+												class="underline"
+												href="/pipelines/scripts"
+											>
+												scripts page
+											</a>
+											.
+										</p>
+									{/if}
+								{/if}
+							</div>
 						{/if}
 					</section>
 				{/key}

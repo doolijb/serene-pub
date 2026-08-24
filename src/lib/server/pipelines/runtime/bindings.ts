@@ -19,12 +19,25 @@
 
 import type { Bindings } from "@serene-pub/sdk"
 import { ok, halt, roughTokens } from "@serene-pub/sdk"
-import { keywordQuery, normaliseTfidf } from "$lib/server/pipelines/ranking/keywordQuery"
-import { eligibleFor, armNote, fuseRanks } from "$lib/server/pipelines/ranking/strategy"
+import {
+	keywordQuery,
+	normaliseTfidf
+} from "$lib/server/pipelines/ranking/keywordQuery"
+import {
+	eligibleFor,
+	armNote,
+	fuseRanks
+} from "$lib/server/pipelines/ranking/strategy"
 import { select } from "$lib/server/pipelines/ranking/select"
-import { rankSemantic, mergeWindows } from "$lib/server/pipelines/ranking/semantic"
+import {
+	rankSemantic,
+	mergeWindows
+} from "$lib/server/pipelines/ranking/semantic"
 import { queryWindows } from "$lib/server/pipelines/ranking/ragQuery"
-import { PRIORITY_SCORE_BONUS, withDefaults } from "$lib/server/pipelines/ranking/weights"
+import {
+	PRIORITY_SCORE_BONUS,
+	withDefaults
+} from "$lib/server/pipelines/ranking/weights"
 import { allocate, render } from "$lib/server/pipelines/prompt/assemble"
 import { resolveContextInput } from "$lib/server/pipelines/prompt/promptFields"
 import { processMessages } from "$lib/server/pipelines/prompt/messages"
@@ -127,11 +140,11 @@ async function loreFor(source: string, input: any, ctx: any) {
 	const params = withDefaults(retrievalParamsFrom(input?.params))
 	const [entries, messages, embedding] = await Promise.all([
 		ctx.read("lorebook_entries", {
-			chatId: input?.scope?.chatId,
+			sessionId: input?.scope?.sessionId,
 			currentCharacterId: input?.scope?.currentCharacterId ?? null
 		}),
-		ctx.read("chat_messages", {
-			chatId: input?.scope?.chatId,
+		ctx.read("session_messages", {
+			sessionId: input?.scope?.sessionId,
 			limit: input?.limit ?? 100
 		}),
 		ctx.read("embedding_status", {})
@@ -198,7 +211,7 @@ async function loreFor(source: string, input: any, ctx: any) {
  */
 async function readGraph(input: any, ctx: any) {
 	const summary = await ctx.read("graph_context", {
-		chatId: input?.scope?.chatId,
+		sessionId: input?.scope?.sessionId,
 		currentCharacterId:
 			input?.scope?.currentCharacterId ??
 			input?.currentCharacterId ??
@@ -243,6 +256,71 @@ function capRelationships(
 	return Object.keys(out).length ? out : null
 }
 
+/**
+ * One next-speaker implementation behind four type ids (19 §5, U-C4).
+ *
+ * The rules, in order:
+ *
+ * 1. **An explicit pick always wins.** `characterId` on the in-port means the
+ *    trigger already decided — the "Trigger Character" picker, a regen — and
+ *    every strategy's only job then is to record it (`via: 'pick'`).
+ * 2. Otherwise the strategy decides. `round-robin` is the 0.5 rotation
+ *    verbatim — the same `getNextCharacterTurn` the socket ran, now inside
+ *    the run where the receipt can see it (the flat "Ordered" rule; the
+ *    user-split variant is its own future strategy, not a parameter here).
+ *    `random` is a seeded pick among active characters, so a replayed run
+ *    seats the same speaker. `manual` and `none` never decide — they differ
+ *    in what the UI offers (a picker vs no speaker system at all), not in
+ *    what the node computes.
+ * 3. **No speaker is an outcome, not a failure.** A null id is exactly what
+ *    the legacy path handed on, so nothing here halts.
+ */
+function pickSpeaker(strategy: string) {
+	return async (input: any, ctx: any) => {
+		const done = (characterId: number | null, via: string) =>
+			ok({
+				main: { characterId, strategy, via },
+				characterId,
+				strategy
+			})
+
+		const explicit = input?.characterId
+		const explicitId =
+			typeof explicit === "number"
+				? explicit
+				: typeof explicit?.id === "number"
+					? explicit.id
+					: null
+		if (explicitId != null) return done(explicitId, "pick")
+
+		const cast = input?.cast ?? {}
+		if (strategy === "round-robin") {
+			const { getNextCharacterTurn } = await import(
+				"$lib/server/utils/getNextCharacterTurn"
+			)
+			return done(
+				getNextCharacterTurn({
+					sessionMessages: input?.messages ?? [],
+					sessionCharacters: cast.sessionCharacters ?? [],
+					sessionPersonas: cast.sessionPersonas ?? []
+				} as any),
+				"strategy"
+			)
+		}
+		if (strategy === "random") {
+			const eligible = (cast.sessionCharacters ?? []).filter(
+				(cc: any) => cc?.character && cc.isActive && !cc.removedAt
+			)
+			if (!eligible.length) return done(null, "strategy")
+			const random: () => number = ctx?.random ?? (() => 0)
+			const pick = eligible[Math.floor(random() * eligible.length)]
+			return done(pick.character.id, "strategy")
+		}
+		// manual / none: explicit picks or nobody.
+		return done(null, "strategy")
+	}
+}
+
 export function coreBindings(): Bindings {
 	const bindings: Bindings = {
 		// ── Inputs ──────────────────────────────────────────────────────────
@@ -254,9 +332,9 @@ export function coreBindings(): Bindings {
 		"core:input/message-created@1": async (input: any) => ok(input),
 
 		// ── Queries ─────────────────────────────────────────────────────────
-		"core:query/chat-history@1": async (input: any, ctx: any) => {
-			const messages = await ctx.read("chat_messages", {
-				chatId: input?.scope?.chatId,
+		"core:query/session-history@1": async (input: any, ctx: any) => {
+			const messages = await ctx.read("session_messages", {
+				sessionId: input?.scope?.sessionId,
 				limit: input?.limit ?? 100
 			})
 			// `main` and `messages` carry the same value on purpose: `main` is what
@@ -295,11 +373,11 @@ export function coreBindings(): Bindings {
 			const params = withDefaults(retrievalParamsFrom(input?.params))
 			const [entries, messages, embedding] = await Promise.all([
 				ctx.read("lorebook_entries", {
-					chatId: input?.scope?.chatId,
+					sessionId: input?.scope?.sessionId,
 					currentCharacterId: input?.scope?.currentCharacterId ?? null
 				}),
-				ctx.read("chat_messages", {
-					chatId: input?.scope?.chatId,
+				ctx.read("session_messages", {
+					sessionId: input?.scope?.sessionId,
 					limit: input?.limit ?? 100
 				}),
 				ctx.read("embedding_status", {})
@@ -362,11 +440,11 @@ export function coreBindings(): Bindings {
 
 			const [entries, result] = await Promise.all([
 				ctx.read("lorebook_entries", {
-					chatId: input?.scope?.chatId,
+					sessionId: input?.scope?.sessionId,
 					currentCharacterId: input?.scope?.currentCharacterId ?? null
 				}),
 				ctx.read("vector_search", {
-					chatId: input?.scope?.chatId,
+					sessionId: input?.scope?.sessionId,
 					// Several query vectors: the current window and the recent
 					// one are different questions, and one blended embedding
 					// answers neither.
@@ -475,11 +553,11 @@ export function coreBindings(): Bindings {
 		},
 
 		/**
-		 * Who is in the chat, and the config they speak under.
+		 * Who is in the session, and the config they speak under.
 		 *
 		 * A Query because it reads rows, and one Query rather than three because
 		 * the cast is only useful assembled: a character row without its
-		 * `chatCharacters` join carries no visibility, and visibility is what
+		 * `sessionCharacters` join carries no visibility, and visibility is what
 		 * decides whether that character appears in the prompt at all.
 		 *
 		 * It decides nothing. Which of these rows are shown, named or minimal is
@@ -490,7 +568,7 @@ export function coreBindings(): Bindings {
 		 *
 		 * Empty is normal, not a halt: an install that never opened the graph
 		 * has no relationships, and the shipped template's `{{#if}}` skips the
-		 * block. Halting here would stop every chat on every install without
+		 * block. Halting here would stop every session on every install without
 		 * one — which is what makes "produces nothing" the right shape for a
 		 * Query that is genuinely optional.
 		 */
@@ -522,22 +600,23 @@ export function coreBindings(): Bindings {
 			// against.
 			const out: Record<string, unknown> = {}
 			if (known) out.howOthersRegardYou = known
-			if (graph?.legendaryFigures) out.legendaryFigures = graph.legendaryFigures
+			if (graph?.legendaryFigures)
+				out.legendaryFigures = graph.legendaryFigures
 			const value = Object.keys(out).length ? out : null
 			return ok({ main: value, relationshipsKnown: value })
 		},
 
-		"core:query/chat-cast@1": async (input: any, ctx: any) => {
-			const cast = await ctx.read("chat_cast", {
-				chatId: input?.scope?.chatId
+		"core:query/session-cast@1": async (input: any, ctx: any) => {
+			const cast = await ctx.read("session_cast", {
+				sessionId: input?.scope?.sessionId
 			})
 			if (!cast)
 				return halt(
-					"there is no chat to build a prompt for — the run is scoped to a " +
-						"chat that no longer exists"
+					"there is no session to build a prompt for — the run is scoped to a " +
+						"session that no longer exists"
 				)
 			// Whose turn it is travels *with* the cast rather than separately.
-			// It is one fact about the chat — who is in it and who is speaking —
+			// It is one fact about the session — who is in it and who is speaking —
 			// and splitting it left the context Task unable to resolve the
 			// speaker at all, which the first parity run showed as a missing
 			// scenario and no post-history text.
@@ -552,6 +631,12 @@ export function coreBindings(): Bindings {
 		},
 
 		// ── Tasks ───────────────────────────────────────────────────────────
+		// The four next-speaker strategies (19 §5, U-C4). One implementation,
+		// four ids — see `pickSpeaker` below for the rules.
+		"core:task/turn-round-robin@1": pickSpeaker("round-robin"),
+		"core:task/turn-random@1": pickSpeaker("random"),
+		"core:task/turn-manual@1": pickSpeaker("manual"),
+		"core:task/turn-none@1": pickSpeaker("none"),
 		/**
 		 * Fuse the two arms into one ordering.
 		 *
@@ -595,7 +680,7 @@ export function coreBindings(): Bindings {
 		 * Pure. Reuses `formatMessageForQuery` rather than reimplementing it —
 		 * two formattings of a query are two different sets of results with no
 		 * way to tell which is which, and the speaker fallback reaches through
-		 * participants who have left the chat.
+		 * participants who have left the session.
 		 */
 		"core:task/query-windows@1": async (input: any) => {
 			const params = withDefaults({ semantic: input?.params ?? {} })
@@ -711,7 +796,7 @@ export function coreBindings(): Bindings {
 		 * version read the cast itself and died on `ctx.read is not a function`,
 		 * because a Task is handed no services (F11) and the executor enforces it.
 		 * That was the ledger catching a decomposition mistake, not an obstacle:
-		 * the read is a read and belongs in `core:query/chat-cast@1`, and what is
+		 * the read is a read and belongs in `core:query/session-cast@1`, and what is
 		 * left here is the part anyone should be able to replace — which characters
 		 * appear, which get named, which scenario wins.
 		 *
@@ -725,8 +810,8 @@ export function coreBindings(): Bindings {
 			const cast = input?.cast ?? input?.main
 			if (!cast)
 				return halt(
-					"there is no cast to build a prompt context from — the chat query " +
-						"returned nothing, which usually means the chat was deleted mid-run"
+					"there is no cast to build a prompt context from — the session query " +
+						"returned nothing, which usually means the session was deleted mid-run"
 				)
 
 			const random: () => number = ctx?.random ?? (() => 0)
@@ -746,7 +831,7 @@ export function coreBindings(): Bindings {
 				relationshipsPerspectives: input?.relationshipsPerspectives,
 				relationshipsKnown: input?.relationshipsKnown,
 				characterLore: input?.characterLore,
-				chat: cast,
+				session: cast,
 				pickExample: (n: number) => Math.floor(random() * n)
 			})
 
@@ -774,10 +859,10 @@ export function coreBindings(): Bindings {
 		/**
 		 * Name and interpolate the conversation, and add the seed.
 		 *
-		 * Pure, and it reuses `ChatMessageProcessor` rather than reimplementing it
+		 * Pure, and it reuses `SessionMessageProcessor` rather than reimplementing it
 		 * — the name-resolution chain reaches through removed participants to a
 		 * name snapshotted at removal time, and a second version of that agrees on
-		 * every chat until someone leaves one.
+		 * every session until someone leaves one.
 		 */
 		"core:task/process-messages@1": async (input: any) => {
 			const ctxValue = input?.templateContext ?? {}
@@ -959,11 +1044,11 @@ export function coreBindings(): Bindings {
 		"core:input/summarize-request@1": async (input: any) => ok(input),
 
 		"core:query/summarize-source@1": async (input: any, ctx: any) => {
-			// `summarize_source`, not `chat_messages`: a summary wants a chosen
+			// `summarize_source`, not `session_messages`: a summary wants a chosen
 			// range with sender names resolved, and the host owns both rules so
 			// no binding can get the hidden-message convention wrong.
 			const messages = await ctx.read("summarize_source", {
-				chatId: input?.scope?.chatId,
+				sessionId: input?.scope?.sessionId,
 				messageIds: input?.request?.messageIds,
 				limit: input?.request?.limit ?? 5000
 			})
@@ -1057,7 +1142,15 @@ export function coreBindings(): Bindings {
 			// `<content>` unwrapped here rather than at synthesis: a draft is
 			// what phase 2 merges, and handing it the tags as well would put the
 			// contract's own scaffolding into the finished entry.
-			const draft = parseSummaryOutput(result.text).content ?? result.text
+			const raw = parseSummaryOutput(result.text).content ?? result.text
+			// The interior point (18 §4e): the user's `each-draft` chain runs
+			// over every intermediate draft before synthesis reads it — slop
+			// killed in the material summaries are built *from*. `ctx.scripts`
+			// exists only because the descriptor declares the point; absent an
+			// engine, the draft passes through untouched.
+			const draft = ctx.scripts
+				? await ctx.scripts.applyText("each-draft", raw)
+				: raw
 			return ok({ main: draft, draft })
 		},
 
@@ -1165,7 +1258,7 @@ export function coreBindings(): Bindings {
 
 		"core:query/graph-scenes@1": async (input: any, ctx: any) => {
 			const scenes = await ctx.read("graph_scenes", {
-				chatId: input?.scope?.chatId
+				sessionId: input?.scope?.sessionId
 			})
 			return ok({ main: scenes, scenes })
 		},

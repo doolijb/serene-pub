@@ -42,9 +42,7 @@ describe("stripCardDecorators", () => {
 	})
 
 	test("only swallows one directly-adjacent blank line per side, not the author's own spacing", () => {
-		const { content } = stripCardDecorators(
-			"@@depth 5\n\n\nActual content"
-		)
+		const { content } = stripCardDecorators("@@depth 5\n\n\nActual content")
 		// One blank line closes the gap the decorator block created; the
 		// second blank line is the author's own paragraph spacing.
 		expect(content).toBe("\nActual content")

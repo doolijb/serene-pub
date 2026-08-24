@@ -9,7 +9,7 @@
 		onclick: (e: MouseEvent) => void
 		contentTitle: string
 		classes?: string
-		itemType?: string // e.g., "Character", "Chat", "Persona"
+		itemType?: string // e.g., "Character", "Session", "Persona"
 		totalItems?: number // Total items in the list for context
 		currentIndex?: number // Current position in list
 	}

@@ -12,7 +12,7 @@ export const CONNECTION_DEFAULTS = {
 			stream: true,
 			think: false,
 			keepAlive: "300ms",
-			useChat: true
+			useSession: true
 		}
 	},
 	[CONNECTION_TYPE.OPENAI_CHAT]: {
@@ -32,7 +32,7 @@ export const CONNECTION_DEFAULTS = {
 		promptFormat: PromptFormats.VICUNA,
 		tokenCounter: TokenCounterOptions.ESTIMATE,
 		extraJson: {
-			useChat: true,
+			useSession: true,
 			stream: true,
 			ttl: 60
 		}
@@ -55,7 +55,7 @@ export const CONNECTION_DEFAULTS = {
 		tokenCounter: TokenCounterOptions.ESTIMATE,
 		extraJson: {
 			stream: true,
-			useChat: true,
+			useSession: true,
 			useMemory: false,
 			memory: "",
 			// Must match KoboldCppForm.svelte's own extraJsonToExtraFields
@@ -83,7 +83,7 @@ export const CONNECTION_DEFAULTS = {
 		tokenCounter: TokenCounterOptions.ESTIMATE,
 		extraJson: {
 			stream: true,
-			useChat: true,
+			useSession: true,
 			useMemory: false,
 			memory: "",
 			// See CONNECTION_TYPE.KOBOLDCPP above — same fix, same reason,
@@ -117,7 +117,7 @@ export const CONNECTION_DEFAULTS = {
 	}
 }
 
-// OpenAI Chat presets used in ConnectionsSidebar
+// OpenAI Session presets used in ConnectionsSidebar
 export const OPENAI_CHAT_PRESETS = [
 	{
 		name: "Empty",

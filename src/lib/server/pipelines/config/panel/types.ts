@@ -14,7 +14,6 @@
  * exist"* — and only the first is true.
  */
 
-
 /** Loose on purpose — callers pass the app db and the test db interchangeably. */
 export type Db = {
 	select: any
@@ -23,18 +22,28 @@ export type Db = {
 	delete: any
 }
 
-/** Who is asking, and from where. `chatId` is set only for a chat they own. */
+/** Who is asking, and from where. `sessionId` is set only for a session they own. */
 export interface Viewer {
 	userId: number
 	isAdmin: boolean
-	chatId?: number
+	sessionId?: number
 }
 
 /** Where a value won. `author` means nothing overrode the declared default. */
-export type OptionSource = "chat" | "user" | "preset" | "instance" | "author"
+/**
+ * Where a resolved value came from (12 §2 as simplified 2026-08-24): the
+ * session's override, the selected config ("preset" kept as the wire literal so
+ * clients need no migration), or the author's declared default.
+ */
+export type OptionSource = "session" | "preset" | "author"
 
 /** The scopes a person writes at. `preset` and `author` are not writable here. */
-export type WriteScope = "chat" | "user" | "instance"
+/**
+ * Where an edit lands: the session's override row, or the selected config's own
+ * value ("config"). The former instance/user scopes are gone — an admin's
+ * site-wide edit *is* an edit to the config (ruled 2026-08-24).
+ */
+export type WriteScope = "session" | "config"
 
 export interface ConfigOption {
 	id: string
@@ -148,6 +157,34 @@ export interface ConfigOption {
 	}[]
 	/** For a `share` control: the tokens the split divides. See read.ts. */
 	windowTokens?: number
+	/**
+	 * For a `scripts-chain` option: the resolved chain, hydrated in order.
+	 *
+	 * The value is the ordered id list; this is what those ids *are* — name,
+	 * badge, enabled — so the panel renders the chain without a second fetch,
+	 * the same ride-along `prompt` makes. An id whose row was deleted since
+	 * still appears, marked `missing`, because a dangle the panel hides is a
+	 * chain that quietly shrank.
+	 */
+	scripts?: Array<{
+		id: number
+		name: string
+		enabled: boolean
+		typeLabel: string
+		blastRadius: string
+		operation: string
+		missing?: boolean
+	}>
+	/**
+	 * The effective view's other half (18 §4c): stop guards the run's
+	 * connection carries, shown beside the chain with provenance so "why did
+	 * my reply cut off" is answerable from the step card. Read-only — they are
+	 * managed on the connection.
+	 */
+	connectionScripts?: {
+		connectionName: string
+		entries: Array<{ id: number; name: string; enabled: boolean }>
+	}
 	authorDefault?: unknown
 	value: unknown
 	source: OptionSource
@@ -197,6 +234,16 @@ export interface NamedConfigSummary {
 	name: string
 	isDefault: boolean
 	readOnly: boolean
+	/** Whether a non-admin may choose this preset. Admin's site-wide switch. */
+	enabled: boolean
+	/**
+	 * Which of the mode's actions sessions on this preset include (19 §3).
+	 *
+	 * `null` is not `[]`: null means the preset states nothing and the
+	 * companion rule decides, so a companion shipped later reaches sessions whose
+	 * preset never had a view. `[]` means somebody said none.
+	 */
+	includedActions: string[] | null
 }
 
 export interface NamespaceSummary {
@@ -226,6 +273,21 @@ export interface NamespaceView extends NamespaceSummary {
 	/** The kinds of setting this view contains, in render order. */
 	facets: FacetView[]
 	configs: NamedConfigSummary[]
+	/**
+	 * Every action this pipeline's mode is offered (19 §3) — the checklist the
+	 * preset editor renders. Empty where the pipeline serves no mode.
+	 *
+	 * Sent with the view rather than fetched separately so the editor's list
+	 * and the session's list come from one read of the same rows: a preset that
+	 * could include an action no session would ever see is the two halves of one
+	 * fact disagreeing.
+	 */
+	modeActions: {
+		function: string
+		name: string
+		specSlug: string
+		origin: "companion" | "attachment"
+	}[]
 	selectedConfig: { id: number; name: string; source: string } | null
 	steps: ConfigStep[]
 	writeScope: WriteScope
@@ -325,6 +387,14 @@ export interface Decl {
 	 * it, and selection refuses across it.
 	 */
 	nodeTypeId?: string
+	/**
+	 * For a `scripts-chain` option: the script types this hook accepts, as
+	 * pinned ids (18 §4a). The whole attachment rule — the picker offers rows
+	 * of these types and nothing else, and the write refuses across it.
+	 * Server-side only: type ids are id-shaped strings the payload scan must
+	 * not carry, and the client never needs them — choices arrive resolved.
+	 */
+	accepts?: string[]
 	/** The type this came from — used only to disambiguate a repeated label. */
 	typeLabel: string
 }

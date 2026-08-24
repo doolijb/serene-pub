@@ -2,7 +2,7 @@
  * Round-10 audit fix (HIGH): registerVectorizationHandlers used to
  * unconditionally register EVERY connecting socket (admin or not) as a
  * global vectorization progress emitter. Progress payloads
- * (priorityQueue/history) span every user's chats/lorebooks/characters
+ * (priorityQueue/history) span every user's sessions/lorebooks/characters
  * instance-wide, so a non-admin becoming the emitter meant cross-tenant
  * disclosure. Fixed by gating registration on socket.user.isAdmin and
  * unregistering on disconnect.
@@ -26,9 +26,9 @@ const noopRegister = () => {}
 
 describe("registerVectorizationHandlers — progress emitter admin gate", () => {
 	test("a non-admin socket is never registered as a progress emitter", async () => {
-		const {
-			registerVectorizationHandlers
-		} = await import("./vectorization")
+		const { registerVectorizationHandlers } = await import(
+			"./vectorization"
+		)
 		const { pauseVectorization } = await import(
 			"$lib/server/embedding/vectorizationQueue"
 		)
@@ -42,9 +42,9 @@ describe("registerVectorizationHandlers — progress emitter admin gate", () => 
 	})
 
 	test("an admin socket is registered as a progress emitter and unregistered on disconnect", async () => {
-		const {
-			registerVectorizationHandlers
-		} = await import("./vectorization")
+		const { registerVectorizationHandlers } = await import(
+			"./vectorization"
+		)
 		const { pauseVectorization } = await import(
 			"$lib/server/embedding/vectorizationQueue"
 		)

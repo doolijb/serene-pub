@@ -46,7 +46,9 @@ describe("diskCache — fs concurrency limit", () => {
 			getCachedCardBytes(`concurrency-key-${i}`)
 		)
 
-		await vi.waitFor(() => expect(pendingResolvers.length).toBeGreaterThan(0))
+		await vi.waitFor(() =>
+			expect(pendingResolvers.length).toBeGreaterThan(0)
+		)
 		// Give any (incorrect) extra admissions a moment to happen before
 		// asserting the cap held.
 		await new Promise((r) => setTimeout(r, 20))
@@ -88,7 +90,9 @@ describe("diskCache — fs concurrency limit", () => {
 		const p2 = getCachedCardBytes("mixed-key-2")
 		const p3 = setCachedCardBytes("mixed-key-3", Buffer.from("x"))
 
-		await vi.waitFor(() => expect(pendingResolvers.length).toBeGreaterThan(0))
+		await vi.waitFor(() =>
+			expect(pendingResolvers.length).toBeGreaterThan(0)
+		)
 		await new Promise((r) => setTimeout(r, 20))
 		expect(pendingResolvers.length).toBe(2) // combined cap, not 2-per-function
 
@@ -208,9 +212,7 @@ describe("diskCache — behavior preserved through the concurrency-limiter refac
 		// the setInterval(..., SWEEP_INTERVAL_MS) registered at module load
 		// is the one this test controls.
 		vi.useFakeTimers()
-		const { setCachedCardBytes, IMAGE_TTL_MS } = await import(
-			"./diskCache"
-		)
+		const { setCachedCardBytes, IMAGE_TTL_MS } = await import("./diskCache")
 
 		const survivorKey = "past-default-ttl-within-image-ttl"
 		const evictedKey = "past-image-ttl"
@@ -231,7 +233,8 @@ describe("diskCache — behavior preserved through the concurrency-limiter refac
 		for (const name of files) {
 			const filePath = path.join(cacheDir, name)
 			const content = await fs.readFile(filePath, "utf8")
-			const targetTime = content === "survivor" ? pastDefaultOnly : pastImageTtl
+			const targetTime =
+				content === "survivor" ? pastDefaultOnly : pastImageTtl
 			await fs.utimes(filePath, targetTime, targetTime)
 		}
 

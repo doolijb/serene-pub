@@ -20,7 +20,7 @@ import {
 	VECTORIZATION_API_KEY_INFO
 } from "$lib/server/utils/tokenCrypto"
 import { systemSettingsGet } from "./systemSettings"
-import { checkChatAccess } from "$lib/server/utils/chatAccess"
+import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import {
 	startVectorizationQueue,
 	stopVectorization,
@@ -30,7 +30,7 @@ import {
 	countUnembedded,
 	getPriorityQueue,
 	getCompletedHistory,
-	enqueueChatGroup,
+	enqueueSessionGroup,
 	enqueueLorebookGroup,
 	enqueueCharacterGroup,
 	moveQueueGroup,
@@ -127,7 +127,9 @@ export const vectorizationEnableVectorization: Handler<
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const unsupportedReason = await getLocalEmbeddingUnsupportedReason()
 		if (unsupportedReason) {
-			emitToUser("vectorization:enable:error", { error: unsupportedReason })
+			emitToUser("vectorization:enable:error", {
+				error: unsupportedReason
+			})
 			throw new Error(unsupportedReason)
 		}
 		const modelDef = findModel(params.modelName)
@@ -261,7 +263,7 @@ export const vectorizationSetApiConfig: Handler<
 		// the next full queue restart.
 		clearVectorizationFailureTracking()
 		// Same reasoning for inline embedding's own wedged-backend cooldown
-		// (vectorizationQueue.ts's ensureChatMessageEmbedded).
+		// (vectorizationQueue.ts's ensureSessionMessageEmbedded).
 		clearInlineEmbedCooldown()
 
 		if (params.startNow) {
@@ -312,7 +314,9 @@ export const vectorizationSetModel: Handler<
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const unsupportedReason = await getLocalEmbeddingUnsupportedReason()
 		if (unsupportedReason) {
-			emitToUser("vectorization:setModel:error", { error: unsupportedReason })
+			emitToUser("vectorization:setModel:error", {
+				error: unsupportedReason
+			})
 			throw new Error(unsupportedReason)
 		}
 		const modelDef = findModel(params.modelName)
@@ -351,7 +355,7 @@ export const vectorizationSetModel: Handler<
 		// excluded from picking until the next full queue restart.
 		clearVectorizationFailureTracking()
 		// Same reasoning for inline embedding's own wedged-backend cooldown
-		// (vectorizationQueue.ts's ensureChatMessageEmbedded).
+		// (vectorizationQueue.ts's ensureSessionMessageEmbedded).
 		clearInlineEmbedCooldown()
 
 		const res: Sockets.Vectorization.SetModel.Response = {
@@ -421,8 +425,8 @@ export const vectorizationAddToQueue: Handler<
 	event: "vectorization:addToQueue",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		if (params.chatId != null) {
-			await enqueueChatGroup(params.chatId)
+		if (params.sessionId != null) {
+			await enqueueSessionGroup(params.sessionId)
 		} else if (params.lorebookId != null) {
 			// Fetch the lorebook name for the label
 			const lb = await db.query.lorebooks.findFirst({
@@ -504,10 +508,10 @@ export const vectorizationCheckRagStatus: Handler<
 	event: "vectorization:checkRagStatus",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
-		const chatAccess = await checkChatAccess(params.chatId, userId)
-		if (!chatAccess.hasAccess) {
+		const sessionAccess = await checkSessionAccess(params.sessionId, userId)
+		if (!sessionAccess.hasAccess) {
 			throw new Error(
-				"Access denied. Chat not found or no permission to access."
+				"Access denied. Session not found or no permission to access."
 			)
 		}
 
@@ -541,38 +545,46 @@ export const vectorizationCheckRagStatus: Handler<
 			return res
 		}
 
-		// Load chat metadata + linked content in parallel
-		const [chat, chatCharsRows, chatPersonasRows] = await Promise.all([
-			db.query.chats.findFirst({
-				where: eq(schema.chats.id, params.chatId),
-				columns: { lorebookId: true, metadata: true }
-			}),
-			db
-				.select({
-					characterId: schema.chatCharacters.characterId,
-					charLorebookId: schema.characters.lorebookId
-				})
-				.from(schema.chatCharacters)
-				.leftJoin(
-					schema.characters,
-					eq(schema.chatCharacters.characterId, schema.characters.id)
-				)
-				.where(eq(schema.chatCharacters.chatId, params.chatId)),
-			db
-				.select({ personaId: schema.chatPersonas.personaId })
-				.from(schema.chatPersonas)
-				.where(eq(schema.chatPersonas.chatId, params.chatId))
-		])
+		// Load session metadata + linked content in parallel
+		const [session, sessionCharsRows, sessionPersonasRows] =
+			await Promise.all([
+				db.query.sessions.findFirst({
+					where: eq(schema.sessions.id, params.sessionId),
+					columns: { lorebookId: true, metadata: true }
+				}),
+				db
+					.select({
+						characterId: schema.sessionCharacters.characterId,
+						charLorebookId: schema.characters.lorebookId
+					})
+					.from(schema.sessionCharacters)
+					.leftJoin(
+						schema.characters,
+						eq(
+							schema.sessionCharacters.characterId,
+							schema.characters.id
+						)
+					)
+					.where(
+						eq(schema.sessionCharacters.sessionId, params.sessionId)
+					),
+				db
+					.select({ personaId: schema.sessionPersonas.personaId })
+					.from(schema.sessionPersonas)
+					.where(
+						eq(schema.sessionPersonas.sessionId, params.sessionId)
+					)
+			])
 
-		const ragIgnored = !!(chat?.metadata as any)?.ragIgnored
+		const ragIgnored = !!(session?.metadata as any)?.ragIgnored
 
 		// Gather linked IDs
 		const characterIds: number[] = []
 		const allLorebookIds: number[] = []
 
-		if (chat?.lorebookId) allLorebookIds.push(chat.lorebookId)
+		if (session?.lorebookId) allLorebookIds.push(session.lorebookId)
 
-		for (const cc of chatCharsRows) {
+		for (const cc of sessionCharsRows) {
 			if (cc.characterId) characterIds.push(cc.characterId)
 			if (
 				cc.charLorebookId &&
@@ -583,17 +595,17 @@ export const vectorizationCheckRagStatus: Handler<
 		}
 
 		const personaIds: number[] = []
-		for (const cp of chatPersonasRows) {
+		for (const cp of sessionPersonasRows) {
 			if (cp.personaId) personaIds.push(cp.personaId)
 		}
 
 		// Count total messages to determine if RAG is applicable
 		const totalMessages = await db.$count(
-			schema.chatMessages,
-			eq(schema.chatMessages.chatId, params.chatId)
+			schema.sessionMessages,
+			eq(schema.sessionMessages.sessionId, params.sessionId)
 		)
 
-		// Not applicable if chat has ≤ 10 messages (all are in context window)
+		// Not applicable if session has ≤ 10 messages (all are in context window)
 		if (Number(totalMessages) <= 10) {
 			const res: Sockets.Vectorization.CheckRagStatus.Response = {
 				applicable: false,
@@ -611,18 +623,18 @@ export const vectorizationCheckRagStatus: Handler<
 
 		// Get IDs of the 10 most recent messages to exclude them
 		const recentRows = await db
-			.select({ id: schema.chatMessages.id })
-			.from(schema.chatMessages)
-			.where(eq(schema.chatMessages.chatId, params.chatId))
-			.orderBy(desc(schema.chatMessages.id))
+			.select({ id: schema.sessionMessages.id })
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.sessionId, params.sessionId))
+			.orderBy(desc(schema.sessionMessages.id))
 			.limit(10)
 		const recentIds = recentRows.map((r) => r.id)
 
 		// Messages older than the last 10
 		const olderWhere = and(
-			eq(schema.chatMessages.chatId, params.chatId),
+			eq(schema.sessionMessages.sessionId, params.sessionId),
 			recentIds.length > 0
-				? sql`${schema.chatMessages.id} NOT IN (${sql.join(
+				? sql`${schema.sessionMessages.id} NOT IN (${sql.join(
 						recentIds.map((id) => sql`${id}`),
 						sql`, `
 					)})`
@@ -630,17 +642,17 @@ export const vectorizationCheckRagStatus: Handler<
 		)
 
 		const [msgTotal, msgNull, msgStale] = await Promise.all([
-			db.$count(schema.chatMessages, olderWhere),
+			db.$count(schema.sessionMessages, olderWhere),
 			db.$count(
-				schema.chatMessages,
-				and(olderWhere, isNull(schema.chatMessages.embedding))
+				schema.sessionMessages,
+				and(olderWhere, isNull(schema.sessionMessages.embedding))
 			),
 			db.$count(
-				schema.chatMessages,
+				schema.sessionMessages,
 				and(
 					olderWhere,
-					sql`${schema.chatMessages.embedding} IS NOT NULL`,
-					ne(schema.chatMessages.embeddingModel, activeModelName)
+					sql`${schema.sessionMessages.embedding} IS NOT NULL`,
+					ne(schema.sessionMessages.embeddingModel, activeModelName)
 				)
 			)
 		])
@@ -880,39 +892,39 @@ export const vectorizationCheckRagStatus: Handler<
 	}
 }
 
-export const vectorizationSetChatRagIgnored: Handler<
-	Sockets.Vectorization.SetChatRagIgnored.Params,
-	Sockets.Vectorization.SetChatRagIgnored.Response
+export const vectorizationSetSessionRagIgnored: Handler<
+	Sockets.Vectorization.SetSessionRagIgnored.Params,
+	Sockets.Vectorization.SetSessionRagIgnored.Response
 > = {
-	event: "vectorization:setChatRagIgnored",
+	event: "vectorization:setSessionRagIgnored",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
-		// A chat-level setting, like the other chat-level toggles gated to
-		// owners only in chatsUpdateHandler — guests can use RAG, not
-		// reconfigure it for everyone else in the chat.
-		const chatAccess = await checkChatAccess(params.chatId, userId)
-		if (!chatAccess.hasAccess || !chatAccess.isOwner) {
+		// A session-level setting, like the other session-level toggles gated to
+		// owners only in sessionsUpdateHandler — guests can use RAG, not
+		// reconfigure it for everyone else in the session.
+		const sessionAccess = await checkSessionAccess(params.sessionId, userId)
+		if (!sessionAccess.hasAccess || !sessionAccess.isOwner) {
 			throw new Error(
-				"Access denied. Only the chat owner can change this."
+				"Access denied. Only the session owner can change this."
 			)
 		}
 
-		const chat = await db.query.chats.findFirst({
-			where: eq(schema.chats.id, params.chatId),
+		const session = await db.query.sessions.findFirst({
+			where: eq(schema.sessions.id, params.sessionId),
 			columns: { metadata: true }
 		})
 
-		const currentMeta = (chat?.metadata as Record<string, any>) ?? {}
+		const currentMeta = (session?.metadata as Record<string, any>) ?? {}
 		await db
-			.update(schema.chats)
+			.update(schema.sessions)
 			.set({ metadata: { ...currentMeta, ragIgnored: params.ignored } })
-			.where(eq(schema.chats.id, params.chatId))
+			.where(eq(schema.sessions.id, params.sessionId))
 
-		const res: Sockets.Vectorization.SetChatRagIgnored.Response = {
+		const res: Sockets.Vectorization.SetSessionRagIgnored.Response = {
 			success: true,
 			ragIgnored: params.ignored
 		}
-		emitToUser("vectorization:setChatRagIgnored", res)
+		emitToUser("vectorization:setSessionRagIgnored", res)
 		return res
 	}
 }
@@ -942,12 +954,12 @@ export function registerVectorizationHandlers(
 	register(socket, vectorizationMoveQueueGroup, emitToUser)
 	register(socket, vectorizationRemoveFromQueue, emitToUser)
 	register(socket, vectorizationCheckRagStatus, emitToUser)
-	register(socket, vectorizationSetChatRagIgnored, emitToUser)
+	register(socket, vectorizationSetSessionRagIgnored, emitToUser)
 
-	// Progress telemetry (priorityQueue/history) spans every user's chats/
+	// Progress telemetry (priorityQueue/history) spans every user's sessions/
 	// lorebooks/characters instance-wide — only admins should ever receive
-	// it. vectorizationCheckRagStatus/vectorizationSetChatRagIgnored above
-	// are correctly per-chat-scoped for any user; this is the one piece of
+	// it. vectorizationCheckRagStatus/vectorizationSetSessionRagIgnored above
+	// are correctly per-session-scoped for any user; this is the one piece of
 	// this module that isn't for everyone.
 	if (socket.user?.isAdmin) {
 		registerProgressEmitter(emitToUser)

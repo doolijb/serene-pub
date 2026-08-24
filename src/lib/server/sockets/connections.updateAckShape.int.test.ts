@@ -154,7 +154,9 @@ describe("connections:update — ack payload shape (bugfix, PGlite integration)"
 
 		const updated = await connectionsUpdate.handler(
 			fakeSocket(admin.id),
-			{ connection: { id: legacy.id, name: "Legacy KCPP Renamed" } } as any,
+			{
+				connection: { id: legacy.id, name: "Legacy KCPP Renamed" }
+			} as any,
 			noopEmit
 		)
 

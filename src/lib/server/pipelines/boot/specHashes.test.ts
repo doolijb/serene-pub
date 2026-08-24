@@ -36,13 +36,24 @@ import { CORE_SPECS } from "$lib/server/pipelines/specs"
  * instead of a hash quietly moving underneath a version that did not.
  */
 const PUBLISHED: Record<string, string> = {
-	"core:spec/respond@1.10.0": "1e087d629a6b3c",
-	"core:spec/narrate@1.4.0": "10f782334fb959",
-	"core:spec/summarize-world@1.1.0": "12ae76f187a917",
-	"core:spec/summarize-character@1.1.0": "80f380b6089cf",
-	"core:spec/summarize-scene@1.1.0": "8f3cd054e63cc",
-	"core:spec/summarize-history@1.1.0": "46f05f35469a3",
-	"core:spec/graph-build@1.0.1": "199a066924d0ce"
+	// 1.12.0: the session rename (0141) — session-scope/-history/-cast ids
+	// and sessionId/sessionScope ports ripple into every pinned type.
+	"core:spec/respond@1.12.0": "72df744027f6d",
+	// 1.11.0: turn-taking becomes a node (19 §5, U-C4) — the `speaker` task
+	// records the trigger's pick, and context + generation take their
+	// speaker from its output instead of only from the run scope.
+	"core:spec/respond@1.11.0": "8ae7ccbf18fae",
+	// 1.6.0: the session rename, as above.
+	"core:spec/narrate@1.6.0": "1e7f35cc2ddaaa",
+	// 1.5.0: declares `contributes.triggers` — the narrate button on the
+	// standard mode is now a fact in the document, not a branch in
+	// generateResponse (19 §3–§4, U-C3).
+	"core:spec/narrate@1.5.0": "1bfa0898d8db15",
+	"core:spec/summarize-world@1.2.0": "11dc51df9014b",
+	"core:spec/summarize-character@1.2.0": "460b20537ef94",
+	"core:spec/summarize-scene@1.2.0": "42b49662a7449",
+	"core:spec/summarize-history@1.2.0": "235d7d8abbef1",
+	"core:spec/graph-build@1.1.0": "122aaab2d9ed79"
 }
 
 describe("published spec hashes", () => {

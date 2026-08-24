@@ -7,7 +7,7 @@
 	import PanelTab from "$lib/client/components/panels/PanelTab.svelte"
 	import PanelSectionTitle from "$lib/client/components/panels/PanelSectionTitle.svelte"
 	import NewNameModal from "../modals/NewNameModal.svelte"
-	import { attachLorebookToChat } from "$lib/client/utils/attachLorebookToChat"
+	import { attachLorebookToSession } from "$lib/client/utils/attachLorebookToSession"
 	import EditLorebookForm from "../lorebookForms/EditLorebookForm.svelte"
 	import {
 		FileUpload,
@@ -82,7 +82,7 @@
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
 	)
-	let openChatCtx: OpenChatCtx = $state(getContext("openChatCtx"))
+	let openSessionCtx: OpenSessionCtx = $state(getContext("openSessionCtx"))
 
 	// Building a graph is pure LLM extraction from scene summaries — it never
 	// touches embeddings (see graphBuilder.ts), so this only needs summarization
@@ -92,19 +92,21 @@
 		!!systemSettingsCtx.settings?.summarizationEnabled
 	)
 
-	// Guests can view a shared chat but can't reconfigure it — the server
-	// rejects chats:setLorebook for non-owners anyway, this just avoids
+	// Guests can view a shared session but can't reconfigure it — the server
+	// rejects sessions:setLorebook for non-owners anyway, this just avoids
 	// showing an action that would fail with an error toast.
-	let hasOpenChat = $derived(
-		openChatCtx.chatId !== null && openChatCtx.isOwner
+	let hasOpenSession = $derived(
+		openSessionCtx.sessionId !== null && openSessionCtx.isOwner
 	)
-	let openChatHasLorebook = $derived(openChatCtx.lorebookId !== null)
+	let openSessionHasLorebook = $derived(openSessionCtx.lorebookId !== null)
 
-	// The create modal offers "attach to this chat" only when it would actually
-	// do something: on a chat the user owns, that has no lorebook yet. Anywhere
+	// The create modal offers "attach to this session" only when it would actually
+	// do something: on a session the user owns, that has no lorebook yet. Anywhere
 	// else the checkbox is hidden rather than shown disabled — a greyed control
 	// with no explanation is worse than no control.
-	let canOfferAttachToChat = $derived(hasOpenChat && !openChatHasLorebook)
+	let canOfferAttachToSession = $derived(
+		hasOpenSession && !openSessionHasLorebook
+	)
 
 	// Section names. The tab triggers are icon-only (see PanelTab), so this is
 	// the only place the names are rendered — PanelSectionTitle shows the
@@ -119,18 +121,18 @@
 	}
 	let sectionLabel = $derived(SECTION_LABELS[editGroup])
 
-	function handleAttachToChat(lorebookId: number) {
-		if (openChatCtx.chatId === null) return
-		socket.emit("chats:setLorebook", {
-			chatId: openChatCtx.chatId,
+	function handleAttachToSession(lorebookId: number) {
+		if (openSessionCtx.sessionId === null) return
+		socket.emit("sessions:setLorebook", {
+			sessionId: openSessionCtx.sessionId,
 			lorebookId
 		})
 	}
 
-	function handleDetachFromChat() {
-		if (openChatCtx.chatId === null) return
-		socket.emit("chats:setLorebook", {
-			chatId: openChatCtx.chatId,
+	function handleDetachFromSession() {
+		if (openSessionCtx.sessionId === null) return
+		socket.emit("sessions:setLorebook", {
+			sessionId: openSessionCtx.sessionId,
 			lorebookId: null
 		})
 	}
@@ -142,7 +144,7 @@
 		}
 	})
 
-	// External navigation from chat scene/history-entry clicks
+	// External navigation from session scene/history-entry clicks
 	let focusHistoryEntryId = $state<number | undefined>(undefined)
 	let focusHistoryEntryTab = $state<"content" | "scenes">("content")
 	let focusSceneId = $state<number | undefined>(undefined)
@@ -215,21 +217,24 @@
 	}
 
 	/**
-	 * Set when the user ticked "attach to this chat" so the `lorebooks:create`
+	 * Set when the user ticked "attach to this session" so the `lorebooks:create`
 	 * broadcast can be matched back to this request. Correlating on the
 	 * submitted name rather than a bare boolean — see the same reasoning in
 	 * SummarizeLoreModal.handleLorebookCreate.
 	 */
 	let pendingAttachName: string | null = $state(null)
 
-	async function handleOnCreateConfirm(name: string, attachToChat: boolean) {
+	async function handleOnCreateConfirm(
+		name: string,
+		attachToSession: boolean
+	) {
 		if (!name.trim()) return
 		isCreating = false
 		const trimmed = name.trim()
 		// Only claim the create when the checkbox was both shown and ticked;
-		// `attachToChat` is meaningless if the modal rendered no checkbox.
+		// `attachToSession` is meaningless if the modal rendered no checkbox.
 		pendingAttachName =
-			attachToChat && canOfferAttachToChat ? trimmed : null
+			attachToSession && canOfferAttachToSession ? trimmed : null
 		const req: Sockets.Lorebooks.Create.Params = { name: trimmed }
 		socket.emit("lorebooks:create", req)
 	}
@@ -477,12 +482,12 @@
 			if (
 				pendingAttachName !== null &&
 				msg.lorebook.name === pendingAttachName &&
-				openChatCtx.chatId !== null
+				openSessionCtx.sessionId !== null
 			) {
 				pendingAttachName = null
-				attachLorebookToChat(
+				attachLorebookToSession(
 					socket,
-					openChatCtx.chatId,
+					openSessionCtx.sessionId,
 					msg.lorebook.id
 				)
 			}
@@ -567,22 +572,25 @@
 			}
 		)
 		socket.on(
-			"chats:setLorebook",
-			(msg: Sockets.Chats.SetLorebook.Response) => {
+			"sessions:setLorebook",
+			(msg: Sockets.Sessions.SetLorebook.Response) => {
 				if (
-					!msg.chat ||
-					openChatCtx.chatId === null ||
-					msg.chat.id !== openChatCtx.chatId
+					!msg.session ||
+					openSessionCtx.sessionId === null ||
+					msg.session.id !== openSessionCtx.sessionId
 				)
 					return
 				toaster.success({
-					title: msg.chat.lorebookId
+					title: msg.session.lorebookId
 						? "Lorebook Attached"
 						: "Lorebook Detached"
 				})
-				// Full reload of the open chat, not just a field patch — lore-bound
-				// content (RAG notices, etc.) can depend on the chat's lorebook.
-				socket.emit("chats:get", { id: openChatCtx.chatId, limit: 25 })
+				// Full reload of the open session, not just a field patch — lore-bound
+				// content (RAG notices, etc.) can depend on the session's lorebook.
+				socket.emit("sessions:get", {
+					id: openSessionCtx.sessionId,
+					limit: 25
+				})
 			}
 		)
 		onclose = handleOnClose
@@ -601,7 +609,7 @@
 		socket.off("lorebooks:export")
 		socket.off("lorebooks:export:error")
 		socket.off("lorebooks:delete")
-		socket.off("chats:setLorebook")
+		socket.off("sessions:setLorebook")
 		onclose = undefined
 	})
 </script>
@@ -629,29 +637,29 @@
 							<span>Export</span>
 						</button>
 					{/if}
-					{#if hasOpenChat && selectedLorebook}
-						{#if openChatCtx.lorebookId === selectedLorebook.id}
+					{#if hasOpenSession && selectedLorebook}
+						{#if openSessionCtx.lorebookId === selectedLorebook.id}
 							<button
 								class="btn btn-sm popover-menu-btn hover:preset-filled-warning-500"
-								onclick={handleDetachFromChat}
+								onclick={handleDetachFromSession}
 								type="button"
 							>
 								<Icons.Unlink size={16} aria-hidden="true" />
-								<span>Detach from Chat</span>
+								<span>Detach from Session</span>
 							</button>
 						{:else}
 							<button
 								class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
 								onclick={() =>
-									handleAttachToChat(selectedLorebook.id)}
-								disabled={openChatHasLorebook}
-								title={openChatHasLorebook
-									? "The current chat already has a lorebook attached"
+									handleAttachToSession(selectedLorebook.id)}
+								disabled={openSessionHasLorebook}
+								title={openSessionHasLorebook
+									? "The current session already has a lorebook attached"
 									: undefined}
 								type="button"
 							>
 								<Icons.Link size={16} aria-hidden="true" />
-								<span>Attach to Chat</span>
+								<span>Attach to Session</span>
 							</button>
 						{/if}
 					{/if}
@@ -833,11 +841,12 @@
 						characterEntriesCount={l.characterLoreEntries?.length ||
 							0}
 						historyEntriesCount={l.historyEntries?.length || 0}
-						{hasOpenChat}
-						{openChatHasLorebook}
-						isOpenChatLorebook={openChatCtx.lorebookId === l.id}
-						onAttachToChat={handleAttachToChat}
-						onDetachFromChat={handleDetachFromChat}
+						{hasOpenSession}
+						{openSessionHasLorebook}
+						isOpenSessionLorebook={openSessionCtx.lorebookId ===
+							l.id}
+						onAttachToSession={handleAttachToSession}
+						onDetachFromSession={handleDetachFromSession}
 					/>
 				{/each}
 			{/if}
@@ -852,8 +861,8 @@
 	onCancel={() => (isCreating = false)}
 	title="Create New Lorebook"
 	description="What would you like to call it?"
-	checkboxLabel={canOfferAttachToChat
-		? "Attach to the current chat"
+	checkboxLabel={canOfferAttachToSession
+		? "Attach to the current session"
 		: undefined}
 	checkboxChecked={true}
 />

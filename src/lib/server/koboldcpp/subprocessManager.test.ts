@@ -37,9 +37,8 @@ vi.mock("./kcppHttp", () => ({
 }))
 
 vi.mock("fs/promises", async () => {
-	const actual = await vi.importActual<typeof import("fs/promises")>(
-		"fs/promises"
-	)
+	const actual =
+		await vi.importActual<typeof import("fs/promises")>("fs/promises")
 	return {
 		...actual,
 		readFile: vi.fn(),
@@ -120,7 +119,7 @@ describe("subprocessManager.start — managed-mode gating", () => {
 		expect(spawn).not.toHaveBeenCalled()
 	})
 
-	test("refuses to start when mode is \"external\" even if the manager is enabled", async () => {
+	test('refuses to start when mode is "external" even if the manager is enabled', async () => {
 		findFirstMock.mockResolvedValue({
 			koboldCppManagerEnabled: true,
 			koboldCppManagedMode: "external"
@@ -359,7 +358,7 @@ describe("subprocessManager.start — admin password fallback (Round-7 audit fix
 		updateSetMock.mockClear()
 	})
 
-	test("generates and persists a fresh password instead of falling back to the literal \"serene\"", async () => {
+	test('generates and persists a fresh password instead of falling back to the literal "serene"', async () => {
 		const sm = await freshImport()
 		findFirstMock.mockResolvedValue({
 			...REAL_SETTINGS_BASE,
@@ -411,7 +410,9 @@ describe("subprocessManager.start — admin password fallback (Round-7 audit fix
 		expect(updateSetMock).not.toHaveBeenCalled()
 		const spawnArgs = vi.mocked(spawn).mock.calls[0][1] as string[]
 		const pwIndex = spawnArgs.indexOf("--adminpassword")
-		expect(spawnArgs[pwIndex + 1]).toBe(REAL_SETTINGS_BASE.koboldCppManagedAdminPassword)
+		expect(spawnArgs[pwIndex + 1]).toBe(
+			REAL_SETTINGS_BASE.koboldCppManagedAdminPassword
+		)
 	})
 
 	// Bugfix: without --jinja, koboldcpp renders /v1/chat/completions through
@@ -429,7 +430,9 @@ describe("subprocessManager.start — admin password fallback (Round-7 audit fix
 		pingKoboldCPPMock
 			.mockResolvedValueOnce(false)
 			.mockResolvedValueOnce(true)
-		vi.mocked(fsPromises.readFile).mockRejectedValue(new Error("no pidfile"))
+		vi.mocked(fsPromises.readFile).mockRejectedValue(
+			new Error("no pidfile")
+		)
 		const child = makeFakeChild(54324)
 		vi.mocked(spawn).mockReturnValue(child as any)
 		vi.spyOn(process, "kill").mockImplementation(() => true as any)

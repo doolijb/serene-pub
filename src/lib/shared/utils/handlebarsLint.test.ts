@@ -3,7 +3,9 @@ import { lintHandlebarsText } from "./handlebarsLint"
 
 describe("lintHandlebarsText — @@decorator detection", () => {
 	test("flags a bare @@decorator line", () => {
-		const issues = lintHandlebarsText("@@position before_char\nActual content.")
+		const issues = lintHandlebarsText(
+			"@@position before_char\nActual content."
+		)
 		expect(issues).toHaveLength(1)
 		expect(issues[0].kind).toBe("decorator")
 		expect(issues[0].match).toBe("@@position before_char")

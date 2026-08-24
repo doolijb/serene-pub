@@ -50,7 +50,7 @@ async function ollamaModel(): Promise<string | null> {
 let db: TestDb
 let dataDir: string
 let model: string | null = null
-let chatId: number
+let sessionId: number
 let userId: number
 let characterId: number
 
@@ -70,7 +70,9 @@ beforeAll(async () => {
 	const dbModule = await import("$lib/server/db")
 	db = dbModule.db as unknown as TestDb
 	await (await import("$lib/server/db/defaults")).sync()
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(db as any)
 
 	const [user] = await db
@@ -122,20 +124,25 @@ beforeAll(async () => {
 		})
 		.returning()
 
-	const [chat] = await db
-		.insert(schema.chats)
+	const [session] = await db
+		.insert(schema.sessions)
 		.values({ userId, isGroup: false })
 		.returning()
-	chatId = chat.id
+	sessionId = session.id
 
 	await db
-		.insert(schema.chatCharacters)
-		.values({ chatId, characterId, isActive: true, visibility: "visible" })
+		.insert(schema.sessionCharacters)
+		.values({
+			sessionId,
+			characterId,
+			isActive: true,
+			visibility: "visible"
+		})
 	await db
-		.insert(schema.chatPersonas)
-		.values({ chatId, personaId: persona.id })
-	await db.insert(schema.chatMessages).values({
-		chatId,
+		.insert(schema.sessionPersonas)
+		.values({ sessionId, personaId: persona.id })
+	await db.insert(schema.sessionMessages).values({
+		sessionId,
 		role: "user",
 		content: "Say hello in five words or fewer.",
 		personaId: persona.id
@@ -160,7 +167,7 @@ describe("a real reply, all the way through", () => {
 		)
 		const receipt: any = await runTurn({
 			db: db as any,
-			chatId,
+			sessionId,
 			userId,
 			currentCharacterId: characterId,
 			text: "Say hello in five words or fewer.",
@@ -197,8 +204,8 @@ describe("a real reply, all the way through", () => {
 		// The consumer ran too — a reply nobody stored is not a reply.
 		const rows = await db
 			.select()
-			.from(schema.chatMessages)
-			.where(eq(schema.chatMessages.chatId, chatId))
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.sessionId, sessionId))
 		const written: any = rows.find((r: any) => r.role === "assistant")
 
 		console.log(
@@ -215,7 +222,7 @@ describe("a real reply, all the way through", () => {
 		 * The stored text may still begin with `Ash: `, and that is **not** a
 		 * defect this path can show.
 		 *
-		 * The prompt seeds `<Name>: ` and models routinely echo it. The chat
+		 * The prompt seeds `<Name>: ` and models routinely echo it. The session
 		 * flow strips that: `generateResponse` builds the same `startString`
 		 * and removes it from the completion before writing. This test calls
 		 * `runTurn` non-preview, so the message is written by the pipeline's own

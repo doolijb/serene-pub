@@ -28,7 +28,10 @@
 import { parseSplitChatPrompt } from "$lib/shared/utils/parseSplitChatPrompt"
 import { formatHistoryDateKey } from "$lib/server/pipelines/prompt/dateKeys"
 import { renderTemplate } from "$lib/server/pipelines/prompt/renderers"
-import { renderVariable, type ResolvedLayouts } from "$lib/server/pipelines/entities/variableLayouts"
+import {
+	renderVariable,
+	type ResolvedLayouts
+} from "$lib/server/pipelines/entities/variableLayouts"
 import type { Decision } from "$lib/server/pipelines/ranking/select"
 
 export interface ContextBlock {
@@ -185,6 +188,40 @@ function dateMeta(
 	return { year: payload.year, month: payload.month, day: payload.day }
 }
 
+/**
+ * Depth → render index, for script injections (18 §4a).
+ *
+ * `postHistory`'s arithmetic exactly: depth 0 lands in the seed placeholder's
+ * iteration (right after the newest real message), depth N lands N real
+ * messages earlier, clamped to the top so an over-deep entry still renders
+ * rather than vanishing. Entries keep their declared order within one index.
+ */
+export function resolveInjections(
+	injections: unknown,
+	messageCount: number
+): Record<number, Array<{ role: string; content: string }>> {
+	const out: Record<number, Array<{ role: string; content: string }>> = {}
+	if (!Array.isArray(injections) || !messageCount) return out
+	for (const e of injections as Array<{
+		role?: string
+		content?: unknown
+		depth?: unknown
+	}>) {
+		if (!e || typeof e.content !== "string" || !e.content) continue
+		const depth =
+			typeof e.depth === "number" && Number.isInteger(e.depth)
+				? Math.max(0, e.depth)
+				: 0
+		const idx = Math.max(0, messageCount - 1 - depth)
+		;(out[idx] ??= []).push({
+			role:
+				e.role === "user" || e.role === "assistant" ? e.role : "system",
+			content: e.content
+		})
+	}
+	return out
+}
+
 export interface RenderInput {
 	allocation: AllocatedContext
 	/**
@@ -196,7 +233,7 @@ export interface RenderInput {
 	 * puts it at the top of the conversation instead of next to the generation
 	 * point — which is the one place it was moved to in order to be followed.
 	 *
-	 * Found by comparing against a real chat: eight corpus fixtures missed it,
+	 * Found by comparing against a real session: eight corpus fixtures missed it,
 	 * because their template rendered `postHistory.*` outside the loop and so
 	 * never expressed a position at all.
 	 */
@@ -307,7 +344,19 @@ export function render(input: RenderInput): RenderedContext {
 			"currentDate",
 			currentDateOf(bySourceBlocks("history"))
 		),
-		chatMessages: input.messages,
+		sessionMessages: input.messages,
+		// Script injections, resolved from depth to a render index — the same
+		// arithmetic and the same moment as `postHistory.targetIndex` (§20):
+		// depth 0 is the seed placeholder's own iteration, depth N is N real
+		// messages earlier, clamped so an over-deep entry renders at the top
+		// instead of vanishing. Data for the template's own loop, never a
+		// splice (18 §4a, ruling 2026-08-23) — the template renders them where
+		// its author put the block, and an empty map renders nothing at all.
+		injectionsByIndex: resolveInjections(
+			(input.templateContext as { injections?: unknown } | undefined)
+				?.injections,
+			input.messages.length
+		),
 		budget: input.allocation.budget,
 		// Last, so the resolved block wins over the placeholder the template
 		// context carries.

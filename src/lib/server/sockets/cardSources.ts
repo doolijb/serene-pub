@@ -222,10 +222,14 @@ export const cardSourcesCardDetail: Handler<
 			"cardSources:cardDetail",
 			async (signal) => {
 				try {
-					const detail = await cachedCardDetail(params.source, params.ref, {
-						userId: socket.user!.id,
-						signal
-					})
+					const detail = await cachedCardDetail(
+						params.source,
+						params.ref,
+						{
+							userId: socket.user!.id,
+							signal
+						}
+					)
 					const res: Sockets.CardSources.CardDetail.Response = {
 						...detail,
 						requestId: params.requestId

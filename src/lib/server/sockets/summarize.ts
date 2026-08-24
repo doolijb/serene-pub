@@ -10,19 +10,19 @@ import {
 	resolveCharacterRefs
 } from "$lib/server/utils/summarizer/availableSceneCast"
 import { lorebookBindingListHandler } from "./lorebooks"
-import { withChatTriggerLock } from "$lib/server/utils/chatTriggerLock"
-import { checkChatAccess } from "$lib/server/utils/chatAccess"
+import { withSessionTriggerLock } from "$lib/server/utils/sessionTriggerLock"
+import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { activityStore } from "$lib/server/utils/activityStore"
 
-export const chatsSummarizeHandler: Handler<
-	Sockets.Chats.Summarize.Params,
-	Sockets.Chats.Summarize.Response
+export const sessionsSummarizeHandler: Handler<
+	Sockets.Sessions.Summarize.Params,
+	Sockets.Sessions.Summarize.Response
 > = {
-	event: "chats:summarize",
+	event: "sessions:summarize",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const {
-			chatId,
+			sessionId,
 			messageIds,
 			loreType,
 			topic,
@@ -39,27 +39,27 @@ export const chatsSummarizeHandler: Handler<
 			throw new Error("Topic must be 300 characters or fewer.")
 		}
 
-		// Verify the user owns the chat — shared helper, not an ad-hoc
-		// reimplementation (see chatAccess.ts's own comment: a local
-		// eq(chats.userId, userId)-only check is exactly how a guest-lockout
+		// Verify the user owns the session — shared helper, not an ad-hoc
+		// reimplementation (see sessionAccess.ts's own comment: a local
+		// eq(sessions.userId, userId)-only check is exactly how a guest-lockout
 		// bug happened here before).
-		const chatAccess = await checkChatAccess(chatId, userId)
-		if (!chatAccess.isOwner) {
-			throw new Error("Chat not found or access denied.")
+		const sessionAccess = await checkSessionAccess(sessionId, userId)
+		if (!sessionAccess.isOwner) {
+			throw new Error("Session not found or access denied.")
 		}
-		const chat = await db.query.chats.findFirst({
-			where: eq(schema.chats.id, chatId)
+		const session = await db.query.sessions.findFirst({
+			where: eq(schema.sessions.id, sessionId)
 		})
 
-		if (!chat) {
-			throw new Error("Chat not found or access denied.")
+		if (!session) {
+			throw new Error("Session not found or access denied.")
 		}
 
-		// Guard: chat must have a lorebook attached
-		if (!chat.lorebookId) {
-			emitToUser("chats:summarize:error", {
+		// Guard: session must have a lorebook attached
+		if (!session.lorebookId) {
+			emitToUser("sessions:summarize:error", {
 				reason: "no_lorebook",
-				error: "This chat has no lorebook attached. Please attach or create one first."
+				error: "This session has no lorebook attached. Please attach or create one first."
 			})
 			return null as any
 		}
@@ -68,17 +68,17 @@ export const chatsSummarizeHandler: Handler<
 		// summarize started during an in-flight generation waits that
 		// generation out — without a card first, the user sees nothing at all,
 		// and cancelling during the wait is unreachable. Same reasoning as
-		// scenes:process. The per-chat-per-type supersede/reject rule lives in
-		// startChatSummarize; it replaces the old inFlightSummarizeChatIds set,
-		// which was per-chat and so made a world-lore run block a character one.
+		// scenes:process. The per-session-per-type supersede/reject rule lives in
+		// startSessionSummarize; it replaces the old inFlightSummarizeSessionIds set,
+		// which was per-session and so made a world-lore run block a character one.
 		const abortController = new AbortController()
-		const activityId = activityStore.startChatSummarize(
+		const activityId = activityStore.startSessionSummarize(
 			{
 				userId,
-				chatId,
-				chatLabel: chat.name ?? undefined,
+				sessionId,
+				sessionLabel: session.name ?? undefined,
 				loreType: loreType as "world" | "character",
-				lorebookId: chat.lorebookId!,
+				lorebookId: session.lorebookId!,
 				topic: topic || undefined
 			},
 			abortController
@@ -87,16 +87,16 @@ export const chatsSummarizeHandler: Handler<
 		/** Terminalise the activity alongside the error event. */
 		const failRun = (
 			error: string,
-			reason: Sockets.Chats.Summarize.ErrorResponse["reason"] = "generation_failed"
+			reason: Sockets.Sessions.Summarize.ErrorResponse["reason"] = "generation_failed"
 		) => {
-			activityStore.updateChatSummarize(activityId, {
+			activityStore.updateSessionSummarize(activityId, {
 				status: "error",
 				errorMessage: error
 			})
-			emitToUser("chats:summarize:error", {
+			emitToUser("sessions:summarize:error", {
 				reason,
 				error
-			} satisfies Sockets.Chats.Summarize.ErrorResponse)
+			} satisfies Sockets.Sessions.Summarize.ErrorResponse)
 			return null as any
 		}
 
@@ -104,7 +104,7 @@ export const chatsSummarizeHandler: Handler<
 			try {
 				// Snapshot inside the lock, LLM outside it.
 				//
-				// This read is the only chat-state-dependent step —
+				// This read is the only session-state-dependent step —
 				// generateSummary performs no DB access at all — so holding the
 				// lock across the whole pipeline (as this handler used to)
 				// would queue the user's next message behind minutes of LLM
@@ -113,18 +113,18 @@ export const chatsSummarizeHandler: Handler<
 				const whereClause =
 					messageIds === "all"
 						? and(
-								eq(schema.chatMessages.chatId, chatId),
-								eq(schema.chatMessages.isHidden, false)
+								eq(schema.sessionMessages.sessionId, sessionId),
+								eq(schema.sessionMessages.isHidden, false)
 							)
 						: and(
-								eq(schema.chatMessages.chatId, chatId),
-								inArray(schema.chatMessages.id, messageIds)
+								eq(schema.sessionMessages.sessionId, sessionId),
+								inArray(schema.sessionMessages.id, messageIds)
 							)
 
-				const rawMessages = await withChatTriggerLock(
-					chatId,
+				const rawMessages = await withSessionTriggerLock(
+					sessionId,
 					async () =>
-						db.query.chatMessages.findMany({
+						db.query.sessionMessages.findMany({
 							where: whereClause,
 							orderBy: (cm, { asc }) => asc(cm.id)
 						})
@@ -167,8 +167,8 @@ export const chatsSummarizeHandler: Handler<
 					loreType === "scene"
 						? await buildSceneCastList(
 								null,
-								chat.lorebookId!,
-								chatId
+								session.lorebookId!,
+								sessionId
 							)
 						: undefined
 
@@ -203,22 +203,24 @@ export const chatsSummarizeHandler: Handler<
 				// so the total is not known up front; the count ticking upward
 				// is still an honest "it is working, this far along".
 				let batchesSeen = 0
-				const progress = (data: Sockets.Chats.Summarize.Progress) => {
-					activityStore.updateChatSummarize(activityId, {
+				const progress = (
+					data: Sockets.Sessions.Summarize.Progress
+				) => {
+					activityStore.updateSessionSummarize(activityId, {
 						phase: data.phase,
 						batch: data.batch,
 						totalBatches: data.totalBatches
 					})
-					emitToUser("chats:summarize:progress", data)
+					emitToUser("sessions:summarize:progress", data)
 				}
 
 				const receipt = await runSpec({
 					db,
-					chatId,
+					sessionId,
 					userId,
 					specId,
 					input: {
-						scope: { chatId },
+						scope: { sessionId },
 						request: {
 							topic: topic || undefined,
 							messageIds:
@@ -313,7 +315,7 @@ export const chatsSummarizeHandler: Handler<
 					(lorebookBindingCharacterId || lorebookBindingPersonaId)
 				) {
 					lorebookBindingId = await resolveOrCreateBinding({
-						lorebookId: chat.lorebookId!,
+						lorebookId: session.lorebookId!,
 						characterId: lorebookBindingCharacterId,
 						personaId: lorebookBindingPersonaId
 					})
@@ -350,7 +352,7 @@ export const chatsSummarizeHandler: Handler<
 					for (const characterId of charIds) {
 						senderBindingIds.add(
 							await resolveOrCreateBinding({
-								lorebookId: chat.lorebookId!,
+								lorebookId: session.lorebookId!,
 								characterId
 							})
 						)
@@ -358,7 +360,7 @@ export const chatsSummarizeHandler: Handler<
 					for (const personaId of personaIds) {
 						senderBindingIds.add(
 							await resolveOrCreateBinding({
-								lorebookId: chat.lorebookId!,
+								lorebookId: session.lorebookId!,
 								personaId
 							})
 						)
@@ -378,21 +380,21 @@ export const chatsSummarizeHandler: Handler<
 				// resolveOrCreateBinding for a message sender's first appearance in
 				// this lorebook (unrelated to extraction — extracted-but-unmatched
 				// names are now deferred suggestions, not eager rows) — push a fresh
-				// list to the client now, before chats:summarize:complete, so the
+				// list to the client now, before sessions:summarize:complete, so the
 				// modal's dropdown/chip names are warm.
 				if (emitToUser) {
 					await lorebookBindingListHandler.handler(
 						socket,
-						{ lorebookId: chat.lorebookId! },
+						{ lorebookId: session.lorebookId! },
 						emitToUser
 					)
 				}
 
-				const response: Sockets.Chats.Summarize.Response = {
+				const response: Sockets.Sessions.Summarize.Response = {
 					content: result.content ?? result.raw,
 					name: result.name,
 					raw: result.raw,
-					lorebookId: chat.lorebookId!,
+					lorebookId: session.lorebookId!,
 					batchCount: result.batchCount,
 					lorebookBindingId,
 					participantCharacters,
@@ -409,7 +411,7 @@ export const chatsSummarizeHandler: Handler<
 				// Park the result on the activity, not just the socket event.
 				// This is the only copy until the user saves, so it has to
 				// survive the modal closing.
-				activityStore.updateChatSummarize(activityId, {
+				activityStore.updateSessionSummarize(activityId, {
 					status: "review",
 					pendingResult: {
 						content: response.content,
@@ -419,7 +421,7 @@ export const chatsSummarizeHandler: Handler<
 					}
 				})
 
-				emitToUser("chats:summarize:complete", {
+				emitToUser("sessions:summarize:complete", {
 					...response,
 					activityId
 				})
@@ -431,7 +433,7 @@ export const chatsSummarizeHandler: Handler<
 				// genuinely our own cancellation — and that path has already
 				// removed the activity.
 				if (abortController.signal.aborted) return null as any
-				activityStore.updateChatSummarize(activityId, {
+				activityStore.updateSessionSummarize(activityId, {
 					status: "error",
 					errorMessage:
 						err instanceof Error ? err.message : "Unknown error"
@@ -442,26 +444,26 @@ export const chatsSummarizeHandler: Handler<
 	}
 }
 
-export const chatsSetLorebookHandler: Handler<
-	Sockets.Chats.SetLorebook.Params,
-	Sockets.Chats.SetLorebook.Response
+export const sessionsSetLorebookHandler: Handler<
+	Sockets.Sessions.SetLorebook.Params,
+	Sockets.Sessions.SetLorebook.Response
 > = {
-	event: "chats:setLorebook",
+	event: "sessions:setLorebook",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
-		const { chatId, lorebookId } = params
+		const { sessionId, lorebookId } = params
 
-		// Verify ownership — shared helper, see chatsSummarizeHandler above.
-		const chatAccess = await checkChatAccess(chatId, userId)
-		if (!chatAccess.isOwner) {
-			throw new Error("Chat not found or access denied.")
+		// Verify ownership — shared helper, see sessionsSummarizeHandler above.
+		const sessionAccess = await checkSessionAccess(sessionId, userId)
+		if (!sessionAccess.isOwner) {
+			throw new Error("Session not found or access denied.")
 		}
-		const chat = await db.query.chats.findFirst({
-			where: eq(schema.chats.id, chatId)
+		const session = await db.query.sessions.findFirst({
+			where: eq(schema.sessions.id, sessionId)
 		})
 
-		if (!chat) {
-			throw new Error("Chat not found or access denied.")
+		if (!session) {
+			throw new Error("Session not found or access denied.")
 		}
 
 		// If attaching a lorebook, verify the user owns it
@@ -476,13 +478,15 @@ export const chatsSetLorebookHandler: Handler<
 		}
 
 		const [updated] = await db
-			.update(schema.chats)
+			.update(schema.sessions)
 			.set({ lorebookId })
-			.where(eq(schema.chats.id, chatId))
+			.where(eq(schema.sessions.id, sessionId))
 			.returning()
 
-		const response: Sockets.Chats.SetLorebook.Response = { chat: updated }
-		emitToUser("chats:setLorebook", response)
+		const response: Sockets.Sessions.SetLorebook.Response = {
+			session: updated
+		}
+		emitToUser("sessions:setLorebook", response)
 		return response
 	}
 }
@@ -496,6 +500,6 @@ export function registerSummarizeHandlers(
 		emitToUser: (event: string, data: any) => void
 	) => void
 ) {
-	register(socket, chatsSummarizeHandler, emitToUser)
-	register(socket, chatsSetLorebookHandler, emitToUser)
+	register(socket, sessionsSummarizeHandler, emitToUser)
+	register(socket, sessionsSetLorebookHandler, emitToUser)
 }

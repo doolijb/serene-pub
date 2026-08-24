@@ -30,15 +30,15 @@ class TestAdapter extends BaseConnectionAdapter {
 	}
 }
 
-function makeChat(overrides: Record<string, any> = {}) {
+function makeSession(overrides: Record<string, any> = {}) {
 	return {
 		id: 1,
 		userId: 1,
-		chatType: "chat",
+		sessionType: "session",
 		metadata: { ragIgnored: true }, // skip the RAG dispatch branch entirely
-		chatMessages: [],
-		chatCharacters: [],
-		chatPersonas: [],
+		sessionMessages: [],
+		sessionCharacters: [],
+		sessionPersonas: [],
 		lorebook: {
 			id: 1,
 			lorebookBindings: [],
@@ -56,7 +56,7 @@ function makeAdapter(overrides: Record<string, any> = {}) {
 		sampling: { contextTokensEnabled: false } as any,
 		contextConfig: {} as any,
 		promptConfig: { systemPrompt: "You are a helpful narrator." } as any,
-		chat: makeChat(),
+		session: makeSession(),
 		currentCharacterId: null,
 		tokenCounter: { countTokens: async () => 1 } as any,
 		tokenLimit: 4096,

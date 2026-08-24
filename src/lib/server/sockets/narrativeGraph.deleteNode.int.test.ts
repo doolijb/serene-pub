@@ -18,10 +18,7 @@ import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
-import {
-	readSceneCast,
-	writeSceneCast
-} from "$lib/server/utils/sceneCast"
+import { readSceneCast, writeSceneCast } from "$lib/server/utils/sceneCast"
 
 let testDb: TestDb
 let dataDir: string
@@ -65,11 +62,7 @@ async function makeLorebook(userId: number, name = "Test Book") {
 	return lorebook
 }
 
-async function makeBinding(
-	lorebookId: number,
-	binding: string,
-	name = "Node"
-) {
+async function makeBinding(lorebookId: number, binding: string, name = "Node") {
 	const [row] = await testDb
 		.insert(schema.lorebookBindings)
 		.values({ lorebookId, binding, name })

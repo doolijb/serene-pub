@@ -42,15 +42,15 @@ function makeConnection(overrides: Record<string, any> = {}): any {
 	}
 }
 
-function makeChat(): any {
+function makeSession(): any {
 	return {
 		id: 1,
 		userId: 1,
-		chatType: "chat",
+		sessionType: "session",
 		metadata: { ragIgnored: true },
-		chatMessages: [],
-		chatCharacters: [],
-		chatPersonas: [],
+		sessionMessages: [],
+		sessionCharacters: [],
+		sessionPersonas: [],
 		lorebook: {
 			id: 1,
 			lorebookBindings: [],
@@ -67,7 +67,7 @@ function makeAdapter(connectionOverrides: Record<string, any> = {}) {
 		sampling: { contextTokensEnabled: false } as any,
 		contextConfig: {} as any,
 		promptConfig: { systemPrompt: "Test system prompt." } as any,
-		chat: makeChat(),
+		session: makeSession(),
 		currentCharacterId: null,
 		tokenCounter: { countTokens: async () => 1 } as any,
 		tokenLimit: 4096,

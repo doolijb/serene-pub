@@ -22,7 +22,7 @@
 		    "KoboldCPP Manager" and "Lorebooks+" survive it unchanged. */
 		capitalizeTitle?: boolean
 		onClose: () => void
-		/** Accessible name for the close button, eg. "Close Chats panel". */
+		/** Accessible name for the close button, eg. "Close Sessions panel". */
 		closeLabel: string
 		/** Omit onToggleFullscreen to hide that button entirely — this is how
 		    the mobile dialog keeps its button-less chrome. */

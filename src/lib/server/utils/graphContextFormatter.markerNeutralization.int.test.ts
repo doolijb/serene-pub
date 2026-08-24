@@ -91,7 +91,7 @@ describe("buildGraphContext — structural marker neutralization (Round-12 audit
 		})
 
 		const context = await buildGraphContext({
-			chatId: -1,
+			sessionId: -1,
 			lorebookId: lorebook.id,
 			speakerCharacterId: speakerCharacter.id
 		})
@@ -145,7 +145,7 @@ describe("buildGraphContext — structural marker neutralization (Round-12 audit
 		})
 
 		const context = await buildGraphContext({
-			chatId: -1,
+			sessionId: -1,
 			lorebookId: lorebook.id,
 			speakerCharacterId: speakerCharacter.id
 		})

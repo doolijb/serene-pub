@@ -249,9 +249,7 @@
 					{/each}
 				</div>
 			{:else}
-				<p class="text-surface-700-300 text-sm italic">
-					No tags yet.
-				</p>
+				<p class="text-surface-700-300 text-sm italic">No tags yet.</p>
 			{/if}
 		</div>
 	{:else}

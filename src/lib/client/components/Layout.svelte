@@ -13,7 +13,7 @@
 	import LorebooksSidebar from "./sidebars/LorebooksSidebar.svelte"
 	import PersonasSidebar from "./sidebars/PersonasSidebar.svelte"
 	import CharactersSidebar from "./sidebars/CharactersSidebar.svelte"
-	import ChatsSidebar from "./sidebars/ChatsSidebar.svelte"
+	import SessionsSidebar from "./sidebars/SessionsSidebar.svelte"
 	import PipelinesSidebar from "./sidebars/PipelinesSidebar.svelte"
 	import TagsSidebar from "./sidebars/TagsSidebar.svelte"
 	import UsersSidebar from "./sidebars/UsersSidebar.svelte"
@@ -50,8 +50,8 @@
 		"characters:list:error",
 		"characters:update:error",
 		"characters:uploadGalleryImage:error",
-		"chats:list:error",
-		"chats:summarize:error",
+		"sessions:list:error",
+		"sessions:summarize:error",
 		"connections:list:error",
 		"connections:refreshModels:error",
 		"customThemes:delete:error",
@@ -184,7 +184,7 @@
 			personas: { icon: Icons.UserRound, title: "Personas" },
 			characters: { icon: Icons.UsersRound, title: "Characters" },
 			lorebooks: { icon: Icons.BookMarked, title: "Lorebooks+" },
-			chats: { icon: Icons.MessageSquare, title: "Chats" }
+			sessions: { icon: Icons.MessageSquare, title: "Sessions" }
 		},
 		digest: {},
 		leftNavOrder: [
@@ -202,7 +202,7 @@
 			"personas",
 			"characters",
 			"lorebooks",
-			"chats"
+			"sessions"
 		],
 		getOrderedEntries: (nav: Record<string, any>, order: string[]) => {
 			// First, get entries that are in the order array
@@ -234,8 +234,8 @@
 		history: []
 	})
 	let taskQueueCtx: TaskQueueCtx = $state({ tasks: [] })
-	let openChatCtx: OpenChatCtx = $state({
-		chatId: null,
+	let openSessionCtx: OpenSessionCtx = $state({
+		sessionId: null,
 		lorebookId: null,
 		isOwner: false
 	})
@@ -277,17 +277,18 @@
 			sceneSummarizesCtx.reviewSceneId = id
 		}
 	})
-	let chatSummarizesCtx: ChatSummarizesCtx = $state({
+	let sessionSummarizesCtx: SessionSummarizesCtx = $state({
 		activities: [],
 		reviewActivityId: null,
 		dismiss: (activityId: string) => {
 			socket.emit("activity:dismiss", { id: activityId })
-			chatSummarizesCtx.activities = chatSummarizesCtx.activities.filter(
-				(a) => a.activityId !== activityId
-			)
+			sessionSummarizesCtx.activities =
+				sessionSummarizesCtx.activities.filter(
+					(a) => a.activityId !== activityId
+				)
 		},
 		setReviewActivityId: (id: string | null) => {
-			chatSummarizesCtx.reviewActivityId = id
+			sessionSummarizesCtx.reviewActivityId = id
 		}
 	})
 	let compileEntriesCtx: CompileEntriesCtx = $state({
@@ -320,12 +321,12 @@
 	// local ONNX models can't load under Bionic, but external-API embeddings
 	// work fine, so its nav entry stays visible and the sidebar itself gates
 	// the local-model option (VectorizationSetupScreen).
-	// The chat currently on screen, when there is one. 05 §0a: configuring a
+	// The session currently on screen, when there is one. 05 §0a: configuring a
 	// pipeline from the list writes at user scope, and configuring it from
-	// inside a chat you own writes at chat scope — so the panel has to know
+	// inside a session you own writes at session scope — so the panel has to know
 	// where it was opened from, and the route is the only place that fact lives.
-	let chatIdInView = $derived.by(() => {
-		if (!page.url.pathname.startsWith("/chats/")) return undefined
+	let sessionIdInView = $derived.by(() => {
+		if (!page.url.pathname.startsWith("/sessions/")) return undefined
 		const id = Number(page.params?.id)
 		return Number.isFinite(id) ? id : undefined
 	})
@@ -645,10 +646,10 @@
 		setContext("userSettingsCtx", userSettingsCtx)
 		setContext("vectorizationCtx", vectorizationCtx)
 		setContext("taskQueueCtx", taskQueueCtx)
-		setContext("openChatCtx", openChatCtx)
+		setContext("openSessionCtx", openSessionCtx)
 		setContext("graphBuildsCtx", graphBuildsCtx)
 		setContext("sceneSummarizesCtx", sceneSummarizesCtx)
-		setContext("chatSummarizesCtx", chatSummarizesCtx)
+		setContext("sessionSummarizesCtx", sessionSummarizesCtx)
 		setContext("compileEntriesCtx", compileEntriesCtx)
 
 		// Check system settings first before connecting to sockets
@@ -813,16 +814,16 @@
 				startedAt: a.startedAt
 			}))
 
-			// Chat-side world/character lore summarize activities
-			const chatSummarizeActivities = activities.filter(
-				(a: any) => a.kind === "chat_summarize"
+			// Session-side world/character lore summarize activities
+			const sessionSummarizeActivities = activities.filter(
+				(a: any) => a.kind === "session_summarize"
 			)
-			chatSummarizesCtx.activities = chatSummarizeActivities.map(
+			sessionSummarizesCtx.activities = sessionSummarizeActivities.map(
 				(a: any) => ({
 					activityId: a.id,
 					userId: a.userId,
-					chatId: a.chatId,
-					chatLabel: a.chatLabel,
+					sessionId: a.sessionId,
+					sessionLabel: a.sessionLabel,
 					loreType: a.loreType,
 					lorebookId: a.lorebookId,
 					topic: a.topic,
@@ -958,7 +959,7 @@
 	<div
 		class="bg-surface-100-900 relative h-full max-h-[100dvh] w-full justify-between"
 		role="application"
-		aria-label="Serene Pub Chat Application"
+		aria-label="Serene Pub Session Application"
 	>
 		<!-- Background image layer -->
 		{#if userSettingsCtx.settings?.backgroundImagePath}
@@ -1077,7 +1078,7 @@
 							{:else if panelsCtx.leftPanel === "pipelines"}
 								<PipelinesSidebar
 									bind:onclose={panelsCtx.onLeftPanelClose}
-									chatId={chatIdInView}
+									sessionId={sessionIdInView}
 								/>
 							{:else if panelsCtx.leftPanel === "settings"}
 								<SettingsSidebar
@@ -1160,8 +1161,8 @@
 								<CharactersSidebar
 									bind:onclose={panelsCtx.onRightPanelClose}
 								/>
-							{:else if panelsCtx.rightPanel === "chats"}
-								<ChatsSidebar
+							{:else if panelsCtx.rightPanel === "sessions"}
+								<SessionsSidebar
 									bind:onclose={panelsCtx.onRightPanelClose}
 								/>
 							{:else if panelsCtx.rightPanel === "lorebooks"}
@@ -1241,14 +1242,14 @@
 						<CharactersSidebar
 							bind:onclose={panelsCtx.onMobilePanelClose}
 						/>
-					{:else if panelsCtx.mobilePanel === "chats"}
-						<ChatsSidebar
+					{:else if panelsCtx.mobilePanel === "sessions"}
+						<SessionsSidebar
 							bind:onclose={panelsCtx.onMobilePanelClose}
 						/>
 					{:else if panelsCtx.mobilePanel === "pipelines"}
 						<PipelinesSidebar
 							bind:onclose={panelsCtx.onMobilePanelClose}
-							chatId={chatIdInView}
+							sessionId={sessionIdInView}
 						/>
 					{:else if panelsCtx.mobilePanel === "tags"}
 						<TagsSidebar
@@ -1338,7 +1339,7 @@
 <ConnectionTimeoutModal />
 
 <!-- The review gate (01 §7): a run parked at a gated node, waiting on you.
-     Mounted globally because a review can park from any trigger — a chat
+     Mounted globally because a review can park from any trigger — a session
      reply, a summarize, an event — and the card has to reach the person
      whichever screen they are on. -->
 <PipelineReviewModal />

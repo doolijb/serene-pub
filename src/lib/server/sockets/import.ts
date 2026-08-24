@@ -10,14 +10,14 @@ import { getCharacterDataDir, getPersonaDataDir } from "$lib/server/utils"
 import {
 	extractCharacterFromPNG,
 	readCharacterFile,
-	parseChatFile,
+	parseSessionFile,
 	normalizeTimestamp,
 	mapGroupReplyStrategy,
 	type CharacterCardV2,
 	type CharacterBook,
-	type ChatMessage,
-	type ChatHeader,
-	type GroupChat,
+	type SessionMessage,
+	type SessionHeader,
+	type GroupSession,
 	type WorldInfo
 } from "$lib/server/utils/sillyTavernParsers"
 import { resolveSillyTavernDataRoot } from "$lib/shared/utils/sillyTavernPaths"
@@ -45,7 +45,7 @@ const SESSION_TTL_MS = 30 * 60 * 1000 // 30 minutes of inactivity
 // lorebooks:import enforces LOREBOOK_IMPORT_LIMITS for the exact same
 // unbounded-import-DoS reason (lorebooks.ts) — this bulk SillyTavern-folder
 // import has its own, differently-shaped item lists (character_book entries,
-// world-info entries, chat messages), so it gets its own smaller guard here
+// world-info entries, session messages), so it gets its own smaller guard here
 // rather than reusing that one, using the same ceiling for consistency.
 export const MAX_BULK_IMPORT_ITEMS = 5000
 export function assertWithinBulkImportLimit(
@@ -99,8 +99,8 @@ function getImportSession(sessionId: string, userId: number): ImportSession {
  * `root` — rejects traversal and absolute paths. Shared by the staging
  * write path (root = session dir) and the execute-phase reads (root = the
  * relevant SillyTavern subdirectory) — the latter's accepted relative
- * paths can legitimately contain one subdirectory segment (eg. a chat's
- * "CharacterName/chat.jsonl"), so this only rejects genuine traversal
+ * paths can legitimately contain one subdirectory segment (eg. a session's
+ * "CharacterName/session.jsonl"), so this only rejects genuine traversal
  * (".."/absolute), not slashes in general. */
 function resolveSafePath(root: string, relativePath: string): string {
 	const normalized = relativePath.replace(/\\/g, "/")
@@ -341,12 +341,12 @@ export const importScanSillyTavern: Handler<
 				console.log("No personas found in settings.json")
 			}
 
-			// Scan individual chats. These files are deliberately never staged
-			// to disk at scan time (see deferredChatPaths on the Params type) —
+			// Scan individual sessions. These files are deliberately never staged
+			// to disk at scan time (see deferredSessionPaths on the Params type) —
 			// only their relative paths are sent, so list what's available from
-			// that instead of reading the (nonexistent, at this point) chats/
+			// that instead of reading the (nonexistent, at this point) sessions/
 			// directory on disk.
-			const chats: Array<{
+			const sessions: Array<{
 				filename: string
 				name: string
 				characterNames: string[]
@@ -357,16 +357,16 @@ export const importScanSillyTavern: Handler<
 			}> = []
 
 			try {
-				for (const relativePath of message.deferredChatPaths ?? []) {
+				for (const relativePath of message.deferredSessionPaths ?? []) {
 					const match = relativePath.match(
-						/^chats\/([^/]+)\/(.+\.jsonl)$/
+						/^sessions\/([^/]+)\/(.+\.jsonl)$/
 					)
 					if (!match) continue
-					const [, characterName, chatFile] = match
-					const chatName = chatFile.replace(/\.jsonl$/, "")
-					chats.push({
-						filename: `${characterName}/${chatFile}`,
-						name: chatName,
+					const [, characterName, sessionFile] = match
+					const sessionName = sessionFile.replace(/\.jsonl$/, "")
+					sessions.push({
+						filename: `${characterName}/${sessionFile}`,
+						name: sessionName,
 						characterNames: [characterName],
 						isGroup: false,
 						selected: true,
@@ -374,12 +374,12 @@ export const importScanSillyTavern: Handler<
 					})
 				}
 			} catch (error) {
-				console.log("No chats directory found or empty")
+				console.log("No sessions directory found or empty")
 			}
 
-			// Scan group chats
+			// Scan group sessions
 			const groupsDir = path.join(dataDir, "groups")
-			const groupChats: Array<{
+			const groupSessions: Array<{
 				filename: string
 				name: string
 				memberNames: string[]
@@ -398,9 +398,9 @@ export const importScanSillyTavern: Handler<
 							groupPath,
 							"utf8"
 						)
-						const group = JSON.parse(groupContent) as GroupChat
+						const group = JSON.parse(groupContent) as GroupSession
 
-						groupChats.push({
+						groupSessions.push({
 							filename: groupFile,
 							name: group.name,
 							memberNames: group.members.map((m) =>
@@ -451,8 +451,8 @@ export const importScanSillyTavern: Handler<
 				data: {
 					characters,
 					personas,
-					chats,
-					groupChats,
+					sessions,
+					groupSessions,
 					lorebooks
 				}
 			}
@@ -512,12 +512,12 @@ export const importExecuteSillyTavern: Handler<
 			const stats = {
 				characters: 0,
 				personas: 0,
-				chats: 0,
+				sessions: 0,
 				lorebooks: 0,
 				errors: 0
 			}
 			const errors: string[] = []
-			// Map ST name → newly inserted DB ID (for chat / character linking)
+			// Map ST name → newly inserted DB ID (for session / character linking)
 			const characterNameToId = new Map<string, number>()
 			const personaNameToId = new Map<string, number>()
 			// Lorebook name → DB id, populated as lorebooks are created or found
@@ -624,7 +624,7 @@ export const importExecuteSillyTavern: Handler<
 						.returning()
 
 					characterNameToId.set(d.name, newChar.id)
-					// Also key by filename basename — SillyTavern names chat folders after the
+					// Also key by filename basename — SillyTavern names session folders after the
 					// character file (without extension), which may differ from the card name.
 					const fileBasename = charItem.filename.replace(
 						/\.(png|json)$/i,
@@ -862,67 +862,67 @@ export const importExecuteSillyTavern: Handler<
 					)
 				}))
 
-			// ── Phase 4: Individual chats ────────────────────────────────────────
-			for (const chatItem of selectedData.chats) {
+			// ── Phase 4: Individual sessions ────────────────────────────────────────
+			for (const sessionItem of selectedData.sessions) {
 				try {
-					const chatPath = resolveSafePath(
-						path.join(dataDir, "chats"),
-						chatItem.filename
+					const sessionPath = resolveSafePath(
+						path.join(dataDir, "sessions"),
+						sessionItem.filename
 					)
-					const parsed = await parseChatFile(chatPath)
+					const parsed = await parseSessionFile(sessionPath)
 					if (!parsed) continue
 
-					const charName = chatItem.characterNames[0]
+					const charName = sessionItem.characterNames[0]
 					const characterId =
 						characterNameToId.get(charName) ??
 						(await findCharacterId(charName))
 
-					// Resolve lorebook: prefer explicit world_info from chat metadata,
+					// Resolve lorebook: prefer explicit world_info from session metadata,
 					// fall back to the character's embedded lorebook
 					const worldInfoName =
 						parsed.header.chat_metadata?.world_info
-					const chatLorebookId = worldInfoName
+					const sessionLorebookId = worldInfoName
 						? await findLorebookId(worldInfoName)
 						: characterId
 							? (characterIdToLorebookId.get(characterId) ?? null)
 							: null
 
-					const [newChat] = await db
-						.insert(schema.chats)
+					const [newSession] = await db
+						.insert(schema.sessions)
 						.values({
 							userId,
-							name: chatItem.name,
+							name: sessionItem.name,
 							isGroup: false,
-							lorebookId: chatLorebookId
+							lorebookId: sessionLorebookId
 						})
 						.returning()
 
 					if (characterId) {
-						await db.insert(schema.chatCharacters).values({
-							chatId: newChat.id,
+						await db.insert(schema.sessionCharacters).values({
+							sessionId: newSession.id,
 							characterId,
 							position: 0
 						})
 					}
 
-					// Resolve persona from the chat's user_name header, fall back to default
-					const chatPersonaName = parsed.header.user_name
-					const chatPersonaId = chatPersonaName
-						? (personaNameToId.get(chatPersonaName) ??
-							(await findPersonaId(chatPersonaName)))
+					// Resolve persona from the session's user_name header, fall back to default
+					const sessionPersonaName = parsed.header.user_name
+					const sessionPersonaId = sessionPersonaName
+						? (personaNameToId.get(sessionPersonaName) ??
+							(await findPersonaId(sessionPersonaName)))
 						: null
 					const resolvedPersonaId =
-						chatPersonaId ?? defaultPersona?.id ?? null
+						sessionPersonaId ?? defaultPersona?.id ?? null
 					if (resolvedPersonaId) {
-						await db.insert(schema.chatPersonas).values({
-							chatId: newChat.id,
+						await db.insert(schema.sessionPersonas).values({
+							sessionId: newSession.id,
 							personaId: resolvedPersonaId
 						})
 					}
 
 					assertWithinBulkImportLimit(
 						parsed.messages.length,
-						`Chat "${chatItem.name}"`
+						`Session "${sessionItem.name}"`
 					)
 					for (const msg of parsed.messages) {
 						if (msg.is_system) continue
@@ -934,8 +934,8 @@ export const importExecuteSillyTavern: Handler<
 								history: msg.swipes
 							}
 						}
-						await db.insert(schema.chatMessages).values({
-							chatId: newChat.id,
+						await db.insert(schema.sessionMessages).values({
+							sessionId: newSession.id,
 							userId,
 							characterId:
 								!msg.is_user && characterId
@@ -950,18 +950,18 @@ export const importExecuteSillyTavern: Handler<
 						})
 					}
 
-					stats.chats++
+					stats.sessions++
 				} catch (e) {
-					const msg = `Chat "${chatItem.name}": ${e instanceof Error ? e.message : e}`
+					const msg = `Session "${sessionItem.name}": ${e instanceof Error ? e.message : e}`
 					errors.push(msg)
 					stats.errors++
 				}
 			}
 
-			// ── Phase 5: Group chats ─────────────────────────────────────────────
-			for (const groupItem of selectedData.groupChats) {
+			// ── Phase 5: Group sessions ─────────────────────────────────────────────
+			for (const groupItem of selectedData.groupSessions) {
 				try {
-					// Re-read group JSON to get the id used for the chat file
+					// Re-read group JSON to get the id used for the session file
 					const groupPath = resolveSafePath(
 						path.join(dataDir, "groups"),
 						groupItem.filename
@@ -970,7 +970,7 @@ export const importExecuteSillyTavern: Handler<
 						groupPath,
 						"utf8"
 					)
-					const groupData = JSON.parse(groupContent) as GroupChat
+					const groupData = JSON.parse(groupContent) as GroupSession
 
 					const memberIds: (number | null)[] = await Promise.all(
 						groupItem.memberNames.map(
@@ -980,21 +980,22 @@ export const importExecuteSillyTavern: Handler<
 						)
 					)
 
-					// Group chat history is parsed later; read the file now so we can check
-					// the world_info in the header before inserting the chat.
+					// Group session history is parsed later; read the file now so we can check
+					// the world_info in the header before inserting the session.
 					// groupId can come from groupData.id — parsed JSON content, not
 					// re-validated like groupItem.filename above — so it needs the
 					// same traversal guard before being used in a path.
 					const groupId =
 						groupData.id || groupItem.filename.replace(".json", "")
-					const groupChatFile = resolveSafePath(
-						path.join(dataDir, "group chats"),
+					const groupSessionFile = resolveSafePath(
+						path.join(dataDir, "group sessions"),
 						`${groupId}.jsonl`
 					)
-					let groupParsed: Awaited<ReturnType<typeof parseChatFile>> =
-						null
+					let groupParsed: Awaited<
+						ReturnType<typeof parseSessionFile>
+					> = null
 					try {
-						groupParsed = await parseChatFile(groupChatFile)
+						groupParsed = await parseSessionFile(groupSessionFile)
 					} catch {
 						/* no history file */
 					}
@@ -1007,8 +1008,8 @@ export const importExecuteSillyTavern: Handler<
 						? await findLorebookId(groupWorldInfoName)
 						: null
 
-					const [newChat] = await db
-						.insert(schema.chats)
+					const [newSession] = await db
+						.insert(schema.sessions)
 						.values({
 							userId,
 							name: groupItem.name,
@@ -1023,8 +1024,8 @@ export const importExecuteSillyTavern: Handler<
 					for (let i = 0; i < groupItem.memberNames.length; i++) {
 						const charId = memberIds[i]
 						if (charId) {
-							await db.insert(schema.chatCharacters).values({
-								chatId: newChat.id,
+							await db.insert(schema.sessionCharacters).values({
+								sessionId: newSession.id,
 								characterId: charId,
 								position: i
 							})
@@ -1042,8 +1043,8 @@ export const importExecuteSillyTavern: Handler<
 					const resolvedGroupPersonaId =
 						groupPersonaId ?? defaultPersona?.id ?? null
 					if (resolvedGroupPersonaId) {
-						await db.insert(schema.chatPersonas).values({
-							chatId: newChat.id,
+						await db.insert(schema.sessionPersonas).values({
+							sessionId: newSession.id,
 							personaId: resolvedGroupPersonaId
 						})
 					}
@@ -1051,7 +1052,7 @@ export const importExecuteSillyTavern: Handler<
 					if (groupParsed) {
 						assertWithinBulkImportLimit(
 							groupParsed.messages.length,
-							`Group chat "${groupItem.name}"`
+							`Group session "${groupItem.name}"`
 						)
 						for (const msg of groupParsed.messages) {
 							if (msg.is_system) continue
@@ -1068,8 +1069,8 @@ export const importExecuteSillyTavern: Handler<
 									history: msg.swipes
 								}
 							}
-							await db.insert(schema.chatMessages).values({
-								chatId: newChat.id,
+							await db.insert(schema.sessionMessages).values({
+								sessionId: newSession.id,
 								userId,
 								characterId: charId,
 								role,
@@ -1082,9 +1083,9 @@ export const importExecuteSillyTavern: Handler<
 						}
 					}
 
-					stats.chats++
+					stats.sessions++
 				} catch (e) {
-					const msg = `Group chat "${groupItem.name}": ${e instanceof Error ? e.message : e}`
+					const msg = `Group session "${groupItem.name}": ${e instanceof Error ? e.message : e}`
 					errors.push(msg)
 					stats.errors++
 				}
@@ -1100,8 +1101,10 @@ export const importExecuteSillyTavern: Handler<
 				parts.push(
 					`${stats.personas} persona${stats.personas !== 1 ? "s" : ""}`
 				)
-			if (stats.chats)
-				parts.push(`${stats.chats} chat${stats.chats !== 1 ? "s" : ""}`)
+			if (stats.sessions)
+				parts.push(
+					`${stats.sessions} session${stats.sessions !== 1 ? "s" : ""}`
+				)
 			if (stats.lorebooks)
 				parts.push(
 					`${stats.lorebooks} lorebook${stats.lorebooks !== 1 ? "s" : ""}`

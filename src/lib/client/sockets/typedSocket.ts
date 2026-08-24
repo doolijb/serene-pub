@@ -249,6 +249,30 @@ export type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
+	"connections:scripts": {
+		params: Sockets.Connections.Scripts.Params
+		response: Sockets.Connections.Scripts.Response
+	}
+	"connections:scripts:error": {
+		params: never
+		response: { error?: string }
+	}
+	"connections:attachScript": {
+		params: Sockets.Connections.ScriptWrite.Params
+		response: Sockets.Connections.ScriptWrite.Response
+	}
+	"connections:attachScript:error": {
+		params: never
+		response: { error?: string }
+	}
+	"connections:detachScript": {
+		params: Sockets.Connections.ScriptWrite.Params
+		response: Sockets.Connections.ScriptWrite.Response
+	}
+	"connections:detachScript:error": {
+		params: never
+		response: { error?: string }
+	}
 
 	// Persona events
 	"personas:list": {
@@ -394,198 +418,246 @@ export type SocketEventMap = {
 		response: Sockets.ErrorResponse
 	}
 
-	// Chat events
-	"chats:list": {
-		params: Sockets.Chats.List.Params
-		response: Sockets.Chats.List.Response
+	// Session events
+	"sessions:list": {
+		params: Sockets.Sessions.List.Params
+		response: Sockets.Sessions.List.Response
 	}
-	"chats:typing": {
-		params: Sockets.Chats.Typing.Params
-		response: Sockets.Chats.Typing.Response
+	"sessions:typing": {
+		params: Sockets.Sessions.Typing.Params
+		response: Sockets.Sessions.Typing.Response
 	}
-	"chats:userTyping": {
-		params: Sockets.Chats.UserTyping.Params
-		response: Sockets.Chats.UserTyping.Response
+	"sessions:userTyping": {
+		params: Sockets.Sessions.UserTyping.Params
+		response: Sockets.Sessions.UserTyping.Response
 	}
-	"chats:get": {
-		params: Sockets.Chats.Get.Params
-		response: Sockets.Chats.Get.Response
+	"sessions:get": {
+		params: Sockets.Sessions.Get.Params
+		response: Sockets.Sessions.Get.Response
 	}
-	"chats:saveDraft": {
-		params: Sockets.Chats.SaveDraft.Params
-		response: Sockets.Chats.SaveDraft.Response
+	"sessions:modes": {
+		params: Sockets.Sessions.Modes.Params
+		response: Sockets.Sessions.Modes.Response
 	}
-	"chats:create": {
-		params: Sockets.Chats.Create.Params
-		response: Sockets.Chats.Create.Response
+	"sessions:triggers": {
+		params: Sockets.Sessions.Triggers.Params
+		response: Sockets.Sessions.Triggers.Response
 	}
-	"chats:update": {
-		params: Sockets.Chats.Update.Params
-		response: Sockets.Chats.Update.Response
+	"sessions:triggerFunction": {
+		params: Sockets.Sessions.TriggerFunction.Params
+		response: Sockets.Sessions.TriggerFunction.Response
 	}
-	"chats:setLorebook": {
-		params: Sockets.Chats.SetLorebook.Params
-		response: Sockets.Chats.SetLorebook.Response
+	"sessions:presets": {
+		params: Sockets.Sessions.PresetOptions.Params
+		response: Sockets.Sessions.PresetOptions.Response
 	}
-	"chats:summarize": {
-		params: Sockets.Chats.Summarize.Params
-		response: Sockets.Chats.Summarize.Response
+	"sessions:choosePreset": {
+		params: Sockets.Sessions.ChoosePreset.Params
+		response: Sockets.Sessions.ChoosePreset.Response
 	}
-	"chats:summarize:progress": {
+	"sessions:functions": {
+		params: Sockets.Sessions.Functions.Params
+		response: Sockets.Sessions.Functions.Response
+	}
+	"sessions:setFunction": {
+		params: Sockets.Sessions.SetFunction.Params
+		response: Sockets.Sessions.SetFunction.Response
+	}
+	"sessions:upgradeMode": {
+		params: Sockets.Sessions.UpgradeMode.Params
+		response: Sockets.Sessions.UpgradeMode.Response
+	}
+	"sessions:functionCandidates": {
+		params: Sockets.Sessions.Bindings.Candidates.Params
+		response: Sockets.Sessions.Bindings.Candidates.Response
+	}
+	"sessions:bindFunction": {
+		params: Sockets.Sessions.Bindings.BindFunction.Params
+		response: Sockets.Sessions.Bindings.BindFunction.Response
+	}
+	"sessions:speakerStrategies": {
+		params: Sockets.Sessions.Bindings.SpeakerStrategies.Params
+		response: Sockets.Sessions.Bindings.SpeakerStrategies.Response
+	}
+	"sessions:setSpeakerStrategy": {
+		params: Sockets.Sessions.Bindings.SetSpeakerStrategy.Params
+		response: Sockets.Sessions.Bindings.SetSpeakerStrategy.Response
+	}
+	"sessions:saveDraft": {
+		params: Sockets.Sessions.SaveDraft.Params
+		response: Sockets.Sessions.SaveDraft.Response
+	}
+	"sessions:create": {
+		params: Sockets.Sessions.Create.Params
+		response: Sockets.Sessions.Create.Response
+	}
+	"sessions:update": {
+		params: Sockets.Sessions.Update.Params
+		response: Sockets.Sessions.Update.Response
+	}
+	"sessions:setLorebook": {
+		params: Sockets.Sessions.SetLorebook.Params
+		response: Sockets.Sessions.SetLorebook.Response
+	}
+	"sessions:summarize": {
+		params: Sockets.Sessions.Summarize.Params
+		response: Sockets.Sessions.Summarize.Response
+	}
+	"sessions:summarize:progress": {
 		params: never
-		response: Sockets.Chats.Summarize.Progress
+		response: Sockets.Sessions.Summarize.Progress
 	}
-	"chats:summarize:complete": {
+	"sessions:summarize:complete": {
 		params: never
-		response: Sockets.Chats.Summarize.Response
+		response: Sockets.Sessions.Summarize.Response
 	}
-	"chats:summarize:error": {
+	"sessions:summarize:error": {
 		params: never
-		response: Sockets.Chats.Summarize.ErrorResponse
+		response: Sockets.Sessions.Summarize.ErrorResponse
 	}
-	"chats:summarize:trace": {
+	"sessions:summarize:trace": {
 		params: never
-		response: Sockets.Chats.Summarize.TraceEntry
+		response: Sockets.Sessions.Summarize.TraceEntry
 	}
-	"chats:delete": {
-		params: Sockets.Chats.Delete.Params
-		response: Sockets.Chats.Delete.Response
+	"sessions:delete": {
+		params: Sockets.Sessions.Delete.Params
+		response: Sockets.Sessions.Delete.Response
 	}
-	"chats:toggleChatCharacterActive": {
-		params: Sockets.Chats.ToggleChatCharacterActive.Params
-		response: Sockets.Chats.ToggleChatCharacterActive.Response
+	"sessions:toggleSessionCharacterActive": {
+		params: Sockets.Sessions.ToggleSessionCharacterActive.Params
+		response: Sockets.Sessions.ToggleSessionCharacterActive.Response
 	}
-	"chats:updateChatCharacterVisibility": {
-		params: Sockets.Chats.UpdateChatCharacterVisibility.Params
-		response: Sockets.Chats.UpdateChatCharacterVisibility.Response
+	"sessions:updateSessionCharacterVisibility": {
+		params: Sockets.Sessions.UpdateSessionCharacterVisibility.Params
+		response: Sockets.Sessions.UpdateSessionCharacterVisibility.Response
 	}
-	"chats:triggerNarratorResponse": {
-		params: Sockets.Chats.TriggerNarratorResponse.Params
-		response: Sockets.Chats.TriggerNarratorResponse.Response
+	"sessions:triggerNarratorResponse": {
+		params: Sockets.Sessions.TriggerNarratorResponse.Params
+		response: Sockets.Sessions.TriggerNarratorResponse.Response
 	}
-	"chats:getNarratorName": {
-		params: Sockets.Chats.GetNarratorName.Params
-		response: Sockets.Chats.GetNarratorName.Response
+	"sessions:getNarratorName": {
+		params: Sockets.Sessions.GetNarratorName.Params
+		response: Sockets.Sessions.GetNarratorName.Response
 	}
-	"chats:list:error": {
-		params: never
-		response: Sockets.ErrorResponse
-	}
-	"chats:delete:error": {
-		params: never
-		response: Sockets.ErrorResponse
-	}
-	"chats:create:error": {
-		params: never
-		response: Sockets.ErrorResponse
-	}
-	"chats:update:error": {
-		params: never
-		response: Sockets.ErrorResponse
-	}
-	"chats:get:error": {
-		params: never
-		response: Sockets.ErrorResponse
-	}
-	"chats:addPersona": {
-		params: Sockets.Chats.AddPersona.Params
-		response: Sockets.Chats.AddPersona.Response
-	}
-	"chats:addPersona:error": {
-		params: never
-		response: Sockets.ErrorResponse
-	}
-	"chats:addGuest": {
-		params: Sockets.Chats.AddGuest.Params
-		response: Sockets.Chats.AddGuest.Response
-	}
-	"chats:addGuest:error": {
-		params: never
-		response: Sockets.ErrorResponse
-	}
-	"chats:removeGuest": {
-		params: Sockets.Chats.RemoveGuest.Params
-		response: Sockets.Chats.RemoveGuest.Response
-	}
-	"chats:removeGuest:error": {
-		params: never
-		response: Sockets.ErrorResponse
-	}
-	"chats:getResponseOrder": {
-		params: Sockets.Chats.GetResponseOrder.Params
-		response: Sockets.Chats.GetResponseOrder.Response
-	}
-	"chats:promptTokenCount": {
-		params: Sockets.Chats.PromptTokenCount.Params
-		response: Sockets.Chats.PromptTokenCount.Response
-	}
-	"chats:triggerGenerateMessage": {
-		params: Sockets.Chats.TriggerGenerateMessage.Params
-		response: Sockets.Chats.TriggerGenerateMessage.Response
-	}
-	"chats:branch": {
-		params: Sockets.Chats.Branch.Params
-		response: Sockets.Chats.Branch.Response
-	}
-	"chats:branch:error": {
+	"sessions:list:error": {
 		params: never
 		response: Sockets.ErrorResponse
 	}
-	"chats:reassignRemovedParticipant": {
-		params: Sockets.Chats.ReassignRemovedParticipant.Params
-		response: Sockets.Chats.ReassignRemovedParticipant.Response
+	"sessions:delete:error": {
+		params: never
+		response: Sockets.ErrorResponse
 	}
-	"chats:reassignRemovedParticipant:error": {
+	"sessions:create:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"sessions:update:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"sessions:get:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"sessions:addPersona": {
+		params: Sockets.Sessions.AddPersona.Params
+		response: Sockets.Sessions.AddPersona.Response
+	}
+	"sessions:addPersona:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"sessions:addGuest": {
+		params: Sockets.Sessions.AddGuest.Params
+		response: Sockets.Sessions.AddGuest.Response
+	}
+	"sessions:addGuest:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"sessions:removeGuest": {
+		params: Sockets.Sessions.RemoveGuest.Params
+		response: Sockets.Sessions.RemoveGuest.Response
+	}
+	"sessions:removeGuest:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"sessions:getResponseOrder": {
+		params: Sockets.Sessions.GetResponseOrder.Params
+		response: Sockets.Sessions.GetResponseOrder.Response
+	}
+	"sessions:promptTokenCount": {
+		params: Sockets.Sessions.PromptTokenCount.Params
+		response: Sockets.Sessions.PromptTokenCount.Response
+	}
+	"sessions:triggerGenerateMessage": {
+		params: Sockets.Sessions.TriggerGenerateMessage.Params
+		response: Sockets.Sessions.TriggerGenerateMessage.Response
+	}
+	"sessions:branch": {
+		params: Sockets.Sessions.Branch.Params
+		response: Sockets.Sessions.Branch.Response
+	}
+	"sessions:branch:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
+	"sessions:reassignRemovedParticipant": {
+		params: Sockets.Sessions.ReassignRemovedParticipant.Params
+		response: Sockets.Sessions.ReassignRemovedParticipant.Response
+	}
+	"sessions:reassignRemovedParticipant:error": {
 		params: never
 		response: Sockets.ErrorResponse
 	}
 
-	// Chat Message events
-	"chatMessages:sendPersonaMessage": {
-		params: Sockets.ChatMessages.SendPersonaMessage.Params
-		response: Sockets.ChatMessages.SendPersonaMessage.Response
+	// Session Message events
+	"sessionMessages:sendPersonaMessage": {
+		params: Sockets.SessionMessages.SendPersonaMessage.Params
+		response: Sockets.SessionMessages.SendPersonaMessage.Response
 	}
-	"chatMessages:sendCharacterMessage": {
-		params: Sockets.ChatMessages.SendCharacterMessage.Params
-		response: Sockets.ChatMessages.SendCharacterMessage.Response
+	"sessionMessages:sendCharacterMessage": {
+		params: Sockets.SessionMessages.SendCharacterMessage.Params
+		response: Sockets.SessionMessages.SendCharacterMessage.Response
 	}
-	"chatMessages:update": {
-		params: Sockets.ChatMessages.Update.Params
-		response: Sockets.ChatMessages.Update.Response
+	"sessionMessages:update": {
+		params: Sockets.SessionMessages.Update.Params
+		response: Sockets.SessionMessages.Update.Response
 	}
-	"chatMessages:delete": {
-		params: Sockets.ChatMessages.Delete.Params
-		response: Sockets.ChatMessages.Delete.Response
+	"sessionMessages:delete": {
+		params: Sockets.SessionMessages.Delete.Params
+		response: Sockets.SessionMessages.Delete.Response
 	}
-	"chatMessages:regenerate": {
-		params: Sockets.ChatMessages.Regenerate.Params
-		response: Sockets.ChatMessages.Regenerate.Response
+	"sessionMessages:regenerate": {
+		params: Sockets.SessionMessages.Regenerate.Params
+		response: Sockets.SessionMessages.Regenerate.Response
 	}
-	"chatMessages:continue": {
-		params: Sockets.ChatMessages.Continue.Params
-		response: Sockets.ChatMessages.Continue.Response
+	"sessionMessages:continue": {
+		params: Sockets.SessionMessages.Continue.Params
+		response: Sockets.SessionMessages.Continue.Response
 	}
-	"chatMessages:swipeLeft": {
-		params: Sockets.ChatMessages.SwipeLeft.Params
-		response: Sockets.ChatMessages.SwipeLeft.Response
+	"sessionMessages:swipeLeft": {
+		params: Sockets.SessionMessages.SwipeLeft.Params
+		response: Sockets.SessionMessages.SwipeLeft.Response
 	}
-	"chatMessages:swipeRight": {
-		params: Sockets.ChatMessages.SwipeRight.Params
-		response: Sockets.ChatMessages.SwipeRight.Response
+	"sessionMessages:swipeRight": {
+		params: Sockets.SessionMessages.SwipeRight.Params
+		response: Sockets.SessionMessages.SwipeRight.Response
 	}
-	"chatMessages:cancel": {
-		params: Sockets.ChatMessages.Cancel.Params
-		response: Sockets.ChatMessages.Cancel.Response
+	"sessionMessages:cancel": {
+		params: Sockets.SessionMessages.Cancel.Params
+		response: Sockets.SessionMessages.Cancel.Response
 	}
 
 	// Legacy events (should be migrated) - temporarily using any types
-	chatMessage: {
-		params: Sockets.ChatMessage.Call
-		response: Sockets.ChatMessage.Response
+	sessionMessage: {
+		params: Sockets.SessionMessage.Call
+		response: Sockets.SessionMessage.Response
 	}
-	"chatMessage:error": {
+	"sessionMessage:error": {
 		params: never
-		response: Sockets.ChatMessage.Response
+		response: Sockets.SessionMessage.Response
 	}
 	lorebookBindingList: {
 		params: any
@@ -721,6 +793,14 @@ export type SocketEventMap = {
 		params: never
 		response: { error?: string }
 	}
+	"pipelines:setPresetActions": {
+		params: Sockets.Pipelines.SetPresetActions.Params
+		response: Sockets.Pipelines.SetPresetActions.Response
+	}
+	"pipelines:setPresetActions:error": {
+		params: never
+		response: { error?: string }
+	}
 	"pipelines:selectConfig": {
 		params: Sockets.Pipelines.SelectConfig.Params
 		response: Sockets.Pipelines.SelectConfig.Response
@@ -814,6 +894,62 @@ export type SocketEventMap = {
 		response: Sockets.Pipelines.LibraryPromptWrite.Response
 	}
 	"pipelines:libraryDeletePrompt:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:scripts": {
+		params: Sockets.Pipelines.Scripts.Params
+		response: Sockets.Pipelines.Scripts.Response
+	}
+	"pipelines:scripts:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:createScript": {
+		params: Sockets.Pipelines.ScriptWrite.CreateParams
+		response: Sockets.Pipelines.ScriptWrite.Response
+	}
+	"pipelines:createScript:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:cloneScript": {
+		params: Sockets.Pipelines.ScriptWrite.CloneParams
+		response: Sockets.Pipelines.ScriptWrite.Response
+	}
+	"pipelines:cloneScript:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:updateScript": {
+		params: Sockets.Pipelines.ScriptWrite.UpdateParams
+		response: Sockets.Pipelines.ScriptWrite.Response
+	}
+	"pipelines:updateScript:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:deleteScript": {
+		params: Sockets.Pipelines.ScriptWrite.DeleteParams
+		response: Sockets.Pipelines.ScriptWrite.Response
+	}
+	"pipelines:deleteScript:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:exportScripts": {
+		params: Sockets.Pipelines.ScriptShare.ExportParams
+		response: Sockets.Pipelines.ScriptShare.ExportResponse
+	}
+	"pipelines:exportScripts:error": {
+		params: never
+		response: { error?: string }
+	}
+	"pipelines:importScripts": {
+		params: Sockets.Pipelines.ScriptShare.ImportParams
+		response: Sockets.Pipelines.ScriptShare.ImportResponse
+	}
+	"pipelines:importScripts:error": {
 		params: never
 		response: { error?: string }
 	}
@@ -944,7 +1080,7 @@ export type SocketEventMap = {
 		response: { error?: string }
 	}
 
-	// Narrator Prompt Config events ("Chat Prompts: Narrator")
+	// Narrator Prompt Config events ("Session Prompts: Narrator")
 	"graphBuildConfigs:list": {
 		params: Sockets.GraphBuildConfigs.List.Params
 		response: Sockets.GraphBuildConfigs.List.Response
@@ -1390,6 +1526,10 @@ export type SocketEventMap = {
 		params: Sockets.SystemSettings.UpdateSummarizationEnabled.Params
 		response: Sockets.SystemSettings.UpdateSummarizationEnabled.Response
 	}
+	"systemSettings:updateScriptsEnabled": {
+		params: Sockets.SystemSettings.UpdateScriptsEnabled.Params
+		response: Sockets.SystemSettings.UpdateScriptsEnabled.Response
+	}
 	"systemSettings:updateContextDebuggingEnabled": {
 		params: Sockets.SystemSettings.UpdateContextDebuggingEnabled.Params
 		response: Sockets.SystemSettings.UpdateContextDebuggingEnabled.Response
@@ -1456,9 +1596,9 @@ export type SocketEventMap = {
 		params: Sockets.Vectorization.CheckRagStatus.Params
 		response: Sockets.Vectorization.CheckRagStatus.Response
 	}
-	"vectorization:setChatRagIgnored": {
-		params: Sockets.Vectorization.SetChatRagIgnored.Params
-		response: Sockets.Vectorization.SetChatRagIgnored.Response
+	"vectorization:setSessionRagIgnored": {
+		params: Sockets.Vectorization.SetSessionRagIgnored.Params
+		response: Sockets.Vectorization.SetSessionRagIgnored.Response
 	}
 	"vectorization:getQueue": {
 		params: Sockets.Vectorization.GetQueue.Params
@@ -1933,7 +2073,7 @@ export type SocketEventMap = {
 				connectionName: string
 				samplingName: string
 				startedAt: string
-				chatId?: number
+				sessionId?: number
 				lorebookId?: number
 				label?: string
 			}>

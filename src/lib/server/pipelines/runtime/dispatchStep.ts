@@ -3,14 +3,14 @@
  *
  * Every step in the summarize and graph-build pipelines is the same shape: a
  * system prompt from the node's `prompts` slot, a user prompt built from its
- * input, and text out. `dispatch.ts` handles the *chat* generation, which is a
+ * input, and text out. `dispatch.ts` handles the *session* generation, which is a
  * different thing — it carries a compiled context, a streaming sink and a
  * speaking character. This is the simpler call the other eleven Providers make.
  *
  * ## It is the summarizer's own call, not a second implementation
  *
  * The adapter construction below mirrors `utils/summarizer/index.ts`'s
- * `runGeneration` deliberately, down to the minimal chat it builds and the
+ * `runGeneration` deliberately, down to the minimal session it builds and the
  * `runQueuedLLMCall` it goes through. A near-miss would produce summaries that
  * differ from today's for reasons nobody could locate, which is exactly the
  * failure the parity discipline exists to prevent — so the same queue, the same
@@ -30,7 +30,7 @@ import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
 import { runQueuedLLMCall } from "$lib/server/utils/runQueuedLLMCall"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
-import { ChatTypes } from "$lib/shared/constants/ChatTypes"
+import { SessionTypes } from "$lib/shared/constants/SessionTypes"
 
 export interface StepCall {
 	systemPrompt: string
@@ -44,14 +44,14 @@ export interface StepCall {
 }
 
 /**
- * The chat an adapter needs but this call does not have.
+ * The session an adapter needs but this call does not have.
  *
  * Summarization has no conversation — it has a block of text and a question
- * about it. The adapters are written against a chat, so one is fabricated with
+ * about it. The adapters are written against a session, so one is fabricated with
  * the user prompt as its only message, exactly as the summarizer does today.
- * `chatType: SUMMARIZE` is what keeps this out of the roleplay code paths.
+ * `sessionType: SUMMARIZE` is what keeps this out of the roleplay code paths.
  */
-function minimalChat(userPrompt: string): any {
+function minimalSession(userPrompt: string): any {
 	const now = new Date().toISOString()
 	return {
 		id: 0,
@@ -63,12 +63,12 @@ function minimalChat(userPrompt: string): any {
 		metadata: null,
 		lorebookId: null,
 		isGroup: false,
-		chatType: ChatTypes.SUMMARIZE,
+		sessionType: SessionTypes.SUMMARIZE,
 		groupReplyStrategy: null,
-		chatMessages: [
+		sessionMessages: [
 			{
 				id: 1,
-				chatId: 0,
+				sessionId: 0,
 				role: "user",
 				content: userPrompt,
 				createdAt: now,
@@ -178,7 +178,7 @@ export async function dispatchStep(
 		// happens to have them; nothing in this call path reads any other field.
 		contextConfig: {} as any,
 		promptConfig: { systemPrompt: call.systemPrompt } as any,
-		chat: minimalChat(call.userPrompt),
+		session: minimalSession(call.userPrompt),
 		currentCharacterId: null,
 		tokenCounter,
 		tokenLimit,

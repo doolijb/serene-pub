@@ -190,4 +190,3 @@ async function warmLocalEmbeddingSupportProbe() {
 		console.error("[embedding] Local-embedding support probe failed:", err)
 	}
 }
-

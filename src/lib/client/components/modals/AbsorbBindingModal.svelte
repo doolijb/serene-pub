@@ -55,18 +55,10 @@
 	// Whichever row is bound survives, auto-swapping regardless of which was
 	// picked as the "target" — matches the server's own auto-swap rule.
 	let survivor = $derived(
-		selectedTarget
-			? isBound(node)
-				? node
-				: selectedTarget
-			: null
+		selectedTarget ? (isBound(node) ? node : selectedTarget) : null
 	)
 	let absorbed = $derived(
-		selectedTarget
-			? isBound(node)
-				? selectedTarget
-				: node
-			: null
+		selectedTarget ? (isBound(node) ? selectedTarget : node) : null
 	)
 
 	function selectTarget(n: NarrativeNode) {
@@ -147,9 +139,9 @@
 
 				{#if !selectedTarget}
 					<p class="text-surface-700-300 text-sm">
-						Pick the character <strong>{node.name}</strong> is actually
-						the same person as. Their relationships, private lore,
-						and scene appearances all move over; "{node.name}"
+						Pick the character <strong>{node.name}</strong>
+						is actually the same person as. Their relationships,
+						private lore, and scene appearances all move over; "{node.name}"
 						becomes a recognized alias and this row is deleted.
 					</p>
 
@@ -245,8 +237,8 @@
 							{#if isBound(node) ? node.id !== selectedTarget.id : false}
 								<p class="text-warning-500 text-xs">
 									"{node.name}" is a linked character, so it
-									survives regardless of which side you
-									picked above.
+									survives regardless of which side you picked
+									above.
 								</p>
 							{/if}
 							<p class="text-surface-500 text-xs">

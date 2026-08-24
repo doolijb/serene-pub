@@ -18,8 +18,7 @@ vi.mock("$lib/server/db", () => ({ db: {} }))
 // particular) real, so the assertions below check against the actual
 // exported values rather than a value this test made up itself.
 vi.mock("./session", async (importOriginal) => {
-	const actual =
-		await importOriginal<typeof import("./session")>()
+	const actual = await importOriginal<typeof import("./session")>()
 	return {
 		...actual,
 		hasActiveSession: () => false,
@@ -51,12 +50,16 @@ describe("fetchCharaVaultCardResponse — timeout default", () => {
 		const { fetchCharaVaultCardResponse } = await import(
 			"./charaVaultSource"
 		)
-		const { CHARAVAULT_FETCH_TIMEOUT_MS, CHARAVAULT_IMAGE_FETCH_TIMEOUT_MS } =
-			await import("./session")
+		const {
+			CHARAVAULT_FETCH_TIMEOUT_MS,
+			CHARAVAULT_IMAGE_FETCH_TIMEOUT_MS
+		} = await import("./session")
 
 		await fetchCharaVaultCardResponse({ folder: "f", file: "g.png" })
 
-		expect(timeoutSpy).toHaveBeenCalledWith(CHARAVAULT_IMAGE_FETCH_TIMEOUT_MS)
+		expect(timeoutSpy).toHaveBeenCalledWith(
+			CHARAVAULT_IMAGE_FETCH_TIMEOUT_MS
+		)
 		expect(CHARAVAULT_IMAGE_FETCH_TIMEOUT_MS).toBeGreaterThan(
 			CHARAVAULT_FETCH_TIMEOUT_MS
 		)

@@ -198,8 +198,8 @@ export async function sync() {
 		const existingContextConfigs = await db.query.contextConfigs.findMany()
 
 		// NOTE on the template below: postHistoryInstructions renders inside
-		// the {{#each chatMessages}} loop, gated on @last, rather than after
-		// {{/each}}. chatMessages' last entry is always the seed/prefill
+		// the {{#each sessionMessages}} loop, gated on @last, rather than after
+		// {{/each}}. sessionMessages' last entry is always the seed/prefill
 		// placeholder ("Name: ", the turn the model continues writing from);
 		// it must stay the literal final block in the rendered output for
 		// that continuation to work. Rendering postHistoryInstructions after
@@ -254,8 +254,8 @@ export async function sync() {
 		const existingPromptConfigs = await db.query.promptConfigs.findMany()
 
 		// postHistoryTokenTrigger: 3000 is a "reasonable default" reinforcement
-		// threshold — roughly the point a chat's system prompt starts feeling
-		// distant enough that the model may drift, so short chats skip the
+		// threshold — roughly the point a session's system prompt starts feeling
+		// distant enough that the model may drift, so short sessions skip the
 		// redundant reminder while longer ones get it reinforced right before
 		// the generation point (see defaults.ts's context template).
 		const defaultPromptConfigs: Partial<SelectPromptConfig>[] = [
@@ -321,10 +321,10 @@ export async function sync() {
 			},
 			{
 				id: 7,
-				seedKey: "prompt-neutral-chat",
-				name: "Neutral - Chat",
+				seedKey: "prompt-neutral-session",
+				name: "Neutral - Session",
 				isImmutable: true,
-				systemPrompt: `Write {{char}}'s next reply in a fictional chat between {{char}} and {{personaNames}}.`,
+				systemPrompt: `Write {{char}}'s next reply in a fictional session between {{char}} and {{personaNames}}.`,
 				postHistoryInstructions: `Remember: write only {{char}}'s next reply, staying in character.`,
 				postHistoryDepth: 0,
 				postHistoryTokenTrigger: 3000
@@ -354,7 +354,7 @@ export async function sync() {
 				seedKey: "prompt-assistant-simple",
 				name: "Assistant - Simple",
 				isImmutable: true,
-				systemPrompt: `A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions.`,
+				systemPrompt: `A session between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions.`,
 				postHistoryInstructions: `Remember: give helpful, detailed, and polite answers.`,
 				postHistoryDepth: 0,
 				postHistoryTokenTrigger: 3000
@@ -410,7 +410,7 @@ export async function sync() {
 
 		await Promise.all(promptConfigQueries)
 
-		// Narrator Prompt Configs ("Chat Prompts: Narrator" — manually-triggered
+		// Narrator Prompt Configs ("Session Prompts: Narrator" — manually-triggered
 		// non-character environment/narration responses)
 
 		const existingNarratorPromptConfigs =
@@ -434,7 +434,7 @@ export async function sync() {
 					// regardless of the system prompt.
 					postHistoryInstructions: `Remember: you are {{narratorName}}, narrating only. Do not write dialogue or move, describe or narrate {{characterNames}} nor {{personaNames}}, and do not advance the plot — describe the scene in beautiful detail and stop.`,
 					postHistoryDepth: 0,
-					// Always triggered regardless of chat history size — the
+					// Always triggered regardless of session history size — the
 					// Narrator should never wait for drift to accumulate before
 					// being reinforced, unlike character prompt configs.
 					postHistoryTokenTrigger: 0
@@ -789,7 +789,7 @@ export async function sync() {
 		// Looked up by seedKey rather than assumed to be id 1. The graph build
 		// config is the one every graph LLM step resolves its prompt, model and
 		// sampling through, so a system default pointing at the wrong row (or at
-		// no row) silently sends every step back to the chat defaults — which is
+		// no row) silently sends every step back to the session defaults — which is
 		// the failure this whole config type exists to prevent. Nothing
 		// guarantees the seeded row is at id 1 once defaults are added without
 		// hardcoded ids, which is now the rule.
@@ -909,8 +909,8 @@ export async function sync() {
 	}
 
 	const tables = [
-		"chat_messages",
-		"chats",
+		"session_messages",
+		"sessions",
 		"characters",
 		"connections",
 		"context_configs",

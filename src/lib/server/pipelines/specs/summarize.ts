@@ -20,7 +20,7 @@
  *
  * Messages are cut into token-sized batches and each is drafted *without sight
  * of any other*; the ordered drafts are then merged into one narrative. Drafting
- * in isolation is what makes a long chat summarizable at all — the model never
+ * in isolation is what makes a long session summarizable at all — the model never
  * holds more than one batch — and the batches genuinely do not depend on each
  * other, so `map` states that and lets the connection's own queue decide the
  * ordering. A loop would impose a sequence the work does not have.
@@ -37,14 +37,14 @@ export const SUMMARIZE_HISTORY_SPEC_ID = "core:spec/summarize-history"
 // topic focuses every prompt and the known-cast list reaches extraction. A
 // published version is immutable, so the wiring change is a new version and
 // 1.0.0 stays for anything that resolved against it.
-export const SUMMARIZE_VERSION = "1.1.0"
+export const SUMMARIZE_VERSION = "1.2.0"
 
 /**
  * The ceiling on batches for one run.
  *
  * Mandatory — F9 makes repetition without a bound inexpressible, and the
  * database enforces it too (`pipeline_blocks_bounded_check`). 512 is chosen to
- * be far above any real chat rather than tuned: the batch *size* is the knob a
+ * be far above any real session rather than tuned: the batch *size* is the knob a
  * user turns, and this is the guard that stops a runaway from becoming a bill.
  */
 const MAX_BATCHES = 512

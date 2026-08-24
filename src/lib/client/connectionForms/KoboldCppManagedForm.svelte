@@ -16,7 +16,7 @@
 
 	interface ExtraFieldData {
 		stream: boolean
-		useChat: boolean
+		useSession: boolean
 		useMemory: boolean
 		memory: string
 		trimStop: boolean
@@ -31,7 +31,7 @@
 
 	interface ExtraJson {
 		stream?: boolean
-		useChat?: boolean
+		useSession?: boolean
 		useMemory?: boolean
 		memory?: string
 		trimStop?: boolean
@@ -81,7 +81,7 @@
 	function extraJsonToExtraFields(extraJson: ExtraJson): ExtraFieldData {
 		return {
 			stream: extraJson.stream ?? true,
-			useChat: extraJson.useChat ?? true,
+			useSession: extraJson.useSession ?? true,
 			useMemory: extraJson.useMemory ?? false,
 			memory: extraJson.memory ?? "",
 			trimStop: extraJson.trimStop ?? true,
@@ -112,7 +112,7 @@
 	function extraFieldsToExtraJson(fields: ExtraFieldData): ExtraJson {
 		return {
 			stream: fields.stream,
-			useChat: fields.useChat,
+			useSession: fields.useSession,
 			useMemory: fields.useMemory,
 			memory: fields.memory,
 			trimStop: fields.trimStop,
@@ -220,7 +220,7 @@
 		</p>
 	</div>
 
-	{#if !koboldCppFields?.useChat}
+	{#if !koboldCppFields?.useSession}
 		<div class="mt-2 flex flex-col gap-1">
 			<label class="font-semibold" for="promptFormat">
 				Prompt Format
@@ -259,14 +259,14 @@
 		{#if koboldCppFields}
 			<section class="w-full space-y-4 pt-4">
 				<Switch
-					name="useChat"
-					checked={koboldCppFields.useChat}
+					name="useSession"
+					checked={koboldCppFields.useSession}
 					onCheckedChange={(e) =>
-						(koboldCppFields!.useChat = e.checked)}
+						(koboldCppFields!.useSession = e.checked)}
 					class="flex items-center justify-between gap-4"
 				>
 					<Switch.Label class="font-semibold">
-						Use Chat Mode
+						Use Session Mode
 					</Switch.Label>
 					<Switch.Control
 						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
@@ -276,8 +276,8 @@
 					<Switch.HiddenInput />
 				</Switch>
 				<p class="text-muted-foreground text-xs">
-					Enable to use OpenAI-style chat completion format instead of
-					text completion
+					Enable to use OpenAI-style session completion format instead
+					of text completion
 				</p>
 				<Switch
 					name="stream"

@@ -100,7 +100,7 @@ describe("narrativeGraph:linkOrphanBinding — character access scoping (PGlite 
 		expect(reloaded!.characterId).toBeNull()
 	})
 
-	test("accepts linking a character shared into a chat the caller can access", async () => {
+	test("accepts linking a character shared into a session the caller can access", async () => {
 		const { narrativeGraphLinkOrphanBindingHandler } = await import(
 			"./narrativeGraph"
 		)
@@ -124,19 +124,19 @@ describe("narrativeGraph:linkOrphanBinding — character access scoping (PGlite 
 			.values({
 				userId: sharer.id,
 				name: "Shared Character",
-				description: "Shared via a chat"
+				description: "Shared via a session"
 			})
 			.returning()
-		const [chat] = await testDb
-			.insert(schema.chats)
+		const [session] = await testDb
+			.insert(schema.sessions)
 			.values({ userId: sharer.id, isGroup: false })
 			.returning()
-		await testDb.insert(schema.chatCharacters).values({
-			chatId: chat.id,
+		await testDb.insert(schema.sessionCharacters).values({
+			sessionId: session.id,
 			characterId: sharedCharacter.id
 		})
-		await testDb.insert(schema.chatGuests).values({
-			chatId: chat.id,
+		await testDb.insert(schema.sessionGuests).values({
+			sessionId: session.id,
 			userId: owner.id
 		})
 

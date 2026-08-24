@@ -407,7 +407,7 @@ export const narrativeGraphBuildHandler: Handler<
 
 		/*
 		 * Graph extraction is a structured-output task and should not inherit
-		 * chat's decoding parameters — at chat temperature a roleplay-finetuned
+		 * session's decoding parameters — at session temperature a roleplay-finetuned
 		 * model answered 45% of perspective calls with narrative prose rather
 		 * than JSON, and re-prompting recovered 1 of 13. Each step therefore
 		 * carries its own connection, sampling and prompt.
@@ -423,7 +423,7 @@ export const narrativeGraphBuildHandler: Handler<
 		const { resolveGraphStepConfigs } = await import(
 			"$lib/server/pipelines/config/graphSteps"
 		)
-		const pipelineSteps = await resolveGraphStepConfigs(db, userId)
+		const pipelineSteps = await resolveGraphStepConfigs(db)
 
 		// A step whose connection or sampling was never chosen runs on the
 		// instance default — dispatchStep's rule, and what a person expects the
@@ -506,7 +506,7 @@ export const narrativeGraphBuildHandler: Handler<
 					historyEntry: s.historyEntry ?? null,
 					participantCharacters: cast.participantCharacters,
 					mentionedCharacters: cast.mentionedCharacters,
-					chatId: s.chatId ?? null,
+					sessionId: s.sessionId ?? null,
 					selectedMessageIds: s.selectedMessageIds?.length
 						? s.selectedMessageIds
 						: null
@@ -721,15 +721,15 @@ export const narrativeGraphBuildHandler: Handler<
 					llmCallCount++
 					emitToUser("narrativeGraph:buildLog", entry)
 				},
-				fetchSceneMessages: async (chatId, messageIds) => {
+				fetchSceneMessages: async (sessionId, messageIds) => {
 					if (messageIds.length === 0) return []
-					const msgs = await db.query.chatMessages.findMany({
+					const msgs = await db.query.sessionMessages.findMany({
 						where: and(
-							eq(schema.chatMessages.chatId, chatId),
-							inArray(schema.chatMessages.id, messageIds),
-							eq(schema.chatMessages.isHidden, false)
+							eq(schema.sessionMessages.sessionId, sessionId),
+							inArray(schema.sessionMessages.id, messageIds),
+							eq(schema.sessionMessages.isHidden, false)
 						),
-						orderBy: asc(schema.chatMessages.id),
+						orderBy: asc(schema.sessionMessages.id),
 						columns: {
 							id: true,
 							content: true,
@@ -2104,7 +2104,7 @@ export const narrativeGraphQueryContextHandler: Handler<
 	event: "narrativeGraph:queryContext",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
-		const { lorebookId, chatId, speakerCharacterId, speakerPersonaId } =
+		const { lorebookId, sessionId, speakerCharacterId, speakerPersonaId } =
 			params
 
 		const lorebook = await db.query.lorebooks.findFirst({
@@ -2224,55 +2224,57 @@ export const narrativeGraphQueryContextHandler: Handler<
 			)
 			.map((r) => relEntry(r, l1NodeMap))
 
-		// ── Layer 2: inverse rels from chat participants → speaker (acknowledged/public only) ──
-		const [chatChars, chatPersonas] = await Promise.all([
-			db.query.chatCharacters.findMany({
+		// ── Layer 2: inverse rels from session participants → speaker (acknowledged/public only) ──
+		const [sessionChars, sessionPersonas] = await Promise.all([
+			db.query.sessionCharacters.findMany({
 				where: and(
-					eq(schema.chatCharacters.chatId, chatId),
-					isNull(schema.chatCharacters.removedAt)
+					eq(schema.sessionCharacters.sessionId, sessionId),
+					isNull(schema.sessionCharacters.removedAt)
 				),
 				columns: { characterId: true }
 			}),
-			db.query.chatPersonas.findMany({
+			db.query.sessionPersonas.findMany({
 				where: and(
-					eq(schema.chatPersonas.chatId, chatId),
-					isNull(schema.chatPersonas.removedAt)
+					eq(schema.sessionPersonas.sessionId, sessionId),
+					isNull(schema.sessionPersonas.removedAt)
 				),
 				columns: { personaId: true }
 			})
 		])
 
-		const chatCharIds = chatChars
+		const sessionCharIds = sessionChars
 			.map((c) => c.characterId)
 			.filter(
 				(id): id is number => id !== null && id !== speakerCharacterId
 			)
-		const chatPersonaIds = chatPersonas
+		const sessionPersonaIds = sessionPersonas
 			.map((p) => p.personaId)
 			.filter(
 				(id): id is number =>
 					id !== null && id !== (speakerPersonaId ?? -1)
 			)
 
-		if (chatCharIds.length > 0 || chatPersonaIds.length > 0) {
+		if (sessionCharIds.length > 0 || sessionPersonaIds.length > 0) {
 			const participantBindings =
 				await db.query.lorebookBindings.findMany({
 					where: and(
 						eq(schema.lorebookBindings.lorebookId, lorebookId),
 						sql`(
 						${
-							chatCharIds.length > 0
+							sessionCharIds.length > 0
 								? sql`${schema.lorebookBindings.characterId} IN (${sql.join(
-										chatCharIds.map((id) => sql`${id}`),
+										sessionCharIds.map((id) => sql`${id}`),
 										sql`, `
 									)})`
 								: sql`false`
 						}
 						OR
 						${
-							chatPersonaIds.length > 0
+							sessionPersonaIds.length > 0
 								? sql`${schema.lorebookBindings.personaId} IN (${sql.join(
-										chatPersonaIds.map((id) => sql`${id}`),
+										sessionPersonaIds.map(
+											(id) => sql`${id}`
+										),
 										sql`, `
 									)})`
 								: sql`false`

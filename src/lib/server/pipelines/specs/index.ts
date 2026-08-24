@@ -12,9 +12,18 @@
  * `core:spec/respond` is a list of identifiers, not of things.
  */
 
-import { RESPOND_SPEC_ID, respondSpec } from "$lib/server/pipelines/specs/respond"
-import { NARRATE_SPEC_ID, narrateSpec } from "$lib/server/pipelines/specs/narrate"
-import { GRAPH_BUILD_SPEC_ID, graphBuildSpec } from "$lib/server/pipelines/specs/graphBuild"
+import {
+	RESPOND_SPEC_ID,
+	respondSpec
+} from "$lib/server/pipelines/specs/respond"
+import {
+	NARRATE_SPEC_ID,
+	narrateSpec
+} from "$lib/server/pipelines/specs/narrate"
+import {
+	GRAPH_BUILD_SPEC_ID,
+	graphBuildSpec
+} from "$lib/server/pipelines/specs/graphBuild"
 import {
 	SUMMARIZE_CHARACTER_SPEC_ID,
 	SUMMARIZE_HISTORY_SPEC_ID,
@@ -43,12 +52,12 @@ export interface CoreSpec {
 /**
  * The seven namespaces core ships.
  *
- * Named for what they do to a person's chat, not for what they are made of.
+ * Named for what they do to a person's session, not for what they are made of.
  * These are the entries the pipeline view lists, and a list reading
  * `core:spec/summarize-history` is a list of identifiers.
  */
 export const CORE_SPECS: CoreSpec[] = [
-	{ slug: RESPOND_SPEC_ID, name: "Chat reply", build: respondSpec },
+	{ slug: RESPOND_SPEC_ID, name: "Session reply", build: respondSpec },
 	{ slug: NARRATE_SPEC_ID, name: "Narrator reply", build: narrateSpec },
 	{
 		slug: SUMMARIZE_WORLD_SPEC_ID,
@@ -81,8 +90,16 @@ export const CORE_SPECS: CoreSpec[] = [
 export const coreSpec = (slug: string): CoreSpec | undefined =>
 	CORE_SPECS.find((s) => s.slug === slug)
 
-export { RESPOND_SPEC_ID, RESPOND_VERSION, respondSpec } from "$lib/server/pipelines/specs/respond"
-export { NARRATE_SPEC_ID, NARRATE_VERSION, narrateSpec } from "$lib/server/pipelines/specs/narrate"
+export {
+	RESPOND_SPEC_ID,
+	RESPOND_VERSION,
+	respondSpec
+} from "$lib/server/pipelines/specs/respond"
+export {
+	NARRATE_SPEC_ID,
+	NARRATE_VERSION,
+	narrateSpec
+} from "$lib/server/pipelines/specs/narrate"
 export {
 	GRAPH_BUILD_SPEC_ID,
 	GRAPH_BUILD_VERSION,

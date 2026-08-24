@@ -25,7 +25,10 @@ vi.mock("$lib/server/db", async () => {
 
 beforeAll(async () => {
 	dataDir = await fs.mkdtemp(
-		path.join(os.tmpdir(), "serene-pub-vectorizationconfig-scoping-int-test-")
+		path.join(
+			os.tmpdir(),
+			"serene-pub-vectorizationconfig-scoping-int-test-"
+		)
 	)
 	process.env.SERENE_PUB_DATA_DIR = dataDir
 

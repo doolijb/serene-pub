@@ -12,10 +12,10 @@
  */
 
 export interface QueryCast {
-	chatCharacters?: readonly any[]
-	chatPersonas?: readonly any[]
-	removedChatCharacters?: readonly any[]
-	removedChatPersonas?: readonly any[]
+	sessionCharacters?: readonly any[]
+	sessionPersonas?: readonly any[]
+	removedSessionCharacters?: readonly any[]
+	removedSessionPersonas?: readonly any[]
 }
 
 export interface QueryMessage {
@@ -28,31 +28,31 @@ export interface QueryMessage {
 /**
  * `[Speaker]: text`, with the speaker resolved through removed participants.
  *
- * The fallback chain is the same one `ChatMessageProcessor` walks and for the
- * same reason: a message from someone who has since left the chat still needs a
+ * The fallback chain is the same one `SessionMessageProcessor` walks and for the
+ * same reason: a message from someone who has since left the session still needs a
  * name, or every line they ever said embeds as though the narrator said it.
  */
 export function formatMessageForQuery(
 	msg: QueryMessage,
 	cast: QueryCast
 ): string {
-	let char = cast.chatCharacters?.find(
+	let char = cast.sessionCharacters?.find(
 		(cc: any) => cc.character?.id === msg.characterId
 	)?.character
-	let persona = cast.chatPersonas?.find(
+	let persona = cast.sessionPersonas?.find(
 		(cp: any) => cp.persona?.id === msg.personaId
 	)?.persona
 
 	let removedName: string | undefined
 	if (!char && msg.characterId) {
-		const removed = cast.removedChatCharacters?.find(
+		const removed = cast.removedSessionCharacters?.find(
 			(cc: any) => cc.characterId === msg.characterId
 		)
 		char = removed?.character
 		removedName ??= removed?.removedName ?? undefined
 	}
 	if (!persona && msg.personaId) {
-		const removed = cast.removedChatPersonas?.find(
+		const removed = cast.removedSessionPersonas?.find(
 			(cp: any) => cp.personaId === msg.personaId
 		)
 		persona = removed?.persona
@@ -88,7 +88,7 @@ export function queryWindows(
 	const format = (m: QueryMessage) => formatMessageForQuery(m, cast)
 
 	// `slice(-0)` is `slice(0)` — the **whole array**, not an empty one. A
-	// window of zero therefore reads as "embed every message in the chat, one
+	// window of zero therefore reads as "embed every message in the session, one
 	// query each", which is the opposite of what setting it to zero means and
 	// is expensive enough to notice as a hang rather than as a wrong answer.
 	// Now that these are user-facing parameters, zero is a value someone will

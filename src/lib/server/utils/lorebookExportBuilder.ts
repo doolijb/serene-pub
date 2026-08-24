@@ -95,11 +95,11 @@ export async function buildLorebookExportData(
 
 		// Binding a character/persona only requires being able to *view* it
 		// (canViewCharacter/canViewPersona — true for anything shared into a
-		// chat you're in, not just things you own), but export is a
+		// session you're in, not just things you own), but export is a
 		// data-extraction action, not a viewing action — the direct
 		// characters:exportCard/personas:exportCard handlers are deliberately
 		// owner-only for exactly this reason. Without this check, binding a
-		// character someone else merely shared into a chat with you, then
+		// character someone else merely shared into a session with you, then
 		// exporting your own lorebook, would bundle their full card (system
 		// prompt, personality, everything) into your download. Degrades to
 		// the already-supported "binding present, no card embedded" path

@@ -20,17 +20,9 @@ import {
 	declarations,
 	published
 } from "$lib/server/pipelines/config/panel/declarations"
-import {
-	optionId
-} from "$lib/server/pipelines/config/panel/ids"
-import {
-	layers,
-	namespaceView
-} from "$lib/server/pipelines/config/panel/read"
-import {
-	resolveWriteScope,
-	writeScopeFor
-} from "$lib/server/pipelines/config/panel/scopes"
+import { optionId } from "$lib/server/pipelines/config/panel/ids"
+import { layers, namespaceView } from "$lib/server/pipelines/config/panel/read"
+import { resolveWriteScope } from "$lib/server/pipelines/config/panel/scopes"
 import {
 	type Db,
 	type Decl,
@@ -99,13 +91,13 @@ export async function variableOptionGate(
 				"edit."
 		)
 	// Same refusal the write path uses, rather than a second copy of the rule.
-	// `instance` for an admin because that is where their layout edits land
-	// (see `effScope` in `namespaceView`) — passing the viewer's default scope
-	// would refuse an administrator on the grounds that layouts are set at
-	// instance level, which is where this very call is trying to set one.
+	// `config` for an admin because editing a shared row is a structural act —
+	// passing the viewer's default scope would refuse an administrator inside
+	// a session on the grounds that layouts are not session-writable, when the row
+	// they are editing is the configuration's.
 	resolveWriteScope(
 		viewer,
-		viewer.isAdmin ? "instance" : undefined,
+		viewer.isAdmin ? "config" : undefined,
 		decl.matrixSlot
 	)
 	return { variableId: decl.variableId }
@@ -140,7 +132,7 @@ export async function contextTemplateOptionGate(
 	// Same refusal the write path uses, rather than a second copy of the rule.
 	resolveWriteScope(
 		viewer,
-		viewer.isAdmin ? "instance" : undefined,
+		viewer.isAdmin ? "config" : undefined,
 		decl.matrixSlot
 	)
 	return { nodeTypeId: decl.nodeTypeId, specId: at.specId }
@@ -157,7 +149,7 @@ export async function contextTemplateOptionGate(
  * setting changed it everywhere instead.
  *
  *   - the **builder** authors *the configuration itself* (`preset` layer)
- *   - the **sidebar** overrides that configuration for you or this chat
+ *   - the **sidebar** overrides that configuration for you or this session
  *
  * Refusing an immutable config here rather than in the UI is the same rule the
  * prompt editor keeps: hiding a button is not what protects a shipped row.
@@ -184,6 +176,73 @@ async function configTarget(db: Db, at: Published, configId: number) {
 	return row as any
 }
 
+/**
+ * A chain write, checked against the hook's declaration (18 §4a/§5).
+ *
+ * Three refusals, each the mechanical form of a law: the value is an ordered
+ * list of ids and nothing else; every id names a row that exists (an id that
+ * doesn't is an attachment that stores cleanly and does nothing); and every
+ * row's type is one the hook accepts — chain homogeneity, checkable off the
+ * declaration, refusing at attach rather than at run time. Duplicates collapse
+ * to first occurrence: one script running twice in one chain is never what a
+ * reorder meant.
+ */
+async function checkChain(
+	db: Db,
+	decl: Decl,
+	value: unknown
+): Promise<number[]> {
+	if (!Array.isArray(value) || value.some((v) => typeof v !== "number"))
+		throw new OptionNotWritableError(
+			"A script chain is an ordered list of scripts and nothing else."
+		)
+	const ids = [...new Set(value as number[])]
+	if (!ids.length) return ids
+
+	const accepts = new Set(decl.accepts ?? [])
+	const { inArray } = await import("drizzle-orm")
+	const rows = await db
+		.select()
+		.from(schema.pipelineScripts)
+		.where(inArray(schema.pipelineScripts.id, ids))
+	const byId = new Map<number, any>((rows as any[]).map((r) => [r.id, r]))
+
+	for (const scriptId of ids) {
+		const row = byId.get(scriptId)
+		if (!row)
+			throw new OptionNotWritableError(
+				"One of those scripts no longer exists. It may have been " +
+					"deleted since the list was loaded."
+			)
+		if (!accepts.has(row.typeId))
+			throw new OptionNotWritableError(
+				`'${row.name}' is a different kind of script than this step ` +
+					`accepts, so it can never run here. The picker only offers ` +
+					`what fits; reload if the lists look stale.`
+			)
+	}
+	return ids
+}
+
+/**
+ * The named config a global edit lands in: the instance's selection, resolved
+ * by the runtime's own resolver, then gated exactly as an explicit `configId`
+ * would be — same immutability refusal, same spec check. Shipped defaults
+ * refuse with the duplicate suggestion rather than silently absorbing edits.
+ */
+async function instanceConfigTarget(db: Db, at: Published) {
+	const { resolveSelectedConfig } = await import(
+		"$lib/server/pipelines/config/named"
+	)
+	const selected = await resolveSelectedConfig(db, at.specId, at.slug, {})
+	if (!selected)
+		throw new OptionNotFoundError(
+			"This pipeline has no configuration yet. Publishing seeds one; if " +
+				"this persists, re-run the application's boot."
+		)
+	return await configTarget(db, at, selected.configId)
+}
+
 export async function writeOption(
 	db: Db,
 	secret: string,
@@ -191,23 +250,34 @@ export async function writeOption(
 	viewer: Viewer,
 	id: string,
 	value: unknown,
-	scope?: WriteScope,
-	/** Edit this configuration itself, rather than override it at a scope. */
+	/** Edit this configuration itself, rather than the resolved target. */
 	configId?: number
 ): Promise<void> {
 	const { at, decl } = await locate(db, secret, slug, id)
 	const now = new Date()
 
-	if (configId != null) {
+	if (decl.control === "scripts-chain")
+		value = await checkChain(db, decl, value)
+
+	const target = resolveWriteScope(
+		viewer,
+		configId != null ? "config" : undefined,
+		decl.matrixSlot
+	)
+
+	if (target.scope === "config") {
 		// Authoring a configuration is a structural act — it changes what
-		// everyone resolving that configuration gets — so it takes the same
-		// admin check every other non-prompt write takes, via `instance`.
-		resolveWriteScope(viewer, "instance", decl.matrixSlot)
-		await configTarget(db, at, configId)
+		// everyone resolving that configuration gets — and since the
+		// simplification (2026-08-24) it is the *only* global write: the
+		// former instance override layer folded into the config itself.
+		const row =
+			configId != null
+				? await configTarget(db, at, configId)
+				: await instanceConfigTarget(db, at)
 		await db
 			.insert(schema.pipelineConfigValues)
 			.values({
-				configId,
+				configId: row.id,
 				nodeKey: decl.nodeKey,
 				slot: decl.slot,
 				path: decl.path,
@@ -224,8 +294,6 @@ export async function writeOption(
 			})
 		return
 	}
-
-	const target = resolveWriteScope(viewer, scope, decl.matrixSlot)
 
 	await db
 		.insert(schema.pipelineNodeOverrides)
@@ -266,20 +334,27 @@ export async function clearOption(
 	slug: string,
 	viewer: Viewer,
 	id: string,
-	scope?: WriteScope,
-	/** Reset this configuration's own value, rather than an override of it. */
+	/** Reset this configuration's own value, rather than the resolved target. */
 	configId?: number
 ): Promise<void> {
 	const { at, decl } = await locate(db, secret, slug, id)
 
-	if (configId != null) {
-		resolveWriteScope(viewer, "instance", decl.matrixSlot)
-		await configTarget(db, at, configId)
+	const target = resolveWriteScope(
+		viewer,
+		configId != null ? "config" : undefined,
+		decl.matrixSlot
+	)
+
+	if (target.scope === "config") {
+		const row =
+			configId != null
+				? await configTarget(db, at, configId)
+				: await instanceConfigTarget(db, at)
 		await db
 			.delete(schema.pipelineConfigValues)
 			.where(
 				and(
-					eq(schema.pipelineConfigValues.configId, configId),
+					eq(schema.pipelineConfigValues.configId, row.id),
 					eq(schema.pipelineConfigValues.nodeKey, decl.nodeKey),
 					eq(schema.pipelineConfigValues.slot, decl.slot),
 					eq(schema.pipelineConfigValues.path, decl.path)
@@ -287,8 +362,6 @@ export async function clearOption(
 			)
 		return
 	}
-
-	const target = resolveWriteScope(viewer, scope, decl.matrixSlot)
 
 	await db
 		.delete(schema.pipelineNodeOverrides)
@@ -321,7 +394,7 @@ export async function selectNamedConfig(
 	slug: string,
 	viewer: Viewer,
 	configId: number,
-	scope?: WriteScope
+	scope?: "session" | "instance"
 ): Promise<void> {
 	const at = await published(db, slug)
 	if (!at)
@@ -329,18 +402,17 @@ export async function selectNamedConfig(
 			`There is no published pipeline called '${slug}'.`
 		)
 
-	const target: WriteScope = scope ?? writeScopeFor(viewer)
+	// The two selection scopes left (ruled 2026-08-24): the session's own choice,
+	// else the instance default. From inside a session the selection is the
+	// session's; everywhere else it is the instance's, which is the admin's.
+	const target: "session" | "instance" =
+		scope ?? (viewer.sessionId != null ? "session" : "instance")
 	if (target === "instance" && !viewer.isAdmin)
 		throw new OptionNotWritableError(
 			"Only an administrator chooses the configuration for everyone on this instance."
 		)
 
-	const scopeId =
-		target === "instance"
-			? 0
-			: target === "chat"
-				? viewer.chatId!
-				: viewer.userId
+	const scopeId = target === "session" ? viewer.sessionId! : 0
 
 	const { selectConfig } = await import("$lib/server/pipelines/config/named")
 	await selectConfig(db, at.specId, target, scopeId, configId, viewer.userId)

@@ -40,7 +40,7 @@ const CASES = [
 	{
 		migration: "drizzle/0118_drop_dead_template_slots.sql",
 		pins: [
-			{ typeId: "core:query/chat-history", version: 1 },
+			{ typeId: "core:query/session-history", version: 1 },
 			{ typeId: "core:query/lorebook-triggers", version: 1 },
 			{ typeId: "core:provider/generate-text", version: 1 },
 			{ typeId: "core:task/render-entries", version: 1 }
@@ -97,7 +97,7 @@ const CASES = [
 			{ typeId: "core:query/world-lore", version: 1 },
 			{ typeId: "core:query/character-lore", version: 1 },
 			{ typeId: "core:query/vector-search", version: 1 },
-			{ typeId: "core:query/chat-history", version: 1 },
+			{ typeId: "core:query/session-history", version: 1 },
 			{ typeId: "core:task/rank-hybrid", version: 1 },
 			{ typeId: "core:task/rank-by-recency", version: 1 }
 		]
@@ -126,7 +126,10 @@ for (const { migration, pins } of CASES)
 	describe(`${migration.split("/")[1]} re-projects what it names`, () => {
 		it("the rows exist to begin with, so the rest is not vacuous", async () => {
 			for (const pin of pins)
-				expect(await rowFor(pin), `${pin.typeId}@${pin.version}`).toBeTruthy()
+				expect(
+					await rowFor(pin),
+					`${pin.typeId}@${pin.version}`
+				).toBeTruthy()
 		})
 
 		it("a stale row conflicts, which is the failure this migration exists for", async () => {
@@ -172,7 +175,9 @@ for (const { migration, pins } of CASES)
 				expect(r.inserted).toContain(`${pin.typeId}@${pin.version}`)
 				const row = await rowFor(pin)
 				expect(row).toBeTruthy()
-				expect(row!.contentHash).not.toBe("stale-from-the-previous-build")
+				expect(row!.contentHash).not.toBe(
+					"stale-from-the-previous-build"
+				)
 			}
 		})
 

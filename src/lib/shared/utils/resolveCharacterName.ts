@@ -8,7 +8,7 @@
  * as `""` rather than `null`/`undefined`, and `""` isn't nullish, so a `??`
  * check would keep the empty string instead of falling through to the
  * character's real name (see the historical bug this caused in
- * `src/routes/chats/[id]/+page.svelte`, `handleAvatarClick`).
+ * `src/routes/sessions/[id]/+page.svelte`, `handleAvatarClick`).
  *
  * New call sites that need a nickname-or-name string should use this helper
  * instead of re-deriving the fallback chain inline, so future edits (and
@@ -39,7 +39,7 @@ export function resolvePersonaName(
 }
 
 /**
- * Formats a user (eg. a chat guest) for display as "Display Name (@username)"
+ * Formats a user (eg. a session guest) for display as "Display Name (@username)"
  * — display name primary, username always shown as an @-handle annotation
  * alongside it. Falls back to just "@username" when no display name is set
  * (or it's identical to the username, which would otherwise render as a

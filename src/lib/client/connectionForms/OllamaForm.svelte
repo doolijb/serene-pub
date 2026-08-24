@@ -13,14 +13,14 @@
 		think: boolean
 		keepAliveNumber: number
 		keepAliveUnit: string
-		useChat: boolean
+		useSession: boolean
 	}
 
 	interface ExtraJson {
 		stream?: boolean
 		think?: boolean
 		keepAlive?: string
-		useChat?: boolean
+		useSession?: boolean
 	}
 
 	// Zod validation schema
@@ -113,7 +113,7 @@
 		return {
 			stream: extraJson.stream || false,
 			think: extraJson.think || false,
-			useChat: extraJson.useChat ?? true,
+			useSession: extraJson.useSession ?? true,
 			keepAliveNumber: extraJson.keepAlive
 				? parseInt(extraJson.keepAlive) || 300
 				: 300,
@@ -128,7 +128,7 @@
 			stream: fields.stream,
 			think: fields.think,
 			keepAlive: `${fields.keepAliveNumber}${fields.keepAliveUnit}`,
-			useChat: fields.useChat ?? true
+			useSession: fields.useSession ?? true
 		}
 	}
 
@@ -215,7 +215,7 @@
 			{/if}
 		</button>
 	</div>
-	{#if !ollamaFields?.useChat}
+	{#if !ollamaFields?.useSession}
 		<div class="mt-2 flex flex-col gap-1">
 			<label class="font-semibold" for="promptFormat">
 				Prompt Format
@@ -283,13 +283,14 @@
 			</div>
 			<section class="w-full space-y-4 pt-4">
 				<Switch
-					name="useChat"
-					checked={ollamaFields.useChat}
-					onCheckedChange={(e) => (ollamaFields!.useChat = e.checked)}
+					name="useSession"
+					checked={ollamaFields.useSession}
+					onCheckedChange={(e) =>
+						(ollamaFields!.useSession = e.checked)}
 					class="flex items-center justify-between gap-4"
 				>
 					<Switch.Label class="font-semibold">
-						Use Chat Mode
+						Use Session Mode
 					</Switch.Label>
 					<Switch.Control
 						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"

@@ -10,7 +10,7 @@
 import { compile, spec, slot } from "@serene-pub/sdk"
 import * as C from "@serene-pub/contracts"
 
-/** The spec a chat turn runs. */
+/** The spec a session turn runs. */
 export const RESPOND_SPEC_ID = "core:spec/respond"
 // 1.1.0: one authored prompt, not three. The context builder owns the
 // `prompts` slot; assemble and generate read it by reference (13 §12 finding
@@ -48,7 +48,7 @@ export const RESPOND_SPEC_ID = "core:spec/respond"
 // the configurable share. A new version because the wiring changed.
 // 1.7.0: the four reads move into an `async` block and run together. They were
 // sequential only because unblocked nodes are, never because the data required
-// it — all four take `input.chatScope` and none reads another's output, and
+// it — all four take `input.sessionScope` and none reads another's output, and
 // `graphContext` alone makes three round trips.
 //
 // They stay four distinct nodes. Concurrency is how they run, not a reason to
@@ -80,7 +80,16 @@ export const RESPOND_SPEC_ID = "core:spec/respond"
 // kept a `history` band and `assemble` kept asking for history blocks. No test
 // caught it, because the parity corpus renders through `lorebook-triggers@1`
 // rather than through this document. The corpus mirrors the three lanes now.
-export const RESPOND_VERSION = "1.10.0"
+// 1.11.0: turn-taking becomes a node (19 §5, U-C4). Selection used to happen
+// before the run existed — the one decision per turn the receipt could not
+// explain. The `speaker` node honors the trigger's explicit pick and records
+// it; context and generation take their speaker from its output, so the
+// prompt's voice and the stop-string exclusion follow the same recorded
+// decision. Pinned to `turn-manual` because the socket still pre-picks every
+// turn — the node passes the pick through and today's bytes are unchanged.
+// U-C5 retires the pre-pick, and swapping this pin to `turn-round-robin` is
+// then a version bump, not a rewiring.
+export const RESPOND_VERSION = "1.12.0"
 
 /**
  * Core's answer-a-message pipeline.
@@ -98,7 +107,7 @@ export const respondSpec = () =>
 			/**
 			 * The four reads, run together.
 			 *
-			 * Every one of them takes `input.chatScope` and none consumes
+			 * Every one of them takes `input.sessionScope` and none consumes
 			 * another's output, so nothing about the data required them to
 			 * happen in turn — but unblocked nodes execute sequentially, so a
 			 * turn waited for all four in series. `graphContext` alone makes
@@ -118,7 +127,7 @@ export const respondSpec = () =>
 				b
 					.chain("history", (c) =>
 						c.query("read", ($) =>
-							C.chatHistory.v1({ scope: $.input.chatScope })
+							C.sessionHistory.v1({ scope: $.input.sessionScope })
 						)
 					)
 					// Two lore lanes, not one. World lore and character lore
@@ -127,13 +136,13 @@ export const respondSpec = () =>
 					// character" unsayable.
 					.chain("worldLore", (c) =>
 						c.query("read", ($) =>
-							C.worldLore.v1({ scope: $.input.chatScope })
+							C.worldLore.v1({ scope: $.input.sessionScope })
 						)
 					)
 					.chain("characterLore", (c) =>
 						c.query("read", ($) =>
 							C.characterLore.v1({
-								scope: $.input.chatScope
+								scope: $.input.sessionScope
 							})
 						)
 					)
@@ -144,13 +153,13 @@ export const respondSpec = () =>
 					.chain("historyEntries", (c) =>
 						c.query("read", ($) =>
 							C.historyEntries.v1({
-								scope: $.input.chatScope
+								scope: $.input.sessionScope
 							})
 						)
 					)
 					.chain("cast", (c) =>
 						c.query("read", ($) =>
-							C.chatCast.v1({ scope: $.input.chatScope })
+							C.sessionCast.v1({ scope: $.input.sessionScope })
 						)
 					)
 					// Optional by construction: an install that never opened
@@ -168,21 +177,35 @@ export const respondSpec = () =>
 					.chain("relationshipsPerspectives", (c) =>
 						c.query("read", ($) =>
 							C.relationshipsPerspectives.v1({
-								scope: $.input.chatScope
+								scope: $.input.sessionScope
 							})
 						)
 					)
 					.chain("relationshipsKnown", (c) =>
 						c.query("read", ($) =>
 							C.relationshipsKnown.v1({
-								scope: $.input.chatScope
+								scope: $.input.sessionScope
 							})
 						)
 					)
 			)
+			/**
+			 * Who speaks (19 §5). The trigger's pick arrives on
+			 * `input.characterId` and always wins; the strategy decides only
+			 * when the trigger did not. `turn-manual` never decides — see the
+			 * 1.11.0 note for why that is today's correct pin.
+			 */
+			.task("speaker", ($) =>
+				C.turnManual.v1({
+					cast: $.gather.cast.read.cast,
+					messages: $.gather.history.read.messages,
+					characterId: $.input.characterId
+				})
+			)
 			.task("context", ($) =>
 				C.buildTemplateContext.v1({
 					cast: $.gather.cast.read.cast,
+					currentCharacterId: $.speaker.characterId,
 					relationshipsPerspectives:
 						$.gather.relationshipsPerspectives.read
 							.relationshipsPerspectives,
@@ -260,6 +283,9 @@ export const respondSpec = () =>
 			.provider("generate", ($) =>
 				C.generateText.v1({
 					context: $.prompt.context,
+					// The stop-string exclusion follows the speaker node's
+					// output — the payload-wins seam in the host (19 §5).
+					currentCharacterId: $.speaker.characterId,
 					// Shared too, so the panel does not offer a third copy of
 					// the same authored text on the sending node.
 					prompts: slot.prompts({ node: "context" })

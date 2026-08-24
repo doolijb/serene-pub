@@ -12,9 +12,9 @@
 import { afterEach, describe, expect, test } from "vitest"
 import { activityStore } from "./activityStore"
 
-function baseParams(overrides: Partial<Parameters<
-	typeof activityStore.startCompile
->[0]> = {}) {
+function baseParams(
+	overrides: Partial<Parameters<typeof activityStore.startCompile>[0]> = {}
+) {
 	return {
 		userId: 1,
 		historyEntryId: 100,

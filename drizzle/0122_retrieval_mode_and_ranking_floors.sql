@@ -17,7 +17,7 @@
 --     consult it. If only the keyword node carried the mode, an undecided
 --     entry would be keyword-ineligible and vector-eligible at once — the two
 --     arms disagreeing about the same entry.
---   * `core:query/chat-history` lost `weight` and `minInclude`. Both were
+--   * `core:query/session-history` lost `weight` and `minInclude`. Both were
 --     answers to "how does history fare against everything else", which a node
 --     that fetches rows cannot see enough to answer: the weight sat beside
 --     `rank`'s `share` free to disagree with it, and the floor was the only one
@@ -38,7 +38,7 @@ DELETE FROM "pipeline_type_registry" WHERE ("type_id", "version") IN (
 	('core:query/world-lore', 1),
 	('core:query/character-lore', 1),
 	('core:query/vector-search', 1),
-	('core:query/chat-history', 1),
+	('core:query/session-history', 1),
 	('core:task/rank-hybrid', 1),
 	('core:task/rank-by-recency', 1)
 );

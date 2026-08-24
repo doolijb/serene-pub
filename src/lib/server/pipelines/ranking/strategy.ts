@@ -49,7 +49,11 @@ const isStrategy = (v: unknown): v is RetrievalStrategy =>
  */
 export const strategyOf = (
 	entry: { retrievalStrategy?: string | null },
-	fallback: RetrievalStrategy | string | null | undefined = DEFAULT_RETRIEVAL_STRATEGY
+	fallback:
+		| RetrievalStrategy
+		| string
+		| null
+		| undefined = DEFAULT_RETRIEVAL_STRATEGY
 ): RetrievalStrategy =>
 	isStrategy(entry.retrievalStrategy)
 		? entry.retrievalStrategy

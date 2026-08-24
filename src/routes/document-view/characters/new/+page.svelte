@@ -57,10 +57,7 @@
 		socket.on("characters:create:error", handleCharactersCreateError)
 		return () => {
 			socket.off("characters:create", handleCharactersCreate)
-			socket.off(
-				"characters:create:error",
-				handleCharactersCreateError
-			)
+			socket.off("characters:create:error", handleCharactersCreateError)
 		}
 	})
 </script>

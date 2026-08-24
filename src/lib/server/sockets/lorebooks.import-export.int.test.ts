@@ -24,9 +24,10 @@ vi.mock("$lib/server/db", async () => {
 // no-op for every other test in this file.
 const MID_REBUILD_FAILURE_MARKER = "TRIGGER_MID_TRANSACTION_FAILURE"
 vi.mock("$lib/server/utils/lorebookImportMapper", async (importOriginal) => {
-	const actual = await importOriginal<
-		typeof import("$lib/server/utils/lorebookImportMapper")
-	>()
+	const actual =
+		await importOriginal<
+			typeof import("$lib/server/utils/lorebookImportMapper")
+		>()
 	return {
 		...actual,
 		mapLorebookEntryToWorldLoreEntry: (entry: any, position: number) => {
@@ -523,12 +524,12 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		expect(
 			exportedData.extensions.serenepub.bindings[0].characterLocalId
 		).toBeNull()
-		expect(exportedData.extensions.serenepub.narrativeGraph.nodes).toHaveLength(
-			1
-		)
-		expect(exportedData.extensions.serenepub.narrativeGraph.nodes[0].name).toBe(
-			"Scoped Out Char"
-		)
+		expect(
+			exportedData.extensions.serenepub.narrativeGraph.nodes
+		).toHaveLength(1)
+		expect(
+			exportedData.extensions.serenepub.narrativeGraph.nodes[0].name
+		).toBe("Scoped Out Char")
 
 		await testDb
 			.delete(schema.lorebooks)
@@ -875,11 +876,10 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			// The original content must still be intact — nothing partially
 			// committed despite the failure happening mid-rebuild, after the
 			// deletes had already run inside the same transaction.
-			const survivingEntries = await testDb.query.worldLoreEntries.findMany(
-				{
+			const survivingEntries =
+				await testDb.query.worldLoreEntries.findMany({
 					where: (e, { eq }) => eq(e.lorebookId, lorebook.id)
-				}
-			)
+				})
 			expect(survivingEntries).toHaveLength(1)
 			expect(survivingEntries[0].content).toBe(
 				"Must survive a failed overwrite"

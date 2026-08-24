@@ -11,8 +11,11 @@
  * they're computed here and handed to the template as data, not logic.
  */
 
-import type { ProcessedChatMessage } from "$lib/server/pipelines/prompt/contentProcessors"
-import type { PostHistoryDiag, PostHistoryTemplateContext } from "$lib/server/pipelines/prompt/promptTypes"
+import type { ProcessedSessionMessage } from "$lib/server/pipelines/prompt/contentProcessors"
+import type {
+	PostHistoryDiag,
+	PostHistoryTemplateContext
+} from "$lib/server/pipelines/prompt/promptTypes"
 
 export async function resolvePostHistoryContext({
 	renderMessages,
@@ -23,8 +26,8 @@ export async function resolvePostHistoryContext({
 	postHistoryTokenTrigger,
 	tokenCounter
 }: {
-	/** [...chatMessages].reverse() — oldest-first, seed placeholder last. */
-	renderMessages: ProcessedChatMessage[]
+	/** [...sessionMessages].reverse() — oldest-first, seed placeholder last. */
+	renderMessages: ProcessedSessionMessage[]
 	/** Prompt config's own reinforcement text — gated by postHistoryTokenTrigger below. */
 	instructions: string | undefined
 	/** Character's own authored reinforcement text — always rendered when populated. */

@@ -821,10 +821,7 @@ function emitDownloadProgress() {
 // directly) are never accidentally throttled away.
 function maybeEmitDownloadProgress(filename: string) {
 	const now = Date.now()
-	if (
-		now - (lastProgressEmitAt[filename] ?? 0) <
-		PROGRESS_EMIT_THROTTLE_MS
-	) {
+	if (now - (lastProgressEmitAt[filename] ?? 0) < PROGRESS_EMIT_THROTTLE_MS) {
 		return
 	}
 	lastProgressEmitAt[filename] = now
@@ -944,7 +941,11 @@ function resolveHuggingFaceDownload(
 							reject(new Error("Invalid redirect URL"))
 							return
 						}
-						if (!isAllowedHuggingFaceHost(parsedRedirectUrl.hostname)) {
+						if (
+							!isAllowedHuggingFaceHost(
+								parsedRedirectUrl.hostname
+							)
+						) {
 							res.resume()
 							reject(
 								new Error(
@@ -1015,16 +1016,17 @@ async function downloadFileInParallelChunks(opts: {
 	registerRequest: (req: import("http").ClientRequest) => void
 	isAborted: () => boolean
 }): Promise<void> {
-	const { resolvedUrl, total, destPath, filename, registerRequest, isAborted } =
-		opts
-	const chunkCount = Math.max(
-		1,
-		Math.ceil(total / PARALLEL_CHUNK_SIZE_BYTES)
-	)
+	const {
+		resolvedUrl,
+		total,
+		destPath,
+		filename,
+		registerRequest,
+		isAborted
+	} = opts
+	const chunkCount = Math.max(1, Math.ceil(total / PARALLEL_CHUNK_SIZE_BYTES))
 	const lib = resolvedUrl.startsWith("https") ? https : http
-	const AgentCtor = resolvedUrl.startsWith("https")
-		? https.Agent
-		: http.Agent
+	const AgentCtor = resolvedUrl.startsWith("https") ? https.Agent : http.Agent
 	const agent = new AgentCtor({
 		keepAlive: true,
 		maxSockets: MAX_PARALLEL_CHUNKS_PER_DOWNLOAD
@@ -1088,9 +1090,7 @@ async function downloadFileInParallelChunks(opts: {
 			MAX_PARALLEL_CHUNKS_PER_DOWNLOAD,
 			chunkCount
 		)
-		await Promise.all(
-			Array.from({ length: workerCount }, () => worker())
-		)
+		await Promise.all(Array.from({ length: workerCount }, () => worker()))
 	} finally {
 		await fileHandle.close().catch(() => {})
 		agent.destroy()
@@ -1265,10 +1265,12 @@ export const koboldCppDownloadModelHandler: Handler<
 						// The underlying request was already registered for
 						// abort-tracking inside resolveHuggingFaceDownload's
 						// probe() — no need to register it again here.
-						const res = (resolved as Extract<
-							ResolvedDownload,
-							{ kind: "fallback" }
-						>).initialResponse
+						const res = (
+							resolved as Extract<
+								ResolvedDownload,
+								{ kind: "fallback" }
+							>
+						).initialResponse
 						const writer = fs.createWriteStream(destPath)
 						res.on("data", (chunk: Buffer) => {
 							activeDownloads[filename].downloaded += chunk.length
@@ -1627,9 +1629,7 @@ export const koboldCppDownloadBinary: Handler<
 		// list, an admin's session (or a forged socket emission) could point
 		// the server at an arbitrary URL, which it would then download,
 		// chmod +x, and (via the auto-start below) execute.
-		const { variants } = await binaryManager.listVariants(
-			params.releaseTag
-		)
+		const { variants } = await binaryManager.listVariants(params.releaseTag)
 		const variant = variants.find((v) => v.name === params.assetName)
 		if (!variant) {
 			throw new Error(
@@ -1915,8 +1915,9 @@ export function registerKoboldCppHandlers(
 	// rather than the most recently (re)connected one silently taking over.
 	if (socket.user?.isAdmin) {
 		const userId: number = socket.user.id
-		const downloadEmit = (data: Sockets.KoboldCPP.DownloadProgress.Response) =>
-			emitToUser("koboldcpp:downloadProgress", data)
+		const downloadEmit = (
+			data: Sockets.KoboldCPP.DownloadProgress.Response
+		) => emitToUser("koboldcpp:downloadProgress", data)
 		const binaryEmit = (d: any) =>
 			emitToUser("koboldcpp:binaryDownloadProgress", d)
 		const statusEmit = (s: any) =>

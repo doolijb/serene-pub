@@ -48,7 +48,10 @@ export async function findOrCreateTagId(
 		// other request just committed instead of surfacing the conflict.
 		const existing2 = await dbOrTx.query.tags.findFirst({
 			where: (t, { and, eq, sql }) =>
-				and(eq(t.userId, userId), sql`lower(${t.name}) = lower(${name})`)
+				and(
+					eq(t.userId, userId),
+					sql`lower(${t.name}) = lower(${name})`
+				)
 		})
 		if (existing2) return existing2.id
 		throw e

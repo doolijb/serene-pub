@@ -35,10 +35,7 @@ describe("userSettings — unique constraint on userId", () => {
 
 	test("concurrent onConflictDoNothing() inserts for the same new user converge to exactly one row", async () => {
 		const testDb = await makeTestDb()
-		const user = await createTestUser(
-			testDb,
-			"usersettings-race-user"
-		)
+		const user = await createTestUser(testDb, "usersettings-race-user")
 
 		// Simulates the actual race: two concurrent "find or create" calls
 		// both see no existing row (skipped here — the point under test is

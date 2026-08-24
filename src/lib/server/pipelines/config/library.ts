@@ -21,7 +21,10 @@
 
 import { asc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { declarations, humanizeTypeId } from "$lib/server/pipelines/config/panel"
+import {
+	declarations,
+	humanizeTypeId
+} from "$lib/server/pipelines/config/panel"
 import { getVariable } from "@serene-pub/sdk"
 import { poolKeyFor } from "$lib/server/pipelines/entities/contextTemplateDefaults"
 

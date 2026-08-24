@@ -42,7 +42,9 @@ beforeAll(async () => {
 	db = dbModule.db as unknown as TestDb
 	await (await import("$lib/server/db/defaults")).sync()
 
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(db as any)
 }, 180_000)
 
@@ -118,7 +120,9 @@ describe("every provider has a dispatch path", () => {
 		)
 		expect(ids.size).toBeGreaterThan(0)
 
-		const { STEP_TYPES_FOR_TEST } = await import("$lib/server/pipelines/runtime/host")
+		const { STEP_TYPES_FOR_TEST } = await import(
+			"$lib/server/pipelines/runtime/host"
+		)
 		const dispatchable = new Set([
 			...STEP_TYPES_FOR_TEST,
 			"core:provider/generate-text",
@@ -138,7 +142,9 @@ describe("the summarize batching", () => {
 		// The 1500-token reserve is the legacy headroom for the prompt template
 		// and the draft written back. Without it a batch sized exactly to the
 		// window leaves nowhere for the answer to go.
-		const { coreBindings } = await import("$lib/server/pipelines/runtime/bindings")
+		const { coreBindings } = await import(
+			"$lib/server/pipelines/runtime/bindings"
+		)
 		const binding = coreBindings()["core:task/batch-messages@1"]!
 
 		const messages = Array.from({ length: 200 }, (_, i) => ({
@@ -157,10 +163,12 @@ describe("the summarize batching", () => {
 		expect(batches.flat().length).toBe(messages.length)
 	})
 
-	it("produces one empty batch rather than none for an empty chat", async () => {
+	it("produces one empty batch rather than none for an empty session", async () => {
 		// "There is no summary" reads as a failure; "there was nothing to
 		// summarize" is the truth, and a map over zero batches cannot say it.
-		const { coreBindings } = await import("$lib/server/pipelines/runtime/bindings")
+		const { coreBindings } = await import(
+			"$lib/server/pipelines/runtime/bindings"
+		)
 		const binding = coreBindings()["core:task/batch-messages@1"]!
 		const result: any = await binding({ messages: [] }, {} as any)
 		const batches = result.value?.batches ?? result.batches

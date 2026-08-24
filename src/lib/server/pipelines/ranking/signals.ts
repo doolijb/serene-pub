@@ -26,7 +26,7 @@ export interface KeyedEntry {
 	/**
 	 * Typed as a plain string because this arrives straight off a database
 	 * column. An unrecognised value falls back to today's behaviour rather than
-	 * throwing — a bad row should not take a chat down, and substring is the
+	 * throwing — a bad row should not take a session down, and substring is the
 	 * mode every existing entry is already using.
 	 */
 	matchMode?: string | null
@@ -180,7 +180,7 @@ export function buildTermFreq(text: string): Map<string, number> {
  * weighted by term rarity.
  *
  * The `tf` is the term's frequency in the guaranteed window, not in the entry.
- * That distinction is the whole signal: this asks "is the chat talking about
+ * That distinction is the whole signal: this asks "is the session talking about
  * this entry's subject right now", and an entry-internal frequency asks "is this
  * entry's own wording distinctive", which is a property of the entry alone and
  * says nothing about whether it belongs in this turn's prompt.
@@ -215,7 +215,7 @@ export function tfidfSignal(
 // ── Recency and shape ───────────────────────────────────────────────────────
 
 /**
- * How recently this entry was last referenced anywhere in the chat.
+ * How recently this entry was last referenced anywhere in the session.
  *
  * `exp(-0.01 · (total - lastIndex))` — a slow decay, so an entry mentioned 50
  * messages ago still scores ~0.6. That is deliberate in the original and worth

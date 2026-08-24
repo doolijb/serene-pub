@@ -1,7 +1,7 @@
 /**
  * 2a: scenes:update used to `.set(params.scene)` wholesale, with ownership
  * checked only against the scene's *existing* lorebookId — a client could
- * redirect their own scene into another user's lorebook/chat/history entry
+ * redirect their own scene into another user's lorebook/session/history entry
  * by including a foreign id in the payload, with no re-validation
  * (sceneCreateHandler validates its target ids on insert; this handler was
  * the one outlier that didn't). Now an explicit allowlist.
@@ -49,7 +49,7 @@ function fakeSocket(userId: number) {
 const noopEmit = () => {}
 
 describe("scenes:update — scoping (PGlite integration)", () => {
-	test("ignores a foreign lorebookId/chatId/historyEntryId in the payload while applying allowed fields", async () => {
+	test("ignores a foreign lorebookId/sessionId/historyEntryId in the payload while applying allowed fields", async () => {
 		const { sceneUpdateHandler } = await import("./scenes")
 		const owner = await makeUser("scene-scope-owner")
 		const attacker = await makeUser("scene-scope-attacker")

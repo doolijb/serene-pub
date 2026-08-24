@@ -11,7 +11,7 @@ function item<T>(
 	}
 ): LLMQueueItemInput<T> {
 	return {
-		taskType: "chat",
+		taskType: "session",
 		connectionName: "test-connection",
 		samplingName: "test-sampling",
 		...overrides

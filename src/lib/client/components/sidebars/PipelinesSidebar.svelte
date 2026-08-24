@@ -2,7 +2,7 @@
 	/**
 	 * The pipeline view (05 §0a) — the panel that eventually replaces Prompt Configs.
 	 *
-	 * "A flat list of the things SP does for you — replying in chat, summarizing,
+	 * "A flat list of the things SP does for you — replying in session, summarizing,
 	 * extracting lorebook entries — each with a handful of options."
 	 *
 	 * ## Why there is no field list in this file
@@ -25,7 +25,7 @@
 	 * ## Scope is a fact, not a question
 	 *
 	 * The server decides where an edit lands from where the panel was opened —
-	 * user scope from the list, chat scope from inside a chat you own (05 §0a) —
+	 * user scope from the list, session scope from inside a session you own (05 §0a) —
 	 * and says so in `writeScope`. This shows it rather than asking, because a
 	 * scope picker asks the user to understand the resolution chain before they
 	 * can change a prompt.
@@ -41,11 +41,11 @@
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
-		/** Set when the panel is opened from inside a chat. */
-		chatId?: number
+		/** Set when the panel is opened from inside a session. */
+		sessionId?: number
 	}
 
-	let { onclose = $bindable(), chatId }: Props = $props()
+	let { onclose = $bindable(), sessionId }: Props = $props()
 
 	const socket = useTypedSocket()
 	const userCtx: { user: SelectUser } = getContext("userCtx")
@@ -123,7 +123,7 @@
 	<PanelNavHeader title={selectedName} onBack={back} />
 
 	<div class="px-3 pb-2">
-		<PipelineConfigOptions {slug} {chatId} />
+		<PipelineConfigOptions {slug} {sessionId} />
 	</div>
 
 	{#if isAdmin}

@@ -75,7 +75,7 @@ Story relationships:
 
 {{/systemBlock}}
 
-{{#each chatMessages as |chatMessage msgIndex|}}
+{{#each sessionMessages as |sessionMessage msgIndex|}}
 {{#with ../postHistory}}
 {{#if (and (eq msgIndex targetIndex) hasContent)}}
 {{#systemBlock}}
@@ -113,7 +113,8 @@ Example dialogue:
 {{/each}}`
 
 function block(card: Card): BlockCard {
-	if (card.kind !== "block") throw new Error(`expected block, got ${card.kind}`)
+	if (card.kind !== "block")
+		throw new Error(`expected block, got ${card.kind}`)
 	return card
 }
 
@@ -123,12 +124,17 @@ describe("parseContextTemplate — real Default template", () => {
 		expect(parsed.parseError).toBeNull()
 	})
 
-	test("root level has the outer systemBlock and the chatMessages each-loop as block cards", () => {
+	test("root level has the outer systemBlock and the sessionMessages each-loop as block cards", () => {
 		const parsed = parseContextTemplate(DEFAULT_TEMPLATE)
-		const rootBlocks = parsed.cards.filter((c) => c.kind === "block") as BlockCard[]
-		expect(rootBlocks.map((c) => c.helperName)).toEqual(["systemBlock", "each"])
+		const rootBlocks = parsed.cards.filter(
+			(c) => c.kind === "block"
+		) as BlockCard[]
+		expect(rootBlocks.map((c) => c.helperName)).toEqual([
+			"systemBlock",
+			"each"
+		])
 		expect(rootBlocks[1].tagSource).toBe(
-			"chatMessages as |chatMessage msgIndex|"
+			"sessionMessages as |sessionMessage msgIndex|"
 		)
 		expect(rootBlocks[1].isRoleWrapper).toBe(false)
 		expect(rootBlocks[0].isRoleWrapper).toBe(true)
@@ -137,7 +143,9 @@ describe("parseContextTemplate — real Default template", () => {
 	test("the systemBlock's children include every {{#if field}} as its own block card with the field exposed as tagSource", () => {
 		const parsed = parseContextTemplate(DEFAULT_TEMPLATE)
 		const systemBlock = block(
-			parsed.cards.find((c) => c.kind === "block" && c.helperName === "systemBlock")!
+			parsed.cards.find(
+				(c) => c.kind === "block" && c.helperName === "systemBlock"
+			)!
 		)
 		const ifCards = systemBlock.children.filter(
 			(c): c is BlockCard => c.kind === "block" && c.helperName === "if"
@@ -157,22 +165,30 @@ describe("parseContextTemplate — real Default template", () => {
 	test("the previously-invisible each > with > if(and(eq,hasContent)) chain is now fully represented", () => {
 		const parsed = parseContextTemplate(DEFAULT_TEMPLATE)
 		const eachCard = block(
-			parsed.cards.find((c) => c.kind === "block" && c.helperName === "each")!
+			parsed.cards.find(
+				(c) => c.kind === "block" && c.helperName === "each"
+			)!
 		)
 		const withCard = block(
-			eachCard.children.find((c) => c.kind === "block" && c.helperName === "with")!
+			eachCard.children.find(
+				(c) => c.kind === "block" && c.helperName === "with"
+			)!
 		)
 		expect(withCard.tagSource).toBe("../postHistory")
 
 		const ifCard = block(
-			withCard.children.find((c) => c.kind === "block" && c.helperName === "if")!
+			withCard.children.find(
+				(c) => c.kind === "block" && c.helperName === "if"
+			)!
 		)
 		expect(ifCard.tagSource).toBe(
 			"(and (eq msgIndex targetIndex) hasContent)"
 		)
 
 		const nestedSystemBlock = block(
-			ifCard.children.find((c) => c.kind === "block" && c.helperName === "systemBlock")!
+			ifCard.children.find(
+				(c) => c.kind === "block" && c.helperName === "systemBlock"
+			)!
 		)
 		const nestedIfs = nestedSystemBlock.children.filter(
 			(c): c is BlockCard => c.kind === "block" && c.helperName === "if"
@@ -187,15 +203,22 @@ describe("parseContextTemplate — real Default template", () => {
 	test("{{{name}}}: {{{message}}} stays one text card, not fragmented into separate variable cards", () => {
 		const parsed = parseContextTemplate(DEFAULT_TEMPLATE)
 		const eachCard = block(
-			parsed.cards.find((c) => c.kind === "block" && c.helperName === "each")!
+			parsed.cards.find(
+				(c) => c.kind === "block" && c.helperName === "each"
+			)!
 		)
 		const assistantIf = block(
 			eachCard.children.find(
-				(c) => c.kind === "block" && c.helperName === "if" && c.tagSource.includes("assistant")
+				(c) =>
+					c.kind === "block" &&
+					c.helperName === "if" &&
+					c.tagSource.includes("assistant")
 			)!
 		)
 		const assistantBlockCard = block(
-			assistantIf.children.find((c) => c.kind === "block" && c.helperName === "assistantBlock")!
+			assistantIf.children.find(
+				(c) => c.kind === "block" && c.helperName === "assistantBlock"
+			)!
 		)
 		expect(assistantBlockCard.children).toHaveLength(1)
 		expect(assistantBlockCard.children[0].kind).toBe("text")
@@ -207,16 +230,23 @@ describe("parseContextTemplate — real Default template", () => {
 	test("a standalone {{{worldLore}}} is its own variable card, separate from the surrounding label/fence text", () => {
 		const parsed = parseContextTemplate(DEFAULT_TEMPLATE)
 		const systemBlock = block(
-			parsed.cards.find((c) => c.kind === "block" && c.helperName === "systemBlock")!
+			parsed.cards.find(
+				(c) => c.kind === "block" && c.helperName === "systemBlock"
+			)!
 		)
 		const worldLoreIf = block(
 			systemBlock.children.find(
-				(c) => c.kind === "block" && c.helperName === "if" && c.tagSource === "worldLore"
+				(c) =>
+					c.kind === "block" &&
+					c.helperName === "if" &&
+					c.tagSource === "worldLore"
 			)!
 		)
 		const kinds = worldLoreIf.children.map((c) => c.kind)
 		expect(kinds).toEqual(["text", "variable", "text"])
-		expect((worldLoreIf.children[1] as any).expressionSource).toBe("worldLore")
+		expect((worldLoreIf.children[1] as any).expressionSource).toBe(
+			"worldLore"
+		)
 		expect((worldLoreIf.children[1] as any).escaped).toBe(false)
 	})
 
@@ -225,7 +255,13 @@ describe("parseContextTemplate — real Default template", () => {
 		function collectAll(cards: Card[]): Card[] {
 			return cards.flatMap((c) =>
 				c.kind === "block"
-					? [c, ...collectAll(c.children), ...(c.elseChildren ? collectAll(c.elseChildren) : [])]
+					? [
+							c,
+							...collectAll(c.children),
+							...(c.elseChildren
+								? collectAll(c.elseChildren)
+								: [])
+						]
 					: [c]
 			)
 		}
@@ -249,22 +285,31 @@ describe("standalone vs inline mustache classification", () => {
 	})
 
 	test("two mustaches sharing one line merge into a single text card", () => {
-		const parsed = parseContextTemplate(`{{#if x}}\n{{{a}}}: {{{b}}}\n{{/if}}`)
+		const parsed = parseContextTemplate(
+			`{{#if x}}\n{{{a}}}: {{{b}}}\n{{/if}}`
+		)
 		const ifCard = block(parsed.cards[0])
 		expect(ifCard.children.map((c) => c.kind)).toEqual(["text"])
 		expect((ifCard.children[0] as any).content).toBe("{{{a}}}: {{{b}}}")
 	})
 
 	test("a mustache with trailing prose on the same line is inline, not standalone", () => {
-		const parsed = parseContextTemplate(`{{#if x}}\n{{{a}}} trailing text\n{{/if}}`)
+		const parsed = parseContextTemplate(
+			`{{#if x}}\n{{{a}}} trailing text\n{{/if}}`
+		)
 		const ifCard = block(parsed.cards[0])
 		expect(ifCard.children.map((c) => c.kind)).toEqual(["text"])
 	})
 
 	test("consecutive standalone mustaches on separate lines each get their own variable card", () => {
-		const parsed = parseContextTemplate(`{{#if x}}\n{{{a}}}\n{{{b}}}\n{{/if}}`)
+		const parsed = parseContextTemplate(
+			`{{#if x}}\n{{{a}}}\n{{{b}}}\n{{/if}}`
+		)
 		const ifCard = block(parsed.cards[0])
-		expect(ifCard.children.map((c) => c.kind)).toEqual(["variable", "variable"])
+		expect(ifCard.children.map((c) => c.kind)).toEqual([
+			"variable",
+			"variable"
+		])
 	})
 
 	test("escaped {{x}} vs unescaped {{{x}}} is preserved", () => {
@@ -277,7 +322,9 @@ describe("standalone vs inline mustache classification", () => {
 
 describe("text card paragraph splitting", () => {
 	test("consecutive non-blank lines merge into one text card", () => {
-		const parsed = parseContextTemplate(`{{#if x}}\nLine one\nLine two\n{{/if}}`)
+		const parsed = parseContextTemplate(
+			`{{#if x}}\nLine one\nLine two\n{{/if}}`
+		)
 		const ifCard = block(parsed.cards[0])
 		expect(ifCard.children).toHaveLength(1)
 		expect((ifCard.children[0] as any).content).toBe("Line one\nLine two")
@@ -333,7 +380,12 @@ describe("mutation functions", () => {
 		const template = `{{#if x}}\n{{{v}}}\n{{/if}}`
 		const parsed = parseContextTemplate(template)
 		const varCard = block(parsed.cards[0]).children[0]
-		const { template: result } = updateVariableCard(template, varCard, "v", true)
+		const { template: result } = updateVariableCard(
+			template,
+			varCard,
+			"v",
+			true
+		)
 		expect(result).toContain("{{v}}")
 		expect(result).not.toContain("{{{v}}}")
 	})
@@ -695,14 +747,16 @@ describe("lintContextTemplate", () => {
 	})
 
 	test("flags an unrecognized helper name at the top level", () => {
-		const parsed = parseContextTemplate(`{{#esch chatMessages}}\n{{/esch}}`)
+		const parsed = parseContextTemplate(
+			`{{#esch sessionMessages}}\n{{/esch}}`
+		)
 		const issues = lintContextTemplate(parsed.cards)
 		expect(issues).toHaveLength(1)
 		expect(issues[0].message).toContain("esch")
 	})
 
 	test("flags an unrecognized helper name nested inside an each/with (helper checks aren't scope-limited)", () => {
-		const template = `{{#each chatMessages as |m i|}}\n{{#bogusHelper}}\n{{/bogusHelper}}\n{{/each}}`
+		const template = `{{#each sessionMessages as |m i|}}\n{{#bogusHelper}}\n{{/bogusHelper}}\n{{/each}}`
 		const parsed = parseContextTemplate(template)
 		const issues = lintContextTemplate(parsed.cards)
 		expect(issues.some((i) => i.message.includes("bogusHelper"))).toBe(true)
@@ -726,7 +780,7 @@ describe("lintContextTemplate", () => {
 	})
 
 	test("does not flag field references inside an each block's own scope (block params)", () => {
-		const template = `{{#each chatMessages as |chatMessage msgIndex|}}\n{{#if (eq role "assistant")}}\nx\n{{/if}}\n{{/each}}`
+		const template = `{{#each sessionMessages as |sessionMessage msgIndex|}}\n{{#if (eq role "assistant")}}\nx\n{{/if}}\n{{/each}}`
 		const parsed = parseContextTemplate(template)
 		expect(lintContextTemplate(parsed.cards)).toEqual([])
 	})

@@ -2,12 +2,12 @@
  * Round-12 audit fix (MEDIUM): persistGenerationErrorRow broadcast the raw
  * upstream provider error (friendlyErrorFromUnknown(err) — verbatim
  * err.message, eg. "HTTP 401: Unauthorized" or a KoboldCPP model-load
- * failure with an embedded response body) to the entire chat room,
- * including guests who have no relationship to the chat owner's LLM
+ * failure with an embedded response body) to the entire session room,
+ * including guests who have no relationship to the session owner's LLM
  * connection/credentials. The stored DB row keeps the real error (the
  * owner needs it for troubleshooting); only the guest-facing broadcast is
  * now redacted to a generic message via the new
- * broadcastToChatUsersVaryingByRole helper.
+ * broadcastToSessionUsersVaryingByRole helper.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -59,26 +59,24 @@ function makeIoSpy() {
 }
 
 describe("persistGenerationErrorRow — guest-facing error redaction (Round-12 audit fix, PGlite integration)", () => {
-	test("the chat owner receives the real provider error; a guest receives a generic message", async () => {
-		const { persistGenerationErrorRow } = await import(
-			"./generationStatus"
-		)
+	test("the session owner receives the real provider error; a guest receives a generic message", async () => {
+		const { persistGenerationErrorRow } = await import("./generationStatus")
 
 		const owner = await makeUser("genstatus-redact-owner")
 		const guest = await makeUser("genstatus-redact-guest")
-		const [chat] = await testDb
-			.insert(schema.chats)
+		const [session] = await testDb
+			.insert(schema.sessions)
 			.values({ userId: owner.id, isGroup: true })
 			.returning()
-		await testDb.insert(schema.chatGuests).values({
-			chatId: chat.id,
+		await testDb.insert(schema.sessionGuests).values({
+			sessionId: session.id,
 			userId: guest.id,
 			isPlayer: true
 		})
 		const [message] = await testDb
-			.insert(schema.chatMessages)
+			.insert(schema.sessionMessages)
 			.values({
-				chatId: chat.id,
+				sessionId: session.id,
 				role: "assistant",
 				isGenerating: true,
 				content: ""
@@ -90,26 +88,26 @@ describe("persistGenerationErrorRow — guest-facing error redaction (Round-12 a
 			"HTTP 401: Unauthorized — invalid API key sk-real-secret-fragment"
 		)
 
-		await persistGenerationErrorRow(io, chat.id, message.id, rawError)
+		await persistGenerationErrorRow(io, session.id, message.id, rawError)
 
 		const ownerPayload = received[`user_${owner.id}`]?.[0]
 		const guestPayload = received[`user_${guest.id}`]?.[0]
 
-		expect(ownerPayload.chatMessage.error.message).toContain(
+		expect(ownerPayload.sessionMessage.error.message).toContain(
 			"sk-real-secret-fragment"
 		)
-		expect(guestPayload.chatMessage.error.message).not.toContain(
+		expect(guestPayload.sessionMessage.error.message).not.toContain(
 			"sk-real-secret-fragment"
 		)
-		expect(guestPayload.chatMessage.error.message).toMatch(
-			/ask the chat owner/i
+		expect(guestPayload.sessionMessage.error.message).toMatch(
+			/ask the session owner/i
 		)
 
 		// The stored DB row still keeps the real error — only the guest
 		// broadcast is redacted, not the persisted data the owner can later
 		// re-fetch.
-		const row = await testDb.query.chatMessages.findFirst({
-			where: eq(schema.chatMessages.id, message.id)
+		const row = await testDb.query.sessionMessages.findFirst({
+			where: eq(schema.sessionMessages.id, message.id)
 		})
 		expect((row?.error as any)?.message).toContain(
 			"sk-real-secret-fragment"

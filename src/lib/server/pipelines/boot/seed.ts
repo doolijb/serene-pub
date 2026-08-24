@@ -102,7 +102,7 @@ const DATA_EVENTS: Record<
 > = {
 	"core:event/message-created": {
 		affectsUser: true,
-		description: "A message was written into a chat."
+		description: "A message was written into a session."
 	},
 	"core:event/message-updated": {
 		affectsUser: true,

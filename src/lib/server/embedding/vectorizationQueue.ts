@@ -2,9 +2,9 @@
  * Background vectorization queue.
  *
  * Processes embedding jobs one at a time with:
- *  - Pause/resume support (paused during active chat generation)
+ *  - Pause/resume support (paused during active session generation)
  *  - Socket progress events for the global UI indicator
- *  - Priority groups: chats (with their lorebooks + characters) can be moved
+ *  - Priority groups: sessions (with their lorebooks + characters) can be moved
  *    to the front of the queue; items within a group are processed in a fixed
  *    order (messages → lorebook content → characters → personas)
  *  - Model tracking: embeddingModel is written alongside each vector so RAG
@@ -64,15 +64,15 @@ export type VectorizationProgressEvent = {
 /**
  * A priority group represents a set of related content that should be
  * embedded together before moving to other groups in the queue.
- * Typically one group per chat, containing the chat's messages, its
+ * Typically one group per session, containing the session's messages, its
  * lorebook entries, and its linked characters/personas.
  */
 export type PriorityGroup = {
 	groupId: string
 	label: string
 	ownerDisplayName: string
-	chatId?: number
-	/** All lorebook IDs associated with this group (chat lorebook + character lorebooks) */
+	sessionId?: number
+	/** All lorebook IDs associated with this group (session lorebook + character lorebooks) */
 	lorebookIds: number[]
 	characterIds: number[]
 	personaIds: number[]
@@ -84,7 +84,7 @@ export type CompletedGroup = PriorityGroup & {
 
 const HISTORY_MAX = 20
 
-// Chat messages are already bounded to MAX_CHAT_MESSAGE_LENGTH before
+// Session messages are already bounded to MAX_CHAT_MESSAGE_LENGTH before
 // insert, so their embed() call is implicitly safe. Every other embedded
 // content type (lore entries, narrative nodes/relationships, character/
 // persona descriptions) is an unbounded text column with no cap before it
@@ -135,7 +135,7 @@ let totalCompleted = 0
 // setProgressEmitter() from one admin's connection silently replaced
 // another's, so with 2+ admins (or, before this fix, ANY connected user —
 // see registerVectorizationHandlers) only the most recently (re)connected
-// socket ever received progress, including other users' chat/lorebook/
+// socket ever received progress, including other users' session/lorebook/
 // character names via priorityQueue/history. Same
 // registerEmitter/unregisterEmitter shape as utils/taskQueue.ts.
 const progressEmitters = new Set<EmitFn>()
@@ -261,41 +261,43 @@ export function getCompletedHistory(): CompletedGroup[] {
 }
 
 /**
- * Enqueue a chat and all its associated content (lorebooks, characters, personas)
- * at the front of the priority queue. If the chat is already in the queue, it is
+ * Enqueue a session and all its associated content (lorebooks, characters, personas)
+ * at the front of the priority queue. If the session is already in the queue, it is
  * moved to the front. Starts the queue if it isn't already running.
  */
-export async function enqueueChatGroup(chatId: number): Promise<PriorityGroup> {
-	const chat = await db.query.chats.findFirst({
-		where: eq(schema.chats.id, chatId),
+export async function enqueueSessionGroup(
+	sessionId: number
+): Promise<PriorityGroup> {
+	const session = await db.query.sessions.findFirst({
+		where: eq(schema.sessions.id, sessionId),
 		columns: { id: true, name: true, lorebookId: true, userId: true }
 	})
 
-	if (!chat) throw new Error(`Chat ${chatId} not found`)
+	if (!session) throw new Error(`Session ${sessionId} not found`)
 
-	const [chatCharsRows, chatPersonasRows] = await Promise.all([
+	const [sessionCharsRows, sessionPersonasRows] = await Promise.all([
 		db
 			.select({
-				characterId: schema.chatCharacters.characterId,
+				characterId: schema.sessionCharacters.characterId,
 				charLorebookId: schema.characters.lorebookId
 			})
-			.from(schema.chatCharacters)
+			.from(schema.sessionCharacters)
 			.leftJoin(
 				schema.characters,
-				eq(schema.chatCharacters.characterId, schema.characters.id)
+				eq(schema.sessionCharacters.characterId, schema.characters.id)
 			)
-			.where(eq(schema.chatCharacters.chatId, chatId)),
+			.where(eq(schema.sessionCharacters.sessionId, sessionId)),
 		db
-			.select({ personaId: schema.chatPersonas.personaId })
-			.from(schema.chatPersonas)
-			.where(eq(schema.chatPersonas.chatId, chatId))
+			.select({ personaId: schema.sessionPersonas.personaId })
+			.from(schema.sessionPersonas)
+			.where(eq(schema.sessionPersonas.sessionId, sessionId))
 	])
 
 	const lorebookIds: number[] = []
-	if (chat.lorebookId) lorebookIds.push(chat.lorebookId)
+	if (session.lorebookId) lorebookIds.push(session.lorebookId)
 
 	const characterIds: number[] = []
-	for (const cc of chatCharsRows) {
+	for (const cc of sessionCharsRows) {
 		if (cc.characterId) characterIds.push(cc.characterId)
 		if (cc.charLorebookId && !lorebookIds.includes(cc.charLorebookId)) {
 			lorebookIds.push(cc.charLorebookId)
@@ -303,28 +305,31 @@ export async function enqueueChatGroup(chatId: number): Promise<PriorityGroup> {
 	}
 
 	const personaIds: number[] = []
-	for (const cp of chatPersonasRows) {
+	for (const cp of sessionPersonasRows) {
 		if (cp.personaId) personaIds.push(cp.personaId)
 	}
 
 	const owner = await db.query.users.findFirst({
-		where: eq(schema.users.id, chat.userId),
+		where: eq(schema.users.id, session.userId),
 		columns: { username: true, displayName: true }
 	})
 	const ownerDisplayName = owner?.displayName ?? owner?.username ?? "Unknown"
 
 	const group: PriorityGroup = {
 		groupId: randomUUID(),
-		label: chat.name ?? `Chat #${chatId}`,
+		label: session.name ?? `Session #${sessionId}`,
 		ownerDisplayName,
-		chatId,
+		sessionId,
 		lorebookIds,
 		characterIds,
 		personaIds
 	}
 
-	// Remove any existing group for this chat, then prepend
-	priorityQueue = [group, ...priorityQueue.filter((g) => g.chatId !== chatId)]
+	// Remove any existing group for this session, then prepend
+	priorityQueue = [
+		group,
+		...priorityQueue.filter((g) => g.sessionId !== sessionId)
+	]
 
 	if (!isRunning && !isPaused) {
 		runQueue()
@@ -357,7 +362,7 @@ export function enqueueLorebookGroup(
 			(g) =>
 				!(
 					g.lorebookIds.includes(lorebookId) &&
-					!g.chatId &&
+					!g.sessionId &&
 					g.characterIds.length === 0
 				)
 		)
@@ -398,7 +403,7 @@ export async function enqueueCharacterGroup(
 	priorityQueue = [
 		group,
 		...priorityQueue.filter(
-			(g) => !(g.characterIds.includes(characterId) && !g.chatId)
+			(g) => !(g.characterIds.includes(characterId) && !g.sessionId)
 		)
 	]
 
@@ -440,7 +445,7 @@ export async function enqueuePersonaGroup(
 			(g) =>
 				!(
 					g.personaIds.includes(personaId) &&
-					!g.chatId &&
+					!g.sessionId &&
 					g.characterIds.length === 0
 				)
 		)
@@ -670,9 +675,9 @@ async function pickFromGroup(
 	group: PriorityGroup,
 	currentModel: string
 ): Promise<QueueItem | null> {
-	// 1. Chat messages
-	if (group.chatId) {
-		const item = await pickChatMessage(currentModel, group.chatId)
+	// 1. Session messages
+	if (group.sessionId) {
+		const item = await pickSessionMessage(currentModel, group.sessionId)
 		if (item) return item
 	}
 
@@ -713,7 +718,7 @@ async function pickGlobalNextItem(
 	currentModel: string
 ): Promise<QueueItem | null> {
 	return (
-		(await pickChatMessage(currentModel)) ??
+		(await pickSessionMessage(currentModel)) ??
 		(await pickWorldLoreEntry(currentModel)) ??
 		(await pickCharacterLoreEntry(currentModel)) ??
 		(await pickHistoryEntry(currentModel)) ??
@@ -797,44 +802,47 @@ export async function writeEmbeddingIfFresh(
 		)
 }
 
-async function pickChatMessage(
+async function pickSessionMessage(
 	currentModel: string,
-	chatId?: number
+	sessionId?: number
 ): Promise<QueueItem | null> {
 	const staleness = needsEmbedding(
-		schema.chatMessages.embedding,
-		schema.chatMessages.embeddingModel,
+		schema.sessionMessages.embedding,
+		schema.sessionMessages.embeddingModel,
 		currentModel,
-		schema.chatMessages.updatedAt,
-		schema.chatMessages.vectorizedAt
+		schema.sessionMessages.updatedAt,
+		schema.sessionMessages.vectorizedAt
 	)
-	const where = chatId
-		? and(eq(schema.chatMessages.chatId, chatId), staleness)
+	const where = sessionId
+		? and(eq(schema.sessionMessages.sessionId, sessionId), staleness)
 		: staleness
 
 	const rows = await db
 		.select({
-			id: schema.chatMessages.id,
-			content: schema.chatMessages.content,
-			updatedAtRaw: sql<string>`${schema.chatMessages.updatedAt}::text`
+			id: schema.sessionMessages.id,
+			content: schema.sessionMessages.content,
+			updatedAtRaw: sql<string>`${schema.sessionMessages.updatedAt}::text`
 		})
-		.from(schema.chatMessages)
+		.from(schema.sessionMessages)
 		.where(where)
-		.orderBy(desc(schema.chatMessages.chatId), asc(schema.chatMessages.id))
+		.orderBy(
+			desc(schema.sessionMessages.sessionId),
+			asc(schema.sessionMessages.id)
+		)
 		.limit(1)
 
 	if (!rows.length) return null
 	const { id, content, updatedAtRaw } = rows[0]
 	return {
-		label: { type: "message", label: `Chat message #${id}` },
+		label: { type: "message", label: `Session message #${id}` },
 		id,
 		embeddingModel: currentModel,
 		process: async () => {
 			const vector = await embed(truncateForEmbedding(content))
 			await writeEmbeddingIfFresh(
-				schema.chatMessages,
-				schema.chatMessages.id,
-				schema.chatMessages.updatedAt,
+				schema.sessionMessages,
+				schema.sessionMessages.id,
+				schema.sessionMessages.updatedAt,
 				id,
 				updatedAtRaw,
 				currentModel,
@@ -844,13 +852,13 @@ async function pickChatMessage(
 	}
 }
 
-// ensureChatMessageEmbedded() is awaited from inside runGenerateAndPersist()
+// ensureSessionMessageEmbedded() is awaited from inside runGenerateAndPersist()
 // (generateResponse.ts) — itself llmQueue's execute() callback, and llmQueue
 // has a single global lane (llmQueue.ts:85), so only one generation runs at
 // a time, server-wide. That makes a hung embed() call here worse than any
 // existing caller (e.g. RagInfillEngine's query-time batchEmbed(), which
 // only blocks the one generation that triggered it): it would stall every
-// other user's queued chat generation too. The two constants below guard
+// other user's queued session generation too. The two constants below guard
 // two different things:
 //   - INLINE_EMBED_TIMEOUT_MS bounds how long ONE call waits on embed()
 //     before giving up (embed()/batchEmbed() in embedding/index.ts have no
@@ -905,7 +913,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
- * Ensures one specific chat message has a current embedding — embedding and
+ * Ensures one specific session message has a current embedding — embedding and
  * saving it inline if missing/stale, or no-op'ing immediately if it's
  * already up to date (or the model isn't currently loaded). Called from
  * generateResponse.ts, awaited right after a generated message's final
@@ -916,13 +924,13 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  * Reuses the exact staleness predicate (needsEmbedding) and safe write
  * (writeEmbeddingIfFresh) the background queue itself uses for this row, so
  * this is safe to call even while the queue is concurrently running: if the
- * queue's pickChatMessage() happens to grab the same row at nearly the same
+ * queue's pickSessionMessage() happens to grab the same row at nearly the same
  * time, both compute the same vector for the same content and both writes
  * land harmlessly; if the queue gets there first, this query simply finds
  * nothing stale left to do. writeEmbeddingIfFresh's optimistic-concurrency
  * guard is what prevents either from clobbering a genuine concurrent edit.
  */
-export async function ensureChatMessageEmbedded(
+export async function ensureSessionMessageEmbedded(
 	messageId: number
 ): Promise<void> {
 	if (!isModelReady()) return
@@ -937,21 +945,21 @@ export async function ensureChatMessageEmbedded(
 	const currentModel = getLoadedModelId()!
 
 	const staleness = needsEmbedding(
-		schema.chatMessages.embedding,
-		schema.chatMessages.embeddingModel,
+		schema.sessionMessages.embedding,
+		schema.sessionMessages.embeddingModel,
 		currentModel,
-		schema.chatMessages.updatedAt,
-		schema.chatMessages.vectorizedAt
+		schema.sessionMessages.updatedAt,
+		schema.sessionMessages.vectorizedAt
 	)
 
 	const rows = await db
 		.select({
-			id: schema.chatMessages.id,
-			content: schema.chatMessages.content,
-			updatedAtRaw: sql<string>`${schema.chatMessages.updatedAt}::text`
+			id: schema.sessionMessages.id,
+			content: schema.sessionMessages.content,
+			updatedAtRaw: sql<string>`${schema.sessionMessages.updatedAt}::text`
 		})
-		.from(schema.chatMessages)
-		.where(and(eq(schema.chatMessages.id, messageId), staleness))
+		.from(schema.sessionMessages)
+		.where(and(eq(schema.sessionMessages.id, messageId), staleness))
 		.limit(1)
 
 	if (!rows.length) return // already fresh (or row gone) — nothing to do
@@ -971,9 +979,9 @@ export async function ensureChatMessageEmbedded(
 	}
 
 	await writeEmbeddingIfFresh(
-		schema.chatMessages,
-		schema.chatMessages.id,
-		schema.chatMessages.updatedAt,
+		schema.sessionMessages,
+		schema.sessionMessages.id,
+		schema.sessionMessages.updatedAt,
 		id,
 		updatedAtRaw,
 		currentModel,
@@ -1431,10 +1439,10 @@ export async function countUnembedded(currentModel?: string): Promise<number> {
 
 	const counts = await Promise.all([
 		db.$count(
-			schema.chatMessages,
+			schema.sessionMessages,
 			condition(
-				schema.chatMessages.embedding,
-				schema.chatMessages.embeddingModel
+				schema.sessionMessages.embedding,
+				schema.sessionMessages.embeddingModel
 			)
 		),
 		db.$count(
@@ -1523,7 +1531,7 @@ export async function autoEnqueuePersona(
 	await enqueuePersonaGroup(personaId, personaName)
 }
 
-export async function autoEnqueueChat(chatId: number) {
+export async function autoEnqueueSession(sessionId: number) {
 	if (!(await isVectorizationEnabled())) return
-	await enqueueChatGroup(chatId)
+	await enqueueSessionGroup(sessionId)
 }

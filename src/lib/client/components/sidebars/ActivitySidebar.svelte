@@ -19,8 +19,8 @@
 	let compileEntriesCtx: CompileEntriesCtx = $state(
 		getContext("compileEntriesCtx")
 	)
-	let chatSummarizesCtx: ChatSummarizesCtx = $state(
-		getContext("chatSummarizesCtx")
+	let sessionSummarizesCtx: SessionSummarizesCtx = $state(
+		getContext("sessionSummarizesCtx")
 	)
 	let taskQueueCtx: TaskQueueCtx = $state(getContext("taskQueueCtx"))
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
@@ -29,20 +29,20 @@
 	let build = $derived(graphBuildsCtx?.activeBuild)
 	let sceneActivities = $derived(sceneSummarizesCtx?.activities ?? [])
 	let compileActivities = $derived(compileEntriesCtx?.activities ?? [])
-	let chatSummarizeActivities = $derived(
-		chatSummarizesCtx?.activities ?? []
+	let sessionSummarizeActivities = $derived(
+		sessionSummarizesCtx?.activities ?? []
 	)
 	let hasActivity = $derived(
 		!!build ||
 			sceneActivities.length > 0 ||
 			compileActivities.length > 0 ||
-			chatSummarizeActivities.length > 0
+			sessionSummarizeActivities.length > 0
 	)
 	let activityCount = $derived(
 		(build ? 1 : 0) +
 			sceneActivities.length +
 			compileActivities.length +
-			chatSummarizeActivities.length
+			sessionSummarizeActivities.length
 	)
 	let queueCount = $derived(taskQueueCtx?.tasks?.length ?? 0)
 
@@ -107,13 +107,13 @@
 
 	/**
 	 * Unlike the graph/scene/compile cards, which open a panel via
-	 * panelsCtx.digest, a chat summarize belongs to a route — so reopening means
-	 * navigating to the chat first and letting that page pick the run back up
+	 * panelsCtx.digest, a session summarize belongs to a route — so reopening means
+	 * navigating to the session first and letting that page pick the run back up
 	 * from `reviewActivityId`.
 	 */
-	function navigateToChatSummarize(activity: ChatSummarizeState) {
-		chatSummarizesCtx.setReviewActivityId(activity.activityId)
-		goto(`/chats/${activity.chatId}`)
+	function navigateToSessionSummarize(activity: SessionSummarizeState) {
+		sessionSummarizesCtx.setReviewActivityId(activity.activityId)
+		goto(`/sessions/${activity.sessionId}`)
 	}
 
 	function navigateToCompileEntry(activity: CompileEntryState) {
@@ -396,12 +396,14 @@
 												? Math.max(
 														5,
 														Math.round(
-															((activity.batch ?? 0) /
+															((activity.batch ??
+																0) /
 																activity.totalBatches) *
 																80
 														)
 													)
-												: activity.phase === 'synthesizing'
+												: activity.phase ===
+													  'synthesizing'
 													? 80
 													: 40}%"
 								></div>
@@ -440,7 +442,7 @@
 				</div>
 			</div>
 		{/each}
-		{#each chatSummarizeActivities as activity (activity.activityId)}
+		{#each sessionSummarizeActivities as activity (activity.activityId)}
 			{@const isOwn = activity.userId === userCtx?.user?.id}
 			<div class="m-4 mb-0">
 				<div
@@ -452,20 +454,20 @@
 								<button
 									class="hover:text-primary-500 block w-full truncate text-left text-sm font-medium transition-colors"
 									onclick={() =>
-										navigateToChatSummarize(activity)}
+										navigateToSessionSummarize(activity)}
 									title={activity.status === "running"
 										? "View progress"
-										: "Go to chat"}
+										: "Go to session"}
 								>
 									{activity.topic ||
-										activity.chatLabel ||
-										`Chat #${activity.chatId}`}
+										activity.sessionLabel ||
+										`Session #${activity.sessionId}`}
 								</button>
 							{:else}
 								<p class="truncate text-sm font-medium">
 									{activity.topic ||
-										activity.chatLabel ||
-										`Chat #${activity.chatId}`}
+										activity.sessionLabel ||
+										`Session #${activity.sessionId}`}
 								</p>
 							{/if}
 							<p class="text-surface-700-300 text-xs">
@@ -506,7 +508,7 @@
 							<button
 								class="text-surface-400 hover:text-surface-600-400 shrink-0 transition-colors"
 								onclick={() =>
-									chatSummarizesCtx.dismiss(
+									sessionSummarizesCtx.dismiss(
 										activity.activityId
 									)}
 								title="Dismiss"
@@ -741,13 +743,13 @@
 										</span>
 									</div>
 								{/if}
-								{#if task.chatId}
+								{#if task.sessionId}
 									<div class="flex justify-between gap-2">
 										<span class="text-surface-700-300">
-											Chat ID
+											Session ID
 										</span>
 										<span class="font-mono">
-											{task.chatId}
+											{task.sessionId}
 										</span>
 									</div>
 								{/if}

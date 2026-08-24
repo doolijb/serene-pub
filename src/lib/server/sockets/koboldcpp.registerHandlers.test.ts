@@ -70,10 +70,7 @@ describe("registerKoboldCppHandlers — telemetry emitter admin gate", () => {
 			"$lib/server/koboldcpp/subprocessManager"
 		)
 		const binaryRegisterSpy = vi.spyOn(binaryManager, "registerEmitter")
-		const binaryUnregisterSpy = vi.spyOn(
-			binaryManager,
-			"unregisterEmitter"
-		)
+		const binaryUnregisterSpy = vi.spyOn(binaryManager, "unregisterEmitter")
 		const subprocessRegisterSpy = vi.spyOn(
 			subprocessManager,
 			"registerEmitter"

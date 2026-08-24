@@ -2,9 +2,9 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 
 export type TaskType =
-	| "chat"
+	| "session"
 	| "narratorPrompt"
-	| "chat_title"
+	| "session_title"
 	| "field_generation"
 	| "summarize_batch"
 	| "summarize_synth"
@@ -48,11 +48,11 @@ export interface ResolvedTaskConfig {
  * Resolves connection + sampling for a given task context.
  *
  * Resolution order (first non-null wins):
- *   chat override → prompt/summarize/graphBuild config sub-task → system default
+ *   session override → prompt/summarize/graphBuild config sub-task → system default
  */
 export async function resolveTaskConfig(params: {
 	taskType: TaskType
-	/** ID of the prompt config (chat generation) */
+	/** ID of the prompt config (session generation) */
 	promptConfigId?: number | null
 	/** ID of the narrator prompt config (Narrator response generation) */
 	narratorPromptConfigId?: number | null
@@ -62,8 +62,8 @@ export async function resolveTaskConfig(params: {
 	summarizeConfigType?: "world" | "character" | "scene"
 	/** ID of the graph build config */
 	graphBuildConfigId?: number | null
-	/** ID of the chat (optional per-chat override) */
-	chatId?: number | null
+	/** ID of the session (optional per-session override) */
+	sessionId?: number | null
 }): Promise<ResolvedTaskConfig> {
 	const {
 		taskType,
@@ -72,7 +72,7 @@ export async function resolveTaskConfig(params: {
 		summarizeConfigId,
 		summarizeConfigType,
 		graphBuildConfigId,
-		chatId
+		sessionId
 	} = params
 
 	const systemSettings = await db.query.systemSettings.findFirst()
@@ -80,19 +80,19 @@ export async function resolveTaskConfig(params: {
 	let overrideConnectionId: number | null = null
 	let overrideSamplingId: number | null = null
 
-	// ── Chat-level override (highest priority) ────────────────────────────────
-	if (chatId) {
-		const chat = await db.query.chats.findFirst({
-			where: (c, { eq }) => eq(c.id, chatId),
+	// ── Session-level override (highest priority) ────────────────────────────────
+	if (sessionId) {
+		const session = await db.query.sessions.findFirst({
+			where: (c, { eq }) => eq(c.id, sessionId),
 			columns: { connectionId: true, samplingConfigId: true }
 		})
-		overrideConnectionId = chat?.connectionId ?? null
-		overrideSamplingId = chat?.samplingConfigId ?? null
+		overrideConnectionId = session?.connectionId ?? null
+		overrideSamplingId = session?.samplingConfigId ?? null
 	}
 
 	// ── Prompt/config-level override ──────────────────────────────────────────
 	if (!overrideConnectionId && !overrideSamplingId) {
-		if (taskType === "chat" && promptConfigId) {
+		if (taskType === "session" && promptConfigId) {
 			const cfg = await db.query.promptConfigs.findFirst({
 				where: (c, { eq }) => eq(c.id, promptConfigId),
 				columns: { connectionId: true, samplingConfigId: true }

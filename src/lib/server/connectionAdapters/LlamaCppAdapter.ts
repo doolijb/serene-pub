@@ -8,7 +8,7 @@ import { TokenCounters } from "../utils/TokenCounterManager"
 import {
 	BaseConnectionAdapter,
 	type AdapterExports,
-	type BasePromptChat
+	type BasePromptSession
 } from "./BaseConnectionAdapter"
 import { type CompiledPrompt } from "./types"
 import axios from "axios"
@@ -247,7 +247,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 		sampling,
 		contextConfig,
 		promptConfig,
-		chat,
+		session,
 		currentCharacterId,
 		generatingMessageMetadata
 	}: {
@@ -255,7 +255,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 		sampling: SelectSamplingConfig
 		contextConfig: SelectContextConfig
 		promptConfig: SelectPromptConfig
-		chat: BasePromptChat
+		session: BasePromptSession
 		currentCharacterId: number | null
 		generatingMessageMetadata?: any
 	}) {
@@ -264,11 +264,11 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 			sampling,
 			contextConfig,
 			promptConfig,
-			chat: {
-				...chat,
-				chatCharacters: chat.chatCharacters || [],
-				chatPersonas: chat.chatPersonas || [],
-				chatMessages: chat.chatMessages || []
+			session: {
+				...session,
+				sessionCharacters: session.sessionCharacters || [],
+				sessionPersonas: session.sessionPersonas || [],
+				sessionMessages: session.sessionMessages || []
 			},
 			currentCharacterId,
 			tokenCounter: new TokenCounters(
@@ -312,14 +312,16 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 		const stopStrings = StopStrings.get({
 			format: this.connection.promptFormat || "chatml",
 			characters:
-				this.chat.chatCharacters?.map((cc) => cc.character) || [],
-			personas: this.chat.chatPersonas?.map((cp) => cp.persona) || [],
+				this.session.sessionCharacters?.map((cc) => cc.character) || [],
+			personas:
+				this.session.sessionPersonas?.map((cp) => cp.persona) || [],
 			currentCharacterId: this.currentCharacterId ?? undefined
 		})
 		const characterName = resolveCharacterName(
-			this.chat.chatCharacters?.[0]?.character
+			this.session.sessionCharacters?.[0]?.character
 		)
-		const personaName = this.chat.chatPersonas?.[0]?.persona?.name || "user"
+		const personaName =
+			this.session.sessionPersonas?.[0]?.persona?.name || "user"
 		const stopContext: Record<string, string> = {
 			char: characterName,
 			user: personaName

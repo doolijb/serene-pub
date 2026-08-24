@@ -4,7 +4,7 @@
 	 *
 	 * The control this replaced was a single number — "trim to 4096" — which
 	 * answered a question nobody asks. What people want to say is "lore matters
-	 * more than old history in this chat", and that is a ratio, not a count.
+	 * more than old history in this session", and that is a ratio, not a count.
 	 *
 	 * Because the underlying `share` is normalised, **there is no invalid
 	 * state**: the total is always 100%, dragging a divider takes from one
@@ -33,8 +33,13 @@
 		onchange: (next: Record<string, number>) => void
 	}
 
-	let { members, value, readonly = false, windowTokens, onchange }: Props =
-		$props()
+	let {
+		members,
+		value,
+		readonly = false,
+		windowTokens,
+		onchange
+	}: Props = $props()
 
 	/**
 	 * One colour per band, by index, wrapping.
@@ -52,8 +57,7 @@
 		"oklch(0.72 0.13 310)",
 		"oklch(0.72 0.13 200)"
 	]
-	const toneOf = (m: Member, i: number) =>
-		TONES[(m.tone ?? i) % TONES.length]
+	const toneOf = (m: Member, i: number) => TONES[(m.tone ?? i) % TONES.length]
 
 	const shares = $derived.by<Record<string, number>>(() => {
 		const out: Record<string, number> = {}
@@ -82,9 +86,9 @@
 			0
 		)
 		const next: Record<string, number> = { [key]: want }
+		// Rescale what is left so the ratios *between* the other bands are
+		// untouched — moving one slider must not silently reorder the rest.
 		for (const m of others)
-			// Rescale what is left so the ratios *between* the other bands are
-			// untouched — moving one slider must not silently reorder the rest.
 			next[m.key] =
 				othersTotal > 0
 					? (Math.max(0, shares[m.key] ?? 0) / othersTotal) *
@@ -109,7 +113,10 @@
 	/** Four decimals: enough to hold an even three-way split without drift. */
 	const round = (r: Record<string, number>): Record<string, number> =>
 		Object.fromEntries(
-			Object.entries(r).map(([k, v]) => [k, Math.round(v * 10000) / 10000])
+			Object.entries(r).map(([k, v]) => [
+				k,
+				Math.round(v * 10000) / 10000
+			])
 		)
 
 	const tokensFor = (key: string) =>
@@ -134,7 +141,7 @@
 			{/if}
 		{/each}
 		{#if total <= 0}
-			<div class="h-full w-full bg-surface-300-700"></div>
+			<div class="bg-surface-300-700 h-full w-full"></div>
 		{/if}
 	</div>
 
@@ -163,7 +170,7 @@
 					{m.label ?? m.key}
 				</span>
 				{#if tokensFor(m.key) != null}
-					<span class="opacity-60 tabular-nums">
+					<span class="tabular-nums opacity-60">
 						~{tokensFor(m.key)} tokens
 					</span>
 				{/if}

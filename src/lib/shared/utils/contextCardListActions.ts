@@ -46,7 +46,11 @@ export function makeCardListActions({
 			index: number,
 			spec: InsertableKind
 		): { error?: string; insertedId?: string } {
-			const { template: next, error, insertedId } = insertCard(
+			const {
+				template: next,
+				error,
+				insertedId
+			} = insertCard(
 				template,
 				{ parentBodyStart, parentBodyEnd, siblings },
 				index,

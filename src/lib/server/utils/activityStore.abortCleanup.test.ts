@@ -9,9 +9,9 @@
 import { afterEach, describe, expect, test } from "vitest"
 import { activityStore } from "./activityStore"
 
-function sceneParams(overrides: Partial<
-	Parameters<typeof activityStore.startScene>[0]
-> = {}) {
+function sceneParams(
+	overrides: Partial<Parameters<typeof activityStore.startScene>[0]> = {}
+) {
 	return {
 		userId: 1,
 		sceneId: 100,
@@ -21,9 +21,9 @@ function sceneParams(overrides: Partial<
 	}
 }
 
-function compileParams(overrides: Partial<
-	Parameters<typeof activityStore.startCompile>[0]
-> = {}) {
+function compileParams(
+	overrides: Partial<Parameters<typeof activityStore.startCompile>[0]> = {}
+) {
 	return {
 		userId: 1,
 		historyEntryId: 200,

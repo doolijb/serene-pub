@@ -28,9 +28,16 @@ import {
 	lastRefRecencySignal,
 	type ScanWindow
 } from "$lib/server/pipelines/ranking/signals"
-import { eligibleFor, armNote, type ArmAvailability } from "$lib/server/pipelines/ranking/strategy"
+import {
+	eligibleFor,
+	armNote,
+	type ArmAvailability
+} from "$lib/server/pipelines/ranking/strategy"
 import type { Candidate } from "$lib/server/pipelines/ranking/select"
-import type { RetrievalParams, SourceKind } from "$lib/server/pipelines/ranking/weights"
+import type {
+	RetrievalParams,
+	SourceKind
+} from "$lib/server/pipelines/ranking/weights"
 
 export interface LoreRow {
 	id: number
@@ -67,7 +74,7 @@ export interface MessageRow {
 export interface KeywordQueryInput {
 	entries: readonly LoreRow[]
 	messages: readonly MessageRow[]
-	/** Character and persona names in the chat, for the co-occurrence signal. */
+	/** Character and persona names in the session, for the co-occurrence signal. */
 	entityNames: readonly string[]
 	retrieval: RetrievalParams
 	availability: ArmAvailability
@@ -118,7 +125,7 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 	// one would make a typo in a config the most expensive setting in the app.
 	const maxDepth = Math.max(0, retrieval.maxRecursionDepth ?? 0)
 
-	const chatWindow = buildScanWindow(messages, retrieval.scanDepth)
+	const sessionWindow = buildScanWindow(messages, retrieval.scanDepth)
 	// tf-idf scores against the **guaranteed** window, not the scan window.
 	// They are two different depths and legacy uses the narrower one for this
 	// signal (`:157`): the scan window decides what *can* match a key at all,
@@ -175,10 +182,7 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 					"keyword",
 					availability,
 					defaultStrategy
-				).replace(
-					"matched by keyword",
-					"handled by vector search"
-				)
+				).replace("matched by keyword", "handled by vector search")
 			})
 		}
 	}
@@ -237,7 +241,7 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 		return hits
 	}
 
-	let found = scan(chatWindow, 0)
+	let found = scan(sessionWindow, 0)
 	let level = 0
 	/**
 	 * The deepest level that actually produced something.
@@ -280,7 +284,7 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 		skipped,
 		diagnostics: {
 			scanDepth: retrieval.scanDepth,
-			windowChars: chatWindow.raw.length,
+			windowChars: sessionWindow.raw.length,
 			considered: entries.length,
 			matched,
 			// How deep it actually went, not how deep it was allowed to — a

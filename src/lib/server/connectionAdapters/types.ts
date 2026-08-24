@@ -36,7 +36,7 @@ export type CompiledPrompt = {
 			total: number
 			limit: number
 		}
-		chatMessages: {
+		sessionMessages: {
 			included: number
 			total: number
 			includedIds: number[]

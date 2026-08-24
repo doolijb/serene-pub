@@ -411,7 +411,7 @@ export async function deleteCharacterGalleryImage({
 		)
 	// The deleted file may have been the character's avatar — leaving that
 	// column pointing at a now-nonexistent path renders as a broken image
-	// everywhere the avatar is shown (character cards, chat messages, etc.),
+	// everywhere the avatar is shown (character cards, session messages, etc.),
 	// so clear it rather than leave a dangling reference.
 	await db
 		.update(schema.characters)

@@ -21,7 +21,7 @@ import {
 	getRobustSpecV3Data
 } from "../utils/characterCardParser"
 import { autoEnqueueCharacter } from "$lib/server/embedding/vectorizationQueue"
-import { canViewCharacter } from "$lib/server/utils/chatAccess"
+import { canViewCharacter } from "$lib/server/utils/sessionAccess"
 import {
 	resolveCardSource,
 	cachedSearch,
@@ -297,7 +297,7 @@ export const charactersUpdate: Handler<
 			delete (data as any).vectorizedAt
 			delete (data as any).embedding
 			delete (data as any).embeddingModel
-			// lorebookId: no ownership check exists for it here (unlike chats,
+			// lorebookId: no ownership check exists for it here (unlike sessions,
 			// nothing currently reads a character's own lorebookId for prompt
 			// content), so blocking it outright is the correct minimal fix —
 			// a future feature needing this should validate ownership first.
@@ -369,7 +369,7 @@ export const charactersDelete: Handler<
 		const userId = socket.user!.id
 
 		// Soft delete, mirroring personasDelete exactly — a real DELETE here
-		// cascades chatMessages.characterId -> SET NULL with no name
+		// cascades sessionMessages.characterId -> SET NULL with no name
 		// snapshot, so every historical message this character ever
 		// authored would permanently fall back to the generic "assistant"
 		// label (resolveCharacterName()) the moment the row was gone. Soft
@@ -377,7 +377,7 @@ export const charactersDelete: Handler<
 		// resolution keeps working, while charactersList/charactersGet hide
 		// it going forward. The avatar directory is deliberately NOT removed
 		// either, for the same reason personasDelete doesn't remove a
-		// persona's — old chat messages may still render this character's
+		// persona's — old session messages may still render this character's
 		// avatar.
 		await db
 			.update(schema.characters)
@@ -878,7 +878,7 @@ export const charactersExportCard: Handler<
 
 			// Fetch the character with all its data — owner-only (export is a
 			// data-extraction action, unlike viewing a character in a shared
-			// chat, so this deliberately does NOT use canViewCharacter).
+			// session, so this deliberately does NOT use canViewCharacter).
 			const character = await db.query.characters.findFirst({
 				where: and(
 					eq(schema.characters.id, params.id),

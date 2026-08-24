@@ -391,9 +391,7 @@
 	})
 </script>
 
-<div
-	class="preset-tonal mt-4 min-h-[calc(100%-3rem)] rounded-lg p-6 shadow-md"
->
+<div class="preset-tonal mt-4 min-h-[calc(100%-3rem)] rounded-lg p-6 shadow-md">
 	<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
 		<div class="flex items-center gap-3">
 			<button

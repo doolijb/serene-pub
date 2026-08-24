@@ -9,7 +9,7 @@
 		if (!doc) goto("/document-view/docs")
 	})
 
-	// docsIndex's renderer rewrites relative doc links (eg. "./chats.md") to
+	// docsIndex's renderer rewrites relative doc links (eg. "./sessions.md") to
 	// the standard site's /docs/{slug} route, since it's shared with the
 	// standard docs viewer. Rewritten again here so following a link inside a
 	// doc stays in Document View instead of dropping the reader onto the

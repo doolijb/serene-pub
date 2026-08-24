@@ -29,7 +29,7 @@ export const DEFAULT_MANAGED_CONFIG: ManagedConfig = {
 // TTL timers, keyed by baseUrl (the koboldcpp instance), not connectionId.
 // There's only ever one loaded model per instance — the resource this timer
 // guards is shared, not per-connection. Two managed connections pointed at
-// the same instance (e.g. a "Chat" connection and a separate "Summarizer"
+// the same instance (e.g. a "Session" connection and a separate "Summarizer"
 // connection) used to each get their own independent timer keyed by their
 // own connectionId: whichever fired first would unload the model out from
 // under the other connection's active or imminent generation, regardless of
@@ -86,7 +86,8 @@ async function waitForModelReady(
 	const expected = normalizeModelName(expectedFile)
 	await pollUntilReady(
 		async () => {
-			const { modelName, refused } = await fetchModelStatusForPoll(baseUrl)
+			const { modelName, refused } =
+				await fetchModelStatusForPoll(baseUrl)
 			const current = modelName ? normalizeModelName(modelName) : null
 			if (current && current === expected) return "ready"
 			return refused ? "refused" : "not-ready"
@@ -269,7 +270,9 @@ export async function ensureModelLoaded(opts: {
 				}
 				if (!resp.ok) {
 					const text = await resp.text().catch(() => "")
-					throw new Error(`reload_config failed: ${resp.status} ${text}`)
+					throw new Error(
+						`reload_config failed: ${resp.status} ${text}`
+					)
 				}
 				data = await resp.json().catch(() => ({}))
 				return "ready"
@@ -287,7 +290,12 @@ export async function ensureModelLoaded(opts: {
 			)
 		}
 
-		await waitForModelReady(baseUrl, managedConfig.modelFile, signal, isAlive)
+		await waitForModelReady(
+			baseUrl,
+			managedConfig.modelFile,
+			signal,
+			isAlive
+		)
 	})()
 
 	try {

@@ -22,7 +22,7 @@ import { registerSamplingConfigHandlers } from "./samplingConfigs"
 import { registerCharacterHandlers } from "./characters"
 import { registerPersonaHandlers } from "./personas"
 import { registerContextConfigHandlers } from "./contextConfigs"
-import { registerChatHandlers } from "./chats"
+import { registerSessionHandlers } from "./sessions"
 import { registerPromptConfigHandlers } from "./promptConfigs"
 import { registerNarratorPromptConfigHandlers } from "./narratorPromptConfigs"
 import { registerGraphBuildConfigHandlers } from "./graphBuildConfigs"
@@ -94,7 +94,7 @@ export function connectSockets(io: {
 		registerNarratorPromptConfigHandlers(socket, emitToUser, register)
 		registerGraphBuildConfigHandlers(socket, emitToUser, register)
 		registerSummarizePromptConfigHandlers(socket, emitToUser, register)
-		registerChatHandlers(socket, emitToUser, register)
+		registerSessionHandlers(socket, emitToUser, register)
 		registerLorebookHandlers(socket, emitToUser, register)
 		registerWorldLoreEntryHandlers(socket, emitToUser, register)
 		registerCharacterLoreEntryHandlers(socket, emitToUser, register)

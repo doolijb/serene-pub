@@ -100,14 +100,14 @@ describe("LlamaCppAdapter.mapSamplingConfig()", () => {
 			} as any,
 			contextConfig: {} as any,
 			promptConfig: { systemPrompt: "Test" } as any,
-			chat: {
+			session: {
 				id: 1,
 				userId: 1,
-				chatType: "chat",
+				sessionType: "session",
 				metadata: { ragIgnored: true },
-				chatMessages: [],
-				chatCharacters: [],
-				chatPersonas: [],
+				sessionMessages: [],
+				sessionCharacters: [],
+				sessionPersonas: [],
 				lorebook: {
 					id: 1,
 					lorebookBindings: [],

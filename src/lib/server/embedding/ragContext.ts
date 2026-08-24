@@ -2,10 +2,10 @@
  * RAG context scoping helpers.
  *
  * When performing similarity search, results should be limited to content that
- * is actually associated with the current chat. This prevents pulling in
- * irrelevant context from completely unrelated chats, characters, or lorebooks.
+ * is actually associated with the current session. This prevents pulling in
+ * irrelevant context from completely unrelated sessions, characters, or lorebooks.
  *
- * Use `getChatRagContext` to resolve a chat's linked content IDs, then pass
+ * Use `getSessionRagContext` to resolve a session's linked content IDs, then pass
  * those IDs to `scopedRankBySimilarity` (or filter manually) to ensure all
  * RAG results are relevant to the active conversation.
  */
@@ -19,58 +19,58 @@ import { cosineSimilarity } from "./index"
 // Context resolution
 // ---------------------------------------------------------------------------
 
-export type ChatRagContext = {
-	chatId: number
-	/** IDs of characters linked to the chat via chatCharacters */
+export type SessionRagContext = {
+	sessionId: number
+	/** IDs of characters linked to the session via sessionCharacters */
 	characterIds: number[]
-	/** IDs of personas linked to the chat via chatPersonas */
+	/** IDs of personas linked to the session via sessionPersonas */
 	personaIds: number[]
-	/** The chat's primary lorebook ID, if any */
+	/** The session's primary lorebook ID, if any */
 	lorebookId: number | null
 	/**
 	 * IDs of lorebooks in scope for lore/history/relationship retrieval — just
-	 * the chat's own lorebook (if any). Deliberately does NOT include a chat
+	 * the session's own lorebook (if any). Deliberately does NOT include a session
 	 * character's or persona's own separate lorebook — RAG should only ever
-	 * draw on the story world the chat itself is scoped to, not unrelated
+	 * draw on the story world the session itself is scoped to, not unrelated
 	 * lorebooks a cast member happens to also be attached to elsewhere.
 	 */
 	allLorebookIds: number[]
 }
 
 /**
- * Resolve all content IDs that are in scope for RAG search in a given chat.
+ * Resolve all content IDs that are in scope for RAG search in a given session.
  * Results from outside this set should not be used as RAG context.
  */
-export async function getChatRagContext(
-	chatId: number
-): Promise<ChatRagContext> {
-	const [chat, chatCharsRows, chatPersonasRows] = await Promise.all([
-		db.query.chats.findFirst({
-			where: eq(schema.chats.id, chatId),
+export async function getSessionRagContext(
+	sessionId: number
+): Promise<SessionRagContext> {
+	const [session, sessionCharsRows, sessionPersonasRows] = await Promise.all([
+		db.query.sessions.findFirst({
+			where: eq(schema.sessions.id, sessionId),
 			columns: { lorebookId: true }
 		}),
 		db
-			.select({ characterId: schema.chatCharacters.characterId })
-			.from(schema.chatCharacters)
-			.where(eq(schema.chatCharacters.chatId, chatId)),
+			.select({ characterId: schema.sessionCharacters.characterId })
+			.from(schema.sessionCharacters)
+			.where(eq(schema.sessionCharacters.sessionId, sessionId)),
 		db
-			.select({ personaId: schema.chatPersonas.personaId })
-			.from(schema.chatPersonas)
-			.where(eq(schema.chatPersonas.chatId, chatId))
+			.select({ personaId: schema.sessionPersonas.personaId })
+			.from(schema.sessionPersonas)
+			.where(eq(schema.sessionPersonas.sessionId, sessionId))
 	])
 
-	const lorebookId = chat?.lorebookId ?? null
+	const lorebookId = session?.lorebookId ?? null
 	const allLorebookIds: number[] = lorebookId ? [lorebookId] : []
 
-	const characterIds = chatCharsRows
+	const characterIds = sessionCharsRows
 		.map((cc) => cc.characterId)
 		.filter((id): id is number => id != null)
-	const personaIds = chatPersonasRows
+	const personaIds = sessionPersonasRows
 		.map((cp) => cp.personaId)
 		.filter((id): id is number => id != null)
 
 	return {
-		chatId,
+		sessionId,
 		characterIds,
 		personaIds,
 		lorebookId,
@@ -85,7 +85,7 @@ export async function getChatRagContext(
 export type ScopedRagItem =
 	| {
 			source: "message"
-			chatId: number
+			sessionId: number
 			id: number
 			content: string
 			embedding: number[]
@@ -195,21 +195,21 @@ export type ScopedRagOptions = {
 }
 
 /**
- * Fetches every candidate item in scope for a chat context — the DB-bound
+ * Fetches every candidate item in scope for a session context — the DB-bound
  * half of a similarity search, with no query embedding involved and
  * nothing scored yet. Callers doing multiple similarity passes against the
- * same chat context within one turn (eg. RagInfillEngine.ts scoring
+ * same session context within one turn (eg. RagInfillEngine.ts scoring
  * several query-message embeddings) should fetch once via this and call
  * rankScopedCandidates() per query embedding, rather than re-running the
  * whole fetch for each one. Each source query is capped at
  * RAG_CANDIDATE_FETCH_CAP rows (newest first) — bounds worst-case
- * latency/memory on a pathologically large lorebook/chat; there's no
+ * latency/memory on a pathologically large lorebook/session; there's no
  * pgvector index backing these queries, so ranking by similarity still
  * requires scoring whatever's fetched in-process rather than letting SQL
  * pick the closest matches.
  */
 export async function fetchScopedCandidates(
-	context: ChatRagContext,
+	context: SessionRagContext,
 	opts: Omit<ScopedRagOptions, "topK">
 ): Promise<ScopedRagCandidate[]> {
 	const { modelId, sources, excludeRecentMessages = 10 } = opts
@@ -219,40 +219,40 @@ export async function fetchScopedCandidates(
 
 	const candidates: ScopedRagCandidate[] = []
 
-	// Messages from this chat only. Recent messages are excluded since they're
-	// already in the guaranteed context window. Cross-chat context (other
+	// Messages from this session only. Recent messages are excluded since they're
+	// already in the guaranteed context window. Cross-session context (other
 	// conversations sharing this lorebook) flows through lore/history entries
-	// instead — raw messages from another chat are never pulled in here.
+	// instead — raw messages from another session are never pulled in here.
 	if (include("message")) {
 		let recentIds: number[] = []
 		if (excludeRecentMessages > 0) {
 			const recent = await db
-				.select({ id: schema.chatMessages.id })
-				.from(schema.chatMessages)
-				.where(eq(schema.chatMessages.chatId, context.chatId))
-				.orderBy(desc(schema.chatMessages.id))
+				.select({ id: schema.sessionMessages.id })
+				.from(schema.sessionMessages)
+				.where(eq(schema.sessionMessages.sessionId, context.sessionId))
+				.orderBy(desc(schema.sessionMessages.id))
 				.limit(excludeRecentMessages)
 			recentIds = recent.map((r) => r.id)
 		}
 
 		const messages = await db
 			.select({
-				id: schema.chatMessages.id,
-				chatId: schema.chatMessages.chatId,
-				content: schema.chatMessages.content,
-				embedding: schema.chatMessages.embedding,
-				embeddingModel: schema.chatMessages.embeddingModel
+				id: schema.sessionMessages.id,
+				sessionId: schema.sessionMessages.sessionId,
+				content: schema.sessionMessages.content,
+				embedding: schema.sessionMessages.embedding,
+				embeddingModel: schema.sessionMessages.embeddingModel
 			})
-			.from(schema.chatMessages)
+			.from(schema.sessionMessages)
 			.where(
 				and(
-					eq(schema.chatMessages.chatId, context.chatId),
-					eq(schema.chatMessages.isHidden, false),
-					isNotNull(schema.chatMessages.embedding),
-					eq(schema.chatMessages.embeddingModel, modelId)
+					eq(schema.sessionMessages.sessionId, context.sessionId),
+					eq(schema.sessionMessages.isHidden, false),
+					isNotNull(schema.sessionMessages.embedding),
+					eq(schema.sessionMessages.embeddingModel, modelId)
 				)
 			)
-			.orderBy(desc(schema.chatMessages.id))
+			.orderBy(desc(schema.sessionMessages.id))
 			.limit(RAG_CANDIDATE_FETCH_CAP)
 
 		for (const msg of messages) {
@@ -260,7 +260,7 @@ export async function fetchScopedCandidates(
 			if (!msg.embedding) continue
 			candidates.push({
 				source: "message",
-				chatId: msg.chatId,
+				sessionId: msg.sessionId,
 				id: msg.id,
 				content: msg.content,
 				embedding: msg.embedding,
@@ -480,7 +480,7 @@ export async function fetchScopedCandidates(
 		}
 	}
 
-	// Characters linked to this chat
+	// Characters linked to this session
 	if (include("character") && context.characterIds.length > 0) {
 		const chars = await db
 			.select({
@@ -514,7 +514,7 @@ export async function fetchScopedCandidates(
 		}
 	}
 
-	// Personas linked to this chat
+	// Personas linked to this session
 	if (include("persona") && context.personaIds.length > 0) {
 		const ps = await db
 			.select({
@@ -574,18 +574,18 @@ export function rankScopedCandidates(
 }
 
 /**
- * Run a similarity search over all content associated with the given chat context.
- * Results are scoped to only include content linked to this chat, filtered to the
+ * Run a similarity search over all content associated with the given session context.
+ * Results are scoped to only include content linked to this session, filtered to the
  * active embedding model, and sorted by cosine similarity descending.
  *
  * Thin wrapper around fetchScopedCandidates()+rankScopedCandidates() for
  * single-query callers — a caller scoring multiple query embeddings
- * against the same chat context in one turn should call those two
+ * against the same session context in one turn should call those two
  * directly instead, fetching once and reusing the candidate set.
  */
 export async function scopedRankBySimilarity(
 	queryEmbedding: number[],
-	context: ChatRagContext,
+	context: SessionRagContext,
 	opts: ScopedRagOptions
 ): Promise<ScopedRagItem[]> {
 	const candidates = await fetchScopedCandidates(context, opts)

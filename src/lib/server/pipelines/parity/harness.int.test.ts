@@ -7,8 +7,8 @@
  * only one of them is safe.
  *
  * Ten fixtures, all green: the shipped template itself, one-to-one and group
- * chats, macros inside character cards, the six-way post-history split, dated
- * history entries, the two visibility filters, a chat with every assistant
+ * sessions, macros inside character cards, the six-way post-history split, dated
+ * history entries, the two visibility filters, a session with every assistant
  * character hidden, narrator mode, and twelve near-identical lore entries
  * competing for one budget.
  *
@@ -26,7 +26,11 @@
 
 import { describe, it, expect, beforeAll, vi } from "vitest"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
-import { runFixture, type ParityFixture, type RenderConfigs } from "$lib/server/pipelines/parity/harness"
+import {
+	runFixture,
+	type ParityFixture,
+	type RenderConfigs
+} from "$lib/server/pipelines/parity/harness"
 import { wrapFor } from "$lib/server/pipelines/entities/variableLayouts"
 import { SHIPPED_CONTEXT_TEMPLATE } from "$lib/server/pipelines/entities/contextTemplateDefaults"
 import { renderParity, parityGate } from "@serene-pub/sdk"
@@ -79,7 +83,7 @@ const corpusTemplate = (wrappers: "template" | "layouts") => {
 		const body = wrappers === "template" ? wrap(expr) : expr
 		// Guarded the way the shipped template guards, and the guard is what
 		// makes the comparison mean anything. Unguarded, 0.5 wrote the heading
-		// and an empty fence for a chat with no history — `HISTORY:Story
+		// and an empty fence for a session with no history — `HISTORY:Story
 		// history:` above three blank backticks — because nothing stopped it.
 		// 0.6 renders nothing there, which is better and is still a difference.
 		// Pairing an unguarded template with wrapping layouts is a combination
@@ -110,7 +114,7 @@ const corpusTemplate = (wrappers: "template" | "layouts") => {
 		// `{{{name}}}: {{{message}}}` (defaults.ts:296). The first version of this
 		// fixture guessed `content`, which made *both* sides render blank message
 		// lines and agree for the wrong reason.
-		"{{#each chatMessages}}{{this.name}}: {{this.message}}",
+		"{{#each sessionMessages}}{{this.name}}: {{this.message}}",
 		"{{/each}}"
 	].join("\n")
 }
@@ -153,7 +157,7 @@ beforeAll(async () => {
 /**
  * The rows a fixture needs, written once.
  *
- * Each fixture seeds its own user and chat rather than sharing one, so a fixture
+ * Each fixture seeds its own user and session rather than sharing one, so a fixture
  * that leaves state behind cannot make the next one pass or fail for reasons
  * that are not in its own description.
  */
@@ -165,7 +169,7 @@ async function seedWorld(
 		lore?: Array<Record<string, unknown>>
 		messages: Array<{ role: string; content: string; speaker?: number }>
 		isGroup?: boolean
-		chatScenario?: string
+		sessionScenario?: string
 	}
 ) {
 	const [user] = await db
@@ -211,35 +215,35 @@ async function seedWorld(
 			}))
 		)
 
-	const [chat] = await db
-		.insert(schema.chats)
+	const [session] = await db
+		.insert(schema.sessions)
 		.values({
 			userId: user.id,
 			isGroup: opts.isGroup ?? false,
 			lorebookId: lorebook.id,
-			...(opts.chatScenario ? { scenario: opts.chatScenario } : {})
+			...(opts.sessionScenario ? { scenario: opts.sessionScenario } : {})
 		})
 		.returning()
 
 	for (const c of characters)
-		await db.insert(schema.chatCharacters).values({
-			chatId: chat.id,
+		await db.insert(schema.sessionCharacters).values({
+			sessionId: session.id,
 			characterId: c.id,
 			isActive: true,
 			visibility: "visible"
 		})
 	for (const p of personas)
 		await db
-			.insert(schema.chatPersonas)
-			.values({ chatId: chat.id, personaId: p.id })
+			.insert(schema.sessionPersonas)
+			.values({ sessionId: session.id, personaId: p.id })
 
-	await db.insert(schema.chatMessages).values(
+	await db.insert(schema.sessionMessages).values(
 		opts.messages.map((m) => ({
-			chatId: chat.id,
+			sessionId: session.id,
 			role: m.role,
 			content: m.content,
 			// Who said it, so the naming rules have something to resolve. A
-			// group chat where every assistant line is unattributed would not
+			// group session where every assistant line is unattributed would not
 			// exercise them at all.
 			...(m.role === "assistant"
 				? { characterId: characters[m.speaker ?? 0]!.id }
@@ -247,7 +251,7 @@ async function seedWorld(
 		}))
 	)
 
-	return { user, characters, personas, chat, lorebook }
+	return { user, characters, personas, session, lorebook }
 }
 
 /** Usernames must be unique across fixtures in one database. */
@@ -262,7 +266,7 @@ const ASHGUARD = {
 
 /** One character, one persona, one lore entry, a short history. */
 const oneOnOne: ParityFixture = {
-	name: "chat/one-on-one",
+	name: "session/one-on-one",
 	async seed(db: any) {
 		const w = await seedWorld(db, {
 			characters: [
@@ -281,7 +285,7 @@ const oneOnOne: ParityFixture = {
 			]
 		})
 		return {
-			chatId: w.chat.id,
+			sessionId: w.session.id,
 			userId: w.user.id,
 			currentCharacterId: w.characters[0]!.id,
 			text: "Have you seen the ashguard?"
@@ -292,13 +296,13 @@ const oneOnOne: ParityFixture = {
 /**
  * Two characters, both speaking.
  *
- * Exercises what a one-to-one chat cannot: `{{characterNames}}` as a joined
- * list, per-message name resolution across two speakers, and the group-chat
+ * Exercises what a one-to-one session cannot: `{{characterNames}}` as a joined
+ * list, per-message name resolution across two speakers, and the group-session
  * scenario rule — a group with no scenario of its own renders none rather than
  * one member's.
  */
-const groupChat: ParityFixture = {
-	name: "chat/group",
+const groupSession: ParityFixture = {
+	name: "session/group",
 	async seed(db: any) {
 		const w = await seedWorld(db, {
 			isGroup: true,
@@ -320,7 +324,7 @@ const groupChat: ParityFixture = {
 			]
 		})
 		return {
-			chatId: w.chat.id,
+			sessionId: w.session.id,
 			userId: w.user.id,
 			currentCharacterId: w.characters[0]!.id,
 			text: "Tell me of the ashguard."
@@ -335,7 +339,7 @@ const groupChat: ParityFixture = {
  * card is a prompt difference that no amount of template testing would show.
  */
 const macroHeavy: ParityFixture = {
-	name: "chat/macros-in-cards",
+	name: "session/macros-in-cards",
 	async seed(db: any) {
 		const w = await seedWorld(db, {
 			characters: [
@@ -354,7 +358,7 @@ const macroHeavy: ParityFixture = {
 			messages: [{ role: "user", content: "Are you there?" }]
 		})
 		return {
-			chatId: w.chat.id,
+			sessionId: w.session.id,
 			userId: w.user.id,
 			currentCharacterId: w.characters[0]!.id,
 			text: "Are you there?"
@@ -377,7 +381,7 @@ const macroHeavy: ParityFixture = {
  * prompt". This is the test that makes that sentence true.
  */
 const decoratedLore: ParityFixture = {
-	name: "chat/decorated-lore",
+	name: "session/decorated-lore",
 	async seed(db: any) {
 		const w = await seedWorld(db, {
 			characters: [
@@ -408,7 +412,7 @@ const decoratedLore: ParityFixture = {
 		})
 
 		return {
-			chatId: w.chat.id,
+			sessionId: w.session.id,
 			userId: w.user.id,
 			currentCharacterId: w.characters[0]!.id,
 			text: "Tell me about the gate."
@@ -424,7 +428,7 @@ const decoratedLore: ParityFixture = {
  * fields that carry the same kind of string.
  */
 const postHistory: ParityFixture = {
-	name: "chat/post-history",
+	name: "session/post-history",
 	async seed(db: any) {
 		const [config] = await db
 			.insert(schema.promptConfigs)
@@ -455,7 +459,7 @@ const postHistory: ParityFixture = {
 			messages: [{ role: "user", content: "Speak." }]
 		})
 		return {
-			chatId: w.chat.id,
+			sessionId: w.session.id,
 			userId: w.user.id,
 			currentCharacterId: w.characters[0]!.id,
 			text: "Speak.",
@@ -472,7 +476,7 @@ const postHistory: ParityFixture = {
  * that records only a year must not render as though it recorded a day.
  */
 const datedHistory: ParityFixture = {
-	name: "chat/history-entries",
+	name: "session/history-entries",
 	async seed(db: any) {
 		const w = await seedWorld(db, {
 			characters: [{ name: "Alice", description: "A knight." }],
@@ -497,7 +501,7 @@ const datedHistory: ParityFixture = {
 			}
 		])
 		return {
-			chatId: w.chat.id,
+			sessionId: w.session.id,
 			userId: w.user.id,
 			currentCharacterId: w.characters[0]!.id,
 			text: "What happened at the siege?"
@@ -514,7 +518,7 @@ const datedHistory: ParityFixture = {
  * apart; collapsing them is the obvious cleanup and it changes prompts.
  */
 const mixedVisibility: ParityFixture = {
-	name: "chat/visibility",
+	name: "session/visibility",
 	async seed(db: any) {
 		const w = await seedWorld(db, {
 			characters: [
@@ -526,25 +530,31 @@ const mixedVisibility: ParityFixture = {
 		})
 		const { eq, and } = await import("drizzle-orm")
 		await db
-			.update(schema.chatCharacters)
+			.update(schema.sessionCharacters)
 			.set({ isActive: false })
 			.where(
 				and(
-					eq(schema.chatCharacters.chatId, w.chat.id),
-					eq(schema.chatCharacters.characterId, w.characters[1]!.id)
+					eq(schema.sessionCharacters.sessionId, w.session.id),
+					eq(
+						schema.sessionCharacters.characterId,
+						w.characters[1]!.id
+					)
 				)
 			)
 		await db
-			.update(schema.chatCharacters)
+			.update(schema.sessionCharacters)
 			.set({ visibility: "hidden" })
 			.where(
 				and(
-					eq(schema.chatCharacters.chatId, w.chat.id),
-					eq(schema.chatCharacters.characterId, w.characters[2]!.id)
+					eq(schema.sessionCharacters.sessionId, w.session.id),
+					eq(
+						schema.sessionCharacters.characterId,
+						w.characters[2]!.id
+					)
 				)
 			)
 		return {
-			chatId: w.chat.id,
+			sessionId: w.session.id,
 			userId: w.user.id,
 			currentCharacterId: w.characters[0]!.id,
 			text: "Who is here?"
@@ -562,7 +572,7 @@ const mixedVisibility: ParityFixture = {
  * take one from.
  */
 const narrator: ParityFixture = {
-	name: "chat/narrator",
+	name: "session/narrator",
 	async seed(db: any) {
 		const [config] = await db
 			.insert(schema.promptConfigs)
@@ -590,7 +600,7 @@ const narrator: ParityFixture = {
 			]
 		})
 		return {
-			chatId: w.chat.id,
+			sessionId: w.session.id,
 			userId: w.user.id,
 			// The mode itself.
 			currentCharacterId: null,
@@ -616,7 +626,7 @@ const narrator: ParityFixture = {
  * is user-visible — it is the order lore reaches the model.
  */
 const overBudget: ParityFixture = {
-	name: "chat/over-budget",
+	name: "session/over-budget",
 	async seed(db: any) {
 		// Distinct `position` values, deliberately. With every entry at the
 		// default 0 the tie-break falls through to whatever order the database
@@ -635,7 +645,7 @@ const overBudget: ParityFixture = {
 			messages: [{ role: "user", content: "Tell me of the ashguard." }]
 		})
 		return {
-			chatId: w.chat.id,
+			sessionId: w.session.id,
 			userId: w.user.id,
 			currentCharacterId: w.characters[0]!.id,
 			text: "Tell me of the ashguard."
@@ -645,21 +655,21 @@ const overBudget: ParityFixture = {
 
 /** Fixtures the two paths agree on, byte for byte. The gate runs on these. */
 /**
- * The chat above, rendered by the **template Serene Pub actually ships**.
+ * The session above, rendered by the **template Serene Pub actually ships**.
  *
  * Every other fixture uses a template written for this corpus, which turns out
  * to be a real gap: the shipped one renders the post-history reminder *inside*
  * the message loop, gated on the message index, and a corpus template that
  * renders `postHistory.*` outside the loop cannot express a position at all.
  * Eight green fixtures missed a reminder landing at the top of the conversation
- * instead of next to the generation point, and comparing one real chat found it
+ * instead of next to the generation point, and comparing one real session found it
  * immediately.
  *
  * Read from the seeded row rather than pasted here, so it cannot drift from what
  * users get.
  */
 const shippedTemplate: ParityFixture = {
-	name: "chat/shipped-template",
+	name: "session/shipped-template",
 	async seed(db: any) {
 		const { DEFAULT_CONTEXT_TEMPLATE } = await import(
 			"$lib/server/db/legacyContextTemplate"
@@ -697,7 +707,7 @@ const shippedTemplate: ParityFixture = {
 		})
 
 		return {
-			chatId: w.chat.id,
+			sessionId: w.session.id,
 			userId: w.user.id,
 			currentCharacterId: w.characters[0]!.id,
 			text: "Have you seen the ashguard?",
@@ -724,18 +734,18 @@ const shippedTemplate: ParityFixture = {
  * found. `characterNames` and `characters` are filtered differently — hiding a
  * character removes it from the names list and leaves its card in place — so
  * this renders `NAMES:|Bob`, an empty passthrough variable, beside a cast that
- * is not empty. `chat/visibility` hides one of three; this hides the only one,
+ * is not empty. `session/visibility` hides one of three; this hides the only one,
  * which is the case where the *whole* variable goes empty.
  *
  * It is deliberately **not** named for an empty cast, which is what was wanted
- * and is not reachable here: the cards are not visibility-filtered, so a chat
+ * and is not reachable here: the cards are not visibility-filtered, so a session
  * that can take a turn always has at least one. `JSON.stringify([])` being a
  * truthy `"[]"` — the case where "empty" means something different for the cast
  * than it does for world lore — is asserted directly in
  * `variableTemplates.parity.test.ts` instead.
  */
 const allHidden: ParityFixture = {
-	name: "chat/all-hidden",
+	name: "session/all-hidden",
 	async seed(db: any) {
 		const w = await seedWorld(db, {
 			characters: [{ name: "Alice", description: "A knight." }],
@@ -743,16 +753,19 @@ const allHidden: ParityFixture = {
 		})
 		const { eq, and } = await import("drizzle-orm")
 		await db
-			.update(schema.chatCharacters)
+			.update(schema.sessionCharacters)
 			.set({ visibility: "hidden" })
 			.where(
 				and(
-					eq(schema.chatCharacters.chatId, w.chat.id),
-					eq(schema.chatCharacters.characterId, w.characters[0]!.id)
+					eq(schema.sessionCharacters.sessionId, w.session.id),
+					eq(
+						schema.sessionCharacters.characterId,
+						w.characters[0]!.id
+					)
 				)
 			)
 		return {
-			chatId: w.chat.id,
+			sessionId: w.session.id,
 			userId: w.user.id,
 			currentCharacterId: w.characters[0]!.id,
 			text: "Anyone there?"
@@ -777,7 +790,7 @@ const withPipelineTemplate = (f: ParityFixture): ParityFixture => ({
 const CORPUS = [
 	shippedTemplate,
 	oneOnOne,
-	groupChat,
+	groupSession,
 	macroHeavy,
 	decoratedLore,
 	postHistory,
@@ -799,7 +812,7 @@ const CORPUS = [
  * - a fixture here that starts passing **fails the test**, so it gets promoted
  *   rather than sitting in the open list forever looking like a known problem.
  *
- * It is empty. `chat/over-budget` was its first and only entry, and the second
+ * It is empty. `session/over-budget` was its first and only entry, and the second
  * rule is what emptied it: fixing the tf-idf signal made the fixture pass, and
  * the suite went red until it was moved into the gate above. That is the
  * mechanism working, not a formality — a passing fixture in this list is a test
@@ -843,7 +856,9 @@ describe("the parity corpus", () => {
 		// produced it is deleted, and the golden *is* what 0.5 emitted for this
 		// fixture, which is exactly what this assertion wants to inspect.
 		const { readFileSync } = await import("node:fs")
-		const { goldenPathFor } = await import("$lib/server/pipelines/parity/harness")
+		const { goldenPathFor } = await import(
+			"$lib/server/pipelines/parity/harness"
+		)
 		const rendered = readFileSync(goldenPathFor(allHidden.name), "utf8")
 
 		// Empty on the left of the pipe: no visible assistant character to name.
@@ -869,7 +884,9 @@ describe("the parity corpus", () => {
 		// rather than local, seeing both whole is what actually finds it.
 		if (process.env.PARITY_FULL) {
 			const { readFileSync } = await import("node:fs")
-			const { goldenPathFor, pipelinePreview } = await import("$lib/server/pipelines/parity/harness")
+			const { goldenPathFor, pipelinePreview } = await import(
+				"$lib/server/pipelines/parity/harness"
+			)
 			const scope = await CORPUS[0]!.seed(db as any)
 			const pv: any = await pipelinePreview(db as any, scope)
 			console.log(

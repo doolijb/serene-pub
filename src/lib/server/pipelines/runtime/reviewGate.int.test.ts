@@ -52,13 +52,15 @@ vi.mock("$lib/server/embedding", () => ({
 }))
 
 let db: TestDb
-let chatId: number
+let sessionId: number
 let userId: number
 let specId: number
 
 beforeAll(async () => {
 	db = await createTestDb()
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(db as any)
 
 	const [user] = await db
@@ -71,14 +73,14 @@ beforeAll(async () => {
 		.insert(schema.lorebooks)
 		.values({ name: "Gate Lore", userId })
 		.returning()
-	const [chat] = await db
-		.insert(schema.chats)
+	const [session] = await db
+		.insert(schema.sessions)
 		.values({ userId, isGroup: false, lorebookId: lorebook.id })
 		.returning()
-	chatId = chat.id
-	await db.insert(schema.chatMessages).values([
+	sessionId = session.id
+	await db.insert(schema.sessionMessages).values([
 		{
-			chatId,
+			sessionId,
 			role: "user",
 			content: "The gate was sealed with old iron."
 		}
@@ -107,19 +109,22 @@ beforeAll(async () => {
 			}
 		})
 
-	const { SUMMARIZE_WORLD_SPEC_ID } = await import("$lib/server/pipelines/specs/summarize")
+	const { SUMMARIZE_WORLD_SPEC_ID } = await import(
+		"$lib/server/pipelines/specs/summarize"
+	)
 	const [spec] = await db
 		.select()
 		.from(schema.pipelineSpecs)
 		.where(eq(schema.pipelineSpecs.slug, SUMMARIZE_WORLD_SPEC_ID))
 	specId = spec.id
 
-	// The person's choice, written where every option is written: review
-	// `sync` on the save step, at user scope.
+	// The person's choice, written where every option is written since the
+	// layer simplification (2026-08-24): review `sync` on the save step, as
+	// the session's override.
 	await db.insert(schema.pipelineNodeOverrides).values({
 		specId,
-		scopeKind: "user",
-		scopeId: userId,
+		scopeKind: "session",
+		scopeId: sessionId,
 		nodeKey: "save",
 		slot: "settings",
 		path: "review",
@@ -129,7 +134,9 @@ beforeAll(async () => {
 
 /** Wait for this user's next parked review, patiently — the first run pays cold imports. */
 async function awaitReview() {
-	const { pendingReviewsFor } = await import("$lib/server/pipelines/runtime/reviewGate")
+	const { pendingReviewsFor } = await import(
+		"$lib/server/pipelines/runtime/reviewGate"
+	)
 	await vi.waitFor(
 		() => {
 			expect(pendingReviewsFor(userId).length).toBeGreaterThan(0)
@@ -142,20 +149,24 @@ async function awaitReview() {
 
 /** Clear anything a failed earlier test left parked. */
 async function drainReviews() {
-	const { pendingReviewsFor, resolveReview } = await import("$lib/server/pipelines/runtime/reviewGate")
+	const { pendingReviewsFor, resolveReview } = await import(
+		"$lib/server/pipelines/runtime/reviewGate"
+	)
 	for (const r of pendingReviewsFor(userId))
 		resolveReview(r.id, userId, "reject")
 }
 
 async function runGated() {
 	const { runSpec } = await import("$lib/server/pipelines/runtime/runTurn")
-	const { SUMMARIZE_WORLD_SPEC_ID } = await import("$lib/server/pipelines/specs/summarize")
+	const { SUMMARIZE_WORLD_SPEC_ID } = await import(
+		"$lib/server/pipelines/specs/summarize"
+	)
 	return runSpec({
 		db,
-		chatId,
+		sessionId,
 		userId,
 		specId: SUMMARIZE_WORLD_SPEC_ID,
-		input: { scope: { chatId }, request: {} },
+		input: { scope: { sessionId }, request: {} },
 		skipReceipt: true
 	})
 }
@@ -164,7 +175,9 @@ describe("a run parks at the gate, and a person decides", () => {
 	it("approve writes exactly what was reviewed", async () => {
 		call = 0
 		await drainReviews()
-		const { resolveReview } = await import("$lib/server/pipelines/runtime/reviewGate")
+		const { resolveReview } = await import(
+			"$lib/server/pipelines/runtime/reviewGate"
+		)
 
 		const running = runGated()
 
@@ -195,7 +208,9 @@ describe("a run parks at the gate, and a person decides", () => {
 	it("an edit is committed as if the pipeline wrote it (F14)", async () => {
 		call = 0
 		await drainReviews()
-		const { resolveReview } = await import("$lib/server/pipelines/runtime/reviewGate")
+		const { resolveReview } = await import(
+			"$lib/server/pipelines/runtime/reviewGate"
+		)
 		const running = runGated()
 		const review = await awaitReview()
 		resolveReview(review.id, userId, "edit", {
@@ -214,7 +229,9 @@ describe("a run parks at the gate, and a person decides", () => {
 	it("reject halts the run — a halt, not an error — and writes nothing", async () => {
 		call = 0
 		await drainReviews()
-		const { resolveReview } = await import("$lib/server/pipelines/runtime/reviewGate")
+		const { resolveReview } = await import(
+			"$lib/server/pipelines/runtime/reviewGate"
+		)
 		const before = (await db.select().from(schema.worldLoreEntries)).length
 
 		const running = runGated()
@@ -247,17 +264,23 @@ describe("a run parks at the gate, and a person decides", () => {
 	it("a cancelled run withdraws its review instead of leaving a ghost card", async () => {
 		call = 0
 		await drainReviews()
-		const { pendingReviewsFor } = await import("$lib/server/pipelines/runtime/reviewGate")
-		const { runSpec } = await import("$lib/server/pipelines/runtime/runTurn")
-		const { SUMMARIZE_WORLD_SPEC_ID } = await import("$lib/server/pipelines/specs/summarize")
+		const { pendingReviewsFor } = await import(
+			"$lib/server/pipelines/runtime/reviewGate"
+		)
+		const { runSpec } = await import(
+			"$lib/server/pipelines/runtime/runTurn"
+		)
+		const { SUMMARIZE_WORLD_SPEC_ID } = await import(
+			"$lib/server/pipelines/specs/summarize"
+		)
 
 		const controller = new AbortController()
 		const running = runSpec({
 			db,
-			chatId,
+			sessionId,
 			userId,
 			specId: SUMMARIZE_WORLD_SPEC_ID,
-			input: { scope: { chatId }, request: {} },
+			input: { scope: { sessionId }, request: {} },
 			signal: controller.signal,
 			skipReceipt: true
 		})

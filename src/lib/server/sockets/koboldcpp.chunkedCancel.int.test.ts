@@ -38,7 +38,8 @@ function makeFakeHttpsModule() {
 		Agent: FakeAgent,
 		get(url: string, optionsOrCb: any, maybeCb?: (res: any) => void) {
 			const options = typeof optionsOrCb === "function" ? {} : optionsOrCb
-			const cb = typeof optionsOrCb === "function" ? optionsOrCb : maybeCb!
+			const cb =
+				typeof optionsOrCb === "function" ? optionsOrCb : maybeCb!
 			const range: string = options?.headers?.Range ?? "(none)"
 			const req: any = { on: () => req, destroy: vi.fn() }
 			createdRequests.push({ range, req })
@@ -150,7 +151,8 @@ describe("koboldcpp:cancelDownload — chunked in-flight requests", () => {
 		// concurrent connections before we cancel.
 		await waitUntil(
 			() =>
-				createdRequests.filter((r) => r.range !== "bytes=0-0").length >= 2
+				createdRequests.filter((r) => r.range !== "bytes=0-0").length >=
+				2
 		)
 
 		const chunkRequestsBeforeCancel = createdRequests.filter(

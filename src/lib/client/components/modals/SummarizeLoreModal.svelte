@@ -5,7 +5,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { resolveOrCreateBindingByName } from "$lib/client/utils/createLorebookBinding"
-	import { attachLorebookToChat as attachToChat } from "$lib/client/utils/attachLorebookToChat"
+	import { attachLorebookToSession as attachToSession } from "$lib/client/utils/attachLorebookToSession"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
 
 	/** A name not yet backed by a real lorebookBindings id — either
@@ -22,7 +22,8 @@
 		a: { year: number | null; month: number | null; day: number | null },
 		b: { year: number | null; month: number | null; day: number | null }
 	): number {
-		if ((a.year ?? 0) !== (b.year ?? 0)) return (b.year ?? 0) - (a.year ?? 0)
+		if ((a.year ?? 0) !== (b.year ?? 0))
+			return (b.year ?? 0) - (a.year ?? 0)
 		if ((a.month ?? 0) !== (b.month ?? 0))
 			return (b.month ?? 0) - (a.month ?? 0)
 		return (b.day ?? 0) - (a.day ?? 0)
@@ -52,14 +53,14 @@
 	interface Props {
 		open: boolean
 		onOpenChange: (e: { open: boolean }) => void
-		chatId: number
+		sessionId: number
 		lorebookId: number | null
 		selectedMessageIds: number[]
 		initialLoreType?: "world" | "character" | "scene"
 		onSaved: () => void
 		onLorebookSet: (lorebookId: number) => void
-		chatCharacters?: BindableEntity[]
-		chatPersonas?: BindableEntity[]
+		sessionCharacters?: BindableEntity[]
+		sessionPersonas?: BindableEntity[]
 		hasSceneMessageGap?: boolean
 		/**
 		 * Scene runs hand off to the activity-backed `scenes:process` pipeline:
@@ -69,23 +70,23 @@
 		 */
 		onSceneProcessStarted?: (sceneId: number) => void
 		/**
-		 * Resume an existing chat_summarize activity instead of starting fresh.
-		 * Supplied by the chat page when the Activity panel reopens a run.
+		 * Resume an existing session_summarize activity instead of starting fresh.
+		 * Supplied by the session page when the Activity panel reopens a run.
 		 */
-		resumeActivity?: ChatSummarizeState | null
+		resumeActivity?: SessionSummarizeState | null
 	}
 
 	let {
 		open = $bindable(),
 		onOpenChange,
-		chatId,
+		sessionId,
 		lorebookId = $bindable(),
 		selectedMessageIds,
 		initialLoreType = "world",
 		onSaved,
 		onLorebookSet,
-		chatCharacters = [],
-		chatPersonas = [],
+		sessionCharacters = [],
+		sessionPersonas = [],
 		hasSceneMessageGap = false,
 		onSceneProcessStarted,
 		resumeActivity = null
@@ -148,7 +149,6 @@
 	 */
 	let didPreselectHistoryEntry = $state(false)
 
-
 	let lorebookBindings = $state<SelectLorebookBinding[]>([])
 	let bindableEntities = $derived.by<BindableEntity[]>(() => {
 		const seen = new Set<string>()
@@ -160,8 +160,8 @@
 				result.push(e)
 			}
 		}
-		for (const cc of chatCharacters) add(cc)
-		for (const cp of chatPersonas) add(cp)
+		for (const cc of sessionCharacters) add(cc)
+		for (const cp of sessionPersonas) add(cp)
 		for (const b of lorebookBindings) {
 			if (b.characterId && (b as any).character)
 				add({
@@ -190,7 +190,7 @@
 	let currentBatch = $state(0)
 	let totalBatches = $state(1)
 	let partialSummary = $state<{ content?: string; raw?: string }>({})
-	let trace = $state<Sockets.Chats.Summarize.TraceEntry[]>([])
+	let trace = $state<Sockets.Sessions.Summarize.TraceEntry[]>([])
 	let showTrace = $state(false)
 	let expandedTraceIdx = $state<number | null>(null)
 
@@ -226,7 +226,10 @@
 				: summarizePhase === "synthesizing"
 					? 90
 					: totalBatches > 1
-						? Math.max(5, Math.round((currentBatch / totalBatches) * 80))
+						? Math.max(
+								5,
+								Math.round((currentBatch / totalBatches) * 80)
+							)
 						: currentBatch > 0
 							? 60
 							: 5
@@ -341,18 +344,18 @@
 	})
 
 	// ── Socket handlers ──────────────────────────────────────────────
-	function handleProgress(data: Sockets.Chats.Summarize.Progress) {
+	function handleProgress(data: Sockets.Sessions.Summarize.Progress) {
 		summarizePhase = data.phase
 		currentBatch = data.batch
 		totalBatches = data.totalBatches
 		partialSummary = data.partial
 	}
 
-	function handleTrace(entry: Sockets.Chats.Summarize.TraceEntry) {
+	function handleTrace(entry: Sockets.Sessions.Summarize.TraceEntry) {
 		trace = [...trace, entry]
 	}
 
-	function handleComplete(data: Sockets.Chats.Summarize.Response) {
+	function handleComplete(data: Sockets.Sessions.Summarize.Response) {
 		if (step !== "generating") return
 		rawOutput = data.raw
 		activeActivityId = data.activityId ?? activeActivityId
@@ -361,16 +364,16 @@
 		resolvedBindingId = data.lorebookBindingId ?? null
 		extractedParticipantCharacters = data.participantCharacters ?? []
 		extractedMentionedCharacters = data.mentionedCharacters ?? []
-		pendingNewParticipants = (data.suggestedParticipantCharacters ?? []).map(
-			(name) => ({ name, source: "suggested" as const })
-		)
+		pendingNewParticipants = (
+			data.suggestedParticipantCharacters ?? []
+		).map((name) => ({ name, source: "suggested" as const }))
 		pendingNewMentioned = (data.suggestedMentionedCharacters ?? []).map(
 			(name) => ({ name, source: "suggested" as const })
 		)
 		step = "review"
 	}
 
-	function handleError(data: Sockets.Chats.Summarize.ErrorResponse) {
+	function handleError(data: Sockets.Sessions.Summarize.ErrorResponse) {
 		if (step !== "generating") return
 		errorMessage = data.error
 		step = "error"
@@ -380,10 +383,10 @@
 		availableLorebooks = data.lorebookList
 	}
 
-	function handleSetLorebook(data: Sockets.Chats.SetLorebook.Response) {
-		lorebookId = data.chat.lorebookId
-		if (data.chat.lorebookId) {
-			onLorebookSet(data.chat.lorebookId)
+	function handleSetLorebook(data: Sockets.Sessions.SetLorebook.Response) {
+		lorebookId = data.session.lorebookId
+		if (data.session.lorebookId) {
+			onLorebookSet(data.session.lorebookId)
 			toaster.success({ title: "Lorebook attached" })
 		}
 	}
@@ -391,8 +394,8 @@
 	/**
 	 * `lorebooks:create` is a broadcast, not a reply — it fires for creates made
 	 * anywhere, including the Lorebooks+ sidebar. This modal is mounted on every
-	 * chat page, so attaching unconditionally here meant creating a lorebook from
-	 * the sidebar silently bound it to whatever chat happened to be open.
+	 * session page, so attaching unconditionally here meant creating a lorebook from
+	 * the sidebar silently bound it to whatever session happened to be open.
 	 *
 	 * Only attach when *this* modal asked for the create. Correlating on the
 	 * submitted name rather than a bare boolean, because a bare flag is consumed
@@ -412,7 +415,7 @@
 			data.lorebook.name === pendingCreateName
 		) {
 			pendingCreateName = null
-			attachLorebookToChat(data.lorebook.id)
+			attachLorebookToSession(data.lorebook.id)
 		}
 	}
 
@@ -449,7 +452,7 @@
 		isCreatingHistoryEntry = false
 		if (data.historyEntry) {
 			// Don't rely on a subsequent historyEntries:list refresh to show
-			// this entry — in a busy chat (concurrent message generation,
+			// this entry — in a busy session (concurrent message generation,
 			// vectorization), that refresh can be one of several in flight
 			// and an older, slower one can resolve last and overwrite this
 			// entry right back out of the list. Apply it locally so the
@@ -485,7 +488,7 @@
 		}
 	}
 
-	// Per-dispatch staleness guard for the chats:summarize:* events —
+	// Per-dispatch staleness guard for the sessions:summarize:* events —
 	// generate() below registers fresh listeners closing over the token
 	// current at dispatch time, and stores their cleanup so a superseding
 	// call, a cancel, or unmount can all tear down a stale/in-flight
@@ -494,22 +497,19 @@
 	let activeCleanup: (() => void) | null = null
 
 	onMount(() => {
-		// chats:summarize:progress/complete/error/trace are NOT registered
-		// here — this component stays mounted for the whole chat page
+		// sessions:summarize:progress/complete/error/trace are NOT registered
+		// here — this component stays mounted for the whole session page
 		// session (unlike ProcessSceneModal, which remounts fresh per use),
 		// so a single persistent listener can't distinguish a stale,
 		// already-superseded generation's events from the current one. See
 		// generate()'s per-dispatch registration below instead.
 		socket.on("lorebooks:list", handleLorebooksList)
-		socket.on("chats:setLorebook", handleSetLorebook)
+		socket.on("sessions:setLorebook", handleSetLorebook)
 		socket.on("lorebooks:create", handleLorebookCreate)
 		socket.on("lorebooks:create:error", handleLorebookCreateError)
 		socket.on("historyEntries:list", handleHistoryEntriesList)
 		socket.on("historyEntries:create", handleHistoryEntryCreate)
-		socket.on(
-			"historyEntries:create:error",
-			handleHistoryEntryCreateError
-		)
+		socket.on("historyEntries:create:error", handleHistoryEntryCreateError)
 		socket.on("lorebooks:bindingList", handleLorebookBindingList)
 		socket.emit("lorebooks:list", {})
 	})
@@ -519,7 +519,7 @@
 		const s = socket as any
 		activeCleanup?.()
 		s.off("lorebooks:list", handleLorebooksList)
-		s.off("chats:setLorebook", handleSetLorebook)
+		s.off("sessions:setLorebook", handleSetLorebook)
 		s.off("lorebooks:create", handleLorebookCreate)
 		s.off("lorebooks:create:error", handleLorebookCreateError)
 		s.off("historyEntries:list", handleHistoryEntriesList)
@@ -529,14 +529,14 @@
 	})
 
 	// ── Actions ──────────────────────────────────────────────────────
-	function attachLorebookToChat(id: number) {
-		attachToChat(typedSocket, chatId, id)
+	function attachLorebookToSession(id: number) {
+		attachToSession(typedSocket, sessionId, id)
 		attachingLorebookId = ""
 	}
 
 	function confirmAttachExisting() {
 		if (!attachingLorebookId) return
-		attachLorebookToChat(Number(attachingLorebookId))
+		attachLorebookToSession(Number(attachingLorebookId))
 	}
 
 	function createAndAttachLorebook() {
@@ -575,7 +575,7 @@
 	/**
 	 * Scene runs take a different route to the other two lore types.
 	 *
-	 * `chats:summarize` is foreground-only: it registers no activity and takes
+	 * `sessions:summarize` is foreground-only: it registers no activity and takes
 	 * no abort signal, so closing this modal orphans the run — the server keeps
 	 * burning LLM calls while the client discards the result. `scenes:process`
 	 * is already activity-backed and resumable, so the scene path creates its
@@ -593,7 +593,9 @@
 			s.off("scenes:create:error", onCreateError)
 		}
 
-		function onCreated(data: { scene?: { id: number; selectedMessageIds?: number[] } }) {
+		function onCreated(data: {
+			scene?: { id: number; selectedMessageIds?: number[] }
+		}) {
 			// `scenes:create` is a broadcast, so correlate before claiming it.
 			// Matching on the message id set rather than a bare flag: it is
 			// already unique to this dispatch, and a second tab creating a scene
@@ -630,7 +632,7 @@
 		socket.emit("scenes:create", {
 			scene: {
 				lorebookId,
-				chatId,
+				sessionId,
 				historyEntryId: Number(selectedHistoryEntryId),
 				selectedMessageIds,
 				name: null
@@ -654,37 +656,37 @@
 		activeGenerationToken += 1
 		const token = activeGenerationToken
 
-		const onProgress = (data: Sockets.Chats.Summarize.Progress) => {
+		const onProgress = (data: Sockets.Sessions.Summarize.Progress) => {
 			if (token !== activeGenerationToken) return
 			handleProgress(data)
 		}
-		const onTrace = (entry: Sockets.Chats.Summarize.TraceEntry) => {
+		const onTrace = (entry: Sockets.Sessions.Summarize.TraceEntry) => {
 			if (token !== activeGenerationToken) return
 			handleTrace(entry)
 		}
-		const onComplete = (data: Sockets.Chats.Summarize.Response) => {
+		const onComplete = (data: Sockets.Sessions.Summarize.Response) => {
 			if (token !== activeGenerationToken) return
 			cleanup()
 			handleComplete(data)
 		}
-		const onError = (data: Sockets.Chats.Summarize.ErrorResponse) => {
+		const onError = (data: Sockets.Sessions.Summarize.ErrorResponse) => {
 			if (token !== activeGenerationToken) return
 			cleanup()
 			handleError(data)
 		}
 		function cleanup() {
 			const s = socket as any
-			s.off("chats:summarize:progress", onProgress)
-			s.off("chats:summarize:complete", onComplete)
-			s.off("chats:summarize:error", onError)
-			s.off("chats:summarize:trace", onTrace)
+			s.off("sessions:summarize:progress", onProgress)
+			s.off("sessions:summarize:complete", onComplete)
+			s.off("sessions:summarize:error", onError)
+			s.off("sessions:summarize:trace", onTrace)
 			if (activeCleanup === cleanup) activeCleanup = null
 		}
 		activeCleanup = cleanup
-		socket.on("chats:summarize:progress", onProgress)
-		socket.on("chats:summarize:complete", onComplete)
-		socket.on("chats:summarize:error", onError)
-		socket.on("chats:summarize:trace", onTrace)
+		socket.on("sessions:summarize:progress", onProgress)
+		socket.on("sessions:summarize:complete", onComplete)
+		socket.on("sessions:summarize:error", onError)
+		socket.on("sessions:summarize:trace", onTrace)
 
 		step = "generating"
 		summarizePhase = "drafting"
@@ -700,8 +702,8 @@
 		errorMessage = ""
 
 		const [bindingType, bindingIdStr] = selectedBinding.split(":")
-		socket.emit("chats:summarize", {
-			chatId,
+		socket.emit("sessions:summarize", {
+			sessionId,
 			messageIds: selectedMessageIds,
 			loreType,
 			// Scene runs returned early above, so only world/character reach
@@ -712,7 +714,7 @@
 				bindingType === "character" ? Number(bindingIdStr) : undefined,
 			lorebookBindingPersonaId:
 				bindingType === "persona" ? Number(bindingIdStr) : undefined
-		} satisfies Sockets.Chats.Summarize.Params)
+		} satisfies Sockets.Sessions.Summarize.Params)
 	}
 
 	async function saveEntry() {
@@ -743,7 +745,7 @@
 				socket.emit("scenes:create", {
 					scene: {
 						lorebookId,
-						chatId,
+						sessionId,
 						historyEntryId: selectedHistoryEntryId
 							? Number(selectedHistoryEntryId)
 							: null,
@@ -828,10 +830,7 @@
 		if (newMentionedId === "") return
 		const id = Number(newMentionedId)
 		if (!extractedMentionedCharacters.includes(id)) {
-			extractedMentionedCharacters = [
-				...extractedMentionedCharacters,
-				id
-			]
+			extractedMentionedCharacters = [...extractedMentionedCharacters, id]
 		}
 		newMentionedId = ""
 	}
@@ -853,7 +852,10 @@
 	function addManualMentioned() {
 		const name = newMentionedName.trim()
 		if (!name || pendingNameTaken(name, pendingNewMentioned)) return
-		pendingNewMentioned = [...pendingNewMentioned, { name, source: "manual" }]
+		pendingNewMentioned = [
+			...pendingNewMentioned,
+			{ name, source: "manual" }
+		]
 		newMentionedName = ""
 	}
 </script>
@@ -884,8 +886,8 @@
 							class="text-warning-500 mt-0.5 shrink-0"
 						/>
 						<span>
-							No lorebook is attached to this chat. Attach one to
-							continue.
+							No lorebook is attached to this session. Attach one
+							to continue.
 						</span>
 					</div>
 					{#if !isCreatingLorebook}
@@ -1288,9 +1290,9 @@
 							>
 								<option value="">Add character…</option>
 								{#each lorebookBindings.filter((b) => !extractedParticipantCharacters.includes(b.id)) as b}
-									<option value={b.id}
-										>{b.name || b.binding}</option
-									>
+									<option value={b.id}>
+										{b.name || b.binding}
+									</option>
 								{/each}
 							</select>
 							<button
@@ -1314,8 +1316,9 @@
 									class="chip preset-tonal-warning flex items-center gap-1 border border-dashed text-xs"
 								>
 									{p.name}
-									<span class="text-[10px] opacity-70">(new)</span
-									>
+									<span class="text-[10px] opacity-70">
+										(new)
+									</span>
 									<button
 										class="hover:text-error-500 p-1.5"
 										aria-label="Remove suggested character {p.name}"
@@ -1390,9 +1393,9 @@
 							>
 								<option value="">Add character…</option>
 								{#each lorebookBindings.filter((b) => !extractedMentionedCharacters.includes(b.id)) as b}
-									<option value={b.id}
-										>{b.name || b.binding}</option
-									>
+									<option value={b.id}>
+										{b.name || b.binding}
+									</option>
 								{/each}
 							</select>
 							<button
@@ -1416,8 +1419,9 @@
 									class="chip preset-tonal-warning flex items-center gap-1 border border-dashed text-xs"
 								>
 									{p.name}
-									<span class="text-[10px] opacity-70">(new)</span
-									>
+									<span class="text-[10px] opacity-70">
+										(new)
+									</span>
 									<button
 										class="hover:text-error-500 p-1.5"
 										aria-label="Remove suggested character {p.name}"

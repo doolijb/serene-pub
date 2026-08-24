@@ -4,7 +4,7 @@ import {
 	populateLorebookEntryBindings
 } from "$lib/server/pipelines/prompt/characterLore"
 import {
-	buildChat,
+	buildSession,
 	buildLorebook,
 	character,
 	characterLoreEntry,
@@ -13,32 +13,32 @@ import {
 } from "$lib/server/pipelines/testing/fixtures"
 
 describe("populateLorebookEntryBindings — @@decorator stripping", () => {
-	test("strips a leading @@decorator line when the entry's lorebook matches the chat", () => {
+	test("strips a leading @@decorator line when the entry's lorebook matches the session", () => {
 		const entry = worldLoreEntry({
 			lorebookId: 1,
 			content: "@@position before_char\nActual lore content."
 		})
-		const chat = buildChat({
+		const session = buildSession({
 			lorebookId: 1,
 			lorebook: buildLorebook({ id: 1, worldLoreEntries: [entry] })
 		})
-		const result = populateLorebookEntryBindings(entry, chat)
+		const result = populateLorebookEntryBindings(entry, session)
 		expect(result.content).toBe("Actual lore content.")
 	})
 
-	test("still strips decorators even when the entry's lorebook doesn't match the chat (early-return path)", () => {
-		// chat.lorebook.id (2) !== entry.lorebookId (1) — populateLorebookEntryBindings
+	test("still strips decorators even when the entry's lorebook doesn't match the session (early-return path)", () => {
+		// session.lorebook.id (2) !== entry.lorebookId (1) — populateLorebookEntryBindings
 		// returns early before any {{char:#}} binding substitution, but decorator
 		// stripping must still have applied, since it runs unconditionally up front.
 		const entry = worldLoreEntry({
 			lorebookId: 1,
 			content: "@@dont_activate\nActual lore content."
 		})
-		const chat = buildChat({
+		const session = buildSession({
 			lorebookId: 2,
 			lorebook: buildLorebook({ id: 2 })
 		})
-		const result = populateLorebookEntryBindings(entry, chat)
+		const result = populateLorebookEntryBindings(entry, session)
 		expect(result.content).toBe("Actual lore content.")
 	})
 
@@ -54,7 +54,7 @@ describe("populateLorebookEntryBindings — @@decorator stripping", () => {
 			lorebookId: 1,
 			content: "@@depth 3\n{{char:5}} lives here."
 		})
-		const chat = buildChat({
+		const session = buildSession({
 			lorebookId: 1,
 			lorebook: buildLorebook({
 				id: 1,
@@ -64,7 +64,7 @@ describe("populateLorebookEntryBindings — @@decorator stripping", () => {
 				worldLoreEntries: [entry]
 			})
 		})
-		const result = populateLorebookEntryBindings(entry, chat)
+		const result = populateLorebookEntryBindings(entry, session)
 		expect(result.content).toBe("Kestrel lives here.")
 	})
 
@@ -73,11 +73,11 @@ describe("populateLorebookEntryBindings — @@decorator stripping", () => {
 			lorebookId: 1,
 			content: "Plain lore content with no decorators."
 		})
-		const chat = buildChat({
+		const session = buildSession({
 			lorebookId: 1,
 			lorebook: buildLorebook({ id: 1, worldLoreEntries: [entry] })
 		})
-		const result = populateLorebookEntryBindings(entry, chat)
+		const result = populateLorebookEntryBindings(entry, session)
 		expect(result.content).toBe("Plain lore content with no decorators.")
 	})
 })
@@ -91,7 +91,7 @@ describe("isCharacterLoreEntryVisible — narrator visibility (decision 3)", () 
 		personaId: null
 	})
 
-	function chatWithNpcLore() {
+	function sessionWithNpcLore() {
 		const entry = characterLoreEntry({
 			lorebookId: 1,
 			lorebookBindingId: npcBinding.id,
@@ -99,7 +99,7 @@ describe("isCharacterLoreEntryVisible — narrator visibility (decision 3)", () 
 		})
 		return {
 			entry,
-			chat: buildChat({
+			session: buildSession({
 				lorebookId: 1,
 				lorebook: buildLorebook({
 					id: 1,
@@ -111,13 +111,13 @@ describe("isCharacterLoreEntryVisible — narrator visibility (decision 3)", () 
 	}
 
 	test("a background/NPC-bound entry is visible to the Narrator (no current character)", () => {
-		const { entry, chat } = chatWithNpcLore()
-		expect(isCharacterLoreEntryVisible(entry, chat, null)).toBe(true)
+		const { entry, session } = sessionWithNpcLore()
+		expect(isCharacterLoreEntryVisible(entry, session, null)).toBe(true)
 	})
 
 	test("a background/NPC-bound entry is invisible to any specific character", () => {
-		const { entry, chat } = chatWithNpcLore()
-		expect(isCharacterLoreEntryVisible(entry, chat, 42)).toBe(false)
+		const { entry, session } = sessionWithNpcLore()
+		expect(isCharacterLoreEntryVisible(entry, session, 42)).toBe(false)
 	})
 
 	test("an entry with no lorebookBindingId at all stays invisible to the Narrator too", () => {
@@ -126,10 +126,10 @@ describe("isCharacterLoreEntryVisible — narrator visibility (decision 3)", () 
 			lorebookBindingId: null,
 			content: "Truly unbound lore."
 		})
-		const chat = buildChat({
+		const session = buildSession({
 			lorebookId: 1,
 			lorebook: buildLorebook({ id: 1, characterLoreEntries: [entry] })
 		})
-		expect(isCharacterLoreEntryVisible(entry, chat, null)).toBe(false)
+		expect(isCharacterLoreEntryVisible(entry, session, null)).toBe(false)
 	})
 })

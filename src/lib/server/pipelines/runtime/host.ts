@@ -27,19 +27,19 @@ import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
 type Db = { select: any; insert: any; update: any }
 
 export interface HostScope {
-	/** The chat this run belongs to. Reads outside it are refused, not filtered. */
-	chatId?: number
+	/** The session this run belongs to. Reads outside it are refused, not filtered. */
+	sessionId?: number
 	/** Who triggered the run, for authorship on writes. */
 	userId?: number
 	/**
 	 * A message being composed but not yet stored.
 	 *
-	 * The draft preview (`chats:promptTokenCount`) fires on a debounce while
+	 * The draft preview (`sessions:promptTokenCount`) fires on a debounce while
 	 * somebody types, so the text it is previewing is deliberately not a row.
 	 * The turn itself never needs this — by then the user's message has been
 	 * written — which is why it lives on the scope rather than on a port.
 	 *
-	 * Appended by the `chat_messages` read, so every Query that reads history
+	 * Appended by the `session_messages` read, so every Query that reads history
 	 * sees the same conversation the run would see. Doing it in one binding
 	 * instead would leave retrieval scoring against a message the renderer
 	 * shows, or the reverse.
@@ -48,7 +48,7 @@ export interface HostScope {
 	/**
 	 * Whose turn it is. Null in narrator mode.
 	 *
-	 * A property of the run, like `chatId` — and it has to reach the provider,
+	 * A property of the run, like `sessionId` — and it has to reach the provider,
 	 * because `StopStrings` excludes the *speaking* character's own name from
 	 * the stop list. Without it the prompt seeds `Ash: ` and also stops on
 	 * `Ash:`, so any model that opens by repeating the name returns an empty
@@ -151,7 +151,7 @@ export class HostScopeError extends Error {}
  * A read a spec is not entitled to make is an **error, not an empty result**.
  *
  * Returning `[]` would let a mis-scoped pipeline look like a working one with a
- * quiet chat, and the symptom — "the bot forgot everything" — points at
+ * quiet session, and the symptom — "the bot forgot everything" — points at
  * retrieval rather than at permissions, which is where the week goes.
  */
 function assertScoped(
@@ -162,8 +162,8 @@ function assertScoped(
 	if (wanted === undefined) return
 	if (allowed === undefined || wanted !== allowed)
 		throw new HostScopeError(
-			`${node.key} (${node.typeId}) asked for chat ${wanted}, but this run is scoped to ` +
-				`${allowed ?? "no chat"}. A pipeline may only read the chat it was triggered in.`
+			`${node.key} (${node.typeId}) asked for session ${wanted}, but this run is scoped to ` +
+				`${allowed ?? "no session"}. A pipeline may only read the session it was triggered in.`
 		)
 }
 
@@ -174,7 +174,7 @@ function assertScoped(
  * parallel — which is exactly what a retrieval block does — then raced on the
  * same dynamic import, and one of them observed a module that reported no model
  * loaded while its sibling embedded happily. The symptom was a provider error on
- * a healthy chat, on one of two identical calls, depending on timing.
+ * a healthy session, on one of two identical calls, depending on timing.
  *
  * One promise, created on first use and reused: there is no second import to
  * race with, and the module is still not loaded for an instance that never
@@ -190,24 +190,24 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 			const q = (query ?? {}) as Record<string, any>
 
 			switch (table) {
-				case "chat_messages": {
-					const chatId = q.chatId ?? scope.chatId
-					assertScoped(node, q.chatId, scope.chatId)
-					if (chatId === undefined) return []
+				case "session_messages": {
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined) return []
 
 					// `isHidden` is the existing convention for a message that should
 					// not reach a model. Honoured here rather than left to each
 					// binding, so a new Query type cannot forget it.
 					const rows = await db
 						.select()
-						.from(schema.chatMessages)
+						.from(schema.sessionMessages)
 						.where(
 							and(
-								eq(schema.chatMessages.chatId, chatId),
-								eq(schema.chatMessages.isHidden, false)
+								eq(schema.sessionMessages.sessionId, sessionId),
+								eq(schema.sessionMessages.isHidden, false)
 							)
 						)
-						.orderBy(desc(schema.chatMessages.id))
+						.orderBy(desc(schema.sessionMessages.id))
 						.limit(Math.min(q.limit ?? 100, 500))
 
 					// Reversed after a descending limit: "the most recent N, in
@@ -221,7 +221,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						history.push(
 							toMessage({
 								id: -1,
-								chatId,
+								sessionId,
 								role: "user",
 								content: scope.draftMessage.content,
 								personaId: scope.draftMessage.personaId ?? null,
@@ -233,14 +233,14 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					return history
 				}
 
-				case "chats": {
-					const chatId = q.chatId ?? scope.chatId
-					assertScoped(node, q.chatId, scope.chatId)
-					if (chatId === undefined) return []
+				case "sessions": {
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined) return []
 					return await db
 						.select()
-						.from(schema.chats)
-						.where(eq(schema.chats.id, chatId))
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, sessionId))
 						.limit(1)
 				}
 
@@ -248,10 +248,10 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					/**
 					 * The messages a summary is drawn from, with sender *names*.
 					 *
-					 * A separate read from `chat_messages` because the two want
+					 * A separate read from `session_messages` because the two want
 					 * different things: retrieval wants the recent window in
 					 * reading order; a summary wants a chosen range — possibly
-					 * the whole chat — and it wants `senderName` resolved, since
+					 * the whole session — and it wants `senderName` resolved, since
 					 * the drafting prompt renders speakers and a batch of
 					 * "Unknown: ..." lines summarizes a conversation nobody had.
 					 *
@@ -259,9 +259,9 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * explicit id list is taken as given (a person picked those
 					 * messages, hidden or not); "everything" filters hidden.
 					 */
-					const chatId = q.chatId ?? scope.chatId
-					assertScoped(node, q.chatId, scope.chatId)
-					if (chatId === undefined) return []
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined) return []
 
 					const messageIds: number[] | undefined = Array.isArray(
 						q.messageIds
@@ -271,22 +271,31 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 
 					const rows = await db
 						.select()
-						.from(schema.chatMessages)
+						.from(schema.sessionMessages)
 						.where(
 							messageIds
 								? and(
-										eq(schema.chatMessages.chatId, chatId),
+										eq(
+											schema.sessionMessages.sessionId,
+											sessionId
+										),
 										inArray(
-											schema.chatMessages.id,
+											schema.sessionMessages.id,
 											messageIds
 										)
 									)
 								: and(
-										eq(schema.chatMessages.chatId, chatId),
-										eq(schema.chatMessages.isHidden, false)
+										eq(
+											schema.sessionMessages.sessionId,
+											sessionId
+										),
+										eq(
+											schema.sessionMessages.isHidden,
+											false
+										)
 									)
 						)
-						.orderBy(asc(schema.chatMessages.id))
+						.orderBy(asc(schema.sessionMessages.id))
 						.limit(Math.min(q.limit ?? 5000, 5000))
 
 					const charIds: number[] = [
@@ -333,20 +342,20 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 				}
 
 				case "lorebook_entries": {
-					// The chat's lorebook, or nothing. A pipeline cannot name a
-					// lorebook it was not triggered against — lore is chat-scoped
+					// The session's lorebook, or nothing. A pipeline cannot name a
+					// lorebook it was not triggered against — lore is session-scoped
 					// data and a spec that could reach any lorebook could read one
-					// belonging to another user's chat.
-					const chatId = q.chatId ?? scope.chatId
-					assertScoped(node, q.chatId, scope.chatId)
-					if (chatId === undefined) return []
+					// belonging to another user's session.
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined) return []
 
-					const [chat] = await db
+					const [session] = await db
 						.select()
-						.from(schema.chats)
-						.where(eq(schema.chats.id, chatId))
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, sessionId))
 						.limit(1)
-					if (!chat?.lorebookId) return []
+					if (!session?.lorebookId) return []
 
 					const [world, character, history] = await Promise.all([
 						db
@@ -355,7 +364,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							.where(
 								eq(
 									schema.worldLoreEntries.lorebookId,
-									chat.lorebookId
+									session.lorebookId
 								)
 							),
 						db
@@ -364,7 +373,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							.where(
 								eq(
 									schema.characterLoreEntries.lorebookId,
-									chat.lorebookId
+									session.lorebookId
 								)
 							),
 						db
@@ -373,14 +382,14 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							.where(
 								eq(
 									schema.historyEntries.lorebookId,
-									chat.lorebookId
+									session.lorebookId
 								)
 							)
 					])
 
 					/**
 					 * Normalized here, at the read, for the same reason
-					 * `chat_messages` honours `isHidden` here rather than in
+					 * `session_messages` honours `isHidden` here rather than in
 					 * each binding: a new Query type cannot forget it.
 					 *
 					 * Two transforms, and **both were missing on the pipeline
@@ -390,7 +399,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * they are stripped, and `{{char:1}}` binding placeholders
 					 * were arriving unsubstituted. The still-legacy token-count
 					 * preview *did* strip them, so the number on screen and the
-					 * prompt actually sent disagreed on any chat using either.
+					 * prompt actually sent disagreed on any session using either.
 					 *
 					 * The legacy function is reused rather than reimplemented.
 					 * A second copy of "what a lore entry looks like once it is
@@ -405,33 +414,37 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						.where(
 							eq(
 								schema.lorebookBindings.lorebookId,
-								chat.lorebookId
+								session.lorebookId
 							)
 						)
 					const hydrated = await hydrateBindings(db, bindings)
-					// The visibility rule below reads the chat's personas, so
+					// The visibility rule below reads the session's personas, so
 					// they are part of the shape it is handed.
-					const chatPersonas = await db
+					const sessionPersonas = await db
 						.select()
-						.from(schema.chatPersonas)
-						.where(eq(schema.chatPersonas.chatId, chatId))
-					const asChat = {
-						lorebookId: chat.lorebookId,
+						.from(schema.sessionPersonas)
+						.where(eq(schema.sessionPersonas.sessionId, sessionId))
+					const asSession = {
+						lorebookId: session.lorebookId,
 						lorebook: {
-							id: chat.lorebookId,
+							id: session.lorebookId,
 							lorebookBindings: hydrated
 						},
-						chatPersonas: (chatPersonas as any[]).map((cp) => ({
-							persona: { id: cp.personaId }
-						}))
+						sessionPersonas: (sessionPersonas as any[]).map(
+							(cp) => ({
+								persona: { id: cp.personaId }
+							})
+						)
 					} as any
 
 					const {
 						populateLorebookEntryBindings,
 						isCharacterLoreEntryVisible
-					} = await import("$lib/server/pipelines/prompt/characterLore")
+					} = await import(
+						"$lib/server/pipelines/prompt/characterLore"
+					)
 					const ready = (e: any) =>
-						populateLorebookEntryBindings(e, asChat)
+						populateLorebookEntryBindings(e, asSession)
 
 					/**
 					 * Character lore is private self-knowledge.
@@ -453,7 +466,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 */
 					const speaker = q.currentCharacterId ?? null
 					const visible = (e: any) =>
-						isCharacterLoreEntryVisible(e, asChat, speaker)
+						isCharacterLoreEntryVisible(e, asSession, speaker)
 
 					// Tagged with their source rather than returned as three lists,
 					// because every consumer downstream — scoring, budgeting, the
@@ -474,12 +487,12 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					]
 				}
 
-				case "chat_cast": {
+				case "session_cast": {
 					/**
-					 * Who is in the chat, and the prompt config they speak under.
+					 * Who is in the session, and the prompt config they speak under.
 					 *
 					 * One read rather than three, because the cast is only useful
-					 * assembled: a character row without its `chatCharacters` join
+					 * assembled: a character row without its `sessionCharacters` join
 					 * carries no visibility, and visibility is what decides whether
 					 * that character appears in the prompt at all. Splitting them
 					 * would let a spec read the characters and skip the join, which
@@ -489,51 +502,74 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * minimal is `promptFields.resolveContextInput`'s decision — the
 					 * host retrieves, it does not choose.
 					 */
-					const chatId = q.chatId ?? scope.chatId
-					assertScoped(node, q.chatId, scope.chatId)
-					if (chatId === undefined) return null
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined) return null
 
-					const [chat] = await db
+					const [session] = await db
 						.select()
-						.from(schema.chats)
-						.where(eq(schema.chats.id, chatId))
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, sessionId))
 						.limit(1)
-					if (!chat) return null
+					if (!session) return null
 
-					const [chatCharacters, chatPersonas] = await Promise.all([
-						db
-							.select({
-								isActive: schema.chatCharacters.isActive,
-								visibility: schema.chatCharacters.visibility,
-								character: schema.characters
-							})
-							.from(schema.chatCharacters)
-							.innerJoin(
-								schema.characters,
-								eq(
-									schema.chatCharacters.characterId,
-									schema.characters.id
+					// `position` and `removedAt` ride along for the next-speaker
+					// strategies (19 §5): the rotation is ordered by position and
+					// must not seat a soft-removed participant. Inert to the
+					// prompt path — `resolveContextInput` picks fields by name.
+					const [sessionCharacters, sessionPersonas] =
+						await Promise.all([
+							db
+								.select({
+									isActive: schema.sessionCharacters.isActive,
+									visibility:
+										schema.sessionCharacters.visibility,
+									position: schema.sessionCharacters.position,
+									removedAt:
+										schema.sessionCharacters.removedAt,
+									character: schema.characters
+								})
+								.from(schema.sessionCharacters)
+								.innerJoin(
+									schema.characters,
+									eq(
+										schema.sessionCharacters.characterId,
+										schema.characters.id
+									)
 								)
-							)
-							.where(eq(schema.chatCharacters.chatId, chatId)),
-						db
-							.select({ persona: schema.personas })
-							.from(schema.chatPersonas)
-							.innerJoin(
-								schema.personas,
-								eq(
-									schema.chatPersonas.personaId,
-									schema.personas.id
+								.where(
+									eq(
+										schema.sessionCharacters.sessionId,
+										sessionId
+									)
+								),
+							db
+								.select({
+									persona: schema.personas,
+									position: schema.sessionPersonas.position,
+									removedAt: schema.sessionPersonas.removedAt
+								})
+								.from(schema.sessionPersonas)
+								.innerJoin(
+									schema.personas,
+									eq(
+										schema.sessionPersonas.personaId,
+										schema.personas.id
+									)
 								)
-							)
-							.where(eq(schema.chatPersonas.chatId, chatId))
-					])
+								.where(
+									eq(
+										schema.sessionPersonas.sessionId,
+										sessionId
+									)
+								)
+						])
 
 					return {
-						chatCharacters,
-						chatPersonas,
-						chatScenario: (chat as any).scenario ?? null,
-						isGroup: Boolean((chat as any).isGroup)
+						sessionCharacters,
+						sessionPersonas,
+						sessionScenario: (session as any).scenario ?? null,
+						isGroup: Boolean((session as any).isGroup)
 					}
 				}
 
@@ -542,14 +578,14 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					// walks them one at a time and each step reads the same
 					// list, which is why this is one read rather than one per
 					// step — five identical queries would be five chances for
-					// them to disagree about what "this chat" contains.
-					const chatId = q.chatId ?? scope.chatId
-					assertScoped(node, q.chatId, scope.chatId)
-					if (chatId === undefined) return []
+					// them to disagree about what "this session" contains.
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined) return []
 					return await db
 						.select()
 						.from(schema.scenes)
-						.where(eq(schema.scenes.chatId, chatId))
+						.where(eq(schema.scenes.sessionId, sessionId))
 						.orderBy(asc(schema.scenes.id))
 				}
 
@@ -567,29 +603,29 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * rendering belongs to the variable layout, and a value
 					 * that arrives pre-stringified is one no layout can change.
 					 *
-					 * Null whenever the chat has no lorebook, or the speaker
+					 * Null whenever the session has no lorebook, or the speaker
 					 * has no bound node, or there are no relationships. That is
 					 * the common case on an install that never opened the
 					 * graph, and it is not an error.
 					 */
-					const chatId = q.chatId ?? scope.chatId
-					assertScoped(node, q.chatId, scope.chatId)
-					if (chatId === undefined) return null
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined) return null
 
-					const [chat] = await db
-						.select({ lorebookId: schema.chats.lorebookId })
-						.from(schema.chats)
-						.where(eq(schema.chats.id, chatId))
+					const [session] = await db
+						.select({ lorebookId: schema.sessions.lorebookId })
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, sessionId))
 						.limit(1)
-					if (!chat?.lorebookId) return null
+					if (!session?.lorebookId) return null
 
 					const { buildGraphContextData } = await import(
 						"$lib/server/utils/graphContextFormatter"
 					)
 					return (
 						(await buildGraphContextData({
-							chatId,
-							lorebookId: chat.lorebookId,
+							sessionId,
+							lorebookId: session.lorebookId,
 							speakerCharacterId: q.currentCharacterId ?? null,
 							speakerPersonaId: null,
 							// The host's own connection, not the module-scope
@@ -647,19 +683,19 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * questions and one blended embedding answers neither. The
 					 * candidate pool is fetched once and scored against each.
 					 */
-					const chatId = q.chatId ?? scope.chatId
-					assertScoped(node, q.chatId, scope.chatId)
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
 
 					const vectors: number[][] = Array.isArray(q.vectors)
 						? q.vectors.filter(Array.isArray)
 						: Array.isArray(q.vector)
 							? [q.vector]
 							: []
-					if (chatId === undefined || vectors.length === 0)
+					if (sessionId === undefined || vectors.length === 0)
 						return { lists: [], similarity: [], candidates: [] }
 
 					const {
-						getChatRagContext,
+						getSessionRagContext,
 						fetchScopedCandidates,
 						rankScopedCandidates
 					} = await import("$lib/server/embedding/ragContext")
@@ -669,7 +705,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					if (!modelId)
 						return { lists: [], similarity: [], candidates: [] }
 
-					const context = await getChatRagContext(chatId)
+					const context = await getSessionRagContext(sessionId)
 					const candidates = await fetchScopedCandidates(context, {
 						modelId,
 						sources: q.sources,
@@ -754,11 +790,11 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							: []
 
 					// **No texts means no vectors**, not one vector of an empty
-					// string. A chat on its first turn has no "recent" window,
+					// string. A session on its first turn has no "recent" window,
 					// so this is a normal state rather than an edge case — and
 					// the previous shape embedded `undefined`, which crashed
 					// inside the model wrapper and surfaced as a provider error
-					// on a perfectly healthy chat.
+					// on a perfectly healthy session.
 					if (texts.length === 0) return { vectors: [], vector: null }
 
 					const vectors =
@@ -778,16 +814,18 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * key, no headers. See `dispatch.ts` for why that line is not
 					 * negotiable rather than merely tidy.
 					 */
-					const { dispatchGeneration } = await import("$lib/server/pipelines/runtime/dispatch")
-					if (scope.chatId === undefined)
+					const { dispatchGeneration } = await import(
+						"$lib/server/pipelines/runtime/dispatch"
+					)
+					if (scope.sessionId === undefined)
 						throw new HostScopeError(
-							`${node.key} has no chat to generate in — the run was started without a chat scope`
+							`${node.key} has no session to generate in — the run was started without a session scope`
 						)
 
 					const result = await dispatchGeneration({
 						compiledPrompt: p.compiledPrompt,
 						db: db as any,
-						chatId: scope.chatId,
+						sessionId: scope.sessionId,
 						userId: scope.userId,
 						// The payload's value when a caller supplied one,
 						// otherwise the run's. Neither is authoritative alone:
@@ -816,7 +854,9 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * case by case would be eleven copies of one call.
 					 */
 					if (STEP_TYPES.has(node.typeId)) {
-						const { dispatchStep } = await import("$lib/server/pipelines/runtime/dispatchStep")
+						const { dispatchStep } = await import(
+							"$lib/server/pipelines/runtime/dispatchStep"
+						)
 						const { text, via } = await dispatchStep(db, {
 							systemPrompt: String(p.systemPrompt ?? ""),
 							userPrompt: stepUserPrompt(p),
@@ -844,15 +884,15 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 
 			switch (node.typeId) {
 				case "core:consumer/create-message": {
-					const chatId = p.chatId ?? scope.chatId
-					if (chatId === undefined)
+					const sessionId = p.sessionId ?? scope.sessionId
+					if (sessionId === undefined)
 						throw new HostScopeError(
-							`${node.key} has no chat to write to — the run was started without a chat scope`
+							`${node.key} has no session to write to — the run was started without a session scope`
 						)
 					const [row] = await db
-						.insert(schema.chatMessages)
+						.insert(schema.sessionMessages)
 						.values({
-							chatId,
+							sessionId,
 							userId: p.userId ?? scope.userId ?? null,
 							characterId: p.characterId ?? null,
 							personaId: p.personaId ?? null,
@@ -862,7 +902,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							isGenerating: false
 						})
 						.returning()
-					return { id: row.id, chatId: row.chatId }
+					return { id: row.id, sessionId: row.sessionId }
 				}
 
 				case "core:consumer/update-message": {
@@ -878,16 +918,16 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 								`by a second node (13 §10b).`
 						)
 					const [row] = await db
-						.update(schema.chatMessages)
+						.update(schema.sessionMessages)
 						.set({ content: String(p.text ?? ""), isEdited: true })
-						.where(eq(schema.chatMessages.id, id))
+						.where(eq(schema.sessionMessages.id, id))
 						.returning()
 					if (!row)
 						throw new HostScopeError(
 							`${node.key}: no message ${id} to update`
 						)
-					assertScoped(node, row.chatId, scope.chatId)
-					return { id: row.id, chatId: row.chatId }
+					assertScoped(node, row.sessionId, scope.sessionId)
+					return { id: row.id, sessionId: row.sessionId }
 				}
 
 				case "core:consumer/create-lore-entry": {
@@ -899,20 +939,20 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * decided by which one the user pressed, not by a flag
 					 * threaded through the run.
 					 */
-					const chatId = scope.chatId
-					if (chatId === undefined)
+					const sessionId = scope.sessionId
+					if (sessionId === undefined)
 						throw new HostScopeError(
-							`${node.key} has no chat to write a lore entry for — the run was started without a chat scope`
+							`${node.key} has no session to write a lore entry for — the run was started without a session scope`
 						)
 
-					const [chat] = await db
+					const [session] = await db
 						.select()
-						.from(schema.chats)
-						.where(eq(schema.chats.id, chatId))
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, sessionId))
 						.limit(1)
-					if (!chat?.lorebookId)
+					if (!session?.lorebookId)
 						throw new HostScopeError(
-							`${node.key}: this chat has no lorebook, so there is nowhere to save the summary. Attach one first.`
+							`${node.key}: this session has no lorebook, so there is nowhere to save the summary. Attach one first.`
 						)
 
 					const name = String(p.name ?? "").trim() || "Untitled"
@@ -921,12 +961,12 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					const [row] = await db
 						.insert(schema.worldLoreEntries)
 						.values({
-							lorebookId: chat.lorebookId,
+							lorebookId: session.lorebookId,
 							name,
 							content
 						})
 						.returning()
-					return { id: row.id, lorebookId: chat.lorebookId }
+					return { id: row.id, lorebookId: session.lorebookId }
 				}
 
 				case "core:consumer/graph-proposal": {
@@ -938,14 +978,14 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * rather than node ids is what makes that structural: nothing
 					 * downstream can mistake it for rows that exist.
 					 */
-					const chatId = scope.chatId
-					if (chatId === undefined)
+					const sessionId = scope.sessionId
+					if (sessionId === undefined)
 						throw new HostScopeError(
-							`${node.key} has no chat to propose graph changes for`
+							`${node.key} has no session to propose graph changes for`
 						)
 					return {
 						status: "proposed",
-						chatId,
+						sessionId,
 						proposal: p.proposal ?? null
 					}
 				}
@@ -1006,7 +1046,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
  *
  * Deliberately narrow: a binding gets what a prompt needs, not the whole row.
  * `queueItemId`, `embedding` and `debugMeta` have no business reaching a plugin
- * that asked for chat history, and the cheapest way to guarantee that is to
+ * that asked for session history, and the cheapest way to guarantee that is to
  * never put them in the value (F30).
  */
 /** What leaves the host for one hit: an id, a score and the text. */

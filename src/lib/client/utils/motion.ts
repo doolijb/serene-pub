@@ -56,8 +56,8 @@ interface SoftFadeParams {
 /**
  * Opacity-only fade.
  *
- * Deliberately has no transform and no height component. The chat list's
- * autoscroll (performAutoscroll in routes/chats/[id]/+page.svelte) reads
+ * Deliberately has no transform and no height component. The session list's
+ * autoscroll (performAutoscroll in routes/sessions/[id]/+page.svelte) reads
  * scrollHeight synchronously right after a message is inserted, so an entering
  * element has to contribute its final height to layout immediately — anything
  * that animates size would be measured mid-flight and land the scroll short.
@@ -80,7 +80,7 @@ export function softFade(
 
 interface AnimateHeightParams {
 	/** When false, size changes are adopted instantly with no animation.
-	 *  Chat messages pass `!msg.isGenerating`: while tokens are streaming in,
+	 *  Session messages pass `!msg.isGenerating`: while tokens are streaming in,
 	 *  the height changes many times a second and an animation would lag
 	 *  permanently behind the real content instead of settling. */
 	enabled?: boolean
@@ -107,7 +107,7 @@ interface AnimateHeightParams {
  * in a feedback loop. The wrapper must have no padding of its own, or its
  * border-box height won't match what was measured.
  *
- * Pinning: the chat list's autoscroll always scrolls to the very bottom, and
+ * Pinning: the session list's autoscroll always scrolls to the very bottom, and
  * reads scrollHeight synchronously — so on its own it would measure a
  * mid-animation height and land short. Rather than avoid animating, this
  * re-pins the container every frame for the duration, but only when it was

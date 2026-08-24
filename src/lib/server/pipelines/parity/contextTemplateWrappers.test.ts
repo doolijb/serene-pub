@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 import { SHIPPED_CONTEXT_TEMPLATE } from "$lib/server/pipelines/entities/contextTemplateDefaults"
-import { SHIPPED_VARIABLE_TEMPLATES, wrapFor } from "$lib/server/pipelines/entities/variableLayouts"
+import {
+	SHIPPED_VARIABLE_TEMPLATES,
+	wrapFor
+} from "$lib/server/pipelines/entities/variableLayouts"
 
 /**
  * The headings and fences 0.6 took out of the context template are exactly the
@@ -76,6 +79,31 @@ const SPLIT_BLOCKS =
 	"```\n" +
 	"{{/if}}"
 
+/**
+ * The second recorded exception: script injections render in-loop (18 §4a,
+ * ruling 2026-08-23). 0.5 had no scripts, so its template has no block; 0.6's
+ * loop renders `injectionsByIndex` explicitly — position belongs to the
+ * template, the §20 lesson — and an empty map renders zero bytes, which is
+ * what the frozen goldens prove. Written as the exact string so anything that
+ * is not precisely this block still fails the comparison.
+ */
+const INJECTIONS_BLOCK =
+	"{{#each (lookup ../injectionsByIndex msgIndex)}}\n" +
+	'{{#if (eq this.role "assistant")}}\n' +
+	"{{#assistantBlock}}\n" +
+	"{{{this.content}}}\n" +
+	"{{/assistantBlock}}\n" +
+	'{{else if (eq this.role "user")}}\n' +
+	"{{#userBlock}}\n" +
+	"{{{this.content}}}\n" +
+	"{{/userBlock}}\n" +
+	"{{else}}\n" +
+	"{{#systemBlock}}\n" +
+	"{{{this.content}}}\n" +
+	"{{/systemBlock}}\n" +
+	"{{/if}}\n" +
+	"{{/each}}\n"
+
 describe("the wrappers moved without changing", () => {
 	it("rebuilds 0.5's template from 0.6's plus the shipped layouts", () => {
 		let rebuilt = SHIPPED_CONTEXT_TEMPLATE
@@ -114,6 +142,12 @@ describe("the wrappers moved without changing", () => {
 			"the relationships split is no longer the shape this exception describes"
 		).toBe(true)
 		rebuilt = rebuilt.replace(SPLIT, LEGACY_BLOCK)
+
+		expect(
+			rebuilt.includes(INJECTIONS_BLOCK),
+			"the injections block is no longer the shape this exception describes"
+		).toBe(true)
+		rebuilt = rebuilt.replace(INJECTIONS_BLOCK, "")
 
 		expect(rebuilt).toBe(legacyTemplate())
 	})

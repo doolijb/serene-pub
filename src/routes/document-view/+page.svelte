@@ -24,7 +24,7 @@
 		[]
 	)
 	let personas: Sockets.Personas.List.Response["personaList"] = $state([])
-	let chats: Sockets.Chats.List.Response["chatList"] = $state([])
+	let sessions: Sockets.Sessions.List.Response["sessionList"] = $state([])
 	let setupData: {
 		summarizationStepComplete: boolean
 		ragStepComplete: boolean
@@ -33,7 +33,7 @@
 
 	let hasCharacter = $derived(characters.length > 0)
 	let hasPersona = $derived(personas.length > 0)
-	let hasChat = $derived(chats.length > 0)
+	let hasSession = $derived(sessions.length > 0)
 
 	interface Step {
 		id: string
@@ -42,7 +42,7 @@
 		done: boolean
 		href?: string
 		// Where "Review" should go once the step is done, if different from
-		// `href` (which for persona/character/chat points at their "new"
+		// `href` (which for persona/character/session points at their "new"
 		// creation form — reusing that for Review would drop a returning
 		// user straight into a blank form instead of showing what they
 		// already made).
@@ -73,25 +73,25 @@
 			id: "character",
 			label: "Create a character",
 			description:
-				"Characters are the AI personalities you'll chat with.",
+				"Characters are the AI personalities you'll session with.",
 			done: hasCharacter,
 			href: "/document-view/characters/new",
 			doneHref: "/document-view/characters"
 		})
 		list.push({
-			id: "chat",
-			label: "Start your first chat",
+			id: "session",
+			label: "Start your first session",
 			description: "Pick a character and begin a conversation.",
-			done: hasChat,
-			href: "/document-view/chats/new",
-			doneHref: "/document-view/chats"
+			done: hasSession,
+			href: "/document-view/sessions/new",
+			doneHref: "/document-view/sessions"
 		})
 		if (isAdmin) {
 			list.push({
 				id: "summarization",
 				label: "Summarization (optional)",
 				description:
-					"Generate lore summaries from chat history. Can be configured later in System Settings.",
+					"Generate lore summaries from session history. Can be configured later in System Settings.",
 				done: setupData?.summarizationStepComplete ?? false,
 				skippable: "summarization"
 			})
@@ -118,8 +118,8 @@
 	function handlePersonasList(msg: Sockets.Personas.List.Response) {
 		personas = msg.personaList || []
 	}
-	function handleChatsList(msg: Sockets.Chats.List.Response) {
-		chats = msg.chatList || []
+	function handleSessionsList(msg: Sockets.Sessions.List.Response) {
+		sessions = msg.sessionList || []
 		loaded = true
 	}
 	function handleSetupGet(msg: any) {
@@ -132,17 +132,17 @@
 	onMount(() => {
 		socket.on("characters:list", handleCharactersList)
 		socket.on("personas:list", handlePersonasList)
-		socket.on("chats:list", handleChatsList)
+		socket.on("sessions:list", handleSessionsList)
 		socket.on("setup:get", handleSetupGet)
 		socket.on("setup:markComplete", handleSetupMarkComplete)
 		socket.emit("characters:list", {})
 		socket.emit("personas:list", {})
-		socket.emit("chats:list", {})
+		socket.emit("sessions:list", {})
 		socket.emit("setup:get", {})
 		return () => {
 			socket.off("characters:list", handleCharactersList)
 			socket.off("personas:list", handlePersonasList)
-			socket.off("chats:list", handleChatsList)
+			socket.off("sessions:list", handleSessionsList)
 			socket.off("setup:get", handleSetupGet)
 			socket.off("setup:markComplete", handleSetupMarkComplete)
 		}
@@ -199,25 +199,27 @@
 			: ""}.
 	</p>
 
-	<h2>Recent Chats</h2>
-	{#if chats.length === 0}
+	<h2>Recent Sessions</h2>
+	{#if sessions.length === 0}
 		<p>
-			No chats yet. <a href="/document-view/chats/new">
-				Start a new chat
+			No sessions yet. <a href="/document-view/sessions/new">
+				Start a new session
 			</a>
 			.
 		</p>
 	{:else}
 		<ul class="a11y-list">
-			{#each chats.slice(0, 5) as chat (chat.id)}
+			{#each sessions.slice(0, 5) as session (session.id)}
 				<li class="a11y-list-item">
 					<h3>
-						<a href="/document-view/chats/{chat.id}">{chat.name}</a>
+						<a href="/document-view/sessions/{session.id}">
+							{session.name}
+						</a>
 					</h3>
 				</li>
 			{/each}
 		</ul>
-		<p><a href="/document-view/chats">View all chats</a></p>
+		<p><a href="/document-view/sessions">View all sessions</a></p>
 	{/if}
 
 	<h2>Quick Links</h2>
@@ -229,7 +231,7 @@
 			<a href="/document-view/personas">Personas</a>
 		</li>
 		<li class="a11y-list-item">
-			<a href="/document-view/chats/new">Start a new chat</a>
+			<a href="/document-view/sessions/new">Start a new session</a>
 		</li>
 	</ul>
 {/if}

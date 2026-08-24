@@ -54,6 +54,11 @@
 		<a class="btn btn-sm preset-tonal-surface" href="/pipelines/library">
 			<Icons.Library size={16} /> Library
 		</a>
+		<!-- Temporary home per 18 §4d: scripts get their own page, linked from
+		     here until the navigation shell decides where it permanently lives. -->
+		<a class="btn btn-sm preset-tonal-surface" href="/pipelines/scripts">
+			<Icons.SquareCode size={16} /> Scripts
+		</a>
 		<a class="btn btn-sm preset-tonal-surface" href="/">
 			<Icons.ArrowLeft size={16} /> Back
 		</a>
@@ -107,7 +112,7 @@
 	<section class="flex flex-col gap-2">
 		<h2 class="text-lg font-semibold">Recent runs</h2>
 		<p class="text-muted text-sm">
-			The honest answer to "did that use the pipeline". A chat with no
+			The honest answer to "did that use the pipeline". A session with no
 			rows here was answered by the prompt builder — there is no third
 			possibility.
 		</p>

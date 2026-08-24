@@ -68,14 +68,18 @@ describe("OPENAI_CHAT_PRESETS", () => {
 			expect(preset).toBeDefined()
 			expect(preset.connectionDefaults.extraJson).toHaveProperty("apiKey")
 			expect(preset.connectionDefaults.baseUrl).toBeTruthy()
-			expect(() => new URL(preset.connectionDefaults.baseUrl)).not.toThrow()
+			expect(
+				() => new URL(preset.connectionDefaults.baseUrl)
+			).not.toThrow()
 		}
 	)
 })
 
 describe("CONNECTION_DEFAULTS", () => {
 	test("every built-in connection type has a matching CONNECTION_DEFAULTS entry", () => {
-		for (const type of Object.values(CONNECTION_TYPE) as unknown as string[]) {
+		for (const type of Object.values(
+			CONNECTION_TYPE
+		) as unknown as string[]) {
 			if (typeof type !== "string") continue
 			expect(CONNECTION_DEFAULTS).toHaveProperty(type)
 		}

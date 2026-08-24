@@ -34,9 +34,10 @@ vi.mock("../diskCache", () => ({
 // regression test below can count invocations while every other test in
 // this file still exercises the genuine parse/content-safety behavior.
 vi.mock("$lib/server/utils/characterCardParser", async (importOriginal) => {
-	const actual = await importOriginal<
-		typeof import("$lib/server/utils/characterCardParser")
-	>()
+	const actual =
+		await importOriginal<
+			typeof import("$lib/server/utils/characterCardParser")
+		>()
 	return { ...actual, parseCharacterCard: vi.fn(actual.parseCharacterCard) }
 })
 

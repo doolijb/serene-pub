@@ -223,10 +223,7 @@
 				handleUpdateDisplayNameError
 			)
 			socket.off("users:current:hasPassphrase", handleHasPassphrase)
-			socket.off(
-				"users:current:changePassphrase",
-				handleChangePassphrase
-			)
+			socket.off("users:current:changePassphrase", handleChangePassphrase)
 			socket.off(
 				"users:current:changePassphrase:error",
 				handleChangePassphraseError
@@ -354,11 +351,7 @@
 {/if}
 <div class="a11y-list-item-actions">
 	{#if !accessibilityModeStore.persisted}
-		<button
-			type="button"
-			class="a11y-btn"
-			onclick={alwaysUseDocumentView}
-		>
+		<button type="button" class="a11y-btn" onclick={alwaysUseDocumentView}>
 			Always Use Document View
 		</button>
 	{/if}

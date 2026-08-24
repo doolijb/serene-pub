@@ -21,7 +21,7 @@ The most common reason to open this page: keeping Serene Pub's data in one folde
    SERENE_PUB_DATA_DIR=./data
    ```
    A relative path resolves against the directory you launch Serene Pub *from* — so always launch it from inside `serene-pub-portable/`, not by referencing the executable from elsewhere.
-3. Launch normally. On first run, Serene Pub creates the database and `meta.json` inside `data/`. From then on, copying the entire `serene-pub-portable/` folder anywhere — a different computer, a USB drive — brings your characters, chats, connections, and settings with it.
+3. Launch normally. On first run, Serene Pub creates the database and `meta.json` inside `data/`. From then on, copying the entire `serene-pub-portable/` folder anywhere — a different computer, a USB drive — brings your characters, sessions, connections, and settings with it.
 
 If you're launching a built app directly with `node` rather than a packaged executable, prefer Node's own `--env-file` flag over relying on Serene Pub's automatic `.env` loading:
 
@@ -74,7 +74,7 @@ These are read by `@sveltejs/adapter-node` itself, before Serene Pub's own code 
 
 ## Sockets (real-time updates)
 
-Serene Pub runs a second server for real-time updates (chat messages, generation progress, model status) separate from the main web server. If you're putting a reverse proxy or tunnel in front of Serene Pub, it needs to know about this second server too, or real-time features will silently fail even though the page loads fine — see [Hosting Serene Pub](https://github.com/doolijb/serene-pub/blob/main/HOSTING.md) for worked examples.
+Serene Pub runs a second server for real-time updates (session messages, generation progress, model status) separate from the main web server. If you're putting a reverse proxy or tunnel in front of Serene Pub, it needs to know about this second server too, or real-time features will silently fail even though the page loads fine — see [Hosting Serene Pub](https://github.com/doolijb/serene-pub/blob/main/HOSTING.md) for worked examples.
 
 | Variable | Default | Description |
 |---|---|---|

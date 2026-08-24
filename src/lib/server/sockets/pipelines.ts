@@ -11,7 +11,7 @@
  * ## Every write answers with the whole view
  *
  * Rather than acknowledging the field that changed. A single write can move more
- * than one thing on screen: setting a value at chat scope changes that option's
+ * than one thing on screen: setting a value at session scope changes that option's
  * provenance badge *and* may unshadow another, and clearing one reveals whatever
  * it was covering. Returning the resolved view is one round trip and removes a
  * whole category of "the panel says something different from the database".
@@ -54,23 +54,23 @@ async function instanceSecret(): Promise<string> {
 /**
  * Who is asking, and from where.
  *
- * `chatId` is only honoured for a chat the asker owns. 05 §0a says configuring
- * from inside a chat you own writes at chat scope; the ownership half of that is
- * not decoration, because the parameter arrives from the client and a chat id is
+ * `sessionId` is only honoured for a session the asker owns. 05 §0a says configuring
+ * from inside a session you own writes at session scope; the ownership half of that is
+ * not decoration, because the parameter arrives from the client and a session id is
  * a small integer somebody can guess.
  */
-async function viewerFor(socket: any, chatId?: number): Promise<Viewer> {
+async function viewerFor(socket: any, sessionId?: number): Promise<Viewer> {
 	const userId = socket.user!.id
-	if (chatId == null) return { userId, isAdmin: !!socket.user!.isAdmin }
-	const [chat] = await db
-		.select({ userId: schema.chats.userId })
-		.from(schema.chats)
-		.where(eq(schema.chats.id, chatId))
+	if (sessionId == null) return { userId, isAdmin: !!socket.user!.isAdmin }
+	const [session] = await db
+		.select({ userId: schema.sessions.userId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	return {
 		userId,
 		isAdmin: !!socket.user!.isAdmin,
-		chatId: chat?.userId === userId ? chatId : undefined
+		sessionId: session?.userId === userId ? sessionId : undefined
 	}
 }
 
@@ -80,9 +80,9 @@ async function emitView(
 	emitToUser: (event: string, data: any) => void,
 	event: string,
 	slug: string,
-	chatId?: number
+	sessionId?: number
 ) {
-	const viewer = await viewerFor(socket, chatId)
+	const viewer = await viewerFor(socket, sessionId)
 	const pipeline = await namespaceView(
 		db as any,
 		await instanceSecret(),
@@ -147,7 +147,7 @@ export const pipelinesGet: Handler<
 			emitToUser,
 			"pipelines:get",
 			params.slug,
-			params.chatId
+			params.sessionId
 		)) as Sockets.Pipelines.Get.Response
 }
 
@@ -162,10 +162,9 @@ export const pipelinesSetOption: Handler<
 				db as any,
 				await instanceSecret(),
 				params.slug,
-				await viewerFor(socket, params.chatId),
+				await viewerFor(socket, params.sessionId),
 				params.optionId,
 				params.value,
-				params.scope,
 				params.configId
 			)
 		} catch (err) {
@@ -178,7 +177,7 @@ export const pipelinesSetOption: Handler<
 			emitToUser,
 			"pipelines:get",
 			params.slug,
-			params.chatId
+			params.sessionId
 		)) as Sockets.Pipelines.SetOption.Response
 	}
 }
@@ -194,9 +193,8 @@ export const pipelinesClearOption: Handler<
 				db as any,
 				await instanceSecret(),
 				params.slug,
-				await viewerFor(socket, params.chatId),
+				await viewerFor(socket, params.sessionId),
 				params.optionId,
-				params.scope,
 				params.configId
 			)
 		} catch (err) {
@@ -209,7 +207,7 @@ export const pipelinesClearOption: Handler<
 			emitToUser,
 			"pipelines:get",
 			params.slug,
-			params.chatId
+			params.sessionId
 		)) as Sockets.Pipelines.ClearOption.Response
 	}
 }
@@ -255,6 +253,45 @@ async function configInSpec(slug: string, configId: number) {
 	return row
 }
 
+/**
+ * The caller's "own selection" outside a session, since the layer simplification
+ * (2026-08-24): the instance-selected config's value rows pointing at a row
+ * about to be deleted. Only a mutable config's — the shipped default is not
+ * the admin's to release, and `delete*`'s reference check still refuses it.
+ * Slot-filtered because values are arbitrary json: a params value that
+ * happens to equal the row id must not be swept up as a reference.
+ */
+async function ownInstanceConfigValues(
+	slug: string,
+	rowId: number,
+	slots: string[]
+): Promise<any[]> {
+	if (!slots.length) return []
+	const spec = await specForSlug(slug)
+	const { resolveSelectedConfig } = await import(
+		"$lib/server/pipelines/config/named"
+	)
+	const selected = await resolveSelectedConfig(db as any, spec.id, slug, {})
+	if (!selected) return []
+	const [cfg] = await db
+		.select()
+		.from(schema.pipelineConfigs)
+		.where(eq(schema.pipelineConfigs.id, selected.configId))
+		.limit(1)
+	if (!cfg || (cfg as any).isImmutable) return []
+	const { inArray } = await import("drizzle-orm")
+	const rows = await db
+		.select()
+		.from(schema.pipelineConfigValues)
+		.where(
+			and(
+				eq(schema.pipelineConfigValues.configId, selected.configId),
+				inArray(schema.pipelineConfigValues.slot, slots)
+			)
+		)
+	return (rows as any[]).filter((v) => v.value === rowId)
+}
+
 const adminOnly = (
 	socket: any,
 	emitToUser: any,
@@ -296,6 +333,59 @@ const configRefusal = async (err: unknown): Promise<string> => {
 	return "That change could not be saved. The server log has the details."
 }
 
+/**
+ * Which actions a preset includes, and whether it may be chosen (19 §3).
+ *
+ * Admin-only, like every other write to a preset: a preset decides what sessions
+ * using it can do, and which presets a non-admin sees at all. The entity layer
+ * holds the refusals — immutable rows, actions the mode was never offered — so
+ * the answer does not depend on which door the request came through.
+ */
+export const pipelinesSetPresetActions: Handler<
+	Sockets.Pipelines.SetPresetActions.Params,
+	Sockets.Pipelines.SetPresetActions.Response
+> = {
+	event: "pipelines:setPresetActions",
+	handler: async (socket, params, emitToUser) => {
+		const denied = adminOnly(
+			socket,
+			emitToUser,
+			"pipelines:setPresetActions"
+		)
+		if (denied) return denied
+		try {
+			const config = await configInSpec(params.slug, params.configId)
+			const { setPresetActions } = await import(
+				"$lib/server/pipelines/entities/sessionModes"
+			)
+			const r = await setPresetActions(db as any, config.id, {
+				...(params.includedActions !== undefined
+					? { includedActions: params.includedActions }
+					: {}),
+				...(params.enabled !== undefined
+					? { enabled: params.enabled }
+					: {})
+			})
+			if (!r.ok) {
+				const res = { error: r.error }
+				emitToUser("pipelines:setPresetActions:error", res)
+				return res
+			}
+		} catch (err) {
+			const res = { error: await configRefusal(err) }
+			emitToUser("pipelines:setPresetActions:error", res)
+			return res
+		}
+		return (await emitView(
+			socket,
+			emitToUser,
+			"pipelines:get",
+			params.slug,
+			params.sessionId
+		)) as Sockets.Pipelines.SetPresetActions.Response
+	}
+}
+
 export const pipelinesCreateConfig: Handler<
 	Sockets.Pipelines.CreateConfig.Params,
 	Sockets.Pipelines.CreateConfig.Response
@@ -314,8 +404,12 @@ export const pipelinesCreateConfig: Handler<
 				params.fromConfigId != null
 					? await duplicateConfig(
 							db as any,
-							(await configInSpec(params.slug, params.fromConfigId))
-								.id,
+							(
+								await configInSpec(
+									params.slug,
+									params.fromConfigId
+								)
+							).id,
 							params.name
 						)
 					: await createConfig(db as any, spec.id, params.name)
@@ -330,7 +424,7 @@ export const pipelinesCreateConfig: Handler<
 			emitToUser,
 			"pipelines:get",
 			params.slug,
-			params.chatId
+			params.sessionId
 		)) as Sockets.Pipelines.CreateConfig.Response
 		// Emitted as well as returned: `register` discards a handler's return
 		// value, so the id only reaches the client through an event. The
@@ -366,7 +460,7 @@ export const pipelinesRenameConfig: Handler<
 			emitToUser,
 			"pipelines:get",
 			params.slug,
-			params.chatId
+			params.sessionId
 		)) as Sockets.Pipelines.RenameConfig.Response
 	}
 }
@@ -395,7 +489,7 @@ export const pipelinesDeleteConfig: Handler<
 			emitToUser,
 			"pipelines:get",
 			params.slug,
-			params.chatId
+			params.sessionId
 		)) as Sockets.Pipelines.DeleteConfig.Response
 	}
 }
@@ -410,7 +504,7 @@ export const pipelinesSelectConfig: Handler<
 			await selectNamedConfig(
 				db as any,
 				params.slug,
-				await viewerFor(socket, params.chatId),
+				await viewerFor(socket, params.sessionId),
 				params.configId,
 				params.scope
 			)
@@ -424,7 +518,7 @@ export const pipelinesSelectConfig: Handler<
 			emitToUser,
 			"pipelines:get",
 			params.slug,
-			params.chatId
+			params.sessionId
 		)) as Sockets.Pipelines.SelectConfig.Response
 	}
 }
@@ -513,7 +607,7 @@ export const pipelinesClonePrompt: Handler<
 			emitToUser,
 			"pipelines:get",
 			params.slug,
-			params.chatId
+			params.sessionId
 		)
 		// The new id rides along so the panel can select the copy in the same
 		// gesture — clone-and-edit, not clone-then-hunt-the-dropdown.
@@ -553,7 +647,7 @@ export const pipelinesUpdatePrompt: Handler<
 			emitToUser,
 			"pipelines:get",
 			params.slug,
-			params.chatId
+			params.sessionId
 		)) as Sockets.Pipelines.UpdatePrompt.Response
 	}
 }
@@ -582,38 +676,95 @@ export const pipelinesDeletePrompt: Handler<
 			// its way to failing: the prompt survived, the choice did not, and
 			// the message said nothing about it. The rows only go once the
 			// delete has actually succeeded.
-			const viewer = await viewerFor(socket, params.chatId)
+			const viewer = await viewerFor(socket, params.sessionId)
 			// `value` is a json column, which Postgres cannot compare with `=`
 			// — so the rows are read and matched in code, the same way the
 			// reference check in `deletePrompt` does.
-			const own = await db
-				.select()
-				.from(schema.pipelineNodeOverrides)
-				.where(
-					and(
-						eq(schema.pipelineNodeOverrides.specId, spec.id),
-						eq(
-							schema.pipelineNodeOverrides.scopeKind,
-							viewer.chatId != null ? "chat" : "user"
-						),
-						eq(
-							schema.pipelineNodeOverrides.scopeId,
-							viewer.chatId ?? viewer.userId
-						),
-						eq(schema.pipelineNodeOverrides.slot, "prompts")
+			//
+			// "Your own selection" has two homes since the layer
+			// simplification (2026-08-24): inside a session it is the session's
+			// override row; outside one it is the value row of the instance's
+			// selected config — released only when that config is the
+			// admin's to edit, which `deletePrompt` still guards by refusing
+			// every other reference.
+			const mine: any[] = []
+			const mineValues: any[] = []
+			if (viewer.sessionId != null) {
+				const own = await db
+					.select()
+					.from(schema.pipelineNodeOverrides)
+					.where(
+						and(
+							eq(schema.pipelineNodeOverrides.specId, spec.id),
+							eq(
+								schema.pipelineNodeOverrides.scopeKind,
+								"session"
+							),
+							eq(
+								schema.pipelineNodeOverrides.scopeId,
+								viewer.sessionId
+							),
+							eq(schema.pipelineNodeOverrides.slot, "prompts")
+						)
 					)
+				mine.push(
+					...(own as any[]).filter((o) => o.value === prompt.id)
 				)
-			const mine = (own as any[]).filter((o) => o.value === prompt.id)
+			} else if (viewer.isAdmin) {
+				const { resolveSelectedConfig } = await import(
+					"$lib/server/pipelines/config/named"
+				)
+				const selected = await resolveSelectedConfig(
+					db as any,
+					spec.id,
+					params.slug,
+					{}
+				)
+				if (selected) {
+					const [cfg] = await db
+						.select()
+						.from(schema.pipelineConfigs)
+						.where(eq(schema.pipelineConfigs.id, selected.configId))
+						.limit(1)
+					if (cfg && !(cfg as any).isImmutable) {
+						const own = await db
+							.select()
+							.from(schema.pipelineConfigValues)
+							.where(
+								and(
+									eq(
+										schema.pipelineConfigValues.configId,
+										selected.configId
+									),
+									eq(
+										schema.pipelineConfigValues.slot,
+										"prompts"
+									)
+								)
+							)
+						mineValues.push(
+							...(own as any[]).filter(
+								(v) => v.value === prompt.id
+							)
+						)
+					}
+				}
+			}
 			const { deletePrompt } = await import(
 				"$lib/server/pipelines/entities/prompts"
 			)
 			await deletePrompt(db as any, prompt.id, {
-				ignoreOverrideIds: new Set(mine.map((o) => o.id))
+				ignoreOverrideIds: new Set(mine.map((o) => o.id)),
+				ignoreConfigValueIds: new Set(mineValues.map((v) => v.id))
 			})
 			for (const row of mine)
 				await db
 					.delete(schema.pipelineNodeOverrides)
 					.where(eq(schema.pipelineNodeOverrides.id, row.id))
+			for (const row of mineValues)
+				await db
+					.delete(schema.pipelineConfigValues)
+					.where(eq(schema.pipelineConfigValues.id, row.id))
 		} catch (err) {
 			const res = { error: await promptRefusal(err) }
 			emitToUser("pipelines:deletePrompt:error", res)
@@ -624,7 +775,7 @@ export const pipelinesDeletePrompt: Handler<
 			emitToUser,
 			"pipelines:get",
 			params.slug,
-			params.chatId
+			params.sessionId
 		)) as Sockets.Pipelines.DeletePrompt.Response
 	}
 }
@@ -654,14 +805,16 @@ async function layoutForOption(
 		slug: string
 		optionId: string
 		templateId: number
-		chatId?: number
+		sessionId?: number
 	}
 ) {
-	const { variableOptionGate } = await import("$lib/server/pipelines/config/panel")
+	const { variableOptionGate } = await import(
+		"$lib/server/pipelines/config/panel"
+	)
 	const { assertSelectable } = await import(
 		"$lib/server/pipelines/entities/variableTemplates"
 	)
-	const viewer = await viewerFor(socket, params.chatId)
+	const viewer = await viewerFor(socket, params.sessionId)
 	const { variableId } = await variableOptionGate(
 		db as any,
 		await instanceSecret(),
@@ -734,7 +887,7 @@ export const pipelinesCloneVariableTemplate: Handler<
 			emitToUser,
 			"pipelines:get",
 			params.slug,
-			params.chatId
+			params.sessionId
 		)
 		// Rides along so the panel can select the copy in the same gesture —
 		// clone-and-edit, not clone-then-hunt-the-dropdown.
@@ -774,7 +927,7 @@ export const pipelinesUpdateVariableTemplate: Handler<
 			emitToUser,
 			"pipelines:get",
 			params.slug,
-			params.chatId
+			params.sessionId
 		)) as Sockets.Pipelines.UpdateVariableTemplate.Response
 	}
 }
@@ -798,41 +951,21 @@ export const pipelinesDeleteVariableTemplate: Handler<
 			// exactly the thing that refuses. The row survived, the choice did
 			// not, and nothing said so. Now the rows only go once the delete
 			// has actually succeeded.
-			const [at] = await db
-				.select()
-				.from(schema.pipelineSpecs)
-				.where(eq(schema.pipelineSpecs.slug, params.slug))
-				.limit(1)
-			const own = at
-				? (
-						await db
-							.select()
-							.from(schema.pipelineNodeOverrides)
-							.where(
-								and(
-									eq(
-										schema.pipelineNodeOverrides.specId,
-										at.id
-									),
-									eq(
-										schema.pipelineNodeOverrides.scopeKind,
-										"instance"
-									)
-								)
-							)
-					).filter((o: any) => o.value === row.id)
-				: []
-
-			const { deleteVariableTemplate } = await import(
+			const { deleteVariableTemplate, variableSlotNames } = await import(
 				"$lib/server/pipelines/entities/variableTemplates"
 			)
+			const own = await ownInstanceConfigValues(
+				params.slug,
+				row.id,
+				await variableSlotNames(db as any)
+			)
 			await deleteVariableTemplate(db as any, row.id, {
-				ignoreOverrideIds: new Set((own as any[]).map((o) => o.id))
+				ignoreConfigValueIds: new Set(own.map((v) => v.id))
 			})
-			for (const o of own as any[])
+			for (const v of own)
 				await db
-					.delete(schema.pipelineNodeOverrides)
-					.where(eq(schema.pipelineNodeOverrides.id, o.id))
+					.delete(schema.pipelineConfigValues)
+					.where(eq(schema.pipelineConfigValues.id, v.id))
 		} catch (err) {
 			const res = { error: await layoutRefusal(err) }
 			emitToUser("pipelines:deleteVariableTemplate:error", res)
@@ -843,7 +976,7 @@ export const pipelinesDeleteVariableTemplate: Handler<
 			emitToUser,
 			"pipelines:get",
 			params.slug,
-			params.chatId
+			params.sessionId
 		)) as Sockets.Pipelines.DeleteVariableTemplate.Response
 	}
 }
@@ -862,7 +995,7 @@ async function contextTemplateForOption(
 		slug: string
 		optionId: string
 		templateId: number
-		chatId?: number
+		sessionId?: number
 	}
 ) {
 	const { contextTemplateOptionGate } = await import(
@@ -871,7 +1004,7 @@ async function contextTemplateForOption(
 	const { assertSelectable } = await import(
 		"$lib/server/pipelines/entities/contextTemplates"
 	)
-	const viewer = await viewerFor(socket, params.chatId)
+	const viewer = await viewerFor(socket, params.sessionId)
 	const { nodeTypeId, specId } = await contextTemplateOptionGate(
 		db as any,
 		await instanceSecret(),
@@ -935,7 +1068,7 @@ export const pipelinesCreateContextTemplate: Handler<
 			const { contextTemplateOptionGate } = await import(
 				"$lib/server/pipelines/config/panel"
 			)
-			const viewer = await viewerFor(socket, params.chatId)
+			const viewer = await viewerFor(socket, params.sessionId)
 			const { nodeTypeId, specId } = await contextTemplateOptionGate(
 				db as any,
 				await instanceSecret(),
@@ -969,7 +1102,7 @@ export const pipelinesCreateContextTemplate: Handler<
 			emitToUser,
 			"pipelines:get",
 			params.slug,
-			params.chatId
+			params.sessionId
 		)
 		const res = {
 			templateId,
@@ -1013,7 +1146,7 @@ export const pipelinesCloneContextTemplate: Handler<
 			emitToUser,
 			"pipelines:get",
 			params.slug,
-			params.chatId
+			params.sessionId
 		)
 		// Rides along so the panel can select the copy in the same gesture —
 		// clone-and-edit, not clone-then-hunt-the-dropdown.
@@ -1053,7 +1186,7 @@ export const pipelinesUpdateContextTemplate: Handler<
 			emitToUser,
 			"pipelines:get",
 			params.slug,
-			params.chatId
+			params.sessionId
 		)) as Sockets.Pipelines.UpdateContextTemplate.Response
 	}
 }
@@ -1070,41 +1203,20 @@ export const pipelinesDeleteContextTemplate: Handler<
 			// same correction live use forced on layouts, and it matters more
 			// here: templates are shared, so refusal is the common path and a
 			// refused delete must not still clear the caller's choice.
-			const [at] = await db
-				.select()
-				.from(schema.pipelineSpecs)
-				.where(eq(schema.pipelineSpecs.slug, params.slug))
-				.limit(1)
-			const own = at
-				? (
-						await db
-							.select()
-							.from(schema.pipelineNodeOverrides)
-							.where(
-								and(
-									eq(
-										schema.pipelineNodeOverrides.specId,
-										at.id
-									),
-									eq(
-										schema.pipelineNodeOverrides.scopeKind,
-										"instance"
-									)
-								)
-							)
-					).filter((o: any) => o.value === row.id)
-				: []
-
-			const { deleteContextTemplate } = await import(
-				"$lib/server/pipelines/entities/contextTemplates"
+			const { deleteContextTemplate, contextTemplateSlotNames } =
+				await import("$lib/server/pipelines/entities/contextTemplates")
+			const own = await ownInstanceConfigValues(
+				params.slug,
+				row.id,
+				await contextTemplateSlotNames(db as any)
 			)
 			await deleteContextTemplate(db as any, row.id, {
-				ignoreOverrideIds: new Set((own as any[]).map((o) => o.id))
+				ignoreConfigValueIds: new Set(own.map((v) => v.id))
 			})
-			for (const o of own as any[])
+			for (const v of own)
 				await db
-					.delete(schema.pipelineNodeOverrides)
-					.where(eq(schema.pipelineNodeOverrides.id, o.id))
+					.delete(schema.pipelineConfigValues)
+					.where(eq(schema.pipelineConfigValues.id, v.id))
 		} catch (err) {
 			const res = { error: await contextTemplateRefusal(err) }
 			emitToUser("pipelines:deleteContextTemplate:error", res)
@@ -1115,7 +1227,7 @@ export const pipelinesDeleteContextTemplate: Handler<
 			emitToUser,
 			"pipelines:get",
 			params.slug,
-			params.chatId
+			params.sessionId
 		)) as Sockets.Pipelines.DeleteContextTemplate.Response
 	}
 }
@@ -1203,7 +1315,9 @@ export const pipelinesLibrary: Handler<
 			emitToUser("pipelines:library:error", res)
 			return res
 		}
-		const { libraryView } = await import("$lib/server/pipelines/config/library")
+		const { libraryView } = await import(
+			"$lib/server/pipelines/config/library"
+		)
 		const res = (await libraryView(
 			db as any
 		)) as Sockets.Pipelines.Library.Response
@@ -1228,7 +1342,9 @@ async function libraryGate(
 
 const libraryRefusal = async (err: unknown): Promise<string> => {
 	const ctx = await import("$lib/server/pipelines/entities/contextTemplates")
-	const vars = await import("$lib/server/pipelines/entities/variableTemplates")
+	const vars = await import(
+		"$lib/server/pipelines/entities/variableTemplates"
+	)
 	const prompts = await import("$lib/server/pipelines/entities/prompts")
 	if (
 		err instanceof ctx.ContextTemplateNotFoundError ||
@@ -1574,6 +1690,249 @@ export const pipelinesLibraryDeletePrompt: Handler<
  * may not, which is why the two live in different handlers rather than one
  * handler with a flag.
  */
+/* --- the scripts page (18 §4d) ------------------------------------- */
+
+/**
+ * Same gate, same answer-with-the-whole-view shape as the library: a mutation
+ * here routinely changes another group on the page, and the page is one read.
+ */
+const scriptsRefusal = async (err: unknown): Promise<string> => {
+	const scripts = await import("$lib/server/pipelines/entities/scripts")
+	if (
+		err instanceof scripts.ScriptNotFoundError ||
+		err instanceof scripts.ScriptNotUsableError
+	)
+		return (err as Error).message
+	console.error("[pipelines] script mutation failed:", err)
+	return "That change could not be saved. The server log has the details."
+}
+
+async function scriptsAnswer(
+	emitToUser: any,
+	event: string
+): Promise<{ scripts: Sockets.Pipelines.Scripts.Response }> {
+	const { scriptsView } = await import(
+		"$lib/server/pipelines/entities/scripts"
+	)
+	const scripts = (await scriptsView(
+		db as any
+	)) as Sockets.Pipelines.Scripts.Response
+	const res = { scripts }
+	emitToUser(event, res)
+	return res
+}
+
+export const pipelinesScripts: Handler<
+	Sockets.Pipelines.Scripts.Params,
+	Sockets.Pipelines.Scripts.Response
+> = {
+	event: "pipelines:scripts",
+	handler: async (socket, _params, emitToUser) => {
+		const gate = await libraryGate(socket)
+		if (!gate.ok) {
+			emitToUser("pipelines:scripts:error", gate)
+			return { error: gate.error }
+		}
+		const { scriptsView } = await import(
+			"$lib/server/pipelines/entities/scripts"
+		)
+		const res = (await scriptsView(
+			db as any
+		)) as Sockets.Pipelines.Scripts.Response
+		emitToUser("pipelines:scripts", res)
+		return res
+	}
+}
+
+export const pipelinesCreateScript: Handler<
+	Sockets.Pipelines.ScriptWrite.CreateParams,
+	Sockets.Pipelines.ScriptWrite.Response
+> = {
+	event: "pipelines:createScript",
+	handler: async (socket, params, emitToUser) => {
+		const gate = await libraryGate(socket)
+		if (!gate.ok) {
+			emitToUser("pipelines:createScript:error", gate)
+			return { error: gate.error }
+		}
+		try {
+			const { createScript } = await import(
+				"$lib/server/pipelines/entities/scripts"
+			)
+			await createScript(db as any, {
+				typeId: params.typeId,
+				...(params.name ? { name: params.name } : {})
+			})
+		} catch (err) {
+			const res = { error: await scriptsRefusal(err) }
+			emitToUser("pipelines:createScript:error", res)
+			return res
+		}
+		return await scriptsAnswer(emitToUser, "pipelines:createScript")
+	}
+}
+
+export const pipelinesCloneScript: Handler<
+	Sockets.Pipelines.ScriptWrite.CloneParams,
+	Sockets.Pipelines.ScriptWrite.Response
+> = {
+	event: "pipelines:cloneScript",
+	handler: async (socket, params, emitToUser) => {
+		const gate = await libraryGate(socket)
+		if (!gate.ok) {
+			emitToUser("pipelines:cloneScript:error", gate)
+			return { error: gate.error }
+		}
+		try {
+			const { duplicateScript } = await import(
+				"$lib/server/pipelines/entities/scripts"
+			)
+			await duplicateScript(db as any, params.id, params.name)
+		} catch (err) {
+			const res = { error: await scriptsRefusal(err) }
+			emitToUser("pipelines:cloneScript:error", res)
+			return res
+		}
+		return await scriptsAnswer(emitToUser, "pipelines:cloneScript")
+	}
+}
+
+export const pipelinesUpdateScript: Handler<
+	Sockets.Pipelines.ScriptWrite.UpdateParams,
+	Sockets.Pipelines.ScriptWrite.Response
+> = {
+	event: "pipelines:updateScript",
+	handler: async (socket, params, emitToUser) => {
+		const gate = await libraryGate(socket)
+		if (!gate.ok) {
+			emitToUser("pipelines:updateScript:error", gate)
+			return { error: gate.error }
+		}
+		try {
+			const { updateScript } = await import(
+				"$lib/server/pipelines/entities/scripts"
+			)
+			await updateScript(db as any, params.id, {
+				...(params.name !== undefined ? { name: params.name } : {}),
+				...(params.source !== undefined
+					? { source: params.source }
+					: {}),
+				...(params.enabled !== undefined
+					? { enabled: params.enabled }
+					: {}),
+				...(params.varsIn !== undefined
+					? { varsIn: params.varsIn }
+					: {}),
+				...(params.varsOut !== undefined
+					? { varsOut: params.varsOut }
+					: {})
+			})
+		} catch (err) {
+			const res = { error: await scriptsRefusal(err) }
+			emitToUser("pipelines:updateScript:error", res)
+			return res
+		}
+		return await scriptsAnswer(emitToUser, "pipelines:updateScript")
+	}
+}
+
+export const pipelinesDeleteScript: Handler<
+	Sockets.Pipelines.ScriptWrite.DeleteParams,
+	Sockets.Pipelines.ScriptWrite.Response
+> = {
+	event: "pipelines:deleteScript",
+	handler: async (socket, params, emitToUser) => {
+		const gate = await libraryGate(socket)
+		if (!gate.ok) {
+			emitToUser("pipelines:deleteScript:error", gate)
+			return { error: gate.error }
+		}
+		try {
+			const { deleteScript } = await import(
+				"$lib/server/pipelines/entities/scripts"
+			)
+			await deleteScript(db as any, params.id)
+		} catch (err) {
+			const res = { error: await scriptsRefusal(err) }
+			emitToUser("pipelines:deleteScript:error", res)
+			return res
+		}
+		return await scriptsAnswer(emitToUser, "pipelines:deleteScript")
+	}
+}
+
+export const pipelinesExportScripts: Handler<
+	Sockets.Pipelines.ScriptShare.ExportParams,
+	Sockets.Pipelines.ScriptShare.ExportResponse
+> = {
+	event: "pipelines:exportScripts",
+	handler: async (socket, params, emitToUser) => {
+		const gate = await libraryGate(socket)
+		if (!gate.ok) {
+			emitToUser("pipelines:exportScripts:error", gate)
+			return { error: gate.error }
+		}
+		try {
+			const { exportScriptArtifact } = await import(
+				"$lib/server/pipelines/entities/scripts"
+			)
+			const artifact = await exportScriptArtifact(db as any, params.ids)
+			// One script keeps its own name on the file; a pack is a pack.
+			const base =
+				artifact.scripts.length === 1
+					? artifact.scripts[0]!.name.replace(
+							/[^a-z0-9]/gi,
+							"_"
+						).toLowerCase()
+					: `scripts-pack-${artifact.scripts.length}`
+			const res = {
+				blob: Buffer.from(JSON.stringify(artifact, null, "\t")),
+				filename: `${base}.scripts.json`
+			}
+			emitToUser("pipelines:exportScripts", res)
+			return res
+		} catch (err) {
+			const res = { error: await scriptsRefusal(err) }
+			emitToUser("pipelines:exportScripts:error", res)
+			return res
+		}
+	}
+}
+
+export const pipelinesImportScripts: Handler<
+	Sockets.Pipelines.ScriptShare.ImportParams,
+	Sockets.Pipelines.ScriptShare.ImportResponse
+> = {
+	event: "pipelines:importScripts",
+	handler: async (socket, params, emitToUser) => {
+		const gate = await libraryGate(socket)
+		if (!gate.ok) {
+			emitToUser("pipelines:importScripts:error", gate)
+			return { error: gate.error }
+		}
+		try {
+			const { parseScriptArtifact, importScriptArtifact, scriptsView } =
+				await import("$lib/server/pipelines/entities/scripts")
+			const artifact = parseScriptArtifact(params.artifact)
+			const report = await importScriptArtifact(
+				db as any,
+				artifact,
+				params.accept
+			)
+			const scripts = (await scriptsView(
+				db as any
+			)) as Sockets.Pipelines.Scripts.Response
+			const res = { report, scripts }
+			emitToUser("pipelines:importScripts", res)
+			return res
+		} catch (err) {
+			const res = { error: await scriptsRefusal(err) }
+			emitToUser("pipelines:importScripts:error", res)
+			return res
+		}
+	}
+}
+
 export const pipelinesDetail: Handler<
 	Sockets.Pipelines.Detail.Params,
 	Sockets.Pipelines.Detail.Response
@@ -1700,7 +2059,8 @@ export const pipelinesDetail: Handler<
 			const decls = await declarations(db as any, spec.activeVersionId)
 			const configurable: string[] = []
 			for (const d of decls)
-				if (!configurable.includes(d.nodeKey)) configurable.push(d.nodeKey)
+				if (!configurable.includes(d.nodeKey))
+					configurable.push(d.nodeKey)
 			const stepKeyOf = new Map(
 				configurable.map((nodeKey, i) => [nodeKey, `s${i}`])
 			)
@@ -1716,7 +2076,10 @@ export const pipelinesDetail: Handler<
 				.select()
 				.from(schema.pipelineBlocks)
 				.where(
-					eq(schema.pipelineBlocks.specVersionId, spec.activeVersionId)
+					eq(
+						schema.pipelineBlocks.specVersionId,
+						spec.activeVersionId
+					)
 				)
 
 			res.spec!.graph = {
@@ -1740,8 +2103,7 @@ export const pipelinesDetail: Handler<
 				})),
 				nodes: (nodes as any[]).map((n) => ({
 					key: n.nodeKey,
-					label:
-						typeNames.get(n.typeId) ?? humanizeTypeId(n.typeId),
+					label: typeNames.get(n.typeId) ?? humanizeTypeId(n.typeId),
 					kind: n.kind,
 					typeId: n.typeId,
 					blockId: n.blockId ?? null,
@@ -1760,7 +2122,9 @@ export const pipelinesDetail: Handler<
 						from: e.fromNodeId
 							? (byId.get(e.fromNodeId) ?? null)
 							: null,
-						fromBlock: e.fromNodeId ? null : (e.fromBlockId ?? null),
+						fromBlock: e.fromNodeId
+							? null
+							: (e.fromBlockId ?? null),
 						fromPort: e.fromPort,
 						to: byId.get(e.toNodeId) ?? null
 					}))
@@ -1781,7 +2145,7 @@ export const pipelinesDetail: Handler<
 /**
  * Recent runs — the honest answer to "did that use the new path".
  *
- * Scoped to chats the asker owns, and to their own runs otherwise. A run receipt
+ * Scoped to sessions the asker owns, and to their own runs otherwise. A run receipt
  * records what a pipeline decided about somebody's conversation; it is not
  * instance trivia an admin browses by default.
  */
@@ -1795,19 +2159,19 @@ export const pipelinesRuns: Handler<
 		const limit = Math.min(Math.max(params.limit ?? 25, 1), 100)
 
 		let where = eq(schema.pipelineRuns.userId, userId)
-		if (params.chatId != null) {
-			const [chat] = await db
-				.select({ userId: schema.chats.userId })
-				.from(schema.chats)
-				.where(eq(schema.chats.id, params.chatId))
+		if (params.sessionId != null) {
+			const [session] = await db
+				.select({ userId: schema.sessions.userId })
+				.from(schema.sessions)
+				.where(eq(schema.sessions.id, params.sessionId))
 				.limit(1)
-			if (chat?.userId !== userId) {
+			if (session?.userId !== userId) {
 				const res = { runs: [] }
 				emitToUser("pipelines:runs", res)
 				return res
 			}
 			where = and(
-				eq(schema.pipelineRuns.chatId, params.chatId),
+				eq(schema.pipelineRuns.sessionId, params.sessionId),
 				eq(schema.pipelineRuns.userId, userId)
 			)!
 		}
@@ -1903,10 +2267,11 @@ export function registerPipelineHandlers(
 	// The gate's push transport, bound once per process to socket.io's rooms.
 	// A review can park from any trigger, so it pushes by user rather than
 	// through whichever handler happened to start the run.
-	import("$lib/server/pipelines/runtime/reviewGate").then(({ setReviewTransport }) =>
-		setReviewTransport((userId, event, data) =>
-			socket.io.to(`user_${userId}`).emit(event, data)
-		)
+	import("$lib/server/pipelines/runtime/reviewGate").then(
+		({ setReviewTransport }) =>
+			setReviewTransport((userId, event, data) =>
+				socket.io.to(`user_${userId}`).emit(event, data)
+			)
 	)
 
 	register(socket, pipelinesList, emitToUser)
@@ -1915,6 +2280,7 @@ export function registerPipelineHandlers(
 	register(socket, pipelinesClearOption, emitToUser)
 	register(socket, pipelinesSelectConfig, emitToUser)
 	register(socket, pipelinesCreateConfig, emitToUser)
+	register(socket, pipelinesSetPresetActions, emitToUser)
 	register(socket, pipelinesRenameConfig, emitToUser)
 	register(socket, pipelinesDeleteConfig, emitToUser)
 	register(socket, pipelinesClonePrompt, emitToUser)
@@ -1929,6 +2295,13 @@ export function registerPipelineHandlers(
 	register(socket, pipelinesLibraryClonePrompt, emitToUser)
 	register(socket, pipelinesLibraryUpdatePrompt, emitToUser)
 	register(socket, pipelinesLibraryDeletePrompt, emitToUser)
+	register(socket, pipelinesScripts, emitToUser)
+	register(socket, pipelinesCreateScript, emitToUser)
+	register(socket, pipelinesCloneScript, emitToUser)
+	register(socket, pipelinesUpdateScript, emitToUser)
+	register(socket, pipelinesDeleteScript, emitToUser)
+	register(socket, pipelinesExportScripts, emitToUser)
+	register(socket, pipelinesImportScripts, emitToUser)
 	register(socket, pipelinesCreateContextTemplate, emitToUser)
 	register(socket, pipelinesCloneContextTemplate, emitToUser)
 	register(socket, pipelinesUpdateContextTemplate, emitToUser)

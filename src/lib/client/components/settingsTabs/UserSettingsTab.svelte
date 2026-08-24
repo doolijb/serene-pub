@@ -498,7 +498,7 @@
 		<div class="card preset-tonal p-4">
 			<h3 class="mb-4 text-lg font-semibold">Data Import</h3>
 			<p class="text-surface-700-300 mb-3 text-sm">
-				Import your characters, personas, chats, and lorebooks from
+				Import your characters, personas, sessions, and lorebooks from
 				other applications.
 			</p>
 			<a

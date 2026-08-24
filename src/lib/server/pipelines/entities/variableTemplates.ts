@@ -7,7 +7,7 @@
  *
  * ## There is no spec check here, and there must not be
  *
- * `prompts.ts` refuses a prompt written for another pipeline, because a chat
+ * `prompts.ts` refuses a prompt written for another pipeline, because a session
  * reply's wording has no business in a summarizer's picker. Copying that check
  * here would compile, pass review, and silently delete the entire reason this
  * table exists.
@@ -231,7 +231,7 @@ export async function updateVariableTemplate(
  * Hard-coding the core name would let a plugin's reference go unseen, and an
  * unseen reference is a delete that succeeds and leaves a dangling pointer.
  */
-async function variableSlotNames(db: Db): Promise<string[]> {
+export async function variableSlotNames(db: Db): Promise<string[]> {
 	const specs = await db.select().from(schema.pipelineSpecs)
 	const names = new Set<string>()
 	for (const spec of specs as any[]) {
@@ -268,6 +268,12 @@ export async function deleteVariableTemplate(
 		 * choice did not, and the error message said nothing about it.
 		 */
 		ignoreOverrideIds?: Set<number>
+		/**
+		 * Config-value rows that do not count either — since the layer
+		 * simplification (2026-08-24) an admin's selection outside a session is
+		 * the instance config's own value row, not an override.
+		 */
+		ignoreConfigValueIds?: Set<number>
 	} = {}
 ): Promise<void> {
 	const [row] = await db
@@ -297,8 +303,11 @@ export async function deleteVariableTemplate(
 			.from(schema.pipelineNodeOverrides)
 			.where(inArray(schema.pipelineNodeOverrides.slot, slots))
 		const ignored = opts.ignoreOverrideIds ?? new Set<number>()
+		const ignoredValues = opts.ignoreConfigValueIds ?? new Set<number>()
 		referenced =
-			(values as any[]).some((v) => v.value === templateId) ||
+			(values as any[]).some(
+				(v) => v.value === templateId && !ignoredValues.has(v.id)
+			) ||
 			(overrides as any[]).some(
 				(o) => o.value === templateId && !ignored.has(o.id)
 			)

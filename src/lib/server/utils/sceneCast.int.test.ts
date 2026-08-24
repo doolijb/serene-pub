@@ -230,9 +230,9 @@ describe("sceneCast — repoint (absorb/merge)", () => {
 			one.bindings[1].id
 		)
 
-		expect((await readSceneCast(two.scene.id)).participantCharacters).toEqual(
-			[two.bindings[0].id]
-		)
+		expect(
+			(await readSceneCast(two.scene.id)).participantCharacters
+		).toEqual([two.bindings[0].id])
 	})
 })
 

@@ -58,11 +58,19 @@ describe("narrativeGraph duplicate detection handlers (PGlite integration)", () 
 			.returning()
 		const [a] = await testDb
 			.insert(schema.lorebookBindings)
-			.values({ lorebookId: lorebook.id, binding: "{{char:1}}", name: "Bram" })
+			.values({
+				lorebookId: lorebook.id,
+				binding: "{{char:1}}",
+				name: "Bram"
+			})
 			.returning()
 		const [b] = await testDb
 			.insert(schema.lorebookBindings)
-			.values({ lorebookId: lorebook.id, binding: "{{char:2}}", name: "Bram" })
+			.values({
+				lorebookId: lorebook.id,
+				binding: "{{char:2}}",
+				name: "Bram"
+			})
 			.returning()
 
 		const listed = await narrativeGraphDuplicateCandidatesHandler.handler(

@@ -1,5 +1,5 @@
 /**
- * One chat turn, run as a pipeline.
+ * One session turn, run as a pipeline.
  *
  * This is the entry point the app calls instead of constructing a
  * `PromptBuilder` and an adapter: load the published spec, build the config
@@ -24,15 +24,25 @@ import { createReviewer } from "$lib/server/pipelines/runtime/reviewGate"
 import { createHost, type HostScope } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
-import { loadPublished, RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import {
+	loadPublished,
+	RESPOND_SPEC_ID
+} from "$lib/server/pipelines/boot/bootstrap"
 import { saveReceipt } from "$lib/server/pipelines/runtime/receipts"
+import {
+	connectionStopsFor,
+	makeScriptApplier,
+	scriptExtras,
+	scriptsEnabledFor
+} from "$lib/server/pipelines/scripts/chains"
+import { modeFieldsFor } from "$lib/server/pipelines/entities/sessionModes"
 import { v4 as uuidv4 } from "uuid"
 
 export class PipelineUnavailableError extends Error {}
 
 export interface TurnRequest {
 	db: any
-	chatId: number
+	sessionId: number
 	userId: number
 	/** Whose turn it is. Null in narrator mode. */
 	currentCharacterId: number | null
@@ -46,8 +56,8 @@ export interface TurnRequest {
 	 * The seed for anything that varies.
 	 *
 	 * **Defaults to a fresh value per turn, not to something derived from the
-	 * chat.** It first defaulted to `turn:${chatId}`, which is constant for the
-	 * life of a chat — so every turn would have picked the same example dialogue
+	 * session.** It first defaulted to `turn:${sessionId}`, which is constant for the
+	 * life of a session — so every turn would have picked the same example dialogue
 	 * and the variety the seeding exists to preserve would have been quietly
 	 * gone. The seed is recorded on the run row, so a caller reproducing a turn
 	 * passes the recorded one back rather than reconstructing it.
@@ -70,7 +80,7 @@ export interface TurnRequest {
 	/**
 	 * Skip recording the receipt.
 	 *
-	 * For the comparison tool, which runs a preview against every chat on the
+	 * For the comparison tool, which runs a preview against every session on the
 	 * instance and would otherwise fill the run history with rows nobody asked
 	 * for. A real turn always records.
 	 */
@@ -78,9 +88,9 @@ export interface TurnRequest {
 }
 
 /**
- * Any published spec, run against this chat — the entry every trigger shares.
+ * Any published spec, run against this session — the entry every trigger shares.
  *
- * `runTurn` shapes the input for a chat reply; the summarize and graph-build
+ * `runTurn` shapes the input for a session reply; the summarize and graph-build
  * sockets shape theirs. What none of them get to vary is the substrate: the
  * same world, the same host, the same bindings, the same receipt rule —
  * because two entry points that assembled those differently would be two
@@ -88,7 +98,7 @@ export interface TurnRequest {
  */
 export interface SpecRunRequest {
 	db: any
-	chatId: number
+	sessionId: number
 	userId: number
 	/** Which spec to run. */
 	specId: string
@@ -126,16 +136,28 @@ export interface SpecRunRequest {
 
 export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 	const { specId } = request
-	const doc = await loadPublished(request.db, specId)
-	if (!doc)
+	const loaded = await loadPublished(request.db, specId)
+	if (!loaded)
 		throw new PipelineUnavailableError(
 			`no published version of '${specId}'. Core publishes its own at startup, so ` +
 				`this usually means the type registry refused to sync — check the server log ` +
 				`for a pipeline bootstrap warning.`
 		)
 
+	// Scope node rebinds (19 §5): a session that swapped its next-speaker
+	// strategy — or any future node-type swap — lands here, on the freshly
+	// loaded copy, shape-guarded so a stale row degrades to the pin. The
+	// receipt then names the substituted type with no extra bookkeeping.
+	const { applyNodeRebinds } = await import(
+		"$lib/server/pipelines/entities/bindings"
+	)
+	const doc = await applyNodeRebinds(request.db, loaded, {
+		specSlug: specId,
+		sessionId: request.sessionId
+	})
+
 	const scope: HostScope = {
-		chatId: request.chatId,
+		sessionId: request.sessionId,
 		userId: request.userId,
 		currentCharacterId: request.currentCharacterId,
 		draftMessage: request.draftMessage,
@@ -143,10 +165,19 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 		signal: request.signal
 	}
 
+	// Hoisted so the run and the script applier share one seed — a script's
+	// rolls are a function of the run seed and the link's address (18 §6), and
+	// two seeds would make "replay with the recorded seed" a half-truth.
+	const seed = request.seed ?? uuidv4()
+
+	// The kill switch (18 §10): off means the host supplies no engine at all,
+	// and the executor's seam makes that mean "every spec runs exactly as
+	// before scripts existed" — chains and attachments kept, waiting.
+	const scriptsOn = await scriptsEnabledFor(request.db)
+
 	const receipt = await run(doc, {
 		world: await buildWorld(request.db, {
-			chatId: request.chatId,
-			userId: request.userId,
+			sessionId: request.sessionId,
 			// Which pipeline is running, so its own configs and overrides are
 			// read. Without it the run resolves against the legacy projection
 			// only, and everything a person set in the pipeline panel is
@@ -155,18 +186,35 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 		}),
 		input: request.input,
 		runId: request.runId ?? uuidv4(),
-		seed: request.seed ?? uuidv4(),
+		seed,
 		triggerSource: request.preview ? "ui" : "event",
 		preview: request.preview,
 		bindings: coreBindings(),
 		host: createHost(request.db, scope),
+		// The script engine, behind the executor's seam (18 §4a). Chains are
+		// config, so which ones run is already decided by the world above;
+		// this is only *how* a link executes — sandboxed, seeded, recorded.
+		...(scriptsOn
+			? {
+					applyScripts: makeScriptApplier(request.db, {
+						seed,
+						nowMs: Date.now(),
+						extras: await scriptExtras(request.db, scope),
+						// The connection's own stop guards ride along (18 §4b):
+						// resolved by the same rule dispatch uses — the instance
+						// default — so every spec running against that endpoint
+						// inherits its model knowledge.
+						connectionStops: await connectionStopsFor(request.db)
+					})
+				}
+			: {}),
 		onNode: request.onNode,
 		// Every run can park at a gated node — the review position is a
 		// config option (`settings.review`), so whether it *does* is the
 		// person's to decide in the panel, never the trigger's to wire.
 		reviewer: createReviewer({
 			userId: request.userId,
-			chatId: request.chatId,
+			sessionId: request.sessionId,
 			specId,
 			signal: request.signal
 		})
@@ -177,7 +225,7 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 	// produced a good reply.
 	if (!request.skipReceipt)
 		await saveReceipt(request.db, receipt, {
-			chatId: request.chatId,
+			sessionId: request.sessionId,
 			userId: request.userId,
 			messageId: writtenMessageId(receipt) ?? undefined
 		})
@@ -196,7 +244,7 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 export async function runTurn(request: TurnRequest): Promise<Receipt> {
 	return await runSpec({
 		db: request.db,
-		chatId: request.chatId,
+		sessionId: request.sessionId,
 		userId: request.userId,
 		specId: request.specId ?? RESPOND_SPEC_ID,
 		currentCharacterId: request.currentCharacterId,
@@ -206,14 +254,18 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 			// Both as ports and bundled. A query that wants the pair takes the
 			// scope; a node that wants only the speaker takes the id, instead
 			// of accepting the whole scope and reaching into it.
-			chatId: request.chatId,
+			sessionId: request.sessionId,
 			characterId: request.currentCharacterId ?? null,
-			// The speaker rides on the chat scope: a scope for a turn is this
-			// chat *and* whose turn it is.
-			chatScope: {
-				chatId: request.chatId,
+			// The speaker rides on the session scope: a scope for a turn is this
+			// session *and* whose turn it is.
+			sessionScope: {
+				sessionId: request.sessionId,
 				currentCharacterId: request.currentCharacterId
-			}
+			},
+			// The mode's declared fields, supplied back (19 §1): session settings
+			// wrote them to the row; this is where they enter the run, filtered
+			// to the shape's declared keys — see modeFieldsFor.
+			fields: await modeFieldsFor(request.db, request.sessionId)
 		},
 		seed: request.seed,
 		runId: request.runId,

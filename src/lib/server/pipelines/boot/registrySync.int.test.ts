@@ -16,6 +16,9 @@ import type { Descriptor } from "@serene-pub/sdk"
 import {
 	S,
 	allTypes,
+	allScriptTypes,
+	getScriptType,
+	snapshotRegistry,
 	checkInstall,
 	installable,
 	renderInstall,
@@ -60,7 +63,7 @@ describe("type registry sync", () => {
 		// row is what a form renders from (F6). Same pin, same contract, new
 		// wording → the stored slots move and nothing raises.
 		const base = allTypes().find(
-			(d: any) => d.id === "core:query/chat-history@1"
+			(d: any) => d.id === "core:query/session-history@1"
 		)! as any
 		const reworded = {
 			...base,
@@ -81,12 +84,12 @@ describe("type registry sync", () => {
 		const r = await syncTypeRegistry(db as any, [reworded], {
 			release: "0.6.0"
 		})
-		expect(r.updated).toContain("core:query/chat-history@1")
+		expect(r.updated).toContain("core:query/session-history@1")
 
 		const rows = await readTypeRegistry(db as any)
 		// Registry entries carry the bare id; the version is its own column.
 		const row = rows.find(
-			(e) => `${e.id}@${e.version}` === "core:query/chat-history@1"
+			(e) => `${e.id}@${e.version}` === "core:query/session-history@1"
 		)! as any
 		expect(row.slots.params.schema.limit.description).toBe(
 			"Reworded after shipping."
@@ -96,7 +99,7 @@ describe("type registry sync", () => {
 		const restore = await syncTypeRegistry(db as any, [base], {
 			release: "0.6.0"
 		})
-		expect(restore.updated).toContain("core:query/chat-history@1")
+		expect(restore.updated).toContain("core:query/session-history@1")
 	})
 
 	it("raises when a published version's content changed — never publishes, never ignores", async () => {
@@ -153,7 +156,7 @@ describe("type registry sync", () => {
 			spec("chariot.demo:turn", { version: "1.0.0" })
 				.input("input", C.userMessage.v1())
 				.query("history", ($) =>
-					C.chatHistory.v1({ scope: $.input.chatScope })
+					C.sessionHistory.v1({ scope: $.input.sessionScope })
 				)
 				.task("prompt", ($) =>
 					C.assemble.v2({ candidates: $.history.messages })
@@ -185,7 +188,7 @@ describe("type registry sync", () => {
 			spec("chariot.demo:stale", { version: "1.0.0" })
 				.input("input", C.userMessage.v1())
 				.query("history", ($) =>
-					C.chatHistory.v1({ scope: $.input.chatScope })
+					C.sessionHistory.v1({ scope: $.input.sessionScope })
 				)
 				.build()
 		)
@@ -222,7 +225,10 @@ describe("the optional flag is stored, and self-corrects", () => {
 			.delete(schema.pipelineTypeRegistry)
 			.where(
 				and(
-					eq(schema.pipelineTypeRegistry.typeId, "core:query/relationships-perspectives"),
+					eq(
+						schema.pipelineTypeRegistry.typeId,
+						"core:query/relationships-perspectives"
+					),
 					eq(schema.pipelineTypeRegistry.version, 1)
 				)
 			)
@@ -233,11 +239,17 @@ describe("the optional flag is stored, and self-corrects", () => {
 			.from(schema.pipelineTypeRegistry)
 			.where(
 				and(
-					eq(schema.pipelineTypeRegistry.typeId, "core:query/relationships-perspectives"),
+					eq(
+						schema.pipelineTypeRegistry.typeId,
+						"core:query/relationships-perspectives"
+					),
 					eq(schema.pipelineTypeRegistry.version, 1)
 				)
 			)
-		expect(row, "relationships-perspectives was not re-inserted").toBeTruthy()
+		expect(
+			row,
+			"relationships-perspectives was not re-inserted"
+		).toBeTruthy()
 		expect(row.optional).toBe(true)
 	})
 
@@ -250,7 +262,10 @@ describe("the optional flag is stored, and self-corrects", () => {
 			.from(schema.pipelineTypeRegistry)
 			.where(
 				and(
-					eq(schema.pipelineTypeRegistry.typeId, "core:query/relationships-perspectives"),
+					eq(
+						schema.pipelineTypeRegistry.typeId,
+						"core:query/relationships-perspectives"
+					),
 					eq(schema.pipelineTypeRegistry.version, 1)
 				)
 			)
@@ -275,7 +290,10 @@ describe("the optional flag is stored, and self-corrects", () => {
 			.from(schema.pipelineTypeRegistry)
 			.where(
 				and(
-					eq(schema.pipelineTypeRegistry.typeId, "core:query/chat-history"),
+					eq(
+						schema.pipelineTypeRegistry.typeId,
+						"core:query/session-history"
+					),
 					eq(schema.pipelineTypeRegistry.version, 1)
 				)
 			)
@@ -362,5 +380,161 @@ describe("the declared name is stored, and self-corrects", () => {
 			.from(schema.pipelineTypeRegistry)
 			.where(eq(schema.pipelineTypeRegistry.id, before.id))
 		expect((after.i18n as any)?.name?.en).toBe(NAME)
+	})
+})
+
+/**
+ * Script types go into the same registry, under the same rules (18 §2, U-S1).
+ *
+ * The claim is not "scripts have rows" — it is that there is *one* sync. A
+ * parallel projection for the fourth paradigm would be a second set of freeze,
+ * conflict and re-projection rules, agreeing on the day it was written and
+ * drifting after. These assert the shared machinery actually carries them.
+ */
+describe("script types ride the node-type sync", () => {
+	const ALL = () => [...allTypes(), ...allScriptTypes()]
+
+	const scriptRow = async (typeId: string) => {
+		const [row] = await db
+			.select()
+			.from(schema.pipelineTypeRegistry)
+			.where(
+				and(
+					eq(schema.pipelineTypeRegistry.typeId, typeId),
+					eq(schema.pipelineTypeRegistry.version, 1)
+				)
+			)
+		return row
+	}
+
+	it("projects all seven core contracts as rows of kind 'script'", async () => {
+		await syncTypeRegistry(db as any, ALL(), { release: "test" })
+
+		const rows = await db
+			.select()
+			.from(schema.pipelineTypeRegistry)
+			.where(eq(schema.pipelineTypeRegistry.kind, "script"))
+		expect(rows.map((r: any) => r.typeId).sort()).toEqual(
+			allScriptTypes()
+				.map((t) => t.id.replace(/@\d+$/, ""))
+				.sort()
+		)
+	})
+
+	it("stores the chain semantics, because the panel reads rows", async () => {
+		// A `transport: 'process'` script type has no descriptor in this
+		// process, so a semantics only the descriptor knows is a semantics the
+		// panel cannot render — the same argument that put `slots` in a column.
+		expect((await scriptRow("core:script:text/stop")).semantics).toBe(
+			"verdict"
+		)
+		expect((await scriptRow("core:script:text/transform")).semantics).toBe(
+			"transform"
+		)
+	})
+
+	it("leaves node types with no semantics rather than a stand-in", async () => {
+		// NULL here is a real value: a node type has no chain semantics to
+		// have. Defaulting it to 'transform' would make the column unreadable.
+		expect(
+			(await scriptRow("core:query/session-history")).semantics
+		).toBeNull()
+	})
+
+	it("is idempotent, which is what lets it run unconditionally at boot", async () => {
+		const again = await syncTypeRegistry(db as any, ALL(), {
+			release: "test"
+		})
+		expect(again.inserted).toEqual([])
+		expect(again.updated).toEqual([])
+	})
+
+	it("refuses a moved script contract exactly as it refuses a moved node one", async () => {
+		// The freeze rule is the whole reason scripts share this path. A
+		// contract that could change under a pin would let every chain using it
+		// start behaving differently with nothing on screen to say so.
+		const before = await scriptRow("core:script:text/stop")
+		await db
+			.update(schema.pipelineTypeRegistry)
+			.set({ contentHash: "stale-from-the-previous-build" })
+			.where(eq(schema.pipelineTypeRegistry.id, before.id))
+
+		await expect(
+			syncTypeRegistry(db as any, ALL(), { release: "test" })
+		).rejects.toBeInstanceOf(TypeRegistryConflictError)
+
+		// Put it back, so the shared database is not left conflicting for
+		// whatever runs next in this file.
+		await db
+			.update(schema.pipelineTypeRegistry)
+			.set({ contentHash: before.contentHash })
+			.where(eq(schema.pipelineTypeRegistry.id, before.id))
+	})
+
+	it("carries the blast radius as display text, out of the hash", async () => {
+		const row = await scriptRow("core:script:messages/inject")
+		expect((row.i18n as any)?.blastRadius?.en).toMatch(/additive/i)
+
+		// Copyediting it must not be a contract change — the promise that lets
+		// a warning be reworded without a version bump.
+		const { typeContentHash } = await import(
+			"$lib/server/pipelines/boot/registrySync"
+		)
+		const [entry] = snapshotRegistry(
+			[getScriptType("core:script:messages/inject@1")!],
+			{ release: "test" }
+		)
+		const reworded = typeContentHash({
+			...entry,
+			i18n: { blastRadius: { en: "Something else entirely" } }
+		} as any)
+		expect(reworded).toBe(typeContentHash(entry))
+	})
+})
+
+/**
+ * The row → entry read is lossless for the fields the hash depends on.
+ *
+ * ⚠ `readTypeRegistry` is what install-time validation reads, and it rebuilds a
+ * `RegistryEntry` field by field — so a field added to the projection and not
+ * to the reader silently disappears on the way back. For a *hashed* field that
+ * is not a cosmetic loss: the same row would hash differently depending on
+ * which direction it was travelling, and every script type would look
+ * conflicted to anything that compared them.
+ */
+describe("a registry row round-trips through the reader", () => {
+	it("returns the same content hash it was written with", async () => {
+		await syncTypeRegistry(
+			db as any,
+			[...allTypes(), ...allScriptTypes()],
+			{
+				release: "test"
+			}
+		)
+		const { typeContentHash } = await import(
+			"$lib/server/pipelines/boot/registrySync"
+		)
+
+		const readBack = new Map(
+			(await readTypeRegistry(db as any)).map((e) => [
+				`${e.id}@${e.version}`,
+				e
+			])
+		)
+
+		// Node types too, and they are the reason this is worth widening: the
+		// asymmetry this caught — `public` coming back `false` where the
+		// projection had `undefined` — was never about scripts. It had been
+		// true of every node type since the column was added, and nothing
+		// compared the two directions until now.
+		for (const t of [...allScriptTypes(), ...allTypes()]) {
+			const [projected] = snapshotRegistry([t], { release: "test" })
+			const pin = `${projected!.id}@${projected!.version}`
+			const back = readBack.get(pin)
+			expect(back, `${pin} did not come back`).toBeTruthy()
+			expect(typeContentHash(back!), pin).toBe(
+				typeContentHash(projected!)
+			)
+		}
 	})
 })

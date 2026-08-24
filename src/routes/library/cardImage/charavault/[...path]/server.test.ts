@@ -67,7 +67,10 @@ afterEach(() => {
 	fetchCharaVaultCardResponseMock.mockReset()
 })
 
-function fakeEvent(path: string, signal: AbortSignal = new AbortController().signal) {
+function fakeEvent(
+	path: string,
+	signal: AbortSignal = new AbortController().signal
+) {
 	return {
 		params: { path },
 		request: { signal }
@@ -105,7 +108,12 @@ describe("GET /library/cardImage/charavault/[...path]", () => {
 	})
 
 	test.each([
-		["CardSourceRateLimitedError", new CardSourceRateLimitedError(5000), 429, "5"],
+		[
+			"CardSourceRateLimitedError",
+			new CardSourceRateLimitedError(5000),
+			429,
+			"5"
+		],
 		["RateLimitTimeoutError", new RateLimitTimeoutError(), 429, "5"]
 	])(
 		"%s maps to 429 with Retry-After and Cache-Control: no-store",
@@ -192,7 +200,9 @@ describe("GET /library/cardImage/charavault/[...path]", () => {
 		)
 		fetchCharaVaultCardResponseMock.mockResolvedValue({
 			arrayBuffer: () =>
-				Promise.reject(new DOMException("The operation timed out.", "TimeoutError"))
+				Promise.reject(
+					new DOMException("The operation timed out.", "TimeoutError")
+				)
 		})
 
 		const res = await GET(fakeEvent("folder/file.png"))

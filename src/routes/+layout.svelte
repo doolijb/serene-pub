@@ -29,7 +29,7 @@
 	// while `children` only swaps to the new route's page once goto() finishes
 	// (an async navigation). Deriving the shell from the flag meant there was
 	// a window where the new shell had already mounted around the OLD page's
-	// content (eg. AccessibleShell wrapping a standard library/chat page) —
+	// content (eg. AccessibleShell wrapping a standard library/session page) —
 	// exactly the "accessible nav over top of the standard site" bug. Tying
 	// shell choice to page.url.pathname instead means both the shell and its
 	// children can only ever change together, in the same navigation.
@@ -258,7 +258,7 @@
 			<h1 class="text-2xl font-bold">Can't reach Serene Pub</h1>
 			<p class="text-sm opacity-90">
 				The page loaded, but the realtime connection Serene Pub needs
-				for chats and live updates could not be established.
+				for sessions and live updates could not be established.
 			</p>
 			<p class="text-sm opacity-90">
 				Serene Pub runs a second server for realtime updates, separate

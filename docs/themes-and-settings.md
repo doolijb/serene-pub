@@ -86,4 +86,4 @@ The **User** tab also has a **Document View** section with a **Switch to Documen
 
 ## Importing Data (Admin Only)
 
-If you're an admin, the **User** tab also shows a **Data Import** section with an **Import from SillyTavern** button, linking to the app's import tool for bringing in characters, personas, chats, and lorebooks from other applications. See [Importing from SillyTavern](./importing-from-sillytavern.md) for the full walkthrough.
+If you're an admin, the **User** tab also shows a **Data Import** section with an **Import from SillyTavern** button, linking to the app's import tool for bringing in characters, personas, sessions, and lorebooks from other applications. See [Importing from SillyTavern](./importing-from-sillytavern.md) for the full walkthrough.

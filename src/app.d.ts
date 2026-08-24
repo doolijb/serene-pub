@@ -83,9 +83,9 @@ declare global {
 			viewCharacterId?: number
 			/** Open the persona sidebar straight to its detail/view screen, not the edit form */
 			viewPersonaId?: number
-			chatId?: number
-			chatPersonaId?: number
-			chatCharacterId?: number
+			sessionId?: number
+			sessionPersonaId?: number
+			sessionCharacterId?: number
 			lorebookId?: number
 			tutorial?: boolean
 			/** Focus a specific history entry in the lorebook sidebar */
@@ -158,13 +158,13 @@ declare global {
 		tasks: Sockets.TaskQueue.QueuedTask[]
 	}
 
-	// Written by the open chat route (src/routes/chats/[id]/+page.svelte) so
+	// Written by the open session route (src/routes/sessions/[id]/+page.svelte) so
 	// globally-rendered sidebars (e.g. LorebooksSidebar) can tell whether a
-	// chat is currently open, whether it already has a lorebook attached, and
+	// session is currently open, whether it already has a lorebook attached, and
 	// whether the current user owns it (guests can't change it), without a
 	// dedicated fetch of their own.
-	interface OpenChatCtx {
-		chatId: number | null
+	interface OpenSessionCtx {
+		sessionId: number | null
 		lorebookId: number | null
 		isOwner: boolean
 	}
@@ -242,11 +242,11 @@ declare global {
 		setReviewSceneId: (id: number | null) => void
 	}
 
-	interface ChatSummarizeState {
+	interface SessionSummarizeState {
 		activityId: string
 		userId: number
-		chatId: number
-		chatLabel?: string
+		sessionId: number
+		sessionLabel?: string
 		loreType: "world" | "character"
 		lorebookId: number
 		topic?: string
@@ -264,11 +264,11 @@ declare global {
 		startedAt: string
 	}
 
-	interface ChatSummarizesCtx {
-		activities: ChatSummarizeState[]
+	interface SessionSummarizesCtx {
+		activities: SessionSummarizeState[]
 		/**
-		 * Set by the activity sidebar so the chat page reopens the summarize
-		 * modal for that run. Carries the chat too, because unlike the scene and
+		 * Set by the activity sidebar so the session page reopens the summarize
+		 * modal for that run. Carries the session too, because unlike the scene and
 		 * compile flows this one lives on a route rather than a panel — the
 		 * sidebar has to navigate before anything can reopen.
 		 */
@@ -373,7 +373,7 @@ declare global {
 				total: number
 				limit: number
 			}
-			chatMessages?: {
+			sessionMessages?: {
 				included: number
 				total: number
 				includedIds: number[]
@@ -410,7 +410,7 @@ declare global {
 
 	export interface SyncDetails {
 		syncSource: Partial<SelectUser> | null
-		scenario: null | "character" | "chat"
+		scenario: null | "character" | "session"
 	}
 
 	interface FileAcceptDetails {

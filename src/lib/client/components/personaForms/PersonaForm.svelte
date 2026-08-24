@@ -661,7 +661,7 @@
 					</p>
 					<p class="text-surface-400 text-xs">
 						Used as a concise graph node description. Not injected
-						into chat context.
+						into session context.
 					</p>
 				</div>
 			{/if}

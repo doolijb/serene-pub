@@ -194,9 +194,7 @@ describe("createLorebookBindingHandler — token derivation (PGlite integration)
 
 	test("ignores a client-supplied name/aliases when the row is bound to a real character", async () => {
 		const { createLorebookBindingHandler } = await import("./lorebooks")
-		const { createCharacterFromParsedData } = await import(
-			"./characters"
-		)
+		const { createCharacterFromParsedData } = await import("./characters")
 		const user = await makeUser("token-bound-trust-user")
 		const [lorebook] = await testDb
 			.insert(schema.lorebooks)
@@ -246,9 +244,7 @@ describe("createLorebookBindingHandler — token derivation (PGlite integration)
 	test("updateLorebookBindingHandler accepts a name change for an unbound row but rejects it once the row is bound", async () => {
 		const { createLorebookBindingHandler, updateLorebookBindingHandler } =
 			await import("./lorebooks")
-		const { createCharacterFromParsedData } = await import(
-			"./characters"
-		)
+		const { createCharacterFromParsedData } = await import("./characters")
 		const user = await makeUser("update-name-user")
 		const [lorebook] = await testDb
 			.insert(schema.lorebooks)

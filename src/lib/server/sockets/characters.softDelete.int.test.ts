@@ -1,6 +1,6 @@
 /**
  * Round-13 audit fix (HIGH): characters:delete did a real DELETE FROM
- * characters, cascading chatMessages.characterId -> SET NULL with no name
+ * characters, cascading sessionMessages.characterId -> SET NULL with no name
  * snapshot — every historical message that character ever authored
  * permanently fell back to the generic "assistant" label
  * (resolveCharacterName()). personas.isDeleted already implements a real
@@ -104,7 +104,7 @@ describe("characters:delete — soft delete (PGlite integration)", () => {
 		expect(getRes.character).toBeNull()
 	})
 
-	test("a soft-deleted character's historical chat messages still resolve its real name, not the generic fallback", async () => {
+	test("a soft-deleted character's historical session messages still resolve its real name, not the generic fallback", async () => {
 		const { charactersDelete } = await import("./characters")
 		const { resolveCharacterName } = await import(
 			"$lib/shared/utils/resolveCharacterName"
@@ -118,14 +118,14 @@ describe("characters:delete — soft delete (PGlite integration)", () => {
 				userId: user.id
 			})
 			.returning()
-		const [chat] = await testDb
-			.insert(schema.chats)
+		const [session] = await testDb
+			.insert(schema.sessions)
 			.values({ isGroup: false, userId: user.id })
 			.returning()
 		const [message] = await testDb
-			.insert(schema.chatMessages)
+			.insert(schema.sessionMessages)
 			.values({
-				chatId: chat.id,
+				sessionId: session.id,
 				userId: user.id,
 				characterId: character.id,
 				role: "assistant",
@@ -141,7 +141,7 @@ describe("characters:delete — soft delete (PGlite integration)", () => {
 
 		// The message's characterId FK still resolves — a real DELETE would
 		// have cascaded this to NULL.
-		const reloadedMessage = await testDb.query.chatMessages.findFirst({
+		const reloadedMessage = await testDb.query.sessionMessages.findFirst({
 			where: (cm, { eq }) => eq(cm.id, message.id),
 			with: { character: true }
 		})
@@ -151,23 +151,23 @@ describe("characters:delete — soft delete (PGlite integration)", () => {
 		)
 	})
 
-	test("an existing chatCharacters roster entry for a soft-deleted character keeps working", async () => {
+	test("an existing sessionCharacters roster entry for a soft-deleted character keeps working", async () => {
 		const { charactersDelete } = await import("./characters")
 		const user = await makeUser("char-softdelete-roster-user")
 		const [character] = await testDb
 			.insert(schema.characters)
 			.values({
-				name: "Still In Chat",
+				name: "Still In Session",
 				description: "x",
 				userId: user.id
 			})
 			.returning()
-		const [chat] = await testDb
-			.insert(schema.chats)
+		const [session] = await testDb
+			.insert(schema.sessions)
 			.values({ isGroup: true, userId: user.id })
 			.returning()
-		await testDb.insert(schema.chatCharacters).values({
-			chatId: chat.id,
+		await testDb.insert(schema.sessionCharacters).values({
+			sessionId: session.id,
 			characterId: character.id,
 			position: 0
 		})
@@ -178,19 +178,17 @@ describe("characters:delete — soft delete (PGlite integration)", () => {
 			noopEmit
 		)
 
-		const roster = await testDb.query.chatCharacters.findFirst({
-			where: (cc, { eq }) => eq(cc.chatId, chat.id),
+		const roster = await testDb.query.sessionCharacters.findFirst({
+			where: (cc, { eq }) => eq(cc.sessionId, session.id),
 			with: { character: true }
 		})
 		expect(roster).not.toBeNull()
 		expect(roster?.characterId).toBe(character.id)
-		expect(roster?.character?.name).toBe("Still In Chat")
+		expect(roster?.character?.name).toBe("Still In Session")
 	})
 
 	test("deleting a character you don't own is a no-op (ownership scoping preserved)", async () => {
-		const { charactersDelete, charactersGet } = await import(
-			"./characters"
-		)
+		const { charactersDelete, charactersGet } = await import("./characters")
 		const owner = await makeUser("char-softdelete-owner-user")
 		const attacker = await makeUser("char-softdelete-attacker-user")
 		const [character] = await testDb

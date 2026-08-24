@@ -14,10 +14,7 @@ import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
-import {
-	readSceneCast,
-	writeSceneCast
-} from "$lib/server/utils/sceneCast"
+import { readSceneCast, writeSceneCast } from "$lib/server/utils/sceneCast"
 
 let testDb: TestDb
 let dataDir: string
@@ -454,9 +451,8 @@ describe("narrativeGraphMergeNodeHandler — absorb (PGlite integration)", () =>
 		const { narrativeGraphMergeNodeHandler } = await import(
 			"./narrativeGraph"
 		)
-		const { user, bound, unbound } = await makeLorebookWithBoundAndUnbound(
-			"absorb-vector-user"
-		)
+		const { user, bound, unbound } =
+			await makeLorebookWithBoundAndUnbound("absorb-vector-user")
 		await testDb
 			.update(schema.lorebookBindings)
 			.set({
@@ -505,8 +501,10 @@ describe("narrativeGraphMergeNodeHandler — absorb (PGlite integration)", () =>
 
 describe("narrativeGraphUndoMergeHandler (PGlite integration)", () => {
 	test("restores the absorbed row verbatim, including its exact original binding token", async () => {
-		const { narrativeGraphMergeNodeHandler, narrativeGraphUndoMergeHandler } =
-			await import("./narrativeGraph")
+		const {
+			narrativeGraphMergeNodeHandler,
+			narrativeGraphUndoMergeHandler
+		} = await import("./narrativeGraph")
 		const { user, lorebook, bound, unbound } =
 			await makeLorebookWithBoundAndUnbound("undo-token-user")
 
@@ -536,8 +534,10 @@ describe("narrativeGraphUndoMergeHandler (PGlite integration)", () => {
 	})
 
 	test("restores relationships, scenes, character lore, and absorbedAliases on undo", async () => {
-		const { narrativeGraphMergeNodeHandler, narrativeGraphUndoMergeHandler } =
-			await import("./narrativeGraph")
+		const {
+			narrativeGraphMergeNodeHandler,
+			narrativeGraphUndoMergeHandler
+		} = await import("./narrativeGraph")
 		const { user, lorebook, bound, unbound } =
 			await makeLorebookWithBoundAndUnbound("undo-full-user")
 		const thirdParty = await makeBinding(lorebook.id, {
@@ -613,8 +613,10 @@ describe("narrativeGraphUndoMergeHandler (PGlite integration)", () => {
 	})
 
 	test("restores a reparented alias-child's parentNodeId back to the recreated row on undo", async () => {
-		const { narrativeGraphMergeNodeHandler, narrativeGraphUndoMergeHandler } =
-			await import("./narrativeGraph")
+		const {
+			narrativeGraphMergeNodeHandler,
+			narrativeGraphUndoMergeHandler
+		} = await import("./narrativeGraph")
 		const user = await makeUser("undo-reparent-user")
 		const lorebook = await makeLorebook(user.id, "Undo Reparent Book")
 		const survivor = await makeBinding(lorebook.id, { name: "Survivor" })
@@ -647,8 +649,10 @@ describe("narrativeGraphUndoMergeHandler (PGlite integration)", () => {
 	})
 
 	test("re-inserts a relationship that was deleted as a self-loop during absorb", async () => {
-		const { narrativeGraphMergeNodeHandler, narrativeGraphUndoMergeHandler } =
-			await import("./narrativeGraph")
+		const {
+			narrativeGraphMergeNodeHandler,
+			narrativeGraphUndoMergeHandler
+		} = await import("./narrativeGraph")
 		const { user, lorebook, bound, unbound } =
 			await makeLorebookWithBoundAndUnbound("undo-selfloop-user")
 		await makeRelationship(lorebook.id, unbound.id, bound.id, {
@@ -676,14 +680,14 @@ describe("narrativeGraphUndoMergeHandler (PGlite integration)", () => {
 		expect(restored).toHaveLength(1)
 		expect(restored[0].fromNodeId).toBe(res.restoredNode.id)
 		expect(restored[0].toNodeId).toBe(bound.id)
-		expect(restored[0].description).toBe(
-			"the ghost trusts the real one"
-		)
+		expect(restored[0].description).toBe("the ghost trusts the real one")
 	})
 
 	test("refuses to undo once the survivor is gone", async () => {
-		const { narrativeGraphMergeNodeHandler, narrativeGraphUndoMergeHandler } =
-			await import("./narrativeGraph")
+		const {
+			narrativeGraphMergeNodeHandler,
+			narrativeGraphUndoMergeHandler
+		} = await import("./narrativeGraph")
 		const { user, lorebook, bound, unbound } =
 			await makeLorebookWithBoundAndUnbound("undo-gone-survivor-user")
 

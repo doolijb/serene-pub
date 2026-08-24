@@ -10,10 +10,7 @@
 
 import { asc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import {
-	type Db,
-	type Decl
-} from "$lib/server/pipelines/config/panel/types"
+import { type Db, type Decl } from "$lib/server/pipelines/config/panel/types"
 
 type ChoiceList = Array<{ id: number; label: string; description?: string }>
 
@@ -43,7 +40,7 @@ export async function choiceSets(db: Db, specId: number) {
 		.orderBy(asc(schema.samplingConfigs.id))
 
 	// Every context template on the instance, pooled by node type rather than
-	// by spec — the same rule layouts follow, for the same reason: chat reply
+	// by spec — the same rule layouts follow, for the same reason: session reply
 	// and the narrator run the same assemble node, so one story string serves
 	// both and always has. Narrowed per option by `nodeTypeId` below, and
 	// grouped so the pipeline being configured comes first.
@@ -54,7 +51,7 @@ export async function choiceSets(db: Db, specId: number) {
 
 	const specRows = await db.select().from(schema.pipelineSpecs)
 	// The display name, not the slug: `from core:spec/respond` is the id a
-	// developer reads and `from Chat reply` is the thing a user recognises,
+	// developer reads and `from Session reply` is the thing a user recognises,
 	// and this string is a subtitle in a picker.
 	const nameById = new Map<number, string>(
 		(specRows as any[]).map((r) => [r.id, r.name ?? r.slug])
@@ -114,6 +111,53 @@ export async function choiceSets(db: Db, specId: number) {
 			return Number(!!rowB?.isImmutable) - Number(!!rowA?.isImmutable)
 		})
 
+	// Every script on the instance, keyed by pinned type id. Like layouts, a
+	// script is deliberately not namespaced to a spec — a slop filter written
+	// while configuring replies belongs in the summarizer's picker too — so the
+	// narrowing per option is by the hook's accepted types, applied below.
+	const scriptRows = await db
+		.select()
+		.from(schema.pipelineScripts)
+		.orderBy(asc(schema.pipelineScripts.id))
+
+	// The type's display name and badge, from registry rows (F6) — the picker
+	// subtitle has to say what kind of thing each row is, because a hook
+	// accepting two operations ("rewrites content" vs "ends generations") is
+	// offering two different powers under one Add button.
+	const scriptTypeRegistry = await db
+		.select()
+		.from(schema.pipelineTypeRegistry)
+		.where(eq(schema.pipelineTypeRegistry.kind, "script"))
+	const scriptTypeMeta = new Map<
+		string,
+		{ name: string; blastRadius: string; operation: string }
+	>()
+	for (const r of scriptTypeRegistry as any[]) {
+		const pinned = `${r.typeId}@${r.version}`
+		const i18n = (r.i18n ?? {}) as Record<string, any>
+		const text = (v: unknown) =>
+			typeof v === "string" ? v : ((v as any)?.en ?? "")
+		scriptTypeMeta.set(pinned, {
+			name: text(i18n.name) || pinned,
+			blastRadius: text(i18n.blastRadius),
+			operation: pinned.replace(/@\d+$/, "").split("/").pop() ?? ""
+		})
+	}
+
+	const scriptsByType = new Map<string, ChoiceList>()
+	for (const s of scriptRows as any[]) {
+		const meta = scriptTypeMeta.get(s.typeId)
+		const list = scriptsByType.get(s.typeId) ?? []
+		list.push({
+			id: s.id,
+			label: s.name,
+			...(meta
+				? { description: `${meta.name} — ${meta.blastRadius}` }
+				: {})
+		})
+		scriptsByType.set(s.typeId, list)
+	}
+
 	return {
 		prompts: (prompts as any[]).map((p) => ({
 			id: p.id,
@@ -146,7 +190,14 @@ export async function choiceSets(db: Db, specId: number) {
 		/** The full rows, for the inline editor — same reason as `promptRows`. */
 		variableTemplateRows: new Map<number, any>(
 			(variableTemplates as any[]).map((t) => [t.id, t])
-		)
+		),
+		scriptsByType,
+		/** The full rows, to hydrate a chain's entries — same reason as `promptRows`. */
+		scriptRows: new Map<number, any>(
+			(scriptRows as any[]).map((s) => [s.id, s])
+		),
+		/** Type display info, for the chain entries' labels and badges. */
+		scriptTypeMeta
 	}
 }
 
@@ -171,5 +222,12 @@ export const choicesFor = (
 		return d.nodeTypeId
 			? (sets.contextTemplatesBy.get(d.nodeTypeId) ?? [])
 			: []
+	// The union of the hook's accepted types, in declaration order — which is
+	// the attachment rule made visible: nothing outside `accepts` is offered,
+	// and the write path refuses whatever a stale client offers anyway.
+	if (d.control === "scripts-chain")
+		return (d.accepts ?? []).flatMap(
+			(typeId) => sets.scriptsByType.get(typeId) ?? []
+		)
 	return undefined
 }

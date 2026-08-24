@@ -101,7 +101,7 @@
 
 	// Same as above, but opens the read-only detail view instead of the edit
 	// form — used when arriving from a context that just wants to look up a
-	// character (eg. clicking a name in a chat), not edit it.
+	// character (eg. clicking a name in a session), not edit it.
 	$effect(() => {
 		if (panelsCtx.digest.viewCharacterId) {
 			viewingId = panelsCtx.digest.viewCharacterId
@@ -270,10 +270,10 @@
 		handleViewClick(character.id)
 	}
 
-	function handleChatFromView() {
+	function handleSessionFromView() {
 		if (!viewingId) return
-		panelsCtx.digest.chatCharacterId = viewingId
-		panelsCtx.openPanel({ key: "chats", toggle: false })
+		panelsCtx.digest.sessionCharacterId = viewingId
+		panelsCtx.openPanel({ key: "sessions", toggle: false })
 	}
 
 	function confirmLorebookImport() {
@@ -560,7 +560,7 @@
 					characterId={viewingId}
 					onBack={() => (viewingId = undefined)}
 					onEdit={handleEditFromView}
-					onChat={handleChatFromView}
+					onSession={handleSessionFromView}
 					onExport={handleExportCharacter}
 				/>
 			</section>
@@ -677,7 +677,7 @@
 							onEdit={handleEditClick}
 							onDelete={handleDeleteClick}
 							onExport={handleExportCharacter}
-							contentTitle="Go to character chats"
+							contentTitle="Go to character sessions"
 						/>
 					</div>
 				{/each}
@@ -712,7 +712,7 @@
 								onEdit={handleEditClick}
 								onDelete={handleDeleteClick}
 								onExport={handleExportCharacter}
-								contentTitle="Go to character chats"
+								contentTitle="Go to character sessions"
 							/>
 						</div>
 					{/each}

@@ -24,8 +24,8 @@ export type NodeState = "active" | "deceased" | "missing" | "departed"
 export type NodeVisibility = "normal" | "legendary" | "hidden"
 export type RelationshipVisibility = "secret" | "acknowledged" | "public"
 import { GroupReplyStrategies } from "../../shared/constants/GroupReplyStrategies"
-import { ChatCharacterVisibility } from "../../shared/constants/ChatCharacterVisibility"
-import { ChatTypes } from "../../shared/constants/ChatTypes"
+import { SessionCharacterVisibility } from "../../shared/constants/SessionCharacterVisibility"
+import { SessionTypes } from "../../shared/constants/SessionTypes"
 
 export const users = pgTable(
 	"users",
@@ -60,8 +60,8 @@ export const users = pgTable(
 export const userRelations = relations(users, ({ many, one }) => ({
 	lorebooks: many(lorebooks),
 	characters: many(characters),
-	chats: many(chats),
-	chatGuests: many(chatGuests),
+	sessions: many(sessions),
+	sessionGuests: many(sessionGuests),
 	tags: many(tags),
 	personas: many(personas),
 	userSettings: one(userSettings),
@@ -349,8 +349,8 @@ export const samplingRelations = relations(samplingConfigs, () => ({}))
 
 export const connections = pgTable("connections", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	name: text("name").notNull(), // Connection name (e.g., ollama, llama, chatgpt)
-	type: text("type").notNull(), // Connection type/category (e.g., ollama, chatgpt, etc)
+	name: text("name").notNull(), // Connection name (e.g., ollama, llama, sessiongpt)
+	type: text("type").notNull(), // Connection type/category (e.g., ollama, sessiongpt, etc)
 	baseUrl: text("base_url"), // Base URL or endpoint for API
 	model: text("model"), // Model name or identifier
 	// Ollama-specific options
@@ -363,6 +363,43 @@ export const connections = pgTable("connections", {
 })
 
 export const connectionsRelations = relations(connections, () => ({}))
+
+/**
+ * Stop scripts attached to a connection (18 §4b) — the rides-along pattern.
+ *
+ * Stop behavior is usually a property of the *model*, not the story: "this
+ * endpoint leaks ChatML", "this one echoes the speaker line" travel with the
+ * endpoint, and every pipeline that runs against the connection — core's and
+ * any extension's — inherits the guards with no wiring. Legal here because
+ * stops are order-free (a min-reduction, 18 §5), so merging the connection's
+ * set with a pipeline's chain needs no precedence rule.
+ *
+ * Only `core:script:text/stop@1` rows may attach — the entity layer refuses
+ * anything else, because entity attachment is limited to operations whose
+ * content actually flows through the entity (18 §4b's scope guard). `position`
+ * is display order only; verdicts do not care.
+ */
+export const connectionScripts = pgTable(
+	"connection_scripts",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		connectionId: integer("connection_id")
+			.notNull()
+			.references(() => connections.id, { onDelete: "cascade" }),
+		scriptId: integer("script_id")
+			.notNull()
+			.references(() => pipelineScripts.id, { onDelete: "cascade" }),
+		position: integer("position").notNull().default(0),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [
+		uniqueIndex("connection_scripts_pair_idx").on(
+			t.connectionId,
+			t.scriptId
+		),
+		index("connection_scripts_script_idx").on(t.scriptId)
+	]
+)
 
 export const contextConfigs = pgTable("context_configs", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
@@ -397,15 +434,15 @@ export const promptConfigs = pgTable("prompt_configs", {
 	name: text("name").notNull(),
 	systemPrompt: text("system_prompt").notNull(),
 	// Reinforcement inserted right before the model's generation point —
-	// after all chat history, immediately preceding the seed turn — rather
+	// after all session history, immediately preceding the seed turn — rather
 	// than only at the top of a long prompt alongside systemPrompt. Mirrors
 	// narratorPromptConfigs.postHistoryInstructions below.
 	postHistoryInstructions: text("post_history_instructions"),
 	// Number of messages back from the last message the post-history block
 	// is positioned at. 0 = immediately after the last message (default).
 	postHistoryDepth: integer("post_history_depth").notNull().default(0),
-	// Minimum token count of chat history required before
-	// postHistoryInstructions is included — lets short chats skip the
+	// Minimum token count of session history required before
+	// postHistoryInstructions is included — lets short sessions skip the
 	// reminder since the system prompt is still close by. 0 = always
 	// included.
 	postHistoryTokenTrigger: integer("post_history_token_trigger")
@@ -431,9 +468,9 @@ export const promptConfigsRelations = relations(promptConfigs, ({ one }) => ({
 	})
 }))
 
-// "chat" prefix is deliberate: this is a prompt config scoped to the
-// standard roleplay chat type specifically, so a future narrator/environment
-// config for a different chat type can't collide with it.
+// "session" prefix is deliberate: this is a prompt config scoped to the
+// standard roleplay session type specifically, so a future narrator/environment
+// config for a different session type can't collide with it.
 export const narratorPromptConfigs = pgTable("narrator_prompt_configs", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 	/** Stable seed identity, e.g. "sampling-default". NULL for user-created
@@ -441,12 +478,12 @@ export const narratorPromptConfigs = pgTable("narrator_prompt_configs", {
 	seedKey: text("seed_key").unique(),
 	isImmutable: boolean("is_immutable").notNull().default(false),
 	name: text("name").notNull(),
-	// Chat-facing display name/label shown on messages generated with this
+	// Session-facing display name/label shown on messages generated with this
 	// config (e.g. "Narrator", "The World", "Fate") — distinct from
 	// `name` above, which only identifies the config itself in the sidebar.
 	narratorName: text("narrator_name").notNull().default("Narrator"),
 	// Reinforcement inserted right before the model's generation point —
-	// after all chat history, immediately preceding the seed turn — rather
+	// after all session history, immediately preceding the seed turn — rather
 	// than only at the top of a long prompt alongside systemPrompt. Far more
 	// effective against a model drifting back into character-dialogue
 	// patterns established over many prior turns. See defaults.ts's context
@@ -455,7 +492,7 @@ export const narratorPromptConfigs = pgTable("narrator_prompt_configs", {
 	// Number of messages back from the last message the post-history block
 	// is positioned at. 0 = immediately after the last message (default).
 	postHistoryDepth: integer("post_history_depth").notNull().default(0),
-	// Minimum token count of chat history required before
+	// Minimum token count of session history required before
 	// postHistoryInstructions is included. 0 = always included — the
 	// Narrator's own seed keeps this at 0 so it's always reinforced.
 	postHistoryTokenTrigger: integer("post_history_token_trigger")
@@ -1415,7 +1452,7 @@ export const tagsRelations = relations(tags, ({ many, one }) => ({
 	characterTags: many(characterTags),
 	personaTags: many(personaTags),
 	lorebookTags: many(lorebookTags),
-	chatTags: many(chatTags)
+	sessionTags: many(sessionTags)
 }))
 
 export const characterTags = pgTable(
@@ -1433,7 +1470,7 @@ export const characterTags = pgTable(
 		// being inserted repeatedly (a double-click/retry), silently
 		// duplicating the association and inflating counts anywhere that
 		// renders a tag list — matches the composite unique PKs already used
-		// on chatCharacters/chatPersonas/chatGuests for the same reason.
+		// on sessionCharacters/sessionPersonas/sessionGuests for the same reason.
 		uniqueIndex("character_tags_unique").on(t.characterId, t.tagId)
 	]
 )
@@ -1497,26 +1534,26 @@ export const lorebookTagsRelations = relations(lorebookTags, ({ one }) => ({
 	})
 }))
 
-export const chatTags = pgTable(
-	"chat_tags",
+export const sessionTags = pgTable(
+	"session_tags",
 	{
-		chatId: integer("chat_id")
+		sessionId: integer("session_id")
 			.notNull()
-			.references(() => chats.id, { onDelete: "cascade" }), // FK to chats.id
+			.references(() => sessions.id, { onDelete: "cascade" }), // FK to sessions.id
 		tagId: integer("tag_id")
 			.notNull()
 			.references(() => tags.id, { onDelete: "cascade" }) // FK to tags.id
 	},
-	(t) => [uniqueIndex("chat_tags_unique").on(t.chatId, t.tagId)]
+	(t) => [uniqueIndex("session_tags_unique").on(t.sessionId, t.tagId)]
 )
 
-export const chatTagsRelations = relations(chatTags, ({ one }) => ({
-	chat: one(chats, {
-		fields: [chatTags.chatId],
-		references: [chats.id]
+export const sessionTagsRelations = relations(sessionTags, ({ one }) => ({
+	session: one(sessions, {
+		fields: [sessionTags.sessionId],
+		references: [sessions.id]
 	}),
 	tag: one(tags, {
-		fields: [chatTags.tagId],
+		fields: [sessionTags.tagId],
 		references: [tags.id]
 	})
 }))
@@ -1556,7 +1593,7 @@ export const characters = pgTable(
 		creatorNotesMultilingual: json("creator_notes_multilingual").$type<
 			Record<string, string>
 		>(),
-		groupOnlyGreetings: json("group_only_greetings").$type<string[]>(), // JSON array of greetings for group chats
+		groupOnlyGreetings: json("group_only_greetings").$type<string[]>(), // JSON array of greetings for group sessions
 		postHistoryInstructions: text("post_history_instructions"), // Instructions for post-history processing
 		source: json("source").notNull().default([]).$type<string[]>(), // JSON array of sources (e.g., URLs, books)
 		assets: json("assets").notNull().default([]).$type<
@@ -1608,8 +1645,8 @@ export const charactersRelations = relations(characters, ({ many, one }) => ({
 		references: [lorebooks.id]
 	}),
 	characterTags: many(characterTags),
-	chatCharacters: many(chatCharacters),
-	chatMessages: many(chatMessages),
+	sessionCharacters: many(sessionCharacters),
+	sessionMessages: many(sessionMessages),
 	galleryImages: many(characterGalleryImages)
 }))
 
@@ -1731,14 +1768,34 @@ export const personaGalleryImagesRelations = relations(
 	})
 )
 
-// Chats (group or 1:1)
-export const chats = pgTable(
-	"chats",
+// Sessions (group or 1:1)
+export const sessions = pgTable(
+	"sessions",
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		name: text("name"), // Optional chat/group name
-		isGroup: boolean("is_group").notNull(), // 1 for group chat, 0 for 1:1
-		chatType: text("chat_type").notNull().default(ChatTypes.ROLEPLAY), // "roleplay" | "summarize"
+		name: text("name"), // Optional session/group name
+		isGroup: boolean("is_group").notNull(), // 1 for group session, 0 for 1:1
+		/**
+		 * The session's mode — a shape-bearing input type id (19 §0). Every session
+		 * has one; the default is the F29 floor, which is also the backfill
+		 * for every session created before modes existed. Creation validates the
+		 * cast and fields against the mode's declared shape.
+		 */
+		modeId: text("mode_id").notNull().default("core:input/user-message@1"),
+		/**
+		 * Values for the mode's declared `fields` (19 §1), keyed by field
+		 * name. Rendered in session settings from the shape's SettingsSchema and
+		 * supplied back through the input node's published document — the
+		 * whole round trip. Keys the mode does not declare are dropped at the
+		 * supply side, so a mode switch cannot smuggle stale facts.
+		 */
+		modeFields: json("mode_fields")
+			.notNull()
+			.default({})
+			.$type<Record<string, unknown>>(),
+		sessionType: text("session_type")
+			.notNull()
+			.default(SessionTypes.ROLEPLAY), // "roleplay" | "summarize"
 		userId: integer("user_id")
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
@@ -1781,56 +1838,56 @@ export const chats = pgTable(
 			.notNull()
 			.default({})
 	},
-	(table) => [index("chats_user_id_idx").on(table.userId)]
+	(table) => [index("sessions_user_id_idx").on(table.userId)]
 )
 
-export const chatsRelations = relations(chats, ({ one, many }) => ({
+export const sessionsRelations = relations(sessions, ({ one, many }) => ({
 	user: one(users, {
-		fields: [chats.userId],
+		fields: [sessions.userId],
 		references: [users.id]
 	}),
-	chatMessages: many(chatMessages),
-	chatPersonas: many(chatPersonas),
-	chatCharacters: many(chatCharacters),
-	chatGuests: many(chatGuests),
+	sessionMessages: many(sessionMessages),
+	sessionPersonas: many(sessionPersonas),
+	sessionCharacters: many(sessionCharacters),
+	sessionGuests: many(sessionGuests),
 	lorebook: one(lorebooks, {
-		fields: [chats.lorebookId],
+		fields: [sessions.lorebookId],
 		references: [lorebooks.id]
 	}),
 	connection: one(connections, {
-		fields: [chats.connectionId],
+		fields: [sessions.connectionId],
 		references: [connections.id]
 	}),
 	samplingConfig: one(samplingConfigs, {
-		fields: [chats.samplingConfigId],
+		fields: [sessions.samplingConfigId],
 		references: [samplingConfigs.id]
 	}),
 	promptConfig: one(promptConfigs, {
-		fields: [chats.promptConfigId],
+		fields: [sessions.promptConfigId],
 		references: [promptConfigs.id]
 	}),
 	narratorPromptConfig: one(narratorPromptConfigs, {
-		fields: [chats.narratorPromptConfigId],
+		fields: [sessions.narratorPromptConfigId],
 		references: [narratorPromptConfigs.id]
 	}),
-	chatTags: many(chatTags),
+	sessionTags: many(sessionTags),
 	scenes: many(scenes)
 }))
 
-// Chat messages
-export const chatMessages = pgTable(
-	"chat_messages",
+// Session messages
+export const sessionMessages = pgTable(
+	"session_messages",
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		chatId: integer("chat_id")
+		sessionId: integer("session_id")
 			.notNull()
-			.references(() => chats.id, { onDelete: "cascade" }),
+			.references(() => sessions.id, { onDelete: "cascade" }),
 		// Nullable + set null (not cascade): this is who SENT the message, not
-		// who owns the chat it's in — a message can easily belong to a chat
+		// who owns the session it's in — a message can easily belong to a session
 		// owned by a different user (a guest's message in someone else's
-		// chat). Cascading a user delete here would silently wipe messages
-		// out of chats that user doesn't even own; nulling authorship instead
-		// (matching characterId/personaId below) preserves the chat's history.
+		// session). Cascading a user delete here would silently wipe messages
+		// out of sessions that user doesn't even own; nulling authorship instead
+		// (matching characterId/personaId below) preserves the session's history.
 		userId: integer("user_id").references(() => users.id, {
 			onDelete: "set null"
 		}),
@@ -1865,7 +1922,7 @@ export const chatMessages = pgTable(
 			}
 			// Native model thinking content (e.g. Ollama `think: true`) for the
 			// message's currently-active swipe — mirrors swipes.thinkingHistory[currentIdx],
-			// kept denormalized here since that's what ChatMessage.svelte reads.
+			// kept denormalized here since that's what SessionMessage.svelte reads.
 			thinking?: string | null
 			narratorInstructions?: string // Optional extra focus text for a Narrator response generation
 			narratorName?: string // Display name resolved at generation time for a Narrator response message (e.g. "Narrator")
@@ -1880,41 +1937,44 @@ export const chatMessages = pgTable(
 		embeddingModel: text("embedding_model"),
 		vectorizedAt: timestamp("vectorized_at")
 	},
-	// The single hottest query in the app — every chat load filters by this.
-	(table) => [index("chat_messages_chat_id_idx").on(table.chatId)]
+	// The single hottest query in the app — every session load filters by this.
+	(table) => [index("session_messages_session_id_idx").on(table.sessionId)]
 )
 
-export const chatMessagesRelations = relations(chatMessages, ({ one }) => ({
-	chat: one(chats, {
-		fields: [chatMessages.chatId],
-		references: [chats.id]
-	}),
-	user: one(users, {
-		fields: [chatMessages.userId],
-		references: [users.id]
-	}),
-	character: one(characters, {
-		fields: [chatMessages.characterId],
-		references: [characters.id]
-	}),
-	persona: one(personas, {
-		fields: [chatMessages.personaId],
-		references: [personas.id]
+export const sessionMessagesRelations = relations(
+	sessionMessages,
+	({ one }) => ({
+		session: one(sessions, {
+			fields: [sessionMessages.sessionId],
+			references: [sessions.id]
+		}),
+		user: one(users, {
+			fields: [sessionMessages.userId],
+			references: [users.id]
+		}),
+		character: one(characters, {
+			fields: [sessionMessages.characterId],
+			references: [characters.id]
+		}),
+		persona: one(personas, {
+			fields: [sessionMessages.personaId],
+			references: [personas.id]
+		})
 	})
-}))
+)
 
-// Many-to-many: chats <-> personas
-export const chatPersonas = pgTable(
-	"chat_personas",
+// Many-to-many: sessions <-> personas
+export const sessionPersonas = pgTable(
+	"session_personas",
 	{
-		chatId: integer("chat_id")
+		sessionId: integer("session_id")
 			.notNull()
-			.references(() => chats.id, { onDelete: "cascade" }),
+			.references(() => sessions.id, { onDelete: "cascade" }),
 		personaId: integer("persona_id").references(() => personas.id, {
 			onDelete: "set null"
 		}),
-		position: integer("position").default(0), // Position in the chat
-		// Soft-delete: set when this participant is removed from the chat so
+		position: integer("position").default(0), // Position in the session
+		// Soft-delete: set when this participant is removed from the session so
 		// past messages can still resolve a speaker name. Null = active.
 		removedAt: timestamp("removed_at"),
 		// Snapshot of the persona's name at removal time, for the case where
@@ -1923,40 +1983,43 @@ export const chatPersonas = pgTable(
 		removedName: text("removed_name")
 	},
 	(table) => [
-		uniqueIndex("chat_personas_pk").on(table.chatId, table.personaId),
-		// canViewPersona() looks up chatPersonas by personaId alone.
-		index("chat_personas_persona_id_idx").on(table.personaId)
+		uniqueIndex("session_personas_pk").on(table.sessionId, table.personaId),
+		// canViewPersona() looks up sessionPersonas by personaId alone.
+		index("session_personas_persona_id_idx").on(table.personaId)
 	]
 )
 
-export const chatPersonasRelations = relations(chatPersonas, ({ one }) => ({
-	chat: one(chats, {
-		fields: [chatPersonas.chatId],
-		references: [chats.id]
-	}),
-	persona: one(personas, {
-		fields: [chatPersonas.personaId],
-		references: [personas.id]
+export const sessionPersonasRelations = relations(
+	sessionPersonas,
+	({ one }) => ({
+		session: one(sessions, {
+			fields: [sessionPersonas.sessionId],
+			references: [sessions.id]
+		}),
+		persona: one(personas, {
+			fields: [sessionPersonas.personaId],
+			references: [personas.id]
+		})
 	})
-}))
+)
 
-// Many-to-many: chats <-> characters
-export const chatCharacters = pgTable(
-	"chat_characters",
+// Many-to-many: sessions <-> characters
+export const sessionCharacters = pgTable(
+	"session_characters",
 	{
-		chatId: integer("chat_id")
+		sessionId: integer("session_id")
 			.notNull()
-			.references(() => chats.id, { onDelete: "cascade" }),
+			.references(() => sessions.id, { onDelete: "cascade" }),
 		characterId: integer("character_id").references(() => characters.id, {
 			onDelete: "set null"
 		}),
-		position: integer("position").default(0), // Position in the chat
-		isActive: boolean("is_active").notNull().default(true), // 1 if active in chat, 0 if not
+		position: integer("position").default(0), // Position in the session
+		isActive: boolean("is_active").notNull().default(true), // 1 if active in session, 0 if not
 		// Character visibility optimization setting
 		visibility: text("visibility")
 			.notNull()
-			.default(ChatCharacterVisibility.VISIBLE), // Controls how much character info is shown when not responding
-		// Soft-delete: set when this participant is removed from the chat so
+			.default(SessionCharacterVisibility.VISIBLE), // Controls how much character info is shown when not responding
+		// Soft-delete: set when this participant is removed from the session so
 		// past messages can still resolve a speaker name. Null = active.
 		removedAt: timestamp("removed_at"),
 		// Snapshot of the character's name at removal time, for the case where
@@ -1965,73 +2028,82 @@ export const chatCharacters = pgTable(
 		removedName: text("removed_name")
 	},
 	(table) => [
-		uniqueIndex("chat_characters_pk").on(table.chatId, table.characterId),
-		// canViewCharacter() looks up chatCharacters by characterId alone.
-		index("chat_characters_character_id_idx").on(table.characterId)
+		uniqueIndex("session_characters_pk").on(
+			table.sessionId,
+			table.characterId
+		),
+		// canViewCharacter() looks up sessionCharacters by characterId alone.
+		index("session_characters_character_id_idx").on(table.characterId)
 	]
 )
 
-export const chatCharactersRelations = relations(chatCharacters, ({ one }) => ({
-	chat: one(chats, {
-		fields: [chatCharacters.chatId],
-		references: [chats.id]
-	}),
-	character: one(characters, {
-		fields: [chatCharacters.characterId],
-		references: [characters.id]
+export const sessionCharactersRelations = relations(
+	sessionCharacters,
+	({ one }) => ({
+		session: one(sessions, {
+			fields: [sessionCharacters.sessionId],
+			references: [sessions.id]
+		}),
+		character: one(characters, {
+			fields: [sessionCharacters.characterId],
+			references: [characters.id]
+		})
 	})
-}))
+)
 
-// Many-to-many: chats <-> lorebooks
-export const chatLorebooks = pgTable(
-	"chat_lorebooks",
+// Many-to-many: sessions <-> lorebooks
+export const sessionLorebooks = pgTable(
+	"session_lorebooks",
 	{
-		chatId: integer("chat_id")
+		sessionId: integer("session_id")
 			.notNull()
-			.references(() => chats.id, { onDelete: "cascade" }),
+			.references(() => sessions.id, { onDelete: "cascade" }),
 		lorebookId: integer("lorebook_id")
 			.notNull()
 			.references(() => lorebooks.id, { onDelete: "cascade" }),
-		position: integer("position").default(0) // Optional: position/order in the chat
+		position: integer("position").default(0) // Optional: position/order in the session
 	},
 	(table) => ({})
 )
 
-export const chatLorebooksRelations = relations(chatLorebooks, ({ one }) => ({
-	chat: one(chats, {
-		fields: [chatLorebooks.chatId],
-		references: [chats.id]
-	}),
-	lorebook: one(lorebooks, {
-		fields: [chatLorebooks.lorebookId],
-		references: [lorebooks.id]
+export const sessionLorebooksRelations = relations(
+	sessionLorebooks,
+	({ one }) => ({
+		session: one(sessions, {
+			fields: [sessionLorebooks.sessionId],
+			references: [sessions.id]
+		}),
+		lorebook: one(lorebooks, {
+			fields: [sessionLorebooks.lorebookId],
+			references: [lorebooks.id]
+		})
 	})
-}))
+)
 
-// Many-to-many: chats <-> users (guests)
-export const chatGuests = pgTable(
-	"chat_guests",
+// Many-to-many: sessions <-> users (guests)
+export const sessionGuests = pgTable(
+	"session_guests",
 	{
-		chatId: integer("chat_id")
+		sessionId: integer("session_id")
 			.notNull()
-			.references(() => chats.id, { onDelete: "cascade" }),
+			.references(() => sessions.id, { onDelete: "cascade" }),
 		userId: integer("user_id")
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
 		isPlayer: boolean("is_player").notNull().default(true)
 	},
 	(table) => ({
-		pk: uniqueIndex("chat_guests_pk").on(table.chatId, table.userId)
+		pk: uniqueIndex("session_guests_pk").on(table.sessionId, table.userId)
 	})
 )
 
-export const chatGuestsRelations = relations(chatGuests, ({ one }) => ({
-	chat: one(chats, {
-		fields: [chatGuests.chatId],
-		references: [chats.id]
+export const sessionGuestsRelations = relations(sessionGuests, ({ one }) => ({
+	session: one(sessions, {
+		fields: [sessionGuests.sessionId],
+		references: [sessions.id]
 	}),
 	user: one(users, {
-		fields: [chatGuests.userId],
+		fields: [sessionGuests.userId],
 		references: [users.id]
 	})
 }))
@@ -2064,7 +2136,7 @@ export const systemSettings = pgTable("system_settings", {
 	 * shipping its own pipeline — there is no column for a namespace core did not
 	 * know about, and adding one is a core migration. A selection row keys on the
 	 * spec, so every namespace works including a plugin's, and the same table
-	 * covers user and chat scope instead of only this one.
+	 * covers user and session scope instead of only this one.
 	 *
 	 * Kept, not dropped: the legacy run path still reads these, and they are what
 	 * the config migration reads *from*. Remove them once nothing does.
@@ -2083,7 +2155,7 @@ export const systemSettings = pgTable("system_settings", {
 	 * shipping its own pipeline — there is no column for a namespace core did not
 	 * know about, and adding one is a core migration. A selection row keys on the
 	 * spec, so every namespace works including a plugin's, and the same table
-	 * covers user and chat scope instead of only this one.
+	 * covers user and session scope instead of only this one.
 	 *
 	 * Kept, not dropped: the legacy run path still reads these, and they are what
 	 * the config migration reads *from*. Remove them once nothing does.
@@ -2102,7 +2174,7 @@ export const systemSettings = pgTable("system_settings", {
 	 * shipping its own pipeline — there is no column for a namespace core did not
 	 * know about, and adding one is a core migration. A selection row keys on the
 	 * spec, so every namespace works including a plugin's, and the same table
-	 * covers user and chat scope instead of only this one.
+	 * covers user and session scope instead of only this one.
 	 *
 	 * Kept, not dropped: the legacy run path still reads these, and they are what
 	 * the config migration reads *from*. Remove them once nothing does.
@@ -2119,6 +2191,13 @@ export const systemSettings = pgTable("system_settings", {
 	summarizationEnabled: boolean("summarization_enabled")
 		.notNull()
 		.default(false),
+	/**
+	 * The scripts kill switch (18 §10, §13.3 — ruled: default **on**). Unlike
+	 * plugins, nothing executes until an admin authors or imports a script, so
+	 * this is a recovery lever rather than a gate: off returns every run to
+	 * vanilla instantly, with every chain and attachment kept in place.
+	 */
+	scriptsEnabled: boolean("scripts_enabled").notNull().default(true),
 	contextDebuggingEnabled: boolean("context_debugging_enabled")
 		.notNull()
 		.default(false),
@@ -2167,7 +2246,7 @@ export const systemSettings = pgTable("system_settings", {
 	 * shipping its own pipeline — there is no column for a namespace core did not
 	 * know about, and adding one is a core migration. A selection row keys on the
 	 * spec, so every namespace works including a plugin's, and the same table
-	 * covers user and chat scope instead of only this one.
+	 * covers user and session scope instead of only this one.
 	 *
 	 * Kept, not dropped: the legacy run path still reads these, and they are what
 	 * the config migration reads *from*. Remove them once nothing does.
@@ -2182,7 +2261,7 @@ export const systemSettings = pgTable("system_settings", {
 	 * shipping its own pipeline — there is no column for a namespace core did not
 	 * know about, and adding one is a core migration. A selection row keys on the
 	 * spec, so every namespace works including a plugin's, and the same table
-	 * covers user and chat scope instead of only this one.
+	 * covers user and session scope instead of only this one.
 	 *
 	 * Kept, not dropped: the legacy run path still reads these, and they are what
 	 * the config migration reads *from*. Remove them once nothing does.
@@ -2197,7 +2276,7 @@ export const systemSettings = pgTable("system_settings", {
 	 * shipping its own pipeline — there is no column for a namespace core did not
 	 * know about, and adding one is a core migration. A selection row keys on the
 	 * spec, so every namespace works including a plugin's, and the same table
-	 * covers user and chat scope instead of only this one.
+	 * covers user and session scope instead of only this one.
 	 *
 	 * Kept, not dropped: the legacy run path still reads these, and they are what
 	 * the config migration reads *from*. Remove them once nothing does.
@@ -2212,7 +2291,7 @@ export const systemSettings = pgTable("system_settings", {
 	 * shipping its own pipeline — there is no column for a namespace core did not
 	 * know about, and adding one is a core migration. A selection row keys on the
 	 * spec, so every namespace works including a plugin's, and the same table
-	 * covers user and chat scope instead of only this one.
+	 * covers user and session scope instead of only this one.
 	 *
 	 * Kept, not dropped: the legacy run path still reads these, and they are what
 	 * the config migration reads *from*. Remove them once nothing does.
@@ -2349,15 +2428,15 @@ export type SelectKoboldCppModel = typeof koboldCppModels.$inferSelect
 export type InsertKoboldCppModel = typeof koboldCppModels.$inferInsert
 
 /**
- * Scenes: discrete story moments within a chat, used as the foundation for
+ * Scenes: discrete story moments within a session, used as the foundation for
  * vectorization and causal graph construction.
  */
 export const scenes = pgTable(
 	"scenes",
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		// Chat is nullable — chat deletion sets this to null; scenes persist until lorebook is deleted
-		chatId: integer("chat_id").references(() => chats.id, {
+		// Session is nullable — session deletion sets this to null; scenes persist until lorebook is deleted
+		sessionId: integer("session_id").references(() => sessions.id, {
 			onDelete: "set null"
 		}),
 		lorebookId: integer("lorebook_id")
@@ -2368,7 +2447,7 @@ export const scenes = pgTable(
 			.notNull()
 			.references(() => historyEntries.id, { onDelete: "cascade" }),
 		name: text("name"),
-		// The IDs of chatMessages included in this scene
+		// The IDs of sessionMessages included in this scene
 		selectedMessageIds: json("selected_message_ids")
 			.notNull()
 			.default([])
@@ -2403,15 +2482,15 @@ export const scenes = pgTable(
 	},
 	(table) => [
 		index("scenes_lorebook_id_idx").on(table.lorebookId),
-		index("scenes_chat_id_idx").on(table.chatId),
+		index("scenes_session_id_idx").on(table.sessionId),
 		index("scenes_history_entry_id_idx").on(table.historyEntryId)
 	]
 )
 
 export const scenesRelations = relations(scenes, ({ one, many }) => ({
-	chat: one(chats, {
-		fields: [scenes.chatId],
-		references: [chats.id]
+	session: one(sessions, {
+		fields: [scenes.sessionId],
+		references: [sessions.id]
 	}),
 	lorebook: one(lorebooks, {
 		fields: [scenes.lorebookId],
@@ -2706,6 +2785,12 @@ export const pipelineSpecVersions = pgTable(
 		derivedFromSpecVersionId: integer("derived_from_spec_version_id"),
 		migratedFrom: text("migrated_from"),
 		mode: json("mode").$type<Record<string, any> | null>(),
+		/**
+		 * Contributed surfaces (19 §3–§4) — the version's `contributes` block,
+		 * stored like `mode` so function routing and the trigger UI are
+		 * SELECTs over rows, never document loads.
+		 */
+		contributes: json("contributes").$type<Record<string, any> | null>(),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		publishedAt: timestamp("published_at")
 	},
@@ -2932,18 +3017,21 @@ export const pipelinePresetValues = pgTable("pipeline_preset_values", {
 })
 
 /**
- * What this instance's people have changed, per pipeline (12 §2, layers 1, 2 and 4).
+ * The session's overrides, per pipeline (12 §2 as simplified 2026-08-24).
  *
- * The preset table above holds layer 3 and travels **with the document**; this one
- * holds the layers that belong to *this install* and must never leave it. 12 §3
- * writes both as `node_overrides` rows discriminated by `scope_kind`, and that is
- * the one place this schema deliberately disagrees.
+ * Three layers remain: the pipeline's author defaults, the selected config's
+ * values, and this table — **session scope only**. The instance's tuning lives in
+ * the config itself (edited as a thing with a name, duplicated when shipped),
+ * and the per-user layer no longer exists; migration 0140 folded instance rows
+ * into configs and removed the rest. A session's overrides stay a separate table
+ * because they are arguably the session's content, and must never travel with an
+ * exported document.
  *
  * **The reason is export.** A preset is execution-affecting and round-trips (F4);
- * a user's overrides are their configuration and, at chat scope, arguably their
+ * a user's overrides are their configuration and, at session scope, arguably their
  * content. One table means every export is a `WHERE scope_kind <> …` away from
  * shipping somebody's tuning — or, on the day someone forgets the predicate, their
- * chat-scoped prompt edits — to whoever they sent a pipeline to. Two tables make
+ * session-scoped prompt edits — to whoever they sent a pipeline to. Two tables make
  * *"does this travel with the document"* a structural fact rather than a clause
  * somebody has to remember. Resolution reads both and projects preset rows in at
  * `scopeKind: 'preset'`, so the five-layer chain is still one ordered walk (see
@@ -2962,13 +3050,14 @@ export const pipelineNodeOverrides = pgTable(
 			.notNull()
 			.references(() => pipelineSpecs.id, { onDelete: "cascade" }),
 		/**
-		 * instance | user | chat. `preset` and `author` are absent on purpose —
-		 * they live in `pipeline_preset_values` and in the spec document, and a
-		 * row here claiming to be one of them would be a second, disagreeing copy.
+		 * Always `session` (ruled 2026-08-24). Kept as a column rather than dropped
+		 * because the address index and every reader key on it, and because the
+		 * closed set is enforced by the CHECK below — a second scope arriving in
+		 * a later design lands as data, not as a schema rewrite.
 		 */
 		scopeKind: text("scope_kind").notNull(),
 		/**
-		 * The user or chat. Zero at instance scope rather than NULL: this column is
+		 * The user or session. Zero at instance scope rather than NULL: this column is
 		 * half of the uniqueness rule, and under Postgres' default NULL handling two
 		 * instance-scope rows for the same path would both be accepted — so "there is
 		 * one instance value for this path" would stop being true exactly where it
@@ -3005,7 +3094,7 @@ export const pipelineNodeOverrides = pgTable(
 		// table through any path would give the resolver two answers for one layer.
 		check(
 			"pipeline_node_overrides_scope_check",
-			sql`${t.scopeKind} IN ('instance', 'user', 'chat')`
+			sql`${t.scopeKind} = 'session'`
 		)
 	]
 )
@@ -3031,7 +3120,7 @@ export const pipelineConfigSelections = pgTable(
 		specId: integer("spec_id")
 			.notNull()
 			.references(() => pipelineSpecs.id, { onDelete: "cascade" }),
-		scopeKind: text("scope_kind").notNull(), // instance | user | chat
+		scopeKind: text("scope_kind").notNull(), // instance | session (ruled 2026-08-24: no user layer)
 		scopeId: integer("scope_id").notNull().default(0),
 		/**
 		 * The author preset a scope selected, where it selected one.
@@ -3057,7 +3146,7 @@ export const pipelineConfigSelections = pgTable(
 		 * scope had selected returns that scope to core's default automatically.
 		 * The alternative — a code path that checks whether the referenced row
 		 * still exists — is a check every read has to remember, and the first
-		 * read that forgets resolves a chat against nothing.
+		 * read that forgets resolves a session against nothing.
 		 */
 		configId: integer("config_id").references(() => pipelineConfigs.id, {
 			onDelete: "set null"
@@ -3075,7 +3164,7 @@ export const pipelineConfigSelections = pgTable(
 		),
 		check(
 			"pipeline_config_selections_scope_check",
-			sql`${t.scopeKind} IN ('instance', 'user', 'chat')`
+			sql`${t.scopeKind} IN ('instance', 'session')`
 		)
 	]
 )
@@ -3084,7 +3173,7 @@ export const pipelineConfigSelections = pgTable(
  * A **named, swappable configuration for one pipeline** (12 §3).
  *
  * Many per pipeline, one selected per scope. This is what the Prompt Configs
- * sidebar becomes: "Chat Prompts", "Chat Prompts: Narrator", "Summarize: World"
+ * sidebar becomes: "Session Prompts", "Session Prompts: Narrator", "Summarize: World"
  * stop being six hand-written tables and become six *namespaces*, each holding
  * as many configs as a user cares to keep.
  *
@@ -3129,12 +3218,187 @@ export const pipelineConfigs = pgTable(
 		isImmutable: boolean("is_immutable").notNull().default(false),
 		/** The one a scope falls back to when it has selected nothing. */
 		isDefault: boolean("is_default").notNull().default(false),
+		/**
+		 * Whether this preset may be chosen, site-wide. Admin's switch.
+		 *
+		 * A pipeline has no enabled state — it is present or it is not — but a
+		 * preset does, because presets are what a non-admin picks from and an
+		 * instance owner decides what that list contains. Disabling one leaves
+		 * every session already on it running: it stops being *offered*, which is
+		 * a different thing from being withdrawn, and withdrawing a preset out
+		 * from under a live session is not something a checkbox should do.
+		 */
+		enabled: boolean("enabled").notNull().default(true),
+		/**
+		 * Which of the mode's actions sessions on this preset include (19 §3).
+		 *
+		 * An array of function keys. **NULL is not the empty array** and the
+		 * difference is load-bearing: NULL means this preset states nothing
+		 * and the companion rule decides (mode-owner's namespace on, foreign
+		 * off), so a companion arriving in a later update reaches every session
+		 * whose preset never had a view. `[]` means somebody said *none*.
+		 *
+		 * The preset decides what is *included*; a session decides which of its
+		 * included actions are switched on, and an admin may additionally turn
+		 * on something outside the set for one session. Three layers, resolved in
+		 * that order — the same shape as every other setting here.
+		 */
+		includedActions: json("included_actions").$type<string[] | null>(),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at").notNull().defaultNow()
 	},
 	(t) => [
 		index("pipeline_configs_spec_idx").on(t.specId),
 		uniqueIndex("pipeline_configs_spec_name_idx").on(t.specId, t.name)
+	]
+)
+
+/**
+ * Which of a mode's functions a session actually has (19 §3).
+ *
+ * §3 rules that a contribution from the **mode owner's own namespace** is a
+ * *companion* — present by default, toggleable — and a foreign one is an
+ * *attachment*, per-user opt-in. Both halves of that were design until this
+ * table: every session of a mode rendered every trigger contributed to it, with
+ * no way to say otherwise. This is the "otherwise".
+ *
+ * ## Rows are exceptions, absence is the rule
+ *
+ * A row exists only where somebody's choice **differs from the default** for
+ * that function, and turning a function back to its default deletes the row
+ * (reset-is-delete, the same discipline as the config layer and session presets).
+ * So a session with no rows behaves exactly as it did before this table existed,
+ * and — more usefully — a contributor changing sides later, or a new companion
+ * arriving in an update, reaches every session that never had an opinion.
+ *
+ * ## Keyed by mode, deliberately
+ *
+ * A choice about `narrate` was made about *this mode's* narrate. Mode upgrades
+ * move along the same bare type (`crawl@1 → crawl@2`, 19 §6), and a version
+ * that retires a function should not leave a stale row deciding anything —
+ * while a version that keeps it should keep the user's answer. Storing the
+ * full mode id and matching on it gives the first for free; carrying answers
+ * across an upgrade is a deliberate step in `upgradeSessionMode`, not an
+ * accident of the key.
+ *
+ * `enabled` is `notNull` because a row *is* a stated position. "No opinion" is
+ * spelled by having no row, and a nullable third state would make two
+ * spellings for it.
+ */
+export const sessionFunctions = pgTable(
+	"session_functions",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		sessionId: integer("session_id")
+			.notNull()
+			.references(() => sessions.id, { onDelete: "cascade" }),
+		/** The full mode id the choice was made under. */
+		modeId: text("mode_id").notNull(),
+		/** The function key — `narrate`, `summarize-scene`, … (19 §3). */
+		functionKey: text("function_key").notNull(),
+		enabled: boolean("enabled").notNull(),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at").notNull().defaultNow()
+	},
+	(t) => [
+		uniqueIndex("session_functions_session_mode_fn_idx").on(
+			t.sessionId,
+			t.modeId,
+			t.functionKey
+		)
+	]
+)
+
+/**
+ * "Same key, several contributors → the binding selects" (19 §3), as rows.
+ *
+ * A scope's choice of which spec serves a function for sessions of a mode —
+ * `respond` selected among the bucket, a contributed key selected among its
+ * contributors. Resolution is session > user > instance, then the default rule
+ * (companion namespace first); a row is only ever a *choice among the
+ * eligible*, so `resolveFunctionSpec` re-checks eligibility at read and a
+ * binding whose spec left the bucket falls through rather than routing wrong.
+ *
+ * `specId` rather than slug, cascading: a deleted spec deletes its bindings,
+ * and the scope falls back to default resolution automatically — the same
+ * "NULL means inherit" posture `pipeline_config_selections.configId` records,
+ * spelled as row-absence because the whole row is the choice.
+ */
+export const pipelineFunctionBindings = pgTable(
+	"pipeline_function_bindings",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		scopeKind: text("scope_kind").notNull(), // instance | user | session
+		/** Zero at instance scope — half of the uniqueness rule (see node overrides). */
+		scopeId: integer("scope_id").notNull().default(0),
+		/** Which sessions this binding shapes — bindings are mode-scoped like presets. */
+		modeId: text("mode_id").notNull(),
+		functionKey: text("function_key").notNull(),
+		specId: integer("spec_id")
+			.notNull()
+			.references(() => pipelineSpecs.id, { onDelete: "cascade" }),
+		updatedBy: integer("updated_by").references(() => users.id, {
+			onDelete: "set null"
+		}),
+		updatedAt: timestamp("updated_at").notNull().defaultNow()
+	},
+	(t) => [
+		uniqueIndex("pipeline_function_bindings_addr_idx").on(
+			t.scopeKind,
+			t.scopeId,
+			t.modeId,
+			t.functionKey
+		),
+		check(
+			"pipeline_function_bindings_scope_check",
+			sql`${t.scopeKind} IN ('instance', 'session')`
+		)
+	]
+)
+
+/**
+ * "The session scope may swap it" (19 §5): a node-type rebind.
+ *
+ * A scope's substitution of which **type** fills a node position in a spec —
+ * the next-speaker strategy swap is the first use: the respond spec pins
+ * `turn-manual`, and a session that wants round-robin rebinds the `speaker`
+ * node. Applied when the document is loaded for a run, guarded by shape
+ * compatibility (the substitute must publish the same `main` shape as the
+ * pinned type — the swap-list membership rule made a load-time check), so a
+ * stale rebind degrades to the pinned type rather than mis-wiring the run.
+ *
+ * `typeId` carries the full pin (`ns:kind/name@N`) as text rather than a
+ * registry-row FK: the registry re-projects pre-1.0 (rows are deleted and
+ * re-inserted at boot), and a rebind must survive that the way spec pins do.
+ */
+export const pipelineNodeRebinds = pgTable(
+	"pipeline_node_rebinds",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		specId: integer("spec_id")
+			.notNull()
+			.references(() => pipelineSpecs.id, { onDelete: "cascade" }),
+		scopeKind: text("scope_kind").notNull(), // instance | user | session
+		scopeId: integer("scope_id").notNull().default(0),
+		nodeKey: text("node_key").notNull(),
+		/** The substitute's pinned type id, e.g. `core:task/turn-round-robin@1`. */
+		typeId: text("type_id").notNull(),
+		updatedBy: integer("updated_by").references(() => users.id, {
+			onDelete: "set null"
+		}),
+		updatedAt: timestamp("updated_at").notNull().defaultNow()
+	},
+	(t) => [
+		uniqueIndex("pipeline_node_rebinds_addr_idx").on(
+			t.specId,
+			t.scopeKind,
+			t.scopeId,
+			t.nodeKey
+		),
+		check(
+			"pipeline_node_rebinds_scope_check",
+			sql`${t.scopeKind} IN ('instance', 'session')`
+		)
 	]
 )
 
@@ -3216,7 +3480,7 @@ export const pipelineConfigValues = pgTable(
  *
  * ## Namespaced to a pipeline
  *
- * A prompt written for chat replies is not a prompt for scene summarization,
+ * A prompt written for session replies is not a prompt for scene summarization,
  * and offering it in that picker invites exactly the mistake the split exists
  * to prevent. The namespace is the spec, and selection refuses across it.
  *
@@ -3265,6 +3529,50 @@ export const pipelinePromptsRelations = relations(
 )
 
 /**
+ * User-authored scripts — the fourth paradigm's rows (18 §2).
+ *
+ * A script is typed text: the row holds the source and the *type* holds the
+ * contract, projected into `pipeline_type_registry` with `kind: 'script'`. The
+ * same entity pattern as prompts — a chain stores this row's id, never a copy
+ * of its text — with one deliberate difference: **keyed by the script type,
+ * not by a spec.** A slop filter is a statement about text, not about which
+ * pipeline runs it, and the whole point of the tier is that one script serves
+ * the reply pipeline, the summarizers, and any extension's hook that accepts
+ * its type (18 §4a).
+ *
+ * `varsIn` / `varsOut` are the declared variable I/O (18 §6a): what the script
+ * reads and what it may rewrite, as subsets of its hook's variable space.
+ * In-but-not-out is read-only — enforcement is the executor's job, but the
+ * declaration lives here so the editor, the import review and the receipt can
+ * all say what a script touches without reading its source.
+ */
+export const pipelineScripts = pgTable(
+	"pipeline_scripts",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/** Pinned script type id — `core:script:text/transform@1`. */
+		typeId: text("type_id").notNull(),
+		/** Stable identity for anything core ships; NULL for a user's own. */
+		seedKey: text("seed_key").unique(),
+		name: text("name").notNull(),
+		/** Core's shipped script: selectable and copyable, never edited in place. */
+		isImmutable: boolean("is_immutable").notNull().default(false),
+		/** A disabled script keeps its place in every chain and does nothing. */
+		enabled: boolean("enabled").notNull().default(true),
+		/** The function body. The sandbox contract is 18 §6. */
+		source: text("source").notNull().default(""),
+		varsIn: json("vars_in").notNull().default([]).$type<string[]>(),
+		varsOut: json("vars_out").notNull().default([]).$type<string[]>(),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at").notNull().defaultNow()
+	},
+	(t) => [
+		index("pipeline_scripts_type_idx").on(t.typeId),
+		uniqueIndex("pipeline_scripts_type_name_idx").on(t.typeId, t.name)
+	]
+)
+
+/**
  * How a context variable is *presented* — the swappable half of `{{{characters}}}`.
  *
  * Same entity pattern as `pipeline_prompts` above: the config stores a
@@ -3274,7 +3582,7 @@ export const pipelinePromptsRelations = relations(
  * ## Keyed by the variable, deliberately not by the spec
  *
  * This is the one place the prompt pattern is *not* copied, and the difference
- * is the entire feature. A prompt is namespaced to a pipeline because a chat
+ * is the entire feature. A prompt is namespaced to a pipeline because a session
  * reply's wording has no business in a summarizer's picker. A *rendering* is the
  * opposite: "characters as prose instead of JSON" is a statement about
  * characters, not about which pipeline asked for them. So the row names the
@@ -3337,12 +3645,12 @@ export const pipelineVariableTemplates = pgTable(
  *
  * `node_type_id` is the compatibility rule, and it is the same move
  * `pipeline_variable_templates` makes with `variable_id`: a row is keyed by
- * *what it renders against*, never by who happened to be rendering. Chat reply
+ * *what it renders against*, never by who happened to be rendering. Session reply
  * and the narrator both run `core:task/assemble`, so one template genuinely
  * serves both — which is how `context_configs` has always behaved, and
  * namespacing to a spec would turn that into two copies to keep in sync. A
  * pipeline with no such node offers no picker at all, so a summarizer's
- * settings cannot fill up with templates written for chat.
+ * settings cannot fill up with templates written for session.
  *
  * **Unversioned on purpose.** `core:task/assemble`, not `@2`. Which variables
  * exist is a property of the version and belongs to the lint; fragmenting the
@@ -3353,7 +3661,7 @@ export const pipelineVariableTemplates = pgTable(
  * Which pipeline's panel a row was written in. The picker groups on it — used
  * here, then shipped, then everything else that fits — because "compatible" and
  * "the one I want" stop being the same answer at about ten rows. It is
- * deliberately not a permission: a template written while editing chat replies
+ * deliberately not a permission: a template written while editing session replies
  * is still one scroll away in the narrator, because the whole reason this is not
  * spec-scoped is that it genuinely works there.
  */
@@ -3519,7 +3827,7 @@ export const pipelineConfigValuesRelations = relations(
  *
  * Deliberately **not** cascade-deleted with the spec version. A run happened; a
  * spec being retired later does not unhappen it, and a receipt whose spec was
- * deleted is still evidence about a message that is still in someone's chat.
+ * deleted is still evidence about a message that is still in someone's session.
  * The reference is recorded as plain columns rather than a foreign key for the
  * same reason.
  */
@@ -3533,14 +3841,14 @@ export const pipelineRuns = pgTable(
 		specVersion: text("spec_version").notNull(),
 		/** Nullable on purpose: see the note above about retired specs. */
 		specVersionId: integer("spec_version_id"),
-		chatId: integer("chat_id").references(() => chats.id, {
+		sessionId: integer("session_id").references(() => sessions.id, {
 			onDelete: "set null"
 		}),
 		userId: integer("user_id").references(() => users.id, {
 			onDelete: "set null"
 		}),
 		/** The message this run produced, when it produced one. */
-		messageId: integer("message_id").references(() => chatMessages.id, {
+		messageId: integer("message_id").references(() => sessionMessages.id, {
 			onDelete: "set null"
 		}),
 		outcome: text("outcome").notNull(), // ok | halt | err | cancelled
@@ -3566,7 +3874,7 @@ export const pipelineRuns = pgTable(
 		createdAt: timestamp("created_at").notNull().defaultNow()
 	},
 	(t) => [
-		index("pipeline_runs_chat_idx").on(t.chatId, t.id),
+		index("pipeline_runs_session_idx").on(t.sessionId, t.id),
 		index("pipeline_runs_message_idx").on(t.messageId)
 	]
 )
@@ -3576,7 +3884,7 @@ export const pipelineRuns = pgTable(
  *
  * Split out of the receipt JSON rather than left inside it because the trail is
  * the thing a user reads, and reading it should not mean loading and walking a
- * blob for every run in a chat. The blob stays on the run row as the source of
+ * blob for every run in a session. The blob stays on the run row as the source of
  * truth; these are the parts worth indexing.
  */
 export const pipelineRunNodes = pgTable(
@@ -3625,6 +3933,37 @@ export const pipelineTypeRegistry = pgTable(
 		 * declaration that only the executor honours.
 		 */
 		optional: boolean("optional").notNull().default(false),
+		/**
+		 * Script types only: how a chain of this operation treats what its
+		 * links return — `transform` folds into the flowing variable bag,
+		 * `verdict` is consumed by the hook and reduced (18 §5).
+		 *
+		 * NULL on every node type, which is not a default standing in for a
+		 * value: a node type has no chain semantics to have. Stored rather than
+		 * read off the descriptor for the reason `slots` is — the panel renders
+		 * from rows and never loads the plugin that owns a type (F6), and a
+		 * `transport: 'process'` script type has no descriptor in this process
+		 * at all.
+		 */
+		semantics: text("semantics"),
+		/**
+		 * Interior script points (18 §4e), for node types that declare them.
+		 * Stored for the reason `slots` is — the panel offers one chain option
+		 * per point and renders from rows, never from an in-process descriptor
+		 * (F6). Keys are hashed contract; labels refresh like slot text.
+		 */
+		scriptPoints: json("script_points").$type<Array<
+			Record<string, unknown>
+		> | null>(),
+		/**
+		 * The session-shape contract (19 §1) — present only on mode-bearing input
+		 * types. Stored for the reason `slots` is: the mode picker and session
+		 * settings render from rows (F6). Hashed contract; display stripped.
+		 */
+		sessionShape: json("session_shape").$type<Record<
+			string,
+			unknown
+		> | null>(),
 		causesEvent: text("causes_event"),
 		isPublic: boolean("is_public").notNull().default(false),
 		declaresRandomness: boolean("declares_randomness")

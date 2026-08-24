@@ -13,7 +13,7 @@
  * A flag on the reply spec would have made the two share one config surface,
  * which is the thing a user configuring a narrator most needs them not to do:
  * the narrator's whole job is to *not* sound like the character reply that
- * shares its chat.
+ * shares its session.
  *
  * ## What it deliberately keeps
  *
@@ -41,22 +41,45 @@ export const NARRATE_SPEC_ID = "core:spec/narrate"
 // speaker relationships (which this spec deliberately never supplies), while
 // `narratorName` sat on every reply prompt doing nothing. A type is the unit
 // that declares a surface; two surfaces is two types.
-export const NARRATE_VERSION = "1.4.0"
+// 1.5.0: declares its contribution — the narrator button on the standard
+// mode (19 §3–§4). Contribution is content, so it is a version, not an edit.
+export const NARRATE_VERSION = "1.6.0"
 
 export const narrateSpec = () =>
 	compile(
-		spec(NARRATE_SPEC_ID, { version: NARRATE_VERSION })
+		spec(NARRATE_SPEC_ID, {
+			version: NARRATE_VERSION,
+			/**
+			 * The canonical contributed trigger (19 §4): this spec offers the
+			 * `narrate` function on standard-mode sessions. Same namespace as the
+			 * mode owner, so it lands as a companion — present by default —
+			 * and the standard input type never has to know it exists.
+			 */
+			contributes: {
+				triggers: [
+					{
+						mode: "core:input/user-message@1",
+						function: "narrate",
+						kind: "button",
+						icon: "book-open-text",
+						i18n: { en: "Narrate" }
+					}
+				]
+			}
+		})
 			// Manually triggered — a person asks the narrator to speak. Unlike the
 			// reply pipeline, nothing about a new message should start one.
 			.on("core:event/ui-action@1")
 			.input("input", C.userMessage.v1())
 			.query("history", ($) =>
-				C.chatHistory.v1({ scope: $.input.chatScope })
+				C.sessionHistory.v1({ scope: $.input.sessionScope })
 			)
 			.query("lore", ($) =>
-				C.lorebookTriggers.v1({ scope: $.input.chatScope })
+				C.lorebookTriggers.v1({ scope: $.input.sessionScope })
 			)
-			.query("cast", ($) => C.chatCast.v1({ scope: $.input.chatScope }))
+			.query("cast", ($) =>
+				C.sessionCast.v1({ scope: $.input.sessionScope })
+			)
 			.task("context", ($) =>
 				C.buildNarratorContext.v1({
 					cast: $.cast.cast,

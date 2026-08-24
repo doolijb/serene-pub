@@ -33,25 +33,25 @@
 						href: "/document-view",
 						label: "Home",
 						description:
-							"Onboarding checklist, then your recent chats and quick links.",
+							"Onboarding checklist, then your recent sessions and quick links.",
 						show: true
 					}
 				]
 			},
 			{
-				title: "Chats",
+				title: "Sessions",
 				pages: [
 					{
-						href: "/document-view/chats",
-						label: "Chats",
-						description: "List of all your chats.",
+						href: "/document-view/sessions",
+						label: "Sessions",
+						description: "List of all your sessions.",
 						show: true
 					},
 					{
-						href: "/document-view/chats/new",
-						label: "Start a New Chat",
+						href: "/document-view/sessions/new",
+						label: "Start a New Session",
 						description:
-							"Create a chat with one or more characters and personas.",
+							"Create a session with one or more characters and personas.",
 						show: true
 					}
 				]
@@ -243,7 +243,7 @@
 	<li class="a11y-list-item">
 		<p>"Skip to latest message" / "Skip to message box" links</p>
 		<p>
-			Appear at the top of every chat, right below its title — jump
+			Appear at the top of every session, right below its title — jump
 			straight past the message history instead of tabbing through it.
 		</p>
 	</li>
@@ -259,7 +259,7 @@
 			on macOS)
 		</p>
 		<p>
-			Send a chat message without leaving the message box. Plain Enter
+			Send a session message without leaving the message box. Plain Enter
 			still just adds a new line.
 		</p>
 	</li>

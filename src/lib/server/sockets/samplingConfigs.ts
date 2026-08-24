@@ -112,7 +112,7 @@ export const samplingConfigsListHandler: Handler<
 		// `desc` on a boolean puts true first. Ordered here rather than in each
 		// consumer because this one response feeds several: SamplingSidebar
 		// (which groups with its own immutable/mutable filters — those preserve
-		// input order, so this is what sorts within each group), EditChatForm,
+		// input order, so this is what sorts within each group), EditSessionForm,
 		// and every per-task override selector in PromptsSidebar. Without it the
 		// list came back in whatever order Postgres happened to return, so the
 		// flat consumers interleaved presets with user configs.

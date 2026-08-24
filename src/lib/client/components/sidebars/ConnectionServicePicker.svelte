@@ -86,7 +86,9 @@
 								{item}
 								class="hover:preset-tonal-primary data-[state=checked]:preset-filled-primary-500 flex cursor-pointer items-center justify-between rounded px-2 py-1.5 text-sm"
 							>
-								<Combobox.ItemText>{item.label}</Combobox.ItemText>
+								<Combobox.ItemText>
+									{item.label}
+								</Combobox.ItemText>
 								<Combobox.ItemIndicator>
 									<Icons.Check size={14} />
 								</Combobox.ItemIndicator>

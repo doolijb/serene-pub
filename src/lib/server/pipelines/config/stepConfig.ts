@@ -53,11 +53,10 @@ const refId = (v: unknown): number | null => {
  */
 export async function resolveStepConfigs(
 	db: Db,
-	userId: number,
 	specId: string,
 	nodeKeys: string[]
 ): Promise<Record<string, ResolvedStepConfig>> {
-	const world = await buildWorld(db, { userId, specId })
+	const world = await buildWorld(db, { specId })
 	const sourced: any = resolveConfigSources(world as any, nodeKeys)
 
 	const rowById = async (table: any, id: number | null) =>

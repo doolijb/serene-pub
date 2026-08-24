@@ -1,5 +1,5 @@
 /**
- * What a template draft would produce, without a chat.
+ * What a template draft would produce, without a session.
  *
  * The editors need this for a reason the panel does not: a layout or a context
  * template can be *syntactically fine and render nothing*. `{{#each character}}`
@@ -14,7 +14,7 @@
  * it rendered `worldLore` and `history` as `JSON.stringify([{name, content}], null, 2)`
  * where the real path produces a **keyed object, minified**. So the preview
  * showed a shape no prompt has ever contained — worse than no preview, because
- * a template written against it looks correct here and renders empty in a chat.
+ * a template written against it looks correct here and renders empty in a session.
  *
  * Every variable now declares its own `sample` alongside its `scope`
  * (sdk/src/variables.ts), so there is one definition and the preview renders
@@ -70,7 +70,7 @@ function structuralContext(): Record<string, unknown> {
 			exampleDialogue: '"You picked a poor season for it."',
 			hasContent: true
 		},
-		chatMessages: [
+		sessionMessages: [
 			{
 				id: 1,
 				role: "user",
@@ -139,7 +139,7 @@ export interface ContextPreviewInput {
 /**
  * Render a context template draft as role-tagged blocks.
  *
- * Split-chat format so the result can be shown as distinct system/user/assistant
+ * Split-session format so the result can be shown as distinct system/user/assistant
  * sections rather than one wall of text — the same reason the editor it feeds
  * has always used it.
  */

@@ -47,14 +47,14 @@ const ctx = {
 	read: async (what: string) =>
 		what === "lorebook_entries"
 			? entries.map((e) => ({ ...e, source: "worldLore" }))
-			: what === "chat_messages"
+			: what === "session_messages"
 				? messages
 				: { available: false, reason: "no embedding model is loaded" }
 }
 
 const worldLore = (params: Record<string, unknown>) =>
 	coreBindings()["core:query/world-lore@1"]!(
-		{ scope: { chatId: 1 }, params },
+		{ scope: { sessionId: 1 }, params },
 		ctx as any
 	) as Promise<any>
 
@@ -92,7 +92,7 @@ describe("a lore node's parameters reach the scan", () => {
 		// An entry that stated its own strategy outranks the node's default.
 		const stated = coreBindings()["core:query/world-lore@1"]!(
 			{
-				scope: { chatId: 1 },
+				scope: { sessionId: 1 },
 				params: { scanDepth: 10, retrievalMode: "keyword" }
 			},
 			{
@@ -106,7 +106,7 @@ describe("a lore node's parameters reach the scan", () => {
 									retrievalStrategy: "rag"
 								}
 							]
-						: what === "chat_messages"
+						: what === "session_messages"
 							? messages
 							: { available: true, model: "test" }
 			} as any

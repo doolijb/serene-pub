@@ -1,9 +1,9 @@
 /**
  * Flattens CONNECTION_TYPES (native adapters) and OPENAI_CHAT_PRESETS (all
- * backed by the generic OpenAI Chat adapter) into one list of pickable
+ * backed by the generic OpenAI Session adapter) into one list of pickable
  * "services" for the New Connection modal's searchable picker — so a user
  * looking for Groq/Mistral/DeepSeek/etc. sees them directly instead of
- * having to first guess that they live two levels deep under "OpenAI Chat".
+ * having to first guess that they live two levels deep under "OpenAI Session".
  */
 import { CONNECTION_TYPE, CONNECTION_TYPES } from "../constants/ConnectionTypes"
 import { OPENAI_CHAT_PRESETS } from "./connectionDefaults"

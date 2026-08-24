@@ -256,7 +256,11 @@ describe("narrativeGraphApplyProposalHandler — replace mode (PGlite integratio
 				// restore loop is a plain UPDATE by id, so it's a harmless
 				// no-op regardless of whether the wholesale wipe below ran.
 				relationshipRewrites: [
-					{ id: 12345, oldFromNodeId: 999999, oldToNodeId: survivor.id }
+					{
+						id: 12345,
+						oldFromNodeId: 999999,
+						oldToNodeId: survivor.id
+					}
 				],
 				// The one that actually matters: this restore loop is a fresh
 				// INSERT built from the merge's own recorded content, with only

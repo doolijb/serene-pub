@@ -141,7 +141,8 @@ export const usersCurrentSetPassphrase: Handler<
 		if (existingPassphrase) {
 			const res: Sockets.Users.SetPassphrase.Response = {
 				success: false,
-				message: "Passphrase already set. Use change passphrase instead."
+				message:
+					"Passphrase already set. Use change passphrase instead."
 			}
 			emitToUser("users:current:setPassphrase:error", res)
 			throw new Error("Passphrase already set.")
@@ -724,7 +725,7 @@ export const usersDelete: Handler<
 		// Revoke every active session immediately — without this, a token
 		// issued before the delete stays valid (and authenticate() didn't
 		// check isDeleted either, see the fix there) for up to
-		// USER_TOKEN_EXPIRATION_HOURS, letting a "deleted" user keep chatting.
+		// USER_TOKEN_EXPIRATION_HOURS, letting a "deleted" user keep sessionting.
 		await db
 			.delete(schema.userTokens)
 			.where(eq(schema.userTokens.userId, params.id))

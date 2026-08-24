@@ -199,7 +199,7 @@ describe("other signals", () => {
 
 		it("is zero for empty text, and survives an empty window", () => {
 			expect(tfidfSignal("", idf, buildTermFreq("sword"), 1)).toBe(0)
-			// No division by zero when the chat has no messages yet.
+			// No division by zero when the session has no messages yet.
 			expect(tfidfSignal("sword", idf, new Map(), 0)).toBe(0)
 		})
 	})
@@ -286,7 +286,7 @@ describe("parameters reproduce today's constants", () => {
 
 	// `minMessageTokens: 512` used to be asserted here against
 	// MIN_MESSAGE_FILL_TOKENS. It is `minEntries` now — a count, per source —
-	// and the messages floor carries `core:query/chat-history@1`'s old
+	// and the messages floor carries `core:query/session-history@1`'s old
 	// `minInclude` rather than the token constant.
 	it("floors default to six messages and nothing else", () => {
 		expect(DEFAULT_GROUPS.minEntries).toEqual({

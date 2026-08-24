@@ -38,7 +38,7 @@ function stripDataThemeWrapper(css: string): string {
 // data-exfiltration vectors (leaking page state/cookies via a background
 // image request to an attacker-controlled host, or pulling in arbitrary
 // remote stylesheet content). style-src stays a tight fixed list, but
-// img-src deliberately allows any "https:" host (inline chat images need
+// img-src deliberately allows any "https:" host (inline session images need
 // that — see svelte.config.js), so this rejection is this app's *actual*
 // defense for theme CSS, not just a backstop behind CSP. Rejects (doesn't
 // silently strip) so the upload fails loudly rather than having content

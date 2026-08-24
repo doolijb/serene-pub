@@ -10,7 +10,7 @@
  *    `affects_user` is a column rather than a classification somebody repeats
  *    per subscription (11 §4). Also a fact about the code.
  * 3. **Core's own spec documents** — the pipelines core ships, published so a
- *    chat can run one. This is *content*, and the difference matters at the next
+ *    session can run one. This is *content*, and the difference matters at the next
  *    line of code: the registry sync raises on conflict, and spec publishing is
  *    idempotent by version.
  *
@@ -33,18 +33,29 @@
  * response is to stop and say so. See `registrySync.ts`.
  */
 
-import { allTypes } from "@serene-pub/sdk"
-import { seedCoreSpecs, syncEventRegistry, type SpecSeedReport } from "$lib/server/pipelines/boot/seed"
+import { allTypes, allScriptTypes } from "@serene-pub/sdk"
+import {
+	seedCoreSpecs,
+	syncEventRegistry,
+	type SpecSeedReport
+} from "$lib/server/pipelines/boot/seed"
 import {
 	migrateLegacyToPipelines,
 	type FullMigrationReport
 } from "$lib/server/pipelines/migrate/migrateLegacy"
 // Re-exported rather than moved out from under its importers: the spec now
 // lives in `specs/respond.ts`, and half the pipeline tests name it from here.
-export { RESPOND_SPEC_ID, RESPOND_VERSION, respondSpec } from "$lib/server/pipelines/specs/respond"
+export {
+	RESPOND_SPEC_ID,
+	RESPOND_VERSION,
+	respondSpec
+} from "$lib/server/pipelines/specs/respond"
 import { RESPOND_VERSION } from "$lib/server/pipelines/specs/respond"
 import { loadDocument } from "$lib/server/pipelines/boot/store"
-import { syncTypeRegistry, TypeRegistryConflictError } from "$lib/server/pipelines/boot/registrySync"
+import {
+	syncTypeRegistry,
+	TypeRegistryConflictError
+} from "$lib/server/pipelines/boot/registrySync"
 import { seedVariableTemplates } from "$lib/server/pipelines/boot/seedVariableTemplates"
 import { seedContextTemplates } from "$lib/server/pipelines/boot/seedContextTemplates"
 import {
@@ -75,7 +86,7 @@ export interface BootstrapReport {
  * Bring the pipeline tables in line with this build.
  *
  * Returns a report rather than throwing on a registry conflict. A type-hash
- * conflict means *pipelines* cannot run safely; it does not mean the chat app
+ * conflict means *pipelines* cannot run safely; it does not mean the session app
  * cannot start, and taking the whole instance down over a subsystem nobody has
  * opted into yet would be the wrong trade. The conflict travels in the report so
  * the diagnostics screen can say what is wrong and the caller can decide.
@@ -102,9 +113,16 @@ export async function bootstrapPipelines(db: any): Promise<BootstrapReport> {
 		// Every type the running build knows about. Importing the contracts is
 		// what registers them, so this is a fact about the code rather than a
 		// list anyone maintains.
-		const synced = await syncTypeRegistry(db, allTypes(), {
-			release: RESPOND_VERSION
-		})
+		const synced = await syncTypeRegistry(
+			db,
+			// Script types go through the same sync, and that is the design
+			// rather than a convenience: 18 §2 puts them "under the same sync,
+			// conflict-refusal and re-projection rules as node types", so a
+			// second projection path would be a second set of rules to keep in
+			// step. `snapshotRegistry` branches on the id.
+			[...allTypes(), ...allScriptTypes()],
+			{ release: RESPOND_VERSION }
+		)
 		report.types = {
 			inserted: synced.inserted.length,
 			unchanged: synced.unchanged.length

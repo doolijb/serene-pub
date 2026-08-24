@@ -7,7 +7,7 @@ export class PromptFormats {
 	static readonly CLAUDE = "claude"
 	static readonly INSTRUCT = "instruct"
 	static readonly TEKKEN = "tekken"
-	static readonly SPLIT_CHAT = "split_chat" // This is a hidden format for splitting chat completions
+	static readonly SPLIT_CHAT = "split_session" // This is a hidden format for splitting session completions
 
 	static readonly keys = [
 		PromptFormats.VICUNA,

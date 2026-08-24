@@ -1,0 +1,16 @@
+-- Chain semantics on the type registry, for script types.
+--
+-- A script type says how a chain of its operation treats what its links return:
+-- `transform` folds each return into the flowing variable bag, `verdict` hands
+-- it to the hook to reduce — `text/stop` takes the earliest index and order
+-- stops mattering. That is contract, not presentation, so it is hashed; and it
+-- is stored rather than read off the descriptor for the reason `slots` is,
+-- because the panel renders from rows and never loads the plugin that owns a
+-- type (F6).
+--
+-- NULL on every node type, and that is a real value rather than a default
+-- standing in for one: a node type has no chain semantics to have. Which is
+-- also why this needs no re-projection — `snapshotRegistry` leaves the field
+-- undefined for node entries, `JSON.stringify` drops undefined keys, and no
+-- existing type's content hash moves.
+ALTER TABLE "pipeline_type_registry" ADD COLUMN "semantics" text;

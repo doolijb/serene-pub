@@ -45,7 +45,7 @@ export type SceneSummarizeActivity = {
 	 * The scene row was created solely to carry this run, so abandoning the run
 	 * should take the row with it.
 	 *
-	 * This kind serves two origins: a chat-side summarize, which creates an
+	 * This kind serves two origins: a session-side summarize, which creates an
 	 * empty scene up front, and a lorebook-side re-process of a scene the user
 	 * already owns. Without this flag they are indistinguishable at cancel time,
 	 * and deleting on "a scene_summarize ended" would destroy a real scene the
@@ -90,19 +90,19 @@ export type CompileHistoryEntryActivity = {
 }
 
 /**
- * Chat-side world/character lore summarization.
+ * Session-side world/character lore summarization.
  *
  * Modelled on CompileHistoryEntryActivity rather than SceneSummarizeActivity
  * because there is **no row to point at**: unlike scenes, nothing is persisted
  * until the user saves, so `pendingResult` is the only copy of the generated
- * text. That difference drives the supersede rule in startChatSummarize too.
+ * text. That difference drives the supersede rule in startSessionSummarize too.
  */
-export type ChatSummarizeActivity = {
-	kind: "chat_summarize"
+export type SessionSummarizeActivity = {
+	kind: "session_summarize"
 	id: string
 	userId: number
-	chatId: number
-	chatLabel?: string
+	sessionId: number
+	sessionLabel?: string
 	loreType: "world" | "character"
 	lorebookId: number
 	topic?: string
@@ -118,7 +118,7 @@ export type ChatSummarizeActivity = {
 		/**
 		 * Minted server-side by resolveOrCreateBinding for character lore. It
 		 * has to ride the activity: the client otherwise only ever sees it on
-		 * the `chats:summarize:complete` payload, so a review reopened from the
+		 * the `sessions:summarize:complete` payload, so a review reopened from the
 		 * Activity panel would save the entry with a null binding.
 		 */
 		lorebookBindingId?: number | null
@@ -130,7 +130,7 @@ export type Activity =
 	| GraphBuildActivity
 	| SceneSummarizeActivity
 	| CompileHistoryEntryActivity
-	| ChatSummarizeActivity
+	| SessionSummarizeActivity
 
 type Emitter = (event: string, data: unknown) => void
 
@@ -349,11 +349,11 @@ class ActivityStore {
 		this.broadcast(updated)
 	}
 
-	startChatSummarize(
+	startSessionSummarize(
 		params: {
 			userId: number
-			chatId: number
-			chatLabel?: string
+			sessionId: number
+			sessionLabel?: string
 			loreType: "world" | "character"
 			lorebookId: number
 			topic?: string
@@ -362,8 +362,8 @@ class ActivityStore {
 	): string {
 		for (const [existingId, activity] of this.activities) {
 			if (
-				activity.kind !== "chat_summarize" ||
-				activity.chatId !== params.chatId ||
+				activity.kind !== "session_summarize" ||
+				activity.sessionId !== params.sessionId ||
 				activity.loreType !== params.loreType ||
 				activity.userId !== params.userId
 			) {
@@ -373,7 +373,7 @@ class ActivityStore {
 			// reasons depending on state.
 			//
 			// running — a prior audit (see summarize.concurrentLock.int.test.ts)
-			// found concurrent chats:summarize calls for one chat each running a
+			// found concurrent sessions:summarize calls for one session each running a
 			// full batch+synthesis pipeline, and fixed it by rejecting outright.
 			// Superseding would technically avoid multiplying cost, since
 			// remove() aborts the controller — but a second request here is
@@ -387,20 +387,20 @@ class ActivityStore {
 			// Superseding would destroy it outright.
 			if (activity.status === "running") {
 				throw new Error(
-					"A summarization is already running for this chat."
+					"A summarization is already running for this session."
 				)
 			}
 			if (activity.status === "review") {
 				throw new Error(
-					"A finished summary for this chat is still waiting to be saved or discarded."
+					"A finished summary for this session is still waiting to be saved or discarded."
 				)
 			}
 			// error: already finished, nothing in flight, nothing unsaved.
 			this.remove(existingId)
 		}
 		const id = uuidv4()
-		const activity: ChatSummarizeActivity = {
-			kind: "chat_summarize",
+		const activity: SessionSummarizeActivity = {
+			kind: "session_summarize",
 			...params,
 			id,
 			status: "running",
@@ -412,13 +412,13 @@ class ActivityStore {
 		return id
 	}
 
-	updateChatSummarize(
+	updateSessionSummarize(
 		id: string,
-		patch: Partial<Omit<ChatSummarizeActivity, "id" | "userId" | "kind">>
+		patch: Partial<Omit<SessionSummarizeActivity, "id" | "userId" | "kind">>
 	) {
 		const existing = this.activities.get(id)
 		if (!existing) return
-		const updated = { ...existing, ...patch } as ChatSummarizeActivity
+		const updated = { ...existing, ...patch } as SessionSummarizeActivity
 		this.activities.set(id, updated)
 		if (updated.status !== "running") {
 			// See the identical note in updateScene() above.

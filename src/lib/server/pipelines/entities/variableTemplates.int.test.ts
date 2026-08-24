@@ -46,7 +46,9 @@ let adminId: number
 
 beforeAll(async () => {
 	db = await createTestDb()
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(db as any)
 
 	const [admin] = await db
@@ -54,6 +56,31 @@ beforeAll(async () => {
 		.values({ username: "layout-admin", isAdmin: true })
 		.returning()
 	adminId = admin.id
+
+	// Global writes land in the selected configuration (the layers as
+	// simplified 2026-08-24), and the shipped default refuses edits — so the
+	// selections below give each pipeline a mutable one, exactly as an admin
+	// would duplicate before tuning.
+	const { resolveSelectedConfig, duplicateConfig, selectConfig } =
+		await import("$lib/server/pipelines/config/named")
+	for (const slug of [RESPOND_SPEC_ID, NARRATE_SPEC_ID]) {
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, slug))
+		const shipped = await resolveSelectedConfig(
+			db as any,
+			spec.id,
+			slug,
+			{}
+		)
+		const copy = await duplicateConfig(
+			db as any,
+			shipped!.configId,
+			"Layout host"
+		)
+		await selectConfig(db as any, spec.id, "instance", 0, copy.id, adminId)
+	}
 }, 60_000)
 
 const view = (slug: string): Promise<NamespaceView> =>
@@ -138,7 +165,6 @@ describe("what ships", () => {
 
 	it("resolves assembly's layouts to sources at run time", async () => {
 		const world = await buildWorld(db as any, {
-			userId: adminId,
 			specId: RESPOND_SPEC_ID
 		})
 		const layouts = (resolveConfig(world, ["prompt"]).prompt?.variables ??
@@ -176,7 +202,9 @@ describe("what ships", () => {
 		 * output that plainly had a layout. Found by booting the new build
 		 * against an existing database, not by any test that existed.
 		 */
-		const { reconcileConfigs } = await import("$lib/server/pipelines/config/named")
+		const { reconcileConfigs } = await import(
+			"$lib/server/pipelines/config/named"
+		)
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
@@ -235,7 +263,9 @@ describe("the picker", () => {
 	})
 
 	it("refuses a layout written for a different variable", async () => {
-		const { assertSelectable } = await import("$lib/server/pipelines/entities/variableTemplates")
+		const { assertSelectable } = await import(
+			"$lib/server/pipelines/entities/variableTemplates"
+		)
 		const [personas] = await listVariableTemplates(
 			db as any,
 			"core:var/personas@1"
@@ -310,8 +340,7 @@ describe("cross-pipeline reuse", () => {
 				slug,
 				{ userId: adminId, isAdmin: true },
 				option.id,
-				prose.id,
-				option.writeAt
+				prose.id
 			)
 
 		for (const slug of [RESPOND_SPEC_ID, NARRATE_SPEC_ID]) {
@@ -335,8 +364,7 @@ describe("cross-pipeline reuse", () => {
 			SECRET,
 			RESPOND_SPEC_ID,
 			{ userId: adminId, isAdmin: true },
-			respondOption.id,
-			respondOption.writeAt
+			respondOption.id
 		)
 
 		await expect(
@@ -353,7 +381,6 @@ describe("the runtime resolves what the panel shows", () => {
 	 */
 	const resolvedLayouts = async (slug: string) => {
 		const world = await buildWorld(db as any, {
-			userId: adminId,
 			specId: slug
 		})
 		const config = resolveConfig(world, ["context"])
@@ -413,7 +440,9 @@ describe("the mutation gate", () => {
 	 * allowed to write.
 	 */
 	const gate = async (viewer: any, id: string) => {
-		const { variableOptionGate } = await import("$lib/server/pipelines/config/panel")
+		const { variableOptionGate } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
 		return await variableOptionGate(
 			db as any,
 			SECRET,
@@ -478,21 +507,25 @@ describe("who may change a layout", () => {
 		expect(layoutOptions(v)).toEqual([])
 	})
 
-	it("writes an admin's choice at instance scope", async () => {
+	it("lands an admin's global choice in the selected configuration", async () => {
 		const option = await charactersOption(RESPOND_SPEC_ID)
-		expect(option.writeAt).toBe("instance")
+		expect(option.writable).toBe(true)
 
-		const rows = await db
+		// The selections written by the reuse test above live as the mutable
+		// configs' own values — the only global home since the layer
+		// simplification (2026-08-24). No override row exists anywhere.
+		const prose = (await listVariableTemplates(db as any, CHARACTERS)).find(
+			(r) => r.name === "Prose"
+		)!
+		const values = (
+			await db.select().from(schema.pipelineConfigValues)
+		).filter((v: any) => v.slot === "variables" && v.value === prose.id)
+		expect(values.length).toBeGreaterThan(0)
+		const overrides = await db
 			.select()
 			.from(schema.pipelineNodeOverrides)
-			.where(
-				and(
-					eq(schema.pipelineNodeOverrides.slot, "variables"),
-					eq(schema.pipelineNodeOverrides.scopeKind, "instance")
-				)
-			)
-		// The narrator's selection from the reuse test above.
-		expect(rows.length).toBeGreaterThan(0)
+			.where(eq(schema.pipelineNodeOverrides.slot, "variables"))
+		expect(overrides).toHaveLength(0)
 	})
 })
 
@@ -514,8 +547,8 @@ describe("deleting what you have selected", () => {
 		)!
 
 		const own = (
-			await db.select().from(schema.pipelineNodeOverrides)
-		).filter((o: any) => o.value === prose.id)
+			await db.select().from(schema.pipelineConfigValues)
+		).filter((v: any) => v.slot === "variables" && v.value === prose.id)
 		expect(own.length).toBeGreaterThan(0)
 
 		// Refused while those rows count — and the rows are still there after,
@@ -524,15 +557,15 @@ describe("deleting what you have selected", () => {
 			deleteVariableTemplate(db as any, prose.id)
 		).rejects.toThrow(/still in use/)
 		const after = (
-			await db.select().from(schema.pipelineNodeOverrides)
-		).filter((o: any) => o.value === prose.id)
+			await db.select().from(schema.pipelineConfigValues)
+		).filter((v: any) => v.slot === "variables" && v.value === prose.id)
 		expect(after.length).toBe(own.length)
 
 		// Allowed once they are discounted, which is what the socket handler
 		// passes — and only then does it clear them.
 		await expect(
 			deleteVariableTemplate(db as any, prose.id, {
-				ignoreOverrideIds: new Set(own.map((o: any) => o.id))
+				ignoreConfigValueIds: new Set(own.map((v: any) => v.id))
 			})
 		).resolves.toBeUndefined()
 	})

@@ -128,7 +128,7 @@ describe("every namespace arrives usable", () => {
 	})
 
 	it("keeps namespaces from sharing prompts", async () => {
-		// The rule the picker depends on. A chat reply's wording offered where a
+		// The rule the picker depends on. A session reply's wording offered where a
 		// summary is being written is the mistake the split exists to prevent.
 		const respond = new Set(
 			(await promptsIn(RESPOND_SPEC_ID)).map((p: any) => p.name)

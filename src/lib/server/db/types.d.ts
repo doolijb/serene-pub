@@ -118,9 +118,9 @@ export global {
 	export type SelectLorebookTag = typeof schema.lorebookTags.$inferSelect
 	export type InsertLorebookTag = typeof schema.lorebookTags.$inferInsert
 
-	// Chat Tag types
-	export type SelectChatTag = typeof schema.chatTags.$inferSelect
-	export type InsertChatTag = typeof schema.chatTags.$inferInsert
+	// Session Tag types
+	export type SelectSessionTag = typeof schema.sessionTags.$inferSelect
+	export type InsertSessionTag = typeof schema.sessionTags.$inferInsert
 
 	// Character types
 	export type SelectCharacter = typeof schema.characters.$inferSelect
@@ -132,27 +132,37 @@ export global {
 	export type InsertPersona = typeof schema.personas.$inferInsert
 	export type UpdatePersona = Partial<SelectPersona> & { id: number }
 
-	// Chat types
-	export type SelectChat = typeof schema.chats.$inferSelect
-	export type InsertChat = typeof schema.chats.$inferInsert
-	export type UpdateChat = Partial<SelectChat> & { id: number }
+	// Session types
+	export type SelectSession = typeof schema.sessions.$inferSelect
+	export type InsertSession = typeof schema.sessions.$inferInsert
+	export type UpdateSession = Partial<SelectSession> & { id: number }
 
-	// Chat Message types
-	export type SelectChatMessage = typeof schema.chatMessages.$inferSelect
-	export type InsertChatMessage = typeof schema.chatMessages.$inferInsert
-	export type UpdateChatMessage = Partial<SelectChatMessage> & { id: number }
+	// Session Message types
+	export type SelectSessionMessage =
+		typeof schema.sessionMessages.$inferSelect
+	export type InsertSessionMessage =
+		typeof schema.sessionMessages.$inferInsert
+	export type UpdateSessionMessage = Partial<SelectSessionMessage> & {
+		id: number
+	}
 
-	// Chat Persona types
-	export type SelectChatPersona = typeof schema.chatPersonas.$inferSelect
-	export type InsertChatPersona = typeof schema.chatPersonas.$inferInsert
+	// Session Persona types
+	export type SelectSessionPersona =
+		typeof schema.sessionPersonas.$inferSelect
+	export type InsertSessionPersona =
+		typeof schema.sessionPersonas.$inferInsert
 
-	// Chat Character types
-	export type SelectChatCharacter = typeof schema.chatCharacters.$inferSelect
-	export type InsertChatCharacter = typeof schema.chatCharacters.$inferInsert
+	// Session Character types
+	export type SelectSessionCharacter =
+		typeof schema.sessionCharacters.$inferSelect
+	export type InsertSessionCharacter =
+		typeof schema.sessionCharacters.$inferInsert
 
-	// Chat Lorebook types
-	export type SelectChatLorebook = typeof schema.chatLorebooks.$inferSelect
-	export type InsertChatLorebook = typeof schema.chatLorebooks.$inferInsert
+	// Session Lorebook types
+	export type SelectSessionLorebook =
+		typeof schema.sessionLorebooks.$inferSelect
+	export type InsertSessionLorebook =
+		typeof schema.sessionLorebooks.$inferInsert
 
 	export type SelectSystemSettings = typeof schema.systemSettings.$inferSelect
 	export type InsertSystemSettings = typeof schema.systemSettings.$inferInsert

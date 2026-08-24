@@ -1,8 +1,8 @@
 /**
  * Round-6 audit fix: sceneCreateHandler verified lorebookId and (if
- * present) chatId ownership, but inserted the client-supplied
+ * present) sessionId ownership, but inserted the client-supplied
  * historyEntryId with no check it belonged to that same lorebook. An
- * attacker could create a scene with their own lorebookId/chatId but a
+ * attacker could create a scene with their own lorebookId/sessionId but a
  * guessed historyEntryId from a victim's private lorebook — the injected
  * scene's content would then feed directly into the victim's own
  * LLM-driven compile call the next time they compiled that history entry

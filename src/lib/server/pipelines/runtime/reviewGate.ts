@@ -34,7 +34,7 @@ import {
 export interface PendingReview {
 	id: string
 	userId: number
-	chatId?: number
+	sessionId?: number
 	specId: string
 	nodeKey: string
 	typeId: string
@@ -151,7 +151,7 @@ export function resolveReview(
  */
 export function createReviewer(scope: {
 	userId: number
-	chatId?: number
+	sessionId?: number
 	specId: string
 	signal?: AbortSignal
 }): Reviewer {
@@ -160,7 +160,7 @@ export function createReviewer(scope: {
 		const entry: PendingReview = {
 			id: randomUUID(),
 			userId: scope.userId,
-			chatId: scope.chatId,
+			sessionId: scope.sessionId,
 			specId: scope.specId,
 			nodeKey: req.nodeKey,
 			typeId: req.typeId,

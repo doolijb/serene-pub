@@ -37,7 +37,7 @@
 	// Data
 	let characters: Partial<SelectCharacter>[] = $state([])
 	let personas: Partial<SelectPersona>[] = $state([])
-	let chats: Partial<SelectChat>[] = $state([])
+	let sessions: Partial<SelectSession>[] = $state([])
 	let connections: Sockets.Connections.List.Response["connectionsList"] =
 		$state([])
 
@@ -50,14 +50,14 @@
 	// Data-ready flags — wizard auto-shows once all initial socket data has arrived
 	let _charsLoaded = $state(false)
 	let _personasLoaded = $state(false)
-	let _chatsLoaded = $state(false)
+	let _sessionsLoaded = $state(false)
 	let _connectionsLoaded = $state(false)
 	let _setupLoaded = $state(false)
 
 	let dataReady = $derived(
 		_charsLoaded &&
 			_personasLoaded &&
-			_chatsLoaded &&
+			_sessionsLoaded &&
 			(!userCtx.user?.isAdmin || _connectionsLoaded) &&
 			_setupLoaded
 	)
@@ -142,7 +142,7 @@
 		| "vectorization"
 		| "character"
 		| "persona"
-		| "create-chat"
+		| "create-session"
 
 	interface WizardStepDefinition {
 		id: WizardStepType
@@ -163,7 +163,7 @@
 		}
 		ids.push("persona")
 		ids.push("character")
-		ids.push("create-chat")
+		ids.push("create-session")
 		return ids
 	}
 
@@ -197,10 +197,10 @@
 			label: "Persona",
 			isComplete: () => hasPersona
 		},
-		"create-chat": {
-			id: "create-chat",
-			label: "First Chat",
-			isComplete: () => chats.length > 0
+		"create-session": {
+			id: "create-session",
+			label: "First Session",
+			isComplete: () => sessions.length > 0
 		}
 	}
 
@@ -273,12 +273,12 @@
 		socket.emit("setup:markComplete", { step })
 	}
 
-	function startChatWithCharacter(character: Partial<SelectCharacter>) {
+	function startSessionWithCharacter(character: Partial<SelectCharacter>) {
 		if (!character.id) return
 		const personaId = personas[0]?.id
-		socket.emit("chats:create", {
-			chat: {
-				name: `Chat with ${character.nickname || character.name || "Character"}`,
+		socket.emit("sessions:create", {
+			session: {
+				name: `Session with ${character.nickname || character.name || "Character"}`,
 				isGroup: false
 			},
 			characterIds: [character.id],
@@ -312,7 +312,7 @@
 			persona: {
 				name: "You",
 				description:
-					"This represents you in conversations. You can edit this later to add more details about yourself or create different personas for different types of chats.",
+					"This represents you in conversations. You can edit this later to add more details about yourself or create different personas for different types of sessions.",
 				isDefault: true
 			} as any
 		})
@@ -379,9 +379,9 @@
 			)
 				nextWizardStep()
 		})
-		socket.on("chats:list", (msg) => {
-			chats = msg.chatList || []
-			_chatsLoaded = true
+		socket.on("sessions:list", (msg) => {
+			sessions = msg.sessionList || []
+			_sessionsLoaded = true
 		})
 		socket.on("connections:list", (msg) => {
 			connections = msg.connectionsList || []
@@ -481,9 +481,9 @@
 			)
 				nextWizardStep()
 		})
-		socket.on("chats:create", (res) => {
-			if (res.chat) {
-				goto(`/chats/${res.chat.id}`)
+		socket.on("sessions:create", (res) => {
+			if (res.session) {
+				goto(`/sessions/${res.session.id}`)
 			}
 		})
 
@@ -559,7 +559,7 @@
 
 		socket.emit("characters:list", {})
 		socket.emit("personas:list", {})
-		socket.emit("chats:list", {})
+		socket.emit("sessions:list", {})
 		socket.emit("setup:get", {})
 		if (userCtx.user?.isAdmin) {
 			socket.emit("connections:list", {})
@@ -573,12 +573,12 @@
 		socket.off("bindingCheck:result")
 		socket.off("characters:list")
 		socket.off("personas:list")
-		socket.off("chats:list")
+		socket.off("sessions:list")
 		socket.off("connections:list")
 		socket.off("connections:create")
 		socket.off("characters:create")
 		socket.off("personas:create")
-		socket.off("chats:create")
+		socket.off("sessions:create")
 		socket.off("ollama:version")
 		socket.off("ollama:modelsList")
 		socket.off("ollama:connectModel")
@@ -708,13 +708,14 @@
 					{#each sortedCharacters as character (character.id)}
 						<SidebarListItem
 							onclick={() => {
-								panelsCtx.digest.chatCharacterId = character.id
+								panelsCtx.digest.sessionCharacterId =
+									character.id
 								panelsCtx.openPanel({
-									key: "chats",
+									key: "sessions",
 									toggle: false
 								})
 							}}
-							contentTitle="Go to character chats"
+							contentTitle="Go to character sessions"
 							classes="!preset-filled-surface-200-800 transition-colors hover:!preset-filled-surface-300-700"
 						>
 							{#snippet content()}
@@ -751,35 +752,36 @@
 						<CharacterCardItem
 							{character}
 							onclick={() => {
-								panelsCtx.digest.chatCharacterId = character.id
+								panelsCtx.digest.sessionCharacterId =
+									character.id
 								panelsCtx.openPanel({
-									key: "chats",
+									key: "sessions",
 									toggle: false
 								})
 							}}
 							showControls={false}
-							contentTitle="Go to character chats"
+							contentTitle="Go to character sessions"
 						/>
 					{/each}
 				</div>
 			{/if}
 		</div>
 
-		{#if chats.length > 0}
+		{#if sessions.length > 0}
 			<div class="mb-6 w-full">
-				<h3 class="w-full text-xl">Recent Chats</h3>
+				<h3 class="w-full text-xl">Recent Sessions</h3>
 				<div
 					class="grid grid-cols-1 justify-between gap-2 lg:grid-cols-2"
 				>
-					{#each chats.slice(0, 6) as chat (chat.id)}
+					{#each sessions.slice(0, 6) as session (session.id)}
 						<SidebarListItem
-							onclick={() => goto(`/chats/${chat.id}`)}
-							contentTitle="Open chat"
+							onclick={() => goto(`/sessions/${session.id}`)}
+							contentTitle="Open session"
 							classes="!preset-filled-surface-200-800 transition-colors hover:!preset-filled-surface-300-700"
 						>
 							{#snippet content()}
 								<div class="flex items-center gap-2">
-									{#if chat.isGroup}
+									{#if session.isGroup}
 										<Icons.Users
 											size={20}
 											class="text-primary-500 flex-shrink-0"
@@ -791,7 +793,7 @@
 										/>
 									{/if}
 									<div class="text-foreground font-semibold">
-										{chat.name || "Untitled Chat"}
+										{session.name || "Untitled Session"}
 									</div>
 								</div>
 							{/snippet}
@@ -886,16 +888,16 @@
 								>
 									{#if wizardPath === "admin-first-time"}
 										Let's get your application set up and
-										ready to chat. This only takes a few
+										ready to session. This only takes a few
 										minutes.
 									{:else if wizardPath === "admin-existing"}
 										The application is already configured.
 										Let's get your personal account set up
-										so you can start chatting.
+										so you can start sessionting.
 									{:else}
 										An administrator has already set up the
 										application. Let's get your account
-										ready so you can start chatting.
+										ready so you can start sessionting.
 									{/if}
 								</p>
 							</div>
@@ -1307,7 +1309,7 @@
 									</div>
 									<p class="text-sm opacity-75">
 										You trigger summarization manually in a
-										chat. Serene compresses selected
+										session. Serene compresses selected
 										messages into a compact record that the
 										AI uses to stay aware of past events
 										without running out of context.
@@ -1326,7 +1328,7 @@
 									<p class="text-sm opacity-75">
 										Increases AI usage by around 30%.
 										Summarization only runs when you
-										manually trigger it in a chat, so you
+										manually trigger it in a session, so you
 										stay in control.
 									</p>
 								</div>
@@ -1364,8 +1366,8 @@
 									</div>
 									<p class="text-sm opacity-75">
 										A small AI model understands the meaning
-										of your lore. When you chat, Serene Pub
-										finds the most relevant entries and
+										of your lore. When you session, Serene
+										Pub finds the most relevant entries and
 										quietly adds them to every message.
 									</p>
 								</div>
@@ -1440,8 +1442,8 @@
 									class="text-muted-foreground mx-auto max-w-sm"
 								>
 									Characters are the AI personalities you'll
-									chat with. Add one to get started — you can
-									always create more later.
+									session with. Add one to get started — you
+									can always create more later.
 								</p>
 							</div>
 							<div class="grid gap-3 sm:grid-cols-2">
@@ -1485,8 +1487,8 @@
 										</div>
 										<p class="text-sm opacity-75">
 											Import characters, personas, and
-											chats from an existing SillyTavern
-											installation.
+											sessions from an existing
+											SillyTavern installation.
 										</p>
 									</button>
 								{/if}
@@ -1716,20 +1718,21 @@
 							</div>
 
 							<!-- ══ CREATE CHAT ══ -->
-						{:else if currentWizardStep?.id === "create-chat"}
+						{:else if currentWizardStep?.id === "create-session"}
 							<div class="text-center">
 								<Icons.MessageCircle
 									size={60}
 									class="text-primary-500 mx-auto mb-4"
 								/>
 								<h2 class="mb-3 text-3xl font-bold">
-									Start Your First Chat
+									Start Your First Session
 								</h2>
 								<p
 									class="text-muted-foreground mx-auto max-w-sm"
 								>
-									Pick a character to chat with. You can
-									always come back and chat with others later.
+									Pick a character to session with. You can
+									always come back and session with others
+									later.
 								</p>
 							</div>
 							{#if characters.length > 0}
@@ -1738,7 +1741,7 @@
 										<button
 											class="card preset-filled-surface-400-600 hover:preset-filled-surface-300-700 flex items-center gap-3 overflow-hidden p-4 text-left transition-all"
 											onclick={() =>
-												startChatWithCharacter(
+												startSessionWithCharacter(
 													character
 												)}
 										>
@@ -1997,17 +2000,17 @@
 						>
 							Skip for now
 						</button>
-					{:else if currentWizardStep?.id === "create-chat"}
+					{:else if currentWizardStep?.id === "create-session"}
 						<button
 							class="btn preset-filled-surface-400-600 btn-sm"
 							onclick={() =>
 								panelsCtx.openPanel({
-									key: "chats",
+									key: "sessions",
 									toggle: false
 								})}
 						>
 							<Icons.MessageSquare size={14} />
-							Open Chats Panel
+							Open Sessions Panel
 						</button>
 					{/if}
 				</div>
@@ -2035,7 +2038,7 @@
 	<BindingLinkerModal
 		bind:open={bindingLinkerOpen}
 		lorebookId={bindingLinkerData.lorebookId}
-		chatId={bindingLinkerData.chatId}
+		sessionId={bindingLinkerData.sessionId}
 		orphanedBindings={bindingLinkerData.orphanedBindings}
 		unboundEntities={bindingLinkerData.unboundEntities}
 		onOpenChange={(e) => (bindingLinkerOpen = e.open)}

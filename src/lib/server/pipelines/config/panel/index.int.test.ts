@@ -38,11 +38,13 @@ let db: TestDb
 let userId: number
 let otherUserId: number
 let adminId: number
-let chatId: number
+let sessionId: number
 
 beforeAll(async () => {
 	db = await createTestDb()
-	const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
 	await bootstrapPipelines(db as any)
 
 	const [user] = await db
@@ -61,11 +63,11 @@ beforeAll(async () => {
 		.returning()
 	adminId = admin.id
 
-	const [chat] = await db
-		.insert(schema.chats)
+	const [session] = await db
+		.insert(schema.sessions)
 		.values({ userId, isGroup: false })
 		.returning()
-	chatId = chat.id
+	sessionId = session.id
 }, 60_000)
 
 const viewer = (over: any = {}) => ({
@@ -238,7 +240,7 @@ describe("the option payload", () => {
 			})
 			.returning()
 
-		const before = await view()
+		const before = await view({ sessionId })
 		const ref = allOptions(before).find((o) => o.control === "prompts-ref")!
 		expect(ref).toBeTruthy()
 		// Unselected: nothing to carry, and nothing invented.
@@ -248,11 +250,13 @@ describe("the option payload", () => {
 			db as any,
 			SECRET,
 			RESPOND_SPEC_ID,
-			viewer(),
+			viewer({ sessionId }),
 			ref.id,
 			prompt.id
 		)
-		const after = allOptions(await view()).find((o) => o.id === ref.id)!
+		const after = allOptions(await view({ sessionId })).find(
+			(o) => o.id === ref.id
+		)!
 		expect(after.prompt).toBeTruthy()
 		expect(after.prompt!.id).toBe(prompt.id)
 		expect(after.prompt!.name).toBe("Rides along")
@@ -260,7 +264,13 @@ describe("the option payload", () => {
 		expect(after.prompt!.readOnly).toBe(false)
 
 		// Leave the option as found for the provenance tests below.
-		await clearOption(db as any, SECRET, RESPOND_SPEC_ID, viewer(), ref.id)
+		await clearOption(
+			db as any,
+			SECRET,
+			RESPOND_SPEC_ID,
+			viewer({ sessionId }),
+			ref.id
+		)
 	})
 
 	it("offers a non-admin prompts and nothing else", async () => {
@@ -272,21 +282,18 @@ describe("the option payload", () => {
 			expect(o.control).toBe("prompts-ref")
 	})
 
-	it("gives an admin live controls that land at instance scope", async () => {
+	it("gives an admin live controls — global edits are config edits now", async () => {
 		// "(admin only)" text on the admin's own screen was the defect: the
 		// person who may change it saw a label saying they may not. Every
-		// non-prompt option is writable for an admin and declares that its
-		// edits land at instance scope; prompts stay personal.
+		// option is writable for an admin; since the layer simplification
+		// (2026-08-24) a global edit lands in the selected configuration
+		// itself, so there is no per-option landing scope to declare.
 		const asAdmin = await view({ userId: adminId, isAdmin: true })
 		const connections = allOptions(asAdmin).filter(
 			(o) => o.control === "connection-ref"
 		)
 		expect(connections.length).toBeGreaterThan(0)
-		for (const o of allOptions(asAdmin)) {
-			expect(o.writable).toBe(true)
-			if (o.control === "prompts-ref") expect(o.writeAt).toBeUndefined()
-			else expect(o.writeAt).toBe("instance")
-		}
+		for (const o of allOptions(asAdmin)) expect(o.writable).toBe(true)
 	})
 
 	it("refuses a non-admin write to anything but prompts, by sentence", async () => {
@@ -297,6 +304,19 @@ describe("the option payload", () => {
 			(o) => o.control === "integer" || o.control === "number"
 		)!
 		expect(param).toBeTruthy()
+		// From inside a session: the prompts line.
+		await expect(
+			writeOption(
+				db as any,
+				SECRET,
+				RESPOND_SPEC_ID,
+				viewer({ sessionId }),
+				param.id,
+				99
+			)
+		).rejects.toThrow(/stays with the administrator/)
+		// Globally: a non-admin has no target at all — a global edit is a
+		// config edit, and configs are the administrator's (ruled 2026-08-24).
 		await expect(
 			writeOption(
 				db as any,
@@ -306,149 +326,220 @@ describe("the option payload", () => {
 				param.id,
 				99
 			)
-		).rejects.toThrow(/stays with the administrator/)
+		).rejects.toThrow(/administrator edits a configuration/)
 	})
 })
 
 describe("resolution and provenance", () => {
 	it("reports the layer a value won at, and follows the chain up", async () => {
-		const before = await view()
-		// An option nothing has touched: the shipped default config covers
-		// most addresses at `preset`, which outranks `instance` — so the walk
-		// below needs a setting whose chain is empty to start from.
-		const target = allOptions(before).find(
+		// The chain since the simplification (2026-08-24): the author's
+		// default, the selected configuration, the session's override — walked
+		// in a session view, where all three can be seen at once.
+		const inSession = await view({ sessionId })
+		const target = allOptions(inSession).find(
 			(o) => o.writable && o.source === "author"
 		)!
 		expect(target).toBeTruthy()
 
+		// A mutable copy of the shipped default, selected for the instance —
+		// the global edit below lands in *it*, because there is no other
+		// global place left for an edit to go.
+		const { duplicateConfig, selectConfig } = await import(
+			"$lib/server/pipelines/config/named"
+		)
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		const [shipped] = await db
+			.select()
+			.from(schema.pipelineConfigs)
+			.where(
+				and(
+					eq(schema.pipelineConfigs.specId, spec.id),
+					eq(schema.pipelineConfigs.isImmutable, true)
+				)
+			)
+		const copy = await duplicateConfig(db as any, shipped.id, "Walk copy")
+		await selectConfig(db as any, spec.id, "instance", 0, copy.id, adminId)
+
 		await writeOption(
 			db as any,
 			SECRET,
 			RESPOND_SPEC_ID,
 			viewer({ userId: adminId, isAdmin: true }),
 			target.id,
-			"instance says so",
-			"instance"
+			"the config says so"
 		)
-		let v = await view()
-		let now = allOptions(v).find((o) => o.id === target.id)!
-		expect(now.value).toBe("instance says so")
-		expect(now.source).toBe("instance")
-
-		await writeOption(
-			db as any,
-			SECRET,
-			RESPOND_SPEC_ID,
-			viewer(),
-			target.id,
-			"the user says so"
-		)
-		v = await view()
-		now = allOptions(v).find((o) => o.id === target.id)!
-		expect(now.value).toBe("the user says so")
-		expect(now.source).toBe("user")
+		let now = allOptions(
+			await view({ userId: adminId, isAdmin: true })
+		).find((o) => o.id === target.id)!
+		expect(now.value).toBe("the config says so")
+		expect(now.source).toBe("preset")
 		expect(now.overriddenHere).toBe(true)
 
-		// Opened from inside the chat, the same edit lands at chat scope and wins.
+		// Opened from inside the session, the same edit lands at session scope and wins.
 		await writeOption(
 			db as any,
 			SECRET,
 			RESPOND_SPEC_ID,
-			viewer({ chatId }),
+			viewer({ sessionId }),
 			target.id,
-			"only in this chat"
+			"only in this session"
 		)
-		v = await view({ chatId })
+		let v = await view({ sessionId })
 		now = allOptions(v).find((o) => o.id === target.id)!
-		expect(now.value).toBe("only in this chat")
-		expect(now.source).toBe("chat")
+		expect(now.value).toBe("only in this session")
+		expect(now.source).toBe("session")
 
-		// …and the user's own value is untouched outside it.
-		v = await view()
-		now = allOptions(v).find((o) => o.id === target.id)!
-		expect(now.value).toBe("the user says so")
+		// …and the configuration's value is untouched outside it.
+		now = allOptions(await view({ userId: adminId, isAdmin: true })).find(
+			(o) => o.id === target.id
+		)!
+		expect(now.value).toBe("the config says so")
+		expect(now.source).toBe("preset")
+
+		// Leave the instance as found for the tests below.
+		await clearOption(
+			db as any,
+			SECRET,
+			RESPOND_SPEC_ID,
+			viewer({ sessionId }),
+			target.id
+		)
+		await selectConfig(db as any, spec.id, "instance", 0, null, adminId)
 	})
 
-	it("an admin's instance override beats the selected config", async () => {
-		// The 0.6 revision of the chain (SDK SCOPE_ORDER): an override is a
-		// decision made on top of the selected config, so it wins — the
-		// original order made an admin's live edit the one write that could
-		// store cleanly and do nothing, shadowed forever by the shipped
-		// default's value for the same path.
+	it("a global edit lands in the selected configuration — and a shipped one refuses", async () => {
+		// The former instance override layer is gone (ruled 2026-08-24). A
+		// global edit *is* an edit to the selected configuration: against the
+		// shipped immutable default it refuses with the duplicate suggestion,
+		// and against a mutable selection it becomes that configuration's own
+		// value — reset deletes the value row, so the author default resolves
+		// again.
 		const asAdmin = () => view({ userId: adminId, isAdmin: true })
-		const fromConfig = allOptions(await asAdmin()).find(
-			(o) => o.source === "preset" && o.control === "integer"
+		const param = allOptions(await asAdmin()).find(
+			(o) => o.control === "integer" && o.writable
 		)!
-		expect(fromConfig).toBeTruthy()
+		expect(param).toBeTruthy()
+
+		// Nothing selected: the shipped default resolves, and refuses edits.
+		await expect(
+			writeOption(
+				db as any,
+				SECRET,
+				RESPOND_SPEC_ID,
+				viewer({ userId: adminId, isAdmin: true }),
+				param.id,
+				777
+			)
+		).rejects.toThrow(/Duplicate it and edit the copy/)
+
+		const { createConfig, selectConfig } = await import(
+			"$lib/server/pipelines/config/named"
+		)
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		const landing = await createConfig(db as any, spec.id, "Landing")
+		await selectConfig(
+			db as any,
+			spec.id,
+			"instance",
+			0,
+			landing.id,
+			adminId
+		)
 
 		await writeOption(
 			db as any,
 			SECRET,
 			RESPOND_SPEC_ID,
 			viewer({ userId: adminId, isAdmin: true }),
-			fromConfig.id,
-			777,
-			"instance"
+			param.id,
+			777
 		)
 		const after = allOptions(await asAdmin()).find(
-			(o) => o.id === fromConfig.id
+			(o) => o.id === param.id
 		)!
 		expect(after.value).toBe(777)
-		expect(after.source).toBe("instance")
-		expect(after.overriddenHere).toBe(true)
+		expect(after.source).toBe("preset")
+		const rows = await db
+			.select()
+			.from(schema.pipelineConfigValues)
+			.where(eq(schema.pipelineConfigValues.configId, landing.id))
+		expect((rows as any[]).some((r) => r.value === 777)).toBe(true)
 
-		// Reset deletes the row; the config's value is what resolves again.
+		// Reset deletes the configuration's value; the author default resolves.
 		await clearOption(
 			db as any,
 			SECRET,
 			RESPOND_SPEC_ID,
 			viewer({ userId: adminId, isAdmin: true }),
-			fromConfig.id,
-			"instance"
+			param.id
 		)
-		const back = allOptions(await asAdmin()).find(
-			(o) => o.id === fromConfig.id
+		const back = allOptions(await asAdmin()).find((o) => o.id === param.id)!
+		expect(back.value).not.toBe(777)
+		expect(back.source).not.toBe("preset")
+
+		await selectConfig(db as any, spec.id, "instance", 0, null, adminId)
+	})
+
+	it("keeps one session's overrides out of another's view", async () => {
+		const inSession = await view({ sessionId })
+		const target = allOptions(inSession).find(
+			(o) => o.writable && o.source !== "session"
 		)!
-		expect(back.value).toBe(fromConfig.value)
-		expect(back.source).toBe("preset")
+		await writeOption(
+			db as any,
+			SECRET,
+			RESPOND_SPEC_ID,
+			viewer({ sessionId }),
+			target.id,
+			"only here"
+		)
+
+		const [other] = await db
+			.insert(schema.sessions)
+			.values({ userId: otherUserId, isGroup: false })
+			.returning()
+		const theirs = allOptions(await view({ sessionId: other.id })).find(
+			(o) => o.id === target.id
+		)!
+		expect(theirs.source).not.toBe("session")
+		expect(theirs.value).not.toBe("only here")
 	})
 
-	it("keeps one user's overrides out of another's view", async () => {
-		const v = await view({ userId: otherUserId })
-		const mine = await view()
-		const target = allOptions(mine).find((o) => o.source === "user")!
-		const theirs = allOptions(v).find((o) => o.id === target.id)!
-		expect(theirs.source).not.toBe("user")
-		expect(theirs.value).not.toBe(target.value)
-	})
-
-	it("resets by deleting, so a later admin change still reaches the user", async () => {
-		const target = allOptions(await view()).find(
-			(o) => o.source === "user"
+	it("resets by deleting, so a later config change still reaches the session", async () => {
+		const target = allOptions(await view({ sessionId })).find(
+			(o) => o.source === "session"
 		)!
 
 		await clearOption(
 			db as any,
 			SECRET,
 			RESPOND_SPEC_ID,
-			viewer(),
+			viewer({ sessionId }),
 			target.id
 		)
 
-		const after = allOptions(await view()).find((o) => o.id === target.id)!
-		expect(after.source).toBe("instance")
+		const after = allOptions(await view({ sessionId })).find(
+			(o) => o.id === target.id
+		)!
+		expect(after.source).not.toBe("session")
 		expect(after.overriddenHere).toBe(false)
 
-		// The row is gone rather than rewritten with the inherited value — which is
-		// the whole difference: an admin moving the instance value now reaches this
-		// user, and would not if reset had pinned a copy.
+		// The row is gone rather than rewritten with the inherited value —
+		// which is the whole difference: an admin moving the configuration's
+		// value now reaches this session, and would not if reset had pinned a copy.
 		const rows = await db
 			.select()
 			.from(schema.pipelineNodeOverrides)
 			.where(
 				and(
-					eq(schema.pipelineNodeOverrides.scopeKind, "user"),
-					eq(schema.pipelineNodeOverrides.scopeId, userId)
+					eq(schema.pipelineNodeOverrides.scopeKind, "session"),
+					eq(schema.pipelineNodeOverrides.scopeId, sessionId)
 				)
 			)
 		expect(rows).toHaveLength(0)
@@ -473,8 +564,10 @@ describe("what a write refuses", () => {
 		).rejects.toThrow(OptionNotWritableError)
 	})
 
-	it("refuses instance scope to a non-admin", async () => {
-		const target = allOptions(await view()).find((o) => o.writable)!
+	it("refuses a global edit to a non-admin — their levers are the session's", async () => {
+		const target = allOptions(await view()).find(
+			(o) => o.control === "prompts-ref"
+		)!
 		await expect(
 			writeOption(
 				db as any,
@@ -482,8 +575,7 @@ describe("what a write refuses", () => {
 				RESPOND_SPEC_ID,
 				viewer(),
 				target.id,
-				"x",
-				"instance"
+				"x"
 			)
 		).rejects.toThrow(OptionNotWritableError)
 	})
@@ -654,7 +746,6 @@ describe("configurations hold their own values", () => {
 			admin,
 			(await budget()).id,
 			1111,
-			undefined,
 			alpha
 		)
 
@@ -666,7 +757,6 @@ describe("configurations hold their own values", () => {
 			admin,
 			(await budget()).id,
 			2222,
-			undefined,
 			beta
 		)
 
@@ -688,7 +778,6 @@ describe("configurations hold their own values", () => {
 			RESPOND_SPEC_ID,
 			admin,
 			(await budget()).id,
-			undefined,
 			beta
 		)
 		expect((await budget()).value).not.toBe(2222)
@@ -719,7 +808,6 @@ describe("configurations hold their own values", () => {
 				admin,
 				(await budget()).id,
 				4242,
-				undefined,
 				shipped.id
 			)
 		).rejects.toThrow(/ships|Duplicate/i)
@@ -742,7 +830,6 @@ describe("configurations hold their own values", () => {
 				admin,
 				(await budget()).id,
 				7,
-				undefined,
 				foreign.id
 			)
 		).rejects.toThrow(/different pipeline/i)
@@ -775,11 +862,14 @@ describe("0115 retires the third review position", () => {
 			.values({ specId: spec.id, name: "Review legacy" })
 			.returning()
 
+		// Session-scope rows: the only override scope 0140 leaves, and the 0115
+		// rewrite never keyed on scope — retired spellings are retired
+		// wherever they sit.
 		await db.insert(schema.pipelineNodeOverrides).values([
 			{
 				specId: spec.id,
-				scopeKind: "instance",
-				scopeId: 0,
+				scopeKind: "session",
+				scopeId: 4241,
 				nodeKey: "save",
 				slot: "settings",
 				path: "review",
@@ -787,7 +877,7 @@ describe("0115 retires the third review position", () => {
 			},
 			{
 				specId: spec.id,
-				scopeKind: "user",
+				scopeKind: "session",
 				scopeId: 4242,
 				nodeKey: "generate",
 				slot: "settings",
@@ -797,7 +887,7 @@ describe("0115 retires the third review position", () => {
 			// A gate deliberately left off stays off.
 			{
 				specId: spec.id,
-				scopeKind: "user",
+				scopeKind: "session",
 				scopeId: 4243,
 				nodeKey: "generate",
 				slot: "settings",
@@ -813,7 +903,9 @@ describe("0115 retires the third review position", () => {
 			value: "async" as any
 		})
 
-		for (const stmt of (await migration()).split("--> statement-breakpoint"))
+		for (const stmt of (await migration()).split(
+			"--> statement-breakpoint"
+		))
 			await db.execute(stmt)
 
 		const overrides = await db
@@ -844,12 +936,10 @@ describe("0115 retires the third review position", () => {
  */
 describe("a share option carries its own bands", () => {
 	const shareOption = async () => {
-		const v = (await namespaceView(
-			db as any,
-			SECRET,
-			RESPOND_SPEC_ID,
-			{ userId: 1, isAdmin: true }
-		)) as NamespaceView
+		const v = (await namespaceView(db as any, SECRET, RESPOND_SPEC_ID, {
+			userId: 1,
+			isAdmin: true
+		})) as NamespaceView
 		return v.steps
 			.flatMap((s) => [...s.options, ...s.advanced])
 			.find((o) => o.control === "share")
@@ -928,12 +1018,10 @@ describe("a share option carries its own bands", () => {
 	})
 
 	it("gives the per-member ceiling the same bands", async () => {
-		const v = (await namespaceView(
-			db as any,
-			SECRET,
-			RESPOND_SPEC_ID,
-			{ userId: 1, isAdmin: true }
-		)) as NamespaceView
+		const v = (await namespaceView(db as any, SECRET, RESPOND_SPEC_ID, {
+			userId: 1,
+			isAdmin: true
+		})) as NamespaceView
 		const ceiling = v.steps
 			.flatMap((s) => [...s.options, ...s.advanced])
 			.find((o) => o.control === "per-member")
@@ -954,7 +1042,7 @@ describe("a share option carries its own bands", () => {
  *
  * Three node types declared a `template` slot nothing read and nothing seeded a
  * row for, so the panel rendered a picker with an empty dropdown on every
- * pipeline using them — `chat-history`, `lorebook-triggers` and `generate-text`.
+ * pipeline using them — `session-history`, `lorebook-triggers` and `generate-text`.
  * The slots are gone; this is what stops one coming back unnoticed, because the
  * declaration compiles perfectly well without anything to select and the defect
  * is only visible on the screen.
@@ -974,31 +1062,35 @@ describe("every reference control has something to reference", () => {
 				userId: 1,
 				isAdmin: true
 			})) as NamespaceView
+			// Three exclusions, each for a different reason:
+			//
+			// · `connection-ref` / `sampling-ref` — the instance's rows
+			//   to create. An install with none is a fresh install, not
+			//   a broken declaration.
+			// · `prompts-ref` — core's prompts are migrated *from* the
+			//   legacy config rows, which `defaults.sync()` writes at
+			//   boot, and this fixture cannot call it (it re-enters the
+			//   mocked db module). Asserting on them here would report
+			//   empty pickers the fixture caused, and a guard that cries
+			//   wolf is a guard someone switches off.
+			//
+			// What is left is what core seeds through `bootstrapPipelines`
+			// alone — the context templates and variable layouts — which
+			// is exactly the class the dead `template` slots were in.
 			for (const step of v.steps)
 				for (const o of [...step.options, ...step.advanced])
-					// Three exclusions, each for a different reason:
-					//
-					// · `connection-ref` / `sampling-ref` — the instance's rows
-					//   to create. An install with none is a fresh install, not
-					//   a broken declaration.
-					// · `prompts-ref` — core's prompts are migrated *from* the
-					//   legacy config rows, which `defaults.sync()` writes at
-					//   boot, and this fixture cannot call it (it re-enters the
-					//   mocked db module). Asserting on them here would report
-					//   empty pickers the fixture caused, and a guard that cries
-					//   wolf is a guard someone switches off.
-					//
-					// What is left is what core seeds through `bootstrapPipelines`
-					// alone — the context templates and variable layouts — which
-					// is exactly the class the dead `template` slots were in.
 					if (
 						/-ref$/.test(o.control) &&
-						!["connection-ref", "sampling-ref", "prompts-ref"].includes(
-							o.control
-						) &&
+						![
+							"connection-ref",
+							"sampling-ref",
+							"prompts-ref"
+						].includes(o.control) &&
 						!(o.choices ?? []).length
 					)
-						empty.push(`${ns.slug} › ${step.label} › ${o.label} [${o.control}]`)
+						empty.push(
+							`${ns.slug} › ${step.label} › ${o.label} [${o.control}]`
+						)
 		}
 		expect(empty).toEqual([])
 	})
@@ -1023,7 +1115,9 @@ describe("the facet vocabulary travels with the view", () => {
 	it("names every facet the pipeline actually uses, and no others", async () => {
 		const v = await view()
 		const used = new Set(
-			v.steps.flatMap((s) => [...s.options, ...s.advanced]).map((o) => o.facet)
+			v.steps
+				.flatMap((s) => [...s.options, ...s.advanced])
+				.map((o) => o.facet)
 		)
 		expect(new Set(v.facets.map((f) => f.id))).toEqual(used)
 	})
@@ -1042,7 +1136,10 @@ describe("the facet vocabulary travels with the view", () => {
 
 	it("says which lead the panel rather than the client deciding", async () => {
 		const v = await view()
-		const simple = v.facets.filter((f) => f.simple).map((f) => f.id).sort()
+		const simple = v.facets
+			.filter((f) => f.simple)
+			.map((f) => f.id)
+			.sort()
 		expect(simple).toEqual(["connection", "prompts", "review", "sampling"])
 	})
 
@@ -1054,7 +1151,10 @@ describe("the facet vocabulary travels with the view", () => {
 			"$lib/server/pipelines/config/panel/read"
 		)
 		const { getFacet } = await import("@serene-pub/sdk")
-		expect(getFacet("retrieval_tuning"), "picked a name core declares").toBeUndefined()
+		expect(
+			getFacet("retrieval_tuning"),
+			"picked a name core declares"
+		).toBeUndefined()
 
 		expect(resolveFacet("retrieval_tuning")).toEqual({
 			id: "retrieval_tuning",
@@ -1125,6 +1225,10 @@ describe("options arrive in the order they were declared", () => {
 		expect(
 			[...rank!.options, ...rank!.advanced].map((o) => o.label)
 		).toEqual([
+			// The chain first: `scripts` is a headline option, not a tuning
+			// parameter, so it lands in `options` while the shares sit in
+			// `advanced` — declaration order within each group still holds.
+			"Scripts",
 			"Context split",
 			"Most entries per source",
 			"Always keep at least"
@@ -1143,7 +1247,9 @@ describe("options arrive in the order they were declared", () => {
 		const asm = v.steps.find((s) => /assemble/i.test(s.label))
 		expect(asm, "no assembly step").toBeTruthy()
 		const labels = asm!.advanced.map((o) => o.label)
-		expect(labels[0], "the template slot is declared first").toBe("Template")
+		expect(labels[0], "the template slot is declared first").toBe(
+			"Template"
+		)
 		// Then the layouts, then the tuning numbers — slot by slot, in order.
 		expect(labels.indexOf("World lore")).toBeLessThan(
 			labels.indexOf("Post History Depth")
@@ -1160,6 +1266,8 @@ describe("options arrive in the order they were declared", () => {
 		expect(labels.indexOf("Context budget")).toBeLessThan(
 			labels.indexOf("Rank hybrid")
 		)
-		expect(labels.indexOf("Rank hybrid")).toBeLessThan(labels.indexOf("Assemble"))
+		expect(labels.indexOf("Rank hybrid")).toBeLessThan(
+			labels.indexOf("Assemble")
+		)
 	})
 })

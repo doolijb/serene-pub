@@ -14,7 +14,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest"
 import { sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { createTestDb, createTestUser, type TestDb } from "$lib/server/utils/testDb"
+import {
+	createTestDb,
+	createTestUser,
+	type TestDb
+} from "$lib/server/utils/testDb"
 
 let testDb: TestDb
 
@@ -48,7 +52,9 @@ async function runConversionOnce() {
 /** The conversion statements from drizzle/0091, verbatim in shape. */
 async function runConversion(role: "participant" | "mentioned") {
 	const column =
-		role === "participant" ? "participant_characters" : "mentioned_characters"
+		role === "participant"
+			? "participant_characters"
+			: "mentioned_characters"
 	await testDb.execute(
 		sql.raw(`
 INSERT INTO "scene_characters" ("scene_id", "binding_id", "role", "ordinal")
@@ -120,7 +126,10 @@ describe("migration 0091 — legacy cast conversion", () => {
 			})
 			.returning()
 
-		async function makeScene(participants: unknown[], mentioned: unknown[]) {
+		async function makeScene(
+			participants: unknown[],
+			mentioned: unknown[]
+		) {
 			const [row] = await testDb
 				.insert(schema.scenes)
 				.values({
@@ -189,7 +198,10 @@ describe("migration 0091 — legacy cast conversion", () => {
 			.returning()
 		const [row] = await testDb
 			.insert(schema.scenes)
-			.values({ lorebookId: lorebook.id, historyEntryId: historyEntry.id })
+			.values({
+				lorebookId: lorebook.id,
+				historyEntryId: historyEntry.id
+			})
 			.returning()
 		await testDb.execute(
 			sql`UPDATE "scenes" SET "participant_characters" = ${JSON.stringify([solo.id])}::json, "mentioned_characters" = ${JSON.stringify([solo.id])}::json WHERE "id" = ${row.id}`

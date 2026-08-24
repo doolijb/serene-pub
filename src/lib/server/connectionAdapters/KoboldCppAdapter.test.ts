@@ -40,14 +40,14 @@ function makeAdapter(connectionOverrides: Record<string, any> = {}) {
 		sampling: { contextTokensEnabled: false } as any,
 		contextConfig: {} as any,
 		promptConfig: { systemPrompt: "You are a helpful narrator." } as any,
-		chat: {
+		session: {
 			id: 1,
 			userId: 1,
-			chatType: "chat",
+			sessionType: "session",
 			metadata: { ragIgnored: true },
-			chatMessages: [],
-			chatCharacters: [],
-			chatPersonas: [],
+			sessionMessages: [],
+			sessionCharacters: [],
+			sessionPersonas: [],
 			lorebook: {
 				id: 1,
 				lorebookBindings: [],
@@ -188,7 +188,7 @@ describe("KoboldCppAdapter — base URL trailing-slash normalization", () => {
 
 // Round: connections-editing/thinking-toggle bugfix. See the plan for full
 // context — enable_thinking only has meaning inside koboldcpp's
-// chat-template pipeline (useChat: true), and koboldcpp separates native
+// session-template pipeline (useSession: true), and koboldcpp separates native
 // reasoning into a `reasoning_content` field this adapter previously never
 // read (unlike its Ollama/Anthropic siblings).
 describe("KoboldCppAdapter — enable_thinking request gating", () => {
@@ -232,11 +232,11 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 	// ── responseFormat ────────────────────────────────────────────────────
 	//
 	// The NEGATIVE case is the important one. This constraint rides on the same
-	// adapters chat uses; a grammar leaking into an ordinary roleplay reply
+	// adapters session uses; a grammar leaking into an ordinary roleplay reply
 	// would be a far worse regression than the extraction failures it exists to
 	// fix. Default is "text", so forgetting to opt in can only ever under-apply.
 
-	test("sends no grammar by default \u2014 chat must never be constrained", async () => {
+	test("sends no grammar by default \u2014 session must never be constrained", async () => {
 		const adapter = makeAdapter({ extraJson: { stream: false } })
 		mockCompilePrompt(adapter)
 		expect(adapter.responseFormat).toBe("text")
@@ -244,7 +244,7 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 		expect(findGenerateCallBody()).not.toHaveProperty("grammar")
 	})
 
-	test('responseFormat "json" sends a GBNF grammar in chat mode', async () => {
+	test('responseFormat "json" sends a GBNF grammar in session mode', async () => {
 		const adapter = makeAdapter({ extraJson: { stream: false } })
 		mockCompilePrompt(adapter)
 		adapter.responseFormat = "json"
@@ -258,7 +258,7 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 		// KoboldCPP accepts `grammar` on both endpoints; a caller should not
 		// have to know which one their connection happens to use.
 		const adapter = makeAdapter({
-			extraJson: { useChat: false, stream: false }
+			extraJson: { useSession: false, stream: false }
 		})
 		mockCompilePrompt(adapter)
 		adapter.responseFormat = "json"
@@ -283,7 +283,7 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 	test("a responseSchema is ignored while responseFormat is text", async () => {
 		// The negative case again, and the one that matters most: responseSchema
 		// is consulted ONLY under "json". A schema set without opting into JSON
-		// mode must not constrain generation, or the chat path could be
+		// mode must not constrain generation, or the session path could be
 		// constrained by a stray assignment rather than a deliberate one.
 		const adapter = makeAdapter({ extraJson: { stream: false } })
 		mockCompilePrompt(adapter)
@@ -293,9 +293,13 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 		expect(findGenerateCallBody()).not.toHaveProperty("grammar")
 	})
 
-	test("omits chat_template_kwargs entirely in text-completion mode (useChat: false), even with a value set", async () => {
+	test("omits chat_template_kwargs entirely in text-completion mode (useSession: false), even with a value set", async () => {
 		const adapter = makeAdapter({
-			extraJson: { useChat: false, stream: false, enableThinking: true }
+			extraJson: {
+				useSession: false,
+				stream: false,
+				enableThinking: true
+			}
 		})
 		mockCompilePrompt(adapter)
 		const result = await adapter.generate()
@@ -310,9 +314,9 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 	// request — every occurrence of that key in koboldcpp's own source is
 	// inside its Tkinter GUI's launch-config code. The real per-request path
 	// only reads a nested chat_template_kwargs object.
-	test("includes enable_thinking nested in chat_template_kwargs in chat mode when explicitly set", async () => {
+	test("includes enable_thinking nested in chat_template_kwargs in session mode when explicitly set", async () => {
 		const adapter = makeAdapter({
-			extraJson: { useChat: true, stream: false, enableThinking: true }
+			extraJson: { useSession: true, stream: false, enableThinking: true }
 		})
 		mockCompilePrompt(adapter)
 		await adapter.generate()
@@ -322,9 +326,9 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 		expect(body.chat_template_kwargs?.enable_thinking).toBe(true)
 	})
 
-	test("omits chat_template_kwargs in chat mode when Auto (null)", async () => {
+	test("omits chat_template_kwargs in session mode when Auto (null)", async () => {
 		const adapter = makeAdapter({
-			extraJson: { useChat: true, stream: false, enableThinking: null }
+			extraJson: { useSession: true, stream: false, enableThinking: null }
 		})
 		mockCompilePrompt(adapter)
 		await adapter.generate()
@@ -378,7 +382,7 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 		vi.stubGlobal("fetch", fetchMock)
 
 		const adapter = makeAdapter({
-			extraJson: { useChat: true, stream: true }
+			extraJson: { useSession: true, stream: true }
 		})
 		mockCompilePrompt(adapter)
 		const result = await adapter.generate()
@@ -399,7 +403,7 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 		expect(thinking).toBe("Pondering deeply.")
 	})
 
-	test("non-streaming: populates thinkingContent from message.reasoning_content in chat mode", async () => {
+	test("non-streaming: populates thinkingContent from message.reasoning_content in session mode", async () => {
 		fetchMock = vi.fn(async () => ({
 			ok: true,
 			json: async () => ({
@@ -416,7 +420,7 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 		vi.stubGlobal("fetch", fetchMock)
 
 		const adapter = makeAdapter({
-			extraJson: { useChat: true, stream: false }
+			extraJson: { useSession: true, stream: false }
 		})
 		mockCompilePrompt(adapter)
 		const result = await adapter.generate()
@@ -435,7 +439,7 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 		vi.stubGlobal("fetch", fetchMock)
 
 		const adapter = makeAdapter({
-			extraJson: { useChat: true, stream: false }
+			extraJson: { useSession: true, stream: false }
 		})
 		mockCompilePrompt(adapter)
 		const result = await adapter.generate()

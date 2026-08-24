@@ -19,7 +19,7 @@ const listMock = vi.fn()
 vi.mock("ollama", () => ({
 	Ollama: class {
 		list = (...args: any[]) => listMock(...args)
-		chat = vi.fn()
+		session = vi.fn()
 		generate = vi.fn()
 		abort = vi.fn()
 		constructor(...args: any[]) {
@@ -37,20 +37,20 @@ function makeConnection(overrides: Record<string, any> = {}): any {
 		baseUrl: "http://localhost:11434",
 		model: "llama3",
 		promptFormat: "vicuna",
-		extraJson: { useChat: true, stream: false },
+		extraJson: { useSession: true, stream: false },
 		...overrides
 	}
 }
 
-function makeChat(): any {
+function makeSession(): any {
 	return {
 		id: 1,
 		userId: 1,
-		chatType: "chat",
+		sessionType: "session",
 		metadata: { ragIgnored: true },
-		chatMessages: [],
-		chatCharacters: [],
-		chatPersonas: [],
+		sessionMessages: [],
+		sessionCharacters: [],
+		sessionPersonas: [],
 		lorebook: {
 			id: 1,
 			lorebookBindings: [],
@@ -67,7 +67,7 @@ function makeAdapter(connectionOverrides: Record<string, any> = {}) {
 		sampling: { contextTokensEnabled: false } as any,
 		contextConfig: {} as any,
 		promptConfig: { systemPrompt: "Test system prompt." } as any,
-		chat: makeChat(),
+		session: makeSession(),
 		currentCharacterId: null,
 		tokenCounter: { countTokens: async () => 1 } as any,
 		tokenLimit: 4096,

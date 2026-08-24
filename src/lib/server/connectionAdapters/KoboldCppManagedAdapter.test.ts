@@ -70,15 +70,15 @@ function makeConnection(overrides: Record<string, any> = {}): any {
 	}
 }
 
-function makeChat(overrides: Record<string, any> = {}) {
+function makeSession(overrides: Record<string, any> = {}) {
 	return {
 		id: 1,
 		userId: 1,
-		chatType: "chat",
+		sessionType: "session",
 		metadata: { ragIgnored: true },
-		chatMessages: [],
-		chatCharacters: [],
-		chatPersonas: [],
+		sessionMessages: [],
+		sessionCharacters: [],
+		sessionPersonas: [],
 		lorebook: {
 			id: 1,
 			lorebookBindings: [],
@@ -96,7 +96,7 @@ function makeAdapter(overrides: Record<string, any> = {}) {
 		sampling: { contextTokensEnabled: false } as any,
 		contextConfig: {} as any,
 		promptConfig: { systemPrompt: "system" } as any,
-		chat: makeChat(),
+		session: makeSession(),
 		currentCharacterId: null,
 		tokenCounter: { countTokens: async () => 1 } as any,
 		tokenLimit: 4096,
@@ -323,7 +323,7 @@ describe("KoboldCppManagedAdapter.generate() — TTL reset after completion", ()
 		const adapter = makeAdapter({
 			connection: makeConnection({
 				baseUrl: "http://localhost:5001",
-				extraJson: { stream: false, useChat: true }
+				extraJson: { stream: false, useSession: true }
 			})
 		})
 		adapter.withCompiledPrompt({

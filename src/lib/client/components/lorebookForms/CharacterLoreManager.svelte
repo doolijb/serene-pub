@@ -1077,19 +1077,24 @@
 						     on — an entry set to `keyword` or `both`, and every `rag` entry
 						     on an instance whose model is not loaded, goes through it.
 						     Hiding this would repeat the mistake those two are making. -->
-						<div class="flex w-full items-center justify-between gap-2">
+						<div
+							class="flex w-full items-center justify-between gap-2"
+						>
 							<label for="cleRecursion">Recursion depth</label>
 							<select
 								id="cleRecursion"
 								class="select preset-filled-surface-200-800 w-max max-w-xs rounded-lg text-sm"
-								value={String(editingEntry.recursionDepth ?? "")}
+								value={String(
+									editingEntry.recursionDepth ?? ""
+								)}
 								onchange={(e) => {
 									if (!editingEntry) return
 									// "" is not 0. Empty means the entry has no opinion and the
 									// pipeline's ceiling decides, which is a different answer
 									// from "conversation only" and has to survive as null.
 									const v = e.currentTarget.value
-									editingEntry.recursionDepth = v === "" ? null : Number(v)
+									editingEntry.recursionDepth =
+										v === "" ? null : Number(v)
 								}}
 							>
 								<option value="">Use pipeline default</option>

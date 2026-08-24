@@ -112,7 +112,7 @@ export async function assertSelectable(
 	if (row.specId !== specId)
 		throw new PromptNotUsableError(
 			`'${row.name}' was written for a different pipeline. Prompts are kept ` +
-				`per pipeline so that a chat reply's wording is never offered where ` +
+				`per pipeline so that a session reply's wording is never offered where ` +
 				`a summary is being written.`
 		)
 
@@ -277,6 +277,13 @@ export async function deletePrompt(
 		 * `deleteVariableTemplate`.
 		 */
 		ignoreOverrideIds?: Set<number>
+		/**
+		 * Config-value rows that do not count either — the same "your own
+		 * selection" release, for the global panel: since the layer
+		 * simplification (2026-08-24) an admin's selection outside a session is
+		 * the instance config's own value row, not an override.
+		 */
+		ignoreConfigValueIds?: Set<number>
 	} = {}
 ): Promise<void> {
 	const [row] = await db
@@ -304,8 +311,11 @@ export async function deletePrompt(
 		.from(schema.pipelineNodeOverrides)
 		.where(eq(schema.pipelineNodeOverrides.slot, "prompts"))
 	const ignored = opts.ignoreOverrideIds ?? new Set<number>()
+	const ignoredValues = opts.ignoreConfigValueIds ?? new Set<number>()
 	const referenced =
-		(values as any[]).some((v) => v.value === promptId) ||
+		(values as any[]).some(
+			(v) => v.value === promptId && !ignoredValues.has(v.id)
+		) ||
 		(overrides as any[]).some(
 			(o) => o.value === promptId && !ignored.has(o.id)
 		)
@@ -313,7 +323,7 @@ export async function deletePrompt(
 	if (referenced)
 		throw new PromptNotUsableError(
 			`'${row.name}' is still selected somewhere — a configuration or a ` +
-				`chat is pointing at it. Choose a different prompt there first, ` +
+				`session is pointing at it. Choose a different prompt there first, ` +
 				`then delete this one.`
 		)
 

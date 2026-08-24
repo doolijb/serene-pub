@@ -49,7 +49,7 @@
 				<article class="space-y-2">
 					<p class="text-muted-foreground text-sm">
 						Let {narratorName} narrate — describe the environment, atmosphere,
-						or any side characters and encounters, instead of a chat
+						or any side characters and encounters, instead of a session
 						character.
 					</p>
 					<label

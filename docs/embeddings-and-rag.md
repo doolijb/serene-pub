@@ -2,28 +2,28 @@
 
 Serene Pub can quietly turn your characters, personas, and lorebook content into searchable embeddings, then pull the most relevant pieces back into the prompt as a conversation grows.
 
-This is a separate system from [Summarization](./summarization.md), which condenses chat messages into permanent lorebook entries — the two are related (summarization output gets embedded too) but independently enabled and configured.
+This is a separate system from [Summarization](./summarization.md), which condenses session messages into permanent lorebook entries — the two are related (summarization output gets embedded too) but independently enabled and configured.
 
 ## Overview
 
-- **Embeddings** (internally "vectorization") turns text — chat messages, character/persona descriptions, lorebook entries, narrative graph nodes — into a numeric vector that captures its meaning. This can run locally via a small on-device model, or against any external OpenAI-compatible embeddings API.
+- **Embeddings** (internally "vectorization") turns text — session messages, character/persona descriptions, lorebook entries, narrative graph nodes — into a numeric vector that captures its meaning. This can run locally via a small on-device model, or against any external OpenAI-compatible embeddings API.
 - **RAG (Retrieval-Augmented Generation)** is what happens at generation time: right before the model writes a reply, Serene Pub compares the current conversation against all those embeddings and pulls in the handful that are most semantically relevant — even if they're from messages or lore entries that fell out of the normal context window long ago.
 
-As a chat gets long, older messages and related lore don't just disappear from the model's awareness — if embeddings are enabled, the most relevant ones are found by meaning and quietly re-inserted.
+As a session gets long, older messages and related lore don't just disappear from the model's awareness — if embeddings are enabled, the most relevant ones are found by meaning and quietly re-inserted.
 
 ### How retrieval fits into a generated reply
 
-When you send a message, Serene Pub's prompt builder checks whether embeddings are enabled and ready. If so, it runs a semantic search scoped to the current chat: the chat's own messages plus the content of the chat's own lorebook only — deliberately *not* a linked character's or persona's own separate lorebook, and not messages from other chats, even ones sharing the same lorebook and cast. RAG only ever draws on the story world the chat itself is scoped to, never on an unrelated lorebook a cast member happens to also be attached to elsewhere. Results are ranked by similarity, boosted slightly for recency, and capped per content type (a handful of messages, world lore entries, character lore entries, history entries, and narrative-graph relationships) so retrieved context doesn't crowd out the guaranteed recent messages. If embeddings are off or the model isn't ready, prompt building falls back to non-semantic (keyword/recency-based) content selection instead.
+When you send a message, Serene Pub's prompt builder checks whether embeddings are enabled and ready. If so, it runs a semantic search scoped to the current session: the session's own messages plus the content of the session's own lorebook only — deliberately *not* a linked character's or persona's own separate lorebook, and not messages from other sessions, even ones sharing the same lorebook and cast. RAG only ever draws on the story world the session itself is scoped to, never on an unrelated lorebook a cast member happens to also be attached to elsewhere. Results are ranked by similarity, boosted slightly for recency, and capped per content type (a handful of messages, world lore entries, character lore entries, history entries, and narrative-graph relationships) so retrieved context doesn't crowd out the guaranteed recent messages. If embeddings are off or the model isn't ready, prompt building falls back to non-semantic (keyword/recency-based) content selection instead.
 
 ### What gets embedded
 
-Everything embeddings touch falls into one of these buckets: chat messages, character descriptions, persona descriptions, and everything inside a lorebook — world lore entries, character lore entries, history entries, and (if the lorebook has one) narrative graph nodes and relationships. See [Lorebooks](./lorebooks.md) for what those lorebook content types are and how the narrative graph itself is built. A row only ever counts as "embedded" for the specific model (and, in External API mode, the specific endpoint) that produced it — switching models or backends effectively resets everything to needing re-embedding, as covered below.
+Everything embeddings touch falls into one of these buckets: session messages, character descriptions, persona descriptions, and everything inside a lorebook — world lore entries, character lore entries, history entries, and (if the lorebook has one) narrative graph nodes and relationships. See [Lorebooks](./lorebooks.md) for what those lorebook content types are and how the narrative graph itself is built. A row only ever counts as "embedded" for the specific model (and, in External API mode, the specific endpoint) that produced it — switching models or backends effectively resets everything to needing re-embedding, as covered below.
 
 Narrative graph **nodes** are embedded and tracked for staleness like everything else, but they're not actually part of RAG's similarity search — retrieval only searches messages, world lore, character lore, history entries, and narrative _relationships_. Graph context that reaches the prompt comes from relationship matches plus a direct node lookup, not from a node's own embedding being found by meaning.
 
-### Why some short chats never show RAG activity
+### Why some short sessions never show RAG activity
 
-RAG scoring only ever considers messages _older_ than the most recent ten in a chat — those ten are always included in the prompt directly, so there's nothing for retrieval to add. This also means chats with ten or fewer messages are treated as not applicable for RAG at all: there's no [RAG notice](#understanding-rag-notices), and nothing gets prioritized in the queue for them, because everything already fits in the guaranteed window.
+RAG scoring only ever considers messages _older_ than the most recent ten in a session — those ten are always included in the prompt directly, so there's nothing for retrieval to add. This also means sessions with ten or fewer messages are treated as not applicable for RAG at all: there's no [RAG notice](#understanding-rag-notices), and nothing gets prioritized in the queue for them, because everything already fits in the guaranteed window.
 
 ## Enabling Embeddings
 
@@ -66,11 +66,11 @@ Once configured, the Embeddings Sidebar has two tabs: **Queue** and **Settings**
 
 The Queue tab shows:
 
-- A **status card** at the top (Running / Paused / Idle) with a Start or Stop button, plus a live "Completed" and "Queued" counter. While running, it shows the label of the item currently being embedded (e.g. a specific chat message, character, or lorebook entry).
-- A **Queue** list of pending "priority groups" — each group bundles one chat together with its lorebook, linked characters, and linked personas, so a chat's content is embedded as a unit rather than getting interleaved with unrelated content. Each queued group shows its label, owner, and a short summary (e.g. "2 chars · 1 persona · 1 lorebook"). Groups can be reordered with up/down arrows or removed from the queue entirely with the X button.
+- A **status card** at the top (Running / Paused / Idle) with a Start or Stop button, plus a live "Completed" and "Queued" counter. While running, it shows the label of the item currently being embedded (e.g. a specific session message, character, or lorebook entry).
+- A **Queue** list of pending "priority groups" — each group bundles one session together with its lorebook, linked characters, and linked personas, so a session's content is embedded as a unit rather than getting interleaved with unrelated content. Each queued group shows its label, owner, and a short summary (e.g. "2 chars · 1 persona · 1 lorebook"). Groups can be reordered with up/down arrows or removed from the queue entirely with the X button.
 - A **Recent** history list of the last completed groups, each with a relative "time ago" timestamp, kept for reference after they finish.
 
-Within a group, content is embedded in a fixed order: chat messages first, then lorebook content (world lore → character lore → history entries → narrative graph nodes → narrative graph relationships), then characters, then personas. Once the priority queue is empty, the queue falls back to a global sweep that finds any other unembedded or stale content anywhere in the database, so nothing is left behind indefinitely.
+Within a group, content is embedded in a fixed order: session messages first, then lorebook content (world lore → character lore → history entries → narrative graph nodes → narrative graph relationships), then characters, then personas. Once the priority queue is empty, the queue falls back to a global sweep that finds any other unembedded or stale content anywhere in the database, so nothing is left behind indefinitely.
 
 ### The Settings tab
 
@@ -87,21 +87,21 @@ The queue has three states, shown by both the sidebar's status card and the head
 
 - **Idle** — nothing queued, or the queue has been explicitly stopped.
 - **Running** — actively embedding items one at a time; since Embeddings has no left-navigation icon of its own (see above), the header's **Connections** icon is what animates and turns green while this is happening.
-- **Paused** — reserved for pausing the queue without fully stopping it (for example, to avoid competing with the model during an active chat generation).
+- **Paused** — reserved for pausing the queue without fully stopping it (for example, to avoid competing with the model during an active session generation).
 
 ### Troubleshooting a stuck or empty queue
 
-If the queue looks stuck at "Idle" with items still needing embeddings, check the Settings tab first — the queue silently stops (and logs a warning server-side) if embeddings are disabled, if a local model fails to auto-load (most commonly because it isn't cached and can't be re-downloaded, or the server restarted and the model needs to be reloaded), or if an External API config has stopped validating. Reloading or re-downloading the model from the warning banner, then pressing Start on the Queue tab, resolves most local-mode cases. If a specific chat's content never seems to finish indexing, the RAG notice inside that chat has a "Prioritize in queue" button that jumps its content to the very front of the queue.
+If the queue looks stuck at "Idle" with items still needing embeddings, check the Settings tab first — the queue silently stops (and logs a warning server-side) if embeddings are disabled, if a local model fails to auto-load (most commonly because it isn't cached and can't be re-downloaded, or the server restarted and the model needs to be reloaded), or if an External API config has stopped validating. Reloading or re-downloading the model from the warning banner, then pressing Start on the Queue tab, resolves most local-mode cases. If a specific session's content never seems to finish indexing, the RAG notice inside that session has a "Prioritize in queue" button that jumps its content to the very front of the queue.
 
 ## Understanding RAG Notices
 
-Inside a chat, a **RAG notice** banner (the `RagNotice` component) can appear just above the message composer once a conversation has grown past 10 messages — below that threshold everything already fits in the guaranteed context window, so the notice doesn't apply. It checks the embedding status of the chat's older messages, its linked characters, personas, and lorebook content, and shows one of three variants:
+Inside a session, a **RAG notice** banner (the `RagNotice` component) can appear just above the message composer once a conversation has grown past 10 messages — below that threshold everything already fits in the guaranteed context window, so the notice doesn't apply. It checks the embedding status of the session's older messages, its linked characters, personas, and lorebook content, and shows one of three variants:
 
-- **"RAG content not yet indexed"** — none of the applicable older content has been embedded yet, so RAG can't surface anything from this chat.
+- **"RAG content not yet indexed"** — none of the applicable older content has been embedded yet, so RAG can't surface anything from this session.
 - **"RAG content indexed with a different model"** — everything was embedded with a previous model/backend and needs re-indexing with the currently active one.
 - **"Indexing in progress…"** — a mix of ready and pending content; shows a running count like "12 of 40 items indexed" and notes if the queue itself is paused.
 
-Each notice includes a **Prioritize in queue** button, which moves the chat (and its linked lorebook/characters/personas) to the front of the embeddings queue, and an **Ignore for this chat** button, which silences the notice for that specific chat going forward (shown afterward as a small "RAG disabled for this chat" line with a "Re-enable" link). Once every applicable item is fully indexed with the current model, the notice disappears on its own.
+Each notice includes a **Prioritize in queue** button, which moves the session (and its linked lorebook/characters/personas) to the front of the embeddings queue, and an **Ignore for this session** button, which silences the notice for that specific session going forward (shown afterward as a small "RAG disabled for this session" line with a "Re-enable" link). Once every applicable item is fully indexed with the current model, the notice disappears on its own.
 
 ### The per-item vectorization status icon
 
@@ -123,12 +123,12 @@ One consequence worth knowing: the per-content-type budget described below is en
 
 ### Always-included content
 
-Two categories bypass ranking entirely: the most recent handful of chat messages (the "guaranteed window") are always in the prompt regardless of token budget, and any lorebook entry marked **constant** is always included as long as it's enabled — constant entries are lore the model should never forget, so they skip the relevance contest altogether. See [Lorebooks](./lorebooks.md) for how the constant flag is set on an entry.
+Two categories bypass ranking entirely: the most recent handful of session messages (the "guaranteed window") are always in the prompt regardless of token budget, and any lorebook entry marked **constant** is always included as long as it's enabled — constant entries are lore the model should never forget, so they skip the relevance contest altogether. See [Lorebooks](./lorebooks.md) for how the constant flag is set on an entry.
 
 Bypassing the relevance contest also means bypassing token-budget trimming — pinned/constant world lore, character lore, and history entries aren't among the content types the token-budget enforcement step is allowed to shrink. In practice this is rarely an issue, but if the combined content you've marked constant/pinned in a lorebook is large enough on its own, there's currently no mechanism to trim it back down to fit the model's context limit the way ordinary RAG-recalled content is.
 
 ## Context Debugging
 
-A System Settings toggle, **Enable Context Debugging**, is worth knowing about alongside RAG: when turned on, it adds a Statistics tab and a debug icon to chat messages, computes full RAG and prompt-infill diagnostics for each generation, and saves that metadata alongside the message so you can inspect exactly what content the model saw — including which RAG results were retrieved — after the fact. This is an admin-only, opt-in setting since the extra computation and stored metadata add overhead; it's primarily useful when troubleshooting why a particular reply did or didn't seem to "remember" something. See [System Settings](./system-settings.md) for the rest of the settings on this screen.
+A System Settings toggle, **Enable Context Debugging**, is worth knowing about alongside RAG: when turned on, it adds a Statistics tab and a debug icon to session messages, computes full RAG and prompt-infill diagnostics for each generation, and saves that metadata alongside the message so you can inspect exactly what content the model saw — including which RAG results were retrieved — after the fact. This is an admin-only, opt-in setting since the extra computation and stored metadata add overhead; it's primarily useful when troubleshooting why a particular reply did or didn't seem to "remember" something. See [System Settings](./system-settings.md) for the rest of the settings on this screen.
 
 One diagnostic gotcha worth knowing: because the current and recent passes each compute their own adaptive similarity threshold, and the recorded value is simply whatever ran last, the "adaptive similarity threshold" figure shown in Prompt Details reflects only the **recent** pass's threshold, not the current pass's — keep that in mind if the number looks like it doesn't match what you'd expect from the most recent messages specifically.

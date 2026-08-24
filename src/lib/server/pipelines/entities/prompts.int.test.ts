@@ -14,7 +14,10 @@ import { describe, it, expect, beforeAll } from "vitest"
 import { eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
-import { bootstrapPipelines, RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import {
+	bootstrapPipelines,
+	RESPOND_SPEC_ID
+} from "$lib/server/pipelines/boot/bootstrap"
 import {
 	assertSelectable,
 	createPrompt,
@@ -71,9 +74,7 @@ describe("what a node declares", () => {
 		// is generated from the registry row, showed each of them the other's
 		// controls. Every reply prompt carried an empty `narratorName`. Two
 		// surfaces is two types; this is the assertion that says so.
-		const { NARRATE_SPEC_ID } = await import(
-			"$lib/server/pipelines/specs"
-		)
+		const { NARRATE_SPEC_ID } = await import("$lib/server/pipelines/specs")
 		const [narrate] = await db
 			.select()
 			.from(schema.pipelineSpecs)
@@ -99,9 +100,7 @@ describe("what a node declares", () => {
 		// `exampleDialogue` is read off the speaking character a narrator does
 		// not have, and `speakerRelationships` is never supplied by the narrate
 		// spec at all. Offering either is a control wired to nothing.
-		const { NARRATE_SPEC_ID } = await import(
-			"$lib/server/pipelines/specs"
-		)
+		const { NARRATE_SPEC_ID } = await import("$lib/server/pipelines/specs")
 		const [narrate] = await db
 			.select()
 			.from(schema.pipelineSpecs)
@@ -113,7 +112,9 @@ describe("what a node declares", () => {
 		const { declarations } = await import(
 			"$lib/server/pipelines/config/panel"
 		)
-		const layouts = (await declarations(db as any, narrate.activeVersionId!))
+		const layouts = (
+			await declarations(db as any, narrate.activeVersionId!)
+		)
 			.filter((d) => d.nodeKey === "context" && d.slot === "variables")
 			.map((d) => d.path)
 		expect(layouts.length).toBeGreaterThan(0)
@@ -329,7 +330,7 @@ describe("deleting", () => {
 		})
 		await db.insert(schema.pipelineNodeOverrides).values({
 			specId,
-			scopeKind: "user",
+			scopeKind: "session",
 			scopeId: 1,
 			nodeKey: "context",
 			slot: "prompts",
@@ -364,7 +365,9 @@ describe("what the picker is sent", () => {
 	 * the one that eventually disagrees.
 	 */
 	it("offers only prompts from this namespace", async () => {
-		const { namespaceView } = await import("$lib/server/pipelines/config/panel")
+		const { namespaceView } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
 		const view = await namespaceView(
 			db as any,
 			"prompt-picker-test-secret",
@@ -390,7 +393,9 @@ describe("what the picker is sent", () => {
 		// user could put a node key into the payload themselves. Labels are prose
 		// and exempt; the property names around them are not, and that is what
 		// this re-checks now that the payload has a new shape.
-		const { namespaceView } = await import("$lib/server/pipelines/config/panel")
+		const { namespaceView } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
 		const keys = (
 			await db
 				.select({ nodeKey: schema.pipelineNodes.nodeKey })
@@ -440,7 +445,7 @@ describe("deleting what you have selected", () => {
 			.insert(schema.pipelineNodeOverrides)
 			.values({
 				specId,
-				scopeKind: "user",
+				scopeKind: "session",
 				scopeId: 1,
 				nodeKey: "context",
 				slot: "prompts",
@@ -450,7 +455,7 @@ describe("deleting what you have selected", () => {
 			.returning()
 		await db.insert(schema.pipelineNodeOverrides).values({
 			specId,
-			scopeKind: "user",
+			scopeKind: "session",
 			scopeId: 2,
 			nodeKey: "context",
 			slot: "prompts",

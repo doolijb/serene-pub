@@ -192,7 +192,7 @@
 			: false
 	})
 
-	// ── External focus (from chat scene/history-entry clicks) ────────
+	// ── External focus (from session scene/history-entry clicks) ────────
 	let _lastFocusedEntryId = $state<number | undefined>(undefined)
 	$effect(() => {
 		const targetId = focusHistoryEntryId
@@ -1379,13 +1379,13 @@
 								</p>
 							{/if}
 							{@render sceneCastChips(scene)}
-							{#if scene.chatName}
+							{#if scene.sessionName}
 								<p class="text-surface-700-300 text-xs">
 									<Icons.MessageSquare
 										size={11}
 										class="inline"
 									/>
-									{scene.chatName}
+									{scene.sessionName}
 									{#if scene.selectedMessageIds?.length}· {scene
 											.selectedMessageIds.length} messages{/if}
 								</p>
@@ -1847,22 +1847,31 @@
 							     on — an entry set to `keyword` or `both`, and every `rag` entry
 							     on an instance whose model is not loaded, goes through it.
 							     Hiding this would repeat the mistake those two are making. -->
-							<div class="flex w-full items-center justify-between gap-2">
-								<label for="heeRecursion">Recursion depth</label>
+							<div
+								class="flex w-full items-center justify-between gap-2"
+							>
+								<label for="heeRecursion">
+									Recursion depth
+								</label>
 								<select
 									id="heeRecursion"
 									class="select preset-filled-surface-200-800 w-max max-w-xs rounded-lg text-sm"
-									value={String(editingEntry.recursionDepth ?? "")}
+									value={String(
+										editingEntry.recursionDepth ?? ""
+									)}
 									onchange={(e) => {
 										if (!editingEntry) return
 										// "" is not 0. Empty means the entry has no opinion and the
 										// pipeline's ceiling decides, which is a different answer
 										// from "conversation only" and has to survive as null.
 										const v = e.currentTarget.value
-										editingEntry.recursionDepth = v === "" ? null : Number(v)
+										editingEntry.recursionDepth =
+											v === "" ? null : Number(v)
 									}}
 								>
-									<option value="">Use pipeline default</option>
+									<option value="">
+										Use pipeline default
+									</option>
 									<option value="0">Conversation only</option>
 									<option value="1">1 level deep</option>
 									<option value="2">2 levels deep</option>
@@ -2087,7 +2096,7 @@
 							class="text-surface-700-300 py-4 text-center text-xs italic"
 						>
 							No scenes captured for this entry yet. Capture
-							scenes from the chat page.
+							scenes from the session page.
 						</p>
 					{:else}
 						{#each editScenes as scene, sceneIdx}

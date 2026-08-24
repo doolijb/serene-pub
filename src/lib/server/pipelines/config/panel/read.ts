@@ -12,10 +12,7 @@ import { asc, eq } from "drizzle-orm"
 import { getFacet } from "@serene-pub/sdk"
 import { i18nText } from "$lib/server/pipelines/config/panel/declarations"
 import * as schema from "$lib/server/db/schema"
-import {
-	mayWrite,
-	type ScopeKind
-} from "@serene-pub/sdk"
+import { mayWrite, type ScopeKind } from "@serene-pub/sdk"
 import {
 	choiceSets,
 	choicesFor
@@ -27,9 +24,7 @@ import {
 	stepLabels,
 	subscription
 } from "$lib/server/pipelines/config/panel/declarations"
-import {
-	optionId
-} from "$lib/server/pipelines/config/panel/ids"
+import { optionId } from "$lib/server/pipelines/config/panel/ids"
 import {
 	visibleTo,
 	writeScopeFor
@@ -57,12 +52,12 @@ const addr = (nodeKey: string, slot: string, path: string) =>
 	`${nodeKey}\u0000${slot}\u0000${path}`
 
 /**
- * The five layers, as lookups.
+ * The three layers, as lookups (12 §2 as simplified 2026-08-24).
  *
- * Preset values are projected in at `preset` rather than stored beside the other
- * scopes — they live in a different table on purpose (see the schema note on
- * `pipelineNodeOverrides`), and the resolver is what puts the five back into one
- * ordered walk.
+ * Author defaults come off the declarations; the selected config projects in
+ * at `preset` (its historical key); the session's overrides are the only scoped
+ * rows left. The former instance and user maps are gone with their layers —
+ * migration 0140 folded instance rows into configs and removed the rest.
  */
 export async function layers(db: Db, at: Published, viewer: Viewer) {
 	const overrides = await db
@@ -83,10 +78,11 @@ export async function layers(db: Db, at: Published, viewer: Viewer) {
 	// mechanism on purpose: a panel that read a different table than the run
 	// would agree with the user while the model did something else — the worst
 	// class of bug in this area, because there is nothing to see.
-	const { resolveSelectedConfig } = await import("$lib/server/pipelines/config/named")
+	const { resolveSelectedConfig } = await import(
+		"$lib/server/pipelines/config/named"
+	)
 	const selectedConfig = await resolveSelectedConfig(db, at.specId, at.slug, {
-		userId: viewer.userId,
-		chatId: viewer.chatId ?? undefined
+		sessionId: viewer.sessionId ?? undefined
 	})
 
 	const preset = new Map<string, unknown>()
@@ -105,10 +101,11 @@ export async function layers(db: Db, at: Published, viewer: Viewer) {
 	}
 
 	return {
-		chat: viewer.chatId != null ? scoped("chat", viewer.chatId) : null,
-		user: scoped("user", viewer.userId),
+		session:
+			viewer.sessionId != null
+				? scoped("session", viewer.sessionId)
+				: null,
 		preset,
-		instance: scoped("instance", 0),
 		selectedConfig
 	}
 }
@@ -139,7 +136,6 @@ export async function listNamespaces(db: Db): Promise<NamespaceSummary[]> {
 	}
 	return out
 }
-
 
 /**
  * A facet nobody declared, made readable.
@@ -208,8 +204,15 @@ export async function namespaceView(
 	const decls = await declarations(db, at.specVersionId)
 	const chain = await layers(db, at, viewer)
 	const sets = await choiceSets(db, at.specId)
+	// The connection's stop guards, for the effective-chain view (18 §4c):
+	// resolved by the same rule the runtime uses, so what the step card shows
+	// beside the chain is what the run actually evaluates. Read-only here —
+	// they are managed on the connection, and the badge says so.
+	const { connectionStopsFor } = await import(
+		"$lib/server/pipelines/scripts/chains"
+	)
+	const connStops = await connectionStopsFor(db)
 	const scope = writeScopeFor(viewer)
-	const here = scope === "chat" ? chain.chat : chain.user
 
 	// Group by node, in declaration order — which is node position, because
 	// that is how `declarations` walks. `advanced` splits the tuning
@@ -222,20 +225,15 @@ export async function namespaceView(
 		if (!visibleTo(d.matrixSlot, viewer)) continue
 
 		const key = addr(d.nodeKey, d.slot, d.path)
-		// The same order the runtime resolves in (SDK SCOPE_ORDER): overrides
-		// beat the selected config, most specific scope first. The two walks
-		// must agree or the panel shows a value the run does not use.
+		// The same order the runtime resolves in: the session's override beats
+		// the selected config beats the author default — the whole chain,
+		// since the simplification. The two walks must agree or the panel
+		// shows a value the run does not use.
 		let value: unknown = d.authorDefault
 		let source: OptionSource = "author"
-		if (chain.chat?.has(key)) {
-			value = chain.chat.get(key)
-			source = "chat"
-		} else if (chain.user.has(key)) {
-			value = chain.user.get(key)
-			source = "user"
-		} else if (chain.instance.has(key)) {
-			value = chain.instance.get(key)
-			source = "instance"
+		if (chain.session?.has(key)) {
+			value = chain.session.get(key)
+			source = "session"
 		} else if (chain.preset.has(key)) {
 			value = chain.preset.get(key)
 			source = "preset"
@@ -263,14 +261,42 @@ export async function namespaceView(
 				? sets.contextTemplateRows.get(value)
 				: undefined
 
-		// Where this option's edits land. Prompts are personal — chat or user
-		// scope, an override on the admin's configuration. Everything else an
-		// admin edits *is* the instance's configuration, so those write at
-		// instance scope: an admin tuning a weight at user scope would change
-		// only their own runs while believing they configured the application,
-		// which is the on-screen lie this whole layer exists to prevent.
-		const effScope: WriteScope =
-			viewer.isAdmin && d.matrixSlot !== "prompts" ? "instance" : scope
+		// The chain, hydrated in order. The value is the id list; this is what
+		// the ids are. A deleted row still yields an entry, marked missing —
+		// a dangle the panel hides is a chain that quietly shrank.
+		const chainEntries =
+			d.control === "scripts-chain" && Array.isArray(value)
+				? (value as unknown[])
+						.filter((v): v is number => typeof v === "number")
+						.map((scriptId) => {
+							const row = sets.scriptRows.get(scriptId)
+							if (!row)
+								return {
+									id: scriptId,
+									name: `#${scriptId}`,
+									enabled: false,
+									typeLabel: "",
+									blastRadius: "",
+									operation: "",
+									missing: true
+								}
+							const meta = sets.scriptTypeMeta.get(row.typeId)
+							return {
+								id: row.id,
+								name: row.name,
+								enabled: !!row.enabled,
+								typeLabel: meta?.name ?? row.typeId,
+								blastRadius: meta?.blastRadius ?? "",
+								operation: meta?.operation ?? ""
+							}
+						})
+				: undefined
+
+		// Where this option's edits land (ruled 2026-08-24): inside a session,
+		// the session's override; everywhere else, the selected configuration
+		// itself — which is why the global panel is an admin's surface, and a
+		// non-admin's levers are the session's.
+		const effScope: WriteScope = scope
 
 		const option: ConfigOption = {
 			id: optionId(secret, d.nodeKey, d.slot, d.path),
@@ -284,6 +310,21 @@ export async function namespaceView(
 			...(d.of ? { of: d.of } : {}),
 			...(d.members ? { members: d.members } : {}),
 			...((c) => (c ? { choices: c } : {}))(choicesFor(d, sets)),
+			...(chainEntries ? { scripts: chainEntries } : {}),
+			...(d.control === "scripts-chain" &&
+			connStops &&
+			(d.accepts ?? []).includes("core:script:text/stop@1")
+				? {
+						connectionScripts: {
+							connectionName: connStops.connectionName,
+							entries: connStops.rows.map((r) => ({
+								id: r.id,
+								name: r.name,
+								enabled: r.enabled
+							}))
+						}
+					}
+				: {}),
 			...(variableTemplateRow
 				? {
 						variableTemplate: {
@@ -346,12 +387,20 @@ export async function namespaceView(
 			// enforceable precisely because the declaration says it is one.
 			value: d.control === "secret" ? null : value,
 			source,
-			writable: mayWrite(d.matrixSlot, effScope as ScopeKind),
-			...(effScope !== scope ? { writeAt: effScope } : {}),
+			// The same decision resolveWriteScope enforces, asked without
+			// throwing: session writes need the session column and the non-admin
+			// prompts line; config writes are the admin's, on the instance
+			// column (a config's values are what the whole instance resolves).
+			writable:
+				effScope === "session"
+					? mayWrite(d.matrixSlot, "session" as ScopeKind) &&
+						(viewer.isAdmin || d.matrixSlot === "prompts")
+					: viewer.isAdmin &&
+						mayWrite(d.matrixSlot, "instance" as ScopeKind),
 			overriddenHere:
-				effScope === "instance"
-					? chain.instance.has(key)
-					: !!here?.has(key)
+				effScope === "session"
+					? !!chain.session?.has(key)
+					: chain.preset.has(key)
 		}
 
 		let group = byNode.get(d.nodeKey)
@@ -391,7 +440,8 @@ export async function namespaceView(
 	// writes stays the HMAC per option, and the payload still never names a
 	// node (see `ConfigStep`).
 	const kindOf = new Map<string, string>()
-	for (const d of decls) if (!kindOf.has(d.nodeKey)) kindOf.set(d.nodeKey, d.nodeKind)
+	for (const d of decls)
+		if (!kindOf.has(d.nodeKey)) kindOf.set(d.nodeKey, d.nodeKind)
 
 	/**
 	 * The tokens a share divides, read from the sampling config that is
@@ -405,7 +455,10 @@ export async function namespaceView(
 	 * Only the normalised control gets it. A ceiling is a count of entries, and
 	 * a token figure beside it would answer a question it does not ask.
 	 */
-	const all = [...byNode.values()].flatMap((n) => [...n.options, ...n.advanced])
+	const all = [...byNode.values()].flatMap((n) => [
+		...n.options,
+		...n.advanced
+	])
 	const samplingId = all.find(
 		(o) => o.control === "sampling-ref" && typeof o.value === "number"
 	)?.value as number | undefined
@@ -469,8 +522,25 @@ export async function namespaceView(
 			isDefault: !!c.isDefault,
 			// The shipped default is immutable (one per pipeline, always
 			// present) — copies a person made are theirs to edit.
-			readOnly: !!c.isImmutable
+			readOnly: !!c.isImmutable,
+			enabled: c.enabled !== false,
+			includedActions: Array.isArray(c.includedActions)
+				? (c.includedActions as string[])
+				: null
 		})),
+		modeActions: await (async () => {
+			const { modeOfSpec, listModeTriggers } = await import(
+				"$lib/server/pipelines/entities/sessionModes"
+			)
+			const modeId = await modeOfSpec(db as any, at.slug)
+			if (!modeId) return []
+			return (await listModeTriggers(db as any, modeId)).map((t) => ({
+				function: t.function,
+				name: t.name,
+				specSlug: t.specSlug,
+				origin: t.origin
+			}))
+		})(),
 		selectedConfig: chain.selectedConfig
 			? {
 					id: chain.selectedConfig.configId,
