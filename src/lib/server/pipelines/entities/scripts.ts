@@ -65,6 +65,23 @@ export interface ScriptTypeInfo {
 	 * an extra some hook actually provides, never a name typed on faith.
 	 */
 	extras: string[]
+	/**
+	 * Where a link of this type executes. `node` — core's own script, run
+	 * in-process by the Scripts sandbox. `process` — an extension's hook, run
+	 * out-of-process by the plugin runtime. Written from ownership in the
+	 * registry (`registrySync`), never from a manifest's claim, so a plugin
+	 * cannot ask to run in-process. The chain applier reads this to route each
+	 * link to the same value-fold law through one of two executors — the single
+	 * dispatch interface for core and extension hooks alike.
+	 */
+	transport: "node" | "process"
+	/**
+	 * The installed plugin that owns this type (`plugins.id`), or null for a
+	 * core type. Present exactly when `transport === "process"`; the applier
+	 * hands it, with the type id, to the plugin-dispatch port to resolve the
+	 * runtime hook.
+	 */
+	ownerPluginId: number | null
 }
 
 export interface ScriptRecord {
@@ -113,7 +130,10 @@ function typeInfo(row: any, extras: string[]): ScriptTypeInfo {
 		blastRadius: en(i18n.blastRadius),
 		varsIn: Object.keys((row.ports as any)?.in ?? {}),
 		varsOut: Object.keys((row.ports as any)?.out ?? {}),
-		extras
+		extras,
+		transport: row.transport === "process" ? "process" : "node",
+		ownerPluginId:
+			typeof row.ownerPluginId === "number" ? row.ownerPluginId : null
 	}
 }
 

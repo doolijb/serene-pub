@@ -201,6 +201,50 @@ export type SocketEventMap = {
 	}
 
 	// Connection events
+	"plugins:list": {
+		params: Sockets.Plugins.List.Params
+		response: Sockets.Plugins.List.Response
+	}
+	"plugins:install": {
+		params: Sockets.Plugins.Install.Params
+		response: Sockets.Plugins.Install.Response
+	}
+	"plugins:setEnabled": {
+		params: Sockets.Plugins.SetEnabled.Params
+		response: Sockets.Plugins.SetEnabled.Response
+	}
+	"plugins:setBackend": {
+		params: Sockets.Plugins.SetBackend.Params
+		response: Sockets.Plugins.SetBackend.Response
+	}
+	"plugins:setSequential": {
+		params: Sockets.Plugins.SetSequential.Params
+		response: Sockets.Plugins.SetSequential.Response
+	}
+	"plugins:uninstall": {
+		params: Sockets.Plugins.Uninstall.Params
+		response: Sockets.Plugins.Uninstall.Response
+	}
+	"plugins:active": {
+		params: Sockets.Plugins.Active.Params
+		response: Sockets.Plugins.Active.Response
+	}
+	"plugins:kill": {
+		params: Sockets.Plugins.Kill.Params
+		response: Sockets.Plugins.Kill.Response
+	}
+	"plugins:logs": {
+		params: Sockets.Plugins.Logs.Params
+		response: Sockets.Plugins.Logs.Response
+	}
+	"plugins:permissions": {
+		params: Sockets.Plugins.Permissions.Params
+		response: Sockets.Plugins.Permissions.Response
+	}
+	"plugins:setPermission": {
+		params: Sockets.Plugins.SetPermission.Params
+		response: Sockets.Plugins.SetPermission.Response
+	}
 	"connections:list": {
 		params: Sockets.Connections.List.Params
 		response: Sockets.Connections.List.Response

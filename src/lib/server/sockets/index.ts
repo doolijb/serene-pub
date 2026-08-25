@@ -18,6 +18,7 @@
 
 import type { Handler } from "$lib/shared/events"
 import { registerConnectionHandlers } from "./connections"
+import { registerPluginHandlers } from "./plugins"
 import { registerSamplingConfigHandlers } from "./samplingConfigs"
 import { registerCharacterHandlers } from "./characters"
 import { registerPersonaHandlers } from "./personas"
@@ -83,6 +84,7 @@ export function connectSockets(io: {
 		registerUserSettingsHandlers(socket, emitToUser, register)
 		registerSamplingConfigHandlers(socket, emitToUser, register)
 		registerConnectionHandlers(socket, emitToUser, register)
+		registerPluginHandlers(socket, emitToUser, register)
 		registerOllamaHandlers(socket, emitToUser, register)
 		registerKoboldCppHandlers(socket, emitToUser, register)
 		registerSystemSettingsHandlers(socket, emitToUser, register)

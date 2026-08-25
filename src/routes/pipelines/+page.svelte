@@ -59,6 +59,11 @@
 		<a class="btn btn-sm preset-tonal-surface" href="/pipelines/scripts">
 			<Icons.SquareCode size={16} /> Scripts
 		</a>
+		<!-- Interim home for the plugin admin surface; re-homed under a dedicated
+		     administrative route later. -->
+		<a class="btn btn-sm preset-tonal-surface" href="/pipelines/extensions">
+			<Icons.Puzzle size={16} /> Extensions
+		</a>
 		<a class="btn btn-sm preset-tonal-surface" href="/">
 			<Icons.ArrowLeft size={16} /> Back
 		</a>

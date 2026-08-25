@@ -1,0 +1,11 @@
+-- Seed keys follow the session rename (0141's missed identity).
+--
+-- Found by the smoke boot against real data, not by the suites: `seed_key`
+-- values are *stored identity* — the seeder matches existing rows by them —
+-- and the rename pass changed the literal in code without migrating the
+-- rows. On an upgraded install the seeder then found no row named
+-- `prompt-neutral-session`, tried to insert its hardcoded id, and collided
+-- with the very row it was looking for (the never-seed-fixed-ids lesson,
+-- again, one layer up: fixed ids are only survivable when the identity key
+-- match is airtight).
+UPDATE "prompt_configs" SET "seed_key" = 'prompt-neutral-session' WHERE "seed_key" = 'prompt-neutral-chat';

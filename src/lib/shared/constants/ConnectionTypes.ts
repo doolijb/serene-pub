@@ -29,8 +29,8 @@ const ollamaDesc = `
 const ollamaDiff = "Beginner (No GUI) - Minimal setup required"
 
 const openaiSessionDesc = `
-<p>Serene Pub supports OpenAI's session completion API.</p>
-<p>It provides a powerful API for generating session completions and supports various models.</p>
+<p>Serene Pub supports OpenAI's chat completion API.</p>
+<p>It provides a powerful API for generating chat completions and supports various models.</p>
 <p>To use OpenAI's API, you need to create an account and obtain an API key from <a class="text-primary-500 hover:underline" href="https://platform.openai.com/signup" target="_blank">OpenAI's website</a> or another service.</p>
 <p>OpenAI's API is well-documented and widely used, making it a good choice for many applications.</p>
 `
@@ -100,7 +100,7 @@ export class CONNECTION_TYPE {
 		},
 		{
 			value: CONNECTION_TYPE.OPENAI_CHAT,
-			label: "OpenAI Session",
+			label: "OpenAI Chat",
 			description: openaiSessionDesc,
 			difficulty: openaiSessionDiff,
 			category: "cloud"

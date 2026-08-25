@@ -266,6 +266,155 @@ declare global {
 		}
 
 		// Connections namespace
+		namespace Plugins {
+			/** A row of the installed-plugins list, as the admin panel renders it. */
+			interface PluginRow {
+				pluginId: string
+				name: string
+				version: string
+				bundleHash: string
+				backends: ("quickjs" | "ses")[]
+				backend: "quickjs" | "ses"
+				sequential: boolean
+				enabled: boolean
+			}
+			/** One in-flight sandbox call, for the live runtime monitor. */
+			interface ActiveRow {
+				callId: number
+				pluginId: string
+				pluginName: string
+				hookName: string
+				backend: "quickjs" | "ses"
+				user?: string
+				lifecycle: boolean
+				startedAt: number
+			}
+			/** One hook-invocation log entry. */
+			interface LogRow {
+				id: number
+				pluginId: string
+				pluginName: string
+				hookName: string
+				backend: string
+				mode: string
+				triggeredBy: string | null
+				runId: string | null
+				durationMs: number
+				ok: boolean
+				outcome: string
+				reason: string | null
+				finishedAt: string | Date
+			}
+			namespace List {
+				interface Params {}
+				interface Response {
+					plugins: PluginRow[]
+					/** Whether the runtime is actually on (SP_PLUGINS_ENABLED). */
+					runtimeEnabled: boolean
+				}
+			}
+			namespace Install {
+				interface Params {
+					pluginId: string
+					name: string
+					version?: string
+					bundleSource: string
+					backends: ("quickjs" | "ses")[]
+					sequential?: boolean
+					manifest?: Record<string, unknown>
+				}
+				interface Response {
+					plugins: PluginRow[]
+				}
+			}
+			namespace SetEnabled {
+				interface Params {
+					pluginId: string
+					enabled: boolean
+				}
+				interface Response {
+					plugins: PluginRow[]
+				}
+			}
+			namespace SetBackend {
+				interface Params {
+					pluginId: string
+					backend: "quickjs" | "ses"
+				}
+				interface Response {
+					plugins: PluginRow[]
+				}
+			}
+			namespace SetSequential {
+				interface Params {
+					pluginId: string
+					sequential: boolean
+				}
+				interface Response {
+					plugins: PluginRow[]
+				}
+			}
+			namespace Uninstall {
+				interface Params {
+					pluginId: string
+				}
+				interface Response {
+					plugins: PluginRow[]
+				}
+			}
+			namespace Active {
+				interface Params {}
+				interface Response {
+					active: ActiveRow[]
+				}
+			}
+			namespace Kill {
+				interface Params {
+					callId: number
+				}
+				interface Response {
+					killed: boolean
+					active: ActiveRow[]
+				}
+			}
+			namespace Logs {
+				interface Params {
+					pluginId?: string
+					limit?: number
+				}
+				interface Response {
+					logs: LogRow[]
+				}
+			}
+			/** One declared permission and whether an admin has granted it. */
+			interface PermState {
+				key: string
+				kind: "system" | "resource" | "event"
+				label: string
+				accountAffecting: boolean
+				granted: boolean
+			}
+			namespace Permissions {
+				interface Params {
+					pluginId: string
+				}
+				interface Response {
+					pluginId: string
+					permissions: PermState[]
+				}
+			}
+			namespace SetPermission {
+				interface Params {
+					pluginId: string
+					key: string
+					granted: boolean
+				}
+				interface Response {
+					pluginId: string
+					permissions: PermState[]
+				}
+			}
+		}
 		namespace Connections {
 			namespace List {
 				interface Params {}

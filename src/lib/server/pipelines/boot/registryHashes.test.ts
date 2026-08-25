@@ -83,7 +83,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:provider/graph-perspective@1": "10d6e4b8419763",
 	"core:provider/graph-pre-filter@1": "af07bcf5d1b65",
 	"core:provider/graph-state-detection@1": "145613287cd09f",
-	"core:provider/mcp-tool@1": "18bd4abfda050e",
+	// Re-pinned when 14 was built out (the draft stub's hash never reached an
+	// install — 0141's core wipe re-projects every row at boot).
+	"core:provider/mcp-tool@1": "2a4ceca243862",
+	"core:provider/mcp-resource@1": "9d9890414a3d8",
 	"core:provider/name-entry@1": "1b49a34a5cac88",
 	"core:provider/speak@1": "8e5f957ad71f9",
 	"core:provider/summarize-batch@1": "1030d47b263042",

@@ -35,6 +35,7 @@ import {
 	type ScriptTypeInfo
 } from "$lib/server/pipelines/entities/scripts"
 import { runScriptSource } from "$lib/server/pipelines/scripts/host"
+import type { PluginHookDispatch } from "$lib/server/pipelines/scripts/pluginDispatch"
 
 type Db = { select: any; insert: any; update: any; delete: any }
 
@@ -65,6 +66,18 @@ export interface ScriptApplierOptions {
 			varsIn: string[]
 		}>
 	}
+	/**
+	 * The extension-hook executor, present only when plugins are enabled and the
+	 * runtime is ready. A chain link whose type is plugin-owned
+	 * (`transport: 'process'`) is routed here instead of the in-process Scripts
+	 * sandbox; both feed the same fold. Absent, such links are absorbed as a
+	 * skip — the pipeline runs exactly as it did before extensions existed.
+	 */
+	pluginDispatch?: PluginHookDispatch
+	/** The pipeline run id, threaded to the plugin runtime's invocation log. */
+	runId?: string
+	/** Who triggered the run — for the plugin log and the account-visibility view. */
+	user?: string
 }
 
 /** What a transform is allowed to hand back, per content scope. */
@@ -198,17 +211,47 @@ export function makeScriptApplier(
 				if (declaredIns.has(name))
 					extras[name] = (opts.extras ?? {})[name] ?? null
 
-			const res = await runScriptSource({
-				source: row.source ?? "",
-				vars,
-				extras,
-				// Per-link stream, seeded by address — see the header. The
-				// PRNG lives inside the sandbox program (one algorithm, one
-				// source), so the label is all that crosses.
-				seedLabel: `${opts.seed}:scripts:${site.nodeKey}:${site.slot}:${i}:${id}`,
-				nowMs: opts.nowMs,
-				timeoutMs: opts.timeoutMs ?? 250
-			})
+			// One address for the per-link stream, whichever executor runs it,
+			// so a chain replays the same whether a link is core's or a
+			// plugin's. The PRNG lives inside the sandbox; only the label crosses.
+			const seedLabel = `${opts.seed}:scripts:${site.nodeKey}:${site.slot}:${i}:${id}`
+
+			// The single dispatch fork. A plugin-owned type (`transport:
+			// 'process'`) runs out-of-process through the injected port; core's
+			// own runs in the in-process sandbox. Both hand back one
+			// `ScriptRunResult`, so everything below — verdict, inject,
+			// transform — is applied identically and never learns which ran.
+			let res: Awaited<ReturnType<typeof runScriptSource>>
+			if (type.transport === "process") {
+				if (!opts.pluginDispatch || type.ownerPluginId == null) {
+					record({
+						...base,
+						result: "skip",
+						reason: "extensions are disabled on this instance"
+					})
+					continue
+				}
+				res = await opts.pluginDispatch.runHook({
+					ownerPluginId: type.ownerPluginId,
+					typeId: row.typeId,
+					value: declaredIns.has(subject) ? current : null,
+					extras,
+					seedLabel,
+					nowMs: opts.nowMs,
+					timeoutMs: opts.timeoutMs ?? 250,
+					runId: opts.runId,
+					user: opts.user
+				})
+			} else {
+				res = await runScriptSource({
+					source: row.source ?? "",
+					vars,
+					extras,
+					seedLabel,
+					nowMs: opts.nowMs,
+					timeoutMs: opts.timeoutMs ?? 250
+				})
+			}
 
 			if (!res.ok) {
 				record({

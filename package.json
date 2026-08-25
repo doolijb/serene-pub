@@ -132,6 +132,7 @@
 		"png-chunks-extract": "^1.0.0",
 		"pngjs": "^7.0.0",
 		"quickjs-emscripten": "0.32.0",
+		"ses": "^2.3.0",
 		"svelte-dnd-action": "^0.9.61",
 		"sveltekit-io": "^1.0.13",
 		"uuid": "^11.1.0",

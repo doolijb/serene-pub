@@ -458,6 +458,20 @@ if (!building) {
 	}
 }
 
+// Plugins load after every core startup task. Inert unless SP_PLUGINS_ENABLED
+// is set; a failure here never stops the app (same trade as pipelines above).
+if (!building) {
+	try {
+		const { bootstrapPlugins } = await import("$lib/server/plugins")
+		await bootstrapPlugins(db)
+	} catch (err) {
+		console.warn(
+			"[plugins] bootstrap failed, plugin subsystem unavailable:",
+			err
+		)
+	}
+}
+
 // Mark any downloads that were in-flight when the server last stopped as errored
 db.update(schema.koboldCppModels)
 	.set({ status: "error", errorMessage: "Server restarted during download" })

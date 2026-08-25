@@ -36,6 +36,10 @@ import {
 	scriptsEnabledFor
 } from "$lib/server/pipelines/scripts/chains"
 import { modeFieldsFor } from "$lib/server/pipelines/entities/sessionModes"
+import { pluginsEnabled } from "$lib/server/plugins/flag"
+import { getManager } from "$lib/server/plugins"
+import { makePluginHookDispatch } from "$lib/server/plugins/hookDispatch"
+import type { PluginHookDispatch } from "$lib/server/pipelines/scripts/pluginDispatch"
 import { v4 as uuidv4 } from "uuid"
 
 export class PipelineUnavailableError extends Error {}
@@ -175,6 +179,22 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 	// before scripts existed" — chains and attachments kept, waiting.
 	const scriptsOn = await scriptsEnabledFor(request.db)
 
+	// The same run id the executor stamps below, hoisted so a plugin link's
+	// invocation-log row soft-links to the run that fired it.
+	const runId = request.runId ?? uuidv4()
+
+	// The extension-hook executor. Behind the same seam as core scripts and
+	// gated three ways: chains must be on at all, the plugin subsystem must be
+	// enabled (dark by default in 0.6), and startup must have finished so a
+	// link never stalls a turn on the ready-gate. When any is false, plugin
+	// links are absorbed as skips and the pipeline is untouched.
+	let pluginDispatch: PluginHookDispatch | undefined
+	if (scriptsOn && pluginsEnabled()) {
+		const manager = getManager()
+		if (manager.isReady())
+			pluginDispatch = makePluginHookDispatch(request.db, manager)
+	}
+
 	const receipt = await run(doc, {
 		world: await buildWorld(request.db, {
 			sessionId: request.sessionId,
@@ -185,7 +205,7 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 			specId
 		}),
 		input: request.input,
-		runId: request.runId ?? uuidv4(),
+		runId,
 		seed,
 		triggerSource: request.preview ? "ui" : "event",
 		preview: request.preview,
@@ -204,7 +224,16 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 						// resolved by the same rule dispatch uses — the instance
 						// default — so every spec running against that endpoint
 						// inherits its model knowledge.
-						connectionStops: await connectionStopsFor(request.db)
+						connectionStops: await connectionStopsFor(request.db),
+						// The extension-hook executor and the identity a plugin
+						// link's invocation record carries. Undefined here means
+						// the applier runs core scripts exactly as before.
+						pluginDispatch,
+						runId,
+						user:
+							request.userId != null
+								? String(request.userId)
+								: undefined
 					})
 				}
 			: {}),

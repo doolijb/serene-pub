@@ -14,7 +14,7 @@
  * wrong for the user on core's who would inherit it.
  */
 
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi } from "vitest"
 import { and, eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
@@ -28,6 +28,13 @@ import { CONTEXT_TEMPLATE_SEED_KEY } from "$lib/server/pipelines/entities/contex
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { resolveConfig } from "@serene-pub/sdk"
 import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+
+// Every test here builds a database and boots it (`install`), which is
+// seconds of real work — the repo's 60s convention for DB-building setup,
+// applied per test because the setup lives inside each one. Without it these
+// sit just under the 5s default and fail under CPU contention, which reads as
+// a flake and is really a budget.
+vi.setConfig({ testTimeout: 60_000 })
 
 /** A template of somebody's own — what matters is that it is not core's. */
 const MINE =
@@ -115,55 +122,49 @@ async function overrides(db: TestDb) {
 	const layoutById = new Map(layouts.map((t) => [t.id, t]))
 	const templateById = new Map(templates.map((t) => [t.id, t]))
 
-	const { resolveSelectedConfig } = await import(
-		"$lib/server/pipelines/config/named"
-	)
-	const specs = await db.select().from(schema.pipelineSpecs)
-	const configs = await db.select().from(schema.pipelineConfigs)
+	// Four bulk reads and an in-memory join, deliberately: this runs inside
+	// tests that build a database and bootstrap it within one test timeout,
+	// and a per-spec query loop here is what pushed them over it under load.
+	const specs = (await db.select().from(schema.pipelineSpecs)) as any[]
+	const configs = (await db.select().from(schema.pipelineConfigs)) as any[]
+	const selections = (await db
+		.select()
+		.from(schema.pipelineConfigSelections)) as any[]
+	const allValues = (await db
+		.select()
+		.from(schema.pipelineConfigValues)) as any[]
+	const valuesOf = (configId: number) =>
+		allValues.filter((v) => v.configId === configId)
+
 	const out: Array<{
 		scope: string
 		slot: string
 		path: string
 		name: string
 	}> = []
-	for (const spec of specs as any[]) {
-		const selected = await resolveSelectedConfig(
-			db as any,
-			spec.id,
-			spec.slug,
-			{}
+	for (const spec of specs) {
+		// The resolution `resolveSelectedConfig` performs, inlined against
+		// rows already in hand: the instance's selection, else what shipped.
+		const chosenId = selections.find(
+			(x) =>
+				x.specId === spec.id &&
+				x.scopeKind === "instance" &&
+				x.configId != null
+		)?.configId
+		const shipped = configs.find(
+			(c) => c.specId === spec.id && c.isImmutable
 		)
-		if (!selected) continue
-		const cfg = (configs as any[]).find((c) => c.id === selected.configId)
+		const cfg = chosenId ? configs.find((c) => c.id === chosenId) : shipped
 		// The shipped default is the untouched state; only a mutable
 		// selection is something the migration produced or adopted.
 		if (!cfg || cfg.isImmutable) continue
-		const shipped = (configs as any[]).find(
-			(c) => c.specId === spec.id && c.isImmutable
-		)
-		const values = await db
-			.select()
-			.from(schema.pipelineConfigValues)
-			.where(eq(schema.pipelineConfigValues.configId, selected.configId))
 		const shippedVals = new Map(
-			shipped
-				? (
-						(await db
-							.select()
-							.from(schema.pipelineConfigValues)
-							.where(
-								eq(
-									schema.pipelineConfigValues.configId,
-									shipped.id
-								)
-							)) as any[]
-					).map((v) => [
-						`${v.nodeKey}\0${v.slot}\0${v.path}`,
-						v.value
-					])
-				: []
+			(shipped ? valuesOf(shipped.id) : []).map((v) => [
+				`${v.nodeKey}\0${v.slot}\0${v.path}`,
+				v.value
+			])
 		)
-		for (const r of values as any[]) {
+		for (const r of valuesOf(cfg.id)) {
 			if (r.slot !== "variables" && r.slot !== "template") continue
 			if (
 				shippedVals.get(`${r.nodeKey}\0${r.slot}\0${r.path}`) ===

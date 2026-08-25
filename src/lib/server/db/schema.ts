@@ -3907,6 +3907,106 @@ export const pipelineRunNodes = pgTable(
 	(t) => [index("pipeline_run_nodes_run_idx").on(t.runId, t.seq)]
 )
 
+/**
+ * Installed plugins / extensions. Built and persisted on this branch behind the
+ * `SP_PLUGINS_ENABLED` gate so a proper SDK preview can ship in 0.6.0 with an
+ * almost-frozen shape; the whole surface is inert until that flag is set.
+ *
+ * A plugin's executable code is *only* its reviewed, `bundleHash`-pinned bundle
+ * — never a file it writes at runtime. `backends` is the set the conformance
+ * harness certified (it must run identically on each); `backend` is the active
+ * one, the security/speed dial (quickjs = strong/slow default, ses = fast
+ * fallback). `manifest` is the compiled declaration: hooks, components,
+ * pipelines, and the fine-grained permissions the plugin requests.
+ */
+export const plugins = pgTable(
+	"plugins",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/** Stable manifest id (namespace/name) — the address everything uses. */
+		pluginId: text("plugin_id").notNull().unique(),
+		name: text("name").notNull(),
+		version: text("version").notNull().default("0.0.0"),
+		/** The compiled, self-contained bundle (deps baked in). */
+		bundleSource: text("bundle_source").notNull(),
+		/** SHA-256 of the bundle bytes; permission grants bind to this exact value. */
+		bundleHash: text("bundle_hash").notNull(),
+		/** Backends the conformance harness certified: ['quickjs'] | ['quickjs','ses'] | ['ses']. */
+		backends: json("backends")
+			.notNull()
+			.default(["quickjs"])
+			.$type<("quickjs" | "ses")[]>(),
+		/** The active backend — the dial. Must be one of `backends`. */
+		backend: text("backend").notNull().default("quickjs"), // quickjs | ses
+		/** Sequential-only: manifest-declared, or admin-forced. Concurrent otherwise. */
+		sequential: boolean("sequential").notNull().default(false),
+		enabled: boolean("enabled").notNull().default(false),
+		/** The compiled manifest — hooks, components, pipelines, declared permissions. */
+		manifest: json("manifest")
+			.notNull()
+			.default({})
+			.$type<Record<string, any>>(),
+		/**
+		 * Permission keys an admin has denied at the plugin level. The effective
+		 * grant is (manifest-declared − this); every capability the runtime hands
+		 * out derives from the effective set, never the raw manifest.
+		 */
+		adminDenied: json("admin_denied")
+			.notNull()
+			.default([])
+			.$type<string[]>(),
+		installedAt: timestamp("installed_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at").notNull().defaultNow()
+	},
+	(t) => [
+		check(
+			"plugins_backend_check",
+			sql`${t.backend} IN ('quickjs', 'ses')`
+		)
+	]
+)
+
+/**
+ * The hook-execution log — every invocation, for the admin observability view.
+ *
+ * Identity is **denormalized** (name + hash as text, no FK to `plugins`) so a
+ * row stays meaningful after the plugin is uninstalled or upgraded: this is a
+ * historical record, not a live reference. Pipeline logs *reference* this table
+ * via `runId` (the SDK run id, matching `pipeline_runs.run_id`) rather than
+ * re-storing hook timing/identity — a soft link on purpose, so pruning a run
+ * never deletes the hook history.
+ */
+export const pluginHookInvocations = pgTable(
+	"plugin_hook_invocations",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		pluginId: text("plugin_id").notNull(),
+		pluginName: text("plugin_name").notNull(),
+		bundleHash: text("bundle_hash").notNull(),
+		hookName: text("hook_name").notNull(),
+		backend: text("backend").notNull(), // quickjs | ses
+		mode: text("mode").notNull(), // concurrent | sequential | lifecycle
+		/** Who triggered it (user id as text) — feeds the account-visibility view. */
+		triggeredBy: text("triggered_by"),
+		/** Soft link to the pipeline run that fired this hook, if any. */
+		runId: text("run_id"),
+		queuedAt: timestamp("queued_at").notNull(),
+		startedAt: timestamp("started_at").notNull(),
+		finishedAt: timestamp("finished_at").notNull(),
+		durationMs: integer("duration_ms").notNull(),
+		ok: boolean("ok").notNull(),
+		outcome: text("outcome").notNull(), // ok | error | timeout | killed | load | missing
+		reason: text("reason")
+	},
+	(t) => [
+		index("plugin_hook_invocations_plugin_idx").on(
+			t.pluginId,
+			t.finishedAt
+		),
+		index("plugin_hook_invocations_run_idx").on(t.runId)
+	]
+)
+
 export const pipelineTypeRegistry = pgTable(
 	"pipeline_type_registry",
 	{
